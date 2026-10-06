@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0e1a14">
+<meta name="description" content="전통발효체험관 메타버스 — 한국 전통발효문화와 농업체험을 3D로 탐험하고 배우는 브라우저 교육형 메타버스 게임">
+<title>전통발효체험관 메타버스</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cellipse cx='32' cy='14' rx='14' ry='5' fill='%233b2416'/%3E%3Cpath d='M14 18c-6 8-6 30 4 38h28c10-8 10-30 4-38z' fill='%235a3520'/%3E%3Cpath d='M18 26h28' stroke='%23f4c54a' stroke-width='3'/%3E%3C/svg%3E">
+<!--@FONTFACE-->
+<style>
+/*@CSS*/
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Three.js renders into this container (canvas is appended by the engine) -->
+  <main id="game-container" aria-label="3D 게임 화면"></main>
+  <!-- World-anchored DOM labels (name tags, plot stats, emote bubbles) -->
+  <div id="labels-layer" aria-hidden="true"></div>
+
+  <!-- ============================== HUD ============================== -->
+  <div id="hud" class="hud" hidden>
+    <header id="hud-profile" class="glass hud-profile">
+      <button class="hud-avatar" data-action="avatar" title="아바타 꾸미기" aria-label="아바타 꾸미기"><span class="ico" data-icon="user"></span></button>
+      <div class="hud-brand">
+        <div class="hud-brand-top">METAVERSE</div>
+        <div class="hud-brand-title">전통발효체험관</div>
+        <div class="hud-online"><span class="dot"></span>온라인 <b id="hud-online-count">1</b>명</div>
+      </div>
+    </header>
+
+    <section id="hud-player" class="glass hud-player" aria-label="플레이어 정보">
+      <div class="hud-player-row">
+        <span id="hud-level" class="lv-chip">Lv.1</span>
+        <span id="hud-nickname" class="hud-nick">게스트</span>
+        <span id="hud-title" class="title-chip" hidden></span>
+      </div>
+      <div class="bar bar-exp" title="경험치"><i id="hud-exp-bar" style="width:0%"></i><span id="hud-exp-text"></span></div>
+      <div class="hud-player-row hud-currency">
+        <span title="코인"><span class="ico ico-sm" data-icon="coin"></span><b id="hud-coin">0</b></span>
+        <span title="교육 포인트"><span class="ico ico-sm" data-icon="book"></span><b id="hud-edu">0</b></span>
+        <span id="hud-mode" class="mode-chip" title="저장 방식">로컬</span>
+      </div>
+    </section>
+
+    <nav id="hud-left-menu" class="glass hud-left-menu" aria-label="메인 메뉴">
+      <button data-action="avatar"><span class="ico" data-icon="user"></span><span class="lbl">아바타</span></button>
+      <button data-action="chat"><span class="ico" data-icon="chat"></span><span class="lbl">채팅</span></button>
+      <button data-action="move"><span class="ico" data-icon="pin"></span><span class="lbl">이동</span></button>
+      <button data-action="minimap"><span class="ico" data-icon="map"></span><span class="lbl">미니맵</span></button>
+      <span class="menu-sep" role="separator"></span>
+      <button data-action="inventory"><span class="ico" data-icon="bag"></span><span class="lbl">가방</span></button>
+      <button data-action="quests"><span class="ico" data-icon="quest"></span><span class="lbl">퀘스트</span></button>
+      <button data-action="collection"><span class="ico" data-icon="collection"></span><span class="lbl">도감</span></button>
+      <button data-action="menu"><span class="ico" data-icon="menu"></span><span class="lbl">메뉴</span></button>
+    </nav>
+
+    <aside id="hud-right" class="hud-right">
+      <section id="minimap-panel" class="glass panel minimap-panel" aria-label="미니맵">
+        <header class="panel-head">
+          <h2>미니맵</h2>
+          <div class="panel-tools">
+            <button class="icon-btn" data-action="minimap-collapse" title="접기" aria-label="미니맵 접기"><span class="ico ico-sm" data-icon="minus"></span></button>
+            <button class="icon-btn" data-action="minimap-close" title="닫기" aria-label="미니맵 닫기"><span class="ico ico-sm" data-icon="x"></span></button>
+          </div>
+        </header>
+        <div class="minimap-wrap">
+          <canvas id="minimap-canvas" width="272" height="196"></canvas>
+          <div class="minimap-zoom">
+            <button class="icon-btn" data-action="minimap-zoom-in" aria-label="확대"><span class="ico ico-sm" data-icon="plus"></span></button>
+            <button class="icon-btn" data-action="minimap-zoom-out" aria-label="축소"><span class="ico ico-sm" data-icon="minus"></span></button>
+          </div>
+        </div>
+        <div id="minimap-address" class="minimap-address"></div>
+      </section>
+
+      <section id="quest-panel" class="glass panel quest-panel" aria-label="퀘스트">
+        <header class="panel-head">
+          <h2>퀘스트</h2>
+          <div class="panel-tools">
+            <button class="icon-btn" data-action="quest-collapse" title="접기" aria-label="퀘스트 접기"><span class="ico ico-sm" data-icon="minus"></span></button>
+          </div>
+        </header>
+        <div id="quest-list" class="quest-list"></div>
+        <button class="btn btn-block btn-soft" data-action="quests">퀘스트 모두 보기 <span class="ico ico-sm" data-icon="chevron-right"></span></button>
+      </section>
+    </aside>
+
+    <div id="hud-top-center" class="hud-top-center">
+      <div id="notice-banner" class="glass notice-banner" hidden></div>
+      <div id="objective-hint" class="glass objective-hint" hidden></div>
+    </div>
+    <div id="zone-label" class="zone-label" hidden><small>현재 위치</small><b></b></div>
+
+    <section id="chat-panel" class="glass chat-panel" aria-label="채팅">
+      <header class="chat-tabs" role="tablist">
+        <button data-channel="all" class="active" role="tab">전체</button>
+        <button data-channel="local" role="tab">지역</button>
+        <button data-channel="system" role="tab">시스템</button>
+        <button class="icon-btn chat-collapse" data-action="chat-collapse" title="채팅 접기" aria-label="채팅 접기"><span class="ico ico-sm" data-icon="minus"></span></button>
+      </header>
+      <div id="chat-log" class="chat-log" role="log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <input id="chat-input" type="text" maxlength="120" placeholder="메시지를 입력하세요..." aria-label="채팅 메시지">
+        <button type="submit" class="btn btn-primary btn-sm">전송</button>
+      </form>
+    </section>
+
+    <nav id="bottom-bar" class="glass bottom-bar" aria-label="빠른 메뉴">
+      <button data-action="emote"><span class="ico" data-icon="smile"></span><span class="lbl">이모지</span></button>
+      <button data-action="gesture"><span class="ico" data-icon="hand"></span><span class="lbl">제스처</span></button>
+      <button data-action="journal"><span class="ico" data-icon="journal"></span><span class="lbl">작업일지</span></button>
+      <button data-action="weather" class="weather-btn"><span class="weather-now"><span id="weather-icon" class="ico" data-icon="sun"></span><b id="weather-temp">23°C</b><span class="ico ico-xs" data-icon="chevron-down"></span></span><span class="lbl">날씨</span></button>
+      <button data-action="photo"><span class="ico" data-icon="camera"></span><span class="lbl">사진</span></button>
+      <button data-action="voice"><span class="ico" data-icon="mic"></span><span class="lbl">음성</span></button>
+    </nav>
+    <div id="popover-root"></div>
+
+    <div id="dpad" class="dpad" aria-label="이동 패드">
+      <button data-dir="up" aria-label="앞으로"><span class="ico" data-icon="chevron-up"></span></button>
+      <button data-dir="left" aria-label="왼쪽"><span class="ico" data-icon="chevron-left"></span></button>
+      <button data-dir="center" aria-label="상호작용"><span class="dpad-center"></span></button>
+      <button data-dir="right" aria-label="오른쪽"><span class="ico" data-icon="chevron-right"></span></button>
+      <button data-dir="down" aria-label="뒤로"><span class="ico" data-icon="chevron-down"></span></button>
+    </div>
+
+    <div id="mobile-controls" class="mobile-controls" aria-hidden="true">
+      <div id="joystick" class="joystick"><div class="joystick-knob"></div></div>
+      <div class="mobile-buttons">
+        <button data-mobile="interact" class="mb-interact">E</button>
+        <button data-mobile="jump" class="mb-jump"><span class="ico" data-icon="chevron-up"></span><small>점프</small></button>
+        <button data-mobile="run" class="mb-run"><span class="ico" data-icon="run"></span><small>달리기</small></button>
+        <button data-mobile="photo" class="mb-photo"><span class="ico" data-icon="camera"></span></button>
+      </div>
+    </div>
+
+    <div id="interact-prompt" class="interact-prompt" hidden><kbd>E</kbd><span class="interact-text"></span></div>
+    <div id="fps-meter" class="fps-meter" hidden></div>
+  </div>
+
+  <div id="dialogue-root"></div>
+  <div id="photo-ui" class="photo-ui" hidden></div>
+  <div id="screen-root"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+  <div id="reward-root"></div>
+  <div id="fade" class="fade"></div>
+
+  <!-- ============================== LOADING ============================== -->
+  <section id="loading-screen" class="loading-screen" aria-live="polite">
+    <div class="loading-bg"></div>
+    <div class="loading-inner">
+      <div class="loading-logo" aria-hidden="true">
+        <svg viewBox="0 0 120 120" width="96" height="96"><defs><linearGradient id="lg-jar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a4a2c"/><stop offset="1" stop-color="#3a2114"/></linearGradient></defs><ellipse cx="60" cy="24" rx="26" ry="8" fill="#2a170d"/><path d="M28 30c-14 18-12 58 8 74h48c20-16 22-56 8-74z" fill="url(#lg-jar)"/><path d="M33 50h54" stroke="#f4c54a" stroke-width="3" stroke-linecap="round" opacity=".9"/><ellipse cx="46" cy="66" rx="5" ry="14" fill="#fff" opacity=".12"/></svg>
+      </div>
+      <div class="loading-eyebrow">METAVERSE</div>
+      <h1 class="loading-title">전통발효체험관</h1>
+      <div class="loading-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i id="loading-bar-fill"></i></div>
+      <div class="loading-status"><span id="loading-label">로딩 중...</span><b id="loading-pct">0%</b></div>
+      <p id="loading-tip" class="loading-tip"></p>
+    </div>
+  </section>
+
+  <div id="fatal" class="fatal" hidden></div>
+  <noscript><div class="fatal">이 게임을 실행하려면 JavaScript를 켜 주세요.</div></noscript>
+</div>
+<script>
+/*@VENDOR*/
+</script>
+<script>
+/*@GAME*/
+</script>
+</body>
+</html>
