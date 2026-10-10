@@ -26,7 +26,11 @@ const copy = (src, dst) => {
   if (!fs.existsSync(s)) return;
   fs.cpSync(s, path.join(stage, dst ?? src), {
     recursive: true,
-    filter: (p) => !/(^|\/)(node_modules|\.cache|test-output|\.git)(\/|$)/.test(p) && !/\.sqlite$|\/logs\//.test(p),
+    // skip deps/caches, runtime DBs/logs/secrets, and every hidden file or folder (tool state such as .omc/, .claude/)
+    // except the .htaccess / .gitignore guards that the server folders need
+    filter: (p) => !/(^|\/)(node_modules|test-output)(\/|$)/.test(p)
+      && !/(^|\/)\.(?!htaccess$|gitignore$)[^/]+(\/|$)/.test(p)
+      && !/\.sqlite(-wal|-shm)?$|\/(logs|sessions|backups)\/|\/secret\.php$|config\.local\.php$/.test(p),
   });
 };
 copy('dist/metaverse', 'metaverse');
