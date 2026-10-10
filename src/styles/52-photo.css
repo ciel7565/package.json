@@ -47,6 +47,8 @@ body.photo-mode #game-container canvas:active { cursor: grabbing; }
 .ph-hint { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem .85rem; font-size: .76rem; color: var(--text-dim); }
 .ph-hint kbd { font-size: .68rem; height: 1.45em; margin-right: .1rem; }
 .ph-top-actions { display: flex; gap: .35rem; flex: none; }
+.ph-opts-btn { display: none; }
+.photo-ui.show-opts .ph-opts-btn { background: rgba(244, 197, 74, .22); border-color: rgba(244, 197, 74, .6); }
 .ph-count { display: inline-grid; place-items: center; min-width: 1.3rem; height: 1.3rem; padding: 0 .3rem; border-radius: 999px; background: rgba(255, 255, 255, .16); font-size: .7rem; font-weight: 800; }
 
 /* ---------------------------------------------------------------- side panels */
@@ -184,15 +186,22 @@ body.photo-mode #game-container canvas:active { cursor: grabbing; }
 }
 @media (max-width: 820px), (max-height: 560px) {
   .ph-top { top: .5rem; padding: .35rem .45rem; }
+  .ph-opts-btn { display: inline-flex; }
   .ph-title b { font-size: .9rem; }
   .ph-zone { max-width: 8rem; }
-  .ph-left { top: auto; bottom: 10.4rem; left: 50%; right: auto; transform: translateX(-50%); width: calc(100% - 1rem); max-height: none; padding: .4rem; }
+  .ph-left { top: auto; bottom: 11.4rem; left: 50%; right: auto; transform: translateX(-50%); width: calc(100% - 1rem); max-height: none; padding: .4rem; }
   .ph-left h4, .ph-left > .btn { display: none; }
   .ph-poses { display: flex; overflow-x: auto; margin: 0; }
   .ph-pose { flex: none; width: 4.4rem; }
   .ph-right { top: 3.8rem; transform: none; width: 11.2rem; max-height: calc(100% - 15.5rem); padding: .5rem .55rem; }
-  .ph-filters { max-width: calc(100vw - 1rem); overflow-x: auto; }
-  .ph-filter { padding: .25rem .6rem .25rem .25rem; font-size: .74rem; }
+  /* absolute left:50% would shrink the bar to half the screen: span the width and centre the content instead */
+  .ph-bottom { left: .5rem; right: .5rem; transform: none; }
+  .ph-filters { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .ph-filters::-webkit-scrollbar { display: none; }
+  .ph-filter { flex: none; white-space: nowrap; padding: .25rem .6rem .25rem .25rem; font-size: .74rem; }
+  /* the camera / option panel is opened from the ⚙ button so it never hides half of the shot */
+  .ph-right { display: none; }
+  .photo-ui.show-opts .ph-right { display: block; z-index: 3; }
   .ph-card { width: calc(100% - 1rem); right: .5rem; bottom: auto; top: 3.8rem; }
   .photo-ui.clean .ph-left { transform: translate(-50%, 1rem); }
   .photo-ui.clean .ph-right { transform: translateX(1rem); }
@@ -209,7 +218,9 @@ body.photo-mode #game-container canvas:active { cursor: grabbing; }
   .ph-poses { display: grid; grid-template-columns: 1fr; gap: .25rem; overflow: visible; margin: 0; }
   .ph-pose { width: auto; padding: .25rem .1rem; font-size: .56rem; }
   .ph-pose .emoji { font-size: 1.05rem; }
-  .ph-right { top: 3.4rem; bottom: .5rem; right: .5rem; transform: none; width: 11.4rem; max-height: none; padding: .45rem .5rem; }
+  .ph-right { display: block; top: 3.4rem; bottom: .5rem; right: .5rem; transform: none; width: 11.4rem; max-height: none; padding: .45rem .5rem; }
+  .ph-opts-btn { display: none; }
+  .ph-bottom { left: 5.4rem; right: 12.4rem; }
   .ph-right h4 { margin-bottom: .3rem; }
   .ph-range { margin-bottom: .35rem; }
   .ph-toggle { padding: .26rem .25rem; font-size: .74rem; }

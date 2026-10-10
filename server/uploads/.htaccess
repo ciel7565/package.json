@@ -1,0 +1,50 @@
+# =============================================================================
+# User uploads (journal photos). Files here are re-encoded images with random names.
+# Defense in depth: nothing in this folder may ever execute or be sniffed as HTML/script.
+# =============================================================================
+Options -Indexes -ExecCGI -Includes -MultiViews
+
+# no PHP / CGI handlers in this tree (mod_php and handler-based setups)
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag engine off
+</IfModule>
+<IfModule php_module>
+  php_flag engine off
+</IfModule>
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phps .pht .phar .cgi .pl .py .sh .shtml
+RemoveType .php .phtml .php3 .php4 .php5 .php7 .php8 .phps .pht .phar
+
+# deny everything that is not a plain image
+<FilesMatch ".*">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+<FilesMatch "(?i)^[a-f0-9]{32}\.(jpe?g|png|webp)$">
+  <IfModule mod_authz_core.c>
+    Require all granted
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order deny,allow
+    Allow from all
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_mime.c>
+  AddType image/jpeg .jpg .jpeg
+  AddType image/png .png
+  AddType image/webp .webp
+</IfModule>
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Content-Security-Policy "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
+  Header always set Cross-Origin-Resource-Policy "same-origin"
+  Header always set Cache-Control "public, max-age=604800, immutable"
+</IfModule>

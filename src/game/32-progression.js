@@ -5,7 +5,9 @@
 //   addCoin(n, {silent}) / spendCoin(n) -> bool / addExp(n) / addEdu(n)
 //   incStat(key, n=1) / getStat(key) (derived: level zonesVisited npcsTalked cropKinds socials) / expToNext()
 //   unlockCollection(id, {silent}) / isCollected(id) / openCollection(category?)
-//   openAchievements() / openProfile() / setTitle(name) / addTitle(name, {silent}) / titles()
+//   openAchievements(tab?) / openProfile() / openHub('col'|'ach'|'me') — ONE tabbed modal '도감 · 업적'
+//   (id 'collection') with 도감 / 업적 / 내 기록 tabs; hotkey C + actions `collection`, `achievements`.
+//   setTitle(name) / addTitle(name, {silent}) / titles()
 //   celebrate('levelup'|'quest') / refreshHud()
 // Stats are maintained only here, from bus events (CONTRACT §4). exp = progress inside the current level,
 // expTotal = lifetime exp (monotonic, handy for server-side validation).
@@ -102,13 +104,17 @@
   const progression = {
     name: 'progression', order: 54, label: '성장·도감',
     _loginCounted: false, _checking: false, _recheck: false,
-    _coinShown: 0, _coinTarget: 0, _newCol: new Set(), _fx: null, _luQueue: [], _luShowing: false,
+    _coinShown: 0, _coinTarget: 0, _newCol: new Set(), _newAch: new Set(), _hubModal: null, _hubTab: 'col', _fx: null, _luQueue: [], _luShowing: false,
     _hudKey: '', _distSince: 0,
 
     init() {
       buildIndex();
       this._bindEvents();
       G.ui.onAction('collection', () => this.toggleCollection());
+      G.ui.onAction('achievements', () => this.openAchievements());
+      // hub stays in sync with unlocks that happen while it is open (quest rewards, jar claims...)
+      G.bus.on('collection:unlocked', () => { this._hubTabCounts(this._hubModal); if (this._hubModal?._tab !== 'me') this._hubRefresh(); });
+      G.bus.on('achievement:unlocked', () => { this._hubTabCounts(this._hubModal); this._hubRefresh(); });
       G.input?.onKey?.('KeyC', () => { this.toggleCollection(); return true; }, { allowInModal: true });
       // level-up overlay
       const lu = G.ui.h('div', { id: 'levelup-fx', class: 'levelup-fx', 'aria-live': 'assertive', hidden: true });
@@ -133,6 +139,7 @@
       // level titles earned so far (silent: they belong to the save already)
       for (const [lv, name] of Object.entries(LV().titles || {})) if (s.level >= Number(lv)) this.addTitle(name, { silent: true, equip: !p.title && !state.flags['title:manual'] });
       this._newCol.clear();
+      this._newAch.clear();
       G.ui.setBadge('collection', 0);
       this._reevalCollection();
       this._coinShown = this._coinTarget = s.coin;
@@ -147,9 +154,13 @@
     onLogout() {
       this._loginCounted = false;
       this._newCol.clear();
+      this._newAch.clear();
       this._luQueue.length = 0;
       G.progToast?.clear?.();
+      clearTimeout(this._hubRefreshT);
       for (const id of ['collection', 'achievements', 'profile']) G.ui.modal.get(id)?.close();
+      this._hubModal = null;
+      G.ui.setBadge('collection', 0);
       if (this._fx) { this._fx.active = false; this._fx.group.visible = false; }
     },
 
@@ -185,7 +196,11 @@
       on('ferment:started', () => inc('fermentsStarted'));
       on('ferment:checked', () => inc('fermentChecks'));
       on('ferment:claimed', (p) => { inc('fermentsClaimed'); this._unlockBy('claim', p.recipeId); this._unlockBy('claim', '*'); });
-      on('quiz:answered', (p) => { if (p.correct) G.state.stats.quizCorrect = (G.state.stats.quizCorrect || 0) + 1; inc('quizAnswered'); });
+      // quizCorrect = distinct quizzes solved (re-answering a solved quiz does not inflate it); quizAnswered = attempts
+      on('quiz:answered', (p) => {
+        if (p.correct && p.first !== false) G.state.stats.quizCorrect = (G.state.stats.quizCorrect || 0) + 1;
+        inc('quizAnswered');
+      });
       on('edu:completed', (p) => {
         // distinct contents finished (re-reading does not inflate the stat)
         const set = new Set(Object.keys(G.state.education?.completed || {}));
@@ -396,6 +411,8 @@
       toastQ(`<b>업적 달성!</b> ${esc(a.name)}${parts.length ? ` <span class="t-sub">${esc(parts.join(' · '))}</span>` : ''}`, { html: true, emoji: a.icon || '🏆', type: 'reward', cls: 'ach-toast', duration: 3600, gap: 420 });
       G.sfx('achievement');
       this.grant(r, { popup: false, silent: true, reason: `achievement:${id}` });
+      this._newAch.add(id);
+      this._hubBadge();
       G.bus.emit('achievement:unlocked', { id });
       G.activity('achievement', `업적 「${a.name}」 달성`);
       G.dirty('achievement');
@@ -412,7 +429,7 @@
       if (!opts.silent) {
         toastQ(`<b>도감 등록</b> ${esc(c.name)} <span class="t-sub">${esc(G.data.collectionCategories?.find((k) => k.id === c.category)?.name || '')}</span>`, { html: true, emoji: c.icon || '📖', type: 'success', cls: 'col-toast' });
         this._newCol.add(id);
-        G.ui.setBadge('collection', this._newCol.size);
+        this._hubBadge();
       }
       G.bus.emit('collection:unlocked', { id });
       G.dirty('collection');
@@ -435,70 +452,174 @@
       each('visit', Object.keys(st.visited || {}));
     },
 
+    // ------------------------------------------------------------ 도감 · 업적 · 내 기록 hub (one tabbed modal)
+    // openCollection(category) / openAchievements(tab) / openProfile() all open the same hub on their tab,
+    // so the HUD button, hotkey C, NPC/app/jar links and the menu never stack duplicate modals.
+    _hubBadge() { G.ui.setBadge('collection', this._newCol.size + this._newAch.size); },
+
     toggleCollection() {
       const m = G.ui.modal.get('collection');
       if (m && G.ui.modal.top() === m) { m.close(); return; }
       if (G.ui.isBlocking() && !m && G.ui.blockers && [...G.ui.blockers].some((k) => !String(k).startsWith('modal:'))) return;
-      this.openCollection();
+      // unseen achievements first, otherwise the tab used last
+      this.openHub(this._newAch.size && !this._newCol.size ? 'ach' : null);
     },
 
     openCollection(category) {
-      if (!G.state) return null;
       const cats = G.data.collectionCategories || [];
-      this._colCat = category && cats.some((c) => c.id === category) ? category : (this._colCat || 'all');
-      const fresh = new Set(this._newCol);
-      this._newCol.clear();
-      G.ui.setBadge('collection', 0);
+      if (category && cats.some((c) => c.id === category)) { this._colCat = category; this._colSel = null; }
+      return this.openHub('col');
+    },
+    openAchievements(tab) {
+      if (tab && ['all', 'todo', 'done'].includes(tab)) this._achTab = tab;
+      return this.openHub('ach');
+    },
+    openProfile() { return this.openHub('me'); },
+
+    openHub(tab) {
+      if (!G.state) return null;
+      const TABS = ['col', 'ach', 'me'];
+      tab = TABS.includes(tab) ? tab : (TABS.includes(this._hubTab) ? this._hubTab : 'col');
+      const open = G.ui.modal.get('collection');
+      if (open && open._hub && !open.closed) { open._hub.set(tab); return open; }
+      this._colCat = this._colCat || 'all';
+      this._achTab = this._achTab || 'all';
+      const counts = this._hubCounts();
+      const chipCol = G.ui.h('span', { class: 'chip chip-gold hub-chip', title: '도감 수집' }, `📖 ${counts.colN}/${counts.colT}`);
+      const chipAch = G.ui.h('span', { class: 'chip chip-gold hub-chip', title: '업적 달성' }, `🏆 ${counts.achN}/${counts.achT}`);
+      const m = G.ui.modal.open({
+        id: 'collection', title: '도감 · 업적', icon: 'collection', size: 'xl', className: 'col-modal prog-hub',
+        headExtra: G.ui.h('span', { class: 'hub-chips' }, chipCol, chipAch),
+        body: (body) => { body.innerHTML = '<div class="hub-tabs"></div><div class="hub-pane" role="tabpanel"></div>'; },
+        onClose: () => { G.ui.setActive('collection', false); if (this._hubModal === m) this._hubModal = null; },
+      });
+      m._chips = { col: chipCol, ach: chipAch };
+      m._fresh = new Set();
+      m._freshAch = new Set();
+      this._hubModal = m;
+      G.ui.setActive('collection', true);
+      const tabList = [
+        { id: 'col', icon: '📖', label: '도감' },
+        { id: 'ach', icon: '🏆', label: '업적' },
+        { id: 'me', icon: '📊', label: '내 기록' },
+      ];
+      const tabsEl = m.body.querySelector('.hub-tabs');
+      m._hub = G.ui.tabs(tabsEl, tabList, (id) => this._showHubTab(m, id), tab);
+      for (const b of tabsEl.querySelectorAll('.tab')) {
+        b.setAttribute('role', 'tab');
+        if (b.dataset.tab !== 'me') b.appendChild(G.ui.h('span', { class: 'tab-count' }, ''));
+        b.appendChild(G.ui.h('span', { class: 'hub-dot', hidden: true }, ''));
+      }
+      this._hubTabCounts(m);
+      return m;
+    },
+
+    _hubCounts() {
+      const st = G.state;
+      const colT = Object.keys(G.data.collection || {}).length;
+      const colN = Object.keys(st?.collection || {}).filter((k) => G.data.collection?.[k]).length;
+      const achT = Object.keys(G.data.achievements || {}).length;
+      const achN = Object.keys(st?.achievements || {}).filter((k) => G.data.achievements?.[k]).length;
+      return { colN, colT, achN, achT };
+    },
+    /** refresh tab counters, head chips and "new" dots without re-rendering the pane */
+    _hubTabCounts(m) {
+      if (!m || m.closed) return;
+      const c = this._hubCounts();
+      const set = (id, txt) => { const el = m.body.querySelector(`.hub-tabs [data-tab="${id}"] .tab-count`); if (el && el.textContent !== txt) el.textContent = txt; };
+      set('col', `${c.colN}/${c.colT}`);
+      set('ach', `${c.achN}/${c.achT}`);
+      if (m._chips) { m._chips.col.textContent = `📖 ${c.colN}/${c.colT}`; m._chips.ach.textContent = `🏆 ${c.achN}/${c.achT}`; }
+      const dot = (id, on) => { const el = m.body.querySelector(`.hub-tabs [data-tab="${id}"] .hub-dot`); if (el) el.hidden = !on; };
+      dot('col', this._newCol.size > 0);
+      dot('ach', this._newAch.size > 0);
+    },
+
+    _showHubTab(m, tab) {
+      if (!m || m.closed) return;
+      this._hubTab = tab;
+      m._tab = tab;
+      const pane = m.body.querySelector('.hub-pane');
+      if (!pane) return;
+      pane.className = `hub-pane hub-${tab}`;
+      pane.innerHTML = '';
+      if (tab === 'col') {
+        for (const id of this._newCol) m._fresh.add(id);
+        this._newCol.clear();
+        this._renderColPane(m, pane);
+      } else if (tab === 'ach') {
+        for (const id of this._newAch) m._freshAch.add(id);
+        this._newAch.clear();
+        this._renderAchPane(m, pane);
+      } else this._renderMePane(m, pane);
+      this._hubBadge();
+      this._hubTabCounts(m);
+      if (!m._keepScroll) m.body.scrollTop = 0;
+    },
+    /** re-render the visible pane (new unlocks while the hub is open) */
+    _hubRefresh() {
+      const m = this._hubModal;
+      if (!m || m.closed || !m._tab) return;
+      clearTimeout(this._hubRefreshT);
+      this._hubRefreshT = setTimeout(() => {
+        if (this._hubModal !== m || m.closed) return;
+        const y = m.body.scrollTop;
+        m._keepScroll = true;
+        try { this._showHubTab(m, m._tab); } finally { m._keepScroll = false; }
+        m.body.scrollTop = y;
+      }, 60);
+    },
+
+    // ---- 도감 pane
+    _renderColPane(m, pane) {
+      const cats = G.data.collectionCategories || [];
       const all = Object.values(G.data.collection || {});
       const got = all.filter((c) => G.state.collection[c.id]).length;
       const pct = all.length ? Math.round((got / all.length) * 100) : 0;
-      const m = G.ui.modal.open({
-        id: 'collection', title: '도감', icon: 'collection', size: 'xl', className: 'col-modal',
-        headExtra: G.ui.h('span', { class: 'chip chip-gold' }, `수집 ${got}/${all.length}`),
-        body: (body) => {
-          body.innerHTML = `<div class="col-summary"><div class="col-sum-txt"><b>${pct}%</b><span>전통발효 도감 완성도</span></div>${G.ui.bar(pct, { cls: 'bar-gold', lg: true })}</div>
-            <div class="col-tabs"></div><div class="col-layout"><div class="col-grid" role="listbox" aria-label="도감 목록"></div><aside class="col-detail" aria-live="polite"></aside></div>`;
-        },
-        onClose: () => G.ui.setActive('collection', false),
-      });
-      m._fresh = fresh;
-      this._colModal = m;
-      G.ui.setActive('collection', true);
-      const tabsEl = m.body.querySelector('.col-tabs');
+      pane.innerHTML = `<div class="col-summary"><div class="col-sum-txt"><b>${pct}%</b><span>전통발효 도감 완성도</span></div>${G.ui.bar(pct, { cls: 'bar-gold', lg: true })}</div>
+        <div class="col-tabs"></div><div class="col-layout"><div class="col-grid" role="listbox" aria-label="도감 목록"></div><aside class="col-detail" aria-live="polite"></aside></div>`;
+      const tabsEl = pane.querySelector('.col-tabs');
       const tabList = [{ id: 'all', label: '전체', icon: '📚' }].concat(cats.map((c) => ({ id: c.id, label: c.name, icon: c.icon })));
-      G.ui.tabs(tabsEl, tabList, (id) => { this._colCat = id; this._colSel = null; this._renderColGrid(); }, this._colCat);
+      if (!tabList.some((t) => t.id === this._colCat)) this._colCat = 'all';
+      G.ui.tabs(tabsEl, tabList, (id) => { this._colCat = id; this._colSel = null; this._renderColGrid(m); }, this._colCat);
       for (const b of tabsEl.querySelectorAll('.tab')) {
         const list = all.filter((c) => b.dataset.tab === 'all' || c.category === b.dataset.tab);
         b.appendChild(G.ui.h('span', { class: 'tab-count' }, `${list.filter((c) => G.state.collection[c.id]).length}/${list.length}`));
       }
-      return m;
     },
 
-    _renderColGrid() {
-      const m = this._colModal;
+    _renderColGrid(m = this._hubModal) {
       if (!m || m.closed) return;
+      const grid = m.body.querySelector('.col-grid');
+      if (!grid) return;
       const all = Object.values(G.data.collection || {});
       const list = all.filter((c) => this._colCat === 'all' || c.category === this._colCat);
       if (!this._colSel || !list.some((c) => c.id === this._colSel)) this._colSel = (list.find((c) => m._fresh?.has(c.id)) || list.find((c) => G.state.collection[c.id]) || list[0])?.id || null;
-      const grid = m.body.querySelector('.col-grid');
       grid.innerHTML = '';
+      const frag = document.createDocumentFragment();
       for (const c of list) {
         const got = !!G.state.collection[c.id];
         const no = String(all.indexOf(c) + 1).padStart(3, '0');
-        const card = G.ui.h('button', { type: 'button', role: 'option', class: `col-card ${got ? 'got' : 'locked'} cat-${c.category}${c.id === this._colSel ? ' selected' : ''}${m._fresh?.has(c.id) ? ' is-new' : ''}`, 'aria-selected': c.id === this._colSel ? 'true' : 'false', title: got ? c.name : '아직 발견하지 못했어요' },
+        const card = G.ui.h('button', { type: 'button', role: 'option', class: `col-card ${got ? 'got' : 'locked'} cat-${c.category}${c.id === this._colSel ? ' selected' : ''}${m._fresh?.has(c.id) ? ' is-new' : ''}`, 'aria-selected': c.id === this._colSel ? 'true' : 'false', title: got ? c.name : '아직 발견하지 못했어요', dataset: { col: c.id } },
           G.ui.h('span', { class: 'col-no' }, `No.${no}`),
           G.ui.h('span', { class: 'col-ico emoji' }, c.icon || '❔'),
           G.ui.h('span', { class: 'col-name' }, got ? c.name : '???'));
-        card.addEventListener('click', () => { this._colSel = c.id; m._fresh?.delete(c.id); this._renderColGrid(); });
-        grid.appendChild(card);
+        card.addEventListener('click', () => {
+          this._colSel = c.id; m._fresh?.delete(c.id);
+          for (const el of grid.querySelectorAll('.col-card.selected')) { el.classList.remove('selected'); el.setAttribute('aria-selected', 'false'); }
+          card.classList.add('selected'); card.classList.remove('is-new'); card.setAttribute('aria-selected', 'true');
+          this._renderColDetail(m);
+        });
+        frag.appendChild(card);
       }
-      this._renderColDetail();
+      grid.appendChild(frag);
+      this._renderColDetail(m);
     },
 
-    _renderColDetail() {
-      const m = this._colModal;
+    _renderColDetail(m = this._hubModal) {
       if (!m || m.closed) return;
       const pane = m.body.querySelector('.col-detail');
+      if (!pane) return;
       pane.innerHTML = '';
       const c = G.data.collection?.[this._colSel];
       if (!c) { pane.appendChild(G.ui.h('div', { class: 'empty' }, '항목을 선택하세요.')); return; }
@@ -508,9 +629,10 @@
       pane.appendChild(G.ui.h('div', { class: `col-d-art ${rec ? 'got' : 'locked'} cat-${c.category}` }, G.ui.h('span', { class: 'emoji' }, c.icon || '❔'), G.ui.h('span', { class: 'col-d-no' }, `No.${String(all.indexOf(c) + 1).padStart(3, '0')}`)));
       pane.appendChild(G.ui.h('div', { class: 'col-d-name' }, G.ui.h('h3', {}, rec ? c.name : '???'), G.ui.h('span', { class: 'chip' }, `${cat?.icon || ''} ${cat?.name || ''}`)));
       if (rec) {
-        pane.appendChild(G.ui.h('p', { class: 'col-d-desc' }, c.desc));
+        pane.appendChild(G.ui.h('p', { class: 'col-d-desc' }, c.desc || ''));
         const zone = rec.zoneId ? G.world.zoneById?.(rec.zoneId)?.name : null;
-        pane.appendChild(G.ui.h('dl', { class: 'kv col-d-kv', html: `<dt>획득 위치</dt><dd>${esc(c.location || '-')}</dd><dt>등록일</dt><dd>${esc(G.util.formatDate(rec.at, true))}</dd>${zone ? `<dt>발견한 곳</dt><dd>${esc(zone)}</dd>` : ''}` }));
+        const at = Number(rec.at) || 0;
+        pane.appendChild(G.ui.h('dl', { class: 'kv col-d-kv', html: `<dt>획득 위치</dt><dd>${esc(c.location || '-')}</dd>${at ? `<dt>등록일</dt><dd>${esc(G.util.formatDate(at, true))}</dd>` : ''}${zone ? `<dt>발견한 곳</dt><dd>${esc(zone)}</dd>` : ''}` }));
         if (c.category === 'fermented') pane.appendChild(G.ui.h('p', { class: 'tiny muted' }, G.data.meta?.disclaimer || ''));
       } else {
         pane.appendChild(G.ui.h('p', { class: 'col-d-desc muted' }, '아직 발견하지 못한 항목이에요.'));
@@ -520,53 +642,60 @@
       }
     },
 
-    // ------------------------------------------------------------ achievements modal
-    openAchievements(tab) {
-      if (!G.state) return null;
-      this._achTab = tab || this._achTab || 'all';
+    // ---- 업적 pane
+    _renderAchPane(m, pane) {
       const list = Object.values(G.data.achievements || {});
       const got = list.filter((a) => G.state.achievements[a.id]).length;
-      const m = G.ui.modal.open({
-        id: 'achievements', title: '업적', icon: 'trophy', size: 'lg', className: 'ach-modal',
-        headExtra: G.ui.h('span', { class: 'chip chip-gold' }, `달성 ${got}/${list.length}`),
-        body: (body) => { body.innerHTML = `<div class="col-summary">${G.ui.bar(list.length ? (got / list.length) * 100 : 0, { cls: 'bar-gold', lg: true })}</div><div class="ach-tabs"></div><div class="ach-list"></div>`; },
-      });
-      G.ui.tabs(m.body.querySelector('.ach-tabs'), [{ id: 'all', label: '전체' }, { id: 'todo', label: '진행 중' }, { id: 'done', label: '달성' }], (id) => { this._achTab = id; this._renderAch(m); }, this._achTab);
-      return m;
+      const pct = list.length ? Math.round((got / list.length) * 100) : 0;
+      // the closest unfinished goals ("거의 다 왔어요!")
+      const near = list.filter((a) => !G.state.achievements[a.id] && a.condition)
+        .map((a) => ({ a, r: Math.min(1, this.getStat(a.condition.stat) / (a.condition.gte || 1)) }))
+        .filter((x) => x.r > 0).sort((x, y) => y.r - x.r).slice(0, 3);
+      pane.innerHTML = `<div class="col-summary"><div class="col-sum-txt"><b>${pct}%</b><span>업적 달성률 · ${got}/${list.length}</span></div>${G.ui.bar(pct, { cls: 'bar-gold', lg: true })}</div>
+        ${near.length ? `<div class="ach-near"><span class="ach-near-t">🔥 거의 다 왔어요</span>${near.map((x) => `<span class="ach-near-i" title="${esc(x.a.desc)}"><span class="emoji">${esc(x.a.icon || '🏆')}</span>${esc(x.a.name)} <b>${Math.floor(x.r * 100)}%</b></span>`).join('')}</div>` : ''}
+        <div class="ach-tabs"></div><div class="ach-list"></div>`;
+      G.ui.tabs(pane.querySelector('.ach-tabs'), [{ id: 'all', label: '전체' }, { id: 'todo', label: '진행 중' }, { id: 'done', label: '달성' }], (id) => { this._achTab = id; this._renderAch(m); }, this._achTab || 'all');
     },
-    _renderAch(m) {
+    _renderAch(m = this._hubModal) {
+      if (!m || m.closed) return;
       const el = m.body.querySelector('.ach-list');
+      if (!el) return;
       const rows = Object.values(G.data.achievements || {}).map((a) => {
         const goal = a.condition?.gte || 1;
         const cur = Math.min(goal, this.getStat(a.condition?.stat));
-        return { a, goal, cur, at: G.state.achievements[a.id] || 0, ratio: cur / goal };
+        return { a, goal, cur, at: Number(G.state.achievements[a.id]) || 0, ratio: cur / goal };
       }).filter((r) => this._achTab === 'all' || (this._achTab === 'done' ? r.at : !r.at));
       rows.sort((x, y) => (!!x.at - !!y.at) || (x.at ? y.at - x.at : y.ratio - x.ratio));
       el.innerHTML = '';
       for (const r of rows) {
         const unit = STAT_INFO[r.a.condition?.stat]?.[1] || '';
         const rw = r.a.reward || {};
-        const rewards = [rw.coin ? `<span class="ql-rw"><span class="ico ico-sm" data-icon="coin"></span>${fmt(rw.coin)}</span>` : '', rw.edu ? `<span class="ql-rw">📘 ${fmt(rw.edu)}</span>` : '', rw.title ? `<span class="ql-rw ql-rw-title">🏅 「${esc(rw.title)}」</span>` : ''].join('');
+        const rewards = [rw.coin ? `<span class="ql-rw"><span class="ico ico-sm" data-icon="coin"></span>${fmt(rw.coin)}</span>` : '', rw.exp ? `<span class="ql-rw">✨ ${fmt(rw.exp)}</span>` : '', rw.edu ? `<span class="ql-rw">📘 ${fmt(rw.edu)}</span>` : '', rw.title ? `<span class="ql-rw ql-rw-title">🏅 「${esc(rw.title)}」</span>` : ''].join('');
+        const isNew = m._freshAch?.has(r.a.id);
         el.appendChild(G.ui.h('div', {
-          class: `ach-row ${r.at ? 'got' : ''}`,
+          class: `ach-row ${r.at ? 'got' : ''}${isNew ? ' is-new' : ''}`,
           html: `<div class="ach-ico emoji">${esc(r.a.icon || '🏆')}</div>
-            <div class="ach-main"><div class="ach-name">${esc(r.a.name)}${r.at ? '<span class="chip chip-gold">달성</span>' : ''}</div><div class="ach-desc">${esc(r.a.desc)}</div>
-            <div class="ach-prog">${G.ui.bar(r.ratio * 100, { cls: r.at ? 'bar-gold' : '' })}<span>${fmt(r.cur)} / ${fmt(r.goal)}${unit}</span></div></div>
+            <div class="ach-main"><div class="ach-name">${esc(r.a.name)}${r.at ? '<span class="chip chip-gold">달성</span>' : ''}${isNew ? '<span class="chip chip-new">NEW</span>' : ''}</div><div class="ach-desc">${esc(r.a.desc)}</div>
+            <div class="ach-prog">${G.ui.bar(r.ratio * 100, { cls: r.at ? 'bar-gold' : '' })}<span>${fmt(r.cur)} / ${fmt(r.goal)}${esc(unit)}</span></div></div>
             <div class="ach-side"><div class="ach-rewards">${rewards}</div>${r.at ? `<small>${esc(G.util.formatDate(r.at))}</small>` : ''}</div>`,
         }));
       }
-      if (!rows.length) el.appendChild(G.ui.h('div', { class: 'empty' }, this._achTab === 'done' ? '아직 달성한 업적이 없어요. 체험을 시작해 보세요!' : '모든 업적을 달성했어요! 🎉'));
+      if (!rows.length) {
+        const none = this._achTab === 'done';
+        const box = G.ui.h('div', { class: 'empty ach-empty' }, none ? '아직 달성한 업적이 없어요. 체험을 시작해 보세요!' : '모든 업적을 달성했어요! 🎉');
+        // mascot 옹이 (65-companion) cheers in empty states when available — its SVG is module-generated, not user data
+        try { const svg = G.mascot?.svg?.(none ? 'think' : 'cheer', 72); if (typeof svg === 'string' && svg.startsWith('<svg')) box.insertAdjacentHTML('afterbegin', `<div class="ach-empty-mascot" aria-hidden="true">${svg}</div>`); } catch (e) { /* optional */ }
+        el.appendChild(box);
+      }
       G.ui.hydrateIcons(el);
     },
 
-    // ------------------------------------------------------------ profile / stats
-    openProfile() {
-      if (!G.state) return null;
+    // ---- 내 기록 pane (profile · titles · stats)
+    _renderMePane(m, pane) {
       const st = G.state, s = st.stats, p = st.profile;
       const need = expFor(s.level);
       const maxed = s.level >= (LV().max || 50);
-      const achN = Object.keys(st.achievements).length, achT = Object.keys(G.data.achievements || {}).length;
-      const colN = Object.keys(st.collection).filter((k) => G.data.collection?.[k]).length, colT = Object.keys(G.data.collection || {}).length;
+      const c = this._hubCounts();
       const statRows = [
         ['logins', s.logins], ['playTime', G.util.formatDuration(s.playTime || 0)], ['distance', s.distance >= 1000 ? `${(s.distance / 1000).toFixed(2)}km` : `${fmt(Math.round(s.distance))}m`],
         ['zonesVisited', `${this.getStat('zonesVisited')}/${(G.data.visitZones || []).length}`], ['npcsTalked', `${this.getStat('npcsTalked')}/${Object.keys(G.data.npcs || {}).length}`],
@@ -575,34 +704,32 @@
         ['eduCompleted', s.eduCompleted], ['quizCorrect', `${fmt(s.quizCorrect)}/${fmt(s.quizAnswered)}`], ['journals', s.journals], ['photos', s.photos],
         ['socials', this.getStat('socials')], ['chats', s.chats],
       ];
-      const m = G.ui.modal.open({
-        id: 'profile', title: '프로필 · 기록', icon: 'user', size: 'lg', className: 'profile-modal',
-        body: (body) => {
-          const initial = esc((p.nickname || '게').trim().charAt(0));
-          body.innerHTML = `<div class="pf-head"><div class="pf-avatar">${initial}</div>
-              <div class="pf-id"><div class="pf-row"><span class="lv-chip">Lv.${s.level}</span><b class="pf-nick">${esc(p.nickname)}</b>${p.title ? `<span class="title-chip">${esc(p.title)}</span>` : ''}</div>
-              <div class="bar bar-exp pf-exp"><i style="width:${maxed ? 100 : Math.round((s.exp / need) * 100)}%"></i><span>${maxed ? 'MAX' : `${fmt(s.exp)} / ${fmt(need)} EXP`}</span></div>
-              <small class="dim">${maxed ? '최고 레벨에 도달했어요!' : `다음 레벨까지 ${fmt(this.expToNext())} EXP · 누적 ${fmt(s.expTotal)} EXP`}</small></div></div>
-            <div class="grid grid-4 pf-cur">
-              <div class="stat"><span>코인</span><b class="gold">${fmt(s.coin)}</b></div>
-              <div class="stat"><span>교육 포인트</span><b class="blue">${fmt(s.edu)}</b></div>
-              <div class="stat pf-link" data-open="achievements" role="button" tabindex="0"><span>업적</span><b>${achN}/${achT}</b></div>
-              <div class="stat pf-link" data-open="collection" role="button" tabindex="0"><span>도감</span><b>${colN}/${colT}</b></div></div>
-            <h4 class="ql-sub">칭호</h4><div class="pf-titles"></div><p class="tiny muted">${esc(G.data.meta?.titleDisclaimer || '')}</p>
-            <h4 class="ql-sub">체험 기록</h4><div class="pf-stats">${statRows.map(([k, v]) => `<div class="pf-stat"><span>${esc(STAT_INFO[k]?.[0] || k)}</span><b>${typeof v === 'number' ? fmt(v) + (STAT_INFO[k]?.[1] || '') : esc(v)}</b></div>`).join('')}</div>`;
-          body.querySelectorAll('[data-open]').forEach((el) => {
-            const go = () => (el.dataset.open === 'achievements' ? this.openAchievements() : this.openCollection());
-            el.addEventListener('click', go);
-            el.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-          });
-        },
-        actions: [{ label: '업적 보기', icon: 'trophy', class: 'btn-soft', onClick: () => { this.openAchievements(); return false; } }, { label: '도감 보기', icon: 'collection', class: 'btn-soft', onClick: () => { this.openCollection(); return false; } }, { label: '닫기', class: 'btn-primary' }],
+      const initial = esc((p.nickname || '게').trim().charAt(0) || '게');
+      pane.innerHTML = `<div class="pf-head"><div class="pf-avatar">${initial}</div>
+          <div class="pf-id"><div class="pf-row"><span class="lv-chip">Lv.${s.level}</span><b class="pf-nick">${esc(p.nickname || '')}</b><span class="title-chip"${p.title ? '' : ' hidden'}>${esc(p.title || '')}</span></div>
+          <div class="bar bar-exp pf-exp"><i style="width:${maxed ? 100 : Math.round(G.util.clamp(s.exp / need, 0, 1) * 100)}%"></i><span>${maxed ? 'MAX' : `${fmt(s.exp)} / ${fmt(need)} EXP`}</span></div>
+          <small class="dim">${maxed ? '최고 레벨에 도달했어요!' : `다음 레벨까지 ${fmt(this.expToNext())} EXP · 누적 ${fmt(s.expTotal)} EXP`}</small></div>
+          <button type="button" class="btn btn-soft btn-sm pf-avatar-btn" data-hub="avatar"><span class="emoji">🎨</span> 아바타 꾸미기</button></div>
+        <div class="grid grid-4 pf-cur">
+          <div class="stat"><span>코인</span><b class="gold">${fmt(s.coin)}</b></div>
+          <div class="stat"><span>교육 포인트</span><b class="blue">${fmt(s.edu)}</b></div>
+          <div class="stat pf-link" data-hub="ach" role="button" tabindex="0"><span>🏆 업적</span><b>${c.achN}/${c.achT}</b></div>
+          <div class="stat pf-link" data-hub="col" role="button" tabindex="0"><span>📖 도감</span><b>${c.colN}/${c.colT}</b></div></div>
+        <h4 class="ql-sub">칭호</h4><div class="pf-titles"></div><p class="tiny muted">${esc(G.data.meta?.titleDisclaimer || '')}</p>
+        <h4 class="ql-sub">체험 기록</h4><div class="pf-stats">${statRows.map(([k, v]) => `<div class="pf-stat"><span>${esc(STAT_INFO[k]?.[0] || k)}</span><b>${typeof v === 'number' ? fmt(v) + esc(STAT_INFO[k]?.[1] || '') : esc(v)}</b></div>`).join('')}</div>`;
+      pane.querySelectorAll('[data-hub]').forEach((el) => {
+        const go = () => {
+          const t = el.dataset.hub;
+          if (t === 'avatar') { m.close(); G.ui.triggerAction('avatar', el); return; }
+          m._hub?.set(t);
+        };
+        el.addEventListener('click', go);
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
       });
       this._renderTitles(m);
-      return m;
     },
     _renderTitles(m) {
-      const box = m.body.querySelector('.pf-titles');
+      const box = m?.body?.querySelector('.pf-titles');
       if (!box) return;
       const p = G.state.profile;
       box.innerHTML = '';
@@ -660,9 +787,11 @@
       if (document.querySelector('#reward-root .reward-pop')) { setTimeout(() => this._pumpLevelUp(), 350); return; }
       const { level, title } = this._luQueue.shift();
       this._luShowing = true;
-      const el = this._luEl;
-      G.sfx('levelup');
-      this.celebrate('levelup');
+      // the motion-graphics module (66-fx) owns the full-screen level-up show + 3D burst when present:
+      // never play two celebrations on top of each other
+      const fxOwned = typeof G.fx?.levelUp === 'function';
+      const el = fxOwned ? null : this._luEl;
+      if (!fxOwned) { G.sfx('levelup'); this.celebrate('levelup'); }
       toastQ(`레벨 업! Lv.${level} 달성${title ? ` · 새 칭호 「${title}」` : ''}`, { emoji: '⭐', type: 'success', sound: false, cls: 'lv-toast' });
       if (el) {
         el.innerHTML = `<div class="lu-rays"></div><div class="lu-card"><div class="lu-eyebrow">LEVEL UP!</div><div class="lu-level"><span>Lv.</span><b>${level}</b></div>${title ? `<div class="lu-sub">새 칭호 「${esc(title)}」</div>` : `<div class="lu-sub">다음 레벨까지 ${fmt(expFor(level))} EXP</div>`}</div>`;
@@ -673,11 +802,13 @@
         if (el) { el.classList.remove('show'); el.hidden = true; }
         this._luShowing = false;
         this._pumpLevelUp();
-      }, G.settings.reduceMotion ? 1600 : 2700);
+      }, fxOwned ? 900 : G.settings.reduceMotion ? 1600 : 2700);
     },
 
     /** small 3D burst around the player ('levelup' big gold pillar, 'quest' sparkle) */
     celebrate(kind = 'quest') {
+      // 66-fx plays quest / level-up bursts from the same events: one celebration, not two stacked
+      if (typeof G.fx?.burst === 'function') return;
       const scene = G.sys.engine?.scene;
       const pl = G.sys.player;
       if (!scene || !pl?.position) return;

@@ -8,12 +8,12 @@
   box-shadow: 0 0 0 4px rgba(244, 197, 74, .12), 0 0 22px rgba(244, 197, 74, .22), var(--shadow-sm);
   backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
   user-select: none; -webkit-user-select: none; white-space: nowrap; max-width: min(92vw, 30rem);
-  transition: transform .12s var(--ease), box-shadow .15s;
-  animation: ipIn .2s var(--ease);
+  transition: translate .12s var(--ease), scale .12s var(--ease), box-shadow .15s;
+  /* base popIn animates the individual translate/scale properties, so the centring transform stays intact */
+  animation: popIn .2s var(--ease);
 }
-@keyframes ipIn { from { opacity: 0; transform: translateX(-50%) translateY(8px) scale(.96); } to { opacity: 1; transform: translateX(-50%); } }
-.interact-prompt:hover { transform: translateX(-50%) translateY(-2px); box-shadow: 0 0 0 4px rgba(244, 197, 74, .2), 0 0 26px rgba(244, 197, 74, .32), var(--shadow-sm); }
-.interact-prompt:active { transform: translateX(-50%) scale(.97); }
+.interact-prompt:hover { translate: 0 -2px; box-shadow: 0 0 0 4px rgba(244, 197, 74, .2), 0 0 26px rgba(244, 197, 74, .32), var(--shadow-sm); }
+.interact-prompt:active { scale: .97; }
 .interact-prompt .ip-key {
   min-width: 1.85rem; height: 1.85rem; font-size: .95rem; border-radius: 8px;
   background: linear-gradient(180deg, #fff, #e9e4d6); color: #1b241d;

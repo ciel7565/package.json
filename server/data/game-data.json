@@ -1,0 +1,690 @@
+{
+  "exportedAt": "2026-10-10T15:45:49.321Z",
+  "quests": {
+    "QUEST001": {
+      "reward": {
+        "coin": 3000,
+        "exp": 500,
+        "edu": 30,
+        "items": {
+          "ITEM_SMALL_JAR": 1,
+          "ITEM_SEED_BEAN": 3
+        },
+        "title": "체험관 새내기"
+      }
+    },
+    "Q_FIRST_WATER": {
+      "reward": {
+        "coin": 1000,
+        "exp": 50
+      }
+    },
+    "Q_HARVEST3": {
+      "reward": {
+        "coin": 5000,
+        "exp": 150
+      }
+    },
+    "Q_JOURNAL5": {
+      "reward": {
+        "coin": 3000,
+        "exp": 200,
+        "title": "기록하는 농부"
+      }
+    },
+    "Q_TOUR": {
+      "reward": {
+        "coin": 500,
+        "exp": 80
+      }
+    },
+    "Q_STORAGE": {
+      "reward": {
+        "coin": 500,
+        "exp": 80
+      }
+    },
+    "Q_ALL_ZONES": {
+      "reward": {
+        "coin": 2000,
+        "exp": 300,
+        "title": "산골 탐험가"
+      }
+    },
+    "Q_FARMER": {
+      "reward": {
+        "coin": 1200,
+        "exp": 150,
+        "items": {
+          "ITEM_SEED_CORN": 2,
+          "ITEM_SEED_RADISH": 2,
+          "ITEM_BASKET": 1
+        }
+      }
+    },
+    "Q_HERB": {
+      "reward": {
+        "coin": 1500,
+        "exp": 180,
+        "items": {
+          "ITEM_SEED_LAVENDER": 2,
+          "ITEM_SEED_ROSEMARY": 2
+        }
+      }
+    },
+    "Q_MEJU": {
+      "reward": {
+        "coin": 800,
+        "exp": 120,
+        "items": {
+          "ITEM_SALT": 2
+        }
+      }
+    },
+    "Q_DOENJANG": {
+      "reward": {
+        "coin": 2000,
+        "exp": 300,
+        "edu": 20,
+        "title": "장 담그는 손"
+      }
+    },
+    "Q_NEW_FERMENT": {
+      "reward": {
+        "coin": 1000,
+        "exp": 150
+      }
+    },
+    "Q_QUIZ3": {
+      "reward": {
+        "coin": 1500,
+        "exp": 250,
+        "edu": 30
+      }
+    },
+    "Q_CULTURE": {
+      "reward": {
+        "coin": 1000,
+        "exp": 150,
+        "edu": 15
+      }
+    },
+    "Q_PHOTO": {
+      "reward": {
+        "coin": 800,
+        "exp": 100
+      }
+    },
+    "Q_GREET": {
+      "reward": {
+        "coin": 300,
+        "exp": 40
+      }
+    }
+  },
+  "achievements": {
+    "ACH_FIRST_VISIT": {
+      "reward": {
+        "coin": 100
+      }
+    },
+    "ACH_FIRST_WATER": {
+      "reward": {
+        "coin": 100
+      }
+    },
+    "ACH_FIRST_HARVEST": {
+      "reward": {
+        "coin": 200
+      }
+    },
+    "ACH_FIRST_FERMENT": {
+      "reward": {
+        "coin": 300,
+        "title": "발효 입문자"
+      }
+    },
+    "ACH_FIRST_QUIZ": {
+      "reward": {
+        "coin": 100
+      }
+    },
+    "ACH_FIRST_JOURNAL": {
+      "reward": {
+        "coin": 100
+      }
+    },
+    "ACH_JOURNAL5": {
+      "reward": {
+        "coin": 500,
+        "title": "꾸준한 기록가"
+      }
+    },
+    "ACH_PHOTO10": {
+      "reward": {
+        "coin": 500,
+        "title": "산골 사진작가"
+      }
+    },
+    "ACH_ALL_ZONES": {
+      "reward": {
+        "coin": 500
+      }
+    },
+    "ACH_CROPS5": {
+      "reward": {
+        "coin": 600
+      }
+    },
+    "ACH_EDU5": {
+      "reward": {
+        "coin": 500,
+        "edu": 20
+      }
+    },
+    "ACH_LEVEL5": {
+      "reward": {
+        "coin": 500
+      }
+    },
+    "ACH_FRIENDLY": {
+      "reward": {
+        "coin": 300
+      }
+    },
+    "ACH_WALKER": {
+      "reward": {
+        "coin": 400
+      }
+    },
+    "ACH_NPC_ALL": {
+      "reward": {
+        "coin": 400
+      }
+    },
+    "ACH_FIRST_CHAT": {
+      "reward": {
+        "coin": 50
+      }
+    },
+    "ACH_CRAFTER": {
+      "reward": {
+        "coin": 300
+      }
+    }
+  },
+  "quizzes": {
+    "QZ_FERMENT_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_FERMENT_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_FERMENT_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_JANGDOK_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_JANGDOK_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_JANGDOK_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_BEAN_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_BEAN_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_BEAN_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_DOENJANG_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_DOENJANG_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_DOENJANG_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_GANJANG_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_GANJANG_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_GOCHUJANG_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_GOCHUJANG_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_KIMCHI_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_KIMCHI_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_KIMCHI_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_FARMING_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_FARMING_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_FARMING_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_TOOLS_1": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_TOOLS_2": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    },
+    "QZ_TOOLS_3": {
+      "reward": {
+        "exp": 100,
+        "edu": 10
+      }
+    }
+  },
+  "crops": {
+    "CROP_BEAN": {
+      "growthTime": 120,
+      "exp": 40,
+      "coin": 30,
+      "harvestItem": "ITEM_BEAN",
+      "harvestAmount": [
+        3,
+        5
+      ]
+    },
+    "CROP_PEPPER": {
+      "growthTime": 150,
+      "exp": 45,
+      "coin": 35,
+      "harvestItem": "ITEM_PEPPER",
+      "harvestAmount": [
+        3,
+        5
+      ]
+    },
+    "CROP_CABBAGE": {
+      "growthTime": 140,
+      "exp": 45,
+      "coin": 35,
+      "harvestItem": "ITEM_CABBAGE",
+      "harvestAmount": [
+        2,
+        4
+      ]
+    },
+    "CROP_PERILLA": {
+      "growthTime": 130,
+      "exp": 40,
+      "coin": 30,
+      "harvestItem": "ITEM_PERILLA",
+      "harvestAmount": [
+        3,
+        5
+      ]
+    },
+    "CROP_CORN": {
+      "growthTime": 160,
+      "exp": 50,
+      "coin": 40,
+      "harvestItem": "ITEM_CORN",
+      "harvestAmount": [
+        2,
+        4
+      ]
+    },
+    "CROP_RADISH": {
+      "growthTime": 110,
+      "exp": 35,
+      "coin": 30,
+      "harvestItem": "ITEM_RADISH",
+      "harvestAmount": [
+        2,
+        4
+      ]
+    },
+    "CROP_MINT": {
+      "growthTime": 90,
+      "exp": 30,
+      "coin": 25,
+      "harvestItem": "ITEM_MINT",
+      "harvestAmount": [
+        3,
+        5
+      ]
+    },
+    "CROP_LAVENDER": {
+      "growthTime": 150,
+      "exp": 45,
+      "coin": 40,
+      "harvestItem": "ITEM_LAVENDER",
+      "harvestAmount": [
+        2,
+        4
+      ]
+    },
+    "CROP_ROSEMARY": {
+      "growthTime": 140,
+      "exp": 40,
+      "coin": 35,
+      "harvestItem": "ITEM_ROSEMARY",
+      "harvestAmount": [
+        2,
+        4
+      ]
+    },
+    "CROP_LEMONBALM": {
+      "growthTime": 100,
+      "exp": 35,
+      "coin": 30,
+      "harvestItem": "ITEM_LEMONBALM",
+      "harvestAmount": [
+        3,
+        5
+      ]
+    }
+  },
+  "recipes": {
+    "FER001": {
+      "baseDuration": 180,
+      "exp": 200,
+      "coin": 300,
+      "resultItem": "ITEM_DOENJANG"
+    },
+    "FER002": {
+      "baseDuration": 240,
+      "exp": 230,
+      "coin": 350,
+      "resultItem": "ITEM_GANJANG"
+    },
+    "FER003": {
+      "baseDuration": 300,
+      "exp": 260,
+      "coin": 400,
+      "resultItem": "ITEM_GOCHUJANG"
+    },
+    "FER004": {
+      "baseDuration": 150,
+      "exp": 220,
+      "coin": 330,
+      "resultItem": "ITEM_KIMCHI"
+    },
+    "FER005": {
+      "baseDuration": 360,
+      "exp": 280,
+      "coin": 450,
+      "resultItem": "ITEM_VINEGAR"
+    }
+  },
+  "items": {
+    "ITEM_SEED_BEAN": {
+      "price": 60,
+      "sell": 20,
+      "type": "seed"
+    },
+    "ITEM_SEED_PEPPER": {
+      "price": 90,
+      "sell": 30,
+      "type": "seed"
+    },
+    "ITEM_SEED_CABBAGE": {
+      "price": 80,
+      "sell": 25,
+      "type": "seed"
+    },
+    "ITEM_SEED_PERILLA": {
+      "price": 70,
+      "sell": 20,
+      "type": "seed"
+    },
+    "ITEM_SEED_CORN": {
+      "price": 80,
+      "sell": 25,
+      "type": "seed"
+    },
+    "ITEM_SEED_RADISH": {
+      "price": 60,
+      "sell": 20,
+      "type": "seed"
+    },
+    "ITEM_SEED_MINT": {
+      "price": 70,
+      "sell": 20,
+      "type": "seed"
+    },
+    "ITEM_SEED_LAVENDER": {
+      "price": 110,
+      "sell": 35,
+      "type": "seed"
+    },
+    "ITEM_SEED_ROSEMARY": {
+      "price": 100,
+      "sell": 30,
+      "type": "seed"
+    },
+    "ITEM_SEED_LEMONBALM": {
+      "price": 90,
+      "sell": 30,
+      "type": "seed"
+    },
+    "ITEM_BEAN": {
+      "price": 0,
+      "sell": 40,
+      "type": "crop"
+    },
+    "ITEM_PEPPER": {
+      "price": 0,
+      "sell": 50,
+      "type": "crop"
+    },
+    "ITEM_CABBAGE": {
+      "price": 0,
+      "sell": 50,
+      "type": "crop"
+    },
+    "ITEM_PERILLA": {
+      "price": 0,
+      "sell": 45,
+      "type": "crop"
+    },
+    "ITEM_CORN": {
+      "price": 0,
+      "sell": 50,
+      "type": "crop"
+    },
+    "ITEM_RADISH": {
+      "price": 0,
+      "sell": 40,
+      "type": "crop"
+    },
+    "ITEM_MINT": {
+      "price": 0,
+      "sell": 40,
+      "type": "crop"
+    },
+    "ITEM_LAVENDER": {
+      "price": 0,
+      "sell": 60,
+      "type": "crop"
+    },
+    "ITEM_ROSEMARY": {
+      "price": 0,
+      "sell": 55,
+      "type": "crop"
+    },
+    "ITEM_LEMONBALM": {
+      "price": 0,
+      "sell": 50,
+      "type": "crop"
+    },
+    "ITEM_MEJU": {
+      "price": 250,
+      "sell": 120,
+      "type": "ingredient"
+    },
+    "ITEM_SALT": {
+      "price": 80,
+      "sell": 30,
+      "type": "ingredient"
+    },
+    "ITEM_GOCHUGARU": {
+      "price": 220,
+      "sell": 90,
+      "type": "ingredient"
+    },
+    "ITEM_RICE": {
+      "price": 120,
+      "sell": 50,
+      "type": "ingredient"
+    },
+    "ITEM_DOENJANG": {
+      "price": 0,
+      "sell": 400,
+      "type": "fermented"
+    },
+    "ITEM_GANJANG": {
+      "price": 0,
+      "sell": 420,
+      "type": "fermented"
+    },
+    "ITEM_GOCHUJANG": {
+      "price": 0,
+      "sell": 500,
+      "type": "fermented"
+    },
+    "ITEM_KIMCHI": {
+      "price": 0,
+      "sell": 450,
+      "type": "fermented"
+    },
+    "ITEM_VINEGAR": {
+      "price": 0,
+      "sell": 480,
+      "type": "fermented"
+    },
+    "ITEM_WATERING_CAN": {
+      "price": 300,
+      "sell": 0,
+      "type": "tool"
+    },
+    "ITEM_HOMI": {
+      "price": 300,
+      "sell": 0,
+      "type": "tool"
+    },
+    "ITEM_BASKET": {
+      "price": 200,
+      "sell": 0,
+      "type": "tool"
+    },
+    "ITEM_GUIDEBOOK": {
+      "price": 0,
+      "sell": 0,
+      "type": "quest"
+    },
+    "ITEM_SMALL_JAR": {
+      "price": 500,
+      "sell": 100,
+      "type": "decoration"
+    },
+    "ITEM_FLOWERPOT": {
+      "price": 350,
+      "sell": 80,
+      "type": "decoration"
+    },
+    "ITEM_LANTERN": {
+      "price": 600,
+      "sell": 120,
+      "type": "decoration"
+    }
+  },
+  "limits": {
+    "saveMaxBytes": 1500000,
+    "maxCoinGainPerSave": 60000,
+    "maxExpGainPerSave": 20000,
+    "harvestSpeedTolerance": 0.5
+  }
+}

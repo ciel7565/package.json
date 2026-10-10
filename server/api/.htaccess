@@ -1,0 +1,12 @@
+# JSON API — every endpoint sends its own security headers (CSP default-src 'none', frame-ancestors 'none',
+# nosniff, no-store). Only *.php endpoints are reachable here.
+Options -Indexes -MultiViews
+<FilesMatch "(?i)\.(?!php$)[^.]+$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

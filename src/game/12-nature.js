@@ -5,6 +5,7 @@
 //   G.sys.nature (order 12)
 //     setCloudCover(0..1)          how much of the sky is covered (weather)
 //     setCloudTint(color)          multiply cloud colour (grey rain clouds, warm dusk ...)
+//     setCloudVeil(0..1, color)    blend clouds into the overcast / fog haze colour (weather)
 //     setWind(dirX, dirZ, strength) wind for trees / grass / clouds (strength 0..2, default 1)
 //     rockGeometry(seed, detail)   displaced rock geometry (also used by the water module)
 //     rockMaterial                 shared rock material (vertex colours, moss on top)
@@ -424,10 +425,17 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     meshes: {},
     rockGeometry,
     get rockMaterial() { return rockMaterial(); },
-    _cloudCover: 0.42, _cloudTint: new THREE.Color(1, 1, 1),
+    _cloudCover: 0.42, _cloudTint: new THREE.Color(1, 1, 1), _cloudVeil: 0, _cloudVeilCol: new THREE.Color(0xbcd6e8),
 
     setCloudCover(v) { this._cloudCover = clamp(Number(v) || 0, 0, 1); if (this._cloudMat) this._cloudMat.uniforms.uCover.value = this._cloudCover; },
     setCloudTint(c) { try { this._cloudTint.set(c); } catch (e) { this._cloudTint.set(0xffffff); } if (this._cloudMat) this._cloudMat.uniforms.uTint.value.copy(this._cloudTint); },
+    /** overcast / fog veil: blend clouds toward the haze colour (they can sit in front of distant mountains,
+     *  where the weather sky overlay cannot reach them) */
+    setCloudVeil(amount, color) {
+      this._cloudVeil = clamp(Number(amount) || 0, 0, 1);
+      if (color != null) { try { this._cloudVeilCol.set(color); } catch (e) { /* keep */ } }
+      if (this._cloudMat) { this._cloudMat.uniforms.uVeil.value = this._cloudVeil; this._cloudMat.uniforms.uVeilCol.value.copy(this._cloudVeilCol); }
+    },
     setWind(dx = 0.86, dz = 0.5, strength = 1) {
       const l = Math.hypot(dx, dz) || 1;
       uniforms.uWind.value.set(dx / l, dz / l);
@@ -1010,6 +1018,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         uniforms: {
           map: { value: tex }, uTime: uniforms.uTime, uDrift: { value: new THREE.Vector2(2.2, 1.1) }, uDomain: { value: DOMAIN },
           uCover: { value: this._cloudCover }, uTint: { value: this._cloudTint.clone() },
+          uVeil: { value: this._cloudVeil }, uVeilCol: { value: this._cloudVeilCol.clone() },
           uSunCol: { value: new THREE.Color(1, 1, 1) }, uAmb: { value: new THREE.Color(0.8, 0.85, 0.95) }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
         },
         vertexShader: `
@@ -1037,7 +1046,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vDense = dense;
           }`,
         fragmentShader: `
-          uniform sampler2D map; uniform vec3 uTint; uniform vec3 uSunCol; uniform vec3 uAmb;
+          uniform sampler2D map; uniform vec3 uTint; uniform vec3 uSunCol; uniform vec3 uAmb; uniform float uVeil; uniform vec3 uVeilCol;
           varying vec2 vUv; varying float vAlpha; varying float vSunSide; varying float vDense;
           void main() {
             vec4 t = texture2D(map, vUv);
@@ -1046,6 +1055,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vec3 base = t.rgb;
             base = mix(base, base * vec3(0.72, 0.76, 0.82), vDense * 0.6);
             vec3 col = base * (uAmb + uSunCol * (0.55 + 0.45 * vSunSide)) * uTint;
+            col = mix(col, uVeilCol * (0.92 + 0.12 * t.r), uVeil);
+            a *= 1.0 - uVeil * 0.45;
             gl_FragColor = vec4(col, a);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
@@ -1298,6 +1309,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         u.uAmb.value.copy(eng.hemi ? eng.hemi.color : _c.set(0xcfe3ff)).multiplyScalar(hI * 0.95);
         u.uCover.value = this._cloudCover;
         u.uTint.value.copy(this._cloudTint);
+        u.uVeil.value = this._cloudVeil;
+        u.uVeilCol.value.copy(this._cloudVeilCol);
         const w = uniforms.uWind.value, ws = uniforms.uWindStrength.value;
         u.uDrift.value.set(w.x * 2.4 * (0.6 + ws * 0.4), w.y * 2.4 * (0.6 + ws * 0.4));
       }

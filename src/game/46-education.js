@@ -1616,7 +1616,7 @@ ${fl}
       const first = correct && !rec.correct;
       if (first) { rec.correct = true; rec.at = G.time.now(); rec.firstTry = rec.attempts === 1; }
       G.dirty('quiz');
-      G.bus.emit('quiz:answered', { quizId, correct });
+      G.bus.emit('quiz:answered', { quizId, correct, first });
       if (correct || rec.attempts === 1) G.activity('quiz', `퀴즈 ${correct ? '정답' : '도전'}: ${q.question}`, { quizId, eduId: q.edu, correct });
       G.sfx(correct ? 'correct' : 'wrong');
       const reward = q.reward || { exp: 100, edu: 10 };

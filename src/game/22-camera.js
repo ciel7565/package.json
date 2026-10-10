@@ -138,6 +138,20 @@
     },
     /** photo helper: put the camera in front of the player (selfie view) */
     photoFront() { const p = G.sys.player; if (p) { this._photo.yaw = p.rotY; this._photo.pitch = 0.12; this._photo.dist = 3.2; } },
+    /** snapshot of the photo orbit {yaw, pitch, dist, height} (pass `out` to reuse an object every frame) */
+    photoState(out) { const ph = this._photo, o = out || {}; o.yaw = ph.yaw; o.pitch = ph.pitch; o.dist = ph.dist; o.height = ph.height; return o; },
+    /** set part of the photo orbit: setPhotoState({dist, height, yaw, pitch}) (values are clamped) */
+    setPhotoState(s = {}) {
+      if (!s || typeof s !== 'object') return this.photoState();
+      const o = {};
+      if (Number.isFinite(s.dist)) o.distance = s.dist;
+      else if (Number.isFinite(s.distance)) o.distance = s.distance;
+      if (Number.isFinite(s.height)) o.height = s.height;
+      if (Number.isFinite(s.yaw)) o.yaw = s.yaw;
+      if (Number.isFinite(s.pitch)) o.pitch = s.pitch;
+      this.photoControl(o);
+      return this.photoState();
+    },
 
     shake(amount = 0.4) {
       if (G.settings.cameraShake === false || G.settings.reduceMotion) return;

@@ -5,14 +5,14 @@
 //   G.sys.farming (order 60)
 //     getPlot(id) -> {id, def, crop, cropId, growth, water, health, stage, stageName, ready, empty, eta, ...} | null
 //     plots() -> [getPlot(...)]          plotIds()
-//     water(id) -> bool                  needs ITEM_WATERING_CAN (offers to buy one when missing)
+//     water(id) -> bool                  needs ITEM_WATERING_CAN (offers to buy it through the 매점 when missing)
 //     plant(id, cropId) -> bool          needs the crop's seed item; crop plots take crops, herb plots take herbs
 //     harvest(id) -> {itemId, qty}|null  only at 100 % (yield scaled by health, + basket bonus)
 //     clear(id) -> Promise<bool>         empty the plot (confirm)
 //     openPlot(id)                       modal: crop, stage, 성장률/수분/건강 bars, ETA, tips, actions, seed picker
 //     primary(id)                        what E does: plant (empty) / harvest (ready) / water (< 90 %) / open modal
 //     setPlot(id, patch)                 debug / test helper (growth, water, health, cropId)
-//     growAll(pct)                       debug helper
+//     growAll(pct) / fastForward(sec)    debug helpers (dev center)
 //   Emits farm:watered {plotId, cropId}, farm:planted {plotId, cropId}, farm:harvested {plotId, cropId, itemId, qty}.
 //
 //   G.ffx — small shared particle system (also used by 41-fermentation.js):
@@ -21,6 +21,7 @@
 //     G.ffx.floatText(html, vec3, cls)  rising world-anchored text
 // Growth is simulated in fixed steps from each plot's lastUpdate to G.time.now() (catch-up capped by
 // G.data.farming.offlineCatchUpMax), so offline time counts. Visuals/labels refresh 4x per second.
+// Live rain from G.sys.weather (precipitation.rain) slowly waters every bed while the player is online.
 // =============================================================================
 (function () {
   const U = G.util;
@@ -37,6 +38,15 @@
     const fin = code % 28;
     if (withB === '으로') return w + (fin === 0 || fin === 8 ? '로' : '으로');
     return w + (fin ? withB : withoutB);
+  }
+
+  /** '많이' / '보통' / '조금' relative to the other crops (stays correct when the balance data changes) */
+  function waterNeedLabel(use) {
+    const all = Object.values(G.data.crops || {}).map((c) => Number(c.waterUse)).filter((v) => v > 0);
+    if (!all.length || !(use > 0)) return '보통';
+    const lo = Math.min(...all), hi = Math.max(...all);
+    const t = hi > lo ? (use - lo) / (hi - lo) : 0.5;
+    return t >= 0.67 ? '많이' : t <= 0.33 ? '조금' : '보통';
   }
 
   // ===========================================================================================
@@ -777,6 +787,7 @@
   // ===========================================================================================
   // farming system
   // ===========================================================================================
+  const RAIN_WATER_RATE = 0.6; // water % per second under full rain (a dry bed is soaked in ~2-3 min)
   const DEF_CFG = { waterPerAction: 45, waterCooldown: 2.5, dryThreshold: 25, healthDecayDry: 0.25, healthRegen: 0.08, basketBonus: 1, offlineCatchUpMax: 3600 };
   let CFG = null;
   const cfg = () => CFG || (CFG = Object.assign({}, DEF_CFG, G.data.farming || {}));
@@ -880,6 +891,7 @@
       if (this._tick <= 0) {
         this._tick = LABEL_HZ;
         this._simulateAll();
+        this._rainWater();
         for (const P of this._plots.values()) this._syncVisual(P, false);
         this._refreshLabels(false);
         this._refreshModal();
@@ -963,6 +975,32 @@
       return s;
     },
     _simulateAll() { const t = now(); for (const id of this._plots.keys()) this._simulate(id, t); },
+
+    /** live rain (weather system) slowly waters every bed — no farm:watered event (it is not the player's action) */
+    _rainWater() {
+      // wall-clock based like the growth simulation (frame dt is capped and would lag behind on slow devices)
+      const t = now();
+      const dt = this._rainAt ? clamp((t - this._rainAt) / 1000, 0, 5) : 0;
+      this._rainAt = t;
+      const rain = Number(G.sys.weather?.precipitation?.rain) || 0;
+      if (rain < 0.15 || !(dt > 0)) { if (rain < 0.05) this._rainNotified = false; return; }
+      const add = RAIN_WATER_RATE * rain * dt;
+      let any = false;
+      for (const id of this._plots.keys()) {
+        const s = this._state(id);
+        if (!s || s.water >= 100) continue;
+        s.water = Math.min(100, s.water + add);
+        const P = this._plots.get(id);
+        if (P) P.vis.wT = s.water;
+        any = true;
+      }
+      if (any) G.dirty('farm');
+      if (!this._rainNotified && rain > 0.5 && G.ready) {
+        this._rainNotified = true;
+        const near = (G.sys.minimap?.currentZone?.id || G.state?.player?.zoneId) === 'ZONE_CROP' || (G.sys.minimap?.currentZone?.id || G.state?.player?.zoneId) === 'ZONE_HERB';
+        if (near) G.ui.toast('비가 내려 밭이 촉촉해지고 있어요. 비가 오는 동안은 물을 덜 줘도 돼요!', { type: 'info', emoji: '🌧️', sound: false, duration: 4200 });
+      }
+    },
 
     /** seconds to 100 %: {full: watered well, now: with the current water (Infinity if it stalls)} */
     _eta(s, crop) {
@@ -1112,7 +1150,8 @@
         G.bus.emit('item:added', { itemId, qty, source: 'harvest' });
         G.ui.toast(`+${items()[itemId].name} ×${qty}`, { type: 'success', emoji: items()[itemId].icon });
       }
-      if (G.sys.progression?.grant) G.sys.progression.grant({ exp: crop.exp || 0, coin: crop.coin || 0 }, { popup: false, reason: 'harvest' });
+      // coin / exp are shown in the floating harvest text + HUD counters (no extra toast in the stack)
+      if (G.sys.progression?.grant) G.sys.progression.grant({ exp: crop.exp || 0, coin: crop.coin || 0 }, { popup: false, silent: true, reason: 'harvest' });
       const t = now();
       s.harvests = (s.harvests || 0) + 1;
       if (crop.category === 'herb') {
@@ -1139,7 +1178,8 @@
         for (const pl2 of P.plants) if (Math.random() < 0.5) FX.spawn(FX.P.LEAF, pl2.wx, P.soilY + 0.2, pl2.wz, (Math.random() - 0.5) * 1.2, 1.2 + Math.random(), (Math.random() - 0.5) * 1.2, null, P.soilY);
       }, 1);
       G.sfx('harvest');
-      G.ffx.floatText(`<b>${items()[itemId]?.icon || '🧺'} +${qty}</b> ${esc(items()[itemId]?.name || '')}${basket ? ' <small>(바구니 보너스)</small>' : ''}`, { x: P.cx, y: P.soilY + 1.6, z: P.cz }, 'harvest');
+      const rw = [crop.coin ? `🪙+${fmt(crop.coin)}` : '', crop.exp ? `✨+${fmt(crop.exp)}` : ''].filter(Boolean).join(' ');
+      G.ffx.floatText(`<b>${esc(items()[itemId]?.icon || '🧺')} +${qty}</b> ${esc(items()[itemId]?.name || '')}${basket ? ' <small>(바구니 보너스)</small>' : ''}${rw ? `<small class="ffx-rw">${rw}</small>` : ''}`, { x: P.cx, y: P.soilY + 1.6, z: P.cz }, 'harvest');
       G.log.info('FARM', `harvest ${id} ${crop.id} -> ${itemId} x${qty}`);
       G.activity('harvest', `${crop.name} ${qty}개 수확`, { plotId: id, cropId: crop.id, itemId, qty });
       G.dirty('farm');
@@ -1188,6 +1228,25 @@
       return this.getPlot(id);
     },
     growAll(pct = 100) { for (const id of this._plots.keys()) { const s = this._state(id); if (s?.cropId) this.setPlot(id, { growth: Math.min(100, s.growth + pct) }); } },
+    /** debug / test helper: simulate `sec` seconds for every plot (same rules as offline catch-up) */
+    fastForward(sec = 60) {
+      sec = clamp(Number(sec) || 0, 0, 24 * 3600);
+      if (!sec || !G.state) return 0;
+      const t = now();
+      for (const id of this._plots.keys()) {
+        const s = this._state(id);
+        if (!s) continue;
+        let left = sec;
+        // step in chunks no longer than the offline cap so long jumps are simulated fully
+        while (left > 0) { const chunk = Math.min(left, cfg().offlineCatchUpMax || 1800); s.lastUpdate = t - chunk * 1000; this._simulate(id, t); left -= chunk; }
+        const P = this._plots.get(id);
+        if (P) { P.vis.gT = s.growth; P.vis.wT = s.water; this._syncVisual(P, true); }
+      }
+      this._refreshLabels(true);
+      this._refreshModal(true);
+      G.dirty('farm');
+      return sec;
+    },
 
     // ------------------------------------------------------------ inventory helpers
     _hasItem(id, n = 1) { return G.sys.inventory?.has ? G.sys.inventory.has(id, n) : (Number(G.state?.inventory?.[id]) || 0) >= n; },
@@ -1205,16 +1264,23 @@
       const coin = G.state?.stats?.coin || 0;
       const ok = await G.ui.confirm(`물을 주려면 <b>${esc(it.name)}</b>${josa(it.name, '이/가').slice(it.name.length)} 필요해요.<br>${fmt(price)} 코인에 구입할까요? <span class="dim small">(보유 ${fmt(coin)} 코인)</span>`, { title: '물뿌리개가 없어요', okText: `${fmt(price)} 코인에 구입`, icon: 'watering-can', html: true });
       if (!ok || !G.state) return;
-      const prog = G.sys.progression;
-      if (!prog?.spendCoin || !prog.spendCoin(price)) {
-        G.ui.toast('코인이 부족해요. 수확물이나 발효식품을 매점에 팔아 코인을 모아 보세요.', { type: 'warn' });
-        G.sys.inventory?.openShop?.('SHOP_GENERAL');
-        return;
+      if (this._hasItem('ITEM_WATERING_CAN')) { if (id) setTimeout(() => this.water(id), 150); return; } // bought meanwhile
+      const inv = G.sys.inventory;
+      // one purchase path: the 매점 (SHOP_GENERAL sells the can) — same price, coin check, toasts and events
+      if (inv?.buy) {
+        if (!inv.buy('ITEM_WATERING_CAN', 1, 'SHOP_GENERAL')) {
+          if ((G.state?.stats?.coin || 0) < price) G.ui.toast('수확물이나 발효식품을 매점에 팔면 코인을 모을 수 있어요.', { type: 'info', emoji: '💡' });
+          inv.openShop?.('SHOP_GENERAL');
+          return;
+        }
+      } else {
+        const prog = G.sys.progression;
+        if (!prog?.spendCoin || !prog.spendCoin(price)) { G.ui.toast('코인이 부족해요. 수확물이나 발효식품을 팔아 코인을 모아 보세요.', { type: 'warn' }); return; }
+        G.state.inventory.ITEM_WATERING_CAN = 1;
+        G.bus.emit('item:added', { itemId: 'ITEM_WATERING_CAN', qty: 1, source: 'shop' });
+        G.sfx('coin');
+        G.dirty('inventory');
       }
-      if (G.sys.inventory?.add) G.sys.inventory.add('ITEM_WATERING_CAN', 1, { source: 'shop' });
-      else { G.state.inventory.ITEM_WATERING_CAN = 1; G.bus.emit('item:added', { itemId: 'ITEM_WATERING_CAN', qty: 1, source: 'shop' }); }
-      G.sfx('coin');
-      G.dirty('inventory');
       if (id) setTimeout(() => this.water(id), 250);
     },
 
@@ -1650,7 +1716,7 @@
           const b = h('button', { class: `fm-seed ${x.ok ? '' : 'wrong'} ${x.count > 0 ? '' : 'none'}`, type: 'button', disabled: dis || null, title: x.crop.desc || '' },
             h('span', { class: 'emoji fm-seed-ico' }, x.seed.icon || '🌱'),
             h('b', null, x.crop.name),
-            h('span', { class: 'fm-seed-meta' }, x.ok ? `${U.formatDuration(x.crop.growthTime)} · 물 ${x.crop.waterUse >= 0.36 ? '많이' : x.crop.waterUse <= 0.25 ? '조금' : '보통'}` : (herb ? '작물밭 전용' : '허브밭 전용')),
+            h('span', { class: 'fm-seed-meta' }, x.ok ? `${U.formatDuration(x.crop.growthTime)} · 물 ${waterNeedLabel(x.crop.waterUse)}` : (herb ? '작물밭 전용' : '허브밭 전용')),
             h('span', { class: 'fm-seed-qty' }, `×${x.count}`));
           if (!dis) b.addEventListener('click', () => { if (this.plant(P.id, x.id)) m.close(); });
           grid.appendChild(b);
@@ -1754,8 +1820,10 @@
       else if (s.water <= 0) tip = '🥀 흙이 완전히 말랐어요. 성장이 멈추고 건강이 조금씩 떨어지고 있어요.';
       else if (s.water < C.dryThreshold) tip = `💧 흙이 말라 가요. 수분이 ${C.dryThreshold}% 아래면 자라는 속도가 절반으로 느려져요.`;
       else if (s.health < 50) tip = '💚 작물이 약해졌어요. 물을 넉넉히 주면 건강이 천천히 회복돼요. 건강할수록 수확량이 많아요.';
+      else if ((Number(G.sys.weather?.precipitation?.rain) || 0) > 0.15) tip = '🌧️ 비가 내려 밭이 저절로 촉촉해지고 있어요. 비가 그치면 수분을 다시 확인해 주세요.';
       else if (crop.category === 'herb') tip = '🌿 허브는 여러해살이라 줄기를 잘라 수확해도 다시 자라요. 물을 너무 많이 주지 않아도 잘 자라요.';
-      else tip = `🌱 ${crop.desc || '물을 주면 작물이 더 빨리 자라요.'}`;
+      else if (s.water >= 85) tip = `😊 흙이 촉촉해요! ${crop.name}${josa(crop.name, '이/가').slice(crop.name.length)} 쑥쑥 자라는 중이에요. 수분이 ${C.dryThreshold}% 아래로 내려가기 전에 다시 물을 주면 가장 빨리 자라요.`;
+      else tip = `🌱 물을 ${waterNeedLabel(crop.waterUse) === '많이' ? '자주' : waterNeedLabel(crop.waterUse) === '조금' ? '가끔' : '적당히'} 주면 좋아요. 수분이 ${C.dryThreshold}% 아래면 자라는 속도가 절반으로 느려져요.`;
       if (els.tip.textContent !== tip) els.tip.textContent = tip;
       // water button cooldown text
       if (md.waterBtn) {

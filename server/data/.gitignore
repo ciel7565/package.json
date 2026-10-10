@@ -1,0 +1,6 @@
+# runtime data — never commit (database, secrets, sessions, logs)
+*
+!.gitignore
+!.htaccess
+!index.php
+!game-data.json

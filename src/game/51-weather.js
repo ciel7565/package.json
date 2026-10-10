@@ -10,11 +10,12 @@
 //     phase / phaseName  'MORNING'|'DAY'|'EVENING'|'NIGHT' / '아침'...
 //     set(id, {instant, source})      change the weather (emits weather:changed {id, prev, source})
 //     auto / lockTime    G.settings.autoWeather / G.settings.lockTime (setAuto(b), setLockTime(b))
-//     temperature (°C), humidity (%), nightFactor, isNight, precipitation {rain, snow}
+//     temperature (°C), humidity (%), nightFactor, isNight, precipitation {rain, snow}, wetness (0..1 after rain)
 //     sunElevation / sunAzimuth (deg), timeString(h?) -> '10:30', icon(), openPopover(anchor)
 //   Emits weather:changed {id, prev, source}, time:phase {phase, prev, name}.
 //   Drives engine.setSun, Preetham sky uniforms, scene.fog, hemi / sun / fill lights, tone-mapping
 //   exposure, G.world.nightFactor, G.world.nightMaterials / nightLights, nature clouds & wind,
+//   water ripples / flow speed (G.sys.water.uniforms.uRain / uFlowSpeed),
 //   engine.flareSuppressed. Per-device persistence: manual weather (auto off) and the locked hour.
 // =============================================================================
 (function () {
@@ -38,8 +39,8 @@
   const LOOK = {
     CLEAR: { cover: 0.36, tint: '#ffffff', sun: 1.0, hemi: 1.0, fog: 0.0026, grey: 0.0, greyCol: '#c4d0da', turb: 0, ray: 0, mie: 0, exp: 1.0, wind: 0.9, lamp: 0, haze: 0.2 },
     CLOUDY: { cover: 0.84, tint: '#d4d9df', sun: 0.42, hemi: 1.12, fog: 0.0036, grey: 0.42, greyCol: '#b6bfc8', turb: 4.5, ray: 0.5, mie: 0.004, exp: 0.98, wind: 1.25, lamp: 0.1, haze: 0.3 },
-    RAIN: { cover: 1.0, tint: '#868e98', sun: 0.16, hemi: 0.84, fog: 0.0072, grey: 0.84, greyCol: '#86909a', turb: 9, ray: 1.0, mie: 0.01, exp: 0.95, wind: 1.8, lamp: 0.42, haze: 0.4 },
-    FOG: { cover: 0.92, tint: '#e2e6e9', sun: 0.32, hemi: 1.06, fog: 0.021, grey: 0.97, greyCol: '#c3cacf', turb: 10, ray: 0.8, mie: 0.012, exp: 1.0, wind: 0.25, lamp: 0.36, haze: 0.5 },
+    RAIN: { cover: 1.0, tint: '#9aa2ac', sun: 0.16, hemi: 0.84, fog: 0.0072, grey: 0.84, greyCol: '#86909a', turb: 9, ray: 1.0, mie: 0.01, exp: 0.95, wind: 1.8, lamp: 0.42, haze: 0.4 },
+    FOG: { cover: 0.3, tint: '#eef1f3', sun: 0.32, hemi: 1.06, fog: 0.021, grey: 0.97, greyCol: '#c3cacf', turb: 10, ray: 0.8, mie: 0.012, exp: 1.0, wind: 0.25, lamp: 0.36, haze: 0.5 },
     SNOW: { cover: 0.96, tint: '#eef1f5', sun: 0.36, hemi: 1.2, fog: 0.0062, grey: 0.74, greyCol: '#d0d7df', turb: 8, ray: 0.6, mie: 0.008, exp: 1.0, wind: 0.6, lamp: 0.26, haze: 0.45 },
   };
   // monthly climate of a Gangwon mountain valley (°C daily max / min, humidity offset %)
@@ -53,9 +54,9 @@
   // ---------------------------------------------------------------- colours (linear working space)
   const C = (hex) => new THREE.Color(hex);
   const COL = {
-    sunNoon: C('#fff1dc'), sunGold: C('#ffa860'), moon: C('#a9bdff'),
-    hemiDay: C('#cfe3ff'), hemiGold: C('#ffd2a8'), hemiNight: C('#4b6290'),
-    groundDay: C('#5c6b3c'), groundNight: C('#1d2621'), groundSnow: C('#c9d0d6'),
+    sunNoon: C('#ffeed4'), sunGold: C('#ffa25a'), moon: C('#a9bdff'),
+    hemiDay: C('#d3e3f6'), hemiGold: C('#ffd2a8'), hemiNight: C('#4b6290'),
+    groundDay: C('#66683c'), groundNight: C('#1d2621'), groundSnow: C('#c9d0d6'),
     fogDay: C('#bcd6e8'), fogGold: C('#e9c4a0'), fogNight: C('#1b2840'),
     zenithNight: C('#0a1430'), zenithTwilight: C('#2b4176'), glowSunset: C('#ff9a5c'), glowDusk: C('#e8707a'), fillDay: C('#bfd6ff'), fillNight: C('#6d82b6'),
     rainDay: C('#cfdae6'), rainNight: C('#59677c'), snowDay: C('#ffffff'), snowNight: C('#9aa8c4'),
@@ -388,6 +389,7 @@
     temperature: 23, humidity: 55,
     nightFactor: 0, sunElevation: 45, sunAzimuth: 160,
     precipitation: { rain: 0, snow: 0 },
+    wetness: 0,
     _hour: 10.5, _phase: null, _autoT: 240, _hudT: 0, _hudKey: '',
     _lastSunE: 999, _lastSunA: 999, _envT: 0, _ready: false, _emittedInit: false,
     _pop: null, _dragging: false, _prefs: null,
@@ -426,10 +428,10 @@
           this._overlay = buildOverlay();
           fx.add(this._overlay);
           // same overlay inside the environment bake so reflections match the sky (night / overcast / fog)
-          if (E._envScene) {
-            this._envOverlay = new THREE.Mesh(this._overlay.geometry, this._overlay.material);
-            this._envOverlay.scale.setScalar(900); this._envOverlay.frustumCulled = false; this._envOverlay.renderOrder = -9;
-            E._envScene.add(this._envOverlay);
+          if (typeof E.addEnvObject === 'function') {
+            const envOv = new THREE.Mesh(this._overlay.geometry, this._overlay.material);
+            envOv.scale.setScalar(900); envOv.frustumCulled = false; envOv.renderOrder = -9; envOv.name = 'sky-overlay-env';
+            if (E.addEnvObject(envOv) && envOv.parent) this._envOverlay = envOv;
           }
         } catch (e) { G.log.warn('WEATHER', 'sky overlay failed', e); }
         try { this._stars = buildStars(q === 'low' ? 900 : q === 'medium' ? 1500 : 2200); fx.add(this._stars); } catch (e) { G.log.warn('WEATHER', 'stars failed', e); }
@@ -616,7 +618,7 @@
 
       // ---- time-of-day factors
       const dayK = smooth(-5, 8, e);                               // daylight amount
-      const gold = smooth(-5, 2, e) * (1 - smooth(5, 22, e));      // golden hour
+      const gold = smooth(-5, 2, e) * (1 - smooth(6, 26, e));      // golden hour (warm light for the first/last ~2 h of sun)
       const nightK = 1 - smooth(-12, -2, e);                       // depth of night (sky)
       const twK = (1 - smooth(-1, 4, e)) * (1 - nightK);           // blue hour (sun just below the horizon)
       const glowK = smooth(-9, -1, e) * (1 - smooth(4, 15, e));    // warm glow on the sun side of the sky
@@ -691,7 +693,7 @@
         u.mieDirectionalG.value = 0.82;
       }
       // ---- exposure
-      if (E.renderer) E.renderer.toneMappingExposure = lerp(0.95, 0.88, dayK) * m.exp * (1 + 0.05 * gold);
+      if (E.renderer) E.renderer.toneMappingExposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold);
       // lens flare only under a clear sky
       E.flareSuppressed = grey > 0.3;
 
@@ -736,6 +738,8 @@
           _c1.copy(_tint).lerp(COL.goldTint, gold * 0.6).lerp(COL.nightTint, nightK * 0.75);
           N.setCloudTint?.(_c1);
           N.setWind?.(0.86, 0.5, m.wind);
+          // overcast / fog: clouds melt into the haze (also where they overlap distant mountains)
+          N.setCloudVeil?.(clamp(grey * 0.85, 0, 0.92), _fogCol);
         } catch (err) { /* optional */ }
       }
       // ---- night materials & lights (lanterns, windows) — lamps also glow on dark rainy days
@@ -764,6 +768,15 @@
     _updatePrecip(dt, t, dayK, cam) {
       const rainI = this.mix.RAIN || 0, snowI = this.mix.SNOW || 0;
       this.precipitation.rain = rainI; this.precipitation.snow = snowI;
+      // ground / stream wetness: soaks up in ~40 s of rain, dries over ~4 min (river swells and runs faster after rain)
+      const wetGoal = rainI;
+      this.wetness += (wetGoal - this.wetness) * (1 - Math.exp(-(wetGoal > this.wetness ? 1 / 40 : 1 / 240) * Math.min(dt || 0, 0.25)));
+      if (!(this.wetness >= 0)) this.wetness = 0;
+      const WU = G.sys.water?.uniforms;
+      if (WU) {
+        if (WU.uRain) WU.uRain.value = clamp(rainI, 0, 1);
+        if (WU.uFlowSpeed) WU.uFlowSpeed.value = 1 + 0.55 * this.wetness + 0.15 * rainI;
+      }
       if (!cam) return;
       // camera-forward biased centre so most drops are in view
       _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion); _fwd.y = 0;

@@ -1,0 +1,52 @@
+# =============================================================================
+# 전통발효체험관 메타버스 — Apache rules for the installation folder (XAMPP: htdocs/metaverse)
+# Requires AllowOverride All (XAMPP default for htdocs). PHP endpoints set their own security
+# headers, so the headers below are applied only to static files (index.html, images, models).
+# =============================================================================
+
+Options -Indexes -MultiViews
+DirectoryIndex index.html
+AddDefaultCharset UTF-8
+
+<IfModule mod_mime.c>
+  AddType image/webp .webp
+  AddType model/gltf-binary .glb
+  AddType font/woff2 .woff2
+</IfModule>
+
+# ---------------------------------------------------------------- never serve private / build files
+<FilesMatch "(?i)(^\.|\.(sqlite3?|sqlite-wal|sqlite-shm|db|sql|log|ini|env|bak|old|orig|swp|lock|md|dist|sh|bat|ps1|yml|yaml|tmp)$|^config\.local\.php$|^composer\.(json|lock)$|^package(-lock)?\.json$)">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# ---------------------------------------------------------------- security headers for static files
+<IfModule mod_headers.c>
+  <FilesMatch "(?i)\.(html?|js|css|png|jpe?g|webp|gif|svg|ico|woff2?|glb|gltf|bin|txt|mp3|ogg|wav)$">
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+  </FilesMatch>
+  # index.html carries its own strict <meta> CSP; frame-ancestors only works as a header
+  <FilesMatch "(?i)\.html?$">
+    Header always set Content-Security-Policy "frame-ancestors 'self'"
+    Header always set Cache-Control "no-cache"
+  </FilesMatch>
+  Header always unset X-Powered-By
+</IfModule>
+
+# ---------------------------------------------------------------- optional: force HTTPS (uncomment on a server with a certificate)
+# <IfModule mod_rewrite.c>
+#   RewriteEngine On
+#   RewriteCond %{HTTPS} !=on
+#   RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1)(:\d+)?$
+#   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+# </IfModule>

@@ -25,6 +25,10 @@
   let pickList = [];               // [entry objects..., ground meshes..., camera blockers...]
   let pickKey = '';
   const _p = new THREE.Vector3(), _q = new THREE.Vector3(), _box = new THREE.Box3(), _size = new THREE.Vector3(), _ctr = new THREE.Vector3();
+  const _quat = new THREE.Quaternion(), _eul = new THREE.Euler(0, 0, 0, 'YXZ');
+  const RING_MAX = 2.1;       // largest round highlight (m); bigger footprints get a rectangular outline
+  const RECT_MIN = 3.4;       // footprint (m) from which the outline is rectangular
+  const RECT_W = 0.34;        // outline strip width (m)
 
   function readPos(e, out) {
     try {
@@ -173,6 +177,36 @@
       scene.add(ring);
       this._ring = ring;
 
+      // rectangular outline for large footprints (farm beds): 4 glowing strips, glow across the strip width
+      const stripTex = G.gfx.canvasTexture(8, 64, (ctx, w, h) => {
+        const g = ctx.createLinearGradient(0, 0, 0, h);
+        g.addColorStop(0, 'rgba(255,214,102,0)');
+        g.addColorStop(0.3, 'rgba(255,214,102,0.28)');
+        g.addColorStop(0.46, 'rgba(255,236,170,0.95)');
+        g.addColorStop(0.5, 'rgba(255,250,225,1)');
+        g.addColorStop(0.54, 'rgba(255,236,170,0.95)');
+        g.addColorStop(0.7, 'rgba(255,214,102,0.28)');
+        g.addColorStop(1, 'rgba(255,214,102,0)');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      });
+      const cornerTex = G.gfx.radialTexture(64, 'rgba(255,246,205,1)', 'rgba(255,214,102,0)');
+      const rect = new THREE.Group(); rect.name = 'interactRect';
+      const stripMat = mk(stripTex, 0xffe08a, 0.9);
+      const cornerMat = mk(cornerTex, 0xfff0c0, 0.9);
+      this._rectStrips = [];
+      for (let i = 0; i < 4; i++) {
+        const m = new THREE.Mesh(plane, stripMat);
+        m.renderOrder = 3;
+        if (i >= 2) m.rotation.y = Math.PI / 2; // strips 2/3 run along local Z
+        rect.add(m); this._rectStrips.push(m);
+      }
+      this._rectCorners = [];
+      for (let i = 0; i < 4; i++) { const c = new THREE.Mesh(plane, cornerMat); c.renderOrder = 4; rect.add(c); this._rectCorners.push(c); }
+      this._rectMat = stripMat; this._rectCornerMat = cornerMat;
+      rect.visible = false; rect.renderOrder = 3;
+      scene.add(rect);
+      this._rect = rect;
+
       // bobbing arrow (shaft + head), own material (never shared)
       const head = new THREE.ConeGeometry(0.15, 0.26, 20).rotateX(Math.PI).translate(0, -0.13, 0);
       const shaft = new THREE.CylinderGeometry(0.055, 0.055, 0.2, 14).translate(0, 0.1, 0);
@@ -204,7 +238,7 @@
       this._destG = dest;
       // fx are never pick targets (other modules may raycast the whole scene)
       const noRay = () => {};
-      for (const m of [this._ringA, this._ringB, this._arrow, this._destR1, this._destR2, this._destDot]) m.raycast = noRay;
+      for (const m of [this._ringA, this._ringB, this._arrow, this._destR1, this._destR2, this._destDot, ...this._rectStrips, ...this._rectCorners]) m.raycast = noRay;
     },
 
     _bindPrompt() {
@@ -228,22 +262,37 @@
         if (this._promptEl) this._promptEl.hidden = true;
         this._fx = null;
         if (this._ring) this._ring.visible = false;
+        if (this._rect) this._rect.visible = false;
         if (this._arrow) this._arrow.visible = false;
         this._releaseLook();
         return;
       }
       // highlight geometry from the object's bounds (offset kept relative to the live entry position)
       const pos = readPos(e, _p) ? _p : null;
-      let ringR = 0.75, offX = 0, offZ = 0, top = 1.6;
+      let ringR = 0.75, offX = 0, offZ = 0, top = 1.6, rect = null;
       if (pos && e.object) {
         try {
           _box.setFromObject(e.object);
           if (!_box.isEmpty()) {
             _box.getSize(_size); _box.getCenter(_ctr);
-            ringR = clamp(Math.max(_size.x, _size.z) * 0.5 + 0.35, 0.6, 4.6);
+            const foot = Math.max(_size.x, _size.z);
+            ringR = clamp(foot * 0.5 + 0.35, 0.6, RING_MAX);
             offX = _ctr.x - pos.x; offZ = _ctr.z - pos.z;
             if (Math.hypot(offX, offZ) > 3) { offX = 0; offZ = 0; }
             top = clamp(_box.max.y - pos.y, 0.3, 6);
+            // large footprints (8 m farm beds...) get a snug oriented rectangle instead of a huge ring
+            const ud = e.object.userData || {};
+            const plot = ud.plot && Number(ud.plot.w) > 0 && Number(ud.plot.d) > 0 ? ud.plot : null;
+            if (plot || e.kind === 'plot' || foot > RECT_MIN) {
+              let w, d, yaw = 0;
+              if (plot) {
+                w = Number(plot.w); d = Number(plot.d);
+                e.object.getWorldQuaternion(_quat); _eul.setFromQuaternion(_quat, 'YXZ'); yaw = _eul.y;
+                e.object.getWorldPosition(_ctr);
+                offX = _ctr.x - pos.x; offZ = _ctr.z - pos.z;
+              } else { w = _size.x; d = _size.z; }
+              rect = { w: clamp(w, 0.6, 30) + 0.6, d: clamp(d, 0.6, 30) + 0.6, yaw, bed: !!plot || e.kind === 'plot' };
+            }
           }
         } catch (err) { /* ignore */ }
       } else if (pos) {
@@ -251,7 +300,23 @@
         top = 1.2;
       }
       if (e.kind === 'npc') top += 0.35;
-      this._fx = { ringR, offX, offZ, top, t: 0 };
+      this._fx = { ringR, offX, offZ, top, rect, t: 0 };
+      if (rect) this._layoutRect(rect);
+    },
+
+    /** size the 4 strips + corner glints of the rectangular outline for a w x d footprint */
+    _layoutRect(rc) {
+      const S = this._rectStrips, C = this._rectCorners;
+      if (!S || !C) return;
+      const hw = rc.w / 2, hd = rc.d / 2;
+      // strips 0/1 along X (full length incl. corners), 2/3 along Z (between them -> no double blending)
+      S[0].position.set(0, 0, -hd); S[0].scale.set(rc.w + RECT_W, 1, RECT_W);
+      S[1].position.set(0, 0, hd); S[1].scale.set(rc.w + RECT_W, 1, RECT_W);
+      S[2].position.set(-hw, 0.002, 0); S[2].scale.set(Math.max(0.01, rc.d - RECT_W), 1, RECT_W);
+      S[3].position.set(hw, 0.002, 0); S[3].scale.set(Math.max(0.01, rc.d - RECT_W), 1, RECT_W);
+      const cs = RECT_W * 3.2;
+      C[0].position.set(-hw, 0.004, -hd); C[1].position.set(hw, 0.004, -hd); C[2].position.set(-hw, 0.004, hd); C[3].position.set(hw, 0.004, hd);
+      for (const c of C) c.scale.set(cs, 1, cs);
     },
 
     _releaseLook() {
@@ -319,8 +384,10 @@
       const ring = this._ring, arrow = this._arrow;
       if (!ring) return;
       const seated = e && e.kind === 'bench' && G.sys.player?.sitting;
+      const rect = this._rect;
       if (!e || !fx || !e.highlight || seated || !readPos(e, _p)) {
         ring.visible = false; arrow.visible = false;
+        if (rect) rect.visible = false;
         this._releaseLook();
         return;
       }
@@ -329,12 +396,26 @@
       const cx = _p.x + fx.offX, cz = _p.z + fx.offZ;
       const gy = G.world.heightAt(cx, cz, _p.y + 0.6);
       const pulse = 1 + Math.sin(t * 4.2) * 0.035;
-      ring.visible = true;
-      ring.position.set(cx, gy + 0.04, cz);
-      ring.scale.setScalar(fx.ringR * 2 * pulse * (0.85 + 0.15 * fade));
-      this._ringA.material.opacity = (0.72 + 0.18 * Math.sin(t * 4.2)) * fade;
-      this._ringB.material.opacity = 0.7 * fade;
-      this._ringB.rotation.y = t * 0.6;
+      if (fx.rect && rect) {
+        ring.visible = false;
+        rect.visible = true;
+        // raised beds: a selection frame hovering just above the rim (always visible from the follow camera)
+        const ry = fx.rect.bed ? Math.max(gy, _p.y) + 0.12 : gy + 0.045;
+        rect.position.set(cx, ry, cz);
+        rect.rotation.y = fx.rect.yaw;
+        const s = 1 + (pulse - 1) * 0.5;
+        rect.scale.set(s * (0.94 + 0.06 * fade), 1, s * (0.94 + 0.06 * fade));
+        this._rectMat.opacity = (0.82 + 0.18 * Math.sin(t * 4.2)) * fade;
+        this._rectCornerMat.opacity = (0.6 + 0.4 * Math.sin(t * 4.2 + 1.2)) * fade;
+      } else {
+        if (rect) rect.visible = false;
+        ring.visible = true;
+        ring.position.set(cx, gy + 0.04, cz);
+        ring.scale.setScalar(fx.ringR * 2 * pulse * (0.85 + 0.15 * fade));
+        this._ringA.material.opacity = (0.72 + 0.18 * Math.sin(t * 4.2)) * fade;
+        this._ringB.material.opacity = 0.7 * fade;
+        this._ringB.rotation.y = t * 0.6;
+      }
       const reduce = G.settings.reduceMotion;
       arrow.visible = true;
       arrow.position.set(cx, _p.y + fx.top + 0.42 + (reduce ? 0 : Math.sin(t * 3.4) * 0.09), cz);
@@ -444,7 +525,7 @@
       if (list && list.length) { try { hits = E.raycastScreen(x, y, list, true); } catch (err) { hits = []; } }
       for (const h of hits) {
         if (!h.object.visible) continue;
-        if (h.object.name === 'interactArrow' || h.object.parent === this._ring || h.object.parent === this._destG) continue;
+        if (h.object.name === 'interactArrow' || h.object.parent === this._ring || h.object.parent === this._rect || h.object.parent === this._destG) continue;
         const e = this._entryOf(h.object);
         if (e) return { entry: e, point: h.point };
         if (entriesOnly) continue;

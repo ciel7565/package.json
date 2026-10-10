@@ -298,6 +298,7 @@
             h('span', { class: 'chip chip-gold ph-zone', hidden: true }, h('span', { class: 'ico ico-xs', 'data-icon': 'star' }), h('span', { class: 'ph-zone-name' }, ''))),
           h('div', { class: 'ph-hint' }, h('span', null, h('kbd', null, '드래그'), ' 시점'), h('span', null, h('kbd', null, '휠'), ' 거리'), h('span', null, h('kbd', null, 'Space'), ' 촬영'), h('span', null, h('kbd', null, 'H'), ' 화면 정리'), h('span', null, h('kbd', null, 'Esc'), ' 나가기')),
           h('div', { class: 'ph-top-actions' },
+            h('button', { type: 'button', class: 'btn btn-sm btn-soft ph-opts-btn', dataset: { ph: 'opts' }, 'aria-pressed': 'false', title: '카메라·옵션 패널', 'aria-label': '카메라 설정 열기' }, h('span', { class: 'ico ico-sm', 'data-icon': 'settings' })),
             h('button', { type: 'button', class: 'btn btn-sm btn-soft', dataset: { ph: 'gallery' } }, h('span', { class: 'ico ico-sm', 'data-icon': 'image' }), '앨범', h('span', { class: 'ph-count' }, '0')),
             h('button', { type: 'button', class: 'btn btn-sm btn-soft', dataset: { ph: 'exit' } }, h('span', { class: 'ico ico-sm', 'data-icon': 'x' }), '나가기'))),
         h('aside', { class: 'ph-left glass' },
@@ -337,8 +338,8 @@
       this._ui = root;
       root.addEventListener('click', (ev) => this._onClick(ev));
       const dist = root.querySelector('[data-ph="dist"]'), height = root.querySelector('[data-ph="height"]');
-      dist.addEventListener('input', () => { G.sys.camera?.photoControl?.({ distance: Number(dist.value) }); this._syncSliders(true); });
-      height.addEventListener('input', () => { G.sys.camera?.photoControl?.({ height: Number(height.value) }); this._syncSliders(true); });
+      dist.addEventListener('input', () => { this._setCamPhoto({ dist: Number(dist.value) }); this._syncSliders(true); });
+      height.addEventListener('input', () => { this._setCamPhoto({ height: Number(height.value) }); this._syncSliders(true); });
       // keep keyboard focus off the sliders so Space still shoots
       for (const r of [dist, height]) r.addEventListener('change', () => r.blur());
       this._renderOptions();
@@ -367,6 +368,7 @@
       else if (a === 'back') { const p = G.sys.player; if (p) G.sys.camera?.photoControl?.({ yaw: p.rotY + PI, pitch: 0.22 }); }
       else if (a === 'timer') { const i = (TIMERS.indexOf(this.timer) + 1) % TIMERS.length; this._setOpt('timer', TIMERS[i]); }
       else if (a === 'clean') this._toggleClean();
+      else if (a === 'opts') { const on = !this._ui.classList.contains('show-opts'); this._ui.classList.toggle('show-opts', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
       if (a !== 'shoot') G.sfx('click');
     },
 
@@ -534,8 +536,16 @@
       if (this.active) this._drawFramePreview();
     },
 
+    /** camera photo orbit through the public API (falls back to photoControl on older cameras) */
+    _setCamPhoto(s) {
+      const cam = G.sys.camera;
+      if (cam?.setPhotoState) cam.setPhotoState(s);
+      else cam?.photoControl?.({ distance: s.dist, height: s.height });
+    },
+
     _syncSliders(force) {
-      const ph = G.sys.camera?._photo;
+      const cam = G.sys.camera;
+      const ph = cam?.photoState ? cam.photoState(this._phState || (this._phState = {})) : cam?._photo;
       const root = this._ui;
       if (!ph || !root) return;
       const el = this._sl || (this._sl = {
