@@ -115,3 +115,11 @@ body.is-touch .bottom-bar { bottom: .5rem; }
   .hud-right { right: max(var(--gap), env(safe-area-inset-right)); top: max(var(--gap), env(safe-area-inset-top)); }
   .bottom-bar { bottom: max(var(--gap), env(safe-area-inset-bottom)); }
 }
+
+/* Toast lane while a modal is open: toasts sit above the dialog instead of covering its header. */
+body.modal-open .toast-root { top: max(.55rem, env(safe-area-inset-top)) !important; }
+body.modal-open .toast-root .toast:not(:last-child) { display: none; }
+body.modal-open .modal-backdrop { padding-top: 3.6rem; }
+@media (max-width: 820px), (max-height: 520px) {
+  body.modal-open .modal { max-height: min(94vh, 100%); }
+}
