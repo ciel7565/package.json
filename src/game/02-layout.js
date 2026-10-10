@@ -85,7 +85,7 @@
       { shape: 'box', x: 39, z: 4, hw: 3, hd: 3.2, top: 0.45, rot: 0 },      // connecting step
       { shape: 'circle', x: 60, z: 4, r: 19, top: 0.9 },                      // tier 2 ring field
     ],
-    rows: { x0: 26.6, x1: 35.4, z0: -13, z1: 16.5, step: 2.2, aisleZ: [0, 4.2] }, // tier-1 decorative rows (jar-free aisle)
+    rows: { x0: 26.6, x1: 35.4, z0: -13, z1: 16.5, step: 2.2, aisleZ: [1.9, 6.1] }, // tier-1 decorative rows (jar-free aisle, lined up with the connecting step)
     rings: { cx: 60, cz: 4, radii: [5, 7.4, 9.8, 12.2, 14.6, 17], spacing: 1.3, aisleWidth: 2.6, aisles: 4 },
     frontWalkX: [21, 25.6], // jar-free walkway on tier 1 (player jars stand at x≈24.6)
   };
@@ -140,14 +140,14 @@
   ];
   L.hallDoor = { id: 'HALL_DOOR', x: 0, z: -77.2, rot: 0 };
   L.eduBoard = { id: 'EDU_BOARD', x: -44, z: -68.5, rot: 0, w: 6, h: 3 };
-  L.exhibits = [ // fermented-food display tables (fermentation zone yard)
-    { id: 'EXH_DOENJANG', x: -32, z: -6, rot: -PI / 2, food: 'ITEM_DOENJANG', edu: 'EDU_DOENJANG', title: '된장' },
-    { id: 'EXH_GANJANG', x: -30, z: -1.5, rot: -PI / 2, food: 'ITEM_GANJANG', edu: 'EDU_GANJANG', title: '간장' },
-    { id: 'EXH_GOCHUJANG', x: -29.5, z: 3, rot: -PI / 2, food: 'ITEM_GOCHUJANG', edu: 'EDU_GOCHUJANG', title: '고추장' },
-    { id: 'EXH_KIMCHI', x: -30, z: 7.5, rot: -PI / 2, food: 'ITEM_KIMCHI', edu: 'EDU_KIMCHI', title: '김치' },
-    { id: 'EXH_VINEGAR', x: -32, z: 12, rot: -PI / 2, food: 'ITEM_VINEGAR', edu: 'EDU_FERMENT', title: '전통 식초' },
+  L.exhibits = [ // fermented-food display tables (fermentation zone yard; fronts face the plaza path)
+    { id: 'EXH_DOENJANG', x: -32, z: -6, rot: PI / 2, food: 'ITEM_DOENJANG', edu: 'EDU_DOENJANG', title: '된장' },
+    { id: 'EXH_GANJANG', x: -30, z: -1.5, rot: PI / 2, food: 'ITEM_GANJANG', edu: 'EDU_GANJANG', title: '간장' },
+    { id: 'EXH_GOCHUJANG', x: -29.5, z: 3, rot: PI / 2, food: 'ITEM_GOCHUJANG', edu: 'EDU_GOCHUJANG', title: '고추장' },
+    { id: 'EXH_KIMCHI', x: -30, z: 7.5, rot: PI / 2, food: 'ITEM_KIMCHI', edu: 'EDU_KIMCHI', title: '김치' },
+    { id: 'EXH_VINEGAR', x: -32, z: 12, rot: PI / 2, food: 'ITEM_VINEGAR', edu: 'EDU_FERMENT', title: '전통 식초' },
   ];
-  L.craftTable = { id: 'CRAFT_TABLE', x: -37, z: 15.5, rot: -PI / 2 + 0.3, title: '발효 재료 작업대' };
+  L.craftTable = { id: 'CRAFT_TABLE', x: -37, z: 15.5, rot: PI / 2 + 0.3, title: '발효 재료 작업대' };
   L.tools = [ // traditional tools display (collection + quest Q_CULTURE)
     { id: 'TOOL_JIGE', x: -58, z: -41, rot: 0.6, kind: 'jige', name: '지게' },
     { id: 'TOOL_MAETDOL', x: -61.5, z: -39.5, rot: 0.4, kind: 'maetdol', name: '맷돌' },
@@ -162,7 +162,7 @@
     { id: 'PZ_JANGDOK', name: '장독대', x: 18.5, z: 13.5, r: 4, look: [60, 1, 4] },
     { id: 'PZ_PAVILION', name: '전통정자', x: 43, z: 47, r: 4, look: [50, 3, 41] },
     { id: 'PZ_RIVER', name: '계곡', x: 74, z: 46, r: 4, look: [92, 0, 40] },
-    { id: 'PZ_FLOWER', name: '꽃밭', x: 37, z: 64, r: 4, look: [50, 1, 60] },
+    { id: 'PZ_FLOWER', name: '꽃밭', x: 31.5, z: 66, r: 4, look: [40, 1, 61] },
     { id: 'PZ_HANOK', name: '한옥마당', x: -27, z: -3, r: 4, look: [-44, 3, 2] },
     { id: 'PZ_GATE', name: '정문', x: 0, z: 71, r: 4, look: [0, 4, 58] },
     { id: 'PZ_WATERFALL', name: '폭포 정원', x: -18, z: -58, r: 4, look: [-26, 2, -67] },
@@ -175,7 +175,7 @@
     { x: -7, z: 60.5, type: 'post' }, { x: 7, z: 60.5, type: 'post' },
     { x: 21, z: -15, type: 'stone' }, { x: 21, z: 19, type: 'stone' },
     { x: -27, z: -9, type: 'post' }, { x: -27, z: 17, type: 'post' },
-    { x: 43, z: 47, type: 'stone' }, { x: 61, z: 47, type: 'stone' }, { x: 44, z: 63, type: 'stone' }, { x: 61, z: 63, type: 'stone' },
+    { x: 41.2, z: 45.2, type: 'stone' }, { x: 61, z: 47, type: 'stone' }, { x: 44, z: 63, type: 'stone' }, { x: 61, z: 63, type: 'stone' },
     { x: -40, z: -52, type: 'post' }, { x: -48, z: -52, type: 'post' },
   ];
   L.benches = [
@@ -206,7 +206,8 @@
   ];
   L.stoneWalls = [ // low 돌담 segments [x1,z1,x2,z2]
     [-6.5, 58, -24, 59.5], [6.5, 58, 24, 59.5],
-    [-24, -60, -24, -58], // placeholder short segment near hall garden (modules may extend)
+    // hall waterfall garden: back wall behind the waterfall + east / west returns (paths stay open)
+    [-34, -73.5, -17, -73.5], [-16.6, -73, -16.6, -66.5], [-34.5, -73, -34.5, -65.5],
   ];
 
   // ---------------------------------------------------------------- anchor lookup

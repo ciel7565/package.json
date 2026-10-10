@@ -1,0 +1,57 @@
+/* =============================================================================
+   23-interaction.css — interaction prompt (E), player name tag details
+   ============================================================================= */
+.interact-prompt {
+  gap: .5rem; padding: .42rem 1.05rem .42rem .45rem;
+  background: linear-gradient(180deg, rgba(22, 30, 24, .86), rgba(10, 16, 13, .86));
+  border: 1px solid rgba(244, 197, 74, .7);
+  box-shadow: 0 0 0 4px rgba(244, 197, 74, .12), 0 0 22px rgba(244, 197, 74, .22), var(--shadow-sm);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  user-select: none; -webkit-user-select: none; white-space: nowrap; max-width: min(92vw, 30rem);
+  transition: transform .12s var(--ease), box-shadow .15s;
+  animation: ipIn .2s var(--ease);
+}
+@keyframes ipIn { from { opacity: 0; transform: translateX(-50%) translateY(8px) scale(.96); } to { opacity: 1; transform: translateX(-50%); } }
+.interact-prompt:hover { transform: translateX(-50%) translateY(-2px); box-shadow: 0 0 0 4px rgba(244, 197, 74, .2), 0 0 26px rgba(244, 197, 74, .32), var(--shadow-sm); }
+.interact-prompt:active { transform: translateX(-50%) scale(.97); }
+.interact-prompt .ip-key {
+  min-width: 1.85rem; height: 1.85rem; font-size: .95rem; border-radius: 8px;
+  background: linear-gradient(180deg, #fff, #e9e4d6); color: #1b241d;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .45), inset 0 -2px 0 rgba(0, 0, 0, .08);
+  animation: ipKey 1.6s ease-in-out infinite;
+}
+.interact-prompt .ip-ico { font-size: 1.12rem; line-height: 1; }
+.interact-prompt .ip-ico:empty { display: none; }
+.interact-prompt .interact-text { overflow: hidden; text-overflow: ellipsis; letter-spacing: -.01em; }
+.interact-prompt[data-kind="npc"] { border-color: rgba(134, 227, 168, .7); box-shadow: 0 0 0 4px rgba(52, 195, 107, .12), 0 0 22px rgba(52, 195, 107, .2), var(--shadow-sm); }
+@keyframes ipKey { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+
+/* touch: round gold "button" hint matching the mobile E button */
+.interact-prompt.touch { padding-left: .35rem; }
+.interact-prompt.touch .ip-key {
+  width: 2rem; height: 2rem; min-width: 2rem; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffe9a6, #e2aa22); color: #2b1d02;
+  border: 2px solid rgba(255, 255, 255, .8); box-shadow: 0 0 0 3px rgba(244, 197, 74, .35);
+}
+.interact-prompt.touch .interact-text::after { content: ' · 탭하기'; color: var(--text-mute); font-weight: 600; font-size: .8em; }
+
+body.reduce-motion .interact-prompt .ip-key { animation: none; }
+
+/* player name tag: optional title chip before the nickname */
+.nametag .nm { line-height: 1.2; }
+.nametag.me { box-shadow: 0 2px 10px rgba(0, 0, 0, .25); }
+.nametag.me .role {
+  padding: .02rem .38rem; border-radius: 999px; background: rgba(52, 195, 107, .2); color: #c9f5d8;
+  font-size: .64rem; font-weight: 700; max-width: 8rem; overflow: hidden; text-overflow: ellipsis;
+}
+
+@media (max-width: 820px), (max-height: 520px) {
+  .interact-prompt { font-size: .86rem; padding: .34rem .85rem .34rem .38rem; }
+  .interact-prompt .ip-key { min-width: 1.6rem; height: 1.6rem; }
+}
+
+/* short landscape phones: keep the prompt just above the bottom bar instead of over the character */
+@media (max-height: 520px) {
+  body.is-touch .interact-prompt { bottom: calc(max(.5rem, env(safe-area-inset-bottom)) + 3.6rem); font-size: .8rem; }
+  body.is-touch .interact-prompt .ip-key { width: 1.7rem; height: 1.7rem; min-width: 1.7rem; }
+}
