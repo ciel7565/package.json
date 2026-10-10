@@ -54,7 +54,7 @@
   const REMEMBER_MS = 30 * 86400000; // "로그인 상태 유지" lasts 30 days
 
   // ---------------------------------------------------------------- phase-2 settings (core defaults lack them)
-  const EXTRA_DEFAULTS = { fxLevel: 'high', companion: true };
+  const EXTRA_DEFAULTS = { fxLevel: G.settingsDefaults?.fxLevel || 'high', companion: true }; // 66-fx registers 'low' on touch devices
   for (const [k, v] of Object.entries(EXTRA_DEFAULTS)) {
     if (G.settingsDefaults && !(k in G.settingsDefaults)) G.settingsDefaults[k] = v;
     if (G.settings && G.settings[k] === undefined) G.settings[k] = v;
@@ -2509,6 +2509,7 @@
     [['E'], '상호작용 — 대화·물 주기·수확·장독 확인·안내판'], [['M'], '전체 지도 · 빠른 이동'], [['Q'], '퀘스트 목록 (L도 가능)'],
     [['I'], '가방'], [['C'], '도감·업적'], [['J'], '작업일지'], [['P'], '사진 모드 (Space·Enter 촬영, H 화면 정리)'], [['Enter'], '채팅 입력'],
     [['T'], '이모지 (열린 뒤 1~9로 바로 선택)'], [['G'], '제스처 (열린 뒤 1~9로 바로 선택)'], [['H'], '도움말'], [['Esc'], '메뉴 열기 · 창 닫기'],
+    [['N'], '오늘의 체험 — 출석·미션·알림함·수료증·랭킹·마당 꾸미기'], [['O'], '옹이와 놀기 (동반자 메뉴)'],
     [['F9'], '개발자·관리자 센터 (권한이 있을 때)'],
   ];
   const HELP_DIALOG = [[['Space', 'Enter'], '대사 넘기기'], [['1', '2', '3', '4'], '선택지 고르기'], [['↑', '↓'], '선택지 이동'], [['Esc'], '대화 닫기']];

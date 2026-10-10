@@ -363,9 +363,11 @@
     },
 
     render() {
-      // A large blocking modal covers most of the view: render the world at ~1/3 rate to save GPU/battery.
-      if (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) {
-        this._skip = ((this._skip || 0) + 1) % 3;
+      // The opaque developer center hides the world (render ~1/6); a large blocking modal covers most of it (~1/3).
+      const cover = document.body.classList.contains('dc-open') ? 6
+        : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3 : 1;
+      if (cover > 1) {
+        this._skip = ((this._skip || 0) + 1) % cover;
         if (this._skip) return;
       }
       if (this.composer) this.composer.render();

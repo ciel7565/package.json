@@ -15,7 +15,7 @@
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const KIND_ICON = {
     npc: '💬', jar: '🏺', plot: '🌱', sign: '🪧', kiosk: '🖥️', exhibit: '🍲', tool: '🧺', jardisp: '🏺', craft: '🛠️',
-    shop: '🛒', door: '🚪', board: '📋', photo: '📷', bench: '🪑',
+    shop: '🛒', door: '🚪', board: '📋', photo: '📷', bench: '🪑', companion: '🏺', decor: '🏡',
   };
   // kinds where the player does a small "reach / look" gesture on interaction
   const GESTURE_KINDS = new Set(['sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'board', 'door', 'craft', 'shop', 'jar']);

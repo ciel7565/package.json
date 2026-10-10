@@ -347,7 +347,27 @@
       } else {
         this._pos.copy(this._dPos); this._look.copy(this._dLook);
       }
+      this._guardFinite();
       this._applyToCamera(dt);
+    },
+
+    /** a NaN target (bad position, zero-length focus) must never poison the camera: restore the last finite frame */
+    _guardFinite() {
+      const ok = (v) => Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+      if (!this._goodPos) { this._goodPos = new THREE.Vector3(0, 8, 14); this._goodLook = new THREE.Vector3(0, 1, 0); }
+      if (ok(this._pos) && ok(this._look)) { this._goodPos.copy(this._pos); this._goodLook.copy(this._look); return; }
+      this._pos.copy(this._goodPos); this._look.copy(this._goodLook);
+      this._trans = null;
+      for (const k of ['yaw', '_yawT']) if (!Number.isFinite(this[k])) this[k] = 0;
+      for (const k of ['pitch', '_pitchT']) if (!Number.isFinite(this[k])) this[k] = 0.35;
+      for (const k of ['distance', '_distT']) if (!Number.isFinite(this[k])) this[k] = 6;
+      const f = this._focus;
+      if (!ok(f.point)) { f.obj = null; f.point.copy(this._goodLook); }
+      if (!Number.isFinite(f.distance)) f.distance = 3.4;
+      if (!Number.isFinite(f.yaw)) f.yaw = 0;
+      if (!Number.isFinite(f.pitch)) f.pitch = 0.25;
+      const now = performance.now();
+      if (now - (this._nanWarnAt || 0) > 5000) { this._nanWarnAt = now; G.log.warn('UI', 'camera: non-finite target repaired'); }
     },
 
     _autoAlign(dt, t) {

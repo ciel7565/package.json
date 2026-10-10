@@ -101,7 +101,7 @@ final class SaveValidator
         $first = $p === null;
         $meta['v'] = 1;
         $paid = is_array($meta['paid'] ?? null) ? $meta['paid'] : [];
-        foreach (['q', 'a', 'z', 'e'] as $k) if (!isset($paid[$k]) || !is_array($paid[$k])) $paid[$k] = [];
+        foreach (['q', 'a', 'z', 'e', 'g'] as $k) if (!isset($paid[$k]) || !is_array($paid[$k])) $paid[$k] = [];
 
         $dt = max(0.0, ($now - $prevAt) / 1000);
         $explain = ['value' => 0, 'exp' => 0, 'edu' => 0];
@@ -183,6 +183,51 @@ final class SaveValidator
             if (self::p($compP, $eid)) continue;
             $explain['edu'] += (int) $this->t('edu_complete', 5);
         }
+        // daily engagement rewards (출석 체크 · 오늘의 미션, src/game/62-engagement.js): explained once per day key.
+        // The client uses the player's local date, so only keys within ±1 day of the server date are accepted.
+        $engN = self::o(self::p($n, 'engagement'));
+        $engP = $p ? self::o(self::p($p, 'engagement')) : null;
+        $nearDay = function (string $d) use ($now): bool {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) return false;
+            foreach ([-1, 0, 1] as $off) if ($d === Clock::day($now + $off * 86400000)) return true;
+            return false;
+        };
+        $maxVal = fn (array $ids): int => array_reduce($ids, fn ($m, $id) => max($m, GameData::itemValue($id)), 0);
+        $ckDay = self::s(self::p(self::o(self::p($engN, 'checkin')), 'lastDay'));
+        $ckDayP = self::s(self::p(self::o(self::p($engP, 'checkin')), 'lastDay'));
+        if ($ckDay !== '' && $ckDay !== $ckDayP && $nearDay($ckDay) && !isset($paid['g']['c' . $ckDay])) {
+            $paid['g']['c' . $ckDay] = $now;
+            $explain['value'] += 250 + $maxVal(['ITEM_SMALL_JAR', 'ITEM_FLOWERPOT', 'ITEM_LANTERN']) + 2 * $maxVal(['ITEM_SEED_BEAN', 'ITEM_SEED_LAVENDER', 'ITEM_SEED_CORN']);
+            $explain['exp'] += 50;
+        }
+        $dailyN = self::o(self::p($engN, 'daily'));
+        $dailyP = self::o(self::p($engP, 'daily'));
+        $dDay = self::s(self::p($dailyN, 'day'));
+        if ($nearDay($dDay)) {
+            $countClaimed = function (?object $daily) use ($dDay): int {
+                if ($daily === null || self::s(self::p($daily, 'day')) !== $dDay) return 0;
+                $c = 0;
+                $ms = self::p($daily, 'missions');
+                if (is_array($ms)) foreach (array_slice($ms, 0, 3) as $m) if (self::p(self::o($m), 'claimed') === true) $c++;
+                return $c;
+            };
+            $claimedN = $countClaimed($dailyN);
+            $already = max($countClaimed($dailyP), (int) ($paid['g']['m' . $dDay] ?? 0));
+            if ($claimedN > $already) {
+                $k = $claimedN - $already;
+                $paid['g']['m' . $dDay] = $claimedN;
+                $explain['value'] += 180 * $k;
+                $explain['exp'] += 40 * $k;
+                $explain['edu'] += 5 * $k;
+            }
+            $bonusBefore = self::p($dailyP, 'bonus') === true && self::s(self::p($dailyP, 'day')) === $dDay;
+            if (self::p($dailyN, 'bonus') === true && $claimedN >= 3 && !$bonusBefore && !isset($paid['g']['b' . $dDay])) {
+                $paid['g']['b' . $dDay] = $now;
+                $explain['value'] += 200 + $maxVal(['ITEM_SEED_PEPPER', 'ITEM_SEED_CABBAGE', 'ITEM_SEED_PERILLA', 'ITEM_SEED_RADISH', 'ITEM_SEED_MINT', 'ITEM_SEED_ROSEMARY', 'ITEM_SEED_LEMONBALM']);
+                $explain['exp'] += 50;
+            }
+        }
+
         // ledger size guard
         foreach ($paid as $k => $list) if (count($list) > 2000) $paid[$k] = array_slice($list, -2000, null, true);
         $meta['paid'] = $paid;
@@ -246,6 +291,13 @@ final class SaveValidator
             $v = self::p($n, $k);
             if ($v !== null && !self::o($v) && $v !== []) self::bad($k);
         }
+        foreach (['companion', 'engagement'] as $k) {
+            $v = self::p($n, $k);
+            if ($v !== null && !self::o($v)) self::bad($k);
+        }
+        if (mb_strlen(self::s(self::p(self::o(self::p($n, 'companion')), 'name'))) > 16) self::bad('companion name');
+        $decor = self::p(self::o(self::p($n, 'engagement')), 'decor');
+        if ($decor !== null && (!is_array($decor) || count($decor) > 50)) self::bad('engagement decor');
         foreach (['journal', 'photos', 'activity'] as $k) {
             $v = self::p($n, $k);
             if ($v !== null && !is_array($v)) self::bad($k);

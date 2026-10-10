@@ -508,6 +508,32 @@ async function main() {
     assert(d.stats.coin === stored.stats.coin && d.stats.distance === 12 && d.inventory.ITEM_RADISH === 4, `coin ${d.stats.coin} vs ${stored.stats.coin}`);
     return `revision ${g.data.save.revision}`;
   });
+  await step('engagement: daily check-in + missions explained once per day (re-claim after un-claiming → 409)', async () => {
+    const meB = { id: userB.id, nickname: userB.nickname, email: userB.email, role: 'user' };
+    const s0 = freshState(meB);
+    let r = await B.req('api/player/save.php', { json: saveBody(s0) });
+    assert(r.status === 200, `first save ${r.status} ${r.error?.code}`);
+    await sleep(1100);
+    const d = new Date();
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const daily = (claimed) => ({ day, missions: [0, 1, 2].map((i) => ({ id: `M${i}`, target: 1, progress: 1, done: true, claimed })), bonus: claimed });
+    // claim check-in + 3 missions + bonus; 2,090 coins exceeds the per-save allowance (~1,520) unless the claims are explained
+    const s1 = structuredClone(s0);
+    s1.engagement = { v: 1, checkin: { lastDay: day, streak: 1, best: 1, total: 1, days: [day] }, daily: daily(true), decor: [] };
+    s1.stats.coin += 2090; s1.savedAt = Date.now();
+    r = await B.req('api/player/save.php', { json: saveBody(s1) });
+    assert(r.status === 200, `claim save ${r.status} ${JSON.stringify(r.json?.data?.violations || r.error?.code)}`);
+    // un-claim (no value change → accepted), then claim the same day again → the ledger refuses a second explanation
+    const s2 = structuredClone(s1);
+    s2.engagement.checkin = { lastDay: null, streak: 0, best: 1, total: 1, days: [] }; s2.engagement.daily = daily(false); s2.savedAt = Date.now();
+    r = await B.req('api/player/save.php', { json: saveBody(s2) });
+    assert(r.status === 200, `un-claim save ${r.status} ${JSON.stringify(r.json?.data?.violations || r.error?.code)}`);
+    const s3 = structuredClone(s1);
+    s3.stats.coin += 2090; s3.savedAt = Date.now();
+    r = await B.req('api/player/save.php', { json: saveBody(s3) });
+    assert(r.status === 409 && (r.json?.data?.violations || []).includes('UNEXPLAINED_VALUE'), `replay ${r.status} ${r.json?.data?.violations}`);
+    return 'claim accepted, replay refused';
+  });
   await step('brute force: lockout after 5 wrong passwords (429, even with the right password)', async () => {
     const c = new Client('brute'); await c.req('api/ping.php');
     const codes = [];

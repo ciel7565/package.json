@@ -110,6 +110,7 @@ education 64, journal 66, minimap 70, weather 72, photo 74, social 80, audio 85,
 | `photo:taken` | `{photoId, zoneId, photoZoneId}` | photo |
 | `emote:played` / `gesture:played` | `{emoteId}` / `{gestureId}` | social |
 | `chat:sent` / `chat:message` | `{text, channel}` / `{msg}` | social |
+| `chat:mention` | `{msg}` (a chat message that @mentions my nickname) | social → engagement 알림함 |
 | `quest:accepted` / `quest:progress` / `quest:completed` / `quest:claimed` | `{questId}` / `{questId, objective, value, target}` / `{questId}` / `{questId, reward}` | quest |
 | `reward:granted` | `{reward, reason}` | progression |
 | `level:up` | `{level}` | progression |
