@@ -32,7 +32,10 @@
   const esc = U.escapeHtml;
 
   const MAX_MSG = 120, MAX_LEN = 120, RATE_MS = 1200, LOCAL_R = 30;
-  const LABEL_DIST = 40, HIDE_DIST = 120;
+  const DUP_MS = 20000, BURST_N = 5, BURST_MS = 10000, BURST_COOL = 8000; // spam guard
+  const LABEL_DIST = 40, HIDE_DIST = 90, FAR_DIST = 55, SLEEP_STEP = 0.5;  // visitors: hide + sleep beyond 90 m
+  const MAX_REMOTES = 60, MAX_ROWS = 120, WORLD_LIM = 135;               // server payload limits
+  const QUICK = ['EMO_HELLO', 'EMO_SMILE', 'EMO_THUMBS', 'EMO_CLAP', 'EMO_LIKE', 'EMO_LAUGH', 'EMO_WOW'];
   const DEFLECT = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]; // heading offsets tried when the way ahead is blocked
   const LS_COLLAPSED = 'tfm.v1.chat.collapsed', LS_TAB = 'tfm.v1.chat.tab', LS_REPORTS = 'tfm.v1.chat.reports';
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } };
@@ -66,6 +69,189 @@
     euro: (w) => w + (hasFinal(w) && !finalIsRieul(w) ? '으로' : '로'),
     nim: (w) => w + '님',
   };
+
+  // ================================================================= text hygiene (every chat / name string is untrusted)
+  // C0/C1 controls, soft hyphen, zero-width & joiners, bidi overrides/isolates (spoofing), BOM, Hangul fillers
+  // (used for "blank" nicknames), interlinear annotation, ...
+  const INVISIBLE_RANGES = [[0x00, 0x1f], [0x7f, 0x9f], [0xad], [0x34f], [0x61c], [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180e],
+    [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x206f], [0x3164], [0xfeff], [0xffa0], [0xfff0, 0xfffb]];
+  const hexEsc = (n) => '\\' + 'u{' + n.toString(16) + '}';
+  const INVISIBLE_RE = new RegExp('[' + INVISIBLE_RANGES.map(([a, b]) => (b ? hexEsc(a) + '-' + hexEsc(b) : hexEsc(a))).join('') + ']', 'gu');
+  let MARKS_RE = null;
+  try { MARKS_RE = new RegExp('(\\p{M}{2})\\p{M}+', 'gu'); } catch (e) { MARKS_RE = null; } // "zalgo" stacks
+  /** NFC, invisible/control characters removed, whitespace collapsed, at most `max` code points */
+  function cleanText(s, max = 120) {
+    let t = String(s ?? '');
+    if (t.length > max * 8) t = t.slice(0, max * 8);
+    try { t = t.normalize('NFC'); } catch (e) { /* very old engine */ }
+    t = t.replace(INVISIBLE_RE, ' ');
+    if (MARKS_RE) t = t.replace(MARKS_RE, '$1');
+    t = t.replace(/\s+/g, ' ').trim();
+    const cps = Array.from(t);
+    return cps.length > max ? cps.slice(0, max).join('').trim() : t;
+  }
+  const cpLen = (s) => Array.from(String(s)).length;
+  const RESERVED = ['시스템', 'system', '운영자', '관리자', '운영진', 'admin', 'gm', '공지', '알림'];
+  /** display name of another person: cleaned, never blank, cannot impersonate the system or an NPC */
+  function cleanName(s, kind) {
+    let n = cleanText(s, 20).replace(/[<>"'`]/g, '');
+    if (!n) n = '체험객';
+    if (kind === 'visitor' || kind === 'remote') {
+      const low = n.toLowerCase();
+      const npcNames = Object.values(G.data.npcs || {}).map((x) => String(x?.name || '').toLowerCase());
+      if (RESERVED.includes(low) || npcNames.includes(low)) n = `${n}(체험객)`;
+      n = maskBad(n);
+    }
+    return n;
+  }
+
+  // ================================================================= bad-word filter
+  // Matching runs on a "skeleton" of the message that undoes common evasion tricks — spaces / dots / digits
+  // between letters, zero-width characters, full-width letters, decomposed or spelled-out jamo (ㅅㅣㅂㅏㄹ),
+  // l33t (sh1t) — and then masks the ORIGINAL characters of every match with ♡♡.
+  const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', $: 's', '@': 'a', '!': 'i', '|': 'l', '+': 't', '*': '*' };
+  const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+  const JUNG = 'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ';
+  const JONG = ' ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ';
+  // ordinary words that contain a listed word (never masked)
+  const ALLOW = ['시발점', '시발역', '시발택시', '시발자동차'];
+  const isHangulCh = (k) => k === 'H' || k === 'J';
+  /** conjoining jamo (U+1100…) -> compatibility jamo */
+  function conj2compat(cp) {
+    if (cp >= 0x1100 && cp <= 0x1112) return CHO[cp - 0x1100];
+    if (cp >= 0x1161 && cp <= 0x1175) return JUNG[cp - 0x1161];
+    if (cp >= 0x11a8 && cp <= 0x11c2) return JONG[cp - 0x11a7];
+    return null;
+  }
+  /** -> { s: skeleton string, items: [{c, s, e}] } (items[i] maps skeleton char i to the source span [s, e)) */
+  function skeleton(text) {
+    const raw = [];
+    let pos = 0;
+    for (const ch of String(text)) {
+      const s = pos; pos += ch.length;
+      const cp = ch.codePointAt(0);
+      if (cp >= 0xac00 && cp <= 0xd7a3) { raw.push({ c: ch, k: 'H', s, e: pos }); continue; }
+      if (cp >= 0x3131 && cp <= 0x3163) { raw.push({ c: ch, k: 'J', s, e: pos }); continue; }
+      if (cp >= 0x1100 && cp <= 0x11ff) { const m = conj2compat(cp); if (m) raw.push({ c: m, k: 'J', s, e: pos }); continue; }
+      if (/\s/.test(ch)) { raw.push({ c: ' ', k: 'S', s, e: pos }); continue; }
+      let n = ch;
+      try { n = ch.normalize('NFKC'); } catch (e) { /* ignore */ }
+      n = n.toLowerCase();
+      if (/^[a-z]+$/.test(n)) { for (const x of n) raw.push({ c: x, k: 'L', s, e: pos }); continue; }
+      if (LEET[n]) raw.push({ c: LEET[n], k: 'D', s, e: pos });
+      // anything else (punctuation, emoji, symbols, digits used as separators) is ignored
+    }
+    // leet characters count only inside latin words ("sh1t"); between Hangul they are separators ("시1발")
+    const latinNear = (i, dir) => { for (let j = i + dir; j >= 0 && j < raw.length; j += dir) { const k = raw[j].k; if (k === 'D') continue; return k === 'L'; } return false; };
+    const kept = [];
+    for (let i = 0; i < raw.length; i++) {
+      const it = raw[i];
+      if (it.k === 'D') { if (latinNear(i, -1) || latinNear(i, 1)) kept.push({ ...it, k: 'L' }); continue; }
+      kept.push(it);
+    }
+    // whitespace: join when one of the neighbouring tokens is a single letter ("시 발", "f u c k"), else a word boundary
+    const tokLen = (i, dir) => { let n = 0; for (let j = i + dir; j >= 0 && j < kept.length && kept[j].k !== 'S'; j += dir) n++; return n; };
+    const joined = [];
+    for (let i = 0; i < kept.length; i++) {
+      const it = kept[i];
+      if (it.k !== 'S') { joined.push(it); continue; }
+      if (!joined.length || joined[joined.length - 1].c === '|') continue;
+      const l = tokLen(i, -1), r = tokLen(i, 1);
+      if (!r) continue;
+      if (l === 1 || r === 1) continue;
+      joined.push({ c: '|', k: 'B', s: it.s, e: it.e });
+    }
+    // compose spelled-out jamo into syllables: ㅅㅣㅂㅏㄹ -> 시발
+    const out = [];
+    for (let i = 0; i < joined.length; i++) {
+      const a = joined[i], b = joined[i + 1];
+      const ci = a.k === 'J' ? CHO.indexOf(a.c) : -1;
+      const vi = b && b.k === 'J' ? JUNG.indexOf(b.c) : -1;
+      if (ci >= 0 && vi >= 0) {
+        let ti = 0, end = b.e, used = 2;
+        const c = joined[i + 2], d = joined[i + 3];
+        const tc = c && c.k === 'J' ? JONG.indexOf(c.c) : -1;
+        if (tc > 0 && !(d && d.k === 'J' && JUNG.includes(d.c))) { ti = tc; end = c.e; used = 3; }
+        out.push({ c: String.fromCharCode(0xac00 + (ci * 21 + vi) * 28 + ti), k: 'H', s: a.s, e: end });
+        i += used - 1;
+        continue;
+      }
+      out.push(a);
+    }
+    return { s: out.map((x) => x.c).join(''), items: out };
+  }
+  const BAD = { re: null, src: '' };
+  function badRegex() {
+    const words = Array.isArray(G.data.badWords) ? G.data.badWords : [];
+    const key = words.join('|');
+    if (BAD.src === key) return BAD.re;
+    BAD.src = key;
+    const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = [];
+    for (const w0 of words) {
+      const w = skeleton(String(w0 || '')).s.replace(/\|/g, '');
+      if (!w) continue;
+      // latin letters may repeat ("fuuuck") and vowels may be starred ("f*ck")
+      parts.push([w.length, Array.from(w).map((ch) => (/[aeiou]/.test(ch) ? `[${ch}*]+` : /[a-z]/.test(ch) ? `${ch}+` : escRe(ch))).join('')]);
+    }
+    parts.sort((a, b) => b[0] - a[0]);
+    try { BAD.re = parts.length ? new RegExp(parts.map((p) => p[1]).join('|'), 'g') : null; } catch (e) { BAD.re = null; }
+    return BAD.re;
+  }
+  /** [[start, end), ...] source ranges of bad words in text */
+  function badRanges(text) {
+    const re = badRegex();
+    if (!re || !text) return [];
+    const sk = skeleton(text);
+    if (!sk.s) return [];
+    const allow = [];
+    for (const w of ALLOW) { let i = -1; while ((i = sk.s.indexOf(w, i + 1)) >= 0) allow.push([i, i + w.length]); }
+    const out = [];
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(sk.s))) {
+      const a = m.index, b = a + m[0].length;
+      if (b <= a) { re.lastIndex++; continue; }
+      if (allow.some(([x, y]) => a >= x && b <= y)) continue;
+      out.push([sk.items[a].s, sk.items[b - 1].e]);
+    }
+    return out;
+  }
+  function maskBad(text) {
+    const t = String(text ?? '');
+    const r = badRanges(t);
+    if (!r.length) return t;
+    let out = t;
+    for (let i = r.length - 1; i >= 0; i--) out = out.slice(0, r[i][0]) + '♡♡' + out.slice(r[i][1]);
+    return out;
+  }
+  /** repeat-spam key (mirrors the server: case-folded, no spaces/punctuation, repeated letters squashed) */
+  function spamKey(text) {
+    let k = skeleton(text).s.replace(/\|/g, '').replace(/(.)\1{2,}/g, '$1$1');
+    if (!k) k = String(text).toLowerCase().replace(/\s+/g, '');
+    return k.slice(0, 200);
+  }
+
+  // ================================================================= emoji shortcuts
+  const EMOJI_NAMES = {
+    smile: '😊', happy: '😄', laugh: '😆', lol: '😆', wink: '😉', love: '🥰', cool: '😎', wow: '😮', cry: '😢', sad: '😢', think: '🤔',
+    heart: '❤️', thumbsup: '👍', '+1': '👍', ok: '👌', clap: '👏', wave: '👋', hi: '👋', pray: '🙏', muscle: '💪', party: '🎉', tada: '🎉',
+    star: '⭐', sparkles: '✨', fire: '🔥', '100': '💯', sun: '☀️', rain: '🌧️', snow: '❄️', flower: '🌸', leaf: '🌿', tree: '🌳',
+    jar: '🏺', bean: '🫘', rice: '🍚', kimchi: '🥬', pepper: '🌶️', water: '💧', camera: '📷', music: '🎶', book: '📖', gift: '🎁',
+    웃음: '😊', 하하: '😆', 사랑: '🥰', 하트: '❤️', 최고: '👍', 박수: '👏', 인사: '👋', 감사: '🙏', 축하: '🎉', 반짝: '✨', 별: '⭐',
+    장독: '🏺', 항아리: '🏺', 콩: '🫘', 김치: '🥬', 고추: '🌶️', 밥: '🍚', 꽃: '🌸', 나무: '🌳', 해: '☀️', 비: '🌧️', 물: '💧', 사진: '📷',
+  };
+  const EMOTICONS = [[':-)', '😊'], [':)', '😊'], ['(:', '😊'], [':-D', '😄'], [':D', '😄'], [';-)', '😉'], [';)', '😉'], [':-(', '😢'], [':(', '😢'],
+    [':P', '😛'], [':p', '😛'], [':O', '😮'], [':o', '😮'], ['<3', '❤️'], ['</3', '💔'], ['xD', '😆'], ['XD', '😆'], ['B-)', '😎'], [':*', '😘']];
+  const EMOTICON_RE = new RegExp(`(^|\\s)(${EMOTICONS.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).sort((a, b) => b.length - a.length).join('|')})(?=\\s|$)`, 'g');
+  const EMOTICON_MAP = Object.fromEntries(EMOTICONS);
+  const NAMED_RE = /:([a-z0-9_+ㄱ-ㆎ가-힣]{1,12}):/gi;
+  /** :heart: -> ❤️ always; standalone emoticons (":)", "<3") only when the message is sent */
+  function applyShortcuts(text, final) {
+    let t = String(text).replace(NAMED_RE, (m, name) => EMOJI_NAMES[name.toLowerCase()] || m);
+    if (final) t = t.replace(EMOTICON_RE, (m, pre, emo) => pre + (EMOTICON_MAP[emo] || emo));
+    return t;
+  }
 
   function nameHue(name) { return U.hashInt(String(name)) % 360; }
   function nameColor(name) { return `hsl(${nameHue(name)} 78% 74%)`; }
@@ -160,6 +346,7 @@
     _pool: [], _target: 0, _vroot: null, _lineT: 12, _cycleT: 200, _joinT: -1, _recentLines: [], _replyT: 0,
     _sessionKey: null, _loggedOut: true, _mode: 'local', _srv: null, _timers: new Set(),
     _lastEmote: -1e9, _emoteSeq: 0, _emoteState: null,
+    _sendLog: [], _recentKeys: [], _muteUntil: 0, _typingNames: new Map(), _suggest: null, _gatherAt: -1e9, _mentionAt: -1e9,
     stats: { plans: 0, planFails: 0, arrivals: 0, stuck: 0, lines: 0, replies: 0, joins: 0, leaves: 0 },
 
     get online() { return 1 + this.others.size; },
@@ -185,14 +372,20 @@
       const fresh = this._loggedOut || key !== this._sessionKey;
       this._sessionKey = key;
       this._loggedOut = false;
-      if (state && !Array.isArray(state.blocked)) state.blocked = [];
+      // imported / old saves: keep only sane, unique names
+      if (state) {
+        const raw = Array.isArray(state.blocked) ? state.blocked : [];
+        const list = [];
+        for (const n of raw) { if (typeof n !== 'string') continue; const c = cleanText(n, 32); if (c && !list.includes(c)) list.push(c); if (list.length >= 200) break; }
+        if (!Array.isArray(state.blocked) || list.length !== raw.length) state.blocked = list;
+      }
       if (fresh) {
         this._stopServer();
         this._clearRemotes();
         this._mode = mode;
         this._resetChat();
         this._seedChat();
-        if (mode === 'local') this._spawnVisitors(); else { this._despawnVisitors(); this._startServer(); }
+        if (mode === 'local') { this._spawnVisitors(); this._later(rand(6500, 9000), () => this._welcomePlayer()); } else { this._despawnVisitors(); this._startServer(); }
         this._clearMyBubble();
       } else {
         this._refreshBlocked(); // re-applied state (reset / import): keep the session going
@@ -212,6 +405,10 @@
       this._clearMyBubble();
       for (const t of this._timers) clearTimeout(t);
       this._timers.clear();
+      this._typingNames.clear();
+      this._renderTyping();
+      this._hideSuggest();
+      if (this._chat) { this._chat.input.value = ''; this._chat.input.blur(); this._updateCount(); }
       document.body.classList.remove('show-chat');
       this._updateOnline();
     },
@@ -247,6 +444,31 @@
       form.insertBefore(C.voiceInd, input);
       C.count = h('span', { class: 'chat-count', hidden: true });
       form.insertBefore(C.count, C.send);
+      // "OO님이 입력 중…" line + quick reaction row (emotes) + @name / :emoji: suggestions
+      C.typing = h('div', { class: 'chat-typing', hidden: true, 'aria-hidden': 'true' }, h('div', { class: 'ct-pill' }, h('span', { class: 'soc-dots' }, h('i'), h('i'), h('i')), h('span', { class: 'ct-txt' })));
+      C.quick = h('div', { class: 'chat-quick', role: 'toolbar', 'aria-label': '빠른 반응' });
+      for (const id of QUICK) {
+        const e = (G.data.emotes || []).find((x) => x.id === id);
+        if (!e) continue;
+        const b = h('button', { type: 'button', class: 'cq-btn', dataset: { emote: e.id }, title: `${e.name} — 내 머리 위에 띄우기`, 'aria-label': e.name }, h('span', { class: 'emoji' }, e.icon));
+        C.quick.appendChild(b);
+      }
+      C.quickMore = h('button', { type: 'button', class: 'cq-btn cq-more', title: '이모지 전체 보기 (T)', 'aria-label': '이모지 전체 보기' }, h('span', { class: 'ico ico-sm', 'data-icon': 'plus' }));
+      C.quickHelp = h('button', { type: 'button', class: 'cq-btn cq-help', title: '채팅 단축키 보기', 'aria-label': '채팅 단축키 보기' }, ':)');
+      C.quick.append(C.quickMore, C.quickHelp);
+      C.quick.addEventListener('click', (e) => {
+        const b = e.target.closest('.cq-btn');
+        if (!b) return;
+        if (b === C.quickMore) { this.openEmotes(b); return; }
+        if (b === C.quickHelp) { this._openShortcutHelp(b); return; }
+        if (this.emote(b.dataset.emote)) { b.classList.remove('hit'); void b.offsetWidth; b.classList.add('hit'); }
+      });
+      C.suggest = h('div', { class: 'chat-suggest glass', role: 'listbox', hidden: true });
+      C.suggest.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the input focused
+      C.suggest.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) this._acceptSuggest(Number(b.dataset.i)); });
+      panel.insertBefore(C.typing, form);
+      panel.insertBefore(C.quick, form);
+      panel.insertBefore(C.suggest, form);
 
       for (const b of C.tabs) {
         b.setAttribute('type', 'button');
@@ -277,16 +499,119 @@
           if (this.tab === 'system') this.setTab('all');
         }
       });
-      input.addEventListener('input', () => this._updateCount());
+      input.addEventListener('input', (e) => {
+        // complete ":name:" shortcuts turn into emoji right away (keeps the caret in place)
+        if (!e.isComposing && input.value.includes(':')) {
+          const pos = input.selectionStart ?? input.value.length;
+          const before = input.value.slice(0, pos), after = input.value.slice(pos);
+          const nb = applyShortcuts(before, false);
+          if (nb !== before) { input.value = nb + after; try { input.setSelectionRange(nb.length, nb.length); } catch (err) { /* ignore */ } }
+        }
+        this._updateCount();
+        this._updateSuggest();
+      });
       input.addEventListener('focus', () => { panel.classList.add('typing'); this._markRead(); });
-      input.addEventListener('blur', () => panel.classList.remove('typing'));
-      // stop key presses inside the input from reaching gameplay shortcuts (input module already ignores while typing)
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.isComposing) e.stopPropagation(); });
+      input.addEventListener('blur', () => { panel.classList.remove('typing'); this._hideSuggest(); });
+      // suggestion navigation; IME composition (Korean) must never submit half-composed syllables
+      input.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) { if (e.key === 'Enter') e.stopPropagation(); return; }
+        const S = this._suggest;
+        if (!S) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { S.active = (S.active + (e.key === 'ArrowDown' ? 1 : -1) + S.items.length) % S.items.length; this._renderSuggest(); }
+        else if (e.key === 'Tab' || e.key === 'Enter') this._acceptSuggest(S.active);
+        else if (e.key === 'Escape') this._hideSuggest();
+        else return;
+        e.preventDefault(); e.stopPropagation();
+      });
 
       if (lsGet(LS_COLLAPSED, '0') === '1') this.collapse(true, { silent: true });
       const t = lsGet(LS_TAB, 'all');
       this.setTab(['all', 'local', 'system'].includes(t) ? t : 'all', { silent: true });
       G.ui.hydrateIcons(panel);
+    },
+
+    // ------------------------------------------------------------ @name / :emoji: suggestions
+    _updateSuggest() {
+      const C = this._chat;
+      if (!C || document.activeElement !== C.input) { this._hideSuggest(); return; }
+      const pos = C.input.selectionStart ?? C.input.value.length;
+      const before = C.input.value.slice(0, pos);
+      let m, items = [];
+      if ((m = /(^|\s)@([^\s@]{0,12})$/.exec(before))) {
+        const frag = m[2].toLowerCase();
+        const pp = G.sys.player?.position;
+        const seen = new Set();
+        const cand = [];
+        const add = (name, icon, x, z, sub) => {
+          if (!name || seen.has(name) || this._isBlocked(name)) return;
+          if (frag && !name.toLowerCase().includes(frag)) return;
+          seen.add(name);
+          cand.push({ label: name, icon, sub, insert: `@${name} `, d: pp && Number.isFinite(x) ? Math.hypot(x - pp.x, z - pp.z) : 999, start: pos - m[2].length - 1 });
+        };
+        for (const o of this.others.values()) add(o.name, '🙂', o.position?.x, o.position?.z, o.kind === 'remote' ? '접속 중' : '체험객');
+        for (const r of G.sys.npc?.list?.() || []) add(r.data?.name, '⭐', r.position?.x, r.position?.z, r.data?.role || 'NPC');
+        cand.sort((a, b) => (a.label.toLowerCase().startsWith(frag) ? 0 : 1) - (b.label.toLowerCase().startsWith(frag) ? 0 : 1) || a.d - b.d);
+        items = cand.slice(0, 5).map((c) => ({ ...c, sub: c.d < 999 ? `${c.sub} · ${Math.round(c.d)}m` : c.sub }));
+      } else if ((m = /(^|\s):([a-z0-9_+ㄱ-ㆎ가-힣]{1,12})$/i.exec(before))) {
+        const frag = m[2].toLowerCase();
+        const seen = new Set();
+        for (const [name, emo] of Object.entries(EMOJI_NAMES)) {
+          if (!name.startsWith(frag) || seen.has(emo + name)) continue;
+          seen.add(emo + name);
+          items.push({ label: `:${name}:`, icon: emo, insert: emo + ' ', start: pos - m[2].length - 1 });
+          if (items.length >= 6) break;
+        }
+      }
+      if (!items.length) { this._hideSuggest(); return; }
+      const prev = this._suggest;
+      this._suggest = { items, active: prev && prev.items.length === items.length ? Math.min(prev.active, items.length - 1) : 0, end: pos };
+      this._renderSuggest();
+    },
+    _renderSuggest() {
+      const C = this._chat, S = this._suggest;
+      if (!C || !S) return;
+      const h = G.ui.h;
+      C.suggest.replaceChildren(...S.items.map((it, i) => h('button', { type: 'button', class: `cs-item${i === S.active ? ' active' : ''}`, role: 'option', 'aria-selected': i === S.active ? 'true' : 'false', dataset: { i: String(i) } },
+        h('span', { class: 'emoji' }, it.icon), h('b', null, it.label), it.sub ? h('small', null, it.sub) : null)));
+      C.suggest.appendChild(h('div', { class: 'cs-tip' }, '↑↓ 선택 · Tab/Enter 입력 · Esc 닫기'));
+      C.suggest.hidden = false;
+    },
+    _hideSuggest() { this._suggest = null; if (this._chat) this._chat.suggest.hidden = true; },
+    _acceptSuggest(i) {
+      const C = this._chat, S = this._suggest;
+      if (!C || !S || !S.items[i]) return;
+      const it = S.items[i];
+      const v = C.input.value;
+      const nv = (v.slice(0, it.start) + it.insert + v.slice(S.end)).slice(0, MAX_LEN);
+      C.input.value = nv;
+      const caret = Math.min(nv.length, it.start + it.insert.length);
+      try { C.input.setSelectionRange(caret, caret); } catch (e) { /* ignore */ }
+      this._hideSuggest();
+      this._updateCount();
+      C.input.focus({ preventScroll: true });
+    },
+    /** cheat sheet of emoji shortcuts (click inserts into the chat input) */
+    _openShortcutHelp(anchor) {
+      const h = G.ui.h;
+      const rows = [[':)', '😊'], [':D', '😄'], [';)', '😉'], ['<3', '❤️'], [':(', '😢'], [':O', '😮'], [':하트:', '❤️'], [':최고:', '👍'], [':박수:', '👏'], [':축하:', '🎉'], [':장독:', '🏺'], [':김치:', '🥬']];
+      const grid = h('div', { class: 'soc-sc-grid' });
+      for (const [k, e] of rows) {
+        const b = h('button', { type: 'button', class: 'soc-sc', title: `${k} → ${e}` }, h('span', { class: 'emoji' }, e), h('code', null, k));
+        b.addEventListener('click', () => {
+          G.ui.popover.close();
+          if (this._guestReadOnly() || !this.focusChat()) return;
+          const C = this._chat;
+          const v = C.input.value;
+          C.input.value = (v && !/\s$/.test(v) ? v + ' ' : v) + e + ' ';
+          this._updateCount();
+        });
+        grid.appendChild(b);
+      }
+      const box = h('div', { class: 'soc-picker soc-shortcuts' },
+        h('div', { class: 'soc-pk-head' }, h('h4', null, '채팅 단축키'), h('kbd', null, 'Enter')),
+        grid,
+        h('p', { class: 'soc-pk-tip' }, '메시지에 :) 나 :하트: 를 쓰면 이모지로 바뀌어요. @이름 으로 다른 체험객을 부를 수 있어요.'));
+      G.ui.popover.open(anchor, box, { id: 'social-shortcuts', placement: 'top', className: 'soc-pop' });
     },
 
     _updateCount() {
@@ -392,14 +717,19 @@
     },
     _markRead() {
       this._unread = 0;
+      this._unreadMention = false;
       const C = this._chat;
-      if (C) C.unread.hidden = true;
+      if (C) { C.unread.hidden = true; C.unread.classList.remove('mention'); }
       G.ui.setBadge('chat', 0);
+      for (const b of document.querySelectorAll('#hud-left-menu [data-action="chat"] .badge, #bottom-bar [data-action="chat"] .badge')) b.classList.remove('mention');
     },
 
     _resetChat() {
       this.messages.length = 0;
-      if (this._chat) { this._chat.log.innerHTML = ''; this._chat.input.value = ''; this._updateCount(); }
+      if (this._chat) { this._chat.log.replaceChildren(); this._chat.input.value = ''; this._updateCount(); this._hideSuggest(); }
+      this._typingNames.clear();
+      this._renderTyping();
+      this._recentKeys.length = 0; this._sendLog.length = 0; this._muteUntil = 0;
       this._markRead();
       this._stick = true;
     },
@@ -416,17 +746,23 @@
 
     /** add a message to the log. m: {name, text, channel, kind, self, near, uid, sid, history} */
     _push(m) {
+      const kind = m.kind || (m.self ? 'me' : m.channel === 'system' ? 'system' : m.channel === 'npc' ? 'npc' : 'visitor');
       const msg = {
         id: m.sid != null ? `s${m.sid}` : `m${++this._seq}`,
-        name: String(m.name || '익명').slice(0, 24),
-        text: String(m.text ?? '').slice(0, 300),
-        channel: m.channel || 'all',
-        at: m.at || G.time.now(),
+        name: kind === 'visitor' || kind === 'remote' ? cleanName(m.name, kind) : cleanText(m.name || '익명', 24) || '익명',
+        text: cleanText(m.text, 300),
+        channel: ['all', 'local', 'system', 'npc'].includes(m.channel) ? m.channel : 'all',
+        at: Number.isFinite(m.at) && m.at > 0 ? m.at : G.time.now(),
         self: !!m.self,
-        kind: m.kind || (m.self ? 'me' : m.channel === 'system' ? 'system' : m.channel === 'npc' ? 'npc' : 'visitor'),
+        kind,
         near: !!m.near,
-        uid: m.uid ?? null,
+        uid: m.uid != null ? String(m.uid).slice(0, 40) : null,
+        mention: false,
       };
+      if (!msg.text) return null;
+      // @mention of my nickname (or the plain nickname) in someone else's message
+      const nick = G.state?.profile?.nickname;
+      if (!msg.self && kind !== 'system' && nick && cpLen(nick) >= 2 && msg.text.toLowerCase().includes(String(nick).toLowerCase())) msg.mention = true;
       this.messages.push(msg);
       while (this.messages.length > MAX_MSG) { const old = this.messages.shift(); old._el?.remove(); }
       this._render(msg);
@@ -434,14 +770,39 @@
       G.bus.emit('chat:message', { msg: pub });
       if (!msg.self && !m.history) {
         const visibleHere = !(this._isBlocked(msg.name) && msg.kind !== 'system' && msg.kind !== 'npc') && !(msg.channel === 'local' && !msg.near);
+        if (visibleHere && msg.mention) {
+          G.bus.emit('chat:mention', { msg: pub });
+          const now = performance.now();
+          if (now - this._mentionAt > 1500) { this._mentionAt = now; G.sfx('notify'); }
+        }
         if (visibleHere && !this._chatShown()) {
           this._unread++;
+          if (msg.mention) this._unreadMention = true;
           const C = this._chat;
-          if (C) { C.unread.hidden = false; C.unread.textContent = this._unread > 99 ? '99+' : String(this._unread); }
-          if (!this._chatShown()) G.ui.setBadge('chat', this._unread);
+          if (C) { C.unread.hidden = false; C.unread.textContent = this._unread > 99 ? '99+' : String(this._unread); C.unread.classList.toggle('mention', !!this._unreadMention); }
+          G.ui.setBadge('chat', this._unread);
+          if (this._unreadMention) for (const b of document.querySelectorAll('#hud-left-menu [data-action="chat"] .badge, #bottom-bar [data-action="chat"] .badge')) b.classList.add('mention');
         }
       }
       return msg;
+    },
+    /** message text as DOM nodes: @tokens and my nickname highlighted (text nodes only — never HTML) */
+    _textNodes(text, nick) {
+      const h = G.ui.h;
+      const parts = [];
+      const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let re;
+      try { re = new RegExp(`@[^\\s@]{1,20}${nick && cpLen(nick) >= 2 ? `|${escRe(nick)}` : ''}`, 'gi'); } catch (e) { return [text]; }
+      let last = 0, mm, guard = 0;
+      while ((mm = re.exec(text)) && guard++ < 40) {
+        if (mm.index > last) parts.push(text.slice(last, mm.index));
+        const tok = mm[0];
+        const mine = !!nick && tok.replace(/^@/, '').toLowerCase().startsWith(String(nick).toLowerCase());
+        parts.push(h('mark', { class: mine ? 'at me' : 'at' }, tok));
+        last = mm.index + tok.length;
+      }
+      if (last < text.length) parts.push(text.slice(last));
+      return parts;
     },
 
     _render(msg) {
@@ -452,12 +813,14 @@
       if (msg.near || msg.self) cls.push('near');
       if (msg.channel === 'local') cls.push('ch-local');
       if (msg.kind !== 'system' && msg.kind !== 'npc' && !msg.self && this._isBlocked(msg.name)) cls.push('blocked');
+      if (msg.mention) cls.push('mention');
       const el = h('div', { class: cls.join(' '), dataset: { id: msg.id } });
       if (msg.channel === 'local') el.appendChild(h('span', { class: 'ch-tag' }, '지역'));
       const isBtn = msg.kind !== 'system' && msg.kind !== 'me';
       const who = h(isBtn ? 'button' : 'span', { class: 'who', type: isBtn ? 'button' : null, dataset: { name: msg.name, kind: msg.kind, uid: msg.uid ?? '' }, title: isBtn ? `${msg.name} — 메뉴 열기` : null }, `${msg.name}:`);
       if (msg.kind === 'visitor' || msg.kind === 'remote') who.style.color = nameColor(msg.name);
-      el.append(who, h('span', { class: 'txt' }, msg.text), h('time', { class: 'time' }, hhmm(msg.at)));
+      const txt = msg.kind === 'system' ? msg.text : this._textNodes(msg.text, msg.self ? null : G.state?.profile?.nickname);
+      el.append(who, h('span', { class: 'txt' }, txt), h('time', { class: 'time', datetime: new Date(msg.at).toISOString() }, hhmm(msg.at)));
       C.log.appendChild(el);
       msg._el = el;
       if (this._stick) this._scrollBottom(true);
@@ -493,15 +856,14 @@
       return this._push({ name: name || 'NPC', text: this.filter(String(text)), channel: 'npc', kind: 'npc', near });
     },
 
-    filter(text) { return this._badRe ? String(text).replace(this._badRe, '♡♡') : String(text); },
-    _buildFilter() {
-      const words = (G.data.badWords || []).map((w) => String(w || '').trim()).filter(Boolean);
-      if (!words.length) { this._badRe = null; return; }
-      const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      // tolerate spaces / punctuation inserted between the letters ("시 발", "s.h.i.t")
-      const parts = words.sort((a, b) => b.length - a.length).map((w) => Array.from(w).map(escRe).join('[\\s._\\-*~!@#^]*'));
-      try { this._badRe = new RegExp(parts.join('|'), 'gi'); } catch (e) { this._badRe = null; }
-    },
+    /** bad words masked with ♡♡ (spacing / punctuation / jamo / l33t / full-width tricks normalised first) */
+    filter(text) { try { return maskBad(text); } catch (e) { G.log.warn('SOCIAL', 'filter failed', e); return String(text ?? ''); } },
+    hasBadWord(text) { try { return badRanges(String(text ?? '')).length > 0; } catch (e) { return false; } },
+    /** shared helpers (used by the developer self-test and other modules) */
+    cleanText(text, max = MAX_LEN) { return cleanText(text, max); },
+    cleanName(name) { return cleanName(name, 'remote'); },
+    emojify(text) { return applyShortcuts(String(text ?? ''), true); },
+    _buildFilter() { this._badRe = badRegex(); },
 
     _guestReadOnly() {
       if (this._mode !== 'server') return false;
@@ -520,25 +882,35 @@
 
     sendChat(text, channel = 'all') {
       if (!G.state) return false;
-      let t = String(text ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+      let t = cleanText(applyShortcuts(cleanText(text, MAX_LEN * 2), true), MAX_LEN);
       if (!t) return false;
       if (this._guestReadOnly()) { G.ui.toast('게스트는 채팅을 보낼 수 없어요. 로그인 후 이용해 주세요.', { type: 'warn' }); return false; }
-      if (t.length > MAX_LEN) t = t.slice(0, MAX_LEN);
       const now = performance.now();
-      if (now - this._lastSent < RATE_MS) { G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn' }); return false; }
-      if (t === this._lastText && now - this._lastSent < 10000) {
-        if (++this._repeat >= 2) { G.ui.toast('같은 메시지를 계속 보낼 수 없어요.', { type: 'warn' }); return false; }
-      } else this._repeat = 0;
+      // spam guard: 1.2 s between messages, ≤ 5 messages per 10 s, no repeating the same text within 20 s
+      if (now < this._muteUntil) { G.ui.toast(`잠깐 쉬어 가요! ${Math.ceil((this._muteUntil - now) / 1000)}초 뒤에 다시 보낼 수 있어요.`, { type: 'warn', emoji: '⏳' }); return false; }
+      if (now - this._lastSent < RATE_MS) { G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn', emoji: '⏳' }); return false; }
+      while (this._sendLog.length && now - this._sendLog[0] > BURST_MS) this._sendLog.shift();
+      if (this._sendLog.length >= BURST_N) {
+        this._muteUntil = now + BURST_COOL;
+        G.ui.toast('메시지를 너무 많이 보냈어요. 8초 뒤에 다시 보낼 수 있어요.', { type: 'warn', emoji: '⏳' });
+        return false;
+      }
+      const key = spamKey(t);
+      while (this._recentKeys.length && (now - this._recentKeys[0].at > DUP_MS || this._recentKeys.length > 3)) this._recentKeys.shift();
+      if (this._recentKeys.some((r) => r.key === key)) { G.ui.toast('같은 메시지를 연달아 보낼 수 없어요. 조금 뒤에 다시 보내 주세요.', { type: 'warn', emoji: '🔁' }); return false; }
+      this._recentKeys.push({ key, at: now });
+      this._sendLog.push(now);
       this._lastSent = now;
       this._lastText = t;
       const ch = channel === 'local' ? 'local' : 'all';
       const masked = this.filter(t);
+      if (masked !== t) G.ui.toast('고운 말을 써 주세요. 일부 표현이 ♡♡로 가려졌어요.', { type: 'info', emoji: '💚', sound: false, duration: 2200 });
       const nick = G.state.profile?.nickname || '나';
       const msg = this._push({ name: nick, text: masked, channel: ch, kind: 'me', self: true, near: true, uid: G.save?.profile?.id ?? null });
       this.say(masked);
       G.sfx('chat');
       G.bus.emit('chat:sent', { text: masked, channel: ch });
-      G.log.info('UI', `chat (${ch}): ${masked}`);
+      G.log.info('UI', `chat sent (${ch}, ${cpLen(masked)}자)`); // never log message contents
       if (this._mode === 'server') this._serverSend(masked, ch, msg);
       else this._visitorsHear(masked, ch);
       return true;
@@ -558,20 +930,26 @@
     _clearMyBubble() { if (this._me) { this._me.t = 0; this._me.bubble.hidden = true; this._me.label.setVisible(false); } },
     /** show text (or an emoji with {emote:true}) in a bubble holder {bubble, t, label?} */
     _bubble(holder, text, opts = {}) {
-      if (!holder || !text) return;
+      if (!holder || (!text && !opts.typing)) return;
       const b = holder.bubble;
       b.classList.toggle('emote', !!opts.emote);
-      b.textContent = text;
+      b.classList.toggle('typing', !!opts.typing);
+      b.classList.remove('out');
+      holder.out = false;
+      if (opts.typing) { const h = G.ui.h; b.replaceChildren(h('span', { class: 'soc-dots' }, h('i'), h('i'), h('i'))); }
+      else b.textContent = String(text);
       b.hidden = false;
       b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
-      holder.t = opts.dur ?? (opts.emote ? 2.5 : clamp(2.4 + String(text).length * 0.07, 3, 6.5));
+      holder.t = opts.dur ?? (opts.emote ? 2.6 : clamp(2.4 + cpLen(text) * 0.07, 3, 6.5));
       holder.label?.setVisible?.(true);
     },
     _tickBubble(holder, dt) {
       if (!holder || holder.t <= 0) return;
       holder.t -= dt;
-      if (holder.t <= 0) { holder.bubble.hidden = true; holder.label?.setVisible?.(false); }
+      if (holder.t <= 0.26 && !holder.out) { holder.out = true; holder.bubble.classList.remove('pop'); holder.bubble.classList.add('out'); }
+      if (holder.t <= 0) { holder.bubble.hidden = true; holder.bubble.classList.remove('out', 'typing'); holder.label?.setVisible?.(false); }
     },
+    _hideBubble(holder) { if (!holder) return; holder.t = 0; holder.out = false; holder.bubble.hidden = true; holder.bubble.classList.remove('out', 'typing'); holder.label?.setVisible?.(false); },
     /** my own speech bubble */
     say(text) { if (G.state && text) this._bubble(this._me, String(text)); },
 
@@ -623,6 +1001,7 @@
         const b = h('button', { class: `pick${loopOn ? ' active' : ''}`, type: 'button', dataset: { id: it.id }, title: `${it.name} (${i + 1})` },
           h('span', { class: 'emoji' }, it.icon), h('span', { class: 'pk-name' }, it.name), h('kbd', { class: 'pk-key' }, String(i + 1)),
           kind === 'gesture' && it.loop ? h('span', { class: 'pk-loop', title: '반복 동작' }, loopOn ? '중지' : '반복') : null);
+        b.style.setProperty('--i', String(i));
         grid.appendChild(b);
       });
       grid.addEventListener('click', (e) => {
@@ -651,7 +1030,7 @@
       this._bubble(this._me, e.icon, { emote: true });
       try { G.sys.player?.playAction?.(e.anim); } catch (err) { G.log.warn('SOCIAL', 'emote anim failed', err); }
       G.sfx('emote');
-      this._emoteState = { id: e.id, at: Date.now(), seq: ++this._emoteSeq };
+      this._emoteState = { id: e.id, at: G.time.now(), seq: ++this._emoteSeq };
       G.bus.emit('emote:played', { emoteId: e.id });
       if (this._mode === 'local') this._visitorsSeeEmote(e);
       return true;
@@ -806,8 +1185,10 @@
       for (const o of this.others.values()) {
         const b = this._isBlocked(o.name);
         o.el?.root?.classList.toggle('blocked', b);
-        if (b && o.bub) { o.bub.t = 0; o.bub.bubble.hidden = true; }
+        if (b && o.bub) this._hideBubble(o.bub);
       }
+      this._renderTyping();
+      this._hideSuggest();
     },
 
     report(info) {
@@ -921,8 +1302,15 @@
       const on = (n, fn) => G.bus.on(n, (p) => { if (G.state) fn(p || {}); });
       on('level:up', ({ level }) => {
         this.system(`🎉 레벨 ${level} 달성! 축하합니다.`);
-        if (this._mode === 'local') this._later(1800, () => { const v = this._nearestVisitor(LOCAL_R, true); if (v) { this._visitorFace(v); this._visitorSay(v, this._replyLine('congrats'), { anim: 'clap' }); } });
+        if (this._mode !== 'local') return;
+        this._later(1200, () => {
+          const before = this._gatherAt;
+          this._gather('level');
+          if (this._gatherAt === before) { const v = this._nearestVisitor(LOCAL_R, true); if (v) { this._visitorFace(v); this._visitorSay(v, this._replyLine('congrats'), { anim: 'clap' }); } }
+        });
       });
+      on('quest:claimed', () => { if (this._mode === 'local') this._later(1400, () => this._gather('quest')); });
+      on('ferment:claimed', () => { if (this._mode === 'local') this._later(1400, () => this._gather('ferment')); });
       on('achievement:unlocked', ({ id }) => { const a = G.data.achievements?.[id]; if (a) this.system(`🏆 업적 달성: ${a.icon || ''} ${a.name}`); });
       on('quest:completed', ({ questId }) => { const q = G.data.quests?.[questId]; if (q) this.system(`📜 퀘스트 완료: ${q.title} — 퀘스트 패널에서 보상을 받으세요.`); });
       on('collection:unlocked', ({ id }) => { const c = G.data.collection?.[id]; if (c) this.system(`📖 도감에 등록됐어요: ${c.icon || ''} ${c.name}`); });
@@ -1343,6 +1731,12 @@
         v.rig.setAnim('sit', { loop: true, seatY: s.seat.y });
         return;
       }
+      if (s.kind === 'gather') { // celebrating next to the player
+        this._visitorFace(v);
+        this._visitorAnim(v, pick(s.anims));
+        this._visitorEmote(v, pick(['👏', '🎉', '✨', '🙌', '😆']));
+        return;
+      }
       v.faceYaw = s.face ?? null;
       if (!opts.silent && s.anims && Math.random() < 0.65) this._visitorAnim(v, pick(s.anims));
       if (s.social && !opts.silent) this._tryTalk(v);
@@ -1375,19 +1769,109 @@
       fn?.();
     },
 
+    /** a visitor speaks: "…" typing dots above the head (+ "OO님이 입력 중" in the chat panel), then the line */
     _visitorSay(v, text, opts = {}) {
       if (!v?.active || !text) return;
       const line = String(text).replace(/\{nickname\}/g, G.state?.profile?.nickname || '체험객');
+      if (opts.typing === false || this._isBlocked(v.name)) { this._visitorSayNow(v, line, opts); return; }
+      const name = v.name;
+      const pp = G.sys.player?.position;
+      const d = pp ? Math.hypot(v.position.x - pp.x, v.position.z - pp.z) : Infinity;
+      const inChat = (opts.channel || 'all') !== 'local' || d <= LOCAL_R;
+      const secs = clamp(0.7 + cpLen(line) * 0.045, 0.9, 2.6);
+      if (d < LABEL_DIST) this._bubble(v.bub, '', { typing: true, dur: secs + 0.4 });
+      if (inChat) this._typingStart(name);
+      this._later(secs * 1000, () => {
+        if (inChat) this._typingEnd(name);
+        if (v.active && v.name === name && G.state) this._visitorSayNow(v, line, opts);
+      });
+    },
+    _visitorSayNow(v, line, opts = {}) {
+      if (!v?.active) return;
       const pp = G.sys.player?.position;
       const d = pp ? Math.hypot(v.position.x - pp.x, v.position.z - pp.z) : Infinity;
       const channel = opts.channel || 'all';
       if (channel === 'local' && d > LOCAL_R) { if (!this._isBlocked(v.name)) this._bubble(v.bub, line); return; }
-      this._push({ name: v.name, text: this.filter(line), channel, kind: 'visitor', near: d <= LOCAL_R, uid: v.id });
+      const msg = this._push({ name: v.name, text: this.filter(line), channel, kind: 'visitor', near: d <= LOCAL_R, uid: v.id });
       if (!this._isBlocked(v.name)) {
-        this._bubble(v.bub, line);
+        this._bubble(v.bub, msg?.text || line);
         if (d < 45) G.sfx('chat', { at: v.position, volume: 0.6 });
       }
       if (opts.anim && v.state !== 'walk') this._visitorAnim(v, opts.anim);
+    },
+    _typingStart(name) { this._typingNames.set(name, (this._typingNames.get(name) || 0) + 1); this._renderTyping(); },
+    _typingEnd(name) {
+      const n = (this._typingNames.get(name) || 0) - 1;
+      if (n > 0) this._typingNames.set(name, n); else this._typingNames.delete(name);
+      this._renderTyping();
+    },
+    _renderTyping() {
+      const C = this._chat;
+      if (!C?.typing) return;
+      const names = [...this._typingNames.keys()].filter((n) => !this._isBlocked(n));
+      if (!names.length) { C.typing.hidden = true; return; }
+      const txt = names.length === 1 ? `${J.nim(names[0])}이 입력 중…` : names.length === 2 ? `${J.nim(names[0])}, ${J.nim(names[1])}이 입력 중…` : `${J.nim(names[0])} 외 ${names.length - 1}명이 입력 중…`;
+      C.typing.querySelector('.ct-txt').textContent = txt;
+      C.typing.hidden = false;
+    },
+
+    /** a couple of nearby visitors welcome the player after logging in */
+    _welcomePlayer() {
+      if (this._mode !== 'local' || !G.state) return;
+      const nick = G.state.profile?.nickname || '체험객';
+      const pp = G.sys.player?.position;
+      const vis = this._activeVisitors().filter((v) => !v.leaving && !this._isBlocked(v.name));
+      if (!vis.length) return;
+      const byDist = pp ? vis.slice().sort((a, b) => Math.hypot(a.position.x - pp.x, a.position.z - pp.z) - Math.hypot(b.position.x - pp.x, b.position.z - pp.z)) : vis;
+      const first = byDist[0];
+      const lines = [`@${nick} 님, 어서 오세요! 😊`, `${J.nim(nick)} 반가워요! 같이 둘러봐요 👋`, `@${nick} 님 환영해요~ 장독대 꼭 가 보세요!`];
+      const near = pp && Math.hypot(first.position.x - pp.x, first.position.z - pp.z) < 25;
+      if (near) this._react(first, 3, () => this._visitorEmote(first, '👋', 'wave'));
+      this._visitorSay(first, pick(lines));
+      const second = byDist[1];
+      if (second && Math.random() < 0.6) this._later(rand(2600, 4200), () => { if (second.active && G.state) this._visitorSay(second, pick(['반가워요~ 👋', '어서 오세요!', '환영합니다 🙌'])); });
+    },
+
+    /** celebrations: up to three nearby visitors walk over, face the player and clap / cheer */
+    _gather(kind) {
+      if (this._mode !== 'local' || !G.state || !NAV.ready) return;
+      const now = performance.now();
+      if (now - this._gatherAt < 40000) return;
+      const pp = G.sys.player?.position;
+      if (!pp || G.sys.photo?.active) return;
+      const cand = this._activeVisitors()
+        .filter((v) => !v.leaving && !v.talk && !this._isBlocked(v.name) && v.state !== 'sit' && !v.slide)
+        .map((v) => [v, Math.hypot(v.position.x - pp.x, v.position.z - pp.z)])
+        .filter(([, d]) => d > 2.4 && d < 38)
+        .sort((a, b) => a[1] - b[1]).slice(0, 3);
+      if (!cand.length) return;
+      this._gatherAt = now;
+      const LINES = {
+        level: ['레벨 업 축하해요! 🎉', '와, 레벨 업! 👏', '축하드려요~ 🙌'],
+        quest: ['퀘스트 완료 축하해요! 👏', '대단해요! 🎉', '오, 벌써 끝냈어요? 👍'],
+        ferment: ['와, 장 담그기 성공! 🏺', '맛있겠다~ 😋', '발효 완성 축하해요! 🎉'],
+      };
+      cand.forEach(([v, d], i) => {
+        const base = Math.atan2(v.position.x - pp.x, v.position.z - pp.z) + (i - (cand.length - 1) / 2) * 0.55;
+        const r = 2.4 + (i % 2) * 0.45;
+        const free = this._freeNear(pp.x + Math.sin(base) * r, pp.z + Math.cos(base) * r, 1.6);
+        if (!free) return;
+        const y = G.world.surfaceHeight(free.x, free.z);
+        const spot = {
+          id: `GATHER_${v.id}`, kind: 'gather', x: free.x, z: free.z, face: Math.atan2(pp.x - free.x, pp.z - free.z),
+          anims: ['clap', 'celebrate', 'thumbsup'], cap: 1, users: new Set(), stay: [6, 10], w: 0,
+          node: nearestNode(free.x, free.z, Number.isFinite(y) ? y : 0),
+        };
+        if (!spot.node) return;
+        this._later(i * 450, () => {
+          if (!v.active || v.leaving || !G.state) return;
+          v.react = null;
+          if (this._startWalk(v, spot)) {
+            v.run = d > 14;
+            if (i === 0) this._later(rand(1500, 2600), () => { if (v.active && G.state) this._visitorSay(v, pick(LINES[kind] || LINES.level)); });
+          }
+        });
+      });
     },
     _visitorEmote(v, emo, anim) {
       if (!v?.active) return;
@@ -1470,7 +1954,9 @@
           const pd = pp ? Math.hypot(v.position.x - pp.x, v.position.z - pp.z) : 99;
           this.stats.replies++;
           if (pd < 25) this._react(v, 3.2, () => this._visitorAnim(v, k === 'greet' ? 'wave' : k === 'thanks' ? 'nod' : k === 'question' ? 'think' : 'wave'));
-          this._visitorSay(v, this._replyLine(k), { channel });
+          const nick = G.state.profile?.nickname;
+          const direct = nick && (named || Math.random() < 0.35);
+          this._visitorSay(v, (direct ? `@${nick} ` : '') + this._replyLine(k), { channel });
         });
       });
     },
@@ -1487,7 +1973,7 @@
           if (!v.active) return;
           const map = {
             EMO_HELLO: ['👋', 'wave'], EMO_WELCOME: ['🙌', 'celebrate'], EMO_CLAP: ['👏', 'clap'], EMO_THUMBS: ['👍', 'thumbsup'],
-            EMO_LIKE: ['❤️', 'heart'], EMO_WOW: [pick(['😮', '😆']), 'surprise'], EMO_SMILE: ['😊', 'nod'], EMO_LAUGH: ['😆', 'nod'],
+            EMO_LIKE: [pick(['❤️', '💕', '🥰', '💖']), 'heart'], EMO_WOW: [pick(['😮', '😆']), 'surprise'], EMO_SMILE: ['😊', 'nod'], EMO_LAUGH: ['😆', 'nod'],
           };
           const [emo, anim] = map[e.id] || ['😊', 'nod'];
           this._react(v, 2.8, () => this._visitorEmote(v, emo, anim));
@@ -1564,7 +2050,7 @@
         if (hide !== v.hidden) { v.hidden = hide; v.group.visible = !hide; v.label.setVisible(!hide); }
         // simulate at a reduced rate far away
         v.simAcc += dt;
-        const simStep = hide ? 0.25 : cd > 70 ? 0.066 : 0;
+        const simStep = hide ? SLEEP_STEP : cd > FAR_DIST ? 0.066 : 0; // asleep when hidden, coarse when far
         if (v.simAcc >= simStep) {
           const sdt = Math.min(0.3, v.simAcc);
           v.simAcc = 0;
@@ -1726,7 +2212,13 @@
       free.state = 'idle'; free.t = 0.6;
       this.system(`👋 ${J.nim(free.name)}이 입장했어요. 반갑게 인사해 보세요!`);
       this._updateOnline();
-      this._later(rand(5000, 9000), () => { if (free.active && Math.random() < 0.6) this._visitorSay(free, pick(['안녕하세요!', '저 처음 왔어요!', '모두 반갑습니다~', '와, 공기가 정말 좋네요!'])); });
+      this._later(rand(5000, 9000), () => {
+        if (!free.active || !G.state) return;
+        if (Math.random() < 0.7) this._visitorSay(free, pick(['안녕하세요!', '저 처음 왔어요!', '모두 반갑습니다~', '와, 공기가 정말 좋네요!']));
+        // someone already here welcomes the newcomer
+        const host = pick(this._activeVisitors().filter((o) => o !== free && !o.leaving && !o.talk));
+        if (host && Math.random() < 0.65) this._later(rand(2500, 4500), () => { if (host.active && free.active && G.state) this._visitorSay(host, pick([`@${free.name} 님 어서 오세요! 😊`, `${J.nim(free.name)} 반가워요~ 👋`, `환영해요, ${J.nim(free.name)}!`])); });
+      });
     },
 
     _updateVisitorScheduler(dt) {
@@ -1781,7 +2273,8 @@
       G.log.info('NETWORK', 'social: server presence & chat polling started');
     },
     _stopServer() { this._srv = null; },
-    _backoff(base) { const f = this._srv?.fails || 0; return Math.min(30, base * Math.pow(2, Math.min(4, f))); },
+    /** poll interval in seconds: exponential back-off on failures (×2 per failure, ≤ 30 s) with ±15 % jitter */
+    _backoff(base) { const f = this._srv?.fails || 0; return Math.min(30, base * Math.pow(2, Math.min(4, f))) * rand(0.85, 1.15); },
     _netFail(e) {
       const S = this._srv;
       if (!S) return;
@@ -1834,14 +2327,20 @@
     },
     _applyPresence(data) {
       const S = this._srv;
-      const list = Array.isArray(data) ? data : Array.isArray(data?.players) ? data.players : [];
+      if (!S) return;
+      const raw = Array.isArray(data) ? data : Array.isArray(data?.players) ? data.players : [];
       const me = String(G.save?.profile?.id ?? '');
       const seen = new Set();
-      for (const r of list) {
-        const id = String(r.id ?? r.userId ?? r.user_id ?? '');
-        if (!id || id === me) continue;
+      let n = 0;
+      for (const r of raw) {
+        if (n >= MAX_REMOTES) break;                       // never spawn an unbounded crowd
+        if (!r || typeof r !== 'object' || Array.isArray(r)) continue; // malformed row
+        const id = String(r.id ?? r.userId ?? r.user_id ?? '').slice(0, 40);
+        if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || id === me) continue;
         const key = 'P_' + id;
+        if (seen.has(key)) continue;
         seen.add(key);
+        n++;
         try { this._upsertRemote(key, id, r); } catch (e) { G.log.warn('NETWORK', 'remote player update failed', e); }
       }
       for (const [key, o] of this.others) {
@@ -1852,14 +2351,32 @@
       }
       for (const key of seen) S.missing.delete(key);
       const online = Number(data?.online ?? data?.count);
-      S.online = Number.isFinite(online) && online > 0 ? online : 1 + seen.size;
+      S.online = Number.isFinite(online) && online > 0 ? Math.min(Math.floor(online), 99999) : 1 + seen.size;
       S.presFirst = false;
       this._updateOnline();
     },
-    _upsertRemote(key, id, r) {
-      const name = String(r.nickname ?? r.name ?? '체험객').slice(0, 24);
-      const x = Number(r.x), z = Number(r.z), y = Number(r.y), rot = Number(r.rotY ?? r.rot ?? 0);
-      if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    /** validated remote row -> {name, x, y, z, rot, zoneId, anim, emote, emoteAt, appearance} or null */
+    _remoteRow(r) {
+      const num = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+      let x = num(r.x), z = num(r.z), y = num(r.y), rot = num(r.rotY ?? r.rot ?? 0);
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+      x = clamp(x, -WORLD_LIM, WORLD_LIM); z = clamp(z, -WORLD_LIM, WORLD_LIM);
+      y = Number.isFinite(y) ? clamp(y, -10, 80) : null;
+      rot = Number.isFinite(rot) ? Math.atan2(Math.sin(rot), Math.cos(rot)) : 0;
+      const zoneId = typeof r.zoneId === 'string' && /^[A-Z0-9_]{1,40}$/.test(r.zoneId) ? r.zoneId : null;
+      const anim = typeof r.anim === 'string' && G.avatar?.actions && Object.prototype.hasOwnProperty.call(G.avatar.actions, r.anim) ? r.anim : null;
+      const emote = typeof r.emote === 'string' && (G.data.emotes || []).some((q) => q.id === r.emote) ? r.emote : null;
+      const emoteAt = num(r.emoteAt);
+      let appearance = null;
+      if (r.appearance && typeof r.appearance === 'object' && !Array.isArray(r.appearance)) {
+        try { appearance = G.avatar?.normalize ? G.avatar.normalize(r.appearance) : null; } catch (e) { appearance = null; }
+      }
+      return { name: cleanName(r.nickname ?? r.name ?? '체험객', 'remote'), x, y, z, rot, zoneId, anim, emote, emoteAt: Number.isFinite(emoteAt) ? emoteAt : 0, appearance };
+    },
+    _upsertRemote(key, id, raw) {
+      const r = this._remoteRow(raw);
+      if (!r) return;
+      const { name, x, y, z, rot } = r;
       let o = this.others.get(key);
       if (!o) {
         if (!G.avatar?.create || !this._vroot) return;
@@ -1868,35 +2385,41 @@
         const group = new THREE.Group(); group.name = 'remote'; group.add(rig.group);
         this._vroot.add(group);
         const bubble = this._bubbleEl('remote');
-        const tag = h('button', { class: 'nametag remote', type: 'button', title: `${name} · 클릭하면 메뉴가 열려요` }, h('i', { class: 'soc-dot', style: { background: nameColor(name) } }), h('span', { class: 'nm' }, name));
+        const dot = h('i', { class: 'soc-dot', style: { background: nameColor(name) } });
+        const nm = h('span', { class: 'nm' }, name);
+        const tag = h('button', { class: 'nametag remote', type: 'button', title: `${name} · 클릭하면 메뉴가 열려요` }, dot, nm);
         const root = h('div', { class: 'soc-label' }, bubble, tag);
         const label = G.ui.label({ el: root, target: rig.headAnchor, offsetY: 0.04, maxDist: LABEL_DIST, fadeDist: 8 });
-        o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId || null, label, el: { root, bubble, tag }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, anim: null, emoteAt: Number(r.emoteAt) || 0, appKey: '' };
+        o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId, label, el: { root, bubble, tag, dot, nm }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, anim: null, emoteAt: r.emoteAt, appKey: '', hidden: false };
         tag.addEventListener('click', (e) => { e.stopPropagation(); this._openUser(tag, { name: o.name, kind: 'remote', id }); });
-        group.position.set(x, Number.isFinite(y) ? y : G.world.surfaceHeight(x, z), z);
+        group.position.set(x, y != null ? y : G.world.surfaceHeight(x, z), z);
         group.rotation.y = rot;
         root.classList.toggle('blocked', this._isBlocked(name));
         this.others.set(key, o);
         if (!this._srv?.presFirst) this.system(`👋 ${J.nim(name)}이 접속했어요.`);
+      } else if (o.name !== name) { // account renamed
+        o.name = name;
+        o.el.nm.textContent = name;
+        o.el.dot.style.background = nameColor(name);
+        o.el.tag.title = `${name} · 클릭하면 메뉴가 열려요`;
+        o.el.root.classList.toggle('blocked', this._isBlocked(name));
       }
       if (r.appearance) { const k = JSON.stringify(r.appearance); if (k !== o.appKey) { o.appKey = k; try { o.rig.setAppearance(r.appearance); } catch (e) { /* keep */ } } }
-      if (Math.hypot(x - o.position.x, z - o.position.z) > 25) { o.position.set(x, Number.isFinite(y) ? y : o.position.y, z); }
-      o.tx = x; o.tz = z; o.ty = Number.isFinite(y) ? y : null; o.trot = rot; o.zoneId = r.zoneId || o.zoneId;
-      const anim = r.anim && G.avatar?.actions?.[r.anim] ? r.anim : null;
+      if (Math.hypot(x - o.position.x, z - o.position.z) > 25) { o.position.set(x, y != null ? y : o.position.y, z); } // teleported: snap
+      o.tx = x; o.tz = z; o.ty = y; o.trot = rot; o.zoneId = r.zoneId || o.zoneId;
+      const anim = r.anim;
       if (anim !== o.anim) {
         o.anim = anim;
         if (anim) {
           const def = G.avatar.actions[anim];
           const onBench = (G.data.layout?.benches || []).some((b) => Math.hypot(b.x - x, b.z - z) < 1.2);
           o.rig.setAnim(anim, { loop: def.loop || anim === 'sit' || anim === 'dance', seatY: anim === 'sit' ? (onBench ? 0.44 : 0) : undefined });
-        }
-        else o.rig.stopAll?.();
+        } else o.rig.stopAll?.();
       }
-      const eAt = Number(r.emoteAt) || 0;
-      if (r.emote && eAt > o.emoteAt) {
-        o.emoteAt = eAt;
+      if (r.emote && r.emoteAt > o.emoteAt) {
+        o.emoteAt = r.emoteAt;
         const e = (G.data.emotes || []).find((q) => q.id === r.emote);
-        if (e && !this._isBlocked(o.name) && Date.now() - eAt < 15000) { this._bubble(o.bub, e.icon, { emote: true }); o.rig.setAnim(e.anim, {}); }
+        if (e && !this._isBlocked(o.name) && Math.abs(G.time.now() - r.emoteAt) < 15000) { this._bubble(o.bub, e.icon, { emote: true }); o.rig.setAnim(e.anim, {}); }
       }
     },
     _updateRemotes(dt) {
@@ -1937,58 +2460,74 @@
       if (!S || !G.state) return;
       S.chatBusy = true;
       try {
-        const data = await G.net.request(`chat/list.php?after=${encodeURIComponent(S.lastId)}`, { timeout: 6000, quiet: true });
+        const after = Number.isSafeInteger(S.lastId) && S.lastId >= 0 ? S.lastId : 0;
+        const data = await G.net.request(`chat/list.php?after=${encodeURIComponent(String(after))}`, { timeout: 6000, quiet: true });
         if (this._srv !== S) return;
         this._netOk();
-        const msgs = (Array.isArray(data) ? data : Array.isArray(data?.messages) ? data.messages : []).slice().sort((a, b) => Number(a.id) - Number(b.id));
+        const raw = Array.isArray(data) ? data : Array.isArray(data?.messages) ? data.messages : [];
+        const rows = [];
+        for (const m of raw.slice(0, MAX_ROWS)) {
+          if (!m || typeof m !== 'object' || Array.isArray(m)) continue;  // malformed row
+          const id = Number(m.id);
+          if (!Number.isSafeInteger(id) || id <= 0 || id <= S.lastId) continue;
+          if (typeof (m.text ?? m.message) !== 'string') continue;
+          rows.push([id, m]);
+        }
+        rows.sort((a, b) => a[0] - b[0]);
         const me = String(G.save?.profile?.id ?? '');
         const pp = G.sys.player?.position;
-        for (const m of msgs) {
-          const id = Number(m.id);
-          if (!Number.isFinite(id) || id <= S.lastId) continue;
+        const now = G.time.now();
+        for (const [id, m] of rows) {
           S.lastId = id;
           if (S.sentIds.has(id)) continue;
-          const uid = String(m.userId ?? m.user_id ?? '');
-          const text = this.filter(String(m.text ?? m.message ?? ''));
+          const uid = String(m.userId ?? m.user_id ?? '').slice(0, 40);
+          const text = this.filter(cleanText(m.text ?? m.message, MAX_LEN * 2));
+          if (!text) continue;
           const self = !!uid && uid === me;
           if (self) {
-            const i = S.pending.indexOf(text);
+            const i = S.pending.indexOf(spamKey(text));
             if (i >= 0) { S.pending.splice(i, 1); continue; }
           }
           const channel = ['all', 'local', 'system'].includes(m.channel) ? m.channel : 'all';
-          const name = channel === 'system' ? '시스템' : String(m.nickname ?? m.name ?? '체험객');
+          const name = channel === 'system' ? '시스템' : cleanName(m.nickname ?? m.name ?? '체험객', self ? 'me' : 'remote');
           const rawAt = m.createdAt ?? m.created_at ?? m.at;
           let at = Number(rawAt);
           if (!Number.isFinite(at) || at <= 0) at = Date.parse(String(rawAt ?? '').replace(' ', 'T'));
-          if (!Number.isFinite(at) || at <= 0) at = G.time.now();
-          const remote = [...this.others.values()].find((o) => o.kind === 'remote' && (o.uid === uid || o.name === name));
+          if (Number.isFinite(at) && at > 0 && at < 1e11) at *= 1000; // seconds -> ms
+          if (!Number.isFinite(at) || at < 1.5e12 || at > now + 864e5) at = now; // implausible timestamps
+          let remote = null;
+          for (const o of this.others.values()) if (o.kind === 'remote' && (o.uid === uid || o.name === name)) { remote = o; break; }
           const near = remote && pp ? Math.hypot(remote.position.x - pp.x, remote.position.z - pp.z) <= LOCAL_R : false;
           if (channel === 'local' && !near && !self) continue;
-          this._push({ name, text, channel, kind: channel === 'system' ? 'system' : self ? 'me' : 'remote', self, near: near || self, uid, sid: id, at: at < 1e11 ? at * 1000 : at, history: S.first });
+          this._push({ name, text, channel, kind: channel === 'system' ? 'system' : self ? 'me' : 'remote', self, near: near || self, uid, sid: id, at, history: S.first });
           if (!S.first && !self && remote && !this._isBlocked(name)) { this._bubble(remote.bub, text); G.sfx('chat', { volume: 0.6 }); }
         }
+        const lastId = Number(data?.lastId);
+        if (Number.isSafeInteger(lastId) && lastId > S.lastId && lastId < S.lastId + 1e6) S.lastId = lastId; // skipped hidden rows
         S.first = false;
         const online = Number(data?.online);
-        if (Number.isFinite(online) && online > 0) { S.online = online; this._updateOnline(); }
+        if (Number.isFinite(online) && online > 0) { S.online = Math.min(Math.floor(online), 99999); this._updateOnline(); }
       } catch (e) { if (this._srv === S) this._netFail(e); }
       finally { S.chatBusy = false; }
     },
     async _serverSend(text, channel) {
       const S = this._srv;
       if (!S) return;
-      S.pending.push(text);
+      const key = spamKey(text); // the server may mask differently: match my echo by its skeleton
+      S.pending.push(key);
       if (S.pending.length > 20) S.pending.shift();
+      const drop = () => { const i = S.pending.indexOf(key); if (i >= 0) S.pending.splice(i, 1); };
       try {
         const data = await G.net.request('chat/send.php', { body: { text, channel }, timeout: 8000 });
         const id = Number(data?.message?.id ?? data?.id);
-        if (Number.isFinite(id)) {
+        if (Number.isSafeInteger(id) && id > 0) {
           S.sentIds.add(id);
-          const i = S.pending.indexOf(text); if (i >= 0) S.pending.splice(i, 1);
+          drop();
           if (S.sentIds.size > 200) S.sentIds = new Set([...S.sentIds].slice(-100));
         }
         this._netOk();
       } catch (e) {
-        const i = S.pending.indexOf(text); if (i >= 0) S.pending.splice(i, 1);
+        drop();
         if (e?.code === 'RATE_LIMITED' || e?.status === 429) G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn' });
         else G.ui.toast(e?.message || '메시지를 보내지 못했어요.', { type: 'error' });
         this.system('⚠️ 마지막 메시지가 전송되지 않았어요.');

@@ -28,8 +28,9 @@
 
   // ---------------------------------------------------------------- tuning constants
   const MAX_VOICES = 40;            // simultaneous sfx calls (each is a handful of nodes)
-  // bus make-up gains (measured with analyze()/meter(): UI sfx peak ≈ -24 dBFS, fanfares ≈ -15 dBFS,
-  // BGM RMS ≈ -32 dBFS and ambience beds ≈ -36 dBFS at the default volume settings)
+  // bus make-up gains (measured with analyze() through the mastering stage at the default settings:
+  // UI clicks ≈ -29 dBFS peak, footsteps ≈ -36, pickups/rewards ≈ -17, fanfares ≈ -12; a pile-up of eight
+  // fanfares at full volume stays below -2 dBFS thanks to the limiter + soft clip)
   const BASE = { music: 2.5, sfx: 1.7, ambient: 2.3 };
   const THROTTLE = {                // minimum seconds between two plays of the same sfx
     click: 0.045, open: 0.08, close: 0.08, notify: 0.12, error: 0.2, coin: 0.06, step: 0.07, land: 0.12, jump: 0.1,
@@ -149,7 +150,7 @@
 
   // ---------------------------------------------------------------- step sounds by surface
   function step(S, t, o) {
-    const run = !!o.run, k = 1.5 * (run ? 1.25 : 1) * (o.heavy ? 2.1 : 1) * rand(0.85, 1.1), pf = rand(0.9, 1.1);
+    const run = !!o.run, k = 1.9 * (run ? 1.25 : 1) * (o.heavy ? 2.1 : 1) * rand(0.85, 1.1), pf = rand(0.9, 1.1);
     const pan = (Math.random() - 0.5) * 0.12;
     let end = t;
     switch (o.surface) {
@@ -185,16 +186,16 @@
   // each fn(S, t, opts) schedules nodes from time t and returns its approximate end time
   const SFX = {
     click(S, t) {
-      tone(S, { type: 'sine', f: 1750, f2: 1150, glide: 0.025, t, a: 0.0015, d: 0.032, g: 0.07 });
-      return tone(S, { type: 'triangle', f: 880, t, a: 0.001, d: 0.022, g: 0.03 });
+      tone(S, { type: 'sine', f: 1750, f2: 1150, glide: 0.025, t, a: 0.0015, d: 0.032, g: 0.12 });
+      return tone(S, { type: 'triangle', f: 880, t, a: 0.001, d: 0.022, g: 0.05 });
     },
     open(S, t) {
-      tone(S, { type: 'sine', f: 440, f2: 660, glide: 0.07, t, a: 0.006, d: 0.15, g: 0.085, wet: 0.25 });
+      tone(S, { type: 'sine', f: 440, f2: 660, glide: 0.07, t, a: 0.006, d: 0.15, g: 0.11, wet: 0.25 });
       return tone(S, { type: 'sine', f: 880, t: t + 0.055, a: 0.004, d: 0.2, g: 0.04, wet: 0.3 });
     },
     close(S, t) {
-      tone(S, { type: 'sine', f: 660, f2: 430, glide: 0.08, t, a: 0.005, d: 0.14, g: 0.075 });
-      return tone(S, { type: 'triangle', f: 330, t: t + 0.04, a: 0.004, d: 0.08, g: 0.02 });
+      tone(S, { type: 'sine', f: 660, f2: 430, glide: 0.08, t, a: 0.005, d: 0.14, g: 0.11 });
+      return tone(S, { type: 'triangle', f: 330, t: t + 0.04, a: 0.004, d: 0.08, g: 0.03 });
     },
     notify(S, t) {
       bell(S, 1046.5, t, 0.055, 0.5, { wet: 0.5 });
@@ -292,8 +293,8 @@
       return tone(S, { type: 'sine', f: 85, f2: 46, t, a: 0.003, d: 0.14, g: 0.2 });
     },
     jump(S, t) {
-      noise(S, { kind: 'pink', ft: 'bandpass', f: 480, f2: 1450, sweep: 0.16, q: 0.8, t, a: 0.02, d: 0.18, g: 0.11 });
-      return tone(S, { type: 'sine', f: 260, f2: 430, glide: 0.09, t, a: 0.006, d: 0.1, g: 0.04 });
+      noise(S, { kind: 'pink', ft: 'bandpass', f: 480, f2: 1450, sweep: 0.16, q: 0.8, t, a: 0.02, d: 0.18, g: 0.17 });
+      return tone(S, { type: 'sine', f: 260, f2: 430, glide: 0.09, t, a: 0.006, d: 0.1, g: 0.06 });
     },
     splash(S, t) {
       const end = noise(S, { kind: 'white', ft: 'bandpass', f: 1500, f2: 600, sweep: 0.3, q: 0.7, t, a: 0.003, d: 0.38, g: 0.2 });
@@ -302,8 +303,8 @@
       return end;
     },
     chat(S, t) {
-      tone(S, { type: 'sine', f: 784, f2: 1046.5, glide: 0.045, t, a: 0.003, d: 0.09, g: 0.055 });
-      return tone(S, { type: 'sine', f: 1568, t: t + 0.04, a: 0.002, d: 0.08, g: 0.018 });
+      tone(S, { type: 'sine', f: 784, f2: 1046.5, glide: 0.045, t, a: 0.003, d: 0.09, g: 0.085 });
+      return tone(S, { type: 'sine', f: 1568, t: t + 0.04, a: 0.002, d: 0.08, g: 0.028 });
     },
     emote(S, t) { // cartoon "boing"
       tone(S, { type: 'sine', f: 420, f2: 860, glide: 0.07, f3: 690, glide2: 0.12, t, a: 0.005, d: 0.26, g: 0.09, vib: { rate: 11, depth: 25, delay: 0.1 }, wet: 0.3 });
@@ -491,6 +492,34 @@
     return b;
   }
 
+  // ================================================================= mastering: trim -> limiter -> soft clip
+  // The limiter catches fanfares stacking on top of music/ambience; the soft clipper (transparent below
+  // ~-3 dBFS) guarantees that nothing ever reaches digital full scale, even if many sounds coincide.
+  let SOFT_CURVE = null;
+  function softClipCurve() {
+    if (SOFT_CURVE) return SOFT_CURVE;
+    const n = 2048, c = new Float32Array(n), knee = 0.7, room = 1 - knee - 0.02;
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1, ax = Math.abs(x);
+      const y = ax <= knee ? ax : knee + room * Math.tanh((ax - knee) / room);
+      c[i] = x < 0 ? -y : y;
+    }
+    SOFT_CURVE = c;
+    return c;
+  }
+  /** builds the output stage on ac; returns {input, limiter, clip} (input is where the master bus connects) */
+  function buildMaster(ac, dest) {
+    const input = gainNode(ac, 0.92);
+    const limiter = ac.createDynamicsCompressor();
+    limiter.threshold.value = -9; limiter.knee.value = 6; limiter.ratio.value = 12;
+    limiter.attack.value = 0.002; limiter.release.value = 0.22;
+    let clip = null;
+    try { clip = ac.createWaveShaper(); clip.curve = softClipCurve(); clip.oversample = '2x'; } catch (e) { clip = null; }
+    input.connect(limiter);
+    if (clip) { limiter.connect(clip); clip.connect(dest); } else limiter.connect(dest);
+    return { input, limiter, clip };
+  }
+
   // ================================================================= music (generative, Korean pentatonic)
   const MOODS = {
     // 평조 (pyeongjo) colour: G major pentatonic, 12/8 굿거리-like lilt
@@ -535,6 +564,10 @@
       // music reacts to the time of day immediately at phase changes
       G.bus.on('time:phase', () => { if (this._mus) this._mus.moodCheck = 0; });
       G.bus.on('game:ready', () => { if (this._mus) this._mus.cursor = Math.max(this._mus.cursor, (this.ctx?.currentTime || 0) + 0.6); });
+      // dialogue: keep the music under the conversation (TTS ducks further while speaking)
+      G.bus.on('npc:talk', () => this.duck('dialogue', 0.55));
+      G.bus.on('dialogue:end', () => this.unduck('dialogue'));
+      G.bus.on('photo:mode', ({ active } = {}) => { if (active) this.duck('photo', 0.75); else this.unduck('photo'); });
     },
 
     // ------------------------------------------------------------ context / graph
@@ -572,18 +605,17 @@
       this._gesture = null;
     },
     _create() {
-      const ac = new AC({ latencyHint: 'interactive' });
+      let ac;
+      try { ac = new AC({ latencyHint: 'interactive' }); } catch (e) { ac = new AC(); }
       this.ctx = ac;
       ac.onstatechange = () => {
         if (ac.state === 'running') { if (this._mus) this._mus.cursor = Math.max(this._mus.cursor, ac.currentTime + 0.3); return; }
         if (ac.state !== 'closed' && !this._suspendedByUs) this._armGesture(); // interrupted by the system
       };
       const n = {};
-      n.limiter = ac.createDynamicsCompressor();
-      n.limiter.threshold.value = -10; n.limiter.knee.value = 8; n.limiter.ratio.value = 10;
-      n.limiter.attack.value = 0.003; n.limiter.release.value = 0.25;
-      n.limiter.connect(ac.destination);
-      n.master = gainNode(ac, 0); n.master.connect(n.limiter);
+      n.out = buildMaster(ac, ac.destination);
+      n.limiter = n.out.limiter;
+      n.master = gainNode(ac, 0); n.master.connect(n.out.input);
       n.music = gainNode(ac, 0); n.duck = gainNode(ac, 1); n.music.connect(n.duck); n.duck.connect(n.master);
       n.sfx = gainNode(ac, 0); n.sfx.connect(n.master);
       n.amb = gainNode(ac, 0); n.amb.connect(n.master);
@@ -1105,6 +1137,13 @@
 
     // ------------------------------------------------------------ frame
     update(dt) {
+      // safety net: release the dialogue duck if a conversation closed without 'dialogue:end'
+      if (this._ducks.has('dialogue')) {
+        const wall = performance.now();
+        if (G.sys.dialogue?.active) this._dlgIdleAt = 0;
+        else if (!this._dlgIdleAt) this._dlgIdleAt = wall;
+        else if (wall - this._dlgIdleAt > 1500) { this._dlgIdleAt = 0; this.unduck('dialogue'); }
+      }
       if (!this.ready || !this.ctx || this.ctx.state !== 'running') return;
       // timed ducks
       if (this._ducks.size) {
@@ -1117,28 +1156,43 @@
       try { this._updateMusic(); } catch (e) { G.log.debug('AUDIO', 'music', e); }
     },
 
-    onLogout() { this.stopSpeaking(); },
+    onLogout() { this.stopSpeaking(); this._ducks.clear(); this._applyDuck(); },
 
     // ------------------------------------------------------------ diagnostics (tests / debug panel)
-    /** render one sfx offline and measure it: {peak, rms, duration} */
-    async analyze(name, opts = {}) {
+    /**
+     * render sfx offline and measure the output: {peak, rms, duration}. names: one name or a list played together
+     * (opts.gap seconds apart) — by default through the real bus gains + limiter + soft clip at the current settings;
+     * opts.raw skips the mastering stage.
+     */
+    async analyze(names, opts = {}) {
       const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-      if (!OAC || !SFX[name]) return null;
+      const list = (Array.isArray(names) ? names : [names]).filter((n) => SFX[n]);
+      if (!OAC || !list.length) return null;
       const sr = 44100, len = Math.ceil(sr * (opts.seconds || 3));
       const oac = new OAC(2, len, sr);
-      const bufs = this._bufs || { white: makeNoise(oac, 'white'), pink: makeNoise(oac, 'pink'), brown: makeNoise(oac, 'brown') };
+      const bufs = { white: makeNoise(oac, 'white'), pink: makeNoise(oac, 'pink'), brown: makeNoise(oac, 'brown') };
+      let out = oac.destination;
+      if (!opts.raw) {
+        const lv = (v, d) => { v = clamp(Number(v ?? d), 0, 1); return Number.isFinite(v) ? Math.pow(v, 1.6) : 0; };
+        const st = G.settings || {};
+        const m = buildMaster(oac, oac.destination);
+        const master = gainNode(oac, opts.master ?? lv(st.volumeMaster, 0.8)); master.connect(m.input);
+        out = gainNode(oac, (opts.sfx ?? lv(st.volumeSfx, 0.8)) * BASE.sfx); out.connect(master);
+      }
       const verb = oac.createConvolver();
       try { verb.buffer = makeImpulse(oac, 2.4); } catch (e) { /* ignore */ }
-      verb.connect(oac.destination);
+      verb.connect(out);
       const wet = gainNode(oac, 0.5); wet.connect(verb);
-      const S = { ac: oac, out: oac.destination, wet: WET[name] ? wet : null, buf: bufs, t: 0, pluck: (m) => (this.ctx ? this._pluck(m) : renderPluck(oac, m)) };
-      SFX[name](S, 0.01, opts);
+      const plucks = new Map();
+      const S = { ac: oac, out, wet: null, buf: bufs, t: 0, pluck: (mi) => { if (!plucks.has(mi)) plucks.set(mi, renderPluck(oac, mi)); return plucks.get(mi); } };
+      list.forEach((n, i) => { S.wet = WET[n] ? wet : null; SFX[n](S, 0.01 + i * (opts.gap || 0), opts); });
       const rb = await oac.startRendering();
-      const d = rb.getChannelData(0);
       let peak = 0, sum = 0, lastLoud = 0;
-      for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; sum += d[i] * d[i]; if (a > 0.002) lastLoud = i; }
-      const dur = lastLoud / sr;
-      return { name, peak: +peak.toFixed(3), rms: +Math.sqrt(sum / Math.max(1, lastLoud)).toFixed(4), duration: +dur.toFixed(2) };
+      for (let c = 0; c < rb.numberOfChannels; c++) {
+        const d = rb.getChannelData(c);
+        for (let i = 0; i < d.length; i++) { const v = d[i], a = v < 0 ? -v : v; if (a > peak) peak = a; if (c === 0) sum += v * v; if (a > 0.002 && i > lastLoud) lastLoud = i; }
+      }
+      return { name: list.join('+'), peak: +peak.toFixed(3), peakDb: +(20 * Math.log10(Math.max(peak, 1e-6))).toFixed(1), rms: +Math.sqrt(sum / Math.max(1, lastLoud)).toFixed(4), duration: +(lastLoud / sr).toFixed(2) };
     },
     names() { return Object.keys(SFX); },
     /** live output level (post master, pre limiter): {rms, peak} over the last ~46 ms */
