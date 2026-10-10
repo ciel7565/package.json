@@ -383,7 +383,8 @@ G.showFatal = function (err) {
   const el = document.getElementById('fatal');
   if (!el) return;
   el.hidden = false;
-  el.innerHTML = `<h2>게임을 시작하지 못했습니다</h2><p>브라우저가 WebGL을 지원하는지 확인하고, 페이지를 새로고침해 주세요.</p><pre>${G.util.escapeHtml(String((err && err.stack) || err))}</pre><button class="btn btn-primary" onclick="location.reload()">새로고침</button>`;
+  el.innerHTML = `<h2>게임을 시작하지 못했습니다</h2><p>브라우저가 WebGL을 지원하는지 확인하고, 페이지를 새로고침해 주세요.</p><pre>${G.util.escapeHtml(String((err && err.stack) || err))}</pre><button class="btn btn-primary" type="button" id="fatal-reload">새로고침</button>`;
+  el.querySelector('#fatal-reload')?.addEventListener('click', () => location.reload()); // no inline handlers (CSP)
   document.getElementById('loading-screen')?.classList.add('done');
 };
 

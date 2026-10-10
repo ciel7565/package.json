@@ -329,10 +329,11 @@ input[type=range] { width: 100%; accent-color: var(--green); }
 
 /* ------------------------------------------------------------------ animations */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes popIn { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
-@keyframes toastIn { from { opacity: 0; transform: translateY(-10px) scale(.96); } to { opacity: 1; transform: none; } }
-@keyframes toastOut { to { opacity: 0; transform: translateY(-8px) scale(.97); } }
-@keyframes rewardIn { 0% { opacity: 0; transform: scale(.7); } 60% { opacity: 1; transform: scale(1.04); } 100% { transform: none; } }
+/* individual transform properties so centred elements (transform: translate(-50%)) keep their own transform */
+@keyframes popIn { from { opacity: 0; translate: 0 8px; scale: .97; } to { opacity: 1; translate: 0 0; scale: 1; } }
+@keyframes toastIn { from { opacity: 0; translate: 0 -10px; scale: .96; } to { opacity: 1; translate: 0 0; scale: 1; } }
+@keyframes toastOut { to { opacity: 0; translate: 0 -8px; scale: .97; } }
+@keyframes rewardIn { 0% { opacity: 0; scale: .7; } 60% { opacity: 1; scale: 1.04; } 100% { scale: 1; } }
 @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
 @keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -341,5 +342,5 @@ input[type=range] { width: 100%; accent-color: var(--green); }
 /* ------------------------------------------------------------------ accessibility modes */
 body.high-contrast { --bg-glass: rgba(0, 0, 0, .86); --bg-glass-strong: rgba(0, 0, 0, .95); --line: rgba(255,255,255,.45); --line-strong: rgba(255,255,255,.7); --text-dim: #f0f0f0; --text-mute: #d0d0d0; }
 body.large-text { font-size: 1.06rem; }
-body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after { animation-duration: .001s !important; transition-duration: .001s !important; }
-@media (prefers-reduced-motion: reduce) { .toast, .modal, .popover, .reward-pop { animation-duration: .001s; } }
+body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; }
+@media (prefers-reduced-motion: reduce) { .toast, .modal, .popover, .reward-pop { animation-duration: .001s; animation-iteration-count: 1; } }

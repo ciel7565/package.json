@@ -252,7 +252,7 @@
       composer.setPixelRatio(r.getPixelRatio());
       composer.setSize(window.innerWidth, window.innerHeight);
       composer.addPass(new ADDONS.RenderPass(this.scene, this.camera));
-      const bloom = new ADDONS.UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 0.32, 0.45, 0.9);
+      const bloom = new ADDONS.UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 0.24, 0.4, 1.05); // threshold > 1: only HDR emissives (lanterns, markers, glowing jars) bloom
       composer.addPass(bloom);
       composer.addPass(new ADDONS.OutputPass());
       this.composer = composer;
@@ -305,8 +305,13 @@
       if (this._envRT) this._envRT.dispose();
       this._envRT = rt;
       this.scene.environment = rt.texture;
+      this.scene.environmentIntensity = this.envIntensity ?? 0.5; // baked sky ~= sun; keep IBL as a soft fill
       this._envDirty = false;
     },
+
+    /** add an object to the environment-bake scene (e.g. weather cloud overlay) */
+    addEnvObject(obj) { if (this._envScene && obj) { this._envScene.add(obj); this._envDirty = true; } return obj; },
+    removeEnvObject(obj) { if (this._envScene && obj) { this._envScene.remove(obj); this._envDirty = true; } },
 
     resize() {
       const w = window.innerWidth, h = window.innerHeight;
@@ -358,6 +363,11 @@
     },
 
     render() {
+      // A large blocking modal covers most of the view: render the world at ~1/3 rate to save GPU/battery.
+      if (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) {
+        this._skip = ((this._skip || 0) + 1) % 3;
+        if (this._skip) return;
+      }
       if (this.composer) this.composer.render();
       else this.renderer.render(this.scene, this.camera);
     },

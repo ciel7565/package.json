@@ -19,6 +19,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
+import crypto from 'node:crypto';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -201,7 +202,19 @@ function copyDir(src, dst) {
 const t0 = Date.now();
 const vendor = await buildVendor();
 let html = fs.readFileSync(path.join(ROOT, 'src/template.html'), 'utf8');
-const buildInfo = { version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, three: vendor.version, builtAt: new Date().toISOString(), fragments: fragments.length };
+const sha = (str) => crypto.createHash('sha256').update(str).digest('hex').slice(0, 12);
+const buildInfo = {
+  version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version,
+  three: vendor.version,
+  builtAt: new Date().toISOString(),
+  fragments: fragments.length,
+  manifest: {
+    js: fragments.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.code), lines: f.code.split('\n').length, sha: sha(f.code) })),
+    css: cssFiles.map((f) => { const c = fs.readFileSync(path.join(styleDir, f), 'utf8'); return { name: f, bytes: Buffer.byteLength(c), lines: c.split('\n').length, sha: sha(c) }; }),
+    skipped: skipped.filter((x) => x.reason !== 'filtered'),
+    fontEmbedded: EMBED_FONT,
+  },
+};
 // Markers appear exactly once; slice-based replacement avoids `$` pattern surprises.
 const replaceOnce = (marker, value) => {
   const i = html.indexOf(marker);
@@ -212,6 +225,35 @@ replaceOnce('<!--@FONTFACE-->', fontFace());
 replaceOnce('/*@CSS*/', css);
 replaceOnce('/*@VENDOR*/', `/*! three.js r${vendor.version.split('.')[1]} — MIT License — https://threejs.org */\n` + vendor.code.replace(/<\/script/gi, '<\\/script'));
 replaceOnce('/*@GAME*/', `window.__BUILD__ = ${JSON.stringify(buildInfo)};\n` + gameScript().replace(/<\/script/gi, '<\\/script'));
+
+// ---------------------------------------------------------------- docs for the in-game developer center (non-executed JSON)
+const docsDir = path.join(ROOT, 'docs');
+const docs = {};
+for (const f of listSorted(docsDir, '.md')) docs[f] = fs.readFileSync(path.join(docsDir, f), 'utf8');
+if (fs.existsSync(path.join(ROOT, 'README.md'))) docs['README.md'] = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+if (fs.existsSync(path.join(ROOT, 'server/README-SERVER.md'))) docs['README-SERVER.md'] = fs.readFileSync(path.join(ROOT, 'server/README-SERVER.md'), 'utf8');
+const docsJson = JSON.stringify(docs).replace(/</g, '\\u003c');
+html = html.replace('</body>', () => `<script type="application/json" id="build-docs">${docsJson}</script>\n</body>`);
+
+// ---------------------------------------------------------------- Content-Security-Policy with script hashes
+// Inline scripts are allowed only by their exact SHA-256 hash: injected markup can never run script.
+const scriptHashes = [];
+html.replace(/<script>([\s\S]*?)<\/script>/g, (m, body) => { scriptHashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`); return m; });
+const csp = [
+  "default-src 'none'",
+  `script-src ${scriptHashes.join(' ')}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "media-src 'self' data: blob:",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+].join('; ');
+replaceOnce('<!--@CSP-->', `<meta http-equiv="Content-Security-Policy" content="${csp}">`);
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, html);

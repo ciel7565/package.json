@@ -189,7 +189,7 @@
   L.flowerBeds = [
     { x: 38, z: 62, r: 4.5, colors: ['#ff7eb6', '#ffd23f', '#ffffff'] },
     { x: 64, z: 62, r: 4, colors: ['#b48be0', '#ff9f43', '#ffffff'] },
-    { x: 66, z: 45, r: 3, colors: ['#ff6b5e', '#ffd23f'] },
+    { x: 66, z: 51.5, r: 3, colors: ['#ff6b5e', '#ffd23f'] },
     { x: -14, z: -64, r: 3.5, colors: ['#ff7eb6', '#ffffff'] },
     { x: 14, z: -64, r: 3.5, colors: ['#ffd23f', '#ff9f43'] },
     { x: -10, z: 14, r: 2.5, colors: ['#ff7eb6', '#b48be0'] },

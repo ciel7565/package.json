@@ -376,3 +376,72 @@ sunlight, soft shadows, light haze. Characters: cute chibi (big head, small body
 | social-audio | 60-social.js, 61-audio.js, 6x-*.css |
 | app | 70-app.js, 70-app.css |
 | server | server/** , tests/server-*.mjs |
+
+---
+
+## 11. Phase 2 additions (security, engagement, motion graphics, developer center)
+
+### 11.1 Security rules (apply to EVERY module)
+- The release HTML carries a strict **Content-Security-Policy** (`tools/build.mjs`): inline `<script>` blocks run only by
+  SHA-256 hash. Therefore: **no `eval`, no `new Function`, no string `setTimeout`, no inline event-handler attributes
+  (`onclick="..."` in HTML strings), no `javascript:` URLs, no external URLs** (scripts, styles, images, fetches to
+  other origins are blocked). Attach listeners with `addEventListener`.
+- Treat every user/remote string (nickname, chat, journal text, server data, imported JSON, file names) as untrusted:
+  render with `textContent` / `G.ui.h(...)` children / `G.ui.esc()`; never concatenate it into `innerHTML` unescaped.
+  Validate lengths/types on input. Images from users: only `data:image/(png|jpeg|webp)` or same-origin relative URLs.
+- Never store secrets/passwords in `G.state` or logs. Local accounts use PBKDF2-SHA256 (WebCrypto) with a per-user salt.
+- Imported saves (`G.save.importJSON`) are normalized; modules must tolerate missing/odd fields in `onStateLoaded`.
+
+### 11.2 New modules & owners
+| Owner | Files | System |
+|---|---|---|
+| engagement | `62-engagement.js`, `62-engagement.css` | `G.sys.engagement` (order 84) |
+| companion | `65-companion.js`, `65-companion.css` | `G.sys.companion` (order 82) + `G.mascot` |
+| fx | `66-fx.js`, `66-fx.css` | `G.sys.fx` (order 83) + `G.fx` |
+| devcenter | `80-devcenter.js`, `80-devcenter.css`, `docs/HANDOVER.md` | `G.sys.devcenter` (order 95) |
+| integration | cross-module fixes in 11–16, 20–23, 25–26, 30–32, 40–41, 45–47, 50–52 | — |
+
+### 11.3 `G.fx` (66-fx.js) — motion graphics, auto-wired to events
+`G.fx.burst(pos: Vector3|{x,y,z}, {type:'confetti'|'sparkle'|'hearts'|'leaves'|'coins'|'stars'|'dust'|'splash'|'petals', count, color, spread})`,
+`G.fx.emoji3d(target: Object3D|Vector3, emoji, {rise, duration, scale})` (floating 3D emoji sprite),
+`G.fx.levelUp(level)` (full-screen 2D celebration), `G.fx.stamp(text, {color})` (big "완료!" stamp),
+`G.fx.coinFly(fromScreenXY|Vector3, amount)` (coins fly into `#hud-coin` + count-up),
+`G.fx.pulse(color)` (soft screen-edge pulse), `G.fx.ripple(pos)` (ground ring). Respects `G.settings.reduceMotion`
+and `G.settings.fxLevel` ('off'|'low'|'high'). Listens to `quest:completed/claimed`, `level:up`, `achievement:unlocked`,
+`collection:unlocked`, `farm:watered/harvested/planted`, `ferment:claimed`, `reward:granted`, `emote:played`, `craft:done`
+and plays the matching effect. Other modules MAY call `G.fx?.burst?.(...)` directly.
+
+### 11.4 `G.mascot` + `G.sys.companion` (65-companion.js) — mascot "옹이" (a cute onggi-jar spirit)
+- 2D: `G.mascot.svg(mood='happy'|'wink'|'surprised'|'sleepy'|'cheer'|'think'|'sad', size=96) -> SVG string` (inline, CSP-safe),
+  `G.mascot.say(text, {mood, duration, action:{label, fn}})` (non-blocking speech card, rate-limited, queued),
+  `G.mascot.hint()` (context tip for the current objective).
+- 3D companion following the player (hop, squash & stretch, idle/sleep at night, reacts to rewards, points at the
+  objective, umbrella in rain), interactable kind `'companion'` (pet / 한마디 / 옷 갈아입히기 / 이름 바꾸기), setting `G.settings.companion`.
+- Event-driven helper tips (dry crops, unclaimed rewards, completed jar, idle player, first night, rain...).
+- Other modules MAY use `G.mascot?.svg?.(mood)` in empty states, tutorials, loading and reward UI.
+
+### 11.5 `G.sys.engagement` (62-engagement.js) — one hub: 출석·오늘의 미션·알림함·수료증·꾸미기·랭킹
+- HUD: one bell button (top-left, next to the profile card) with an unread badge → hub modal with tabs
+  `출석 체크` (7-day calendar, streak, escalating rewards, auto-opens once per day after login), `오늘의 미션`
+  (3 daily missions from a pool, event-driven progress, rewards), `알림함` (history of achievements, quest updates,
+  rewards, mentions — fed by events; unread count), `수료증` (canvas-rendered printable certificate PNG after QUEST001
+  or with progress summary), `랭킹` (local: me + simulated visitors; server: `api/ranking/top.php`), `꾸미기`
+  (place decoration items ITEM_SMALL_JAR / ITEM_FLOWERPOT / ITEM_LANTERN on a small personal yard; persisted).
+- State: `G.state.engagement = { checkin:{lastDay, streak, days:[]}, daily:{day, missions:[...]}, notifications:[...],
+  decor:[{id, item, x, z, rot}], certificate:{issuedAt} }`. Data for missions/rewards lives in this fragment.
+
+### 11.6 `G.sys.devcenter` (80-devcenter.js) — 개발자 점검·인수인계 센터
+Open with `?dev=1`, Ctrl+Shift+D, F9, or the main menu. Full-screen panel, tabs: 개요 (version, build time,
+three revision, mode, fragment manifest from `window.__BUILD__.manifest`), 시스템 점검 (browser, WebGL caps, GPU,
+DPR, memory, storage quota & usage, secure context, CSP active, AudioContext/Speech support, FPS/draw calls), 모듈 상태
+(every `G.systems()` with init/failed/update-disabled, errors from `G.__systemErrors`/`__fragmentErrors`), 데이터 검증
+(cross-reference linter over `G.data`: quests→items/npcs/zones/crops/recipes/edu/quiz ids, collection unlock refs,
+layout anchors, dialogue node links…), 저장 데이터 (inspect/export/import/reset local saves & accounts, size per key),
+서버 점검 (ping + `api/admin/health.php` + endpoint checks in server mode), 자가 테스트 (in-browser test suite of pure
+logic: save checksum round-trip, quest state machine, farming growth math, fermentation quality, collision resolve,
+zoneAt, bad-word mask, escape helpers…, green/red results), 디버그 도구 (cheats: coin/items/quests/teleport/time/
+weather/grow/ferment/colliders/fps — the single place for debug tools), 소스 구조 (file tree + owner + purpose +
+lines from the manifest), 문서 (renders `#build-docs` JSON markdown: README, ARCHITECTURE, CONTRACT, HANDOVER,
+README-SERVER), 인수인계 (checklist: build, test, deploy, configure server, known issues, roadmap). Button: download
+a full diagnostic report (JSON + Markdown). Admin/debug access in production: only when `?dev=1`, local mode, or
+profile role `admin`.

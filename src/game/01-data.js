@@ -108,26 +108,26 @@ G.data.cropStages = [
   { id: 'harvestable', name: '수확 가능', min: 100 },
 ];
 G.data.crops = {
-  CROP_BEAN: { name: '콩', seedItem: 'ITEM_SEED_BEAN', harvestItem: 'ITEM_BEAN', harvestAmount: [3, 5], growthTime: 120, waterUse: 0.32, exp: 40, coin: 30, model: 'bean', color: '#5f9e3a', fruit: '#c9b26b', category: 'crop', desc: '된장·간장·두부의 재료. 뿌리혹박테리아 덕분에 땅을 기름지게 한다고 알려져 있습니다.' },
-  CROP_PEPPER: { name: '고추', seedItem: 'ITEM_SEED_PEPPER', harvestItem: 'ITEM_PEPPER', harvestAmount: [3, 5], growthTime: 150, waterUse: 0.35, exp: 45, coin: 35, model: 'pepper', color: '#3f8a35', fruit: '#d8312a', category: 'crop', desc: '고추장·김치 양념에 쓰이는 고추입니다.' },
-  CROP_CABBAGE: { name: '배추', seedItem: 'ITEM_SEED_CABBAGE', harvestItem: 'ITEM_CABBAGE', harvestAmount: [2, 4], growthTime: 140, waterUse: 0.4, exp: 45, coin: 35, model: 'cabbage', color: '#8cc65a', fruit: '#e6f1b5', category: 'crop', desc: '김치의 주재료인 결구 배추입니다.' },
-  CROP_PERILLA: { name: '들깨', seedItem: 'ITEM_SEED_PERILLA', harvestItem: 'ITEM_PERILLA', harvestAmount: [3, 5], growthTime: 130, waterUse: 0.3, exp: 40, coin: 30, model: 'perilla', color: '#4c8f3c', fruit: '#6aa84f', category: 'crop', desc: '깻잎과 들기름을 얻는 들깨입니다.' },
-  CROP_CORN: { name: '옥수수', seedItem: 'ITEM_SEED_CORN', harvestItem: 'ITEM_CORN', harvestAmount: [2, 4], growthTime: 160, waterUse: 0.38, exp: 50, coin: 40, model: 'corn', color: '#6aa443', fruit: '#f2cf4a', category: 'crop', desc: '여름에 키가 크게 자라는 옥수수입니다.' },
-  CROP_RADISH: { name: '무', seedItem: 'ITEM_SEED_RADISH', harvestItem: 'ITEM_RADISH', harvestAmount: [2, 4], growthTime: 110, waterUse: 0.34, exp: 35, coin: 30, model: 'radish', color: '#5aa043', fruit: '#f3f1e6', category: 'crop', desc: '깍두기와 동치미에 쓰는 무입니다.' },
-  CROP_MINT: { name: '박하', seedItem: 'ITEM_SEED_MINT', harvestItem: 'ITEM_MINT', harvestAmount: [3, 5], growthTime: 90, waterUse: 0.3, exp: 30, coin: 25, model: 'mint', color: '#59b35a', fruit: '#7fd17a', category: 'herb', desc: '시원한 향의 박하(민트)입니다.' },
-  CROP_LAVENDER: { name: '라벤더', seedItem: 'ITEM_SEED_LAVENDER', harvestItem: 'ITEM_LAVENDER', harvestAmount: [2, 4], growthTime: 150, waterUse: 0.25, exp: 45, coin: 40, model: 'lavender', color: '#6d9a63', fruit: '#9b72d6', category: 'herb', desc: '보라색 꽃과 은은한 향의 허브입니다.' },
-  CROP_ROSEMARY: { name: '로즈마리', seedItem: 'ITEM_SEED_ROSEMARY', harvestItem: 'ITEM_ROSEMARY', harvestAmount: [2, 4], growthTime: 140, waterUse: 0.22, exp: 40, coin: 35, model: 'rosemary', color: '#4f7f55', fruit: '#8fb8d8', category: 'herb', desc: '바늘 모양 잎의 상록 허브입니다.' },
-  CROP_LEMONBALM: { name: '레몬밤', seedItem: 'ITEM_SEED_LEMONBALM', harvestItem: 'ITEM_LEMONBALM', harvestAmount: [3, 5], growthTime: 100, waterUse: 0.3, exp: 35, coin: 30, model: 'lemonbalm', color: '#8cc95c', fruit: '#c8e67a', category: 'herb', desc: '레몬 향이 나는 허브입니다.' },
+  CROP_BEAN: { name: '콩', seedItem: 'ITEM_SEED_BEAN', harvestItem: 'ITEM_BEAN', harvestAmount: [3, 5], growthTime: 120, waterUse: 0.16, exp: 40, coin: 30, model: 'bean', color: '#5f9e3a', fruit: '#c9b26b', category: 'crop', desc: '된장·간장·두부의 재료. 뿌리혹박테리아 덕분에 땅을 기름지게 한다고 알려져 있습니다.' },
+  CROP_PEPPER: { name: '고추', seedItem: 'ITEM_SEED_PEPPER', harvestItem: 'ITEM_PEPPER', harvestAmount: [3, 5], growthTime: 150, waterUse: 0.175, exp: 45, coin: 35, model: 'pepper', color: '#3f8a35', fruit: '#d8312a', category: 'crop', desc: '고추장·김치 양념에 쓰이는 고추입니다.' },
+  CROP_CABBAGE: { name: '배추', seedItem: 'ITEM_SEED_CABBAGE', harvestItem: 'ITEM_CABBAGE', harvestAmount: [2, 4], growthTime: 140, waterUse: 0.2, exp: 45, coin: 35, model: 'cabbage', color: '#8cc65a', fruit: '#e6f1b5', category: 'crop', desc: '김치의 주재료인 결구 배추입니다.' },
+  CROP_PERILLA: { name: '들깨', seedItem: 'ITEM_SEED_PERILLA', harvestItem: 'ITEM_PERILLA', harvestAmount: [3, 5], growthTime: 130, waterUse: 0.15, exp: 40, coin: 30, model: 'perilla', color: '#4c8f3c', fruit: '#6aa84f', category: 'crop', desc: '깻잎과 들기름을 얻는 들깨입니다.' },
+  CROP_CORN: { name: '옥수수', seedItem: 'ITEM_SEED_CORN', harvestItem: 'ITEM_CORN', harvestAmount: [2, 4], growthTime: 160, waterUse: 0.19, exp: 50, coin: 40, model: 'corn', color: '#6aa443', fruit: '#f2cf4a', category: 'crop', desc: '여름에 키가 크게 자라는 옥수수입니다.' },
+  CROP_RADISH: { name: '무', seedItem: 'ITEM_SEED_RADISH', harvestItem: 'ITEM_RADISH', harvestAmount: [2, 4], growthTime: 110, waterUse: 0.17, exp: 35, coin: 30, model: 'radish', color: '#5aa043', fruit: '#f3f1e6', category: 'crop', desc: '깍두기와 동치미에 쓰는 무입니다.' },
+  CROP_MINT: { name: '박하', seedItem: 'ITEM_SEED_MINT', harvestItem: 'ITEM_MINT', harvestAmount: [3, 5], growthTime: 90, waterUse: 0.15, exp: 30, coin: 25, model: 'mint', color: '#59b35a', fruit: '#7fd17a', category: 'herb', desc: '시원한 향의 박하(민트)입니다.' },
+  CROP_LAVENDER: { name: '라벤더', seedItem: 'ITEM_SEED_LAVENDER', harvestItem: 'ITEM_LAVENDER', harvestAmount: [2, 4], growthTime: 150, waterUse: 0.125, exp: 45, coin: 40, model: 'lavender', color: '#6d9a63', fruit: '#9b72d6', category: 'herb', desc: '보라색 꽃과 은은한 향의 허브입니다.' },
+  CROP_ROSEMARY: { name: '로즈마리', seedItem: 'ITEM_SEED_ROSEMARY', harvestItem: 'ITEM_ROSEMARY', harvestAmount: [2, 4], growthTime: 140, waterUse: 0.11, exp: 40, coin: 35, model: 'rosemary', color: '#4f7f55', fruit: '#8fb8d8', category: 'herb', desc: '바늘 모양 잎의 상록 허브입니다.' },
+  CROP_LEMONBALM: { name: '레몬밤', seedItem: 'ITEM_SEED_LEMONBALM', harvestItem: 'ITEM_LEMONBALM', harvestAmount: [3, 5], growthTime: 100, waterUse: 0.15, exp: 35, coin: 30, model: 'lemonbalm', color: '#8cc95c', fruit: '#c8e67a', category: 'herb', desc: '레몬 향이 나는 허브입니다.' },
 };
 for (const [id, c] of Object.entries(G.data.crops)) c.id = id;
 G.data.farming = {
   waterPerAction: 45,       // +water % per watering
   waterCooldown: 2.5,       // seconds per plot
   dryThreshold: 25,         // below -> half growth speed
-  healthDecayDry: 0.25,     // health / s while water == 0
+  healthDecayDry: 0.05,     // health / s while water == 0 (gentle: a dry crop survives ~30 min)
   healthRegen: 0.08,        // health / s while water >= dryThreshold
   basketBonus: 1,           // extra item with ITEM_BASKET
-  offlineCatchUpMax: 3600,  // seconds simulated when returning
+  offlineCatchUpMax: 1800,  // seconds simulated when returning
 };
 
 // ------------------------------------------------------------------ fermentation (educational simulation)
@@ -163,7 +163,7 @@ for (const [id, c] of Object.entries(G.data.crafts)) c.id = id;
 G.data.shops = {
   SHOP_GENERAL: {
     name: '체험관 매점', npc: 'NPC005',
-    sells: ['ITEM_SEED_BEAN', 'ITEM_SEED_PEPPER', 'ITEM_SEED_CABBAGE', 'ITEM_SEED_PERILLA', 'ITEM_SEED_CORN', 'ITEM_SEED_RADISH', 'ITEM_SEED_MINT', 'ITEM_SEED_LAVENDER', 'ITEM_SEED_ROSEMARY', 'ITEM_SEED_LEMONBALM', 'ITEM_SALT', 'ITEM_RICE', 'ITEM_MEJU', 'ITEM_GOCHUGARU', 'ITEM_BASKET', 'ITEM_SMALL_JAR', 'ITEM_FLOWERPOT', 'ITEM_LANTERN'],
+    sells: ['ITEM_WATERING_CAN', 'ITEM_HOMI', 'ITEM_SEED_BEAN', 'ITEM_SEED_PEPPER', 'ITEM_SEED_CABBAGE', 'ITEM_SEED_PERILLA', 'ITEM_SEED_CORN', 'ITEM_SEED_RADISH', 'ITEM_SEED_MINT', 'ITEM_SEED_LAVENDER', 'ITEM_SEED_ROSEMARY', 'ITEM_SEED_LEMONBALM', 'ITEM_SALT', 'ITEM_RICE', 'ITEM_MEJU', 'ITEM_GOCHUGARU', 'ITEM_BASKET', 'ITEM_SMALL_JAR', 'ITEM_FLOWERPOT', 'ITEM_LANTERN'],
     buysTypes: ['crop', 'fermented', 'decoration', 'ingredient'],
   },
 };
