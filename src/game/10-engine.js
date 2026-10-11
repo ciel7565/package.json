@@ -31,9 +31,56 @@
     return PRESETS[q] ? q : autoQuality();
   }
 
+  // ---------------------------------------------------------------- geometry hygiene (GPU NaN guard)
+  // Zero-length or NaN vertex normals (degenerate triangles, cone tips, parts scaled to 0) make real GPUs evaluate
+  // normalize(vec3(0)) = NaN (Direct3D/ANGLE on Windows); bloom then smears that NaN into big black rectangles.
+  // Normals are repaired at the source (computeVertexNormals / applyMatrix4 / mergeGeometries) and new scene
+  // geometries are scanned once (engine.update), so no module has to remember it.
+  function fixNormals(geo) {
+    const n = geo && geo.attributes && geo.attributes.normal;
+    if (!n || n.itemSize !== 3) return geo;
+    let bad = 0;
+    if (n.isInterleavedBufferAttribute) {
+      for (let i = 0; i < n.count; i++) {
+        const x = n.getX(i), y = n.getY(i), z = n.getZ(i), l2 = x * x + y * y + z * z;
+        if (!(l2 > 1e-12) || !Number.isFinite(l2)) { n.setXYZ(i, 0, 1, 0); bad++; }
+      }
+    } else {
+      const a = n.array;
+      for (let i = 0; i + 2 < a.length; i += 3) {
+        const x = a[i], y = a[i + 1], z = a[i + 2], l2 = x * x + y * y + z * z;
+        if (!(l2 > 1e-12) || !Number.isFinite(l2)) { a[i] = 0; a[i + 1] = 1; a[i + 2] = 0; bad++; }
+      }
+    }
+    if (bad) { n.needsUpdate = true; fixNormals.repaired += bad; }
+    return geo;
+  }
+  fixNormals.repaired = 0;
+  const BG = THREE.BufferGeometry.prototype;
+  if (!BG.__tfmNormalFix) {
+    BG.__tfmNormalFix = true;
+    const computeVertexNormals = BG.computeVertexNormals;
+    BG.computeVertexNormals = function () { computeVertexNormals.call(this); fixNormals(this); };
+    const applyMatrix4 = BG.applyMatrix4;
+    BG.applyMatrix4 = function (m) { applyMatrix4.call(this, m); fixNormals(this); return this; };
+    const U = ADDONS.BufferGeometryUtils;
+    if (U && typeof U.mergeGeometries === 'function') {
+      ADDONS.BufferGeometryUtils = Object.assign({}, U, { mergeGeometries: (...a) => fixNormals(U.mergeGeometries(...a)) });
+    }
+  }
+  const checkedGeos = new WeakSet();
+  function scanSceneNormals(root) {
+    let n = 0;
+    root.traverse((o) => { const g = o.geometry; if (g && !checkedGeos.has(g)) { checkedGeos.add(g); fixNormals(g); n++; } });
+    return n;
+  }
+
   // ---------------------------------------------------------------- tiny graphics helpers shared by world modules
   const matCache = new Map();
   G.gfx = {
+    /** repair zero/NaN vertex normals in place (see "geometry hygiene"); returns the geometry */
+    fixNormals,
+    get normalsRepaired() { return fixNormals.repaired; },
     /** CanvasTexture from a 2D drawing function */
     canvasTexture(w, h, draw, opts = {}) {
       const c = document.createElement('canvas');
@@ -252,6 +299,23 @@
       composer.setPixelRatio(r.getPixelRatio());
       composer.setSize(window.innerWidth, window.innerHeight);
       composer.addPass(new ADDONS.RenderPass(this.scene, this.camera));
+      if (ADDONS.ShaderPass) {
+        // NaN/Inf scrub before bloom: one bad pixel (any shader, any GPU) must never be blurred into a black box;
+        // also caps HDR so half-float bloom targets cannot overflow. max/min drop NaN on D3D; isnan/isinf cover GL.
+        composer.addPass(new ADDONS.ShaderPass({
+          name: 'NaNScrubShader',
+          uniforms: { tDiffuse: { value: null } },
+          vertexShader: 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+          fragmentShader: [
+            'uniform sampler2D tDiffuse;', 'varying vec2 vUv;',
+            'void main() {',
+            '  vec4 c = texture2D(tDiffuse, vUv);',
+            '  if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0, 0.0, 0.0, 1.0);',
+            '  gl_FragColor = vec4(min(max(c.rgb, vec3(0.0)), vec3(48.0)), clamp(c.a, 0.0, 1.0));',
+            '}',
+          ].join('\n'),
+        }));
+      }
       const bloom = new ADDONS.UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 0.24, 0.4, 1.05); // threshold > 1: only HDR emissives (lanterns, markers, glowing jars) bloom
       composer.addPass(bloom);
       composer.addPass(new ADDONS.OutputPass());
@@ -325,6 +389,9 @@
     onResize(fn) { this._resizeFns.push(fn); },
 
     update(dt) {
+      // repair normals of geometries added since the last scan (crops regrowing, decorations, effects) ~every 1.5 s
+      this._normScan = (this._normScan ?? 9) + dt; // first frame scans immediately
+      if (this._normScan > 1.5 && this.scene) { this._normScan = 0; scanSceneNormals(this.scene); }
       // shadow camera + sun follow the focus point (player)
       const f = this.focus;
       if (this.sun) {

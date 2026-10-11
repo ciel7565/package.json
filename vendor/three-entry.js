@@ -10,12 +10,13 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 window.THREE = THREE_NS;
 window.THREE_ADDONS = {
   Sky, Lensflare, LensflareElement, BufferGeometryUtils, SimplexNoise,
-  EffectComposer, RenderPass, UnrealBloomPass, OutputPass,
+  EffectComposer, RenderPass, UnrealBloomPass, OutputPass, ShaderPass,
   RoundedBoxGeometry, GLTFLoader,
 };

@@ -162,6 +162,8 @@
 
     // ------------------------------------------------------------ public API
     async teleport(x, z, rotY, opts = {}) {
+      if (x && typeof x === 'object') { opts = (rotY && typeof rotY === 'object') ? rotY : opts; rotY = typeof z === 'number' ? z : x.rotY; z = x.z; x = x.x; }
+      if (!Number.isFinite(x) || !Number.isFinite(z)) { G.log.warn('PLAYER', 'teleport ignored: non-finite target', x, z); return; }
       const run = () => {
         const f = this._findFree(x, z, G.world.surfaceHeight(x, z)) || { x, z };
         this.cancelWalk('teleport');

@@ -133,3 +133,7 @@ body.modal-open .modal-backdrop { padding-top: 3.6rem; }
   body.is-touch.show-chat .chat-panel { bottom: 14.2rem; }
   body.show-chat .hud-left-menu { display: none; }
 }
+
+/* Onboarding coach card visible: toasts move to the bottom-center lane (above the E prompt) instead of covering the card. */
+body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !important; bottom: 10.8rem; }
+@media (max-width: 560px) { body.is-touch:has(.coach-layer .coach):not(.modal-open) .toast-root { bottom: 17rem; } }
