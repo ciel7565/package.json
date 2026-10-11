@@ -147,3 +147,83 @@
   .fm-ring { width: 3.8rem; height: 3.8rem; }
   .fm-step span { font-size: .62rem; }
 }
+
+/* =============================================================================
+   쉬운 모드 (CONTRACT §12): picture plot tags + the big picture card
+   ============================================================================= */
+.farm-label .fl-kid, .farm-label .fl-kid-empty { display: none; }
+body.easy .farm-label .fl-stats, body.easy .farm-label .fl-empty, body.easy .farm-label .fl-stage { display: none !important; }
+body.easy .farm-label .ttl { font-size: 1.02rem; }
+body.easy .farm-label .num { width: 1.8rem; height: 1.8rem; font-size: .95rem; }
+body.easy .farm-label:not(.is-empty) .fl-kid,
+body.easy .farm-label.is-empty .fl-kid-empty {
+  display: inline-flex; align-items: center; gap: .4rem; padding: .2rem .7rem .2rem .45rem; border-radius: 999px;
+  background: rgba(10, 18, 13, .78); border: 1px solid rgba(255, 255, 255, .22); font-size: .9rem; font-weight: 800; color: #fff;
+}
+.fl-kid .flk-stage, .fl-kid .flk-face { font-size: 1.35rem; line-height: 1; }
+.fl-kid .flk-drops { display: inline-flex; gap: .12rem; }
+.fl-kid .flk-drops i {
+  width: .62rem; height: .78rem; border-radius: 50% 50% 50% 50% / 62% 62% 42% 42%; transform: rotate(0deg);
+  background: rgba(255, 255, 255, .2); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .25); clip-path: polygon(50% 0, 100% 62%, 92% 82%, 72% 98%, 28% 98%, 8% 82%, 0 62%);
+}
+.fl-kid .flk-drops i.on { background: linear-gradient(180deg, #9fdcff, #2f9bff); box-shadow: 0 0 6px rgba(79, 179, 255, .7); }
+.fl-kid .flk-ready { display: none; color: #2b1d02; }
+body.easy .farm-label.is-ready .fl-kid { background: linear-gradient(180deg, #fff2b5, #ffcf4a); border-color: #fff; color: #2b1d02; box-shadow: 0 0 0 3px rgba(255, 207, 74, .3), 0 0 18px rgba(255, 207, 74, .55); }
+body.easy .farm-label.is-ready .flk-drops, body.easy .farm-label.is-ready .flk-face { display: none; }
+body.easy .farm-label.is-ready .flk-ready { display: inline; }
+body.easy .farm-label.is-dry .fl-kid { border-color: rgba(79, 179, 255, .75); box-shadow: 0 0 0 3px rgba(79, 179, 255, .22); }
+.fl-kid-empty .emoji { font-size: 1.2rem; }
+
+/* the picture card (G.ui.modal 'farm-plot' in 쉬운 모드) */
+.farm-kid .modal-body.fk-body { display: flex; flex-direction: column; align-items: center; gap: .85rem; padding-top: 1rem; padding-bottom: 1.2rem; text-align: center; }
+.fk-hero { display: grid; place-items: center; }
+.fk-ring {
+  --p: 0;
+  position: relative; width: 8.6rem; height: 8.6rem; border-radius: 50%; padding: .55rem;
+  background: conic-gradient(var(--kid-green, #3fd078) calc(var(--p) * 1%), rgba(255, 255, 255, .12) 0);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .35), 0 0 0 4px rgba(255, 255, 255, .08);
+}
+.fk-ring.empty { background: repeating-conic-gradient(rgba(255, 255, 255, .25) 0 8deg, transparent 8deg 18deg); }
+.fk-pic {
+  display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; font-size: 4.2rem; line-height: 1;
+  background: radial-gradient(circle at 40% 30%, #fff8e4, #f3d9a6 55%, #c99a5a); box-shadow: inset 0 -6px 0 rgba(0, 0, 0, .12);
+  animation: fkBob 2.6s ease-in-out infinite;
+}
+@keyframes fkBob { 0%, 100% { translate: 0 0; rotate: -2deg; } 50% { translate: 0 -5px; rotate: 2deg; } }
+.fk-track { display: flex; align-items: center; justify-content: center; gap: .35rem; }
+.fk-step {
+  display: grid; place-items: center; width: 3.1rem; height: 3.1rem; border-radius: 16px; font-size: 1.85rem; line-height: 1;
+  background: rgba(255, 255, 255, .08); border: 2px solid rgba(255, 255, 255, .16); filter: grayscale(.85) brightness(.85); opacity: .65;
+  transition: transform .2s var(--kid-bounce, ease), filter .2s, opacity .2s;
+}
+.fk-step.done { filter: none; opacity: .95; border-color: rgba(63, 208, 120, .6); }
+.fk-step.cur { filter: none; opacity: 1; transform: scale(1.18); background: radial-gradient(circle at 50% 35%, #fff6cf, #ffd25a); border-color: #fff; box-shadow: 0 0 0 4px rgba(255, 207, 74, .35), 0 6px 14px rgba(0, 0, 0, .3); }
+.fk-arrow { color: rgba(255, 255, 255, .45); font-size: 1.4rem; font-weight: 900; }
+.fk-meter { display: flex; align-items: center; justify-content: center; gap: .7rem; flex-wrap: wrap; }
+.fk-m { display: inline-flex; align-items: center; gap: .45rem; min-height: var(--tap); padding: .3rem .9rem .3rem .6rem; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .16); }
+.fk-m-ico { font-size: 1.5rem; }
+.fk-drops { display: inline-flex; gap: .3rem; }
+.fk-drops i {
+  width: 1.15rem; height: 1.45rem; background: rgba(255, 255, 255, .18);
+  clip-path: polygon(50% 0, 100% 62%, 92% 82%, 72% 98%, 28% 98%, 8% 82%, 0 62%); transition: background .25s;
+}
+.fk-drops i.on { background: linear-gradient(180deg, #b6e6ff, #2f9bff); }
+.fk-m.feel { padding: .3rem .7rem; }
+.fk-face { font-size: 2rem; line-height: 1; }
+.fk-say { margin: 0; max-width: 22rem; text-wrap: balance; font-size: 1.28rem; font-weight: 800; line-height: 1.4; word-break: keep-all; display: inline-flex; align-items: center; gap: .5rem; justify-content: center; }
+.fk-say .easy-speak { width: var(--tap, 56px); height: var(--tap, 56px); font-size: 1.25rem; flex: none; }
+.fk-btns { display: flex; flex-wrap: wrap; justify-content: center; gap: .7rem; width: 100%; }
+.fk-btns .easy-big-btn { min-width: 12rem; font-size: 1.25rem; min-height: calc(var(--tap) + .5rem); }
+.fk-btns .easy-big-btn .emoji { font-size: 1.8rem; }
+.fk-btns .easy-big-btn:disabled { opacity: .6; filter: grayscale(.4); cursor: default; }
+.fk-btns .fk-harvest { background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d, #e3a412)); color: #2b1d02; text-shadow: none; }
+body.reduce-motion .fk-pic { animation: none; }
+@media (prefers-reduced-motion: reduce) { .fk-pic { animation: none; } }
+@media (max-width: 560px) {
+  .fk-ring { width: 7.2rem; height: 7.2rem; }
+  .fk-pic { font-size: 3.5rem; }
+  .fk-step { width: 2.7rem; height: 2.7rem; font-size: 1.55rem; }
+  .fk-say { font-size: 1.15rem; }
+  .fk-btns .easy-big-btn { width: 100%; }
+}
+.ffx-float.kid .ffx-float-in { font-size: 1.05rem; padding: .3rem .8rem; border-color: rgba(255, 255, 255, .5); }

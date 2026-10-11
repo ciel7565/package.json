@@ -22,9 +22,14 @@
 // plays 'talk' while the line types. Optional TTS (G.settings.voiceOver → G.sys.audio.speak).
 // Emits npc:talk {npcId} at the start and dialogue:end {npcId, dialogueId} when it closes.
 // Data format (conditions / actions / placeholders): see the header of 26-dialogues.js.
+// 쉬운 모드 (CONTRACT §12): big portrait + big short kid lines (node.kid / variant.kid, falling back to text),
+// every line read aloud with G.easy.say, tap ANYWHERE to continue, choices as 2–3 big picture buttons
+// (choice.kid / choice.emoji; choice.easy === false hides grown-up extras), a big "✖ 그만" exit. The first
+// greeting of each NPC is read aloud too. Switching modes while talking re-renders the current line.
 // =============================================================================
 (function () {
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
   const damp = (l, dt) => 1 - Math.exp(-l * dt);
   const angleDiff = (a, b) => G.util.angleDiff(a, b);
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -139,6 +144,7 @@
         case 'all': if (!arr(v).every(check)) return false; break;
         case 'not': if (check(v)) return false; break;
         case 'chance': if (Math.random() >= Number(v)) return false; break;
+        case 'easy': if (!!v !== kidOn()) return false; break; // 쉬운 모드 only (true) / normal mode only (false)
         default:
           if (!warnedConds.has(k)) { warnedConds.add(k); G.log.warn('UI', `dialogue: unknown condition "${k}"`); }
           return false;
@@ -166,11 +172,13 @@
       return '자유롭게 체험하기';
     },
     jar: () => jarText('J1'),
+    /** the "다음 할 일" sentence of the easy HUD (kid words), falling back to the quest objective */
+    next: () => { try { const t = G.easy?.nextStep?.()?.text; if (t) return t; } catch (e) { /* optional */ } return PLACEHOLDERS.objective(); },
     weather: () => G.data.weather?.[weatherId()]?.name || '맑음',
     temp: () => (Number.isFinite(G.sys.weather?.temperature) ? `${Math.round(G.sys.weather.temperature)}°C` : '23°C'),
     phase: () => (G.data.dayPhases || []).find((p) => p.id === phaseId())?.name || '낮',
   };
-  /** replace {nickname} {objective} {jar} {level} {coin} {weather} {temp} {phase} */
+  /** replace {nickname} {objective} {next} {jar} {level} {coin} {weather} {temp} {phase} */
   function fill(str) {
     return String(str ?? '').replace(/\{(\w+)\}/g, (m, k) => { try { return PLACEHOLDERS[k] ? PLACEHOLDERS[k]() : m; } catch (e) { return ''; } });
   }
@@ -354,6 +362,9 @@
       G.interact?.register?.({
         id, kind: 'npc', radius: 3.2, priority: 1,
         label: () => this._promptLabel(rec),
+        kidLabel: () => this._kidPromptLabel(rec),
+        emoji: () => (rec.marker === '?' ? '🎁' : rec.marker === '!' ? '🙋' : rec.persona.icon || '💬'),
+        handOffset: () => (rec.marker ? 1.3 : 0.45), // above the ! / ? quest mark (and its greeting bubble) when one is shown
         position: () => rec.group.position,
         object: rig.group,
         enabled: () => !rec.talking,
@@ -366,7 +377,10 @@
       const bubble = h('div', { class: 'bubble npc-bubble', hidden: true });
       const mark = h('button', { class: 'npc-mark', type: 'button', hidden: true, tabindex: '-1', 'aria-label': `${rec.data.name}에게 가기` });
       mark.addEventListener('click', (ev) => { ev.stopPropagation(); if (!G.ui.isBlocking()) G.interact?.activate?.(rec.id); });
-      const tag = h('div', { class: 'nametag npc' }, h('span', { class: 'nm', text: rec.data.name || rec.id }), rec.data.role ? h('span', { class: 'role', text: rec.data.role }) : null);
+      // 쉬운 모드: a picture in front of the name so children who cannot read yet recognise each NPC
+      const tag = h('div', { class: 'nametag npc' },
+        h('span', { class: 'nm' }, h('span', { class: 'nm-ico emoji easy-only', 'aria-hidden': 'true' }, rec.persona.icon || '🙂'), String(rec.data.name || rec.id)),
+        rec.data.role ? h('span', { class: 'role', text: rec.data.role }) : null);
       const root = h('div', { class: 'npc-label', dataset: { npc: rec.id } }, bubble, mark, tag);
       rec.el = { root, bubble, mark, tag };
       rec.label = G.ui.label({ el: root, target: rec.rig.headAnchor, offsetY: 0.04, maxDist: LABEL_DIST, fadeDist: 8 });
@@ -377,6 +391,12 @@
       if (rec.marker === '!') return `${base} · 새 퀘스트`;
       if (rec.marker === '?') return `${base} · 퀘스트`;
       return base;
+    },
+    /** 쉬운 모드 prompt words: "발효마스터랑 이야기" (the picture shows 🙋 new task / 🎁 report) */
+    _kidPromptLabel(rec) {
+      const n = String(rec.data.name || '');
+      const fc = finalCode(n);
+      return `${n}${fc > 0 ? '이랑' : '랑'} 이야기`;
     },
 
     // ------------------------------------------------------------ public API
@@ -617,7 +637,9 @@
       const now = G.time.elapsed;
       if (rec.greeted && now - rec.lastGreet < GREET_COOLDOWN) return;
       const first = !rec.greeted;
-      const text = first ? rec.data.greeting : this._bark(rec);
+      const kid = kidOn();
+      const def = G.data.dialogues?.[rec.data.dialogue];
+      const text = first ? ((kid && def?.kidGreeting) || rec.data.greeting) : this._bark(rec);
       if (!text) return;
       rec.greeted = true;
       rec.lastGreet = now;
@@ -625,19 +647,24 @@
         rec.ai.state = 'gesture';
         rec.ai.t = 2.6;
       } else if (rec.ai.state === 'walk') { rec.ai.state = 'idle'; rec.ai.t = rand(3, 5); }
-      this.say(rec.id, text, { duration: 3.4, chat: first });
+      this.say(rec.id, text, { duration: kid ? 4.2 : 3.4, chat: first });
+      // 쉬운 모드: the very first hello of each NPC is read aloud (queued behind anything already speaking)
+      if (kid && first && !G.ui.isBlocking()) { try { G.easy?.say?.(fill(text), { interrupt: false }); } catch (e) { /* voice optional */ } }
     },
 
-    /** proximity line: conditional barks win over generic ones */
+    /** proximity line: conditional barks win over generic ones (쉬운 모드: bark.kid / dialogue.kidBarks) */
     _bark(rec) {
-      const list = G.data.dialogues?.[rec.data.dialogue]?.barks;
+      const def = G.data.dialogues?.[rec.data.dialogue];
+      const list = def?.barks;
       if (!Array.isArray(list) || !list.length) return rec.data.greeting || null;
+      const kid = kidOn();
       const cond = [], plain = [];
       for (const b of list) {
         if (typeof b === 'string') plain.push(b);
-        else if (b && b.text && check(b.if)) cond.push(b.text);
+        else if (b && b.text && check(b.if)) cond.push(kid && b.kid ? b.kid : b.text);
       }
-      const pool = cond.length ? cond : plain;
+      const kidPlain = kid && Array.isArray(def.kidBarks) && def.kidBarks.length ? def.kidBarks : null;
+      const pool = cond.length ? cond : (kidPlain || plain);
       return pool.length ? pick(pool) : null;
     },
 
@@ -738,7 +765,7 @@
   // =========================================================================================== dialogue system
   const UI_ACTIONS = new Set(['openEdu', 'openQuiz', 'openLibrary', 'openShop', 'openCraft', 'openJar', 'openMap', 'openFastTravel', 'openJournal', 'openQuestLog', 'openInventory', 'openCollection', 'teleport']);
   const KNOWN_ACTIONS = new Set([...UI_ACTIONS, 'acceptQuest', 'claimQuest', 'giveItem', 'takeItem', 'setFlag', 'clearFlag', 'emote', 'npcAnim', 'event', 'toast', 'sfx', 'activity']);
-  const KNOWN_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance']);
+  const KNOWN_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const CPS = 40;                       // typewriter characters per second
   const ACTION_ICON = { openShop: '🛒', openMap: '🗺️', openFastTravel: '🧭', teleport: '🧭', openEdu: '📖', openLibrary: '📚', openQuiz: '✏️', openJar: '🏺', openCraft: '🛠️', openJournal: '📝', openQuestLog: '📜', openInventory: '🎒', openCollection: '📗', giveItem: '🎁' };
   const defs = () => G.data.dialogues || {};
@@ -778,6 +805,26 @@
     if (c.end && !c.next) return { cls: 'leave', icon: '' };
     return { cls: '', icon: '' };
   }
+  /** a "goodbye" choice: ends the talk without doing anything but a farewell animation */
+  function isLeave(c) {
+    if (!c.end || c.next) return false;
+    return arr(c.actions).every((x) => { const t = normAction(x)?.type; return t === 'npcAnim' || t === 'emote'; });
+  }
+  /**
+   * 쉬운 모드 choices: at most 3 big picture buttons. Choices marked `easy: false` are grown-up extras; when more
+   * than 3 remain, plain goodbyes go first (the big "✖ 그만" button already ends the talk).
+   */
+  function kidChoices(list) {
+    let l = list.filter((c) => c.easy !== false);
+    if (!l.length) l = list.slice();
+    if (l.length > 3) { const keep = l.filter((c) => !isLeave(c)); if (keep.length >= 2) l = keep; }
+    return l.slice(0, 3);
+  }
+  const KID_CLS_EMOJI = { claim: '🎁', quest: '👍', leave: '👋' };
+  function kidChoiceEmoji(c, st) {
+    const own = typeof c.emoji === 'string' && c.emoji.trim() ? c.emoji.trim().slice(0, 16) : '';
+    return own || KID_CLS_EMOJI[st.cls] || st.icon || (isLeave(c) ? '👋' : '💬');
+  }
   function pickQuiz(spec, edu) {
     const Q = G.data.quizzes || {};
     if (spec && Q[spec]) return spec;
@@ -803,12 +850,14 @@
       root.innerHTML = '';
       root.classList.add('dlg-root');
       const shade = h('div', { class: 'dlg-shade', 'aria-hidden': 'true' });
+      // 쉬운 모드: a full-screen catcher behind the box — tap anywhere to continue
+      const tap = h('div', { class: 'dlg-tap', 'aria-hidden': 'true' });
       const box = h('section', { class: 'dlg', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'dlg-name', hidden: true });
       box.innerHTML = `
         <div class="dlg-portrait" aria-hidden="true"><img class="dlg-img" alt="" hidden><span class="dlg-face emoji"></span></div>
         <header class="dlg-head">
           <span class="dlg-name" id="dlg-name"></span><span class="dlg-role"></span>
-          <button class="icon-btn dlg-close" type="button" tabindex="-1" aria-label="대화 닫기" title="대화 닫기 (Esc)"><span class="ico" data-icon="x"></span></button>
+          <button class="icon-btn dlg-close" type="button" tabindex="-1" aria-label="대화 닫기" title="대화 닫기 (Esc)"><span class="ico" data-icon="x"></span><span class="dlg-close-lbl">그만</span></button>
         </header>
         <div class="dlg-text" aria-hidden="true"></div>
         <div class="dlg-sr" aria-live="polite"></div>
@@ -818,22 +867,26 @@
           <button class="btn btn-sm dlg-next" type="button" tabindex="-1" hidden></button>
         </footer>`;
       G.ui.hydrateIcons(box);
-      root.append(shade, box);
+      root.append(shade, tap, box);
       const $ = (s) => box.querySelector(s);
-      this._root = root; this._box = box; this._shade = shade;
+      this._root = root; this._box = box; this._shade = shade; this._tap = tap;
       this._img = $('.dlg-img'); this._face = $('.dlg-face');
       this._nameEl = $('.dlg-name'); this._roleEl = $('.dlg-role');
       this._textEl = $('.dlg-text'); this._srEl = $('.dlg-sr');
       this._choicesEl = $('.dlg-choices'); this._nextBtn = $('.dlg-next'); this._hintEl = $('.dlg-hint');
-      this._hintEl.innerHTML = G.input?.touchUI
-        ? '화면을 눌러 넘기기'
-        : '<span class="h-line"><kbd>Space</kbd> 다음</span><span class="h-pick"><kbd>1</kbd>–<kbd>4</kbd> 선택 <span class="sep">·</span> <kbd>↑</kbd><kbd>↓</kbd> 이동</span> <span class="sep">·</span> <kbd>Esc</kbd> 닫기';
       this._caret = h('span', { class: 'dlg-caret', 'aria-hidden': 'true' });
+      this._applyMode();
 
       $('.dlg-close').addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
       this._nextBtn.addEventListener('click', (e) => { e.stopPropagation(); this.advance(); });
-      this._textEl.addEventListener('click', () => this.advance());
-      $('.dlg-portrait').addEventListener('click', () => this.advance());
+      // text / portrait click continues (normal); in 쉬운 모드 a tap anywhere in or around the box does
+      box.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        if (!kidOn() && !e.target.closest('.dlg-text, .dlg-portrait')) return;
+        this._onTapAnywhere();
+      });
+      tap.addEventListener('click', (e) => { e.stopPropagation(); if (kidOn()) this._onTapAnywhere(); });
+      G.bus.on('easy:changed', () => this._onModeChange());
       this._choicesEl.addEventListener('click', (e) => {
         const b = e.target.closest('.dlg-choice');
         if (b) { e.stopPropagation(); this.choose(Number(b.dataset.i)); }
@@ -903,6 +956,8 @@
       clearTimeout(this._unblockT); clearTimeout(this._hideT);
       G.ui.block('dialogue');
       document.body.classList.add('dialogue-open');
+      this._applyMode();
+      try { G.easy?.stopPoint?.(); } catch (e) { /* optional */ }
       try { G.ui.popover?.close?.(); } catch (e) { /* ignore */ }
       if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur?.();
       this._setSpeaker(data, npcId);
@@ -990,6 +1045,42 @@
       }
       this.close();   // no (matching) next: the conversation ends and deferred UI actions run
       return true;
+    },
+
+    /** tap on the text / portrait (normal) or anywhere (쉬운 모드) */
+    _onTapAnywhere() {
+      if (!this.active || this._foreign()) return;
+      if (kidOn() && !this._typing && this._choices.length) { this._nudgeChoices(); return; }
+      this.advance();
+    },
+    /** 쉬운 모드: the child tapped beside the picture buttons — wiggle them and say what to do */
+    _nudgeChoices() {
+      const el = this._choicesEl;
+      el.classList.remove('nudge'); void el.offsetWidth; el.classList.add('nudge');
+      try { G.easy?.say?.('아래 그림 중에 하나를 골라요!', { priority: 1 }); } catch (e) { /* voice optional */ }
+    },
+    /** apply normal / 쉬운 모드 presentation (box class, hint, button words) */
+    _applyMode() {
+      const kid = kidOn();
+      this._box?.classList.toggle('kid', kid);
+      if (!this._hintEl) return;
+      if (this._hintMode === kid) return;
+      this._hintMode = kid;
+      // static strings only
+      this._hintEl.innerHTML = kid
+        ? '<span class="h-line"><span class="emoji">👆</span> 아무 데나 눌러요</span><span class="h-pick"><span class="emoji">👇</span> 그림을 하나 골라요</span>'
+        : G.input?.touchUI
+          ? '화면을 눌러 넘기기'
+          : '<span class="h-line"><kbd>Space</kbd> 다음</span><span class="h-pick"><kbd>1</kbd>–<kbd>4</kbd> 선택 <span class="sep">·</span> <kbd>↑</kbd><kbd>↓</kbd> 이동</span> <span class="sep">·</span> <kbd>Esc</kbd> 닫기';
+    },
+    /** easy mode switched while talking: same line, other words / buttons (actions are NOT run again) */
+    _onModeChange() {
+      this._applyMode();
+      const a = this.active;
+      if (!a || !a.node || !a.texts) return;
+      const text = kidOn() ? a.texts.k : a.texts.n;
+      this._type(text);
+      if (kidOn()) this._speak(text);
     },
 
     /** skip the typewriter, or continue when the line has no choices */
@@ -1104,7 +1195,8 @@
       this._focus = -1;
       this._nextBtn.hidden = true;
       this._box.classList.remove('has-choices');
-      const text = this._nodeText(node);
+      a.texts = this._nodeTexts(node);
+      const text = kidOn() ? a.texts.k : a.texts.n;
       if (a.npcId) {
         if (node.emote) G.sys.npc?.playAnim?.(a.npcId, node.emote);
         G.sys.npc?.setSpeaking?.(a.npcId, !!text);
@@ -1115,12 +1207,24 @@
       G.sfx('chat');
     },
 
-    _nodeText(node) {
-      let t = null;
-      if (Array.isArray(node.variants)) for (const v of node.variants) { if (v && v.text != null && check(v.if)) { t = v.text; break; } }
-      if (t == null) t = node.text;
-      if (Array.isArray(t)) t = t.length ? pick(t) : '';
-      return fill(t == null ? '' : String(t));
+    /** the line of a node in the current mode */
+    _nodeText(node) { const t = this._nodeTexts(node); return kidOn() ? t.k : t.n; },
+    /**
+     * {n: normal line, k: kid line} — the first matching variant wins (its own `kid`, else its normal text);
+     * otherwise node.text / node.kid. Arrays pick one random line (the kid array uses the same index).
+     */
+    _nodeTexts(node) {
+      let t = null, k = null;
+      if (Array.isArray(node.variants)) for (const v of node.variants) { if (v && v.text != null && check(v.if)) { t = v.text; k = v.kid ?? null; break; } }
+      if (t == null) { t = node.text; k = node.kid ?? null; }
+      if (Array.isArray(t)) {
+        const i = t.length ? Math.floor(Math.random() * t.length) : 0;
+        if (Array.isArray(k)) k = k.length ? k[Math.min(i, k.length - 1)] : null;
+        t = t.length ? t[i] : '';
+      } else if (Array.isArray(k)) k = k.length ? pick(k) : null;
+      const n = fill(t == null ? '' : String(t));
+      const kk = k != null && String(k).trim() ? fill(String(k)) : n;
+      return { n, k: kk };
     },
 
     /** re-apply the speaker chip / portrait (e.g. when the NPC portrait finished rendering) */
@@ -1193,19 +1297,27 @@
       const node = a?.node;
       if (!node) return;
       const h = G.ui.h;
-      const list = (node.choices || []).filter((c) => c && c.text != null && check(c.if)).slice(0, 6);
+      const kid = kidOn();
+      let list = (node.choices || []).filter((c) => c && c.text != null && check(c.if)).slice(0, 6);
+      if (kid) list = kidChoices(list);
       this._choices = list;
       this._focus = -1;
       const box = this._choicesEl;
       box.innerHTML = '';
+      box.classList.toggle('kid', kid);
+      box.dataset.n = String(list.length);
       if (list.length) {
         list.forEach((c, i) => {
           const st = choiceStyle(c);
-          const b = h('button', { class: `dlg-choice ${st.cls}`.trim(), type: 'button', tabindex: '-1', dataset: { i: String(i) } },
-            i < 9 ? h('kbd', null, String(i + 1)) : null,
-            st.icon ? h('span', { class: 'dc-ico emoji', 'aria-hidden': 'true' }, st.icon) : null,
-            h('span', { class: 'dc-text', text: fill(c.text) }));
-          b.style.animationDelay = `${i * 50}ms`;
+          const b = kid
+            ? h('button', { class: `dlg-choice kid ${st.cls}`.trim(), type: 'button', tabindex: '-1', dataset: { i: String(i), say: fill(c.kid ?? c.text) } },
+              h('span', { class: 'dc-emo emoji', 'aria-hidden': 'true' }, kidChoiceEmoji(c, st)),
+              h('span', { class: 'dc-text', text: fill(c.kid ?? c.text) }))
+            : h('button', { class: `dlg-choice ${st.cls}`.trim(), type: 'button', tabindex: '-1', dataset: { i: String(i) } },
+              i < 9 ? h('kbd', null, String(i + 1)) : null,
+              st.icon ? h('span', { class: 'dc-ico emoji', 'aria-hidden': 'true' }, st.icon) : null,
+              h('span', { class: 'dc-text', text: fill(c.text) }));
+          b.style.animationDelay = `${i * (kid ? 90 : 50)}ms`;
           box.appendChild(b);
         });
         this._caret.hidden = true;
@@ -1213,7 +1325,10 @@
       } else {
         const next = this._resolveNext(node.next);
         const more = !!next && next !== 'END';
-        this._nextBtn.innerHTML = more ? '다음 <span class="arr">▶</span>' : '대화 마치기';
+        // static strings only
+        this._nextBtn.innerHTML = kid
+          ? (more ? '<span class="emoji">👉</span> 다음' : '<span class="emoji">👋</span> 안녕')
+          : (more ? '다음 <span class="arr">▶</span>' : '대화 마치기');
         this._nextBtn.classList.toggle('end', !more);
         this._nextBtn.hidden = false;
         this._caret.hidden = !more;
@@ -1320,6 +1435,8 @@
           case 'openJar': if (S.fermentation?.openJar) S.fermentation.openJar(act.jar ?? v ?? 'J1'); else this._missing('장독'); return;
           case 'openMap': if (S.minimap?.openWorldMap) S.minimap.openWorldMap(); else this._missing('지도'); return;
           case 'openFastTravel':
+            // 쉬운 모드: the picture "어디 갈까?" menu (08-easy owns the 'where' action)
+            if (kidOn() && G.ui.triggerAction('where')) return;
             if (S.minimap?.openFastTravel) S.minimap.openFastTravel();
             else if (S.minimap?.openWorldMap) S.minimap.openWorldMap();
             else this._missing('이동 메뉴');
@@ -1348,10 +1465,12 @@
       }
     },
 
-    // voice-over
+    // voice-over (쉬운 모드: every line through the shared kid voice queue, so it never fights other prompts)
     _speak(text) {
-      if (!G.settings.voiceOver || !text) return;
+      if (!text) return;
       const plain = text.replace(/\*\*/g, '');
+      if (kidOn() && G.easy?.say) { try { G.easy.say(plain, { priority: 1 }); } catch (e) { /* voice optional */ } return; }
+      if (!G.settings.voiceOver) return;
       try {
         if (G.sys.audio?.speak) { G.sys.audio.speak(plain); return; }
         const ss = window.speechSynthesis;
@@ -1363,6 +1482,7 @@
       } catch (e) { /* speech is optional */ }
     },
     _stopSpeech() {
+      if (kidOn()) { try { G.easy?.stop?.(); } catch (e) { /* optional */ } }
       if (!G.settings.voiceOver) return;
       try { G.sys.audio?.stopSpeaking?.(); } catch (e) { /* optional */ }
       try { window.speechSynthesis?.cancel?.(); } catch (e) { /* optional */ }

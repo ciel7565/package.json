@@ -221,3 +221,96 @@ body.reduce-motion .chat-quick .cq-btn.hit .emoji, body.reduce-motion .chat-log 
 @media (prefers-reduced-motion: reduce) {
   .soc-bubble.emote.pop, .soc-picker-emote .pick .emoji { animation: none; }
 }
+
+/* ---------------------------------------------------------------- one merged emote + gesture picker (normal mode) */
+.soc-picker-express .soc-pk-head { gap: .5rem; }
+.soc-pk-tabs { display: inline-flex; gap: .2rem; padding: .18rem; margin-left: auto; border-radius: 999px; background: rgba(0, 0, 0, .25); }
+.soc-pk-tab {
+  display: inline-flex; align-items: center; gap: .25rem; padding: .2rem .62rem; border-radius: 999px; border: 0; background: none;
+  font-size: .74rem; font-weight: 700; color: var(--text-mute); transition: background .15s, color .15s;
+}
+.soc-pk-tab .emoji { font-size: .95rem; line-height: 1; }
+.soc-pk-tab:hover:not(.active) { color: var(--text-dim); background: rgba(255, 255, 255, .06); }
+.soc-pk-tab.active { color: #fff; background: rgba(52, 195, 107, .38); }
+
+/* ================================================================ 쉬운 모드 (CONTRACT §12) */
+/* chat log as a kid card: no text box (kid chat), no tabs, bigger text, one big 말하기 button */
+body.kid-chat #chat-form, body.kid-chat .chat-quick, body.kid-chat .chat-suggest, body.kid-chat .chat-count, body.kid-chat .chat-voice-ind { display: none !important; }
+body.easy .chat-tabs [data-channel], body.easy .chat-tabs .chat-collapse { display: none; }
+body.easy .chat-tabs::before { content: '💬 이야기'; font-weight: 800; font-size: .95rem; color: var(--text); }
+body.easy #chat-panel { padding: .6rem .65rem .65rem; border-radius: 22px; }
+body.easy .chat-log { font-size: 1.02rem; gap: .38rem; }
+body.easy .chat-msg .time, body.easy .chat-msg .ch-tag { display: none; }
+body.easy .chat-msg.system { font-size: .92rem; }
+.chat-kid-row { display: flex; gap: .5rem; margin-top: .45rem; }
+.chat-kid-row .ck-talk { flex: 1; min-width: 0; }
+.chat-kid-row .ck-hide { flex: none; min-width: var(--tap); width: var(--tap); padding: 0; }
+.chat-kid-row .ck-hide .emoji { font-size: 1.2rem; }
+body.easy:not(.kid-chat) .chat-kid-row .ck-talk { display: none; }
+body.easy:not(.kid-chat) .chat-kid-row { justify-content: flex-end; margin-top: .3rem; }
+
+/* name tags and bubbles a little bigger for small readers */
+body.easy .nametag.visitor, body.easy .nametag.remote { font-size: .9rem; padding: .2rem .7rem .2rem .55rem; }
+/* tapping a person is a kid action: a transparent border grows the hit area to ≥ 56 px without a bigger pill */
+body.easy .nametag.visitor, body.easy .nametag.remote,
+body.easy .nametag.visitor:hover, body.easy .nametag.remote:hover { border: 17px solid transparent; background-clip: padding-box; margin: -17px; }
+body.easy .soc-bubble { max-width: 16rem; font-size: .98rem; font-weight: 600; }
+body.easy .soc-bubble.emote { font-size: 2.8rem; }
+
+/* 💬 phrase picker (G.sys.social.openKidChat) */
+.skc { display: flex; flex-direction: column; gap: .85rem; }
+.skc-recent { display: flex; flex-direction: column; gap: .42rem; min-height: 3.3rem; padding: .6rem .7rem; border-radius: 18px; background: rgba(0, 0, 0, .24); border: 1px solid rgba(255, 255, 255, .08); }
+.skc-msg { display: flex; align-items: flex-end; gap: .5rem; animation: chatIn .28s var(--ease); }
+.skc-msg.me { flex-direction: row-reverse; }
+.skc-ava {
+  width: 2.3rem; height: 2.3rem; flex: none; display: grid; place-items: center; border-radius: 50%;
+  font-weight: 800; font-size: 1.05rem; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); background: var(--green);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .35), 0 3px 8px rgba(0, 0, 0, .25);
+}
+.skc-msg.me .skc-ava { background: #fff3c4; font-size: 1.35rem; text-shadow: none; }
+.skc-bub {
+  max-width: min(28rem, 78%); padding: .42rem .85rem .5rem; border-radius: 18px 18px 18px 6px;
+  background: var(--kid-cream, #fffaf0); color: var(--kid-ink, #23301f); font-size: 1.06rem; font-weight: 700; line-height: 1.35;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, .18); word-break: keep-all; overflow-wrap: anywhere;
+}
+.skc-msg.me .skc-bub { border-radius: 18px 18px 6px 18px; background: #dcf8e6; }
+.skc-bub b { display: block; font-size: max(14px, .8rem); font-weight: 800; color: #4a5646; }
+.skc-empty { display: flex; align-items: center; gap: .55rem; color: var(--text-dim); font-weight: 700; font-size: 1.02rem; }
+.skc-empty .emoji { font-size: 1.7rem; }
+.skc-cats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.skc-cat {
+  --tile: #ffc93c;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .12rem; min-height: calc(var(--tap) + .4rem);
+  padding: .4rem .3rem; border-radius: 18px; border: 3px solid rgba(255, 255, 255, .12); background: rgba(255, 255, 255, .08);
+  color: var(--text); font-weight: 800; font-size: max(16px, 1.02rem); transition: transform .14s var(--kid-bounce, ease), background .15s, border-color .15s;
+  touch-action: manipulation;
+}
+.skc-cat .emoji { font-size: 1.85rem; line-height: 1; }
+.skc-cat.active { background: radial-gradient(120% 110% at 50% 20%, color-mix(in srgb, var(--tile) 35%, #fff), var(--tile)); color: var(--kid-ink, #23301f); border-color: #fff; transform: translateY(-2px); box-shadow: 0 5px 0 color-mix(in srgb, var(--tile) 55%, #000); }
+.skc-cat:active { transform: translateY(2px) scale(.96); }
+.skc-cat:focus-visible { outline: 4px solid var(--kid-gold, #ffcf4a); outline-offset: 2px; }
+.skc-tile { min-height: calc(var(--tap) * 1.9); }
+.skc-tile .et-emoji { min-height: 3.5rem; font-size: 2.3rem; }
+.skc-sub { display: flex; align-items: center; justify-content: center; gap: .35rem; font-weight: 700; color: var(--text-dim); font-size: max(16px, .95rem); margin-bottom: -.35rem; }
+.skc-emoji-row { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.skc-emo {
+  display: grid; place-items: center; min-height: var(--tap); aspect-ratio: 1; border-radius: 50%; padding: 0;
+  background: linear-gradient(180deg, #ffffff, #fff1d6); border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 4px 0 rgba(0, 0, 0, .22);
+  transition: transform .12s var(--kid-bounce, ease); touch-action: manipulation;
+}
+.skc-emo .emoji { font-size: 1.85rem; line-height: 1; }
+.skc-emo:hover { transform: translateY(-2px) rotate(-4deg); }
+.skc-emo:active, .skc-emo.is-chosen { transform: translateY(3px) scale(.92); box-shadow: 0 1px 0 rgba(0, 0, 0, .22); }
+.skc-emo:focus-visible { outline: 4px solid var(--kid-gold, #ffcf4a); outline-offset: 2px; }
+.skc-foot { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+.skc-safe { display: inline-flex; align-items: center; gap: .35rem; font-size: max(16px, .95rem); font-weight: 800; color: #ffe9a8; }
+.skc-safe .emoji { font-size: 1.3rem; }
+@media (max-width: 560px) {
+  .skc-emoji-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .skc-cat { font-size: max(15px, .92rem); }
+  .skc-cat .emoji { font-size: 1.6rem; }
+  .skc-recent .skc-msg:nth-last-child(n+3) { display: none; }
+  .skc-foot .skc-log { flex: 1; }
+}
+body.reduce-motion .skc-msg { animation: none; }
+@media (prefers-reduced-motion: reduce) { .skc-msg { animation: none; } }

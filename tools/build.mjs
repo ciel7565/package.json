@@ -182,6 +182,12 @@ function exportGameData() {
     crops: pick(d.crops, (c) => ({ growthTime: c.growthTime, exp: c.exp || 0, coin: c.coin || 0, harvestItem: c.harvestItem, harvestAmount: c.harvestAmount })),
     recipes: pick(d.recipes, (r) => ({ baseDuration: r.baseDuration, exp: r.exp || 0, coin: r.coin || 0, resultItem: r.resultItem })),
     items: pick(d.items, (i) => ({ price: i.price || 0, sell: i.sell || 0, type: i.type })),
+    // every title a player can legitimately equip (level titles + reward titles): the ranking shows only these,
+    // so the save's free-text profile.title can never carry chat-filter-bypassing text to other players
+    titles: [...new Set([
+      ...Object.values(d.levels?.titles || {}),
+      ...[d.quests, d.achievements, d.quizzes].flatMap((m) => Object.values(m || {}).map((x) => x?.reward?.title)),
+    ].filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()))].sort(),
     limits: d.serverLimits || {},
   };
 }
@@ -214,6 +220,14 @@ const buildInfo = {
     skipped: skipped.filter((x) => x.reason !== 'filtered'),
     fontEmbedded: EMBED_FONT,
   },
+  // kid-safety test vectors shared by the server e2e and the developer center self-tests (CONTRACT §12.4)
+  piiVectors: (() => {
+    try {
+      const v = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/pii-vectors.json'), 'utf8'));
+      const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 200) : []);
+      return { whole: list(v.whole), partial: list(v.partial), keep: list(v.keep) };
+    } catch (e) { return null; }
+  })(),
 };
 // Markers appear exactly once; slice-based replacement avoids `$` pattern surprises.
 const replaceOnce = (marker, value) => {
@@ -224,7 +238,8 @@ const replaceOnce = (marker, value) => {
 replaceOnce('<!--@FONTFACE-->', fontFace());
 replaceOnce('/*@CSS*/', css);
 replaceOnce('/*@VENDOR*/', `/*! three.js r${vendor.version.split('.')[1]} — MIT License — https://threejs.org */\n` + vendor.code.replace(/<\/script/gi, '<\\/script'));
-replaceOnce('/*@GAME*/', `window.__BUILD__ = ${JSON.stringify(buildInfo)};\n` + gameScript().replace(/<\/script/gi, '<\\/script'));
+// buildInfo carries strings from files (manifest names, tests/pii-vectors.json): '<' is escaped so nothing can close the script
+replaceOnce('/*@GAME*/', `window.__BUILD__ = ${JSON.stringify(buildInfo).replace(/</g, '\\u003c')};\n` + gameScript().replace(/<\/script/gi, '<\\/script'));
 
 // ---------------------------------------------------------------- docs for the in-game developer center (non-executed JSON)
 const docsDir = path.join(ROOT, 'docs');

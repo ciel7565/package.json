@@ -29,7 +29,7 @@
 }
 
 @media (max-height: 800px) {
-  .hud-left-menu button { padding: .32rem .2rem; font-size: .72rem; }
+  .hud-left-menu button { padding: .27rem .2rem; font-size: .72rem; }
   .hud-left-menu button .ico { width: 1.32rem; height: 1.32rem; }
   .chat-log { height: 6rem; }
 }
@@ -137,3 +137,101 @@ body.modal-open .modal-backdrop { padding-top: 3.6rem; }
 /* Onboarding coach card visible: toasts move to the bottom-center lane (above the E prompt) instead of covering the card. */
 body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !important; bottom: 10.8rem; }
 @media (max-width: 560px) { body.is-touch:has(.coach-layer .coach):not(.modal-open) .toast-root { bottom: 17rem; } }
+
+/* =============================================================================
+   쉬운 모드 responsive (§12.3): no overlaps at 1600x900, 1366x768, 390x844 and landscape phones.
+   ============================================================================= */
+@media (max-width: 1366px), (max-height: 768px) {
+  body.easy { --easy-ava: 3.9rem; }
+  body.easy .hud-right { width: 14.5rem; }
+  body.easy .hud-left-menu { width: 5.3rem; }
+  body.easy .bottom-bar > button { min-width: 5.6rem; }
+}
+@media (max-height: 800px) {
+  body.easy .hud-left-menu .lm-tile { min-height: calc(var(--tap) + .55rem); }
+  body.easy .hud-left-menu .lm-emo { font-size: 1.85rem; }
+}
+@media (max-width: 1100px) {
+  body.easy .hud-top-center { width: min(30rem, 44vw); }
+  body.easy .easy-next .en-go .en-go-lbl { display: none; }
+  body.easy .easy-next .en-go { padding: 0 .9rem; }
+}
+
+/* tablets / small laptops: minimap is the first thing to go */
+@media (max-width: 820px), (max-height: 520px) {
+  body.easy { --easy-ava: 3.4rem; }
+  body.easy .hud-avatar { font-size: 1.5rem; }
+  body.easy .hud-player { min-width: 0; max-width: 12.5rem; padding: .35rem .75rem; }
+  body.easy .hud-nick { font-size: 1rem; max-width: 8rem; }
+  body.easy .hud-currency { font-size: 1.08rem; }
+  body.easy .minimap-panel { display: none !important; }
+  body.easy .hud-right { width: auto; flex-direction: row; gap: .5rem; align-items: flex-start; }
+  body.easy .easy-where-btn { width: var(--tap); height: var(--tap); min-height: 0; padding: 0; border-radius: 50%; }
+  body.easy .easy-where-btn .lbl { display: none; }
+  body.easy .hud-left-menu { width: max(4.7rem, calc(var(--tap) + .6rem + 2px)); padding: .3rem; gap: .3rem; }
+  body.easy .hud-left-menu .lm-tile { min-height: var(--tap); padding: .25rem .1rem .3rem; }
+  body.easy .hud-left-menu .lm-emo { font-size: 1.7rem; }
+  body.easy .hud-left-menu .lbl { font-size: max(13px, .74rem); }
+  body.easy .bottom-bar > button { min-width: 4.6rem; min-height: var(--tap); padding: .2rem .35rem; }
+  body.easy .bottom-bar .bb-emo { font-size: 1.75rem; }
+  body.easy .bottom-bar .lbl { display: block; font-size: max(14px, .72rem); }
+  body.easy .easy-next { padding: .45rem .5rem; gap: .55rem; border-radius: 20px; }
+  body.easy .easy-next .en-emoji { width: 2.9rem; height: 2.9rem; font-size: 1.8rem; border-radius: 14px; }
+  body.easy .easy-next .en-label { display: none; }
+  body.easy .easy-next .en-text { font-size: 1.05rem; }
+  body.easy .easy-next .en-go .en-go-lbl { display: none; }
+  body.easy .easy-next .en-go { padding: 0; width: var(--tap); justify-content: center; }
+  body.easy .easy-next .en-btns { gap: .35rem; }
+  body.easy .easy-next .en-say { width: var(--tap); height: var(--tap); font-size: 1.2rem; }
+}
+
+/* phones (portrait): [avatar][stats] ......... [🗺️]  /  next-step card  /  tiles on the left  /  bar at the bottom */
+@media (max-width: 560px) {
+  body.easy .hud-player { display: flex; }
+  body.easy .hud-top-center { top: calc(var(--gap) + var(--easy-card) + .45rem); bottom: auto; left: var(--gap); right: var(--gap); width: auto; transform: none; }
+  body.easy .zone-label { top: calc(var(--gap) + var(--easy-card) + 6.4rem); }
+  body.easy .toast-root { top: calc(var(--gap) + var(--easy-card) + 5.6rem); }
+  body.easy .hud-player { max-width: calc(100vw - var(--easy-card) - 2 * var(--tap) - 2.6rem); }
+  body.easy .hud-left-menu { top: auto; bottom: calc(16rem + env(safe-area-inset-bottom, 0px)); }
+  body.easy.is-touch .hud-left-menu { bottom: calc(16rem + env(safe-area-inset-bottom, 0px)); }
+  body.easy .easy-chat-btn { left: auto; right: calc(var(--gap) + var(--tap) + .45rem); top: var(--gap); bottom: auto; width: var(--tap); height: var(--tap); }
+  body.easy .easy-chat-btn .lbl { display: none; }
+  body.easy .easy-chat-btn .emoji { font-size: 1.7rem; }
+  body.easy.show-chat .hud-left-menu { display: flex; }
+  body.easy.show-chat #chat-panel { left: .5rem; right: .5rem; width: auto; top: calc(var(--gap) + var(--easy-card) + 5.4rem); bottom: auto; }
+  body.easy.show-chat #chat-panel .chat-log { height: 6.5rem; }
+  body.easy .bottom-bar { left: .5rem; right: .5rem; transform: none; justify-content: space-around; }
+  body.easy .bottom-bar > button { flex: 1 1 0; min-width: 0; }
+  body.easy .bottom-bar > button + button::before { display: none; }
+  body.easy.is-touch .interact-prompt { bottom: calc(17.8rem + env(safe-area-inset-bottom, 0px)); }
+  body.easy .interact-prompt { max-width: calc(100vw - 11rem); font-size: 1.05rem; padding-right: 1rem; }
+  body.easy .interact-prompt .interact-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body.easy.is-touch .joystick { width: 8.8rem; height: 8.8rem; bottom: calc(6.4rem + env(safe-area-inset-bottom, 0px)); }
+  body.easy.is-touch .mobile-buttons { bottom: calc(6.4rem + env(safe-area-inset-bottom, 0px)); right: .6rem; }
+}
+
+/* landscape phones: tiles in a 2×2 block, card between profile and the corner buttons */
+@media (orientation: landscape) and (max-height: 520px) {
+  body.easy .hud-player { display: flex; max-width: calc(50vw - 21rem); min-width: 8rem; }
+  body.easy .hud-left-menu { top: calc(var(--gap) + var(--easy-card) + .4rem); bottom: auto; width: auto; display: grid; grid-template-columns: repeat(2, 3.7rem); }
+  body.easy .hud-left-menu .lm-tile { min-height: 3.5rem; }
+  body.easy .hud-left-menu .lbl { display: none; }
+  body.easy .hud-left-menu .lm-emo { font-size: 1.7rem; }
+  body.easy .hud-top-center { top: var(--gap); width: min(26rem, 42vw); }
+  body.easy .easy-chat-btn { left: auto; right: calc(var(--gap) + var(--tap) + .5rem); top: var(--gap); bottom: auto; width: var(--tap); height: var(--tap); }
+  body.easy .easy-chat-btn .lbl { display: none; }
+  body.easy .easy-chat-btn .emoji { font-size: 1.6rem; }
+  body.easy .zone-label { top: 5.2rem; }
+  body.easy .toast-root { top: 5rem; }
+  body.easy .bottom-bar { bottom: .35rem; }
+  body.easy .bottom-bar > button { min-width: 4.2rem; }
+  body.easy.is-touch .interact-prompt { bottom: 6.2rem; }
+  body.easy.is-touch .joystick { width: 7.6rem; height: 7.6rem; bottom: .9rem; }
+  body.easy.show-chat #chat-panel { left: calc(var(--gap) + 8.2rem); top: 6.8rem; bottom: auto; width: 15rem; }
+  body.easy.show-chat #chat-panel .chat-log { height: 4.6rem; }
+}
+/* landscape phones, normal mode: chat panel and joystick sit right of the slim left menu instead of on top of it */
+@media (orientation: landscape) and (max-height: 520px) {
+  body:not(.easy) .chat-panel { left: calc(var(--gap) + 3.4rem + .45rem); }
+  body.is-touch:not(.easy) .joystick { left: calc(var(--gap) + 3.4rem + .8rem); }
+}

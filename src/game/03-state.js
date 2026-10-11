@@ -32,16 +32,95 @@
     cameraShake: true,
     autoWeather: true,
     lockTime: false,
+    // ---- Phase 3: 쉬운 모드 (CONTRACT §12.1) — easy mode is the DEFAULT
+    easyMode: true,             // big picture UI for young children (body.easy / body.easy-off)
+    voiceGuide: true,           // read prompts aloud in easy mode (G.easy.say)
+    voiceRate: 0.95,            // speech rate for the voice guide (0.6 .. 1.4)
+    playReminderMin: 30,        // healthy-play reminder every N minutes of active play (0 = off)
+    kidChat: true,              // easy mode chat = preset phrases + emoji only (no free text)
+    parentGate: true,           // G.easy.gate() before grown-up screens (settings, logout, reset...)
   };
-  let stored = {};
-  try { stored = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { stored = {}; }
-  G.settings = Object.assign({}, DEFAULTS, stored);
+  /** settings that belong to the PLAYER (profile save) rather than the device: a parent who switches
+   *  easy mode off in their own profile must not leak that into a child's profile on the same device. */
+  const PROFILE_KEYS = ['easyMode', 'kidChat', 'parentGate'];
+  const ENUMS = { quality: ['auto', 'low', 'medium', 'high'] };
+  const RANGES = { volumeMaster: [0, 1], volumeMusic: [0, 1], volumeSfx: [0, 1], volumeAmbient: [0, 1], sensitivity: [0.2, 3], uiScale: [0.75, 1.4], voiceRate: [0.6, 1.4], playReminderMin: [0, 240] };
+  /** coerce a stored/imported value to the default's type (corrupt or hostile saves must not break the UI) */
+  function sanitize(key, value) {
+    const def = DEFAULTS[key];
+    if (def === undefined) return value; // unknown keys are kept as-is (other modules may add their own)
+    if (typeof def === 'boolean') return typeof value === 'boolean' ? value : def;
+    if (typeof def === 'number') {
+      const n = Number(value);
+      if (typeof value !== 'number' || !Number.isFinite(n)) return def;
+      const r = RANGES[key];
+      return r ? G.util.clamp(n, r[0], r[1]) : n;
+    }
+    if (typeof def === 'string') {
+      if (typeof value !== 'string') return def;
+      if (ENUMS[key] && !ENUMS[key].includes(value)) return def;
+      return value.slice(0, 40);
+    }
+    return value;
+  }
+  /**
+   * Device store format marker. Before it existed, setSetting serialised the whole merged G.settings, so a
+   * grown-up's profile could leak easyMode:false / parentGate:false / kidChat:false onto the device (the next
+   * child then got the normal-mode title with no gate). Stores without the marker drop those keys once
+   * (child-safe direction: back to the defaults = easy mode on, gate on).
+   */
+  const STORE_V = 2;
+  const isBadKey = (k) => k === '__proto__' || k === 'constructor' || k === 'prototype';
+  /** this device's stored settings object (never the merged in-memory G.settings) */
+  function readDevice() {
+    let dev = {};
+    try { dev = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { dev = {}; }
+    if (!dev || typeof dev !== 'object' || Array.isArray(dev)) dev = {};
+    if (dev._v !== STORE_V) {
+      for (const k of PROFILE_KEYS) delete dev[k];
+      dev._v = STORE_V;
+      try { localStorage.setItem(KEY, JSON.stringify(dev)); } catch (e) { /* storage blocked */ }
+    }
+    return dev;
+  }
+  const stored = readDevice();
+  G.settings = Object.assign({}, DEFAULTS);
+  for (const [k, v] of Object.entries(stored)) {
+    if (isBadKey(k) || k.charAt(0) === '_') continue;
+    G.settings[k] = sanitize(k, v);
+  }
   G.settingsDefaults = DEFAULTS;
+  G.settingsProfileKeys = PROFILE_KEYS;
+  G.sanitizeSetting = sanitize;
+  /** after logout: profile-scoped keys fall back to this device's stored values (title screen) */
+  G.restoreDeviceSettings = function () {
+    const dev = readDevice();
+    for (const k of PROFILE_KEYS) {
+      const v = sanitize(k, Object.prototype.hasOwnProperty.call(dev, k) ? dev[k] : DEFAULTS[k]);
+      if (G.settings[k] !== v) { G.settings[k] = v; G.bus.emit('settings:changed', { key: k, value: v }); }
+    }
+    G.applySettingsToDom();
+  };
+  /** the stored device value of a key (profile keys: what the title screen uses) */
+  G.deviceSetting = function (key) {
+    const dev = readDevice();
+    return sanitize(key, Object.prototype.hasOwnProperty.call(dev, key) ? dev[key] : DEFAULTS[key]);
+  };
 
   G.setSetting = function (key, value) {
+    if (typeof key !== 'string' || isBadKey(key) || key.charAt(0) === '_') return;
+    value = sanitize(key, value);
     if (G.settings[key] === value) return;
     G.settings[key] = value;
-    try { localStorage.setItem(KEY, JSON.stringify(G.settings)); } catch (e) { /* storage blocked */ }
+    // write ONLY this key to the device store. Profile-scoped keys (easy mode, kid chat, parent gate) changed
+    // while a profile is loaded belong to that profile's save only (§12.1) — they never touch the device.
+    if (!(PROFILE_KEYS.includes(key) && G.state)) {
+      try {
+        const dev = readDevice();
+        dev[key] = value;
+        localStorage.setItem(KEY, JSON.stringify(dev));
+      } catch (e) { /* storage blocked */ }
+    }
     G.applySettingsToDom();
     G.bus.emit('settings:changed', { key, value });
     G.dirty('settings');
@@ -49,10 +128,16 @@
   G.applySettingsToDom = function () {
     const b = document.body;
     if (!b) return;
-    document.documentElement.style.setProperty('--ui-scale', String(G.util.clamp(Number(G.settings.uiScale) || 1, 0.75, 1.4)));
+    const root = document.documentElement;
+    root.style.setProperty('--ui-scale', String(G.util.clamp(Number(G.settings.uiScale) || 1, 0.75, 1.4)));
     b.classList.toggle('high-contrast', !!G.settings.highContrast);
     b.classList.toggle('large-text', !!G.settings.largeText);
     b.classList.toggle('reduce-motion', !!G.settings.reduceMotion);
+    // 쉬운 모드 (§12.1): body.easy | body.easy-off, minimum tap size token
+    const easy = G.settings.easyMode !== false;
+    b.classList.toggle('easy', easy);
+    b.classList.toggle('easy-off', !easy);
+    root.style.setProperty('--tap', easy ? '56px' : '40px');
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => G.applySettingsToDom());
   else G.applySettingsToDom();
@@ -292,6 +377,24 @@
     LocalAdapter,
     ServerAdapter,
 
+    /**
+     * apply the settings stored in a profile save to G.settings (validated per key type).
+     * Profile-scoped keys (easyMode, kidChat, parentGate) ALWAYS come from the save, falling back to the
+     * defaults when the save predates them (existing players get easy mode = the default, §12.1).
+     * Emits settings:changed for every key whose value actually changed.
+     */
+    applyProfileSettings(state) {
+      const src = state && state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings) ? state.settings : {};
+      const defs = G.settingsDefaults, profileKeys = G.settingsProfileKeys || [];
+      const changed = [];
+      const set = (k, v) => { v = G.sanitizeSetting(k, v); if (G.settings[k] !== v) { G.settings[k] = v; changed.push([k, v]); } };
+      for (const [k, v] of Object.entries(src)) if (k in defs && !profileKeys.includes(k)) set(k, v);
+      for (const k of profileKeys) set(k, Object.prototype.hasOwnProperty.call(src, k) ? src[k] : defs[k]);
+      G.applySettingsToDom();
+      for (const [key, value] of changed) G.bus.emit('settings:changed', { key, value });
+      return changed.length;
+    },
+
     /** choose who we are saving for. mode: 'local' | 'server' */
     useProfile(profile, mode) {
       G.save.profile = profile;
@@ -313,10 +416,7 @@
       const state = normalize(res.data, profile);
       state._isNew = isNew;
       if (res.source === 'backup') G.ui?.toast?.('저장 파일이 손상되어 백업본으로 복구했습니다.', { type: 'warn' });
-      if (state.settings && Object.keys(state.settings).length) {
-        for (const [k, v] of Object.entries(state.settings)) if (k in G.settingsDefaults) G.settings[k] = v;
-        G.applySettingsToDom();
-      }
+      G.save.applyProfileSettings(state);
       G.save.dirty = false;
       G.log.info('SAVE', `loaded profile ${profile.id} (${res.source}${isNew ? ', new' : ''})`);
       return state;
@@ -343,6 +443,7 @@
         if (G.save._pendingServerRestore) {
           const srv = G.save._pendingServerRestore; G.save._pendingServerRestore = null;
           G.state = normalize(typeof srv.data === 'string' ? JSON.parse(srv.data) : srv.data, G.save.profile);
+          G.save.applyProfileSettings(G.state);
           G.applyState();
           G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
         } else if (opts.notify || opts.reason === 'manual') {
@@ -380,6 +481,7 @@
       G.save.adapter.remove?.(p.id);
       G.state = normalize(null, p);
       G.state._isNew = true;
+      G.save.applyProfileSettings(G.state); // a fresh start is a child-safe start (easy mode = default)
       await G.save.save({ reason: 'reset' });
       G.applyState();
     },
@@ -389,6 +491,7 @@
       const obj = JSON.parse(text);
       if (!obj || obj.app !== 'tfm-metaverse' || !obj.state) throw new Error('올바른 저장 파일이 아닙니다.');
       G.state = normalize(obj.state, G.save.profile);
+      G.save.applyProfileSettings(G.state);
       G.applyState();
       return G.save.save({ reason: 'import', notify: true });
     },

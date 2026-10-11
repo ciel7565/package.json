@@ -26,7 +26,7 @@ final class GameData
             Log::warn('DATA', 'game-data.json missing or invalid — run "node tools/build.mjs" to regenerate it');
             $d = [];
         }
-        foreach (['quests', 'achievements', 'quizzes', 'crops', 'recipes', 'items', 'limits'] as $k) {
+        foreach (['quests', 'achievements', 'quizzes', 'crops', 'recipes', 'items', 'limits', 'titles'] as $k) {
             if (!isset($d[$k]) || !is_array($d[$k])) $d[$k] = [];
         }
         return self::$d = $d;
@@ -40,6 +40,9 @@ final class GameData
         $v = self::all()['limits'][$k] ?? null;
         return is_numeric($v) ? $v + 0 : $def;
     }
+
+    /** titles a player can earn (level + reward titles); empty when the export predates the list */
+    public static function titles(): array { return array_values(array_filter(self::all()['titles'], 'is_string')); }
 
     public static function item(string $id): ?array { $i = self::all()['items'][$id] ?? null; return is_array($i) ? $i : null; }
     public static function crop(string $id): ?array { $c = self::all()['crops'][$id] ?? null; return is_array($c) ? $c : null; }

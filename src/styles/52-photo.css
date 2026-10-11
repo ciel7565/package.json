@@ -237,3 +237,179 @@ body.photo-mode #game-container canvas:active { cursor: grabbing; }
   .photo-ui.clean .ph-left { transform: translateX(-1rem); }
   .photo-ui.clean .ph-right { transform: translateX(1rem); }
 }
+
+/* =============================================================================
+   쉬운 모드 photo mode (CONTRACT §12): kid overlay .ph-kid replaces the adult panels.
+   Tap targets >= var(--tap); every motion is slow or a one-shot; reduce-motion turns them off.
+   ============================================================================= */
+.photo-ui > .ph-kid, .photo-ui > .ph-flash { pointer-events: none; }
+.ph-kid { display: none; position: absolute; inset: 0; }
+body.easy .photo-ui > .ph-top, body.easy .photo-ui > .ph-left, body.easy .photo-ui > .ph-right,
+body.easy .photo-ui > .ph-bottom, body.easy .photo-ui > .ph-card, body.easy .photo-ui > .ph-grid,
+body.easy .photo-ui > .ph-countdown, body.easy .photo-ui > .ph-vignette { display: none !important; }
+body.easy .ph-kid { display: block; }
+.ph-kid > .phk-col, .ph-kid > .phk-card { pointer-events: auto; }
+.ph-kid > .phk-top, .ph-kid > .phk-bottom, .ph-kid > .phk-click { pointer-events: none; }
+.phk-stage { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+
+/* soft single flash (both modes) */
+.ph-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 5; }
+.ph-flash.on { animation: phSoftFlash .55s ease-out 1; }
+.ph-flash.glow { background: transparent; opacity: 1; box-shadow: inset 0 0 0 10px rgba(255, 210, 63, .75), inset 0 0 60px rgba(255, 210, 63, .45); animation: phGlow .8s ease-out 1 forwards; }
+@keyframes phSoftFlash { 0% { opacity: 0; } 20% { opacity: .5; } 100% { opacity: 0; } }
+@keyframes phGlow { 0% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 0; } }
+
+/* top row */
+.phk-top { position: absolute; top: calc(var(--gap) + env(safe-area-inset-top, 0px)); left: var(--gap); right: var(--gap); display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem; pointer-events: none; }
+.phk-top > * { pointer-events: auto; }
+.phk-exit { min-height: var(--tap, 56px); }
+.phk-title {
+  display: inline-flex; align-items: center; gap: .45rem; padding: .55rem 1rem; border-radius: 999px; font-size: 1.12rem;
+  border: 2px solid rgba(255, 255, 255, .3); pointer-events: none; min-width: 0;
+}
+.phk-title .emoji { font-size: 1.5rem; }
+.phk-zone { padding: .1rem .55rem; border-radius: 999px; background: rgba(255, 210, 63, .9); color: #2b1d02; font-size: .85rem; font-weight: 800; white-space: nowrap; }
+.phk-album {
+  position: relative; display: grid; place-items: center; width: calc(var(--tap, 56px) + 1rem); height: calc(var(--tap, 56px) + 1rem);
+  border-radius: 20px; overflow: hidden; border: 3px solid rgba(255, 255, 255, .8); padding: 0;
+}
+.phk-album .phk-last { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.phk-album-emo { font-size: 1.9rem; position: relative; }
+.phk-album .phk-last:not([hidden]) + .phk-album-emo { display: none; }
+.phk-count {
+  position: absolute; right: .2rem; bottom: .2rem; min-width: 1.5rem; height: 1.5rem; padding: 0 .3rem; border-radius: 999px;
+  display: grid; place-items: center; background: #ffd23f; color: #2b1d02; font-size: .8rem; font-weight: 900; border: 2px solid #fff;
+}
+
+/* side columns: poses (left) / frames (right) */
+.phk-col {
+  position: absolute; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: .45rem; padding: .55rem .45rem;
+  border-radius: 24px; border: 2px solid rgba(255, 255, 255, .22); max-height: calc(100% - 17rem); overflow-y: auto; scrollbar-width: none;
+}
+.phk-col::-webkit-scrollbar { display: none; }
+.phk-left { left: var(--gap); }
+.phk-right { right: var(--gap); }
+.phk-col-title { text-align: center; font-size: max(1rem, 16px); font-weight: 900; color: var(--gold, #f4c54a); }
+.phk-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; width: calc(var(--tap, 56px) + 1rem); min-height: calc(var(--tap, 56px) + .8rem);
+  border-radius: 18px; background: linear-gradient(180deg, #fff, #ffe9b8); color: #2a2412; font-weight: 800; border: 3px solid rgba(255, 255, 255, .9);
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .28); transition: transform .15s cubic-bezier(.34, 1.56, .64, 1); touch-action: manipulation; flex: none;
+}
+.phk-tile .phk-emo { font-size: 1.9rem; line-height: 1.1; }
+.phk-lbl { font-size: max(1rem, 16px); line-height: 1.15; white-space: nowrap; }
+.phk-tile:active { transform: translateY(3px) scale(.94); box-shadow: 0 1px 0 rgba(0, 0, 0, .28); }
+.phk-tile.active { border-color: #ffd23f; background: linear-gradient(180deg, #fff6c8, #ffd23f); box-shadow: 0 0 0 3px rgba(255, 210, 63, .6), 0 4px 0 rgba(0, 0, 0, .28); }
+
+/* bottom: sticker tray + giant shutter */
+.phk-bottom {
+  position: absolute; left: 50%; bottom: calc(var(--gap) + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: .6rem; pointer-events: none; width: max-content; max-width: calc(100% - 2 * var(--gap));
+}
+.phk-bottom > * { pointer-events: auto; }
+.phk-stickers { display: flex; gap: .35rem; padding: .35rem .5rem; border-radius: 999px; border: 2px solid rgba(255, 255, 255, .22); max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.phk-st-btn {
+  flex: none; display: grid; place-items: center; width: var(--tap, 56px); height: var(--tap, 56px); border-radius: 50%;
+  font-size: 1.75rem; background: rgba(255, 255, 255, .16); border: 2px solid rgba(255, 255, 255, .3); touch-action: manipulation;
+  transition: transform .15s cubic-bezier(.34, 1.56, .64, 1);
+}
+.phk-st-btn:hover { background: rgba(255, 255, 255, .28); }
+.phk-st-btn:active { transform: scale(.88); }
+.phk-shoot-row { display: flex; align-items: center; gap: 1.1rem; }
+.phk-side {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; width: calc(var(--tap, 56px) + 1.4rem); height: calc(var(--tap, 56px) + 1.4rem);
+  border-radius: 50%; background: rgba(12, 20, 16, .72); border: 3px solid rgba(255, 255, 255, .55); color: #fff; touch-action: manipulation;
+}
+.phk-side .emoji { font-size: 1.6rem; line-height: 1.1; }
+.phk-side .phk-lbl { font-size: max(1rem, 16px); font-weight: 800; }
+.phk-side:active { transform: scale(.92); }
+.phk-shutter {
+  display: grid; place-items: center; width: 7rem; height: 7rem; border-radius: 50%; font-size: 3.3rem; touch-action: manipulation;
+  background: radial-gradient(circle at 40% 32%, #fff 0, #ffe27a 45%, #f4b400 100%); border: 6px solid #fff;
+  box-shadow: 0 0 0 5px rgba(255, 210, 63, .55), 0 8px 0 rgba(140, 95, 0, .55), 0 14px 28px rgba(0, 0, 0, .45);
+  transition: transform .12s cubic-bezier(.34, 1.56, .64, 1);
+}
+.phk-shutter:hover { transform: scale(1.04); }
+.phk-shutter:active { transform: translateY(5px) scale(.94); box-shadow: 0 0 0 5px rgba(255, 210, 63, .55), 0 2px 0 rgba(140, 95, 0, .55); }
+@media (prefers-reduced-motion: no-preference) {
+  body:not(.reduce-motion) .phk-shutter { animation: phkBreath 2.6s ease-in-out infinite; }
+}
+@keyframes phkBreath { 0%, 100% { box-shadow: 0 0 0 5px rgba(255, 210, 63, .55), 0 8px 0 rgba(140, 95, 0, .55), 0 14px 28px rgba(0, 0, 0, .45); } 50% { box-shadow: 0 0 0 11px rgba(255, 210, 63, .3), 0 8px 0 rgba(140, 95, 0, .55), 0 14px 28px rgba(0, 0, 0, .45); } }
+
+/* stickers on the picture: font-size matches the capture (12% of the short screen side) */
+.phk-sticker {
+  position: absolute; transform: translate(-50%, -50%); font-size: calc(min(100vw, 100vh) * .12); line-height: 1; pointer-events: auto;
+  cursor: grab; touch-action: none; user-select: none; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .35));
+}
+.phk-sticker.dragging { cursor: grabbing; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .45)); }
+.phk-sticker.pop { animation: phkPop .45s cubic-bezier(.34, 1.56, .64, 1); }
+.phk-sticker.wiggle { animation: phkWiggle .6s ease-in-out; }
+@keyframes phkPop { 0% { transform: translate(-50%, -50%) scale(.2); } 100% { transform: translate(-50%, -50%) scale(1); } }
+@keyframes phkWiggle { 0%, 100% { transform: translate(-50%, -50%) rotate(0); } 30% { transform: translate(-50%, -50%) rotate(-12deg); } 65% { transform: translate(-50%, -50%) rotate(10deg); } }
+
+/* "찰칵!" pop */
+.phk-click {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%) scale(.6); opacity: 0; pointer-events: none; z-index: 6;
+  font-size: clamp(2.6rem, 9vmin, 5rem); font-weight: 900; color: #fff; letter-spacing: .02em;
+  text-shadow: 0 4px 0 #e2a412, 0 8px 18px rgba(0, 0, 0, .45); -webkit-text-stroke: 2px #b37800;
+}
+.phk-click.on { animation: phkClick .9s cubic-bezier(.34, 1.56, .64, 1) 1; }
+@keyframes phkClick { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.6); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); } 70% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -60%) scale(1); } }
+
+/* after the shot */
+.phk-card {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 7; display: flex; align-items: center; gap: 1rem;
+  width: min(34rem, calc(100% - 2rem)); padding: 1rem; border-radius: 26px; border: 3px solid rgba(255, 255, 255, .5);
+}
+.phk-card.in { animation: phkCardIn .35s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes phkCardIn { 0% { opacity: 0; transform: translate(-50%, -46%) scale(.9); } 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+.phk-card img { width: 11rem; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 16px; border: 4px solid #fff; flex: none; transform: rotate(-3deg); box-shadow: 0 8px 18px rgba(0, 0, 0, .4); }
+.phk-card-main { display: flex; flex-direction: column; gap: .7rem; min-width: 0; }
+.phk-card-main b { font-size: 1.22rem; }
+.phk-card-btns { display: flex; flex-wrap: wrap; gap: .45rem; }
+.phk-card-btns .easy-big-btn { min-height: var(--tap, 56px); padding: .3rem .8rem; font-size: 1rem; }
+
+/* kid album */
+.pg-kid .pg-grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: .9rem; }
+.pg-kid .pg-item { border-radius: 18px; border: 4px solid #fff; transform: rotate(-.6deg); box-shadow: 0 6px 14px rgba(0, 0, 0, .35); }
+.pg-kid .pg-item:nth-child(2n) { transform: rotate(.8deg); }
+.pg-kid .pg-meta small { display: none; }
+.pg-kid .pg-empty-emo { font-size: 3.6rem; }
+.pg-kid .pg-empty b { font-size: 1.2rem; }
+.pg-kid .pg-empty p { font-size: 1.05rem; }
+.pg-kid .pg-nav { width: var(--tap, 56px); height: var(--tap, 56px); }
+.pg-kid .modal-foot .btn { min-height: var(--tap, 56px); font-size: 1.02rem; padding: .4rem 1rem; }
+
+body.reduce-motion .phk-sticker, body.reduce-motion .phk-click, body.reduce-motion .phk-card, body.reduce-motion .phk-shutter { animation: none !important; }
+
+/* phones (portrait) */
+@media (max-width: 600px) {
+  .phk-title b { display: none; }
+  .phk-title { padding: .45rem .7rem; }
+  .phk-col { padding: .4rem .3rem; gap: .35rem; max-height: calc(100% - 20rem); }
+  .phk-tile { width: var(--tap, 56px); min-height: var(--tap, 56px); border-radius: 16px; }
+  .phk-tile .phk-emo { font-size: 1.55rem; }
+  .phk-st-btn { font-size: 1.55rem; }
+  .phk-stickers { gap: .2rem; padding: .25rem .3rem; }
+  .phk-shutter { width: 6rem; height: 6rem; font-size: 2.8rem; }
+  .phk-card { flex-direction: column; text-align: center; }
+  .phk-card img { width: 70%; }
+  .phk-card-btns { justify-content: center; }
+}
+/* short landscape (phones on their side): one bottom row, compact columns */
+@media (max-height: 560px) {
+  .phk-bottom { flex-direction: row; align-items: center; gap: .8rem; }
+  /* two compact columns per side, between the top row and the bottom row */
+  .phk-col {
+    display: grid; grid-template-columns: repeat(2, auto); align-content: start; gap: .3rem; padding: .35rem;
+    top: calc(var(--gap) + var(--tap, 56px) + 1.4rem); transform: none; max-height: calc(100% - 2 * var(--tap, 56px) - 4.6rem);
+  }
+  .phk-col-title { grid-column: 1 / -1; font-size: .74rem; }
+  .phk-tile { width: calc(var(--tap, 56px) - .6rem); min-height: calc(var(--tap, 56px) - .8rem); border-radius: 14px; }
+  .phk-tile .phk-emo { font-size: 1.45rem; }
+  .phk-tile .phk-lbl { display: none; }
+  .phk-shutter { width: 5.2rem; height: 5.2rem; font-size: 2.4rem; }
+  .phk-side { width: var(--tap, 56px); height: var(--tap, 56px); }
+  .phk-side .phk-lbl { display: none; }
+  .phk-st-btn { font-size: 1.45rem; }
+  .phk-stickers { gap: .2rem; padding: .25rem .3rem; }
+}

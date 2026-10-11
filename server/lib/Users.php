@@ -47,6 +47,8 @@ final class Users
         if (in_array($low, array_map('mb_strtolower', self::RESERVED), true)) return '사용할 수 없는 닉네임이에요.';
         if (preg_match('/^(게스트|guest)/iu', $nick)) return '‘게스트’로 시작하는 닉네임은 사용할 수 없어요.';
         if (ChatFilter::containsBadWord($nick)) return '바르고 고운 닉네임을 사용해 주세요.';
+        // nicknames are shown to everyone: no phone numbers, addresses, school names or messenger ids (kid safety)
+        if (ChatFilter::nicknameLooksPersonal($nick)) return '전화번호·주소·학교 같은 개인정보는 닉네임에 쓸 수 없어요. 🔒';
         return null;
     }
 

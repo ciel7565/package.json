@@ -55,3 +55,43 @@ body.reduce-motion .interact-prompt .ip-key { animation: none; }
   body.is-touch .interact-prompt { bottom: calc(max(.5rem, env(safe-area-inset-bottom)) + 3.6rem); font-size: .8rem; }
   body.is-touch .interact-prompt .ip-key { width: 1.7rem; height: 1.7rem; min-width: 1.7rem; }
 }
+
+/* =============================================================================
+   쉬운 모드 (CONTRACT §12): big gold prompt = [target picture] [short words] [👆 눌러요!]
+   The base pill (gold gradient, picture circle, bob) comes from 01-hud.css (body.easy .interact-prompt);
+   this file adds the "👆 눌러요!" chip and replaces the generic ::after hand with it.
+   ============================================================================= */
+.interact-prompt .ip-tap { display: none; }
+body.easy .interact-prompt.kid::after { content: none; display: none; }
+body.easy .interact-prompt.kid { min-width: min(17rem, calc(100vw - 2rem)); justify-content: flex-start; padding-right: .5rem; }
+body.easy .interact-prompt.kid .interact-text { flex: 1 1 auto; min-width: 0; letter-spacing: -.02em; }
+body.easy .interact-prompt.touch .interact-text::after { content: none; }
+body.easy .interact-prompt .ip-tap {
+  display: inline-flex; align-items: center; gap: .2rem; flex: none; margin-left: .35rem;
+  min-height: calc(var(--tap) - .35rem); padding: 0 .85rem 0 .55rem; border-radius: 999px;
+  background: linear-gradient(180deg, #5ee08f, #1f9e52); color: #fff; font-size: 1.02rem; font-weight: 900; white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .35); border: 2px solid rgba(255, 255, 255, .85);
+  box-shadow: 0 4px 0 rgba(10, 90, 40, .55), inset 0 1px 0 rgba(255, 255, 255, .4);
+}
+body.easy .interact-prompt .ip-tap-hand { font-size: 1.45rem; line-height: 1; display: inline-block; animation: ixTap 1.1s ease-in-out infinite; }
+body.easy .interact-prompt:active .ip-tap { transform: translateY(3px); box-shadow: 0 1px 0 rgba(10, 90, 40, .55); }
+@keyframes ixTap { 0%, 100% { translate: 0 0; } 45% { translate: 0 -5px; } 60% { translate: 0 -3px; } }
+@media (max-width: 560px) {
+  body.easy .interact-prompt.kid { min-width: 0; }
+  body.easy .interact-prompt .ip-tap { padding: 0 .55rem; }
+  body.easy .interact-prompt .ip-tap-lbl { display: none; }
+}
+
+/* the bouncing world hand above the focused thing (G.ui.label) — the soft "hint" one marks the nearest thing */
+.wl.ix-hand { padding: 0; background: none; border: 0; box-shadow: none; line-height: 1; touch-action: manipulation; }
+.ix-hand .ixh-glyph {
+  font-size: 2.7rem; transform: rotate(180deg); transform-origin: 50% 50%;
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, .45)) drop-shadow(0 0 10px rgba(255, 220, 120, .7));
+  min-width: 56px; min-height: 56px; display: grid; place-items: center;
+}
+.ix-hand.hint .ixh-glyph { font-size: 2rem; opacity: .78; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .4)); }
+body:not(.easy) .wl.ix-hand { display: none !important; }
+body.dialogue-open .wl.ix-hand, body.photo-mode .wl.ix-hand, body.hud-hidden .wl.ix-hand { visibility: hidden; }
+
+body.reduce-motion.easy .interact-prompt .ip-tap-hand { animation: none; }
+@media (prefers-reduced-motion: reduce) { body.easy .interact-prompt .ip-tap-hand { animation: none; } }

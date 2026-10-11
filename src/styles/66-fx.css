@@ -66,15 +66,17 @@
 .fx-lu.out { animation: fxLuOut .5s ease forwards; }
 .fx-lu-flash {
   position: absolute; inset: 0;
-  background: radial-gradient(circle at 50% 46%, rgba(255, 240, 190, .6), rgba(255, 205, 90, .18) 35%, rgba(255, 200, 80, 0) 65%);
-  animation: fxLuFlash .9s ease-out both;
+  background: radial-gradient(circle at 50% 46%, rgba(255, 240, 190, .5), rgba(255, 205, 90, .16) 35%, rgba(255, 200, 80, 0) 65%);
+  /* photosensitivity: a large bright area eases in over ~0.6 s (never a hard flash) */
+  animation: fxLuFlash 1.4s ease-in-out both;
 }
 .fx-lu-rays {
   position: absolute; left: 50%; top: 46%; width: 170vmax; height: 170vmax; margin: -85vmax 0 0 -85vmax;
   background: repeating-conic-gradient(from 0deg, rgba(255, 214, 102, 0) 0deg 5deg, rgba(255, 220, 120, .34) 6deg 8deg, rgba(255, 214, 102, 0) 9deg 15deg);
   -webkit-mask-image: radial-gradient(circle, #000 0, rgba(0,0,0,.85) 12%, transparent 46%);
   mask-image: radial-gradient(circle, #000 0, rgba(0,0,0,.85) 12%, transparent 46%);
-  animation: fxSpin 11s linear infinite, fxLuRays 3.4s ease both;
+  /* 24 stripes per turn: 20 s/turn = 1.2 stripes/s at any point (well under 3 Hz) */
+  animation: fxSpin 20s linear infinite, fxLuRays 3.4s ease both;
 }
 .fx-lu-glow {
   position: absolute; left: 50%; top: 46%; width: min(92vw, 640px); height: min(70vh, 460px); transform: translate(-50%, -50%);
@@ -111,8 +113,11 @@
 }
 .fx-lu-sub b { color: var(--gold, #f4c54a); }
 .fx-lu-note { margin-top: .35rem; font-size: .7rem; color: rgba(255, 255, 255, .72); text-shadow: 0 1px 3px rgba(0, 0, 0, .8); animation: fxRise .5s .7s ease both; }
-.fx-lu.fx-static .fx-lu-card, .fx-lu.fx-static .fx-lu-sub, .fx-lu.fx-static .fx-lu-note, .fx-lu.fx-static .fx-lu-mascot, .fx-lu.fx-static .fx-lu-flash { animation: fxFade .3s ease both; }
-@keyframes fxLuFlash { 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: .35; } }
+.fx-lu.fx-static .fx-lu-card, .fx-lu.fx-static .fx-lu-sub, .fx-lu.fx-static .fx-lu-note, .fx-lu.fx-static .fx-lu-mascot { animation: fxFade .3s ease both; }
+/* the big light never pops in, even without motion */
+.fx-lu.fx-static .fx-lu-flash { animation: fxLuFlashKid 1.6s ease-in-out both; }
+@keyframes fxLuFlash { 0% { opacity: 0; } 42% { opacity: 1; } 100% { opacity: .35; } }
+@keyframes fxLuFlashKid { 0% { opacity: 0; } 45% { opacity: .7; } 100% { opacity: .25; } }
 @keyframes fxLuRays { 0% { opacity: 0; } 14% { opacity: 1; } 75% { opacity: .9; } 100% { opacity: 0; } }
 @keyframes fxLuRing { 0% { opacity: 1; transform: scale(.3); } 100% { opacity: 0; transform: scale(14); } }
 @keyframes fxLuPop { 0% { opacity: 0; transform: translateY(-4%) scale(.5); } 60% { opacity: 1; transform: translateY(-4%) scale(1.08); } 100% { opacity: 1; transform: translateY(-4%) scale(1); } }
@@ -121,6 +126,21 @@
 @keyframes fxHop { 0%, 100% { transform: translateY(0) scale(1, 1); } 30% { transform: translateY(-14px) scale(.94, 1.06); } 55% { transform: translateY(0) scale(1.08, .92); } 70% { transform: translateY(-4px) scale(1, 1); } }
 @keyframes fxRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes fxSpin { to { rotate: 360deg; } }
+
+/* ------------------------------------------------------------------ 쉬운 모드 (kid celebrations: softer light, slower motion) */
+.fx-lu.fx-kid .fx-lu-flash { animation-name: fxLuFlashKid; animation-duration: 1.6s; }
+.fx-lu.fx-kid .fx-lu-rays { animation: fxSpin 28s linear infinite, fxLuRays 3.4s ease both; }
+.fx-lu.fx-kid .fx-lu-ring { animation-duration: 1.6s; }
+.fx-lu.fx-kid .fx-lu-mascot { width: 116px; height: 116px; }
+.fx-lu.fx-kid .fx-lu-title { font-size: 3.4rem; }
+.fx-lu-star { font-size: 3.4rem; padding-bottom: .4rem; filter: drop-shadow(0 0 14px rgba(255, 212, 59, .9)); }
+.fx-lu.fx-kid .fx-lu-sub { font-size: 1.15rem; padding: .5rem 1.2rem; }
+.fx-stamp-wrap.fx-kid .fx-stamp { padding: .5rem 1.6rem .65rem; border-radius: 28px; }
+.fx-stamp-wrap.fx-kid .fx-stamp-text { font-size: 2.9rem; letter-spacing: .02em; }
+.fx-stamp-wrap.fx-kid .fx-stamp-sub { font-size: 1.1rem; }
+.fx-stamp-star { position: absolute; top: -1.4rem; right: -1.1rem; font-size: 2.6rem; transform: rotate(14deg); filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .3)); }
+.fx-stamp-wrap.fx-kid:not(.fx-static) .fx-stamp-star { animation: fxStarPop .6s .35s cubic-bezier(.2, .9, .25, 1.2) both; }
+@keyframes fxStarPop { from { transform: rotate(-30deg) scale(.2); } to { transform: rotate(14deg) scale(1); } }
 
 /* ------------------------------------------------------------------ shine sweeps (exp bar, achievement toast) */
 .fx-shine-clip { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; z-index: 1; display: block; }
@@ -137,6 +157,9 @@ body.photo-mode .fx-root { display: none; }
 /* ------------------------------------------------------------------ responsive & accessibility */
 @media (max-width: 640px) {
   .fx-stamp-text { font-size: 2.5rem; }
+  .fx-stamp-wrap.fx-kid .fx-stamp-text { font-size: 2.2rem; }
+  .fx-lu.fx-kid .fx-lu-title { font-size: 2.6rem; }
+  .fx-lu-star { font-size: 2.6rem; }
   .fx-lu-title { font-size: 2.4rem; }
   .fx-lu-num { font-size: 4rem; }
   .fx-lu-lv { font-size: 1.6rem; padding-bottom: .45rem; }
@@ -148,8 +171,11 @@ body.photo-mode .fx-root { display: none; }
   .fx-stamp-wrap { top: 40%; }
 }
 body.reduce-motion .fx-lu-rays, body.reduce-motion .fx-lu-ring, body.reduce-motion .fx-stamp-ink { display: none; }
+body.reduce-motion .fx-stamp-star { animation: none; }
 body.reduce-motion .fx-stamp, body.reduce-motion .fx-lu-card, body.reduce-motion .fx-lu-mascot { animation: fxFade .25s ease both; }
 @media (prefers-reduced-motion: reduce) {
   .fx-lu-rays, .fx-lu-ring, .fx-stamp-ink { display: none; }
   .fx-stamp, .fx-lu-card, .fx-lu-mascot, .fx-lu-num.fx-lu-final { animation: fxFade .25s ease both; }
+  .fx-stamp-star { animation: fxFade .4s ease both; }
+  .fx-lu-flash { animation: fxLuFlashKid 1.6s ease-in-out both; }
 }

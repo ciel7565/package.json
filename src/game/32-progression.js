@@ -9,6 +9,11 @@
 //   (id 'collection') with 도감 / 업적 / 내 기록 tabs; hotkey C + actions `collection`, `achievements`.
 //   setTitle(name) / addTitle(name, {silent}) / titles()
 //   celebrate('levelup'|'quest') / refreshHud()
+//   openStickerbook(tab?) — alias of openHub (devcenter / 08-easy 'stickerbook' action)
+// 쉬운 모드 (CONTRACT §12): the same modal becomes "📖 스티커북" with big tabs 📜 할 일 (G.sys.quest.renderList) ·
+//   📖 도감 (sticker sheet; locked = grey silhouette + "?", tap -> card with a kid hint and 👉 찾으러 가기) ·
+//   🏆 업적 (medals with a progress ring) · ⭐ 나 (level, picture stats, 이름표, 🎨 옷 갈아입기). Toasts are short kid
+//   sentences read aloud; level-up = kid toast + voice (66-fx plays the big show). Normal mode keeps 도감·업적·내 기록.
 // Stats are maintained only here, from bus events (CONTRACT §4). exp = progress inside the current level,
 // expTotal = lifetime exp (monotonic, handy for server-side validation).
 // Emits reward:granted, level:up, achievement:unlocked, collection:unlocked. Hotkey C, action `collection`.
@@ -60,6 +65,106 @@
       default: return null;
     }
   }
+
+  // ---------------------------------------------------------------- 쉬운 모드 helpers (CONTRACT §12)
+  const easyOn = () => !!(G.easy && G.easy.on);
+  const kjo = (w, p) => (G.kidKit?.josa ? G.kidKit.josa(w, p) : `${w}${String(p).split('/')[1]}`);
+  const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+  const KID_TABS = [
+    { id: 'quest', emoji: '📜', label: '할 일', say: '할 일이에요. 선물도 받을 수 있어요.' },
+    { id: 'col', emoji: '📖', label: '도감', say: '스티커 도감이에요. 찾은 스티커를 봐요.' },
+    { id: 'ach', emoji: '🏆', label: '업적', say: '메달이에요. 동그라미가 다 차면 메달을 받아요.' },
+    { id: 'me', emoji: '⭐', label: '나', say: '내가 한 일을 봐요.' },
+  ];
+  const CAT_COLOR = { crop: '#8fd14f', fermented: '#ffb347', jar: '#c98b5e', tool: '#d3a46a', plant: '#36cfc0', npc: '#4fb3ff', edu: '#b48bff' };
+  /** an achievement goal in kid words (from its condition, so new data still reads well) */
+  function kidAchText(a) {
+    const n = Math.max(1, Number(a?.condition?.gte) || 1);
+    switch (a?.condition?.stat) {
+      case 'logins': return n > 1 ? `체험관에 ${n}번 놀러 와요` : '체험관에 놀러 와요';
+      case 'waters': return n > 1 ? `밭에 물을 ${n}번 줘요` : '밭에 물을 줘요';
+      case 'plants': return `씨앗을 ${n}번 심어요`;
+      case 'harvests': return n > 1 ? `채소를 ${n}번 거둬요` : '채소를 거둬요';
+      case 'fermentsClaimed': return n > 1 ? `장을 ${n}번 완성해요` : '장독에서 장을 완성해요';
+      case 'quizCorrect': return n > 1 ? `퀴즈를 ${n}개 맞혀요` : '퀴즈를 맞혀요';
+      case 'journals': return n > 1 ? `그림일기를 ${n}번 써요` : '그림일기를 써요';
+      case 'photos': return `사진을 ${n}장 찍어요`;
+      case 'zonesVisited': return '체험관의 모든 곳에 가 봐요';
+      case 'cropKinds': return `채소를 ${n}가지 거둬요`;
+      case 'eduCompleted': return `그림 이야기를 ${n}개 끝까지 봐요`;
+      case 'level': return `레벨 ${n}까지 놀아요`;
+      case 'socials': return `표현하기를 ${n}번 해요`;
+      case 'distance': return '체험관을 아주 많이 걸어요';
+      case 'npcsTalked': return '모든 친구랑 이야기해요';
+      case 'chats': return '친구에게 인사해요';
+      case 'crafts': return `작업대에서 ${n}번 만들어요`;
+      default: return a?.desc || '';
+    }
+  }
+  /** how to find a locked sticker, in kid words */
+  function kidRuleHint(r) {
+    switch (r?.on) {
+      case 'harvest': { const c = G.data.crops?.[r.crop]; return c ? `${kjo(c.name, '을/를')} 거두면 생겨요` : null; }
+      case 'item': { const it = G.data.items?.[r.item]; return it ? `${kjo(it.name, '을/를')} 가지면 생겨요` : null; }
+      case 'talk': { const n = G.data.npcs?.[r.npc]; return n ? `${kjo(n.name, '이랑/랑')} 이야기하면 생겨요` : null; }
+      case 'edu': return '그림 이야기를 끝까지 보면 생겨요';
+      case 'interact': { const a = G.data.layout?.get?.(r.id); const n = a?.name || a?.title; return n ? `${kjo(n, '을/를')} 살펴보면 생겨요` : '반짝이는 것을 살펴보면 생겨요'; }
+      case 'visit': { const z = (G.data.zones || []).find((x) => x.id === r.zone); return z ? `${z.short || z.name}에 가면 생겨요` : null; }
+      case 'claim': { const rc = G.data.recipes?.[r.recipe]; return rc ? `장독에서 ${kjo(rc.name.replace(/\s*체험$/, ''), '을/를')} 꺼내면 생겨요` : '장독에서 장을 꺼내면 생겨요'; }
+      default: return null;
+    }
+  }
+  /** a walkable place where a locked sticker can be found -> {x, z, label, stop} | null */
+  function ruleTarget(r) {
+    const L = G.data.layout || {};
+    const p = G.sys.player?.position;
+    const near = (list) => { let best = null, bd = Infinity; for (const a of list || []) { if (!a) continue; const d = p ? Math.hypot(a.x - p.x, a.z - p.z) : 0; if (d < bd) { bd = d; best = a; } } return best; };
+    const zoneC = (id, label) => { const z = (G.data.zones || []).find((x) => x.id === id); return z ? { x: z.center[0], z: z.center[1], label: label || z.short || z.name, stop: 3 } : null; };
+    const plotWith = (cropId) => {
+      const crop = G.data.crops?.[cropId];
+      if (!crop) return null;
+      const plots = (L.farmPlots || []).filter((d) => { let s = null; try { s = G.sys.farming?.getPlot?.(d.id); } catch (e) { s = null; } return (s ? s.cropId : d.crop) === cropId; });
+      const pl = near(plots);
+      if (pl) return { x: pl.x, z: pl.z, label: `${crop.name}밭`, stop: Math.max(pl.w || 4, pl.d || 4) / 2 + 1.2 };
+      return zoneC(crop.category === 'herb' ? 'ZONE_HERB' : 'ZONE_CROP');
+    };
+    switch (r?.on) {
+      case 'harvest': return plotWith(r.crop);
+      case 'item': {
+        const crop = Object.values(G.data.crops || {}).find((c) => c.harvestItem === r.item);
+        if (crop) return plotWith(crop.id);
+        const s = L.shopStall;
+        if (s && Object.values(G.data.shops || {}).some((sh) => sh.sells?.includes(r.item))) return { x: s.x, z: s.z, label: '가게', stop: 3.2 };
+        return null;
+      }
+      case 'talk': {
+        let g = null;
+        try { g = G.sys.npc?.get?.(r.npc)?.group || null; } catch (e) { g = null; }
+        const n = G.data.npcs?.[r.npc];
+        // no label for people: "같이 가요!" reads better than "발효마스터로 같이 가요!"
+        if (g) return { x: g.position.x, z: g.position.z, label: '', stop: 1.8 };
+        return n?.pos ? { x: n.pos[0], z: n.pos[1], label: '', stop: 1.8 } : null;
+      }
+      case 'edu': {
+        const a = near([].concat((L.kiosks || []).filter((k) => k.edu === r.edu), (L.signs || []).filter((s) => s.edu === r.edu), (L.exhibits || []).filter((x) => x.edu === r.edu)));
+        return a ? { x: a.x, z: a.z, label: '', stop: 2.2 } : null;
+      }
+      case 'interact': { const a = L.get?.(r.id); return a ? { x: a.x, z: a.z, label: '', stop: 2.2 } : null; }
+      case 'visit': return zoneC(r.zone);
+      case 'claim': { const j = (L.jars || []).find((x) => x.id === 'J1'); return j ? { x: j.x, z: j.z, label: '내 장독', stop: 2 } : null; }
+      default: return null;
+    }
+  }
+  /** one row of progress pips (≤ 5 steps, larger goals are scaled to 5) */
+  function pipsEl(cur, goal) {
+    const g = Math.max(1, goal);
+    const n = g <= 5 ? g : 5;
+    const on = g <= 5 ? Math.min(cur, g) : Math.floor((Math.min(cur, g) / g) * 5);
+    const w = G.ui.h('div', { class: 'kk-pips', role: 'img', 'aria-label': g <= 5 ? `${g}개 중에 ${Math.min(cur, g)}개 했어요` : `${Math.round((Math.min(cur, g) / g) * 100)}퍼센트 했어요` });
+    for (let i = 0; i < n; i++) w.appendChild(G.ui.h('i', { class: i < on ? 'on' : '' }));
+    return w;
+  }
+  const KID_CARD_IDS = ['col-card', 'ach-card'];
 
   // ---------------------------------------------------------------- 3D celebration burst (lazy, pooled single instance)
   function buildBurst(scene) {
@@ -115,6 +220,10 @@
       // hub stays in sync with unlocks that happen while it is open (quest rewards, jar claims...)
       G.bus.on('collection:unlocked', () => { this._hubTabCounts(this._hubModal); if (this._hubModal?._tab !== 'me') this._hubRefresh(); });
       G.bus.on('achievement:unlocked', () => { this._hubTabCounts(this._hubModal); this._hubRefresh(); });
+      // the 📜 할 일 tab badge (rewards waiting) follows the quest state
+      for (const ev of ['quest:completed', 'quest:claimed', 'state:loaded']) G.bus.on(ev, () => { if (this._hubModal?._kid) this._kidTabBadges(this._hubModal); });
+      // easy <-> normal at runtime: the hub of the other look is closed (the HUD reopens the right one)
+      G.bus.on('easy:changed', () => { this._closeHub(); });
       G.input?.onKey?.('KeyC', () => { this.toggleCollection(); return true; }, { allowInModal: true });
       // level-up overlay
       const lu = G.ui.h('div', { id: 'levelup-fx', class: 'levelup-fx', 'aria-live': 'assertive', hidden: true });
@@ -158,7 +267,8 @@
       this._luQueue.length = 0;
       G.progToast?.clear?.();
       clearTimeout(this._hubRefreshT);
-      for (const id of ['collection', 'achievements', 'profile']) G.ui.modal.get(id)?.close();
+      this._closeHub();
+      for (const id of ['achievements', 'profile']) G.ui.modal.get(id)?.close();
       this._hubModal = null;
       G.ui.setBadge('collection', 0);
       if (this._fx) { this._fx.active = false; this._fx.group.visible = false; }
@@ -278,7 +388,7 @@
       this._coinTarget = G.state.stats.coin;
       this._delta(`+${fmt(n)}`, 'coin');
       G.dirty('coin');
-      if (!opts.silent) toastQ(`+${fmt(n)} 코인`, { type: 'reward', icon: 'coin' });
+      if (!opts.silent) toastQ(easyOn() ? `🪙 +${fmt(n)}` : `+${fmt(n)} 코인`, easyOn() ? { type: 'reward', emoji: '🪙' } : { type: 'reward', icon: 'coin' });
       this.refreshHud();
       return G.state.stats.coin;
     },
@@ -299,7 +409,7 @@
       G.state.stats.edu = (G.state.stats.edu || 0) + n;
       this._delta(`+${fmt(n)}`, 'edu');
       G.dirty('edu');
-      if (!opts.silent) toastQ(`교육 포인트 +${fmt(n)}`, { emoji: '📘', type: 'success' });
+      if (!opts.silent) toastQ(easyOn() ? `📘 +${fmt(n)}` : `교육 포인트 +${fmt(n)}`, { emoji: '📘', type: 'success' });
       this.refreshHud();
       return G.state.stats.edu;
     },
@@ -313,7 +423,7 @@
       let ups = 0;
       while (s.level < max && s.exp >= expFor(s.level)) { s.exp -= expFor(s.level); s.level++; ups++; this._onLevelUp(s.level); }
       if (s.level >= max) s.exp = Math.min(s.exp, expFor(max));
-      if (!opts.silent && !ups) toastQ(`EXP +${fmt(n)}`, { emoji: '✨', type: 'success', sound: false });
+      if (!opts.silent && !ups) toastQ(easyOn() ? `✨ +${fmt(n)}` : `EXP +${fmt(n)}`, { emoji: '✨', type: 'success', sound: false });
       G.dirty('exp');
       this.refreshHud();
       if (ups) this._statChanged();
@@ -346,9 +456,10 @@
         G.ui.rewardPopup({ eyebrow: opts.eyebrow || 'REWARD', title: opts.title || '보상 획득!', coin: r.coin, exp: r.exp, edu: r.edu, items: r.items, titleName: r.title, note: opts.note || (r.title ? G.data.meta?.titleDisclaimer : null), sound: opts.sound });
       } else if (!opts.silent) {
         const parts = [];
-        if (r.coin) parts.push(`+${fmt(r.coin)} 코인`);
-        if (r.exp) parts.push(`EXP +${fmt(r.exp)}`);
-        if (r.edu) parts.push(`교육 +${fmt(r.edu)}`);
+        const kid = easyOn();
+        if (r.coin) parts.push(kid ? `🪙 +${fmt(r.coin)}` : `+${fmt(r.coin)} 코인`);
+        if (r.exp) parts.push(kid ? `✨ +${fmt(r.exp)}` : `EXP +${fmt(r.exp)}`);
+        if (r.edu) parts.push(kid ? `📘 +${fmt(r.edu)}` : `교육 +${fmt(r.edu)}`);
         if (parts.length) toastQ(parts.join(' · '), { type: 'reward', icon: r.coin ? 'coin' : undefined, emoji: r.coin ? undefined : '✨', cls: 'reward-toast' });
       }
       if (r.exp) this.addExp(r.exp, { silent: true });
@@ -367,7 +478,7 @@
       p.titles.push(name);
       const equip = opts.equip ?? !G.state.flags['title:manual'];
       if (equip) p.title = name;
-      if (!opts.silent) toastQ(`새 칭호 획득: 「${name}」`, { emoji: '🏅', type: 'success', cls: 'title-toast' });
+      if (!opts.silent) toastQ(easyOn() ? `새 이름표를 받았어요! 「${name}」` : `새 칭호 획득: 「${name}」`, { emoji: '🏅', type: 'success', cls: 'title-toast' });
       G.dirty('title');
       this.refreshHud();
       return true;
@@ -408,7 +519,8 @@
       if (r.exp) parts.push(`EXP +${fmt(r.exp)}`);
       if (r.edu) parts.push(`교육 +${fmt(r.edu)}`);
       if (r.title) parts.push(`칭호 「${r.title}」`);
-      toastQ(`<b>업적 달성!</b> ${esc(a.name)}${parts.length ? ` <span class="t-sub">${esc(parts.join(' · '))}</span>` : ''}`, { html: true, emoji: a.icon || '🏆', type: 'reward', cls: 'ach-toast', duration: 3600, gap: 420 });
+      if (easyOn()) toastQ(`메달을 받았어요! ${a.name}`, { emoji: a.icon || '🏆', type: 'reward', cls: 'ach-toast', duration: 3600, gap: 420, say: `메달을 받았어요! ${a.name}!` });
+      else toastQ(`<b>업적 달성!</b> ${esc(a.name)}${parts.length ? ` <span class="t-sub">${esc(parts.join(' · '))}</span>` : ''}`, { html: true, emoji: a.icon || '🏆', type: 'reward', cls: 'ach-toast', duration: 3600, gap: 420 });
       G.sfx('achievement');
       this.grant(r, { popup: false, silent: true, reason: `achievement:${id}` });
       this._newAch.add(id);
@@ -427,7 +539,8 @@
       G.state.collection[id] = { at: now(), zoneId };
       G.log.info('PLAYER', `collection ${id}`);
       if (!opts.silent) {
-        toastQ(`<b>도감 등록</b> ${esc(c.name)} <span class="t-sub">${esc(G.data.collectionCategories?.find((k) => k.id === c.category)?.name || '')}</span>`, { html: true, emoji: c.icon || '📖', type: 'success', cls: 'col-toast' });
+        if (easyOn()) toastQ(`새 스티커! ${c.name}`, { emoji: c.icon || '📖', type: 'success', cls: 'col-toast', say: `새 스티커를 찾았어요! ${c.name}!` });
+        else toastQ(`<b>도감 등록</b> ${esc(c.name)} <span class="t-sub">${esc(G.data.collectionCategories?.find((k) => k.id === c.category)?.name || '')}</span>`, { html: true, emoji: c.icon || '📖', type: 'success', cls: 'col-toast' });
         this._newCol.add(id);
         this._hubBadge();
       }
@@ -475,9 +588,12 @@
       return this.openHub('ach');
     },
     openProfile() { return this.openHub('me'); },
+    openStickerbook(tab) { return this.openHub(tab); },
 
     openHub(tab) {
       if (!G.state) return null;
+      if (easyOn()) return this._openKidHub(tab);
+      if (tab === 'quest') return G.sys.quest?.openLog?.(null, null, { normal: true }) || null;
       const TABS = ['col', 'ach', 'me'];
       tab = TABS.includes(tab) ? tab : (TABS.includes(this._hubTab) ? this._hubTab : 'col');
       const open = G.ui.modal.get('collection');
@@ -525,6 +641,7 @@
     /** refresh tab counters, head chips and "new" dots without re-rendering the pane */
     _hubTabCounts(m) {
       if (!m || m.closed) return;
+      if (m._kid) { this._kidTabBadges(m); return; }
       const c = this._hubCounts();
       const set = (id, txt) => { const el = m.body.querySelector(`.hub-tabs [data-tab="${id}"] .tab-count`); if (el && el.textContent !== txt) el.textContent = txt; };
       set('col', `${c.colN}/${c.colT}`);
@@ -559,7 +676,14 @@
     /** re-render the visible pane (new unlocks while the hub is open) */
     _hubRefresh() {
       const m = this._hubModal;
-      if (!m || m.closed || !m._tab) return;
+      if (!m || m.closed) return;
+      if (m._kid) {
+        if (m._kidTab === 'quest') return; // the quest list re-renders itself
+        clearTimeout(this._hubRefreshT);
+        this._hubRefreshT = setTimeout(() => { if (this._hubModal === m && !m.closed) this._kidShow(m, m._kidTab, { keep: true }); }, 80);
+        return;
+      }
+      if (!m._tab) return;
       clearTimeout(this._hubRefreshT);
       this._hubRefreshT = setTimeout(() => {
         if (this._hubModal !== m || m.closed) return;
@@ -568,6 +692,295 @@
         try { this._showHubTab(m, m._tab); } finally { m._keepScroll = false; }
         m.body.scrollTop = y;
       }, 60);
+    },
+
+    // ------------------------------------------------------------ 쉬운 모드: 📖 스티커북 (same modal id 'collection')
+    _closeHub() {
+      for (const id of KID_CARD_IDS) G.ui.modal.get(id)?.close();
+      G.ui.modal.get('collection')?.close();
+    },
+
+    _openKidHub(tab) {
+      const ids = KID_TABS.map((t) => t.id);
+      const claimable = Object.keys(G.data.quests || {}).some((id) => G.state.quests?.[id]?.status === 'completed');
+      if (!ids.includes(tab)) tab = claimable ? 'quest' : this._newCol.size ? 'col' : this._newAch.size ? 'ach' : (ids.includes(this._kidTab) ? this._kidTab : 'quest');
+      for (const id of KID_CARD_IDS) G.ui.modal.get(id)?.close();
+      const open = G.ui.modal.get('collection');
+      if (open && open._kid && !open.closed) { this._kidShow(open, tab); return open; }
+      const m = G.ui.modal.open({
+        id: 'collection', title: '스티커북', icon: '📖', size: 'xl', className: 'col-modal prog-hub kk-hub-modal',
+        say: '스티커북이에요. 위에 있는 그림을 눌러 봐요.',
+        body: (body) => {
+          body.append(G.ui.h('div', { class: 'ksb-tabs', role: 'tablist', 'aria-label': '스티커북' }), G.ui.h('div', { class: 'ksb-pane', role: 'tabpanel' }));
+        },
+        actions: [],
+        onClose: () => {
+          try { m._qctl?.destroy?.(); } catch (e) { /* ignore */ }
+          m._qctl = null;
+          G.ui.setActive('collection', false); G.ui.setActive('stickerbook', false);
+          if (this._hubModal === m) this._hubModal = null;
+        },
+      });
+      m._kid = true;
+      m._fresh = new Set();
+      m._freshAch = new Set();
+      const tabsEl = m.body.querySelector('.ksb-tabs');
+      for (const t of KID_TABS) {
+        const b = G.ui.h('button', { type: 'button', role: 'tab', class: 'ksb-tab', dataset: { tab: t.id }, 'data-say': t.label },
+          G.ui.h('span', { class: 'ksb-emoji emoji', 'aria-hidden': 'true' }, t.emoji),
+          G.ui.h('span', { class: 'ksb-label' }, t.label),
+          G.ui.h('span', { class: 'ksb-badge', hidden: true }, ''));
+        b.addEventListener('click', () => { if (m._kidTab !== t.id) { this._kidShow(m, t.id); kidSay(t.say, { priority: 0 }); } });
+        tabsEl.appendChild(b);
+      }
+      G.kidKit?.gridKeys?.(tabsEl, '.ksb-tab');
+      this._hubModal = m;
+      G.ui.setActive('collection', true); G.ui.setActive('stickerbook', true);
+      this._kidShow(m, tab);
+      return m;
+    },
+
+    _kidTabBadges(m) {
+      if (!m || m.closed || !m._kid) return;
+      const claim = Object.keys(G.data.quests || {}).filter((id) => G.state?.quests?.[id]?.status === 'completed').length;
+      const set = (id, txt) => {
+        const el = m.body.querySelector(`.ksb-tab[data-tab="${id}"] .ksb-badge`);
+        if (!el) return;
+        el.hidden = !txt;
+        if (el.textContent !== String(txt || '')) el.textContent = String(txt || '');
+      };
+      set('quest', claim ? `🎁${claim}` : '');
+      set('col', this._newCol.size ? `${this._newCol.size}` : '');
+      set('ach', this._newAch.size ? `${this._newAch.size}` : '');
+    },
+
+    _kidShow(m, tab, opts = {}) {
+      if (!m || m.closed || !G.state) return;
+      if (!KID_TABS.some((t) => t.id === tab)) tab = 'quest';
+      const y = opts.keep ? m.body.scrollTop : 0;
+      m._kidTab = tab;
+      this._kidTab = tab;
+      for (const b of m.body.querySelectorAll('.ksb-tab')) { const on = b.dataset.tab === tab; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); }
+      try { m._qctl?.destroy?.(); } catch (e) { /* ignore */ }
+      m._qctl = null;
+      const pane = m.body.querySelector('.ksb-pane');
+      if (!pane) return;
+      pane.className = `ksb-pane kh-${tab}`;
+      pane.textContent = '';
+      try {
+        if (tab === 'quest') this._kidQuests(m, pane);
+        else if (tab === 'col') { for (const id of this._newCol) m._fresh.add(id); this._newCol.clear(); this._kidCol(m, pane, opts.keep); }
+        else if (tab === 'ach') { for (const id of this._newAch) m._freshAch.add(id); this._newAch.clear(); this._kidAch(m, pane, opts.keep); }
+        else this._kidMe(m, pane);
+      } catch (e) {
+        G.log.error('PLAYER', 'stickerbook tab failed', e);
+        pane.appendChild(G.kidKit ? G.kidKit.empty('🥺', '앗, 잘 안 보여요.', '다시 눌러 봐요!', 'sad') : G.ui.h('p', null, '앗, 잘 안 보여요.'));
+      }
+      this._hubBadge();
+      this._kidTabBadges(m);
+      m.body.scrollTop = y;
+    },
+
+    _kidQuests(m, pane) {
+      const Q = G.sys.quest;
+      if (Q?.renderList) m._qctl = Q.renderList(pane, { easy: true, close: () => m.close() });
+      else pane.appendChild(G.kidKit ? G.kidKit.empty('📜', '할 일을 준비하고 있어요.', '조금 있다가 다시 봐요!') : G.ui.h('p', null, '할 일을 준비하고 있어요.'));
+    },
+
+    /** 📖 도감: sticker sheet with category chips */
+    _kidCol(m, pane, keep) {
+      const h = G.ui.h;
+      const cats = G.data.collectionCategories || [];
+      const all = Object.values(G.data.collection || {});
+      const got = all.filter((c) => G.state.collection[c.id]).length;
+      const pct = all.length ? Math.round((got / all.length) * 100) : 0;
+      pane.appendChild(h('div', { class: 'ksb-head' },
+        h('span', { class: 'ksb-head-ico emoji', 'aria-hidden': 'true' }, '📖'),
+        h('div', { class: 'ksb-head-txt' }, h('b', null, `스티커 ${fmt(got)}개를 모았어요!`), h('span', null, `모두 ${fmt(all.length)}개예요`)),
+        G.kidKit ? G.kidKit.vars(h('div', { class: 'kk-meter', role: 'img', 'aria-label': `${pct}퍼센트` }, h('i')), { '--p': `${pct}%` }) : null));
+      const chips = h('div', { class: 'kc-cats', role: 'group', 'aria-label': '스티커 종류' });
+      const list = [{ id: 'all', emoji: '🌈', label: '전부' }].concat(cats.map((c) => ({ id: c.id, emoji: c.icon, label: c.name })));
+      if (!list.some((c) => c.id === this._colCat)) this._colCat = 'all';
+      for (const c of list) {
+        const inCat = all.filter((x) => c.id === 'all' || x.category === c.id);
+        const n = inCat.filter((x) => G.state.collection[x.id]).length;
+        const b = h('button', { type: 'button', class: `kc-cat${this._colCat === c.id ? ' active' : ''}`, 'aria-pressed': this._colCat === c.id ? 'true' : 'false', 'data-say': `${c.label}. ${inCat.length}개 중에 ${n}개 찾았어요.` },
+          h('span', { class: 'emoji', 'aria-hidden': 'true' }, c.emoji), h('span', { class: 'kc-cat-lbl' }, c.label), h('small', null, `${n}/${inCat.length}`));
+        b.addEventListener('click', () => { this._colCat = c.id; this._kidShow(m, 'col', { keep: true }); });
+        chips.appendChild(b);
+      }
+      pane.appendChild(chips);
+      const grid = h('div', { class: 'kc-grid', role: 'list' });
+      all.filter((c) => this._colCat === 'all' || c.category === this._colCat).forEach((c, i) => {
+        const has = !!G.state.collection[c.id];
+        const fresh = !!m._fresh?.has(c.id);
+        const b = h('button', { type: 'button', role: 'listitem', class: `kc-sticker ${has ? 'got' : 'locked'}${fresh ? ' is-new' : ''}${keep ? ' still' : ''}`, 'aria-label': has ? c.name : '아직 못 찾은 스티커' },
+          h('span', { class: 'kc-art', 'aria-hidden': 'true' }, h('span', { class: 'kc-emoji emoji' }, c.icon || '❔'), has ? null : h('span', { class: 'kc-q' }, '?')),
+          h('span', { class: 'kc-name' }, has ? c.name : '???'),
+          fresh ? h('span', { class: 'kk-new', 'aria-hidden': 'true' }, '새것') : null);
+        b.style.setProperty('--cat', CAT_COLOR[c.category] || '#ffc93c');
+        b.style.setProperty('--r', `${((i * 37) % 7) - 3}deg`);
+        b.style.setProperty('--i', String(Math.min(i, 24)));
+        b.__easySpeak = { btn: null, text: has ? `${c.name} 스티커예요.` : '아직 못 찾은 스티커예요.' };
+        b.addEventListener('click', () => { m._fresh?.delete(c.id); b.classList.remove('is-new'); b.querySelector('.kk-new')?.remove(); this._kidColCard(c.id); });
+        grid.appendChild(b);
+      });
+      G.kidKit?.gridKeys?.(grid);
+      pane.appendChild(grid);
+    },
+
+    /** sticker card: found -> big sticker + words; locked -> silhouette + hint + 👉 찾으러 가기 */
+    _kidColCard(id) {
+      const c = G.data.collection?.[id];
+      if (!c || !G.state) return null;
+      const h = G.ui.h;
+      const has = !!G.state.collection[id];
+      const hints = has ? [] : (c.unlock || []).map(kidRuleHint).filter(Boolean);
+      const hint = hints[0] || '체험관을 구경하면 찾을 수 있어요';
+      let target = null;
+      if (!has) for (const r of c.unlock || []) { try { target = ruleTarget(r); } catch (e) { target = null; } if (target) break; }
+      const art = h('div', { class: `kc-big ${has ? 'got' : 'locked'}` }, h('span', { class: 'kc-emoji emoji', 'aria-hidden': 'true' }, c.icon || '❔'), has ? null : h('span', { class: 'kc-q', 'aria-hidden': 'true' }, '?'));
+      art.style.setProperty('--cat', CAT_COLOR[c.category] || '#ffc93c');
+      const btns = h('div', { class: 'kitem-btns' });
+      const close = () => G.ui.modal.get('col-card')?.close();
+      const btn = (emoji, label, cls, fn) => { const b = h('button', { type: 'button', class: `easy-big-btn ${cls}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', null, label)); b.addEventListener('click', fn); btns.appendChild(b); return b; };
+      if (!has && target && G.easy?.goTo) btn('👉', '찾으러 가기', 'easy-btn-yes', () => { close(); this._closeHub(); G.easy.goTo({ x: target.x, z: target.z }, { label: target.label || '', stopDistance: target.stop || 1.8 }); });
+      btn(has ? '👍' : '✖', has ? '좋아요' : '닫기', has ? 'easy-btn-yes' : 'easy-btn-no', close);
+      const words = has ? `${c.name} 스티커예요. ${c.desc || ''}` : `아직 못 찾았어요. ${hint}.`;
+      const body = h('div', { class: 'kitem kc-card' }, art,
+        h('h3', { class: 'kc-card-name' }, has ? c.name : '???'),
+        has ? h('p', { class: 'kitem-desc' }, c.desc || '') : h('p', { class: 'kitem-desc' }, '아직 못 찾았어요!'),
+        has ? (c.location ? h('p', { class: 'kc-where' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📍'), c.location) : null) : h('p', { class: 'kitem-hint' }, `💡 ${hint}`),
+        has && c.category === 'fermented' ? h('p', { class: 'kitem-note' }, '게임 속 체험이에요.') : null,
+        btns);
+      const m = G.ui.modal.open({ id: 'col-card', title: has ? '스티커' : '숨은 스티커', icon: has ? (c.icon || '📖') : '❓', size: 'sm', className: 'kk-card-modal kk-col-card', say: words, body, actions: [] });
+      setTimeout(() => { if (!m.closed) btns.querySelector('button')?.focus({ preventScroll: true }); }, 60);
+      return m;
+    },
+
+    /** 🏆 업적: medals with a progress ring */
+    _kidAch(m, pane, keep) {
+      const h = G.ui.h;
+      const list = Object.values(G.data.achievements || {});
+      const got = list.filter((a) => G.state.achievements[a.id]).length;
+      const pct = list.length ? Math.round((got / list.length) * 100) : 0;
+      pane.appendChild(h('div', { class: 'ksb-head' },
+        h('span', { class: 'ksb-head-ico emoji', 'aria-hidden': 'true' }, '🏆'),
+        h('div', { class: 'ksb-head-txt' }, h('b', null, `메달 ${fmt(got)}개를 받았어요!`), h('span', null, '동그라미가 다 차면 메달을 받아요')),
+        G.kidKit ? G.kidKit.vars(h('div', { class: 'kk-meter', role: 'img', 'aria-label': `${pct}퍼센트` }, h('i')), { '--p': `${pct}%` }) : null));
+      const rows = list.map((a) => {
+        const goal = Math.max(1, a.condition?.gte || 1);
+        const cur = Math.min(goal, this.getStat(a.condition?.stat));
+        return { a, goal, cur, got: !!G.state.achievements[a.id], at: Number(G.state.achievements[a.id]) || 0, r: cur / goal };
+      });
+      // earned medals first (newest first), then the nearly-done ones
+      rows.sort((x, y) => (y.got - x.got) || (x.got ? y.at - x.at : y.r - x.r));
+      const grid = h('div', { class: 'ka-grid', role: 'list' });
+      rows.forEach((row, i) => {
+        const { a } = row;
+        const fresh = !!m._freshAch?.has(a.id);
+        const b = h('button', { type: 'button', role: 'listitem', class: `ka-medal${row.got ? ' got' : ''}${fresh ? ' is-new' : ''}${keep ? ' still' : ''}`, 'aria-label': `${a.name}${row.got ? ', 받았어요' : ''}` },
+          h('span', { class: 'ka-ring', 'aria-hidden': 'true' }, h('span', { class: 'ka-emoji emoji' }, a.icon || '🏆')),
+          h('span', { class: 'ka-name' }, a.name),
+          row.got ? h('span', { class: 'ka-done' }, '받았어요!') : pipsEl(row.cur, row.goal),
+          fresh ? h('span', { class: 'kk-new', 'aria-hidden': 'true' }, '새것') : null);
+        b.style.setProperty('--p', `${Math.round(row.r * 100)}%`);
+        b.style.setProperty('--i', String(Math.min(i, 20)));
+        b.__easySpeak = { btn: null, text: `${a.name}. ${kidAchText(a)}.` };
+        b.addEventListener('click', () => { m._freshAch?.delete(a.id); this._kidAchCard(a.id); });
+        grid.appendChild(b);
+      });
+      G.kidKit?.gridKeys?.(grid);
+      pane.appendChild(grid);
+    },
+
+    _kidAchCard(id) {
+      const a = G.data.achievements?.[id];
+      if (!a || !G.state) return null;
+      const h = G.ui.h;
+      const goal = Math.max(1, a.condition?.gte || 1);
+      const cur = Math.min(goal, this.getStat(a.condition?.stat));
+      const got = !!G.state.achievements[id];
+      const ring = h('div', { class: `ka-big${got ? ' got' : ''}` }, h('span', { class: 'ka-emoji emoji', 'aria-hidden': 'true' }, a.icon || '🏆'));
+      ring.style.setProperty('--p', `${Math.round((cur / goal) * 100)}%`);
+      const rw = a.reward || {};
+      const gifts = [];
+      if (rw.coin) gifts.push(h('span', { class: 'kq-rw' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🪙'), fmt(rw.coin)));
+      if (rw.exp) gifts.push(h('span', { class: 'kq-rw' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✨'), fmt(rw.exp)));
+      if (rw.title) gifts.push(h('span', { class: 'kq-rw' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏅'), '이름표'));
+      const ok = h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '👍'), h('span', null, '알았어요'));
+      const goalText = kidAchText(a);
+      const body = h('div', { class: 'kitem ka-card' }, ring,
+        h('h3', { class: 'kc-card-name' }, a.name),
+        h('p', { class: 'kitem-desc' }, goalText),
+        got ? h('p', { class: 'ka-yay' }, '🎉 메달을 받았어요!') : pipsEl(cur, goal),
+        !got && goal > 1 ? h('p', { class: 'kitem-note' }, `${fmt(cur)} / ${fmt(goal)}`) : null,
+        gifts.length ? h('div', { class: 'kq-reward ka-gifts' }, h('span', { class: 'kq-gift emoji', 'aria-hidden': 'true' }, '🎁'), gifts) : null,
+        h('div', { class: 'kitem-btns' }, ok));
+      const m = G.ui.modal.open({ id: 'ach-card', title: '메달', icon: a.icon || '🏆', size: 'sm', className: 'kk-card-modal kk-ach-card', say: `${a.name}. ${goalText}. ${got ? '메달을 받았어요!' : '조금만 더 해요!'}`, body, actions: [] });
+      ok.addEventListener('click', () => m.close());
+      setTimeout(() => { if (!m.closed) ok.focus({ preventScroll: true }); }, 60);
+      return m;
+    },
+
+    /** ⭐ 나: level, picture stats, 이름표 */
+    _kidMe(m, pane) {
+      const h = G.ui.h;
+      const st = G.state, s = st.stats, p = st.profile;
+      const need = expFor(s.level);
+      const maxed = s.level >= (LV().max || 50);
+      const ratio = maxed ? 1 : G.util.clamp(s.exp / need, 0, 1);
+      const c = this._hubCounts();
+      const nick = String(p.nickname || '나');
+      const dress = h('button', { type: 'button', class: 'easy-big-btn kme-dress', 'data-say': '옷을 갈아입어요.' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🎨'), h('span', null, '옷 갈아입기'));
+      dress.addEventListener('click', () => { m.close(); G.ui.triggerAction('avatar', dress); });
+      const lvLine = maxed ? '가장 높은 레벨이에요!' : `별을 모으면 ${kjo(`레벨 ${s.level + 1}`, '이/가')} 돼요`;
+      pane.appendChild(h('div', { class: 'kme-card' },
+        h('div', { class: 'kme-avatar', 'aria-hidden': 'true' }, nick.trim().charAt(0) || '나'),
+        h('div', { class: 'kme-id' },
+          h('b', { class: 'kme-nick' }, nick),
+          h('div', { class: 'kme-lv' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⭐'), `레벨 ${s.level}`),
+          p.title ? h('div', { class: 'kme-title' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏅'), p.title) : null,
+          G.kidKit ? G.kidKit.vars(h('div', { class: 'kk-meter kme-exp', role: 'img', 'aria-label': lvLine }, h('i')), { '--p': `${Math.round(ratio * 100)}%` }) : null,
+          h('small', { class: 'kme-next' }, lvLine)),
+        dress));
+      const tile = (emoji, val, label, sayLine) => {
+        const t = h('div', { class: 'kme-stat', role: 'img', 'aria-label': sayLine || `${label} ${val}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('b', null, String(val)), h('span', { class: 'kme-stat-lbl' }, label));
+        t.__easySpeak = { btn: null, text: sayLine || `${label} ${val}` };
+        return t;
+      };
+      const dist = Number(s.distance) || 0;
+      pane.appendChild(h('h3', { class: 'kk-sec' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🌟'), '내가 한 일'));
+      pane.appendChild(h('div', { class: 'kme-stats' },
+        tile('🪙', fmt(s.coin), '코인', `코인 ${s.coin}개`),
+        tile('📖', `${c.colN}/${c.colT}`, '스티커', `스티커 ${c.colN}개`),
+        tile('🏆', `${c.achN}/${c.achT}`, '메달', `메달 ${c.achN}개`),
+        tile('💧', fmt(s.waters || 0), '물 주기', `물을 ${s.waters || 0}번 줬어요`),
+        tile('🌱', fmt(s.plants || 0), '씨앗 심기', `씨앗을 ${s.plants || 0}번 심었어요`),
+        tile('🧺', fmt(s.harvests || 0), '거두기', `채소를 ${s.harvests || 0}번 거뒀어요`),
+        tile('🏺', fmt(s.fermentsClaimed || 0), '장 완성', `장을 ${s.fermentsClaimed || 0}번 완성했어요`),
+        tile('📝', fmt(s.journals || 0), '그림일기', `그림일기를 ${s.journals || 0}번 썼어요`),
+        tile('📸', fmt(s.photos || 0), '사진', `사진을 ${s.photos || 0}장 찍었어요`),
+        tile('🧑‍🤝‍🧑', `${this.getStat('npcsTalked')}/${Object.keys(G.data.npcs || {}).length}`, '만난 친구', `친구 ${this.getStat('npcsTalked')}명을 만났어요`),
+        tile('🗺️', `${this.getStat('zonesVisited')}/${(G.data.visitZones || []).length}`, '가 본 곳', `${this.getStat('zonesVisited')}곳에 가 봤어요`),
+        tile('👣', dist >= 1000 ? `${(dist / 1000).toFixed(1)}km` : `${fmt(Math.round(dist))}m`, '걸은 길', '체험관을 걸었어요')));
+      // 이름표 (titles): tap to wear
+      pane.appendChild(h('h3', { class: 'kk-sec' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏅'), '내 이름표'));
+      const box = h('div', { class: 'kme-titles', role: 'group', 'aria-label': '이름표 고르기' });
+      const mk = (name, label) => {
+        const on = (p.title || '') === name;
+        const b = h('button', { type: 'button', class: `kme-tag${on ? ' active' : ''}`, 'aria-pressed': on ? 'true' : 'false' }, label);
+        b.addEventListener('click', () => {
+          this.setTitle(name);
+          kidSay(name ? `이름표를 ${kjo(name, '으로/로')} 바꿨어요!` : '이름표를 뺐어요.', { force: true });
+          this._kidShow(m, 'me', { keep: true });
+        });
+        return b;
+      };
+      box.appendChild(mk('', '🙈 안 달기'));
+      for (const t of p.titles) box.appendChild(mk(t, `🏅 ${t}`));
+      pane.appendChild(box);
+      pane.appendChild(h('p', { class: 'kitem-note kme-note' }, '이름표는 게임 속 놀이예요.'));
     },
 
     // ---- 도감 pane
@@ -792,9 +1205,13 @@
       const fxOwned = typeof G.fx?.levelUp === 'function';
       const el = fxOwned ? null : this._luEl;
       if (!fxOwned) { G.sfx('levelup'); this.celebrate('levelup'); }
-      toastQ(`레벨 업! Lv.${level} 달성${title ? ` · 새 칭호 「${title}」` : ''}`, { emoji: '⭐', type: 'success', sound: false, cls: 'lv-toast' });
+      const kid = easyOn();
+      if (kid) toastQ(`와! ${kjo(`레벨 ${level}`, '이/가')} 됐어요! 쑥쑥 컸어요`, { emoji: '⭐', type: 'success', sound: false, cls: 'lv-toast', say: `와! ${kjo(`레벨 ${level}`, '이/가')} 됐어요! 쑥쑥 컸어요!` });
+      else toastQ(`레벨 업! Lv.${level} 달성${title ? ` · 새 칭호 「${title}」` : ''}`, { emoji: '⭐', type: 'success', sound: false, cls: 'lv-toast' });
       if (el) {
-        el.innerHTML = `<div class="lu-rays"></div><div class="lu-card"><div class="lu-eyebrow">LEVEL UP!</div><div class="lu-level"><span>Lv.</span><b>${level}</b></div>${title ? `<div class="lu-sub">새 칭호 「${esc(title)}」</div>` : `<div class="lu-sub">다음 레벨까지 ${fmt(expFor(level))} EXP</div>`}</div>`;
+        const sub = kid ? (title ? `새 이름표 「${esc(title)}」` : '쑥쑥 컸어요! ⭐') : (title ? `새 칭호 「${esc(title)}」` : `다음 레벨까지 ${fmt(expFor(level))} EXP`);
+        el.classList.toggle('kid', kid);
+        el.innerHTML = `<div class="lu-rays"></div><div class="lu-card"><div class="lu-eyebrow">${kid ? '레벨 업!' : 'LEVEL UP!'}</div><div class="lu-level"><span>${kid ? '⭐' : 'Lv.'}</span><b>${level}</b></div><div class="lu-sub">${sub}</div></div>`;
         el.hidden = false;
         el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
       }

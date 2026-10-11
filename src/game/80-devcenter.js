@@ -4,14 +4,18 @@
 //   Open: ?dev=1 (after boot) · Ctrl+Shift+D · F9 / ` (the app shell toggles it) · main menu (action 'devcenter')
 //         · G.sys.devcenter.open(tab). Esc closes. Access: always in local mode; in server mode only for an admin
 //         account (G.auth.current.role from the server — never the save's profile.role) or ?dev=1 on localhost.
-//   Tabs: overview 개요 · system 시스템 점검 · modules 모듈 상태 · data 데이터 검증 · save 저장 데이터 ·
-//         server 서버 점검 · tests 자가 테스트 · debug 디버그 도구 · source 소스 구조 · docs 문서 · handover 인수인계
+//   Tabs: overview 개요 · system 시스템 점검 (+ 🖥️ GPU 안전) · kids 👶 쉬운 모드 점검 · modules 모듈 상태 · data 데이터 검증 ·
+//         save 저장 데이터 · server 서버 점검 · tests 자가 테스트 · debug 디버그 도구 · source 소스 구조 · docs 문서 · handover 인수인계
+//   In easy mode (CONTRACT §12) opening the center asks the parent gate first (G.easy.gate); automation may pass {gate:false}.
 //
 //   G.sys.devcenter.open(tab?) / close() / toggle(tab?) / isOpen() / tab
 //   G.sys.devcenter.lint() -> {issues, counts, byCat, entities, ms}       cross-reference linter over G.data
 //   G.sys.devcenter.runTests() -> Promise<{passed, failed, skipped, total, ms, results}>   (never touches the real save)
 //   G.sys.devcenter.health() -> {score, grade, ...}                       G.sys.devcenter.report() -> Promise<object>
 //   G.sys.devcenter.downloadReport('md'|'json'|'both') · cheat(cmd, arg) · probe (read-only diagnostics)
+//   G.sys.devcenter.kidAudit({scope, screen}) -> audit of what is on screen (tap size, labels, free text, overlap, contrast…)
+//   G.sys.devcenter.kidTour({onStep}) -> Promise<{rows, totals}> opens the main screens through public APIs and audits each
+//   G.sys.devcenter.kidScreens() · gpuScan() · nanTest() · showElement(el, caption)   (tools/kid-audit.mjs uses these)
 //
 // Instrumentation installed when this fragment is evaluated (before any system init): CSP violation listener,
 // window error / unhandled rejection + console.error/warn ring buffers (pass-through), G.bus emit/on counters
@@ -202,45 +206,47 @@
       F('00-core.js', 'core', '로거·이벤트 버스·유틸·아이콘·시스템 등록·게임 루프·부팅 폴백'),
       F('01-data.js', 'core', '콘텐츠 데이터: 구역·아이템·작물·레시피·NPC·퀘스트·업적·도감·팁·서버 검증 한도'),
       F('02-layout.js', 'core', '월드 배치 좌표(건물·밭·장독·안내판·포토존)와 앵커 조회 layout.get(id)'),
-      F('03-state.js', 'core', '설정·네트워크(G.net)·저장(G.save: 체크섬·백업·마이그레이션·가져오기)'),
+      F('03-state.js', 'core', '설정(기기 ↔ 프로필 키 분리·검증)·네트워크(G.net)·저장(G.save: 체크섬·백업·마이그레이션·가져오기)'),
       F('04-ui.js', 'core', 'UI 도구: 모달·토스트·보상 팝업·팝오버·월드 라벨·로딩·이스케이프'),
       F('05-input.js', 'core', '키보드·마우스·터치 조이스틱·D-패드 입력과 단축키 등록'),
       F('06-world.js', 'core', '지형 높이·충돌·구역·앵커 레지스트리, 충돌체 디버그 표시'),
+      F('08-easy.js', 'core', '쉬운 모드 G.easy: 읽어주기·보호자 확인(마구 누르기 방지)·그림 고르기·다음 할 일·같이 가기·축하·놀이 시간 알림'),
       F('10-engine.js', 'core', '렌더러·씬·카메라·하늘·태양·그림자·블룸·그래픽 품질 프리셋'),
       F('11-terrain.js', 'terrain', '지형 높이장·산·강 바닥·도로·오솔길·지표 판정'),
       F('12-nature.js', 'terrain', '나무·바위·풀·꽃·구름·새·나비·반딧불 (인스턴싱)'),
       F('13-water.js', 'terrain', '강·연못 셰이더·폭포·물보라·물까지 거리'),
       F('15-buildings.js', 'buildings', '체험관 본관·한옥·초가·정자·정문·매점 건물'),
       F('16-props.js', 'buildings', '장독대·밭·안내판·키오스크·석등·벤치·전시 소품'),
-      F('20-avatar.js', 'player', '3등신 아바타 리그·애니메이션·꾸미기 옵션'),
-      F('21-player.js', 'player', '플레이어 이동·점프·충돌·순간이동·앉기·위치 저장'),
-      F('22-camera.js', 'player', '3인칭 카메라·시네마틱·대화/사진 모드'),
-      F('23-interaction.js', 'player', '상호작용 대상 선택·E 프롬프트·클릭 이동'),
+      F('20-avatar.js', 'player', '3등신 아바타 리그·애니메이션·꾸미기 옵션·아이 모습 6종(presets)'),
+      F('21-player.js', 'player', '플레이어 이동·점프·충돌·순간이동·앉기·길 찾기 걷기(walkTo·금빛 발자국)·위치 저장'),
+      F('22-camera.js', 'player', '3인칭 카메라(쉬운 모드: 부드러운 카메라)·시네마틱·대화/사진 모드'),
+      F('23-interaction.js', 'player', '상호작용 대상 선택(쉬운 모드: 다음 할 일 대상 우선)·금빛 👆 프롬프트·클릭 이동'),
       F('25-npc.js', 'npc', 'NPC 생성·배회·이름표 + 대화 시스템(조건·액션·타자기 효과)'),
       F('26-dialogues.js', 'npc', 'NPC 5명의 대화 트리 데이터'),
-      F('30-inventory.js', 'progression', '가방·상점(구매/판매)·아이템 안내'),
-      F('31-quest.js', 'progression', '퀘스트 상태 머신·퀘스트 패널·금빛 표식·목표 안내'),
-      F('32-progression.js', 'progression', '레벨·코인·통계·업적·도감·칭호·HUD 갱신'),
-      F('40-farming.js', 'farm', '밭 성장 시뮬레이션·물주기·심기·수확·작물 표현'),
-      F('41-fermentation.js', 'farm', '장독 발효 시뮬레이션·품질 공식·재료 만들기'),
-      F('45-education-data.js', 'edu', '교육 콘텐츠 9종·퀴즈 데이터 (순수 데이터)'),
+      F('30-inventory.js', 'progression', '가방·상점(구매/판매)·아이템 안내 + 그림 가방/가게, 공용 아이 도구 G.kidKit'),
+      F('31-quest.js', 'progression', '퀘스트 상태 머신·퀘스트 패널·금빛 표식·목표 안내·current()/renderList(스티커 카드)'),
+      F('32-progression.js', 'progression', '레벨·코인·통계·업적·도감·칭호·HUD 갱신 + 📖 스티커북(할 일·도감·업적·나)'),
+      F('40-farming.js', 'farm', '밭 성장 시뮬레이션·물주기·심기·수확·작물 표현·한 번 누르기(쉬운 모드)'),
+      F('41-fermentation.js', 'farm', '장독 발효 시뮬레이션·품질 공식·재료 만들기·장독 얼굴 카드(쉬운 모드)'),
+      F('45-education-data.js', 'edu', '교육 콘텐츠 9종·퀴즈 25개 + 아이용 그림 이야기·그림 퀴즈 (순수 데이터)'),
       F('46-education.js', 'edu', '교육 뷰어·3D 모형·퀴즈·안내판·키오스크·전시'),
-      F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소)'),
-      F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵·빠른 이동'),
-      F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도'),
-      F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리'),
-      F('60-social.js', 'social', '채팅·필터·말풍선·이모지·제스처·체험객·음성 입력·서버 접속자'),
+      F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소) + 그림 일기(기분·스티커)'),
+      F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
+      F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
+      F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
+      F('60-social.js', 'social', '채팅·필터·개인정보 가림(maskPII)·말풍선·아이 말하기(문장 고르기)·표현하기·체험객·서버 접속자'),
       F('61-audio.js', 'social', '절차적 효과음·환경음·국악풍 BGM·음성 합성'),
-      F('62-engagement.js', 'engagement', '출석·오늘의 미션·알림함·수료증·랭킹·마당 꾸미기'),
-      F('65-companion.js', 'companion', '마스코트 옹이(2D SVG·3D 동반자)·상황별 도움말'),
-      F('66-fx.js', 'fx', '파티클·3D 이모지·레벨업·코인 비행·도장 연출'),
-      F('70-app.js', 'app', '부팅·인증(PBKDF2)·타이틀·메뉴·설정·도움말·아바타 꾸미기·튜토리얼'),
+      F('62-engagement.js', 'engagement', '출석·오늘의 미션·알림함·수료증·랭킹·마당 꾸미기 (쉬운 모드: 🔔 오늘 스티커북)'),
+      F('65-companion.js', 'companion', '마스코트 옹이(2D SVG·3D 동반자)·상황별 도움말·읽어주기·멈춰 있을 때 안내·쉬는 시간 연기'),
+      F('66-fx.js', 'fx', '파티클·3D 이모지·레벨업·코인 비행·도장 연출·아이 축하(kidParty)·광과민 안전'),
+      F('70-app.js', 'app', '부팅·인증(PBKDF2)·아이 타이틀(타자 없음)·그림 메뉴/설정/도움말·보호자 확인 연결·아바타 꾸미기·쉬운 튜토리얼'),
       F('80-devcenter.js', 'devcenter', '개발자 점검·인수인계 센터 (이 화면)'),
     ] },
     { dir: 'src/styles', emoji: '🎨', desc: '스타일 — 같은 번호의 JS 모듈 화면을 꾸밉니다', files: [
       F('00-base.css', 'core', '디자인 토큰(색·반경·그림자·z-index)과 공용 컴포넌트(.btn .card .chip .modal …)'),
       F('01-hud.css', 'core', 'HUD 배치(프로필·메뉴·미니맵·퀘스트·채팅·하단바)'),
       F('02-responsive.css', 'core', '화면 크기별 반응형 규칙(노트북·태블릿·모바일)'),
+      F('08-easy.css', 'core', '쉬운 모드 화면 부품(큰 버튼·그림 고르기·보호자 확인·다음 할 일 카드)'),
       F('23-interaction.css', 'player', '상호작용 프롬프트·도착 표식'),
       F('25-npc.css', 'npc', '대화창·NPC 이름표'),
       F('30-inventory.css', 'progression', '가방·상점 화면'),
@@ -250,10 +256,10 @@
       F('41-fermentation.css', 'farm', '장독 창·작업대'),
       F('46-education.css', 'edu', '교육 뷰어·퀴즈·도서관'),
       F('47-journal.css', 'edu', '작업일지'),
-      F('50-minimap.css', 'map', '미니맵·월드맵·빠른 이동'),
-      F('51-weather.css', 'map', '날씨 팝오버'),
+      F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
+      F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
-      F('60-social.css', 'social', '채팅·말풍선·이모지 선택'),
+      F('60-social.css', 'social', '채팅·말풍선·이모지 선택·아이 말하기(skc-*)'),
       F('62-engagement.css', 'engagement', '참여 허브(출석·미션·알림·수료증·랭킹·꾸미기)'),
       F('65-companion.css', 'companion', '옹이 말풍선·놀이 메뉴'),
       F('66-fx.css', 'fx', '2D 연출(레벨업·도장·코인)'),
@@ -287,7 +293,7 @@
       F('lib/Users.php', 'server', '계정·권한·정지'),
       F('lib/SaveValidator.php', 'server', '저장 데이터 부정 진행 검증'),
       F('lib/GameData.php', 'server', 'data/game-data.json 보상표 읽기'),
-      F('lib/ChatFilter.php', 'server', '채팅 욕설 필터'),
+      F('lib/ChatFilter.php', 'server', '채팅 욕설 필터 · 어린이 개인정보 가림(🔒)'),
       F('lib/Presence.php', 'server', '접속자 관리'),
       F('lib/Upload.php', 'server', '업로드 검사·재인코딩'),
       F('lib/Admin.php', 'server', '관리자 기능·통계·상태 점검'),
@@ -301,7 +307,9 @@
       F('tools/build.mjs', 'core', '단일 HTML 빌드: 조각 합치기·문법 검사·CSP 해시·매니페스트·문서 번들'),
       F('tools/smoke.mjs', 'core', '헤드리스 브라우저 스모크 테스트·스크린샷'),
       F('tools/package.mjs', 'core', '배포 zip 만들기 (엄격 빌드 + 소스)'),
-      F('tests/server-e2e.mjs', 'server', '서버 보안·기능 E2E 테스트'),
+      F('tools/kid-audit.mjs', 'devcenter', '쉬운 모드 화면 자동 점검 (QA용 · JSON + 표)'),
+      F('tests/server-e2e.mjs', 'server', '서버 보안·기능 E2E 테스트 (개인정보 가림 벡터·DB 스팸 키 확인 포함)'),
+      F('tests/pii-vectors.json', 'server', '개인정보 가림 공통 테스트 벡터 — 서버 ChatFilter 와 게임 maskPII 가 같이 통과해야 해요'),
       F('vendor/three-entry.js', 'core', 'three.js r170 + 애드온 번들 진입점'),
       F('src/template.html', 'core', 'HUD 뼈대 (빌드가 CSS·JS·글꼴·CSP 를 주입)'),
       F('package.json', 'core', 'npm 스크립트·개발 의존성'),
@@ -374,6 +382,11 @@
     'engine:quality': ['engine', 'app · nature', '그래픽 품질 변경'],
     'profile:changed': ['app', 'progression · social', '프로필 변경'],
     'player:appearance': ['player', 'app', '아바타 변경'],
+    'easy:changed': ['easy(core)', '모든 화면', '쉬운 모드 켜짐/꺼짐 {on}'],
+    'easy:say': ['easy(core)', 'devcenter · companion', '읽어주기 {text}'],
+    'easy:gate': ['easy(core)', 'devcenter · app', '보호자 확인 결과 {reason, ok}'],
+    'easy:point': ['easy(core)', '—', '손가락 안내 {label}'],
+    'kid:phrase': ['social', 'quest · engagement', '어린이 문장 고르기 {phraseId}'],
     'dev:tests': ['devcenter', '—', '자가 테스트 완료 {passed, failed, total}'],
     'dev:open': ['누구나', 'devcenter', '개발자 센터 열기 요청 {tab}'],
   };
@@ -387,7 +400,7 @@
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
-  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'app', 'devcenter'];
+  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'app', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -934,6 +947,773 @@
     },
   };
 
+  // =========================================================================== kid safety helpers (CONTRACT §12)
+  /** shared PII vectors — the same cases as server/lib/ChatFilter.php and tests/server-e2e.mjs */
+  const PII_VECTORS = {
+    phone: ['010-1234-5678', '01012345678', '+82 10 1234 5678', '내 번호는 010 1234 5678 이야', '02-123-4567'],
+    email: ['kid@example.com', '메일 kid.dino@gmail.com 로 줘'],
+    url: ['https://evil.example.com/x', 'www.abc.kr 와봐'],
+    address: ['서울시 강남구 테헤란로 123', '세종대로 110', '101동 1203호'],
+    keep: ['오늘 콩 3개 심었어요!', '레벨 12 됐어요', '2024년 가을', '새로 30개 심었어', '서울 친구 만났어', '유치원 가기 싫어', '@발효1234 안녕', '안녕하세요 반가워요 😊', '물 주기 5번 했어'],
+  };
+  const maskOut = (r) => (typeof r === 'string' ? r : r && typeof r.text === 'string' ? r.text : String(r ?? ''));
+  /** tests/pii-vectors.json, embedded by tools/build.mjs (the same file the server e2e runs through ChatFilter.php) */
+  const sharedPII = () => {
+    const v = window.__BUILD__?.piiVectors;
+    return v && Array.isArray(v.whole) && Array.isArray(v.partial) && Array.isArray(v.keep) ? v : null;
+  };
+  const easyOn = () => (typeof G.easy?.on === 'boolean' ? G.easy.on : G.settings?.easyMode !== false);
+  const RX_EMOJI = /\p{Extended_Pictographic}/u;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const nextFrame = () => new Promise((r) => { let done = false; const f = () => { if (!done) { done = true; r(); } }; requestAnimationFrame(f); setTimeout(f, 220); });
+
+  /** ring logs of kid-mode events (read by the 👶 tab and the report) */
+  const KidLog = { say: [], gate: [], changed: 0 };
+  const pushRing = (arr, v, n = 20) => { arr.push(v); if (arr.length > n) arr.shift(); };
+
+  /** short, stable CSS path for an element (ids win; class names are kept short) */
+  function cssPath(el) {
+    if (!el || el.nodeType !== 1) return '';
+    const parts = [];
+    for (let e = el, i = 0; e && e.nodeType === 1 && i < 6; e = e.parentElement, i++) {
+      if (e.id && /^[A-Za-z][\w-]*$/.test(e.id)) { parts.unshift(`#${e.id}`); break; }
+      let p = e.tagName.toLowerCase();
+      const cls = Array.from(e.classList).filter((c) => /^[A-Za-z][\w-]*$/.test(c) && !/^(active|open|on|show|is-|dc-in)/.test(c)).slice(0, 2);
+      if (cls.length) p += `.${cls.join('.')}`;
+      const da = e.getAttribute('data-action');
+      if (da && /^[\w:-]{1,30}$/.test(da)) p += `[data-action="${da}"]`;
+      else if (e.parentElement) {
+        const same = Array.from(e.parentElement.children).filter((c) => c.tagName === e.tagName);
+        if (same.length > 1) p += `:nth-of-type(${same.indexOf(e) + 1})`;
+      }
+      parts.unshift(p);
+    }
+    return parts.join(' > ').slice(0, 160);
+  }
+  /** colour helpers for the WCAG quick check */
+  function parseColor(s) {
+    const m = String(s || '').match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)/);
+    if (!m) return { r: 0, g: 0, b: 0, a: 0 };
+    let a = m[4] == null ? 1 : m[4].endsWith('%') ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+    if (!Number.isFinite(a)) a = 1;
+    return { r: +m[1], g: +m[2], b: +m[3], a };
+  }
+  const over = (top, under) => {
+    const a = top.a + under.a * (1 - top.a);
+    if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+    const mix = (k) => (top[k] * top.a + under[k] * under.a * (1 - top.a)) / a;
+    return { r: mix('r'), g: mix('g'), b: mix('b'), a };
+  };
+  const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+  const contrastRatio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  /** the 3D world behind glass panels: a mid-dark summer valley (estimate used when no opaque layer is found) */
+  const BACKDROP = { r: 58, g: 80, b: 62, a: 1 };
+
+  // =========================================================================== 👶 kid usability audit (what is on screen)
+  const KID_KINDS = {
+    freetext: { emoji: '⌨️', label: '글자 입력칸', desc: '쉬운 모드에서는 타자 없이 그림으로 골라요 (0개여야 해요)' },
+    tap: { emoji: '👆', label: '누르기 크기', desc: '손가락 크기 이상: 쉬운 모드 56 px · 보통 40 px (44 px 미만은 치명)' },
+    errtext: { emoji: '🐞', label: '오류 글자', desc: '화면에 NaN · undefined · [object …] 같은 글자가 보여요' },
+    exit: { emoji: '🚪', label: '나가기 버튼', desc: '모든 창에는 크게 ✖ / ⬅️ 가 있어야 해요 (막다른 길 금지)' },
+    name: { emoji: '🏷️', label: '이름·그림', desc: '버튼에 읽을 이름(aria-label)과 그림(이모지)이 있어야 해요' },
+    label: { emoji: '🔤', label: '긴 버튼 글자', desc: '버튼 글자는 6글자 이하 + 큰 그림' },
+    overlap: { emoji: '🧱', label: 'HUD 겹침', desc: '화면 고정 요소끼리 겹치면 누르기 어려워요' },
+    contrast: { emoji: '🌗', label: '글자 대비', desc: 'WCAG AA: 보통 글자 4.5 : 1 · 큰 글자 3 : 1 (배경 추정 포함)' },
+    fontsize: { emoji: '🔠', label: '작은 글자', desc: '쉬운 모드 글자는 16 px 이상' },
+    flash: { emoji: '⚡', label: '깜빡임', desc: '초당 3번보다 빠르게 깜빡이면 안 돼요 (광과민)' },
+    speak: { emoji: '🔊', label: '읽어주기', desc: '쉬운 모드의 안내 문장은 🔊 로 다시 들을 수 있어야 해요' },
+    focus: { emoji: '🎯', label: '한 가지 행동', desc: '한 화면의 큰 버튼은 3개 이하가 좋아요' },
+    hanja: { emoji: '🈶', label: '한자', desc: '쉬운 모드에서는 한자·어려운 말을 피해요' },
+    gate: { emoji: '🔒', label: '보호자 확인', desc: '쉬운 모드에서 어른용 화면(설정·로그아웃·초기화)은 보호자 확인 뒤에만 열려요' },
+  };
+  const KID_SEV = { critical: { label: '치명', emoji: '⛔', rank: 0 }, warn: { label: '경고', emoji: '⚠️', rank: 1 }, info: { label: '참고', emoji: '💡', rank: 2 } };
+  const INTERACTIVE = 'button, a[href], input:not([type=hidden]), select, textarea, summary, [role="button"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="option"], [role="radio"], [role="slider"], [data-action], [contenteditable=""], [contenteditable="true"]';
+  const FREETEXT = 'input:not([type]), input[type=text], input[type=search], input[type=email], input[type=password], input[type=tel], input[type=url], input[type=number], textarea, [contenteditable=""], [contenteditable="true"]';
+  const BUTTONISH = 'button, a[href], summary, [role="button"], [role="tab"], [role="menuitem"], [data-action]';
+  const EXIT_RX = /닫기|뒤로|돌아가기|그만|나가기|취소|close|back|✖|✕|×|⬅|←|❌/i;
+  const ERR_RX = /\bNaN\b|\bundefined\b|\[object [A-Za-z]+\]|\bInfinity\b|\bnull\b|TypeError|ReferenceError|ERR_[A-Z_]{3,}/;
+  const LAYERS = new Set(['labels-layer', 'modal-root', 'popover-root', 'reward-root', 'toast-root', 'fade', 'screen-root', 'loading-screen', 'game-container', 'dialogue-root', 'devcenter', 'hud', 'app']);
+  const kidExcluded = (el) => !!el.closest('#devcenter, .dc-spot, .dc-tour-pill, [data-kid-exempt]');
+
+  const KidAudit = {
+    last: null,
+    tapMin() {
+      const easy = easyOn();
+      let v = parseFloat(getComputedStyle(document.body).getPropertyValue('--tap'));
+      if (!(v >= 20 && v <= 120)) v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap'));
+      if (!(v >= 20 && v <= 120)) v = easy ? 56 : 40;
+      return { easy, min: v, critical: easy ? 44 : 24 };
+    },
+    /** visible box of an element on screen (null = hidden / off screen / collapsed), cached per run */
+    box(el, cache) {
+      if (cache.has(el)) return cache.get(el);
+      let out = null;
+      try {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 1 && r.height >= 1 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth && !(r.width <= 2 && r.height <= 2)) {
+          out = r;
+          for (let e = el, i = 0; e && e !== document.body && i < 16; e = e.parentElement, i++) {
+            const cs = getComputedStyle(e);
+            if (cs.display === 'none' || (i === 0 && (cs.visibility === 'hidden' || cs.visibility === 'collapse')) || Number(cs.opacity) < 0.05) { out = null; break; }
+          }
+        }
+      } catch (e) { out = null; }
+      cache.set(el, out);
+      return out;
+    },
+    /** is the element (or a descendant) the topmost thing under its centre? (modal backdrops cover the HUD) */
+    onTop(el, r) {
+      const x = clamp(r.left + r.width / 2, 0, innerWidth - 1), y = clamp(r.top + r.height / 2, 0, innerHeight - 1);
+      let stack;
+      try { stack = document.elementsFromPoint(x, y); } catch (e) { return true; }
+      const top = stack.find((e) => !kidExcluded(e));
+      return !top || top === el || el.contains(top) || top.contains(el) && !LAYERS.has(top.id);
+    },
+    name(el) {
+      const aria = el.getAttribute('aria-label');
+      if (aria && aria.trim()) return aria.trim();
+      const by = el.getAttribute('aria-labelledby');
+      if (by) { const t = by.split(/\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ').trim(); if (t) return t; }
+      const txt = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt) return txt;
+      if (el.value && /^(button|submit|reset)$/i.test(el.type || '')) return String(el.value);
+      const t = el.getAttribute('title') || el.querySelector?.('img[alt]')?.getAttribute('alt') || el.querySelector?.('svg title')?.textContent || '';
+      if (t.trim()) return t.trim();
+      if (el.id) { const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l?.textContent.trim()) return l.textContent.trim(); }
+      const wrap = el.closest('label');
+      if (wrap && wrap !== el && wrap.textContent.trim()) return wrap.textContent.trim();
+      return (el.getAttribute('placeholder') || '').trim();
+    },
+    hasPicture(el, text) {
+      return RX_EMOJI.test(text) || !!el.querySelector?.('svg, img, canvas, .ico, .emoji, [data-icon], i[class]') || /^(✖|✕|×|⬅|←|→|➡|↻|＋|－|\+|-)$/.test(text.trim());
+    },
+    /** the box a kid actually taps: labels around checkboxes/radios count */
+    targetBox(el, cache) {
+      let r = this.box(el, cache);
+      if ((el.type === 'checkbox' || el.type === 'radio') && el.tagName === 'INPUT') {
+        const lab = el.closest('label') || (el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
+        const lr = lab ? this.box(lab, cache) : null;
+        if (lr) r = lr;
+      }
+      return r;
+    },
+    /** painted area of a fixed HUD block (transparent wrappers → union of visible children) */
+    paintBox(el, cache, depth = 0) {
+      const r = this.box(el, cache);
+      if (!r) return null;
+      const cs = getComputedStyle(el);
+      const painted = parseColor(cs.backgroundColor).a > 0.05 || cs.backgroundImage !== 'none' || cs.boxShadow !== 'none' || (parseFloat(cs.borderTopWidth) > 0 && parseColor(cs.borderTopColor).a > 0.05);
+      if (painted || depth >= 2 || Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.textContent.trim())) return r;
+      let u = null;
+      for (const c of el.children) {
+        const b = this.paintBox(c, cache, depth + 1);
+        if (!b) continue;
+        u = u ? { left: Math.min(u.left, b.left), top: Math.min(u.top, b.top), right: Math.max(u.right, b.right), bottom: Math.max(u.bottom, b.bottom) } : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+      }
+      return u ? { left: u.left, top: u.top, right: u.right, bottom: u.bottom, width: u.right - u.left, height: u.bottom - u.top } : null;
+    },
+    bgOf(el) {
+      let acc = { r: 0, g: 0, b: 0, a: 0 };
+      let estimated = true;
+      for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        let c = parseColor(cs.backgroundColor);
+        if (c.a < 0.02 && cs.backgroundImage && cs.backgroundImage !== 'none') {
+          // gradients: average of the colour stops (quick estimate)
+          const stops = cs.backgroundImage.match(/rgba?\([^)]+\)/g) || [];
+          if (stops.length) {
+            const cs2 = stops.map(parseColor);
+            c = { r: cs2.reduce((n, x) => n + x.r, 0) / cs2.length, g: cs2.reduce((n, x) => n + x.g, 0) / cs2.length, b: cs2.reduce((n, x) => n + x.b, 0) / cs2.length, a: Math.min(1, cs2.reduce((n, x) => n + x.a, 0) / cs2.length) };
+          }
+        }
+        if (c.a > 0.01) acc = over(acc, c); // acc is on top of c: compose "under"
+        if (acc.a >= 0.985) { estimated = false; break; }
+      }
+      if (acc.a < 0.985) acc = over(acc, BACKDROP);
+      return { color: acc, estimated };
+    },
+
+    /**
+     * Audit what is on screen. opts: {scope: Element (default: whole page), screen: id, label, hud: include overlap check}
+     * Never mutates the page. Elements inside the developer center are ignored.
+     */
+    run(opts = {}) {
+      const t0 = perf();
+      const cache = new Map();
+      const root = opts.scope && opts.scope.isConnected ? opts.scope : document.body;
+      const tap = this.tapMin();
+      const easy = tap.easy;
+      const items = [];
+      const counts = { critical: 0, warn: 0, info: 0 };
+      const byKind = {};
+      for (const k of Object.keys(KID_KINDS)) byKind[k] = { critical: 0, warn: 0, info: 0 };
+      const stats = { interactive: 0, covered: 0, textChecked: 0, prompts: 0, speakable: 0, modals: 0, anims: 0 };
+      const add = (sev, kind, el, text, detail, r) => {
+        counts[sev]++; byKind[kind][sev]++;
+        if (items.length < 400) items.push({ sev, kind, sel: cssPath(el), text: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 60), detail, box: r ? [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] : null, el });
+      };
+      // dc-open hides the interact prompt / mascot bubble while the panel is up: audit the real game screen
+      const hadOpen = document.body.classList.contains('dc-open');
+      if (hadOpen) document.body.classList.remove('dc-open');
+      try {
+        // ---------------------------------------------------------------- interactive targets
+        const all = Array.from(root.querySelectorAll(INTERACTIVE)).filter((el) => !kidExcluded(el));
+        const seen = new Set();
+        for (const el of all) {
+          const r = this.targetBox(el, cache);
+          if (!r) continue;
+          // a control nested in another control of (almost) the same size is the same target
+          const outer = el.parentElement?.closest(INTERACTIVE);
+          if (outer && !kidExcluded(outer) && seen.has(outer)) {
+            const orr = this.box(outer, cache);
+            if (orr && orr.width * orr.height <= r.width * r.height * 1.6) continue;
+          }
+          if (!this.onTop(el, r)) { stats.covered++; continue; }
+          seen.add(el);
+          stats.interactive++;
+          const name = this.name(el);
+          const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+          const inlineLink = el.tagName === 'A' && el.parentElement && /^(P|LI|SPAN|SMALL|TD)$/.test(el.parentElement.tagName) && (el.parentElement.textContent || '').trim().length > (el.textContent || '').trim().length + 8;
+          // 👆 tap size
+          const m = Math.min(r.width, r.height);
+          if (m < tap.min - 0.5) { // half a pixel of sub-pixel layout (55.99 px) is still the full size
+            const sev = disabled || inlineLink ? 'info' : m < tap.critical ? 'critical' : 'warn';
+            add(sev, 'tap', el, name, `${Math.round(r.width)}×${Math.round(r.height)} px (최소 ${tap.min} px)${disabled ? ' · 꺼진 버튼' : inlineLink ? ' · 글 속 링크' : ''}`, r);
+          }
+          const buttonish = el.matches(BUTTONISH);
+          // 🏷️ accessible name + picture
+          const vis = (el.innerText || '').replace(/\s+/g, ' ').trim();
+          if (!name) add(el.getAttribute('aria-hidden') === 'true' ? 'info' : 'warn', 'name', el, '', '읽을 이름이 없어요 → aria-label 을 넣어 주세요', r);
+          else if (buttonish && easy && !this.hasPicture(el, vis || name) && !disabled) add('info', 'name', el, name, '그림(이모지)이 없어요 — 글을 못 읽는 아이도 알 수 있게', r);
+          // 🔤 long label
+          if (buttonish && vis) {
+            const hangul = (vis.match(/[가-힣]/g) || []).length;
+            const pic = this.hasPicture(el, vis);
+            if (hangul > 6 && !pic) add(easy ? 'warn' : 'info', 'label', el, vis, `${hangul}글자 · 그림 없음 (6글자 이하 + 그림)`, r);
+            else if (hangul > 12) add('info', 'label', el, vis, `${hangul}글자 — 더 짧게`, r);
+          }
+        }
+        // ---------------------------------------------------------------- ⌨️ free-text inputs
+        for (const el of root.querySelectorAll(FREETEXT)) {
+          if (kidExcluded(el) || el.readOnly || el.disabled) continue;
+          const r = this.box(el, cache);
+          if (!r) continue;
+          if (easy) add('critical', 'freetext', el, this.name(el) || el.getAttribute('placeholder') || el.type || 'text', `쉬운 모드에서 글자 입력칸이 보여요 (${el.tagName.toLowerCase()}${el.type ? `[type=${el.type}]` : ''})`, r);
+        }
+        // ---------------------------------------------------------------- 🚪 exits & 🎯 one obvious action (dialogs)
+        const dialogs = Array.from(root.querySelectorAll('.modal, [role="dialog"], [role="alertdialog"], [aria-modal="true"]')).filter((d) => !kidExcluded(d) && this.box(d, cache));
+        if (root !== document.body && root.matches?.('.modal, [role="dialog"], [aria-modal="true"]') && !dialogs.includes(root)) dialogs.unshift(root);
+        const outerDialogs = dialogs.filter((d) => !dialogs.some((o) => o !== d && o.contains(d)));
+        for (const d of outerDialogs) {
+          stats.modals++;
+          const btns = Array.from(d.querySelectorAll('button, [role="button"], a[href]')).filter((b) => this.box(b, cache));
+          const title = (d.querySelector('h1, h2, h3, .modal-head')?.textContent || d.getAttribute('aria-label') || '').trim();
+          const r = this.box(d, cache);
+          if (!btns.length) add('critical', 'exit', d, title, '버튼이 하나도 없는 창 — 막다른 길이에요', r);
+          else if (!btns.some((b) => EXIT_RX.test(`${this.name(b)} ${b.textContent}`))) add('warn', 'exit', d, title, '✖ 닫기 / ⬅️ 뒤로 버튼이 없어요', r);
+          const big = btns.filter((b) => b.matches('.btn-primary, .btn-gold, .btn-lg, .btn-xl, .easy-big, [data-primary]')).length;
+          if (big > 3) add('info', 'focus', d, title, `큰 버튼이 ${big}개 — 다음 할 일이 하나로 보이면 좋아요`, r);
+        }
+        // ---------------------------------------------------------------- text: contrast, size, error words, hanja
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT) });
+        const textEls = new Set();
+        for (let n = walker.nextNode(); n && textEls.size < 700; n = walker.nextNode()) {
+          const el = n.parentElement;
+          if (!el || textEls.has(el) || kidExcluded(el) || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|CODE|PRE|OPTION)$/.test(el.tagName)) continue;
+          textEls.add(el);
+        }
+        const contrastSeen = new Set();
+        for (const el of textEls) {
+          const r = this.box(el, cache);
+          if (!r) continue;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden') continue;
+          stats.textChecked++;
+          const own = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim();
+          if (ERR_RX.test(own)) add('critical', 'errtext', el, own, '화면에 프로그램 오류 글자가 보여요', r);
+          if (easy && /[㐀-䶿一-鿿]/.test(own)) add('info', 'hanja', el, own, '한자가 있어요', r);
+          const size = parseFloat(cs.fontSize) || 16;
+          if (easy && own.length > 1 && !RX_EMOJI.test(own.length <= 2 ? own : '')) {
+            if (size < 13.5) add('warn', 'fontsize', el, own, `${size.toFixed(0)} px (16 px 이상)`, r);
+            else if (size < 15.5) add('info', 'fontsize', el, own, `${size.toFixed(1)} px (16 px 이상)`, r);
+          }
+          const fg = parseColor(cs.color);
+          if (fg.a < 0.05 || !own.replace(/\p{Extended_Pictographic}|\s/gu, '')) continue;
+          const bg = this.bgOf(el);
+          const ink = over({ ...fg }, bg.color);
+          const ratio = contrastRatio(ink, bg.color);
+          const weight = Number(cs.fontWeight) || (cs.fontWeight === 'bold' ? 700 : 400);
+          const large = size >= 24 || (size >= 18.66 && weight >= 700);
+          const shadow = cs.textShadow && cs.textShadow !== 'none';
+          const need = large || shadow ? 3 : 4.5;
+          if (ratio < need) {
+            const key = `${cs.color}|${bg.color.r | 0},${bg.color.g | 0},${bg.color.b | 0}|${large}`;
+            if (contrastSeen.has(key) && items.length > 200) continue;
+            contrastSeen.add(key);
+            add('warn', 'contrast', el, own, `${ratio.toFixed(2)} : 1 (필요 ${need} : 1)${bg.estimated ? ' · 3D 배경 추정' : ''}`, r);
+          }
+        }
+        // ---------------------------------------------------------------- 🔊 speakable prompts (easy mode)
+        if (easy) {
+          const prompts = Array.from(root.querySelectorAll('.modal-head h2, #objective-hint, [data-say], [data-speak], [class*="next-step"], [class*="nextstep"], #dialogue-root [class*="text"]')).filter((el) => !kidExcluded(el) && this.box(el, cache) && el.textContent.trim());
+          const speakBtn = (scope) => Array.from(scope.querySelectorAll('button, [role="button"]')).some((b) => /🔊|📢/.test(b.textContent) || /읽어|듣기|소리로/.test(b.getAttribute('aria-label') || '') || b.hasAttribute('data-say') || b.hasAttribute('data-speak'));
+          for (const p of prompts) {
+            stats.prompts++;
+            const host = p.closest('.modal-head, header, [class*="card"], #dialogue-root, .modal') || p.parentElement || p;
+            if (p.hasAttribute('data-say') || p.hasAttribute('data-speak') || speakBtn(host) || speakBtn(p)) stats.speakable++;
+            else add('info', 'speak', p, p.textContent, '🔊 다시 듣기 버튼이 없어요', this.box(p, cache));
+          }
+        }
+        // ---------------------------------------------------------------- 🧱 fixed HUD overlaps
+        if (opts.hud !== false && root === document.body) {
+          const cands = [];
+          const vw = innerWidth * innerHeight;
+          for (const el of document.querySelectorAll('#hud > *, body > *, #app > *, #popover-root > *')) {
+            if (kidExcluded(el) || LAYERS.has(el.id) || el.matches('script, style, canvas')) continue;
+            const cs = getComputedStyle(el);
+            if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
+            const b = this.paintBox(el, cache);
+            if (!b || b.width * b.height > vw * 0.55 || b.width * b.height < 64) continue;
+            cands.push({ el, b });
+          }
+          for (let i = 0; i < cands.length; i++) {
+            for (let j = i + 1; j < cands.length; j++) {
+              const A = cands[i], B = cands[j];
+              if (A.el.contains(B.el) || B.el.contains(A.el)) continue;
+              const w = Math.min(A.b.right, B.b.right) - Math.max(A.b.left, B.b.left), h = Math.min(A.b.bottom, B.b.bottom) - Math.max(A.b.top, B.b.top);
+              if (w <= 2 || h <= 2) continue;
+              const ratio = (w * h) / Math.min(A.b.width * A.b.height, B.b.width * B.b.height);
+              if (ratio < 0.06 || w * h < 120) continue;
+              add(ratio > 0.3 ? 'warn' : 'info', 'overlap', A.el, `${cssPath(A.el)} ↔ ${cssPath(B.el)}`, `${Math.round(ratio * 100)}% 겹침 (${Math.round(w)}×${Math.round(h)} px)`, { left: Math.max(A.b.left, B.b.left), top: Math.max(A.b.top, B.b.top), width: w, height: h });
+            }
+          }
+        }
+        // ---------------------------------------------------------------- ⚡ photosensitivity (> 3 Hz infinite flashes)
+        try {
+          for (const a of document.getAnimations?.() || []) {
+            const t = a.effect?.target;
+            if (!t || t.nodeType !== 1 || kidExcluded(t) || (root !== document.body && !root.contains(t)) || a.playState !== 'running') continue;
+            stats.anims++;
+            const ct = a.effect.getComputedTiming?.() || {};
+            const dur = Number(ct.duration) / Math.max(0.01, Math.abs(a.playbackRate || 1));
+            if (ct.iterations !== Infinity || !(dur > 0) || dur >= 333) continue;
+            const props = new Set();
+            for (const k of a.effect.getKeyframes?.() || []) for (const p of Object.keys(k)) props.add(p);
+            if (['opacity', 'backgroundColor', 'background', 'filter', 'color', 'visibility', 'boxShadow'].some((p) => props.has(p))) {
+              const r = this.box(t, cache);
+              if (r) add('warn', 'flash', t, a.animationName || [...props].join(','), `${(1000 / dur).toFixed(1)} Hz 반복 (3 Hz 이하로)`, r);
+            }
+          }
+        } catch (e) { /* getAnimations unsupported */ }
+      } finally {
+        if (hadOpen) document.body.classList.add('dc-open');
+      }
+      items.sort((a, b) => KID_SEV[a.sev].rank - KID_SEV[b.sev].rank || a.kind.localeCompare(b.kind));
+      const score = Math.round(clamp(100 - counts.critical * 10 - Math.min(40, counts.warn * 2) - Math.min(10, counts.info * 0.25), 0, 100));
+      const result = {
+        at: now(), ms: perf() - t0, screen: opts.screen || 'live', label: opts.label || '지금 화면', easy, tap, score, counts, byKind, stats, items,
+        viewport: `${innerWidth}×${innerHeight}`, scope: root === document.body ? 'page' : cssPath(root),
+      };
+      if (!opts.keep) this.last = result;
+      return result;
+    },
+    /** JSON-safe copy (no element references) */
+    plain(r) {
+      if (!r) return null;
+      const { items, ...rest } = r;
+      return { ...rest, items: items.map(({ el, ...x }) => x) };
+    },
+  };
+
+  // =========================================================================== parent gate / speech / easy status
+  function easyStatus() {
+    const E = G.easy;
+    let unlocked = null;
+    try {
+      if (typeof E?.gateStatus === 'function') unlocked = !!E.gateStatus()?.unlocked;
+      else if (typeof E?.isUnlocked === 'function') unlocked = !!E.isUnlocked();
+      else if (typeof E?.gateUnlocked === 'boolean') unlocked = E.gateUnlocked;
+      else { const u = Number(E?.gateUnlockedUntil ?? E?.unlockedUntil); if (Number.isFinite(u) && u > 0) unlocked = u > Date.now(); }
+    } catch (e) { unlocked = null; }
+    let voices = 0, ko = 0;
+    try { const v = window.speechSynthesis?.getVoices?.() || []; voices = v.length; ko = v.filter((x) => /^ko/i.test(x.lang)).length; } catch (e) { /* unsupported */ }
+    const api = ['set', 'say', 'stop', 'speakable', 'gate', 'pick', 'confirm', 'celebrate', 'point', 'nextStep', 'goTo', 't', 'nameIdeas'];
+    return {
+      present: !!E, on: easyOn(), api: api.map((k) => ({ k, ok: typeof E?.[k] === 'function' })),
+      voiceGuide: G.settings?.voiceGuide !== false, voiceRate: num(G.settings?.voiceRate, 0.95), muted: !!G.settings?.muted,
+      speech: !!window.speechSynthesis, voices, koVoices: ko, kidChat: G.settings?.kidChat !== false,
+      parentGate: G.settings?.parentGate !== false, unlocked, reminder: num(G.settings?.playReminderMin, 30),
+      tap: KidAudit.tapMin().min, bodyClass: document.body.classList.contains('easy') ? 'easy' : document.body.classList.contains('easy-off') ? 'easy-off' : '-',
+      maskPII: typeof G.sys.social?.maskPII === 'function', sayLog: KidLog.say.slice(), gateLog: KidLog.gate.slice(),
+    };
+  }
+  /** switch easy mode; turning it OFF asks the parent gate (G.easy.set) — the panel steps aside so it can be seen */
+  async function setEasy(on) {
+    if (typeof G.easy?.set === 'function') {
+      const st = safe(() => G.easy.gateStatus?.()) || {};
+      const gated = !on && easyOn() && G.settings?.parentGate !== false && !st.unlocked;
+      if (gated && ui.opened) { panelAway(true); tourPill('🔒 보통 모드로 바꾸려면 보호자 확인을 풀어 주세요'); }
+      try { await G.easy.set(!!on); } catch (e) { G.log.warn('DEV', 'easy toggle failed', e); }
+      finally { if (gated) { tourPill(null); if (ui.opened && ui.away) panelAway(false); } }
+    } else { G.setSetting('easyMode', !!on); G.applySettingsToDom?.(); }
+    return easyOn();
+  }
+
+  // =========================================================================== 🎬 tour: open the main screens through public APIs and audit each
+  const firstKey = (o) => (o && typeof o === 'object' ? Object.keys(o)[0] : undefined);
+  const fnOf = (obj, ...names) => { for (const n of names) if (typeof obj?.[n] === 'function') return obj[n].bind(obj); return null; };
+  const KID_SCREENS = [
+    { id: 'hud', emoji: '🏠', label: '게임 화면 (HUD)', hud: true, fn: () => (G.state ? () => true : null) },
+    { id: 'bag', emoji: '🎒', label: '가방', fn: () => fnOf(G.sys.inventory, 'open') },
+    { id: 'shop', emoji: '🛒', label: '가게', fn: () => { const f = fnOf(G.sys.inventory, 'openShop'); return f && (() => f(firstKey(G.data.shops))); } },
+    { id: 'sticker', emoji: '📖', label: '스티커북 (도감·업적)', fn: () => fnOf(G.sys.progression, 'openStickerbook', 'openHub', 'openCollection') },
+    { id: 'today', emoji: '🔔', label: '오늘 (출석·미션)', fn: () => fnOf(G.sys.engagement, 'open') },
+    { id: 'quest', emoji: '📜', label: '할 일 (퀘스트)', fn: () => fnOf(G.sys.quest, 'openLog') },
+    { id: 'journal', emoji: '📝', label: '일기 쓰기', fn: () => fnOf(G.sys.journal, 'open') },
+    { id: 'edu', emoji: '📚', label: '배움터', fn: () => fnOf(G.sys.education, 'openLibrary') },
+    { id: 'lesson', emoji: '📗', label: '배움 이야기', fn: () => { const f = fnOf(G.sys.education, 'open'); const id = (G.data.educationIds || [])[0] || firstKey(G.data.education); return f && id ? () => f(id) : null; } },
+    { id: 'quiz', emoji: '❓', label: '퀴즈', fn: () => { const f = fnOf(G.sys.education, 'openQuiz'); const id = firstKey(G.data.quizzes); return f && id ? () => f(id) : null; } },
+    { id: 'map', emoji: '🗺️', label: '어디 갈까 (지도)', fn: () => fnOf(G.sys.minimap, 'openFastTravel', 'openWorldMap') },
+    { id: 'emote', emoji: '😊', label: '표현하기', fn: () => { const f = fnOf(G.sys.social, 'openExpress', 'openEmotes'); return f && (() => f(document.querySelector('[data-action="emote"]') || undefined)); } },
+    { id: 'chat', emoji: '💬', label: '말하기 (채팅)', fn: () => { const f = fnOf(G.sys.social, 'openKidChat', 'openPhrases'); if (f) return f; return typeof G.ui?.triggerAction === 'function' ? () => G.ui.triggerAction('chat') : null; } },
+    { id: 'avatar', emoji: '👕', label: '꾸미기 (아바타)', fn: () => fnOf(G.app, 'openAvatar') },
+    { id: 'menu', emoji: '☰', label: '메뉴', fn: () => fnOf(G.app, 'openMenu') },
+    // kid settings sheet (소리·음악·읽어주기·쉬운 모드) is ungated on purpose (§12.4 quick toggles);
+    // the grown-up settings must show the parent gate first
+    { id: 'settings-kid', emoji: '🔊', label: '설정 (아이용)', fn: () => fnOf(G.app, 'openKidSettings', 'openSettings') },
+    { id: 'settings', emoji: '⚙️', label: '어른 설정 (보호자 확인)', gate: true, fn: () => fnOf(G.app, 'openAdultSettings') || (typeof G.app?.openSettings === 'function' ? () => G.app.openSettings({ adult: true }) : null) },
+    { id: 'help', emoji: '❔', label: '도움말', fn: () => fnOf(G.app, 'openHelp') },
+    { id: 'photo', emoji: '📸', label: '사진 찍기', fn: () => fnOf(G.sys.photo, 'enter'), scope: () => document.getElementById('photo-ui'), close: () => { if (G.sys.photo?.active) G.sys.photo.exit?.({ silent: true }); } },
+  ];
+  const Tour = {
+    running: false, stop: false, result: null, step: null, _p: null,
+    screens() { return KID_SCREENS.map((s) => ({ id: s.id, emoji: s.emoji, label: s.label, available: !!safe(() => s.fn()) })); },
+    snapshot() { return { modals: document.querySelectorAll('#modal-root .modal').length, top: G.ui?.modal?.top?.() || null, pop: !!G.ui?.popover?.isOpen?.(), photo: !!G.sys.photo?.active, layers: document.body.querySelectorAll('[role="dialog"], [aria-modal="true"]').length }; },
+    changed(a) { const b = this.snapshot(); return b.modals !== a.modals || b.top !== a.top || b.pop !== a.pop || b.photo !== a.photo || b.layers !== a.layers; },
+    scopeFor(s) {
+      const sc = s.scope?.();
+      if (sc && sc.isConnected && !sc.hidden) return sc;
+      const top = G.ui?.modal?.top?.();
+      if (top?.el?.isConnected) return top.el;
+      const dlg = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).filter((d) => !kidExcluded(d) && d.getBoundingClientRect().width > 1).pop();
+      if (dlg) return dlg;
+      const pop = document.querySelector('#popover-root > *');
+      return pop && pop.getBoundingClientRect().width > 1 ? pop : null;
+    },
+    /** wait until enter animations of the screen (and of its backdrop / ancestors) have finished */
+    async settle(scope, maxMs = 1400) {
+      await nextFrame(); await nextFrame();
+      const related = (t) => !!t && t.nodeType === 1 && (!scope || scope.contains(t) || t.contains(scope));
+      try {
+        const anims = (document.getAnimations?.() || []).filter((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime) && related(a.effect?.target));
+        if (anims.length) await Promise.race([Promise.allSettled(anims.map((a) => a.finished)), sleep(maxMs)]);
+      } catch (e) { /* no Web Animations */ }
+      // still fading in (opacity on an ancestor)? poll briefly until the screen is really visible
+      if (scope) { const end = perf() + 900; while (perf() < end && !KidAudit.box(scope, new Map())) await sleep(60); }
+      // slow devices (software WebGL, < 5 fps): staggered entrance animations can still hold every button at
+      // opacity 0 — wait by FRAMES (not wall time) until at least one button is really visible, so a window that is
+      // still fading in is not reported as a dead end
+      if (scope) {
+        const hasBtn = () => Array.from(scope.querySelectorAll('button, [role="button"], a[href]')).some((b) => KidAudit.box(b, new Map()));
+        const end = perf() + 5000;
+        for (let i = 0; i < 40 && perf() < end && scope.isConnected && !hasBtn(); i++) await nextFrame();
+      }
+      await nextFrame();
+    },
+    async closeAll(s) {
+      try { s?.close?.(); } catch (e) { /* ignore */ }
+      try { G.easy?.stop?.(); } catch (e) { /* ignore */ }
+      try { G.ui?.popover?.close?.(); } catch (e) { /* ignore */ }
+      try { G.ui?.modal?.closeAll?.(); } catch (e) { /* ignore */ }
+      if (G.sys.photo?.active) { try { G.sys.photo.exit({ silent: true }); } catch (e) { /* ignore */ } }
+      const ae = document.activeElement;
+      if (ae && ae !== document.body && !kidExcluded(ae) && isTypingEl(ae)) ae.blur();
+      // overlays that are not G.ui modals (gate, pickers): close buttons first, Escape only when something is open
+      for (let i = 0; i < 3; i++) {
+        const open = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).filter((d) => !kidExcluded(d) && d.isConnected && d.getBoundingClientRect().width > 1);
+        if (!open.length) break;
+        const btn = open[open.length - 1].querySelector('[aria-label*="닫기"], [aria-label*="뒤로"], [data-close], .close, .icon-btn');
+        if (btn) btn.click();
+        else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        await nextFrame();
+      }
+    },
+    /** opts: {onStep(row, i, n), screens:[ids]} — returns {at, easy, rows, totals} */
+    run(opts = {}) {
+      if (this.running) return this._p;
+      this.running = true; this.stop = false;
+      this._p = (async () => {
+        const t0 = perf();
+        const rows = [];
+        const list = KID_SCREENS.filter((s) => !opts.screens || opts.screens.includes(s.id));
+        const wasOpen = ui.opened;
+        if (wasOpen) panelAway(true, '🎬 화면을 차례로 점검하고 있어요…');
+        const hadBlock = !!G.ui?.blockers?.has?.('devcenter');
+        if (hadBlock) G.ui.unblock('devcenter');
+        try {
+          await this.closeAll();
+          for (let i = 0; i < list.length; i++) {
+            const s = list[i];
+            if (this.stop) break;
+            this.step = { i, n: list.length, label: s.label, emoji: s.emoji };
+            tourPill(`${s.emoji} ${i + 1}/${list.length} · ${s.label}`);
+            const row = { id: s.id, emoji: s.emoji, label: s.label, status: 'skip', note: '', audit: null, ms: 0 };
+            const t1 = perf();
+            const fn = safe(() => s.fn());
+            if (!fn) { row.note = '공개 API 가 없어요 (건너뜀)'; rows.push(row); opts.onStep?.(row, i, list.length); continue; }
+            try {
+              const before = this.snapshot();
+              const ret = await Promise.race([Promise.resolve().then(fn), sleep(1500).then(() => 'pending')]);
+              if (s.id !== 'hud') { const until = perf() + 1600; while (perf() < until && !this.changed(before)) await sleep(60); }
+              const scope = s.id === 'hud' ? null : this.scopeFor(s);
+              if (s.id !== 'hud' && !scope && ret === false) { row.status = 'skip'; row.note = '열리지 않았어요 (지금은 열 수 없는 상태)'; }
+              else {
+                await this.settle(scope);
+                row.audit = KidAudit.run({ scope: scope || undefined, screen: s.id, label: s.label, hud: !!s.hud, keep: true });
+                row.status = 'ok';
+                if (!scope && s.id !== 'hud') row.note = '창을 찾지 못해 전체 화면을 점검했어요';
+                // kid safety: in easy mode a grown-up screen must show the parent gate first, never the screen itself
+                if (s.gate && easyOn() && G.settings?.parentGate !== false && typeof G.easy?.gate === 'function') {
+                  const gateShown = !!scope && /\d{2}\s*[×xX*]\s*\d/.test(scope.textContent || '');
+                  const unlocked = easyStatus().unlocked === true;
+                  if (!gateShown && !unlocked) {
+                    const a = row.audit;
+                    a.counts.critical++; a.byKind.gate.critical++;
+                    a.items.unshift({ sev: 'critical', kind: 'gate', sel: scope ? cssPath(scope) : 'body', text: s.label, detail: '보호자 확인 없이 어른용 화면이 열렸어요', box: null, el: scope || null });
+                    a.score = Math.max(0, a.score - 10);
+                  } else row.note = gateShown ? '보호자 확인 화면이 먼저 나와요 ✅' : '보호자 확인이 이미 풀려 있어요 (5분)';
+                }
+              }
+            } catch (e) {
+              row.status = 'fail'; row.note = `열다가 오류: ${String(e?.message || e).slice(0, 100)}`;
+              G.log.warn('DEV', `kid tour ${s.id} failed`, e);
+            } finally {
+              await this.closeAll(s);
+              // closed screens are detached: drop their element references (no DOM kept alive by old results)
+              if (row.audit) for (const it of row.audit.items) if (it.el && !it.el.isConnected) it.el = null;
+            }
+            row.ms = perf() - t1;
+            rows.push(row);
+            opts.onStep?.(row, i, list.length);
+          }
+        } finally {
+          await this.closeAll();
+          if (hadBlock && ui.opened) G.ui.block('devcenter');
+          tourPill(null);
+          if (wasOpen) panelAway(false);
+          this.running = false; this.step = null;
+        }
+        const totals = { critical: 0, warn: 0, info: 0, screens: rows.filter((r) => r.status === 'ok').length, skipped: rows.filter((r) => r.status === 'skip').length, failed: rows.filter((r) => r.status === 'fail').length };
+        for (const r of rows) if (r.audit) for (const k of ['critical', 'warn', 'info']) totals[k] += r.audit.counts[k];
+        this.result = { at: now(), ms: perf() - t0, easy: easyOn(), viewport: `${innerWidth}×${innerHeight}`, rows, totals, stopped: this.stop };
+        G.log.info('DEV', `kid tour: ${totals.screens} screens, critical ${totals.critical}, warn ${totals.warn}`);
+        G.bus.emit('dev:kid-tour', { totals });
+        return this.result;
+      })();
+      return this._p;
+    },
+    plain(r) { return r ? { ...r, rows: r.rows.map((x) => ({ ...x, audit: KidAudit.plain(x.audit) })) } : null; },
+  };
+  function safe(fn) { try { return fn(); } catch (e) { return null; } }
+
+  // =========================================================================== 🖥️ GPU safety (black-rectangle bug, CONTRACT §11 / a954f38)
+  const SCRUB_FALLBACK = {
+    name: 'NaNScrubShader',
+    uniforms: { tDiffuse: { value: null } },
+    vertexShader: 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform sampler2D tDiffuse;\nvarying vec2 vUv;\nvoid main() {\n  vec4 c = texture2D(tDiffuse, vUv);\n  if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0, 0.0, 0.0, 1.0);\n  gl_FragColor = vec4(min(max(c.rgb, vec3(0.0)), vec3(48.0)), clamp(c.a, 0.0, 1.0));\n}',
+  };
+  const objPath = (o) => { const p = []; for (let x = o; x && p.length < 5; x = x.parent) if (x.parent || x.name) p.unshift(x.name || x.type); return p.join(' / ').slice(0, 120); };
+  const LIT = (m) => !!m && (m.isMeshStandardMaterial || m.isMeshLambertMaterial || m.isMeshPhongMaterial || m.isMeshToonMaterial || m.isMeshMatcapMaterial || m.isMeshNormalMaterial || (m.isShaderMaterial && m.lights));
+  const Gpu = {
+    last: null, nan: null,
+    /** read-only scan of the whole scene: zero/NaN normals, NaN positions, flattened (zero-scale axis) lit meshes */
+    scan() {
+      const E = G.sys.engine;
+      if (!E?.scene) return null;
+      const t0 = perf();
+      const out = { at: now(), meshes: 0, geometries: 0, vertices: 0, badNormals: 0, badNormalGeos: [], nanPositions: 0, nanPosGeos: [], flat: [], flatInstances: 0, flatInstMeshes: [], instancedChecked: 0, shaders: [], repaired: num(G.gfx?.normalsRepaired), fixNormals: typeof G.gfx?.fixNormals === 'function' };
+      const seen = new Set();
+      const shaderSeen = new Set();
+      E.scene.traverse((o) => {
+        if (!o.isMesh) return;
+        out.meshes++;
+        const g = o.geometry;
+        if (g && !seen.has(g)) {
+          seen.add(g); out.geometries++;
+          const n = g.attributes?.normal, p = g.attributes?.position;
+          if (p) out.vertices += p.count;
+          if (n && n.itemSize === 3) {
+            let bad = 0;
+            if (n.isInterleavedBufferAttribute) { for (let i = 0; i < n.count; i++) { const x = n.getX(i), y = n.getY(i), z = n.getZ(i), l = x * x + y * y + z * z; if (!(l > 1e-12) || !Number.isFinite(l)) bad++; } }
+            else { const a = n.array; for (let i = 0; i + 2 < a.length; i += 3) { const l = a[i] * a[i] + a[i + 1] * a[i + 1] + a[i + 2] * a[i + 2]; if (!(l > 1e-12) || !Number.isFinite(l)) bad++; } }
+            if (bad) { out.badNormals += bad; if (out.badNormalGeos.length < 12) out.badNormalGeos.push({ obj: objPath(o), n: bad, geo: g.type }); }
+          }
+          if (p && !p.isInterleavedBufferAttribute && p.array) {
+            let nanP = 0;
+            const a = p.array;
+            for (let i = 0; i < a.length; i++) if (!Number.isFinite(a[i])) nanP++;
+            if (nanP) { out.nanPositions += nanP; if (out.nanPosGeos.length < 8) out.nanPosGeos.push({ obj: objPath(o), n: nanP }); }
+          }
+        }
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) if (m && (m.isShaderMaterial || m.isRawShaderMaterial) && !shaderSeen.has(m)) {
+          shaderSeen.add(m);
+          if (out.shaders.length < 24) {
+            const src = String(m.fragmentShader || '');
+            out.shaders.push({ name: m.name || objPath(o) || m.type, ops: ['normalize', 'pow', 'sqrt', 'log', 'inversesqrt', 'atan'].filter((op) => src.includes(`${op}(`)) });
+          }
+        }
+        let vis = true;
+        for (let p = o; p; p = p.parent) if (!p.visible) { vis = false; break; }
+        if (!vis || !mats.some(LIT)) return;
+        const e = o.matrixWorld.elements;
+        const sx = Math.hypot(e[0], e[1], e[2]), sy = Math.hypot(e[4], e[5], e[6]), sz = Math.hypot(e[8], e[9], e[10]);
+        const mx = Math.max(sx, sy, sz), mn = Math.min(sx, sy, sz);
+        if (mx > 1e-6 && mn < mx * 1e-4 && out.flat.length < 20) out.flat.push({ obj: objPath(o), scale: [sx, sy, sz].map((v) => +v.toFixed(4)) });
+        if (o.isInstancedMesh && o.instanceMatrix?.array) {
+          const a = o.instanceMatrix.array;
+          let k = 0;
+          for (let i = 0, cnt = Math.min(o.count, a.length / 16); i < cnt; i++) {
+            const j = i * 16;
+            const ix = a[j] * a[j] + a[j + 1] * a[j + 1] + a[j + 2] * a[j + 2], iy = a[j + 4] * a[j + 4] + a[j + 5] * a[j + 5] + a[j + 6] * a[j + 6], iz = a[j + 8] * a[j + 8] + a[j + 9] * a[j + 9] + a[j + 10] * a[j + 10];
+            const M = Math.max(ix, iy, iz), m = Math.min(ix, iy, iz);
+            if (M > 1e-12 && m < M * 1e-8) k++; // a zero axis with others non-zero: the instancing normal divide hits 0/0
+            out.instancedChecked++;
+          }
+          if (k) { out.flatInstances += k; if (out.flatInstMeshes.length < 12) out.flatInstMeshes.push({ obj: objPath(o), n: k, count: o.count }); }
+        }
+      });
+      out.passes = this.passes();
+      out.ms = perf() - t0;
+      out.ok = out.badNormals === 0 && out.nanPositions === 0 && !out.flat.length && !out.flatInstances && out.passes.ok !== false;
+      this.last = out;
+      return out;
+    },
+    /** repair every geometry in the scene with the engine's helper (counts go to G.gfx.normalsRepaired) */
+    fixAll() {
+      const E = G.sys.engine;
+      if (!E?.scene || typeof G.gfx?.fixNormals !== 'function') return 0;
+      const before = num(G.gfx.normalsRepaired);
+      const seen = new Set();
+      E.scene.traverse((o) => { const g = o.geometry; if (g && !seen.has(g)) { seen.add(g); G.gfx.fixNormals(g); } });
+      return num(G.gfx.normalsRepaired) - before;
+    },
+    passes() {
+      const E = G.sys.engine, A = ADDONS || {};
+      const c = E?.composer;
+      if (!c || !Array.isArray(c.passes)) return { composer: false, bloomPreset: !!E?.preset?.bloom, list: [], ok: null };
+      const list = c.passes.map((p) => {
+        let name = p.material?.name && p.material.name !== 'unspecified' ? p.material.name : '';
+        if (A.UnrealBloomPass && p instanceof A.UnrealBloomPass) name = 'UnrealBloomPass';
+        else if (A.RenderPass && p instanceof A.RenderPass) name = 'RenderPass';
+        else if (A.OutputPass && p instanceof A.OutputPass) name = 'OutputPass';
+        return { name: name || p.constructor?.name || 'Pass', enabled: p.enabled !== false };
+      });
+      const scrub = list.findIndex((x) => /NaNScrub/i.test(x.name) && x.enabled);
+      const bloom = list.findIndex((x) => /Bloom/i.test(x.name) && x.enabled);
+      return { composer: true, list, scrub, bloom, ok: bloom < 0 ? true : scrub >= 0 && scrub < bloom };
+    },
+    scrubShader() {
+      const p = G.sys.engine?.composer?.passes?.find?.((x) => x.material?.name === 'NaNScrubShader');
+      if (p?.material?.fragmentShader) return { shader: { name: 'NaNScrubShader', uniforms: { tDiffuse: { value: null } }, vertexShader: p.material.vertexShader, fragmentShader: p.material.fragmentShader }, source: '엔진 컴포저의 셰이더' };
+      const s = G.gfx?.nanScrubShader;
+      if (s?.fragmentShader) return { shader: { name: 'NaNScrubShader', uniforms: { tDiffuse: { value: null } }, vertexShader: s.vertexShader || SCRUB_FALLBACK.vertexShader, fragmentShader: s.fragmentShader }, source: 'G.gfx.nanScrubShader' };
+      return { shader: SCRUB_FALLBACK, source: '같은 셰이더 사본 (블룸 꺼짐)' };
+    },
+    /**
+     * NaN injection: a temporary ShaderMaterial computes z/z with a uniform z = 0 on a tiny quad in front of a test
+     * camera; the frame goes through the same chain as the engine (HalfFloat → [NaN scrub] → UnrealBloom) into a
+     * small 8-bit target. Without the scrub, bloom smears NaN into a black box on GPUs that produce NaN; with it the
+     * frame must be ≤ 1 % black. Every resource is disposed and the renderer state restored.
+     */
+    nanTest() {
+      const E = G.sys.engine, r = E?.renderer, A = ADDONS || {};
+      if (!r || !A.ShaderPass || !A.UnrealBloomPass) return { skip: true, detail: '렌더러 또는 후처리 모듈이 없어요' };
+      const S = 64;
+      const res = { at: now(), size: S, rawNaN: null, blackNoScrub: null, blackScrub: null, ok: false, source: '', frames: {}, ms: 0 };
+      const t0 = perf();
+      const prev = { rt: r.getRenderTarget(), autoClear: r.autoClear, color: r.getClearColor(new THREE.Color()), alpha: r.getClearAlpha() };
+      const trash = [];
+      const keep = (x) => { trash.push(x); return x; };
+      const black = (px) => { let n = 0; for (let i = 0; i < px.length; i += 4) if (Math.max(px[i], px[i + 1], px[i + 2]) <= 12) n++; return n / (px.length / 4); };
+      // three's readRenderTargetPixelsAsync (NPC/avatar portraits) keeps a PIXEL_PACK_BUFFER bound while it awaits the GPU
+      // fence; a synchronous readPixels into JS memory then fails (INVALID_OPERATION, the array stays 0). Unbind around
+      // our reads and put the binding back so the pending async read still completes.
+      const gl = r.getContext();
+      const gl2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+      const readPx = (target, arr) => {
+        const pack = gl2 ? gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) : null;
+        if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        try { r.readRenderTargetPixels(target, 0, 0, S, S, arr); } finally { if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack); }
+        return arr;
+      };
+      try {
+        const scene = new THREE.Scene();
+        const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+        cam.position.set(0, 0, 2);
+        const bgGeo = keep(new THREE.PlaneGeometry(2, 2)), bgMat = keep(new THREE.MeshBasicMaterial({ color: 0x9fb39f }));
+        scene.add(new THREE.Mesh(bgGeo, bgMat));
+        const nanGeo = keep(new THREE.PlaneGeometry(0.125, 0.125)); // 4×4 px of 64×64 ≈ 0.4 % of the frame
+        const nanMat = keep(new THREE.ShaderMaterial({
+          name: 'DevNaNInjector',
+          uniforms: { z: { value: 0 } },
+          vertexShader: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+          fragmentShader: 'uniform float z;\nvoid main() { float v = z / z; gl_FragColor = vec4(v, v, v, 1.0); }',
+        }));
+        const quad = new THREE.Mesh(nanGeo, nanMat);
+        quad.position.set(0.31, -0.22, 0.5);
+        scene.add(quad);
+        const { shader, source } = this.scrubShader();
+        res.source = source;
+        const scrub = keep(new A.ShaderPass(shader));
+        const copy = keep(new A.ShaderPass({ uniforms: { tDiffuse: { value: null } }, vertexShader: SCRUB_FALLBACK.vertexShader, fragmentShader: 'uniform sampler2D tDiffuse;\nvarying vec2 vUv;\nvoid main() { vec4 c = texture2D(tDiffuse, vUv); gl_FragColor = vec4(clamp(c.rgb, 0.0, 1.0), 1.0); }' }));
+        const rt = (type) => keep(new THREE.WebGLRenderTarget(S, S, { type, depthBuffer: false }));
+        // raw probe: can this GPU produce NaN at all? (float target when readable)
+        try {
+          if (r.extensions?.has?.('EXT_color_buffer_float')) {
+            const f = rt(THREE.FloatType);
+            r.setRenderTarget(f); r.setClearColor(0x000000, 1); r.clear(); r.render(scene, cam);
+            const px = readPx(f, new Float32Array(S * S * 4));
+            let n = 0, alpha = 0;
+            for (let i = 0; i < px.length; i += 4) { if (Number.isNaN(px[i]) || !Number.isFinite(px[i])) n++; if (px[i + 3] > 0.5) alpha++; }
+            res.rawNaN = alpha ? n : null; // alpha 0 everywhere = the read did not happen
+          }
+        } catch (e) { res.rawNaN = null; }
+        const pass = (withScrub) => {
+          const a = rt(THREE.HalfFloatType), b = rt(THREE.HalfFloatType), out = rt(THREE.UnsignedByteType);
+          const bloom = keep(new A.UnrealBloomPass(new THREE.Vector2(S, S), 0.24, 0.4, 1.05)); // the engine's settings
+          r.setRenderTarget(a); r.setClearColor(0x000000, 1); r.clear(); r.render(scene, cam);
+          let read = a, write = b;
+          if (withScrub) { scrub.render(r, write, read); [read, write] = [write, read]; }
+          bloom.render(r, write, read, 0, false);
+          copy.render(r, out, read);
+          return readPx(out, new Uint8Array(S * S * 4));
+        };
+        const opaque = (px) => { for (let i = 3; i < px.length; i += 4) if (px[i] !== 255) return false; return true; };
+        const no = pass(false), yes = pass(true);
+        if (!opaque(no) || !opaque(yes)) { res.skip = true; res.detail = '테스트 화면을 읽지 못했어요 (다른 GPU 읽기와 겹침) — 잠시 후 다시 실행해 주세요'; return res; }
+        res.blackNoScrub = black(no); res.blackScrub = black(yes);
+        res.frames = { noScrub: no, scrub: yes };
+        res.ok = res.blackScrub <= 0.01;
+        res.gpuMakesNaN = res.rawNaN == null ? null : res.rawNaN > 0;
+        res.detail = `스크럽 없음 검정 ${(res.blackNoScrub * 100).toFixed(1)}% → 스크럽 ${(res.blackScrub * 100).toFixed(2)}% (기준 ≤ 1%)${res.rawNaN == null ? '' : res.rawNaN ? ` · 원본 NaN ${res.rawNaN}화소` : ' · 이 GPU 는 0/0 을 NaN 으로 만들지 않아요'}`;
+      } catch (e) {
+        res.error = String(e?.message || e).slice(0, 200);
+        res.detail = `테스트 실행 오류: ${res.error}`;
+      } finally {
+        try { r.setRenderTarget(prev.rt); r.autoClear = prev.autoClear; r.setClearColor(prev.color, prev.alpha); } catch (e) { /* ignore */ }
+        // FullScreenQuad.dispose() would dispose three's SHARED full-screen triangle (also used by the engine's
+        // composer): keep it, dispose only what this test created
+        for (const x of trash) { try { if (x.fsQuad) x.fsQuad.dispose = () => {}; x.dispose?.(); } catch (e) { /* ignore */ } }
+        res.ms = perf() - t0;
+      }
+      this.nan = res;
+      return res;
+    },
+    plainNan(n) { if (!n) return null; const { frames, ...rest } = n; return rest; },
+  };
+
   // =========================================================================== in-browser self tests (never mutate the real save)
   const SKIP = (why) => ({ skip: true, detail: why });
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -1094,6 +1874,22 @@
     return Q._currentIdx(q, { progress: [1, 1, 0] }) === 1 && Q._currentIdx(q, { progress: [1, 2, 1] }) === -1 && Q._currentIdx(q, { progress: [] }) === 0;
   });
   T('📜 퀘스트', '선행 퀘스트에 순환이 없어요', () => !(Lint.get().issues.some((i) => i.cat === 'quests' && /순환/.test(i.msg))));
+  T('📜 퀘스트', 'craftNeed: 만들기 재료가 모자라면 무엇이 몇 개 필요한지 알려 줘요 (아이 "콩을 모아요" 단계)', () => {
+    const Q = G.sys.quest;
+    if (typeof Q?.craftNeed !== 'function') return SKIP('G.sys.quest.craftNeed 가 없어요');
+    if (Q.craftNeed('__NO_SUCH_CRAFT__') !== null) return { ok: false, detail: '없는 만들기 ID 는 null 이어야 해요' };
+    const bad = [];
+    let n = 0;
+    for (const [id, r] of Object.entries(G.data.crafts || {})) {
+      n++;
+      const short = Object.entries(r.in || {}).find(([item, k]) => (Number(G.sys.inventory?.count?.(item)) || 0) < Math.max(1, Math.round(Number(k) || 1)));
+      const got = Q.craftNeed(id);
+      if (!short) { if (got !== null) bad.push(`${id}: 재료가 다 있는데 ${got.item}`); continue; }
+      const crop = Object.keys(G.data.crops || {}).find((c) => G.data.crops[c]?.harvestItem === short[0]) || null;
+      if (!got || got.item !== short[0] || got.need !== Math.max(1, Math.round(Number(short[1]) || 1)) || got.crop !== crop) bad.push(`${id}: ${JSON.stringify(got)}`);
+    }
+    return { ok: !bad.length, detail: bad.length ? bad.slice(0, 3).join(' · ') : `만들기 ${n}가지 확인 (가방 그대로)` };
+  });
 
   // ---- 농사
   T('🌱 농사 계산', '작물 단계는 0 → 100 오름차순', () => { const s = G.data.cropStages || []; return s.length >= 2 && s[0].min === 0 && s[s.length - 1].min === 100 && s.every((x, i) => !i || x.min > s[i - 1].min); });
@@ -1166,6 +1962,243 @@
   T('🧩 시스템', 'localStorage 쓰기·읽기·삭제', () => {
     const k = 'tfm.v1.dev.probe';
     try { localStorage.setItem(k, '1'); const ok = localStorage.getItem(k) === '1'; localStorage.removeItem(k); return ok && localStorage.getItem(k) === null; } catch (e) { return { ok: false, detail: '저장소가 차단돼 있어요' }; }
+  });
+
+
+  // ---- GPU 안전 (검은 사각형 버그 a954f38 재발 방지)
+  T('🖥️ GPU 안전', '장면 전체에 길이 0·NaN 정점 노멀이 없어요', () => {
+    const s = Gpu.scan();
+    if (!s) return SKIP('3D 장면이 아직 없어요');
+    return { ok: s.badNormals === 0, detail: s.badNormals ? `${s.badNormals}개 — ${s.badNormalGeos.map((g) => g.obj).slice(0, 3).join(', ')}` : `메시 ${fmt(s.meshes)} · 정점 ${fmt(s.vertices)} 검사 · 엔진이 고친 노멀 누적 ${fmt(s.repaired)}개` };
+  });
+  T('🖥️ GPU 안전', '정점 위치에 NaN/Infinity 가 없어요', () => {
+    const s = Gpu.last && now() - Gpu.last.at < 5000 ? Gpu.last : Gpu.scan();
+    if (!s) return SKIP('3D 장면이 아직 없어요');
+    return { ok: s.nanPositions === 0, detail: s.nanPositions ? s.nanPosGeos.map((g) => `${g.obj} ×${g.n}`).join(', ') : `${fmt(s.geometries)}개 지오메트리 정상` };
+  });
+  T('🖥️ GPU 안전', '한 축만 0 으로 납작한 조명 메시·인스턴스가 없어요 (노멀 행렬 0 → NaN)', () => {
+    const s = Gpu.last && now() - Gpu.last.at < 5000 ? Gpu.last : Gpu.scan();
+    if (!s) return SKIP('3D 장면이 아직 없어요');
+    const bad = [...s.flat.map((f) => `${f.obj} (${f.scale.join('·')})`), ...s.flatInstMeshes.map((f) => `${f.obj} 인스턴스 ${f.n}개`)];
+    return { ok: !bad.length, detail: bad.length ? bad.slice(0, 4).join(', ') : `인스턴스 ${fmt(s.instancedChecked)}개 포함 정상` };
+  });
+  T('🖥️ GPU 안전', '후처리: NaN 청소(NaNScrubShader)가 블룸보다 먼저', () => {
+    const p = Gpu.passes();
+    if (!p.composer) return SKIP(p.bloomPreset ? '컴포저가 아직 없어요' : '이 품질에서는 블룸이 꺼져 있어요 (NaN 이 번지지 않아요)');
+    return { ok: p.ok, detail: p.list.map((x) => x.name).join(' → ') };
+  });
+  T('🖥️ GPU 안전', 'NaN 주입 → 청소 패스를 거치면 검은 화소 ≤ 1%', () => {
+    const r = Gpu.nanTest();
+    if (r.skip) return SKIP(r.detail);
+    return { ok: !r.error && r.ok, detail: r.detail };
+  });
+
+  // ---- 쉬운 모드 (G.easy, CONTRACT §12.2)
+  const EASY_API = ['set', 'say', 'stop', 'speakable', 'gate', 'pick', 'confirm', 'celebrate', 'point', 'nextStep', 'goTo', 't', 'nameIdeas'];
+  T('👶 쉬운 모드', 'G.easy 공개 API 가 모두 있어요', () => {
+    if (!G.easy) return SKIP('08-easy.js (G.easy) 가 아직 없어요');
+    const miss = EASY_API.filter((k) => typeof G.easy[k] !== 'function');
+    return { ok: !miss.length && typeof G.easy.on === 'boolean', detail: miss.length ? `없음: ${miss.join(', ')}` : `${EASY_API.length}개 · 지금 ${G.easy.on ? '쉬운 모드' : '보통 모드'}` };
+  });
+  T('👶 쉬운 모드', 'body 클래스 · --tap 이 설정과 같아요', () => {
+    const on = G.settings?.easyMode !== false;
+    const b = document.body.classList;
+    const tap = KidAudit.tapMin().min;
+    if (!b.contains('easy') && !b.contains('easy-off')) return SKIP('body.easy / easy-off 클래스가 아직 없어요');
+    return { ok: b.contains('easy') === on && b.contains('easy-off') === !on && tap === (on ? 56 : 40), detail: `easyMode=${on} · body.${on ? 'easy' : 'easy-off'} · --tap ${tap}px` };
+  });
+  T('👶 쉬운 모드', 't(보통, 쉬운) 은 모드에 맞는 문구를 줘요', () => {
+    if (typeof G.easy?.t !== 'function') return SKIP('G.easy.t 가 없어요');
+    return G.easy.t('보통', '쉬운') === (easyOn() ? '쉬운' : '보통');
+  });
+  T('👶 쉬운 모드', 'say() 는 음성이 없는 환경에서도 오류 없이 끝나요', async () => {
+    if (typeof G.easy?.say !== 'function') return SKIP('G.easy.say 가 없어요');
+    let threw = null;
+    try { const p = G.easy.say('', { interrupt: false }); if (p && typeof p.then === 'function') await Promise.race([p, sleep(1500)]); G.easy.stop?.(); } catch (e) { threw = e; }
+    return { ok: !threw, detail: threw ? String(threw.message || threw) : `speechSynthesis ${window.speechSynthesis ? '있음' : '없음'}` };
+  });
+  T('👶 쉬운 모드', 'nameIdeas: 아이 친화 닉네임 (금칙어·개인정보 없음, 닉네임 규칙 통과)', () => {
+    if (typeof G.easy?.nameIdeas !== 'function') return SKIP('G.easy.nameIdeas 가 없어요');
+    const list = G.easy.nameIdeas(40);
+    if (!Array.isArray(list) || list.length < 8) return { ok: false, detail: `결과가 ${Array.isArray(list) ? list.length : typeof list}개` };
+    const bad = [];
+    const S = G.sys.social;
+    for (const n of list) {
+      const s = String(n ?? '');
+      const why = [];
+      if (S?.hasBadWord?.(s) || (G.data.badWords || []).some((w) => w && s.toLowerCase().includes(String(w).toLowerCase()))) why.push('금칙어');
+      if (typeof S?.maskPII === 'function' && maskOut(S.maskPII(s)) !== s) why.push('개인정보');
+      const v = G.auth?.validate?.nickname?.(s);
+      if (v) why.push(`규칙: ${v}`);
+      if (/[0-9]{3,}/.test(s)) why.push('숫자');
+      if (why.length) bad.push(`"${s}" ${why.join('·')}`);
+    }
+    const uniq = new Set(list).size;
+    return { ok: !bad.length && uniq >= Math.min(list.length, 8), detail: bad.length ? bad.slice(0, 3).join(' / ') : `${list.length}개 · 서로 다른 이름 ${uniq}개 · 예: ${list.slice(0, 3).join(', ')}` };
+  });
+  /** find a visible button (outside the dev center) whose text contains `text` */
+  const findKidButton = (text) => Array.from(document.querySelectorAll('button, [role="button"]')).find((b) => !kidExcluded(b) && b.isConnected && (b.textContent || '').includes(text));
+  async function waitFor(fn, ms = 1500) { const end = perf() + ms; for (;;) { const v = fn(); if (v) return v; if (perf() > end) return null; await sleep(40); } }
+  T('👶 쉬운 모드', 'pick(): 고른 그림의 id 로 끝나고 ✖ 는 null', async () => {
+    if (typeof G.easy?.pick !== 'function') return SKIP('G.easy.pick 가 없어요');
+    const items = [{ id: 'dc-apple', emoji: '🍎', label: '사과깡' }, { id: 'dc-banana', emoji: '🍌', label: '바나나깡' }];
+    const p1 = G.easy.pick({ title: '개발자 테스트', items, say: '' });
+    const b = await waitFor(() => findKidButton('바나나깡'));
+    if (!b) { G.ui.modal?.closeAll?.(); await Promise.race([p1, sleep(500)]); return SKIP('고르기 화면의 버튼을 찾지 못했어요'); }
+    b.click();
+    const v1 = await Promise.race([p1, sleep(1500).then(() => '__timeout')]);
+    const p2 = G.easy.pick({ title: '개발자 테스트', items, say: '' });
+    await waitFor(() => findKidButton('사과깡'));
+    const close = Array.from(document.querySelectorAll('button')).reverse().find((x) => !kidExcluded(x) && x.isConnected && /닫기|뒤로|close/i.test(x.getAttribute('aria-label') || x.textContent || ''));
+    if (close) close.click(); else G.ui.modal?.closeAll?.();
+    const v2 = await Promise.race([p2, sleep(1500).then(() => '__timeout')]);
+    return { ok: v1 === 'dc-banana' && v2 === null, detail: `선택 → ${JSON.stringify(v1)} · 닫기 → ${JSON.stringify(v2)}` };
+  });
+  T('👶 쉬운 모드', 'confirm(): 좋아요 → true · 아니요 → false', async () => {
+    if (typeof G.easy?.confirm !== 'function') return SKIP('G.easy.confirm 가 없어요');
+    const p1 = G.easy.confirm({ emoji: '🧪', title: '개발자 테스트', say: '', yes: '네맞아요', no: '아니에요' });
+    const yes = await waitFor(() => findKidButton('네맞아요'));
+    if (!yes) { G.ui.modal?.closeAll?.(); await Promise.race([p1, sleep(500)]); return SKIP('확인 화면의 버튼을 찾지 못했어요'); }
+    yes.click();
+    const v1 = await Promise.race([p1, sleep(1500).then(() => '__timeout')]);
+    const p2 = G.easy.confirm({ emoji: '🧪', title: '개발자 테스트', say: '', yes: '네맞아요', no: '아니에요' });
+    const no = await waitFor(() => findKidButton('아니에요'));
+    no?.click();
+    const v2 = await Promise.race([p2, sleep(1500).then(() => '__timeout')]);
+    return { ok: v1 === true && v2 === false, detail: `좋아요 → ${JSON.stringify(v1)} · 아니요 → ${JSON.stringify(v2)}` };
+  });
+  T('👶 쉬운 모드', '퀘스트를 주는 NPC는 아이에게 제안 대사부터 보여 줘요 (메뉴 헤매기 없음)', () => {
+    const D = G.sys.dialogue;
+    if (typeof D?.check !== 'function') return SKIP('G.sys.dialogue.check 가 없어요');
+    const on = !!G.easy?.on;
+    if (D.check({ easy: on }) !== true || D.check({ easy: !on }) !== false) return { ok: false, detail: '대화 조건 easy 가 지금 모드와 달라요' };
+    const qs = G.data.quests || {};
+    const defs = Object.values(G.data.dialogues || {});
+    const accepts = (node, id) => (node?.choices || []).some((c) => (c.actions || []).some((a) => a && a.type === 'acceptQuest' && a.quest === id));
+    const bad = [];
+    let n = 0;
+    for (const [id, q] of Object.entries(qs)) {
+      if (!q?.giver || q.autoAccept) continue;
+      const def = defs.find((d) => d && d.npc === q.giver);
+      if (!def) continue;
+      n++;
+      const ok = (def.entries || []).some((e) => e && JSON.stringify(e.if || {}).includes(`"${id}":"available"`) && accepts(def.nodes?.[e.node], id));
+      if (!ok) bad.push(id);
+    }
+    return { ok: !bad.length, detail: bad.length ? `제안으로 바로 가지 않아요: ${bad.join(', ')}` : `퀘스트 ${n}개 모두 제안부터` };
+  });
+  T('🔒 개인정보 가림', '설정: 프로필 키(쉬운 모드·아이 채팅·보호자 확인)는 기기 저장소에 새지 않아요', () => {
+    if (typeof G.setSetting !== 'function') return SKIP('G.setSetting 이 없어요');
+    const KEY = 'tfm.v1.settings';
+    const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return null; } };
+    const before = read();
+    if (!before) return SKIP('기기 저장소를 읽을 수 없어요');
+    const cur = !!G.settings.showFps;
+    G.setSetting('showFps', !cur); G.setSetting('showFps', cur); // one ordinary device setting, then back
+    const after = read() || {};
+    const leaked = (G.settingsProfileKeys || ['easyMode', 'kidChat', 'parentGate']).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k]));
+    const ok = !leaked.length && after._v === 2 && after.showFps === cur;
+    return { ok, detail: ok ? `기기 저장소 형식 _v=${after._v} · 프로필 키 그대로 (${G.state ? '프로필 열림' : '처음 화면'})` : `새어 나감: ${leaked.join(', ') || '없음'} · _v=${after._v}` };
+  });
+  T('👶 쉬운 모드', '보호자 확인: 아무리 빨리 눌러도 문제 하나에 답 하나 (마구 누르기 방지)', async () => {
+    if (typeof G.easy?.gate !== 'function') return SKIP('G.easy.gate 가 없어요');
+    if (!easyOn() || G.settings.parentGate === false) return SKIP('쉬운 모드/보호자 확인이 꺼져 있어요');
+    if (G.easy.gateStatus?.().unlocked) return SKIP('보호자 확인이 이미 풀려 있어요 (5분 동안)');
+    if (G.easy.gateStatus?.().cooldownLeft > 0) return SKIP('보호자 확인이 쉬는 중이에요');
+    const LS = 'tfm.v1.gate';
+    let saved = null;
+    try { saved = localStorage.getItem(LS); } catch (e) { saved = null; }
+    const p = G.easy.gate({ reason: 'dev-test-mash', title: '개발자 테스트' });
+    try {
+      const armed = await waitFor(() => document.querySelector('.easy-gate-modal .easy-gate-choice:not([disabled])'), 2500);
+      if (!armed) return SKIP('보호자 확인 문제가 나타나지 않았어요');
+      const spans = Array.from(document.querySelectorAll('.easy-gate-modal .easy-gate-q span')).map((x) => x.textContent);
+      const ans = Number(spans[0]) * Number(spans[2]);
+      const btns = Array.from(document.querySelectorAll('.easy-gate-modal .easy-gate-choice'));
+      const right = btns.find((b) => Number(b.dataset.v) === ans);
+      const wrong = btns.filter((b) => b !== right);
+      const w0 = G.easy.gateStatus().wrong;
+      right?.click();
+      for (const b of wrong) b.click(); // the same finger keeps tapping the other tiles in the same moment
+      const st = G.easy.gateStatus();
+      const ok = !!right && st.unlocked && st.wrong <= w0 && st.cooldownLeft === 0;
+      return { ok, detail: `정답 → 바로 다른 보기 ${wrong.length}개 → 통과 ${st.unlocked ? '✅' : '❌'} · 틀림 ${w0} → ${st.wrong} (늘면 안 돼요)` };
+    } finally {
+      G.ui.modal?.get?.('easy-gate')?.close?.();
+      await Promise.race([p, sleep(1500)]);
+      try { if (saved == null) localStorage.removeItem(LS); else localStorage.setItem(LS, saved); } catch (e) { /* storage blocked */ }
+      G.easy.lockGate?.();
+    }
+  });
+  T('👶 쉬운 모드', '보호자 확인: 두 자리 × 한 자리 · 보기 4개 중 정답 하나 · ✖ 는 false', async () => {
+    if (typeof G.easy?.gate !== 'function') return SKIP('G.easy.gate 가 없어요');
+    // pure helper first (if the module exposes one), then the real screen
+    const q = safe(() => (G.easy._gateQuestion || G.easy.gateQuestion)?.call(G.easy));
+    if (q && Array.isArray(q.choices)) {
+      const okq = q.a >= 10 && q.a <= 99 && q.b >= 2 && q.b <= 9 && q.choices.length === 4 && new Set(q.choices).size === 4 && q.choices.filter((c) => c === q.a * q.b).length === 1;
+      if (!okq) return { ok: false, detail: `문제 ${JSON.stringify(q)}` };
+    }
+    if (!easyOn() || G.settings.parentGate === false) {
+      const v = await Promise.race([G.easy.gate({ reason: 'dev-test' }), sleep(800).then(() => '__timeout')]);
+      return { ok: v === true, detail: `쉬운 모드/보호자 확인이 꺼져 있으면 바로 통과 → ${JSON.stringify(v)}` };
+    }
+    const before = KidLog.gate.length;
+    const p = G.easy.gate({ reason: 'dev-test', title: '개발자 테스트' });
+    const host = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')).reverse().find((d) => !kidExcluded(d) && /\d{2}\s*[×xX*]\s*\d/.test(d.textContent || '')), 1200);
+    if (!host) {
+      const v = await Promise.race([p, sleep(400).then(() => '__pending')]);
+      if (v === true) return SKIP('보호자 확인이 이미 풀려 있어요 (5분 동안)');
+      G.ui.modal?.closeAll?.();
+      return SKIP('보호자 확인 화면의 문제를 읽지 못했어요');
+    }
+    const m = (host.textContent || '').match(/(\d{2})\s*[×xX*]\s*(\d)/);
+    const a = Number(m[1]), b2 = Number(m[2]);
+    const choices = Array.from(host.querySelectorAll('button')).map((x) => x.textContent.replace(/[^\d]/g, '')).filter((t) => t.length >= 2).map(Number);
+    const right = choices.filter((c) => c === a * b2).length;
+    const close = Array.from(host.querySelectorAll('button')).find((x) => /닫기|뒤로|그만|close/i.test(`${x.getAttribute('aria-label') || ''} ${x.textContent}`));
+    if (close) close.click(); else { G.ui.modal?.closeAll?.(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); }
+    const v = await Promise.race([p, sleep(1500).then(() => '__timeout')]);
+    const evt = KidLog.gate.length > before ? KidLog.gate[KidLog.gate.length - 1] : null;
+    const ok = a >= 10 && a <= 99 && b2 >= 2 && b2 <= 9 && choices.length === 4 && new Set(choices).size === 4 && right === 1 && v === false;
+    return { ok, detail: `${a} × ${b2} · 보기 ${choices.join('/')} · 닫기 → ${JSON.stringify(v)}${evt ? ` · easy:gate ok=${evt.ok}` : ''}` };
+  });
+
+  // ---- 개인정보 가림 (CONTRACT §12.4, client mirror of server/lib/ChatFilter.php)
+  const piiCheck = (cases) => {
+    const M = G.sys.social?.maskPII;
+    if (typeof M !== 'function') return SKIP('G.sys.social.maskPII 가 아직 없어요');
+    const bad = [];
+    for (const t of cases) {
+      const o = maskOut(M.call(G.sys.social, t));
+      if (!o.includes('🔒') || /[0-9]{4}|@[a-z]|\.com|\.kr|테헤란로|강남구|1203호/i.test(o)) bad.push(`${t} → ${o}`);
+    }
+    return { ok: !bad.length, detail: bad.length ? bad.slice(0, 2).join(' / ') : cases.map((t) => maskOut(M.call(G.sys.social, t))).slice(0, 2).join(' · ') };
+  };
+  T('🔒 개인정보 가림', '전화번호 (010-1234-5678 · 01012345678 · +82 10 1234 5678)', () => piiCheck(PII_VECTORS.phone));
+  T('🔒 개인정보 가림', '이메일 · 링크', () => piiCheck([...PII_VECTORS.email, ...PII_VECTORS.url]));
+  T('🔒 개인정보 가림', '주소 (서울시 강남구 테헤란로 123 · 동·호수)', () => piiCheck(PII_VECTORS.address));
+  T('🔒 개인정보 가림', '보통 문장은 그대로 (숫자·@멘션·지명)', () => {
+    const M = G.sys.social?.maskPII;
+    if (typeof M !== 'function') return SKIP('G.sys.social.maskPII 가 아직 없어요');
+    const keep = [...new Set([...PII_VECTORS.keep, ...(sharedPII()?.keep || [])])];
+    const bad = keep.filter((t) => maskOut(M.call(G.sys.social, t)) !== t);
+    return { ok: !bad.length, detail: bad.length ? `잘못 가림: ${bad.slice(0, 3).join(' / ')}` : `${keep.length}문장 그대로` };
+  });
+  T('🔒 개인정보 가림', '숨긴 번호·주소도 가려요 (전각 ０１０ · 010/1234 · 공일공-일이삼사 · at…dot · bad[.]com) — tests/pii-vectors.json', () => {
+    const M = G.sys.social?.maskPII;
+    if (typeof M !== 'function') return SKIP('G.sys.social.maskPII 가 아직 없어요');
+    const v = sharedPII();
+    if (!v || !v.whole.length) return SKIP('빌드에 공유 테스트 벡터(window.__BUILD__.piiVectors)가 없어요');
+    const bad = [];
+    for (const t of v.whole) { const o = maskOut(M.call(G.sys.social, t)); if (o !== '🔒') bad.push(`${t} → ${o}`); }
+    for (const t of v.partial) { const o = maskOut(M.call(G.sys.social, t)); if (!o.includes('🔒') || /[0-9]{4}|@[a-z]|\.com|\.kr|dino|강남구|역삼동/iu.test(o)) bad.push(`${t} → ${o}`); }
+    return { ok: !bad.length, detail: bad.length ? bad.slice(0, 2).join(' / ') : `${v.whole.length + v.partial.length}개 모두 🔒 (서버 ChatFilter 와 같은 벡터)` };
+  });
+  T('🔒 개인정보 가림', '쉬운 모드 채팅은 글자 입력 없이 고르기만 (kidChat)', () => {
+    if (!easyOn()) return SKIP('보통 모드예요');
+    if (G.settings.kidChat === false) return { ok: false, detail: '쉬운 모드인데 kidChat 이 꺼져 있어요' };
+    const inputs = Array.from(document.querySelectorAll('#chat-panel input, #chat-panel textarea, #chat-form input')).filter((el) => !el.disabled && !el.readOnly && KidAudit.box(el, new Map()));
+    return { ok: !inputs.length, detail: inputs.length ? `보이는 채팅 입력칸 ${inputs.length}개` : '보이는 채팅 입력칸 없음' };
   });
 
   const Tests = {
@@ -1361,9 +2394,14 @@
     minus(Math.min(8, lint.counts.warn), `데이터 경고 ${lint.counts.warn}건`);
     if (tests) minus(Math.min(25, tests.failed * 5), `테스트 실패 ${tests.failed}건`);
     if (fps.cur && fps.cur < 15) minus(4, `낮은 FPS (${fps.cur})`);
+    const K = KidAudit.last;
+    if (K) { minus(Math.min(15, K.counts.critical * 3), `어린이 사용성 치명 ${K.counts.critical}건`); minus(Math.min(5, Math.floor(K.counts.warn / 5)), `어린이 사용성 경고 ${K.counts.warn}건`); }
+    const Gs = Gpu.last;
+    if (Gs && !Gs.ok) minus(8, 'GPU 안전 문제 (노멀·NaN·후처리)');
+    if (Gpu.nan && !Gpu.nan.skip && !Gpu.nan.ok) minus(10, 'NaN 주입 테스트 실패');
     score = Math.round(clamp(score, 0, 100));
     const grade = score >= 90 ? { label: '아주 건강해요', emoji: '🟢', tone: 'ok', mood: 'cheer' } : score >= 75 ? { label: '양호해요', emoji: '🟢', tone: 'ok', mood: 'happy' } : score >= 50 ? { label: '살펴볼 곳이 있어요', emoji: '🟡', tone: 'warn', mood: 'think' } : { label: '점검이 필요해요', emoji: '🔴', tone: 'bad', mood: 'surprised' };
-    return { score, grade, reasons, modules: { total: mods.rows.length, ok: mods.rows.filter((r) => r.status === 'ok').length, failed, disabled, missing: mods.missing }, errors: err, lint: lint.counts, tests: tests ? { passed: tests.passed, failed: tests.failed, skipped: tests.skipped, total: tests.total } : null, fps };
+    return { score, grade, reasons, modules: { total: mods.rows.length, ok: mods.rows.filter((r) => r.status === 'ok').length, failed, disabled, missing: mods.missing }, errors: err, lint: lint.counts, tests: tests ? { passed: tests.passed, failed: tests.failed, skipped: tests.skipped, total: tests.total } : null, fps, kids: K ? { score: K.score, ...K.counts } : null, gpu: Gs ? { ok: Gs.ok, nan: Gpu.nan ? (Gpu.nan.skip ? 'skip' : Gpu.nan.ok) : null } : null };
   }
 
   // =========================================================================== report (JSON + Markdown)
@@ -1388,6 +2426,16 @@
       tests: Tests.result ? { passed: Tests.result.passed, failed: Tests.result.failed, skipped: Tests.result.skipped, total: Tests.result.total, ms: Math.round(Tests.result.ms), results: Tests.result.results.map((r) => ({ ...r, ms: +r.ms.toFixed(2) })) } : null,
       events: [...Probe.bus.entries()].sort((a, b) => b[1].emits - a[1].emits).slice(0, 60).map(([name, r]) => ({ name, emits: r.emits, listeners: G.bus.count?.(name) || 0 })),
       save: st ? { version: st.version, savedAt: st.savedAt || null, bytes: stateSize(), level: st.stats?.level, quests: Object.keys(st.quests || {}).length, journal: (st.journal || []).length, photos: (st.photos || []).length } : null,
+      kids: (() => {
+        const e = easyStatus();
+        const live = KidAudit.plain(KidAudit.run({ keep: true }));
+        // texts on screen may carry the nickname: the report keeps kinds, selectors and sizes only
+        live.items = live.items.map(({ text, ...x }) => x);
+        const tour = Tour.plain(Tour.result);
+        if (tour) for (const r of tour.rows) if (r.audit) r.audit.items = r.audit.items.slice(0, 40).map(({ text, ...x }) => x);
+        return { status: { ...e, sayLog: e.sayLog.length, gateLog: e.gateLog.slice(-10) }, live, tour };
+      })(),
+      gpu: { scan: Gpu.last && now() - Gpu.last.at < 10000 ? Gpu.last : Gpu.scan(), nan: Gpu.plainNan(Gpu.nan) },
       manifest: B.manifest || null,
     };
   }
@@ -1406,6 +2454,8 @@
     L.push(`| 데이터 검사 | 오류 ${h.lint.error} · 경고 ${h.lint.warn} · 참고 ${h.lint.info} |`);
     L.push(`| 자가 테스트 | ${h.tests ? `${h.tests.passed}/${h.tests.total} 통과, 실패 ${h.tests.failed}, 건너뜀 ${h.tests.skipped}` : '실행 안 함'} |`);
     L.push(`| FPS | 현재 ${h.fps.cur} · 평균 ${h.fps.avg} · 최소 ${h.fps.min} |`);
+    if (h.kids) L.push(`| 👶 쉬운 모드 점검 | 아이 점수 ${h.kids.score} · 치명 ${h.kids.critical} · 경고 ${h.kids.warn} · 참고 ${h.kids.info} |`);
+    if (h.gpu) L.push(`| 🖥️ GPU 안전 | ${h.gpu.ok ? '✅' : '⛔'} · NaN 테스트 ${h.gpu.nan === null ? '실행 안 함' : h.gpu.nan === 'skip' ? '건너뜀' : h.gpu.nan ? '통과' : '실패'} |`);
     L.push('', '## 시스템 환경', '', '| 항목 | 값 |', '|---|---|');
     const b = r.system.browser;
     for (const [k, v] of [['브라우저', b.ua], ['플랫폼', b.platform], ['CPU 코어', b.cores], ['메모리', b.memory], ['화면 / DPR', `${b.screen} @${b.dpr}`], ['보안 컨텍스트', b.secure ? '예' : '아니오'], ['WebGL', r.system.webgl ? `${r.system.webgl.version} · ${r.system.webgl.renderer}` : '-'], ['최대 텍스처', r.system.webgl?.maxTexture], ['draw calls', r.system.renderer?.calls], ['저장 크기', kb(r.system.storage.stateBytes)]]) L.push(`| ${cell(k)} | ${cell(v)} |`);
@@ -1422,6 +2472,30 @@
     L.push('', '## 자가 테스트', '');
     if (r.tests) { L.push(`${r.tests.passed}/${r.tests.total} 통과 · 실패 ${r.tests.failed} · 건너뜀 ${r.tests.skipped} · ${r.tests.ms} ms`, '', '| 결과 | 그룹 | 테스트 | 비고 |', '|---|---|---|---|'); for (const t of r.tests.results) L.push(`| ${t.status === 'pass' ? '✅' : t.status === 'skip' ? '⏭️' : '❌'} | ${cell(t.group)} | ${cell(t.name)} | ${cell(t.detail)} |`); }
     else L.push('- 실행 안 함');
+    const K = r.kids;
+    if (K) {
+      const e = K.status, a = K.live;
+      L.push('', '## 👶 쉬운 모드 점검', '');
+      L.push(`- 모드: ${e.on ? '쉬운 모드' : '보통 모드'} · 누르기 최소 ${e.tap}px · 화면 ${a.viewport} · 아이 점수 ${a.score}/100`);
+      L.push(`- G.easy: ${e.present ? `있음 (API ${e.api.filter((x) => x.ok).length}/${e.api.length}${e.api.some((x) => !x.ok) ? `, 없음: ${e.api.filter((x) => !x.ok).map((x) => x.k).join(', ')}` : ''})` : '없음'} · 읽어주기 ${e.voiceGuide ? '켬' : '끔'} · 보호자 확인 ${e.parentGate ? '켬' : '끔'} · 아이 채팅 ${e.kidChat ? '고르기만' : '자유 입력'} · 개인정보 가림(maskPII) ${e.maskPII ? '있음' : '없음'}`);
+      L.push('', '| 종류 | ⛔ 치명 | ⚠️ 경고 | 💡 참고 |', '|---|---|---|---|');
+      for (const [k, m] of Object.entries(KID_KINDS)) { const v = a.byKind[k]; if (v.critical || v.warn || v.info) L.push(`| ${m.emoji} ${m.label} | ${v.critical} | ${v.warn} | ${v.info} |`); }
+      L.push(`| **합계** | **${a.counts.critical}** | **${a.counts.warn}** | **${a.counts.info}** |`);
+      const top = a.items.filter((x) => x.sev !== 'info').slice(0, 30);
+      if (top.length) { L.push(''); for (const x of top) L.push(`- ${KID_SEV[x.sev].emoji} ${KID_KINDS[x.kind].emoji} ${cell(x.detail)} — \`${cell(x.sel)}\``); }
+      if (K.tour) {
+        L.push('', `### 🎬 화면별 점검 (${K.tour.easy ? '쉬운 모드' : '보통 모드'}, ${K.tour.viewport})`, '', '| 화면 | 상태 | ⛔ | ⚠️ | 💡 | 점수 |', '|---|---|---|---|---|---|');
+        for (const row of K.tour.rows) L.push(`| ${row.emoji} ${cell(row.label)} | ${row.status === 'ok' ? '✅' : row.status === 'skip' ? `⏭️ ${cell(row.note)}` : `⛔ ${cell(row.note)}`} | ${row.audit ? row.audit.counts.critical : '-'} | ${row.audit ? row.audit.counts.warn : '-'} | ${row.audit ? row.audit.counts.info : '-'} | ${row.audit ? row.audit.score : '-'} |`);
+      }
+    }
+    const Gs = r.gpu?.scan;
+    if (Gs) {
+      L.push('', '## 🖥️ GPU 안전 (검은 사각형 방지)', '', '| 항목 | 값 |', '|---|---|');
+      L.push(`| 길이 0·NaN 노멀 | ${Gs.badNormals} (엔진이 고친 누적 ${Gs.repaired}) |`, `| NaN 정점 위치 | ${Gs.nanPositions} |`, `| 납작한 메시 / 인스턴스 | ${Gs.flat.length} / ${Gs.flatInstances} |`);
+      L.push(`| 후처리 순서 | ${Gs.passes.composer ? `${Gs.passes.list.map((x) => x.name).join(' → ')} ${Gs.passes.ok ? '✅' : '⛔'}` : '블룸 꺼짐 (후처리 없음)'} |`);
+      const n = r.gpu.nan;
+      L.push(`| NaN 주입 테스트 | ${n ? (n.skip ? `⏭️ ${cell(n.detail)}` : `${n.ok ? '✅' : '⛔'} ${cell(n.detail)}`) : '실행 안 함'} |`);
+    }
     L.push('', '## 빌드 매니페스트', '', '| 파일 | 줄 | 크기 | sha |', '|---|---|---|---|');
     for (const f of [...(r.manifest?.js || []), ...(r.manifest?.css || [])]) L.push(`| ${cell(f.name)} | ${f.lines} | ${kb(f.bytes)} | \`${cell(f.sha)}\` |`);
     if (r.manifest?.skipped?.length) { L.push('', '빌드에서 빠진 조각:'); for (const s of r.manifest.skipped) L.push(`- ${cell(s.name)}: ${cell(s.reason)}`); }
@@ -1450,7 +2524,7 @@
     save: '💾 즉시 저장', objective: '🎯 현재 목표 완료', claimall: '🎁 완료 보상 모두 받기', tutorial: '🧭 튜토리얼 다시',
     grow: '🌾 작물 100% 성장', water: '💧 밭 물 100%', ffwd: '⏩ 10분 빨리 감기', ferment: '🏺 내 장독 발효 완료', ferment1: '⏱️ 발효 +1분',
     weather: '🌤️ 날씨', hour: '🕐 시간', autoWeather: '🔁 자동 날씨', lockTime: '⏸️ 시간 멈춤', tp: '📍 순간이동',
-    colliders: '🧱 충돌체 보기', fps: '⚡ FPS 표시', quality: '🖥️ 그래픽 품질',
+    colliders: '🧱 충돌체 보기', fps: '⚡ FPS 표시', quality: '🖥️ 그래픽 품질', easy: '👶 쉬운 모드 켜기/끄기',
     fxConfetti: '🎉 축하 파티클', fxCoins: '🪙 코인 연출', fxStamp: '✅ 완료 도장', fxLevel: '⭐ 레벨업 연출', mascot: '🏺 옹이 한마디',
   };
   const NEEDS_STATE = new Set(['coin', 'exp', 'edu', 'seeds', 'ingredients', 'decor', 'save', 'objective', 'claimall', 'tutorial', 'grow', 'water', 'ffwd', 'ferment', 'ferment1', 'tp', 'fxCoins', 'fxLevel', 'fxConfetti']);
@@ -1561,6 +2635,11 @@
         }
         case 'colliders': this.colliders = !this.colliders; G.world.debugDraw?.(this.colliders); return { ok: true, msg: `충돌체 보기 ${this.colliders ? '켜짐 (빨강=충돌, 파랑=발판)' : '꺼짐'}` };
         case 'fps': G.setSetting('showFps', !G.settings.showFps); return { ok: true, msg: `FPS 표시 ${G.settings.showFps ? '켜짐' : '꺼짐'}` };
+        case 'easy': {
+          const want = !easyOn();
+          setEasy(want).then((on) => { toast(on === want ? (on ? '쉬운 모드 켜짐 👶' : '보통 모드 🧑 (쉬운 모드 꺼짐)') : '보호자 확인을 통과하지 않아 그대로예요', on === want ? 'success' : 'info', '👶'); if (ui.opened && !ui.away && ui.tab === 'debug') render(); });
+          return { ok: true, msg: '', silent: true };
+        }
         case 'quality': {
           if (!['low', 'medium', 'high', 'auto'].includes(arg)) return { ok: false, msg: '알 수 없는 품질이에요.' };
           G.setSetting('quality', arg);
@@ -1590,7 +2669,8 @@
   // =========================================================================== UI
   const TABS = [
     { id: 'overview', emoji: '📊', label: '개요', desc: '건강 점수 · 빌드 정보 · 실행 환경 한눈에 보기' },
-    { id: 'system', emoji: '🖥️', label: '시스템 점검', desc: '브라우저 · WebGL/GPU · 렌더러 · 보안(CSP) · 저장소 · 미디어 API' },
+    { id: 'system', emoji: '🖥️', label: '시스템 점검', desc: '브라우저 · WebGL/GPU · GPU 안전(검은 사각형 방지) · 렌더러 · 보안(CSP) · 저장소 · 미디어 API' },
+    { id: 'kids', emoji: '👶', label: '쉬운 모드 점검', desc: '아이 눈높이 점검: 누르기 크기 · 글자 입력칸 · 겹침 · 대비 · 읽어주기 · 보호자 확인 · 주요 화면 차례로 점검' },
     { id: 'modules', emoji: '🧩', label: '모듈 상태', desc: '시스템 초기화 순서 · 공개 API · 오류 · 빌드 조각 목록' },
     { id: 'data', emoji: '🔍', label: '데이터 검증', desc: 'G.data 교차 참조 검사 — 퀘스트·도감·상점·대화·배치·교육' },
     { id: 'save', emoji: '💾', label: '저장 데이터', desc: '현재 상태 트리 · 내보내기/가져오기/초기화 · 저장소 키 · 로컬 계정' },
@@ -1602,7 +2682,7 @@
     { id: 'handover', emoji: '🤝', label: '인수인계', desc: '인수인계 체크리스트 · 어디를 고치면 되나요?' },
   ];
   const TAB_IDS = new Set(TABS.map((t) => t.id));
-  const TAB_ALIAS = { dashboard: 'overview', stats: 'overview', admin: 'overview', home: 'overview', health: 'server', test: 'tests', cheats: 'debug', cheat: 'debug', tools: 'debug', files: 'source', events: 'source', doc: 'docs', readme: 'docs', checklist: 'handover', lint: 'data', storage: 'save', saves: 'save', env: 'system', modules: 'modules' };
+  const TAB_ALIAS = { dashboard: 'overview', stats: 'overview', admin: 'overview', home: 'overview', health: 'server', test: 'tests', cheats: 'debug', cheat: 'debug', tools: 'debug', files: 'source', events: 'source', doc: 'docs', readme: 'docs', checklist: 'handover', lint: 'data', storage: 'save', saves: 'save', env: 'system', modules: 'modules', kid: 'kids', easy: 'kids', audit: 'kids', child: 'kids', a11y: 'kids', gpu: 'system' };
   const normTab = (t) => { const s = String(t || '').toLowerCase(); return TAB_IDS.has(s) ? s : TAB_ALIAS[s] || null; };
   const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
@@ -1612,6 +2692,7 @@
     docs: null, docCache: new Map(), docId: null, docQuery: '',
     srv: { running: false, results: null, health: null, at: 0, err: '' },
     lint: { sev: 'all', cat: 'all', q: '' }, modQ: '', srcQ: '', evQ: '',
+    kid: { sev: 'all', kind: 'all', view: 'live', sayN: -1, gateN: -1 }, away: false, gating: null,
   };
   const toast = (msg, type = 'info', emoji) => G.ui?.toast?.(msg, { type, emoji, sound: type !== 'info' });
   const yes = (v, y = '예', n = '아니오') => (v ? `<span class="dc-yes">✅ ${y}</span>` : `<span class="dc-no">— ${n}</span>`);
@@ -1839,6 +2920,10 @@
     const err = errorSummary();
     set('overview', err.total ? err.total : '', 'bad');
     set('handover', (() => { const c = handoverProgress(); return c.done === c.total ? '✓' : `${c.done}/${c.total}`; })(), 'info');
+    const K = KidAudit.last;
+    set('kids', K ? (K.counts.critical || K.counts.warn || '✓') : '', K?.counts.critical ? 'bad' : K?.counts.warn ? 'warn' : 'ok');
+    const Gs = Gpu.last;
+    if (Gs && (!Gs.ok || (Gpu.nan && !Gpu.nan.ok && !Gpu.nan.skip))) set('system', '!', 'bad');
   }
   function access2Side() {
     const el = ui.root?.querySelector('.dc-access');
@@ -1847,7 +2932,22 @@
     el.innerHTML = `<span class="dc-dot ${G.net?.mode === 'server' ? 'srv' : ''}"></span><span>${G.net?.mode === 'server' ? '🌐 서버 모드' : '💻 로컬 모드'}</span><small>${esc(a.label)}</small>`;
   }
 
+  /**
+   * Open the center. In easy mode a child must not wander in: the parent gate (G.easy.gate, CONTRACT §12.4) runs
+   * first and the result is awaited (returns a Promise then). Automation passes {gate:false}. A failing gate keeps
+   * the center closed (kid safety first); grown-ups can switch easy mode off or open it from the console.
+   */
   function open(tab, opts = {}) {
+    if (!access().ok) return openNow(tab, opts);
+    if (ui.opened || opts.gate === false || typeof G.easy?.gate !== 'function' || !easyOn() || G.settings?.parentGate === false) return openNow(tab, opts);
+    if (ui.gating) return ui.gating;
+    ui.gating = Promise.resolve()
+      .then(() => G.easy.gate({ reason: 'devcenter', title: '개발자 센터는 어른만 열 수 있어요' }))
+      .then((ok) => { ui.gating = null; if (ok === true) return openNow(tab, opts); G.log.info('DEV', 'dev center: parent gate not passed'); return false; },
+        (e) => { ui.gating = null; G.log.warn('DEV', 'parent gate failed — dev center stays closed', e); toast('보호자 확인을 열지 못했어요. 잠시 후 다시 해 주세요.', 'warn', '🔒'); return false; });
+    return ui.gating;
+  }
+  function openNow(tab, opts = {}) {
     const a = access();
     if (!a.ok) {
       toast('개발자 센터는 서버 관리자 계정이나 서버 PC(localhost)의 ?dev=1 주소에서만 열 수 있어요.', 'warn', '🔒');
@@ -1877,6 +2977,9 @@
     if (!ui.opened) return false;
     closeDialog(false);
     closePop();
+    Spot.hide(true);
+    if (Tour.running) Tour.stop = true;
+    ui.away = false;
     ui.opened = false;
     ui.root.hidden = true;
     document.body.classList.remove('dc-open');
@@ -1935,6 +3038,12 @@
       else for (let i = 0; i < items.length; i++) if (spans[i].textContent !== items[i]) spans[i].textContent = items[i];
     },
     tests(b) { if (Tests.running) renderTestProgress(b); },
+    kids(b) {
+      if (KidLog.say.length === ui.kid.sayN && KidLog.gate.length === ui.kid.gateN) return;
+      ui.kid.sayN = KidLog.say.length; ui.kid.gateN = KidLog.gate.length;
+      const box = b.querySelector('[data-live="kidlog"]');
+      if (box) box.innerHTML = kidLogHtml();
+    },
   };
 
   // ---------------------------------------------------------------- tab renderers
@@ -2090,7 +3199,9 @@
           ['전체 화면', yes(bi.fullscreen)],
           ['WebP 인코딩', yes(bi.webp, '가능 (사진 축소)')],
         ])}</dl></section>
-      </div>`;
+      </div>
+      ${gpuCardHtml()}`;
+    drawNan(b);
     storageEstimate().then((e) => {
       const dl = b.querySelector('[data-live-est]');
       if (!dl || ui.tab !== 'system') return;
@@ -2100,6 +3211,234 @@
       ]);
     });
   };
+
+  // ---------------------------------------------------------------- step away from the panel (highlight · tour · gate test)
+  function panelAway(on) {
+    if (!ui.root) return;
+    ui.away = !!on && ui.opened;
+    ui.root.hidden = ui.away || !ui.opened;
+    document.body.classList.toggle('dc-open', ui.opened && !ui.away);
+    if (!ui.away && ui.opened) {
+      render();
+      setTimeout(() => { if (ui.opened && !ui.away && !ui.dialog) ui.root?.querySelector('.dc-nav-btn.active')?.focus({ preventScroll: true }); }, 30);
+    }
+  }
+  /** small floating status pill while the panel is away (tour progress / stop) */
+  function tourPill(text) {
+    let el = document.querySelector('.dc-tour-pill');
+    if (text == null) { el?.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'dc-tour-pill';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+      el.innerHTML = '<span class="dc-tour-spin" aria-hidden="true">🎬</span><b></b><button type="button" class="dc-tour-stop" aria-label="점검 멈추기">⏹ 멈추기</button>';
+      el.querySelector('button').addEventListener('click', () => { Tour.stop = true; el.querySelector('b').textContent = '멈추는 중…'; });
+      document.body.appendChild(el);
+    }
+    el.querySelector('b').textContent = text;
+  }
+  /** "👀 보기": hide the panel and outline one element on the live screen */
+  const Spot = {
+    el: null, target: null, timer: 0,
+    get active() { return !!this.el; },
+    show(target, caption) {
+      if (!target || !target.isConnected) { toast('그 요소가 지금은 화면에 없어요. 그 화면을 열고 "지금 화면 점검" 을 눌러 주세요.', 'warn', '👀'); return false; }
+      this.hide(true);
+      const wrap = document.createElement('div');
+      wrap.className = 'dc-spot';
+      wrap.innerHTML = '<div class="dc-spot-box" aria-hidden="true"></div><div class="dc-spot-cap" role="status"></div><button type="button" class="dc-spot-back">⬅️ 점검으로 돌아가기 <kbd>Esc</kbd></button>';
+      wrap.querySelector('.dc-spot-cap').textContent = caption || cssPath(target);
+      wrap.querySelector('.dc-spot-back').addEventListener('click', () => this.hide());
+      document.body.appendChild(wrap);
+      this.el = wrap; this.target = target;
+      if (ui.opened) panelAway(true);
+      try { target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { /* old browsers */ }
+      this.place();
+      this.timer = setInterval(() => this.place(), 200);
+      setTimeout(() => wrap.querySelector('.dc-spot-back')?.focus(), 40);
+      return true;
+    },
+    place() {
+      if (!this.el) return;
+      const box = this.el.querySelector('.dc-spot-box'), cap = this.el.querySelector('.dc-spot-cap');
+      const r = this.target?.isConnected ? this.target.getBoundingClientRect() : null;
+      if (!r || (r.width < 1 && r.height < 1)) { box.hidden = true; cap.style.left = '50%'; cap.style.top = '40%'; return; }
+      box.hidden = false;
+      const pad = 6;
+      Object.assign(box.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px` });
+      const below = r.bottom + 12 + 60 < innerHeight;
+      cap.style.left = `${clamp(r.left + r.width / 2, 120, innerWidth - 120)}px`;
+      cap.style.top = below ? `${r.bottom + pad + 10}px` : `${Math.max(8, r.top - pad - 10)}px`;
+      cap.dataset.pos = below ? 'below' : 'above';
+    },
+    hide(silent) {
+      clearInterval(this.timer); this.timer = 0;
+      if (this.el) this.el.remove();
+      this.el = null; this.target = null;
+      if (!silent && ui.opened && ui.away) panelAway(false);
+    },
+  };
+
+  // ---------------------------------------------------------------- 👶 쉬운 모드 점검 tab
+  const kidItems = () => {
+    if (ui.kid.view !== 'live' && Tour.result?.rows?.[ui.kid.view]?.audit) return { audit: Tour.result.rows[ui.kid.view].audit, src: Tour.result.rows[ui.kid.view] };
+    return { audit: KidAudit.last, src: null };
+  };
+  RENDER.kids = (b) => {
+    if (!KidAudit.last) KidAudit.run();
+    const st = easyStatus();
+    const { audit: A, src } = kidItems();
+    const easy = st.on;
+    const C = 2 * Math.PI * 52;
+    const tone = A.counts.critical ? 'bad' : A.counts.warn ? 'warn' : 'ok';
+    const apiOk = st.api.filter((x) => x.ok).length;
+    const screens = Tour.screens();
+    const bubble = !st.present ? '쉬운 모드 도구(G.easy)가 아직 없어요. 08-easy.js 를 확인해 주세요 🧐'
+      : A.counts.critical ? `치명 ${A.counts.critical}건! 빨간 줄부터 "👀 보기" 로 확인해요 🚨`
+        : A.counts.warn ? '거의 다 왔어요. 경고만 고치면 아이가 더 쉽게 써요 🙂' : '아이도 쉽게 쓸 수 있는 화면이에요! 🎉';
+    const kindTiles = Object.entries(KID_KINDS).map(([k, m]) => {
+      const v = A.byKind[k] || { critical: 0, warn: 0, info: 0 };
+      const t = v.critical ? 'bad' : v.warn ? 'warn' : v.info ? 'info' : 'ok';
+      if (!easy && (k === 'freetext' || k === 'speak' || k === 'fontsize' || k === 'hanja') && !v.critical && !v.warn && !v.info) return '';
+      return `<button type="button" class="dc-kid-kind" data-dc="kid-kind" data-kind="${k}" data-tone="${t}" aria-pressed="${ui.kid.kind === k}" title="${esc(m.desc)}"><span class="dc-kid-kind-emoji" aria-hidden="true">${m.emoji}</span><b>${esc(m.label)}</b><span class="dc-cat-counts">${v.critical ? `<i data-s="error">⛔${v.critical}</i>` : ''}${v.warn ? `<i data-s="warn">⚠️${v.warn}</i>` : ''}${v.info ? `<i data-s="info">💡${v.info}</i>` : ''}${!v.critical && !v.warn && !v.info ? '<i data-s="ok">✅</i>' : ''}</span></button>`;
+    }).join('');
+    const tr = Tour.result;
+    b.innerHTML = `
+      <section class="dc-hero dc-in" data-tone="${tone}" style="--i:0">
+        <div class="dc-gauge" role="img" aria-label="아이 친화 점수 ${A.score}점">
+          <svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="dc-g-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#86e3a8"/><stop offset="1" stop-color="#f4c54a"/></linearGradient></defs><circle cx="60" cy="60" r="52" class="dc-gauge-bg"/><circle cx="60" cy="60" r="52" class="dc-gauge-fg" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${(C * (1 - A.score / 100)).toFixed(1)}" style="--c:${C.toFixed(1)}"/></svg>
+          <div class="dc-gauge-num"><b data-countup="${A.score}">${A.score}</b><small>아이 점수</small></div>
+        </div>
+        <div class="dc-hero-text">
+          <div class="dc-eyebrow">KID MODE · 쉬운 모드 점검 · ${esc(src ? `${src.emoji} ${src.label}` : '지금 화면')}</div>
+          <h3>${easy ? '👶 쉬운 모드 켜짐' : '🧑 보통 모드'} <span class="muted small">· 누르기 최소 ${st.tap}px · ${esc(A.viewport)}</span></h3>
+          <p class="dc-reasons">${pill(A.counts.critical ? 'bad' : 'ok', `⛔ 치명 ${A.counts.critical}`)} ${pill(A.counts.warn ? 'warn' : 'ok', `⚠️ 경고 ${A.counts.warn}`)} ${pill('info', `💡 참고 ${A.counts.info}`)} <span class="muted small">버튼 ${fmt(A.stats.interactive)}개 · 가려짐 ${fmt(A.stats.covered)} · 글자 ${fmt(A.stats.textChecked)}개 · ${A.ms.toFixed(0)} ms · ${esc(ago(A.at))}</span></p>
+          <div class="dc-row wrap">
+            <button type="button" class="btn btn-primary btn-sm" data-dc="kid-audit">🔍 지금 화면 점검</button>
+            <button type="button" class="btn btn-gold btn-sm" data-dc="kid-tour" ${Tour.running ? 'disabled' : ''}>${Tour.running ? '⏳ 점검 중…' : `🎬 주요 화면 차례로 (${screens.filter((x) => x.available).length}개)`}</button>
+            <button type="button" class="btn btn-soft btn-sm" data-dc="kid-easy">${easy ? '🧑 보통 모드로 바꾸기' : '👶 쉬운 모드로 바꾸기'}</button>
+            <button type="button" class="btn btn-soft btn-sm" data-dc="kid-gate" ${st.api.find((x) => x.k === 'gate')?.ok ? '' : 'disabled'}>🔒 보호자 확인 시험</button>
+          </div>
+        </div>
+        <div class="dc-hero-mascot" aria-hidden="true">${mascot(A.counts.critical ? 'surprised' : A.counts.warn ? 'think' : 'cheer', 84)}<div class="dc-bubble">${esc(bubble)}</div></div>
+      </section>
+      <div class="dc-kid-kinds dc-in" style="--i:1">${kindTiles}</div>
+      <div class="dc-grid2">
+        <section class="dc-card dc-in" style="--i:2"><h4>🧸 쉬운 모드 상태</h4><dl class="dc-kv">${kvRows([
+          ['G.easy', st.present ? `${pill(apiOk === st.api.length ? 'ok' : 'warn', `API ${apiOk}/${st.api.length}`)}${apiOk < st.api.length ? ` <span class="muted small">없음: ${esc(st.api.filter((x) => !x.ok).map((x) => x.k).join(', '))}</span>` : ''}` : pill('bad', '없음 (08-easy.js)')],
+          ['화면 표시', `body.${esc(st.bodyClass)} · --tap ${st.tap}px`],
+          ['읽어주기', `${yes(st.voiceGuide, '켜짐', '꺼짐')} · 속도 ${st.voiceRate} · ${st.speech ? `음성 ${st.voices}개 (한국어 ${st.koVoices})` : '이 브라우저는 음성 합성 없음'}${st.muted ? ' · 🔇 음소거' : ''}`],
+          ['보호자 확인', `${yes(st.parentGate, '켜짐', '꺼짐')}${st.unlocked == null ? '' : st.unlocked ? ` ${pill('warn', '🔓 지금 풀려 있음 (5분)')}` : ` ${pill('ok', '🔒 잠김')}`}`],
+          ['아이 채팅', `${yes(st.kidChat, st.on ? '고르기만 (글자 입력 없음)' : '쉬운 모드일 때 고르기만', '자유 입력')} · 개인정보 가림 ${st.maskPII ? pill('ok', 'maskPII ✅') : pill('warn', 'maskPII 없음')}`],
+          ['놀이 시간 알림', st.reminder ? `${st.reminder}분마다` : '꺼짐'],
+          ['읽어주기 범위', A.stats.prompts ? `${A.stats.speakable}/${A.stats.prompts} 안내 문장에 🔊` : '<span class="muted">안내 문장 없음</span>'],
+        ])}</dl></section>
+        <section class="dc-card dc-in" style="--i:3"><h4>🔊 최근 읽어준 말 · 🔒 보호자 확인 기록</h4><div data-live="kidlog">${kidLogHtml()}</div></section>
+      </div>
+      <section class="dc-card dc-in" style="--i:4"><div class="dc-card-head"><h4>🎬 화면별 점검 ${tr ? `<span class="muted small">${esc(ago(tr.at))} · ${tr.easy ? '쉬운 모드' : '보통 모드'} · ${(tr.ms / 1000).toFixed(1)}초${tr.stopped ? ' · 중간에 멈춤' : ''}</span>` : ''}</h4>${ui.kid.view !== 'live' ? '<button type="button" class="btn btn-ghost btn-sm" data-dc="kid-row" data-i="live">지금 화면 결과 보기</button>' : ''}</div>
+        ${tr ? `<div class="dc-table-wrap"><table class="dc-table dc-kid-table"><thead><tr><th>화면</th><th>상태</th><th>⛔</th><th>⚠️</th><th>💡</th><th>점수</th><th>먼저 볼 문제</th><th></th></tr></thead><tbody>${tr.rows.map((r, i) => {
+          const a = r.audit;
+          const top = a?.items?.[0];
+          return `<tr data-on="${ui.kid.view === i ? 1 : 0}"><td><b>${r.emoji} ${esc(r.label)}</b></td><td>${r.status === 'ok' ? pill(a.counts.critical ? 'bad' : a.counts.warn ? 'warn' : 'ok', a.counts.critical ? '⛔ 고쳐요' : a.counts.warn ? '⚠️ 살펴요' : '✅ 좋아요') : r.status === 'skip' ? pill('skip', '⏭️ 건너뜀') : pill('bad', '⛔ 실패')}${r.note ? `<div class="muted small">${esc(r.note)}</div>` : ''}</td><td class="dc-num">${a ? a.counts.critical : '-'}</td><td class="dc-num">${a ? a.counts.warn : '-'}</td><td class="dc-num">${a ? a.counts.info : '-'}</td><td class="dc-num">${a ? a.score : '-'}</td><td class="small">${top ? `${KID_KINDS[top.kind].emoji} ${esc(top.detail)}${top.text ? ` <span class="muted">· ${esc(top.text.slice(0, 24))}</span>` : ''}` : '<span class="muted">—</span>'}</td><td>${a ? `<button type="button" class="btn btn-ghost btn-sm" data-dc="kid-row" data-i="${i}">자세히</button>` : ''}</td></tr>`;
+        }).join('')}</tbody><tfoot><tr><td><b>합계</b></td><td>${tr.totals.screens}개 화면 · 건너뜀 ${tr.totals.skipped}</td><td class="dc-num">${tr.totals.critical}</td><td class="dc-num">${tr.totals.warn}</td><td class="dc-num">${tr.totals.info}</td><td></td><td></td><td></td></tr></tfoot></table></div>`
+          : `<p class="dc-note">"🎬 주요 화면 차례로" 를 누르면 센터가 잠깐 숨고 가방 · 가게 · 스티커북 · 오늘 · 일기 · 배움터 · 퀴즈 · 지도 · 설정 · 도움말 · 사진 … 을 공개 API 로 하나씩 열어 점검한 뒤 돌아와요. (API 가 없는 화면은 건너뛰어요 · 아무것도 사거나 저장하지 않지만 배움 이야기 첫 쪽은 '본 것' 으로 기록될 수 있어요)</p><div class="dc-chips">${screens.map((x) => `<span class="chip ${x.available ? '' : 'dc-chip-off'}">${x.emoji} ${esc(x.label)}${x.available ? '' : ' ⏭️'}</span>`).join('')}</div>`}
+      </section>
+      <section class="dc-card dc-in" style="--i:5">
+        <div class="dc-toolbar">
+          <div class="seg" role="group" aria-label="심각도">${[['all', '전체'], ['critical', '⛔ 치명'], ['warn', '⚠️ 경고'], ['info', '💡 참고']].map(([v, l]) => `<button type="button" class="${ui.kid.sev === v ? 'active' : ''}" data-dc="kid-sev" data-sev="${v}">${l}</button>`).join('')}</div>
+          ${ui.kid.kind !== 'all' ? `<button type="button" class="chip chip-gold" data-dc="kid-kind" data-kind="all">${KID_KINDS[ui.kid.kind]?.emoji || ''} ${esc(KID_KINDS[ui.kid.kind]?.label || ui.kid.kind)} ✕</button>` : ''}
+          <span class="muted small">${esc(src ? `${src.emoji} ${src.label} 화면 결과` : '지금 화면 결과')} · 범위 ${esc(A.scope)}</span>
+        </div>
+        <div id="dc-kid-list"></div>
+      </section>`;
+    renderKidList(b);
+    ui.kid.sayN = KidLog.say.length; ui.kid.gateN = KidLog.gate.length;
+  };
+  function kidLogHtml() {
+    const say = KidLog.say.slice(-8).reverse();
+    const gate = KidLog.gate.slice(-6).reverse();
+    return `${say.length ? `<ul class="dc-errlist dc-kid-log">${say.map((x) => `<li><b>🔊 ${esc(ago(x.at))}</b><span>${esc(x.text || '(빈 문장)')}</span></li>`).join('')}</ul>` : '<p class="dc-note">아직 읽어준 말이 없어요. (쉬운 모드 + 읽어주기 켜짐일 때 easy:say 로 기록돼요)</p>'}
+      <div class="dc-sub-h">🔒 보호자 확인</div>${gate.length ? `<ul class="dc-errlist">${gate.map((x) => `<li><b>${x.ok ? '✅ 통과' : '✋ 닫음/틀림'} · ${esc(ago(x.at))}</b><span>${esc(x.reason || '-')}</span></li>`).join('')}</ul>` : '<p class="dc-note">기록 없음</p>'}`;
+  }
+  function renderKidList(scope) {
+    const box = scope.querySelector('#dc-kid-list');
+    if (!box) return;
+    const { audit: A } = kidItems();
+    const list = (A?.items || []).filter((x) => (ui.kid.sev === 'all' || x.sev === ui.kid.sev) && (ui.kid.kind === 'all' || x.kind === ui.kid.kind));
+    if (!list.length) { box.innerHTML = emptyBox(A?.items?.length ? '조건에 맞는 항목이 없어요.' : '문제가 하나도 없어요! 아이가 쓰기 좋은 화면이에요.', 'cheer'); return; }
+    const LIMIT = 200;
+    box.innerHTML = `<ul class="dc-issues dc-kid-issues">${list.slice(0, LIMIT).map((x) => {
+      const idx = A.items.indexOf(x);
+      return `<li data-sev="${x.sev === 'critical' ? 'error' : x.sev}"><span class="dc-issue-sev" title="${KID_SEV[x.sev].label}">${KID_SEV[x.sev].emoji}</span><span class="chip">${KID_KINDS[x.kind].emoji} ${esc(KID_KINDS[x.kind].label)}</span><span class="dc-issue-msg"><b>${esc(x.detail)}</b>${x.text ? ` <span class="muted">“${esc(x.text)}”</span>` : ''}<br>${mono(x.sel)}</span>${x.el ? `<button type="button" class="btn btn-ghost btn-sm dc-kid-show" data-dc="kid-show" data-i="${idx}" aria-label="화면에서 보기">👀 보기</button>` : ''}</li>`;
+    }).join('')}</ul>${list.length > LIMIT ? `<p class="dc-note">… 외 ${list.length - LIMIT}건</p>` : ''}`;
+  }
+  async function kidGateTest() {
+    if (typeof G.easy?.gate !== 'function') return;
+    panelAway(true);
+    tourPill('🔒 보호자 확인 시험 중 — 문제를 풀거나 ✖ 로 닫아요');
+    let ok = null;
+    try { ok = await G.easy.gate({ reason: 'dev-check', title: '보호자 확인 시험' }); } catch (e) { G.log.warn('DEV', 'gate test failed', e); }
+    tourPill(null);
+    panelAway(false);
+    toast(ok === true ? '보호자 확인 통과 ✅ (5분 동안 다시 묻지 않아요)' : ok === false ? '보호자 확인을 닫았어요 ✋' : '보호자 확인을 열지 못했어요', ok === true ? 'success' : 'info', '🔒');
+  }
+  async function kidTourUi() {
+    if (Tour.running) return;
+    // the tour closes whatever is open underneath the center (an unsent journal draft would be lost): ask first
+    if (G.ui?.modal?.isOpen?.() || G.sys.photo?.active) {
+      const ok = await confirmBox({ title: '열려 있는 게임 창을 닫고 점검할까요?', message: '화면을 하나씩 열어 보려면 지금 열린 창(작성 중인 일기 등)을 먼저 닫아야 해요.', okText: '닫고 점검', emoji: '🎬' });
+      if (!ok) return;
+    }
+    toast('주요 화면을 차례로 열어 점검해요. 끝나면 돌아와요 🎬', 'info', '👶');
+    const r = await Tour.run({});
+    ui.kid.view = 'live';
+    KidAudit.run();
+    if (ui.opened) { ui.tab = 'kids'; render({ scrollTop: false }); }
+    toast(r.totals.critical ? `화면 점검: 치명 ${r.totals.critical}건 · 경고 ${r.totals.warn}건이에요.` : `화면 ${r.totals.screens}개 점검 완료 — 치명 문제 없음 🎉`, r.totals.critical ? 'warn' : 'success', '🎬');
+  }
+
+  // ---------------------------------------------------------------- 🖥️ GPU 안전 card (system tab)
+  function gpuCardHtml() {
+    const g = Gpu.last && now() - Gpu.last.at < 4000 ? Gpu.last : Gpu.scan();
+    if (!g) return '<section class="dc-card dc-in dc-gpu" style="--i:6"><h4>🖥️ GPU 안전</h4><p class="dc-note">3D 장면이 아직 없어요.</p></section>';
+    const p = g.passes;
+    const n = Gpu.nan;
+    const passTxt = p.composer ? p.list.map((x, i) => `<span class="chip ${i === p.scrub ? 'chip-green' : i === p.bloom ? 'chip-gold' : ''}">${esc(x.name)}${x.enabled ? '' : ' (꺼짐)'}</span>`).join('<span class="dc-arrow" aria-hidden="true">→</span>') : `<span class="muted">${p.bloomPreset ? '컴포저 준비 전' : '블룸이 꺼진 품질 — 후처리 없음 (NaN 이 번지지 않아요)'}</span>`;
+    return `<section class="dc-card dc-in dc-gpu" style="--i:6" data-tone="${g.ok && (!n || n.ok || n.skip) ? 'ok' : 'bad'}">
+      <div class="dc-card-head"><h4>🖥️ GPU 안전 <span class="muted small">검은 사각형 버그 방지 (a954f38)</span></h4>
+        <div class="dc-row wrap"><button type="button" class="btn btn-soft btn-sm" data-dc="gpu-scan">🔍 다시 검사</button>${g.badNormals && g.fixNormals ? '<button type="button" class="btn btn-gold btn-sm" data-dc="gpu-fix">🔧 노멀 고치기</button>' : ''}<button type="button" class="btn btn-primary btn-sm" data-dc="gpu-nan">🧪 NaN 주입 테스트</button></div></div>
+      <p class="dc-note">Windows(Direct3D) GPU 는 길이 0 노멀을 <code>normalize(0)</code> 하면 NaN 을 만들고, 블룸이 그 한 점을 큰 검은 사각형으로 번지게 해요. 엔진은 노멀을 고치고(<code>G.gfx.fixNormals</code>) 블룸 전에 NaN 을 지워요(<code>NaNScrubShader</code>).</p>
+      <dl class="dc-kv dc-kv-3">${kvRows([
+        ['길이 0·NaN 노멀', `${g.badNormals ? pill('bad', `⛔ ${fmt(g.badNormals)}개`) : pill('ok', '✅ 0개')} <span class="muted small">메시 ${fmt(g.meshes)} · 정점 ${fmt(g.vertices)}</span>`],
+        ['엔진이 고친 노멀 (누적)', `${fmt(g.repaired)}개 <span class="muted small">G.gfx.normalsRepaired</span>`],
+        ['NaN 정점 위치', g.nanPositions ? pill('bad', `⛔ ${fmt(g.nanPositions)}개`) : pill('ok', '✅ 0개')],
+        ['납작한 조명 메시 (축 하나가 0)', g.flat.length ? pill('bad', `⛔ ${g.flat.length}개`) : pill('ok', '✅ 0개')],
+        ['납작한 인스턴스', g.flatInstances ? pill('bad', `⛔ ${fmt(g.flatInstances)}개`) : pill('ok', `✅ 0개 / ${fmt(g.instancedChecked)}`)],
+        ['검사 시간', `${g.ms.toFixed(1)} ms · ${esc(ago(g.at))}`],
+      ])}</dl>
+      ${[...g.badNormalGeos.map((x) => `노멀 ${x.n}개 · ${x.obj}`), ...g.nanPosGeos.map((x) => `NaN 위치 ${x.n}개 · ${x.obj}`), ...g.flat.map((x) => `납작 ${x.scale.join('·')} · ${x.obj}`), ...g.flatInstMeshes.map((x) => `납작 인스턴스 ${x.n}/${x.count} · ${x.obj}`)].length ? `<ul class="dc-errlist">${[...g.badNormalGeos.map((x) => `노멀 ${x.n}개 · ${x.obj}`), ...g.nanPosGeos.map((x) => `NaN 위치 ${x.n}개 · ${x.obj}`), ...g.flat.map((x) => `납작 ${x.scale.join('·')} · ${x.obj}`), ...g.flatInstMeshes.map((x) => `납작 인스턴스 ${x.n}/${x.count} · ${x.obj}`)].slice(0, 12).map((t) => `<li><b>⛔</b><span>${esc(t)}</span></li>`).join('')}</ul>` : ''}
+      <div class="dc-sub-h">🎞️ 후처리 순서 ${p.ok === false ? pill('bad', '⛔ NaN 청소가 블룸 뒤에 있어요') : p.ok ? pill('ok', '✅ 청소 → 블룸') : ''}</div>
+      <div class="dc-chips dc-passes">${passTxt}</div>
+      <div class="dc-sub-h">🧪 NaN 주입 테스트 ${n ? (n.skip ? pill('skip', '⏭️ 건너뜀') : n.ok ? pill('ok', '✅ 통과') : pill('bad', '⛔ 실패')) : '<span class="muted small">(버튼을 눌러 실행 · 게임 화면은 바뀌지 않아요)</span>'}</div>
+      ${n && !n.skip ? `<div class="dc-nan"><figure><canvas data-nan="noScrub" width="64" height="64" aria-label="청소 없이"></canvas><figcaption>청소 없이<br><b>${(n.blackNoScrub * 100).toFixed(1)}%</b> 검정</figcaption></figure><span class="dc-arrow" aria-hidden="true">→</span><figure><canvas data-nan="scrub" width="64" height="64" aria-label="청소 후"></canvas><figcaption>NaN 청소 후<br><b>${(n.blackScrub * 100).toFixed(2)}%</b> 검정</figcaption></figure><p class="dc-note">${esc(n.detail || '')} · 셰이더: ${esc(n.source)} · ${n.ms.toFixed(0)} ms</p></div>` : n?.skip ? `<p class="dc-note">${esc(n.detail)}</p>` : ''}
+      ${g.shaders.length ? `<details class="dc-details"><summary>커스텀 셰이더 ${g.shaders.length}개 — 0 나누기·normalize·pow·sqrt 를 쓰면 입력이 0/음수일 때를 막았는지 확인하세요</summary><div class="dc-chips">${g.shaders.map((x) => `<span class="chip">${esc(x.name)}${x.ops.length ? ` <small class="muted">${esc(x.ops.join(' · '))}</small>` : ''}</span>`).join('')}</div></details>` : ''}
+    </section>`;
+  }
+  function drawNan(scope) {
+    const n = Gpu.nan;
+    if (!n?.frames) return;
+    for (const [k, px] of Object.entries(n.frames)) {
+      const c = scope.querySelector(`canvas[data-nan="${k}"]`);
+      if (!c || !px) continue;
+      const S = n.size;
+      const ctx = c.getContext('2d');
+      if (!ctx) continue;
+      const img = ctx.createImageData(S, S);
+      for (let y = 0; y < S; y++) img.data.set(px.subarray((S - 1 - y) * S * 4, (S - y) * S * 4), y * S * 4); // readPixels is bottom-up
+      ctx.putImageData(img, 0, 0);
+    }
+  }
 
   RENDER.modules = (b) => {
     const { rows, missing } = moduleRows();
@@ -2473,7 +3812,7 @@
         <section class="dc-card dc-in" style="--i:5"><h4>🌤️ 날씨 · 시간</h4><div class="dc-cheats">${weathers}</div>
           <div class="dc-cheats">${[[6.5, '🌅 아침 6:30'], [12, '☀️ 낮 12:00'], [18.5, '🌇 저녁 18:30'], [22, '🌙 밤 22:00']].map(([h, l]) => btn('hour', h, l)).join('')}${btn('autoWeather', null, CHEAT_LABEL.autoWeather, G.settings.autoWeather)}${btn('lockTime', null, CHEAT_LABEL.lockTime, G.settings.lockTime)}</div></section>
         <section class="dc-card dc-in dc-span2" style="--i:6"><h4>📍 순간이동 <span class="muted small">(누르면 센터가 닫히고 이동해요)</span></h4><div class="dc-cheats">${zones}</div></section>
-        <section class="dc-card dc-in" style="--i:7"><h4>🖥️ 표시 · 품질</h4><div class="dc-cheats">${btn('colliders', null, CHEAT_LABEL.colliders, Cheats.colliders)}${btn('fps', null, CHEAT_LABEL.fps, G.settings.showFps)}</div>
+        <section class="dc-card dc-in" style="--i:7"><h4>🖥️ 표시 · 품질</h4><div class="dc-cheats">${btn('colliders', null, CHEAT_LABEL.colliders, Cheats.colliders)}${btn('fps', null, CHEAT_LABEL.fps, G.settings.showFps)}${btn('easy', null, CHEAT_LABEL.easy, easyOn())}</div>
           <div class="dc-cheats">${[['low', '낮음'], ['medium', '중간'], ['high', '높음'], ['auto', '자동']].map(([v, l]) => btn('quality', v, `🖥️ ${l}`, q === v)).join('')}</div></section>
         <section class="dc-card dc-in" style="--i:8"><h4>🎬 연출 미리보기 <span class="muted small">(보상 지급 없음)</span></h4><div class="dc-cheats">${btn('fxConfetti', null, CHEAT_LABEL.fxConfetti)}${btn('fxCoins', null, CHEAT_LABEL.fxCoins)}${btn('fxStamp', null, CHEAT_LABEL.fxStamp)}${btn('fxLevel', null, CHEAT_LABEL.fxLevel)}${btn('mascot', null, CHEAT_LABEL.mascot)}</div></section>
       </div>
@@ -2622,7 +3961,9 @@
       ['t2', '자가 테스트 탭에서 "모두 실행" 이 전부 통과했어요'],
       ['t3', '데이터 검증 탭의 오류가 0건이에요 (경고는 이유를 확인)'],
       ['t4', '모바일(390×844, --mobile)과 그래픽 낮음에서 화면이 깨지지 않아요'],
-      ['t5', '서버 모드라면 <code>node tests/server-e2e.mjs</code> 가 통과했어요'] ] },
+      ['t5', '서버 모드라면 <code>node tests/server-e2e.mjs</code> 가 통과했어요'],
+      ['t6', '<code>node tools/kid-audit.mjs</code> (쉬운 모드 화면 점검) 의 ⛔ 치명이 0건이에요'],
+      ['t7', '시스템 점검 › 🖥️ GPU 안전이 모두 ✅ 이고 NaN 주입 테스트가 통과했어요'] ] },
     { id: 'deploy', emoji: '🚀', title: '배포', items: [
       ['d1', '<code>npm run package</code> 로 <code>release/fermentation-metaverse.zip</code> 을 만들었어요'],
       ['d2', '파일 실행판(전통발효체험관.html 더블클릭)이 인터넷 없이 동작해요'],
@@ -2639,7 +3980,8 @@
       ['x2', '새 코드에서 사용자 문자열은 <code>esc()</code>·textContent 로만 넣고 <code>onclick=</code> 같은 인라인 핸들러를 쓰지 않았어요'],
       ['x3', '로컬 계정이 PBKDF2 로 보호돼요 (저장 데이터 탭의 계정 목록)'],
       ['x4', '서버는 HTTPS · Secure 쿠키 · data/ 웹 접근 차단을 확인했어요'],
-      ['x5', '관리자 비밀번호를 공유하지 않고, 인수인계 때 새로 바꿨어요'] ] },
+      ['x5', '관리자 비밀번호를 공유하지 않고, 인수인계 때 새로 바꿨어요'],
+      ['x6', '자가 테스트 › 🔒 개인정보 가림 · 👶 쉬운 모드(보호자 확인) 가 통과하고, admin.php 의 "어린이 개인정보 가림" 점검이 ✅ 예요'] ] },
     { id: 'content', emoji: '✍️', title: '콘텐츠 추가 방법', items: [
       ['c1', '작물 추가 절차를 읽었어요 (HANDOVER.md §6 — items · crops · collection)'],
       ['c2', '퀘스트·NPC 대사·교육/퀴즈 추가 절차를 읽었어요'],
@@ -2670,6 +4012,9 @@
     ['⌨️ 단축키·도움말', '해당 모듈 init 의 G.input.onKey + 70-app.js 도움말', '-'],
     ['🔐 보안 정책(CSP)', 'tools/build.mjs (CSP 해시)', '시스템 점검 › 보안'],
     ['🐘 서버 API', 'server/api/*.php + server/lib/*.php', '서버 점검'],
+    ['👶 쉬운 모드 화면', '08-easy.js (G.easy) + 각 모듈의 easy 분기 · 08-easy.css', '👶 쉬운 모드 점검 · tools/kid-audit.mjs'],
+    ['🔒 개인정보 가림', '60-social.js maskPII + server/lib/ChatFilter.php (같은 규칙)', '자가 테스트 › 🔒 개인정보 가림 · server E2E'],
+    ['🖥️ 검은 사각형(NaN)', '10-engine.js fixNormals · NaNScrubShader', '시스템 점검 › 🖥️ GPU 안전'],
   ];
   function handoverState() { const s = store.get(LS.handover, {}); return isObj(s) ? s : {}; }
   function handoverProgress() {
@@ -2746,6 +4091,38 @@
       }
       case 'tree-refresh': renderTree(ui.body.querySelector('#dc-tree')); return;
       case 'srv-run': await runServerChecks(); return;
+      case 'kid-audit': KidAudit.run(); ui.kid.view = 'live'; render(); toast(`지금 화면: 치명 ${KidAudit.last.counts.critical} · 경고 ${KidAudit.last.counts.warn} · 참고 ${KidAudit.last.counts.info}`, KidAudit.last.counts.critical ? 'warn' : 'success', '👶'); return;
+      case 'kid-tour': await kidTourUi(); return;
+      case 'kid-easy': {
+        const want = !easyOn();
+        const on = await setEasy(want);
+        if (on !== want) { toast('보호자 확인을 통과하지 않아 그대로예요 🔒', 'info', '👶'); return; }
+        await nextFrame(); await nextFrame();
+        KidAudit.run(); ui.kid.view = 'live';
+        if (ui.opened) render();
+        toast(on ? '쉬운 모드로 바꿨어요 👶' : '보통 모드로 바꿨어요 🧑', 'info', on ? '👶' : '🧑');
+        return;
+      }
+      case 'kid-gate': await kidGateTest(); return;
+      case 'kid-kind': ui.kid.kind = ui.kid.kind === el.dataset.kind || el.dataset.kind === 'all' ? 'all' : el.dataset.kind; render(); return;
+      case 'kid-sev': ui.kid.sev = el.dataset.sev; renderKidList(ui.body); for (const x of ui.body.querySelectorAll('[data-dc="kid-sev"]')) x.classList.toggle('active', x.dataset.sev === ui.kid.sev); return;
+      case 'kid-row': ui.kid.view = el.dataset.i === 'live' ? 'live' : Number(el.dataset.i); ui.kid.kind = 'all'; render(); setTimeout(() => ui.body.querySelector('#dc-kid-list')?.scrollIntoView({ block: 'start', behavior: reduceMotion() ? 'auto' : 'smooth' }), 40); return;
+      case 'kid-show': {
+        const it = kidItems().audit?.items?.[Number(el.dataset.i)];
+        if (it) Spot.show(it.el, `${KID_SEV[it.sev].emoji} ${KID_KINDS[it.kind].emoji} ${it.detail}${it.text ? ` · “${it.text}”` : ''}`);
+        return;
+      }
+      case 'gpu-scan': Gpu.scan(); render(); toast(Gpu.last?.ok ? 'GPU 안전 검사: 문제 없어요 ✅' : 'GPU 안전 검사: 살펴볼 곳이 있어요', Gpu.last?.ok ? 'success' : 'warn', '🖥️'); return;
+      case 'gpu-fix': { const n = Gpu.fixAll(); Gpu.scan(); render(); toast(`노멀 ${fmt(n)}개를 고쳤어요 🔧`, 'success', '🖥️'); G.log.info('DEV', `fixed ${n} normals from the dev center`); return; }
+      case 'gpu-nan': {
+        el.disabled = true;
+        await nextFrame();
+        const r = Gpu.nanTest();
+        Gpu.scan();
+        render();
+        toast(r.skip ? `NaN 테스트를 건너뛰었어요: ${r.detail}` : r.ok ? `NaN 주입 테스트 통과 ✅ (${(r.blackScrub * 100).toFixed(2)}% 검정)` : `NaN 주입 테스트 실패: ${r.detail}`, r.ok ? 'success' : 'warn', '🧪');
+        return;
+      }
       case 'srv-detect': {
         // probe only — never switch G.net.mode in the middle of a session (saves/chat would mix modes)
         el.disabled = true;
@@ -2868,13 +4245,24 @@
       G.input?.onKey?.('Backquote', fk, { allowInModal: true });
       if (!appOk()) G.ui.onAction('devcenter', () => this.open());
       G.ui.onEscape(() => {
-        if (!ui.opened) return false;
+        if (Spot.active) { Spot.hide(); return true; }
+        if (Tour.running) return false; // the tour itself sends Escape to close kid overlays
+        if (!ui.opened || ui.away) return false;
         if (ui.dialog) { closeDialog(false); return true; }
         if (ui.pop && !ui.pop.hidden) { closePop(); return true; }
         close();
         return true;
       }, 125);
       G.bus.on('dev:open', (p) => this.open(p?.tab));
+      // kid-mode event logs for the 👶 tab (texts are prompts, never typed by the child)
+      G.bus.on('easy:say', (p) => pushRing(KidLog.say, { at: now(), text: String(p?.text ?? '').replace(/\s+/g, ' ').slice(0, 140) }));
+      G.bus.on('easy:gate', (p) => pushRing(KidLog.gate, { at: now(), reason: String(p?.reason ?? '').slice(0, 40), ok: !!p?.ok }));
+      G.bus.on('easy:changed', () => {
+        KidLog.changed++;
+        if (!ui.opened || ui.away || ui.tab !== 'kids' || Tour.running) return;
+        clearTimeout(this._kt);
+        this._kt = setTimeout(() => { if (ui.opened && !ui.away && ui.tab === 'kids') { KidAudit.run(); render(); } }, 160);
+      });
       G.log.info('DEV', `dev center ready (${TESTS.length} self tests, ${Object.keys(LINT_CATS).length} lint categories)`);
     },
 
@@ -2890,6 +4278,10 @@
       Cheats.serverConfirmed = false;
       Tests.result = null;
       ui.srv = { running: false, results: null, health: null, at: 0, err: '' };
+      Spot.hide(true);
+      if (Tour.running) Tour.stop = true;
+      KidAudit.last = null; Tour.result = null; KidLog.say.length = 0; KidLog.gate.length = 0;
+      ui.kid.view = 'live';
     },
 
     update(dt) {
@@ -2915,7 +4307,7 @@
     // ---------------------------------------------------------------- public API
     open(tab, opts) { return open(tab, opts || {}); },
     close() { return close(); },
-    toggle(tab) { if (ui.opened && (!tab || normTab(tab) === ui.tab)) return close(); return open(tab); },
+    toggle(tab) { if (ui.gating) return ui.gating; if (ui.opened && (!tab || normTab(tab) === ui.tab)) return close(); return open(tab); },
     isOpen() { return ui.opened; },
     setTab(tab) { if (normTab(tab)) setTab(tab, { scrollTop: true }); },
     lint() { return Lint.run(); },
@@ -2929,6 +4321,19 @@
     access() { return { ...access() }; },
     renderMarkdown(src) { return Md.render(src).html; },
     docs() { return docList(); },
+    /** 👶 audit of what is on screen; opts.scope may be an Element or a CSS selector (JSON-safe result) */
+    kidAudit(opts = {}) {
+      const o = { ...opts };
+      if (typeof o.scope === 'string') o.scope = document.querySelector(o.scope) || undefined;
+      return KidAudit.plain(KidAudit.run(o));
+    },
+    kidTour(opts) { return Tour.run(opts || {}).then((r) => Tour.plain(r)); },
+    kidStop() { Tour.stop = true; },
+    kidScreens() { return Tour.screens(); },
+    easyStatus() { const e = easyStatus(); return { ...e, sayLog: e.sayLog.length, gateLog: e.gateLog }; },
+    gpuScan() { return Gpu.scan(); },
+    nanTest() { return Gpu.plainNan(Gpu.nanTest()); },
+    showElement(el, caption) { return Spot.show(typeof el === 'string' ? document.querySelector(el) : el, caption); },
   };
   G.register(devcenter);
 })();

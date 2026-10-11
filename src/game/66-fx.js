@@ -16,6 +16,14 @@
 //   G.fx.pulse(color, {duration})                                       soft screen-edge glow
 //   G.fx.shimmerExp() / G.fx.shine(el)                                  HUD exp-bar shimmer / glossy sweep on an element
 //   G.fx.level() -> 'off'|'low'|'high' (effective)   G.fx.enabled()   G.fx.clear()   G.fx.stats()
+//   G.fx.kidParty(pos?, {rain=true, burst=true, emoji})                 쉬운 모드 celebration: confetti + stars + hearts
+//        in 3D and a soft 2D rain of stars / hearts / confetti (auto-added to every G.easy.celebrate pop)
+//
+// 쉬운 모드 & photosensitivity (CONTRACT §12.4): nothing flashes faster than 3 Hz — edge pulses are merged
+// (≥ 0.7 s apart) and eased, the level-up light eases in over ~0.6 s, light rays turn slowly (≤ 1.2 Hz stripe
+// rate; kid ≤ 0.9 Hz), star twinkle ≈ 1.7 Hz; no camera shake for children; prefers-reduced-motion counts like
+// the reduceMotion setting. Kid texts: level-up = "쑥쑥 컸어요!" + ⭐ number (no "LEVEL UP"/EXP), quest stamp =
+// "참 잘했어요!".
 //
 // One world-particle API: the farming module's pooled point system G.ffx (presets DROP SPLASH LEAF POP
 // SPARK GLINT DUST STEAM BUBBLE PETAL) renders sparkle / leaves / dust / splash / petals; this module adds
@@ -45,15 +53,20 @@
   if (G.settingsDefaults && !Object.prototype.hasOwnProperty.call(G.settingsDefaults, 'fxLevel')) G.settingsDefaults.fxLevel = DEFAULT_LEVEL;
   if (G.settings && LEVEL_NAMES.indexOf(G.settings.fxLevel) < 0) G.settings.fxLevel = DEFAULT_LEVEL;
 
+  // the OS-level "reduce motion" wish counts like the in-game setting (cached query, live `matches`)
+  let RMQ = null;
+  try { RMQ = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null; } catch (e) { RMQ = null; }
+  const osReduce = () => !!(RMQ && RMQ.matches);
   /** 0 off, 1 low, 2 high (reduceMotion caps at 1) */
   function lv() {
     let l = LEVEL_NAMES.indexOf(G.settings ? G.settings.fxLevel : DEFAULT_LEVEL);
     if (l < 0) l = LEVEL_NAMES.indexOf(DEFAULT_LEVEL);
-    if (l > 1 && G.settings && G.settings.reduceMotion) l = 1;
+    if (l > 1 && ((G.settings && G.settings.reduceMotion) || osReduce())) l = 1;
     return l;
   }
   const mult = () => { const l = lv(); return l === 2 ? 1 : l === 1 ? 0.45 : 0; };
-  const motion = () => !(G.settings && G.settings.reduceMotion);
+  const motion = () => !(G.settings && G.settings.reduceMotion) && !osReduce();
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
 
   // ---------------------------------------------------------------- colours (validated)
   const dict = (o) => Object.freeze(Object.assign(Object.create(null), o)); // no prototype keys ('constructor', '__proto__'...)
@@ -94,7 +107,7 @@
   const _c1 = new THREE.Color(), _c2 = new THREE.Color();
 
   // ---------------------------------------------------------------- positions
-  const _pv = new THREE.Vector3(), _pv2 = new THREE.Vector3(), _hv = new THREE.Vector3();
+  const _pv = new THREE.Vector3(), _pv2 = new THREE.Vector3(), _hv = new THREE.Vector3(), _kv = new THREE.Vector3();
   function groundAt(x, z, fromY) {
     try { const h = G.world?.heightAt?.(x, z, fromY == null ? Infinity : fromY); return Number.isFinite(h) ? h : 0; } catch (e) { return 0; }
   }
@@ -386,7 +399,7 @@
         size = P.s0[i] + (P.s1[i] - P.s0[i]) * k;
         if (k < 0.12) { const q = k / 0.12; size *= 1 + 2.2 * (q - 1) * (q - 1) * (q - 1) + 1.2 * (q - 1) * (q - 1); } // ease-out-back pop
       }
-      if (fl & F_TWINKLE) size *= 0.72 + 0.28 * Math.sin(life * 17 + P.ph[i]);
+      if (fl & F_TWINKLE) size *= 0.72 + 0.28 * Math.sin(life * 11 + P.ph[i]);   // ≈ 1.7 Hz: well under the 3 Hz flash limit
       const fo = P.fout[i];
       let a = P.a0[i] * (k < 0.06 ? k / 0.06 : 1) * (k > fo ? 1 - (k - fo) / (1 - fo) : 1);
       if (fl & F_GROW) a *= 1 - k * 0.35;
@@ -440,12 +453,17 @@
     _flights: [], _coinEls: 0, _coinDisp: null, _coinOverride: false, _coinText: '',
     _luQ: [], _lu: null, _stampEl: null, _stampT: 0, _pendingStamp: null, _rain: null, _pulseEl: null, _root: null,
     _lastFarm: null, _timers: new Set(), _offs: [], _gen: 0, _wLast: 0, _ev: new THREE.Vector3(),
+    _pulseAt: -1e9, _partyAt: -1e9,
 
     // ------------------------------------------------------------ lifecycle
     init() {
       this._ensure3D();
       this._bindEvents();
       this._applyBodyClass();
+      // every G.easy.celebrate pop gets the kid party (08-easy emits easy:celebrate, CONTRACT §12.5)
+      G.bus.on('easy:celebrate', (e) => { if (!e?.reduced) this._onCelebrate(); });
+      // the OS "reduce motion" switch can flip while playing: keep the fx-* body classes in step
+      try { RMQ?.addEventListener?.('change', () => { this._applyBodyClass(); if (osReduce()) this._stopRain(); }); } catch (e) { /* old engines */ }
       G.sys.engine?.onResize?.(() => { if (this._rain?.active) this._sizeRain(); });
       G.log.info('UI', `fx ready (level ${LEVEL_NAMES[lv()]}${G.ffx ? ', G.ffx merged' : ''})`);
     },
@@ -599,8 +617,9 @@
       const color = cssColor(opts.color) || '#e0453a';
       this._killStamp();
       const h = G.ui.h;
-      const el = h('div', { class: 'fx-stamp-wrap' + (motion() ? '' : ' fx-static'), 'aria-hidden': 'true' },
-        h('div', { class: 'fx-stamp' }, h('span', { class: 'fx-stamp-text' }, txt), sub ? h('span', { class: 'fx-stamp-sub' }, sub) : null),
+      const kid = kidOn();
+      const el = h('div', { class: 'fx-stamp-wrap' + (motion() ? '' : ' fx-static') + (kid ? ' fx-kid' : ''), 'aria-hidden': 'true' },
+        h('div', { class: 'fx-stamp' }, kid ? h('span', { class: 'fx-stamp-star emoji' }, '⭐') : null, h('span', { class: 'fx-stamp-text' }, txt), sub ? h('span', { class: 'fx-stamp-sub' }, sub) : null),
         h('div', { class: 'fx-stamp-ink' }));
       el.style.setProperty('--fx-stamp', color);
       this._root.appendChild(el);
@@ -609,7 +628,8 @@
       // the lifetime starts when the stamp is actually painted (slow devices commit frames late)
       this._whenShown(el, () => {
         if (this._stampEl !== el) return;
-        this._later(() => { if (this._stampEl === el) { G.sfx('pop', { volume: 1 }); if (motion() && G.settings.cameraShake !== false) G.sys.camera?.shake?.(0.06); } }, motion() ? 230 : 0);
+        // no camera shake for children (motion sickness); a soft 'stamp' thud instead of the pop
+        this._later(() => { if (this._stampEl === el) { G.sfx(kid ? 'stamp' : 'pop', { volume: 1 }); if (!kid && motion() && G.settings.cameraShake !== false) G.sys.camera?.shake?.(0.06); } }, motion() ? 230 : 0);
         this._later(() => { if (this._stampEl === el) { el.classList.add('out'); this._later(() => { el.remove(); if (this._stampEl === el) this._stampEl = null; }, 420); } }, dur);
       });
     },
@@ -678,15 +698,50 @@
     /** soft screen-edge glow */
     pulse(color = '#f4c54a', opts = {}) {
       if (!lv() || !this._layer()) return;
+      // photosensitivity: back-to-back events (achievement + quest + level-up in one tick) merge into ONE glow,
+      // so the screen edge can never flash faster than ~1.4 Hz; the rise is eased over a third of the duration
+      const now = pnow();
+      if (now - this._pulseAt < 700) return;
+      this._pulseAt = now;
       const c = cssColor(color) || '#f4c54a';
       let el = this._pulseEl;
       if (!el || !el.isConnected) { el = this._pulseEl = G.ui.h('div', { class: 'fx-pulse', 'aria-hidden': 'true' }); this._root.appendChild(el); }
       el.style.setProperty('--fx-pulse', c);
-      const dur = clamp(Number(opts?.duration) || 1300, 400, 4000);
+      const dur = clamp(Number(opts?.duration) || 1300, 900, 4000);
+      const peak = !motion() ? 0.55 : kidOn() ? 0.75 : 0.95;
       try {
         el.getAnimations?.().forEach((a) => a.cancel());
-        el.animate([{ opacity: 0 }, { opacity: motion() ? 1 : 0.7, offset: 0.25 }, { opacity: 0 }], { duration: dur, easing: 'ease-out' });
+        el.animate([{ opacity: 0 }, { opacity: peak, offset: 0.35 }, { opacity: 0 }], { duration: dur, easing: 'ease-in-out' });
       } catch (e) { /* cosmetic */ }
+    },
+
+    /** 쉬운 모드 party: confetti + stars + hearts at pos (default: the player) and a soft 2D rain of stars & hearts */
+    kidParty(pos, opts = {}) {
+      if (!lv()) return 0;
+      if (opts == null || typeof opts !== 'object') opts = {};
+      const now = pnow();
+      if (now - this._partyAt < 900) return 0;   // one party at a time (celebrations can chain)
+      this._partyAt = now;
+      let n = 0;
+      if (opts.burst !== false) {
+        const p = pos == null ? playerPos(_kv) : resolvePos(pos, _kv);
+        if (p) {
+          n += this.burst('confetti', p, { count: 34, lift: 1.5, spread: 0.9 });
+          n += this.burst('stars', p, { count: 14, lift: 1.7, spread: 0.9 });
+          n += this.burst('hearts', p, { count: 8, lift: 1.6, spread: 0.8 });
+          const e = cleanEmoji(opts.emoji);
+          if (e) this.emoji3d(null, e, { scale: 1.2, rise: 1.4, duration: 1.9 });
+        }
+      }
+      if (opts.rain !== false && motion()) this._startRain(lv() > 1 ? 70 : 34, 2.6, true);
+      return n;
+    },
+    /** 08-easy already bursts confetti at the player: add stars + hearts and the falling-shapes rain */
+    _onCelebrate() {
+      if (!G.state || !lv()) return;
+      this.burst('stars', null, { count: 12, lift: 1.8 });
+      this.burst('hearts', null, { count: 6, lift: 1.7 });
+      if (motion() && pnow() - this._partyAt > 900) { this._partyAt = pnow(); this._startRain(lv() > 1 ? 60 : 30, 2.4, true); }
     },
 
     shimmerExp() {
@@ -1046,18 +1101,26 @@
       let title = null;
       for (let l = to; l > from; l--) if (titles[l]) { title = titles[l]; break; }
       const remain = G.sys.progression?.expToNext?.();
+      const kid = kidOn();
       const numEl = h('b', { class: 'fx-lu-num' }, h('span', { class: 'fx-lu-digit' }, String(anim ? Math.max(1, from) : to)));
       const mascot = this._mascotNode('cheer');
-      const card = h('div', { class: 'fx-lu-card' },
-        mascot ? h('div', { class: 'fx-lu-mascot' }, mascot) : null,
-        h('div', { class: 'fx-lu-eyebrow' }, 'LEVEL UP'),
-        h('div', { class: 'fx-lu-title' }, '레벨 업!'),
-        h('div', { class: 'fx-lu-level' }, h('span', { class: 'fx-lu-lv' }, 'Lv.'), numEl),
-        title ? h('div', { class: 'fx-lu-sub fx-lu-titleline' }, h('span', { class: 'emoji' }, '🏅'), ' 새 칭호 「', h('b', null, title), '」 획득!') : null,
-        title && G.data.meta?.titleDisclaimer ? h('div', { class: 'fx-lu-note' }, G.data.meta.titleDisclaimer) : null,
-        !title && Number.isFinite(remain) && remain > 0 ? h('div', { class: 'fx-lu-sub' }, h('span', { class: 'emoji' }, '✨'), ` 다음 레벨까지 ${U.fmt(remain)} EXP`) : null);
+      // 쉬운 모드: no "LEVEL UP" / EXP words — a big ⭐ with the number and one happy sentence
+      const card = kid
+        ? h('div', { class: 'fx-lu-card' },
+          mascot ? h('div', { class: 'fx-lu-mascot' }, mascot) : null,
+          h('div', { class: 'fx-lu-title' }, '쑥쑥 컸어요!'),
+          h('div', { class: 'fx-lu-level' }, h('span', { class: 'fx-lu-lv fx-lu-star emoji' }, '⭐'), numEl),
+          h('div', { class: 'fx-lu-sub' }, h('span', { class: 'emoji' }, '🌱'), ' 별이 하나 더 생겼어요!'))
+        : h('div', { class: 'fx-lu-card' },
+          mascot ? h('div', { class: 'fx-lu-mascot' }, mascot) : null,
+          h('div', { class: 'fx-lu-eyebrow' }, 'LEVEL UP'),
+          h('div', { class: 'fx-lu-title' }, '레벨 업!'),
+          h('div', { class: 'fx-lu-level' }, h('span', { class: 'fx-lu-lv' }, 'Lv.'), numEl),
+          title ? h('div', { class: 'fx-lu-sub fx-lu-titleline' }, h('span', { class: 'emoji' }, '🏅'), ' 새 칭호 「', h('b', null, title), '」 획득!') : null,
+          title && G.data.meta?.titleDisclaimer ? h('div', { class: 'fx-lu-note' }, G.data.meta.titleDisclaimer) : null,
+          !title && Number.isFinite(remain) && remain > 0 ? h('div', { class: 'fx-lu-sub' }, h('span', { class: 'emoji' }, '✨'), ` 다음 레벨까지 ${U.fmt(remain)} EXP`) : null);
       // decorative (fx-root is aria-hidden): the level-up toast from progression is the accessible announcement
-      const el = h('div', { class: 'fx-lu' + (anim ? '' : ' fx-static') },
+      const el = h('div', { class: 'fx-lu' + (anim ? '' : ' fx-static') + (kid ? ' fx-kid' : '') },
         h('div', { class: 'fx-lu-flash' }), anim ? h('div', { class: 'fx-lu-rays' }) : null, h('div', { class: 'fx-lu-glow' }),
         anim ? h('div', { class: 'fx-lu-ring' }) : null, card);
       this._root.appendChild(el);
@@ -1074,7 +1137,7 @@
         this._later(() => { if (this._lu !== L) return; L.el.remove(); this._lu = null; this._pumpLevelUp(); }, dur + 500);
       });
       this._startPillar();
-      if (anim && lv() > 0) this._startRain(lv() > 1 ? 130 : 50, 3.0);
+      if (anim && lv() > 0) this._startRain(kid ? (lv() > 1 ? 90 : 40) : lv() > 1 ? 130 : 50, 3.0, kid);
       this.pulse('#f4c54a', { duration: 1600 });
     },
     /** odometer step: the old number slides up, the new one pops in */
@@ -1115,7 +1178,7 @@
     },
 
     // ------------------------------------------------------------ 2D confetti rain (one lazy canvas)
-    _startRain(n, dur) {
+    _startRain(n, dur, kid) {
       if (!this._layer()) return;
       let R0 = this._rain;
       if (!R0) {
@@ -1132,7 +1195,11 @@
       const cols = ['#e0453a', '#f4c54a', '#2f7de1', '#f7f4ea', '#34c36b', '#ff7eb6', '#a07dff', '#ff9f43'];
       n = Math.min(n, 220 - R0.parts.length);
       for (let i = 0; i < n; i++) {
-        R0.parts.push({ x: R(0, W), y: R(-innerHeight * 0.6, -10), vx: R(-50, 50), vy: R(60, 200), w: R(7, 13), h: R(4, 8), rot: R(0, TAU), vr: R(-6, 6), ph: R(0, TAU), phs: R(5, 12), c: cols[(rnd() * cols.length) | 0], round: rnd() < 0.25, sway: R(15, 45) });
+        // shape: 0 rect, 1 dot, 2 star, 3 heart (kid rain: mostly stars & hearts, bigger, slower flips)
+        const r = rnd();
+        const shape = kid ? (r < 0.4 ? 2 : r < 0.68 ? 3 : r < 0.85 ? 0 : 1) : (r < 0.25 ? 1 : 0);
+        const big = shape >= 2 ? R(1.5, 2.1) : 1;
+        R0.parts.push({ x: R(0, W), y: R(-innerHeight * 0.6, -10), vx: R(-50, 50), vy: R(60, 200), w: R(7, 13) * big, h: R(4, 8) * big, rot: R(0, TAU), vr: R(-6, 6) * (kid ? 0.5 : 1), ph: R(0, TAU), phs: R(5, 12) * (shape >= 2 ? 0.35 : 1), c: shape === 3 ? (rnd() < 0.6 ? '#ff6b9d' : '#ff8fb3') : shape === 2 ? (rnd() < 0.7 ? '#ffd43b' : '#fff3b0') : cols[(rnd() * cols.length) | 0], shape, sway: R(15, 45) });
       }
       R0.active = true; R0.t = 0; R0.dur = Math.max(R0.dur - R0.t, dur);
     },
@@ -1166,7 +1233,9 @@
         ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(sx, 1);
         ctx.fillStyle = p.c;
         if (sx < 0) ctx.globalAlpha = fade * 0.75;
-        if (p.round) { ctx.beginPath(); ctx.arc(0, 0, p.h * 0.6, 0, TAU); ctx.fill(); }
+        if (p.shape === 1) { ctx.beginPath(); ctx.arc(0, 0, p.h * 0.6, 0, TAU); ctx.fill(); }
+        else if (p.shape === 2) { starPath(ctx, p.w * 0.62); ctx.fill(); }
+        else if (p.shape === 3) { heartPath(ctx, p.w * 0.6); ctx.fill(); }
         else ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
         ctx.restore();
       }
@@ -1218,6 +1287,7 @@
       this._coinEls = 0;
       this._lastFarm = null;
       this._airVy = 0; this._wasAir = false;
+      this._partyAt = -1e9; this._pulseAt = -1e9;
     },
 
     _applyBodyClass() {
@@ -1253,7 +1323,8 @@
           const ps = this._pendingStamp;
           this._pendingStamp = null;
           if (!ps || !G.state) return;
-          this.stamp('완료!', { sub: ps.count > 1 ? `퀘스트 ${ps.count}개 완료` : ps.title });
+          if (kidOn()) this.stamp('참 잘했어요!', { sub: ps.count > 1 ? `${ps.count}개나 해냈어요! 🎁` : '🎁 선물을 받아요!' });
+          else this.stamp('완료!', { sub: ps.count > 1 ? `퀘스트 ${ps.count}개 완료` : ps.title });
           this.pulse('#34c36b', { duration: 1200 });
           this.burst('sparkle', null, { count: 18, lift: 1.2 });
         }, 120);
@@ -1263,7 +1334,8 @@
         const q = G.data.quests?.[questId];
         this.burst('confetti', null, { count: q?.category === 'main' ? 60 : 38 });
         this.burst('stars', null, { count: 12 });
-        if (q?.category === 'main' && motion()) this._later(() => this._startRain(lv() > 1 ? 80 : 30, 2.2), 250);
+        if (q?.category === 'main' && motion()) this._later(() => this._startRain(lv() > 1 ? 80 : 30, 2.2, kidOn()), 250);
+        else if (kidOn()) this.burst('hearts', null, { count: 8, lift: 1.6 });
       });
 
       on('achievement:unlocked', ({ id }) => {
@@ -1523,6 +1595,23 @@
     return k;
   }
 
+  // ---------------------------------------------------------------- 2D rain shapes (centred on 0,0; r = outer radius)
+  function starPath(ctx, r) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r;
+      if (i) ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); else ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+  function heartPath(ctx, r) {
+    ctx.beginPath();
+    ctx.moveTo(0, r * 0.9);
+    ctx.bezierCurveTo(-r * 1.25, r * 0.1, -r * 0.75, -r * 0.95, 0, -r * 0.35);
+    ctx.bezierCurveTo(r * 0.75, -r * 0.95, r * 1.25, r * 0.1, 0, r * 0.9);
+    ctx.closePath();
+  }
+
   // ---------------------------------------------------------------- fallback mascot (small onggi spirit, static markup)
   const FALLBACK_MASCOT = '<svg viewBox="0 0 100 100" width="92" height="92" xmlns="http://www.w3.org/2000/svg">'
     + '<defs><radialGradient id="fxm-b" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#a8683f"/><stop offset=".65" stop-color="#6e3f22"/><stop offset="1" stop-color="#4a2814"/></radialGradient></defs>'
@@ -1568,6 +1657,7 @@
     stamp: (t, o) => fx.stamp(t, o),
     coinFly: (f, a, o) => fx.coinFly(f, a, o),
     pulse: (c, o) => fx.pulse(c, o),
+    kidParty: (p, o) => fx.kidParty(p, o),
     shimmerExp: () => fx.shimmerExp(),
     shine: (el, o) => fx.shine(el, o),
     level: () => fx.level(),

@@ -4,12 +4,19 @@
 //   G.interact.register({id, kind, label: string|()=>string, position: Vector3|()=>Vector3, object?: Object3D,
 //                        radius=2.6, priority=0, enabled?: ()=>bool, onInteract: ()=>void, highlight=true})
 //      -> {id, unregister(), setEnabled(b)}
-//   G.interact.unregister(id), get(id), list(kind?), current, hovered, trigger(), activate(id) (walks there first),
-//   setObject(id, obj) (attach a mesh built after registration)
+//   G.interact.unregister(id), get(id), list(kind?), current, hovered, hint, trigger(), activate(id) (walks there first),
+//   setObject(id, obj) (attach a mesh built after registration), showDest(x, z, forEntry) / hideDest()
+//   optional entry fields for 쉬운 모드 (CONTRACT §12): kidLabel: string|()=>string (short kid words, no emoji),
+//   emoji: string|()=>string (the picture in the big round prompt; default = label's leading emoji / kind icon),
+//   handOffset: m above the object's top for the 👆 (default 0.55; raise it above world labels such as plot tags)
+//               — a number, or a cheap function returning one (read every frame for the pointed-at entry only)
 // Each frame the best candidate (distance + player facing / camera forward + priority) gets the
 // #interact-prompt and a soft gold ground ring + bobbing arrow. E / d-pad centre / mobile E trigger it,
 // then 'interact' {kind, id} is emitted. Clicking a registered object interacts (or walks there first);
 // clicking the ground walks there with a destination marker when G.settings.clickToMove is on.
+// 쉬운 모드: radius ×1.3, a big gold "picture + words + 👆 눌러요!" prompt (tappable everywhere, read aloud after a
+// short pause, long-press reads it), a bouncing 👆 above the focused object (replaces the 3D arrow) and a softer
+// 👆 "hint" over the nearest thing within 11 m when nothing is in reach yet (tap it → walk there and use it).
 // =============================================================================
 (function () {
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -19,6 +26,14 @@
   };
   // kinds where the player does a small "reach / look" gesture on interaction
   const GESTURE_KINDS = new Set(['sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'board', 'door', 'craft', 'shop', 'jar']);
+  // 쉬운 모드
+  const EASY_RADIUS = 1.3;          // interaction radius multiplier (CONTRACT §12: +30 %)
+  const HINT_R2 = 11 * 11;          // the "look here" hand appears over the nearest thing within 11 m
+  const HINT_SKIP = new Set(['companion', 'bench', 'decor']); // things that are always around: no hint hand
+  const SAY_DWELL = 1.1;            // s on the same target before its words are read aloud
+  const SAY_AGAIN = 25000;          // ms before the same target is read again
+  const easyOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
+  const RX_LEAD_EMOJI = /^\s*((?:\p{Extended_Pictographic}|\p{Regional_Indicator})(?:\uFE0F|\u200D(?:\p{Extended_Pictographic}|\uFE0F)|[\u{1F3FB}-\u{1F3FF}])*)\s*/u;
 
   const entries = new Map();
   const objToEntry = new Map();
@@ -50,6 +65,27 @@
   function labelOf(e) {
     try { return String((typeof e.label === 'function' ? e.label() : e.label) ?? ''); } catch (err) { return ''; }
   }
+  function valOf(v) {
+    try { const r = typeof v === 'function' ? v() : v; return r == null ? '' : String(r); } catch (err) { return ''; }
+  }
+  /** short kid words for the prompt: entry.kidLabel, else the label without " · detail" and leading emoji */
+  function kidLabelOf(e) {
+    let t = e.kidLabel != null ? valOf(e.kidLabel) : '';
+    if (!t) {
+      t = labelOf(e);
+      const cut = t.indexOf(' · ');
+      if (cut > 0) t = t.slice(0, cut);
+    }
+    t = t.replace(RX_LEAD_EMOJI, '').trim();
+    return (t || '살펴보기').slice(0, 18);
+  }
+  /** the picture in the big round prompt */
+  function emojiOf(e) {
+    const own = e.emoji != null ? valOf(e.emoji).trim() : '';
+    if (own) return own.slice(0, 16);
+    const m = RX_LEAD_EMOJI.exec(labelOf(e));
+    return m ? m[1] : (KIND_ICON[e.kind] || '✨');
+  }
 
   const interact = {
     name: 'interaction', order: 40, label: '상호작용',
@@ -61,6 +97,9 @@
     _lookV: new THREE.Vector3(), _lookOwned: false,
     _dest: null,            // destination marker state
     _hoverT: 0, _hoverXY: null,
+    hint: null,             // 쉬운 모드: nearest interactable that is not in reach yet (gets the soft 👆)
+    _hintFx: null,          // {id, offX, offZ, top} measured once per hint target
+    _sayFor: null, _sayT: 0, _said: new Map(),
 
     // ------------------------------------------------------------ registry
     register(opts) {
@@ -70,6 +109,8 @@
         id: opts.id, kind: opts.kind || 'object', label: opts.label ?? '살펴보기', position: opts.position || null,
         object: opts.object || null, radius: opts.radius ?? 2.6, priority: opts.priority || 0, enabled: opts.enabled || null,
         onInteract: opts.onInteract || null, highlight: opts.highlight !== false, disabled: false,
+        kidLabel: opts.kidLabel ?? null, emoji: opts.emoji ?? null,
+        handOffset: Number.isFinite(opts.handOffset) || typeof opts.handOffset === 'function' ? opts.handOffset : 0.55,
       };
       entries.set(e.id, e);
       if (e.object) objToEntry.set(e.object, e);
@@ -90,8 +131,17 @@
       pickKey = '';
       if (this.current === e) this._setCurrent(null);
       if (this.hovered === e) this.hovered = null;
+      if (this.hint === e) { this.hint = null; this._hintFx = null; }
     },
     get(id) { return entries.get(id) || null; },
+    /** effective interaction radius of an entry (×1.3 in 쉬운 모드) */
+    radiusOf(e) { return (e?.radius || 0) * (easyOn() ? EASY_RADIUS : 1); },
+    /** the words / picture the prompt shows for an entry ({text, emoji, kid}) */
+    promptOf(e) {
+      if (!e) return null;
+      const kid = easyOn();
+      return { text: kid ? kidLabelOf(e) : (labelOf(e) || '살펴보기'), emoji: kid ? emojiOf(e) : (KIND_ICON[e.kind] || '✨'), kid };
+    },
     /** attach / replace the 3D object of an entry (e.g. when the mesh is built after registration) */
     setObject(id, obj) {
       const e = entries.get(id);
@@ -113,16 +163,26 @@
       if (!e) return false;
       return this._approach(e, opts.walk !== false);
     },
+    /** ground destination marker (ripple) at x,z; forEntry = walking to an interactable (marker hidden) */
+    showDest(x, z, forEntry = false) {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
+      this._showDest(x, z, !!forEntry);
+      return true;
+    },
+    hideDest() { this._hideDest(); },
 
     // ------------------------------------------------------------ lifecycle
     init() {
       this._buildFx();
       this._bindPrompt();
+      this._buildHand();
       G.bus.on('input:interact', () => {
         if (G.ui?.isBlocking?.() || !this._playerReady()) return;
         this.trigger('input');
       });
       G.bus.on('input:click', (ev) => this._onClick(ev));
+      // switching 쉬운 모드 at runtime: re-render the prompt in the other style right away
+      G.bus.on('easy:changed', () => { this._promptKey = ''; this._sayFor = null; this._setHint(null); });
       const cont = document.getElementById('game-container');
       if (cont && !G.input?.touchUI) {
         const hxy = { x: 0, y: 0 };
@@ -133,8 +193,12 @@
 
     onLogout() {
       this._setCurrent(null);
+      this._setHint(null);
       this._hideDest();
       this._setCursor('');
+      this._said.clear();
+      this._sayFor = null;
+      if (this._hand) this._hand.setVisible(false);
     },
 
     _playerReady() {
@@ -244,14 +308,59 @@
     _bindPrompt() {
       const el = document.getElementById('interact-prompt');
       if (!el) return;
-      el.innerHTML = '<kbd class="ip-key">E</kbd><span class="ip-ico emoji" aria-hidden="true"></span><span class="interact-text"></span>';
+      // static markup only; the target's words go in through textContent (_updatePrompt)
+      el.innerHTML = '<kbd class="ip-key">E</kbd><span class="ip-ico emoji" aria-hidden="true"></span><span class="interact-text"></span>'
+        + '<span class="ip-tap" aria-hidden="true"><span class="ip-tap-hand emoji">👆</span><span class="ip-tap-lbl">눌러요!</span></span>';
       el.setAttribute('role', 'button');
       el.setAttribute('aria-live', 'polite');
+      el.tabIndex = -1;
       if (G.input?.touchUI) el.classList.add('touch');
       el.addEventListener('click', (ev) => { ev.stopPropagation(); this.trigger('prompt'); });
       this._promptEl = el;
       this._promptText = el.querySelector('.interact-text');
       this._promptIco = el.querySelector('.ip-ico');
+    },
+
+    /** 쉬운 모드: one bouncing 👆 world label (above the focused thing, or a soft hint over the nearest one) */
+    _buildHand() {
+      if (!G.ui?.label) return;
+      const el = G.ui.h('div', { class: 'ix-hand', 'aria-hidden': 'true' }, G.ui.h('span', { class: 'ixh-glyph emoji' }, '👆'));
+      this._handPos = new THREE.Vector3();
+      this._handMode = '';
+      this._hand = G.ui.label({
+        el, target: this._handPos, maxDist: 46, fadeDist: 6,
+        onClick: (ev) => {
+          ev.stopPropagation();
+          if (G.ui.isBlocking() || !this._playerReady()) return;
+          if (this.current) this.trigger('hand');
+          else if (this.hint) this._approach(this.hint, true);
+        },
+      });
+      this._hand.setVisible(false);
+    },
+    _setHint(e) {
+      if (this.hint === e) return;
+      this.hint = e || null;
+      this._hintFx = e ? this._measure(e) : null;
+    },
+    /** highlight offset / top of an entry relative to its position (bounds measured once) */
+    _measure(e) {
+      const out = { offX: 0, offZ: 0, top: 1.4 };
+      const pos = readPos(e, _p) ? _p : null;
+      if (!pos) return out;
+      if (e.object) {
+        try {
+          _box.setFromObject(e.object);
+          if (!_box.isEmpty()) {
+            _box.getCenter(_ctr);
+            out.offX = _ctr.x - pos.x; out.offZ = _ctr.z - pos.z;
+            if (Math.hypot(out.offX, out.offZ) > 3) { out.offX = 0; out.offZ = 0; }
+            out.top = clamp(_box.max.y - pos.y, 0.3, 6);
+          }
+        } catch (err) { /* keep defaults */ }
+      } else out.top = 1.2;
+      if (e.kind === 'npc') out.top += 0.35;
+      return out;
     },
 
     _setCurrent(e) {
@@ -332,31 +441,50 @@
       const pl = G.sys.player;
       const ready = this._playerReady();
       const allowed = ready && pl.enabled !== false && !G.ui?.isBlocking?.() && (!G.sys.camera || G.sys.camera.mode === 'follow');
-      let best = null;
+      const kid = easyOn();
+      const rk = kid ? EASY_RADIUS : 1;
+      let best = null, hint = null;
+      // 쉬운 모드: the thing the "다음 할 일" card talks about wins over a nearer sign / bed (card and prompt agree)
+      this._goalT = (this._goalT || 0) - (dt || 0);
+      if (this._goalT <= 0) {
+        this._goalT = 0.4;
+        let gid = null;
+        if (kid) { try { const tg = G.sys.quest?.focus?.()?.target; gid = tg ? (tg.id || tg.npc || null) : null; } catch (e) { gid = null; } }
+        this._goalId = gid;
+      }
+      const goalId = kid ? this._goalId : null;
       if (allowed) {
         const pp = pl.position;
         const fx = Math.sin(pl.rotY), fz = Math.cos(pl.rotY);
         const cb = G.sys.camera?.getMoveBasis?.();
         const cfx = cb ? cb.forward.x : fx, cfz = cb ? cb.forward.z : fz;
-        let bestScore = Infinity;
+        let bestScore = Infinity, hintD2 = HINT_R2;
         for (const e of entries.values()) {
           if (!isEnabled(e)) continue;
           if (!readPos(e, _q)) continue;
-          const dx = _q.x - pp.x, dz = _q.z - pp.z;
-          const d2 = dx * dx + dz * dz, r = e.radius;
-          if (d2 > r * r) continue;
           if (Math.abs(_q.y - pp.y) > 3.5) continue;
+          const dx = _q.x - pp.x, dz = _q.z - pp.z;
+          const d2 = dx * dx + dz * dz, r = e.radius * rk;
+          if (d2 > r * r) {
+            // 쉬운 모드: remember the nearest thing just out of reach for the "look here" hand
+            if (kid && d2 < hintD2 && !HINT_SKIP.has(e.kind)) { hintD2 = d2; hint = e; }
+            continue;
+          }
           const d = Math.sqrt(d2);
           let face = 1;
           if (d > 0.6) { const nx = dx / d, nz = dz / d; face = Math.max(fx * nx + fz * nz, (cfx * nx + cfz * nz) * 0.85); }
           let score = d / r + (1 - face) * 0.5 - e.priority * 0.3;
           if (e === this.current) score -= 0.15;
+          if (goalId && e.id === goalId) score -= 0.6;
           if (score < bestScore) { bestScore = score; best = e; }
         }
       }
       this._setCurrent(best);
+      this._setHint(best ? null : hint);
       this._updatePrompt();
       this._updateFx(dt, t);
+      this._updateHand(t, kid);
+      this._updateSay(dt, kid);
       this._updateDest(dt, t);
       this._updateHover(dt);
     },
@@ -366,17 +494,69 @@
       if (!el) return;
       const e = this.current;
       if (!e) { if (!el.hidden) el.hidden = true; return; }
-      const text = labelOf(e) || '살펴보기';
-      const key = e.id + '|' + text;
+      const kid = easyOn();
+      // cheap per-frame key (labels are short strings); DOM is touched only when something changed
+      const raw = labelOf(e);
+      const key = (kid ? 'k|' : 'n|') + e.id + '|' + raw + (kid ? '|' + valOf(e.kidLabel) + '|' + valOf(e.emoji) : '');
       if (key !== this._promptKey) {
         this._promptKey = key;
-        this._promptText.textContent = text;
-        const ico = KIND_ICON[e.kind] || '✨';
-        this._promptIco.textContent = /^\p{Extended_Pictographic}/u.test(text) ? '' : ico;
+        if (kid) {
+          const text = kidLabelOf(e);
+          this._promptText.textContent = text;
+          this._promptIco.textContent = emojiOf(e);
+          el.title = text;
+          el.dataset.say = `${text}. 눌러 봐요!`;
+          this._kidText = text;
+        } else {
+          const text = raw || '살펴보기';
+          this._promptText.textContent = text;
+          this._promptIco.textContent = /^\p{Extended_Pictographic}/u.test(text) ? '' : (KIND_ICON[e.kind] || '✨');
+          el.title = text;
+          delete el.dataset.say;
+        }
+        el.classList.toggle('kid', kid);
         el.dataset.kind = e.kind;
-        el.title = text;
       }
       if (el.hidden) el.hidden = false;
+    },
+
+    /** 쉬운 모드: the bouncing 👆 above the focused thing (or the softer hint hand over the nearest one) */
+    _updateHand(t, kid) {
+      const L = this._hand;
+      if (!L) return;
+      const e = kid ? (this.current || this.hint) : null;
+      const seated = e && e.kind === 'bench' && G.sys.player?.sitting;
+      if (!e || seated || !e.highlight || !readPos(e, _p)) {
+        if (L.visible) L.setVisible(false);
+        return;
+      }
+      const m = e === this.current ? this._fx : this._hintFx;
+      if (!m) { if (L.visible) L.setVisible(false); return; }
+      const reduce = !!G.settings.reduceMotion;
+      // world-space bob (≤ 1 Hz); the DOM label follows the projected point every frame (04-ui updateLabels)
+      let ho = e.handOffset;
+      if (typeof ho === 'function') { try { ho = Number(ho()); } catch (err) { ho = NaN; } if (!Number.isFinite(ho)) ho = 0.55; }
+      this._handPos.set(_p.x + m.offX, _p.y + m.top + ho + (reduce ? 0 : Math.abs(Math.sin(t * 2.6)) * 0.16), _p.z + m.offZ);
+      const mode = e === this.current ? 'on' : 'hint';
+      if (mode !== this._handMode) { this._handMode = mode; L.el.classList.toggle('hint', mode === 'hint'); }
+      if (!L.visible) L.setVisible(true);
+    },
+
+    /** 쉬운 모드: read the focused target's words once the child stops next to it for a moment */
+    _updateSay(dt, kid) {
+      const e = this.current;
+      if (!kid || !e) { this._sayFor = null; return; }
+      if (e !== this._sayFor) { this._sayFor = e; this._sayT = 0; return; }
+      if (this._sayT < 0) return;
+      this._sayT += dt;
+      if (this._sayT < SAY_DWELL) return;
+      this._sayT = -1; // once per focus
+      const now = performance.now();
+      if (now - (this._said.get(e.id) || -1e9) < SAY_AGAIN) return;
+      if (G.easy?.speaking || G.sys.dialogue?.active) return;
+      this._said.set(e.id, now);
+      if (this._said.size > 80) this._said.clear();
+      try { G.easy?.say?.(`${this._kidText || kidLabelOf(e)}. 눌러 봐요!`, { interrupt: false }); } catch (err) { /* voice optional */ }
     },
 
     _updateFx(dt, t) {
@@ -417,10 +597,13 @@
         this._ringB.rotation.y = t * 0.6;
       }
       const reduce = G.settings.reduceMotion;
-      arrow.visible = true;
-      arrow.position.set(cx, _p.y + fx.top + 0.42 + (reduce ? 0 : Math.sin(t * 3.4) * 0.09), cz);
-      arrow.rotation.y = reduce ? 0 : t * 1.6;
-      arrow.material.opacity = fade;
+      // 쉬운 모드 shows the bouncing 👆 label instead of the 3D arrow (one pointer, not two)
+      arrow.visible = !easyOn() || !this._hand;
+      if (arrow.visible) {
+        arrow.position.set(cx, _p.y + fx.top + 0.42 + (reduce ? 0 : Math.sin(t * 3.4) * 0.09), cz);
+        arrow.rotation.y = reduce ? 0 : t * 1.6;
+        arrow.material.opacity = fade;
+      }
       // player glances at the focused object (only if nobody else drives the look target)
       const rig = G.sys.player?.rig;
       if (rig && (!rig._look || rig._look === this._lookV)) {
@@ -452,8 +635,9 @@
       const pl = G.sys.player;
       if (!pl || !readPos(e, _p) || !isEnabled(e)) return false;
       const d = Math.hypot(_p.x - pl.position.x, _p.z - pl.position.z);
-      if (d <= e.radius * 1.6 || !walk) {
-        if (d > e.radius * 1.6) return false;
+      const R = this.radiusOf(e);
+      if (d <= R * 1.6 || !walk) {
+        if (d > R * 1.6) return false;
         return this._do(e, 'click');
       }
       const id = e.id;
@@ -463,7 +647,7 @@
           const en = entries.get(id);
           if (!en || !readPos(en, _q)) return;
           const dd = Math.hypot(_q.x - pl.position.x, _q.z - pl.position.z);
-          if (dd <= en.radius * 1.3) this._do(en, 'click');
+          if (dd <= this.radiusOf(en) * 1.3) this._do(en, 'click');
         },
       });
       this._showDest(_p.x, _p.z, true);

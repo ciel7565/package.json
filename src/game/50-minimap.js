@@ -3,10 +3,17 @@
 //
 //   currentZone / currentPoi          zone (G.data.zones entry or G.data.defaultZone) / poi | null
 //   worldToMap(x, z) -> {x, y, u, v}  base-map pixel (x, y) and normalised (u, v 0..1) coordinates
-//   openWorldMap({zoneId})            large map: clickable zone chips -> description + '여기로 이동'
-//   openFastTravel()                  zone list with visited state and teleport buttons
-//   travelTo(zoneOrPoiId)             fade + G.sys.player.teleport to a free arrival spot
+//   ONE travel flow (duplicates merged): every "go somewhere" entry point ends in travelTo()
+//   openWorldMap({zoneId, full})      large map: zone chips -> description + '여기로 이동'; the zone list on the
+//                                     right has a direct 이동 button per zone (this replaced the old fast-travel list)
+//   openFastTravel()                  = the world map's zone list (normal) / the picture menu (easy)
+//   openPictureTravel()               쉬운 모드 "🗺️ 어디 갈까?": big picture tiles (⭐ quest goal, 🏺 my jar, 9 zones)
+//   travelTo(id | {x,z}, {say}) -> Promise<bool>   zone / POI / NPC / layout anchor / point: fade + teleport
+//                                     to a free arrival spot (one travel at a time; kid voice + sparkle on arrival)
+//   arrivalFor(id) -> {x, z, rotY} | null
 //   setVisible(bool) / toggle() / setCollapsed(bool) / zoomIn() / zoomOut()
+// Easy mode: M / 'move' / minimap tap open the picture menu; the minimap shows big zone emoji and bigger
+// markers, and tapping a zone on it travels there.
 // Zone detection every 0.25 s (with hysteresis) -> zone:exit / zone:enter {zoneId, zone, first},
 // poi:enter {poiId, poi, first}; first visits are stored in G.state.visited / poisVisited.
 // Actions: minimap (toggle panel), move, minimap-collapse, minimap-close, minimap-zoom-in/out. Hotkey M.
@@ -14,7 +21,6 @@
 // =============================================================================
 (function () {
   const U = G.util;
-  const esc = U.escapeHtml;
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const PI = Math.PI, TAU = PI * 2;
   const BASE = { x0: -150, z0: -150, size: 300, ppm: 4 };     // 1200 x 1200 px base canvas
@@ -34,8 +40,56 @@
     ZONE_JANGDOKDAE: [20.5, 2, PI / 2],
     ZONE_REST: [38, 37.5, 0.75],
     ZONE_ENTRANCE: [0, 66, PI],
+    // points of interest next to water: stand on the bank, looking at the sight (never in the pond basin)
+    POI_WATERFALL: [-18, -58, -2.415],
+    POI_PAVILION: [43, 47, 2.28],
+    POI_RIVERSIDE: [74, 46, 1.89],
   };
   const KIND_R = { pine: 2.1, oak: 2.6, maple: 2.5, zelkova: 3.6, conifer: 1.55 };
+  const EASY_ZOOM = 3;                                        // 180 m across: more zones to tap
+  const ZONE_EMOJI = {
+    ZONE_MAIN: '⛲', ZONE_CROP: '🌱', ZONE_HALL: '🏛️', ZONE_HERB: '🌿', ZONE_EDUCATION: '📖', ZONE_FERMENTATION: '🍲',
+    ZONE_JANGDOKDAE: '🏺', ZONE_REST: '🌸', ZONE_ENTRANCE: '🚪', ZONE_TRAIL: '🚶',
+  };
+  const ZONE_SAY = {
+    ZONE_MAIN: '분수가 있는 광장', ZONE_CROP: '채소를 기르는 밭', ZONE_HALL: '큰 체험관', ZONE_HERB: '향기로운 허브 밭',
+    ZONE_EDUCATION: '이야기를 배우는 곳', ZONE_FERMENTATION: '맛있는 발효 음식', ZONE_JANGDOKDAE: '장독이 가득한 곳',
+    ZONE_REST: '꽃과 연못 정원', ZONE_ENTRANCE: '들어오는 문',
+  };
+  const POI_KID = {
+    POI_STORAGE: ['🍶', '저장고', '커다란 옹기가 모여 있는 저장고'], POI_TOOLS: ['🛠️', '옛날 도구', '옛날 농기구를 구경하는 곳'],
+    POI_PAVILION: ['🪷', '정자', '연못가의 예쁜 정자'], POI_WATERFALL: ['💦', '폭포', '시원한 작은 폭포'],
+    POI_RIVERSIDE: ['🏞️', '계곡', '맑은 계곡물을 보는 곳'], POI_PARKING: ['🚗', '주차장', '자동차가 쉬는 곳'],
+    POI_HANOK_VILLAGE: ['🏡', '한옥마을', '옛날 집이 모여 있는 마을'],
+  };
+  const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  const easyOn = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
+  /**
+   * a dry, free spot near (x, z): not water, not inside a collider, and not down in a pond / river basin
+   * (feet must stay above the water surface) — searched in growing rings up to ~14 m; null when none
+   */
+  function safeSpot(x, z) {
+    const W = G.world, b = W.bounds;
+    const wy = L().waterY ?? -1.1;
+    const ok = (px, pz) => {
+      if (!(px > b.minX + 1 && px < b.maxX - 1 && pz > b.minZ + 1 && pz < b.maxZ - 1)) return false;
+      if (W.isWater(px, pz)) return false;
+      const y = W.heightAt(px, pz);
+      return Number.isFinite(y) && y > wy + 0.08 && !W.blocked(px, pz, 0.45, y);
+    };
+    if (ok(x, z)) return { x, z };
+    for (let r = 0.8; r <= 14; r += 0.8) {
+      const n = Math.max(8, Math.round(r * 5));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU;
+        const px = x + Math.cos(a) * r, pz = z + Math.sin(a) * r;
+        if (ok(px, pz)) return { x: px, z: pz };
+      }
+    }
+    return null;
+  }
+  const say = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+  const kidToast = (msg, emoji = '🗺️') => G.ui.toast(msg, { type: 'info', emoji, sound: false, duration: 2400 });
 
   const L = () => G.data.layout || {};
   const TR = () => G.sys.terrain || null;
@@ -683,7 +737,7 @@
     visible: true, collapsed: false, zoom: DEFAULT_ZOOM,
     _detT: 0, _drawT: 0, _clockT: 0, _initialPending: false, _bannerAt: {},
     _canvas: null, _ctx: null, _dpr: 1, _W: 0, _H: 0,
-    _wm: null, _ft: null,
+    _wm: null, _travel: null, _pickOpen: false,
 
     init() {
       this.zoom = clamp(parseInt(lsGet(LS_ZOOM, DEFAULT_ZOOM), 10) || DEFAULT_ZOOM, 0, ZOOMS.length - 1);
@@ -702,7 +756,7 @@
       G.ui.onAction('move', () => this.openFastTravel());
       G.input?.onKey?.('KeyM', () => {
         if (!G.state) return false;
-        const m = G.ui.modal.get('world-map');
+        const m = G.ui.modal.get('world-map') || G.ui.modal.get('easy-where');
         if (m) { m.close(); return true; }
         if (G.ui.isBlocking()) return false;
         this.openWorldMap();
@@ -710,6 +764,13 @@
       }, { allowInModal: true });
       G.bus.on('settings:changed', ({ key }) => { if (key === 'minimapVisible') { this.visible = G.settings.minimapVisible !== false; this._applyPanelState(); } });
       G.bus.on('player:moved', () => { this._drawT = 1; });
+      G.bus.on('easy:changed', () => {
+        this._setZoneLabel(this.currentZone);
+        this._setZoom(this.zoom);
+        this._drawT = 1;
+        // the grown-up world map is not part of the kid flow (and the picture menu is not part of the adult one)
+        if (easyOn()) G.ui.modal.get('world-map')?.close();
+      });
     },
 
     onStateLoaded(state) {
@@ -728,7 +789,7 @@
       this.currentPoi = null;
       this._initialPending = false;
       this._wm?.m?.close?.();
-      this._ft?.close?.();
+      G.ui.modal.get('easy-where')?.close?.();
       this._setZoneLabel(null);
     },
 
@@ -766,7 +827,7 @@
       canvas.setAttribute('role', 'button');
       canvas.setAttribute('aria-label', '미니맵 — 클릭하면 전체 지도 열기');
       canvas.tabIndex = 0;
-      canvas.addEventListener('click', () => { if (G.state) this.openWorldMap(); });
+      canvas.addEventListener('click', (ev) => { if (!G.state) return; if (easyOn()) this._easyTap(ev); else this.openWorldMap(); });
       canvas.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (G.state) this.openWorldMap(); } });
       const wrap = panel.querySelector('.minimap-wrap');
       if (wrap && !wrap.querySelector('.mm-zone')) {
@@ -839,10 +900,12 @@
       p?.querySelector('[data-action="minimap-zoom-in"]')?.toggleAttribute('disabled', z === 0);
       p?.querySelector('[data-action="minimap-zoom-out"]')?.toggleAttribute('disabled', z === ZOOMS.length - 1);
     },
+    /** zoom level actually drawn: a fixed kid-friendly overview in easy mode (the adult zoom is kept) */
+    _zoomIdx() { return easyOn() ? EASY_ZOOM : this.zoom; },
     _updateScaleBar() {
       const el = this._scaleEl;
       if (!el || !this._W) return;
-      const meters = ZOOMS[this.zoom];
+      const meters = ZOOMS[this._zoomIdx()];
       const cssW = this._W / this._dpr;
       const step = meters <= 60 ? 10 : meters <= 130 ? 20 : 50;
       el.querySelector('i').style.width = `${(step / meters) * cssW}px`;
@@ -859,7 +922,7 @@
     },
     _setZoneLabel(zone) {
       if (!this._zoneEl) return;
-      this._zoneEl.textContent = zone ? zone.name : '';
+      this._zoneEl.textContent = zone ? (easyOn() ? `${ZONE_EMOJI[zone.id] || '📍'} ${zone.short || zone.name}` : zone.name) : '';
       this._zoneEl.parentElement.style.setProperty('--zc', zone?.color || '#9aa88f');
       this._zoneEl.parentElement.hidden = !zone;
     },
@@ -928,15 +991,6 @@
       const v = G.state?.visited?.[id];
       return { visited: !!v, at: v || null, current: this.currentZone?.id === id };
     },
-    arrivalFor(id) {
-      const a = ARRIVE[id];
-      if (a) return { x: a[0], z: a[1], rotY: a[2] };
-      const zn = G.world.zoneById(id);
-      if (zn && zn.r > 0) return { x: zn.center[0], z: zn.center[1], rotY: undefined };
-      const poi = (G.data.pois || []).find((p) => p.id === id);
-      if (poi) return { x: poi.x, z: poi.z, rotY: undefined };
-      return null;
-    },
 
     // ------------------------------------------------------------ minimap drawing
     _draw(t) {
@@ -946,8 +1000,10 @@
       const pl = G.sys.player;
       const hasP = !!(pl && pl.position && G.state);
       const cx = hasP ? pl.position.x : 0, cz = hasP ? pl.position.z : 0;
-      const meters = ZOOMS[this.zoom];
+      const easy = easyOn();
+      const meters = ZOOMS[this._zoomIdx()];
       const scale = W / meters;
+      const big = easy ? 1.45 : 1;      // bigger, chunkier markers for small fingers / eyes
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       blitBase(ctx, this.base, cx, cz, scale, W, H);
       const X = (x) => (x - cx) * scale + W / 2, Y = (z) => (z - cz) * scale + H / 2;
@@ -961,45 +1017,98 @@
         ctx.beginPath(); ctx.arc(X(zn.center[0]), Y(zn.center[1]), zn.r * scale, 0, TAU);
         ctx.setLineDash([5 * s, 4 * s]); ctx.lineWidth = 1.6 * s; ctx.strokeStyle = rgba(zn.color || '#ffffff', 0.85); ctx.stroke(); ctx.setLineDash([]);
       }
+      // easy mode: a big picture badge per zone (tap it to go there)
+      if (easy) this._drawZoneBadges(ctx, X, Y, inView, s, zn);
       // photo zones + my jar (when zoomed in)
       if (meters <= 180) {
-        for (const pz of L().photoZones || []) { const px = X(pz.x), py = Y(pz.z); if (inView(px, py, 10)) drawCamera(ctx, px, py, s * 0.95); }
+        if (!easy) for (const pz of L().photoZones || []) { const px = X(pz.x), py = Y(pz.z); if (inView(px, py, 10)) drawCamera(ctx, px, py, s * 0.95); }
         const j1 = L().get?.('J1');
-        if (j1) { const px = X(j1.x), py = Y(j1.z); if (inView(px, py, 10)) drawMyJar(ctx, px, py, s, t); }
+        if (j1) { const px = X(j1.x), py = Y(j1.z); if (inView(px, py, 10)) drawMyJar(ctx, px, py, s * big, t); }
       }
       // other players
-      eachOther((x, z) => { const px = X(x), py = Y(z); if (inView(px, py, 6)) drawOther(ctx, px, py, s); });
+      eachOther((x, z) => { const px = X(x), py = Y(z); if (inView(px, py, 6)) drawOther(ctx, px, py, s * (easy ? 1.15 : 1)); });
       // NPCs
       const npcs = G.sys.npc?.list?.() || [];
       for (const r of npcs) {
         const p = r.position || r.group?.position;
         if (!p) continue;
         const px = X(p.x), py = Y(p.z);
-        if (inView(px, py, 8)) drawNpc(ctx, px, py, s, r.marker || null);
+        if (inView(px, py, 8)) drawNpc(ctx, px, py, s * big, r.marker || null);
       }
       // quest markers (clamped to the edge with an arrow when outside)
       const pad = 12 * s;
       for (const m of questMarkers()) {
         if (!Number.isFinite(m.x) || !Number.isFinite(m.z)) continue;
         let px = X(m.x), py = Y(m.z);
-        if (inView(px, py, -pad * 0.4)) drawDiamond(ctx, px, py, s, t, !!m.primary);
+        if (inView(px, py, -pad * 0.4)) drawDiamond(ctx, px, py, s * big, t, !!m.primary);
         else {
           const dx = px - W / 2, dy = py - H / 2;
           const k = Math.min((W / 2 - pad) / Math.max(1e-3, Math.abs(dx)), (H / 2 - pad) / Math.max(1e-3, Math.abs(dy)));
           px = W / 2 + dx * k; py = H / 2 + dy * k;
-          drawEdgeArrow(ctx, px, py, Math.atan2(dy, dx), s * (m.primary ? 1.05 : 0.85));
+          drawEdgeArrow(ctx, px, py, Math.atan2(dy, dx), s * big * (m.primary ? 1.05 : 0.85));
         }
       }
       // player + view cone
       if (hasP) {
         const b = G.sys.camera?.getMoveBasis?.();
-        if (b) drawViewCone(ctx, W / 2, H / 2, b.forward.x, b.forward.z, s);
-        drawPlayerArrow(ctx, W / 2, H / 2, pl.rotY || 0, s);
+        if (b) drawViewCone(ctx, W / 2, H / 2, b.forward.x, b.forward.z, s * big);
+        drawPlayerArrow(ctx, W / 2, H / 2, Number.isFinite(pl.rotY) ? pl.rotY : 0, s * big);
       }
+    },
+
+    /** easy minimap: round picture badges at the zone centres (the current zone gets a soft gold halo) */
+    _drawZoneBadges(ctx, X, Y, inView, s, here) {
+      const R = 12.5 * s;
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `${Math.round(15 * s)}px ${EMOJI_FONT}`;
+      for (const z of zones()) {
+        if (!(z.r > 0)) continue;
+        const px = X(z.center[0]), py = Y(z.center[1]);
+        if (!inView(px, py, R)) continue;
+        const cur = here && here.id === z.id;
+        ctx.globalAlpha = cur ? 0.55 : 0.95;
+        ctx.beginPath(); ctx.arc(px, py + 1.5 * s, R, 0, TAU); ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill();
+        ctx.beginPath(); ctx.arc(px, py, R, 0, TAU); ctx.fillStyle = rgba(z.color || '#ffffff', 0.92); ctx.fill();
+        ctx.lineWidth = 2 * s; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+        ctx.globalAlpha = cur ? 0.7 : 1;
+        ctx.fillStyle = '#000';
+        ctx.fillText(ZONE_EMOJI[z.id] || '📍', px, py + 1 * s);
+      }
+      ctx.restore();
+    },
+
+    /** easy minimap tap: a zone (or its badge) under the finger -> go there; otherwise the picture menu */
+    _easyTap(ev) {
+      const c = this._canvas;
+      const pl = G.sys.player;
+      if (!c || !this._W || !pl?.position) { this.openPictureTravel(); return; }
+      const r = c.getBoundingClientRect();
+      if (!(r.width > 0)) { this.openPictureTravel(); return; }
+      const dpr = this._W / r.width;
+      const scale = this._W / ZOOMS[this._zoomIdx()];
+      const wx = pl.position.x + ((ev.clientX - r.left) * dpr - this._W / 2) / scale;
+      const wz = pl.position.z + ((ev.clientY - r.top) * dpr - this._H / 2) / scale;
+      if (!Number.isFinite(wx) || !Number.isFinite(wz)) { this.openPictureTravel(); return; }
+      const badgeR = (16 * this._dpr) / scale; // the badge radius in metres (+ a little slack for small fingers)
+      let best = null, bd = Infinity;
+      for (const z of zones()) {
+        if (!(z.r > 0)) continue;
+        const d = Math.hypot(wx - z.center[0], wz - z.center[1]);
+        const hit = d <= badgeR * 1.25 ? -1 : d <= z.r ? d / z.r : Infinity;
+        if (hit < bd) { bd = hit; best = z; }
+      }
+      if (!best || best.id === this.currentZone?.id) { this.openPictureTravel(); return; }
+      G.sfx('click');
+      this.travelTo(best.id);
     },
 
     // ============================================================ world map
     openWorldMap(opts = {}) {
+      opts = opts && typeof opts === 'object' ? opts : {};
+      // kid flow: the picture menu (fire and forget: callers awaiting a modal action must not wait for the whole trip)
+      if (easyOn() && !opts.full) { this.openPictureTravel(); return null; }
+      if (!G.state) return null;
       if (G.sys.photo?.active) G.sys.photo.exit?.();
       const ex = G.ui.modal.get('world-map');
       if (ex) { if (opts.zoneId) this._wmSelect(opts.zoneId); return ex; }
@@ -1203,12 +1312,19 @@
             h('div', { class: 'bar bar-gold', html: `<i style="width:${Math.round((nVisited / Math.max(1, vz.length)) * 100)}%"></i>` })),
           h('div', { class: 'wm-sub' }, '구역 목록'),
           h('div', { class: 'wm-zone-list' }, zs.map((zz, i) => {
-            const b = h('button', { type: 'button', class: `wm-zl ${visited[zz.id] ? 'visited' : ''} ${this.currentZone?.id === zz.id ? 'here' : ''}`, dataset: { zone: zz.id } },
-              h('span', { class: 'wm-chip-num' }, String(i + 1)), h('span', { class: 'grow' }, zz.name),
-              this.currentZone?.id === zz.id ? h('span', { class: 'chip chip-green' }, '여기') : visited[zz.id] ? h('span', { class: 'ico ico-xs wm-ok', 'data-icon': 'check' }) : h('span', { class: 'tiny muted' }, '미방문'));
-            b.style.setProperty('--c', zz.color || '#34c36b');
-            b.addEventListener('click', () => this._wmSelect(zz.id));
-            return b;
+            const here = this.currentZone?.id === zz.id;
+            const goal = questMarkers().some((m) => Number.isFinite(m.x) && Math.hypot(m.x - zz.center[0], m.z - zz.center[1]) <= zz.r + 2);
+            const row = h('div', { class: `wm-zl ${visited[zz.id] ? 'visited' : ''} ${here ? 'here' : ''}` },
+              h('button', { type: 'button', class: 'wm-zl-main', dataset: { zone: zz.id }, title: `${zz.name} 자세히 보기` },
+                h('span', { class: 'wm-chip-num' }, String(i + 1)), h('span', { class: 'grow' }, zz.name),
+                goal ? h('span', { class: 'wm-zl-goal', title: '퀘스트 목표' }, '◆') : null,
+                here ? h('span', { class: 'chip chip-green' }, '여기') : visited[zz.id] ? h('span', { class: 'ico ico-xs wm-ok', 'data-icon': 'check' }) : h('span', { class: 'tiny muted' }, '미방문')),
+              h('button', { type: 'button', class: 'btn btn-sm btn-primary wm-zl-go', dataset: { go: zz.id }, disabled: here || null, title: `${zz.name}${ro(zz.name).slice(zz.name.length)} 이동`, 'aria-label': `${zz.name}${ro(zz.name).slice(zz.name.length)} 이동` },
+                h('span', { class: 'ico ico-xs', 'data-icon': 'teleport' }), '이동'));
+            row.style.setProperty('--c', zz.color || '#34c36b');
+            row.querySelector('.wm-zl-main').addEventListener('click', () => this._wmSelect(zz.id));
+            row.querySelector('.wm-zl-go').addEventListener('click', (e) => { e.stopPropagation(); this.travelTo(zz.id); });
+            return row;
           }))));
         G.ui.hydrateIcons(card);
         return;
@@ -1353,69 +1469,164 @@
       }
     },
 
-    // ============================================================ fast travel
+    // ============================================================ travel (one flow for every entry point)
+    /** the zone list lives in the world map now (normal) / the picture menu (easy) — kept as an API alias */
     openFastTravel() {
       if (!G.state) return null;
-      if (G.sys.photo?.active) G.sys.photo.exit?.();
-      const h = G.ui.h;
-      const zs = zones();
-      const visited = G.state.visited || {};
-      const marks = questMarkers();
-      const list = h('div', { class: 'ft-list' }, zs.map((z, i) => {
-        const here = this.currentZone?.id === z.id;
-        const goal = marks.some((m) => Number.isFinite(m.x) && Math.hypot(m.x - z.center[0], m.z - z.center[1]) <= z.r + 2);
-        const row = h('div', { class: `ft-item ${here ? 'here' : ''} ${visited[z.id] ? 'visited' : ''}` },
-          h('span', { class: 'ft-ico' }, h('span', { class: 'ico', 'data-icon': z.icon || 'pin' }), h('span', { class: 'ft-num' }, String(i + 1))),
-          h('div', { class: 'ft-main' },
-            h('div', { class: 'ft-title' }, h('b', null, z.name),
-              here ? h('span', { class: 'chip chip-green' }, '현재 위치') : visited[z.id] ? h('span', { class: 'chip chip-gold' }, h('span', { class: 'ico ico-xs', 'data-icon': 'check' }), '방문함') : h('span', { class: 'chip' }, '미방문'),
-              goal ? h('span', { class: 'chip chip-gold ft-goal' }, '◆ 퀘스트 목표') : null),
-            h('p', { class: 'ft-desc' }, z.desc || '')),
-          h('button', { type: 'button', class: `btn ${here ? 'btn-ghost' : 'btn-primary'} btn-sm ft-go`, disabled: here || null, dataset: { zone: z.id } },
-            h('span', { class: 'ico ico-sm', 'data-icon': here ? 'pin' : 'teleport' }), here ? '여기' : '이동'));
-        row.style.setProperty('--c', z.color || '#34c36b');
-        return row;
-      }));
-      list.addEventListener('click', (ev) => {
-        const b = ev.target.closest('[data-zone]');
-        if (b && !b.disabled) this.travelTo(b.dataset.zone);
-      });
-      const nVisited = (G.data.visitZones || []).filter((id) => visited[id]).length;
-      const m = G.ui.modal.open({
-        id: 'fast-travel', size: 'md', className: 'ft-modal', title: '빠른 이동', icon: 'pin',
-        body: h('div', null,
-          h('div', { class: 'ft-top' }, h('span', { class: 'dim small' }, '가고 싶은 구역을 고르면 바로 이동해요.'), h('span', { class: 'chip chip-gold' }, `방문 ${nVisited}/${(G.data.visitZones || []).length}`)),
-          list),
-        actions: [
-          { label: '전체 지도', icon: 'map', class: 'btn-soft', onClick: () => { setTimeout(() => this.openWorldMap(), 0); } },
-          { label: '닫기', class: 'btn-ghost' },
-        ],
-        onClose: () => { if (this._ft === m) this._ft = null; },
-      });
-      this._ft = m;
-      return m;
+      if (easyOn()) { this.openPictureTravel(); return null; }
+      return this.openWorldMap({ full: true });
     },
 
-    /** fade + teleport to a zone (or POI) arrival spot */
-    async travelTo(id) {
-      const pl = G.sys.player;
-      if (!G.state || !pl?.teleport) { G.ui.toast('지금은 이동할 수 없어요.', { type: 'warn' }); return false; }
-      if (G.sys.dialogue?.active) { G.ui.toast('대화를 마친 뒤에 이동해 주세요.', { type: 'info' }); return false; }
-      const a = this.arrivalFor(id);
-      if (!a) return false;
+    /** 쉬운 모드 "🗺️ 어디 갈까?": one big picture menu — ⭐ quest goal, 🏺 my jar, every zone */
+    async openPictureTravel() {
+      if (!G.state) return null;
+      const open = G.ui.modal.get('easy-where');
+      if (open) { open.close(); return null; }
+      if (this._pickOpen) return null;
       if (G.sys.photo?.active) G.sys.photo.exit?.();
-      G.ui.modal.get('world-map')?.close();
-      G.ui.modal.get('fast-travel')?.close();
+      if (!G.easy?.pick) return this.openWorldMap({ full: true });
       G.ui.popover?.close?.();
-      const name = G.world.zoneById(id)?.name || (G.data.pois || []).find((p) => p.id === id)?.name || '';
+      const here = this.currentZone?.id || G.state.player?.zoneId || null;
+      const marks = questMarkers();
+      const visited = G.state.visited || {};
+      const items = [];
+      // ⭐ the next quest goal (walk there with the footprint trail)
+      let step = null;
+      try { step = G.easy.nextStep?.() || null; } catch (e) { step = null; }
+      const goal = step && step.target && Number.isFinite(step.target.x) && Number.isFinite(step.target.z) ? step.target : null;
+      if (goal) items.push({ id: '@goal', emoji: '⭐', label: '금빛 별', color: '#ffd23f', badge: '👉', say: `금빛 별을 찾아가요. ${step.say || step.text || ''}` });
+      // 🏺 my jar
+      const j1 = L().get?.('J1');
+      if (j1 && Number.isFinite(j1.x)) items.push({ id: '@jar', emoji: '🏺', label: '내 장독', color: '#c98a5a', say: '내 장독이 있는 곳으로 가요.' });
+      zones().forEach((z) => {
+        if (!z || !(z.r > 0) || !Array.isArray(z.center)) return;
+        const isHere = here === z.id;
+        const isGoal = marks.some((m) => m && m.primary && Number.isFinite(m.x) && Math.hypot(m.x - z.center[0], m.z - z.center[1]) <= z.r + 2);
+        const name = String(z.short || z.name);
+        items.push({
+          id: z.id, emoji: ZONE_EMOJI[z.id] || '📍', label: name, color: z.color,
+          badge: isHere ? '📍' : isGoal ? '⭐' : (visited[z.id] ? '' : '✨'),
+          selected: isHere,
+          say: isHere ? `${name}. 지금 여기 있어요.` : `${name}. ${ZONE_SAY[z.id] || ''}${isGoal ? '. 금빛 별이 있어요!' : ''}`,
+        });
+      });
+      // ✨ more places (points of interest) on a second page
+      const pois = (G.data.pois || []).filter((p) => p && p.id && Number.isFinite(p.x) && Number.isFinite(p.z));
+      if (pois.length) items.push({ id: '@more', emoji: '✨', label: '더 보기', color: '#b48bff', say: '다른 곳도 더 볼까요?' });
+      this._pickOpen = true;
+      let id = null;
+      try {
+        for (let page = 0; page < 6; page++) {
+          id = await G.easy.pick({ id: 'easy-where', title: '어디 갈까?', emoji: '🗺️', say: page ? '' : '어디로 갈까요? 그림을 눌러요.', items, columns: 4, className: 'mm-pick' });
+          if (id !== '@more') break;
+          const seen = G.state?.poisVisited || {};
+          const more = [{ id: '@back', emoji: '⬅️', label: '처음으로', color: '#9fb4c8', say: '처음 그림으로 돌아가요.' }].concat(pois.map((p) => {
+            const k = POI_KID[p.id] || ['📍', String(p.name).slice(0, 6), String(p.name)];
+            return { id: p.id, emoji: k[0], label: k[1], badge: seen[p.id] ? '' : '✨', say: `${k[1]}. ${k[2]}` };
+          }));
+          id = await G.easy.pick({ id: 'easy-where', title: '더 많은 곳', emoji: '✨', say: '더 많은 곳이에요. 그림을 눌러요.', items: more, columns: 4, className: 'mm-pick' });
+          if (id !== '@back') break;
+        }
+      } finally { this._pickOpen = false; }
+      if (!id || id === '@more' || id === '@back' || !G.state) return null; // (a logout during the menu ends the trip too)
+      if (id === '@goal' && goal) {
+        G.easy.goTo?.({ x: goal.x, z: goal.z }, { label: '' });
+        return id;
+      }
+      if (id === '@jar' && j1) {
+        G.easy.goTo?.({ x: j1.x - 1.6, z: j1.z }, { label: '내 장독', stopDistance: 0.9 });
+        return id;
+      }
+      if (id === here) { say('지금 여기에 있어요!', { force: true }); return id; }
+      await this.travelTo(id);
+      return id;
+    },
+
+    /** arrival spot for a zone / POI / NPC / layout anchor id: {x, z, rotY} | null */
+    arrivalFor(id) {
+      if (typeof id !== 'string' || !id) return null;
+      const a = ARRIVE[id];
+      if (a) return { x: a[0], z: a[1], rotY: a[2] };
+      const zn = G.world.zoneById(id);
+      if (zn && zn.r > 0) return { x: zn.center[0], z: zn.center[1], rotY: undefined };
+      const poi = (G.data.pois || []).find((p) => p.id === id);
+      if (poi) return { x: poi.x, z: poi.z, rotY: undefined };
+      // an NPC: stand ~2.4 m in front of them (towards the plaza), facing them
+      const npc = G.sys.npc?.get?.(id);
+      const np = npc?.position || npc?.group?.position;
+      const nd = G.data.npcs?.[id];
+      const nx = Number(np?.x ?? nd?.pos?.[0]), nz = Number(np?.z ?? nd?.pos?.[1]);
+      if (Number.isFinite(nx) && Number.isFinite(nz)) {
+        let dx = -nx, dz = -nz;
+        const l = Math.hypot(dx, dz);
+        if (l > 1e-3) { dx /= l; dz /= l; } else { dx = 0; dz = 1; }
+        return { x: nx + dx * 2.4, z: nz + dz * 2.4, rotY: Math.atan2(-dx, -dz) };
+      }
+      const an = L().get?.(id);
+      if (an && Number.isFinite(an.x) && Number.isFinite(an.z)) return { x: an.x, z: an.z + 2, rotY: Math.PI };
+      return null;
+    },
+
+    /**
+     * the single travel step behind the world map, the picture menu, the minimap tap, NPC "map" actions,
+     * missions and G.easy.goTo: fade + teleport to a free arrival spot. One travel at a time (double taps
+     * share the running one). Accepts an id (zone / POI / NPC / anchor) or a point {x, z, label?}.
+     */
+    travelTo(id, opts = {}) {
+      if (this._travel) return this._travel;
+      const p = this._doTravel(id, opts && typeof opts === 'object' ? opts : {});
+      this._travel = p;
+      const clear = () => { if (this._travel === p) this._travel = null; };
+      p.then(clear, clear);
+      return p;
+    },
+    async _doTravel(id, opts) {
+      const pl = G.sys.player;
+      const easy = easyOn();
+      if (!G.state || !pl?.teleport || pl._ready === false) {
+        if (easy) kidToast('지금은 갈 수 없어요. 조금 뒤에 해 봐요!'); else G.ui.toast('지금은 이동할 수 없어요.', { type: 'warn' });
+        return false;
+      }
+      if (G.sys.dialogue?.active) {
+        if (easy) kidToast('이야기가 끝나면 갈 수 있어요.', '💬'); else G.ui.toast('대화를 마친 뒤에 이동해 주세요.', { type: 'info' });
+        return false;
+      }
+      let a = null, name = '', zoneId = null;
+      if (id && typeof id === 'object') {
+        const x = Number(id.x), z = Number(id.z);
+        if (Number.isFinite(x) && Number.isFinite(z)) { a = { x, z, rotY: Number.isFinite(id.rotY) ? id.rotY : undefined }; name = String(id.label || '').slice(0, 20); }
+      } else if (typeof id === 'string') {
+        a = this.arrivalFor(id);
+        const zn = G.world.zoneById(id);
+        zoneId = zn && zn.r > 0 ? zn.id : null;
+        name = zn ? String((easy && zn.short) || zn.name) : (G.data.pois || []).find((p) => p.id === id)?.name || G.data.npcs?.[id]?.name || '';
+      }
+      if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) { G.log.warn('UI', 'travelTo: unknown target', id); return false; }
+      const b = G.world.bounds;
+      a.x = clamp(a.x, b.minX + 1, b.maxX - 1); a.z = clamp(a.z, b.minZ + 1, b.maxZ - 1);
+      const spot = safeSpot(a.x, a.z);
+      if (spot) { a.x = spot.x; a.z = spot.z; }
+      if (G.sys.photo?.active) G.sys.photo.exit?.();
+      // whatever screen sent us here (map, picture menu, mission card, bag...) closes: we are leaving
+      G.ui.modal.closeAll();
+      G.ui.popover?.close?.();
+      try { pl.cancelWalk?.('travel'); } catch (e) { /* ignore */ }
+      if (easy && opts.say !== false) say(name ? `${name}${ro(name).slice(name.length)} 가요!` : '출발!', { priority: 1 });
       try {
         await pl.teleport(a.x, a.z, a.rotY);
         this._detT = 1; // detect right away
-        G.log.info('UI', `fast travel -> ${id}`);
+        this._drawT = 1;
+        G.log.info('UI', `travel -> ${typeof id === 'string' ? id : `(${a.x.toFixed(1)}, ${a.z.toFixed(1)})`}`);
+        G.bus.emit('travel:arrived', { id: typeof id === 'string' ? id : null, zoneId, x: pl.position.x, z: pl.position.z });
+        if (easy) {
+          if (!G.settings?.reduceMotion) { try { G.fx?.burst?.({ x: pl.position.x, y: pl.position.y + 1.2, z: pl.position.z }, { type: 'sparkle', count: 22 }); } catch (e) { /* fx optional */ } }
+          // (when G.easy.goTo used this hop to get closer, its walk has started by now and it greets the arrival itself)
+          if (opts.say !== false) setTimeout(() => { if (!pl.isWalking) say(name ? `${name}에 도착했어요!` : '도착했어요!', { priority: 1 }); }, 120);
+        }
         return true;
       } catch (e) {
         G.log.warn('UI', 'fast travel failed', e);
-        G.ui.toast(`${ro(name || '그곳')} 이동하지 못했어요.`, { type: 'error' });
+        if (easy) kidToast('앗, 못 갔어요. 다시 눌러 봐요!'); else G.ui.toast(`${ro(name || '그곳')} 이동하지 못했어요.`, { type: 'error' });
         return false;
       }
     },

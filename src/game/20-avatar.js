@@ -4,6 +4,8 @@
 //   G.avatar.defaultAppearance / options / labels / heightRange
 //   G.avatar.normalize(app) -> complete, validated appearance
 //   G.avatar.random(seed) -> appearance
+//   G.avatar.presets -> 6 bright ready-made kid looks [{id, emoji, label, say, appearance}] (frozen, normalized)
+//                       for the easy-mode look picker (title screen / customizer)
 //   G.avatar.create(appearance, {shadow=true}) -> rig
 //     rig.group (feet at y=0, faces +Z, ~1.45 m), rig.height, rig.headAnchor, rig.handR, rig.handL
 //     rig.update(dt, {speed, grounded, vy})      locomotion: idle / walk / run / jump / fall / land
@@ -88,6 +90,22 @@
     }
     return out;
   }
+
+  // ---------------------------------------------------------------- 6 bright kid looks (easy mode picker)
+  const PRESETS_RAW = [
+    { id: 'farmer', emoji: '🧑‍🌾', label: '농부 친구', say: '밀짚모자를 쓴 농부 친구예요.',
+      app: { skin: '#f6d0b1', hair: 'short', hairColor: '#3a2a20', top: 'apron', topColor: '#9bd27a', bottom: 'pants', bottomColor: '#5a4636', shoes: '#7a4a2c', bag: 'basket', bagColor: '#b88a4a', accessory: 'strawhat', accessoryColor: '#e2c27a', face: 'cheer', height: 1 } },
+    { id: 'hanbok', emoji: '👘', label: '한복 친구', say: '분홍 한복을 입은 친구예요.',
+      app: { skin: '#fde3cf', hair: 'bun', hairColor: '#1f1a18', top: 'hanbok', topColor: '#f08bb0', bottom: 'skirt', bottomColor: '#b45a73', shoes: '#ffffff', bag: 'pouch', bagColor: '#f4c54a', accessory: 'none', accessoryColor: '#1f1f22', face: 'smile', height: 0.95 } },
+    { id: 'explorer', emoji: '🧢', label: '탐험가 친구', say: '빨간 모자를 쓴 탐험가 친구예요.',
+      app: { skin: '#efc6a2', hair: 'short', hairColor: '#4a3a2c', top: 'tshirt', topColor: '#ffd766', bottom: 'shorts', bottomColor: '#2f6f8f', shoes: '#d9534f', bag: 'backpack', bagColor: '#3b5ba5', accessory: 'cap', accessoryColor: '#d9534f', face: 'cheer', height: 0.95 } },
+    { id: 'cook', emoji: '🧑‍🍳', label: '요리사 친구', say: '하얀 앞치마를 두른 요리사 친구예요.',
+      app: { skin: '#e6b48d', hair: 'ponytail', hairColor: '#6b4a2e', top: 'apron', topColor: '#ffffff', bottom: 'pants', bottomColor: '#3b5ba5', shoes: '#f5f0e6', bag: 'none', bagColor: '#8a5a3b', accessory: 'headband', accessoryColor: '#f4c54a', face: 'smile', height: 1 } },
+    { id: 'bear', emoji: '🐻', label: '곰돌이 친구', say: '보라색 후드티를 입은 곰돌이 친구예요.',
+      app: { skin: '#d9a77f', hair: 'curly', hairColor: '#2f2520', top: 'hoodie', topColor: '#8b6fd6', bottom: 'pants', bottomColor: '#3b5ba5', shoes: '#ffffff', bag: 'backpack', bagColor: '#f4c54a', accessory: 'none', accessoryColor: '#1f1f22', face: 'cheer', height: 0.9 } },
+    { id: 'sky', emoji: '🌈', label: '하늘 친구', say: '하늘색 옷에 동그란 안경을 쓴 친구예요.',
+      app: { skin: '#f6d0b1', hair: 'long', hairColor: '#8a5a34', top: 'shirt', topColor: '#6fc3df', bottom: 'skirt', bottomColor: '#ffd766', shoes: '#d9534f', bag: 'pouch', bagColor: '#d9534f', accessory: 'glasses', accessoryColor: '#3b5ba5', face: 'smile', height: 1 } },
+  ];
 
   function random(seed) {
     const r = G.util.rng(seed == null ? Math.floor(Math.random() * 1e9) : seed);
@@ -1281,6 +1299,8 @@
     actions: Object.fromEntries(Object.entries(ACTIONS).map(([k, d]) => [k, { loop: !!d.loop, duration: d.dur || null, fullBody: !!d.fullBody, held: d.held || null }])),
     normalize,
     random,
+    // every read of .appearance is a fresh normalized copy: callers may edit it freely, the presets never change
+    presets: Object.freeze(PRESETS_RAW.map((p) => Object.freeze({ id: p.id, emoji: p.emoji, label: p.label, say: p.say, get appearance() { return normalize(p.app); } }))),
     create(appearance, opts = {}) { return new Rig(appearance, opts); },
     /** pre-build geometry/face textures for a list of appearances (avoids hitches later) */
     warm(list) { for (const a of list || []) { try { bodyGeometry(normalize(a)); } catch (e) { G.log.warn('AVATAR', 'warm failed', e); } } for (const f of OPTIONS.face) faceMaterial(f, 'base'); },

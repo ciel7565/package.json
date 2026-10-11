@@ -235,7 +235,62 @@
     });
   }
 
-  function bindAll() { bindCanvas(); bindDpad(); bindMobile(); }
+  // ---------------------------------------------------------------- 쉬운 모드: long-press to read (touch / pen)
+  // Holding a button, tile, card or text for 600 ms reads it aloud (G.easy.say, forced) and swallows the click that
+  // follows, so a child can "ask" what a button does without triggering it. Not on the 3D view or the controls.
+  const LP_MS = 600, LP_MOVE = 12;
+  const LP_EXCLUDE = '#game-container, #mobile-controls, #dpad, input, textarea, select, [contenteditable], .no-read';
+  const LP_TARGET = '[data-say], button, [role="button"], [role="option"], .easy-tile, .chip, .slot, .card, .list-item, .toast, .bubble, .nametag, label, h1, h2, h3, h4, p, li, .badge';
+  let lp = null, fired = null, swallowUntil = 0;
+  function lpClear() { if (lp) { clearTimeout(lp.timer); lp.el.classList.remove('easy-reading-wait'); lp = null; } }
+  function bindLongPress() {
+    if (document._easyLongPress) return;
+    document._easyLongPress = true;
+    document.addEventListener('pointerdown', (e) => {
+      lpClear();
+      if (fired && e.pointerId !== fired.id) { fired = null; swallowUntil = 0; } // a new finger: the old press is over
+      if (e.pointerType === 'mouse' || !e.isPrimary || !G.easy?.on) return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (!t || t.closest(LP_EXCLUDE)) return;
+      const el = t.closest(LP_TARGET);
+      if (!el || el === document.body) return;
+      const cur = { id: e.pointerId, x: e.clientX, y: e.clientY, el, timer: 0 };
+      cur.timer = setTimeout(() => {
+        if (lp !== cur) return;
+        const text = G.easy?.textOf?.(el) || el.textContent || '';
+        lp = null;
+        el.classList.remove('easy-reading-wait');
+        if (!String(text).trim()) return;
+        fired = { id: cur.id };
+        swallowUntil = performance.now() + 60000; // until this finger is lifted
+        el.classList.add('easy-reading');
+        setTimeout(() => el.classList.remove('easy-reading'), 1400);
+        try { navigator.vibrate?.(12); } catch (err) { /* not supported */ }
+        G.easy?.say?.(text, { force: true, priority: 1 });
+      }, LP_MS);
+      lp = cur;
+      el.classList.add('easy-reading-wait');
+    }, { capture: true, passive: true });
+    document.addEventListener('pointermove', (e) => {
+      if (lp && e.pointerId === lp.id && Math.abs(e.clientX - lp.x) + Math.abs(e.clientY - lp.y) > LP_MOVE) lpClear();
+    }, { capture: true, passive: true });
+    const end = (e) => {
+      if (lp && e.pointerId === lp.id) lpClear();
+      if (fired && e.pointerId === fired.id) { fired = null; swallowUntil = performance.now() + 450; }
+    };
+    document.addEventListener('pointerup', end, { capture: true, passive: true });
+    document.addEventListener('pointercancel', end, { capture: true, passive: true });
+    window.addEventListener('blur', () => { lpClear(); if (fired) { fired = null; swallowUntil = 0; } });
+    // the click that ends a long-press is swallowed (read, don't activate)
+    document.addEventListener('click', (e) => {
+      if (performance.now() < swallowUntil) { swallowUntil = 0; e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }
+    }, true);
+    document.addEventListener('contextmenu', (e) => {
+      if ((lp || fired || performance.now() < swallowUntil) && G.easy?.on) e.preventDefault();
+    }, true);
+  }
+
+  function bindAll() { bindCanvas(); bindDpad(); bindMobile(); bindLongPress(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindAll); else bindAll();
   input.bindAll = bindAll;
 })();

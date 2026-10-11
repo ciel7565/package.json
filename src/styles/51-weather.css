@@ -86,3 +86,124 @@
   .popover.wx-popover { width: min(22rem, 94vw); }
   .wx-pick { font-size: .66rem; }
 }
+
+/* =============================================================================
+   쉬운 모드 weather card (CONTRACT §12): big moving picture, one sentence, picture tiles.
+   Motion: slow (≥ 1.4 s cycles), never flashes; reduce-motion stops every animation.
+   ============================================================================= */
+body.easy #bottom-bar #easy-wx-btn { order: 4; } /* inserted before 🔊 (also order 4) -> 😊 📸 📝 🌤️ 🔊 */
+#easy-wx-btn .bb-emo { transition: transform .3s cubic-bezier(.34, 1.56, .64, 1); }
+#easy-wx-btn:active .bb-emo { transform: scale(.85); }
+
+.popover.wxk-popover {
+  width: min(25rem, calc(100vw - 1rem)); padding: .8rem; border-radius: 26px;
+  background: linear-gradient(180deg, rgba(23, 40, 33, .96), rgba(13, 24, 19, .97));
+  border: 2px solid rgba(255, 255, 255, .22); box-shadow: 0 18px 44px rgba(0, 0, 0, .5);
+  pointer-events: auto; max-height: calc(100vh - 1rem); overflow-y: auto; overscroll-behavior: contain;
+}
+.wxk { position: relative; display: flex; flex-direction: column; gap: .55rem; }
+.wxk-x {
+  position: absolute; top: -.2rem; right: -.2rem; z-index: 2; width: var(--tap, 56px); height: var(--tap, 56px); border-radius: 50%;
+  display: grid; place-items: center; font-size: 1.35rem; background: rgba(255, 255, 255, .14); border: 2px solid rgba(255, 255, 255, .35);
+  touch-action: manipulation;
+}
+.wxk-x:active { transform: scale(.92); }
+.wxk-head { display: flex; align-items: center; gap: .75rem; padding-right: calc(var(--tap, 56px) - .2rem); }
+.wxk-say { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
+.wxk-say .easy-speak { position: static; align-self: flex-start; }
+.wxk-line { margin: 0; font-size: max(1.12rem, 17px); font-weight: 800; line-height: 1.35; color: #fff; word-break: keep-all; }
+.wxk-feel { font-size: max(1.05rem, 16.5px); font-weight: 800; color: var(--gold, #f4c54a); }
+
+/* the animated picture */
+.wxk-scene {
+  position: relative; flex: none; width: 7.4rem; height: 7.4rem; border-radius: 26px; overflow: hidden; display: grid; place-items: center;
+  background: linear-gradient(180deg, #5fb8ff, #bfe6ff); box-shadow: inset 0 -6px 0 rgba(0, 0, 0, .12), 0 6px 14px rgba(0, 0, 0, .35);
+  border: 3px solid rgba(255, 255, 255, .75); transition: background .6s ease;
+}
+.wxk-scene[data-kind="CLOUDY"] { background: linear-gradient(180deg, #8fa6bb, #d6e1ea); }
+.wxk-scene[data-kind="RAIN"] { background: linear-gradient(180deg, #5d7286, #a8b8c6); }
+.wxk-scene[data-kind="FOG"] { background: linear-gradient(180deg, #b9c3cb, #e8edf0); }
+.wxk-scene[data-kind="SNOW"] { background: linear-gradient(180deg, #9fc3e6, #f2f8ff); }
+.wxk-scene[data-night="1"] { background: linear-gradient(180deg, #1b2856, #3b4f8f); }
+.wxk-big { position: relative; z-index: 1; font-size: 4.3rem; line-height: 1; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .25)); }
+.wxk-fx { position: absolute; inset: 0; pointer-events: none; }
+/* sun rays */
+.wxk-scene[data-kind="CLEAR"]:not([data-night="1"]) .wxk-fx {
+  background: repeating-conic-gradient(from 0deg at 50% 50%, rgba(255, 244, 170, .55) 0deg 12deg, rgba(255, 244, 170, 0) 12deg 30deg);
+  -webkit-mask: radial-gradient(circle, transparent 28%, #000 30%, #000 64%, transparent 70%);
+          mask: radial-gradient(circle, transparent 28%, #000 30%, #000 64%, transparent 70%);
+  animation: wxkSpin 14s linear infinite;
+}
+/* stars at night */
+.wxk-scene[data-night="1"] .wxk-fx {
+  background:
+    radial-gradient(circle at 18% 22%, #fff 0 1.5px, transparent 2.5px), radial-gradient(circle at 78% 18%, #fff 0 1.5px, transparent 2.5px),
+    radial-gradient(circle at 66% 70%, #fff 0 1px, transparent 2px), radial-gradient(circle at 28% 76%, #fff 0 1px, transparent 2px),
+    radial-gradient(circle at 86% 50%, #ffe9a8 0 1.5px, transparent 2.5px);
+  animation: wxkTwinkle 3s ease-in-out infinite;
+}
+/* rain / snow fall */
+.wxk-scene[data-kind="RAIN"] .wxk-fx {
+  background-image: linear-gradient(105deg, transparent 46%, rgba(255, 255, 255, .85) 48%, rgba(255, 255, 255, .85) 50%, transparent 52%);
+  background-size: 14px 26px; animation: wxkRain 1.4s linear infinite;
+}
+.wxk-scene[data-kind="SNOW"] .wxk-fx {
+  background-image: radial-gradient(circle, #fff 0 2.4px, transparent 3.2px), radial-gradient(circle, #fff 0 1.6px, transparent 2.4px);
+  background-size: 26px 26px, 17px 17px; background-position: 0 0, 8px 6px; animation: wxkSnow 4.5s linear infinite;
+}
+.wxk-scene[data-kind="CLOUDY"] .wxk-big, .wxk-scene[data-kind="FOG"] .wxk-big { animation: wxkDrift 4s ease-in-out infinite; }
+.wxk-scene[data-kind="FOG"] .wxk-fx { background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .55) 60%, rgba(255, 255, 255, .2)); animation: wxkDrift 5s ease-in-out infinite reverse; }
+.wxk-scene.bump .wxk-big { animation: wxkBump .55s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes wxkSpin { to { transform: rotate(360deg); } }
+@keyframes wxkTwinkle { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+@keyframes wxkRain { from { background-position: 0 0; } to { background-position: -8px 26px; } }
+@keyframes wxkSnow { from { background-position: 0 0, 8px 6px; } to { background-position: 6px 26px, 2px 23px; } }
+@keyframes wxkDrift { 0%, 100% { transform: translateX(-4px); } 50% { transform: translateX(4px); } }
+@keyframes wxkBump { 0% { transform: scale(.6); } 100% { transform: scale(1); } }
+
+.wxk-title { display: flex; align-items: center; gap: .35rem; margin: .25rem 0 0 .1rem; font-size: max(1.05rem, 16.5px); font-weight: 800; color: #fff; }
+.wxk-picks { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .4rem; }
+.wxk-times { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .4rem; }
+.wxk-tile, .wxk-time {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem; min-height: calc(var(--tap, 56px) + 1.3rem);
+  padding: .35rem .1rem; border-radius: 18px; color: #1d2a20; font-weight: 800; touch-action: manipulation;
+  background: linear-gradient(180deg, #fff, color-mix(in srgb, var(--wx, #ffd23f) 45%, #fff));
+  border: 3px solid rgba(255, 255, 255, .85); box-shadow: 0 4px 0 rgba(0, 0, 0, .28);
+  transition: transform .15s cubic-bezier(.34, 1.56, .64, 1), box-shadow .15s;
+}
+.wxk-time { --wx: #ffe6a8; min-height: var(--tap, 56px); }
+.wxk-tile .wxk-emo { font-size: 2rem; line-height: 1.1; }
+.wxk-time .wxk-emo { font-size: 1.55rem; line-height: 1.1; }
+.wxk-lbl { font-size: max(1rem, 16px); white-space: nowrap; }
+.wxk-tile:active, .wxk-time:active { transform: translateY(3px) scale(.95); box-shadow: 0 1px 0 rgba(0, 0, 0, .28); }
+.wxk-tile.active, .wxk-time.active {
+  border-color: #ffd23f; box-shadow: 0 0 0 3px rgba(255, 210, 63, .55), 0 4px 0 rgba(0, 0, 0, .28); transform: translateY(-2px);
+}
+.wxk-tile.active::after, .wxk-time.active::after { content: '✔'; position: absolute; }
+.wxk-tile, .wxk-time { position: relative; }
+.wxk-tile.active::after, .wxk-time.active::after {
+  top: -.45rem; right: -.35rem; width: 1.45rem; height: 1.45rem; display: grid; place-items: center; border-radius: 50%;
+  background: #34c36b; color: #fff; font-size: .8rem; border: 2px solid #fff;
+}
+.wxk-auto {
+  align-self: center; display: inline-flex; align-items: center; gap: .4rem; min-height: 2.75rem; padding: .3rem .95rem; margin-top: .1rem;
+  border-radius: 999px; font-size: max(1rem, 16px); font-weight: 800; color: var(--text-dim, #c9d4cc); background: rgba(255, 255, 255, .08);
+  border: 2px solid rgba(255, 255, 255, .18);
+}
+.wxk-auto.on { color: #fff; background: rgba(52, 195, 107, .3); border-color: rgba(52, 195, 107, .7); }
+body.easy .wxk-auto { min-height: var(--tap); padding: .35rem 1.2rem; }
+
+body.reduce-motion .wxk-fx, body.reduce-motion .wxk-big { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .wxk-fx, .wxk-big { animation: none !important; } }
+@media (max-width: 420px) {
+  .wxk-scene { width: 6rem; height: 6rem; border-radius: 22px; }
+  .wxk-big { font-size: 3.4rem; }
+  .wxk-line { font-size: max(1.02rem, 16px); }
+  .wxk-tile .wxk-emo { font-size: 1.7rem; }
+  .wxk-picks, .wxk-times { gap: .3rem; }
+}
+@media (max-height: 560px) {
+  .popover.wxk-popover { width: min(34rem, calc(100vw - 1rem)); }
+  .wxk-scene { width: 5rem; height: 5rem; }
+  .wxk-big { font-size: 3rem; }
+}

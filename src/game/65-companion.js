@@ -4,10 +4,18 @@
 //
 //   G.mascot.svg(mood='happy', size=96, {outfit, bob, blink=true, pop, label, className}) -> '<svg ...>' (CSP-safe)
 //        moods: happy wink surprised sleepy cheer think sad · outfit: {color, hat, scarf} | 'current'
-//   G.mascot.say(text, {mood, duration, action:{label, fn}, priority, ttl, force}) -> bool   queued speech card
+//   G.mascot.say(text, {mood, duration, action:{label, fn}, priority, ttl, force, voice}) -> bool   queued speech card
+//        (easy mode reads it aloud via G.easy.say unless voice === false — pass that when you already spoke it)
 //   G.mascot.hint({detail}) -> string | {text, mood, action, key}   best contextual tip for the current state
 //   G.mascot.tell()          say the current hint      G.mascot.dismiss() / clear()     G.mascot.showcase() (test album)
 //   G.mascot.moods · G.mascot.name()
+//
+//   쉬운 모드 (G.easy.on) — 옹이 is the voice guide:
+//     every speech card is also read aloud (G.easy.say, queued, opts.voice === false = silent) with a 🔊 replay;
+//     kid sentences for every tip; idle 20 s → "다음 할 일" card + G.easy.point at the target / 👉 같이 가기
+//     (3 nudges per idle spell: 20 s, 45 s, 90 s); delivers the healthy-play reminder & rest (sleepy 옹이,
+//     naps during the rest screen, cheers afterwards); companion menu / rename = big picture tiles
+//     (G.easy.pick, preset names — no typing); far targets use G.easy.goTo.
 //
 //   G.sys.companion (order 82)
 //     openMenu() / closeMenu() / toggleMenu()     radial play menu (쓰다듬기 · 한마디 · 옷 갈아입히기 · 이름 바꾸기), hotkey O
@@ -81,7 +89,7 @@
   /** {ok, need} for an unlock rule */
   function unlockInfo(rule) {
     if (!rule) return { ok: true, need: '' };
-    if (rule.level && playerLevel() < rule.level) return { ok: false, need: `Lv.${rule.level}` };
+    if (rule.level && playerLevel() < rule.level) return { ok: false, need: kidOn() ? `⭐${rule.level}` : `Lv.${rule.level}` };
     if (rule.affection && affection() < rule.affection) return { ok: false, need: `💗 ${rule.affection}` };
     return { ok: true, need: '' };
   }
@@ -113,6 +121,16 @@
   const copula = (w) => josa(w, '이에요/예요');
   const nick = () => cleanText(G.state?.profile?.nickname || '체험객', 20) || '체험객';
   const myName = () => (G.state?.companion?.name) || DEFAULT_NAME;
+  // 쉬운 모드 (default): kid sentences, voice, big tiles. Never throws when 08-easy is missing.
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
+  const kidT = (adult, kid) => (kidOn() ? kid : adult);
+  function kidVoice(text, opts) { try { return G.easy?.say?.(text, opts || {}); } catch (e) { return null; } }
+  /** a reminder card / rest screen from 08-easy is on screen (옹이 stays quiet and delivers it instead) */
+  function restShowing() {
+    try { return !!document.querySelector('#easy-layer .easy-rest-card:not(.out), #easy-layer .easy-rest:not(.out)'); } catch (e) { return false; }
+  }
+  // preset companion names for the kid rename picker (all pass validName)
+  const KID_NAMES = [['옹이', '🏺'], ['콩이', '🌱'], ['단지', '🍯'], ['방울이', '💧'], ['뽀송이', '☁️'], ['토리', '🌰'], ['별이', '⭐'], ['초롱이', '🏮']];
 
   const NAME_RE = /^[가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9 _-]+$/;
   const RESERVED_NAMES = ['시스템', 'system', '운영자', '관리자', '운영진', 'admin', 'gm', '공지', '알림', 'null', 'undefined'];
@@ -357,7 +375,8 @@
       if (G.ui?.modal?.isOpen?.()) return true;
       if (G.sys.dialogue?.active || companion._menu) return true;
       const bl = G.ui?.blockers;
-      if (bl && (bl.has('reward') || bl.has('tutorial'))) return true;
+      if (bl && (bl.has('reward') || bl.has('tutorial') || bl.has('easy-rest'))) return true;
+      if (restShowing()) return true;    // the healthy-play card owns the bottom-left corner meanwhile
       return false;
     },
 
@@ -375,8 +394,12 @@
       let action = null;
       if (opts.action && typeof opts.action.fn === 'function') action = { label: cleanText(opts.action.label || '확인', 14) || '확인', fn: opts.action.fn };
       const chars = Array.from(t).length;
-      const dur = clamp(Number(opts.duration) || (2600 + chars * 75 + (action ? 2600 : 0)), 2200, 15000);
-      const item = { text: t, mood: MOOD_SET.has(opts.mood) ? opts.mood : 'happy', duration: dur, action, expires: now + clamp(Number(opts.ttl) || 30000, 2000, 120000), source: opts.source || 'say' };
+      // read-aloud lines (easy mode) stay up long enough for the voice to finish
+      const auto = kidOn() ? 3400 + chars * 115 + (action ? 3200 : 0) : 2600 + chars * 75 + (action ? 2600 : 0);
+      let dur = Number(opts.duration) || auto;
+      if (kidOn()) dur = Math.max(dur, auto * 0.8);
+      dur = clamp(dur, 2200, 15000);
+      const item = { text: t, mood: MOOD_SET.has(opts.mood) ? opts.mood : 'happy', duration: dur, action, expires: now + clamp(Number(opts.ttl) || 30000, 2000, 120000), source: opts.source || 'say', voice: opts.voice !== false, prio: !!opts.priority };
       // bounded queue (5): a full queue refuses ordinary lines; a priority line pushes out the newest ordinary one
       if (this.q.length >= 5) {
         if (!opts.priority) return false;
@@ -426,9 +449,12 @@
       const main = h('div', { class: 'ong-card-main' },
         h('div', { class: 'ong-card-name' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏺'), h('b', { text: name })),
         h('p', { class: 'ong-card-text' }, tw, sr));
+      const kid = kidOn();
       if (item.action) {
         const act = item.action;
-        const b = h('button', { class: 'btn btn-sm btn-gold ong-card-act', type: 'button' }, act.label, h('span', { class: 'ico ico-xs', 'data-icon': 'chevron-right' }));
+        const b = kid
+          ? h('button', { class: 'easy-big-btn easy-btn-yes ong-card-act', type: 'button', 'data-say': act.label }, h('span', null, act.label))
+          : h('button', { class: 'btn btn-sm btn-gold ong-card-act', type: 'button' }, act.label, h('span', { class: 'ico ico-xs', 'data-icon': 'chevron-right' }));
         b.addEventListener('click', () => { this.hide('action'); try { act.fn(); } catch (e) { G.log.error('UI', 'mascot action failed', e); } });
         main.appendChild(h('div', { class: 'ong-card-actions' }, b));
       }
@@ -438,6 +464,12 @@
       card.append(face, main, x, bar);
       card.addEventListener('pointerenter', () => this.pause(true));
       card.addEventListener('pointerleave', () => this.pause(false));
+      if (kid) {
+        card.classList.add('ong-kid');
+        // 🔊 replay for children who missed it (long-press reads the sentence too)
+        try { G.easy?.speakable?.(main, item.text); } catch (e) { /* voice optional */ }
+        card.__easySpeak = { btn: null, text: item.text };
+      }
       root.appendChild(card);
       this.cardEl = card;
       G.ui.hydrateIcons?.(card);
@@ -449,6 +481,8 @@
       clearTimeout(this.timer);
       this.timer = setTimeout(() => this.hide('timeout'), item.duration);
       G.sfx('pop', { volume: 0.55 });
+      // 옹이 is the voice guide in easy mode: queue behind whatever is being read (never cut a sentence off)
+      if (kid && item.voice) kidVoice(item.text, { interrupt: false, priority: item.prio ? 1 : 0 });
       companion._onSay(item);
     },
 
@@ -489,12 +523,12 @@
       root.style.left = left + 'px';
       root.style.bottom = bottom + 'px';
       root.style.maxWidth = Math.max(220, innerWidth - left - 10) + 'px';
-      // stay clear of the objective hint / interaction prompt (they sit low on small screens)
+      // stay clear of the objective hint / interaction prompt / yard-decor toolbar (they sit low on small screens)
       for (let pass = 0; pass < 2; pass++) {
         const cr = root.getBoundingClientRect();
-        for (const id of ['objective-hint', 'interact-prompt']) {
-          const o = document.getElementById(id);
-          if (!o || o.hidden || o.offsetParent === null) continue;
+        for (const sel of ['#objective-hint', '#interact-prompt', '.eng-decor-bar']) {
+          const o = document.querySelector(sel);
+          if (!o || o.hidden || !o.getClientRects().length) continue;   // (offsetParent is null for fixed bars)
           const r = o.getBoundingClientRect();
           if (r.width && cr.left < r.right && cr.right > r.left && cr.top < r.bottom + 6 && cr.bottom > r.top - 6) {
             bottom = Math.max(bottom, innerHeight - r.top + 8);
@@ -548,6 +582,18 @@
     ['happy', '사진 모드(P)에서 저랑 같이 기념사진 찍어요! 📸'],
     ['cheer', '작업일지(J)에 오늘 한 일을 적으면 배운 게 오래 남아요 📝'],
   ];
+  // 쉬운 모드: one short picture sentence each (read aloud)
+  const KID_FACTS = [
+    ['think', '옹기는 숨을 쉬는 그릇이에요 🏺'],
+    ['wink', '장독은 햇볕을 좋아해요 ☀️'],
+    ['happy', '메주는 콩으로 만들어요 🌱'],
+    ['think', '된장이랑 간장은 메주로 만들어요 🥣'],
+    ['wink', '김치는 배추로 만들어요 🥬'],
+    ['happy', '고추장은 맛있게 매워요 🌶️'],
+    ['think', '작은 미생물 친구가 맛있게 바꿔 줘요 🦠'],
+    ['cheer', '사진도 찍어 봐요! 📸'],
+    ['cheer', '그림일기도 써 봐요! 📝'],
+  ];
   const PET_LINES = ['헤헤, 간지러워요! 💕', '기분 최고예요! ✨', '쓰담쓰담 너무 좋아요~ 🥰', '{nick}님 손은 참 따뜻해요 🌞', '더 열심히 도울게요! 💪', '우리 오늘도 신나게 놀아요! 🎶'];
 
   function entryPos(e) {
@@ -563,15 +609,27 @@
   /** walk to an interactable and use it (close), or open the world map when it is far away */
   function goInteract(id) {
     const e = G.interact?.get?.(id);
-    if (!e) { G.sys.minimap?.openWorldMap?.(); return false; }
+    if (!e) { if (kidOn()) G.ui.triggerAction?.('where'); else G.sys.minimap?.openWorldMap?.(); return false; }
     const p = entryPos(e);
-    if (p && distTo(p.x, p.z) > 70) { G.ui.toast('조금 멀어요! 지도에서 위치를 확인해 보세요 🗺️', { type: 'info', emoji: '🏺' }); G.sys.minimap?.openWorldMap?.(); return false; }
+    if (p && distTo(p.x, p.z) > 70) {
+      // easy mode never sends a child to a map: 옹이 walks (or travels) there with them
+      if (kidOn() && G.easy?.goTo) { G.easy.goTo({ x: p.x, z: p.z }, { label: '' }); return true; }
+      G.ui.toast('조금 멀어요! 지도에서 위치를 확인해 보세요 🗺️', { type: 'info', emoji: '🏺' }); G.sys.minimap?.openWorldMap?.(); return false;
+    }
     return !!G.interact.activate(id);
   }
-  function goTo(x, z) {
+  function goTo(x, z, label) {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
+    if (kidOn() && G.easy?.goTo) { G.easy.goTo({ x, z, label: label || '' }, { label: label || '' }); return true; }
     if (distTo(x, z) > 70) { G.sys.minimap?.openWorldMap?.(); return false; }
     return !!G.sys.player?.walkTo?.({ x, z }, { stopDistance: 2.2 });
+  }
+  /** 쉬운 모드 action for a G.easy.nextStep() result: its own act, or 👉 같이 가기 */
+  function kidStepAction(st) {
+    if (!st) return null;
+    if (st.act) return { label: `${st.actEmoji || '👉'} ${st.actLabel || '하기'}`, fn: () => st.act() };
+    if (st.target) return { label: '👉 같이 가기', fn: () => goTo(st.target.x, st.target.z, st.target.label) };
+    return null;
   }
 
   function objectiveHint() {
@@ -604,12 +662,15 @@
     const st = G.state;
     if (!st) return out;
     const now = G.time.now();
+    const kid = kidOn();
     // 1) unclaimed quest rewards
     for (const [id, e] of Object.entries(st.quests || {})) {
       if (!e || e.status !== 'completed') continue;
       const q = G.data.quests?.[id];
       if (!q) continue;
-      out.push({ key: 'claim:' + id, prio: 100, mood: 'cheer', cd: 150, age: now - (Number(e.completedAt) || now), text: `「${q.title}」 보상이 기다리고 있어요! 얼른 받아요 🎁`, action: { label: '보상 받기', fn: () => G.sys.quest?.claim?.(id) } });
+      out.push({ key: 'claim:' + id, prio: 100, mood: 'cheer', cd: 150, age: now - (Number(e.completedAt) || now),
+        text: kid ? '선물이 기다려요! 🎁 받아 볼까요?' : `「${q.title}」 보상이 기다리고 있어요! 얼른 받아요 🎁`,
+        action: { label: kid ? '🎁 받기' : '보상 받기', fn: () => G.sys.quest?.claim?.(id) } });
       break;
     }
     // 2) finished jars
@@ -619,7 +680,9 @@
         const j = F.getJar?.(jid);
         if (!j || j.status !== 'COMPLETE') continue;
         const rn = j.recipe?.name || '장';
-        out.push({ key: `jar:${jid}:${j.state?.startedAt || 0}`, prio: 90, mood: 'cheer', cd: 600, text: `내 항아리의 ${josa(rn, '이/가')} 다 익었어요! 🏺✨ 열어 볼까요?`, action: { label: '항아리로 가기', fn: () => goInteract(jid) } });
+        out.push({ key: `jar:${jid}:${j.state?.startedAt || 0}`, prio: 90, mood: 'cheer', cd: 600,
+          text: kid ? `내 장독의 ${josa(rn, '이/가')} 다 익었어요! 🏺 열어 봐요!` : `내 항아리의 ${josa(rn, '이/가')} 다 익었어요! 🏺✨ 열어 볼까요?`,
+          action: { label: kid ? '👉 장독 가기' : '항아리로 가기', fn: () => goInteract(jid) } });
         break;
       }
     } catch (e) { /* fermentation optional */ }
@@ -632,22 +695,27 @@
         const w = Number(p.water);
         if (Number.isFinite(w) && w < 25 && (!dry || w < Number(dry.water))) dry = p;
       }
-      if (ready) out.push({ key: `ready:${ready.id}:${ready.plantedAt || 0}`, prio: 80, mood: 'cheer', cd: 420, text: `${josa(ready.crop.name, '이/가')} 다 자랐어요! 수확하러 가 볼까요? 🧺`, action: { label: '밭으로 가기', fn: () => goInteract(ready.id) } });
-      if (dry) out.push({ key: 'dry:' + dry.id, prio: 75, mood: 'surprised', cd: 300, text: `${dry.crop.name}밭이 목말라 보여요! 💧`, action: { label: '물 주러 가기', fn: () => goInteract(dry.id) } });
+      if (ready) out.push({ key: `ready:${ready.id}:${ready.plantedAt || 0}`, prio: 80, mood: 'cheer', cd: 420,
+        text: kid ? `${josa(ready.crop.name, '이/가')} 다 자랐어요! 🧺 거두러 가요!` : `${josa(ready.crop.name, '이/가')} 다 자랐어요! 수확하러 가 볼까요? 🧺`,
+        action: { label: kid ? '👉 밭에 가기' : '밭으로 가기', fn: () => goInteract(ready.id) } });
+      if (dry) out.push({ key: 'dry:' + dry.id, prio: 75, mood: 'surprised', cd: 300,
+        text: kid ? `${josa(dry.crop.name, '이/가')} 목말라요! 💧 물을 줘요!` : `${dry.crop.name}밭이 목말라 보여요! 💧`,
+        action: { label: kid ? '💧 물 주기' : '물 주러 가기', fn: () => goInteract(dry.id) } });
     } catch (e) { /* farming optional */ }
-    // 4) the current objective
-    try { const ob = objectiveHint(); if (ob) out.push(Object.assign(ob, { prio: 60, cd: 180, idle: 60 })); } catch (e) { /* quest optional */ }
+    // 4) the current objective (easy mode: the HUD card already shows it; 옹이 nudges after 20 s idle instead)
+    if (!kid) { try { const ob = objectiveHint(); if (ob) out.push(Object.assign(ob, { prio: 60, cd: 180, idle: 60 })); } catch (e) { /* quest optional */ } }
     // 5) situational
     const W = G.sys.weather;
-    if (W && (W.current === 'RAIN' || (W.precipitation?.rain || 0) > 0.35)) out.push({ key: 'rain', prio: 40, mood: 'wink', cd: 1200, text: '비가 와요 ☔ 빗물이 밭을 촉촉하게 적셔 주니까 물 주기는 잠깐 쉬어도 돼요!' });
-    if ((W?.isNight || G.world.nightFactor > 0.6) && !st.flags?.['companion:night']) out.push({ key: 'night', prio: 45, mood: 'surprised', cd: 0, once: 'companion:night', text: '밤에는 청사초롱이 켜져요 🏮 은은한 불빛을 따라 산책해 봐요!' });
+    if (W && (W.current === 'RAIN' || (W.precipitation?.rain || 0) > 0.35)) out.push({ key: 'rain', prio: 40, mood: 'wink', cd: 1200, text: kid ? '비가 와요 ☔ 비가 밭에 물을 줘요!' : '비가 와요 ☔ 빗물이 밭을 촉촉하게 적셔 주니까 물 주기는 잠깐 쉬어도 돼요!' });
+    if ((W?.isNight || G.world.nightFactor > 0.6) && !st.flags?.['companion:night']) out.push({ key: 'night', prio: 45, mood: 'surprised', cd: 0, once: 'companion:night', text: kid ? '밤이 됐어요 🏮 초롱불이 반짝반짝해요!' : '밤에는 청사초롱이 켜져요 🏮 은은한 불빛을 따라 산책해 봐요!' });
     const coin = Number(st.stats?.coin) || 0;
-    if (coin < 30) {
+    if (coin < 30 && !kid) {   // no money talk for children
       const sellable = Object.entries(st.inventory || {}).some(([iid, n]) => n > 0 && (G.data.items?.[iid]?.sell || 0) > 0 && G.data.items?.[iid]?.type === 'crop');
       out.push({ key: 'coins', prio: 30, mood: 'think', cd: 900, idle: 15, text: sellable ? '코인이 부족할 땐 수확한 작물을 매점에 팔아 보세요 🛒💰' : '코인은 퀘스트 보상과 작물 판매로 모을 수 있어요 🪙 매점 구경도 해 봐요!', action: G.interact?.get?.('SHOP_STALL') ? { label: '매점 가기', fn: () => goInteract('SHOP_STALL') } : null });
     }
     // 6) friendly facts
-    const f = FACTS[Math.floor((now / 60000) % FACTS.length)];
+    const facts = kid ? KID_FACTS : FACTS;
+    const f = facts[Math.floor((now / 60000) % facts.length)];
     out.push({ key: 'fact', prio: 5, mood: f[0], cd: 300, idle: 90, text: f[1] });
     out.sort((a, b) => b.prio - a.prio);
     return out;
@@ -659,8 +727,8 @@
     let pick = list[0] || null;
     // asking again quickly cycles through the other useful lines
     if (pick && list.length > 1 && pick.key === lastHintKey && pnow() - lastHintAt < 25000) pick = list[1];
-    if (pick && pick.key === 'fact') { const f = FACTS[Math.floor(Math.random() * FACTS.length)]; pick = { key: 'fact', mood: f[0], text: f[1] }; }
-    if (!pick) pick = { key: 'none', mood: 'happy', text: '오늘도 즐겁게 체험해요! 🌿' };
+    if (pick && pick.key === 'fact') { const facts = kidOn() ? KID_FACTS : FACTS; const f = facts[Math.floor(Math.random() * facts.length)]; pick = { key: 'fact', mood: f[0], text: f[1] }; }
+    if (!pick) pick = { key: 'none', mood: 'happy', text: kidT('오늘도 즐겁게 체험해요! 🌿', '오늘도 신나게 놀아요! 🌿') };
     lastHintKey = pick.key; lastHintAt = pnow();
     const res = { key: pick.key, text: pick.text, mood: pick.mood || 'happy', action: pick.action || null };
     return opts.detail ? res : res.text;
@@ -865,6 +933,8 @@
     _playerIdleSince: 0, _idleAnchor: new THREE.Vector3(), _nextPointT: 8, _bubbleUntil: 0, _bubbleKey: '',
     _tipAcc: 0, _scanAcc: 0, _lastTipAt: 0, _cool: new Map(), _greet: null, _idleHintFor: -1, _timers: new Set(),
     _texCache: new Map(), _outfitKey: '',
+    // 쉬운 모드 voice guide: idle nudges, healthy-play reminder delivery, picture menu
+    _lastInputAt: 0, _nudgeFor: -1, _nudgeN: 0, _restSeen: '', _restNap: false, _kidMenuOpen: false, _nudgeHand: null,
 
     // ------------------------------------------------------------ lifecycle
     init() {
@@ -872,6 +942,9 @@
       if (G.settings && G.settings.companion === undefined) G.settings.companion = true;
       this._build();
       this._bindEvents();
+      // 08-easy's healthy-play card / rest screen (easy:remind / easy:rest, CONTRACT §12.5): react at once
+      // (the per-tick _watchRest keeps the state in step afterwards)
+      for (const ev of ['easy:remind', 'easy:rest']) G.bus.on(ev, () => { try { if (kidOn()) this._watchRest(); } catch (e) { G.log.warn('UI', 'companion rest sync failed', e); } });
       G.input?.onKey?.('KeyO', () => {
         if (this._menu) { this.closeMenu(); return true; }
         if (G.ui.isBlocking()) return false;
@@ -899,13 +972,16 @@
       this._act = null; this._actQ.length = 0; this._wake(); this._hideBubble(); this._moodOver = null;
       this._cool.clear(); this._lastTipAt = pnow() - 20000; this._idleHintFor = -1;
       this._playerIdleSince = pnow();
+      this._lastInputAt = pnow(); this._nudgeFor = -1; this._nudgeN = 0; this._restSeen = ''; this._restNap = false;
       this._greet = { at: pnow() + 4500, done: false, waitedOnboarding: false };
       this.closeMenu(true);
     },
 
     onLogout() {
       this.closeMenu(true);
-      for (const id of ['companion-wardrobe', 'companion-rename', 'companion-showcase']) G.ui.modal.get(id)?.close();
+      for (const id of ['companion-wardrobe', 'companion-rename', 'companion-showcase', 'companion-menu', 'companion-kid-rename']) G.ui.modal.get(id)?.close();
+      this._stopNudgeHand();
+      this._restSeen = ''; this._restNap = false; this._kidMenuOpen = false;
       for (const t of this._timers) clearTimeout(t);
       this._timers.clear();
       Say.clear();
@@ -1416,7 +1492,7 @@
       const night = (G.world.nightFactor || 0) > 0.6;
       const settled = this.speed < 0.2 && !this._act && !this._menu;
       if (!this._sleeping && night && settled && playerIdle > 8 && !this._photo && !G.sys.dialogue?.active) { this._sleeping = true; this._showBubble('Z z z', 9999, 'zz'); }
-      if (this._sleeping && (!night || playerMoving || this._menu || playerIdle < 1)) {
+      if (this._sleeping && !this._restNap && (!night || playerMoving || this._menu || playerIdle < 1)) {
         this._wake(); this._setMood('surprised', 0.7); this._start('bounce', 0.5);
       }
 
@@ -1583,7 +1659,9 @@
     _startPoint(tg) {
       this._nextPointT = G.time.elapsed + 22 + Math.random() * 12;
       const d = Math.round(distTo(tg.x, tg.z));
-      if (this._start('point', 3.2, { x: tg.x, z: tg.z })) this._showBubble(`👉 ${tg.label ? cleanText(tg.label, 18) + ' ' : ''}${d}m`, 3.2, 'point');
+      // children cannot read metres: just "over there!"
+      const txt = kidOn() ? '👉 저기예요!' : `👉 ${tg.label ? cleanText(tg.label, 18) + ' ' : ''}${d}m`;
+      if (this._start('point', 3.2, { x: tg.x, z: tg.z })) this._showBubble(txt, 3.2, 'point');
     },
 
     _burst(type, count) {
@@ -1623,8 +1701,10 @@
             const unlocked = this._unlockNames((rule) => rule.affection === m);
             this._later(() => {
               this.react('celebrate');
-              say(unlocked.length ? `우리 사이가 더 가까워졌어요! 💗 ${unlocked.join(', ')}${josa(unlocked[unlocked.length - 1].slice(-1), '을/를').slice(1)} 입을 수 있어요!` : `애정도 ${m} 달성! ${nick()}님이 최고예요 💗`,
-                { mood: 'cheer', priority: true, action: unlocked.length ? { label: '옷장 열기', fn: () => this.openWardrobe() } : null, source: 'affection' });
+              const kid = kidOn();
+              say(kid ? (unlocked.length ? '우리 더 친해졌어요! 💗 새 옷이 생겼어요! 👒' : '우리 더 친해졌어요! 💗')
+                : unlocked.length ? `우리 사이가 더 가까워졌어요! 💗 ${unlocked.join(', ')}${josa(unlocked[unlocked.length - 1].slice(-1), '을/를').slice(1)} 입을 수 있어요!` : `애정도 ${m} 달성! ${nick()}님이 최고예요 💗`,
+              { mood: 'cheer', priority: true, action: unlocked.length ? { label: kid ? '👒 옷 입히기' : '옷장 열기', fn: () => this.openWardrobe() } : null, source: 'affection' });
             }, 900);
           }
         }
@@ -1666,11 +1746,97 @@
     },
 
     talk() {
+      if (kidOn()) {
+        // urgent things first (gift / ripe jar / crops), otherwise "what next?" with the pointing hand
+        const top = candidates()[0];
+        if (top && top.prio >= 75) say(top.text, { mood: top.mood, action: top.action, force: true, priority: true, source: 'hint' });
+        else this._kidNudge(true);
+        return;
+      }
       const hnt = hint({ detail: true });
       say(hnt.text, { mood: hnt.mood, action: hnt.action, force: true, priority: true, source: 'hint' });
       if (this._shown) {
         const f = G.sys.quest?.focus?.()?.target;
         if (f && hnt.key.startsWith('obj:') && distTo(f.x, f.z) > 6) this._startPoint(f);
+      }
+    },
+
+    // ------------------------------------------------------------ 쉬운 모드 voice guide
+    _stopNudgeHand() { try { this._nudgeHand?.stop?.(); } catch (e) { /* easy optional */ } this._nudgeHand = null; },
+    /** "다음 할 일" from G.easy.nextStep(): a spoken card + the big 👆 at the target (or at 👉 같이 가기) */
+    _kidNudge(fromTalk, idx = 0) {
+      let st = null;
+      try { st = G.easy?.nextStep?.(); } catch (e) { st = null; }
+      if (!st) return false;
+      const n = idx;
+      let text, mood = 'think', action = null, ptr = null, label = '';
+      if (st.key === 'explore') {
+        text = n >= 2 ? '심심해요? 🗺️ 새로운 곳에 가 봐요!' : '🗺️ 어디로 가 볼까요? 지도를 눌러요!';
+        mood = 'wink';
+        action = { label: '🗺️ 어디 갈까?', fn: () => G.ui.triggerAction?.('where') };
+        ptr = '#easy-where'; label = '눌러요!';
+      } else if (String(st.key).startsWith('claim:')) {
+        text = '🎁 선물이 기다려요! 받아 볼까요?'; mood = 'cheer';
+        action = kidStepAction(st);
+      } else {
+        text = fromTalk || n === 0 ? `${st.emoji} ${st.text}! 제가 알려 줄게요.` : n === 1 ? `👆 손가락을 봐요! ${st.text}!` : `${st.emoji} 같이 해 봐요! ${st.text}!`;
+        action = kidStepAction(st);
+      }
+      // where the hand goes: a nearby world target, else the HUD's big 👉 button
+      if (!ptr) {
+        const go = document.querySelector('#easy-next .en-go');
+        const goVisible = !!(go && !go.hidden && go.offsetParent !== null);
+        if (st.target && distTo(st.target.x, st.target.z) <= 26) { ptr = { x: st.target.x, z: st.target.z }; label = '여기예요!'; }
+        else if (goVisible) { ptr = go; label = '눌러요!'; }
+      }
+      const shown = say(text, { mood, action, priority: true, force: true, ttl: 15000, source: 'nudge' });
+      if (ptr && G.easy?.point) {
+        this._stopNudgeHand();
+        try { this._nudgeHand = G.easy.point(ptr, { label, duration: 7000 }); } catch (e) { this._nudgeHand = null; }
+      }
+      if (st.target && this._shown && distTo(st.target.x, st.target.z) > 6) this._startPoint(st.target);
+      else if (this._shown) this._start('wave', 1.6);
+      return shown;
+    },
+    /** idle ≥ 20 s in easy mode (no walking, no taps) → nudge at 20 s, 45 s, 90 s, then stay quiet until the child plays */
+    _kidIdleTick() {
+      const since = Math.max(this._playerIdleSince, this._lastInputAt || 0);
+      if (since !== this._nudgeFor) { this._nudgeFor = since; this._nudgeN = 0; }
+      if (this._nudgeN >= 3) return false;
+      const idle = (pnow() - since) / 1000;
+      if (idle < [20, 45, 90][this._nudgeN]) return false;
+      if (this._quiet() || Say.cur || Say.q.length || G.ui.isBlocking?.() || G.sys.player?.isWalking) return false;
+      try { if (G.easy?.speaking) return false; } catch (e) { /* easy optional */ }
+      if (document.querySelector('#easy-layer .easy-hand, .coach-layer .coach')) return false;   // someone is already pointing
+      const idx = this._nudgeN++;
+      this._lastTipAt = pnow();
+      return this._kidNudge(false, idx);
+    },
+    /** 08-easy shows the healthy-play card / rest screen; 옹이 acts it out (sleepy → nap → cheer) */
+    _watchRest() {
+      const L = document.getElementById('easy-layer');
+      const state = !L ? '' : L.querySelector('.easy-rest:not(.out)') ? 'rest' : L.querySelector('.easy-rest-card:not(.out)') ? 'card' : '';
+      const prev = this._restSeen;
+      if (state === 'rest' && this._shown && !this._sleeping) { this._sleeping = true; this._showBubble('Z z z', 9999, 'zz'); }
+      if (state === prev) return;
+      this._restSeen = state;
+      if (state === 'card') {
+        Say.hide('rest');
+        this._stopNudgeHand();
+        if (this._shown) { this._setMood('sleepy', 6); this._showBubble('😴 하암~', 3.5, 'zz'); }
+      } else if (state === 'rest') {
+        Say.hide('rest');
+        this._stopNudgeHand();
+        this._restNap = true;
+      } else {
+        const napped = this._restNap;
+        this._restNap = false;
+        if (napped) {
+          this._wake();
+          this._lastInputAt = pnow();
+          if (this._shown) { this._setMood('cheer', 2); this.react('jump'); }
+          if (G.settings.companion !== false) this._later(() => say('푹 쉬었어요? 다시 신나게 놀아요! 🌿', { mood: 'cheer', priority: true, source: 'rest' }), 700);
+        } else if (prev === 'card' && this._shown) this._setMood('cheer', 1.5);
       }
     },
 
@@ -1700,8 +1866,9 @@
     toggleMenu() { if (this._menu) this.closeMenu(); else this.openMenu(); },
     openMenu() {
       if (this._menu || !G.state) return false;
-      if (!this._shown) { G.ui.toast('설정에서 ‘동반자 옹이’를 켜면 함께 놀 수 있어요 🏺', { type: 'info', emoji: '🏺' }); return false; }
+      if (!this._shown) { G.ui.toast(kidT('설정에서 ‘동반자 옹이’를 켜면 함께 놀 수 있어요 🏺', '옹이가 쉬고 있어요. 어른에게 켜 달라고 해요 🏺'), { type: 'info', emoji: '🏺' }); return false; }
       if (G.ui.modal.isOpen() || G.sys.dialogue?.active) return false;
+      if (kidOn() && G.easy?.pick) return this._openKidMenu();
       if (G.util.isTyping()) document.activeElement?.blur?.();
       Say.hide('menu');
       const h = G.ui.h;
@@ -1759,6 +1926,45 @@
       if (c && !c.met) { c.met = true; G.dirty('companion'); }
       return true;
     },
+    /** 쉬운 모드: the play menu as four big picture tiles (G.easy.pick) with a waving 옹이 on top */
+    _openKidMenu() {
+      if (this._kidMenuOpen) return false;
+      if (G.util.isTyping()) document.activeElement?.blur?.();
+      Say.hide('menu');
+      this._stopNudgeHand();
+      const name = myName();
+      const items = [
+        { id: 'pet', emoji: '🤲', label: '쓰다듬기', say: `${josa(name, '을/를')} 쓰다듬어요`, color: '#ff8fb3' },
+        { id: 'talk', emoji: '💬', label: '알려 줘', say: '무엇을 할지 알려 줘요', color: '#74c0fc' },
+        { id: 'dress', emoji: '👒', label: '옷 입히기', say: '옷을 입혀 줘요', color: '#ffd43b' },
+        { id: 'rename', emoji: '🏷️', label: '이름 짓기', say: '이름을 지어 줘요', color: '#8ce99a' },
+      ];
+      this._kidMenuOpen = true;
+      this._setMood('happy', 2); this._wake();
+      if (this._shown) this._start('wave', 1.6);
+      const c = G.state.companion;
+      if (c && !c.met) { c.met = true; G.dirty('companion'); }
+      const p = G.easy.pick({ id: 'companion-menu', title: `${josa(name, '이랑/랑')} 놀기`, say: `${josa(name, '이랑/랑')} 뭐 하고 놀까요?`, emoji: '🏺', items, columns: 2, className: 'ong-kid-menu' });
+      // a big waving 옹이 + hearts (affection as pictures) above the tiles
+      try {
+        const m = G.ui.modal.get('companion-menu');
+        if (m?.body) {
+          const hearts = Math.round(affection() / 20);
+          const hero = G.ui.h('div', { class: 'ong-kmenu-hero' },
+            G.ui.h('div', { class: 'ong-kmenu-face', html: mascotSvg('wink', 104, { outfit: 'current', bob: true }) }),
+            G.ui.h('div', { class: 'ong-kmenu-hearts', role: 'img', 'aria-label': `하트 ${hearts}개` }, '❤️'.repeat(hearts) + '🤍'.repeat(5 - hearts)));
+          m.body.prepend(hero);
+        }
+      } catch (e) { /* decoration only */ }
+      Promise.resolve(p).then((id) => {
+        this._kidMenuOpen = false;
+        if (!id || !G.state) return;
+        const fn = { pet: () => this.pet(), talk: () => this.talk(), dress: () => this.openWardrobe(), rename: () => this.openRename() }[id];
+        // let the picker close first (its focus/sounds), then act
+        if (fn) this._later(fn, 160);
+      }, () => { this._kidMenuOpen = false; });
+      return true;
+    },
     _pick(it) {
       if (!it) return;
       this.closeMenu();
@@ -1789,7 +1995,8 @@
       };
       const sections = h('div', { class: 'ong-ward-sections' });
       const grids = {};
-      const SECT = [['color', '🎨 유약 색깔', COLORS], ['hat', '🎩 모자', HATS], ['scarf', '🧣 목도리', SCARVES]];
+      const SECT = [['color', kidOn() ? '🎨 색깔' : '🎨 유약 색깔', COLORS], ['hat', '🎩 모자', HATS], ['scarf', '🧣 목도리', SCARVES]];
+      const kid = kidOn();
       const renderGrid = (slot) => {
         const grid = grids[slot];
         grid.innerHTML = '';
@@ -1797,12 +2004,21 @@
         for (const [id, it] of Object.entries(SLOTS[slot])) {
           const info = unlockInfo(it.unlock);
           const trial = Object.assign({}, cur, { [slot]: id });
-          const b = h('button', { class: `ong-ward-item${cur[slot] === id ? ' active' : ''}${info.ok ? '' : ' locked'}`, type: 'button', disabled: info.ok ? null : true, 'aria-pressed': cur[slot] === id ? 'true' : 'false', title: info.ok ? it.name : `${info.need}에 열려요` },
+          // easy mode: a locked piece is still tappable — it wiggles and says why (a disabled button just feels broken)
+          const lockSay = it.unlock?.affection ? '쓰다듬어 주면 입을 수 있어요! 💗' : `별을 더 모으면 입을 수 있어요! ⭐`;
+          const b = h('button', { class: `ong-ward-item${cur[slot] === id ? ' active' : ''}${info.ok ? '' : ' locked'}`, type: 'button', disabled: info.ok || kid ? null : true, 'aria-disabled': !info.ok && kid ? 'true' : null, 'aria-pressed': cur[slot] === id ? 'true' : 'false', title: info.ok ? it.name : `${info.need}에 열려요`, 'data-say': info.ok ? it.name : `${it.name}. ${lockSay}` },
             h('span', { class: 'ong-ward-thumb', html: mascotSvg('happy', 52, { outfit: trial, blink: false }) }),
             h('span', { class: 'ong-ward-name', text: it.name }),
             info.ok ? null : h('span', { class: 'ong-ward-lock' }, '🔒 ' + info.need));
           b.addEventListener('click', () => {
-            if (!isUnlocked(slot, id)) return;
+            if (!isUnlocked(slot, id)) {
+              if (kid) {
+                b.classList.remove('easy-shake'); void b.offsetWidth; b.classList.add('easy-shake');
+                G.sfx('wrong');
+                kidVoice(lockSay, { force: true, priority: 1 });
+              }
+              return;
+            }
             this.setOutfit({ [slot]: id });
             G.sfx('click');
             renderPreview(); renderGrid(slot);
@@ -1823,20 +2039,23 @@
       const nextLv = next.length ? Math.min(...next) : 0;
       const body = h('div', { class: 'ong-ward' },
         h('div', { class: 'ong-ward-side' }, preview, caption,
-          h('p', { class: 'ong-ward-note' }, nextLv ? `Lv.${nextLv}이 되면 새 옷이 열려요! 쓰다듬어 주면 애정도 옷도 생겨요 💗` : '모든 레벨 옷을 모았어요! 애정도 옷도 모아 보세요 💗')),
+          h('p', { class: 'ong-ward-note' }, kid
+            ? (nextLv ? `별 ${nextLv}개가 되면 새 옷이 생겨요! ⭐ 쓰다듬어 주면 하트 옷도 생겨요 💗` : '쓰다듬어 주면 하트 옷도 생겨요 💗')
+            : nextLv ? `Lv.${nextLv}이 되면 새 옷이 열려요! 쓰다듬어 주면 애정도 옷도 생겨요 💗` : '모든 레벨 옷을 모았어요! 애정도 옷도 모아 보세요 💗')),
         sections);
       G.ui.modal.open({
-        id: 'companion-wardrobe', title: `${myName()}의 옷장`, icon: '👒', size: 'lg', body,
+        id: 'companion-wardrobe', title: `${myName()}의 옷장`, icon: '👒', size: 'lg', body, className: kid ? 'ong-kid-ward' : '',
+        say: kid ? `${myName()}에게 옷을 입혀 줘요` : undefined,
         actions: [
-          { label: '🎲 랜덤', class: 'btn-ghost', onClick: () => {
+          { label: kid ? '🎲 아무거나' : '🎲 랜덤', class: 'btn-ghost', onClick: () => {
             const pick = (slot) => { const ids = Object.keys(SLOTS[slot]).filter((id) => isUnlocked(slot, id)); return ids[Math.floor(Math.random() * ids.length)]; };
             this.setOutfit({ color: pick('color'), hat: pick('hat'), scarf: pick('scarf') });
             renderPreview(); for (const s of Object.keys(SLOTS)) renderGrid(s);
             G.sfx('pop');
             return false;
           } },
-          { label: '기본으로', class: 'btn-ghost', onClick: () => { this.setOutfit(DEFAULT_OUTFIT); renderPreview(); for (const s of Object.keys(SLOTS)) renderGrid(s); return false; } },
-          { label: '완료', class: 'btn-primary' },
+          { label: kid ? '🔄 처음 옷' : '기본으로', class: 'btn-ghost', onClick: () => { this.setOutfit(DEFAULT_OUTFIT); renderPreview(); for (const s of Object.keys(SLOTS)) renderGrid(s); return false; } },
+          { label: kid ? '✅ 다 했어요' : '완료', class: 'btn-primary' },
         ],
         onClose: () => {
           if (JSON.stringify(this._outfit()) !== before && G.state) {
@@ -1850,6 +2069,7 @@
     // ------------------------------------------------------------ rename
     openRename() {
       if (!G.state) return;
+      if (kidOn() && G.easy?.pick) { this._openKidRename(); return; }
       const h = G.ui.h;
       const cur = myName();
       const input = h('input', { class: 'input', type: 'text', maxlength: '16', value: cur, autocomplete: 'off', spellcheck: 'false', 'aria-label': '새 이름', 'aria-describedby': 'ong-rename-msg' });
@@ -1898,6 +2118,23 @@
       setTimeout(() => { try { input.focus(); input.select(); } catch (e) { /* ignore */ } }, 60);
     },
 
+    /** 쉬운 모드 rename: pick one of the preset names (no keyboard for children) */
+    _openKidRename() {
+      const cur = myName();
+      const items = KID_NAMES.filter(([n]) => validName(n).ok).map(([n, e], i) => ({ id: n, emoji: e, label: n, say: n, selected: n === cur, color: ['#ffd43b', '#8ce99a', '#ffa94d', '#74c0fc', '#e599f7', '#c0a080', '#ffe066', '#ff8787'][i % 8] }));
+      Promise.resolve(G.easy.pick({ id: 'companion-kid-rename', title: '이름 지어 주기', say: '어떤 이름이 좋아요?', emoji: '🏷️', items, columns: 4 })).then((n) => {
+        if (!n || !G.state) return;
+        const prev = myName();
+        const v = this.setName(n);
+        if (!v.ok) return;
+        if (v.name !== prev) {
+          this.react('celebrate');
+          say(`${v.name}! 새 이름이 마음에 쏙 들어요 💕`, { mood: 'cheer', source: 'rename', force: true });
+          G.activity?.('companion', `동반자 이름을 ‘${v.name}’(으)로 지어 줌`);
+        } else say(`저는 그대로 ${copula(v.name)} 💕`, { mood: 'wink', source: 'rename', force: true });
+      }, () => {});
+    },
+
     // ------------------------------------------------------------ test album
     showcase() {
       const h = G.ui.h;
@@ -1930,17 +2167,27 @@
         const lv = Math.floor(Number(p?.level) || playerLevel());
         celebrate('⭐', 2);
         const unlocked = this._unlockNames((rule) => rule.level === lv);
-        this._later(() => say(unlocked.length
-          ? `레벨 ${lv} 달성! 정말 대단해요 🎉 새 옷 ${unlocked.join(', ')}${josa(unlocked[unlocked.length - 1].slice(-1), '이/가').slice(1)} 생겼어요!`
-          : `레벨 ${lv} 달성! ${nick()}님 최고예요 🎉✨`,
-        { mood: 'cheer', priority: true, ttl: 60000, source: 'levelup', action: unlocked.length ? { label: '입혀 보기', fn: () => this.openWardrobe() } : null }), 3600);
+        this._later(() => {
+          const kid = kidOn();
+          const text = kid
+            ? (unlocked.length ? '와, 쑥쑥 컸어요! 🌟 저한테 새 옷이 생겼어요! 👒' : `와, 쑥쑥 컸어요! 🌟 ${nick()} 최고예요!`)
+            : unlocked.length
+              ? `레벨 ${lv} 달성! 정말 대단해요 🎉 새 옷 ${unlocked.join(', ')}${josa(unlocked[unlocked.length - 1].slice(-1), '이/가').slice(1)} 생겼어요!`
+              : `레벨 ${lv} 달성! ${nick()}님 최고예요 🎉✨`;
+          say(text, { mood: 'cheer', priority: true, ttl: 60000, source: 'levelup', action: unlocked.length ? { label: kid ? '👒 입혀 보기' : '입혀 보기', fn: () => this.openWardrobe() } : null });
+        }, 3600);
         this._lastTipAt = pnow();
       });
       B.on('quest:accepted', () => { this._nextPointT = Math.min(this._nextPointT, G.time.elapsed + 2.5); this._idleT = this._nextIdle; });
       B.on('quest:progress', () => { this._nextPointT = Math.min(this._nextPointT, G.time.elapsed + 6); });
       B.on('photo:mode', (p) => { this._photo = !!p?.active; if (this._photo) { this._wake(); this.closeMenu(true); } });
       B.on('photo:taken', () => { if (this._shown) { this._setMood('wink', 1.8); this._start('bounce', 0.6); } });
-      B.on('input:move-start', () => { this._playerIdleSince = pnow(); });
+      B.on('input:move-start', () => { this._playerIdleSince = pnow(); this._stopNudgeHand(); });
+      // any tap / key counts as "the child is playing" for the idle nudges (capture: never blocked by UI handlers)
+      const mark = () => { this._lastInputAt = pnow(); };
+      window.addEventListener('pointerdown', mark, { capture: true, passive: true });
+      window.addEventListener('keydown', mark, { capture: true, passive: true });
+      B.on('easy:changed', ({ on } = {}) => { this._nudgeFor = -1; if (!on) { this._stopNudgeHand(); this._restSeen = ''; this._restNap = false; } });
       B.on('interact', (p) => { this._playerIdleSince = pnow(); if (p?.kind !== 'companion') this._wake(); });
       B.on('ui:modal-open', () => { this._playerIdleSince = pnow(); });
       B.on('npc:talk', () => this._wake());
@@ -1963,7 +2210,7 @@
 
     // ------------------------------------------------------------ helper-tip engine
     _quiet() {
-      if (Say.blocked() || this._menu || G.app?.onboarding?.active || document.hidden || this._photo) return true;
+      if (Say.blocked() || this._menu || this._kidMenuOpen || G.app?.onboarding?.active || document.hidden || this._photo) return true;
       if (G.util.isTyping()) return true;
       return false;
     },
@@ -1982,13 +2229,17 @@
           return;
         }
       }
+      const kid = kidOn();
+      if (kid) this._watchRest();
+      else if (this._restSeen) { this._restSeen = ''; this._restNap = false; }
       if (G.settings.companion === false || !this._shown) return;
+      if (kid && this._kidIdleTick()) return;
       this._scanAcc += 1;
       if (this._scanAcc < 4) return;
       this._scanAcc = 0;
       if (this._quiet() || Say.cur || Say.q.length) return;
       const now = pnow();
-      if (now - this._lastTipAt < 45000) return;
+      if (now - this._lastTipAt < (kid ? 60000 : 45000)) return;
       const idle = (now - this._playerIdleSince) / 1000;
       let pick = null;
       for (const c of candidates()) {
@@ -2012,6 +2263,21 @@
       const nm = myName();
       const play = { label: `${josa(nm, '과/와')} 놀기`, fn: () => this.openMenu() };
       let text, mood = 'happy', action = null;
+      if (kidOn()) {
+        // short, spoken, no keyboard talk
+        const me = nick();
+        const kplay = { label: '🏺 같이 놀기', fn: () => this.openMenu() };
+        const ph = G.sys.weather?.phase;
+        if (afterOnboarding) { text = '저는 늘 옆에 있을게요! 저를 누르면 같이 놀아요 🏺💕'; mood = 'wink'; action = kplay; }
+        else if (!c.met) { text = `안녕하세요, ${me}! 저는 장독 요정 ${copula(nm)} 🏺 같이 놀아요!`; mood = 'cheer'; action = kplay; }
+        else text = ph === 'MORNING' ? `좋은 아침이에요, ${me}! ☀️ 오늘도 같이 놀아요!` : ph === 'NIGHT' ? `밤에도 반가워요, ${me}! 🏮` : `또 만나서 반가워요, ${me}! 🌿`;
+        c.met = true;
+        G.dirty('companion');
+        this._lastTipAt = pnow();
+        say(text, { mood, action, priority: true, ttl: 45000, source: 'greet' });
+        this.react('jump');
+        return;
+      }
       if (afterOnboarding) {
         text = `저는 항상 ${nick()}님 곁에 있을게요! 저를 클릭하거나 O 키를 누르면 같이 놀 수 있어요 🏺💕`; mood = 'wink'; action = play;
       } else if (!c.met) {

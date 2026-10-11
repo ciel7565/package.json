@@ -89,30 +89,75 @@
     if (handled) G.sfx('click');
   });
   function setActive(action, on) { $$(`[data-action="${action}"]`).forEach((b) => b.classList.toggle('active', !!on)); }
-  function setBadge(action, count) {
-    $$(`#hud-left-menu [data-action="${action}"], #bottom-bar [data-action="${action}"]`).forEach((b) => {
+  // easy-mode tiles that merge several adult buttons show the sum of their badges (§12.3)
+  const BADGE_ALIASES = { stickerbook: ['collection', 'quests'], 'kid-chat': ['chat'] };
+  const badgeCounts = new Map();
+  function paintBadge(action, count) {
+    const sel = `#hud-left-menu [data-action="${action}"], #bottom-bar [data-action="${action}"], [data-badge-host][data-action="${action}"]`;
+    $$(sel).forEach((b) => {
       let badge = b.querySelector('.badge');
       if (!count) { badge?.remove(); return; }
       if (!badge) { badge = h('span', { class: 'badge' }); b.appendChild(badge); }
       badge.textContent = count > 99 ? '99+' : String(count);
     });
   }
+  function setBadge(action, count) {
+    count = Math.max(0, Math.floor(Number(count) || 0));
+    badgeCounts.set(action, count);
+    paintBadge(action, count);
+    for (const [alias, parts] of Object.entries(BADGE_ALIASES)) {
+      if (parts.includes(action)) paintBadge(alias, parts.reduce((n, a) => n + (badgeCounts.get(a) || 0), 0));
+    }
+  }
+  function getBadge(action) {
+    const parts = BADGE_ALIASES[action];
+    return parts ? parts.reduce((n, a) => n + (badgeCounts.get(a) || 0), 0) : (badgeCounts.get(action) || 0);
+  }
 
   // ---------------------------------------------------------------- toasts / banners
   const TOAST_ICONS = { info: 'ℹ️', success: '✅', warn: '⚠️', error: '⛔', reward: '🎁' };
+  const easyOn = () => !!(G.settings && G.settings.easyMode !== false);
+  /** technical / long error text is replaced by one friendly sentence in easy mode (§12.0) */
+  function kidError(msg, opts) {
+    if (opts.easy) return String(opts.easy);
+    const t = String(msg ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 34 || /[A-Z]{3,}|_[A-Z]|HTTP|Error|error|undefined|null|NaN|\bat\s|[{}<>]|코드|서버|네트워크|데이터|형식|시도/.test(t)) return '앗, 잘 안 됐어요. 다시 해 봐요!';
+    return t;
+  }
   function toast(msg, opts = {}) {
     const root = $('#toast-root');
     if (!root) return;
     const type = opts.type || 'info';
-    const icon = opts.emoji || (opts.icon ? null : TOAST_ICONS[type]);
-    const el = h('div', { class: `toast ${type}`, role: 'status' },
-      icon ? h('span', { class: 't-ico emoji' }, icon) : h('span', { class: 't-ico ico', 'data-icon': opts.icon }),
-      h('span', { html: opts.html ? msg : esc(msg) }));
+    const easy = easyOn();
+    const kidErr = easy && type === 'error';
+    let ico;
+    if (kidErr) {
+      let svg = '';
+      try { svg = G.mascot?.svg?.('sad', 44) || ''; } catch (e) { svg = ''; }
+      ico = typeof svg === 'string' && svg.trim().startsWith('<svg') ? h('span', { class: 't-ico t-face', html: svg }) : h('span', { class: 't-ico emoji' }, '🥺');
+    } else {
+      const icon = opts.emoji || (opts.icon ? null : TOAST_ICONS[type]);
+      ico = icon ? h('span', { class: 't-ico emoji' }, icon) : h('span', { class: 't-ico ico', 'data-icon': opts.icon });
+    }
+    const text = kidErr ? kidError(msg, opts) : msg;
+    const el = h('div', { class: `toast ${type}${kidErr ? ' kid' : ''}`, role: 'status', title: kidErr && text !== msg ? String(msg ?? '').slice(0, 200) : null },
+      ico, h('span', { class: 't-msg', html: opts.html && !kidErr ? text : esc(text) }));
+    if (typeof opts.retry === 'function') {
+      const rb = h('button', { type: 'button', class: 'btn btn-sm t-retry' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔄'), easy ? '다시' : '다시 시도');
+      rb.addEventListener('click', () => { el.remove(); try { opts.retry(); } catch (e) { G.log.error('UI', 'toast retry', e); } });
+      el.appendChild(rb);
+      el.classList.add('has-btn');
+    }
     root.appendChild(el);
     while (root.children.length > 4) root.firstChild.remove();
-    const dur = opts.duration ?? (type === 'error' ? 4500 : 2800);
+    const dur = opts.duration ?? (type === 'error' ? (easy ? 5500 : 4500) : easy ? 3400 : 2800);
     setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 260); }, dur);
-    if (type === 'error') G.sfx('error'); else if (type === 'reward') G.sfx('coin'); else if (opts.sound !== false) G.sfx('notify');
+    if (type === 'error') G.sfx(easy ? 'notify' : 'error'); else if (type === 'reward') G.sfx('coin'); else if (opts.sound !== false) G.sfx('notify');
+    if (easy && (kidErr || opts.say)) {
+      const line = typeof opts.say === 'string' ? opts.say : opts.html ? el.textContent : text;
+      try { G.easy?.say?.(line, { interrupt: false }); } catch (e) { /* voice optional */ }
+    }
+    if (kidErr && text !== msg) G.log.info('UI', 'error toast (simplified for easy mode):', String(msg ?? '').slice(0, 200));
     return el;
   }
   let bannerTimer = 0;
@@ -169,9 +214,17 @@
         hydrateIcons(titleEl);
       };
       setTitle(opts.title, opts.icon);
+      // easy mode (§12.3): a big ⬅️ 닫기 at the top-left instead of the small ✖; CSS shows one or the other
+      if (opts.closable !== false) head.appendChild(h('button', { type: 'button', class: 'easy-back easy-only', 'aria-label': '닫기', onclick: () => m.close() }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⬅️'), h('span', { class: 'eb-lbl' }, '닫기')));
       head.appendChild(titleEl);
+      const sayLine = () => (typeof opts.say === 'string' ? opts.say : titleEl.textContent);
+      if (opts.say !== false) {
+        const sb = h('button', { type: 'button', class: 'easy-speak easy-only modal-speak', 'aria-label': '소리로 듣기', title: '소리로 듣기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔊'));
+        sb.addEventListener('click', () => { try { G.easy?.say?.(sayLine(), { force: true, priority: 1 }); } catch (e) { /* voice optional */ } });
+        head.appendChild(sb);
+      }
       if (opts.headExtra) head.appendChild(opts.headExtra);
-      if (opts.closable !== false) head.appendChild(h('button', { class: 'icon-btn', 'aria-label': '닫기', onclick: () => m.close() }, h('span', { class: 'ico', 'data-icon': 'x' })));
+      if (opts.closable !== false) head.appendChild(h('button', { class: 'icon-btn modal-x easy-hide', 'aria-label': '닫기', onclick: () => m.close() }, h('span', { class: 'ico', 'data-icon': 'x' })));
       const body = h('div', { class: 'modal-body' });
       const foot = h('footer', { class: 'modal-foot' });
       box.append(head, body, foot);
@@ -215,6 +268,7 @@
       hydrateIcons(box);
       G.bus.emit('ui:modal-open', { id: m.id });
       G.sfx('open');
+      if (opts.say !== false && easyOn()) { try { G.easy?.say?.(sayLine(), { priority: 0 }); } catch (e) { /* voice optional */ } }
       // focus first input for keyboard users
       setTimeout(() => { const f = box.querySelector('[autofocus], input:not([type=hidden]), textarea, select'); if (f && opts.autofocus !== false) f.focus(); }, 30);
       return m;
@@ -228,6 +282,15 @@
   onEscape(() => modal.closeTop(), 100);
 
   function confirm(message, opts = {}) {
+    if (easyOn() && !opts.html && G.easy?.confirm && opts.easy !== false) {
+      const msg = String(message ?? '');
+      const short = msg.length <= 30;
+      return G.easy.confirm({
+        emoji: opts.emoji || (opts.danger ? '⚠️' : '🤔'), heading: opts.title || '확인해요',
+        title: short ? msg : (opts.title || '할까요?'), text: short ? '' : msg,
+        yes: opts.okText || '좋아요', no: opts.cancelText || '아니요', danger: !!opts.danger,
+      });
+    }
     return new Promise((resolve) => {
       let done = false;
       const fin = (v) => { if (!done) { done = true; resolve(v); } };
@@ -242,6 +305,11 @@
     });
   }
   function alert(message, opts = {}) {
+    if (easyOn() && !opts.html && G.easy?.alert && opts.easy !== false) {
+      const msg = String(message ?? '');
+      const short = msg.length <= 30;
+      return G.easy.alert({ emoji: opts.emoji || '💡', heading: opts.title || '알림', title: short ? msg : (opts.title || '알려 줄게요'), text: short ? '' : msg, ok: opts.okText || '알았어요' });
+    }
     return new Promise((resolve) => {
       modal.open({ title: opts.title || '알림', icon: opts.icon || 'info', size: 'sm', body: `<p>${opts.html ? message : esc(message)}</p>`, actions: [{ label: opts.okText || '확인', class: 'btn-primary' }], onClose: () => resolve() });
     });
@@ -258,25 +326,29 @@
     rewardShowing = true;
     const root = $('#reward-root');
     const items = [];
+    const easy = easyOn();
     if (r.coin) items.push(`<div class="rp-item"><span class="ico" data-icon="coin"></span>+${G.util.fmt(r.coin)}</div>`);
-    if (r.exp) items.push(`<div class="rp-item"><span class="emoji">✨</span>EXP +${G.util.fmt(r.exp)}</div>`);
-    if (r.edu) items.push(`<div class="rp-item"><span class="emoji">📘</span>교육 +${G.util.fmt(r.edu)}</div>`);
+    if (r.exp) items.push(`<div class="rp-item"><span class="emoji">✨</span>${easy ? '' : 'EXP '}+${G.util.fmt(r.exp)}</div>`);
+    if (r.edu) items.push(`<div class="rp-item"><span class="emoji">📘</span>${easy ? '' : '교육 '}+${G.util.fmt(r.edu)}</div>`);
     for (const [id, q] of Object.entries(r.items || {})) {
       const it = G.data.items?.[id];
       items.push(`<div class="rp-item"><span class="emoji">${it?.icon || '🎁'}</span>${esc(it?.name || id)} ×${q}</div>`);
     }
     if (r.titleName) items.push(`<div class="rp-item"><span class="emoji">🏅</span>칭호 「${esc(r.titleName)}」</div>`);
     const el = h('div', { class: 'reward-pop', role: 'alertdialog' });
-    el.innerHTML = `<div class="rp-eyebrow">${esc(r.eyebrow || 'REWARD')}</div><h3>${esc(r.title || '보상 획득!')}</h3>${r.note ? `<p class="dim small">${esc(r.note)}</p>` : ''}<div class="rp-items">${items.join('') || '<span class="dim">🎉</span>'}</div><button class="btn btn-gold btn-lg">확인</button>`;
+    const eyebrow = easy ? '🎉 🎁 🎉' : (r.eyebrow || 'REWARD');
+    el.innerHTML = `<div class="rp-eyebrow">${esc(eyebrow)}</div><h3>${esc(r.title || '보상 획득!')}</h3>${r.note && !easy ? `<p class="dim small">${esc(r.note)}</p>` : ''}<div class="rp-items">${items.join('') || '<span class="dim">🎉</span>'}</div><button class="btn btn-gold btn-lg">${easy ? '좋아요! 👍' : '확인'}</button>`;
+    if (easy) el.classList.add('kid');
     hydrateIcons(el);
     root.innerHTML = '';
     root.appendChild(el);
     G.sfx(r.sound || 'reward');
+    if (easy) { try { G.easy?.say?.(`${r.title || '선물을 받았어요'}!`, { priority: 1 }); } catch (e) { /* voice optional */ } }
     const close = () => { el.classList.add('out'); setTimeout(() => { el.remove(); unblock('reward'); nextReward(); }, 220); offEsc(); clearTimeout(auto); };
     el.querySelector('button').addEventListener('click', close);
     block('reward');
     const offEsc = onEscape(() => { close(); return true; }, 150);
-    const auto = setTimeout(close, r.duration || 6000);
+    const auto = setTimeout(close, r.duration || (easy ? 8000 : 6000));
   }
 
   // ---------------------------------------------------------------- popovers (emote/gesture/weather pickers)
@@ -445,7 +517,7 @@
   G.ui = {
     $, $$, h, esc, fmt: G.util.fmt, hydrateIcons, setIcon,
     block, unblock, isBlocking, onEscape, handleEscape, blockers,
-    onAction, triggerAction, setActive, setBadge,
+    onAction, triggerAction, setActive, setBadge, getBadge,
     toast, banner, zoneBanner, objective,
     modal, confirm, alert, rewardPopup, popover,
     label, updateLabels, labels,

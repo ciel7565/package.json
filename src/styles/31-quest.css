@@ -120,3 +120,81 @@ body.reduce-motion .quest-item.done, body.reduce-motion .quest-item .q-claim, bo
 @media (prefers-reduced-motion: reduce) {
   .quest-item.done, .quest-item .q-claim, .objective-hint.oh-done { animation: none !important; }
 }
+
+/* =============================================================================
+   쉬운 모드 (CONTRACT §12) — quest sticker cards (G.sys.quest.renderList, 스티커북 📜 할 일 tab)
+   ============================================================================= */
+.kq { display: flex; flex-direction: column; gap: 12px; }
+.kq .kk-sec { margin-bottom: .1rem; }
+.kq-sec.gold { color: #ffe08a; }
+.kq-card {
+  position: relative; display: grid; grid-template-columns: 4.6rem minmax(0, 1fr) auto; gap: .9rem; align-items: center;
+  padding: .85rem 1rem .85rem .85rem; border-radius: 24px; color: var(--kid-ink, #23301f);
+  background: linear-gradient(180deg, #fffdf6, var(--kid-cream-2, #fff1d6)); border: 3px solid #fff;
+  box-shadow: 0 6px 0 rgba(0,0,0,.22), 0 14px 26px rgba(0,0,0,.28);
+  animation: easyTileIn .38s var(--kid-bounce, ease) both; animation-delay: calc(var(--i, 0) * 45ms);
+}
+.kq-card.still { animation: none; }
+.kq-sticker {
+  display: grid; place-items: center; width: 4.6rem; height: 4.6rem; border-radius: 50%; font-size: 2.6rem; line-height: 1;
+  background: radial-gradient(circle at 50% 35%, #ffffff, #ffe7a8); border: 4px solid #fff; rotate: -6deg;
+  box-shadow: 0 4px 0 rgba(0,0,0,.16), 0 0 0 3px rgba(255,207,74,.5);
+}
+.kq-card.is-main .kq-sticker { background: radial-gradient(circle at 50% 35%, #fff8d6, #ffcf4a); box-shadow: 0 4px 0 rgba(140,95,0,.35), 0 0 0 3px rgba(255,180,40,.85), 0 0 18px rgba(255,200,60,.55); }
+.kq-main { min-width: 0; display: flex; flex-direction: column; gap: .3rem; }
+.kq-title { font-size: 1.24rem; font-weight: 900; line-height: 1.2; letter-spacing: -.01em; word-break: keep-all; overflow-wrap: anywhere; }
+.kq-line { display: flex; align-items: center; gap: .45rem; font-size: 1.1rem; font-weight: 800; color: #3d4a37; line-height: 1.3; word-break: keep-all; }
+.kq-line .emoji { font-size: 1.45rem; flex: none; }
+.kq-pips { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; margin-top: .1rem; }
+.kq-pips i { width: 1.05rem; height: 1.05rem; border-radius: 50%; background: #e6ebe1; border: 2px solid #c8d2c1; }
+.kq-pips i.on { background: radial-gradient(circle at 40% 35%, #fff6c4, #ffc531); border-color: #e3a412; box-shadow: 0 0 6px rgba(255,197,49,.65); }
+.kq-pips i.now { border-color: #ffb21f; box-shadow: 0 0 0 3px rgba(255,178,31,.35); animation: kqNow 1.4s ease-in-out infinite; }
+.kq-pips b { font-size: .98rem; color: #8a5a00; }
+.kq-reward { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin-top: .2rem; }
+.kq-gift { font-size: 1.15rem; margin-right: .05rem; }
+.kq-rw { display: inline-flex; align-items: center; gap: .2rem; padding: .08rem .55rem; border-radius: 999px; background: #fff1c2; color: #5a3d00; font-size: .92rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+.kq-rw .emoji { font-size: 1rem; }
+.kq-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: .5rem; }
+.kq-say { width: 2.75rem; height: 2.75rem; font-size: 1.15rem; }
+.kq-btn { min-width: 8.4rem; white-space: nowrap; }
+.kq-claim { background: linear-gradient(180deg, #ffe58f, var(--kid-gold-d, #e3a412)); color: #2b1d02; animation: qClaimPulse 1.6s ease-in-out infinite; }
+.kq-card.kq-claim { background: linear-gradient(180deg, #fffbe6, #ffe39a); border-color: #ffe08a; box-shadow: 0 6px 0 rgba(150,100,0,.42), 0 0 0 4px rgba(255,207,74,.35), 0 14px 26px rgba(0,0,0,.28); }
+.kq-card.kq-avail { background: linear-gradient(180deg, #f6fbff, #dff0ff); }
+.kq-card.opening .kq-sticker { animation: kqOpen .9s var(--kid-bounce, ease) both; }
+.kq-card.opening .kq-claim { animation: none; opacity: .7; }
+.kq-done { grid-template-columns: repeat(auto-fill, minmax(7.6rem, 1fr)); }
+.kq-done-tile .et-emoji { min-height: 3.6rem; font-size: 2.2rem; }
+.kq-done-tile .et-label { font-size: .98rem; }
+.kq-locked { margin: .3rem 0 0; text-align: center; font-weight: 800; color: var(--text-dim); }
+@keyframes kqNow { 50% { scale: 1.18; } }
+@keyframes kqOpen { 0% { scale: 1; rotate: -6deg; } 35% { scale: 1.35; rotate: 10deg; } 70% { scale: .92; rotate: -4deg; } 100% { scale: 1.05; rotate: 0deg; } }
+/* normal-mode rows (renderList with easy:false) */
+.kq-normal { gap: .4rem; }
+.kq-row { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) auto; gap: .65rem; align-items: center; padding: .55rem .65rem; border-radius: 12px; background: var(--bg-elev); border: 1px solid var(--line); }
+.kq-row.s-completed { border-color: rgba(244,197,74,.6); background: rgba(244,197,74,.08); }
+.kq-row-ico { font-size: 1.4rem; text-align: center; }
+.kq-row-main { min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
+.kq-row-main b { font-size: .9rem; }
+.kq-row-main small { font-size: .78rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kq-row-main .bar { height: .3rem; }
+@media (max-width: 560px) {
+  .kq-card { grid-template-columns: 3.7rem minmax(0, 1fr); gap: .7rem; padding: .75rem .8rem; }
+  .kq-sticker { width: 3.7rem; height: 3.7rem; font-size: 2.05rem; }
+  .kq-side { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; }
+  .kq-btn { flex: 1; }
+  .kq-title { font-size: 1.12rem; }
+  .kq-line { font-size: 1.02rem; }
+}
+body.reduce-motion .kq-claim, body.reduce-motion .kq-pips i.now, body.reduce-motion .kq-card, body.reduce-motion .kq-card.opening .kq-sticker { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .kq-claim, .kq-pips i.now, .kq-card, .kq-card.opening .kq-sticker { animation: none !important; } }
+
+/* ---- kid readability floors (phones shrink rem to 13 px) */
+.kq-title { font-size: max(18px, 1.24rem); }
+.kq-line { font-size: max(16px, 1.1rem); }
+.kq-rw, .kq-pips b { font-size: max(16px, .92rem); }
+.kq-locked { font-size: max(16px, 1rem); }
+.kq-btn { font-size: max(17px, 1.15rem); }
+.kq-btn.easy-btn-yes { background: linear-gradient(180deg, #2fae62, #157a3c); }
+.kq-say { width: var(--tap); height: var(--tap); font-size: 1.35rem; }
+.kq-done-tile .et-label { font-size: max(16px, .98rem); }
+@media (max-width: 560px) { .kq-title { font-size: max(18px, 1.12rem); } .kq-line { font-size: max(16px, 1.02rem); } }

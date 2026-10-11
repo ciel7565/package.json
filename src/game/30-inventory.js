@@ -7,8 +7,15 @@
 //   open(tab?, {select}) / close() / toggle()          bag modal: tabs, .slot grid, detail pane
 //   openShop(shopId) / closeShop()                     buy & sell (coins via G.sys.progression)
 //   typeLabel(type)
+//   openItem(itemId)                                   kid item card (easy mode): picture, 🔊, big emoji actions
 // Hotkey I, action `inventory`. Registers the shop stall interactable (kind 'shop').
-// Also provides G.progToast (small staggered toast queue shared by 30/31/32 modules).
+// Also provides G.progToast (small staggered toast queue shared by 30/31/32 modules) and G.kidKit
+// (tiny kid-UI helpers shared by 30/31/32/47: josa, coin chip, empty state, arrow-key grids).
+//
+// 쉬운 모드 (CONTRACT §12, default): open() = picture bag (sections, big tiles with count badges; tap -> item card
+// with 🌱 심기 (auto-walks to an empty plot and plants) / 💰 팔기 / 🛒 가게 가기 / 🏡 꾸미기 / ✖), openShop() = picture
+// shop (🛍️ 사기 · 💰 팔기 tabs, 🪙 price pictures, one tap + G.easy.confirm, friendly "🪙가 조금 모자라요" path),
+// guidebook = picture guide + 🗺️ 어디 갈까?. No typing, no quantity steppers. Normal mode is unchanged.
 // =============================================================================
 (function () {
   const TYPE_LABEL = { seed: '씨앗', crop: '작물', ingredient: '재료', fermented: '발효식품', tool: '도구', decoration: '장식', quest: '퀘스트' };
@@ -74,6 +81,123 @@
   }
   G.progJosa = G.progJosa || josa;
   G.progJosa.p = G.progJosa.p || particle;
+
+  // ---------------------------------------------------------------- shared kid-UI kit (30/31/32/47, CONTRACT §12)
+  /** easy mode is on AND the kid toolkit (08-easy) is alive — otherwise every module falls back to the adult UI */
+  const easyOn = () => !!(G.easy && G.easy.on);
+  /** josa that never prints "을(를)": non-Hangul endings take the vowel form, digits are read in Sino-Korean */
+  function kjosa(word, pair) {
+    const w = String(word ?? '');
+    const [a, b] = String(pair).split('/');
+    const s = w.replace(/[\s?!.,)」』"'\]]+$/, '');
+    const c = s.charCodeAt(s.length - 1);
+    let jong = false;
+    if (c >= 0xac00 && c <= 0xd7a3) jong = (c - 0xac00) % 28 !== 0;
+    else if (/[0-9]$/.test(s)) jong = /[013678]$/.test(s);
+    if (pair === '으로/로' && c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 === 8) jong = false; // ㄹ받침 + 로
+    return w + (jong ? a : b);
+  }
+  if (!G.kidKit) {
+    G.kidKit = {
+      on: easyOn,
+      josa: kjosa,
+      /** '콩' -> '콩이에요', '고추' -> '고추예요' */
+      iyeyo: (w) => kjosa(w, '이에요/예요'),
+      /** 🪙 coin chip for kid modal headers; .set(n) updates it */
+      coinChip() {
+        const b = G.ui.h('b', null, '0');
+        const el = G.ui.h('span', { class: 'kk-coin', role: 'img', 'aria-label': '내 코인' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🪙'), b);
+        el.set = (n) => { const t = G.util.fmt(Math.max(0, Math.floor(Number(n) || 0))); if (b.textContent !== t) b.textContent = t; el.setAttribute('aria-label', `내 코인 ${t}개`); el.__easySpeak = { btn: null, text: `코인 ${t}개 있어요.` }; };
+        return el;
+      },
+      /** friendly empty state: mascot (or emoji) + one sentence + an optional hint */
+      empty(emoji, title, hint, mood = 'think') {
+        let face = null;
+        try { const svg = G.mascot?.svg?.(mood, 84); if (typeof svg === 'string' && svg.trim().startsWith('<svg')) face = G.ui.h('span', { class: 'kk-empty-face', 'aria-hidden': 'true', html: svg }); } catch (e) { face = null; }
+        return G.ui.h('div', { class: 'kk-empty', role: 'status' },
+          face || G.ui.h('span', { class: 'kk-empty-emoji emoji', 'aria-hidden': 'true' }, emoji || '🙂'),
+          G.ui.h('b', null, String(title || '')),
+          hint ? G.ui.h('span', null, String(hint)) : null);
+      },
+      /** arrow keys / Home / End move the focus between the buttons of a picture grid (idempotent) */
+      gridKeys(grid, selector = 'button') {
+        if (!grid || grid.__kidKeys) return;
+        grid.__kidKeys = true;
+        grid.addEventListener('keydown', (e) => {
+          const tiles = Array.from(grid.querySelectorAll(selector)).filter((t) => !t.disabled && t.offsetParent !== null);
+          const i = tiles.indexOf(document.activeElement);
+          if (i < 0) return;
+          let cols = 1;
+          try { const tpl = getComputedStyle(grid).gridTemplateColumns; cols = tpl && tpl !== 'none' ? Math.max(1, tpl.split(' ').filter(Boolean).length) : 1; } catch (err) { cols = 1; }
+          const mv = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols, Home: -1e4, End: 1e4 }[e.key];
+          if (mv == null) return;
+          e.preventDefault();
+          tiles[G.util.clamp(i + mv, 0, tiles.length - 1)].focus();
+        });
+      },
+      /** read a line aloud with the voice guide (never throws) */
+      say(text, opts) { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } },
+      /** set CSS custom properties (G.ui.h's style object cannot) and return the element */
+      vars(el, map) { if (el) for (const [k, v] of Object.entries(map || {})) el.style.setProperty(k, String(v)); return el; },
+      /** wiggle an element (wrong / not allowed) */
+      shake(el) { if (!el) return; el.classList.remove('easy-shake'); void el.offsetWidth; el.classList.add('easy-shake'); },
+    };
+  }
+  const KK = G.kidKit;
+
+  // kid categories (bag sections) — the colour is the tile frame (--tile), never user data
+  const KID_TYPE = {
+    seed: { label: '씨앗', emoji: '🌱', color: '#55d187' },
+    crop: { label: '채소', emoji: '🥕', color: '#8fd14f' },
+    ingredient: { label: '재료', emoji: '🧂', color: '#4fb3ff' },
+    fermented: { label: '발효 음식', emoji: '🏺', color: '#ffc93c' },
+    tool: { label: '도구', emoji: '🧰', color: '#d3a46a' },
+    decoration: { label: '꾸미기', emoji: '✨', color: '#b48bff' },
+    quest: { label: '특별한 것', emoji: '📘', color: '#ff8a5c' },
+  };
+  /** one short, warm sentence about an item (no numbers, no jargon) */
+  function kidDesc(it) {
+    const n = String(it?.name || '');
+    switch (it?.type) {
+      case 'seed': { const c = G.data.crops?.[it.crop]; return c ? `밭에 심으면 ${kjosa(c.name, '이/가')} 자라요.` : '밭에 심는 씨앗이에요.'; }
+      case 'crop': return `밭에서 거둔 ${KK.iyeyo(n)}.`;
+      case 'ingredient': return `${KK.iyeyo(n)}. 맛있는 장을 만들 때 써요.`;
+      case 'fermented': return `장독에서 익힌 ${KK.iyeyo(n)}.`;
+      case 'tool': return `${KK.iyeyo(n)}. 가방에 있으면 저절로 써요.`;
+      case 'decoration': return `${KK.iyeyo(n)}. 마당을 예쁘게 꾸며요.`;
+      case 'quest': return `${KK.iyeyo(n)}. 어디서 놀지 알려 줘요.`;
+      default: return `${KK.iyeyo(n)}.`;
+    }
+  }
+  /** nearest empty plot that can take this crop (crop beds vs herb beds), from the farming system or the save */
+  function emptyPlotFor(cropId) {
+    const crop = G.data.crops?.[cropId];
+    if (!crop) return null;
+    const herb = crop.category === 'herb';
+    const p = G.sys.player?.position;
+    let best = null, bd = Infinity;
+    for (const d of G.data.layout?.farmPlots || []) {
+      if ((d.zone === 'ZONE_HERB') !== herb) continue;
+      let info = null;
+      try { info = G.sys.farming?.getPlot?.(d.id) || null; } catch (e) { info = null; }
+      const empty = info ? !!info.empty : !(G.state?.farm?.plots?.[d.id]?.cropId ?? d.crop);
+      if (!empty) continue;
+      const dist = p ? Math.hypot(d.x - p.x, d.z - p.z) : 0;
+      if (dist < bd) { bd = dist; best = d; }
+    }
+    return best;
+  }
+  /** a walkable spot just outside a rectangular bed, on the side facing the player */
+  function approachPoint(def, margin = 1.15) {
+    const hw = (Number(def.w) || 4) / 2, hd = (Number(def.d) || 4) / 2;
+    const p = G.sys.player?.position || { x: def.x, z: def.z + hd + 6 };
+    let x = G.util.clamp(p.x, def.x - hw, def.x + hw), z = G.util.clamp(p.z, def.z - hd, def.z + hd);
+    const dx = (p.x - def.x) / hw, dz = (p.z - def.z) / hd;
+    if (Math.abs(dx) > Math.abs(dz)) x = def.x + (dx >= 0 ? 1 : -1) * (hw + margin);
+    else z = def.z + (dz >= 0 ? 1 : -1) * (hd + margin);
+    return { x, z };
+  }
+  const KID_MODALS = ['inv-item', 'guidebook'];
 
   // ---------------------------------------------------------------- helpers
   const items = () => G.data.items || {};
@@ -160,6 +284,7 @@
     _shopId: null,
     _invModal: null, _invTab: 'all', _invSel: null,
     _shopModal: null, _shopTab: 'buy', _shopFilter: 'all', _qty: {},
+    _kidWalk: 0, _kidAsk: false,
     _refreshQueued: false,
     _offs: [],
 
@@ -172,6 +297,14 @@
       this._offs.push(G.bus.on('world:object', ({ id, obj }) => {
         if ((id === 'SHOP_STALL' || id === 'B_SHOP') && obj) { try { G.interact?.setObject?.('SHOP_STALL', obj); } catch (e) { /* optional */ } }
       }));
+      // easy <-> normal at runtime: the open bag / shop belong to the other look, close them (the HUD reopens them)
+      this._offs.push(G.bus.on('easy:changed', () => this._closeAll()));
+    },
+
+    _closeAll() {
+      for (const id of KID_MODALS) G.ui.modal.get(id)?.close();
+      this._invModal?.close();
+      this._shopModal?.close();
     },
 
     postInit() {
@@ -200,13 +333,15 @@
       }
       this._new.clear();
       G.ui.setBadge('inventory', 0);
-      this._invModal?.close(); this._shopModal?.close();
+      this._kidWalk++; this._kidAsk = false;
+      this._closeAll();
     },
 
     onLogout() {
       this._new.clear();
       G.ui.setBadge('inventory', 0);
-      this._invModal?.close(); this._shopModal?.close();
+      this._kidWalk++; this._kidAsk = false;
+      this._closeAll();
     },
 
     // ------------------------------------------------------------ core API
@@ -235,7 +370,7 @@
       const max = it.stack === false ? 1 : (it.max || 999);
       const added = Math.max(0, Math.min(qty, max - cur));
       if (!added) {
-        if (!opts.silent) G.progToast(`${josa(it.name, '은/는')} 더 이상 가질 수 없어요. (최대 ${fmt(max)}개)`, { type: 'warn' });
+        if (!opts.silent) G.progToast(easyOn() ? `가방에 ${kjosa(it.name, '이/가')} 꽉 찼어요!` : `${josa(it.name, '은/는')} 더 이상 가질 수 없어요. (최대 ${fmt(max)}개)`, { type: 'warn', emoji: easyOn() ? '🎒' : undefined });
         return 0;
       }
       inv[itemId] = cur + added;
@@ -245,8 +380,8 @@
       G.dirty('inventory');
       G.bus.emit('item:added', { itemId, qty: added, source });
       if (!opts.silent) {
-        G.progToast(`+${it.name} ×${fmt(added)}`, { emoji: it.icon, type: 'success', sound: !QUIET_SOURCES.test(source), cls: 'item-toast' });
-        if (added < qty) G.progToast(`가방이 가득 차서 ${fmt(added)}개만 받았어요.`, { type: 'warn' });
+        G.progToast(easyOn() ? `${it.name} ${fmt(added)}개 받았어요!` : `+${it.name} ×${fmt(added)}`, { emoji: it.icon, type: 'success', sound: !QUIET_SOURCES.test(source), cls: 'item-toast' });
+        if (added < qty) G.progToast(easyOn() ? '가방이 꽉 찼어요!' : `가방이 가득 차서 ${fmt(added)}개만 받았어요.`, { type: 'warn' });
       }
       this._queueRefresh();
       return added;
@@ -282,6 +417,7 @@
 
     open(tab, opts = {}) {
       if (!G.state) return null;
+      if (easyOn() && !opts.normal) return this._openKidBag(opts);
       if (tab && TABS.some((t) => t.id === tab)) this._invTab = tab;
       else if (tab && TYPE_LABEL[tab]) this._invTab = TABS.find((t) => t.types?.includes(tab))?.id || 'all';
       if (opts.select) this._invSel = opts.select;
@@ -308,6 +444,7 @@
     _renderInv() {
       const m = this._invModal;
       if (!m || m.closed || !G.state) return;
+      if (m._kid) { this._renderKidBag(); return; }
       const body = m.body;
       m._coinChip.innerHTML = `${coinIco()}${fmt(coins())}`;
       G.ui.hydrateIcons(m._coinChip);
@@ -331,7 +468,7 @@
 
     _renderInvGrid() {
       const m = this._invModal;
-      if (!m || m.closed) return;
+      if (!m || m.closed || m._kid) return;
       const body = m.body;
       const tab = TABS.find((t) => t.id === this._invTab) || TABS[0];
       const list = tab.types ? this.list(tab.types) : this.list();
@@ -368,7 +505,7 @@
 
     _renderInvDetail() {
       const m = this._invModal;
-      if (!m || m.closed) return;
+      if (!m || m.closed || m._kid) return;
       const pane = m.body.querySelector('.inv-detail');
       pane.innerHTML = '';
       const id = this._invSel;
@@ -422,8 +559,344 @@
       if (this._shopId && canSellTo(G.data.shops?.[this._shopId], it)) return this.sell(id, 1);
     },
 
+    // ------------------------------------------------------------ 쉬운 모드: picture bag
+    _openKidBag(opts = {}) {
+      G.ui.modal.get('inv-item')?.close(); // never leave a stale item card behind the reopened bag
+      const newSet = new Set(this._new);
+      this._new.clear();
+      G.ui.setBadge('inventory', 0);
+      const coinChip = KK.coinChip();
+      const m = G.ui.modal.open({
+        id: 'inventory', title: '내 가방', icon: '🎒', size: 'lg', className: 'inv-modal kk-bag-modal',
+        say: '내 가방이에요. 그림을 눌러 봐요.', headExtra: coinChip,
+        body: (body) => { body.appendChild(G.ui.h('div', { class: 'kbag-wrap' })); },
+        actions: [],
+        onClose: () => { if (this._invModal === m) this._invModal = null; G.ui.setActive('inventory', false); },
+      });
+      m._kid = true;
+      m._newSet = newSet;
+      m._coinChip = coinChip;
+      this._invModal = m;
+      G.ui.setActive('inventory', true);
+      // one obvious way out of the bag besides ⬅️: walk to the shop (hidden while a shop is open)
+      if (!this._shopId && G.data.layout?.shopStall && G.easy?.goTo) {
+        const go = G.ui.h('button', { type: 'button', class: 'easy-big-btn kbag-shop-btn', 'data-say': '가게에 같이 가요.' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🛒'), G.ui.h('span', null, '가게 가기'));
+        go.addEventListener('click', () => this._kidGoShop('buy'));
+        m.foot.appendChild(go);
+      }
+      this._renderKidBag();
+      if (opts.select && itemOf(opts.select)) setTimeout(() => { if (!m.closed) this.openItem(opts.select); }, 0);
+      return m;
+    },
+
+    _renderKidBag() {
+      const m = this._invModal;
+      if (!m || m.closed || !m._kid || !G.state) return;
+      m._coinChip.set(coins());
+      const wrap = m.body.querySelector('.kbag-wrap');
+      if (!wrap) return;
+      const all = this.list();
+      const first = !m._drawn;
+      m._drawn = true;
+      const scroll = m.body.scrollTop;
+      wrap.textContent = '';
+      if (!all.length) {
+        wrap.appendChild(KK.empty('🎒', '가방이 비어 있어요.', '밭에서 채소를 거둬 봐요!'));
+        return;
+      }
+      let i = 0;
+      for (const type of TYPE_ORDER) {
+        const list = all.filter((e) => e.item.type === type);
+        if (!list.length) continue;
+        const kt = KID_TYPE[type] || KID_TYPE.quest;
+        wrap.appendChild(KK.vars(G.ui.h('h3', { class: 'kk-sec' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, kt.emoji), kt.label), { '--sec': kt.color }));
+        const grid = G.ui.h('div', { class: 'kk-grid kbag-grid', role: 'list' });
+        for (const e of list) grid.appendChild(this._kidSlot(e, kt, first ? i++ : -1, !!m._newSet?.has(e.id)));
+        KK.gridKeys(grid);
+        wrap.appendChild(grid);
+      }
+      m.body.scrollTop = scroll;
+    },
+
+    _kidSlot(e, kt, i, isNew) {
+      const showCount = e.qty > 1 || (e.item.type !== 'tool' && e.item.type !== 'quest');
+      const b = G.ui.h('button', {
+        type: 'button', role: 'listitem', class: `easy-tile kk-tile kbag-tile${i < 0 ? ' still' : ''}${isNew ? ' is-new' : ''}`,
+        'aria-label': `${e.item.name} ${e.qty}개`, dataset: { id: e.id },
+      },
+      G.ui.h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, e.item.icon || '❔'),
+      G.ui.h('span', { class: 'et-label' }, e.item.name),
+      showCount ? G.ui.h('span', { class: 'et-badge' }, fmt(e.qty)) : null,
+      isNew ? G.ui.h('span', { class: 'kk-new', 'aria-hidden': 'true' }, '새것') : null);
+      b.style.setProperty('--tile', kt.color);
+      if (i >= 0) b.style.setProperty('--i', String(Math.min(i, 18)));
+      b.__easySpeak = { btn: null, text: `${e.item.name}. ${fmt(e.qty)}개 있어요.` };
+      b.addEventListener('click', () => { this._invModal?._newSet?.delete(e.id); this.openItem(e.id); });
+      return b;
+    },
+
+    /** kid item card: big picture, short name, 🔊, big emoji actions */
+    openItem(id) {
+      const it = itemOf(id);
+      if (!it || !G.state) return null;
+      if (!easyOn()) return this.open('all', { select: id, normal: true });
+      const qty = this.count(id);
+      if (qty < 1) return null;
+      const kt = KID_TYPE[it.type] || KID_TYPE.quest;
+      const shop = this._shopId ? G.data.shops?.[this._shopId] : null;
+      const desc = kidDesc(it);
+      const close = () => G.ui.modal.get('inv-item')?.close();
+      const acts = [];
+      const add = (emoji, label, cls, fn, sayLine) => acts.push({ emoji, label, cls, fn, sayLine });
+      let note = null;
+      if (it.type === 'seed' && it.crop) {
+        if (emptyPlotFor(it.crop)) add('🌱', '심기', 'easy-btn-yes', () => { close(); this._kidPlant(id); }, '빈 밭에 같이 가서 심어요.');
+        else {
+          note = G.data.crops?.[it.crop]?.category === 'herb' ? '🌿 빈 허브밭이 없어요. 다 자란 허브를 먼저 거둬요!' : '🌾 빈 밭이 없어요. 다 자란 채소를 먼저 거둬요!';
+          add('🌱', '심기', 'easy-btn-no is-off', (btn) => { KK.shake(btn); KK.say(note, { force: true }); }, '빈 밭이 없어요.');
+        }
+      }
+      if (it.type === 'decoration' && G.sys.engagement?.open) add('🏡', '꾸미기', 'easy-btn-yes', () => { this._closeAll(); G.sys.engagement.open('decor'); }, '내 마당을 꾸며요.');
+      if (id === 'ITEM_GUIDEBOOK') add('📖', '보기', 'easy-btn-yes', () => { close(); this.openGuide(); }, '안내서를 봐요.');
+      if (canSellTo(shop || G.data.shops?.SHOP_GENERAL, it)) {
+        if (shop) add('💰', '팔기', 'kitem-sell', () => this._kidSell(id), `팔면 코인 ${it.sell}개를 받아요.`);
+        else if (G.data.layout?.shopStall && G.easy?.goTo) add('🛒', '팔러 가기', 'kitem-sell', () => this._kidGoShop('sell'), '가게에 가서 팔아요.');
+      }
+      add('✖', '닫기', 'easy-btn-no', () => close(), '닫아요.');
+      const btns = G.ui.h('div', { class: `kitem-btns n${Math.min(acts.length, 3)}` });
+      for (const a of acts) {
+        const b = G.ui.h('button', { type: 'button', class: `easy-big-btn ${a.cls}`, 'data-say': a.sayLine || a.label }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, a.emoji), G.ui.h('span', null, a.label));
+        b.addEventListener('click', () => { try { a.fn(b); } catch (e) { G.log.error('INVENTORY', 'kid item action', e); } });
+        btns.appendChild(b);
+      }
+      const count = G.ui.h('span', { class: 'kitem-count' }, `${fmt(qty)}개`);
+      const art = KK.vars(G.ui.h('div', { class: 'kitem-art' },
+        G.ui.h('span', { class: 'kitem-rays', 'aria-hidden': 'true' }),
+        G.ui.h('span', { class: 'kitem-emoji emoji', 'aria-hidden': 'true' }, it.icon || '❔'), count), { '--tile': kt.color });
+      const body = G.ui.h('div', { class: 'kitem' }, art,
+        KK.vars(G.ui.h('div', { class: 'kitem-type' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, kt.emoji), kt.label), { '--tile': kt.color }),
+        G.ui.h('p', { class: 'kitem-desc' }, desc),
+        it.type === 'fermented' ? G.ui.h('p', { class: 'kitem-note' }, '게임 속 체험이에요.') : null,
+        note ? G.ui.h('p', { class: 'kitem-hint' }, note) : null,
+        btns);
+      const m = G.ui.modal.open({ id: 'inv-item', title: it.name, icon: it.icon || '🎒', size: 'sm', className: 'kk-card-modal', say: `${it.name}. ${fmt(qty)}개 있어요. ${desc}`, body, actions: [] });
+      m._itemId = id;
+      m._count = count;
+      setTimeout(() => { if (!m.closed) btns.querySelector('button')?.focus({ preventScroll: true }); }, 60);
+      return m;
+    },
+
+    /** 🌱 심기: walk to the nearest empty bed for this seed, then plant it there */
+    async _kidPlant(seedId) {
+      const it = itemOf(seedId);
+      const cropId = it?.crop;
+      const plot = emptyPlotFor(cropId);
+      if (!plot) { G.easy?.alert?.({ emoji: '🌱', heading: '심기', title: '빈 밭이 없어요', text: '다 자란 채소를 먼저 거둬요!' }); return false; }
+      if (!G.easy?.goTo) return false;
+      // the newest walk wins: a later tap (or the joystick) replaces this one and its arrival is ignored
+      const token = ++this._kidWalk;
+      const st = G.state;
+      try {
+        this._closeAll();
+        const pt = approachPoint(plot);
+        const ok = await G.easy.goTo({ x: pt.x, z: pt.z }, { label: '빈 밭', stopDistance: 1.0 });
+        if (!ok || token !== this._kidWalk || !G.state || G.state !== st || !this.has(seedId)) return false;
+        const target = emptyPlotFor(cropId)?.id === plot.id ? plot : emptyPlotFor(cropId);
+        if (!target) { KK.say('앗, 빈 밭이 없어졌어요.', { force: true }); return false; }
+        return !!G.sys.farming?.plant?.(target.id, cropId);
+      } catch (e) {
+        G.log.warn('INVENTORY', 'kid plant failed', e);
+        return false;
+      }
+    },
+
+    /** walk to the shop stall and open the picture shop on a tab */
+    async _kidGoShop(tab = 'buy') {
+      const s = G.data.layout?.shopStall;
+      if (!s || !G.easy?.goTo) return false;
+      const token = ++this._kidWalk;
+      const st = G.state;
+      this._closeAll();
+      const ok = await G.easy.goTo({ x: s.x, z: s.z }, { label: '가게', stopDistance: 3.2 });
+      if (!ok || token !== this._kidWalk || !G.state || G.state !== st) return false;
+      this._shopTab = tab;
+      return !!this.openShop(s.shop || 'SHOP_GENERAL');
+    },
+
+    // ------------------------------------------------------------ 쉬운 모드: picture shop
+    _openKidShop(shopId, shop) {
+      this._qty = {};
+      const coinChip = KK.coinChip();
+      const greet = (G.sys.weather?.hour >= 20 || G.sys.weather?.hour < 5) ? '늦게까지 노네요! 천천히 골라요.' : '어서 와요! 무엇을 살까요?';
+      const m = G.ui.modal.open({
+        id: 'shop', title: '가게', icon: '🛒', size: 'lg', className: 'shop-modal kk-shop-modal', headExtra: coinChip, say: greet,
+        body: (body) => {
+          const tabs = G.ui.h('div', { class: 'kk-seg', role: 'tablist' });
+          for (const t of [{ id: 'buy', emoji: '🛍️', label: '사기' }, { id: 'sell', emoji: '💰', label: '팔기' }]) {
+            const b = G.ui.h('button', { type: 'button', role: 'tab', class: 'kk-seg-btn', dataset: { tab: t.id }, 'data-say': t.id === 'buy' ? '물건을 사요.' : '물건을 팔아요.' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, t.emoji), G.ui.h('span', null, t.label));
+            b.addEventListener('click', () => { if (this._shopTab !== t.id) { this._shopTab = t.id; this._renderKidShop(); KK.say(t.id === 'buy' ? '무엇을 살까요?' : '무엇을 팔까요?', { force: false }); } });
+            tabs.appendChild(b);
+          }
+          body.append(
+            G.ui.h('div', { class: 'kshop-greet' }, G.ui.h('span', { class: 'kshop-clerk emoji', 'aria-hidden': 'true' }, '🧑‍💼'), G.ui.h('p', { class: 'kshop-bubble' }, greet)),
+            tabs, G.ui.h('div', { class: 'kshop-wrap' }));
+        },
+        actions: [],
+        onClose: () => { if (this._shopModal === m) { this._shopModal = null; this._shopId = null; this._queueRefresh(); } },
+      });
+      m._kid = true;
+      m._coinChip = coinChip;
+      this._shopModal = m;
+      this._shopId = shopId;
+      if (this._shopTab !== 'sell') this._shopTab = 'buy';
+      this._renderKidShop();
+      G.log.info('INVENTORY', `shop open ${shopId} (easy)`);
+      G.activity('shop', `${shop.name} 방문`);
+      return m;
+    },
+
+    _renderKidShop() {
+      const m = this._shopModal;
+      if (!m || m.closed || !m._kid || !G.state) return;
+      const shop = G.data.shops?.[this._shopId];
+      if (!shop) return;
+      m._coinChip.set(coins());
+      for (const b of m.body.querySelectorAll('.kk-seg-btn')) { const on = b.dataset.tab === this._shopTab; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); }
+      const bubble = m.body.querySelector('.kshop-bubble');
+      if (bubble && m._drawnTab !== this._shopTab && m._drawnTab) bubble.textContent = this._shopTab === 'sell' ? '무엇을 팔까요? 그림을 눌러요.' : '무엇을 살까요? 그림을 눌러요.';
+      const wrap = m.body.querySelector('.kshop-wrap');
+      if (!wrap) return;
+      const key = this._shopTab;
+      const first = m._drawnTab !== key;
+      m._drawnTab = key;
+      const scroll = first ? 0 : m.body.scrollTop;
+      wrap.textContent = '';
+      const grid = G.ui.h('div', { class: 'kk-grid kshop-grid', role: 'list' });
+      let i = 0;
+      if (key === 'buy') {
+        for (const id of shop.sells || []) {
+          const it = itemOf(id);
+          if (!it) continue;
+          const owned = this.count(id);
+          const have = it.type === 'tool' && owned > 0;
+          const poor = !have && coins() < (it.price || 0);
+          const kt = KID_TYPE[it.type] || KID_TYPE.quest;
+          const b = G.ui.h('button', {
+            type: 'button', role: 'listitem', class: `easy-tile kk-tile kshop-tile${first ? '' : ' still'}${have ? ' is-disabled' : ''}${poor ? ' is-poor' : ''}`,
+            'aria-label': `${it.name} 코인 ${it.price}개${have ? ', 이미 있어요' : ''}`,
+          },
+          G.ui.h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, it.icon || '❔'),
+          G.ui.h('span', { class: 'et-label' }, it.name),
+          G.ui.h('span', { class: 'et-sub kshop-price' }, have ? '✅ 있어요' : `🪙 ${fmt(it.price || 0)}`),
+          owned > 0 && !have ? G.ui.h('span', { class: 'et-badge', title: '가방에 있는 개수' }, fmt(owned)) : null);
+          b.style.setProperty('--tile', kt.color);
+          if (first) b.style.setProperty('--i', String(Math.min(i++, 18)));
+          b.__easySpeak = { btn: null, text: have ? `${it.name}. 벌써 있어요.` : `${it.name}. 코인 ${it.price}개예요.` };
+          b.addEventListener('click', () => {
+            if (have) { KK.shake(b); KK.say(`${kjosa(it.name, '은/는')} 벌써 있어요!`, { force: true }); return; }
+            if (coins() < (it.price || 0)) { this._kidPoor(it); return; }
+            this._kidBuy(id);
+          });
+          grid.appendChild(b);
+        }
+        wrap.appendChild(grid);
+      } else {
+        const sellable = this.list().filter((e) => canSellTo(shop, e.item));
+        if (!sellable.length) { wrap.appendChild(KK.empty('🧺', '팔 물건이 없어요.', '밭에서 채소를 거둬 와요!')); return; }
+        for (const e of sellable) {
+          const kt = KID_TYPE[e.item.type] || KID_TYPE.quest;
+          const b = G.ui.h('button', { type: 'button', role: 'listitem', class: `easy-tile kk-tile kshop-tile${first ? '' : ' still'}`, 'aria-label': `${e.item.name} ${e.qty}개, 하나에 코인 ${e.item.sell}개` },
+            G.ui.h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, e.item.icon || '❔'),
+            G.ui.h('span', { class: 'et-label' }, e.item.name),
+            G.ui.h('span', { class: 'et-sub kshop-price sell' }, `+🪙 ${fmt(e.item.sell)}`),
+            G.ui.h('span', { class: 'et-badge' }, fmt(e.qty)));
+          b.style.setProperty('--tile', kt.color);
+          if (first) b.style.setProperty('--i', String(Math.min(i++, 18)));
+          b.__easySpeak = { btn: null, text: `${e.item.name}. 팔면 코인 ${e.item.sell}개를 받아요.` };
+          b.addEventListener('click', () => this._kidSell(e.id));
+          grid.appendChild(b);
+        }
+        wrap.appendChild(grid);
+        wrap.appendChild(G.ui.h('p', { class: 'kshop-note' }, '🌱 씨앗과 🧰 도구는 팔 수 없어요.'));
+      }
+      KK.gridKeys(grid);
+      m.body.scrollTop = scroll;
+    },
+
+    /** one tap + a picture confirm -> buy 1 */
+    async _kidBuy(id) {
+      const it = itemOf(id);
+      if (!it || this._kidAsk) return false;
+      this._kidAsk = true;
+      try {
+        const ok = await G.easy.confirm({ emoji: it.icon || '🛍️', heading: '사기', title: `${kjosa(it.name, '을/를')} 살까요?`, text: `🪙 ${fmt(it.price || 0)}`, say: `${kjosa(it.name, '을/를')} 살까요? 코인 ${it.price}개예요.`, yes: '살래요', no: '안 살래요' });
+        if (!ok || !G.state || !this._shopModal) return false;
+        if (coins() < (it.price || 0)) { this._kidPoor(it); return false; }
+        return this.buy(id, 1);
+      } finally { this._kidAsk = false; }
+    },
+
+    async _kidSell(id) {
+      const it = itemOf(id);
+      const shop = G.data.shops?.[this._shopId];
+      if (!it || !canSellTo(shop, it) || this.count(id) < 1 || this._kidAsk) return false;
+      this._kidAsk = true;
+      try {
+        const ok = await G.easy.confirm({ emoji: it.icon || '💰', heading: '팔기', title: `${it.name} 1개를 팔까요?`, text: `+🪙 ${fmt(it.sell)}`, say: `${it.name} 하나를 팔면 코인 ${it.sell}개를 받아요. 팔까요?`, yes: '팔래요', no: '안 팔래요' });
+        if (!ok || !G.state || !this._shopId) return false;
+        return this.sell(id, 1); // an open item card follows the new count via _queueRefresh
+      } finally { this._kidAsk = false; }
+    },
+
+    /** friendly "not enough coins" path (never a red error) */
+    async _kidPoor(it) {
+      const shop = G.data.shops?.[this._shopId];
+      const need = Math.max(1, (it.price || 0) - coins());
+      const canSell = !!shop && this.list().some((e) => canSellTo(shop, e.item));
+      G.log.info('INVENTORY', `kid shop: ${it.id} needs ${need} more coins`);
+      if (canSell) {
+        const go = await G.easy.confirm({ emoji: '🪙', heading: '앗!', title: '🪙가 조금 모자라요', text: '물건을 팔면 🪙가 생겨요. 팔아 볼까요?', say: '코인이 조금 모자라요. 물건을 팔아 볼까요?', yes: '팔러 가기', no: '괜찮아요' });
+        if (go && this._shopModal) { this._shopTab = 'sell'; this._renderKidShop(); }
+      } else {
+        await G.easy.alert({ emoji: '🪙', heading: '앗!', title: '🪙가 조금 모자라요', text: '밭에서 채소를 거둬서 팔면 🪙가 생겨요!', say: '코인이 조금 모자라요. 밭에서 채소를 거둬서 팔면 코인이 생겨요!' });
+      }
+    },
+
+    /** 쉬운 모드 안내서: five picture steps + 🗺️ 어디 갈까? */
+    _openKidGuide() {
+      const steps = [
+        { emoji: '👋', text: '발효마스터랑 인사해요', color: '#ff8a5c' },
+        { emoji: '💧', text: '밭에 물을 줘요', color: '#4fb3ff' },
+        { emoji: '🏺', text: '반짝이는 장독을 봐요', color: '#ffc93c' },
+        { emoji: '📖', text: '그림 이야기를 봐요', color: '#b48bff' },
+        { emoji: '📝', text: '그림일기를 써요', color: '#55d187' },
+      ];
+      const grid = G.ui.h('ol', { class: 'kk-grid kguide-steps' });
+      steps.forEach((s, i) => {
+        const b = G.ui.h('button', { type: 'button', class: 'easy-tile kk-tile kguide-step' },
+          G.ui.h('span', { class: 'kguide-no', 'aria-hidden': 'true' }, String(i + 1)),
+          G.ui.h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, s.emoji),
+          G.ui.h('span', { class: 'et-label' }, s.text));
+        b.style.setProperty('--tile', s.color);
+        b.style.setProperty('--i', String(i));
+        b.addEventListener('click', () => KK.say(`${i + 1}번. ${s.text}.`, { force: true }));
+        grid.appendChild(G.ui.h('li', null, b));
+      });
+      KK.gridKeys(grid);
+      const where = G.ui.h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes kguide-where', 'data-say': '어디로 갈지 골라요.' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🗺️'), G.ui.h('span', null, '어디 갈까?'));
+      const m = G.ui.modal.open({
+        id: 'guidebook', title: '놀이 안내서', icon: '📘', size: 'lg', className: 'guide-modal kk-guide-modal',
+        say: '이렇게 놀아요. 하나, 발효마스터랑 인사해요. 둘, 밭에 물을 줘요. 셋, 반짝이는 장독을 봐요. 넷, 그림 이야기를 봐요. 다섯, 그림일기를 써요.',
+        body: G.ui.h('div', { class: 'kg' }, G.ui.h('p', { class: 'kguide-lead' }, '이렇게 놀아요!'), grid), actions: [],
+      });
+      where.addEventListener('click', () => { m.close(); this._closeAll(); if (G.ui.triggerAction) G.ui.triggerAction('where', where); else G.easy?.travelMenu?.(); });
+      m.foot.appendChild(where);
+      return m;
+    },
+
     /** 체험관 안내서: zone list + experience order */
     openGuide() {
+      if (easyOn()) return this._openKidGuide();
       const zones = (G.data.zones || []).map((z) => `<li><span class="guide-dot" style="background:${esc(z.color)}"></span><div><b>${esc(z.name)}</b><p>${esc(z.desc)}</p></div></li>`).join('');
       const steps = ['발효마스터와 인사하기', '전통작물 구역에서 물 주고 수확하기', '장독대에서 빛나는 내 장독 확인하기', '안내판·키오스크로 배우고 퀴즈 풀기', '작업일지(J)에 오늘의 체험 기록하기'];
       G.ui.modal.open({
@@ -446,6 +919,7 @@
       const shop = G.data.shops?.[shopId];
       if (!shop) { G.log.warn('INVENTORY', `unknown shop ${shopId}`); return null; }
       if (!G.state) return null;
+      if (easyOn()) return this._openKidShop(shopId, shop);
       this._qty = {};
       const npc = G.data.npcs?.[shop.npc];
       const coinChip = G.ui.h('span', { class: 'chip chip-gold inv-coin', title: '보유 코인' });
@@ -483,6 +957,7 @@
     _renderShop() {
       const m = this._shopModal;
       if (!m || m.closed || !G.state) return;
+      if (m._kid) { this._renderKidShop(); return; }
       const shop = G.data.shops?.[this._shopId];
       if (!shop) return;
       m._coinChip.innerHTML = `${coinIco()}${fmt(coins())}`;
@@ -576,12 +1051,14 @@
       if (room < qty) { G.progToast('가방에 더 넣을 수 없어요.', { type: 'warn' }); return false; }
       const total = qty * (it.price || 0);
       if (!spend(total)) {
-        G.progToast(`코인이 부족해요. (필요 ${fmt(total)} · 보유 ${fmt(coins())})`, { type: 'error' });
+        if (easyOn()) G.progToast('🪙가 조금 모자라요.', { type: 'warn', emoji: '🪙' });
+        else G.progToast(`코인이 부족해요. (필요 ${fmt(total)} · 보유 ${fmt(coins())})`, { type: 'error' });
         return false;
       }
       this.add(itemId, qty, { source: 'shop', silent: true });
       G.sfx('coin');
-      G.progToast(`구매 완료: ${it.name} ×${fmt(qty)} (−${fmt(total)} 코인)`, { emoji: it.icon, type: 'success', sound: false });
+      if (easyOn()) G.progToast(`${kjosa(it.name, '을/를')} 샀어요! 가방에 넣었어요.`, { emoji: it.icon, type: 'success', sound: false, say: `${kjosa(it.name, '을/를')} 샀어요!` });
+      else G.progToast(`구매 완료: ${it.name} ×${fmt(qty)} (−${fmt(total)} 코인)`, { emoji: it.icon, type: 'success', sound: false });
       G.activity('shop', `${it.name} ${fmt(qty)}개 구매`);
       G.log.info('INVENTORY', `buy ${itemId} x${qty} for ${total}`);
       this._queueRefresh();
@@ -599,7 +1076,8 @@
       const total = qty * it.sell;
       earn(total);
       G.sfx('coin');
-      G.progToast(`판매 완료: ${it.name} ×${fmt(qty)} (+${fmt(total)} 코인)`, { emoji: it.icon, type: 'success', sound: false });
+      if (easyOn()) G.progToast(`${kjosa(it.name, '을/를')} 팔았어요! 🪙 +${fmt(total)}`, { emoji: it.icon, type: 'success', sound: false, say: `${kjosa(it.name, '을/를')} 팔고 코인 ${total}개를 받았어요!` });
+      else G.progToast(`판매 완료: ${it.name} ×${fmt(qty)} (+${fmt(total)} 코인)`, { emoji: it.icon, type: 'success', sound: false });
       G.activity('shop', `${it.name} ${fmt(qty)}개 판매`);
       G.log.info('INVENTORY', `sell ${itemId} x${qty} for ${total}`);
       this._queueRefresh();
@@ -614,6 +1092,14 @@
         this._refreshQueued = false;
         try { if (this._invModal && !this._invModal.closed) this._renderInv(); } catch (e) { G.log.error('INVENTORY', e); }
         try { if (this._shopModal && !this._shopModal.closed) this._renderShop(); } catch (e) { G.log.error('INVENTORY', e); }
+        try {
+          const card = G.ui.modal.get('inv-item');
+          if (card && card._itemId && card._count) {
+            const n = this.count(card._itemId);
+            if (n < 1) card.close();
+            else card._count.textContent = `${fmt(n)}개`;
+          }
+        } catch (e) { G.log.error('INVENTORY', e); }
       });
     },
   };

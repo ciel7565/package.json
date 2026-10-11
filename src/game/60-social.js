@@ -10,8 +10,18 @@
 //   setTab('all'|'local'|'system') / toggleChat(force?) / collapse(bool) / focusChat()
 //   block(name) / unblock(name) / isBlocked(name) / report({name, id, text})
 //   filter(text) -> bad words masked with '♡♡'
-// Actions: chat, chat-collapse, emote, gesture, voice · Hotkeys: Enter (chat), T (emotes), G (gestures), 1–8 in a picker.
-// Events: chat:sent {text, channel} · chat:message {msg} · emote:played {emoteId} · gesture:played {gestureId}
+//   maskPII(text) -> phones / e-mails / URLs / SNS ids / addresses / schools -> 🔒 (all modes, in AND out; mirror of
+//        server/lib/ChatFilter.php) · hasPII(text) · the sender gets a mascot tip "이름·전화번호·주소는 비밀이에요!"
+//   쉬운 모드 (CONTRACT §12): openKidChat(anchor) — 💬 phrase picker (👋 인사 · 😊 기분 · 🙌 칭찬 · 🌱 놀이, 24 phrases +
+//        an emoji row; no typing while easy && kidChat; replies are read aloud) · sendKidPhrase(id) · sendKidEmoji(e) ·
+//        kidPhrases() · closeKidChat() · openExpress(anchor) — ONE picture picker for emotes + gestures (duplicates
+//        merged) · express(id) · expressItems(). Normal mode: T / G open one merged popover (tabs 이모지 / 제스처).
+//        Visitors talk in short kid lines; a tapped name opens a picture menu (👋 인사 · 📍 가까이 · 🙈 안 볼래요 ·
+//        🚨 어른에게 = one-tap report + block); unblocking asks the parent gate.
+// Actions: chat, chat-collapse, emote, gesture, voice (08-easy owns kid-chat / express and calls the methods above)
+// Hotkeys: Enter (chat; kid chat → picker), T (emotes), G (gestures) — T/G open 표현하기 in 쉬운 모드, 1–8 in a picker.
+// Events: chat:sent {text, channel} · chat:message {msg} · emote:played {emoteId} · gesture:played {gestureId} ·
+//         kid:phrase {phraseId}
 //
 // Local mode: 8–11 visitors (G.avatar) walk a navigation graph built from the layout (paths, plaza, a coarse
 // walkability grid and destination spots; A* + line-of-sight smoothing + local avoidance), sit on benches,
@@ -101,6 +111,8 @@
       const npcNames = Object.values(G.data.npcs || {}).map((x) => String(x?.name || '').toLowerCase());
       if (RESERVED.includes(low) || npcNames.includes(low)) n = `${n}(체험객)`;
       n = maskBad(n);
+      // a name that carries a phone number / e-mail / address is shown as a neutral name (kid safety §12.4)
+      if (maskPIIInfo(n).hits) n = '체험객';
     }
     return n;
   }
@@ -225,6 +237,102 @@
     for (let i = r.length - 1; i >= 0; i--) out = out.slice(0, r[i][0]) + '♡♡' + out.slice(r[i][1]);
     return out;
   }
+  // ================================================================= personal information (kid safety, CONTRACT §12.4)
+  // Client mirror of server/lib/ChatFilter.php piiPatterns(): same order, same rules (keep both lists in sync).
+  // Every match becomes 🔒 and consecutive locks collapse into one. Deliberately conservative where Korean
+  // grammar collides ("…으로 3번", "새로 30개", "서울 친구", "유치원 가기 싫어" stay untouched).
+  const PII_MARK = '🔒';
+  const PII_CITY = '(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|충청북|충청남|전북|전남|전라북|전라남|경북|경남|경상북|경상남|제주)';
+  const PII_SNS_KO = '(?:카톡|카카오톡|카카오|오픈채팅|오픈톡|인스타(?:그램)?|틱톡|디엠|텔레그램|텔레|라인|디코|디스코드|페메|페북|페이스북|유튜브|트위터|스냅챗|위챗|왓츠앱)';
+  const PII_SNS_EN = '(?:insta(?:gram)?|tiktok|dm|telegram|line|discord|facebook|fb|youtube|twitter|snapchat|wechat|whatsapp|kakao(?:talk)?)';
+  const PII_NOT_COUNT = '(?![0-9개번명층살점분초시원마리등위레렙일월년주판칸장권%])'; // "새로 30개", "2층으로 3번" are counts
+  const PII_SEP = '[\\s.\\-_\\/~*·–—ㅡᅳ()\\[\\]]'; // separators between digit groups (ᅳ = ㅡ after NFKC)
+  const PII_KD = '[공영일이삼사오육칠팔구]';           // Korean digit words
+  const PII_LOT = `(?:\\s*[0-9]{1,5}(?:\\s*-\\s*[0-9]{1,5})?${PII_NOT_COUNT}(?:\\s*번지)?)?`; // "… 역삼동 123-4"
+  const PII_TLD = '(?:com|net|org|kr|io|me|gg|tv|ly|app|xyz|info|biz|link|site|shop|jp|cn|us|co|to|be|fm|so|ai)';
+  const piiMixed = (m) => /[0-9]/.test(m) && /[공영일이삼사오육칠팔구]/.test(m);
+  /** [name, source, flags, predicate?] — same order and rules as ChatFilter::piiPatterns() (tests/pii-vectors.json) */
+  const PII_SRC = [
+    ['email', '[\\p{L}\\p{N}._%+\\-]+\\s*(?:@|＠|\\(at\\)|\\[at\\]|골뱅이)\\s*[\\p{L}\\p{N}\\-]+(?:\\s*(?:\\.|。|．|\\(dot\\)|\\[dot\\]|\\(\\.\\)|\\[\\.\\]|닷|쩜)\\s*(?:[a-z]{2,}|컴|넷|케이알))+', 'giu'],
+    ['emailWords', '[\\p{L}\\p{N}._%+\\-]+\\s+at\\s+[\\p{L}\\p{N}\\-]+(?:\\s+dot\\s+[a-z]{2,})+', 'giu'],
+    ['url', `(?:https?:\\/\\/|hxxps?:\\/\\/|www\\.)[^\\s<>"]+|(?<![\\p{L}\\p{N}@.\\-])[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?(?:\\.[a-z0-9\\-]{1,63})*\\.${PII_TLD}(?![a-z0-9])(?:\\/[^\\s<>"]*)?`, 'giu'],
+    ['urlDot', `(?<![\\p{L}\\p{N}@.\\-])[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?\\s*(?:\\[\\s*\\.\\s*\\]|\\(\\s*\\.\\s*\\)|\\{\\s*\\.\\s*\\}|\\[dot\\]|\\(dot\\)|\\s\\.\\s|\\s+dot\\s+|\\s*닷\\s*|\\s*쩜\\s*)${PII_TLD}(?![a-z0-9])`, 'giu'],
+    ['mailHost', '(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud)\\s*(?:\\.|닷|쩜|점)\\s*(?:com|net|co\\s*\\.\\s*kr)(?![a-z])', 'giu'],
+    ['handleKo', `${PII_SNS_KO}\\s*(?:아이디|아디|id|계정|주소|닉네임|닉)?\\s*(?:은|는|이|:|：)?\\s*@?[a-z0-9][a-z0-9._#\\-]{2,}`, 'giu'],
+    ['handleEn', `(?<![a-z0-9])${PII_SNS_EN}\\s*(?:id\\s*[:：]?|[:：]|@)\\s*@?[a-z0-9][a-z0-9._#\\-]{2,}`, 'giu'],
+    ['phone', `(?<![0-9])(?:\\+\\s?82${PII_SEP}{0,3}0?|0)1[016789]${PII_SEP}{0,3}[0-9]{3,4}${PII_SEP}{0,3}[0-9]{4}(?![0-9])`, 'gu'],
+    ['landline', `(?<![0-9])0(?:2|[3-6][1-5]|70|50[0-9]?)${PII_SEP}{0,3}[0-9]{3,4}${PII_SEP}{0,3}[0-9]{4}(?![0-9])`, 'gu'],
+    ['digits', `(?<![0-9])(?:[0-9]${PII_SEP}{0,3}){8,}[0-9](?![0-9])`, 'gu'],
+    ['localNumber', '(?<![0-9])[0-9]{3,4}[.\\-–—ㅡᅳ]+[0-9]{4}(?![0-9])', 'gu'],
+    ['koreanDigits', `(?:${PII_KD}${PII_SEP}{0,2}){7,}${PII_KD}|공일공`, 'gu'],
+    ['mixedDigits', `(?:[0-9]|${PII_KD})(?:${PII_SEP}{0,2}(?:[0-9]|${PII_KD})){7,}`, 'gu', piiMixed],
+    ['cityDistrict', `${PII_CITY}(?:(?:특별시|광역시|특별자치시|특별자치도|시|도)\\s*[가-힣]{1,5}|\\s*[가-힣]{2,5})(?:시|군|구)(?![가-힣])(?:\\s*[가-힣]{1,5}(?:구|읍|면|동|리)(?![가-힣]))*${PII_LOT}`, 'gu'],
+    ['districtDong', `[가-힣]{2,5}(?:구|군)\\s*[가-힣]{1,6}(?:동|읍|면|리)(?![가-힣])${PII_LOT}`, 'gu'],
+    ['road', `[가-힣0-9]{1,10}(?<![으새서별주바따실])(?:로|길)\\s*(?:[0-9]{1,4}\\s*번길\\s*)?[0-9]{1,4}(?:\\s*-\\s*[0-9]{1,4})?${PII_NOT_COUNT}(?:\\s*번지)?`, 'gu'],
+    ['lot', '[가-힣]{1,8}(?:동|리|가)\\s*[0-9]{1,5}(?:\\s*-\\s*[0-9]{1,5})?\\s*번지|[가-힣]{1,8}(?:동|리)\\s*[0-9]{1,5}\\s*-\\s*[0-9]{1,5}', 'gu'],
+    ['apartment', '[0-9]{1,4}\\s*동\\s*[0-9]{1,4}\\s*호|(?<![0-9])[0-9]{3,4}\\s*호(?![선기실점])|[가-힣a-z0-9]{1,12}(?:아파트|빌라|오피스텔|맨션)(?![가-힣])', 'giu'],
+    ['school', '[가-힣]{1,10}(?:초등학교|초교|중학교|고등학교|유치원|어린이집)|[가-힣]{2,10}\\s(?:초등학교|중학교|고등학교)|[0-9]\\s*학년\\s*[0-9]{1,2}\\s*반', 'gu'],
+  ];
+  let PII_RE = null;
+  /** compiled once; an engine without look-behind support drops just the look-behind (stricter, never looser) */
+  function piiRegexes() {
+    if (PII_RE) return PII_RE;
+    PII_RE = [];
+    for (const [name, src, flags, pred] of PII_SRC) {
+      let re = null;
+      try { re = new RegExp(src, flags); } catch (e) {
+        try { re = new RegExp(src.replace(/\(\?<![^)]*\)/g, ''), flags); } catch (e2) { re = null; }
+      }
+      if (re) PII_RE.push([name, re, pred || null]); else G.log.warn('SOCIAL', `PII pattern ${name} unsupported`);
+    }
+    return PII_RE;
+  }
+  const PII_COLLAPSE = /🔒(?:[\s,.\-·_/~*ㅡᅳ–—()[\]]*🔒)+/gu;
+  let RX_ND = null;
+  try { RX_ND = /\p{Nd}/u; } catch (e) { RX_ND = null; }
+  /** compatibility fold (mirror of ChatFilter::fold): NFKC (０１０, ＠, 𝟎…), keycaps (0️⃣ → 0), any digit script → ASCII */
+  function piiFold(text) {
+    let t = String(text);
+    // NFKC everything except Hangul compatibility jamo (ㅋㅋ, ㅠㅠ, ㅡ stay as typed when the folded text is shown)
+    try { t = t.replace(/[^\u3130-\u318F]+/gu, (m) => m.normalize('NFKC')); } catch (e) { /* very old engine */ }
+    t = t.replace(/[︎️⃣]/g, '');
+    if (RX_ND) {
+      t = t.replace(/\p{Nd}/gu, (d) => {
+        if (d >= '0' && d <= '9') return d;
+        const cp = d.codePointAt(0);
+        let z = cp;
+        // Unicode encodes every decimal digit set as 10 contiguous code points 0..9
+        while (cp - z < 9 && z > 0 && RX_ND.test(String.fromCodePoint(z - 1))) z--;
+        return String((cp - z) % 10);
+      });
+    }
+    return t;
+  }
+  function piiPass(text) {
+    let out = text, hits = 0;
+    for (const [, re, pred] of piiRegexes()) {
+      re.lastIndex = 0;
+      out = out.replace(re, (m) => { if (pred && !pred(m)) return m; hits++; return PII_MARK; });
+    }
+    return { out, hits };
+  }
+  /** -> {text, hits}: personal information replaced with 🔒 (pass 1 as written, pass 2 on the folded text) */
+  function maskPIIInfo(text) {
+    let out = String(text ?? '');
+    let hits = 0;
+    if (!out) return { text: out, hits };
+    if (out.length > 4000) out = out.slice(0, 4000);
+    const p1 = piiPass(out);
+    out = p1.out; hits = p1.hits;
+    const folded = piiFold(out);
+    if (folded !== out) {
+      const p2 = piiPass(folded);
+      if (p2.hits > 0) { out = p2.out; hits += p2.hits; }
+    }
+    if (hits) out = out.replace(PII_COLLAPSE, PII_MARK);
+    return { text: out, hits };
+  }
+
   /** repeat-spam key (mirrors the server: case-folded, no spaces/punctuation, repeated letters squashed) */
   function spamKey(text) {
     let k = skeleton(text).s.replace(/\|/g, '').replace(/(.)\1{2,}/g, '$1$1');
@@ -252,6 +360,77 @@
     if (final) t = t.replace(EMOTICON_RE, (m, pre, emo) => pre + (EMOTICON_MAP[emo] || emo));
     return t;
   }
+
+  // ================================================================= 쉬운 모드 content (CONTRACT §12): phrase picker, merged express picker
+  /** kid chat = preset phrases only (no typing): 4 picture categories x 6 short, warm 해요체 lines */
+  const KID_CATS = [
+    { id: 'hello', emoji: '👋', label: '인사', color: '#4fb3ff', say: '인사말이에요', reply: 'greet' },
+    { id: 'feel', emoji: '😊', label: '기분', color: '#ffc93c', say: '내 기분이에요', reply: 'feel' },
+    { id: 'praise', emoji: '🙌', label: '칭찬', color: '#ff7eb6', say: '칭찬하는 말이에요', reply: 'praise' },
+    { id: 'play', emoji: '🌱', label: '놀이', color: '#55d187', say: '같이 노는 말이에요', reply: 'play' },
+  ];
+  const KID_PHRASES = [
+    { id: 'hi', cat: 'hello', emoji: '👋', text: '안녕하세요!' },
+    { id: 'nice', cat: 'hello', emoji: '😊', text: '반가워요!' },
+    { id: 'friend', cat: 'hello', emoji: '🤝', text: '우리 친구 해요!' },
+    { id: 'welcome', cat: 'hello', emoji: '🙌', text: '어서 와요!' },
+    { id: 'thanks', cat: 'hello', emoji: '🙏', text: '고마워요!' },
+    { id: 'bye', cat: 'hello', emoji: '🙋', text: '잘 가요! 또 만나요!' },
+    { id: 'happy', cat: 'feel', emoji: '😄', text: '정말 신나요!' },
+    { id: 'like', cat: 'feel', emoji: '🥰', text: '여기가 좋아요!' },
+    { id: 'fun', cat: 'feel', emoji: '🤩', text: '너무 재밌어요!' },
+    { id: 'wow', cat: 'feel', emoji: '😮', text: '우와, 멋져요!' },
+    { id: 'yum', cat: 'feel', emoji: '😋', text: '맛있겠다!' },
+    { id: 'sleepy', cat: 'feel', emoji: '😴', text: '조금 졸려요' },
+    { id: 'best', cat: 'praise', emoji: '👍', text: '최고예요!' },
+    { id: 'good', cat: 'praise', emoji: '👏', text: '잘했어요!' },
+    { id: 'pretty', cat: 'praise', emoji: '✨', text: '정말 예뻐요!' },
+    { id: 'cool', cat: 'praise', emoji: '😎', text: '멋있어요!' },
+    { id: 'cheer', cat: 'praise', emoji: '💪', text: '힘내요!' },
+    { id: 'great', cat: 'praise', emoji: '🌟', text: '대단해요!' },
+    { id: 'together', cat: 'play', emoji: '🤗', text: '같이 놀아요!' },
+    { id: 'follow', cat: 'play', emoji: '🏃', text: '나를 따라와요!' },
+    { id: 'farm', cat: 'play', emoji: '🌱', text: '같이 밭에 가요!' },
+    { id: 'jar', cat: 'play', emoji: '🏺', text: '장독 보러 가요!' },
+    { id: 'photo', cat: 'play', emoji: '📸', text: '같이 사진 찍어요!' },
+    { id: 'dance', cat: 'play', emoji: '💃', text: '같이 춤춰요!' },
+  ];
+  const KID_EMOJI = ['😊', '😆', '🥰', '👍', '👏', '👋', '🎉', '❤️'];
+  const KID_EMOJI_SET = new Set(KID_EMOJI);
+  /** ONE picture picker for emotes + gestures; duplicates merged (👋 인사 = EMO_HELLO + GES_WAVE, 🙌 만세 = EMO_WELCOME + GES_CHEER) */
+  const EXPRESS = [
+    { id: 'smile', emoji: '😊', label: '웃어요', say: '방긋 웃어요', emote: 'EMO_SMILE' },
+    { id: 'laugh', emoji: '😆', label: '하하', say: '하하 웃어요', emote: 'EMO_LAUGH' },
+    { id: 'hello', emoji: '👋', label: '안녕', say: '손을 흔들어 인사해요', emote: 'EMO_HELLO', gesture: 'GES_WAVE' },
+    { id: 'love', emoji: '❤️', label: '좋아요', say: '좋아요 하트', emote: 'EMO_LIKE' },
+    { id: 'clap', emoji: '👏', label: '박수', say: '짝짝짝 박수', emote: 'EMO_CLAP' },
+    { id: 'thumbs', emoji: '👍', label: '최고', say: '엄지 척 최고', emote: 'EMO_THUMBS' },
+    { id: 'wow', emoji: '😮', label: '깜짝', say: '깜짝 놀라요', emote: 'EMO_WOW' },
+    { id: 'hooray', emoji: '🙌', label: '만세', say: '만세를 해요', emote: 'EMO_WELCOME', gesture: 'GES_CHEER' },
+    { id: 'bow', emoji: '🙇', label: '꾸벅', say: '꾸벅 절해요', gesture: 'GES_BOW' },
+    { id: 'dance', emoji: '💃', label: '춤추기', say: '신나게 춤춰요', gesture: 'GES_DANCE' },
+    { id: 'sit', emoji: '🪑', label: '앉기', say: '털썩 앉아요', gesture: 'GES_SIT' },
+    { id: 'vsign', emoji: '✌️', label: '브이', say: '브이 포즈', gesture: 'GES_PHOTO' },
+    { id: 'think', emoji: '🤔', label: '음…', say: '음 생각해요', gesture: 'GES_THINK' },
+    { id: 'point', emoji: '👉', label: '저기!', say: '저기를 가리켜요', gesture: 'GES_POINT' },
+  ];
+  /** what simulated visitors say while 쉬운 모드 is on: short, warm, picture words */
+  const KID_TALK = {
+    lines: ['안녕하세요! 😊', '여기 정말 예뻐요 🌸', '장독이 엄청 많아요! 🏺', '콩이 쑥쑥 자라요 🌱', '물 주기 재밌어요 💧', '나비를 봤어요! 🦋',
+      '같이 사진 찍을래요? 📸', '오늘 날씨 좋아요 ☀️', '김치 냠냠 😋', '옹이 귀여워요 💕', '정자에서 쉬어요 🌿', '춤추고 싶어요 💃'],
+    greet: ['안녕하세요! 반가워요 😊', '안녕! 👋', '어서 와요~ 😄', '반가워요! 같이 놀아요 🙌'],
+    thanks: ['천만에요! 😊', '헤헤, 고마워요 💕'],
+    feel: ['나도 신나요! 😆', '맞아요, 여기 정말 좋아요 🥰', '우와, 진짜요? 😮'],
+    praise: ['고마워요! 😊', '헤헤, 부끄러워요 ☺️', '너도 최고예요! 👍'],
+    play: ['좋아요! 같이 가요 🙌', '와, 재밌겠다! 😄', '나도 갈래요! 🏃'],
+    question: ['음… 나도 궁금해요 🤔', '반짝이는 별을 따라가 봐요 ⭐'],
+    mention: ['네! 불렀어요? 😊', '저요? 반가워요! 👋'],
+    agree: ['맞아요! 😊', '나도요! 🙌', '좋아요~ 😄'],
+    congrats: ['우와, 축하해요! 🎉', '최고예요! 👏'],
+    chat: ['안녕하세요! 😊'],
+  };
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
+  const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
 
   function nameHue(name) { return U.hashInt(String(name)) % 360; }
   function nameColor(name) { return `hsl(${nameHue(name)} 78% 74%)`; }
@@ -354,7 +533,10 @@
     // ------------------------------------------------------------ lifecycle
     init() {
       this._buildFilter();
+      piiRegexes();
       this._initChat();
+      this._wasEasy = kidOn();
+      this._syncKidChat();
       this._initActions();
       this._initMyBubble();
       this._initVisitors();
@@ -392,10 +574,14 @@
       }
       this._applyChatVisibility();
       this._updateGuestUi();
+      this._syncKidChat();
       this._updateOnline();
     },
 
     onLogout() {
+      this.closeKidChat();
+      this._kidListenUntil = 0;
+      this._kidCat = null;
       this._loggedOut = true;
       this._stopServer();
       this._clearRemotes();
@@ -469,6 +655,15 @@
       panel.insertBefore(C.typing, form);
       panel.insertBefore(C.quick, form);
       panel.insertBefore(C.suggest, form);
+      // 쉬운 모드 (kid chat): no text box — one big "말하기" button opens the phrase picker, ✖ hides the log
+      C.kidTalk = h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes ck-talk', 'data-say': '말하기. 친구에게 할 말을 골라요.' },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, '💬'), h('span', null, '말하기'));
+      C.kidHide = h('button', { type: 'button', class: 'easy-big-btn easy-btn-no ck-hide', 'aria-label': '이야기 창 닫기', 'data-say': '이야기 창을 닫아요.' },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✖'));
+      C.kidRow = h('div', { class: 'chat-kid-row easy-only' }, C.kidTalk, C.kidHide);
+      C.kidTalk.addEventListener('click', () => this.openKidChat(C.kidTalk));
+      C.kidHide.addEventListener('click', () => this.toggleChat(false));
+      panel.appendChild(C.kidRow);
 
       for (const b of C.tabs) {
         b.setAttribute('type', 'button');
@@ -489,6 +684,7 @@
       });
       form.addEventListener('submit', (e) => {
         e.preventDefault();
+        if (this._kidChatOn()) { input.value = ''; input.blur(); this.openKidChat(); return; } // no free text for children
         const v = input.value;
         if (!v.trim()) { input.blur(); return; }
         const ch = this.tab === 'local' ? 'local' : 'all';
@@ -649,22 +845,26 @@
     },
 
     _smallScreen() { return !!window.matchMedia?.('(max-width: 560px)').matches; },
+    /** 쉬운 모드 shows the chat log only with body.show-chat (the panel is a 💬 button otherwise) */
+    _easyLayout() { return document.body.classList.contains('easy'); },
     _chatShown() {
       const C = this._chat;
       if (!C) return false;
       if (C.panel.classList.contains('chat-off') || C.panel.classList.contains('collapsed')) return false;
-      if (this._smallScreen()) return document.body.classList.contains('show-chat');
+      if (this._smallScreen() || this._easyLayout()) return document.body.classList.contains('show-chat');
       return true;
     },
-    /** chat button: show/hide the chat window (body.show-chat on small screens) */
+    /** chat button: show/hide the chat window (body.show-chat on small screens and in 쉬운 모드) */
     toggleChat(force) {
       const C = this._chat;
       if (!C) return;
-      if (this._smallScreen()) {
+      if (this._smallScreen() || this._easyLayout()) {
         const on = force ?? !document.body.classList.contains('show-chat');
         document.body.classList.toggle('show-chat', on);
-        if (on) { C.panel.classList.remove('chat-off'); this.collapse(false); this._markRead(); }
+        if (on) { C.panel.classList.remove('chat-off'); this.collapse(false, { silent: this._easyLayout() }); this._markRead(); this._scrollBottom(true); }
+        else if (C.input === document.activeElement) C.input.blur();
         G.ui.setActive('chat', on);
+        G.ui.setActive('kid-chat', on);
         return;
       }
       const shown = this._chatShown();
@@ -689,16 +889,17 @@
     _showPanel() {
       const C = this._chat;
       if (!C) return;
-      if (this._smallScreen()) { document.body.classList.add('show-chat'); G.ui.setActive('chat', true); }
+      if (this._smallScreen() || this._easyLayout()) { document.body.classList.add('show-chat'); G.ui.setActive('chat', true); G.ui.setActive('kid-chat', true); }
       C.panel.classList.remove('chat-off');
       if (G.settings.chatVisible === false) G.setSetting('chatVisible', true);
-      if (C.panel.classList.contains('collapsed')) this.collapse(false);
+      if (C.panel.classList.contains('collapsed')) this.collapse(false, { silent: this._easyLayout() });
     },
-    /** Enter: open the chat input */
+    /** Enter: open the chat input (kid chat: the phrase picker — children never type) */
     focusChat() {
       const C = this._chat;
       if (!C || !G.state) return false;
       if (G.sys.photo?.active) return false;
+      if (this._kidChatOn()) { if (G.ui.isBlocking()) return false; this.openKidChat(); return true; }
       if (this._guestReadOnly()) { G.ui.toast('게스트는 채팅을 읽을 수만 있어요. 로그인하면 대화에 참여할 수 있어요.', { type: 'info', sound: false }); return true; }
       this._showPanel();
       C.input.focus({ preventScroll: true });
@@ -735,13 +936,14 @@
     },
 
     _seedChat() {
-      this.system('전통발효체험관 메타버스에 오신 것을 환영합니다!');
-      this.system('Enter 채팅 · T 이모지 · G 제스처 — 서로 배려하는 대화를 나눠 주세요. 욕설은 자동으로 가려져요.');
-      if (this._mode === 'server') this.system(this._guestReadOnly() ? '게스트로 접속했어요. 채팅을 읽을 수는 있지만 메시지를 보내려면 로그인이 필요해요.' : '서버에 연결되었어요. 다른 체험객과 실시간으로 대화할 수 있어요.');
+      const kid = kidOn();
+      this.system(kid ? '🌿 전통발효체험관에 온 걸 환영해요!' : '전통발효체험관 메타버스에 오신 것을 환영합니다!');
+      this.system(kid ? '💬 버튼을 누르면 친구에게 인사할 수 있어요. 이름·전화번호·주소는 비밀이에요 🤫' : 'Enter 채팅 · T 이모지 · G 제스처 — 서로 배려하는 대화를 나눠 주세요. 욕설과 개인정보는 자동으로 가려져요.');
+      if (this._mode === 'server') this.system(this._guestReadOnly() ? (kid ? '로그인하면 친구와 이야기할 수 있어요.' : '게스트로 접속했어요. 채팅을 읽을 수는 있지만 메시지를 보내려면 로그인이 필요해요.') : (kid ? '친구들과 함께 놀아요!' : '서버에 연결되었어요. 다른 체험객과 실시간으로 대화할 수 있어요.'));
       const nick = G.state?.profile?.nickname || '체험객';
       const npc = (id, fallback) => G.data.npcs?.[id]?.name || fallback;
-      this._later(1600, () => { if (G.state) this.npcSay(npc('NPC001', '발효마스터'), `${J.nim(nick)}, 3D 체험관에 오신 것을 환영합니다!`); });
-      this._later(3400, () => { if (G.state) this.npcSay(npc('NPC002', '산골농부'), '항아리와 금빛 표식을 클릭해 보세요.'); });
+      this._later(1600, () => { if (G.state) this.npcSay(npc('NPC001', '발효마스터'), kidOn() ? `${nick}, 반가워요! 같이 놀아요!` : `${J.nim(nick)}, 3D 체험관에 오신 것을 환영합니다!`); });
+      this._later(3400, () => { if (G.state) this.npcSay(npc('NPC002', '산골농부'), kidOn() ? '반짝이는 별을 따라가 봐요! ⭐' : '항아리와 금빛 표식을 클릭해 보세요.'); });
     },
 
     /** add a message to the log. m: {name, text, channel, kind, self, near, uid, sid, history} */
@@ -759,6 +961,8 @@
         uid: m.uid != null ? String(m.uid).slice(0, 40) : null,
         mention: false,
       };
+      // personal information is hidden in every message, whoever sent it and in every mode (§12.4)
+      if (kind !== 'system' && msg.text) msg.text = maskPIIInfo(msg.text).text;
       if (!msg.text) return null;
       // @mention of my nickname (or the plain nickname) in someone else's message
       const nick = G.state?.profile?.nickname;
@@ -770,6 +974,7 @@
       G.bus.emit('chat:message', { msg: pub });
       if (!msg.self && !m.history) {
         const visibleHere = !(this._isBlocked(msg.name) && msg.kind !== 'system' && msg.kind !== 'npc') && !(msg.channel === 'local' && !msg.near);
+        if (visibleHere) this._kidHear(msg);
         if (visibleHere && msg.mention) {
           G.bus.emit('chat:mention', { msg: pub });
           const now = performance.now();
@@ -880,31 +1085,41 @@
       this.setTab(this.tab, { silent: true });
     },
 
-    sendChat(text, channel = 'all') {
+    /** opts: {reply: 'greet'|'feel'|'praise'|'play'|'emoji'} how simulated visitors should answer (kid phrases) */
+    sendChat(text, channel = 'all', opts = {}) {
       if (!G.state) return false;
       let t = cleanText(applyShortcuts(cleanText(text, MAX_LEN * 2), true), MAX_LEN);
       if (!t) return false;
-      if (this._guestReadOnly()) { G.ui.toast('게스트는 채팅을 보낼 수 없어요. 로그인 후 이용해 주세요.', { type: 'warn' }); return false; }
+      const kid = kidOn();
+      const warn = (adult, child, emoji) => { G.ui.toast(kid ? child : adult, { type: 'warn', emoji, say: kid ? child : undefined }); };
+      if (this._guestReadOnly()) { warn('게스트는 채팅을 보낼 수 없어요. 로그인 후 이용해 주세요.', '로그인하면 친구와 이야기할 수 있어요.', '🔒'); return false; }
+      // personal information never leaves the device (the server masks again): 🔒 + a friendly tip from 옹이
+      const pii = maskPIIInfo(t);
+      if (pii.hits) {
+        t = pii.text;
+        this._piiTip();
+        if (!t.replace(/🔒|[\s\p{P}\p{S}]/gu, '')) { G.log.info('UI', 'chat: personal information only — not sent'); return false; }
+      }
       const now = performance.now();
       // spam guard: 1.2 s between messages, ≤ 5 messages per 10 s, no repeating the same text within 20 s
-      if (now < this._muteUntil) { G.ui.toast(`잠깐 쉬어 가요! ${Math.ceil((this._muteUntil - now) / 1000)}초 뒤에 다시 보낼 수 있어요.`, { type: 'warn', emoji: '⏳' }); return false; }
-      if (now - this._lastSent < RATE_MS) { G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn', emoji: '⏳' }); return false; }
+      if (now < this._muteUntil) { warn(`잠깐 쉬어 가요! ${Math.ceil((this._muteUntil - now) / 1000)}초 뒤에 다시 보낼 수 있어요.`, '잠깐 쉬었다가 다시 말해요!', '⏳'); return false; }
+      if (now - this._lastSent < RATE_MS) { warn('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', '천천히 말해요!', '⏳'); return false; }
       while (this._sendLog.length && now - this._sendLog[0] > BURST_MS) this._sendLog.shift();
       if (this._sendLog.length >= BURST_N) {
         this._muteUntil = now + BURST_COOL;
-        G.ui.toast('메시지를 너무 많이 보냈어요. 8초 뒤에 다시 보낼 수 있어요.', { type: 'warn', emoji: '⏳' });
+        warn('메시지를 너무 많이 보냈어요. 8초 뒤에 다시 보낼 수 있어요.', '말을 많이 했어요. 조금 쉬어요!', '⏳');
         return false;
       }
       const key = spamKey(t);
       while (this._recentKeys.length && (now - this._recentKeys[0].at > DUP_MS || this._recentKeys.length > 3)) this._recentKeys.shift();
-      if (this._recentKeys.some((r) => r.key === key)) { G.ui.toast('같은 메시지를 연달아 보낼 수 없어요. 조금 뒤에 다시 보내 주세요.', { type: 'warn', emoji: '🔁' }); return false; }
+      if (this._recentKeys.some((r) => r.key === key)) { warn('같은 메시지를 연달아 보낼 수 없어요. 조금 뒤에 다시 보내 주세요.', '방금 한 말이에요. 다른 말을 골라 봐요!', '🔁'); return false; }
       this._recentKeys.push({ key, at: now });
       this._sendLog.push(now);
       this._lastSent = now;
       this._lastText = t;
       const ch = channel === 'local' ? 'local' : 'all';
       const masked = this.filter(t);
-      if (masked !== t) G.ui.toast('고운 말을 써 주세요. 일부 표현이 ♡♡로 가려졌어요.', { type: 'info', emoji: '💚', sound: false, duration: 2200 });
+      if (masked !== t) G.ui.toast(kid ? '고운 말을 써요! 💚' : '고운 말을 써 주세요. 일부 표현이 ♡♡로 가려졌어요.', { type: 'info', emoji: '💚', sound: false, duration: 2200 });
       const nick = G.state.profile?.nickname || '나';
       const msg = this._push({ name: nick, text: masked, channel: ch, kind: 'me', self: true, near: true, uid: G.save?.profile?.id ?? null });
       this.say(masked);
@@ -912,9 +1127,24 @@
       G.bus.emit('chat:sent', { text: masked, channel: ch });
       G.log.info('UI', `chat sent (${ch}, ${cpLen(masked)}자)`); // never log message contents
       if (this._mode === 'server') this._serverSend(masked, ch, msg);
-      else this._visitorsHear(masked, ch);
+      else this._visitorsHear(masked, ch, opts.reply || null);
       return true;
     },
+    /** 옹이's friendly reminder after personal information was masked (at most every 12 s) */
+    _piiTip() {
+      const now = performance.now();
+      if (now - (this._piiTipAt || -1e9) < 12000) return;
+      this._piiTipAt = now;
+      // "자물쇠" keeps the sentence whole when the voice guide drops the emoji
+      const line = '이름·전화번호·주소는 비밀이에요! 🤫 자물쇠 🔒로 가렸어요.';
+      let shown = false;
+      try { shown = !!G.mascot?.say?.(line, { mood: 'think', priority: true, force: true, duration: 5200, source: 'pii' }); } catch (e) { shown = false; }
+      if (!shown) G.ui.toast(line, { type: 'info', emoji: '🤫', say: kidOn() ? line : undefined });
+      G.log.info('UI', 'chat: personal information masked');
+    },
+    /** personal information -> 🔒 (phones, e-mails, URLs, SNS ids, addresses, schools); mirror of ChatFilter::maskPII */
+    maskPII(text) { try { return maskPIIInfo(text).text; } catch (e) { G.log.warn('SOCIAL', 'maskPII failed', e); return String(text ?? ''); } },
+    hasPII(text) { try { return maskPIIInfo(text).hits > 0; } catch (e) { return false; } },
 
     // ================================================================ bubbles
     _bubbleEl(cls) { return G.ui.h('div', { class: `bubble soc-bubble ${cls || ''}`, hidden: true, role: 'status' }); },
@@ -964,12 +1194,12 @@
       const IN = G.input;
       if (!IN?.onKey) return;
       for (const code of ['Enter', 'NumpadEnter']) IN.onKey(code, () => this.focusChat());
-      IN.onKey('KeyT', () => { if (!G.state || G.sys.photo?.active) return false; this.openEmotes(); return true; });
-      IN.onKey('KeyG', () => { if (!G.state || G.sys.photo?.active) return false; this.openGestures(); return true; });
+      IN.onKey('KeyT', () => { if (!G.state || G.sys.photo?.active) return false; if (kidOn()) this.openExpress(); else this.openEmotes(); return true; });
+      IN.onKey('KeyG', () => { if (!G.state || G.sys.photo?.active) return false; if (kidOn()) this.openExpress(); else this.openGestures(); return true; });
       for (let i = 1; i <= 8; i++) {
         const sel = () => {
           const p = this._picker;
-          if (!p || p.pop?.closed) return false;
+          if (!p || p.pop?.closed || (p.kind !== 'emote' && p.kind !== 'gesture')) return false;
           const list = p.kind === 'emote' ? G.data.emotes : G.data.gestures;
           const it = list?.[i - 1];
           if (!it) return false;
@@ -988,38 +1218,118 @@
     },
     _closePicker() { if (this._picker) { try { this._picker.pop?.close(); } catch (e) { /* closed */ } this._picker = null; } },
 
+    /** ONE picker for emotes + gestures (normal mode): T opens the 이모지 tab, G the 제스처 tab, the tabs switch in place */
     _openPicker(kind, anchor) {
       if (!G.state) return;
-      if (this._picker && this._picker.kind === kind && !this._picker.pop?.closed) { this._closePicker(); return; }
+      const cur = this._picker;
+      if (cur && !cur.pop?.closed) {
+        if (cur.kind === kind) { this._closePicker(); return; }
+        if (cur.render) { cur.render(kind); G.sfx('click'); return; }
+      }
       anchor = anchor && anchor.isConnected ? anchor : this._anchorFor(kind);
       const h = G.ui.h;
-      const list = (kind === 'emote' ? G.data.emotes : G.data.gestures) || [];
-      const current = G.sys.player?.rig?.currentAction || null;
       const grid = h('div', { class: 'pick-grid' });
-      list.forEach((it, i) => {
-        const loopOn = kind === 'gesture' && it.loop && current === it.anim;
-        const b = h('button', { class: `pick${loopOn ? ' active' : ''}`, type: 'button', dataset: { id: it.id }, title: `${it.name} (${i + 1})` },
-          h('span', { class: 'emoji' }, it.icon), h('span', { class: 'pk-name' }, it.name), h('kbd', { class: 'pk-key' }, String(i + 1)),
-          kind === 'gesture' && it.loop ? h('span', { class: 'pk-loop', title: '반복 동작' }, loopOn ? '중지' : '반복') : null);
-        b.style.setProperty('--i', String(i));
-        grid.appendChild(b);
-      });
+      const title = h('h4');
+      const key = h('kbd');
+      const tip = h('p', { class: 'soc-pk-tip' });
+      const tabs = h('div', { class: 'soc-pk-tabs', role: 'tablist', 'aria-label': '표현 종류' });
+      const tabBtn = {};
+      for (const [k, emo, label] of [['emote', '😊', '이모지'], ['gesture', '🙌', '제스처']]) {
+        const b = h('button', { type: 'button', role: 'tab', class: 'soc-pk-tab', dataset: { k } }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emo), label);
+        b.addEventListener('click', () => { if (picker.kind !== k) { render(k); G.sfx('click'); } });
+        tabBtn[k] = b;
+        tabs.appendChild(b);
+      }
+      const box = h('div', { class: 'soc-picker soc-picker-express' }, h('div', { class: 'soc-pk-head' }, title, tabs, key), grid, tip);
+      const picker = { kind, pop: null, render: null };
+      const render = (k) => {
+        picker.kind = k;
+        box.classList.toggle('soc-picker-emote', k === 'emote');
+        box.classList.toggle('soc-picker-gesture', k === 'gesture');
+        title.textContent = k === 'emote' ? '이모지 보내기' : '제스처';
+        key.textContent = k === 'emote' ? 'T' : 'G';
+        tip.textContent = k === 'emote' ? '숫자 키 1–8로도 바로 보낼 수 있어요. 가까운 체험객이 반응할지도 몰라요!' : '반복 동작은 다시 누르거나 움직이면 멈춰요.';
+        for (const [kk, b] of Object.entries(tabBtn)) { const on = kk === k; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); }
+        const list = (k === 'emote' ? G.data.emotes : G.data.gestures) || [];
+        const current = G.sys.player?.rig?.currentAction || null;
+        grid.replaceChildren();
+        list.forEach((it, i) => {
+          const loopOn = k === 'gesture' && it.loop && current === it.anim;
+          const b = h('button', { class: `pick${loopOn ? ' active' : ''}`, type: 'button', dataset: { id: it.id }, title: `${it.name} (${i + 1})` },
+            h('span', { class: 'emoji' }, it.icon), h('span', { class: 'pk-name' }, it.name), h('kbd', { class: 'pk-key' }, String(i + 1)),
+            k === 'gesture' && it.loop ? h('span', { class: 'pk-loop', title: '반복 동작' }, loopOn ? '중지' : '반복') : null);
+          b.style.setProperty('--i', String(i));
+          grid.appendChild(b);
+        });
+      };
+      picker.render = render;
+      render(kind);
       grid.addEventListener('click', (e) => {
         const b = e.target.closest('.pick');
         if (!b) return;
         G.ui.popover.close();
-        if (kind === 'emote') this.emote(b.dataset.id); else { this.gesture(b.dataset.id); G.sfx('click'); }
+        if (picker.kind === 'emote') this.emote(b.dataset.id); else { this.gesture(b.dataset.id); G.sfx('click'); }
       });
-      const box = h('div', { class: `soc-picker soc-picker-${kind}` },
-        h('div', { class: 'soc-pk-head' }, h('h4', null, kind === 'emote' ? '이모지 보내기' : '제스처'), h('kbd', null, kind === 'emote' ? 'T' : 'G')),
-        grid,
-        h('p', { class: 'soc-pk-tip' }, kind === 'emote' ? '숫자 키 1–8로도 바로 보낼 수 있어요. 가까운 체험객이 반응할지도 몰라요!' : '반복 동작은 다시 누르거나 움직이면 멈춰요.'));
-      const pop = G.ui.popover.open(anchor, box, { id: 'social-' + kind, placement: 'top', className: 'soc-pop', onClose: () => { if (this._picker?.pop === pop) this._picker = null; } });
-      this._picker = pop ? { kind, pop } : null;
+      const pop = G.ui.popover.open(anchor, box, { id: 'social-express', placement: 'top', className: 'soc-pop', onClose: () => { if (this._picker?.pop === pop) this._picker = null; } });
+      picker.pop = pop;
+      this._picker = pop ? picker : null;
       if (pop) G.sfx('open');
     },
-    openEmotes(anchor) { this._openPicker('emote', anchor); },
-    openGestures(anchor) { this._openPicker('gesture', anchor); },
+    openEmotes(anchor) { if (kidOn()) return this.openExpress(anchor); this._openPicker('emote', anchor); return null; },
+    openGestures(anchor) { if (kidOn()) return this.openExpress(anchor); this._openPicker('gesture', anchor); return null; },
+
+    // ================================================================ 쉬운 모드: 😊 표현하기 (one picture picker for emotes + gestures)
+    /** -> [{id, emoji, label, say, emote?, gesture?, active}] (devcenter / tests) */
+    expressItems() {
+      const pl = G.sys.player;
+      const cur = pl?.rig?.currentAction || null;
+      const okE = (id) => !id || (G.data.emotes || []).some((e) => e.id === id);
+      const okG = (id) => !id || (G.data.gestures || []).some((g) => g.id === id);
+      return EXPRESS.filter((it) => okE(it.emote) && okG(it.gesture)).map((it) => {
+        const g = it.gesture ? (G.data.gestures || []).find((x) => x.id === it.gesture) : null;
+        const active = !!(g && g.loop && !it.emote && (cur === g.anim || (g.anim === 'sit' && pl?.sitting)));
+        return { ...it, active };
+      });
+    },
+    /** 😊 표현하기: big picture tiles in 쉬운 모드, the merged popover otherwise */
+    async openExpress(anchor) {
+      if (!G.state) return null;
+      if (!kidOn() || !G.easy?.pick) { this._openPicker('emote', anchor); return null; }
+      if (G.ui.modal.get('express')) { G.ui.modal.get('express').close(); return null; }
+      this._closePicker();
+      const items = this.expressItems().map((it) => ({
+        id: it.id, emoji: it.emoji, label: it.active ? '그만' : it.label, say: it.active ? `${it.label} 그만해요` : it.say, selected: it.active, badge: it.active ? '⏹' : null,
+      }));
+      const id = await G.easy.pick({ id: 'express', title: '마음 보여 주기', emoji: '😊', say: '어떤 마음을 보여 줄까요? 그림을 눌러요.', items, columns: 4, className: 'soc-express-pick' });
+      if (!id) return null;
+      return this.express(id) ? id : null;
+    },
+    /** play one 표현하기 item: emote bubble + animation, gestures, or both for merged items (both events fire) */
+    express(id) {
+      const it = EXPRESS.find((x) => x.id === id);
+      if (!it || !G.state) return false;
+      if (it.emote) {
+        this._lastEmote = -1e9; // a deliberate tap is never swallowed by the emote cool-down
+        if (!this.emote(it.emote)) return false;
+        if (it.gesture) {
+          // merged tile: the emote already plays the same animation — count the gesture too (quests / missions)
+          const g = (G.data.gestures || []).find((x) => x.id === it.gesture);
+          if (g) {
+            this._gestureState = { id: g.id, anim: g.anim, loop: !!g.loop };
+            G.bus.emit('gesture:played', { gestureId: g.id });
+            if (this._mode === 'local') this._visitorsSeeGesture(g);
+          }
+        }
+        return true;
+      }
+      const wasActive = !!this.expressItems().find((x) => x.id === id)?.active;
+      if (!this.gesture(it.gesture)) return false;
+      if (wasActive) { G.sfx('pop'); return true; } // a looping gesture (dance / sit) chosen again stops
+      this._bubble(this._me, it.emoji, { emote: true });
+      try { G.fx?.emoji3d?.(null, it.emoji, { scale: 0.9, rise: 1.0 }); } catch (e) { /* fx optional */ }
+      G.sfx('emote');
+      return true;
+    },
 
     emote(id) {
       const e = (G.data.emotes || []).find((x) => x.id === id);
@@ -1054,9 +1364,246 @@
       return true;
     },
 
+    // ================================================================ 쉬운 모드: 💬 kid chat (preset phrases + emoji only, no typing)
+    _kidChatOn() { return kidOn() && G.settings?.kidChat !== false; },
+    /** the phrase book (devcenter / tests): {categories, phrases, emoji} */
+    kidPhrases() { return { categories: KID_CATS.map((c) => ({ ...c })), phrases: KID_PHRASES.map((p) => ({ ...p })), emoji: KID_EMOJI.slice() }; },
+    /** easy mode / kidChat changed (boot, profile load, settings, runtime switch): text box hidden, tabs reset */
+    _syncKidChat() {
+      const on = this._kidChatOn();
+      const easy = kidOn();
+      document.body.classList.toggle('kid-chat', on);
+      const C = this._chat;
+      if (C) {
+        if (on) {
+          if (document.activeElement === C.input) C.input.blur();
+          C.input.value = '';
+          this._updateCount();
+          this._hideSuggest();
+          if (this._rec) this.stopVoice();
+        }
+        if (easy) {
+          if (this.tab !== 'all') this.setTab('all', { silent: true });
+          if (C.panel.classList.contains('collapsed')) this.collapse(false, { silent: true });
+        } else if (this._wasEasy) {
+          const t = lsGet(LS_TAB, 'all');
+          this.setTab(['all', 'local', 'system'].includes(t) ? t : 'all', { silent: true });
+          if (lsGet(LS_COLLAPSED, '0') === '1') this.collapse(true, { silent: true });
+        }
+      }
+      if (!on) this.closeKidChat();
+      if (!easy) G.ui.modal.get('express')?.close();
+      this._wasEasy = easy;
+    },
+    closeKidChat() { const m = G.ui.modal.get('kid-chat'); if (m) m.close(); },
+
+    /** 💬 (08-easy 'kid-chat' action): the phrase picker; with kidChat off it opens the ordinary chat input */
+    openKidChat(anchor) {
+      if (!G.state) return null;
+      if (!this._kidChatOn()) { this._showPanel(); this.focusChat(); return null; }
+      const open = G.ui.modal.get('kid-chat');
+      if (open) { open.close(); return null; }
+      if (G.sys.photo?.active) return null;
+      this._closePicker();
+      this._markRead();
+      if (this._guestReadOnly()) {
+        this._showPanel();
+        G.easy?.alert?.({ emoji: '🔒', heading: '이야기', title: '로그인하면 친구와 이야기할 수 있어요.', text: '지금은 친구들의 이야기를 볼 수만 있어요.' });
+        return null;
+      }
+      const h = G.ui.h;
+      const st = { cat: KID_CATS.some((c) => c.id === this._kidCat) ? this._kidCat : 'hello', off: null, raf: 0, modal: null };
+      this._kidUi = st;
+      // last few messages as big bubbles, so a pre-reader sees (and hears) the answers right here
+      const recent = h('div', { class: 'skc-recent', 'aria-live': 'polite' });
+      const renderRecent = () => {
+        st.raf = 0;
+        const list = [];
+        for (let i = this.messages.length - 1; i >= 0 && list.length < 3; i--) {
+          const m = this.messages[i];
+          if (m.kind === 'system' || m.kind === 'npc') continue;
+          if (!m.self && this._isBlocked(m.name)) continue;
+          if (m.channel === 'local' && !m.near) continue;
+          list.unshift(m);
+        }
+        if (!list.length) {
+          recent.replaceChildren(h('div', { class: 'skc-empty' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🙂'), '아직 조용해요. 먼저 인사해 볼까요?'));
+          return;
+        }
+        recent.replaceChildren(...list.map((m) => {
+          const ava = h('span', { class: 'skc-ava', 'aria-hidden': 'true' }, m.self ? '😊' : Array.from(m.name)[0] || '?');
+          if (!m.self) ava.style.background = `hsl(${nameHue(m.name)} 70% 62%)`;
+          const row = h('div', { class: `skc-msg${m.self ? ' me' : ''}` }, ava, h('div', { class: 'skc-bub' }, h('b', null, m.self ? '나' : m.name), h('span', null, m.text)));
+          row.__easySpeak = { btn: null, text: `${m.self ? '내가' : J.iga(m.name)} 말했어요. ${m.text}` };
+          return row;
+        }));
+      };
+      const cats = h('div', { class: 'skc-cats', role: 'tablist', 'aria-label': '말 종류' });
+      for (const c of KID_CATS) {
+        const b = h('button', { type: 'button', class: 'skc-cat', role: 'tab', dataset: { cat: c.id }, 'data-say': `${c.label}. ${c.say}` },
+          h('span', { class: 'emoji', 'aria-hidden': 'true' }, c.emoji), h('span', { class: 'skc-cat-lbl' }, c.label));
+        b.style.setProperty('--tile', c.color);
+        cats.appendChild(b);
+      }
+      const grid = h('div', { class: 'easy-pick skc-grid', role: 'listbox', 'aria-label': '할 말 고르기' });
+      grid.style.setProperty('--cols', '3');
+      grid.style.setProperty('--cols-s', '2');
+      grid.style.setProperty('--cols-xs', '2');
+      const renderGrid = () => {
+        for (const b of cats.children) { const on = b.dataset.cat === st.cat; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); }
+        const color = KID_CATS.find((c) => c.id === st.cat)?.color || '#ffc93c';
+        grid.replaceChildren(...KID_PHRASES.filter((p) => p.cat === st.cat).map((p, i) => {
+          const b = h('button', { type: 'button', class: 'easy-tile skc-tile', role: 'option', dataset: { id: p.id } },
+            h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, p.emoji), h('span', { class: 'et-label' }, p.text));
+          b.style.setProperty('--tile', color);
+          b.style.setProperty('--i', String(i));
+          b.__easySpeak = { btn: null, text: p.text };
+          return b;
+        }));
+      };
+      const emo = h('div', { class: 'skc-emoji-row', role: 'group', 'aria-label': '이모지 보내기' });
+      for (const e of KID_EMOJI) emo.appendChild(h('button', { type: 'button', class: 'skc-emo', dataset: { e }, 'aria-label': `${e} 보내기` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e)));
+      const showing = () => document.body.classList.contains('show-chat');
+      const logBtn = h('button', { type: 'button', class: 'easy-big-btn easy-btn-no skc-log' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, showing() ? '🙈' : '👀'), h('span', null, showing() ? '이야기 숨기기' : '이야기 보기'));
+      const body = h('div', { class: 'skc' },
+        recent,
+        cats,
+        grid,
+        h('div', { class: 'skc-sub' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✨'), '그림 하나로 말해요'),
+        emo,
+        h('div', { class: 'skc-foot' }, logBtn, h('span', { class: 'skc-safe' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🤫'), '이름·주소는 비밀!')));
+      const sent = (el) => {
+        el.classList.add('is-chosen');
+        G.sfx('pop');
+        this._kidCat = st.cat;
+        setTimeout(() => { if (st.modal && !st.modal.closed) st.modal.close(); this.toggleChat(true); }, G.settings?.reduceMotion ? 60 : 380);
+      };
+      grid.addEventListener('click', (e) => {
+        const b = e.target.closest('.skc-tile');
+        if (!b) return;
+        if (this.sendKidPhrase(b.dataset.id)) sent(b);
+        else { b.classList.remove('easy-shake'); void b.offsetWidth; b.classList.add('easy-shake'); }
+      });
+      emo.addEventListener('click', (e) => {
+        const b = e.target.closest('.skc-emo');
+        if (!b) return;
+        if (this.sendKidEmoji(b.dataset.e)) sent(b);
+        else { b.classList.remove('easy-shake'); void b.offsetWidth; b.classList.add('easy-shake'); }
+      });
+      cats.addEventListener('click', (e) => {
+        const b = e.target.closest('.skc-cat');
+        if (!b || b.dataset.cat === st.cat) return;
+        st.cat = b.dataset.cat;
+        renderGrid();
+        G.sfx('page');
+        const c = KID_CATS.find((x) => x.id === st.cat);
+        if (c) kidSay(`${c.label}. ${c.say}`, { force: true, priority: 1 });
+      });
+      // arrow keys move between the phrase tiles (keyboard users)
+      grid.addEventListener('keydown', (e) => {
+        const tiles = Array.from(grid.querySelectorAll('.skc-tile'));
+        const i = tiles.indexOf(document.activeElement);
+        if (i < 0) return;
+        let c = 3;
+        try { const tpl = getComputedStyle(grid).gridTemplateColumns; if (tpl && tpl !== 'none') c = tpl.split(' ').filter(Boolean).length || 3; } catch (err) { c = 3; }
+        const mv = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: c, ArrowUp: -c }[e.key];
+        if (mv == null) return;
+        e.preventDefault();
+        tiles[clamp(i + mv, 0, tiles.length - 1)].focus();
+      });
+      logBtn.addEventListener('click', () => { const on = !showing(); this.toggleChat(on); st.modal?.close(); });
+      renderGrid();
+      renderRecent();
+      st.off = G.bus.on('chat:message', ({ msg } = {}) => {
+        if (!st.raf) st.raf = requestAnimationFrame(renderRecent);
+        if (msg && !msg.self) this._markRead();
+      });
+      const m = G.ui.modal.open({
+        id: 'kid-chat', title: '친구에게 말해요', icon: '💬', size: 'lg', className: 'skc-modal easy-pick-modal', autofocus: false,
+        say: '친구에게 무슨 말을 할까요? 그림을 눌러요.', body, actions: [],
+        onClose: () => {
+          try { st.off?.(); } catch (e) { /* ignore */ }
+          cancelAnimationFrame(st.raf);
+          if (this._kidUi === st) this._kidUi = null;
+          G.ui.setActive('kid-chat', showing());
+        },
+      });
+      st.modal = m;
+      G.ui.setActive('kid-chat', true);
+      if (!G.input?.touchUI) setTimeout(() => { if (!m.closed) grid.querySelector('.skc-tile')?.focus({ preventScroll: true }); }, 60);
+      return m;
+    },
+    /** send one preset phrase (kid chat). Visitors answer in kind; replies are read aloud for 12 s */
+    sendKidPhrase(id) {
+      const p = KID_PHRASES.find((x) => x.id === id);
+      if (!p || !G.state) return false;
+      const cat = KID_CATS.find((c) => c.id === p.cat);
+      if (!this.sendChat(`${p.text} ${p.emoji}`, 'all', { reply: cat?.reply || 'greet' })) return false;
+      this._kidListenUntil = performance.now() + 12000;
+      G.bus.emit('kid:phrase', { phraseId: p.id });
+      kidSay(p.text, { priority: 1 });
+      return true;
+    },
+    /** send one emoji from the kid emoji row */
+    sendKidEmoji(e) {
+      if (!KID_EMOJI_SET.has(e) || !G.state) return false;
+      if (!this.sendChat(e, 'all', { reply: 'emoji' })) return false;
+      this._kidListenUntil = performance.now() + 8000;
+      G.bus.emit('kid:phrase', { phraseId: `emoji:${e}` });
+      return true;
+    },
+    /** 쉬운 모드: read an incoming visitor / player line aloud while the child is chatting */
+    _kidHear(msg) {
+      if (!msg || msg.self || !kidOn() || (msg.kind !== 'visitor' && msg.kind !== 'remote')) return;
+      if (!(this._kidUi || msg.mention || performance.now() < (this._kidListenUntil || 0))) return;
+      kidSay(`${J.iga(msg.name)} 말해요. ${msg.text}`, { interrupt: false });
+    },
+
+    /** 쉬운 모드 user menu (a name tag / chat name tapped): big pictures, no typing */
+    async _kidUser(info, rec, npcRec) {
+      if (!G.easy?.pick) return;
+      const name = info.name;
+      const kind = info.kind === 'npc' ? 'npc' : info.kind === 'remote' ? 'remote' : 'visitor';
+      const blocked = this._isBlocked(name);
+      const pos = rec?.position || npcRec?.position || null;
+      const items = [];
+      if (kind !== 'npc' && !blocked) items.push({ id: 'hi', emoji: '👋', label: '인사', say: `${name}에게 인사해요`, color: '#4fb3ff' });
+      if (pos) items.push({ id: 'go', emoji: '📍', label: '가까이', say: `${name}에게 가요`, color: '#55d187' });
+      if (kind !== 'npc') {
+        items.push(blocked ? { id: 'unblock', emoji: '👀', label: '다시 보기', say: '다시 볼까요? 어른이 도와줘요.', color: '#b48bff' }
+          : { id: 'block', emoji: '🙈', label: '안 볼래요', say: `${name}의 말을 안 볼래요`, color: '#ffc93c' });
+        items.push({ id: 'report', emoji: '🚨', label: '어른에게', say: '싫은 말을 했나요? 어른에게 알려요.', color: '#ff7a59' });
+      }
+      if (!items.length) return;
+      const id = await G.easy.pick({ id: 'kid-user', title: name, emoji: kind === 'npc' ? '⭐' : '🙂', say: `${name}. 무엇을 할까요?`, items, columns: Math.min(items.length, 4) });
+      if (!id || !G.state) return;
+      if (id === 'hi') { if (this.sendChat(`${name}, 안녕하세요! 👋`, 'all', { reply: 'greet' })) { this._kidListenUntil = performance.now() + 12000; if (rec?.position) G.sys.player?.faceTowards?.(rec.position.x, rec.position.z); this._lastEmote = -1e9; this.emote('EMO_HELLO'); } }
+      else if (id === 'go') {
+        if (npcRec && G.interact?.activate) G.interact.activate(npcRec.id);
+        else if (pos && G.easy?.goTo) G.easy.goTo({ x: pos.x, z: pos.z, label: name }, { stopDistance: 2 });
+        else this._goTo(info, rec, npcRec);
+      } else if (id === 'block') {
+        const ok = await G.easy.confirm({ emoji: '🙈', heading: '안 볼래요', title: `${name}의 말을 안 볼까요?`, yes: '안 볼래요', no: '아니요' });
+        if (ok) this.block(name);
+      } else if (id === 'unblock') {
+        if (await G.easy.gate({ reason: 'unblock', title: '다시 보기' })) this.unblock(name);
+      } else if (id === 'report') this._kidReport(info);
+    },
+    /** one-tap report for children: confirm → report (+ block) → "어른에게도 말해 줘요" */
+    async _kidReport(info) {
+      const ok = await G.easy?.confirm?.({ emoji: '🚨', heading: '어른에게 알리기', title: `${info.name}의 말이 싫었나요?`, text: '알리면 이 친구의 말이 더 이상 안 보여요.', yes: '알려요', no: '아니요' });
+      if (!ok || !G.state) return false;
+      const lastMsg = info.msgId ? this.messages.find((m) => m.id === info.msgId) : [...this.messages].reverse().find((m) => m.name === info.name && !m.self);
+      const done = await this._fileReport(info, 'kid', '', lastMsg, { quiet: true });
+      if (!this._isBlocked(info.name)) this.block(info.name);
+      G.easy?.alert?.({ emoji: done ? '🛡️' : '🙈', heading: '잘했어요', title: done ? '어른에게 알렸어요!' : '이제 이 친구의 말은 안 보여요.', text: '어른에게도 꼭 말해 줘요.' });
+      return done;
+    },
+
     // ================================================================ voice dictation (Web Speech API)
     toggleVoice() {
       if (this._rec) { this.stopVoice(); return false; }
+      if (this._kidChatOn()) { this.openKidChat(); return false; } // dictation = free text: not for kid chat
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SR) { G.ui.toast('이 브라우저는 음성 입력을 지원하지 않습니다', { type: 'warn', emoji: '🎙️' }); return false; }
       if (!G.state) return false;
@@ -1164,7 +1711,7 @@
       const list = this._blockedList();
       if (!list.includes(name)) { list.push(String(name)); G.dirty('blocked'); }
       this._refreshBlocked();
-      G.ui.toast(`${J.eulreul(J.nim(name))} 차단했어요. 이 사용자의 채팅과 말풍선이 더 이상 보이지 않아요.`, { type: 'success', emoji: '🚫' });
+      G.ui.toast(kidOn() ? `${name}의 말이 이제 안 보여요.` : `${J.eulreul(J.nim(name))} 차단했어요. 이 사용자의 채팅과 말풍선이 더 이상 보이지 않아요.`, { type: 'success', emoji: kidOn() ? '🙈' : '🚫' });
       G.log.info('UI', `blocked ${name}`);
       return true;
     },
@@ -1174,7 +1721,7 @@
       const i = list.indexOf(String(name));
       if (i >= 0) { list.splice(i, 1); G.dirty('blocked'); }
       this._refreshBlocked();
-      G.ui.toast(`${J.nim(name)}의 차단을 해제했어요.`, { type: 'info', emoji: '🔓' });
+      G.ui.toast(kidOn() ? `${name}의 말이 다시 보여요.` : `${J.nim(name)}의 차단을 해제했어요.`, { type: 'info', emoji: kidOn() ? '👀' : '🔓' });
       return true;
     },
     _refreshBlocked() {
@@ -1191,8 +1738,33 @@
       this._hideSuggest();
     },
 
+    /** store / send one report -> Promise<bool> (server mode: chat/report.php; local: this device only) */
+    async _fileReport(info, reason, memo, lastMsg, opts = {}) {
+      const payload = { target: info.name, targetId: info.id || null, messageId: lastMsg?.id?.startsWith('s') ? Number(lastMsg.id.slice(1)) : null, text: lastMsg?.text || '', reason, memo: String(memo || '').slice(0, 200), at: G.time.now() };
+      if (this._mode === 'server') {
+        try {
+          await G.net.request('chat/report.php', { body: payload, timeout: 8000 });
+          if (!opts.quiet) G.ui.toast('신고가 접수되었어요. 운영자가 확인 후 조치할 예정이에요.', { type: 'success', emoji: '🚨' });
+        } catch (e) {
+          if (!opts.quiet) G.ui.toast(e?.message || '신고를 접수하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error' });
+          return false;
+        }
+      } else {
+        try {
+          const list = JSON.parse(lsGet(LS_REPORTS, '[]')) || [];
+          list.push({ ...payload, reporter: G.state?.profile?.nickname || '' });
+          while (list.length > 50) list.shift();
+          lsSet(LS_REPORTS, JSON.stringify(list));
+        } catch (e) { /* storage blocked */ }
+        if (!opts.quiet) G.ui.toast('신고 내용이 기록되었어요. (로컬 모드에서는 이 기기에만 저장돼요)', { type: 'success', emoji: '🚨' });
+      }
+      G.log.info('UI', `report ${info.name} (${reason})`);
+      return true;
+    },
+
     report(info) {
       if (!info?.name) return;
+      if (kidOn() && G.easy?.confirm) { this._kidReport(info); return; }
       const h = G.ui.h;
       const REASONS = [['abuse', '욕설·비방'], ['spam', '도배·광고'], ['harass', '불쾌한 행동'], ['privacy', '개인정보 노출'], ['etc', '기타']];
       let reason = 'abuse';
@@ -1220,25 +1792,7 @@
             label: '신고하기', class: 'btn-danger', onClick: async (m) => {
               const memo = m.body.querySelector('#soc-report-memo')?.value.trim().slice(0, 200) || '';
               const alsoBlock = !!m.body.querySelector('#soc-report-block')?.checked;
-              const payload = { target: info.name, targetId: info.id || null, messageId: lastMsg?.id?.startsWith('s') ? Number(lastMsg.id.slice(1)) : null, text: lastMsg?.text || '', reason, memo, at: G.time.now() };
-              if (this._mode === 'server') {
-                try {
-                  await G.net.request('chat/report.php', { body: payload, timeout: 8000 });
-                  G.ui.toast('신고가 접수되었어요. 운영자가 확인 후 조치할 예정이에요.', { type: 'success', emoji: '🚨' });
-                } catch (e) {
-                  G.ui.toast(e?.message || '신고를 접수하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error' });
-                  return false;
-                }
-              } else {
-                try {
-                  const list = JSON.parse(lsGet(LS_REPORTS, '[]')) || [];
-                  list.push({ ...payload, reporter: G.state?.profile?.nickname || '' });
-                  while (list.length > 50) list.shift();
-                  lsSet(LS_REPORTS, JSON.stringify(list));
-                } catch (e) { /* storage blocked */ }
-                G.ui.toast('신고 내용이 기록되었어요. (로컬 모드에서는 이 기기에만 저장돼요)', { type: 'success', emoji: '🚨' });
-              }
-              G.log.info('UI', `report ${info.name} (${reason})`);
+              if (!(await this._fileReport(info, reason, memo, lastMsg))) return false;
               if (alsoBlock && !this._isBlocked(info.name)) this.block(info.name);
               return true;
             },
@@ -1254,6 +1808,7 @@
       const kind = info.kind === 'npc' ? 'npc' : info.kind === 'remote' ? 'remote' : 'visitor';
       const rec = kind === 'npc' ? null : [...this.others.values()].find((o) => o.name === info.name) || null;
       const npcRec = kind === 'npc' ? (G.sys.npc?.list?.() || []).find((r) => r.data?.name === info.name) : null;
+      if (kidOn() && G.easy?.pick) { this._kidUser(info, rec, npcRec); return; }
       const pos = rec?.position || npcRec?.position || null;
       const pp = G.sys.player?.position;
       const dist = pos && pp ? Math.round(Math.hypot(pos.x - pp.x, pos.z - pp.z)) : null;
@@ -1300,8 +1855,9 @@
     // ================================================================ events → system messages / reactions
     _initEvents() {
       const on = (n, fn) => G.bus.on(n, (p) => { if (G.state) fn(p || {}); });
+      const T = (adult, child) => (kidOn() ? child : adult);
       on('level:up', ({ level }) => {
-        this.system(`🎉 레벨 ${level} 달성! 축하합니다.`);
+        this.system(T(`🎉 레벨 ${level} 달성! 축하합니다.`, `⭐ 레벨 ${level}! 쑥쑥 컸어요!`));
         if (this._mode !== 'local') return;
         this._later(1200, () => {
           const before = this._gatherAt;
@@ -1311,10 +1867,10 @@
       });
       on('quest:claimed', () => { if (this._mode === 'local') this._later(1400, () => this._gather('quest')); });
       on('ferment:claimed', () => { if (this._mode === 'local') this._later(1400, () => this._gather('ferment')); });
-      on('achievement:unlocked', ({ id }) => { const a = G.data.achievements?.[id]; if (a) this.system(`🏆 업적 달성: ${a.icon || ''} ${a.name}`); });
-      on('quest:completed', ({ questId }) => { const q = G.data.quests?.[questId]; if (q) this.system(`📜 퀘스트 완료: ${q.title} — 퀘스트 패널에서 보상을 받으세요.`); });
-      on('collection:unlocked', ({ id }) => { const c = G.data.collection?.[id]; if (c) this.system(`📖 도감에 등록됐어요: ${c.icon || ''} ${c.name}`); });
-      on('ferment:completed', ({ recipeId }) => { const r = G.data.recipes?.[recipeId]; this.system(`🏺 ${r ? r.name.replace(/ 체험$/, '') : '장독'} 발효가 완성되었어요! 장독대에서 수령해 보세요.`); });
+      on('achievement:unlocked', ({ id }) => { const a = G.data.achievements?.[id]; if (a) this.system(T(`🏆 업적 달성: ${a.icon || ''} ${a.name}`, `🏅 메달을 받았어요: ${a.icon || ''} ${a.name}`)); });
+      on('quest:completed', ({ questId }) => { const q = G.data.quests?.[questId]; if (q) this.system(T(`📜 퀘스트 완료: ${q.title} — 퀘스트 패널에서 보상을 받으세요.`, `🎁 잘했어요! 선물을 받아요: ${q.title}`)); });
+      on('collection:unlocked', ({ id }) => { const c = G.data.collection?.[id]; if (c) this.system(T(`📖 도감에 등록됐어요: ${c.icon || ''} ${c.name}`, `📖 새 스티커: ${c.icon || ''} ${c.name}`)); });
+      on('ferment:completed', ({ recipeId }) => { const r = G.data.recipes?.[recipeId]; this.system(T(`🏺 ${r ? r.name.replace(/ 체험$/, '') : '장독'} 발효가 완성되었어요! 장독대에서 수령해 보세요.`, '🏺 장독의 장이 다 익었어요!')); });
       on('weather:changed', ({ id, prev, source }) => {
         if (!prev || source === 'init' || prev === id) return;
         const w = G.data.weather?.[id];
@@ -1323,7 +1879,11 @@
       on('time:phase', ({ name, initial, prev }) => { if (!initial && prev && name) this._systemOnce('phase', `${{ 아침: '🌅', 낮: '☀️', 저녁: '🌇', 밤: '🌙' }[name] || '🕰️'} ${J.iga(name)} 되었어요.`); });
       G.bus.on('photo:mode', () => this._closePicker());
       G.bus.on('ui:modal-open', () => this._closePicker());
-      G.bus.on('settings:changed', ({ key }) => { if (key === 'chatVisible') this._applyChatVisibility(); });
+      G.bus.on('settings:changed', ({ key } = {}) => {
+        if (key === 'chatVisible') this._applyChatVisibility();
+        else if (key === 'easyMode' || key === 'kidChat') this._syncKidChat();
+      });
+      G.bus.on('easy:changed', () => this._syncKidChat());
       G.bus.on('engine:quality', () => { /* visitors keep their meshes; shadows follow the renderer */ });
     },
 
@@ -1824,12 +2384,15 @@
       if (!vis.length) return;
       const byDist = pp ? vis.slice().sort((a, b) => Math.hypot(a.position.x - pp.x, a.position.z - pp.z) - Math.hypot(b.position.x - pp.x, b.position.z - pp.z)) : vis;
       const first = byDist[0];
-      const lines = [`@${nick} 님, 어서 오세요! 😊`, `${J.nim(nick)} 반가워요! 같이 둘러봐요 👋`, `@${nick} 님 환영해요~ 장독대 꼭 가 보세요!`];
+      const kid = kidOn();
+      const lines = kid
+        ? [`${nick}, 어서 와요! 😊`, `${nick}, 반가워요! 같이 놀아요 👋`, `안녕, ${nick}! 장독대 가 봤어요? 🏺`]
+        : [`@${nick} 님, 어서 오세요! 😊`, `${J.nim(nick)} 반가워요! 같이 둘러봐요 👋`, `@${nick} 님 환영해요~ 장독대 꼭 가 보세요!`];
       const near = pp && Math.hypot(first.position.x - pp.x, first.position.z - pp.z) < 25;
       if (near) this._react(first, 3, () => this._visitorEmote(first, '👋', 'wave'));
       this._visitorSay(first, pick(lines));
       const second = byDist[1];
-      if (second && Math.random() < 0.6) this._later(rand(2600, 4200), () => { if (second.active && G.state) this._visitorSay(second, pick(['반가워요~ 👋', '어서 오세요!', '환영합니다 🙌'])); });
+      if (second && Math.random() < 0.6) this._later(rand(2600, 4200), () => { if (second.active && G.state) this._visitorSay(second, pick(kid ? ['반가워요~ 👋', '어서 와요! 😄', '같이 놀아요 🙌'] : ['반가워요~ 👋', '어서 오세요!', '환영합니다 🙌'])); });
     },
 
     /** celebrations: up to three nearby visitors walk over, face the player and clap / cheer */
@@ -1846,7 +2409,11 @@
         .sort((a, b) => a[1] - b[1]).slice(0, 3);
       if (!cand.length) return;
       this._gatherAt = now;
-      const LINES = {
+      const LINES = kidOn() ? {
+        level: ['우와, 축하해요! 🎉', '쑥쑥 컸어요! 👏', '최고예요! 🌟'],
+        quest: ['참 잘했어요! 👏', '대단해요! 🌟', '우와, 해냈어요! 🎉'],
+        ferment: ['장 담그기 성공! 🏺', '맛있겠다~ 😋', '우와, 축하해요! 🎉'],
+      } : {
         level: ['레벨 업 축하해요! 🎉', '와, 레벨 업! 👏', '축하드려요~ 🙌'],
         quest: ['퀘스트 완료 축하해요! 👏', '대단해요! 🎉', '오, 벌써 끝냈어요? 👍'],
         ferment: ['와, 장 담그기 성공! 🏺', '맛있겠다~ 😋', '발효 완성 축하해요! 🎉'],
@@ -1880,13 +2447,23 @@
     },
 
     _replyLine(kind) {
-      const R = G.data.visitors?.replies || {};
-      const list = Array.isArray(R[kind]) && R[kind].length ? R[kind] : FALLBACK[kind] || FALLBACK.agree;
-      return pick(list);
+      let list;
+      if (kidOn()) list = KID_TALK[kind] || KID_TALK.agree; // 쉬운 모드: short, warm kid lines
+      else {
+        const R = G.data.visitors?.replies || {};
+        list = Array.isArray(R[kind]) && R[kind].length ? R[kind] : FALLBACK[kind] || FALLBACK.agree;
+      }
+      // two visitors answering together never say the very same line
+      const recent = this._recentReplies || (this._recentReplies = []);
+      const fresh = list.filter((l) => !recent.includes(l));
+      const line = pick(fresh.length ? fresh : list);
+      recent.push(line);
+      if (recent.length > 3) recent.shift();
+      return line;
     },
-    /** a line from G.data.visitors.lines, weighted by where the visitor is */
+    /** a line from G.data.visitors.lines (쉬운 모드: kid lines), weighted by where the visitor is */
     _pickLine(v) {
-      const lines = G.data.visitors?.lines?.length ? G.data.visitors.lines : FALLBACK.chat;
+      const lines = kidOn() ? KID_TALK.lines : G.data.visitors?.lines?.length ? G.data.visitors.lines : FALLBACK.chat;
       const z = v.zoneId || '';
       const HINT = [
         [/장독|발효 언제/, ['ZONE_JANGDOKDAE']], [/콩|물 주|수확/, ['ZONE_CROP', 'ZONE_HERB']], [/정자|사진/, ['ZONE_REST']],
@@ -1929,15 +2506,18 @@
     },
 
     // ---------------------------------------------------------------- reactions to the player
-    _visitorsHear(text, channel) {
+    _visitorsHear(text, channel, reply) {
       const vis = this._activeVisitors();
       if (!vis.length) return;
       const now = performance.now();
       const t = text.toLowerCase();
       let kind = null;
-      if (/안녕|반가|하이|ㅎㅇ|hello|\bhi\b|헬로|어서\s?오|반갑/.test(t)) kind = 'greet';
+      if (reply === 'emoji') { this._visitorsEchoEmoji(text); return; }
+      if (reply && KID_TALK[reply]) kind = reply;
+      else if (/안녕|반가|하이|ㅎㅇ|hello|\bhi\b|헬로|어서\s?오|반갑/.test(t)) kind = 'greet';
       else if (/고마|감사|땡큐|thank|ㄱㅅ|고맙/.test(t)) kind = 'thanks';
       else if (/[?？]|어디|어떻게|뭐|언제|왜|몇|누구|있나요|인가요|할까요/.test(t)) kind = 'question';
+      if (kind && !kidOn() && !G.data.visitors?.replies?.[kind] && !FALLBACK[kind]) kind = 'greet';
       const named = vis.find((v) => text.includes(v.name));
       if (!kind && !named) return;
       if (now - this._replyT < 3500 && !named) return;
@@ -1953,10 +2533,34 @@
           const k = kind || 'mention';
           const pd = pp ? Math.hypot(v.position.x - pp.x, v.position.z - pp.z) : 99;
           this.stats.replies++;
-          if (pd < 25) this._react(v, 3.2, () => this._visitorAnim(v, k === 'greet' ? 'wave' : k === 'thanks' ? 'nod' : k === 'question' ? 'think' : 'wave'));
+          const ANIM = { greet: 'wave', thanks: 'nod', question: 'think', feel: 'nod', praise: 'thumbsup', play: 'celebrate', mention: 'wave' };
+          if (pd < 25) this._react(v, 3.2, () => this._visitorAnim(v, ANIM[k] || 'wave'));
           const nick = G.state.profile?.nickname;
-          const direct = nick && (named || Math.random() < 0.35);
-          this._visitorSay(v, (direct ? `@${nick} ` : '') + this._replyLine(k), { channel });
+          const direct = nick && (named || Math.random() < (kidOn() ? 0.6 : 0.35));
+          // children cannot read "@name": in 쉬운 모드 the visitor simply calls them by name
+          this._visitorSay(v, (direct ? (kidOn() ? `${nick}, ` : `@${nick} `) : '') + this._replyLine(k), { channel });
+        });
+      });
+    },
+
+    /** an emoji-only kid message: one or two nearby visitors answer with an emoji of their own */
+    _visitorsEchoEmoji(text) {
+      const pp = G.sys.player?.position;
+      if (!pp) return;
+      const now = performance.now();
+      if (now - this._replyT < 2500) return;
+      this._replyT = now;
+      const vis = this._activeVisitors().filter((v) => !v.leaving && Math.hypot(v.position.x - pp.x, v.position.z - pp.z) < 22)
+        .sort((a, b) => Math.hypot(a.position.x - pp.x, a.position.z - pp.z) - Math.hypot(b.position.x - pp.x, b.position.z - pp.z)).slice(0, 2);
+      const ANSWER = { '😊': ['😊', '🥰'], '😆': ['😆', '🤣'], '🥰': ['🥰', '💕'], '👍': ['👍', '😎'], '👏': ['👏', '🎉'], '👋': ['👋', '😊'], '🎉': ['🎉', '🥳'], '❤️': ['💕', '🥰'] };
+      const first = Array.from(String(text).trim())[0] || '😊';
+      const key = Object.keys(ANSWER).find((k) => String(text).includes(k)) || first;
+      vis.forEach((v, i) => {
+        this._later((rand(0.7, 1.6) + i * 0.8) * 1000, () => {
+          if (!v.active || !G.state) return;
+          const emo = pick(ANSWER[key] || ['😊', '👋']);
+          this._react(v, 2.6, () => this._visitorEmote(v, emo, key === '👋' ? 'wave' : key === '👏' ? 'clap' : key === '👍' ? 'thumbsup' : 'nod'));
+          if (i === 0 && Math.random() < 0.5) this._later(700, () => { if (v.active && G.state) this._visitorSay(v, emo, { channel: 'local', typing: false }); });
         });
       });
     },
@@ -2499,8 +3103,9 @@
           for (const o of this.others.values()) if (o.kind === 'remote' && (o.uid === uid || o.name === name)) { remote = o; break; }
           const near = remote && pp ? Math.hypot(remote.position.x - pp.x, remote.position.z - pp.z) <= LOCAL_R : false;
           if (channel === 'local' && !near && !self) continue;
-          this._push({ name, text, channel, kind: channel === 'system' ? 'system' : self ? 'me' : 'remote', self, near: near || self, uid, sid: id, at, history: S.first });
-          if (!S.first && !self && remote && !this._isBlocked(name)) { this._bubble(remote.bub, text); G.sfx('chat', { volume: 0.6 }); }
+          const pushed = this._push({ name, text, channel, kind: channel === 'system' ? 'system' : self ? 'me' : 'remote', self, near: near || self, uid, sid: id, at, history: S.first });
+          // the bubble shows the same masked text as the log (personal information → 🔒)
+          if (pushed && !S.first && !self && remote && !this._isBlocked(name)) { this._bubble(remote.bub, pushed.text); G.sfx('chat', { volume: 0.6 }); }
         }
         const lastId = Number(data?.lastId);
         if (Number.isSafeInteger(lastId) && lastId > S.lastId && lastId < S.lastId + 1e6) S.lastId = lastId; // skipped hidden rows

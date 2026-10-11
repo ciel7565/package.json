@@ -11,7 +11,7 @@
 // repeated against the same server. Note: the brute-force step records 5 failed logins from this IP; the
 // per-IP credential-stuffing guard (30 failures / 15 min) therefore allows ~6 runs per 15 minutes.
 // =============================================================================
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -243,6 +243,16 @@ async function main() {
     r = await c.req('api/auth/register.php', { json: { email: `s${id}@example.com`, nickname: '<b>x</b>', password: PASSWORD, password_confirm: PASSWORD, agree: true } });
     assert(r.status === 400 && r.error?.code === 'NICKNAME_INVALID', `html nick: ${r.status} ${r.error?.code}`);
   });
+  await step('register: nicknames that look like personal info are refused (phone · street address)', async () => {
+    const c = new Client('pii-nick'); await c.req('api/ping.php');
+    const codes = [];
+    for (const nickname of ['kid01012345', '테헤란로123']) {
+      const r = await c.req('api/auth/register.php', { json: { email: `p${rnd()}@example.com`, nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+      assert(r.status === 400 && r.error?.code === 'NICKNAME_INVALID' && /개인정보/.test(r.error?.message || ''), `${nickname}: ${r.status} ${r.error?.code} ${r.error?.message}`);
+      codes.push(`${nickname}→${r.status}`);
+    }
+    return codes.join(', ');
+  });
   await step('register → logged in, session id + CSRF rotated', async () => {
     csrfBefore = A.csrf; cookieBefore = A.sessionCookie();
     const r = await A.req('api/auth/register.php', { json: { email: userA.email, nickname: userA.nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
@@ -419,6 +429,74 @@ async function main() {
     const long = await B.req('api/chat/send.php', { json: { text: 'ㅋ'.repeat(121), channel: 'all' } });
     assert(long.status === 400 && long.error?.code === 'MESSAGE_TOO_LONG', `length: ${long.status}`);
   });
+  await step('chat: personal information masked with 🔒 before storing (phone · e-mail · URL · address), innocent text untouched', async () => {
+    await sleep(1100);
+    const pii = '전화 +82 10 1234 5678, 메일 kid.dino@gmail.com, 집 서울시 강남구 테헤란로 123, 010-9876-5432, https://evil.example.com/x';
+    const r = await A.req('api/chat/send.php', { json: { text: pii, channel: 'all' } });
+    assert(r.status === 200 && r.data?.message?.id, `send ${r.status} ${r.error?.code}`);
+    const t = r.data.message.text;
+    assert(r.data.piiMasked === true, 'piiMasked flag for the mascot tip');
+    assert(t.includes('🔒') && !/[0-9]{3,}|@|gmail|evil|테헤란로|강남구/.test(t), `masked: ${t}`);
+    const l = await B.req(`api/chat/list.php?after=${r.data.message.id - 1}`);
+    const m = (l.data?.messages || []).find((x) => x.id === r.data.message.id);
+    assert(m && m.text === t && !/1234|5678|kid\.dino/.test(l.text), 'other players only ever see the masked copy');
+    await sleep(1100);
+    const ok = await A.req('api/chat/send.php', { json: { text: `오늘 콩 3개 심었어요! 레벨 12 됐어요 😊 ${id.slice(0, 2)}`, channel: 'all' } });
+    assert(ok.status === 200 && ok.data?.piiMasked === false && ok.data.message.text.startsWith('오늘 콩 3개 심었어요! 레벨 12 됐어요 😊'), `innocent: ${ok.status} ${ok.data?.message?.text}`);
+    return t;
+  });
+  await step('chat: shared PII vectors (tests/pii-vectors.json) through ChatFilter::maskPII — whole · partial · innocent', async () => {
+    const vecFile = path.join(ROOT, 'tests/pii-vectors.json');
+    const v = JSON.parse(fs.readFileSync(vecFile, 'utf8'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-pii-'));
+    const script = path.join(tmp, 'pii.php');
+    fs.writeFileSync(script, `<?php declare(strict_types=1); namespace Tfm; define('TFM_BOOT', 1);
+final class Config { public static function get($k, $d = null) { return $d; } }
+require ${JSON.stringify(path.join(ROOT, 'server/lib/ChatFilter.php'))};
+$in = json_decode(file_get_contents('php://stdin'), true);
+echo json_encode(array_map(fn ($s) => ChatFilter::maskPII((string) $s), $in), JSON_UNESCAPED_UNICODE);`);
+    try {
+      const all = [...v.whole, ...v.partial, ...v.keep];
+      const r = spawnSync('php', [script], { input: JSON.stringify(all), encoding: 'utf8' });
+      assert(r.status === 0, `php exit ${r.status}: ${String(r.stderr).slice(0, 200)}`);
+      const out = JSON.parse(r.stdout);
+      const bad = [];
+      all.forEach((s0, i) => {
+        const o = out[i];
+        if (i < v.whole.length) { if (o !== '🔒') bad.push(`${s0} → ${o}`); }
+        else if (i < v.whole.length + v.partial.length) { if (!o.includes('🔒') || /[0-9]{4}|@[a-z]|\.com|\.kr|dino|강남구|역삼동/iu.test(o)) bad.push(`${s0} → ${o}`); }
+        else if (o !== s0) bad.push(`kept? ${s0} → ${o}`);
+      });
+      assert(!bad.length, bad.slice(0, 4).join(' | '));
+      return `${all.length} vectors`;
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  });
+  await step('chat: disguised phone / e-mail / domain forms are masked by the live API (full-width, / separators, Korean digits, "at … dot")', async () => {
+    const cases = ['０１０-１２３４-５６７８', '010/1234/5678', '공일공-일이삼사-오육칠팔', 'dinokid at gmail dot com', 'bad[.]com 와'];
+    const outs = [];
+    for (const t of cases) {
+      await sleep(1100);
+      const r = await A.req('api/chat/send.php', { json: { text: `${t} 친구${'가나다라마바'[outs.length]}`, channel: 'all' } });
+      assert(r.status === 200 && r.data?.piiMasked === true, `${t}: ${r.status} ${r.error?.code} piiMasked=${r.data?.piiMasked}`);
+      const m = r.data.message.text;
+      assert(m.startsWith('🔒') && !/[0-9０-９]{4}|일이삼사|gmail|bad/.test(m), `${t} → ${m}`);
+      outs.push(m);
+    }
+    return outs.join(' · ');
+  });
+  await step('chat: the stored repeat-spam key holds no personal information (built from the masked text)', async () => {
+    if (!tmpData) return 'skipped (external server: no access to its database)';
+    const dbf = fs.readdirSync(tmpData).find((f) => /^db-.*\.sqlite$/.test(f));
+    assert(dbf, `sqlite file in ${tmpData}`);
+    const q = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); echo json_encode($p->query("SELECT text, text_key FROM chat_messages")->fetchAll(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);', path.join(tmpData, dbf)], { encoding: 'utf8' });
+    assert(q.status === 0, `php ${q.status} ${String(q.stderr).slice(0, 200)}`);
+    const rows = JSON.parse(q.stdout);
+    const leak = rows.filter((r) => /[0-9]{9,}|gmail|kiddino|dinokid|evil|테헤란로/.test(String(r.text_key)) || /[0-9]{4}[^0-9]?[0-9]{4}/.test(String(r.text_key)));
+    assert(rows.length >= 3 && !leak.length, `leaking keys: ${leak.map((r) => r.text_key).slice(0, 3).join(' | ')}`);
+    const sv = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); echo (int) $p->query("SELECT MAX(version) FROM schema_version")->fetchColumn();', path.join(tmpData, dbf)], { encoding: 'utf8' });
+    assert(Number(sv.stdout) >= 2, `schema version ${sv.stdout}`);
+    return `${rows.length} rows, keys clean, schema v${sv.stdout}`;
+  });
   await step('chat: report', async () => {
     const r = await B.req('api/chat/report.php', { json: { target: userA.nickname, targetId: String(me.id), messageId: msgId, text: 'ignored client copy', reason: 'abuse', memo: '테스트 신고' } });
     assert(r.status === 200 && r.data?.reportId, `status ${r.status} ${r.error?.code}`);
@@ -433,6 +511,24 @@ async function main() {
     for (const e of r.data.ranking) assert(!('email' in e) && !('id' in e) && !('user_id' in e) && typeof e.nickname === 'string', 'no ids/emails');
     assert(r.data.me && r.data.me.rank >= 1 && r.data.me.nickname === userA.nickname, 'my rank');
     return `my rank ${r.data.me.rank} of ${r.data.total}`;
+  });
+  await step('ranking: profile.title from a save is shown only when it is a real game title (no free text)', async () => {
+    const titled = async (title) => {
+      await sleep(1100);
+      const s = structuredClone(stored);
+      s.profile.title = title; s.savedAt = Date.now();
+      const w = await A.req('api/player/save.php', { json: saveBody(s) });
+      assert(w.status === 200, `save ${w.status} ${w.error?.code} ${JSON.stringify(w.json?.data?.violations || '')}`);
+      stored = s;
+      const r = await A.req('api/ranking/top.php');
+      return (r.data?.ranking || []).find((e) => e.me);
+    };
+    let mine = await titled('내번호 01012345678');
+    if (!mine) return 'skipped: this account is not in the top 20 on this server';
+    assert(mine.title === '', `free-text title leaked into the ranking: "${mine.title}"`);
+    mine = await titled('입문자');
+    assert(mine?.title === '입문자', `real title shown: "${mine?.title}"`);
+    return 'free text → "", 입문자 → 입문자';
   });
   await step('time.php', async () => {
     const r = await anon.req('api/time.php');

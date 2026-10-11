@@ -7,7 +7,11 @@
 //                     server mode uploads it to journal/upload.php and stores the returned url)
 //   openList()        cards newest first, zone filter, detail view, delete with confirm
 //   openDetail(id) / create(entry) -> entry | null / remove(id) / get(id) / list() / count()
-// Emits journal:created {entry} (progression counts it, quests advance). Required: 작업 or 배운 내용.
+// Emits journal:created {entry} (progression counts it, quests advance). Required: 작업 or 배운 내용 (or a mood).
+// 쉬운 모드 (CONTRACT §12, default) = "그림일기": ① mood face (😊😐😢😮😴) ② up to 5 stickers (today's activities are
+//   pre-picked ✨) ③ optional photo from the in-game album (no file upload, no typing) -> "📝 다 썼어요!" saves; a live
+//   diary page previews it. The list is a 일기장 of big picture pages; delete asks a picture confirm. Entries keep the
+//   same validated shape (+ `mood` id), so adult and kid entries show in both looks. Normal mode is unchanged.
 // =============================================================================
 (function () {
   const U = G.util;
@@ -37,6 +41,26 @@
   ];
   const TASK = Object.fromEntries(TASKS.map((t) => [t.id, t]));
   const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
+  // ---- 쉬운 모드 (그림일기)
+  const MOODS = [
+    { id: 'happy', emoji: '😊', label: '기뻐요', color: '#ffc93c' },
+    { id: 'calm', emoji: '😐', label: '그냥 그래요', color: '#9ad0ff' },
+    { id: 'sad', emoji: '😢', label: '슬퍼요', color: '#8fb4ff' },
+    { id: 'wow', emoji: '😮', label: '놀라워요', color: '#ff9f43' },
+    { id: 'sleepy', emoji: '😴', label: '졸려요', color: '#b48bff' },
+  ];
+  const MOOD = Object.fromEntries(MOODS.map((m) => [m.id, m]));
+  const MAX_STICKERS = 5;
+  /** short kid labels for the sticker chips (same ids as TASKS) */
+  const KID_TASK = { water: '물 주기', plant: '씨앗 심기', harvest: '채소 거두기', ferment_check: '장독 보기', ferment: '장 담그기', craft: '만들기', edu: '그림 이야기', quiz: '퀴즈', photo: '사진 찍기', talk: '이야기', tour: '구경하기', shop: '가게' };
+  const STICKER_COLOR = { water: '#4fb3ff', plant: '#55d187', harvest: '#8fd14f', ferment_check: '#ffc93c', ferment: '#ff9f43', craft: '#d3a46a', edu: '#b48bff', quiz: '#ff7eb6', photo: '#36cfc0', talk: '#6c8cff', tour: '#ffd166', shop: '#ff8a5c' };
+  const easyOn = () => !!(G.easy && G.easy.on);
+  const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+  function kidDate(iso) {
+    if (!validISO(iso)) return String(iso || '');
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${m}월 ${d}일 ${WEEK[new Date(y, m - 1, d).getDay()]}요일`;
+  }
 
   // ---------------------------------------------------------------- helpers
   const h = (...a) => G.ui.h(...a);
@@ -233,14 +257,18 @@
       G.bus.on('photo:taken', (p) => logSoon('photo', '사진 촬영', { photoId: p?.photoId, photoZoneId: p?.photoZoneId }, 'photoId'));
       G.bus.on('npc:talk', (p) => { const n = G.data.npcs?.[p?.npcId]; if (n) logSoon('talk', `${n.name}${josa(n.name, '과/와')} 대화`, { npcId: p.npcId }, 'npcId'); });
       G.bus.on('zone:enter', (p) => { if (p?.first && p.zone) logSoon('visit', `${p.zone.name} 첫 방문`, { zoneId: p.zoneId }, 'zoneId'); });
+      // easy <-> normal at runtime: close the journal windows of the other look (drafts are kept)
+      G.bus.on('easy:changed', () => { for (const id of MODAL_IDS) G.ui.modal.get(id)?.close(); });
     },
     onStateLoaded(state) {
       if (!Array.isArray(state.journal)) state.journal = [];
       this._draft = null;
+      this._kidDraft = null;
       for (const id of MODAL_IDS) G.ui.modal.get(id)?.close();
     },
     onLogout() {
       this._draft = null;
+      this._kidDraft = null;
       for (const id of MODAL_IDS) G.ui.modal.get(id)?.close();
     },
     // ------------------------------------------------------------ data API
@@ -254,7 +282,9 @@
       const tasks = Array.isArray(entry.tasks) ? [...new Set(entry.tasks.filter((t) => TASK[t]))] : [];
       const note = clip(entry.note ?? '', LIMIT.note);
       const learned = clip(entry.learned, LIMIT.learned);
-      const activityText = clip(entry.activity ?? [tasks.map((t) => TASK[t].label).join(', '), note].filter(Boolean).join(' · '), LIMIT.note + 120);
+      const mood = typeof entry.mood === 'string' && MOOD[entry.mood] ? entry.mood : null;
+      let activityText = clip(entry.activity ?? [tasks.map((t) => TASK[t].label).join(', '), note].filter(Boolean).join(' · '), LIMIT.note + 120);
+      if (!activityText && mood) activityText = `오늘 기분: ${MOOD[mood].label}`;
       if (!activityText && !learned) return null;
       const zoneId = zoneOf(entry.zoneId) ? entry.zoneId : currentZoneId();
       const now = G.time.now();
@@ -274,6 +304,7 @@
         photo: safeSrc(entry.photo) || null,
         photoId: entry.photo && entry.photoId ? String(entry.photoId).slice(0, 64) : null,
         eduIds: Array.isArray(entry.eduIds) ? entry.eduIds.filter((x) => G.data.education?.[x]).slice(0, 12) : [],
+        mood,
       };
       G.state.journal.push(e);
       if (G.state.journal.length > MAX_ENTRIES) G.state.journal.splice(0, G.state.journal.length - MAX_ENTRIES);
@@ -295,6 +326,7 @@
     // ------------------------------------------------------------ form
     open(opts = {}) {
       if (!G.state) { G.ui.toast('로그인 후 작업일지를 쓸 수 있어요.', { type: 'warn' }); return null; }
+      if (easyOn() && !opts.normal) return this._openKid(opts);
       const pre = opts.prefill || {};
       const autoT = autoTasks();
       const restoring = !!this._draft?.touched && !opts.prefill;
@@ -529,6 +561,7 @@
     // ------------------------------------------------------------ list / detail
     openList(opts = {}) {
       if (!G.state) return null;
+      if (easyOn() && !opts.normal) return this._openKidList();
       const ctx = { zone: opts.zone || 'all' };
       const head = h('div', { class: 'jr-switch seg', role: 'tablist' });
       head.innerHTML = `<button type="button" data-jr-write>✏️ 일지 쓰기</button><button type="button" class="active" aria-selected="true">📚 지난 일지 <b data-jr-count>${this.count()}</b></button>`;
@@ -564,7 +597,8 @@
       const cards = list.map((e) => {
         const z = zoneOf(e.zoneId);
         const src = safeSrc(e.photo);
-        const tasks = (e.tasks || []).filter((t) => TASK[t]).slice(0, 6).map((t) => `<span class="emoji" title="${esc(TASK[t].label)}">${TASK[t].icon}</span>`).join('');
+        const moodIco = MOOD[e.mood] ? `<span class="emoji jr-mood" title="${esc(MOOD[e.mood].label)}">${MOOD[e.mood].emoji}</span>` : '';
+        const tasks = moodIco + (e.tasks || []).filter((t) => TASK[t]).slice(0, 6).map((t) => `<span class="emoji" title="${esc(TASK[t].label)}">${TASK[t].icon}</span>`).join('');
         const excerpt = e.learned || e.memo || e.activity || '';
         return `<article class="jr-card" style="--zc:${esc(z?.color || '#9aa88f')}" tabindex="0" role="button" data-jr-open="${esc(e.id)}" aria-label="${esc(fmtDate(e.date))} 작업일지 보기">
           <div class="jr-card-pic ${src ? '' : 'none'}">${src ? `<img src="${esc(src)}" alt="" loading="lazy">` : `<span class="ico ico-lg" data-icon="${esc(z?.icon || 'journal')}"></span>`}</div>
@@ -587,7 +621,8 @@
     },
     openDetail(id) {
       const e = this.get(id);
-      if (!e) { G.ui.toast('일지를 찾을 수 없어요.', { type: 'warn' }); return null; }
+      if (!e) { G.ui.toast(easyOn() ? '일기를 찾을 수 없어요.' : '일지를 찾을 수 없어요.', { type: 'warn' }); return null; }
+      if (easyOn()) return this._openKidDetail(e);
       const z = zoneOf(e.zoneId);
       const src = safeSrc(e.photo);
       const tasks = (e.tasks || []).filter((t) => TASK[t]).map((t) => `<span class="jr-chip on static"><span class="emoji">${TASK[t].icon}</span>${esc(TASK[t].label)}</span>`).join('');
@@ -596,7 +631,8 @@
           <header class="jr-paper-head"><div><div class="jr-paper-date">${esc(fmtDate(e.date))}</div><div class="jr-paper-zone" style="--zc:${esc(z?.color || '#9aa88f')}"><span class="ico ico-sm" data-icon="pin"></span>${esc(z?.name || e.zoneName || '체험관')}</div></div><div class="jr-paper-stamp">작업일지</div></header>
           ${src ? `<figure class="jr-paper-photo"><img src="${esc(src)}" alt="일지 사진"></figure>` : ''}
           ${tasks ? `<div class="jr-paper-tasks">${tasks}</div>` : ''}
-          ${sec('작업', '🧑‍🌾', e.note || (tasks ? '' : e.activity))}
+          ${MOOD[e.mood] ? sec('기분', MOOD[e.mood].emoji, MOOD[e.mood].label) : ''}
+          ${sec('작업', '🧑‍🌾', e.note || (tasks || MOOD[e.mood] ? '' : e.activity))}
           ${sec('수확물', '🧺', e.harvest)}
           ${sec('발효 상태', '🏺', e.ferment)}
           ${sec('배운 내용', '📖', e.learned)}
@@ -617,6 +653,262 @@
           { label: '닫기', class: 'btn-primary' },
         ],
       });
+    },
+
+    // ------------------------------------------------------------ 쉬운 모드: 그림일기 (no typing)
+    /** 📝 쓰기 | 📚 일기장 switch for the kid modals */
+    _kidSwitch(active, ctx) {
+      const h = G.ui.h;
+      const seg = h('div', { class: 'kd-switch', role: 'tablist' });
+      const mk = (id, emoji, label, fn) => {
+        const b = h('button', { type: 'button', role: 'tab', class: `kd-switch-btn${active === id ? ' active' : ''}`, 'aria-selected': active === id ? 'true' : 'false' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', null, label));
+        b.addEventListener('click', () => { if (active !== id) fn(); });
+        seg.appendChild(b);
+      };
+      mk('write', '📝', '쓰기', () => { ctx.m?.close(); this.open(); });
+      mk('list', '📚', `일기장 ${this.count()}`, () => { ctx.m?.close(); this.openList(); });
+      return seg;
+    },
+
+    _openKid(opts = {}) {
+      const h = G.ui.h;
+      const pre = opts.prefill || {};
+      const autoT = autoTasks();
+      const suggested = Object.keys(autoT).filter((t) => TASK[t]).sort((a, b) => autoT[b] - autoT[a]).slice(0, MAX_STICKERS);
+      let d = this._kidDraft;
+      if (!d || !d.touched) d = this._kidDraft = { mood: null, tasks: suggested.slice(), photo: null, photoId: null, touched: false };
+      if (pre.photo && safeSrc(pre.photo)) { d.photo = safeSrc(pre.photo); d.photoId = pre.photoId ? String(pre.photoId).slice(0, 64) : null; d.touched = true; }
+      const ctx = { d, suggested };
+      const m = G.ui.modal.open({
+        id: 'journal-form', size: 'lg', className: 'journal-modal kd-modal', title: '그림일기', icon: '📝',
+        headExtra: this._kidSwitch('write', ctx), autofocus: false,
+        say: '그림일기를 써요. 오늘 기분과 스티커를 골라요.',
+        body: (body) => { body.appendChild(h('div', { class: 'kd-layout' }, h('div', { class: 'kd-steps' }), h('aside', { class: 'kd-page', 'aria-live': 'polite' }))); },
+        actions: [],
+        onClose: () => { if (this._form === ctx) this._form = null; },
+      });
+      ctx.m = m;
+      this._form = ctx;
+      const steps = m.body.querySelector('.kd-steps');
+      const sec = (no, title, sub, sayLine) => {
+        const head = h('h3', { class: 'kd-sec' }, h('span', { class: 'kd-no', 'aria-hidden': 'true' }, String(no)), h('span', { class: 'kd-sec-t' }, title), sub ? h('small', null, sub) : null);
+        const speak = h('button', { type: 'button', class: 'easy-speak kd-say', 'aria-label': '소리로 듣기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔊'));
+        speak.addEventListener('click', () => kidSay(sayLine, { force: true, priority: 1 }));
+        head.appendChild(speak);
+        const box = h('section', { class: 'kd-step' }, head);
+        steps.appendChild(box);
+        return box;
+      };
+      // ① mood
+      const moods = h('div', { class: 'kd-moods', role: 'radiogroup', 'aria-label': '오늘 기분' });
+      for (const mo of MOODS) {
+        const b = h('button', { type: 'button', role: 'radio', class: 'kd-mood', dataset: { mood: mo.id }, 'aria-label': mo.label, 'data-say': mo.label },
+          h('span', { class: 'kd-mood-face emoji', 'aria-hidden': 'true' }, mo.emoji), h('span', { class: 'kd-mood-lbl' }, mo.label));
+        b.style.setProperty('--mood', mo.color);
+        b.addEventListener('click', () => {
+          d.mood = d.mood === mo.id ? null : mo.id;
+          d.touched = true;
+          G.sfx('click');
+          if (d.mood) kidSay(mo.label, { force: false });
+          this._kidRefresh(ctx);
+        });
+        moods.appendChild(b);
+      }
+      G.kidKit?.gridKeys?.(moods);
+      sec(1, '오늘 기분은?', null, '오늘 기분은 어때요? 얼굴을 하나 골라요.').appendChild(moods);
+      // ② stickers (max 5; today's activities are pre-picked)
+      const stick = h('div', { class: 'kd-stickers', role: 'group', 'aria-label': '오늘 한 일 스티커' });
+      for (const t of TASKS) {
+        const b = h('button', { type: 'button', class: 'kd-sticker', dataset: { task: t.id }, 'aria-pressed': 'false', 'data-say': KID_TASK[t.id] || t.label },
+          h('span', { class: 'kd-st-emoji emoji', 'aria-hidden': 'true' }, t.icon), h('span', { class: 'kd-st-lbl' }, KID_TASK[t.id] || t.label),
+          ctx.suggested.includes(t.id) ? h('span', { class: 'kd-today', title: '오늘 한 일', 'aria-hidden': 'true' }, '✨') : null);
+        b.style.setProperty('--st', STICKER_COLOR[t.id] || '#ffc93c');
+        b.addEventListener('click', () => {
+          const i = d.tasks.indexOf(t.id);
+          if (i >= 0) d.tasks.splice(i, 1);
+          else if (d.tasks.length >= MAX_STICKERS) { G.kidKit?.shake?.(b); G.sfx('wrong'); kidSay('스티커는 다섯 개까지 붙일 수 있어요.', { force: true }); return; }
+          else { d.tasks.push(t.id); kidSay(KID_TASK[t.id] || t.label, { force: false }); }
+          d.touched = true;
+          G.sfx('click');
+          this._kidRefresh(ctx);
+        });
+        stick.appendChild(b);
+      }
+      G.kidKit?.gridKeys?.(stick);
+      sec(2, '무엇을 했나요?', `스티커 ${MAX_STICKERS}개까지`, `오늘 무엇을 했나요? 스티커를 ${MAX_STICKERS}개까지 골라요.`).appendChild(stick);
+      // ③ photo (in-game album only: no file upload for children)
+      const photos = h('div', { class: 'kd-photos', role: 'radiogroup', 'aria-label': '사진 고르기' });
+      const list = recentPhotos(7);
+      const none = h('button', { type: 'button', role: 'radio', class: 'kd-photo kd-photo-none', dataset: { photo: '' }, 'aria-label': '사진 없이', 'data-say': '사진 없이' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🚫'), h('span', null, '사진 없이'));
+      none.addEventListener('click', () => { d.photo = null; d.photoId = null; d.touched = true; this._kidRefresh(ctx); });
+      photos.appendChild(none);
+      // a photo attached from the album that is no longer in the recent list stays choosable
+      if (d.photo && d.photoId && !list.some((p) => p.id === d.photoId)) list.unshift({ id: d.photoId, thumb: d.photo });
+      if (d.photo && !d.photoId) list.unshift({ id: '__pre', thumb: d.photo });
+      for (const p of list) {
+        const src = safeSrc(p.thumb || p.url);
+        if (!src) continue;
+        const b = h('button', { type: 'button', role: 'radio', class: 'kd-photo', dataset: { photo: p.id }, 'aria-label': '찍은 사진' }, h('img', { src, alt: '', loading: 'lazy' }));
+        b.addEventListener('click', () => { d.photo = src; d.photoId = p.id === '__pre' ? null : p.id; d.touched = true; G.sfx('click'); this._kidRefresh(ctx); });
+        photos.appendChild(b);
+      }
+      G.kidKit?.gridKeys?.(photos);
+      const photoSec = sec(3, '사진도 붙일까요?', '안 붙여도 돼요', '사진도 붙일까요? 안 붙여도 괜찮아요.');
+      photoSec.appendChild(photos);
+      if (!list.length) photoSec.appendChild(h('p', { class: 'kd-tip' }, '📸 사진을 찍으면 여기에 나와요!'));
+      // save
+      const save = h('button', { type: 'button', class: 'easy-big-btn kd-save', 'data-say': '다 썼어요' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📝'), h('span', null, '다 썼어요!'));
+      save.addEventListener('click', () => this._kidSave(ctx, save));
+      m.foot.appendChild(save);
+      ctx.save = save;
+      this._kidRefresh(ctx);
+      return m;
+    },
+
+    /** sync the chosen states + the live diary page preview */
+    _kidRefresh(ctx) {
+      const { d, m } = ctx;
+      if (!m || m.closed) return;
+      const h = G.ui.h;
+      for (const b of m.body.querySelectorAll('.kd-mood')) { const on = b.dataset.mood === d.mood; b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); }
+      for (const b of m.body.querySelectorAll('.kd-sticker')) { const on = d.tasks.includes(b.dataset.task); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+      for (const b of m.body.querySelectorAll('.kd-photo')) { const on = b.dataset.photo ? (b.dataset.photo === (d.photoId || '__pre') && !!d.photo) : !d.photo; b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); }
+      const count = m.body.querySelector('.kd-step:nth-child(2) .kd-sec small');
+      if (count) count.textContent = `스티커 ${d.tasks.length} / ${MAX_STICKERS}`;
+      ctx.save?.classList.toggle('ready', !!(d.mood || d.tasks.length));
+      const page = m.body.querySelector('.kd-page');
+      if (!page) return;
+      page.textContent = '';
+      const z = zoneOf(currentZoneId());
+      const mood = MOOD[d.mood];
+      const src = safeSrc(d.photo);
+      // h() skips null children; native append() would print "null" — so the parts go through one h() wrapper
+      page.appendChild(h('div', { class: 'kd-page-in' },
+        h('div', { class: 'kd-page-date' }, kidDate(todayISO())),
+        h('div', { class: 'kd-page-zone' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📍'), z?.short || z?.name || '체험관'),
+        h('div', { class: `kd-page-mood${mood ? '' : ' empty'}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, mood ? mood.emoji : '🙂'), h('span', null, mood ? mood.label : '기분을 골라요')),
+        src ? h('figure', { class: 'kd-page-photo' }, h('img', { src, alt: '고른 사진' })) : null,
+        h('div', { class: 'kd-page-stickers' }, d.tasks.length ? d.tasks.map((t) => {
+          const s = h('span', { class: 'kd-page-st', title: KID_TASK[t] || TASK[t]?.label || '' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, TASK[t]?.icon || '⭐'));
+          s.style.setProperty('--st', STICKER_COLOR[t] || '#ffc93c');
+          return s;
+        }) : h('span', { class: 'kd-page-hint' }, '스티커를 붙여요'))));
+    },
+
+    _kidSave(ctx, btn) {
+      const d = ctx.d;
+      if (ctx.busy || ctx.m.closed) return;
+      if (!d.mood && !d.tasks.length) {
+        G.kidKit?.shake?.(ctx.m.body.querySelector('.kd-moods'));
+        G.kidKit?.shake?.(btn);
+        G.sfx('wrong');
+        kidSay('기분이나 스티커를 하나 골라요!', { force: true, priority: 1 });
+        return;
+      }
+      ctx.busy = true;
+      const entry = this.create({
+        mood: d.mood, tasks: d.tasks.slice(0, MAX_STICKERS), zoneId: currentZoneId(), date: todayISO(),
+        harvest: autoHarvest(), ferment: autoFerment(), learned: '', memo: '', note: '',
+        photo: d.photo, photoId: d.photoId,
+      });
+      ctx.busy = false;
+      if (!entry) { G.ui.toast('앗, 일기를 못 썼어요. 다시 해 봐요!', { type: 'error', easy: '앗, 일기를 못 썼어요. 다시 해 봐요!' }); return; }
+      this._kidDraft = null;
+      ctx.m.close();
+      G.sfx('page');
+      const mo = MOOD[entry.mood];
+      try { G.easy?.celebrate?.('일기를 다 썼어요!', { emoji: mo ? mo.emoji : '📝', say: `그림일기를 다 썼어요! 지금까지 ${this.count()}개를 썼어요.` }); } catch (e) { /* cosmetic */ }
+    },
+
+    _openKidList() {
+      const h = G.ui.h;
+      const ctx = {};
+      const m = G.ui.modal.open({
+        id: 'journal-list', size: 'lg', className: 'journal-modal kd-modal kd-list-modal', title: '내 일기장', icon: '📚',
+        headExtra: this._kidSwitch('list', ctx), say: this.count() ? `일기장이에요. 일기가 ${this.count()}개 있어요.` : '일기장이 비어 있어요.',
+        body: (body) => body.appendChild(h('div', { class: 'kd-book' })), actions: [],
+        onClose: () => { if (this._kidList === ctx) this._kidList = null; },
+      });
+      ctx.m = m;
+      this._kidList = ctx;
+      this._renderKidList(ctx);
+      return m;
+    },
+
+    _renderKidList(ctx) {
+      if (!ctx?.m || ctx.m.closed) return;
+      const h = G.ui.h;
+      const book = ctx.m.body.querySelector('.kd-book');
+      if (!book) return;
+      book.textContent = '';
+      const all = this.list().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      const btn = ctx.m.el.querySelector('.kd-switch-btn:last-child span:last-child');
+      if (btn) btn.textContent = `일기장 ${all.length}`;
+      if (!all.length) {
+        book.appendChild(G.kidKit ? G.kidKit.empty('📔', '아직 일기가 없어요.', '오늘 한 일을 그림일기로 남겨 봐요!') : h('p', null, '아직 일기가 없어요.'));
+        const w = h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes kd-write-first' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📝'), h('span', null, '일기 쓰기'));
+        w.addEventListener('click', () => { ctx.m.close(); this.open(); });
+        book.appendChild(w);
+        return;
+      }
+      const grid = h('div', { class: 'kd-cards', role: 'list' });
+      all.slice(0, 120).forEach((e, i) => {
+        const mo = MOOD[e.mood];
+        const src = safeSrc(e.photo);
+        const tasks = (e.tasks || []).filter((t) => TASK[t]).slice(0, MAX_STICKERS);
+        const card = h('button', { type: 'button', role: 'listitem', class: 'kd-card', 'aria-label': `${kidDate(e.date)} 일기${mo ? `, ${mo.label}` : ''}` },
+          h('span', { class: 'kd-card-date' }, kidDate(e.date)),
+          h('span', { class: 'kd-card-mood emoji', 'aria-hidden': 'true' }, mo ? mo.emoji : '📝'),
+          src ? h('span', { class: 'kd-card-pic' }, h('img', { src, alt: '', loading: 'lazy' })) : null,
+          h('span', { class: 'kd-card-st', 'aria-hidden': 'true' }, tasks.map((t) => h('span', { class: 'emoji' }, TASK[t].icon))));
+        card.style.setProperty('--i', String(Math.min(i, 16)));
+        if (mo) card.style.setProperty('--mood', mo.color);
+        card.__easySpeak = { btn: null, text: `${kidDate(e.date)} 일기. ${mo ? `기분은 ${mo.label}.` : ''} ${tasks.map((t) => KID_TASK[t] || TASK[t].label).join(', ')}` };
+        card.addEventListener('click', () => this.openDetail(e.id));
+        grid.appendChild(card);
+      });
+      G.kidKit?.gridKeys?.(grid);
+      book.appendChild(grid);
+    },
+
+    _openKidDetail(e) {
+      const h = G.ui.h;
+      const mo = MOOD[e.mood];
+      const z = zoneOf(e.zoneId);
+      const src = safeSrc(e.photo);
+      const tasks = (e.tasks || []).filter((t) => TASK[t]);
+      // the jar status line (temperature, quality %) is for the grown-up view; the kid page keeps it simple
+      const texts = [['🧑‍🌾', e.note], ['🧺', e.harvest], ['📖', e.learned], ['💭', e.memo]].filter(([, v]) => v && String(v).trim());
+      const page = h('div', { class: 'kd-paper' },
+        h('header', { class: 'kd-paper-head' },
+          h('div', null, h('div', { class: 'kd-paper-date' }, kidDate(e.date)), h('div', { class: 'kd-paper-zone' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📍'), z?.short || z?.name || e.zoneName || '체험관')),
+          mo ? h('div', { class: 'kd-paper-mood' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, mo.emoji), h('span', null, mo.label)) : null),
+        src ? h('figure', { class: 'kd-paper-photo' }, h('img', { src, alt: '일기 사진' })) : null,
+        tasks.length ? h('div', { class: 'kd-paper-stickers' }, tasks.map((t) => {
+          const s = h('span', { class: 'kd-paper-st' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, TASK[t].icon), h('span', null, KID_TASK[t] || TASK[t].label));
+          s.style.setProperty('--st', STICKER_COLOR[t] || '#ffc93c');
+          return s;
+        })) : null,
+        texts.length ? h('div', { class: 'kd-paper-notes' }, texts.map(([emo, v]) => h('p', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emo), h('span', null, String(v))))) : null);
+      const del = h('button', { type: 'button', class: 'easy-big-btn easy-btn-no kd-del', 'data-say': '지우기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🗑️'), h('span', null, '지우기'));
+      const ok = h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '👍'), h('span', null, '다 봤어요'));
+      const m = G.ui.modal.open({
+        id: 'journal-detail', size: 'md', className: 'kd-detail-modal', title: '그림일기', icon: mo ? mo.emoji : '📝',
+        say: `${kidDate(e.date)} 일기. ${mo ? `기분은 ${mo.label}.` : ''} ${tasks.map((t) => KID_TASK[t] || TASK[t].label).join(', ')}`,
+        body: page, actions: [],
+      });
+      m.foot.append(del, ok);
+      ok.addEventListener('click', () => m.close());
+      del.addEventListener('click', async () => {
+        const yes = await (G.easy?.confirm ? G.easy.confirm({ emoji: '🗑️', heading: '지우기', title: '이 일기를 지울까요?', text: '지우면 다시 볼 수 없어요.', danger: true, yes: '지울래요', no: '안 지울래요' }) : G.ui.confirm('이 일기를 지울까요?', { danger: true }));
+        if (!yes || !this.get(e.id)) return;
+        this.remove(e.id);
+        m.close();
+        G.ui.toast('일기를 지웠어요.', { type: 'info', emoji: '🗑️' });
+        this._renderKidList(this._kidList);
+      });
+      setTimeout(() => { if (!m.closed) ok.focus({ preventScroll: true }); }, 60);
+      return m;
     },
   };
 

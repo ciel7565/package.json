@@ -324,6 +324,8 @@ G.time = {
       if (sys._failed || !sys.onLogout) continue;
       try { sys.onLogout(); } catch (e) { recordError(sys, 'onLogout', e); }
     }
+    // profile-scoped settings (easy mode, kid chat, parent gate) fall back to this device's values (§12.1)
+    try { G.restoreDeviceSettings?.(); } catch (e) { G.log.warn('CORE', 'restoreDeviceSettings failed', e); }
   };
 
   // ---------------------------------------------------------------- main loop

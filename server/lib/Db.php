@@ -13,7 +13,7 @@ if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
 
 final class Db
 {
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
     private static ?PDO $pdo = null;
     private static string $driver = 'sqlite';
     private static int $txDepth = 0;

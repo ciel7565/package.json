@@ -220,7 +220,10 @@ appearance option values: hair short|long|bun|ponytail|buzz|curly ; top tshirt|h
   Emits `npc:talk` on start and `dialogue:end`. `{nickname}` placeholder in text.
 - `G.data.dialogues = { npc_master: {npc:'NPC001', entries:[{if:{...}, node:'x'}, {node:'start'}], nodes:{ id:{ text, speaker?, emote?,
   actions:[...], choices:[{text, next?, end?, if?, actions?}], next? } } } }` for npc_master, npc_farmer, npc_culture, npc_keeper, npc_guide.
-  Conditions: `{questStatus:{Q:'available'|[..]}, hasItem:{ITEM:n}, flag:'x', notFlag:'x', level:n, jarStatus:{J1:'COMPLETE'}}`.
+  Conditions: `{questStatus:{Q:'available'|[..]}, hasItem:{ITEM:n}, flag:'x', notFlag:'x', level:n, jarStatus:{J1:'COMPLETE'}, easy:true|false}`
+  (full list in the 26-dialogues.js header; `easy` = 쉬운 모드 on/off). In 쉬운 모드 every quest giver opens straight on the offer of
+  a quest that is `available` (산골농부 does it in both modes; 전통사랑 / 장독지기 via `KID(...)` entries), so "OO에게 가요" never
+  ends in a menu hunt; normal mode keeps their hub menu.
   Actions: `acceptQuest{quest}`, `claimQuest{quest}`, `giveItem{item,qty}`, `takeItem{item,qty}`, `setFlag{flag}`, `openEdu{edu}`,
   `openQuiz{quiz}`, `openShop{shop}`, `openCraft`, `openJar{jar}`, `openMap`, `openJournal`, `teleport{zone}`, `emote{emote}`, `event{name,payload}`.
   Content: warm, short Korean lines (spec #71 style); 발효마스터 runs the tutorial (QUEST001), 산골농부 → Q_FARMER/Q_HERB + farming tips,
@@ -459,41 +462,109 @@ sentences (≤ 12 words), no hanja/jargon; numbers as pictures where possible (�
 Normal mode (adults) keeps the same features with the denser UI. Easy mode is the DEFAULT.
 
 ### 12.1 Settings (03-state DEFAULTS additions)
-`easyMode: true` · `voiceGuide: true` (read prompts aloud in easy mode) · `voiceRate: 0.95` ·
-`playReminderMin: 30` (0 = off) · `kidChat: true` (chat = phrase/emoji picker only while easyMode) ·
-`parentGate: true`. `<body>` gets class `easy` (easy on) or `easy-off`; CSS var `--tap` = 56px / 40px.
+`easyMode: true` · `voiceGuide: true` (read prompts aloud in easy mode) · `voiceRate: 0.95` (0.6–1.4) ·
+`playReminderMin: 30` (0 = off, ≤ 240) · `kidChat: true` (chat = phrase/emoji picker only while easyMode) ·
+`parentGate: true`. `<body>` gets class `easy` (easy on) or `easy-off` (`G.applySettingsToDom`, at boot and on every
+change); CSS var `--tap` = 56px / 40px on `<html>`.
+- **Profile-scoped keys** `easyMode`, `kidChat`, `parentGate` (`G.settingsProfileKeys`) always come from the player's
+  save: `G.save.applyProfileSettings(state)` runs on load / reset / import / server restore and gives saves that lack
+  them the DEFAULT (existing players and new profiles start in easy mode, a parent's "easy off" never leaks into a
+  child's profile). After logout they fall back to this device's stored value (`G.restoreDeviceSettings()`).
+- Every stored, imported or `setSetting` value is type-checked against the default (`G.sanitizeSetting(key, v)`:
+  wrong type → default, numbers clamped, enums checked). **Pass numbers as numbers** (`Number(input.value)`).
+  Loading a profile now emits `settings:changed` for each key whose value actually changed (handlers must not assume
+  `G.state` exists).
+- Change easy mode with `G.easy.set(bool)` (asks the gate before switching OFF), not `G.setSetting('easyMode')`.
+- **Device store** `localStorage['tfm.v1.settings']` holds only device values: `G.setSetting(k, v)` writes just that key,
+  and never writes a profile-scoped key while a profile is loaded (`G.state` set) — those go to the save only. On the title
+  (no profile) a profile key written there becomes the device default. The store carries `_v: 2`; an older store without it
+  drops the three profile keys once (back to the child-safe defaults). `G.deviceSetting(key)` reads the stored device value.
 
 ### 12.2 `G.easy` (08-easy.js — core fragment, no 3D dependency, safe to call before world init)
-- `G.easy.on` (getter) · `G.easy.set(bool)` → setSetting('easyMode') + body class + emit `easy:changed {on}`.
-- `G.easy.say(text, {interrupt=true, priority})` → Promise. speechSynthesis ko-KR (best Korean voice, rate
-  voiceRate, pitch 1.1); only when easy && voiceGuide && !muted (or opts.force); strips emoji/markup; de-dups the
-  same text within 4 s; ≤ 140 chars; ducks music via `G.sys.audio?.duck?.(true|false)`; `G.easy.stop()`.
-  Emits `easy:say {text}`. Never throws when speech is unsupported.
-- `G.easy.speakable(el, text?)` → adds a small 🔊 button (and long-press 600 ms on touch) reading text/el text.
-- `G.easy.gate({reason, title})` → Promise<boolean>. Parent gate (UX barrier, not an adult security boundary):
-  random 2-digit × 1-digit multiplication with 4 big shuffled choices; 3 wrong → 30 s cool-down; success unlocks
-  for 5 minutes. Resolves true immediately when easyMode is off or parentGate is false. Emits `easy:gate`.
-- `G.easy.pick({title, say, items:[{id, emoji, label, color?, disabled?, badge?}], columns})` → Promise<id|null>:
-  big picture chooser (seeds, recipes, destinations, phrases, stickers, outfits…). Esc/✖ → null.
-- `G.easy.confirm({emoji, title, say, yes='좋아요', no='아니요', danger})` → Promise<boolean>.
-- `G.easy.celebrate(text, {emoji})` → big centered emoji pop + voice + `G.fx?.burst` (honours reduceMotion).
-- `G.easy.point(target, {label, say, duration})` → big bouncing 👆 hand; target = Element | selector |
-  {x,y,z} world point (projected every frame via `G.sys.engine.worldToScreen`); returns {stop()}; one at a time.
-- `G.easy.nextStep()` → {emoji, text, say, target:{x,z}|null, act?} from the current quest objective
-  (`G.sys.quest?.getMarkers?.()`, `G.sys.quest?.current?.()`); drives the HUD "다음 할 일" card.
-- `G.easy.goTo(target, {label})` → auto-walk to {x,z} (`G.sys.player.walkTo`) or travel to a poi/zone id
-  (`G.sys.minimap?.travelTo`), shows a golden trail if available.
+- `G.easy.on` (getter) · `G.easy.set(bool)` → Promise<bool>; OFF asks `G.easy.gate({reason:'easy-off'})` first
+  (it re-enables free-text chat); emits `easy:changed {on}` (also when a profile load or `setSetting` flips it).
+- `G.easy.say(text, {interrupt=true, priority=0, force, rate})` → Promise<bool> (true = finished speaking).
+  speechSynthesis ko-KR (best Korean voice: Natural/Online > Google > named female > ko-KR; rate `voiceRate`,
+  pitch 1.1); only when easy && voiceGuide && !muted, or `force` (explicit 🔊 / long-press — still silent when muted,
+  with a "소리가 꺼져 있어요" hint); strips emoji/markup/symbols; de-dups the same line within 4 s (forced lines too
+  while it is still being read); ≤ 140 chars cut at a sentence end. Queue: `interrupt` cancels the current line
+  unless it has a higher `priority` (then it is queued); max 4 queued. Ducks music with
+  `G.sys.audio?.duck?.('easy-voice', 0.4)` / `unduck('easy-voice')`. `G.easy.stop()`, `G.easy.speaking`.
+  Emits `easy:say {text}` (also headless / unsupported, for captions & tests). Never throws.
+- `G.easy.speakable(el, text|fn?)` → appends one 🔊 `.easy-speak` button to `el` (idempotent) reading `text` /
+  `fn()` / the element text. `G.easy.textOf(el)` = what a 🔊 / long-press reads: `__easySpeak` text, `data-say`,
+  visible text, then `aria-label` / `title`.
+- `G.easy.gate({reason, title, text})` → Promise<boolean>. Parent gate (UX barrier, not an adult security boundary):
+  random 2-digit × 1-digit multiplication (12–98 × 3–9) with 4 big shuffled plausible choices (keys 1–4 / arrows);
+  a new question after every wrong answer; 3 wrong → 30 s cool-down, doubling on repeated failures (max 5 min,
+  persisted in `localStorage['tfm.v1.gate']`, survives reload); success unlocks for 5 minutes (memory only, re-locked
+  on logout: `G.easy.lockGate()`). Resolves true immediately when easyMode is off or parentGate is false. One gate at
+  a time (concurrent calls share the result). Emits `easy:gate {reason, ok, skipped?, cached?}`.
+  `G.easy.gateStatus()` → {unlocked, unlockLeft, cooldownLeft, wrong, open, required}.
+  Anti-mashing: a tap locks the 4 choices at once and the next question becomes tappable only after a short pause
+  (0.35 s first, 0.6 s after a wrong answer; `disabled` buttons, stale question ids ignored) → one answer per question.
+  The wrong count of the current round is persisted with the cool-down (`{until, strikes, wrong, wt}`, expires after 10 min).
+  Scripts that solve the gate must wait for `.easy-gate-choice:not([disabled])`.
+- `G.easy.pick({id, title, say, emoji, text, items:[{id, emoji, label, color?, disabled?, disabledSay?, badge?, sub?,
+  selected?, say?}], columns, size})` → Promise<id|null>: big picture chooser (2–4 columns, 3 on phones, 2 below
+  380 px; arrows/Home/End/Enter; the focused tile is read aloud; disabled tiles shake + speak). Esc / ⬅️ → null.
+- `G.easy.confirm({emoji, heading, title, text, say, yes='좋아요', no='아니요', danger})` → Promise<boolean>
+  (danger: the safe ❌ button is focused). `G.easy.alert({emoji, heading, title, text, say, ok='알았어요'})` → Promise.
+  In easy mode `G.ui.confirm` / `G.ui.alert` route to these unless `opts.html` or `opts.easy === false`.
+- `G.easy.celebrate(text, {emoji='🎉', say, duration=2200, sound})` → Promise: centred emoji pop + slow light rays +
+  voice + `G.fx?.burst` confetti at the player (rays/burst off with reduceMotion).
+- `G.easy.point(target, {label, say, duration=6000 (0 = until stop), offsetY})` → {stop(), active}: big bouncing 👆
+  with a pulse ring; target = Element | selector (resolved lazily) | {x,y?,z} | Object3D; world targets are projected
+  every frame (`engine.worldToScreen`), off-screen/behind-camera targets get an edge hand pointing towards them;
+  one at a time (`G.easy.stopPoint()`); tapping the target element stops it. Emits `easy:point {label}`.
+- `G.easy.nextStep()` → {key, speakKey, emoji, text, say, target:{x,z,label}|null, act?, actLabel?, actEmoji?,
+  progress:{value,target}|null, questId?, type?} from `G.sys.quest.focus()` (claim → 🎁 선물 받기 acts
+  `quest.claim`, giver → 🙋 go to the NPC, objective → one kid sentence per objective type; journal/photo/emote/chat
+  objectives act directly; a craft objective whose ingredient is missing — `G.sys.quest.craftNeed(craftId)` →
+  {item, have, need, crop} — reads "🫘 콩을 모아요 1/3" and its marker points at that crop's bed or the 매점 until the
+  bag holds enough, then "작업대에서 만들어요"); fallback "🗺️ 구경해요" (act = picture travel menu). Drives the HUD card.
+- `G.easy.goTo(target {x,z,label?} | zoneOrPoiId, {label, stopDistance=1.8})` → Promise<bool>: auto-walk
+  (`player.walkTo`, runs when > 10 m, destination ring via `G.interact.showDest ?? _showDest`); > 70 m or stuck →
+  `G.sys.minimap.travelTo(zone)` first when that lands closer; on arrival "도착했어요!" + the hand points at
+  `#interact-prompt`. A walk cancelled by the child (joystick/click) ends silently.
+- `G.easy.travelMenu()` → Promise<zoneId|null>: "🗺️ 어디 갈까?" picture menu of the zones (📍 here, ⭐ quest goal).
 - `G.easy.t(normalText, easyText)` → easyText when easy mode is on.
-- `G.easy.nameIdeas(n)` → kid-safe nickname suggestions (형용사 + 동물/발효 친구, e.g. "용감한 다람쥐").
-- Play-time reminder every playReminderMin minutes of active play (mascot, gentle, non-blocking: 쉬기 / 계속).
+- `G.easy.nameIdeas(n=6)` → unique kid-safe nicknames (형용사 + 동물/발효 친구, written without a space so they pass
+  the 2–12 char nickname rule, e.g. "용감한다람쥐"), filtered against `G.data.badWords`.
+- Healthy play: every `playReminderMin` minutes of ACTIVE play (easy mode, in game, tab visible, input in the last
+  90 s; counted per browser session) a non-blocking mascot card offers 😴 쉬기 / ▶️ 계속. 쉬기 = `G.easy.rest()`: a calm
+  full-screen breathing break (8 s cycle, tips 👀 🙆 💧, "다시 놀기" always available, Esc closes, blocks gameplay).
+  `G.easy.remind()` shows the card now; `G.easy.playSeconds`.
+- `G.easy.josa(word, '을/를')` Korean particle helper. Dev-center hooks: `_gateQuestion()`, `_speechText()`, `_voice`.
 
 ### 12.3 HUD in easy mode (template.html + 00/01/02 css + 08-easy)
-Top-left: avatar, nickname, ⭐ level, 🪙 coins (big digits, no exp text). Top-center: "다음 할 일" card (big emoji,
-one sentence, 👉 같이 가기 = auto-walk, 🔊). Right: compact minimap + big "🗺️ 어디 갈까?" (picture travel menu).
-The left menu becomes 4 big tiles: 🎒 가방 · 📖 스티커북 (도감·업적·퀘스트 tabs merged) · 🔔 오늘 (engagement) · ☰ 메뉴.
-Bottom bar: 😊 표현하기 (emote + gesture merged picker) · 📸 사진 · 📝 일기 · 🔊 소리. Chat collapses to a 💬 button
-with a badge; opening it shows the kid phrase picker. Interact prompt = big round "👆 눌러요!" button with the
-target's emoji (tappable on every device). Quest panel is hidden in easy mode (merged into 다음 할 일 + 스티커북).
+Top-left: avatar + one stats card (nickname, ⭐ level from `#hud-level`, 🪙 `#hud-coin`; exp bar, title, edu and
+mode chip hidden). Top-center: `#easy-next` "다음 할 일" card (bouncing emoji, one sentence, ●●○ progress pips,
+👉 같이 가기 / 🎁 선물 받기 / ✋ 멈춰, 🔊; a new step is read aloud once nothing else is on screen); `#objective-hint`
+is hidden — coach marks must anchor `#easy-next` in easy mode. Right: compact minimap (no header tools) + big
+`#easy-where` "🗺️ 어디 갈까?" (minimap hidden ≤ 820 px). Left menu = 4 big tiles: 🎒 가방 · 📖 스티커북 · 🔔 오늘 · ☰ 메뉴
+(`#hud-bell` is hidden: merged into 🔔 오늘). Bottom bar: 😊 표현하기 · 📸 사진 · 📝 일기 · 🔊 소리. Chat collapses to the
+`#easy-chat-btn` 💬 (badge = chat unread). Interact prompt = big gold pill with the target's emoji and a bouncing 👆.
+Quest panel and `.app-mobile-toggles` are hidden. Mobile: bigger joystick / 👆 / jump / run, 📷 hidden (bottom bar).
+Verified free of overlaps at 1600×900, 1366×768, 390×844 and 844×390.
+- **Actions owned by 08-easy** (other modules implement the target methods, never register these actions):
+  `stickerbook` → `G.sys.progression.openHub()` · `today` → `G.sys.engagement.open()` · `express` →
+  `G.sys.social.openExpress(anchor)` (fallback `openEmotes`) · `kid-chat` → `G.sys.social.openKidChat(anchor)`
+  (fallback: toggles `body.show-chat`, which shows the chat log in easy mode on every screen size) · `where` →
+  `G.sys.minimap.openPictureTravel()` (fallback `G.easy.travelMenu()`) · `sound` (mute toggle) · `easy-go` · `easy-read`.
+- Badges: `G.ui.setBadge` also paints `[data-badge-host][data-action=X]`; merged tiles sum their parts
+  (`stickerbook` = collection + quests, `kid-chat` = chat); 🔔 오늘 polls `G.sys.engagement.unreadCount()` every 2 s.
+  `G.ui.getBadge(action)`.
+- Utility classes (08-easy.css): `.easy-only` / `.easy-hide`, `.easy-big-btn` (+ `.easy-btn-yes/-no/-danger`),
+  `.easy-speak`, `.easy-pick` / `.easy-tile` (`--tile` colour), `.easy-confirm`, `.easy-gate`, `.easy-next`,
+  `.easy-shake`. `[data-say="…"]` sets what a long-press reads; `.no-read` opts out.
+- 04-ui in easy mode: every closable modal gets a big `⬅️ 닫기` (`.easy-back`, ≥ 56 px) at the top-left instead of
+  ✖ plus a 🔊 button; the title (or `opts.say` string) is read aloud on open (`opts.say === false` = silent).
+  Error toasts show the mascot + one friendly sentence (technical/long text → "앗, 잘 안 됐어요. 다시 해 봐요!",
+  `opts.easy` = custom kid sentence; the original goes to the log); `toast(msg, {retry: fn})` adds a 🔄 다시 button
+  (both modes); `opts.say` reads a toast aloud. Reward popups: bigger, no "EXP" words, title read aloud, 8 s.
+- 05-input in easy mode: touch/pen long-press (600 ms, < 12 px movement) on a button/tile/card/text reads it
+  (`G.easy.textOf`) and swallows the click that follows the release; never on the 3D view, joystick or inputs.
 
 ### 12.4 Kid safety (security)
 - Easy mode: no free-text input for the child — nickname via `G.easy.nameIdeas`, chat via preset phrases + emoji,
@@ -501,12 +572,50 @@ target's emoji (tappable on every device). Quest panel is hidden in easy mode (m
   login/register forms, progress reset, import/export, developer center, admin.
 - PII protection (client AND server, all modes): chat masks phone numbers (010-1234-5678, 01012345678, +82 …),
   e-mail addresses, URLs and Korean street-address fragments with 🔒; the sender gets a friendly mascot tip
-  ("이름·전화번호·주소는 비밀이에요! 🤫").
+  ("이름·전화번호·주소는 비밀이에요! 🤫"). `G.sys.social.maskPII/hasPII` (60-social `PII_SRC`) and
+  `ChatFilter::maskPII/hasPII/fold` (server) are the SAME ordered rule list: pass 1 on the text as written, pass 2 on a
+  compatibility fold (NFKC, keycap emoji stripped, every `\p{Nd}` digit → ASCII) whose result is used when it found more.
+  Covered disguises: separators `/ _ ~ * · – — ㅡ ( ) [ ]`, Korean digit words with separators, numerals mixed with digit
+  words, local numbers `1234-5678`, "at … dot" e-mails, "지메일 닷컴", `bad[.]com` / `bad(.)com` / `bad . com`, an address
+  with its lot number, "OO 초등학교" with a space. Shared vectors: `tests/pii-vectors.json` (whole / partial / keep) — run
+  by `tests/server-e2e.mjs` (PHP) and, embedded as `window.__BUILD__.piiVectors`, by the dev-center self-tests (JS).
+  The server's repeat-spam key `chat_messages.text_key` is built from the MASKED text (schema v2 cleared older keys).
 - Photosensitivity: nothing flashes faster than 3 Hz; large-area brightness changes are eased; honour reduceMotion.
 - Healthy play reminders (12.2). No paid items, no countdown pressure, no dark patterns.
 
 ### 12.5 Events (additions)
-`easy:changed {on}` · `easy:say {text}` · `easy:gate {reason, ok}` · `easy:point {label}` · `kid:phrase {phraseId}`.
+`easy:changed {on}` · `easy:say {text}` · `easy:gate {reason, ok, skipped?, cached?}` · `easy:point {label}` ·
+`easy:celebrate {text, emoji, reduced}` (every `G.easy.celebrate`; 66-fx adds the kid party) · `easy:remind {open}`
+(healthy-play card shown / hidden) · `easy:rest {open}` (rest screen; 65-companion naps and wakes) ·
+`kid:phrase {phraseId}` (emoji sends use `'emoji:<e>'`) · `player:arrived {id, x, z, rescued}` ·
+`travel:arrived {id, zoneId, x, z}`. Settings: `settings:changed {key, value}` is also emitted when a profile load changes a key.
+
+### 12.5b Integration APIs added by the phase-3 modules (the implementations are the reference)
+- Interaction (23): interactables may add `kidLabel` (2–3 words), `emoji`, `handOffset` (number | () => number).
+  `G.interact.showDest(x, z, forEntry)` / `hideDest()` / `radiusOf(entry)` / `promptOf(entry)` / `hint`. Easy mode: reach
+  radius ×1.3, and the entry whose id equals the quest focus target (`G.sys.quest.focus().target.id` / `.npc`) wins the
+  prompt over nearer things (card and gold prompt agree). Quest targets carry `id` (plot / jar / object) since QA.
+- Player (21): `walkTo({x,z}, {stopDistance, onArrive, onFail(reason), run, path=true, rescue=easy, trail=easy, label})` → id |
+  false (routes around obstacles, re-plans, easy-mode rescue hop keeps the id; reasons manual · replaced · teleport · stuck ·
+  sit · action · logout · travel), `planPath(from, to, goalR?)`, `walkInfo`, `isWalking`. Camera (22): `G.sys.camera.gentle`.
+- Minimap (50): `openPictureTravel()` → Promise<id|null> (the one "🗺️ 어디 갈까?" flow; M / move / openWorldMap /
+  openFastTravel land there in easy mode), `travelTo(id | {x, z, label?, rotY?}, {say})` → Promise<bool> (one trip at a
+  time, closes open windows first). Avatar (20): `G.avatar.presets` (6 × {id, emoji, label, say, appearance}).
+- Social / audio / fx / mascot: `G.sys.social.maskPII · hasPII · openKidChat(anchor) · openExpress(anchor)`,
+  `G.sys.audio.duck(true|false | key, gain, seconds) · unduck(key)` + kid sounds `tap · oops · sparkle · stamp`,
+  `G.mascot.say(text, {…, voice:false})` (silent card), `G.fx.kidParty(pos?, {rain, burst, emoji})`.
+- Quest / progression / inventory / journal: `G.sys.quest.current()` (kid `easyText`, `emoji`, walk target),
+  `renderList(el, {easy})`, `G.sys.progression.openHub('quest'|'col'|'ach'|'me')` = 📖 스티커북, shared kid kit `G.kidKit`
+  (josa, coinChip, empty, gridKeys, say, vars, shake), `G.sys.journal.create({…, mood})`.
+- Education data: `content.kid = {title, summary, slides:[{text, vis|steps|emoji}]}`, `quiz.kid = {q, choices:[{e,t}],
+  answer, hint, why} | {q, ox:true, answer, hint, why}`; `G.sys.education.answer(quizId, index, {quiet})`.
+- One-tap rules in easy mode: crop bed → plant picker / **water first while the current objective is 💧 water** (any
+  bed with water < 100, even ripe) / harvest when ripe / water below 80 % / picture card; own jar near → claim when ripe,
+  recipe picker when empty (both emit `ferment:checked`, so "내 장독을 살펴봐요" counts), otherwise the jar card.
+- Onboarding coach (70-app, easy): a caption that never takes taps (`.coach.kid { pointer-events:none }`, only 🔊 / ⏭️);
+  hidden while another interact prompt is visible; using any other interactable during steps 2–3 finishes the tutorial;
+  docks above the prompt / bottom controls; "같이 가고 있어요!" after 👉 같이 가기 until the walk stops for 3 s.
+- Dev-center kid tour: `settings-kid` (ungated kid sheet) and `settings` (= `G.app.openAdultSettings()`, must show the gate).
 
 ### 12.6 Phase-3 file ownership
 | Agent | Files |

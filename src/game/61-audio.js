@@ -4,8 +4,13 @@
 //   G.sys.audio.play(name, {volume, pan, at:{x,z}, surface, run}) -> bool
 //       click open close notify error coin reward quest levelup achievement water harvest plant jar craft
 //       shutter step jump land splash chat emote teleport page correct wrong   (+ bubble pop drip whoosh)
-//   G.sys.audio.speak(text, {rate, pitch}) / stopSpeaking()     speechSynthesis with a ko-KR voice
-//   G.sys.audio.duck(key, gain, seconds?) / unduck(key)          lower the music (dialogue TTS, voice input…)
+//       쉬운 모드 extras: tap (soft bloop) oops (gentle uh-oh) sparkle (twinkle) stamp (check-in stamp)
+//   G.sys.audio.speak(text, {rate, pitch, force}) / stopSpeaking()   speechSynthesis with a ko-KR voice; in 쉬운 모드
+//       it goes through G.easy.say (priority 1) so the kid voice queue and dialogue TTS never cancel each other
+//   G.sys.audio.duck(key, gain, seconds?) / unduck(key)          lower the music (dialogue TTS, voice input, 'easy-voice'…)
+//   G.sys.audio.duck(true|false)                                 shorthand for the shared 'tts' duck
+// 쉬운 모드 (CONTRACT §12): click → tap and error / wrong → oops (never a harsh buzzer), loud fanfares a little softer,
+// music bed ×0.8, and every big kid button / tile answers pointer-down with one soft tap (de-duplicated with the click).
 //   G.sys.audio.unlock()                                         (also automatic on the first pointer / key)
 //   G.sys.audio.ready, ctx, levels, mood, stats, analyze(name) -> Promise<{peak, rms, duration}>
 //
@@ -36,9 +41,14 @@
     click: 0.045, open: 0.08, close: 0.08, notify: 0.12, error: 0.2, coin: 0.06, step: 0.07, land: 0.12, jump: 0.1,
     chat: 0.09, emote: 0.15, page: 0.07, water: 0.25, harvest: 0.15, plant: 0.15, jar: 0.15, bubble: 0.03, drip: 0.02,
     reward: 0.3, quest: 0.4, levelup: 0.8, achievement: 0.5, correct: 0.25, wrong: 0.25, teleport: 0.4, shutter: 0.12,
+    tap: 0.06, oops: 0.3, sparkle: 0.3, stamp: 0.2,
   };
   const FANFARE = { levelup: 2.6, achievement: 2.0, quest: 1.6, reward: 1.4 }; // duck the music under these (s)
-  const WET = { notify: 0.5, coin: 0.4, reward: 0.7, quest: 0.7, levelup: 0.8, achievement: 0.8, correct: 0.5, emote: 0.3, teleport: 0.8, open: 0.25, craft: 0.4, jar: 0.35 };
+  const WET = { notify: 0.5, coin: 0.4, reward: 0.7, quest: 0.7, levelup: 0.8, achievement: 0.8, correct: 0.5, emote: 0.3, teleport: 0.8, open: 0.25, craft: 0.4, jar: 0.35, tap: 0.15, sparkle: 0.7, stamp: 0.4, oops: 0.2 };
+  // 쉬운 모드 (CONTRACT §12): buzzers become a gentle "uh-oh", clicks a soft bloop; big fanfares a little softer
+  const EASY_SWAP = { click: 'tap', error: 'oops', wrong: 'oops' };
+  const EASY_GAIN = { levelup: 0.8, achievement: 0.85, reward: 0.9, quest: 0.9, teleport: 0.85, shutter: 0.75, splash: 0.85, land: 0.85 };
+  const easyOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
 
   // ================================================================= synth helpers (any BaseAudioContext)
   // S = { ac, out (AudioNode), wet (AudioNode|null), buf {white,pink,brown}, pluck(midi) }
@@ -330,6 +340,29 @@
       tone(S, { type: 'triangle', f: 330, t, a: 0.006, d: 0.14, g: 0.11, lp: 1500 });
       return tone(S, { type: 'triangle', f: 247, f2: 233, t: t + 0.16, a: 0.006, d: 0.26, g: 0.11, lp: 1300 });
     },
+    // ---- 쉬운 모드 (CONTRACT §12): soft, round, never harsh
+    /** big kid buttons / tiles: a soft wooden "bloop" (low, short, no click transient) */
+    tap(S, t) {
+      tone(S, { type: 'sine', f: 520, f2: 760, glide: 0.05, t, a: 0.006, d: 0.11, g: 0.085, lp: 2600 });
+      return tone(S, { type: 'triangle', f: 1040, t: t + 0.03, a: 0.004, d: 0.07, g: 0.022, lp: 3200 });
+    },
+    /** gentle "uh-oh" instead of error / wrong buzzers: two falling round notes */
+    oops(S, t) {
+      tone(S, { type: 'sine', f: 587.3, f2: 554.4, t, a: 0.012, d: 0.16, g: 0.08, vib: { rate: 6, depth: 6, delay: 0.04 } });
+      return tone(S, { type: 'sine', f: 440, f2: 415.3, t: t + 0.17, a: 0.012, d: 0.24, g: 0.08, vib: { rate: 6, depth: 5, delay: 0.05 } });
+    },
+    /** twinkle for kid celebrations (G.easy.celebrate / stickers) */
+    sparkle(S, t) {
+      let end = t;
+      [1568, 2093, 2349.3, 3136].forEach((f, i) => { end = Math.max(end, bell(S, f, t + i * 0.07, 0.03 - i * 0.004, 0.45, { wet: 0.7 })); });
+      return end;
+    },
+    /** check-in stamp: a soft rubber "pomp" + a tiny bell */
+    stamp(S, t) {
+      noise(S, { kind: 'brown', ft: 'lowpass', f: 420, q: 0.7, t, a: 0.003, d: 0.12, g: 0.3 });
+      tone(S, { type: 'sine', f: 180, f2: 110, t, a: 0.004, d: 0.14, g: 0.12 });
+      return bell(S, 1318.5, t + 0.12, 0.035, 0.4, { wet: 0.5 });
+    },
     // small extras used internally / by other modules
     bubble(S, t, o) { const f = o.f || rand(450, 1100); return tone(S, { type: 'sine', f, f2: f * rand(1.6, 2.2), glide: 0.03, t, a: 0.003, d: 0.045, g: 0.04 }); },
     drip(S, t, o) { const f = o.f || rand(1800, 3800); return tone(S, { type: 'sine', f, f2: f * 0.7, glide: 0.03, t, a: 0.001, d: 0.04, g: 0.03 }); },
@@ -548,9 +581,22 @@
     init() {
       if (!AC) { G.log.info('AUDIO', 'Web Audio not supported - sound disabled'); }
       else this._armGesture();
-      G.bus.on('settings:changed', ({ key }) => {
+      G.bus.on('settings:changed', ({ key } = {}) => {
         if (/^volume|^muted$/.test(key)) { this._applyVolumes(); if (key === 'muted' && G.settings.muted) this.stopSpeaking(); }
+        else if (key === 'easyMode') this._applyVolumes();
       });
+      G.bus.on('easy:changed', () => this._applyVolumes());
+      // 쉬운 모드: every big kid button / tile answers the finger right away with a soft "bloop"
+      // (data-action buttons already sound through G.ui's click → 'tap'; one press never plays twice)
+      const KID_TAP = '.easy-tile, .easy-big-btn, .easy-back, .easy-speak, .skc-cat, .skc-emo, .eng-k-tap, .ong-rad-item, .ong-rad-center';
+      document.addEventListener('pointerdown', (e) => {
+        try {
+          if (!easyOn() || (e.pointerType === 'mouse' && e.button !== 0)) return;
+          const el = e.target?.closest?.(KID_TAP);
+          if (!el || el.disabled || el.closest('[data-action]')) return;
+          this.play('tap');
+        } catch (err) { /* sound is optional */ }
+      }, { capture: true, passive: true });
       document.addEventListener('visibilitychange', () => this._syncSuspend());
       // speech voices load asynchronously
       try {
@@ -660,7 +706,9 @@
       const s = G.settings || {};
       const lv = (v) => { v = clamp(Number(v), 0, 1); return Number.isFinite(v) ? Math.pow(v, 1.6) : 0; };
       const master = s.muted ? 0 : lv(s.volumeMaster ?? 0.8);
-      this.levels = { master, music: lv(s.volumeMusic ?? 0.45), sfx: lv(s.volumeSfx ?? 0.8), ambient: lv(s.volumeAmbient ?? 0.6) };
+      // 쉬운 모드: gentler balance for small ears — softer music bed so the voice guide and 옹이 stay clear
+      const kid = easyOn();
+      this.levels = { master, music: lv(s.volumeMusic ?? 0.45) * (kid ? 0.8 : 1), sfx: lv(s.volumeSfx ?? 0.8), ambient: lv(s.volumeAmbient ?? 0.6) * (kid ? 0.9 : 1) };
       const n = this._nodes;
       if (!n) return;
       const now = this.ctx.currentTime, tc = instant ? 0.001 : 0.06;
@@ -693,15 +741,19 @@
         const ac = this.ctx;
         if (!ac || !this.ready || ac.state === 'closed') return false;
         if (this.levels.master <= 0.0001 || this.levels.sfx <= 0.0001) return false;
+        const o = opts && typeof opts === 'object' ? opts : {};
+        const kid = easyOn();
+        if (kid && EASY_SWAP[name] && !o.exact) name = EASY_SWAP[name];
         const fn = SFX[name];
         if (!fn) { G.log.debug('AUDIO', `unknown sfx "${name}"`); return false; }
-        const o = opts && typeof opts === 'object' ? opts : {};
         const now = ac.currentTime;
+        // one press = one sound: a kid tile's pointer-down "tap" already answered the click that follows it
+        if (name === 'tap' && !o.force && now - (this._tapAt ?? -1) < 0.3) return false;
         const min = THROTTLE[name] ?? 0.03;
         const last = this._last.get(name);
         if (last != null && now - last < min && !o.force) return false;
         if (this._voices >= MAX_VOICES) { this.stats.dropped++; return false; }
-        let vol = o.volume ?? 1, pan = o.pan || 0;
+        let vol = (o.volume ?? 1) * (kid ? (EASY_GAIN[name] ?? 1) : 1), pan = o.pan || 0;
         if (o.at && Number.isFinite(o.at.x)) { // simple distance attenuation + panning from the camera
           const cam = G.sys.engine?.camera;
           if (cam) {
@@ -715,6 +767,7 @@
           }
         }
         this._last.set(name, now);
+        if (name === 'tap') this._tapAt = now;
         const out = gainNode(ac, clamp(vol, 0, 2));
         let head = out;
         const p = panNode(ac, pan);
@@ -735,13 +788,22 @@
       } catch (e) { G.log.debug('AUDIO', 'play failed', name, e); return false; }
     },
 
-    /** music ducking: the lowest active duck wins; seconds = auto release */
+    /**
+     * music ducking: the lowest active duck wins; seconds = auto release.
+     * duck(key, gain, seconds) · duck(true) / duck(false) = the shared 'tts' duck (speech outside G.easy.say)
+     */
     duck(key, gain = 0.4, seconds) {
-      const now = performance.now() / 1000;
-      this._ducks.set(key, { gain: clamp(gain, 0, 1), until: seconds ? now + seconds : Infinity });
-      this._applyDuck();
+      try {
+        if (typeof key === 'boolean') { if (key) this.duck('tts', 0.4); else this.unduck('tts'); return; }
+        if (typeof key !== 'string' || !key) return;
+        const g = Number(gain);
+        const s = Number(seconds);
+        const now = performance.now() / 1000;
+        this._ducks.set(key, { gain: clamp(Number.isFinite(g) ? g : 0.4, 0, 1), until: Number.isFinite(s) && s > 0 ? now + s : Infinity });
+        this._applyDuck();
+      } catch (e) { G.log.debug('AUDIO', 'duck failed', e); }
     },
-    unduck(key) { if (this._ducks.delete(key)) this._applyDuck(); },
+    unduck(key) { try { if (this._ducks.delete(key)) this._applyDuck(); } catch (e) { G.log.debug('AUDIO', 'unduck failed', e); } },
     _applyDuck() {
       const n = this._nodes;
       let g = 1;
@@ -756,6 +818,13 @@
     // ------------------------------------------------------------ public: speech (TTS)
     speak(text, opts = {}) {
       try {
+        opts = opts && typeof opts === 'object' ? opts : {};
+        // 쉬운 모드: one shared kid voice queue (best Korean voice, music ducking, de-dup) — never two engines at once
+        if (easyOn() && typeof G.easy?.say === 'function') {
+          if (!String(text ?? '').trim()) return false;
+          G.easy.say(String(text), { priority: 1, force: opts.force !== false, rate: opts.rate });
+          return true;
+        }
         const ss = window.speechSynthesis;
         if (!ss || typeof window.SpeechSynthesisUtterance !== 'function') return false;
         if (G.settings.muted) return false;
@@ -781,7 +850,8 @@
       } catch (e) { G.log.debug('AUDIO', 'speak failed', e); return false; }
     },
     stopSpeaking() {
-      try { window.speechSynthesis?.cancel(); } catch (e) { /* ignore */ }
+      if (easyOn() && typeof G.easy?.stop === 'function') { try { G.easy.stop(); } catch (e) { /* ignore */ } }
+      else { try { window.speechSynthesis?.cancel(); } catch (e) { /* ignore */ } }
       this._speaking = false;
       this.unduck('speech');
     },

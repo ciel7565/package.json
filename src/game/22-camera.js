@@ -7,9 +7,12 @@
 //   cinematic({center:[x,y,z], radius, height, speed, angle})   slow orbit (title screen)
 //   focusOn(vec3|Object3D, {distance, height, duration, side})  dialogue framing (over the shoulder)
 //   photoControl({dx, dy, zoom, height})        free orbit around the player in photo mode (<= 20 m)
-//   shake(amount 0..1), snap(), yaw / pitch / distance
+//   shake(amount 0..1), snap(), yaw / pitch / distance, gentle (easy-mode camera active)
 // Drag (G.input.consumeLook) rotates, wheel / pinch (G.input.consumeZoom) zooms 2.5–16 m.
 // The camera never goes below the terrain and pulls in when G.world.cameraBlockers occlude the player.
+// 쉬운 모드 (CONTRACT §12): a gentle camera for small children — softer drag (x0.62), a comfortable
+// zoom range (4.5–12.5 m, default 9 m a little higher up), it swings behind the walking player by itself
+// (also during auto-walk), never shakes and keeps a fixed field of view (no running FOV kick).
 // =============================================================================
 (function () {
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -20,6 +23,8 @@
   const PMIN = -0.32, PMAX = 1.22;     // follow pitch range (rad)
   const DMIN = 2.5, DMAX = 16;          // follow zoom range (m)
   const DEF = { yaw: 0, pitch: 0.36, distance: 8 };
+  const EASY = { dmin: 4.5, dmax: 12.5, pitch: 0.42, distance: 9, look: 0.62, pmin: -0.05, pmax: 1.05 };
+  const gentle = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
   const FOV = 55;
   const SAMPLES = [0.35, 0.7, 1];
 
@@ -57,11 +62,29 @@
     onStateLoaded() {
       const p = G.sys.player;
       const ry = p ? p.rotY : 0;
+      const easy = gentle();
       this._yawT = this.yaw = ry + Math.PI;
-      this._pitchT = this.pitch = DEF.pitch;
-      this._distT = this.distance = this._effDist = DEF.distance;
+      this._pitchT = this.pitch = easy ? EASY.pitch : DEF.pitch;
+      this._distT = this.distance = this._effDist = easy ? EASY.distance : DEF.distance;
       this._ftInit = false;
+      this._wasGentle = easy;
       if (this.mode === 'follow') this.snap();
+    },
+
+    /** easy-mode camera active (soft drag, comfortable zoom, auto-follow, no shake) */
+    get gentle() { return gentle(); },
+    /** easy <-> normal at runtime: ease into the other comfort range instead of jumping */
+    _syncGentle() {
+      const easy = gentle();
+      if (easy === this._wasGentle) return;
+      this._wasGentle = easy;
+      if (easy) {
+        this._distT = clamp(this._distT, EASY.dmin, EASY.dmax);
+        if (Math.abs(this._distT - EASY.distance) > 2.5) this._distT = EASY.distance;
+        this._pitchT = clamp(this._pitchT, EASY.pmin, EASY.pmax);
+        this._shake = 0;
+      }
+      this._pitchT = clamp(this._pitchT, PMIN, PMAX);
     },
 
     // ------------------------------------------------------------ public API
@@ -154,7 +177,8 @@
     },
 
     shake(amount = 0.4) {
-      if (G.settings.cameraShake === false || G.settings.reduceMotion) return;
+      if (G.settings.cameraShake === false || G.settings.reduceMotion || gentle()) return;
+      if (!Number.isFinite(amount)) return;
       this._shake = clamp(this._shake + amount, 0, 1);
     },
 
@@ -304,30 +328,37 @@
       const look = G.input?.consumeLook?.() || { dx: 0, dy: 0 };
       const zoom = G.input?.consumeZoom?.() || 0;
       const mode = this.mode;
+      if (!Number.isFinite(look.dx)) look.dx = 0;
+      if (!Number.isFinite(look.dy)) look.dy = 0;
+      const zm = Number.isFinite(zoom) ? clamp(zoom, -4, 4) : 0;
+      this._syncGentle();
       if (mode === 'follow') {
+        const easy = this._wasGentle;
+        const ls = easy ? EASY.look : 1;
         if (look.dx || look.dy) {
-          this._yawT -= look.dx * 0.0055;
-          this._pitchT = clamp(this._pitchT + look.dy * 0.0042, PMIN, PMAX);
+          this._yawT -= look.dx * 0.0055 * ls;
+          this._pitchT = clamp(this._pitchT + look.dy * 0.0042 * ls, easy ? EASY.pmin : PMIN, easy ? EASY.pmax : PMAX);
           this._lastUserLook = t;
         }
-        if (zoom) this._distT = clamp(this._distT * (1 + zoom * 0.12), DMIN, DMAX);
-        this._autoAlign(dt, t);
+        if (zm) this._distT = clamp(this._distT * (1 + zm * (easy ? 0.09 : 0.12)), easy ? EASY.dmin : DMIN, easy ? EASY.dmax : DMAX);
+        if (easy) this._autoFollow(dt, t); else this._autoAlign(dt, t);
         const k = damp(15, dt);
         this.yaw += angleDiff(this.yaw, this._yawT) * k;
         this.pitch += (this._pitchT - this.pitch) * k;
         this.distance += (this._distT - this.distance) * damp(9, dt);
       } else if (mode === 'photo') {
-        if (look.dx || look.dy || zoom) {
+        if (look.dx || look.dy || zm) {
           const ph = this._photo;
-          ph.yaw -= look.dx * 0.0055;
-          ph.pitch = clamp(ph.pitch + look.dy * 0.0045, -0.5, 1.35);
-          if (zoom) ph.dist = clamp(ph.dist * (1 + zoom * 0.12), 1.2, 20);
+          const ls = this._wasGentle ? 0.75 : 1;
+          ph.yaw -= look.dx * 0.0055 * ls;
+          ph.pitch = clamp(ph.pitch + look.dy * 0.0045 * ls, -0.5, 1.35);
+          if (zm) ph.dist = clamp(ph.dist * (1 + zm * 0.12), 1.2, 20);
         }
       } else if (mode === 'focus') {
         const f = this._focus;
         if (look.dx) f.yaw -= look.dx * 0.0055;
         if (look.dy) f.pitch = clamp(f.pitch + look.dy * 0.0042, -0.2, 1.2);
-        if (zoom) f.distance = clamp(f.distance * (1 + zoom * 0.12), 1.2, 14);
+        if (zm) f.distance = clamp(f.distance * (1 + zm * 0.12), 1.2, 14);
       }
       this._occlusion(dt);
       this._computeDesired(dt);
@@ -370,6 +401,24 @@
       if (now - (this._nanWarnAt || 0) > 5000) { this._nanWarnAt = now; G.log.warn('UI', 'camera: non-finite target repaired'); }
     },
 
+    /**
+     * easy mode: gently swing behind the walking player — joystick / keys forward-ish and auto-walk (walkTo) —
+     * and ease the pitch back to the comfortable default; never while (or right after) the child drags the view.
+     */
+    _autoFollow(dt, t) {
+      const p = G.sys.player, ax = G.input?.axis;
+      if (!p || !p.velocity || t - this._lastUserLook < 2.2) return;
+      const sp = Math.hypot(p.velocity.x, p.velocity.z);
+      if (!(sp > 0.8)) return;
+      const manual = !!ax && Math.hypot(ax.x, ax.y) > 0.05;
+      if (manual && (ax.y < 0.3 || Math.abs(ax.x) > 0.6)) return; // strafing / backing up: do not chase (no circling)
+      const behind = Math.atan2(p.velocity.x, p.velocity.z) + Math.PI;
+      if (!Number.isFinite(behind)) return;
+      const k = damp((p.isWalking && !manual ? 1.5 : 1.25) * Math.min(1, sp / 3.2), dt);
+      this._yawT += angleDiff(this._yawT, behind) * k;
+      this._pitchT += (EASY.pitch - this._pitchT) * damp(0.5, dt);
+    },
+
     _autoAlign(dt, t) {
       // gently swing behind the player while walking forward with the keyboard (never fights the mouse)
       const p = G.sys.player, ax = G.input?.axis;
@@ -396,7 +445,7 @@
       // subtle FOV kick while running
       const p = G.sys.player;
       const sp = p?.velocity ? Math.hypot(p.velocity.x, p.velocity.z) : 0;
-      const target = this.mode === 'follow' ? FOV + clamp((sp - 3.6) / 2.4, 0, 1) * 4 : FOV;
+      const target = this.mode === 'follow' && !this._wasGentle ? FOV + clamp((sp - 3.6) / 2.4, 0, 1) * 4 : FOV;
       this._fov += (target - this._fov) * damp(4, dt || 1);
       if (Math.abs(c.fov - this._fov) > 0.01) { c.fov = this._fov; c.updateProjectionMatrix(); }
     },

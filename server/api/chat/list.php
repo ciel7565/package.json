@@ -4,12 +4,13 @@
  * → {messages:[{id, userId, nickname, text, channel, createdAt}], online, lastId}
  * Readable by any session (guests can read, only accounts can write). Hidden messages and messages from
  * banned accounts are never returned. 'local' messages are only delivered to players near the sender.
+ * Personal information is masked again on the way out (defense in depth: rows stored before the PII filter).
  */
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Config, Ctx, Db, Presence, Session};
+use Tfm\{Api, ApiException, ChatFilter, Config, Ctx, Db, Presence, Session};
 
 Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
     Session::close();
@@ -41,7 +42,7 @@ Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
             'id' => (int) $r['id'],
             'userId' => (string) $r['user_id'],
             'nickname' => (string) $r['nickname'],
-            'text' => (string) $r['text'],
+            'text' => ChatFilter::maskPII((string) $r['text']),
             'channel' => (string) $r['channel'],
             'createdAt' => (int) $r['created_at'],
         ];

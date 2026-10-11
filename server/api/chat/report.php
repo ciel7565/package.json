@@ -8,17 +8,18 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Audit, Config, Ctx, Db, Users};
+use Tfm\{Api, ApiException, Audit, ChatFilter, Config, Ctx, Db, Users};
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function (Ctx $c): array {
     $b = $c->json(8192);
     $reasons = (array) Config::get('chat.reasons', ['abuse', 'spam', 'harass', 'privacy', 'etc']);
     $reason = is_string($b['reason'] ?? null) && in_array($b['reason'], $reasons, true) ? $b['reason'] : 'etc';
     $target = Users::cleanText(is_string($b['target'] ?? null) ? $b['target'] : '', 40);
-    $memo = Users::cleanText(is_string($b['memo'] ?? null) ? $b['memo'] : '', 200);
+    // reports may quote personal information (reason "privacy"): admins see that something was shared, not the data
+    $memo = ChatFilter::maskPII(Users::cleanText(is_string($b['memo'] ?? null) ? $b['memo'] : '', 200));
     $mid = (is_int($b['messageId'] ?? null) || (is_string($b['messageId'] ?? null) && ctype_digit($b['messageId']))) ? (int) $b['messageId'] : 0;
     $tid = (is_int($b['targetId'] ?? null) || (is_string($b['targetId'] ?? null) && ctype_digit($b['targetId']))) ? (int) $b['targetId'] : 0;
-    $text = Users::cleanText(is_string($b['text'] ?? null) ? $b['text'] : '', 300);
+    $text = ChatFilter::maskPII(Users::cleanText(is_string($b['text'] ?? null) ? $b['text'] : '', 300));
     $msg = $mid > 0 ? Db::one('SELECT id, user_id, nickname, text FROM chat_messages WHERE id = ?', [$mid]) : null;
     if ($msg) { $tid = (int) $msg['user_id']; $target = (string) $msg['nickname']; $text = (string) $msg['text']; }
     elseif ($tid > 0) { $tu = Users::byId($tid); $tid = $tu ? (int) $tu['id'] : 0; if ($tu) $target = (string) $tu['nickname']; }

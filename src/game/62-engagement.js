@@ -51,6 +51,32 @@
     { id: 'decor', label: '꾸미기', icon: '🏡' },
   ];
   const TAB_IDS = TABS.map((t) => t.id);
+  // 쉬운 모드 (CONTRACT §12): the same six pages as a picture sticker book (same ids, so badges / deep links work)
+  const KTABS = [
+    { id: 'checkin', label: '도장', icon: '📅', say: '출석 도장을 찍어요' },
+    { id: 'missions', label: '놀이', icon: '🎯', say: '오늘의 놀이예요' },
+    { id: 'inbox', label: '소식', icon: '📬', say: '새 소식을 봐요' },
+    { id: 'cert', label: '상장', icon: '🎓', say: '나의 상장이에요' },
+    { id: 'rank', label: '친구', icon: '👫', say: '같이 노는 친구들이에요' },
+    { id: 'decor', label: '꾸미기', icon: '🏡', say: '내 마당을 꾸며요' },
+  ];
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
+  const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+  const KT = (adult, kid) => (kidOn() ? kid : adult);
+  /** kid mission names: short, no numbers (the ●●○ pips show "how many") */
+  const KID_MIS = {
+    M_WATER: () => '밭에 물 주기', M_HARVEST: () => '채소 거두기', M_PLANT: () => '씨앗 심기', M_QUIZ: () => '퀴즈 맞히기',
+    M_EDU: () => '그림 이야기 보기', M_JOURNAL: () => '그림일기 쓰기', M_PHOTO: () => '사진 찍기', M_CHAT: () => '친구에게 인사',
+    M_EMOTE: () => '마음 보여 주기', M_GESTURE: () => '몸으로 표현하기', M_TALK: () => '이웃과 이야기', M_VISIT: (n, m) => `${kidZone(m.param)} 가 보기`,
+    M_WALK: () => '산책하기', M_JAR: () => '내 장독 보기', M_CRAFT: () => '작업대에서 만들기', M_LOOK: () => '구경하기',
+  };
+  const KID_NOTI = {
+    achievement: '메달을 받았어요', quest: '놀이를 다 했어요', level: '레벨이 올랐어요', collection: '새 스티커를 찾았어요', reward: '선물을 받았어요',
+    mention: '친구가 불렀어요', ferment: '장이 다 익었어요', mission: '오늘의 놀이', checkin: '출석 도장', cert: '상장이 나왔어요', decor: '마당 꾸미기', system: '알림',
+  };
+  const KID_COLORS = ['#ff8a5c', '#ffc93c', '#55d187', '#4fb3ff', '#b48bff', '#ff7eb6', '#36cfc0'];
+  function kidZone(id) { const z = (G.data.zones || []).find((x) => x.id === id); return z ? String(z.short || z.name) : '새로운 곳'; }
+  function kidMissionText(m) { const f = KID_MIS[m.id]; try { return f ? f(m.target, m) : missionText(m); } catch (e) { return missionText(m); } }
 
   // ---------------------------------------------------------------- small safe helpers
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -633,7 +659,7 @@
       this._refreshBadge();
       this._uiDirty();
       if (today > prev) {
-        G.ui.toast('새로운 하루가 시작됐어요! 출석 체크와 오늘의 미션을 확인해 보세요.', { emoji: '🌅', type: 'info' });
+        G.ui.toast(KT('새로운 하루가 시작됐어요! 출석 체크와 오늘의 미션을 확인해 보세요.', '새 하루예요! 🔔 오늘에서 도장을 찍어요.'), { emoji: '🌅', type: 'info' });
         this._rank = null;
       }
     },
@@ -769,6 +795,8 @@
         if (Math.hypot(num(x) - this._yard.x, num(z) - this._yard.z) > 30) this.stopDecor({ silent: true });
       });
       G.bus.on('settings:changed', ({ key } = {}) => { if (key === 'uiScale' || key === 'largeText') setTimeout(() => this._placeBell(), 50); });
+      // easy <-> normal at runtime: close the hub / decor bar of the other look (the HUD reopens the right one)
+      G.bus.on('easy:changed', () => { if (this.isOpen() && this._kid !== kidOn()) this.close(); if (this._edit) this._renderBar(); });
     },
 
     _onChat(msg) {
@@ -833,8 +861,11 @@
       if (this.isOpen()) { this._setTab(next); return this._modal; }
       this._tab = next;
       this._inboxViewed = false;
+      const kid = this._kid = kidOn();
+      const kt = KTABS.find((t) => t.id === next);
       const m = G.ui.modal.open({
-        id: HUB_ID, title: '오늘의 체험', icon: 'bell', size: 'lg', className: 'eng-modal', autofocus: false,
+        id: HUB_ID, title: kid ? '오늘' : '오늘의 체험', icon: kid ? '🔔' : 'bell', size: 'lg', className: `eng-modal${kid ? ' eng-kid' : ''}`, autofocus: false,
+        say: kid ? `오늘의 놀이예요. ${kt ? kt.say : ''}` : undefined,
         body: (body) => this._buildHub(body),
         onClose: () => this._onHubClose(),
       });
@@ -853,13 +884,21 @@
       this._refreshBadge();
     },
     _buildHub(body) {
+      const kid = !!this._kid;
       const hero = h('div', { class: 'eng-hero' });
-      const tabs = h('div', { class: 'eng-tabs', role: 'tablist', 'aria-label': '오늘의 체험 메뉴' });
-      for (const t of TABS) {
-        tabs.appendChild(h('button', { type: 'button', class: 'eng-tab', role: 'tab', id: `eng-tab-${t.id}`, 'data-tab': t.id, 'aria-selected': 'false', 'aria-controls': 'eng-pane', tabindex: '-1' },
-          h('span', { class: 'emoji eng-tab-ico', 'aria-hidden': 'true' }, t.icon), h('span', { class: 'eng-tab-lbl' }, t.label), h('span', { class: 'eng-tab-badge', hidden: true })));
+      const tabs = h('div', { class: `eng-tabs${kid ? ' eng-ktabs' : ''}`, role: 'tablist', 'aria-label': kid ? '오늘 메뉴' : '오늘의 체험 메뉴' });
+      for (const t of kid ? KTABS : TABS) {
+        const b = h('button', { type: 'button', class: `eng-tab${kid ? ' eng-ktab' : ''}`, role: 'tab', id: `eng-tab-${t.id}`, 'data-tab': t.id, 'aria-selected': 'false', 'aria-controls': 'eng-pane', tabindex: '-1', 'data-say': kid ? `${t.label}. ${t.say}` : null },
+          h('span', { class: 'emoji eng-tab-ico', 'aria-hidden': 'true' }, t.icon), h('span', { class: 'eng-tab-lbl' }, t.label), h('span', { class: 'eng-tab-badge', hidden: true }));
+        tabs.appendChild(b);
       }
-      tabs.addEventListener('click', (e) => { const b = e.target.closest('.eng-tab'); if (b) this._setTab(b.dataset.tab, true); });
+      tabs.addEventListener('click', (e) => {
+        const b = e.target.closest('.eng-tab');
+        if (!b) return;
+        const changed = b.dataset.tab !== this._tab;
+        this._setTab(b.dataset.tab, true);
+        if (kid && changed) { const t = KTABS.find((x) => x.id === b.dataset.tab); if (t) kidSay(t.say, { priority: 1 }); }
+      });
       tabs.addEventListener('keydown', (e) => {
         const d = { ArrowRight: 1, ArrowLeft: -1, Home: -99, End: 99 }[e.key];
         if (d == null) return;
@@ -908,18 +947,19 @@
       p.classList.remove('eng-in');
       if (fresh && !reduceMotion()) { void p.offsetWidth; p.classList.add('eng-in'); }
       try {
+        const kid = !!this._kid;
         switch (this._tab) {
-          case 'checkin': this._renderCheckin(p); break;
-          case 'missions': this._renderMissions(p); break;
-          case 'inbox': this._renderInbox(p); break;
-          case 'cert': this._renderCert(p); break;
-          case 'rank': this._renderRank(p); break;
-          case 'decor': this._renderDecor(p); break;
+          case 'checkin': if (kid) this._renderKidCheckin(p); else this._renderCheckin(p); break;
+          case 'missions': if (kid) this._renderKidMissions(p); else this._renderMissions(p); break;
+          case 'inbox': if (kid) this._renderKidInbox(p); else this._renderInbox(p); break;
+          case 'cert': if (kid) this._renderKidCert(p); else this._renderCert(p); break;
+          case 'rank': if (kid) this._renderKidFriends(p); else this._renderRank(p); break;
+          case 'decor': if (kid) this._renderKidDecor(p); else this._renderDecor(p); break;
           default:
         }
       } catch (e) {
         G.log.error(CAT, `render ${this._tab}`, e);
-        p.replaceChildren(h('div', { class: 'empty' }, '화면을 그리지 못했어요. 잠시 후 다시 열어 주세요.'));
+        p.replaceChildren(this._kid ? this._kidEmpty('sad', '앗, 잘 안 보여요.', '닫았다가 다시 열어 봐요!') : h('div', { class: 'empty' }, '화면을 그리지 못했어요. 잠시 후 다시 열어 주세요.'));
       }
       G.ui.hydrateIcons(p);
       if (scroller) scroller.scrollTop = fresh ? 0 : keep;
@@ -951,6 +991,7 @@
     _renderHero() {
       const el = this._heroEl;
       if (!el || !G.state) return;
+      if (this._kid) { this._renderKidHero(el); return; }
       const e = this._E(), d = this._daily(), c = this._counts();
       const nick = G.state.profile?.nickname || '체험객';
       const hr = new Date(now()).getHours();
@@ -1015,8 +1056,9 @@
       G.log.info(CAT, `check-in ${can.day} streak ${c.streak} (day ${can.pos})`);
       this.notify({ type: 'checkin', icon: '📅', title: `출석 ${can.pos}일차 보상을 받았어요`, text: rewardText(got), act: 'checkin', read: true });
       G.bus.emit('engagement:checkin', { day: can.day, streak: c.streak, pos: can.pos, reward: got });
-      if (can.pos === 7) say('7일 연속 출석 성공! 마당을 꾸밀 장식을 선물했어요 🎁 꾸미기 탭에서 놓아 보세요.', { mood: 'cheer', duration: 6000, action: { label: '꾸미기', fn: () => this.open('decor') } });
-      else say(`출석 ${can.pos}일차 완료! ${c.streak >= 2 ? `${c.streak}일 연속이에요 🔥` : '내일도 만나요 😊'}`, { mood: 'happy', duration: 4200 });
+      // the open kid sticker book already answers with its own stamp, sound and voice: no second (queued) card then
+      if (this._hubKidOpen()) { /* feedback shown in the hub */ } else if (can.pos === 7) say(KT('7일 연속 출석 성공! 마당을 꾸밀 장식을 선물했어요 🎁 꾸미기 탭에서 놓아 보세요.', '도장 7개를 다 모았어요! 마당 장식을 선물해요 🎁'), { mood: 'cheer', duration: 6000, action: { label: KT('꾸미기', '🏡 꾸미기'), fn: () => this.open('decor') } });
+      else say(KT(`출석 ${can.pos}일차 완료! ${c.streak >= 2 ? `${c.streak}일 연속이에요 🔥` : '내일도 만나요 😊'}`, `도장 쾅! ${c.streak >= 2 ? `${c.streak}일째 왔어요 🔥` : '내일도 만나요 😊'}`), { mood: 'happy', duration: 4200 });
       serverSave();
       this._refreshBadge();
       return { day: can.day, streak: c.streak, pos: can.pos, reward: got };
@@ -1143,12 +1185,13 @@
       m.progress = m.target;
       m.doneAt = now();
       const text = missionText(m);
-      G.ui.toast(`오늘의 미션 완료! ${text}`, { type: 'success', emoji: def.icon, duration: 3600 });
+      G.ui.toast(KT(`오늘의 미션 완료! ${text}`, `놀이를 해냈어요! ${kidMissionText(m)}`), { type: 'success', emoji: def.icon, duration: 3600, say: kidOn() ? `놀이를 해냈어요! ${kidMissionText(m)}! 오늘에서 선물을 받아요.` : undefined });
       G.sfx('quest');
       this.notify({ type: 'mission', icon: def.icon, title: '오늘의 미션 완료!', text: `${text} — 보상을 받아 가세요.`, act: 'missions', ref: m.id });
       const left = d.missions.filter((x) => !x.done).length;
-      say(left ? `미션 완료! “${text}” 🎉 종 버튼(N)에서 보상을 받을 수 있어요.` : '오늘의 미션 3개를 모두 끝냈어요! 보너스 보상까지 챙겨 가세요 🎁',
-        { mood: 'cheer', duration: 5200, action: { label: '보상 받기', fn: () => this.open('missions') } });
+      say(kidOn() ? (left ? `${kidMissionText(m)} 성공! 🎉 🔔 오늘에서 선물을 받아요.` : '오늘의 놀이를 다 했어요! 보물상자도 열어 봐요 🎁')
+        : left ? `미션 완료! “${text}” 🎉 종 버튼(N)에서 보상을 받을 수 있어요.` : '오늘의 미션 3개를 모두 끝냈어요! 보너스 보상까지 챙겨 가세요 🎁',
+        { mood: 'cheer', duration: 5200, voice: false, action: { label: KT('보상 받기', '🎁 받기'), fn: () => this.open('missions') } });   // the toast already read it aloud
       try { G.fx?.burst?.('stars', null, { count: 10, lift: 1.2 }); } catch (e) { /* fx optional */ }
       G.log.info(CAT, `mission completed ${m.id}`);
       G.bus.emit('engagement:mission', { missionId: m.id, state: 'completed', day: d.day });
@@ -1164,7 +1207,7 @@
       const got = grant(MISSIONS[id].reward, 'engagement:mission') || MISSIONS[id].reward;
       G.sfx('coin');
       G.bus.emit('engagement:mission', { missionId: id, state: 'claimed', day: d.day });
-      if (d.missions.every((x) => x.claimed) && !d.bonus) say('미션 보상을 모두 받았어요! 마지막 보너스 상자도 열어 보세요 🎁', { mood: 'wink', duration: 4200 });
+      if (d.missions.every((x) => x.claimed) && !d.bonus && !this._hubKidOpen()) say(KT('미션 보상을 모두 받았어요! 마지막 보너스 상자도 열어 보세요 🎁', '선물을 다 받았어요! 보물상자를 열어 봐요 🎁'), { mood: 'wink', duration: 4200 });
       serverSave();
       this._refreshBadge();
       return got;
@@ -1181,7 +1224,7 @@
       this.notify({ type: 'mission', icon: '🎁', title: '오늘의 미션 보너스 획득!', text: rewardText(got), act: 'missions', read: true });
       G.bus.emit('engagement:mission', { missionId: 'BONUS', state: 'bonus', day: d.day });
       try { G.fx?.burst?.('confetti', null, { count: 36 }); } catch (e) { /* fx optional */ }
-      say('오늘의 미션 완벽 달성! 내일 또 새로운 미션이 준비돼요 🌟', { mood: 'cheer', duration: 4500 });
+      if (!this._hubKidOpen()) say(KT('오늘의 미션 완벽 달성! 내일 또 새로운 미션이 준비돼요 🌟', '보물상자를 열었어요! 내일 또 놀아요 🌟'), { mood: 'cheer', duration: 4500 });
       serverSave();
       this._refreshBadge();
       return got;
@@ -1332,6 +1375,14 @@
     _doAct(act, ref) {
       const tabs = { checkin: 1, missions: 1, inbox: 1, cert: 1, rank: 1, decor: 1 };
       if (tabs[act]) { this._setTab(act, true); return; }
+      const P = G.sys.progression;
+      const kidFns = kidOn() ? { // 쉬운 모드: one 📖 스티커북 holds quests · medals · stickers; 💬 = the phrase picker
+        quests: () => (P?.openHub ? P.openHub() : G.sys.quest?.openLog?.()),
+        achievements: () => (P?.openHub ? P.openHub() : P?.openAchievements?.()),
+        collection: () => (P?.openHub ? P.openHub() : P?.openCollection?.()),
+        profile: () => (P?.openHub ? P.openHub() : P?.openProfile?.()),
+        chat: () => (G.sys.social?.openKidChat ? G.sys.social.openKidChat() : G.sys.social?.toggleChat?.(true)),
+      } : {};
       const fns = {
         quests: () => G.sys.quest?.openLog?.(),
         achievements: () => (G.sys.progression?.openAchievements ? G.sys.progression.openAchievements() : G.sys.progression?.openHub?.('ach')),
@@ -1340,6 +1391,7 @@
         jar: () => { const id = ref && (G.sys.fermentation?.myJarIds?.() || []).includes(ref) ? ref : 'J1'; G.sys.fermentation?.openJar?.(id); },
         chat: () => { G.sys.social?.toggleChat?.(true); G.sys.social?.focusChat?.(); },
         inventory: () => G.sys.inventory?.open?.(),
+        ...kidFns,
       };
       const fn = fns[act];
       if (!fn) return;
@@ -1412,7 +1464,7 @@
       G.dirty('engagement');
       if (!silent) {
         this.notify({ type: 'cert', icon: '🎓', title: '전통발효체험 수료증이 발급됐어요!', text: '수료증 탭에서 이미지로 저장하거나 인쇄할 수 있어요.', act: 'cert' });
-        say('축하해요! 전통발효체험 수료증이 발급됐어요 🎓 종 버튼(N) → 수료증에서 볼 수 있어요.', { mood: 'cheer', duration: 6000, action: { label: '수료증 보기', fn: () => this.open('cert') } });
+        say(KT('축하해요! 전통발효체험 수료증이 발급됐어요 🎓 종 버튼(N) → 수료증에서 볼 수 있어요.', '우와! 상장을 받았어요 🎓 같이 볼까요?'), { mood: 'cheer', duration: 6000, action: { label: KT('수료증 보기', '🎓 상장 보기'), fn: () => this.open('cert') } });
       }
     },
     _certData(preview) {
@@ -1448,22 +1500,25 @@
         preview: !!preview,
       };
     },
+    /** opts: {preview, kid} — kid = the 쉬운 모드 "참 잘했어요" award (defaults to the current mode) */
     renderCertificate(opts = {}) {
       if (!G.state) return null;
       const preview = !!opts.preview || !this.hasCertificate();
+      const kid = opts.kid != null ? !!opts.kid : kidOn();
       const D = this._certData(preview);
+      D.kid = kid;
       const key = JSON.stringify(D);
       if (this._certCanvas && this._certKey === key) return this._certCanvas;
       const c = document.createElement('canvas');
       c.width = 1600; c.height = 1131;
       const ctx = c.getContext('2d');
-      try { drawCertificate(ctx, c.width, c.height, D); } catch (e) { G.log.error(CAT, 'certificate draw', e); }
+      try { if (kid) drawKidCertificate(ctx, c.width, c.height, D, G.state); else drawCertificate(ctx, c.width, c.height, D); } catch (e) { G.log.error(CAT, 'certificate draw', e); }
       this._certCanvas = c;
       this._certKey = key;
       return c;
     },
     downloadCertificate() {
-      if (!this.hasCertificate()) { G.ui.toast('수료증은 메인 퀘스트를 마친 뒤에 받을 수 있어요.', { type: 'info' }); return false; }
+      if (!this.hasCertificate()) { G.ui.toast(KT('수료증은 메인 퀘스트를 마친 뒤에 받을 수 있어요.', '첫 놀이를 다 하면 상장을 받아요!'), { type: 'info' }); return false; }
       const c = this.renderCertificate();
       if (!c?.toBlob) return false;
       const d = new Date(this._E().certificate?.issuedAt || now());
@@ -1477,7 +1532,7 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 15000);
-        G.ui.toast('수료증 이미지를 저장했어요.', { type: 'success', emoji: '🖼️' });
+        G.ui.toast(KT('수료증 이미지를 저장했어요.', '상장 그림을 저장했어요!'), { type: 'success', emoji: '🖼️', say: kidOn() ? '상장 그림을 저장했어요!' : undefined });
       }, 'image/png');
       return true;
     },
@@ -1647,6 +1702,349 @@
         body.appendChild(h('p', { class: 'eng-foot' }, res.mode === 'server' ? '서버에 저장된 체험객의 레벨과 누적 경험치로 순위를 매겨요. 닉네임만 공개돼요.' : '로컬 모드에서는 지금 함께 있는 체험객(가상 체험객 포함)과 내 기록을 비교해요.'));
       };
       this.ranking().then(fill).catch(() => fill(this._localRanking()));
+    },
+
+    // ============================================================ 쉬운 모드 pages (CONTRACT §12): a picture sticker book
+    _hubKidOpen() { return !!(this._kid && this.isOpen()); },
+    _kidEmpty(mood, title, text) {
+      const el = h('div', { class: 'eng-empty eng-kempty' }, h('div', { class: 'eng-empty-ava', 'aria-hidden': 'true', html: mascotSvg(mood, 96) }), h('b', null, title), text ? h('p', null, text) : null);
+      el.__easySpeak = { btn: null, text: `${title}. ${text || ''}` };
+      return el;
+    },
+    _kidHead(emoji, title, sub) {
+      const el = h('div', { class: 'eng-khead' }, h('span', { class: 'eng-khead-emo emoji', 'aria-hidden': 'true' }, emoji), h('div', { class: 'grow' }, h('b', null, title), sub ? h('small', null, sub) : null));
+      try { G.easy?.speakable?.(el, `${title}. ${sub || ''}`); } catch (e) { /* voice optional */ }
+      return el;
+    },
+    _kidBtn(emoji, label, cls, fn, sayText) {
+      const b = h('button', { type: 'button', class: `easy-big-btn ${cls || ''}`, 'data-say': sayText || label }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', null, label));
+      b.addEventListener('click', fn);
+      return b;
+    },
+    /** progress as pictures: ●●○ (≤ 6), otherwise a fat bar */
+    _kidProgress(value, target, icon) {
+      const v = clamp(Math.floor(num(value)), 0, Math.max(1, target));
+      if (target <= 6) {
+        const pips = h('span', { class: 'eng-kpips', role: 'img', 'aria-label': `${target}번 중에 ${v}번 했어요` });
+        for (let i = 0; i < target; i++) pips.appendChild(h('i', { class: i < v ? 'on' : '' }));
+        return pips;
+      }
+      const b = h('span', { class: 'eng-kbar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(target), 'aria-valuenow': String(v) }, h('i'), icon ? h('span', { class: 'emoji', 'aria-hidden': 'true' }, icon) : null);
+      b.querySelector('i').style.width = `${clamp((v / target) * 100, 0, 100).toFixed(1)}%`;
+      return b;
+    },
+    _kidStamp(anim, text = '참 잘했어요') {
+      return h('span', { class: `eng-kstamp${anim ? ' anim' : ''}`, 'aria-hidden': 'true' }, h('span', null, text));
+    },
+    /** reward bundle as big pictures (🪙 50 · 🌱 ×2) */
+    _kidReward(r) {
+      const box = h('div', { class: 'eng-krw', 'aria-hidden': 'true' });
+      if (r?.coin) box.appendChild(h('span', { class: 'eng-krw-chip' }, '🪙 ', fmt(r.coin)));
+      for (const [id, q] of Object.entries(r?.items || {})) box.appendChild(h('span', { class: 'eng-krw-chip' }, `${itemIcon(id)} ×${q}`));
+      return box;
+    },
+    _renderKidHero(el) {
+      const e = this._E(), d = this._daily(), c = this._counts();
+      const ck = e.checkin, today = dayKey();
+      const streak = ck.lastDay === today || (ck.lastDay && addDays(ck.lastDay, 1) === today) ? ck.streak : 0;
+      const done = d.missions.filter((m) => m.done).length;
+      const nick = str(G.state.profile?.nickname, 24) || '친구';
+      const allClaimed = d.missions.length > 0 && d.missions.every((m) => m.claimed);
+      const line = c.check ? '오늘 도장을 찍어요! 📅' : c.missionClaims || c.bonus ? '선물이 기다려요! 🎁' : allClaimed ? '오늘 놀이를 다 했어요! 🎉' : '오늘의 놀이를 해 봐요! 🎯';
+      const chip = (icon, text, cls = '') => h('span', { class: `eng-hero-chip ${cls}` }, h('span', { class: 'emoji' }, icon), text);
+      const pipText = d.missions.map((m) => (m.done ? '●' : '○')).join('');
+      el.replaceChildren(
+        h('div', { class: 'eng-hero-ava', 'aria-hidden': 'true', html: mascotSvg(c.claims ? 'cheer' : 'happy', 64) }),
+        h('div', { class: 'eng-hero-txt' },
+          h('div', { class: 'eng-hero-hi' }, h('b', null, nick), ', 반가워요! 👋'),
+          h('div', { class: 'eng-hero-sub' }, line),
+          h('div', { class: 'eng-hero-chips' },
+            chip('🔥', `${streak}일째`, streak >= 3 ? 'hot' : ''),
+            chip('🎯', pipText || '○○○', done >= 3 ? 'ok' : ''),
+            c.unread ? chip('📬', `새 소식 ${c.unread}`, 'new') : null)));
+      el.__easySpeak = { btn: null, text: `${nick}, 반가워요! ${line}` };
+    },
+
+    // ---- 📅 도장 (check-in): seven big stamp circles, today's circle is the button
+    _renderKidCheckin(p) {
+      const e = this._E(), c = e.checkin, can = this.canCheckin();
+      const today = dayKey();
+      const doneToday = can.reason === 'done' || can.reason === 'skew';
+      const basePos = can.ok ? can.pos : posOf(c.streak || 1);
+      const streakAtBase = can.ok ? can.streak : Math.max(1, c.streak);
+      const curStreak = doneToday || (c.lastDay && addDays(c.lastDay, 1) === today) ? c.streak : 0;
+      p.appendChild(this._kidHead('📅', '출석 도장', can.ok ? '오늘 도장을 콕 찍어요!' : '오늘 도장을 찍었어요. 내일 또 만나요!'));
+      const page = h('div', { class: 'eng-kcal', role: 'list', 'aria-label': '출석 도장 7칸' });
+      for (let i = 1; i <= 7; i++) {
+        const r = checkinReward(streakAtBase - basePos + i);
+        const items = Object.keys(r.items);
+        const gift = i === 7 ? '🎁' : items.length ? itemIcon(items[items.length - 1]) : '🪙';
+        const state = i < basePos || (i === basePos && doneToday) ? 'stamped' : i === basePos ? (can.ok ? 'today' : 'locked') : 'future';
+        const isBtn = state === 'today';
+        const cell = h(isBtn ? 'button' : 'div', { type: isBtn ? 'button' : null, class: `eng-kday ${state}${i === 7 ? ' big' : ''}`, role: isBtn ? null : 'listitem', 'data-pos': String(i),
+          'aria-label': `${i}일째 ${state === 'stamped' ? '도장 찍음' : state === 'today' ? '오늘, 눌러서 도장 찍기' : ''}` },
+        h('span', { class: 'eng-kday-n' }, String(i)),
+        h('span', { class: 'eng-kday-gift emoji', 'aria-hidden': 'true' }, gift),
+        isBtn ? h('span', { class: 'eng-kday-tap emoji', 'aria-hidden': 'true' }, '👆') : null,
+        state === 'stamped' ? this._kidStamp(false) : null);
+        cell.style.setProperty('--i', String(i));
+        cell.__easySpeak = { btn: null, text: state === 'stamped' ? `${i}일째. 도장을 찍었어요.` : isBtn ? `${i}일째. 눌러서 도장을 찍어요!` : `${i}일째. ${i === 7 ? '보물 선물이 있어요.' : '아직이에요.'}` };
+        page.appendChild(cell);
+      }
+      p.appendChild(page);
+      if (can.ok) {
+        const doCheck = () => {
+          const res = this.checkin();
+          if (!res) { this._uiDirty(); return; }
+          this._animUntil = performance.now() + 1700;
+          const cell = page.querySelector(`[data-pos="${res.pos}"]`);
+          if (cell) {
+            cell.classList.remove('today');
+            cell.classList.add('stamped', 'just');
+            cell.querySelector('.eng-kday-tap')?.remove();
+            cell.appendChild(this._kidStamp(true));
+            setTimeout(() => burstAt(cell, 22), 240);
+          }
+          G.sfx('stamp');
+          setTimeout(() => G.sfx('sparkle'), 420);
+          kidSay(`도장 쾅! ${res.pos}일째 도장이에요. 선물을 받았어요!`, { priority: 2, force: true });
+          if (res.pos === 7) { try { G.easy?.celebrate?.('도장을 다 모았어요!', { emoji: '🎁', duration: 2400, sound: 'achievement' }); } catch (err) { /* optional */ } }
+          this._uiDirty();
+        };
+        page.querySelector('.eng-kday.today')?.addEventListener('click', doCheck);
+        const btn = this._kidBtn('📅', '도장 찍기', 'easy-btn-yes eng-kclaim', doCheck, '도장 찍기. 눌러서 오늘 도장을 찍어요.');
+        p.appendChild(h('div', { class: 'eng-kclaim-row' }, btn, this._kidReward(checkinReward(can.streak))));
+      } else if (can.reason === 'done') {
+        p.appendChild(h('div', { class: 'eng-kdone' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🌙'), h('b', null, '내일 또 도장을 찍어요!')));
+      } else if (can.reason === 'skew') {
+        p.appendChild(h('div', { class: 'eng-kdone' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🕰️'), h('b', null, '시계가 이상해요. 어른에게 물어봐요!')));
+      }
+      const fires = h('div', { class: 'eng-kstreak' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔥'.repeat(clamp(curStreak, 1, 7))), h('b', null, curStreak ? `${curStreak}일째 왔어요!` : '오늘부터 시작해요!'));
+      fires.__easySpeak = { btn: null, text: curStreak ? `${curStreak}일째 왔어요!` : '오늘부터 시작해요!' };
+      p.appendChild(fires);
+      p.appendChild(h('p', { class: 'eng-kfoot' }, '🎁 도장 7개를 모으면 마당 장식을 선물해요!'));
+    },
+
+    // ---- 🎯 놀이 (missions): three picture cards with ●●○ and 👉 가기 / 🎁 받기
+    _renderKidMissions(p) {
+      const d = this._daily();
+      const done = d.missions.filter((m) => m.done).length;
+      p.appendChild(this._kidHead('🎯', '오늘의 놀이', done >= d.missions.length && d.missions.length ? '다 했어요! 최고예요!' : '하나씩 해 봐요!'));
+      const list = h('div', { class: 'eng-kmis-list' });
+      d.missions.forEach((m, i) => {
+        const def = MISSIONS[m.id];
+        if (!def) return;
+        const text = kidMissionText(m);
+        const state = m.claimed ? 'claimed' : m.done ? 'done' : 'progress';
+        const card = h('div', { class: `eng-kmis ${state}` });
+        card.style.setProperty('--tile', KID_COLORS[i % KID_COLORS.length]);
+        card.style.setProperty('--i', String(i));
+        const side = h('div', { class: 'eng-kmis-side' });
+        if (state === 'claimed') side.appendChild(h('span', { class: 'eng-kmis-ok' }, '✅ 받았어요'));
+        else if (state === 'done') {
+          const b = this._kidBtn('🎁', '받기', 'easy-btn-yes eng-kpulse', () => {
+            const got = this.claimMission(m.id);
+            if (!got) return;
+            this._animUntil = performance.now() + 1300;
+            card.classList.remove('done');
+            card.classList.add('claimed', 'just');
+            card.appendChild(this._kidStamp(true));
+            b.replaceWith(h('span', { class: 'eng-kmis-ok' }, '✅ 받았어요'));
+            burstAt(card, 16);
+            G.sfx('sparkle');
+            kidSay(`선물을 받았어요! ${text} 최고예요!`, { priority: 2, force: true });
+            this._uiDirty();
+          }, '받기. 선물을 받아요.');
+          side.appendChild(b);
+        } else {
+          const go = def.go ? (def.go === '@param' ? m.param : def.go) : null;
+          if (go || def.act) side.appendChild(this._kidBtn('👉', '가기', 'easy-btn-yes', () => this._kidMissionGo(m), `가기. ${text}`));
+          else side.appendChild(h('span', { class: 'eng-kmis-hint' }, '👟 걸어 다녀요'));
+        }
+        card.append(
+          h('div', { class: 'eng-kmis-ico emoji', 'aria-hidden': 'true' }, def.icon),
+          h('div', { class: 'eng-kmis-main' }, h('b', null, text), this._kidProgress(m.progress, m.target, def.unit ? '👟' : null)),
+          side);
+        if (state === 'claimed') card.appendChild(this._kidStamp(false));
+        card.__easySpeak = { btn: null, text: `${text}. ${state === 'claimed' ? '선물을 받았어요.' : state === 'done' ? '다 했어요! 선물을 받아요.' : def.unit ? '많이 걸어 봐요.' : `${m.target}번 중에 ${Math.floor(m.progress)}번 했어요.`}` };
+        list.appendChild(card);
+      });
+      p.appendChild(list);
+      const allClaimed = d.missions.length > 0 && d.missions.every((m) => m.claimed);
+      const chest = h('div', { class: `eng-kchest${d.bonus ? ' got' : allClaimed ? ' ready' : ''}` },
+        h('span', { class: 'eng-kchest-ico emoji', 'aria-hidden': 'true' }, d.bonus ? '🎉' : allClaimed ? '🎁' : '🔒'),
+        h('b', null, d.bonus ? '보물상자를 열었어요!' : allClaimed ? '보물상자를 열어요!' : '셋 다 하면 보물상자!'));
+      chest.__easySpeak = { btn: null, text: d.bonus ? '보물상자를 열었어요!' : allClaimed ? '보물상자를 열어요!' : '놀이 세 개를 다 하면 보물상자를 열 수 있어요.' };
+      if (!d.bonus && allClaimed) {
+        chest.appendChild(this._kidBtn('🎁', '열기', 'easy-btn-yes eng-kpulse', () => {
+          const got = this.claimBonus();
+          if (!got) return;
+          this._animUntil = performance.now() + 1400;
+          chest.classList.add('got', 'just');
+          burstAt(chest, 26);
+          try { G.easy?.celebrate?.('보물상자를 열었어요!', { emoji: '🎁', duration: 2200, sound: 'achievement' }); } catch (e) { /* optional */ }
+          this._uiDirty();
+        }, '열기. 보물상자를 열어요.'));
+      }
+      p.appendChild(chest);
+    },
+    _kidMissionGo(m) {
+      const def = MISSIONS[m.id];
+      if (!def) return;
+      const go = def.go ? (def.go === '@param' ? m.param : def.go) : null;
+      this.close();
+      setTimeout(() => {
+        try {
+          if (go) { if (G.easy?.goTo) G.easy.goTo(go); else G.sys.minimap?.travelTo?.(go); return; }
+          const S = G.sys.social;
+          const fns = {
+            journal: () => G.ui.triggerAction('journal'),
+            photo: () => G.ui.triggerAction('photo'),
+            chat: () => (S?.openKidChat ? S.openKidChat() : S?.toggleChat?.(true)),
+            emote: () => (S?.openExpress ? S.openExpress() : S?.openEmotes?.()),
+            gesture: () => (S?.openExpress ? S.openExpress() : S?.openGestures?.()),
+          };
+          fns[def.act]?.();
+        } catch (e) { G.log.warn(CAT, 'kid mission shortcut', e?.message || e); }
+      }, 90);
+    },
+
+    // ---- 📬 소식 (inbox): picture rows, tap = go there
+    _renderKidInbox(p) {
+      const e = this._E();
+      this._inboxViewed = true;
+      const all = e.notifications.slice(0, 12);
+      p.appendChild(this._kidHead('📬', '새 소식', all.length ? '그림을 누르면 가 봐요!' : ''));
+      if (!all.length) { p.appendChild(this._kidEmpty('sleepy', '아직 소식이 없어요', '메달이나 스티커를 받으면 여기에 모여요!')); return; }
+      const sub = (n) => { const t = String(n.title || ''); const i = t.indexOf(': '); return i > 0 ? t.slice(i + 2) : t; };
+      const list = h('div', { class: 'eng-knoti-list', role: 'list' });
+      for (const n of all) {
+        const label = KID_NOTI[n.type] || '알림';
+        const row = h(n.act ? 'button' : 'div', { type: n.act ? 'button' : null, class: `eng-knoti${n.read ? '' : ' unread'}`, 'data-id': n.id, role: n.act ? null : 'listitem' },
+          h('span', { class: 'eng-knoti-ico emoji', 'aria-hidden': 'true' }, n.icon || NTYPES[n.type] || '🔔'),
+          h('span', { class: 'eng-knoti-main' }, h('b', null, label), h('small', null, sub(n))),
+          n.read ? null : h('i', { class: 'eng-noti-dot', 'aria-hidden': 'true' }),
+          n.act ? h('span', { class: 'eng-knoti-go emoji', 'aria-hidden': 'true' }, '👉') : null);
+        row.__easySpeak = { btn: null, text: `${label}. ${sub(n)}` };
+        list.appendChild(row);
+      }
+      list.addEventListener('click', (ev) => {
+        const row = ev.target.closest('.eng-knoti');
+        if (!row) return;
+        const n = e.notifications.find((x) => x.id === row.dataset.id);
+        if (!n) return;
+        if (!n.read) { n.read = true; G.dirty('engagement'); row.classList.remove('unread'); row.querySelector('.eng-noti-dot')?.remove(); this._refreshBadge(); }
+        if (n.act) this._doAct(n.act, n.ref);
+      });
+      p.appendChild(list);
+    },
+
+    // ---- 🎓 상장 (certificate): a "참 잘했어요" award with the child's nickname
+    _renderKidCert(p) {
+      const has = this.hasCertificate();
+      if (has) this._syncCertificate(true);
+      const canvas = this.renderCertificate({ kid: true, preview: !has });
+      canvas.className = 'eng-cert-canvas eng-kcert-canvas';
+      if (has) {
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', `${G.state.profile?.nickname || '친구'}의 상장`);
+        canvas.removeAttribute('aria-hidden');
+        p.append(
+          this._kidHead('🎓', '나의 상장', '참 잘했어요! 멋진 상장이에요.'),
+          h('div', { class: 'eng-cert-frame eng-kcert-frame' }, canvas),
+          h('div', { class: 'eng-kbtns' },
+            this._kidBtn('🖼️', '그림으로 저장', 'easy-btn-yes', () => this.downloadCertificate(), '그림으로 저장해요'),
+            this._kidBtn('🖨️', '인쇄하기', 'easy-btn-no', () => this.printCertificate(), '종이로 인쇄해요')));
+        return;
+      }
+      canvas.setAttribute('aria-hidden', 'true');
+      const def = G.data.quests?.QUEST001;
+      const prog = G.sys.quest?.progress?.('QUEST001');
+      const objs = prog?.objectives || (def?.objectives || []).map((o, i) => ({ text: o.text, done: (Number(G.state.quests?.QUEST001?.progress?.[i]) || 0) >= (o.count || 1) }));
+      const doneN = objs.filter((o) => o.done).length;
+      const steps = h('ul', { class: 'eng-ksteps' });
+      for (const o of objs) {
+        // Keyboard hints like "(J)" mean nothing to a child holding a tablet.
+        const t = String(o.text || '').replace(/\s*\((?:[A-Za-z]|Shift\+?[A-Za-z]|Space|Tab)\)\s*$/u, '');
+        const li = h('li', { class: o.done ? 'done' : '' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, o.done ? '✅' : '⬜'), h('span', null, t));
+        li.__easySpeak = { btn: null, text: `${t}. ${o.done ? '했어요!' : '아직이에요.'}` };
+        steps.appendChild(li);
+      }
+      p.append(
+        this._kidHead('🔒', '상장은 아직이에요', '첫 놀이를 다 하면 상장을 받아요!'),
+        h('div', { class: 'eng-kcert-lock' },
+          h('div', { class: 'eng-kcert-steps' }, this._kidProgress(doneN, Math.max(1, objs.length)), steps,
+            this._kidBtn('👉', '다음 할 일', 'easy-btn-yes', () => { this.close(); setTimeout(() => G.ui.triggerAction('easy-go'), 80); }, '다음 할 일을 같이 해요')),
+          h('div', { class: 'eng-cert-frame eng-kcert-frame preview' }, canvas, h('div', { class: 'eng-cert-badge' }, '미리 보기'))));
+    },
+
+    // ---- 👫 친구 (no ranks): who is here now, 👋 인사 / 📍 가기
+    _renderKidFriends(p) {
+      p.appendChild(this._kidHead('👫', '같이 노는 친구들', '지금 체험관에 있는 친구들이에요'));
+      const S = G.sys.social;
+      const pp = G.sys.player?.position;
+      const people = [];
+      for (const o of S?.others?.values?.() || []) {
+        if (!o || (o.kind === 'visitor' && !o.active)) continue;
+        const name = str(o.name, 24);
+        if (!name || S.isBlocked?.(name)) continue;
+        const pos = o.position && Number.isFinite(o.position.x) ? o.position : null;
+        people.push({ name, pos, d: pp && pos ? Math.hypot(pos.x - pp.x, pos.z - pp.z) : Infinity });
+      }
+      people.sort((a, b) => a.d - b.d);
+      const grid = h('div', { class: 'eng-kfriends' });
+      const nick = str(G.state.profile?.nickname, 24) || '나';
+      const meCard = h('div', { class: 'eng-kfriend me' }, h('span', { class: 'eng-kfriend-ava emoji', 'aria-hidden': 'true' }, '😊'), h('b', null, nick), h('small', null, '나예요!'));
+      meCard.__easySpeak = { btn: null, text: `${nick}. 나예요!` };
+      grid.appendChild(meCard);
+      for (const f of people.slice(0, 15)) {
+        const ava = h('span', { class: 'eng-kfriend-ava', 'aria-hidden': 'true' }, Array.from(f.name)[0] || '?');
+        ava.style.setProperty('--hue', String(U.hashInt(`hue|${f.name}`) % 360));
+        const z = f.pos ? G.world?.zoneAt?.(f.pos.x, f.pos.z) : null;
+        const where = f.d < 25 ? '📍 가까이 있어요' : z ? `${z.short || z.name}에 있어요` : '체험관에 있어요';
+        const hi = this._kidBtn('👋', '인사', 'easy-btn-yes eng-kfriend-hi', () => {
+          if (G.sys.social?.sendChat?.(`${f.name}, 안녕하세요! 👋`, 'all', { reply: 'greet' })) {
+            hi.classList.add('sent');
+            G.sfx('pop');
+            kidSay(`${f.name}에게 인사했어요!`, { priority: 1, force: true });
+          }
+        }, `${f.name}에게 인사해요`);
+        const card = h('div', { class: 'eng-kfriend' }, ava, h('b', null, f.name), h('small', null, where), h('div', { class: 'eng-kfriend-btns' }, hi,
+          f.pos ? this._kidBtn('📍', '가기', 'easy-btn-no', () => { this.close(); setTimeout(() => G.easy?.goTo?.({ x: f.pos.x, z: f.pos.z, label: f.name }, { stopDistance: 2 }), 80); }, `${f.name}에게 가요`) : null));
+        card.__easySpeak = { btn: null, text: `${f.name}. ${where}` };
+        grid.appendChild(card);
+      }
+      p.appendChild(grid);
+      if (!people.length) p.appendChild(this._kidEmpty('sleepy', '친구들이 아직 안 왔어요', '조금 있으면 놀러 올 거예요!'));
+    },
+
+    // ---- 🏡 꾸미기: three big picture tiles + 꾸미러 가기
+    _renderKidDecor(p) {
+      const y = this._yard, e = this._E();
+      p.appendChild(this._kidHead('🏡', '내 마당 꾸미기', '장독·화분·초롱을 마당에 놓아요!'));
+      if (!y) { p.appendChild(this._kidEmpty('sad', '마당을 준비하지 못했어요', '나중에 다시 해 봐요!')); return; }
+      const tiles = h('div', { class: 'easy-pick eng-kdeco', role: 'listbox', 'aria-label': '장식 고르기' });
+      tiles.style.setProperty('--cols', '3'); tiles.style.setProperty('--cols-s', '3'); tiles.style.setProperty('--cols-xs', '3');
+      DECOR_ITEMS.forEach((id, i) => {
+        const n = invCount(id);
+        const short = DECOR_INFO[id].short;
+        const b = h('button', { type: 'button', class: `easy-tile${n ? '' : ' is-disabled'}`, role: 'option', 'aria-disabled': n ? null : 'true' },
+          h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, itemIcon(id)), h('span', { class: 'et-label' }, short),
+          h('span', { class: 'et-badge' }, n ? `×${n}` : '0'));
+        b.style.setProperty('--tile', KID_COLORS[(i + 2) % KID_COLORS.length]);
+        b.style.setProperty('--i', String(i));
+        b.__easySpeak = { btn: null, text: n ? `${josa(short, '이/가')} ${n}개 있어요.` : `${josa(short, '은/는')} 아직 없어요. 도장 7개를 모으면 받아요.` };
+        b.addEventListener('click', () => {
+          if (!invCount(id)) { b.classList.remove('easy-shake'); void b.offsetWidth; b.classList.add('easy-shake'); kidSay(`${josa(short, '은/는')} 아직 없어요. 도장 7개를 모으면 받아요.`, { force: true }); return; }
+          this.startDecor().then((ok) => { if (ok) this._pickItem(id); });
+        });
+        tiles.appendChild(b);
+      });
+      p.append(
+        tiles,
+        h('div', { class: 'eng-kyard' }, this._yardMap(), h('small', null, `장식 ${e.decor.length}개 · 빈 칸 ${y.cells.filter((c) => c.ok && !c.sign && !this._decorAt(c)).length}개`)),
+        h('div', { class: 'eng-kbtns' }, this._kidBtn('🏡', '꾸미러 가기', 'easy-btn-yes', () => this.startDecor(), '꾸미러 가기. 내 마당에 가서 장식을 놓아요.')),
+        h('p', { class: 'eng-kfoot' }, '🎁 도장 7개를 모으면 장식을 선물해요!'));
     },
 
     // ============================================================ 꾸미기 — yard
@@ -2077,20 +2475,21 @@
     // ============================================================ 꾸미기 — edit mode
     _canPlace(item, cell) {
       const e = this._E();
-      if (!cell) return { ok: false, why: '마당 안을 골라 주세요.' };
-      if (!cell.ok) return { ok: false, why: '여기는 놓을 수 없는 자리예요.' };
-      if (cell.sign) return { ok: false, why: '마당 표지판 자리예요.' };
-      if (this._decorAt(cell)) return { ok: false, why: '이미 장식이 있어요.' };
-      if (e.decor.length >= MAX_DECOR) return { ok: false, why: `장식은 ${MAX_DECOR}개까지 놓을 수 있어요.` };
+      const short = DECOR_INFO[item]?.short || '장식';
+      if (!cell) return { ok: false, why: KT('마당 안을 골라 주세요.', '마당 안을 눌러요!') };
+      if (!cell.ok) return { ok: false, why: KT('여기는 놓을 수 없는 자리예요.', '여기는 못 놓아요. 다른 칸을 눌러요!') };
+      if (cell.sign) return { ok: false, why: KT('마당 표지판 자리예요.', '표지판 자리예요!') };
+      if (this._decorAt(cell)) return { ok: false, why: KT('이미 장식이 있어요.', '벌써 장식이 있어요!') };
+      if (e.decor.length >= MAX_DECOR) return { ok: false, why: KT(`장식은 ${MAX_DECOR}개까지 놓을 수 있어요.`, '마당이 꽉 찼어요!') };
       if (!DECOR_ITEMS.includes(item)) return { ok: false, why: '꾸미기 장식이 아니에요.' };
-      if (invCount(item) < 1) return { ok: false, why: `가방에 ${josa(itemName(item), '이/가')} 없어요. 출석 7일차 선물이나 입구 매점에서 구할 수 있어요.` };
+      if (invCount(item) < 1) return { ok: false, why: KT(`가방에 ${josa(itemName(item), '이/가')} 없어요. 출석 7일차 선물이나 입구 매점에서 구할 수 있어요.`, `${josa(short, '이/가')} 없어요. 다른 걸 골라요!`) };
       return { ok: true };
     },
     placeDecor(item, cx, cz, rot = 0) {
       if (!G.state || !this._yard || !this._3d) return null;
       const cell = this._cellAt(int(cx, -1, 99, -1), int(cz, -1, 99, -1));
       const can = this._canPlace(item, cell);
-      if (!can.ok) { G.ui.toast(can.why, { type: 'warn', sound: false }); G.sfx('error'); return null; }
+      if (!can.ok) { G.ui.toast(can.why, { type: 'warn', sound: false, say: kidOn() ? can.why : undefined }); G.sfx('error'); return null; }
       if (!invTake(item)) { G.ui.toast(`가방에 ${josa(itemName(item), '이/가')} 없어요.`, { type: 'warn' }); return null; }
       const e = this._E();
       const d = { id: `d${Date.now().toString(36)}${Math.floor(Math.random() * 1679616).toString(36)}`, item, x: Math.round(cell.x * 100) / 100, z: Math.round(cell.z * 100) / 100, rot: (Math.round(num(rot, 0) / (Math.PI / 4)) % 8 + 8) % 8 * (Math.PI / 4), cx: cell.ix, cz: cell.iz, at: now() };
@@ -2170,7 +2569,8 @@
       G.sys.camera?.setMode?.('focus', { target: y.center, distance: 9.5, height: 1.2, yaw: y.front < 0 ? y.rot + Math.PI : y.rot, pitch: 0.82, duration: 0.9 });
       this._buildBar();
       G.sfx('open');
-      if (!G.state.flags?.['eng:decorTip']) {
+      if (kidOn()) kidSay('빈 칸을 눌러서 장식을 놓아요! 다 하면 다 했어요를 눌러요.', { priority: 1, force: true });
+      else if (!G.state.flags?.['eng:decorTip']) {
         G.state.flags['eng:decorTip'] = true;
         say(G.input?.touchUI ? '칸을 한 번 탭하면 미리 보고, 한 번 더 탭하면 놓아요! 놓인 장식을 탭하면 돌리거나 치울 수 있어요.' : '마우스로 칸을 고르고 클릭하면 장식이 놓여요! R로 돌리고, 놓인 장식을 클릭하면 치울 수 있어요.', { mood: 'wink', duration: 6500 });
       }
@@ -2196,7 +2596,7 @@
       G.dirty('engagement');
       if (!opts.silent) {
         const n = this._E()?.decor.length || 0;
-        G.ui.toast(n ? `마당 꾸미기 완료! 장식 ${n}개가 마당을 빛내고 있어요.` : '마당 꾸미기를 마쳤어요.', { emoji: '🏡', type: 'success' });
+        G.ui.toast(KT(n ? `마당 꾸미기 완료! 장식 ${n}개가 마당을 빛내고 있어요.` : '마당 꾸미기를 마쳤어요.', n ? `마당이 예뻐졌어요! 장식 ${n}개가 반짝여요.` : '마당 꾸미기 끝!'), { emoji: '🏡', type: 'success' });
       }
     },
     _buildBar() {
@@ -2220,6 +2620,8 @@
       const bar = this._bar, ed = this._edit;
       if (!bar || !ed || !G.state) return;
       const e = this._E();
+      if (kidOn()) { this._renderKidBar(bar, ed, e); return; }
+      bar.classList.remove('eng-kbar-on');
       const items = h('div', { class: 'edb-items' });
       DECOR_ITEMS.forEach((id, i) => {
         const n = invCount(id);
@@ -2239,6 +2641,29 @@
           h('button', { type: 'button', class: 'btn btn-danger btn-sm', 'data-edb': 'remove', disabled: !selD || null }, '🗑 치우기', touch ? null : h('kbd', null, 'Del')),
           touch ? h('button', { type: 'button', class: 'btn btn-soft btn-sm', 'data-edb': 'place', disabled: !ed.touchCell || null }, '📍 놓기') : null,
           h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-edb': 'done' }, '✔ 완료')),
+        h('div', { class: 'edb-hint', 'aria-live': 'polite' }, hint));
+    },
+    /** 쉬운 모드 decor bar: three big picture tiles + 🔄 돌리기 · 🗑️ 치우기 · ✅ 다 했어요 (same [data-edb] actions) */
+    _renderKidBar(bar, ed, e) {
+      bar.classList.add('eng-kbar-on');
+      const kbtn = (emoji, label, cls, act, disabled) => h('button', { type: 'button', class: `easy-big-btn ${cls}`, 'data-edb': act, disabled: disabled || null, 'data-say': label },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', null, label));
+      const items = h('div', { class: 'edb-kitems' });
+      DECOR_ITEMS.forEach((id, i) => {
+        const n = invCount(id);
+        const short = DECOR_INFO[id].short;
+        const b = h('button', { type: 'button', class: `edb-kitem${ed.item === id ? ' active' : ''}${n ? '' : ' empty'}`, 'data-edb': 'item', 'data-item': id, 'aria-pressed': ed.item === id ? 'true' : 'false', 'data-say': n ? `${short}. ${n}개 있어요.` : `${short}. 아직 없어요.` },
+          h('span', { class: 'emoji', 'aria-hidden': 'true' }, itemIcon(id)), h('b', null, short), h('small', null, `×${n}`));
+        b.style.setProperty('--tile', KID_COLORS[(i + 2) % KID_COLORS.length]);
+        items.appendChild(b);
+      });
+      const selD = ed.sel ? e.decor.find((d) => d.id === ed.sel) : null;
+      const short = DECOR_INFO[ed.item]?.short || '장식';
+      const hint = selD ? '👆 이 장식을 돌리거나 치울 수 있어요.' : invCount(ed.item) < 1 ? `${josa(short, '이/가')} 없어요. 다른 걸 골라요!` : '👆 빈 칸을 눌러서 놓아요!';
+      bar.replaceChildren(
+        h('div', { class: 'edb-khead' }, h('b', null, '🏡 마당 꾸미기'), h('span', { class: 'edb-kcount' }, `${e.decor.length}/${MAX_DECOR}`)),
+        items,
+        h('div', { class: 'edb-kacts' }, kbtn('🔄', '돌리기', 'easy-btn-no', 'rotate'), kbtn('🗑️', '치우기', 'easy-btn-danger', 'remove', !selD), kbtn('✅', '다 했어요', 'easy-btn-yes', 'done')),
         h('div', { class: 'edb-hint', 'aria-live': 'polite' }, hint));
     },
     _decorInvChanged() { if (this._edit) this._renderBar(); this._uiDirty('decor'); },
@@ -2267,7 +2692,7 @@
       const ed = this._edit;
       if (!ed) return;
       ed.sel = id; ed.touchCell = null; ed.dirty = true;
-      if (id) G.sfx('click');
+      if (id) { G.sfx('click'); if (kidOn()) kidSay('이 장식을 돌리거나 치울 수 있어요.', { priority: 1 }); }
       this._renderBar();
     },
     _pickCell() {
@@ -2294,7 +2719,8 @@
       const d = this._decorAt(cell);
       if (d) { this._select(ed.sel === d.id ? null : d.id); return; }
       if (ed.sel) { this._select(null); return; }
-      if (touch && ed.touchCell !== cell) { ed.touchCell = cell; ed.dirty = true; this._renderBar(); return; }
+      // touch: tap once to preview, again to place — in 쉬운 모드 one tap places (a tapped decoration can be removed again)
+      if (touch && !kidOn() && ed.touchCell !== cell) { ed.touchCell = cell; ed.dirty = true; this._renderBar(); return; }
       ed.touchCell = null;
       this.placeDecor(ed.item, cell.ix, cell.iz, ed.rot);
     },
@@ -2356,12 +2782,9 @@
       } else T.sel.visible = false;
       T.ghostMat.opacity = 0.42 + Math.sin(t * 4) * 0.08;
     },
-    _renderDecor(p) {
+    /** the little yard plan (▲ inside · ▼ sign side): one cell per metre, decorations as their emoji */
+    _yardMap() {
       const y = this._yard, e = this._E();
-      if (!y) {
-        p.appendChild(h('div', { class: 'eng-empty' }, h('div', { class: 'eng-empty-ava', 'aria-hidden': 'true', html: mascotSvg('sad', 72) }), h('b', null, '마당을 준비하지 못했어요'), h('p', null, '그래픽을 불러오지 못했거나 빈자리를 찾지 못했어요. 새로고침 후 다시 시도해 주세요.')));
-        return;
-      }
       const map = h('div', { class: 'eng-yard', role: 'img', 'aria-label': `마당 배치도: 장식 ${e.decor.length}개` });
       map.style.setProperty('--cols', String(YW));
       const rows = y.front < 0 ? [...Array(YD).keys()].reverse() : [...Array(YD).keys()];
@@ -2374,6 +2797,15 @@
           map.appendChild(h('span', { class: `eng-ycell ${cls}` }, c.sign ? '🪧' : d ? itemIcon(d.item) : ''));
         }
       }
+      return map;
+    },
+    _renderDecor(p) {
+      const y = this._yard, e = this._E();
+      if (!y) {
+        p.appendChild(h('div', { class: 'eng-empty' }, h('div', { class: 'eng-empty-ava', 'aria-hidden': 'true', html: mascotSvg('sad', 72) }), h('b', null, '마당을 준비하지 못했어요'), h('p', null, '그래픽을 불러오지 못했거나 빈자리를 찾지 못했어요. 새로고침 후 다시 시도해 주세요.')));
+        return;
+      }
+      const map = this._yardMap();
       const start = h('button', { type: 'button', class: 'btn btn-primary btn-lg' }, '🏡 마당 꾸미기 시작');
       start.addEventListener('click', () => this.startDecor());
       const goto = h('button', { type: 'button', class: 'btn btn-soft' }, '📍 마당으로 이동');
@@ -2694,6 +3126,158 @@
       ctx.translate(W / 2, H / 2); ctx.rotate(-0.32);
       ctx.fillStyle = 'rgba(168,50,45,.14)'; ctx.font = `800 150px ${FONT}`; ctx.textBaseline = 'middle';
       ctx.fillText('미리보기', 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------- 쉬운 모드 award: "참 잘했어요" 상장 (canvas paths only)
+  function rrect(ctx, x, y, w, hh, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + hh - r); ctx.quadraticCurveTo(x + w, y + hh, x + w - r, y + hh);
+    ctx.lineTo(x + r, y + hh); ctx.quadraticCurveTo(x, y + hh, x, y + hh - r);
+    ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+  function star5(ctx, cx, cy, r, fill, rot = 0) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) { const a = rot - Math.PI / 2 + (i * Math.PI) / 5; const rr = i % 2 ? r * 0.45 : r; ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); }
+    ctx.closePath();
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.lineWidth = Math.max(2, r * 0.08); ctx.strokeStyle = 'rgba(160,100,10,.55)'; ctx.stroke();
+  }
+  function heartPath(ctx, cx, cy, s) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + s * 0.9);
+    ctx.bezierCurveTo(cx - s * 1.3, cy, cx - s * 0.9, cy - s * 1.05, cx, cy - s * 0.35);
+    ctx.bezierCurveTo(cx + s * 0.9, cy - s * 1.05, cx + s * 1.3, cy, cx, cy + s * 0.9);
+    ctx.closePath();
+  }
+  function sproutPath(ctx, cx, cy, s, color) {
+    ctx.save();
+    ctx.strokeStyle = '#3f8f3a'; ctx.lineWidth = s * 0.14; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(cx, cy + s * 0.7); ctx.quadraticCurveTo(cx + s * 0.05, cy, cx, cy - s * 0.2); ctx.stroke();
+    ctx.fillStyle = color || '#5fcf55';
+    ctx.beginPath(); ctx.ellipse(cx - s * 0.36, cy - s * 0.32, s * 0.4, s * 0.2, -0.5, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx + s * 0.36, cy - s * 0.42, s * 0.44, s * 0.22, 0.5, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  /** 옹이 drawn with paths: brown onggi body, lid, sprout, shiny eyes, rosy cheeks, smile */
+  function kidMascot(ctx, cx, base, s) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,.16)'; ctx.beginPath(); ctx.ellipse(cx, base + s * 0.05, s * 0.85, s * 0.16, 0, 0, TAU); ctx.fill();
+    jarPath(ctx, cx, base, s);
+    let g = ctx.createLinearGradient(cx - s, base - 1.6 * s, cx + s, base);
+    g.addColorStop(0, '#b77a4c'); g.addColorStop(0.6, '#7a4527'); g.addColorStop(1, '#4e2b17');
+    ctx.fillStyle = g; ctx.fill();
+    ctx.lineWidth = s * 0.05; ctx.strokeStyle = '#3b2113'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - s * 0.82, base - s * 0.98); ctx.lineTo(cx + s * 0.82, base - s * 0.98); ctx.lineWidth = s * 0.07; ctx.strokeStyle = '#f4c54a'; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(cx, base - 1.66 * s, s * 0.52, s * 0.16, 0, 0, TAU); ctx.fillStyle = '#4b2b19'; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx, base - 1.76 * s, s * 0.2, s * 0.09, 0, 0, TAU); ctx.fillStyle = '#86542f'; ctx.fill();
+    sproutPath(ctx, cx, base - 2.05 * s, s * 0.5);
+    // face
+    for (const dx of [-0.3, 0.3]) {
+      ctx.beginPath(); ctx.arc(cx + dx * s, base - 0.66 * s, s * 0.1, 0, TAU); ctx.fillStyle = '#1d0f08'; ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + dx * s + s * 0.035, base - 0.7 * s, s * 0.035, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.beginPath(); ctx.ellipse(cx + dx * 1.55 * s, base - 0.48 * s, s * 0.13, s * 0.075, 0, 0, TAU); ctx.fillStyle = 'rgba(255,143,143,.75)'; ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(cx, base - 0.52 * s, s * 0.16, 0.15 * Math.PI, 0.85 * Math.PI); ctx.lineWidth = s * 0.06; ctx.lineCap = 'round'; ctx.strokeStyle = '#1d0f08'; ctx.stroke();
+    // little waving arms
+    ctx.strokeStyle = '#7a4527'; ctx.lineWidth = s * 0.16; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(cx - s * 0.86, base - s * 0.7); ctx.lineTo(cx - s * 1.22, base - s * 1.08); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx + s * 0.86, base - s * 0.7); ctx.lineTo(cx + s * 1.25, base - s * 0.98); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(cx - s * 0.42, base - 1.18 * s, s * 0.08, s * 0.24, 0.2, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fill();
+    ctx.restore();
+  }
+  function drawKidCertificate(ctx, W, H, D, st) {
+    const rng = U.rng(`kidcert|${D.no}|${D.nick}`);
+    const s = st?.stats || {};
+    const n = (k) => int(s[k], 0, 1e9, 0);
+    ctx.save();
+    // sunny paper + soft polka dots
+    let g = ctx.createRadialGradient(W / 2, H * 0.42, H * 0.1, W / 2, H / 2, H);
+    g.addColorStop(0, '#fffdf5'); g.addColorStop(0.75, '#fff3d6'); g.addColorStop(1, '#ffe2ad');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    const DOTS = ['rgba(255,138,92,.12)', 'rgba(79,179,255,.12)', 'rgba(85,209,135,.13)', 'rgba(180,139,255,.12)', 'rgba(255,201,60,.16)'];
+    for (let i = 0; i < 70; i++) { ctx.fillStyle = DOTS[i % DOTS.length]; ctx.beginPath(); ctx.arc(rng() * W, rng() * H, 8 + rng() * 22, 0, TAU); ctx.fill(); }
+    // rainbow frame
+    const m = 34;
+    g = ctx.createLinearGradient(0, 0, W, H);
+    ['#ff6b6b', '#ff9f43', '#ffd43b', '#51cf66', '#4dabf7', '#9775fa', '#f783ac'].forEach((c, i, a) => g.addColorStop(i / (a.length - 1), c));
+    rrect(ctx, m, m, W - 2 * m, H - 2 * m, 56);
+    ctx.lineWidth = 30; ctx.strokeStyle = g; ctx.stroke();
+    rrect(ctx, m + 30, m + 30, W - 2 * m - 60, H - 2 * m - 60, 36);
+    ctx.setLineDash([16, 14]); ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.stroke(); ctx.setLineDash([]);
+    // corner stars + hearts
+    for (const [x, y, r, c] of [[118, 118, 46, '#ffd43b'], [W - 118, 118, 46, '#ffd43b'], [118, H - 118, 40, '#ffe066'], [W - 118, H - 118, 40, '#ffe066'], [250, 92, 20, '#ffa94d'], [W - 250, 92, 20, '#ffa94d']]) star5(ctx, x, y, r, c, rng() * 0.6 - 0.3);
+    for (const [x, y, sz, c] of [[96, H / 2, 22, '#ff8787'], [W - 96, H / 2, 22, '#ff8787'], [W / 2 - 520, H - 88, 16, '#f783ac'], [W / 2 + 520, H - 88, 16, '#f783ac']]) { heartPath(ctx, x, y, sz); ctx.fillStyle = c; ctx.fill(); }
+    // ribbon banner "상장"
+    const rw = 420, rh = 104, ry = 104;
+    ctx.fillStyle = '#e8590c';
+    for (const dir of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(W / 2 + dir * (rw / 2 - 20), ry + 18); ctx.lineTo(W / 2 + dir * (rw / 2 + 70), ry + 18); ctx.lineTo(W / 2 + dir * (rw / 2 + 40), ry + rh / 2 + 18);
+      ctx.lineTo(W / 2 + dir * (rw / 2 + 70), ry + rh + 18); ctx.lineTo(W / 2 + dir * (rw / 2 - 20), ry + rh + 18); ctx.closePath(); ctx.fill();
+    }
+    rrect(ctx, W / 2 - rw / 2, ry, rw, rh, 22);
+    g = ctx.createLinearGradient(0, ry, 0, ry + rh); g.addColorStop(0, '#ff8a5c'); g.addColorStop(1, '#f03e3e');
+    ctx.fillStyle = g; ctx.fill(); ctx.lineWidth = 5; ctx.strokeStyle = '#fff'; ctx.stroke();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff'; spacing(ctx, 36); ctx.font = `900 64px ${FONT}`; ctx.fillText('상 장', W / 2 + 18, ry + rh / 2 + 4); spacing(ctx, 0);
+    // title
+    ctx.textBaseline = 'alphabetic';
+    fitFont(ctx, '참 잘했어요!', 900, 118, FONT, 1000);
+    ctx.lineJoin = 'round'; ctx.lineWidth = 18; ctx.strokeStyle = '#fff'; ctx.strokeText('참 잘했어요!', W / 2, 368);
+    g = ctx.createLinearGradient(0, 270, 0, 370); g.addColorStop(0, '#ff922b'); g.addColorStop(1, '#e8590c');
+    ctx.fillStyle = g; ctx.fillText('참 잘했어요!', W / 2, 368);
+    // name
+    ctx.fillStyle = '#5c3d1e'; ctx.font = `800 40px ${FONT}`;
+    ctx.fillText('이름', W / 2 - 300, 470);
+    fitFont(ctx, D.nick, 900, 76, FONT, 520, 36);
+    ctx.fillStyle = '#2b1d10'; ctx.fillText(D.nick, W / 2 + 40, 476);
+    ctx.setLineDash([14, 10]); ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(232,89,12,.55)';
+    ctx.beginPath(); ctx.moveTo(W / 2 - 230, 498); ctx.lineTo(W / 2 + 330, 498); ctx.stroke(); ctx.setLineDash([]);
+    // message
+    ctx.fillStyle = '#4a3420'; ctx.font = `700 36px ${FONT}`;
+    const msg = '전통발효체험관에서 씨앗을 심고, 장독을 돌보고, 친구들과 사이좋게 놀았어요. 멋진 체험을 축하하며 이 상장을 줍니다.';
+    wrapLines(ctx, msg, 1040).slice(0, 3).forEach((ln, i) => ctx.fillText(ln, W / 2, 576 + i * 52));
+    // medals: what the child did, as pictures
+    const medals = [
+      { draw: (x, y) => sproutPath(ctx, x, y + 6, 40), label: `씨앗·물 ${n('plants') + n('waters')}번`, ring: '#51cf66' },
+      { draw: (x, y) => { jarPath(ctx, x, y + 34, 30); ctx.fillStyle = '#8a5532'; ctx.fill(); ctx.beginPath(); ctx.ellipse(x, y - 15, 16, 5, 0, 0, TAU); ctx.fillStyle = '#3a2213'; ctx.fill(); }, label: `장독 ${n('fermentChecks')}번`, ring: '#ff922b' },
+      { draw: (x, y) => star5(ctx, x, y, 36, '#ffd43b'), label: `레벨 ${D.level}`, ring: '#fcc419' },
+      { draw: (x, y) => { heartPath(ctx, x, y + 2, 28); ctx.fillStyle = '#ff6b6b'; ctx.fill(); }, label: `인사 ${n('chats') + n('emotes')}번`, ring: '#f783ac' },
+    ];
+    const my = 800, gap = 250, x0 = W / 2 - gap * 1.5;
+    medals.forEach((md, i) => {
+      const x = x0 + i * gap;
+      ctx.beginPath(); ctx.arc(x, my, 66, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.lineWidth = 10; ctx.strokeStyle = md.ring; ctx.stroke();
+      md.draw(x, my);
+      ctx.fillStyle = '#4a3420'; ctx.font = `800 28px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText(md.label, x, my + 108);
+    });
+    // 옹이 + date + issuer + round stamp
+    kidMascot(ctx, 214, H - 132, 62);
+    const dt = new Date(D.issued);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#2b1d10';
+    ctx.font = `800 34px ${FONT}`; ctx.fillText(`${dt.getFullYear()}년 ${dt.getMonth() + 1}월 ${dt.getDate()}일`, W / 2, H - 168);
+    ctx.font = `900 38px ${FONT}`; ctx.fillText('전통발효체험관 · 장독 요정 옹이', W / 2, H - 116);
+    const sx = W - 236, sy = H - 168;
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(-0.18);
+    ctx.beginPath(); ctx.arc(0, 0, 74, 0, TAU); ctx.lineWidth = 8; ctx.strokeStyle = 'rgba(224,49,49,.88)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 60, 0, TAU); ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = 'rgba(224,49,49,.9)'; ctx.font = `900 34px ${FONT}`; ctx.textBaseline = 'middle';
+    ctx.fillText('참 잘', 0, -18); ctx.fillText('했어요', 0, 22);
+    ctx.restore();
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#8a7356'; ctx.font = `600 20px ${FONT}`;
+    ctx.fillText('※ 게임 속 체험을 기념하는 상장이에요. 진짜 자격증은 아니에요.', W / 2, H - 70);
+    if (D.preview) {
+      ctx.save();
+      ctx.translate(W / 2, H / 2 + 40); ctx.rotate(-0.28);
+      ctx.fillStyle = 'rgba(232,89,12,.16)'; ctx.font = `900 170px ${FONT}`; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      ctx.fillText('미리 보기', 0, 0);
       ctx.restore();
     }
     ctx.restore();

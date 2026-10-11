@@ -520,4 +520,128 @@
     ],
     note: '실제 체험관 운영 정보(관람 시간·요금 등)는 게임과 무관하며 별도로 확인해야 해요.',
   };
+
+  // ---------------------------------------------------------------- 쉬운 모드 (CONTRACT §12): kid versions
+  // content.kid = { title, summary (2–3 short sentences + emoji), slides:[3 × { text, vis:pageIndex | steps:[[icon,label]] | emoji }] }
+  //   vis reuses that page's picture (3D model / illustration); steps draws a picture row; emoji shows one big picture.
+  // quiz.kid    = { q, choices:[{e, t}] (2–3 pictures), answer, hint, why }  or  { q, ox:true, answer:true|false, hint, why }
+  //   The kid quiz is the same quiz id: rewards stay "first correct answer only" (server SaveValidator unchanged).
+  const KID_EDU = {
+    EDU_FERMENT: {
+      title: '발효가 뭐예요?', summary: '눈에 안 보이는 작은 친구, 미생물이 음식을 맛있게 바꿔요! 🦠✨',
+      slides: [
+        { vis: 0, text: '아주아주 작은 친구들이 있어요. 미생물이라고 불러요 🦠' },
+        { steps: [['🫘', '콩'], ['🦠', '미생물'], ['🟤', '된장']], text: '미생물이 콩을 바꾸면 구수한 된장이 돼요!' },
+        { vis: 3, text: '천천히 기다릴수록 맛이 더 깊어져요 ⏳' },
+      ],
+    },
+    EDU_JANGDOK: {
+      title: '장독대와 옹기', summary: '장독대는 맛있는 장이 사는 집이에요. 옹기는 숨을 쉬는 그릇이에요 🏺',
+      slides: [
+        { vis: 0, text: '햇볕 잘 들고 바람 솔솔 부는 곳에 장독을 모아 둬요 ☀️' },
+        { vis: 1, text: '옹기는 흙으로 만든 그릇이에요. 작은 숨구멍으로 숨을 쉬어요 🌬️' },
+        { vis: 3, text: '맑은 날엔 뚜껑을 열고, 비가 오면 꼭 덮어 줘요 ☔' },
+      ],
+    },
+    EDU_BEAN: {
+      title: '콩과 메주', summary: '모든 장은 콩에서 시작해요. 콩을 삶고 찧어서 메주를 만들어요 🫘',
+      slides: [
+        { vis: 0, text: '된장, 간장, 고추장은 모두 콩으로 만들어요 🫘' },
+        { vis: 1, text: '봄에 심은 콩이 쑥쑥 자라서 가을에 콩알이 열려요 🌱' },
+        { vis: 2, text: '콩을 삶고 콩콩 찧어서 네모난 메주를 만들어요 🧱' },
+      ],
+    },
+    EDU_DOENJANG: {
+      title: '된장 이야기', summary: '된장은 메주로 만든 구수한 장이에요. 된장찌개 맛있죠? 🍲',
+      slides: [
+        { vis: 0, text: '된장은 구수한 맛이 나는 장이에요 🟤' },
+        { steps: [['🧱', '메주'], ['🧂', '소금물'], ['🟤', '된장'], ['🫙', '간장']], text: '메주를 소금물에 담갔다가 나누면 된장과 간장이 돼요!' },
+        { emoji: '🍲😋', text: '된장찌개랑 된장국을 끓일 때 써요. 냠냠!' },
+      ],
+    },
+    EDU_GANJANG: {
+      title: '간장 이야기', summary: '간장은 음식을 알맞게 짭짤하게 해 줘요 🫙',
+      slides: [
+        { vis: 0, text: '메주를 건져 내고 남은 까만 물로 간장을 만들어요 🫙' },
+        { vis: 1, text: '국이랑 나물에 조금 넣으면 맛있어져요 🍲' },
+        { vis: 2, text: '간장도 장독에서 햇볕을 쬐며 천천히 익어요 ☀️' },
+      ],
+    },
+    EDU_GOCHUJANG: {
+      title: '고추장 이야기', summary: '고추장은 맵고 달콤한 빨간 장이에요 🌶️',
+      slides: [
+        { vis: 0, text: '고추장은 맵고 달콤한 빨간 장이에요 🔴' },
+        { steps: [['🌶️', '고춧가루'], ['🍚', '찹쌀'], ['🧱', '메주'], ['🔴', '고추장']], text: '고춧가루랑 찹쌀이랑 메주를 섞어서 만들어요!' },
+        { vis: 2, text: '빨간 고추를 햇볕에 말리고 빻으면 고춧가루가 돼요 ☀️' },
+      ],
+    },
+    EDU_KIMCHI: {
+      title: '김치 이야기', summary: '배추를 절이고 양념에 버무려 익히면 새콤한 김치가 돼요 🥬',
+      slides: [
+        { vis: 0, text: '배추를 소금에 절이고 빨간 양념을 발라요 🥬' },
+        { vis: 1, text: '작은 젖산균 친구가 김치를 새콤하게 만들어요 😋' },
+        { vis: 3, text: '겨울이 오기 전에 다 같이 김장을 하고 나눠 먹어요 🤝' },
+      ],
+    },
+    EDU_FARMING: {
+      title: '절기와 농사', summary: '해님을 보고 계절을 나누어 씨를 뿌리고 거두었어요 🌞',
+      slides: [
+        { vis: 0, text: '해님의 움직임을 보고 일 년을 스물네 마디로 나눴어요 🌞' },
+        { steps: [['🌱', '봄'], ['☀️', '여름'], ['🍂', '가을'], ['⛄', '겨울']], text: '봄에는 씨를 뿌리고, 가을에는 곡식을 거둬요 🌾' },
+        { vis: 3, text: '마을 사람들이 다 같이 도우며 농사를 지었어요. 두레라고 해요 🤝' },
+      ],
+    },
+    EDU_TOOLS: {
+      title: '옛날 도구', summary: '옛날 사람들은 지게, 맷돌, 호미 같은 도구로 일했어요 🛠️',
+      slides: [
+        { vis: 0, text: '지게는 등에 메고 무거운 짐을 나르는 도구예요 🪵' },
+        { vis: 1, text: '맷돌은 빙글빙글 돌려서 콩을 가는 돌이에요 🪨' },
+        { vis: 2, text: '키, 호미, 시루, 절구도 있어요. 전시장에서 찾아봐요! 🔍' },
+      ],
+    },
+  };
+  const KID_QUIZ = {
+    QZ_FERMENT_1: { q: '발효를 일으키는 작은 친구는 누구일까요?', choices: [{ e: '🦠', t: '미생물' }, { e: '☀️', t: '햇빛' }, { e: '💨', t: '바람' }], answer: 0, hint: '눈에 안 보이는 아주 작은 친구예요 🔍', why: '미생물이 음식을 맛있게 바꿔 줘요!' },
+    QZ_FERMENT_2: { q: '발효는 음식을 먹기 좋게 바꾸는 거예요. 맞을까요?', ox: true, answer: true, hint: '된장이랑 김치를 떠올려 봐요 🟤', why: '맞아요! 상해서 못 먹게 되면 부패라고 해요.' },
+    QZ_FERMENT_3: { q: '발효 음식이 아닌 것은 무엇일까요?', choices: [{ e: '🥬', t: '김치' }, { e: '🟤', t: '된장' }, { e: '💧', t: '물' }], answer: 2, hint: '그대로 꿀꺽 마시는 거예요 💧', why: '물은 발효하지 않아요. 김치랑 된장은 발효 음식이에요!' },
+    QZ_JANGDOK_1: { q: '옹기를 왜 숨 쉬는 그릇이라고 할까요?', choices: [{ e: '🌬️', t: '작은 숨구멍이 있어서' }, { e: '🐟', t: '물고기가 살아서' }], answer: 0, hint: '그릇 벽에 아주 작은 구멍이 있어요 🔍', why: '맞아요! 작은 숨구멍으로 공기가 솔솔 드나들어요.' },
+    QZ_JANGDOK_2: { q: '장독대는 어디에 두면 좋을까요?', choices: [{ e: '☀️', t: '햇볕 잘 드는 곳' }, { e: '🌑', t: '깜깜한 곳' }, { e: '💦', t: '물웅덩이' }], answer: 0, hint: '장독은 햇볕을 좋아해요 ☀️', why: '햇볕 잘 들고 바람 잘 통하는 곳이 좋아요!' },
+    QZ_JANGDOK_3: { q: '배가 볼록하고 입구가 좁은 옹기는 무엇일까요?', choices: [{ e: '🏺', t: '항아리' }, { e: '🧺', t: '소쿠리' }, { e: '🍲', t: '시루' }], answer: 0, hint: '고추장을 담아 두는 볼록한 그릇이에요 🏺', why: '맞아요! 볼록한 배의 항아리예요.' },
+    QZ_BEAN_1: { q: '메주는 무엇으로 만들까요?', choices: [{ e: '🫘', t: '콩' }, { e: '🍎', t: '사과' }, { e: '🥕', t: '당근' }], answer: 0, hint: '장은 모두 이걸로 시작해요 🫘', why: '콩을 삶고 찧어서 메주를 만들어요!' },
+    QZ_BEAN_2: { q: '메주를 볏짚으로 묶어 바람이 솔솔 부는 곳에 매달아요. 맞을까요?', ox: true, answer: true, hint: '메주도 바람을 좋아해요 🌬️', why: '맞아요! 볏짚 속 작은 친구들이 메주를 잘 띄워 줘요.' },
+    QZ_BEAN_3: { q: '콩 뿌리에 붙은 작은 혹은 무엇을 도울까요?', choices: [{ e: '🌱', t: '땅을 튼튼하게' }, { e: '🐛', t: '벌레 잡기' }], answer: 0, hint: '콩을 심으면 밭이 좋아진대요 🌱', why: '맞아요! 땅을 기름지게 도와준대요.' },
+    QZ_DOENJANG_1: { q: '된장은 무엇으로 만들까요?', choices: [{ e: '🫘', t: '콩' }, { e: '🍓', t: '딸기' }, { e: '🍌', t: '바나나' }], answer: 0, hint: '메주를 만드는 재료예요 🧱', why: '콩으로 만든 메주로 된장을 만들어요!' },
+    QZ_DOENJANG_2: { q: '메주 건더기와 장물을 나누는 일은 무엇일까요?', choices: [{ e: '✋', t: '장 가르기' }, { e: '🥬', t: '김장' }, { e: '🌾', t: '모내기' }], answer: 0, hint: '나눈다는 말은 "가르다"예요 ✋', why: '맞아요! 장 가르기라고 해요.' },
+    QZ_DOENJANG_3: { q: '메주 건더기로 만드는 장은 무엇일까요?', choices: [{ e: '🟤', t: '된장' }, { e: '🫙', t: '간장' }], answer: 0, hint: '건더기는 꾸덕꾸덕해요 🟤', why: '건더기는 된장, 까만 물은 간장이 돼요!' },
+    QZ_GANJANG_1: { q: '간장은 무엇으로 만들까요?', choices: [{ e: '🫙', t: '메주를 건지고 남은 물' }, { e: '🌾', t: '볏짚' }], answer: 0, hint: '메주를 건져 내고 남은 까만 물이에요 🫙', why: '맞아요! 남은 장물을 익히면 간장이 돼요.' },
+    QZ_GANJANG_2: { q: '간장은 어디에 쓸까요?', choices: [{ e: '🍲', t: '음식 맛 내기' }, { e: '👕', t: '옷 물들이기' }, { e: '🧽', t: '장독 닦기' }], answer: 0, hint: '부엌에서 쓰는 거예요 🍲', why: '맞아요! 국이랑 나물을 맛있게 해 줘요.' },
+    QZ_GOCHUJANG_1: { q: '고추장에 들어가지 않는 것은 무엇일까요?', choices: [{ e: '🌶️', t: '고춧가루' }, { e: '🍚', t: '찹쌀' }, { e: '🥛', t: '우유' }], answer: 2, hint: '하얗고 소한테서 나와요 🐄', why: '맞아요! 고추장에는 우유가 안 들어가요.' },
+    QZ_GOCHUJANG_2: { q: '고춧가루는 어떻게 만들까요?', choices: [{ e: '☀️', t: '고추를 말려서 빻아요' }, { e: '🧊', t: '고추를 꽁꽁 얼려요' }], answer: 0, hint: '햇볕에 바싹 말려요 ☀️', why: '빨간 고추를 말려서 빻으면 고춧가루가 돼요!' },
+    QZ_KIMCHI_1: { q: '김치를 새콤하게 만드는 친구는 누구일까요?', choices: [{ e: '🦠', t: '젖산균' }, { e: '🐸', t: '개구리' }, { e: '🦋', t: '나비' }], answer: 0, hint: '눈에 안 보이는 작은 친구예요 🦠', why: '젖산균이 김치를 새콤하게 만들어요!' },
+    QZ_KIMCHI_2: { q: '겨울이 오기 전에 다 같이 김치를 담그는 일은?', choices: [{ e: '🥬', t: '김장' }, { e: '🎂', t: '생일 잔치' }, { e: '🎄', t: '성탄절' }], answer: 0, hint: '김치의 "김"으로 시작해요 🥬', why: '맞아요! 김장이에요. 이웃이랑 나눠 먹어요.' },
+    QZ_KIMCHI_3: { q: '김치는 서늘한 곳에 두면 천천히 익어요. 맞을까요?', ox: true, answer: true, hint: '냉장고를 떠올려 봐요 🧊', why: '맞아요! 따뜻하면 빨리, 서늘하면 천천히 익어요.' },
+    QZ_FARMING_1: { q: '24절기는 무엇을 보고 나눴을까요?', choices: [{ e: '🌞', t: '해님' }, { e: '🌊', t: '바닷물' }, { e: '⭐', t: '별 개수' }], answer: 0, hint: '하늘에서 반짝 빛나고 따뜻해요 🌞', why: '해님의 움직임을 보고 나눴어요!' },
+    QZ_FARMING_2: { q: '낮이 가장 긴 날은 언제일까요?', choices: [{ e: '☀️', t: '하지' }, { e: '⛄', t: '동지' }], answer: 0, hint: '여름에 있어요 ☀️', why: '하지는 낮이 제일 길고, 동지는 밤이 제일 길어요!' },
+    QZ_FARMING_3: { q: '마을 사람들이 다 같이 농사짓던 모임은?', choices: [{ e: '🤝', t: '두레' }, { e: '🏫', t: '서당' }], answer: 0, hint: '서로 돕는 모임이에요 🤝', why: '맞아요! 두레라고 해요.' },
+    QZ_TOOLS_1: { q: '등에 메고 짐을 나르는 도구는 무엇일까요?', choices: [{ e: '🪵', t: '지게' }, { e: '🪨', t: '맷돌' }, { e: '🧺', t: '키' }], answer: 0, hint: '나무로 만들고 등에 메요 🎒', why: '지게예요! 무거운 짐도 거뜬해요.' },
+    QZ_TOOLS_2: { q: '빙글빙글 돌려서 콩을 가는 돌은 무엇일까요?', choices: [{ e: '🪨', t: '맷돌' }, { e: '⛏️', t: '호미' }], answer: 0, hint: '돌 두 개가 겹쳐 있어요 🪨', why: '맷돌이에요! 빙글빙글 돌려서 갈아요.' },
+    QZ_TOOLS_3: { q: '곡식을 까불러 껍질을 날리는 도구는 무엇일까요?', choices: [{ e: '🧺', t: '키' }, { e: '🍲', t: '시루' }, { e: '🥣', t: '절구' }], answer: 0, hint: '넓적하고 위아래로 흔들어요 🧺', why: '키예요! 가벼운 껍질이 훨훨 날아가요.' },
+  };
+  const KID_EXHIBIT = {
+    EXH_DOENJANG: '구수한 된장이에요. 된장찌개를 끓일 때 써요 🍲',
+    EXH_GANJANG: '까만 간장이에요. 음식을 알맞게 짭짤하게 해 줘요 🫙',
+    EXH_GOCHUJANG: '맵고 달콤한 빨간 고추장이에요. 비빔밥에 넣어요 🌶️',
+    EXH_KIMCHI: '새콤한 김치예요. 배추에 빨간 양념을 발라 익혀요 🥬',
+    EXH_VINEGAR: '새콤한 식초예요. 술이 한 번 더 익어서 돼요 🍶',
+  };
+  const KID_FLOORS = {
+    '3F': '높은 곳에서 밭이랑 장독대를 내려다봐요 🏔️',
+    '2F': '메주랑 김치 만드는 걸 배워요 🧑‍🏫',
+    '1F': '맛있는 장이랑 옹기를 구경해요 🏺',
+  };
+  for (const [id, k] of Object.entries(KID_EDU)) if (G.data.education[id]) G.data.education[id].kid = k;
+  for (const [id, k] of Object.entries(KID_QUIZ)) if (G.data.quizzes[id]) G.data.quizzes[id].kid = k;
+  for (const [id, t] of Object.entries(KID_EXHIBIT)) if (G.data.exhibitInfo[id]) G.data.exhibitInfo[id].kid = t;
+  for (const f of G.data.hallGuide.floors) if (KID_FLOORS[f.floor]) f.kid = KID_FLOORS[f.floor];
+  G.data.hallGuide.kidIntro = '체험관에는 세 층이 있어요. 층을 눌러 구경해요!';
 })();

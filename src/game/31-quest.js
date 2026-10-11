@@ -9,6 +9,15 @@
 //   G.sys.quest.openLog(tab?, questId?)              tabs: active | claimable | done | all
 //   G.sys.quest.getMarkers() -> [{x, z, kind, label, primary, questId}]   (minimap)
 //   G.sys.quest.focus() -> {mode, questId, objective, target} | null   suspendHint(bool) (onboarding may borrow #objective-hint)
+//   G.sys.quest.craftNeed(craftId) -> {item, have, need, crop} | null  (쉬운 모드 craft steps lead to the missing ingredient)
+//   G.sys.quest.current() -> {questId, mode, title, easyTitle, icon, step, steps,
+//        objective:{index, type, kind, text, easyText, emoji, target:{x,z,label}|null, value, count}} | null
+//        what to do next, with one short kid sentence per objective kind (쉬운 모드 "다음 할 일")
+//   G.sys.quest.easyTitle(id) / easyText(objective)   kid wording for a quest / an objective
+//   G.sys.quest.renderList(el, {easy, close}) -> {refresh(), destroy()}   quest list as sticker cards (big 🎁 받기,
+//        👉 같이 가기, 🙋 만나러 가기); live-updates on quest events until el leaves the DOM
+// 쉬운 모드: openLog() / hotkeys Q·L open the 📖 스티커북 on its 📜 할 일 tab (one place for quests), toasts are short
+// kid sentences, reward popups use the kid title.
 // State: G.state.quests[id] = {status, progress[], acceptedAt, completedAt, claimedAt, tracked, seen{}}
 // Objective types (01-data.js): talk visit water plant harvest ferment_check ferment_start ferment_claim edu quiz
 //   journal photo emote gesture interact collect craft chat visit_all level. Sequential quests only count the
@@ -174,6 +183,66 @@
     }
   }
 
+  // ---------------------------------------------------------------- 쉬운 모드 wording (CONTRACT §12)
+  const easyOn = () => !!(G.easy && G.easy.on);
+  const kjo = (w, p) => (G.kidKit?.josa ? G.kidKit.josa(w, p) : `${w}${String(p).split('/')[1]}`);
+  /** short, friendly quest names for children (unknown ids fall back to the data title) */
+  const KID_TITLE = {
+    QUEST001: '체험관 첫 나들이', Q_FIRST_WATER: '첫 물 주기', Q_HARVEST3: '채소 3번 거두기', Q_JOURNAL5: '그림일기 5번 쓰기',
+    Q_TOUR: '큰 건물 구경하기', Q_STORAGE: '항아리 창고 가 보기', Q_ALL_ZONES: '모든 곳 가 보기', Q_FARMER: '산골농부 돕기',
+    Q_HERB: '향긋한 허브 거두기', Q_MEJU: '메주 만들기', Q_DOENJANG: '된장 완성하기', Q_NEW_FERMENT: '새 장 담그기',
+    Q_QUIZ3: '퀴즈 3개 맞히기', Q_CULTURE: '옛날 도구 구경하기', Q_PHOTO: '사진 찍기', Q_GREET: '반갑게 인사하기',
+  };
+  const kidTitle = (q) => (q ? KID_TITLE[q.id] || q.title || '할 일' : '할 일');
+  const OBJ_EMOJI = {
+    talk: '💬', visit: '🚶', visit_all: '🗺️', water: '💧', plant: '🌱', harvest: '🧺', collect: '🎒', ferment_check: '🏺',
+    ferment_start: '🫙', ferment_claim: '🎉', edu: '📖', quiz: '❓', journal: '📝', photo: '📸', emote: '👋', gesture: '🙌',
+    interact: '👆', craft: '🔨', chat: '💬', level: '⭐', claim: '🎁', giver: '🙋',
+  };
+  const KID_CRAFT = { CRAFT_MEJU: '작업대에서 메주를 빚어요', CRAFT_GOCHUGARU: '작업대에서 고춧가루를 빻아요', CRAFT_HERB_TEA: '작업대에서 허브 다발을 묶어요' };
+  const shortRecipe = (r) => String(r?.name || '장').replace(/\s*체험$/, '');
+  /** one short kid sentence (≤ 12 words, 해요체, no keys / numbers jargon) per objective kind */
+  function kidObjective(o) {
+    if (!o) return '금빛 표시를 따라가요';
+    const crop = o.crop ? G.data.crops?.[o.crop]?.name : null;
+    switch (o.type) {
+      case 'talk': return o.npc ? `${kjo(npcName(o.npc), '이랑/랑')} 이야기해요` : '친구랑 이야기해요';
+      case 'visit': {
+        const z = o.zone ? zoneDef(o.zone) : null;
+        const n = z ? (z.short || z.name) : poiDef(o.poi)?.name;
+        return n ? `${n}에 가 봐요` : '반짝이는 곳에 가 봐요';
+      }
+      case 'visit_all': return '아직 안 가 본 곳에 가 봐요';
+      case 'water': return crop ? `${crop}밭에 물을 줘요` : '밭에 물을 줘요';
+      case 'plant': return crop ? `${crop} 씨앗을 심어요` : o.category === 'herb' ? '허브를 심어요' : '빈 밭에 씨앗을 심어요';
+      case 'harvest': return crop ? `${kjo(crop, '을/를')} 거둬요` : o.category === 'herb' ? '향긋한 허브를 거둬요' : '다 자란 채소를 거둬요';
+      case 'collect': { const it = G.data.items?.[o.item]; return it ? `${kjo(it.name, '을/를')} 모아요` : '재료를 모아요'; }
+      case 'ferment_check': return '반짝이는 내 장독을 봐요';
+      case 'ferment_start': return '장독에 새 장을 담가요';
+      case 'ferment_claim': return `다 익은 ${kjo(shortRecipe(G.data.recipes?.[o.recipe]), '을/를')} 꺼내요`;
+      case 'edu': return '그림 이야기를 봐요';
+      case 'quiz': return '퀴즈를 맞혀요';
+      case 'journal': return '그림일기를 써요';
+      case 'photo': return '사진을 찍어요';
+      case 'emote': return o.emote === 'EMO_HELLO' ? '손 흔들어 인사해요' : '내 마음을 보여 줘요';
+      case 'gesture': return '몸으로 표현해요';
+      case 'interact': return o.kind === 'tool' ? '옛날 도구를 살펴봐요' : '반짝이는 것을 눌러 봐요';
+      case 'craft': return KID_CRAFT[o.craft] || '작업대에서 만들어요';
+      case 'chat': return '친구에게 인사해요';
+      case 'level': return `레벨 ${Math.max(1, Number(o.count) || 1)}까지 놀아요`;
+      default: return '금빛 표시를 따라가요';
+    }
+  }
+  /** reward as pictures: [{emoji, text}] (no "EXP" words) */
+  function kidReward(r = {}) {
+    const out = [];
+    if (r.coin) out.push({ emoji: '🪙', text: fmt(r.coin) });
+    if (r.exp) out.push({ emoji: '✨', text: fmt(r.exp) });
+    for (const [id, n] of Object.entries(r.items || {})) { const it = G.data.items?.[id]; if (it) out.push({ emoji: it.icon || '🎁', text: `${fmt(n)}` }); }
+    if (r.title) out.push({ emoji: '🏅', text: '이름표' });
+    return out;
+  }
+
   // ---------------------------------------------------------------- the system
   const quest = {
     name: 'quest', order: 52, label: '퀘스트',
@@ -220,6 +289,8 @@
         for (let i = 0; i < MAX_MARKERS; i++) this._markers.push(makeMarker(this._markerRoot));
       }
       this._arrow = G.ui.h('span', { class: 'oh-arrow', 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24"><path d="M12 3 19 19 12 15.5 5 19z" fill="currentColor"/></svg>' });
+      // easy <-> normal: the adult quest log does not belong in easy mode (the 스티커북 shows quests there)
+      G.bus.on('easy:changed', ({ on } = {}) => { if (on) this._logModal?.close(); this._hintKey = ''; });
     },
 
     onStateLoaded(state) {
@@ -309,7 +380,8 @@
       if (fresh.length && !opts.silent) {
         const first = defs()[fresh[0]];
         const giver = first.giver ? `${npcName(first.giver)}에게서 ` : '';
-        toastQ(fresh.length > 1 ? `새 퀘스트 ${fresh.length}개가 열렸어요! ${giver}「${first.title}」 외 ${fresh.length - 1}개` : `새 퀘스트가 열렸어요! ${giver}「${first.title}」`, { emoji: '❗', type: 'info', cls: 'quest-toast' });
+        if (easyOn()) toastQ(fresh.length > 1 ? `새 할 일이 ${fresh.length}개 생겼어요!` : `새 할 일이 생겼어요! ${kidTitle(first)}`, { emoji: '🙋', type: 'info', cls: 'quest-toast', say: '새 할 일이 생겼어요!' });
+        else toastQ(fresh.length > 1 ? `새 퀘스트 ${fresh.length}개가 열렸어요! ${giver}「${first.title}」 외 ${fresh.length - 1}개` : `새 퀘스트가 열렸어요! ${giver}「${first.title}」`, { emoji: '❗', type: 'info', cls: 'quest-toast' });
         for (const id of fresh) this._fresh[id] = performance.now();
       }
       if (fresh.length) { G.dirty('quest'); this._changed(); }
@@ -351,7 +423,7 @@
       G.log.info('QUEST', `accepted ${id}${opts.auto ? ' (auto)' : ''}`);
       G.bus.emit('quest:accepted', { questId: id });
       if (!opts.silent) {
-        toastQ(`퀘스트 수락: 「${q.title}」`, { emoji: q.icon || '📜', type: 'info', cls: 'quest-toast' });
+        toastQ(easyOn() ? `새 할 일: ${kidTitle(q)}` : `퀘스트 수락: 「${q.title}」`, { emoji: q.icon || '📜', type: 'info', cls: 'quest-toast' });
         G.sfx('quest');
         this._fresh[id] = performance.now();
         G.activity('quest', `퀘스트 「${q.title}」 시작`);
@@ -375,7 +447,7 @@
       let granted = reward;
       try {
         const P = G.sys.progression;
-        if (P?.grant) granted = P.grant(reward, { reason: `quest:${id}`, popup: true, title: q.title, eyebrow: q.category === 'main' ? 'MAIN QUEST CLEAR' : 'QUEST CLEAR' }) || reward;
+        if (P?.grant) granted = P.grant(reward, { reason: `quest:${id}`, popup: true, title: easyOn() ? `${kidTitle(q)} 성공` : q.title, eyebrow: q.category === 'main' ? 'MAIN QUEST CLEAR' : 'QUEST CLEAR' }) || reward;
         else this._fallbackGrant(reward);
       } catch (err) { G.log.error('QUEST', 'reward grant failed', err); }
       G.log.info('QUEST', `claimed ${id}`, reward);
@@ -406,7 +478,241 @@
     },
 
     focus() { return this._focus; },
+    /**
+     * craft objective helper: the first ingredient of G.data.crafts[craftId] the player is short of ->
+     * {item, have, need, crop} (crop = the crop that grows it, or null) | null when everything is in the bag
+     */
+    craftNeed(craftId) {
+      const r = G.data.crafts?.[craftId];
+      if (!r || !r.in || !G.state) return null;
+      for (const [item, n] of Object.entries(r.in)) {
+        const need = Math.max(1, Math.round(Number(n) || 1));
+        const have = Math.max(0, Number(G.sys.inventory?.count?.(item)) || 0);
+        if (have < need) {
+          const crop = Object.keys(G.data.crops || {}).find((id) => G.data.crops[id]?.harvestItem === item) || null;
+          return { item, have, need, crop };
+        }
+      }
+      return null;
+    },
     getMarkers() { return this._mapMarkers; },
+
+    // ------------------------------------------------------------ 쉬운 모드 helpers
+    easyTitle(id) { return kidTitle(defs()[id]); },
+    easyText(o) { return kidObjective(o); },
+
+    /** what to do next (same priority as the gold marker), with kid wording — drives the easy "다음 할 일" card */
+    current() {
+      const f = this._focus;
+      const q = f ? defs()[f.questId] : null;
+      if (!f || !q || !G.state) return null;
+      const e = G.state.quests[f.questId] || { progress: [] };
+      // a person is a place to walk to by name ("발효마스터"), never by the adult objective sentence
+      const tg = f.target && Number.isFinite(f.target.x) && Number.isFinite(f.target.z)
+        ? { x: f.target.x, z: f.target.z, kind: f.target.kind || null, label: String((f.target.npc ? npcName(f.target.npc) : f.target.label) || '') } : null;
+      let objective;
+      if (f.mode === 'claim') {
+        objective = { index: -1, type: 'claim', kind: 'claim', text: '퀘스트 보상 받기', easyText: '잘했어요! 선물을 받아요', emoji: OBJ_EMOJI.claim, target: null, value: 1, count: 1 };
+      } else if (f.mode === 'giver') {
+        const n = npcName(q.giver);
+        objective = { index: -1, type: 'talk', kind: 'giver', text: `${n}에게 말을 걸어 「${q.title}」 받기`, easyText: `${n}에게 가 봐요`, emoji: OBJ_EMOJI.giver, target: tg, value: 0, count: 1 };
+      } else {
+        const o = q.objectives[f.objective];
+        if (!o) return null;
+        const count = o.count || 1;
+        objective = { index: f.objective, type: o.type, kind: o.type, text: o.text, easyText: kidObjective(o), emoji: OBJ_EMOJI[o.type] || '⭐', target: tg, value: Math.min(count, Number(e.progress[f.objective]) || 0), count };
+      }
+      return { questId: f.questId, mode: f.mode, title: q.title, easyTitle: kidTitle(q), icon: q.icon || '📜', category: q.category, step: Math.max(0, f.objective) + 1, steps: q.objectives.length, objective };
+    },
+
+    /**
+     * Quest list as sticker cards (easy) or compact rows (normal) inside `el`.
+     * opts: {easy = G.easy.on, close: fn (called before an action takes the child into the world)}
+     * -> {root, refresh(), destroy()} ; re-renders itself on quest events until `el` leaves the DOM.
+     */
+    renderList(el, opts = {}) {
+      if (!el || !G.state) return null;
+      const easy = opts.easy ?? easyOn();
+      const root = G.ui.h('div', { class: `kq ${easy ? 'kq-easy' : 'kq-normal'}` });
+      el.appendChild(root);
+      let raf = 0, drawn = false;
+      const ctl = { root, destroyed: false };
+      const draw = () => {
+        if (ctl.destroyed) return;
+        if (!G.state) { root.textContent = ''; return; }
+        try { this._drawList(root, easy, opts, !drawn); drawn = true; } catch (err) { G.log.error('QUEST', 'renderList failed', err); }
+      };
+      const queue = () => {
+        if (ctl.destroyed || raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; if (root.isConnected) draw(); else ctl.destroy(); });
+      };
+      const offs = ['quest:accepted', 'quest:progress', 'quest:completed', 'quest:claimed', 'state:loaded'].map((n) => G.bus.on(n, queue));
+      ctl.refresh = draw;
+      ctl.destroy = () => {
+        if (ctl.destroyed) return;
+        ctl.destroyed = true;
+        cancelAnimationFrame(raf);
+        for (const off of offs) { try { off(); } catch (err) { /* already gone */ } }
+      };
+      draw();
+      return ctl;
+    },
+
+    _drawList(root, easy, opts, first) {
+      const st = G.state.quests;
+      const ids = Object.keys(defs());
+      const order = (id) => ids.indexOf(id) + (defs()[id].category === 'main' ? -1000 : 0) + (st[id]?.tracked ? -100 : 0);
+      const by = (fn) => ids.filter((id) => fn(st[id]?.status)).sort((a, b) => order(a) - order(b));
+      const claim = by((s) => s === 'completed');
+      const active = by((s) => ACTIVE.has(s));
+      const avail = by((s) => s === 'available').filter((id) => !!defs()[id].giver);
+      const done = by((s) => s === 'claimed');
+      const locked = by((s) => s === 'locked').length;
+      const y = root.closest('.modal-body')?.scrollTop;
+      root.textContent = '';
+      const h = G.ui.h;
+      if (!easy) {
+        for (const id of claim.concat(active, avail)) root.appendChild(this._adultRow(id, opts));
+        if (!root.childElementCount) root.appendChild(h('div', { class: 'empty' }, '진행 중인 퀘스트가 없어요.'));
+        return;
+      }
+      let i = 0;
+      const sec = (emoji, text, cls = '') => root.appendChild(h('h3', { class: `kk-sec kq-sec ${cls}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), text));
+      if (claim.length) { sec('🎁', '선물을 받을 수 있어요!', 'gold'); for (const id of claim) root.appendChild(this._kidCard(id, 'claim', opts, first ? i++ : -1)); }
+      if (active.length) { sec('🏃', '하고 있어요'); for (const id of active) root.appendChild(this._kidCard(id, 'active', opts, first ? i++ : -1)); }
+      if (avail.length) { sec('🙋', '새로 할 수 있어요'); for (const id of avail) root.appendChild(this._kidCard(id, 'avail', opts, first ? i++ : -1)); }
+      if (done.length) {
+        sec('✅', `다 했어요 (${done.length})`);
+        const grid = h('div', { class: 'kk-grid kq-done' });
+        for (const id of done) {
+          const q = defs()[id];
+          const b = h('button', { type: 'button', class: `easy-tile kk-tile kq-done-tile${first ? '' : ' still'}`, 'aria-label': `${kidTitle(q)}, 다 했어요` },
+            h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, q.icon || '📜'),
+            h('span', { class: 'et-label' }, kidTitle(q)),
+            h('span', { class: 'et-badge', 'aria-hidden': 'true' }, '✅'));
+          b.style.setProperty('--tile', '#55d187');
+          b.addEventListener('click', () => G.kidKit?.say?.(`${kidTitle(q)}. 다 했어요! 멋져요!`, { force: true }));
+          grid.appendChild(b);
+        }
+        G.kidKit?.gridKeys?.(grid);
+        root.appendChild(grid);
+      }
+      if (!claim.length && !active.length && !avail.length) {
+        const all = !locked;
+        root.prepend(G.kidKit ? G.kidKit.empty(all ? '🎉' : '🧭', all ? '할 일을 모두 했어요!' : '지금은 할 일이 없어요.', all ? '마음껏 구경해요!' : '친구들에게 말을 걸어 봐요!', all ? 'cheer' : 'think') : h('div', { class: 'empty' }, '지금은 할 일이 없어요.'));
+      }
+      if (locked) root.appendChild(h('p', { class: 'kq-locked' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔒'), ` 더 놀면 새 할 일이 생겨요! (${locked}개)`));
+      if (y != null) { const mb = root.closest('.modal-body'); if (mb) mb.scrollTop = y; }
+    },
+
+    /** one sticker card: claim / active / avail */
+    _kidCard(id, kind, opts, i) {
+      const h = G.ui.h;
+      const q = defs()[id], e = G.state.quests[id];
+      const p = this.progress(id);
+      const title = kidTitle(q);
+      let line = '', lineEmoji = '';
+      let o = null;
+      if (kind === 'claim') { line = '다 했어요! 선물을 받아요'; lineEmoji = '🎉'; }
+      else if (kind === 'avail') { line = `${npcName(q.giver)}에게 가면 알려 줘요`; lineEmoji = '🙋'; }
+      else {
+        const idx = p.current >= 0 ? p.current : q.objectives.findIndex((x, k) => (e.progress[k] || 0) < (x.count || 1));
+        o = idx >= 0 ? q.objectives[idx] : null;
+        line = kidObjective(o);
+        lineEmoji = OBJ_EMOJI[o?.type] || '⭐';
+        o = o ? { o, idx } : null;
+      }
+      const card = h('div', { class: `kq-card kq-${kind}${q.category === 'main' ? ' is-main' : ''}${i < 0 ? ' still' : ''}`, role: 'group', 'aria-label': `${title}. ${line}` });
+      if (i >= 0) card.style.setProperty('--i', String(Math.min(i, 12)));
+      // progress as pictures: one pip per step (sequential) or per count
+      let pips = null;
+      if (kind === 'active') {
+        const pipsOf = (n, on, cur) => { const w = h('div', { class: 'kq-pips', role: 'img', 'aria-label': `${n}개 중에 ${on}개 했어요` }); for (let k = 0; k < n; k++) w.appendChild(h('i', { class: k < on ? 'on' : k === cur ? 'now' : '' })); return w; };
+        if (q.objectives.length > 1) pips = pipsOf(q.objectives.length, p.done, p.current);
+        else {
+          const ob = p.objectives[0];
+          if (ob.target > 1 && ob.target <= 10) pips = pipsOf(ob.target, ob.value, ob.value);
+          else if (ob.target > 10) pips = h('div', { class: 'kq-pips' }, h('b', null, `⭐ ${fmt(ob.value)} / ${fmt(ob.target)}`));
+        }
+      }
+      const rw = kidReward(q.reward);
+      const reward = rw.length ? h('div', { class: 'kq-reward', 'aria-label': '선물' }, h('span', { class: 'kq-gift emoji', 'aria-hidden': 'true' }, '🎁'), rw.slice(0, 4).map((r) => h('span', { class: 'kq-rw' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, r.emoji), r.text))) : null;
+      const main = h('div', { class: 'kq-main' },
+        h('div', { class: 'kq-title' }, title),
+        h('div', { class: 'kq-line' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, lineEmoji), h('span', null, line)),
+        pips, reward);
+      const sayLine = `${title}. ${line}.`;
+      const sayBtn = h('button', { type: 'button', class: 'easy-speak kq-say', 'aria-label': '소리로 듣기', title: '소리로 듣기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔊'));
+      sayBtn.addEventListener('click', () => G.kidKit?.say?.(sayLine, { force: true, priority: 1 }));
+      const act = this._kidAct(id, kind, o, opts);
+      let btn = null;
+      if (act) {
+        btn = h('button', { type: 'button', class: `easy-big-btn kq-btn ${act.cls || 'easy-btn-yes'}`, 'data-say': act.label }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, act.emoji), h('span', null, act.label));
+        btn.addEventListener('click', () => { try { act.fn(card, btn); } catch (err) { G.log.error('QUEST', 'kid card action', err); } });
+      }
+      card.append(h('div', { class: 'kq-sticker emoji', 'aria-hidden': 'true' }, q.icon || '📜'), main, h('div', { class: 'kq-side' }, sayBtn, btn));
+      card.__easySpeak = { btn: sayBtn, text: sayLine };
+      return card;
+    },
+
+    /** the one big button of a card -> {emoji, label, cls, fn} | null */
+    _kidAct(id, kind, cur, opts) {
+      const leave = () => { try { opts.close?.(); } catch (e) { /* ignore */ } };
+      const walk = (t, label) => { leave(); if (G.easy?.goTo) G.easy.goTo({ x: t.x, z: t.z }, { label: label || '' }); };
+      if (kind === 'claim') return { emoji: '🎁', label: '선물 받기', cls: 'kq-claim', fn: (card, btn) => this._kidClaim(id, card, btn) };
+      if (kind === 'avail') {
+        const q = defs()[id];
+        const t = this._npcTarget(q.giver, npcName(q.giver));
+        return t ? { emoji: '🙋', label: '만나러 가기', fn: () => walk(t, '') } : null;
+      }
+      if (!cur) return null;
+      const t = cur.o.type;
+      const trig = (action) => () => { leave(); G.ui.triggerAction(action); };
+      if (t === 'journal') return { emoji: '📝', label: '일기 쓰기', fn: () => { leave(); G.sys.journal?.open?.(); } };
+      if (t === 'photo') return { emoji: '📸', label: '사진 찍기', fn: trig('photo') };
+      if (t === 'emote' || t === 'gesture') return { emoji: '😊', label: '표현하기', fn: trig('express') };
+      if (t === 'chat') return { emoji: '💬', label: '인사하기', fn: trig('kid-chat') };
+      let target = null;
+      try { target = this._targetFor(id, cur.idx); } catch (e) { target = null; }
+      if (target && G.easy?.goTo) return { emoji: '👉', label: '같이 가기', fn: () => walk(target, '') };
+      if ((t === 'edu' || t === 'quiz') && G.sys.education?.openLibrary) return { emoji: '📖', label: '보러 가기', fn: () => { leave(); G.sys.education.openLibrary(); } };
+      return null;
+    },
+
+    /** 🎁 선물 받기: a short celebration, then the reward popup */
+    async _kidClaim(id, card, btn) {
+      if (this.status(id) !== 'completed' || card?._busy) return null;
+      if (card) card._busy = true;
+      if (btn) btn.disabled = true;
+      card?.classList.add('opening');
+      const q = defs()[id];
+      const st = G.state;
+      try { if (G.easy?.celebrate) await G.easy.celebrate('다 했어요!', { emoji: q.icon || '🎁', duration: 1100 }); } catch (e) { /* cosmetic */ }
+      if (!G.state || G.state !== st) return null; // logged out / another player meanwhile
+      return this.claim(id);
+    },
+
+    /** compact adult row (normal-mode renderList) */
+    _adultRow(id, opts) {
+      const h = G.ui.h;
+      const q = defs()[id], e = G.state.quests[id];
+      const p = this.progress(id);
+      const cur = p.current >= 0 ? q.objectives[p.current] : null;
+      const row = h('div', { class: `kq-row s-${e.status}` },
+        h('span', { class: 'kq-row-ico emoji', 'aria-hidden': 'true' }, q.icon || '📜'),
+        h('div', { class: 'kq-row-main' }, h('b', null, q.title), h('small', null, e.status === 'completed' ? '보상을 받을 수 있어요' : e.status === 'available' ? `${npcName(q.giver)}에게서 받을 수 있어요` : (cur?.text || q.desc)),
+          ACTIVE.has(e.status) ? h('span', { class: 'bar', html: `<i style="width:${Math.round(p.ratio * 100)}%"></i>` }) : null));
+      if (e.status === 'completed') {
+        const b = h('button', { type: 'button', class: 'btn btn-gold btn-sm' }, '보상 받기');
+        b.addEventListener('click', () => this.claim(id));
+        row.appendChild(b);
+      } else {
+        const b = h('button', { type: 'button', class: 'btn btn-soft btn-sm' }, '자세히');
+        b.addEventListener('click', () => { try { opts.close?.(); } catch (err) { /* ignore */ } this.openLog(null, id, { normal: true }); });
+        row.appendChild(b);
+      }
+      return row;
+    },
 
     // ------------------------------------------------------------ progress
     _changed() { this._panelDirty = true; this._npcDirty = true; this._targetsDirty = true; this._hintT = 0; },
@@ -454,7 +760,10 @@
       if (after >= target && before < target) {
         G.log.info('QUEST', `${id} objective ${i} done (${o.text})`);
         if (this._allDone(q, e)) { this._complete(id, opts); return true; }
-        if (!opts.silent) toastQ(`목표 달성: ${o.text}`, { emoji: '✅', type: 'success', cls: 'quest-toast' });
+        if (!opts.silent) {
+          if (easyOn()) toastQ('잘했어요! 하나 끝났어요 ✅', { emoji: OBJ_EMOJI[o.type] || '✅', type: 'success', cls: 'quest-toast' });
+          else toastQ(`목표 달성: ${o.text}`, { emoji: '✅', type: 'success', cls: 'quest-toast' });
+        }
         if (q.sequential) {
           this._evalState(id, opts);
           if (ACTIVE.has(e.status)) this._checkImmediate(id);
@@ -474,7 +783,8 @@
       G.bus.emit('quest:completed', { questId: id });
       if (!opts.silent) {
         G.sfx('quest');
-        toastQ(`퀘스트 완료! 「${q.title}」 — ‘보상 받기’를 눌러 주세요`, { emoji: q.icon || '🎉', type: 'success', sound: false, cls: 'quest-toast quest-done-toast', duration: 4200 });
+        if (easyOn()) toastQ(`다 했어요! 🎁 선물을 받아요`, { emoji: q.icon || '🎉', type: 'success', sound: false, cls: 'quest-toast quest-done-toast', duration: 4200, say: `${kidTitle(q)}, 다 했어요! 선물을 받아요.` });
+        else toastQ(`퀘스트 완료! 「${q.title}」 — ‘보상 받기’를 눌러 주세요`, { emoji: q.icon || '🎉', type: 'success', sound: false, cls: 'quest-toast quest-done-toast', duration: 4200 });
       }
       this._changed();
     },
@@ -738,7 +1048,13 @@
           const pz = nearestOf(L().photoZones || [], (z) => !o.photoZone || o.photoZone === '*' || z.id === o.photoZone);
           return pz ? loc(pz.x, pz.z, 2.4, 'photo', `포토존 · ${pz.name}`) : null;
         }
-        case 'craft': { const c = L().craftTable; return c ? this._objTarget(c.id, c.x, c.z, 2.3, 'craft', c.title || '작업대') : null; }
+        case 'craft': {
+          // 쉬운 모드: short of an ingredient (e.g. 콩 3개 for 메주) -> lead to where it comes from first, not to a
+          // workbench whose picture is locked (08-easy says "콩을 모아요 1/3" for the same case)
+          const need = easyOn() && o.craft ? this.craftNeed(o.craft) : null;
+          if (need) { const t = this._ingredientTarget(need, loc); if (t) return t; }
+          const c = L().craftTable; return c ? this._objTarget(c.id, c.x, c.z, 2.3, 'craft', c.title || '작업대') : null;
+        }
         case 'interact': {
           const seen = e.seen?.[i] || [];
           if (o.id) { const a = L().get?.(o.id); return a ? this._objTarget(o.id, a.x, a.z, 2.2, o.kind || 'object', a.name || a.title || '') : null; }
@@ -760,12 +1076,23 @@
       const h = (rec?.rig?.height || 1.45) + 0.95;
       const x = n?.pos?.[0] ?? 0, z = n?.pos?.[1] ?? 0;
       const y = ground(x, z);
-      return { x, z, y, gemY: y + h, follow: group, followOff: h, beam: true, beamFromGem: true, kind: 'npc', label: label || n?.name || '' };
+      return { x, z, y, gemY: y + h, follow: group, followOff: h, beam: true, beamFromGem: true, kind: 'npc', npc: npcId, label: label || n?.name || '' };
     },
     _objTarget(id, x, z, h, kind, label) {
       const obj = G.world.getObject?.(id);
       const y = ground(x, z);
-      return { x, z, y, gemY: y + h, follow: null, followOff: 0, beam: true, kind, label, _obj: obj };
+      return { id, x, z, y, gemY: y + h, follow: null, followOff: 0, beam: true, kind, label, _obj: obj };
+    },
+    /** where an ingredient comes from: its crop's ripe / growing bed -> an empty bed (seeds in the bag) -> the shop */
+    _ingredientTarget(need, loc) {
+      if (need.crop) {
+        const t = this._plotTarget({ type: 'harvest', crop: need.crop });
+        if (t) return t;
+        const seed = G.data.crops?.[need.crop]?.seedItem;
+        if (seed && (Number(G.sys.inventory?.count?.(seed)) || 0) > 0) { const p = this._plotTarget({ type: 'plant', crop: need.crop }); if (p) return p; }
+      }
+      const s = L().shopStall;
+      return s ? loc(s.x, s.z, 3.4, 'shop', '매점') : null;
     },
     _plotTarget(o) {
       const plots = L().farmPlots || [];
@@ -776,7 +1103,12 @@
         best = nearestOf(plots, (pd) => !plotInfo(pd).cropId && (!zoneWanted || pd.zone === zoneWanted));
       } else if (o.type === 'water') {
         const cand = plots.filter((pd) => { const s = plotInfo(pd); return s.cropId && cropOk(o, s.cropId) && s.growth < 100; });
-        best = nearestOf(cand, (pd) => plotInfo(pd).water < 65) || nearestOf(cand) || nearestOf(plots, (pd) => !!plotInfo(pd).cropId);
+        // every starter bed can be ripe already: then any bed with a crop that still takes water (one tap waters it
+        // while the water step is current — 40-farming), and with no crop anywhere an empty bed (plant first)
+        best = nearestOf(cand, (pd) => plotInfo(pd).water < 65) || nearestOf(cand)
+          || nearestOf(plots, (pd) => { const s = plotInfo(pd); return !!s.cropId && cropOk(o, s.cropId) && s.water < 95; })
+          || nearestOf(plots, (pd) => !!plotInfo(pd).cropId)
+          || nearestOf(plots, (pd) => !plotInfo(pd).cropId);
       } else {
         const cand = plots.filter((pd) => { const s = plotInfo(pd); return s.cropId && cropOk(o, s.cropId); });
         best = nearestOf(cand, (pd) => plotInfo(pd).growth >= 100);
@@ -789,7 +1121,7 @@
       const y = ground(best.x, best.z);
       const s = plotInfo(best);
       const crop = G.data.crops?.[s.cropId];
-      return { x: best.x, z: best.z, y, gemY: y + 2.1, follow: null, followOff: 0, beam: true, kind: 'plot', label: crop ? `${best.label}번 ${crop.name}밭` : `${best.label}번 밭` };
+      return { id: best.id, x: best.x, z: best.z, y, gemY: y + 2.1, follow: null, followOff: 0, beam: true, kind: 'plot', label: crop ? `${best.label}번 ${crop.name}밭` : `${best.label}번 밭` };
     },
 
     /**
@@ -996,6 +1328,14 @@
 
     // ------------------------------------------------------------ quest log modal
     toggleLog() {
+      if (easyOn() && G.sys.progression?.openHub) {
+        // 쉬운 모드: quests live on the 스티커북's 📜 할 일 tab (one place, no duplicate quest window)
+        const hub = G.ui.modal.get('collection');
+        if (hub && G.ui.modal.top() === hub && hub._kidTab === 'quest') { hub.close(); return; }
+        if (G.ui.isBlocking() && !hub && G.ui.blockers && [...G.ui.blockers].some((k) => !String(k).startsWith('modal:'))) return;
+        G.sys.progression.openHub('quest');
+        return;
+      }
       if (this._logModal && !this._logModal.closed && G.ui.modal.top() === this._logModal) { this._logModal.close(); return; }
       if (G.ui.isBlocking() && !(this._logModal && !this._logModal.closed)) {
         if (G.ui.blockers && [...G.ui.blockers].some((k) => !String(k).startsWith('modal:'))) return;
@@ -1005,8 +1345,9 @@
 
     _tabOf(status) { return status === 'completed' ? 'claimable' : status === 'claimed' ? 'done' : (ACTIVE.has(status) || status === 'available') ? 'active' : 'all'; },
 
-    openLog(tab, questId) {
+    openLog(tab, questId, opts = {}) {
       if (!G.state) return null;
+      if (easyOn() && !opts.normal && G.sys.progression?.openHub) return G.sys.progression.openHub('quest');
       const ALIAS = { progress: 'active', accepted: 'active', available: 'active', '진행중': 'active', '진행 중': 'active', completed: 'claimable', reward: 'claimable', '완료 가능': 'claimable', '보상 대기': 'claimable', claimed: 'done', '완료': 'done', '전체': 'all' };
       if (tab && ALIAS[tab]) tab = ALIAS[tab];
       if (tab && !['active', 'claimable', 'done', 'all'].includes(tab)) tab = null;

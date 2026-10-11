@@ -174,3 +174,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (1, UNIX_TIMESTAMP() * 1000, 'initial schema');
+
+-- v2 (kid safety): chat_messages.text_key used to be built from the UNMASKED text, so phone numbers / e-mails that
+-- were masked in `text` stayed readable there. Keys are now built from the masked text; older keys are cleared
+-- (they only feed the 30-second repeat-spam check). Re-running this file later only touches rows older than v2.
+UPDATE chat_messages SET text_key = '' WHERE text_key <> '' AND created_at < COALESCE((SELECT applied_at FROM schema_version WHERE version = 2), 9007199254740991);
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (2, UNIX_TIMESTAMP() * 1000, 'chat text_key from masked text');

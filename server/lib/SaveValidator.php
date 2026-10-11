@@ -597,6 +597,10 @@ final class SaveValidator
         $prof = self::o(self::p($s, 'profile'));
         $title = self::s(self::p($prof, 'title'));
         $title = mb_substr(trim(preg_replace('/[^\x{AC00}-\x{D7A3}a-zA-Z0-9 _·\-]/u', '', $title) ?? ''), 0, 20);
+        // the ranking shows this to everyone: only titles the game can award (exported list); older exports fall
+        // back to the chat filters so the title can never smuggle bad words or personal information
+        $known = GameData::titles();
+        if ($known ? !in_array($title, $known, true) : (ChatFilter::containsBadWord($title) || ChatFilter::hasPII($title))) $title = '';
         $quests = 0;
         foreach (self::kv(self::p($s, 'quests')) as $q) if (self::s(self::p(self::o($q), 'status')) === 'claimed') $quests++;
         $level = max(1, self::i(self::p($st, 'level')));

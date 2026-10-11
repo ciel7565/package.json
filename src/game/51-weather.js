@@ -13,6 +13,10 @@
 //     temperature (°C), humidity (%), nightFactor, isNight, precipitation {rain, snow}, wetness (0..1 after rain)
 //     sunElevation / sunAzimuth (deg), timeString(h?) -> '10:30', icon(), openPopover(anchor)
 //   Emits weather:changed {id, prev, source}, time:phase {phase, prev, name}.
+//   쉬운 모드 (CONTRACT §12): a 🌤️ 날씨 button joins the kid bottom bar (#easy-wx-btn, easy-only) and the
+//   popover becomes a picture card — a big animated weather picture + one sentence (read aloud) + a feeling
+//   word instead of °C, 5 big weather tiles and 4 time-of-day tiles (아침/낮/저녁/밤). Weather is per device
+//   (local), so a child's change never affects anyone else.
 //   Drives engine.setSun, Preetham sky uniforms, scene.fog, hemi / sun / fill lights, tone-mapping
 //   exposure, G.world.nightFactor, G.world.nightMaterials / nightLights, nature clouds & wind,
 //   water ripples / flow speed (G.sys.water.uniforms.uRain / uFlowSpeed),
@@ -50,6 +54,31 @@
     hum: [-10, -8, -6, -4, 0, 6, 10, 10, 4, 0, -4, -8],
   };
   const PICK_COLORS = { CLEAR: '#ffd23f', CLOUDY: '#c9d3dc', RAIN: '#6fb9ff', FOG: '#d7dde2', SNOW: '#dff0ff' };
+  // kid picture card (easy mode)
+  const KID_WX = {
+    CLEAR: { emoji: '☀️', night: '🌙', label: '맑음', line: '해님이 반짝반짝 웃어요!', nightLine: '달님이 떴어요. 별도 반짝반짝해요!', pick: '해님아, 나와라!' },
+    CLOUDY: { emoji: '☁️', label: '구름', line: '구름이 몽실몽실 떠 있어요.', pick: '구름이 몽실몽실 와요!' },
+    RAIN: { emoji: '🌧️', label: '비', line: '비가 주룩주룩 내려요. 우산을 써요!', pick: '비가 주룩주룩 내려요!' },
+    FOG: { emoji: '🌫️', label: '안개', line: '안개가 뿌옇게 꼈어요. 천천히 걸어요.', pick: '안개가 스르르 와요!' },
+    SNOW: { emoji: '❄️', label: '눈', line: '하얀 눈이 펑펑 내려요!', pick: '눈이 펑펑 내려요!' },
+  };
+  const KID_TIMES = [
+    { h: 6.5, emoji: '🌅', label: '아침', say: '아침이에요. 해가 떠요!' },
+    { h: 12, emoji: '🌞', label: '낮', say: '낮이에요. 신나게 놀아요!' },
+    { h: 18.6, emoji: '🌇', label: '저녁', say: '저녁이에요. 노을이 예뻐요!' },
+    { h: 22, emoji: '🌙', label: '밤', say: '밤이에요. 별을 찾아봐요!' },
+  ];
+  const easyOn = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
+  const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+  /** a feeling word instead of a number (°C) for small children */
+  function feelWord(t) {
+    if (!Number.isFinite(t)) return { emoji: '😊', word: '기분 좋은 날씨예요' };
+    if (t <= 0) return { emoji: '🥶', word: '꽁꽁 추워요' };
+    if (t <= 10) return { emoji: '🧣', word: '조금 추워요' };
+    if (t <= 20) return { emoji: '🍃', word: '시원해요' };
+    if (t <= 27) return { emoji: '😊', word: '따뜻해요' };
+    return { emoji: '🥵', word: '더워요' };
+  }
 
   // ---------------------------------------------------------------- colours (linear working space)
   const C = (hex) => new THREE.Color(hex);
@@ -446,6 +475,8 @@
       }
 
       G.ui.onAction('weather', (el) => this.openPopover(el));
+      this._ensureKidButton();
+      G.bus.on('easy:changed', () => { this._pop?.close?.(); this._updateHud(true); });
       G.bus.on('settings:changed', ({ key }) => {
         if (key === 'autoWeather') {
           this._autoT = U.rand(AUTO_MIN, AUTO_MAX);
@@ -889,25 +920,159 @@
       if (ic) ic.dataset.wx = this.current.toLowerCase();
       const tp = document.getElementById('weather-temp');
       if (tp) tp.textContent = tempTxt;
-      const btn = document.querySelector('#bottom-bar [data-action="weather"]');
+      const btn = document.querySelector('#bottom-bar [data-action="weather"]:not(#easy-wx-btn)');
       if (btn) {
         btn.title = `${name} · ${tempTxt} · 습도 ${this.humidity}% · ${this.timeString()} (${this.phaseName})`;
         btn.setAttribute('aria-label', `날씨: ${name}, ${tempTxt}, ${this.phaseName}`);
         btn.dataset.phase = this.phase.toLowerCase();
       }
+      const kb = this._kidBtn;
+      if (kb) {
+        const emo = this._kidEmoji();
+        const e = kb.querySelector('.bb-emo');
+        if (e && e.textContent !== emo) e.textContent = emo;
+        kb.dataset.wx = this.current.toLowerCase();
+        kb.setAttribute('aria-label', `날씨: ${KID_WX[this.current]?.label || name}. 날씨 바꾸기`);
+      }
+    },
+
+    // ------------------------------------------------------------ 쉬운 모드: kid weather button + picture card
+    /** the kid bottom bar has no weather button in the template: add one (easy-only; CSS orders it before 🔊) */
+    _ensureKidButton() {
+      const bar = document.getElementById('bottom-bar');
+      if (!bar) return;
+      let b = bar.querySelector('#easy-wx-btn');
+      if (!b) {
+        const h = G.ui.h;
+        b = h('button', { id: 'easy-wx-btn', type: 'button', class: 'easy-only easy-wx-btn', 'data-action': 'weather', 'data-say': '날씨. 날씨와 시간을 바꿔요.', 'aria-label': '날씨 바꾸기' },
+          h('span', { class: 'bb-emo emoji', 'aria-hidden': 'true' }, '☀️'), h('span', { class: 'lbl' }, '날씨'));
+        bar.insertBefore(b, bar.querySelector('[data-action="sound"]'));
+      }
+      this._kidBtn = b;
+    },
+    _kidEmoji(id = this.current) {
+      const k = KID_WX[id] || KID_WX.CLEAR;
+      return id === 'CLEAR' && this.nightFactor > 0.55 ? k.night : k.emoji;
+    },
+    /** one sentence for the picture card */
+    _kidLine() {
+      const k = KID_WX[this.current] || KID_WX.CLEAR;
+      const night = this.nightFactor > 0.55;
+      return this.current === 'CLEAR' && night ? k.nightLine : k.line;
+    },
+
+    _buildKidPopover() {
+      const h = G.ui.h;
+      const scene = h('div', { class: 'wxk-scene', dataset: { wx: 'scene' }, 'aria-hidden': 'true' },
+        h('span', { class: 'wxk-fx' }), h('span', { class: 'wxk-big emoji' }, '☀️'));
+      const line = h('p', { class: 'wxk-line', dataset: { wx: 'line' } }, '');
+      const feel = h('div', { class: 'wxk-feel', dataset: { wx: 'feel' } }, '');
+      const picks = Object.keys(KID_WX).map((id) => {
+        const b = h('button', { type: 'button', class: 'wxk-tile', dataset: { kidWx: id }, 'aria-pressed': 'false', 'data-say': KID_WX[id].label },
+          h('span', { class: 'wxk-emo emoji', 'aria-hidden': 'true' }, KID_WX[id].emoji), h('span', { class: 'wxk-lbl' }, KID_WX[id].label));
+        b.style.setProperty('--wx', PICK_COLORS[id]);
+        return b;
+      });
+      const times = KID_TIMES.map((tm) => h('button', { type: 'button', class: 'wxk-time', dataset: { kidHour: String(tm.h) }, 'aria-pressed': 'false', 'data-say': tm.label },
+        h('span', { class: 'wxk-emo emoji', 'aria-hidden': 'true' }, tm.emoji), h('span', { class: 'wxk-lbl' }, tm.label)));
+      const auto = h('button', { type: 'button', class: 'wxk-auto', dataset: { kidAuto: '1' }, 'aria-pressed': 'false' },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔄'), h('span', { dataset: { wx: 'autoLbl' } }, '저절로 바뀌어요'));
+      const close = h('button', { type: 'button', class: 'wxk-x', 'aria-label': '닫기', title: '닫기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✖'));
+      const head = h('div', { class: 'wxk-head' }, scene, h('div', { class: 'wxk-say' }, line, feel));
+      const el = h('div', { class: 'wxk', role: 'dialog', 'aria-label': '날씨' },
+        close, head,
+        h('div', { class: 'wxk-title' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '👇'), '날씨를 바꿔 봐요'),
+        h('div', { class: 'wxk-picks' }, picks),
+        h('div', { class: 'wxk-title' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🕰️'), '언제로 할까요?'),
+        h('div', { class: 'wxk-times' }, times),
+        auto);
+      try { G.easy?.speakable?.(head.querySelector('.wxk-say'), () => this._kidSpeech()); } catch (e) { /* voice optional */ }
+      close.addEventListener('click', () => this._pop?.close?.());
+      el.addEventListener('click', (ev) => {
+        const p = ev.target.closest('[data-kid-wx]');
+        if (p) {
+          const id = p.dataset.kidWx;
+          if (this.auto) G.setSetting('autoWeather', false);
+          this.set(id, { source: 'user' });
+          this._bump();
+          kidSay(KID_WX[id]?.pick || '', { priority: 1 });
+          return;
+        }
+        const tm = ev.target.closest('[data-kid-hour]');
+        if (tm) {
+          const hr = Number(tm.dataset.kidHour);
+          this.setHour(hr);
+          this._bump();
+          kidSay(KID_TIMES.find((x) => x.h === hr)?.say || '', { priority: 1 });
+          this._refreshPopover(true);
+          return;
+        }
+        if (ev.target.closest('[data-kid-auto]')) {
+          const on = !this.auto;
+          G.setSetting('autoWeather', on);
+          kidSay(on ? '이제 날씨가 저절로 바뀌어요.' : '내가 고른 날씨로 있어요.', { priority: 1 });
+        }
+      });
+      return el;
+    },
+    _kidSpeech() {
+      const f = feelWord(this.temperature);
+      return `${this._kidLine()} ${f.word}.`;
+    },
+    _bump() {
+      const sc = this._popEl?.querySelector('.wxk-scene');
+      if (!sc) return;
+      sc.classList.remove('bump'); void sc.offsetWidth; sc.classList.add('bump');
+    },
+    _refreshKid(force) {
+      const el = this._popEl;
+      if (!el) return;
+      const q = (k) => el.querySelector(`[data-wx="${k}"]`);
+      const sc = q('scene');
+      if (sc) {
+        const night = this.nightFactor > 0.55 ? '1' : '0';
+        if (sc.dataset.kind !== this.current || sc.dataset.night !== night) {
+          sc.dataset.kind = this.current; sc.dataset.night = night;
+          const big = sc.querySelector('.wxk-big');
+          if (big) big.textContent = this._kidEmoji();
+        }
+      }
+      const setT = (n, v) => { if (n && n.textContent !== v) n.textContent = v; };
+      setT(q('line'), this._kidLine());
+      const f = feelWord(this.temperature);
+      setT(q('feel'), `${f.emoji} ${f.word}`);
+      for (const b of el.querySelectorAll('[data-kid-wx]')) {
+        const on = b.dataset.kidWx === this.current;
+        b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      const ph = this.phase;
+      const cur = ph === 'MORNING' ? 6.5 : ph === 'DAY' ? 12 : ph === 'EVENING' ? 18.6 : 22;
+      for (const b of el.querySelectorAll('[data-kid-hour]')) {
+        const on = Number(b.dataset.kidHour) === cur;
+        b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      const au = el.querySelector('[data-kid-auto]');
+      if (au) { au.setAttribute('aria-pressed', this.auto ? 'true' : 'false'); au.classList.toggle('on', this.auto); }
+      setT(q('autoLbl'), this.auto ? '날씨가 저절로 바뀌어요' : '저절로 바뀌게 하기');
+      if (force) el.closest('.popover') && this._pop?.reposition?.();
     },
 
     // ------------------------------------------------------------ popover
     openPopover(anchor) {
-      anchor = anchor || document.querySelector('#bottom-bar [data-action="weather"]');
+      const kid = easyOn();
+      if (!anchor || !anchor.isConnected || anchor.offsetParent === null) {
+        anchor = kid ? (this._kidBtn || document.querySelector('#bottom-bar [data-action="weather"]')) : document.querySelector('#bottom-bar [data-action="weather"]:not(#easy-wx-btn)');
+      }
       if (!anchor) return null;
-      const el = this._buildPopover();
-      const p = G.ui.popover.open(anchor, el, { id: 'weather', placement: 'top', className: 'wx-popover', onClose: () => { if (this._pop === p) this._pop = null; } });
+      const el = kid ? this._buildKidPopover() : this._buildPopover();
+      const p = G.ui.popover.open(anchor, el, { id: 'weather', placement: 'top', className: kid ? 'wx-popover wxk-popover' : 'wx-popover', onClose: () => { if (this._pop === p) { this._pop = null; this._popEl = null; } } });
       if (!p) { this._pop = null; return null; }
       this._pop = p;
       this._popEl = el;
+      this._popKid = kid;
       this._refreshPopover(true);
       p.reposition?.();
+      if (kid) kidSay(`날씨예요. ${this._kidSpeech()}`, { priority: 0 });
       return p;
     },
 
@@ -970,6 +1135,7 @@
     _refreshPopover(force) {
       const el = this._popEl;
       if (!el || !this._pop || this._pop.closed) return;
+      if (this._popKid) { this._refreshKid(force); return; }
       const q = (k) => el.querySelector(`[data-wx="${k}"]`);
       const d = G.data.weather?.[this.current] || { name: '맑음' };
       const icoBox = q('icon');

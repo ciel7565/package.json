@@ -1,0 +1,343 @@
+/* =============================================================================
+   08-easy.css — 쉬운 모드 kid UI kit (CONTRACT §12). Shared by every module:
+   .easy-only / .easy-hide · .easy-big-btn · .easy-speak · .easy-pick + .easy-tile · .easy-confirm ·
+   .easy-gate · .easy-hand · .easy-celebrate · .easy-next · .easy-rest(-card) · easy modal header / toasts.
+   Look: the game's dark glass + green/gold tokens, with warm bright "candy" tiles for children.
+   Every animation is ≤ 3 Hz and is switched off by body.reduce-motion / prefers-reduced-motion.
+   ============================================================================= */
+:root {
+  --tap: 40px;
+  --kid-ink: #23301f;
+  --kid-cream: #fffaf0;
+  --kid-cream-2: #fff1d6;
+  --kid-gold: #ffcf4a;
+  --kid-gold-d: #e3a412;
+  --kid-green: #3fd078;
+  --kid-green-d: #1f9e52;
+  --kid-red: #ff7a59;
+  --kid-radius: 22px;
+  --kid-shadow: 0 6px 0 rgba(0, 0, 0, .22), 0 14px 28px rgba(0, 0, 0, .28);
+  --kid-bounce: cubic-bezier(.34, 1.56, .64, 1);
+}
+body.easy { --tap: 56px; font-size: max(16px, 1rem); }
+
+/* unread badges: white on a deeper red reaches WCAG AA (4.5:1) for the small digits */
+body.easy .badge { background: #d6372a; }
+
+/* ------------------------------------------------------------------ visibility utilities */
+body:not(.easy) .easy-only { display: none !important; }
+body.easy .easy-hide { display: none !important; }
+
+/* ------------------------------------------------------------------ overlay layer (hand, celebration, rest) */
+.easy-layer { position: fixed; inset: 0; z-index: 75; pointer-events: none; }
+.easy-layer > * { pointer-events: none; }
+.easy-face { display: inline-grid; place-items: center; line-height: 0; }
+.easy-face svg { display: block; width: 100%; height: auto; }
+.easy-face.emoji { font-size: 3rem; line-height: 1; }
+
+/* ------------------------------------------------------------------ big buttons */
+.easy-big-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  min-height: var(--tap); min-width: calc(var(--tap) * 2); padding: .55rem 1.25rem; border-radius: 999px;
+  font-size: 1.15rem; font-weight: 800; letter-spacing: -.01em; color: var(--kid-ink);
+  background: linear-gradient(180deg, #ffffff, var(--kid-cream-2)); border: 2px solid rgba(255, 255, 255, .85);
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .25), 0 10px 22px rgba(0, 0, 0, .22);
+  transition: transform .12s var(--kid-bounce), box-shadow .12s, filter .15s;
+  touch-action: manipulation;
+}
+.easy-big-btn .emoji { font-size: 1.55rem; filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .18)); }
+.easy-big-btn:hover:not(:disabled) { filter: brightness(1.05); transform: translateY(-1px); }
+.easy-big-btn:active:not(:disabled) { transform: translateY(4px) scale(.96); box-shadow: 0 1px 0 rgba(0, 0, 0, .25), 0 4px 10px rgba(0, 0, 0, .2); }
+.easy-big-btn:focus-visible { outline: 4px solid var(--kid-gold); outline-offset: 3px; }
+/* white text needs ≥ 4.5:1 on the green (WCAG AA for 18 px bold kid labels) */
+.easy-btn-yes { background: linear-gradient(180deg, #1e9a4f, #0f6b30); color: #fff; border-color: rgba(255, 255, 255, .55); text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.easy-btn-no { background: linear-gradient(180deg, #ffffff, #e8eee6); color: var(--kid-ink); }
+.easy-btn-danger { background: linear-gradient(180deg, #ff9b7a, #e85a3c); color: #fff; border-color: rgba(255, 255, 255, .5); text-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+
+/* 🔊 read-aloud button */
+.easy-speak {
+  display: inline-grid; place-items: center; flex: none; width: max(2.75rem, 44px); height: max(2.75rem, 44px); border-radius: 50%;
+  background: linear-gradient(180deg, #fff6d8, #ffd765); border: 2px solid rgba(255, 255, 255, .8); color: var(--kid-ink);
+  box-shadow: 0 3px 0 rgba(140, 95, 0, .45), 0 6px 14px rgba(0, 0, 0, .25); font-size: 1.3rem; line-height: 1;
+  transition: transform .12s var(--kid-bounce);
+  touch-action: manipulation;
+}
+.easy-speak:hover { transform: scale(1.06); }
+.easy-speak:active { transform: translateY(2px) scale(.94); }
+.easy-speak:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.easy-speak.easy-speak-on { animation: easySpeakOn .9s ease-out 1; }
+/* easy mode: every 🔊 is a full kid tap target (§12.0, ≥ 56 px) */
+body.easy .easy-speak { width: var(--tap); height: var(--tap); font-size: 1.45rem; }
+@keyframes easySpeakOn { 0% { box-shadow: 0 0 0 0 rgba(255, 207, 74, .75), 0 3px 0 rgba(140, 95, 0, .45); } 100% { box-shadow: 0 0 0 16px rgba(255, 207, 74, 0), 0 3px 0 rgba(140, 95, 0, .45); } }
+
+/* long-press read feedback (05-input) */
+body.easy .easy-reading-wait { transition: box-shadow .6s linear; box-shadow: 0 0 0 4px rgba(255, 207, 74, .28) !important; }
+body.easy .easy-reading { box-shadow: 0 0 0 4px var(--kid-gold), 0 0 22px rgba(255, 207, 74, .65) !important; animation: easyReadPulse .7s ease-out 1; }
+@keyframes easyReadPulse { 0% { scale: 1; } 40% { scale: 1.06; } 100% { scale: 1; } }
+
+/* wrong answer / disabled tile */
+.easy-shake { animation: easyShake .42s ease-in-out 1; }
+@keyframes easyShake { 0%, 100% { translate: 0 0; } 20% { translate: -9px 0; } 40% { translate: 8px 0; } 60% { translate: -6px 0; } 80% { translate: 4px 0; } }
+
+/* ------------------------------------------------------------------ modals in easy mode (04-ui header) */
+.easy-back {
+  display: inline-flex; align-items: center; gap: .35rem; flex: none; min-height: var(--tap); padding: 0 1rem 0 .7rem; border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff, #e9efe6); color: var(--kid-ink); font-weight: 800; font-size: max(16px, 1.05rem);
+  border: 2px solid rgba(255, 255, 255, .8); box-shadow: 0 4px 0 rgba(0, 0, 0, .28), 0 8px 18px rgba(0, 0, 0, .22);
+  transition: transform .12s var(--kid-bounce); touch-action: manipulation;
+}
+.easy-back .emoji { font-size: 1.45rem; }
+.easy-back:active { transform: translateY(3px) scale(.96); box-shadow: 0 1px 0 rgba(0, 0, 0, .28); }
+.easy-back:focus-visible { outline: 4px solid var(--kid-gold); outline-offset: 2px; }
+body.easy .modal-head { gap: .75rem; padding: .85rem 1rem .75rem; }
+body.easy .modal-head h2 { font-size: 1.32rem; font-weight: 800; }
+body.easy .modal-head .modal-icon { font-size: 1.7rem; }
+body.easy .modal-foot .btn, body.easy .btn-lg { min-height: var(--tap); font-size: max(16px, 1.05rem); border-radius: 16px; padding-left: 1.2rem; padding-right: 1.2rem; }
+/* white on green reaches 4.5:1 for kid buttons (same green as .easy-btn-yes) */
+body.easy .btn-primary { background: linear-gradient(180deg, #1e9a4f, #0f6b30); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+body.easy .btn-primary:hover:not(:disabled) { background: linear-gradient(180deg, #23a85a, #127a37); }
+body.easy .btn { min-height: max(2.75rem, 42px); }
+body.easy .btn-sm { min-height: max(2.2rem, 36px); }
+body.easy .modal-body { font-size: max(16px, 1rem); }
+
+/* ------------------------------------------------------------------ picture chooser (G.easy.pick) */
+.easy-pick-modal .modal-body { padding-top: 1.1rem; padding-bottom: 1.3rem; }
+.easy-pick-text { margin: 0 0 .9rem; text-align: center; font-weight: 700; color: var(--text-dim); font-size: 1.02rem; }
+.easy-pick { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 14px; }
+.easy-tile {
+  --tile: #ffc93c;
+  position: relative; display: flex; flex-direction: column; align-items: stretch; min-height: calc(var(--tap) * 2.1); min-width: 0;
+  border-radius: var(--kid-radius); overflow: hidden; color: var(--kid-ink); text-align: center;
+  background: var(--kid-cream); border: 3px solid var(--tile);
+  box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 12px 24px rgba(0, 0, 0, .3);
+  transition: transform .14s var(--kid-bounce), box-shadow .14s, filter .15s;
+  animation: easyTileIn .38s var(--kid-bounce) both; animation-delay: calc(var(--i, 0) * 35ms);
+  touch-action: manipulation;
+}
+.easy-tile .et-emoji {
+  flex: 1 1 auto; display: grid; place-items: center; min-height: 4.4rem; padding: .55rem .3rem .35rem;
+  font-size: 2.6rem; line-height: 1;
+  background: radial-gradient(120% 95% at 50% 25%, color-mix(in srgb, var(--tile) 30%, #fff), var(--tile));
+  text-shadow: 0 3px 4px rgba(0, 0, 0, .18);
+}
+.easy-tile .et-label { display: block; padding: .5rem .4rem .55rem; font-size: max(1.05rem, 16.8px); font-weight: 800; line-height: 1.15; letter-spacing: -.01em; word-break: keep-all; overflow-wrap: anywhere; }
+.easy-tile .et-sub { display: block; padding: 0 .45rem .55rem; margin-top: -.25rem; font-size: .8rem; font-weight: 600; color: #5d6a58; }
+.easy-tile .et-badge { position: absolute; top: .4rem; right: .4rem; min-width: 1.9rem; height: 1.9rem; padding: 0 .35rem; display: grid; place-items: center; border-radius: 999px; background: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); font-size: 1.05rem; font-weight: 800; }
+.easy-tile .et-lock { position: absolute; top: .45rem; left: .45rem; font-size: 1.2rem; }
+.easy-tile:hover:not(.is-disabled) { transform: translateY(-3px) rotate(-.6deg); filter: brightness(1.04); }
+.easy-tile:active:not(.is-disabled), .easy-tile.is-chosen { transform: translateY(5px) scale(.95); box-shadow: 0 1px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 4px 10px rgba(0, 0, 0, .25); }
+.easy-tile:focus-visible { outline: 5px solid #fff; outline-offset: 3px; box-shadow: 0 0 0 9px rgba(255, 207, 74, .55), 0 6px 0 color-mix(in srgb, var(--tile) 62%, #000); }
+.easy-tile.is-selected { border-width: 4px; box-shadow: 0 0 0 4px rgba(255, 255, 255, .85), 0 6px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 12px 24px rgba(0, 0, 0, .3); }
+.easy-tile.is-disabled { filter: grayscale(.85) brightness(.85); opacity: .7; cursor: not-allowed; }
+@keyframes easyTileIn { from { opacity: 0; translate: 0 14px; scale: .9; } to { opacity: 1; translate: 0 0; scale: 1; } }
+
+/* ------------------------------------------------------------------ confirm / alert (G.easy.confirm / alert) */
+.easy-confirm { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .55rem; padding: .3rem 0 .2rem; }
+.easy-confirm .ec-big { font-size: 4.4rem; line-height: 1; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .35)); animation: easyBob 2.4s ease-in-out infinite; }
+.easy-confirm .ec-title { margin: .2rem 0 0; font-size: 1.36rem; font-weight: 800; line-height: 1.3; word-break: keep-all; }
+.easy-confirm .ec-text { margin: 0; color: var(--text-dim); font-size: 1rem; line-height: 1.5; word-break: keep-all; }
+.easy-confirm .ec-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; margin-top: .7rem; }
+.easy-confirm .ec-btns.one { grid-template-columns: 1fr; }
+.easy-confirm .ec-btns .easy-big-btn { width: 100%; min-width: 0; }
+.easy-confirm.danger .ec-big { animation: none; }
+@keyframes easyBob { 0%, 100% { translate: 0 0; rotate: -3deg; } 50% { translate: 0 -6px; rotate: 3deg; } }
+
+/* ------------------------------------------------------------------ parent gate (G.easy.gate) */
+.easy-gate { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .35rem; }
+.easy-gate .easy-face { width: 76px; }
+.easy-gate-lead { margin: .2rem 0 0; font-size: 1.3rem; font-weight: 800; }
+.easy-gate-sub { margin: 0 0 .4rem; font-size: max(16px, .92rem); color: var(--text-dim); word-break: keep-all; }
+.easy-gate-q {
+  display: flex; align-items: center; justify-content: center; gap: .55rem; margin: .3rem 0 .6rem; padding: .5rem 1.1rem;
+  border-radius: 18px; background: rgba(255, 255, 255, .07); border: 1px solid var(--line);
+  font-size: 2.3rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em;
+}
+.easy-gate-q .op { color: var(--kid-gold); font-weight: 700; }
+.easy-gate-q .qm { color: var(--kid-green); }
+.easy-gate-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; }
+.easy-gate-choice {
+  min-height: max(var(--tap), 60px); border-radius: 18px; font-size: 1.65rem; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: var(--kid-ink); background: linear-gradient(180deg, #ffffff, #e6eee3); border: 2px solid rgba(255, 255, 255, .85);
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .28), 0 10px 20px rgba(0, 0, 0, .22); transition: transform .12s var(--kid-bounce);
+  touch-action: manipulation;
+}
+.easy-gate-choice:active { transform: translateY(4px) scale(.97); box-shadow: 0 1px 0 rgba(0, 0, 0, .28); }
+.easy-gate-choice:focus-visible { outline: 4px solid var(--kid-gold); outline-offset: 3px; }
+.easy-gate-choice.ok { background: linear-gradient(180deg, #2fae62, #157a3c); color: #fff; }
+.easy-gate-choice.bad { background: linear-gradient(180deg, #ffd1c4, #ff9a80); }
+/* anti-mashing: a new question is briefly not tappable (one guess per question) */
+.easy-gate-choice:disabled { opacity: .6; cursor: wait; transition: opacity .2s ease, transform .12s var(--kid-bounce); }
+.easy-gate-choice.ok:disabled, .easy-gate-choice.bad:disabled { opacity: 1; }
+.easy-gate-status { min-height: 1.5em; margin: .55rem 0 0; font-weight: 700; color: #ffe7a6; }
+.easy-gate-cool { display: flex; align-items: center; gap: .6rem; margin: .4rem 0; padding: .8rem 1.2rem; border-radius: 18px; background: rgba(244, 197, 74, .12); border: 1px solid rgba(244, 197, 74, .45); font-size: 1.15rem; font-weight: 700; }
+.easy-gate-cool .emoji { font-size: 2rem; }
+.easy-gate-cool b { font-size: 1.6rem; color: var(--kid-gold); font-variant-numeric: tabular-nums; margin-right: .1rem; }
+
+/* ------------------------------------------------------------------ hand pointer (G.easy.point) */
+.easy-hand { position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 2; transition: opacity .25s; will-change: transform; }
+.easy-hand .eh-glyph {
+  position: absolute; left: -1.62rem; top: .1rem; font-size: 3.25rem; line-height: 1;
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, .45)) drop-shadow(0 0 10px rgba(255, 220, 120, .65));
+  animation: easyHandTap 1.05s ease-in-out infinite;
+}
+.easy-hand .eh-ring {
+  position: absolute; left: -1.4rem; top: -1.4rem; width: 2.8rem; height: 2.8rem; border-radius: 50%;
+  border: 4px solid rgba(255, 215, 90, .95); box-shadow: 0 0 14px rgba(255, 215, 90, .8);
+  animation: easyHandRing 1.05s ease-out infinite;
+}
+.easy-hand.edge .eh-ring { display: none; }
+.easy-hand.edge .eh-glyph { font-size: 2.8rem; left: -1.4rem; }
+@keyframes easyHandTap { 0%, 100% { translate: 0 14px; } 45% { translate: 0 2px; } 60% { translate: 0 4px; } }
+@keyframes easyHandRing { 0% { scale: .45; opacity: .95; } 100% { scale: 1.25; opacity: 0; } }
+.easy-hand-label {
+  position: fixed; left: 0; top: 0; padding: .35rem .9rem; border-radius: 999px; white-space: nowrap; z-index: 2;
+  background: linear-gradient(180deg, #fff2b5, var(--kid-gold)); color: #3a2a00; font-weight: 800; font-size: 1.05rem;
+  box-shadow: 0 4px 0 rgba(140, 95, 0, .45), 0 8px 18px rgba(0, 0, 0, .3); transition: opacity .25s;
+}
+
+/* ------------------------------------------------------------------ celebration (G.easy.celebrate) */
+.easy-celebrate { position: fixed; inset: 0; display: grid; place-items: center; align-content: center; gap: 1rem; animation: fadeIn .2s ease; }
+.easy-celebrate .ec-rays {
+  position: absolute; left: 50%; top: 46%; width: min(150vmin, 1100px); aspect-ratio: 1; translate: -50% -50%; border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 214, 102, .22) 0 10deg, rgba(255, 214, 102, 0) 10deg 20deg);
+  -webkit-mask: radial-gradient(circle, #000 18%, transparent 62%); mask: radial-gradient(circle, #000 18%, transparent 62%);
+  animation: easyRays 14s linear infinite;
+}
+.easy-celebrate .ec-pop {
+  position: relative; font-size: clamp(5.5rem, 22vmin, 9rem); line-height: 1;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, .45)); animation: easyPop .62s var(--kid-bounce) both;
+}
+.easy-celebrate .ec-msg {
+  position: relative; max-width: 88vw; padding: .6rem 1.5rem; border-radius: 999px; text-align: center; word-break: keep-all;
+  background: linear-gradient(180deg, #fffdf3, #ffe9a8); color: #3a2a00; font-size: clamp(1.25rem, 4.6vmin, 2rem); font-weight: 900;
+  box-shadow: 0 6px 0 rgba(150, 100, 0, .45), 0 18px 40px rgba(0, 0, 0, .35); animation: easyPop .55s .12s var(--kid-bounce) both;
+}
+.easy-celebrate.out { animation: easyOut .38s ease forwards; }
+.easy-celebrate.rm .ec-pop, .easy-celebrate.rm .ec-msg { animation: fadeIn .2s ease both; }
+@keyframes easyPop { 0% { opacity: 0; scale: .2; rotate: -14deg; } 70% { opacity: 1; scale: 1.08; rotate: 4deg; } 100% { scale: 1; rotate: 0deg; } }
+@keyframes easyRays { to { rotate: 360deg; } }
+@keyframes easyOut { to { opacity: 0; scale: .96; } }
+
+/* ------------------------------------------------------------------ "다음 할 일" card (HUD, template #easy-next) */
+.easy-next {
+  display: flex; align-items: center; gap: .8rem; width: 100%; padding: .6rem .7rem .6rem .75rem;
+  border-radius: 24px; border: 2px solid rgba(255, 207, 74, .7);
+  background: linear-gradient(180deg, rgba(36, 48, 30, .9), rgba(14, 22, 18, .9));
+  box-shadow: 0 0 0 4px rgba(255, 207, 74, .12), var(--shadow);
+}
+.easy-next.bump { animation: easyNextBump .7s var(--kid-bounce) 1; }
+@keyframes easyNextBump { 0% { scale: .92; } 55% { scale: 1.04; } 100% { scale: 1; } }
+.easy-next .en-emoji {
+  flex: none; display: grid; place-items: center; width: 3.6rem; height: 3.6rem; border-radius: 18px; font-size: 2.3rem;
+  background: radial-gradient(circle at 50% 35%, #fff6cf, #ffd25a); box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .12), 0 4px 10px rgba(0, 0, 0, .3);
+  animation: easyBob 2.6s ease-in-out infinite;
+}
+.easy-next .en-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+.easy-next .en-label { font-size: max(13px, .78rem); font-weight: 800; letter-spacing: .06em; color: var(--kid-gold); }
+.easy-next .en-text { font-size: 1.22rem; font-weight: 800; line-height: 1.22; word-break: keep-all; overflow-wrap: anywhere; }
+.easy-next .en-pips { display: flex; align-items: center; gap: .3rem; margin-top: .15rem; }
+.easy-next .en-pips i { width: .95rem; height: .95rem; border-radius: 50%; background: rgba(255, 255, 255, .18); border: 2px solid rgba(255, 255, 255, .35); }
+.easy-next .en-pips i.on { background: radial-gradient(circle at 40% 35%, #fff3b0, var(--kid-gold)); border-color: #fff2b0; box-shadow: 0 0 8px rgba(255, 207, 74, .7); }
+.easy-next .en-pips b { font-size: .95rem; color: var(--kid-gold); }
+.easy-next .en-btns { flex: none; display: flex; align-items: center; gap: .5rem; }
+.easy-next .en-go {
+  display: inline-flex; align-items: center; gap: .4rem; min-height: var(--tap); padding: 0 1.05rem 0 .85rem; border-radius: 999px;
+  background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d)); color: #2b1d02; font-weight: 900; font-size: 1.08rem; white-space: nowrap;
+  border: 2px solid rgba(255, 255, 255, .7); box-shadow: 0 5px 0 rgba(140, 95, 0, .55), 0 10px 20px rgba(0, 0, 0, .3);
+  transition: transform .12s var(--kid-bounce); touch-action: manipulation;
+}
+.easy-next .en-go .emoji { font-size: 1.5rem; }
+.easy-next .en-go:hover { transform: translateY(-1px) scale(1.03); }
+.easy-next .en-go:active { transform: translateY(4px) scale(.96); box-shadow: 0 1px 0 rgba(140, 95, 0, .55); }
+.easy-next .en-go[data-mode="go"] .emoji { animation: easyNudge 1.2s ease-in-out infinite; }
+.easy-next .en-go[data-mode="stop"] { background: linear-gradient(180deg, #ffffff, #e6ece3); }
+.easy-next .en-go[data-mode="act"] { background: linear-gradient(180deg, #6fe39a, var(--kid-green-d)); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .3); box-shadow: 0 5px 0 rgba(10, 90, 40, .6), 0 10px 20px rgba(0, 0, 0, .3); }
+.easy-next .en-say { width: var(--tap); height: var(--tap); }
+@keyframes easyNudge { 0%, 100% { translate: 0 0; } 50% { translate: 5px 0; } }
+
+/* ------------------------------------------------------------------ healthy play: reminder card + rest screen */
+.easy-rest-card {
+  position: fixed; left: 50%; bottom: calc(7.6rem + env(safe-area-inset-bottom, 0px)); translate: -50% 0; pointer-events: auto !important;
+  display: flex; align-items: center; gap: .9rem; width: min(34rem, calc(100vw - 1.5rem)); padding: .8rem .9rem .8rem .8rem;
+  border-radius: 26px; background: linear-gradient(180deg, #fffaf0, #ffeccc); color: var(--kid-ink); border: 3px solid #fff;
+  box-shadow: 0 8px 0 rgba(150, 100, 30, .35), 0 24px 48px rgba(0, 0, 0, .4); animation: easyCardIn .5s var(--kid-bounce) both;
+}
+.easy-rest-card .easy-face { width: 64px; flex: none; }
+.easy-rest-card .erc-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+.easy-rest-card .erc-main b { font-size: 1.12rem; font-weight: 900; word-break: keep-all; }
+.easy-rest-card .erc-main span { font-size: .98rem; font-weight: 600; color: #4e5b48; }
+.easy-rest-card .erc-btns { display: flex; flex-direction: column; gap: .45rem; flex: none; }
+.easy-rest-card .easy-big-btn { min-width: 7rem; font-size: 1.02rem; padding: .3rem .9rem; }
+.easy-rest-card.out { animation: easyOut .26s ease forwards; }
+@keyframes easyCardIn { from { opacity: 0; translate: -50% 30px; } to { opacity: 1; translate: -50% 0; } }
+
+.easy-rest {
+  position: fixed; inset: 0; pointer-events: auto !important; display: grid; place-items: center; padding: 1rem; z-index: 3;
+  background: radial-gradient(120% 90% at 50% 10%, rgba(120, 190, 255, .55), rgba(30, 60, 90, .92) 60%), #12304a;
+  animation: fadeIn .5s ease;
+}
+.easy-rest.out { animation: easyOut .32s ease forwards; }
+.easy-rest .er-card {
+  display: flex; flex-direction: column; align-items: center; gap: .55rem; width: min(30rem, 100%); max-height: 100%; overflow: auto;
+  padding: 1.4rem 1.2rem 1.3rem; border-radius: 30px; text-align: center; color: var(--kid-ink);
+  background: linear-gradient(180deg, #fffdf6, #eaf5ff); border: 3px solid #fff; box-shadow: 0 10px 0 rgba(20, 60, 100, .35), 0 30px 60px rgba(0, 0, 0, .4);
+}
+.easy-rest .er-face .easy-face { width: 112px; }
+.easy-rest h2 { font-size: 1.6rem; font-weight: 900; }
+.easy-rest .er-breath { display: grid; place-items: center; width: 8.5rem; height: 8.5rem; margin: .3rem 0; border-radius: 50%; background: rgba(79, 179, 255, .14); border: 2px dashed rgba(79, 179, 255, .5); }
+.easy-rest .er-ball { width: 6.8rem; height: 6.8rem; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #ffffff, #9ed6ff 45%, #4fb3ff); box-shadow: 0 0 24px rgba(79, 179, 255, .55); animation: easyBreath 8s ease-in-out infinite; }
+.easy-rest .er-step { margin: 0; font-size: 1.3rem; font-weight: 800; color: #1d5c8c; }
+.easy-rest .er-tips { list-style: none; margin: .3rem 0 .6rem; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem .6rem; }
+.easy-rest .er-tips li { display: inline-flex; align-items: center; gap: .3rem; padding: .35rem .7rem; border-radius: 999px; background: #fff; border: 2px solid #d8e9f7; font-weight: 700; font-size: .95rem; }
+.easy-rest .er-tips .emoji { font-size: 1.25rem; }
+.easy-rest .er-done { width: min(18rem, 100%); }
+.easy-rest.rm .er-ball { animation: none; }
+@keyframes easyBreath { 0%, 100% { scale: .55; } 50% { scale: 1; } }
+
+/* ------------------------------------------------------------------ toasts & rewards readable in easy mode (04-ui) */
+body.easy .toast { font-size: max(16px, 1rem); padding: .7rem 1.1rem; border-radius: 18px; }
+body.easy .toast .t-ico { font-size: 1.5rem; }
+.toast .t-face { width: 44px; height: 44px; flex: none; display: grid; place-items: center; line-height: 0; }
+.toast .t-face svg { width: 100%; height: 100%; }
+.toast.kid { border-color: rgba(255, 207, 74, .8); background: linear-gradient(180deg, rgba(48, 40, 18, .95), rgba(20, 18, 10, .95)); }
+.toast.has-btn { pointer-events: auto; }
+.toast .t-retry { flex: none; margin-left: .3rem; min-height: 2.4rem; border-radius: 999px; }
+body.easy .toast .t-retry { min-height: 44px; background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d)); color: #2b1d02; border-color: rgba(255, 255, 255, .6); font-weight: 800; }
+.reward-pop.kid h3 { font-size: 1.6rem; }
+.reward-pop.kid .rp-eyebrow { font-size: 1.4rem; letter-spacing: .3em; }
+.reward-pop.kid .rp-item { font-size: 1.25rem; padding: .55rem .9rem; border-radius: 16px; }
+.reward-pop.kid .rp-item .emoji, .reward-pop.kid .rp-item .ico { font-size: 1.7rem; width: 1.7rem; height: 1.7rem; }
+.reward-pop.kid .btn-lg { min-height: var(--tap); font-size: 1.2rem; border-radius: 999px; padding: 0 2rem; }
+
+/* ------------------------------------------------------------------ small screens */
+@media (max-width: 560px) {
+  .easy-pick { grid-template-columns: repeat(var(--cols-s, 3), minmax(0, 1fr)); gap: 10px; }
+  .easy-tile .et-emoji { min-height: 3.9rem; }
+  .easy-confirm .ec-big { font-size: 3.6rem; }
+  .easy-gate-q { font-size: 2rem; }
+  .easy-back { padding: 0 .8rem 0 .55rem; }
+  .easy-back .eb-lbl { font-size: max(16px, .98rem); }
+  .easy-rest-card { flex-wrap: wrap; bottom: calc(16rem + env(safe-area-inset-bottom, 0px)); }
+  .easy-rest-card .erc-btns { flex-direction: row; width: 100%; }
+  .easy-rest-card .easy-big-btn { flex: 1; }
+}
+@media (max-width: 380px) {
+  .easy-pick { grid-template-columns: repeat(var(--cols-xs, 2), minmax(0, 1fr)); }
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  .easy-tile .et-emoji { min-height: 3.2rem; font-size: 2.4rem; }
+  .easy-tile { min-height: calc(var(--tap) * 1.7); }
+  .easy-rest-card { bottom: 4.6rem; }
+  .easy-rest .er-breath { width: 5.5rem; height: 5.5rem; }
+  .easy-rest .er-ball { width: 4.4rem; height: 4.4rem; }
+  .easy-rest .er-face { display: none; }
+}
+
+/* ------------------------------------------------------------------ reduced motion */
+body.reduce-motion .easy-hand .eh-glyph, body.reduce-motion .easy-hand .eh-ring, .easy-hand.rm .eh-glyph, .easy-hand.rm .eh-ring,
+body.reduce-motion .easy-next .en-emoji, body.reduce-motion .easy-confirm .ec-big, body.reduce-motion .easy-tile,
+body.reduce-motion .easy-next .en-go .emoji, body.reduce-motion .easy-rest .er-ball { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .easy-hand .eh-glyph, .easy-hand .eh-ring, .easy-next .en-emoji, .easy-confirm .ec-big, .easy-tile, .easy-next .en-go .emoji,
+  .easy-celebrate .ec-rays, .easy-rest .er-ball { animation: none !important; }
+}

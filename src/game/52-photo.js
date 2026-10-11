@@ -13,6 +13,12 @@
 // thumbnail in G.state.photos (max 24) -> flash, 'shutter' sfx, photo:taken {photoId, zoneId, photoZoneId}.
 // Photo zones: interactables kind 'photo' ('포토존 – 사진 찍기') that frame the shot towards the zone's
 // look target, plus a small camera label over each zone when near. Emits photo:mode {active}.
+// 쉬운 모드 (CONTRACT §12): a separate kid overlay (.ph-kid) replaces the adult panels — ⬅️ 나가기, a giant 📸
+// shutter, 5 big pose buttons, 4 fun frames (🌸 꽃 · 🏺 전통 · ⭐ 별 · 🌈 무지개, or 🚫 none), 6 emoji stickers the
+// child can tap in and drag around (drawn into the photo), 🤳 앞/뒤 view, 🧽 clear. Shutter = "찰칵!" pop + voice +
+// a soft single flash (eased, ≤ 0.5 white; a gold glow instead with reduce-motion). Photos go to the album
+// (G.state.photos) exactly as in normal mode; no automatic PNG download in easy mode.
+// The flash is the soft one in both modes (photosensitivity: no hard full-screen white).
 // =============================================================================
 (function () {
   const U = G.util;
@@ -31,6 +37,23 @@
     { id: 'vivid', name: '선명', css: 'contrast(1.16) saturate(1.42) brightness(1.02)' },
   ];
   const TIMERS = [0, 3, 10];
+  // ---- 쉬운 모드
+  const KID_FRAMES = [
+    { id: 'none', emoji: '🚫', label: '없음', say: '액자 없이 찍어요.' },
+    { id: 'flower', emoji: '🌸', label: '꽃', say: '꽃 액자예요.' },
+    { id: 'hanok', emoji: '🏺', label: '전통', say: '알록달록 전통 액자예요.' },
+    { id: 'star', emoji: '⭐', label: '별', say: '반짝반짝 별 액자예요.' },
+    { id: 'rainbow', emoji: '🌈', label: '무지개', say: '무지개 액자예요.' },
+  ];
+  const KID_STICKERS = ['😀', '❤️', '⭐', '🌸', '🏺', '🎉'];
+  const KID_POSES = ['GES_PHOTO', 'GES_WAVE', 'GES_DANCE', 'GES_CHEER', 'GES_BOW'];
+  const KID_POSE_LABEL = { GES_PHOTO: '브이', GES_WAVE: '안녕', GES_DANCE: '춤', GES_CHEER: '응원', GES_BOW: '인사' };
+  const STICKER_SLOTS = [[0.24, 0.3], [0.76, 0.3], [0.3, 0.6], [0.7, 0.6], [0.5, 0.2], [0.16, 0.48], [0.84, 0.48], [0.5, 0.74]];
+  const MAX_STICKERS = 8;
+  const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  const easyOn = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
+  const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+  const reduceMotion = () => !!G.settings?.reduceMotion || !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const L = () => G.data.layout || {};
   const filterById = (id) => FILTERS.find((f) => f.id === id) || FILTERS[0];
   const loadOpts = () => { try { return JSON.parse(localStorage.getItem(LS_OPTS) || '{}') || {}; } catch (e) { return {}; } };
@@ -146,6 +169,111 @@
     ctx.fillText([info.date, info.place].filter(Boolean).join(' · '), w - s * 0.9, h - s * 0.7);
     ctx.restore();
   }
+  /** five-petal flower */
+  function flowerAt(ctx, x, y, r, petal, core) {
+    ctx.fillStyle = petal;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * TAU - PI / 2;
+      ctx.beginPath(); ctx.arc(x + Math.cos(a) * r * 0.55, y + Math.sin(a) * r * 0.55, r * 0.48, 0, TAU); ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(x, y, r * 0.36, 0, TAU); ctx.fillStyle = core; ctx.fill();
+  }
+  function starAt(ctx, x, y, r, rot) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = rot - PI / 2 + (i / 10) * TAU, rr = i % 2 ? r * 0.45 : r;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+  /** points evenly spaced along the band centre line (clockwise from the top-left corner) */
+  function bandPoints(w, h, b, step) {
+    const pts = [];
+    const x0 = b / 2, y0 = b / 2, x1 = w - b / 2, y1 = h - b / 2;
+    const per = 2 * ((x1 - x0) + (y1 - y0));
+    const n = Math.max(8, Math.round(per / step));
+    for (let i = 0; i < n; i++) {
+      let d = (i / n) * per;
+      if (d < x1 - x0) { pts.push([x0 + d, y0]); continue; } d -= x1 - x0;
+      if (d < y1 - y0) { pts.push([x1, y0 + d]); continue; } d -= y1 - y0;
+      if (d < x1 - x0) { pts.push([x1 - d, y1]); continue; } d -= x1 - x0;
+      pts.push([x0, y1 - d]);
+    }
+    return pts;
+  }
+  /** rounded-rectangle sub-path WITHOUT beginPath (so several can be combined for an evenodd ring) */
+  function rrSub(ctx, x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  /** a rounded "window" band: the outside of an inner rounded rectangle (fill with 'evenodd') */
+  function bandPath(ctx, w, h, b, r) {
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    rrSub(ctx, b, b, w - b * 2, h - b * 2, r);
+  }
+  /** fun kid frames: flower / star / rainbow (hanok = the traditional frame, none = watermark only) */
+  function drawKidFrame(ctx, w, h, id, info = {}, preview = false) {
+    if (id === 'hanok') { drawFrame(ctx, w, h, info); return; }
+    if (id !== 'flower' && id !== 'star' && id !== 'rainbow') { if (!preview) drawWatermark(ctx, w, h, info); return; }
+    const u = Math.min(w, h);
+    const b = Math.max(14, Math.round(u * 0.07));
+    const r = b * 0.9;
+    ctx.save();
+    if (id === 'rainbow') {
+      const cols = ['#ff5f5f', '#ff9f43', '#ffd23f', '#55d187', '#4fb3ff', '#8b6fd6'];
+      const t = b / cols.length;
+      for (let i = 0; i < cols.length; i++) {
+        ctx.beginPath();
+        if (i === 0) ctx.rect(0, 0, w, h); else rrSub(ctx, i * t, i * t, w - i * t * 2, h - i * t * 2, r + (cols.length - i) * t * 0.6);
+        rrSub(ctx, (i + 1) * t, (i + 1) * t, w - (i + 1) * t * 2, h - (i + 1) * t * 2, r + (cols.length - i - 1) * t * 0.6);
+        ctx.fillStyle = cols[i]; ctx.fill('evenodd');
+      }
+      // fluffy clouds on the corners
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = b * 0.25;
+      for (const [cx, cy] of [[b * 1.1, b * 1.1], [w - b * 1.1, b * 1.1], [b * 1.1, h - b * 1.1], [w - b * 1.1, h - b * 1.1]]) {
+        for (const [dx, dy, rr] of [[-0.5, 0.1, 0.55], [0.1, -0.2, 0.7], [0.65, 0.12, 0.5], [0, 0.3, 0.6]]) { ctx.beginPath(); ctx.arc(cx + dx * b, cy + dy * b, rr * b, 0, TAU); ctx.fill(); }
+      }
+      ctx.shadowColor = 'transparent';
+    } else {
+      const flower = id === 'flower';
+      bandPath(ctx, w, h, b, r);
+      const g = ctx.createLinearGradient(0, 0, w, h);
+      if (flower) { g.addColorStop(0, '#ffd1e3'); g.addColorStop(0.5, '#ffe9f2'); g.addColorStop(1, '#ffc6dc'); }
+      else { g.addColorStop(0, '#1d2b6b'); g.addColorStop(1, '#2f3f8f'); }
+      ctx.fillStyle = g; ctx.fill('evenodd');
+      // inner rim
+      ctx.lineWidth = Math.max(2, b * 0.09); ctx.strokeStyle = flower ? '#ffffff' : '#ffe27a';
+      ctx.beginPath(); roundRect(ctx, b, b, w - b * 2, h - b * 2, r); ctx.stroke();
+      const pts = bandPoints(w, h, b, b * 1.25);
+      const rnd = U.rng(id === 'flower' ? 77 : 99);
+      pts.forEach(([x, y], i) => {
+        if (flower) {
+          const pal = [['#ff7eb6', '#ffd23f'], ['#ffffff', '#ffb000'], ['#ffb3d1', '#ff7a59'], ['#b48bff', '#ffe27a']][i % 4];
+          flowerAt(ctx, x, y, b * (0.34 + rnd() * 0.12), pal[0], pal[1]);
+          if (i % 3 === 0) { ctx.fillStyle = '#7fcf6a'; ctx.beginPath(); ctx.ellipse(x + b * 0.32, y + b * 0.2, b * 0.16, b * 0.08, 0.6, 0, TAU); ctx.fill(); }
+        } else {
+          starAt(ctx, x, y, b * (i % 2 ? 0.2 : 0.34 + rnd() * 0.08), rnd() * 0.6);
+          ctx.fillStyle = i % 5 === 0 ? '#ffffff' : '#ffd23f'; ctx.fill();
+          if (i % 2 === 0) { ctx.beginPath(); ctx.arc(x + b * 0.32, y - b * 0.28, b * 0.05, 0, TAU); ctx.fillStyle = '#ffffff'; ctx.fill(); }
+        }
+      });
+    }
+    ctx.restore();
+    if (preview) return; // the live preview keeps the corners free for the big buttons; the photo gets the name tag
+    // small name tag (bottom-right, on the picture)
+    const s = Math.max(11, Math.round(u * 0.026));
+    ctx.save();
+    ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+    ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = s * 0.5;
+    ctx.font = `800 ${s}px ${FONT}`; ctx.fillStyle = '#ffffff';
+    ctx.fillText('전통발효체험관', w - b - s * 0.6, h - b - s * 0.9);
+    ctx.font = `600 ${Math.round(s * 0.55)}px ${FONT}`;
+    ctx.fillText([info.date, info.place].filter(Boolean).join(' · '), w - b - s * 0.6, h - b - s * 0.2);
+    ctx.restore();
+  }
   function drawVignette(ctx, w, h, k) {
     const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.32, w / 2, h / 2, Math.hypot(w, h) * 0.56);
     g.addColorStop(0, 'rgba(30,18,6,0)'); g.addColorStop(1, `rgba(30,18,6,${k})`);
@@ -197,6 +325,8 @@
     filters: FILTERS,
     _ui: null, _busy: false, _zoneT: 0, _syncT: 0, _lookT: 0, _countdown: null, _labels: [], _full: new Map(),
     _cardTimer: 0, _clean: false,
+    kidFrame: 'flower', _stickers: [], _stickerN: 0, _kidFront: false, _kidHinted: false, _kidCardTimer: 0,
+    get kidFrames() { return KID_FRAMES; },
 
     init() {
       const o = loadOpts();
@@ -205,6 +335,7 @@
       if (typeof o.grid === 'boolean') this.grid = o.grid;
       if (typeof o.autoSave === 'boolean') this.autoSave = o.autoSave;
       if (TIMERS.includes(o.timer)) this.timer = o.timer;
+      if (KID_FRAMES.some((f) => f.id === o.kidFrame)) this.kidFrame = o.kidFrame;
       this._buildUi();
       G.ui.onAction('photo', () => this.toggle());
       G.ui.onAction('photo-gallery', () => this.openGallery());
@@ -216,7 +347,9 @@
       const shoot = () => { if (!this.active || G.ui.modal.isOpen() || U.isTyping()) return false; this.shoot(); return true; };
       G.input?.onKey?.('Space', shoot, { allowInModal: true });
       G.input?.onKey?.('Enter', shoot, { allowInModal: true });
-      G.input?.onKey?.('KeyH', () => { if (!this.active || G.ui.modal.isOpen()) return false; this._toggleClean(); return true; }, { allowInModal: true });
+      G.input?.onKey?.('KeyH', () => { if (!this.active || G.ui.modal.isOpen() || easyOn()) return false; this._toggleClean(); return true; }, { allowInModal: true });
+      // switching easy <-> normal while the camera is up: swap the overlay, redraw the right frame, filters
+      G.bus.on('easy:changed', () => { if (this.active) { this._ui?.classList.remove('clean'); this._clean = false; this._renderOptions(); this._syncKid(); } });
       G.ui.onEscape(() => {
         if (!this.active) return false;
         if (this._countdown) { this._cancelCountdown(); return true; }
@@ -236,6 +369,8 @@
     },
     onLogout() {
       if (this.active) this.exit({ silent: true, logout: true });
+      this._clearStickers();
+      this._kidHinted = false;
       G.ui.modal.get('photo-gallery')?.close();
       this.currentPhotoZone = null;
       this._lastPhoto = null;
@@ -334,6 +469,7 @@
               h('button', { type: 'button', class: 'btn btn-sm btn-soft', dataset: { ph: 'card-gallery' } }, '앨범 보기'),
               h('button', { type: 'button', class: 'btn btn-sm btn-gold', dataset: { ph: 'card-journal' } }, '일지에 첨부')))),
       );
+      root.append(this._buildKidUi(), h('div', { class: 'ph-flash', 'aria-hidden': 'true' }));
       G.ui.hydrateIcons(root);
       this._ui = root;
       root.addEventListener('click', (ev) => this._onClick(ev));
@@ -350,6 +486,7 @@
       // never keep focus on photo-ui buttons: Space / Enter are the shutter keys
       const btn = t.closest('button');
       if (btn) btn.blur();
+      if (t.closest('.ph-kid') && this._onKidClick(t)) return;
       const pose = t.closest('[data-pose]');
       if (pose) { this._playPose(pose.dataset.pose); return; }
       const f = t.closest('[data-filter]');
@@ -376,7 +513,7 @@
       this[key] = value;
       if (key === 'hidePlayer' && this.active) this._applyHide(!!value);
       if (key === 'lookAtCam' && value && this.active) this._faceCamera();
-      try { localStorage.setItem(LS_OPTS, JSON.stringify({ filter: this.filter, frame: this.frame, grid: this.grid, autoSave: this.autoSave, timer: this.timer })); } catch (e) { /* ignore */ }
+      try { localStorage.setItem(LS_OPTS, JSON.stringify({ filter: this.filter, frame: this.frame, grid: this.grid, autoSave: this.autoSave, timer: this.timer, kidFrame: this.kidFrame })); } catch (e) { /* ignore */ }
       this._renderOptions();
     },
     setFilter(id) { this._setOpt('filter', filterById(id).id); this._applyLiveFilter(); },
@@ -390,9 +527,10 @@
       const tl = root.querySelector('.ph-timer-label');
       if (tl) tl.textContent = this.timer ? `타이머 ${this.timer}초` : '타이머 끔';
       root.querySelector('.ph-timer')?.classList.toggle('on', !!this.timer);
-      root.classList.toggle('show-grid', !!this.grid);
+      const easy = easyOn();
+      root.classList.toggle('show-grid', !!this.grid && !easy);
       root.classList.toggle('show-frame', !!this.frame);
-      root.classList.toggle('show-vignette', !!filterById(this.filter).vignette);
+      root.classList.toggle('show-vignette', !!filterById(this.filter).vignette && !easy);
       if (this.active) { this._drawFramePreview(); this._applyLiveFilter(); }
     },
 
@@ -408,7 +546,7 @@
       const c = G.sys.engine?.renderer?.domElement;
       if (!c) return;
       const f = filterById(this.filter);
-      c.style.filter = this.active && f.css !== 'none' ? f.css : '';
+      c.style.filter = this.active && !easyOn() && f.css !== 'none' ? f.css : '';
     },
 
     _drawFramePreview() {
@@ -420,7 +558,8 @@
       const ctx = cv.getContext('2d');
       ctx.clearRect(0, 0, w, h);
       const info = this._info();
-      if (this.frame) drawFrame(ctx, w, h, info); else drawWatermark(ctx, w, h, info);
+      if (easyOn()) drawKidFrame(ctx, w, h, this.kidFrame, info, true);
+      else if (this.frame) drawFrame(ctx, w, h, info); else drawWatermark(ctx, w, h, info);
     },
 
     _info() {
@@ -439,9 +578,13 @@
       const n = Array.isArray(G.state?.photos) ? G.state.photos.length : 0;
       const el = this._ui?.querySelector('.ph-count');
       if (el) el.textContent = String(n);
-      const last = this._ui?.querySelector('.ph-last');
       const p = n ? G.state.photos[n - 1] : null;
-      if (last) { const src = safeThumb(p?.thumb); if (src) { last.src = src; last.hidden = false; } else { last.removeAttribute('src'); last.hidden = true; } }
+      const src = safeThumb(p?.thumb);
+      for (const last of this._ui?.querySelectorAll('.ph-last, .phk-last') || []) {
+        if (src) { last.src = src; last.hidden = false; } else { last.removeAttribute('src'); last.hidden = true; }
+      }
+      const kc = this._ui?.querySelector('.phk-count');
+      if (kc) kc.textContent = String(n);
     },
 
     // ------------------------------------------------------------ enter / exit
@@ -449,7 +592,11 @@
       if (this.active) return true;
       const pl = G.sys.player;
       if (!G.state || !pl || !pl.object || pl._ready === false) return false;
-      if (G.sys.dialogue?.active) { G.ui.toast('대화를 마친 뒤에 사진 모드를 켜 주세요.', { type: 'info' }); return false; }
+      if (G.sys.dialogue?.active) {
+        if (easyOn()) G.ui.toast('이야기가 끝나면 사진을 찍어요.', { type: 'info', emoji: '📸' });
+        else G.ui.toast('대화를 마친 뒤에 사진 모드를 켜 주세요.', { type: 'info' });
+        return false;
+      }
       if (G.ui.modal.isOpen()) return false;
       G.ui.popover?.close?.();
       pl.cancelWalk?.('photo');
@@ -480,8 +627,17 @@
       this._renderOptions();
       this._syncSliders(true);
       this._updateCount();
+      this._kidFront = false;
+      this._syncKid();
       G.bus.emit('photo:mode', { active: true });
       G.sfx('open');
+      if (easyOn()) {
+        kidSay(pz ? `포토존이에요! 큰 사진기 버튼을 눌러 찰칵 찍어요.` : '사진 찍기! 큰 사진기 버튼을 눌러요.', { priority: 1 });
+        if (!this._kidHinted) {
+          this._kidHinted = true;
+          setTimeout(() => { if (this.active && easyOn()) G.easy?.point?.('.phk-shutter', { duration: 3800 }); }, 700);
+        }
+      }
       G.log.info('UI', `photo mode on${pz ? ` (${pz.id})` : ''}`);
       return true;
     },
@@ -492,7 +648,9 @@
       this.active = false;
       G.ui.unblock('photo');
       document.body.classList.remove('hud-hidden', 'photo-mode');
-      if (this._ui) { this._ui.hidden = true; this._ui.querySelector('.ph-card').hidden = true; }
+      if (this._ui) { this._ui.hidden = true; this._ui.querySelector('.ph-card').hidden = true; this._hideKidCard(); }
+      this._clearStickers();
+      try { G.easy?.stopPoint?.(); } catch (e) { /* optional */ }
       if (opts.logout) this._hidPlayer = false; // the player module hides the model itself on logout
       else this._applyHide(false);
       this._applyLiveFilter();
@@ -533,7 +691,7 @@
         if (n) n.textContent = pz ? `포토존 · ${pz.name}` : '';
       }
       for (const lbl of this._labels) lbl.el.classList.toggle('here', !!pz && lbl.pzId === pz.id);
-      if (this.active) this._drawFramePreview();
+      if (this.active) { this._drawFramePreview(); this._syncKid(); }
     },
 
     /** camera photo orbit through the public API (falls back to photoControl on older cameras) */
@@ -578,6 +736,7 @@
     shoot() {
       if (!this.active || this._busy) return;
       if (this._countdown) { this._cancelCountdown(); return; }
+      if (easyOn()) { this._kidShutter(); return; }
       if (!this.timer) { this.capture(); return; }
       const el = this._ui.querySelector('.ph-countdown');
       let n = this.timer;
@@ -610,7 +769,8 @@
       this._busy = true;
       try {
         const info = this._info();
-        const f = filterById(this.filter);
+        const easy = easyOn();
+        const f = easy ? FILTERS[0] : filterById(this.filter);
         // fresh frame in the drawing buffer, read it in the same task (preserveDrawingBuffer is off)
         E.render();
         const src = r.domElement;
@@ -625,8 +785,11 @@
         else if (f.css !== 'none') manualFilter(ctx, w, h, f.id);
         if (f.vignette) drawVignette(ctx, w, h, f.vignette);
         if (f.grain) drawGrain(ctx, w, h);
-        if (this.frame) drawFrame(ctx, w, h, info); else drawWatermark(ctx, w, h, info);
-        G.ui.flash();
+        if (easy) {
+          this._drawStickers(ctx, w, h);
+          drawKidFrame(ctx, w, h, this.kidFrame, info);
+        } else if (this.frame) drawFrame(ctx, w, h, info); else drawWatermark(ctx, w, h, info);
+        this._softFlash();
         G.sfx('shutter');
         // thumbnail (kept in the save)
         const tw = Math.min(THUMB_W, w), th = Math.max(1, Math.round((h * tw) / w));
@@ -643,7 +806,8 @@
           id: U.uid('photo'), at: now,
           zoneId: zone?.id || G.state.player?.zoneId || null,
           photoZoneId: pz?.id || null,
-          place: info.place || '', filter: f.id, frame: !!this.frame, w, h, thumb,
+          place: info.place || '', filter: f.id, frame: easy ? this.kidFrame !== 'none' : !!this.frame,
+          frameId: easy ? this.kidFrame : (this.frame ? 'hanok' : 'none'), stickers: easy ? this._stickers.length : 0, w, h, thumb,
         };
         const list = Array.isArray(G.state.photos) ? G.state.photos : (G.state.photos = []);
         list.push(photo);
@@ -651,7 +815,7 @@
         G.dirty('photo');
         this._lastPhoto = photo;
         this._updateCount();
-        this._showCard(photo);
+        if (easy) this._showKidCard(photo); else this._showCard(photo);
         // full-size PNG: keep a few in memory for the album, download when enabled
         const name = `jeontong-balhyo_${stamp(now)}.png`; // ASCII: some browsers drop non-ASCII download names
         out.toBlob((blob) => {
@@ -659,14 +823,14 @@
           const url = URL.createObjectURL(blob);
           this._full.set(photo.id, { url, name });
           while (this._full.size > 6) { const [k, v] = this._full.entries().next().value; URL.revokeObjectURL(v.url); this._full.delete(k); }
-          if (this.autoSave) download(url, name);
+          if (this.autoSave && !easy) download(url, name);
         }, 'image/png');
         G.bus.emit('photo:taken', { photoId: photo.id, zoneId: photo.zoneId, photoZoneId: photo.photoZoneId });
         G.log.info('UI', `photo taken ${photo.id} ${w}x${h}${pz ? ` @${pz.id}` : ''}`);
         return photo;
       } catch (e) {
         G.log.error('UI', 'photo capture failed', e);
-        G.ui.toast('사진을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error' });
+        G.ui.toast('사진을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error', easy: '앗, 사진이 안 찍혔어요. 다시 눌러 봐요!', retry: () => { if (this.active) this.shoot(); } });
         return null;
       } finally {
         this._busy = false;
@@ -693,12 +857,207 @@
       setTimeout(() => J.open({ prefill: { photo: p.thumb, photoId: p.id } }), 0);
     },
 
+    // ============================================================ 쉬운 모드 overlay
+    _buildKidUi() {
+      const h = G.ui.h;
+      const tile = (attrs, emoji, label) => h('button', { type: 'button', ...attrs }, h('span', { class: 'phk-emo emoji', 'aria-hidden': 'true' }, emoji), h('span', { class: 'phk-lbl' }, label));
+      const gestures = G.data.gestures || [];
+      const poses = KID_POSES.map((id) => gestures.find((g) => g.id === id)).filter(Boolean)
+        .map((g) => tile({ class: 'phk-tile phk-pose', dataset: { pose: g.id }, 'data-say': g.name, 'aria-label': g.name }, g.icon || '🙂', KID_POSE_LABEL[g.id] || g.name.slice(0, 2)));
+      const frames = KID_FRAMES.map((f) => tile({ class: 'phk-tile phk-frame', dataset: { kidFrame: f.id }, 'data-say': f.say, 'aria-label': `${f.label} 액자`, 'aria-pressed': 'false' }, f.emoji, f.label));
+      const stickers = KID_STICKERS.map((e) => h('button', { type: 'button', class: 'phk-st-btn', dataset: { sticker: e }, 'aria-label': `${e} 스티커 붙이기`, 'data-say': '스티커 붙이기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e)));
+      const ui = h('div', { class: 'ph-kid', 'aria-label': '사진 찍기' },
+        h('div', { class: 'phk-stage', 'aria-hidden': 'true' }),
+        h('div', { class: 'phk-top' },
+          h('button', { type: 'button', class: 'phk-exit easy-big-btn easy-btn-no', dataset: { phk: 'exit' }, 'data-say': '나가기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⬅️'), h('span', null, '나가기')),
+          h('div', { class: 'phk-title glass' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📸'), h('b', null, '사진 찍기'), h('span', { class: 'phk-zone', hidden: true }, '')),
+          h('button', { type: 'button', class: 'phk-album glass', dataset: { phk: 'album' }, 'aria-label': '사진첩 보기', 'data-say': '사진첩' },
+            h('img', { class: 'phk-last', alt: '', hidden: true }), h('span', { class: 'emoji phk-album-emo', 'aria-hidden': 'true' }, '🖼️'), h('span', { class: 'phk-count' }, '0'))),
+        h('aside', { class: 'phk-col phk-left glass', 'aria-label': '포즈' }, h('div', { class: 'phk-col-title' }, '포즈'), poses),
+        h('aside', { class: 'phk-col phk-right glass', 'aria-label': '액자' }, h('div', { class: 'phk-col-title' }, '액자'), frames),
+        h('div', { class: 'phk-bottom' },
+          h('div', { class: 'phk-stickers glass', role: 'group', 'aria-label': '스티커' }, stickers),
+          h('div', { class: 'phk-shoot-row' },
+            h('button', { type: 'button', class: 'phk-side', dataset: { phk: 'front' }, 'aria-label': '앞에서 찍기', 'data-say': '앞에서 찍기' }, h('span', { class: 'emoji phk-front-emo', 'aria-hidden': 'true' }, '🤳'), h('span', { class: 'phk-lbl phk-front-lbl' }, '앞')),
+            h('button', { type: 'button', class: 'phk-shutter', dataset: { phk: 'shoot' }, 'aria-label': '사진 찍기', 'data-say': '찰칵! 사진 찍기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📸')),
+            h('button', { type: 'button', class: 'phk-side', dataset: { phk: 'clear' }, 'aria-label': '스티커 모두 지우기', 'data-say': '스티커 지우기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🧽'), h('span', { class: 'phk-lbl' }, '지움')))),
+        h('div', { class: 'phk-click', 'aria-hidden': 'true' }, '찰칵!'),
+        h('div', { class: 'phk-card glass', hidden: true, role: 'status' },
+          h('img', { alt: '방금 찍은 사진' }),
+          h('div', { class: 'phk-card-main' },
+            h('b', null, '사진첩에 쏙 넣었어요!'),
+            h('div', { class: 'phk-card-btns' },
+              h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes', dataset: { phk: 'card-again' } }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📸'), h('span', null, '또 찍기')),
+              h('button', { type: 'button', class: 'easy-big-btn easy-btn-no', dataset: { phk: 'card-album' } }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🖼️'), h('span', null, '사진첩')),
+              h('button', { type: 'button', class: 'easy-big-btn easy-btn-no', dataset: { phk: 'card-journal' } }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📝'), h('span', null, '일기'))))));
+      this._kidStage = ui.querySelector('.phk-stage');
+      this._bindStickerDrag(this._kidStage);
+      return ui;
+    },
+
+    /** kid overlay buttons; true when handled */
+    _onKidClick(t) {
+      const pose = t.closest('[data-pose]');
+      if (pose) { this._playPose(pose.dataset.pose); kidSay(pose.getAttribute('data-say') || '', { priority: 1 }); return true; }
+      const fr = t.closest('[data-kid-frame]');
+      if (fr) {
+        const f = KID_FRAMES.find((x) => x.id === fr.dataset.kidFrame);
+        if (f) { this._setOpt('kidFrame', f.id); this._syncKid(); G.sfx('click'); kidSay(f.say, { priority: 1 }); }
+        return true;
+      }
+      const st = t.closest('[data-sticker]');
+      if (st) { this._addSticker(st.dataset.sticker); return true; }
+      const b = t.closest('[data-phk]');
+      if (!b) return false;
+      const a = b.dataset.phk;
+      if (a === 'shoot') this.shoot();
+      else if (a === 'exit') this.exit();
+      else if (a === 'album' || a === 'card-album') { this._hideKidCard(); this.openGallery(); }
+      else if (a === 'card-again') { this._hideKidCard(); kidSay('또 찍어요!', { priority: 1 }); }
+      else if (a === 'card-journal') { const p = this._lastPhoto; this._hideKidCard(); if (p) this._attachToJournal(p); }
+      else if (a === 'clear') { this._clearStickers(); kidSay('스티커를 깨끗이 지웠어요.', { priority: 1 }); }
+      else if (a === 'front') {
+        this._kidFront = !this._kidFront;
+        const p = G.sys.player;
+        if (this._kidFront) G.sys.camera?.photoFront?.();
+        else if (p) G.sys.camera?.photoControl?.({ yaw: p.rotY + PI, pitch: 0.22 });
+        this._syncKid();
+        kidSay(this._kidFront ? '앞에서 찍어요. 웃어요!' : '뒤에서 찍어요.', { priority: 1 });
+      }
+      if (a !== 'shoot') G.sfx('click');
+      return true;
+    },
+
+    /** reflect state on the kid overlay (frame tiles, view toggle, place chip) */
+    _syncKid() {
+      const ui = this._ui?.querySelector('.ph-kid');
+      if (!ui) return;
+      for (const b of ui.querySelectorAll('[data-kid-frame]')) { const on = b.dataset.kidFrame === this.kidFrame; b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+      const fe = ui.querySelector('.phk-front-emo'), fl = ui.querySelector('.phk-front-lbl');
+      if (fe) fe.textContent = this._kidFront ? '🔙' : '🤳';
+      if (fl) fl.textContent = this._kidFront ? '뒤' : '앞';
+      const fb = fe?.closest('button');
+      if (fb) { const t = this._kidFront ? '뒤에서 찍기' : '앞에서 찍기'; fb.setAttribute('aria-label', t); fb.setAttribute('data-say', t); }
+      const zc = ui.querySelector('.phk-zone');
+      if (zc) { const pz = this.currentPhotoZone; zc.hidden = !pz; zc.textContent = pz ? `⭐ ${pz.name}` : ''; }
+    },
+
+    /** kid shutter: "찰칵!" pop + voice, then the normal capture */
+    _kidShutter() {
+      const pop = this._ui?.querySelector('.phk-click');
+      if (pop && !reduceMotion()) { pop.classList.remove('on'); void pop.offsetWidth; pop.classList.add('on'); }
+      kidSay('찰칵!', { priority: 1 });
+      try { G.easy?.stopPoint?.(); } catch (e) { /* optional */ }
+      this.capture().then((p) => { if (p && easyOn()) kidSay('멋진 사진이에요! 사진첩에 넣었어요.', { priority: 1, interrupt: false }); });
+    },
+
+    /**
+     * one soft flash (photosensitivity, CONTRACT §12.4): eased up to ≤ 0.5 white and back over ~0.55 s,
+     * never repeated faster than the shutter; reduce-motion gets a gentle gold rim instead
+     */
+    _softFlash() {
+      const el = this._ui?.querySelector('.ph-flash');
+      if (!el) return;
+      el.classList.remove('on', 'glow'); void el.offsetWidth;
+      el.classList.add(reduceMotion() ? 'glow' : 'on');
+      clearTimeout(this._flashT);
+      this._flashT = setTimeout(() => el.classList.remove('on', 'glow'), 900);
+    },
+
+    // ---- stickers (positions are fractions of the screen = of the captured canvas)
+    _addSticker(emoji) {
+      if (!this.active || !KID_STICKERS.includes(emoji) || !this._kidStage) return;
+      if (this._stickers.length >= MAX_STICKERS) { const old = this._stickers.shift(); old?.el?.remove(); }
+      const slot = STICKER_SLOTS[this._stickerN++ % STICKER_SLOTS.length];
+      // narrow phones: keep new stickers between the pose / frame columns
+      const k = window.innerWidth < 600 ? 0.5 : 1;
+      const st = { emoji, fx: 0.5 + (slot[0] - 0.5) * k, fy: slot[1], scale: 1, el: null };
+      const el = G.ui.h('span', { class: `phk-sticker emoji${reduceMotion() ? '' : ' pop'}`, role: 'img', 'aria-label': '스티커' }, emoji);
+      st.el = el;
+      el.__st = st;
+      this._placeSticker(st);
+      this._kidStage.appendChild(el);
+      this._stickers.push(st);
+      G.sfx('click');
+      kidSay('스티커를 붙였어요. 끌어서 옮겨 봐요!', { priority: 0 });
+    },
+    _placeSticker(st) {
+      if (!st.el) return;
+      st.el.style.left = `${(clamp(st.fx, 0.04, 0.96) * 100).toFixed(2)}%`;
+      st.el.style.top = `${(clamp(st.fy, 0.06, 0.94) * 100).toFixed(2)}%`;
+    },
+    _clearStickers() {
+      for (const st of this._stickers) st.el?.remove();
+      this._stickers.length = 0;
+    },
+    _bindStickerDrag(stage) {
+      let drag = null;
+      stage.addEventListener('pointerdown', (ev) => {
+        const el = ev.target.closest('.phk-sticker');
+        if (!el || !el.__st) return;
+        ev.preventDefault(); ev.stopPropagation();
+        drag = { id: ev.pointerId, st: el.__st, x: ev.clientX, y: ev.clientY, moved: 0 };
+        el.classList.add('dragging');
+        try { el.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      });
+      stage.addEventListener('pointermove', (ev) => {
+        if (!drag || drag.id !== ev.pointerId) return;
+        ev.preventDefault();
+        const w = Math.max(1, window.innerWidth), hh = Math.max(1, window.innerHeight);
+        drag.moved += Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y);
+        drag.x = ev.clientX; drag.y = ev.clientY;
+        drag.st.fx = clamp(ev.clientX / w, 0.04, 0.96);
+        drag.st.fy = clamp(ev.clientY / hh, 0.06, 0.94);
+        this._placeSticker(drag.st);
+      });
+      const end = (ev) => {
+        if (!drag || drag.id !== ev.pointerId) return;
+        const d = drag; drag = null;
+        d.st.el?.classList.remove('dragging');
+        if (d.moved < 6 && d.st.el && !reduceMotion()) { const e = d.st.el; e.classList.remove('wiggle'); void e.offsetWidth; e.classList.add('wiggle'); G.sfx('click'); }
+      };
+      stage.addEventListener('pointerup', end);
+      stage.addEventListener('pointercancel', end);
+    },
+    _drawStickers(ctx, w, h) {
+      if (!this._stickers.length) return;
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = Math.min(w, h) * 0.01; ctx.shadowOffsetY = Math.min(w, h) * 0.004;
+      for (const st of this._stickers) {
+        const size = Math.max(16, Math.round(Math.min(w, h) * 0.12 * (st.scale || 1)));
+        ctx.font = `${size}px ${EMOJI_FONT}`;
+        const x = clamp(st.fx, 0, 1) * w, y = clamp(st.fy, 0, 1) * h;
+        if (Number.isFinite(x) && Number.isFinite(y)) ctx.fillText(st.emoji, x, y);
+      }
+      ctx.restore();
+    },
+
+    _showKidCard(photo) {
+      const card = this._ui?.querySelector('.phk-card');
+      if (!card) return;
+      const src = safeThumb(photo.thumb);
+      const img = card.querySelector('img');
+      if (src) img.src = src; else img.removeAttribute('src');
+      card.hidden = false;
+      card.classList.remove('in'); void card.offsetWidth; card.classList.add('in');
+      clearTimeout(this._kidCardTimer);
+      this._kidCardTimer = setTimeout(() => this._hideKidCard(), 7000);
+    },
+    _hideKidCard() {
+      clearTimeout(this._kidCardTimer);
+      const card = this._ui?.querySelector('.phk-card');
+      if (card) card.hidden = true;
+    },
+
     // ------------------------------------------------------------ album
     openGallery(opts = {}) {
       if (!G.state) return null;
       const h = G.ui.h;
+      const easy = easyOn();
       const m = G.ui.modal.open({
-        id: 'photo-gallery', size: 'lg', className: 'pg-modal', title: '사진 앨범', icon: 'image',
+        id: 'photo-gallery', size: 'lg', className: `pg-modal${easy ? ' pg-kid' : ''}`, title: easy ? '내 사진첩' : '사진 앨범', icon: easy ? '🖼️' : 'image',
+        say: easy ? '내 사진첩이에요. 사진을 눌러 크게 봐요.' : undefined,
         headExtra: h('span', { class: 'chip pg-count' }, ''),
         body: h('div', { class: 'pg' }),
         actions: [],
@@ -716,11 +1075,12 @@
       body.innerHTML = '';
       m.el.querySelector('.pg-count').textContent = `${list.length} / ${MAX_PHOTOS}장`;
       const zoneName = (id) => G.world.zoneById(id)?.name || '';
+      const easy = easyOn();
       if (!list.length) {
         body.appendChild(h('div', { class: 'empty pg-empty' },
-          h('div', { class: 'pg-empty-ico' }, h('span', { class: 'ico ico-lg', 'data-icon': 'camera' })),
+          easy ? h('div', { class: 'pg-empty-emo emoji', 'aria-hidden': 'true' }, '📸') : h('div', { class: 'pg-empty-ico' }, h('span', { class: 'ico ico-lg', 'data-icon': 'camera' })),
           h('b', null, '아직 찍은 사진이 없어요'),
-          h('p', { class: 'small' }, 'P 키나 아래 ‘사진’ 버튼으로 사진 모드를 켜 보세요. 금빛 액자가 있는 포토존에서 찍으면 퀘스트도 진행돼요.')));
+          h('p', { class: 'small' }, easy ? '📸 사진 버튼을 눌러 찍어 봐요!' : 'P 키나 아래 ‘사진’ 버튼으로 사진 모드를 켜 보세요. 금빛 액자가 있는 포토존에서 찍으면 퀘스트도 진행돼요.')));
       } else {
         const grid = h('div', { class: 'pg-grid' }, list.map((p) => {
           const b = h('button', { type: 'button', class: 'pg-item', dataset: { photo: p.id }, title: '크게 보기' },
@@ -732,12 +1092,10 @@
         grid.addEventListener('click', (ev) => { const b = ev.target.closest('[data-photo]'); if (b) this._renderViewer(m, b.dataset.photo); });
         body.appendChild(grid);
       }
-      body.appendChild(h('p', { class: 'pg-note tiny muted' }, `앨범에는 최근 ${MAX_PHOTOS}장까지 작은 크기로 보관돼요. 원본 PNG는 촬영할 때 내려받을 수 있어요.`));
+      if (!easy) body.appendChild(h('p', { class: 'pg-note tiny muted' }, `앨범에는 최근 ${MAX_PHOTOS}장까지 작은 크기로 보관돼요. 원본 PNG는 촬영할 때 내려받을 수 있어요.`));
       G.ui.hydrateIcons(body);
-      m.setActions([
-        { label: '사진 찍으러 가기', icon: 'camera', class: 'btn-primary', onClick: () => { setTimeout(() => { if (!this.active) this.enter(); }, 0); } },
-        { label: '닫기', class: 'btn-ghost' },
-      ]);
+      const go = { label: easy ? '📸 사진 찍기' : '사진 찍으러 가기', icon: easy ? null : 'camera', class: 'btn-primary', onClick: () => { setTimeout(() => { if (!this.active) this.enter(); }, 0); } };
+      m.setActions(easy ? [go] : [go, { label: '닫기', class: 'btn-ghost' }]);
     },
 
     _renderViewer(m, id) {
@@ -773,12 +1131,12 @@
       this._viewerKeys = () => window.removeEventListener('keydown', onKey);
       const prevClose = m.opts.onClose;
       if (!m._pgHooked) { m._pgHooked = true; m.opts.onClose = (mm) => { this._viewerKeys?.(); this._viewerKeys = null; prevClose?.(mm); }; }
-      m.setActions([
-        { label: '목록', icon: 'chevron-left', class: 'btn-ghost', onClick: () => { this._viewerKeys?.(); this._viewerKeys = null; this._renderGrid(m); return false; } },
-        { label: '삭제', icon: 'trash', class: 'btn-danger', onClick: () => { this._deletePhoto(m, p.id); return false; } },
-        { label: full ? 'PNG 내려받기' : '내려받기', icon: 'download', class: 'btn-soft', onClick: () => { this._downloadPhoto(p); return false; } },
-        { label: '작업일지에 첨부', icon: 'journal', class: 'btn-gold', onClick: () => { this._viewerKeys?.(); this._attachToJournal(p); } },
-      ]);
+      const toList = { label: easyOn() ? '⬅️ 목록' : '목록', icon: easyOn() ? null : 'chevron-left', class: 'btn-ghost', onClick: () => { this._viewerKeys?.(); this._viewerKeys = null; this._renderGrid(m); return false; } };
+      const del = { label: easyOn() ? '🗑️ 지우기' : '삭제', icon: easyOn() ? null : 'trash', class: 'btn-danger', onClick: () => { this._deletePhoto(m, p.id); return false; } };
+      const toJournal = { label: easyOn() ? '📝 일기에 붙이기' : '작업일지에 첨부', icon: easyOn() ? null : 'journal', class: 'btn-gold', onClick: () => { this._viewerKeys?.(); this._attachToJournal(p); } };
+      // easy mode: no file downloads for the child (a grown-up can download in normal mode)
+      m.setActions(easyOn() ? [toList, del, toJournal] : [toList, del,
+        { label: full ? 'PNG 내려받기' : '내려받기', icon: 'download', class: 'btn-soft', onClick: () => { this._downloadPhoto(p); return false; } }, toJournal]);
     },
 
     _downloadPhoto(p) {
@@ -791,7 +1149,7 @@
     },
 
     async _deletePhoto(m, id) {
-      const ok = await G.ui.confirm('이 사진을 앨범에서 지울까요? 지운 사진은 되돌릴 수 없어요.', { title: '사진 지우기', okText: '지우기', danger: true, icon: 'trash' });
+      const ok = await G.ui.confirm(easyOn() ? '이 사진을 지울까요?' : '이 사진을 앨범에서 지울까요? 지운 사진은 되돌릴 수 없어요.', { title: '사진 지우기', okText: '지우기', danger: true, icon: 'trash', emoji: '🗑️' });
       if (!ok || !G.state) return;
       const list = G.state.photos || [];
       const i = list.findIndex((p) => p.id === id);
@@ -802,7 +1160,7 @@
       this._updateCount();
       this._viewerKeys?.(); this._viewerKeys = null;
       if (!m.closed) this._renderGrid(m);
-      G.ui.toast('사진을 지웠어요.', { type: 'info', icon: 'trash', sound: false });
+      G.ui.toast('사진을 지웠어요.', { type: 'info', icon: 'trash', emoji: '🗑️', sound: false });
     },
   };
 

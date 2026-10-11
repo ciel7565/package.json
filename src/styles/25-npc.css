@@ -187,3 +187,103 @@ body.reduce-motion .npc-mark, body.reduce-motion .dlg-next, body.reduce-motion .
   .dlg-text { min-height: 0; }
   .dlg-choice { min-height: 2.2rem; padding-block: .32rem; }
 }
+
+/* =============================================================================
+   쉬운 모드 (CONTRACT §12): big portrait, big short lines, tap anywhere, 2–3 big picture choices, big "그만"
+   ============================================================================= */
+.nametag .nm-ico { margin-right: .25rem; font-size: 1.05em; }
+.dlg-close-lbl { display: none; }
+.dlg-tap { position: absolute; inset: 0; pointer-events: none; }
+body.easy.dialogue-open .dlg-tap { pointer-events: auto; cursor: pointer; touch-action: manipulation; }
+
+.dlg.kid {
+  width: min(54rem, calc(100vw - 1.5rem)); grid-template-columns: 9.4rem minmax(0, 1fr);
+  column-gap: 1.25rem; padding: 1.1rem 1.25rem 1rem 1.15rem; border-width: 2px; border-color: rgba(255, 207, 74, .7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 18px 50px rgba(0, 0, 0, .5), 0 0 0 5px rgba(255, 207, 74, .12);
+  cursor: pointer;
+}
+.dlg.kid .dlg-portrait { width: 9.4rem; height: 9.4rem; margin-top: -4.4rem; border-width: 4px; box-shadow: 0 0 0 6px rgba(255, 207, 74, .25), 0 12px 30px rgba(0, 0, 0, .5); }
+.dlg.kid .dlg-face { font-size: 5rem; }
+.dlg.kid.typing .dlg-portrait { animation: dlgKidTalk .9s ease-in-out infinite; }
+@keyframes dlgKidTalk { 0%, 100% { transform: translateY(0) rotate(0deg); } 30% { transform: translateY(-4px) rotate(-1.5deg); } 70% { transform: translateY(-2px) rotate(1.5deg); } }
+.dlg.kid .dlg-name { font-size: 1.2rem; padding: .3rem 1rem; }
+.dlg.kid .dlg-role { display: none; }
+.dlg.kid .dlg-text { font-size: 1.5rem; line-height: 1.5; font-weight: 700; min-height: 2.6em; letter-spacing: -.015em; }
+.dlg.kid .dlg-text .hl { color: #ffe08a; }
+.dlg.kid .dlg-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: auto; min-width: var(--tap); height: var(--tap); padding: 0 .95rem 0 .75rem; gap: .3rem; border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff, #e6ece3); color: var(--kid-ink, #23301f); border: 2px solid rgba(255, 255, 255, .85);
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .3), 0 8px 16px rgba(0, 0, 0, .25); font-weight: 900; font-size: 1.05rem;
+}
+.dlg.kid .dlg-close .ico { width: 1.25rem; height: 1.25rem; }
+.dlg.kid .dlg-close .dlg-close-lbl { display: inline; }
+.dlg.kid .dlg-close:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0, 0, 0, .3); }
+
+/* picture choices: 1–3 big tiles in one row */
+.dlg-choices.kid { grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: .75rem; margin-top: 1rem; }
+.dlg-choices.kid[data-n="1"] { --n: 1; } .dlg-choices.kid[data-n="2"] { --n: 2; } .dlg-choices.kid[data-n="3"] { --n: 3; }
+.dlg-choice.kid {
+  --tile: #55d187;
+  flex-direction: column; justify-content: center; gap: .35rem; min-height: calc(var(--tap) * 2); padding: .65rem .5rem .7rem;
+  border-radius: 22px; text-align: center; color: var(--kid-ink, #23301f); font-size: 1.15rem; font-weight: 900; line-height: 1.2;
+  background: linear-gradient(180deg, #fffdf6, #fff0cf); border: 3px solid var(--tile);
+  box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 12px 24px rgba(0, 0, 0, .3);
+  animation: dlgKidIn .4s cubic-bezier(.34, 1.56, .64, 1) backwards; touch-action: manipulation;
+}
+.dlg-choice.kid:nth-child(2) { --tile: #4fb3ff; }
+.dlg-choice.kid:nth-child(3) { --tile: #ff9f43; }
+.dlg-choice.kid.claim, .dlg-choice.kid.quest { --tile: #ffc93c; background: linear-gradient(180deg, #fffbe6, #ffe39a); }
+.dlg-choice.kid.claim { animation: dlgKidIn .4s cubic-bezier(.34, 1.56, .64, 1) backwards, dlgGlow 1.8s ease-in-out .4s infinite; }
+.dlg-choice.kid .dc-emo { font-size: 2.5rem; line-height: 1; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .2)); }
+.dlg-choice.kid .dc-text { flex: none; }
+.dlg-choice.kid:hover, .dlg-choice.kid.focus { transform: translateY(-3px); background: linear-gradient(180deg, #ffffff, #fff4d6); border-color: var(--tile); box-shadow: 0 9px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 14px 26px rgba(0, 0, 0, .32); }
+.dlg-choice.kid:active { transform: translateY(5px) scale(.97); box-shadow: 0 1px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 4px 10px rgba(0, 0, 0, .25); }
+.dlg-choice.kid.focus { outline: 4px solid #fff; outline-offset: 2px; }
+.dlg-choices.kid.nudge .dlg-choice { animation: dlgKidNudge .5s ease-in-out 1; }
+@keyframes dlgKidIn { from { opacity: 0; transform: translateY(14px) scale(.9); } }
+@keyframes dlgKidNudge { 0%, 100% { transform: none; } 25% { transform: translateY(-7px) rotate(-2deg); } 60% { transform: translateY(-3px) rotate(2deg); } }
+
+.dlg.kid .dlg-foot { margin-top: .75rem; min-height: var(--tap); }
+.dlg.kid .dlg-hint { font-size: 1rem; font-weight: 800; color: #ffe7a6; }
+.dlg.kid .dlg-hint .emoji { font-size: 1.25rem; }
+.dlg.kid .dlg-next {
+  min-height: var(--tap); padding: 0 1.4rem 0 1.1rem; border-radius: 999px; font-size: 1.2rem; font-weight: 900;
+  border: 2px solid rgba(255, 255, 255, .7); box-shadow: 0 5px 0 rgba(10, 90, 40, .6), 0 10px 20px rgba(0, 0, 0, .3);
+}
+.dlg.kid .dlg-next .emoji { font-size: 1.5rem; margin-right: .2rem; }
+.dlg.kid .dlg-next.end { background: linear-gradient(180deg, #ffffff, #e6ece3); color: var(--kid-ink, #23301f); box-shadow: 0 5px 0 rgba(0, 0, 0, .3); }
+.dlg.kid .dlg-caret { font-size: 1em; }
+
+@media (max-width: 1366px), (max-height: 768px) {
+  .dlg.kid { grid-template-columns: 7.6rem minmax(0, 1fr); }
+  .dlg.kid .dlg-portrait { width: 7.6rem; height: 7.6rem; margin-top: -3.6rem; }
+  .dlg.kid .dlg-face { font-size: 4.2rem; }
+  .dlg.kid .dlg-text { font-size: 1.36rem; }
+}
+@media (max-width: 820px), (max-height: 520px) {
+  .dlg.kid { width: calc(100vw - 1rem); grid-template-columns: 5.6rem minmax(0, 1fr); column-gap: .8rem; padding: .8rem .85rem .75rem; }
+  .dlg.kid .dlg-portrait { width: 5.6rem; height: 5.6rem; margin-top: -2.6rem; border-width: 3px; }
+  .dlg.kid .dlg-face { font-size: 3.2rem; }
+  .dlg.kid .dlg-name { font-size: 1rem; padding: .22rem .75rem; }
+  .dlg.kid .dlg-text { font-size: 1.18rem; line-height: 1.45; min-height: 2.9em; }
+  .dlg-choices.kid { gap: .5rem; margin-top: .7rem; }
+  .dlg-choice.kid { min-height: calc(var(--tap) * 1.75); font-size: 1rem; padding: .5rem .3rem .55rem; border-radius: 18px; }
+  .dlg-choice.kid .dc-emo { font-size: 2.1rem; }
+  .dlg.kid .dlg-hint { display: inline; font-size: .9rem; }
+  .dlg.kid .dlg-foot { margin-top: .5rem; }
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .dlg.kid { width: min(50rem, calc(100vw - 1rem)); }
+  .dlg.kid .dlg-text { min-height: 0; font-size: 1.1rem; }
+  .dlg-choices.kid { grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); }
+  .dlg-choice.kid { min-height: calc(var(--tap) * 1.3); flex-direction: row; gap: .45rem; }
+  .dlg-choice.kid .dc-emo { font-size: 1.7rem; }
+}
+body.reduce-motion .dlg.kid.typing .dlg-portrait, body.reduce-motion .dlg-choice.kid, body.reduce-motion .dlg-choices.kid.nudge .dlg-choice { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .dlg.kid.typing .dlg-portrait, .dlg-choice.kid, .dlg-choices.kid.nudge .dlg-choice { animation: none; }
+}
+/* 쉬운 모드: the floating ! / ? quest mark is a real tap target (≥ 44 px even on small phones) */
+body.easy .npc-mark { width: max(3.2rem, 52px); height: max(3.2rem, 52px); font-size: max(1.9rem, 30px); }
+body.easy .npc-label.far .npc-mark { width: max(2.8rem, 46px); height: max(2.8rem, 46px); font-size: max(1.6rem, 26px); }

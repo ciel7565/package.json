@@ -160,3 +160,9 @@ CREATE INDEX IF NOT EXISTS ix_audit_event ON audit_log (event, created_at);
 CREATE INDEX IF NOT EXISTS ix_audit_user ON audit_log (user_id, created_at);
 
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (1, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'initial schema');
+
+-- v2 (kid safety): chat_messages.text_key used to be built from the UNMASKED text, so phone numbers / e-mails that
+-- were masked in `text` stayed readable there. Keys are now built from the masked text; older keys are cleared
+-- (they only feed the 30-second repeat-spam check). Re-running this file later only touches rows older than v2.
+UPDATE chat_messages SET text_key = '' WHERE text_key <> '' AND created_at < COALESCE((SELECT applied_at FROM schema_version WHERE version = 2), 9007199254740991);
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (2, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'chat text_key from masked text');

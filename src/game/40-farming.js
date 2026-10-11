@@ -14,6 +14,10 @@
 //     setPlot(id, patch)                 debug / test helper (growth, water, health, cropId)
 //     growAll(pct) / fastForward(sec)    debug helpers (dev center)
 //   Emits farm:watered {plotId, cropId}, farm:planted {plotId, cropId}, farm:harvested {plotId, cropId, itemId, qty}.
+//   쉬운 모드 (CONTRACT §12): ONE TAP does the right thing — empty → picture seed picker (G.easy.pick) → plant,
+//     ready → harvest (+ G.easy.celebrate), thirsty (< 80 %) → water, otherwise a big picture card
+//     (stage 🌱→🌿→🌾→crop, 💧 drops 0–5, 😊/😐/😟, one sentence, big 💧/🧺/🌱 buttons). Plot labels become
+//     pictures too, every action is spoken (G.easy.say). The grown-up modal is unchanged in normal mode.
 //
 //   G.ffx — small shared particle system (also used by 41-fermentation.js):
 //     G.ffx.spawn(preset, x, y, z, vx, vy, vz, color?, floorY?)   G.ffx.burst(preset, x, y, z, n, speed, up, color?)
@@ -816,6 +820,30 @@
   const DRY_TINT = new THREE.Color(0.95, 0.74, 0.38);
   const SOIL_DRY = new THREE.Color(1.0, 0.96, 0.92), SOIL_WET = new THREE.Color(0.5, 0.45, 0.42);
 
+  // ---------------------------------------------------------------- 쉬운 모드 helpers (pictures instead of numbers)
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
+  const KID_WATER_AT = 80;               // one tap waters a bed below this water level
+  const KID_STAGE = ['🌱', '🌿', '🌾'];   // + the crop's own picture when it is ready
+  const kidStageIdx = (g) => (g >= 100 ? 3 : g >= 80 ? 2 : g >= 50 ? 1 : 0);
+  const cropPic = (crop) => items()[crop?.harvestItem]?.icon || '🌾';
+  const kidStagePic = (crop, g) => { const i = kidStageIdx(g); return i === 3 ? cropPic(crop) : KID_STAGE[i]; };
+  const kidFace = (health) => (health >= 70 ? '😊' : health >= 40 ? '😐' : '😟');
+  const kidDrops = (water) => clamp(Math.round((Number(water) || 0) / 20), 0, 5);
+  const kidSay = (text, opts) => { try { G.easy?.say?.(text, opts || { priority: 1 }); } catch (e) { /* voice optional */ } };
+  const pickOne = (a) => a[Math.floor(Math.random() * a.length)];
+  /** one short sentence about a planted bed for children */
+  function kidSentence(s, crop) {
+    const C = cfg();
+    if (!crop) return '';
+    if (s.growth >= 100) return `${josa(crop.name, '이/가')} 다 자랐어요! 거둬요 🧺`;
+    if (s.water <= 0) return '흙이 바싹 말랐어요! 물을 주세요 💧';
+    if (s.water < C.dryThreshold) return '목이 말라요! 물을 주세요 💧';
+    if (s.health < 40) return '조금 아파요. 물을 주면 나아요 💚';
+    if ((Number(G.sys.weather?.precipitation?.rain) || 0) > 0.15) return '비가 와서 촉촉해요 🌧️';
+    if (s.water < KID_WATER_AT) return '쑥쑥 자라요! 물을 더 줘도 좋아요 💧';
+    return '쑥쑥 자라고 있어요! 조금만 기다려요 😊';
+  }
+
   const farming = {
     name: 'farming', order: 60, label: '농장',
     _plots: new Map(),   // id -> runtime {def, group, root, meshes, plants[], label, vis, ...}
@@ -841,6 +869,13 @@
         if (!P || !obj || P.group === obj) return;
         this._adoptGroup(P, obj, false);
         if (G.state) { P.modelId = '__rebuild'; this._syncVisual(P, true); }
+      });
+      // 쉬운 모드 switched: labels switch picture/number rows at once, an open plot window reopens in the other style
+      G.bus.on('easy:changed', () => {
+        for (const P of this._plots.values()) if (P.labelEls) P.labelEls.last = {};
+        if (G.state && this._ready) this._refreshLabels(true);
+        const md = this._modal;
+        if (md && !md.m.closed && md.kid !== kidOn() && G.ui.modal.top?.() === md.m) { const id = md.id; md.m.close(); this.openPlot(id); }
       });
       G.log.info('FARM', `${this._plots.size} plots ready`);
     },
@@ -1042,10 +1077,41 @@
       if (!s) return;
       const P = this._plots.get(id);
       if (P && performance.now() < P.busyUntil) return;
+      if (kidOn()) { this._kidPrimary(id, s); return; }
       if (!s.cropId) { this.openPlot(id); return; }
       if (s.growth >= 100) { this.harvest(id); return; }
       if (s.water < 90) { this.water(id); return; }
       this.openPlot(id);
+    },
+    /** the "다음 할 일" step right now is 💧 watering (then one tap waters any bed that still takes water, ripe or not) */
+    _questWantsWater() {
+      try {
+        const f = G.sys.quest?.focus?.();
+        if (!f || f.mode !== 'objective') return false;
+        return G.data.quests?.[f.questId]?.objectives?.[f.objective]?.type === 'water';
+      } catch (e) { return false; }
+    },
+    /** 쉬운 모드 one tap: plant (seed pictures) / harvest / water / big picture card */
+    _kidPrimary(id, s) {
+      if (!s.cropId) { this._kidPlant(id); return; }
+      const cool = now() - s.lastWaterAt < cfg().waterCooldown * 1000;
+      // card says "물을 줘요" -> the tap waters first, even a ripe bed (otherwise the step could never be done)
+      if (!cool && s.water < 100 && this._questWantsWater()) { this.water(id); return; }
+      if (s.growth >= 100) { this.harvest(id); return; }
+      if (s.water < KID_WATER_AT && !cool) { this.water(id); return; }
+      this.openPlot(id);
+    },
+    /** what one tap will do in 쉬운 모드 -> {label, emoji} (prompt words + picture) */
+    _kidAction(id) {
+      const s = this._state(id);
+      const crop = cropOf(s?.cropId);
+      if (!s) return { label: '밭 보기', emoji: '👀' };
+      if (!crop) return { label: isHerbPlot(this._plots.get(id)?.def || {}) ? '모종 심기' : '씨앗 심기', emoji: '🌱' };
+      const cool = now() - s.lastWaterAt < cfg().waterCooldown * 1000;
+      if (!cool && s.water < 100 && this._questWantsWater()) return { label: '물 주기', emoji: '💧' };
+      if (s.growth >= 100) return { label: `${crop.name} 거두기`, emoji: cropPic(crop) };
+      if (s.water < KID_WATER_AT && !cool) return { label: '물 주기', emoji: '💧' };
+      return { label: `${crop.name}밭 보기`, emoji: '👀' };
     },
     _primaryLabel(id) {
       const s = this._state(id), P = this._plots.get(id);
@@ -1063,15 +1129,19 @@
       const s = this._simulate(id);
       if (!P || !s) return false;
       const crop = cropOf(s.cropId);
-      if (!crop) { G.ui.toast('빈 밭이에요. 먼저 씨앗을 심어 주세요.', { type: 'info', emoji: '🌱' }); return false; }
+      const kid = kidOn();
+      if (!crop) { G.ui.toast(kid ? '빈 밭이에요. 먼저 씨앗을 심어요!' : '빈 밭이에요. 먼저 씨앗을 심어 주세요.', { type: 'info', emoji: '🌱', say: kid ? '빈 밭이에요. 먼저 씨앗을 심어요!' : undefined }); return false; }
       if (!this._hasItem('ITEM_WATERING_CAN')) { this._offerWateringCan(id); return false; }
       const C = cfg();
       const t = now();
       if (t - s.lastWaterAt < C.waterCooldown * 1000) {
-        if (!opts.silent) G.ui.toast('물이 흙에 스며드는 중이에요. 잠시 후에 다시 주세요.', { type: 'info', emoji: '💧', sound: false, duration: 1600 });
+        if (!opts.silent) {
+          if (kid) G.ui.toast('물이 스며들고 있어요. 조금만 기다려요!', { type: 'info', emoji: '💧', sound: false, duration: 1800, say: '물이 스며들고 있어요. 조금만 기다려요!' });
+          else G.ui.toast('물이 흙에 스며드는 중이에요. 잠시 후에 다시 주세요.', { type: 'info', emoji: '💧', sound: false, duration: 1600 });
+        }
         return false;
       }
-      if (s.water >= 100) { G.ui.toast('흙이 이미 촉촉해요. 물을 더 줄 필요가 없어요.', { type: 'info', emoji: '💧' }); return false; }
+      if (s.water >= 100) { G.ui.toast(kid ? '흙이 벌써 촉촉해요!' : '흙이 이미 촉촉해요. 물을 더 줄 필요가 없어요.', { type: 'info', emoji: '💧', say: kid ? '흙이 벌써 촉촉해요!' : undefined }); return false; }
       const before = s.water;
       s.water = Math.min(100, s.water + C.waterPerAction);
       s.lastWaterAt = t;
@@ -1079,7 +1149,11 @@
       P.busyUntil = performance.now() + 2300;
       this._doWaterFx(P);
       G.sfx('water');
-      G.ffx.floatText(`<b>💧 +${Math.round(s.water - before)}%</b> 수분`, { x: P.cx, y: P.soilY + 1.3, z: P.cz }, 'water');
+      if (kid) {
+        // pictures, not percentages: one 💧 per 20 % of water now in the bed
+        G.ffx.floatText(`<b>${'💧'.repeat(Math.max(1, kidDrops(s.water)))}</b> 촉촉!`, { x: P.cx, y: P.soilY + 1.3, z: P.cz }, 'water kid');
+        kidSay(pickOne(['물을 줬어요! 쑥쑥 자라라!', '시원한 물이에요! 촉촉해졌어요.', `${josa(crop.name, '이/가')} 고맙대요! 꿀꺽꿀꺽!`]));
+      } else G.ffx.floatText(`<b>💧 +${Math.round(s.water - before)}%</b> 수분`, { x: P.cx, y: P.soilY + 1.3, z: P.cz }, 'water');
       G.log.info('FARM', `water ${id} (${crop.id}) ${before.toFixed(0)} -> ${s.water.toFixed(0)}`);
       G.activity('water', `${crop.name}밭에 물 주기`, { plotId: id, cropId: crop.id });
       G.dirty('farm');
@@ -1118,7 +1192,10 @@
       FX.burst(FX.P.DUST, fp.x, P.soilY + 0.05, fp.z, 14, 1.0, 0.9);
       FX.burst(FX.P.SPARK, fp.x, P.soilY + 0.2, fp.z, 6, 0.6, 0.8);
       G.sfx('plant');
-      G.ui.toast(`${crop.name} ${crop.category === 'herb' ? '모종' : '씨앗'}을 심었어요! 물을 주면 더 빨리 자라요.`, { type: 'success', emoji: items()[seed]?.icon || '🌱' });
+      if (kidOn()) {
+        G.ui.toast(`${josa(crop.name, '을/를')} 심었어요! 🌱`, { type: 'success', emoji: cropPic(crop), say: `${josa(crop.name, '을/를')} 심었어요! 물을 주면 쑥쑥 자라요.` });
+        G.ffx.floatText('<b>🌱</b> 심었어요!', { x: P.cx, y: P.soilY + 1.2, z: P.cz }, 'kid');
+      } else G.ui.toast(`${crop.name} ${crop.category === 'herb' ? '모종' : '씨앗'}을 심었어요! 물을 주면 더 빨리 자라요.`, { type: 'success', emoji: items()[seed]?.icon || '🌱' });
       G.log.info('FARM', `plant ${id} <- ${crop.id}`);
       G.activity('plant', `${crop.name} 심기`, { plotId: id, cropId: crop.id });
       G.dirty('farm');
@@ -1184,7 +1261,13 @@
       G.activity('harvest', `${crop.name} ${qty}개 수확`, { plotId: id, cropId: crop.id, itemId, qty });
       G.dirty('farm');
       G.bus.emit('farm:harvested', { plotId: id, cropId: crop.id, itemId, qty });
-      if (crop.category === 'herb') setTimeout(() => { if (G.state && this._ready) G.ui.toast('허브는 여러해살이라 줄기를 잘라 수확하면 다시 자라요.', { type: 'info', emoji: '🌿', sound: false }); }, 1400);
+      const kid = kidOn();
+      if (kid) {
+        // a big happy moment for children: picture pop + rays + voice (G.easy.celebrate)
+        const nm = items()[itemId]?.name || crop.name;
+        try { G.easy?.celebrate?.(`${nm} ${qty}개!`, { emoji: items()[itemId]?.icon || '🧺', say: `${josa(nm, '을/를')} ${qty}개 거뒀어요! 최고예요!`, duration: 1900, sound: 'pop' }); } catch (e) { /* optional */ }
+      }
+      if (crop.category === 'herb') setTimeout(() => { if (G.state && this._ready) G.ui.toast(kid ? '허브는 잘라도 다시 자라요! 🌿' : '허브는 여러해살이라 줄기를 잘라 수확하면 다시 자라요.', { type: 'info', emoji: '🌿', sound: false }); }, kid ? 2400 : 1400);
       this._refreshLabels(true);
       this._refreshModal(true);
       return { itemId, qty };
@@ -1259,10 +1342,17 @@
       return true;
     },
     async _offerWateringCan(id) {
+      if (this._offering) return;
       const it = items().ITEM_WATERING_CAN || { name: '물뿌리개', price: 300 };
       const price = it.price || 300;
       const coin = G.state?.stats?.coin || 0;
-      const ok = await G.ui.confirm(`물을 주려면 <b>${esc(it.name)}</b>${josa(it.name, '이/가').slice(it.name.length)} 필요해요.<br>${fmt(price)} 코인에 구입할까요? <span class="dim small">(보유 ${fmt(coin)} 코인)</span>`, { title: '물뿌리개가 없어요', okText: `${fmt(price)} 코인에 구입`, icon: 'watering-can', html: true });
+      let ok;
+      this._offering = true;
+      try {
+        ok = kidOn() && G.easy?.confirm
+          ? await G.easy.confirm({ emoji: it.icon || '🚿', heading: '물뿌리개', title: '물뿌리개가 없어요!', text: `🪙 ${fmt(price)}으로 살까요? (지금 🪙 ${fmt(coin)})`, say: '물뿌리개가 없어요. 코인으로 살까요?', yes: '살래요', no: '아니요' })
+          : await G.ui.confirm(`물을 주려면 <b>${esc(it.name)}</b>${josa(it.name, '이/가').slice(it.name.length)} 필요해요.<br>${fmt(price)} 코인에 구입할까요? <span class="dim small">(보유 ${fmt(coin)} 코인)</span>`, { title: '물뿌리개가 없어요', okText: `${fmt(price)} 코인에 구입`, icon: 'watering-can', html: true });
+      } finally { this._offering = false; }
       if (!ok || !G.state) return;
       if (this._hasItem('ITEM_WATERING_CAN')) { if (id) setTimeout(() => this.water(id), 150); return; } // bought meanwhile
       const inv = G.sys.inventory;
@@ -1356,6 +1446,9 @@
       G.interact.register({
         id, kind: 'plot',
         label: () => self._primaryLabel(id),
+        kidLabel: () => self._kidAction(id).label,
+        emoji: () => self._kidAction(id).emoji,
+        handOffset: 1.55, // above the plot tag
         position: new THREE.Vector3(P.cx, P.soilY, P.cz),
         object: P.group,
         radius: Math.max(P.def.w, P.def.d) / 2 + (herb ? 1.6 : 1.9),
@@ -1610,11 +1703,15 @@
       el.className = 'plot-label farm-label';
       el.innerHTML = `<div class="fl-head"><span class="num">${esc(def.label)}</span><span class="ttl"></span><span class="fl-stage"></span></div>`
         + '<div class="fl-stats"><span class="fl-g">성장률 <b>0%</b></span><i></i><span class="fl-w">수분 <b>0%</b></span><i></i><span class="fl-h">건강 <b>0%</b></span></div>'
-        + '<div class="fl-empty">씨앗을 심어 주세요</div>';
+        + '<div class="fl-empty">씨앗을 심어 주세요</div>'
+        // 쉬운 모드 picture row (CSS shows it instead of the numbers): stage · 💧 0–5 · face / "다 자랐어요!"
+        + '<div class="fl-kid" aria-hidden="true"><span class="flk-stage emoji"></span><span class="flk-drops"><i></i><i></i><i></i><i></i><i></i></span><span class="flk-face emoji"></span><span class="flk-ready">✨ 다 자랐어요!</span></div>'
+        + '<div class="fl-kid-empty" aria-hidden="true"><span class="emoji">🌱</span><span class="flk-empty-t">씨앗 심어요</span></div>';
       if (isHerbPlot(def)) el.classList.add('herb');
       P.labelEls = {
         el, ttl: el.querySelector('.ttl'), stage: el.querySelector('.fl-stage'),
         g: el.querySelector('.fl-g b'), w: el.querySelector('.fl-w b'), h: el.querySelector('.fl-h b'), empty: el.querySelector('.fl-empty'), last: {},
+        kStage: el.querySelector('.flk-stage'), kDrops: Array.from(el.querySelectorAll('.flk-drops i')), kFace: el.querySelector('.flk-face'), kEmpty: el.querySelector('.flk-empty-t'),
       };
       P.labelPos.set(P.cx, P.soilY + 1.2, P.cz);
       P.label = G.ui.label({ el, target: P.labelPos, maxDist: 42, fadeDist: 8, onClick: (ev) => { ev.stopPropagation(); this.openPlot(def.id); } });
@@ -1642,6 +1739,14 @@
           set('w', E.w, `${Math.round(s.water)}%`);
           set('h', E.h, `${Math.round(s.health)}%`);
         } else set('empty', E.empty, isHerbPlot(P.def) ? '허브 모종을 심어 주세요' : '씨앗을 심어 주세요');
+        if (kidOn() && E.kStage) {
+          if (crop) {
+            set('kStage', E.kStage, kidStagePic(crop, s.growth));
+            set('kFace', E.kFace, s.water < C.dryThreshold ? '🥵' : kidFace(s.health));
+            const n = kidDrops(s.water);
+            if (L.kDrops !== n) { L.kDrops = n; for (let i = 0; i < E.kDrops.length; i++) E.kDrops[i].classList.toggle('on', i < n); }
+          } else set('kEmpty', E.kEmpty, isHerbPlot(P.def) ? '모종 심어요' : '씨앗 심어요');
+        }
       }
     },
 
@@ -1649,14 +1754,18 @@
     openPlot(id) {
       const P = this._plots.get(id);
       if (!P || !G.state) return null;
-      this._simulate(id);
+      const s = this._simulate(id);
       const self = this;
+      const kid = kidOn();
+      const crop = cropOf(s?.cropId);
       const m = G.ui.modal.open({
-        id: 'farm-plot', size: 'md', className: 'farm-modal', title: '', icon: null,
-        body: (body) => { body.classList.add('fm-body'); },
+        id: 'farm-plot', size: kid ? 'sm' : 'md', className: kid ? 'farm-modal farm-kid' : 'farm-modal', title: '', icon: null,
+        // 쉬운 모드: the card reads its name and one sentence aloud when it opens
+        say: kid ? `${plotTitle(P.def, crop)}. ${crop ? kidSentence(s, crop) : (isHerbPlot(P.def) ? '모종을 심어 볼까요?' : '씨앗을 심어 볼까요?')}` : undefined,
+        body: (body) => { body.classList.add(kid ? 'fk-body' : 'fm-body'); },
         onClose: () => { if (self._modal?.m === m) self._modal = null; },
       });
-      this._modal = { m, id, key: '', els: null };
+      this._modal = { m, id, key: '', els: null, kid };
       this._refreshModal(true);
       return m;
     },
@@ -1676,10 +1785,116 @@
       const crop = cropOf(s.cropId);
       const near = this._near(P);
       const ready = !!crop && s.growth >= 100;
+      if (md.kid) {
+        const key = `k|${s.cropId}|${ready}|${near}`;
+        if (force || key !== md.key) { md.key = key; this._renderKid(md, P, s, crop, near); }
+        this._updateKid(md, P, s, crop);
+        return;
+      }
       const seedSig = !crop ? this._seedList(P).map((x) => x.id + x.count).join(',') : '';
       const key = `${s.cropId}|${ready}|${near}|${seedSig}`;
       if (force || key !== md.key) { md.key = key; this._renderModal(md, P, s, crop, near); }
       this._updateModalValues(md, P, s, crop);
+    },
+
+    // ------------------------------------------------------------ 쉬운 모드: picture card + seed picker
+    _renderKid(md, P, s, crop, near) {
+      const m = md.m, def = P.def, h = G.ui.h;
+      const herb = isHerbPlot(def);
+      m.setTitle(`${CIRCLED[def.label] || def.label} ${plotTitle(def, crop)}`, crop ? cropPic(crop) : '🌱');
+      const body = m.body;
+      body.innerHTML = '';
+      const els = { crop };
+      els.ring = h('div', { class: `fk-ring${crop ? '' : ' empty'}` }, els.pic = h('span', { class: 'fk-pic emoji', 'aria-hidden': 'true' }, crop ? kidStagePic(crop, s.growth) : '🟫'));
+      // the sentence lives in its own span: the 🔊 button easy.speakable appends must survive text updates
+      els.sayT = h('span', { class: 'fk-say-t' });
+      els.say = h('p', { class: 'fk-say' }, els.sayT);
+      const btns = h('div', { class: 'fk-btns' });
+      const big = (cls, emoji, label, fn) => {
+        const b = h('button', { type: 'button', class: `easy-big-btn ${cls}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', { class: 'fk-btn-lbl' }, label));
+        b.addEventListener('click', fn);
+        btns.appendChild(b);
+        return b;
+      };
+      if (!crop) {
+        els.sayT.textContent = herb ? '빈 허브 밭이에요. 모종을 심어 볼까요?' : '빈 밭이에요. 씨앗을 심어 볼까요?';
+        body.append(h('div', { class: 'fk-hero' }, els.ring), els.say);
+        if (near) big('easy-btn-yes', '🌱', herb ? '모종 심기' : '씨앗 심기', () => { m.close(); this._kidPlant(P.id); });
+        else big('easy-btn-yes', '👉', '밭으로 가기', () => this._goTo(P, false));
+      } else {
+        // stage track 🌱 → 🌿 → 🌾 → crop
+        els.steps = [0, 1, 2, 3].map((i) => h('span', { class: 'fk-step emoji', 'aria-hidden': 'true' }, i === 3 ? cropPic(crop) : KID_STAGE[i]));
+        const track = h('div', { class: 'fk-track', role: 'img', 'aria-label': '자라는 단계' });
+        els.steps.forEach((st, i) => { if (i) track.appendChild(h('span', { class: 'fk-arrow', 'aria-hidden': 'true' }, '›')); track.appendChild(st); });
+        els.drops = [0, 1, 2, 3, 4].map(() => h('i'));
+        els.face = h('span', { class: 'fk-face emoji', 'aria-hidden': 'true' }, '😊');
+        const meter = h('div', { class: 'fk-meter' },
+          h('div', { class: 'fk-m water' }, h('span', { class: 'fk-m-ico emoji', 'aria-hidden': 'true' }, '💧'), h('span', { class: 'fk-drops' }, els.drops)),
+          h('div', { class: 'fk-m feel' }, els.face));
+        body.append(h('div', { class: 'fk-hero' }, els.ring), track, meter, els.say);
+        if (near) {
+          if (s.growth >= 100) big('easy-btn-yes fk-harvest', cropPic(crop), '거두기', () => { if (this.harvest(P.id)) m.close(); });
+          else els.water = big('easy-btn-yes fk-water', '💧', '물 주기', () => { if (this.water(P.id)) m.close(); });
+        } else big('easy-btn-yes', '👉', '밭으로 가기', () => this._goTo(P, s.growth >= 100));
+      }
+      body.appendChild(btns);
+      try { G.easy?.speakable?.(els.say, () => els.sayT.textContent); } catch (e) { /* optional */ }
+      m.setActions([]);
+      md.els = els;
+    },
+    _updateKid(md, P, s, crop) {
+      const els = md.els;
+      if (!els) return;
+      const txt = (el, v) => { if (el && el.textContent !== v) el.textContent = v; };
+      if (!crop) return;
+      const g = Math.floor(s.growth);
+      const p = String(g);
+      if (els.ring.style.getPropertyValue('--p') !== p) els.ring.style.setProperty('--p', p);
+      txt(els.pic, kidStagePic(crop, s.growth));
+      const si = kidStageIdx(s.growth);
+      if (els.si !== si) { els.si = si; els.steps.forEach((st, i) => { st.classList.toggle('done', i < si); st.classList.toggle('cur', i === si); }); }
+      const n = kidDrops(s.water);
+      if (els.n !== n) { els.n = n; els.drops.forEach((d, i) => d.classList.toggle('on', i < n)); }
+      txt(els.face, s.water < cfg().dryThreshold ? '🥵' : kidFace(s.health));
+      txt(els.sayT, kidSentence(s, crop));
+      if (els.water) {
+        const C = cfg();
+        const cool = now() - s.lastWaterAt < C.waterCooldown * 1000;
+        const full = s.water >= 100;
+        const dis = cool || full;
+        if (els.water.disabled !== dis) els.water.disabled = dis;
+        txt(els.water.querySelector('.fk-btn-lbl'), cool ? '스며드는 중' : full ? '촉촉해요' : '물 주기');
+      }
+    },
+    /** 쉬운 모드: "무엇을 심을까?" picture picker (only seeds that fit this bed; 🛒 가게 when you have none) */
+    async _kidPlant(id) {
+      const P = this._plots.get(id);
+      if (!P || !G.state || this._picking || !G.easy?.pick) { if (!G.easy?.pick) this.openPlot(id); return; }
+      const st0 = G.state;
+      const herb = isHerbPlot(P.def);
+      const list = this._seedList(P).filter((x) => x.ok);
+      const items0 = list.map((x) => ({
+        id: x.id, emoji: cropPic(x.crop), label: x.crop.name, badge: x.count > 0 ? `×${Math.min(x.count, 99)}` : null,
+        disabled: x.count <= 0, disabledSay: `${x.crop.name} ${herb ? '모종' : '씨앗'}이 없어요. 가게에서 살 수 있어요.`,
+        say: `${x.crop.name}. ${x.count}개 있어요.`,
+      }));
+      items0.sort((a, b) => (a.disabled - b.disabled));
+      const has = items0.some((x) => !x.disabled);
+      if (G.sys.inventory?.openShop) items0.push({ id: '__shop', emoji: '🛒', label: '가게', say: '가게에서 씨앗을 사요.' });
+      this._picking = true;
+      let pick = null;
+      try {
+        pick = await G.easy.pick({
+          id: 'farm-seed', title: herb ? '어떤 모종을 심을까?' : '무엇을 심을까?', emoji: '🌱', items: items0, columns: items0.length > 6 ? 4 : 3,
+          say: has ? '무엇을 심을까요? 그림을 골라요.' : '씨앗이 없어요. 가게에서 사 올까요?',
+          text: has ? '' : '씨앗이 없어요. 🛒 가게에서 살 수 있어요!',
+        });
+      } finally { this._picking = false; }
+      if (!pick || !G.state || G.state !== st0) return;
+      if (pick === '__shop') { G.sys.inventory?.openShop?.('SHOP_GENERAL'); return; }
+      const s = this._simulate(id);
+      if (!s || s.cropId) return; // planted meanwhile
+      this.plant(id, pick);
     },
     _seedList(P) {
       const cat = plotCategory(P.def);

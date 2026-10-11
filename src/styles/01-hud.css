@@ -217,3 +217,131 @@ body.hud-hidden .hud, body.hud-hidden #labels-layer { display: none; }
 .loading-status { display: flex; justify-content: space-between; margin-top: .55rem; font-size: .86rem; color: var(--text-dim); }
 .loading-tip { margin-top: 1.6rem; min-height: 3em; font-size: .9rem; color: var(--text-dim); line-height: 1.6; }
 .loading-tip b { color: var(--gold); margin-right: .35rem; }
+
+/* =============================================================================
+   쉬운 모드 HUD (CONTRACT §12.3) — everything below is scoped to body.easy, so normal mode is unchanged.
+   Top-left: avatar + nickname + ⭐ level + 🪙 coins · top-center: "다음 할 일" card · right: compact minimap +
+   🗺️ 어디 갈까? · left: 4 big tiles · bottom: 😊 📸 📝 🔊 · 💬 button instead of the chat panel.
+   ============================================================================= */
+body.easy { --easy-ava: 4.2rem; --easy-card: calc(var(--easy-ava) + 1rem); }
+
+/* ---- profile: avatar card + one compact stats card (no brand text, no exp bar, no edu/mode) */
+body.easy .hud-profile { min-width: 0; padding: .45rem; gap: 0; border-radius: 22px; }
+body.easy .hud-brand { display: none; }
+body.easy .hud-avatar { width: max(var(--tap), var(--easy-ava)); height: max(var(--tap), var(--easy-ava)); font-size: 1.9rem; box-shadow: inset 0 0 0 3px rgba(255,255,255,.35), 0 4px 0 rgba(0,0,0,.25); }
+body.easy .hud-avatar .ico { width: 2rem; height: 2rem; }
+body.easy .hud-player {
+  top: var(--gap); left: calc(var(--gap) + var(--easy-card) + .5rem); width: auto; min-width: 9.5rem; max-width: 17rem;
+  height: var(--easy-card); padding: .45rem .95rem; justify-content: center; gap: .25rem; border-radius: 22px;
+}
+body.easy .hud-player .bar-exp, body.easy #hud-title, body.easy .hud-currency .cur-edu, body.easy #hud-mode { display: none !important; }
+body.easy .hud-player-row { gap: .55rem; }
+body.easy .hud-nick { font-size: 1.12rem; font-weight: 800; }
+body.easy .lv-chip { order: 2; font-size: 0; padding: .12rem .55rem .12rem .45rem; border-radius: 999px; line-height: 1; }
+body.easy .lv-chip::after { content: '⭐ ' attr(data-n); font-size: 1.02rem; font-weight: 900; }
+body.easy .hud-currency { font-size: 1.22rem; gap: .5rem; color: var(--text); }
+body.easy .hud-currency .cur-coin { gap: .35rem; }
+body.easy .hud-currency .cur-coin .ico { width: 1.45rem; height: 1.45rem; }
+body.easy .hud-currency b { font-weight: 900; }
+body.easy #hud-bell { display: none !important; } /* merged into the 🔔 오늘 tile */
+
+/* ---- left menu: 4 big picture tiles */
+body.easy .hud-left-menu { top: calc(var(--gap) + var(--easy-card) + .6rem); width: 5.6rem; padding: .4rem; gap: .4rem; border-radius: 24px; }
+body.easy .hud-left-menu .ico { display: none; }
+body.easy .hud-left-menu .lm-tile {
+  min-height: calc(var(--tap) + 1rem); padding: .35rem .2rem .4rem; gap: .1rem; border-radius: 18px; color: var(--text);
+  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)); border: 1px solid rgba(255,255,255,.14);
+  transition: transform .12s cubic-bezier(.34,1.56,.64,1), background .15s;
+}
+body.easy .hud-left-menu .lm-tile:hover, body.easy .hud-left-menu .lm-tile.active { background: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,.08)); }
+body.easy .hud-left-menu .lm-tile:active { transform: scale(.93); }
+body.easy .hud-left-menu .lm-emo { font-size: 2.05rem; line-height: 1.05; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+body.easy .hud-left-menu .lbl { display: block; font-size: max(15px, .84rem); font-weight: 800; white-space: nowrap; }
+body.easy .hud-left-menu .badge { transform: none; top: .15rem; right: .2rem; min-width: 1.4rem; height: 1.4rem; font-size: .78rem; }
+
+/* ---- right column: compact minimap (no header tools) + big "어디 갈까?" */
+body.easy .hud-right { width: 16rem; }
+body.easy #quest-panel { display: none !important; }
+body.easy .minimap-panel { padding: .45rem; border-radius: 20px; }
+body.easy .minimap-panel > .panel-head, body.easy .minimap-address { display: none; }
+body.easy .minimap-panel.collapsed > .minimap-wrap { display: block !important; }
+body.easy .minimap-wrap { border-radius: 16px; }
+.easy-where-btn {
+  display: flex; align-items: center; justify-content: center; gap: .5rem; min-height: var(--tap); padding: .35rem 1rem; border-radius: 999px;
+  background: linear-gradient(180deg, #ffe07a, #e3a412); color: #2b1d02; font-weight: 900; font-size: 1.12rem;
+  border: 2px solid rgba(255,255,255,.7); box-shadow: 0 5px 0 rgba(140,95,0,.55), 0 10px 22px rgba(0,0,0,.3);
+  transition: transform .12s cubic-bezier(.34,1.56,.64,1); touch-action: manipulation;
+}
+.easy-where-btn .emoji { font-size: 1.6rem; }
+.easy-where-btn:hover { transform: translateY(-1px) scale(1.02); }
+.easy-where-btn:active { transform: translateY(4px) scale(.96); box-shadow: 0 1px 0 rgba(140,95,0,.55); }
+
+/* ---- top center: next-step card replaces the objective hint; notices sit under it */
+body.easy .hud-top-center { width: min(36rem, 46vw); gap: .45rem; }
+body.easy #objective-hint { display: none !important; }
+body.easy .zone-label { top: 9.6rem; }
+body.easy .toast-root { top: 8.9rem; }
+body.easy .notice-banner { font-size: 1rem; padding: .6rem 1.1rem; border-radius: 16px; }
+
+/* ---- chat: the panel becomes a 💬 button (the phrase picker opens from it); body.show-chat reveals the log */
+body.easy #chat-panel { display: none; }
+body.easy.show-chat #chat-panel { display: flex; left: calc(var(--gap) + var(--tap) + 2.1rem); bottom: var(--gap); }
+body.easy .app-mobile-toggles { display: none !important; } /* chat = 💬 button, quests = 다음 할 일 + 스티커북 */
+.easy-chat-btn {
+  position: absolute; left: var(--gap); bottom: var(--gap); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .05rem;
+  width: calc(var(--tap) + 1.4rem); height: calc(var(--tap) + 1.4rem); border-radius: 50%; color: var(--text);
+  border: 2px solid rgba(255,255,255,.35); transition: transform .12s cubic-bezier(.34,1.56,.64,1); touch-action: manipulation;
+}
+.easy-chat-btn .emoji { font-size: 2rem; line-height: 1; }
+.easy-chat-btn .lbl { font-size: max(13px, .74rem); font-weight: 800; }
+.easy-chat-btn:active { transform: scale(.92); }
+.easy-chat-btn .badge { position: absolute; top: -.2rem; right: -.2rem; }
+body.easy.show-chat .easy-chat-btn { background: rgba(52,195,107,.45); }
+/* touch tablets / big touch screens: the joystick owns the bottom-left corner, so 💬 (and its log) sit above it
+   (phones use the top-right placement from 02-responsive.css) */
+@media (min-width: 561px) and (min-height: 521px) {
+  body.easy.is-touch .easy-chat-btn { bottom: calc(1.4rem + 10rem + .9rem); }
+  body.easy.is-touch.show-chat #chat-panel { left: var(--gap); bottom: calc(1.4rem + 10rem + .9rem + var(--tap) + 1.9rem); }
+}
+
+/* ---- bottom bar: 😊 표현하기 · 📸 사진 · 📝 일기 · 🔊 소리 */
+body.easy .bottom-bar { padding: .4rem .55rem; gap: .25rem; border-radius: 26px; }
+body.easy .bottom-bar .ico { display: none; }
+body.easy .bottom-bar > button { min-width: 6.2rem; min-height: calc(var(--tap) + .9rem); padding: .3rem .6rem; gap: .1rem; border-radius: 18px; color: var(--text); }
+body.easy .bottom-bar > button:active { transform: scale(.93); }
+body.easy .bottom-bar .bb-emo { font-size: 2.05rem; line-height: 1.05; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+body.easy .bottom-bar .lbl { display: block; font-size: max(15px, .86rem); font-weight: 800; }
+body.easy #bottom-bar [data-action=express] { order: 1; }
+body.easy #bottom-bar [data-action=photo] { order: 2; }
+body.easy #bottom-bar [data-action=journal] { order: 3; }
+body.easy #bottom-bar [data-action=sound] { order: 4; }
+body.easy #bottom-bar [data-action=sound].is-muted { opacity: .8; }
+body.easy .bottom-bar .badge { position: absolute; top: .1rem; right: .6rem; }
+
+/* ---- movement & interaction: bigger, rounder, tappable everywhere */
+/* each arrow is a full kid tap target (≥ var(--tap)); the ring hugs the 3×3 grid */
+body.easy .dpad { width: auto; height: auto; padding: 6px; grid-template: repeat(3, var(--tap)) / repeat(3, var(--tap)); }
+body.easy .dpad button { width: var(--tap); height: var(--tap); }
+body.easy .dpad button .ico { width: 2rem; height: 2rem; }
+body.easy .dpad-center { width: 2.9rem; height: 2.9rem; background: rgba(255,207,74,.35); border-color: rgba(255,207,74,.95); }
+body.easy .interact-prompt {
+  bottom: 8.6rem; min-height: calc(var(--tap) + .6rem); padding: .45rem 1.4rem .45rem .5rem; gap: .65rem; font-size: 1.2rem; font-weight: 900;
+  background: linear-gradient(180deg, #fff6d1, #ffd34f); color: #2b1d02; border: 3px solid #fff;
+  box-shadow: 0 6px 0 rgba(150,100,0,.55), 0 0 0 6px rgba(255,207,74,.25), 0 14px 30px rgba(0,0,0,.4);
+  animation: popIn .18s var(--ease), easyPromptBob 1.6s ease-in-out .2s infinite;
+}
+body.easy .interact-prompt kbd { display: none; }
+body.easy .interact-prompt .ip-ico { display: grid; place-items: center; width: calc(var(--tap) - .2rem); height: calc(var(--tap) - .2rem); border-radius: 50%; background: #fff; font-size: 1.8rem; box-shadow: inset 0 -3px 0 rgba(0,0,0,.1); }
+body.easy .interact-prompt .ip-ico:empty { display: none; }
+body.easy .interact-prompt:active { transform: translateX(-50%) translateY(4px) scale(.97); }
+@keyframes easyPromptBob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -5px; } }
+body.reduce-motion.easy .interact-prompt { animation: none; }
+body.easy .joystick { width: 10rem; height: 10rem; border-width: 3px; }
+body.easy .joystick-knob { width: 4.2rem; height: 4.2rem; margin: -2.1rem 0 0 -2.1rem; background: radial-gradient(circle at 40% 35%, #fff, #ffe08a); }
+body.easy .mobile-buttons { width: 10.8rem; height: 10.8rem; }
+body.easy .mobile-buttons button .emoji { font-size: 2rem; }
+body.easy .mb-interact { width: 5.6rem; height: 5.6rem; background: rgba(255,207,74,.55) !important; }
+body.easy .mb-jump { right: 6.1rem; bottom: .2rem; width: 4.4rem; height: 4.4rem; }
+body.easy .mb-run { right: .6rem; bottom: 6.1rem; width: 4.4rem; height: 4.4rem; }
+body.easy .mb-photo { display: none; } /* 📸 lives in the bottom bar */
+body.easy .mobile-buttons button small { font-size: max(12px, .72rem); font-weight: 800; }

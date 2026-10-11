@@ -88,6 +88,28 @@
     s.coin = (s.coin || 0) + (reward.coin || 0);
     G.dirty('reward');
   }
+  // ---------------------------------------------------------------- 쉬운 모드 helpers
+  const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
+  const kidSay = (text, opts) => { try { G.easy?.say?.(text, opts || { priority: 1 }); } catch (e) { /* voice optional */ } };
+  const kidSpeakable = (el, fn) => { try { G.easy?.speakable?.(el, fn); } catch (e) { /* optional */ } };
+  /** kid slides of a content (null when the content has none / bad data) */
+  function kidOf(e) { const k = e?.kid; return k && Array.isArray(k.slides) && k.slides.length ? k : null; }
+  /** kid quiz of a quiz: {q, choices:[{e,t}], answer} or {q, ox:true, answer:bool} (null when missing / invalid) */
+  function kidQuizOf(q) {
+    const k = q?.kid;
+    if (!k || typeof k.q !== 'string') return null;
+    if (k.ox) return typeof k.answer === 'boolean' ? k : null;
+    return Array.isArray(k.choices) && k.choices.length >= 2 && Number.isInteger(k.answer) && k.choices[k.answer] ? k : null;
+  }
+  function kidChoicesOf(k) {
+    if (k.ox) return [{ e: '⭕', t: '맞아요', ok: k.answer === true, c: '#55d187' }, { e: '❌', t: '아니에요', ok: k.answer === false, c: '#ff8a5c' }];
+    const colors = ['#4fb3ff', '#ffc93c', '#b48bff'];
+    return k.choices.slice(0, 3).map((c, i) => ({ e: c.e || '⭐', t: c.t || '', ok: i === k.answer, c: colors[i % colors.length] }));
+  }
+  function kidTitle(e) { return kidOf(e)?.title || e?.title || '교육'; }
+  function mascotSvg(mood, size) {
+    try { const v = G.mascot?.svg?.(mood, size); return typeof v === 'string' && v.trim().startsWith('<svg') ? v : ''; } catch (e) { return ''; }
+  }
 
   // =============================================================================================
   // procedural 3D models for the education viewer
@@ -1329,10 +1351,22 @@ ${fl}
       const choose = (i) => () => {
         if (top() !== 'edu-quiz' || !this._quiz) return false;
         const q = this._quiz;
+        if (q.kid) { if (q.phase !== 'right') this._kidPick(q, i); return true; }
         if (q.phase === 'ask' || q.phase === 'wrong') { if (q.phase === 'wrong') { q.phase = 'ask'; q.picked = -1; } this._pick(q, i); return true; }
         return false;
       };
       [['Digit1', 0], ['Digit2', 1], ['Digit3', 2], ['Digit4', 3], ['Numpad1', 0], ['Numpad2', 1], ['Numpad3', 2], ['Numpad4', 3]].forEach(([code, i]) => G.input?.onKey?.(code, choose(i), { allowInModal: true }));
+      // 쉬운 모드 switched while one of my windows is on top: reopen it in the other style
+      on('easy:changed', () => {
+        const t = G.ui.modal.top?.();
+        if (!t || !G.state) return;
+        const kid = kidOn();
+        const c = this._edu, q = this._quiz;
+        if (t.id === 'edu-content' && c && c.m === t && !!c.kid !== (kid && !!kidOf(c.e))) { t.close(); this.open(c.eduId); }
+        else if (t.id === 'edu-quiz' && q && q.m === t && !!q.kid !== (kid && !!kidQuizOf(q.q))) { t.close(); this.openQuiz(q.quizId); }
+        else if (t.id === 'edu-library' && this._lib && this._lib.m === t && !!this._lib.kid !== kid) { t.close(); this.openLibrary(); }
+        else if (t.id === 'edu-hall' && this._hall && this._hall.m === t && !!this._hall.kid !== kid) { t.close(); this.openHallGuide(); }
+      });
       G.log.info('UI', `education: ${eduIds().length} contents, ${Object.keys(QZ()).length} quizzes, ${this._interactIds.size} interactables`);
     },
 
@@ -1377,6 +1411,7 @@ ${fl}
         G.ui.toast('교육 콘텐츠를 찾을 수 없어요.', { type: 'warn' });
         return null;
       }
+      if (kidOn() && kidOf(e)) return this._openKid(eduId, opts);
       const n = e.pages.length;
       const seen = this.viewedPages(eduId);
       const ctx = {
@@ -1422,6 +1457,7 @@ ${fl}
     },
     _go(ctx, page) {
       if (!ctx || ctx.m?.closed) return;
+      if (ctx.kid) { this._kidGo(ctx, page); return; }
       const n = ctx.n;
       page = clamp(page, 0, n - 1);
       if (page > ctx.maxSeen + 1 && !this.isCompleted(ctx.eduId)) page = ctx.maxSeen + 1;
@@ -1454,8 +1490,11 @@ ${fl}
       G.activity('edu', `「${e.title}」 학습 완료`, { eduId, completed: true });
       G.log.info('UI', `education completed: ${eduId}`);
       G.bus.emit('edu:completed', { eduId });
-      G.ui.toast(`「${e.title}」 학습 완료! 교육 포인트 +${COMPLETE_EDU_POINTS}`, { type: 'success', emoji: '📖', sound: false });
-      G.sfx('reward');
+      if (kidOn() && G.easy?.celebrate) G.easy.celebrate('다 배웠어요!', { emoji: e.icon || '📖', say: `${kidTitle(e)}, 다 배웠어요! 최고예요!`, sound: 'reward', duration: 1800 });
+      else {
+        G.ui.toast(`「${e.title}」 학습 완료! 교육 포인트 +${COMPLETE_EDU_POINTS}`, { type: 'success', emoji: '📖', sound: false });
+        G.sfx('reward');
+      }
       return true;
     },
     _renderPage(ctx, dir) {
@@ -1530,6 +1569,7 @@ ${fl}
       const q = QZ()[id];
       if (!q) { G.ui.toast('퀴즈를 찾을 수 없어요.', { type: 'warn' }); return null; }
       const e = EDU()[q.edu];
+      if (kidOn() && kidQuizOf(q)) return this._openKidQuiz(id, q, e);
       const head = h('div', { class: 'edu-head-extra' });
       if (e) head.innerHTML = catChip(e);
       const ctx = { quizId: id, q, e, phase: 'ask', picked: -1, reward: null };
@@ -1604,7 +1644,7 @@ ${fl}
       if (r.correct) confetti(ctx.m.el);
     },
     /** answer a quiz: returns {correct, rewarded, reward, attempts} (null for unknown quiz / no state) */
-    answer(quizId, index) {
+    answer(quizId, index, opts = {}) {
       const q = QZ()[quizId];
       const S = est();
       if (!q || !S) return null;
@@ -1618,19 +1658,22 @@ ${fl}
       G.dirty('quiz');
       G.bus.emit('quiz:answered', { quizId, correct, first });
       if (correct || rec.attempts === 1) G.activity('quiz', `퀴즈 ${correct ? '정답' : '도전'}: ${q.question}`, { quizId, eduId: q.edu, correct });
-      G.sfx(correct ? 'correct' : 'wrong');
+      // opts.quiet: the caller shows its own feedback (쉬운 모드 quiz screen) — state, events and rewards are identical
+      const quiet = !!opts.quiet;
+      if (!quiet) G.sfx(correct ? 'correct' : 'wrong');
       const reward = q.reward || { exp: 100, edu: 10 };
       if (first) {
         grantReward(reward, `quiz:${quizId}`);
-        G.ui.toast(`정답! EXP +${U.fmt(reward.exp || 0)} · 교육 포인트 +${U.fmt(reward.edu || 0)}`, { type: 'reward', emoji: '🎉', sound: false });
-      } else if (correct) {
-        G.ui.toast('정답이에요! (보상은 처음 맞혔을 때 한 번만 받아요)', { type: 'success', emoji: '✅', sound: false });
+        if (!quiet) G.ui.toast(kidOn() ? '정답! 선물을 받았어요 🎁' : `정답! EXP +${U.fmt(reward.exp || 0)} · 교육 포인트 +${U.fmt(reward.edu || 0)}`, { type: 'reward', emoji: '🎉', sound: false });
+      } else if (correct && !quiet) {
+        G.ui.toast(kidOn() ? '정답이에요! 또 맞혔어요 👍' : '정답이에요! (보상은 처음 맞혔을 때 한 번만 받아요)', { type: 'success', emoji: '✅', sound: false });
       }
       return { correct, rewarded: first, reward: first ? reward : null, attempts: rec.attempts };
     },
 
     // ------------------------------------------------------------ library
     openLibrary(opts = {}) {
+      if (kidOn()) return this._openKidLibrary();
       const ctx = { tab: opts.tab || 'all' };
       const m = G.ui.modal.open({
         id: 'edu-library', size: 'xl', className: 'edu-lib', title: '배움터 · 교육 콘텐츠', icon: '📚',
@@ -1657,6 +1700,7 @@ ${fl}
     },
     _renderLibrary(ctx) {
       if (!ctx?.m || ctx.m.closed) return;
+      if (ctx.kid) { this._renderKidLibrary(ctx); return; }
       const st = this.stats();
       const ids = eduIds();
       const cats = [];
@@ -1711,6 +1755,7 @@ ${fl}
     },
     /** wooden-board style info modal. opts: {sign, links:[{label, edu|fn}]} */
     openInfo(title, text, opts = {}) {
+      if (kidOn()) return this._kidInfo(title, text, opts);
       const s = opts.sign || null;
       const zone = s && G.world?.zoneAt ? G.world.zoneAt(s.x, s.z) : null;
       const actions = [];
@@ -1749,6 +1794,7 @@ ${fl}
       const e = EDU()[x.edu] || null;
       const st = { viewer: null };
       const desc = info.text || (item?.desc || '').replace(/\s*\(게임 체험 결과물\)\s*$/, '');
+      if (kidOn()) return this._kidExhibit(x, info, item, e, st, desc);
       const facts = (info.facts || []).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
       const box = visualBox('exh-visual');
       const right = h('div', { class: 'exh-info' });
@@ -1775,10 +1821,14 @@ ${fl}
     openHallGuide() {
       const H = G.data.hallGuide;
       if (!H) return null;
-      const ctx = { sel: H.floors.length - 1 };
+      const kid = kidOn();
+      const ctx = { sel: H.floors.length - 1, kid };
       const m = G.ui.modal.open({
-        id: 'edu-hall', size: 'xl', className: 'hall-modal', title: H.title || '체험관 안내', icon: '🏛️',
-        actions: [{ label: '배움터 열기', class: 'btn-soft', icon: 'book', onClick: () => { setTimeout(() => this.openLibrary(), 0); } }, { label: '확인', class: 'btn-primary' }],
+        id: 'edu-hall', size: kid ? 'md' : 'xl', className: kid ? 'hall-modal hall-kid' : 'hall-modal', title: H.title || '체험관 안내', icon: '🏛️',
+        say: kid ? H.kidIntro || H.title : undefined,
+        actions: kid
+          ? [{ label: '📚 배움터', class: 'btn-soft', onClick: () => { setTimeout(() => this.openLibrary(), 0); } }, { label: '👍 알았어요', class: 'btn-primary' }]
+          : [{ label: '배움터 열기', class: 'btn-soft', icon: 'book', onClick: () => { setTimeout(() => this.openLibrary(), 0); } }, { label: '확인', class: 'btn-primary' }],
         onClose: () => { if (this._hall === ctx) this._hall = null; },
       });
       ctx.m = m;
@@ -1787,12 +1837,16 @@ ${fl}
         const b = ev.target.closest('[data-edu-open]');
         if (b) { this.open(b.dataset.eduOpen); return; }
         const f = ev.target.closest('[data-i]');
-        if (f) { ctx.sel = +f.dataset.i; this._selectFloor(ctx, true); }
+        if (f) {
+          ctx.sel = +f.dataset.i; this._selectFloor(ctx, true);
+          const fl = (H.floors || [])[ctx.sel];
+          if (ctx.kid && fl) kidSay(`${fl.name}. ${fl.kid || fl.desc}`, { priority: 1 });
+        }
       });
       m.body.addEventListener('keydown', (ev) => {
         if (ev.key !== 'Enter' && ev.key !== ' ') return;
-        const f = ev.target.closest('.hall-fl[data-i]');
-        if (f) { ev.preventDefault(); ctx.sel = +f.dataset.i; this._selectFloor(ctx, true); }
+        const f = ev.target.closest('.hall-fl[data-i], .hk-floor[data-i]');
+        if (f && ev.target === f) { ev.preventDefault(); ctx.sel = +f.dataset.i; this._selectFloor(ctx, true); }
       });
       this._renderHall(ctx);
       return m;
@@ -1800,6 +1854,7 @@ ${fl}
     _renderHall(ctx) {
       const H = G.data.hallGuide;
       if (!H || !ctx?.m || ctx.m.closed) return;
+      if (ctx.kid) { this._renderKidHall(ctx, H); return; }
       const floors = H.floors || [];
       const cards = floors.map((f, i) => `<article class="hall-floor" data-i="${i}" style="--c:${esc(f.color || '#f4c54a')}">
           <div class="hf-badge">${esc(f.floor)}</div>
@@ -1816,6 +1871,333 @@ ${fl}
       const body = ctx.m.body;
       body.querySelectorAll('[data-i]').forEach((el) => el.classList.toggle('on', +el.dataset.i === ctx.sel));
       if (scroll) body.querySelector(`.hall-floor[data-i="${ctx.sel}"]`)?.scrollIntoView({ block: 'nearest', behavior: G.settings?.reduceMotion ? 'auto' : 'smooth' });
+    },
+
+    // ============================================================ 쉬운 모드 (CONTRACT §12)
+    // ------------------------------------------------------------ 3 big picture slides, read aloud
+    _openKid(eduId, opts = {}) {
+      const e = EDU()[eduId];
+      const K = kidOf(e);
+      const n = K.slides.length;
+      const done = this.isCompleted(eduId);
+      const ctx = { eduId, e, K, kid: true, page: -1, n, maxSeen: done ? n - 1 : -1, vis: { viewer: null }, justCompleted: false };
+      const start = opts.page != null && Number.isFinite(+opts.page) ? clamp(Math.floor(+opts.page), 0, n - 1) : 0;
+      const m = G.ui.modal.open({
+        id: 'edu-content', size: 'md', className: 'edu-modal edu-kid', title: K.title || e.title, icon: e.icon || '📖',
+        say: K.title || e.title,
+        onClose: () => {
+          ctx.vis.viewer?.dispose(); ctx.vis.viewer = null;
+          if (this._edu === ctx) this._edu = null;
+          setTimeout(() => this._refreshOpen(), 0);
+        },
+      });
+      ctx.m = m;
+      ctx.box = visualBox('ek-visual');
+      const hint = ctx.box.querySelector('.edu-vis-hint');
+      if (hint) { hint.textContent = ''; hint.append(h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🖐️'), ' 돌려 봐요!'); }
+      ctx.dots = h('div', { class: 'ek-dots', 'aria-hidden': 'true' });
+      ctx.sayT = h('span', { class: 'ek-text-t' });
+      ctx.say = h('p', { class: 'ek-text', 'aria-live': 'polite' }, ctx.sayT);
+      ctx.done = h('div', { class: 'ek-done', hidden: true });
+      ctx.btns = h('div', { class: 'ek-btns' });
+      m.body.classList.add('ek-body');
+      m.body.append(ctx.box, ctx.dots, ctx.say, ctx.done, ctx.btns);
+      kidSpeakable(ctx.say, () => ctx.sayT.textContent);
+      m.setActions([]);
+      this._edu = ctx;
+      this._logView(eduId, e);
+      this._go(ctx, start);
+      return m;
+    },
+    _kidGo(ctx, page) {
+      const n = ctx.n;
+      page = clamp(Math.floor(Number(page) || 0), 0, n - 1);
+      if (page === ctx.page) return;
+      const dir = page > ctx.page ? 1 : -1;
+      const first = ctx.page === -1;
+      ctx.page = page;
+      ctx.maxSeen = Math.max(ctx.maxSeen, page);
+      const slide = ctx.K.slides[page];
+      // the slide stands for one of the grown-up pages: record that page as seen (same state shape as normal mode)
+      const src = Number.isInteger(slide?.vis) && slide.vis >= 0 && slide.vis < ctx.e.pages.length ? slide.vis : Math.min(page, ctx.e.pages.length - 1);
+      const S = est();
+      if (S) {
+        const v = S.viewed[ctx.eduId] && typeof S.viewed[ctx.eduId] === 'object' ? S.viewed[ctx.eduId] : (S.viewed[ctx.eduId] = { at: G.time.now(), pages: [] });
+        if (!Array.isArray(v.pages)) v.pages = [];
+        if (!v.pages.includes(src)) v.pages.push(src);
+        v.last = src; v.lastAt = G.time.now();
+        G.dirty('edu');
+      }
+      G.bus.emit('edu:viewed', { eduId: ctx.eduId, page: src });
+      if (!first) G.sfx('page');
+      if (page === n - 1 && !this.isCompleted(ctx.eduId)) ctx.justCompleted = this._complete(ctx.eduId);
+      this._renderKidSlide(ctx, dir, first);
+    },
+    /** picture for a kid slide: a grown-up page's visual (3D model / illustration), a picture row or one big emoji */
+    _kidVisual(e, slide) {
+      if (Number.isInteger(slide?.vis) && e.pages[slide.vis]?.visual) return Object.assign({}, e.pages[slide.vis].visual, { caption: '' });
+      if (Array.isArray(slide?.steps) && slide.steps.length) return { type: 'steps', items: slide.steps.map(([icon, label]) => ({ icon, label })) };
+      return { type: 'emoji', emoji: slide?.emoji || e.icon || '📖' };
+    },
+    _renderKidSlide(ctx, dir, first) {
+      const { e, K, page, n } = ctx;
+      const slide = K.slides[page] || {};
+      const last = page === n - 1;
+      renderVisual(ctx.box, this._kidVisual(e, slide), ctx.vis, e.icon);
+      ctx.box.classList.remove('edu-swap'); void ctx.box.offsetWidth; ctx.box.classList.add('edu-swap');
+      ctx.dots.textContent = '';
+      for (let i = 0; i < n; i++) ctx.dots.appendChild(h('i', { class: i === page ? 'on' : i < page || i <= ctx.maxSeen ? 'seen' : '' }));
+      ctx.sayT.textContent = String(slide.text || '');
+      ctx.say.classList.remove('ek-in', 'ek-back'); void ctx.say.offsetWidth; ctx.say.classList.add(dir < 0 ? 'ek-back' : 'ek-in');
+      // last slide: "다 배웠어요" ribbon
+      ctx.done.hidden = !last;
+      if (last) {
+        ctx.done.textContent = '';
+        ctx.done.append(h('span', { class: 'emoji', 'aria-hidden': 'true' }, ctx.justCompleted ? '🎉' : '✅'), h('b', null, ctx.justCompleted ? '다 배웠어요!' : '다 배운 이야기예요'));
+      }
+      // big buttons
+      ctx.btns.textContent = '';
+      const big = (cls, emoji, label, fn) => {
+        const b = h('button', { type: 'button', class: `easy-big-btn ${cls}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', null, label));
+        b.addEventListener('click', fn);
+        ctx.btns.appendChild(b);
+        return b;
+      };
+      if (page > 0) big('ek-prev', '⬅️', '앞으로', () => this._go(ctx, ctx.page - 1));
+      if (!last) big('easy-btn-yes', '👉', '다음', () => this._go(ctx, ctx.page + 1));
+      else {
+        const qid = this.pickQuiz(ctx.eduId);
+        if (qid) big('easy-btn-yes ek-quiz', '✏️', '퀴즈 놀이', () => { ctx.m.close(); this.openQuiz(qid); });
+        big('ek-more', '📚', '다른 이야기', () => { ctx.m.close(); this.openLibrary(); });
+      }
+      // read the slide aloud (the first one waits for the title the window reads)
+      kidSay(String(slide.text || ''), { interrupt: !first, priority: 1 });
+    },
+
+    // ------------------------------------------------------------ kid quiz: 2–3 big pictures or ⭕ / ❌
+    _openKidQuiz(id, q, e) {
+      const K = kidQuizOf(q);
+      const ctx = { quizId: id, q, e, K, kid: true, phase: 'ask', wrong: new Set(), picked: -1, reward: null };
+      const m = G.ui.modal.open({
+        id: 'edu-quiz', size: 'md', className: 'quiz-modal quiz-kid', title: '퀴즈 놀이', icon: '✏️', say: K.q,
+        onClose: () => { if (this._quiz === ctx) this._quiz = null; setTimeout(() => this._refreshOpen(), 0); },
+      });
+      ctx.m = m;
+      m.body.classList.add('kq-body');
+      m.setActions([]);
+      this._quiz = ctx;
+      this._renderKidQuiz(ctx);
+      return m;
+    },
+    _renderKidQuiz(ctx) {
+      const { K, m } = ctx;
+      const body = m.body;
+      body.textContent = '';
+      const right = ctx.phase === 'right';
+      const mood = right ? 'cheer' : ctx.phase === 'wrong' ? 'think' : 'happy';
+      const svg = mascotSvg(mood, 84);
+      const face = svg ? h('span', { class: 'kq-face', 'aria-hidden': 'true', html: svg }) : h('span', { class: 'kq-face emoji', 'aria-hidden': 'true' }, right ? '🥳' : '🤔');
+      const qT = h('span', { class: 'kq-q-t' }, K.q);
+      const qEl = h('p', { class: 'kq-q' }, qT);
+      body.appendChild(h('div', { class: 'kq-head' }, face, h('div', { class: 'kq-bubble' }, qEl)));
+      kidSpeakable(qEl, () => qT.textContent);
+      const list = kidChoicesOf(K);
+      const grid = h('div', { class: `kq-choices n${list.length}${K.ox ? ' ox' : ''}`, role: 'group', 'aria-label': '골라요' });
+      list.forEach((c, i) => {
+        let cls = 'easy-tile kq-choice';
+        if (right) cls += c.ok ? ' is-right' : ' is-dim';
+        else if (ctx.wrong.has(i)) cls += ' is-wrong';
+        const b = h('button', { type: 'button', class: cls, dataset: { i: String(i) }, 'aria-disabled': right || ctx.wrong.has(i) ? 'true' : null },
+          h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, c.e),
+          h('span', { class: 'et-label' }, c.t),
+          right && c.ok ? h('span', { class: 'et-badge' }, '⭕') : ctx.wrong.has(i) ? h('span', { class: 'et-badge' }, '❌') : null);
+        b.style.setProperty('--tile', c.c);
+        b.style.setProperty('--i', String(i));
+        b.__easySpeak = { btn: null, text: c.t };
+        b.addEventListener('click', () => this._kidPick(ctx, i, b));
+        grid.appendChild(b);
+      });
+      body.appendChild(grid);
+      if (ctx.phase === 'wrong') {
+        body.appendChild(h('div', { class: 'kq-msg hint', role: 'status' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '💡'), h('span', null, `괜찮아요! 힌트: ${K.hint || '다시 한번 생각해 봐요.'}`)));
+      } else if (right) {
+        const msg = h('div', { class: 'kq-msg ok', role: 'status' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🎉'), h('span', null, `정답이에요! ${K.why || ''}`));
+        body.appendChild(msg);
+        body.appendChild(ctx.reward
+          ? h('div', { class: 'kq-gift' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🎁'), h('b', null, '선물을 받았어요!'), h('span', { class: 'chip chip-gold' }, `✨ +${U.fmt(ctx.reward.exp || 0)}`), h('span', { class: 'chip chip-blue' }, `📘 +${U.fmt(ctx.reward.edu || 0)}`))
+          : h('div', { class: 'kq-gift again' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '👍'), h('b', null, '또 맞혔어요! 똑똑해요!')));
+      }
+      // buttons
+      const btns = h('div', { class: 'ek-btns' });
+      const big = (cls, emoji, label, fn) => {
+        const b = h('button', { type: 'button', class: `easy-big-btn ${cls}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, emoji), h('span', null, label));
+        b.addEventListener('click', fn);
+        btns.appendChild(b);
+        return b;
+      };
+      if (right) {
+        const next = this.pickQuiz(ctx.q.edu, ctx.quizId);
+        const nextOpen = next && !this.isQuizSolved(next) ? next : this.pickQuiz(null, ctx.quizId);
+        if (nextOpen) big('easy-btn-yes', '👉', '다음 퀴즈', () => { ctx.m.close(); this.openQuiz(nextOpen); });
+        big(nextOpen ? 'ek-more' : 'easy-btn-yes', '👍', '좋아요', () => ctx.m.close());
+      } else if (ctx.e && kidOf(ctx.e)) {
+        big('ek-more', '📖', '이야기 보기', () => this._toContent(ctx));
+      }
+      if (btns.childNodes.length) body.appendChild(btns);
+    },
+    _kidPick(ctx, i, btn) {
+      if (!ctx || ctx.m.closed || ctx.phase === 'right') return;
+      const list = kidChoicesOf(ctx.K);
+      const c = list[i];
+      if (!c) return;
+      if (ctx.wrong.has(i)) { kidSay('그건 아니었어요. 다른 그림을 골라 봐요!', { priority: 1 }); return; }
+      if (c.ok) {
+        const r = this.answer(ctx.quizId, ctx.q.answer, { quiet: true });
+        if (!r) return;
+        ctx.phase = 'right'; ctx.picked = i; ctx.reward = r.rewarded ? r.reward : null;
+        this._renderKidQuiz(ctx);
+        confetti(ctx.m.el);
+        const why = String(ctx.K.why || '');
+        if (G.easy?.celebrate) G.easy.celebrate('정답이에요!', { emoji: '🎉', say: `정답이에요! ${why}`, sound: 'correct', duration: 1500 });
+        else G.sfx('correct');
+        return;
+      }
+      // a wrong picture is a recorded try (same state as a wrong answer in the grown-up quiz), then a gentle hint
+      const n = Array.isArray(ctx.q.choices) && ctx.q.choices.length > 1 ? ctx.q.choices.length : 2;
+      this.answer(ctx.quizId, (ctx.q.answer + 1) % n, { quiet: true });
+      ctx.wrong.add(i);
+      ctx.phase = 'wrong';
+      this._renderKidQuiz(ctx);
+      G.sfx('notify');
+      const tile = ctx.m.body.querySelector(`.kq-choice[data-i="${i}"]`) || btn;
+      if (tile) { tile.classList.remove('kq-shake'); void tile.offsetWidth; tile.classList.add('kq-shake'); }
+      kidSay(`괜찮아요! 힌트를 줄게요. ${ctx.K.hint || '다시 한번 생각해 봐요.'}`, { priority: 1 });
+    },
+
+    // ------------------------------------------------------------ kid library: picture tiles + quiz tile
+    _openKidLibrary() {
+      const ctx = { kid: true };
+      const m = G.ui.modal.open({
+        id: 'edu-library', size: 'lg', className: 'edu-lib edu-lib-kid', title: '배움터', icon: '📚', say: '무엇을 배워 볼까요? 그림을 골라요.',
+        onClose: () => { if (this._lib === ctx) this._lib = null; },
+      });
+      ctx.m = m;
+      this._lib = ctx;
+      m.setActions([]);
+      m.body.addEventListener('click', (ev) => {
+        const b = ev.target.closest('[data-kl]');
+        if (!b || !m.body.contains(b)) return;
+        const id = b.dataset.kl;
+        if (id === '__quiz') {
+          const q = this.pickQuiz(null) || Object.keys(QZ())[0];
+          if (!this.pickQuiz(null)) kidSay('퀴즈를 모두 맞혔어요! 다시 풀어 볼까요?', { priority: 1 });
+          if (q) this.openQuiz(q);
+        } else if (EDU()[id]) this.open(id);
+      });
+      this._renderLibrary(ctx);
+      return m;
+    },
+    _renderKidLibrary(ctx) {
+      const body = ctx.m.body;
+      const st = this.stats();
+      body.textContent = '';
+      body.appendChild(h('div', { class: 'kl-stats' },
+        h('span', { class: 'kl-stat' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📖'), h('b', null, `${st.completed} / ${st.contents}`), h('span', null, '다 배웠어요')),
+        h('span', { class: 'kl-stat' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⭐'), h('b', null, `${st.solved} / ${st.quizzes}`), h('span', null, '퀴즈 정답'))));
+      const grid = h('div', { class: 'easy-pick kl-grid', role: 'list' });
+      grid.style.setProperty('--cols', '4'); grid.style.setProperty('--cols-s', '3'); grid.style.setProperty('--cols-xs', '2');
+      eduIds().forEach((id, i) => {
+        const e = EDU()[id];
+        const K = kidOf(e);
+        const done = this.isCompleted(id);
+        const qids = quizIdsOf(id);
+        const solved = qids.filter((q) => this.isQuizSolved(q)).length;
+        const stars = qids.length ? '⭐'.repeat(solved) + '☆'.repeat(Math.max(0, qids.length - solved)) : '';
+        const b = h('button', { type: 'button', class: `easy-tile kl-tile${done ? ' is-done' : ''}`, role: 'listitem', dataset: { kl: id }, 'aria-label': `${kidTitle(e)}${done ? ', 다 배웠어요' : ''}` },
+          h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, e.icon || '📖'),
+          h('span', { class: 'et-label' }, kidTitle(e)),
+          stars ? h('span', { class: 'et-sub kl-stars', 'aria-hidden': 'true' }, stars) : null,
+          done ? h('span', { class: 'et-badge' }, '✅') : null);
+        b.style.setProperty('--tile', catOf(e).color);
+        b.style.setProperty('--i', String(i));
+        b.__easySpeak = { btn: null, text: `${kidTitle(e)}. ${K?.summary || e.summary || ''}` };
+        grid.appendChild(b);
+      });
+      const open = this.pickQuiz(null);
+      const qb = h('button', { type: 'button', class: 'easy-tile kl-tile kl-quiz', role: 'listitem', dataset: { kl: '__quiz' }, 'aria-label': '퀴즈 놀이' },
+        h('span', { class: 'et-emoji emoji', 'aria-hidden': 'true' }, '✏️'),
+        h('span', { class: 'et-label' }, '퀴즈 놀이'),
+        h('span', { class: 'et-sub' }, open ? `⭐ ${st.solved} / ${st.quizzes}` : '🏆 다 맞혔어요!'));
+      qb.style.setProperty('--tile', '#ffc93c');
+      qb.__easySpeak = { btn: null, text: '퀴즈 놀이. 그림을 골라 퀴즈를 맞혀요.' };
+      grid.appendChild(qb);
+      body.appendChild(grid);
+    },
+
+    // ------------------------------------------------------------ kid sign / exhibit / hall
+    _kidInfo(title, text, opts = {}) {
+      const s = opts.sign || null;
+      const link = s ? SIGN_LINKS[s.id] : null;
+      const actions = [];
+      if (link === '@library') actions.push({ label: '📚 배움터', class: 'btn-soft', onClick: () => { setTimeout(() => this.openLibrary(), 0); } });
+      else if (link === '@hall') actions.push({ label: '🏛️ 체험관 안내', class: 'btn-soft', onClick: () => { setTimeout(() => this.openHallGuide(), 0); } });
+      else if (link && EDU()[link]) actions.push({ label: `${EDU()[link].icon || '📖'} 배워 볼까요?`, class: 'btn-soft', onClick: () => { setTimeout(() => this.open(link), 0); } });
+      for (const l of opts.links || []) actions.push({ label: l.label, class: 'btn-soft', onClick: () => { setTimeout(() => (l.edu ? this.open(l.edu) : l.fn?.()), 0); } });
+      actions.push({ label: '👍 알았어요', class: 'btn-primary' });
+      const t = String(title || '안내'), x = String(text || '');
+      return G.ui.modal.open({
+        id: 'edu-sign', size: 'sm', className: 'sign-modal sign-kid', title: '안내판', icon: '🪧', say: `${t}. ${x}`,
+        body: (b) => {
+          const pT = h('span', null, x);
+          const p = h('p', { class: 'sk-text' }, pT);
+          b.appendChild(h('div', { class: 'sign-board' }, h('div', { class: 'sb-nail l' }), h('div', { class: 'sb-nail r' }), h('h3', null, t), p));
+          kidSpeakable(p, () => `${t}. ${pT.textContent}`);
+        },
+        actions,
+      });
+    },
+    _kidExhibit(x, info, item, e, st, desc) {
+      const name = x.title || item?.name || '전시';
+      const line = String(info.kid || desc || '');
+      const box = visualBox('exh-visual');
+      const hint = box.querySelector('.edu-vis-hint');
+      if (hint) { hint.textContent = ''; hint.append(h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🖐️'), ' 돌려 봐요!'); }
+      const m = G.ui.modal.open({
+        id: 'edu-exhibit', size: 'md', className: 'exhibit-modal exh-kid', title: name, icon: item?.icon || '🍲', say: `${name}. ${line}`,
+        body: (b) => {
+          const pT = h('span', null, line);
+          const p = h('p', { class: 'xk-text' }, pT);
+          b.append(box, h('div', { class: 'xk-name' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, item?.icon || '🍲'), h('b', null, name)), p);
+          kidSpeakable(p, () => pT.textContent);
+        },
+        actions: [
+          ...(e ? [{ label: '📖 더 알아보기', class: 'btn-soft', onClick: () => { setTimeout(() => this.open(x.edu), 0); } }] : []),
+          { label: '👍 좋아요', class: 'btn-primary' },
+        ],
+        onClose: () => { st.viewer?.dispose(); st.viewer = null; },
+      });
+      renderVisual(box, info.model ? { type: 'model', model: info.model } : { type: 'emoji', emoji: item?.icon || '🍲' }, st, item?.icon);
+      G.activity('exhibit', `「${name}」 전시 관람`, { exhibitId: x.id, eduId: x.edu });
+      return m;
+    },
+    _renderKidHall(ctx, H) {
+      const body = ctx.m.body;
+      body.textContent = '';
+      body.appendChild(h('p', { class: 'hk-intro' }, H.kidIntro || H.intro || ''));
+      const list = h('div', { class: 'hk-floors' });
+      (H.floors || []).forEach((f, i) => {
+        const edus = (f.edu || []).filter((id) => EDU()[id]);
+        list.appendChild(h('article', { class: 'hk-floor', dataset: { i: String(i) }, role: 'button', tabindex: '0', 'aria-label': `${f.floor} ${f.name}` },
+          h('div', { class: 'hk-badge' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, f.icon || '🏛️'), h('b', null, f.floor)),
+          h('div', { class: 'hk-body' },
+            h('b', { class: 'hk-name' }, f.name),
+            h('p', { class: 'hk-text' }, f.kid || f.desc || ''),
+            h('div', { class: 'hk-edus' }, edus.map((id) => h('button', { type: 'button', class: `hk-edu${this.isCompleted(id) ? ' done' : ''}`, dataset: { eduOpen: id } },
+              h('span', { class: 'emoji', 'aria-hidden': 'true' }, EDU()[id].icon || '📖'), h('span', null, kidTitle(EDU()[id])), this.isCompleted(id) ? h('span', { class: 'hk-ok', 'aria-hidden': 'true' }, '✅') : null))))));
+        list.lastChild.style.setProperty('--c', /^#[0-9a-f]{3,8}$/i.test(f.color || '') ? f.color : '#f4c54a');
+      });
+      body.appendChild(list);
+      this._selectFloor(ctx, false);
     },
 
     // ------------------------------------------------------------ world interactables
@@ -1837,18 +2219,18 @@ ${fl}
         return cut >= 4 ? t.slice(0, cut) : t.slice(0, n - 1) + '…';
       };
       for (const s of lay.signs || []) {
-        reg({ id: s.id, kind: 'sign', label: `안내판 읽기 · ${short(s.title)}`, radius: 2.9, onInteract: () => this.readSign(s.id) }, s.x, s.z, 1.3);
+        reg({ id: s.id, kind: 'sign', label: `안내판 읽기 · ${short(s.title)}`, kidLabel: '안내판 보기', emoji: '🪧', radius: 2.9, onInteract: () => this.readSign(s.id) }, s.x, s.z, 1.3);
       }
       for (const k of lay.kiosks || []) {
-        reg({ id: k.id, kind: 'kiosk', label: `키오스크 보기 · ${short(EDU()[k.edu]?.title || k.title)}`, radius: 2.6, onInteract: () => this.open(EDU()[k.edu] ? k.edu : 'EDU_FERMENT') }, k.x, k.z, 1.3);
+        reg({ id: k.id, kind: 'kiosk', label: `키오스크 보기 · ${short(EDU()[k.edu]?.title || k.title)}`, kidLabel: '이야기 듣기', emoji: EDU()[k.edu]?.icon || '📺', radius: 2.6, onInteract: () => this.open(EDU()[k.edu] ? k.edu : 'EDU_FERMENT') }, k.x, k.z, 1.3);
       }
       for (const x of lay.exhibits || []) {
-        reg({ id: x.id, kind: 'exhibit', label: `전시 살펴보기 · ${short(x.title)}`, radius: 2.4, onInteract: () => this.openExhibit(x.id) }, x.x, x.z, 0.95);
+        reg({ id: x.id, kind: 'exhibit', label: `전시 살펴보기 · ${short(x.title)}`, kidLabel: '구경하기', emoji: G.data.items?.[x.food]?.icon || '🍲', radius: 2.4, onInteract: () => this.openExhibit(x.id) }, x.x, x.z, 0.95);
       }
       const eb = lay.eduBoard;
-      if (eb) reg({ id: eb.id || 'EDU_BOARD', kind: 'board', label: '교육 게시판 보기', radius: 3.6, onInteract: () => this.openLibrary() }, eb.x, eb.z, 1.9);
+      if (eb) reg({ id: eb.id || 'EDU_BOARD', kind: 'board', label: '교육 게시판 보기', kidLabel: '배움터', emoji: '📚', radius: 3.6, onInteract: () => this.openLibrary() }, eb.x, eb.z, 1.9);
       const hd = lay.hallDoor;
-      if (hd) reg({ id: hd.id || 'HALL_DOOR', kind: 'door', label: '체험관 안내', radius: 4.2, priority: 1, onInteract: () => this.openHallGuide() }, hd.x, hd.z, 1.4);
+      if (hd) reg({ id: hd.id || 'HALL_DOOR', kind: 'door', label: '체험관 안내', kidLabel: '체험관 안내', emoji: '🏛️', radius: 4.2, priority: 1, onInteract: () => this.openHallGuide() }, hd.x, hd.z, 1.4);
     },
   };
 
