@@ -2011,7 +2011,7 @@
       if (meter) {
         const s = strength(pw);
         meter.dataset.level = pw ? String(s) : '';
-        meter.querySelector('i').style.width = pw ? `${(s + 1) * 20}%` : '0%';
+        meter.querySelector('i').style.transform = `scaleX(${pw ? (s + 1) / 5 : 0})`;
         meter.querySelector('.pw-label').textContent = pw ? `강도: ${STRENGTH[s]}` : '비밀번호 강도';
       }
       const low = pw.toLowerCase();
