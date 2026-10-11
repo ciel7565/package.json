@@ -446,3 +446,76 @@ lines from the manifest), 문서 (renders `#build-docs` JSON markdown: README, A
 README-SERVER), 인수인계 (checklist: build, test, deploy, configure server, known issues, roadmap). Button: download
 a full diagnostic report (JSON + Markdown). Admin/debug access in production: only when `?dev=1`, local mode, or
 profile role `admin`.
+
+## 12. Phase 3 — 쉬운 모드 (usable by a 5-year-old) & kid safety
+
+### 12.0 Principle (applies to EVERY screen)
+A 5-year-old who barely reads must be able to use every page: picture/emoji first; button labels ≤ 2 short words
+(≤ 6 Korean chars where possible) + a big emoji; every prompt can be read aloud; ONE obvious next action per screen;
+tap targets ≥ 56 px (easy) / 40 px (normal); text ≥ 16 px; always a big ⬅️ / ✖ exit (no dead ends); forgiving
+(confirm destructive actions with pictures, undo where cheap); no typing needed anywhere in easy mode; errors are
+shown as the mascot + one friendly sentence + a retry button (never stack traces/codes). Friendly 해요체, short
+sentences (≤ 12 words), no hanja/jargon; numbers as pictures where possible (💧💧💧 instead of "60%").
+Normal mode (adults) keeps the same features with the denser UI. Easy mode is the DEFAULT.
+
+### 12.1 Settings (03-state DEFAULTS additions)
+`easyMode: true` · `voiceGuide: true` (read prompts aloud in easy mode) · `voiceRate: 0.95` ·
+`playReminderMin: 30` (0 = off) · `kidChat: true` (chat = phrase/emoji picker only while easyMode) ·
+`parentGate: true`. `<body>` gets class `easy` (easy on) or `easy-off`; CSS var `--tap` = 56px / 40px.
+
+### 12.2 `G.easy` (08-easy.js — core fragment, no 3D dependency, safe to call before world init)
+- `G.easy.on` (getter) · `G.easy.set(bool)` → setSetting('easyMode') + body class + emit `easy:changed {on}`.
+- `G.easy.say(text, {interrupt=true, priority})` → Promise. speechSynthesis ko-KR (best Korean voice, rate
+  voiceRate, pitch 1.1); only when easy && voiceGuide && !muted (or opts.force); strips emoji/markup; de-dups the
+  same text within 4 s; ≤ 140 chars; ducks music via `G.sys.audio?.duck?.(true|false)`; `G.easy.stop()`.
+  Emits `easy:say {text}`. Never throws when speech is unsupported.
+- `G.easy.speakable(el, text?)` → adds a small 🔊 button (and long-press 600 ms on touch) reading text/el text.
+- `G.easy.gate({reason, title})` → Promise<boolean>. Parent gate (UX barrier, not an adult security boundary):
+  random 2-digit × 1-digit multiplication with 4 big shuffled choices; 3 wrong → 30 s cool-down; success unlocks
+  for 5 minutes. Resolves true immediately when easyMode is off or parentGate is false. Emits `easy:gate`.
+- `G.easy.pick({title, say, items:[{id, emoji, label, color?, disabled?, badge?}], columns})` → Promise<id|null>:
+  big picture chooser (seeds, recipes, destinations, phrases, stickers, outfits…). Esc/✖ → null.
+- `G.easy.confirm({emoji, title, say, yes='좋아요', no='아니요', danger})` → Promise<boolean>.
+- `G.easy.celebrate(text, {emoji})` → big centered emoji pop + voice + `G.fx?.burst` (honours reduceMotion).
+- `G.easy.point(target, {label, say, duration})` → big bouncing 👆 hand; target = Element | selector |
+  {x,y,z} world point (projected every frame via `G.sys.engine.worldToScreen`); returns {stop()}; one at a time.
+- `G.easy.nextStep()` → {emoji, text, say, target:{x,z}|null, act?} from the current quest objective
+  (`G.sys.quest?.getMarkers?.()`, `G.sys.quest?.current?.()`); drives the HUD "다음 할 일" card.
+- `G.easy.goTo(target, {label})` → auto-walk to {x,z} (`G.sys.player.walkTo`) or travel to a poi/zone id
+  (`G.sys.minimap?.travelTo`), shows a golden trail if available.
+- `G.easy.t(normalText, easyText)` → easyText when easy mode is on.
+- `G.easy.nameIdeas(n)` → kid-safe nickname suggestions (형용사 + 동물/발효 친구, e.g. "용감한 다람쥐").
+- Play-time reminder every playReminderMin minutes of active play (mascot, gentle, non-blocking: 쉬기 / 계속).
+
+### 12.3 HUD in easy mode (template.html + 00/01/02 css + 08-easy)
+Top-left: avatar, nickname, ⭐ level, 🪙 coins (big digits, no exp text). Top-center: "다음 할 일" card (big emoji,
+one sentence, 👉 같이 가기 = auto-walk, 🔊). Right: compact minimap + big "🗺️ 어디 갈까?" (picture travel menu).
+The left menu becomes 4 big tiles: 🎒 가방 · 📖 스티커북 (도감·업적·퀘스트 tabs merged) · 🔔 오늘 (engagement) · ☰ 메뉴.
+Bottom bar: 😊 표현하기 (emote + gesture merged picker) · 📸 사진 · 📝 일기 · 🔊 소리. Chat collapses to a 💬 button
+with a badge; opening it shows the kid phrase picker. Interact prompt = big round "👆 눌러요!" button with the
+target's emoji (tappable on every device). Quest panel is hidden in easy mode (merged into 다음 할 일 + 스티커북).
+
+### 12.4 Kid safety (security)
+- Easy mode: no free-text input for the child — nickname via `G.easy.nameIdeas`, chat via preset phrases + emoji,
+  journal via stickers/moods. Parent gate before: settings (except 소리 & 쉬운 모드 quick toggles), logout,
+  login/register forms, progress reset, import/export, developer center, admin.
+- PII protection (client AND server, all modes): chat masks phone numbers (010-1234-5678, 01012345678, +82 …),
+  e-mail addresses, URLs and Korean street-address fragments with 🔒; the sender gets a friendly mascot tip
+  ("이름·전화번호·주소는 비밀이에요! 🤫").
+- Photosensitivity: nothing flashes faster than 3 Hz; large-area brightness changes are eased; honour reduceMotion.
+- Healthy play reminders (12.2). No paid items, no countdown pressure, no dark patterns.
+
+### 12.5 Events (additions)
+`easy:changed {on}` · `easy:say {text}` · `easy:gate {reason, ok}` · `easy:point {label}` · `kid:phrase {phraseId}`.
+
+### 12.6 Phase-3 file ownership
+| Agent | Files |
+|---|---|
+| easy-core | NEW `src/game/08-easy.js`, `src/styles/08-easy.css`; `00-core.js`, `03-state.js`, `04-ui.js`, `05-input.js`, `src/template.html`, `00-base.css`, `01-hud.css`, `02-responsive.css`, `docs/CONTRACT.md` §12 |
+| easy-app | `70-app.js`, `70-app.css` |
+| easy-play-1 | `30-inventory`, `31-quest`, `32-progression`, `47-journal` (+ css) |
+| easy-play-2 | `23-interaction`, `25-npc`, `26-dialogues`, `40-farming`, `41-fermentation`, `45-education-data`, `46-education` (+ css) |
+| easy-world | `20-avatar`, `21-player`, `22-camera`, `50-minimap`, `51-weather`, `52-photo` (+ css) |
+| easy-social | `60-social`, `61-audio`, `62-engagement`, `65-companion`, `66-fx` (+ css) |
+| devcenter-security | `80-devcenter.js/.css`, `server/**`, `tests/**`, `docs/HANDOVER.md`, `README.md`, `tools/*` |
+| qa (last) | any file |
