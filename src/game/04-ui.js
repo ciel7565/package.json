@@ -252,6 +252,27 @@
     el.classList.add('out');
     setTimeout(finish, MOTION.d2 + 20);
   }
+  const heldToasts = [], heldSay = [];
+  /** show the toasts held back during a cinematic (newest 4, one sound) */
+  function releaseToasts() {
+    const root = $('#toast-root');
+    const list = heldToasts.splice(0), lines = heldSay.splice(0);
+    if (!root || !list.length) return;
+    list.forEach((t, i) => {
+      if (t.el.__gone) return;
+      setTimeout(() => {
+        if (t.el.__gone) return;
+        root.appendChild(t.el);
+        const live = Array.from(root.children).filter((x) => !x.classList.contains('out'));
+        for (let k = 0; k < live.length - 4; k++) dismissToast(live[k]);
+        t.el.__toastT = setTimeout(() => dismissToast(t.el), t.dur);
+      }, 160 * i);
+    });
+    const loud = list.find((t) => t.type === 'error' || t.type === 'reward' || t.sound !== false);
+    if (loud) G.sfx(loud.type === 'reward' ? 'coin' : 'notify');
+    if (lines.length && easyOn()) { try { G.easy?.say?.(lines[lines.length - 1], { interrupt: false }); } catch (e) { /* voice optional */ } }
+  }
+  G.bus.on('manjangdae:intro', ({ phase } = {}) => { if (phase === 'end') setTimeout(releaseToasts, 450); });
   function toast(msg, opts = {}) {
     const root = $('#toast-root');
     if (!root) return;
@@ -278,6 +299,13 @@
     }
     const dur = opts.duration ?? (type === 'error' ? (easy ? 5500 : 4500) : easy ? 3400 : 2800);
     el.style.setProperty('--toast-life', `${Math.max(400, Number(dur) || 0)}ms`);
+    // a cinematic owns the screen (정선 만장대 intro): hold the toast and show it when the cinematic ends
+    if (document.body.classList.contains('md-intro') && !opts.urgent) {
+      heldToasts.push({ el, dur, type, sound: opts.sound });
+      while (heldToasts.length > 4) heldToasts.shift();
+      if (easy && (kidErr || opts.say)) heldSay.push(typeof opts.say === 'string' ? opts.say : opts.html ? el.textContent : text);
+      return el;
+    }
     root.appendChild(el);
     // at most 4 live toasts: the oldest leaves (with its exit) and the stack closes up smoothly
     const live = Array.from(root.children).filter((t) => !t.classList.contains('out'));
@@ -460,7 +488,7 @@
       if (opts.blocking !== false) block('modal:' + m.id);
       document.body.classList.add('modal-open');
       hydrateIcons(box);
-      G.bus.emit('ui:modal-open', { id: m.id });
+      G.bus.emit('ui:modal-open', { id: m.id, className: String(opts.className || '').slice(0, 120) });
       G.sfx('open');
       if (opts.say !== false && easyOn()) { try { G.easy?.say?.(sayLine(), { priority: 0 }); } catch (e) { /* voice optional */ } }
       // focus first input for keyboard users

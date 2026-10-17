@@ -9,7 +9,7 @@
 .hud-delta.edu { color: #a9d4ff; }
 @keyframes hudDelta { 0% { opacity: 0; transform: translateY(5px); } 15% { opacity: 1; } 100% { opacity: 0; transform: translateY(-20px); } }
 #hud-level.lv-pop { animation: lvPop .8s var(--ease); }
-@keyframes lvPop { 0% { transform: scale(1); } 35% { transform: scale(1.38); box-shadow: 0 0 16px rgba(244,197,74,.95); } 100% { transform: scale(1); } }
+@keyframes lvPop { 0% { transform: scale(1); } 35% { transform: scale(1.04); box-shadow: 0 0 16px rgba(244,197,74,.95); } 100% { transform: scale(1); } }
 #hud-exp-text { font-size: .56rem; letter-spacing: .02em; }
 #hud-title { cursor: help; }
 
@@ -33,7 +33,7 @@
 .lu-sub { display: inline-block; margin-top: .55rem; padding: .38rem 1rem; border-radius: 999px; background: rgba(12,18,14,.78); border: 1px solid rgba(244,197,74,.65); font-size: .92rem; font-weight: 700; color: #fff; box-shadow: 0 8px 20px rgba(0,0,0,.35); }
 body.reduce-motion .levelup-fx.show .lu-card { animation: none !important; opacity: 1; }
 body.reduce-motion .levelup-fx .lu-rays { display: none; }
-@keyframes luPop { 0% { opacity: 0; transform: scale(.55); } 12% { opacity: 1; transform: scale(1.1); } 22% { transform: scale(1); } 78% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-24px) scale(.96); } }
+@keyframes luPop { 0% { opacity: 0; transform: scale(.55); } 14% { opacity: 1; transform: scale(1.03); } 24% { transform: scale(1); } 78% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-24px) scale(.96); } }
 @keyframes luRays { 0% { opacity: 0; } 15% { opacity: 1; } 72% { opacity: .9; } 100% { opacity: 0; } }
 @keyframes luSpin { to { transform: rotate(360deg); } }
 
@@ -352,3 +352,5 @@ body.reduce-motion .ksb-badge, body.reduce-motion .kc-sticker, body.reduce-motio
 .kme-stat b { font-size: max(19px, 1.32rem); }
 .kk-pips i { width: max(12px, .78rem); height: max(12px, .78rem); }
 @media (max-width: 560px) { .ksb-tab { font-size: max(16px, .98rem); } .kme-stat b { font-size: max(18px, 1.15rem); } }
+/* low preset (body.ui-lite): no masked rotating ray layer behind the level-up card */
+body.ui-lite .levelup-fx .lu-rays { display: none; }

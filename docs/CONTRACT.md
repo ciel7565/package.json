@@ -495,16 +495,27 @@ change); CSS var `--tap` = 56px / 40px on `<html>`.
   `fn()` / the element text. `G.easy.textOf(el)` = what a 🔊 / long-press reads: `__easySpeak` text, `data-say`,
   visible text, then `aria-label` / `title`.
 - `G.easy.gate({reason, title, text})` → Promise<boolean>. Parent gate (UX barrier, not an adult security boundary):
-  random 2-digit × 1-digit multiplication (12–98 × 3–9) with 4 big shuffled plausible choices (keys 1–4 / arrows);
-  a new question after every wrong answer; 3 wrong → 30 s cool-down, doubling on repeated failures (max 5 min,
-  persisted in `localStorage['tfm.v1.gate']`, survives reload); success unlocks for 5 minutes (memory only, re-locked
-  on logout: `G.easy.lockGate()`). Resolves true immediately when easyMode is off or parentGate is false. One gate at
-  a time (concurrent calls share the result). Emits `easy:gate {reason, ok, skipped?, cached?}`.
-  `G.easy.gateStatus()` → {unlocked, unlockLeft, cooldownLeft, wrong, open, required}.
-  Anti-mashing: a tap locks the 4 choices at once and the next question becomes tappable only after a short pause
-  (0.35 s first, 0.6 s after a wrong answer; `disabled` buttons, stale question ids ignored) → one answer per question.
-  The wrong count of the current round is persisted with the cool-down (`{until, strikes, wrong, wt}`, expires after 10 min).
-  Scripts that solve the gate must wait for `.easy-gate-choice:not([disabled])`.
+  random 2-digit × 1-digit multiplication (12–98 × 3–9) with **6** big shuffled plausible choices (the answer's rank is
+  uniform; 3 columns, 2 below 380 px); **two right answers in a row** are needed (a wrong answer restarts the streak and
+  brings a new question; the dots `●○ 1/2번째 문제` show the streak); 3 wrong → 30 s cool-down, doubling on repeated
+  failures (max 5 min, persisted in `localStorage['tfm.v1.gate']`, survives reload). Blind-tapping odds ≈ 8 % per round
+  (`G.easy._gateSim`). Resolves true immediately when easyMode is off or parentGate is false. One gate at a time
+  (concurrent calls share the result). Emits `easy:gate {reason, ok, skipped?, cached?}`.
+  **Unlock scope (phase 4, final):** a pass opens a short grown-up *session* bound to the grown-up screen it opened —
+  a modal whose className matches `GATE_ROOT_CLASS` (`app-menu-modal` 어른 메뉴, `app-settings-modal`, `app-delete-modal`,
+  `admin-modal`; 04-ui sends `ui:modal-open {id, className}`) or the title's 어른 메뉴 view. Reasons that open a screen
+  (`parents · settings · admin · delete-account · login · register`) may adopt it within 3 s, the others within 0.6 s
+  (they only serve their own action). Screens a child opens alone (가방, 도움말, 스티커북, kid menu) are never adopted.
+  The session ends when the last adopted screen closes (650 ms grace for a hop between two), on logout / login /
+  profile load, easy-mode switch, tab hide, or after 3 min idle (`GATE_IDLE`). `logout · devcenter · admin ·
+  delete-account` always ask again (`GATE_NO_CACHE`); `kid-chat · parent-gate · easy-off · reset · import · forget`
+  need a pass from the last 90 s (`GATE_FRESH`). `G.easy.lockGate(why)` ends the session.
+  `G.easy.gateStatus()` → {unlocked, unlockLeft, screens, cooldownLeft, wrong, streak, need, choices, tries, open, required}.
+  Anti-mashing: a tap locks the choices at once and the next question becomes tappable only after a short pause
+  (`.easy-gate-choices.is-locked`; stale question ids ignored) → one answer per question. The wrong count of the
+  current round is persisted with the cool-down (`{until, strikes, wrong, wt}`, expires after 10 min).
+  Scripts that solve the gate must answer each armed question (`.easy-gate-modal:not(.modal-closing)
+  .easy-gate-choices:not(.is-locked)`) until the modal closes.
 - `G.easy.pick({id, title, say, emoji, text, items:[{id, emoji, label, color?, disabled?, disabledSay?, badge?, sub?,
   selected?, say?}], columns, size})` → Promise<id|null>: big picture chooser (2–4 columns, 3 on phones, 2 below
   380 px; arrows/Home/End/Enter; the focused tile is read aloud; disabled tiles shake + speak). Esc / ⬅️ → null.
@@ -697,3 +708,50 @@ server register ignores chosen play mode (70-app).
 | ui-motion | src/template.html, 00-base.css, 01-hud.css, 02-responsive.css, 04-ui.js, 08-easy.css, 70-app.js/.css, all other module CSS not listed elsewhere (30,31,32,40,41,46,47,50,51,52,62,80 .css) |
 | fix-security | 05-input.js, 08-easy.js, 60-social.js/.css, 61-audio.js, server/**, tests/** |
 | qa (last) | any file |
+
+### 13.8 Final phase-4 behaviour (integrator — this section wins over 13.1–13.6 where they differ)
+- **Speed:** `G.sys.player.WALK = 9.6`, `RUN = 18`, `speedScale = 3` (21-player, sub-steps ≤ 0.25 m). Followers read
+  `speedScale`: 옹이, simulated visitors (run speed × speedScale clamped 1–3) and remote players (60-social dead
+  reckoning ≤ 1.2 s along the last velocity, blocked check, snap when the gap is > 20 m, catch-up damping grows with the
+  gap; presence sends every 1 s while moving fast). Server `SaveValidator`: distance per save ≤ `move_max_speed × elapsed
+  + move_slack_m`, also on a reset save (≤ 600 s window) → `DISTANCE_TOO_FAST`; `stats` ≤ 200 keys, numeric or null only.
+- **Start:** new players spawn on the 만장대 deck; returning players keep their saved position (no intro). The intro
+  (`manjangdae:intro {phase}`) runs on game time but never slower than the wall clock (`t = max(t + dt, real elapsed)`,
+  ends at 8.3 s), applies a soft grade layer `'md-intro'` (vignette / warmth / contrast, removed at the hand-off),
+  hides the HUD, the coach, the pointing hand, `#interact-prompt` and `#labels-layer`, and HOLDS toasts (04-ui; `toast(…,
+  {urgent:true})` still shows) and kid voice lines (`G.easy.say` queues while `body.md-intro` / `body.md-scoping`
+  unless `opts.intro` / `opts.force`; released on `phase:'end'`). Any key / tap after 450 ms skips it.
+- **Telescope (`tour(startZoneId = 'ZONE_MAIN')`):** each zone is aimed at its largest building (gate ×4 weight; look
+  height = ground + 8 m hall / 4.2 m gate / 3 m else); near targets get a closer, higher lens so the foreground fence
+  never hides them. Labels and the coach step back while scoping. The guide adds a kid line "게임 속 풍경이에요. 진짜
+  만장대와는 조금 달라요."
+- **`walkSpot(from?)`:** a 2.2–3 m deck spot in front of the camera, line-clear, on screen, preferring spots with no
+  interactable prompt (telescope / board / marker) nearby. 70-app `_groundPoint()` (the onboarding "tap here" hand)
+  uses it first; elsewhere 5 / 3.5 / 2.5 m straight-line samples that are dry, free and level. Ambient interactables
+  (`companion · bench · decor`) never push the onboarding coach aside and never count as "the next step".
+- **Easy 👉 같이 가기 from the hill:** walks the switchback (run when > WALK × 2.5 m; travel only beyond 170 m from the
+  hill), so a new player really walks down "만장대에서 내려가 발효마스터를 만나요".
+- **Camera:** the occlusion ray always spans the full follow distance (no pull-in oscillation); the pavilion roof has an
+  invisible DoubleSide lathe hull in `G.world.cameraBlockers` so the camera never pokes through the roof corners.
+  reduceMotion turns off look-ahead / dolly / FOV kick.
+- **Engine (10):** distance culling of small props, decor and jar groups — `CULL_DIST {low:72, medium:125, high:210}` m
+  from the camera, checked a few times per second (`G.sys.engine.cullStats` getter → `{items, culled, dist}`);
+  `G.gfx.canvasTexture` halves canvases over 600 000 px and uses anisotropy 1 on the low preset; FPS is measured on the
+  wall clock and auto-quality only judges windows ≤ 3 s long. `grade(params|null, layer)` layers: contrast / exposure /
+  saturation multiply, warmth / vignette / flash add.
+- **Motion:** every scale pop ≤ 1.04 (no overshoot past 4 %); the zone banner ends early when the zone changes;
+  minimap travel plays the portal "out" dissolve 220 ms before the teleport (skipped under reduceMotion).
+- **UI events:** `ui:modal-open {id, className}` (the parent gate adopts only grown-up screens, 12.2).
+- **Kid chat:** in easy mode other players' messages show only when they are preset phrases / emoji (`pub.kidPhrase`);
+  free text is hidden and never read aloud; remote names are read as "친구". Nicknames that look like PII (handles such
+  as `ig_…`, school + grade, 동 + house number) are refused client- and server-side.
+- **One PII rule source:** the client engine between `// >>> PII ENGINE` markers in 60-social.js is exported by
+  `node tests/pii-sync.mjs` to `server/lib/pii-rules.json` (deployed next to `ChatFilter.php`, which also mirrors
+  fold / units / nickname predicates). The strict build runs `pii-sync --check`; `tests/pii-client.mjs` checks every
+  vector of `tests/pii-vectors.json` in the built game and against PHP with and without intl (outputs must match).
+- **Small integration rules:** the onboarding coach publishes `--coach-lane-bottom` (a card in the lower half pushes
+  the toast lane just above it — no toast ever covers the card on phones); 50-minimap re-checks the zone on the frame
+  after any `player:moved` (a teleport registers the zone visit at once); 65-companion says one short line per
+  `weather:rainbow {on:true}` and at most one a minute per `weather:shootingstar` (never during the intro / telescope /
+  a dialog); the 62-engagement ranking shows `G.ui.skeleton()` rows while loading; the dev-center GPU tab shows the
+  current frame's draw calls / triangles and the distance-cull count.

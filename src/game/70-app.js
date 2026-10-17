@@ -307,6 +307,8 @@
       if (!RX_NICK.test(v)) return '한글·영문·숫자·밑줄(_)만 사용할 수 있어요.';
       if (RESERVED.includes(v.toLowerCase())) return '사용할 수 없는 닉네임이에요.';
       if (hasBadWord(v)) return '바르고 고운 닉네임을 사용해 주세요.';
+      // the same personal-information rule as the server (Users::validNickname → ChatFilter::nicknameLooksPersonal)
+      try { if (G.sys.social?.nicknameLooksPersonal?.(v)) return '전화번호·주소·학교 같은 개인정보는 닉네임에 쓸 수 없어요. 🔒'; } catch (e) { /* social optional */ }
       if (opts.account && /^(게스트|guest)/i.test(v)) return '‘게스트’로 시작하는 닉네임은 사용할 수 없어요.';
       if (opts.checkTaken && Accounts.nicknameTaken(v, opts.excludeId)) return '이미 사용 중인 닉네임이에요.';
       return '';
@@ -832,6 +834,15 @@
         const art = typeof opts.lookId === 'string' ? safePortrait(LookArt.get(opts.lookId)) : null;
         p = Profiles.upsert({ id, kind: 'guest', nickname, role: 'user', lastPlayed: now(), portrait: art || undefined });
         if (!p) throw new AuthError('저장 공간이 부족해 새 친구를 만들지 못했어요.');
+        // the picture was still being drawn (slow GPU / low preset): the face card picks it up when it is ready
+        if (!art && typeof opts.lookId === 'string') {
+          LookArt.whenReady(opts.lookId, (url) => {
+            const ok = safePortrait(url), e = ok && Profiles.get(id);
+            if (!e || e.portrait) return;
+            Profiles.upsert({ id, portrait: ok });
+            if (Title.open && Title.view === 'kid' && Title.kid?.mode === 'home') Title._renderKid();
+          });
+        }
       } else p = guestEntry(typeof opts.id === 'string' ? opts.id : 'guest');
       const prof = { id: p.id, kind: 'guest', nickname: p.nickname || '게스트', email: '', role: 'user', guest: true };
       if (opts.look && typeof opts.look === 'object') prof.initialAvatar = opts.look;
@@ -1040,7 +1051,8 @@
       const rim = new THREE.DirectionalLight(0xffe0a8, 2.0 * K); rim.position.set(-1.2, 2.4, -2.6);
       scene.add(new THREE.HemisphereLight(0xfff4e2, 0x56674a, 1.5 * K), key, fill, rim);
       const cam = new THREE.PerspectiveCamera(22, 1, 0.05, 20);
-      const rt = new THREE.WebGLRenderTarget(S, S, { samples: 4 });
+      // low preset: no MSAA for portraits (software / weak GPUs: a multisampled target costs a lot for 128 px)
+      const rt = new THREE.WebGLRenderTarget(S, S, { samples: lowPreset() ? 0 : 4 });
       const buf = new Uint8Array(S * S * 4);
       let rig = null;
       try {
@@ -1085,18 +1097,42 @@
     reset() { clearTimeout(this._timer); this._seq++; this.apply(null); },
   };
 
+  /** the cheapest quality preset is active (weak GPU / software rendering): skip optional offscreen renders */
+  function lowPreset() { return G.sys.engine?.preset?.name === 'low' || G.sys.engine?.quality === 'low'; }
+  /** body.ui-lite on the low preset: no backdrop blur / decorative loops (00-base / 70-app css), no hero parallax */
+  function syncLiteUi() { try { document.body.classList.toggle('ui-lite', lowPreset()); } catch (e) { /* no body yet */ } }
+
   /** portraits of the kid looks on the title (rendered once per session, idle time, one at a time) */
   const RX_LOOK_URL = /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/;
   const LookArt = {
-    cache: new Map(), _queue: [], _busy: false, _gen: 0, _fails: 0,
+    cache: new Map(), _queue: [], _busy: false, _gen: 0, _fails: 0, _waiters: new Map(),
     get(id) { return this.cache.get(id) || null; },
     ensure(looks, onReady) {
       if (this._fails > 2 || !G.avatar?.create || !G.sys.engine?.renderer) return;
       this._onReady = onReady;
-      for (const lk of looks) if (!this.cache.has(lk.id) && !this._queue.some((x) => x.id === lk.id)) this._queue.push(lk);
+      for (const lk of looks) if (lk && !this.cache.has(lk.id) && !this._queue.some((x) => x.id === lk.id)) this._queue.push(lk);
       this._pump();
     },
-    cancel() { this._queue.length = 0; this._gen++; this._busy = false; },
+    /** draw this look next (the child just picked it) */
+    prioritize(id) {
+      const i = this._queue.findIndex((x) => x.id === id);
+      if (i > 0) this._queue.unshift(this._queue.splice(i, 1)[0]);
+    },
+    /** run fn(url) once the look's picture exists (now, if it already does) */
+    whenReady(id, fn) {
+      const url = this.cache.get(id);
+      if (url) { fn(url); return; }
+      const list = this._waiters.get(id) || [];
+      if (list.length < 4) list.push(fn);
+      this._waiters.set(id, list);
+    },
+    _settle(id, url) {
+      const list = this._waiters.get(id);
+      this._waiters.delete(id);
+      for (const fn of list || []) { try { fn(url); } catch (e) { G.log.warn('UI', 'look portrait waiter failed', e?.message || e); } }
+    },
+    /** the title closed: drop the background work, but finish a picture a new friend's face card is waiting for */
+    cancel() { this._queue = this._queue.filter((x) => this._waiters.has(x.id)); this._onReady = null; },
     _pump() {
       if (this._busy || !this._queue.length) return;
       this._busy = true;
@@ -1107,10 +1143,11 @@
           const canvas = await Portrait.render(G.avatar.normalize(lk.app), 112, { dist: 2.35, drop: 0.5, gain: 0.6 });
           if (gen !== this._gen) return;
           const url = canvas ? canvas.toDataURL('image/png') : '';
-          if (RX_LOOK_URL.test(url) && url.length < 120000) { this.cache.set(lk.id, url); this._onReady?.(); }
+          if (RX_LOOK_URL.test(url) && url.length < 120000) { this.cache.set(lk.id, url); this._onReady?.(); this._settle(lk.id, url); }
         } catch (e) { this._fails++; G.log.warn('UI', 'look portrait skipped', e?.message || e); }
         finally {
-          if (gen === this._gen) { this._busy = false; setTimeout(() => this._pump(), 30); }
+          // low preset: a breather between portraits so a weak GPU never stalls the title for long
+          if (gen === this._gen) { this._busy = false; setTimeout(() => this._pump(), lowPreset() ? 450 : 30); }
         }
       };
       if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 800 }); else setTimeout(run, 16);
@@ -1149,20 +1186,16 @@
 
   /**
    * Title hero parallax (§13.5): layers shift by depth with the pointer (desktop) or device tilt (phones), and with a
-   * slow idle drift when nobody moves — subtle (≤ 44 px), damped, off with reduce motion. The 3D orbit centre is
-   * nudged the same way along the camera's own right / up axes, reusing one options object (no per-frame garbage).
+   * slow idle drift when nobody moves — subtle (≤ 44 px), damped, off with reduce motion / the low preset.
+   * TitleCam reads the damped values (px, py) to nudge the 3D orbit the same way.
    */
   const Hero = {
-    on: false, el: null, tx: 0, ty: 0, x: 0, y: 0, wx: 9, wy: 9, t: 0, lastInput: -1e9, g0: null,
-    base: null, center: [0, 0, 0], camOpts: null,
+    on: false, el: null, tx: 0, ty: 0, x: 0, y: 0, px: 0, py: 0, wx: 9, wy: 9, t: 0, lastInput: -1e9, g0: null,
     _onMove: null, _onTilt: null,
     start(el) {
       this.stop();
-      if (!el || reduceMotion()) return;
+      if (!el || reduceMotion() || lowPreset()) return;
       this.el = el; this.on = true; this.t = 0; this.lastInput = -1e9; this.g0 = null; this.x = this.y = this.tx = this.ty = 0; this.wx = this.wy = 9;
-      const c = titleCine();
-      this.base = Array.isArray(c.center) ? [Number(c.center[0]), Number(c.center[1]), Number(c.center[2])] : null;
-      this.camOpts = { center: this.center };
       this._onMove = (e) => {
         if (e.pointerType === 'touch') return;
         this.tx = U.clamp((e.clientX / Math.max(1, innerWidth) - 0.5) * 2, -1, 1);
@@ -1184,6 +1217,7 @@
       if (this._onTilt) removeEventListener('deviceorientation', this._onTilt);
       this._onMove = this._onTilt = null;
       this.on = false;
+      this.px = this.py = 0;
       if (this.el) { this.el.style.removeProperty('--px'); this.el.style.removeProperty('--py'); }
       this.el = null;
     },
@@ -1201,21 +1235,186 @@
       this.y += (this.ty - this.y) * k;
       const amp = easyOn() ? 0.6 : 1;
       const px = this.x * amp, py = this.y * amp;
+      this.px = px; this.py = py;
       if (Math.abs(px - this.wx) > 0.002 || Math.abs(py - this.wy) > 0.002) {
         this.el.style.setProperty('--px', px.toFixed(3));
         this.el.style.setProperty('--py', py.toFixed(3));
         this.wx = px; this.wy = py;
       }
+    },
+  };
+
+  /**
+   * Title camera (§13.5): the 정선 만장대 orbit must never sit inside a tree canopy or look through a ridge.
+   * Once per orbit centre the ring is probed — bounding spheres of the nearby tree / rock / shrub instances and the
+   * camera blockers, plus the terrain along each sight line — and the clear arc nearest the authored angle wins.
+   * The camera then sweeps gently inside that arc (static with reduce motion) instead of orbiting into the trees;
+   * a ring that is clear all the way round keeps the authored slow orbit. Hero parallax nudges the centre along the
+   * camera's right axis. One options object is reused every frame (no per-frame garbage).
+   */
+  const ORBIT_SLOTS = 72;
+  // [radius factor, height factor] candidates, authored framing first
+  const ORBIT_RINGS = [[1, 1], [1, 1.55], [1.28, 1], [1.28, 1.55], [1.6, 1], [1.6, 1.55], [1, 2.25], [1.28, 2.25], [1.6, 2.25]];
+  const RX_OCCLUDER = /^(trees|rocks|shrubs)/;
+  function orbitOccluders(cx, cy, cz, reach) {
+    const out = [];
+    const scene = G.sys.engine?.scene;
+    if (!scene || typeof scene.traverse !== 'function') return null;
+    let instanced = 0;
+    const add = (x, y, z, r) => {
+      if (!(r > 0.25) || !Number.isFinite(x + y + z + r)) return;
+      if (Math.hypot(x - cx, z - cz) > reach + r) return;
+      if (Math.hypot(x - cx, y - cy, z - cz) < r + 4) return; // the pavilion itself
+      out.push(x, y, z, r);
+    };
+    const colMax = (e, o) => Math.sqrt(Math.max(
+      e[o] * e[o] + e[o + 1] * e[o + 1] + e[o + 2] * e[o + 2],
+      e[o + 4] * e[o + 4] + e[o + 5] * e[o + 5] + e[o + 6] * e[o + 6],
+      e[o + 8] * e[o + 8] + e[o + 9] * e[o + 9] + e[o + 10] * e[o + 10]));
+    const sphereOf = (o) => {
+      const g = o.geometry;
+      if (!g) return null;
+      if (!g.boundingSphere && typeof g.computeBoundingSphere === 'function') g.computeBoundingSphere();
+      const bs = g.boundingSphere;
+      return bs && bs.radius > 0 && Number.isFinite(bs.radius) ? bs : null;
+    };
+    scene.traverse((o) => {
+      if (!o.isInstancedMesh || !o.visible || !RX_OCCLUDER.test(o.name || '')) return;
+      const bs = sphereOf(o);
+      const a = o.instanceMatrix?.array;
+      if (!bs || !a) return;
+      o.updateWorldMatrix?.(true, false);
+      const w = o.matrixWorld.elements, ws = colMax(w, 0), bx = bs.center.x, by = bs.center.y, bz = bs.center.z;
+      instanced++;
+      for (let i = 0, n = Math.min(o.count | 0, (a.length / 16) | 0); i < n; i++) {
+        const m = i * 16, s = colMax(a, m);
+        if (!(s > 1e-4)) continue; // hidden instance
+        const lx = a[m] * bx + a[m + 4] * by + a[m + 8] * bz + a[m + 12];
+        const ly = a[m + 1] * bx + a[m + 5] * by + a[m + 9] * bz + a[m + 13];
+        const lz = a[m + 2] * bx + a[m + 6] * by + a[m + 10] * bz + a[m + 14];
+        add(w[0] * lx + w[4] * ly + w[8] * lz + w[12], w[1] * lx + w[5] * ly + w[9] * lz + w[13], w[2] * lx + w[6] * ly + w[10] * lz + w[14], bs.radius * s * ws * 0.9);
+      }
+    });
+    for (const o of G.world?.cameraBlockers || []) {
+      const bs = o && o.visible !== false ? sphereOf(o) : null;
+      if (!bs) continue;
+      o.updateWorldMatrix?.(true, false);
+      const w = o.matrixWorld.elements, bx = bs.center.x, by = bs.center.y, bz = bs.center.z;
+      add(w[0] * bx + w[4] * by + w[8] * bz + w[12], w[1] * bx + w[5] * by + w[9] * bz + w[13], w[2] * bx + w[6] * by + w[10] * bz + w[14], bs.radius * colMax(w, 0) * 0.9);
+    }
+    return instanced ? out : null; // no instanced scenery yet → the world is not built, try again later
+  }
+  /** is the sight line camera → centre clear of occluder spheres (with margin) and of the terrain? */
+  function orbitClear(sph, px, py, pz, cx, cy, cz) {
+    const W = G.world;
+    const dx = cx - px, dy = cy - py, dz = cz - pz;
+    const L = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(L > 1)) return false;
+    const ux = dx / L, uy = dy / L, uz = dz / L, far = L - 7, margin = 1.2;
+    for (let k = 0; k < sph.length; k += 4) {
+      const qx = sph[k] - px, qy = sph[k + 1] - py, qz = sph[k + 2] - pz, rr = sph[k + 3] + margin;
+      let t = qx * ux + qy * uy + qz * uz;
+      if (t < 0) t = 0; else if (t > far) t = far;
+      const ex = qx - ux * t, ey = qy - uy * t, ez = qz - uz * t;
+      if (ex * ex + ey * ey + ez * ez < rr * rr) return false;
+    }
+    for (let f = 0.1; f < 0.86; f += 0.075) {
+      const x = px + dx * f, z = pz + dz * f;
+      if (py + dy * f < W.heightAt(x, z) + 1.5) return false;
+    }
+    return true;
+  }
+  /** plan the title framing around `c` ({center, radius, height, angle}); null = scenery not ready */
+  function planOrbit(c) {
+    const cx = c.center[0], cy = c.center[1], cz = c.center[2];
+    const r0 = Math.max(8, c.radius), h0 = c.height, a0 = Number.isFinite(c.angle) ? c.angle : 0;
+    const sph = orbitOccluders(cx, cy, cz, r0 * 1.6 + 20);
+    if (!sph) return null;
+    const TAU = Math.PI * 2, step = TAU / ORBIT_SLOTS, clear = new Uint8Array(ORBIT_SLOTS);
+    const angDist = (a, b) => { const d = ((((a - b) % TAU) + TAU + Math.PI) % TAU) - Math.PI; return Math.abs(d); };
+    let best = null;
+    for (const [fr, fh] of ORBIT_RINGS) {
+      const R = r0 * fr, H = h0 * fh;
+      let nClear = 0;
+      for (let i = 0; i < ORBIT_SLOTS; i++) {
+        const a = i * step, px = cx + Math.sin(a) * R, pz = cz + Math.cos(a) * R;
+        const py = Math.max(cy + H, G.world.heightAt(px, pz) + 2);
+        clear[i] = orbitClear(sph, px, py, pz, cx, cy, cz) ? 1 : 0;
+        nClear += clear[i];
+      }
+      const ringCost = (fr - 1) * 0.9 + (fh - 1) * 0.6;
+      if (nClear === ORBIT_SLOTS) { // clear all round: keep the authored orbit
+        const cost = ringCost - 0.3;
+        if (!best || cost < best.cost) best = { cost, radius: R, height: H, mid: a0, amp: 0, orbit: true };
+        continue;
+      }
+      // contiguous clear runs on the circle (start after a blocked slot)
+      let s0 = 0;
+      while (clear[s0]) s0++;
+      for (let k = 1; k <= ORBIT_SLOTS; k++) {
+        const i = (s0 + k) % ORBIT_SLOTS;
+        if (!clear[i]) continue;
+        let len = 0;
+        while (len < ORBIT_SLOTS && clear[(i + len) % ORBIT_SLOTS]) len++;
+        k += len;
+        if (len < 12) continue; // < 60°: too tight to frame and sweep
+        const m = 6; // keep 30° from the arc edges
+        const lo = (i + (len >= 2 * m + 1 ? m : (len - 1) / 2)) * step;
+        const span = Math.max(0, len - 1 - 2 * m) * step;
+        // the angle inside [lo, lo + span] closest to the authored one
+        let cand = lo, cd = angDist(lo, a0);
+        for (let j = 1; j <= 24; j++) { const a = lo + (span * j) / 24, d = angDist(a, a0); if (d < cd) { cd = d; cand = a; } }
+        const toEdge = Math.min(angDist(cand, i * step), angDist(cand, (i + len - 1) * step));
+        const cost = cd + ringCost - (Math.min(len, 36) / 36) * 0.3;
+        if (!best || cost < best.cost) best = { cost, radius: R, height: H, mid: cand % TAU, amp: U.clamp(toEdge - 0.17, 0, 0.42), orbit: false };
+      }
+    }
+    return best || { cost: 0, radius: r0, height: h0, mid: a0, amp: 0, orbit: false, blocked: true };
+  }
+  const TitleCam = {
+    on: false, plan: null, key: '', t: 0, retry: 0, tries: 0, speed: 0.018,
+    base: [0, 0, 0], center: [0, 0, 0], opts: { center: null, angle: null, speed: 0 },
+    /** frame the title view; `duration` is the camera blend (0 = cut) */
+    start(duration) {
       const cam = G.sys.camera;
-      if (!this.base || !cam || cam.mode !== 'cinematic' || typeof cam.cinematic !== 'function') return;
-      const ang = Number(cam._cine?.angle);
-      const a = Number.isFinite(ang) ? ang : 0;
-      const m = 1.6 * amp;
+      if (!cam || typeof cam.cinematic !== 'function') return;
+      const c = titleCine();
+      const key = c.center.map((v) => Math.round(v)).join(',');
+      if (key !== this.key) { this.key = key; this.plan = null; this.tries = 0; }
+      if (!this.plan && this.tries < 6) {
+        this.tries++;
+        try { this.plan = planOrbit(c); } catch (e) { this.plan = null; G.log.warn('UI', 'title orbit probe failed', e?.message || e); this.tries = 6; }
+        this.retry = 1;
+      }
+      const p = this.plan;
+      for (let i = 0; i < 3; i++) this.base[i] = this.center[i] = Number(c.center[i]);
+      this.speed = Number.isFinite(c.speed) ? c.speed : 0.018;
+      this.t = 0;
+      this.opts.center = this.center;
+      const first = { center: this.center, duration };
+      if (p) Object.assign(first, { radius: p.radius, height: p.height, angle: p.mid, speed: p.orbit && !reduceMotion() ? this.speed : 0 });
+      else Object.assign(first, { radius: c.radius, height: c.height, angle: c.angle, speed: reduceMotion() ? 0 : c.speed });
+      try { cam.cinematic(first); } catch (e) { G.log.warn('UI', 'cinematic camera failed', e?.message || e); return; }
+      this.on = true;
+    },
+    stop() { this.on = false; },
+    tick(dt) {
+      if (!this.on || !Title.open) return;
+      const cam = G.sys.camera;
+      if (!cam || cam.mode !== 'cinematic' || typeof cam.cinematic !== 'function') return;
+      if (!this.plan && this.tries < 6 && (this.retry -= dt) <= 0) { this.start(); return; } // scenery arrived late
+      this.t += Math.min(0.1, dt);
+      const p = this.plan, o = this.opts, still = reduceMotion();
+      // sweep inside the clear arc: ≈ 80 s period, so the camera never drifts into the trees
+      if (p && !p.orbit) { o.angle = p.mid + (still ? 0 : p.amp * Math.sin(this.t * 0.0785)); o.speed = 0; }
+      else { o.angle = null; o.speed = still ? 0 : this.speed; }
+      const ang = o.angle ?? Number(cam._cine?.angle);
+      const a = Number.isFinite(ang) ? ang : 0, m = 1.6;
       // camera right = (cos a, 0, -sin a) for an orbit camera at angle a looking at the centre
-      this.center[0] = this.base[0] + Math.cos(a) * px * m;
-      this.center[1] = this.base[1] - py * m * 0.5;
-      this.center[2] = this.base[2] - Math.sin(a) * px * m;
-      try { cam.cinematic(this.camOpts); } catch (e) { this.base = null; }
+      this.center[0] = this.base[0] + Math.cos(a) * Hero.px * m;
+      this.center[1] = this.base[1] - Hero.py * m * 0.5;
+      this.center[2] = this.base[2] - Math.sin(a) * Hero.px * m;
+      try { cam.cinematic(o); } catch (e) { this.on = false; }
     },
   };
 
@@ -1267,7 +1466,7 @@
             <header class="ts-brand">
               <div class="ts-eyebrow"><span class="ts-eyebrow-line"></span>METAVERSE<span class="ts-eyebrow-sep">·</span><span class="ts-eyebrow-ko">전통발효 메타버스</span></div>
               <h1 id="ts-title" class="ts-title"><span class="w w1">전통</span><span class="w w2">발효</span><span class="w w3">체험관</span></h1>
-              <span class="ts-seal" aria-hidden="true"><i>萬丈臺</i></span>
+              <span class="ts-seal" aria-hidden="true"><i>만장대</i></span>
               <p class="ts-place"><span class="emoji" aria-hidden="true">🏔️</span><b>정선 만장대</b><span class="ts-place-rest">에서 여행을 시작해요</span><span class="ts-place-kid">에서 출발!</span></p>
               <p class="ts-sub">밭을 일구고, 장을 담그고, 배우고 기록하는 <b>3D 전통발효 체험 여행</b></p>
               <p class="ts-kid-sub" aria-hidden="true"><span>🌱 키우고</span><span>🏺 담그고</span><span>📖 배워요</span></p>
@@ -1357,7 +1556,7 @@
       G.ui.setHudVisible(false);
       G.ui.objective?.(null);
       // 3D background: the slow orbit around the 정선 만장대 pavilion (§13.2 titleShot), with pointer / tilt parallax
-      try { G.sys.camera?.cinematic?.(titleCine()); } catch (e) { G.log.warn('UI', 'cinematic camera failed', e); }
+      if (!wasOpen || G.sys.camera?.mode !== 'cinematic') TitleCam.start();
       // every fresh title starts on the child's screen; only the gated paths (upgradeGuest...) pass parent:true
       if (!wasOpen) { this.parent = !!opts.parent; this.kid = { mode: 'home', ideas: [], ni: 0, look: U.randInt(0, 5) }; this._transferFrom = 'guest'; }
       else if (opts.parent) this.parent = true;
@@ -1388,6 +1587,7 @@
       clearInterval(this._lockTimer);
       clearInterval(this._mascotTimer);
       Hero.stop();
+      TitleCam.stop();
       this._greetPending = false;
       LookArt.cancel();
       this.el.classList.remove('in');
@@ -1578,7 +1778,9 @@
         const go = h('button', { type: 'button', class: 'kid-go kid-go-big', 'data-act': 'kid-go', 'data-say': '놀러 가기' },
           h('span', { class: 'emoji', 'aria-hidden': 'true' }, '▶'), h('span', null, '놀러 가기!'));
         box.append(head, nameRow, h('div', { class: 'kid-label-row', 'aria-hidden': 'true' }, '👕'), grid, go);
-        LookArt.ensure(looks, () => { if (this.open && this.view === 'kid' && this.kid.mode === 'new') this._paintLooks(); });
+        // the picked look is drawn first (its picture becomes the new friend's face card), then the others
+        LookArt.ensure([looks[k.look], ...looks.filter((_, i) => i !== k.look)], () => this._looksReady());
+        LookArt.prioritize(looks[k.look]?.id);
       }
       if (hadFocus && !touchUI()) box.querySelector(`[data-act="${hadFocus}"]`)?.focus({ preventScroll: true });
     },
@@ -1589,6 +1791,7 @@
       if (p.kind === 'local') return !isServer() && Profiles.remembered(p);
       return p.kind === 'server' && isServer() && !!auth.serverUser && indexId(auth.serverUser) === p.id;
     },
+    _looksReady() { if (this.open && this.view === 'kid' && this.kid.mode === 'new') this._paintLooks(); },
     _paintLooks() {
       const looks = kidLooks();
       for (const b of this.el?.querySelectorAll('.kid-look') || []) {
@@ -1614,6 +1817,7 @@
           if (!reduceMotion()) { b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
         }
       }
+      if (looks[this.kid.look]) LookArt.prioritize(looks[this.kid.look].id);
       G.sfx('pop');
       say(looks[this.kid.look]?.say || '', { force: true });
     },
@@ -2226,6 +2430,7 @@
   const STEP_COUNT = 4;
   const STEP_MOOD = ['happy', 'wink', 'think', 'cheer'];
   const EASY_STEPS = [0, 2, 3];
+  const AMBIENT_KINDS = new Set(['companion', 'bench', 'decor']);
   const _obV = new THREE.Vector3();
   const Onboarding = {
     active: false,
@@ -2276,8 +2481,9 @@
       G.bus.on('dialogue:end', () => { if (this.active && this.step === 4 && this._waitDialogue) this._queueFinal(700); });
       // easy mode: a child who already uses the gold prompt on something else (crop bed, jar, sign…) has learned
       // what the "인사" step teaches — finish with the celebration instead of nagging "같이 가기를 눌러요!" forever
-      G.bus.on('interact', ({ id } = {}) => {
-        if (!this.active || !easyOn() || (this.step !== 2 && this.step !== 3) || id === 'NPC001') return;
+      // (옹이, benches and yard decor are always around: playing with them does not end the lesson)
+      G.bus.on('interact', ({ id, kind } = {}) => {
+        if (!this.active || !easyOn() || (this.step !== 2 && this.step !== 3) || id === 'NPC001' || AMBIENT_KINDS.has(kind)) return;
         this._go(4, { silent: true });
       });
       // a child who tapped 👉 같이 가기 is on the way: the coach stops repeating the instruction
@@ -2344,18 +2550,39 @@
       if (v) { if (!co.isConnected && this.layer) this.layer.appendChild(co); } else if (co.isConnected) co.remove();
     },
     _dropHand() { if (this._hand) { try { this._hand.stop(); } catch (e) { /* ignore */ } this._hand = null; } this._handKey = ''; },
-    /** a spot on the ground ~5 m in front of the camera (desktop "tap here to walk") */
+    /**
+     * a spot on the ground a few metres in front of the camera (desktop "tap here to walk"): on the 정선 만장대
+     * deck the landmark's own safe spot (never past the balustrade); elsewhere the nearest of 5 / 3.5 / 2.5 m
+     * that is dry, free, level with the player (no drop or wall top) and reachable in a straight line
+     */
     _groundPoint() {
       const p = G.sys.player?.position, cam = G.sys.engine?.camera;
       if (!p || !cam) return null;
+      try {
+        const s = G.sys.manjangdae?.walkSpot?.();
+        if (s && Number.isFinite(s.x) && Number.isFinite(s.z)) return { x: s.x, z: s.z };
+      } catch (e) { /* landmark optional */ }
+      const W = G.world;
+      const md = G.data.layout?.manjangdae;
+      const onDeck = !!md && Math.hypot(p.x - md.x, p.z - md.z) < md.r + 0.5;
       cam.getWorldDirection(_obV);
       _obV.y = 0;
       if (_obV.lengthSq() < 1e-6) _obV.set(0, 0, -1); else _obV.normalize();
+      const ok = (x, z) => {
+        try {
+          if (W?.isWater?.(x, z) || W?.blocked?.(x, z, 0.4, p.y)) return false;
+          const gy = W?.heightAt?.(x, z, p.y + 0.5);
+          if (!Number.isFinite(gy) || Math.abs(gy - p.y) > 0.6) return false;
+          if (onDeck && Math.hypot(x - md.x, z - md.z) > md.r - 1.2) return false;
+          return true;
+        } catch (e) { return false; }
+      };
       for (const d of [5, 3.5, 2.5]) {
         const x = p.x + _obV.x * d, z = p.z + _obV.z * d;
-        let bad = false;
-        try { bad = !!G.world?.isWater?.(x, z) || !!G.world?.blocked?.(x, z); } catch (e) { bad = false; }
-        if (!bad) return { x, z };
+        if (!ok(x, z)) continue;
+        let clear = true;
+        for (let i = 1; i < 5 && clear; i++) { const f = (i / 5) * d; clear = ok(p.x + _obV.x * f, p.z + _obV.z * f); }
+        if (clear) return { x, z };
       }
       return null;
     },
@@ -2458,7 +2685,8 @@
       const pr = $('#interact-prompt');
       if (!pr || pr.hidden) return false;
       const cur = G.interact?.current;
-      return !!cur && cur.id !== 'NPC001' && cur.kind !== 'npc';
+      // 옹이 follows the child everywhere (and benches / yard decor are all over): their prompt never hides the coach
+      return !!cur && cur.id !== 'NPC001' && cur.kind !== 'npc' && !AMBIENT_KINDS.has(cur.kind);
     },
     _npcPromptVisible() {
       const pr = $('#interact-prompt');
@@ -2613,6 +2841,9 @@
       co.dataset.place = place;
       co.style.setProperty('--ax', `${(ax * 100).toFixed(1)}%`);
       co.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+      // toast lane (02-responsive): a card in the lower half pushes toasts just above it instead of under them
+      const laneB = y + ch / 2 > H * 0.5 ? `${Math.round(H - y + 10)}px` : '10.8rem';
+      if (laneB !== this._laneB) { this._laneB = laneB; document.documentElement.style.setProperty('--coach-lane-bottom', laneB); }
       // spotlight ring around the anchor
       const ring = this.ring;
       if (r && place !== 'center') {
@@ -3364,7 +3595,7 @@
           guarded('kidChat', '아이 채팅', 'kid-chat', { kid: { emoji: '💬', heading: '아이 채팅', title: '글자 채팅을 열까요?', text: '아이가 직접 글을 써서 보낼 수 있어요.', yes: '열기', no: '그대로', danger: true }, html: '아이 채팅을 끄면 쉬운 모드에서도 <b>자유롭게 글을 써서</b> 채팅할 수 있어요. 끌까요?' })),
         settingRow('🔒 보호자 확인', '어른용 화면 앞에서 곱셈 문제를 내요 · 끄면 아이가 모든 화면을 열 수 있어요 · 이 프로필에만 저장돼요',
           guarded('parentGate', '보호자 확인', 'parent-gate', { kid: { emoji: '🔓', heading: '보호자 확인', title: '보호자 확인을 끌까요?', text: '아이가 설정과 로그아웃을 열 수 있어요.', yes: '끄기', no: '그대로', danger: true }, html: '보호자 확인을 끄면 아이가 <b>설정·로그아웃·초기화</b> 화면을 바로 열 수 있어요. 끌까요?' })),
-        settingRow('🔐 보호자 확인 잠그기', st?.unlocked ? `지금 풀려 있어요 (약 ${Math.max(1, Math.ceil((st.unlockLeft || 0) / 60000))}분 남음) · 다 끝나면 잠가 주세요` : '한 번 풀면 5분 동안 열려 있어요', lockBtn),
+        settingRow('🔐 보호자 확인 잠그기', st?.unlocked ? '지금 풀려 있어요 · 어른 화면을 닫으면 저절로 잠겨요' : '어른 화면을 닫으면 저절로 다시 잠겨요', lockBtn),
       );
       if (!hasEasy) f.append(note(`${ico('info', 'ico-sm')}쉬운 모드 모듈을 불러오지 못해 일부 기능(읽어주기·보호자 확인)이 동작하지 않아요.`));
       return f;
@@ -4739,8 +4970,10 @@
         if (isServer()) { L.set(0.04, '계정 확인 중'); await auth.checkServer(); }
         await G.initSystems((f, label) => L.set(0.05 + f * 0.85, `${label} 준비 중`));
         L.set(0.93, '체험관 문을 여는 중');
+        syncLiteUi();
+        G.bus.on('engine:quality', () => { syncLiteUi(); if (Title.open) { Hero.stop(); Hero.start(Title.el); } });
         G.ui.setHudVisible(false);
-        try { G.sys.camera?.cinematic?.(titleCine({ duration: 0 })); } catch (e) { G.log.warn('UI', 'cinematic failed', e?.message || e); }
+        TitleCam.start(0);
         G.loop.start();
         // the first frames compile shaders: keep them behind the loading screen
         await U.nextFrame();
@@ -5035,6 +5268,7 @@
       Onboarding.update(dt);
       Debug.update(dt);
       Hero.tick(dt);
+      TitleCam.tick(dt);
     },
 
     onLogout() {

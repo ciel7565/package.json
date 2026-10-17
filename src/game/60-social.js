@@ -253,7 +253,7 @@
   const PII_MAX = 400; // code points looked at (chat ≤ 120, reports ≤ 300); anything longer is cut
   const PR = String.raw;
   // ---- building blocks (the very same strings appear in ChatFilter.php)
-  const P_SEP = PR`(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]|하고|그리고|이랑(?=[\s0-9])|에|and|x)`;  // one separator unit between digit groups
+  const P_SEP = PR`(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]|하고|그리고|(?:그\s?)?다음(?:에|으로)?|이랑(?=[\s0-9])|에|and|x)`;  // one separator unit between digit groups
   const P_GAP = `${P_SEP}{0,6}`;
   const P_KDW = PR`(?:다섯|여섯|일곱|여덟|아홉|하나|둘|셋|넷|[공영빵일이삼사오육륙칠팔구]|(?<![a-z])(?:zero|one|two|three|four|five|six|seven|eight|nine|oh)(?![a-z])|[0-9])`;
   const P_JOSA = '(?:이야|이에요|이예요|예요|에요|이고|이랑|이요|이다|이라고|라고|입니다|야|요|고|랑|로|으로|번|이|가|은|는|을|를|에|도|만)';
@@ -261,7 +261,8 @@
   const P_CITY = '(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|충청북|충청남|전북|전남|전라북|전라남|경북|경남|경상북|경상남|제주)';
   const P_NOTCOUNT = '(?![0-9개번명층살점분초시원마리등위레렙일월년주판칸장권%])'; // "새로 30개", "2층으로 3번" are counts
   const P_LOT = PR`(?:\s*[0-9]{1,5}(?:\s*-\s*[0-9]{1,5})?` + P_NOTCOUNT + PR`(?:\s*번지)?)?`;
-  const P_AT = PR`(?:@|\(at\)|\[at\]|\{at\}|<at>|골뱅이|앳)`;
+  // "ⓐ" folds to a plain "a": a lone "a" between spaces counts as an at-sign in front of a host + dot + TLD
+  const P_AT = PR`(?:@|\(at\)|\[at\]|\{at\}|<at>|골뱅(?:이)?|앳|엣|에이티|(?<=\s)a(?=\s))`;
   const P_DOT = PR`(?:\.|。|\(dot\)|\[dot\]|\{dot\}|\(\.\)|\[\.\]|\{\.\}|닷|쩜|점|[•·ㆍ‧∙・])`;
   const P_TLDW = PR`(?:(?=[a-z0-9]*[a-z])[a-z0-9]{2,}|컴|넷|케이알|코리아)`;  // any e-mail TLD (c0m too)
   const P_TLD_STRONG = '(?:com|net|org|kr|io|gg|xyz|cc|jp|cn|tk|ml|ga|cf|gq|pw|ws|info|biz|club|online|site|shop|store|website|link|games?|app|dev)';
@@ -271,34 +272,55 @@
   const P_SNS_GAME = '(?:로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤스타즈|브롤|쿠키런|메이플|roblox|zepeto|minecraft|fortnite)';
   const P_SNS_EN = '(?:insta(?:gram)?|ig|tiktok|dm|telegram|line|discord|facebook|fb|youtube|yt|twitter|snapchat|snap|wechat|whatsapp|kakao(?:talk)?|roblox|zepeto|minecraft|fortnite|twitch)';
   const P_SNS_EN_PLAIN = '(?:insta(?:gram)?|ig|discord|tiktok|telegram|snapchat|snap|kakao(?:talk)?|roblox|zepeto|minecraft|fortnite|twitch|youtube|yt)';
-  const P_FOLLOW = PR`(?:팔로우|팔로|follow|친추|친구\s*추가|친구|추가|add|놀러|들어와|와|검색|찾아)`;
+  const P_FOLLOW = PR`(?:팔로우|팔로|follow|친추|친구\s*추가|친구|추가|add|놀러|들어와|와|검색|찾아|쳐(?:봐|봐요|보세요)?|구독|입력)`;
+  const P_SNS_PART = '(?:에서는|에선|에서|에|으로|로|은|는|이|가)?';   // "로블록스에서 …", "제페토에 …"
+  const P_POINT = PR`(?:[:：→➡👉=]|->|=>)`;                          // "인스타: dino", "insta → dino", "인스타 👉 dino"
+  const P_ANY_SNS = '(?:' + P_SNS_KO + '|' + P_SNS_GAME + ')';
   const P_LATIN_ID = PR`[a-z0-9][a-z0-9._#\-]{2,}`;
-  const P_ODD_ID = PR`(?=[a-z0-9._#\-]{3,})[a-z0-9]*[0-9_.#][a-z0-9._#\-]*`; // an id that has a digit / _ . #
+  // an id that has a digit / _ . # (and a letter or _ . #: "dino12", "kid_7"); an all-digit id only from 5 digits up and
+  // not followed by a counter word ("로블록스 100판 했어" stays, "로블록스 12345678" goes)
+  const P_ODD_ID = PR`(?:(?=[a-z0-9._#\-]{3,})(?=[a-z0-9._#\-]*[a-z_.#])[a-z0-9]*[0-9_.#][a-z0-9._#\-]*|[0-9]{5,}(?![0-9가-힣]))`;
   const P_HANGUL_ID = PR`(?:[가-힣]{1,10}[0-9][가-힣0-9]{0,10}|[0-9]{1,10}[가-힣]{1,10})`;
   const P_KID_STOP = '(?:우리|오늘|내일|어제|이제|아직|저기|빨리|진짜|정말|엄마|아빠|동생|누나|언니|오빠|친구|같은|무슨|어느|옛날|다른|그냥|매일|요즘|지금)';
   /** [name, source, flags, predicate?] — ChatFilter::piiPatterns() has the same list in the same order */
   const PII_SRC = [
     // ---- e-mail: "kid@x.com", "kid 골뱅이 naver 닷 com", "kid(at)gmail(dot)com", "kid@gmail" (no TLD), "kid dot dino at gmail dot com"
     ['email', PR`[\p{L}\p{N}._%+\-]+\s*` + P_AT + PR`\s*[\p{L}\p{N}\-]+(?:\s*` + P_DOT + PR`\s*` + P_TLDW + ')+', 'giu'],
-    ['emailWords', PR`[\p{L}\p{N}._%+\-]+(?:\s+dot\s+[\p{L}\p{N}._%+\-]+)*\s+at\s+[\p{L}\p{N}\-]+(?:\s+dot\s+(?=[a-z0-9]*[a-z])[a-z0-9]{2,})+`, 'giu'],
+    ['emailWords', PR`[\p{L}\p{N}._%+\-]+(?:\s+dot\s+[\p{L}\p{N}._%+\-]+)*\s+at\s+[\p{L}\p{N}\-]+(?:\s+(?!dot\s)[a-z0-9\-]{1,12}){0,2}(?:\s+dot\s+(?=[a-z0-9]*[a-z])[a-z0-9]{2,})+`, 'giu'],
     ['emailHost', PR`[\p{L}\p{N}._%+\-]{2,}\s*(?:@|\(at\)|\[at\]|\{at\}|골뱅이|앳)\s*` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
     ['emailHostAt', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:look|looks|looking|meet|see|me|you|we|they|it|is|am|are|was|were|be|this|that|go|come|stay|play|eat|sit|wait|good|bad|laugh|smile|point|stare|arrive|here|there|home|school)\s)[\p{L}\p{N}._%+\-]{2,}\s+at\s+` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
+    ['emailNoTld', PR`[\p{L}\p{N}._%+\-]{2,}\s*@\s*[a-z][a-z0-9\-]{2,}(?![\p{L}\p{N}.@])`, 'giu'],               // "kid@protonmail"
+    ['mailWord', PR`(?:이메일|메일)\s*(?:주소)?\s*(?:은|는|이|가|:)?\s*[a-z0-9][a-z0-9._%+\-]{2,}|e-?mail\s*(?:address\s*)?(?:is|:)\s*` + P_ODD_ID, 'giu'],
     // ---- links: scheme / www, invite & short links, bare domains, disguised dots, IP addresses
     ['url', PR`(?:https?|hxxps?):\/\/[^\s<>"]+|www\.[^\s<>"]+`, 'giu'],
     ['shortLink', PR`(?<![\p{L}\p{N}])(?:t\.me|discord\.gg|bit\.ly|youtu\.be|open\.kakao\.com|qr\.kakao\.com|band\.us|toss\.me|linktr\.ee|naver\.me)(?:\/[^\s<>"]*)?`, 'giu'],
     ['mailHost', PR`(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud)\s*(?:\.|닷|쩜|점)\s*(?:com|net|co\s*\.\s*kr)(?![a-z])`, 'giu'],
     ['domain', PR`(?<![\p{L}\p{N}@.\-])(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)*(?:[a-z0-9][a-z0-9\-]{0,61}[a-z0-9]\.` + P_TLD_STRONG + PR`|[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]\.` + P_TLD_WEAK + PR`)(?![a-z0-9])(?:\/[^\s<>"]*)?`, 'giu'],
     ['urlDot', PR`(?<![\p{L}\p{N}@.\-])[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]\s*(?:\[\s*\.\s*\]|\(\s*\.\s*\)|\{\s*\.\s*\}|\[dot\]|\(dot\)|\{dot\}|\s+dot\s+|닷|쩜|점|\s\.\s?|\.\s)\s*(?:` + P_TLD_STRONG + PR`|컴|넷|케이알|코리아)(?![a-z0-9])`, 'giu'],
+    // "bad,com" "bad。com" "bad·com" "bad[점]com" "bad(닷)com" "bad d0t com" "bad.c0m" (the common TLDs only: lists stay)
+    ['urlDot2', PR`(?<![\p{L}\p{N}@.\-])[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]\s*(?:[,。、·•ㆍ‧∙・.]|\[\s*(?:점|닷|쩜)\s*\]|\(\s*(?:점|닷|쩜)\s*\)|\s+d[o0]t\s+)\s*(?:com|net|org|kr|c0m|n3t)(?![a-z0-9])`, 'giu'],
+    ['shortLinkSpaced', PR`(?<![\p{L}\p{N}])(?:t|bit|discord|youtu|band|toss|linktr|naver)\s*(?:\.|점|닷|쩜)\s*(?:me|ly|gg|be|us|ee)\s*\/\s*[a-z0-9_\-]{2,}`, 'giu'],
+    ['hangulDomain', PR`[가-힣a-z0-9]{2,15}\s?(?:닷|쩜|점)\s?(?:컴|넷)(?![가-힣])`, 'giu'],
     ['ip', PR`(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])`, 'gu'],
     // ---- messenger / SNS / game ids: "카톡 아이디 dino123", "로블록스 dino12 친추", "insta dinokid 팔로우해", "@dino 인스타로 와"
     ['handleKo', P_SNS_KO + PR`\s*(?:(?:아이디|아디|id|계정|주소|닉네임|닉|코드)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|(?:은|는|이|가|:)?\s*(?:@` + P_LATIN_ID + '|' + P_ODD_ID + PR`|[a-z0-9]{6,}|` + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')|' + P_HANGUL_ID + '))', 'giu'],
     ['handleGame', P_SNS_GAME + PR`\s*(?:(?:아이디|아디|id|닉네임|닉|계정|친구\s*코드|코드)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
+    // a platform with a particle / pointer / "친구 추가" before the id, a tag, a channel, or a nickname after "이름"
+    ['handleKo2', P_SNS_KO + P_SNS_PART + PR`\s*(?:(?:친구\s*추가|친추|검색|팔로우|팔로|추가)(?:해|해줘|해요|하면)?\s*:?\s*@?` + P_LATIN_ID + PR`|(?:채널|태그)\s*(?:은|는|:)?\s*@?` + P_LATIN_ID + PR`|(?:으로|로)?\s*` + P_POINT + PR`\s*@?[a-z0-9][a-z0-9._#\-]{1,}|@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
+    ['handleGame2', P_SNS_GAME + P_SNS_PART + PR`\s*(?:내\s*)?(?:(?:아이디|아디|id|닉네임|닉|이름|계정|친구\s*코드|코드|태그|tag)\s*(?:은|는|이|가|:)?\s*(?:[@#]?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|[가-힣]{2,12}(?=\s*` + P_FOLLOW + PR`))|[@#]?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
+    ['handleEn2', PR`(?<![a-z0-9])` + P_SNS_EN + PR`\s*` + P_POINT + PR`\s*@?[a-z0-9][a-z0-9._#\-]{1,}`, 'giu'],
+    ['discordTag', PR`(?:디코|디스코드|discord)\s*(?:아이디|id|:)?\s*[a-z0-9][a-z0-9._\-]{1,31}\s*#\s*[0-9]{4}(?![0-9])`, 'giu'],
+    // the id first, the platform after: "dino77 카톡으로 와", "dinokid 인스타 팔로우해", "내 닉은 dinokid야 로블록스"
+    ['idThenPlatform', PR`(?<![\p{L}\p{N}._#@\-])@?(?:(?=[a-z0-9._#\-]*[a-z])` + P_ODD_ID + PR`(?=\s*(?:` + P_SNS_KO + '|' + P_SNS_GAME + '|' + P_SNS_EN + PR`)(?:으로|로|에서|에|를|을)?(?![a-z]))|` + P_LATIN_ID + PR`(?=\s*` + P_ANY_SNS + PR`(?:으로|로|에서|에)?\s*` + P_FOLLOW + '))', 'giu'],
+    ['nickThenPlatform', PR`(?:닉네임|닉|아이디|아디)\s*(?:은|는|이|가|:)?\s*@?[a-z0-9][a-z0-9._#\-]{2,}(?=(?:이야|야|이에요|예요|에요|이고|고|이요|요)?\s*` + P_ANY_SNS + ')', 'giu'],
     ['openChat', PR`(?:오픈채팅|오픈톡|오픈카톡|단톡)\s*(?:방)?\s*(?:이름|제목)?\s*(?:은|는|:)?\s*[가-힣a-z0-9][가-힣a-z0-9._#\-]+`, 'giu'],
     ['handleEn', PR`(?<![a-z0-9])` + P_SNS_EN + PR`\s*(?:id\s*:?|:|@)\s*@?` + P_LATIN_ID, 'giu'],
     ['handleEnPlain', PR`(?<![a-z0-9])` + P_SNS_EN_PLAIN + PR`\s+@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + '))', 'giu'],
     ['atHandle', PR`(?<![\p{L}\p{N}])@[a-z0-9][a-z0-9._]{2,}(?=\s*(?:인스타|틱톡|디코|카톡|유튜브|트위터|로블록스|제페토|insta|tiktok|discord|youtube|twitter|roblox|zepeto|ig(?![a-z])))`, 'giu'],
     // ---- phone numbers: any separator between the groups ("010,1234,5678", "010😀1234😀5678", "010 하고 1234 …")
     ['phone', PR`(?<![0-9])(?:\+` + P_GAP + '82' + P_GAP + '0?|0)1[016789]' + P_GAP + '[0-9]{3,4}' + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
+    // any filler between the three groups of a mobile number ("010번 1234번 5678", "010 우리엄마 1234 5678", 7+ emoji)
+    ['phoneLoose', PR`(?<![0-9])01[016789] *(?:[^0-9 ] *){0,12}[0-9]{3,4} *(?:[^0-9 ] *){0,12}[0-9]{4}(?![0-9])`, 'gu'], // ≤ 12 junk chars per gap, spaces free (a ZWJ family emoji becomes 4 emoji + 3 spaces after cleanText)
     ['landline', PR`(?<![0-9])0(?:2|[3-6][1-5]|70|50[0-9]?|80)` + P_GAP + '[0-9]{3,4}' + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
     ['digits', PR`(?<![0-9])(?:[0-9]` + P_GAP + PR`){8,}[0-9](?![0-9])`, 'gu', piiNotCounting], // ≥ 9 digits: ids, cards, accounts
     ['localNumber', PR`(?<![0-9])[0-9]{3,4}\s*(?:[\p{Pd}−~.·•ㆍㅡᅳ]\s*)+[0-9]{4}(?![0-9])(?!\s*` + P_COUNTER + ')', 'gu'],
@@ -310,15 +332,23 @@
     // ---- street addresses (a trailing lot number goes with them: "서울시 강남구 역삼동 123-4")
     ['cityDistrict', P_CITY + PR`(?:(?:특별시|광역시|특별자치시|특별자치도|시|도)\s*[가-힣]{1,5}|\s*[가-힣]{2,5})(?:시|군|구)(?![가-힣])(?:\s*[가-힣]{1,5}(?:구|읍|면|동|리)(?![가-힣]))*` + P_LOT, 'gu'],
     ['districtDong', PR`[가-힣]{2,5}(?:구|군)\s*[가-힣]{1,6}(?:동|읍|면|리)(?![가-힣])` + P_LOT, 'gu'],
+    ['cityLoose', P_CITY + PR`(?:\s+[가-힣]{2,4}){1,3}\s+[가-힣]{1,6}(?:동|읍|면|리)(?![가-힣])` + P_LOT, 'gu'],   // "경기 성남 분당 정자동 123"
+    ['roadWords', PR`[가-힣]{1,10}(?<![으새서별주바따실])(?:로|길)\s*[일이삼사오육칠팔구십백천]{3,6}(?:\s*번지|\s*번길)?(?![가-힣])`, 'gu'],
+    ['postcode', PR`(?:우편\s*번호|zip\s*code|postal\s*code)\s*(?:은|는|가|이|:)?\s*[0-9]{5}(?![0-9])`, 'giu'],
     ['road', PR`[가-힣0-9]{1,10}(?<![으새서별주바따실])(?:로|길)\s*(?:[0-9]{1,4}\s*(?:번길|길)\s*)?[0-9]{1,4}(?:\s*-\s*[0-9]{1,4})?` + P_NOTCOUNT + PR`(?:\s*번지)?`, 'gu'],
     ['lot', PR`[가-힣]{1,8}(?:동|리|가)\s*[0-9]{1,5}(?:\s*-\s*[0-9]{1,5})?\s*번지|[가-힣]{1,8}(?:동|리)\s*[0-9]{1,5}\s*-\s*[0-9]{1,5}`, 'gu'],
     ['aptName', PR`[가-힣a-z]{2,12}\s?[0-9]{2,4}\s*동(?![가-힣])`, 'giu'],
     ['apartment', PR`[0-9]{1,4}\s*동\s*[0-9]{1,4}\s*호|(?<![0-9])[0-9]{3,4}\s*호(?![선기실점])(?!\s*(?:교실|강의실|방|차|관|열차))|[가-힣a-z0-9]{1,12}(?:아파트|빌라|오피스텔|맨션)(?![가-힣])`, 'giu'],
-    ['aptWords', PR`(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천]{2,6})\s*동\s*(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천공영]{2,6})\s*호`, 'gu'],
+    ['aptWords', PR`(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천공영]{2,6})\s*동\s*(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천공영]{2,6})\s*호`, 'gu'],
+    ['aptBlockWords', PR`(?:아파트|빌라|맨션)\s*(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천공영]{2,6})\s*동(?![가-힣])`, 'gu'],
     // ---- school / kindergarten / class ("해바라기 초등학교", "해바라기초 2학년", "해바라기 유치원 다녀", "2학년 3반", "이학년 삼반")
     ['schoolShort', PR`[가-힣]{2,10}\s?초(?=\s*(?:[0-9]{1,2}|[일이삼사오육])\s*학년|\s*(?:에\s*)?다(?:녀|니|녔)|\s*학생)`, 'gu'],
-    ['kinder', PR`(?<![가-힣])(?!` + P_KID_STOP + PR`\s)[가-힣]{2,10}\s(?:유치원|어린이집)(?=\s*(?:에\s*)?(?:다녀|다니|다녔|친구|선생|이야|야|이에요|예요|이고|에서|반|원생|학생|가요|갔|간다))`, 'gu'],
-    ['school', PR`[가-힣]{1,10}(?:초등학교|초교|중학교|고등학교|유치원|어린이집)|[가-힣]{2,10}\s(?:초등학교|중학교|고등학교)|[0-9]\s*학년\s*[0-9]{1,2}\s*반`, 'gu'],
+    ['kinder', PR`(?<![가-힣])(?!` + P_KID_STOP + PR`\s)[가-힣]{2,10}\s(?:유치원|어린이집)(?=\s*(?:에\s*)?(?:다녀|다니|다녔|친구|선생|이야|야|이에요|예요|이고|에서|[가-힣]{0,4}반|원생|학생|가요|갔|간다))`, 'gu'],
+    ['schoolChodeung', PR`(?<![가-힣])(?!` + P_KID_STOP + PR`\s)[가-힣]{2,10}\s?초등(?=\s*(?:[0-9]{1,2}|[일이삼사오육])\s*학년|\s*학생|\s*(?:에\s*)?다(?:녀|니|녔))`, 'gu'],
+    ['schoolNamed', PR`학교\s*(?:는|가|은|이름은|이름이)?\s*:?\s*[가-힣]{2,10}(?<!식)초(?:등학교)?(?=` + P_JOSA + PR`?(?![가-힣]))`, 'gu'],
+    ['schoolGrade', PR`(?<![가-힣])(?!` + P_KID_STOP + PR`\s)(?!(?:나는|저는|난|전|내|제|형은|형이|누나는|언니는|오빠는|동생은)\s)[가-힣]{2,10}\s?(?:중|고)(?=\s*(?:[0-9]|[일이삼])\s*학년)`, 'gu'],
+    ['schoolEn', PR`(?<![a-z])(?!(?:to|a|an|the|my|our|in|at|of|go|like|love|and|or|is|was|big|small|new|old|this|that)\s)[a-z]{2,20}\s+(?:elementary|primary|middle\s+school|high\s+school|kindergarten)`, 'giu'],
+    ['school', PR`[가-힣]{1,10}(?:초등학교|초교|중학교|고등학교|유치원|어린이집)|(?<![가-힣])(?!` + P_KID_STOP + PR`\s)[가-힣]{2,10}\s(?:초등학교|중학교|고등학교)|[0-9]\s*학년\s*[0-9]{1,2}\s*반`, 'gu'],
     ['classWords', PR`[일이삼사오육]\s*학년\s*[일이삼사오육칠팔구십]{1,3}\s*반|(?<![0-9])[1-6]\s*-\s*[0-9]{1,2}\s*반`, 'gu'],
   ];
 
@@ -375,7 +405,8 @@
     RX_CTRL = /^[\p{Cc}\p{Zl}\p{Zp}\u2800]$/u;
     RX_ND = /\p{Nd}/u;
   } catch (e) { /* very old engine: no folding (the patterns still run on the text as written) */ }
-  const PII_CJK = { '〇': '0', '零': '0', '一': '1', '二': '2', '三': '3', '四': '4', '五': '5', '六': '6', '七': '7', '八': '8', '九': '9' };
+  const PII_CJK = { '〇': '0', '零': '0', '一': '1', '二': '2', '三': '3', '四': '4', '五': '5', '六': '6', '七': '7', '八': '8', '九': '9',
+    '壹': '1', '貳': '2', '參': '3', '肆': '4', '伍': '5', '陸': '6', '柒': '7', '捌': '8', '玖': '9' }; // + the banking (갖은자) forms
   /** dingbat / double-circled digits that NFKC leaves alone */
   function piiDigitLike(cp) {
     if (cp >= 0x2776 && cp <= 0x277F) return String(cp - 0x2775);
@@ -419,15 +450,15 @@
   function piiUnits(cps) {
     const u = cps.map((c, i) => ({ s: piiFoldChar(c), a: i, b: i + 1 }));
     const one = (x) => x && x.s.length === 1;
-    // O / l / I look-alikes inside a digit token: "O1O-1234", "o1o", "010-l234" (a token = a run of [0-9a-z])
+    // O / l / I / S look-alikes inside a digit token: "O1O-1234", "o1o", "010-l234", "S678" (a token = a run of [0-9a-z])
     for (let i = 0; i < u.length;) {
-      if (!one(u[i]) || !/[0-9oli|]/.test(u[i].s)) { i++; continue; }
+      if (!one(u[i]) || !/[0-9olis|]/.test(u[i].s)) { i++; continue; }
       let j = i;
-      while (j < u.length && one(u[j]) && /[0-9oli|]/.test(u[j].s)) j++;
+      while (j < u.length && one(u[j]) && /[0-9olis|]/.test(u[j].s)) j++;
       const before = i > 0 ? u[i - 1].s : '', after = j < u.length ? u[j].s : '';
       const run = u.slice(i, j);
-      if (run.length >= 3 && !/[a-z]$/.test(before) && !/^[a-z]/.test(after) && run.some((x) => /[0-9]/.test(x.s)) && run.some((x) => /[oli|]/.test(x.s))) {
-        for (const x of run) x.s = x.s === 'o' ? '0' : /[li|]/.test(x.s) ? '1' : x.s;
+      if (run.length >= 3 && !/[a-z]$/.test(before) && !/^[a-z]/.test(after) && run.some((x) => /[0-9]/.test(x.s)) && run.some((x) => /[olis|]/.test(x.s))) {
+        for (const x of run) x.s = x.s === 'o' ? '0' : x.s === 's' ? '5' : /[li|]/.test(x.s) ? '1' : x.s;
       }
       i = j;
     }
@@ -507,6 +538,8 @@
     if (/01[016789][0-9]{3,}|공일공|영일영/u.test(f)) return true;
     if (/카톡|카카오톡|인스타|틱톡|디코|디스코드|텔레그램|페메|유튜브|로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤|insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu.test(f) && /[0-9a-z_]{3,}|[0-9]{2,}/i.test(f.replace(/insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/giu, ''))) return true;
     if (/학년|[0-9일이삼사오육칠팔구]반$|초등|중학|고등|유치원|어린이집|[가-힣]{2,}초[0-9일이삼사오육]/u.test(f)) return true;
+    if (/^(?:ig|yt|tt|dc|snap|kt|insta|fb|tw|tg|dm)[._]/u.test(f)) return true;               // "ig_dino", "snap.dino77"
+    if (/[가-힣]{2,}(?<!식)초$|[가-힣]{2,}(?:중|고)[0-9일이삼]|[가-힣]{1,6}동[0-9]{2,}/u.test(f)) return true; // 해바라기초 · 해바라기중1 · 정자동123
     return false;
   }
   // <<< PII ENGINE
@@ -616,16 +649,31 @@
   // is exactly a preset kid phrase / kid emoji is read from the LOCAL phrase book (never from the received text).
   const normLine = (s) => { let t = String(s ?? ''); try { t = t.normalize('NFC'); } catch (e) { /* old engine */ } return t.replace(/[\uFE0E\uFE0F]/g, '').replace(/\s+/g, ' ').trim(); };
   const PRESET_LINES = new Map(); // normalised text -> what may be read ('' = emoji only: a chime, nothing to read)
-  const addPreset = (text, spoken) => { const k = normLine(text); if (k && !PRESET_LINES.has(k)) PRESET_LINES.set(k, spoken); };
+  const PRESET_SHOW = new Map();  // normalised text -> what kid chat may SHOW (always the local phrase-book string)
+  const addPreset = (text, spoken) => {
+    const k = normLine(text);
+    if (k && !PRESET_LINES.has(k)) { PRESET_LINES.set(k, spoken); PRESET_SHOW.set(k, String(text)); }
+  };
   for (const p of KID_PHRASES) { addPreset(`${p.text} ${p.emoji}`, p.text); addPreset(p.text, p.text); }
   for (const e of KID_EMOJI) addPreset(e, '');
   for (const list of Object.values(KID_TALK)) for (const l of list) addPreset(l, l);
-  const RX_KID_HI = /^.{1,24}, 안녕하세요! 👋$/u; // the 👋 인사 of the kid user menu: "<name>, 안녕하세요! 👋"
+  // the 👋 인사 of the kid user menu is sent as "<name>, 안녕하세요! 👋". The part before the comma is free text from
+  // the sender (anything up to 24 characters), so it is NEVER shown or read: the child sees and hears only the
+  // phrase-book greeting below.
+  const RX_KID_HI = /^.{1,24}, 안녕하세요! 👋$/u;
+  const KID_HI_SHOW = '👋 안녕하세요!';
   /** a preset (code-written) line → the text the voice may read ('' = emoji only), otherwise null */
   function presetLine(text) {
     const k = normLine(text);
     if (PRESET_LINES.has(k)) return PRESET_LINES.get(k);
     if (RX_KID_HI.test(k)) return '안녕하세요!';
+    return null;
+  }
+  /** what kid chat may DISPLAY for another account's message: the local phrase-book text, or null (hidden) */
+  function presetShow(text) {
+    const k = normLine(text);
+    if (PRESET_SHOW.has(k)) return PRESET_SHOW.get(k);
+    if (RX_KID_HI.test(k)) return KID_HI_SHOW;
     return null;
   }
 
@@ -1172,8 +1220,10 @@
       while (this.messages.length > MAX_MSG) { const old = this.messages.shift(); old._el?.remove(); }
       this._render(msg);
       const pub = { ...msg }; delete pub._el; delete pub._txt; delete pub._kidHid;
-      // listeners (알림함 …) get what a child may see: another account's free text stays hidden in kid chat
+      // listeners (알림함 …) get what a child may see: another account's free text stays hidden in kid chat, and a
+      // preset phrase arrives as the local phrase-book text (never the received characters)
       if (this._kidHidden(msg)) { pub.text = '✉️ 글자 메시지예요'; pub.kidHidden = true; }
+      else if (this._kidPhraseView(msg)) { pub.text = this._kidText(msg); pub.kidPhrase = true; }
       G.bus.emit('chat:message', { msg: pub });
       if (!msg.self && !m.history) {
         const visibleHere = !(this._isBlocked(msg.name) && msg.kind !== 'system' && msg.kind !== 'npc') && !(msg.channel === 'local' && !msg.near);
@@ -1647,7 +1697,7 @@
           const ava = h('span', { class: 'skc-ava', 'aria-hidden': 'true' }, m.self ? '😊' : Array.from(m.name)[0] || '?');
           if (!m.self) ava.style.background = `hsl(${nameHue(m.name)} 70% 62%)`;
           const hidden = this._kidHidden(m);
-          const row = h('div', { class: `skc-msg${m.self ? ' me' : ''}` }, ava, h('div', { class: 'skc-bub' }, h('b', null, m.self ? '나' : m.name), hidden ? h('span', { class: 'kid-hidden' }, '✉️ 글자 메시지예요') : h('span', null, m.text)));
+          const row = h('div', { class: `skc-msg${m.self ? ' me' : ''}` }, ava, h('div', { class: 'skc-bub' }, h('b', null, m.self ? '나' : m.name), hidden ? h('span', { class: 'kid-hidden' }, '✉️ 글자 메시지예요') : h('span', null, this._kidText(m))));
           row.__easySpeak = { btn: null, text: this._kidSpeakText(m) };
           row.dataset.say = row.__easySpeak.text;
           return row;
@@ -1795,17 +1845,25 @@
      * kid chat (easy + 아이 채팅): another account's free text is not shown to the child either — only preset
      * phrases and emoji (the same set the child can send). A grown-up who turns 아이 채팅 off sees the real text.
      */
-    _kidHidden(m) { return !!m && m.kind === 'remote' && !m.self && this._kidChatOn() && presetLine(m.text) == null; },
+    _kidHidden(m) { return !!m && m.kind === 'remote' && !m.self && this._kidChatOn() && presetShow(m.text) == null; },
+    /** kid chat shows another account's preset phrase from the local phrase book (not the received characters) */
+    _kidPhraseView(m) { return !!m && m.kind === 'remote' && !m.self && this._kidChatOn() && presetShow(m.text) != null; },
+    /** the text a message shows right now (kid chat: phrase-book text for remote presets) */
+    _kidText(m) { return this._kidPhraseView(m) ? presetShow(m.text) : m?.text; },
     _applyKidView(m) {
       const t = m?._txt;
       if (!t) return;
       const hide = this._kidHidden(m);
-      if (m._kidHid === hide) return;
-      m._kidHid = hide;
+      const view = hide ? '#hidden' : this._kidPhraseView(m) ? '#phrase' : '#text';
+      if (m._kidHid === view) return;
+      m._kidHid = view;
       t.classList.toggle('kid-hidden', hide);
       if (hide) {
         t.replaceChildren(G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✉️'), ' 글자 메시지예요');
         t.dataset.say = '친구가 글자로 말했어요. 어른과 함께 봐요.';
+      } else if (view === '#phrase') {
+        t.replaceChildren(document.createTextNode(presetShow(m.text)));
+        t.dataset.say = this._kidSpeakText(m);
       } else {
         t.replaceChildren(...[].concat(this._textNodes(m.text, G.state?.profile?.nickname)));
         if (m.kind === 'remote') t.dataset.say = this._kidSpeakText(m); else delete t.dataset.say;
@@ -1820,24 +1878,30 @@
       const kind = info.kind === 'npc' ? 'npc' : info.kind === 'remote' ? 'remote' : 'visitor';
       const blocked = this._isBlocked(name);
       const pos = rec?.position || npcRec?.position || null;
+      // another account's nickname is free text chosen by a stranger: it may be SHOWN, but the voice only ever says
+      // "친구" (NPC and simulated visitor names are written by this game and are read as they are)
+      const who = kind === 'remote' ? '친구' : name;
       const items = [];
-      if (kind !== 'npc' && !blocked) items.push({ id: 'hi', emoji: '👋', label: '인사', say: `${name}에게 인사해요`, color: '#4fb3ff' });
-      if (pos) items.push({ id: 'go', emoji: '📍', label: '가까이', say: `${name}에게 가요`, color: '#55d187' });
+      if (kind !== 'npc' && !blocked) items.push({ id: 'hi', emoji: '👋', label: '인사', say: `${who}에게 인사해요`, color: '#4fb3ff' });
+      if (pos) items.push({ id: 'go', emoji: '📍', label: '가까이', say: `${who}에게 가요`, color: '#55d187' });
       if (kind !== 'npc') {
         items.push(blocked ? { id: 'unblock', emoji: '👀', label: '다시 보기', say: '다시 볼까요? 어른이 도와줘요.', color: '#b48bff' }
-          : { id: 'block', emoji: '🙈', label: '안 볼래요', say: `${name}의 말을 안 볼래요`, color: '#ffc93c' });
+          : { id: 'block', emoji: '🙈', label: '안 볼래요', say: `${who}의 말을 안 볼래요`, color: '#ffc93c' });
         items.push({ id: 'report', emoji: '🚨', label: '어른에게', say: '싫은 말을 했나요? 어른에게 알려요.', color: '#ff7a59' });
       }
       if (!items.length) return;
-      const id = await G.easy.pick({ id: 'kid-user', title: name, emoji: kind === 'npc' ? '⭐' : '🙂', say: `${name}. 무엇을 할까요?`, items, columns: Math.min(items.length, 4) });
+      const picking = G.easy.pick({ id: 'kid-user', title: name, emoji: kind === 'npc' ? '⭐' : '🙂', say: kind === 'remote' ? '친구에게 무엇을 할까요?' : `${name}. 무엇을 할까요?`, items, columns: Math.min(items.length, 4) });
+      // a long-press on the title reads this line instead of the stranger's nickname
+      if (kind === 'remote') { const t = G.ui.modal?.get?.('kid-user')?.el?.querySelector?.('.modal-head h2'); if (t) t.dataset.say = '친구 메뉴예요. 무엇을 할까요?'; }
+      const id = await picking;
       if (!id || !G.state) return;
       if (id === 'hi') { if (this.sendChat(`${name}, 안녕하세요! 👋`, 'all', { reply: 'greet' })) { this._kidListenUntil = performance.now() + 12000; if (rec?.position) G.sys.player?.faceTowards?.(rec.position.x, rec.position.z); this._lastEmote = -1e9; this.emote('EMO_HELLO'); } }
       else if (id === 'go') {
         if (npcRec && G.interact?.activate) G.interact.activate(npcRec.id);
-        else if (pos && G.easy?.goTo) G.easy.goTo({ x: pos.x, z: pos.z, label: name }, { stopDistance: 2 });
+        else if (pos && G.easy?.goTo) G.easy.goTo({ x: pos.x, z: pos.z, label: who }, { stopDistance: 2 });
         else this._goTo(info, rec, npcRec);
       } else if (id === 'block') {
-        const ok = await G.easy.confirm({ emoji: '🙈', heading: '안 볼래요', title: `${name}의 말을 안 볼까요?`, yes: '안 볼래요', no: '아니요' });
+        const ok = await G.easy.confirm({ emoji: '🙈', heading: '안 볼래요', title: `${name}의 말을 안 볼까요?`, say: `${who}의 말을 안 볼까요?`, yes: '안 볼래요', no: '아니요' });
         if (ok) this.block(name);
       } else if (id === 'unblock') {
         if (await G.easy.gate({ reason: 'unblock', title: '다시 보기' })) this.unblock(name);
@@ -1845,7 +1909,7 @@
     },
     /** one-tap report for children: confirm → report (+ block) → "어른에게도 말해 줘요" */
     async _kidReport(info) {
-      const ok = await G.easy?.confirm?.({ emoji: '🚨', heading: '어른에게 알리기', title: `${info.name}의 말이 싫었나요?`, text: '알리면 이 친구의 말이 더 이상 안 보여요.', yes: '알려요', no: '아니요' });
+      const ok = await G.easy?.confirm?.({ emoji: '🚨', heading: '어른에게 알리기', title: `${info.name}의 말이 싫었나요?`, text: '알리면 이 친구의 말이 더 이상 안 보여요.', say: '친구의 말이 싫었나요? 알리면 이 친구의 말이 더 이상 안 보여요.', yes: '알려요', no: '아니요' });
       if (!ok || !G.state) return false;
       const lastMsg = info.msgId ? this.messages.find((m) => m.id === info.msgId) : [...this.messages].reverse().find((m) => m.name === info.name && !m.self);
       const done = await this._fileReport(info, 'kid', '', lastMsg, { quiet: true });
@@ -3027,7 +3091,8 @@
       v.rotY += angleDiff(v.rotY, want) * damp(8, dt);
       const align = Math.cos(angleDiff(v.rotY, want));
       if (align < 0.3) return 0.3;
-      const base = v.run ? 3.4 : v.speed;
+      // a running visitor keeps pace with the 3× world (G.sys.player.speedScale); strolls stay leisurely
+      const base = v.run ? 3.4 * clamp(Number(G.sys.player?.speedScale) || 1, 1, 3) : v.speed;
       const sp = base * clamp(align, 0.45, 1) * (last && d < 1.4 ? Math.max(0.45, d / 1.4) : 1);
       const step = Math.min(sp * dt, d + 0.05);
       // move along the facing direction; deflect around unexpected obstacles (NPCs, props)
@@ -3155,7 +3220,9 @@
       if (!S) return;
       const canWrite = !this._guestReadOnly();
       const now = performance.now();
-      if (canWrite && now >= S.nextPres && !S.presBusy) { S.nextPres = now + this._backoff(2) * 1000; this._presence(); }
+      // every 2 s, every second while moving faster than a stroll (3× speed: up to 18 m between updates otherwise)
+      const fast = (G.sys.player?.speed || 0) > (Number(G.sys.player?.WALK) || 9.6) * 0.5;
+      if (canWrite && now >= S.nextPres && !S.presBusy) { S.nextPres = now + this._backoff(fast ? 1 : 2) * 1000; this._presence(); }
       if (now >= S.nextChat && !S.chatBusy) { S.nextChat = now + this._backoff(3) * 1000; this._pollChat(); }
       this._updateRemotes(dt);
     },
@@ -3169,7 +3236,8 @@
         const appKey = JSON.stringify(app || {});
         S.appT -= 1;
         const sendApp = appKey !== S.appKey || S.appT <= 0;
-        const anim = pl.rig?.currentAction || (pl.sitting ? 'sit' : pl.speed > 4.5 ? 'run' : pl.speed > 0.2 ? 'walk' : 'idle');
+        const runAt = ((Number(pl.WALK) || 9.6) + (Number(pl.RUN) || 18)) / 2;   // between walk and run pace
+        const anim = pl.rig?.currentAction || (pl.sitting ? 'sit' : pl.speed > runAt ? 'run' : pl.speed > 0.2 ? 'walk' : 'idle');
         const body = {
           x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100, z: Math.round(p.z * 100) / 100, rotY: Math.round((pl.rotY || 0) * 1000) / 1000,
           anim, speed: Math.round((pl.speed || 0) * 10) / 10, zoneId: G.state.player?.zoneId || G.sys.minimap?.currentZone?.id || null,
@@ -3229,7 +3297,8 @@
       if (r.appearance && typeof r.appearance === 'object' && !Array.isArray(r.appearance)) {
         try { appearance = G.avatar?.normalize ? G.avatar.normalize(r.appearance) : null; } catch (e) { appearance = null; }
       }
-      return { name: cleanName(r.nickname ?? r.name ?? '체험객', 'remote'), x, y, z, rot, zoneId, anim, emote, emoteAt: Number.isFinite(emoteAt) ? emoteAt : 0, appearance };
+      const speed = num(r.speed);
+      return { name: cleanName(r.nickname ?? r.name ?? '체험객', 'remote'), x, y, z, rot, zoneId, anim, emote, emoteAt: Number.isFinite(emoteAt) ? emoteAt : 0, appearance, speed: Number.isFinite(speed) ? clamp(speed, 0, 30) : 0 };
     },
     _upsertRemote(key, id, raw) {
       const r = this._remoteRow(raw);
@@ -3263,8 +3332,10 @@
         o.el.root.classList.toggle('blocked', this._isBlocked(name));
       }
       if (r.appearance) { const k = JSON.stringify(r.appearance); if (k !== o.appKey) { o.appKey = k; try { o.rig.setAppearance(r.appearance); } catch (e) { /* keep */ } } }
-      if (Math.hypot(x - o.position.x, z - o.position.z) > 25) { o.position.set(x, y != null ? y : o.position.y, z); } // teleported: snap
+      if (Math.hypot(x - o.position.x, z - o.position.z) > 20) { o.position.set(x, y != null ? y : o.position.y, z); } // teleported: snap
       o.tx = x; o.tz = z; o.ty = y; o.trot = rot; o.zoneId = r.zoneId || o.zoneId;
+      // dead reckoning between updates: keep going the way the player faces at the reported pace (walk / run only)
+      o.tsp = r.anim === 'walk' || r.anim === 'run' ? r.speed : 0; o.tAt = performance.now();
       const anim = r.anim;
       if (anim !== o.anim) {
         o.anim = anim;
@@ -3282,12 +3353,24 @@
     },
     _updateRemotes(dt) {
       const cam = G.sys.engine.camera.position;
+      const nowMs = performance.now();
       for (const o of this.others.values()) {
         if (o.kind !== 'remote') continue;
         const p = o.position;
         const ox = p.x, oz = p.z;
-        const k = damp(3.2, dt);
-        p.x += (o.tx - p.x) * k; p.z += (o.tz - p.z) * k;
+        // where the player should be by now: the last report + up to 1.2 s of its reported motion (stops at walls)
+        let ex = o.tx, ez = o.tz;
+        if (o.tsp > 0.2 && o.tAt) {
+          const lead = o.tsp * Math.min(1.2, (nowMs - o.tAt) / 1000);
+          const fx = o.tx + Math.sin(o.trot) * lead, fz = o.tz + Math.cos(o.trot) * lead;
+          let free = true;
+          try { free = !G.world.blocked(fx, fz, 0.3, p.y); } catch (e) { free = true; }
+          if (free) { ex = fx; ez = fz; }
+        }
+        const gap = Math.hypot(ex - p.x, ez - p.z);
+        if (gap > 20) { p.x = ex; p.z = ez; }                                  // far behind: snap
+        const k = damp(3.2 + Math.min(6, gap * 0.35), dt);                     // catch up faster when further behind
+        p.x += (ex - p.x) * k; p.z += (ez - p.z) * k;
         const gy = o.ty != null ? o.ty : G.world.heightAt(p.x, p.z, p.y + 0.3);
         p.y += (gy - p.y) * damp(8, dt);
         o.rotY += angleDiff(o.rotY, o.trot) * damp(6, dt);
@@ -3361,7 +3444,7 @@
           // the bubble shows the same masked text as the log (personal information → 🔒)
           if (pushed && !S.first && !self && remote && !this._isBlocked(name)) {
             const hid = this._kidHidden(pushed);
-            this._bubble(remote.bub, hid ? '✉️' : pushed.text, { emote: hid, say: this._kidSpeakText(pushed) });
+            this._bubble(remote.bub, hid ? '✉️' : this._kidText(pushed), { emote: hid, say: this._kidSpeakText(pushed) });
             G.sfx('chat', { volume: 0.6 });
           }
         }

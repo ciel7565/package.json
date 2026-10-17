@@ -43,14 +43,14 @@ body.title-open .toast-root { top: max(1rem, env(safe-area-inset-top)); left: au
     linear-gradient(180deg, rgba(5, 12, 9, .5) 0%, rgba(5, 12, 9, 0) 22%);
 }
 .title-screen { --px: 0; --py: 0; }
-/* parallax depth (70-app Hero sets --px / --py in -1..1): far glow and near petals move against the pointer,
-   the brand and the card drift with it — transform only, damped in JS, off with reduce motion */
+/* parallax depth (70-app Hero sets --px / --py in -1..1): far glow and near petals move against the pointer and
+   the (non-interactive) brand drifts with it, over the 3D orbit nudged the same way — transform only, damped in JS,
+   off with reduce motion. Cards, panels and buttons never move under the pointer: a target must hold still to be hit. */
 .ts-glow { position: absolute; inset: -6%; transform: translate3d(calc(var(--px) * -26px), calc(var(--py) * -18px), 0); }
 .ts-petals { transform: translate3d(calc(var(--px) * -44px), calc(var(--py) * -30px), 0); }
 .ts-brand { transform: translate3d(calc(var(--px) * 10px), calc(var(--py) * 6px), 0); }
-.ts-stage { transform: translate3d(calc(var(--px) * 5px), calc(var(--py) * 4px), 0); }
-.ts-panel { transform: translate3d(calc(var(--px) * 7px), calc(var(--py) * 5px), 0); }
-.ts-aurora { position: absolute; width: 60vmax; height: 60vmax; border-radius: 50%; filter: blur(60px); opacity: .32; mix-blend-mode: screen; will-change: transform; }
+/* soft radial glows (no blur filter / blend mode: both are re-composited every frame over the live 3D view) */
+.ts-aurora { position: absolute; width: 60vmax; height: 60vmax; border-radius: 50%; opacity: .3; will-change: transform; }
 .ts-aurora.a1 { left: -18vmax; top: -22vmax; background: radial-gradient(circle, rgba(52, 195, 107, .9), rgba(52, 195, 107, 0) 65%); animation: ts-drift1 26s ease-in-out infinite alternate; }
 .ts-aurora.a2 { left: 8vmax; bottom: -34vmax; background: radial-gradient(circle, rgba(244, 197, 74, .75), rgba(244, 197, 74, 0) 62%); opacity: .22; animation: ts-drift2 32s ease-in-out infinite alternate; }
 .ts-aurora.a3 { right: -26vmax; top: -10vmax; width: 50vmax; height: 50vmax; background: radial-gradient(circle, rgba(74, 168, 255, .55), rgba(74, 168, 255, 0) 62%); opacity: .16; animation: ts-drift3 38s ease-in-out infinite alternate; }
@@ -111,14 +111,14 @@ body.title-open .toast-root { top: max(1rem, env(safe-area-inset-top)); left: au
 .ts-sub { font-size: clamp(1rem, 1.35vw, 1.22rem); color: #e4ead9; margin: 0 0 .5rem; text-shadow: 0 2px 10px rgba(0, 0, 0, .65); }
 .ts-sub b { color: #fff; }
 .ts-world { font-size: .84rem; color: var(--text-dim); letter-spacing: .01em; text-shadow: 0 1px 6px rgba(0, 0, 0, .7); min-height: 1.2em; }
-.ts-brand { position: relative; }
-/* 萬丈臺 seal: pressed onto the hero like a stamp (decorative, hidden from screen readers and from the kid view) */
+.ts-brand { position: relative; width: fit-content; max-width: 100%; }
+/* 만장대 seal (낙관): pressed beside the title like a stamp (decorative, hidden from screen readers and from the kid view) */
 .ts-seal {
-  position: absolute; right: 0; top: 1.9rem; display: grid; place-items: center; width: 3.3rem; height: 4.6rem; border-radius: 9px;
+  position: absolute; right: -4.3rem; top: 2.1rem; display: grid; place-items: center; width: 3.3rem; height: 4.6rem; border-radius: 9px;
   background: linear-gradient(160deg, #c8402f, #94261a); color: #fff3e6; box-shadow: inset 0 0 0 2px rgba(255, 235, 215, .55), 0 10px 24px rgba(0, 0, 0, .4);
   rotate: -6deg; opacity: .92; pointer-events: none;
 }
-.ts-seal i { font-style: normal; writing-mode: vertical-rl; font-size: 1.15rem; font-weight: 800; letter-spacing: .12em; font-family: 'Noto Serif KR', 'Nanum Myeongjo', serif, var(--font); }
+.ts-seal i { font-style: normal; writing-mode: vertical-rl; text-orientation: upright; font-size: 1.05rem; line-height: 1; font-weight: 800; letter-spacing: .14em; font-family: var(--font); }
 .title-screen.in .ts-seal { animation: ts-stamp 700ms var(--ease-out) 520ms both; }
 @keyframes ts-stamp { 0% { opacity: 0; scale: 1.5; } 60% { opacity: .95; scale: .97; } 100% { opacity: .92; scale: 1; } }
 .ts-place {
@@ -133,22 +133,21 @@ body.title-open .toast-root { top: max(1rem, env(safe-area-inset-top)); left: au
 .title-screen.in .ts-eyebrow, .title-screen.in .ts-sub, .title-screen.in .ts-world { animation: ts-fade-up .8s var(--ease) both; }
 .title-screen.in .ts-sub { animation-delay: .34s; }
 .title-screen.in .ts-world { animation-delay: .42s; }
-@keyframes ts-rise { from { opacity: 0; translate: 0 .45em; filter: blur(6px); } to { opacity: 1; translate: 0 0; filter: blur(0); } }
+@keyframes ts-rise { from { opacity: 0; translate: 0 .45em; scale: .97; } to { opacity: 1; translate: 0 0; scale: 1; } }
 @keyframes ts-fade-up { from { opacity: 0; translate: 0 12px; } to { opacity: 1; translate: 0 0; } }
 
 /* ---- stage: card + mascot */
 .ts-stage { display: flex; align-items: flex-end; gap: 1.2rem; }
 .ts-card {
   position: relative; width: min(27rem, 100%); padding: 1.15rem 1.15rem 1.05rem; flex: none;
-  background: linear-gradient(180deg, rgba(20, 32, 25, .78), rgba(10, 18, 14, .86));
-  border-color: rgba(255, 255, 255, .16); border-radius: 22px;
+  /* gold → green rim drawn as a border-box gradient under a padding-box fill: no mask pass (a mask-composite
+     ring re-rendered every frame was the single most expensive effect on weak / software GPUs) */
+  border: 1px solid transparent; border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(20, 32, 25, .84), rgba(10, 18, 14, .9)) padding-box,
+    linear-gradient(140deg, rgba(244, 197, 74, .6), rgba(255, 255, 255, .1) 35%, rgba(52, 195, 107, .42) 100%) border-box;
   box-shadow: 0 0 0 1px rgba(244, 197, 74, .08), 0 24px 60px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .08);
   max-height: calc(100vh - 2.4rem); overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.25) transparent;
-}
-.ts-card::before {
-  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; padding: 1px;
-  background: linear-gradient(140deg, rgba(244, 197, 74, .55), rgba(255, 255, 255, .06) 35%, rgba(52, 195, 107, .35) 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
 }
 .title-screen.in .ts-card { animation: ts-card-in .8s var(--ease) .18s both; }
 .ts-card.shake { animation: ts-shake .42s ease both; }
@@ -165,10 +164,11 @@ body.title-open .toast-root { top: max(1rem, env(safe-area-inset-top)); left: au
   box-shadow: 0 10px 30px rgba(226, 170, 34, .38), inset 0 1px 0 rgba(255, 255, 255, .55);
 }
 .ts-start::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .55) 45%, transparent 60%);
-  background-size: 250% 100%; animation: shimmer 4.5s ease-in-out infinite; mix-blend-mode: soft-light;
+  content: ''; position: absolute; inset: 0; pointer-events: none; transform: translateX(-110%);
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .28) 48%, transparent 66%);
+  animation: sheenSweep 4.5s var(--ease-in-out) infinite;
 }
+@keyframes sheenSweep { 0%, 55% { transform: translateX(-110%); } 100% { transform: translateX(110%); } }
 .ts-start-ico { display: grid; place-items: center; width: 2.9rem; height: 2.9rem; border-radius: 14px; background: rgba(43, 29, 2, .14); box-shadow: inset 0 0 0 1px rgba(43, 29, 2, .12); flex: none; }
 .ts-start-ico .emoji { font-size: 1.7rem; animation: ts-jar 2.6s ease-in-out infinite; }
 .ts-start-txt { display: flex; flex-direction: column; gap: .15rem; min-width: 0; flex: 1; }
@@ -251,7 +251,8 @@ body.title-open .toast-root { top: max(1rem, env(safe-area-inset-top)); left: au
 /* mascot */
 .ts-mascot { position: relative; display: flex; flex-direction: column; align-items: center; flex: none; padding-bottom: .4rem; cursor: pointer; outline-offset: 6px; border-radius: 18px; }
 .title-screen.in .ts-mascot { animation: ts-mascot-in .9s var(--ease) .45s both; }
-.ts-mascot-body { position: relative; filter: drop-shadow(0 12px 18px rgba(0, 0, 0, .45)); animation: ts-bob 3.2s ease-in-out infinite; transform-origin: 50% 90%; }
+.ts-mascot-body { position: relative; animation: ts-bob 3.2s var(--ease-in-out) infinite; transform-origin: 50% 90%; }
+.ts-mascot-body svg { filter: drop-shadow(0 12px 18px rgba(0, 0, 0, .45)); }
 .ts-mascot-body svg { display: block; width: 7rem; height: auto; }
 .ts-mascot::after {
   content: '👋'; position: absolute; right: -.4rem; top: 2.6rem; font-size: 1.7rem; line-height: 1;
@@ -742,7 +743,12 @@ body.title-open .toast-root { top: max(1rem, env(safe-area-inset-top)); left: au
   .ts-mascot-body, .ts-mascot::after, .coach-mascot, .coach-ring, .coach-hl { animation: none !important; }
 }
 body.reduce-motion .ts-petals, body.reduce-motion .ts-aurora, body.reduce-motion .ts-start::after { display: none; }
-body.reduce-motion .title-screen .ts-glow, body.reduce-motion .title-screen .ts-brand, body.reduce-motion .title-screen .ts-stage, body.reduce-motion .title-screen .ts-panel { transform: none; }
+/* low quality preset (body.ui-lite, 70-app): the title keeps its layout but drops the effects that cost the most on
+   weak / software GPUs — glows, petals, sheen loops, filters (glass blur is switched off by the --blur token) */
+body.ui-lite .ts-aurora, body.ui-lite .ts-petals, body.ui-lite .ts-start::after, body.ui-lite .kf-go::after, body.ui-lite .kid-go-big::after { display: none; }
+body.ui-lite .ts-title, body.ui-lite .ts-mascot-body svg, body.ui-lite .coach-mascot svg { filter: none; }
+body.ui-lite .ts-title .w { text-shadow: 0 3px 14px rgba(0, 0, 0, .6); }
+body.reduce-motion .title-screen .ts-glow, body.reduce-motion .title-screen .ts-brand, body.reduce-motion .title-screen .ts-petals { transform: none; }
 
 /* ==================================================================
    쉬운 모드 (CONTRACT §12) — kid title, picture menu, kid settings & help,
@@ -837,9 +843,9 @@ body.easy .ts-modebar button { min-height: var(--tap); font-size: 1rem; }
 .kf-go { grid-area: go; margin-top: .85rem; position: relative; overflow: hidden; }
 .kf-go .emoji, .kid-go-big .emoji { font-size: 1.6em; line-height: 1; }
 .kf-go::after, .kid-go-big::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
-  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .6) 45%, transparent 60%); background-size: 250% 100%;
-  animation: shimmer 4.5s ease-in-out infinite; mix-blend-mode: soft-light;
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; transform: translateX(-110%);
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .32) 48%, transparent 66%);
+  animation: sheenSweep 4.5s var(--ease-in-out) infinite;
 }
 .kid-go-big { position: relative; overflow: hidden; width: 100%; margin-top: 1rem; transition: transform .14s var(--ease-pop), box-shadow .14s; touch-action: manipulation; }
 .kid-go-big:hover:not(:disabled) { transform: translateY(-2px) scale(1.01); }

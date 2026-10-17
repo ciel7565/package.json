@@ -178,6 +178,13 @@ function cleanup() {
   if (phpProc) {
     // remove the photos this run uploaded into dist/metaverse/uploads
     for (const u of uploadedFiles) { try { fs.unlinkSync(path.join(ROOT, 'dist/metaverse', u)); } catch { /* ignore */ } }
+    // and the then-empty dated folders (uploads/journal/YYYY/MM), so no test residue ends up in the release zip
+    // (rmdirSync only removes empty folders; the server re-creates them on the next upload)
+    const base = path.join(ROOT, 'dist/metaverse/uploads');
+    for (const u of uploadedFiles) {
+      let d = path.dirname(path.join(ROOT, 'dist/metaverse', u));
+      while (d.startsWith(base + path.sep) && d !== base) { try { fs.rmdirSync(d); } catch { break; } d = path.dirname(d); }
+    }
   }
 }
 

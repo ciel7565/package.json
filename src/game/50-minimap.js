@@ -783,6 +783,8 @@
       this._applyPanelState();
       this._setZoom(this.zoom);
 
+      // a teleport (or any reported move) is checked on the next frame, so a zone visit never waits for the 0.25 s tick
+      G.bus.on('player:moved', () => { if (this._detT < 0.25) this._detT = 0.25; });
       G.ui.onAction('minimap', () => this.toggle());
       G.ui.onAction('minimap-collapse', () => this.setCollapsed(!this.collapsed));
       G.ui.onAction('minimap-close', () => this.setVisible(false, true));
@@ -1648,6 +1650,10 @@
       try { pl.cancelWalk?.('travel'); } catch (e) { /* ignore */ }
       if (easy && opts.say !== false) say(name ? `${name}${ro(name).slice(name.length)} 가요!` : '출발!', { priority: 1 });
       try {
+        // departure: the portal dissolve plays where the player stands, the fade starts while it rises (66-fx)
+        if (!G.settings?.reduceMotion && typeof G.fx?.portal === 'function') {
+          try { G.fx.portal(pl.position, { mode: 'out' }); await G.util.sleep(220); } catch (e) { /* fx optional */ }
+        }
         await pl.teleport(a.x, a.z, a.rotY);
         this._detT = 1; // detect right away
         this._drawT = 1;

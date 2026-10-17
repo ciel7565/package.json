@@ -2327,6 +2327,19 @@
       B.on('interact', (p) => { this._playerIdleSince = pnow(); if (p?.kind !== 'companion') this._wake(); });
       B.on('ui:modal-open', () => { this._playerIdleSince = pnow(); });
       B.on('npc:talk', () => this._wake());
+      // sky moments (51-weather): one short happy line per rainbow, at most one a minute for shooting stars; quiet
+      // during the 만장대 intro / telescope view and while a dialog or menu is open
+      const skyLine = (bubble, text, key, gapMs) => {
+        if (!G.state || !this._shown || this._sleeping || this._photo) return;
+        if (G.sys.manjangdae?.introActive || G.sys.manjangdae?.tourActive || G.ui.isBlocking?.()) return;
+        const t = pnow(), at = this._skyAt || (this._skyAt = {});
+        if (t - (at[key] ?? -1e9) < gapMs) return;
+        at[key] = t;
+        this.react('jump', { bubble });
+        say(text, { mood: 'cheer', ttl: 7000, source: 'sky' });
+      };
+      B.on('weather:rainbow', (p) => { if (p?.on) skyLine('🌈', '와, 무지개가 떴어요! 🌈', 'rainbow', 120000); });
+      B.on('weather:shootingstar', () => skyLine('🌠', '별똥별이에요! 소원 빌어 봐요 🌠', 'star', 60000));
       B.on('settings:changed', ({ key, value } = {}) => {
         if (key !== 'companion' || !G.state) return;
         if (value === false) { this._burst('dust', 10); Say.clear(); }

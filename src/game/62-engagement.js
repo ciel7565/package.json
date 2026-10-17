@@ -815,7 +815,10 @@
       const name = str(msg.name, 24) || '체험객';
       if (G.sys.social?.isBlocked?.(name)) return;
       this._mention.id = id;
-      this.notify({ type: 'mention', icon: '💬', title: `${name}님이 나를 불렀어요`, text: `“${str(msg.text, 120)}”`, act: 'chat', key: 'mention' });
+      // another account's nickname is a stranger's free text: the title (what the kid inbox shows and reads aloud)
+      // says only "친구"; the name stays in the detail line for grown-ups. msg.text is already kid-safe (60-social).
+      const remote = msg.kind === 'remote';
+      this.notify({ type: 'mention', icon: '💬', title: remote ? '친구가 나를 불렀어요' : `${name}님이 나를 불렀어요`, text: remote ? `${name}: “${str(msg.text, 120)}”` : `“${str(msg.text, 120)}”`, act: 'chat', key: 'mention' });
     },
 
     // ============================================================ hotkeys
@@ -1650,14 +1653,16 @@
     },
     _renderRank(p) {
       const head = h('div', { class: 'eng-rhead' });
-      const body = h('div', { class: 'eng-rbody' }, h('div', { class: 'eng-skel' }, h('i'), h('i'), h('i'), h('i')));
+      // shimmering placeholder rows while the ranking loads (the shared 04-ui skeleton; the old bars as a fallback)
+      const skel = () => (typeof G.ui.skeleton === 'function' ? h('div', { class: 'eng-skel-wrap', html: G.ui.skeleton({ rows: 5, avatar: true }) }) : h('div', { class: 'eng-skel' }, h('i'), h('i'), h('i'), h('i')));
+      const body = h('div', { class: 'eng-rbody' }, skel());
       p.append(head, body);
       const fill = (res) => {
         if (!p.isConnected || this._tab !== 'rank') return;
         const refresh = h('button', { type: 'button', class: 'btn btn-soft btn-sm' }, h('span', { class: 'ico ico-sm', 'data-icon': 'refresh' }), ' 새로고침');
         refresh.addEventListener('click', () => {
           if (performance.now() - this._rankAt < 5000) { G.ui.toast('잠시 후 다시 눌러 주세요.', { sound: false }); return; }
-          body.replaceChildren(h('div', { class: 'eng-skel' }, h('i'), h('i'), h('i'), h('i')));
+          body.replaceChildren(skel());
           this.ranking({ force: true }).then(fill);
         });
         head.replaceChildren(
@@ -1991,7 +1996,7 @@
         const name = str(o.name, 24);
         if (!name || S.isBlocked?.(name)) continue;
         const pos = o.position && Number.isFinite(o.position.x) ? o.position : null;
-        people.push({ name, pos, d: pp && pos ? Math.hypot(pos.x - pp.x, pos.z - pp.z) : Infinity });
+        people.push({ name, pos, remote: o.kind === 'remote', d: pp && pos ? Math.hypot(pos.x - pp.x, pos.z - pp.z) : Infinity });
       }
       people.sort((a, b) => a.d - b.d);
       const grid = h('div', { class: 'eng-kfriends' });
@@ -2004,16 +2009,18 @@
         ava.style.setProperty('--hue', String(U.hashInt(`hue|${f.name}`) % 360));
         const z = f.pos ? G.world?.zoneAt?.(f.pos.x, f.pos.z) : null;
         const where = f.d < 25 ? '📍 가까이 있어요' : z ? `${z.short || z.name}에 있어요` : '체험관에 있어요';
+        // a real account's nickname is shown but never spoken (a stranger chose it): the voice says "친구"
+        const who = f.remote ? '친구' : f.name;
         const hi = this._kidBtn('👋', '인사', 'easy-btn-yes eng-kfriend-hi', () => {
           if (G.sys.social?.sendChat?.(`${f.name}, 안녕하세요! 👋`, 'all', { reply: 'greet' })) {
             hi.classList.add('sent');
             G.sfx('pop');
-            kidSay(`${f.name}에게 인사했어요!`, { priority: 1, force: true });
+            kidSay(`${who}에게 인사했어요!`, { priority: 1, force: true });
           }
-        }, `${f.name}에게 인사해요`);
+        }, `${who}에게 인사해요`);
         const card = h('div', { class: 'eng-kfriend' }, ava, h('b', null, f.name), h('small', null, where), h('div', { class: 'eng-kfriend-btns' }, hi,
-          f.pos ? this._kidBtn('📍', '가기', 'easy-btn-no', () => { this.close(); setTimeout(() => G.easy?.goTo?.({ x: f.pos.x, z: f.pos.z, label: f.name }, { stopDistance: 2 }), 80); }, `${f.name}에게 가요`) : null));
-        card.__easySpeak = { btn: null, text: `${f.name}. ${where}` };
+          f.pos ? this._kidBtn('📍', '가기', 'easy-btn-no', () => { this.close(); setTimeout(() => G.easy?.goTo?.({ x: f.pos.x, z: f.pos.z, label: who }, { stopDistance: 2 }), 80); }, `${who}에게 가요`) : null));
+        card.__easySpeak = { btn: null, text: f.remote ? `친구예요. ${where}` : `${f.name}. ${where}` };
         grid.appendChild(card);
       }
       p.appendChild(grid);

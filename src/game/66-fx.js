@@ -119,7 +119,7 @@
     firefly: ['#fff3a0', '#e6ff9a', '#ffe48a'].map(C),
     white: [C('#ffffff')],
   };
-  const SURFACE_DUST = dict({ grass: C('#b9c79a'), road: C('#c9c4bb'), stone: C('#cfc8bb'), dirt: C('#a5835e'), wood: C('#b49470'), sand: C('#e2d2a8') });
+  const SURFACE_DUST = dict({ grass: C('#d4dbb8'), road: C('#c9c4bb'), stone: C('#cfc8bb'), dirt: C('#a5835e'), wood: C('#b49470'), sand: C('#e2d2a8') });
   const _c1 = new THREE.Color(), _c2 = new THREE.Color();
 
   // ---------------------------------------------------------------- positions
@@ -904,7 +904,7 @@
     },
     _bumpBag(bag, qty, e) {
       if (!bag.isConnected) return;
-      try { bag.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.12)', offset: 0.35 }, { transform: 'scale(1)' }], { duration: 360, easing: 'cubic-bezier(.22,1,.36,1)' }); } catch (err) { /* cosmetic */ }
+      try { bag.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.04)', offset: 0.35 }, { transform: 'scale(1)' }], { duration: 360, easing: 'cubic-bezier(.22,1,.36,1)' }); } catch (err) { /* cosmetic */ }
       if (!this._layer()) return;
       const r = bag.getBoundingClientRect();
       const chip = G.ui.h('span', { class: 'fx-item-chip' }, '+' + qty);
@@ -1057,7 +1057,7 @@
       P.t = 0; P.active = true; P.spawnAcc = 0; P.showerAcc = 0; P.group.visible = true;
       P.dur = quest ? 2.4 : 2.8; P.tall = quest ? 12 : 16; P.follow = !pos;
       P.outer.material.uniforms.uColor.value.set(quest ? 0x7fe3b4 : 0xffc94a);
-      P.inner.material.uniforms.uColor.value.set(quest ? 0xfff4cf : 0xfff2c0);
+      P.inner.material.uniforms.uColor.value.set(quest ? 0xdcffec : 0xfff2c0);
       P.group.position.copy(at);
       const ground = this._ev.copy(at);
       // shock rings + star burst (+ confetti for a level-up)
@@ -1144,7 +1144,7 @@
         if (this._airVy < -4 && !quietCam) {          // every real jump / drop (jump v0 = 5.7 m/s), not a step down
           const power = clamp(-this._airVy / 6, 1, 2.4);
           this._footDust(pl, l, power);
-          CM.landRing(pl, power);
+          CM.landRing(pl, power, l);
           CM.footprint(pl, 1, l, true);
         }
         this._airVy = 0; this._wasAir = false;
@@ -1228,7 +1228,7 @@
       return Number.isFinite(x) && Number.isFinite(y) ? { x: clamp(x, 0, W), y: clamp(y, 0, H) } : fallback;
     },
     _bumpCoin(icon) {
-      try { icon.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.45) rotate(-10deg)', filter: 'drop-shadow(0 0 6px rgba(255,214,90,.95))' }, { transform: 'scale(1)' }], { duration: 260, easing: 'ease-out' }); } catch (e) { /* cosmetic */ }
+      try { icon.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.04) rotate(-6deg)', filter: 'drop-shadow(0 0 6px rgba(255,214,90,.95))' }, { transform: 'scale(1)' }], { duration: 260, easing: 'ease-out' }); } catch (e) { /* cosmetic */ }
     },
     _startCoinOverride() {
       if (this._coinOverride) return;
@@ -1334,7 +1334,7 @@
       L.cur = nu;
       try {
         if (old) old.animate([{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(-70%)', opacity: 0 }], { duration: 220, easing: 'ease-in', fill: 'forwards' }).finished.then(() => old.remove(), () => old.remove());
-        nu.animate([{ transform: 'translateY(70%) scale(.8)', opacity: 0 }, { transform: 'translateY(0) scale(1.18)', opacity: 1, offset: 0.7 }, { transform: 'translateY(0) scale(1)', opacity: 1 }], { duration: last ? 420 : 220, easing: 'ease-out' });
+        nu.animate([{ transform: 'translateY(70%) scale(.8)', opacity: 0 }, { transform: 'translateY(0) scale(1.03)', opacity: 1, offset: 0.7 }, { transform: 'translateY(0) scale(1)', opacity: 1 }], { duration: last ? 420 : 220, easing: 'ease-out' });
       } catch (e) { old?.remove(); }
       if (last) { G.sfx('reward', { volume: 0.5 }); L.numEl.classList.add('fx-lu-final'); }
     },
@@ -1967,9 +1967,13 @@
       float edge = (1.0 - smoothstep(0.0, 0.07, abs(field - thr))) * live;
       float dy = (y - uProg) * 12.0;
       float scan = exp(-dy * dy) * live;
-      float rim = 0.3 + 0.7 * (1.0 - vFace);
+      // brightest just inside the silhouette, fading to nothing AT it: soft sides instead of a hard-edged box
+      float side = smoothstep(0.02, 0.32, vFace);
+      float rim = (0.3 + 0.7 * (1.0 - vFace)) * side;
       float fade = (1.0 - smoothstep(0.72, 1.0, vUv.y)) * smoothstep(0.0, 0.04, vUv.y);
-      float a = (keep * rim * 0.55 + edge * 1.1 + scan * 0.55) * fade * uOp;
+      // the solid part is a soft, noisy veil brightest at the feet (no flat "box of light"); the burning edge carries the shape
+      float body = keep * rim * (0.3 + 0.32 * n) * mix(1.0, 0.45, vUv.y);
+      float a = (body + (edge * 1.1 + scan * 0.55) * (0.35 + 0.65 * side)) * fade * uOp;
       if (a < 0.003) discard;
       vec3 c = mix(uColor, uEdge, clamp(edge + scan, 0.0, 1.0));
       gl_FragColor = vec4(c, clamp(a, 0.0, 1.0));
@@ -2433,15 +2437,23 @@
       this.fpLast = this.t;
     },
 
-    /** dust shock ring on a hard landing (normal blending: dust, not light) */
-    landRing(pl, power) {
+    /** dust shock ring + a crown of puffs blown outwards on a landing (normal blending: dust, not light) */
+    landRing(pl, power, l = 2) {
       if (!fx._normal) return;
       const p = pl.position;
       let surf = 'grass';
       try { surf = G.world?.surfaceAt?.(p.x, p.z) || 'grass'; } catch (e) { surf = 'grass'; }
+      if (surf === 'water') return;
       const col = SURFACE_DUST[surf] || SURFACE_DUST.grass;
-      resetSP(); SP.kind = K.SHOCK; SP.flags = F_FLAT | F_GROW; SP.life = 0.55; SP.s0 = 0.4; SP.s1 = 1.4 + power * 0.9; SP.a0 = 0.55; SP.drag = 0; SP.fout = 0.3; SP.color = col; SP.rot = rnd() * TAU;
+      resetSP(); SP.kind = K.SHOCK; SP.flags = F_FLAT | F_GROW; SP.life = 0.6; SP.s0 = 0.4; SP.s1 = 1.5 + power * 0.9; SP.a0 = 0.62; SP.drag = 0; SP.fout = 0.35; SP.color = col; SP.rot = rnd() * TAU;
       spawn(fx._normal, p.x, p.y + 0.05, p.z, 0, 0, 0);
+      const n = l > 1 ? 10 : 5, a0 = rnd() * TAU;
+      for (let i = 0; i < n; i++) {
+        const a = a0 + (i / n) * TAU + R(-0.15, 0.15), v = R(1.6, 2.6) * Math.min(1.6, power);
+        resetSP(); SP.kind = K.PUFF; SP.life = R(0.5, 0.75); SP.s0 = 0.16; SP.s1 = R(0.42, 0.6); SP.a0 = 0.6; SP.grav = 0.25; SP.drag = 3.2;
+        SP.floor = p.y; SP.color = col;
+        spawn(fx._normal, p.x + Math.cos(a) * 0.25, p.y + 0.08, p.z + Math.sin(a) * 0.25, Math.cos(a) * v, R(0.25, 0.55), Math.sin(a) * v);
+      }
     },
 
     portal(pos, mode) {
@@ -2517,6 +2529,9 @@
       const B = this.ban;
       const cam = G.sys.engine?.camera;
       B.t += dt;
+      // left the zone (fast travel, teleport, walked on): the board lifts away now instead of naming the wrong place
+      const zNow = G.sys.minimap?.currentZone?.id || G.state?.player?.zoneId || null;
+      if (zNow && B.zone && zNow !== B.zone && B.t < B.dur - 0.35) B.t = B.dur - 0.35;
       if (!cam || B.t >= B.dur || !G.state || cinematic()) { B.active = false; B.g.visible = false; return; }
       const dist = 5.4;
       const fov = THREE.MathUtils.degToRad(cam.fov || 55);

@@ -83,6 +83,9 @@
   --z-loading: 100;
   --z-fatal: 200;
 }
+/* low quality preset (70-app toggles body.ui-lite): no backdrop blur anywhere (it is re-composited over the live
+   3D view every frame — the costliest UI effect on weak / software GPUs); glass becomes a little more opaque */
+body.ui-lite { --blur: none; --bg-glass: rgba(14, 22, 18, 0.8); --bg-glass-strong: rgba(11, 18, 15, 0.94); }
 /* easy mode (§12): calmer motion — smaller travel, no overshoot, gentler entrance scale */
 body.easy { --ease-pop: var(--ease-out-quint); --lift: -1px; --press: .95; --enter-scale: .95; --stagger: 44ms; }
 
@@ -525,3 +528,5 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
   :root { --dur-1: 1ms; --dur-2: 1ms; --dur-3: 1ms; --dur-4: 1ms; --stagger: 0ms; }
   *, *::before, *::after { animation-duration: .001s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; transition-delay: 0s !important; }
 }
+/* low preset (body.ui-lite): no masked, rotating ray layers */
+body.ui-lite .reward-pop::before { display: none; }

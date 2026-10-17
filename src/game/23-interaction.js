@@ -6,7 +6,7 @@
 //      -> {id, unregister(), setEnabled(b)}
 //   G.interact.unregister(id), get(id), list(kind?), current, hovered, hint, trigger(), activate(id) (walks there first),
 //   setObject(id, obj) (attach a mesh built after registration), showDest(x, z, forEntry) / hideDest()
-//   hover glow (CONTRACT §13.4): the mouse-hovered entry and the focused one get G.sys.engine.setOutline (rebuilt
+//   hover glow (CONTRACT §13.4): the mouse-hovered entry (+ the focused one, medium/high) get G.sys.engine.setOutline (rebuilt
 //   only when the pair changes); without it a soft additive halo pulses behind the object (≤ 1 Hz, steady with
 //   reduceMotion). Entries with highlight:false and farm beds (their own frame) are skipped.
 //   optional entry fields for 쉬운 모드 (CONTRACT §12): kidLabel: string|()=>string (short kid words, no emoji),
@@ -503,7 +503,10 @@
     _updateGlow(dt, t, allowed) {
       const hv = allowed && this.hovered && this.hovered.highlight && this.hovered.object && isEnabled(this.hovered) ? this.hovered : null;
       const cur = this.current;
-      const cu = allowed && cur && cur !== hv && cur.highlight && cur.object && cur.kind !== 'plot' && !(cur.kind === 'bench' && G.sys.player?.sitting) ? cur : null;
+      // the focused entry already has its ring / frame: its rim glow is an extra (skipped on the low preset — each
+      // outlined mesh is one more draw)
+      const cu = allowed && cur && cur !== hv && cur.highlight && cur.object && cur.kind !== 'plot' && G.sys.engine?.quality !== 'low'
+        && !(cur.kind === 'bench' && G.sys.player?.sitting) ? cur : null;
       const key = (hv ? hv.id : '') + '|' + (cu ? cu.id : '');
       const eng = G.sys.engine;
       if (typeof eng?.setOutline === 'function') {

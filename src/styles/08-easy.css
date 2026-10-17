@@ -155,7 +155,11 @@ body.easy .modal-body { font-size: max(16px, 1rem); }
 }
 .easy-gate-q .op { color: var(--kid-gold); font-weight: 700; }
 .easy-gate-q .qm { color: var(--kid-green); }
-.easy-gate-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; }
+.easy-gate-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
+.easy-gate-steps {
+  margin: .1rem 0 .15rem; font-size: max(16px, 1rem); font-weight: 800; letter-spacing: .02em;
+  color: var(--kid-gold); font-variant-numeric: tabular-nums; white-space: pre;
+}
 .easy-gate-choice {
   min-height: max(var(--tap), 60px); border-radius: 18px; font-size: 1.65rem; font-weight: 800; font-variant-numeric: tabular-nums;
   color: var(--kid-ink); background: linear-gradient(180deg, #ffffff, #e6eee3); border: 2px solid rgba(255, 255, 255, .85);
@@ -187,6 +191,9 @@ body.easy .modal-body { font-size: max(16px, 1rem); }
   animation: easyHandRing 1.05s ease-out infinite;
 }
 .easy-hand.edge .eh-ring { display: none; }
+/* a target inside the crowded bottom control cluster of a phone: a smaller hand touches fewer neighbours (NEW-4) */
+.easy-hand.compact .eh-glyph { font-size: 2.6rem; left: -1.3rem; }
+.easy-hand.compact .eh-ring { left: -1.15rem; top: -1.15rem; width: 2.3rem; height: 2.3rem; border-width: 3px; }
 .easy-hand.edge .eh-glyph { font-size: 2.8rem; left: -1.4rem; }
 @keyframes easyHandTap { 0%, 100% { translate: 0 14px; } 45% { translate: 0 2px; } 60% { translate: 0 4px; } }
 @keyframes easyHandRing { 0% { scale: .45; opacity: .95; } 100% { scale: 1.25; opacity: 0; } }
@@ -323,6 +330,7 @@ body.easy .toast .t-retry { min-height: 44px; background: linear-gradient(180deg
   .easy-rest-card .easy-big-btn { flex: 1; }
 }
 @media (max-width: 380px) {
+  .easy-gate-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .easy-pick { grid-template-columns: repeat(var(--cols-xs, 2), minmax(0, 1fr)); }
 }
 @media (max-height: 520px) and (orientation: landscape) {
@@ -342,3 +350,5 @@ body.reduce-motion .easy-next .en-go .emoji, body.reduce-motion .easy-rest .er-b
   .easy-hand .eh-glyph, .easy-hand .eh-ring, .easy-next .en-emoji, .easy-confirm .ec-big, .easy-tile, .easy-next .en-go .emoji,
   .easy-celebrate .ec-rays, .easy-rest .er-ball { animation: none !important; }
 }
+/* low preset (body.ui-lite): the masked rotating rays are the costliest part of a celebration on weak GPUs */
+body.ui-lite .easy-celebrate .ec-rays { display: none; }

@@ -111,7 +111,7 @@
   }
 
   const Voice = {
-    q: [], cur: null, recent: new Map(), voice: null, cancelAt: -1e9, mutedHintAt: -1e9,
+    q: [], cur: null, recent: new Map(), voice: null, cancelAt: -1e9, mutedHintAt: -1e9, held: [],
     ok() {
       try { return !!window.speechSynthesis && typeof window.SpeechSynthesisUtterance === 'function'; } catch (e) { return false; }
     },
@@ -209,6 +209,12 @@
       for (const [k, at] of Voice.recent) if (t - at > 4000) Voice.recent.delete(k);
       if (Voice.cur && Voice.cur.text === clean) return Promise.resolve(false);       // already reading it
       if (!force && Voice.recent.has(clean)) return Promise.resolve(false);           // same line within 4 s
+      // a cinematic owns the screen (정선 만장대 intro / telescope view): only its own lines are read; the rest waits
+      if (!opts.intro && !force && (document.body.classList.contains('md-intro') || document.body.classList.contains('md-scoping'))) {
+        if (!Voice.held.includes(clean)) Voice.held.push(clean);
+        while (Voice.held.length > 2) Voice.held.shift();
+        return Promise.resolve(false);
+      }
       Voice.recent.set(clean, t);
       emit('easy:say', { text: clean });
       if (!Voice.ok()) return Promise.resolve(false);
@@ -218,6 +224,16 @@
       return Promise.resolve(false);
     }
   }
+
+  // lines held back during the 정선 만장대 intro are read (newest two, in order) once it ends
+  const releaseHeld = ({ phase } = {}) => {
+    if (phase !== 'end') return;
+    const lines = Voice.held.splice(0);
+    if (lines.length) setTimeout(() => { for (const l of lines) say(l, { interrupt: false }); }, 700);
+  };
+  G.bus.on('manjangdae:intro', releaseHeld);
+  G.bus.on('manjangdae:tour', releaseHeld);
+  G.bus.on('game:logout', () => { Voice.held.length = 0; });
 
   /** the text a 🔊 button / long-press reads for an element */
   function textOf(el) {
@@ -258,16 +274,24 @@
   //   · 3 wrong answers → cool-down 30 s, doubling per failed round (max 5 min), persisted across reloads
   //   · one answer per question (a tap locks the grid; the next question arms after a short pause)
   //   Blind odds per round ≈ 8 % (see G.easy._gateSim), so mashing through the cool-downs takes ~45 minutes.
-  // Unlock scope: a pass opens a short grown-up SESSION bound to the screen it opened (the modal(s) that appear right
-  // after, or the title's 어른 메뉴 view). It ends when that screen closes, on logout / login / profile load, easy-mode
-  // switch, tab hide, or after GATE_IDLE. Logout / developer center / admin / account deletion always ask again;
-  // dangerous switches (아이 채팅 끄기, 보호자 확인 끄기, 쉬운 모드 끄기, 초기화, 가져오기) need a pass from the last GATE_FRESH.
+  // Unlock scope: a pass opens a short grown-up SESSION bound to the grown-up screen it opened — 어른 메뉴, 어른 설정,
+  // 계정 삭제, 관리자 (GATE_ROOT_CLASS), or the title's 어른 메뉴 view. Screens a child can open themselves (가방, 도움말,
+  // 스티커북, kid menu…) are never adopted, and dialogs opened on top of a grown-up screen do not keep the session
+  // alive on their own. The session ends when the last grown-up screen closes (650 ms grace for a hop between two of
+  // them), on logout / login / profile load, easy-mode switch, tab hide, or after GATE_IDLE. A pass for an action that
+  // opens no screen (unblock, export…) only serves that action. Logout / developer center / admin / account deletion
+  // always ask again; dangerous switches (아이 채팅 끄기, 보호자 확인 끄기, 쉬운 모드 끄기, 초기화, 가져오기) need a pass from
+  // the last GATE_FRESH.
   const GATE_NEED = 2;
   const GATE_CHOICES = 6;
   const GATE_FRESH = 90 * 1000;
   const GATE_IDLE = 3 * 60 * 1000;
   const GATE_NO_CACHE = new Set(['logout', 'devcenter', 'admin', 'delete-account']);
   const GATE_DANGER = new Set(['kid-chat', 'parent-gate', 'easy-off', 'reset', 'import', 'forget']);
+  // gated actions that open a grown-up screen right after the pass (the others only serve their own action)
+  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register']);
+  // the grown-up screens a session may live on (04-ui passes the modal's className with ui:modal-open)
+  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal)(\s|$)/;
   const Gate = { sess: null, wrong: 0, pending: null, streak: 0, tick: 0 };
   /** persisted gate state: cool-down end, failed rounds (doubling) and the wrong answers of the current round
    *  (so a reload between wrong taps does not hand out fresh tries). Wrong answers older than 10 min expire. */
@@ -364,11 +388,13 @@
   function unlock(reason) {
     const t = nowMs();
     const s = sessAlive() ? Gate.sess : { modals: new Set(), title: false, closedAt: 0 };
-    s.reason = reason; s.at = t; s.until = t + GATE_IDLE; s.adoptUntil = t + 3000; s.closedAt = 0;
+    s.reason = reason; s.at = t; s.until = t + GATE_IDLE; s.closedAt = 0;
+    // the screen of a screen-opening action may take a moment to appear; any other pass serves only its own action
+    s.adoptUntil = t + (GATE_SCREEN.has(reason) ? 3000 : 600);
     Gate.sess = s;
     if (!Gate.tick) Gate.tick = setInterval(sessTick, 400);
   }
-  /** the session follows its screen: the modals opened right after the pass (and the title's 어른 메뉴 view) */
+  /** the session follows its grown-up screen (s.modals = the open grown-up screens, or the title's 어른 메뉴 view) */
   function sessTick() {
     const s = Gate.sess;
     if (!s) { clearInterval(Gate.tick); Gate.tick = 0; return; }
@@ -380,11 +406,11 @@
     if (s.closedAt) { if (t - s.closedAt > 650) lockGate('screen-closed'); return; }
     if (t > s.adoptUntil && !G.ui?.modal?.get?.('easy-gate')) lockGate('no-screen'); // the pass only served its own action
   }
-  G.bus.on('ui:modal-open', ({ id } = {}) => {
+  G.bus.on('ui:modal-open', ({ id, className } = {}) => {
     const s = Gate.sess;
     if (!s || !id || id === 'easy-gate' || !sessAlive()) return;
-    const t = nowMs();
-    if (t <= s.adoptUntil || s.modals.size > 0 || s.title || (s.closedAt && t - s.closedAt <= 650)) { s.modals.add(String(id)); s.closedAt = 0; }
+    // only a grown-up screen can carry the session (a child-openable screen opened meanwhile never does)
+    if (GATE_ROOT_CLASS.test(String(className || ''))) { s.modals.add(String(id)); s.closedAt = 0; }
   });
   G.bus.on('ui:modal-close', ({ id } = {}) => {
     const s = Gate.sess;
@@ -438,7 +464,6 @@
     Gate.streak = 0;
     const qEl = h('div', { class: 'easy-gate-q' });
     const grid = h('div', { class: 'easy-gate-choices', role: 'group', 'aria-label': '답을 골라요' });
-    grid.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
     const steps = h('p', { class: 'easy-gate-steps', 'aria-live': 'polite' });
     const status = h('p', { class: 'easy-gate-status', role: 'status', 'aria-live': 'polite' });
     const coolNum = h('b', null, '30');
@@ -850,7 +875,10 @@
       const st = getComputedStyle(el);
       if (st.visibility === 'hidden' || Number(st.opacity) === 0) return null;
       // below the target when there is room, otherwise above — then whichever side covers the least HUD (NEW-4)
-      return bestPlace(c, r, el, r.bottom + 96 < innerHeight ? HAND_PREFER_BELOW : HAND_PREFER_ABOVE);
+      const p = bestPlace(c, r, el, r.bottom + 96 < innerHeight ? HAND_PREFER_BELOW : HAND_PREFER_ABOVE);
+      if (c.compactEl !== el) { c.compactEl = el; c.compact = innerWidth < 700 && !!el.closest?.('#mobile-controls, #bottom-bar, .mobile-controls, .bottom-bar'); }
+      p.compact = c.compact;
+      return p;
     }
     const eng = G.sys.engine;
     if (!eng || !eng.camera) return null;
@@ -897,6 +925,7 @@
         c.x = x; c.y = y; c.rot = rot; c.lox = lox; c.loy = loy;
         c.el.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(${rot}deg)`;
         c.el.classList.toggle('edge', !!p.edge);
+        c.el.classList.toggle('compact', !!p.compact);
         if (c.lbl) {
           // the spot chosen with the hand (bestPlace), or straight behind an edge hand
           let lx = x + lox, ly = y + loy;
@@ -957,6 +986,17 @@
   const cropName = (id) => String(G.data.crops?.[id]?.name || '');
 
   function objectiveStep(o) {
+    // an objective with authored kid wording (e.g. QUEST001 "산에서 내려가 발효마스터랑 이야기해요") keeps its pictures/actions
+    let authored = typeof o.easyText === 'string' && o.easyText.trim() ? o.easyText.trim() : '';
+    // "산에서 내려가 …" only makes sense while the child is still up on 정선 만장대
+    if (authored && /산에서|만장대/.test(authored)) {
+      const md = G.data.layout?.manjangdae, p = G.sys.player?.position;
+      if (!md || !p || Math.hypot(p.x - md.x, p.z - md.z) > md.r + 4) authored = '';
+    }
+    if (authored && o.type !== 'craft') { const b = objectiveStepByType(o); return { ...b, text: authored, say: b.say && b.say !== b.text ? b.say : authored }; }
+    return objectiveStepByType(o);
+  }
+  function objectiveStepByType(o) {
     switch (o.type) {
       case 'talk': { const n = npcName(o.npc); return { text: `${josa(n, '이랑/랑')} 이야기해요` }; }
       case 'visit': {
@@ -1086,7 +1126,7 @@
           const w = { id: 0, target: dest, label, resolve };
           Walk.cur = w;
           const id = pl.walkTo(dest, {
-            stopDistance: Number.isFinite(opts.stopDistance) ? opts.stopDistance : 1.8, run: d > 10,
+            stopDistance: Number.isFinite(opts.stopDistance) ? opts.stopDistance : 1.8, run: d > (Number(pl.WALK) || 9.6) * 2.5,
             onArrive: () => { if (Walk.cur === w) finishWalk(true); },
             onFail: (reason) => {
               if (Walk.cur !== w) return;
@@ -1104,7 +1144,11 @@
           hudRefreshSoon();
         };
         const far = Math.hypot(dest.x - pl.position.x, dest.z - pl.position.z);
-        if (far > 70) travelFirst().then(() => start(true), () => start(true));
+        // up on 정선 만장대 the guided trip walks down the switchback path (it is the point of starting there, and
+        // takes ~12 s at the new speed); farther goals, or a walk that gets stuck, still use fast travel
+        const md = G.data.layout?.manjangdae;
+        const onHill = !!md && Math.hypot(pl.position.x - md.x, pl.position.z - md.z) < md.r + 3;
+        if (far > (onHill ? 170 : 70)) travelFirst().then(() => start(true), () => start(true));
         else start(true);
         if (label) say(`${label}${hasJong(label) ? '으로' : '로'} 같이 가요!`, { priority: 1 });
         else say('같이 가요!', { priority: 1 });
@@ -1124,7 +1168,7 @@
     const items = zs.map((z, i) => {
       const goal = marks.some((m) => m && m.primary && Number.isFinite(m.x) && Math.hypot(m.x - z.center[0], m.z - z.center[1]) <= z.r + 2);
       const name = String(z.short || z.name);
-      return { id: z.id, emoji: ZONE_EMOJI[z.id] || '📍', label: name, color: KID_COLORS[i % KID_COLORS.length], badge: here === z.id ? '📍' : goal ? '⭐' : null, selected: here === z.id, say: here === z.id ? `${name}. 지금 여기 있어요.` : goal ? `${name}. 금빛 별이 있는 곳이에요.` : name };
+      return { id: z.id, emoji: ZONE_EMOJI[z.id] || z.emoji || '📍', label: name, color: KID_COLORS[i % KID_COLORS.length], badge: here === z.id ? '📍' : goal ? '⭐' : null, selected: here === z.id, say: here === z.id ? `${name}. 지금 여기 있어요.` : goal ? `${name}. 금빛 별이 있는 곳이에요.` : name };
     });
     if (!items.length) return null;
     const id = await pick({ id: 'easy-where', title: '어디 갈까?', emoji: '🗺️', say: '어디로 갈까요? 그림을 눌러요.', items, columns: 3 });

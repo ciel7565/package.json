@@ -98,6 +98,10 @@ final class SaveValidator
         // ---------------------------------------------------------- progress reset (설정 → 진행 초기화)
         if ($p !== null && $this->looksLikeReset($n, $p)) {
             $this->notes[] = 'reset';
+            // a fresh start begins at 0 m: allow what can be walked in the 10 minutes before its first save
+            $resetD = self::n(self::p(self::o(self::p($n, 'stats')), 'distance'));
+            $capD = max(1.0, $this->t('move_max_speed', 27)) * 600 + max(0.0, $this->t('move_slack_m', 300));
+            if ($resetD > $capD) $this->violate('DISTANCE_TOO_FAST', ['gain' => (int) round($resetD), 'allowed' => (int) round($capD), 'reset' => true]);
             $meta = ['v' => 1, 'resets' => (int) ($meta['resets'] ?? 0) + 1, 'budget' => $meta['budget'] ?? null];
             $p = null;
         }
@@ -311,8 +315,13 @@ final class SaveValidator
         $stats = self::o(self::p($n, 'stats'));
         // absolute ceilings: 100,000 km walked, 10 years of play, 10 million of any counter
         $ceil = ['distance' => 1e8, 'playTime' => 3.2e8];
+        if (count(self::kv($stats)) > 200) self::bad('stats size');
         foreach (self::kv($stats) as $k => $v) {
-            if (!is_int($v) && !is_float($v)) continue;
+            // every counter is a number: a string / object / bool would slip past the movement and range checks
+            if (!is_int($v) && !is_float($v)) {
+                if ($v === null) continue;
+                self::bad('stat type');
+            }
             if (!is_finite((float) $v) || $v < 0 || $v > ($ceil[$k] ?? 1e7)) $this->violate('STAT_RANGE', ['stat' => mb_substr($k, 0, 24)]);
         }
         $level = self::i(self::p($stats, 'level'));

@@ -1095,6 +1095,14 @@
     _kidPrimary(id, s) {
       if (!s.cropId) { this._kidPlant(id); return; }
       const cool = now() - s.lastWaterAt < cfg().waterCooldown * 1000;
+      // the tap does what the gold prompt SAYS: the words were picked a moment ago (the quest focus can move on in
+      // between — e.g. the step turns to 💧 the frame a zone visit completes), so follow the shown action while it is fresh
+      const shown = this._kidShown?.get(id);
+      if (shown && performance.now() - shown.t < 1500) {
+        if (shown.act === 'harvest' && s.growth >= 100) { this.harvest(id); return; }
+        if (shown.act === 'water' && !cool && s.water < 100) { this.water(id); return; }
+        if (shown.act === 'view') { this.openPlot(id); return; }
+      }
       // card says "물을 줘요" -> the tap waters first, even a ripe bed (otherwise the step could never be done)
       if (!cool && s.water < 100 && this._questWantsWater()) { this.water(id); return; }
       if (s.growth >= 100) { this.harvest(id); return; }
@@ -1103,15 +1111,23 @@
     },
     /** what one tap will do in 쉬운 모드 -> {label, emoji} (prompt words + picture) */
     _kidAction(id) {
+      const a = this._kidActionNow(id);
+      // remembered per bed: what the prompt shows is what the next tap does (see _kidPrimary)
+      if (!this._kidShown) this._kidShown = new Map();
+      const m = this._kidShown.get(id);
+      if (m) { m.act = a.act; m.t = performance.now(); } else this._kidShown.set(id, { act: a.act, t: performance.now() });
+      return a;
+    },
+    _kidActionNow(id) {
       const s = this._state(id);
       const crop = cropOf(s?.cropId);
-      if (!s) return { label: '밭 보기', emoji: '👀' };
-      if (!crop) return { label: isHerbPlot(this._plots.get(id)?.def || {}) ? '모종 심기' : '씨앗 심기', emoji: '🌱' };
+      if (!s) return { label: '밭 보기', emoji: '👀', act: 'view' };
+      if (!crop) return { label: isHerbPlot(this._plots.get(id)?.def || {}) ? '모종 심기' : '씨앗 심기', emoji: '🌱', act: 'plant' };
       const cool = now() - s.lastWaterAt < cfg().waterCooldown * 1000;
-      if (!cool && s.water < 100 && this._questWantsWater()) return { label: '물 주기', emoji: '💧' };
-      if (s.growth >= 100) return { label: `${crop.name} 거두기`, emoji: cropPic(crop) };
-      if (s.water < KID_WATER_AT && !cool) return { label: '물 주기', emoji: '💧' };
-      return { label: `${crop.name}밭 보기`, emoji: '👀' };
+      if (!cool && s.water < 100 && this._questWantsWater()) return { label: '물 주기', emoji: '💧', act: 'water' };
+      if (s.growth >= 100) return { label: `${crop.name} 거두기`, emoji: cropPic(crop), act: 'harvest' };
+      if (s.water < KID_WATER_AT && !cool) return { label: '물 주기', emoji: '💧', act: 'water' };
+      return { label: `${crop.name}밭 보기`, emoji: '👀', act: 'view' };
     },
     _primaryLabel(id) {
       const s = this._state(id), P = this._plots.get(id);

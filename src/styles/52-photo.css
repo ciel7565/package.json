@@ -353,7 +353,7 @@ body.easy .ph-kid { display: block; }
   text-shadow: 0 4px 0 #e2a412, 0 8px 18px rgba(0, 0, 0, .45); -webkit-text-stroke: 2px #b37800;
 }
 .phk-click.on { animation: phkClick .9s var(--ease-pop) 1; }
-@keyframes phkClick { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.6); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); } 70% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -60%) scale(1); } }
+@keyframes phkClick { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.6); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1.03); } 70% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -60%) scale(1); } }
 
 /* after the shot */
 .phk-card {

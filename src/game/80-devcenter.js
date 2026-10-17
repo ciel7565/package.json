@@ -397,7 +397,7 @@
   const INTERACT_KINDS = new Set(['npc', 'jar', 'plot', 'sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'craft', 'shop', 'door', 'board', 'photo', 'bench', 'companion']);
   const UNLOCK_ON = new Set(['harvest', 'item', 'talk', 'edu', 'interact', 'claim', 'visit', 'quiz', 'craft', 'ferment', 'photo']);
   const DIALOGUE_ACTIONS = new Set(['openEdu', 'openQuiz', 'openLibrary', 'openShop', 'openCraft', 'openJar', 'openMap', 'openFastTravel', 'openJournal', 'openQuestLog', 'openInventory', 'openCollection', 'teleport', 'acceptQuest', 'claimQuest', 'giveItem', 'takeItem', 'setFlag', 'clearFlag', 'emote', 'npcAnim', 'event', 'toast', 'sfx', 'activity']);
-  const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance']);
+  const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'app', 'devcenter'];
@@ -1404,9 +1404,15 @@
     async settle(scope, maxMs = 1400) {
       await nextFrame(); await nextFrame();
       const related = (t) => !!t && t.nodeType === 1 && (!scope || scope.contains(t) || t.contains(scope));
+      const running = () => (document.getAnimations?.() || []).filter((a) => (a.playState === 'running' || a.pending) && Number.isFinite(a.effect?.getComputedTiming?.().endTime) && related(a.effect?.target));
       try {
-        const anims = (document.getAnimations?.() || []).filter((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime) && related(a.effect?.target));
+        const anims = running();
         if (anims.length) await Promise.race([Promise.allSettled(anims.map((a) => a.finished)), sleep(maxMs)]);
+        // a staggered entrance (header, then up to 16 cards, then the footer) can outlast maxMs on a slow device whose
+        // main thread is busy rendering 3D: keep polling (wall clock) until no finite entrance animation is left
+        const end = perf() + 9000;
+        while (perf() < end && scope?.isConnected !== false && running().length) await sleep(90);
+        if (scope?.querySelector?.('.is-entering') || scope?.classList?.contains?.('is-entering')) { const e2 = perf() + 2500; while (perf() < e2 && (scope.classList?.contains('is-entering') || scope.querySelector('.is-entering'))) await sleep(90); }
       } catch (e) { /* no Web Animations */ }
       // still fading in (opacity on an ancestor)? poll briefly until the screen is really visible
       if (scope) { const end = perf() + 900; while (perf() < end && !KidAudit.box(scope, new Map())) await sleep(60); }
@@ -1415,8 +1421,8 @@
       // still fading in is not reported as a dead end
       if (scope) {
         const hasBtn = () => Array.from(scope.querySelectorAll('button, [role="button"], a[href]')).some((b) => KidAudit.box(b, new Map()));
-        const end = perf() + 5000;
-        for (let i = 0; i < 40 && perf() < end && scope.isConnected && !hasBtn(); i++) await nextFrame();
+        const end = perf() + 10000;
+        for (let i = 0; i < 60 && perf() < end && scope.isConnected && !hasBtn(); i++) await nextFrame();
       }
       await nextFrame();
     },
@@ -1481,7 +1487,7 @@
                     a.counts.critical++; a.byKind.gate.critical++;
                     a.items.unshift({ sev: 'critical', kind: 'gate', sel: scope ? cssPath(scope) : 'body', text: s.label, detail: '보호자 확인 없이 어른용 화면이 열렸어요', box: null, el: scope || null });
                     a.score = Math.max(0, a.score - 10);
-                  } else row.note = gateShown ? '보호자 확인 화면이 먼저 나와요 ✅' : '보호자 확인이 이미 풀려 있어요 (5분)';
+                  } else row.note = gateShown ? '보호자 확인 화면이 먼저 나와요 ✅' : '보호자 확인이 이미 풀려 있어요 (어른 화면이 열려 있어요)';
                 }
               }
             } catch (e) {
@@ -2103,26 +2109,52 @@
   T('👶 쉬운 모드', '보호자 확인: 아무리 빨리 눌러도 문제 하나에 답 하나 (마구 누르기 방지)', async () => {
     if (typeof G.easy?.gate !== 'function') return SKIP('G.easy.gate 가 없어요');
     if (!easyOn() || G.settings.parentGate === false) return SKIP('쉬운 모드/보호자 확인이 꺼져 있어요');
-    if (G.easy.gateStatus?.().unlocked) return SKIP('보호자 확인이 이미 풀려 있어요 (5분 동안)');
+    if (G.easy.gateStatus?.().unlocked) return SKIP('보호자 확인이 이미 풀려 있어요 (어른 화면이 열려 있어요)');
     if (G.easy.gateStatus?.().cooldownLeft > 0) return SKIP('보호자 확인이 쉬는 중이에요');
+    const need = Math.max(1, Number(G.easy.gateStatus?.().need) || 1);
     const LS = 'tfm.v1.gate';
     let saved = null;
     try { saved = localStorage.getItem(LS); } catch (e) { saved = null; }
     const p = G.easy.gate({ reason: 'dev-test-mash', title: '개발자 테스트' });
     try {
-      const armed = await waitFor(() => document.querySelector('.easy-gate-modal .easy-gate-choice:not([disabled])'), 2500);
-      if (!armed) return SKIP('보호자 확인 문제가 나타나지 않았어요');
-      const spans = Array.from(document.querySelectorAll('.easy-gate-modal .easy-gate-q span')).map((x) => x.textContent);
-      const ans = Number(spans[0]) * Number(spans[2]);
-      const btns = Array.from(document.querySelectorAll('.easy-gate-modal .easy-gate-choice'));
-      const right = btns.find((b) => Number(b.dataset.v) === ans);
-      const wrong = btns.filter((b) => b !== right);
+      // one question: the right tile, then every other tile in the same moment (a mashing finger). Each round waits
+      // for a NEW armed question (the grid unlocks after a short pause; slow devices take longer).
+      let lastQ = null;
+      const mash = async () => {
+        const armed = await waitFor(() => {
+          const g = document.querySelector('.easy-gate-modal:not(.modal-closing) .easy-gate-choices');
+          if (!g || g.hidden || g.classList.contains('is-locked')) return null;
+          const b = g.querySelector('.easy-gate-choice:not([disabled])');
+          return b && b.dataset.q !== lastQ ? b : null;
+        }, 5000);
+        if (!armed) return null;
+        lastQ = armed.dataset.q;
+        const m = armed.closest('.easy-gate-modal');
+        const spans = Array.from(m.querySelectorAll('.easy-gate-q span')).map((x) => x.textContent);
+        const ans = Number(spans[0]) * Number(spans[2]);
+        const btns = Array.from(m.querySelectorAll('.easy-gate-choice'));
+        const right = btns.find((b) => Number(b.dataset.v) === ans);
+        if (!right) return null;
+        right.click();
+        for (const b of btns) if (b !== right) b.click();
+        return btns.length - 1;
+      };
       const w0 = G.easy.gateStatus().wrong;
-      right?.click();
-      for (const b of wrong) b.click(); // the same finger keeps tapping the other tiles in the same moment
+      const n1 = await mash();
+      if (n1 == null) return SKIP('보호자 확인 문제가 나타나지 않았어요');
+      const st1 = G.easy.gateStatus();
+      // rules: `need` right answers in a row; the extra taps on the same question must not count as wrong answers
+      let steps = 1;
+      while (steps < need) {
+        if ((await mash()) == null) break;
+        steps++;
+      }
+      // the pass is announced a moment after the last right answer: the gate's own promise says whether it opened
+      const passed = (await Promise.race([p, sleep(4000).then(() => 'timeout')])) === true;
       const st = G.easy.gateStatus();
-      const ok = !!right && st.unlocked && st.wrong <= w0 && st.cooldownLeft === 0;
-      return { ok, detail: `정답 → 바로 다른 보기 ${wrong.length}개 → 통과 ${st.unlocked ? '✅' : '❌'} · 틀림 ${w0} → ${st.wrong} (늘면 안 돼요)` };
+      const okFirst = need > 1 ? (st1.streak === 1 && !st1.unlocked) : true;
+      const ok = okFirst && passed && steps === need && st.wrong <= w0 && st.cooldownLeft === 0;
+      return { ok, detail: `정답 → 바로 다른 보기 ${n1}개 → 연속 ${st1.streak}/${need} · ${steps}문제 뒤 통과 ${passed ? '✅' : '❌'} · 틀림 ${w0} → ${st.wrong} (늘면 안 돼요)` };
     } finally {
       G.ui.modal?.get?.('easy-gate')?.close?.();
       await Promise.race([p, sleep(1500)]);
@@ -2130,13 +2162,14 @@
       G.easy.lockGate?.();
     }
   });
-  T('👶 쉬운 모드', '보호자 확인: 두 자리 × 한 자리 · 보기 4개 중 정답 하나 · ✖ 는 false', async () => {
+  T('👶 쉬운 모드', '보호자 확인: 두 자리 × 한 자리 · 보기 여러 개 중 정답 하나 · ✖ 는 false', async () => {
     if (typeof G.easy?.gate !== 'function') return SKIP('G.easy.gate 가 없어요');
+    const NCH = Math.max(2, Number(G.easy.gateStatus?.().choices) || 4);
     // pure helper first (if the module exposes one), then the real screen
     const q = safe(() => (G.easy._gateQuestion || G.easy.gateQuestion)?.call(G.easy));
     if (q && Array.isArray(q.choices)) {
-      const okq = q.a >= 10 && q.a <= 99 && q.b >= 2 && q.b <= 9 && q.choices.length === 4 && new Set(q.choices).size === 4 && q.choices.filter((c) => c === q.a * q.b).length === 1;
-      if (!okq) return { ok: false, detail: `문제 ${JSON.stringify(q)}` };
+      const okq = q.a >= 10 && q.a <= 99 && q.b >= 2 && q.b <= 9 && q.choices.length === NCH && new Set(q.choices).size === NCH && q.choices.filter((c) => c === q.a * q.b).length === 1;
+      if (!okq) return { ok: false, detail: `문제 ${JSON.stringify(q)} · 보기 ${NCH}개여야 해요` };
     }
     if (!easyOn() || G.settings.parentGate === false) {
       const v = await Promise.race([G.easy.gate({ reason: 'dev-test' }), sleep(800).then(() => '__timeout')]);
@@ -2147,7 +2180,7 @@
     const host = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')).reverse().find((d) => !kidExcluded(d) && /\d{2}\s*[×xX*]\s*\d/.test(d.textContent || '')), 1200);
     if (!host) {
       const v = await Promise.race([p, sleep(400).then(() => '__pending')]);
-      if (v === true) return SKIP('보호자 확인이 이미 풀려 있어요 (5분 동안)');
+      if (v === true) return SKIP('보호자 확인이 이미 풀려 있어요 (어른 화면이 열려 있어요)');
       G.ui.modal?.closeAll?.();
       return SKIP('보호자 확인 화면의 문제를 읽지 못했어요');
     }
@@ -2159,8 +2192,8 @@
     if (close) close.click(); else { G.ui.modal?.closeAll?.(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); }
     const v = await Promise.race([p, sleep(1500).then(() => '__timeout')]);
     const evt = KidLog.gate.length > before ? KidLog.gate[KidLog.gate.length - 1] : null;
-    const ok = a >= 10 && a <= 99 && b2 >= 2 && b2 <= 9 && choices.length === 4 && new Set(choices).size === 4 && right === 1 && v === false;
-    return { ok, detail: `${a} × ${b2} · 보기 ${choices.join('/')} · 닫기 → ${JSON.stringify(v)}${evt ? ` · easy:gate ok=${evt.ok}` : ''}` };
+    const ok = a >= 10 && a <= 99 && b2 >= 2 && b2 <= 9 && choices.length === NCH && new Set(choices).size === NCH && right === 1 && v === false;
+    return { ok, detail: `${a} × ${b2} · 보기 ${choices.length}/${NCH}개 ${choices.join('/')} · 닫기 → ${JSON.stringify(v)}${evt ? ` · easy:gate ok=${evt.ok}` : ''}` };
   });
 
   // ---- 개인정보 가림 (CONTRACT §12.4, client mirror of server/lib/ChatFilter.php)
@@ -3329,7 +3362,7 @@
           ['G.easy', st.present ? `${pill(apiOk === st.api.length ? 'ok' : 'warn', `API ${apiOk}/${st.api.length}`)}${apiOk < st.api.length ? ` <span class="muted small">없음: ${esc(st.api.filter((x) => !x.ok).map((x) => x.k).join(', '))}</span>` : ''}` : pill('bad', '없음 (08-easy.js)')],
           ['화면 표시', `body.${esc(st.bodyClass)} · --tap ${st.tap}px`],
           ['읽어주기', `${yes(st.voiceGuide, '켜짐', '꺼짐')} · 속도 ${st.voiceRate} · ${st.speech ? `음성 ${st.voices}개 (한국어 ${st.koVoices})` : '이 브라우저는 음성 합성 없음'}${st.muted ? ' · 🔇 음소거' : ''}`],
-          ['보호자 확인', `${yes(st.parentGate, '켜짐', '꺼짐')}${st.unlocked == null ? '' : st.unlocked ? ` ${pill('warn', '🔓 지금 풀려 있음 (5분)')}` : ` ${pill('ok', '🔒 잠김')}`}`],
+          ['보호자 확인', `${yes(st.parentGate, '켜짐', '꺼짐')}${st.unlocked == null ? '' : st.unlocked ? ` ${pill('warn', '🔓 지금 풀려 있음 (어른 화면이 열려 있는 동안)')}` : ` ${pill('ok', '🔒 잠김')}`}`],
           ['아이 채팅', `${yes(st.kidChat, st.on ? '고르기만 (글자 입력 없음)' : '쉬운 모드일 때 고르기만', '자유 입력')} · 개인정보 가림 ${st.maskPII ? pill('ok', 'maskPII ✅') : pill('warn', 'maskPII 없음')}`],
           ['놀이 시간 알림', st.reminder ? `${st.reminder}분마다` : '꺼짐'],
           ['읽어주기 범위', A.stats.prompts ? `${A.stats.speakable}/${A.stats.prompts} 안내 문장에 🔊` : '<span class="muted">안내 문장 없음</span>'],
@@ -3381,7 +3414,7 @@
     try { ok = await G.easy.gate({ reason: 'dev-check', title: '보호자 확인 시험' }); } catch (e) { G.log.warn('DEV', 'gate test failed', e); }
     tourPill(null);
     panelAway(false);
-    toast(ok === true ? '보호자 확인 통과 ✅ (5분 동안 다시 묻지 않아요)' : ok === false ? '보호자 확인을 닫았어요 ✋' : '보호자 확인을 열지 못했어요', ok === true ? 'success' : 'info', '🔒');
+    toast(ok === true ? '보호자 확인 통과 ✅ (이 시험은 화면을 열지 않으니 곧 다시 잠겨요)' : ok === false ? '보호자 확인을 닫았어요 ✋' : '보호자 확인을 열지 못했어요', ok === true ? 'success' : 'info', '🔒');
   }
   async function kidTourUi() {
     if (Tour.running) return;
@@ -3416,6 +3449,11 @@
         ['납작한 조명 메시 (축 하나가 0)', g.flat.length ? pill('bad', `⛔ ${g.flat.length}개`) : pill('ok', '✅ 0개')],
         ['납작한 인스턴스', g.flatInstances ? pill('bad', `⛔ ${fmt(g.flatInstances)}개`) : pill('ok', `✅ 0개 / ${fmt(g.instancedChecked)}`)],
         ['검사 시간', `${g.ms.toFixed(1)} ms · ${esc(ago(g.at))}`],
+        ['지금 프레임', (() => {
+          const f = G.sys.engine?.frameInfo, c = G.sys.engine?.cullStats;
+          if (!f) return '<span class="muted small">-</span>';
+          return `draw calls ${fmt(Number(f.calls) || 0)} · 삼각형 ${fmt(Number(f.triangles) || 0)}${c ? ` <span class="muted small">거리 컷 ${fmt(Number(c.culled) || 0)}/${fmt(Number(c.items) || 0)}${Number.isFinite(c.dist) ? ` (${c.dist} m)` : ''}</span>` : ''}`;
+        })()],
       ])}</dl>
       ${[...g.badNormalGeos.map((x) => `노멀 ${x.n}개 · ${x.obj}`), ...g.nanPosGeos.map((x) => `NaN 위치 ${x.n}개 · ${x.obj}`), ...g.flat.map((x) => `납작 ${x.scale.join('·')} · ${x.obj}`), ...g.flatInstMeshes.map((x) => `납작 인스턴스 ${x.n}/${x.count} · ${x.obj}`)].length ? `<ul class="dc-errlist">${[...g.badNormalGeos.map((x) => `노멀 ${x.n}개 · ${x.obj}`), ...g.nanPosGeos.map((x) => `NaN 위치 ${x.n}개 · ${x.obj}`), ...g.flat.map((x) => `납작 ${x.scale.join('·')} · ${x.obj}`), ...g.flatInstMeshes.map((x) => `납작 인스턴스 ${x.n}/${x.count} · ${x.obj}`)].slice(0, 12).map((t) => `<li><b>⛔</b><span>${esc(t)}</span></li>`).join('')}</ul>` : ''}
       <div class="dc-sub-h">🎞️ 후처리 순서 ${p.ok === false ? pill('bad', '⛔ NaN 청소가 블룸 뒤에 있어요') : p.ok ? pill('ok', '✅ 청소 → 블룸') : ''}</div>

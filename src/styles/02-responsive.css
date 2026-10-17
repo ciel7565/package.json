@@ -136,8 +136,8 @@ body.modal-open .modal-backdrop { padding-top: 3.6rem; }
 }
 
 /* Onboarding coach card visible: toasts move to the bottom-center lane (above the E prompt) instead of covering the card. */
-body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !important; bottom: 10.8rem; }
-@media (max-width: 560px) { body.is-touch:has(.coach-layer .coach):not(.modal-open) .toast-root { bottom: 17rem; } }
+/* 70-app sets --coach-lane-bottom from the card's position (a card in the lower half: the lane sits just above it). */
+body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !important; bottom: var(--coach-lane-bottom, 10.8rem); }
 
 /* =============================================================================
    쉬운 모드 responsive (§12.3): no overlaps at 1600x900, 1366x768, 390x844 and landscape phones.

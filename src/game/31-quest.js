@@ -204,6 +204,12 @@
   /** one short kid sentence (≤ 12 words, 해요체, no keys / numbers jargon) per objective kind */
   function kidObjective(o) {
     if (!o) return '금빛 표시를 따라가요';
+    // authored kid wording wins ("산에서 내려가 …" only while the player is still up on 정선 만장대)
+    if (typeof o.easyText === 'string' && o.easyText.trim()) {
+      const t = o.easyText.trim();
+      const md = G.data.layout?.manjangdae, p = G.sys.player?.position;
+      if (!/산에서|만장대/.test(t) || (md && p && Math.hypot(p.x - md.x, p.z - md.z) <= md.r + 4)) return t;
+    }
     const crop = o.crop ? G.data.crops?.[o.crop]?.name : null;
     switch (o.type) {
       case 'talk': return o.npc ? `${kjo(npcName(o.npc), '이랑/랑')} 이야기해요` : '친구랑 이야기해요';
@@ -700,7 +706,7 @@
       const cur = p.current >= 0 ? q.objectives[p.current] : null;
       const row = h('div', { class: `kq-row s-${e.status}` },
         h('span', { class: 'kq-row-ico emoji', 'aria-hidden': 'true' }, q.icon || '📜'),
-        h('div', { class: 'kq-row-main' }, h('b', null, q.title), h('small', null, e.status === 'completed' ? '보상을 받을 수 있어요' : e.status === 'available' ? `${npcName(q.giver)}에게서 받을 수 있어요` : (cur?.text || q.desc)),
+        h('div', { class: 'kq-row-main' }, h('b', null, q.title), h('small', null, e.status === 'completed' ? '보상을 받을 수 있어요' : e.status === 'available' ? `${npcName(q.giver)}에게서 받을 수 있어요` : (cur?.text || (easyOn() && q.easyDesc) || q.desc)),
           ACTIVE.has(e.status) ? h('span', { class: 'bar', html: `<i style="width:${Math.round(p.ratio * 100)}%"></i>` }) : null));
       if (e.status === 'completed') {
         const b = h('button', { type: 'button', class: 'btn btn-gold btn-sm' }, '보상 받기');

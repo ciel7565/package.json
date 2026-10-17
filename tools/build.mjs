@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import crypto from 'node:crypto';
@@ -106,6 +107,12 @@ for (const f of listSorted(gameDir, '.js')) {
   fragments.push({ name: f, code });
 }
 
+// --strict: the server's PII rule file must match the client engine (one rule list, CONTRACT §12.4)
+if (STRICT && fs.existsSync(path.join(ROOT, 'tests/pii-sync.mjs'))) {
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'tests/pii-sync.mjs'), '--check'], { encoding: 'utf8' });
+  if (r.status !== 0) { console.error((r.stderr || r.stdout || '').trim() || '✖ pii-sync check failed'); console.error('✖ run: node tests/pii-sync.mjs'); process.exit(1); }
+}
+
 const cssFiles = listSorted(styleDir, '.css').filter((f) => {
   if (/^0\d-/.test(f)) return true; // base styles always
   if (EXCLUDE.some((p) => f.startsWith(p))) return false;
@@ -177,7 +184,14 @@ function exportGameData() {
   return {
     exportedAt: new Date().toISOString(),
     quests: pick(d.quests, (q) => ({ reward: q.reward || {} })),
-    achievements: pick(d.achievements, (a) => ({ reward: a.reward || {} })),
+    // condition {stat, gte} for the stats the client keeps as plain counters in state.stats (SaveValidator checks a newly
+    // claimed achievement against them); derived ones (zonesVisited, npcsTalked, cropKinds, socials) are left out
+    achievements: pick(d.achievements, (a) => {
+      const c = a.condition;
+      const derived = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
+      const cond = c && typeof c.stat === 'string' && Number.isFinite(Number(c.gte)) && !derived.includes(c.stat) ? { stat: c.stat, gte: Number(c.gte) } : undefined;
+      return cond ? { reward: a.reward || {}, condition: cond } : { reward: a.reward || {} };
+    }),
     quizzes: pick(d.quizzes, (q) => ({ reward: q.reward || {} })),
     crops: pick(d.crops, (c) => ({ growthTime: c.growthTime, exp: c.exp || 0, coin: c.coin || 0, harvestItem: c.harvestItem, harvestAmount: c.harvestAmount })),
     recipes: pick(d.recipes, (r) => ({ baseDuration: r.baseDuration, exp: r.exp || 0, coin: r.coin || 0, resultItem: r.resultItem })),
@@ -224,7 +238,7 @@ const buildInfo = {
   piiVectors: (() => {
     try {
       const v = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/pii-vectors.json'), 'utf8'));
-      const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 200) : []);
+      const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 400) : []);
       return { whole: list(v.whole), partial: list(v.partial), keep: list(v.keep) };
     } catch (e) { return null; }
   })(),

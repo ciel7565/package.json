@@ -6,8 +6,9 @@
 /* ------------------------------------------------------------------ jar world label */
 .jar-label {
   display: inline-flex; align-items: center; gap: .55rem; padding: .38rem .8rem .38rem .38rem;
-  border-radius: 14px; background: rgba(12, 18, 14, .72); border: 1px solid rgba(255, 255, 255, .16);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, .32); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  /* world label: no backdrop blur (moves every frame) — a slightly denser fill keeps it readable */
+  border-radius: 14px; background: rgba(12, 18, 14, .82); border: 1px solid rgba(255, 255, 255, .16);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .32);
   color: #fff; font-size: .74rem; transition: border-color .2s, box-shadow .2s, background .15s;
 }
 .jar-label:hover { background: rgba(12, 18, 14, .86); }

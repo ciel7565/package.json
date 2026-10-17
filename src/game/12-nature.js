@@ -959,7 +959,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             float tfMask = (tfUv.x <= 0.0 || tfUv.y <= 0.0 || tfUv.x >= 1.0 || tfUv.y >= 1.0) ? 0.0 : texture2D(tGrassMask, tfUv).r;
             float tfDist = distance(tfP, cameraPosition.xz);
             float tfFade = 1.0 - smoothstep(uGrassT * 0.28, uGrassT * 0.47, tfDist);
-            float tfScale = (0.68 + fract(aOff.w * 13.71) * 0.62) * smoothstep(aOff.w - 0.12, aOff.w + 0.02, tfMask) * tfFade;
+            // step(): a mask of 0 (paving, roads, the 만장대 deck) always means no tuft — the smoothstep alone is > 0 at
+            // tfMask = 0 for aOff.w < 0.12, which left ~12 % of the tufts standing on stone
+            float tfScale = (0.68 + fract(aOff.w * 13.71) * 0.62) * smoothstep(aOff.w - 0.12, aOff.w + 0.02, tfMask) * step(0.004, tfMask) * tfFade;
             float tfCs = cos(aOff.z), tfSn = sin(aOff.z);
             vec3 tfL = position * tfScale;
             tfL.xz = vec2(tfCs * tfL.x - tfSn * tfL.z, tfSn * tfL.x + tfCs * tfL.z);

@@ -98,11 +98,11 @@ body.voice-listening #bottom-bar [data-action="voice"] .ico { animation: pulse 1
 .chat-quick .cq-btn:active { transform: scale(.9); }
 .chat-quick .cq-btn:focus:not(:focus-visible) { outline: none; box-shadow: none; }
 .chat-quick .cq-btn:focus-visible { outline: 2px solid var(--green-l); outline-offset: 1px; }
-.chat-quick .cq-btn.hit .emoji { animation: socHit .5s cubic-bezier(.2, 1.6, .4, 1); }
+.chat-quick .cq-btn.hit .emoji { animation: socHit .5s var(--ease-pop, cubic-bezier(.2, 1, .3, 1.1)); }
 .chat-quick .cq-more { margin-left: auto; }
 .chat-quick .cq-help { font-size: .72rem; font-weight: 800; letter-spacing: -.02em; color: var(--green-l); }
 .chat-panel.collapsed .chat-quick, .chat-panel.collapsed .chat-typing { display: none; }
-@keyframes socHit { 0% { transform: scale(1); } 35% { transform: scale(1.55) rotate(-12deg); } 70% { transform: scale(.9) rotate(4deg); } 100% { transform: scale(1); } }
+@keyframes socHit { 0% { transform: scale(1); } 40% { transform: scale(1.04) rotate(-6deg); } 100% { transform: scale(1); } }
 
 /* @name / :emoji: suggestions above the input */
 .chat-suggest {
@@ -140,12 +140,12 @@ body.voice-listening #bottom-bar [data-action="voice"] .ico { animation: pulse 1
 }
 .soc-bubble.typing { padding: .45rem .7rem; color: #4d5b52; min-width: 2.8rem; }
 .soc-bubble.typing .soc-dots i { width: .42rem; height: .42rem; }
-.soc-bubble.pop { animation: socPop .38s cubic-bezier(.2, 1.35, .45, 1); transform-origin: 50% 100%; }
-.soc-bubble.emote.pop { animation: socEmote .62s cubic-bezier(.2, 1.5, .45, 1), socBob 1.25s ease-in-out .62s infinite; }
+.soc-bubble.pop { animation: socPop .38s var(--ease-pop, cubic-bezier(.2, 1, .3, 1.1)); transform-origin: 50% 100%; }
+.soc-bubble.emote.pop { animation: socEmote .62s var(--ease-pop, cubic-bezier(.2, 1, .3, 1.1)), socBob 1.25s ease-in-out .62s infinite; }
 .soc-bubble.out { animation: socOut .26s ease forwards; }
-@keyframes socPop { 0% { opacity: 0; transform: translateY(10px) scale(.6); } 70% { opacity: 1; transform: translateY(-2px) scale(1.04); } 100% { opacity: 1; transform: none; } }
-@keyframes socEmote { 0% { opacity: 0; transform: translateY(14px) scale(.3) rotate(-12deg); } 60% { opacity: 1; transform: translateY(-5px) scale(1.18) rotate(6deg); } 100% { transform: none; } }
-@keyframes socBob { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.06); } }
+@keyframes socPop { 0% { opacity: 0; transform: translateY(10px) scale(.6); } 70% { opacity: 1; transform: translateY(-2px) scale(1.02); } 100% { opacity: 1; transform: none; } }
+@keyframes socEmote { 0% { opacity: 0; transform: translateY(14px) scale(.3) rotate(-12deg); } 60% { opacity: 1; transform: translateY(-3px) scale(1.03) rotate(3deg); } 100% { transform: none; } }
+@keyframes socBob { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.03); } }
 @keyframes socOut { to { opacity: 0; transform: translateY(-8px) scale(.9); } }
 
 .nametag.visitor, .nametag.remote {
@@ -293,7 +293,7 @@ body.easy .soc-bubble.emote { font-size: 2.8rem; }
   --tile: #ffc93c;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .12rem; min-height: calc(var(--tap) + .4rem);
   padding: .4rem .3rem; border-radius: 18px; border: 3px solid rgba(255, 255, 255, .12); background: rgba(255, 255, 255, .08);
-  color: var(--text); font-weight: 800; font-size: max(16px, 1.02rem); transition: transform .14s var(--kid-bounce, ease), background .15s, border-color .15s;
+  color: var(--text); font-weight: 800; font-size: max(16px, 1.02rem); transition: transform .14s var(--ease-pop, ease), background .15s, border-color .15s;
   touch-action: manipulation;
 }
 .skc-cat .emoji { font-size: 1.85rem; line-height: 1; }
@@ -307,7 +307,7 @@ body.easy .soc-bubble.emote { font-size: 2.8rem; }
 .skc-emo {
   display: grid; place-items: center; min-height: var(--tap); aspect-ratio: 1; border-radius: 50%; padding: 0;
   background: linear-gradient(180deg, #ffffff, #fff1d6); border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 4px 0 rgba(0, 0, 0, .22);
-  transition: transform .12s var(--kid-bounce, ease); touch-action: manipulation;
+  transition: transform .12s var(--ease-pop, ease); touch-action: manipulation;
 }
 .skc-emo .emoji { font-size: 1.85rem; line-height: 1; }
 .skc-emo:hover { transform: translateY(-2px) rotate(-4deg); }

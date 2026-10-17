@@ -199,7 +199,8 @@ final class ChatFilter
         return null;
     }
 
-    private const CJK_DIGITS = ['〇' => '0', '零' => '0', '一' => '1', '二' => '2', '三' => '3', '四' => '4', '五' => '5', '六' => '6', '七' => '7', '八' => '8', '九' => '9'];
+    private const CJK_DIGITS = ['〇' => '0', '零' => '0', '一' => '1', '二' => '2', '三' => '3', '四' => '4', '五' => '5', '六' => '6', '七' => '7', '八' => '8', '九' => '9',
+        '壹' => '1', '貳' => '2', '參' => '3', '肆' => '4', '伍' => '5', '陸' => '6', '柒' => '7', '捌' => '8', '玖' => '9']; // + banking (갖은자) forms
 
     /** NFKC of one character; without the intl extension the common compatibility forms by hand */
     private static function nfkc(string $c): string
@@ -270,11 +271,11 @@ final class ChatFilter
         foreach ($cps as $i => $c) $u[] = ['s' => self::foldChar($c), 'a' => $i, 'b' => $i + 1, 'm' => false];
         $n = count($u);
         $one = function (int $k) use (&$u, $n): bool { return $k >= 0 && $k < $n && mb_strlen($u[$k]['s'], 'UTF-8') === 1; };
-        // O / l / I look-alikes inside a digit token: "O1O-1234", "o1o", "010-l234"
+        // O / l / I / S look-alikes inside a digit token: "O1O-1234", "o1o", "010-l234", "S678"
         for ($i = 0; $i < $n;) {
-            if (!$one($i) || !preg_match('/^[0-9oli|]$/', $u[$i]['s'])) { $i++; continue; }
+            if (!$one($i) || !preg_match('/^[0-9olis|]$/', $u[$i]['s'])) { $i++; continue; }
             $j = $i;
-            while ($j < $n && $one($j) && preg_match('/^[0-9oli|]$/', $u[$j]['s'])) $j++;
+            while ($j < $n && $one($j) && preg_match('/^[0-9olis|]$/', $u[$j]['s'])) $j++;
             $before = $i > 0 ? $u[$i - 1]['s'] : '';
             $after = $j < $n ? $u[$j]['s'] : '';
             $hasDigit = $hasLook = false;
@@ -282,7 +283,7 @@ final class ChatFilter
             if ($j - $i >= 3 && !preg_match('/[a-z]$/', $before) && !preg_match('/^[a-z]/', $after) && $hasDigit && $hasLook) {
                 for ($k = $i; $k < $j; $k++) {
                     $s = $u[$k]['s'];
-                    $u[$k]['s'] = $s === 'o' ? '0' : (preg_match('/^[li|]$/', $s) ? '1' : $s);
+                    $u[$k]['s'] = $s === 'o' ? '0' : ($s === 's' ? '5' : (preg_match('/^[li|]$/', $s) ? '1' : $s));
                 }
             }
             $i = $j;
@@ -374,6 +375,8 @@ final class ChatFilter
         $tail = preg_replace('/insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu', '', $f) ?? $f;
         if (preg_match($platform, $f) && preg_match('/[0-9a-z_]{3,}|[0-9]{2,}/i', $tail)) return true;
         if (preg_match('/학년|[0-9일이삼사오육칠팔구]반$|초등|중학|고등|유치원|어린이집|[가-힣]{2,}초[0-9일이삼사오육]/u', $f)) return true;
+        if (preg_match('/^(?:ig|yt|tt|dc|snap|kt|insta|fb|tw|tg|dm)[._]/u', $f)) return true;                 // "ig_dino", "snap.dino77"
+        if (preg_match('/[가-힣]{2,}(?<!식)초$|[가-힣]{2,}(?:중|고)[0-9일이삼]|[가-힣]{1,6}동[0-9]{2,}/u', $f)) return true; // 해바라기초 · 해바라기중1 · 정자동123
         return false;
     }
 

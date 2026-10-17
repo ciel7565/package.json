@@ -70,6 +70,23 @@
     return new THREE.Matrix4().compose(_p.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2), _q, _s.set(r, len, r));
   }
   const bearingPt = (cx, cz, r, a) => [cx + Math.sin(a) * r, cz + Math.cos(a) * r];
+  // walkSpot: bearings tried around the camera's forward direction (front first, then wider)
+  const WALK_SIDES = [0, 0.45, -0.45, 0.9, -0.9, 1.35, -1.35, 1.8, -1.8, 2.3, -2.3];
+  const PROMPT_SKIP = new Set(['companion', 'bench', 'decor']);
+  /** would standing at (x, z) bring up another gold prompt (an interactable within its reach)? */
+  function promptNear(x, z) {
+    const I = G.interact;
+    if (!I?.list) return false;
+    for (const e of I.list()) {
+      if (!e || PROMPT_SKIP.has(e.kind) || e.disabled) continue;
+      let v = null;
+      try { v = typeof e.position === 'function' ? e.position() : e.position; } catch (err) { v = null; }
+      if (!v || !fin(v.x) || !fin(v.z)) continue;
+      const r = (I.radiusOf ? I.radiusOf(e) : e.radius || 2.6) + 0.4;
+      if ((v.x - x) * (v.x - x) + (v.z - z) * (v.z - z) < r * r) return true;
+    }
+    return false;
+  }
 
   // ---------------------------------------------------------------- merge buckets
   // Every part becomes non-indexed, gets a vertex colour (jittered per part), is transformed in world space and
@@ -465,6 +482,26 @@
       add(B.glow.build(m.glow, { cast: false, receive: false }), 'glow');
       if (roof) G.world.cameraBlockers.push(roof);
       if (this.meshes.paint) G.world.cameraBlockers.push(this.meshes.paint);
+      // the tiled roof is single-sided, so a follow-camera ray coming up from the deck slips under the eaves and the
+      // camera could settle on (or in) the tiles. An invisible closed octagonal hull that wraps the whole roof with a
+      // margin (double-sided: hit from outside and from under the eaves) keeps the camera out of it.
+      const hb = this._roofHull;
+      if (hb) {
+        // octagonal lathe: flat underside under the eaves, a rim that also covers the upturned corners (앙곡), and a
+        // cone above the concave tiles up to the finial
+        const R = hb.Rc + 0.6, yLo = hb.yE - 0.45, yRim = hb.yE + (hb.lift || 0.62) + 0.45;
+        const prof = [[0.02, hb.yA + 0.6], [R * 0.42, hb.yE + (hb.yA - hb.yE) * 0.62], [R, yRim], [R, yLo], [0.02, yLo]].map(([r, y]) => new THREE.Vector2(r, y));
+        const g = new THREE.LatheGeometry(prof, 8, hb.A0, TAU);
+        g.translate(hb.cx, 0, hb.cz);
+        const hull = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false }));
+        hull.name = 'manjangdae-roof-hull';
+        hull.visible = false; hull.castShadow = false; hull.receiveShadow = false; hull.frustumCulled = false;
+        hull.userData.cameraOnly = true;
+        this.root.add(hull);
+        hull.updateMatrixWorld(true);
+        this.meshes.roofHull = hull;
+        G.world.cameraBlockers.push(hull);
+      }
     },
     _col(c) { const id = G.world.addCollider({ tag: 'manjangdae', ...c }); this.colliders.push(id); return id; },
     /** a geometry that already carries vertex colours -> non-indexed position/normal/color only */
@@ -613,6 +650,7 @@
       }
       // ---- roof: 8 concave facets, upturned corners (앙곡), inward-bowed eaves (안허리), tile texture
       const yE = yTop + 0.62, yA = yTop + 3.35, lift = 0.62, Rc = colR + 2.05, bow = 0.2, VMAX = 0.94;
+      this._roofHull = { cx, cz, Rc, yE, yA, A0, lift };
       const corner = (k, r) => bearingPt(cx, cz, r, A0 + k * (PI / 4));
       const eaveAt = (k, u, out) => {
         const [ax, az] = corner(k, Rc), [bx, bz] = corner(k + 1, Rc);
@@ -1017,7 +1055,7 @@
       const reduced = opts.reduced ?? reduceMotion();
       let resolve;
       this._introDone = new Promise((r) => { resolve = r; });
-      const it = this._intro = { t: 0, reduced, resolve, skipped: false, ending: false, said: false, cardIn: false };
+      const it = this._intro = { t: 0, rt0: performance.now(), reduced, resolve, skipped: false, ending: false, said: false, cardIn: false };
       this.introActive = true;
       document.body.classList.add('md-intro');
       G.ui.block('md-intro');
@@ -1042,12 +1080,14 @@
           try { cam.setMode('follow', { duration: 0 }); cam.behind?.(pl.rotY, true); cam.snap?.(); } catch (e) { /* camera optional */ }
           ui.title.classList.add('on');
           await G.ui.fade(false, 420);
-          if (easyOn()) say('정선 만장대에 왔어요! 체험관이 다 보여요.', { priority: 1 });
+          if (easyOn()) say('정선 만장대에 왔어요! 체험관이 다 보여요.', { priority: 1, intro: true });
           await G.util.sleep(1700);
           if (this._intro === it) this._finishIntro(false);
         })();
       } else {
         this._prepIntroPath();
+        // a soft cinematic grade for the flight (eased by the engine, removed at the hand-off)
+        try { G.sys.engine?.grade?.({ vignette: 0.14, warmth: 0.08, contrast: 1.03 }, 'md-intro'); } catch (e) { /* grade optional */ }
         G.ui.fade(true, 0).then(() => G.ui.fade(false, 700));
         try { cam.shot(this._introPosCurve.getPoint(0), this._introLookCurve.getPoint(0), { fov: 50, duration: 0 }); } catch (e) { G.log.warn('WORLD', 'intro shot failed', e); }
       }
@@ -1095,6 +1135,7 @@
           if (cut) cam.snap?.();
         }
       } catch (e) { G.log.warn('WORLD', 'intro hand-off failed', e); }
+      try { G.sys.engine?.grade?.(null, 'md-intro'); } catch (e) { /* grade optional */ }
       document.body.classList.remove('md-intro');
       G.ui.unblock('md-intro');
       if (!logout) this._hud(true);   // (on logout the app owns the HUD)
@@ -1110,7 +1151,9 @@
     _updateIntro(dt) {
       const it = this._intro;
       if (!it || it.reduced) return;
-      it.t += dt;
+      // the flight runs on game time, but never slower than the wall clock: on a slow device (the loop clamps dt to
+      // 0.1 s, so < 10 fps would stretch it) the cinematic still hands the controls back after 8.3 s of real time
+      it.t = Math.max(it.t + dt, (performance.now() - it.rt0) / 1000);
       const T = 8.3, t = it.t;
       if (!it.ending) {
         const k = easeIO(clamp(t / 7.6, 0, 1));
@@ -1122,7 +1165,7 @@
       if (t > 1.2 && !it.subOn) { it.subOn = true; this._ui?.sub.classList.add('on'); }
       if (t > 4.0 && it.subOn && !it.subOff) { it.subOff = true; this._ui?.sub.classList.remove('on'); }
       if (t > 4.4 && !it.cardIn) { it.cardIn = true; this._cardOn(); }
-      if (t > 4.9 && !it.said) { it.said = true; if (easyOn()) say('정선 만장대에 왔어요! 저 아래 체험관이 다 보여요.', { priority: 1 }); }
+      if (t > 4.9 && !it.said) { it.said = true; if (easyOn()) say('정선 만장대에 왔어요! 저 아래 체험관이 다 보여요.', { priority: 1, intro: true }); }
       if (t > 7.4 && !it.cardOut) { it.cardOut = true; this._cardOff(false); }
       if (t > 7.6 && !it.barsOut) { it.barsOut = true; this._ui?.root.classList.remove('on'); }
       if (t >= T && !it.ending) { it.ending = true; this._finishIntro(false); }
@@ -1166,6 +1209,11 @@
     _updateCard(dt) {
       const c = this._card;
       if (!c) return;
+      const now = performance.now();
+      if (!c.rt) c.rt = now;
+      const rdt = Math.min(1, Math.max(dt, (now - c.rt) / 1000));   // wall-clock pacing on slow devices too
+      c.rt = now;
+      dt = rdt;
       c.t += dt;
       const cam = G.sys.engine?.camera;
       let op = easeOut(clamp(c.t / 0.9, 0, 1));
@@ -1186,11 +1234,29 @@
 
     // ============================================================== telescope tour
     _tourTargets() {
+      if (this._tourCache) return this._tourCache;
       const zs = (G.data.zones || []).filter((z) => z && z.id !== this.zoneId && Array.isArray(z.center) && z.r > 0);
       const eye = this.telescopeEye || { x: this.lookout.x, z: this.lookout.z };
+      const blds = G.data.layout?.buildings || [];
+      const ground = (x, z) => { const y = G.world?.terrainHeight?.(x, z); return fin(y) ? y : 0; };
+      // what the lens aims at: the zone's landmark building (the biggest one inside it — the 정문 for 입구, the hall
+      // for 체험관…), at roughly half its height; otherwise the zone centre a little above the ground
+      const aimOf = (z) => {
+        let best = null, area = 0;
+        for (const b of blds) {
+          if (!b || !fin(b.x) || !fin(b.z) || Math.hypot(b.x - z.center[0], b.z - z.center[1]) > z.r) continue;
+          const a = (Number(b.w) || 4) * (Number(b.d) || 4) * (b.type === 'gate' ? 4 : 1);
+          if (a > area) { area = a; best = b; }
+        }
+        if (best) return { x: best.x, z: best.z, y: ground(best.x, best.z) + (best.type === 'hall' ? 8 : best.type === 'gate' ? 4.2 : 3) };
+        return { x: z.center[0], z: z.center[1], y: ground(z.center[0], z.center[1]) + 1.4 };
+      };
       // left to right as seen from the deck (looking north): sort by bearing
-      return zs.map((z) => ({ id: z.id, name: z.name, short: z.short || z.name, emoji: z.emoji || ZONE_EMOJI[z.id] || '📍', desc: z.desc || '', kid: z.kidDesc || ZONE_KID[z.id] || '', x: z.center[0], z: z.center[1], d: Math.hypot(z.center[0] - eye.x, z.center[1] - eye.z), b: Math.atan2(z.center[0] - eye.x, -(z.center[1] - eye.z)) }))
-        .sort((a, b) => a.b - b.b);
+      this._tourCache = zs.map((z) => {
+        const a = aimOf(z);
+        return { id: z.id, name: z.name, short: z.short || z.name, emoji: z.emoji || ZONE_EMOJI[z.id] || '📍', desc: z.desc || '', kid: z.kidDesc || ZONE_KID[z.id] || '', x: a.x, z: a.z, ly: a.y, d: Math.hypot(a.x - eye.x, a.z - eye.z), b: Math.atan2(a.x - eye.x, -(a.z - eye.z)) };
+      }).sort((a, b) => a.b - b.b);
+      return this._tourCache;
     },
     /** telescope view over the valley; resolves when closed */
     tour(startId) {
@@ -1200,11 +1266,13 @@
       if (!targets.length) return Promise.resolve(false);
       let resolve;
       const promise = new Promise((r) => { resolve = r; });
-      let idx = Math.max(0, targets.findIndex((t) => t.id === startId));
+      // without a choice the tour starts where the adventure goes next: the plaza (발효마스터), not the nearest edge
+      let idx = targets.findIndex((t) => t.id === (startId || 'ZONE_MAIN'));
+      if (idx < 0) idx = 0;
       const eye = this.telescopeEye || { x: this.lookout.x, y: this.lookout.y + 1.4, z: this.lookout.z };
       const tr = this._tour = { targets, idx, t: 0, hold: 0, promise, resolve, eye, look: new THREE.Vector3(), from: new THREE.Vector3(), to: new THREE.Vector3(), blend: 1, auto: true };
       const first = targets[idx];
-      tr.look.set(first.x, 1.2, first.z); tr.from.copy(tr.look); tr.to.copy(tr.look);
+      tr.look.set(first.x, first.ly ?? 1.2, first.z); tr.from.copy(tr.look); tr.to.copy(tr.look);
       G.ui.block('md-scope');
       this.tourActive = true;
       // the lens is see-through in the middle: the HUD (and cards living in it) step aside while looking
@@ -1239,7 +1307,7 @@
       tr.idx = (tr.idx + step + n) % n;
       if (!auto) tr.auto = false;
       const tg = tr.targets[tr.idx];
-      tr.from.copy(tr.look); tr.to.set(tg.x, 1.2, tg.z); tr.blend = 0; tr.hold = 0;
+      tr.from.copy(tr.look); tr.to.set(tg.x, tg.ly ?? 1.2, tg.z); tr.blend = 0; tr.hold = 0;
       this._tourShow();
       G.sfx('page');
       G.bus.emit('manjangdae:tour', { phase: 'zone', zoneId: tg.id });
@@ -1256,7 +1324,7 @@
       ui.dots.textContent = '';
       tr.targets.forEach((_, i) => ui.dots.appendChild(G.ui.h('i', { class: i === tr.idx ? 'on' : '' })));
       ui.card.classList.remove('pop'); void ui.card.offsetWidth; ui.card.classList.add('pop');
-      if (easy) say(`${tg.short}. ${tg.kid || ''}`, { priority: first ? 1 : 0 });
+      if (easy) say(`${tg.short}. ${tg.kid || ''}`, { priority: first ? 1 : 0, intro: true });
     },
     _dirName(tg) {
       const eye = this._tour?.eye || this.lookout;
@@ -1301,7 +1369,10 @@
       let dx = tr.look.x - e.x, dz = tr.look.z - e.z;
       const dl = Math.hypot(dx, dz);
       if (dl > 1e-3) { dx /= dl; dz /= dl; } else { dx = 0; dz = -1; }
-      _camPos.set(e.x + dx * 1.5, this.lookout.y + 2.25, e.z + dz * 1.5);
+      // near targets sit low in the view, behind the deck edge and the switchback path below it: the lens moves out
+      // past the balustrade and up a little more for them, so neither rails nor the path's rope fence fill the view
+      const near = clamp((110 - Math.min(tg.d, dl)) / 50, 0, 1);
+      _camPos.set(e.x + dx * (1.5 + 2.5 * near), this.lookout.y + 2.25 + 2.2 * near, e.z + dz * (1.5 + 2.5 * near));
       const fov = clamp(1400 / Math.max(40, tg.d), 14, 30);
       _shotOpts.fov = fov; _shotOpts.duration = tr.t < dt * 1.5 ? 0.6 : undefined;
       try { G.sys.camera.shot(_camPos, _camLook, _shotOpts); } catch (err) { /* camera optional */ }
@@ -1321,7 +1392,8 @@
           type: 'button', class: 'md-guide-tile', 'data-say': `${tg.short}. ${tg.kid || ''}`,
           onclick: () => { G.ui.modal.get('md-guide')?.close(); setTimeout(() => this.tour(tg.id), 60); },
         }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, tg.emoji), h('b', null, easy ? tg.short : tg.name), easy ? null : h('small', null, `${Math.round(tg.d)}m · ${this._dirName(tg)}`)))),
-        h('p', { class: 'md-guide-note' }, '※ 게임 속 전망대와 풍경은 실제 지형·시설을 그대로 옮긴 것이 아니에요. ' + (G.data.meta?.addressNote || '')),
+        // kids get one plain sentence; grown-ups also see the data's address note (display-only, not verified geography)
+        h('p', { class: 'md-guide-note' }, easy ? '게임 속 풍경이에요. 진짜 만장대와는 조금 달라요.' : '※ 게임 속 전망대와 풍경은 실제 지형·시설을 그대로 옮긴 것이 아니에요. ' + (G.data.meta?.addressNote || '')),
       );
       return G.ui.modal.open({
         id: 'md-guide', title: easy ? '만장대 안내' : '정선 만장대 전망 안내', icon: '🏔️', size: 'md', className: 'md-guide-modal', body,
@@ -1364,26 +1436,43 @@
       let fx = 0, fz = -1;
       const cam = G.sys.engine?.camera;
       if (cam) { cam.getWorldDirection(_camLook); const l = Math.hypot(_camLook.x, _camLook.z); if (l > 1e-4) { fx = _camLook.x / l; fz = _camLook.z / l; } }
-      const a0 = Math.atan2(fx, fz);
-      for (const d of [3, 2.4, 1.8]) {
-        for (const side of [0, 0.45, -0.45, 0.9, -0.9]) {
+      const a0 = Math.atan2(fx, fz), y = this.lookout.y;
+      const free = (x, z) => {
+        if (Math.hypot(x - md.x, z - md.z) > md.r - 1.2) return false;
+        try { return !G.world.blocked?.(x, z, 0.45, y); } catch (e) { return true; }
+      };
+      // far enough that the "move" step counts (> 1.8 m after a 0.3 m stop), reachable in a straight line,
+      // on screen, and — preferably — out of reach of the deck's own prompts (telescope, board, marker), so the
+      // next coach step ("👉 같이 가기") is the one obvious thing on screen when the child arrives
+      let fallback = null;
+      for (const side of WALK_SIDES) {
+        for (const d of [3, 2.6, 2.2]) {
           const x = p.x + Math.sin(a0 + side) * d, z = p.z + Math.cos(a0 + side) * d;
-          if (Math.hypot(x - md.x, z - md.z) > md.r - 1.2) continue;
-          let bad = false;
-          try { bad = !!G.world.blocked?.(x, z, 0.45, this.lookout.y); } catch (e) { bad = false; }
-          if (!bad) return { x, z };
+          if (!free(x, z)) continue;
+          let clear = true;
+          for (let i = 1; i < 4 && clear; i++) clear = free(p.x + Math.sin(a0 + side) * d * i / 4, p.z + Math.cos(a0 + side) * d * i / 4);
+          if (!clear) continue;
+          if (cam) {
+            _v2.set(x, y + 0.1, z).project(cam);
+            if (!(Math.abs(_v2.x) < 0.82 && _v2.y > -0.7 && _v2.y < 0.75 && _v2.z < 1)) continue;
+          }
+          if (!promptNear(x, z)) return { x, z };
+          if (!fallback) fallback = { x, z };
         }
       }
-      return null;
+      return fallback;
     },
 
     /** framing for the title screen (70-app): a slow orbit around the pavilion with the valley behind */
     titleShot() {
       const md = MDL() || { x: 52, z: 118, pavilion: { x: 52, z: 124 } };
       const y = this.lookout.y;
+      // authored from the south-west, over the pavilion roof towards the valley: this arc is clear of the big
+      // canopies on the ridge (the old 0.72 rad framing sat inside them); 70-app's TitleCam still checks the ring
+      const A = 5.7, R = 36, H = 14;
       return {
-        pos: [md.x + 30, y + 16, md.z + 34], look: [md.x - 16, y - 6, md.z - 40],
-        cinematic: { center: [md.x, y + 3, md.z], radius: 36, height: 14, angle: 0.72, speed: 0.018 },
+        pos: [md.x + Math.sin(A) * R, y + 3 + H, md.z + Math.cos(A) * R], look: [md.x, y + 3, md.z],
+        cinematic: { center: [md.x, y + 3, md.z], radius: R, height: H, angle: A, speed: 0.018 },
       };
     },
 

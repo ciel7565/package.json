@@ -36,6 +36,9 @@
     medium: { name: 'medium', label: '중간', pixelRatio: 1.25, shadows: true, shadowSize: 1024, bloom: false, grade: true, godrays: false, atmos: 1, antialias: true, treeDensity: 0.75, grassDensity: 0.5, drawDistance: 1200, flare: true },
     high: { name: 'high', label: '높음', pixelRatio: 2, shadows: true, shadowSize: 2048, bloom: true, grade: true, godrays: true, atmos: 2, antialias: true, treeDensity: 1.0, grassDensity: 1.0, drawDistance: 2000, flare: true },
   };
+  // small-scenery cull distance (m) per preset (see engine._updateCull)
+  const CULL_DIST = { low: 72, medium: 125, high: 210 };
+  const _cullBox = new THREE.Box3();
   // world-ambience features: minimum preset level (0 low, 1 medium, 2 high) and whether reduceMotion turns them off
   const FEATURES = {
     grade: { min: 1 }, sunGlow: { min: 1 }, godrays: { min: 2 },
@@ -318,14 +321,28 @@
     nanScrubShader: NAN_SCRUB,
     /** CanvasTexture from a 2D drawing function */
     canvasTexture(w, h, draw, opts = {}) {
-      const c = document.createElement('canvas');
+      let c = document.createElement('canvas');
       c.width = w; c.height = h;
       const ctx = c.getContext('2d');
       draw(ctx, w, h);
+      // low preset: big drawings (≥ 1024×640) are uploaded at half size — 4× less texture memory and upload time on
+      // the first frame, which is what a slow GPU feels at start-up (the drawing code keeps its full-size coordinates)
+      const low = G.sys.engine?.preset?.name === 'low';
+      if (low && w * h > 600000 && !opts.full) {
+        try {
+          const half = document.createElement('canvas');
+          half.width = Math.max(1, Math.round(w / 2)); half.height = Math.max(1, Math.round(h / 2));
+          const hc = half.getContext('2d');
+          hc.imageSmoothingEnabled = true; hc.imageSmoothingQuality = 'high';
+          hc.drawImage(c, 0, 0, half.width, half.height);
+          c.width = c.height = 1;   // free the full-size backing store
+          c = half;
+        } catch (e) { /* keep the full-size canvas */ }
+      }
       const t = new THREE.CanvasTexture(c);
       if (opts.srgb !== false) t.colorSpace = THREE.SRGBColorSpace;
       if (opts.repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(opts.repeat[0], opts.repeat[1]); }
-      t.anisotropy = opts.anisotropy ?? 4;
+      t.anisotropy = low ? 1 : (opts.anisotropy ?? 4);
       if (opts.nearest) { t.magFilter = THREE.NearestFilter; }
       t.needsUpdate = true;
       return t;
@@ -821,6 +838,65 @@
     },
     onResize(fn) { if (typeof fn === 'function') this._resizeFns.push(fn); },
 
+    /**
+     * distance cull for small scenery: the 정선 만장대 start view frames the whole valley, and every small prop
+     * (lantern, bench, sign, barrel…) far below is one more draw call. Small direct children of the props group and the
+     * jar groups (bounding radius ≤ 3.2 m) farther than CULL_DIST (by preset) leave the render layer — `visible` is
+     * not touched, so the owning modules keep full control of it; buildings, trees, terrain and instanced sets stay.
+     */
+    _updateCull(dt) {
+      const C = this._cull || (this._cull = { t: 0, items: null, key: '', off: 0 });
+      C.t -= dt;
+      if (C.t > 0 || !this.scene || !this.camera || !G.ready) return;
+      C.t = 0.25;
+      const groups = this.scene.children.filter((c) => c && (c.name === 'props' || /^jar:/.test(c.name)));
+      const key = groups.map((g) => g.name + ':' + g.children.length).join('|');
+      if (key !== C.key) { this._buildCull(groups); C.key = key; }
+      const lim = CULL_DIST[this.preset?.name] ?? Infinity;
+      const cp = this.camera.position;
+      let off = 0;
+      for (const it of C.items) {
+        const dx = it.x - cp.x, dy = it.y - cp.y, dz = it.z - cp.z;
+        const far = Math.sqrt(dx * dx + dy * dy + dz * dz) - it.r > lim;
+        if (far !== it.off) {
+          it.off = far;
+          for (const m of it.meshes) { if (far) { m.userData._cullMask = m.layers.mask; m.layers.mask = 0; } else if (m.userData._cullMask != null) { m.layers.mask = m.userData._cullMask; delete m.userData._cullMask; } }
+        }
+        if (far) off++;
+      }
+      C.off = off;
+    },
+    _buildCull(groups) {
+      const C = this._cull;
+      for (const it of C.items || []) for (const m of it.meshes) if (m.userData._cullMask != null) { m.layers.mask = m.userData._cullMask; delete m.userData._cullMask; }
+      const items = [];
+      const box = new THREE.Box3(), sph = new THREE.Sphere();
+      const add = (obj) => {
+        obj.updateWorldMatrix(true, true);
+        box.makeEmpty();
+        const meshes = [];
+        obj.traverse((o) => {
+          if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite) || o.isInstancedMesh || o.isSkinnedMesh) return;
+          if (!o.geometry) return;
+          if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+          const bb = o.geometry.boundingBox;
+          if (!bb || bb.isEmpty()) return;
+          box.union(_cullBox.copy(bb).applyMatrix4(o.matrixWorld));
+          meshes.push(o);
+        });
+        if (!meshes.length || box.isEmpty()) return;
+        box.getBoundingSphere(sph);
+        if (!(sph.radius > 0) || sph.radius > 3.2 || !Number.isFinite(sph.center.x)) return;
+        items.push({ x: sph.center.x, y: sph.center.y, z: sph.center.z, r: sph.radius, meshes, off: false });
+      };
+      for (const g of groups) {
+        if (/^jar:/.test(g.name)) add(g);
+        else for (const c of g.children) add(c);
+      }
+      C.items = items;
+    },
+    get cullStats() { return { items: this._cull?.items?.length || 0, culled: this._cull?.off || 0, dist: CULL_DIST[this.preset?.name] ?? null }; },
+
     update(dt) {
       // repair normals of geometries added since the last scan (crops regrowing, decorations, effects) ~every 1.5 s
       this._normScan = (this._normScan ?? 9) + dt; // first frame scans immediately
@@ -834,19 +910,25 @@
       }
       this._updateGrade(dt);
       this._updateOutline(dt);
+      this._updateCull(dt);
       // re-bake environment at most every 2s when sun/sky changed
       this._envTimer -= dt;
       if (this._envDirty && this._envTimer <= 0) { this._envTimer = 2; this.updateEnvironment(); }
-      // fps & auto quality
-      this._fpsAcc += dt; this._fpsFrames++;
+      // fps & auto quality — measured on the wall clock (the loop clamps dt to 0.1 s, which would make a 3 fps device
+      // read "10 fps"); a window that spans a hidden tab or a long stall is dropped instead of judged
+      const wall = performance.now();
+      if (!this._fpsT0) this._fpsT0 = wall;
+      this._fpsFrames++;
+      this._fpsAcc = (wall - this._fpsT0) / 1000;
       if (this._fpsAcc >= 0.5) {
         this.fps = this._fpsFrames / this._fpsAcc;
-        this._fpsAcc = 0; this._fpsFrames = 0;
+        const judge = this._fpsAcc <= 3;
+        this._fpsT0 = wall; this._fpsAcc = 0; this._fpsFrames = 0;
         if (G.settings.showFps) {
           const el = document.getElementById('fps-meter');
           if (el) el.textContent = `FPS ${this.fps.toFixed(0)}  ${this.quality}\ndraw ${this.frameInfo.calls}  tri ${(this.frameInfo.triangles / 1000).toFixed(0)}k`;
         }
-        if ((G.settings.quality || 'auto') === 'auto' && !G.flags.quality && G.ready && !document.hidden) {
+        if (judge && (G.settings.quality || 'auto') === 'auto' && !G.flags.quality && G.ready && !document.hidden) {
           this._lowFpsTime = this.fps < 24 ? this._lowFpsTime + 0.5 : Math.max(0, this._lowFpsTime - 0.5);
           if (this._lowFpsTime > 6 && this.quality !== 'low') {
             const next = this.quality === 'high' ? 'medium' : 'low';

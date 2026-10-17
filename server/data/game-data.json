@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-10-17T11:40:09.431Z",
+  "exportedAt": "2026-10-17T21:28:27.636Z",
   "quests": {
     "QUEST001": {
       "reward": {
@@ -126,44 +126,76 @@
     "ACH_FIRST_VISIT": {
       "reward": {
         "coin": 100
+      },
+      "condition": {
+        "stat": "logins",
+        "gte": 1
       }
     },
     "ACH_FIRST_WATER": {
       "reward": {
         "coin": 100
+      },
+      "condition": {
+        "stat": "waters",
+        "gte": 1
       }
     },
     "ACH_FIRST_HARVEST": {
       "reward": {
         "coin": 200
+      },
+      "condition": {
+        "stat": "harvests",
+        "gte": 1
       }
     },
     "ACH_FIRST_FERMENT": {
       "reward": {
         "coin": 300,
         "title": "발효 입문자"
+      },
+      "condition": {
+        "stat": "fermentsClaimed",
+        "gte": 1
       }
     },
     "ACH_FIRST_QUIZ": {
       "reward": {
         "coin": 100
+      },
+      "condition": {
+        "stat": "quizCorrect",
+        "gte": 1
       }
     },
     "ACH_FIRST_JOURNAL": {
       "reward": {
         "coin": 100
+      },
+      "condition": {
+        "stat": "journals",
+        "gte": 1
       }
     },
     "ACH_JOURNAL5": {
       "reward": {
         "coin": 500,
         "title": "꾸준한 기록가"
+      },
+      "condition": {
+        "stat": "journals",
+        "gte": 5
       }
     },
     "ACH_PHOTO10": {
       "reward": {
         "coin": 500,
         "title": "산골 사진작가"
+      },
+      "condition": {
+        "stat": "photos",
+        "gte": 10
       }
     },
     "ACH_ALL_ZONES": {
@@ -180,11 +212,19 @@
       "reward": {
         "coin": 500,
         "edu": 20
+      },
+      "condition": {
+        "stat": "eduCompleted",
+        "gte": 5
       }
     },
     "ACH_LEVEL5": {
       "reward": {
         "coin": 500
+      },
+      "condition": {
+        "stat": "level",
+        "gte": 5
       }
     },
     "ACH_FRIENDLY": {
@@ -195,6 +235,10 @@
     "ACH_WALKER": {
       "reward": {
         "coin": 400
+      },
+      "condition": {
+        "stat": "distance",
+        "gte": 6000
       }
     },
     "ACH_NPC_ALL": {
@@ -205,11 +249,19 @@
     "ACH_FIRST_CHAT": {
       "reward": {
         "coin": 50
+      },
+      "condition": {
+        "stat": "chats",
+        "gte": 1
       }
     },
     "ACH_CRAFTER": {
       "reward": {
         "coin": 300
+      },
+      "condition": {
+        "stat": "crafts",
+        "gte": 3
       }
     }
   },

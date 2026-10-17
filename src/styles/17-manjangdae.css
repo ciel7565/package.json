@@ -52,6 +52,8 @@ body.easy .md-skip { min-height: var(--tap, 56px); padding: .7rem 1.3rem; font-s
 /* while the intro runs / while looking through the telescope: the HUD and the onboarding coach wait */
 body.md-intro .coach, body.md-intro #easy-next, body.md-intro #interact-prompt, body.md-intro .easy-point, body.md-intro .easy-hand,
 body.md-scoping .coach, body.md-scoping #easy-next, body.md-scoping #interact-prompt, body.md-scoping .easy-point, body.md-scoping .easy-hand { opacity: 0 !important; pointer-events: none !important; }
+/* floating name tags / speech bubbles also step back (toasts are held by 04-ui until the intro ends) */
+body.md-intro #labels-layer, body.md-scoping #labels-layer { opacity: 0; transition: opacity .4s ease; }
 
 /* ---------------------------------------------------------------- telescope scope */
 .md-scope { position: fixed; inset: 0; z-index: 44; pointer-events: none; opacity: 0; transition: opacity 380ms var(--md-ease); }
@@ -111,6 +113,7 @@ body.easy .md-z-desc { font-size: 1.1rem; }
 .md-guide.easy .md-guide-tile { min-height: var(--tap, 56px); padding: .9rem .5rem; font-size: 1.1rem; }
 .md-guide.easy .md-guide-tile .emoji { font-size: 2.3rem; }
 .md-guide-note { margin: 0; font-size: .78rem; opacity: .62; line-height: 1.5; }
+.md-guide.easy .md-guide-note { font-size: max(16px, 1rem); opacity: .8; }
 
 @media (max-width: 640px) {
   :root { --md-bar: 8vh; }

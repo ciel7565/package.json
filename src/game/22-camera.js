@@ -295,14 +295,15 @@
         const sk = Number.isFinite(sp) ? clamp(sp / RUN(), 0, 1) : 0;
         this._speedK += (sk - this._speedK) * damp(3, dt || 1);
         if (mode === 'follow' && vel && sp > 0.5 && Number.isFinite(sp)) {
-          const lead = (this._wasGentle ? LEAD_EASY : LEAD) * this._speedK;
+          // reduce motion: no speed look-ahead (and no dolly / FOV kick below) — the view stays put
+          const lead = G.settings?.reduceMotion ? 0 : (this._wasGentle ? LEAD_EASY : LEAD) * this._speedK;
           _v2.set(vel.x / sp * lead, 0, vel.z / sp * lead);
         } else _v2.set(0, 0, 0);
         this._lead.lerp(_v2, damp(2.4, dt || 1));
         let yaw, pitch, dist;
         if (mode === 'follow') {
           yaw = this.yaw; pitch = this.pitch;
-          dist = this._effDist + (this._wasGentle ? DOLLY_EASY : DOLLY) * this._speedK * (this._effDist / Math.max(1, this.distance));
+          dist = this._effDist + (G.settings?.reduceMotion ? 0 : (this._wasGentle ? DOLLY_EASY : DOLLY) * this._speedK * (this._effDist / Math.max(1, this.distance)));
           // closer zoom (or occlusion pull-in) looks at the head / over the shoulder instead of the chest
           // far: pivot above the head so the player sits in the lower third and more of the world shows ahead
           const lift = clamp((5 - this.distance) / 2.5, 0, 1) * 0.28 + clamp((2.4 - dist) / 1.4, 0, 1) * 0.32 + clamp((dist - 2.6) / 5.4, 0, 1.45) * 0.85;
@@ -374,7 +375,10 @@
             _dir.multiplyScalar(1 / len);
             const r = this._ray;
             r.set(look, _dir);
-            r.far = len + 0.3;
+            // test the whole WANTED distance, not just the current (already pulled-in) one: otherwise the ray stops
+            // short of the blocker once the camera has moved in, the pull-in is released, the camera slides back
+            // into the roof and is pulled in again — a frame-by-frame flicker in and out of roofs
+            r.far = Math.max(len, this.mode === 'follow' ? this.distance + 1.2 : len) + 0.3;
             let hits = null;
             try { hits = r.intersectObjects(blockers, true); } catch (e) { hits = null; }
             if (hits && hits.length) this._blockDist = Math.max(1.05, hits[0].distance - 0.35);
@@ -512,7 +516,7 @@
       const sp = p?.velocity ? Math.hypot(p.velocity.x, p.velocity.z) : 0;
       let target = FOV;
       if (this.mode === 'shot' && Number.isFinite(this._shot.fov)) target = this._shot.fov;
-      else if (this.mode === 'follow' && !this._wasGentle && Number.isFinite(sp)) target = FOV + clamp((sp - WALK() * 1.05) / (RUN() - WALK() * 1.05), 0, 1) * FOV_KICK;
+      else if (this.mode === 'follow' && !this._wasGentle && !G.settings?.reduceMotion && Number.isFinite(sp)) target = FOV + clamp((sp - WALK() * 1.05) / (RUN() - WALK() * 1.05), 0, 1) * FOV_KICK;
       this._fov += (target - this._fov) * damp(this.mode === 'shot' ? 6 : 3, dt || 1);
       if (!Number.isFinite(this._fov)) this._fov = FOV;
       if (Math.abs(c.fov - this._fov) > 0.01) { c.fov = this._fov; c.updateProjectionMatrix(); }
