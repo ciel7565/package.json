@@ -27,7 +27,7 @@
   const ZOOMS = [50, 80, 120, 180, 260];                      // metres across the minimap width
   const DEFAULT_ZOOM = 2;
   const LS_ZOOM = 'tfm.v1.mmZoom', LS_COLLAPSED = 'tfm.v1.mmCollapsed', LS_CLOSE_HINT = 'tfm.v1.mmCloseHint';
-  const WORLD_VIEW = { cx: 4, cz: -8, size: 236 };            // default world-map framing (m)
+  const WORLD_VIEW = { cx: 6, cz: 0, size: 272 };             // default world-map framing (m): hall (north) to 만장대 (south)
   const BG_FOREST = '#2d4a2b';
   // arrival spots for fast travel [x, z, rotY] (free ground, facing the zone's highlight)
   const ARRIVE = {
@@ -40,6 +40,8 @@
     ZONE_JANGDOKDAE: [20.5, 2, PI / 2],
     ZONE_REST: [38, 37.5, 0.75],
     ZONE_ENTRANCE: [0, 66, PI],
+    ZONE_MANJANGDAE: [52, 109.4, PI],   // the viewing deck, facing the valley
+    POI_MANJANGDAE_TRAIL: [31.2, 99.6, -2.0],
     // points of interest next to water: stand on the bank, looking at the sight (never in the pond basin)
     POI_WATERFALL: [-18, -58, -2.415],
     POI_PAVILION: [43, 47, 2.28],
@@ -49,18 +51,20 @@
   const EASY_ZOOM = 3;                                        // 180 m across: more zones to tap
   const ZONE_EMOJI = {
     ZONE_MAIN: '⛲', ZONE_CROP: '🌱', ZONE_HALL: '🏛️', ZONE_HERB: '🌿', ZONE_EDUCATION: '📖', ZONE_FERMENTATION: '🍲',
-    ZONE_JANGDOKDAE: '🏺', ZONE_REST: '🌸', ZONE_ENTRANCE: '🚪', ZONE_TRAIL: '🚶',
+    ZONE_JANGDOKDAE: '🏺', ZONE_REST: '🌸', ZONE_ENTRANCE: '🚪', ZONE_TRAIL: '🚶', ZONE_MANJANGDAE: '🏔️',
   };
+  const zoneEmoji = (z) => (z && (ZONE_EMOJI[z.id] || z.emoji)) || '📍';
   const ZONE_SAY = {
     ZONE_MAIN: '분수가 있는 광장', ZONE_CROP: '채소를 기르는 밭', ZONE_HALL: '큰 체험관', ZONE_HERB: '향기로운 허브 밭',
     ZONE_EDUCATION: '이야기를 배우는 곳', ZONE_FERMENTATION: '맛있는 발효 음식', ZONE_JANGDOKDAE: '장독이 가득한 곳',
-    ZONE_REST: '꽃과 연못 정원', ZONE_ENTRANCE: '들어오는 문',
+    ZONE_REST: '꽃과 연못 정원', ZONE_ENTRANCE: '들어오는 문', ZONE_MANJANGDAE: '체험관이 다 보이는 높은 전망대',
   };
   const POI_KID = {
     POI_STORAGE: ['🍶', '저장고', '커다란 옹기가 모여 있는 저장고'], POI_TOOLS: ['🛠️', '옛날 도구', '옛날 농기구를 구경하는 곳'],
     POI_PAVILION: ['🪷', '정자', '연못가의 예쁜 정자'], POI_WATERFALL: ['💦', '폭포', '시원한 작은 폭포'],
     POI_RIVERSIDE: ['🏞️', '계곡', '맑은 계곡물을 보는 곳'], POI_PARKING: ['🚗', '주차장', '자동차가 쉬는 곳'],
     POI_HANOK_VILLAGE: ['🏡', '한옥마을', '옛날 집이 모여 있는 마을'],
+    POI_MANJANGDAE_TRAIL: ['🪜', '돌계단 길', '만장대로 오르는 지그재그 돌계단'],
   };
   const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
   const easyOn = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
@@ -287,6 +291,37 @@
       if (p.type === 'wood') strokeLine(ctx, p.pts, p.width * 0.95, '#4a301b', [0.1, 0.45]);
     }
     ctx.restore();
+  }
+
+  /** 정선 만장대: paved plateau with its balustrade, the octagonal pavilion roof and the deck lookout */
+  function drawManjangdae(ctx) {
+    const md = L().manjangdae;
+    if (!md || !Number.isFinite(md.x)) return;
+    // plateau + rim
+    ctx.beginPath(); ctx.arc(md.x, md.z, md.r + 0.45, 0, TAU); ctx.fillStyle = '#8f877a'; ctx.fill();
+    const g = ctx.createRadialGradient(md.x, md.z, 1, md.x, md.z, md.r);
+    g.addColorStop(0, '#e2dccf'); g.addColorStop(1, '#c9c1b2');
+    ctx.beginPath(); ctx.arc(md.x, md.z, md.r, 0, TAU); ctx.fillStyle = g; ctx.fill();
+    ctx.lineWidth = 0.28; ctx.strokeStyle = 'rgba(110,100,86,0.8)';
+    const gb = md.gap?.bearing ?? -PI * 0.75, gh = md.gap?.half ?? 0.17;
+    // canvas angle (from +x, clockwise with +z down) for a bearing b (x = sin b, z = cos b): atan2(cos b, sin b)
+    const ca = (b) => Math.atan2(Math.cos(b), Math.sin(b));
+    ctx.beginPath(); ctx.arc(md.x, md.z, md.r - 0.15, ca(gb - gh), ca(gb + gh), false); ctx.stroke();
+    // pavilion: octagonal roof with hip lines
+    const pv = md.pavilion;
+    if (pv) {
+      const R = (pv.r || 3.9) + 1.9;
+      ctx.beginPath();
+      for (let k = 0; k < 8; k++) { const a = PI / 8 + k * (PI / 4); const x = pv.x + Math.sin(a) * R, z = pv.z + Math.cos(a) * R; if (k) ctx.lineTo(x, z); else ctx.moveTo(x, z); }
+      ctx.closePath();
+      ctx.fillStyle = '#4a4f57'; ctx.fill();
+      ctx.lineWidth = 0.22; ctx.strokeStyle = '#dcd6c8';
+      for (let k = 0; k < 8; k++) { const a = PI / 8 + k * (PI / 4); ctx.beginPath(); ctx.moveTo(pv.x, pv.z); ctx.lineTo(pv.x + Math.sin(a) * R, pv.z + Math.cos(a) * R); ctx.stroke(); }
+      ctx.beginPath(); ctx.arc(pv.x, pv.z, 0.6, 0, TAU); ctx.fillStyle = '#dcd6c8'; ctx.fill();
+    }
+    // telescope + lookout dot
+    const tl = md.telescope;
+    if (tl) { ctx.beginPath(); ctx.arc(tl.x, tl.z, 0.6, 0, TAU); ctx.fillStyle = '#2e5c4b'; ctx.fill(); }
   }
 
   function drawPlazas(ctx) {
@@ -599,7 +634,7 @@
       ['water', () => drawWater(ctx)], ['roads', () => drawRoads(ctx)], ['paths', () => drawPaths(ctx)], ['plazas', () => drawPlazas(ctx)],
       ['parking', () => drawParking(ctx)], ['deck', () => drawDeck(ctx)], ['jangdokdae', () => drawJangdokdae(ctx)], ['plots', () => drawPlots(ctx)],
       ['flowers', () => drawFlowers(ctx)], ['walls', () => drawWalls(ctx)], ['trees', () => { trees = drawTrees(ctx); }],
-      ['buildings', () => { for (const b of L().buildings || []) drawRoof(ctx, b); }],
+      ['buildings', () => { for (const b of L().buildings || []) drawRoof(ctx, b); }], ['manjangdae', () => drawManjangdae(ctx)],
     ];
     for (const [name, fn] of steps) {
       ctx.save();
@@ -922,7 +957,7 @@
     },
     _setZoneLabel(zone) {
       if (!this._zoneEl) return;
-      this._zoneEl.textContent = zone ? (easyOn() ? `${ZONE_EMOJI[zone.id] || '📍'} ${zone.short || zone.name}` : zone.name) : '';
+      this._zoneEl.textContent = zone ? (easyOn() ? `${zoneEmoji(zone)} ${zone.short || zone.name}` : zone.name) : '';
       this._zoneEl.parentElement.style.setProperty('--zc', zone?.color || '#9aa88f');
       this._zoneEl.parentElement.hidden = !zone;
     },
@@ -1073,7 +1108,7 @@
         ctx.lineWidth = 2 * s; ctx.strokeStyle = '#ffffff'; ctx.stroke();
         ctx.globalAlpha = cur ? 0.7 : 1;
         ctx.fillStyle = '#000';
-        ctx.fillText(ZONE_EMOJI[z.id] || '📍', px, py + 1 * s);
+        ctx.fillText(zoneEmoji(z), px, py + 1 * s);
       }
       ctx.restore();
     },
@@ -1504,7 +1539,7 @@
         const isGoal = marks.some((m) => m && m.primary && Number.isFinite(m.x) && Math.hypot(m.x - z.center[0], m.z - z.center[1]) <= z.r + 2);
         const name = String(z.short || z.name);
         items.push({
-          id: z.id, emoji: ZONE_EMOJI[z.id] || '📍', label: name, color: z.color,
+          id: z.id, emoji: zoneEmoji(z), label: name, color: z.color,
           badge: isHere ? '📍' : isGoal ? '⭐' : (visited[z.id] ? '' : '✨'),
           selected: isHere,
           say: isHere ? `${name}. 지금 여기 있어요.` : `${name}. ${ZONE_SAY[z.id] || ''}${isGoal ? '. 금빛 별이 있어요!' : ''}`,

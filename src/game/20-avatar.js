@@ -8,7 +8,10 @@
 //                       for the easy-mode look picker (title screen / customizer)
 //   G.avatar.create(appearance, {shadow=true}) -> rig
 //     rig.group (feet at y=0, faces +Z, ~1.45 m), rig.height, rig.headAnchor, rig.handR, rig.handL
-//     rig.update(dt, {speed, grounded, vy})      locomotion: idle / walk / run / jump / fall / land
+//     rig.update(dt, {speed, grounded, vy})      locomotion: idle / walk / run / jump / fall / land; above
+//                                                ~5 m/s an IK bounding run + sprint pose (stride grows with
+//                                                speed, playback = speed / stride: no foot sliding)
+//     rig.gait -> {speed, stride, cadence, fast, sprint}  (read-only; for fx / audio / camera)
 //     rig.setAnim(name, {loop, duration, speed, seatY, onEnd})  layered actions
 //     rig.stopAction(), rig.currentAction, rig.setAppearance(app), rig.setHeld(name|null),
 //     rig.setLookTarget(vec3|null), rig.setExpression(expr, seconds), rig.dispose()
@@ -750,6 +753,63 @@
     o[C.elLX] = ex; o[C.elRX] = ex; o[C.elLZ] = ez || 0; o[C.elRZ] = -(ez || 0);
   }
   function mix(o, i, v, w) { o[i] += (v - o[i]) * w; }
+
+  // ---------------------------------------------------------------- fast gait (phase 4: the 9.6 / 18 m/s player)
+  // Above ~5 m/s the sinusoidal walk/run blends into an IK-driven bounding run: each foot follows a
+  // stance line that moves backwards exactly as fast as the body moves forwards (no foot sliding), then a
+  // swing curve (heel kick -> high knee -> reach). Stride per cycle grows with speed so the cadence stays
+  // readable (2.8 Hz at 9.6 m/s, 3.3 Hz at 18 m/s); the stance is short and the flight long, like a sprint.
+  const FAST0 = 5, FAST1 = 8;          // m/s: fast-gait blend in
+  const SPRINT0 = 11, SPRINT1 = 16;    // m/s: sprint pose blend in
+  const SWEEP = 0.38;                  // m: how far a planted foot travels under the hip
+  const LEG_MAX = (L1 + L2) * 0.999, LEG_MIN = Math.abs(L1 - L2) + 0.03;
+  /** metres per full gait cycle (two steps) at ground speed v */
+  function strideLength(v, runW, fastW) {
+    const slow = lerp(1.45, 2.25, runW);
+    const fast = 1.1 + 0.24 * clamp(v, 0, 30);
+    return lerp(slow, fast, fastW);
+  }
+  /** planar two-bone IK in the sagittal plane: ankle target (z fwd, y up) relative to the hip joint -> out[0]=thigh, out[1]=knee */
+  function legIK(z, y, out) {
+    let d = Math.hypot(z, y);
+    if (!(d > 1e-4)) { z = 0; y = -LEG_MAX; d = LEG_MAX; }
+    if (d > LEG_MAX) { const k = LEG_MAX / d; z *= k; y *= k; d = LEG_MAX; }
+    else if (d < LEG_MIN) { const k = LEG_MIN / d; z *= k; y *= k; d = LEG_MIN; }
+    const aT = Math.atan2(-z, -y);
+    const beta = Math.acos(clamp((L1 * L1 + d * d - L2 * L2) / (2 * L1 * d), -1, 1));
+    const inner = Math.acos(clamp((L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2), -1, 1));
+    out[0] = aT - beta;
+    out[1] = Math.PI - inner;
+    return out;
+  }
+  const crom = (p0, p1, p2, p3, t) => {
+    const t2 = t * t, t3 = t2 * t;
+    return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+  };
+  const SW_Z = new Float32Array(7), SW_Y = new Float32Array(7);
+  /** ankle offset {z, y(above the sole line)} of one leg at leg phase f (0 = touchdown) */
+  function footPath(f, duty, S2, H, sprintW, out) {
+    if (f < duty) { // stance: planted, sweeping back linearly (= ground speed)
+      const u = f / duty;
+      out.z = S2 - 2 * S2 * u; out.y = 0; out.stance = 1 - Math.abs(u * 2 - 1);
+      return out;
+    }
+    const u = (f - duty) / (1 - duty);
+    // keyframes: lift-off, heel kick behind, tucked under the hip, reach forward, touchdown (+ phantom ends)
+    SW_Z[0] = -S2 + 0.12; SW_Y[0] = -0.05 * H;
+    SW_Z[1] = -S2; SW_Y[1] = 0;
+    SW_Z[2] = -S2 - 0.07 - 0.05 * sprintW; SW_Y[2] = 0.58 * H;
+    SW_Z[3] = 0.03; SW_Y[3] = H;
+    SW_Z[4] = S2 + 0.06 + 0.04 * sprintW; SW_Y[4] = 0.42 * H;
+    SW_Z[5] = S2; SW_Y[5] = 0;
+    SW_Z[6] = S2 - 0.12; SW_Y[6] = -0.05 * H;
+    const x = u * 4, i = Math.min(3, Math.floor(x)), t = x - i;
+    out.z = crom(SW_Z[i], SW_Z[i + 1], SW_Z[i + 2], SW_Z[i + 3], t);
+    out.y = Math.max(0, crom(SW_Y[i], SW_Y[i + 1], SW_Y[i + 2], SW_Y[i + 3], t));
+    out.stance = 0;
+    return out;
+  }
+  const _ikA = [0, 0], _ikB = [0, 0], _fpL = { z: 0, y: 0, stance: 0 }, _fpR = { z: 0, y: 0, stance: 0 };
   const env = (t, d, a = 0.25, b = 0.3) => Math.min(smooth(0, a, t), 1 - smooth(d - b, d, t));
 
   // Action library. pose(o, t, k, rig): o is prefilled with the locomotion pose; write absolute channel values.
@@ -966,7 +1026,7 @@
       this._seed = Math.random();
       this.phase = this._seed;
       this.steps = 0;
-      this._moveW = 0; this._runW = 0; this._airW = 0;
+      this._moveW = 0; this._runW = 0; this._airW = 0; this._fastW = 0; this._sprintW = 0; this._gaitV = 0; this._cyc = 1.45;
       this._grounded = true; this._lastVy = 0; this._landT = 9; this._landAmt = 0;
       this._L = new Float32Array(NCH); this._A = new Float32Array(NCH); this._F = new Float32Array(NCH); this._S = new Float32Array(NCH);
       this._cross = 1; // crossfade progress from snapshot S
@@ -1072,6 +1132,12 @@
       this._syncCurrent();
     }
     get sitting() { return !!(this._sitL && !this._sitL.stopping); }
+    /** current gait (read-only numbers): ground speed, metres per cycle, cycles per second, blend weights */
+    get gait() {
+      const g = this._gaitOut || (this._gaitOut = { speed: 0, stride: 1.45, cadence: 0, fast: 0, sprint: 0 });
+      g.speed = this._gaitV; g.stride = this._cyc; g.cadence = this._cyc > 0 ? this._gaitV / this._cyc : 0; g.fast = this._fastW; g.sprint = this._sprintW;
+      return g;
+    }
     _syncCurrent() {
       this.currentAction = this._act && !this._act.stopping ? this._act.name : this.sitting ? 'sit' : null;
     }
@@ -1094,11 +1160,18 @@
       // locomotion weights
       this._moveW += (clamp(speed / 3.0, 0, 1) - this._moveW) * damp(9, dt);
       this._runW += (clamp((speed - 3.3) / 2.4, 0, 1) - this._runW) * damp(6, dt);
+      this._fastW += (clamp((speed - FAST0) / (FAST1 - FAST0), 0, 1) - this._fastW) * damp(8, dt);
+      this._sprintW += (clamp((speed - SPRINT0) / (SPRINT1 - SPRINT0), 0, 1) - this._sprintW) * damp(5, dt);
       this._airW += ((grounded ? 0 : 1) - this._airW) * damp(grounded ? 16 : 10, dt);
+      this._gaitV += (speed - this._gaitV) * damp(12, dt);
+      if (!Number.isFinite(this._gaitV)) this._gaitV = 0;
       if (speed > 0.05) {
-        const cyc = lerp(1.45, 2.25, this._runW);
+        // playback rate = ground speed / stride length: the feet never slide (stride grows with speed)
+        const cyc = strideLength(this._gaitV, this._runW, this._fastW);
+        this._cyc = cyc;
         const prevHalf = Math.floor(this.phase * 2);
         this.phase = (this.phase + (speed * dt) / cyc) % 1;
+        if (!Number.isFinite(this.phase)) this.phase = 0;
         if (Math.floor(this.phase * 2) !== prevHalf && grounded && this._moveW > 0.3) this.steps++;
       }
       if (!this._grounded && grounded) { this._landT = 0; this._landAmt = clamp(-this._lastVy / 9, 0.12, 1); }
@@ -1200,6 +1273,9 @@
         mix(o, C.bagX, 0.05 * Math.sin(this.phase * TAU * 2) * (0.4 + rw), mw);
         mix(o, C.skirtZ, 0.03 * s, mw);
       }
+      // fast gait (IK bounding run) + sprint pose
+      const fw = this._fastW * mw;
+      if (fw > 0.002) this._fastGait(o, t, fw);
       // air
       const aw = this._airW;
       if (aw > 0.002) {
@@ -1221,6 +1297,49 @@
         o[C.spineX] += 0.22 * e; o[C.squash] -= 0.13 * e;
         o[C.shLZ] += 0.35 * e; o[C.shRZ] -= 0.35 * e;
       }
+    }
+
+    _fastGait(o, t, fw) {
+      const sw = this._sprintW;
+      const cyc = Math.max(0.5, this._cyc);
+      const duty = clamp(SWEEP / cyc, 0.05, 0.42);       // stance share of a leg's cycle
+      const S2 = SWEEP * 0.5;
+      const H = lerp(0.12, 0.18, sw);                     // swing foot lift
+      const crouch = lerp(0.05, 0.062, sw);
+      const phL = this.phase, phR = (this.phase + 0.5) % 1;
+      const fl = footPath(phL, duty, S2, H, sw, _fpL), fr = footPath(phR, duty, S2, H, sw, _fpR);
+      // body: lowest at mid-stance, a short ballistic hop between steps (exaggerated a little for readability)
+      const psi = (this.phase * 2) % 1, d2 = Math.min(0.9, duty * 2);
+      const bobAmp = lerp(0.035, 0.07, sw);
+      const bob = psi < d2 ? -0.018 * Math.sin(Math.PI * psi / d2) : bobAmp * Math.sin(Math.PI * (psi - d2) / (1 - d2));
+      const hipY = (L1 + L2 + LF) - crouch + bob;
+      legIK(fl.z, -(hipY - LF - fl.y), _ikA);
+      legIK(fr.z, -(hipY - LF - fr.y), _ikB);
+      // toes: push off at the end of stance, reach (toes up) before touchdown
+      const toe = (f) => (f < duty ? 0.35 * smooth(0.55, 1, f / duty) : -0.25 * smooth(0.6, 0.95, (f - duty) / (1 - duty)));
+      mix(o, C.thLX, _ikA[0], fw); mix(o, C.knLX, _ikA[1], fw); mix(o, C.ftLX, -(_ikA[0] + _ikA[1]) + toe(phL), fw);
+      mix(o, C.thRX, _ikB[0], fw); mix(o, C.knRX, _ikB[1], fw); mix(o, C.ftRX, -(_ikB[0] + _ikB[1]) + toe(phR), fw);
+      mix(o, C.thLZ, 0.03, fw); mix(o, C.thRZ, -0.03, fw);
+      // the auto ground contact drops the body until the lowest foot touches: give back the lift of a flight phase
+      mix(o, C.rootY, Math.min(fl.y, fr.y), fw);
+      // upper body: forward lean, opposite arm pump with bent elbows, torso twist, head looking ahead
+      const aw = clamp(fl.z / (S2 + 0.1), -1, 1), bw = clamp(fr.z / (S2 + 0.1), -1, 1);
+      const armA = lerp(0.72, 1.08, sw);
+      mix(o, C.shLX, -armA * bw * 0.9 + 0.12, fw); mix(o, C.shRX, -armA * aw * 0.9 + 0.12, fw);
+      mix(o, C.shLZ, lerp(0.16, 0.1, sw), fw); mix(o, C.shRZ, -lerp(0.16, 0.1, sw), fw);
+      mix(o, C.elLX, -lerp(1.35, 1.65, sw) - 0.25 * Math.max(0, bw), fw); mix(o, C.elRX, -lerp(1.35, 1.65, sw) - 0.25 * Math.max(0, aw), fw);
+      mix(o, C.hdLZ, -0.15, fw); mix(o, C.hdRZ, 0.15, fw);
+      const tw = (aw - bw) * 0.5;
+      mix(o, C.hipsY, 0.11 * tw, fw); mix(o, C.spineY, -0.15 * tw, fw);
+      mix(o, C.hipsX, lerp(0.05, 0.12, sw), fw);
+      mix(o, C.spineX, lerp(0.3, 0.46, sw), fw);
+      mix(o, C.headX, -lerp(0.2, 0.32, sw), fw); mix(o, C.headY, 0.04 * tw, fw);
+      mix(o, C.hipsZ, 0.025 * tw, fw);
+      // stance compression (cartoon squash) and streaming hair / bag
+      mix(o, C.squash, -0.035 * Math.max(fl.stance, fr.stance), fw);
+      mix(o, C.ponyX, -0.75 - 0.35 * sw + 0.12 * Math.sin(t * 17), fw); mix(o, C.ponyZ, 0.08 * tw, fw);
+      mix(o, C.bagX, -0.12 - 0.1 * sw + 0.08 * Math.sin(this.phase * TAU * 2), fw);
+      mix(o, C.skirtX, 0.22 + 0.1 * sw, fw);
     }
 
     _apply(F) {

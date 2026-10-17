@@ -15,6 +15,10 @@
 //   G.sys.buildings (order 20): every G.data.layout.buildings entry with box colliders,
 //   camera blockers, G.world.registerObject(id, group) and G.assets.tryOverride(id, group).
 //     get(id) -> group, list() -> [{id, type, group}]
+//     smokeSources [{x, y, z, s}]   chimney tops (hanok 굴뚝 / thatched clay chimney)
+//   Phase 4: hanok houses and the thatched house have chimneys; on medium / high their smoke rises as soft
+//   camera-facing puffs (one instanced draw call, all motion on the GPU), thicker at breakfast and dinner time
+//   (아궁이), bent by the wind, lit by the sun / dimmed at night.
 // =============================================================================
 (function () {
   const L = G.data.layout || {};
@@ -1135,6 +1139,156 @@
   const WOOD = { natural: '#b98a5c', dark: '#7a5236', pillar: '#a8693f', red: '#a8442f', green: '#3f7f6c', beam: '#94653f', light: '#d6b48a' };
   const STONE_T = '#c9c3b8', PLASTER_T = '#ffffff';
   const SIGN_ATLAS = new SignAtlas('buildings', 1024, 1536);
+  const SMOKE_SOURCES = [];
+  const BANNER_SOURCES = [];
+
+  // ---------------------------------------------------------------- cloth banners (wind wave in the vertex shader)
+  function bannerTexture() {
+    return G.gfx.canvasTexture(64, 192, (ctx, w, h) => {
+      ctx.fillStyle = '#bfbfbf'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#8c8c8c'; ctx.fillRect(0, 0, w, 10); ctx.fillRect(0, 0, 5, h); ctx.fillRect(w - 5, 0, 5, h);
+      // onggi jar emblem (the fermentation centre's symbol)
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      const cx = w / 2, top = 58;
+      ctx.moveTo(cx - 9, top); ctx.lineTo(cx + 9, top);
+      ctx.bezierCurveTo(cx + 26, top + 14, cx + 25, top + 40, cx + 12, top + 58);
+      ctx.lineTo(cx - 12, top + 58);
+      ctx.bezierCurveTo(cx - 25, top + 40, cx - 26, top + 14, cx - 9, top);
+      ctx.fill();
+      ctx.fillRect(cx - 12, top - 6, 24, 6);
+      // pointed fringe at the bottom (the gaps are cut out by alphaTest)
+      ctx.clearRect(0, h - 22, w, 22);
+      ctx.fillStyle = '#bfbfbf';
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(i * w / 4, h - 22); ctx.lineTo((i + 0.5) * w / 4, h - 1); ctx.lineTo((i + 1) * w / 4, h - 22); ctx.fill(); }
+      ctx.fillStyle = '#9a9a9a'; ctx.fillRect(0, h - 25, w, 4);
+    });
+  }
+  function buildBanners(list) {
+    if (!list.length) return null;
+    const BW = 0.78, BH = 2.5;
+    const g = new THREE.PlaneGeometry(BW, BH, 2, 14);
+    g.translate(0, -BH / 2, 0);
+    const mat = new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.92, side: THREE.DoubleSide, alphaTest: 0.5, transparent: false });
+    const wu = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0.86, 0.5) }, uWindS: { value: 1 } };
+    mat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, wu);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float uTime; uniform vec2 uWind; uniform float uWindS;')
+        .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+          #ifdef USE_INSTANCING
+            float tfPh = instanceMatrix[3][0] * 0.7 + instanceMatrix[3][2] * 0.3;
+          #else
+            float tfPh = 0.0;
+          #endif
+          float tfV = clamp(-position.y / ${BH.toFixed(2)}, 0.0, 1.0);
+          float tfA = (0.08 + 0.16 * min(uWindS, 2.0));
+          float tfK = 5.5, tfW = 2.4 + uWindS * 0.8;
+          float tfArg = tfK * tfV - tfW * uTime + tfPh;
+          float tfDisp = tfA * tfV * sin(tfArg) + tfV * tfV * 0.25 * min(uWindS, 2.0) * (0.6 + 0.4 * sin(uTime * 0.7 + tfPh));
+          float tfSlope = tfA * (sin(tfArg) + tfV * tfK * cos(tfArg)) / ${BH.toFixed(2)};
+          objectNormal = normalize(vec3(0.0, -tfSlope, 1.0));`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          transformed.z += tfDisp;
+          transformed.x += sin(tfArg * 0.7 + 1.3) * tfA * 0.25 * tfV;`);
+    };
+    mat.customProgramCacheKey = () => 'bk-banner1';
+    const im = new THREE.InstancedMesh(g, mat, list.length);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+    list.forEach((b, i) => {
+      e.set(0, b.rot || 0, 0); q.setFromEuler(e); v.set(b.x, b.y, b.z);
+      m4.compose(v, q, one); im.setMatrixAt(i, m4);
+      im.setColorAt(i, new THREE.Color(b.color));
+    });
+    im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.castShadow = false; im.receiveShadow = true; im.name = 'banners';
+    im.computeBoundingSphere();
+    im.raycast = () => {};
+    im.userData.wind = wu;
+    return im;
+  }
+
+  // ---------------------------------------------------------------- chimney smoke (GPU billboards, recycled by time)
+  const SMOKE_PER = 14;
+  function buildSmoke(sources) {
+    if (!sources.length) return null;
+    const n = sources.length * SMOKE_PER;
+    const quad = new THREE.PlaneGeometry(1, 1);
+    const g = new THREE.InstancedBufferGeometry();
+    g.index = quad.index;
+    g.setAttribute('position', quad.attributes.position);
+    g.setAttribute('uv', quad.attributes.uv);
+    const src = new Float32Array(n * 4), seed = new Float32Array(n * 4);
+    const r = rngOf('smoke');
+    for (let i = 0; i < n; i++) {
+      const s = sources[Math.floor(i / SMOKE_PER)];
+      src[i * 4] = s.x; src[i * 4 + 1] = s.y; src[i * 4 + 2] = s.z; src[i * 4 + 3] = s.s || 1;
+      seed[i * 4] = ((i % SMOKE_PER) + r() * 0.35) / SMOKE_PER; seed[i * 4 + 1] = r(); seed[i * 4 + 2] = r(); seed[i * 4 + 3] = r();
+    }
+    g.setAttribute('aSrc', new THREE.InstancedBufferAttribute(src, 4));
+    g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 4));
+    g.instanceCount = n;
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+    quad.dispose();
+    const puff = G.gfx.canvasTexture(64, 64, (ctx, w) => {
+      const rr = rngOf('puff');
+      for (let k = 0; k < 9; k++) {
+        const px = w * (0.3 + rr() * 0.4), py = w * (0.3 + rr() * 0.4), rad = w * (0.16 + rr() * 0.16);
+        const gr = ctx.createRadialGradient(px, py, 0, px, py, rad);
+        gr.addColorStop(0, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = gr; ctx.fillRect(0, 0, w, w);
+      }
+    }, { srgb: false });
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
+        map: { value: puff }, uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0.86, 0.5) }, uWindS: { value: 1 },
+        uDensity: { value: 0 }, uLight: { value: new THREE.Color(1, 1, 1) },
+      },
+      vertexShader: `
+        attribute vec4 aSrc; attribute vec4 aSeed;
+        uniform float uTime; uniform vec2 uWind; uniform float uWindS; uniform float uDensity;
+        varying vec2 vUv; varying float vA; varying float vLife;
+        #include <fog_pars_vertex>
+        void main() {
+          float life = fract(uTime * (0.085 + aSeed.y * 0.02) + aSeed.x);
+          float sz = aSrc.w * mix(0.35, 2.6, sqrt(life));
+          vec3 p = aSrc.xyz;
+          p.y += life * (4.2 + aSeed.z * 1.6) * mix(1.0, 0.7, min(uWindS, 1.5) / 1.5);
+          p.xz += uWind * (life * life * 6.5 * (0.4 + uWindS * 0.6) + life * 0.8);
+          p.xz += vec2(sin(uTime * 0.7 + aSeed.w * 30.0 + life * 5.0), cos(uTime * 0.6 + aSeed.y * 30.0 + life * 4.0)) * life * 0.55;
+          vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+          vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+          float ang = aSeed.w * 6.283 + life * (aSeed.z - 0.5) * 2.0;
+          float ca = cos(ang), sa = sin(ang);
+          vec2 q = vec2(ca * position.x - sa * position.y, sa * position.x + ca * position.y) * sz;
+          vec4 mvPosition = viewMatrix * vec4(p + right * q.x + up * q.y, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          vUv = uv; vLife = life;
+          vA = smoothstep(0.0, 0.08, life) * pow(1.0 - life, 1.6) * uDensity;
+          #include <fog_vertex>
+        }`,
+      fragmentShader: `
+        uniform sampler2D map; uniform vec3 uLight;
+        varying vec2 vUv; varying float vA; varying float vLife;
+        #include <fog_pars_fragment>
+        void main() {
+          float t = texture2D(map, vUv).a;
+          float a = t * vA;
+          if (a < 0.004) discard;
+          vec3 col = uLight * mix(0.72, 1.0, vLife);
+          gl_FragColor = vec4(col, a * 0.85);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          #include <fog_fragment>
+        }`,
+      transparent: true, depthWrite: false, fog: true,
+    });
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.frustumCulled = false; mesh.renderOrder = 8; mesh.name = 'chimney-smoke'; mesh.visible = false;
+    mesh.raycast = () => {};
+    return mesh;
+  }
 
   /** one wall bay between (x0,z0) and (x1,z1) on a wall line with outward normal (nx,nz) */
   function wallBay(B, x0, z0, x1, z1, nx, nz, type, y0, y1, st) {
@@ -1284,6 +1438,19 @@
       const sw = o.signW || 1.9, sh = sw / 2;
       const top = Math.min(topY - 0.26, eaveBottom - 0.1);
       addSignBoard(B, rect, sw, sh, M(0, top - sh / 2, d / 2 + 0.2, 0, 1, 1, 1, -0.06));
+    }
+    // 굴뚝: a low stone-and-clay chimney with a tiled cap behind the house (smoke on medium / high)
+    const chX = w / 2 - Math.min(1.4, w * 0.18), chZ = -d / 2 - bm - 0.62;
+    if (o.chimney && !(G.sys.terrain?.pathDistance?.(site.wx(chX, chZ), site.wz(chX, chZ)) < 1.6)) {
+      const cx = chX, cz = chZ;
+      const ch = 2.35;
+      B.add('field', geo.box(0.86, 0.5, 0.86, 'world'), M(cx, 0.15, cz), '#e6e0d4');
+      B.add('plaster', geo.box(0.58, ch - 0.4, 0.58, 'world', 0.3), M(cx, 0.4 + (ch - 0.4) / 2, cz), '#d8c6a8');
+      for (let k = 0; k < 4; k++) B.add('stone', geo.box(0.62, 0.05, 0.62, 'world', k * 0.3), M(cx, 0.75 + k * 0.42, cz), '#cfc7b8');
+      B.add('roof', geo.box(0.86, 0.1, 0.86, 'world'), M(cx, ch + 0.05, cz), o.roofTint || '#ffffff');
+      B.add('stone', geo.box(0.42, 0.18, 0.42, 'world'), M(cx, ch + 0.19, cz), '#8a8378');
+      site.circle(cx, cz, 0.45);
+      SMOKE_SOURCES.push({ x: site.wx(cx, cz), y: site.gy + ch + 0.32, z: site.wz(cx, cz), s: 1 });
     }
     // colliders / walkables / blockers
     site.walk(0, 0, w / 2 + bm, d / 2 + bm, baseH, 'stone');
@@ -1579,6 +1746,15 @@
       const row = Math.floor(i / 3), k = i % 3;
       B.add('wood', geo.cyl(0.09, 0.09, 1.1, 7), M(-hw - 0.45, baseH + 0.1 + row * 0.17, -1.2 + k * 0.2 + (row % 2) * 0.1, 0, 1, 1, 1, PI / 2), '#8a6a48');
     }
+    // clay chimney behind the house (흙 굴뚝), smoke on medium / high
+    if (!(G.sys.terrain?.pathDistance?.(site.wx(-hw + 1.1, -hd - 0.95), site.wz(-hw + 1.1, -hd - 0.95)) < 1.6)) {
+      const cx = -hw + 1.1, cz = -hd - 0.95;
+      B.add('field', geo.box(0.7, 0.45, 0.7, 'world'), M(cx, 0.12, cz), '#e0d8c8');
+      B.add('plaster', geo.cyl(0.24, 0.32, 1.9, 10), M(cx, 0.35 + 0.95, cz), '#b99872');
+      B.add('plaster', geo.cyl(0.3, 0.26, 0.14, 10), M(cx, 2.32, cz), '#a8875f');
+      site.circle(cx, cz, 0.4);
+      SMOKE_SOURCES.push({ x: site.wx(cx, cz), y: site.gy + 2.42, z: site.wz(cx, cz), s: 0.9 });
+    }
     site.walk(0, 0, hw + 0.5, hd + 0.5, baseH, 'stone');
     site.box(0, 0, hw + 0.15, hd + 0.15);
     site.box(-hw - 0.45, -1.0, 0.3, 0.6);
@@ -1706,6 +1882,20 @@
     // 현판
     const rect = SIGN_ATLAS.sign(b.sign || b.name, null, HYEONPAN);
     addSignBoard(B, rect, 2.0, 1.0, M(0, Math.min(cTop - 0.3, cr.y - cr.t - 0.1) - 0.5, hd + 0.2, 0, 1, 1, 1, -0.05));
+    // festival banners (오방색 깃발) on tall poles at the outer corners of the gate, front and back
+    const BANNER_COLS = [['#2f5fb3', '#c8432f'], ['#e2b23a', '#2f8a5b']];
+    // front pair stands clear of the post lanterns (arms point outwards); back pair faces the plaza path
+    [[1, 0, hw + 2.2, hd - 0.2, 1], [-1, 1, hw + 0.75, -(hd + 0.55), -1]].forEach(([side, ci, ox, pz, armDir]) => {
+      for (const sx of [-1, 1]) {
+        const px = sx * ox, ph = 6.2, arm = sx * armDir;
+        B.add('stone', geo.box(0.46, 0.3, 0.46), M(px, 0.1, pz), '#d0cabe');
+        B.add('wood', geo.cyl(0.07, 0.09, ph, 8), M(px, ph / 2, pz), '#5e3d24');
+        B.add('wood', geo.box(1.1, 0.07, 0.07, 'grain'), M(px + arm * 0.5, ph - 0.25, pz), '#5e3d24');
+        B.add('paint', geo.cyl(0.0, 0.09, 0.24, 8), M(px, ph + 0.12, pz), '#c9a45a');
+        site.circle(px, pz, 0.24);
+        BANNER_SOURCES.push({ x: site.wx(px + arm * 0.52, pz), y: site.gy + ph - 0.3, z: site.wz(px + arm * 0.52, pz), rot: site.rot + (side < 0 ? Math.PI : 0), color: BANNER_COLS[ci][(sx + 1) / 2] });
+      }
+    });
     for (const sx of [-1, 1]) site.box(sx * (pw + 0.2 + (hw - pw) / 2), 0, (hw - pw) / 2 + 0.1, hd + 0.15);
     for (const [x, z] of posts) site.circle(x, z, 0.22);
     for (const sx of [-1, 1]) site.blocker(sx * (pw + (hw - pw) / 2), 0, 0, hw - pw, wTop, d);
@@ -1749,7 +1939,7 @@
       const r = rngOf(b.id);
       return buildHanok(site, b, big
         ? { railing: true, veranda: 1.5, ph: 3.0, pillarTint: '#9c5634', sign: b.sign || b.name, signW: 2.2, roofTint: '#f1f3f5' }
-        : { veranda: b.d >= 6.5 ? 1.2 : 0.9, pillarTint: r() < 0.5 ? '#a8693f' : '#9a6440', roofTint: r() < 0.5 ? '#ffffff' : '#ece6dc', wallTint: r() < 0.3 ? '#f6efe0' : '#ffffff' });
+        : { veranda: b.d >= 6.5 ? 1.2 : 0.9, pillarTint: r() < 0.5 ? '#a8693f' : '#9a6440', roofTint: r() < 0.5 ? '#ffffff' : '#ece6dc', wallTint: r() < 0.3 ? '#f6efe0' : '#ffffff', chimney: true });
     },
     classroom: buildClassroom,
     storage: buildStorage,
@@ -1797,7 +1987,46 @@
         }
       }
       SIGN_ATLAS.getTexture().needsUpdate = true;
-      G.log.info('WORLD', `buildings: ${this._list.length} built, ~${Math.round(tris / 1000)}k triangles`);
+      this.smokeSources = SMOKE_SOURCES;
+      try { this.banners = buildBanners(BANNER_SOURCES); if (this.banners) root.add(this.banners); } catch (e) { G.log.warn('WORLD', 'banners failed', e); this.banners = null; }
+      this._ensureSmoke();
+      G.bus.on('engine:features', () => this._ensureSmoke());
+      G.bus.on('engine:quality', () => this._ensureSmoke());
+      G.log.info('WORLD', `buildings: ${this._list.length} built, ~${Math.round(tris / 1000)}k triangles, ${SMOKE_SOURCES.length} chimneys`);
+    },
+
+    _ensureSmoke() {
+      const E = G.sys.engine;
+      const on = typeof E?.feature === 'function' ? E.feature('smoke') : false;
+      if (on && !this.smoke && this.root) {
+        try { this.smoke = buildSmoke(SMOKE_SOURCES); if (this.smoke) this.root.add(this.smoke); } catch (e) { G.log.warn('WORLD', 'chimney smoke failed', e); this.smoke = null; }
+      }
+      this._smokeOn = on;
+    },
+
+    update(dt, t) {
+      const N = G.sys.nature?.uniforms;
+      const bw = this.banners?.userData.wind;
+      if (bw) { bw.uTime.value = t % 3600; if (N) { bw.uWind.value.copy(N.uWind.value); bw.uWindS.value = N.uWindStrength.value; } }
+      const sm = this.smoke;
+      if (!sm) return;
+      const W = G.sys.weather, E = G.sys.engine;
+      const h = Number.isFinite(W?.hour) ? W.hour : 12;
+      // 아궁이: fires are lit for breakfast and dinner; a thin thread of smoke the rest of the day
+      const bump = (c, wdt) => Math.max(0, 1 - Math.abs(h - c) / wdt);
+      const cook = Math.max(bump(7, 2.2), bump(18.3, 2.4));
+      const dens = this._smokeOn ? clamp(0.28 + cook * 0.62 - (W?.precipitation?.snow || 0) * 0.1, 0, 1) : 0;
+      sm.visible = dens > 0.02;
+      if (!sm.visible) return;
+      const u = sm.material.uniforms;
+      u.uTime.value = t % 3600;
+      u.uDensity.value = dens;
+      if (N) { u.uWind.value.copy(N.uWind.value); u.uWindS.value = N.uWindStrength.value; }
+      if (E?.hemi) {
+        const sunK = E.sun ? E.sun.intensity * Math.max(0, E.sunDir.y) * 0.32 : 0.5;
+        const li = E.hemi.intensity * 0.62 + sunK;
+        u.uLight.value.copy(E.hemi.color).lerp(E.sun ? E.sun.color : E.hemi.color, clamp(sunK, 0, 0.6)).multiplyScalar(li);
+      }
     },
 
     get(id) { return this.groups[id] || null; },

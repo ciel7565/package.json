@@ -31,6 +31,21 @@
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
   const damp = (l, dt) => 1 - Math.exp(-l * dt);
+  const smoothstep01 = (x) => { const k = clamp(x, 0, 1); return k * k * (3 - 2 * k); };
+  /** does the quest system's gem marker (G.sys.quest.getMarkers, the minimap list) sit over this NPC? */
+  function questGemOn(rec) {
+    let list = null;
+    try { list = G.sys.quest?.getMarkers?.(); } catch (e) { list = null; }
+    if (!Array.isArray(list)) return false;
+    const p = rec.group.position;
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      if (!m) continue;
+      if (m._t && m._t.npc != null) { if (m._t.npc === rec.id) return true; continue; }
+      if ((m.kind === 'giver' || m._t?.kind === 'npc') && Math.abs(m.x - p.x) < 1.2 && Math.abs(m.z - p.z) < 1.2) return true;
+    }
+    return false;
+  }
   const angleDiff = (a, b) => G.util.angleDiff(a, b);
   const rand = (a, b) => a + Math.random() * (b - a);
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -199,6 +214,31 @@
   const RESET_R = 11;          // leaving this radius re-arms the approach greeting
   const GREET_COOLDOWN = 70;   // s between approach greetings of one NPC
   const LABEL_DIST = 38, LABEL_DIST_MARK = 90, TAG_FAR = 30;
+  const SMILE_R = 3.6;         // smiles while the player stands this close
+  const NOTICE_R = 8;          // notices a sprinting player within (phase 4: 18 m/s runs)
+  const MARK_UP = 0.74;        // 3D quest mark: metres above the head top
+
+  // ---------------------------------------------------------------- 3D quest marks ('!' gold / '?' silver-gold), shared assets
+  let markAssets = null;
+  function buildMarkAssets() {
+    if (markAssets) return markAssets;
+    const merge = (list) => { const g = ADDONS.BufferGeometryUtils.mergeGeometries(list, false); for (const x of list) x.dispose(); return g; };
+    const strip = (g) => { g.deleteAttribute('uv'); return g; };
+    // '!' = rounded bar + dot
+    const bar = strip(new THREE.CapsuleGeometry(0.072, 0.25, 6, 14)); bar.translate(0, 0.1, 0);
+    const dot = strip(new THREE.SphereGeometry(0.082, 16, 12)); dot.translate(0, -0.21, 0);
+    const ex = merge([bar, dot]);
+    // '?' = 3/4 arc over the top, a short stem from the arc's bottom end, and the dot
+    const arc = strip(new THREE.TorusGeometry(0.115, 0.052, 10, 28, Math.PI * 1.5)); arc.rotateZ(-Math.PI / 2); arc.translate(0, 0.15, 0);
+    const stem = strip(new THREE.CapsuleGeometry(0.052, 0.05, 4, 10)); stem.translate(0, 0.0, 0);
+    const qd = strip(new THREE.SphereGeometry(0.078, 16, 12)); qd.translate(0, -0.2, 0);
+    const qm = merge([arc, stem, qd]);
+    const gold = G.gfx.material('npc:mark:gold', () => new THREE.MeshStandardMaterial({ color: 0xf6c23a, emissive: 0xff8f10, emissiveIntensity: 0.6, metalness: 0.55, roughness: 0.24 }));
+    const silver = G.gfx.material('npc:mark:silver', () => new THREE.MeshStandardMaterial({ color: 0xf3f6fb, emissive: 0xffd58a, emissiveIntensity: 0.42, metalness: 0.5, roughness: 0.22 }));
+    const glowTex = G.gfx.radialTexture(128, 'rgba(255,224,140,1)', 'rgba(255,180,60,0)');
+    markAssets = { ex, qm, gold, silver, glowTex };
+    return markAssets;
+  }
 
   /** minimal stand-in rig when the avatar module is missing */
   function capsuleRig(app, shadow) {
@@ -342,8 +382,13 @@
       group.position.set(hx, Number.isFinite(y) ? y : 0, hz);
       group.rotation.y = data.rotY || 0;
       this._root.add(group);
+      // 3D quest mark anchor (the DOM tap target is a world label on the same point)
+      const markAnchor = new THREE.Object3D();
+      markAnchor.name = 'npcMark';
+      markAnchor.position.y = (Number(rig.height) || 1.45) + 0.1 + MARK_UP;
+      group.add(markAnchor);
       const rec = {
-        id, data, rig, group, position: group.position, focusAnchor,
+        id, data, rig, group, position: group.position, focusAnchor, markAnchor, mark3d: null,
         persona: PERSONA[id] || DEFAULT_PERSONA,
         rotY: data.rotY || 0,
         home: { x: hx, z: hz, rotY: data.rotY || 0, wander: Math.max(0, Number(data.wander) || 0) },
@@ -353,6 +398,8 @@
         animAcc: 0, camDist: 0, far: null, bubbleT: 0, look: null,
         colliderId: null, lastColX: hx, lastColZ: hz,
         portrait: null,
+        // idle life: glances at things around, notices sprinting players, smiles when you stand close
+        glanceV: new THREE.Vector3(), glanceT: rand(3, 8), glanceUntil: 0, noticeAt: -1e9, smileT: 0, sparkT: rand(0.3, 0.9), markPh: Math.random() * TAU, gemChkT: 0, gemOver: false, markBaseY: markAnchor.position.y, markLift: 0,
       };
       rec.colliderId = G.world.addCollider({ shape: 'circle', x: hx, z: hz, r: 0.4, tag: 'npc:' + id });
       this._buildLabel(rec);
@@ -375,15 +422,96 @@
     _buildLabel(rec) {
       const h = G.ui.h;
       const bubble = h('div', { class: 'bubble npc-bubble', hidden: true });
+      // the ! / ? quest mark: a 3D bouncing mark over the head (25-npc update) + this DOM button as its tap target,
+      // centred on the same world point (its own label), transparent while the 3D mark is drawn
       const mark = h('button', { class: 'npc-mark', type: 'button', hidden: true, tabindex: '-1', 'aria-label': `${rec.data.name}에게 가기` });
       mark.addEventListener('click', (ev) => { ev.stopPropagation(); if (!G.ui.isBlocking()) G.interact?.activate?.(rec.id); });
+      const markWrap = h('div', { class: 'npc-mark-wl', dataset: { npc: rec.id } }, mark);
       // 쉬운 모드: a picture in front of the name so children who cannot read yet recognise each NPC
       const tag = h('div', { class: 'nametag npc' },
         h('span', { class: 'nm' }, h('span', { class: 'nm-ico emoji easy-only', 'aria-hidden': 'true' }, rec.persona.icon || '🙂'), String(rec.data.name || rec.id)),
         rec.data.role ? h('span', { class: 'role', text: rec.data.role }) : null);
-      const root = h('div', { class: 'npc-label', dataset: { npc: rec.id } }, bubble, mark, tag);
-      rec.el = { root, bubble, mark, tag };
+      const root = h('div', { class: 'npc-label', dataset: { npc: rec.id } }, bubble, tag);
+      rec.el = { root, bubble, mark, tag, markWrap };
       rec.label = G.ui.label({ el: root, target: rec.rig.headAnchor, offsetY: 0.04, maxDist: LABEL_DIST, fadeDist: 8 });
+      rec.markLabel = G.ui.label({ el: markWrap, target: rec.markAnchor, offsetY: 0, maxDist: LABEL_DIST_MARK, fadeDist: 14, visible: false });
+      rec.markLabel.setVisible(false);
+    },
+
+    /** build the 3D mark of an NPC on first use (shared geometry & materials; own glow sprite) */
+    _ensureMark3d(rec) {
+      if (rec.mark3d) return rec.mark3d;
+      try {
+        const A = buildMarkAssets();
+        const pivot = new THREE.Group();
+        pivot.name = 'npcMark3d';
+        const ex = new THREE.Mesh(A.ex, A.gold), qm = new THREE.Mesh(A.qm, A.silver);
+        const glowMat = new THREE.SpriteMaterial({ map: A.glowTex, color: 0xffc04a, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending });
+        const glow = new THREE.Sprite(glowMat);
+        glow.scale.setScalar(0.95); glow.renderOrder = 5;
+        for (const m of [ex, qm]) { m.castShadow = false; m.receiveShadow = false; m.raycast = () => {}; }
+        glow.raycast = () => {};
+        pivot.add(ex, qm);
+        rec.markAnchor.add(pivot, glow);
+        pivot.visible = false; glow.visible = false;
+        rec.mark3d = { pivot, ex, qm, glow, glowMat };
+        rec.el.mark.classList.add('has3d');
+      } catch (e) {
+        G.log.warn('NPC', `3D quest mark for ${rec.id} failed, the 2D badge stays`, e);
+        rec.mark3d = false;
+      }
+      return rec.mark3d;
+    },
+    /** per-frame bounce / spin / squash of the 3D mark + a few sparkles (fx-gated) */
+    _animMark(rec, dt, t, show) {
+      const M = rec.mark3d;
+      const el = rec.el.mark;
+      if (!show) {
+        if (M) { if (M.pivot.visible) { M.pivot.visible = false; M.glow.visible = false; } }
+        if (rec.markLabel.visible) rec.markLabel.setVisible(false);
+        return;
+      }
+      if (!rec.markLabel.visible) rec.markLabel.setVisible(true);
+      // a speech bubble pops over the name tag → the mark (3D glyph + its tap target) floats up out of its way
+      const lift = rec.bubbleT > 0 ? 0.55 : 0;
+      if (Math.abs(lift - rec.markLift) > 0.002) {
+        rec.markLift += (lift - rec.markLift) * Math.min(1, dt * 7);
+        rec.markAnchor.position.y = rec.markBaseY + rec.markLift;
+      }
+      if (!M) return;
+      const reduce = !!G.settings.reduceMotion;
+      // the quest system may already hang its gem + beam over this NPC (its focus target): one marker only —
+      // the glyph steps aside (the tap target and sparkles stay), checked twice a second, no allocation
+      rec.gemChkT -= dt;
+      if (!(rec.gemChkT > 0)) { rec.gemChkT = 0.5; rec.gemOver = questGemOn(rec); }
+      if (rec.gemOver) {
+        if (M.pivot.visible) { M.pivot.visible = false; M.glow.visible = false; }
+      } else if (!M.pivot.visible) { M.pivot.visible = true; M.glow.visible = true; }
+      M.ex.visible = rec.marker === '!';
+      M.qm.visible = rec.marker === '?';
+      // a hop: fast up, slow at the top, quick soft landing with a little squash (≤ 0.4 Hz, no flashing)
+      const ph = t * 2.3 + rec.markPh;
+      const b = reduce ? 0.5 : Math.abs(Math.sin(ph));
+      const land = reduce ? 0 : 1 - smoothstep01(b / 0.28);
+      const far = clamp((rec.camDist - 14) / 40, 0, 1.4);
+      const s = (1 + far) * (rec.marker === '?' ? 1.02 : 1);
+      M.pivot.position.y = b * 0.17;
+      M.pivot.scale.set(s * (1 + 0.08 * land), s * (1 - 0.14 * land), s * (1 + 0.08 * land));
+      M.pivot.rotation.y = reduce ? 0.35 : t * 1.25 + rec.markPh;
+      M.glow.position.y = M.pivot.position.y;
+      M.glow.scale.setScalar(0.95 * s * (1 + 0.06 * Math.sin(t * 2.4 + rec.markPh)));
+      M.glowMat.opacity = 0.42 + 0.12 * Math.sin(t * 2.4 + rec.markPh);
+      M.glowMat.color.setHex(rec.marker === '?' ? 0xffe2a0 : 0xffc04a);
+      // sparkles drifting off the mark (G.fx thins / drops them for fxLevel low / off)
+      rec.sparkT -= dt;
+      if (rec.sparkT <= 0) {
+        rec.sparkT = reduce ? 2.2 : rand(0.55, 0.95);
+        if (rec.camDist < 46 && G.fx?.burst) {
+          rec.markAnchor.getWorldPosition(_v);
+          _v.y += M.pivot.position.y;
+          try { G.fx.burst('sparkle', _v, { count: 3, lift: 0, spread: 0.35, up: 0.45, size: 0.8 }); } catch (e) { /* fx optional */ }
+        }
+      }
     },
 
     _promptLabel(rec) {
@@ -430,9 +558,10 @@
       el.classList.toggle('ex', m === '!');
       el.classList.toggle('qm', m === '?');
       el.title = m === '!' ? '새 퀘스트' : m === '?' ? '퀘스트 진행' : '';
+      el.setAttribute('aria-label', m === '!' ? `${rec.data.name}에게 새 퀘스트 받으러 가기` : m === '?' ? `${rec.data.name}에게 퀘스트 알리러 가기` : `${rec.data.name}에게 가기`);
+      el.classList.remove('pop'); void el.offsetWidth; if (m) el.classList.add('pop');
       rec.el.root.classList.toggle('has-mark', !!m);
-      rec.label.opts.maxDist = m ? LABEL_DIST_MARK : LABEL_DIST;
-      rec.label.opts.fadeDist = m ? 14 : 8;
+      if (m) this._ensureMark3d(rec);
       return true;
     },
 
@@ -463,7 +592,16 @@
         rec.ai.state = 'idle'; rec.ai.t = 999;
         if (rec.rig.currentAction) rec.rig.stopAction();
         rec.el.bubble.hidden = true; rec.bubbleT = 0;
+        rec.glanceUntil = 0;
         this._setLook(rec, G.sys.player?.rig?.headAnchor || null);
+        // turn to face the player with a warm little acknowledgement (the dialogue line's own emote follows)
+        try { rec.rig.setExpression?.('happy', 2.2); } catch (e) { /* cosmetic */ }
+        const pp = G.sys.player?.position;
+        if (pp) {
+          const want = Math.atan2(pp.x - rec.group.position.x, pp.z - rec.group.position.z);
+          // most of the turn happens at once (snappy), the rest eases in _think (no robotic snap)
+          rec.rotY += angleDiff(rec.rotY, want) * 0.55;
+        }
       } else {
         rec.speaking = false;
         if (rec.rig.currentAction === 'talk') rec.rig.stopAction();
@@ -523,6 +661,10 @@
           if (rec.animAcc < (cd > 110 ? 0.25 : 0.1)) adt = 0; else { adt = rec.animAcc; rec.animAcc = 0; }
         }
         if (adt > 0) rec.rig.update(adt, rec.params);
+        // 3D quest mark (hidden while talking / in photo mode / far away)
+        if (rec.marker || rec.markLabel.visible || (rec.mark3d && rec.mark3d.pivot.visible)) {
+          this._animMark(rec, dt, t, !!rec.marker && !rec.talking && !this._photo && cd < 130 && !!G.state);
+        }
         // label: far -> marker only; bubble timer
         const far = cd > TAG_FAR;
         if (far !== rec.far) { rec.far = far; rec.el.root.classList.toggle('far', far); }
@@ -546,6 +688,7 @@
       if (pp && !dlgBusy && !this._photo) {
         if (!rec.near && pd < GREET_R) { rec.near = true; this._greet(rec); }
         else if (rec.near && pd > RESET_R) rec.near = false;
+        this._life(rec, dt, pp, pd);
       }
       let speed = 0;
       if (ai.state === 'walk') {
@@ -561,8 +704,53 @@
         else if (!near && rec.home.wander === 0) this._turnTo(rec, rec.home.rotY, 1.4, dt);
         if (ai.t <= 0) this._decide(rec, near, pd);
       }
-      this._setLook(rec, near ? head : null);
+      // look: the player when near; otherwise a short glance at something nearby (another NPC, 옹이, the view)
+      const glancing = !near && G.time.elapsed < rec.glanceUntil;
+      this._setLook(rec, near ? head : glancing ? rec.glanceV : null);
       rec.params.speed = speed;
+    },
+
+    /** idle life: glances around, a surprised look at a sprinting player, a smile when the player stands close */
+    _life(rec, dt, pp, pd) {
+      const now = G.time.elapsed;
+      const rig = rec.rig;
+      // notice a player racing past (phase-4 speeds): turn the head, raise the brows, sometimes a little start
+      const pl = G.sys.player;
+      const fast = (Number(pl?.speed) || 0) > (Number(pl?.RUN) || 18) * 0.62;
+      if (fast && pd < NOTICE_R && now - rec.noticeAt > 16 && !rec.talking) {
+        rec.noticeAt = now;
+        try { rig.setExpression?.('surprise', 1.3); } catch (e) { /* cosmetic */ }
+        if (rec.ai.state !== 'walk' && !rig.currentAction && Math.random() < 0.4) this._play(rec, 'surprise', { duration: 1.1 });
+        rec.glanceUntil = 0;
+        return;
+      }
+      // smile while the player stands close (re-armed every half second)
+      if (pd < SMILE_R) {
+        rec.smileT -= dt;
+        if (rec.smileT <= 0) { rec.smileT = 0.5; try { if (now - rec.noticeAt > 1.4) rig.setExpression?.('happy', 0.8); } catch (e) { /* cosmetic */ } }
+        return;
+      }
+      // glance at something nearby every few seconds (a moment of attention, then back)
+      rec.glanceT -= dt;
+      if (rec.glanceT > 0 || rec.ai.state === 'walk') return;
+      rec.glanceT = rand(4.5, 9.5);
+      if (Math.random() < 0.3) return;   // not every time: sometimes they just stand
+      const p = rec.group.position;
+      const head = (Number(rig.height) || 1.45) * 0.95;
+      let best = null, bd = 13;
+      for (const o of this._list) {
+        if (o === rec) continue;
+        const d = Math.hypot(o.group.position.x - p.x, o.group.position.z - p.z);
+        if (d < bd) { bd = d; best = o.group.position; }
+      }
+      const C = G.sys.companion;
+      if (!best && C?.visible && C.position && Math.hypot(C.position.x - p.x, C.position.z - p.z) < 9) { best = C.position; rec.glanceV.set(best.x, (C.groundY ?? best.y) + 0.35, best.z); }
+      else if (best) rec.glanceV.set(best.x, best.y + head, best.z);
+      else {
+        const a = rec.rotY + rand(-1.1, 1.1);
+        rec.glanceV.set(p.x + Math.sin(a) * 4, p.y + head + rand(-0.4, 0.5), p.z + Math.cos(a) * 4);
+      }
+      rec.glanceUntil = now + rand(1.2, 2.4);
     },
 
     _decide(rec, near, pd) {

@@ -1,0 +1,127 @@
+/* =============================================================================
+   17-manjangdae.css — 정선 만장대: intro letterbox / skip / 2D title, telescope scope, view guide
+   Motion: transform + opacity only, ease-out-quint, no overshoot; reduceMotion keeps fades only.
+   Layer: above the HUD and the onboarding coach, below modals / toasts / rewards / fade.
+   ============================================================================= */
+:root {
+  --md-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --md-ink: #fff8ea;
+  --md-gold: #f2d38c;
+  --md-bar: 11vh;
+}
+
+/* ---------------------------------------------------------------- intro overlay */
+.md-cine { position: fixed; inset: 0; z-index: 45; pointer-events: auto; cursor: pointer; overflow: hidden; }
+.md-cine[hidden] { display: none; }
+.md-bar { position: absolute; left: 0; right: 0; height: var(--md-bar); background: #050806; transition: transform 640ms var(--md-ease); will-change: transform; }
+.md-bar.top { top: 0; transform: translateY(-100%); }
+.md-bar.bottom { bottom: 0; transform: translateY(100%); }
+.md-cine.on .md-bar.top, .md-cine.on .md-bar.bottom { transform: translateY(0); }
+
+.md-sub {
+  position: absolute; left: 50%; bottom: calc(var(--md-bar) + 1.4rem); transform: translate(-50%, 12px); opacity: 0;
+  color: var(--md-ink); font-weight: 600; font-size: clamp(1rem, 2.1vw, 1.35rem); letter-spacing: .06em; white-space: nowrap;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .65); transition: opacity 600ms var(--md-ease), transform 600ms var(--md-ease); pointer-events: none;
+}
+.md-sub.on { opacity: 1; transform: translate(-50%, 0); }
+
+.md-skip {
+  position: absolute; right: max(1rem, env(safe-area-inset-right)); bottom: calc(var(--md-bar) * .5 - 1.3rem);
+  display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; padding: .55rem 1rem; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .28); background: rgba(14, 22, 18, .55); color: var(--md-ink); font: inherit; font-weight: 700;
+  backdrop-filter: blur(6px); cursor: pointer; opacity: 0; transform: translateY(8px);
+  transition: opacity 400ms var(--md-ease) 900ms, transform 400ms var(--md-ease) 900ms, background-color 160ms ease;
+}
+.md-cine.on .md-skip { opacity: 1; transform: translateY(0); }
+.md-skip:hover { background: rgba(30, 46, 38, .72); }
+.md-skip:active { transform: scale(.97); }
+.md-skip:focus-visible { outline: 3px solid var(--md-gold); outline-offset: 3px; }
+body.easy .md-skip { min-height: var(--tap, 56px); padding: .7rem 1.3rem; font-size: 1.15rem; }
+
+/* 2D title (reduced motion / fallback) */
+.md-title2d {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%) scale(.97); opacity: 0; text-align: center; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: .3rem; color: var(--md-ink); transition: opacity 500ms var(--md-ease), transform 700ms var(--md-ease);
+}
+.md-title2d small { color: var(--md-gold); font-size: clamp(.95rem, 2vw, 1.3rem); letter-spacing: .5em; font-weight: 600; }
+.md-title2d b { font-size: clamp(2.4rem, 7vw, 4.6rem); font-weight: 900; letter-spacing: .08em; text-shadow: 0 4px 24px rgba(0, 0, 0, .55); }
+.md-title2d span { font-size: clamp(1rem, 2.2vw, 1.4rem); font-weight: 600; text-shadow: 0 2px 10px rgba(0, 0, 0, .6); }
+.md-title2d.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.md-cine.reduced .md-title2d { transition: opacity 400ms linear; transform: translate(-50%, -50%); }
+
+/* while the intro runs / while looking through the telescope: the HUD and the onboarding coach wait */
+body.md-intro .coach, body.md-intro #easy-next, body.md-intro #interact-prompt, body.md-intro .easy-point, body.md-intro .easy-hand,
+body.md-scoping .coach, body.md-scoping #easy-next, body.md-scoping #interact-prompt, body.md-scoping .easy-point, body.md-scoping .easy-hand { opacity: 0 !important; pointer-events: none !important; }
+
+/* ---------------------------------------------------------------- telescope scope */
+.md-scope { position: fixed; inset: 0; z-index: 44; pointer-events: none; opacity: 0; transition: opacity 380ms var(--md-ease); }
+.md-scope[hidden] { display: none; }
+.md-scope.on { opacity: 1; }
+.md-lens {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 50% 46%, transparent 0, transparent 37vmin, rgba(201, 162, 78, .55) 37.4vmin, rgba(30, 24, 14, .9) 38.2vmin, rgba(4, 8, 6, .94) 41vmin);
+}
+.md-lens::after { content: ''; position: absolute; left: 50%; top: 46%; width: 2.2vmin; height: 2.2vmin; transform: translate(-50%, -50%); border: 2px solid rgba(255, 255, 255, .35); border-radius: 50%; }
+.md-scope-ui { position: absolute; left: 50%; bottom: max(1.4rem, env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; align-items: center; gap: .8rem; pointer-events: auto; width: min(94vw, 40rem); }
+.md-zcard {
+  flex: 1; display: flex; align-items: center; gap: .9rem; padding: .85rem 1.1rem; border-radius: 18px; min-width: 0;
+  background: rgba(16, 28, 22, .78); border: 1px solid rgba(242, 211, 140, .35); color: var(--md-ink); backdrop-filter: blur(8px);
+}
+.md-zcard.pop { animation: md-pop 420ms var(--md-ease); }
+@keyframes md-pop { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.md-z-emoji { font-size: 2.4rem; line-height: 1; }
+.md-z-text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.md-z-name { font-size: 1.25rem; font-weight: 800; color: var(--md-gold); }
+.md-z-desc { margin: 0; font-size: .95rem; line-height: 1.45; color: rgba(255, 248, 234, .92); }
+.md-z-meta { font-size: .8rem; opacity: .7; }
+.md-nav, .md-close {
+  pointer-events: auto; min-width: 48px; min-height: 48px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .25); cursor: pointer;
+  background: rgba(16, 28, 22, .72); color: var(--md-ink); font: inherit; font-size: 1.2rem; font-weight: 800; transition: transform 140ms ease, background-color 160ms ease;
+}
+.md-nav:hover, .md-close:hover { background: rgba(36, 56, 46, .85); }
+.md-nav:active, .md-close:active { transform: scale(.95); }
+.md-nav:focus-visible, .md-close:focus-visible { outline: 3px solid var(--md-gold); outline-offset: 2px; }
+.md-close { position: absolute; top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); display: inline-flex; align-items: center; gap: .4rem; padding: 0 1rem; font-size: 1rem; }
+.md-dots { position: absolute; left: 50%; top: calc(46% + 39vmin); transform: translateX(-50%); display: flex; gap: .45rem; pointer-events: none; }
+.md-dots i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, .35); transition: transform 200ms var(--md-ease), background-color 200ms ease; }
+.md-dots i.on { background: var(--md-gold); transform: scale(1.35); }
+body.easy .md-nav, body.easy .md-close { min-width: var(--tap, 56px); min-height: var(--tap, 56px); font-size: 1.45rem; }
+body.easy .md-z-name { font-size: 1.5rem; }
+body.easy .md-z-desc { font-size: 1.1rem; }
+
+/* ---------------------------------------------------------------- view guide (modal body) */
+.md-guide { display: flex; flex-direction: column; gap: 1rem; }
+.md-guide-hero { display: flex; flex-direction: column; gap: .45rem; padding: 1rem 1.1rem; border-radius: 16px; background: linear-gradient(135deg, rgba(47, 116, 100, .28), rgba(26, 46, 38, .4)); border: 1px solid rgba(242, 211, 140, .25); }
+.md-guide-name { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
+.md-guide-name .hanja { color: var(--md-gold); font-size: 1.05rem; letter-spacing: .3em; }
+.md-guide-name b { font-size: 1.6rem; font-weight: 900; }
+.md-guide-hero p { margin: 0; line-height: 1.55; }
+.md-guide-word { font-size: .92rem; opacity: .85; }
+.md-guide-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.6rem, 1fr)); gap: .6rem; }
+.md-guide-tile {
+  display: flex; flex-direction: column; align-items: center; gap: .25rem; padding: .75rem .5rem; min-height: 56px; border-radius: 14px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, .14); background: rgba(255, 255, 255, .06); color: inherit; font: inherit; transition: transform 140ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+.md-guide-tile:hover { background: rgba(255, 255, 255, .12); border-color: rgba(242, 211, 140, .45); transform: translateY(-2px); }
+.md-guide-tile:active { transform: scale(.97); }
+.md-guide-tile:focus-visible { outline: 3px solid var(--md-gold); outline-offset: 2px; }
+.md-guide-tile .emoji { font-size: 1.8rem; line-height: 1; }
+.md-guide-tile small { opacity: .7; font-size: .78rem; }
+.md-guide.easy .md-guide-grid { grid-template-columns: repeat(auto-fill, minmax(7.4rem, 1fr)); }
+.md-guide.easy .md-guide-tile { min-height: var(--tap, 56px); padding: .9rem .5rem; font-size: 1.1rem; }
+.md-guide.easy .md-guide-tile .emoji { font-size: 2.3rem; }
+.md-guide-note { margin: 0; font-size: .78rem; opacity: .62; line-height: 1.5; }
+
+@media (max-width: 640px) {
+  :root { --md-bar: 8vh; }
+  .md-sub { white-space: normal; text-align: center; width: 86vw; }
+  .md-scope-ui { gap: .45rem; }
+  .md-zcard { padding: .7rem .8rem; }
+  .md-z-emoji { font-size: 1.9rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-bar, .md-sub, .md-skip, .md-title2d, .md-scope, .md-dots i { transition-duration: 1ms; }
+  .md-zcard.pop { animation: none; }
+}
+body.reduce-motion .md-bar, body.reduce-motion .md-sub, body.reduce-motion .md-title2d { transition-duration: 1ms; }
+body.reduce-motion .md-zcard.pop { animation: none; }

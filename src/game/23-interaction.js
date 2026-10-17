@@ -196,6 +196,8 @@
       this._setHint(null);
       this._hideDest();
       this._setCursor('');
+      this.hovered = null;
+      this._updateGlow(0, 0, false);
       this._said.clear();
       this._sayFor = null;
       if (this._hand) this._hand.setVisible(false);
@@ -487,6 +489,57 @@
       this._updateSay(dt, kid);
       this._updateDest(dt, t);
       this._updateHover(dt);
+      this._updateGlow(dt, t, allowed);
+    },
+
+    /**
+     * hover glow (CONTRACT §13.4): the mouse-hovered interactable and the focused one get the engine's soft rim
+     * outline (G.sys.engine.setOutline — only re-built when the pair changes); without it a soft additive halo
+     * pulses behind the object instead (≤ 1 Hz, steady with reduceMotion). Big farm beds keep their frame only.
+     */
+    _updateGlow(dt, t, allowed) {
+      const hv = allowed && this.hovered && this.hovered.highlight && this.hovered.object && isEnabled(this.hovered) ? this.hovered : null;
+      const cur = this.current;
+      const cu = allowed && cur && cur !== hv && cur.highlight && cur.object && cur.kind !== 'plot' && !(cur.kind === 'bench' && G.sys.player?.sitting) ? cur : null;
+      const key = (hv ? hv.id : '') + '|' + (cu ? cu.id : '');
+      const eng = G.sys.engine;
+      if (typeof eng?.setOutline === 'function') {
+        if (key !== this._glowKey) {
+          this._glowKey = key;
+          const list = [];
+          if (hv) list.push(hv.object);
+          if (cu) list.push(cu.object);
+          try { eng.setOutline(list.length ? list : null, { color: 0xffd36a, strength: hv ? 1.1 : 0.85 }); } catch (err) { G.log.warn('UI', 'outline failed', err); }
+        }
+        return;
+      }
+      // fallback: a soft halo sprite behind the hovered / focused object
+      const e = hv || cu;
+      const H = this._halo ?? (this._halo = this._buildHalo() || false);   // false: failed once, never retried per frame
+      if (!H) return;
+      if (!e || !readPos(e, _p)) { if (H.sprite.visible) H.sprite.visible = false; this._haloFor = null; return; }
+      if (this._haloFor !== e) {
+        this._haloFor = e;
+        H.m = this._measure(e);
+        H.t = 0;
+      }
+      H.t += dt;
+      const m = H.m;
+      const reduce = !!G.settings.reduceMotion;
+      H.sprite.position.set(_p.x + m.offX, _p.y + m.top * 0.55, _p.z + m.offZ);
+      H.sprite.scale.setScalar(clamp(m.top * 1.6, 1.2, 5));
+      H.mat.opacity = clamp(H.t / 0.2, 0, 1) * (reduce ? 0.32 : 0.26 + 0.1 * Math.sin(t * Math.PI * 1.6));
+      H.sprite.visible = true;
+    },
+    _buildHalo() {
+      try {
+        const tex = G.gfx.radialTexture(128, 'rgba(255,226,140,0.85)', 'rgba(255,200,80,0)');
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+        const sprite = new THREE.Sprite(mat);
+        sprite.name = 'interactHalo'; sprite.visible = false; sprite.renderOrder = 2; sprite.raycast = () => {};
+        G.sys.engine.scene.add(sprite);
+        return { sprite, mat, t: 0, m: null };
+      } catch (err) { return null; }
     },
 
     _updatePrompt() {

@@ -84,7 +84,8 @@
   // C0/C1 controls, soft hyphen, zero-width & joiners, bidi overrides/isolates (spoofing), BOM, Hangul fillers
   // (used for "blank" nicknames), interlinear annotation, ...
   const INVISIBLE_RANGES = [[0x00, 0x1f], [0x7f, 0x9f], [0xad], [0x34f], [0x61c], [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180e],
-    [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x206f], [0x3164], [0xfeff], [0xffa0], [0xfff0, 0xfffb]];
+    [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x206f], [0x3164], [0xfeff], [0xffa0], [0xfff0, 0xfffb], [0xe0000, 0xe007f]];
+  // (server/lib/ChatFilter.php INVISIBLE_CLASS is the same list; Users::cleanText strips it on the server)
   const hexEsc = (n) => '\\' + 'u{' + n.toString(16) + '}';
   const INVISIBLE_RE = new RegExp('[' + INVISIBLE_RANGES.map(([a, b]) => (b ? hexEsc(a) + '-' + hexEsc(b) : hexEsc(a))).join('') + ']', 'gu');
   let MARKS_RE = null;
@@ -111,8 +112,8 @@
       const npcNames = Object.values(G.data.npcs || {}).map((x) => String(x?.name || '').toLowerCase());
       if (RESERVED.includes(low) || npcNames.includes(low)) n = `${n}(체험객)`;
       n = maskBad(n);
-      // a name that carries a phone number / e-mail / address is shown as a neutral name (kid safety §12.4)
-      if (maskPIIInfo(n).hits) n = '체험객';
+      // a name that carries a phone number / e-mail / address / platform id / school is shown as a neutral name (§12.4)
+      if (kind === 'remote' ? nicknameLooksPersonal(n) : maskPIIInfo(n).hits) n = '체험객';
     }
     return n;
   }
@@ -238,41 +239,209 @@
     return out;
   }
   // ================================================================= personal information (kid safety, CONTRACT §12.4)
-  // Client mirror of server/lib/ChatFilter.php piiPatterns(): same order, same rules (keep both lists in sync).
-  // Every match becomes 🔒 and consecutive locks collapse into one. Deliberately conservative where Korean
-  // grammar collides ("…으로 3번", "새로 30개", "서울 친구", "유치원 가기 싫어" stay untouched).
+  // >>> PII ENGINE — client mirror of server/lib/ChatFilter.php (same fold, same ordered rules, same predicates).
+  // Keep both in sync: tests/pii-vectors.json is run on BOTH sides by tests/server-e2e.mjs + tests/pii-client.mjs
+  // (which also diff client vs server output), and in the browser by the developer-center self-tests.
+  //
+  // How it works: the text is cut into units, one per code point, each carrying a "folded" form the rules see —
+  // invisible / format characters and combining marks vanish, NFKC (０１０ ＠ ① ⁰ 𝟎 …), every digit script and the
+  // dingbat / CJK numerals become ASCII digits, letters are lower-cased, O/l look-alikes inside digit tokens become
+  // 0/1 and "k i d d i n o" spaced letters join up. Each match is mapped back to the ORIGINAL characters it covers,
+  // so the shown text only changes where 🔒 replaces something (emoji, ZWJ sequences, spelling stay as typed).
+  // Digit runs that look like counting (1 2 3 …, 10 20 30, 369 369 369, 1000000000, dates) are kept.
   const PII_MARK = '🔒';
-  const PII_CITY = '(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|충청북|충청남|전북|전남|전라북|전라남|경북|경남|경상북|경상남|제주)';
-  const PII_SNS_KO = '(?:카톡|카카오톡|카카오|오픈채팅|오픈톡|인스타(?:그램)?|틱톡|디엠|텔레그램|텔레|라인|디코|디스코드|페메|페북|페이스북|유튜브|트위터|스냅챗|위챗|왓츠앱)';
-  const PII_SNS_EN = '(?:insta(?:gram)?|tiktok|dm|telegram|line|discord|facebook|fb|youtube|twitter|snapchat|wechat|whatsapp|kakao(?:talk)?)';
-  const PII_NOT_COUNT = '(?![0-9개번명층살점분초시원마리등위레렙일월년주판칸장권%])'; // "새로 30개", "2층으로 3번" are counts
-  const PII_SEP = '[\\s.\\-_\\/~*·–—ㅡᅳ()\\[\\]]'; // separators between digit groups (ᅳ = ㅡ after NFKC)
-  const PII_KD = '[공영일이삼사오육칠팔구]';           // Korean digit words
-  const PII_LOT = `(?:\\s*[0-9]{1,5}(?:\\s*-\\s*[0-9]{1,5})?${PII_NOT_COUNT}(?:\\s*번지)?)?`; // "… 역삼동 123-4"
-  const PII_TLD = '(?:com|net|org|kr|io|me|gg|tv|ly|app|xyz|info|biz|link|site|shop|jp|cn|us|co|to|be|fm|so|ai)';
-  const piiMixed = (m) => /[0-9]/.test(m) && /[공영일이삼사오육칠팔구]/.test(m);
-  /** [name, source, flags, predicate?] — same order and rules as ChatFilter::piiPatterns() (tests/pii-vectors.json) */
+  const PII_MAX = 400; // code points looked at (chat ≤ 120, reports ≤ 300); anything longer is cut
+  const PR = String.raw;
+  // ---- building blocks (the very same strings appear in ChatFilter.php)
+  const P_SEP = PR`(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]|하고|그리고|이랑(?=[\s0-9])|에|and|x)`;  // one separator unit between digit groups
+  const P_GAP = `${P_SEP}{0,6}`;
+  const P_KDW = PR`(?:다섯|여섯|일곱|여덟|아홉|하나|둘|셋|넷|[공영빵일이삼사오육륙칠팔구]|(?<![a-z])(?:zero|one|two|three|four|five|six|seven|eight|nine|oh)(?![a-z])|[0-9])`;
+  const P_JOSA = '(?:이야|이에요|이예요|예요|에요|이고|이랑|이요|이다|이라고|라고|입니다|야|요|고|랑|로|으로|번|이|가|은|는|을|를|에|도|만)';
+  const P_COUNTER = '(?:코인|원|개|점|명|번|살|등|마리|씩|층|미터|킬로|그램|년|월|일|시|분|초|까지|사이|m|cm|km|g|kg|%)';
+  const P_CITY = '(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|충청북|충청남|전북|전남|전라북|전라남|경북|경남|경상북|경상남|제주)';
+  const P_NOTCOUNT = '(?![0-9개번명층살점분초시원마리등위레렙일월년주판칸장권%])'; // "새로 30개", "2층으로 3번" are counts
+  const P_LOT = PR`(?:\s*[0-9]{1,5}(?:\s*-\s*[0-9]{1,5})?` + P_NOTCOUNT + PR`(?:\s*번지)?)?`;
+  const P_AT = PR`(?:@|\(at\)|\[at\]|\{at\}|<at>|골뱅이|앳)`;
+  const P_DOT = PR`(?:\.|。|\(dot\)|\[dot\]|\{dot\}|\(\.\)|\[\.\]|\{\.\}|닷|쩜|점|[•·ㆍ‧∙・])`;
+  const P_TLDW = PR`(?:(?=[a-z0-9]*[a-z])[a-z0-9]{2,}|컴|넷|케이알|코리아)`;  // any e-mail TLD (c0m too)
+  const P_TLD_STRONG = '(?:com|net|org|kr|io|gg|xyz|cc|jp|cn|tk|ml|ga|cf|gq|pw|ws|info|biz|club|online|site|shop|store|website|link|games?|app|dev)';
+  const P_TLD_WEAK = '(?:me|to|be|us|co|so|ai|fm|tv|ly|top|fun|live|life|art|kids|chat|zone|today|world|space|page|pro|vip|lol|click|social)';
+  const P_PROV = '(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud|네이버|지메일|다음|한메일|카카오|네이트|핫메일|아웃룩|야후)';
+  const P_SNS_KO = '(?:카톡|카카오톡|카카오|인스타(?:그램)?|틱톡|디엠|텔레그램|텔레|라인|디코|디스코드|페메|페북|페이스북|유튜브|트위터|스냅챗|위챗|왓츠앱|ㅋㅌ|ㅇㅅㅌ|아이디|아디)';
+  const P_SNS_GAME = '(?:로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤스타즈|브롤|쿠키런|메이플|roblox|zepeto|minecraft|fortnite)';
+  const P_SNS_EN = '(?:insta(?:gram)?|ig|tiktok|dm|telegram|line|discord|facebook|fb|youtube|yt|twitter|snapchat|snap|wechat|whatsapp|kakao(?:talk)?|roblox|zepeto|minecraft|fortnite|twitch)';
+  const P_SNS_EN_PLAIN = '(?:insta(?:gram)?|ig|discord|tiktok|telegram|snapchat|snap|kakao(?:talk)?|roblox|zepeto|minecraft|fortnite|twitch|youtube|yt)';
+  const P_FOLLOW = PR`(?:팔로우|팔로|follow|친추|친구\s*추가|친구|추가|add|놀러|들어와|와|검색|찾아)`;
+  const P_LATIN_ID = PR`[a-z0-9][a-z0-9._#\-]{2,}`;
+  const P_ODD_ID = PR`(?=[a-z0-9._#\-]{3,})[a-z0-9]*[0-9_.#][a-z0-9._#\-]*`; // an id that has a digit / _ . #
+  const P_HANGUL_ID = PR`(?:[가-힣]{1,10}[0-9][가-힣0-9]{0,10}|[0-9]{1,10}[가-힣]{1,10})`;
+  const P_KID_STOP = '(?:우리|오늘|내일|어제|이제|아직|저기|빨리|진짜|정말|엄마|아빠|동생|누나|언니|오빠|친구|같은|무슨|어느|옛날|다른|그냥|매일|요즘|지금)';
+  /** [name, source, flags, predicate?] — ChatFilter::piiPatterns() has the same list in the same order */
   const PII_SRC = [
-    ['email', '[\\p{L}\\p{N}._%+\\-]+\\s*(?:@|＠|\\(at\\)|\\[at\\]|골뱅이)\\s*[\\p{L}\\p{N}\\-]+(?:\\s*(?:\\.|。|．|\\(dot\\)|\\[dot\\]|\\(\\.\\)|\\[\\.\\]|닷|쩜)\\s*(?:[a-z]{2,}|컴|넷|케이알))+', 'giu'],
-    ['emailWords', '[\\p{L}\\p{N}._%+\\-]+\\s+at\\s+[\\p{L}\\p{N}\\-]+(?:\\s+dot\\s+[a-z]{2,})+', 'giu'],
-    ['url', `(?:https?:\\/\\/|hxxps?:\\/\\/|www\\.)[^\\s<>"]+|(?<![\\p{L}\\p{N}@.\\-])[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?(?:\\.[a-z0-9\\-]{1,63})*\\.${PII_TLD}(?![a-z0-9])(?:\\/[^\\s<>"]*)?`, 'giu'],
-    ['urlDot', `(?<![\\p{L}\\p{N}@.\\-])[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?\\s*(?:\\[\\s*\\.\\s*\\]|\\(\\s*\\.\\s*\\)|\\{\\s*\\.\\s*\\}|\\[dot\\]|\\(dot\\)|\\s\\.\\s|\\s+dot\\s+|\\s*닷\\s*|\\s*쩜\\s*)${PII_TLD}(?![a-z0-9])`, 'giu'],
-    ['mailHost', '(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud)\\s*(?:\\.|닷|쩜|점)\\s*(?:com|net|co\\s*\\.\\s*kr)(?![a-z])', 'giu'],
-    ['handleKo', `${PII_SNS_KO}\\s*(?:아이디|아디|id|계정|주소|닉네임|닉)?\\s*(?:은|는|이|:|：)?\\s*@?[a-z0-9][a-z0-9._#\\-]{2,}`, 'giu'],
-    ['handleEn', `(?<![a-z0-9])${PII_SNS_EN}\\s*(?:id\\s*[:：]?|[:：]|@)\\s*@?[a-z0-9][a-z0-9._#\\-]{2,}`, 'giu'],
-    ['phone', `(?<![0-9])(?:\\+\\s?82${PII_SEP}{0,3}0?|0)1[016789]${PII_SEP}{0,3}[0-9]{3,4}${PII_SEP}{0,3}[0-9]{4}(?![0-9])`, 'gu'],
-    ['landline', `(?<![0-9])0(?:2|[3-6][1-5]|70|50[0-9]?)${PII_SEP}{0,3}[0-9]{3,4}${PII_SEP}{0,3}[0-9]{4}(?![0-9])`, 'gu'],
-    ['digits', `(?<![0-9])(?:[0-9]${PII_SEP}{0,3}){8,}[0-9](?![0-9])`, 'gu'],
-    ['localNumber', '(?<![0-9])[0-9]{3,4}[.\\-–—ㅡᅳ]+[0-9]{4}(?![0-9])', 'gu'],
-    ['koreanDigits', `(?:${PII_KD}${PII_SEP}{0,2}){7,}${PII_KD}|공일공`, 'gu'],
-    ['mixedDigits', `(?:[0-9]|${PII_KD})(?:${PII_SEP}{0,2}(?:[0-9]|${PII_KD})){7,}`, 'gu', piiMixed],
-    ['cityDistrict', `${PII_CITY}(?:(?:특별시|광역시|특별자치시|특별자치도|시|도)\\s*[가-힣]{1,5}|\\s*[가-힣]{2,5})(?:시|군|구)(?![가-힣])(?:\\s*[가-힣]{1,5}(?:구|읍|면|동|리)(?![가-힣]))*${PII_LOT}`, 'gu'],
-    ['districtDong', `[가-힣]{2,5}(?:구|군)\\s*[가-힣]{1,6}(?:동|읍|면|리)(?![가-힣])${PII_LOT}`, 'gu'],
-    ['road', `[가-힣0-9]{1,10}(?<![으새서별주바따실])(?:로|길)\\s*(?:[0-9]{1,4}\\s*번길\\s*)?[0-9]{1,4}(?:\\s*-\\s*[0-9]{1,4})?${PII_NOT_COUNT}(?:\\s*번지)?`, 'gu'],
-    ['lot', '[가-힣]{1,8}(?:동|리|가)\\s*[0-9]{1,5}(?:\\s*-\\s*[0-9]{1,5})?\\s*번지|[가-힣]{1,8}(?:동|리)\\s*[0-9]{1,5}\\s*-\\s*[0-9]{1,5}', 'gu'],
-    ['apartment', '[0-9]{1,4}\\s*동\\s*[0-9]{1,4}\\s*호|(?<![0-9])[0-9]{3,4}\\s*호(?![선기실점])|[가-힣a-z0-9]{1,12}(?:아파트|빌라|오피스텔|맨션)(?![가-힣])', 'giu'],
-    ['school', '[가-힣]{1,10}(?:초등학교|초교|중학교|고등학교|유치원|어린이집)|[가-힣]{2,10}\\s(?:초등학교|중학교|고등학교)|[0-9]\\s*학년\\s*[0-9]{1,2}\\s*반', 'gu'],
+    // ---- e-mail: "kid@x.com", "kid 골뱅이 naver 닷 com", "kid(at)gmail(dot)com", "kid@gmail" (no TLD), "kid dot dino at gmail dot com"
+    ['email', PR`[\p{L}\p{N}._%+\-]+\s*` + P_AT + PR`\s*[\p{L}\p{N}\-]+(?:\s*` + P_DOT + PR`\s*` + P_TLDW + ')+', 'giu'],
+    ['emailWords', PR`[\p{L}\p{N}._%+\-]+(?:\s+dot\s+[\p{L}\p{N}._%+\-]+)*\s+at\s+[\p{L}\p{N}\-]+(?:\s+dot\s+(?=[a-z0-9]*[a-z])[a-z0-9]{2,})+`, 'giu'],
+    ['emailHost', PR`[\p{L}\p{N}._%+\-]{2,}\s*(?:@|\(at\)|\[at\]|\{at\}|골뱅이|앳)\s*` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
+    ['emailHostAt', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:look|looks|looking|meet|see|me|you|we|they|it|is|am|are|was|were|be|this|that|go|come|stay|play|eat|sit|wait|good|bad|laugh|smile|point|stare|arrive|here|there|home|school)\s)[\p{L}\p{N}._%+\-]{2,}\s+at\s+` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
+    // ---- links: scheme / www, invite & short links, bare domains, disguised dots, IP addresses
+    ['url', PR`(?:https?|hxxps?):\/\/[^\s<>"]+|www\.[^\s<>"]+`, 'giu'],
+    ['shortLink', PR`(?<![\p{L}\p{N}])(?:t\.me|discord\.gg|bit\.ly|youtu\.be|open\.kakao\.com|qr\.kakao\.com|band\.us|toss\.me|linktr\.ee|naver\.me)(?:\/[^\s<>"]*)?`, 'giu'],
+    ['mailHost', PR`(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud)\s*(?:\.|닷|쩜|점)\s*(?:com|net|co\s*\.\s*kr)(?![a-z])`, 'giu'],
+    ['domain', PR`(?<![\p{L}\p{N}@.\-])(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)*(?:[a-z0-9][a-z0-9\-]{0,61}[a-z0-9]\.` + P_TLD_STRONG + PR`|[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]\.` + P_TLD_WEAK + PR`)(?![a-z0-9])(?:\/[^\s<>"]*)?`, 'giu'],
+    ['urlDot', PR`(?<![\p{L}\p{N}@.\-])[a-z0-9][a-z0-9\-]{1,61}[a-z0-9]\s*(?:\[\s*\.\s*\]|\(\s*\.\s*\)|\{\s*\.\s*\}|\[dot\]|\(dot\)|\{dot\}|\s+dot\s+|닷|쩜|점|\s\.\s?|\.\s)\s*(?:` + P_TLD_STRONG + PR`|컴|넷|케이알|코리아)(?![a-z0-9])`, 'giu'],
+    ['ip', PR`(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])`, 'gu'],
+    // ---- messenger / SNS / game ids: "카톡 아이디 dino123", "로블록스 dino12 친추", "insta dinokid 팔로우해", "@dino 인스타로 와"
+    ['handleKo', P_SNS_KO + PR`\s*(?:(?:아이디|아디|id|계정|주소|닉네임|닉|코드)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|(?:은|는|이|가|:)?\s*(?:@` + P_LATIN_ID + '|' + P_ODD_ID + PR`|[a-z0-9]{6,}|` + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')|' + P_HANGUL_ID + '))', 'giu'],
+    ['handleGame', P_SNS_GAME + PR`\s*(?:(?:아이디|아디|id|닉네임|닉|계정|친구\s*코드|코드)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
+    ['openChat', PR`(?:오픈채팅|오픈톡|오픈카톡|단톡)\s*(?:방)?\s*(?:이름|제목)?\s*(?:은|는|:)?\s*[가-힣a-z0-9][가-힣a-z0-9._#\-]+`, 'giu'],
+    ['handleEn', PR`(?<![a-z0-9])` + P_SNS_EN + PR`\s*(?:id\s*:?|:|@)\s*@?` + P_LATIN_ID, 'giu'],
+    ['handleEnPlain', PR`(?<![a-z0-9])` + P_SNS_EN_PLAIN + PR`\s+@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + '))', 'giu'],
+    ['atHandle', PR`(?<![\p{L}\p{N}])@[a-z0-9][a-z0-9._]{2,}(?=\s*(?:인스타|틱톡|디코|카톡|유튜브|트위터|로블록스|제페토|insta|tiktok|discord|youtube|twitter|roblox|zepeto|ig(?![a-z])))`, 'giu'],
+    // ---- phone numbers: any separator between the groups ("010,1234,5678", "010😀1234😀5678", "010 하고 1234 …")
+    ['phone', PR`(?<![0-9])(?:\+` + P_GAP + '82' + P_GAP + '0?|0)1[016789]' + P_GAP + '[0-9]{3,4}' + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
+    ['landline', PR`(?<![0-9])0(?:2|[3-6][1-5]|70|50[0-9]?|80)` + P_GAP + '[0-9]{3,4}' + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
+    ['digits', PR`(?<![0-9])(?:[0-9]` + P_GAP + PR`){8,}[0-9](?![0-9])`, 'gu', piiNotCounting], // ≥ 9 digits: ids, cards, accounts
+    ['localNumber', PR`(?<![0-9])[0-9]{3,4}\s*(?:[\p{Pd}−~.·•ㆍㅡᅳ]\s*)+[0-9]{4}(?![0-9])(?!\s*` + P_COUNTER + ')', 'gu'],
+    ['telHint', PR`(?<![0-9])[0-9]{4}(?![0-9])(?=\s*(?:으로|로|번으로)?\s*(?:연락|전화|문자|카톡))`, 'gu'],
+    ['phonePrefix', PR`(?<![0-9])01[016789]` + P_GAP + PR`[0-9]{3,4}(?![0-9])`, 'gu'],
+    // digits spelled as words (공일공 일이삼사 오육칠팔 · 하나둘셋넷 · zero one zero …), numerals mixed in
+    ['wordDigits', PR`(?:(?<![가-힣])|(?<=[는은번호폰]))` + P_KDW + '(?:' + P_GAP + P_KDW + '){7,15}(?=' + P_JOSA + PR`?(?![가-힣]))`, 'giu', piiWordDigits],
+    ['zeroOneZero', '(?:공|영|빵)일(?:공|영|빵)', 'gu'],
+    // ---- street addresses (a trailing lot number goes with them: "서울시 강남구 역삼동 123-4")
+    ['cityDistrict', P_CITY + PR`(?:(?:특별시|광역시|특별자치시|특별자치도|시|도)\s*[가-힣]{1,5}|\s*[가-힣]{2,5})(?:시|군|구)(?![가-힣])(?:\s*[가-힣]{1,5}(?:구|읍|면|동|리)(?![가-힣]))*` + P_LOT, 'gu'],
+    ['districtDong', PR`[가-힣]{2,5}(?:구|군)\s*[가-힣]{1,6}(?:동|읍|면|리)(?![가-힣])` + P_LOT, 'gu'],
+    ['road', PR`[가-힣0-9]{1,10}(?<![으새서별주바따실])(?:로|길)\s*(?:[0-9]{1,4}\s*(?:번길|길)\s*)?[0-9]{1,4}(?:\s*-\s*[0-9]{1,4})?` + P_NOTCOUNT + PR`(?:\s*번지)?`, 'gu'],
+    ['lot', PR`[가-힣]{1,8}(?:동|리|가)\s*[0-9]{1,5}(?:\s*-\s*[0-9]{1,5})?\s*번지|[가-힣]{1,8}(?:동|리)\s*[0-9]{1,5}\s*-\s*[0-9]{1,5}`, 'gu'],
+    ['aptName', PR`[가-힣a-z]{2,12}\s?[0-9]{2,4}\s*동(?![가-힣])`, 'giu'],
+    ['apartment', PR`[0-9]{1,4}\s*동\s*[0-9]{1,4}\s*호|(?<![0-9])[0-9]{3,4}\s*호(?![선기실점])(?!\s*(?:교실|강의실|방|차|관|열차))|[가-힣a-z0-9]{1,12}(?:아파트|빌라|오피스텔|맨션)(?![가-힣])`, 'giu'],
+    ['aptWords', PR`(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천]{2,6})\s*동\s*(?:[0-9]{1,4}|[일이삼사오육칠팔구십백천공영]{2,6})\s*호`, 'gu'],
+    // ---- school / kindergarten / class ("해바라기 초등학교", "해바라기초 2학년", "해바라기 유치원 다녀", "2학년 3반", "이학년 삼반")
+    ['schoolShort', PR`[가-힣]{2,10}\s?초(?=\s*(?:[0-9]{1,2}|[일이삼사오육])\s*학년|\s*(?:에\s*)?다(?:녀|니|녔)|\s*학생)`, 'gu'],
+    ['kinder', PR`(?<![가-힣])(?!` + P_KID_STOP + PR`\s)[가-힣]{2,10}\s(?:유치원|어린이집)(?=\s*(?:에\s*)?(?:다녀|다니|다녔|친구|선생|이야|야|이에요|예요|이고|에서|반|원생|학생|가요|갔|간다))`, 'gu'],
+    ['school', PR`[가-힣]{1,10}(?:초등학교|초교|중학교|고등학교|유치원|어린이집)|[가-힣]{2,10}\s(?:초등학교|중학교|고등학교)|[0-9]\s*학년\s*[0-9]{1,2}\s*반`, 'gu'],
+    ['classWords', PR`[일이삼사오육]\s*학년\s*[일이삼사오육칠팔구십]{1,3}\s*반|(?<![0-9])[1-6]\s*-\s*[0-9]{1,2}\s*반`, 'gu'],
   ];
+
+  // ---- predicates (ChatFilter::notCounting / ::wordDigits)
+  /** counting, not contact data: the same group repeated, 1 2 3 … / 10 20 30 …, a round number, 123456789, a date */
+  function piiNotCounting(m) {
+    const g = String(m).split(/[^0-9]+/).filter(Boolean);
+    if (!g.length) return false;
+    const all = g.join('');
+    if (/^([0-9])\1+$/.test(all)) return false;
+    if (/^\s*[0-9]+\.[0-9]+\s*$/.test(m)) return false;                                        // 3.141592653589
+    if (/^\s*(?:[0-2]?[0-9]:[0-5][0-9][^0-9]*)+$/.test(m)) return false;                      // 10:00 11:00 12:00
+    if (g.length === 1) return !(/^[1-9]0+$/.test(all) || piiIsRun(all));
+    if (g.length >= 3) {
+      if (g.every((x) => x === g[0])) return false;
+      const v = g.map(Number);
+      const d = v[1] - v[0];
+      if (d !== 0 && v.every((x, i) => i === 0 || x - v[i - 1] === d)) return false;
+      if (v[0] >= 1900 && v[0] <= 2099 && v[1] >= 1 && v[1] <= 12 && v[2] >= 1 && v[2] <= 31) return false;
+    }
+    return true;
+  }
+  /** 123456789 / 987654321 (each digit one up or one down) */
+  function piiIsRun(s) {
+    if (s.length < 3) return false;
+    let up = true, dn = true;
+    for (let i = 1; i < s.length; i++) {
+      const a = s.charCodeAt(i - 1) - 48, b = s.charCodeAt(i) - 48;
+      if (b !== (a + 1) % 10) up = false;
+      if (b !== (a + 9) % 10) dn = false;
+    }
+    return up || dn;
+  }
+  const PII_WD = { 다섯: '5', 여섯: '6', 일곱: '7', 여덟: '8', 아홉: '9', 하나: '1', 둘: '2', 셋: '3', 넷: '4', zero: '0', oh: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', 공: '0', 영: '0', 빵: '0', 일: '1', 이: '2', 삼: '3', 사: '4', 오: '5', 육: '6', 륙: '6', 칠: '7', 팔: '8', 구: '9' };
+  const PII_WD_RE = /다섯|여섯|일곱|여덟|아홉|하나|둘|셋|넷|zero|one|two|three|four|five|six|seven|eight|nine|oh|[공영빵일이삼사오육륙칠팔구]/gu;
+  const PII_WD_SEPS = /하고|이랑|그리고|랑|and/gu;
+  /** a run of digit words (maybe with numerals) that is shaped like a phone / local number, not counting */
+  function piiWordDigits(m) {
+    const t = String(m).toLowerCase().replace(PII_WD_SEPS, ' ');
+    if (!/다섯|여섯|일곱|여덟|아홉|하나|둘|셋|넷|zero|one|two|three|four|five|six|seven|eight|nine|oh|[공영빵일이삼사오육륙칠팔구]/u.test(t)) return false; // numerals only: the digit rules decide
+    const d = t.replace(PII_WD_RE, (w) => PII_WD[w] ?? w).replace(/[^0-9]+/g, ' ').trim();
+    const g = d.split(' ').filter(Boolean);
+    const all = g.join('');
+    if (all.length < 8 || all.length > 14 || !piiNotCounting(d)) return false;
+    if (all[0] === '0' && all.length >= 9) return true;                                      // 0… phone / landline
+    if (g.length >= 2 && g[g.length - 1].length === 4 && g[g.length - 2].length >= 3) return true; // …1234 5678
+    return /[0-9]/.test(m) && all.length >= 9;                                                 // numerals mixed in
+  }
+
+  // ---- fold (ChatFilter::foldChar): what the rules see for one original code point
+  let RX_DROP = null, RX_CTRL = null, RX_ND = null;
+  try {
+    RX_DROP = /^[\p{Cf}\p{Mn}\p{Me}\u3164\u115F\u1160\uFFA0]$/u;
+    RX_CTRL = /^[\p{Cc}\p{Zl}\p{Zp}\u2800]$/u;
+    RX_ND = /\p{Nd}/u;
+  } catch (e) { /* very old engine: no folding (the patterns still run on the text as written) */ }
+  const PII_CJK = { '〇': '0', '零': '0', '一': '1', '二': '2', '三': '3', '四': '4', '五': '5', '六': '6', '七': '7', '八': '8', '九': '9' };
+  /** dingbat / double-circled digits that NFKC leaves alone */
+  function piiDigitLike(cp) {
+    if (cp >= 0x2776 && cp <= 0x277F) return String(cp - 0x2775);
+    if (cp >= 0x2780 && cp <= 0x2789) return String(cp - 0x277F);
+    if (cp >= 0x278A && cp <= 0x2793) return String(cp - 0x2789);
+    if (cp >= 0x24EB && cp <= 0x24F4) return String(cp - 0x24EB + 11);
+    if (cp >= 0x24F5 && cp <= 0x24FE) return String(cp - 0x24F4);
+    if (cp === 0x24FF) return '0';
+    return null;
+  }
+  const PII_FOLD_CACHE = new Map();
+  function piiFoldChar(c) {
+    let f = PII_FOLD_CACHE.get(c);
+    if (f !== undefined) return f;
+    const cp = c.codePointAt(0);
+    if (RX_DROP && RX_DROP.test(c)) f = '';
+    else if (RX_CTRL && RX_CTRL.test(c)) f = ' ';
+    else if ((cp >= 0x3131 && cp <= 0x318E) || (cp >= 0xFFA0 && cp <= 0xFFDC)) f = c; // Hangul jamo stay as typed (ㅋㅋ, ㅡ, ㆍ)
+    else if (piiDigitLike(cp) !== null) f = piiDigitLike(cp);
+    else if (PII_CJK[c]) f = PII_CJK[c];
+    else {
+      let n = c;
+      try { n = c.normalize('NFKC'); } catch (e) { n = c; }
+      let out = '';
+      for (const ch of n) {
+        if (RX_DROP && RX_DROP.test(ch)) continue;
+        if (RX_ND && RX_ND.test(ch) && !(ch >= '0' && ch <= '9')) {
+          const z0 = ch.codePointAt(0);
+          let z = z0;
+          // Unicode encodes every decimal digit set as 10 contiguous code points 0..9
+          while (z0 - z < 9 && z > 0 && RX_ND.test(String.fromCodePoint(z - 1))) z--;
+          out += String((z0 - z) % 10);
+        } else out += ch.toLowerCase();
+      }
+      f = out;
+    }
+    if (PII_FOLD_CACHE.size < 4000) PII_FOLD_CACHE.set(c, f);
+    return f;
+  }
+  /** units: [{s: folded, a, b: original code point range, mask?}] */
+  function piiUnits(cps) {
+    const u = cps.map((c, i) => ({ s: piiFoldChar(c), a: i, b: i + 1 }));
+    const one = (x) => x && x.s.length === 1;
+    // O / l / I look-alikes inside a digit token: "O1O-1234", "o1o", "010-l234" (a token = a run of [0-9a-z])
+    for (let i = 0; i < u.length;) {
+      if (!one(u[i]) || !/[0-9oli|]/.test(u[i].s)) { i++; continue; }
+      let j = i;
+      while (j < u.length && one(u[j]) && /[0-9oli|]/.test(u[j].s)) j++;
+      const before = i > 0 ? u[i - 1].s : '', after = j < u.length ? u[j].s : '';
+      const run = u.slice(i, j);
+      if (run.length >= 3 && !/[a-z]$/.test(before) && !/^[a-z]/.test(after) && run.some((x) => /[0-9]/.test(x.s)) && run.some((x) => /[oli|]/.test(x.s))) {
+        for (const x of run) x.s = x.s === 'o' ? '0' : /[li|]/.test(x.s) ? '1' : x.s;
+      }
+      i = j;
+    }
+    // "k i d d i n o @ g m a i l . c o m": ≥ 4 single letters / @ . _ - separated by single spaces join up
+    for (let i = 0; i < u.length;) {
+      const isTok = (k) => one(u[k]) && /[a-z@._\-]/.test(u[k].s) && (k === 0 || u[k - 1].s === ' ') && (k + 1 >= u.length || u[k + 1].s === ' ');
+      if (!isTok(i)) { i++; continue; }
+      let j = i, n = 1;
+      while (j + 2 < u.length && u[j + 1].s === ' ' && isTok(j + 2)) { j += 2; n++; }
+      if (n >= 4) for (let k = i + 1; k < j; k += 2) u[k].s = '';
+      i = j + 1;
+    }
+    return u;
+  }
   let PII_RE = null;
   /** compiled once; an engine without look-behind support drops just the look-behind (stricter, never looser) */
   function piiRegexes() {
@@ -281,57 +450,66 @@
     for (const [name, src, flags, pred] of PII_SRC) {
       let re = null;
       try { re = new RegExp(src, flags); } catch (e) {
-        try { re = new RegExp(src.replace(/\(\?<![^)]*\)/g, ''), flags); } catch (e2) { re = null; }
+        try { re = new RegExp(src.replace(/\(\?<[!=][^)]*\)/g, ''), flags); } catch (e2) { re = null; }
       }
       if (re) PII_RE.push([name, re, pred || null]); else G.log.warn('SOCIAL', `PII pattern ${name} unsupported`);
     }
     return PII_RE;
   }
-  const PII_COLLAPSE = /🔒(?:[\s,.\-·_/~*ㅡᅳ–—()[\]]*🔒)+/gu;
-  let RX_ND = null;
-  try { RX_ND = /\p{Nd}/u; } catch (e) { RX_ND = null; }
-  /** compatibility fold (mirror of ChatFilter::fold): NFKC (０１０, ＠, 𝟎…), keycaps (0️⃣ → 0), any digit script → ASCII */
-  function piiFold(text) {
-    let t = String(text);
-    // NFKC everything except Hangul compatibility jamo (ㅋㅋ, ㅠㅠ, ㅡ stay as typed when the folded text is shown)
-    try { t = t.replace(/[^\u3130-\u318F]+/gu, (m) => m.normalize('NFKC')); } catch (e) { /* very old engine */ }
-    t = t.replace(/[︎️⃣]/g, '');
-    if (RX_ND) {
-      t = t.replace(/\p{Nd}/gu, (d) => {
-        if (d >= '0' && d <= '9') return d;
-        const cp = d.codePointAt(0);
-        let z = cp;
-        // Unicode encodes every decimal digit set as 10 contiguous code points 0..9
-        while (cp - z < 9 && z > 0 && RX_ND.test(String.fromCodePoint(z - 1))) z--;
-        return String((cp - z) % 10);
-      });
+  /** one rule over the units: every match becomes one 🔒 unit covering the original characters it spans */
+  function piiApply(units, re, pred) {
+    let s = '';
+    const pos = [];
+    for (let i = 0; i < units.length; i++) { const x = units[i].s; for (let k = 0; k < x.length; k++) pos.push(i); s += x; }
+    pos.push(units.length);
+    re.lastIndex = 0;
+    const spans = [];
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      if (m[0] === '') { re.lastIndex++; continue; }
+      if (pred && !pred(m[0])) continue;
+      spans.push([pos[m.index], pos[m.index + m[0].length - 1]]);
     }
-    return t;
-  }
-  function piiPass(text) {
-    let out = text, hits = 0;
-    for (const [, re, pred] of piiRegexes()) {
-      re.lastIndex = 0;
-      out = out.replace(re, (m) => { if (pred && !pred(m)) return m; hits++; return PII_MARK; });
+    for (let k = spans.length - 1; k >= 0; k--) {
+      const i = spans[k][0];
+      let j = spans[k][1];
+      while (j + 1 < units.length && units[j + 1].s === '' && !units[j + 1].mask) j++; // marks / invisibles right after go too
+      units.splice(i, j - i + 1, { s: PII_MARK, a: units[i].a, b: units[j].b, mask: true });
     }
-    return { out, hits };
+    return spans.length;
   }
-  /** -> {text, hits}: personal information replaced with 🔒 (pass 1 as written, pass 2 on the folded text) */
+  const PII_COLLAPSE = /🔒(?:(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]){0,8}🔒)+/gu;
+  /** -> {text, hits}: personal information replaced with 🔒 (the rest of the text exactly as written) */
   function maskPIIInfo(text) {
-    let out = String(text ?? '');
+    let t = String(text ?? '');
+    if (!t) return { text: t, hits: 0 };
+    try { t = t.normalize('NFC'); } catch (e) { /* old engine */ }
+    let cps = Array.from(t);
+    if (cps.length > PII_MAX) cps = cps.slice(0, PII_MAX);
+    const units = piiUnits(cps);
     let hits = 0;
-    if (!out) return { text: out, hits };
-    if (out.length > 4000) out = out.slice(0, 4000);
-    const p1 = piiPass(out);
-    out = p1.out; hits = p1.hits;
-    const folded = piiFold(out);
-    if (folded !== out) {
-      const p2 = piiPass(folded);
-      if (p2.hits > 0) { out = p2.out; hits += p2.hits; }
-    }
+    for (const [, re, pred] of piiRegexes()) hits += piiApply(units, re, pred);
+    let out = '';
+    for (const x of units) out += x.mask ? PII_MARK : cps.slice(x.a, x.b).join('');
     if (hits) out = out.replace(PII_COLLAPSE, PII_MARK);
     return { text: out, hits };
   }
+  /**
+   * nicknames are public and permanent: stricter than chat (ChatFilter::nicknameLooksPersonal) — any PII, ≥ 7 digits,
+   * 010…, messenger / game platform + an id-like tail ("로블록스dino12", "인스타dino"), school / grade / class.
+   */
+  function nicknameLooksPersonal(nick) {
+    const n = String(nick ?? '');
+    if (!n) return false;
+    if (maskPIIInfo(n).hits) return true;
+    const f = Array.from(n.normalize('NFC')).map(piiFoldChar).join('');
+    if ((f.match(/[0-9공영빵일이삼사오육륙칠팔구]/gu) || []).length >= 7) return true; // digits, also as words
+    if (/01[016789][0-9]{3,}|공일공|영일영/u.test(f)) return true;
+    if (/카톡|카카오톡|인스타|틱톡|디코|디스코드|텔레그램|페메|유튜브|로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤|insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu.test(f) && /[0-9a-z_]{3,}|[0-9]{2,}/i.test(f.replace(/insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/giu, ''))) return true;
+    if (/학년|[0-9일이삼사오육칠팔구]반$|초등|중학|고등|유치원|어린이집|[가-힣]{2,}초[0-9일이삼사오육]/u.test(f)) return true;
+    return false;
+  }
+  // <<< PII ENGINE
 
   /** repeat-spam key (mirrors the server: case-folded, no spaces/punctuation, repeated letters squashed) */
   function spamKey(text) {
@@ -431,6 +609,25 @@
   };
   const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
   const kidSay = (text, opts) => { try { return G.easy?.say?.(text, opts); } catch (e) { return null; } };
+
+  // ---- what the voice guide may read from OTHER people (kid safety §12.4): only lines this code wrote.
+  // Another account's free text — and its nickname — is never spoken: a pre-reader cannot tell a stranger's
+  // "엄마한테 비밀로 하고 …" from a game line, and any PII-filter gap would be read out loud. A remote message that
+  // is exactly a preset kid phrase / kid emoji is read from the LOCAL phrase book (never from the received text).
+  const normLine = (s) => { let t = String(s ?? ''); try { t = t.normalize('NFC'); } catch (e) { /* old engine */ } return t.replace(/[\uFE0E\uFE0F]/g, '').replace(/\s+/g, ' ').trim(); };
+  const PRESET_LINES = new Map(); // normalised text -> what may be read ('' = emoji only: a chime, nothing to read)
+  const addPreset = (text, spoken) => { const k = normLine(text); if (k && !PRESET_LINES.has(k)) PRESET_LINES.set(k, spoken); };
+  for (const p of KID_PHRASES) { addPreset(`${p.text} ${p.emoji}`, p.text); addPreset(p.text, p.text); }
+  for (const e of KID_EMOJI) addPreset(e, '');
+  for (const list of Object.values(KID_TALK)) for (const l of list) addPreset(l, l);
+  const RX_KID_HI = /^.{1,24}, 안녕하세요! 👋$/u; // the 👋 인사 of the kid user menu: "<name>, 안녕하세요! 👋"
+  /** a preset (code-written) line → the text the voice may read ('' = emoji only), otherwise null */
+  function presetLine(text) {
+    const k = normLine(text);
+    if (PRESET_LINES.has(k)) return PRESET_LINES.get(k);
+    if (RX_KID_HI.test(k)) return '안녕하세요!';
+    return null;
+  }
 
   function nameHue(name) { return U.hashInt(String(name)) % 360; }
   function nameColor(name) { return `hsl(${nameHue(name)} 78% 74%)`; }
@@ -960,17 +1157,23 @@
         near: !!m.near,
         uid: m.uid != null ? String(m.uid).slice(0, 40) : null,
         mention: false,
+        preset: null,
       };
       // personal information is hidden in every message, whoever sent it and in every mode (§12.4)
       if (kind !== 'system' && msg.text) msg.text = maskPIIInfo(msg.text).text;
       if (!msg.text) return null;
+      // what the voice guide may read: our own lines (system / NPC / simulated visitors / me) as they are,
+      // another account's message only when it is a preset kid phrase (then from the local phrase book)
+      msg.preset = kind === 'remote' ? presetLine(msg.text) : msg.text;
       // @mention of my nickname (or the plain nickname) in someone else's message
       const nick = G.state?.profile?.nickname;
       if (!msg.self && kind !== 'system' && nick && cpLen(nick) >= 2 && msg.text.toLowerCase().includes(String(nick).toLowerCase())) msg.mention = true;
       this.messages.push(msg);
       while (this.messages.length > MAX_MSG) { const old = this.messages.shift(); old._el?.remove(); }
       this._render(msg);
-      const pub = { ...msg }; delete pub._el;
+      const pub = { ...msg }; delete pub._el; delete pub._txt; delete pub._kidHid;
+      // listeners (알림함 …) get what a child may see: another account's free text stays hidden in kid chat
+      if (this._kidHidden(msg)) { pub.text = '✉️ 글자 메시지예요'; pub.kidHidden = true; }
       G.bus.emit('chat:message', { msg: pub });
       if (!msg.self && !m.history) {
         const visibleHere = !(this._isBlocked(msg.name) && msg.kind !== 'system' && msg.kind !== 'npc') && !(msg.channel === 'local' && !msg.near);
@@ -1024,8 +1227,11 @@
       const isBtn = msg.kind !== 'system' && msg.kind !== 'me';
       const who = h(isBtn ? 'button' : 'span', { class: 'who', type: isBtn ? 'button' : null, dataset: { name: msg.name, kind: msg.kind, uid: msg.uid ?? '' }, title: isBtn ? `${msg.name} — 메뉴 열기` : null }, `${msg.name}:`);
       if (msg.kind === 'visitor' || msg.kind === 'remote') who.style.color = nameColor(msg.name);
+      if (msg.kind === 'remote') who.dataset.say = '친구 이름이에요. 누르면 친구 메뉴가 열려요.';
       const txt = msg.kind === 'system' ? msg.text : this._textNodes(msg.text, msg.self ? null : G.state?.profile?.nickname);
-      el.append(who, h('span', { class: 'txt' }, txt), h('time', { class: 'time', datetime: new Date(msg.at).toISOString() }, hhmm(msg.at)));
+      const txtEl = h('span', { class: 'txt' }, txt);
+      el.append(who, txtEl, h('time', { class: 'time', datetime: new Date(msg.at).toISOString() }, hhmm(msg.at)));
+      if (msg.kind === 'remote') { msg._txt = txtEl; this._applyKidView(msg); }
       C.log.appendChild(el);
       msg._el = el;
       if (this._stick) this._scrollBottom(true);
@@ -1145,6 +1351,10 @@
     /** personal information -> 🔒 (phones, e-mails, URLs, SNS ids, addresses, schools); mirror of ChatFilter::maskPII */
     maskPII(text) { try { return maskPIIInfo(text).text; } catch (e) { G.log.warn('SOCIAL', 'maskPII failed', e); return String(text ?? ''); } },
     hasPII(text) { try { return maskPIIInfo(text).hits > 0; } catch (e) { return false; } },
+    /** nickname rule shared with the server (ChatFilter::nicknameLooksPersonal): PII, platform ids, school / class */
+    nicknameLooksPersonal(nick) { try { return nicknameLooksPersonal(nick); } catch (e) { return true; } },
+    /** the ordered PII rules (tests/pii-sync.mjs exports them to server/lib/pii-rules.json; dev-center checks) */
+    _piiRules() { return PII_SRC.map(([name, src, flags, pred]) => ({ name, src, flags, pred: pred ? pred.name : null })); },
 
     // ================================================================ bubbles
     _bubbleEl(cls) { return G.ui.h('div', { class: `bubble soc-bubble ${cls || ''}`, hidden: true, role: 'status' }); },
@@ -1168,6 +1378,8 @@
       holder.out = false;
       if (opts.typing) { const h = G.ui.h; b.replaceChildren(h('span', { class: 'soc-dots' }, h('i'), h('i'), h('i'))); }
       else b.textContent = String(text);
+      // what a long-press may read (another account's bubble: never its free text)
+      if (opts.say) b.dataset.say = String(opts.say).slice(0, 140); else delete b.dataset.say;
       b.hidden = false;
       b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
       holder.t = opts.dur ?? (opts.emote ? 2.6 : clamp(2.4 + cpLen(text) * 0.07, 3, 6.5));
@@ -1394,6 +1606,7 @@
       if (!on) this.closeKidChat();
       if (!easy) G.ui.modal.get('express')?.close();
       this._wasEasy = easy;
+      this._refreshKidView();
     },
     closeKidChat() { const m = G.ui.modal.get('kid-chat'); if (m) m.close(); },
 
@@ -1433,8 +1646,10 @@
         recent.replaceChildren(...list.map((m) => {
           const ava = h('span', { class: 'skc-ava', 'aria-hidden': 'true' }, m.self ? '😊' : Array.from(m.name)[0] || '?');
           if (!m.self) ava.style.background = `hsl(${nameHue(m.name)} 70% 62%)`;
-          const row = h('div', { class: `skc-msg${m.self ? ' me' : ''}` }, ava, h('div', { class: 'skc-bub' }, h('b', null, m.self ? '나' : m.name), h('span', null, m.text)));
-          row.__easySpeak = { btn: null, text: `${m.self ? '내가' : J.iga(m.name)} 말했어요. ${m.text}` };
+          const hidden = this._kidHidden(m);
+          const row = h('div', { class: `skc-msg${m.self ? ' me' : ''}` }, ava, h('div', { class: 'skc-bub' }, h('b', null, m.self ? '나' : m.name), hidden ? h('span', { class: 'kid-hidden' }, '✉️ 글자 메시지예요') : h('span', null, m.text)));
+          row.__easySpeak = { btn: null, text: this._kidSpeakText(m) };
+          row.dataset.say = row.__easySpeak.text;
           return row;
         }));
       };
@@ -1552,12 +1767,51 @@
       G.bus.emit('kid:phrase', { phraseId: `emoji:${e}` });
       return true;
     },
-    /** 쉬운 모드: read an incoming visitor / player line aloud while the child is chatting */
+    /**
+     * 쉬운 모드: read an incoming line aloud while the child is chatting. Never another account's free text or
+     * nickname: a remote preset phrase is read from the local phrase book as "친구가 말해요. …", anything else
+     * (and every @mention) only chimes. Simulated visitors speak code-written lines, so they are read as they are.
+     */
     _kidHear(msg) {
       if (!msg || msg.self || !kidOn() || (msg.kind !== 'visitor' && msg.kind !== 'remote')) return;
-      if (!(this._kidUi || msg.mention || performance.now() < (this._kidListenUntil || 0))) return;
-      kidSay(`${J.iga(msg.name)} 말해요. ${msg.text}`, { interrupt: false });
+      const listening = !!this._kidUi || performance.now() < (this._kidListenUntil || 0);
+      if (!listening && !msg.mention) return;
+      const line = msg.kind === 'remote' ? presetLine(msg.text) : msg.preset;
+      if (!listening || line == null || line === '') {
+        // free text from a person, an emoji, or a mention outside the chat window: a soft chime, no words
+        const now = performance.now();
+        if (now - (this._kidChimeAt || -1e9) > 1500) { this._kidChimeAt = now; G.sfx(msg.mention ? 'notify' : 'chat', { volume: 0.7 }); }
+        return;
+      }
+      kidSay(msg.kind === 'remote' ? `친구가 말해요. ${line}` : `${J.iga(msg.name)} 말해요. ${line}`, { interrupt: false });
     },
+    /** what a 🔊 / long-press may read for a chat line (same rule as _kidHear) */
+    _kidSpeakText(m) {
+      if (m.self) return `내가 말했어요. ${m.text}`;
+      if (m.kind === 'remote') { const p = presetLine(m.text); return p ? `친구가 말했어요. ${p}` : (p === '' ? '친구가 그림말을 보냈어요.' : '친구가 글자로 말했어요. 어른과 함께 봐요.'); }
+      return `${J.iga(m.name)} 말했어요. ${m.preset ?? m.text}`;
+    },
+    /**
+     * kid chat (easy + 아이 채팅): another account's free text is not shown to the child either — only preset
+     * phrases and emoji (the same set the child can send). A grown-up who turns 아이 채팅 off sees the real text.
+     */
+    _kidHidden(m) { return !!m && m.kind === 'remote' && !m.self && this._kidChatOn() && presetLine(m.text) == null; },
+    _applyKidView(m) {
+      const t = m?._txt;
+      if (!t) return;
+      const hide = this._kidHidden(m);
+      if (m._kidHid === hide) return;
+      m._kidHid = hide;
+      t.classList.toggle('kid-hidden', hide);
+      if (hide) {
+        t.replaceChildren(G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✉️'), ' 글자 메시지예요');
+        t.dataset.say = '친구가 글자로 말했어요. 어른과 함께 봐요.';
+      } else {
+        t.replaceChildren(...[].concat(this._textNodes(m.text, G.state?.profile?.nickname)));
+        if (m.kind === 'remote') t.dataset.say = this._kidSpeakText(m); else delete t.dataset.say;
+      }
+    },
+    _refreshKidView() { for (const m of this.messages || []) if (m.kind === 'remote') this._applyKidView(m); },
 
     /** 쉬운 모드 user menu (a name tag / chat name tapped): big pictures, no typing */
     async _kidUser(info, rec, npcRec) {
@@ -2991,7 +3245,7 @@
         const bubble = this._bubbleEl('remote');
         const dot = h('i', { class: 'soc-dot', style: { background: nameColor(name) } });
         const nm = h('span', { class: 'nm' }, name);
-        const tag = h('button', { class: 'nametag remote', type: 'button', title: `${name} · 클릭하면 메뉴가 열려요` }, dot, nm);
+        const tag = h('button', { class: 'nametag remote', type: 'button', title: `${name} · 클릭하면 메뉴가 열려요`, 'data-say': '친구예요. 누르면 친구 메뉴가 열려요.' }, dot, nm);
         const root = h('div', { class: 'soc-label' }, bubble, tag);
         const label = G.ui.label({ el: root, target: rig.headAnchor, offsetY: 0.04, maxDist: LABEL_DIST, fadeDist: 8 });
         o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId, label, el: { root, bubble, tag, dot, nm }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, anim: null, emoteAt: r.emoteAt, appKey: '', hidden: false };
@@ -3105,7 +3359,11 @@
           if (channel === 'local' && !near && !self) continue;
           const pushed = this._push({ name, text, channel, kind: channel === 'system' ? 'system' : self ? 'me' : 'remote', self, near: near || self, uid, sid: id, at, history: S.first });
           // the bubble shows the same masked text as the log (personal information → 🔒)
-          if (pushed && !S.first && !self && remote && !this._isBlocked(name)) { this._bubble(remote.bub, pushed.text); G.sfx('chat', { volume: 0.6 }); }
+          if (pushed && !S.first && !self && remote && !this._isBlocked(name)) {
+            const hid = this._kidHidden(pushed);
+            this._bubble(remote.bub, hid ? '✉️' : pushed.text, { emote: hid, say: this._kidSpeakText(pushed) });
+            G.sfx('chat', { volume: 0.6 });
+          }
         }
         const lastId = Number(data?.lastId);
         if (Number.isSafeInteger(lastId) && lastId > S.lastId && lastId < S.lastId + 1e6) S.lastId = lastId; // skipped hidden rows

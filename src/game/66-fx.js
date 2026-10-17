@@ -18,6 +18,22 @@
 //   G.fx.level() -> 'off'|'low'|'high' (effective)   G.fx.enabled()   G.fx.clear()   G.fx.stats()
 //   G.fx.kidParty(pos?, {rain=true, burst=true, emoji})                 쉬운 모드 celebration: confetti + stars + hearts
 //        in 3D and a soft 2D rain of stars / hearts / confetti (auto-added to every G.easy.celebrate pop)
+//   G.fx.portal(pos?, {mode:'in'|'out'})                                teleport / travel portal: dissolving light column
+//        + rune disc + spiral sparks (auto-played on every teleport arrival of the player)
+//   G.fx.pillar(pos?, {kind:'quest'|'level'})                           light pillar + falling star shower
+//   G.fx.zoneBanner(zoneId)                                             3D hanging name board (현판) on a first visit
+//   G.fx.itemFly(from, itemId|emoji, {qty})                             3D pop + arc into the 🎒 가방 tile
+//
+// Phase 4 character motion (CONTRACT §13.4, tuned for WALK 9.6 / RUN 18 m/s from G.sys.player):
+//   sprint speed lines (one instanced clip-space draw, animated in the vertex shader — no per-frame uploads)
+//   + a soft sprint vignette (engine.grade layer 'fx-sprint'), additive afterimages (the player's own skinned
+//   mesh re-drawn at its recent positions with a rim shader), a soft ground ribbon behind the feet, pooled
+//   footprint decals (64, fade in the shader by birth time, aligned to the slope, coloured by surface /
+//   rain / snow), kick-off / skid / landing dust with a dust shock ring, a teleport portal on every arrival,
+//   a 3D zone banner on first visits, a quest-complete light pillar, 3D coins that hand over to the 2D HUD
+//   flight. Off: fxLevel 'off'. Low: fewer lines, one afterimage, short-lived prints. reduceMotion: no speed
+//   lines / afterimages / ribbon / swing (portal & banner just fade). Hidden during the 만장대 intro / tour,
+//   photo mode, dialogue camera and any non-follow camera.
 //
 // 쉬운 모드 & photosensitivity (CONTRACT §12.4): nothing flashes faster than 3 Hz — edge pulses are merged
 // (≥ 0.7 s apart) and eased, the level-up light eases in over ~0.6 s, light rays turn slowly (≤ 1.2 Hz stripe
@@ -453,7 +469,7 @@
     _flights: [], _coinEls: 0, _coinDisp: null, _coinOverride: false, _coinText: '',
     _luQ: [], _lu: null, _stampEl: null, _stampT: 0, _pendingStamp: null, _rain: null, _pulseEl: null, _root: null,
     _lastFarm: null, _timers: new Set(), _offs: [], _gen: 0, _wLast: 0, _ev: new THREE.Vector3(),
-    _pulseAt: -1e9, _partyAt: -1e9,
+    _pulseAt: -1e9, _partyAt: -1e9, _itemEls: 0, _itemAt: 0,
 
     // ------------------------------------------------------------ lifecycle
     init() {
@@ -499,6 +515,8 @@
         if (l > 1) this._stepFireflies(dt);
         if (this._emoQ.length) { this._emoQT -= dt; if (this._emoQT <= 0) { const e = this._emoQ.shift(); this._emoQT = 0.3; this.emoji3d(e.target, e.emoji, e.opts); } }
       }
+      // phase-4 character motion (speed lines, afterimages, ribbon, prints, portal, banner) — hides itself when off
+      if (ok) { try { CM.update(dt, t, G.state ? lv() : 0); } catch (e) { G.log.warn('UI', 'fx motion', e); CM.hideAll(); } }
       // 2D layer runs on wall-clock time so it stays in sync with its CSS animations on slow devices
       const wn = pnow();
       const wdt = this._wLast ? clamp((wn - this._wLast) / 1000, 0, 0.25) : dt;
@@ -656,18 +674,34 @@
       if (!n) { flight.landed = flight.n = 1; this._bumpCoin(icon); return; }
       const h = G.ui.h;
       const gen = this._gen;
+      // 3D hand-over: from a world point the coins first burst up as spinning 3D 엽전, then each one continues as a
+      // 2D coin from where its 3D twin is on screen (analytic ballistic position at the hand-over time)
+      const w3 = from && (from.isVector3 || from.isObject3D) && this._ensure3D() ? (from.isObject3D ? from.getWorldPosition(_kv) : _kv.copy(from)) : null;
+      const HAND = 0.42, GRAV = -11;
       for (let i = 0; i < n; i++) {
         const el = h('span', { class: 'fx-coin', html: G.icon('coin') }); // static inline SVG from the core icon set
         this._root.appendChild(el);
         this._coinEls++;
         const a = rnd() * TAU, sr = R(18, 64);
-        const x0 = src.x, y0 = src.y;
-        const x1 = x0 + Math.cos(a) * sr, y1 = y0 + Math.sin(a) * sr * 0.7 - 20;
+        let x0 = src.x, y0 = src.y, handed = false;
+        if (w3) {
+          const s = R(0.7, 1.7), vx = Math.cos(a) * s, vy = R(5.2, 6.4), vz = Math.sin(a) * s;
+          resetSP(); SP.kind = K.COIN; SP.life = HAND + 0.08; SP.s0 = SP.s1 = R(0.2, 0.26); SP.grav = GRAV; SP.drag = 0; SP.flags = F_COIN;
+          SP.phs = R(9, 14); SP.spin = 0; SP.rot = R(-0.25, 0.25); SP.fout = 0.8; SP.color = PAL.white[0]; SP.bri = 1.1; SP.delay = i * 0.03;
+          spawn(this._normal, w3.x, w3.y, w3.z, vx, vy, vz);
+          const tt = HAND;
+          _pv.set(w3.x + vx * tt, w3.y + vy * tt + 0.5 * GRAV * tt * tt, w3.z + vz * tt);
+          const sp = toScreen(_pv);
+          if (sp && sp.x > -40 && sp.x < innerWidth + 40 && sp.y > -40 && sp.y < innerHeight + 40) { x0 = sp.x; y0 = sp.y; handed = true; }
+        }
+        const x1 = handed ? x0 : x0 + Math.cos(a) * sr, y1 = handed ? y0 : y0 + Math.sin(a) * sr * 0.7 - 20;
         const cx = (x1 + tx) / 2 + R(-90, 90), cy = Math.min(y1, ty) - R(90, 200);
         // spin = horizontal squash that never goes fully edge-on (stays readable as a coin)
         const ph0 = rnd() * Math.PI;
         const spin = (k) => (0.38 + 0.62 * Math.abs(Math.cos(ph0 + k * Math.PI * 3.5))).toFixed(3);
-        const frames = [{ transform: `translate(${x0}px,${y0}px) scale(.3,.3)`, opacity: 0, offset: 0 }];
+        const frames = [handed
+          ? { transform: `translate(${x0.toFixed(1)}px,${y0.toFixed(1)}px) scale(${(0.9 * spin(0)).toFixed(3)},.9)`, opacity: 1, offset: 0 }
+          : { transform: `translate(${x0}px,${y0}px) scale(.3,.3)`, opacity: 0, offset: 0 }];
         frames.push({ transform: `translate(${x1}px,${y1}px) scale(${(1.15 * spin(0)).toFixed(3)},1.15)`, opacity: 1, offset: 0.2 });
         for (let s = 1; s <= 8; s++) {
           const u = s / 8, iu = 1 - u, sc = 1.15 - 0.5 * u;
@@ -688,7 +722,7 @@
           }
         };
         try {
-          const anim = el.animate(frames, { duration: R(720, 900), delay: i * 55, easing: 'cubic-bezier(.35,.1,.6,1)', fill: 'both' });
+          const anim = el.animate(frames, { duration: R(720, 900), delay: handed ? HAND * 1000 + i * 30 : i * 55, easing: 'cubic-bezier(.35,.1,.6,1)', fill: handed ? 'forwards' : 'both' });
           anim.onfinish = finish; anim.oncancel = finish;
         } catch (e) { finish(); }
         this._later(finish, 2600 + i * 60); // hard stop
@@ -776,15 +810,108 @@
       if (this._emo) { this._emo.n = 0; this._emo.geo.instanceCount = 0; this._emo.mesh.visible = false; }
       if (this._pillar) { this._pillar.active = false; this._pillar.group.visible = false; }
       this._stopRain();
+      CM.clear();
     },
 
     stats() {
+      const m = CM.stats();
       return {
         level: this.level(), normal: this._normal?.n || 0, additive: this._add?.n || 0, emoji: this._emoInst.length, emojiCached: this._emoMap.size,
         pillar: !!this._pillar?.active, coinsFlying: this._coinEls, flights: this._flights.length, levelUpQueue: this._luQ.length,
-        levelUpShowing: !!this._lu, rain: !!this._rain?.active, ffxMerged: !!G.ffx?.__fxGated,
-        drawCalls: [this._normal, this._add, this._emo].filter((P) => P?.mesh.visible).length + (this._pillar?.active ? 2 : 0),
+        levelUpShowing: !!this._lu, rain: !!this._rain?.active, ffxMerged: !!G.ffx?.__fxGated, items: this._itemEls,
+        motion: m,
+        drawCalls: [this._normal, this._add, this._emo].filter((P) => P?.mesh.visible).length + (this._pillar?.active ? 2 : 0) + m.drawCalls,
       };
+    },
+
+    /** teleport / travel portal at pos (default: the player) — 'in' = arriving (dissolves away), 'out' = leaving */
+    portal(pos, opts) {
+      if (!lv() || !this._ensure3D()) return false;
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const p = pos == null ? playerPos(_pv) : resolvePos(pos, _pv);
+      if (!p) return false;
+      return CM.portal(p, o.mode === 'out' ? 'out' : 'in');
+    },
+    /** light pillar + star shower at pos (default: the player); kind 'quest' (jade-gold) or 'level' (gold) */
+    pillar(pos, opts) {
+      if (!lv() || !this._ensure3D()) return false;
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const p = pos == null ? playerPos(_pv) : resolvePos(pos, _pv);
+      if (!p) return false;
+      this._startPillar(o.kind === 'level' ? 'level' : 'quest', p);
+      return true;
+    },
+    /** 3D hanging name board for a zone (first visits play it automatically) */
+    zoneBanner(zoneId) {
+      if (!lv() || !this._ensure3D() || typeof zoneId !== 'string') return false;
+      const z = G.world?.zoneById?.(zoneId);
+      return z && z.r > 0 ? CM.banner(z) : false;
+    },
+
+    /** an item pops out of `from` (3D) and arcs into the 🎒 가방 tile (2D); qty shows as "+n" */
+    itemFly(from, what, opts) {
+      if (!lv() || !this._layer()) return false;
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const it = typeof what === 'string' ? G.data.items?.[what] : null;
+      const e = cleanEmoji(it ? it.icon : what);
+      if (!e) return false;
+      const bag = document.querySelector('#hud-left-menu [data-action="inventory"]');
+      if (!bag || !bag.getClientRects().length || document.body.classList.contains('hud-hidden') || document.getElementById('hud')?.hidden) return false;
+      if (this._itemEls >= 4) return false;
+      const qty = Math.max(1, Math.min(999, Math.floor(Number(o.qty) || 1)));
+      // 3D pop at the source, then the 2D flight starts where the pop is on screen
+      let start = null;
+      const world = from && (from.isObject3D || from.isVector3 || (typeof from === 'object' && Number.isFinite(from.x) && Number.isFinite(from.z) && from.y !== undefined));
+      if (world && motion()) {
+        const p = from.isObject3D ? headPos(from, _kv, 0.2) : resolvePos(from, _kv);
+        if (p) {
+          this.emoji3d(p, e, { rise: 0.75, duration: 0.6, scale: 1.05 });
+          _pv.copy(p); _pv.y += 0.7;
+          start = toScreen(_pv);
+        }
+      }
+      if (!start) start = this._screenFrom(world ? null : from);
+      const br = bag.getBoundingClientRect();
+      const tx = br.left + br.width / 2, ty = br.top + br.height / 2;
+      if (!motion() || typeof Element.prototype.animate !== 'function') { this._bumpBag(bag, qty, e); return true; }
+      const el = G.ui.h('span', { class: 'fx-item emoji' }, e);   // textContent: the emoji / item icon
+      this._root.appendChild(el);
+      this._itemEls++;
+      const x0 = clamp(start.x, 0, innerWidth), y0 = clamp(start.y, 0, innerHeight);
+      const cx = (x0 + tx) / 2 + R(-40, 40), cy = Math.min(y0, ty) - R(70, 140);
+      const frames = [];
+      for (let s = 0; s <= 10; s++) {
+        const u = s / 10, iu = 1 - u;
+        const bx = iu * iu * x0 + 2 * iu * u * cx + u * u * tx, by = iu * iu * y0 + 2 * iu * u * cy + u * u * ty;
+        const sc = u < 0.15 ? 0.6 + u / 0.15 * 0.5 : 1.1 - 0.55 * ((u - 0.15) / 0.85);
+        frames.push({ transform: `translate(${bx.toFixed(1)}px,${by.toFixed(1)}px) scale(${sc.toFixed(3)})`, opacity: u < 0.1 ? u / 0.1 : 1, offset: u });
+      }
+      const gen = this._gen;
+      let done = false;
+      const finish = () => {
+        if (done) return; done = true;
+        el.remove();
+        if (gen !== this._gen) return;
+        this._itemEls = Math.max(0, this._itemEls - 1);
+        this._bumpBag(bag, qty, e);
+      };
+      try {
+        const a = el.animate(frames, { duration: 780, delay: world ? 380 : 0, easing: 'cubic-bezier(.4,.05,.55,1)', fill: 'both' });
+        a.onfinish = finish; a.oncancel = finish;
+      } catch (err) { finish(); }
+      this._later(finish, 2400);
+      return true;
+    },
+    _bumpBag(bag, qty, e) {
+      if (!bag.isConnected) return;
+      try { bag.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.12)', offset: 0.35 }, { transform: 'scale(1)' }], { duration: 360, easing: 'cubic-bezier(.22,1,.36,1)' }); } catch (err) { /* cosmetic */ }
+      if (!this._layer()) return;
+      const r = bag.getBoundingClientRect();
+      const chip = G.ui.h('span', { class: 'fx-item-chip' }, '+' + qty);
+      chip.style.left = (r.right - 6) + 'px'; chip.style.top = (r.top + 4) + 'px';
+      this._root.appendChild(chip);
+      this._later(() => chip.remove(), 1300);
+      G.sfx('pop', { volume: 0.35 });
     },
 
     // ------------------------------------------------------------ internals: 3D setup
@@ -885,16 +1012,23 @@
       if (this._pillar) return this._pillar;
       const geo = new THREE.CylinderGeometry(1, 1, 1, 40, 1, true);
       geo.translate(0, 0.5, 0);
+      // NaN-safe: every normalize is guarded (a pillar scaled thin must never feed normalize(vec3(0)) to the GPU)
       const mk = (core) => new THREE.ShaderMaterial({
         uniforms: { uTime: { value: 0 }, uOp: { value: 0 }, uColor: { value: new THREE.Color(core ? 0xfff2c0 : 0xffc94a) } },
-        vertexShader: `varying vec2 vUv; varying vec3 vN; varying vec3 vV;
-          void main(){ vUv = uv; vec4 wp = modelMatrix * vec4(position, 1.0); vN = normalize(mat3(modelMatrix) * normal); vV = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix * viewMatrix * wp; }`,
-        fragmentShader: `uniform float uTime; uniform float uOp; uniform vec3 uColor; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+        vertexShader: `varying vec2 vUv; varying float vFace;
           void main(){
-            float facing = pow(abs(dot(normalize(vN), normalize(vV))), ${core ? '1.2' : '2.2'});
-            float fade = pow(1.0 - vUv.y, 1.25) * smoothstep(0.0, 0.035, vUv.y);
+            vUv = uv; vec4 wp = modelMatrix * vec4(position, 1.0);
+            vec3 n = mat3(modelMatrix) * normal; float nl = length(n); n = nl > 1e-6 ? n / nl : vec3(0.0, 1.0, 0.0);
+            vec3 v = cameraPosition - wp.xyz; float vl = length(v); v = vl > 1e-6 ? v / vl : vec3(0.0, 0.0, 1.0);
+            vFace = clamp(abs(dot(n, v)), 0.0, 1.0);
+            gl_Position = projectionMatrix * viewMatrix * wp; }`,
+        fragmentShader: `uniform float uTime; uniform float uOp; uniform vec3 uColor; varying vec2 vUv; varying float vFace;
+          void main(){
+            float facing = pow(max(vFace, 0.0), ${core ? '1.2' : '2.2'});
+            float fade = pow(max(1.0 - vUv.y, 0.0), 1.25) * smoothstep(0.0, 0.035, vUv.y);
             float sw = 0.62 + 0.38 * sin((vUv.x * ${core ? '2.0' : '5.0'} + vUv.y * 9.0 - uTime * 2.4) * 6.2831);
-            float a = facing * fade * sw * uOp;
+            float a = clamp(facing * fade * sw * uOp, 0.0, 1.0);
+            if (a < 0.002) discard;
             gl_FragColor = vec4(uColor * (1.1 + facing), a);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
@@ -905,51 +1039,74 @@
       const inner = new THREE.Mesh(geo, mk(true));
       for (const m of [outer, inner]) { m.frustumCulled = false; m.renderOrder = 13; m.raycast = () => {}; }
       const group = new THREE.Group();
-      group.name = 'fx-levelup-pillar';
+      group.name = 'fx-light-pillar';
       group.add(outer, inner);
       group.visible = false;
       this._scene.add(group);
-      this._pillar = { group, outer, inner, t: 0, dur: 2.8, active: false, spawnAcc: 0 };
+      this._pillar = { group, outer, inner, t: 0, dur: 2.8, active: false, spawnAcc: 0, showerAcc: 0, kind: 'level', follow: true, tall: 16 };
       return this._pillar;
     },
-    _startPillar() {
-      if (!this._ensure3D() || !playerPos(_pv)) return;
+    /** kind 'level' (gold, tall, confetti) or 'quest' (jade-gold, star shower); pos = where (default: the player) */
+    _startPillar(kind = 'level', pos = null) {
+      if (!this._ensure3D()) return;
+      const at = pos ? _pv2.copy(pos) : playerPos(_pv2);
+      if (!at) return;
       const P = this._buildPillar();
-      P.t = 0; P.active = true; P.spawnAcc = 0; P.group.visible = true;
-      P.group.position.copy(_pv);
-      // shock rings + star burst + confetti
-      this.ripple(_pv, { color: '#ffd166', radius: 3.4, duration: 1.2, rings: lv() > 1 ? 3 : 1 });
-      this.burst('stars', _pv, { count: 26, lift: 1.0, spread: 1.4 });
-      this.burst('confetti', _pv, { count: 50, lift: 2.2 });
-      G.sfx('whoosh', { volume: 0.7 });
-      if (motion() && G.settings.cameraShake !== false) G.sys.camera?.shake?.(0.16);
+      const quest = kind === 'quest';
+      P.kind = quest ? 'quest' : 'level';
+      P.t = 0; P.active = true; P.spawnAcc = 0; P.showerAcc = 0; P.group.visible = true;
+      P.dur = quest ? 2.4 : 2.8; P.tall = quest ? 12 : 16; P.follow = !pos;
+      P.outer.material.uniforms.uColor.value.set(quest ? 0x7fe3b4 : 0xffc94a);
+      P.inner.material.uniforms.uColor.value.set(quest ? 0xfff4cf : 0xfff2c0);
+      P.group.position.copy(at);
+      const ground = this._ev.copy(at);
+      // shock rings + star burst (+ confetti for a level-up)
+      this.ripple(ground, { color: quest ? '#9cf0c8' : '#ffd166', radius: quest ? 2.6 : 3.4, duration: 1.2, rings: lv() > 1 ? 3 : 1 });
+      this.burst('stars', ground, { count: quest ? 18 : 26, lift: 1.0, spread: quest ? 1.1 : 1.4 });
+      if (!quest) this.burst('confetti', ground, { count: 50, lift: 2.2 });
+      G.sfx('whoosh', { volume: quest ? 0.45 : 0.7 });
+      if (!quest && motion() && !kidOn() && G.settings.cameraShake !== false) G.sys.camera?.shake?.(0.16);
     },
     _stepPillar(dt, t) {
       const P = this._pillar;
       P.t += dt;
       const k = P.t / P.dur;
       if (k >= 1 || !G.state) { P.active = false; P.group.visible = false; return; }
-      if (playerPos(_pv)) P.group.position.lerp(_pv, Math.min(1, dt * 10));
+      if (P.follow && playerPos(_pv)) P.group.position.lerp(_pv, Math.min(1, dt * 10));
       const grow = 1 - Math.pow(1 - Math.min(1, P.t / 0.45), 3);
       const op = (P.t < 0.15 ? P.t / 0.15 : 1) * (k > 0.62 ? 1 - (k - 0.62) / 0.38 : 1);
-      const h = 2 + grow * 16;
-      P.outer.scale.set(0.35 + grow * 1.05, h, 0.35 + grow * 1.05);
-      P.inner.scale.set(0.12 + grow * 0.36, h * 1.05, 0.12 + grow * 0.36);
+      const h = 2 + grow * P.tall;
+      const w = P.kind === 'quest' ? 0.85 : 1;
+      P.outer.scale.set((0.35 + grow * 1.05) * w, h, (0.35 + grow * 1.05) * w);
+      P.inner.scale.set((0.12 + grow * 0.36) * w, h * 1.05, (0.12 + grow * 0.36) * w);
       P.outer.material.uniforms.uOp.value = op * 0.55;
       P.inner.material.uniforms.uOp.value = op * 0.8;
       P.outer.material.uniforms.uTime.value = t;
       P.inner.material.uniforms.uTime.value = t * 1.3;
+      if (!lv()) return;
+      const g = P.group.position;
       // rising helix of sparks
-      if (P.t < 1.7 && lv()) {
+      if (P.t < 1.7) {
         P.spawnAcc += dt * (lv() > 1 ? 34 : 14);
-        const g = P.group.position;
         while (P.spawnAcc >= 1) {
           P.spawnAcc -= 1;
           const a = P.t * 7 + (rnd() < 0.5 ? 0 : Math.PI) + R(-0.2, 0.2);
-          const r = R(0.9, 1.3);
+          const r = R(0.9, 1.3) * w;
           resetSP(); SP.kind = rnd() < 0.5 ? K.SPARK : K.STAR; SP.life = R(0.9, 1.4); SP.s0 = R(0.18, 0.3); SP.s1 = 0.02; SP.grav = 0; SP.drag = 0.4;
           SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.6; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0];
           spawn(this._add, g.x + Math.cos(a) * r, g.y + R(0.1, 0.6), g.z + Math.sin(a) * r, -Math.sin(a) * 1.2, R(3.5, 6), Math.cos(a) * 1.2);
+        }
+      }
+      // quest pillar: a slow shower of stars drifting down around it (twinkle ≈ 1.7 Hz, no flashing)
+      if (P.kind === 'quest' && P.t > 0.35 && P.t < 1.9) {
+        P.showerAcc += dt * (lv() > 1 ? 16 : 7);
+        while (P.showerAcc >= 1) {
+          P.showerAcc -= 1;
+          const a = rnd() * TAU, r = R(0.4, 2.2);
+          resetSP(); SP.kind = K.STAR; SP.life = R(1.4, 2.1); SP.s0 = R(0.16, 0.26); SP.s1 = 0.08; SP.grav = -1.2; SP.drag = 1.4;
+          SP.flags = F_TWINKLE | F_FLUTTER; SP.spin = R(-1.5, 1.5); SP.bri = 1.5; SP.floor = g.y + 0.05; SP.fout = 0.6;
+          SP.color = rnd() < 0.35 ? PAL.firefly[0] : PAL.stars[(rnd() * PAL.stars.length) | 0];
+          spawn(this._add, g.x + Math.cos(a) * r, g.y + R(4.5, 8), g.z + Math.sin(a) * r, R(-0.3, 0.3), R(-0.4, 0), R(-0.3, 0.3));
         }
       }
     },
@@ -958,24 +1115,50 @@
     _stepPlayerFx(dt, l) {
       const pl = G.sys.player;
       if (!pl?.rig || !pl.position || pl.enabled === false) return;
-      const steps = pl.rig.steps;
-      if (this._steps < 0) this._steps = steps;
+      const steps = Number(pl.rig.steps) || 0;
+      const sp = Number(pl.speed) || 0;
+      const RUN = RUNV(), WALK = WALKV();
+      const quietCam = cinematic();
+      if (this._steps < 0 || steps < this._steps) this._steps = steps;
       if (steps !== this._steps) {
+        // at 18 m/s several steps can pass in one slow frame: lay their prints along the frame's path
+        const nStep = Math.min(3, steps - this._steps);
         this._steps = steps;
-        if (pl.grounded && (pl.speed || 0) > 4.6) this._footDust(pl, l, 1);
+        if (pl.grounded && !quietCam) {
+          for (let k = 0; k < nStep; k++) CM.footprint(pl, (k + 1) / nStep, l);
+          // step dust only when actually running (walking is 9.6 m/s now: dust on every walk step would be noise)
+          if (sp > (WALK + RUN) * 0.5 && (l > 1 || (steps & 1))) this._footDust(pl, l, 0.8);
+        }
       }
+      // kick-off (walk/stand -> sprint) and skid (sprint -> sudden stop) dust
+      const prev = this._spPrev ?? sp;
+      this._spPrev = sp;
+      this._sprintT = sp > RUN * 0.8 ? (this._sprintT || 0) + dt : 0;
+      if (pl.grounded && !quietCam) {
+        if (prev < WALK * 0.55 && sp > WALK * 0.9 && pnow() - (this._kickAt || 0) > 900) { this._kickAt = pnow(); this._footDust(pl, l, 1.2, -1); }
+        if (prev > RUN * 0.7 && sp < WALK * 0.45 && this._sprintPeak > 0.4 && pnow() - (this._skidAt || 0) > 700) { this._skidAt = pnow(); this._footDust(pl, l, 1.5, 1); }
+      }
+      this._sprintPeak = sp > RUN * 0.7 ? Math.min(2, (this._sprintPeak || 0) + dt) : Math.max(0, (this._sprintPeak || 0) - dt * 2);
       if (!pl.grounded) { this._airVy = Math.min(this._airVy, pl.velocity?.y || 0); this._wasAir = true; }
       else if (this._wasAir) {
-        if (this._airVy < -5.5) this._footDust(pl, l, clamp(-this._airVy / 6, 1, 2.4));
+        if (this._airVy < -4 && !quietCam) {          // every real jump / drop (jump v0 = 5.7 m/s), not a step down
+          const power = clamp(-this._airVy / 6, 1, 2.4);
+          this._footDust(pl, l, power);
+          CM.landRing(pl, power);
+          CM.footprint(pl, 1, l, true);
+        }
         this._airVy = 0; this._wasAir = false;
       }
     },
-    _footDust(pl, l, power) {
+    /** dust at the feet; dir -1 = kicked backwards (sprint start), +1 = sprayed forwards (skid), 0 = around */
+    _footDust(pl, l, power, dir = 0) {
       const p = pl.position;
-      const surf = (() => { try { return G.world?.surfaceAt?.(p.x, p.z) || 'grass'; } catch (e) { return 'grass'; } })();
+      let surf = 'grass';
+      try { surf = G.world?.surfaceAt?.(p.x, p.z) || 'grass'; } catch (e) { surf = 'grass'; }
       const water = surf === 'water' || p.y < (G.data.layout?.waterY ?? -1.1) - 0.02;
-      const fx = Math.sin(pl.rotY || 0), fz = Math.cos(pl.rotY || 0);
-      const n = Math.max(1, Math.round((l > 1 ? 3 : 1) * power));
+      let fx = Math.sin(pl.rotY || 0), fz = Math.cos(pl.rotY || 0);
+      if (dir > 0) { fx = -fx; fz = -fz; }   // skid: the spray goes ahead of the feet (the "behind" below flips)
+      const n = Math.max(1, Math.round((l > 1 ? 3 : 1) * power * (dir ? 1.6 : 1)));
       const raw = ffxRaw;
       if (raw && G.ffx?.P) {
         const Pp = G.ffx.P;
@@ -1285,8 +1468,11 @@
       }
       if (this._root) this._root.querySelectorAll('.fx-coin').forEach((n) => n.remove());
       this._coinEls = 0;
-      this._lastFarm = null;
+      this._lastFarm = null; this._lastJar = null;
       this._airVy = 0; this._wasAir = false;
+      if (this._root) this._root.querySelectorAll('.fx-item, .fx-item-chip').forEach((n) => n.remove());
+      this._itemEls = 0;
+      CM.reset();
       this._partyAt = -1e9; this._pulseAt = -1e9;
     },
 
@@ -1327,7 +1513,30 @@
           else this.stamp('완료!', { sub: ps.count > 1 ? `퀘스트 ${ps.count}개 완료` : ps.title });
           this.pulse('#34c36b', { duration: 1200 });
           this.burst('sparkle', null, { count: 18, lift: 1.2 });
+          // a jade-gold light pillar with a slow star shower (a level-up pillar that is already up wins)
+          if (!this._pillar?.active) this._startPillar('quest');
         }, 120);
+      });
+
+      // items flying into the bag (harvest / NPC gifts / rewards / crafts); shop buys and silent adds stay quiet
+      on('item:added', ({ itemId, qty, source }) => {
+        const src = String(source || '');
+        if (!lv() || !G.data.items?.[itemId] || /^(shop|buy|debug|import|init|restore|load|server|corrupted|default)/.test(src)) return;
+        if (G.ui.modal?.isOpen?.() || pnow() < this._quietUntil) return;
+        const now = pnow();
+        if (now - this._itemAt < 220) return;   // a reward with many items: the first one flies, the bag bumps for all
+        this._itemAt = now;
+        let from = null;
+        if (/^harvest|^farm/.test(src) && this._lastFarm && now - this._lastFarm.t < 900) from = this._lastFarm.v;
+        else if (/^ferment/.test(src) && this._lastJar && now - this._lastJar.t < 900) from = this._lastJar.v;
+        else { const hp = headPos(null, new THREE.Vector3(), 0); from = hp; }
+        this._later(() => { if (G.state) this.itemFly(from, itemId, { qty }); }, /^harvest|^farm/.test(src) ? 260 : 120);
+      });
+
+      // first visit of a zone: a 3D name board floats in front of the camera
+      on('zone:enter', ({ zone, first }) => {
+        if (!first || !zone || !(zone.r > 0) || pnow() < this._quietUntil + 1500) return;
+        this._later(() => { if (G.state && G.sys.minimap?.currentZone?.id === zone.id) CM.banner(zone); }, 350);
       });
 
       on('quest:claimed', ({ questId }) => {
@@ -1405,6 +1614,7 @@
         const v = new THREE.Vector3();
         if (o) o.getWorldPosition(v); else if (!playerPos(v)) return;
         v.y = groundAt(v.x, v.z, v.y + 2);
+        this._lastJar = { v: v.clone().setY(v.y + 0.6), t: pnow() };
         if (!near(v)) return;
         // fermentation already sparkles the jar: add the product + a golden ground ring
         this.emoji3d(o || v, G.data.items?.[itemId]?.icon || '🏺', { scale: 1.15, rise: 1.4, duration: 2 });
@@ -1595,6 +1805,770 @@
     return k;
   }
 
+  // ===========================================================================================
+  // Phase 4: character motion graphics (CONTRACT §13.4) — speed lines, afterimages, ground ribbon,
+  // footprints, landing ring, teleport portal, 3D zone banner. Built lazily on the first frame with a scene,
+  // nothing allocated per frame, every mesh hidden while it has nothing to show (0 draw calls when idle).
+  // ===========================================================================================
+  const fin = Number.isFinite;
+  const WALKV = () => (fin(G.sys.player?.WALK) ? G.sys.player.WALK : 9.6);
+  const RUNV = () => (fin(G.sys.player?.RUN) ? G.sys.player.RUN : 18);
+  const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const dampK = (k, dt) => 1 - Math.exp(-k * dt);
+  const easeOutQuint = (x) => 1 - Math.pow(1 - clamp(x, 0, 1), 5);
+  const noRay = () => {};
+  /** the camera is telling a story (intro, telescope tour, photo, dialogue / focus camera): no character fx */
+  function cinematic() {
+    const M = G.sys.manjangdae;
+    if (M && (M.introActive || M.tourActive)) return true;
+    const cam = G.sys.camera;
+    if (cam && cam.mode && cam.mode !== 'follow') return true;
+    const b = document.body;
+    return !!(b && (b.classList.contains('photo-mode') || b.classList.contains('dialogue-open')));
+  }
+  function weatherId() { const c = G.sys.weather?.current; return (c && typeof c === 'object' ? c.id : c) || 'CLEAR'; }
+  function wetness() {
+    const W = G.sys.weather;
+    const r = Number(W?.precipitation?.rain) || 0;
+    return weatherId() === 'RAIN' ? Math.max(0.6, r) : r;
+  }
+
+  // ---- shaders (NaN-safe: every normalize / division is guarded)
+  const SL_N = 64;
+  const SL_VS = `
+    attribute vec4 aSeed;
+    uniform float uTime; uniform float uStrength; uniform float uAspect; uniform vec2 uCenter;
+    varying vec2 vUv; varying float vA;
+    void main() {
+      vUv = position.xy + 0.5;
+      float cyc = fract(aSeed.z + uTime * (0.55 + 0.6 * aSeed.y));
+      vec2 dir = vec2(cos(aSeed.x), sin(aSeed.x));
+      float ax = abs(dir.x), ay = abs(dir.y);
+      float edge = min(ax > 1e-4 ? uAspect / ax : 1e4, ay > 1e-4 ? 1.0 / ay : 1e4);
+      float r0 = mix(0.6, 1.08, cyc) * edge;
+      float len = (0.07 + 0.22 * uStrength) * (0.6 + 0.5 * aSeed.y) * edge;
+      float hw = (0.0022 + 0.003 * aSeed.w) * (0.6 + 0.4 * uStrength);
+      vec2 perp = vec2(-dir.y, dir.x);
+      vec2 p = uCenter * vec2(uAspect, 1.0) + dir * (r0 + position.y * len) + perp * (position.x * 2.0 * hw);
+      gl_Position = vec4(p.x / max(uAspect, 0.05), p.y, 0.0, 1.0);
+      vA = smoothstep(0.0, 0.22, cyc) * (1.0 - smoothstep(0.72, 1.0, cyc));
+    }`;
+  const SL_FS = `
+    uniform vec3 uColor; uniform float uAlpha;
+    varying vec2 vUv; varying float vA;
+    void main() {
+      float across = 1.0 - abs(vUv.x * 2.0 - 1.0);
+      float along = sin(clamp(vUv.y, 0.0, 1.0) * 3.14159265);
+      float a = uAlpha * vA * across * along;
+      if (a < 0.003) discard;
+      gl_FragColor = vec4(uColor, a);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`;
+  // afterimage: the player's skinned body re-drawn with a soft rim (same pose, translated to a recent position)
+  const GHOST_VS = `
+    #include <common>
+    #include <skinning_pars_vertex>
+    varying float vRim; varying float vY;
+    void main() {
+      #include <beginnormal_vertex>
+      #include <skinbase_vertex>
+      #include <skinnormal_vertex>
+      #include <begin_vertex>
+      #include <skinning_vertex>
+      vec4 mv = modelViewMatrix * vec4(transformed, 1.0);
+      vec3 n = normalMatrix * objectNormal; float nl = length(n); n = nl > 1e-6 ? n / nl : vec3(0.0, 0.0, 1.0);
+      vec3 vd = -mv.xyz; float vl = length(vd); vd = vl > 1e-6 ? vd / vl : vec3(0.0, 0.0, 1.0);
+      vRim = clamp(1.0 - abs(dot(n, vd)), 0.0, 1.0);
+      vY = position.y;
+      gl_Position = projectionMatrix * mv;
+    }`;
+  const GHOST_FS = `
+    uniform vec3 uColor; uniform float uAlpha;
+    varying float vRim; varying float vY;
+    void main() {
+      float r = vRim * vRim;
+      float a = uAlpha * (0.16 + 0.84 * r) * smoothstep(-0.02, 0.32, vY);
+      if (a < 0.004) discard;
+      gl_FragColor = vec4(uColor * (0.65 + 0.7 * r), clamp(a, 0.0, 1.0));
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`;
+  const RB_N = 24;
+  const RB_VS = `
+    attribute float aAlpha; attribute float aSide;
+    varying float vA; varying float vS;
+    void main() { vA = aAlpha; vS = aSide; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+  const RB_FS = `
+    uniform vec3 uColor; varying float vA; varying float vS;
+    void main() {
+      float e = 1.0 - vS * vS;
+      float a = clamp(vA * e, 0.0, 1.0);
+      if (a < 0.003) discard;
+      gl_FragColor = vec4(uColor, a);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`;
+  const FP_CAP = 64;
+  const FP_VS = `
+    attribute vec4 iData; attribute vec3 iCol;
+    uniform float uTime; uniform float uLife;
+    varying vec2 vUv; varying float vA; varying vec3 vCol;
+    void main() {
+      vUv = vec2(iData.z < 0.0 ? 1.0 - uv.x : uv.x, uv.y);
+      float age = uTime - iData.x;
+      vA = iData.y * smoothstep(0.0, 0.08, age) * (1.0 - smoothstep(uLife * 0.45, uLife, age));
+      vCol = iCol;
+      vec4 p = vec4(position, 1.0);
+      #ifdef USE_INSTANCING
+        p = instanceMatrix * p;
+      #endif
+      gl_Position = projectionMatrix * modelViewMatrix * p;
+    }`;
+  const FP_FS = `
+    uniform sampler2D uMap; uniform float uNight;
+    varying vec2 vUv; varying float vA; varying vec3 vCol;
+    void main() {
+      float a = texture2D(uMap, vUv).a * vA;
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(vCol * (1.0 - 0.45 * uNight), clamp(a, 0.0, 1.0));
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`;
+  const PORTAL_VS = `
+    varying vec2 vUv; varying float vFace;
+    void main() {
+      vUv = uv;
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vec3 n = mat3(modelMatrix) * normal; float nl = length(n); n = nl > 1e-6 ? n / nl : vec3(0.0, 1.0, 0.0);
+      vec3 v = cameraPosition - wp.xyz; float vl = length(v); v = vl > 1e-6 ? v / vl : vec3(0.0, 0.0, 1.0);
+      vFace = clamp(abs(dot(n, v)), 0.0, 1.0);
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`;
+  const PORTAL_FS = `
+    uniform float uProg; uniform float uTime; uniform float uOp; uniform float uDir; uniform vec3 uColor; uniform vec3 uEdge;
+    varying vec2 vUv; varying float vFace;
+    float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), u.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+    void main() {
+      float y = uDir > 0.0 ? vUv.y : 1.0 - vUv.y;
+      vec2 q = vec2(vUv.x * 10.0, vUv.y * 6.0 - uTime * 1.4);
+      float n = vnoise(q) * 0.65 + vnoise(q * 2.7 + 3.1) * 0.35;
+      float field = y * 0.62 + n * 0.38;
+      float thr = uProg * 1.12 - 0.06;
+      float keep = smoothstep(thr - 0.02, thr + 0.03, field);
+      float live = step(0.01, uProg) * (1.0 - step(0.99, uProg));
+      float edge = (1.0 - smoothstep(0.0, 0.07, abs(field - thr))) * live;
+      float dy = (y - uProg) * 12.0;
+      float scan = exp(-dy * dy) * live;
+      float rim = 0.3 + 0.7 * (1.0 - vFace);
+      float fade = (1.0 - smoothstep(0.72, 1.0, vUv.y)) * smoothstep(0.0, 0.04, vUv.y);
+      float a = (keep * rim * 0.55 + edge * 1.1 + scan * 0.55) * fade * uOp;
+      if (a < 0.003) discard;
+      vec3 c = mix(uColor, uEdge, clamp(edge + scan, 0.0, 1.0));
+      gl_FragColor = vec4(c, clamp(a, 0.0, 1.0));
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`;
+
+  // ---- canvas art
+  function drawPrint(ctx, w, h) {
+    // a small shoe print (sole + heel), soft edges; white alpha mask tinted in the shader
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#fff';
+    ctx.filter = 'blur(1.2px)';
+    ctx.beginPath(); ctx.ellipse(w * 0.5, h * 0.33, w * 0.3, h * 0.25, 0, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(w * 0.5, h * 0.77, w * 0.22, h * 0.14, 0, 0, TAU); ctx.fill();
+    ctx.filter = 'none';
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    for (let i = 0; i < 4; i++) { ctx.fillRect(w * 0.26, h * (0.18 + i * 0.075), w * 0.48, h * 0.022); }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  function drawRune(ctx, w) {
+    const c = w / 2;
+    ctx.clearRect(0, 0, w, w);
+    const g = ctx.createRadialGradient(c, c, 0, c, c, c);
+    g.addColorStop(0, 'rgba(255,240,200,.55)'); g.addColorStop(0.4, 'rgba(255,220,140,.16)'); g.addColorStop(1, 'rgba(255,214,102,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, w);
+    ctx.strokeStyle = 'rgba(255,236,180,.95)'; ctx.lineCap = 'round';
+    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(c, c, c * 0.9, 0, TAU); ctx.stroke();
+    ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(c, c, c * 0.78, 0, TAU); ctx.stroke();
+    ctx.lineWidth = 2.2; ctx.beginPath(); ctx.arc(c, c, c * 0.42, 0, TAU); ctx.stroke();
+    // 24 ticks between the rings + 8 diamonds (오방색 accents) — a 문양 ring, no letters
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * TAU, r0 = c * 0.8, r1 = c * (i % 3 ? 0.86 : 0.88);
+      ctx.lineWidth = i % 3 ? 1.4 : 2.6;
+      ctx.beginPath(); ctx.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0); ctx.lineTo(c + Math.cos(a) * r1, c + Math.sin(a) * r1); ctx.stroke();
+    }
+    const hues = ['#ffd84a', '#ff8f7a', '#8fd3ff', '#9cf0c8', '#fff4d6'];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU + Math.PI / 8, r = c * 0.6;
+      ctx.save(); ctx.translate(c + Math.cos(a) * r, c + Math.sin(a) * r); ctx.rotate(a);
+      ctx.fillStyle = hues[i % hues.length];
+      ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(6, 0); ctx.lineTo(0, 9); ctx.lineTo(-6, 0); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+  const SERIF = '"Noto Serif KR","Nanum Myeongjo","Batang","AppleMyungjo","Noto Serif CJK KR",serif';
+  const SANS = '"PretendardEmbed","Pretendard","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
+  /** 현판-style name board: lacquered wood, gold double frame, 단청 bands, emoji medallion, zone name */
+  function drawBanner(ctx, w, h, name, sub, emoji) {
+    ctx.clearRect(0, 0, w, h);
+    const x0 = 16, y0 = 26, x1 = w - 16, y1 = h - 26, r = 30;
+    const rr = (x, y, ww, hh, rad) => { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, ww, hh, rad); else ctx.rect(x, y, ww, hh); };
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+    const wood = ctx.createLinearGradient(0, y0, 0, y1);
+    wood.addColorStop(0, '#4a2c17'); wood.addColorStop(0.5, '#33200f'); wood.addColorStop(1, '#22140a');
+    ctx.fillStyle = wood; rr(x0, y0, x1 - x0, y1 - y0, r); ctx.fill();
+    ctx.restore();
+    // wood grain
+    ctx.save(); rr(x0, y0, x1 - x0, y1 - y0, r); ctx.clip();
+    ctx.strokeStyle = 'rgba(255,220,170,.05)'; ctx.lineWidth = 2;
+    for (let i = 0; i < 14; i++) { const y = y0 + 12 + i * ((y1 - y0 - 24) / 13); ctx.beginPath(); ctx.moveTo(x0, y); ctx.bezierCurveTo(w * 0.3, y + 6, w * 0.6, y - 6, x1, y + 3); ctx.stroke(); }
+    // 단청 bands (top + bottom)
+    const band = ['#2f8a72', '#c8453a', '#2b5ea8', '#f2d27a', '#e8e1cf'];
+    for (const by of [y0 + 16, y1 - 28]) {
+      for (let x = x0 + 26, i = 0; x < x1 - 26; x += 22, i++) { ctx.fillStyle = band[i % band.length]; ctx.globalAlpha = 0.85; ctx.fillRect(x, by, 18, 12); }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    // gold double frame
+    ctx.strokeStyle = '#e8c46a'; ctx.lineWidth = 6; rr(x0 + 6, y0 + 6, x1 - x0 - 12, y1 - y0 - 12, r - 6); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,236,180,.7)'; ctx.lineWidth = 2; rr(x0 + 40, y0 + 36, x1 - x0 - 80, y1 - y0 - 72, 14); ctx.stroke();
+    // medallion with the zone picture
+    const mx = x0 + 132, my = h / 2;
+    const mg = ctx.createRadialGradient(mx - 20, my - 24, 6, mx, my, 76);
+    mg.addColorStop(0, '#fff6d2'); mg.addColorStop(0.55, '#f2c860'); mg.addColorStop(1, '#b37a1c');
+    ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(mx, my, 74, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#fff1c4'; ctx.lineWidth = 4; ctx.stroke();
+    ctx.font = `86px ${EMOJI_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, mx, my + 6);
+    // name (shrinks to fit) + sub line
+    const tx = mx + 104, maxW = x1 - 60 - tx;
+    let fs = 104;
+    ctx.textAlign = 'left';
+    for (; fs > 48; fs -= 4) { ctx.font = `900 ${fs}px ${SERIF}`; if (ctx.measureText(name).width <= maxW) break; }
+    ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+    ctx.fillStyle = '#fff3cf'; ctx.fillText(name, tx, h / 2 - 18, maxW);
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.font = `800 40px ${SANS}`; ctx.fillStyle = '#f2c860';
+    ctx.fillText(sub, tx + 2, h / 2 + 62, maxW);
+  }
+
+  // ---- shared position history of the player's feet (time-stamped ring) for afterimages / ribbon
+  const HN = 48;
+  const Hist = {
+    x: new Float32Array(HN), y: new Float32Array(HN), z: new Float32Array(HN), t: new Float32Array(HN), head: -1, n: 0,
+    reset() { this.head = -1; this.n = 0; },
+    push(x, y, z, t) { this.head = (this.head + 1) % HN; const h = this.head; this.x[h] = x; this.y[h] = y; this.z[h] = z; this.t[h] = t; if (this.n < HN) this.n++; },
+    /** position at time `at` (interpolated) into out; returns false when the history does not reach back that far */
+    at(at, out) {
+      if (!this.n) return false;
+      let i = this.head;
+      if (at >= this.t[i]) { out.set(this.x[i], this.y[i], this.z[i]); return true; }
+      for (let k = 1; k < this.n; k++) {
+        const j = (i - 1 + HN) % HN;
+        if (this.t[j] <= at) {
+          const span = this.t[i] - this.t[j];
+          const u = span > 1e-6 ? (at - this.t[j]) / span : 1;
+          out.set(this.x[j] + (this.x[i] - this.x[j]) * u, this.y[j] + (this.y[i] - this.y[j]) * u, this.z[j] + (this.z[i] - this.z[j]) * u);
+          return true;
+        }
+        i = j;
+      }
+      out.set(this.x[i], this.y[i], this.z[i]);
+      return false;
+    },
+  };
+
+  const _cv = new THREE.Vector3(), _cv2 = new THREE.Vector3(), _cn = new THREE.Vector3(), _cf = new THREE.Vector3(), _cr = new THREE.Vector3(), _cb = new THREE.Vector3();
+  const _cm4 = new THREE.Matrix4(), _cq = new THREE.Quaternion();
+  const _rx = new Float32Array(RB_N), _ry = new Float32Array(RB_N), _rz = new Float32Array(RB_N);
+
+  const CM = {
+    ready: false, scene: null,
+    sl: null, slS: 0, slCx: 0, slCy: 0.1, vig: 0,
+    gh: [], ghSrc: null, ghS: 0,
+    rb: null, rbS: 0,
+    fp: null, fpI: 0, fpLast: -1e9, fpSide: 1,
+    pt: [], ban: null, banTex: new Map(),
+    prev: new THREE.Vector3(), hasPrev: false, lastPortalAt: -1e9, t: 0, banCls: false,
+
+    build() {
+      if (this.ready) return true;
+      const scene = G.sys.engine?.scene;
+      if (!scene) return false;
+      this.scene = scene;
+      this._buildLines(scene);
+      this._buildRibbon(scene);
+      this._buildPrints(scene);
+      this._buildPortals(scene);
+      this._buildBanner(scene);
+      this.ready = true;
+      return true;
+    },
+
+    // ------------------------------------------------------------ builders
+    _buildLines(scene) {
+      const base = new THREE.PlaneGeometry(1, 1);
+      const geo = new THREE.InstancedBufferGeometry();
+      geo.setIndex(base.getIndex());
+      geo.setAttribute('position', base.getAttribute('position'));
+      const seed = new Float32Array(SL_N * 4);
+      // golden-angle order: any prefix (the low preset draws the first 26) is still spread all around
+      for (let i = 0; i < SL_N; i++) { seed[i * 4] = (i * 2.399963 + R(-0.06, 0.06)) % TAU; seed[i * 4 + 1] = R(0.7, 1.35); seed[i * 4 + 2] = rnd(); seed[i * 4 + 3] = R(0.5, 1.5); }
+      geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 4));
+      geo.instanceCount = SL_N;
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uStrength: { value: 0 }, uAspect: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uColor: { value: new THREE.Color('#f3f8ff') }, uAlpha: { value: 0.3 } },
+        vertexShader: SL_VS, fragmentShader: SL_FS, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = 'fx-speed-lines'; mesh.frustumCulled = false; mesh.renderOrder = 998; mesh.visible = false; mesh.raycast = noRay; mesh.matrixAutoUpdate = false;
+      scene.add(mesh);
+      this.sl = { mesh, mat, geo };
+    },
+    _buildRibbon(scene) {
+      const V = RB_N * 2;
+      const pos = new Float32Array(V * 3), alpha = new Float32Array(V), side = new Float32Array(V);
+      for (let i = 0; i < RB_N; i++) { side[i * 2] = -1; side[i * 2 + 1] = 1; }
+      const idx = [];
+      for (let i = 0; i < RB_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      const geo = new THREE.BufferGeometry();
+      geo.setIndex(idx);
+      const pa = new THREE.BufferAttribute(pos, 3); pa.setUsage(THREE.DynamicDrawUsage);
+      const aa = new THREE.BufferAttribute(alpha, 1); aa.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('position', pa); geo.setAttribute('aAlpha', aa); geo.setAttribute('aSide', new THREE.BufferAttribute(side, 1));
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Color('#ffe3a6') } }, vertexShader: RB_VS, fragmentShader: RB_FS,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = 'fx-sprint-ribbon'; mesh.frustumCulled = false; mesh.renderOrder = 4; mesh.visible = false; mesh.raycast = noRay; mesh.matrixAutoUpdate = false;
+      scene.add(mesh);
+      this.rb = { mesh, mat, pos, alpha, pa, aa };
+    },
+    _buildPrints(scene) {
+      const geo = new THREE.PlaneGeometry(0.21, 0.33).rotateX(-Math.PI / 2);
+      geo.deleteAttribute('normal');   // unlit decal: no normals at all (nothing for a GPU to normalise)
+      const data = new Float32Array(FP_CAP * 4), col = new Float32Array(FP_CAP * 3);
+      for (let i = 0; i < FP_CAP; i++) data[i * 4] = -1e5;
+      const ad = new THREE.InstancedBufferAttribute(data, 4); ad.setUsage(THREE.DynamicDrawUsage);
+      const ac = new THREE.InstancedBufferAttribute(col, 3); ac.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('iData', ad); geo.setAttribute('iCol', ac);
+      const tex = G.gfx.canvasTexture(64, 96, drawPrint);
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uMap: { value: tex }, uTime: { value: 0 }, uLife: { value: 7 }, uNight: { value: 0 } },
+        vertexShader: FP_VS, fragmentShader: FP_FS, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+      });
+      const mesh = new THREE.InstancedMesh(geo, mat, FP_CAP);
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      _cm4.makeTranslation(0, -9999, 0);
+      for (let i = 0; i < FP_CAP; i++) mesh.setMatrixAt(i, _cm4);
+      mesh.name = 'fx-footprints'; mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.visible = false; mesh.raycast = noRay;
+      mesh.castShadow = false; mesh.receiveShadow = false;
+      scene.add(mesh);
+      this.fp = { mesh, mat, data, col, ad, ac };
+    },
+    _buildPortals(scene) {
+      const colGeo = new THREE.CylinderGeometry(1, 1, 1, 40, 1, true); colGeo.translate(0, 0.5, 0);
+      const discGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+      const runeTex = G.gfx.canvasTexture(256, 256, (ctx, w) => drawRune(ctx, w));
+      for (let k = 0; k < 2; k++) {
+        const colMat = new THREE.ShaderMaterial({
+          uniforms: { uProg: { value: 0 }, uTime: { value: 0 }, uOp: { value: 0 }, uDir: { value: 1 }, uColor: { value: new THREE.Color('#ffcf73') }, uEdge: { value: new THREE.Color('#fff6dc') } },
+          vertexShader: PORTAL_VS, fragmentShader: PORTAL_FS, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+        });
+        const discMat = new THREE.MeshBasicMaterial({ map: runeTex, color: 0xffd36a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+        const col = new THREE.Mesh(colGeo, colMat), disc = new THREE.Mesh(discGeo, discMat);
+        col.renderOrder = 13; disc.renderOrder = 3;
+        const g = new THREE.Group(); g.name = 'fx-portal'; g.add(col, disc); g.visible = false;
+        for (const m of [col, disc]) { m.frustumCulled = false; m.raycast = noRay; }
+        scene.add(g);
+        this.pt.push({ g, col, disc, colMat, discMat, t: 0, dur: 1.3, active: false, mode: 'in', acc: 0, burst: false });
+      }
+    },
+    _buildBanner(scene) {
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.9), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, depthWrite: false, toneMapped: false }));
+      const glowTex = G.gfx.radialTexture(128, 'rgba(255,214,120,0.5)', 'rgba(255,214,120,0)');
+      const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 2.0), new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+      glow.position.z = -0.03;
+      board.renderOrder = 993; glow.renderOrder = 992;
+      for (const m of [board, glow]) { m.frustumCulled = false; m.raycast = noRay; }
+      const g = new THREE.Group(); g.name = 'fx-zone-banner'; g.add(glow, board); g.visible = false;
+      scene.add(g);
+      this.ban = { g, board, glow, t: 0, dur: 3.4, active: false, pos: new THREE.Vector3(), snap: true, burst: false, scale: 1, zone: null };
+    },
+
+    // ------------------------------------------------------------ per frame
+    update(dt, t, l) {
+      if (!this.ready && !this.build()) return;
+      this.t = t;
+      const pl = G.sys.player;
+      const live = l > 0 && !!G.state && !!pl?.position && pl._ready !== false && pl.object?.visible !== false;
+      const quiet = !live || cinematic();
+      const mo = motion();
+      // ---- history + teleport detection
+      if (live) {
+        const p = pl.position;
+        if (this.hasPrev) {
+          const jx = p.x - this.prev.x, jz = p.z - this.prev.z;
+          if (jx * jx + jz * jz > 36) {                    // > 6 m in one frame: teleport / fast travel / rescue hop
+            Hist.reset();
+            if (!quiet && t - this.lastPortalAt > 0.6) { this.lastPortalAt = t; this.portal(_cv.copy(p), 'in'); }
+          }
+        }
+        if (Hist.n === 0 || t - Hist.t[Hist.head] > 0.03 || Math.hypot(p.x - Hist.x[Hist.head], p.z - Hist.z[Hist.head]) > 0.2) Hist.push(p.x, p.y, p.z, t);
+        this.prev.copy(p); this.hasPrev = true;
+      } else { this.hasPrev = false; Hist.reset(); }
+
+      const sp = live ? Number(pl.speed) || 0 : 0;
+      const RUN = RUNV();
+      const kid = kidOn();
+      const gate = live && !quiet && mo;
+      // ---- sprint speed lines (+ a soft vignette layer on the engine grade)
+      this._stepLines(dt, t, l, pl, gate ? smooth(RUN * 0.6, RUN * 0.97, sp) : 0, kid);
+      // ---- afterimages + ground ribbon
+      this._stepGhosts(dt, t, l, pl, gate ? smooth(RUN * 0.62, RUN * 0.98, sp) : 0, kid);
+      this._stepRibbon(dt, t, l, pl, gate && pl.grounded !== false ? smooth(RUN * 0.55, RUN * 0.95, sp) : 0);
+      // ---- footprints (fade in the shader)
+      const fp = this.fp;
+      fp.mat.uniforms.uTime.value = t;
+      fp.mat.uniforms.uNight.value = clamp(Number(G.world?.nightFactor) || 0, 0, 1);
+      const vis = t - this.fpLast < fp.mat.uniforms.uLife.value + 0.3 && !!G.state;
+      if (fp.mesh.visible !== vis) fp.mesh.visible = vis;
+      // ---- portals + banner
+      for (const P of this.pt) if (P.active) this._stepPortal(P, dt, t, l, mo);
+      if (this.ban.active) this._stepBanner(dt, t, mo);
+      if (this.banCls !== this.ban.active) { this.banCls = this.ban.active; document.body?.classList.toggle('fx-zone3d', this.banCls); }
+    },
+
+    _stepLines(dt, t, l, pl, target, kid) {
+      const S = this.sl;
+      this.slS += (target - this.slS) * dampK(target > this.slS ? 3.2 : 5, dt);
+      if (this.slS < 0.012) {
+        this.slS = target > 0 ? this.slS : 0;
+        if (S.mesh.visible) S.mesh.visible = false;
+        this._vignette(0);
+        return;
+      }
+      const u = S.mat.uniforms;
+      u.uTime.value = t;
+      u.uStrength.value = this.slS;
+      u.uAspect.value = Math.max(0.2, innerWidth / Math.max(1, innerHeight));
+      u.uAlpha.value = (kid ? 0.32 : 0.42) * (l > 1 ? 1 : 0.8);
+      // radiate from where the run is heading on screen (the camera trails behind: near the centre)
+      const cam = G.sys.engine?.camera, v = pl.velocity;
+      let cx = 0, cy = 0.12;
+      if (cam && v) {
+        const vl = Math.hypot(v.x, v.z);
+        if (vl > 0.5) {
+          _cv2.set(pl.position.x + (v.x / vl) * 14, pl.position.y + 1.2, pl.position.z + (v.z / vl) * 14).project(cam);
+          if (_cv2.z > -1 && _cv2.z < 1 && fin(_cv2.x) && fin(_cv2.y)) { cx = clamp(_cv2.x, -0.4, 0.4); cy = clamp(_cv2.y, -0.25, 0.22); }
+        }
+      }
+      const k = dampK(4, dt);
+      this.slCx += (cx - this.slCx) * k; this.slCy += (cy - this.slCy) * k;
+      u.uCenter.value.set(this.slCx, this.slCy);
+      S.geo.instanceCount = l > 1 ? SL_N : 26;
+      if (!S.mesh.visible) S.mesh.visible = true;
+      this._vignette(this.slS);
+    },
+    _vignette(s) {
+      const q = Math.round(clamp(s, 0, 1) * 8) / 8;
+      if (q === this.vig) return;
+      this.vig = q;
+      try { G.sys.engine?.grade?.(q > 0 ? { vignette: 0.12 * q } : null, 'fx-sprint'); } catch (e) { /* engine grade optional */ }
+    },
+
+    _ensureGhosts(pl) {
+      const src = pl?.rig?.mesh;
+      if (!src || !src.isSkinnedMesh || !src.skeleton) return false;
+      if (this.ghSrc === src && this.gh.length) return true;
+      this._disposeGhosts();
+      const cols = ['#ffe7a8', '#a9d7ff'];
+      for (let k = 0; k < 2; k++) {
+        const mat = new THREE.ShaderMaterial({
+          uniforms: { uColor: { value: new THREE.Color(cols[k]) }, uAlpha: { value: 0 } },
+          vertexShader: GHOST_VS, fragmentShader: GHOST_FS, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+        });
+        const g = new THREE.SkinnedMesh(src.geometry, mat);
+        g.bind(src.skeleton, src.bindMatrix);
+        g.name = 'fx-afterimage'; g.frustumCulled = false; g.castShadow = false; g.receiveShadow = false;
+        g.matrixAutoUpdate = false; g.matrixWorldAutoUpdate = false; g.raycast = noRay; g.renderOrder = 12; g.visible = false;
+        const off = new THREE.Vector3();
+        g.userData.off = off;
+        // same pose as the live body, translated to where the player was a moment ago
+        g.onBeforeRender = () => {
+          const s = this.ghSrc;
+          if (!s) return;
+          if (g.geometry !== s.geometry) g.geometry = s.geometry;
+          g.matrixWorld.copy(s.matrixWorld);
+          const e = g.matrixWorld.elements;
+          e[12] += off.x; e[13] += off.y; e[14] += off.z;
+          g.bindMatrixInverse.copy(s.bindMatrixInverse);
+        };
+        this.scene.add(g);
+        this.gh.push({ g, mat, off });
+      }
+      this.ghSrc = src;
+      return true;
+    },
+    _disposeGhosts() {
+      for (const x of this.gh) { x.g.onBeforeRender = () => {}; this.scene?.remove(x.g); x.mat.dispose(); }
+      this.gh.length = 0; this.ghSrc = null;
+    },
+    _stepGhosts(dt, t, l, pl, target, kid) {
+      this.ghS += (target - this.ghS) * dampK(target > this.ghS ? 3 : 6, dt);
+      if (this.ghS < 0.02 || !this._ensureGhosts(pl)) { for (const x of this.gh) if (x.g.visible) x.g.visible = false; return; }
+      const n = l > 1 ? 2 : 1;
+      const p = pl.position;
+      for (let k = 0; k < this.gh.length; k++) {
+        const x = this.gh[k];
+        if (k >= n) { x.g.visible = false; continue; }
+        const lag = 0.06 * (k + 1) * (1.25 - 0.25 * this.ghS);
+        Hist.at(t - lag, _cv);
+        x.off.set(_cv.x - p.x, _cv.y - p.y, _cv.z - p.z);
+        const d = Math.hypot(x.off.x, x.off.z);
+        x.mat.uniforms.uAlpha.value = this.ghS * (k ? 0.2 : 0.3) * (kid ? 0.85 : 1) * clamp((d - 0.12) / 0.4, 0, 1);
+        x.g.visible = d > 0.12 && pl.object.visible !== false;
+      }
+    },
+
+    _stepRibbon(dt, t, l, pl, target) {
+      const R0 = this.rb;
+      this.rbS += (target - this.rbS) * dampK(target > this.rbS ? 3 : 4, dt);
+      if (this.rbS < 0.02 || Hist.n < 2) { if (R0.mesh.visible) R0.mesh.visible = false; return; }
+      const span = 0.32;
+      for (let i = 0; i < RB_N; i++) {
+        const u = i / (RB_N - 1);
+        Hist.at(t - u * span, _cv);
+        _rx[i] = _cv.x; _ry[i] = _cv.y; _rz[i] = _cv.z;
+      }
+      // the newest point sits at the current feet
+      _rx[0] = pl.position.x; _ry[0] = pl.position.y; _rz[0] = pl.position.z;
+      let tx = Math.sin(pl.rotY || 0), tz = Math.cos(pl.rotY || 0);
+      const P = R0.pos, A = R0.alpha;
+      const s = this.rbS * (l > 1 ? 0.5 : 0.36);
+      for (let i = 0; i < RB_N; i++) {
+        const a = Math.max(0, i - 1), b = Math.min(RB_N - 1, i + 1);
+        const dx = _rx[a] - _rx[b], dz = _rz[a] - _rz[b], dl = Math.hypot(dx, dz);
+        if (dl > 1e-4) { tx = dx / dl; tz = dz / dl; }
+        const u = i / (RB_N - 1);
+        const w = 0.34 * (1 - 0.65 * u) * (0.65 + 0.35 * this.rbS);
+        const sx = -tz * w, sz = tx * w, y = _ry[i] + 0.05;
+        const o = i * 6;
+        P[o] = _rx[i] + sx; P[o + 1] = y; P[o + 2] = _rz[i] + sz;
+        P[o + 3] = _rx[i] - sx; P[o + 4] = y; P[o + 5] = _rz[i] - sz;
+        const al = s * Math.pow(1 - u, 1.6);
+        A[i * 2] = al; A[i * 2 + 1] = al;
+      }
+      R0.pa.needsUpdate = true; R0.aa.needsUpdate = true;
+      if (!R0.mesh.visible) R0.mesh.visible = true;
+    },
+
+    /** one footprint at the player's feet; frac = where along this frame's path (0 = last frame, 1 = now) */
+    footprint(pl, frac = 1, l = 2, landing = false) {
+      if (!this.ready || !l || !pl?.position) return;
+      const p = pl.position;
+      const x = this.hasPrev && frac < 1 ? this.prev.x + (p.x - this.prev.x) * frac : p.x;
+      const z = this.hasPrev && frac < 1 ? this.prev.z + (p.z - this.prev.z) * frac : p.z;
+      let surf = 'grass';
+      try { surf = G.world?.surfaceAt?.(x, z) || 'grass'; } catch (e) { surf = 'grass'; }
+      if (surf === 'water') return;
+      const wet = wetness(), snow = weatherId() === 'SNOW';
+      let col, a;
+      if (snow && surf !== 'wood') { col = 0x8ea6c2; a = 0.42; }
+      else if (surf === 'dirt') { col = 0x3a2617; a = 0.36 + 0.12 * wet; }
+      else if (surf === 'sand') { col = 0x5e4628; a = 0.36; }
+      else if (surf === 'grass') { col = 0x263a1b; a = 0.26 + 0.12 * wet; }
+      else if (wet > 0.3) { col = 0x1b1d20; a = 0.22 * wet; }          // wet prints on stone / road / wood
+      else return;
+      const fp = this.fp;
+      const yaw = pl.rotY || 0;
+      const side = landing ? 0 : (this.fpSide = -this.fpSide);
+      const fx = Math.sin(yaw), fz = Math.cos(yaw);
+      const rx = -fz, rz = fx;                                     // character right (+Z facing: right = -X)
+      for (let j = 0, nPrints = landing ? 2 : 1; j < nPrints; j++) {   // landing: both feet, else the next foot
+        const sd = landing ? (j ? 1 : -1) : side;
+        const px = x + rx * 0.12 * sd, pz = z + rz * 0.12 * sd;
+        const gy = groundAt(px, pz, p.y + 0.6);
+        // slope normal from four height samples
+        const hx0 = groundAt(px - 0.25, pz, gy + 0.5), hx1 = groundAt(px + 0.25, pz, gy + 0.5);
+        const hz0 = groundAt(px, pz - 0.25, gy + 0.5), hz1 = groundAt(px, pz + 0.25, gy + 0.5);
+        _cn.set(-(hx1 - hx0) / 0.5, 1, -(hz1 - hz0) / 0.5);
+        const nl = _cn.length();
+        if (!(nl > 1e-6) || !fin(nl)) _cn.set(0, 1, 0); else _cn.multiplyScalar(1 / nl);
+        if (_cn.y < 0.55) continue;                                // steep step / wall edge: no print
+        _cf.set(fx, 0, fz).addScaledVector(_cn, -(fx * _cn.x + fz * _cn.z));
+        const fl = _cf.length();
+        if (!(fl > 1e-6)) continue;
+        _cf.multiplyScalar(1 / fl);
+        _cr.crossVectors(_cf, _cn);
+        const rl = _cr.length();
+        if (!(rl > 1e-6)) continue;
+        _cr.multiplyScalar(1 / rl);
+        _cb.copy(_cf).negate();
+        _cm4.makeBasis(_cr, _cn, _cb);
+        _cm4.setPosition(px + _cn.x * 0.015, gy + 0.02, pz + _cn.z * 0.015);
+        const i = this.fpI;
+        this.fpI = (this.fpI + 1) % FP_CAP;
+        fp.mesh.setMatrixAt(i, _cm4);
+        fp.data[i * 4] = this.t; fp.data[i * 4 + 1] = clamp(a, 0, 0.6); fp.data[i * 4 + 2] = sd < 0 ? -1 : 1; fp.data[i * 4 + 3] = 0;
+        _c2.setHex(col);
+        fp.col[i * 3] = _c2.r; fp.col[i * 3 + 1] = _c2.g; fp.col[i * 3 + 2] = _c2.b;
+      }
+      fp.mesh.instanceMatrix.needsUpdate = true; fp.ad.needsUpdate = true; fp.ac.needsUpdate = true;
+      fp.mat.uniforms.uLife.value = l > 1 ? 7 : 4;
+      this.fpLast = this.t;
+    },
+
+    /** dust shock ring on a hard landing (normal blending: dust, not light) */
+    landRing(pl, power) {
+      if (!fx._normal) return;
+      const p = pl.position;
+      let surf = 'grass';
+      try { surf = G.world?.surfaceAt?.(p.x, p.z) || 'grass'; } catch (e) { surf = 'grass'; }
+      const col = SURFACE_DUST[surf] || SURFACE_DUST.grass;
+      resetSP(); SP.kind = K.SHOCK; SP.flags = F_FLAT | F_GROW; SP.life = 0.55; SP.s0 = 0.4; SP.s1 = 1.4 + power * 0.9; SP.a0 = 0.55; SP.drag = 0; SP.fout = 0.3; SP.color = col; SP.rot = rnd() * TAU;
+      spawn(fx._normal, p.x, p.y + 0.05, p.z, 0, 0, 0);
+    },
+
+    portal(pos, mode) {
+      if (!this.ready && !this.build()) return false;
+      let P = this.pt.find((x) => !x.active);
+      if (!P) P = this.pt.reduce((a, b) => (a.t > b.t ? a : b));
+      const reduce = !motion();
+      P.mode = mode; P.t = 0; P.active = true; P.acc = 0; P.burst = false;
+      P.dur = reduce ? 0.9 : mode === 'in' ? 1.35 : 0.95;
+      P.g.position.copy(pos);
+      P.g.position.y = groundAt(pos.x, pos.z, pos.y + 0.6);
+      P.colMat.uniforms.uDir.value = mode === 'in' ? 1 : -1;
+      P.g.visible = true;
+      fx.ripple(P.g.position, { color: '#ffe08a', radius: 2.2, duration: 1.0, rings: lv() > 1 ? 2 : 1 });
+      return true;
+    },
+    _stepPortal(P, dt, t, l, mo) {
+      P.t += dt;
+      const k = P.t / P.dur;
+      if (k >= 1 || !G.state) { P.active = false; P.g.visible = false; return; }
+      const fadeIn = clamp(P.t / 0.1, 0, 1), fadeOut = 1 - smooth(0.8, 1, k);
+      const u = P.colMat.uniforms;
+      u.uTime.value = mo ? t : 0;
+      u.uOp.value = fadeIn * fadeOut * (mo ? 1 : 0.6);
+      // 'in': solid light that burns away from the feet up (the character appears); 'out': forms, then burns top-down
+      u.uProg.value = mo ? (P.mode === 'in' ? smooth(0.12, 0.92, k) : smooth(0.25, 0.95, k)) : 0;
+      const rad = 0.62 + (mo ? 0.08 * Math.sin(P.t * 5) : 0);
+      P.col.scale.set(rad, 2.5 + (P.mode === 'in' ? 0.4 * k : -0.5 * k), rad);
+      const grow = easeOutQuint(Math.min(1, P.t / 0.45));
+      P.disc.scale.setScalar(Math.max(0.05, 3.2 * (0.35 + 0.65 * grow)));
+      P.disc.position.y = 0.03;
+      if (mo) P.disc.rotation.y += dt * 1.1;
+      P.discMat.opacity = 0.9 * fadeIn * fadeOut;
+      // spiral sparks rising with the scan line
+      if (mo && l > 0 && k < 0.8) {
+        P.acc += dt * (l > 1 ? 30 : 12);
+        const g = P.g.position;
+        while (P.acc >= 1) {
+          P.acc -= 1;
+          const a = P.t * 9 + (rnd() < 0.5 ? 0 : Math.PI) + R(-0.25, 0.25), r = R(0.55, 0.85);
+          resetSP(); SP.kind = rnd() < 0.6 ? K.SPARK : K.STAR; SP.life = R(0.6, 1.0); SP.s0 = R(0.12, 0.22); SP.s1 = 0.02; SP.grav = 0; SP.drag = 0.6;
+          SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.6; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0];
+          spawn(fx._add, g.x + Math.cos(a) * r, g.y + R(0.05, 0.4) + k * 1.8, g.z + Math.sin(a) * r, -Math.sin(a) * 0.9, R(1.4, 2.6), Math.cos(a) * 0.9);
+        }
+      }
+      if (!P.burst && k > 0.78) {
+        P.burst = true;
+        if (P.mode === 'in') fx.burst('stars', P.g.position, { count: 10, lift: 1.1, spread: 0.8 });
+      }
+    },
+
+    banner(zone) {
+      if (!this.ready && !this.build()) return false;
+      if (cinematic() || !G.state) return false;
+      const B = this.ban, kid = kidOn();
+      const key = `${zone.id}|${kid ? 'k' : 'n'}`;
+      let tex = this.banTex.get(key);
+      if (!tex) {
+        const ZE = { ZONE_MAIN: '⛲', ZONE_CROP: '🌱', ZONE_HALL: '🏛️', ZONE_HERB: '🌿', ZONE_EDUCATION: '📖', ZONE_FERMENTATION: '🍲', ZONE_JANGDOKDAE: '🏺', ZONE_REST: '🌸', ZONE_ENTRANCE: '🚪', ZONE_MANJANGDAE: '🏔️' };
+        const name = String(zone.name || '').replace(/[\u0000-\u001f<>]/g, '').slice(0, 16) || '새로운 곳';
+        const emoji = cleanEmoji(zone.emoji) || ZE[zone.id] || '📍';
+        const sub = kid ? '새로운 곳이에요!' : '새로운 구역 발견';
+        tex = G.gfx.canvasTexture(1024, 330, (ctx, w, h) => drawBanner(ctx, w, h, name, sub, emoji));
+        if (this.banTex.size > 16) { const first = this.banTex.keys().next().value; this.banTex.get(first)?.dispose?.(); this.banTex.delete(first); }
+        this.banTex.set(key, tex);
+      }
+      B.board.material.map = tex; B.board.material.needsUpdate = true;
+      B.t = 0; B.active = true; B.snap = true; B.burst = false; B.zone = zone.id; B.g.visible = true;
+      B.dur = kid ? 3.8 : 3.4;
+      return true;
+    },
+    _stepBanner(dt, t, mo) {
+      const B = this.ban;
+      const cam = G.sys.engine?.camera;
+      B.t += dt;
+      if (!cam || B.t >= B.dur || !G.state || cinematic()) { B.active = false; B.g.visible = false; return; }
+      const dist = 5.4;
+      const fov = THREE.MathUtils.degToRad(cam.fov || 55);
+      const visH = 2 * dist * Math.tan(fov / 2), visW = visH * Math.max(0.3, cam.aspect || 1);
+      const sc = Math.min(1, (visW * 0.84) / 2.8, (visH * 0.26) / 0.9);
+      // a spot ~30 % above the screen centre (just under the top HUD), 5.4 m in front of the camera; a soft spring gives it depth
+      _cv.set(0, 0, -1).applyQuaternion(cam.quaternion);
+      _cv2.set(0, 1, 0).applyQuaternion(cam.quaternion);
+      const want = _cb.copy(cam.position).addScaledVector(_cv, dist).addScaledVector(_cv2, visH * 0.305);
+      if (B.snap || !mo) { B.pos.copy(want); B.snap = false; } else B.pos.lerp(want, dampK(10, dt));
+      const tOut = B.dur - 0.6;
+      const out = B.t > tOut ? clamp((B.t - tOut) / 0.6, 0, 1) : 0;
+      B.g.position.copy(B.pos);
+      if (mo) B.g.position.addScaledVector(_cv2, Math.sin(B.t * 2.4) * 0.03 * sc + out * 0.35 * sc);
+      B.g.quaternion.copy(cam.quaternion);
+      if (mo) { B.g.rotateY(Math.sin(B.t * 1.7) * 0.06 * (1 - out)); B.g.rotateZ(Math.sin(B.t * 2.1 + 0.6) * 0.018); }
+      // unroll sideways (ease-out-quint, no overshoot), hold, then lift away while fading
+      const open = mo ? easeOutQuint(B.t / 0.55) : 1;
+      B.g.scale.set(sc * Math.max(0.04, open), sc * (1 - 0.18 * out), sc);
+      const op = clamp(B.t / 0.22, 0, 1) * (1 - out);
+      B.board.material.opacity = op;
+      B.glow.material.opacity = op * 0.55;
+      if (!B.burst && B.t > tOut && lv() > 0) {
+        B.burst = true;
+        fx.burst('petals', _cb.copy(B.g.position).addScaledVector(_cv2, -0.2), { count: 14, lift: 0, spread: 0.8, up: 0.5 });
+      }
+    },
+
+    hideAll() {
+      if (!this.ready) return;
+      this.sl.mesh.visible = false; this.rb.mesh.visible = false;
+      for (const x of this.gh) x.g.visible = false;
+      this._vignette(0);
+    },
+    clear() {
+      if (!this.ready) return;
+      this.hideAll();
+      this.slS = 0; this.ghS = 0; this.rbS = 0;
+      for (const P of this.pt) { P.active = false; P.g.visible = false; }
+      this.ban.active = false; this.ban.g.visible = false;
+      document.body?.classList.remove('fx-zone3d'); this.banCls = false;
+      for (let i = 0; i < FP_CAP; i++) this.fp.data[i * 4] = -1e5;
+      this.fp.ad.needsUpdate = true; this.fp.mesh.visible = false; this.fpLast = -1e9;
+    },
+    reset() { this.clear(); Hist.reset(); this.hasPrev = false; },
+    stats() {
+      if (!this.ready) return { built: false, drawCalls: 0 };
+      const vis = [this.sl.mesh, this.rb.mesh, this.fp.mesh, ...this.gh.map((x) => x.g)].filter((m) => m.visible).length
+        + this.pt.filter((P) => P.active).length * 2 + (this.ban.active ? 2 : 0);
+      return {
+        built: true, speedLines: +this.slS.toFixed(3), afterimage: +this.ghS.toFixed(3), ribbon: +this.rbS.toFixed(3),
+        footprints: this.fp.data.filter((v, i) => i % 4 === 0 && v > this.t - this.fp.mat.uniforms.uLife.value).length,
+        portals: this.pt.filter((P) => P.active).length, banner: this.ban.active ? this.ban.zone : null, history: Hist.n, drawCalls: vis,
+      };
+    },
+  };
+
   // ---------------------------------------------------------------- 2D rain shapes (centred on 0,0; r = outer radius)
   function starPath(ctx, r) {
     ctx.beginPath();
@@ -1658,6 +2632,10 @@
     coinFly: (f, a, o) => fx.coinFly(f, a, o),
     pulse: (c, o) => fx.pulse(c, o),
     kidParty: (p, o) => fx.kidParty(p, o),
+    portal: (p, o) => fx.portal(p, o),
+    pillar: (p, o) => fx.pillar(p, o),
+    zoneBanner: (z) => fx.zoneBanner(z),
+    itemFly: (f, w, o) => fx.itemFly(f, w, o),
     shimmerExp: () => fx.shimmerExp(),
     shine: (el, o) => fx.shine(el, o),
     level: () => fx.level(),

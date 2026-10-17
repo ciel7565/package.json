@@ -18,7 +18,7 @@ G.data.meta = {
 
 // ------------------------------------------------------------------ zones (circles; smallest containing radius wins)
 G.data.zones = [
-  { id: 'ZONE_MAIN', name: '중앙 광장', short: '광장', center: [0, 0], r: 16, color: '#d9c9a3', icon: 'home', desc: '체험관의 중심 광장입니다. 발효마스터가 첫 체험을 안내해 줍니다.' },
+  { id: 'ZONE_MAIN', name: '중앙 광장', short: '광장', center: [0, 0], r: 16, color: '#d9c9a3', icon: 'home', desc: '체험관의 중심 광장입니다. 만장대에서 내려온 체험객을 발효마스터가 맞이하고 첫 체험을 안내해 줍니다.' },
   { id: 'ZONE_CROP', name: '전통작물 구역', short: '작물밭', center: [0, -34], r: 20, color: '#7fbf5a', icon: 'sprout', desc: '콩·고추·배추 등 전통작물을 직접 심고, 물을 주고, 수확하는 농사 체험 구역입니다.' },
   { id: 'ZONE_HALL', name: '전통발효체험관', short: '체험관', center: [0, -80], r: 28, color: '#9fb4c8', icon: 'home', desc: '현대식 전시관과 한옥 지붕이 어우러진 체험관 본관입니다.' },
   { id: 'ZONE_HERB', name: '허브 구역', short: '허브', center: [-44, -30], r: 15, color: '#b48be0', icon: 'leaf', desc: '박하·라벤더·로즈마리·레몬밤 등 향기로운 허브를 기르는 구역입니다.' },
@@ -27,6 +27,10 @@ G.data.zones = [
   { id: 'ZONE_JANGDOKDAE', name: '장독대 구역', short: '장독대', center: [46, 2], r: 30, color: '#8a5a3b', icon: 'jar', desc: '수백 개의 장독이 늘어선 장독대입니다. 내 장독의 발효 상태를 확인할 수 있습니다.' },
   { id: 'ZONE_REST', name: '휴식정원 구역', short: '휴식정원', center: [48, 50], r: 21, color: '#f08bb0', icon: 'sparkle', desc: '정자와 연못, 꽃밭이 있는 휴식 공간입니다. 사진을 찍고 다른 체험객과 쉬어 가세요.' },
   { id: 'ZONE_ENTRANCE', name: '입구', short: '입구', center: [0, 74], r: 20, color: '#c9c3b5', icon: 'flag', desc: '체험관 정문과 주차장이 있는 입구입니다.' },
+  // phase 4: the start point — a high lookout on the southern ridge (elevated: the terrain keeps the hill)
+  { id: 'ZONE_MANJANGDAE', name: '정선 만장대', short: '만장대', center: [52, 118], r: 14, color: '#7fa6c9', icon: 'flag', emoji: '🏔️', elevated: true, start: true,
+    desc: '체험관과 계곡이 한눈에 내려다보이는 높은 전망대예요. 팔각정과 망원경이 있고, 돌계단 길을 따라 내려가면 정문과 광장이 나와요.',
+    kidDesc: '높은 산 위 전망대예요. 체험관이 다 보여요!' },
 ];
 G.data.defaultZone = { id: 'ZONE_TRAIL', name: '산책로', short: '산책로', center: [0, 0], r: 0, color: '#9aa88f', icon: 'pin', desc: '체험관 곳곳을 잇는 산책로입니다.' };
 /** zones that count for "모든 구역 방문" */
@@ -41,6 +45,7 @@ G.data.pois = [
   { id: 'POI_RIVERSIDE', name: '계곡 전망대', x: 76, z: 46, r: 8, icon: 'droplet', desc: '맑은 계곡물을 내려다보는 나무 데크입니다.' },
   { id: 'POI_PARKING', name: '주차장', x: -34, z: 90, r: 13, icon: 'pin', desc: '방문객 주차장입니다.' },
   { id: 'POI_HANOK_VILLAGE', name: '한옥마을', x: -64, z: 22, r: 15, icon: 'home', desc: '전통 한옥이 모여 있는 마을입니다.' },
+  { id: 'POI_MANJANGDAE_TRAIL', name: '만장대 돌계단 길', x: 33, z: 97, r: 11, icon: 'flag', emoji: '🪜', desc: '만장대에서 정문까지 이어지는 지그재그 돌계단 길입니다. 밧줄 난간을 따라 천천히 내려가 보세요.' },
 ];
 
 // ------------------------------------------------------------------ items
@@ -187,9 +192,10 @@ G.data.questStates = ['locked', 'available', 'accepted', 'progress', 'completed'
 G.data.quests = {
   QUEST001: {
     title: '체험관에 오신 것을 환영합니다', icon: '🏮', category: 'main', giver: 'NPC001', autoAccept: true, sequential: true, tracked: true,
-    desc: '발효마스터의 안내에 따라 전통발효체험관의 핵심 체험을 하나씩 해 보세요.',
+    desc: '정선 만장대에서 체험관을 내려다본 뒤, 돌계단 길을 따라 내려가 광장의 발효마스터를 만나요. 그다음 발효마스터의 안내에 따라 핵심 체험을 하나씩 해 보세요.',
+    easyDesc: '산 위 전망대에서 내려가 발효마스터를 만나요!',
     objectives: [
-      { type: 'talk', npc: 'NPC001', count: 1, text: '발효마스터와 인사하기' },
+      { type: 'talk', npc: 'NPC001', count: 1, text: '만장대에서 내려가 발효마스터와 인사하기', easyText: '산에서 내려가 발효마스터랑 이야기해요' },
       { type: 'visit', zone: 'ZONE_CROP', count: 1, text: '전통작물 구역으로 이동하기' },
       { type: 'water', count: 1, text: '작물에 물 주기' },
       { type: 'harvest', count: 1, text: '다 자란 작물 수확하기' },
@@ -235,7 +241,7 @@ G.data.achievements = {
   ACH_EDU5: { name: '배움의 즐거움', icon: '📖', desc: '교육 콘텐츠 5개를 끝까지 학습했습니다.', condition: { stat: 'eduCompleted', gte: 5 }, reward: { coin: 500, edu: 20 } },
   ACH_LEVEL5: { name: '체험생', icon: '⭐', desc: '레벨 5를 달성했습니다.', condition: { stat: 'level', gte: 5 }, reward: { coin: 500 } },
   ACH_FRIENDLY: { name: '친절한 체험객', icon: '🤝', desc: '이모지·제스처로 10번 소통했습니다.', condition: { stat: 'socials', gte: 10 }, reward: { coin: 300 } },
-  ACH_WALKER: { name: '산책 마니아', icon: '👟', desc: '체험관 안을 2km 걸었습니다.', condition: { stat: 'distance', gte: 2000 }, reward: { coin: 400 } },
+  ACH_WALKER: { name: '산책 마니아', icon: '👟', desc: '체험관 안을 6km 걸었습니다.', condition: { stat: 'distance', gte: 6000 }, reward: { coin: 400 } },
   ACH_NPC_ALL: { name: '마당발', icon: '🧑‍🤝‍🧑', desc: '모든 NPC와 대화했습니다.', condition: { stat: 'npcsTalked', gte: 5 }, reward: { coin: 400 } },
   ACH_FIRST_CHAT: { name: '첫 인사말', icon: '💬', desc: '채팅으로 처음 이야기했습니다.', condition: { stat: 'chats', gte: 1 }, reward: { coin: 50 } },
   ACH_CRAFTER: { name: '손재주꾼', icon: '🛠️', desc: '작업대에서 재료를 3번 만들었습니다.', condition: { stat: 'crafts', gte: 3 }, reward: { coin: 300 } },
@@ -361,6 +367,8 @@ G.data.tips = [
   ['팁', 'J 키로 작업일지를, M 키로 전체 지도를 열 수 있어요.'],
   ['팁', '작물은 물이 부족하면 자라는 속도가 느려지고 건강이 떨어져요.'],
   ['팁', 'P 키를 누르면 사진 모드! 포토존에서 찍으면 퀘스트가 진행돼요.'],
+  ['팁', '정선 만장대의 망원경을 들여다보면 체험관 구역을 하나씩 구경할 수 있어요.'],
+  ['팁', '돌계단 길은 밧줄 난간을 따라 지그재그로 내려가요. 길이 헷갈리면 금빛 발자국을 따라가세요.'],
   ['팁', '날씨와 시간에 따라 장독의 발효 환경(온도·습도)이 달라져요.'],
   ['팁', '퀘스트 패널에서 “보상 받기”를 눌러야 보상이 지급돼요.'],
   ['알림', '게임 속 발효·재배 수치는 교육용 가상 시뮬레이션입니다.'],
@@ -373,6 +381,7 @@ G.data.visitors = {
     '안녕하세요!', '멋진 공간이네요!', '장독대 진짜 예뻐요', '같이 퀘스트 해요!', '오늘 날씨가 좋네요!', '모두 반갑습니다~',
     '콩 수확했어요 ㅎㅎ', '된장 발효 언제 끝나지?', '정자에서 사진 찍었어요', '허브 향이 날 것 같아요', '교육관 퀴즈 재밌어요',
     '물 주는 거 잊지 마세요~', '메주 처음 만들어 봤어요', '저 처음 왔어요!', '장독이 이렇게 많다니', '계곡 소리 좋네요',
+    '만장대에서 보니까 다 보여요!', '만장대 팔각정 멋져요',
   ],
   replies: {
     greet: ['안녕하세요! 반가워요 😊', '어서 오세요~', '반갑습니다!'],

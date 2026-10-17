@@ -656,6 +656,29 @@
     return { key: `obj:${f.questId}:${f.objective}`, mood: 'think', text: `다음 할 일: ${o.text} ${em}${where}`, action: go };
   }
 
+  /**
+   * 쉬운 모드 (NEW-2): the "다음 할 일" card (G.easy.nextStep) is the ONE source of what to do. An actionable tip is
+   * only offered when it is about that same step — and then it carries the card's own action (same words, same
+   * button); tips about anything else are dropped, so 옹이 never contradicts the card or adds a second big button.
+   */
+  /** where 옹이 points: in 쉬운 모드 always the "다음 할 일" card's own target (NEW-2: never a second, competing goal) */
+  function pointTarget() {
+    if (kidOn()) {
+      try { const t = G.easy?.nextStep?.()?.target; return t && Number.isFinite(t.x) && Number.isFinite(t.z) ? t : null; } catch (e) { return null; }
+    }
+    return G.sys.quest?.focus?.()?.target || null;
+  }
+  function kidStepMatch(st, kind) {
+    if (!st) return false;
+    const k = String(st.key || '');
+    switch (kind) {
+      case 'claim': return k.startsWith('claim:');
+      case 'jar': return st.type === 'ferment_claim' || st.type === 'ferment_check';
+      case 'ready': return st.type === 'harvest' || st.type === 'collect';
+      case 'dry': return st.type === 'water';
+      default: return false;
+    }
+  }
   /** every tip that fits the current state, best first */
   function candidates() {
     const out = [];
@@ -663,14 +686,22 @@
     if (!st) return out;
     const now = G.time.now();
     const kid = kidOn();
-    // 1) unclaimed quest rewards
+    let step = null;
+    if (kid) { try { step = G.easy?.nextStep?.() || null; } catch (e) { step = null; } }
+    // 1) unclaimed quest rewards (쉬운 모드: only the gift the card is about, with the card's 🎁 button)
     for (const [id, e] of Object.entries(st.quests || {})) {
       if (!e || e.status !== 'completed') continue;
       const q = G.data.quests?.[id];
       if (!q) continue;
+      if (kid) {
+        if (!kidStepMatch(step, 'claim')) break;
+        out.push({ key: 'claim:' + id, prio: 100, mood: 'cheer', cd: 150, age: now - (Number(e.completedAt) || now),
+          text: '선물이 기다려요! 🎁 받아 볼까요?', action: kidStepAction(step) });
+        break;
+      }
       out.push({ key: 'claim:' + id, prio: 100, mood: 'cheer', cd: 150, age: now - (Number(e.completedAt) || now),
-        text: kid ? '선물이 기다려요! 🎁 받아 볼까요?' : `「${q.title}」 보상이 기다리고 있어요! 얼른 받아요 🎁`,
-        action: { label: kid ? '🎁 받기' : '보상 받기', fn: () => G.sys.quest?.claim?.(id) } });
+        text: `「${q.title}」 보상이 기다리고 있어요! 얼른 받아요 🎁`,
+        action: { label: '보상 받기', fn: () => G.sys.quest?.claim?.(id) } });
       break;
     }
     // 2) finished jars
@@ -680,9 +711,10 @@
         const j = F.getJar?.(jid);
         if (!j || j.status !== 'COMPLETE') continue;
         const rn = j.recipe?.name || '장';
+        if (kid && !kidStepMatch(step, 'jar')) break;
         out.push({ key: `jar:${jid}:${j.state?.startedAt || 0}`, prio: 90, mood: 'cheer', cd: 600,
           text: kid ? `내 장독의 ${josa(rn, '이/가')} 다 익었어요! 🏺 열어 봐요!` : `내 항아리의 ${josa(rn, '이/가')} 다 익었어요! 🏺✨ 열어 볼까요?`,
-          action: { label: kid ? '👉 장독 가기' : '항아리로 가기', fn: () => goInteract(jid) } });
+          action: kid ? kidStepAction(step) : { label: '항아리로 가기', fn: () => goInteract(jid) } });
         break;
       }
     } catch (e) { /* fermentation optional */ }
@@ -695,12 +727,12 @@
         const w = Number(p.water);
         if (Number.isFinite(w) && w < 25 && (!dry || w < Number(dry.water))) dry = p;
       }
-      if (ready) out.push({ key: `ready:${ready.id}:${ready.plantedAt || 0}`, prio: 80, mood: 'cheer', cd: 420,
+      if (ready && (!kid || kidStepMatch(step, 'ready'))) out.push({ key: `ready:${ready.id}:${ready.plantedAt || 0}`, prio: 80, mood: 'cheer', cd: 420,
         text: kid ? `${josa(ready.crop.name, '이/가')} 다 자랐어요! 🧺 거두러 가요!` : `${josa(ready.crop.name, '이/가')} 다 자랐어요! 수확하러 가 볼까요? 🧺`,
-        action: { label: kid ? '👉 밭에 가기' : '밭으로 가기', fn: () => goInteract(ready.id) } });
-      if (dry) out.push({ key: 'dry:' + dry.id, prio: 75, mood: 'surprised', cd: 300,
+        action: kid ? kidStepAction(step) : { label: '밭으로 가기', fn: () => goInteract(ready.id) } });
+      if (dry && (!kid || kidStepMatch(step, 'dry'))) out.push({ key: 'dry:' + dry.id, prio: 75, mood: 'surprised', cd: 300,
         text: kid ? `${josa(dry.crop.name, '이/가')} 목말라요! 💧 물을 줘요!` : `${dry.crop.name}밭이 목말라 보여요! 💧`,
-        action: { label: kid ? '💧 물 주기' : '물 주러 가기', fn: () => goInteract(dry.id) } });
+        action: kid ? kidStepAction(step) : { label: '물 주러 가기', fn: () => goInteract(dry.id) } });
     } catch (e) { /* farming optional */ }
     // 4) the current objective (easy mode: the HUD card already shows it; 옹이 nudges after 20 s idle instead)
     if (!kid) { try { const ob = objectiveHint(); if (ob) out.push(Object.assign(ob, { prio: 60, cd: 180, idle: 60 })); } catch (e) { /* quest optional */ } }
@@ -1388,10 +1420,12 @@
       if (fx) { try { G.fx?.burst?.(_v.set(this.pos.x, this.groundY + 0.3, this.pos.z), { type: 'dust', count: 10 }); } catch (e) { /* fx optional */ } }
       this._snapBehind();
       this._pop = 0;
+      this._poofN = (this._poofN || 0) + 1;
       this._wake();
       if (fx) {
         try { G.fx?.burst?.(_v.set(this.pos.x, this.groundY + 0.3, this.pos.z), { type: 'sparkle', count: 12 }); } catch (e) { /* optional */ }
         this._setMood('surprised', 0.6);
+        this._act = null; this._start('dizzy', 0.9);
       }
     },
 
@@ -1411,7 +1445,7 @@
 
     /** start an action; reactions replace idle actions, celebrations queue up (max 2) */
     _start(type, dur, data) {
-      const IDLE = { look: 1, hum: 1, bounce: 1, spin: 1, wave: 1, point: 1 };
+      const IDLE = { look: 1, hum: 1, bounce: 1, spin: 1, wave: 1, point: 1, wee: 1, yawn: 1, shiver: 1 };
       const cur = this._act;
       if (cur && !IDLE[cur.type] && !IDLE[type]) { if (this._actQ.length < 2) { this._actQ.push({ type, dur, data }); return true; } return false; }
       if (cur && !IDLE[cur.type] && IDLE[type]) return false;
@@ -1442,7 +1476,9 @@
 
       // ---- follow target: ~1.6 m behind-right (other side / straight behind when blocked)
       const fx = Math.sin(P.rotY), fz = Math.cos(P.rotY), rgx = -fz, rgz = fx;
-      const frozen = !!this._menu || (this._act && (this._act.type === 'pet' || this._act.type === 'point'));
+      // pointing is an idle beat: the moment the player sets off (up to 18 m/s) 옹이 drops it and follows
+      if (this._act?.type === 'point' && (pSpeed > 2.5 || dPl > 3.6)) this._act.t = Math.max(this._act.t, this._act.dur);
+      const frozen = !!this._menu || (this._act && (this._act.type === 'pet' || (this._act.type === 'point' && this._act.t < this._act.dur)));
       this._sideT -= dt;
       if (this._sideT <= 0) {
         this._sideT = 0.3;
@@ -1457,24 +1493,39 @@
       const kT = damp(6, dt);
       this._tgt.x += (tx - this._tgt.x) * kT; this._tgt.z += (tz - this._tgt.z) * kT;
 
-      // ---- arrive steering
+      // ---- arrive steering (phase 4: the player runs 18 m/s — 옹이 accelerates with the player's pace and
+      //      bounds after them in long catch-up hops; far behind for a moment → a puff and it pops up next to them)
       const dx = this._tgt.x - this.pos.x, dz = this._tgt.z - this.pos.z, dist = Math.hypot(dx, dz);
-      let maxS = Math.max(3.4, pSpeed * 1.18 + 0.4);
-      if (dPl > 4.5) maxS += Math.min(6, (dPl - 4.5) * 1.2);
+      const RUN = Number(P.RUN) || 18;
+      let maxS = Math.max(3.4, pSpeed * 1.16 + 0.6);
+      if (dPl > 4.5) maxS += Math.min(14, (dPl - 4.5) * 1.7);
+      maxS = Math.min(maxS, RUN * 1.6);
       const wantS = dist < 0.06 ? 0 : maxS * Math.min(1, dist / 1.1);
       const dvx = (dist > 1e-4 ? (dx / dist) * wantS : 0) - this.vel.x, dvz = (dist > 1e-4 ? (dz / dist) * wantS : 0) - this.vel.z;
-      const maxDv = 16 * dt, dvl = Math.hypot(dvx, dvz), kk = dvl > maxDv ? maxDv / dvl : 1;
+      const maxDv = (16 + Math.min(pSpeed, RUN) * 3.4) * dt, dvl = Math.hypot(dvx, dvz), kk = dvl > maxDv ? maxDv / dvl : 1;
       this.vel.x += dvx * kk; this.vel.z += dvz * kk;
+      // lagging far behind for a while (blocked path, huge sprint) → catch-up puff
+      this._lagT = dPl > 13 ? (this._lagT || 0) + dt : 0;
+      if (this._lagT > 0.9 && !frozen) { this._lagT = 0; this._poof(true); dPl = Math.hypot(pp.x - this.pos.x, pp.z - this.pos.z); }
 
-      // ---- integrate with light collision (no own collider; never enters water / climbs walls)
+      // ---- integrate with light collision (no own collider; never enters water / climbs walls), sub-stepped
+      //      like the player (≤ 0.3 m per step) so a fast catch-up never tunnels through a fence
       const ox = this.pos.x, oz = this.pos.z;
-      if (this.vel.x * this.vel.x + this.vel.z * this.vel.z > 1e-6) {
-        _tmp.set(ox + this.vel.x * dt, this.groundY, oz + this.vel.z * dt);
-        W.resolve(_tmp, 0.24, this.groundY);
-        W.clampToBounds(_tmp);
-        const gy = W.heightAt(_tmp.x, _tmp.z, this.groundY + 0.5);
-        if (W.isWater(_tmp.x, _tmp.z) || !Number.isFinite(gy) || gy - this.groundY > 0.75) { this.vel.multiplyScalar(0.4); this._stuck += dt; }
-        else { this.pos.x = _tmp.x; this.pos.z = _tmp.z; this._stuck = Math.max(0, this._stuck - dt * 0.5); }
+      const v2 = this.vel.x * this.vel.x + this.vel.z * this.vel.z;
+      if (v2 > 1e-6) {
+        const steps = Math.min(8, Math.max(1, Math.ceil((Math.sqrt(v2) * dt) / 0.3)));
+        const sdt = dt / steps;
+        let blocked = false;
+        for (let i = 0; i < steps; i++) {
+          _tmp.set(this.pos.x + this.vel.x * sdt, this.groundY, this.pos.z + this.vel.z * sdt);
+          W.resolve(_tmp, 0.24, this.groundY);
+          W.clampToBounds(_tmp);
+          const gy = W.heightAt(_tmp.x, _tmp.z, this.groundY + 0.5);
+          if (W.isWater(_tmp.x, _tmp.z) || !Number.isFinite(gy) || gy - this.groundY > 0.75) { this.vel.multiplyScalar(0.4); blocked = true; break; }
+          this.pos.x = _tmp.x; this.pos.z = _tmp.z;
+          if (gy < this.groundY) this.groundY = Math.max(gy, this.groundY - 0.75);
+        }
+        this._stuck = blocked ? this._stuck + dt : Math.max(0, this._stuck - dt * 0.5);
       }
       // personal space: never stand inside the player
       const sx = this.pos.x - pp.x, sz = this.pos.z - pp.z, sd = Math.hypot(sx, sz);
@@ -1491,7 +1542,9 @@
       // ---- night sleep (player idle, nothing going on)
       const night = (G.world.nightFactor || 0) > 0.6;
       const settled = this.speed < 0.2 && !this._act && !this._menu;
+      if (!this._sleeping && night && settled && playerIdle > 6 && !this._yawned && !reduce && !this._photo && !G.sys.dialogue?.active) { this._yawned = true; this._start('yawn', 1.7); }
       if (!this._sleeping && night && settled && playerIdle > 8 && !this._photo && !G.sys.dialogue?.active) { this._sleeping = true; this._showBubble('Z z z', 9999, 'zz'); }
+      if (playerIdle < 1) this._yawned = false;
       if (this._sleeping && !this._restNap && (!night || playerMoving || this._menu || playerIdle < 1)) {
         this._wake(); this._setMood('surprised', 0.7); this._start('bounce', 0.5);
       }
@@ -1501,18 +1554,20 @@
         this._idleT += dt;
         if (this._idleT > this._nextIdle) {
           this._idleT = 0; this._nextIdle = 5 + Math.random() * 6;
-          const f = G.sys.quest?.focus?.()?.target;
+          const f = pointTarget();
           if (f && playerIdle > 3 && G.time.elapsed > this._nextPointT && distTo(f.x, f.z) > 6) this._startPoint(f);
           else if (!reduce) {
             const r = Math.random();
-            this._start(r < 0.3 ? 'look' : r < 0.5 ? 'hum' : r < 0.7 ? 'bounce' : r < 0.85 ? 'spin' : 'wave', r < 0.3 ? 2.6 : r < 0.5 ? 3 : r < 0.7 ? 0.9 : r < 0.85 ? 0.85 : 1.6);
+            const wid = G.sys.weather?.current;
+            if ((wid === 'SNOW' || wid?.id === 'SNOW') && r < 0.35) this._start('shiver', 1.4);
+            else this._start(r < 0.3 ? 'look' : r < 0.5 ? 'hum' : r < 0.7 ? 'bounce' : r < 0.85 ? 'spin' : 'wave', r < 0.3 ? 2.6 : r < 0.5 ? 3 : r < 0.7 ? 0.9 : r < 0.85 ? 0.85 : 1.6);
           }
         }
       } else this._idleT = 0;
 
       // ---- action layer
       let extraH = 0, spin = 0, wiggle = 0, lean = 0, faceYaw = null, lookOff = 0;
-      let armL = null, armR = null, moodA = null;
+      let armL = null, armR = null, moodA = null, fwdL = 0, fwdR = 0;
       const a = this._act;
       if (a) {
         a.t += dt;
@@ -1545,6 +1600,37 @@
             if (k >= 1 && !a.done) { a.done = true; this._burst('stars', 8); }
             break;
           }
+          case 'wee': {   // sprinting along: arms up, a little hop, "💨"
+            armL = armR = 2.5; moodA = 'cheer'; extraH = 4 * 0.1 * k * (1 - k);
+            if (!a.b) { a.b = true; this._showBubble('💨', a.dur, 'note'); }
+            break;
+          }
+          case 'dance': {  // the player dances: bob, sway and pump the arms in turn
+            const ph = (a.t * 2.4) % 1; extraH = 4 * 0.09 * ph * (1 - ph);
+            wiggle = Math.sin(a.t * 4.8) * 0.16; spin = reduce ? 0 : Math.sin(a.t * 2.4) * 0.6;
+            armL = 1.5 + Math.sin(a.t * 9.6) * 0.9; armR = 1.5 - Math.sin(a.t * 9.6) * 0.9; moodA = 'cheer';
+            if (!a.b) { a.b = true; this._showBubble('♪', a.dur, 'note'); }
+            break;
+          }
+          case 'clap': {   // a quest done: claps in front of the belly
+            armL = armR = 0.9; fwdL = fwdR = -1.15 - Math.abs(Math.sin(a.t * 13)) * 0.35; moodA = 'cheer';
+            extraH = 4 * 0.05 * ((a.t * 2.6) % 1) * (1 - ((a.t * 2.6) % 1));
+            faceYaw = Math.atan2(pp.x - this.pos.x, pp.z - this.pos.z);
+            break;
+          }
+          case 'dizzy': {  // popped out of a puff: a wobble that settles
+            wiggle = Math.sin(a.t * 10) * 0.14 * (1 - k); spin = reduce ? 0 : Math.sin(a.t * 6) * 0.35 * (1 - k); moodA = 'surprised';
+            break;
+          }
+          case 'shiver': { // snow: tiny shivers (a jitter, not a flash)
+            wiggle = Math.sin(a.t * 26) * 0.035; armL = armR = 0.25; fwdL = fwdR = -0.6; moodA = 'sad';
+            break;
+          }
+          case 'yawn': {   // sleepy at night: a big stretch before dozing off
+            const s2 = Math.sin(Math.min(1, k) * Math.PI); armL = armR = 0.4 + 2.1 * s2; moodA = 'sleepy'; extraH = 0.02 * s2;
+            if (!a.b) { a.b = true; this._showBubble('🥱', a.dur, 'zz'); }
+            break;
+          }
           default: break;
         }
         if (a.t >= a.dur) {
@@ -1554,16 +1640,28 @@
         }
       }
 
-      // ---- hop + squash & stretch
+      // ---- hop + squash & stretch: at sprint pace the hops get longer and higher (a bounding chase, ≤ 4.4 hops/s)
       const moving = this.speed > 0.35;
+      const rate = clamp(this.speed / 1.1, 1.9, 4.4);
       if (moving || this._hopPh > 0) {
-        const rate = clamp(this.speed / 0.95, 1.9, 3.4);
         this._hopPh += dt * (moving ? rate : Math.max(rate, 2.6));
-        if (this._hopPh >= 1) { this._hopPh = moving ? this._hopPh - 1 : 0; this._sqv -= 2.4; }
+        if (this._hopPh >= 1) {
+          this._hopPh = moving ? this._hopPh - 1 : 0;
+          this._sqv -= 2.4 + Math.min(this.speed, 18) * 0.07;
+          // dust puff on the landings of a fast chase (G.fx thins / drops it for fxLevel low / off)
+          if (this.speed > 7 && !reduce) this._burst('dust', this.speed > 12 ? 3 : 2);
+        }
       }
-      const hopH = reduce ? 0.03 : 0.07 + Math.min(this.speed, 6) * 0.012;
+      const hopLen = this.speed / rate;
+      const hopH = reduce ? 0.03 : clamp(0.07 + hopLen * 0.11, 0.07, 0.55);
       const ph = this._hopPh;
       const hopY = 4 * hopH * ph * (1 - ph) + extraH;
+      // sprint pose: lean into the run, a happy "wee!" now and then on a long sprint
+      const dash = U.smoothstep(6, 14, this.speed);
+      if (dash > 0.3 && !this._act && !reduce) {
+        this._dashT = (this._dashT || 0) + dt;
+        if (this._dashT > 2.2 && G.time.elapsed > (this._weeAt || 0)) { this._weeAt = G.time.elapsed + 14 + Math.random() * 10; this._start('wee', 1.1); }
+      } else this._dashT = 0;
       // squash spring: fixed sub-steps keep it stable at any frame rate (dt is capped at 0.1 s by the loop)
       for (let n = Math.min(14, Math.ceil(dt / (1 / 120))), h = dt / n, i = 0; i < n; i++) {
         this._sqv += (-260 * this._sq - 13 * this._sqv) * h;
@@ -1574,6 +1672,7 @@
       const breath = this._sleeping ? Math.sin(t * 1.6) * 0.035 : moving ? 0 : Math.sin(t * 2.3) * 0.012;
       const sy = clamp(1 + this._sq + air + breath, 0.72, 1.3), sxz = 1 / Math.sqrt(sy);
       if (this._sleeping) lean = 0.14;
+      else if (dash > 0) lean = Math.max(lean, 0.24 * dash);
 
       // ---- facing
       let want;
@@ -1614,10 +1713,15 @@
       }
       if (armL != null) aL = armL === -1 ? 0.2 : armL;
       if (armL === -1) pxL = -1.35;
+      else if (fwdL) pxL = fwdL;
       if (armR != null && !umbOn) aR = -armR;
+      // the sprint pose swings both arms back (a stubby "superhero" dash)
+      if (dash > 0 && armL == null && !this._sleeping) { pxL = Math.min(pxL, 0) + 0.9 * dash; }
+      const pxR = umbOn ? 0 : fwdR ? fwdR : (dash > 0 && armR == null ? 0.9 * dash : 0);
       this._armL.rotation.z += (aL - this._armL.rotation.z) * damp(14, dt);
       this._armR.rotation.z += (aR - this._armR.rotation.z) * damp(14, dt);
       this._armL.rotation.x += (pxL - this._armL.rotation.x) * damp(12, dt);
+      this._armR.rotation.x += (pxR - this._armR.rotation.x) * damp(12, dt);
       // sprout sways with motion
       this._sprout.rotation.z = (this._hats[this._outfit().hat]?.rotation.z || 0) + Math.sin(tArm * 3.1) * 0.07 + (moving ? Math.sin(ph * TAU) * 0.18 : 0);
 
@@ -1756,7 +1860,7 @@
       const hnt = hint({ detail: true });
       say(hnt.text, { mood: hnt.mood, action: hnt.action, force: true, priority: true, source: 'hint' });
       if (this._shown) {
-        const f = G.sys.quest?.focus?.()?.target;
+        const f = pointTarget();
         if (f && hnt.key.startsWith('obj:') && distTo(f.x, f.z) > 6) this._startPoint(f);
       }
     },
@@ -2179,6 +2283,9 @@
         this._lastTipAt = pnow();
       });
       B.on('quest:accepted', () => { this._nextPointT = Math.min(this._nextPointT, G.time.elapsed + 2.5); this._idleT = this._nextIdle; });
+      B.on('quest:completed', () => { if (G.state && this._shown && !this._sleeping) { this._start('clap', 1.5); this._showBubble('👏', 1.5, 'note'); } });
+      // the player dances → 옹이 dances along (when it is close enough to see it)
+      B.on('gesture:played', (p) => { if (G.state && this._shown && p?.gestureId === 'GES_DANCE' && distTo(this.pos.x, this.pos.z) < 10) { this._wake(); this._act = null; this._start('dance', 3.2); } });
       B.on('quest:progress', () => { this._nextPointT = Math.min(this._nextPointT, G.time.elapsed + 6); });
       B.on('photo:mode', (p) => { this._photo = !!p?.active; if (this._photo) { this._wake(); this.closeMenu(true); } });
       B.on('photo:taken', () => { if (this._shown) { this._setMood('wink', 1.8); this._start('bounce', 0.6); } });
@@ -2256,7 +2363,7 @@
       if (!say(pick.text, { mood: pick.mood, action: pick.action, source: 'tip', ttl: 20000 })) return; // deduped: keep the gap free
       if (pick.once) { G.state.flags = G.state.flags || {}; G.state.flags[pick.once] = G.time.now(); G.dirty('companion'); }
       this._lastTipAt = now;
-      if (pick.key.startsWith('obj:')) { const f = G.sys.quest?.focus?.()?.target; if (f && distTo(f.x, f.z) > 6) this._startPoint(f); }
+      if (pick.key.startsWith('obj:')) { const f = pointTarget(); if (f && distTo(f.x, f.z) > 6) this._startPoint(f); }
     },
     _greetNow(afterOnboarding) {
       const c = G.state.companion;

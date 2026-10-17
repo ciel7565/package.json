@@ -34,7 +34,7 @@
   background: radial-gradient(120% 140% at 50% 40%, rgba(255, 250, 240, .93), rgba(255, 241, 222, .86));
   box-shadow: 0 14px 36px rgba(0, 0, 0, .35), 0 0 0 9px rgba(255, 250, 240, .35);
   transform: rotate(-11deg);
-  animation: fxStampIn .52s cubic-bezier(.2, .9, .25, 1.1) both;
+  animation: fxStampIn .5s cubic-bezier(.22, 1, .36, 1) both;
   -webkit-mask-image: radial-gradient(circle at 18% 22%, rgba(0,0,0,.82) 0 2px, #000 3px), radial-gradient(circle at 76% 64%, rgba(0,0,0,.85) 0 3px, #000 4px);
   -webkit-mask-size: 23px 19px, 31px 27px;
   mask-image: radial-gradient(circle at 18% 22%, rgba(0,0,0,.82) 0 2px, #000 3px), radial-gradient(circle at 76% 64%, rgba(0,0,0,.85) 0 3px, #000 4px);
@@ -51,10 +51,8 @@
 .fx-stamp-wrap.fx-static .fx-stamp { animation: fxFade .25s ease both; }
 .fx-stamp-wrap.fx-static .fx-stamp-ink { display: none; }
 @keyframes fxStampIn {
-  0% { opacity: 0; transform: scale(2.6) rotate(-3deg); }
-  44% { opacity: 1; transform: scale(.9) rotate(-12deg); }
-  62% { transform: scale(1.05) rotate(-10.5deg); }
-  78% { transform: scale(.98) rotate(-11deg); }
+  0% { opacity: 0; transform: scale(2.2) rotate(-4deg); }
+  55% { opacity: 1; transform: scale(.97) rotate(-11.5deg); }
   100% { opacity: 1; transform: scale(1) rotate(-11deg); }
 }
 @keyframes fxInk { 0% { opacity: .75; transform: scale(.6); } 100% { opacity: 0; transform: scale(7); } }
@@ -94,15 +92,14 @@
 .fx-lu-eyebrow { font-size: .95rem; font-weight: 900; letter-spacing: .5em; padding-left: .5em; color: #fff3c4; text-shadow: 0 0 16px rgba(244, 197, 74, .95), 0 2px 6px rgba(0, 0, 0, .6); }
 .fx-lu-title {
   margin-top: .1rem; font-size: 3.1rem; font-weight: 900; line-height: 1.05; letter-spacing: -.01em;
-  background: linear-gradient(180deg, #fffbe6 8%, #ffe07a 45%, #f0a91a 92%); -webkit-background-clip: text; background-clip: text; color: transparent;
-  filter: drop-shadow(0 3px 0 rgba(120, 70, 0, .55)) drop-shadow(0 8px 18px rgba(0, 0, 0, .5));
+  color: #ffe58f; text-shadow: 0 2px 0 #c98a12, 0 4px 0 rgba(120, 70, 0, .55), 0 10px 22px rgba(0, 0, 0, .5);
 }
 .fx-lu-level { display: flex; align-items: flex-end; justify-content: center; gap: .15rem; margin-top: .05rem; font-weight: 900; line-height: 1; filter: drop-shadow(0 4px 14px rgba(0, 0, 0, .55)) drop-shadow(0 0 22px rgba(244, 197, 74, .55)); }
 .fx-lu-lv { font-size: 2rem; padding-bottom: .55rem; color: #ffe9a6; }
 .fx-lu-num { display: inline-grid; overflow: hidden; font-size: 5.2rem; padding: 0 .06em; min-width: .7em; }
 .fx-lu-digit {
   grid-area: 1 / 1; display: block; text-align: center;
-  background: linear-gradient(180deg, #fffbe3 5%, #ffd257 48%, #e0960f 95%); -webkit-background-clip: text; background-clip: text; color: transparent;
+  color: #ffd95e; text-shadow: 0 3px 0 #b97a0c, 0 6px 0 rgba(110, 64, 0, .45);
 }
 .fx-lu-num.fx-lu-final { animation: fxNumGlow 1.2s ease-out 1; }
 .fx-lu-sub {
@@ -120,10 +117,10 @@
 @keyframes fxLuFlashKid { 0% { opacity: 0; } 45% { opacity: .7; } 100% { opacity: .25; } }
 @keyframes fxLuRays { 0% { opacity: 0; } 14% { opacity: 1; } 75% { opacity: .9; } 100% { opacity: 0; } }
 @keyframes fxLuRing { 0% { opacity: 1; transform: scale(.3); } 100% { opacity: 0; transform: scale(14); } }
-@keyframes fxLuPop { 0% { opacity: 0; transform: translateY(-4%) scale(.5); } 60% { opacity: 1; transform: translateY(-4%) scale(1.08); } 100% { opacity: 1; transform: translateY(-4%) scale(1); } }
+@keyframes fxLuPop { 0% { opacity: 0; transform: translateY(-4%) scale(.6); } 60% { opacity: 1; transform: translateY(-4%) scale(1.03); } 100% { opacity: 1; transform: translateY(-4%) scale(1); } }
 @keyframes fxLuOut { to { opacity: 0; transform: translateY(-18px); } }
 @keyframes fxNumGlow { 0% { filter: drop-shadow(0 0 0 rgba(255, 214, 90, 0)); } 30% { filter: drop-shadow(0 0 18px rgba(255, 214, 90, 1)); } 100% { filter: drop-shadow(0 0 0 rgba(255, 214, 90, 0)); } }
-@keyframes fxHop { 0%, 100% { transform: translateY(0) scale(1, 1); } 30% { transform: translateY(-14px) scale(.94, 1.06); } 55% { transform: translateY(0) scale(1.08, .92); } 70% { transform: translateY(-4px) scale(1, 1); } }
+@keyframes fxHop { 0%, 100% { transform: translateY(0) scale(1, 1); } 35% { transform: translateY(-12px) scale(.97, 1.03); } 62% { transform: translateY(0) scale(1.03, .97); } }
 @keyframes fxRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes fxSpin { to { rotate: 360deg; } }
 
@@ -139,7 +136,7 @@
 .fx-stamp-wrap.fx-kid .fx-stamp-text { font-size: 2.9rem; letter-spacing: .02em; }
 .fx-stamp-wrap.fx-kid .fx-stamp-sub { font-size: 1.1rem; }
 .fx-stamp-star { position: absolute; top: -1.4rem; right: -1.1rem; font-size: 2.6rem; transform: rotate(14deg); filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .3)); }
-.fx-stamp-wrap.fx-kid:not(.fx-static) .fx-stamp-star { animation: fxStarPop .6s .35s cubic-bezier(.2, .9, .25, 1.2) both; }
+.fx-stamp-wrap.fx-kid:not(.fx-static) .fx-stamp-star { animation: fxStarPop .6s .35s cubic-bezier(.22, 1, .36, 1) both; }
 @keyframes fxStarPop { from { transform: rotate(-30deg) scale(.2); } to { transform: rotate(14deg) scale(1); } }
 
 /* ------------------------------------------------------------------ shine sweeps (exp bar, achievement toast) */
@@ -178,4 +175,29 @@ body.reduce-motion .fx-stamp, body.reduce-motion .fx-lu-card, body.reduce-motion
   .fx-stamp, .fx-lu-card, .fx-lu-mascot, .fx-lu-num.fx-lu-final { animation: fxFade .25s ease both; }
   .fx-stamp-star { animation: fxFade .4s ease both; }
   .fx-lu-flash { animation: fxLuFlashKid 1.6s ease-in-out both; }
+}
+
+/* ------------------------------------------------------------------ items flying into the 🎒 가방 tile */
+.fx-item {
+  position: absolute; left: 0; top: 0; width: 34px; height: 34px; margin: -17px 0 0 -17px; display: grid; place-items: center;
+  font-size: 28px; line-height: 1; opacity: 0; will-change: transform, opacity;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .45)) drop-shadow(0 0 6px rgba(255, 236, 170, .8));
+}
+.fx-item-chip {
+  position: absolute; transform: translate(-50%, -50%); padding: .1rem .45rem; border-radius: 999px;
+  background: #2fb36a; color: #fff; font-size: .82rem; font-weight: 900; line-height: 1.3; white-space: nowrap;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .9), 0 4px 10px rgba(0, 0, 0, .35);
+  animation: fxChip 1.25s cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes fxChip { 0% { opacity: 0; transform: translate(-50%, -20%) scale(.7); } 18% { opacity: 1; transform: translate(-50%, -60%) scale(1); } 75% { opacity: 1; transform: translate(-50%, -95%); } 100% { opacity: 0; transform: translate(-50%, -125%); } }
+body.easy .fx-item-chip { font-size: 1rem; padding: .15rem .6rem; }
+body.reduce-motion .fx-item-chip { animation: fxFade .25s ease both; }
+
+/* ------------------------------------------------------------------ 3D zone banner on screen: the 2D zone title steps aside,
+   world labels dim for its ~3.5 s so the floating 현판 reads cleanly (the labels fade back afterwards) */
+#labels-layer { transition: opacity .35s ease; }
+body.fx-zone3d #zone-label { visibility: hidden; }
+body.fx-zone3d #labels-layer { opacity: .28; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-item-chip { animation: fxFade .25s ease both; }
 }

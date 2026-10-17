@@ -8,15 +8,18 @@
 //   G.easy.stop() / G.easy.speaking
 //   G.easy.speakable(el, text|fn?) -> 🔊 button appended to el (long-press on touch reads it too)
 //   G.easy.textOf(el)                      the text a long-press / 🔊 reads for an element
-//   G.easy.gate({reason, title}) -> Promise<bool>   parent gate (2-digit × 1-digit, 4 choices, cool-down)
-//   G.easy.gateStatus() / G.easy.lockGate()
+//   G.easy.gate({reason, title}) -> Promise<bool>   parent gate (2 × 2-digit·1-digit in a row, 6 choices, cool-down,
+//        unlock scoped to the screen it opens; logout / devcenter always ask)
+//   G.easy.gateStatus(reason?) / G.easy.lockGate()
 //   G.easy.pick({title, say, emoji, items:[{id, emoji, label, color?, disabled?, badge?, say?, sub?}], columns})
 //        -> Promise<id|null>              big picture chooser (Esc / ⬅️ → null)
 //   G.easy.confirm({emoji, title, text, say, yes, no, danger}) -> Promise<bool>
 //   G.easy.alert({emoji, title, text, say, ok}) -> Promise<void>
 //   G.easy.celebrate(text, {emoji, say, duration, sound}) -> Promise
 //   G.easy.point(target, {label, say, duration=6000, offsetY}) -> {stop(), active}   target: Element | selector |
-//        {x, y?, z} | Object3D ; one hand at a time ; G.easy.stopPoint()
+//        {x, y?, z} | Object3D ; one hand at a time ; G.easy.stopPoint() ; the hand picks the side of the target
+//        (8 directions, round buttons touched on their rim) and the label spot (behind or beside the hand) that
+//        cover the least of the fixed HUD, and keeps the label on screen
 //   G.easy.nextStep() -> {key, emoji, text, say, target:{x,z,label}|null, act?, actLabel?, actEmoji?, progress?}
 //   G.easy.goTo(target {x,z} | zoneOrPoiId, {label, stopDistance}) -> Promise<bool>   (auto-walk / travel)
 //   G.easy.travelMenu() -> Promise<zoneId|null>   picture "어디 갈까?" menu
@@ -43,7 +46,6 @@
   const GATE_TRIES = 3;
   const GATE_COOLDOWN = 30000;      // first cool-down after 3 wrong answers
   const GATE_COOLDOWN_MAX = 300000; // repeated failures double the wait, capped at 5 minutes
-  const GATE_UNLOCK = 5 * 60 * 1000;
   const KID_COLORS = ['#ff8a5c', '#ffc93c', '#55d187', '#4fb3ff', '#b48bff', '#ff7eb6', '#36cfc0', '#ff9f43', '#8fd14f', '#6c8cff', '#f4a7ff', '#ffd166'];
   const RX_COLOR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%+-]{3,40}\))$/i;
 
@@ -250,7 +252,23 @@
   }
 
   // ================================================================ parent gate
-  const Gate = { unlockUntil: 0, wrong: 0, pending: null };
+  // A UX barrier for small children (not an adult security boundary), made hard to beat by blind tapping:
+  //   · 6 big choices, the answer's rank among them is uniform (no "it is usually a middle value" tell)
+  //   · TWO correct answers in a row are needed; a wrong answer starts the streak again
+  //   · 3 wrong answers → cool-down 30 s, doubling per failed round (max 5 min), persisted across reloads
+  //   · one answer per question (a tap locks the grid; the next question arms after a short pause)
+  //   Blind odds per round ≈ 8 % (see G.easy._gateSim), so mashing through the cool-downs takes ~45 minutes.
+  // Unlock scope: a pass opens a short grown-up SESSION bound to the screen it opened (the modal(s) that appear right
+  // after, or the title's 어른 메뉴 view). It ends when that screen closes, on logout / login / profile load, easy-mode
+  // switch, tab hide, or after GATE_IDLE. Logout / developer center / admin / account deletion always ask again;
+  // dangerous switches (아이 채팅 끄기, 보호자 확인 끄기, 쉬운 모드 끄기, 초기화, 가져오기) need a pass from the last GATE_FRESH.
+  const GATE_NEED = 2;
+  const GATE_CHOICES = 6;
+  const GATE_FRESH = 90 * 1000;
+  const GATE_IDLE = 3 * 60 * 1000;
+  const GATE_NO_CACHE = new Set(['logout', 'devcenter', 'admin', 'delete-account']);
+  const GATE_DANGER = new Set(['kid-chat', 'parent-gate', 'easy-off', 'reset', 'import', 'forget']);
+  const Gate = { sess: null, wrong: 0, pending: null, streak: 0, tick: 0 };
   /** persisted gate state: cool-down end, failed rounds (doubling) and the wrong answers of the current round
    *  (so a reload between wrong taps does not hand out fresh tries). Wrong answers older than 10 min expire. */
   const GATE_WRONG_TTL = 10 * 60 * 1000;
@@ -277,34 +295,131 @@
   /** remaining cool-down (ms). A clock moved backwards cannot make it longer than the cap. */
   function cooldownLeft() { return clamp(gateLoad().until - Date.now(), 0, GATE_COOLDOWN_MAX); }
 
-  /** a × b with a 2-digit and b 1-digit; 4 shuffled, plausible, positive, distinct choices */
+  /** unbiased integer in [a, b] (crypto when available: the next question cannot be guessed from the last) */
+  function gateRand(a, b) {
+    const n = b - a + 1;
+    try {
+      const buf = new Uint32Array(1);
+      const lim = Math.floor(0x100000000 / n) * n;
+      do crypto.getRandomValues(buf); while (buf[0] >= lim);
+      return a + (buf[0] % n);
+    } catch (e) { return U.randInt(a, b); }
+  }
+  function gateShuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = gateRand(0, i); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+  /**
+   * a × b with a 2-digit and b 1-digit; 6 shuffled, plausible, positive, distinct choices. How many choices are
+   * SMALLER than the answer is drawn uniformly (0…5), so the answer is the smallest, a middle or the largest value
+   * equally often.
+   */
   function gateQuestion() {
-    const a = U.randInt(12, 98), b = U.randInt(3, 9);
+    const a = gateRand(12, 98), b = gateRand(3, 9);
     const answer = a * b;
-    const pool = [];
-    for (const c of U.shuffle([answer + b, answer - b, answer + 10, answer - 10, answer + a, answer - a, answer + 2 * b, answer - 2 * b, answer + 20, answer - 20])) {
-      if (c > 0 && c !== answer && !pool.includes(c)) pool.push(c);
-      if (pool.length >= 3) break;
+    const n = GATE_CHOICES - 1;
+    const below = gateRand(0, n);
+    const offs = gateShuffle([b, 2 * b, 3 * b, 4 * b, 10, 20, 30, 10 + b, 20 + b, 10 - b > 0 ? 10 - b : 11, a, 2 * b + 10, 1, 2]);
+    const pick = (sign, want, used) => {
+      const out = [];
+      for (const o of offs) {
+        if (out.length >= want) break;
+        const v = answer + sign * o;
+        if (v > 0 && v !== answer && !used.has(v)) { used.add(v); out.push(v); }
+      }
+      for (let k = 3; out.length < want && k < 200; k++) { const v = answer + sign * k; if (v > 0 && !used.has(v)) { used.add(v); out.push(v); } }
+      return out;
+    };
+    const used = new Set([answer]);
+    const lows = pick(-1, below, used);
+    const highs = pick(1, n - lows.length, used);
+    return { a, b, answer, choices: gateShuffle([answer, ...lows, ...highs]) };
+  }
+  /** Monte-Carlo blind-tapping pass rate per round with the real rules (dev-center / tests: must stay ≤ 10 %) */
+  function gateSim(rounds = 20000) {
+    let pass = 0;
+    for (let r = 0; r < rounds; r++) {
+      let streak = 0, wrong = 0;
+      while (wrong < GATE_TRIES) {
+        const q = gateQuestion();
+        if (q.choices[gateRand(0, q.choices.length - 1)] === q.answer) { if (++streak >= GATE_NEED) { pass++; break; } }
+        else { streak = 0; wrong++; }
+      }
     }
-    return { a, b, answer, choices: U.shuffle([answer, ...pool]) };
+    return pass / rounds;
   }
 
-  function gateStatus() {
-    Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong);
-    return { unlocked: nowMs() < Gate.unlockUntil, unlockLeft: Math.max(0, Gate.unlockUntil - nowMs()), cooldownLeft: cooldownLeft(), wrong: Gate.wrong, open: !!Gate.pending, required: isOn() && S().parentGate !== false };
+  // ---- grown-up session (what a pass unlocks, and for how long)
+  function sessAlive() {
+    // apply the screen rules right now as well (the 400 ms timer can lag behind on a busy main thread)
+    if (Gate.sess) sessTick();
+    const s = Gate.sess;
+    if (!s) return false;
+    if (nowMs() > s.until) { lockGate('expired'); return false; }
+    return true;
   }
-  function lockGate() { Gate.unlockUntil = 0; }
+  function canReuse(reason) {
+    if (!sessAlive()) return false;
+    if (GATE_NO_CACHE.has(reason)) return false;
+    if (GATE_DANGER.has(reason) && nowMs() - Gate.sess.at > GATE_FRESH) return false;
+    return true;
+  }
+  function unlock(reason) {
+    const t = nowMs();
+    const s = sessAlive() ? Gate.sess : { modals: new Set(), title: false, closedAt: 0 };
+    s.reason = reason; s.at = t; s.until = t + GATE_IDLE; s.adoptUntil = t + 3000; s.closedAt = 0;
+    Gate.sess = s;
+    if (!Gate.tick) Gate.tick = setInterval(sessTick, 400);
+  }
+  /** the session follows its screen: the modals opened right after the pass (and the title's 어른 메뉴 view) */
+  function sessTick() {
+    const s = Gate.sess;
+    if (!s) { clearInterval(Gate.tick); Gate.tick = 0; return; }
+    const t = nowMs();
+    if (t > s.until) { lockGate('expired'); return; }
+    if (document.querySelector('.title-screen.parent')) { s.title = true; s.closedAt = 0; return; }
+    if (s.title && !s.modals.size) { lockGate('screen-closed'); return; }
+    if (s.modals.size) return;
+    if (s.closedAt) { if (t - s.closedAt > 650) lockGate('screen-closed'); return; }
+    if (t > s.adoptUntil && !G.ui?.modal?.get?.('easy-gate')) lockGate('no-screen'); // the pass only served its own action
+  }
+  G.bus.on('ui:modal-open', ({ id } = {}) => {
+    const s = Gate.sess;
+    if (!s || !id || id === 'easy-gate' || !sessAlive()) return;
+    const t = nowMs();
+    if (t <= s.adoptUntil || s.modals.size > 0 || s.title || (s.closedAt && t - s.closedAt <= 650)) { s.modals.add(String(id)); s.closedAt = 0; }
+  });
+  G.bus.on('ui:modal-close', ({ id } = {}) => {
+    const s = Gate.sess;
+    if (!s || !id) return;
+    if (s.modals.delete(String(id)) && !s.modals.size) s.closedAt = nowMs();
+  });
+  for (const ev of ['game:login', 'state:loaded', 'easy:changed']) G.bus.on(ev, () => lockGate(ev));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) lockGate('hidden'); });
+
+  function gateStatus(reason) {
+    Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong);
+    const alive = sessAlive();
+    const s = Gate.sess;
+    return {
+      unlocked: reason ? canReuse(String(reason)) : alive, unlockLeft: alive ? Math.max(0, s.until - nowMs()) : 0,
+      screens: alive ? [...s.modals] : [], cooldownLeft: cooldownLeft(), wrong: Gate.wrong, streak: Gate.streak, need: GATE_NEED,
+      choices: GATE_CHOICES, tries: GATE_TRIES, open: !!Gate.pending, required: isOn() && S().parentGate !== false,
+    };
+  }
+  function lockGate(why = 'manual') {
+    if (Gate.sess) G.log.info('UI', `parent gate locked (${String(why).slice(0, 20)})`);
+    Gate.sess = null;
+    if (Gate.tick) { clearInterval(Gate.tick); Gate.tick = 0; }
+  }
 
   function gate(opts = {}) {
     const reason = String(opts.reason || 'settings').slice(0, 40);
     const finish = (ok, extra) => { emit('easy:gate', { reason, ok, ...(extra || {}) }); return ok; };
     if (!isOn() || S().parentGate === false) return Promise.resolve(finish(true, { skipped: true }));
-    if (nowMs() < Gate.unlockUntil) return Promise.resolve(finish(true, { cached: true }));
+    if (canReuse(reason)) { Gate.sess.until = nowMs() + GATE_IDLE; return Promise.resolve(finish(true, { cached: true })); }
     if (Gate.pending) return Gate.pending;
     if (!G.ui?.modal) return Promise.resolve(finish(false, { error: 'no-ui' }));
     Gate.pending = new Promise((resolve) => {
       try {
-        openGate(opts, (ok) => { Gate.pending = null; resolve(finish(ok)); });
+        openGate(opts, (ok) => { Gate.pending = null; if (ok) unlock(reason); resolve(finish(ok)); });
       } catch (e) {
         G.log.error('UI', 'easy.gate failed', e);
         Gate.pending = null;
@@ -318,10 +433,13 @@
     // anti-mashing: every question has an id; a tap locks the grid at once (stale/second taps are ignored) and a
     // new question only becomes tappable after a short pause, so rapid tapping gets ONE guess per question.
     let finished = false, q = null, qid = 0, armed = false, coolTimer = 0, armTimer = 0, m = null;
-    const fin = (ok) => { if (finished) return; finished = true; clearInterval(coolTimer); clearTimeout(armTimer); done(ok); };
+    const fin = (ok) => { if (finished) return; finished = true; clearInterval(coolTimer); clearTimeout(armTimer); Gate.streak = 0; done(ok); };
     Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong);
+    Gate.streak = 0;
     const qEl = h('div', { class: 'easy-gate-q' });
     const grid = h('div', { class: 'easy-gate-choices', role: 'group', 'aria-label': '답을 골라요' });
+    grid.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
+    const steps = h('p', { class: 'easy-gate-steps', 'aria-live': 'polite' });
     const status = h('p', { class: 'easy-gate-status', role: 'status', 'aria-live': 'polite' });
     const coolNum = h('b', null, '30');
     const cool = h('div', { class: 'easy-gate-cool', hidden: true },
@@ -329,8 +447,9 @@
     const body = h('div', { class: 'easy-gate' },
       faceEl('think', 76, '🤔'),
       h('p', { class: 'easy-gate-lead' }, '어른과 함께 해요!'),
-      h('p', { class: 'easy-gate-sub' }, String(opts.text || '보호자만 풀 수 있는 문제예요. 맞는 답을 눌러 주세요.').slice(0, 120)),
-      qEl, grid, status, cool);
+      h('p', { class: 'easy-gate-sub' }, String(opts.text || `보호자만 풀 수 있는 문제예요. ${GATE_NEED}문제를 연달아 맞혀 주세요.`).slice(0, 120)),
+      steps, qEl, grid, status, cool);
+    const showSteps = () => { steps.textContent = `${'●'.repeat(Gate.streak)}${'○'.repeat(Math.max(0, GATE_NEED - Gate.streak))}  ${Gate.streak + 1}/${GATE_NEED}번째 문제`; };
 
     const setArmed = (on) => {
       armed = !!on;
@@ -346,7 +465,8 @@
       qEl.setAttribute('aria-label', `${q.a} 곱하기 ${q.b}는?`);
       grid.textContent = '';
       q.choices.forEach((c, i) => grid.appendChild(h('button', { type: 'button', class: 'easy-gate-choice', dataset: { v: String(c), q: String(qid) }, 'aria-label': `${i + 1}번, ${c}` }, String(c))));
-      qEl.hidden = false; grid.hidden = false; cool.hidden = true;
+      qEl.hidden = false; grid.hidden = false; cool.hidden = true; steps.hidden = false;
+      showSteps();
       setArmed(false);
       const my = qid;
       clearTimeout(armTimer);
@@ -358,7 +478,7 @@
     };
     const showCool = () => {
       setArmed(false);
-      qEl.hidden = true; grid.hidden = true; cool.hidden = false;
+      qEl.hidden = true; grid.hidden = true; cool.hidden = false; steps.hidden = true;
       const tick = () => {
         const left = cooldownLeft();
         coolNum.textContent = String(Math.ceil(left / 1000));
@@ -374,15 +494,24 @@
       if (!b || finished || !q || !armed || b.disabled || Number(b.dataset.q) !== qid || !cool.hidden || cooldownLeft() > 0) return;
       setArmed(false);
       if (Number(b.dataset.v) === q.answer) {
-        Gate.unlockUntil = nowMs() + GATE_UNLOCK;
-        Gate.wrong = 0;
-        gateSave({ until: 0, strikes: 0, wrong: 0 });
         b.classList.add('ok');
-        status.textContent = '✅ 확인했어요!';
-        G.sfx('correct');
-        setTimeout(() => { fin(true); m?.close(); }, 320);
+        Gate.streak++;
+        if (Gate.streak >= GATE_NEED) {
+          Gate.wrong = 0;
+          gateSave({ until: 0, strikes: 0, wrong: 0 });
+          status.textContent = '✅ 확인했어요!';
+          steps.textContent = '●'.repeat(GATE_NEED);
+          G.sfx('correct');
+          setTimeout(() => { fin(true); m?.close(); }, 320);
+          return;
+        }
+        status.textContent = '맞았어요! 한 문제 더 풀어요.';
+        G.sfx('tap');
+        const my = qid;
+        setTimeout(() => { if (!finished && cool.hidden && my === qid) render(450); }, 380);
         return;
       }
+      Gate.streak = 0;
       Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong) + 1;
       G.sfx('wrong');
       b.classList.add('bad');
@@ -396,7 +525,7 @@
         showCool();
       } else {
         gateSave({ until: st.until, strikes: st.strikes, wrong: Gate.wrong });
-        status.textContent = `앗, 아니에요. ${GATE_TRIES - Gate.wrong}번 더 할 수 있어요.`;
+        status.textContent = `앗, 아니에요. 처음부터 다시 해요. (${GATE_TRIES - Gate.wrong}번 더 할 수 있어요)`;
         const my = qid;
         setTimeout(() => { if (!finished && cool.hidden && my === qid) render(600); }, 450);
       }
@@ -404,10 +533,10 @@
     body.addEventListener('keydown', (e) => {
       const btns = Array.from(grid.querySelectorAll('.easy-gate-choice'));
       if (!btns.length || grid.hidden || !armed) return;
-      const n = /^(Digit|Numpad)([1-4])$/.exec(e.code);
-      if (n) { e.preventDefault(); btns[Number(n[2]) - 1]?.click(); return; }
+      const n = /^(Digit|Numpad)([1-9])$/.exec(e.code);
+      if (n) { e.preventDefault(); if (!e.repeat) btns[Number(n[2]) - 1]?.click(); return; }
       const i = btns.indexOf(document.activeElement);
-      const move = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 2, ArrowUp: -2 }[e.key];
+      const move = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 3, ArrowUp: -3 }[e.key];
       if (move && i >= 0) { e.preventDefault(); btns[clamp(i + move, 0, btns.length - 1)].focus(); }
     });
     m = G.ui.modal.open({
@@ -590,6 +719,126 @@
     c.el.remove();
     c.lbl?.remove();
   }
+  // ---- collision-aware placement (NEW-4): the hand and its label keep clear of the fixed HUD boxes
+  const HAND_OBST = '#hud-left-menu > *, #hud-profile, #easy-next, #minimap-panel, #easy-where, #easy-chat-btn, #bottom-bar > *, #mobile-controls .joystick, #mobile-controls button, #dpad button, #chat-panel, #quest-panel, #interact-prompt, .coach-layer .coach';
+  /** tip position on the target box + rotation (0 = 👆 pointing up; the hand's body extends away from the tip) */
+  const HAND_DIRS = [
+    { f: (r) => [r.cx, r.bottom + 2], rot: 0 },            // 0 below, pointing up
+    { f: (r) => [r.cx, r.top - 2], rot: 180 },             // 1 above, pointing down
+    { f: (r) => [r.right + 2, r.cy], rot: -90 },           // 2 right, pointing left
+    { f: (r) => [r.left - 2, r.cy], rot: 90 },             // 3 left, pointing right
+    // diagonals: a round / square-ish target is touched on its 45° rim (closer to the button, less HUD covered in a
+    // crowded corner such as the phone's 👆 between 달리기 and 점프); a wide bar near its corner
+    { f: (r) => (r.round ? [r.cx + r.ex, r.cy - r.ey] : [r.right - r.qx, r.top - 2]), rot: -135 },   // 4 above-right, pointing down-left
+    { f: (r) => (r.round ? [r.cx - r.ex, r.cy - r.ey] : [r.left + r.qx, r.top - 2]), rot: 135 },     // 5 above-left, pointing down-right
+    { f: (r) => (r.round ? [r.cx + r.ex, r.cy + r.ey] : [r.right - r.qx, r.bottom + 2]), rot: -45 },  // 6 below-right, pointing up-left
+    { f: (r) => (r.round ? [r.cx - r.ex, r.cy + r.ey] : [r.left + r.qx, r.bottom + 2]), rot: 45 },   // 7 below-left, pointing up-right
+  ];
+  /** [distance from the fingertip along the hand, half size] of the squares that approximate the glyph */
+  const HAND_CAPS = [[24, 20], [42, 22], [60, 18]];
+  const HAND_PREFER_BELOW = [0, 6, 7, 2, 3, 1, 4, 5];
+  const HAND_PREFER_ABOVE = [1, 4, 5, 2, 3, 0, 6, 7];
+  function handObstacles(c, targetEl) {
+    const t = nowMs();
+    if (c.obs && t - c.obsAt < 250) return c.obs;
+    const out = [];
+    let list = [];
+    try { list = document.querySelectorAll(HAND_OBST); } catch (e) { list = []; }
+    for (const el of list) {
+      if (targetEl && (el === targetEl || el.contains(targetEl) || targetEl.contains(el))) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
+      const st = getComputedStyle(el);
+      if (st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) < 0.05) continue;
+      out.push(r);
+    }
+    c.obs = out; c.obsAt = t;
+    return out;
+  }
+  function boxOverlap(a, b) {
+    const w = Math.min(a.r, b.right) - Math.max(a.l, b.left), hh = Math.min(a.b, b.bottom) - Math.max(a.t, b.top);
+    return w > 0 && hh > 0 ? w * hh : 0;
+  }
+  function boxOffscreen(a) {
+    const vis = Math.max(0, Math.min(a.r, innerWidth) - Math.max(a.l, 0)) * Math.max(0, Math.min(a.b, innerHeight) - Math.max(a.t, 0));
+    return (a.r - a.l) * (a.b - a.t) - vis;
+  }
+  /** label centre distance from the tip along the hand's axis (clears the hand for sideways hands too) */
+  function labelDist(c, rot) {
+    const a = rot / 57.29578;
+    return 84 + Math.max(((c.lh || 38) / 2) * Math.abs(Math.cos(a)), ((c.lw || 120) / 2) * Math.abs(Math.sin(a)));
+  }
+  /** sideways steps (in label half-sizes) tried for the label when the spot straight along the hand is taken */
+  const LABEL_SHIFTS = [0, 0.75, -0.75, 1.4, -1.4];
+  const _sb = { l: 0, r: 0, t: 0, b: 0 }, _lb = { left: 0, right: 0, top: 0, bottom: 0 }; // scratch boxes (placement runs every frame)
+  function scoreBox(cx, cy, hw, hh, box, obs, wObs) {
+    _sb.l = cx - hw; _sb.r = cx + hw; _sb.t = cy - hh; _sb.b = cy + hh;
+    let s = boxOffscreen(_sb) * 3 + boxOverlap(_sb, box) * 1.5;
+    for (const o of obs) s += boxOverlap(_sb, o) * wObs;
+    return s;
+  }
+  /** the 👆 glyph (52 px, bobbing 2–14 px) as a short capsule of squares along the hand's axis: right for diagonal
+   *  hands too (one rotated box's bounding square would reach back over the very target the finger touches) */
+  function handScore(x, y, dx, dy, box, obs) {
+    let s = 0;
+    for (const [d, hs] of HAND_CAPS) s += scoreBox(x + dx * d, y + dy * d, hs, hs, box, obs, 1);
+    return s;
+  }
+  /** best label spot for a hand at (x, y) pointing along (dx, dy): straight behind the hand, else a little to the
+   *  side (a label is wider than the hand, so it is usually the label that would sit on a neighbouring button) */
+  function labelSpot(c, x, y, rot, dx, dy, box, obs, out) {
+    const d = labelDist(c, rot), hw = c.lw / 2, hh = c.lh / 2;
+    const px = -dy, py = dx; // perpendicular to the hand
+    const unit = Math.abs(px) * (hw + 10) + Math.abs(py) * (hh + 10);
+    let best = Infinity;
+    for (const k of LABEL_SHIFTS) {
+      const lx = x + dx * d + px * unit * k, ly = y + dy * d + py * unit * k;
+      let sc = scoreBox(lx, ly, hw, hh, box, obs, 1.2) + Math.abs(k) * 40;
+      // a shifted label must not sit on its own hand
+      _lb.left = lx - hw; _lb.right = lx + hw; _lb.top = ly - hh; _lb.bottom = ly + hh;
+      for (const [hd, hs] of HAND_CAPS) {
+        _sb.l = x + dx * hd - hs; _sb.r = x + dx * hd + hs; _sb.t = y + dy * hd - hs; _sb.b = y + dy * hd + hs;
+        sc += boxOverlap(_sb, _lb) * 1.5;
+      }
+      if (sc < best) { best = sc; if (out) { out[0] = lx - x; out[1] = ly - y; } }
+    }
+    return best;
+  }
+  function placeScore(c, x, y, rot, box, obs, rank, lo) {
+    const a = rot / 57.29578, dx = -Math.sin(a), dy = Math.cos(a);
+    let s = rank * 60 + handScore(x, y, dx, dy, box, obs);
+    if (c.lbl) s += labelSpot(c, x, y, rot, dx, dy, box, obs, lo);
+    return s;
+  }
+  /** the side of the target where hand + label cover the least HUD; sticky (switches only when clearly better) */
+  function bestPlace(c, rect, targetEl, prefer) {
+    const obs = handObstacles(c, targetEl);
+    const box = { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    const w = rect.right - rect.left, hgt = rect.bottom - rect.top;
+    const r = {
+      ...box, cx: (rect.left + rect.right) / 2, cy: (rect.top + rect.bottom) / 2, qx: Math.min(w * 0.25, 24),
+      round: hgt > 0 && w / hgt >= 0.75 && w / hgt <= 1.33, ex: w * 0.3536 + 1.5, ey: hgt * 0.3536 + 1.5,
+    };
+    let best = null;
+    prefer.forEach((di, rank) => {
+      const d = HAND_DIRS[di];
+      const [x, y] = d.f(r);
+      const sc = placeScore(c, x, y, d.rot, box, obs, rank, null);
+      if (!best || sc < best.s) best = { di, x, y, rot: d.rot, s: sc };
+    });
+    let di = best.di;
+    if (c.place != null && c.place !== best.di && prefer.includes(c.place)) {
+      const d = HAND_DIRS[c.place];
+      const [x, y] = d.f(r);
+      if (placeScore(c, x, y, d.rot, box, obs, prefer.indexOf(c.place), null) <= best.s + 600) di = c.place;
+    }
+    c.place = di;
+    const d = HAND_DIRS[di];
+    const [x, y] = d.f(r);
+    const lo = c.lo || (c.lo = [0, 0]);
+    if (c.lbl) placeScore(c, x, y, d.rot, box, obs, 0, lo);
+    return { x, y, rot: d.rot, edge: false, lo: c.lbl ? lo : null };
+  }
   function handPos(c) {
     const t = c.target;
     if (t.sel || t.el) {
@@ -600,9 +849,8 @@
       if (r.width < 2 || r.height < 2) return null;
       const st = getComputedStyle(el);
       if (st.visibility === 'hidden' || Number(st.opacity) === 0) return null;
-      const cx = r.left + r.width / 2;
-      if (r.bottom + 96 < innerHeight) return { x: cx, y: r.bottom + 2, rot: 0, edge: false };
-      return { x: cx, y: r.top - 2, rot: 180, edge: false };
+      // below the target when there is room, otherwise above — then whichever side covers the least HUD (NEW-4)
+      return bestPlace(c, r, el, r.bottom + 96 < innerHeight ? HAND_PREFER_BELOW : HAND_PREFER_ABOVE);
     }
     const eng = G.sys.engine;
     if (!eng || !eng.camera) return null;
@@ -617,7 +865,9 @@
       _hv.set(t.x, y, t.z);
     }
     const s = eng.worldToScreen(_hv);
-    if (s.visible && s.y > 60 && s.y < innerHeight - 40 && s.x > 30 && s.x < innerWidth - 30) return { x: s.x, y: s.y - 4, rot: 180, edge: false };
+    if (s.visible && s.y > 60 && s.y < innerHeight - 40 && s.x > 30 && s.x < innerWidth - 30) {
+      return bestPlace(c, { left: s.x - 6, right: s.x + 6, top: s.y + 2, bottom: s.y + 14 }, null, HAND_PREFER_ABOVE);
+    }
     // off-screen / behind the camera: an edge hand pointing towards the target (camera space direction)
     eng.camera.updateMatrixWorld();
     _hc.copy(_hv).applyMatrix4(eng.camera.matrixWorldInverse);
@@ -642,13 +892,19 @@
       c.missing = 0;
       if (!c.shown) { c.shown = true; c.el.style.opacity = ''; if (c.lbl) c.lbl.style.opacity = ''; }
       const x = Math.round(p.x), y = Math.round(p.y), rot = Math.round(p.rot);
-      if (x !== c.x || y !== c.y || rot !== c.rot) {
-        c.x = x; c.y = y; c.rot = rot;
+      const lox = p.lo ? Math.round(p.lo[0]) : 1e9, loy = p.lo ? Math.round(p.lo[1]) : 1e9; // 1e9 = straight behind
+      if (x !== c.x || y !== c.y || rot !== c.rot || lox !== c.lox || loy !== c.loy) {
+        c.x = x; c.y = y; c.rot = rot; c.lox = lox; c.loy = loy;
         c.el.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(${rot}deg)`;
         c.el.classList.toggle('edge', !!p.edge);
         if (c.lbl) {
-          const a = rot / 57.29578, d = 104;
-          const lx = Math.round(x - Math.sin(a) * d), ly = Math.round(y + Math.cos(a) * d);
+          // the spot chosen with the hand (bestPlace), or straight behind an edge hand
+          let lx = x + lox, ly = y + loy;
+          if (!p.lo) { const a = rot / 57.29578, d = labelDist(c, rot); lx = x - Math.sin(a) * d; ly = y + Math.cos(a) * d; }
+          // keep the whole label on screen (8 px margin) when the hand sits near an edge
+          const hw = (c.lw || 120) / 2 + 8, hh = (c.lh || 38) / 2 + 8;
+          lx = Math.round(clamp(lx, hw, Math.max(hw, innerWidth - hw)));
+          ly = Math.round(clamp(ly, hh, Math.max(hh, innerHeight - hh)));
           c.lbl.style.transform = `translate3d(${lx}px, ${ly}px, 0) translate(-50%, -50%)`;
         }
       }
@@ -672,6 +928,7 @@
       const c = {
         el, lbl, target: t, start: nowMs(), dur: opts.duration == null ? 6000 : Math.max(0, Number(opts.duration) || 0),
         x: NaN, y: NaN, rot: NaN, missing: 0, shown: false, offsetY: Number.isFinite(opts.offsetY) ? opts.offsetY : undefined, tapEl: null,
+        lw: lbl ? (lbl.offsetWidth || 120) : 0, lh: lbl ? (lbl.offsetHeight || 38) : 0, place: null, obs: null, obsAt: -1e9,
       };
       const handle = { stop() { if (Hand.cur === c) stopPoint(); }, get active() { return Hand.cur === c; } };
       c.onTap = () => setTimeout(() => handle.stop(), 0); // the child followed the hint
@@ -1236,6 +1493,7 @@
     josa,
     // internals exposed for the developer center self-tests
     _gateQuestion: gateQuestion,
+    _gateSim: gateSim,
     _speechText: speechText,
     _voice: Voice,
   };

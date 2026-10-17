@@ -1,6 +1,6 @@
 <?php
 /**
- * Chat text hygiene: normalization and bad-word masking (mirrors the client filter in 60-social.js).
+ * Chat text hygiene: bad-word masking and personal-information masking (mirrors the client filter in 60-social.js).
  *  - letters may be glued with punctuation anywhere ("s.h.i.t", "시.발", "bullshit"),
  *  - whitespace may split a word only when the whole word stands alone ("f u c k", "개 새끼"), so innocent
  *    text such as "this hit" or "그 병 신경" is left alone,
@@ -73,147 +73,276 @@ final class ChatFilter
     }
 
     // ------------------------------------------------------------------ personal information (kid safety, CONTRACT §12.4)
+    // Mirror of the client engine in src/game/60-social.js ("PII ENGINE"). The ORDERED RULES are generated from the
+    // client by tests/pii-sync.mjs into lib/pii-rules.json (one list for both sides); the fold below and the two
+    // predicates (notCounting, wordDigits) are hand-mirrored and checked by the shared vectors in tests/pii-vectors.json
+    // (tests/server-e2e.mjs + tests/pii-client.mjs, which also diff client vs server output).
+    //
+    // The text is cut into units, one per code point, each with the "folded" form the rules see (invisible / format
+    // characters and combining marks vanish, NFKC, every digit script + dingbat / CJK numerals → ASCII digits,
+    // lower case, O/l look-alikes inside digit tokens → 0/1, "k i d d i n o" spaced letters join). Every match is
+    // mapped back to the ORIGINAL characters it covers, so only the masked part changes.
     public const PII_MARK = '🔒';
-    private const CITY = '(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|충청북|충청남|전북|전남|전라북|전라남|경북|경남|경상북|경상남|제주)';
-    /** messenger / SNS names: Korean names may be followed directly by an id, latin ones need "id", ":" or "@" */
-    private const SNS_KO = '(?:카톡|카카오톡|카카오|오픈채팅|오픈톡|인스타(?:그램)?|틱톡|디엠|텔레그램|텔레|라인|디코|디스코드|페메|페북|페이스북|유튜브|트위터|스냅챗|위챗|왓츠앱)';
-    private const SNS_EN = '(?:insta(?:gram)?|tiktok|dm|telegram|line|discord|facebook|fb|youtube|twitter|snapchat|wechat|whatsapp|kakao(?:talk)?)';
+    private const PII_MAX = 400; // code points looked at (chat ≤ 120, reports ≤ 300)
+    /** invisible characters removed by Users::cleanText (same list as INVISIBLE_RANGES in 60-social.js) */
+    public const INVISIBLE_CLASS = '\x{0000}-\x{001F}\x{007F}-\x{009F}\x{00AD}\x{034F}\x{061C}\x{115F}-\x{1160}\x{17B4}-\x{17B5}\x{180E}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}\x{3164}\x{FEFF}\x{FFA0}\x{FFF0}-\x{FFFB}\x{E0000}-\x{E007F}';
 
-    /** separators people put between digit groups: spaces . - _ / ~ * · – — ㅡ ( ) [ ] (ᅳ = ㅡ after NFKC) */
-    private const SEP = '[\s.\-_\/~*·–—ㅡᅳ()\[\]]';
-    /** a digit written as a numeral or as a Korean digit word (공/영 일 이 삼 사 오 육 칠 팔 구) */
-    private const KDIGIT = '[공영일이삼사오육칠팔구]';
+    private static ?array $rules = null;
+    private static array $foldCache = [];
 
     /**
-     * Ordered patterns (most specific first). Each match is replaced with 🔒. The client mirror is
-     * G.sys.social.maskPII (60-social.js); keep both lists in sync (docs/HANDOVER.md "어린이 안전",
-     * shared test vectors in tests/pii-vectors.json).
-     * Deliberately conservative where Korean grammar collides (…으로 3번, 새로 30개, 서울 친구, 유치원 가기 싫어).
-     * A pattern given as [regex, predicate] only masks matches the predicate accepts.
+     * Ordered rules from lib/pii-rules.json: [name => [pcre, predicate|null]]. A missing / broken file is a deploy
+     * error: it is logged and the built-in fallback (phones, e-mails, URLs) keeps the most important cases covered.
      */
     private static function piiPatterns(): array
     {
-        static $p = null;
-        if ($p !== null) return $p;
-        $c = self::CITY;
-        $sep = self::SEP;
-        $kd = self::KDIGIT;
-        // number followed by a counter word is a count, not an address ("새로 30개", "2층으로 3번")
-        $notCount = '(?![0-9개번명층살점분초시원마리등위레렙일월년주판칸장권%])';
-        $lotTail = '(?:\s*[0-9]{1,5}(?:\s*-\s*[0-9]{1,5})?' . $notCount . '(?:\s*번지)?)?';
-        $tld = '(?:com|net|org|kr|io|me|gg|tv|ly|app|xyz|info|biz|link|site|shop|jp|cn|us|co|to|be|fm|so|ai)';
-        return $p = [
-            // e-mail, also spelled out: "abc 골뱅이 naver 닷 com", "abc(at)gmail(dot)com", "dino at gmail dot com", "… 지메일 닷컴"
-            'email' => '/[\p{L}\p{N}._%+\-]+\s*(?:@|＠|\(at\)|\[at\]|골뱅이)\s*[\p{L}\p{N}\-]+(?:\s*(?:\.|。|．|\(dot\)|\[dot\]|\(\.\)|\[\.\]|닷|쩜)\s*(?:[a-z]{2,}|컴|넷|케이알))+/iu',
-            // fully spelled in English: "dinokid at gmail dot com" (needs both words, so "I'm at home. so" stays)
-            'emailWords' => '/[\p{L}\p{N}._%+\-]+\s+at\s+[\p{L}\p{N}\-]+(?:\s+dot\s+[a-z]{2,})+/iu',
-            // URL / bare domain / mail provider
-            'url' => '/(?:https?:\/\/|hxxps?:\/\/|www\.)[^\s<>"]+|(?<![\p{L}\p{N}@.\-])[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?(?:\.[a-z0-9\-]{1,63})*\.' . $tld . '(?![a-z0-9])(?:\/[^\s<>"]*)?/iu',
-            // domain with a disguised dot: "bad[.]com", "bad(.)com", "bad . com", "bad dot com", "bad 닷 com"
-            'urlDot' => '/(?<![\p{L}\p{N}@.\-])[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\s*(?:\[\s*\.\s*\]|\(\s*\.\s*\)|\{\s*\.\s*\}|\[dot\]|\(dot\)|\s\.\s|\s+dot\s+|\s*닷\s*|\s*쩜\s*)' . $tld . '(?![a-z0-9])/iu',
-            'mailHost' => '/(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud)\s*(?:\.|닷|쩜|점)\s*(?:com|net|co\s*\.\s*kr)(?![a-z])/iu',
-            // messenger / SNS handle: "카톡 아이디 abc123", "인스타 @dino_kid", "discord: kid#1234", "kakao id dino12"
-            'handleKo' => '/' . self::SNS_KO . '\s*(?:아이디|아디|id|계정|주소|닉네임|닉)?\s*(?:은|는|이|:|：)?\s*@?[a-z0-9][a-z0-9._#\-]{2,}/iu',
-            'handleEn' => '/(?<![a-z0-9])' . self::SNS_EN . '\s*(?:id\s*[:：]?|[:：]|@)\s*@?[a-z0-9][a-z0-9._#\-]{2,}/iu',
-            // phone numbers: mobile / +82 / landline, any common separator ("010/1234/5678", "010ㅡ1234ㅡ5678")
-            'phone' => '/(?<![0-9])(?:\+\s?82' . $sep . '{0,3}0?|0)1[016789]' . $sep . '{0,3}[0-9]{3,4}' . $sep . '{0,3}[0-9]{4}(?![0-9])/u',
-            'landline' => '/(?<![0-9])0(?:2|[3-6][1-5]|70|50[0-9]?)' . $sep . '{0,3}[0-9]{3,4}' . $sep . '{0,3}[0-9]{4}(?![0-9])/u',
-            'digits' => '/(?<![0-9])(?:[0-9]' . $sep . '{0,3}){8,}[0-9](?![0-9])/u', // ≥ 9 digits in a row: phone, ID, card numbers
-            // a local number without area code: "1234-5678" (dash/dot-like separators only; "1000 2000" stays)
-            'localNumber' => '/(?<![0-9])[0-9]{3,4}[.\-–—ㅡᅳ]+[0-9]{4}(?![0-9])/u',
-            // phone spelled with Korean digit words, separators allowed: "공일공-일이삼사-오육칠팔", "일이삼사 오육칠팔"
-            'koreanDigits' => '/(?:' . $kd . $sep . '{0,2}){7,}' . $kd . '|공일공/u',
-            // numerals and digit words mixed: "010 일이삼사 5678", "공1공 1234 5678"
-            'mixedDigits' => ['/(?:[0-9]|' . $kd . ')(?:' . $sep . '{0,2}(?:[0-9]|' . $kd . ')){7,}/u', fn (string $m): bool => (bool) preg_match('/[0-9]/', $m) && (bool) preg_match('/' . self::KDIGIT . '/u', $m)],
-            // street addresses (a trailing lot number goes with them: "서울시 강남구 역삼동 123-4")
-            'cityDistrict' => '/' . $c . '(?:(?:특별시|광역시|특별자치시|특별자치도|시|도)\s*[가-힣]{1,5}|\s*[가-힣]{2,5})(?:시|군|구)(?![가-힣])(?:\s*[가-힣]{1,5}(?:구|읍|면|동|리)(?![가-힣]))*' . $lotTail . '/u',
-            'districtDong' => '/[가-힣]{2,5}(?:구|군)\s*[가-힣]{1,6}(?:동|읍|면|리)(?![가-힣])' . $lotTail . '/u',
-            'road' => '/[가-힣0-9]{1,10}(?<![으새서별주바따실])(?:로|길)\s*(?:[0-9]{1,4}\s*번길\s*)?[0-9]{1,4}(?:\s*-\s*[0-9]{1,4})?' . $notCount . '(?:\s*번지)?/u',
-            'lot' => '/[가-힣]{1,8}(?:동|리|가)\s*[0-9]{1,5}(?:\s*-\s*[0-9]{1,5})?\s*번지|[가-힣]{1,8}(?:동|리)\s*[0-9]{1,5}\s*-\s*[0-9]{1,5}/u',
-            'apartment' => '/[0-9]{1,4}\s*동\s*[0-9]{1,4}\s*호|(?<![0-9])[0-9]{3,4}\s*호(?![선기실점])|[가-힣a-z0-9]{1,12}(?:아파트|빌라|오피스텔|맨션)(?![가-힣])/iu',
-            // school / kindergarten / class ("해바라기 초등학교" with a space too; "유치원 가기 싫어" stays)
-            'school' => '/[가-힣]{1,10}(?:초등학교|초교|중학교|고등학교|유치원|어린이집)|[가-힣]{2,10}\s(?:초등학교|중학교|고등학교)|[0-9]\s*학년\s*[0-9]{1,2}\s*반/u',
-        ];
+        if (self::$rules !== null) return self::$rules;
+        $out = [];
+        $file = __DIR__ . '/pii-rules.json';
+        $j = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
+        $list = is_array($j) && is_array($j['rules'] ?? null) ? $j['rules'] : [];
+        foreach ($list as $r) {
+            if (!is_array($r) || !is_string($r['src'] ?? null) || !is_string($r['name'] ?? null)) continue;
+            $flags = preg_replace('/[^iu]/', '', (string) ($r['flags'] ?? 'u')) ?: 'u';
+            if (!str_contains($flags, 'u')) $flags .= 'u';
+            $re = '/' . $r['src'] . '/' . $flags;
+            if (@preg_match($re, '') === false) { Log::error('CHAT', 'PII rule does not compile', ['rule' => $r['name']]); continue; }
+            $pred = match ($r['pred'] ?? null) { 'piiNotCounting' => [self::class, 'notCounting'], 'piiWordDigits' => [self::class, 'wordDigits'], default => null };
+            $out[$r['name']] = [$re, $pred];
+        }
+        if (!$out) {
+            Log::error('CHAT', 'lib/pii-rules.json missing or empty — using the minimal fallback (run node tests/pii-sync.mjs)');
+            $out = [
+                'email' => ['/[\p{L}\p{N}._%+\-]+\s*(?:@|골뱅이)\s*[\p{L}\p{N}\-]+(?:\s*(?:\.|닷|쩜|점)\s*[a-z0-9]{2,})+/iu', null],
+                'url' => ['/(?:https?:\/\/|www\.)[^\s<>"]+/iu', null],
+                'phone' => ['/(?<![0-9])0[0-9](?:[^\p{L}\p{N}]{0,6}[0-9]){7,10}(?![0-9])/u', null],
+            ];
+        }
+        return self::$rules = $out;
     }
 
-    /** one masking pass over $text with every pattern; $hits += masked fragments */
-    private static function maskPass(string $text, int &$hits): string
+    /** names of the loaded rules in order (admin health / tests) */
+    public static function piiRuleNames(): array { return array_keys(self::piiPatterns()); }
+
+    // ---- predicates (60-social piiNotCounting / piiWordDigits)
+    /** counting, not contact data: the same group repeated, 1 2 3 … / 10 20 30 …, a round number, 123456789, a date */
+    public static function notCounting(string $m): bool
     {
-        $out = $text;
-        foreach (self::piiPatterns() as $pat) {
-            if (is_array($pat)) {
-                [$re, $ok] = $pat;
-                $n = 0;
-                $r = preg_replace_callback($re, function (array $m) use ($ok, &$n): string {
-                    if (!$ok($m[0])) return $m[0];
-                    $n++;
-                    return self::PII_MARK;
-                }, $out);
-            } else {
-                $r = preg_replace($pat, self::PII_MARK, $out, -1, $n);
+        $g = array_values(array_filter(preg_split('/[^0-9]+/', $m) ?: [], 'strlen'));
+        if (!$g) return false;
+        $all = implode('', $g);
+        if (preg_match('/^([0-9])\1+$/', $all)) return false;
+        if (preg_match('/^\s*[0-9]+\.[0-9]+\s*$/u', $m)) return false;
+        if (preg_match('/^\s*(?:[0-2]?[0-9]:[0-5][0-9][^0-9]*)+$/u', $m)) return false;
+        if (count($g) === 1) return !(preg_match('/^[1-9]0+$/', $all) || self::isRun($all));
+        if (count($g) >= 3) {
+            if (count(array_unique($g)) === 1) return false;
+            $v = array_map('intval', $g);
+            $d = $v[1] - $v[0];
+            if ($d !== 0) {
+                $ap = true;
+                for ($i = 1, $n = count($v); $i < $n; $i++) if ($v[$i] - $v[$i - 1] !== $d) { $ap = false; break; }
+                if ($ap) return false;
             }
-            if ($r === null) continue; // PCRE limit (pathological input): keep what we have, other patterns still run
-            $out = $r;
-            $hits += $n;
+            if ($v[0] >= 1900 && $v[0] <= 2099 && $v[1] >= 1 && $v[1] <= 12 && $v[2] >= 1 && $v[2] <= 31) return false;
         }
-        return $out;
+        return true;
     }
 
-    /**
-     * Compatibility fold used to see through disguises: NFKC (full-width ０１０ / ＠ / ．, 𝟎𝟏𝟎 …), keycap emoji
-     * (0️⃣ → 0) and every other decimal digit script (٠١٠ → 010) to ASCII digits.
-     */
-    public static function fold(string $text): string
+    /** 123456789 / 987654321 (each digit one up or one down) */
+    private static function isRun(string $s): bool
     {
-        $t = $text;
-        if (class_exists(\Normalizer::class)) {
-            // NFKC everything except Hangul compatibility jamo (ㅋㅋ, ㅠㅠ, ㅡ stay as typed when the folded text is shown)
-            $t = preg_replace_callback('/[^\x{3130}-\x{318F}]+/u', function (array $m): string {
-                $n = \Normalizer::normalize($m[0], \Normalizer::FORM_KC);
-                return is_string($n) ? $n : $m[0];
-            }, $t) ?? $t;
-        } else {
-            // no intl extension: the common compatibility forms by hand (full-width ASCII, ideographic space, math digits)
-            $t = preg_replace_callback('/[\x{FF01}-\x{FF5E}\x{3000}\x{1D7CE}-\x{1D7FF}\x{1FBF0}-\x{1FBF9}]/u', function (array $m): string {
-                $cp = mb_ord($m[0], 'UTF-8');
-                if ($cp === 0x3000) return ' ';
-                if ($cp >= 0x1D7CE && $cp <= 0x1D7FF) return (string) (($cp - 0x1D7CE) % 10);
-                if ($cp >= 0x1FBF0) return (string) ($cp - 0x1FBF0);
-                return mb_chr($cp - 0xFEE0, 'UTF-8');
-            }, $t) ?? $t;
+        $n = strlen($s);
+        if ($n < 3) return false;
+        $up = $dn = true;
+        for ($i = 1; $i < $n; $i++) {
+            $a = ord($s[$i - 1]) - 48;
+            $b = ord($s[$i]) - 48;
+            if ($b !== ($a + 1) % 10) $up = false;
+            if ($b !== ($a + 9) % 10) $dn = false;
         }
-        $t = preg_replace('/[\x{FE0E}\x{FE0F}\x{20E3}]/u', '', $t) ?? $t;
-        // any remaining non-ASCII decimal digit: Unicode encodes each digit set as 10 contiguous code points 0..9
-        $t = preg_replace_callback('/(?![0-9])\p{Nd}/u', function (array $m): string {
-            $cp = mb_ord($m[0], 'UTF-8');
-            $z = $cp;
-            while ($cp - $z < 9 && $z > 0 && preg_match('/^\p{Nd}$/u', mb_chr($z - 1, 'UTF-8'))) $z--;
-            return (string) (($cp - $z) % 10);
-        }, $t) ?? $t;
-        return $t;
+        return $up || $dn;
+    }
+
+    private const WORD_DIGITS = ['다섯' => '5', '여섯' => '6', '일곱' => '7', '여덟' => '8', '아홉' => '9', '하나' => '1', '둘' => '2', '셋' => '3', '넷' => '4',
+        'zero' => '0', 'oh' => '0', 'one' => '1', 'two' => '2', 'three' => '3', 'four' => '4', 'five' => '5', 'six' => '6', 'seven' => '7', 'eight' => '8', 'nine' => '9',
+        '공' => '0', '영' => '0', '빵' => '0', '일' => '1', '이' => '2', '삼' => '3', '사' => '4', '오' => '5', '육' => '6', '륙' => '6', '칠' => '7', '팔' => '8', '구' => '9'];
+    private const WORD_DIGIT_RE = '/다섯|여섯|일곱|여덟|아홉|하나|둘|셋|넷|zero|one|two|three|four|five|six|seven|eight|nine|oh|[공영빵일이삼사오육륙칠팔구]/u';
+
+    /** a run of digit words (maybe with numerals) shaped like a phone / local number, not counting */
+    public static function wordDigits(string $m): bool
+    {
+        $t = preg_replace('/하고|이랑|그리고|랑|and/u', ' ', mb_strtolower($m)) ?? '';
+        if (!preg_match(self::WORD_DIGIT_RE, $t)) return false; // numerals only: the digit rules decide
+        $d = preg_replace_callback(self::WORD_DIGIT_RE, fn (array $x): string => self::WORD_DIGITS[$x[0]] ?? $x[0], $t) ?? '';
+        $d = trim(preg_replace('/[^0-9]+/', ' ', $d) ?? '');
+        $g = array_values(array_filter(explode(' ', $d), 'strlen'));
+        $all = implode('', $g);
+        $len = strlen($all);
+        if ($len < 8 || $len > 14 || !self::notCounting($d)) return false;
+        if ($all[0] === '0' && $len >= 9) return true;
+        $n = count($g);
+        if ($n >= 2 && strlen($g[$n - 1]) === 4 && strlen($g[$n - 2]) >= 3) return true;
+        return preg_match('/[0-9]/', $m) === 1 && $len >= 9;
+    }
+
+    // ---- fold (60-social piiFoldChar)
+    /** dingbat / double-circled digits that NFKC leaves alone */
+    private static function digitLike(int $cp): ?string
+    {
+        if ($cp >= 0x2776 && $cp <= 0x277F) return (string) ($cp - 0x2775);
+        if ($cp >= 0x2780 && $cp <= 0x2789) return (string) ($cp - 0x277F);
+        if ($cp >= 0x278A && $cp <= 0x2793) return (string) ($cp - 0x2789);
+        if ($cp >= 0x24EB && $cp <= 0x24F4) return (string) ($cp - 0x24EB + 11);
+        if ($cp >= 0x24F5 && $cp <= 0x24FE) return (string) ($cp - 0x24F4);
+        if ($cp === 0x24FF) return '0';
+        return null;
+    }
+
+    private const CJK_DIGITS = ['〇' => '0', '零' => '0', '一' => '1', '二' => '2', '三' => '3', '四' => '4', '五' => '5', '六' => '6', '七' => '7', '八' => '8', '九' => '9'];
+
+    /** NFKC of one character; without the intl extension the common compatibility forms by hand */
+    private static function nfkc(string $c): string
+    {
+        if (class_exists(\Normalizer::class)) {
+            $n = \Normalizer::normalize($c, \Normalizer::FORM_KC);
+            return is_string($n) ? $n : $c;
+        }
+        $cp = mb_ord($c, 'UTF-8');
+        if ($cp === false) return $c;
+        if ($cp >= 0xFF01 && $cp <= 0xFF5E) return mb_chr($cp - 0xFEE0, 'UTF-8');                       // full-width ASCII
+        if ($cp === 0x3000 || $cp === 0x00A0 || ($cp >= 0x2000 && $cp <= 0x200A) || $cp === 0x202F || $cp === 0x205F) return ' ';
+        if ($cp >= 0x1D7CE && $cp <= 0x1D7FF) return (string) (($cp - 0x1D7CE) % 10);                    // math digits
+        if ($cp >= 0x1FBF0 && $cp <= 0x1FBF9) return (string) ($cp - 0x1FBF0);
+        if ($cp === 0x2070) return '0';
+        if ($cp === 0x00B9) return '1';
+        if ($cp === 0x00B2) return '2';
+        if ($cp === 0x00B3) return '3';
+        if ($cp >= 0x2074 && $cp <= 0x2079) return (string) ($cp - 0x2070);                               // superscripts
+        if ($cp >= 0x2080 && $cp <= 0x2089) return (string) ($cp - 0x2080);                               // subscripts
+        if ($cp >= 0x2460 && $cp <= 0x2473) return (string) ($cp - 0x245F);                               // ① … ⑳
+        if ($cp >= 0x2474 && $cp <= 0x2487) return '(' . ($cp - 0x2473) . ')';
+        if ($cp >= 0x2488 && $cp <= 0x249B) return ($cp - 0x2487) . '.';
+        if ($cp === 0x24EA) return '0';
+        if ($cp >= 0x24B6 && $cp <= 0x24CF) return chr(0x61 + $cp - 0x24B6);                             // Ⓐ … Ⓩ
+        if ($cp >= 0x24D0 && $cp <= 0x24E9) return chr(0x61 + $cp - 0x24D0);                             // ⓐ … ⓩ
+        if ($cp === 0xFE6B) return '@';
+        if ($cp === 0xFE52) return '.';
+        if ($cp === 0xFE63) return '-';
+        if ($cp === 0xFF61) return '。';
+        return $c;
+    }
+
+    /** what the rules see for one original character ('' = invisible) */
+    private static function foldChar(string $c): string
+    {
+        if (isset(self::$foldCache[$c])) return self::$foldCache[$c];
+        $cp = mb_ord($c, 'UTF-8');
+        if ($cp === false) $f = $c;
+        elseif (preg_match('/^[\p{Cf}\p{Mn}\p{Me}\x{3164}\x{115F}\x{1160}\x{FFA0}]$/u', $c)) $f = '';
+        elseif (preg_match('/^[\p{Cc}\p{Zl}\p{Zp}\x{2800}]$/u', $c)) $f = ' ';
+        elseif (($cp >= 0x3131 && $cp <= 0x318E) || ($cp >= 0xFFA0 && $cp <= 0xFFDC)) $f = $c; // Hangul jamo as typed
+        elseif (($dl = self::digitLike($cp)) !== null) $f = $dl;
+        elseif (isset(self::CJK_DIGITS[$c])) $f = self::CJK_DIGITS[$c];
+        else {
+            $f = '';
+            foreach (mb_str_split(self::nfkc($c), 1, 'UTF-8') as $ch) {
+                if (preg_match('/^[\p{Cf}\p{Mn}\p{Me}\x{3164}\x{115F}\x{1160}\x{FFA0}]$/u', $ch)) continue;
+                if (preg_match('/^\p{Nd}$/u', $ch) && !($ch >= '0' && $ch <= '9' && strlen($ch) === 1)) {
+                    // Unicode encodes every decimal digit set as 10 contiguous code points 0..9
+                    $z0 = mb_ord($ch, 'UTF-8');
+                    $z = $z0;
+                    while ($z0 - $z < 9 && $z > 0 && preg_match('/^\p{Nd}$/u', mb_chr($z - 1, 'UTF-8'))) $z--;
+                    $f .= (string) (($z0 - $z) % 10);
+                } else {
+                    $f .= mb_strtolower($ch, 'UTF-8');
+                }
+            }
+        }
+        if (count(self::$foldCache) < 4000) self::$foldCache[$c] = $f;
+        return $f;
+    }
+
+    /** units: [['s' => folded, 'a' => first cp, 'b' => end cp, 'm' => masked?]] */
+    private static function units(array $cps): array
+    {
+        $u = [];
+        foreach ($cps as $i => $c) $u[] = ['s' => self::foldChar($c), 'a' => $i, 'b' => $i + 1, 'm' => false];
+        $n = count($u);
+        $one = function (int $k) use (&$u, $n): bool { return $k >= 0 && $k < $n && mb_strlen($u[$k]['s'], 'UTF-8') === 1; };
+        // O / l / I look-alikes inside a digit token: "O1O-1234", "o1o", "010-l234"
+        for ($i = 0; $i < $n;) {
+            if (!$one($i) || !preg_match('/^[0-9oli|]$/', $u[$i]['s'])) { $i++; continue; }
+            $j = $i;
+            while ($j < $n && $one($j) && preg_match('/^[0-9oli|]$/', $u[$j]['s'])) $j++;
+            $before = $i > 0 ? $u[$i - 1]['s'] : '';
+            $after = $j < $n ? $u[$j]['s'] : '';
+            $hasDigit = $hasLook = false;
+            for ($k = $i; $k < $j; $k++) { if (preg_match('/[0-9]/', $u[$k]['s'])) $hasDigit = true; else $hasLook = true; }
+            if ($j - $i >= 3 && !preg_match('/[a-z]$/', $before) && !preg_match('/^[a-z]/', $after) && $hasDigit && $hasLook) {
+                for ($k = $i; $k < $j; $k++) {
+                    $s = $u[$k]['s'];
+                    $u[$k]['s'] = $s === 'o' ? '0' : (preg_match('/^[li|]$/', $s) ? '1' : $s);
+                }
+            }
+            $i = $j;
+        }
+        // "k i d d i n o @ g m a i l . c o m": ≥ 4 single letters / @ . _ - separated by single spaces join up
+        $isTok = function (int $k) use (&$u, $n, $one): bool { return $one($k) && preg_match('/^[a-z@._\-]$/', $u[$k]['s']) === 1 && ($k === 0 || $u[$k - 1]['s'] === ' ') && ($k + 1 >= $n || $u[$k + 1]['s'] === ' '); };
+        for ($i = 0; $i < $n;) {
+            if (!$isTok($i)) { $i++; continue; }
+            $j = $i;
+            $cnt = 1;
+            while ($j + 2 < $n && $u[$j + 1]['s'] === ' ' && $isTok($j + 2)) { $j += 2; $cnt++; }
+            if ($cnt >= 4) for ($k = $i + 1; $k < $j; $k += 2) $u[$k]['s'] = '';
+            $i = $j + 1;
+        }
+        return $u;
+    }
+
+    /** one rule over the units: every match becomes one 🔒 unit covering the original characters it spans */
+    private static function applyRule(array &$units, string $re, ?callable $pred): int
+    {
+        $s = '';
+        $pos = [];
+        foreach ($units as $i => $x) {
+            $len = strlen($x['s']);
+            for ($k = 0; $k < $len; $k++) $pos[] = $i;
+            $s .= $x['s'];
+        }
+        $pos[] = count($units);
+        if ($s === '' || !preg_match_all($re, $s, $all, PREG_OFFSET_CAPTURE)) return 0;
+        $spans = [];
+        foreach ($all[0] as [$m, $off]) {
+            if ($m === '') continue;
+            if ($pred && !$pred($m)) continue;
+            $spans[] = [$pos[$off], $pos[$off + strlen($m) - 1]];
+        }
+        for ($k = count($spans) - 1; $k >= 0; $k--) {
+            [$i, $j] = $spans[$k];
+            while ($j + 1 < count($units) && $units[$j + 1]['s'] === '' && !$units[$j + 1]['m']) $j++; // marks right after go too
+            array_splice($units, $i, $j - $i + 1, [['s' => self::PII_MARK, 'a' => $units[$i]['a'], 'b' => $units[$j]['b'], 'm' => true]]);
+        }
+        return count($spans);
     }
 
     /**
-     * Mask personal information with 🔒 (consecutive locks collapse into one).
-     * $hits receives the number of masked fragments (0 = unchanged).
-     * Pass 1 masks the text as written; pass 2 masks the folded text (full-width / keycap / other-script digits)
-     * and, when the fold revealed more, the folded masked text is returned.
+     * Mask personal information with 🔒 (consecutive locks collapse into one); the rest of the text stays exactly
+     * as written. $hits receives the number of masked fragments (0 = unchanged).
      */
     public static function maskPII(string $text, ?int &$hits = null): string
     {
         $hits = 0;
         if ($text === '') return $text;
-        $out = self::maskPass($text, $hits);
-        $folded = self::fold($out);
-        if ($folded !== $out) {
-            $more = 0;
-            $f = self::maskPass($folded, $more);
-            if ($more > 0) { $out = $f; $hits += $more; }
-        }
-        if ($hits > 0) {
-            $m = preg_quote(self::PII_MARK, '/');
-            $out = preg_replace('/' . $m . '(?:[\s,.\-·_\/~*ㅡᅳ–—()\[\]]*' . $m . ')+/u', self::PII_MARK, $out) ?? $out;
-        }
+        if (!mb_check_encoding($text, 'UTF-8')) $text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+        if (class_exists(\Normalizer::class)) $text = \Normalizer::normalize($text, \Normalizer::FORM_C) ?: $text;
+        $cps = mb_str_split($text, 1, 'UTF-8');
+        if (count($cps) > self::PII_MAX) $cps = array_slice($cps, 0, self::PII_MAX);
+        $units = self::units($cps);
+        foreach (self::piiPatterns() as [$re, $pred]) $hits += self::applyRule($units, $re, $pred);
+        $out = '';
+        foreach ($units as $x) $out .= $x['m'] ? self::PII_MARK : implode('', array_slice($cps, $x['a'], $x['b'] - $x['a']));
+        if ($hits > 0) $out = preg_replace('/🔒(?:(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]){0,8}🔒)+/u', self::PII_MARK, $out) ?? $out;
         return $out;
     }
 
@@ -224,14 +353,27 @@ final class ChatFilter
         return $hits > 0;
     }
 
-    /** nicknames are public and permanent: stricter than chat (any phone-like digits, SNS names, addresses) */
+    /** the folded matching copy of a whole string (tests / admin tools) */
+    public static function fold(string $text): string
+    {
+        return implode('', array_map(fn ($u) => $u['s'], self::units(mb_str_split($text, 1, 'UTF-8'))));
+    }
+
+    /**
+     * nicknames are public and permanent: stricter than chat (60-social nicknameLooksPersonal) — any PII, ≥ 7 digits,
+     * 010…, messenger / game platform + an id-like tail ("로블록스dino12", "인스타dino"), school / grade / class.
+     */
     public static function nicknameLooksPersonal(string $nick): bool
     {
+        if ($nick === '') return false;
         if (self::hasPII($nick)) return true;
-        if (preg_match_all('/[0-9]/', $nick) >= 7) return true;
-        if (preg_match('/01[016789][0-9]{3,}|공일공/u', $nick)) return true;
-        // "인스타dino123", "kakao_kid77": a messenger name + an id-like tail (latin words such as "line"/"dm" are too common in names)
-        if (preg_match('/카톡|카카오톡|인스타|틱톡|디코|디스코드|텔레그램|페메|유튜브|insta|kakao|tiktok|discord|telegram|youtube|snapchat/iu', $nick) && preg_match('/[0-9a-z_]{3,}/i', $nick)) return true;
+        $f = self::fold(class_exists(\Normalizer::class) ? (\Normalizer::normalize($nick, \Normalizer::FORM_C) ?: $nick) : $nick);
+        if (preg_match_all('/[0-9공영빵일이삼사오육륙칠팔구]/u', $f) >= 7) return true; // digits, also as words
+        if (preg_match('/01[016789][0-9]{3,}|공일공|영일영/u', $f)) return true;
+        $platform = '/카톡|카카오톡|인스타|틱톡|디코|디스코드|텔레그램|페메|유튜브|로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤|insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu';
+        $tail = preg_replace('/insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu', '', $f) ?? $f;
+        if (preg_match($platform, $f) && preg_match('/[0-9a-z_]{3,}|[0-9]{2,}/i', $tail)) return true;
+        if (preg_match('/학년|[0-9일이삼사오육칠팔구]반$|초등|중학|고등|유치원|어린이집|[가-힣]{2,}초[0-9일이삼사오육]/u', $f)) return true;
         return false;
     }
 

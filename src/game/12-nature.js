@@ -7,6 +7,12 @@
 //     setCloudTint(color)          multiply cloud colour (grey rain clouds, warm dusk ...)
 //     setCloudVeil(0..1, color)    blend clouds into the overcast / fog haze colour (weather)
 //     setWind(dirX, dirZ, strength) wind for trees / grass / clouds (strength 0..2, default 1)
+//     setMist(0..1, color?)        valley mist layers (high preset; weather: mornings / fog / after rain)
+//     setPetals(0..1)              drifting petals & leaves around the camera (medium / high; off in rain / at night)
+//   Phase 4: rolling wind gusts (trees bend, waves of sheen run through the grass), GPU petals/leaves that recycle
+//   around the camera (world-stable, no CPU per frame), valley mist planes that fade softly where they meet the
+//   terrain (GPU height lookup, no depth texture) and near the camera, fireflies drifting around the player at night.
+//   Wind sway is halved with reduceMotion. Features follow G.sys.engine.feature() and are built lazily.
 //     rockGeometry(seed, detail)   displaced rock geometry (also used by the water module)
 //     rockMaterial                 shared rock material (vertex colours, moss on top)
 //     riverRocks                   [{x, z, r}] boulders in/along the river (water foam)
@@ -49,6 +55,8 @@
     uVegAmb: { value: new THREE.Color(0.12, 0.13, 0.12) },
     uWind: { value: new THREE.Vector2(0.86, 0.5) },
     uWindStrength: { value: 1 },
+    uGustPos: { value: new THREE.Vector2(0, 0) },  // gust field offset, advected by the wind on the CPU (no precision drift)
+    uGustAmt: { value: 1 },                         // 0 on the low preset: the gust noise is skipped (uniform branch)
     uNight: { value: 0 },
   };
   const GLSL_NOISE = `
@@ -78,28 +86,32 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       const m = new THREE.MeshLambertMaterial({ vertexColors: true, side });
       m.onBeforeCompile = (sh) => {
         sh.uniforms.uTime = uniforms.uTime; sh.uniforms.uWind = uniforms.uWind; sh.uniforms.uWindStrength = uniforms.uWindStrength; sh.uniforms.uVegAmb = uniforms.uVegAmb;
+        sh.uniforms.uGustPos = uniforms.uGustPos;
+        sh.uniforms.uGustAmt = uniforms.uGustAmt;
         sh.fragmentShader = sh.fragmentShader
           .replace('#include <common>', '#include <common>\nuniform vec3 uVegAmb;')
           .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.indirectDiffuse += diffuseColor.rgb * uVegAmb;');
         if (noFlip) sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;', ''));
         sh.vertexShader = sh.vertexShader
-          .replace('#include <common>', '#include <common>\nattribute float aFoliage;\nuniform float uTime;\nuniform vec2 uWind;\nuniform float uWindStrength;')
+          .replace('#include <common>', '#include <common>\nattribute float aFoliage;\nuniform float uTime;\nuniform vec2 uWind;\nuniform float uWindStrength;\nuniform vec2 uGustPos;\nuniform float uGustAmt;\n' + GLSL_NOISE)
           .replace('#include <color_vertex>', COLOR_VERTEX)
           .replace('#include <begin_vertex>', `#include <begin_vertex>
             #ifdef USE_INSTANCING
               vec3 tfIP = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
             #else
-              vec3 tfIP = vec3(0.0);
+              vec3 tfIP = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
             #endif
             float tfPh = uTime * 1.3 + dot(tfIP.xz, vec2(0.11, 0.17));
-            float tfSw = (sin(tfPh) * 0.65 + sin(tfPh * 2.27 + 1.7) * 0.3) * uWindStrength;
+            // rolling gusts: a slow noise field blown along the wind direction
+            float tfGust = uGustAmt > 0.001 ? smoothstep(0.45, 0.95, tfNoise(tfIP.xz * 0.011 - uGustPos * 0.011)) * uGustAmt : 0.0;
+            float tfSw = (sin(tfPh) * 0.65 + sin(tfPh * 2.27 + 1.7) * 0.3 + tfGust * 0.9) * uWindStrength;
             float tfHgt = max(position.y, 0.0);
             transformed.xz += uWind * tfSw * tfHgt * tfHgt * ${sway.toFixed(5)} * (0.35 + 0.65 * aFoliage);
             transformed += normal * sin(uTime * 5.3 + position.x * 3.1 + position.z * 2.3 + tfIP.x) * ${flutter.toFixed(4)} * aFoliage * uWindStrength;
             ${bend ? `transformed.xz += uWind * tfSw * tfHgt * ${bend.toFixed(4)};` : ''}
           `);
       };
-      m.customProgramCacheKey = () => `nat-veg2-${sway}-${flutter}-${bend}-${noFlip}`;
+      m.customProgramCacheKey = () => `nat-veg3-${sway}-${flutter}-${bend}-${noFlip}`;
       return m;
     });
   }
@@ -379,6 +391,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
 
   // ---------------------------------------------------------------- instancing helpers
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler(), _c = new THREE.Color();
+  const WHITE = new THREE.Color(1, 1, 1);
   function makeInstanced(geo, mat, list, { shadow = false, receive = true, name = '' } = {}) {
     if (!list.length) return null;
     const im = new THREE.InstancedMesh(geo, mat, list.length);
@@ -438,9 +451,16 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     },
     setWind(dx = 0.86, dz = 0.5, strength = 1) {
       const l = Math.hypot(dx, dz) || 1;
-      uniforms.uWind.value.set(dx / l, dz / l);
-      uniforms.uWindStrength.value = clamp(strength, 0, 3);
+      if (Number.isFinite(dx) && Number.isFinite(dz)) uniforms.uWind.value.set(dx / l, dz / l);
+      this._windGoal = clamp(Number(strength) || 0, 0, 3) * (G.settings?.reduceMotion ? 0.5 : 1);
+      if (this._windCur == null) { this._windCur = this._windGoal; uniforms.uWindStrength.value = this._windCur; }
     },
+    setMist(amount, color) {
+      this._mistAmt = clamp(Number(amount) || 0, 0, 1);
+      if (color != null) { try { this._mistCol.set(color); } catch (e) { /* keep */ } }
+    },
+    setPetals(amount) { this._petalAmt = clamp(Number(amount) || 0, 0, 1); },
+    _mistAmt: 0.35, _mistCol: new THREE.Color(0xc9d8e4), _petalAmt: 1,
 
     async init() {
       const eng = G.sys.engine;
@@ -469,6 +489,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         try { fn(); } catch (e) { G.log.error('WORLD', `nature: ${name} failed`, e); G.__systemErrors?.push({ system: 'nature', phase: 'init:' + name, message: String(e && e.stack || e) }); }
         if (name === 'trees' || name === 'grass') await G.util.nextFrame();
       }
+      this._ensureAtmos();
+      G.bus.on('engine:features', () => this._ensureAtmos());
+      G.bus.on('engine:quality', () => this._ensureAtmos());
       G.log.info('WORLD', 'nature', JSON.stringify(this.counts));
     },
 
@@ -918,12 +941,12 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       this._grassUniforms = gu;
       const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
       mat.onBeforeCompile = (sh) => {
-        Object.assign(sh.uniforms, terr.uniforms, gu, { uTime: uniforms.uTime, uWind: uniforms.uWind, uWindStrength: uniforms.uWindStrength });
+        Object.assign(sh.uniforms, terr.uniforms, gu, { uTime: uniforms.uTime, uWind: uniforms.uWind, uWindStrength: uniforms.uWindStrength, uGustPos: uniforms.uGustPos, uGustAmt: uniforms.uGustAmt });
         sh.vertexShader = sh.vertexShader
           .replace('#include <common>', `#include <common>
             attribute vec4 aOff; attribute float aBlade;
             uniform vec2 uGrassCenter; uniform float uGrassT; uniform vec2 uPlayer;
-            uniform float uTime; uniform vec2 uWind; uniform float uWindStrength;
+            uniform float uTime; uniform vec2 uWind; uniform float uWindStrength; uniform vec2 uGustPos; uniform float uGustAmt;
             uniform sampler2D tTerrColor; uniform sampler2D tGrassMask;
             varying vec3 vGrassCol;
             ${terr.glslTerrain}
@@ -941,6 +964,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vec3 tfL = position * tfScale;
             tfL.xz = vec2(tfCs * tfL.x - tfSn * tfL.z, tfSn * tfL.x + tfCs * tfL.z);
             float tfWave = sin(uTime * 1.9 + dot(tfP, vec2(0.21, 0.13))) * 0.45 + sin(uTime * 3.3 + tfP.x * 0.47) * 0.15 + (tfNoise(tfP * 0.045 + uTime * 0.18) - 0.5) * 1.1;
+            // gust waves rolling across the meadow (bend + a silvery sheen on the bent blades)
+            float tfGust = uGustAmt > 0.001 ? smoothstep(0.42, 0.92, tfNoise(tfP * 0.05 - uGustPos * 0.05)) * uWindStrength * uGustAmt : 0.0;
+            tfWave += tfGust * 1.6;
             tfL.xz += uWind * tfWave * aBlade * aBlade * 0.14 * uWindStrength * tfScale;
             vec2 tfD = tfP - uPlayer; float tfPd = length(tfD);
             float tfPush = 1.0 - smoothstep(0.25, 1.15, tfPd);
@@ -951,14 +977,14 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vec3 tfG = texture2D(tTerrColor, (tfCuv * (uTerrN.x - 1.0) + 0.5) / uTerrN.x).rgb;
             tfG *= tfG;
             float tfVar = 0.88 + fract(aOff.w * 7.13) * 0.24;
-            vGrassCol = mix(tfG * 0.72, tfG * 1.28 + vec3(0.025, 0.03, 0.0), aBlade) * tfVar;
+            vGrassCol = mix(tfG * 0.72, tfG * 1.28 + vec3(0.025, 0.03, 0.0), aBlade) * tfVar * (1.0 + tfGust * aBlade * 0.22);
           `);
         sh.fragmentShader = sh.fragmentShader
           .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol;')
           .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vGrassCol;')
           .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;', ''));
       };
-      mat.customProgramCacheKey = () => 'nat-grass';
+      mat.customProgramCacheKey = () => 'nat-grass2';
       const mesh = new THREE.Mesh(geo, mat);
       mesh.frustumCulled = false;
       mesh.receiveShadow = !!preset.shadows;
@@ -1016,18 +1042,18 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
       const mat = new THREE.ShaderMaterial({
         uniforms: {
-          map: { value: tex }, uTime: uniforms.uTime, uDrift: { value: new THREE.Vector2(2.2, 1.1) }, uDomain: { value: DOMAIN },
+          map: { value: tex }, uOffset: { value: new THREE.Vector2(0, 0) }, uDomain: { value: DOMAIN },
           uCover: { value: this._cloudCover }, uTint: { value: this._cloudTint.clone() },
           uVeil: { value: this._cloudVeil }, uVeilCol: { value: this._cloudVeilCol.clone() },
           uSunCol: { value: new THREE.Color(1, 1, 1) }, uAmb: { value: new THREE.Color(0.8, 0.85, 0.95) }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
         },
         vertexShader: `
           attribute vec4 aCloud; attribute vec4 aInfo;
-          uniform float uTime; uniform vec2 uDrift; uniform float uDomain; uniform float uCover; uniform vec3 uSunDir;
-          varying vec2 vUv; varying float vAlpha; varying float vSunSide; varying float vDense;
+          uniform vec2 uOffset; uniform float uDomain; uniform float uCover; uniform vec3 uSunDir;
+          varying vec2 vUv; varying float vAlpha; varying float vSunSide; varying float vDense; varying float vFwd;
           void main() {
             vec3 c = aCloud.xyz;
-            c.xz += uDrift * uTime;
+            c.xz += uOffset;
             c.xz = mod(c.xz + uDomain, 2.0 * uDomain) - uDomain;
             float dense = smoothstep(0.55, 1.0, uCover);
             float size = aCloud.w * (1.0 + dense * 0.6);
@@ -1037,17 +1063,22 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             float vi = aInfo.x;
             vUv = vec2(uv.x * 0.5 + mod(vi, 2.0) * 0.5, uv.y * 0.5 + (1.0 - floor(vi / 2.0)) * 0.5);
             float cover = smoothstep(aInfo.y - 0.1, aInfo.y + 0.02, uCover);
-            vec3 dir = normalize(c - cameraPosition);
+            vec3 dv = c - cameraPosition; float dvl = length(dv);
+            vec3 dir = dvl > 1e-4 ? dv / dvl : vec3(0.0, 1.0, 0.0);
             float horizon = smoothstep(0.01, 0.1, dir.y);
             float edge = 1.0 - smoothstep(uDomain * 0.78, uDomain * 0.98, length(c.xz));
             vAlpha = cover * horizon * edge;
-            vec3 toSun = normalize(uSunDir);
-            vSunSide = dot(normalize(vec3(position.x, position.y, 0.3)), normalize((viewMatrix * vec4(toSun, 0.0)).xyz)) * 0.5 + 0.5;
+            vec3 sv = (viewMatrix * vec4(uSunDir, 0.0)).xyz; float svl = length(sv);
+            sv = svl > 1e-5 ? sv / svl : vec3(0.0, 1.0, 0.0);
+            vSunSide = dot(normalize(vec3(position.x, position.y, 0.3)), sv) * 0.5 + 0.5;
             vDense = dense;
+            // forward scattering: clouds near the sun glow (silver lining) instead of reading as grey smudges
+            float sl = length(uSunDir);
+            vFwd = sl > 1e-5 ? pow(max(dot(dir, uSunDir / sl), 0.0), 5.0) : 0.0;
           }`,
         fragmentShader: `
           uniform sampler2D map; uniform vec3 uTint; uniform vec3 uSunCol; uniform vec3 uAmb; uniform float uVeil; uniform vec3 uVeilCol;
-          varying vec2 vUv; varying float vAlpha; varying float vSunSide; varying float vDense;
+          varying vec2 vUv; varying float vAlpha; varying float vSunSide; varying float vDense; varying float vFwd;
           void main() {
             vec4 t = texture2D(map, vUv);
             float a = t.a * vAlpha * (0.9 + vDense * 0.1);
@@ -1055,6 +1086,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vec3 base = t.rgb;
             base = mix(base, base * vec3(0.72, 0.76, 0.82), vDense * 0.6);
             vec3 col = base * (uAmb + uSunCol * (0.55 + 0.45 * vSunSide)) * uTint;
+            col += uSunCol * vFwd * (1.2 + 2.6 * (1.0 - t.a)) * (1.0 - vDense * 0.7);
             col = mix(col, uVeilCol * (0.92 + 0.12 * t.r), uVeil);
             a *= 1.0 - uVeil * 0.45;
             gl_FragColor = vec4(col, a);
@@ -1282,12 +1314,284 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       mat.uniforms.uScale.value = (G.sys.engine.renderer.getPixelRatio() || 1) * (window.innerHeight / 900);
     },
 
+    // ============================================================== phase-4 atmosphere (lazy, preset-gated)
+    _ensureAtmos() {
+      const E = G.sys.engine;
+      if (!E?.scene || !this.root) return;
+      const want = (f) => (typeof E.feature === 'function' ? E.feature(f) : false);
+      try { if (want('petals') && !this.meshes.petals) this._buildPetals(this.root); } catch (e) { G.log.warn('WORLD', 'petals failed', e); }
+      try { if (want('mist') && !this.meshes.mist) this._buildMist(E.scene); } catch (e) { G.log.warn('WORLD', 'mist failed', e); }
+      try { if (!this.meshes.nightFlies && (E.preset?.atmos ?? 0) >= 1) this._buildNightFlies(this.root); } catch (e) { G.log.warn('WORLD', 'fireflies near the player failed', e); }
+      this._petalsOn = want('petals');
+      this._mistOn = want('mist');
+    },
+
+    /** petals & leaves: GPU points in a camera-following box; positions are world-stable and wrap at the box edges */
+    _buildPetals(root) {
+      const high = (G.sys.engine?.preset?.atmos ?? 1) >= 2;
+      const count = high ? 420 : 220;
+      const rnd = G.util.rng(8128);
+      const seed = new Float32Array(count * 4), kind = new Float32Array(count);
+      for (let i = 0; i < count; i++) {
+        seed[i * 4] = rnd(); seed[i * 4 + 1] = rnd(); seed[i * 4 + 2] = rnd(); seed[i * 4 + 3] = rnd();
+        kind[i] = rnd(); // < 0.62 petal (pink / white), < 0.85 green leaf, else golden leaf
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+      geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+      geo.setAttribute('aKind', new THREE.BufferAttribute(kind, 1));
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: uniforms.uTime, uWind: uniforms.uWind, uWindStrength: uniforms.uWindStrength,
+          uCenter: { value: new THREE.Vector3() }, uBox: { value: new THREE.Vector3(56, 20, 56) },
+          uScale: { value: 600 }, uAmount: { value: 0 }, uLight: { value: new THREE.Color(1, 1, 1) },
+        },
+        vertexShader: `
+          attribute vec4 aSeed; attribute float aKind;
+          uniform float uTime; uniform vec2 uWind; uniform float uWindStrength; uniform vec3 uCenter; uniform vec3 uBox; uniform float uScale; uniform float uAmount;
+          varying float vA; varying float vSpin; varying vec3 vCol;
+          void main() {
+            if (aSeed.w > uAmount) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; vSpin = 0.0; vCol = vec3(0.0); return; }
+            float drift = (0.55 + aSeed.w * 0.7) * (0.35 + uWindStrength * 0.65);
+            vec3 p = aSeed.xyz * uBox + vec3(uWind.x * drift, -(0.32 + aSeed.x * 0.3), uWind.y * drift) * uTime;
+            p += vec3(sin(uTime * 1.3 + aSeed.y * 40.0), sin(uTime * 2.1 + aSeed.z * 31.0) * 0.4, cos(uTime * 1.1 + aSeed.x * 27.0)) * 0.7;
+            vec3 origin = uCenter - uBox * 0.5;
+            p = origin + mod(p - origin, uBox);
+            vec3 rel = (p - uCenter) / (uBox * 0.5);
+            float edge = 1.0 - smoothstep(0.72, 1.0, max(max(abs(rel.x), abs(rel.z)), abs(rel.y)));
+            vec4 mv = viewMatrix * vec4(p, 1.0);
+            gl_Position = projectionMatrix * mv;
+            float dist = max(0.2, -mv.z);
+            float size = aKind < 0.62 ? 0.075 : 0.1;
+            gl_PointSize = clamp(size * (0.75 + aSeed.y * 0.6) * uScale / dist, 1.0, 22.0);
+            vA = edge * smoothstep(0.4, 1.6, dist) * (1.0 - smoothstep(24.0, 30.0, dist));
+            vSpin = uTime * (1.5 + aSeed.z * 2.5) + aSeed.x * 6.283;
+            vCol = aKind < 0.62 ? mix(vec3(1.0, 0.72, 0.84), vec3(1.0, 0.95, 0.96), step(0.42, aKind)) : aKind < 0.85 ? vec3(0.42, 0.66, 0.26) : vec3(0.95, 0.72, 0.28);
+          }`,
+        fragmentShader: `
+          uniform vec3 uLight;
+          varying float vA; varying float vSpin; varying vec3 vCol;
+          void main() {
+            vec2 q = gl_PointCoord - 0.5;
+            float c = cos(vSpin), s = sin(vSpin);
+            q = vec2(c * q.x - s * q.y, s * q.x + c * q.y);
+            float flip = 0.35 + 0.65 * abs(sin(vSpin * 0.7));      // tumbling: the petal turns its edge to us
+            float d = length(q * vec2(1.0, 2.0 / flip));
+            float a = (1.0 - smoothstep(0.32, 0.46, d)) * vA;
+            if (a < 0.02) discard;
+            vec3 col = vCol * uLight * (0.8 + 0.2 * flip);
+            gl_FragColor = vec4(col, a * 0.92);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+          }`,
+        transparent: true, depthWrite: false,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false; pts.name = 'petals'; pts.renderOrder = 7; pts.visible = false;
+      pts.raycast = () => {};
+      root.add(pts);
+      this.meshes.petals = pts;
+      this._petalMat = mat;
+      const scale = () => { const E = G.sys.engine; const fov = (E.camera?.fov || 55) * PI / 180; mat.uniforms.uScale.value = (window.innerHeight * (E.renderer.getPixelRatio() || 1) * 0.5) / Math.tan(fov / 2); };
+      scale();
+      G.sys.engine?.onResize?.(scale);
+      this.counts.petals = count;
+    },
+
+    /** valley mist: 3 large horizontal layers outside the campus; soft where they meet the ground (GPU height) */
+    _buildMist(scene) {
+      const terr = TR();
+      if (!terr?.uniforms || !terr.glslTerrain) return;
+      const half = (terr.half || 500) - 10;
+      const LAYERS = [{ y: 9, a: 0.5, sc: 0.012, sp: 1.0 }, { y: 19, a: 0.36, sc: 0.008, sp: 0.7 }, { y: 32, a: 0.24, sc: 0.006, sp: 0.5 }];
+      const grp = new THREE.Group(); grp.name = 'valley-mist';
+      const cx = L.plaza?.x ?? 0, cz = L.plaza?.z ?? 0;
+      const mats = [];
+      for (const ly of LAYERS) {
+        const geo = new THREE.PlaneGeometry(half * 2, half * 2, 1, 1).rotateX(-PI / 2);
+        geo.deleteAttribute('normal');
+        const mat = new THREE.ShaderMaterial({
+          uniforms: {
+            ...terr.uniforms, ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
+            uY: { value: ly.y }, uAlpha: { value: ly.a }, uScale: { value: ly.sc }, uAmount: { value: 0 },
+            uDrift: { value: new THREE.Vector2() }, uCol: { value: new THREE.Color(0xd5e0e8) }, uSun: { value: new THREE.Color(0, 0, 0) },
+            uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uCampus: { value: new THREE.Vector3(cx, cz, 115) },
+          },
+          vertexShader: `
+            uniform float uY;
+            varying vec3 vW;
+            #include <fog_pars_vertex>
+            void main() {
+              vec4 w = modelMatrix * vec4(position.x, uY, position.z, 1.0);
+              vW = w.xyz;
+              vec4 mvPosition = viewMatrix * w;
+              gl_Position = projectionMatrix * mvPosition;
+              #include <fog_vertex>
+            }`,
+          fragmentShader: `
+            uniform float uAlpha; uniform float uScale; uniform float uAmount; uniform vec2 uDrift; uniform vec3 uCol; uniform vec3 uSun; uniform vec3 uSunDir; uniform vec3 uCampus;
+            varying vec3 vW;
+            ${terr.glslTerrain}
+            ${GLSL_NOISE}
+            #include <fog_pars_fragment>
+            void main() {
+              // cheap rejections first (outside the valleys / inside the campus / close to the camera)
+              float campus = smoothstep(uCampus.z, uCampus.z + 60.0, length(vW.xz - uCampus.xy));
+              vec3 dv = vW - cameraPosition; float dist = length(dv);
+              float nearFade = smoothstep(20.0, 70.0, dist);
+              if (campus * nearFade < 0.003) discard;
+              float below = vW.y - terrainH(vW.xz);
+              float soft = smoothstep(0.0, 6.0, below) * (1.0 - smoothstep(26.0, 60.0, below) * 0.55);
+              if (soft < 0.003) discard;
+              vec2 p = vW.xz * uScale + uDrift;
+              float n = tfNoise(p) * 0.55 + tfNoise(p * 2.13 + 7.1) * 0.3 + tfNoise(p * 4.7 - 3.3) * 0.15;
+              float wisps = smoothstep(0.32, 0.78, n);
+              float a = uAlpha * uAmount * wisps * soft * campus * nearFade;
+              if (a < 0.003) discard;
+              vec3 vd = dist > 1e-4 ? dv / dist : vec3(0.0, 0.0, 1.0);
+              float fwd = pow(max(dot(vd, uSunDir), 0.0), 6.0);
+              vec3 col = uCol + uSun * (0.25 + fwd * 1.4);
+              gl_FragColor = vec4(col, a);
+              #include <tonemapping_fragment>
+              #include <colorspace_fragment>
+              #include <fog_fragment>
+            }`,
+          transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true,
+        });
+        const m = new THREE.Mesh(geo, mat);
+        m.frustumCulled = false; m.renderOrder = 1; m.name = 'mist-' + ly.y; m.raycast = () => {};
+        m.userData.sp = ly.sp;
+        grp.add(m);
+        mats.push(mat);
+      }
+      grp.visible = false;
+      scene.add(grp);
+      this.meshes.mist = grp;
+      this._mistMats = mats;
+      this._mistDrift = 0;
+      this.counts.mist = LAYERS.length;
+    },
+
+    /** a few fireflies that always drift around the player at night (world-stable, wrap in a 26 m box) */
+    _buildNightFlies(root) {
+      const count = (G.sys.engine?.preset?.atmos ?? 1) >= 2 ? 70 : 40;
+      const rnd = G.util.rng(9393);
+      const seed = new Float32Array(count * 4);
+      for (let i = 0; i < count * 4; i++) seed[i] = rnd();
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+      geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uTime: uniforms.uTime, uNight: uniforms.uNight, uCenter: { value: new THREE.Vector3() }, uGround: { value: 0 }, uScale: { value: 1 } },
+        vertexShader: `
+          attribute vec4 aSeed; uniform float uTime; uniform float uNight; uniform vec3 uCenter; uniform float uGround; uniform float uScale;
+          varying float vA;
+          void main() {
+            vec3 box = vec3(26.0, 1.0, 26.0);
+            vec3 p = vec3(aSeed.x, 0.0, aSeed.z) * box + vec3(sin(uTime * 0.23 + aSeed.y * 50.0), 0.0, cos(uTime * 0.19 + aSeed.w * 50.0)) * 3.0;
+            vec3 origin = uCenter - box * 0.5;
+            p.xz = origin.xz + mod(p.xz - origin.xz, box.xz);
+            p.y = uGround + 0.45 + aSeed.y * 2.2 + sin(uTime * 0.6 + aSeed.x * 40.0) * 0.35;
+            vec2 rel = (p.xz - uCenter.xz) / 13.0;
+            float edge = 1.0 - smoothstep(0.7, 1.0, max(abs(rel.x), abs(rel.y)));
+            vec4 mv = viewMatrix * vec4(p, 1.0);
+            float blink = smoothstep(0.3, 1.0, sin(uTime * (0.9 + aSeed.w * 0.8) + aSeed.z * 20.0) * 0.5 + 0.5);
+            vA = blink * uNight * edge;
+            gl_PointSize = uScale * (0.4 + blink * 0.6) * 36.0 * (10.0 / max(1.0, -mv.z));
+            gl_Position = projectionMatrix * mv;
+          }`,
+        fragmentShader: `
+          varying float vA;
+          void main() {
+            float d = length(gl_PointCoord - 0.5);
+            float a = smoothstep(0.5, 0.0, d);
+            a = a * a * vA;
+            if (a < 0.004) discard;
+            gl_FragColor = vec4(vec3(0.8, 1.0, 0.45) * a * 1.7, a);
+          }`,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false; pts.name = 'fireflies-near'; pts.visible = false; pts.raycast = () => {};
+      root.add(pts);
+      this.meshes.nightFlies = pts;
+      this._nightFlyMat = mat;
+      const setScale = () => { mat.uniforms.uScale.value = (G.sys.engine.renderer.getPixelRatio() || 1) * (window.innerHeight / 900); };
+      setScale();
+      G.sys.engine?.onResize?.(setScale);
+    },
+
+    _updateAtmos(dt, t, night) {
+      const E = G.sys.engine;
+      const cam = E?.camera;
+      if (!cam) return;
+      const W = G.sys.weather;
+      const rain = W?.precipitation?.rain || 0, snow = W?.precipitation?.snow || 0;
+      // petals: day, dry weather, a little more with wind
+      const pm = this.meshes.petals;
+      if (pm) {
+        const amt = this._petalsOn ? this._petalAmt * (1 - smooth(0.25, 0.7, night)) * (1 - smooth(0.05, 0.4, rain)) * (1 - snow) * clamp(0.55 + uniforms.uWindStrength.value * 0.35, 0, 1) : 0;
+        pm.visible = amt > 0.01;
+        if (pm.visible) {
+          const u = this._petalMat.uniforms;
+          u.uAmount.value = amt;
+          const fx = -cam.matrixWorld.elements[8], fz = -cam.matrixWorld.elements[10], fl = Math.hypot(fx, fz) || 1;
+          u.uCenter.value.set(cam.position.x + (fx / fl) * 16, cam.position.y + 1, cam.position.z + (fz / fl) * 16);
+          const hemi = E.hemi, sun = E.sun;
+          const li = (hemi ? hemi.intensity * 0.55 : 0.5) + (sun ? sun.intensity * Math.max(0, E.sunDir.y) * 0.28 : 0.4);
+          u.uLight.value.setRGB(li, li, li).multiply(sun ? _c.copy(sun.color).lerp(WHITE, 0.6) : WHITE);
+        }
+      }
+      // valley mist
+      const mg = this.meshes.mist;
+      if (mg) {
+        const amt = this._mistOn ? this._mistAmt : 0;
+        mg.visible = amt > 0.01;
+        if (mg.visible) {
+          this._mistDrift += dt * (0.4 + uniforms.uWindStrength.value * 0.6) * 0.035;
+          const w = uniforms.uWind.value;
+          const fogC = E.scene.fog ? E.scene.fog.color : this._mistCol;
+          const sunUp = Math.max(0, E.sunDir.y);
+          for (let i = 0; i < this._mistMats.length; i++) {
+            const u = this._mistMats[i].uniforms, sp = mg.children[i].userData.sp || 1;
+            u.uAmount.value = amt;
+            u.uDrift.value.set(w.x * this._mistDrift * sp % 1000, w.y * this._mistDrift * sp % 1000);
+            u.uCol.value.copy(fogC).lerp(this._mistCol, 0.35).multiplyScalar(0.92 + 0.12 * (1 - night));
+            if (E.sun) u.uSun.value.copy(E.sun.color).multiplyScalar(E.sun.intensity * Math.sqrt(sunUp) * 0.16);
+            u.uSunDir.value.copy(E.sunDir);
+          }
+        }
+      }
+      // fireflies around the player at night
+      const nf = this.meshes.nightFlies;
+      if (nf) {
+        nf.visible = (E.preset?.atmos ?? 0) >= 1 && night > 0.3 && rain < 0.3 && snow < 0.3;
+        if (nf.visible) {
+          const pl = G.sys.player?.position || cam.position;
+          const u = this._nightFlyMat.uniforms;
+          u.uCenter.value.set(pl.x, pl.y, pl.z);
+          u.uGround.value = Number.isFinite(pl.y) ? pl.y : 0;
+        }
+      }
+    },
+
     // ============================================================== per frame
     update(dt, t) {
       uniforms.uTime.value = t;
       const night = clamp(G.world.nightFactor || 0, 0, 1);
       uniforms.uNight.value = night;
       const eng = G.sys.engine;
+      // wind eases (no sudden jumps when the weather changes); gusts are advected by the wind
+      if (this._windGoal != null) {
+        this._windCur += (this._windGoal - this._windCur) * (1 - Math.exp(-Math.min(dt || 0, 0.25) / 1.5));
+        uniforms.uWindStrength.value = this._windCur;
+      }
+      uniforms.uGustAmt.value = (eng?.preset?.atmos ?? 1) >= 1 ? 1 : 0;
+      const ws = uniforms.uWindStrength.value, wv = uniforms.uWind.value, gp = uniforms.uGustPos.value;
+      gp.x = (gp.x + wv.x * ws * 6 * Math.min(dt || 0, 0.25)) % 1e6; gp.y = (gp.y + wv.y * ws * 6 * Math.min(dt || 0, 0.25)) % 1e6;
+      try { this._updateAtmos(dt, t, night); } catch (e) { if (!this._atmosErr) { this._atmosErr = true; G.log.warn('WORLD', 'nature atmosphere update failed', e); } }
       // grass follows the camera
       if (this._grassUniforms && eng) {
         const cam = eng.camera;
@@ -1312,7 +1616,10 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         u.uVeil.value = this._cloudVeil;
         u.uVeilCol.value.copy(this._cloudVeilCol);
         const w = uniforms.uWind.value, ws = uniforms.uWindStrength.value;
-        u.uDrift.value.set(w.x * 2.4 * (0.6 + ws * 0.4), w.y * 2.4 * (0.6 + ws * 0.4));
+        // drift accumulated on the CPU: a wind change bends the path smoothly instead of teleporting every cloud
+        const k = 2.4 * (0.6 + ws * 0.4) * Math.min(dt || 0, 0.25), D2 = 3000;
+        const off = u.uOffset.value;
+        off.x = ((off.x + w.x * k) % D2 + D2) % D2; off.y = ((off.y + w.y * k) % D2 + D2) % D2;
       }
       if (eng?.hemi) uniforms.uVegAmb.value.copy(eng.hemi.color).multiplyScalar(eng.hemi.intensity * 0.16);
       if (this.meshes.fireflies) this.meshes.fireflies.visible = night > 0.04;

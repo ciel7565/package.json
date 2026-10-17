@@ -17,10 +17,16 @@
 //   popover becomes a picture card — a big animated weather picture + one sentence (read aloud) + a feeling
 //   word instead of °C, 5 big weather tiles and 4 time-of-day tiles (아침/낮/저녁/밤). Weather is per device
 //   (local), so a child's change never affects anyone else.
-//   Drives engine.setSun, Preetham sky uniforms, scene.fog, hemi / sun / fill lights, tone-mapping
-//   exposure, G.world.nightFactor, G.world.nightMaterials / nightLights, nature clouds & wind,
-//   water ripples / flow speed (G.sys.water.uniforms.uRain / uFlowSpeed),
-//   engine.flareSuppressed. Per-device persistence: manual weather (auto off) and the locked hour.
+//   Drives engine.setSun, Preetham sky uniforms, scene.fog, hemi / sun / fill lights, the colour grade
+//   (engine.grade: exposure, contrast, saturation, warmth, vignette, shadow lift / highlight gain by time and weather),
+//   sun glow + god-ray strength (engine.atmos), G.world.nightFactor, G.world.nightMaterials / nightLights,
+//   nature clouds & wind, water ripples / flow speed (G.sys.water.uniforms.uRain / uFlowSpeed).
+//   Phase 4 atmosphere: soft lightning in heavy rain (one slow eased glow, never faster than ~0.6 Hz, off with
+//   reduceMotion / fxLevel 'off'), a rainbow opposite the sun after rain (weather:rainbow {on}), shimmering
+//   puddles on paths and the plaza that fill with rain and dry afterwards (medium / high), sunrise / sunset
+//   twilight bands (warm horizon, pink anti-twilight arch), a shooting star now and then on clear nights
+//   (weather:shootingstar). this.lightning (0..1), this.rainbow (0..1).
+//   Per-device persistence: manual weather (auto off) and the locked hour.
 // =============================================================================
 (function () {
   const U = G.util;
@@ -41,11 +47,11 @@
   //  greyCol: overcast sky / fog colour at noon · turb/ray/mie: Preetham sky offsets · exp: exposure multiplier
   //  wind: nature wind strength · lamp: how much lanterns/windows glow in daylight · haze: clear horizon haze
   const LOOK = {
-    CLEAR: { cover: 0.36, tint: '#ffffff', sun: 1.0, hemi: 1.0, fog: 0.0026, grey: 0.0, greyCol: '#c4d0da', turb: 0, ray: 0, mie: 0, exp: 1.0, wind: 0.9, lamp: 0, haze: 0.2 },
-    CLOUDY: { cover: 0.84, tint: '#d4d9df', sun: 0.42, hemi: 1.12, fog: 0.0036, grey: 0.42, greyCol: '#b6bfc8', turb: 4.5, ray: 0.5, mie: 0.004, exp: 0.98, wind: 1.25, lamp: 0.1, haze: 0.3 },
-    RAIN: { cover: 1.0, tint: '#9aa2ac', sun: 0.16, hemi: 0.84, fog: 0.0072, grey: 0.84, greyCol: '#86909a', turb: 9, ray: 1.0, mie: 0.01, exp: 0.95, wind: 1.8, lamp: 0.42, haze: 0.4 },
-    FOG: { cover: 0.3, tint: '#eef1f3', sun: 0.32, hemi: 1.06, fog: 0.021, grey: 0.97, greyCol: '#c3cacf', turb: 10, ray: 0.8, mie: 0.012, exp: 1.0, wind: 0.25, lamp: 0.36, haze: 0.5 },
-    SNOW: { cover: 0.96, tint: '#eef1f5', sun: 0.36, hemi: 1.2, fog: 0.0062, grey: 0.74, greyCol: '#d0d7df', turb: 8, ray: 0.6, mie: 0.008, exp: 1.0, wind: 0.6, lamp: 0.26, haze: 0.45 },
+    CLEAR: { cover: 0.36, tint: '#ffffff', sun: 1.0, hemi: 1.0, fog: 0.0026, grey: 0.0, greyCol: '#c4d0da', turb: -1.3, ray: 0.25, mie: 0, exp: 1.0, wind: 0.9, lamp: 0, haze: 0.2, sat: 1.1, con: 1.06, warm: 0.02, vig: 0.2 },
+    CLOUDY: { cover: 0.84, tint: '#d4d9df', sun: 0.42, hemi: 1.12, fog: 0.0036, grey: 0.42, greyCol: '#b6bfc8', turb: 4.5, ray: 0.5, mie: 0.004, exp: 0.98, wind: 1.25, lamp: 0.1, haze: 0.3, sat: 1.0, con: 1.03, warm: -0.03, vig: 0.22 },
+    RAIN: { cover: 1.0, tint: '#9aa2ac', sun: 0.16, hemi: 0.84, fog: 0.0072, grey: 0.84, greyCol: '#86909a', turb: 9, ray: 1.0, mie: 0.01, exp: 0.95, wind: 1.8, lamp: 0.42, haze: 0.4, sat: 0.86, con: 1.02, warm: -0.12, vig: 0.3 },
+    FOG: { cover: 0.3, tint: '#eef1f3', sun: 0.32, hemi: 1.06, fog: 0.021, grey: 0.97, greyCol: '#c3cacf', turb: 10, ray: 0.8, mie: 0.012, exp: 1.0, wind: 0.25, lamp: 0.36, haze: 0.5, sat: 0.88, con: 0.94, warm: -0.04, vig: 0.24 },
+    SNOW: { cover: 0.96, tint: '#eef1f5', sun: 0.36, hemi: 1.2, fog: 0.0062, grey: 0.74, greyCol: '#d0d7df', turb: 8, ray: 0.6, mie: 0.008, exp: 1.0, wind: 0.6, lamp: 0.26, haze: 0.45, sat: 0.9, con: 1.0, warm: -0.14, vig: 0.22 },
   };
   // monthly climate of a Gangwon mountain valley (°C daily max / min, humidity offset %)
   const CLIMATE = {
@@ -86,7 +92,7 @@
     sunNoon: C('#ffeed4'), sunGold: C('#ffa25a'), moon: C('#a9bdff'),
     hemiDay: C('#d3e3f6'), hemiGold: C('#ffd2a8'), hemiNight: C('#4b6290'),
     groundDay: C('#66683c'), groundNight: C('#1d2621'), groundSnow: C('#c9d0d6'),
-    fogDay: C('#bcd6e8'), fogGold: C('#e9c4a0'), fogNight: C('#1b2840'),
+    fogDay: C('#bcd6e8'), fogGold: C('#efbf92'), fogNight: C('#1b2840'),
     zenithNight: C('#0a1430'), zenithTwilight: C('#2b4176'), glowSunset: C('#ff9a5c'), glowDusk: C('#e8707a'), fillDay: C('#bfd6ff'), fillNight: C('#6d82b6'),
     rainDay: C('#cfdae6'), rainNight: C('#59677c'), snowDay: C('#ffffff'), snowNight: C('#9aa8c4'),
     goldTint: C('#ffd9b6'), nightTint: C('#4a5470'), white: C('#ffffff'),
@@ -98,7 +104,9 @@
   const _c1 = new THREE.Color(), _c2 = new THREE.Color(), _c3 = new THREE.Color();
   const _fogCol = new THREE.Color(), _greyCol = new THREE.Color(), _tint = new THREE.Color();
   const _moonDir = new THREE.Vector3(), _v = new THREE.Vector3(), _fwd = new THREE.Vector3();
-  const _mixed = { cover: 0, sun: 0, hemi: 0, fog: 0, grey: 0, turb: 0, ray: 0, mie: 0, exp: 0, wind: 0, lamp: 0, haze: 0, tempMod: 0, hum: 0 };
+  const _mixed = { cover: 0, sun: 0, hemi: 0, fog: 0, grey: 0, turb: 0, ray: 0, mie: 0, exp: 0, wind: 0, lamp: 0, haze: 0, tempMod: 0, hum: 0, sat: 0, con: 0, warm: 0, vig: 0 };
+  const _lift = new THREE.Color(), _gain = new THREE.Color(), _gradeArg = { exposure: 1, contrast: 1, saturation: 1, warmth: 0, vignette: 0.2, lift: _lift, gain: _gain, instant: false };
+  const _flashArg = { flash: 0, exposure: 1 };
 
   /** Korean particle 으로/로 for a word (ㄹ-final and vowel-final words take 로) */
   function roOf(word) {
@@ -140,19 +148,52 @@
     }`;
   const OVERLAY_FS = `
     uniform vec3 uHorizon; uniform vec3 uZenith; uniform float uAH; uniform float uAT; uniform float uBand;
-    uniform vec3 uSunDir; uniform vec3 uGlow; uniform float uGlowAmt;
+    uniform vec3 uSunDir; uniform vec3 uGlow; uniform float uGlowAmt; uniform float uBelt; uniform float uRainbow;
     varying vec3 vDir;
+    vec3 tfSpectrum(float x) { // 0 = violet .. 1 = red
+      float h = (1.0 - clamp(x, 0.0, 1.0)) * 0.76;
+      return clamp(abs(fract(vec3(h) + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    }
     void main() {
-      vec3 d = normalize(vDir);
+      float dl = length(vDir);
+      vec3 d = dl > 1e-6 ? vDir / dl : vec3(0.0, 1.0, 0.0);
       float k = smoothstep(-0.03, uBand, d.y);
       vec3 col = mix(uHorizon, uZenith, k);
       float a = mix(uAH, uAT, k);
       // warm twilight glow above the horizon on the sun side
-      vec2 sh = normalize(uSunDir.xz + vec2(1e-5));
-      vec2 dh = normalize(d.xz + vec2(1e-5));
-      float g = pow(max(dot(dh, sh), 0.0), 3.0) * (1.0 - smoothstep(-0.02, 0.42, d.y)) * uGlowAmt;
+      vec2 sxz = uSunDir.xz, dxz = d.xz;
+      float sl = length(sxz), dlh = length(dxz);
+      vec2 sh = sl > 1e-5 ? sxz / sl : vec2(0.0, 1.0);
+      vec2 dh = dlh > 1e-5 ? dxz / dlh : vec2(0.0, 1.0);
+      float sunSide = dot(dh, sh);
+      float g = pow(max(sunSide, 0.0), 3.0) * (1.0 - smoothstep(-0.02, 0.42, d.y)) * uGlowAmt;
       col = mix(col, uGlow, clamp(g * 1.15, 0.0, 1.0));
       a = max(a, g);
+      // anti-twilight arch (pink) over the earth's shadow (blue-grey) opposite the sun
+      if (uBelt > 0.001) {
+        float anti = pow(max(-sunSide, 0.0), 1.6);
+        float belt = smoothstep(0.015, 0.09, d.y) * (1.0 - smoothstep(0.1, 0.32, d.y)) * anti * uBelt;
+        float shade = (1.0 - smoothstep(0.0, 0.06, d.y)) * anti * uBelt;
+        col = mix(col, vec3(0.86, 0.58, 0.66), clamp(belt * 0.85, 0.0, 1.0));
+        col = mix(col, vec3(0.34, 0.4, 0.56), clamp(shade * 0.55, 0.0, 1.0));
+        a = max(a, max(belt * 0.75, shade * 0.5));
+      }
+      // rainbow: primary bow at ~41-42 deg around the antisolar point, faint reversed secondary at ~51 deg
+      if (uRainbow > 0.001) {
+        float cosA = clamp(dot(d, -uSunDir), -1.0, 1.0);
+        float ang = acos(cosA) * 57.29578;
+        float x1 = (ang - 40.3) / 2.3, x2 = 1.0 - (ang - 50.2) / 3.4;
+        float b1 = smoothstep(-0.05, 0.25, x1) * (1.0 - smoothstep(0.75, 1.05, x1));
+        float b2 = smoothstep(-0.05, 0.25, x2) * (1.0 - smoothstep(0.75, 1.05, x2)) * 0.32;
+        float ground = smoothstep(0.0, 0.1, d.y);
+        float ra = (b1 + b2) * uRainbow * 0.42 * ground;
+        if (ra > 0.0005) {
+          vec3 rc = b1 >= b2 ? tfSpectrum(x1) : tfSpectrum(x2);
+          float na = a + ra * (1.0 - a);
+          col = (col * a + rc * ra * (1.0 - a) + rc * ra * a * 0.6) / max(na, 1e-4);
+          a = clamp(na, 0.0, 1.0);
+        }
+      }
       gl_FragColor = vec4(col, a);
       #include <colorspace_fragment>
     }`;
@@ -163,6 +204,7 @@
         uHorizon: { value: new THREE.Color(0xbcd6e8) }, uZenith: { value: new THREE.Color(0xbcd6e8) },
         uAH: { value: 0 }, uAT: { value: 0 }, uBand: { value: 0.12 },
         uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uGlow: { value: new THREE.Color(0xff9a5c) }, uGlowAmt: { value: 0 },
+        uBelt: { value: 0 }, uRainbow: { value: 0 },
       },
       vertexShader: OVERLAY_VS, fragmentShader: OVERLAY_FS,
       side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: true, fog: false,
@@ -256,6 +298,47 @@
     return s;
   }
 
+  /** one shooting star: a thin additive streak on the sky dome (head bright, tail fading) */
+  function buildMeteor() {
+    const geo = new THREE.PlaneGeometry(1, 1);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uA: { value: new THREE.Vector3() }, uB: { value: new THREE.Vector3() }, uT: { value: 0 }, uAlpha: { value: 0 } },
+      vertexShader: `
+        uniform vec3 uA; uniform vec3 uB; uniform float uT;
+        varying vec2 vUv;
+        void main() {
+          // the streak runs from the tail (behind) to the head (uT along A->B), 9 % of the path long
+          float head = uT, tail = max(0.0, uT - 0.09);
+          vec3 p0 = (modelMatrix * vec4(mix(uA, uB, tail), 1.0)).xyz, p1 = (modelMatrix * vec4(mix(uA, uB, head), 1.0)).xyz;
+          vec3 c = mix(p0, p1, position.x + 0.5);
+          vec3 dir = p1 - p0; float dl = length(dir);
+          dir = dl > 1e-4 ? dir / dl : vec3(1.0, 0.0, 0.0);
+          vec3 toCam = cameraPosition - c; float tl = length(toCam);
+          toCam = tl > 1e-4 ? toCam / tl : vec3(0.0, 0.0, 1.0);
+          vec3 side = cross(dir, toCam); float sl = length(side);
+          side = sl > 1e-4 ? side / sl : vec3(0.0, 1.0, 0.0);
+          c += side * position.y * 3.2;
+          vUv = uv;
+          gl_Position = projectionMatrix * viewMatrix * vec4(c, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float uAlpha; varying vec2 vUv;
+        void main() {
+          float along = vUv.x;                 // 0 tail .. 1 head
+          float across = 1.0 - abs(vUv.y - 0.5) * 2.0;
+          float a = along * along * across * across * uAlpha;
+          if (a < 0.004) discard;
+          gl_FragColor = vec4(vec3(0.85, 0.9, 1.0) * a, a);
+          #include <colorspace_fragment>
+        }`,
+      transparent: true, depthWrite: false, depthTest: true, fog: false, blending: THREE.AdditiveBlending,
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.frustumCulled = false; m.renderOrder = -7; m.name = 'shooting-star'; m.visible = false;
+    m.raycast = () => {};
+    return m;
+  }
+
   // ================================================================= precipitation
   function buildRain(count) {
     const quad = new THREE.PlaneGeometry(1, 1);
@@ -287,8 +370,10 @@
           vec3 p = aSeed.xyz * uBox + vel * uTime;
           p = origin + mod(p - origin, uBox);
           vec3 axis = normalize(vel);
-          vec3 toCam = normalize(cameraPosition - p);
-          vec3 side = normalize(cross(axis, toCam));
+          vec3 tc = cameraPosition - p; float tcl = length(tc);
+          vec3 toCam = tcl > 1e-4 ? tc / tcl : vec3(0.0, 0.0, 1.0);
+          vec3 sd = cross(axis, toCam); float sdl = length(sd);
+          vec3 side = sdl > 1e-4 ? sd / sdl : vec3(1.0, 0.0, 0.0);
           float len = uLen * (0.7 + fract(aSeed.x * 7.13) * 0.6);
           vec3 wp = p + side * position.x * uWidth + axis * position.y * len;
           vec4 mv = viewMatrix * vec4(wp, 1.0);
@@ -345,9 +430,10 @@
         varying vec2 vUv; varying float vAge;
         void main() {
           float r = length(vUv - 0.5) * 2.0;
-          float ring = smoothstep(0.55, 0.78, r) * (1.0 - smoothstep(0.82, 1.0, r));
+          float ring = smoothstep(0.62, 0.8, r) * (1.0 - smoothstep(0.84, 0.98, r));
           float core = (1.0 - smoothstep(0.0, 0.3, r)) * (1.0 - smoothstep(0.0, 0.25, vAge));
-          float a = (ring * 0.9 + core) * (1.0 - vAge) * uOpacity;
+          float fade = 1.0 - vAge;
+          float a = (ring * 0.8 * fade + core) * fade * uOpacity;
           if (a < 0.01) discard;
           gl_FragColor = vec4(uColor, a);
           #include <colorspace_fragment>
@@ -410,6 +496,123 @@
     return pts;
   }
 
+  // ================================================================= puddles (medium / high): fill with rain, dry afterwards
+  const PUDDLE_VS = `
+    attribute vec4 aPud; attribute vec4 aPud2;
+    varying vec2 vLocal; varying vec3 vW; varying float vSeed;
+    #include <fog_pars_vertex>
+    void main() {
+      float c = cos(aPud2.x), s = sin(aPud2.x);
+      vec2 p = position.xz * aPud.w * vec2(aPud2.y, 1.0);
+      p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+      vec3 w = vec3(aPud.x + p.x, aPud.y, aPud.z + p.y);
+      vLocal = position.xz; vW = w; vSeed = aPud2.z;
+      vec4 mvPosition = viewMatrix * vec4(w, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <fog_vertex>
+    }`;
+  const PUDDLE_FS = `
+    uniform float uWet; uniform float uRain; uniform float uTime; uniform vec3 uSky; uniform vec3 uHor; uniform vec3 uSunCol; uniform vec3 uSunDir;
+    varying vec2 vLocal; varying vec3 vW; varying float vSeed;
+    #include <fog_pars_fragment>
+    float pHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+    float pNoise(vec2 p) { vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(pHash(i), pHash(i + vec2(1.0, 0.0)), u.x), mix(pHash(i + vec2(0.0, 1.0)), pHash(i + vec2(1.0, 1.0)), u.x), u.y); }
+    void main() {
+      float r = length(vLocal);
+      float n = pNoise(vLocal * 2.3 + vSeed * 17.0) * 0.45 + pNoise(vLocal * 5.1 - vSeed * 9.0) * 0.2;
+      float fill = mix(0.2, 0.92, uWet);
+      float mask = 1.0 - smoothstep(fill - 0.14, fill, r + n * 0.5);
+      if (mask < 0.01) discard;
+      // raindrop rings: two staggered cell layers, each cell one expanding ring per cycle
+      vec2 nrm = vec2(0.0);
+      if (uRain > 0.01) {
+        for (int k = 0; k < 2; k++) {
+          vec2 q = vW.xz * 2.1 + float(k) * vec2(0.37, 0.61);
+          vec2 cell = floor(q);
+          vec2 loc = fract(q) - 0.5 - (vec2(pHash(cell), pHash(cell + 7.1)) - 0.5) * 0.5;
+          float ph = fract(uTime * (0.75 + pHash(cell + 3.3) * 0.5) + pHash(cell + 1.7));
+          float d = length(loc);
+          float re = (d - ph * 0.42) * 30.0;
+          float ring = exp(-re * re) * (1.0 - ph) * uRain;
+          nrm += (d > 1e-4 ? loc / d : vec2(0.0)) * ring;
+        }
+      }
+      vec3 N = normalize(vec3(nrm.x * 0.5, 1.0, nrm.y * 0.5));
+      vec3 vv = cameraPosition - vW; float vl = length(vv);
+      vec3 V = vl > 1e-5 ? vv / vl : vec3(0.0, 1.0, 0.0);
+      float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 5.0);
+      vec3 R = reflect(-V, N);
+      vec3 refl = mix(uHor, uSky, smoothstep(0.0, 0.55, R.y));
+      float spec = pow(max(dot(R, uSunDir), 0.0), 160.0) * 2.5;
+      // looking down a puddle mostly darkens the stone (wet, absorbing); towards grazing angles it mirrors the sky
+      vec3 col = mix(uHor * 0.07, refl, clamp(fres * 1.7, 0.0, 1.0)) + uSunCol * spec;
+      float a = mask * (0.4 + 0.5 * fres) * clamp(uWet * 1.4, 0.0, 1.0);
+      gl_FragColor = vec4(col, a);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      #include <fog_fragment>
+    }`;
+  function buildPuddles(count) {
+    const L = G.data.layout || {};
+    const W = G.world;
+    const rnd = U.rng(3434);
+    const lines = [...(L.paths || []), ...(L.roads || [])].filter((p) => Array.isArray(p.points) && p.points.length > 1 && !p.elevated);
+    const spots = [];
+    const flat = (x, z, r) => {
+      const h0 = W.surfaceHeight(x, z);
+      if (!Number.isFinite(h0) || h0 - W.terrainHeight(x, z) > 0.1) return null; // not on decks / building platforms
+      let lo = h0, hi = h0;
+      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r]]) { const h = W.surfaceHeight(x + dx, z + dz); if (!Number.isFinite(h)) return null; lo = Math.min(lo, h); hi = Math.max(hi, h); }
+      return hi - lo < 0.05 ? h0 : null;
+    };
+    for (let i = 0; i < count * 40 && spots.length < count; i++) {
+      let x, z;
+      if (L.plaza && rnd() < 0.35) { const a = rnd() * PI * 2, d = Math.sqrt(rnd()) * (L.plaza.r - 1); x = L.plaza.x + Math.sin(a) * d; z = L.plaza.z + Math.cos(a) * d; }
+      else if (lines.length) {
+        const ln = lines[Math.floor(rnd() * lines.length)], pts = ln.points, k = Math.floor(rnd() * (pts.length - 1));
+        const t = rnd(), ax = pts[k][0], az = pts[k][1], bx = pts[k + 1][0], bz = pts[k + 1][1];
+        const len = Math.hypot(bx - ax, bz - az) || 1, off = (rnd() - 0.5) * (ln.width || 3) * 0.6;
+        x = ax + (bx - ax) * t + (-(bz - az) / len) * off; z = az + (bz - az) * t + ((bx - ax) / len) * off;
+      } else break;
+      if (Math.abs(x) > 130 || Math.abs(z) > 130 || W.isWater(x, z)) continue;
+      const sf = W.surfaceAt(x, z);
+      if (sf !== 'stone' && sf !== 'dirt' && sf !== 'road') continue;
+      const r = 0.55 + rnd() * rnd() * 1.3;
+      const y = flat(x, z, r * 1.1);
+      if (y == null) continue;
+      if (spots.some((p) => Math.hypot(p[0] - x, p[2] - z) < p[3] + r + 0.6)) continue;
+      spots.push([x, y + 0.016, z, r, rnd() * PI * 2, 0.65 + rnd() * 0.75, rnd()]);
+    }
+    if (!spots.length) return null;
+    const plane = new THREE.PlaneGeometry(2, 2).rotateX(-PI / 2);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = plane.index;
+    geo.setAttribute('position', plane.attributes.position);
+    const a1 = new Float32Array(spots.length * 4), a2 = new Float32Array(spots.length * 4);
+    spots.forEach((p, i) => { a1.set([p[0], p[1], p[2], p[3]], i * 4); a2.set([p[4], p[5], p[6], 0], i * 4); });
+    geo.setAttribute('aPud', new THREE.InstancedBufferAttribute(a1, 4));
+    geo.setAttribute('aPud2', new THREE.InstancedBufferAttribute(a2, 4));
+    geo.instanceCount = spots.length;
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+    plane.dispose();
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
+        uWet: { value: 0 }, uRain: { value: 0 }, uTime: { value: 0 }, uSky: { value: new THREE.Color(0x9fb4c8) }, uHor: { value: new THREE.Color(0xbcd6e8) },
+        uSunCol: { value: new THREE.Color(0, 0, 0) }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+      },
+      vertexShader: PUDDLE_VS, fragmentShader: PUDDLE_FS,
+      transparent: true, depthWrite: false, fog: true,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.name = 'puddles'; mesh.visible = false;
+    mesh.raycast = () => {};
+    mesh.userData.count = spots.length;
+    return mesh;
+  }
+
   // ================================================================= the system
   const WX = {
     name: 'weather', order: 72, label: '날씨와 시간',
@@ -418,7 +621,8 @@
     temperature: 23, humidity: 55,
     nightFactor: 0, sunElevation: 45, sunAzimuth: 160,
     precipitation: { rain: 0, snow: 0 },
-    wetness: 0,
+    wetness: 0, lightning: 0, rainbow: 0,
+    _lt: null, _ltT: 20, _rainbowOn: false, _puddles: null,
     _hour: 10.5, _phase: null, _autoT: 240, _hudT: 0, _hudKey: '',
     _lastSunE: 999, _lastSunA: 999, _envT: 0, _ready: false, _emittedInit: false,
     _pop: null, _dragging: false, _prefs: null,
@@ -465,11 +669,13 @@
         } catch (e) { G.log.warn('WEATHER', 'sky overlay failed', e); }
         try { this._stars = buildStars(q === 'low' ? 900 : q === 'medium' ? 1500 : 2200); fx.add(this._stars); } catch (e) { G.log.warn('WEATHER', 'stars failed', e); }
         try { this._moon = buildMoon(); fx.add(this._moon); } catch (e) { G.log.warn('WEATHER', 'moon failed', e); }
+        try { this._meteor = buildMeteor(); fx.add(this._meteor); } catch (e) { G.log.warn('WEATHER', 'shooting star failed', e); }
         E.scene.add(fx);
         this._fx = fx;
         try { this._rain = buildRain(q === 'low' ? 2600 : q === 'medium' ? 5200 : 8000); E.scene.add(this._rain); } catch (e) { G.log.warn('WEATHER', 'rain failed', e); }
         try { this._splash = buildSplashes(q === 'low' ? 70 : q === 'medium' ? 150 : 230); E.scene.add(this._splash); } catch (e) { G.log.warn('WEATHER', 'splashes failed', e); }
         try { this._snow = buildSnow(q === 'low' ? 2200 : q === 'medium' ? 4200 : 6000); E.scene.add(this._snow); } catch (e) { G.log.warn('WEATHER', 'snow failed', e); }
+        this._ensurePuddles();
         this._onResize();
         E.onResize?.(() => this._onResize());
       }
@@ -487,7 +693,7 @@
           this._refreshPopover(true);
         }
       });
-      G.bus.on('engine:quality', () => this._onResize());
+      G.bus.on('engine:quality', () => { this._onResize(); this._ensurePuddles(); });
       this._ready = true;
       // compute everything once so the first rendered frame is already graded
       this._apply(0, 0, true);
@@ -582,6 +788,7 @@
       }
       if (sum > 0) for (const id of IDS) this.mix[id] /= sum;
       this._apply(dt, t, false);
+      this._updateLightning(dt);
       // temperature / HUD (2x per second)
       this._hudT -= dt;
       if (this._hudT <= 0) {
@@ -632,6 +839,7 @@
         m.cover += L.cover * w; m.sun += L.sun * w; m.hemi += L.hemi * w; m.fog += L.fog * w; m.grey += L.grey * w;
         m.turb += L.turb * w; m.ray += L.ray * w; m.mie += L.mie * w; m.exp += L.exp * w; m.wind += L.wind * w;
         m.lamp += L.lamp * w; m.haze += L.haze * w;
+        m.sat += L.sat * w; m.con += L.con * w; m.warm += L.warm * w; m.vig += L.vig * w;
         m.tempMod += (wd[id]?.tempMod ?? 0) * w; m.hum += (wd[id]?.humidity ?? 60) * w;
         _greyCol.r += LOOK_COL[id].grey.r * w; _greyCol.g += LOOK_COL[id].grey.g * w; _greyCol.b += LOOK_COL[id].grey.b * w;
         _tint.r += LOOK_COL[id].tint.r * w; _tint.g += LOOK_COL[id].tint.g * w; _tint.b += LOOK_COL[id].tint.b * w;
@@ -649,7 +857,7 @@
 
       // ---- time-of-day factors
       const dayK = smooth(-5, 8, e);                               // daylight amount
-      const gold = smooth(-5, 2, e) * (1 - smooth(6, 26, e));      // golden hour (warm light for the first/last ~2 h of sun)
+      const gold = smooth(-5, 2, e) * (1 - smooth(10, 34, e));      // golden hour: the valley's ridges (~16°) hide the low sun, so the warm light starts higher
       const nightK = 1 - smooth(-12, -2, e);                       // depth of night (sky)
       const twK = (1 - smooth(-1, 4, e)) * (1 - nightK);           // blue hour (sun just below the horizon)
       const glowK = smooth(-9, -1, e) * (1 - smooth(4, 15, e));    // warm glow on the sun side of the sky
@@ -688,6 +896,8 @@
           const f = E.focus;
           sun.position.set(f.x + _moonDir.x * 160, f.y + _moonDir.y * 160, f.z + _moonDir.z * 160);
         }
+        // overcast skies and moonlight cast soft, faint shadows (no hard black pools under the trees at night)
+        if (sun.shadow && 'intensity' in sun.shadow) sun.shadow.intensity = clamp((1 - grey * 0.6) * (e > -1.75 ? 0.92 : 0.5), 0.25, 1);
       }
       // ---- hemisphere (sky / ground bounce)
       const hemi = E.hemi;
@@ -706,7 +916,7 @@
         E.fill.color.copy(COL.fillDay).lerp(COL.fillNight, 1 - dayK);
       }
       // ---- fog (also the horizon colour of the sky overlay -> seamless haze)
-      _fogCol.copy(COL.fogDay).lerp(COL.fogGold, gold * 0.7).lerp(COL.fogNight, 1 - dayK);
+      _fogCol.copy(COL.fogDay).lerp(COL.fogGold, gold * 0.82).lerp(COL.fogNight, 1 - dayK);
       if (grey > 0) { _c2.copy(_greyCol).multiplyScalar(light); if (gold > 0) _c2.lerp(COL.fogGold, gold * 0.25 * light); _fogCol.lerp(_c2, grey); }
       const fog = E.scene.fog;
       if (fog) {
@@ -720,13 +930,34 @@
         const u = E.sky.material.uniforms;
         u.turbidity.value = 5.5 + gold * 2.6 + m.turb;
         u.rayleigh.value = 1.5 + gold * 1.4 + m.ray;
-        u.mieCoefficient.value = 0.004 + m.mie;
-        u.mieDirectionalG.value = 0.82;
+        // a tighter, dimmer sun halo on clear days keeps blue sky around a low sun (less milky backlight)
+        u.mieCoefficient.value = 0.003 + m.mie + gold * 0.0008;
+        u.mieDirectionalG.value = 0.85 - grey * 0.04;
       }
-      // ---- exposure
-      if (E.renderer) E.renderer.toneMappingExposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold);
-      // lens flare only under a clear sky
-      E.flareSuppressed = grey > 0.3;
+      // ---- colour grade (one engine pass on medium / high; exposure on every preset) + sun glow / god rays
+      const exposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold);
+      const wFog = this.mix.FOG || 0, lowLight = 1 - dayK;
+      _gradeArg.exposure = exposure;
+      _gradeArg.contrast = m.con + gold * 0.04 - lowLight * 0.03;
+      _gradeArg.saturation = m.sat * lerp(0.8, 1, dayK) + gold * 0.1 * (1 - grey);
+      _gradeArg.warmth = m.warm + gold * 0.5 * (1 - grey * 0.6) + glowK * 0.08 - lowLight * 0.2;
+      _gradeArg.vignette = m.vig + lowLight * 0.12 + gold * 0.05;
+      _lift.setRGB(0.003 + gold * 0.004, 0.003 + gold * 0.002, 0.004).lerp(_c1.setRGB(0.002, 0.004, 0.011), lowLight);
+      _gain.setRGB(1, 1, 1).lerp(_c1.setRGB(1.05, 1.0, 0.92), gold * (1 - grey)).lerp(_c2.setRGB(0.94, 0.98, 1.07), lowLight * 0.8);
+      _gradeArg.instant = !!force;
+      if (typeof E.grade === 'function') E.grade(_gradeArg);
+      else if (E.renderer) E.renderer.toneMappingExposure = exposure;
+      if (E.atmos) {
+        E.atmos.sunGlow = (1 - grey) * smooth(-2, 3, e) * (1 - wFog * 0.6);
+        E.atmos.rays = (1 - smooth(0.25, 0.75, grey)) * (0.7 + 0.8 * gold) * smooth(-1, 3, e);
+      }
+      // ---- rainbow: opposite the sun when it shines again after rain (low sun, wet air)
+      const rbGoal = smooth(0.18, 0.55, this.wetness) * (1 - smooth(0.04, 0.2, this.mix.RAIN || 0)) * smooth(2, 9, e) * (1 - smooth(34, 44, e))
+        * (1 - smooth(0.35, 0.7, grey)) * (1 - wFog) * (1 - (this.mix.SNOW || 0));
+      this.rainbow = force ? rbGoal : this.rainbow + (rbGoal - this.rainbow) * (1 - Math.exp(-Math.min(dt || 0, 0.25) / 2.5));
+      if (!(this.rainbow >= 0)) this.rainbow = 0;
+      const rbOn = this._rainbowOn ? this.rainbow > 0.1 : this.rainbow > 0.25;
+      if (rbOn !== !!this._rainbowOn) { this._rainbowOn = rbOn; G.bus.emit('weather:rainbow', { on: rbOn }); }
 
       // ---- sky overlay (night sky + overcast / fog veil, horizon == fog colour)
       const ov = this._overlay;
@@ -741,7 +972,10 @@
         u.uSunDir.value.copy(E.sunDir);
         u.uGlow.value.copy(COL.glowSunset).lerp(COL.glowDusk, smooth(1, -6, e));
         u.uGlowAmt.value = glowK * (1 - grey) * 0.9;
-        ov.visible = u.uAH.value > 0.004 || u.uAT.value > 0.004 || u.uGlowAmt.value > 0.004;
+        // twilight: pink anti-twilight arch above the earth's blue shadow on the side opposite the sun
+        u.uBelt.value = smooth(-7, -1.5, e) * (1 - smooth(1, 7, e)) * (1 - grey) * 0.85;
+        u.uRainbow.value = this.rainbow;
+        ov.visible = u.uAH.value > 0.004 || u.uAT.value > 0.004 || u.uGlowAmt.value > 0.004 || u.uBelt.value > 0.004 || u.uRainbow.value > 0.004;
         ov.renderOrder = grey > 0.45 ? -3 : -9; // heavy overcast also veils the clouds
         if (this._envOverlay) this._envOverlay.visible = ov.visible;
       }
@@ -755,6 +989,7 @@
         this._stars.material.uniforms.uAlpha.value = a;
         this._stars.material.uniforms.uTime.value = t;
       }
+      this._updateMeteor(dt, smooth(0.5, 0.95, nightK) * clearNight);
       if (this._moon) {
         const a = smooth(0.15, 0.7, nightK) * (1 - grey * 0.92);
         this._moon.visible = a > 0.01;
@@ -771,6 +1006,9 @@
           N.setWind?.(0.86, 0.5, m.wind);
           // overcast / fog: clouds melt into the haze (also where they overlap distant mountains)
           N.setCloudVeil?.(clamp(grey * 0.85, 0, 0.92), _fogCol);
+          // valley mist: thick at dawn, in fog and after rain, a thin veil on clear afternoons, silvery at night
+          const morn = Math.max(0, 1 - Math.abs(this._hour - 6.8) / 2.6);
+          N.setMist?.(clamp(0.2 + morn * 0.6 + (this.mix.FOG || 0) * 0.7 + this.wetness * 0.35 + (1 - dayK) * 0.18 + (this.mix.RAIN || 0) * 0.2, 0, 1), _fogCol);
         } catch (err) { /* optional */ }
       }
       // ---- night materials & lights (lanterns, windows) — lamps also glow on dark rainy days
@@ -791,6 +1029,64 @@
       this._updatePrecip(dt, t, dayK, cam);
     },
 
+    /** heavy rain: now and then ONE slow soft glow lights the clouds (0.4 s rise, 1.4 s fade — never a strobe) */
+    _updateLightning(dt) {
+      const E = G.sys.engine;
+      const rainI = this.mix.RAIN || 0;
+      const allowed = rainI > 0.6 && (typeof E?.feature === 'function' ? E.feature('lightning') : !G.settings?.reduceMotion);
+      const p = this._lt;
+      if (p) {
+        p.t += dt;
+        const v = p.t < 0.4 ? smooth(0, 0.4, p.t) : 1 - smooth(0.4, 1.8, p.t);
+        this.lightning = clamp(v * p.amp * (allowed ? 1 : 0.5), 0, 1);
+        if (p.t >= 1.8) { this._lt = null; this.lightning = 0; }
+      } else {
+        this.lightning = 0;
+        if (allowed) {
+          this._ltT -= dt;
+          if (this._ltT <= 0) { this._lt = { t: 0, amp: 0.3 + Math.random() * 0.25 }; this._ltT = 24 + Math.random() * 32; }
+        } else if (this._ltT < 8) this._ltT = 8 + Math.random() * 10;
+      }
+      const v = this.lightning;
+      if (typeof E?.grade === 'function') {
+        if (v > 0.001) { _flashArg.flash = v * 0.5; _flashArg.exposure = 1 + v * 0.12; E.grade(_flashArg, 'lightning'); this._ltLayer = true; }
+        else if (this._ltLayer) { E.grade(null, 'lightning'); this._ltLayer = false; }
+      }
+      if (v > 0.001 && E?.hemi) E.hemi.intensity *= 1 + v * 0.45;
+      const N = G.sys.nature;
+      if (v > 0.001 && N?._cloudTint && typeof N.setCloudTint === 'function') N.setCloudTint(_c3.copy(N._cloudTint).lerp(COL.white, v * 0.45));
+    },
+
+    /** clear nights: now and then a shooting star glides across the sky (~1 s; off with reduceMotion) */
+    _updateMeteor(dt, skyK) {
+      const m = this._meteor;
+      if (!m) return;
+      const E = G.sys.engine;
+      const ok = skyK > 0.5 && (typeof E?.feature === 'function' ? E.feature('lightning') : !G.settings?.reduceMotion);
+      const st = this._met || (this._met = { t: -1, wait: 25 + Math.random() * 30 });
+      if (st.t >= 0) {
+        st.t += (dt || 0) / st.dur;
+        const u = m.material.uniforms;
+        u.uT.value = Math.min(st.t, 1);
+        u.uAlpha.value = skyK * Math.sin(Math.PI * Math.min(st.t, 1)) * 1.3;
+        if (st.t >= 1) { st.t = -1; m.visible = false; st.wait = 35 + Math.random() * 55; }
+        return;
+      }
+      if (!ok) return;
+      st.wait -= dt || 0;
+      if (st.wait > 0) return;
+      // a path high in the sky, 25-40 degrees long, gently descending
+      const az = Math.random() * PI * 2, el = (38 + Math.random() * 30) * DEG, len = (25 + Math.random() * 15) * DEG, dz = (8 + Math.random() * 10) * DEG;
+      const dir = Math.random() < 0.5 ? 1 : -1, R = 1800;
+      const pt = (a, e2, out) => out.set(Math.cos(e2) * Math.sin(a) * R, Math.sin(e2) * R, -Math.cos(e2) * Math.cos(a) * R);
+      const u = m.material.uniforms;
+      pt(az, el, u.uA.value); pt(az + dir * len, el - dz, u.uB.value);
+      st.t = 0; st.dur = 0.9 + Math.random() * 0.5;
+      u.uT.value = 0; u.uAlpha.value = 0;
+      m.visible = true;
+      G.bus.emit('weather:shootingstar', {});
+    },
+
     _inTransition() {
       for (const id of IDS) { const v = this.mix[id]; if (v > 0.001 && v < 0.999) return true; }
       return false;
@@ -807,6 +1103,18 @@
       if (WU) {
         if (WU.uRain) WU.uRain.value = clamp(rainI, 0, 1);
         if (WU.uFlowSpeed) WU.uFlowSpeed.value = 1 + 0.55 * this.wetness + 0.15 * rainI;
+      }
+      const pd = this._puddles;
+      if (pd) {
+        const wet = clamp((this.wetness - 0.04) / 0.6, 0, 1);
+        pd.visible = !!pd.userData.allowed && wet > 0.01;
+        if (pd.visible) {
+          const u = pd.material.uniforms, E = G.sys.engine;
+          u.uWet.value = wet; u.uRain.value = rainI; u.uTime.value = t % 600;
+          u.uHor.value.copy(_fogCol);
+          u.uSky.value.copy(this._overlay ? this._overlay.material.uniforms.uZenith.value : _fogCol).lerp(_fogCol, 0.35);
+          if (E?.sun) { u.uSunCol.value.copy(E.sun.color).multiplyScalar(E.sun.intensity * 0.35 * (E.sunDir.y > 0 ? 1 : 0)); u.uSunDir.value.copy(E.sunDir); }
+        }
       }
       if (!cam) return;
       // camera-forward biased centre so most drops are in view
@@ -843,7 +1151,7 @@
         if (sp.visible) {
           const u = sp.material.uniforms;
           u.uTime.value = t;
-          u.uOpacity.value = lerp(0.25, 0.55, dayK) * rainI;
+          u.uOpacity.value = lerp(0.13, 0.28, dayK) * rainI;
           const pl = G.sys.player;
           const c = this._splashCenter;
           if (pl && pl.position && pl.object?.visible !== false) c.copy(pl.position); else c.set(cam.position.x + _fwd.x * 8, 0, cam.position.z + _fwd.z * 8);
@@ -868,6 +1176,20 @@
           if (changed) attr.needsUpdate = true;
         }
       }
+    },
+
+    /** puddles exist on medium / high (built once, lazily, when the preset allows them) */
+    _ensurePuddles() {
+      const E = G.sys.engine;
+      const on = typeof E?.feature === 'function' ? E.feature('rainRings') : (E?.preset?.name !== 'low');
+      if (on && !this._puddles && E?.scene) {
+        try {
+          const q = E.preset?.name;
+          this._puddles = buildPuddles(q === 'high' ? 44 : 28);
+          if (this._puddles) E.scene.add(this._puddles);
+        } catch (e) { G.log.warn('WEATHER', 'puddles failed', e); this._puddles = null; }
+      }
+      if (this._puddles) this._puddles.userData.allowed = !!on;
     },
 
     _onResize() {

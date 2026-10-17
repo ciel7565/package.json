@@ -1,5 +1,5 @@
 {
-  "about": "Shared personal-information (PII) test vectors — kid safety, CONTRACT §12.4. Used by tests/server-e2e.mjs (server/lib/ChatFilter.php, via the API and the PHP CLI) and, embedded by tools/build.mjs as window.__BUILD__.piiVectors, by the developer center self-tests (60-social.js G.sys.social.maskPII). Keep the client and the server rules in sync: both must pass every vector.",
+  "about": "Shared personal-information (PII) test vectors — kid safety, CONTRACT §12.4. Used by tests/server-e2e.mjs (server/lib/ChatFilter.php, via the API and the PHP CLI) and, embedded by tools/build.mjs as window.__BUILD__.piiVectors, by the developer center self-tests (60-social.js G.sys.social.maskPII).  whole: the entire text must become 🔒 · partial: some 🔒 and no 4-digit run left · keep: innocent kid sentences that must come back unchanged · leak: adversarial disguises — none of `secrets` may survive (compared after a strong normalisation: NFKC, every digit script → ASCII, invisible/format/marks removed, letters and digits only, lower-case) · nickname: names the account rules must reject / allow. tests/server-e2e.mjs runs all of them on the server (PHP CLI + API), tests/pii-client.mjs in the built game (G.sys.social.maskPII) and diffs client vs server output. Keep the client and the server rules in sync: both must pass every vector.",
   "whole": [
     "010-1234-5678",
     "01012345678",
@@ -21,7 +21,7 @@
     "010 - 1234 - 5678",
     "𝟎𝟏𝟎-𝟏𝟐𝟑𝟒-𝟓𝟔𝟕𝟖",
     "٠١٠-١٢٣٤-٥٦٧٨",
-    "0️⃣1️⃣0️⃣ 1️⃣2️⃣3️⃣4️⃣ 5️⃣6️⃣7️⃣8️⃣",
+    "0\ufe0f\u20e31\ufe0f\u20e30\ufe0f\u20e3 1\ufe0f\u20e32\ufe0f\u20e33\ufe0f\u20e34\ufe0f\u20e3 5\ufe0f\u20e36\ufe0f\u20e37\ufe0f\u20e38\ufe0f\u20e3",
     "공일공-일이삼사-오육칠팔",
     "공일공 일이삼사 오육칠팔",
     "공일공일이삼사오육칠팔",
@@ -67,6 +67,1480 @@
     "오늘 일 이 삼 놀이 했어",
     "콩 10개 심고 물 3번 줬어",
     "1등 했어!",
-    "3.1415"
-  ]
+    "3.1415",
+    "콩 12개랑 팥 7개 모았어",
+    "레벨 15 됐다!!",
+    "지금 3시 30분이야",
+    "오후 2시 15분에 만나",
+    "2024년 10월 11일 소풍 갔어",
+    "10월 9일은 한글날",
+    "1, 2, 3, 4, 5, 6, 7, 8, 9, 10 세어볼래",
+    "1 2 3 4 5 6 7 8 9 10 세어볼래",
+    "일 이 삼 사 오 육 칠 팔 구 십",
+    "하나 둘 셋 넷 다섯",
+    "시발점에서 출발!",
+    "시발역 가봤어?",
+    "이삼일 뒤에 와",
+    "물 2번 주고 콩 3개 심었어",
+    "1등! 2등! 3등!",
+    "100점 맞았어",
+    "점수 1000000000점!!",
+    "2024-10-11 10:30 에 만나",
+    "가격이 1000-2000 코인이야",
+    "강아지 이름은 콩이야",
+    "된장 담그기 성공!! 🎉",
+    "나 7살이야",
+    "서울시청 가봤어",
+    "제주도 놀러갔어",
+    "naver 웹툰 재밌어",
+    "ok . so what",
+    "go . to school",
+    "좋아 . me too",
+    "10 20 30 40 50 세기",
+    "100 200 300 코인",
+    "삼육구 삼육구 삼육구 게임!",
+    "일이삼사오육칠팔구십",
+    "구구단 2단 2 4 6 8 10 12 14 16 18",
+    "오이 이사 일일이 구이 다 했어",
+    "사이좋게 지내자",
+    "삼촌이랑 이모랑 놀았어",
+    "우리 반 친구 3명이랑 왔어",
+    "김치 담글 때 소금 2컵",
+    "메주 3개 만들었어 ㅋㅋㅋ",
+    "초코 우유 좋아",
+    "나 초록색 좋아",
+    "안녕 친구들 😊",
+    "빵 5개 사줘",
+    "엄마가 6시에 밥 먹으래",
+    "1+1=2",
+    "3 x 4 = 12",
+    "7 8 9 10 11 12 13 14 15 숨바꼭질",
+    "이층 삼층 사층",
+    "유치원 끝나고 놀자",
+    "학교 끝나고 또 와",
+    "1학년 때 배웠어",
+    "서울 부산 대구 다 가봤어",
+    "강남 스타일 춤 추자",
+    "1·2·3 출발!",
+    "오늘은 ㆍ 맑음",
+    "귤 3개 ~ 5개",
+    "10 - 20 = -10",
+    "7-8살 친구들",
+    "오늘 마크 하자!",
+    "로블록스 재밌어",
+    "제페토에서 옷 샀어",
+    "인스타 몰라",
+    "아이디 뭐야?",
+    "카톡 했어?",
+    "유튜브 봤어",
+    "틱톡 춤 배웠어",
+    "디코가 뭐야?",
+    "마크에서 집 지었어",
+    "마크 서버 들어갈래?",
+    "마크 pvp 하자",
+    "로블록스 하자",
+    "인스타 사진 예쁘다",
+    "유치원 다녀왔어",
+    "우리 유치원 친구야",
+    "동생 어린이집 가",
+    "오늘 학교 끝나고 놀자",
+    "초등학교 가고 싶어",
+    "나 1학년이야",
+    "우리 반 선생님 좋아",
+    "2반 친구랑 놀았어",
+    "점심 먹었어",
+    "점 찍었어",
+    "닷새 동안 했어",
+    "사과 하나 둘 셋",
+    "하나 둘 셋 넷 다섯 여섯 일곱 여덟 아홉 열",
+    "이 이 이 이 이 이 이 이 이",
+    "일일일일일일일일일",
+    "공공공공공공공공",
+    "오오오오오오오오오 대박",
+    "1111111111",
+    "123456789 숫자 세기",
+    "0 1 2 3 4 5 6 7 8 9",
+    "9 8 7 6 5 4 3 2 1 0 발사!",
+    "2 4 6 8 10 12 14 16",
+    "5 10 15 20 25 30",
+    "3 6 9 12 15 18 21",
+    "100 200 300 400 500 600 코인",
+    "레벨 10 20 30 40 50",
+    "2024년 10월 17일",
+    "2024.10.17",
+    "2024-10-17 오후 3시",
+    "10/17 소풍날",
+    "3시 30분에 만나",
+    "1시 2시 3시 4시",
+    "가격 1500원",
+    "콩 1000개 모았어!",
+    "점수 99999999점",
+    "점수 123456789점",
+    "look at this jar",
+    "meet me at home",
+    "I love kimchi",
+    "see you at the farm",
+    "a b c d e f g",
+    "ㅋㅋㅋㅋ 웃겨",
+    "ㅠㅠ 슬퍼",
+    "된장 3kg 만들었어",
+    "물 2L 마셨어",
+    "이사 갔어",
+    "오이 먹었어",
+    "구이 맛있다",
+    "사이다 마실래",
+    "일이 많아",
+    "삼일절",
+    "육이오",
+    "칠판",
+    "팔씨름 하자",
+    "구구단 외웠어",
+    "이 사람 누구야?",
+    "오 진짜?",
+    "공 차자!",
+    "공공장소",
+    "영화 봤어",
+    "빵 먹자",
+    "빵빵 터졌어",
+    "하나도 안 무서워",
+    "둘이서 놀자",
+    "셋이 같이 가자",
+    "넷플릭스 봤어",
+    "다섯 살이야",
+    "여섯 시에 만나",
+    "일곱 시 반",
+    "인터넷 느려",
+    "서울 가고 싶어",
+    "부산 바다 예뻐",
+    "우리 동네 좋아",
+    "101번 버스 타",
+    "우리집 3층이야",
+    "하트 ❤\ufe0f❤\ufe0f❤\ufe0f",
+    "🍎🍌🍇",
+    "1\ufe0f\u20e32\ufe0f\u20e33\ufe0f\u20e3 출발",
+    "구구단 3단 3 6 9 12 15 18 21 24 27",
+    "숨바꼭질 1 2 3 4 5 6 7 8 9 10",
+    "디엠 보내",
+    "gmail 몰라",
+    "다음에 또 놀자",
+    "이메일 몰라",
+    "앳된 얼굴",
+    "점 점 점",
+    "쩜쩜쩜",
+    "www 몰라",
+    "http 가 뭐야",
+    "1.5배 빨라",
+    "3.14 원주율",
+    "오늘은 10월 17일 금요일",
+    "이삼사오육칠팔구",
+    "나랑 너랑 1 2 3 4 5 6 7 8 9 10",
+    "사이좋게 일이삼 놀이",
+    "10분 20분 30분 40분"
+  ],
+  "leak": [
+    {
+      "id": "sep-comma",
+      "t": "010,1234,5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-colon",
+      "t": "010:1234:5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-plus",
+      "t": "010+1234+5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-equals",
+      "t": "010=1234=5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-pipe",
+      "t": "010|1234|5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-hash",
+      "t": "010#1234#5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-double-dash",
+      "t": "010 -- 1234 -- 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-emoji",
+      "t": "010😀1234😀5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-heart",
+      "t": "010❤\ufe0f1234❤\ufe0f5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-jamo-k",
+      "t": "010 ㅋ 1234 ㅋ 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-word-hago",
+      "t": "010 하고 1234 하고 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-dot-spaced",
+      "t": "010 . 1234 . 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-arrow",
+      "t": "010→1234→5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-star-emoji",
+      "t": "010⭐1234⭐5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-nbsp",
+      "t": "010\u00a01234\u00a05678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-thinspace",
+      "t": "010\u20091234\u20095678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-ideographic-space",
+      "t": "010\u30001234\u30005678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "spaced-single-digits",
+      "t": "0 1 0 1 2 3 4 5 6 7 8",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "split-last-group",
+      "t": "010 1234 56 78",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "zw-space",
+      "t": "010\u200b1234\u200b5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "soft-hyphen",
+      "t": "010\u00ad1234\u00ad5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "cgj",
+      "t": "010\u034f1234\u034f5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "hangul-filler-3164",
+      "t": "010\u31641234\u31645678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "hangul-filler-115f",
+      "t": "010\u115f1234\u115f5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "halfwidth-filler-ffa0",
+      "t": "010\uffa01234\uffa05678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "mongolian-vs",
+      "t": "010\u180e1234\u180e5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "word-joiner-between-digits",
+      "t": "0\u20601\u20600\u20601\u20602\u20603\u20604\u20605\u20606\u20607\u20608",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "lrm-between-digits",
+      "t": "0\u200e1\u200e0\u200e1\u200e2\u200e3\u200e4\u200e5\u200e6\u200e7\u200e8",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "arabic-letter-mark",
+      "t": "010\u061c1234\u061c5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "tag-space",
+      "t": "010\udb40\udc201234\udb40\udc205678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "variation-selector-1",
+      "t": "0\ufe001\ufe000\ufe001\ufe002\ufe003\ufe004\ufe005\ufe006\ufe007\ufe008",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "combining-acute",
+      "t": "0\u03011\u03010\u0301-1\u03012\u03013\u03014\u0301-5\u03016\u03017\u03018\u0301",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "fullwidth-spaced",
+      "t": "０１０ １２３４ ５６７８",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "fullwidth-mixed",
+      "t": "내번호 ０1０-12３4-5６78",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "devanagari",
+      "t": "०१०-१२३४-५६७८",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "circled",
+      "t": "⓪①⓪-①②③④-⑤⑥⑦⑧",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "superscript",
+      "t": "⁰¹⁰-¹²³⁴-⁵⁶⁷⁸",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "cjk-numerals",
+      "t": "〇一〇 一二三四 五六七八",
+      "secrets": [
+        "一二三四",
+        "五六七八"
+      ]
+    },
+    {
+      "id": "letter-O-for-zero",
+      "t": "O1O-1234-5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "letter-o-l",
+      "t": "o1o 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "letter-l-for-one",
+      "t": "010-l234-5678",
+      "secrets": [
+        "l234",
+        "5678"
+      ]
+    },
+    {
+      "id": "kd-young",
+      "t": "영일영-일이삼사-오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "kd-ppang",
+      "t": "빵일빵 일이삼사 오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "kd-ryuk",
+      "t": "공일공 일이삼사 오륙칠팔",
+      "secrets": [
+        "일이삼사",
+        "오륙칠팔"
+      ]
+    },
+    {
+      "id": "kd-spaced",
+      "t": "공 일 공 일 이 삼 사 오 육 칠 팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "kd-mixed-spaced",
+      "t": "010 일 이 삼 사 5 6 7 8",
+      "secrets": [
+        "일이삼사",
+        "5678"
+      ]
+    },
+    {
+      "id": "kd-slash-spaced",
+      "t": "공일공 / 일이삼사 / 오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "kd-particle-e",
+      "t": "공일공에 일이삼사에 오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "kd-native",
+      "t": "공일공 하나둘셋넷 다섯여섯일곱여덟",
+      "secrets": [
+        "하나둘셋넷",
+        "다섯여섯일곱여덟"
+      ]
+    },
+    {
+      "id": "english-words",
+      "t": "zero one zero one two three four five six seven eight",
+      "secrets": [
+        "onetwothreefour",
+        "fivesixseveneight"
+      ]
+    },
+    {
+      "id": "email-aet",
+      "t": "kiddino 앳 gmail 닷 com",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-jeom",
+      "t": "kiddino 골뱅이 gmail 점 com",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-no-tld",
+      "t": "kiddino@gmail",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-no-tld-naver",
+      "t": "내 메일 kiddino@naver 야",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-at-naver",
+      "t": "kiddino at naver",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-dot-local",
+      "t": "kid dot dino at gmail dot com",
+      "secrets": [
+        "kiddot",
+        "kid",
+        "dino"
+      ]
+    },
+    {
+      "id": "email-spaced-letters",
+      "t": "k i d d i n o @ g m a i l . c o m",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-fullwidth-letters",
+      "t": "kiddino＠ｇｍａｉｌ．ｃｏｍ",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-bracket-at-dot",
+      "t": "kiddino [at] gmail [dot] com",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-c0m",
+      "t": "kiddino@gmail.c0m",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-hangul-host",
+      "t": "kiddino 골뱅이 네이버 닷컴",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-geolbaengi-naver-jeom",
+      "t": "kiddino 골뱅이 네이버 쩜 컴",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "url-club",
+      "t": "badsite.club 와봐",
+      "secrets": [
+        "badsite"
+      ]
+    },
+    {
+      "id": "url-online",
+      "t": "badsite.online 들어와",
+      "secrets": [
+        "badsite"
+      ]
+    },
+    {
+      "id": "url-games",
+      "t": "kidsfun.games 에서 놀자",
+      "secrets": [
+        "kidsfun"
+      ]
+    },
+    {
+      "id": "url-live",
+      "t": "meetme.live",
+      "secrets": [
+        "meetme"
+      ]
+    },
+    {
+      "id": "url-top",
+      "t": "freegift.top",
+      "secrets": [
+        "freegift"
+      ]
+    },
+    {
+      "id": "url-xyz-path",
+      "t": "freegift.xyz/abc",
+      "secrets": [
+        "freegift"
+      ]
+    },
+    {
+      "id": "url-space-dot",
+      "t": "badsite .com",
+      "secrets": [
+        "badsite"
+      ]
+    },
+    {
+      "id": "url-hangul-dot",
+      "t": "badsite 쩜 컴",
+      "secrets": [
+        "badsite"
+      ]
+    },
+    {
+      "id": "url-ip",
+      "t": "http 없이 192.168.0.10 접속",
+      "secrets": [
+        "192168010"
+      ]
+    },
+    {
+      "id": "url-t-me",
+      "t": "t.me/dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "url-discord-invite",
+      "t": "discord.gg/abc123",
+      "secrets": [
+        "abc123"
+      ]
+    },
+    {
+      "id": "url-youtube-handle",
+      "t": "youtube.com/@dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "addr-road-gil",
+      "t": "테헤란로 12길 34",
+      "secrets": [
+        "1234",
+        "34"
+      ]
+    },
+    {
+      "id": "addr-gyeonggi",
+      "t": "경기도 성남시 분당구 정자동 123",
+      "secrets": [
+        "정자동",
+        "123"
+      ]
+    },
+    {
+      "id": "addr-busan",
+      "t": "부산 해운대구 우동 1234-5",
+      "secrets": [
+        "우동",
+        "12345"
+      ]
+    },
+    {
+      "id": "addr-dong-ho-korean",
+      "t": "백일동 천이백삼호",
+      "secrets": [
+        "백일동",
+        "천이백삼호"
+      ]
+    },
+    {
+      "id": "addr-dong-ho-dash",
+      "t": "101-1203",
+      "secrets": [
+        "1011203"
+      ]
+    },
+    {
+      "id": "addr-apt-name-dong",
+      "t": "래미안 101동",
+      "secrets": [
+        "래미안"
+      ]
+    },
+    {
+      "id": "addr-house-no",
+      "t": "역삼동 12번지 살아",
+      "secrets": [
+        "12"
+      ]
+    },
+    {
+      "id": "school-cho-abbrev",
+      "t": "나 해바라기초 2학년 3반이야",
+      "secrets": [
+        "해바라기"
+      ]
+    },
+    {
+      "id": "school-kinder-space",
+      "t": "해바라기 유치원 다녀",
+      "secrets": [
+        "해바라기"
+      ]
+    },
+    {
+      "id": "school-daycare-space",
+      "t": "해바라기 어린이집 다녀",
+      "secrets": [
+        "해바라기"
+      ]
+    },
+    {
+      "id": "class-korean-words",
+      "t": "이학년 삼반이야",
+      "secrets": [
+        "이학년삼반"
+      ]
+    },
+    {
+      "id": "class-dash",
+      "t": "2-3반이야",
+      "secrets": [
+        "23반"
+      ]
+    },
+    {
+      "id": "school-cho-space",
+      "t": "해바라기 초 2학년",
+      "secrets": [
+        "해바라기"
+      ]
+    },
+    {
+      "id": "sns-kt-jamo",
+      "t": "ㅋㅌ dino123",
+      "secrets": [
+        "dino123"
+      ]
+    },
+    {
+      "id": "sns-insta-plain",
+      "t": "insta dinokid 팔로우해",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-at-then-insta",
+      "t": "@dinokid 인스타로 와",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-discord-plain",
+      "t": "discord dino#1234",
+      "secrets": [
+        "dino1234"
+      ]
+    },
+    {
+      "id": "sns-kakao-korean-id",
+      "t": "카톡 아이디 디노123",
+      "secrets": [
+        "디노123"
+      ]
+    },
+    {
+      "id": "sns-openchat",
+      "t": "오픈채팅 디노방 들어와",
+      "secrets": [
+        "디노방"
+      ]
+    },
+    {
+      "id": "sns-ig-abbrev",
+      "t": "ig: dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-tiktok-plain",
+      "t": "틱톡 dino.kid 봐줘",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-roblox",
+      "t": "로블록스 dinokid123 친추",
+      "secrets": [
+        "dinokid123"
+      ]
+    },
+    {
+      "id": "sns-zepeto",
+      "t": "제페토 dinokid 놀러와",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-minecraft",
+      "t": "마크 아이디 dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sep-araea-318d",
+      "t": "010ㆍ1234ㆍ5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-hyphen-2010",
+      "t": "010‐1234‐5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-nb-hyphen-2011",
+      "t": "010‑1234‑5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-figure-dash-2012",
+      "t": "010‒1234‒5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-minus-2212",
+      "t": "010−1234−5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-wave-301c",
+      "t": "010〜1234〜5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-fw-tilde-ff5e",
+      "t": "010～1234～5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-bullet-2022",
+      "t": "010•1234•5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-katakana-dot-30fb",
+      "t": "010・1234・5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-hyph-point-2027",
+      "t": "010‧1234‧5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-small-hyphen-fe63",
+      "t": "010﹣1234﹣5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-semicolon",
+      "t": "010;1234;5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-apostrophe",
+      "t": "010'1234'5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "sep-x",
+      "t": "010x1234x5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "email-bullet-dot",
+      "t": "kiddino@gmail•com",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-araea-dot",
+      "t": "kiddino@gmailㆍcom",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "email-middot",
+      "t": "kiddino@gmail·com",
+      "secrets": [
+        "kiddino"
+      ]
+    },
+    {
+      "id": "id-generic",
+      "t": "내 아이디 dinokid123",
+      "secrets": [
+        "dinokid123"
+      ]
+    },
+    {
+      "id": "id-generic-neun",
+      "t": "아이디는 dinokid123 이야",
+      "secrets": [
+        "dinokid123"
+      ]
+    },
+    {
+      "id": "phone-word-prefix",
+      "t": "번호 010 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "phone-kd-prefix",
+      "t": "폰번 공일공 일이삼사 오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "phone-two-msgs-1",
+      "t": "010 1234",
+      "secrets": [
+        "1234"
+      ]
+    },
+    {
+      "id": "phone-reverse",
+      "t": "8765 4321 010 거꾸로",
+      "secrets": [
+        "8765",
+        "4321"
+      ]
+    },
+    {
+      "id": "landline-031",
+      "t": "031,123,4567",
+      "secrets": [
+        "123",
+        "4567"
+      ]
+    },
+    {
+      "id": "kakao-pay-account",
+      "t": "국민은행 123456-01-123456",
+      "secrets": [
+        "12345601123456"
+      ]
+    },
+    {
+      "id": "dots",
+      "t": "내 번호 010.1234.5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "slashes-spaced",
+      "t": "010 / 1234 / 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "paren-area",
+      "t": "(010) 1234-5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "paren-close",
+      "t": "010)1234-5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "beon-suffix",
+      "t": "010-1234-5678번",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "tilde-ro",
+      "t": "010~1234~5678로 전화해",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "plus82-dash",
+      "t": "+82-10-1234-5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "82-no-plus",
+      "t": "82 10 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "irang",
+      "t": "010 이랑 1234 이랑 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "kd-irang",
+      "t": "공일공 이랑 일이삼사 이랑 오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "geurigo",
+      "t": "010 그리고 1234 그리고 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "kd-glued-neun",
+      "t": "번호는공일공일이삼사오육칠팔",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "kd-iya",
+      "t": "공일공 일이삼사 오육칠팔이야",
+      "secrets": [
+        "일이삼사",
+        "오육칠팔"
+      ]
+    },
+    {
+      "id": "mixed-o-kd",
+      "t": "O1O 일이삼사 5678",
+      "secrets": [
+        "일이삼사",
+        "5678"
+      ]
+    },
+    {
+      "id": "fw-plus82",
+      "t": "＋８２ １０ １２３４ ５６７８",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "dingbat",
+      "t": "❶❷❸❹-❺❻❼❽ 공일공",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "double-circled",
+      "t": "⓪⓵⓪-⓵⓶⓷⓸-⓹⓺⓻⓼",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "zwj-between",
+      "t": "0\u200d1\u200d0\u200d1\u200d2\u200d3\u200d4\u200d5\u200d6\u200d7\u200d8",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "bidi-override",
+      "t": "\u202e010-1234-5678\u202c",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "email-plain",
+      "t": "kid.dino@gmail.com",
+      "secrets": [
+        "kiddino",
+        "kid"
+      ]
+    },
+    {
+      "id": "email-upper",
+      "t": "KID@NAVER.COM",
+      "secrets": [
+        "kid"
+      ]
+    },
+    {
+      "id": "email-cokr",
+      "t": "kid@naver.co.kr",
+      "secrets": [
+        "kid"
+      ]
+    },
+    {
+      "id": "email-fw-spaced",
+      "t": "kid ＠ naver ． com",
+      "secrets": [
+        "kid"
+      ]
+    },
+    {
+      "id": "email-daum",
+      "t": "kid@daum.net",
+      "secrets": [
+        "kid"
+      ]
+    },
+    {
+      "id": "email-at-gmail-com",
+      "t": "kid at gmail.com",
+      "secrets": [
+        "kid"
+      ]
+    },
+    {
+      "id": "email-math-letters",
+      "t": "dino@gmail.com 로 보내",
+      "secrets": [
+        "dino"
+      ]
+    },
+    {
+      "id": "url-www",
+      "t": "www.kidsite.com",
+      "secrets": [
+        "kidsite"
+      ]
+    },
+    {
+      "id": "url-bitly",
+      "t": "https://bit.ly/abc",
+      "secrets": [
+        "abc"
+      ]
+    },
+    {
+      "id": "url-kr",
+      "t": "kidsite.kr 놀러와",
+      "secrets": [
+        "kidsite"
+      ]
+    },
+    {
+      "id": "url-kr-spaced",
+      "t": "kidsite . kr",
+      "secrets": [
+        "kidsite"
+      ]
+    },
+    {
+      "id": "url-bracket-net",
+      "t": "kidsite[.]net",
+      "secrets": [
+        "kidsite"
+      ]
+    },
+    {
+      "id": "url-open-kakao",
+      "t": "open.kakao.com/o/abc123",
+      "secrets": [
+        "abc123"
+      ]
+    },
+    {
+      "id": "sns-insta-at",
+      "t": "인스타 @dino_kid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-kakao-plain",
+      "t": "카톡 dino_kid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-insta-colon",
+      "t": "insta: dino_kid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-tiktok-id",
+      "t": "틱톡 아이디 dino_kid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-dico-hash",
+      "t": "디코 dino#1234",
+      "secrets": [
+        "dino1234"
+      ]
+    },
+    {
+      "id": "sns-roblox-en",
+      "t": "roblox dino_kid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-robl-id",
+      "t": "로블 아이디 dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "sns-zepeto-id",
+      "t": "제페토 아이디는 dino123",
+      "secrets": [
+        "dino123"
+      ]
+    },
+    {
+      "id": "addr-teheran",
+      "t": "서울시 강남구 테헤란로 123",
+      "secrets": [
+        "테헤란로",
+        "123"
+      ]
+    },
+    {
+      "id": "addr-yeoksam-dash",
+      "t": "역삼동 12-3",
+      "secrets": [
+        "123"
+      ]
+    },
+    {
+      "id": "addr-raemian-ho",
+      "t": "래미안 103동 1201호",
+      "secrets": [
+        "래미안",
+        "1031201"
+      ]
+    },
+    {
+      "id": "school-full-class",
+      "t": "해바라기초등학교 2학년 3반",
+      "secrets": [
+        "해바라기",
+        "23반"
+      ]
+    },
+    {
+      "id": "school-kinder-yo",
+      "t": "해바라기 유치원 다녀요",
+      "secrets": [
+        "해바라기"
+      ]
+    },
+    {
+      "id": "school-cho-danyeo",
+      "t": "나는 해바라기초 다녀",
+      "secrets": [
+        "해바라기"
+      ]
+    }
+  ],
+  "nickname": {
+    "reject": [
+      "로블록스dino12",
+      "제페토dinokid",
+      "해바라기초2학년",
+      "인스타dino123",
+      "kakao_kid77",
+      "공일공일이삼사",
+      "일이삼사오육칠팔",
+      "해바라기유치원",
+      "O1O_1234_567",
+      "오육칠팔_1234",
+      "마크아이디abc",
+      "3학년2반",
+      "로블_dino"
+    ],
+    "allow": [
+      "용감한다람쥐",
+      "콩콩이",
+      "날쌘거북이",
+      "dinokid",
+      "발효왕",
+      "김치사랑",
+      "마루",
+      "하늘별",
+      "kimchi99",
+      "메주콩"
+    ]
+  }
 }

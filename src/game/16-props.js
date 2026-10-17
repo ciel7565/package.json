@@ -6,6 +6,9 @@
 //
 //   G.sys.props (order 25)
 //     plot(id) -> farm-bed group (userData.soilMaterial, soilTopY, size, rows)
+//   Phase 4: the hanging 청사초롱 lanterns swing gently in the wind (vertex-shader pendulum around each hook;
+//   2 draw calls for all of them, the night halo follows the swing); paving and decks darken and gain a wet
+//   sheen while G.sys.weather.wetness is high.
 //     jarCount                 number of decorative jars
 //     anchors                  {id: group} of every interactive prop registered with G.world
 // Static meshes are merged per material and per 44 m map cell (few draw calls, still frustum-culled).
@@ -969,6 +972,82 @@
     sg.updateMatrixWorld(true);
   }
 
+  // ---------------------------------------------------------------- swinging lantern parts (world-space, pivot attribute)
+  const SWAY_U = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0.86, 0.5) }, uWindS: { value: 1 } };
+  const SWAY_GLSL = `
+    attribute vec4 aPivot;
+    uniform float uTime; uniform vec2 uWind; uniform float uWindS;
+    mat3 tfRot(vec3 a, float ang) {
+      float c = cos(ang), s = sin(ang), t = 1.0 - c;
+      return mat3(t * a.x * a.x + c, t * a.x * a.y + s * a.z, t * a.x * a.z - s * a.y,
+                  t * a.x * a.y - s * a.z, t * a.y * a.y + c, t * a.y * a.z + s * a.x,
+                  t * a.x * a.z + s * a.y, t * a.y * a.z - s * a.x, t * a.z * a.z + c);
+    }
+    mat3 tfSwing(float ph) {
+      float ws = min(uWindS, 2.0);
+      float ang = (sin(uTime * 1.55 + ph) * 0.6 + sin(uTime * 2.6 + ph * 1.9) * 0.3) * (0.04 + 0.06 * ws) + 0.05 * ws;
+      vec3 ax = vec3(-uWind.y, 0.0, uWind.x); float al = length(ax);
+      ax = al > 1e-4 ? ax / al : vec3(1.0, 0.0, 0.0);
+      return tfRot(ax, ang);
+    }`;
+  const swayParts = { silk: [], cap: [] };
+  const _swC = new THREE.Color();
+  function swayAdd(kind, g, worldM, hex, pivot, phase, glow = 1) {
+    if (!g.index) { const n = g.attributes.position.count, idx = new Array(n); for (let i = 0; i < n; i++) idx[i] = i; g.setIndex(idx); }
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    g.applyMatrix4(worldM);
+    const n = g.attributes.position.count;
+    _swC.set(hex);
+    const colA = new Float32Array(n * 3), pv = new Float32Array(n * 4), gl = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      colA[i * 3] = _swC.r; colA[i * 3 + 1] = _swC.g; colA[i * 3 + 2] = _swC.b;
+      pv[i * 4] = pivot[0]; pv[i * 4 + 1] = pivot[1]; pv[i * 4 + 2] = pivot[2]; pv[i * 4 + 3] = phase;
+      gl[i] = glow;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(colA, 3));
+    g.setAttribute('aPivot', new THREE.BufferAttribute(pv, 4));
+    g.setAttribute('aGlow', new THREE.BufferAttribute(gl, 1));
+    swayParts[kind].push(g);
+  }
+  function swayMaterial(kind) {
+    const silk = kind === 'silk';
+    const m = STD({ vertexColors: true, roughness: silk ? 0.75 : 0.62, metalness: silk ? 0 : 0.05, emissive: silk ? new THREE.Color(1, 1, 1) : new THREE.Color(0, 0, 0) });
+    m.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, SWAY_U);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute float aGlow;\nvarying float vGlow;\n' + SWAY_GLSL)
+        .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nmat3 tfR = tfSwing(aPivot.w);\nobjectNormal = tfR * objectNormal;\nvGlow = aGlow;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed = aPivot.xyz + tfR * (transformed - aPivot.xyz);');
+      if (silk) {
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying float vGlow;')
+          .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vColor.rgb * 1.9 * vGlow;');
+      }
+    };
+    m.customProgramCacheKey = () => 'pr-sway-' + kind;
+    if (silk) G.world.addNightMaterial(m, 1.35, 0.03);
+    return m;
+  }
+  function buildSwayMeshes(root) {
+    const out = [];
+    for (const kind of ['silk', 'cap']) {
+      const list = swayParts[kind];
+      if (!list.length) continue;
+      const g = list.length === 1 ? list[0] : ADDONS.BufferGeometryUtils.mergeGeometries(list, false);
+      if (!g) continue;
+      g.computeBoundingSphere();
+      const mesh = new THREE.Mesh(g, swayMaterial(kind));
+      mesh.name = 'lanterns-sway-' + kind; mesh.castShadow = kind === 'cap'; mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+      mesh.raycast = () => {};
+      root.add(mesh);
+      out.push(mesh);
+      list.length = 0;
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- lanterns (+ night glow)
   const glowPts = [];
   function buildLanterns() {
@@ -991,28 +1070,36 @@
         P.add('stone', geo.box(0.34, 0.18, 0.34), M(0, 0.09, 0), '#cfc9bd');
         P.add('wood', geo.box(0.11, 2.45, 0.11, 'grain'), M(0, 0.18 + 1.22, 0), '#5e3d24');
         P.add('wood', geo.box(0.6, 0.08, 0.08, 'grain'), M(0.25, 2.5, 0), '#5e3d24');
-        P.add('metal', geo.cyl(0.006, 0.006, 0.22, 4), M(0.48, 2.36, 0), '#222222');
-        // 청사초롱: blue silk on top, red silk below (both glow at night), dark wooden caps, tassel
-        P.add('silkBlue', geo.cyl(0.17, 0.17, 0.19, 12), M(0.48, 2.15, 0), '#ffffff');
-        P.add('silkRed', geo.cyl(0.17, 0.17, 0.2, 12), M(0.48, 1.955, 0), '#ffffff');
-        P.add('wood', geo.cyl(0.08, 0.18, 0.06, 12), M(0.48, 2.275, 0), '#3b2a1c');
-        P.add('wood', geo.cyl(0.18, 0.1, 0.05, 12), M(0.48, 1.83, 0), '#3b2a1c');
-        P.add('paint', geo.cyl(0.012, 0.035, 0.16, 6), M(0.48, 1.72, 0), '#c0392b');
-        glowPts.push([P.wx(0.48, 0), gy + 2.06, P.wz(0.48, 0), 0.8]);
+        // 청사초롱: blue silk on top, red silk below (both glow at night), dark wooden caps, tassel — the whole
+        // hanging part swings from the hook under the arm (pivot at the top of the cord)
+        const pivot = [P.wx(0.48, 0), gy + 2.47, P.wz(0.48, 0)], ph = i * 1.7 + lt.x * 0.31;
+        const at = (y) => mul(P.base, M(0.48, y, 0));
+        swayAdd('cap', geo.cyl(0.006, 0.006, 0.22, 4), at(2.36), '#222222', pivot, ph);
+        swayAdd('silk', geo.cyl(0.17, 0.17, 0.19, 12), at(2.15), '#2f56b0', pivot, ph, 0.62);
+        swayAdd('silk', geo.cyl(0.17, 0.17, 0.2, 12), at(1.955), '#c63a2c', pivot, ph, 1.0);
+        swayAdd('cap', geo.cyl(0.08, 0.18, 0.06, 12), at(2.275), '#3b2a1c', pivot, ph);
+        swayAdd('cap', geo.cyl(0.18, 0.1, 0.05, 12), at(1.83), '#3b2a1c', pivot, ph);
+        swayAdd('cap', geo.cyl(0.012, 0.035, 0.16, 6), at(1.72), '#c0392b', pivot, ph);
+        glowPts.push([P.wx(0.48, 0), gy + 2.06, P.wz(0.48, 0), 0.8, pivot, ph]);
         circleCol(lt.x, lt.z, 0.2);
       }
     });
   }
   function buildGlow(root) {
     if (!glowPts.length) return null;
-    const pos = new Float32Array(glowPts.length * 3), sz = new Float32Array(glowPts.length);
-    glowPts.forEach((p, i) => { pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; sz[i] = p[3]; });
+    const pos = new Float32Array(glowPts.length * 3), sz = new Float32Array(glowPts.length), pv = new Float32Array(glowPts.length * 4);
+    glowPts.forEach((p, i) => {
+      pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; sz[i] = p[3];
+      const piv = p[4] || [p[0], p[1], p[2]];  // stone lanterns: pivot == position -> no swing
+      pv[i * 4] = piv[0]; pv[i * 4 + 1] = piv[1]; pv[i * 4 + 2] = piv[2]; pv[i * 4 + 3] = p[5] || 0;
+    });
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('size', new THREE.BufferAttribute(sz, 1));
+    g.setAttribute('aPivot', new THREE.BufferAttribute(pv, 4));
     const m = new THREE.ShaderMaterial({
-      uniforms: { uMap: { value: G.gfx.radialTexture(64, 'rgba(255,214,150,1)', 'rgba(255,160,60,0)') }, uOpacity: { value: 0 }, uScale: { value: window.innerHeight * 0.5 } },
-      vertexShader: 'attribute float size; uniform float uScale; void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); gl_PointSize = size * 2.4 * uScale / max(-mv.z, 0.5); gl_Position = projectionMatrix * mv; }',
+      uniforms: { uMap: { value: G.gfx.radialTexture(64, 'rgba(255,214,150,1)', 'rgba(255,160,60,0)') }, uOpacity: { value: 0 }, uScale: { value: window.innerHeight * 0.5 }, ...SWAY_U },
+      vertexShader: SWAY_GLSL + '\nattribute float size; uniform float uScale; void main(){ vec3 p = aPivot.xyz + tfSwing(aPivot.w) * (position - aPivot.xyz); vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = size * 2.4 * uScale / max(-mv.z, 0.5); gl_Position = projectionMatrix * mv; }',
       fragmentShader: 'uniform sampler2D uMap; uniform float uOpacity; void main(){ vec4 c = texture2D(uMap, gl_PointCoord); gl_FragColor = vec4(c.rgb, c.a * uOpacity); }',
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     });
@@ -1315,6 +1402,7 @@
       }
       cells.clear();
       try { this.jarCount = buildJarInstances(root); } catch (e) { G.log.error('WORLD', 'jar instancing failed', e); }
+      try { this.swayMeshes = buildSwayMeshes(root); } catch (e) { G.log.error('WORLD', 'lantern sway meshes failed', e); }
       this.glow = buildGlow(root);
       try { buildNightLights(root); } catch (e) { G.log.warn('WORLD', 'night lights failed', e); }
       PSIGN.getTexture().needsUpdate = true; SCREEN.getTexture().needsUpdate = true;
@@ -1324,7 +1412,11 @@
       G.log.info('WORLD', `props: ${meshes} merged meshes (~${Math.round(tris / 1000)}k tris), ${this.jarCount} decorative jars, ${colliders.length} colliders`);
     },
 
-    update() {
+    update(dt, t) {
+      SWAY_U.uTime.value = (t || 0) % 3600;
+      const N = G.sys.nature?.uniforms;
+      if (N) { SWAY_U.uWind.value.copy(N.uWind.value); SWAY_U.uWindS.value = N.uWindStrength.value; }
+      this._updateWet();
       const nf = G.world.nightFactor || 0;
       const g = this.glow;
       if (g && nf !== this._nf) {
@@ -1334,7 +1426,25 @@
       }
     },
 
+    /** rain darkens paving, decks and roof tiles and gives them a wet sheen (uniform tweaks only, no recompiles) */
+    _updateWet() {
+      const w = clamp(Number(G.sys.weather?.wetness) || 0, 0, 1);
+      if (this._wetK != null && Math.abs(w - this._wetK) < 0.01) return;
+      this._wetK = w;
+      const k = w * w * (3 - 2 * w);
+      for (const key of WET_KEYS) {
+        let m;
+        try { m = mat(key); } catch (e) { continue; }
+        if (!m || !m.isMeshStandardMaterial) continue;
+        const dry = m.userData.dry || (m.userData.dry = { r: m.roughness, c: m.color.clone(), e: m.envMapIntensity ?? 1 });
+        m.roughness = lerp(dry.r, Math.min(dry.r, 0.4), k * 0.85);
+        m.color.copy(dry.c).multiplyScalar(1 - 0.3 * k);
+        m.envMapIntensity = dry.e * (1 + 0.45 * k);
+      }
+    },
+
     plot(id) { return plotGroups[id] || null; },
   };
+  const WET_KEYS = ['paver', 'pavement', 'emblem', 'stone', 'field', 'plank', 'roof', 'gravel'];
   G.register(props);
 })();

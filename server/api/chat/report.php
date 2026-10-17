@@ -25,6 +25,8 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function
     elseif ($tid > 0) { $tu = Users::byId($tid); $tid = $tu ? (int) $tu['id'] : 0; if ($tu) $target = (string) $tu['nickname']; }
     elseif ($target !== '') { $tu = Users::byNickname($target); $tid = $tu ? (int) $tu['id'] : 0; }
     if ($target === '') throw new ApiException(400, 'TARGET_REQUIRED', '신고할 대상을 확인할 수 없어요.');
+    // an unknown target name is free text typed by the reporter: admins never see personal information in it either
+    if ($tid === 0) $target = ChatFilter::maskPII($target);
     if ($tid === $c->uid()) throw new ApiException(400, 'SELF_REPORT', '자기 자신은 신고할 수 없어요.');
     $dup = $msg ? Db::one('SELECT id FROM chat_reports WHERE reporter_id = ? AND message_id = ?', [$c->uid(), (int) $msg['id']]) : null;
     if ($dup) return ['reportId' => (int) $dup['id'], 'duplicate' => true];

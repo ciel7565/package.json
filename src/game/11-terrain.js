@@ -18,6 +18,15 @@
 //     riverLine / roadLines / pathLines   smoothed centre lines ([[x,z],...])
 //     uniforms + glslTerrain   GPU height / ground colour / grass-mask textures (grass, water)
 //     noise2(x,z), fbm2(x,z,oct)  deterministic Perlin noise shared with nature/water
+//     manjangdae               정선 만장대 lookout (phase 4): {x, z, r, top, pts (switchback centre line,
+//                              top -> foot), s (arc length per point), y (path height per point), len,
+//                              pathY(s), nearest(x,z) -> {i, s, d, x, z}, hill(x,z)} | null
+// The lookout hill (layout.manjangdae) is added on top of the valley floor after the campus flattening
+// (roads / river / buildings keep it away), with a flat paved plateau, a steep north face towards the view,
+// a gentler north-west flank carrying the filleted switchback path (carved as a level bench at a constant
+// grade) and a forested ridge running out of the valley to the south. It feeds the mountain field (forest
+// & ground colours) except inside the view wedge below the deck, and never gets slope colliders (the
+// lookout module fences the path and the plateau instead).
 // =============================================================================
 (function () {
   const L = G.data.layout || {};
@@ -140,8 +149,136 @@
     }
     for (const p of L.paths || []) {
       const hw = (p.width || 2.5) / 2;
+      if (p.elevated) {
+        // the 만장대 switchback path: filleted hairpins, carved by mdCarve (never flattened to the valley floor)
+        const pts = MD ? MD.pts : smoothLine(p.points, 0.7);
+        lines.paths.push({ id: p.id, type: p.type || 'stone', width: p.width || 3, hw, pts, coarse: pts.filter((_, i) => i % 3 === 0 || i === pts.length - 1), elevated: true });
+        continue;
+      }
       lines.paths.push({ type: p.type || 'dirt', width: p.width || 2.5, hw, pts: smoothLine(p.points, 0.7), coarse: smoothLine(p.points, 2.2) });
     }
+  }
+
+  // ---------------------------------------------------------------- 정선 만장대 (lookout hill, phase 4)
+  let MD = null;
+  /** fillet every corner of a polyline with an arc of radius R (hairpins become smooth turns), resampled at `step` */
+  function filletLine(pts, R, step) {
+    const out = [];
+    const push = (x, z) => { const q = out[out.length - 1]; if (!q || Math.hypot(q[0] - x, q[1] - z) > 1e-3) out.push([x, z]); };
+    push(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [ax, az] = pts[i - 1], [bx, bz] = pts[i], [cx, cz] = pts[i + 1];
+      let ux = bx - ax, uz = bz - az, vx = cx - bx, vz = cz - bz;
+      const lu = Math.hypot(ux, uz), lv = Math.hypot(vx, vz);
+      if (!(lu > 1e-6) || !(lv > 1e-6)) { push(bx, bz); continue; }
+      ux /= lu; uz /= lu; vx /= lv; vz /= lv;
+      const cos = clamp(ux * vx + uz * vz, -0.999, 0.999), th = Math.acos(cos);
+      if (th < 0.05) { push(bx, bz); continue; }
+      let r = R, tl = r * Math.tan(th / 2);
+      const lim = Math.min(lu, lv) * 0.45;
+      if (tl > lim) { tl = lim; r = tl / Math.tan(th / 2); }
+      const p0x = bx - ux * tl, p0z = bz - uz * tl;
+      const cross = ux * vz - uz * vx;            // >0: turning one way, <0 the other
+      const nx = cross > 0 ? -uz : uz, nz = cross > 0 ? ux : -ux; // towards the arc centre
+      const ccx = p0x + nx * r, ccz = p0z + nz * r;
+      const a0 = Math.atan2(p0z - ccz, p0x - ccx);
+      const sweep = (cross > 0 ? 1 : -1) * th;
+      push(p0x, p0z);
+      const n = Math.max(2, Math.ceil((Math.abs(sweep) * r) / (step * 0.6)));
+      for (let k = 1; k <= n; k++) { const a = a0 + sweep * (k / n); push(ccx + Math.cos(a) * r, ccz + Math.sin(a) * r); }
+    }
+    push(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+    // resample at ~step
+    const res = [out[0]];
+    for (let i = 1; i < out.length; i++) {
+      const [ax, az] = out[i - 1], [bx, bz] = out[i];
+      const l = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(l / step));
+      for (let k = 1; k <= n; k++) res.push([ax + (bx - ax) * (k / n), az + (bz - az) * (k / n)]);
+    }
+    return res;
+  }
+  function prepareManjangdae() {
+    const M = L.manjangdae;
+    if (!M || !Array.isArray(M.route) || M.route.length < 2 || ![M.x, M.z, M.r, M.top].every(Number.isFinite)) { MD = null; return; }
+    const pts = filletLine(M.route, M.hairpinR || 3.4, 0.8);
+    const n = pts.length, sArr = new Float32Array(n), yArr = new Float32Array(n);
+    for (let i = 1; i < n; i++) sArr[i] = sArr[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const len = sArr[n - 1] || 1, top = M.top, foot = Number.isFinite(M.footY) ? M.footY : 0;
+    for (let i = 0; i < n; i++) yArr[i] = top + (foot - top) * (sArr[i] / len);
+    const a = Number.isFinite(M.gentleBearing) ? M.gentleBearing : -Math.PI * 0.75;
+    MD = {
+      x: M.x, z: M.z, r: M.r, top, hw: (M.pathWidth || 3) / 2,
+      ux: Math.sin(a), uz: Math.cos(a), span: M.gentleSpan || 60, wSteep: M.steepWidth || 20, wGentle: M.gentleWidth || 36,
+      ridge: (M.ridge || []).filter((q) => Array.isArray(q) && q.length >= 5 && q.every(Number.isFinite)),
+      view: M.view || null, pts, s: sArr, y: yArr, len,
+      bx0: Math.min(...pts.map((p) => p[0])) - 6, bx1: Math.max(...pts.map((p) => p[0])) + 6,
+      bz0: Math.min(...pts.map((p) => p[1])) - 6, bz1: Math.max(...pts.map((p) => p[1])) + 6,
+    };
+    // the player's route hint follows exactly this centre line
+    for (const nl of L.navLinks || []) if (nl && nl.id === (M.navLink || 'MANJANGDAE')) nl.route = pts.map((p) => [p[0], p[1]]);
+  }
+  /** soft linear ramp 1 -> 0 over u in [0, 1] with rounded ends */
+  function mdRamp(u) {
+    if (u <= 0) return 1; if (u >= 1) return 0;
+    const e = 0.18;
+    if (u < e) return 1 - (u * u) / (2 * e * (1 - e));
+    if (u > 1 - e) { const v = 1 - u; return (v * v) / (2 * e * (1 - e)); }
+    return 1 - (u - e / 2) / (1 - e);
+  }
+  /** additive hill height (before protection by roads / river / buildings) */
+  function mdHill(x, z) {
+    if (!MD) return 0;
+    const dx = x - MD.x, dz = z - MD.z, r = Math.sqrt(dx * dx + dz * dz);
+    let h;
+    if (r <= MD.r) h = MD.top;
+    else {
+      const ca = (dx * MD.ux + dz * MD.uz) / r;
+      const ang = Math.acos(clamp(ca, -1, 1)) * 57.29578;
+      const g = 1 - smooth(MD.span * 0.6, MD.span, ang);
+      const wf = MD.wSteep + (MD.wGentle - MD.wSteep) * g;
+      h = MD.top * mdRamp((r - MD.r) / wf);
+    }
+    // ridge spine running out of the valley (skips its round start: the dome owns the summit)
+    const R = MD.ridge;
+    for (let i = 0; i < R.length - 1; i++) {
+      const a = R[i], b = R[i + 1];
+      const vx = b[0] - a[0], vz = b[1] - a[1], l2 = vx * vx + vz * vz;
+      let t = l2 > 1e-9 ? ((x - a[0]) * vx + (z - a[1]) * vz) / l2 : 0;
+      if (i === 0 && t <= 0.02) continue;
+      t = clamp(t, 0, 1);
+      const d = Math.hypot(x - a[0] - vx * t, z - a[1] - vz * t);
+      const crest = a[2] + (b[2] - a[2]) * t, w0 = a[3] + (b[3] - a[3]) * t, wf = a[4] + (b[4] - a[4]) * t;
+      const hr = crest * (1 - smooth(w0, w0 + wf, d)) * (1 + 0.08 * N2(x / 23 + 4, z / 23 - 2));
+      if (hr > h) h = hr;
+    }
+    return h;
+  }
+  /** nearest point on the switchback centre line -> {i, s, d, x, z} (reused object) */
+  const _mdN = { i: 0, s: 0, d: 1e9, x: 0, z: 0 };
+  function mdNearest(x, z) {
+    _mdN.d = 1e9;
+    if (!MD) return _mdN;
+    const P = MD.pts;
+    for (let i = 0; i < P.length - 1; i++) {
+      const ax = P[i][0], az = P[i][1], vx = P[i + 1][0] - ax, vz = P[i + 1][1] - az;
+      const l2 = vx * vx + vz * vz;
+      let t = l2 > 1e-9 ? ((x - ax) * vx + (z - az) * vz) / l2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, pz = az + vz * t, d = Math.hypot(x - px, z - pz);
+      if (d < _mdN.d) { _mdN.d = d; _mdN.i = i; _mdN.s = MD.s[i] + (MD.s[i + 1] - MD.s[i]) * t; _mdN.x = px; _mdN.z = pz; }
+    }
+    return _mdN;
+  }
+  function mdPathY(s) {
+    if (!MD) return 0;
+    return MD.top + ((MD.y[MD.y.length - 1]) - MD.top) * clamp(s / MD.len, 0, 1);
+  }
+  /** 0..1 inside the view wedge below the deck (no forest there, rock & grass instead) */
+  function mdView(x, z) {
+    const v = MD && MD.view;
+    if (!v) return 0;
+    const ox = Math.max(0, Math.abs(x - v.x) - v.hw), oz = Math.max(0, Math.abs(z - v.z) - v.hd);
+    return 1 - smooth(0, 5, Math.hypot(ox, oz));
   }
 
   // ---------------------------------------------------------------- feature index (layout -> shapes)
@@ -214,6 +351,10 @@
     // paths
     for (const p of lines.paths) {
       const surf = PATH_SURF[p.type] ?? S_DIRT;
+      if (p.elevated) { // carved by mdCarve: no flattening, keeps vegetation & grass off the stone
+        addLine(p.coarse, p.hw, { kind: K_PATH, ptype: p.type, vegT: 2.2, vegS: 0.6, grass: 0.1, surf, prio: 4, tint: COL.stone, tintPad: 0.7, tintStr: 0.55 });
+        continue;
+      }
       addLine(p.coarse, p.hw, { kind: K_PATH, ptype: p.type, flat: [0.8, 2.6], prot: [1.2, 1.6], vegT: 1.7, vegS: 0.45, grass: -0.05, surf, prio: surf === S_WOOD ? 5 : surf === S_STONE ? 4 : 3 });
     }
     // plaza & hall plaza
@@ -221,6 +362,7 @@
     if (L.hallPlaza) addF({ t: 2, x: L.hallPlaza.x, z: L.hallPlaza.z, hw: L.hallPlaza.w / 2, hd: L.hallPlaza.d / 2, rot: 0, flat: [1.2, 4], vegT: 3, vegS: 0.6, grass: 0.25, surf: S_STONE, prio: 2, tint: COL.stone, tintPad: 0.8, tintStr: 0.85 });
     // zones: flat slightly inside the circle, trees kept to the rim
     for (const zn of G.data.zones || []) {
+      if (zn.elevated) { addF({ t: 1, x: zn.center[0], z: zn.center[1], r: zn.r * 0.82, kind: K_ZONE, vegT: 0 }); continue; } // 만장대: keep the hill
       addF({ t: 1, x: zn.center[0], z: zn.center[1], r: zn.r * 0.82, kind: K_ZONE, flat: [zn.r * 0.08, 6], vegT: 0 });
     }
     // buildings
@@ -253,7 +395,16 @@
     for (const pz of L.photoZones || []) addF({ t: 1, x: pz.x, z: pz.z, r: pz.r, vegT: 0.8, vegS: 0 });
     for (const lt of L.landmarkTrees || []) addF({ t: 1, x: lt.x, z: lt.z, r: 0.8, flat: [1, 2], vegT: 4.5 * (lt.scale || 1), vegS: 1.4, grass: 0.4 });
     for (const w of L.stoneWalls || []) addF({ t: 3, ax: w[0], az: w[1], bx: w[2], bz: w[3], hw: 0.45, flat: [0.6, 1.5], vegT: 2, vegS: 0.35, grass: 0.1 });
-    if (L.spawn) addF({ t: 1, x: L.spawn.x, z: L.spawn.z, r: 2.5, flat: [0.5, 2], vegT: 3, vegS: 1.2 });
+    if (L.spawn) {
+      const onHill = MD && Math.hypot(L.spawn.x - MD.x, L.spawn.z - MD.z) < MD.r + 2;
+      addF(onHill ? { t: 1, x: L.spawn.x, z: L.spawn.z, r: 2.5, vegT: 3, vegS: 1.2 } : { t: 1, x: L.spawn.x, z: L.spawn.z, r: 2.5, flat: [0.5, 2], vegT: 3, vegS: 1.2 });
+    }
+    // 정선 만장대: paved plateau (stone surface, no grass / trees), view wedge below the deck (no trees)
+    if (MD) {
+      addF({ t: 1, x: MD.x, z: MD.z, r: MD.r - 0.1, vegT: 3.2, vegS: 0.4, grass: 0.4, surf: S_STONE, prio: 4, tint: COL.stone, tintPad: 0.6, tintStr: 0.75, reach: 2 });
+      const v = MD.view;
+      if (v && [v.x, v.z, v.hw, v.hd].every(Number.isFinite)) addF({ t: 2, x: v.x, z: v.z, hw: v.hw, hd: v.hd, rot: 0, vegT: 1.5 });
+    }
     // ponds: tree/shrub clearance (carving is analytic, see pondCarve)
     for (const p of L.ponds || []) addF({ t: 1, x: p.x, z: p.z, r: p.r, flat: [3.2, 4], vegT: 2.6, vegS: 0.9, grass: 0.6 });
   }
@@ -410,6 +561,29 @@
     probe(x, z);
     h *= 1 - P.flat;
     raw.m = m; raw.flat = P.flat;
+    // 정선 만장대: hill (kept away from roads / river / buildings by the same flattening weights),
+    // switchback bench carved at a constant grade, exactly flat plateau
+    if (MD && x > MD.bx0 - 60 && x < MD.bx1 + 80 && z > MD.bz0 - 40 && z < MD.bz1 + 140) {
+      const hill = mdHill(x, z) * (1 - P.flat);
+      if (hill > 0) {
+        h += hill;
+        const mv = hill * (1 - mdView(x, z));
+        if (mv > raw.m) raw.m = mv;
+      }
+      if (x > MD.bx0 && x < MD.bx1 && z > MD.bz0 && z < MD.bz1) {
+        const nn = mdNearest(x, z);
+        const w = 1 - smooth(MD.hw + 0.6, MD.hw + 3.4, nn.d);
+        if (w > 0) h += (mdPathY(nn.s) - h) * w;
+      }
+      const pr = Math.hypot(x - MD.x, z - MD.z);
+      // uphill side (the ridge climbs on behind the deck): a cut bank that starts at the balustrade, so the
+      // railing never sinks into the slope; faded out before the ridge so the cap never leaves a seam
+      if (pr < MD.r + 20) {
+        const cap = MD.top + Math.max(0, pr - MD.r - 0.25) * 0.85;
+        if (h > cap) h += (cap - h) * (1 - smooth(MD.r + 12, MD.r + 20, pr));
+      }
+      if (pr < MD.r + 0.3) h += (MD.top - h) * (1 - smooth(MD.r - 0.6, MD.r + 0.3, pr));
+    }
     // river channel
     if (P.riverD < RIVER_HW + 12) {
       const dr = P.riverD + N2(x / 37, z / 37) * 1.3;
@@ -833,6 +1007,16 @@ float terrainH(vec2 p) {
     noise2: N2, noise3: N3, fbm2,
     _fieldsReady: false,
     _classGrid: null, _grassMask: null,
+    /** 정선 만장대 geometry (null until ensureFields, or without layout.manjangdae) */
+    get manjangdae() {
+      if (!MD) return null;
+      return {
+        x: MD.x, z: MD.z, r: MD.r, top: MD.top, hw: MD.hw, pts: MD.pts, s: MD.s, y: MD.y, len: MD.len,
+        pathY: (s) => mdPathY(s),
+        nearest: (x, z) => { const n = mdNearest(x, z); return { i: n.i, s: n.s, d: n.d, x: n.x, z: n.z }; },
+        hill: (x, z) => mdHill(x, z),
+      };
+    },
 
     /** compute all fields & height grids (pure JS; safe to call from other modules) */
     ensureFields() {
@@ -842,6 +1026,7 @@ float terrainH(vec2 p) {
     },
     _computeFields() {
       const t0 = performance.now();
+      prepareManjangdae();
       prepareLines();
       this.riverLine = lines.river; this.roadLines = lines.roads; this.pathLines = lines.paths;
       buildFeatures();
@@ -1361,6 +1546,8 @@ float terrainH(vec2 p) {
       this._slopeColliders = [];
       for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
         if (!hi[j * nx + i]) continue;
+        // the 만장대 hill is a walkable landmark (its path & plateau are fenced by the lookout module)
+        if (MD && mdHill(x0 + i * step, z0 + j * step) > 0.05) continue;
         const nb = (ii, jj) => (ii < 0 || jj < 0 || ii >= nx || jj >= nz) ? 1 : hi[jj * nx + ii];
         if (nb(i - 1, j) && nb(i + 1, j) && nb(i, j - 1) && nb(i, j + 1)) continue;
         const id = G.world.addCollider({ shape: 'circle', x: x0 + i * step, z: z0 + j * step, r: 1.9, tag: 'terrain' });

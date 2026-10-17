@@ -54,7 +54,10 @@
     go: (zone, x, z, rotY) => (rotY == null ? { type: 'teleport', zone, x, z } : { type: 'teleport', zone, x, z, rotY }),
   };
   // arrival spots for "데려다 주세요" (open ground in front of each place, facing it)
+  const SPAWN = G.data.layout?.spawn || {};
   const GO = {
+    // phase 4: the 정선 만장대 lookout deck (= the new-player spawn, facing the valley)
+    manjangdae: A.go('ZONE_MANJANGDAE', Number.isFinite(SPAWN.x) ? SPAWN.x : 52, Number.isFinite(SPAWN.z) ? SPAWN.z : 109.4, Number.isFinite(SPAWN.rotY) ? SPAWN.rotY : PI),
     plaza: A.go('ZONE_MAIN', 0, 7),
     myJar: A.go('ZONE_JANGDOKDAE', 21.8, -3.4, PI / 2),
     jangdokdae: A.go('ZONE_JANGDOKDAE', 18, 4),
@@ -101,6 +104,12 @@
     nodes: {
       // ---- first meeting (spec #27 / #71)
       intro: {
+        // phase 4: new visitors arrive from the 정선 만장대 lookout on the ridge
+        variants: [{
+          if: { visited: 'ZONE_MANJANGDAE' },
+          text: '안녕하세요! 만장대에서 내려오느라 수고 많았어요.\n이곳은 **전통발효체험관**이에요. {nickname}님, 환영해요.',
+          kid: '만장대에서 잘 내려왔네요! 🏔️ 여기는 **발효체험관**이에요.',
+        }],
         kid: '안녕하세요, {nickname}님! 🏺 여기는 **전통발효체험관**이에요.',
         text: '안녕하세요! 이곳은 **전통발효체험관**입니다.\n{nickname}님, 오신 것을 환영해요.',
         emote: 'wave', actions: [A.flag('npc:master:intro')], next: 'intro2',
@@ -792,6 +801,7 @@
       { if: { phase: 'NIGHT' }, text: '밤길 조심하세요! 청사초롱이 길을 밝혀 줄 거예요.', kid: '밤길 조심해요! 등불이 길을 밝혀 줘요 🏮' },
       '전통발효체험관에 오신 것을 환영합니다!',
       '매점에서 씨앗과 재료를 살 수 있어요~',
+      '산 위 정선 만장대에서 내려다보는 계곡 풍경, 정말 멋지지요?',
       '길을 잃으면 M 키로 지도를 열어 보세요!',
     ],
     nodes: {
@@ -814,7 +824,7 @@
           { text: '안녕히 계세요', kid: '안녕', emoji: '👋', end: true, actions: [A.anim('bow')] },
         ],
       },
-      tour1: { text: '체험관은 **아홉 구역**으로 나뉘어 있어요.\n중앙 광장을 중심으로 길이 이어지지요.', next: 'tour2', kid: '여기는 **아홉 곳**으로 나뉘어 있어요. 가운데에 광장이 있어요 ⛲' },
+      tour1: { text: '체험관은 **아홉 구역**으로 나뉘어 있어요.\n중앙 광장을 중심으로 길이 이어지고, 남쪽 산 위엔 **정선 만장대** 전망대가 있지요.', next: 'tour2', kid: '여기는 **아홉 곳**이 있어요. 산 위엔 **만장대** 전망대도 있어요 🏔️' },
       tour2: { text: '광장 북쪽엔 전통작물 구역과 체험관 본관,\n동쪽엔 수백 개의 장독이 늘어선 장독대가 있어요.', emote: 'point', next: 'tour3', kid: '위쪽엔 밭이랑 큰 건물, 오른쪽엔 장독대가 있어요 🌱🏺' },
       tour3: { text: '서쪽엔 발효식품·허브·체험교육 구역이,\n동남쪽엔 정자와 연못이 있는 휴식정원이 있어요.', next: 'tour4', kid: '왼쪽엔 허브 밭이랑 배움터, 아래엔 예쁜 연못이 있어요 🌸' },
       tour4: {
@@ -853,6 +863,7 @@
         choices: [
           { text: '광장으로 데려다 주세요', kid: '데려다 줘요', emoji: '🚀', actions: [GO.plaza] },
           { text: '장독대로 데려다 주세요', kid: '장독대 가기', emoji: '🏺', actions: [GO.jangdokdae] },
+          { text: '만장대 전망대로 데려다 주세요', kid: '만장대 가기', emoji: '🏔️', actions: [GO.manjangdae] },
           { text: '고마워요!', kid: '고마워요', emoji: '👋', end: true },
         ],
       },

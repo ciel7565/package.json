@@ -8,6 +8,11 @@
 //   focusOn(vec3|Object3D, {distance, height, duration, side})  dialogue framing (over the shoulder)
 //   photoControl({dx, dy, zoom, height})        free orbit around the player in photo mode (<= 20 m)
 //   shake(amount 0..1), snap(), yaw / pitch / distance, gentle (easy-mode camera active)
+//   shot(pos, look, {fov, duration}) / setMode('shot')   scripted cinematography (intro, telescope tour):
+//                                               the caller moves pos/look every frame; setMode('follow') ends it
+// Follow at speed (phase 4: 9.6 / 18 m/s): the target is fed forward with the player's own motion (zero
+// lag, zero jitter), the view leads a little in the direction of travel, pulls back and widens the FOV a
+// touch at a sprint (normal mode only), and auto-swings behind the runner with a capped turn rate.
 // Drag (G.input.consumeLook) rotates, wheel / pinch (G.input.consumeZoom) zooms 2.5–16 m.
 // The camera never goes below the terrain and pulls in when G.world.cameraBlockers occlude the player.
 // 쉬운 모드 (CONTRACT §12): a gentle camera for small children — softer drag (x0.62), a comfortable
@@ -27,9 +32,25 @@
   const gentle = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
   const FOV = 55;
   const SAMPLES = [0.35, 0.7, 1];
+  const MODES = ['follow', 'cinematic', 'dialogue', 'photo', 'focus', 'shot'];
+  // speed-aware follow (phase 4): numbers relative to the player's WALK / RUN constants
+  const WALK = () => G.sys.player?.WALK || 9.6;
+  const RUN = () => G.sys.player?.RUN || 18;
+  const LEAD = 1.7, LEAD_EASY = 0.9;   // m the view leads at a full sprint
+  const DOLLY = 0.9, DOLLY_EASY = 0.45; // m pulled back at a full sprint
+  const FOV_KICK = 7;                   // deg at a full sprint (normal mode only)
+  const SWING_MAX = 1.5;                // rad/s cap for automatic swings behind the runner
 
   const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
   const _dir = new THREE.Vector3();
+  const NO_OPTS = Object.freeze({});
+  /** [x,y,z] | {x,y,z} -> out (false when missing / not finite) */
+  function readVec(v, out) {
+    if (!v) return false;
+    const x = Array.isArray(v) ? v[0] : v.x, y = Array.isArray(v) ? v[1] : v.y, z = Array.isArray(v) ? v[2] : v.z;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return false;
+    out.set(x, y, z); return true;
+  }
   const _basis = { forward: new THREE.Vector3(0, 0, -1), right: new THREE.Vector3(1, 0, 0) };
 
   const cam = {
@@ -49,6 +70,8 @@
     _cine: { center: new THREE.Vector3(0, 6, -30), radius: 70, height: 26, speed: 0.045, angle: 0.6 },
     _focus: { point: new THREE.Vector3(), obj: null, distance: 3.4, height: 1.75, side: 0.95, dir: new THREE.Vector3(0, 0, 1), orbit: false, yaw: 0, pitch: 0.25, pair: 0 },
     _photo: { yaw: 0, pitch: 0.2, dist: 4.5, height: 0 },
+    _shot: { pos: new THREE.Vector3(0, 30, 60), look: new THREE.Vector3(0, 0, 0), fov: null },
+    _lead: new THREE.Vector3(), _prevTarget: new THREE.Vector3(), _hasPrev: false, _speedK: 0,
     _ray: null,
 
     init() {
@@ -90,7 +113,8 @@
     // ------------------------------------------------------------ public API
     setMode(mode, opts = {}) {
       const prev = this.mode;
-      if (!['follow', 'cinematic', 'dialogue', 'photo', 'focus'].includes(mode)) { G.log.warn('UI', `camera: unknown mode ${mode}`); return; }
+      if (!MODES.includes(mode)) { G.log.warn('UI', `camera: unknown mode ${mode}`); return; }
+      if (mode === 'shot') return this.shot(opts.pos || this._pos, opts.look || this._look, opts);
       if (mode === 'cinematic') return this.cinematic(opts);
       if (mode === 'dialogue') return this.focusOn(opts.target || opts.point || G.sys.player?.position || _v.set(0, 1.4, 0), opts);
       if (mode === 'photo') {
@@ -105,7 +129,7 @@
       }
       this._beginTransition(opts.duration ?? (prev === 'cinematic' ? 1.6 : 0.7));
       this.mode = mode;
-      if (mode === 'follow') { this._ftInit = this._ftInit && prev !== 'cinematic'; }
+      if (mode === 'follow') { this._ftInit = this._ftInit && prev !== 'cinematic' && prev !== 'shot'; this._lead.set(0, 0, 0); }
       G.bus.emit('camera:mode', { mode, prev });
     },
 
@@ -149,6 +173,24 @@
       if (prev !== 'dialogue') G.bus.emit('camera:mode', { mode: 'dialogue', prev });
     },
 
+    /**
+     * scripted shot: put the camera at pos looking at look (Vector3 | [x,y,z] | {x,y,z}). Call it every frame
+     * to fly a path; the first call eases in over opts.duration (default 0 = cut). opts.fov overrides the FOV.
+     */
+    shot(pos, look, opts = NO_OPTS) {
+      const sh = this._shot;
+      if (readVec(pos, _v3)) sh.pos.copy(_v3);
+      if (readVec(look, _v2)) sh.look.copy(_v2);
+      // narrow angles are allowed here (telescope views)
+      sh.fov = opts && Number.isFinite(opts.fov) ? clamp(opts.fov, 10, 100) : (opts && opts.fov === null ? null : sh.fov);
+      const prev = this.mode;
+      if (prev !== 'shot') {
+        this._beginTransition(opts && Number.isFinite(opts.duration) ? opts.duration : 0);
+        this.mode = 'shot';
+        G.bus.emit('camera:mode', { mode: 'shot', prev });
+      }
+    },
+
     photoControl(o = {}) {
       const ph = this._photo;
       if (o.dx) ph.yaw -= o.dx * 0.0055;
@@ -186,6 +228,7 @@
     snap() {
       this.yaw = this._yawT; this.pitch = this._pitchT; this.distance = this._distT; this._effDist = this._distT;
       this._ftInit = false;
+      this._lead.set(0, 0, 0); this._hasPrev = false; this._speedK = 0;
       this._trans = null;
       this._blockTimer = 0;
       this._computeDesired(0);
@@ -234,18 +277,36 @@
       const mode = this.mode;
       if (mode === 'follow' || mode === 'photo') {
         this._playerTarget(_v);
-        if (!this._ftInit || dt === 0) { this._ft.copy(_v); this._ftInit = true; }
+        const pl = G.sys.player;
+        if (!this._ftInit || dt === 0 || !this._hasPrev) { this._ft.copy(_v); this._ftInit = true; }
         else {
-          const kh = damp(16, dt), kv = damp(7, dt);
+          // feed forward with the player's own motion (continuous movement: zero lag, zero jitter) and only
+          // smooth what is left (step-ups, small corrections); jumps are followed softly in height
+          const mx = _v.x - this._prevTarget.x, my = _v.y - this._prevTarget.y, mz = _v.z - this._prevTarget.z;
+          if (Math.abs(mx) < 4 && Math.abs(mz) < 4) { this._ft.x += mx; this._ft.z += mz; }
+          if (pl?.grounded !== false && Math.abs(my) < 1) this._ft.y += my * 0.85;
+          const kh = damp(14, dt), kv = damp(pl?.grounded === false ? 4 : 8, dt);
           this._ft.x += (_v.x - this._ft.x) * kh; this._ft.z += (_v.z - this._ft.z) * kh; this._ft.y += (_v.y - this._ft.y) * kv;
         }
+        this._prevTarget.copy(_v); this._hasPrev = true;
+        // speed factor 0 (<= walk pace) .. 1 (full sprint): look-ahead, dolly
+        const vel = pl?.velocity;
+        const sp = vel ? Math.hypot(vel.x, vel.z) : 0;
+        const sk = Number.isFinite(sp) ? clamp(sp / RUN(), 0, 1) : 0;
+        this._speedK += (sk - this._speedK) * damp(3, dt || 1);
+        if (mode === 'follow' && vel && sp > 0.5 && Number.isFinite(sp)) {
+          const lead = (this._wasGentle ? LEAD_EASY : LEAD) * this._speedK;
+          _v2.set(vel.x / sp * lead, 0, vel.z / sp * lead);
+        } else _v2.set(0, 0, 0);
+        this._lead.lerp(_v2, damp(2.4, dt || 1));
         let yaw, pitch, dist;
         if (mode === 'follow') {
-          yaw = this.yaw; pitch = this.pitch; dist = this._effDist;
+          yaw = this.yaw; pitch = this.pitch;
+          dist = this._effDist + (this._wasGentle ? DOLLY_EASY : DOLLY) * this._speedK * (this._effDist / Math.max(1, this.distance));
           // closer zoom (or occlusion pull-in) looks at the head / over the shoulder instead of the chest
           // far: pivot above the head so the player sits in the lower third and more of the world shows ahead
           const lift = clamp((5 - this.distance) / 2.5, 0, 1) * 0.28 + clamp((2.4 - dist) / 1.4, 0, 1) * 0.32 + clamp((dist - 2.6) / 5.4, 0, 1.45) * 0.85;
-          this._dLook.copy(this._ft); this._dLook.y += lift;
+          this._dLook.copy(this._ft).add(this._lead); this._dLook.y += lift;
         } else {
           const ph = this._photo;
           yaw = ph.yaw; pitch = ph.pitch; dist = Math.min(ph.dist, this._blockDist);
@@ -269,6 +330,9 @@
         const dist = Math.max(f.distance, (f.pair || 0) * 0.9 + 2.0);
         this._dPos.set(look.x + f.dir.x * dist, gy + f.height, look.z + f.dir.z * dist);
         look.y = _v.y - 0.12;
+      } else if (mode === 'shot') {
+        this._dPos.copy(this._shot.pos);
+        this._dLook.copy(this._shot.look);
       } else if (mode === 'focus') {
         const f = this._focus;
         this._focusPoint(this._dLook);
@@ -409,13 +473,13 @@
       const p = G.sys.player, ax = G.input?.axis;
       if (!p || !p.velocity || t - this._lastUserLook < 2.2) return;
       const sp = Math.hypot(p.velocity.x, p.velocity.z);
-      if (!(sp > 0.8)) return;
+      if (!(sp > WALK() * 0.09)) return;
       const manual = !!ax && Math.hypot(ax.x, ax.y) > 0.05;
       if (manual && (ax.y < 0.3 || Math.abs(ax.x) > 0.6)) return; // strafing / backing up: do not chase (no circling)
       const behind = Math.atan2(p.velocity.x, p.velocity.z) + Math.PI;
       if (!Number.isFinite(behind)) return;
-      const k = damp((p.isWalking && !manual ? 1.5 : 1.25) * Math.min(1, sp / 3.2), dt);
-      this._yawT += angleDiff(this._yawT, behind) * k;
+      const k = damp((p.isWalking && !manual ? 1.5 : 1.25) * Math.min(1, sp / WALK()), dt);
+      this._yawT += clamp(angleDiff(this._yawT, behind) * k, -SWING_MAX * dt, SWING_MAX * dt);
       this._pitchT += (EASY.pitch - this._pitchT) * damp(0.5, dt);
     },
 
@@ -424,9 +488,10 @@
       const p = G.sys.player, ax = G.input?.axis;
       if (!p || !ax || t - this._lastUserLook < 1.8) return;
       const sp = p.velocity ? Math.hypot(p.velocity.x, p.velocity.z) : 0;
-      if (sp < 1 || ax.y < 0.3 || Math.abs(ax.x) > 0.55) return;
+      if (!(sp >= WALK() * 0.1) || ax.y < 0.3 || Math.abs(ax.x) > 0.55) return;
       const behind = Math.atan2(p.velocity.x, p.velocity.z) + Math.PI;
-      this._yawT += angleDiff(this._yawT, behind) * damp(0.9 * Math.min(1, sp / 3.2), dt);
+      if (!Number.isFinite(behind)) return;
+      this._yawT += clamp(angleDiff(this._yawT, behind) * damp(0.9 * Math.min(1, sp / WALK()), dt), -SWING_MAX * dt, SWING_MAX * dt);
     },
 
     _applyToCamera(dt = 0) {
@@ -442,11 +507,14 @@
         c.rotateZ(Math.sin(t * 29.3 + 2.1) * 0.02 * s);
         this._shake = Math.max(0, this._shake - (dt || 0.016) * 1.4);
       }
-      // subtle FOV kick while running
+      // subtle FOV kick from walk pace to a full sprint (normal mode only; easy mode keeps a fixed FOV)
       const p = G.sys.player;
       const sp = p?.velocity ? Math.hypot(p.velocity.x, p.velocity.z) : 0;
-      const target = this.mode === 'follow' && !this._wasGentle ? FOV + clamp((sp - 3.6) / 2.4, 0, 1) * 4 : FOV;
-      this._fov += (target - this._fov) * damp(4, dt || 1);
+      let target = FOV;
+      if (this.mode === 'shot' && Number.isFinite(this._shot.fov)) target = this._shot.fov;
+      else if (this.mode === 'follow' && !this._wasGentle && Number.isFinite(sp)) target = FOV + clamp((sp - WALK() * 1.05) / (RUN() - WALK() * 1.05), 0, 1) * FOV_KICK;
+      this._fov += (target - this._fov) * damp(this.mode === 'shot' ? 6 : 3, dt || 1);
+      if (!Number.isFinite(this._fov)) this._fov = FOV;
       if (Math.abs(c.fov - this._fov) > 0.01) { c.fov = this._fov; c.updateProjectionMatrix(); }
     },
   };

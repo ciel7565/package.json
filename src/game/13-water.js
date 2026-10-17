@@ -4,7 +4,10 @@
 //   G.sys.water (order 13)
 //     distanceToWater(x, z)   metres to the nearest open water (0 on/in water) — used by audio
 //     isWater(x, z)           same test as G.world.isWater (deep water)
-//     uniforms                {uTime, uFlowSpeed (1 = normal), uRain (0..1 extra ripples), uFoam}
+//     uniforms                {uTime, uFlowSpeed (1 = normal), uRain (0..1 extra ripples), uFoam, uCaustic, uRings}
+// Phase 4: dancing caustic light on the shallow bed (two scrolling Voronoi-edge layers, min-combined; sunny
+// daytime only), raindrop ring ripples on every water surface in rain (medium / high), sunlit sparkle on the
+// waterfall spray. All maths guarded (no normalize of zero vectors, no division by zero).
 //     meshes                  {water, fall, foam, spray, rocks}
 // Water shading: MeshStandardMaterial (env reflection from scene.environment, sun glints, fog)
 // with an injected flow-mapped normal, depth tint from the terrain height texture,
@@ -60,11 +63,29 @@
       return out;
     };
     const w1 = worley(9, 11), w2 = worley(19, 12);
+    // caustic network: Voronoi cell edges (F2 - F1 small) of a jittered 7x7 wrapping grid -> B channel
+    const edges = (() => {
+      const cells = 7, r = G.util.rng(13), pts = new Float32Array(cells * cells * 2), cs = S / cells, out = new Float32Array(S * S);
+      for (let i = 0; i < cells * cells; i++) { pts[i * 2] = 0.15 + r() * 0.7; pts[i * 2 + 1] = 0.15 + r() * 0.7; }
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+        const ci = Math.floor(x / cs), cj = Math.floor(y / cs);
+        let f1 = 9, f2 = 9;
+        for (let oj = -1; oj <= 1; oj++) for (let oi = -1; oi <= 1; oi++) {
+          const ii = (ci + oi + cells) % cells, jj = (cj + oj + cells) % cells;
+          const px = (ci + oi + pts[(jj * cells + ii) * 2]) * cs, py = (cj + oj + pts[(jj * cells + ii) * 2 + 1]) * cs;
+          const d = Math.hypot(px - x, py - y) / cs;
+          if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+        }
+        const e = clamp(1 - (f2 - f1) / 0.2, 0, 1);
+        out[y * S + x] = e * e;
+      }
+      return out;
+    })();
     const data = new Uint8Array(S * S * 4);
     for (let i = 0; i < S * S; i++) {
       data[i * 4] = Math.round((gx[i] / mx * 0.5 + 0.5) * 255);
       data[i * 4 + 1] = Math.round((gy[i] / mx * 0.5 + 0.5) * 255);
-      data[i * 4 + 2] = 255;
+      data[i * 4 + 2] = Math.round(edges[i] * 255);
       const f = clamp(1 - w1[i] * 1.55, 0, 1) * 0.65 + clamp(1 - w2[i] * 1.7, 0, 1) * 0.55;
       data[i * 4 + 3] = Math.round(clamp(f, 0, 1) * 255);
     }
@@ -99,6 +120,8 @@
       uFlowSpeed: { value: 1 },
       uRain: { value: 0 },
       uFoam: { value: 1 },
+      uCaustic: { value: 0 },
+      uRings: { value: 0 },
       uWaterLight: { value: 1 },
       uShallow: { value: new THREE.Color('#3a8f80') },
       uDeep: { value: new THREE.Color('#0c3540') },
@@ -241,7 +264,7 @@
       const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.07, metalness: 0, transparent: true });
       mat.onBeforeCompile = (sh) => {
         Object.assign(sh.uniforms, hasT ? terr.uniforms : {}, {
-          uTime: u.uTime, uFlowSpeed: u.uFlowSpeed, uRain: u.uRain, uFoam: u.uFoam,
+          uTime: u.uTime, uFlowSpeed: u.uFlowSpeed, uRain: u.uRain, uFoam: u.uFoam, uCaustic: u.uCaustic, uRings: u.uRings,
           uShallow: u.uShallow, uDeep: u.uDeep, uMtnTint: u.uMtnTint,
           tWaterN: { value: this.tex }, tFoamMask: { value: this.foamMask },
         });
@@ -253,7 +276,8 @@
         sh.fragmentShader = sh.fragmentShader
           .replace('#include <common>', `#include <common>
             varying vec2 vFlow; varying vec3 vWPos;
-            uniform float uTime; uniform float uFlowSpeed; uniform float uRain; uniform float uFoam;
+            uniform float uTime; uniform float uFlowSpeed; uniform float uRain; uniform float uFoam; uniform float uCaustic; uniform float uRings;
+            float tfWHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
             uniform sampler2D tWaterN; uniform sampler2D tFoamMask; uniform vec3 uShallow; uniform vec3 uDeep; uniform vec3 uMtnTint;
             #ifdef TF_TERRAIN
             ${terr?.glslTerrain || ''}
@@ -278,6 +302,19 @@
               slope *= smoothstep(0.0, 0.45, spd);
               slope += ((rip.xy - 0.5) * 0.55 + (rip2.xy - 0.5) * 0.4 * (1.0 + uRain * 2.5)) * 0.6;
               float str = mix(0.19, 0.36, smoothstep(0.0, 0.6, spd)) + uRain * 0.18;
+              // raindrop rings (two staggered cell layers, one expanding ring per cell and cycle)
+              if (uRings > 0.5 && uRain > 0.01) {
+                for (int k = 0; k < 2; k++) {
+                  vec2 q = p * 1.35 + float(k) * vec2(0.37, 0.61) - fl * uTime * 0.2;
+                  vec2 cell = floor(q);
+                  vec2 loc = fract(q) - 0.5 - (vec2(tfWHash(cell), tfWHash(cell + 7.1)) - 0.5) * 0.5;
+                  float ph = fract(uTime * (0.7 + tfWHash(cell + 3.3) * 0.5) + tfWHash(cell + 1.7));
+                  float d = length(loc);
+                  float re = (d - ph * 0.45) * 24.0;
+                  float ring = exp(-re * re) * (1.0 - ph) * uRain;
+                  slope += (d > 1e-4 ? loc / d : vec2(0.0)) * ring * 2.2;
+                }
+              }
               tfWaterN = normalize(vec3(slope.x * str, 1.0, slope.y * str));
               // depth from the terrain height texture
               #ifdef TF_TERRAIN
@@ -295,8 +332,16 @@
               float foam = clamp(shore * 0.85 + rockF * 1.2 + smoothstep(0.75, 1.2, spd) * 0.12, 0.0, 1.5);
               foam = smoothstep(0.42, 0.95, fpat * foam + foam * 0.25) * uFoam;
               tfFoamAmt = foam;
+              // caustics: sunlight focused by the ripples dances on the shallow bed
+              if (uCaustic > 0.001) {
+                float ca = texture2D(tWaterN, p * 0.16 + vec2(uTime * 0.021, uTime * 0.013) - fl * uTime * 0.05).b;
+                float cb = texture2D(tWaterN, p * 0.21 - vec2(uTime * 0.017, -uTime * 0.019) + 0.37 - fl * uTime * 0.04).b;
+                float caus = min(ca, cb) * (1.0 - deepK * 0.85) * smoothstep(0.03, 0.3, depth) * (1.0 - foam);
+                col += vec3(0.8, 1.0, 0.92) * caus * uCaustic * 0.6;
+              }
               col = mix(col, vec3(0.93, 0.97, 1.0), foam * 0.85);
-              vec3 V = normalize(cameraPosition - vWPos);
+              vec3 tfVv = cameraPosition - vWPos; float tfVl = length(tfVv);
+              vec3 V = tfVl > 1e-5 ? tfVv / tfVl : vec3(0.0, 1.0, 0.0);
               float fres = pow(1.0 - clamp(dot(tfWaterN, V), 0.0, 1.0), 5.0);
               float alpha = mix(0.42, 0.9, deepK) + fres * 0.45 + foam * 0.6;
               alpha *= smoothstep(0.0, 0.1, depth);
@@ -308,7 +353,8 @@
           .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
             {
               // the valley is ringed by forested mountains: low reflected rays see green slopes, not white sky
-              vec3 tfV = normalize(cameraPosition - vWPos);
+              vec3 tfVd = cameraPosition - vWPos; float tfVdl = length(tfVd);
+              vec3 tfV = tfVdl > 1e-5 ? tfVd / tfVdl : vec3(0.0, 1.0, 0.0);
               vec3 tfR = reflect(-tfV, tfWaterN);
               float tfM = smoothstep(0.45, 0.05, tfR.y) * (1.0 - tfFoamAmt);
               reflectedLight.indirectSpecular *= mix(vec3(1.0), uMtnTint, tfM * 0.85);
@@ -316,7 +362,7 @@
               reflectedLight.indirectDiffuse *= 0.42;
             }`);
       };
-      mat.customProgramCacheKey = () => 'tf-water2-' + (hasT ? 1 : 0);
+      mat.customProgramCacheKey = () => 'tf-water3-' + (hasT ? 1 : 0);
       return mat;
     },
 
@@ -512,6 +558,12 @@
         const sunI = eng.sun ? eng.sun.intensity * Math.max(0, eng.sunDir.y) : 1.5;
         const hemiI = eng.hemi ? eng.hemi.intensity : 0.8;
         this.uniforms.uWaterLight.value = clamp(0.25 + hemiI * 0.5 + sunI * 0.2, 0.12, 1.15);
+        const feat = (f) => (typeof eng.feature === 'function' ? eng.feature(f) : false);
+        // caustics need direct sun: strongest at midday, gone at night / under thick cloud
+        const goal = feat('caustics') && eng.sunDir.y > 0 ? clamp(sunI / 1.6, 0, 1) : 0;
+        const u = this.uniforms.uCaustic;
+        u.value += (goal - u.value) * (1 - Math.exp(-Math.min(dt || 0, 0.25) / 0.8));
+        this.uniforms.uRings.value = feat('rainRings') ? 1 : 0;
       }
     },
   };

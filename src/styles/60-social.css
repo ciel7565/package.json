@@ -251,9 +251,20 @@ body.easy:not(.kid-chat) .chat-kid-row { justify-content: flex-end; margin-top: 
 
 /* name tags and bubbles a little bigger for small readers */
 body.easy .nametag.visitor, body.easy .nametag.remote { font-size: .9rem; padding: .2rem .7rem .2rem .55rem; }
-/* tapping a person is a kid action: a transparent border grows the hit area to ≥ 56 px without a bigger pill */
+/* tapping a person is a kid action: a transparent border grows the hit area to ≥ 56 px without a bigger pill.
+   border-box + min-height keep the whole box ≥ --tap on every screen (the border alone left 53 px on phones). */
 body.easy .nametag.visitor, body.easy .nametag.remote,
-body.easy .nametag.visitor:hover, body.easy .nametag.remote:hover { border: 17px solid transparent; background-clip: padding-box; margin: -17px; }
+body.easy .nametag.visitor:hover, body.easy .nametag.remote:hover {
+  box-sizing: border-box; min-height: calc(var(--tap) + 2px); min-width: calc(var(--tap) + 2px); justify-content: center;
+  border: 17px solid transparent; background-clip: padding-box; margin: -17px;
+}
+/* chat names open the kid user menu (🙈 안 볼래요 · 🚨 어른에게): a full --tap row instead of a 19 px word */
+body.easy .chat-log .chat-msg.visitor, body.easy .chat-log .chat-msg.remote, body.easy .chat-log .chat-msg.npc { min-height: var(--tap); display: flex; flex-wrap: wrap; align-items: center; column-gap: .3rem; }
+body.easy .chat-msg button.who { min-height: var(--tap); min-width: var(--tap); padding: 0 .45rem; margin-left: -.45rem; border-radius: 14px; touch-action: manipulation; }
+body.easy .chat-msg button.who:active { background: rgba(255, 255, 255, .08); }
+/* kid chat: another account's free text is replaced by a quiet placeholder (60-social _applyKidView) */
+.chat-msg .txt.kid-hidden, .skc-bub .kid-hidden { color: var(--text-dim); font-style: normal; font-weight: 700; }
+.skc-bub .kid-hidden { color: #6b7466; }
 body.easy .soc-bubble { max-width: 16rem; font-size: .98rem; font-weight: 600; }
 body.easy .soc-bubble.emote { font-size: 2.8rem; }
 

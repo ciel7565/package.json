@@ -171,7 +171,7 @@
 
   // ---------------------------------------------------------------- daily mission pool
   const zoneName = (id) => G.world?.zoneById?.(id)?.name || (G.data.zones || []).find((z) => z.id === id)?.name || '구역';
-  const LOOK_KINDS = new Set(['exhibit', 'tool', 'jardisp', 'sign', 'kiosk', 'board']);
+  const LOOK_KINDS = new Set(['exhibit', 'tool', 'jardisp', 'sign', 'kiosk', 'board', 'telescope']);
   const hasSeeds = () => Object.entries(G.state?.inventory || {}).some(([id, q]) => q > 0 && G.data.items?.[id]?.type === 'seed');
   const MISSIONS = {
     M_WATER: { icon: '💧', cat: 'farm', ev: 'farm:watered', min: 2, max: 3, text: (n) => `작물에 물 ${n}번 주기`, hint: '전통작물·허브 구역의 밭에서 E 키로 물을 줄 수 있어요.', go: 'ZONE_CROP', reward: { coin: 120, exp: 25 } },
@@ -186,7 +186,8 @@
     M_GESTURE: { icon: '🙌', cat: 'social', ev: 'gesture:played', min: 1, max: 2, text: (n) => `제스처 ${n}번 하기`, hint: 'G 키로 인사·박수 같은 제스처를 해 봐요.', act: 'gesture', reward: { coin: 100, exp: 20 } },
     M_TALK: { icon: '🗣️', cat: 'people', ev: 'npc:talk', min: 1, max: 2, distinct: 'npcId', text: (n) => `NPC ${n}명과 이야기하기`, hint: 'NPC에게 다가가 E 키로 말을 걸어요.', go: 'ZONE_MAIN', reward: { coin: 120, exp: 25 } },
     M_VISIT: { icon: '🗺️', cat: 'explore', ev: 'zone:enter', min: 1, max: 1, param: 'zone', filter: (p, m) => p.zoneId === m.param, text: (n, m) => `${zoneName(m.param)} 방문하기`, hint: '걸어가도 좋고, 빠른 이동으로 가도 좋아요.', go: '@param', reward: { coin: 120, exp: 25 } },
-    M_WALK: { icon: '👟', cat: 'explore', ev: 'player:distance', min: 300, max: 300, amount: (p) => clamp(num(p.meters), 0, 60), unit: 'm', text: (n) => `체험관 안을 ${n}m 산책하기`, hint: 'WASD로 걸으면 거리가 쌓여요. 순간 이동은 포함되지 않아요.', reward: { coin: 150, exp: 30 } },
+    // phase 4: walking is 3x faster (G.sys.player.speedScale) -> 3x the distance for the same effort
+    M_WALK: { icon: '👟', cat: 'explore', ev: 'player:distance', min: 900, max: 900, amount: (p) => clamp(num(p.meters), 0, 60), unit: 'm', text: (n) => `체험관 안을 ${n}m 산책하기`, hint: 'WASD로 걸으면 거리가 쌓여요. 만장대 돌계단 길도 좋아요! 순간 이동은 포함되지 않아요.', reward: { coin: 150, exp: 30 } },
     M_JAR: { icon: '🏺', cat: 'ferment', ev: 'ferment:checked', min: 1, max: 1, text: () => '내 장독 발효 상태 확인하기', hint: '장독대의 빛나는 내 장독을 E 키로 살펴봐요.', go: 'ZONE_JANGDOKDAE', reward: { coin: 120, exp: 25 } },
     M_CRAFT: { icon: '🔨', cat: 'ferment', ev: 'craft:done', min: 1, max: 1, when: (c) => c.level >= 3, text: () => '작업대에서 발효 재료 만들기', hint: '발효식품 구역의 작업대에서 재료를 만들 수 있어요.', go: 'ZONE_FERMENTATION', reward: { coin: 180, exp: 40 } },
     M_LOOK: { icon: '🔍', cat: 'explore2', ev: 'interact', min: 3, max: 3, distinct: 'id', filter: (p) => LOOK_KINDS.has(p.kind) && p.id !== YARD_ID, text: (n) => `전시물·도구 ${n}가지 살펴보기`, hint: '전시대·전통도구·옹기·안내판을 E 키로 살펴봐요.', go: 'POI_TOOLS', reward: { coin: 120, exp: 25 } },
@@ -1070,6 +1071,7 @@
       const today = dayKey();
       if (!this.canCheckin().ok || e.checkin.shownDay === today) return;
       const busy = !!G.app?.onboarding?.active || G.ui.modal.isOpen() || !!G.sys.dialogue?.active || !!G.sys.photo?.active
+        || !!G.sys.manjangdae?.introActive || !!G.sys.manjangdae?.tourActive
         || G.ui.isBlocking() || document.hidden || !!this._edit || document.getElementById('hud')?.hidden;
       if (busy) {
         this._busyAt = performance.now();

@@ -10,7 +10,9 @@
   const PI = Math.PI;
   const L = (G.data.layout = {});
 
-  L.spawn = { x: 0, z: 9, rotY: PI };
+  // phase 4: new players start on the 정선 만장대 viewing deck, facing north over the whole valley
+  L.spawn = { x: 52, z: 109.4, rotY: PI, zone: 'ZONE_MANJANGDAE' };
+  L.plazaSpawn = { x: 0, z: 9, rotY: PI };   // the old start (plaza) — fallback / dev tools
   L.bounds = { minX: -135, maxX: 135, minZ: -135, maxZ: 135 }; // walkable box (soft clamp)
   L.worldSize = 1000;   // terrain plane extent (mountains continue to the horizon)
   L.waterY = -1.1;      // river / pond water surface height
@@ -57,6 +59,10 @@
     { type: 'wood', width: 2.4, points: [[60, 46], [70, 46]] },
     // entrance
     { type: 'stone', width: 4.0, points: [[0, 57], [0, 82]] },
+    // 정선 만장대: switchback stone path down the north-west flank (carved by the terrain at a constant grade,
+    // hairpins filleted; see L.manjangdae.route) + the link from its foot to the entrance path
+    { id: 'PATH_MANJANGDAE', type: 'stone', width: 3.0, elevated: true, points: [[43.5, 109.5], [44.6, 96.4], [24.4, 104.6], [31.9, 85.1], [15.3, 89.7]] },
+    { id: 'PATH_MANJANGDAE_LINK', type: 'stone', width: 3.0, points: [[15.3, 89.7], [8.5, 84.6], [2.2, 80.6]] },
   ];
   L.plaza = { x: 0, z: 0, r: 13 };
   L.hallPlaza = { x: 0, z: -70, w: 30, d: 16 };
@@ -210,11 +216,45 @@
     [-34, -73.5, -17, -73.5], [-16.6, -73, -16.6, -66.5], [-34.5, -73, -34.5, -65.5],
   ];
 
+  // ---------------------------------------------------------------- 정선 만장대 (phase 4 start: lookout on the southern ridge)
+  // A paved plateau (r) at `top` m above the valley on a hill south-east of the entrance. The deck faces north:
+  // the whole experience centre with the hall and the tall northern mountains behind it. The switchback
+  // path (route, top -> foot) descends the gentler north-west flank; the ridge runs on out of the valley.
+  // (Location naming is in-game styling, not verified geography: see G.data.meta.addressNote.)
+  L.manjangdae = {
+    id: 'MANJANGDAE', zone: 'ZONE_MANJANGDAE', navLink: 'MANJANGDAE',
+    x: 52, z: 118, r: 12, top: 22, footY: 0,
+    gentleBearing: -PI * 0.75, gentleSpan: 60, gentleWidth: 36, steepWidth: 20,   // NW flank / other faces
+    ridge: [[52, 118, 22, 12, 22], [62, 148, 31, 10, 24], [70, 182, 20, 9, 22], [74, 215, 0, 6, 16]],
+    view: { x: 52, z: 90.5, hw: 20, hd: 15.5 },   // no trees below the deck
+    route: [[43.5, 109.5], [44.6, 96.4], [24.4, 104.6], [31.9, 85.1], [15.3, 89.7]],
+    pathWidth: 3, hairpinR: 2.5,
+    deck: { x: 52, z: 109.4 },                      // the viewing spot (spawn)
+    look: [2, 3, -40],                              // what the deck looks at (valley centre)
+    pavilion: { id: 'MD_PAVILION', x: 52, z: 124.2, r: 3.9, base: 0.62 },   // 팔각정 on a stone base
+    marker: { id: 'MD_MARKER', x: 45.4, z: 113.6, rot: 1.9 },                // carved stone (faces the deck)
+    telescope: { id: 'MD_TELESCOPE', x: 55.6, z: 107.5, rot: PI },           // barrels point north (rot = facing)
+    board: { id: 'MD_BOARD', x: 48.4, z: 107.6, rot: 0 },                    // text faces the deck (south)
+    lanterns: [{ x: 49.0, z: 118.4 }, { x: 55.0, z: 118.4 }],               // 석등 at the pavilion steps (+ 2 at the path gap, by code)
+    pines: [{ x: 61.8, z: 120.6, s: 1.1, lean: 0.24 }, { x: 42.2, z: 120.6, s: 1.0, lean: 0.2 }, { x: 58.6, z: 125.8, s: 1.2, lean: 0.14 }, { x: 45.4, z: 125.8, s: 0.95, lean: 0.12 }],
+    gap: { bearing: -PI * 0.75, half: 0.17 },       // railing opening where the path leaves the plateau
+  };
+  L.navLinks = [
+    // the planner follows the switchback path on / to / from the hill (terrain replaces `route` with the filleted centre line)
+    { id: 'MANJANGDAE', route: L.manjangdae.route.map((p) => p.slice()), area: { x: 52, z: 118, r: 13.5 }, width: 2.4 },
+  ];
+  // two benches on the deck, looking at the view (appended: existing BENCH_i ids stay stable)
+  L.benches.push({ x: 46.6, z: 112.4, rot: PI, manjangdae: true }, { x: 57.4, z: 112.4, rot: PI, manjangdae: true });
+  L.photoZones.push({ id: 'PZ_MANJANGDAE', name: '만장대 전망대', x: 60.8, z: 117.2, r: 3, look: [10, 6, -30], elevated: true });
+
   // ---------------------------------------------------------------- anchor lookup
   L.anchors = {};
   const add = (o) => { if (o && o.id) L.anchors[o.id] = o; };
   [L.buildings, L.jars, L.jarDisplays, L.farmPlots, L.signs, L.kiosks, L.exhibits, L.tools, L.photoZones, L.ponds].forEach((arr) => arr.forEach(add));
   [L.craftTable, L.shopStall, L.hallDoor, L.eduBoard, L.riverDeck].forEach(add);
+  const M = L.manjangdae;
+  [M.pavilion, M.marker, M.telescope, M.board].forEach(add);
+  L.anchors.MANJANGDAE = { id: 'MANJANGDAE', x: M.deck.x, z: M.deck.z, rot: PI };
   /** anchor by id -> {x, z, rot, ...} or null */
   L.get = (id) => L.anchors[id] || null;
 })();

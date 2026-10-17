@@ -10,7 +10,17 @@
 //   G.input.isDown(code)
 //   events: 'input:interact' (E / mobile / d-pad center), 'input:click' {x, y, button, target}
 //           'input:move-start' (first movement input; cancels click-to-move / sitting)
+//   G.input.shieldClicks(ms?)   swallow the browser click that trails the current press (see "ghost clicks")
 // Gameplay input is ignored while G.ui.isBlocking() (modal, dialogue, typing...).
+//
+// Ghost clicks (NEW-1): a touch / pen tap is pointerdown → pointerup → (later) a compatibility `click` that the
+// browser hit-tests at the tap point AFTER our handlers ran. When the press itself opened something there (the
+// phone 👆 opening a dialogue, a tap on the 3D view opening a picker), that click used to land on the new UI and
+// close / skip it. Every primary press is remembered; a trusted pointer click that lands on an element unrelated
+// to the pressed one (while the pressed one is still in the page) is swallowed, and controls that act on their
+// own (👆 / 점프 / 달리기 / d-pad) swallow their trailing click outright. Keyboard clicks (detail 0) and
+// programmatic .click() calls are never touched. The 👆 and the d-pad centre now act on RELEASE (sliding the
+// finger off cancels), with touchend.preventDefault() so most browsers do not even send the click.
 // =============================================================================
 (function () {
   const keys = new Set();
@@ -25,6 +35,49 @@
 
   const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
   const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+
+  // ---------------------------------------------------------------- ghost-click shield (see header)
+  const GHOST_MS = 900;            // how long after a press its trailing click can still arrive (slow phones ≈ 700 ms)
+  const GHOST_PX = 48;             // the trailing click lands where the finger was
+  let press = null;                // {el, id, t, x, y, type, shieldUntil, up}
+  const ACTIVATION_KEYS = new Set(['Enter', 'NumpadEnter', 'Space']);
+  /** force-swallow the next trusted pointer click of the current press (the control already acted) */
+  function shieldPress(ms = GHOST_MS) {
+    const now = performance.now();
+    if (!press || now - press.t > GHOST_MS * 2) press = { el: null, id: -1, t: now, x: NaN, y: NaN, type: 'any', shieldUntil: 0, up: false };
+    press.shieldUntil = now + Math.max(0, Math.min(3000, Number(ms) || GHOST_MS));
+  }
+  function swallow(e) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }
+  function bindGhostShield() {
+    if (window._tfmGhostShield) return;
+    window._tfmGhostShield = true;
+    window.addEventListener('pointerdown', (e) => {
+      if (!e.isPrimary) return;
+      press = { el: e.target instanceof Element ? e.target : null, id: e.pointerId, t: performance.now(), x: e.clientX, y: e.clientY, type: e.pointerType, shieldUntil: 0, up: false };
+    }, { capture: true, passive: true });
+    window.addEventListener('pointerup', (e) => { if (press && e.pointerId === press.id) press.up = true; }, { capture: true, passive: true });
+    window.addEventListener('pointercancel', (e) => { if (press && e.pointerId === press.id && !(press.shieldUntil > performance.now())) press = null; }, { capture: true, passive: true });
+    // capture on window: runs before every other click listener (document capture, delegated actions, the target)
+    window.addEventListener('click', (e) => {
+      const p = press;
+      if (!p || !e.isTrusted || !(e.detail >= 1)) return; // keyboard / programmatic clicks are never ghosts
+      const now = performance.now();
+      if (now - p.t > GHOST_MS && !(p.shieldUntil > now)) { press = null; return; }
+      const t = e.target instanceof Element ? e.target : (e.target?.parentElement || null);
+      const near = !Number.isFinite(p.x) || Math.abs(e.clientX - p.x) + Math.abs(e.clientY - p.y) <= GHOST_PX * 2;
+      let ghost = false;
+      if (p.shieldUntil > now && near) ghost = true;               // a control that acted on press / release
+      else if (p.el && p.el.isConnected && t && near && !p.el.contains(t) && !t.contains(p.el)) {
+        // the DOM changed under the finger between press and click: a new element took the click
+        const lab = p.el.closest?.('label');
+        ghost = !(lab && (lab.control === t || lab.contains(t)));
+      }
+      if (!ghost) return;
+      press = null;
+      swallow(e);
+      G.log?.debug?.('INPUT', 'ghost click swallowed', { on: String(t?.className || t?.tagName || '').slice(0, 40) });
+    }, true);
+  }
 
   const input = {
     keys,
@@ -53,6 +106,8 @@
     gameplay() { return input.enabled && !G.ui?.isBlocking?.(); },
     setMobileRun(v) { mobileRun = !!v; document.querySelector('[data-mobile=run]')?.classList.toggle('on', mobileRun); },
     queueJump() { jumpQueued = true; },
+    /** swallow the trailing browser click of the press in progress (or of the one that just ended) */
+    shieldClicks(ms = GHOST_MS) { shieldPress(ms); },
     reset() { keys.clear(); look.dx = look.dy = 0; zoom = 0; jumpQueued = false; joy.x = joy.y = 0; dpad.x = dpad.y = 0; },
 
     /** recompute axis; called by the player each frame */
@@ -92,7 +147,13 @@
     }
     if (!typing) {
       if (!e.repeat) keys.add(e.code);
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+      const ae = document.activeElement;
+      const onControl = !!(ae && ae !== document.body && ae.matches?.('button, [role="button"], [role="option"], [role="tab"], [role="switch"], a[href], summary, input[type="checkbox"], input[type="radio"]'));
+      // a held Enter / Space must not re-activate a focused button 30× a second (open → close → open … flicker)
+      if (e.repeat && onControl && ACTIVATION_KEYS.has(e.code)) { e.preventDefault(); return; }
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+      // Space = jump while playing; inside a window (modal, dialogue) it activates the focused button as usual
+      else if (e.code === 'Space' && (!onControl || !G.ui?.isBlocking?.())) e.preventDefault();
     }
     const list = handlers.get(e.code);
     if (list && list.length) {
@@ -181,19 +242,44 @@
         if (dir === 'left') dpad.x -= 1; if (dir === 'right') dpad.x += 1;
       }
     };
+    let centre = null; // {id, el} the centre (interact) button acts on release, while the pointer is still on it
     pad.addEventListener('pointerdown', (e) => {
       const b = e.target.closest('[data-dir]');
       if (!b) return;
       e.preventDefault();
+      shieldPress();
       const dir = b.dataset.dir;
-      if (dir === 'center') { G.bus.emit('input:interact', { source: 'dpad' }); return; }
+      if (dir === 'center') {
+        centre = { id: e.pointerId, el: b };
+        b.classList.add('pressed');
+        try { b.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        return;
+      }
       active.set(e.pointerId, dir); b.classList.add('pressed');
       try { pad.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       recompute();
     });
-    const up = (e) => { if (active.has(e.pointerId)) { active.delete(e.pointerId); pad.querySelectorAll('.pressed').forEach((x) => x.classList.remove('pressed')); recompute(); } };
+    const up = (e) => {
+      if (centre && e.pointerId === centre.id) {
+        const c = centre; centre = null;
+        c.el.classList.remove('pressed');
+        if (e.type === 'pointerup' && overEl(c.el, e)) { shieldPress(); G.bus.emit('input:interact', { source: 'dpad' }); }
+        return;
+      }
+      if (active.has(e.pointerId)) { active.delete(e.pointerId); pad.querySelectorAll('.pressed').forEach((x) => x.classList.remove('pressed')); recompute(); }
+    };
     pad.addEventListener('pointerup', up);
     pad.addEventListener('pointercancel', up);
+    // no compatibility mouse events / click for taps on the pad (they would hit whatever the press opened)
+    pad.addEventListener('touchend', (e) => { if (e.cancelable && e.target instanceof Element && e.target.closest('[data-dir]')) e.preventDefault(); }, { passive: false });
+  }
+
+  /** is the pointer (still) over the element? a little slack for fat fingers */
+  function overEl(el, e, slack = 18) {
+    try {
+      const r = el.getBoundingClientRect();
+      return e.clientX >= r.left - slack && e.clientX <= r.right + slack && e.clientY >= r.top - slack && e.clientY <= r.bottom + slack;
+    } catch (err) { return false; }
   }
 
   // ---------------------------------------------------------------- touch joystick + buttons
@@ -223,13 +309,42 @@
     stick.addEventListener('pointerup', end);
     stick.addEventListener('pointercancel', end);
 
+    // 점프 / 달리기 act on press (instant feel); 👆 and 📷 open things, so they act on RELEASE while the finger is
+    // still on the button (sliding off cancels) — and every one of them swallows its trailing click (ghost taps).
     document.querySelectorAll('[data-mobile]').forEach((b) => {
+      let held = null;
       b.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        shieldPress();
+        const a = b.dataset.mobile;
+        if (a === 'jump') { jumpQueued = true; return; }
+        if (a === 'run') { input.setMobileRun(!mobileRun); return; }
+        if (held != null) return; // a second finger on the same button
+        held = e.pointerId;
+        b.classList.add('pressed');
+        try { b.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      });
+      const release = (e) => {
+        if (held == null || e.pointerId !== held) return;
+        held = null;
+        b.classList.remove('pressed');
+        if (e.type !== 'pointerup' || !overEl(b, e)) return;
+        shieldPress();
+        const a = b.dataset.mobile;
+        if (a === 'interact') G.bus.emit('input:interact', { source: 'touch' });
+        else if (a === 'photo') G.ui?.triggerAction?.('photo', b);
+      };
+      b.addEventListener('pointerup', release);
+      b.addEventListener('pointercancel', release);
+      b.addEventListener('lostpointercapture', (e) => { if (held != null && e.pointerId === held) { held = null; b.classList.remove('pressed'); } });
+      b.addEventListener('touchend', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+      // keyboard / switch access (no pointer): Enter / Space on a focused control button still works
+      b.addEventListener('click', (e) => {
+        if (e.detail !== 0) return; // pointer clicks were handled above (and are swallowed by the shield)
         const a = b.dataset.mobile;
         if (a === 'jump') jumpQueued = true;
-        else if (a === 'interact') G.bus.emit('input:interact', { source: 'touch' });
         else if (a === 'run') input.setMobileRun(!mobileRun);
+        else if (a === 'interact') G.bus.emit('input:interact', { source: 'key' });
         else if (a === 'photo') G.ui?.triggerAction?.('photo', b);
       });
     });
@@ -290,7 +405,7 @@
     }, true);
   }
 
-  function bindAll() { bindCanvas(); bindDpad(); bindMobile(); bindLongPress(); }
+  function bindAll() { bindGhostShield(); bindCanvas(); bindDpad(); bindMobile(); bindLongPress(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindAll); else bindAll();
   input.bindAll = bindAll;
 })();

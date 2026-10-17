@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { judgeAll, allTexts, allNicks, norm } from './pii-client.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -243,10 +244,10 @@ async function main() {
     r = await c.req('api/auth/register.php', { json: { email: `s${id}@example.com`, nickname: '<b>x</b>', password: PASSWORD, password_confirm: PASSWORD, agree: true } });
     assert(r.status === 400 && r.error?.code === 'NICKNAME_INVALID', `html nick: ${r.status} ${r.error?.code}`);
   });
-  await step('register: nicknames that look like personal info are refused (phone · street address)', async () => {
+  await step('register: nicknames that look like personal info are refused (phone · street address · game/SNS id · school · digit words)', async () => {
     const c = new Client('pii-nick'); await c.req('api/ping.php');
     const codes = [];
-    for (const nickname of ['kid01012345', '테헤란로123']) {
+    for (const nickname of ['kid01012345', '테헤란로123', '로블록스dino12', '제페토dinokid', '해바라기초2학년', '공일공일이삼사']) {
       const r = await c.req('api/auth/register.php', { json: { email: `p${rnd()}@example.com`, nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
       assert(r.status === 400 && r.error?.code === 'NICKNAME_INVALID' && /개인정보/.test(r.error?.message || ''), `${nickname}: ${r.status} ${r.error?.code} ${r.error?.message}`);
       codes.push(`${nickname}→${r.status}`);
@@ -279,6 +280,7 @@ async function main() {
 
   // ------------------------------------------------------------- saves
   let state = null;
+  let savedAtMs = Date.now(); // when the last accepted save reached the server (movement plausibility)
   await step('player/get: new account has no save', async () => {
     const r = await A.req('api/player/get.php');
     assert(r.status === 200 && r.data?.save === null, `status ${r.status} save=${JSON.stringify(r.data?.save)?.slice(0, 40)}`);
@@ -371,8 +373,48 @@ async function main() {
     const ok = await A.req('api/player/save.php', { raw: JSON.stringify({ ...saveBody(s), csrf: A.csrf }), csrf: false });
     assert(ok.status === 200, `valid beacon: ${ok.status} ${ok.error?.code}`);
     stored = s;
+    savedAtMs = Date.now();
     const bad = await A.req('api/player/save.php', { raw: JSON.stringify({ ...saveBody(s), csrf: 'f'.repeat(64) }), csrf: false });
     assert(bad.status === 403 && bad.error?.code === 'CSRF_INVALID', `forged beacon: ${bad.status}`);
+  });
+  await step('player/save: 3× speed — running at 18 m/s for the elapsed time is accepted', async () => {
+    await sleep(2100);
+    const s = structuredClone(stored);
+    const elapsed = (Date.now() - savedAtMs) / 1000;
+    // RUN = 18 m/s (phase 4) the whole time since the last save, plus the ≤ 5 m the client batches per event
+    s.stats.distance = Math.round(s.stats.distance + 18 * elapsed + 5);
+    s.stats.playTime = Math.round((s.stats.playTime || 0) + elapsed);
+    s.savedAt = Date.now();
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 200, `status ${r.status} ${r.error?.code || ''} ${JSON.stringify(r.json?.data?.violations || '')}`);
+    stored = s; savedAtMs = Date.now();
+    return `+${Math.round(18 * elapsed + 5)} m in ${elapsed.toFixed(1)} s`;
+  });
+  await step('cheating save: teleport-sized distance (+10,000,000 m) → 409 DISTANCE_TOO_FAST', async () => {
+    const s = structuredClone(stored);
+    s.stats.distance += 10000000;
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 409 && (r.json?.data?.violations || []).includes('DISTANCE_TOO_FAST'), `status ${r.status} ${r.json?.data?.violations}`);
+  });
+  await step('cheating save: 100× the legal speed for a minute of claimed movement (+60 km) → 409 DISTANCE_TOO_FAST', async () => {
+    const s = structuredClone(stored);
+    s.stats.distance += 60000;
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 409 && (r.json?.data?.violations || []).includes('DISTANCE_TOO_FAST'), `status ${r.status} ${r.json?.data?.violations}`);
+  });
+  await step('cheating save: play time faster than the clock (+1 day in seconds) → 409 PLAYTIME_TOO_FAST', async () => {
+    const s = structuredClone(stored);
+    s.stats.playTime = (s.stats.playTime || 0) + 86400;
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 409 && (r.json?.data?.violations || []).includes('PLAYTIME_TOO_FAST'), `status ${r.status} ${r.json?.data?.violations}`);
+  });
+  await step('cheating save: absurd stat (distance 1e12) → 409 STAT_RANGE', async () => {
+    const s = structuredClone(stored);
+    s.stats.distance = 1e12;
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    const v = r.json?.data?.violations || [];
+    assert(r.status === 409 && v.includes('STAT_RANGE'), `status ${r.status} violations ${v} ${r.error?.code}`);
+    return v.join(',');
   });
   await step('save size limit → 413', async () => {
     const s = structuredClone(stored);
@@ -445,38 +487,38 @@ async function main() {
     assert(ok.status === 200 && ok.data?.piiMasked === false && ok.data.message.text.startsWith('오늘 콩 3개 심었어요! 레벨 12 됐어요 😊'), `innocent: ${ok.status} ${ok.data?.message?.text}`);
     return t;
   });
-  await step('chat: shared PII vectors (tests/pii-vectors.json) through ChatFilter::maskPII — whole · partial · innocent', async () => {
-    const vecFile = path.join(ROOT, 'tests/pii-vectors.json');
-    const v = JSON.parse(fs.readFileSync(vecFile, 'utf8'));
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-pii-'));
-    const script = path.join(tmp, 'pii.php');
-    fs.writeFileSync(script, `<?php declare(strict_types=1); namespace Tfm; define('TFM_BOOT', 1);
-final class Config { public static function get($k, $d = null) { return $d; } }
-require ${JSON.stringify(path.join(ROOT, 'server/lib/ChatFilter.php'))};
-$in = json_decode(file_get_contents('php://stdin'), true);
-echo json_encode(array_map(fn ($s) => ChatFilter::maskPII((string) $s), $in), JSON_UNESCAPED_UNICODE);`);
-    try {
-      const all = [...v.whole, ...v.partial, ...v.keep];
-      const r = spawnSync('php', [script], { input: JSON.stringify(all), encoding: 'utf8' });
-      assert(r.status === 0, `php exit ${r.status}: ${String(r.stderr).slice(0, 200)}`);
+  await step('chat: server PII rules are the client rules (node tests/pii-sync.mjs --check)', async () => {
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'tests/pii-sync.mjs'), '--check'], { encoding: 'utf8' });
+    assert(r.status === 0, `out of sync: ${String(r.stdout + r.stderr).trim().slice(0, 300)}`);
+    return String(r.stdout).trim().split('\n').pop();
+  });
+  await step('chat: shared PII vectors (tests/pii-vectors.json) through the real server filters — whole · partial · keep · leak · nickname, with and without intl', async () => {
+    const v = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/pii-vectors.json'), 'utf8'));
+    const texts = allTexts(v), nicks = allNicks(v);
+    const notes = [];
+    for (const [label, phpArgs] of [['intl', []], ['no-intl', ['-n', '-d', 'extension=mbstring', '-d', 'extension=pdo', '-d', 'extension=pdo_sqlite']]]) {
+      const r = spawnSync('php', [...phpArgs, path.join(ROOT, 'tests/pii-server.php')], { input: JSON.stringify({ texts, nicks }), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      assert(r.status === 0, `${label}: php exit ${r.status}: ${String(r.stderr).slice(0, 200)}`);
       const out = JSON.parse(r.stdout);
-      const bad = [];
-      all.forEach((s0, i) => {
-        const o = out[i];
-        if (i < v.whole.length) { if (o !== '🔒') bad.push(`${s0} → ${o}`); }
-        else if (i < v.whole.length + v.partial.length) { if (!o.includes('🔒') || /[0-9]{4}|@[a-z]|\.com|\.kr|dino|강남구|역삼동/iu.test(o)) bad.push(`${s0} → ${o}`); }
-        else if (o !== s0) bad.push(`kept? ${s0} → ${o}`);
-      });
-      assert(!bad.length, bad.slice(0, 4).join(' | '));
-      return `${all.length} vectors`;
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+      const fails = judgeAll(v, out.mask, out.nick.map((e) => e !== null));
+      assert(!fails.length, `${label}: ${fails.length} failure(s): ${fails.slice(0, 3).map((f) => JSON.stringify(f)).join(' | ')}`);
+      // the full send.php pipeline (cleanText → maskPII → bad-word mask) must not let a secret through either
+      const w = v.whole.length + v.partial.length + v.keep.length;
+      const pipeLeak = v.leak.filter((x, k) => x.secrets.some((sec) => norm(out.pipe[w + k]).includes(norm(sec))));
+      const pipeWhole = v.whole.filter((t, k) => out.pipe[k] !== '🔒');
+      assert(!pipeLeak.length && !pipeWhole.length, `${label} pipeline: ${[...pipeLeak.map((x) => x.id), ...pipeWhole].slice(0, 4).join(' | ')}`);
+      assert(out.rules.length >= 30, `${label}: only ${out.rules.length} rules loaded (lib/pii-rules.json missing?)`);
+      notes.push(`${label}${out.intl ? '' : '(fallback fold)'} ✓`);
+    }
+    return `${texts.length} texts + ${nicks.length} nicknames · ${notes.join(' · ')}`;
   });
   await step('chat: disguised phone / e-mail / domain forms are masked by the live API (full-width, / separators, Korean digits, "at … dot")', async () => {
-    const cases = ['０１０-１２３４-５６７８', '010/1234/5678', '공일공-일이삼사-오육칠팔', 'dinokid at gmail dot com', 'bad[.]com 와'];
+    const cases = ['０１０-１２３４-５６７８', '010/1234/5678', '공일공-일이삼사-오육칠팔', 'dinokid at gmail dot com', 'bad[.]com 와',
+      '0\u200b1\u200b0 1\u00ad2\u00ad3\u00ad4 5\u20606\u20607\u20608', '공1공 1234 5678'];
     const outs = [];
     for (const t of cases) {
       await sleep(1100);
-      const r = await A.req('api/chat/send.php', { json: { text: `${t} 친구${'가나다라마바'[outs.length]}`, channel: 'all' } });
+      const r = await A.req('api/chat/send.php', { json: { text: `${t} 친구${'가나다라마바사아'[outs.length]}`, channel: 'all' } });
       assert(r.status === 200 && r.data?.piiMasked === true, `${t}: ${r.status} ${r.error?.code} piiMasked=${r.data?.piiMasked}`);
       const m = r.data.message.text;
       assert(m.startsWith('🔒') && !/[0-9０-９]{4}|일이삼사|gmail|bad/.test(m), `${t} → ${m}`);
@@ -504,6 +546,16 @@ echo json_encode(array_map(fn ($s) => ChatFilter::maskPII((string) $s), $in), JS
     assert(again.status === 200 && again.data?.duplicate === true, 'duplicate report is idempotent');
     const self = await A.req('api/chat/report.php', { json: { target: userA.nickname, targetId: String(me.id), reason: 'spam' } });
     assert(self.status === 400, 'self report refused');
+  });
+  await step('chat: a report about an unknown name stores no personal information for the admins', async () => {
+    const r = await B.req('api/chat/report.php', { json: { target: '모르는친구 010-2468-1357', reason: 'privacy', memo: '전화번호 공일공 이사육팔 일삼오칠 을 보냈어요' } });
+    assert(r.status === 200 && r.data?.reportId, `status ${r.status} ${r.error?.code}`);
+    if (!tmpData) return 'stored copy not checked (external server)';
+    const dbf = fs.readdirSync(tmpData).find((f) => /^db-.*\.sqlite$/.test(f));
+    const q = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); $s = $p->prepare("SELECT target_name, memo FROM chat_reports WHERE id = ?"); $s->execute([(int) $argv[2]]); echo json_encode($s->fetch(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);', path.join(tmpData, dbf), String(r.data.reportId)], { encoding: 'utf8' });
+    const row = JSON.parse(q.stdout || 'null');
+    assert(row && !/2468|1357|이사육팔|일삼오칠/.test(row.target_name + row.memo) && row.target_name.includes('🔒'), `stored ${JSON.stringify(row)}`);
+    return `${row.target_name} · ${row.memo}`;
   });
   await step('ranking: top list, nicknames only', async () => {
     const r = await A.req('api/ranking/top.php');
@@ -573,7 +625,11 @@ echo json_encode(array_map(fn ($s) => ChatFilter::maskPII((string) $s), $in), JS
     if (r.status === 403) return 'admin already exists → 403 for non-admins (expected)';
     assert(r.status === 200 && Array.isArray(r.data?.checks) && r.data.db?.ok === true, `status ${r.status}`);
     const fails = r.data.checks.filter((c) => c.status === 'fail').map((c) => c.id);
-    return `status=${r.data.status} fail=[${fails.join(',')}] access=${r.data.access}`;
+    for (const id of ['pii_rules', 'pii_filter']) {
+      const c = r.data.checks.find((x) => x.id === id);
+      assert(c && c.status === 'ok', `${id}: ${JSON.stringify(c)}`);
+    }
+    return `status=${r.data.status} fail=[${fails.join(',')}] access=${r.data.access} · PII self-check ok`;
   });
   await step('private files are not served (config/lib/data/database/cli)', async () => {
     for (const p of ['config/config.php', 'lib/Core.php', 'lib/bootstrap.php', 'data/secret.php', 'data/', 'database/', 'cli/tfm.php', 'lib/']) {
@@ -601,7 +657,7 @@ echo json_encode(array_map(fn ($s) => ChatFilter::maskPII((string) $s), $in), JS
     const g = await A.req('api/player/get.php');
     const d = g.data?.save?.data;
     assert(g.status === 200 && d, `get ${g.status}`);
-    assert(d.stats.coin === stored.stats.coin && d.stats.distance === 12 && d.inventory.ITEM_RADISH === 4, `coin ${d.stats.coin} vs ${stored.stats.coin}`);
+    assert(d.stats.coin === stored.stats.coin && d.stats.distance === stored.stats.distance && d.stats.distance > 12 && d.inventory.ITEM_RADISH === 4, `coin ${d.stats.coin} vs ${stored.stats.coin}`);
     return `revision ${g.data.save.revision}`;
   });
   await step('engagement: daily check-in + missions explained once per day (re-claim after un-claiming → 409)', async () => {

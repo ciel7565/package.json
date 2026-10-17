@@ -10,6 +10,9 @@
  *   2. identity                 profile.id / profile.role must match the account (immutable)
  *   3. farming timing           growth/harvests cannot outpace crop growthTime × harvestSpeedTolerance
  *   4. fermentation timing      progress/claims cannot outpace recipe baseDuration (max speed, tolerance)
+ *   4b. movement / play time    Δstats.distance ≤ move_max_speed × elapsed (+ slack): legit running at RUN 18 m/s
+ *                               (phase 4: 3× speed) passes with room to spare, a teleported 10,000 km does not;
+ *                               Δstats.playTime ≤ elapsed server time (+ slack)
  *   5. economy                  Δ(net worth = coin + item replacement value + decor + extra jars), Δexp, Δedu
  *                               must be explained by rewards the server can account for (quests, achievements,
  *                               quizzes — each paid once, tracked in a server-side ledger — harvests, claims,
@@ -104,9 +107,11 @@ final class SaveValidator
         foreach (['q', 'a', 'z', 'e', 'g'] as $k) if (!isset($paid[$k]) || !is_array($paid[$k])) $paid[$k] = [];
 
         $dt = max(0.0, ($now - $prevAt) / 1000);
+        $statsNOf = fn (?object $s): ?object => $s ? self::o(self::p($s, 'stats')) : null;
         $explain = ['value' => 0, 'exp' => 0, 'edu' => 0];
         if ($first) $explain['value'] += (int) $this->t('new_player_value', 3000);
 
+        if (!$first) $this->movement($statsNOf($n), $statsNOf($p), $dt);
         $farm = $this->farming($n, $p, $first, $dt);
         $ferm = $this->fermentation($n, $p, $first, $dt);
         $max = GameData::maxima();
@@ -304,9 +309,11 @@ final class SaveValidator
             if (is_array($v) && count($v) > 2000) self::bad("$k length");
         }
         $stats = self::o(self::p($n, 'stats'));
+        // absolute ceilings: 100,000 km walked, 10 years of play, 10 million of any counter
+        $ceil = ['distance' => 1e8, 'playTime' => 3.2e8];
         foreach (self::kv($stats) as $k => $v) {
             if (!is_int($v) && !is_float($v)) continue;
-            if (!is_finite((float) $v) || $v < 0) $this->violate('STAT_RANGE', ['stat' => mb_substr($k, 0, 24)]);
+            if (!is_finite((float) $v) || $v < 0 || $v > ($ceil[$k] ?? 1e7)) $this->violate('STAT_RANGE', ['stat' => mb_substr($k, 0, 24)]);
         }
         $level = self::i(self::p($stats, 'level'));
         $lc = (array) Config::get('save.level_exp', []);
@@ -331,6 +338,23 @@ final class SaveValidator
         if (!($cn > $cp + 1000)) return false;
         $st = self::o(self::p($n, 'stats'));
         return self::i(self::p($st, 'level')) <= 1 && $this->expTotal($n) <= 1000 && self::i(self::p($st, 'coin')) <= 5000;
+    }
+
+    // ------------------------------------------------------------------ movement / play time
+    /**
+     * The client counts walked metres (player:distance, teleports / fast travel excluded) and active play seconds.
+     * Since phase 4 the player runs at 18 m/s (walk 9.6): move_max_speed (default 27 m/s = RUN × 1.5 for jumps, the
+     * easy-mode rescue hop and frame jitter) × the elapsed server time between accepted saves, plus a fixed slack.
+     */
+    private function movement(?object $sN, ?object $sP, float $dt): void
+    {
+        $slackT = $this->t('time_slack', 5);
+        $dD = self::n(self::p($sN, 'distance')) - self::n(self::p($sP, 'distance'));
+        $allowD = max(1.0, $this->t('move_max_speed', 27)) * ($dt + $slackT) + max(0.0, $this->t('move_slack_m', 300));
+        if ($dD > $allowD) $this->violate('DISTANCE_TOO_FAST', ['gain' => (int) round($dD), 'allowed' => (int) round($allowD), 'elapsed' => round($dt, 1)]);
+        $dT = self::n(self::p($sN, 'playTime')) - self::n(self::p($sP, 'playTime'));
+        $allowT = $dt * 1.05 + $slackT + max(0.0, $this->t('playtime_slack', 120));
+        if ($dT > $allowT) $this->violate('PLAYTIME_TOO_FAST', ['gain' => (int) round($dT), 'allowed' => (int) round($allowT)]);
     }
 
     // ------------------------------------------------------------------ farming

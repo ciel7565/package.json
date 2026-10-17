@@ -223,14 +223,23 @@ final class Health
             GameData::loaded() ? sprintf('퀘스트 %d · 작물 %d · 레시피 %d · 아이템 %d (%s)', count($gd['quests']), count($gd['crops']), count($gd['recipes']), count($gd['items']), GameData::exportedAt()) : '없음',
             GameData::loaded() ? '' : '"node tools/build.mjs" 로 다시 빌드하세요. 없으면 저장 검증이 약해집니다.');
         $this->add('app', 'save_validation', '저장 검증', Config::get('save.validate', true) ? 'ok' : 'fail', Config::get('save.validate', true) ? '사용 (경제·성장·발효 시간 검증)' : '꺼짐');
-        // kid safety: the personal-information filter must mask the canonical samples and leave ordinary chat alone
+        // kid safety: the personal-information filter must load its whole rule list (lib/pii-rules.json, generated from
+        // the client by tests/pii-sync.mjs), mask the canonical disguises and leave ordinary kid sentences alone
+        $piiRules = ChatFilter::piiRuleNames();
+        $piiFull = count($piiRules) >= 30 && !array_diff(['email', 'url', 'phone', 'wordDigits', 'handleKo', 'school', 'classWords'], $piiRules);
+        $this->add('security', 'pii_rules', '개인정보 가림 규칙', $piiFull ? 'ok' : 'fail', count($piiRules) . '개' . ($piiFull ? '' : ' (기본 규칙만)'),
+            $piiFull ? '' : 'lib/pii-rules.json 이 없거나 깨졌어요. "node tests/pii-sync.mjs" 로 다시 만들고 함께 올리세요.');
         $piiSamples = ['010-1234-5678', '01012345678', '+82 10 1234 5678', 'kid@example.com', 'https://example.com', '서울시 강남구 테헤란로 123',
-            '０１０-１２３４-５６７８', '010/1234/5678', '공일공-일이삼사-오육칠팔', '010 일이삼사 5678', 'dinokid at gmail dot com', 'bad[.]com', '서울시 강남구 역삼동 123-4'];
-        $piiMissed = array_values(array_filter($piiSamples, fn ($t) => ChatFilter::maskPII($t) !== ChatFilter::PII_MARK));
-        $piiFalse = ChatFilter::maskPII('오늘 콩 3개 심었어요! 레벨 12 😊') !== '오늘 콩 3개 심었어요! 레벨 12 😊';
-        $this->add('security', 'pii_filter', '어린이 개인정보 가림(채팅)', !$piiMissed && !$piiFalse ? 'ok' : 'fail',
-            !$piiMissed && !$piiFalse ? '전화번호·이메일·주소·링크 → 🔒' : ($piiMissed ? '가리지 못함: ' . implode(', ', $piiMissed) : '보통 문장을 잘못 가림'),
-            !$piiMissed && !$piiFalse ? '' : 'lib/ChatFilter.php 의 piiPatterns() 를 확인하세요.');
+            '０１０-１２３４-５６７８', '010/1234/5678', '공일공-일이삼사-오육칠팔', '010 일이삼사 5678', 'dinokid at gmail dot com', 'bad[.]com', '서울시 강남구 역삼동 123-4',
+            "0\u{200B}1\u{200B}0 1\u{00AD}2\u{00AD}3\u{00AD}4 5\u{2060}6\u{2060}7\u{2060}8", '공1공 1234 5678', '해바라기초등학교', '3학년 2반', '101동 1203호'];
+        $piiMissed = array_values(array_filter($piiSamples, fn ($t) => ChatFilter::maskPII(Users::cleanText($t, 200)) !== ChatFilter::PII_MARK));
+        $piiKeep = ['오늘 콩 3개 심었어요! 레벨 12 😊', '2024.10.11 소풍', '콩 10개 심고 물 3번 줬어', '1000 2000 코인 모았어', '나 유치원 가기 싫어'];
+        $piiFalse = array_values(array_filter($piiKeep, fn ($t) => ChatFilter::maskPII($t) !== $t));
+        $nickBad = array_values(array_filter(['로블록스dino12', '해바라기초2학년', '공일공일이삼사'], fn ($n) => !ChatFilter::nicknameLooksPersonal($n)));
+        $piiOk = !$piiMissed && !$piiFalse && !$nickBad;
+        $this->add('security', 'pii_filter', '어린이 개인정보 가림(채팅·닉네임)', $piiOk ? 'ok' : 'fail',
+            $piiOk ? '전화번호·이메일·주소·학교·링크·숫자 말 → 🔒' : ($piiMissed ? '가리지 못함: ' . implode(', ', array_map(fn ($t) => mb_substr(Users::cleanText($t, 40), 0, 24), $piiMissed)) : ($piiFalse ? '보통 문장을 잘못 가림: ' . implode(', ', $piiFalse) : '닉네임 검사 실패: ' . implode(', ', $nickBad))),
+            $piiOk ? '' : 'lib/pii-rules.json 과 lib/ChatFilter.php 를 확인하세요 (node tests/pii-client.mjs).');
         $titles = count(GameData::titles());
         $this->add('app', 'titles', '칭호 목록 (랭킹 표시 제한)', $titles ? 'ok' : 'warn', $titles ? "{$titles}개" : '없음', $titles ? '' : '"node tools/build.mjs" 로 game-data.json 을 다시 만들면 랭킹에 실제 칭호만 보여요.');
 

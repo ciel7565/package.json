@@ -180,6 +180,9 @@ return [
             'jar_value'         => 1500,   // 추가 장독 1개(열기 비용)를 자산으로 계산
             'craft_value_gain'  => 260,    // 작업대 제작 1회로 늘 수 있는 최대 자산 가치
             'craft_exp'         => 40,
+            'move_max_speed'    => 27,     // 이동 거리 판정 최대 속도(m/s): 달리기 18 m/s(3배 속도) × 1.5 — 점프·도움 이동·프레임 오차 여유
+            'move_slack_m'      => 300,    // 이동 거리 고정 여유(m)
+            'playtime_slack'    => 120,    // 플레이 시간 고정 여유(초)
             'edu_complete'      => 5,      // 교육 콘텐츠 완료 시 교육 포인트
         ],
         // 레벨 경험치 공식 (01-data.js G.data.levels.expFor 와 같아야 함): round(base × level^pow)

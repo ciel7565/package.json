@@ -14,14 +14,18 @@
 .npc-label.far .nametag, .npc-label.far .npc-bubble { display: none; }
 .npc-label.talking { display: none; }
 
+.npc-mark-wl { display: grid; place-items: center; }
 .npc-mark {
   pointer-events: auto; cursor: pointer; display: grid; place-items: center;
-  width: 2rem; height: 2rem; border-radius: 50%; padding: 0;
-  font: 900 1.3rem/1 var(--font); color: #4a2f00; text-shadow: 0 1px 0 rgba(255, 255, 255, .55);
+  width: 2.75rem; height: 2.75rem; border-radius: 50%; padding: 0;
+  /* world labels stand on their bottom edge: shift down by half so the button is centred on the 3D mark */
+  transform: translateY(50%);
+  font: 900 1.45rem/1 var(--font); color: #4a2f00; text-shadow: 0 1px 0 rgba(255, 255, 255, .55);
   background: radial-gradient(circle at 35% 28%, #fff6d2 0%, #ffd766 36%, #e9b02a 72%, #b9800f 100%);
   border: 2px solid #fff3c9;
   box-shadow: 0 0 0 3px rgba(244, 197, 74, .32), 0 0 18px rgba(255, 186, 48, .85), 0 4px 10px rgba(0, 0, 0, .38);
   animation: npcMarkBob 1.5s ease-in-out infinite;
+  touch-action: manipulation;
 }
 .npc-mark.qm {
   color: #6a4a00;
@@ -30,8 +34,14 @@
   box-shadow: 0 0 0 3px rgba(244, 197, 74, .5), 0 0 16px rgba(255, 214, 120, .8), 0 4px 10px rgba(0, 0, 0, .38);
 }
 .npc-mark:hover { filter: brightness(1.08); }
-.npc-label.far .npc-mark { width: 1.75rem; height: 1.75rem; font-size: 1.12rem; }
-@keyframes npcMarkBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+/* the 3D bouncing mark is drawn in the scene: the button becomes its invisible (but focusable) tap target */
+.npc-mark.has3d { color: transparent; text-shadow: none; background: transparent; border-color: transparent; box-shadow: none; animation: none; }
+.npc-mark.has3d:hover { background: radial-gradient(circle, rgba(255, 224, 140, .2), rgba(255, 224, 140, 0) 70%); filter: none; }
+.npc-mark.has3d:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.npc-mark:not(.has3d).pop { animation: npcMarkPop .32s cubic-bezier(.22, 1, .36, 1), npcMarkBob 1.5s .32s ease-in-out infinite; }
+@keyframes npcMarkPop { from { opacity: 0; scale: .6; } to { opacity: 1; scale: 1; } }
+body.dialogue-open .npc-mark-wl, body.photo-mode .npc-mark-wl, body.hud-hidden .npc-mark-wl { visibility: hidden; }
+@keyframes npcMarkBob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -5px; } }
 
 .npc-bubble { max-width: 15rem; font-size: .84rem; line-height: 1.42; margin-bottom: .1rem; word-break: keep-all; overflow-wrap: anywhere; }
 .npc-bubble.pop { animation: npcBubble .38s var(--ease); }
@@ -128,14 +138,19 @@ body.dialogue-open #labels-layer .nametag.me { visibility: hidden; }
 .dlg-choice.quest { border-color: rgba(244, 197, 74, .6); background: linear-gradient(180deg, rgba(244, 197, 74, .2), rgba(244, 197, 74, .08)); }
 .dlg-choice.claim {
   border-color: rgba(255, 215, 102, .85); background: linear-gradient(180deg, rgba(255, 215, 102, .32), rgba(226, 170, 34, .14));
-  animation: dlgChoiceIn .3s var(--ease) backwards, dlgGlow 1.8s ease-in-out .3s infinite;
+  position: relative;
+}
+/* soft breathing halo — opacity on a pseudo-element (compositor-only), ≤ 0.6 Hz */
+.dlg-choice.claim::after, .dlg-next:not(.end)::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 24px rgba(244, 197, 74, .45); opacity: 0; animation: dlgGlow 1.8s ease-in-out .3s infinite;
 }
 .dlg-choice.quest:hover, .dlg-choice.quest.focus, .dlg-choice.claim:hover, .dlg-choice.claim.focus {
   border-color: #ffe08a; background: linear-gradient(180deg, rgba(255, 215, 102, .38), rgba(226, 170, 34, .18)); box-shadow: 0 0 0 3px rgba(244, 197, 74, .2);
 }
 .dlg-choice.leave { color: var(--text-dim); background: rgba(255, 255, 255, .04); }
 @keyframes dlgChoiceIn { from { opacity: 0; transform: translateY(7px); } }
-@keyframes dlgGlow { 0%, 100% { box-shadow: 0 0 10px rgba(244, 197, 74, .16); } 50% { box-shadow: 0 0 24px rgba(244, 197, 74, .42); } }
+@keyframes dlgGlow { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 
 .dlg-foot { grid-area: foot; display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .55rem; min-height: 2rem; }
 .dlg-hint { font-size: .72rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -146,19 +161,19 @@ body.dialogue-open #labels-layer .nametag.me { visibility: hidden; }
 .dlg-hint kbd + kbd { margin-left: .15rem; }
 .dlg-next {
   margin-left: auto; padding-inline: 1rem; color: #fff; border-color: rgba(255, 255, 255, .2);
-  background: linear-gradient(180deg, #3fd078, #23a95a); animation: dlgNext 1.6s ease-in-out infinite;
+  position: relative; background: linear-gradient(180deg, #3fd078, #23a95a); box-shadow: 0 4px 12px rgba(35, 169, 90, .28);
 }
+.dlg-next:not(.end)::after { box-shadow: 0 4px 22px rgba(35, 169, 90, .62); animation-duration: 1.6s; animation-delay: 0s; }
 .dlg-next:hover:not(:disabled) { background: linear-gradient(180deg, #4ddc86, #27b462); }
 .dlg-next .arr { font-size: .7em; margin-left: .15rem; }
-.dlg-next.end { background: var(--bg-elev-2); color: var(--text); border-color: var(--line-strong); animation: none; }
-@keyframes dlgNext { 0%, 100% { box-shadow: 0 4px 12px rgba(35, 169, 90, .28); } 50% { box-shadow: 0 4px 22px rgba(35, 169, 90, .62); } }
+.dlg-next.end { background: var(--bg-elev-2); color: var(--text); border-color: var(--line-strong); box-shadow: none; }
 
 /* ---------------------------------------------------------------- accessibility modes */
 body.high-contrast .dlg { background: rgba(0, 0, 0, .95); border-color: var(--gold); }
 body.high-contrast .dlg-choice { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .5); }
 body.large-text .dlg-text { font-size: 1.22rem; }
 body.large-text .dlg-choice { font-size: 1.04rem; }
-body.reduce-motion .npc-mark, body.reduce-motion .dlg-next, body.reduce-motion .dlg-caret, body.reduce-motion .dlg.typing .dlg-portrait { animation: none; }
+body.reduce-motion .npc-mark, body.reduce-motion .dlg-next::after, body.reduce-motion .dlg-choice.claim::after, body.reduce-motion .dlg-caret, body.reduce-motion .dlg.typing .dlg-portrait { animation: none; }
 
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 1366px), (max-height: 768px) {
@@ -229,19 +244,19 @@ body.easy.dialogue-open .dlg-tap { pointer-events: auto; cursor: pointer; touch-
   border-radius: 22px; text-align: center; color: var(--kid-ink, #23301f); font-size: 1.15rem; font-weight: 900; line-height: 1.2;
   background: linear-gradient(180deg, #fffdf6, #fff0cf); border: 3px solid var(--tile);
   box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 12px 24px rgba(0, 0, 0, .3);
-  animation: dlgKidIn .4s cubic-bezier(.34, 1.56, .64, 1) backwards; touch-action: manipulation;
+  animation: dlgKidIn .42s cubic-bezier(.22, 1, .36, 1) backwards; touch-action: manipulation;
 }
 .dlg-choice.kid:nth-child(2) { --tile: #4fb3ff; }
 .dlg-choice.kid:nth-child(3) { --tile: #ff9f43; }
 .dlg-choice.kid.claim, .dlg-choice.kid.quest { --tile: #ffc93c; background: linear-gradient(180deg, #fffbe6, #ffe39a); }
-.dlg-choice.kid.claim { animation: dlgKidIn .4s cubic-bezier(.34, 1.56, .64, 1) backwards, dlgGlow 1.8s ease-in-out .4s infinite; }
+.dlg-choice.kid.claim::after { inset: -3px; box-shadow: 0 0 26px rgba(255, 201, 60, .7); }
 .dlg-choice.kid .dc-emo { font-size: 2.5rem; line-height: 1; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .2)); }
 .dlg-choice.kid .dc-text { flex: none; }
 .dlg-choice.kid:hover, .dlg-choice.kid.focus { transform: translateY(-3px); background: linear-gradient(180deg, #ffffff, #fff4d6); border-color: var(--tile); box-shadow: 0 9px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 14px 26px rgba(0, 0, 0, .32); }
 .dlg-choice.kid:active { transform: translateY(5px) scale(.97); box-shadow: 0 1px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 4px 10px rgba(0, 0, 0, .25); }
 .dlg-choice.kid.focus { outline: 4px solid #fff; outline-offset: 2px; }
 .dlg-choices.kid.nudge .dlg-choice { animation: dlgKidNudge .5s ease-in-out 1; }
-@keyframes dlgKidIn { from { opacity: 0; transform: translateY(14px) scale(.9); } }
+@keyframes dlgKidIn { from { opacity: 0; transform: translateY(14px) scale(.92); } }
 @keyframes dlgKidNudge { 0%, 100% { transform: none; } 25% { transform: translateY(-7px) rotate(-2deg); } 60% { transform: translateY(-3px) rotate(2deg); } }
 
 .dlg.kid .dlg-foot { margin-top: .75rem; min-height: var(--tap); }
@@ -282,8 +297,9 @@ body.easy.dialogue-open .dlg-tap { pointer-events: auto; cursor: pointer; touch-
 }
 body.reduce-motion .dlg.kid.typing .dlg-portrait, body.reduce-motion .dlg-choice.kid, body.reduce-motion .dlg-choices.kid.nudge .dlg-choice { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .dlg.kid.typing .dlg-portrait, .dlg-choice.kid, .dlg-choices.kid.nudge .dlg-choice { animation: none; }
+  .dlg.kid.typing .dlg-portrait, .dlg-choice.kid, .dlg-choices.kid.nudge .dlg-choice, .dlg-next::after, .dlg-choice.claim::after { animation: none; }
 }
-/* 쉬운 모드: the floating ! / ? quest mark is a real tap target (≥ 44 px even on small phones) */
-body.easy .npc-mark { width: max(3.2rem, 52px); height: max(3.2rem, 52px); font-size: max(1.9rem, 30px); }
-body.easy .npc-label.far .npc-mark { width: max(2.8rem, 46px); height: max(2.8rem, 46px); font-size: max(1.6rem, 26px); }
+body.reduce-motion .dlg-next:not(.end)::after, body.reduce-motion .dlg-choice.claim::after { opacity: .6; }
+@media (prefers-reduced-motion: reduce) { .dlg-next:not(.end)::after, .dlg-choice.claim::after { opacity: .6; } }
+/* 쉬운 모드: the floating ! / ? quest mark is a real tap target (≥ 56 px, CONTRACT §12 / NEW-3) */
+body.easy .npc-mark { width: max(var(--tap, 56px), 3.5rem); height: max(var(--tap, 56px), 3.5rem); font-size: max(2rem, 30px); }

@@ -22,8 +22,10 @@ final class Users
     {
         if (!mb_check_encoding($s, 'UTF-8')) $s = mb_convert_encoding($s, 'UTF-8', 'UTF-8');
         if (class_exists(\Normalizer::class)) $s = \Normalizer::normalize($s, \Normalizer::FORM_C) ?: $s;
-        // C0/C1 controls, zero-width & bidi overrides (spoofing), BOM
-        $s = preg_replace('/[\x{0000}-\x{001F}\x{007F}-\x{009F}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]/u', ' ', $s) ?? '';
+        // the same invisible set the client strips (60-social INVISIBLE_RANGES): C0/C1 controls, soft hyphen, CGJ, ALM,
+        // Hangul fillers ("blank" names), zero-width & joiners, bidi overrides/isolates (spoofing), BOM, tag characters
+        $s = preg_replace('/[' . ChatFilter::INVISIBLE_CLASS . ']/u', ' ', $s) ?? '';
+        $s = preg_replace('/(\p{M}{2})\p{M}+/u', '$1', $s) ?? $s; // "zalgo" stacks: at most 2 marks per letter
         $s = trim(preg_replace('/\s+/u', ' ', $s) ?? '');
         return mb_substr($s, 0, $maxChars);
     }
