@@ -92,7 +92,7 @@
    Motion: slow (≥ 1.4 s cycles), never flashes; reduce-motion stops every animation.
    ============================================================================= */
 body.easy #bottom-bar #easy-wx-btn { order: 4; } /* inserted before 🔊 (also order 4) -> 😊 📸 📝 🌤️ 🔊 */
-#easy-wx-btn .bb-emo { transition: transform .3s cubic-bezier(.34, 1.56, .64, 1); }
+#easy-wx-btn .bb-emo { transition: transform .3s var(--ease-pop); }
 #easy-wx-btn:active .bb-emo { transform: scale(.85); }
 
 .popover.wxk-popover {
@@ -153,7 +153,7 @@ body.easy #bottom-bar #easy-wx-btn { order: 4; } /* inserted before 🔊 (also o
 }
 .wxk-scene[data-kind="CLOUDY"] .wxk-big, .wxk-scene[data-kind="FOG"] .wxk-big { animation: wxkDrift 4s ease-in-out infinite; }
 .wxk-scene[data-kind="FOG"] .wxk-fx { background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .55) 60%, rgba(255, 255, 255, .2)); animation: wxkDrift 5s ease-in-out infinite reverse; }
-.wxk-scene.bump .wxk-big { animation: wxkBump .55s cubic-bezier(.34, 1.56, .64, 1); }
+.wxk-scene.bump .wxk-big { animation: wxkBump .55s var(--ease-pop); }
 @keyframes wxkSpin { to { transform: rotate(360deg); } }
 @keyframes wxkTwinkle { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
 @keyframes wxkRain { from { background-position: 0 0; } to { background-position: -8px 26px; } }
@@ -169,7 +169,7 @@ body.easy #bottom-bar #easy-wx-btn { order: 4; } /* inserted before 🔊 (also o
   padding: .35rem .1rem; border-radius: 18px; color: #1d2a20; font-weight: 800; touch-action: manipulation;
   background: linear-gradient(180deg, #fff, color-mix(in srgb, var(--wx, #ffd23f) 45%, #fff));
   border: 3px solid rgba(255, 255, 255, .85); box-shadow: 0 4px 0 rgba(0, 0, 0, .28);
-  transition: transform .15s cubic-bezier(.34, 1.56, .64, 1), box-shadow .15s;
+  transition: transform .15s var(--ease-pop), box-shadow .15s;
 }
 .wxk-time { --wx: #ffe6a8; min-height: var(--tap, 56px); }
 .wxk-tile .wxk-emo { font-size: 2rem; line-height: 1.1; }

@@ -10,11 +10,113 @@
 //   G.ui.onAction(action, fn)  delegated [data-action] clicks
 //   G.ui.onEscape(fn, priority) / handleEscape()
 //   G.ui.block(key) / unblock(key) / isBlocking()
+//   motion (CONTRACT §13.5): G.ui.motion {d1..d4, ease}, reducedMotion(), stagger(els, opts), countUp(el, to, opts),
+//   setBar(el, pct), skeleton(opts), pulse(el) — modals grow out of the element that opened them, toasts stack with
+//   FLIP, every `.bar > i` fill becomes transform-based, G.ui.tabs gets a sliding ink. reduceMotion → instant/opacity.
 // =============================================================================
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const esc = G.util.escapeHtml;
+
+  // ---------------------------------------------------------------- motion system (§13.5)
+  // the same tokens as 00-base.css (--dur-1..4, --ease-out-quint, --ease-in, --ease-pop ≤ 4 % overshoot)
+  const MOTION = Object.freeze({
+    d1: 120, d2: 200, d3: 320, d4: 500, stagger: 36,
+    out: 'cubic-bezier(.22, 1, .36, 1)', in: 'cubic-bezier(.5, 0, .75, 0)', pop: 'cubic-bezier(.2, 1, .3, 1.1)', inOut: 'cubic-bezier(.65, 0, .35, 1)',
+  });
+  const rmq = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+  /** reduce motion: the player's setting or the OS preference → instant / opacity-only */
+  const reduced = () => !!(G.settings && G.settings.reduceMotion) || !!(rmq && rmq.matches);
+  const canAnimate = () => typeof Element !== 'undefined' && typeof Element.prototype.animate === 'function';
+  const easyMotion = () => !!(G.settings && G.settings.easyMode !== false);
+  const perfNow = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  /** run el.animate() safely; returns the Animation or null */
+  function anim(el, frames, opts) {
+    if (!el || !canAnimate()) return null;
+    try { return el.animate(frames, opts); } catch (e) { return null; }
+  }
+  // where did the player last tap / press Enter? Dialogs and popovers grow out of that point (shared-element feel).
+  const lastPtr = { x: 0, y: 0, t: -1e9 };
+  document.addEventListener('pointerdown', (e) => { lastPtr.x = e.clientX; lastPtr.y = e.clientY; lastPtr.t = perfNow(); }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const a = document.activeElement;
+    if (!a || a === document.body || typeof a.getBoundingClientRect !== 'function') return;
+    const r = a.getBoundingClientRect();
+    if (r.width < 1) return;
+    lastPtr.x = r.left + r.width / 2; lastPtr.y = r.top + r.height / 2; lastPtr.t = perfNow();
+  }, true);
+  /** the recent tap point (≤ maxAge ms ago) or null */
+  function tapOrigin(maxAge = 900) { return perfNow() - lastPtr.t <= maxAge ? { x: lastPtr.x, y: lastPtr.y } : null; }
+
+  /**
+   * stagger(elements | parent, {delay, step, y, scale, duration, max, skipAnimated=true}) — one-shot entrance with the
+   * Web Animations API (fill: backwards), so a later re-render never replays it and modules' own CSS entrances win.
+   */
+  function stagger(list, o = {}) {
+    if (reduced() || !canAnimate() || !list) return;
+    const all = list instanceof Element ? Array.from(list.children) : Array.from(list);
+    const max = o.max ?? 12, step = o.step ?? (easyMotion() ? 44 : MOTION.stagger), d0 = o.delay ?? 0, dur = o.duration ?? MOTION.d4;
+    const y = o.y ?? (easyMotion() ? 8 : 12), s0 = o.scale ?? 1;
+    let i = 0;
+    for (const el of all) {
+      if (i >= max) break;
+      if (!(el instanceof Element) || el.hidden || el.classList.contains('tab-ink')) continue;
+      if (o.skipAnimated !== false) {
+        let name = 'none';
+        try { name = getComputedStyle(el).animationName; } catch (e) { name = 'none'; }
+        if (name && name !== 'none') continue;
+      }
+      anim(el, [{ opacity: 0, translate: `0 ${y}px`, scale: s0 }, { opacity: 1, translate: '0 0', scale: 1 }],
+        { duration: dur, delay: d0 + i * step, easing: MOTION.out, fill: 'backwards' });
+      i++;
+    }
+  }
+
+  /** countUp(el, to, {from, duration, delay, format, prefix, suffix}) — eased number roll (ease-out-quint) */
+  function countUp(el, to, o = {}) {
+    if (!el) return;
+    const end = Number(to);
+    if (!Number.isFinite(end)) return;
+    const fmtN = typeof o.format === 'function' ? o.format : (n) => G.util.fmt(n);
+    const pre = o.prefix || '', suf = o.suffix || '';
+    const paint = (v) => { el.textContent = `${pre}${fmtN(v)}${suf}`; };
+    if (el.__cuRaf) { cancelAnimationFrame(el.__cuRaf); el.__cuRaf = 0; }
+    clearTimeout(el.__cuT);
+    const start = o.from != null ? Number(o.from) : (Number(String(el.textContent).replace(/[^\d.-]/g, '')) || 0);
+    if (reduced() || !Number.isFinite(start) || start === end) { paint(end); return; }
+    const dur = Math.max(120, o.duration ?? 800);
+    const run = () => {
+      const t0 = perfNow();
+      const step = () => {
+        const k = Math.min(1, (perfNow() - t0) / dur);
+        const e = 1 - Math.pow(1 - k, 5);
+        paint(Math.round(start + (end - start) * e));
+        el.__cuRaf = k < 1 ? requestAnimationFrame(step) : 0;
+      };
+      paint(start);
+      el.__cuRaf = requestAnimationFrame(step);
+    };
+    if (o.delay > 0) { paint(start); el.__cuT = setTimeout(run, o.delay); } else run();
+  }
+
+  /** a soft attention pulse on an element (scale 1 → 1.06 → 1, no flashing) */
+  function pulse(el, o = {}) {
+    if (!el || reduced()) return;
+    anim(el, [{ scale: 1 }, { scale: o.scale ?? 1.06 }, { scale: 1 }], { duration: o.duration ?? MOTION.d3 + 80, easing: MOTION.out });
+  }
+
+  /** skeleton({rows=3, avatar=true, block=false}) → HTML string of shimmering placeholder rows (while loading) */
+  function skeleton(o = {}) {
+    const rows = Math.max(1, Math.min(8, Number(o.rows) || 3));
+    let out = '<div class="skel" aria-hidden="true">';
+    if (o.block) out += '<div class="skel-block"></div>';
+    for (let i = 0; i < rows; i++) {
+      out += `<div class="skel-row">${o.avatar === false ? '' : '<span class="skel-ava"></span>'}<span class="col grow"><span class="skel-line ${i % 2 ? 'w60' : 'w80'}"></span><span class="skel-line w40"></span></span></div>`;
+    }
+    return `${out}</div>`;
+  }
 
   /** tiny hyperscript: h('div', {class:'x', onclick: fn, html:'<b>..</b>'}, child1, [child2, child3]) */
   function h(tag, attrs, ...children) {
@@ -97,8 +199,13 @@
     $$(sel).forEach((b) => {
       let badge = b.querySelector('.badge');
       if (!count) { badge?.remove(); return; }
+      const fresh = !badge;
       if (!badge) { badge = h('span', { class: 'badge' }); b.appendChild(badge); }
-      badge.textContent = count > 99 ? '99+' : String(count);
+      const txt = count > 99 ? '99+' : String(count);
+      if (badge.textContent === txt) return;
+      badge.textContent = txt;
+      // a new badge pops in (CSS badgeIn); a changed count gets one small bump
+      if (!fresh && !reduced()) anim(badge, [{ scale: 1 }, { scale: 1.28 }, { scale: 1 }], { duration: MOTION.d3, easing: MOTION.out });
     });
   }
   function setBadge(action, count) {
@@ -124,6 +231,27 @@
     if (!t || t.length > 34 || /[A-Z]{3,}|_[A-Z]|HTTP|Error|error|undefined|null|NaN|\bat\s|[{}<>]|코드|서버|네트워크|데이터|형식|시도/.test(t)) return '앗, 잘 안 됐어요. 다시 해 봐요!';
     return t;
   }
+  /** remove one toast: exit animation, then FLIP the remaining stack into place (transform only, no layout jumps) */
+  function dismissToast(el, instant) {
+    if (!el || el.__gone) return;
+    el.__gone = true;
+    clearTimeout(el.__toastT);
+    const root = el.parentElement;
+    const finish = () => {
+      if (!el.isConnected) return;
+      const sibs = root ? Array.from(root.children).filter((t) => t !== el) : [];
+      const before = (!reduced() && canAnimate()) ? sibs.map((t) => t.getBoundingClientRect().top) : null;
+      el.remove();
+      if (!before) return;
+      sibs.forEach((t, i) => {
+        const dy = before[i] - t.getBoundingClientRect().top;
+        if (Math.abs(dy) > 0.5) anim(t, [{ transform: `translateY(${dy.toFixed(1)}px)` }, { transform: 'translateY(0)' }], { duration: MOTION.d3, easing: MOTION.out });
+      });
+    };
+    if (instant || reduced()) { finish(); return; }
+    el.classList.add('out');
+    setTimeout(finish, MOTION.d2 + 20);
+  }
   function toast(msg, opts = {}) {
     const root = $('#toast-root');
     if (!root) return;
@@ -144,14 +272,17 @@
       ico, h('span', { class: 't-msg', html: opts.html && !kidErr ? text : esc(text) }));
     if (typeof opts.retry === 'function') {
       const rb = h('button', { type: 'button', class: 'btn btn-sm t-retry' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔄'), easy ? '다시' : '다시 시도');
-      rb.addEventListener('click', () => { el.remove(); try { opts.retry(); } catch (e) { G.log.error('UI', 'toast retry', e); } });
+      rb.addEventListener('click', () => { dismissToast(el, true); try { opts.retry(); } catch (e) { G.log.error('UI', 'toast retry', e); } });
       el.appendChild(rb);
       el.classList.add('has-btn');
     }
-    root.appendChild(el);
-    while (root.children.length > 4) root.firstChild.remove();
     const dur = opts.duration ?? (type === 'error' ? (easy ? 5500 : 4500) : easy ? 3400 : 2800);
-    setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 260); }, dur);
+    el.style.setProperty('--toast-life', `${Math.max(400, Number(dur) || 0)}ms`);
+    root.appendChild(el);
+    // at most 4 live toasts: the oldest leaves (with its exit) and the stack closes up smoothly
+    const live = Array.from(root.children).filter((t) => !t.classList.contains('out'));
+    for (let i = 0; i < live.length - 4; i++) dismissToast(live[i]);
+    el.__toastT = setTimeout(() => dismissToast(el), dur);
     if (type === 'error') G.sfx(easy ? 'notify' : 'error'); else if (type === 'reward') G.sfx('coin'); else if (opts.sound !== false) G.sfx('notify');
     if (easy && (kidErr || opts.say)) {
       const line = typeof opts.say === 'string' ? opts.say : opts.html ? el.textContent : text;
@@ -192,6 +323,64 @@
     el.hidden = false;
   }
 
+  // ---------------------------------------------------------------- modal motion
+  // Enter: the box grows out of the tap point (transform-origin at the button that opened it), then its content
+  // staggers in once. Exit: the box steps out of every selector (`.modal` → `.modal-closing`, no role / aria-modal,
+  // inert, data-kid-exempt) so scripts, tests and audits only ever see live dialogs, and fades/shrinks for 200 ms.
+  const closingModals = new Set();
+  function flushClosingModals() {
+    for (const b of closingModals) { clearTimeout(b.__outT); b.remove(); }
+    closingModals.clear();
+  }
+  function enterModal(m, origin, replacing) {
+    const box = m.el, bd = m.backdrop;
+    if (replacing) { bd.classList.add('no-enter'); return; }
+    if (reduced()) {
+      // opacity-only, very short (§13.5 reduce motion)
+      bd.classList.add('no-enter');
+      anim(bd, [{ opacity: 0 }, { opacity: 1 }], { duration: MOTION.d1, easing: 'linear' });
+      return;
+    }
+    box.classList.add('is-entering');
+    if (origin) {
+      // untransformed layout box: the backdrop is the offsetParent and fills the viewport
+      const ox = origin.x - box.offsetLeft, oy = origin.y - box.offsetTop;
+      if (Number.isFinite(ox) && Number.isFinite(oy)) {
+        box.style.transformOrigin = `${Math.round(ox)}px ${Math.round(oy)}px`;
+        box.classList.add('from-origin');
+      }
+    }
+    const body = m.body;
+    stagger(Array.from(body.children).filter((c) => !c.matches('.list, .grid, .pick-grid')), { delay: 70, max: 6 });
+    for (const g of body.querySelectorAll('.list, .grid, .pick-grid')) stagger(g, { delay: 110, max: 10, y: 10 });
+    stagger(m.foot, { delay: 140, max: 4, y: 6 });
+    // numbers marked data-countup roll up from 0 while the dialog arrives
+    let k = 0;
+    for (const el of body.querySelectorAll('[data-countup]')) {
+      if (k++ > 24) break;
+      countUp(el, Number(el.dataset.countup), { from: 0, delay: 160, duration: 900 });
+    }
+    clearTimeout(box.__enterT);
+    box.__enterT = setTimeout(() => box.classList.remove('is-entering'), MOTION.d4 + 300);
+  }
+  function leaveModal(m, instant) {
+    const box = m.el, bd = m.backdrop;
+    clearTimeout(box.__enterT);
+    if (instant || reduced() || !bd.isConnected) { bd.remove(); return; }
+    // freeze the size the dialog has now (size rules hang on `.modal.<name>`), then step out of `.modal`
+    const w = box.offsetWidth, hgt = box.offsetHeight;
+    if (w > 0 && hgt > 0) { box.style.width = `${w}px`; box.style.height = `${hgt}px`; box.style.maxHeight = 'none'; }
+    box.classList.remove('modal', 'is-entering');
+    box.classList.add('modal-closing');
+    box.removeAttribute('role'); box.removeAttribute('aria-modal');
+    bd.setAttribute('aria-hidden', 'true');
+    bd.setAttribute('data-kid-exempt', '');
+    bd.inert = true;
+    bd.classList.add('is-out');
+    closingModals.add(bd);
+    bd.__outT = setTimeout(() => { bd.remove(); closingModals.delete(bd); }, MOTION.d2 + 40);
+  }
+
   // ---------------------------------------------------------------- modal stack
   const modalStack = [];
   const modal = {
@@ -201,7 +390,11 @@
      *        size:'sm'|'md'|'lg'|'xl', closable:true, blocking:true, className, onClose })
      */
     open(opts = {}) {
-      if (opts.id) { const ex = modal.get(opts.id); if (ex) ex.close(); }
+      // re-opening the same id is a re-render: swap instantly, no exit/entrance replay
+      let replacing = false;
+      if (opts.id) { const ex = modal.get(opts.id); if (ex) { ex.close({ instant: true }); replacing = true; } }
+      flushClosingModals();
+      const origin = replacing ? null : tapOrigin();
       const root = $('#modal-root');
       const backdrop = h('div', { class: 'modal-backdrop' });
       const box = h('div', { class: `modal ${opts.size ? 'modal-' + opts.size : ''} ${opts.className || ''}`, role: 'dialog', 'aria-modal': 'true' });
@@ -244,12 +437,12 @@
             foot.appendChild(b);
           }
         },
-        close() {
+        close(how) {
           if (m.closed) return;
           m.closed = true;
           const i = modalStack.indexOf(m);
           if (i >= 0) modalStack.splice(i, 1);
-          backdrop.remove();
+          leaveModal(m, !!(how && how.instant));
           if (opts.blocking !== false) unblock('modal:' + m.id);
           if (!modalStack.length) document.body.classList.remove('modal-open');
           try { opts.onClose?.(m); } catch (e) { G.log.error('UI', e); }
@@ -262,6 +455,7 @@
       m.setActions(opts.actions);
       if (opts.closable !== false && opts.backdropClose !== false) backdrop.addEventListener('pointerdown', (e) => { if (e.target === backdrop) m.close(); });
       root.appendChild(backdrop);
+      enterModal(m, origin, replacing);
       modalStack.push(m);
       if (opts.blocking !== false) block('modal:' + m.id);
       document.body.classList.add('modal-open');
@@ -327,12 +521,15 @@
     const root = $('#reward-root');
     const items = [];
     const easy = easyOn();
-    if (r.coin) items.push(`<div class="rp-item"><span class="ico" data-icon="coin"></span>+${G.util.fmt(r.coin)}</div>`);
-    if (r.exp) items.push(`<div class="rp-item"><span class="emoji">✨</span>${easy ? '' : 'EXP '}+${G.util.fmt(r.exp)}</div>`);
-    if (r.edu) items.push(`<div class="rp-item"><span class="emoji">📘</span>${easy ? '' : '교육 '}+${G.util.fmt(r.edu)}</div>`);
+    // numbers roll up from 0 as each chip pops in (data-cu = the final value; textContent stays the real number
+    // until the roll starts, so nothing is ever shown wrong if motion is off)
+    const num = (v) => { const n = Math.max(0, Math.round(Number(v) || 0)); return `<b class="rp-num" data-cu="${n}">+${G.util.fmt(n)}</b>`; };
+    if (r.coin) items.push(`<div class="rp-item"><span class="ico" data-icon="coin"></span>${num(r.coin)}</div>`);
+    if (r.exp) items.push(`<div class="rp-item"><span class="emoji">✨</span>${easy ? '' : 'EXP '}${num(r.exp)}</div>`);
+    if (r.edu) items.push(`<div class="rp-item"><span class="emoji">📘</span>${easy ? '' : '교육 '}${num(r.edu)}</div>`);
     for (const [id, q] of Object.entries(r.items || {})) {
       const it = G.data.items?.[id];
-      items.push(`<div class="rp-item"><span class="emoji">${it?.icon || '🎁'}</span>${esc(it?.name || id)} ×${q}</div>`);
+      items.push(`<div class="rp-item"><span class="emoji">${esc(it?.icon || '🎁')}</span>${esc(it?.name || id)} ×${Math.max(0, Math.round(Number(q) || 0))}</div>`);
     }
     if (r.titleName) items.push(`<div class="rp-item"><span class="emoji">🏅</span>칭호 「${esc(r.titleName)}」</div>`);
     const el = h('div', { class: 'reward-pop', role: 'alertdialog' });
@@ -342,9 +539,17 @@
     hydrateIcons(el);
     root.innerHTML = '';
     root.appendChild(el);
+    el.querySelectorAll('.rp-item').forEach((it, i) => it.style.setProperty('--i', String(i)));
+    el.querySelectorAll('.rp-num[data-cu]').forEach((b, i) => countUp(b, Number(b.dataset.cu), { from: 0, prefix: '+', delay: 220 + i * 70, duration: 900 }));
     G.sfx(r.sound || 'reward');
     if (easy) { try { G.easy?.say?.(`${r.title || '선물을 받았어요'}!`, { priority: 1 }); } catch (e) { /* voice optional */ } }
-    const close = () => { el.classList.add('out'); setTimeout(() => { el.remove(); unblock('reward'); nextReward(); }, 220); offEsc(); clearTimeout(auto); };
+    const close = () => {
+      if (el.__closing) return;
+      el.__closing = true;
+      el.classList.add('out');
+      setTimeout(() => { el.remove(); unblock('reward'); nextReward(); }, reduced() ? 0 : MOTION.d2 + 20);
+      offEsc(); clearTimeout(auto);
+    };
     el.querySelector('button').addEventListener('click', close);
     block('reward');
     const offEsc = onEscape(() => { close(); return true; }, 150);
@@ -359,13 +564,18 @@
       if (currentPopover && opts.id && currentPopover.id === opts.id) { currentPopover.close(); return null; }
       popover.close();
       const root = $('#popover-root');
-      const el = h('div', { class: `popover ${opts.className || ''}` });
+      // a popover still playing its exit goes now (scripts look for `#popover-root > *`)
+      for (const old of Array.from(root?.querySelectorAll('.popover.is-out') || [])) old.remove();
+      const el = h('div', { class: `popover ${opts.className || ''}`, 'data-place': opts.placement || 'top' });
       if (typeof content === 'string') el.innerHTML = content; else el.appendChild(content);
       hydrateIcons(el);
       root.appendChild(el);
+      if (reduced()) el.style.animation = 'none';
+      else for (const g of el.querySelectorAll('.pick-grid, .list')) stagger(g, { delay: 40, step: 16, max: 16, y: 6, scale: .9, duration: MOTION.d3 });
       const place = () => {
+        // getBoundingClientRect of the popover itself would include its entrance scale: use the layout size
         const r = anchor.getBoundingClientRect();
-        const pr = el.getBoundingClientRect();
+        const pr = { width: el.offsetWidth, height: el.offsetHeight };
         const pl = opts.placement || 'top';
         let x = r.left + r.width / 2 - pr.width / 2, y = r.top - pr.height - 10;
         if (pl === 'bottom') y = r.bottom + 10;
@@ -383,7 +593,12 @@
         id: opts.id, el,
         close() {
           if (p.closed) return; p.closed = true;
-          el.remove(); anchor.classList?.remove('active');
+          if (reduced() || !el.isConnected) el.remove();
+          else {
+            el.classList.add('is-out'); el.inert = true; el.setAttribute('aria-hidden', 'true'); el.setAttribute('data-kid-exempt', '');
+            setTimeout(() => el.remove(), MOTION.d1 + 30);
+          }
+          anchor.classList?.remove('active');
           document.removeEventListener('pointerdown', onDown, true);
           if (currentPopover === p) currentPopover = null;
           opts.onClose?.();
@@ -446,35 +661,71 @@
   }
 
   // ---------------------------------------------------------------- loading screen
+  // The motion graphic (template + 01-hud.css): an onggi jar fills with 장 as `--p` (0..1) rises, steam curls from
+  // the lid, the bar fill slides with transform, the % rolls smoothly towards the real value and tips cross-fade.
   const loading = {
     _tipTimer: 0,
+    _shown: 0,
+    _target: 0,
+    _raf: 0,
+    _lastTip: -1,
     show() {
       const el = $('#loading-screen');
       if (!el) return;
       el.hidden = false; el.classList.remove('done');
-      loading.nextTip();
+      loading._shown = 0; loading._target = 0;
+      el.style.setProperty('--p', '0');
+      loading.nextTip(true);
       clearInterval(loading._tipTimer);
-      loading._tipTimer = setInterval(loading.nextTip, 4200);
+      loading._tipTimer = setInterval(() => loading.nextTip(), 4200);
     },
     set(frac, text) {
-      const pct = Math.round(G.util.clamp(frac, 0, 1) * 100);
-      const fill = $('#loading-bar-fill'); if (fill) fill.style.width = pct + '%';
-      const p = $('#loading-pct'); if (p) p.textContent = pct + '%';
-      const l = $('#loading-label'); if (l && text) l.textContent = text;
+      const f = G.util.clamp(Number(frac) || 0, 0, 1);
+      const pct = Math.round(f * 100);
+      const el = $('#loading-screen');
+      // the fill (bar + jar) follows the real value; the number rolls there in the rAF below
+      el?.style.setProperty('--p', f.toFixed(3));
+      loading._target = pct;
+      if (reduced() || !el || el.hidden) { loading._shown = pct; loading._paintPct(); }
+      else if (!loading._raf) loading._raf = requestAnimationFrame(loading._tick);
+      const l = $('#loading-label');
+      if (l && text && l.textContent !== text) {
+        l.textContent = text;
+        if (!reduced()) anim(l, [{ opacity: 0.25, translate: '0 4px' }, { opacity: 1, translate: '0 0' }], { duration: MOTION.d2, easing: MOTION.out });
+      }
       $('#loading-screen .loading-bar')?.setAttribute('aria-valuenow', String(pct));
     },
-    nextTip() {
+    _paintPct() { const p = $('#loading-pct'); if (p) p.textContent = `${loading._shown}%`; },
+    _tick() {
+      loading._raf = 0;
+      const d = loading._target - loading._shown;
+      if (d === 0) return;
+      loading._shown += d > 0 ? Math.max(1, Math.round(d * 0.18)) : d;
+      loading._paintPct();
+      if (loading._shown !== loading._target) loading._raf = requestAnimationFrame(loading._tick);
+    },
+    nextTip(first) {
       const tips = G.data.tips || [];
-      if (!tips.length) return;
-      const [k, t] = tips[Math.floor(Math.random() * tips.length)];
-      const el = $('#loading-tip'); if (el) el.innerHTML = `<b>${esc(k)}</b>${esc(t)}`;
+      const el = $('#loading-tip');
+      if (!tips.length || !el) return;
+      let i = Math.floor(Math.random() * tips.length);
+      if (tips.length > 1 && i === loading._lastTip) i = (i + 1) % tips.length;
+      loading._lastTip = i;
+      const [k, t] = tips[i];
+      const paint = () => { el.innerHTML = `<b>${esc(k)}</b>${esc(t)}`; };
+      if (first || reduced()) { paint(); return; }
+      // cross-fade: out (200 ms) → swap → in (320 ms)
+      el.classList.add('swap-out');
+      setTimeout(() => { paint(); el.classList.remove('swap-out'); }, MOTION.d2);
     },
     hide() {
       const el = $('#loading-screen');
       clearInterval(loading._tipTimer);
+      if (loading._raf) { cancelAnimationFrame(loading._raf); loading._raf = 0; }
+      loading._shown = loading._target; loading._paintPct();
       if (!el) return;
       el.classList.add('done');
-      setTimeout(() => { el.hidden = true; }, 650);
+      setTimeout(() => { el.hidden = true; }, reduced() ? 0 : 650);
     },
   };
 
@@ -487,11 +738,13 @@
     return G.util.sleep(ms + 20);
   }
   async function fadeThrough(fn, ms = 300) { await fade(true, ms); try { await fn(); } finally { await fade(false, ms); } }
+  /** a soft single white bloom (photosensitivity: eased in AND out, peak ≤ 0.55, never repeated; off with reduce motion) */
   function flash() {
-    const el = h('div', { style: { position: 'fixed', inset: '0', background: '#fff', zIndex: 95, pointerEvents: 'none', opacity: '0.9', transition: 'opacity .35s ease' } });
+    if (reduced()) return;
+    const el = h('div', { style: { position: 'fixed', inset: '0', background: '#fff', zIndex: 95, pointerEvents: 'none', opacity: '0' } });
     document.body.appendChild(el);
-    requestAnimationFrame(() => { el.style.opacity = '0'; });
-    setTimeout(() => el.remove(), 420);
+    const a = anim(el, [{ opacity: 0 }, { opacity: 0.55, offset: 0.25 }, { opacity: 0 }], { duration: 520, easing: MOTION.inOut, fill: 'forwards' });
+    setTimeout(() => el.remove(), a ? 560 : 0);
   }
   function setHudVisible(v) {
     const hud = $('#hud');
@@ -504,14 +757,173 @@
   function bar(value, opts = {}) { const v = G.util.clamp(Number(value) || 0, 0, 100); return `<div class="bar ${opts.cls || ''} ${opts.lg ? 'bar-lg' : ''}"><i style="width:${v}%"></i>${opts.text ? `<span>${esc(opts.text)}</span>` : ''}</div>`; }
   function itemIcon(id) { return G.data.items?.[id]?.icon || '❔'; }
   function itemName(id) { return G.data.items?.[id]?.name || id; }
+  /** set a `.bar` (or its `<i>` fill) to pct 0..100 — transform-based, animated (instant with reduce motion) */
+  function setBar(el, pct) {
+    const i = el?.matches?.('.bar') ? el.querySelector(':scope > i') : el;
+    if (!i) return;
+    i.style.width = `${G.util.clamp(Number(pct) || 0, 0, 100)}%`;
+    syncBar(i);
+  }
+
+  // tabs: a 3 px ink slides under the active tab (translate + scaleX of a fixed 100 px line — transform only)
+  const inkRO = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const c = e.target;
+      if (!c.isConnected) { inkRO.unobserve(c); continue; }
+      c.__placeInk?.(true);
+    }
+  }) : null;
   /** tabs(container, [{id,label}], onChange, activeId) -> {set(id)} */
   function tabs(container, list, onChange, active) {
     container.classList.add('tabs');
     container.innerHTML = '';
     const btns = list.map((t) => { const b = h('button', { class: 'tab', type: 'button', dataset: { tab: t.id } }, t.icon ? h('span', { class: 'emoji' }, t.icon + ' ') : null, t.label); b.addEventListener('click', () => set(t.id)); container.appendChild(b); return b; });
-    function set(id) { btns.forEach((b) => b.classList.toggle('active', b.dataset.tab === id)); onChange?.(id); }
+    const ink = h('i', { class: 'tab-ink', 'aria-hidden': 'true' });
+    container.appendChild(ink);
+    let cur = null, tries = 0;
+    const place = (snap) => {
+      const b = btns.find((x) => x.dataset.tab === cur);
+      if (!b || !container.isConnected || !b.offsetWidth) {
+        ink.classList.remove('on');
+        // not laid out yet (built before the dialog is attached): try again on the next frames
+        if (b && tries++ < 30) requestAnimationFrame(() => place(true));
+        return;
+      }
+      tries = 0;
+      const first = !ink.classList.contains('on');
+      if (snap || first || reduced()) ink.classList.add('snap');
+      ink.style.setProperty('--ink-x', `${b.offsetLeft}px`);
+      ink.style.setProperty('--ink-y', `${Math.max(0, container.clientHeight - 2)}px`);
+      ink.style.setProperty('--ink-s', (b.offsetWidth / 100).toFixed(3));
+      ink.classList.add('on');
+      if (ink.classList.contains('snap')) requestAnimationFrame(() => requestAnimationFrame(() => ink.classList.remove('snap')));
+    };
+    container.__placeInk = place;
+    inkRO?.observe(container);
+    function set(id) {
+      cur = id;
+      btns.forEach((b) => b.classList.toggle('active', b.dataset.tab === id));
+      place(false);
+      onChange?.(id);
+    }
     if (active ?? list[0]?.id) set(active ?? list[0].id);
     return { set };
+  }
+
+  // ---------------------------------------------------------------- progress bars → transform-based fills
+  // Modules write `<i style="width:N%">` (HTML strings) or `fill.style.width = …`. A MutationObserver on the UI roots
+  // turns every such bar into `.bar.fx` (full-width fill, translateX by --p) so changes slide with ease-out-quint and
+  // a soft sheen, and no layout property is ever animated. New bars inside a dialog that is arriving fill from 0.
+  const pendingSnap = new Set();
+  let snapRaf = 0;
+  function flushSnaps() {
+    snapRaf = 0;
+    for (const bar of pendingSnap) {
+      bar.classList.remove('fx-instant');
+      const v = bar.__barTo;
+      if (v != null) { bar.style.setProperty('--p', String(v)); bar.__barTo = null; }
+    }
+    pendingSnap.clear();
+  }
+  function syncBar(i) {
+    const bar = i?.parentElement;
+    if (!bar || !bar.classList.contains('bar')) return;
+    const w = i.style.width;
+    const v = w && w.endsWith('%') ? parseFloat(w) : NaN;
+    if (!Number.isFinite(v)) { if (bar.classList.contains('fx')) { bar.classList.remove('fx'); i.__p = undefined; } return; }
+    const p = G.util.clamp(v, 0, 100);
+    if (i.__p === p) return;
+    const prev = i.__p;
+    i.__p = p;
+    if (prev === undefined) {
+      // first sight: snap (no transition) — or, inside a dialog that is arriving, fill up from 0
+      const arriving = !reduced() && !!bar.closest('.modal.is-entering, .reward-pop, .popover');
+      bar.classList.add('fx', 'fx-instant');
+      bar.style.setProperty('--p', arriving ? '0' : String(p));
+      bar.__barTo = arriving ? p : null;
+      pendingSnap.add(bar);
+      if (!snapRaf) snapRaf = requestAnimationFrame(() => { snapRaf = requestAnimationFrame(flushSnaps); });
+      return;
+    }
+    bar.style.setProperty('--p', String(p));
+    if (!reduced() && Math.abs(p - prev) >= 1) {
+      bar.classList.remove('sheen');
+      clearTimeout(bar.__sheenT);
+      requestAnimationFrame(() => { bar.classList.add('sheen'); bar.__sheenT = setTimeout(() => bar.classList.remove('sheen'), 950); });
+    }
+  }
+  function scanBars(node) {
+    if (!node || node.nodeType !== 1) return;
+    if (node.tagName === 'I' && node.parentElement?.classList.contains('bar')) { watchFill(node); return; }
+    if (!node.firstElementChild) return;
+    for (const i of node.querySelectorAll('.bar > i')) watchFill(i);
+  }
+  const fillObs = typeof MutationObserver === 'function' ? new MutationObserver((recs) => { for (const r of recs) syncBar(r.target); }) : null;
+  function watchFill(i) {
+    if (!i.__barWatched) { i.__barWatched = true; fillObs?.observe(i, { attributes: true, attributeFilter: ['style'] }); }
+    syncBar(i);
+  }
+  const treeObs = typeof MutationObserver === 'function' ? new MutationObserver((recs) => {
+    for (const r of recs) for (const n of r.addedNodes) scanBars(n);
+  }) : null;
+
+  // ---------------------------------------------------------------- HUD life: number ticks, panel reveals
+  function hudLife() {
+    // coins / edu / level: a calm gold glow while the number is changing (count-ups run elsewhere)
+    const tick = (el, host) => {
+      if (!el || typeof MutationObserver !== 'function') return;
+      new MutationObserver(() => {
+        host.classList.add('tick');
+        clearTimeout(host.__tickT);
+        host.__tickT = setTimeout(() => host.classList.remove('tick'), 420);
+      }).observe(el, { childList: true, characterData: true, subtree: true });
+    };
+    tick($('#hud-coin'), $('#hud-coin')?.closest('.cur-coin') || $('#hud-coin'));
+    tick($('#hud-edu'), $('#hud-edu')?.closest('.cur-edu') || $('#hud-edu'));
+    const lv = $('#hud-level');
+    if (lv && typeof MutationObserver === 'function') {
+      let last = lv.textContent;
+      new MutationObserver(() => { if (lv.textContent !== last) { last = lv.textContent; pulse(lv, { scale: 1.18, duration: MOTION.d4 }); } })
+        .observe(lv, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['data-n'] });
+    }
+    // a collapsed HUD panel that opens again: its content settles in once
+    if (typeof MutationObserver === 'function') {
+      const panels = ['#minimap-panel', '#quest-panel', '#chat-panel'].map((s) => $(s)).filter(Boolean);
+      const ro = new MutationObserver((recs) => {
+        for (const r of recs) {
+          const p = r.target;
+          const was = (r.oldValue || '').split(/\s+/).includes('collapsed');
+          if (was && !p.classList.contains('collapsed') && !reduced()) {
+            p.classList.add('panel-reveal');
+            clearTimeout(p.__revT);
+            p.__revT = setTimeout(() => p.classList.remove('panel-reveal'), MOTION.d3 + 60);
+          }
+        }
+      });
+      for (const p of panels) ro.observe(p, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+    }
+  }
+  // UI roots whose bars become transform-based (not #labels-layer / #dialogue-root: they change every frame)
+  const BAR_ROOTS = ['#hud', '#modal-root', '#screen-root', '#popover-root', '#reward-root'];
+  const LATE_ROOTS = new Set(['devcenter']); // panels appended to #app later (80-devcenter)
+  function startMotionObservers() {
+    if (treeObs) {
+      for (const sel of BAR_ROOTS) {
+        const r = $(sel);
+        if (!r) continue;
+        treeObs.observe(r, { childList: true, subtree: true });
+        scanBars(r);
+      }
+      const app = $('#app');
+      if (app && typeof MutationObserver === 'function') {
+        new MutationObserver((recs) => {
+          for (const r of recs) for (const n of r.addedNodes) {
+            if (n.nodeType === 1 && LATE_ROOTS.has(n.id) && !n.__barRoot) { n.__barRoot = true; treeObs.observe(n, { childList: true, subtree: true }); scanBars(n); }
+          }
+        }).observe(app, { childList: true });
+      }
+    }
+    hudLife();
   }
 
   G.ui = {
@@ -522,12 +934,15 @@
     modal, confirm, alert, rewardPopup, popover,
     label, updateLabels, labels,
     loading, fade, fadeThrough, flash, setHudVisible,
-    bar, itemIcon, itemName, tabs,
+    bar, setBar, itemIcon, itemName, tabs,
+    // motion system (§13.5)
+    motion: MOTION, reducedMotion: reduced, tapOrigin, stagger, countUp, pulse, skeleton, dismissToast,
   };
 
-  // hydrate static template icons asap
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => hydrateIcons(document));
-  else hydrateIcons(document);
+  // hydrate static template icons asap; start the bar / HUD motion observers once the template exists
+  const boot = () => { hydrateIcons(document); try { startMotionObservers(); } catch (e) { G.log.warn('UI', 'motion observers', e); } };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
   const addr = document.getElementById('minimap-address');
   if (addr && G.data.meta) { addr.textContent = G.data.meta.address; addr.title = G.data.meta.addressNote; }
 })();

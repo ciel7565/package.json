@@ -744,7 +744,10 @@
           if (!user) user = await this._serverLogin(email, password, !!form.remember);
           this.serverUser = user;
           G.log.info('AUTH', `server account created ${user.id}`);
-          return this._setCurrent(user);
+          const prof = this._setCurrent(user);
+          // SRV-REG-MODE: the register form's "누가 놀아요?" choice decides the NEW account's play mode (same as local mode)
+          if (prof && typeof form.easy === 'boolean') { prof.initialEasy = form.easy; prof.forceEasy = true; }
+          return prof;
         } catch (e) { throw serverAuthError(e); }
       }
       if (Accounts.emailTaken(email)) throw new AuthError('이미 가입된 이메일이에요. 로그인해 주세요.', 'email');
@@ -1135,6 +1138,87 @@
     ['wink', '나를 누르면 말해 줄게요!'],
   ];
   /** floating petals / leaves / sparkles (pure CSS motion, transform + opacity only) */
+  /** title framing: the slow orbit around the 정선 만장대 pavilion (17-manjangdae titleShot) — or the classic valley orbit */
+  function titleCine(extra) {
+    let shot = null;
+    try { shot = G.sys.manjangdae?.titleShot?.()?.cinematic || null; } catch (e) { shot = null; }
+    const ok = shot && Array.isArray(shot.center) && shot.center.length >= 3 && shot.center.every(Number.isFinite)
+      && Number.isFinite(shot.radius) && Number.isFinite(shot.height);
+    return { ...(ok ? shot : CINE), ...(extra || {}) };
+  }
+
+  /**
+   * Title hero parallax (§13.5): layers shift by depth with the pointer (desktop) or device tilt (phones), and with a
+   * slow idle drift when nobody moves — subtle (≤ 44 px), damped, off with reduce motion. The 3D orbit centre is
+   * nudged the same way along the camera's own right / up axes, reusing one options object (no per-frame garbage).
+   */
+  const Hero = {
+    on: false, el: null, tx: 0, ty: 0, x: 0, y: 0, wx: 9, wy: 9, t: 0, lastInput: -1e9, g0: null,
+    base: null, center: [0, 0, 0], camOpts: null,
+    _onMove: null, _onTilt: null,
+    start(el) {
+      this.stop();
+      if (!el || reduceMotion()) return;
+      this.el = el; this.on = true; this.t = 0; this.lastInput = -1e9; this.g0 = null; this.x = this.y = this.tx = this.ty = 0; this.wx = this.wy = 9;
+      const c = titleCine();
+      this.base = Array.isArray(c.center) ? [Number(c.center[0]), Number(c.center[1]), Number(c.center[2])] : null;
+      this.camOpts = { center: this.center };
+      this._onMove = (e) => {
+        if (e.pointerType === 'touch') return;
+        this.tx = U.clamp((e.clientX / Math.max(1, innerWidth) - 0.5) * 2, -1, 1);
+        this.ty = U.clamp((e.clientY / Math.max(1, innerHeight) - 0.5) * 2, -1, 1);
+        this.lastInput = performance.now();
+      };
+      this._onTilt = (e) => {
+        if (!Number.isFinite(e.gamma) || !Number.isFinite(e.beta)) return;
+        if (!this.g0) this.g0 = { g: e.gamma, b: e.beta };
+        this.tx = U.clamp((e.gamma - this.g0.g) / 24, -1, 1);
+        this.ty = U.clamp((e.beta - this.g0.b) / 24, -1, 1);
+        this.lastInput = performance.now();
+      };
+      addEventListener('pointermove', this._onMove, { passive: true });
+      if (touchUI() && typeof window.DeviceOrientationEvent === 'function') addEventListener('deviceorientation', this._onTilt, { passive: true });
+    },
+    stop() {
+      if (this._onMove) removeEventListener('pointermove', this._onMove);
+      if (this._onTilt) removeEventListener('deviceorientation', this._onTilt);
+      this._onMove = this._onTilt = null;
+      this.on = false;
+      if (this.el) { this.el.style.removeProperty('--px'); this.el.style.removeProperty('--py'); }
+      this.el = null;
+    },
+    tick(dt) {
+      if (!this.on || !this.el || !Title.open) return;
+      if (reduceMotion()) { this.stop(); return; }
+      this.t += dt;
+      if (performance.now() - this.lastInput > 4000) {
+        // idle: a slow figure-eight so the hero keeps breathing (≈ 0.04 Hz)
+        this.tx = Math.sin(this.t * 0.23) * 0.35;
+        this.ty = Math.sin(this.t * 0.17 + 1.1) * 0.22;
+      }
+      const k = 1 - Math.exp(-Math.min(0.1, dt) * 3.2);
+      this.x += (this.tx - this.x) * k;
+      this.y += (this.ty - this.y) * k;
+      const amp = easyOn() ? 0.6 : 1;
+      const px = this.x * amp, py = this.y * amp;
+      if (Math.abs(px - this.wx) > 0.002 || Math.abs(py - this.wy) > 0.002) {
+        this.el.style.setProperty('--px', px.toFixed(3));
+        this.el.style.setProperty('--py', py.toFixed(3));
+        this.wx = px; this.wy = py;
+      }
+      const cam = G.sys.camera;
+      if (!this.base || !cam || cam.mode !== 'cinematic' || typeof cam.cinematic !== 'function') return;
+      const ang = Number(cam._cine?.angle);
+      const a = Number.isFinite(ang) ? ang : 0;
+      const m = 1.6 * amp;
+      // camera right = (cos a, 0, -sin a) for an orbit camera at angle a looking at the centre
+      this.center[0] = this.base[0] + Math.cos(a) * px * m;
+      this.center[1] = this.base[1] - py * m * 0.5;
+      this.center[2] = this.base[2] - Math.sin(a) * px * m;
+      try { cam.cinematic(this.camOpts); } catch (e) { this.base = null; }
+    },
+  };
+
   function petalsHtml(n = 18) {
     const r = U.rng(20261010);
     let out = '';
@@ -1170,7 +1254,7 @@
       const el = h('div', { class: 'title-screen', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ts-title' });
       el.innerHTML = `
         <div class="ts-bg" aria-hidden="true">
-          <div class="ts-aurora a1"></div><div class="ts-aurora a2"></div><div class="ts-aurora a3"></div>
+          <div class="ts-glow"><div class="ts-aurora a1"></div><div class="ts-aurora a2"></div><div class="ts-aurora a3"></div></div>
           <div class="ts-vignette"></div>
           <div class="ts-petals">${petalsHtml()}</div>
         </div>
@@ -1183,6 +1267,8 @@
             <header class="ts-brand">
               <div class="ts-eyebrow"><span class="ts-eyebrow-line"></span>METAVERSE<span class="ts-eyebrow-sep">·</span><span class="ts-eyebrow-ko">전통발효 메타버스</span></div>
               <h1 id="ts-title" class="ts-title"><span class="w w1">전통</span><span class="w w2">발효</span><span class="w w3">체험관</span></h1>
+              <span class="ts-seal" aria-hidden="true"><i>萬丈臺</i></span>
+              <p class="ts-place"><span class="emoji" aria-hidden="true">🏔️</span><b>정선 만장대</b><span class="ts-place-rest">에서 여행을 시작해요</span><span class="ts-place-kid">에서 출발!</span></p>
               <p class="ts-sub">밭을 일구고, 장을 담그고, 배우고 기록하는 <b>3D 전통발효 체험 여행</b></p>
               <p class="ts-kid-sub" aria-hidden="true"><span>🌱 키우고</span><span>🏺 담그고</span><span>📖 배워요</span></p>
               <div class="ts-world" aria-live="off"></div>
@@ -1270,7 +1356,8 @@
       G.ui.block('title');
       G.ui.setHudVisible(false);
       G.ui.objective?.(null);
-      try { G.sys.camera?.cinematic?.(CINE); } catch (e) { G.log.warn('UI', 'cinematic camera failed', e); }
+      // 3D background: the slow orbit around the 정선 만장대 pavilion (§13.2 titleShot), with pointer / tilt parallax
+      try { G.sys.camera?.cinematic?.(titleCine()); } catch (e) { G.log.warn('UI', 'cinematic camera failed', e); }
       // every fresh title starts on the child's screen; only the gated paths (upgradeGuest...) pass parent:true
       if (!wasOpen) { this.parent = !!opts.parent; this.kid = { mode: 'home', ideas: [], ni: 0, look: U.randInt(0, 5) }; this._transferFrom = 'guest'; }
       else if (opts.parent) this.parent = true;
@@ -1284,6 +1371,7 @@
       if (opts.login) { const i = this.el.querySelector('[data-form=login] [name=login]'); if (i) i.value = opts.login; }
       if (opts.transfer) { const cb = this.el.querySelector('[data-form=register] [name=transferGuest]'); if (cb && !cb.closest('[hidden]')) cb.checked = true; }
       this._mascotStart();
+      if (!wasOpen) Hero.start(this.el);
       if (v === 'kid' && !wasOpen) { this._greetPending = true; setTimeout(() => { if (this.open && this.view === 'kid') this._greet(); }, 900); }
       requestAnimationFrame(() => requestAnimationFrame(() => {
         this.el?.classList.add('in');
@@ -1299,6 +1387,7 @@
       G.ui.unblock('title');
       clearInterval(this._lockTimer);
       clearInterval(this._mascotTimer);
+      Hero.stop();
       this._greetPending = false;
       LookArt.cancel();
       this.el.classList.remove('in');
@@ -4516,7 +4605,8 @@
         return;
       }
       const load = async () => {
-        pane.innerHTML = '<div class="adm-loading"><span class="spin"></span>서버 통계를 불러오는 중…</div>';
+        // shimmer skeleton while the server answers (§13.5) — a status line for screen readers
+        pane.innerHTML = `<p class="adm-loading" role="status"><span class="spin"></span>서버 통계를 불러오는 중…</p><div class="adm-skel">${G.ui.skeleton?.({ rows: 4, block: true }) || ''}</div>`;
         let d;
         try { d = await G.net.request('admin/stats.php', { timeout: 10000 }); }
         catch (e) {
@@ -4650,7 +4740,7 @@
         await G.initSystems((f, label) => L.set(0.05 + f * 0.85, `${label} 준비 중`));
         L.set(0.93, '체험관 문을 여는 중');
         G.ui.setHudVisible(false);
-        try { G.sys.camera?.cinematic?.({ ...CINE, duration: 0 }); } catch (e) { G.log.warn('UI', 'cinematic failed', e?.message || e); }
+        try { G.sys.camera?.cinematic?.(titleCine({ duration: 0 })); } catch (e) { G.log.warn('UI', 'cinematic failed', e?.message || e); }
         G.loop.start();
         // the first frames compile shaders: keep them behind the loading screen
         await U.nextFrame();
@@ -4944,6 +5034,7 @@
     update(dt) {
       Onboarding.update(dt);
       Debug.update(dt);
+      Hero.tick(dt);
     },
 
     onLogout() {

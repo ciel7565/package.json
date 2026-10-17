@@ -6,6 +6,9 @@
 //      -> {id, unregister(), setEnabled(b)}
 //   G.interact.unregister(id), get(id), list(kind?), current, hovered, hint, trigger(), activate(id) (walks there first),
 //   setObject(id, obj) (attach a mesh built after registration), showDest(x, z, forEntry) / hideDest()
+//   hover glow (CONTRACT §13.4): the mouse-hovered entry and the focused one get G.sys.engine.setOutline (rebuilt
+//   only when the pair changes); without it a soft additive halo pulses behind the object (≤ 1 Hz, steady with
+//   reduceMotion). Entries with highlight:false and farm beds (their own frame) are skipped.
 //   optional entry fields for 쉬운 모드 (CONTRACT §12): kidLabel: string|()=>string (short kid words, no emoji),
 //   emoji: string|()=>string (the picture in the big round prompt; default = label's leading emoji / kind icon),
 //   handOffset: m above the object's top for the 👆 (default 0.55; raise it above world labels such as plot tags)

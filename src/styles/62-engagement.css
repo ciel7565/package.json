@@ -129,7 +129,7 @@ body.easy .eng-tab-badge:not(.gold) { background: #d6372a; }
 .eng-stamp::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; border: 1.5px solid rgba(224,69,58,.75); }
 .eng-stamp span { font-size: 1rem; font-weight: 900; color: #ff7a6e; letter-spacing: .08em; text-shadow: 0 0 6px rgba(255,90,78,.55); }
 .eng-stamp .ink { position: absolute; inset: -6px; border-radius: 50%; border: 2px solid rgba(224,69,58,.5); opacity: 0; }
-.eng-stamp.anim { animation: eng-stamp .55s cubic-bezier(.2,.9,.3,1.25) both; }
+.eng-stamp.anim { animation: eng-stamp .55s var(--ease-pop) both; }
 .eng-stamp.anim .ink { animation: eng-ink .7s ease-out .32s both; }
 @keyframes eng-stamp { 0% { opacity: 0; scale: 2.6; rotate: -32deg; } 55% { opacity: 1; scale: .86; rotate: -9deg; } 78% { scale: 1.06; rotate: -13deg; } 100% { opacity: 1; scale: 1; rotate: -12deg; } }
 @keyframes eng-ink { 0% { opacity: .8; scale: .7; } 100% { opacity: 0; scale: 1.9; } }
@@ -382,7 +382,7 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
 .eng-ktab {
   flex-direction: column; justify-content: center; gap: .12rem; min-height: calc(var(--tap) + .9rem); padding: .4rem .2rem; border-radius: 18px;
   font-size: 1.02rem; font-weight: 800; color: var(--text); background: rgba(255, 255, 255, .07); border: 3px solid rgba(255, 255, 255, .1);
-  transition: transform .14s var(--kid-bounce, ease), background .15s, border-color .15s; touch-action: manipulation;
+  transition: transform .14s var(--ease-pop), background .15s, border-color .15s; touch-action: manipulation;
 }
 .eng-ktab .eng-tab-ico { font-size: 1.95rem; line-height: 1; }
 .eng-ktab:hover { background: rgba(255, 255, 255, .12); color: var(--text); }

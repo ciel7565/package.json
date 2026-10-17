@@ -12,6 +12,11 @@
 // gestures), wandering within `wander` m of home (G.world.blocked, walkable height, no crops / water), turn and
 // look at the player within ~7 m, wave + greeting bubble when the player first comes near, name tag
 // (.nametag.npc name + role) with a marker slot, interactable kind 'npc' (id = NPC id) → talk().
+// Phase 4 (CONTRACT §13.4): the ! / ? marker is a bouncing, spinning 3D glyph with a soft glow and drifting
+// sparkles (shared geometry/materials, built on first use; steps aside while the quest system's own gem hangs over
+// the same NPC); its tap target is a transparent DOM button on the same world point (≥ 56 px in 쉬운 모드).
+// Idle life: blinking (avatar rig), glances at nearby NPCs / 옹이 / the view, a surprised look at a player racing
+// past, a smile while the player stands close, role gestures, and a warm turn towards the player on talk.
 //
 // G.sys.dialogue
 //   start(dialogueId, {npcId, node}) -> bool    close()    active -> {dialogueId, npcId, nodeId, ...} | null
@@ -399,7 +404,7 @@
         colliderId: null, lastColX: hx, lastColZ: hz,
         portrait: null,
         // idle life: glances at things around, notices sprinting players, smiles when you stand close
-        glanceV: new THREE.Vector3(), glanceT: rand(3, 8), glanceUntil: 0, noticeAt: -1e9, smileT: 0, sparkT: rand(0.3, 0.9), markPh: Math.random() * TAU, gemChkT: 0, gemOver: false, markBaseY: markAnchor.position.y, markLift: 0,
+        glanceV: new THREE.Vector3(), glanceT: rand(3, 8), glanceUntil: 0, noticeAt: -1e9, smileT: 0, sparkT: rand(0.3, 0.9), markPh: Math.random() * TAU, gemChkT: 0, gemOver: false, markBaseY: (Number(rig.height) || 1.45) + 0.1, markBub: false, tagPx: 0,
       };
       rec.colliderId = G.world.addCollider({ shape: 'circle', x: hx, z: hz, r: 0.4, tag: 'npc:' + id });
       this._buildLabel(rec);
@@ -472,18 +477,30 @@
         return;
       }
       if (!rec.markLabel.visible) rec.markLabel.setVisible(true);
-      // a speech bubble pops over the name tag → the mark (3D glyph + its tap target) floats up out of its way
-      const lift = rec.bubbleT > 0 ? 0.55 : 0;
-      if (Math.abs(lift - rec.markLift) > 0.002) {
-        rec.markLift += (lift - rec.markLift) * Math.min(1, dt * 7);
-        rec.markAnchor.position.y = rec.markBaseY + rec.markLift;
+      // twice a second (and at once when a speech bubble pops): the on-screen height of the name tag (+ bubble),
+      // and whether the quest system already hangs its own gem + beam over this NPC (its focus target)
+      const bub = rec.bubbleT > 0;
+      if (bub !== rec.markBub) { rec.markBub = bub; rec.gemChkT = 0; }
+      rec.gemChkT -= dt;
+      if (!(rec.gemChkT > 0)) {
+        rec.gemChkT = 0.5;
+        rec.gemOver = M ? questGemOn(rec) : false;
+        rec.tagPx = rec.far && !bub ? 0 : (rec.el.root.offsetHeight || 0);
       }
+      // grows with distance so it still reads as a "!" across a field (same size up close)
+      const far = clamp((rec.camDist - 8) / 30, 0, 1.6);
+      const s = (1 + far) * (rec.marker === '?' ? 1.02 : 1);
+      // float just above the name tag: its pixel height in metres at this distance, so the DOM tag never covers
+      // the glyph (the tap target follows the same anchor)
+      const cam = G.sys.engine?.camera;
+      const fov = cam && cam.fov > 1 ? cam.fov : 55;
+      const wpp = (2 * Math.max(0.5, rec.camDist) * Math.tan(fov * Math.PI / 360)) / Math.max(200, innerHeight || 0);
+      const want = rec.markBaseY + Math.min(3.2, (rec.tagPx || 0) * wpp) + 0.27 * s;
+      const cy = rec.markAnchor.position.y;
+      if (Number.isFinite(want) && Math.abs(want - cy) > 0.002) rec.markAnchor.position.y = cy + (want - cy) * Math.min(1, dt * 7);
       if (!M) return;
       const reduce = !!G.settings.reduceMotion;
-      // the quest system may already hang its gem + beam over this NPC (its focus target): one marker only —
-      // the glyph steps aside (the tap target and sparkles stay), checked twice a second, no allocation
-      rec.gemChkT -= dt;
-      if (!(rec.gemChkT > 0)) { rec.gemChkT = 0.5; rec.gemOver = questGemOn(rec); }
+      // one marker only: under the quest gem the glyph steps aside (the tap target and sparkles stay)
       if (rec.gemOver) {
         if (M.pivot.visible) { M.pivot.visible = false; M.glow.visible = false; }
       } else if (!M.pivot.visible) { M.pivot.visible = true; M.glow.visible = true; }
@@ -493,8 +510,6 @@
       const ph = t * 2.3 + rec.markPh;
       const b = reduce ? 0.5 : Math.abs(Math.sin(ph));
       const land = reduce ? 0 : 1 - smoothstep01(b / 0.28);
-      const far = clamp((rec.camDist - 14) / 40, 0, 1.4);
-      const s = (1 + far) * (rec.marker === '?' ? 1.02 : 1);
       M.pivot.position.y = b * 0.17;
       M.pivot.scale.set(s * (1 + 0.08 * land), s * (1 - 0.14 * land), s * (1 + 0.08 * land));
       M.pivot.rotation.y = reduce ? 0.35 : t * 1.25 + rec.markPh;

@@ -194,7 +194,7 @@ body.easy .farm-label.is-dry .fl-kid { border-color: rgba(79, 179, 255, .75); bo
 .fk-step {
   display: grid; place-items: center; width: 3.1rem; height: 3.1rem; border-radius: 16px; font-size: 1.85rem; line-height: 1;
   background: rgba(255, 255, 255, .08); border: 2px solid rgba(255, 255, 255, .16); filter: grayscale(.85) brightness(.85); opacity: .65;
-  transition: transform .2s var(--kid-bounce, ease), filter .2s, opacity .2s;
+  transition: transform .2s var(--ease-pop), filter .2s, opacity .2s;
 }
 .fk-step.done { filter: none; opacity: .95; border-color: rgba(63, 208, 120, .6); }
 .fk-step.cur { filter: none; opacity: 1; transform: scale(1.18); background: radial-gradient(circle at 50% 35%, #fff6cf, #ffd25a); border-color: #fff; box-shadow: 0 0 0 4px rgba(255, 207, 74, .35), 0 6px 14px rgba(0, 0, 0, .3); }

@@ -293,7 +293,7 @@ body.easy .ph-kid { display: block; }
 .phk-tile {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; width: calc(var(--tap, 56px) + 1rem); min-height: calc(var(--tap, 56px) + .8rem);
   border-radius: 18px; background: linear-gradient(180deg, #fff, #ffe9b8); color: #2a2412; font-weight: 800; border: 3px solid rgba(255, 255, 255, .9);
-  box-shadow: 0 4px 0 rgba(0, 0, 0, .28); transition: transform .15s cubic-bezier(.34, 1.56, .64, 1); touch-action: manipulation; flex: none;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .28); transition: transform .15s var(--ease-pop); touch-action: manipulation; flex: none;
 }
 .phk-tile .phk-emo { font-size: 1.9rem; line-height: 1.1; }
 .phk-lbl { font-size: max(1rem, 16px); line-height: 1.15; white-space: nowrap; }
@@ -310,7 +310,7 @@ body.easy .ph-kid { display: block; }
 .phk-st-btn {
   flex: none; display: grid; place-items: center; width: var(--tap, 56px); height: var(--tap, 56px); border-radius: 50%;
   font-size: 1.75rem; background: rgba(255, 255, 255, .16); border: 2px solid rgba(255, 255, 255, .3); touch-action: manipulation;
-  transition: transform .15s cubic-bezier(.34, 1.56, .64, 1);
+  transition: transform .15s var(--ease-pop);
 }
 .phk-st-btn:hover { background: rgba(255, 255, 255, .28); }
 .phk-st-btn:active { transform: scale(.88); }
@@ -326,7 +326,7 @@ body.easy .ph-kid { display: block; }
   display: grid; place-items: center; width: 7rem; height: 7rem; border-radius: 50%; font-size: 3.3rem; touch-action: manipulation;
   background: radial-gradient(circle at 40% 32%, #fff 0, #ffe27a 45%, #f4b400 100%); border: 6px solid #fff;
   box-shadow: 0 0 0 5px rgba(255, 210, 63, .55), 0 8px 0 rgba(140, 95, 0, .55), 0 14px 28px rgba(0, 0, 0, .45);
-  transition: transform .12s cubic-bezier(.34, 1.56, .64, 1);
+  transition: transform .12s var(--ease-pop);
 }
 .phk-shutter:hover { transform: scale(1.04); }
 .phk-shutter:active { transform: translateY(5px) scale(.94); box-shadow: 0 0 0 5px rgba(255, 210, 63, .55), 0 2px 0 rgba(140, 95, 0, .55); }
@@ -341,7 +341,7 @@ body.easy .ph-kid { display: block; }
   cursor: grab; touch-action: none; user-select: none; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .35));
 }
 .phk-sticker.dragging { cursor: grabbing; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .45)); }
-.phk-sticker.pop { animation: phkPop .45s cubic-bezier(.34, 1.56, .64, 1); }
+.phk-sticker.pop { animation: phkPop .45s var(--ease-pop); }
 .phk-sticker.wiggle { animation: phkWiggle .6s ease-in-out; }
 @keyframes phkPop { 0% { transform: translate(-50%, -50%) scale(.2); } 100% { transform: translate(-50%, -50%) scale(1); } }
 @keyframes phkWiggle { 0%, 100% { transform: translate(-50%, -50%) rotate(0); } 30% { transform: translate(-50%, -50%) rotate(-12deg); } 65% { transform: translate(-50%, -50%) rotate(10deg); } }
@@ -352,7 +352,7 @@ body.easy .ph-kid { display: block; }
   font-size: clamp(2.6rem, 9vmin, 5rem); font-weight: 900; color: #fff; letter-spacing: .02em;
   text-shadow: 0 4px 0 #e2a412, 0 8px 18px rgba(0, 0, 0, .45); -webkit-text-stroke: 2px #b37800;
 }
-.phk-click.on { animation: phkClick .9s cubic-bezier(.34, 1.56, .64, 1) 1; }
+.phk-click.on { animation: phkClick .9s var(--ease-pop) 1; }
 @keyframes phkClick { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.6); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); } 70% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -60%) scale(1); } }
 
 /* after the shot */
@@ -360,7 +360,7 @@ body.easy .ph-kid { display: block; }
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 7; display: flex; align-items: center; gap: 1rem;
   width: min(34rem, calc(100% - 2rem)); padding: 1rem; border-radius: 26px; border: 3px solid rgba(255, 255, 255, .5);
 }
-.phk-card.in { animation: phkCardIn .35s cubic-bezier(.34, 1.56, .64, 1); }
+.phk-card.in { animation: phkCardIn .35s var(--ease-pop); }
 @keyframes phkCardIn { 0% { opacity: 0; transform: translate(-50%, -46%) scale(.9); } 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
 .phk-card img { width: 11rem; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 16px; border: 4px solid #fff; flex: none; transform: rotate(-3deg); box-shadow: 0 8px 18px rgba(0, 0, 0, .4); }
 .phk-card-main { display: flex; flex-direction: column; gap: .7rem; min-width: 0; }

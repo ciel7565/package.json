@@ -27,7 +27,7 @@
 .levelup-fx.show .lu-card { animation: luPop 2.7s var(--ease) forwards; }
 .lu-eyebrow { font-size: 1.05rem; font-weight: 900; letter-spacing: .32em; color: #fff3c4; text-shadow: 0 0 18px rgba(244,197,74,.95), 0 2px 6px rgba(0,0,0,.65); }
 .lu-level { margin-top: .1rem; font-weight: 900; line-height: 1; filter: drop-shadow(0 4px 14px rgba(0,0,0,.55)) drop-shadow(0 0 22px rgba(244,197,74,.55)); }
-.lu-level span, .lu-level b { background: linear-gradient(180deg, #fffbe3 5%, #ffd257 48%, #e0960f 95%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lu-level span, .lu-level b { color: #ffd257; text-shadow: 0 2px 0 #b8750b, 0 0 24px rgba(255, 210, 87, .55); }
 .lu-level span { font-size: 2.2rem; margin-right: .1rem; }
 .lu-level b { font-size: 5rem; }
 .lu-sub { display: inline-block; margin-top: .55rem; padding: .38rem 1rem; border-radius: 999px; background: rgba(12,18,14,.78); border: 1px solid rgba(244,197,74,.65); font-size: .92rem; font-weight: 700; color: #fff; box-shadow: 0 8px 20px rgba(0,0,0,.35); }
@@ -196,7 +196,7 @@ body.reduce-motion .col-d-art.got::before, body.reduce-motion .toast.ach-toast .
 .ksb-tab {
   position: relative; display: flex; align-items: center; justify-content: center; gap: .45rem; min-height: max(var(--tap), 60px); padding: .3rem .5rem; border-radius: 20px;
   color: var(--text); background: rgba(255,255,255,.07); border: 2px solid var(--line-strong); font-weight: 900; font-size: 1.15rem;
-  transition: transform .12s var(--kid-bounce, ease), background .15s, box-shadow .15s; touch-action: manipulation;
+  transition: transform .12s var(--ease-pop), background .15s, box-shadow .15s; touch-action: manipulation;
 }
 .ksb-tab .ksb-emoji { font-size: 1.75rem; }
 .ksb-tab:hover { background: rgba(255,255,255,.12); }
@@ -213,7 +213,7 @@ body.reduce-motion .col-d-art.got::before, body.reduce-motion .toast.ach-toast .
 .ksb-head-txt b { font-size: 1.2rem; font-weight: 900; }
 .ksb-head-txt span { font-size: .92rem; color: var(--text-dim); font-weight: 700; }
 .kk-meter { position: relative; flex: 1 1 auto; min-width: 6rem; height: 1.25rem; border-radius: 999px; background: rgba(255,255,255,.12); box-shadow: inset 0 2px 4px rgba(0,0,0,.35); overflow: hidden; }
-.kk-meter > i { position: absolute; inset: 0 auto 0 0; width: var(--p, 0%); min-width: .6rem; border-radius: inherit; background: linear-gradient(180deg, #fff2a8, #ffc531 55%, #e89b0c); box-shadow: 0 0 10px rgba(255,197,49,.6); transition: width .5s var(--ease); }
+.kk-meter > i { position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(180deg, #fff2a8, #ffc531 55%, #e89b0c); box-shadow: 0 0 10px rgba(255,197,49,.6); transform: translateX(calc(max(var(--p, 0%), 5%) - 100%)); transition: transform var(--dur-4) var(--ease-out); }
 .kk-pips { display: flex; flex-wrap: wrap; justify-content: center; gap: .26rem; }
 .kk-pips i { width: .78rem; height: .78rem; border-radius: 50%; background: rgba(255,255,255,.16); border: 2px solid rgba(255,255,255,.3); }
 .kk-pips i.on { background: radial-gradient(circle at 40% 35%, #fff6c4, #ffc531); border-color: #ffe08a; box-shadow: 0 0 6px rgba(255,197,49,.6); }
@@ -231,13 +231,13 @@ body.reduce-motion .col-d-art.got::before, body.reduce-motion .toast.ach-toast .
 .kc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: 18px 14px; }
 .kc-sticker {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: .45rem; padding: .3rem .1rem .2rem; color: var(--text); border-radius: 18px;
-  animation: easyTileIn .38s var(--kid-bounce, ease) both; animation-delay: calc(var(--i, 0) * 25ms); touch-action: manipulation;
+  animation: easyTileIn .38s var(--ease-pop) both; animation-delay: calc(var(--i, 0) * 25ms); touch-action: manipulation;
 }
 .kc-sticker.still { animation: none; }
 .kc-art {
   position: relative; display: grid; place-items: center; width: 5.6rem; height: 5.6rem; border-radius: 50%; rotate: var(--r, 0deg);
   background: radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--cat, #ffc93c) 25%, #fff), var(--cat, #ffc93c) 80%);
-  border: 5px solid #fff; box-shadow: 0 5px 0 rgba(0,0,0,.25), 0 10px 20px rgba(0,0,0,.3); transition: transform .14s var(--kid-bounce, ease);
+  border: 5px solid #fff; box-shadow: 0 5px 0 rgba(0,0,0,.25), 0 10px 20px rgba(0,0,0,.3); transition: transform .14s var(--ease-pop);
 }
 .kc-art::after { content: ''; position: absolute; left: 18%; top: 10%; width: 36%; height: 22%; border-radius: 50%; background: rgba(255,255,255,.55); filter: blur(1px); rotate: -24deg; pointer-events: none; }
 .kc-emoji { font-size: 3rem; line-height: 1; filter: drop-shadow(0 3px 3px rgba(0,0,0,.25)); }
@@ -269,13 +269,13 @@ body.reduce-motion .col-d-art.got::before, body.reduce-motion .toast.ach-toast .
 .ka-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.6rem, 1fr)); gap: 16px 12px; }
 .ka-medal {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: .35rem .15rem .25rem; border-radius: 18px; color: var(--text);
-  animation: easyTileIn .38s var(--kid-bounce, ease) both; animation-delay: calc(var(--i, 0) * 25ms); touch-action: manipulation;
+  animation: easyTileIn .38s var(--ease-pop) both; animation-delay: calc(var(--i, 0) * 25ms); touch-action: manipulation;
 }
 .ka-medal.still { animation: none; }
 .ka-ring, .ka-big {
   display: grid; place-items: center; width: 5.6rem; height: 5.6rem; padding: 6px; border-radius: 50%;
   background: conic-gradient(#ffc531 var(--p, 0%), rgba(255,255,255,.14) 0); box-shadow: 0 5px 0 rgba(0,0,0,.25);
-  transition: transform .14s var(--kid-bounce, ease);
+  transition: transform .14s var(--ease-pop);
 }
 .ka-ring .ka-emoji, .ka-big .ka-emoji { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: #1d2a22; font-size: 2.5rem; line-height: 1; filter: grayscale(.85); opacity: .75; }
 .ka-medal.got .ka-ring, .ka-big.got { background: linear-gradient(180deg, #fff3b0, #e7a311); box-shadow: 0 5px 0 rgba(140,95,0,.5), 0 0 18px rgba(255,197,49,.45); }

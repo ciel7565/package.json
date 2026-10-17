@@ -16,6 +16,10 @@
 //     (3 nudges per idle spell: 20 s, 45 s, 90 s); delivers the healthy-play reminder & rest (sleepy 옹이,
 //     naps during the rest screen, cheers afterwards); companion menu / rename = big picture tiles
 //     (G.easy.pick, preset names — no typing); far targets use G.easy.goTo.
+//     NEW-2: the "다음 할 일" card (G.easy.nextStep) is the one source of what to do — tips about anything else are
+//     dropped, step tips carry the card's own action (opts.stepAction), any other card loses its button while a
+//     step is open (and lines from other modules are not read aloud then); no tips while the gold prompt is up or
+//     for 20 s after a walk arrives.
 //
 //   G.sys.companion (order 82)
 //     openMenu() / closeMenu() / toggleMenu()     radial play menu (쓰다듬기 · 한마디 · 옷 갈아입히기 · 이름 바꾸기), hotkey O
@@ -28,7 +32,10 @@
 // blinks and changes expression, lid hat with a sprout, stubby arms & feet, outfit variants, blob shadow.
 // Arrive-steering follow ~1.6 m behind-right, squash & stretch hops, idle look/spin/bounce/hum, sleeps at
 // night (Zz), jumps + sparkles on rewards, points at the quest target, leaf umbrella in rain, re-appears
-// next to the player after teleports. No collider of its own (never blocks the player); it lightly resolves
+// next to the player after teleports. Phase 4 (WALK 9.6 / RUN 18 m/s): accelerates with the player's pace, long
+// bounding catch-up hops with dust puffs, sub-stepped collision, a puff + dizzy pop-up next to the player when it
+// lags > 13 m for ~1 s; sprint lean + arms back + "💨 wee", claps on quest completion, dances along with GES_DANCE,
+// yawns before napping, shivers in snow. No collider of its own (never blocks the player); it lightly resolves
 // against world colliders and never walks into water.
 // Security: every user/remote string is rendered with textContent; SVG markup is generated only from
 // whitelisted ids and numbers; names are NFC-cleaned, length/charset checked and bad-word filtered.
@@ -361,6 +368,12 @@
   }
 
   // ================================================================= speech cards (queued, rate-limited)
+  /** card sources that are 옹이's own lines (they keep their voice when a competing button is dropped in 쉬운 모드) */
+  const OWN_SOURCES = new Set(['greet', 'affection', 'levelup', 'pet', 'rename', 'settings', 'tip', 'hint', 'nudge', 'rest']);
+  /** 쉬운 모드: does the "다음 할 일" card currently ask for something (anything but free exploring)? */
+  function kidStepBusy() {
+    try { const st = G.easy?.nextStep?.(); return !!st && st.key !== 'explore'; } catch (e) { return false; }
+  }
   const Say = {
     q: [], cur: null, cardEl: null, root: null, timer: 0, pumpTimer: 0, typeTimer: 0, placeTimer: 0,
     lastShownAt: 0, recent: new Map(), remaining: 0, startedAt: 0, paused: false,
@@ -393,13 +406,21 @@
       if (this.recent.size > 40) { for (const [k, v] of this.recent) if (now - v > 60000) this.recent.delete(k); }
       let action = null;
       if (opts.action && typeof opts.action.fn === 'function') action = { label: cleanText(opts.action.label || '확인', 14) || '확인', fn: opts.action.fn };
+      // 쉬운 모드 (NEW-2): while the "다음 할 일" card has a step to do, a card never carries a second, different big
+      // button — only actions derived from that same step (opts.stepAction) stay. Any other card becomes a quiet note
+      // (no button; lines from other modules are not read aloud either, so the last voice line is still the step).
+      let voice = opts.voice !== false;
+      if (action && !opts.stepAction && kidOn() && kidStepBusy()) {
+        action = null;
+        if (!OWN_SOURCES.has(opts.source)) voice = false;
+      }
       const chars = Array.from(t).length;
       // read-aloud lines (easy mode) stay up long enough for the voice to finish
       const auto = kidOn() ? 3400 + chars * 115 + (action ? 3200 : 0) : 2600 + chars * 75 + (action ? 2600 : 0);
       let dur = Number(opts.duration) || auto;
       if (kidOn()) dur = Math.max(dur, auto * 0.8);
       dur = clamp(dur, 2200, 15000);
-      const item = { text: t, mood: MOOD_SET.has(opts.mood) ? opts.mood : 'happy', duration: dur, action, expires: now + clamp(Number(opts.ttl) || 30000, 2000, 120000), source: opts.source || 'say', voice: opts.voice !== false, prio: !!opts.priority };
+      const item = { text: t, mood: MOOD_SET.has(opts.mood) ? opts.mood : 'happy', duration: dur, action, expires: now + clamp(Number(opts.ttl) || 30000, 2000, 120000), source: opts.source || 'say', voice, prio: !!opts.priority };
       // bounded queue (5): a full queue refuses ordinary lines; a priority line pushes out the newest ordinary one
       if (this.q.length >= 5) {
         if (!opts.priority) return false;
@@ -656,12 +677,10 @@
     return { key: `obj:${f.questId}:${f.objective}`, mood: 'think', text: `다음 할 일: ${o.text} ${em}${where}`, action: go };
   }
 
-  /**
-   * 쉬운 모드 (NEW-2): the "다음 할 일" card (G.easy.nextStep) is the ONE source of what to do. An actionable tip is
-   * only offered when it is about that same step — and then it carries the card's own action (same words, same
-   * button); tips about anything else are dropped, so 옹이 never contradicts the card or adds a second big button.
-   */
-  /** where 옹이 points: in 쉬운 모드 always the "다음 할 일" card's own target (NEW-2: never a second, competing goal) */
+  // 쉬운 모드 (NEW-2): the "다음 할 일" card (G.easy.nextStep) is the ONE source of what to do. An actionable tip is
+  // only offered when it is about that same step — and then it carries the card's own action (same words, same
+  // button); tips about anything else are dropped, so 옹이 never contradicts the card or adds a second big button.
+  /** where 옹이 points: in 쉬운 모드 always the "다음 할 일" card's own target (never a second, competing goal) */
   function pointTarget() {
     if (kidOn()) {
       try { const t = G.easy?.nextStep?.()?.target; return t && Number.isFinite(t.x) && Number.isFinite(t.z) ? t : null; } catch (e) { return null; }
@@ -696,7 +715,7 @@
       if (kid) {
         if (!kidStepMatch(step, 'claim')) break;
         out.push({ key: 'claim:' + id, prio: 100, mood: 'cheer', cd: 150, age: now - (Number(e.completedAt) || now),
-          text: '선물이 기다려요! 🎁 받아 볼까요?', action: kidStepAction(step) });
+          text: '선물이 기다려요! 🎁 받아 볼까요?', action: kidStepAction(step), stepAction: true });
         break;
       }
       out.push({ key: 'claim:' + id, prio: 100, mood: 'cheer', cd: 150, age: now - (Number(e.completedAt) || now),
@@ -714,7 +733,7 @@
         if (kid && !kidStepMatch(step, 'jar')) break;
         out.push({ key: `jar:${jid}:${j.state?.startedAt || 0}`, prio: 90, mood: 'cheer', cd: 600,
           text: kid ? `내 장독의 ${josa(rn, '이/가')} 다 익었어요! 🏺 열어 봐요!` : `내 항아리의 ${josa(rn, '이/가')} 다 익었어요! 🏺✨ 열어 볼까요?`,
-          action: kid ? kidStepAction(step) : { label: '항아리로 가기', fn: () => goInteract(jid) } });
+          action: kid ? kidStepAction(step) : { label: '항아리로 가기', fn: () => goInteract(jid) }, stepAction: kid });
         break;
       }
     } catch (e) { /* fermentation optional */ }
@@ -729,16 +748,24 @@
       }
       if (ready && (!kid || kidStepMatch(step, 'ready'))) out.push({ key: `ready:${ready.id}:${ready.plantedAt || 0}`, prio: 80, mood: 'cheer', cd: 420,
         text: kid ? `${josa(ready.crop.name, '이/가')} 다 자랐어요! 🧺 거두러 가요!` : `${josa(ready.crop.name, '이/가')} 다 자랐어요! 수확하러 가 볼까요? 🧺`,
-        action: kid ? kidStepAction(step) : { label: '밭으로 가기', fn: () => goInteract(ready.id) } });
+        action: kid ? kidStepAction(step) : { label: '밭으로 가기', fn: () => goInteract(ready.id) }, stepAction: kid });
       if (dry && (!kid || kidStepMatch(step, 'dry'))) out.push({ key: 'dry:' + dry.id, prio: 75, mood: 'surprised', cd: 300,
         text: kid ? `${josa(dry.crop.name, '이/가')} 목말라요! 💧 물을 줘요!` : `${dry.crop.name}밭이 목말라 보여요! 💧`,
-        action: kid ? kidStepAction(step) : { label: '물 주러 가기', fn: () => goInteract(dry.id) } });
+        action: kid ? kidStepAction(step) : { label: '물 주러 가기', fn: () => goInteract(dry.id) }, stepAction: kid });
     } catch (e) { /* farming optional */ }
     // 4) the current objective (easy mode: the HUD card already shows it; 옹이 nudges after 20 s idle instead)
     if (!kid) { try { const ob = objectiveHint(); if (ob) out.push(Object.assign(ob, { prio: 60, cd: 180, idle: 60 })); } catch (e) { /* quest optional */ } }
     // 5) situational
     const W = G.sys.weather;
-    if (W && (W.current === 'RAIN' || (W.precipitation?.rain || 0) > 0.35)) out.push({ key: 'rain', prio: 40, mood: 'wink', cd: 1200, text: kid ? '비가 와요 ☔ 비가 밭에 물을 줘요!' : '비가 와요 ☔ 빗물이 밭을 촉촉하게 적셔 주니까 물 주기는 잠깐 쉬어도 돼요!' });
+    // rain: never "you can skip watering" while watering IS the current step (card or quest objective)
+    let waterStep = false;
+    if (kid) waterStep = step?.type === 'water';
+    else { try { const f = G.sys.quest?.focus?.(); waterStep = f?.mode !== 'claim' && G.data.quests?.[f?.questId]?.objectives?.[f?.objective]?.type === 'water'; } catch (e) { waterStep = false; } }
+    if (W && (W.current === 'RAIN' || (W.precipitation?.rain || 0) > 0.35)) {
+      out.push({ key: 'rain', prio: 40, mood: 'wink', cd: 1200, text: waterStep
+        ? (kid ? '비가 와요 ☔ 그래도 물뿌리개로 밭에 물을 줘 봐요!' : '비가 와요 ☔ 그래도 지금은 직접 물을 주는 연습을 해 봐요!')
+        : (kid ? '비가 와요 ☔ 비가 밭에 물을 줘요!' : '비가 와요 ☔ 빗물이 밭을 촉촉하게 적셔 주니까 물 주기는 잠깐 쉬어도 돼요!') });
+    }
     if ((W?.isNight || G.world.nightFactor > 0.6) && !st.flags?.['companion:night']) out.push({ key: 'night', prio: 45, mood: 'surprised', cd: 0, once: 'companion:night', text: kid ? '밤이 됐어요 🏮 초롱불이 반짝반짝해요!' : '밤에는 청사초롱이 켜져요 🏮 은은한 불빛을 따라 산책해 봐요!' });
     const coin = Number(st.stats?.coin) || 0;
     if (coin < 30 && !kid) {   // no money talk for children
@@ -1853,7 +1880,7 @@
       if (kidOn()) {
         // urgent things first (gift / ripe jar / crops), otherwise "what next?" with the pointing hand
         const top = candidates()[0];
-        if (top && top.prio >= 75) say(top.text, { mood: top.mood, action: top.action, force: true, priority: true, source: 'hint' });
+        if (top && top.prio >= 75) say(top.text, { mood: top.mood, action: top.action, stepAction: !!top.stepAction, force: true, priority: true, source: 'hint' });
         else this._kidNudge(true);
         return;
       }
@@ -1890,10 +1917,11 @@
       if (!ptr) {
         const go = document.querySelector('#easy-next .en-go');
         const goVisible = !!(go && !go.hidden && go.offsetParent !== null);
-        if (st.target && distTo(st.target.x, st.target.z) <= 26) { ptr = { x: st.target.x, z: st.target.z }; label = '여기예요!'; }
+        const td = st.target ? distTo(st.target.x, st.target.z) : Infinity;
+        if (td <= 26) { ptr = { x: st.target.x, z: st.target.z }; label = td <= 8 ? '여기예요!' : '저기예요!'; }
         else if (goVisible) { ptr = go; label = '눌러요!'; }
       }
-      const shown = say(text, { mood, action, priority: true, force: true, ttl: 15000, source: 'nudge' });
+      const shown = say(text, { mood, action, stepAction: true, priority: true, force: true, ttl: 15000, source: 'nudge' });
       if (ptr && G.easy?.point) {
         this._stopNudgeHand();
         try { this._nudgeHand = G.easy.point(ptr, { label, duration: 7000 }); } catch (e) { this._nudgeHand = null; }
@@ -2287,6 +2315,7 @@
       // the player dances → 옹이 dances along (when it is close enough to see it)
       B.on('gesture:played', (p) => { if (G.state && this._shown && p?.gestureId === 'GES_DANCE' && distTo(this.pos.x, this.pos.z) < 10) { this._wake(); this._act = null; this._start('dance', 3.2); } });
       B.on('quest:progress', () => { this._nextPointT = Math.min(this._nextPointT, G.time.elapsed + 6); });
+      B.on('player:arrived', () => { this._arrivedAt = pnow(); });
       B.on('photo:mode', (p) => { this._photo = !!p?.active; if (this._photo) { this._wake(); this.closeMenu(true); } });
       B.on('photo:taken', () => { if (this._shown) { this._setMood('wink', 1.8); this._start('bounce', 0.6); } });
       B.on('input:move-start', () => { this._playerIdleSince = pnow(); this._stopNudgeHand(); });
@@ -2347,6 +2376,8 @@
       if (this._quiet() || Say.cur || Say.q.length) return;
       const now = pnow();
       if (now - this._lastTipAt < (kid ? 60000 : 45000)) return;
+      // 쉬운 모드: the gold prompt is up, or a walk just arrived — the child is about to act: no tip on top of it
+      if (kid && (G.interact?.current || now - (this._arrivedAt || 0) < 20000)) return;
       const idle = (now - this._playerIdleSince) / 1000;
       let pick = null;
       for (const c of candidates()) {
@@ -2360,7 +2391,7 @@
       if (!pick) return;
       this._cool.set(pick.key, now + (pick.cd || 120) * 1000);
       if (pick.key.startsWith('obj:') || pick.key.startsWith('giver:')) this._idleHintFor = this._playerIdleSince;
-      if (!say(pick.text, { mood: pick.mood, action: pick.action, source: 'tip', ttl: 20000 })) return; // deduped: keep the gap free
+      if (!say(pick.text, { mood: pick.mood, action: pick.action, stepAction: !!pick.stepAction, source: 'tip', ttl: 20000 })) return; // deduped: keep the gap free
       if (pick.once) { G.state.flags = G.state.flags || {}; G.state.flags[pick.once] = G.time.now(); G.dirty('companion'); }
       this._lastTipAt = now;
       if (pick.key.startsWith('obj:')) { const f = pointTarget(); if (f && distTo(f.x, f.z) > 6) this._startPoint(f); }

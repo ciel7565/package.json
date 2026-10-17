@@ -22,7 +22,7 @@
 .jar-label .jl-note { font-style: normal; font-size: .62rem; color: var(--text-mute); }
 .jar-label .jl-note:empty { display: none; }
 .jar-label .jl-bar { position: relative; display: block; height: .28rem; margin-top: .14rem; border-radius: 999px; background: rgba(255, 255, 255, .14); overflow: hidden; }
-.jar-label .jl-bar > i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--gold-d), var(--gold)); transition: width .4s var(--ease); }
+.jar-label .jl-bar > i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--gold-d), var(--gold)); }
 .jar-label.empty .jl-bar, .jar-label.locked .jl-bar { display: none; }
 .jar-label.active { border-color: rgba(244, 197, 74, .45); }
 .jar-label.complete { border-color: rgba(244, 197, 74, .9); box-shadow: 0 0 0 3px rgba(244, 197, 74, .2), 0 0 26px rgba(244, 197, 74, .45); animation: jlGlow 1.8s ease-in-out infinite; }
@@ -127,9 +127,9 @@
   --rc: #8a5a3b;
   display: flex; flex-direction: column; gap: .45rem; padding: .75rem .8rem; border-radius: 14px;
   background: linear-gradient(160deg, color-mix(in srgb, var(--rc) 22%, transparent), rgba(255, 255, 255, .04) 60%);
-  border: 1px solid rgba(255, 255, 255, .13); border-left: 4px solid var(--rc);
+  border: 1px solid color-mix(in srgb, var(--rc) 45%, rgba(255, 255, 255, .13));
 }
-.jm-recipe.ok { border-color: rgba(52, 195, 107, .35); border-left-color: var(--rc); }
+.jm-recipe.ok { border-color: rgba(52, 195, 107, .45); }
 .jm-r-head { display: flex; align-items: center; gap: .55rem; }
 .jm-r-head b { font-size: .98rem; }
 .jm-r-ico { font-size: 1.7rem; }
@@ -224,14 +224,14 @@ body.easy .jar-label.locked .jl-sub { color: #e1e6e2; }
 .jk-moon {
   display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border-radius: 14px; font-size: 1.6rem; line-height: 1;
   background: rgba(255, 255, 255, .08); border: 2px solid rgba(255, 255, 255, .14); opacity: .55; filter: grayscale(.6);
-  transition: transform .2s var(--kid-bounce, ease), opacity .2s, filter .2s;
+  transition: transform .2s var(--ease-pop), opacity .2s, filter .2s;
 }
 .jk-moon.done { opacity: .95; filter: none; border-color: rgba(255, 207, 74, .5); }
 .jk-moon.cur { opacity: 1; filter: none; transform: scale(1.2); background: radial-gradient(circle at 50% 35%, #2b3a6b, #121a33); border-color: #fff; box-shadow: 0 0 0 4px rgba(255, 207, 74, .35), 0 6px 14px rgba(0, 0, 0, .3); }
 .jk-taste { display: inline-flex; align-items: center; gap: .5rem; min-height: 2.6rem; padding: .25rem .9rem; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .16); }
 .jk-taste-lbl { font-weight: 900; font-size: 1.05rem; }
 .jk-stars { display: inline-flex; gap: .15rem; }
-.jk-star { font-size: 1.45rem; line-height: 1; opacity: .28; filter: grayscale(1); transition: opacity .25s, filter .25s, transform .25s var(--kid-bounce, ease); }
+.jk-star { font-size: 1.45rem; line-height: 1; opacity: .28; filter: grayscale(1); transition: opacity .25s, filter .25s, transform .25s var(--ease-pop); }
 .jk-star.on { opacity: 1; filter: none; transform: scale(1.06); }
 .jk-say { margin: 0; max-width: 22rem; text-wrap: balance; font-size: 1.28rem; font-weight: 800; line-height: 1.4; word-break: keep-all; display: inline-flex; align-items: center; gap: .5rem; justify-content: center; }
 .jk-say .easy-speak { width: var(--tap, 56px); height: var(--tap, 56px); font-size: 1.25rem; flex: none; }
@@ -247,7 +247,7 @@ body.easy .jar-label.locked .jl-sub { color: #e1e6e2; }
   min-height: 6.4rem; padding: .6rem .3rem; border-radius: 22px; cursor: pointer; overflow: hidden;
   font: inherit; color: var(--kid-ink, #2b1d02); background: linear-gradient(180deg, #fffaf0, #ffe8b8);
   border: 3px solid #fff; box-shadow: 0 6px 0 rgba(0, 0, 0, .22), 0 10px 18px rgba(0, 0, 0, .25);
-  transition: transform .15s var(--kid-bounce, ease), box-shadow .15s, filter .2s;
+  transition: transform .15s var(--ease-pop), box-shadow .15s, filter .2s;
 }
 .jk-care-btn[data-k="sun"] { background: linear-gradient(180deg, #fff6cf, #ffd25a); }
 .jk-care-btn[data-k="vent"] { background: linear-gradient(180deg, #e4f6ff, #8fd3ff); }

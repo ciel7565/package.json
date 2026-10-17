@@ -1826,6 +1826,8 @@
     const b = document.body;
     return !!(b && (b.classList.contains('photo-mode') || b.classList.contains('dialogue-open')));
   }
+  /** the low quality preset stays cheap: one afterimage, the short speed-line set */
+  const lowQ = () => G.sys.engine?.quality === 'low';
   function weatherId() { const c = G.sys.weather?.current; return (c && typeof c === 'object' ? c.id : c) || 'CLEAR'; }
   function wetness() {
     const W = G.sys.weather;
@@ -1887,10 +1889,11 @@
     uniform vec3 uColor; uniform float uAlpha;
     varying float vRim; varying float vY;
     void main() {
+      // mostly rim: a light silhouette, not a second body (the interior is a faint tint)
       float r = vRim * vRim;
-      float a = uAlpha * (0.16 + 0.84 * r) * smoothstep(-0.02, 0.32, vY);
+      float a = uAlpha * (0.07 + 0.93 * r) * smoothstep(-0.02, 0.32, vY);
       if (a < 0.004) discard;
-      gl_FragColor = vec4(uColor * (0.65 + 0.7 * r), clamp(a, 0.0, 1.0));
+      gl_FragColor = vec4(uColor * (0.55 + 0.8 * r), clamp(a, 0.0, 1.0));
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
     }`;
@@ -2275,7 +2278,7 @@
       const k = dampK(4, dt);
       this.slCx += (cx - this.slCx) * k; this.slCy += (cy - this.slCy) * k;
       u.uCenter.value.set(this.slCx, this.slCy);
-      S.geo.instanceCount = l > 1 ? SL_N : 26;
+      S.geo.instanceCount = l > 1 && !lowQ() ? SL_N : 26;
       if (!S.mesh.visible) S.mesh.visible = true;
       this._vignette(this.slS);
     },
@@ -2326,7 +2329,7 @@
     _stepGhosts(dt, t, l, pl, target, kid) {
       this.ghS += (target - this.ghS) * dampK(target > this.ghS ? 3 : 6, dt);
       if (this.ghS < 0.02 || !this._ensureGhosts(pl)) { for (const x of this.gh) if (x.g.visible) x.g.visible = false; return; }
-      const n = l > 1 ? 2 : 1;
+      const n = l > 1 && !lowQ() ? 2 : 1;
       const p = pl.position;
       for (let k = 0; k < this.gh.length; k++) {
         const x = this.gh[k];
@@ -2335,7 +2338,7 @@
         Hist.at(t - lag, _cv);
         x.off.set(_cv.x - p.x, _cv.y - p.y, _cv.z - p.z);
         const d = Math.hypot(x.off.x, x.off.z);
-        x.mat.uniforms.uAlpha.value = this.ghS * (k ? 0.2 : 0.3) * (kid ? 0.85 : 1) * clamp((d - 0.12) / 0.4, 0, 1);
+        x.mat.uniforms.uAlpha.value = this.ghS * (k ? 0.15 : 0.24) * (kid ? 0.85 : 1) * clamp((d - 0.12) / 0.4, 0, 1);
         x.g.visible = d > 0.12 && pl.object.visible !== false;
       }
     },
@@ -2376,8 +2379,10 @@
     footprint(pl, frac = 1, l = 2, landing = false) {
       if (!this.ready || !l || !pl?.position) return;
       const p = pl.position;
-      const x = this.hasPrev && frac < 1 ? this.prev.x + (p.x - this.prev.x) * frac : p.x;
-      const z = this.hasPrev && frac < 1 ? this.prev.z + (p.z - this.prev.z) * frac : p.z;
+      // interpolate along this frame's path — never across a teleport jump (> 6 m)
+      const lerpOk = this.hasPrev && frac < 1 && (p.x - this.prev.x) ** 2 + (p.z - this.prev.z) ** 2 < 36;
+      const x = lerpOk ? this.prev.x + (p.x - this.prev.x) * frac : p.x;
+      const z = lerpOk ? this.prev.z + (p.z - this.prev.z) * frac : p.z;
       let surf = 'grass';
       try { surf = G.world?.surfaceAt?.(x, z) || 'grass'; } catch (e) { surf = 'grass'; }
       if (surf === 'water') return;

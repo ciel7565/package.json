@@ -168,15 +168,49 @@
   <div id="fade" class="fade"></div>
 
   <!-- ============================== LOADING ============================== -->
+  <!-- motion graphic: layered 정선 ridges drift behind an onggi jar whose glaze fills with the progress (--p),
+       steam curls from the lid, tips cross-fade (04-ui G.ui.loading, 01-hud.css). Static and calm with reduce motion. -->
   <section id="loading-screen" class="loading-screen" aria-live="polite">
-    <div class="loading-bg"></div>
+    <div class="loading-bg" aria-hidden="true">
+      <i class="lb-sun"></i>
+      <svg class="lb-ridge r1" viewBox="0 0 1200 400" preserveAspectRatio="none" focusable="false"><path d="M0 230C80 190 140 170 210 200S330 140 420 170S560 120 640 160S780 110 880 150S1040 120 1110 160S1180 170 1200 165V400H0Z"/></svg>
+      <svg class="lb-ridge r2" viewBox="0 0 1200 400" preserveAspectRatio="none" focusable="false"><path d="M0 280C90 240 170 250 250 235S380 200 470 230S610 190 700 225S860 200 950 230S1100 210 1200 240V400H0Z"/></svg>
+      <i class="lb-mist"></i>
+      <svg class="lb-ridge r3" viewBox="0 0 1200 400" preserveAspectRatio="none" focusable="false"><path d="M0 330C120 300 210 315 300 300S470 280 560 305S720 285 820 300S1010 290 1200 310V400H0Z"/></svg>
+    </div>
     <div class="loading-inner">
-      <div class="loading-logo" aria-hidden="true">
-        <svg viewBox="0 0 120 120" width="96" height="96"><defs><linearGradient id="lg-jar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a4a2c"/><stop offset="1" stop-color="#3a2114"/></linearGradient></defs><ellipse cx="60" cy="24" rx="26" ry="8" fill="#2a170d"/><path d="M28 30c-14 18-12 58 8 74h48c20-16 22-56 8-74z" fill="url(#lg-jar)"/><path d="M33 50h54" stroke="#f4c54a" stroke-width="3" stroke-linecap="round" opacity=".9"/><ellipse cx="46" cy="66" rx="5" ry="14" fill="#fff" opacity=".12"/></svg>
+      <div class="loading-jar" aria-hidden="true">
+        <svg viewBox="0 0 160 172" width="150" height="161" focusable="false">
+          <defs>
+            <linearGradient id="ldj-shell" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#22140c"/><stop offset=".42" stop-color="#4a2c1b"/><stop offset="1" stop-color="#1c100a"/></linearGradient>
+            <linearGradient id="ldj-jang" x1="0" y1="0" x2="0" y2="120" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e2a35a"/><stop offset=".08" stop-color="#a8642f"/><stop offset=".45" stop-color="#7a4321"/><stop offset="1" stop-color="#4a2512"/></linearGradient>
+            <linearGradient id="ldj-lid" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6b4129"/><stop offset="1" stop-color="#2e1b10"/></linearGradient>
+            <clipPath id="ldj-clip"><path d="M55 48C34 56 23 73 25 93C27 119 38 145 56 154L104 154C122 145 133 119 135 93C137 73 126 56 105 48Z"/></clipPath>
+          </defs>
+          <g class="lj-steam" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round">
+            <path class="s1" d="M64 30c-6-6 6-10 0-16s6-10 0-16"/>
+            <path class="s2" d="M80 28c-6-6 6-10 0-16s6-10 0-16"/>
+            <path class="s3" d="M96 30c-6-6 6-10 0-16s6-10 0-16"/>
+          </g>
+          <path class="lj-shell" d="M52 45C30 53 18 71 20 93C22 121 34 149 54 159L106 159C126 149 138 121 140 93C142 71 130 53 108 45Z" fill="url(#ldj-shell)"/>
+          <g clip-path="url(#ldj-clip)">
+            <g class="lj-fill">
+              <path class="lj-wave" fill="url(#ldj-jang)" d="M-160 6 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 q10 -6 20 0 q10 6 20 0 V200 H-160 Z"/>
+              <circle class="lj-bub b1" cx="62" cy="60" r="3"/><circle class="lj-bub b2" cx="92" cy="74" r="2.4"/><circle class="lj-bub b3" cx="78" cy="88" r="2"/>
+            </g>
+          </g>
+          <path d="M30 112C58 120 102 120 130 112M36 132C60 139 100 139 124 132" stroke="#000" stroke-opacity=".18" stroke-width="2" fill="none"/>
+          <path class="lj-band" d="M24 80C52 89 108 89 136 80" stroke="#f4c54a" stroke-width="3.2" stroke-linecap="round" fill="none"/>
+          <path d="M40 66C30 84 31 112 42 132" stroke="#fff" stroke-opacity=".16" stroke-width="7" stroke-linecap="round" fill="none"/>
+          <ellipse cx="80" cy="45" rx="31" ry="7" fill="#1a0e08"/>
+          <g class="lj-lid"><path d="M44 43C48 28 112 28 116 43Z" fill="url(#ldj-lid)"/><ellipse cx="80" cy="43" rx="36" ry="5" fill="#3b2416"/><ellipse cx="80" cy="29" rx="7" ry="3.4" fill="#2a1810"/></g>
+        </svg>
+        <span class="lj-shadow"></span>
       </div>
       <div class="loading-eyebrow">METAVERSE</div>
       <h1 class="loading-title">전통발효체험관</h1>
-      <div class="loading-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i id="loading-bar-fill"></i></div>
+      <p class="loading-place"><span class="emoji" aria-hidden="true">🏔️</span>정선 만장대에서 출발해요</p>
+      <div class="loading-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="불러오는 중"><i id="loading-bar-fill"></i></div>
       <div class="loading-status"><span id="loading-label">로딩 중...</span><b id="loading-pct">0%</b></div>
       <p id="loading-tip" class="loading-tip"></p>
     </div>
