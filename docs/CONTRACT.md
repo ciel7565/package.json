@@ -628,3 +628,72 @@ Verified free of overlaps at 1600×900, 1366×768, 390×844 and 844×390.
 | easy-social | `60-social`, `61-audio`, `62-engagement`, `65-companion`, `66-fx` (+ css) |
 | devcenter-security | `80-devcenter.js/.css`, `server/**`, `tests/**`, `docs/HANDOVER.md`, `README.md`, `tools/*` |
 | qa (last) | any file |
+
+## 13. Phase 4 — 3× speed, start at 정선 만장대, 3D & motion-graphics overhaul, open fixes
+
+### 13.1 Movement ×3 (owner: world-start)
+`21-player.js` WALK 3.2→**9.6** m/s, RUN 6.0→**18** m/s (keep both as named constants; derive everything else from
+them, never hard-code the old numbers). Requirements that come with it: **sub-stepped movement + collision**
+(max 0.25 m per sub-step, so 18 m/s at 10 fps never tunnels through 0.1 m fences/walls; same for walkTo and
+rescue paths), acceleration/turn smoothing retuned so control stays precise, **walk/run animation playback rate
+scaled to ground speed** (no foot sliding; 20-avatar), footstep audio cadence by distance not time, camera follow
+/ look-ahead / FOV kick retuned (22-camera) so the view never lags or jitters, companion 옹이 & visitors that follow
+the player keep up (65/60 read `G.sys.player.speedScale`), engagement M_WALK target ×3 (900 m), any distance or
+time based balance/anti-cheat (server SaveValidator `stats.distance`) re-checked. Expose
+`G.sys.player.WALK / RUN / speedScale (=3)`.
+
+### 13.2 Start at 정선 만장대 (owner: world-start)
+New zone **`ZONE_MANJANGDAE` "정선 만장대"** (short "만장대", icon flag/mountain, emoji 🏔️): a high scenic overlook on
+the valley's mountain ridge with a traditional pavilion (누각/정자 with dancheong colours), stone viewing deck with
+railings, a big carved stone marker "旌善 萬丈臺 · 정선 만장대", a telescope (interactable: zooms the camera over
+the valley and names each zone), prayer-flag-free Korean styling (stone lanterns, pine trees, rope fence), and a
+safe walkable stone stair/switchback path down to the experience-center paths (no gaps, no colliders blocking,
+`walkTo`/A* can route from it to ZONE_MAIN). Data address note stays a display-only disclaimer (location naming
+is in-game styling, not verified geography). **New players spawn on the deck facing the valley**
+(`G.layout.spawn`); returning players keep their saved position. First-entry **intro cinematic** (skippable with
+any key/tap, ≤ 9 s, respects reduceMotion → a short fade instead): drone sweep from above the valley up the ridge
+onto the pavilion, letterbox bars, 3D title card "정선 만장대" + subtitle, then hand-off to follow camera behind the
+player. Everything new lives in **`src/game/17-manjangdae.js` + `src/styles/17-manjangdae.css`**
+(`G.sys.manjangdae = { lookout:{x,y,z}, intro(opts)->Promise, titleShot()->{pos,look} , zoneId }`), plus the
+needed edits to 01-data (zone, POI, quest/tutorial wording "만장대에서 내려가 발효마스터를 만나요", education/info
+sign), 02-layout (spawn, anchors), 11-terrain (plateau + carved path, no zero-normals), 50-minimap (zone shown,
+travel target), 70-app title shot uses `G.sys.manjangdae?.titleShot?.()` (owner ui-motion).
+
+### 13.3 3D world & post-processing (owner: engine-atmos)
+Quality-scaled (low ≈ today's cost; high = everything): wind-swayed grass/trees/flowers (vertex shader, no CPU per
+vertex), drifting petals/leaves & valley mist layers, god rays / sun shafts (cheap screen-space pass on high),
+color grading + vignette + subtle filmic tone (one combined pass after bloom, before OutputPass — the
+NaNScrubShader stays before bloom), water caustics/foam/ripples, rain splashes, lantern & flag sway, chimney
+smoke, night fireflies; selective glow/outline support for hovered interactables
+(`G.sys.engine.setOutline(objs[])` or emissive pulse). All shaders NaN-safe (guard normalize/division/pow/sqrt),
+no zero-length normals, no flashes > 3 Hz, instanced, no per-frame allocations.
+
+### 13.4 Character & interaction motion graphics (owner: char-fx)
+`66-fx`: sprint speed lines + soft afterimage trail at high speed, landing dust/squash, footprint decals that fade,
+teleport/travel portal dissolve, zone-enter 3D banner, quest-complete light pillar, coin/item 3D arcs; NPC idle
+life (blink, look-at player, small gestures), bouncing 3D quest markers with sparkles, companion 옹이 expressive
+3D anims; hover glow on interactables (23-interaction). Everything gated by `G.settings.fxLevel` and reduceMotion.
+
+### 13.5 2D UI/UX motion (owner: ui-motion)
+Consistent motion system (tokens: durations 120/200/320/500 ms, ease-out-quint, spring-like overshoot only ≤ 4 %),
+animated HUD entrances, panel/modal/page transitions, button press/hover micro-interactions, number count-ups,
+shimmer skeletons on loading, toasts with icons, title screen hero with 만장대 and parallax depth, loading screen
+motion graphic, accessible focus rings; respects reduceMotion and easy mode (≥ 56 px tap targets).
+
+### 13.6 Open fixes carried over (owners in 13.7)
+NEW-1 phone 👆 closes the dialogue it opened (05-input) · voice guide reads strangers' free text aloud (60-social)
+· SEC-2 PII mask gaps client+server (judge.json in scratch p3-final-sec) · server cleanText invisible chars (Users)
+· nickname allows platform handles/school (Users/ChatFilter) · SEC-3 gate odds + 5-min unlock window re-lock rules
+(08-easy) · NEW-4 onboarding hand overlaps HUD (08-easy) · NEW-2 companion tip contradicts 다음 할 일 (65-companion)
+· KID-4/NEW-3 tap targets < 56 px (65-companion.css 🔊, 25-npc.css npc-mark, 60-social.css nametag) · SRV-REG-MODE
+server register ignores chosen play mode (70-app).
+
+### 13.7 Phase-4 file ownership
+| Agent | Files |
+|---|---|
+| world-start | 01-data, 02-layout, 11-terrain, NEW 17-manjangdae.js/.css, 20-avatar, 21-player, 22-camera, 50-minimap.js, 62-engagement.js |
+| engine-atmos | 10-engine, 12-nature, 13-water, 15-buildings, 16-props, 51-weather.js |
+| char-fx | 66-fx.js/.css, 23-interaction.js/.css, 25-npc.js/.css, 26-dialogues, 65-companion.js/.css |
+| ui-motion | src/template.html, 00-base.css, 01-hud.css, 02-responsive.css, 04-ui.js, 08-easy.css, 70-app.js/.css, all other module CSS not listed elsewhere (30,31,32,40,41,46,47,50,51,52,62,80 .css) |
+| fix-security | 05-input.js, 08-easy.js, 60-social.js/.css, 61-audio.js, server/**, tests/** |
+| qa (last) | any file |
