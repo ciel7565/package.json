@@ -166,9 +166,9 @@ body.reduce-motion .quest-item.done, body.reduce-motion .quest-item .q-claim, bo
 .kq-done-tile .et-emoji { min-height: 3.6rem; font-size: 2.2rem; }
 .kq-done-tile .et-label { font-size: .98rem; }
 .kq-locked { margin: .3rem 0 0; text-align: center; font-weight: 800; color: var(--text-dim); }
-@keyframes kqNow { 50% { scale: 1.18; } }
+@keyframes kqNow { 50% { scale: 1.04; box-shadow: 0 0 0 6px rgba(255,178,31,.5); } }
 /* the sticker lifts once and settles (one rise, one fall — no swinging bounce) */
-@keyframes kqOpen { 0% { scale: 1; rotate: 0deg; } 40% { scale: 1.18; rotate: 6deg; } 100% { scale: 1; rotate: 0deg; } }
+@keyframes kqOpen { 0% { scale: 1; rotate: 0deg; filter: none; } 40% { scale: 1.04; rotate: 2deg; filter: brightness(1.18); } 100% { scale: 1; rotate: 0deg; filter: none; } }
 /* normal-mode rows (renderList with easy:false) */
 .kq-normal { gap: .4rem; }
 .kq-row { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) auto; gap: .65rem; align-items: center; padding: .55rem .65rem; border-radius: 12px; background: var(--bg-elev); border: 1px solid var(--line); }

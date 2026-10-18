@@ -24,7 +24,8 @@
 // speakable prompts. The same audit is the 👶 tab of the developer center (F9 / Ctrl+Shift+D).
 //
 // Exit codes: 0 = no critical problem · 1 = critical problems (free-text input in easy mode, tap target < 44 px,
-// error text on screen, a dialog without any button) or --strict warnings · 2 = could not run (no build, no
+// error text on screen, a dialog without any button), page errors (uncaught exceptions while the game ran) or
+// --strict warnings · 2 = could not run (no build, no
 // devcenter, G.ready timeout).
 // =============================================================================
 import fs from 'node:fs';
@@ -121,8 +122,9 @@ try {
     result.easyStatus = await page.evaluate(() => G.sys.devcenter.easyStatus?.() || null);
     await context.close();
     const crit = tour.totals.critical, warn = tour.totals.warn;
-    if (crit > 0 || (strict && warn > 0)) exitCode = Math.max(exitCode, 1);
-    log(`  끝 (${(tour.ms / 1000).toFixed(1)}초): 화면 ${tour.totals.screens}개 · 건너뜀 ${tour.totals.skipped} · ⛔ ${crit} · ⚠️ ${warn} · 💡 ${tour.totals.info}`);
+    // a game that throws while a child plays is not "OK", even when every screen looked fine
+    if (crit > 0 || pageErrors.length || (strict && warn > 0)) exitCode = Math.max(exitCode, 1);
+    log(`  끝 (${(tour.ms / 1000).toFixed(1)}초): 화면 ${tour.totals.screens}개 · 건너뜀 ${tour.totals.skipped} · ⛔ ${crit} · ⚠️ ${warn} · 💡 ${tour.totals.info}${pageErrors.length ? ` · 🐞 페이지 오류 ${pageErrors.length}` : ''}`);
   }
 } finally {
   await browser.close();
@@ -137,7 +139,7 @@ function markdown() {
     L.push(`## ${run.name === 'mobile' ? '📱' : '🖥️'} ${run.name} ${run.vw}×${run.vh}`, '');
     if (run.error) { L.push(`⛔ ${run.error}`, ''); continue; }
     const t = run.tour;
-    L.push(`화면 ${t.totals.screens}개 · 건너뜀 ${t.totals.skipped} · 실패 ${t.totals.failed} · ⛔ 치명 **${t.totals.critical}** · ⚠️ 경고 ${t.totals.warn} · 💡 참고 ${t.totals.info} · ${(t.ms / 1000).toFixed(1)}초`, '');
+    L.push(`화면 ${t.totals.screens}개 · 건너뜀 ${t.totals.skipped} · 실패 ${t.totals.failed} · ⛔ 치명 **${t.totals.critical}** · ⚠️ 경고 ${t.totals.warn} · 💡 참고 ${t.totals.info}${run.pageErrors.length ? ` · 🐞 페이지 오류 **${run.pageErrors.length}**` : ''} · ${(t.ms / 1000).toFixed(1)}초`, '');
     L.push('| 화면 | 상태 | ⛔ | ⚠️ | 💡 | 점수 | 먼저 볼 문제 |', '|---|---|---|---|---|---|---|');
     for (const r of t.rows) {
       const a = r.audit;
@@ -152,10 +154,10 @@ function markdown() {
     const byKind = {};
     for (const r of t.rows) for (const x of r.audit?.items || []) if (x.sev === 'warn') byKind[x.kind] = (byKind[x.kind] || 0) + 1;
     if (Object.keys(byKind).length) { L.push('', '### ⚠️ 경고 종류별', ''); for (const [k, n] of Object.entries(byKind).sort((a, b) => b[1] - a[1])) L.push(`- ${KIND[k] || k}: ${n}건`); }
-    if (run.pageErrors.length) { L.push('', '### 페이지 오류', ''); for (const e of run.pageErrors.slice(0, 10)) L.push(`- ${cell(e)}`); }
+    if (run.pageErrors.length) { L.push('', `### 🐞 페이지 오류 ${run.pageErrors.length}건 (실행 중 오류 — exit 1)`, ''); for (const e of run.pageErrors.slice(0, 10)) L.push(`- ${cell(e)}`); }
     L.push('');
   }
-  L.push('---', '', '치명 = 쉬운 모드의 글자 입력칸 · 44 px 미만 누르기 · 화면의 오류 글자(NaN/undefined) · 버튼 없는 창. 개발자 센터(F9) › 👶 쉬운 모드 점검 탭에서 "👀 보기" 로 위치를 확인할 수 있어요.');
+  L.push('---', '', '치명 = 쉬운 모드의 글자 입력칸 · 44 px 미만 누르기 · 화면의 오류 글자(NaN/undefined) · 버튼 없는 창. 페이지 오류(잡히지 않은 예외)도 exit 1 이에요. 개발자 센터(F9) › 👶 쉬운 모드 점검 탭에서 "👀 보기" 로 위치를 확인할 수 있어요.');
   return L.join('\n');
 }
 
@@ -168,5 +170,9 @@ if (outBase) {
   log(`\n📄 ${base}.json · ${base}.md`);
 }
 if (jsonOnly) console.log(JSON.stringify(report, null, 2));
-else console.log(`\n${md}\n\n${exitCode === 0 ? '✔ KID AUDIT OK' : exitCode === 1 ? `✖ KID AUDIT: 치명 문제가 있어요${strict ? ' (또는 --strict 경고)' : ''}` : '✖ KID AUDIT: 실행하지 못했어요'}`);
+else {
+  const pageErrs = report.runs.reduce((n, r) => n + r.pageErrors.length, 0);
+  const why = [report.runs.some((r) => r.tour?.totals.critical > 0) ? '⛔ 치명' : '', pageErrs ? `🐞 페이지 오류 ${pageErrs}건` : ''].filter(Boolean).join(' · ') || '--strict 경고';
+  console.log(`\n${md}\n\n${exitCode === 0 ? '✔ KID AUDIT OK' : exitCode === 1 ? `✖ KID AUDIT: 문제가 있어요 (${why})` : '✖ KID AUDIT: 실행하지 못했어요'}`);
+}
 process.exit(exitCode);

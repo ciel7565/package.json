@@ -119,6 +119,8 @@
     raw(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     setRaw(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } },
   };
+  /** a profile's save with its backup and the kept-aside damaged copy (03-state LocalAdapter keys) */
+  const delSave = (id) => { const k = SAVE_KEY(id); store.del(k); store.del(`${k}.bak`); store.del(`${k}.corrupt`); };
 
   /** Korean particle: josa('콩', '을/를') -> '콩을' */
   function josa(word, pair) {
@@ -749,9 +751,10 @@
             await this._serverLogout(); // the register call reports real problems
             this.serverUser = null;
           }
-          const d = await G.net.request('auth/register.php', { body: { email, nickname, password, password_confirm: confirm, agree: true } });
+          const d = await G.net.request('auth/register.php', { body: { email, nickname, password, password_confirm: confirm, agree: true, remember: !!form.remember } });
           let user = normServerUser(d);
           if (!user) user = await this._serverLogin(email, password, !!form.remember);
+          else Profiles.upsert({ id: indexId(user), kind: 'server', nickname: user.nickname, role: user.role, ...rememberFields(!!form.remember) });
           this.serverUser = user;
           G.log.info('AUTH', `server account created ${user.id}`);
           const prof = this._setCurrent(user);
@@ -773,7 +776,7 @@
       if (form.transferGuest && hasGuestSave(from)) {
         const raw = store.raw(SAVE_KEY(from));
         if (raw && store.setRaw(SAVE_KEY(acc.id), raw)) {
-          store.del(SAVE_KEY(from)); store.del(`${SAVE_KEY(from)}.bak`);
+          delSave(from);
           const gp = Profiles.get(from);
           Profiles.remove(from);
           if (gp?.portrait) Profiles.upsert({ id: acc.id, kind: 'local', nickname, role: acc.role, portrait: gp.portrait });
@@ -993,7 +996,7 @@
       Lock.clear(key);
       Accounts.remove(acc.id);
       Profiles.remove(acc.id);
-      store.del(SAVE_KEY(acc.id)); store.del(`${SAVE_KEY(acc.id)}.bak`);
+      delSave(acc.id);
       if (this.current?.id === acc.id) this.current = null;
       G.log.info('AUTH', 'local account deleted');
       return '';
@@ -2020,7 +2023,7 @@
             : await G.ui.confirm(`「${nm}」${jo} 최근 플레이 목록에서 지울까요?<br><span class="small dim">저장된 진행 상황은 지워지지 않아요. 다시 로그인하면 이어서 할 수 있어요.</span>`, { title: '목록에서 지우기', icon: 'trash', okText: '지우기', html: true });
           if (!ok) return;
           Profiles.remove(p.id);
-          if (kidSlot) { store.del(SAVE_KEY(p.id)); store.del(`${SAVE_KEY(p.id)}.bak`); G.log.info('AUTH', 'kid profile removed with its save'); }
+          if (kidSlot) { delSave(p.id); G.log.info('AUTH', 'kid profile removed with its save'); }
           this.renderHome();
           return;
         }
@@ -5048,9 +5051,29 @@
    * kept on this device (03-state pending copy) and a grown-up can log in again right here — same account only —
    * after which the save is retried; "나중에" keeps playing and the copy is offered at the next login.
    */
+  let reloginAsking = false;
   function onAuthLost() {
     const cur = auth.current;
-    if (!app.loggedIn || !isServer() || cur?.kind !== 'server' || G.ui.modal.get('app-relogin')) return;
+    if (!app.loggedIn || !isServer() || cur?.kind !== 'server' || reloginAsking || G.ui.modal.get('app-relogin')) return;
+    if (!easyOn()) { openRelogin(cur); return; }
+    // easy mode (§12.4): the child never gets a password box — a kid card asks for a grown-up, the parent gate comes
+    // next, and only then the form. "나중에" keeps playing; the progress stays in the pending copy on this device.
+    reloginAsking = true;
+    const seq = app._loginSeq;
+    const same = () => app.loggedIn && seq === app._loginSeq && auth.current?.id === cur.id;
+    Promise.resolve(askConfirm({ emoji: '🧑‍🏫', heading: '저장이 멈췄어요', title: '어른을 불러 주세요', text: '놀던 것은 잘 보관하고 있어요.', say: '어른을 불러 주세요. 놀던 것은 잘 보관하고 있어요.', yes: '어른이 왔어요', no: '나중에' },
+      '로그인 시간이 끝나서 저장이 멈췄어요.<br><span class="small dim">놀던 것은 이 기기에 보관하고 있어요. 어른이 다시 로그인해 주세요.</span>', { title: '저장이 멈췄어요', icon: 'lock', okText: '다시 로그인', cancelText: '나중에' }))
+      .then(async (ok) => {
+        if (!ok || !same()) return;
+        if (!(await parentGate('login', '다시 로그인', '어른이 비밀번호를 넣어 주세요.')) || !same()) return;
+        openRelogin(cur);
+      })
+      .catch((e) => G.log.warn('AUTH', 'relogin card failed', e?.message || e))
+      .finally(() => { reloginAsking = false; });
+  }
+  /** the re-login form (normal mode, or after the parent gate in easy mode) */
+  function openRelogin(cur) {
+    if (G.ui.modal.get('app-relogin')) return;
     const pw = h('input', { type: 'password', class: 'input', name: 'password', autocomplete: 'current-password', 'aria-label': '비밀번호', placeholder: '비밀번호', maxlength: '256' });
     const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
     const body = h('div', { class: 'relogin' },
@@ -5060,12 +5083,15 @@
       h('input', { type: 'text', name: 'username', autocomplete: 'username', value: cur.email || cur.nickname, hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
       pw, err);
     const fail = (msg) => { err.textContent = msg; err.hidden = false; pw.focus(); return false; };
+    // the player's own "로그인 유지" choice for this account (the recent-profile row) is kept as it was
+    const rp = Profiles.get(indexId(cur));
+    const remembered = !!(rp && rp.remember && (!rp.rememberUntil || rp.rememberUntil > now()));
     const submit = async () => {
       if (!pw.value) return fail('비밀번호를 입력해 주세요.');
       let u;
       // the ended session took its CSRF token along: ping hands out a fresh one first
       try { await G.net.request('ping.php', { quiet: true, timeout: 6000 }); } catch (e) { /* the login call reports it */ }
-      try { u = await auth._serverLogin(cur.email || cur.nickname, pw.value, false); }
+      try { u = await auth._serverLogin(cur.email || cur.nickname, pw.value, remembered); }
       catch (e) { return fail(serverAuthError(e).message); }
       finally { pw.value = ''; }
       if (!u || u.id !== cur.id) {

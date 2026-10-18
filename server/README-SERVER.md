@@ -152,7 +152,7 @@ client_max_body_size 8m;
 |---|---|---|---|
 | `ping.php` | GET | 누구나 | `{app:'tfm-metaverse', version, db, serverTime, csrf, loggedIn}` — 세션·CSRF 발급 |
 | `time.php` | GET | 누구나 | `{serverTime, iso, timezone, day}` |
-| `auth/register.php` | POST | 비로그인 | `{email, nickname, password, password_confirm, agree:true}` → `{user}` |
+| `auth/register.php` | POST | 비로그인 | `{email, nickname, password, password_confirm, agree:true, remember?}` → `{user}` |
 | `auth/login.php` | POST | 누구나 | `{login 또는 email, password, remember}` → `{user}` · 실패 401 `INVALID_CREDENTIALS`, 잠금 429 `TOO_MANY_ATTEMPTS` |
 | `auth/logout.php` | POST | 누구나 | `{loggedOut:true}` (새 CSRF) |
 | `auth/me.php` | GET | 누구나 | `{user:{id,email,nickname,role} 또는 null}` |
@@ -213,7 +213,7 @@ client_max_body_size 8m;
 | 세션 탈취·고정 | 쿠키 이름 `TFMSESSID`, HttpOnly, SameSite=Lax, HTTPS 면 Secure, 경로 = 설치 폴더, `use_strict_mode`, 로그인/권한 변경 시 `session_regenerate_id`, 유휴 2시간·최대 24시간(로그인 유지: 7일·30일), User-Agent 지문, 사용자별 세션 epoch(정지·권한 변경·비밀번호 재설정 시 모든 기기 로그아웃), 전용 세션 폴더 |
 | 무차별 대입 | `login_attempts`: 같은 IP+계정 5회 실패 → 30초부터 2배씩(최대 1시간) 잠금, 계정 단위 15회, IP 단위 60회(15분) 잠금, 모르는 계정도 같은 시간(더미 해시) |
 | 비밀번호 | `password_hash` Argon2id(없으면 bcrypt cost 12) + `password_needs_rehash`, 8~64자 영문+숫자, 흔한 비밀번호·이메일/닉네임 포함 거부 |
-| 과다 요청 | 엔드포인트별 제한(`rate_limits`): 로그인 사용자=계정별, 비로그인=세션별 + IP 전체 상한(×25), 로그인=IP별, 가입=시도는 세션별·만들어진 계정 수는 IP별(`register_ip`, 시간당 60). 채팅 1초 1개·분당 20개·30초 내 같은 말 반복 금지. 쿠키 없는 요청은 세션 파일을 만들지 않음 |
+| 과다 요청 | 엔드포인트별 제한(`rate_limits`): 로그인 사용자=계정별, 비로그인=세션별 + IP 전체 상한(×25), 로그인=IP별, 가입=시도는 세션별·만들어진 계정 수와 '이미 가입된 이메일/닉네임' 응답은 IP별(`register_ip`, 시간당 60). 채팅 1초 1개·분당 20개·30초 내 같은 말 반복 금지. 쿠키 없는 요청은 세션 파일을 만들지 않음 |
 | 업로드 악용 | `is_uploaded_file`, 5 MB, **finfo MIME 화이트리스트**(PNG/JPEG/WEBP), `getimagesize` 형식 일치, 해상도·픽셀 상한(압축 폭탄), PHP/HTML/SVG 폴리글롯 패턴 거부, **GD 재인코딩**(EXIF·GPS·주석·덧붙인 데이터 제거), 무작위 128비트 이름 + 강제 확장자, 사용자별 일/총 개수 제한, `uploads/.htaccess` 스크립트 실행 금지·이미지 외 차단·nosniff·sandbox CSP |
 | 정보 노출 | 오류는 일반 메시지 + 참조 번호만 (`display_errors` 끔, 스택은 `data/logs` 에만), `X-Powered-By` 제거, 랭킹·접속자에 이메일/내부 ID 없음 |
 | 비공개 파일 | `lib` `config` `database` `data` `cli` 는 `.htaccess` 차단 + `index.php` 가드 + 각 PHP 파일 직접 실행 가드. DB 파일 이름 무작위, 로그·비밀키는 `.php`(직접 열면 실행되어 아무것도 안 보임). **권장: `TFM_DATA_DIR` 로 웹 루트 밖** |

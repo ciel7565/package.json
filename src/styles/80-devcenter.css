@@ -21,7 +21,9 @@
   color: var(--text);
 }
 .dc-root button { user-select: none; -webkit-user-select: none; }
-body.dc-open #interact-prompt, body.dc-open .ong-say { visibility: hidden; }
+/* in-world pointers would sit on top of the center (the onboarding hand lives in the z 75 easy layer next to the parent
+   gate, which must stay visible); kid audits drop dc-open, so they still see them */
+body.dc-open #interact-prompt, body.dc-open .ong-say, body.dc-open .easy-hand, body.dc-open .easy-hand-label { visibility: hidden; }
 
 /* ------------------------------------------------------------------ shell */
 .dc-shell {
@@ -136,7 +138,8 @@ body.dc-open #interact-prompt, body.dc-open .ong-say { visibility: hidden; }
 .dc-body.dc-anim .dc-in { animation: dcRise .46s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms); }
 /* starts partly visible: content stays readable even when frames are starved (software GL, slow devices) */
 @keyframes dcRise { from { opacity: .3; translate: 0 12px; } to { opacity: 1; translate: 0 0; } }
-@keyframes dcPop { 0% { scale: .6; opacity: 0; } 70% { scale: 1.08; opacity: 1; } 100% { scale: 1; } }
+/* no overshoot (≤ 4 % rule): the ease-out-quint curve gives the snap */
+@keyframes dcPop { from { scale: .6; opacity: 0; } to { scale: 1; opacity: 1; } }
 
 /* ------------------------------------------------------------------ shared blocks */
 .dc-card {

@@ -122,10 +122,11 @@
     if (o.delay > 0) { paint(start); el.__cuT = setTimeout(run, o.delay); } else run();
   }
 
-  /** a soft attention pulse on an element (scale 1 → 1.06 → 1, no flashing) */
+  /** a soft attention pulse on an element (scale 1 → ≤ 1.04 → 1 with a little brightness, no flashing; §13.8) */
   function pulse(el, o = {}) {
     if (!el || reduced()) return;
-    anim(el, [{ scale: 1 }, { scale: o.scale ?? 1.06 }, { scale: 1 }], { duration: o.duration ?? MOTION.d3 + 80, easing: MOTION.out });
+    const peak = Math.min(1.04, Math.max(1, Number(o.scale) || 1.04));
+    anim(el, [{ scale: 1, filter: 'none' }, { scale: peak, filter: 'brightness(1.18)' }, { scale: 1, filter: 'none' }], { duration: o.duration ?? MOTION.d3 + 80, easing: MOTION.out });
   }
 
   /** skeleton({rows=3, avatar=true, block=false}) → HTML string of shimmering placeholder rows (while loading) */
@@ -226,7 +227,7 @@
       if (badge.textContent === txt) return;
       badge.textContent = txt;
       // a new badge pops in (CSS badgeIn); a changed count gets one small bump
-      if (!fresh && !reduced()) anim(badge, [{ scale: 1 }, { scale: 1.28 }, { scale: 1 }], { duration: MOTION.d3, easing: MOTION.out });
+      if (!fresh && !reduced()) anim(badge, [{ scale: 1, filter: 'none' }, { scale: 1.04, filter: 'brightness(1.25)' }, { scale: 1, filter: 'none' }], { duration: MOTION.d3, easing: MOTION.out });
     });
   }
   function setBadge(action, count) {
@@ -973,7 +974,7 @@
     const lv = $('#hud-level');
     if (lv && typeof MutationObserver === 'function') {
       let last = lv.textContent;
-      new MutationObserver(() => { if (lv.textContent !== last) { last = lv.textContent; pulse(lv, { scale: 1.18, duration: MOTION.d4 }); } })
+      new MutationObserver(() => { if (lv.textContent !== last) { last = lv.textContent; pulse(lv, { duration: MOTION.d4 }); } })
         .observe(lv, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['data-n'] });
     }
     // a collapsed HUD panel that opens again: its content settles in once

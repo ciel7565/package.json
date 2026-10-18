@@ -40,7 +40,7 @@
   },
   {
    "name": "idProvider",
-   "src": "(?<![\\p{L}\\p{N}._%+\\-])(?!(?:hello|hi|hey|love|like|go|play|game|games|my|your|the|open|search|find|use|see|watch|webtoon|map|maps|news|app)\\s)[a-z][a-z0-9._%+\\-]{3,}\\s*(?:(?:naver|gmail|hanmail|nate|hotmail|outlook|yahoo|icloud|네이버|지메일|한메일|네이트|핫메일|아웃룩|야후)(?:\\s*(?:메일|mail|이메일)(?:로|으로|이야|야|이에요|예요|주소)?)?|(?:다음|daum|카카오|kakao)\\s*(?:메일|mail)(?:로|으로|이야|야|이에요|예요|주소)?)(?![\\p{L}\\p{N}])",
+   "src": "(?<![\\p{L}\\p{N}._%+\\-])(?!(?:hello|hi|hey|love|like|go|play|game|games|my|your|the|open|search|find|use|see|watch|webtoon|map|maps|news|app)\\s)[a-z][a-z0-9._%+\\-]{3,}\\s*(?:(?:naver|gmail|hanmail|nate|hotmail|outlook|yahoo|icloud|네이버|지메일|한메일|네이트|핫메일|아웃룩|야후)(?:\\s*(?:메일|mail|이메일)(?:로|으로|이야|야|이에요|예요|주소)?|(?!\\s*(?:검색|찾|쳐|웹툰|지도|뉴스|카페|블로그|쇼핑|사전|번역|앱|게임|동영상|영상|search|webtoon|map|news|cafe|blog|app)))|(?:다음|daum|카카오|kakao)\\s*(?:메일|mail)(?:로|으로|이야|야|이에요|예요|주소)?)(?![\\p{L}\\p{N}])",
    "flags": "iu",
    "pred": null
   },

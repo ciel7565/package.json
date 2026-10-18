@@ -675,7 +675,22 @@
       const t = cur.o.type;
       const trig = (action) => () => { leave(); G.ui.triggerAction(action); };
       if (t === 'journal') return { emoji: '📝', label: '일기 쓰기', fn: () => { leave(); G.sys.journal?.open?.(); } };
-      if (t === 'photo') return { emoji: '📸', label: '사진 찍기', fn: trig('photo') };
+      if (t === 'photo') {
+        // same rule as 08-easy objectiveStepByType 'photo': a zone photo only counts inside that zone, so outside it
+        // the card walks there first instead of opening the camera
+        const want = cur.o.photoZone;
+        if (want) {
+          const p = G.sys.player?.position;
+          let pz = null;
+          try { pz = p ? G.sys.photo?.photoZoneAt?.(p.x, p.z) : null; } catch (e) { pz = null; }
+          if (!pz || (want !== '*' && pz.id !== want)) {
+            let tgt = null;
+            try { tgt = this._targetFor(id, cur.idx); } catch (e) { tgt = null; }
+            if (tgt && G.easy?.goTo) return { emoji: '👉', label: '같이 가기', fn: () => walk(tgt, '') };
+          }
+        }
+        return { emoji: '📸', label: '사진 찍기', fn: trig('photo') };
+      }
       if (t === 'emote' || t === 'gesture') return { emoji: '😊', label: '표현하기', fn: trig('express') };
       if (t === 'chat') return { emoji: '💬', label: '인사하기', fn: trig('kid-chat') };
       let target = null;

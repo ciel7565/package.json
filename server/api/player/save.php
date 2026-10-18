@@ -34,6 +34,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
     $c->checkBodyCsrf($env->csrf ?? null); // only enforced when the X-CSRF-Token header was absent (beacon)
     $data = $env->data ?? null;
     if (!$data instanceof \stdClass) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
+    SaveValidator::assertNoProtoKeys($data); // 'constructor' / '__proto__' map keys would be served on every login
     $checksum = is_string($env->checksum ?? null) ? substr($env->checksum, 0, 32) : '';
     $base = is_int($env->base ?? null) && $env->base >= 0 ? $env->base : null;
 

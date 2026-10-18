@@ -13,7 +13,8 @@
 //        [--url http://127.0.0.1:8080/]          use a URL instead of --file (server mode tests)
 //        [--json]                                print only the JSON report
 //
-// Exit code 1 when page errors / console errors / fragment errors happened (or G.ready never set).
+// Exit code 1 when page errors / console errors / fragment or system errors happened, when G.ready never set, or
+// when --eval / --script threw (a failed assertion in a step script fails the run; its message is in the report).
 // =============================================================================
 import fs from 'node:fs';
 import path from 'node:path';
@@ -90,15 +91,16 @@ try {
 await page.waitForTimeout(extraWait);
 
 const ctx = { ROOT, report, opt, flag, shotDir: shot ? path.dirname(path.resolve(shot)) : path.join(ROOT, 'test-output') };
+const failed = []; // '--eval' / '--script' when they threw (a returned {error} value is data, not a failure)
 if (evalSrc) {
   try { report.evalResult = await page.evaluate(new Function(`return (async () => { ${evalSrc} })()`)); }
-  catch (e) { report.evalResult = { error: String(e) }; }
+  catch (e) { report.evalResult = { error: String(e) }; failed.push('--eval'); }
 }
 if (script) {
   try {
     const mod = await import(pathToFileURL(path.resolve(script)).href);
     report.scriptResult = await mod.default(page, ctx);
-  } catch (e) { report.scriptResult = { error: String(e && e.stack || e) }; }
+  } catch (e) { report.scriptResult = { error: String(e && e.stack || e) }; failed.push('--script'); }
 }
 if (shot) {
   fs.mkdirSync(path.dirname(path.resolve(shot)), { recursive: true });
@@ -116,10 +118,10 @@ try {
 } catch (e) { report.pageErrors.push('evaluate failed: ' + e); }
 
 await browser.close();
-const bad = !report.ready || report.pageErrors.length || report.consoleErrors.length || report.fragmentErrors.length || report.systemErrors.length;
+const bad = !report.ready || report.pageErrors.length || report.consoleErrors.length || report.fragmentErrors.length || report.systemErrors.length || failed.length;
 if (jsonOnly) console.log(JSON.stringify(report, null, 2));
 else {
   console.log(JSON.stringify({ ...report, consoleWarnings: report.consoleWarnings.slice(0, 15), consoleWarningCount: report.consoleWarnings.length }, null, 2));
-  console.log(bad ? '✖ SMOKE FAILED' : '✔ SMOKE OK');
+  console.log(bad ? `✖ SMOKE FAILED${failed.length ? ` (${failed.join(' and ')} threw)` : ''}` : '✔ SMOKE OK');
 }
 process.exit(bad ? 1 : 0);

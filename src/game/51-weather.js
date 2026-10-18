@@ -875,7 +875,9 @@
       if (force || dE > 0.35 || dA > 0.5 || (trans && this._envT <= 0)) {
         if (trans) this._envT = 1.5;
         this._lastSunE = e; this._lastSunA = _sun.az;
-        E.setSun(e, _sun.az);
+        // a weather blend or a jump (set time / weather) changes the sky itself: re-bake the environment then; a sun
+        // that only creeps along its arc re-bakes every few degrees (engine.setSun)
+        E.setSun(e, _sun.az, { env: !!(force || trans) });
       }
       // moon: opposite side of the sky, high at midnight
       const moonElev = (22 + 40 * Math.sin(PI * clamp(_sun.night, 0, 1))) * DEG;
@@ -942,7 +944,9 @@
       _gradeArg.saturation = m.sat * lerp(0.8, 1, dayK) + gold * 0.1 * (1 - grey);
       _gradeArg.warmth = m.warm + gold * 0.5 * (1 - grey * 0.6) + glowK * 0.08 - lowLight * 0.2;
       _gradeArg.vignette = m.vig + lowLight * 0.12 + gold * 0.05;
-      _lift.setRGB(0.003 + gold * 0.004, 0.003 + gold * 0.002, 0.004).lerp(_c1.setRGB(0.002, 0.004, 0.011), lowLight);
+      // daytime shadow lift: dense far forest floor lit by the sky only sits in the ACES toe and crushed to ~(2,6,3)
+      // (S-6); 0.007 keeps it dark green (≥ ~(5,10,7)) for +1 % mean brightness. Night keeps its own cool lift.
+      _lift.setRGB(0.007 + gold * 0.004, 0.007 + gold * 0.002, 0.009).lerp(_c1.setRGB(0.002, 0.004, 0.011), lowLight);
       _gain.setRGB(1, 1, 1).lerp(_c1.setRGB(1.05, 1.0, 0.92), gold * (1 - grey)).lerp(_c2.setRGB(0.94, 0.98, 1.07), lowLight * 0.8);
       _gradeArg.instant = !!force;
       if (typeof E.grade === 'function') E.grade(_gradeArg);

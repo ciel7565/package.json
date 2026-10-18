@@ -534,7 +534,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
           const sec = Math.floor(((Math.atan2(x, z) + PI) / TAU) * SECT) % SECT;
           far[fk][sec].push(it);
         }
-        if (inBox(x, z, 1) && H(x, z) < 4.5) colliders.push({ x, z, r: (TRUNK_R[kind] || 0.3) * s + 0.12 });
+        // every trunk inside the walkable box blocks: its foothills rise well above the valley floor and stay walkable
+        if (inBox(x, z, 1)) colliders.push({ x, z, r: (TRUNK_R[kind] || 0.3) * s + 0.12 });
       };
 
       // ---- landmark trees
@@ -842,7 +843,18 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       }
       root.add(grp);
       this.meshes.shrubs = grp;
-      for (const c of colliders) G.world.addCollider({ shape: 'circle', x: c.x, z: c.z, r: c.r, tag: 'shrub', maxY: H(c.x, c.z) + 0.55 });
+      // foliage is never a platform (stand:false). Its blocking top sits above every bit of ground a walker could
+      // stand on beside it (a bush on a slope would otherwise be "passed over" from the uphill side, then shove the
+      // walker sideways as the ground drops inside it)
+      const WALKER_R = 0.4;
+      for (const c of colliders) {
+        let rim = H(c.x, c.z);
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2, rr = c.r + WALKER_R;
+          rim = Math.max(rim, H(c.x + Math.sin(a) * rr, c.z + Math.cos(a) * rr), H(c.x + Math.sin(a) * c.r * 0.6, c.z + Math.cos(a) * c.r * 0.6));
+        }
+        G.world.addCollider({ shape: 'circle', x: c.x, z: c.z, r: c.r, tag: 'shrub', stand: false, maxY: Math.max(H(c.x, c.z) + 0.55, rim + 0.1) });
+      }
       this.counts.shrubs = green.length + flower.length;
     },
 

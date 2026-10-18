@@ -510,11 +510,11 @@ button.slot:active:not(:disabled), .slot[role="button"]:active { transform: scal
 @keyframes rewardOut { to { opacity: 0; scale: .94; } }
 @keyframes bubbleIn { from { opacity: 0; scale: .7; } to { opacity: 1; scale: 1; } }
 @keyframes badgeIn { from { opacity: 0; scale: .4; } to { opacity: 1; scale: 1; } }
-@keyframes badgeBump { 0% { scale: 1; } 40% { scale: 1.25; } 100% { scale: 1; } }
+@keyframes badgeBump { 0% { scale: 1; } 40% { scale: 1.04; filter: brightness(1.2); } 100% { scale: 1; } }
 @keyframes barSheen { 0% { opacity: 0; transform: translateX(-100%); } 25% { opacity: 1; } 100% { opacity: 0; transform: translateX(100%); } }
 @keyframes skelSweep { to { transform: translateX(100%); } }
 @keyframes raysSpin { to { rotate: 360deg; } }
-@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
 @keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }

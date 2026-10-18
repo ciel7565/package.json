@@ -217,6 +217,7 @@
       F('13-water.js', 'terrain', '강·연못 셰이더·폭포·물보라·물까지 거리'),
       F('15-buildings.js', 'buildings', '체험관 본관·한옥·초가·정자·정문·매점 건물'),
       F('16-props.js', 'buildings', '장독대·밭·안내판·키오스크·석등·벤치·전시 소품'),
+      F('17-manjangdae.js', 'terrain', '시작점 정선 만장대: 전망대·팔각정·돌계단 길·첫 입장 인트로 시네마틱·망원경 투어·걷기 안내 지점(walkSpot)'),
       F('20-avatar.js', 'player', '3등신 아바타 리그·애니메이션·꾸미기 옵션·아이 모습 6종(presets)'),
       F('21-player.js', 'player', '플레이어 이동·점프·충돌·순간이동·앉기·길 찾기 걷기(walkTo·금빛 발자국)·위치 저장'),
       F('22-camera.js', 'player', '3인칭 카메라(쉬운 모드: 부드러운 카메라)·시네마틱·대화/사진 모드'),
@@ -247,6 +248,7 @@
       F('01-hud.css', 'core', 'HUD 배치(프로필·메뉴·미니맵·퀘스트·채팅·하단바)'),
       F('02-responsive.css', 'core', '화면 크기별 반응형 규칙(노트북·태블릿·모바일)'),
       F('08-easy.css', 'core', '쉬운 모드 화면 부품(큰 버튼·그림 고르기·보호자 확인·다음 할 일 카드)'),
+      F('17-manjangdae.css', 'terrain', '만장대 인트로(레터박스·건너뛰기·2D 제목)·망원경 화면·전망 안내'),
       F('23-interaction.css', 'player', '상호작용 프롬프트·도착 표식'),
       F('25-npc.css', 'npc', '대화창·NPC 이름표'),
       F('30-inventory.css', 'progression', '가방·상점 화면'),
@@ -294,6 +296,7 @@
       F('lib/SaveValidator.php', 'server', '저장 데이터 부정 진행 검증'),
       F('lib/GameData.php', 'server', 'data/game-data.json 보상표 읽기'),
       F('lib/ChatFilter.php', 'server', '채팅 욕설 필터 · 어린이 개인정보 가림(🔒)'),
+      F('lib/pii-rules.json', 'server', '개인정보 가림 규칙 목록 — tests/pii-sync.mjs 가 게임(60-social)에서 만들어요 (손으로 고치지 않기)'),
       F('lib/Presence.php', 'server', '접속자 관리'),
       F('lib/Upload.php', 'server', '업로드 검사·재인코딩'),
       F('lib/Admin.php', 'server', '관리자 기능·통계·상태 점검'),
@@ -310,6 +313,9 @@
       F('tools/kid-audit.mjs', 'devcenter', '쉬운 모드 화면 자동 점검 (QA용 · JSON + 표)'),
       F('tests/server-e2e.mjs', 'server', '서버 보안·기능 E2E 테스트 (개인정보 가림 벡터·DB 스팸 키 확인 포함)'),
       F('tests/pii-vectors.json', 'server', '개인정보 가림 공통 테스트 벡터 — 서버 ChatFilter 와 게임 maskPII 가 같이 통과해야 해요'),
+      F('tests/pii-sync.mjs', 'server', '게임의 개인정보 가림 규칙 → server/lib/pii-rules.json 생성 (--check: 최신인지 확인)'),
+      F('tests/pii-client.mjs', 'server', '빌드된 게임의 maskPII·닉네임 검사를 공통 벡터로 확인 (서버 필터와 비교)'),
+      F('tests/pii-server.php', 'server', '테스트용 CLI: 진짜 서버 필터(ChatFilter·닉네임 검사)를 실행 (웹에 올리지 않음)'),
       F('vendor/three-entry.js', 'core', 'three.js r170 + 애드온 번들 진입점'),
       F('src/template.html', 'core', 'HUD 뼈대 (빌드가 CSS·JS·글꼴·CSP 를 주입)'),
       F('package.json', 'core', 'npm 스크립트·개발 의존성'),
@@ -400,7 +406,7 @@
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
-  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'app', 'devcenter'];
+  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'app', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -634,6 +640,8 @@
       }
 
       // ---------------------------------------------------------------- quests
+      // registered interactables (23-interaction) once systems are up: what a player can really use
+      const IX = G.interact && typeof G.interact.list === 'function' && typeof G.interact.get === 'function' && G.interact.list().length ? G.interact : null;
       const visitTargets = (o) => (o.zone ? zoneIds.has(o.zone) : true) && (o.poi ? poiIds.has(o.poi) : true);
       for (const [id, q] of Object.entries(quests)) {
         chk('quests');
@@ -664,7 +672,12 @@
           if (o.item && !itemOk(o.item)) add('error', 'quests', `아이템 ${o.item} 이 없어요`, at);
           if (o.photoZone && o.photoZone !== '*' && !photoZoneIds.has(o.photoZone)) add('error', 'quests', `포토존 ${o.photoZone} 이 없어요`, at);
           if (o.kind && !INTERACT_KINDS.has(o.kind)) add('warn', 'quests', `상호작용 종류 ${o.kind} 를 알 수 없어요`, at);
-          if (o.type === 'interact' && o.id && !anchorIds.has(o.id)) add('warn', 'quests', `상호작용 대상 ${o.id} 가 배치(layout)에 없어요`, at);
+          // interact targets: the registered interactables are the truth once the world is up (quests count distinct
+          // ids, so a kind needs at least `count` of them); before that, the layout anchors
+          if (o.type === 'interact' && IX) {
+            if (o.id && !IX.get(o.id)) add('error', 'quests', `상호작용 대상 ${o.id} 가 등록되지 않았어요 — 이 목표는 끝낼 수 없어요`, at);
+            else if (!o.id && o.kind) { const n = IX.list(o.kind).length, need = Math.max(1, num(o.count, 1)); if (n < need) add('error', 'quests', `상호작용 종류 ${o.kind} 가 ${n}개만 등록돼 있어요 (목표 ${need}개) — 이 목표는 끝낼 수 없어요`, at); }
+          } else if (o.type === 'interact' && o.id && !anchorIds.has(o.id)) add('warn', 'quests', `상호작용 대상 ${o.id} 가 배치(layout)에 없어요`, at);
           if (o.type === 'visit_all' && o.count > arr(d.visitZones).length) add('error', 'quests', `visit_all 목표 수(${o.count})가 방문 구역 수(${arr(d.visitZones).length})보다 커요`, at);
         });
         const rw = obj(q.reward);
@@ -726,7 +739,9 @@
           if (u.poi && !poiIds.has(u.poi)) add('error', 'collection', `명소 ${u.poi} 가 없어요`, at);
           if (u.quest && !has(quests, u.quest)) add('error', 'collection', `퀘스트 ${u.quest} 가 없어요`, at);
           if (u.recipe && !has(recipes, u.recipe)) add('error', 'collection', `레시피 ${u.recipe} 가 없어요`, at);
-          if (u.on === 'interact' && u.id && !anchorIds.has(u.id)) add(un.length > 1 ? 'info' : 'warn', 'collection', `상호작용 ID ${u.id} 가 배치(layout)에 없어요${un.length > 1 ? ' (다른 조건으로 등록 가능)' : ''}`, at);
+          if (u.on === 'interact' && u.id && IX) {
+            if (!IX.get(u.id)) add(un.length > 1 ? 'info' : 'error', 'collection', `상호작용 ID ${u.id} 가 등록되지 않았어요${un.length > 1 ? ' (다른 조건으로 등록 가능)' : ' — 이 도감 칸은 채울 수 없어요'}`, at);
+          } else if (u.on === 'interact' && u.id && !anchorIds.has(u.id)) add(un.length > 1 ? 'info' : 'warn', 'collection', `상호작용 ID ${u.id} 가 배치(layout)에 없어요${un.length > 1 ? ' (다른 조건으로 등록 가능)' : ''}`, at);
         });
       }
       for (const eid of Object.keys(edu)) if (!Object.values(col).some((x) => arr(x?.unlock).some((u) => u?.edu === eid))) add('info', 'collection', `교육 ${eid} 를 등록하는 도감 항목이 없어요`, eid);
@@ -1232,13 +1247,19 @@
           const own = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim();
           if (ERR_RX.test(own)) add('critical', 'errtext', el, own, '화면에 프로그램 오류 글자가 보여요', r);
           if (easy && /[㐀-䶿一-鿿]/.test(own)) add('info', 'hanja', el, own, '한자가 있어요', r);
-          const size = parseFloat(cs.fontSize) || 16;
+          // SVG text (illustrations): its CSS font size is in drawing units, scaled with the picture → measure the
+          // size on screen; its colour is `fill` over the drawing's own shapes, which a CSS background walk cannot see
+          const svgText = typeof SVGElement !== 'undefined' && el instanceof SVGElement;
+          let size = parseFloat(cs.fontSize) || 16;
+          if (svgText) { try { const m = el.getScreenCTM?.(); const k = m ? Math.hypot(m.a, m.b) : 1; if (k > 0.05) size *= k; } catch (e) { /* keep CSS size */ } }
           if (easy && own.length > 1 && !RX_EMOJI.test(own.length <= 2 ? own : '')) {
             if (size < 13.5) add('warn', 'fontsize', el, own, `${size.toFixed(0)} px (16 px 이상)`, r);
             else if (size < 15.5) add('info', 'fontsize', el, own, `${size.toFixed(1)} px (16 px 이상)`, r);
           }
+          if (svgText) continue;
           const fg = parseColor(cs.color);
-          if (fg.a < 0.05 || !own.replace(/\p{Extended_Pictographic}|\s/gu, '')) continue;
+          // emoji are coloured pictures: also drop their joiners / variation selectors (❤️ = U+2764 U+FE0F)
+          if (fg.a < 0.05 || !own.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\u200d\ufe0e\ufe0f\u20e3]|\s/gu, '')) continue;
           const bg = this.bgOf(el);
           const ink = over({ ...fg }, bg.color);
           const ratio = contrastRatio(ink, bg.color);
@@ -1959,6 +1980,13 @@
   });
   T('🧩 시스템', '모든 시스템 초기화 성공', () => { const bad = G.systems().filter((s) => s._failed || !s._initialized).map((s) => s.name); return { ok: !bad.length, detail: bad.length ? bad.join(', ') : `${G.systems().length}개 정상` }; });
   T('🧩 시스템', '조각(fragment) 로드 오류 없음', () => { const e = G.__fragmentErrors || []; return { ok: !e.length, detail: e.map((x) => x.name).join(', ') || `${(G.__fragments || []).length}개 로드` }; });
+  // a new module must be added to the SOURCE map and EXPECTED_SYSTEMS (otherwise the 모듈 상태 tab can not report it missing)
+  T('🧩 시스템', '새 파일·새 시스템이 소스 지도와 필수 시스템 목록에 있어요', () => {
+    const man = window.__BUILD__?.manifest || {};
+    const files = [...(man.js || []), ...(man.css || [])].map((f) => f.name).filter((n) => !SOURCE_BY_NAME.has(n));
+    const sys = G.systems().map((s) => s.name).filter((n) => !EXPECTED_SYSTEMS.includes(n));
+    return { ok: !files.length && !sys.length, detail: [files.length ? `SOURCE 에 없음: ${files.join(', ')}` : '', sys.length ? `EXPECTED_SYSTEMS 에 없음: ${sys.join(', ')}` : ''].filter(Boolean).join(' · ') || `파일 ${(man.js || []).length + (man.css || []).length}개 · 시스템 ${G.systems().length}개` };
+  });
   T('🧩 시스템', 'WebGL 컨텍스트 정상', () => {
     const r = G.sys.engine?.renderer;
     if (!r) return false;
@@ -2232,6 +2260,245 @@
     if (G.settings.kidChat === false) return { ok: false, detail: '쉬운 모드인데 kidChat 이 꺼져 있어요' };
     const inputs = Array.from(document.querySelectorAll('#chat-panel input, #chat-panel textarea, #chat-form input')).filter((el) => !el.disabled && !el.readOnly && KidAudit.box(el, new Map()));
     return { ok: !inputs.length, detail: inputs.length ? `보이는 채팅 입력칸 ${inputs.length}개` : '보이는 채팅 입력칸 없음' };
+  });
+
+  // ---- phase 5 round 1: regression guards for the bug-sweep fixes (cheap; the real save is never changed)
+  T('💾 저장 (G.save)', 'normalize: 잘못된 형식 고치기 (stats 글자 · 가방 배열 · 일기 null · player.x 글자 · constructor 키)', () => {
+    const P = { id: 'dc_t', nickname: 'dc' };
+    const n = G.save.normalize({ stats: 'x', inventory: [], journal: [null, { id: 'a' }], player: { x: 'NaN' }, visited: JSON.parse('{"constructor":1,"Z":1}') }, P);
+    const empty = G.save.normalize({ inventory: {} }, P);
+    const bad = [];
+    if (!isObj(n.stats) || !Number.isFinite(n.stats.coin)) bad.push('stats');
+    if (!isObj(n.inventory)) bad.push('가방');
+    if (!isObj(empty.inventory) || Object.keys(empty.inventory).length) bad.push('다 쓴 빈 가방이 다시 채워져요');
+    if (!Array.isArray(n.journal) || n.journal.length !== 1) bad.push(`일기 ${n.journal?.length}개`);
+    if (!Number.isFinite(n.player?.x)) bad.push('player.x');
+    if (!isObj(n.visited) || Object.prototype.hasOwnProperty.call(n.visited, 'constructor') || n.visited.Z !== 1) bad.push('visited');
+    return { ok: !bad.length, detail: bad.join(' · ') || '모두 고쳐졌어요' };
+  });
+  T('👶 쉬운 모드', "josa '으로/로': 한옥마을로 · 밭으로 · 참가자1로 · 참가자3으로", () => {
+    if (typeof G.easy?.josa !== 'function') return SKIP('G.easy.josa 가 없어요');
+    const got = ['한옥마을', '밭', '참가자1', '참가자3'].map((w) => G.easy.josa(w, '으로/로'));
+    return { ok: eq(got, ['한옥마을로', '밭으로', '참가자1로', '참가자3으로']), detail: got.join(' · ') };
+  });
+  T('👶 쉬운 모드', '보호자 확인: 기기 시계가 뒤로 가도 쉬는 시간은 5분을 넘지 않아요 (저장된 끝 시각도 줄여요)', () => {
+    if (typeof G.easy?.gateStatus !== 'function') return SKIP('G.easy.gateStatus 가 없어요');
+    const KEY = 'tfm.v1.gate';
+    let prev;
+    try { prev = localStorage.getItem(KEY); } catch (e) { return SKIP('기기 저장소를 쓸 수 없어요'); }
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ until: Date.now() + 1e9, strikes: 0, wrong: 0, wt: 0 }));
+      const left = num(G.easy.gateStatus().cooldownLeft, Infinity);
+      const stored = num(JSON.parse(localStorage.getItem(KEY) || '{}').until);
+      const capped = stored <= Date.now() + 300000 + 1000;
+      return { ok: left <= 300000 && capped, detail: `남은 시간 ${Math.round(left / 1000)}초 · 저장된 끝 시각 ${capped ? '줄였어요' : '그대로예요'}` };
+    } finally {
+      try { if (prev == null) localStorage.removeItem(KEY); else localStorage.setItem(KEY, prev); } catch (e) { /* storage blocked */ }
+    }
+  });
+  T('📦 데이터 불변식', '퀘스트·도감의 상호작용 대상이 모두 등록돼 있어요 (끝낼 수 없는 목표 없음)', () => {
+    if (!G.interact?.list?.().length) return SKIP('상호작용 대상이 아직 등록되지 않았어요');
+    const bad = Lint.run().issues.filter((i) => i.sev === 'error' && /등록되지 않았어요|개만 등록돼 있어요/.test(i.msg));
+    return { ok: !bad.length, detail: bad.length ? `${bad[0].ref}: ${bad[0].msg}` : `상호작용 대상 ${G.interact.list().length}개 등록됨` };
+  });
+  T('👶 쉬운 모드', '퀴즈 놀이: 그림 보기 순서가 열 때마다 섞여요 (정답이 늘 첫 칸이 아니에요)', () => {
+    const E = G.sys.education;
+    if (typeof E?._kidOrder !== 'function') return SKIP('G.sys.education._kidOrder 가 없어요');
+    const k = G.data.quizzes?.QZ_BEAN_1?.kid;
+    if (!k || k.ox || !Array.isArray(k.choices)) return SKIP('QZ_BEAN_1 아이 퀴즈가 없어요');
+    const n = Math.min(3, k.choices.length), want = [...Array(n).keys()].join(), slots = [];
+    for (let i = 0; i < 12; i++) {
+      const o = E._kidOrder('QZ_BEAN_1');
+      if (!Array.isArray(o) || [...o].sort().join() !== want) return { ok: false, detail: `순서가 이상해요: ${JSON.stringify(o)}` };
+      slots.push(o.indexOf(k.answer));
+    }
+    return { ok: slots.some((s) => s !== 0), detail: `정답 칸 ${slots.join(' ')}` };
+  });
+  T('🌍 월드 (G.world)', 'heightAt: 낮은 충돌체(maxY) 위에 선 사람은 그 위 · 아래에 있으면 땅 · 머리 위 들보(minY)는 막지 않아요 · 덤불(stand:false)은 발판이 아니에요', () => {
+    const x = 30, z = -110, t = G.world.heightAt(x, z, Infinity);
+    if (!Number.isFinite(t)) return SKIP('시험 자리의 땅 높이를 모르겠어요');
+    const top = G.world.addCollider({ shape: 'box', x, z, hw: 1, hd: 1, maxY: t + 0.6, tag: 'dc-test' });
+    let onTop, below, beam;
+    try { onTop = G.world.heightAt(x, z, t + 1); below = G.world.heightAt(x, z, t); } finally { G.world.removeCollider(top); }
+    const lid = G.world.addCollider({ shape: 'box', x, z, hw: 1, hd: 1, minY: t + 3, tag: 'dc-test' });
+    try { beam = G.world.blocked(x, z, 0.35, t); } finally { G.world.removeCollider(lid); }
+    // a bush / small decor (stand:false) still blocks at the ground but is never a platform
+    let bushTop, bushBlocks;
+    const bush = G.world.addCollider({ shape: 'circle', x, z, r: 0.8, maxY: t + 0.55, stand: false, tag: 'dc-test' });
+    try { bushTop = G.world.heightAt(x, z, t + 1); bushBlocks = G.world.blocked(x, z, 0.35, t); } finally { G.world.removeCollider(bush); }
+    const ok = near(onTop, t + 0.6, 1e-3) && near(below, t, 1e-3) && beam === false && near(bushTop, t, 1e-3) && bushBlocks === true;
+    return { ok, detail: `위 ${(onTop - t).toFixed(2)} m · 아래 ${(below - t).toFixed(2)} m · 들보 ${beam ? '막아요 ❌' : '안 막아요'} · 덤불 위 ${(bushTop - t).toFixed(2)} m${bushBlocks ? '' : ' (안 막아요 ❌)'}` };
+  });
+  T('🌍 월드 (G.world)', '길 찾기: 0.1 m 난간 바로 옆에서 출발해도 길이 난간을 뚫지 않아요', () => {
+    const pl = G.sys.player;
+    if (typeof pl?.planPath !== 'function') return SKIP('G.sys.player.planPath 가 없어요');
+    const X = 30, Z = -100, HD = 5, y = G.world.heightAt(X, Z, Infinity);
+    if (!Number.isFinite(y)) return SKIP('시험 자리의 땅 높이를 모르겠어요');
+    const id = G.world.addCollider({ shape: 'box', x: X, z: Z, hw: 0.05, hd: HD, rot: 0, tag: 'dc-test' });
+    let path = null;
+    try { path = pl.planPath({ x: X - 0.4, y, z: Z }, { x: X + 1.6, z: Z }, 0.5); } finally { G.world.removeCollider(id); }
+    if (!Array.isArray(path) || path.length < 2) return { ok: false, detail: '길을 못 찾았어요' };
+    // a segment crosses the rail when it changes sides of x = X between its ends while within the rail's length
+    let cross = -1;
+    for (let i = 1; i < path.length && cross < 0; i++) {
+      const a = path[i - 1], b = path[i];
+      if ((a.x - X) * (b.x - X) >= 0) continue;
+      const k = (X - a.x) / (b.x - a.x), zc = a.z + (b.z - a.z) * k;
+      if (Math.abs(zc - Z) <= HD + 0.05) cross = i;
+    }
+    return { ok: cross < 0, detail: cross < 0 ? `점 ${path.length}개 · 난간 끝으로 돌아가요` : `${cross}번째 구간이 난간을 지나요` };
+  });
+  T('💬 소셜', '접속 친구: 달리기 보고(anim run · 18 m/s)는 달리기로 읽어요', () => {
+    const S = G.sys.social;
+    if (typeof S?._remoteRow !== 'function') return SKIP('G.sys.social._remoteRow 가 없어요');
+    const r = S._remoteRow({ x: 1, z: 1, anim: 'run', speed: 18 });
+    return { ok: r?.loco === 'run' && r.speed === 18, detail: `loco ${r?.loco} · speed ${r?.speed}` };
+  });
+  T('💬 소셜', '접속 친구: 1초 동안 18 m/s 로 17~19 m 앞서 그려지고 이름표는 그대로예요 (이름 바꾸기 포함)', () => {
+    const S = G.sys.social;
+    if (typeof S?._upsertRemote !== 'function' || typeof S._updateRemotes !== 'function' || !G.avatar?.create || !S._vroot) return SKIP('접속 친구를 그릴 준비가 안 됐어요');
+    const KEY = 'P_dc_test', X0 = 30, Z0 = -110;
+    const prevSrv = S._srv;
+    let o = null;
+    try {
+      S._srv = prevSrv || { presFirst: true }; // no "접속했어요" chat line for this stand-in
+      S._upsertRemote(KEY, 'dc', { x: X0, z: Z0, anim: 'run', speed: 18, rotY: 0, nickname: '시험친구' });
+      o = S.others.get(KEY);
+      if (!o) return SKIP('접속 친구를 만들지 못했어요');
+      const z0 = o.position.z;
+      for (let i = 0; i < 30; i++) S._updateRemotes(1 / 30);
+      const moved = o.position.z - z0;
+      S._upsertRemote(KEY, 'dc', { x: X0, z: o.position.z, anim: 'run', speed: 18, rotY: 0, nickname: '시험친구2' });
+      const tagOk = o.el && o.el.nm instanceof Element && o.el.nm.textContent === '시험친구2';
+      return { ok: moved >= 17 && moved <= 19 && tagOk, detail: `${moved.toFixed(2)} m${tagOk ? '' : ' · 이름표가 망가졌어요'}` };
+    } finally {
+      if (o) S._removeRemote(o); else S.others.delete(KEY);
+      S._srv = prevSrv;
+    }
+  });
+  T('💬 소셜', '쉬운 모드 신고: 확인 창 제목에 다른 사람의 닉네임을 쓰지 않아요', async () => {
+    const S = G.sys.social;
+    if (!easyOn() || typeof S?._kidReport !== 'function' || typeof G.easy?.confirm !== 'function') return SKIP('쉬운 모드에서만 확인해요');
+    if (G.ui.modal.get('easy-confirm')) return SKIP('다른 확인 창이 열려 있어요');
+    const nick = '엄마몰래만나';
+    const run = S._kidReport({ name: nick, kind: 'remote' });
+    let title = '';
+    try {
+      await nextFrame();
+      const el = document.querySelector('.easy-confirm-modal .ec-title');
+      title = el ? G.easy.textOf(el) : '';
+    } finally { G.ui.modal.get('easy-confirm')?.close(); }
+    await run;
+    if (!title) return SKIP('확인 창이 열리지 않았어요');
+    return { ok: !title.includes(nick), detail: title };
+  });
+  T('⌨️ 입력', '창 안의 Tab: 끝이 아닐 땐 브라우저가 옮기고, 마지막 칸에서만 처음으로 돌아가요', async () => {
+    if (G.ui.modal.isOpen?.()) return SKIP('다른 창이 열려 있어요');
+    const h = G.ui.h;
+    const body = h('div', null, h('button', { type: 'button', class: 'btn' }, '하나'), h('button', { type: 'button', class: 'btn' }, '둘'), h('button', { type: 'button', class: 'btn' }, '셋'));
+    const m = G.ui.modal.open({ id: 'dc-tab-test', size: 'sm', title: 'Tab 시험', body, actions: [] });
+    const tab = (shift) => {
+      const opts = { key: 'Tab', code: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true };
+      const ev = new KeyboardEvent('keydown', opts);
+      window.dispatchEvent(ev);
+      window.dispatchEvent(new KeyboardEvent('keyup', opts));
+      return ev.defaultPrevented;
+    };
+    // the developer-center panel is a modal dialog too: it steps aside (inert) while the test window is on top
+    const aside = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].filter((d) => d !== m?.el && !d.inert);
+    for (const d of aside) d.inert = true;
+    try {
+      await nextFrame(); await nextFrame();
+      const root = m?.el;
+      const items = root ? [...root.querySelectorAll('button')].filter((b) => b.getClientRects().length) : [];
+      if (items.length < 3) return SKIP('시험 창의 버튼이 안 보여요');
+      items[0].focus();
+      const mid = tab(false);
+      items[items.length - 1].focus();
+      const wrap = tab(false), back = document.activeElement === items[0];
+      return { ok: !mid && wrap && back, detail: `가운데 ${mid ? '막힘 ❌' : '통과'} · 마지막 ${wrap && back ? '처음으로' : '그대로 ❌'}` };
+    } finally { for (const d of aside) d.inert = false; m?.close?.(); }
+  });
+  T('🎆 효과', '머리 위 이모지: 104 % 까지만 커졌다가 자리 잡아요 (튀는 반동 없음)', () => {
+    const F = G.sys.fx;
+    if (typeof G.fx?.emoji3d !== 'function' || typeof F?._stepEmoji !== 'function' || !F._emo) return SKIP('3D 이모지를 쓸 수 없어요 (효과 끔)');
+    if (!G.fx.emoji3d(null, '🎉')) return SKIP('이모지를 띄우지 못했어요');
+    const it = F._emoInst[F._emoInst.length - 1];
+    let max = 0;
+    try {
+      for (let s = 0; s < 40; s++) {
+        F._stepEmoji(1 / 60);
+        const k = F._emoInst.indexOf(it);
+        if (k < 0) break;
+        max = Math.max(max, F._emo.iData[k * 4] / it.size);
+      }
+    } finally { const k = F._emoInst.indexOf(it); if (k >= 0) { F._emoInst.splice(k, 1); F._stepEmoji(0); } }
+    return { ok: max > 0 && max <= 1.041, detail: `가장 클 때 ${(max * 100).toFixed(1)} %` };
+  });
+  T('🖱️ 상호작용', '키오스크 누르기: 화면에서 체험관 안내 키오스크를 누르면 그 키오스크가 골라져요', () => {
+    const I = G.sys.interaction, E = G.sys.engine, cam = E?.camera;
+    const root = G.world.getObject?.('K_HALL');
+    const proxy = root?.getObjectByName?.('pick-proxy');
+    if (typeof I?._pick !== 'function' || !cam || !proxy) return SKIP('키오스크가 아직 없어요');
+    const c = new THREE.Vector3(); new THREE.Box3().setFromObject(proxy).getCenter(c);
+    const pos = cam.position.clone(), quat = cam.quaternion.clone();
+    try {
+      cam.position.set(c.x, c.y + 2.2, c.z + 8);
+      cam.lookAt(c);
+      cam.updateMatrixWorld(true);
+      const s = E.worldToScreen(c);
+      if (!s.visible) return SKIP('키오스크가 화면에 안 보여요');
+      const hit = I._pick(s.x, s.y);
+      return { ok: hit?.entry?.id === 'K_HALL', detail: hit?.entry ? `고른 것 ${hit.entry.id}` : hit?.ground ? '땅을 골랐어요 ❌' : hit?.blocker ? '다른 물체가 가렸어요 ❌' : '아무것도 안 골라요 ❌' };
+    } finally { cam.position.copy(pos); cam.quaternion.copy(quat); cam.updateMatrixWorld(true); }
+  });
+  T('🖥️ 렌더', '하늘 빛 다시 굽기: scene.environment 텍스처가 같은 객체로 남아요 (재질 프로그램 유지)', () => {
+    const E = G.sys.engine;
+    if (typeof E?.updateEnvironment !== 'function' || !E.scene) return SKIP('엔진이 없어요');
+    const before = E.scene.environment;
+    if (!before) return SKIP('이 품질에서는 환경 텍스처를 쓰지 않아요');
+    E.updateEnvironment(true);
+    return { ok: E.scene.environment === before, detail: E.scene.environment === before ? '같은 텍스처' : '새 텍스처로 바뀌었어요' };
+  });
+  T('🖥️ 렌더', '테두리 빛(hover): 다른 물체로 옮겨도 새 셰이더 프로그램을 만들지 않아요', () => {
+    const E = G.sys.engine, r = E?.renderer;
+    if (typeof E?.setOutline !== 'function' || !r?.info?.programs) return SKIP('엔진이 없어요');
+    const objs = [];
+    G.world.getObject?.('J1') && objs.push(G.world.getObject('J1'));
+    G.world.getObject?.('K_HALL') && objs.push(G.world.getObject('K_HALL'));
+    if (objs.length < 2) return SKIP('시험할 물체가 없어요');
+    const prev = E._outline ? { list: E._outline.list.slice(), color: E._outline.color, strength: E._outline.strength } : null;
+    try {
+      E.setOutline(objs[0]); E.render({ force: true });
+      const n1 = r.info.programs.length;
+      E.setOutline(objs[1]); E.render({ force: true });
+      const n2 = r.info.programs.length;
+      return { ok: n2 === n1, detail: `프로그램 ${n1} → ${n2}` };
+    } finally { if (prev && prev.list.length) E.setOutline(prev.list, { color: prev.color, strength: prev.strength }); else E.setOutline(null); }
+  });
+  T('🖥️ 렌더', '화면 배율: 렌더러 픽셀 비율 = min(기기 배율, 품질 상한) · 등불 빛 크기도 같은 배율', () => {
+    const E = G.sys.engine, r = E?.renderer;
+    if (!r || !E.preset) return SKIP('엔진이 없어요');
+    const want = Math.min(Number(window.devicePixelRatio) > 0 ? Number(window.devicePixelRatio) : 1, E.preset.pixelRatio);
+    const pr = r.getPixelRatio();
+    const u = G.sys.props?.glow?.material?.uniforms?.uScale?.value;
+    const glowOk = u == null || near(u, window.innerHeight * 0.5 * pr, 0.5);
+    return { ok: near(pr, want, 1e-6) && glowOk && Array.isArray(E._cull?.items ?? []), detail: `배율 ${pr} (기대 ${want})${u == null ? '' : ` · 등불 ${Math.round(u)}${glowOk ? '' : ' ❌'}`}` };
+  });
+  T('🖥️ 렌더', '사진: GPU 화면을 잃었을 때 찍으면 빈 사진을 앨범에 넣지 않아요', async () => {
+    const P = G.sys.photo, gl = G.sys.engine?.renderer?.getContext?.();
+    if (typeof P?.capture !== 'function' || !gl || !G.state) return SKIP('사진 기능을 시험할 수 없어요');
+    if (P.active || P._busy) return SKIP('사진 모드가 열려 있어요');
+    const n = Array.isArray(G.state.photos) ? G.state.photos.length : 0;
+    const toast = G.ui.toast;
+    let res;
+    P.active = true;
+    gl.isContextLost = () => true;
+    G.ui.toast = () => null;
+    try { res = P.capture(); } finally { delete gl.isContextLost; P.active = false; G.ui.toast = toast; }
+    const out = await res;
+    const n2 = Array.isArray(G.state.photos) ? G.state.photos.length : 0;
+    return { ok: out == null && n2 === n, detail: out == null ? `찍지 않았어요 · 앨범 ${n2}장 그대로` : '사진을 찍었어요 ❌' };
   });
 
   const Tests = {

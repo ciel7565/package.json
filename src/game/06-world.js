@@ -6,7 +6,9 @@
 //   G.world.heightAt(x,z, fromY?)           ground under a walker (terrain + walkable platforms + the top of a low
 //                                           collider the walker is already standing on, see heightAt)
 //   G.world.addWalkable({shape:'box',x,z,hw,hd,rot,top} | {shape:'circle',x,z,r,top}) -> id
-//   G.world.addCollider({shape:'circle',x,z,r,minY?,maxY?,tag?} | {shape:'box',x,z,hw,hd,rot,...}) -> id
+//   G.world.addCollider({shape:'circle',x,z,r,minY?,maxY?,stand?,tag?} | {shape:'box',x,z,hw,hd,rot,...}) -> id
+//                                           stand:false = the top (maxY) never carries a walker (foliage, small
+//                                           decor): it only decides blocking; a walker that lands on it slides off
 //   G.world.removeCollider(id) / removeWalkable(id)
 //   G.world.resolve(pos:Vector3, radius, feetY?) pushes pos (XZ) out of colliders; returns true if hit
 //   G.world.setWaterFn(fn) / isWater(x,z)    river/pond test (not walkable)
@@ -26,7 +28,7 @@
   // spatial hashes: cell key -> array of shapes. Queries are allocation-free (they run for every collision
   // sub-step and every planner sample): no Sets, no iterators, a query stamp de-duplicates shapes in several cells.
   const grid = new Map();   // colliders
-  const wgrid = new Map();  // walkables + the low colliders (maxY: rocks, shrubs, skirts…) whose tops carry walkers
+  const wgrid = new Map();  // walkables + the low colliders (maxY: rocks, crags, skirts…) whose tops carry walkers
   let nextId = 1;
   let qstamp = 0;
   const _near = [];         // result buffer of near(): entries [0, n) are valid (callers never nest queries; the
@@ -130,7 +132,7 @@
 
     /**
      * ground height for a walker whose feet are at fromY (platforms above fromY+STEP are ignored).
-     * The top (maxY) of a low collider (rock, shrub, crag, skirt) carries a walker that is already up there
+     * The top (maxY) of a low collider (rock, crag, skirt — not one added with stand:false) carries a walker that is already up there
      * (fromY >= maxY — the same rule resolve() uses to let the walker pass over it): crossing a boulder half
      * buried in a slope keeps the feet on the boulder until they leave it, instead of sinking into it and being
      * shoved out sideways. fromY = Infinity (surfaceHeight, spawning objects) ignores collider tops.
@@ -156,7 +158,8 @@
       const s = { shape: 'circle', rot: 0, ...c, id };
       if (s.shape === 'box') { s.hw = s.hw ?? (s.w || 1) / 2; s.hd = s.hd ?? (s.d || 1) / 2; }
       colliders.set(id, s); insert(grid, s, s._cells = []);
-      if (Number.isFinite(s.maxY)) { s._top = true; insert(wgrid, s, s._tcells = []); }
+      // a standable top carries walkers (heightAt); stand:false (shrubs, small decor) keeps maxY for blocking only
+      if (Number.isFinite(s.maxY) && s.stand !== false) { s._top = true; insert(wgrid, s, s._tcells = []); }
       return id;
     },
     removeCollider(id) {

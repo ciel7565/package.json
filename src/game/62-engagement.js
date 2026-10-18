@@ -2049,7 +2049,7 @@
           }
         }, `${who}에게 인사해요`);
         const card = h('div', { class: 'eng-kfriend' }, ava, h('b', null, f.name), h('small', null, where), h('div', { class: 'eng-kfriend-btns' }, hi,
-          f.pos ? this._kidBtn('📍', '가기', 'easy-btn-no', () => { this.close(); setTimeout(() => G.easy?.goTo?.({ x: f.pos.x, z: f.pos.z, label: who }, { stopDistance: 2 }), 80); }, `${who}에게 가요`) : null));
+          f.pos ? this._kidBtn('📍', '가기', 'easy-btn-no', () => { this.close(); setTimeout(() => G.easy?.goTo?.({ x: f.pos.x, z: f.pos.z, label: who }, { stopDistance: 2, person: true }), 80); }, `${who}에게 가요`) : null));
         card.__easySpeak = { btn: null, text: f.remote ? `친구예요. ${where}` : `${f.name}. ${where}` };
         grid.appendChild(card);
       }
@@ -2377,7 +2377,7 @@
       T.sign.visible = true;
       T.sign.updateMatrixWorld(true);
       if (T.signCol != null) G.world.removeCollider?.(T.signCol);
-      T.signCol = G.world.addCollider?.({ shape: 'circle', x: c.x, z: c.z, r: 0.14, maxY: c.y + 1.15, tag: 'eng:sign' }) ?? null;
+      T.signCol = G.world.addCollider?.({ shape: 'circle', x: c.x, z: c.z, r: 0.14, maxY: c.y + 1.15, stand: false, tag: 'eng:sign' }) ?? null;
       this._drawSign();
       const pos = new THREE.Vector3(c.x, c.y + 0.9, c.z);
       G.interact?.register?.({ id: YARD_ID, kind: 'sign', label: '내 마당 꾸미기', position: pos, object: T.sign, radius: 2.4, onInteract: () => this.open('decor') });
@@ -2421,7 +2421,7 @@
         if (!r) {
           const info = DECOR_INFO[d.item];
           r = { d, cell, yaw: y.rot + d.rot, phase: (U.hashInt(d.id) % 1000) / 159, col: null, scale: 1 };
-          r.col = G.world.addCollider?.({ shape: 'circle', x: cell.x, z: cell.z, r: info.r, maxY: cell.y + info.h, tag: `decor:${d.id}` }) ?? null;
+          r.col = G.world.addCollider?.({ shape: 'circle', x: cell.x, z: cell.z, r: info.r, maxY: cell.y + info.h, stand: false, tag: `decor:${d.id}` }) ?? null;
           this._recs.set(d.id, r);
         }
         r.d = d; r.cell = cell;

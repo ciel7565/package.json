@@ -50,12 +50,12 @@
 <path d="M170 86q5.5 4 11 0" fill="none" stroke="#2b2118" stroke-width="1.8" stroke-linecap="round"/>
 <g fill="none" stroke="#9b86d6" stroke-width="3.2" stroke-linecap="round"><path d="M122 116c10-15 22-13 30-3s20 10 27 0"/><path d="M140 108c-3-12 5-19 12-23"/><path d="M152 113c3 10 0 18-6 24"/></g>
 <g fill="#b5a2ee" stroke="#7d68c2" stroke-width="2"><circle cx="153" cy="84" r="6"/><circle cx="180" cy="113" r="6"/><circle cx="145" cy="138" r="5"/></g>
-<g ${FONT} font-size="13" font-weight="700">
-<rect x="236" y="34" width="66" height="26" rx="13" fill="#f6c453"/><text x="269" y="52" text-anchor="middle" fill="#4a3300">효모</text>
-<rect x="236" y="72" width="66" height="26" rx="13" fill="#86cf7c"/><text x="269" y="90" text-anchor="middle" fill="#163d14">세균</text>
-<rect x="236" y="110" width="66" height="26" rx="13" fill="#b5a2ee"/><text x="269" y="128" text-anchor="middle" fill="#2e1f63">곰팡이</text>
+<g ${FONT} font-size="16.5" font-weight="800">
+<rect x="234" y="32" width="76" height="30" rx="15" fill="#f6c453"/><text x="272" y="53" text-anchor="middle" fill="#4a3300">효모</text>
+<rect x="234" y="70" width="76" height="30" rx="15" fill="#86cf7c"/><text x="272" y="91" text-anchor="middle" fill="#163d14">세균</text>
+<rect x="234" y="108" width="76" height="30" rx="15" fill="#b5a2ee"/><text x="272" y="129" text-anchor="middle" fill="#2e1f63">곰팡이</text>
 </g>
-<text x="14" y="228" font-size="12.5" fill="#6b4a2b" font-weight="600">눈에 보이지 않을 만큼 작은 미생물이 발효를 일으켜요</text>
+<text class="ev-cap" x="14" y="228" font-size="12.5" fill="#6b4a2b" font-weight="600">눈에 보이지 않을 만큼 작은 미생물이 발효를 일으켜요</text>
 </svg>`,
 
     fermentVsRot: `<svg viewBox="0 0 320 240" xmlns="http://www.w3.org/2000/svg" ${FONT}>
@@ -73,7 +73,7 @@
 <g fill="#a7b48f"><circle cx="219" cy="117" r="3"/><circle cx="248" cy="132" r="4"/></g>
 <circle cx="282" cy="56" r="17" fill="#ff6b5e"/><path d="m275 49 14 14m0-14-14 14" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
 <text x="241" y="178" text-anchor="middle" font-size="17" font-weight="800" fill="#a23a30">부패</text>
-<text x="160" y="214" text-anchor="middle" font-size="12.5" font-weight="600" fill="#5a4636">둘 다 미생물의 작용 · 먹기 좋게 변하면 발효, 상하면 부패</text>
+<text class="ev-cap" x="160" y="214" text-anchor="middle" font-size="12.5" font-weight="600" fill="#5a4636">둘 다 미생물의 작용 · 먹기 좋게 변하면 발효, 상하면 부패</text>
 </svg>`,
 
     agingTimeline: `<svg viewBox="0 0 320 240" xmlns="http://www.w3.org/2000/svg" ${FONT}>
@@ -88,7 +88,7 @@
 </g>
 <path d="M30 196h260" stroke="#b08a5a" stroke-width="3" stroke-linecap="round"/><path d="m282 189 10 7-10 7" fill="none" stroke="#b08a5a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
 <g font-size="13" font-weight="700" fill="#5a3a22" text-anchor="middle"><text x="62" y="186">며칠</text><text x="132" y="186">몇 주</text><text x="203" y="186">몇 달</text><text x="273" y="186">몇 년</text></g>
-<text x="160" y="224" text-anchor="middle" font-size="12.5" font-weight="600" fill="#6b4a2b">시간이 흐를수록 색은 짙어지고 맛은 깊어져요</text>
+<text class="ev-cap" x="160" y="224" text-anchor="middle" font-size="12.5" font-weight="600" fill="#6b4a2b">시간이 흐를수록 색은 짙어지고 맛은 깊어져요</text>
 </svg>`,
 
     jangdokdae: `<svg viewBox="0 0 320 240" xmlns="http://www.w3.org/2000/svg" ${FONT}>
@@ -108,7 +108,7 @@
 </g>
 <g fill="#fff" opacity=".22"><ellipse cx="62" cy="134" rx="4" ry="11"/><ellipse cx="119" cy="128" rx="5" ry="14"/><ellipse cx="178" cy="131" rx="4" ry="12"/><ellipse cx="231" cy="136" rx="3" ry="9"/></g>
 <g stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity=".85" fill="none"><path d="M18 74c14-6 22 6 36 0"/><path d="M30 92c14-6 22 6 36 0"/></g>
-<text x="160" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#5a3a22">햇볕 잘 들고 바람 잘 통하는 높은 돌단 위</text>
+<text class="ev-cap" x="160" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#5a3a22">햇볕 잘 들고 바람 잘 통하는 높은 돌단 위</text>
 </svg>`,
 
     jarTypes: `<svg viewBox="0 0 320 240" xmlns="http://www.w3.org/2000/svg" ${FONT}>
@@ -119,7 +119,7 @@
 <g transform="translate(176 92)"><ellipse cx="34" cy="7" rx="12" ry="4" fill="#2e1a10"/><path d="M23 9c0 6-2 8-8 14-22 20-18 64 6 80h26c24-16 28-60 6-80-6-6-8-8-8-14z" fill="url(#ejt)"/><path d="M8 52h52" stroke="#c9a46a" stroke-width="2" opacity=".7"/><ellipse cx="24" cy="58" rx="5" ry="18" fill="#fff" opacity=".14"/></g>
 <g transform="translate(252 134)"><ellipse cx="25" cy="7" rx="15" ry="4" fill="#2e1a10"/><path d="M11 9c-14 12-14 40 2 52h24c16-12 16-40 2-52z" fill="url(#ejt)"/><ellipse cx="18" cy="32" rx="4" ry="11" fill="#fff" opacity=".14"/></g>
 <g font-size="15" font-weight="800" fill="#4a2c18" text-anchor="middle"><text x="52" y="218">독</text><text x="130" y="218">중두리</text><text x="210" y="218">항아리</text><text x="277" y="218">단지</text></g>
-<g font-size="10.5" font-weight="600" fill="#8a6a4a" text-anchor="middle"><text x="52" y="233">가장 큰 그릇</text><text x="130" y="233">배가 부른 중간 크기</text><text x="210" y="233">좁은 아가리</text><text x="277" y="233">작고 목이 짧음</text></g>
+<g class="ev-cap" font-size="10.5" font-weight="600" fill="#8a6a4a" text-anchor="middle"><text x="52" y="233">가장 큰 그릇</text><text x="130" y="233">배가 부른 중간 크기</text><text x="210" y="233">좁은 아가리</text><text x="277" y="233">작고 목이 짧음</text></g>
 </svg>`,
 
     beanCycle: `<svg viewBox="0 0 320 240" xmlns="http://www.w3.org/2000/svg" ${FONT}>
@@ -135,7 +135,7 @@
 <g fill="#c9a85a" stroke="#8f7434" stroke-width="1.5"><rect x="256" y="104" width="10" height="28" rx="5" transform="rotate(14 261 118)"/><rect x="276" y="98" width="10" height="30" rx="5" transform="rotate(-12 281 113)"/><rect x="264" y="126" width="9" height="24" rx="4.5" transform="rotate(30 268 138)"/></g>
 <g fill="none" stroke="#c7b08a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M64 140h22m-6-5 6 5-6 5"/><path d="M144 132h22m-6-5 6 5-6 5"/><path d="M226 128h20m-6-5 6 5-6 5"/></g>
 <g font-size="12.5" font-weight="800" fill="#fff" text-anchor="middle"><text x="42" y="182">봄</text><text x="118" y="182">싹 트기</text><text x="196" y="182">여름 꽃</text><text x="272" y="182">가을 꼬투리</text></g>
-<text x="160" y="228" text-anchor="middle" font-size="12" font-weight="600" fill="#5a4636">씨앗 → 싹 → 꽃 → 꼬투리, 콩의 한살이</text>
+<text class="ev-cap" x="160" y="228" text-anchor="middle" font-size="12" font-weight="600" fill="#5a4636">씨앗 → 싹 → 꽃 → 꼬투리, 콩의 한살이</text>
 </svg>`,
 
     kimchiBuried: `<svg viewBox="0 0 320 240" xmlns="http://www.w3.org/2000/svg" ${FONT}>
@@ -149,7 +149,7 @@
 <g transform="translate(250 130)"><rect x="0" y="0" width="14" height="66" rx="7" fill="#fff" stroke="#9fb4c8" stroke-width="2"/><circle cx="7" cy="72" r="11" fill="#4aa8ff" stroke="#9fb4c8" stroke-width="2"/><rect x="4" y="34" width="6" height="36" rx="3" fill="#4aa8ff"/></g>
 <text x="246" y="122" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">서늘하고 고르게</text>
 <text x="40" y="150" font-size="12.5" font-weight="700" fill="#fff">땅속</text>
-<text x="160" y="232" text-anchor="middle" font-size="12" font-weight="600" fill="#f4e6d2">겨울엔 김칫독을 땅에 묻어 온도를 고르게 지켰어요</text>
+<text class="ev-cap" x="160" y="232" text-anchor="middle" font-size="12" font-weight="600" fill="#f4e6d2">겨울엔 김칫독을 땅에 묻어 온도를 고르게 지켰어요</text>
 </svg>`,
   };
 

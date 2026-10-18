@@ -172,7 +172,10 @@ async function startServer() {
   throw new Error('php -S did not start');
 }
 const uploadedFiles = [];
+let cleaned = false;
 function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
   if (phpProc) { try { phpProc.kill(); } catch { /* ignore */ } }
   if (tmpData) { try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* ignore */ } }
   if (phpProc) {
@@ -187,6 +190,9 @@ function cleanup() {
     }
   }
 }
+
+// an interrupted run (Ctrl-C, kill) cleans up too: the test photos must not stay in dist/metaverse/uploads
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
 
 // =============================================================================
 async function main() {
@@ -425,6 +431,19 @@ async function main() {
     const v = r.json?.data?.violations || [];
     assert(r.status === 409 && v.includes('STAT_RANGE'), `status ${r.status} violations ${v} ${r.error?.code}`);
     return v.join(',');
+  });
+  await step('malformed save: Object.prototype names as map keys (visited.constructor · inventory.__proto__ · education.completed.toString) → 400', async () => {
+    const codes = [];
+    for (const [where, key] of [['visited', 'constructor'], ['inventory', '__proto__'], ['education.completed', 'toString']]) {
+      const s = structuredClone(stored);
+      const tgt = where.split('.').reduce((o, k) => (o[k] = o[k] && typeof o[k] === 'object' ? o[k] : {}), s);
+      // an own key (assignment to '__proto__' would set the prototype instead); JSON.stringify sends it as is
+      Object.defineProperty(tgt, key, { value: 1, enumerable: true, writable: true, configurable: true });
+      const r = await A.req('api/player/save.php', { json: saveBody(s) });
+      assert(r.status === 400 && r.error?.code === 'INVALID_SAVE', `${where}.${key}: status ${r.status} ${r.error?.code}`);
+      codes.push(`${where}.${key} ${r.status}`);
+    }
+    return codes.join(' · ');
   });
   await step('save size limit → 413', async () => {
     const s = structuredClone(stored);

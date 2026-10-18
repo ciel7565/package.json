@@ -205,7 +205,7 @@ body.reduce-motion .col-d-art.got::before, body.reduce-motion .toast.ach-toast .
 .ksb-tab:focus-visible { outline: 4px solid var(--kid-gold, #ffcf4a); outline-offset: 2px; }
 .ksb-badge { position: absolute; top: -.45rem; right: -.2rem; min-width: 1.6rem; height: 1.6rem; padding: 0 .4rem; display: grid; place-items: center; border-radius: 999px; background: var(--kid-red, #ff7a59); color: #fff; font-size: .85rem; font-weight: 900; box-shadow: 0 2px 6px rgba(0,0,0,.35); animation: khPop 1.6s ease-in-out infinite; }
 .ksb-pane { animation: popIn .22s var(--ease); }
-@keyframes khPop { 50% { scale: 1.15; } }
+@keyframes khPop { 50% { scale: 1.04; } }
 
 .ksb-head { display: flex; align-items: center; gap: .9rem; margin: 0 0 .9rem; padding: .7rem .9rem; border-radius: 20px; background: rgba(255,255,255,.05); border: 1px solid var(--line); }
 .ksb-head-ico { flex: none; display: grid; place-items: center; width: 3.2rem; height: 3.2rem; border-radius: 50%; font-size: 1.9rem; background: radial-gradient(circle at 50% 35%, #fff6d2, #ffcf4a); box-shadow: 0 3px 0 rgba(140,95,0,.45); }

@@ -50,14 +50,14 @@ node tests/server-e2e.mjs http://127.0.0.1:8080/ # 서버 보안·기능 E2E
 | `node tools/build.mjs` | 릴리스 빌드 → `dist/metaverse/` (+ 서버 파일 복사, `server/data/game-data.json` 생성) |
 | `node tools/build.mjs --strict` | 문법 오류 조각이 하나라도 있으면 실패 (**배포 전 필수**) |
 | `node tools/build.mjs --out /tmp/a.html --no-font --only 40,41` | 코어 + 특정 모듈만 빠르게 빌드 (개발용) |
-| `node tools/smoke.mjs --file dist/metaverse/index.html --params "autostart=1&quality=low"` | 헤드리스 실행 테스트 — 콘솔·조각·시스템 오류가 있으면 exit 1 |
+| `node tools/smoke.mjs --file dist/metaverse/index.html --params "autostart=1&quality=low"` | 헤드리스 실행 테스트 — 콘솔·조각·시스템 오류가 있거나 `--eval`·`--script` 가 실패(throw)하면 exit 1 |
 | `node tools/smoke.mjs ... --eval "return G.sys.devcenter.runTests()"` | 브라우저 안 자가 테스트(50개+) 실행 결과 출력 |
 | `node tools/smoke.mjs ... --shot a.png --viewport 1366x768` / `--mobile` | 스크린샷 (헤드리스 WebGL 은 소프트웨어라 FPS 가 낮은 게 정상) |
 | `node tests/server-e2e.mjs` | 서버 E2E (php -S 를 임시 DB 로 띄우고 정리) — 개인정보 가림·닉네임·랭킹 칭호 단계 포함 |
-| `node tools/kid-audit.mjs` | 👶 쉬운 모드 화면 자동 점검 (주요 화면 18개, ⛔ 치명이 있으면 exit 1) — §12.4 |
+| `node tools/kid-audit.mjs` | 👶 쉬운 모드 화면 자동 점검 (주요 화면 18개, ⛔ 치명이나 페이지 오류가 있으면 exit 1) — §12.4 |
 | `node tests/pii-sync.mjs` / `--check` | 60-social 의 개인정보 가림 규칙을 `server/lib/pii-rules.json` 으로 내보내기 / 같은지 확인 (`--strict` 빌드가 확인도 함) |
 | `node tests/pii-client.mjs --file dist/metaverse/index.html` | 빌드된 게임 안에서 `tests/pii-vectors.json` 의 모든 문장을 가려 보고, PHP(intl 있음·없음)와 결과가 똑같은지 비교 |
-| `npm run package` | 엄격 빌드 + `release/fermentation-metaverse.zip` |
+| `npm run package` | 엄격 빌드 + `release/fermentation-metaverse.zip` (`data/`·`uploads/` 는 보호 파일만 담아요 — 시험으로 올린 사진·DB·비밀 키·로그는 zip 에 안 들어가요) |
 
 ## 4. 폴더·모듈 지도
 
@@ -200,7 +200,7 @@ FER006: { name: '청국장 체험', resultItem: 'ITEM_CHEONGGUKJANG', resultQty:
 
 **알려진 이슈**
 - 헤드리스 브라우저·저사양 GPU(소프트웨어 WebGL)에서는 FPS 가 매우 낮습니다 — 테스트는 `quality=low` 로, 화면 판단은 스크린샷으로.
-- 소프트웨어 WebGL(SwiftShader)에서는 4단계 이후 첫 화면까지 걸리는 시간이 예전보다 깁니다(첫 프레임의 셰이더 링크 대기). 실제 저사양 GPU 에서 한 번 재 보세요 — 셰이더 미리 컴파일(`compileAsync`)은 아직 넣지 않았어요.
+- 소프트웨어 WebGL(SwiftShader)에서는 4단계 이후 첫 화면까지 걸리는 시간이 예전보다 깁니다. `engine.postInit` 이 로딩 화면 뒤에서 장면의 모든 재질을 미리 컴파일해요(`KHR_parallel_shader_compile` 이 있으면 `compileAsync`, 없으면 `compile`) — 숨어 있는 비·눈·물웅덩이·밤 불빛, 테두리 빛(hover), 66-fx 의 순간이동 문·구역 현판·레벨업 빛기둥도 포함이라 처음 쓸 때 프레임이 멈추지 않아요(옹이 잔상만 플레이어 모델이 필요해서 처음 달릴 때 만들어요).
 - 로컬 모드 저장은 브라우저마다 따로이고 사이트 데이터 삭제 시 사라집니다 → 설정/개발자 센터에서 **내보내기** 권장.
 - 음성 입력(채팅)은 HTTPS(또는 localhost)와 Web Speech 지원 브라우저에서만 동작합니다.
 - 실시간 채팅·접속자는 폴링(1~2초) 방식입니다. 3D 모델은 절차적 블록아웃(고품질 GLB 교체 훅 있음).
@@ -392,3 +392,12 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 
 ### 16.4 4단계 회귀 테스트 (QA 가 돌린 것)
 - `node tools/build.mjs --strict` → smoke(쉬운/보통 × 1366×768/390×844 모바일, 오류 0) → `G.sys.devcenter.runTests()` 전부 통과 → `node tools/kid-audit.mjs` exit 0 → 처음 화면 흐름(새 게스트 → 인트로 건너뛰기 → 전망대, 로그아웃 → 다시 들어와 마지막 자리) → 높은 품질 밭·만장대 스크린샷(검은 영역 없음) → `node tests/server-e2e.mjs` 전부 PASS → 모든 서버 PHP `php -l` → `node tests/pii-client.mjs`.
+
+### 16.5 5단계 1차 버그 수정에서 바뀐 것 (기준: CONTRACT §13.9)
+- **서버 저장 충돌:** 게임은 저장할 때 마지막으로 받은 리비전을 `base` 로 보내요. 다른 창·기기가 그 사이 더 새로 저장했으면 서버가 409 `STALE_SAVE` 로 거절하고, 이 창은 서버의 최신 기록을 불러와 "다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요." 라고 알려요. 서버에 있는 더 새 기록이 이 창이 보낸 것(창을 숨길 때 보낸 비콘, 답을 못 받은 저장)이면 자기 저장이라 그 리비전으로 한 번 더 저장해요.
+- **서버 저장 형식:** 저장 데이터의 지도 키(가방·방문·도감·업적·배움 …)에 `constructor`·`__proto__`·`toString` 같은 Object.prototype 이름이 있으면 서버가 400 `INVALID_SAVE` 로 거절해요(게임의 normalize 도 지워요).
+- **로그인 시간이 끝났을 때:** 채팅·접속자 폴링이 401 을 먼저 받아도 다시 로그인 창이 떠요(`save:auth-lost {source:'social'}`).
+- **응답이 늦게 끝날 때:** 머리글은 왔는데 본문이 제한 시간 안에 다 오지 않으면 "HTTP_200" 실패가 아니라 네트워크 오류(`NETWORK_ERROR`)로 다뤄요 — 바쁜 서버에서 다시 시도해요.
+- **아이 화면:** 3D 이름표(이름·칭호)는 쉬운 모드에서 14 px 이상, 아이 채팅 말풍선·오늘(출석)·배움 화면 글자는 16 px 이상이에요. 아이 배움 슬라이드에서는 그림 속 어른용 작은 설명 글(`ev-cap`)을 감추고(아래 큰 글이 읽어 줘요), 미생물 그림의 이름표는 더 커졌어요.
+- **개발자 센터:** 자가 테스트가 94개예요(이번에 16개 추가: 저장 형식 고치기, 조사 '으로/로', 보호자 확인 쉬는 시간 상한, 상호작용 대상 등록, 퀴즈 보기 섞기, 낮은 충돌체 높이, 난간 옆 길 찾기, 접속 친구 달리기·이름표, 아이 신고 창, Tab 순환, 이모지 104 %, 키오스크 고르기, 하늘 빛 텍스처, 테두리 빛 셰이더, 화면 배율, GPU 잃었을 때 사진). 데이터 검사는 게임이 켜진 뒤 **실제로 등록된 상호작용 대상**으로 퀘스트·도감을 확인해요 — 끝낼 수 없는 목표는 오류예요. 아이 점검의 대비·크기 검사는 SVG 그림 글자(화면 크기로 재요)와 이모지(❤️ 의 보이지 않는 글자)를 잘못 세지 않아요.
+

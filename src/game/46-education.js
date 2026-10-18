@@ -1347,6 +1347,8 @@ ${fl}
     _edu: null, _quiz: null, _lib: null, _hall: null,
     _interactIds: new Set(),
     _viewLog: new Map(),
+    /** developer-center self-test seam: the slot order one kid quiz opening uses (null: ⭕ / ❌ or no kid quiz) */
+    _kidOrder(quizId) { const k = kidQuizOf(G.data.quizzes?.[quizId]); return k ? kidOrder(k) : null; },
 
     init() {
       this._registerInteractables();

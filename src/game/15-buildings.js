@@ -1829,10 +1829,12 @@
     // camera: the merged roof is single-sided and its eave is low (3.9 m above the site), so a follow-camera ray from a
     // child standing inside slips out through the fascia band and the camera settles above the tiles, looking at the
     // roof instead of the child. An invisible closed hexagonal hull (double-sided, a box would also catch the floor)
-    // wraps the roof with a margin; its flat underside sits just below the beam ring, so the camera stays under the
-    // roof and behind the child (as at 만장대).
+    // wraps the roof with a margin (as at 만장대). Its flat underside sits at the lowest edge of the eave soffit (the
+    // middle of each eave side, level with the top of the beam ring): a line of sight that is still below it at the
+    // eave passes under the fascia, and the camera keeps its clearance below it, i.e. below the beams, under the roof
+    // and behind the child.
     {
-      const Rh = ro.R + 0.65, yLo = floorH + postH - 0.25;
+      const Rh = ro.R + 0.65, yLo = ro.y - ro.t - 0.02;
       const prof = [[0.02, ro.y + ro.rise + 0.95], [Rh, ro.y + ro.lift + 0.45], [Rh, yLo], [0.02, yLo]].map(([r, y]) => new THREE.Vector2(r, y));
       const hull = new THREE.Mesh(new THREE.LatheGeometry(prof, n, rot0, TAU), Site.hullMat);
       hull.name = 'roof-hull'; hull.visible = false; hull.castShadow = false; hull.receiveShadow = false;
@@ -1991,7 +1993,9 @@
           const site = new Site(b);
           fn(site, b);
           tris += site.B.tris;
-          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' ? ['thatch'] : ['roof'] });
+          // tiled roofs: the eave underside (soffit) and its edge strips (fascia) block the camera too — a follow ray
+          // that slips under the tiles must not leave the camera above the roof (only buckets that exist are added)
+          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' ? ['thatch'] : ['roof', 'soffit', 'fascia'] });
           site.group.userData.building = b;
           site.group.userData.colliders = site.colliders;
           this.groups[b.id] = site.group;

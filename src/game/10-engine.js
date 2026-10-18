@@ -473,9 +473,9 @@
       renderer.domElement.setAttribute('tabindex', '0');
       renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this._lost = true; G.ui?.toast?.('그래픽 장치가 잠깐 쉬고 있어요. 계속 멈춰 있으면 새로고침해 주세요.', { type: 'warn', duration: 6000 }); });
       renderer.domElement.addEventListener('webglcontextrestored', () => {
-        // the baked environment target belongs to the lost context: drop it without dispose() (that would delete
+        // the environment bake targets belong to the lost context: drop them without dispose() (that would delete
         // objects of the old context on the new one) and re-bake
-        this._lost = false; this._envRT = null; this._envDir = null; this._envDirty = true; this._envTimer = 0;
+        this._lost = false; this._envRT = null; this._envCam = null; this._envDir = null; this._envDirty = true; this._envTimer = 0;
         G.log.info('ENGINE', 'WebGL context restored');
       });
       container.appendChild(renderer.domElement);
@@ -655,8 +655,8 @@
       if (opts.intensity != null) this.sun.intensity = opts.intensity;
       if (opts.color != null) this.sun.color.set(opts.color);
       // the environment re-bakes when the sky look changed (opts.env: weather transitions, time jumps) or once the sun
-      // crept a few degrees since the last bake — not on every small step of its arc (each bake is a GPU pass, a new
-      // target and a program re-check for every lit material)
+      // crept a few degrees since the last bake — not on every small step of its arc (each bake renders the sky cube
+      // and the PMREM blur passes)
       const step = THREE.MathUtils.degToRad(ENV_SUN_STEP[this.preset?.name] ?? 3);
       if (opts.env || !this._envDir || this._envDir.angleTo(this.sunDir) > step) this._envDirty = true;
     },
@@ -744,14 +744,67 @@
       const su = this.sky.material.uniforms, eu = this._envSky.material.uniforms;
       for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG']) eu[k].value = su[k].value;
       eu.sunPosition.value.copy(this.sunDir);
-      const rt = this._pmrem.fromScene(this._envScene, 0, 0.1, 1100);
-      if (this._envRT) this._envRT.dispose();
-      this._envRT = rt;
-      this.scene.environment = rt.texture;
+      // sky cube -> PMREM, both into targets kept for the whole session: scene.environment stays the same texture
+      // object, so lit materials keep their programs (pmrem.fromScene allocated a new target per bake, and the new
+      // texture made every lit material re-check its program on the next frame)
+      if (!this._envCam) this._envCam = new THREE.CubeCamera(0.1, 1100, new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType }));
+      this._envCam.update(this.renderer, this._envScene);
+      this._envRT = this._pmrem.fromCubemap(this._envCam.renderTarget.texture, this._envRT);
+      this.scene.environment = this._envRT.texture;
       this.scene.environmentIntensity = this.envIntensity ?? 0.5; // baked sky ~= sun; keep IBL as a soft fill
       (this._envDir || (this._envDir = new THREE.Vector3())).copy(this.sunDir);
       this._envDirty = false;
     },
+    /** behind the loading screen (core runs postInit before the loader hides): every system has built its scene */
+    async postInit() { await this.precompile(); },
+
+    /**
+     * compile the shader program of every material in the scene, hidden ones included (rain, snow, puddles, night
+     * glows, fireflies…) and the outline glow, so the first rain, night or hover does not freeze the game while the
+     * driver links programs. With KHR_parallel_shader_compile the wait does not block the page (capped at maxWait).
+     * The programs match the frame's: environment baked first, and on post-processing presets compiled for a render
+     * target (linear output, tone mapping in the output pass) like the RenderPass draws.
+     */
+    async precompile(maxWait = 12000) {
+      const r = this.renderer, scene = this.scene;
+      if (!r || !scene || !this.camera || this._isLost()) return 0;
+      const t0 = performance.now();
+      if (this._envDirty) this.updateEnvironment(true);
+      const warm = this._outlineWarmers();
+      const prev = r.getRenderTarget();
+      let job = null;
+      scene.add(warm);
+      try {
+        r.setRenderTarget(this.composer ? this.composer.readBuffer : null);
+        // compiles now; with the extension the promise waits for the driver to finish (compileAsync would also warn
+        // in the console when it is missing — the plain compile hands the same work to the driver)
+        if (r.extensions?.has?.('KHR_parallel_shader_compile')) job = r.compileAsync(scene, this.camera);
+        else r.compile(scene, this.camera);
+      } catch (e) { G.log.warn('ENGINE', 'shader precompile failed', e); }
+      finally {
+        r.setRenderTarget(prev);
+        scene.remove(warm);
+        warm.children[0].geometry.dispose();
+      }
+      if (job) await Promise.race([job, new Promise((res) => setTimeout(res, maxWait))]);
+      const n = r.info.programs?.length || 0;
+      G.log.info('ENGINE', `precompiled ${n} shader programs in ${Math.round(performance.now() - t0)} ms`);
+      return n;
+    },
+    /** stand-ins carrying the outline glow material in each variant it is drawn with (plain, instanced, skinned) */
+    _outlineWarmers() {
+      const mat = this._outlineMaterial(), g = new THREE.BoxGeometry(0.1, 0.1, 0.1), n = g.attributes.position.count;
+      g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(n * 4), 4));
+      g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Float32Array(n * 4).fill(0.25), 4));
+      const bone = new THREE.Bone(), skinned = new THREE.SkinnedMesh(g, mat);
+      skinned.add(bone);
+      skinned.bind(new THREE.Skeleton([bone]));
+      const grp = new THREE.Group();
+      grp.name = 'outline-warm';
+      grp.add(new THREE.Mesh(g, mat), new THREE.InstancedMesh(g, mat, 1), skinned);
+      return grp;
+    },
+
     /** the GL context is gone (the 'webglcontextlost' event arrives asynchronously, after the loss itself) */
     _isLost() {
       if (this._lost) return true;
@@ -942,8 +995,8 @@
       for (const g of groups) {
         if (/^jar:/.test(g.name)) { add(g); continue; }
         for (const c of g.children) {
-          // a merged small-prop batch goes as a whole (its nearest point decides); the big merged surfaces never do —
-          // culling a batch by its own bounds would make neighbouring props of different batches pop at random distances
+          // a merged small-prop batch is culled as a whole once its nearest point is beyond the limit; the big merged
+          // surfaces (plazas, walls, plots) never are
           if (/^props-detail-/.test(c.name)) add(c, Infinity);
           else if (!/^props-cell-/.test(c.name)) add(c);
         }
@@ -995,11 +1048,12 @@
       }
     },
 
-    render() {
+    /** draw one frame. opts.force: never thinned out (a photo reads the frame right after) — the loop passes dt */
+    render(opts) {
       // also between the real loss and its (asynchronous) event: a first-use program would throw inside three
       if (this._isLost()) return;
       // The opaque developer center hides the world (render ~1/6); a large blocking modal covers most of it (~1/3).
-      const cover = document.body.classList.contains('dc-open') ? 6
+      const cover = opts?.force ? 1 : document.body.classList.contains('dc-open') ? 6
         : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3 : 1;
       if (cover > 1) {
         this._skip = ((this._skip || 0) + 1) % cover;

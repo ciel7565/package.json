@@ -36,6 +36,11 @@ final class SaveValidator
     private const JAR_STATES = ['EMPTY', 'PREPARING', 'FERMENTING', 'AGING', 'COMPLETE', 'CLAIMED'];
     private const JAR_ACTIVE = ['PREPARING', 'FERMENTING', 'AGING'];
     private const REGROW = 30.0; // herbs restart at 30 % after a harvest (crop category is not exported → applied to all)
+    /** names of Object.prototype members (+ 'prototype'): as a save-map key ('inventory.constructor', 'visited.__proto__')
+     *  they resolve to an inherited function on every client, so the server never stores them (03-state normalize
+     *  drops them on the client side too) */
+    private const PROTO_KEYS = ['__proto__', 'constructor', 'prototype', 'toString', 'toLocaleString', 'valueOf', 'hasOwnProperty',
+        'isPrototypeOf', 'propertyIsEnumerable', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'];
 
     private array $violations = [];
     private array $notes = [];
@@ -68,6 +73,19 @@ final class SaveValidator
     private static function bad(string $why): never
     {
         throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.', ['reason' => $why]);
+    }
+
+    /**
+     * malformed → 400 when any map key down to three levels (state → inventory / visited / education → completed …,
+     * the depth 03-state normalize cleans) is an Object.prototype member name. Runs on every save, validation on or off.
+     */
+    public static function assertNoProtoKeys(object $o, int $depth = 2, string $path = 'save'): void
+    {
+        foreach (get_object_vars($o) as $k => $v) {
+            $k = (string) $k;
+            if (in_array($k, self::PROTO_KEYS, true)) self::bad('reserved key in ' . mb_substr($path, 0, 40));
+            if ($depth > 0 && $v instanceof \stdClass) self::assertNoProtoKeys($v, $depth - 1, $path === 'save' ? $k : "$path.$k");
+        }
     }
 
     // ------------------------------------------------------------------ public entry

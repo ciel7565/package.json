@@ -283,6 +283,9 @@ body.is-touch .edu-gl { cursor: default; }
 .modal.edu-modal.edu-kid { width: min(42rem, 100%); height: auto; max-height: 94vh; }
 .edu-kid .modal-body.ek-body { display: flex; flex-direction: column; align-items: center; gap: .8rem; padding: 1rem 1.1rem 1.2rem; overflow: auto; text-align: center; }
 .edu-kid .ek-visual { width: 100%; min-height: 0; height: clamp(13rem, 40vh, 20rem); flex: none; margin: 0; }
+/* kid slides: the slide line below the picture says it (and reads it aloud); the grown-up caption inside an
+   illustration would be small print for a 5-year-old */
+.edu-kid .edu-vis-svg .ev-cap { display: none; }
 .edu-kid .edu-vis-caption { display: none !important; }
 .edu-kid .edu-vis-hint { font-size: .9rem; padding: .3rem .75rem; }
 .edu-kid .edu-step { min-width: 6rem; font-size: 1rem; padding: .9rem .8rem .7rem; }
@@ -314,7 +317,7 @@ body.is-touch .edu-gl { cursor: default; }
 .kq-face svg { width: 100%; height: 100%; }
 .kq-bubble { position: relative; flex: 1; padding: .9rem 1.1rem; border-radius: 20px; background: #fffaf0; color: var(--kid-ink, #2b1d02); box-shadow: 0 6px 16px rgba(0, 0, 0, .25); }
 .kq-bubble::before { content: ''; position: absolute; left: -10px; top: 50%; translate: 0 -50%; border: 10px solid transparent; border-right-color: #fffaf0; border-left: 0; }
-.kq-q { margin: 0; font-size: 1.32rem; font-weight: 900; line-height: 1.45; word-break: keep-all; display: flex; align-items: center; gap: .5rem; }
+.kq-q { margin: 0; font-size: max(16px, 1.32rem); font-weight: 900; line-height: 1.45; word-break: keep-all; display: flex; align-items: center; gap: .5rem; }
 .kq-q-t { flex: 1; }
 .kq-q .easy-speak { width: var(--tap, 56px); height: var(--tap, 56px); flex: none; font-size: 1.25rem; }
 .kq-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
@@ -335,7 +338,7 @@ body.is-touch .edu-gl { cursor: default; }
 /* ---- picture library */
 .modal.edu-lib.edu-lib-kid { width: min(52rem, 100%); }
 .kl-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: .6rem; margin-bottom: 1rem; }
-.kl-stat { display: inline-flex; align-items: center; gap: .45rem; padding: .45rem 1rem; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .16); font-weight: 700; }
+.kl-stat { display: inline-flex; align-items: center; gap: .45rem; padding: .45rem 1rem; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .16); font-weight: 700; font-size: max(16px, 1rem); }
 .kl-stat .emoji { font-size: 1.4rem; }
 .kl-stat b { font-size: 1.15rem; color: var(--kid-gold, #ffcf4a); }
 .kl-tile .kl-stars { letter-spacing: .05em; color: #8a6a00; font-size: max(1rem, 16px); }
@@ -382,11 +385,13 @@ body.reduce-motion .ek-text.ek-in, body.reduce-motion .ek-text.ek-back, body.red
   .ek-text.ek-in, .ek-text.ek-back, .ek-done, .kq-choice.is-right, .kq-shake, .kq-msg { animation: none; }
 }
 @media (max-width: 560px) {
-  .edu-kid .ek-visual { height: clamp(11rem, 32vh, 15rem); }
+  /* phones: the picture uses the full width (its labels stay readable, ≥ 15 px on a 390 px screen) */
+  .edu-kid .ek-visual { height: clamp(11rem, 34vh, 19rem); }
+  .edu-kid .ek-visual .edu-vis-layer { padding: .35rem; }
   .ek-text { font-size: 1.2rem; }
   .ek-btns .easy-big-btn { flex: 1 1 8.5rem; min-width: 0; }
   .kq-face { width: 4.2rem; height: 4.2rem; }
-  .kq-q { font-size: 1.15rem; }
+  .kq-q { font-size: max(16px, 1.15rem); }
   .kq-choices { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
   .kq-choice .et-emoji { font-size: 2.6rem; min-height: 3.8rem; }
   .kq-choice .et-label { font-size: max(1rem, 16px); }

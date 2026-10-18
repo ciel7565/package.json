@@ -44,6 +44,7 @@
 .ong-card-face .ong-svg { width: 4.3rem; height: auto; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, .35)); }
 .ong-card-main { min-width: 0; display: flex; flex-direction: column; gap: .2rem; padding-bottom: .1rem; }
 .ong-card-name { display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem; font-weight: 800; color: var(--gold); letter-spacing: .02em; }
+body.easy .ong-card-name { font-size: max(16px, .9rem); }
 .ong-card-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 10rem; }
 .ong-card-text { margin: 0; font-size: .93rem; font-weight: 600; line-height: 1.45; color: #fff8ea; word-break: keep-all; overflow-wrap: anywhere; min-height: 1.4em; }
 .ong-card-actions { margin-top: .3rem; display: flex; gap: .4rem; }
@@ -192,7 +193,7 @@ body.reduce-motion .ong-svg.ong-bob, body.reduce-motion .ong-svg.ong-blink .ong-
 .ong-card.ong-kid { min-width: 17rem; min-height: calc(var(--tap, 56px) * 2 + 1rem); max-width: min(30rem, 94vw); padding: .7rem calc(var(--tap) + .35rem) .8rem .55rem; border-width: 2px; border-radius: 24px 24px 24px 10px; }
 .ong-card.ong-kid .ong-card-face { width: 5.2rem; height: 5.2rem; margin-top: -2rem; }
 .ong-card.ong-kid .ong-card-face .ong-svg { width: 5.1rem; }
-.ong-card.ong-kid .ong-card-name { font-size: .9rem; }
+.ong-card.ong-kid .ong-card-name { font-size: max(16px, .9rem); }
 .ong-card.ong-kid .ong-card-text { font-size: 1.14rem; font-weight: 800; line-height: 1.4; }
 .ong-card.ong-kid .ong-card-actions { margin-top: .45rem; }
 .ong-card.ong-kid .ong-card-act { min-height: var(--tap, 56px); min-width: 0; padding: .4rem 1.1rem; font-size: 1.08rem; }
@@ -214,7 +215,7 @@ body.reduce-motion .ong-svg.ong-bob, body.reduce-motion .ong-svg.ong-blink .ong-
 .ong-kid-ward .ong-ward-item.active { border-color: #ffd43b; color: var(--kid-ink, #23301f); background: #fff3c4; box-shadow: 0 0 0 3px rgba(255, 212, 59, .45), 0 4px 0 rgba(0, 0, 0, .22); }
 .ong-kid-ward .ong-ward-item.locked { cursor: pointer; }
 .ong-kid-ward .ong-ward-thumb .ong-svg { width: 3.8rem; }
-.ong-kid-ward .ong-ward-lock { font-size: .78rem; }
+.ong-kid-ward .ong-ward-lock { font-size: max(16px, .78rem); }
 .ong-kid-ward .ong-ward-sec h4 { font-size: 1.05rem; color: #ffe9a8; }
 .ong-kid-ward .ong-ward-note { font-size: .95rem; font-weight: 700; }
 .ong-kid-ward .modal-foot .btn { min-height: var(--tap, 56px); font-size: 1.05rem; padding-inline: 1.1rem; border-radius: 999px; }

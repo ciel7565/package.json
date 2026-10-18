@@ -1092,7 +1092,8 @@
       }
 
       // ---- sub-stepped locomotion: steering + velocity + turning + collisions + ground, <= MAX_SUBSTEP each
-      const reach = Math.max(Math.hypot(v.x, v.z), manual ? mwant : (this._walk ? RUN : 0)) * dt;
+      // (a fall counts too: at a low frame rate one slice of a jump's descent could otherwise pass a rock top)
+      const reach = Math.max(Math.hypot(v.x, v.z), manual ? mwant : (this._walk ? RUN : 0), this.grounded ? 0 : Math.abs(v.y) + GRAVITY * dt) * dt;
       const n = frozen ? 1 : clamp(Math.ceil(reach / MAX_SUBSTEP), 1, MAX_SUBSTEPS);
       const sdt = dt / n;
       let moved = false, pushed = false, lastWant = 0;
@@ -1155,12 +1156,20 @@
             } else p.y = ground;
           }
           if (!this.grounded) {
+            const py0 = p.y;
             v.y -= GRAVITY * sdt;
             p.y += v.y * sdt;
-            const g2 = W.heightAt(p.x, p.z, p.y + 0.3);
+            // a top passed during this slice still catches the walker (fromY spans the whole slice)
+            const g2 = W.heightAt(p.x, p.z, Math.max(p.y + 0.3, py0 + 0.05));
             if (p.y <= g2 && v.y <= 0) {
               const impact = -v.y;
               p.y = g2; v.y = 0; this.grounded = true;
+              // landed on something that is no platform (a bush, small decor) or against a trunk: slide off it
+              _t1.set(p.x, p.y, p.z);
+              if (W.resolve(_t1, RADIUS, p.y) && !W.isWater(_t1.x, _t1.z) && !W.blocked(_t1.x, _t1.z, RADIUS - 0.03, p.y)) {
+                const gy = W.heightAt(_t1.x, _t1.z, p.y + 0.3);
+                if (fin(gy) && Math.abs(gy - p.y) < 0.7) this._slideTo(_t1.x, gy, _t1.z, 0.18);
+              }
               if (impact > 3) {
                 this._stepOpts.surface = W.surfaceAt(p.x, p.z); this._stepOpts.run = false;
                 G.sfx('land', this._stepOpts);

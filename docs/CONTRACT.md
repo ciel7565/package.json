@@ -42,7 +42,8 @@ node tools/smoke.mjs --file $SCR/game.html --eval "G.sys.player?.teleport?.(40,0
 node tools/smoke.mjs --file $SCR/game.html --script $SCR/steps.mjs   # export default async (page, ctx) => { ...page.screenshot({path}) ... }
 ```
 - `smoke.mjs` waits for `G.ready === true`, prints page/console errors, fragment errors (`G.__fragmentErrors`),
-  system errors (`G.__systemErrors`) and exits 1 if any occurred. `--viewport 1366x768`, `--mobile` are available.
+  system errors (`G.__systemErrors`) and exits 1 if any occurred — or if `--eval` / `--script` threw (a failed
+  assertion in a step script fails the run). `--viewport 1366x768`, `--mobile` are available.
 - Headless WebGL is software (SwiftShader): low FPS there is expected. Judge visuals by **reading the PNG
   screenshots** (Read tool) and iterate until it looks good. Use quality=medium or high for visual checks.
 - URL params: `autostart=1` (skip title, guest login), `notutorial=1`, `quality=low|medium|high`, `debug=1`, `local=1`.
@@ -661,11 +662,14 @@ the valley and names each zone), prayer-flag-free Korean styling (stone lanterns
 safe walkable stone stair/switchback path down to the experience-center paths (no gaps, no colliders blocking,
 `walkTo`/A* can route from it to ZONE_MAIN). Data address note stays a display-only disclaimer (location naming
 is in-game styling, not verified geography). **New players spawn on the deck facing the valley**
-(`G.layout.spawn`); returning players keep their saved position. First-entry **intro cinematic** (skippable with
+(`G.data.layout.spawn`, 02-layout); returning players keep their saved position. First-entry **intro cinematic** (skippable with
 any key/tap, ≤ 9 s, respects reduceMotion → a short fade instead): drone sweep from above the valley up the ridge
 onto the pavilion, letterbox bars, 3D title card "정선 만장대" + subtitle, then hand-off to follow camera behind the
 player. Everything new lives in **`src/game/17-manjangdae.js` + `src/styles/17-manjangdae.css`**
-(`G.sys.manjangdae = { lookout:{x,y,z}, intro(opts)->Promise, titleShot()->{pos,look} , zoneId }`), plus the
+(`G.sys.manjangdae = { zoneId, lookout:{x,y,z}, intro({force, reduced})->Promise<{skipped, reduced}>, introActive,
+whenIntroDone()->Promise, titleShot()->{pos, look, cinematic}, tour(startZoneId?)->Promise, tourActive, openGuide(section?),
+walkSpot(from?)->{x,z}|null }`, events `manjangdae:intro {phase:'start'|'end', skipped, reduced}` /
+`manjangdae:tour {phase, zoneId}` — the 17-manjangdae.js header is the reference), plus the
 needed edits to 01-data (zone, POI, quest/tutorial wording "만장대에서 내려가 발효마스터를 만나요", education/info
 sign), 02-layout (spawn, anchors), 11-terrain (plateau + carved path, no zero-normals), 50-minimap (zone shown,
 travel target), 70-app title shot uses `G.sys.manjangdae?.titleShot?.()` (owner ui-motion).
@@ -739,7 +743,18 @@ server register ignores chosen play mode (70-app).
   `G.gfx.canvasTexture` halves canvases over 600 000 px and uses anisotropy 1 on the low preset; FPS is measured on the
   wall clock and auto-quality only judges windows ≤ 3 s long. `grade(params|null, layer)` layers: contrast / exposure /
   saturation multiply, warmth / vignette / flash add.
-- **Motion:** every scale pop ≤ 1.04 (no overshoot past 4 %); the zone banner ends early when the zone changes;
+  `engine.precompile(maxWait = 12000)` (run by `postInit` behind the loader) compiles every scene material, hidden ones
+  included (rain, snow, puddles, night glows, the outline glow, 66-fx portal / zone board / level-up pillar, all built
+  hidden at fx init). `engine.render({force})` is what photo capture uses — a forced frame is never thinned out behind
+  modals. `engine.onResize(fn(cssW, cssH, pixelRatio))`: the pixel ratio is `min(devicePixelRatio, preset.pixelRatio)`
+  and follows browser zoom / a screen change via `matchMedia`. `setSun(el, az, {env:true})` re-bakes the environment;
+  otherwise a bake happens every 3° of sun (6° on low), always into the same persistent environment texture
+  (`scene.environment` keeps its object, so lit materials keep their programs). The distance-cull limit scales with the
+  camera zoom (telescope). 16-props puts small props into per-44 m-cell `props-detail-*` batches (culled as a cell);
+  the big `props-cell-*` surfaces are never culled.
+- **Motion:** every scale pop ≤ 1.04 (no overshoot past 4 %); the zone banner ends early when the zone changes; it
+  rests under the top HUD bars, travels with the camera (same size walking or running), stays on screen when the camera
+  turns, and waits for / lifts away from the onboarding coach card;
   minimap travel plays the portal "out" dissolve 220 ms before the teleport (skipped under reduceMotion).
 - **UI events:** `ui:modal-open {id, className}` (the parent gate adopts only grown-up screens, 12.2).
 - **Kid chat:** in easy mode other players' messages show only when they are preset phrases / emoji (`pub.kidPhrase`);
@@ -755,3 +770,62 @@ server register ignores chosen play mode (70-app).
   `weather:rainbow {on:true}` and at most one a minute per `weather:shootingstar` (never during the intro / telescope /
   a dialog); the 62-engagement ranking shows `G.ui.skeleton()` rows while loading; the dev-center GPU tab shows the
   current frame's draw calls / triangles and the distance-cull count.
+
+### 13.9 Phase 5 (bug sweep) round 1 — behaviour and APIs added by the fixes
+- **World queries (06):** a collider with a finite `maxY` is a standable top in `G.world.heightAt(x, z, fromY)` when
+  `maxY <= fromY` (its `minY` is honoured: a walker whose head is below `minY` is not on it); `fromY = Infinity`
+  (`surfaceHeight`) ignores collider tops. `G.world.blocked(x, z, r, feetY)` honours `minY` / `maxY` exactly like
+  `resolve()` (an overhead beam does not block, a low top the feet are above does not). NPCs, visitors, 옹이 and remote
+  players rely on these. `addCollider({…, maxY, stand:false})` keeps `maxY` for blocking only — the top is never a
+  platform (12-nature shrubs, 62-engagement decor and sign posts): a walker that lands on one slides off. Shrub tops sit
+  0.1 m above the highest ground beside them, so a bush on a slope is never "passed over" from the uphill side.
+- **Inventory (30):** `G.sys.inventory.room(itemId)` → how many more fit (0 = that stack is full) and
+  `G.sys.inventory.fullNotice(itemId)` (the "가방이 꽉 찼어요" toast, kid words in easy mode). Harvest, jar claim and
+  craft refuse to run at 0 room (nothing is used up).
+- **Education (45/46):** `G.sys.education.openTool(toolId)` — the traditional-tool card; `layout.tools` are registered as
+  interactables of kind `'tool'` (Q_CULTURE counts 3 distinct ones). `G.data.toolInfo[TOOL_*] = {model?, icon, tagline,
+  text, facts:[[label, value]…], kid}`; `G.data.kidSigns[SIGN_*] = {title, text}` (the kid sign card). Kid quiz picture
+  choices are shuffled per opening (⭕ / ❌ keep their places); `_kidOrder(quizId)` is the dev self-test seam. In kid
+  lesson slides the small grown-up caption inside an illustration (`class="ev-cap"`) is hidden — the slide line reads it.
+- **Journal (47):** entries reference album photos (`photo: null` + `photoId` → `G.state.photos`); a copy is kept only
+  for uploads or photos the album dropped, within a budget fitted under `limits.saveMaxBytes` together with the album
+  (oldest copies go first). `onStateLoaded` drops non-object rows.
+- **Local storage full (03 LocalAdapter):** a save that hits the quota frees room step by step and retries after each:
+  this profile's `<key>.corrupt` stash, then `<key>.bak`, then diary `data:` copies in the written copy (copies of photos
+  the album keeps first, then all; entries keep their `photoId`), then the oldest album photos of the written copy (as
+  many of the newest photos as fit, binary search). Only the WRITTEN copy is trimmed — `G.state` keeps every photo and diary
+  picture, so repeated saves under quota write the same copy and never shrink the album further. `G.save.quota =
+  {tight, noted}` (reset per profile): `tight` stops 47-journal copying album photos back into entries; one toast per
+  profile session. A load whose storage probe throws a quota error says "저장 공간이 꽉 찼어요" (not "blocked").
+  `LocalAdapter.remove()` and local account / kid-profile deletion also remove `<key>.corrupt`.
+- **Session expiry in server mode (70-app):** in easy mode the re-login is a kid card ("어른을 불러 주세요") → parent gate
+  (`'login'`) → password form; never a password box first. The relogin keeps the account's "로그인 상태 유지" choice;
+  register.php accepts `remember` like login.php. An expected 401 on save logs a warning, not an error.
+- **Farming (40):** rain fills beds to 92 % at most (`RAIN_WATER_CAP`); watering by hand still reaches 100.
+- **Quest kid cards (31):** a `photo` objective with `photoZone` outside that zone shows 👉 같이 가기 (walk there) instead
+  of opening the camera — the same rule as `G.easy.nextStep()`.
+- **Server saves (03 + server):** `ServerAdapter.rev` is the revision this tab is based on (`get.php` / `save.php`
+  answers; 0 for a brand-new player, `null` = unknown); every save — and the page-hide beacon — sends
+  `{version, checksum, base, data[, csrf]}` in that key order. A stale base → HTTP 409 `STALE_SAVE` with the stored copy:
+  the tab restores it (toast "다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.") and continues from its revision;
+  when the stored copy is one this tab sent itself (`ServerAdapter.sent`: the `savedAt` of its last 8 saves / beacons — a
+  page-hide beacon, or a save whose answer was lost) the save is retried once with that revision instead.
+  The revision resets on every `useProfile` (login / logout). The server refuses (400 `INVALID_SAVE`) any map key down to
+  three levels that is an Object.prototype member name (`__proto__`, `constructor`, `toString`, …), validation on or off.
+- **Session end:** 60-social reports a 401 / `AUTH_REQUIRED` from chat or presence polling as
+  `save:auth-lost {source:'social'}` once per server session (re-armed by the next successful request); 70-app's relogin
+  dialog is idempotent.
+- **Network (03):** `G.net.request` treats an answer whose body did not finish before the time limit as
+  `NETWORK_ERROR` (status 0, retried like any timeout) — never as a refusal `HTTP_200`.
+- **Kid text sizes:** in easy mode 3D name tags (`.wl.nametag .nm / .role`) are ≥ 14 px; kid chat bubbles, the 오늘
+  hub, kid lesson stats and the kid quiz question are ≥ 16 px; chat initials are dark ink on a light per-name pastel.
+- **Camera (15, 22):** tiled hanok roofs add their eave underside and edge strips (`soffit`, `fascia` buckets) to
+  `G.world.cameraBlockers` next to `roof`. When the spot the camera would take is crowded (a roof just above or
+  below), `_occlusion` bisects (4 probes) for the largest clear distance between 1.05 m and that spot instead of
+  stepping in by 0.6 m, so a low roof (정자) keeps the distance it allows.
+- **Developer center (80):** with the world up, the linter checks quest `interact` objectives against the registered
+  interactables (`G.interact.get(id)`, or ≥ `count` of `G.interact.list(kind)` — quests count distinct ids) and
+  collection `{on:'interact', id}` unlocks (error when it is the item's only rule). The kid audit measures SVG text at
+  its on-screen size, skips colour contrast for drawings (their `fill` sits on the drawing's own shapes) and ignores
+  emoji joiners / variation selectors. Self-tests: 94 (16 added for these fixes).
+

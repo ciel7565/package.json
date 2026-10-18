@@ -1,6 +1,6 @@
 <?php
 /**
- * POST api/auth/register.php  {email, nickname, password, password_confirm, agree}
+ * POST api/auth/register.php  {email, nickname, password, password_confirm, agree, remember?}
  * → {user:{id,email,nickname,role}}  (logged in; new session id + CSRF token)
  * Errors: EMAIL_INVALID / EMAIL_TAKEN / NICKNAME_INVALID / NICKNAME_TAKEN / PASSWORD_WEAK / PASSWORD_MISMATCH / TERMS_REQUIRED
  */
@@ -10,8 +10,9 @@ require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\{Api, ApiException, Audit, Ctx, Db, Http, Log, RateLimit, Sec, Session, Users};
 
-// attempts (typos, weak passwords, taken nicknames) count per browser session; the accounts actually created count per
-// IP (register_ip) — a classroom behind one NAT address is not locked out by children's input mistakes
+// attempts (typos, weak passwords) count per browser session; complete forms — accounts created, or an e-mail /
+// nickname already taken — count per IP (register_ip): a classroom behind one NAT address is not locked out by
+// children's input mistakes, and "is this e-mail registered?" probes stay capped per IP as before
 Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], function (Ctx $c): array {
     if ($c->user) throw new ApiException(409, 'ALREADY_LOGGED_IN', '이미 로그인되어 있어요. 로그아웃한 뒤 가입해 주세요.');
     $b = $c->json(8192);
@@ -25,9 +26,9 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], functio
     if ($e = Users::validPassword($pw, $email, $nick)) throw new ApiException(400, 'PASSWORD_WEAK', $e);
     if (!hash_equals($pw, $pw2)) throw new ApiException(400, 'PASSWORD_MISMATCH', '비밀번호가 일치하지 않아요.');
     if (($b['agree'] ?? false) !== true) throw new ApiException(400, 'TERMS_REQUIRED', '이용약관 및 개인정보 처리 안내에 동의해 주세요.');
+    RateLimit::hit('register_ip', 'ip:' . Sec::hashId(Http::clientIp()));
     if (Users::byEmail($email)) throw new ApiException(409, 'EMAIL_TAKEN', '이미 가입된 이메일이에요. 로그인해 주세요.');
     if (Users::byNickname($nick)) throw new ApiException(409, 'NICKNAME_TAKEN', '이미 사용 중인 닉네임이에요.');
-    RateLimit::hit('register_ip', 'ip:' . Sec::hashId(Http::clientIp()));
     try {
         $u = Db::tx(fn () => Users::create($email, $nick, $pw));
     } catch (\PDOException $e) {
@@ -38,7 +39,8 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], functio
         }
         throw $e;
     }
-    Session::login($u, false);
+    // "이 기기에서 로그인 상태 유지" on the register form: the same long-lived session login.php gives
+    Session::login($u, ($b['remember'] ?? false) === true);
     Audit::log('register', (int) $u['id'], ['role' => $u['role']], $u['role'] === 'admin' ? 'warn' : 'info');
     Log::info('AUTH', 'account created', ['uid' => (int) $u['id']]);
     return ['user' => Users::publicUser($u), 'isNew' => true];

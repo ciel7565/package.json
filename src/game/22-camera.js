@@ -427,13 +427,22 @@
             const hit = castBlockers(this._ray, look, _dir, Math.max(len, wanted + 1.2) + 0.3, blockers, 0.2);
             let d = Number.isFinite(hit) ? Math.max(1.05, hit - 0.35) : Infinity;
             // clearance at the spot the camera would take: a roof just above (camera under the eaves) or just below
-            // fills the near plane although the line of sight slips past it — step in until it is clear
+            // fills the near plane although the line of sight slips past it — move in to the largest clear distance
+            // between 1.05 m and here (bisection, 4 probes: within 1/16 of that span): a low roof (정자) keeps the
+            // distance it allows instead of losing up to 0.6 m to fixed steps
             let at = Math.min(d, wanted);
-            for (let k = 0; k < 4 && at > 1.05; k++) {
+            if (at > 1.05) {
               _probe.copy(look).addScaledVector(_dir, at);
-              if (!crowded(this._ray, _probe, blockers)) break;
-              at = Math.max(1.05, at - 0.6);
-              d = at;
+              if (crowded(this._ray, _probe, blockers)) {
+                let lo = 1.05, hi = at;
+                for (let k = 0; k < 4; k++) {
+                  const mid = (lo + hi) * 0.5;
+                  _probe.copy(look).addScaledVector(_dir, mid);
+                  if (crowded(this._ray, _probe, blockers)) hi = mid; else lo = mid;
+                }
+                at = lo;
+                d = at;
+              }
             }
             this._blockDist = d;
             oc.n = blockers.length; oc.look.copy(look); oc.dir.copy(_dir); oc.wanted = wanted;

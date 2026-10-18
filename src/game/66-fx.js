@@ -473,7 +473,12 @@
 
     // ------------------------------------------------------------ lifecycle
     init() {
-      this._ensure3D();
+      // the lazily made FX meshes are built now, hidden: engine.postInit precompiles every scene material behind the
+      // loader, so the first teleport portal, zone board or level-up pillar does not stall a frame linking a shader
+      // (the motion ghosts need the player rig and stay lazy)
+      if (this._ensure3D()) {
+        try { this._buildPillar(); CM.build(); } catch (e) { G.log.warn('UI', 'fx prebuild failed', e?.message || e); }
+      }
       this._bindEvents();
       this._applyBodyClass();
       // every G.easy.celebrate pop gets the kid party (08-easy emits easy:celebrate, CONTRACT §12.5)
@@ -1548,7 +1553,13 @@
       // first visit of a zone: a 3D name board floats in front of the camera
       on('zone:enter', ({ zone, first }) => {
         if (!first || !zone || !(zone.r > 0) || pnow() < this._quietUntil + 1500) return;
-        this._later(() => { if (G.state && G.sys.minimap?.currentZone?.id === zone.id) CM.banner(zone); }, 350);
+        // still there 0.35 s later; while the onboarding coach card covers the board's spot it waits (≤ ~10 s) for it
+        const show = (n) => {
+          if (!G.state || G.sys.minimap?.currentZone?.id !== zone.id) return;
+          if (CM.coachCovers()) { if (n < 14) this._later(() => show(n + 1), 700); return; }
+          CM.banner(zone);
+        };
+        this._later(() => show(0), 350);
       });
 
       on('quest:claimed', ({ questId }) => {
@@ -1838,6 +1849,33 @@
     const b = document.body;
     return !!(b && (b.classList.contains('photo-mode') || b.classList.contains('dialogue-open')));
   }
+  // ---- the zone name board (CM.banner) hangs BAN_DIST m in front of the camera, centred, under the top HUD bars
+  const BAN_DIST = 5.4;
+  /** view size at the board's distance and the board's scale (≤ 84 % of the view wide, ≤ 26 % high) */
+  function banFit(cam) {
+    const visH = 2 * BAN_DIST * Math.tan(THREE.MathUtils.degToRad(cam.fov || 55) / 2), visW = visH * Math.max(0.3, cam.aspect || 1);
+    return { visH, visW, sc: Math.min(1, (visW * 0.84) / 2.8, (visH * 0.26) / 0.9) };
+  }
+  /** px: lowest bottom edge of the top HUD bars ("다음 할 일", objective, profile, minimap…) over the columns [l, r] */
+  function hudTopUnder(l, r) {
+    const H = innerHeight;
+    let y = 0;
+    for (const id of ['easy-next', 'objective-hint', 'hud-profile', 'hud-player', 'hud-right']) {
+      const el = document.getElementById(id);
+      if (!el || el.hidden || !el.getClientRects().length) continue;
+      const b = el.getBoundingClientRect();
+      // bars only: a tall side column (the desktop minimap + quest panel) stands beside the board, not above it
+      if (b.width && b.top < H * 0.3 && b.height < H * 0.4 && b.left < r && b.right > l) y = Math.max(y, b.bottom);
+    }
+    return y;
+  }
+  /** the onboarding coach card (70-app) is up over the rect [l, t, r, b] (px) */
+  function coachOver(l, t, r, b) {
+    const co = document.querySelector('.coach-layer .coach:not([hidden])');
+    if (!co) return false;
+    const c = co.getBoundingClientRect();
+    return c.width > 0 && c.left < r && c.right > l && c.top < b && c.bottom > t;
+  }
   /** the low quality preset stays cheap: one afterimage, the short speed-line set */
   const lowQ = () => G.sys.engine?.quality === 'low';
   // Light effects (portal, light pillar) output premultiplied colour and blend "additively" in two ways: on the HDR composer
@@ -2120,7 +2158,7 @@
     },
   };
 
-  const _cv = new THREE.Vector3(), _cv2 = new THREE.Vector3(), _cn = new THREE.Vector3(), _cf = new THREE.Vector3(), _cr = new THREE.Vector3(), _cb = new THREE.Vector3();
+  const _cv = new THREE.Vector3(), _cv2 = new THREE.Vector3(), _cn = new THREE.Vector3(), _cf = new THREE.Vector3(), _cr = new THREE.Vector3(), _cb = new THREE.Vector3(), _cd = new THREE.Vector3(), _ce = new THREE.Vector3();
   const _cm4 = new THREE.Matrix4(), _cq = new THREE.Quaternion();
   const _rx = new Float32Array(RB_N), _ry = new Float32Array(RB_N), _rz = new Float32Array(RB_N);
 
@@ -2236,7 +2274,25 @@
       for (const m of [board, glow]) { m.frustumCulled = false; m.raycast = noRay; }
       const g = new THREE.Group(); g.name = 'fx-zone-banner'; g.add(glow, board); g.visible = false;
       scene.add(g);
-      this.ban = { g, board, glow, t: 0, dur: 3.4, active: false, pos: new THREE.Vector3(), snap: true, burst: false, scale: 1, zone: null };
+      this.ban = { g, board, glow, t: 0, dur: 3.4, active: false, pos: new THREE.Vector3(), cam: new THREE.Vector3(), snap: true, burst: false, scale: 1, zone: null,
+        chk: 0, top: 0, covered: false };
+    },
+    /** where the board rests on screen (px): centred, ~30 % above the middle, but under the top HUD bars (top: their
+     *  bottom edge, measured unless given) — on a phone the fixed spot ran under "다음 할 일" / the objective bar */
+    _banSpot(cam, top) {
+      const W = innerWidth, H = innerHeight, f = banFit(cam);
+      const bw = ((2.8 * f.sc) / f.visW) * W, bh = ((0.9 * f.sc) / f.visH) * H;
+      const l = (W - bw) / 2, r = (W + bw) / 2;
+      if (top == null) top = hudTopUnder(l, r);
+      const yc = clamp(Math.max(H * 0.195, top + 6 + bh / 2), 0, H * 0.42);
+      return { f, l, r, t: yc - bh / 2, b: yc + bh / 2, yc, top };
+    },
+    /** the onboarding coach card covers the board's spot (a first-visit board waits for it, a shown one lifts away) */
+    coachCovers() {
+      const cam = G.sys.engine?.camera;
+      if (!cam) return false;
+      const s = this._banSpot(cam);
+      return coachOver(s.l, s.t, s.r, s.b);
     },
 
     // ------------------------------------------------------------ per frame
@@ -2550,6 +2606,7 @@
       }
       B.board.material.map = tex; B.board.material.needsUpdate = true;
       B.t = 0; B.active = true; B.snap = true; B.burst = false; B.zone = zone.id; B.g.visible = true;
+      B.chk = 0; B.covered = false;
       B.dur = kid ? 3.8 : 3.4;
       return true;
     },
@@ -2557,20 +2614,37 @@
       const B = this.ban;
       const cam = G.sys.engine?.camera;
       B.t += dt;
-      // left the zone (fast travel, teleport, walked on): the board lifts away now instead of naming the wrong place
+      // the top HUD bars' bottom edge and the onboarding coach card: DOM reads ~4× a second, not every frame
+      if (cam && (B.chk -= dt) <= 0) {
+        B.chk = 0.25;
+        const s = this._banSpot(cam);
+        B.top = s.top; B.covered = coachOver(s.l, s.t, s.r, s.b);
+      }
+      // left the zone (fast travel, teleport, walked on) or the coach card came up over it: the board lifts away now
+      // instead of naming the wrong place / showing under the card
       const zNow = G.sys.minimap?.currentZone?.id || G.state?.player?.zoneId || null;
       // (the fade-out starts from where the board is now: the end moves up to 0.6 s from now, B.t keeps running)
-      if (zNow && B.zone && zNow !== B.zone && B.t < B.dur - 0.6) B.dur = B.t + 0.6;
+      if (((zNow && B.zone && zNow !== B.zone) || B.covered) && B.t < B.dur - 0.6) B.dur = B.t + 0.6;
       if (!cam || B.t >= B.dur || !G.state || cinematic()) { B.active = false; B.g.visible = false; return; }
-      const dist = 5.4;
-      const fov = THREE.MathUtils.degToRad(cam.fov || 55);
-      const visH = 2 * dist * Math.tan(fov / 2), visW = visH * Math.max(0.3, cam.aspect || 1);
-      const sc = Math.min(1, (visW * 0.84) / 2.8, (visH * 0.26) / 0.9);
-      // a spot ~30 % above the screen centre (just under the top HUD), 5.4 m in front of the camera; a soft spring gives it depth
+      const spot = this._banSpot(cam, B.top), sc = spot.f.sc;
+      // BAN_DIST m in front of the camera, ~30 % above the screen centre or just under the top HUD bars
       _cv.set(0, 0, -1).applyQuaternion(cam.quaternion);
       _cv2.set(0, 1, 0).applyQuaternion(cam.quaternion);
-      const want = _cb.copy(cam.position).addScaledVector(_cv, dist).addScaledVector(_cv2, visH * 0.305);
-      if (B.snap || !mo) { B.pos.copy(want); B.snap = false; } else B.pos.lerp(want, dampK(10, dt));
+      const want = _cb.copy(cam.position).addScaledVector(_cv, BAN_DIST).addScaledVector(_cv2, spot.f.visH * (0.5 - spot.yc / innerHeight));
+      // a soft spring gives it depth when the camera turns; the camera's own travel carries the board along (left to the
+      // spring it trailed ~v/10 m: at the 18 m/s run it hung 1.5 m closer, half again as big, over the HUD)
+      if (B.snap || !mo) { B.pos.copy(want); B.snap = false; }
+      else {
+        B.pos.add(_cd.subVectors(cam.position, B.cam)); B.pos.lerp(want, dampK(10, dt));
+        // the swing stays on screen: on a phone the board is 84 % of the view wide (little room beside it) and the HUD
+        // bars may sit right above it
+        const f = spot.f, dv = _cd.subVectors(B.pos, want);
+        _ce.set(1, 0, 0).applyQuaternion(cam.quaternion);
+        const mx = Math.max(0, (f.visW - 2.8 * sc * 1.06) / 2), my = Math.max(0, ((spot.t - spot.top - 6) / innerHeight) * f.visH);
+        B.pos.copy(want).addScaledVector(_ce, clamp(dv.dot(_ce), -mx, mx)).addScaledVector(_cv2, clamp(dv.dot(_cv2), -0.4 * sc, my))
+          .addScaledVector(_cv, clamp(dv.dot(_cv), -0.4, 0.4));
+      }
+      B.cam.copy(cam.position);
       const tOut = B.dur - 0.6;
       const out = B.t > tOut ? clamp((B.t - tOut) / 0.6, 0, 1) : 0;
       B.g.position.copy(B.pos);

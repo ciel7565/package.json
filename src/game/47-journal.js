@@ -282,6 +282,8 @@
     },
     onStateLoaded(state) {
       if (!Array.isArray(state.journal)) state.journal = [];
+      // rows that bypass normalize (imports by other code paths) must not break every journal view
+      state.journal = state.journal.filter((e) => e && typeof e === 'object');
       this._draft = null;
       this._kidDraft = null;
       this._refThumbs.clear();
@@ -314,7 +316,11 @@
         if (a) {
           this._refThumbs.set(e.photoId, a);
           if (e.photo && e.photo === a) { e.photo = null; changed = true; }
-        } else if (!e.photo && this._refThumbs.has(e.photoId)) { e.photo = this._refThumbs.get(e.photoId); changed = true; }
+        } else if (!e.photo && this._refThumbs.has(e.photoId) && !G.save?.quota?.tight) {
+          // copied back in only while local storage has room: under quota the copy would push every save over again
+          // (the entry still shows the picture this session through _refThumbs, see entryPhoto)
+          e.photo = this._refThumbs.get(e.photoId); changed = true;
+        }
       }
       for (const id of [...this._refThumbs.keys()]) if (!refs.has(id)) this._refThumbs.delete(id);
       const limit = Number(G.data.serverLimits?.saveMaxBytes) || 1500000;

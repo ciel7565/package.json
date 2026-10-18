@@ -304,8 +304,9 @@
     ['emailHostAt', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:look|looks|looking|meet|see|me|you|we|they|it|is|am|are|was|were|be|this|that|go|come|stay|play|eat|sit|wait|good|bad|laugh|smile|point|stare|arrive|here|there|home|school)\s)[\p{L}\p{N}._%+\-]{2,}\s+at\s+` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
     ['emailNoTld', PR`[\p{L}\p{N}._%+\-]{2,}\s*@\s*[a-z][a-z0-9\-]{2,}(?![\p{L}\p{N}.@])`, 'giu'],               // "kid@protonmail"
     ['mailWord', PR`(?:이메일|메일)\s*(?:주소)?\s*(?:은|는|이|가|:)?\s*[a-z0-9][a-z0-9._%+\-]{2,}|e-?mail\s*(?:address\s*)?(?:is|:)\s*` + P_ODD_ID, 'giu'],
-    // the id and the mail provider without any @: "dinokid 네이버", "dino77 지메일", "dinokid 다음 메일", "gmail dino77"
-    ['idProvider', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:hello|hi|hey|love|like|go|play|game|games|my|your|the|open|search|find|use|see|watch|webtoon|map|maps|news|app)\s)[a-z][a-z0-9._%+\-]{3,}\s*(?:` + P_MAIL_PROV + PR`(?:\s*(?:메일|mail|이메일)(?:로|으로|이야|야|이에요|예요|주소)?)?|(?:다음|daum|카카오|kakao)\s*(?:메일|mail)(?:로|으로|이야|야|이에요|예요|주소)?)(?![\p{L}\p{N}])`, 'giu'],
+    // the id and the mail provider without any @: "dinokid 네이버", "dino77 지메일", "dinokid 다음 메일", "gmail dino77" —
+    // not a word to look up there ("minecraft 네이버 검색해봐", "pokemon 네이버 웹툰")
+    ['idProvider', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:hello|hi|hey|love|like|go|play|game|games|my|your|the|open|search|find|use|see|watch|webtoon|map|maps|news|app)\s)[a-z][a-z0-9._%+\-]{3,}\s*(?:` + P_MAIL_PROV + PR`(?:\s*(?:메일|mail|이메일)(?:로|으로|이야|야|이에요|예요|주소)?|(?!\s*(?:검색|찾|쳐|웹툰|지도|뉴스|카페|블로그|쇼핑|사전|번역|앱|게임|동영상|영상|search|webtoon|map|news|cafe|blog|app)))|(?:다음|daum|카카오|kakao)\s*(?:메일|mail)(?:로|으로|이야|야|이에요|예요|주소)?)(?![\p{L}\p{N}])`, 'giu'],
     ['providerId', PR`(?<![\p{L}\p{N}])(?:` + P_MAIL_PROV + PR`|daum|다음\s*메일)(?:\s*(?:메일|mail|아이디|id|계정))?\s*(?:은|는|:)?\s*` + P_ODD_ID, 'giu'],
     // ---- links: scheme / www, invite & short links, bare domains, disguised dots, IP addresses
     ['url', PR`(?:https?|hxxps?):\/\/[^\s<>"]+|www\.[^\s<>"]+`, 'giu'],
@@ -1738,7 +1739,7 @@
         }
         recent.replaceChildren(...list.map((m) => {
           const ava = h('span', { class: 'skc-ava', 'aria-hidden': 'true' }, m.self ? '😊' : Array.from(m.name)[0] || '?');
-          if (!m.self) ava.style.background = `hsl(${nameHue(m.name)} 70% 62%)`;
+          if (!m.self) ava.style.background = `hsl(${nameHue(m.name)} 80% 80%)`; // light pastel under dark ink (60-social.css)
           const hidden = this._kidHidden(m);
           const row = h('div', { class: `skc-msg${m.self ? ' me' : ''}` }, ava, h('div', { class: 'skc-bub' }, h('b', null, m.self ? '나' : m.name), hidden ? h('span', { class: 'kid-hidden' }, '✉️ 글자 메시지예요') : h('span', null, this._kidText(m))));
           row.__easySpeak = { btn: null, text: this._kidSpeakText(m) };
@@ -1939,7 +1940,7 @@
       if (id === 'hi') { if (this.sendChat(`${name}, 안녕하세요! 👋`, 'all', { reply: 'greet' })) { this._kidListenUntil = performance.now() + 12000; if (rec?.position) G.sys.player?.faceTowards?.(rec.position.x, rec.position.z); this._lastEmote = -1e9; this.emote('EMO_HELLO'); } }
       else if (id === 'go') {
         if (npcRec && G.interact?.activate) G.interact.activate(npcRec.id);
-        else if (pos && G.easy?.goTo) G.easy.goTo({ x: pos.x, z: pos.z, label: who }, { stopDistance: 2 });
+        else if (pos && G.easy?.goTo) G.easy.goTo({ x: pos.x, z: pos.z, label: who }, { stopDistance: 2, person: true });
         else this._goTo(info, rec, npcRec);
       } else if (id === 'block') {
         // the visible question is long-press readable, so it names a stranger "친구" too
@@ -3242,7 +3243,7 @@
     _startServer() {
       const now = performance.now();
       // network timers run on the wall clock (game dt is capped and slows down on weak devices)
-      this._srv = { nextPres: now + 300, nextChat: now + 150, presBusy: false, chatBusy: false, fails: 0, lastId: 0, first: true, presFirst: true, online: 0, appKey: '', appT: 0, pending: [], sentIds: new Set(), missing: new Map(), warned: false };
+      this._srv = { nextPres: now + 300, nextChat: now + 150, presBusy: false, chatBusy: false, fails: 0, lastId: 0, first: true, presFirst: true, online: 0, appKey: '', appT: 0, pending: [], sentIds: new Set(), missing: new Map(), warned: false, authLost: false };
       G.log.info('NETWORK', 'social: server presence & chat polling started');
     },
     _stopServer() { this._srv = null; },
@@ -3251,6 +3252,7 @@
     _netFail(e) {
       const S = this._srv;
       if (!S) return;
+      this._authCheck(e);
       S.fails++;
       if (S.fails >= 3 && !S.warned) {
         S.warned = true;
@@ -3259,9 +3261,21 @@
       }
       G.log.warn('NETWORK', 'social request failed', e?.code || e);
     },
+    /**
+     * the server session ended (401 / AUTH_REQUIRED): chat and presence polling often notice before the next autosave,
+     * so tell 70-app once (its relogin dialog is idempotent); a later successful request re-arms the report
+     */
+    _authCheck(e) {
+      const S = this._srv;
+      if (!S || S.authLost || !(Number(e?.status) === 401 || e?.code === 'AUTH_REQUIRED')) return false;
+      S.authLost = true;
+      G.bus.emit('save:auth-lost', { source: 'social' });
+      return true;
+    },
     _netOk() {
       const S = this._srv;
       if (!S) return;
+      S.authLost = false;
       if (S.warned) { S.warned = false; this.system('✅ 서버에 다시 연결되었어요.'); }
       S.fails = 0;
     },
@@ -3377,7 +3391,7 @@
         const tag = h('button', { class: 'nametag remote', type: 'button', title: `${name} · 클릭하면 메뉴가 열려요`, 'data-say': '친구예요. 누르면 친구 메뉴가 열려요.' }, dot, nm);
         const root = h('div', { class: 'soc-label' }, bubble, tag);
         const label = G.ui.label({ el: root, target: rig.headAnchor, offsetY: 0.04, maxDist: LABEL_DIST, fadeDist: 8 });
-        o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId, label, el: { root, bubble, tag, dot, nm }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, tsp: 0, tAt: 0, repDt: 1.5, loco: null, rsp: 0, anim: null, emoteAt: r.emoteAt, appKey: '', hidden: false };
+        o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId, label, el: { root, bubble, tag, dot, nm }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, tsp: 0, tAt: 0, repDt: 1.5, repAge: 0, loco: null, rsp: 0, anim: null, emoteAt: r.emoteAt, appKey: '', hidden: false };
         tag.addEventListener('click', (e) => { e.stopPropagation(); this._openUser(tag, { name: o.name, kind: 'remote', id }); });
         group.position.set(x, y != null ? y : G.world.surfaceHeight(x, z), z);
         group.rotation.y = rot;
@@ -3402,6 +3416,8 @@
         const at = r.age != null ? nowMs - r.age : nowMs;
         if (o.tAt) o.repDt = clamp(o.repDt + ((at - o.tAt) / 1000 - o.repDt) * 0.3, 0.5, 2.5); // typical gap between reports
         o.tAt = at;
+        o.repAge = (nowMs - at) / 1000;   // seconds since that report; _updateRemotes advances it by the frame time
+        // (not o.el: that is the record's name-tag elements)
       }
       o.tx = x; o.tz = z; o.ty = y; o.trot = rot; o.zoneId = r.zoneId || o.zoneId;
       // dead reckoning between updates: keep going the way the player faces at the reported pace (walk / run / jump)
@@ -3423,7 +3439,6 @@
     },
     _updateRemotes(dt) {
       const cam = G.sys.engine.camera.position;
-      const nowMs = performance.now();
       let moving = false;
       for (const o of this.others.values()) {
         if (o.kind !== 'remote') continue;
@@ -3433,8 +3448,9 @@
         // where the player should be by now: the last report + its reported motion since then, for at most about one
         // and a half report gaps (a player who stopped is not carried on for ever); stops at walls
         let ex = o.tx, ez = o.tz, vx = 0, vz = 0;
+        o.repAge = (o.repAge || 0) + dt;
         if (o.tsp > 0.2 && o.tAt) {
-          const el = (nowMs - o.tAt) / 1000, cap = Math.max(1.2, (o.repDt || 1.5) * 1.5);
+          const el = o.repAge, cap = Math.max(1.2, (o.repDt || 1.5) * 1.5);
           const lead = o.tsp * clamp(el, 0, cap);
           const fx = o.tx + Math.sin(o.trot) * lead, fz = o.tz + Math.cos(o.trot) * lead;
           let free = true;
@@ -3446,10 +3462,14 @@
         }
         const gap = Math.hypot(ex - p.x, ez - p.z);
         if (gap > snapDist(o.tsp)) { p.x = ex; p.z = ez; }                     // far behind (teleport, lost reports): snap
-        // move with the target (no steady trailing at 18 m/s), then close the remaining gap — faster when further behind
+        // move with the target (no steady trailing at 18 m/s), then close the remaining gap — faster when further behind,
+        // but never in one lurch: a turn or a stop that a report tells late bends the path over a few frames
         p.x += vx * dt; p.z += vz * dt;
         const k = damp(3.2 + Math.min(6, gap * 0.35), dt);
-        p.x += (ex - p.x) * k; p.z += (ez - p.z) * k;
+        let cx = (ex - p.x) * k, cz = (ez - p.z) * k;
+        const cl = Math.hypot(cx, cz), cmax = (Math.max(8, o.tsp) + gap * 1.5) * dt;
+        if (cl > cmax) { cx *= cmax / cl; cz *= cmax / cl; }
+        p.x += cx; p.z += cz;
         const gy = o.ty != null ? o.ty : G.world.heightAt(p.x, p.z, p.y + 0.3);
         p.y += (gy - p.y) * damp(8, dt);
         o.rotY += angleDiff(o.rotY, o.trot) * damp(6, dt);
@@ -3558,6 +3578,7 @@
         onSent?.();
       } catch (e) {
         drop();
+        if (this._srv === S) this._authCheck(e);
         // the line stays in my log, but visibly not delivered (nobody else saw it)
         if (msg?._el) { msg._el.classList.remove('sending'); msg._el.classList.add('failed'); msg._el.appendChild(G.ui.h('span', { class: 'chat-failed' }, '⚠️ 안 보내졌어요')); }
         if (e?.code === 'RATE_LIMITED' || e?.status === 429) G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn' });

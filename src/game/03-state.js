@@ -211,6 +211,12 @@
       } finally { clearTimeout(timer); }
       if (json && json.csrf) G.net.csrf = json.csrf;
       if (json && json.serverTime) G.time.serverOffset = Number(json.serverTime) - Date.now();
+      // the time limit ran out while the answer's body was still arriving (a busy single-threaded server answers
+      // the headers late): that is a timeout like any other, not a refusal with status 200
+      if (!json && ctrl?.signal?.aborted) {
+        if (!opts.quiet) G.log.warn('API', `${method} ${path} timed out reading the answer`);
+        throw new ApiError('NETWORK_ERROR', '서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.', 0);
+      }
       if (!json || json.success !== true) {
         const err = (json && json.error) || {};
         throw new ApiError(err.code || `HTTP_${res.status}`, err.message || '작업을 완료하지 못했습니다. 잠시 후 다시 시도해주세요.', res.status, json && json.data);
@@ -359,7 +365,6 @@
   /** what this tab last read or wrote per save key: {sig, ok} (ok = that copy is a valid save) */
   const seen = new Map();
   const sig = (raw) => (raw ? `${raw.length}:${raw.slice(0, 200)}` : '');
-  let quotaNoted = false;
   const LocalAdapter = {
     name: 'local',
     key: (id) => `${PREFIX}save.${id}`,
@@ -404,53 +409,119 @@
         write(state);
       } catch (e) {
         if (e instanceof SaveConflict) throw e;
-        // quota: the backup copy goes first; only when that is not enough, the oldest photos (in the game too, so the
-        // album shows exactly what is kept)
+        // storage full: free room step by step, retrying after each step. Only the copy written here is trimmed —
+        // the game keeps every photo and diary picture (a later save tries again from the full state), so repeated
+        // saves under quota never shrink the album further (each one trims the same snapshot the same way).
+        const tryWrite = () => { try { write(state); return true; } catch (e2) { if (e2 instanceof SaveConflict) throw e2; return false; } };
+        const Q = G.save.quota;
+        // 1. the kept-aside damaged copy, then the backup copy
+        try { localStorage.removeItem(k + '.corrupt'); } catch (e2) { /* ignore */ }
+        if (tryWrite()) return { savedAt: state.savedAt };
         try { localStorage.removeItem(k + '.bak'); } catch (e2) { /* ignore */ }
-        try { write(state); }
-        catch (e3) {
-          const cut = Math.ceil(state.photos.length / 2);
-          state.photos.splice(0, cut);
-          const live = G.state && G.save.profile && G.save.profile.id === id ? G.state : null;
-          if (live && Array.isArray(live.photos)) live.photos.splice(0, Math.min(cut, live.photos.length));
-          for (const list of [state.journal, live?.journal]) for (const j of Array.isArray(list) ? list : []) if (j && typeof j.photo === 'string' && j.photo.length > 60000) j.photo = null;
-          write(state);
-          if (!quotaNoted) { quotaNoted = true; G.ui?.toast?.('저장 공간이 모자라서 오래된 사진을 조금 정리했어요.', { type: 'warn' }); }
+        if (tryWrite()) return { savedAt: state.savedAt };
+        // from here on the save leaves things out: 47-journal stops copying album photos back into diary entries
+        if (Q) Q.tight = true;
+        // 2. diary copies (data: URLs) in this copy: an entry keeps its photoId (47-journal shows the album photo
+        //    while the album has it). Copies of photos the album still keeps go first, then all of them
+        const dropCopies = (all) => {
+          const kept = new Set(state.photos.map((ph) => ph && ph.id).filter(Boolean));
+          for (const j of Array.isArray(state.journal) ? state.journal : []) {
+            if (j && typeof j.photo === 'string' && j.photo.startsWith('data:') && (all || (j.photoId && kept.has(j.photoId)))) j.photo = null;
+          }
+        };
+        dropCopies(false);
+        let ok = tryWrite();
+        if (!ok) { dropCopies(true); ok = tryWrite(); }
+        // 3. the oldest album photos of this copy: as many of the newest as fit are kept (binary search, ≤ 6 tries)
+        if (!ok) {
+          // (a refused write stores nothing, and every success keeps more photos than the one before it: the copy
+          // in storage is the last successful one = the largest count that fits)
+          const all = state.photos.slice();
+          let fits = -1, fails = all.length;
+          while (fails - fits > 1) {
+            const mid = (fits + fails) >> 1;
+            state.photos = all.slice(all.length - mid);
+            if (tryWrite()) fits = mid; else fails = mid;
+          }
+          if (fits < 0) throw e; // nothing left to leave out: the save fails (onFailed tells the player)
+        }
+        if (Q && !Q.noted) {
+          Q.noted = true;
+          G.ui?.toast?.('저장 공간이 모자라요. 오래된 사진은 일부만 저장돼요.', { type: 'warn', easy: '저장 공간이 모자라요. 어른에게 알려 줘요!', duration: 7000 });
         }
       }
       return { savedAt: state.savedAt };
     },
     remove(id) {
       const k = LocalAdapter.key(id);
-      try { localStorage.removeItem(k); localStorage.removeItem(k + '.bak'); seen.set(k, { sig: '', ok: true }); } catch (e) { /* ignore */ }
+      try { localStorage.removeItem(k); localStorage.removeItem(k + '.bak'); localStorage.removeItem(k + '.corrupt'); seen.set(k, { sig: '', ok: true }); } catch (e) { /* ignore */ }
     },
   };
 
+  const revOf = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
   const ServerAdapter = {
     name: 'server',
+    /** the server revision this tab's state is based on (get.php / save.php answers); sent as `base` so the server
+     *  refuses a stale tab's save (409 STALE_SAVE) instead of letting an old copy overwrite newer progress.
+     *  null = unknown (no base sent: accepted as before) */
+    rev: null,
+    /** savedAt of the copies this tab sent lately (saves and page-hide beacons): a STALE_SAVE whose stored copy is one
+     *  of them is this tab's own save (a beacon, or a save whose answer was lost) — adopt its revision, no restore */
+    sent: [],
+    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; },
+    mark(savedAt) { const L = ServerAdapter.sent; L.push(savedAt); if (L.length > 8) L.shift(); },
     async load() {
+      ServerAdapter.reset();
       const d = await G.net.request('player/get.php');
-      if (!d || !d.save || !d.save.data) return { data: null, source: 'none' };
+      if (!d || !d.save || !d.save.data) {
+        // a new player is based on "nothing stored yet" (0); an unreadable stored copy keeps the old rules (no base)
+        ServerAdapter.rev = d && !d.save && !d.corrupted ? 0 : null;
+        return { data: null, source: 'none' };
+      }
       let data = d.save.data;
       if (typeof data === 'string') data = JSON.parse(data);
+      ServerAdapter.rev = revOf(d.save.revision);
       return { data, source: 'server' };
+    },
+    /** the request body: key order version, checksum, base, data (the server checks the checksum on that slice) */
+    body(state, data) {
+      const rev = ServerAdapter.rev;
+      return { version: STATE_VERSION, checksum: checksum(data), ...(rev != null ? { base: rev } : {}), data: state };
     },
     async save(id, state) {
       const data = JSON.stringify(state);
-      const body = { version: STATE_VERSION, checksum: checksum(data), data: state };
-      try {
-        try { return await G.net.request('player/save.php', { body }); }
+      ServerAdapter.mark(state.savedAt);
+      const post = async () => {
+        try { return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data) }); }
         catch (e) {
           // a rotated session (login elsewhere, expiry) leaves this tab with an old CSRF token; the error answer
           // carries the current one — one retry tells a stale token apart from a real refusal (then 401 / 403)
           if (e.code !== 'CSRF_INVALID') throw e;
-          return await G.net.request('player/save.php', { body });
+          return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data) });
+        }
+      };
+      const done = (res) => { const r = revOf(Number(res?.revision)); if (r != null) ServerAdapter.rev = r; return res; };
+      try {
+        try { return done(await post()); }
+        catch (e) {
+          // the newer stored copy is one this very tab sent (its page-hide beacon, or a save whose answer never
+          // arrived): adopt that revision and save again
+          const st = e?.data?.save, at = st?.data?.savedAt;
+          if (e.code !== 'STALE_SAVE' || !st || !at || !ServerAdapter.sent.includes(at) || revOf(st.revision) == null) throw e;
+          ServerAdapter.rev = st.revision;
+          return done(await post());
         }
       } catch (e) {
-        if (e.code === 'VALIDATION_FAILED' && e.data && e.data.save) {
-          // server rejected suspicious progress -> restore server copy
-          G.log.warn('SAVE', 'server rejected save, restoring server state', e.message);
-          G.save._pendingServerRestore = e.data.save;
+        const st = e && e.data && e.data.save;
+        if ((e.code === 'VALIDATION_FAILED' || e.code === 'STALE_SAVE') && st) {
+          // VALIDATION_FAILED: the server rejected suspicious progress; STALE_SAVE: another tab / device saved newer
+          // progress since this tab loaded. Either way the stored copy comes back and later saves build on it.
+          if (revOf(st.revision) != null) ServerAdapter.rev = st.revision;
+          if ((st.data && typeof st.data === 'object') || typeof st.data === 'string') {
+            G.log.warn('SAVE', e.code === 'STALE_SAVE' ? 'a newer save exists on the server, restoring it' : 'server rejected save, restoring server state', e.message);
+            G.save._pendingServerRestore = st;
+            G.save._pendingServerRestoreCode = e.code;
+          }
         }
         throw e;
       }
@@ -468,8 +539,11 @@
     G.state.settings = { ...G.settings };
     return JSON.parse(JSON.stringify(G.state, (k, v) => (k.startsWith('_') ? undefined : v)));
   }
+  /** a storage error that means "full" (not "blocked") */
+  const isQuotaError = (e) => !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
+  /** true = saving works, 'full' = storage is there but full, false = the browser blocks site storage */
   function storageWorks() {
-    try { const k = `${PREFIX}__probe`; localStorage.setItem(k, '1'); localStorage.removeItem(k); return true; } catch (e) { return false; }
+    try { const k = `${PREFIX}__probe`; localStorage.setItem(k, '1'); localStorage.removeItem(k); return true; } catch (e) { return isQuotaError(e) ? 'full' : false; }
   }
   // server mode: the newest progress the server has not confirmed yet (session ended, outage, tab closed with only
   // the beacon) is kept on this device; 70-app offers it at the next login of the same account
@@ -543,6 +617,9 @@
     /** true once another tab saved the same profile (local mode): saves are refused until a reload */
     conflict: false,
     _fail: freshFail(),
+    /** local storage ran full this session (per profile): tight = saves leave old photos / diary copies out (47-journal
+     *  then stops copying album photos back into entries), noted = the player was told once */
+    quota: { tight: false, noted: false },
     createDefaultState,
     checksum,
     migrate,
@@ -573,8 +650,10 @@
     useProfile(profile, mode) {
       G.save.profile = profile;
       G.save.adapter = mode === 'server' ? ServerAdapter : LocalAdapter;
+      ServerAdapter.reset(); // a revision belongs to one login of one account
       G.save.conflict = false;
       G.save._fail = freshFail();
+      G.save.quota = { tight: false, noted: false };
       const chip = document.getElementById('hud-mode');
       if (chip) { chip.textContent = mode === 'server' ? '서버' : '로컬'; chip.classList.toggle('server', mode === 'server'); chip.title = mode === 'server' ? '서버에 저장됩니다' : '이 브라우저에 저장됩니다'; }
     },
@@ -591,8 +670,10 @@
       const isNew = !res.data;
       const state = normalize(res.data, profile);
       state._isNew = isNew;
-      const warn = (msg) => G.ui?.toast?.(msg, { type: 'warn', duration: 6000 });
-      if (G.save.adapter === LocalAdapter && !storageWorks()) warn('이 브라우저는 저장을 막아 두었어요. 창을 닫으면 놀던 것이 사라져요.');
+      const warn = (msg, easy) => G.ui?.toast?.(msg, { type: 'warn', duration: 6000, ...(easy ? { easy } : {}) });
+      const works = G.save.adapter === LocalAdapter ? storageWorks() : true;
+      if (works === 'full') warn('저장 공간이 꽉 찼어요. 오래된 사진이나 쓰지 않는 프로필을 지워 주세요.', '저장 공간이 꽉 찼어요. 어른에게 알려 줘요!');
+      else if (!works) warn('이 브라우저는 저장을 막아 두었어요. 창을 닫으면 놀던 것이 사라져요.');
       else if (res.source === 'error') warn('저장된 기록을 불러오지 못해서 새로 시작해요.');
       else if (res.source === 'backup') warn('저장 파일이 망가져서 백업으로 되살렸어요.');
       else if (res.source === 'corrupted') warn('저장 파일이 망가져서 새로 시작해요. 옛 파일은 따로 보관했어요.');
@@ -620,13 +701,20 @@
         return true;
       } catch (e) {
         if (e && e.code === 'SAVE_CONFLICT') { markConflict(); return false; }
-        G.log.error('SAVE', 'save failed', e);
+        // a refusal the server answered with its stored copy (STALE_SAVE / VALIDATION_FAILED) is handled right here
+        if (G.save._pendingServerRestore) G.log.warn('SAVE', 'save refused, restoring the server copy', e?.code || e);
+        // an ended server session is expected (idle / lifetime): save:auth-lost and the re-login prompt handle it
+        else if (G.save.adapter === ServerAdapter && (Number(e?.status) === 401 || e?.code === 'AUTH_REQUIRED')) G.log.warn('SAVE', 'save needs a new login (session ended)', e?.code || e?.status);
+        else G.log.error('SAVE', 'save failed', e);
         if (G.save._pendingServerRestore) {
-          const srv = G.save._pendingServerRestore; G.save._pendingServerRestore = null;
+          const srv = G.save._pendingServerRestore, code = G.save._pendingServerRestoreCode;
+          G.save._pendingServerRestore = null; G.save._pendingServerRestoreCode = null;
           G.state = normalize(typeof srv.data === 'string' ? JSON.parse(srv.data) : srv.data, G.save.profile);
           G.save.applyProfileSettings(G.state);
           G.applyState();
-          G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
+          G.save.dirty = false;
+          if (code === 'STALE_SAVE') G.ui?.toast?.('다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.', { type: 'info', icon: 'save', easy: '다른 곳에서 논 것을 불러왔어요!' });
+          else G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
         } else onFailed(e, snap, opts);
         return false;
       } finally {
@@ -689,8 +777,9 @@
         pending.put(G.save.profile.id, snap);
         if (navigator.sendBeacon && G.net.csrf) {
           // best effort: the server also accepts beacons with the csrf token in the payload
-          const data = JSON.stringify({ version: STATE_VERSION, checksum: checksum(JSON.stringify(snap)), data: snap, csrf: G.net.csrf });
-          navigator.sendBeacon(G.net.base + 'player/save.php', new Blob([data], { type: 'application/json' }));
+          // with the same base as a normal save: a stale tab's beacon never overwrites newer progress either
+          const data = JSON.stringify({ ...ServerAdapter.body(snap, JSON.stringify(snap)), csrf: G.net.csrf });
+          if (navigator.sendBeacon(G.net.base + 'player/save.php', new Blob([data], { type: 'application/json' }))) ServerAdapter.mark(snap.savedAt);
         }
       }
     } catch (e) { /* ignore */ }

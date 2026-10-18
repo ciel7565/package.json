@@ -766,13 +766,21 @@
       const E = G.sys.engine;
       const r = E?.renderer;
       if (!r || !G.state) return null;
+      // a lost GPU context draws nothing: say so instead of saving a dark, empty picture to the album
+      let lost = !!E._lost;
+      try { lost = lost || !!r.getContext().isContextLost(); } catch (e) { lost = true; }
+      if (lost) {
+        G.ui.toast('지금은 사진을 찍을 수 없어요. 잠시 후 다시 찍어 주세요.', { type: 'warn', easy: '앗, 지금은 사진이 안 찍혀요. 조금 있다 다시 눌러 봐요!' });
+        return null;
+      }
       this._busy = true;
       try {
         const info = this._info();
         const easy = easyOn();
         const f = easy ? FILTERS[0] : filterById(this.filter);
-        // fresh frame in the drawing buffer, read it in the same task (preserveDrawingBuffer is off)
-        E.render();
+        // fresh frame in the drawing buffer, read it in the same task (preserveDrawingBuffer is off); forced: the
+        // engine thins out frames behind large modals
+        E.render({ force: true });
         const src = r.domElement;
         const w = src.width, h = src.height;
         const out = document.createElement('canvas');
