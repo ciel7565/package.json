@@ -14,10 +14,14 @@ use Tfm\{Api, ApiException, ChatFilter, Config, Ctx, Db, Presence, Session};
 
 Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
     Session::close();
-    $afterRaw = (string) ($_GET['after'] ?? '0');
-    if (!preg_match('/^\d{1,18}$/', $afterRaw)) throw new ApiException(400, 'INVALID_PARAM', '요청 값이 올바르지 않아요.');
+    // query values are strings, or arrays for ?after[]=… (never cast those: "Array to string" would be a 500)
+    $afterRaw = $_GET['after'] ?? '0';
+    $limitRaw = $_GET['limit'] ?? '60';
+    if (!is_string($afterRaw) || !preg_match('/^\d{1,18}$/', $afterRaw) || !is_string($limitRaw) || !preg_match('/^\d{1,4}$/', $limitRaw)) {
+        throw new ApiException(400, 'INVALID_PARAM', '요청 값이 올바르지 않아요.');
+    }
     $after = (int) $afterRaw;
-    $page = max(1, min((int) Config::get('chat.page_size', 60), (int) ($_GET['limit'] ?? 60)));
+    $page = max(1, min((int) Config::get('chat.page_size', 60), (int) $limitRaw));
     $now = $c->now;
     $cols = 'm.id, m.user_id, m.nickname, m.channel, m.text, m.x, m.z, m.created_at';
     $join = "JOIN users u ON u.id = m.user_id AND u.status = 'active'";

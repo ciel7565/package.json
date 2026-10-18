@@ -41,7 +41,8 @@
 //   * everything rendered from storage / server / imported saves is escaped or set via textContent / style APIs.
 //
 // localStorage keys: tfm.v1.accounts · tfm.v1.profiles (최근 플레이) · tfm.v1.lastProfile (id only) ·
-// tfm.v1.authLock (throttle) · tfm.v1.debugPanel. Onboarding state: G.state.tutorial {step, done, skipped}.
+// tfm.v1.authLock (throttle) · tfm.v1.debugPanel · tfm.v1.logoutPending (1). Onboarding state: G.state.tutorial
+// {step, done, skipped, startedAt}.
 // Hotkeys: Esc (input:menu) main menu · H help · F9 / ` developer center (fallback debug panel).
 // Actions: menu avatar help settings logout save devcenter. (08-easy owns stickerbook/today/express/sound/where/kid-chat)
 // =============================================================================
@@ -65,6 +66,7 @@
     last: 'tfm.v1.lastProfile',
     lock: 'tfm.v1.authLock',
     debugPos: 'tfm.v1.debugPanel',
+    logoutPending: 'tfm.v1.logoutPending', // server mode: a logout the server never confirmed (retried at start)
   };
   const SAVE_KEY = (id) => `tfm.v1.save.${id}`;
   const IDLE = { speed: 0, grounded: true, vy: 0 };
@@ -242,9 +244,9 @@
     if (typeof G.easy?.gate !== 'function') return true;
     try { return (await G.easy.gate({ reason, title, text })) === true; } catch (e) { G.log.warn('UI', 'parent gate failed', e?.message || e); return false; }
   }
-  /** will a gate actually be shown (vs. skipped / still unlocked)? */
-  function gateWillShow() {
-    try { const s = G.easy?.gateStatus?.(); return !!(s && s.required && !s.unlocked); } catch (e) { return false; }
+  /** will the gate for this reason actually be shown (vs. skipped / reusable)? logout / admin never reuse a pass */
+  function gateWillShow(reason) {
+    try { const s = G.easy?.gateStatus?.(reason); return !!(s && s.required && !s.unlocked); } catch (e) { return false; }
   }
   /** picture confirm in easy mode, the regular (html) confirm otherwise */
   function askConfirm(kid, html, opts = {}) {
@@ -634,7 +636,13 @@
       if (keys.length > 64) keys.sort((a, b) => (m[a].last || 0) - (m[b].last || 0)).slice(0, keys.length - 64).forEach((k) => delete m[k]);
       store.set(KEYS.lock, m);
     },
-    left(key) { const e = this._load()[key]; return e && e.until > now() ? Math.ceil((e.until - now()) / 1000) : 0; },
+    left(key) {
+      const e = this._load()[key];
+      if (!e || !(e.until > now())) return 0;
+      // a lock can never outlast LOCK_MAX: after the device clock moved back, the stored end could lie days ahead
+      if (e.until - now() > LOCK_MAX) { e.until = now() + LOCK_MAX; this._save(); }
+      return Math.ceil((e.until - now()) / 1000);
+    },
     fail(key) {
       const m = this._load();
       const t = now();
@@ -738,7 +746,7 @@
         try {
           // a remembered session of another account would make the server refuse (409 ALREADY_LOGGED_IN)
           if (this.serverUser) {
-            try { await G.net.request('auth/logout.php', { body: {}, timeout: 5000 }); } catch (e) { /* the register call reports real problems */ }
+            await this._serverLogout(); // the register call reports real problems
             this.serverUser = null;
           }
           const d = await G.net.request('auth/register.php', { body: { email, nickname, password, password_confirm: confirm, agree: true } });
@@ -868,33 +876,55 @@
       return null;
     },
 
-    /** server mode: who is logged in (session cookie)? */
+    /** server mode: who is logged in (session cookie)? A logout the server never confirmed is finished first. */
     async checkServer() {
       if (!isServer()) return null;
+      if (store.get(KEYS.logoutPending, null) && !(await this._serverLogout())) { this.serverUser = null; return null; } // never offer that session
       try { this.serverUser = normServerUser(await G.net.request('auth/me.php', { quiet: true, timeout: 5000 })); } catch (e) { this.serverUser = null; }
       return this.serverUser;
+    },
+    /** logout.php with retries; until the server confirms, a flag keeps the old session from being resumed */
+    async _serverLogout() {
+      store.set(KEYS.logoutPending, 1);
+      for (const wait of [0, 600, 1800]) {
+        if (wait) await U.sleep(wait);
+        try {
+          await G.net.request('auth/logout.php', { body: {}, timeout: 5000, quiet: true });
+          store.del(KEYS.logoutPending);
+          return true;
+        } catch (e) {
+          // 401: there is no session any more — that is a finished logout too
+          if (Number(e?.status) === 401) { store.del(KEYS.logoutPending); return true; }
+          G.log.warn('AUTH', 'server logout failed', e?.message || e);
+        }
+      }
+      return false;
     },
 
     async _serverLogin(login, password, remember) {
       const d = await G.net.request('auth/login.php', { body: { email: login, login, password, remember: !!remember } });
       const u = normServerUser(d);
       if (!u) throw new AuthError('로그인 응답을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.');
+      store.del(KEYS.logoutPending); // a fresh session replaced the one whose logout was pending
       this.serverUser = u;
       Profiles.upsert({ id: indexId(u), kind: 'server', nickname: u.nickname, role: u.role, ...rememberFields(!!remember) });
       G.log.info('AUTH', `server login ${u.id}`);
       return u;
     },
 
+    /** -> { serverOk } (serverOk false: the server session may still be alive — the caller tells the player) */
     async logout() {
       const cur = this.current;
       this.current = null;
-      if (!cur) return;
+      if (!cur) return { serverOk: true };
+      let serverOk = true;
       if (cur.kind === 'server' && isServer()) {
-        try { await G.net.request('auth/logout.php', { body: {}, timeout: 5000 }); } catch (e) { G.log.warn('AUTH', 'server logout failed', e?.message || e); }
+        serverOk = await this._serverLogout();
         this.serverUser = null;
       }
       if (cur.kind !== 'guest') Profiles.upsert({ id: indexId(cur), ...rememberFields(false) });
-      G.log.info('AUTH', `logout ${cur.kind}`);
+      G.log.info('AUTH', `logout ${cur.kind}${serverOk ? '' : ' (server not reached: retried on the next start)'}`);
+      return { serverOk };
     },
 
     /** rename the current player (local accounts and guests) -> '' on success or an error message */
@@ -1670,11 +1700,15 @@
       G.ui.hydrateIcons(home);
       if (hadFocus && !touchUI()) home.querySelector('.ts-start')?.focus({ preventScroll: true });
       const mode = this.el.querySelector('.ts-mode');
-      mode.className = `ts-mode ${server ? 'server' : 'local'}`;
+      // the server did not answer in time (see watchServer): say so instead of a plain "로컬 모드"
+      const late = !server && !!G.net.unreachable;
+      mode.className = `ts-mode ${server ? 'server' : 'local'}${late ? ' late' : ''}`;
       mode.innerHTML = server
         ? `<span class="dot"></span><b>서버 모드</b><span>계정 서버에 저장</span>`
-        : `<span class="dot"></span><b>로컬 모드</b><span>이 브라우저에 저장</span>`;
-      mode.title = server ? `서버에 연결됨${G.net.serverInfo?.version ? ` (API v${String(G.net.serverInfo.version).slice(0, 12)})` : ''}` : '서버 없이 실행 중 — 진행 상황은 이 브라우저(localStorage)에 저장돼요.';
+        : late ? `<span class="dot"></span><b>서버 연결 중</b><span>지금은 이 브라우저에 저장</span>`
+          : `<span class="dot"></span><b>로컬 모드</b><span>이 브라우저에 저장</span>`;
+      mode.title = server ? `서버에 연결됨${G.net.serverInfo?.version ? ` (API v${String(G.net.serverInfo.version).slice(0, 12)})` : ''}`
+        : late ? '서버가 늦게 답해서 잠시 로컬 모드예요. 계속 다시 연결해 보고, 연결되면 알려 드려요.' : '서버 없이 실행 중 — 진행 상황은 이 브라우저(localStorage)에 저장돼요.';
       this._renderWorld();
       this._renderProfiles();
       this._renderModebar();
@@ -2144,7 +2178,7 @@
             </div>
           </div>
           <div class="field ts-transfer" data-field="transferGuest" hidden>
-            <label class="check"><input type="checkbox" name="transferGuest"><span><span class="emoji">🎒</span> 게스트로 하던 진행 상황 이어받기</span></label>
+            <label class="check"><input type="checkbox" name="transferGuest"><span><span class="emoji">🎒</span> <span class="tg-text">게스트로 하던 진행 상황 이어받기</span></span></label>
           </div>
           <label class="check"><input type="checkbox" name="remember"> 이 기기에서 로그인 상태 유지 <small class="muted">(30일)</small></label>
           <div class="field ts-agree" data-field="agree">
@@ -2181,7 +2215,7 @@
         tr.hidden = !can;
         if (can) {
           const gp = Profiles.get(from);
-          tr.querySelector('span:last-child').textContent = ` 게스트(${gp?.nickname || '게스트'}${gp?.level ? ` · Lv.${Number(gp.level) || 1}` : ''}) 진행 상황 이어받기`;
+          tr.querySelector('.tg-text').textContent = `게스트(${gp?.nickname || '게스트'}${gp?.level ? ` · Lv.${Number(gp.level) || 1}` : ''}) 진행 상황 이어받기`;
         } else tr.querySelector('input').checked = false;
       }
     },
@@ -2432,6 +2466,7 @@
   const EASY_STEPS = [0, 2, 3];
   const AMBIENT_KINDS = new Set(['companion', 'bench', 'decor']);
   const _obV = new THREE.Vector3();
+  const _avB = new THREE.Vector3();
   const Onboarding = {
     active: false,
     step: -1,         // 0 move · 1 look · 2 marker · 3 talk · 4 final card
@@ -2499,7 +2534,10 @@
       if (!state) return;
       const t = state.tutorial && typeof state.tutorial === 'object' ? state.tutorial : (state.tutorial = { step: 0, done: false });
       if (G.flags.noTutorial || t.done) return;
-      if (!isNew && !(Number(t.step) > 0)) return; // existing saves from before onboarding existed
+      // saves from before onboarding existed: step 0, never started, already played. A tutorial that started but
+      // ended at step 0 (logout during / right after the intro, a tab reload) carries startedAt and resumes.
+      const played = Number(state.stats?.playTime) >= 60 || Object.keys(state.npcsTalked || {}).length > 0;
+      if (!isNew && !(Number(t.step) > 0) && !t.startedAt && played) return;
       // already talked to the master (e.g. imported save): only the final card is left
       const q = state.quests?.QUEST001;
       const talked = !!(state.npcsTalked?.NPC001) || (q && (q.status === 'completed' || q.status === 'claimed' || (Number(q.progress?.[0]) || 0) >= 1));
@@ -2510,7 +2548,7 @@
       if (!G.state) return;
       this.active = true;
       const t = G.state.tutorial || (G.state.tutorial = { step: 0, done: false });
-      if (!t.startedAt) t.startedAt = G.time.now();
+      if (!t.startedAt) { t.startedAt = G.time.now(); G.dirty('tutorial'); } // the mark must survive a tab close
       t.done = false;
       this._go(step, { silent: true });
       G.log.info('UI', `onboarding start at step ${step}`);
@@ -2589,12 +2627,13 @@
     /** easy mode: keep a pointing hand on the current step's target (re-point a while after the child tapped it) */
     _handTick() {
       if (this.step === 2 && this._going) return; // walking with 👉 같이 가기: no hand (and no per-frame lookups)
-      const touch = touchUI();
+      const touch = touchUI(), ctm = G.settings?.clickToMove !== false;
       const t = performance.now();
-      if (this._handKey && this._hStep === this.step && this._hTouch === touch && (this._hand?.active || t - this._handAt < 7000)) return;
+      if (this._handKey && this._hStep === this.step && this._hTouch === touch && this._hCtm === ctm && (this._hand?.active || t - this._handAt < 7000)) return;
+      if (this._hand && this._hCtm !== ctm) this._dropHand();
       const c = this._content();
       if (!c || !c.hand || typeof G.easy?.point !== 'function') return;
-      this._handKey = 'h'; this._hStep = this.step; this._hTouch = touch; this._handAt = t;
+      this._handKey = 'h'; this._hStep = this.step; this._hTouch = touch; this._hCtm = ctm; this._handAt = t;
       let target = c.hand;
       if (target === 'ground') { if (!this._ground) this._ground = this._groundPoint(); target = this._ground; if (!target) return; }
       else if (this.step === 2) { const go = $('#easy-next .en-go'); target = go && !go.hidden && go.offsetParent !== null ? go : '#easy-next'; }
@@ -2701,7 +2740,9 @@
         switch (this.step) {
           case 0: return touch
             ? { emoji: '🚶', text: '동그라미를 밀어서 걸어요!', say: '걸어 봐요! 동그라미를 손가락으로 밀어요.', anchor: '#joystick', hand: '#joystick', handLabel: '밀어요!' }
-            : { emoji: '🚶', text: '손가락이 가리키는 땅을 눌러요!', say: '걸어 봐요! 손가락이 가리키는 땅을 눌러요.', anchor: null, hand: 'ground', handLabel: '눌러요!' };
+            : G.settings?.clickToMove === false // 클릭해서 이동 is off: tapping the ground does nothing, the arrows do
+              ? { emoji: '🚶', text: '화살표를 눌러 걸어요!', say: '걸어 봐요! 화살표를 눌러요.', anchor: '#dpad', hand: '#dpad [data-dir=up]', handLabel: '눌러요!' }
+              : { emoji: '🚶', text: '손가락이 가리키는 땅을 눌러요!', say: '걸어 봐요! 손가락이 가리키는 땅을 눌러요.', anchor: null, hand: 'ground', handLabel: '눌러요!' };
           case 2: return this._going
             ? { emoji: '🚶', text: '같이 가고 있어요!', say: '같이 가고 있어요! 조금만 기다려요.', anchor: '#easy-next', hand: null }
             : { emoji: '👉', text: '같이 가기를 눌러요!', say: '같이 가기를 누르면 발효 할아버지에게 데려다줘요!', anchor: '#easy-next', hand: '#easy-next', handLabel: '눌러요!' };
@@ -2747,11 +2788,11 @@
     _render() {
       const easy = easyOn(), touch = touchUI();
       // cheap per-frame check first: nothing is built unless the step / input kind / mode changed
-      const going = !!this._going;
-      if (this._key && this._kStep === this.step && this._kTouch === touch && this._kEasy === easy && this._kGoing === going) return;
+      const going = !!this._going, ctm = G.settings?.clickToMove !== false;
+      if (this._key && this._kStep === this.step && this._kTouch === touch && this._kEasy === easy && this._kGoing === going && this._kCtm === ctm) return;
       const c = this._content();
       if (!c) return;
-      this._key = 'k'; this._kStep = this.step; this._kTouch = touch; this._kEasy = easy; this._kGoing = going;
+      this._key = 'k'; this._kStep = this.step; this._kTouch = touch; this._kEasy = easy; this._kGoing = going; this._kCtm = ctm;
       this.coach.classList.toggle('kid', easy);
       this.coach.style.width = ''; // _position may narrow it again (phones: clear of the left tiles)
       if (easy) {
@@ -2786,6 +2827,19 @@
       this._position();
     },
 
+    /** the player's figure on screen (feet to head, a little wider than the body) or null */
+    _avatarBox() {
+      const p = G.sys.player?.position, cam = G.sys.engine?.camera;
+      if (!p || !cam) return null;
+      const W = innerWidth, H = innerHeight;
+      _avB.set(p.x, p.y, p.z).project(cam);
+      if (_avB.z > 1) return null;
+      const fx = (_avB.x * 0.5 + 0.5) * W, fy = (-_avB.y * 0.5 + 0.5) * H;
+      _avB.set(p.x, p.y + 1.9, p.z).project(cam);
+      const hy = (-_avB.y * 0.5 + 0.5) * H;
+      const half = Math.max(36, (fy - hy) * 0.45);
+      return { left: fx - half, right: fx + half, top: Math.min(hy, fy) - 6, bottom: Math.max(hy, fy) + 6 };
+    },
     _position() {
       const co = this.coach;
       if (!co || co.hidden) return;
@@ -2820,6 +2874,13 @@
           const top = $('#hud-top-center')?.getBoundingClientRect();
           const minY = (top && top.height > 2 ? top.bottom : 96) + 10;
           if (y < minY) y = minY;
+          // the child must still see their character: a caption that would sit on the avatar goes above it (or
+          // just below it) when there is room there
+          const av = this._avatarBox();
+          if (av && y < av.bottom && y + ch > av.top && x < av.right && x + cw > av.left) {
+            if (av.top - ch - 10 >= minY) y = av.top - ch - 10;
+            else if (av.bottom + 10 + ch <= lim - 6) y = av.bottom + 10;
+          }
         }
         y = U.clamp(y, 8, Math.max(8, H - ch - 8));
         // phones: the big picture tiles on the left stay visible — the caption moves right of them (narrower if needed)
@@ -3636,7 +3697,7 @@
       const importBtn = h('button', { type: 'button', class: 'btn btn-soft' }, h('span', { class: 'ico ico-sm', 'data-icon': 'upload' }), '가져오기');
       // the file picker must open inside the click: gate first only when it would actually be shown
       importBtn.addEventListener('click', async () => {
-        if (gateWillShow()) { if (!(await parentGate('import', '저장 파일 가져오기'))) return; G.ui.toast('확인했어요. ‘가져오기’를 한 번 더 눌러 파일을 골라 주세요.', { type: 'info', emoji: '📥', sound: false }); return; }
+        if (gateWillShow('import')) { if (!(await parentGate('import', '저장 파일 가져오기'))) return; G.ui.toast('확인했어요. ‘가져오기’를 한 번 더 눌러 파일을 골라 주세요.', { type: 'info', emoji: '📥', sound: false }); return; }
         file.click();
       });
       file.addEventListener('change', async () => {
@@ -4052,6 +4113,49 @@
   const _avV = new THREE.Vector3();
 
   /** small separate WebGLRenderer turntable (disposed with the modal) */
+  /**
+   * ONE renderer for every avatar preview of the session: created on the first open, its canvas moved into each
+   * editor, shrunk to 1×1 between uses. A renderer per open leaked — three.js leaves 'dispose' listeners on the
+   * avatar's shared, cached geometries / materials, so each disposed renderer (its WebGL context, canvas and the closed
+   * dialog) stayed reachable. Input listeners are bound once and go to the editor that owns the canvas right now.
+   * A lost context (GPU reset) is replaced on the next open.
+   */
+  const PreviewGL = {
+    gl: null,
+    get() {
+      if (this.gl && !this.gl.lost) return this.gl;
+      const canvas = document.createElement('canvas');
+      canvas.className = 'av-canvas';
+      canvas.tabIndex = 0;
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', '아바타 미리보기 (끌거나 ← → 키로 돌리기)');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'low-power', preserveDrawingBuffer: false });
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      renderer.setClearColor(0x000000, 0);
+      const gl = { canvas, renderer, lost: false, owner: null };
+      const to = (fn) => (e) => { const o = gl.owner; if (o && !o.disposed) fn.call(o, e); };
+      const P = AvatarPreview.prototype;
+      canvas.addEventListener('pointerdown', to(P._onDown));
+      canvas.addEventListener('pointermove', to(P._onMove));
+      canvas.addEventListener('pointerup', to(P._onUp));
+      canvas.addEventListener('pointercancel', to(P._onUp));
+      canvas.addEventListener('keydown', to(P._onKey));
+      canvas.addEventListener('wheel', to(P._onWheel), { passive: false });
+      // WebGL context loss (GPU reset / too many contexts) -> static fallback instead of a black box
+      canvas.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        gl.lost = true;
+        G.log.warn('UI', 'avatar preview context lost');
+        const o = gl.owner;
+        if (o && !o.disposed) { o.dispose(); if (o.host?.isConnected) o._fallback(); }
+      });
+      this.gl = gl;
+      return gl;
+    },
+  };
+
   class AvatarPreview {
     constructor(host, appearance) {
       this.host = host;
@@ -4060,26 +4164,18 @@
       this._camPos = new THREE.Vector3(0, 0.9, 4.2); this._camLook = new THREE.Vector3(0, 0.7, 0);
       this._tPos = new THREE.Vector3(); this._tLook = new THREE.Vector3();
       this._raf = 0; this._last = 0; this.disposed = false;
-      const canvas = document.createElement('canvas');
-      canvas.className = 'av-canvas';
-      canvas.tabIndex = 0;
-      canvas.setAttribute('role', 'img');
-      canvas.setAttribute('aria-label', '아바타 미리보기 (끌거나 ← → 키로 돌리기)');
-      host.appendChild(canvas);
-      this.canvas = canvas;
-      try {
-        this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'low-power', preserveDrawingBuffer: false });
-      } catch (e) {
+      let gl = null;
+      try { gl = PreviewGL.get(); } catch (e) {
         G.log.warn('UI', 'avatar preview renderer failed', e?.message || e);
         this._fallback();
         return;
       }
-      const r = this.renderer;
-      r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      r.outputColorSpace = THREE.SRGBColorSpace;
-      r.toneMapping = THREE.ACESFilmicToneMapping;
-      r.toneMappingExposure = 1.0;
-      r.setClearColor(0x000000, 0);
+      this.gl = gl;
+      gl.owner = this;
+      this.canvas = gl.canvas;
+      host.appendChild(gl.canvas);
+      this.renderer = gl.renderer;
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       const scene = new THREE.Scene();
       this.scene = scene;
       const hemi = new THREE.HemisphereLight(0xfff4e2, 0x5b6b48, 1.7);
@@ -4111,36 +4207,27 @@
         this.rig = G.avatar.create(appearance, { shadow: false });
         this.turn.add(this.rig.group);
       } catch (e) { G.log.error('UI', 'avatar preview rig failed', e); this.rig = null; }
-      this._bind();
+      if (typeof ResizeObserver === 'function') { this._ro = new ResizeObserver(() => this._resize()); this._ro.observe(this.host); }
       this._resize();
       this._frameCamera(true);
       this._loop = this._loop.bind(this);
       this._raf = requestAnimationFrame(this._loop);
     }
     _fallback() {
-      this.failed = true;
-      this.canvas?.remove();
-      this.canvas = null;
+      this.failed = true; // (dispose() already took the shared canvas back)
       const fb = h('div', { class: 'av-fallback' }, h('span', { class: 'emoji' }, '🧑‍🌾'),
         h('p', null, '이 기기에서는 3D 미리보기를 표시할 수 없어요.', h('br'), '저장하면 게임 속 캐릭터에 바로 적용돼요.'));
       this.host.appendChild(fb);
     }
-    _bind() {
-      const c = this.canvas;
-      c.addEventListener('pointerdown', (e) => { this._drag = { id: e.pointerId, x: e.clientX }; try { c.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } });
-      c.addEventListener('pointermove', (e) => { const d = this._drag; if (!d || d.id !== e.pointerId) return; this.yaw += (e.clientX - d.x) * 0.012; d.x = e.clientX; this._idle = 0; });
-      const up = (e) => { if (this._drag && this._drag.id === e.pointerId) this._drag = null; };
-      c.addEventListener('pointerup', up);
-      c.addEventListener('pointercancel', up);
-      c.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); this.yaw += e.key === 'ArrowLeft' ? -0.35 : 0.35; this._idle = 0; }
-        else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); this.setView(e.key === 'ArrowUp' ? 'face' : 'full'); }
-      });
-      c.addEventListener('wheel', (e) => { e.preventDefault(); this.setView(e.deltaY < 0 ? 'face' : 'full'); }, { passive: false });
-      // WebGL context loss (GPU reset / too many contexts) -> static fallback instead of a black box
-      c.addEventListener('webglcontextlost', (e) => { e.preventDefault(); G.log.warn('UI', 'avatar preview context lost'); this.dispose(); if (this.host?.isConnected) this._fallback(); });
-      if (typeof ResizeObserver === 'function') { this._ro = new ResizeObserver(() => this._resize()); this._ro.observe(this.host); }
+    // input (bound once on the shared canvas by PreviewGL; `this` = the preview that owns it)
+    _onDown(e) { this._drag = { id: e.pointerId, x: e.clientX }; try { this.canvas?.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } }
+    _onMove(e) { const d = this._drag; if (!d || d.id !== e.pointerId) return; this.yaw += (e.clientX - d.x) * 0.012; d.x = e.clientX; this._idle = 0; }
+    _onUp(e) { if (this._drag && this._drag.id === e.pointerId) this._drag = null; }
+    _onKey(e) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); this.yaw += e.key === 'ArrowLeft' ? -0.35 : 0.35; this._idle = 0; }
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); this.setView(e.key === 'ArrowUp' ? 'face' : 'full'); }
     }
+    _onWheel(e) { e.preventDefault(); this.setView(e.deltaY < 0 ? 'face' : 'full'); }
     _resize() {
       if (!this.renderer) return;
       const w = Math.max(80, this.host.clientWidth), hh = Math.max(80, this.host.clientHeight);
@@ -4202,9 +4289,14 @@
       for (const m of this._meshes || []) { m.geometry.dispose(); m.material.dispose(); }
       for (const t of this._own || []) t.dispose();
       for (const l of this._lights || []) l.dispose?.();
-      try { this.renderer?.dispose(); this.renderer?.forceContextLoss?.(); } catch (e) { /* ignore */ }
-      this.canvas?.remove();
-      this.renderer = null; this.scene = null; this.rig = null; this._meshes = null; this._own = null; this._lights = null;
+      // the shared renderer stays (see PreviewGL): it lets go of this scene (render lists) and its big drawing buffer
+      const gl = this.gl;
+      if (gl && gl.owner === this) {
+        gl.owner = null;
+        try { gl.renderer.renderLists.dispose(); if (!gl.lost) gl.renderer.setSize(1, 1, false); } catch (e) { /* ignore */ }
+        gl.canvas.remove();
+      }
+      this.renderer = null; this.scene = null; this.rig = null; this._meshes = null; this._own = null; this._lights = null; this.gl = null; this.canvas = null;
     }
   }
 
@@ -4714,7 +4806,7 @@
 
   function openAdmin(tab = 'overview') {
     if (!G.state || !app.loggedIn) return null;
-    if (easyOn() && gateWillShow()) { parentGate('admin', '관리자 화면은 어른만').then((ok) => { if (ok && app.loggedIn) openAdmin(tab); }); return null; }
+    if (easyOn() && gateWillShow('admin')) { parentGate('admin', '관리자 화면은 어른만').then((ok) => { if (ok && app.loggedIn) openAdmin(tab); }); return null; }
     if (!canDashboard()) { G.ui.toast('관리자 권한이 있는 계정만 볼 수 있어요.', { type: 'warn' }); return null; }
     const ex = G.ui.modal.get('app-admin');
     if (ex) ex.close();
@@ -4942,6 +5034,103 @@
     hudEnter._t = setTimeout(() => hud.classList.remove('hud-enter'), 1600);
   }
 
+  // ================================================================ save trouble (events from 03-state)
+  /** local mode: the same profile was saved from another tab — this tab stopped saving (its progress is older) */
+  function onSaveConflict() {
+    if (!app.loggedIn) return;
+    askConfirm({ emoji: '🪟', heading: '다른 창', title: '다른 창에서 놀고 있어요', text: '이 창은 저장을 멈췄어요. 새로 고치면 이어서 놀아요.', yes: '새로 고치기', no: '닫기' },
+      '이 프로필을 다른 탭(창)에서 저장했어요.<br><span class="small dim">이 탭의 기록이 더 오래돼서 저장을 멈췄어요. 새로 고침하면 최신 기록으로 이어서 할 수 있어요.</span>',
+      { title: '다른 탭에서 플레이 중', icon: 'info', okText: '새로 고침', cancelText: '닫기' })
+      .then((ok) => { if (ok) location.reload(); });
+  }
+  /**
+   * server mode: the session ended mid-play (idle / lifetime / password reset) and saves answer 401. The progress is
+   * kept on this device (03-state pending copy) and a grown-up can log in again right here — same account only —
+   * after which the save is retried; "나중에" keeps playing and the copy is offered at the next login.
+   */
+  function onAuthLost() {
+    const cur = auth.current;
+    if (!app.loggedIn || !isServer() || cur?.kind !== 'server' || G.ui.modal.get('app-relogin')) return;
+    const pw = h('input', { type: 'password', class: 'input', name: 'password', autocomplete: 'current-password', 'aria-label': '비밀번호', placeholder: '비밀번호', maxlength: '256' });
+    const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
+    const body = h('div', { class: 'relogin' },
+      h('p', { class: 'easy-only kid-lead' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🧑‍🏫'), ' 어른에게 보여 주세요.'),
+      h('p', null, '로그인 시간이 끝나서 저장이 멈췄어요. 놀던 것은 이 기기에 잠시 보관하고 있어요.'),
+      h('p', { class: 'small dim' }, `${cur.nickname} 계정의 비밀번호를 다시 넣으면 이어서 저장해요.`),
+      h('input', { type: 'text', name: 'username', autocomplete: 'username', value: cur.email || cur.nickname, hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
+      pw, err);
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; pw.focus(); return false; };
+    const submit = async () => {
+      if (!pw.value) return fail('비밀번호를 입력해 주세요.');
+      let u;
+      // the ended session took its CSRF token along: ping hands out a fresh one first
+      try { await G.net.request('ping.php', { quiet: true, timeout: 6000 }); } catch (e) { /* the login call reports it */ }
+      try { u = await auth._serverLogin(cur.email || cur.nickname, pw.value, false); }
+      catch (e) { return fail(serverAuthError(e).message); }
+      finally { pw.value = ''; }
+      if (!u || u.id !== cur.id) {
+        // another account answered: never write this player's progress into it
+        await auth._serverLogout();
+        auth.serverUser = null;
+        return fail('다른 계정이에요. 같은 계정으로 로그인해 주세요.');
+      }
+      auth.serverUser = u;
+      G.ui.modal.get('app-relogin')?.close();
+      await saveNow('manual', true);
+      return true;
+    };
+    pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    G.ui.modal.open({
+      id: 'app-relogin', size: 'sm', className: 'app-relogin-modal', title: '다시 로그인해 주세요', icon: 'lock',
+      say: '어른에게 보여 주세요. 다시 로그인하면 이어서 저장해요.', body,
+      actions: [
+        { label: '나중에', class: 'btn-ghost' },
+        { label: '로그인하고 저장', class: 'btn-primary', icon: 'save', onClick: async () => (await submit()) === true },
+      ],
+    });
+  }
+  /** server mode, right after login: progress the server never confirmed (session ended, outage, closed tab) */
+  async function offerPending(seq) {
+    const cur = auth.current;
+    if (!isServer() || cur?.kind !== 'server' || !G.state || !G.save.pending) return;
+    const pend = G.save.pending.get(cur.id);
+    if (!pend) return;
+    // the server already has it (or something newer): nothing to offer
+    if (!(Number(pend.savedAt) > (Number(G.state.savedAt) || 0))) { G.save.pending.drop(cur.id); return; }
+    const when = new Date(Number(pend.savedAt) || pend.at);
+    const at = `${when.getMonth() + 1}월 ${when.getDate()}일 ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+    const ok = await askConfirm({ emoji: '💾', heading: '저장 안 된 기록', title: '저장 안 된 기록이 있어요', text: `${at}에 놀던 기록이에요. 이어서 할까요?`, yes: '이어서 하기', no: '버리기' },
+      `서버에 저장되지 못한 기록이 이 기기에 남아 있어요 (${esc(at)}).<br><span class="small dim">이어서 하면 그 기록을 서버에 저장해요. 버리면 지금 서버의 기록으로 계속해요.</span>`,
+      { title: '저장 안 된 기록', icon: 'save', okText: '이어서 하기', cancelText: '버리기' });
+    if (!app.loggedIn || seq !== app._loginSeq || auth.current?.id !== cur.id) return;
+    G.save.pending.drop(cur.id);
+    if (!ok) return;
+    G.state = G.save.normalize(pend.data, G.save.profile);
+    G.save.applyProfileSettings(G.state);
+    G.applyState();
+    await saveNow('manual', true);
+  }
+  /** the server did not answer at start (busy / slow network): keep asking while the title is up, then switch */
+  function watchServer() {
+    clearInterval(app._netWatch);
+    let busy = false;
+    app._netWatch = setInterval(async () => {
+      if (!G.net.unreachable || isServer()) { clearInterval(app._netWatch); return; }
+      if (busy || !Title.open || app.loggedIn || app._entering) return;
+      busy = true;
+      try {
+        if (!(await G.net.recheck())) return;
+        clearInterval(app._netWatch);
+        G.log.info('NETWORK', 'server answered late -> server mode');
+        await auth.checkServer();
+        if (!Title.open || app.loggedIn) return;
+        Title.renderHome();
+        if (Title.view === 'login') Title._prepLogin(); else if (Title.view === 'register') Title._prepRegister();
+        G.ui.toast('서버에 연결됐어요. 계정으로 로그인할 수 있어요.', { type: 'success', emoji: '🌐' });
+      } finally { busy = false; }
+    }, 15000);
+  }
+
   // ================================================================ app core
   const app = {
     loggedIn: false,
@@ -4985,11 +5174,13 @@
           L.set(1, '입장!');
           L.hide();
           if (!ok) Title.show();
+          if (G.net.unreachable) watchServer();
           return;
         }
         Title.show();
         L.set(1, '준비 완료');
         L.hide();
+        if (G.net.unreachable) watchServer();
       } catch (e) {
         G.log.error('CORE', 'app start failed', e);
         G.showFatal(e);
@@ -5058,6 +5249,14 @@
         }, opts.auto ? 400 : 1100);
         setTimeout(() => { if (this.loggedIn && seq === this._loginSeq && G.state === state) Onboarding.sync(state, isNew); }, opts.auto ? 600 : 1600);
         Portrait.schedule(1400);
+        if (mode === 'server' && G.save.pending?.get(profile.id)) {
+          const offer = () => {
+            if (!this.loggedIn || seq !== this._loginSeq) return;
+            if (document.body.classList.contains('md-intro') || G.ui.modal.isOpen()) { setTimeout(offer, 600); return; }
+            offerPending(seq);
+          };
+          setTimeout(offer, 1800);
+        }
         return true;
       } catch (e) {
         G.log.error('AUTH', 'enter game failed', e?.message || e);
@@ -5081,7 +5280,7 @@
       if (opts.confirm !== false) {
         const guest = auth.current?.kind === 'guest';
         // easy mode: the parent gate IS the question; a picture confirm only when the gate is skipped / still open
-        const gated = easyOn() && gateWillShow();
+        const gated = easyOn() && gateWillShow('logout');
         if (easyOn() && !(await parentGate('logout', '그만 놀기', '처음 화면으로 돌아가요. 어른과 함께 해요.'))) return false;
         if (!gated) {
           const ok = await askConfirm({ emoji: '👋', heading: '그만 놀기', title: '그만 놀까요?', text: '놀던 것은 잘 저장돼요.', yes: '그만 놀기', no: '더 놀래요' },
@@ -5092,22 +5291,27 @@
       if (!this.loggedIn || this._leaving) return false;
       this._leaving = true;
       try {
-        this._closeTransient();
+        this._closeScreens(); // photo mode / dialogue / windows end before the save (they may still write the state)
         const saved = await saveNow('logout', false);
-        if (!saved && G.state) {
+        // (a tab whose profile was saved from another tab has nothing newer to keep: no question then)
+        if (!saved && G.state && !G.save.conflict) {
           const go = await askConfirm({ emoji: '💾', heading: '저장 확인', title: '저장이 안 됐어요', text: '그래도 그만 놀까요? 방금 한 것이 사라질 수 있어요.', yes: '그만 놀기', no: '더 놀기', danger: true },
             '진행 상황을 저장하지 못했어요. 그래도 로그아웃할까요?<br><span class="small dim">마지막 저장 이후의 기록이 사라질 수 있어요.</span>', { title: '저장 실패', icon: 'save', okText: '그래도 로그아웃', danger: true });
-          if (!go) return false;
+          if (!go) return false; // keep playing: the onboarding coach (and the debug panel) were left alone
         }
+        Onboarding.stop();
+        Debug.hide();
         const prof = auth.current;
         if (prof && G.state) Profiles.upsert({ id: indexId(prof), level: num(G.state.stats?.level) || 1, lastPlayed: now(), playTime: num(G.state.stats?.playTime) });
         if (!reduceMotion()) await G.ui.fade(true, 320);
         this._teardown();
-        await auth.logout();
+        const out = await auth.logout();
         G.bus.emit('game:logout', { profile: prof ? { id: prof.id, nickname: prof.nickname, kind: prof.kind } : null });
         Title.show();
         if (!reduceMotion()) G.ui.fade(false, 420);
-        if (!opts.quiet) G.ui.toast(easyOn() ? '잘 가요! 또 놀러 와요!' : '로그아웃했어요. 다음에 또 만나요!', { type: 'info', emoji: '👋', say: easyOn() ? '잘 가요! 또 놀러 와요!' : undefined });
+        // the server never heard the logout: the session is still valid there, the player must know (and retry)
+        if (out && out.serverOk === false) G.ui.toast('로그아웃이 서버에 전해지지 않았어요. 인터넷을 확인해 주세요.', { type: 'error', duration: 8000, easy: '로그아웃이 덜 됐어요. 어른에게 알려 줘요!' });
+        else if (!opts.quiet) G.ui.toast(easyOn() ? '잘 가요! 또 놀러 와요!' : '로그아웃했어요. 다음에 또 만나요!', { type: 'info', emoji: '👋', say: easyOn() ? '잘 가요! 또 놀러 와요!' : undefined });
         return true;
       } catch (e) {
         G.log.error('AUTH', 'logout failed', e?.message || e);
@@ -5137,19 +5341,23 @@
     },
 
     _closeTransient() {
+      this._closeScreens();
+      Onboarding.stop();
+      Debug.hide();
+    },
+    _closeScreens() {
       try { if (G.sys.photo?.active) G.sys.photo.exit?.(); } catch (e) { /* ignore */ }
       try { if (G.sys.dialogue?.active) G.sys.dialogue.close?.(); } catch (e) { /* ignore */ }
       try { if (devCenter()?.isOpen?.()) devCenter().close?.(); } catch (e) { /* ignore */ }
       G.ui.modal.closeAll();
       G.ui.popover.close();
-      Onboarding.stop();
-      Debug.hide();
     },
     /** drop the session state without saving (callers save first when they want to) */
     _teardown() {
       G.save.stopAutosave();
       G.save.dirty = false;
       G.logoutSystems();
+      G.ui.resetSession?.(); // rewards / toasts still queued for this player are never shown to the next one
       G.state = null;
       G.save.profile = null;
       this.loggedIn = false;
@@ -5231,6 +5439,8 @@
         const av = G.ui.modal.get('app-avatar');
         if (av && av._kind && av._kind !== (easyOn() ? 'kid' : 'full')) av.close(); // pending picks are dropped: reopen from the menu
       });
+      G.bus.on('save:conflict', () => onSaveConflict());
+      G.bus.on('save:auth-lost', () => onAuthLost());
       G.bus.on('state:saved', () => {
         const cur = auth.current;
         if (!cur || !G.state || !app.loggedIn) return;
@@ -5274,7 +5484,7 @@
     onLogout() {
       Onboarding.stop();
       Debug.hide();
-      for (const id of ['app-menu', 'app-settings', 'app-avatar', 'app-admin', 'app-help', 'app-delete-account']) G.ui.modal.get(id)?.close();
+      for (const id of ['app-menu', 'app-settings', 'app-avatar', 'app-admin', 'app-help', 'app-delete-account', 'app-relogin']) G.ui.modal.get(id)?.close();
     },
   });
 })();

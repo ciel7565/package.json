@@ -8,9 +8,11 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Audit, Ctx, Db, Log, Session, Users};
+use Tfm\{Api, ApiException, Audit, Ctx, Db, Http, Log, RateLimit, Sec, Session, Users};
 
-Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'ip'], function (Ctx $c): array {
+// attempts (typos, weak passwords, taken nicknames) count per browser session; the accounts actually created count per
+// IP (register_ip) — a classroom behind one NAT address is not locked out by children's input mistakes
+Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], function (Ctx $c): array {
     if ($c->user) throw new ApiException(409, 'ALREADY_LOGGED_IN', '이미 로그인되어 있어요. 로그아웃한 뒤 가입해 주세요.');
     $b = $c->json(8192);
     $str = fn ($v) => is_string($v) ? $v : '';
@@ -25,6 +27,7 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'ip'], function 
     if (($b['agree'] ?? false) !== true) throw new ApiException(400, 'TERMS_REQUIRED', '이용약관 및 개인정보 처리 안내에 동의해 주세요.');
     if (Users::byEmail($email)) throw new ApiException(409, 'EMAIL_TAKEN', '이미 가입된 이메일이에요. 로그인해 주세요.');
     if (Users::byNickname($nick)) throw new ApiException(409, 'NICKNAME_TAKEN', '이미 사용 중인 닉네임이에요.');
+    RateLimit::hit('register_ip', 'ip:' . Sec::hashId(Http::clientIp()));
     try {
         $u = Db::tx(fn () => Users::create($email, $nick, $pw));
     } catch (\PDOException $e) {

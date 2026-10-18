@@ -160,14 +160,15 @@ body.reduce-motion .quest-item.done, body.reduce-motion .quest-item .q-claim, bo
 .kq-claim { background: linear-gradient(180deg, #ffe58f, var(--kid-gold-d, #e3a412)); color: #2b1d02; animation: qClaimPulse 1.6s ease-in-out infinite; }
 .kq-card.kq-claim { background: linear-gradient(180deg, #fffbe6, #ffe39a); border-color: #ffe08a; box-shadow: 0 6px 0 rgba(150,100,0,.42), 0 0 0 4px rgba(255,207,74,.35), 0 14px 26px rgba(0,0,0,.28); }
 .kq-card.kq-avail { background: linear-gradient(180deg, #f6fbff, #dff0ff); }
-.kq-card.opening .kq-sticker { animation: kqOpen .9s var(--ease-pop) both; }
+.kq-card.opening .kq-sticker { animation: kqOpen .9s var(--ease-in-out) both; }
 .kq-card.opening .kq-claim { animation: none; opacity: .7; }
 .kq-done { grid-template-columns: repeat(auto-fill, minmax(7.6rem, 1fr)); }
 .kq-done-tile .et-emoji { min-height: 3.6rem; font-size: 2.2rem; }
 .kq-done-tile .et-label { font-size: .98rem; }
 .kq-locked { margin: .3rem 0 0; text-align: center; font-weight: 800; color: var(--text-dim); }
 @keyframes kqNow { 50% { scale: 1.18; } }
-@keyframes kqOpen { 0% { scale: 1; rotate: -6deg; } 35% { scale: 1.35; rotate: 10deg; } 70% { scale: .92; rotate: -4deg; } 100% { scale: 1.05; rotate: 0deg; } }
+/* the sticker lifts once and settles (one rise, one fall — no swinging bounce) */
+@keyframes kqOpen { 0% { scale: 1; rotate: 0deg; } 40% { scale: 1.18; rotate: 6deg; } 100% { scale: 1; rotate: 0deg; } }
 /* normal-mode rows (renderList with easy:false) */
 .kq-normal { gap: .4rem; }
 .kq-row { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) auto; gap: .65rem; align-items: center; padding: .55rem .65rem; border-radius: 12px; background: var(--bg-elev); border: 1px solid var(--line); }

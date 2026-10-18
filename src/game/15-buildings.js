@@ -1127,6 +1127,7 @@
   }
   Site.unitBox = new THREE.BoxGeometry(1, 1, 1);
   Site.proxyMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, visible: false });
+  Site.hullMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false });   // camera-only roof hulls
 
   G.bkit = {
     col, M, mul, I4, rngOf, tex, mat, registerMaterial, MATDEF, Bucket, geo, roof, roofBaseFor, polyRoof, addRidge,
@@ -1170,11 +1171,12 @@
     const g = new THREE.PlaneGeometry(BW, BH, 2, 14);
     g.translate(0, -BH / 2, 0);
     const mat = new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.92, side: THREE.DoubleSide, alphaTest: 0.5, transparent: false });
-    const wu = { uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0.86, 0.5) }, uWindS: { value: 1 } };
+    // uPhase: the travelling wave's phase, integrated on the CPU (buildings.update) because its speed follows the wind
+    const wu = { uTime: { value: 0 }, uPhase: { value: 0 }, uWind: { value: new THREE.Vector2(0.86, 0.5) }, uWindS: { value: 1 } };
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, wu);
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float uTime; uniform vec2 uWind; uniform float uWindS;')
+        .replace('#include <common>', '#include <common>\nuniform float uTime; uniform float uPhase; uniform vec2 uWind; uniform float uWindS;')
         .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
           #ifdef USE_INSTANCING
             float tfPh = instanceMatrix[3][0] * 0.7 + instanceMatrix[3][2] * 0.3;
@@ -1183,8 +1185,8 @@
           #endif
           float tfV = clamp(-position.y / ${BH.toFixed(2)}, 0.0, 1.0);
           float tfA = (0.08 + 0.16 * min(uWindS, 2.0));
-          float tfK = 5.5, tfW = 2.4 + uWindS * 0.8;
-          float tfArg = tfK * tfV - tfW * uTime + tfPh;
+          float tfK = 5.5;
+          float tfArg = tfK * tfV - uPhase + tfPh;
           float tfDisp = tfA * tfV * sin(tfArg) + tfV * tfV * 0.25 * min(uWindS, 2.0) * (0.6 + 0.4 * sin(uTime * 0.7 + tfPh));
           float tfSlope = tfA * (sin(tfArg) + tfV * tfK * cos(tfArg)) / ${BH.toFixed(2)};
           objectNormal = normalize(vec3(0.0, -tfSlope, 1.0));`)
@@ -1822,8 +1824,23 @@
     }
     site.walkCircle(0, 0, apo + 0.15, floorH, 'wood');
     // hexagonal roof
-    polyRoof(B, I4, { n, R: Rp + 1.35, y: floorH + postH + 0.32, rise: 2.2, lift: 0.55, t: 0.28, rot: rot0, tint: '#ffffff' });
-    // the merged roof mesh is the camera blocker (a box would push the camera in while standing inside)
+    const ro = { n, R: Rp + 1.35, y: floorH + postH + 0.32, rise: 2.2, lift: 0.55, t: 0.28, rot: rot0, tint: '#ffffff' };
+    polyRoof(B, I4, ro);
+    // camera: the merged roof is single-sided and its eave is low (3.9 m above the site), so a follow-camera ray from a
+    // child standing inside slips out through the fascia band and the camera settles above the tiles, looking at the
+    // roof instead of the child. An invisible closed hexagonal hull (double-sided, a box would also catch the floor)
+    // wraps the roof with a margin; its flat underside sits just below the beam ring, so the camera stays under the
+    // roof and behind the child (as at 만장대).
+    {
+      const Rh = ro.R + 0.65, yLo = floorH + postH - 0.25;
+      const prof = [[0.02, ro.y + ro.rise + 0.95], [Rh, ro.y + ro.lift + 0.45], [Rh, yLo], [0.02, yLo]].map(([r, y]) => new THREE.Vector2(r, y));
+      const hull = new THREE.Mesh(new THREE.LatheGeometry(prof, n, rot0, TAU), Site.hullMat);
+      hull.name = 'roof-hull'; hull.visible = false; hull.castShadow = false; hull.receiveShadow = false;
+      hull.userData.cameraOnly = true;
+      site.group.add(hull); hull.updateMatrix(); hull.updateMatrixWorld(true);
+      G.world.cameraBlockers.push(hull);
+      site.blockers.push(hull);
+    }
     return { floorH };
   }
 
@@ -2007,7 +2024,14 @@
     update(dt, t) {
       const N = G.sys.nature?.uniforms;
       const bw = this.banners?.userData.wind;
-      if (bw) { bw.uTime.value = t % 3600; if (N) { bw.uWind.value.copy(N.uWind.value); bw.uWindS.value = N.uWindStrength.value; } }
+      if (bw) {
+        if (N) { bw.uWind.value.copy(N.uWind.value); bw.uWindS.value = N.uWindStrength.value; }
+        // clocks never wrap (a wrap snapped every hem once an hour). The wave speed follows the wind, so its phase is
+        // integrated here — uTime·speed would leap whenever the wind changes; 20π is a whole number of periods of both
+        // sin(phase) and sin(0.7·phase)
+        bw.uPhase.value = (bw.uPhase.value + (2.4 + bw.uWindS.value * 0.8) * Math.min(dt || 0, 0.25)) % (20 * Math.PI);
+        bw.uTime.value = t;
+      }
       const sm = this.smoke;
       if (!sm) return;
       const W = G.sys.weather, E = G.sys.engine;
@@ -2019,7 +2043,7 @@
       sm.visible = dens > 0.02;
       if (!sm.visible) return;
       const u = sm.material.uniforms;
-      u.uTime.value = t % 3600;
+      u.uTime.value = t;   // unwrapped: a wrap teleported every puff once an hour
       u.uDensity.value = dens;
       if (N) { u.uWind.value.copy(N.uWind.value); u.uWindS.value = N.uWindStrength.value; }
       if (E?.hemi) {

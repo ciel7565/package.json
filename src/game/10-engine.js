@@ -36,9 +36,13 @@
     medium: { name: 'medium', label: '중간', pixelRatio: 1.25, shadows: true, shadowSize: 1024, bloom: false, grade: true, godrays: false, atmos: 1, antialias: true, treeDensity: 0.75, grassDensity: 0.5, drawDistance: 1200, flare: true },
     high: { name: 'high', label: '높음', pixelRatio: 2, shadows: true, shadowSize: 2048, bloom: true, grade: true, godrays: true, atmos: 2, antialias: true, treeDensity: 1.0, grassDensity: 1.0, drawDistance: 2000, flare: true },
   };
-  // small-scenery cull distance (m) per preset (see engine._updateCull)
+  // small-scenery cull distance (m) per preset (see engine._updateCull), measured at the default 55° field of view
   const CULL_DIST = { low: 72, medium: 125, high: 210 };
+  const CULL_TAN = Math.tan(THREE.MathUtils.degToRad(55) / 2);
   const _cullBox = new THREE.Box3();
+  // the environment (a soft IBL fill) is re-baked when the sky look changes; a sun that only creeps along its arc
+  // re-bakes once it moved this far (deg) since the last bake
+  const ENV_SUN_STEP = { low: 6, medium: 3, high: 3 };
   // world-ambience features: minimum preset level (0 low, 1 medium, 2 high) and whether reduceMotion turns them off
   const FEATURES = {
     grade: { min: 1 }, sunGlow: { min: 1 }, godrays: { min: 2 },
@@ -458,7 +462,7 @@
         preserveDrawingBuffer: false,
         alpha: false,
       });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio));
+      renderer.setPixelRatio(this._pixelRatio());
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -468,7 +472,12 @@
       renderer.info.autoReset = false; // one reset per frame in render(): composer frames count every pass
       renderer.domElement.setAttribute('tabindex', '0');
       renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this._lost = true; G.ui?.toast?.('그래픽 장치가 잠깐 쉬고 있어요. 계속 멈춰 있으면 새로고침해 주세요.', { type: 'warn', duration: 6000 }); });
-      renderer.domElement.addEventListener('webglcontextrestored', () => { this._lost = false; this._envDirty = true; G.log.info('ENGINE', 'WebGL context restored'); });
+      renderer.domElement.addEventListener('webglcontextrestored', () => {
+        // the baked environment target belongs to the lost context: drop it without dispose() (that would delete
+        // objects of the old context on the new one) and re-bake
+        this._lost = false; this._envRT = null; this._envDir = null; this._envDirty = true; this._envTimer = 0;
+        G.log.info('ENGINE', 'WebGL context restored');
+      });
       container.appendChild(renderer.domElement);
       this.renderer = renderer;
 
@@ -526,6 +535,7 @@
       this.setSun(this.sunElevation, this.sunAzimuth);
 
       window.addEventListener('resize', () => this.resize());
+      this._watchPixelRatio();
       G.bus.on('settings:changed', ({ key }) => {
         if (key === 'quality') this.setQuality(G.settings.quality);
         if (key === 'shadows') this.setShadows(G.settings.shadows);
@@ -624,7 +634,7 @@
       const prevDensity = this.preset.treeDensity;
       this.quality = name;
       this.preset = PRESETS[name];
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio));
+      this.renderer.setPixelRatio(this._pixelRatio());
       this.renderer.shadowMap.type = name === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
       this.setShadows(G.settings.shadows !== false);
       this._setupComposer();
@@ -644,7 +654,11 @@
       if (this._envSky) this._envSky.material.uniforms.sunPosition.value.copy(this.sunDir);
       if (opts.intensity != null) this.sun.intensity = opts.intensity;
       if (opts.color != null) this.sun.color.set(opts.color);
-      this._envDirty = true;
+      // the environment re-bakes when the sky look changed (opts.env: weather transitions, time jumps) or once the sun
+      // crept a few degrees since the last bake — not on every small step of its arc (each bake is a GPU pass, a new
+      // target and a program re-check for every lit material)
+      const step = THREE.MathUtils.degToRad(ENV_SUN_STEP[this.preset?.name] ?? 3);
+      if (opts.env || !this._envDir || this._envDir.angleTo(this.sunDir) > step) this._envDirty = true;
     },
 
     /** colour grade targets (see header). Unknown keys are ignored; every value is clamped. */
@@ -725,7 +739,7 @@
 
     /** copy sky look (turbidity etc.) to the env-bake sky and re-bake scene.environment */
     updateEnvironment(force) {
-      if (!this._pmrem || !this._envSky || this._lost) return;
+      if (!this._pmrem || !this._envSky || this._isLost()) return;
       if (!force && !this._envDirty) return;
       const su = this.sky.material.uniforms, eu = this._envSky.material.uniforms;
       for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG']) eu[k].value = su[k].value;
@@ -735,7 +749,13 @@
       this._envRT = rt;
       this.scene.environment = rt.texture;
       this.scene.environmentIntensity = this.envIntensity ?? 0.5; // baked sky ~= sun; keep IBL as a soft fill
+      (this._envDir || (this._envDir = new THREE.Vector3())).copy(this.sunDir);
       this._envDirty = false;
+    },
+    /** the GL context is gone (the 'webglcontextlost' event arrives asynchronously, after the loss itself) */
+    _isLost() {
+      if (this._lost) return true;
+      try { return !!this.renderer?.getContext?.()?.isContextLost?.(); } catch (e) { return true; }
     },
 
     /** add an object to the environment-bake scene (e.g. weather cloud overlay) */
@@ -750,14 +770,13 @@
       if (cur && cur.list.length === list.length && cur.color === color && cur.strength === strength && list.every((o, i) => o === cur.list[i])) return cur.count;
       this.clearOutline();
       if (!list.length || !this._outlineRoot) return 0;
-      const mat = new THREE.ShaderMaterial({
-        name: 'OutlineGlow',
-        uniforms: { uColor: { value: new THREE.Color(color) }, uAlpha: { value: 0 }, uPx: { value: 0.001 }, uWidth: { value: 3.2 } },
-        vertexShader: OUTLINE_VERT, fragmentShader: OUTLINE_FRAG,
-        side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: false, fog: false,
-      });
+      // one material for the whole session (its programs stay linked): a new one per hovered thing re-linked 2-3
+      // programs on every focus change — a visible hitch on weak GPUs while just walking past signs and jars
+      const mat = this._outlineMaterial();
       // HDR on bloom presets so the rim softly blooms; LDR otherwise
+      try { mat.uniforms.uColor.value.set(color); } catch (e) { mat.uniforms.uColor.value.set(0xffd36a); }
       mat.uniforms.uColor.value.multiplyScalar(this.bloomPass ? 1.6 : 1.0);
+      mat.uniforms.uAlpha.value = 0;
       const hulls = [];
       const MAX = 48;
       for (const root of list) {
@@ -801,8 +820,15 @@
       const o = this._outline;
       if (!o) return;
       for (const h of o.hulls) { h.onBeforeRender = () => {}; this._outlineRoot?.remove(h); h.userData.src = null; }
-      o.mat.dispose();
-      this._outline = null;
+      this._outline = null;   // the shared material stays (see _outlineMaterial)
+    },
+    _outlineMaterial() {
+      return this._outlineMat || (this._outlineMat = new THREE.ShaderMaterial({
+        name: 'OutlineGlow',
+        uniforms: { uColor: { value: new THREE.Color(0xffd36a) }, uAlpha: { value: 0 }, uPx: { value: 0.001 }, uWidth: { value: 3.2 } },
+        vertexShader: OUTLINE_VERT, fragmentShader: OUTLINE_FRAG,
+        side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: false, fog: false,
+      }));
     },
     get outline() { return this._outline ? { objects: this._outline.list.slice(), count: this._outline.count } : null; },
     _updateOutline(dt) {
@@ -827,32 +853,53 @@
       u.uPx.value = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov || 55) / 2) / Math.max(1, window.innerHeight);
     },
 
+    /** renderer pixel ratio: the device's (it follows browser zoom and moves between screens), capped by the preset */
+    _pixelRatio() {
+      const dpr = Number(window.devicePixelRatio);
+      return Math.min(dpr > 0 && Number.isFinite(dpr) ? dpr : 1, this.preset.pixelRatio);
+    },
+    /** a devicePixelRatio change alone (browser zoom, a window dragged to another screen) fires no 'resize' event */
+    _watchPixelRatio() {
+      if (typeof window.matchMedia !== 'function') return;
+      let mq;
+      try { mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`); } catch (e) { return; }
+      const changed = () => { this.resize(); this._watchPixelRatio(); };   // re-arm for the new ratio
+      if (mq.addEventListener) mq.addEventListener('change', changed, { once: true });
+      else if (mq.addListener) { const once = () => { mq.removeListener(once); changed(); }; mq.addListener(once); }
+    },
     resize() {
       const w = window.innerWidth, h = window.innerHeight;
+      const pr = this._pixelRatio();
+      if (pr !== this.renderer.getPixelRatio()) this.renderer.setPixelRatio(pr);
       this.renderer.setSize(w, h);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      if (this.composer) { this.composer.setPixelRatio(this.renderer.getPixelRatio()); this.composer.setSize(w, h); }
+      if (this.composer) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); }
       if (this.bloomPass) this.bloomPass.resolution.set(w / 2, h / 2);
-      for (const fn of this._resizeFns) { try { fn(w, h); } catch (e) { G.log.error('ENGINE', e); } }
+      for (const fn of this._resizeFns) { try { fn(w, h, pr); } catch (e) { G.log.error('ENGINE', e); } }
     },
+    /** fn(cssWidth, cssHeight, pixelRatio) after every resize / pixel-ratio / quality change */
     onResize(fn) { if (typeof fn === 'function') this._resizeFns.push(fn); },
 
     /**
      * distance cull for small scenery: the 정선 만장대 start view frames the whole valley, and every small prop
-     * (lantern, bench, sign, barrel…) far below is one more draw call. Small direct children of the props group and the
-     * jar groups (bounding radius ≤ 3.2 m) farther than CULL_DIST (by preset) leave the render layer — `visible` is
-     * not touched, so the owning modules keep full control of it; buildings, trees, terrain and instanced sets stay.
+     * (lantern, bench, sign, barrel…) far below is one more draw call. The small-prop batches of the props group
+     * (`props-detail-*`: one merged batch per 44 m cell, culled when the whole cell is beyond the limit), its other small
+     * direct children and the jar groups (bounding radius ≤ 3.2 m) farther than CULL_DIST (by preset, scaled by the
+     * camera zoom: the telescope magnifies far scenery) leave the render layer — `visible` is not touched, so the owning
+     * modules keep full control of it. Buildings, trees, terrain, instanced sets and the big merged surfaces
+     * (`props-cell-*`: plazas, walls, plots) stay; invisible pick proxies are never enrolled.
      */
     _updateCull(dt) {
-      const C = this._cull || (this._cull = { t: 0, items: null, key: '', off: 0 });
+      const C = this._cull || (this._cull = { t: 0, items: [], key: '', off: 0 });
       C.t -= dt;
       if (C.t > 0 || !this.scene || !this.camera || !G.ready) return;
       C.t = 0.25;
       const groups = this.scene.children.filter((c) => c && (c.name === 'props' || /^jar:/.test(c.name)));
       const key = groups.map((g) => g.name + ':' + g.children.length).join('|');
       if (key !== C.key) { this._buildCull(groups); C.key = key; }
-      const lim = CULL_DIST[this.preset?.name] ?? Infinity;
+      const fov = THREE.MathUtils.degToRad(clamp(fin(this.camera.fov, 55), 1, 120));
+      const lim = (CULL_DIST[this.preset?.name] ?? Infinity) * Math.max(1, CULL_TAN / Math.tan(fov / 2));
       const cp = this.camera.position;
       let off = 0;
       for (const it of C.items) {
@@ -871,13 +918,16 @@
       for (const it of C.items || []) for (const m of it.meshes) if (m.userData._cullMask != null) { m.layers.mask = m.userData._cullMask; delete m.userData._cullMask; }
       const items = [];
       const box = new THREE.Box3(), sph = new THREE.Sphere();
-      const add = (obj) => {
+      const shown = (m) => !!m && m.visible !== false;
+      const add = (obj, rMax = 3.2) => {
         obj.updateWorldMatrix(true, true);
         box.makeEmpty();
         const meshes = [];
         obj.traverse((o) => {
           if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite) || o.isInstancedMesh || o.isSkinnedMesh) return;
           if (!o.geometry) return;
+          // pick proxies / camera blockers never draw: culling them saves nothing
+          if (!(Array.isArray(o.material) ? o.material.some(shown) : shown(o.material))) return;
           if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
           const bb = o.geometry.boundingBox;
           if (!bb || bb.isEmpty()) return;
@@ -886,12 +936,17 @@
         });
         if (!meshes.length || box.isEmpty()) return;
         box.getBoundingSphere(sph);
-        if (!(sph.radius > 0) || sph.radius > 3.2 || !Number.isFinite(sph.center.x)) return;
+        if (!(sph.radius > 0) || sph.radius > rMax || !Number.isFinite(sph.center.x)) return;
         items.push({ x: sph.center.x, y: sph.center.y, z: sph.center.z, r: sph.radius, meshes, off: false });
       };
       for (const g of groups) {
-        if (/^jar:/.test(g.name)) add(g);
-        else for (const c of g.children) add(c);
+        if (/^jar:/.test(g.name)) { add(g); continue; }
+        for (const c of g.children) {
+          // a merged small-prop batch goes as a whole (its nearest point decides); the big merged surfaces never do —
+          // culling a batch by its own bounds would make neighbouring props of different batches pop at random distances
+          if (/^props-detail-/.test(c.name)) add(c, Infinity);
+          else if (!/^props-cell-/.test(c.name)) add(c);
+        }
       }
       C.items = items;
     },
@@ -941,7 +996,8 @@
     },
 
     render() {
-      if (this._lost) return;
+      // also between the real loss and its (asynchronous) event: a first-use program would throw inside three
+      if (this._isLost()) return;
       // The opaque developer center hides the world (render ~1/6); a large blocking modal covers most of it (~1/3).
       const cover = document.body.classList.contains('dc-open') ? 6
         : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3 : 1;

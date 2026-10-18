@@ -50,6 +50,13 @@
 .mm-scale i, .wm-scale i { display: block; height: 5px; border: 2px solid #fff; border-top: 0; box-shadow: 0 1px 2px rgba(0, 0, 0, .5); }
 .mm-scale span, .wm-scale span { order: -1; margin-bottom: 1px; }
 
+/* small minimap (phone portrait ≈ 118×85 px; 50-minimap.js sets .mm-small from the canvas size): the centred zoom
+   column would sit on the compass (top-right) and the clock (bottom-right), so the pair becomes a row at the
+   bottom-left, and the zone chip gets the whole top row except the compass (the colour dot is enough of an icon) */
+.minimap-wrap.mm-small .minimap-zoom { top: auto; right: auto; left: .35rem; bottom: .35rem; transform: none; flex-direction: row; gap: .25rem; }
+.minimap-wrap.mm-small .mm-zone { max-width: calc(100% - 2.75rem); padding-right: .5rem; }
+.minimap-wrap.mm-small .mm-zone .ico, .minimap-wrap.mm-small .mm-clock .ico, .minimap-wrap.mm-small .mm-scale { display: none; }
+
 /* ---------------------------------------------------------------- world map modal */
 .modal.wm-modal { width: min(80rem, 100%); }
 .wm-modal .modal-head .wm-here { margin-right: .3rem; }
@@ -160,8 +167,10 @@ body.easy .minimap-zoom, body.easy .mm-scale, body.easy .mm-clock, body.easy .mm
 body.easy #minimap-canvas { cursor: pointer; }
 body.easy .mm-zone {
   left: .4rem; top: .4rem; padding: .2rem .7rem .2rem .55rem; font-size: max(1rem, 16px); font-weight: 800; max-width: calc(100% - .8rem);
-  border-width: 2px; border-color: rgba(255, 255, 255, .55); box-shadow: inset 4px 0 0 var(--zc, #9aa88f), 0 3px 10px rgba(0, 0, 0, .35);
+  border-width: 2px; border-color: rgba(255, 255, 255, .55); box-shadow: 0 3px 10px rgba(0, 0, 0, .35);
 }
+/* the zone colour stays a leading dot (bigger for kids), never a side stripe */
+body.easy .mm-zone::before { width: .85rem; height: .85rem; box-shadow: 0 0 0 2px rgba(255, 255, 255, .7); }
 body.easy .mm-zone .ico { display: none; }
 
 /* picture travel menu (G.easy.pick with className mm-pick): a gentle "go" wiggle on the quest-goal tile */

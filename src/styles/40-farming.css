@@ -67,8 +67,7 @@
 .ffx-float.care .ffx-float-in { border-color: rgba(52, 195, 107, .6); color: #d4f7e1; }
 @keyframes ffxRise {
   0% { opacity: 0; transform: translateY(12px) scale(.88); }
-  14% { opacity: 1; transform: translateY(0) scale(1.05); }
-  26% { transform: translateY(-4px) scale(1); }
+  14% { opacity: 1; transform: translateY(0) scale(1); }
   72% { opacity: 1; }
   100% { opacity: 0; transform: translateY(-48px) scale(.98); }
 }

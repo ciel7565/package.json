@@ -242,12 +242,29 @@
     const list = Array.isArray(G.state?.photos) ? G.state.photos.filter((p) => p && safeSrc(p.thumb || p.url)) : [];
     return list.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, n);
   }
+  /** thumbnail of the in-game album photo `id` (G.state.photos) or null */
+  function albumThumb(id) {
+    if (!id || !Array.isArray(G.state?.photos)) return null;
+    const p = G.state.photos.find((x) => x && x.id === id);
+    return p ? safeSrc(p.thumb || p.url) : null;
+  }
+  // Album photos are referenced by photoId instead of being copied into every entry: a 384 px thumbnail is ~30–40 KB,
+  // so ~30 copies used to push the save past the server's 1.5 MB limit (every later save was refused). Entries keep
+  // their own copy only for uploads, or when the album no longer has the photo — and those copies share a budget.
+  const PHOTO_BUDGET = 320000;   // chars of photo copies kept inside diary entries (≈ 8–10 thumbnails)
+  const SAVE_BASE = 80000;       // room left for the rest of the save when the budget is fitted under the server limit
+  /** the picture of an entry: its own copy, else the album photo it points to (or the copy kept when the album dropped it) */
+  function entryPhoto(e) {
+    if (!e) return null;
+    return safeSrc(e.photo) || albumThumb(e.photoId) || (e.photoId ? safeSrc(journal._refThumbs.get(e.photoId)) : null);
+  }
 
   // =============================================================================================
   const journal = {
     name: 'journal', order: 66, label: '작업일지',
     _draft: null,
     _form: null, _list: null,
+    _refThumbs: new Map(),   // photoId -> album thumbnail an entry points to (copied back in if the album drops it)
 
     init() {
       G.ui.onAction('journal', () => this.open());
@@ -259,17 +276,56 @@
       G.bus.on('zone:enter', (p) => { if (p?.first && p.zone) logSoon('visit', `${p.zone.name} 첫 방문`, { zoneId: p.zoneId }, 'zoneId'); });
       // easy <-> normal at runtime: close the journal windows of the other look (drafts are kept)
       G.bus.on('easy:changed', () => { for (const id of MODAL_IDS) G.ui.modal.get(id)?.close(); });
+      // keep the diary photos small in the save (album references, shared budget for copies)
+      G.bus.on('state:before-save', (st) => { if (st && st === G.state) this._fitPhotos(); });
+      G.bus.on('photo:taken', () => { if (G.state) this._fitPhotos(); }); // the album may just have dropped its oldest photo
     },
     onStateLoaded(state) {
       if (!Array.isArray(state.journal)) state.journal = [];
       this._draft = null;
       this._kidDraft = null;
+      this._refThumbs.clear();
       for (const id of MODAL_IDS) G.ui.modal.get(id)?.close();
+      this._fitPhotos(); // older saves copied album photos into every entry
     },
     onLogout() {
       this._draft = null;
       this._kidDraft = null;
+      this._refThumbs.clear();
       for (const id of MODAL_IDS) G.ui.modal.get(id)?.close();
+    },
+    /** album photos are referenced (no copy); a photo the album lost is copied back in; copies share PHOTO_BUDGET
+     *  (fitted under the server save limit together with the album) — the oldest copies go first */
+    _fitPhotos() {
+      const list = this.list();
+      if (!list.length) { this._refThumbs.clear(); return; }
+      const album = new Map();
+      let albumChars = 0;
+      for (const p of Array.isArray(G.state?.photos) ? G.state.photos : []) {
+        const src = p && safeSrc(p.thumb || p.url);
+        if (src) { album.set(p.id, src); albumChars += src.length; }
+      }
+      const refs = new Set();
+      let changed = false;
+      for (const e of list) {
+        if (!e || !e.photoId) continue;
+        refs.add(e.photoId);
+        const a = album.get(e.photoId);
+        if (a) {
+          this._refThumbs.set(e.photoId, a);
+          if (e.photo && e.photo === a) { e.photo = null; changed = true; }
+        } else if (!e.photo && this._refThumbs.has(e.photoId)) { e.photo = this._refThumbs.get(e.photoId); changed = true; }
+      }
+      for (const id of [...this._refThumbs.keys()]) if (!refs.has(id)) this._refThumbs.delete(id);
+      const limit = Number(G.data.serverLimits?.saveMaxBytes) || 1500000;
+      const budget = Math.max(0, Math.min(PHOTO_BUDGET, limit * 0.85 - albumChars - SAVE_BASE));
+      let used = 0, full = false;
+      for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i];
+        if (!e || typeof e.photo !== 'string' || !e.photo.startsWith('data:')) continue;
+        if (full || used + e.photo.length > budget) { full = true; e.photo = null; changed = true; } else used += e.photo.length;
+      }
+      if (changed) G.log.info('UI', `journal photos fitted (${Math.round(used / 1024)} KB of copies, budget ${Math.round(budget / 1024)} KB)`);
     },
     // ------------------------------------------------------------ data API
     list() { return Array.isArray(G.state?.journal) ? G.state.journal : []; },
@@ -288,6 +344,9 @@
       if (!activityText && !learned) return null;
       const zoneId = zoneOf(entry.zoneId) ? entry.zoneId : currentZoneId();
       const now = G.time.now();
+      const src = safeSrc(entry.photo);
+      const photoId = src && entry.photoId ? String(entry.photoId).slice(0, 64) : null;
+      const album = photoId ? albumThumb(photoId) : null;
       const e = {
         id: U.uid('jr'),
         createdAt: now,
@@ -301,11 +360,13 @@
         ferment: clip(entry.ferment, LIMIT.ferment),
         learned,
         memo: clip(entry.memo, LIMIT.memo),
-        photo: safeSrc(entry.photo) || null,
-        photoId: entry.photo && entry.photoId ? String(entry.photoId).slice(0, 64) : null,
+        photo: null, photoId: null,
         eduIds: Array.isArray(entry.eduIds) ? entry.eduIds.filter((x) => G.data.education?.[x]).slice(0, 12) : [],
         mood,
       };
+      // an album photo is only referenced (the album keeps the picture); anything else is stored with the entry
+      if (src) { e.photo = album && album === src ? null : src; e.photoId = photoId; }
+      if (album && album === src) this._refThumbs.set(photoId, album);
       G.state.journal.push(e);
       if (G.state.journal.length > MAX_ENTRIES) G.state.journal.splice(0, G.state.journal.length - MAX_ENTRIES);
       G.dirty('journal');
@@ -329,7 +390,10 @@
       if (easyOn() && !opts.normal) return this._openKid(opts);
       const pre = opts.prefill || {};
       const autoT = autoTasks();
-      const restoring = !!this._draft?.touched && !opts.prefill;
+      // "일지에 첨부" (photo card / album) only brings a photo: it joins the draft being written instead of replacing it
+      const photoOnly = !!opts.prefill && Object.keys(pre).every((k) => k === 'photo' || k === 'photoId');
+      const restoring = !!this._draft?.touched && (!opts.prefill || photoOnly);
+      if (restoring && photoOnly && safeSrc(pre.photo)) Object.assign(this._draft, { photo: safeSrc(pre.photo), photoId: pre.photoId || null, photoSource: 'prefill' });
       const d = restoring ? this._draft : {
         date: validISO(pre.date) ? pre.date : todayISO(),
         zoneId: zoneOf(pre.zoneId) ? pre.zoneId : currentZoneId(),
@@ -535,20 +599,23 @@
       }
       if (d.date && !validISO(d.date)) { ctx.err.textContent = '날짜를 다시 확인해 주세요.'; ctx.m.body.querySelector('#jr-date')?.closest('.field')?.classList.add('invalid'); G.sfx('error'); return; }
       let photo = d.photo;
+      const st = G.state; // the upload can outlive the session: the entry belongs to this player only
       if (d.photoSource === 'upload' && d.photo && /^data:/.test(d.photo) && G.net?.mode === 'server') {
         ctx.busy = true;
         ctx.saveBtn.disabled = true;
         ctx.saveBtn.lastChild.textContent = '사진 올리는 중…';
+        let failed = false;
         try { photo = await uploadPhoto(d.photo); }
         catch (e) {
           G.log.warn('API', 'journal photo upload failed, keeping the thumbnail', e);
-          G.ui.toast('사진을 서버에 올리지 못해 작은 사진으로 저장했어요.', { type: 'warn' });
+          failed = true;
           photo = d.photo;
         } finally {
           ctx.busy = false;
           if (!ctx.m.closed) { ctx.saveBtn.disabled = false; ctx.saveBtn.lastChild.textContent = '저장하기'; }
         }
-        if (!G.state) return;
+        if (!G.state || G.state !== st) { G.log.info('UI', 'journal save dropped: the player changed during the photo upload'); return; }
+        if (failed) G.ui.toast('사진을 서버에 올리지 못해 작은 사진으로 저장했어요.', { type: 'warn' });
       }
       const entry = this.create({ date: d.date, zoneId: d.zoneId, tasks: d.tasks, note: d.note, harvest: d.harvest, ferment: d.ferment, learned: d.learned, memo: d.memo, photo, photoId: d.photoId, eduIds: d.eduIds });
       if (!entry) { ctx.err.textContent = '작업일지를 저장하지 못했어요. 내용을 확인해 주세요.'; return; }
@@ -596,7 +663,7 @@
       if (cnt) cnt.textContent = String(all.length);
       const cards = list.map((e) => {
         const z = zoneOf(e.zoneId);
-        const src = safeSrc(e.photo);
+        const src = entryPhoto(e);
         const moodIco = MOOD[e.mood] ? `<span class="emoji jr-mood" title="${esc(MOOD[e.mood].label)}">${MOOD[e.mood].emoji}</span>` : '';
         const tasks = moodIco + (e.tasks || []).filter((t) => TASK[t]).slice(0, 6).map((t) => `<span class="emoji" title="${esc(TASK[t].label)}">${TASK[t].icon}</span>`).join('');
         const excerpt = e.learned || e.memo || e.activity || '';
@@ -624,7 +691,7 @@
       if (!e) { G.ui.toast(easyOn() ? '일기를 찾을 수 없어요.' : '일지를 찾을 수 없어요.', { type: 'warn' }); return null; }
       if (easyOn()) return this._openKidDetail(e);
       const z = zoneOf(e.zoneId);
-      const src = safeSrc(e.photo);
+      const src = entryPhoto(e);
       const tasks = (e.tasks || []).filter((t) => TASK[t]).map((t) => `<span class="jr-chip on static"><span class="emoji">${TASK[t].icon}</span>${esc(TASK[t].label)}</span>`).join('');
       const sec = (label, icon, val) => (val ? `<section class="jr-sec"><h4><span class="emoji">${icon}</span>${esc(label)}</h4><p>${esc(val)}</p></section>` : '');
       const body = `<div class="jr-paper">
@@ -854,7 +921,7 @@
       const grid = h('div', { class: 'kd-cards', role: 'list' });
       all.slice(0, 120).forEach((e, i) => {
         const mo = MOOD[e.mood];
-        const src = safeSrc(e.photo);
+        const src = entryPhoto(e);
         const tasks = (e.tasks || []).filter((t) => TASK[t]).slice(0, MAX_STICKERS);
         const card = h('button', { type: 'button', role: 'listitem', class: 'kd-card', 'aria-label': `${kidDate(e.date)} 일기${mo ? `, ${mo.label}` : ''}` },
           h('span', { class: 'kd-card-date' }, kidDate(e.date)),
@@ -875,7 +942,7 @@
       const h = G.ui.h;
       const mo = MOOD[e.mood];
       const z = zoneOf(e.zoneId);
-      const src = safeSrc(e.photo);
+      const src = entryPhoto(e);
       const tasks = (e.tasks || []).filter((t) => TASK[t]);
       // the jar status line (temperature, quality %) is for the grown-up view; the kid page keeps it simple
       const texts = [['🧑‍🌾', e.note], ['🧺', e.harvest], ['📖', e.learned], ['💭', e.memo]].filter(([, v]) => v && String(v).trim());

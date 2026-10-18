@@ -201,7 +201,7 @@
 
   // ---------------------------------------------------------------- helpers
   const items = () => G.data.items || {};
-  const itemOf = (id) => items()[id] || null;
+  const itemOf = (id) => (typeof id === 'string' && Object.prototype.hasOwnProperty.call(items(), id) ? items()[id] : null); // ids come from saves too
   const coins = () => Number(G.state?.stats?.coin) || 0;
   function sortEntries(arr) {
     return arr.sort((a, b) => {
@@ -347,6 +347,20 @@
     // ------------------------------------------------------------ core API
     count(itemId) { return Number(G.state?.inventory?.[itemId]) || 0; },
     has(itemId, qty = 1) { return this.count(itemId) >= qty; },
+    /** how many more of itemId fit in the bag (0 = that stack is full; harvest / jar / craft check it before using things up) */
+    room(itemId) {
+      const it = itemOf(itemId);
+      if (!it || !G.state) return 0;
+      return Math.max(0, (it.stack === false ? 1 : (it.max || 999)) - this.count(itemId));
+    },
+    /** the "가방이 꽉 찼어요" notice for itemId (kid words in 쉬운 모드) */
+    fullNotice(itemId) {
+      const it = itemOf(itemId);
+      if (!it) return;
+      const max = it.stack === false ? 1 : (it.max || 999);
+      if (easyOn()) G.progToast(`가방에 ${kjosa(it.name, '이/가')} 꽉 찼어요! 가게에 팔고 와요.`, { type: 'warn', emoji: '🎒', say: `가방에 ${kjosa(it.name, '이/가')} 꽉 찼어요! 가게에 팔고 와요.` });
+      else G.progToast(`${josa(it.name, '은/는')} 더 이상 가질 수 없어요. (최대 ${fmt(max)}개) 매점에 판 뒤 다시 해 주세요.`, { type: 'warn' });
+    },
     list(type) {
       const inv = G.state?.inventory || {};
       const out = [];
@@ -1009,7 +1023,7 @@
       update(q);
       if (isTool && owned) { btn.textContent = '보유 중'; btn.disabled = true; btn.classList.replace('btn-primary', 'btn-soft'); }
       else if (maxAfford <= 0) btn.title = '코인이 부족해요';
-      btn.addEventListener('click', () => this.buy(id, st ? st.value : 1));
+      btn.addEventListener('click', (ev) => { if (this._oneTrade(ev, key)) this.buy(id, st ? st.value : 1); });
       return G.ui.h('div', { class: `shop-row t-${it.type}`, role: 'listitem' },
         G.ui.h('div', { class: 'sr-ico' }, G.ui.h('span', { class: 'emoji' }, it.icon || '❔')),
         G.ui.h('div', { class: 'sr-info' },
@@ -1029,7 +1043,7 @@
       const update = (n) => { this._qty[key] = n; btn.innerHTML = `판매 <span class="sr-total">${coinIco()}${fmt(n * it.sell)}</span>`; G.ui.hydrateIcons(btn); };
       const st = stepper(q, 1, owned, update);
       update(q);
-      btn.addEventListener('click', () => this.sell(id, st.value));
+      btn.addEventListener('click', (ev) => { if (this._oneTrade(ev, key)) this.sell(id, st.value); });
       return G.ui.h('div', { class: `shop-row t-${it.type}`, role: 'listitem' },
         G.ui.h('div', { class: 'sr-ico' }, G.ui.h('span', { class: 'emoji' }, it.icon || '❔')),
         G.ui.h('div', { class: 'sr-info' },
@@ -1040,6 +1054,16 @@
         btn);
     },
 
+    /** one press = one trade: the 2nd click of a double-click (or a click within 350 ms on the same row) is ignored —
+     *  the row refreshes a frame later, so its button would otherwise still be live for that click */
+    _oneTrade(ev, key) {
+      if (ev && ev.detail > 1) return false;
+      const t = performance.now();
+      const map = this._tradeAt || (this._tradeAt = new Map());
+      if (t - (map.get(key) || -1e9) < 350) return false;
+      map.set(key, t);
+      return true;
+    },
     /** buy qty of itemId from the open shop (or shopId) */
     buy(itemId, qty = 1, shopId = this._shopId) {
       const it = itemOf(itemId);

@@ -30,18 +30,22 @@
   const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
 
   // ---------------------------------------------------------------- regional buckets
+  // one merge bucket per 44 m cell. Small human-scale props (signs, benches, kiosks, exhibits, tools, jar displays,
+  // shop goods, photo-zone frames: `detail`) get a separate per-cell batch, 'props-detail-<cell>', which the engine's
+  // distance cull drops as a whole once the entire cell is far away (engine._updateCull); the big surfaces (plazas,
+  // walls, plots, lanterns, decks: 'props-cell-<cell>') always draw.
   const CELL = 44;
   const cells = new Map();
-  function BK(x, z) {
-    const k = Math.floor(x / CELL) + ':' + Math.floor(z / CELL);
+  function BK(x, z, detail = false) {
+    const k = (detail ? 'd' : '') + Math.floor(x / CELL) + ':' + Math.floor(z / CELL);
     let b = cells.get(k);
     if (!b) { b = new Bucket(); cells.set(k, b); }
     return b;
   }
   /** helper bound to one prop: add(key, geometry, localMatrix, colour) in a local frame at (x, y, z, rot) */
-  function placer(x, y, z, rot = 0) {
+  function placer(x, y, z, rot = 0, detail = false) {
     const base = M(x, y, z, rot);
-    const B = BK(x, z);
+    const B = BK(x, z, detail);
     return { B, base, add: (key, g, m, c) => B.add(key, g, m ? mul(base, m) : base, c), x, y, z, rot, c: Math.cos(rot), s: Math.sin(rot),
       wx(lx, lz) { return x + lx * this.c + lz * this.s; }, wz(lx, lz) { return z - lx * this.s + lz * this.c; } };
   }
@@ -648,7 +652,7 @@
   function buildSigns(root) {
     for (const s of L.signs || []) {
       const gy = ground(s.x, s.z), rot = s.rot || 0;
-      const P = placer(s.x, gy, s.z, rot);
+      const P = placer(s.x, gy, s.z, rot, true);
       const isMap = s.action === 'map', isEntrance = s.id === 'SIGN_ENTRANCE';
       const bw = isMap ? 2.6 : isEntrance ? 3.2 : 1.7, bh = isMap ? 1.62 : isEntrance ? 1.0 : 0.85;
       const by = isMap ? 1.55 : isEntrance ? 1.75 : 1.4;
@@ -704,7 +708,7 @@
   function buildKiosks(root) {
     for (const k of L.kiosks || []) {
       const gy = ground(k.x, k.z), rot = k.rot || 0;
-      const P = placer(k.x, gy, k.z, rot);
+      const P = placer(k.x, gy, k.z, rot, true);
       P.add('stone', geo.box(1.25, 0.14, 0.8, 'world'), M(0, 0.07, 0), '#d6d0c4');
       for (const sx of [-1, 1]) P.add('wood', geo.box(0.12, 2.3, 0.12, 'grain'), M(sx * 0.52, 0.14 + 1.15, -0.18), '#6e4a2c');
       P.add('wood', geo.box(1.16, 0.12, 0.14, 'grain'), M(0, 2.36, -0.18), '#3f7f6c');
@@ -735,7 +739,7 @@
     const y0 = 0.8;
     for (const ex of L.exhibits || []) {
       const gy = ground(ex.x, ex.z), rot = ex.rot || 0;
-      const P = placer(ex.x, gy, ex.z, rot);
+      const P = placer(ex.x, gy, ex.z, rot, true);
       table(P, 1.7, 0.85, y0);
       P.add('paint', geo.box(1.76, 0.012, 0.4), M(0, y0 + 0.006, 0), r() < 0.5 ? '#3b4d7a' : '#8f2f2f');
       const food = ex.food;
@@ -797,7 +801,7 @@
     const ct = L.craftTable;
     if (ct) {
       const gy = ground(ct.x, ct.z), rot = ct.rot || 0;
-      const P = placer(ct.x, gy, ct.z, rot);
+      const P = placer(ct.x, gy, ct.z, rot, true);
       const y = 0.82;
       table(P, 2.4, 1.1, y, '#9a6a40');
       P.add('wood', geo.box(2.2, 0.04, 0.9, 'grain'), M(0, 0.25, 0), '#7a5236');
@@ -897,7 +901,7 @@
   function buildTools(root) {
     for (const t of L.tools || []) {
       const gy = ground(t.x, t.z), rot = t.rot || 0;
-      const P = placer(t.x, gy, t.z, rot);
+      const P = placer(t.x, gy, t.z, rot, true);
       P.add('stone', geo.box(1.35, 0.2, 1.35, 'world'), M(0, 0.1, 0), '#d8d3c9');
       P.add('wood', geo.box(1.45, 0.06, 1.45, 'grain'), M(0, 0.2, 0), '#7a5236');
       P.add('plank', geo.box(1.25, 0.02, 1.25, 'world'), M(0, 0.235, 0), '#d1b08a');
@@ -916,7 +920,7 @@
     const SC = { dok: 1.15, jungduri: 1.0, hangari: 1.0, danji: 1.35 };
     for (const jd of L.jarDisplays || []) {
       const gy = ground(jd.x, jd.z), rot = jd.rot || 0;
-      const P = placer(jd.x, gy, jd.z, rot);
+      const P = placer(jd.x, gy, jd.z, rot, true);
       const s = SC[jd.kind] || 1;
       P.add('stone', geo.cyl(0.6, 0.66, 0.22, 20), M(0, 0.11, 0), '#cfc9bd');
       P.add('stone', geo.cyl(0.64, 0.64, 0.05, 20), M(0, 0.245, 0), '#e6e1d7');
@@ -940,7 +944,7 @@
     const rot = sp.rot || 0;
     const b = (L.buildings || []).find((q) => q.id === 'B_SHOP') || { w: 5, d: 3 };
     const hd = b.d / 2;
-    const P = placer(sp.x, gy, sp.z, rot);
+    const P = placer(sp.x, gy, sp.z, rot, true);
     const r = rngOf('shop');
     const cy = 1.18, cz = hd - 0.25;
     // counter: jars, bottles, a basket of vegetables
@@ -1085,6 +1089,8 @@
       }
     });
   }
+  /** lantern-halo point scale: half the viewport height in drawing-buffer pixels */
+  function glowScale(h = window.innerHeight, pr = G.sys.engine?.renderer?.getPixelRatio?.()) { return h * 0.5 * (pr > 0 ? pr : 1); }
   function buildGlow(root) {
     if (!glowPts.length) return null;
     const pos = new Float32Array(glowPts.length * 3), sz = new Float32Array(glowPts.length), pv = new Float32Array(glowPts.length * 4);
@@ -1098,7 +1104,8 @@
     g.setAttribute('size', new THREE.BufferAttribute(sz, 1));
     g.setAttribute('aPivot', new THREE.BufferAttribute(pv, 4));
     const m = new THREE.ShaderMaterial({
-      uniforms: { uMap: { value: G.gfx.radialTexture(64, 'rgba(255,214,150,1)', 'rgba(255,160,60,0)') }, uOpacity: { value: 0 }, uScale: { value: window.innerHeight * 0.5 }, ...SWAY_U },
+      // gl_PointSize is in drawing-buffer pixels: the halo scale carries the renderer pixel ratio (props.update keeps it)
+      uniforms: { uMap: { value: G.gfx.radialTexture(64, 'rgba(255,214,150,1)', 'rgba(255,160,60,0)') }, uOpacity: { value: 0 }, uScale: { value: glowScale() }, ...SWAY_U },
       vertexShader: SWAY_GLSL + '\nattribute float size; uniform float uScale; void main(){ vec3 p = aPivot.xyz + tfSwing(aPivot.w) * (position - aPivot.xyz); vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = size * 2.4 * uScale / max(-mv.z, 0.5); gl_Position = projectionMatrix * mv; }',
       fragmentShader: 'uniform sampler2D uMap; uniform float uOpacity; void main(){ vec4 c = texture2D(uMap, gl_PointCoord); gl_FragColor = vec4(c.rgb, c.a * uOpacity); }',
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -1132,7 +1139,7 @@
   function buildBenches(root) {
     (L.benches || []).forEach((bn, i) => {
       const gy = ground(bn.x, bn.z), rot = bn.rot || 0;
-      const P = placer(bn.x, gy, bn.z, rot);
+      const P = placer(bn.x, gy, bn.z, rot, true);
       const seatY = 0.44, w = 1.7;
       for (let k = 0; k < 3; k++) P.add('wood', geo.box(w, 0.05, 0.13, 'grain', k), M(0, seatY - 0.025, -0.15 + k * 0.15), '#b3804e');
       for (let k = 0; k < 2; k++) P.add('wood', geo.box(w, 0.11, 0.04, 'grain', k), mul(M(0, seatY + 0.2 + k * 0.17, -0.27), M(0, 0, 0, 0, 1, 1, 1, -0.18)), '#a87545');
@@ -1319,7 +1326,7 @@
       // face the photographer side (behind the spot, opposite to the view direction)
       const cx = pz.x - dx * 3, cz = pz.z - dz * 3;
       const rot = Math.atan2(cx - fx, cz - fz);
-      const P = placer(fx, fy, fz, rot);
+      const P = placer(fx, fy, fz, rot, true);
       const W = 1.9, H = 1.45, y0 = 0.85, bw = 0.14;
       for (const sx of [-1, 1]) {
         P.add('stone', geo.box(0.34, 0.14, 0.5), M(sx * 0.72, 0.07, 0), '#cfc9bd');
@@ -1348,8 +1355,8 @@
       const py = surf(pz.x, pz.z);
       const plate = geo.disc(0.5, 24, 1);
       { const uv = plate.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, lerp(camRect[0], camRect[2], uv.getX(i) + 0.5), lerp(camRect[1], camRect[3], uv.getY(i) + 0.5)); }
-      BK(pz.x, pz.z).add('psign', plate, M(pz.x, py + 0.035, pz.z, Math.atan2(-dx, -dz)), '#ffffff');
-      BK(pz.x, pz.z).add('stone', geo.cyl(0.56, 0.58, 0.04, 24), M(pz.x, py + 0.012, pz.z), '#8f897e');
+      BK(pz.x, pz.z, true).add('psign', plate, M(pz.x, py + 0.035, pz.z, Math.atan2(-dx, -dz)), '#ffffff');
+      BK(pz.x, pz.z, true).add('stone', geo.cyl(0.56, 0.58, 0.04, 24), M(pz.x, py + 0.012, pz.z), '#8f897e');
       const g = anchorGroup(pz.id, fx, fy, fz, rot, W + 0.3, y0 + H + 0.7, 0.6, root);
       g.userData.photoZone = pz;
       for (const sx of [-1, 1]) circleCol(P.wx(sx * 0.72, 0), P.wz(sx * 0.72, 0), 0.16);
@@ -1395,7 +1402,7 @@
       let meshes = 0, tris = 0;
       for (const [key, B] of cells) {
         tris += B.tris;
-        const grp = new THREE.Group(); grp.name = 'props-cell-' + key;
+        const grp = new THREE.Group(); grp.name = key[0] === 'd' ? 'props-detail-' + key.slice(1) : 'props-cell-' + key;
         const out = B.build(grp, { name: 'props' });
         meshes += Object.keys(out).length;
         root.add(grp);
@@ -1407,13 +1414,13 @@
       try { buildNightLights(root); } catch (e) { G.log.warn('WORLD', 'night lights failed', e); }
       PSIGN.getTexture().needsUpdate = true; SCREEN.getTexture().needsUpdate = true;
       root.updateMatrixWorld(true);
-      E.onResize?.((w, h) => { if (this.glow) this.glow.material.uniforms.uScale.value = h * 0.5; });
+      E.onResize?.((w, h, pr) => { if (this.glow) this.glow.material.uniforms.uScale.value = glowScale(h, pr); });
       this._colliders = colliders; this._walkables = walkables;
       G.log.info('WORLD', `props: ${meshes} merged meshes (~${Math.round(tris / 1000)}k tris), ${this.jarCount} decorative jars, ${colliders.length} colliders`);
     },
 
     update(dt, t) {
-      SWAY_U.uTime.value = (t || 0) % 3600;
+      SWAY_U.uTime.value = t || 0;   // unwrapped (a wrap would twitch every lantern): float precision is ample for hours
       const N = G.sys.nature?.uniforms;
       if (N) { SWAY_U.uWind.value.copy(N.uWind.value); SWAY_U.uWindS.value = N.uWindStrength.value; }
       this._updateWet();

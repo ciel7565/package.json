@@ -86,7 +86,7 @@ return [
 | `TFM_TRUSTED_PROXIES` | (없음) | 리버스 프록시 IP (그때만 X-Forwarded-* 신뢰) |
 | `TFM_SESSION_IDLE` / `TFM_SESSION_MAX` | 7200 / 86400 | 세션 유휴 만료·최대 수명(초) |
 | `TFM_LOG_LEVEL` | `info` | `debug` `info` `warn` `error` |
-| `TFM_LOCAL_BOOTSTRAP` | 1 | 관리자가 없을 때 localhost 에서 첫 관리자 지정 허용 |
+| `TFM_LOCAL_BOOTSTRAP` | 1 | 관리자가 없을 때 서버 PC 브라우저(`http://localhost/…` 직접 접속)에서 첫 관리자 지정 허용. 리버스 프록시·터널(ngrok, cloudflared)을 거친 요청은 서버 PC 로 보지 않아요 |
 | `TFM_UPLOAD_REQUIRE_GD` | 0 | 1 이면 GD 없을 때 업로드 거부 |
 
 ### MySQL / MariaDB (XAMPP)
@@ -133,8 +133,10 @@ client_max_body_size 8m;
 
 ## 5. 관리자
 
-- **첫 관리자**: ① 서버 PC에서 `admin.php` 접속 → 로그인 → "이 계정을 관리자로 지정", ② `config` 의 `admin_emails`,
+- **첫 관리자**: ① 서버 PC에서 `http://localhost/…/admin.php` 접속 → 로그인 → "이 계정을 관리자로 지정", ② `config` 의 `admin_emails`,
   ③ `php cli/tfm.php promote 이메일` 중 하나. (관리자가 생기면 ①은 사라집니다)
+  ①은 프록시·터널 없이 서버 PC 에서 직접 연 경우에만 보여요 (`X-Forwarded-For` 같은 전달 헤더, `trusted_proxies` 주소, localhost 가 아닌 Host 는 모두 제외).
+  리버스 프록시나 ngrok·cloudflared 뒤에서 운영한다면 ② 또는 ③ 을 쓰세요.
 - `admin.php` 탭: 📊 대시보드(가입·접속·저장·신고·거부된 저장 등) · 🩺 시스템 점검(PHP·확장·DB·폴더 권한·세션·HTTPS·헤더·data 노출 검사)
   · 👥 사용자(검색, 관리자 지정/해제, 이용 정지, 채팅 제한, 직전 저장으로 되돌리기) · 🚨 신고·채팅(처리/기각, 메시지 숨기기)
   · 📜 감사 로그 · 🧰 유지보수(정리, 백업 안내, 로그 파일 목록)
@@ -159,7 +161,7 @@ client_max_body_size 8m;
 | `chat/list.php?after=ID` | GET | 누구나 읽기 | `{messages:[{id,userId,nickname,text,channel,createdAt}], online, lastId}` |
 | `chat/send.php` | POST | 로그인 | `{text, channel:'all'|'local'}` → `{message}` · 429 `RATE_LIMITED`, 409 `DUPLICATE_MESSAGE`, 403 `MUTED` |
 | `chat/report.php` | POST | 로그인 | `{target, targetId?, messageId?, reason, memo?}` → `{reportId, duplicate}` |
-| `presence/update.php` | POST | 로그인 | `{x,y,z,rotY,anim,speed,zoneId,emote,emoteAt,appearance?}` → `{players:[…], online}` (최근 15초) |
+| `presence/update.php` | POST | 로그인 | `{x,y,z,rotY,anim,speed,zoneId,emote,emoteAt,appearance?}` → `{players:[…], online}` (최근 15초, 각 줄의 `age` = 그 위치를 받은 뒤 지난 ms) |
 | `journal/upload.php` | POST(multipart `photo`) | 로그인 | `{url:'uploads/journal/…', width, height, size, mime, id}` |
 | `ranking/top.php` | GET | 누구나 | `{ranking:[{rank,nickname,level,exp,title,me}], me, total, updatedAt}` (닉네임만 공개) |
 | `admin/stats.php` | GET | 관리자 | 숫자 합계·레벨 분포·구역별 접속·최근 가입/신고/감사 |
@@ -211,7 +213,7 @@ client_max_body_size 8m;
 | 세션 탈취·고정 | 쿠키 이름 `TFMSESSID`, HttpOnly, SameSite=Lax, HTTPS 면 Secure, 경로 = 설치 폴더, `use_strict_mode`, 로그인/권한 변경 시 `session_regenerate_id`, 유휴 2시간·최대 24시간(로그인 유지: 7일·30일), User-Agent 지문, 사용자별 세션 epoch(정지·권한 변경·비밀번호 재설정 시 모든 기기 로그아웃), 전용 세션 폴더 |
 | 무차별 대입 | `login_attempts`: 같은 IP+계정 5회 실패 → 30초부터 2배씩(최대 1시간) 잠금, 계정 단위 15회, IP 단위 60회(15분) 잠금, 모르는 계정도 같은 시간(더미 해시) |
 | 비밀번호 | `password_hash` Argon2id(없으면 bcrypt cost 12) + `password_needs_rehash`, 8~64자 영문+숫자, 흔한 비밀번호·이메일/닉네임 포함 거부 |
-| 과다 요청 | 엔드포인트별 제한(`rate_limits`): 로그인 사용자=계정별, 비로그인=세션별 + IP 전체 상한(×25), 로그인·가입=IP별. 채팅 1초 1개·분당 20개·30초 내 같은 말 반복 금지. 쿠키 없는 요청은 세션 파일을 만들지 않음 |
+| 과다 요청 | 엔드포인트별 제한(`rate_limits`): 로그인 사용자=계정별, 비로그인=세션별 + IP 전체 상한(×25), 로그인=IP별, 가입=시도는 세션별·만들어진 계정 수는 IP별(`register_ip`, 시간당 60). 채팅 1초 1개·분당 20개·30초 내 같은 말 반복 금지. 쿠키 없는 요청은 세션 파일을 만들지 않음 |
 | 업로드 악용 | `is_uploaded_file`, 5 MB, **finfo MIME 화이트리스트**(PNG/JPEG/WEBP), `getimagesize` 형식 일치, 해상도·픽셀 상한(압축 폭탄), PHP/HTML/SVG 폴리글롯 패턴 거부, **GD 재인코딩**(EXIF·GPS·주석·덧붙인 데이터 제거), 무작위 128비트 이름 + 강제 확장자, 사용자별 일/총 개수 제한, `uploads/.htaccess` 스크립트 실행 금지·이미지 외 차단·nosniff·sandbox CSP |
 | 정보 노출 | 오류는 일반 메시지 + 참조 번호만 (`display_errors` 끔, 스택은 `data/logs` 에만), `X-Powered-By` 제거, 랭킹·접속자에 이메일/내부 ID 없음 |
 | 비공개 파일 | `lib` `config` `database` `data` `cli` 는 `.htaccess` 차단 + `index.php` 가드 + 각 PHP 파일 직접 실행 가드. DB 파일 이름 무작위, 로그·비밀키는 `.php`(직접 열면 실행되어 아무것도 안 보임). **권장: `TFM_DATA_DIR` 로 웹 루트 밖** |

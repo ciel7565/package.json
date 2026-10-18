@@ -17,8 +17,6 @@
   --kid-red: #ff7a59;
   --kid-radius: 22px;
   --kid-shadow: 0 6px 0 rgba(0, 0, 0, .22), 0 14px 28px rgba(0, 0, 0, .28);
-  /* legacy alias kept for modules that still name it — now the calm ≤ 4 % curve (§13.5), never a bounce */
-  --kid-bounce: cubic-bezier(.2, 1, .3, 1.1);
 }
 body.easy { --tap: 56px; font-size: max(16px, 1rem); }
 
@@ -40,7 +38,7 @@ body.easy .easy-hide { display: none !important; }
 .easy-big-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
   min-height: var(--tap); min-width: calc(var(--tap) * 2); padding: .55rem 1.25rem; border-radius: 999px;
-  font-size: 1.15rem; font-weight: 800; letter-spacing: -.01em; color: var(--kid-ink);
+  font-size: max(16px, 1.15rem); font-weight: 800; letter-spacing: -.01em; color: var(--kid-ink);
   background: linear-gradient(180deg, #ffffff, var(--kid-cream-2)); border: 2px solid rgba(255, 255, 255, .85);
   box-shadow: 0 5px 0 rgba(0, 0, 0, .25), 0 10px 22px rgba(0, 0, 0, .22);
   transition: transform .12s var(--ease-pop), box-shadow .12s, filter .15s;
@@ -241,7 +239,7 @@ body.easy .modal-body { font-size: max(16px, 1rem); }
   animation: easyBob 2.6s ease-in-out infinite;
 }
 .easy-next .en-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
-.easy-next .en-label { font-size: max(13px, .78rem); font-weight: 800; letter-spacing: .06em; color: var(--kid-gold); }
+.easy-next .en-label { font-size: max(16px, .78rem); font-weight: 800; letter-spacing: .06em; color: var(--kid-gold); }
 .easy-next .en-text { font-size: 1.22rem; font-weight: 800; line-height: 1.22; word-break: keep-all; overflow-wrap: anywhere; }
 .easy-next .en-pips { display: flex; align-items: center; gap: .3rem; margin-top: .15rem; }
 .easy-next .en-pips i { width: .95rem; height: .95rem; border-radius: 50%; background: rgba(255, 255, 255, .18); border: 2px solid rgba(255, 255, 255, .35); }
@@ -250,7 +248,7 @@ body.easy .modal-body { font-size: max(16px, 1rem); }
 .easy-next .en-btns { flex: none; display: flex; align-items: center; gap: .5rem; }
 .easy-next .en-go {
   display: inline-flex; align-items: center; gap: .4rem; min-height: var(--tap); padding: 0 1.05rem 0 .85rem; border-radius: 999px;
-  background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d)); color: #2b1d02; font-weight: 900; font-size: 1.08rem; white-space: nowrap;
+  background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d)); color: #2b1d02; font-weight: 900; font-size: max(16px, 1.08rem); white-space: nowrap;
   border: 2px solid rgba(255, 255, 255, .7); box-shadow: 0 5px 0 rgba(140, 95, 0, .55), 0 10px 20px rgba(0, 0, 0, .3);
   transition: transform .12s var(--ease-pop); touch-action: manipulation;
 }
@@ -310,7 +308,7 @@ body.easy .toast .t-ico { font-size: 1.5rem; }
 .toast.kid { border-color: rgba(255, 207, 74, .8); background: linear-gradient(180deg, rgba(48, 40, 18, .95), rgba(20, 18, 10, .95)); }
 .toast.has-btn { pointer-events: auto; }
 .toast .t-retry { flex: none; margin-left: .3rem; min-height: 2.4rem; border-radius: 999px; }
-body.easy .toast .t-retry { min-height: 44px; background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d)); color: #2b1d02; border-color: rgba(255, 255, 255, .6); font-weight: 800; }
+body.easy .toast .t-retry { min-height: var(--tap, 56px); min-width: var(--tap, 56px); background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d)); color: #2b1d02; border-color: rgba(255, 255, 255, .6); font-weight: 800; }
 .reward-pop.kid h3 { font-size: 1.6rem; }
 .reward-pop.kid .rp-eyebrow { font-size: 1.4rem; letter-spacing: .3em; }
 .reward-pop.kid .rp-item { font-size: 1.25rem; padding: .55rem .9rem; border-radius: 16px; }

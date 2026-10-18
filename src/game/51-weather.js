@@ -1110,7 +1110,7 @@
         pd.visible = !!pd.userData.allowed && wet > 0.01;
         if (pd.visible) {
           const u = pd.material.uniforms, E = G.sys.engine;
-          u.uWet.value = wet; u.uRain.value = rainI; u.uTime.value = t % 600;
+          u.uWet.value = wet; u.uRain.value = rainI; u.uTime.value = t;   // unwrapped: a wrap restarted every ring at once
           u.uHor.value.copy(_fogCol);
           u.uSky.value.copy(this._overlay ? this._overlay.material.uniforms.uZenith.value : _fogCol).lerp(_fogCol, 0.35);
           if (E?.sun) { u.uSunCol.value.copy(E.sun.color).multiplyScalar(E.sun.intensity * 0.35 * (E.sunDir.y > 0 ? 1 : 0)); u.uSunDir.value.copy(E.sunDir); }
@@ -1120,6 +1120,8 @@
       // camera-forward biased centre so most drops are in view
       _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion); _fwd.y = 0;
       if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1); else _fwd.normalize();
+      // rain streaks wrap their clock every 10 min (fast random streaks hide the reshuffle; keeps float precision for
+      // hours); slow snowflakes would visibly jump all at once, so snow runs on the unwrapped clock
       const tt = t % 600;
       const r = this._rain;
       if (r) {
@@ -1138,7 +1140,7 @@
         s.visible = snowI > 0.01;
         if (s.visible) {
           const u = s.material.uniforms;
-          u.uTime.value = tt;
+          u.uTime.value = t;
           u.uIntensity.value = snowI;
           u.uCenter.value.set(cam.position.x + _fwd.x * 7, cam.position.y + 4, cam.position.z + _fwd.z * 7);
           u.uColor.value.copy(COL.snowNight).lerp(COL.snowDay, dayK);

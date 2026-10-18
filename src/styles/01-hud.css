@@ -328,7 +328,8 @@ body.easy .hud.hud-enter .hud-left-menu > button, body.easy .hud.hud-enter .bott
    Top-left: avatar + nickname + ⭐ level + 🪙 coins · top-center: "다음 할 일" card · right: compact minimap +
    🗺️ 어디 갈까? · left: 4 big tiles · bottom: 😊 📸 📝 🔊 · 💬 button instead of the chat panel.
    ============================================================================= */
-body.easy { --easy-ava: 4.2rem; --easy-card: calc(var(--easy-ava) + 1rem); }
+/* the avatar never goes under --tap, so the card row (stats card, next-step card, tiles below it) is sized from the same max() */
+body.easy { --easy-ava: 4.2rem; --easy-card: calc(max(var(--tap), var(--easy-ava)) + 1rem); }
 
 /* ---- profile: avatar card + one compact stats card (no brand text, no exp bar, no edu/mode) */
 body.easy .hud-profile { min-width: 0; padding: .45rem; gap: 0; border-radius: 22px; }
@@ -341,7 +342,7 @@ body.easy .hud-player {
 }
 body.easy .hud-player .bar-exp, body.easy #hud-title, body.easy .hud-currency .cur-edu, body.easy #hud-mode { display: none !important; }
 body.easy .hud-player-row { gap: .55rem; }
-body.easy .hud-nick { font-size: 1.12rem; font-weight: 800; }
+body.easy .hud-nick { font-size: max(16px, 1.12rem); font-weight: 800; }
 body.easy .lv-chip { order: 2; font-size: 0; padding: .12rem .55rem .12rem .45rem; border-radius: 999px; line-height: 1; }
 body.easy .lv-chip::after { content: '⭐ ' attr(data-n); font-size: 1.02rem; font-weight: 900; }
 body.easy .hud-currency { font-size: 1.22rem; gap: .5rem; color: var(--text); }
@@ -361,7 +362,7 @@ body.easy .hud-left-menu .lm-tile {
 body.easy .hud-left-menu .lm-tile:hover, body.easy .hud-left-menu .lm-tile.active { background: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,.08)); }
 body.easy .hud-left-menu .lm-tile:active { transform: scale(.93); transition-duration: var(--dur-1); }
 body.easy .hud-left-menu .lm-emo { font-size: 2.05rem; line-height: 1.05; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
-body.easy .hud-left-menu .lbl { display: block; font-size: max(15px, .84rem); font-weight: 800; white-space: nowrap; }
+body.easy .hud-left-menu .lbl { display: block; font-size: max(16px, .84rem); font-weight: 800; white-space: nowrap; }
 body.easy .hud-left-menu .badge { transform: none; top: .15rem; right: .2rem; min-width: 1.4rem; height: 1.4rem; font-size: .78rem; }
 
 /* ---- right column: compact minimap (no header tools) + big "어디 갈까?" */
@@ -398,7 +399,7 @@ body.easy .app-mobile-toggles { display: none !important; } /* chat = 💬 butto
   border: 2px solid rgba(255,255,255,.35); transition: transform var(--dur-3) var(--ease-pop), background-color var(--dur-2) var(--ease-out); touch-action: manipulation;
 }
 .easy-chat-btn .emoji { font-size: 2rem; line-height: 1; }
-.easy-chat-btn .lbl { font-size: max(13px, .74rem); font-weight: 800; }
+.easy-chat-btn .lbl { font-size: max(16px, .74rem); font-weight: 800; }
 .easy-chat-btn:active { transform: scale(.92); transition-duration: var(--dur-1); }
 .easy-chat-btn .badge { position: absolute; top: -.2rem; right: -.2rem; }
 body.easy.show-chat .easy-chat-btn { background: rgba(52,195,107,.45); }
@@ -415,7 +416,7 @@ body.easy .bottom-bar .ico { display: none; }
 body.easy .bottom-bar > button { min-width: 6.2rem; min-height: calc(var(--tap) + .9rem); padding: .3rem .6rem; gap: .1rem; border-radius: 18px; color: var(--text); }
 body.easy .bottom-bar > button:active { transform: scale(.93); }
 body.easy .bottom-bar .bb-emo { font-size: 2.05rem; line-height: 1.05; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
-body.easy .bottom-bar .lbl { display: block; font-size: max(15px, .86rem); font-weight: 800; }
+body.easy .bottom-bar .lbl { display: block; font-size: max(16px, .86rem); font-weight: 800; }
 body.easy #bottom-bar [data-action=express] { order: 1; }
 body.easy #bottom-bar [data-action=photo] { order: 2; }
 body.easy #bottom-bar [data-action=journal] { order: 3; }
@@ -449,4 +450,4 @@ body.easy .mb-interact { width: 5.6rem; height: 5.6rem; background: rgba(255,207
 body.easy .mb-jump { right: 6.1rem; bottom: .2rem; width: 4.4rem; height: 4.4rem; }
 body.easy .mb-run { right: .6rem; bottom: 6.1rem; width: 4.4rem; height: 4.4rem; }
 body.easy .mb-photo { display: none; } /* 📸 lives in the bottom bar */
-body.easy .mobile-buttons button small { font-size: max(12px, .72rem); font-weight: 800; }
+body.easy .mobile-buttons button small { font-size: max(16px, .72rem); font-weight: 800; }

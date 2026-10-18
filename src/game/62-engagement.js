@@ -54,7 +54,7 @@
   // 쉬운 모드 (CONTRACT §12): the same six pages as a picture sticker book (same ids, so badges / deep links work)
   const KTABS = [
     { id: 'checkin', label: '도장', icon: '📅', say: '출석 도장을 찍어요' },
-    { id: 'missions', label: '놀이', icon: '🎯', say: '오늘의 놀이예요' },
+    { id: 'missions', label: '놀이', icon: '🎯', say: '오늘 할 놀이를 골라요' },
     { id: 'inbox', label: '소식', icon: '📬', say: '새 소식을 봐요' },
     { id: 'cert', label: '상장', icon: '🎓', say: '나의 상장이에요' },
     { id: 'rank', label: '친구', icon: '👫', say: '같이 노는 친구들이에요' },
@@ -103,6 +103,7 @@
     return s + (fin ? a : b);
   }
   const itemName = (id) => G.data.items?.[id]?.name || id;
+  const expForLv = (lv) => Math.max(1, Math.round(G.data.levels?.expFor?.(lv) || 100 * lv));
   const itemIcon = (id) => G.data.items?.[id]?.icon || '🎁';
 
   // ---------------------------------------------------------------- local calendar days
@@ -542,7 +543,7 @@
     _loggedIn: false, _loginAt: 0, _today: null, _dayT: 0, _autoTimer: 0, _autoTries: 0, _busyAt: 0,
     _uiTimer: 0, _clockTimer: 0, _clockN: 0, _inboxViewed: false, _inboxFilter: 'all', _animUntil: 0,
     _badgeQueued: false, _lastBadge: -1, _bell: null, _bellBadge: null,
-    _rank: null, _rankAt: 0, _rankBusy: null,
+    _rank: null, _rankAt: 0, _rankBusy: null, _rankGen: 0,
     _certCanvas: null, _certKey: '',
     _refunds: [], _yard: null, _edit: null, _starting: false, _bar: null, _recs: new Map(), _byType: {}, _pops: [], _3d: null,
     _mention: { at: 0, id: null }, _claimAt: 0,
@@ -558,7 +559,7 @@
     onStateLoaded(state) {
       if (!state) return;
       this.stopDecor({ silent: true });
-      this._rank = null; this._certKey = '';
+      this._rank = null; this._certKey = ''; this._rankGen++;
       const e = this._E();
       if (!e) return;
       this._today = dayKey();
@@ -575,7 +576,7 @@
       this._loggedIn = false;
       clearTimeout(this._autoTimer);
       clearInterval(this._clockTimer);
-      this._rank = null; this._rankBusy = null; this._certCanvas = null; this._certKey = '';
+      this._rank = null; this._rankBusy = null; this._certCanvas = null; this._certKey = ''; this._rankGen++;
       this._clear3D();
       G.interact?.unregister?.(YARD_ID);
       this._yard = null;
@@ -763,7 +764,7 @@
       on('level:up', ({ level }) => {
         const lv = int(level, 1, 999, 1);
         const tname = G.data.levels?.titles?.[lv];
-        this.notify({ type: 'level', icon: '⭐', title: `레벨 ${lv} 달성!`, text: tname ? `새 칭호 「${tname}」을(를) 얻었어요.` : '더 많은 체험이 기다리고 있어요.', act: 'profile' });
+        this.notify({ type: 'level', icon: '⭐', title: `레벨 ${lv} 달성!`, text: tname ? `새 칭호 「${tname}」${josa(tname, '을/를').slice(tname.length)} 얻었어요.` : '더 많은 체험이 기다리고 있어요.', act: 'profile' });
       });
       on('collection:unlocked', ({ id }) => {
         const c = G.data.collection?.[id];
@@ -869,7 +870,8 @@
       const kt = KTABS.find((t) => t.id === next);
       const m = G.ui.modal.open({
         id: HUB_ID, title: kid ? '오늘' : '오늘의 체험', icon: kid ? '🔔' : 'bell', size: 'lg', className: `eng-modal${kid ? ' eng-kid' : ''}`, autofocus: false,
-        say: kid ? `오늘의 놀이예요. ${kt ? kt.say : ''}` : undefined,
+        // the hub intro is skipped when the page line already starts with 오늘 (no "오늘… 오늘…" twice)
+        say: kid ? (kt && kt.say.startsWith('오늘') ? kt.say : `오늘의 놀이예요. ${kt ? kt.say : ''}`) : undefined,
         body: (body) => this._buildHub(body),
         onClose: () => this._onHubClose(),
       });
@@ -1140,7 +1142,7 @@
           }
           btn.disabled = true;
           btn.replaceChildren(h('span', { class: 'emoji' }, '✅'), ' 출석 완료!');
-          this._say(`출석 ${res.pos}일차 완료. ${rewardText(res.reward)}을(를) 받았어요.`);
+          this._say(`출석 ${res.pos}일차 완료! 받은 보상: ${rewardText(res.reward)}.`);
           this._uiDirty();
         });
         act.append(btn, h('div', { class: 'eng-claim-sub' }, '오늘의 보상: ', rewardChips(reward)));
@@ -1287,7 +1289,7 @@
             card?.appendChild(stampEl('완료', true));
             b.replaceWith(h('span', { class: 'eng-mis-ok' }, '✅ 받음'));
             burstAt(card, 14);
-            this._say(`${text} 보상 ${rewardText(got)}을(를) 받았어요.`);
+            this._say(`${text} 완료! 받은 보상: ${rewardText(got)}.`);
             this._uiDirty();
           });
           side.appendChild(b);
@@ -1327,7 +1329,7 @@
           bonus.classList.add('got', 'just');
           b.replaceWith(h('span', { class: 'eng-mis-ok' }, '✅ 받음'));
           burstAt(bonus, 24);
-          this._say(`보너스 ${rewardText(got)}을(를) 받았어요.`);
+          this._say(`보너스 완료! 받은 보상: ${rewardText(got)}.`);
           this._uiDirty();
         });
         bonus.appendChild(b);
@@ -1605,18 +1607,29 @@
       if (!G.state) return { mode: 'local', rows: [], me: null };
       if (!opts.force && this._rank && performance.now() - this._rankAt < 60000) return this._rank;
       if (this._rankBusy) return this._rankBusy;
+      // the request can outlive the session (그만 놀기 / another child logs in): its answer then belongs to nobody
+      const st = G.state, gen = this._rankGen;
+      const stale = () => G.state !== st || gen !== this._rankGen;
       const run = async () => {
         let res;
         if (G.net?.mode === 'server') {
           try {
             const d = await G.net.request('ranking/top.php', { timeout: 8000 });
-            const rows = (Array.isArray(d?.ranking) ? d.ranking : []).slice(0, 50).map((r, i) => ({
-              rank: int(r?.rank, 1, 1e7, i + 1), nickname: str(r?.nickname, 24) || '체험객', level: int(r?.level, 1, 999, 1),
-              exp: int(r?.exp, 0, 1e12, 0), title: str(r?.title, 24), me: r?.me === true,
-            }));
-            const me = isObj(d?.me) ? { rank: int(d.me.rank, 1, 1e7, 1), nickname: str(d.me.nickname, 24) || (G.state.profile?.nickname || '나'), level: int(d.me.level, 1, 999, 1), exp: int(d.me.exp, 0, 1e12, 0), title: str(G.state.profile?.title, 24), me: true } : null;
+            if (stale()) return { mode: 'local', rows: [], me: null, stale: true };
+            // the server ranks by the cumulative exp_total; the bars show the progress inside the current level
+            const lvExp = (level, total) => { let t = total; for (let l = 1; l < level; l++) t -= expForLv(l); return clamp(t, 0, expForLv(level)); };
+            const rows = (Array.isArray(d?.ranking) ? d.ranking : []).slice(0, 50).map((r, i) => {
+              const level = int(r?.level, 1, 999, 1), exp = int(r?.exp, 0, 1e12, 0);
+              return { rank: int(r?.rank, 1, 1e7, i + 1), nickname: str(r?.nickname, 24) || '체험객', level, exp, lvExp: lvExp(level, exp), title: str(r?.title, 24), me: r?.me === true };
+            });
+            let me = null;
+            if (isObj(d?.me)) {
+              const level = int(d.me.level, 1, 999, 1), exp = int(d.me.exp, 0, 1e12, 0);
+              me = { rank: int(d.me.rank, 1, 1e7, 1), nickname: str(d.me.nickname, 24) || (G.state.profile?.nickname || '나'), level, exp, lvExp: lvExp(level, exp), title: str(G.state.profile?.title, 24), me: true };
+            }
             res = { mode: 'server', rows, me, total: int(d?.total, 0, 1e9, rows.length) };
           } catch (err) {
+            if (stale()) return { mode: 'local', rows: [], me: null, stale: true };
             res = this._localRanking();
             res.mode = 'local';
             res.error = str(err?.message, 120) || '서버 랭킹을 불러오지 못했어요.';
@@ -1627,10 +1640,12 @@
         this._rankAt = performance.now();
         return res;
       };
-      this._rankBusy = run().finally(() => { this._rankBusy = null; });
-      return this._rankBusy;
+      const p = run().finally(() => { if (this._rankBusy === p) this._rankBusy = null; });
+      this._rankBusy = p;
+      return p;
     },
     _localRanking() {
+      if (!G.state) return { mode: 'local', rows: [], me: null, total: 0 };
       const st = G.state, s = st.stats || {};
       const myNick = str(st.profile?.nickname, 24) || '나';
       const names = [];
@@ -1700,7 +1715,7 @@
             h('span', { class: 'eng-rrank' }, String(r.rank)), avatar(r),
             h('div', { class: 'eng-rname' }, h('b', null, r.nickname), r.me ? h('span', { class: 'chip chip-gold' }, '나') : null, r.title ? h('small', null, r.title) : null),
             h('span', { class: 'lv-chip' }, `Lv.${r.level}`),
-            bar(r.exp, expFor(r.level), `${fmt(r.exp)} EXP`, 'bar-purple'));
+            bar(r.lvExp ?? r.exp, expFor(r.level), `${fmt(r.exp)} EXP`, 'bar-purple'));
           return el;
         };
         rows.slice(3, 30).forEach((r, i) => { const el = rowEl(r); el.style.setProperty('--i', String(Math.min(i, 12))); list.appendChild(el); });
@@ -1708,7 +1723,7 @@
         if (list.children.length) body.appendChild(list);
         body.appendChild(h('p', { class: 'eng-foot' }, res.mode === 'server' ? '서버에 저장된 체험객의 레벨과 누적 경험치로 순위를 매겨요. 닉네임만 공개돼요.' : '로컬 모드에서는 지금 함께 있는 체험객(가상 체험객 포함)과 내 기록을 비교해요.'));
       };
-      this.ranking().then(fill).catch(() => fill(this._localRanking()));
+      this.ranking().then(fill).catch(() => { if (G.state) fill(this._localRanking()); });
     },
 
     // ============================================================ 쉬운 모드 pages (CONTRACT §12): a picture sticker book
@@ -1766,7 +1781,7 @@
           h('div', { class: 'eng-hero-hi' }, h('b', null, nick), ', 반가워요! 👋'),
           h('div', { class: 'eng-hero-sub' }, line),
           h('div', { class: 'eng-hero-chips' },
-            chip('🔥', `${streak}일째`, streak >= 3 ? 'hot' : ''),
+            chip('🔥', streak > 0 ? `${streak}일째` : '오늘부터!', streak >= 3 ? 'hot' : ''),
             chip('🎯', pipText || '○○○', done >= 3 ? 'ok' : ''),
             c.unread ? chip('📬', `새 소식 ${c.unread}`, 'new') : null)));
       el.__easySpeak = { btn: null, text: `${nick}, 반가워요! ${line}` };
@@ -1923,16 +1938,31 @@
       const all = e.notifications.slice(0, 12);
       p.appendChild(this._kidHead('📬', '새 소식', all.length ? '그림을 누르면 가 봐요!' : ''));
       if (!all.length) { p.appendChild(this._kidEmpty('sleepy', '아직 소식이 없어요', '메달이나 스티커를 받으면 여기에 모여요!')); return; }
-      const sub = (n) => { const t = String(n.title || ''); const i = t.indexOf(': '); return i > 0 ? t.slice(i + 2) : t; };
+      // kid words per kind (the stored titles are grown-up notices): only medals, stickers and quests add a name
+      const sub = (n) => {
+        const t = String(n.title || ''), cut = t.indexOf(': '), name = cut > 0 ? t.slice(cut + 2) : '';
+        switch (n.type) {
+          case 'achievement': return G.data.achievements?.[n.ref]?.name || name;
+          case 'collection': return G.data.collection?.[n.ref]?.name || name;
+          case 'quest': return (n.ref && G.sys.quest?.easyTitle?.(n.ref)) || name;
+          case 'level': { const lv = /(\d+)/.exec(t); return lv ? `${lv[1]}레벨이 됐어요` : ''; }
+          case 'ferment': return /보상/.test(t) ? '장을 받았어요' : '';
+          case 'mission': return /보너스/.test(t) ? '보물상자를 열었어요' : '놀이를 해냈어요';
+          case 'checkin': return '도장을 찍었어요';
+          case 'decor': return '마당을 꾸몄어요';
+          case 'system': return t;
+          default: return ''; // reward, cert, mention: the picture label says it all (and never a friend's name)
+        }
+      };
       const list = h('div', { class: 'eng-knoti-list', role: 'list' });
       for (const n of all) {
         const label = KID_NOTI[n.type] || '알림';
         const row = h(n.act ? 'button' : 'div', { type: n.act ? 'button' : null, class: `eng-knoti${n.read ? '' : ' unread'}`, 'data-id': n.id, role: n.act ? null : 'listitem' },
           h('span', { class: 'eng-knoti-ico emoji', 'aria-hidden': 'true' }, n.icon || NTYPES[n.type] || '🔔'),
-          h('span', { class: 'eng-knoti-main' }, h('b', null, label), h('small', null, sub(n))),
+          h('span', { class: 'eng-knoti-main' }, h('b', null, label), sub(n) ? h('small', null, sub(n)) : null),
           n.read ? null : h('i', { class: 'eng-noti-dot', 'aria-hidden': 'true' }),
           n.act ? h('span', { class: 'eng-knoti-go emoji', 'aria-hidden': 'true' }, '👉') : null);
-        row.__easySpeak = { btn: null, text: `${label}. ${sub(n)}` };
+        row.__easySpeak = { btn: null, text: sub(n) ? `${label}. ${sub(n)}` : label };
         list.appendChild(row);
       }
       list.addEventListener('click', (ev) => {
@@ -2446,7 +2476,7 @@
     _update3D(dt, t) {
       const T = this._3d;
       if (!this._yard || !T) return;
-      // pop-in animations (elastic overshoot)
+      // pop-in animations: a soft monotonic grow (ease-out cubic, no overshoot — CONTRACT motion rules)
       const dirty = DIRTY;
       dirty.clear();
       let ended = false;
@@ -2456,7 +2486,7 @@
         const r = this._recs.get(p.id);
         if (!r) { this._pops.splice(i, 1); continue; }
         const k = clamp(p.t / 0.45, 0, 1);
-        r.scale = k >= 1 ? 1 : 1 - Math.cos(k * Math.PI * 2.5) * Math.exp(-k * 5.5) * (1 - k * 0.2);
+        r.scale = k >= 1 ? 1 : Math.max(0.001, 1 - (1 - k) ** 3);
         if (k >= 1) { r.scale = 1; this._pops.splice(i, 1); ended = true; }
         dirty.add(r.d.item);
       }
@@ -2505,7 +2535,12 @@
       e.decor.push(d);
       this._rebuildDecor(true);
       const r = this._recs.get(d.id);
-      if (r) { r.yaw = this._yard.rot + d.rot; r.scale = 0.001; this._pops.push({ id: d.id, t: 0 }); this._syncType(item, G.time.elapsed, true); }
+      if (r) {
+        r.yaw = this._yard.rot + d.rot;
+        if (reduceMotion()) r.scale = 1; // reduced motion: the decoration is simply there
+        else { r.scale = 0.001; this._pops.push({ id: d.id, t: 0 }); }
+        this._syncType(item, G.time.elapsed, true);
+      }
       G.sfx('plant');
       try {
         G.fx?.burst?.('dust', { x: cell.x, y: cell.y + 0.05, z: cell.z }, { count: 10 });
@@ -2513,7 +2548,7 @@
       } catch (err) { /* fx optional */ }
       G.dirty('engagement');
       G.bus.emit('engagement:decor', { action: 'place', id: d.id, item });
-      if (e.decor.length === 1) this.notify({ type: 'decor', icon: '🏡', title: '나만의 마당을 꾸미기 시작했어요!', text: `${itemName(item)}을(를) 놓았어요. 장식은 최대 ${MAX_DECOR}개까지 놓을 수 있어요.`, act: 'decor', read: true });
+      if (e.decor.length === 1) this.notify({ type: 'decor', icon: '🏡', title: '나만의 마당을 꾸미기 시작했어요!', text: `${josa(itemName(item), '을/를')} 놓았어요. 장식은 최대 ${MAX_DECOR}개까지 놓을 수 있어요.`, act: 'decor', read: true });
       this._renderBar();
       this._uiDirty('decor');
       return { ...d };

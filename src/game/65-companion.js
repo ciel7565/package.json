@@ -535,12 +535,13 @@
       const root = this.root;
       if (!root || !root.firstElementChild) return;
       const gap = 12;
-      let left = gap, bottom = G.input?.touchUI ? 200 : 96;
+      let left = gap, bottom = G.input?.touchUI ? 200 : 96, chatR = null;
       const chat = document.getElementById('chat-panel');
       if (chat && chat.offsetParent !== null) {
         const r = chat.getBoundingClientRect();
-        if (r.height > 0 && r.width > 0) { left = r.left; bottom = innerHeight - r.top + 10; }
+        if (r.height > 0 && r.width > 0) { left = r.left; bottom = innerHeight - r.top + 10; chatR = r; }
       }
+      root.style.top = '';
       root.style.left = left + 'px';
       root.style.bottom = bottom + 'px';
       root.style.maxWidth = Math.max(220, innerWidth - left - 10) + 'px';
@@ -567,6 +568,30 @@
           root.style.maxWidth = Math.max(200, innerWidth - nl - 10) + 'px';
         }
       }
+      // short screens (landscape phones; the kid chat at the top of a portrait phone): "above the chat" would push
+      // the card off the top of the screen over the top HUD. Then try beside the chat panel just under the top HUD,
+      // then under the chat panel, and at least keep it under the top HUD (over the chat log, never off screen).
+      const cr = root.getBoundingClientRect();
+      if (cr.top < topClear(cr.left, cr.right)) {
+        const at = (l, room, top) => {
+          root.style.left = l + 'px';
+          root.style.maxWidth = Math.max(200, room) + 'px';
+          root.style.bottom = 'auto';
+          root.style.top = (top ?? topClear(l, l + Math.min(root.offsetWidth, room))) + 'px';
+          const r = root.getBoundingClientRect();
+          return r.top >= topClear(r.left, r.right) - 1 && r.bottom <= innerHeight - 4 && !hudHit(r);
+        };
+        let ok = false;
+        if (chatR) {
+          const nl = chatR.right + 10;
+          let room = innerWidth - nl - 10;
+          const hr = document.getElementById('hud-right')?.getBoundingClientRect();
+          if (hr && hr.width && hr.left > nl) room = Math.min(room, hr.left - 10 - nl);
+          if (room >= 240) ok = at(nl, room);
+          if (!ok) ok = at(cr.left, innerWidth - cr.left - 10, chatR.bottom + 10);
+        }
+        if (!ok) at(cr.left, innerWidth - cr.left - 10);
+      }
     },
 
     hide(reason) {
@@ -588,6 +613,28 @@
       if (this.root) this.root.innerHTML = '';
     },
   };
+
+  /** does rect r cover one of the HUD controls (menus, chat, joystick, buttons)? */
+  function hudHit(r) {
+    for (const sel of ['#hud-profile', '#hud-left-menu', '#hud-right', '#chat-panel', '.bottom-bar', '.joystick', '.mobile-buttons', '#easy-next']) {
+      const el = document.querySelector(sel);
+      if (!el || el.hidden || !el.getClientRects().length) continue;
+      const b = el.getBoundingClientRect();
+      if (b.width && r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top) return true;
+    }
+    return false;
+  }
+  /** first free y (px) under the top HUD pieces that overlap the x-range [l, r] */
+  function topClear(l, r) {
+    let y = 8;
+    for (const id of ['hud-profile', 'hud-player', 'objective-hint', 'easy-next', 'hud-right']) {
+      const el = document.getElementById(id);
+      if (!el || el.hidden || !el.getClientRects().length) continue;
+      const b = el.getBoundingClientRect();
+      if (b.width && b.top < innerHeight * 0.5 && b.left < r && b.right > l) y = Math.max(y, b.bottom + 8);
+    }
+    return y;
+  }
 
   // ================================================================= hints & tips content
   const OBJ_EMOJI = { talk: '💬', visit: '🧭', water: '💧', plant: '🌱', harvest: '🧺', ferment_check: '🏺', ferment_start: '🫘', ferment_claim: '🏺', edu: '📖', quiz: '❓', journal: '📝', photo: '📸', emote: '😊', gesture: '👋', interact: '✨', collect: '🎒', craft: '🛠️', chat: '💬', visit_all: '🗺️', level: '⭐' };
@@ -627,22 +674,24 @@
     return null;
   }
   function distTo(x, z) { const p = G.sys.player?.position; return p ? Math.hypot(x - p.x, z - p.z) : Infinity; }
+  /** beyond this a tip opens the world map instead of walking: ~20 s on foot (70 m at the phase-1 pace; the player
+   *  is speedScale × faster since phase 4, so ~210 m — the 만장대 start → 발효마스터 walk is a walk, not a map) */
+  const farWalk = () => 70 * Math.max(1, Number(G.sys.player?.speedScale) || 1);
   /** walk to an interactable and use it (close), or open the world map when it is far away */
   function goInteract(id) {
     const e = G.interact?.get?.(id);
     if (!e) { if (kidOn()) G.ui.triggerAction?.('where'); else G.sys.minimap?.openWorldMap?.(); return false; }
     const p = entryPos(e);
-    if (p && distTo(p.x, p.z) > 70) {
-      // easy mode never sends a child to a map: 옹이 walks (or travels) there with them
-      if (kidOn() && G.easy?.goTo) { G.easy.goTo({ x: p.x, z: p.z }, { label: '' }); return true; }
-      G.ui.toast('조금 멀어요! 지도에서 위치를 확인해 보세요 🗺️', { type: 'info', emoji: '🏺' }); G.sys.minimap?.openWorldMap?.(); return false;
-    }
+    const far = p ? distTo(p.x, p.z) : 0;
+    // easy mode never sends a child to a map: 옹이 walks (or travels) there with them
+    if (far > 70 && kidOn() && G.easy?.goTo) { G.easy.goTo({ x: p.x, z: p.z }, { label: '' }); return true; }
+    if (far > farWalk()) { G.ui.toast('조금 멀어요! 지도에서 위치를 확인해 보세요 🗺️', { type: 'info', emoji: '🏺' }); G.sys.minimap?.openWorldMap?.(); return false; }
     return !!G.interact.activate(id);
   }
   function goTo(x, z, label) {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
     if (kidOn() && G.easy?.goTo) { G.easy.goTo({ x, z, label: label || '' }, { label: label || '' }); return true; }
-    if (distTo(x, z) > 70) { G.sys.minimap?.openWorldMap?.(); return false; }
+    if (distTo(x, z) > farWalk()) { G.sys.minimap?.openWorldMap?.(); return false; }
     return !!G.sys.player?.walkTo?.({ x, z }, { stopDistance: 2.2 });
   }
   /** 쉬운 모드 action for a G.easy.nextStep() result: its own act, or 👉 같이 가기 */
@@ -660,7 +709,7 @@
     if (!q) return null;
     const tg = f.target;
     const dist = tg ? distTo(tg.x, tg.z) : null;
-    const go = tg ? { label: dist > 70 ? '지도 보기' : '같이 가기', fn: () => goTo(tg.x, tg.z) } : null;
+    const go = tg ? { label: dist > farWalk() ? '지도 보기' : '같이 가기', fn: () => goTo(tg.x, tg.z) } : null;
     if (f.mode === 'giver') {
       const nm = G.data.npcs?.[q.giver]?.name || '안내원';
       return { key: 'giver:' + f.questId, mood: 'wink', text: `${nm}에게 말을 걸면 새 퀘스트 「${q.title}」${josa(q.title.slice(-1), '을/를').slice(1)} 받을 수 있어요! 💬`, action: go };
@@ -729,7 +778,7 @@
       for (const jid of F?.myJarIds?.() || []) {
         const j = F.getJar?.(jid);
         if (!j || j.status !== 'COMPLETE') continue;
-        const rn = j.recipe?.name || '장';
+        const rn = (j.recipe?.name || '장').replace(/ 체험$/, '');   // '된장 체험' → '된장' (as 60-social does)
         if (kid && !kidStepMatch(step, 'jar')) break;
         out.push({ key: `jar:${jid}:${j.state?.startedAt || 0}`, prio: 90, mood: 'cheer', cd: 600,
           text: kid ? `내 장독의 ${josa(rn, '이/가')} 다 익었어요! 🏺 열어 봐요!` : `내 항아리의 ${josa(rn, '이/가')} 다 익었어요! 🏺✨ 열어 볼까요?`,
@@ -1536,11 +1585,12 @@
       if (this._lagT > 0.9 && !frozen) { this._lagT = 0; this._poof(true); dPl = Math.hypot(pp.x - this.pos.x, pp.z - this.pos.z); }
 
       // ---- integrate with light collision (no own collider; never enters water / climbs walls), sub-stepped
-      //      like the player (≤ 0.3 m per step) so a fast catch-up never tunnels through a fence
+      //      like the player (≤ 0.25 m per step: less than the 0.24 m radius + half a thin rail) so a fast catch-up
+      //      never tunnels through a fence or the 만장대 balustrade, even at 10 fps (28.8 m/s × 0.1 s = 12 steps)
       const ox = this.pos.x, oz = this.pos.z;
       const v2 = this.vel.x * this.vel.x + this.vel.z * this.vel.z;
       if (v2 > 1e-6) {
-        const steps = Math.min(8, Math.max(1, Math.ceil((Math.sqrt(v2) * dt) / 0.3)));
+        const steps = Math.min(16, Math.max(1, Math.ceil((Math.sqrt(v2) * dt) / (Number(P.maxSubstep) || 0.25))));
         const sdt = dt / steps;
         let blocked = false;
         for (let i = 0; i < steps; i++) {
@@ -1554,11 +1604,20 @@
         }
         this._stuck = blocked ? this._stuck + dt : Math.max(0, this._stuck - dt * 0.5);
       }
-      // personal space: never stand inside the player
+      // personal space: never stand inside the player — resolved against the colliders like a move (≤ 0.2 m a step),
+      // so the player walking into 옹이 at a rail never shoves it through the 만장대 balustrade or a fence
       const sx = this.pos.x - pp.x, sz = this.pos.z - pp.z, sd = Math.hypot(sx, sz);
       if (sd < 0.72 && Math.abs(this.groundY - pp.y) < 1) {
         const nx = sd > 1e-3 ? sx / sd : -fx, nz = sd > 1e-3 ? sz / sd : -fz, push = (0.72 - sd) * Math.min(1, dt * 12);
-        if (!W.isWater(this.pos.x + nx * push, this.pos.z + nz * push)) { this.pos.x += nx * push; this.pos.z += nz * push; }
+        const n = Math.ceil(push / 0.2), sp = push / n;
+        for (let i = 0; i < n; i++) {
+          _tmp.set(this.pos.x + nx * sp, this.groundY, this.pos.z + nz * sp);
+          W.resolve(_tmp, 0.24, this.groundY);
+          W.clampToBounds(_tmp);
+          const gy = W.heightAt(_tmp.x, _tmp.z, this.groundY + 0.5);
+          if (W.isWater(_tmp.x, _tmp.z) || !Number.isFinite(gy) || gy - this.groundY > 0.75) break;
+          this.pos.x = _tmp.x; this.pos.z = _tmp.z;
+        }
       }
       if (this._stuck > 2 && dPl > 3.2) this._poof(true);
       const moved = Math.hypot(this.pos.x - ox, this.pos.z - oz);

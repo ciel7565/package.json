@@ -103,13 +103,15 @@ return [
     // ------------------------------------------------------------------ rate limits [requests, window seconds]
     // 로그인 사용자는 계정별, 비로그인 방문자는 브라우저 세션별로 셉니다. 비로그인 요청은 추가로 같은 IP 전체에
     // (한도 × rate_limit_ip_multiplier) 상한이 걸립니다 — 한 IP(학교·단체 NAT)에 여러 명이 있어도 동작하도록.
-    // login / register 는 IP 단위로만 셉니다.
+    // login 은 IP 단위로만 셉니다. register 는 시도(입력 오류 포함)를 브라우저 세션별로(+ IP 전체 상한), 실제로 만들어진
+    // 계정 수를 IP 별로(register_ip) 셉니다 — 한 교실(같은 IP)의 아이들이 비밀번호를 몇 번 틀려도 모두 가입할 수 있게.
     'rate_limit_ip_multiplier' => 25,
     'rate_limits' => [
         'ping'         => [60, 60],
         'time'         => [120, 60],
         'me'           => [120, 60],
-        'register'     => [30, 3600],
+        'register'     => [20, 3600],
+        'register_ip'  => [60, 3600],
         'login'        => [60, 300],
         'logout'       => [30, 60],
         'player_get'   => [60, 60],
@@ -133,7 +135,7 @@ return [
         'page_size'        => 60,
         'local_radius'     => 30,     // '주변' 채널 메시지를 받을 거리(m)
         'retention_days'   => 30,     // 이보다 오래된 메시지는 정리
-        'reasons'          => ['abuse', 'spam', 'harass', 'privacy', 'etc'],
+        'reasons'          => ['abuse', 'spam', 'harass', 'privacy', 'etc', 'kid'],   // kid = 쉬운 모드 아이의 한 번 누르기 신고
         // 게임(01-data.js badWords)과 같은 목록 + 추가 단어. 글자 사이 공백·기호도 걸러냅니다.
         'bad_words'        => ['시발', '씨발', 'ㅅㅂ', '병신', 'ㅂㅅ', '개새끼', '좆', '지랄', 'fuck', 'shit', 'bitch', '썅', '느금', '니애미', 'ㅄ'],
     ],

@@ -30,7 +30,7 @@ const TABS = [
     'audit' => ['📜', '감사 로그'],
     'maintenance' => ['🧰', '유지보수'],
 ];
-const REASONS = ['abuse' => '욕설·비방', 'spam' => '도배·광고', 'harass' => '불쾌한 행동', 'privacy' => '개인정보 노출', 'etc' => '기타'];
+const REASONS = ['kid' => '🧒 어린이 신고', 'abuse' => '욕설·비방', 'spam' => '도배·광고', 'harass' => '불쾌한 행동', 'privacy' => '개인정보 노출', 'etc' => '기타'];
 
 function e(mixed $v): string { return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8'); }
 function when(int|string|null $ms): string { $ms = (int) $ms; return $ms > 0 ? date('Y-m-d H:i', intdiv($ms, 1000)) : '-'; }
@@ -242,7 +242,7 @@ function viewModeration(): string
 {
     $all = ($_GET['show'] ?? '') === 'all';
     $reports = Db::all('SELECT r.*, ru.nickname AS reporter, m.hidden AS msg_hidden FROM chat_reports r LEFT JOIN users ru ON ru.id = r.reporter_id LEFT JOIN chat_messages m ON m.id = r.message_id '
-        . ($all ? '' : "WHERE r.status = 'open' ") . 'ORDER BY r.id DESC LIMIT 100');
+        . ($all ? '' : "WHERE r.status = 'open' ") . "ORDER BY CASE WHEN r.status = 'open' AND r.reason = 'kid' THEN 0 ELSE 1 END, r.id DESC LIMIT 100"); // open child reports first
     $h = '<section class="card"><h3>🚨 신고 ' . ($all ? '(전체)' : '(처리 대기)') . '</h3><p class="row"><a class="btn ghost" href="admin.php?tab=moderation' . ($all ? '' : '&amp;show=all') . '">' . ($all ? '처리 대기만 보기' : '전체 보기') . '</a></p>';
     if (!$reports) $h .= '<p class="empty">🎉 처리할 신고가 없어요.</p>';
     else {

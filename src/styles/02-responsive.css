@@ -97,8 +97,10 @@ body.is-touch .bottom-bar { bottom: .5rem; }
   body.show-quests .quest-panel { display: flex; }
   .chat-panel { display: none; }
   body.show-chat .chat-panel { display: flex; left: .5rem; right: .5rem; width: auto; bottom: 11rem; }
-  .hud-top-center { width: 92vw; top: auto; bottom: 21rem; }
-  .toast-root { top: 3.8rem; }
+  /* the 현재 목표 tracker sits under the minimap — clear of the avatar (screen middle) and of the left icon column —
+     and toasts stack just below it instead of over the top-left HUD (easy mode has its own rules below) */
+  .hud-top-center { width: auto; left: var(--gap); right: var(--gap); transform: none; top: calc(var(--gap) + 12.2rem); bottom: auto; }
+  .toast-root { top: calc(var(--gap) + 15.8rem); }
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
@@ -160,26 +162,26 @@ body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !importan
 
 /* tablets / small laptops: minimap is the first thing to go */
 @media (max-width: 820px), (max-height: 520px) {
-  body.easy { --easy-ava: 3.4rem; }
+  body.easy { --easy-ava: 3.4rem; } /* the 13 px root of small screens: kid text keeps a 16 px floor via max(16px, …) */
   body.easy .hud-avatar { font-size: 1.5rem; }
   body.easy .hud-player { min-width: 0; max-width: 12.5rem; padding: .35rem .75rem; }
-  body.easy .hud-nick { font-size: 1rem; max-width: 8rem; }
-  body.easy .hud-currency { font-size: 1.08rem; }
+  body.easy .hud-nick { font-size: max(16px, 1rem); max-width: 8rem; }
+  body.easy .hud-currency { font-size: max(16px, 1.08rem); }
   body.easy .minimap-panel { display: none !important; }
   body.easy .hud-right { width: auto; flex-direction: row; gap: .5rem; align-items: flex-start; }
   body.easy .easy-where-btn { width: var(--tap); height: var(--tap); min-height: 0; padding: 0; border-radius: 50%; }
   body.easy .easy-where-btn .lbl { display: none; }
-  body.easy .hud-left-menu { width: max(4.7rem, calc(var(--tap) + .6rem + 2px)); padding: .3rem; gap: .3rem; }
+  body.easy .hud-left-menu { width: max(4.7rem, calc(var(--tap) + 1.2rem + 2px)); padding: .3rem; gap: .3rem; }
   body.easy .hud-left-menu .lm-tile { min-height: var(--tap); padding: .25rem .1rem .3rem; }
   body.easy .hud-left-menu .lm-emo { font-size: 1.7rem; }
-  body.easy .hud-left-menu .lbl { font-size: max(13px, .74rem); }
+  body.easy .hud-left-menu .lbl { font-size: max(16px, .74rem); letter-spacing: -.02em; }
   body.easy .bottom-bar > button { min-width: 4.6rem; min-height: var(--tap); padding: .2rem .35rem; }
   body.easy .bottom-bar .bb-emo { font-size: 1.75rem; }
-  body.easy .bottom-bar .lbl { display: block; font-size: max(14px, .72rem); }
+  body.easy .bottom-bar .lbl { display: block; font-size: max(16px, .72rem); letter-spacing: -.02em; }
   body.easy .easy-next { padding: .45rem .5rem; gap: .55rem; border-radius: 20px; }
   body.easy .easy-next .en-emoji { width: 2.9rem; height: 2.9rem; font-size: 1.8rem; border-radius: 14px; }
   body.easy .easy-next .en-label { display: none; }
-  body.easy .easy-next .en-text { font-size: 1.05rem; }
+  body.easy .easy-next .en-text { font-size: max(16px, 1.05rem); }
   body.easy .easy-next .en-go .en-go-lbl { display: none; }
   body.easy .easy-next .en-go { padding: 0; width: var(--tap); justify-content: center; }
   body.easy .easy-next .en-btns { gap: .35rem; }
@@ -214,8 +216,9 @@ body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !importan
 /* landscape phones: tiles in a 2×2 block, card between profile and the corner buttons */
 @media (orientation: landscape) and (max-height: 520px) {
   body.easy .hud-player { display: flex; max-width: calc(50vw - 21rem); min-width: 8rem; }
-  body.easy .hud-left-menu { top: calc(var(--gap) + var(--easy-card) + .4rem); bottom: auto; width: auto; display: grid; grid-template-columns: repeat(2, 3.7rem); }
-  body.easy .hud-left-menu .lm-tile { min-height: 3.5rem; }
+  /* the 13 px root font of short screens must not shrink kid tap targets under --tap (56 px) */
+  body.easy .hud-left-menu { top: calc(var(--gap) + var(--easy-card) + .4rem); bottom: auto; width: auto; display: grid; grid-template-columns: repeat(2, max(3.7rem, var(--tap))); }
+  body.easy .hud-left-menu .lm-tile { min-height: max(3.5rem, var(--tap)); }
   body.easy .hud-left-menu .lbl { display: none; }
   body.easy .hud-left-menu .lm-emo { font-size: 1.7rem; }
   body.easy .hud-top-center { top: var(--gap); width: min(26rem, 42vw); }
@@ -225,7 +228,8 @@ body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !importan
   body.easy .zone-label { top: 5.2rem; }
   body.easy .toast-root { top: 5rem; }
   body.easy .bottom-bar { bottom: .35rem; }
-  body.easy .bottom-bar > button { min-width: 4.2rem; }
+  body.easy .bottom-bar > button { min-width: max(4.2rem, var(--tap)); min-height: var(--tap); }
+  body.easy .mobile-buttons { transform: none; } /* the .85 scale above would take jump / run under 56 px */
   body.easy.is-touch .interact-prompt { bottom: 6.2rem; }
   body.easy.is-touch .joystick { width: 7.6rem; height: 7.6rem; bottom: .9rem; }
   body.easy.show-chat #chat-panel { left: calc(var(--gap) + 8.2rem); top: 6.8rem; bottom: auto; width: 15rem; }

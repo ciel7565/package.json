@@ -12,7 +12,9 @@ use Tfm\{Api, ApiException, Audit, ChatFilter, Config, Ctx, Db, Users};
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function (Ctx $c): array {
     $b = $c->json(8192);
-    $reasons = (array) Config::get('chat.reasons', ['abuse', 'spam', 'harass', 'privacy', 'etc']);
+    // 'kid' is the one-tap report of a child in easy mode (60-social _kidReport); always accepted, even when an older
+    // config.local.php lists its own reasons, so a child's report never turns into a plain '기타'
+    $reasons = array_merge((array) Config::get('chat.reasons', ['abuse', 'spam', 'harass', 'privacy', 'etc']), ['kid']);
     $reason = is_string($b['reason'] ?? null) && in_array($b['reason'], $reasons, true) ? $b['reason'] : 'etc';
     $target = Users::cleanText(is_string($b['target'] ?? null) ? $b['target'] : '', 40);
     // reports may quote personal information (reason "privacy"): admins see that something was shared, not the data

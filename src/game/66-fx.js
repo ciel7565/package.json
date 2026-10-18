@@ -413,7 +413,7 @@
       if (fl & F_GROW) { const e = 1 - Math.pow(1 - k, 3); size = P.s0[i] + (P.s1[i] - P.s0[i]) * e; }
       else {
         size = P.s0[i] + (P.s1[i] - P.s0[i]) * k;
-        if (k < 0.12) { const q = k / 0.12; size *= 1 + 2.2 * (q - 1) * (q - 1) * (q - 1) + 1.2 * (q - 1) * (q - 1); } // ease-out-back pop
+        if (k < 0.12) { const q = k / 0.12; size *= 1 + 2 * (q - 1) * (q - 1) * (q - 1) + (q - 1) * (q - 1); } // ease-out-back pop (peak +3.7 %)
       }
       if (fl & F_TWINKLE) size *= 0.72 + 0.28 * Math.sin(life * 11 + P.ph[i]);   // ≈ 1.7 Hz: well under the 3 Hz flash limit
       const fo = P.fout[i];
@@ -990,11 +990,13 @@
         P.iPos[i3] = it.base.x + it.dx * u + Math.sin(it.t * 2.6 + it.ph) * 0.06;
         P.iPos[i3 + 1] = it.base.y + it.oy + rise;
         P.iPos[i3 + 2] = it.base.z + it.dz * u;
+        // pop in to 104 % and settle (no overshoot past 4 %); reduceMotion: full size at once, a short fade-in instead
+        const mo = motion();
         const pop = u < 0.16 ? (u / 0.16) : 1;
-        const sc = u < 0.16 ? 1.32 * Math.sin(pop * Math.PI / 2) : u < 0.3 ? 1.32 - 0.32 * ((u - 0.16) / 0.14) : 1;
+        const sc = !mo ? 1 : u < 0.16 ? 1.04 * Math.sin(pop * Math.PI / 2) : u < 0.3 ? 1.04 - 0.04 * ((u - 0.16) / 0.14) : 1;
         P.iData[i4] = it.size * sc;
-        P.iData[i4 + 1] = u > 0.7 ? 1 - (u - 0.7) / 0.3 : 1;
-        P.iData[i4 + 2] = motion() ? Math.sin(it.t * 3.4 + it.ph) * 0.14 : 0;
+        P.iData[i4 + 1] = (u > 0.7 ? 1 - (u - 0.7) / 0.3 : 1) * (mo ? 1 : Math.min(1, u / 0.08));
+        P.iData[i4 + 2] = mo ? Math.sin(it.t * 3.4 + it.ph) * 0.14 : 0;
         P.iData[i4 + 3] = 1;
         P.iCol[i3] = P.iCol[i3 + 1] = P.iCol[i3 + 2] = 1;
         P.iMisc[(w - 1) * 2] = it.cell; P.iMisc[(w - 1) * 2 + 1] = 0;
@@ -1013,7 +1015,7 @@
       const geo = new THREE.CylinderGeometry(1, 1, 1, 40, 1, true);
       geo.translate(0, 0.5, 0);
       // NaN-safe: every normalize is guarded (a pillar scaled thin must never feed normalize(vec3(0)) to the GPU)
-      const mk = (core) => new THREE.ShaderMaterial({
+      const mk = (core) => lightMat(new THREE.ShaderMaterial({
         uniforms: { uTime: { value: 0 }, uOp: { value: 0 }, uColor: { value: new THREE.Color(core ? 0xfff2c0 : 0xffc94a) } },
         vertexShader: `varying vec2 vUv; varying float vFace;
           void main(){
@@ -1032,9 +1034,10 @@
             gl_FragColor = vec4(uColor * (1.1 + facing), a);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
+            gl_FragColor.rgb *= gl_FragColor.a;   // premultiplied (lightMat blending)
           }`,
-        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-      });
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
       const outer = new THREE.Mesh(geo, mk(false));
       const inner = new THREE.Mesh(geo, mk(true));
       for (const m of [outer, inner]) { m.frustumCulled = false; m.renderOrder = 13; m.raycast = () => {}; }
@@ -1055,6 +1058,7 @@
       const quest = kind === 'quest';
       P.kind = quest ? 'quest' : 'level';
       P.t = 0; P.active = true; P.spawnAcc = 0; P.showerAcc = 0; P.group.visible = true;
+      lightBlend(P.outer.material); lightBlend(P.inner.material);   // HDR additive / LDR screen (see lightMat)
       P.dur = quest ? 2.4 : 2.8; P.tall = quest ? 12 : 16; P.follow = !pos;
       P.outer.material.uniforms.uColor.value.set(quest ? 0x7fe3b4 : 0xffc94a);
       P.inner.material.uniforms.uColor.value.set(quest ? 0xdcffec : 0xfff2c0);
@@ -1130,13 +1134,17 @@
           if (sp > (WALK + RUN) * 0.5 && (l > 1 || (steps & 1))) this._footDust(pl, l, 0.8);
         }
       }
-      // kick-off (walk/stand -> sprint) and skid (sprint -> sudden stop) dust
+      // kick-off (stand -> walk/sprint) and skid (sprint -> sudden stop) dust. The player speeds up / brakes over a
+      // few frames (21-player ACCEL / DECEL): the kick compares with the speed of the last 0.35 s, the skid fires
+      // when the wanted speed drops away while still sprinting (input released; an auto-walk brakes gently instead)
       const prev = this._spPrev ?? sp;
       this._spPrev = sp;
-      this._sprintT = sp > RUN * 0.8 ? (this._sprintT || 0) + dt : 0;
+      const ft = (this._pfT = (this._pfT || 0) + dt);
+      if (this._slowAt === undefined || prev < WALK * 0.55) this._slowAt = ft;
       if (pl.grounded && !quietCam) {
-        if (prev < WALK * 0.55 && sp > WALK * 0.9 && pnow() - (this._kickAt || 0) > 900) { this._kickAt = pnow(); this._footDust(pl, l, 1.2, -1); }
-        if (prev > RUN * 0.7 && sp < WALK * 0.45 && this._sprintPeak > 0.4 && pnow() - (this._skidAt || 0) > 700) { this._skidAt = pnow(); this._footDust(pl, l, 1.5, 1); }
+        if (prev <= WALK * 0.9 && sp > WALK * 0.9 && ft - this._slowAt < 0.35 && pnow() - (this._kickAt || 0) > 900) { this._kickAt = pnow(); this._footDust(pl, l, 1.2, -1); }
+        const want = Number(pl.wantSpeed);
+        if (want < WALK * 0.45 && prev > RUN * 0.7 && this._sprintPeak > 0.4 && pnow() - (this._skidAt || 0) > 700) { this._skidAt = pnow(); this._footDust(pl, l, 1.5, 1); }
       }
       this._sprintPeak = sp > RUN * 0.7 ? Math.min(2, (this._sprintPeak || 0) + dt) : Math.max(0, (this._sprintPeak || 0) - dt * 2);
       if (!pl.grounded) { this._airVy = Math.min(this._airVy, pl.velocity?.y || 0); this._wasAir = true; }
@@ -1526,11 +1534,15 @@
         const now = pnow();
         if (now - this._itemAt < 220) return;   // a reward with many items: the first one flies, the bag bumps for all
         this._itemAt = now;
-        let from = null;
-        if (/^harvest|^farm/.test(src) && this._lastFarm && now - this._lastFarm.t < 900) from = this._lastFarm.v;
-        else if (/^ferment/.test(src) && this._lastJar && now - this._lastJar.t < 900) from = this._lastJar.v;
-        else { const hp = headPos(null, new THREE.Vector3(), 0); from = hp; }
-        this._later(() => { if (G.state) this.itemFly(from, itemId, { qty }); }, /^harvest|^farm/.test(src) ? 260 : 120);
+        const farm = /^harvest|^farm/.test(src), jar = /^ferment/.test(src);
+        // farm:harvested / ferment:claimed (which name the plot / jar) are emitted AFTER the item is in the bag:
+        // pick the start point when the flight starts, not now
+        this._later(() => {
+          if (!G.state) return;
+          const L = farm ? this._lastFarm : jar ? this._lastJar : null;
+          const from = L && Math.abs(L.t - now) < 900 ? L.v : headPos(null, new THREE.Vector3(), 0);
+          this.itemFly(from, itemId, { qty });
+        }, farm ? 260 : 120);
       });
 
       // first visit of a zone: a 3D name board floats in front of the camera
@@ -1828,6 +1840,20 @@
   }
   /** the low quality preset stays cheap: one afterimage, the short speed-line set */
   const lowQ = () => G.sys.engine?.quality === 'low';
+  // Light effects (portal, light pillar) output premultiplied colour and blend "additively" in two ways: on the HDR composer
+  // target (medium / high) as plain additive light (dst + c·a, tone-mapped later by the OutputPass); on the low
+  // preset — straight into the 8-bit canvas, already tone-mapped — as "screen" (dst + c·a·(1 − dst)), which can
+  // never clip a bright scene to a flat white block over the character.
+  function lightMat(m) {
+    m.blending = THREE.CustomBlending; m.blendEquation = THREE.AddEquation;
+    m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor;
+    m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor;
+    return m;
+  }
+  function lightBlend(m) {
+    const src = G.sys.engine?.composer ? THREE.OneFactor : THREE.OneMinusDstColorFactor;
+    if (m.blendSrc !== src) m.blendSrc = src;
+  }
   function weatherId() { const c = G.sys.weather?.current; return (c && typeof c === 'object' ? c.id : c) || 'CLEAR'; }
   function wetness() {
     const W = G.sys.weather;
@@ -1979,6 +2005,7 @@
       gl_FragColor = vec4(c, clamp(a, 0.0, 1.0));
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
+      gl_FragColor.rgb *= gl_FragColor.a;   // premultiplied (lightMat blending)
     }`;
 
   // ---- canvas art
@@ -2187,11 +2214,11 @@
       const discGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
       const runeTex = G.gfx.canvasTexture(256, 256, (ctx, w) => drawRune(ctx, w));
       for (let k = 0; k < 2; k++) {
-        const colMat = new THREE.ShaderMaterial({
+        const colMat = lightMat(new THREE.ShaderMaterial({
           uniforms: { uProg: { value: 0 }, uTime: { value: 0 }, uOp: { value: 0 }, uDir: { value: 1 }, uColor: { value: new THREE.Color('#ffcf73') }, uEdge: { value: new THREE.Color('#fff6dc') } },
-          vertexShader: PORTAL_VS, fragmentShader: PORTAL_FS, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-        });
-        const discMat = new THREE.MeshBasicMaterial({ map: runeTex, color: 0xffd36a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+          vertexShader: PORTAL_VS, fragmentShader: PORTAL_FS, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        }));
+        const discMat = lightMat(new THREE.MeshBasicMaterial({ map: runeTex, color: 0xffd36a, transparent: true, opacity: 0, depthWrite: false, premultipliedAlpha: true, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
         const col = new THREE.Mesh(colGeo, colMat), disc = new THREE.Mesh(discGeo, discMat);
         col.renderOrder = 13; disc.renderOrder = 3;
         const g = new THREE.Group(); g.name = 'fx-portal'; g.add(col, disc); g.visible = false;
@@ -2463,6 +2490,7 @@
       const reduce = !motion();
       P.mode = mode; P.t = 0; P.active = true; P.acc = 0; P.burst = false;
       P.dur = reduce ? 0.9 : mode === 'in' ? 1.35 : 0.95;
+      lightBlend(P.colMat); lightBlend(P.discMat);   // the preset (composer or straight to the canvas) may have changed
       P.g.position.copy(pos);
       P.g.position.y = groundAt(pos.x, pos.z, pos.y + 0.6);
       P.colMat.uniforms.uDir.value = mode === 'in' ? 1 : -1;
@@ -2531,7 +2559,8 @@
       B.t += dt;
       // left the zone (fast travel, teleport, walked on): the board lifts away now instead of naming the wrong place
       const zNow = G.sys.minimap?.currentZone?.id || G.state?.player?.zoneId || null;
-      if (zNow && B.zone && zNow !== B.zone && B.t < B.dur - 0.35) B.t = B.dur - 0.35;
+      // (the fade-out starts from where the board is now: the end moves up to 0.6 s from now, B.t keeps running)
+      if (zNow && B.zone && zNow !== B.zone && B.t < B.dur - 0.6) B.dur = B.t + 0.6;
       if (!cam || B.t >= B.dur || !G.state || cinematic()) { B.active = false; B.g.visible = false; return; }
       const dist = 5.4;
       const fov = THREE.MathUtils.degToRad(cam.fov || 55);

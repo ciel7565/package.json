@@ -371,8 +371,9 @@ button.slot:active:not(:disabled), .slot[role="button"]:active { transform: scal
 .modal { animation: modalIn var(--dur-3) var(--ease-out) both; }
 .modal.from-origin { animation-name: modalFromOrigin; animation-duration: calc(var(--dur-3) + 60ms); }
 .modal-backdrop.no-enter, .modal-backdrop.no-enter .modal { animation: none; }
-/* leaving (04-ui): the box is renamed .modal-closing so selectors / audits only see live dialogs */
-.modal-backdrop.is-out { animation: fadeOut var(--dur-2) var(--ease-in) forwards; pointer-events: none; }
+/* leaving (04-ui): the box is renamed .modal-closing (and made inert) so selectors / audits only see live dialogs;
+   the fading backdrop still catches taps, so a double tap never falls through to the HUD behind it */
+.modal-backdrop.is-out { animation: fadeOut var(--dur-2) var(--ease-in) forwards; }
 .modal-backdrop.is-out .modal-closing { animation: modalOut var(--dur-2) var(--ease-in) forwards; }
 .modal.modal-sm { width: min(24rem, 100%); }
 .modal.modal-lg { width: min(48rem, 100%); }

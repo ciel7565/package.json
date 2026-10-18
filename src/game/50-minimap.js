@@ -44,7 +44,7 @@
     POI_MANJANGDAE_TRAIL: [31.2, 99.6, -2.0],
     // points of interest next to water: stand on the bank, looking at the sight (never in the pond basin)
     POI_WATERFALL: [-18, -58, -2.415],
-    POI_PAVILION: [43, 47, 2.28],
+    POI_PAVILION: [45.5, 44.5, 2.21],   // inside the place (r 7 around (50, 41)): the visit counts on arrival
     POI_RIVERSIDE: [74, 46, 1.89],
   };
   const KIND_R = { pine: 2.1, oak: 2.6, maple: 2.5, zelkova: 3.6, conifer: 1.55 };
@@ -891,6 +891,10 @@
       if (!w || !h) return;
       const W = Math.round(w * dpr), H = Math.round(h * dpr);
       if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+      // a small map (phone portrait) lays its overlays out differently (50-minimap.css .mm-small): the zoom column
+      // would cover the compass and the clock. Measured in rem, since small screens shrink the root font.
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      c.parentElement?.classList.toggle('mm-small', h < rem * 8.6);
       this._dpr = dpr; this._W = W; this._H = H;
       this._drawT = 1;
       this._updateScaleBar();

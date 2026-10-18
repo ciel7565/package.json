@@ -109,10 +109,22 @@ final class SaveValidator
         $meta['v'] = 1;
         $paid = is_array($meta['paid'] ?? null) ? $meta['paid'] : [];
         foreach (['q', 'a', 'z', 'e', 'g'] as $k) if (!isset($paid[$k]) || !is_array($paid[$k])) $paid[$k] = [];
+        // ids an older copy took back (see "regressed" below) and the losses that copy gave back: claiming such an
+        // id again is explained only from that credit, so a child can finish the quest again but nothing pays twice
+        $reg = is_array($meta['regressed'] ?? null) ? $meta['regressed'] : [];
+        foreach (['q', 'a', 'z', 'e'] as $k) if (!isset($reg[$k]) || !is_array($reg[$k])) $reg[$k] = [];
+        $cr = is_array($meta['credit'] ?? null) ? $meta['credit'] : [];
+        $credit = ['value' => max(0, (int) ($cr['value'] ?? 0)), 'exp' => max(0, (int) ($cr['exp'] ?? 0)), 'edu' => max(0, (int) ($cr['edu'] ?? 0))];
+        $fromCredit = ['value' => 0, 'exp' => 0, 'edu' => 0];
 
         $dt = max(0.0, ($now - $prevAt) / 1000);
         $statsNOf = fn (?object $s): ?object => $s ? self::o(self::p($s, 'stats')) : null;
         $explain = ['value' => 0, 'exp' => 0, 'edu' => 0];
+        $pay = function (string $kind, string $id, array $r) use (&$reg, &$explain, &$fromCredit): void {
+            $again = isset($reg[$kind][$id]);
+            unset($reg[$kind][$id]);
+            foreach ($r as $k => $x) { if ($again) $fromCredit[$k] += $x; else $explain[$k] += $x; }
+        };
         if ($first) $explain['value'] += (int) $this->t('new_player_value', 3000);
 
         if (!$first) $this->movement($statsNOf($n), $statsNOf($p), $dt);
@@ -152,8 +164,7 @@ final class SaveValidator
             $def = $gd['quests'][$qid] ?? null;
             if (!is_array($def)) { $this->notes[] = "unknown quest $qid"; continue; }
             $this->checkQuestObjectives($qid, $def, $n);
-            $r = GameData::rewardOf($def['reward'] ?? null);
-            foreach ($r as $k => $x) $explain[$k] += $x;
+            $pay('q', $qid, GameData::rewardOf($def['reward'] ?? null));
             $newQuests++;
         }
         $pAch = $p ? self::o(self::p($p, 'achievements')) : null;
@@ -165,11 +176,11 @@ final class SaveValidator
             $def = $gd['achievements'][$aid] ?? null;
             if (!is_array($def)) { $this->notes[] = "unknown achievement $aid"; continue; }
             if (isset($def['condition']['stat'], $def['condition']['gte']) && is_string($def['condition']['stat'])) {
-                $have = self::n(self::p($statsN, $def['condition']['stat']), -1);
-                if ($have >= 0 && $have < (float) $def['condition']['gte']) $this->violate('ACHIEVEMENT_CONDITION', ['id' => $aid]);
+                // a missing / null counter is 0 (the client never unlocks on one), never "cannot check"
+                $have = self::n(self::p($statsN, $def['condition']['stat']), 0.0);
+                if ($have < (float) $def['condition']['gte']) $this->violate('ACHIEVEMENT_CONDITION', ['id' => $aid]);
             }
-            $r = GameData::rewardOf($def['reward'] ?? null);
-            foreach ($r as $k => $x) $explain[$k] += $x;
+            $pay('a', $aid, GameData::rewardOf($def['reward'] ?? null));
         }
         $eduN = self::o(self::p($n, 'education'));
         $eduP = $p ? self::o(self::p($p, 'education')) : null;
@@ -181,8 +192,7 @@ final class SaveValidator
             $paid['z'][$zid] = $now;
             if ($solved(self::p($quizP, $zid))) continue;
             $def = $gd['quizzes'][$zid] ?? null;
-            $r = GameData::rewardOf(is_array($def) ? ($def['reward'] ?? ['exp' => 100, 'edu' => 10]) : ['exp' => 100, 'edu' => 10]);
-            foreach ($r as $k => $x) $explain[$k] += $x;
+            $pay('z', $zid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? ['exp' => 100, 'edu' => 10]) : ['exp' => 100, 'edu' => 10]));
         }
         $compP = self::o(self::p($eduP, 'completed'));
         foreach (self::kv(self::p($eduN, 'completed')) as $eid => $at) {
@@ -190,7 +200,7 @@ final class SaveValidator
             if (!$at || isset($paid['e'][$eid])) continue;
             $paid['e'][$eid] = $now;
             if (self::p($compP, $eid)) continue;
-            $explain['edu'] += (int) $this->t('edu_complete', 5);
+            $pay('e', $eid, ['value' => 0, 'exp' => 0, 'edu' => (int) $this->t('edu_complete', 5)]);
         }
         // daily engagement rewards (출석 체크 · 오늘의 미션, src/game/62-engagement.js): explained once per day key.
         // The client uses the player's local date, so only keys within ±1 day of the server date are accepted.
@@ -237,9 +247,7 @@ final class SaveValidator
             }
         }
 
-        // ledger size guard
-        foreach ($paid as $k => $list) if (count($list) > 2000) $paid[$k] = array_slice($list, -2000, null, true);
-        $meta['paid'] = $paid;
+        foreach ($fromCredit as $k => $x) { $use = min($x, $credit[$k]); $explain[$k] += $use; $credit[$k] -= $use; }
 
         // ---------------------------------------------------------- economy totals
         $wN = $this->netWorth($n);
@@ -275,6 +283,58 @@ final class SaveValidator
         $budget['exp'] = (int) $budget['exp'] + $uX;
         $budget['edu'] = (int) $budget['edu'] + $uE;
         $meta['budget'] = $budget;
+
+        // ---------------------------------------------------------- regressed rewards (an older copy won)
+        // A stale second tab / device or an imported file can be accepted (losses always are) with ledger-paid
+        // quests, achievements, quizzes or lessons no longer claimed. Their ledger entries move to "regressed",
+        // and what this save gave back (its loss, at most their rewards) becomes credit for claiming them again.
+        // Unclaiming while keeping the reward gives no credit: the re-claim stays unexplained (no farming).
+        if ($p !== null) {
+            $quizN = self::o(self::p($eduN, 'quiz'));
+            $compN = self::o(self::p($eduN, 'completed'));
+            $nQuests = self::o(self::p($n, 'quests'));
+            $nAch = self::o(self::p($n, 'achievements'));
+            $back = ['value' => 0, 'exp' => 0, 'edu' => 0];
+            $took = function (string $kind, string $id, array $r) use (&$paid, &$reg, &$back, $now): void {
+                unset($paid[$kind][$id]);
+                $reg[$kind][$id] = $now;
+                foreach ($r as $k => $x) $back[$k] += $x;
+            };
+            foreach (array_keys($paid['q']) as $qid) {
+                $qid = (string) $qid;
+                if (self::s(self::p(self::o(self::p($pQuests, $qid)), 'status')) === 'claimed' && self::s(self::p(self::o(self::p($nQuests, $qid)), 'status')) !== 'claimed') {
+                    $def = $gd['quests'][$qid] ?? null;
+                    $took('q', $qid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? null) : null));
+                }
+            }
+            foreach (array_keys($paid['a']) as $aid) {
+                $aid = (string) $aid;
+                if (self::p($pAch, $aid) && !self::p($nAch, $aid)) {
+                    $def = $gd['achievements'][$aid] ?? null;
+                    $took('a', $aid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? null) : null));
+                }
+            }
+            foreach (array_keys($paid['z']) as $zid) {
+                $zid = (string) $zid;
+                if ($solved(self::p($quizP, $zid)) && !$solved(self::p($quizN, $zid))) {
+                    $def = $gd['quizzes'][$zid] ?? null;
+                    $took('z', $zid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? ['exp' => 100, 'edu' => 10]) : ['exp' => 100, 'edu' => 10]));
+                }
+            }
+            foreach (array_keys($paid['e']) as $eid) {
+                $eid = (string) $eid;
+                if (self::p($compP, $eid) && !self::p($compN, $eid)) $took('e', $eid, ['value' => 0, 'exp' => 0, 'edu' => (int) $this->t('edu_complete', 5)]);
+            }
+            foreach (['value' => $dW, 'exp' => $dX, 'edu' => $dE] as $k => $delta) $credit[$k] += min($back[$k], max(0, -$delta));
+        }
+        $anyReg = false;
+        foreach ($reg as $k => $list) { if (count($list) > 2000) $reg[$k] = array_slice($list, -2000, null, true); if ($reg[$k]) $anyReg = true; }
+        if (!$anyReg) $credit = ['value' => 0, 'exp' => 0, 'edu' => 0];
+        // ledger size guard
+        foreach ($paid as $k => $list) if (count($list) > 2000) $paid[$k] = array_slice($list, -2000, null, true);
+        $meta['paid'] = $paid;
+        $meta['regressed'] = $reg;
+        $meta['credit'] = $credit;
 
         $ok = !$this->violations;
         return [
@@ -610,15 +670,15 @@ final class SaveValidator
     }
 
     /**
-     * Raw JSON text of "data" inside the request envelope {"version":n,"checksum":"…","data":{…}[,"csrf":"…"]}
+     * Raw JSON text of "data" inside the request envelope
+     * {"version":n,"checksum":"…"[,"base":n],"data":{…}[,"base":n][,"csrf":"…"]}
      * exactly as the browser serialized it (JSON.stringify is deterministic), or null if the shape differs.
      */
     public static function rawDataSlice(string $body): ?string
     {
-        if (!preg_match('/^\{"version":\d{1,6},"checksum":"[0-9a-f]{1,32}","data":/', $body, $m)) return null;
+        if (!preg_match('/^\{"version":\d{1,6},"checksum":"[0-9a-f]{1,32}",(?:"base":\d{1,12},)?"data":/', $body, $m)) return null;
         $rest = substr($body, strlen($m[0]));
-        if (preg_match('/,"csrf":"[A-Za-z0-9]{1,128}"\}$/', $rest, $c)) $rest = substr($rest, 0, -strlen($c[0]));
-        elseif (str_ends_with($rest, '}')) $rest = substr($rest, 0, -1);
+        if (preg_match('/(?:,"base":\d{1,12})?(?:,"csrf":"[A-Za-z0-9]{1,128}")?\}$/', $rest, $c)) $rest = substr($rest, 0, -strlen($c[0]));
         else return null;
         return ($rest !== '' && $rest[0] === '{') ? $rest : null;
     }

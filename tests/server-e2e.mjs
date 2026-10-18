@@ -198,8 +198,11 @@ async function main() {
   const B = new Client('B');            // second player (presence / chat / report)
   const anon = new Client('anon');      // never logs in
   const id = rnd();
-  const userA = { email: `e2e_${id}@example.com`, nickname: `발효${id.slice(0, 4)}`, password: PASSWORD };
-  const userB = { email: `e2e_b${id}@example.com`, nickname: `Tester_${id.slice(0, 4)}`, password: PASSWORD };
+  // nickname / innocent-text tails are digits only: random hex can spell platform names ("…fb", "…ig") that the
+  // nickname and PII rules refuse on purpose, which made a run fail now and then
+  const tag = String(parseInt(id, 16)).padStart(10, '0');
+  const userA = { email: `e2e_${id}@example.com`, nickname: `발효${tag.slice(-5)}`, password: PASSWORD };
+  const userB = { email: `e2e_b${id}@example.com`, nickname: `Tester_${tag.slice(-5)}`, password: PASSWORD };
   let me = null, stored = null, csrfBefore = null, cookieBefore = null;
 
   // ------------------------------------------------------------- basics
@@ -242,9 +245,9 @@ async function main() {
   });
   await step('register: validation (weak password, bad email, reserved nickname)', async () => {
     const c = new Client('v'); await c.req('api/ping.php');
-    let r = await c.req('api/auth/register.php', { json: { email: `w${id}@example.com`, nickname: `약한${id.slice(0, 3)}`, password: 'abcdefgh', password_confirm: 'abcdefgh', agree: true } });
+    let r = await c.req('api/auth/register.php', { json: { email: `w${id}@example.com`, nickname: `약한${tag.slice(-3)}`, password: 'abcdefgh', password_confirm: 'abcdefgh', agree: true } });
     assert(r.status === 400 && r.error?.code === 'PASSWORD_WEAK', `weak pw: ${r.status} ${r.error?.code}`);
-    r = await c.req('api/auth/register.php', { json: { email: 'not-an-email', nickname: `nick${id.slice(0, 3)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    r = await c.req('api/auth/register.php', { json: { email: 'not-an-email', nickname: `nick${tag.slice(-3)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
     assert(r.status === 400 && r.error?.code === 'EMAIL_INVALID', `email: ${r.status} ${r.error?.code}`);
     r = await c.req('api/auth/register.php', { json: { email: `r${id}@example.com`, nickname: '관리자', password: PASSWORD, password_confirm: PASSWORD, agree: true } });
     assert(r.status === 400 && r.error?.code === 'NICKNAME_INVALID', `nick: ${r.status} ${r.error?.code}`);
@@ -273,7 +276,7 @@ async function main() {
   });
   await step('register: duplicate email / nickname → 409', async () => {
     const c = new Client('dup'); await c.req('api/ping.php');
-    let r = await c.req('api/auth/register.php', { json: { email: userA.email.toUpperCase(), nickname: `other${id.slice(0, 4)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    let r = await c.req('api/auth/register.php', { json: { email: userA.email.toUpperCase(), nickname: `other${tag.slice(-5)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
     assert(r.status === 409 && r.error?.code === 'EMAIL_TAKEN', `email: ${r.status} ${r.error?.code}`);
     r = await c.req('api/auth/register.php', { json: { email: `x${id}@example.com`, nickname: userA.nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
     assert(r.status === 409 && r.error?.code === 'NICKNAME_TAKEN', `nick: ${r.status} ${r.error?.code}`);
@@ -465,8 +468,11 @@ async function main() {
     assert(g.status === 200 && (g.data?.messages || []).some((x) => x.id === msgId), 'guests can read');
   });
   await step('chat: 1 msg/s rate limit, repeat spam blocked, guests cannot send', async () => {
-    const t1 = await A.req('api/chat/send.php', { json: { text: `빠른 메시지 ${id}`, channel: 'all' } });
-    assert(t1.status === 429 && t1.error?.code === 'RATE_LIMITED', `rate: ${t1.status} ${t1.error?.code}`);
+    // two sends at once: whatever the previous step left (or how slow this server is), they land well inside
+    // chat.min_interval_ms of each other, so at least one is refused and never both accepted
+    const pair = await Promise.all([1, 2].map((n) => A.req('api/chat/send.php', { json: { text: `빠른 메시지 ${n} ${id}`, channel: 'all' } })));
+    const limited = pair.filter((r) => r.status === 429 && r.error?.code === 'RATE_LIMITED').length;
+    assert(limited >= 1 && pair.every((r) => r.status === 200 || r.status === 429), `rate: ${pair.map((r) => `${r.status} ${r.error?.code || ''}`).join(' / ')}`);
     await sleep(1100);
     const ok = await A.req('api/chat/send.php', { json: { text: `반복 ${id}`, channel: 'all' } });
     assert(ok.status === 200, `send: ${ok.status}`);
@@ -490,7 +496,7 @@ async function main() {
     const m = (l.data?.messages || []).find((x) => x.id === r.data.message.id);
     assert(m && m.text === t && !/1234|5678|kid\.dino/.test(l.text), 'other players only ever see the masked copy');
     await sleep(1100);
-    const ok = await A.req('api/chat/send.php', { json: { text: `오늘 콩 3개 심었어요! 레벨 12 됐어요 😊 ${id.slice(0, 2)}`, channel: 'all' } });
+    const ok = await A.req('api/chat/send.php', { json: { text: `오늘 콩 3개 심었어요! 레벨 12 됐어요 😊 ${tag.slice(-2)}`, channel: 'all' } });
     assert(ok.status === 200 && ok.data?.piiMasked === false && ok.data.message.text.startsWith('오늘 콩 3개 심었어요! 레벨 12 됐어요 😊'), `innocent: ${ok.status} ${ok.data?.message?.text}`);
     return t;
   });

@@ -129,9 +129,10 @@ body.easy .eng-tab-badge:not(.gold) { background: #d6372a; }
 .eng-stamp::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; border: 1.5px solid rgba(224,69,58,.75); }
 .eng-stamp span { font-size: 1rem; font-weight: 900; color: #ff7a6e; letter-spacing: .08em; text-shadow: 0 0 6px rgba(255,90,78,.55); }
 .eng-stamp .ink { position: absolute; inset: -6px; border-radius: 50%; border: 2px solid rgba(224,69,58,.5); opacity: 0; }
-.eng-stamp.anim { animation: eng-stamp .55s var(--ease-pop) both; }
+.eng-stamp.anim { animation: eng-stamp .55s var(--ease-out-quint) both; }
 .eng-stamp.anim .ink { animation: eng-ink .7s ease-out .32s both; }
-@keyframes eng-stamp { 0% { opacity: 0; scale: 2.6; rotate: -32deg; } 55% { opacity: 1; scale: .86; rotate: -9deg; } 78% { scale: 1.06; rotate: -13deg; } 100% { opacity: 1; scale: 1; rotate: -12deg; } }
+/* one monotonic settle onto the paper (no under/overshoot) */
+@keyframes eng-stamp { from { opacity: 0; scale: 2.6; rotate: -32deg; } to { opacity: 1; scale: 1; rotate: -12deg; } }
 @keyframes eng-ink { 0% { opacity: .8; scale: .7; } 100% { opacity: 0; scale: 1.9; } }
 
 .eng-claim-row { display: flex; flex-direction: column; align-items: center; gap: .45rem; }
@@ -430,7 +431,7 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
   font-weight: 900; font-size: .78rem; line-height: 1.05; text-align: center; rotate: -14deg;
 }
 .eng-kstamp span { padding: 0 .2rem; word-break: keep-all; }
-.eng-kstamp.anim { animation: eng-kstamp .5s cubic-bezier(.2, .9, .25, 1.1) both; }
+.eng-kstamp.anim { animation: eng-kstamp .5s var(--ease-out-quint) both; }
 .eng-kclaim-row { display: flex; flex-direction: column; align-items: center; gap: .55rem; margin-top: 1.3rem; }
 .eng-kclaim { min-width: 14rem; font-size: 1.3rem; }
 .eng-krw { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; }
@@ -441,7 +442,7 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
 .eng-kstreak .emoji { font-size: 1.45rem; letter-spacing: -.12em; }
 @keyframes eng-kglow { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 146, 43, 0), 0 6px 14px rgba(255, 146, 43, .35); } 50% { box-shadow: 0 0 0 8px rgba(255, 146, 43, .22), 0 8px 20px rgba(255, 146, 43, .45); } }
 @keyframes eng-ktap { 0%, 100% { translate: -50% 0; } 50% { translate: -50% -8px; } }
-@keyframes eng-kstamp { 0% { opacity: 0; scale: 2.6; rotate: -4deg; } 55% { opacity: 1; scale: .9; rotate: -16deg; } 100% { opacity: 1; scale: 1; rotate: -14deg; } }
+@keyframes eng-kstamp { from { opacity: 0; scale: 2.6; rotate: -4deg; } to { opacity: 1; scale: 1; rotate: -14deg; } }
 @media (max-width: 640px) {
   .eng-kcal { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 12px; }
   .eng-kday-gift { font-size: 1.7rem; }

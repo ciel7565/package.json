@@ -347,7 +347,28 @@
     "100 로블록스 코인 있어",
     "로블록스 100판 했어",
     "미끄럼틀 10번 탔어 20번 탔어",
-    "버스 01번 탔어"
+    "버스 01번 탔어",
+    "번호표 12번 받았어",
+    "내 번호는 3번이야",
+    "폰 게임 1시간 했어",
+    "카톡 하자",
+    "카톡으로 말해",
+    "카카오프렌즈 좋아",
+    "kakao friends 귀여워",
+    "친추 해줘",
+    "네이버 웹툰 봤어",
+    "네이버에서 찾아봐",
+    "minecraft 다음에 하자",
+    "레벨 2000 3000 했어",
+    "천이백 원 있어",
+    "사천오백 점",
+    "follow me",
+    "add me please",
+    "hello 네이버",
+    "gmail 이랑 naver 중에 뭐 써",
+    "카톡 프사 바꿨어",
+    "다음 판 하자",
+    "1000 2000 3000 4000"
   ],
   "leak": [
     {
@@ -2183,6 +2204,191 @@
       "secrets": [
         "해바라기초"
       ]
+    },
+    {
+      "id": "r1-phone-word-prefix",
+      "t": "앞에 공일공 붙이고 1234 5678",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "r1-phone-jamo-prefix",
+      "t": "ㄱㅇㄱ 1234 5678",
+      "secrets": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "r1-phone-tel-after",
+      "t": "1234 5678 전화해",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "r1-phone-tel-after-ro",
+      "t": "1234 5678로 전화해",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "r1-phone-word-local",
+      "t": "전화번호 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "r1-phone-word-pon",
+      "t": "폰 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "r1-phone-word-contact",
+      "t": "연락처 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "r1-phone-word-beonho",
+      "t": "번호 1234 5678",
+      "secrets": [
+        "1234",
+        "5678"
+      ]
+    },
+    {
+      "id": "r1-phone-place-value",
+      "t": "010 천이백삼십사 오천육백칠십팔",
+      "secrets": [
+        "천이백삼십사",
+        "오천육백칠십팔"
+      ]
+    },
+    {
+      "id": "r1-phone-place-value-short",
+      "t": "010 이천삼백 사천오백",
+      "secrets": [
+        "이천삼백",
+        "사천오백"
+      ]
+    },
+    {
+      "id": "r1-phone-place-value-il",
+      "t": "010 일천이백삼십사 오천육백칠십팔",
+      "secrets": [
+        "일천이백삼십사",
+        "오천육백칠십팔"
+      ]
+    },
+    {
+      "id": "r1-phone-place-value-words",
+      "t": "공일공 이천삼백사십오 육천칠백팔십구",
+      "secrets": [
+        "이천삼백사십오",
+        "육천칠백팔십구"
+      ]
+    },
+    {
+      "id": "r1-kakao-id-filler",
+      "t": "카카오톡 아이디 알려줄게 dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-kakao-underscore",
+      "t": "카_톡 dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-kakao-spaced",
+      "t": "카 톡 아 이 디 dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-kakao-latin-spaced",
+      "t": "k a k a o dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-kakao-jamo",
+      "t": "ㅋㅏ톡 dinokid",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-kakao-gogo",
+      "t": "카톡ㄱㄱ dinokid77",
+      "secrets": [
+        "dinokid77"
+      ]
+    },
+    {
+      "id": "r1-friend-add",
+      "t": "친추 dinokid77",
+      "secrets": [
+        "dinokid77"
+      ]
+    },
+    {
+      "id": "r1-mail-id-naver",
+      "t": "dinokid 네이버",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-mail-id77-naver",
+      "t": "dinokid77 네이버",
+      "secrets": [
+        "dinokid77"
+      ]
+    },
+    {
+      "id": "r1-mail-id-gmail-ko",
+      "t": "dinokid 지메일",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-mail-id-daum-mail",
+      "t": "dinokid 다음 메일",
+      "secrets": [
+        "dinokid"
+      ]
+    },
+    {
+      "id": "r1-mail-provider-first",
+      "t": "gmail dinokid77",
+      "secrets": [
+        "dinokid77"
+      ]
+    },
+    {
+      "id": "r1-mail-id-naver-send",
+      "t": "dinokid 네이버 메일로 보내",
+      "secrets": [
+        "dinokid"
+      ]
     }
   ],
   "nickname": {
@@ -2208,7 +2414,11 @@
       "해바라기중1",
       "정자동123",
       "tt_dino",
-      "kt_dino7"
+      "kt_dino7",
+      "행복초김민준",
+      "강남구민준",
+      "일공일동",
+      "해운대구"
     ],
     "allow": [
       "용감한다람쥐",
@@ -2228,7 +2438,15 @@
       "초코",
       "초록이",
       "중꺾마",
-      "감식초"
+      "감식초",
+      "바닐라초코칩",
+      "하늘초원이",
+      "민트초코",
+      "거북이친구",
+      "야구왕자",
+      "축구선수",
+      "김치초밥왕",
+      "새싹초보"
     ]
   }
 }

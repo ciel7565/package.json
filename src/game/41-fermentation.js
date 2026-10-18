@@ -386,7 +386,10 @@
       s.progress = clamp(Number(s.progress) || 0, 0, 100);
       s.hygiene = clamp(Number.isFinite(Number(s.hygiene)) ? Number(s.hygiene) : 100, 0, 100);
       s.tempOff = Number(s.tempOff) || 0; s.humOff = Number(s.humOff) || 0;
-      s.care = s.care && typeof s.care === 'object' ? s.care : {};
+      s.care = s.care && typeof s.care === 'object' && !Array.isArray(s.care) ? s.care : {};
+      // stamps from a device whose clock ran ahead would lock the care buttons (and the timeline) for hours
+      for (const k of Object.keys(s.care)) { const v = Number(s.care[k]); s.care[k] = Number.isFinite(v) && v <= t ? v : 0; }
+      for (const k of ['startedAt', 'completedAt', 'claimedAt']) s[k] = Math.min(Number(s[k]) || 0, t);
       if (!s.acc || typeof s.acc !== 'object') s.acc = { t: 0, temp: 0, hum: 0, hyg: 0 };
       for (const k of ['t', 'temp', 'hum', 'hyg']) s.acc[k] = Number(s.acc[k]) || 0;
       if (!Number.isFinite(s.lastUpdate) || s.lastUpdate <= 0 || s.lastUpdate > t + 60000) s.lastUpdate = t;
@@ -590,8 +593,12 @@
       const q = clamp(Math.round(s.quality || 0), 0, 100);
       const grade = gradeOf(q);
       const bonus = q >= 90 ? 1 : 0;
-      const qty = (rec.resultQty || 1) + bonus;
+      let qty = (rec.resultQty || 1) + bonus;
       const itemId = rec.resultItem;
+      // the bag cannot take any more of it: the jar keeps its result until there is room
+      const room = G.sys.inventory?.room ? G.sys.inventory.room(itemId) : Infinity;
+      if (room <= 0) { G.sys.inventory.fullNotice?.(itemId); return null; }
+      qty = Math.min(qty, room);
       const reward = { exp: rec.exp || 0, coin: rec.coin || 0, items: { [itemId]: qty } };
       const note = `품질 ${q}점 · ${grade} 등급${bonus ? ' (최상 품질 보너스 +1)' : ''} — 교육용 가상 시뮬레이션 결과예요.`;
       if (G.sys.progression?.grant) G.sys.progression.grant(reward, { popup: true, reason: 'ferment', eyebrow: 'FERMENTATION', title: kid ? `${shortName(rec)} 완성!` : `${rec.name} 완성!`, note });
@@ -657,7 +664,10 @@
       this._refreshModal(true);
       return true;
     },
-    _careLeft(s, action) { return Math.max(0, FD().careCooldown - (now() - (Number(s.care?.[action]) || 0)) / 1000); },
+    _careLeft(s, action) {
+      const el = (now() - (Number(s.care?.[action]) || 0)) / 1000;
+      return el < 0 ? 0 : Math.max(0, FD().careCooldown - el); // a future stamp (clock moved back) is no cooldown
+    },
 
     async unlock(jarId) {
       if (!G.state) return false;
@@ -1171,7 +1181,7 @@
       const gauge = (key, icon, label, min, max, unit) => {
         const wrap = h('div', { class: `jm-gauge g-${key}` },
           h('div', { class: 'jm-g-head' }, h('span', { class: 'emoji' }, icon), h('span', null, label), h('b', { class: 'jm-g-val' }, '-'), h('span', { class: 'jm-g-state' }, '')),
-          h('div', { class: 'jm-g-track' }, h('div', { class: 'jm-g-ideal' }), h('div', { class: 'jm-g-mark' })),
+          h('div', { class: 'jm-g-track' }, h('div', { class: 'jm-g-ideal' }), h('div', { class: 'jm-g-pos' }, h('div', { class: 'jm-g-mark' }))),
           h('div', { class: 'jm-g-scale tiny muted' }, h('span', null, `${min}${unit}`), h('span', { class: 'jm-g-ideal-txt' }, ''), h('span', null, `${max}${unit}`)));
         wrap._min = min; wrap._max = max; wrap._unit = unit;
         return wrap;
@@ -1259,12 +1269,13 @@
       const setG = (g, v, lo, hi, fmtV) => {
         const span = g._max - g._min;
         const pos = clamp((v - g._min) / span * 100, 0, 100);
-        const ideal = g.querySelector('.jm-g-ideal'), mark = g.querySelector('.jm-g-mark');
+        const ideal = g.querySelector('.jm-g-ideal'), mark = g.querySelector('.jm-g-pos');
         const l = `${clamp((lo - g._min) / span * 100, 0, 100)}%`, w = `${clamp((hi - lo) / span * 100, 0, 100)}%`;
         if (ideal.style.left !== l) ideal.style.left = l;
         if (ideal.style.width !== w) ideal.style.width = w;
-        const mp = `${pos.toFixed(1)}%`;
-        if (mark.style.left !== mp) mark.style.left = mp;
+        // the marker rides a full-width layer moved with transform (no layout per frame while it slides)
+        const mp = `translateX(${pos.toFixed(1)}%)`;
+        if (mark.style.transform !== mp) mark.style.transform = mp;
         txt(g.querySelector('.jm-g-val'), fmtV);
         const stTxt = v < lo ? '낮음' : v > hi ? '높음' : '알맞음';
         const st = g.querySelector('.jm-g-state');
@@ -1656,6 +1667,9 @@
         G.ui.toast(kt(`재료가 부족해요: ${lack.map(([iid, q]) => `${items()[iid]?.name || iid} ${q - this._count(iid)}개`).join(', ')}`, kidText), { type: 'warn', emoji: '🧺', say: kidOn() ? kidText : undefined });
         return false;
       }
+      // every result must fit in the bag before any ingredient is used up
+      const full = Object.keys(c.out || {}).find((iid) => G.sys.inventory?.room && G.sys.inventory.room(iid) <= 0);
+      if (full) { G.sys.inventory.fullNotice?.(full); return false; }
       const taken = [];
       for (const [iid, q] of ins) {
         if (this._take(iid, q)) taken.push([iid, q]);

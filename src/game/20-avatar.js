@@ -753,6 +753,8 @@
     o[C.elLX] = ex; o[C.elRX] = ex; o[C.elLZ] = ez || 0; o[C.elRZ] = -(ez || 0);
   }
   function mix(o, i, v, w) { o[i] += (v - o[i]) * w; }
+  /** fast gait toes: push off at the end of stance, reach (toes up) before touchdown (f = leg phase, duty = stance share) */
+  function toeAngle(f, duty) { return f < duty ? 0.35 * smooth(0.55, 1, f / duty) : -0.25 * smooth(0.6, 0.95, (f - duty) / (1 - duty)); }
 
   // ---------------------------------------------------------------- fast gait (phase 4: the 9.6 / 18 m/s player)
   // Above ~5 m/s the sinusoidal walk/run blends into an IK-driven bounding run: each foot follows a
@@ -1037,7 +1039,7 @@
       this._blinkT = 1 + Math.random() * 3; this._blinking = 0;
       this._exprOverride = null; this._exprT = 0;
       this._talkT = 0; this._talkOpen = false;
-      this._faceKey = '';
+      this._faceFace = ''; this._faceExpr = '';
       this._look = null; this._lookY = 0; this._lookX = 0; this._lookW = 0;
       this._idleLook = 0; this._idleLookT = 2 + Math.random() * 4; this._idleLookTarget = 0;
       this._fing = [0, 0, 0];
@@ -1071,7 +1073,7 @@
       this.height = 1.45 * app.height;
       const top = HEAD_TOP[app.accessory] || (app.hair === 'bun' ? 1.47 : 1.43);
       this.headAnchor.position.set(0, top + 0.08 - BONES[B.head][3], 0);
-      this._faceKey = '';
+      this._faceFace = '';
       return app;
     }
 
@@ -1316,9 +1318,8 @@
       legIK(fl.z, -(hipY - LF - fl.y), _ikA);
       legIK(fr.z, -(hipY - LF - fr.y), _ikB);
       // toes: push off at the end of stance, reach (toes up) before touchdown
-      const toe = (f) => (f < duty ? 0.35 * smooth(0.55, 1, f / duty) : -0.25 * smooth(0.6, 0.95, (f - duty) / (1 - duty)));
-      mix(o, C.thLX, _ikA[0], fw); mix(o, C.knLX, _ikA[1], fw); mix(o, C.ftLX, -(_ikA[0] + _ikA[1]) + toe(phL), fw);
-      mix(o, C.thRX, _ikB[0], fw); mix(o, C.knRX, _ikB[1], fw); mix(o, C.ftRX, -(_ikB[0] + _ikB[1]) + toe(phR), fw);
+      mix(o, C.thLX, _ikA[0], fw); mix(o, C.knLX, _ikA[1], fw); mix(o, C.ftLX, -(_ikA[0] + _ikA[1]) + toeAngle(phL, duty), fw);
+      mix(o, C.thRX, _ikB[0], fw); mix(o, C.knRX, _ikB[1], fw); mix(o, C.ftRX, -(_ikB[0] + _ikB[1]) + toeAngle(phR, duty), fw);
       mix(o, C.thLZ, 0.03, fw); mix(o, C.thRZ, -0.03, fw);
       // the auto ground contact drops the body until the lowest foot touches: give back the lift of a flight phase
       mix(o, C.rootY, Math.min(fl.y, fr.y), fw);
@@ -1395,8 +1396,8 @@
       this._blinkT -= dt;
       if (this._blinking > 0) { this._blinking -= dt; if (expr === 'base' || expr === 'talk' || expr === 'think') expr = 'blink'; }
       else if (this._blinkT <= 0) { this._blinking = 0.12; this._blinkT = 2 + Math.random() * 3.5; if (Math.random() < 0.15) this._blinkT = 0.25; }
-      const key = app.face + ':' + expr;
-      if (key !== this._faceKey) { this._faceKey = key; this.face.material = faceMaterial(app.face, expr); }
+      // (compared field by field: building a 'face:expr' key string every frame was per-frame garbage for every avatar)
+      if (app.face !== this._faceFace || expr !== this._faceExpr) { this._faceFace = app.face; this._faceExpr = expr; this.face.material = faceMaterial(app.face, expr); }
     }
 
     dispose() {

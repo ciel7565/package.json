@@ -1,8 +1,13 @@
 <?php
 /**
- * POST api/player/save.php  {version, checksum, data:{…state…}}            (fetch, header X-CSRF-Token)
- *                           {version, checksum, data:{…}, csrf:"…"}        (navigator.sendBeacon on page hide)
+ * POST api/player/save.php  {version, checksum, base?, data:{…state…}}     (fetch, header X-CSRF-Token)
+ *                           {version, checksum, base?, data:{…}, csrf:"…"} (navigator.sendBeacon on page hide)
  * → {savedAt, revision, size}
+ *
+ * base (optional int): the revision this state was loaded from / last saved as (get.php / save.php answers). When
+ * the stored revision is newer — another tab or device saved since — the save is refused with HTTP 409
+ * {error:{code:'STALE_SAVE'}, data:{save:{…stored copy…}}} so an old copy never overwrites newer progress.
+ * Without base (older clients) the save is accepted as before.
  *
  * The save is validated against the previously accepted save (lib/SaveValidator.php). On violation:
  * HTTP 409 {error:{code:'VALIDATION_FAILED'}, data:{save:{version, revision, savedAt, data}, violations:[codes]}}
@@ -30,6 +35,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
     $data = $env->data ?? null;
     if (!$data instanceof \stdClass) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
     $checksum = is_string($env->checksum ?? null) ? substr($env->checksum, 0, 32) : '';
+    $base = is_int($env->base ?? null) && $env->base >= 0 ? $env->base : null;
 
     // integrity: the client's cyrb53 checksum over JSON.stringify(state) (detects truncated/corrupted uploads)
     if ($checksum !== '' && Config::get('save.verify_checksum', true) && strlen($raw) <= (int) Config::get('save.checksum_max_bytes', 800000)) {
@@ -45,13 +51,14 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
     $now = Clock::ms();
     $validate = (bool) Config::get('save.validate', true) && !($c->isAdmin() && Config::get('save.admin_bypass', false));
 
-    $result = Db::tx(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw) {
+    $result = Db::tx(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base) {
         $row = Db::one('SELECT * FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
         $prev = null;
         if ($row) {
             $prev = json_decode((string) $row['data'], false, 512);
             if (!$prev instanceof \stdClass) $prev = null;
         }
+        if ($base !== null && $row && $base < (int) $row['revision']) return ['ok' => false, 'stale' => true, 'row' => $row, 'prev' => $prev];
         $meta = $row ? (json_decode((string) $row['meta'], true) ?: []) : [];
         $prevAt = $row ? (int) $row['saved_at'] : (int) $user['created_at'];
         $res = ['ok' => true, 'meta' => $meta, 'violations' => [], 'summary' => [], 'notes' => []];
@@ -91,18 +98,23 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         return ['ok' => true, 'rev' => $rev, 'size' => strlen($json), 'summary' => $res['summary'] ?? []];
     });
 
+    $stored = fn (?array $row, ?object $prev): array => [
+        'version' => $row ? (int) $row['version'] : 1,
+        'revision' => $row ? (int) $row['revision'] : 0,
+        'savedAt' => $row ? (int) $row['saved_at'] : 0,
+        'data' => $prev,
+    ];
+    if (!empty($result['stale'])) {
+        Log::info('SAVE', 'stale save refused', ['uid' => $uid, 'base' => $base, 'stored' => (int) $result['row']['revision']]);
+        throw new ApiException(409, 'STALE_SAVE', '다른 창이나 기기에서 더 새로 저장했어요. 이 창의 진행 상황은 저장하지 않았어요.', ['save' => $stored($result['row'], $result['prev'])]);
+    }
     if (!$result['ok']) {
         $res = $result['res'];
         $codes = array_values(array_unique(array_map(fn ($v) => $v['code'], $res['violations'])));
         Audit::log('save_rejected', $uid, ['violations' => array_slice($res['violations'], 0, 8), 'summary' => $res['summary'] ?? []], 'warn');
         $row = $result['row'];
         throw new ApiException(409, 'VALIDATION_FAILED', '서버 검증에 실패해 이번 진행 상황은 저장하지 않았어요. 서버에 저장된 진행 상황으로 되돌립니다.', [
-            'save' => [
-                'version' => $row ? (int) $row['version'] : 1,
-                'revision' => $row ? (int) $row['revision'] : 0,
-                'savedAt' => $row ? (int) $row['saved_at'] : 0,
-                'data' => $result['prev'],
-            ],
+            'save' => $stored($row, $result['prev']),
             'violations' => $codes,
         ]);
     }

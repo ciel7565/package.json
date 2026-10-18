@@ -509,6 +509,40 @@
     },
   };
 
+  // ---------------------------------------------------------------- traditional tools display (layout.tools: quest Q_CULTURE + 도감)
+  G.data.toolInfo = {
+    TOOL_JIGE: {
+      model: 'jige', icon: '🪵', tagline: '등에 지는 운반 도구',
+      text: '나무 몸체에 짚으로 엮은 멜빵을 달아 등에 지고 짐을 날랐어요. 무거운 짐도 몸 전체로 나누어 질 수 있어서 산과 비탈이 많은 우리 땅에서 많이 쓰였어요.',
+      facts: [['재료', '나무 · 짚 멜빵'], ['쓰임', '나무 · 곡식 · 짐 나르기'], ['짝꿍', '지겟작대기']],
+    },
+    TOOL_MAETDOL: {
+      model: 'maetdol', icon: '🪨', tagline: '돌려서 가는 돌 도구',
+      text: '둥근 돌 두 개를 포개고 위짝의 손잡이를 돌리면, 구멍으로 넣은 콩이나 곡식이 곱게 갈려 나와요. 두부를 만들 콩을 갈 때도 썼어요.',
+      facts: [['재료', '돌'], ['쓰임', '콩 · 곡식 갈기'], ['쓰는 법', '위짝을 빙글빙글 돌리기']],
+    },
+    TOOL_JEOLGU: {
+      icon: '🥣', tagline: '찧고 빻는 도구',
+      text: '우묵한 통에 곡식을 넣고 절굿공이로 내리쳐 찧거나 빻는 도구예요. 메주를 만들 때 삶은 콩을 찧는 데도 썼어요.',
+      facts: [['재료', '나무 · 돌'], ['쓰임', '곡식 찧기 · 콩 으깨기'], ['짝꿍', '절굿공이']],
+    },
+    TOOL_KI: {
+      icon: '🧺', tagline: '까불러 고르는 도구',
+      text: '곡식을 담아 위아래로 까부르면 가벼운 껍질과 티끌은 바람에 날아가고 무거운 알곡만 남아요.',
+      facts: [['재료', '대나무 · 버들가지'], ['쓰임', '껍질 · 티끌 골라내기'], ['쓰는 법', '위아래로 까부르기']],
+    },
+    TOOL_HOMI: {
+      icon: '⛏️', tagline: '김매는 작은 농기구',
+      text: '손에 쥐고 김을 매거나 흙을 고르고, 모종을 심을 구멍을 팔 때 쓰는 작은 농기구예요. 지금도 텃밭에서 많이 써요.',
+      facts: [['재료', '쇠 날 · 나무 손잡이'], ['쓰임', '김매기 · 흙 고르기'], ['특징', '한 손에 쏙 들어와요']],
+    },
+    TOOL_SIRU: {
+      icon: '🍲', tagline: '떡을 찌는 질그릇',
+      text: '바닥에 작은 구멍이 여러 개 뚫린 질그릇이에요. 물이 끓는 솥 위에 올리면 뜨거운 김이 구멍으로 올라와 떡이나 곡식을 쪄 줘요.',
+      facts: [['재료', '흙으로 빚은 질그릇'], ['쓰임', '떡 · 곡식 찌기'], ['특징', '바닥의 작은 구멍들']],
+    },
+  };
+
   // ---------------------------------------------------------------- hall guide (HALL_DOOR)
   G.data.hallGuide = {
     title: '전통발효체험관 안내',
@@ -608,7 +642,7 @@
     QZ_JANGDOK_2: { q: '장독대는 어디에 두면 좋을까요?', choices: [{ e: '☀️', t: '햇볕 잘 드는 곳' }, { e: '🌑', t: '깜깜한 곳' }, { e: '💦', t: '물웅덩이' }], answer: 0, hint: '장독은 햇볕을 좋아해요 ☀️', why: '햇볕 잘 들고 바람 잘 통하는 곳이 좋아요!' },
     QZ_JANGDOK_3: { q: '배가 볼록하고 입구가 좁은 옹기는 무엇일까요?', choices: [{ e: '🏺', t: '항아리' }, { e: '🧺', t: '소쿠리' }, { e: '🍲', t: '시루' }], answer: 0, hint: '고추장을 담아 두는 볼록한 그릇이에요 🏺', why: '맞아요! 볼록한 배의 항아리예요.' },
     QZ_BEAN_1: { q: '메주는 무엇으로 만들까요?', choices: [{ e: '🫘', t: '콩' }, { e: '🍎', t: '사과' }, { e: '🥕', t: '당근' }], answer: 0, hint: '장은 모두 이걸로 시작해요 🫘', why: '콩을 삶고 찧어서 메주를 만들어요!' },
-    QZ_BEAN_2: { q: '메주를 볏짚으로 묶어 바람이 솔솔 부는 곳에 매달아요. 맞을까요?', ox: true, answer: true, hint: '메주도 바람을 좋아해요 🌬️', why: '맞아요! 볏짚 속 작은 친구들이 메주를 잘 띄워 줘요.' },
+    QZ_BEAN_2: { q: '메주는 깜깜하고 축축한 통 속에 꼭꼭 숨겨 둬요. 맞을까요?', ox: true, answer: false, hint: '메주도 바람을 좋아해요 🌬️', why: '메주는 볏짚으로 묶어서 바람이 솔솔 부는 곳에 매달아요!' },
     QZ_BEAN_3: { q: '콩 뿌리에 붙은 작은 혹은 무엇을 도울까요?', choices: [{ e: '🌱', t: '땅을 튼튼하게' }, { e: '🐛', t: '벌레 잡기' }], answer: 0, hint: '콩을 심으면 밭이 좋아진대요 🌱', why: '맞아요! 땅을 기름지게 도와준대요.' },
     QZ_DOENJANG_1: { q: '된장은 무엇으로 만들까요?', choices: [{ e: '🫘', t: '콩' }, { e: '🍓', t: '딸기' }, { e: '🍌', t: '바나나' }], answer: 0, hint: '메주를 만드는 재료예요 🧱', why: '콩으로 만든 메주로 된장을 만들어요!' },
     QZ_DOENJANG_2: { q: '메주 건더기와 장물을 나누는 일은 무엇일까요?', choices: [{ e: '✋', t: '장 가르기' }, { e: '🥬', t: '김장' }, { e: '🌾', t: '모내기' }], answer: 0, hint: '나눈다는 말은 "가르다"예요 ✋', why: '맞아요! 장 가르기라고 해요.' },
@@ -619,7 +653,7 @@
     QZ_GOCHUJANG_2: { q: '고춧가루는 어떻게 만들까요?', choices: [{ e: '☀️', t: '고추를 말려서 빻아요' }, { e: '🧊', t: '고추를 꽁꽁 얼려요' }], answer: 0, hint: '햇볕에 바싹 말려요 ☀️', why: '빨간 고추를 말려서 빻으면 고춧가루가 돼요!' },
     QZ_KIMCHI_1: { q: '김치를 새콤하게 만드는 친구는 누구일까요?', choices: [{ e: '🦠', t: '젖산균' }, { e: '🐸', t: '개구리' }, { e: '🦋', t: '나비' }], answer: 0, hint: '눈에 안 보이는 작은 친구예요 🦠', why: '젖산균이 김치를 새콤하게 만들어요!' },
     QZ_KIMCHI_2: { q: '겨울이 오기 전에 다 같이 김치를 담그는 일은?', choices: [{ e: '🥬', t: '김장' }, { e: '🎂', t: '생일 잔치' }, { e: '🎄', t: '성탄절' }], answer: 0, hint: '김치의 "김"으로 시작해요 🥬', why: '맞아요! 김장이에요. 이웃이랑 나눠 먹어요.' },
-    QZ_KIMCHI_3: { q: '김치는 서늘한 곳에 두면 천천히 익어요. 맞을까요?', ox: true, answer: true, hint: '냉장고를 떠올려 봐요 🧊', why: '맞아요! 따뜻하면 빨리, 서늘하면 천천히 익어요.' },
+    QZ_KIMCHI_3: { q: '김치는 따뜻한 곳에 두면 더 천천히 익어요. 맞을까요?', ox: true, answer: false, hint: '냉장고를 떠올려 봐요 🧊', why: '김치는 따뜻하면 빨리, 서늘하면 천천히 익어요!' },
     QZ_FARMING_1: { q: '24절기는 무엇을 보고 나눴을까요?', choices: [{ e: '🌞', t: '해님' }, { e: '🌊', t: '바닷물' }, { e: '⭐', t: '별 개수' }], answer: 0, hint: '하늘에서 반짝 빛나고 따뜻해요 🌞', why: '해님의 움직임을 보고 나눴어요!' },
     QZ_FARMING_2: { q: '낮이 가장 긴 날은 언제일까요?', choices: [{ e: '☀️', t: '하지' }, { e: '⛄', t: '동지' }], answer: 0, hint: '여름에 있어요 ☀️', why: '하지는 낮이 제일 길고, 동지는 밤이 제일 길어요!' },
     QZ_FARMING_3: { q: '마을 사람들이 다 같이 농사짓던 모임은?', choices: [{ e: '🤝', t: '두레' }, { e: '🏫', t: '서당' }], answer: 0, hint: '서로 돕는 모임이에요 🤝', why: '맞아요! 두레라고 해요.' },
@@ -634,6 +668,22 @@
     EXH_KIMCHI: '새콤한 김치예요. 배추에 빨간 양념을 발라 익혀요 🥬',
     EXH_VINEGAR: '새콤한 식초예요. 술이 한 번 더 익어서 돼요 🍶',
   };
+  const KID_TOOLS = {
+    TOOL_JIGE: '지게예요. 등에 메고 무거운 짐을 날라요 🪵',
+    TOOL_MAETDOL: '맷돌이에요. 빙글빙글 돌려서 콩을 갈아요 🪨',
+    TOOL_JEOLGU: '절구예요. 쿵쿵 찧어서 콩을 으깨요 🥣',
+    TOOL_KI: '키예요. 흔들흔들 껍질을 날려 보내요 🧺',
+    TOOL_HOMI: '호미예요. 풀을 뽑고 흙을 골라요 ⛏️',
+    TOOL_SIRU: '시루예요. 뜨거운 김으로 떡을 쪄요 🍡',
+  };
+  // 쉬운 모드 words for the plain info signboards (layout.signs action 'info'); other signs open content or the map
+  G.data.kidSigns = {
+    SIGN_HERB: { title: '허브 밭', text: '향긋한 허브가 자라는 밭이에요. 허브는 물을 조금만 줘도 잘 자라요 🌿' },
+    SIGN_STORAGE: { title: '장 창고', text: '커다란 장독에 장을 모아 두는 곳이에요. 옹기를 구경해 봐요 🏺' },
+    SIGN_EDU: { title: '배우는 집', text: '화면을 눌러 발효 이야기를 듣고 퀴즈도 풀어요 📺' },
+    SIGN_REST: { title: '쉼터', text: '정자랑 연못이 있어요. 앉아서 쉬고 사진도 찍어요 📸' },
+    SIGN_ENTRANCE: { title: '전통발효체험관', text: '어서 와요! 장이랑 김치, 밭 이야기를 함께 배워요 👋' },
+  };
   const KID_FLOORS = {
     '3F': '높은 곳에서 밭이랑 장독대를 내려다봐요 🏔️',
     '2F': '메주랑 김치 만드는 걸 배워요 🧑‍🏫',
@@ -642,6 +692,7 @@
   for (const [id, k] of Object.entries(KID_EDU)) if (G.data.education[id]) G.data.education[id].kid = k;
   for (const [id, k] of Object.entries(KID_QUIZ)) if (G.data.quizzes[id]) G.data.quizzes[id].kid = k;
   for (const [id, t] of Object.entries(KID_EXHIBIT)) if (G.data.exhibitInfo[id]) G.data.exhibitInfo[id].kid = t;
+  for (const [id, t] of Object.entries(KID_TOOLS)) if (G.data.toolInfo[id]) G.data.toolInfo[id].kid = t;
   for (const f of G.data.hallGuide.floors) if (KID_FLOORS[f.floor]) f.kid = KID_FLOORS[f.floor];
   G.data.hallGuide.kidIntro = '체험관에는 세 층이 있어요. 층을 눌러 구경해요!';
 })();

@@ -13,11 +13,34 @@
 // =============================================================================
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'src/game/60-social.js');
 const OUT = path.join(ROOT, 'server/lib/pii-rules.json');
+
+/** escape every "/" that is not escaped yet (it is the PCRE delimiter). Walks the string and tracks the backslash
+ *  parity, so runs of slashes ("https?://", "a//b") are all escaped, not every other one. */
+export function escapeDelim(src) {
+  let out = '', bs = 0;
+  for (const ch of src) {
+    out += ch === '/' && bs % 2 === 0 ? '\\/' : ch;
+    bs = ch === '\\' ? bs + 1 : 0;
+  }
+  return out;
+}
+
+/** names of generated rules that PHP's PCRE cannot compile (ChatFilter would skip them) — null when php is missing */
+export function pcreFailures(rules) {
+  const code = '$r = json_decode(stream_get_contents(STDIN), true); $bad = [];'
+    + ' foreach ($r as $x) { if (@preg_match("/" . $x["src"] . "/" . $x["flags"], "") === false) $bad[] = $x["name"]; }'
+    + ' echo json_encode($bad);';
+  const flags = (f) => { const x = f.replace(/[^iu]/g, ''); return x.includes('u') ? x : x + 'u'; }; // as ChatFilter::piiPatterns
+  const res = spawnSync('php', ['-r', code], { input: JSON.stringify(rules.map((x) => ({ name: x.name, src: x.src, flags: flags(x.flags) }))), encoding: 'utf8' });
+  if (res.error || res.status !== 0) return null;
+  try { return JSON.parse(res.stdout); } catch { return null; }
+}
 
 /** evaluate the engine block of 60-social.js and return {rules, engine} */
 export function loadEngine() {
@@ -30,7 +53,7 @@ export function loadEngine() {
   const engine = new Function('G', `${body}\nreturn { PII_SRC, maskPIIInfo, nicknameLooksPersonal };`)(G);
   const rules = engine.PII_SRC.map(([name, src, flags, pred]) => {
     // a PCRE pattern is delimited by "/": escape the ones that are not already escaped
-    const pcre = src.replace(/(^|[^\\])((?:\\\\)*)\//g, '$1$2\\/');
+    const pcre = escapeDelim(src);
     new RegExp(src, flags); // must compile in JS
     return { name, src: pcre, flags: flags.replace('g', ''), pred: pred ? pred.name : null };
   });
@@ -51,7 +74,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const cur = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';
   if (process.argv.includes('--check')) {
     if (cur !== next) { console.error('✖ server/lib/pii-rules.json is out of date — run: node tests/pii-sync.mjs'); process.exit(1); }
-    console.log('✔ server/lib/pii-rules.json matches the client PII engine');
+    // the JSON matching is not enough: a rule PCRE cannot compile is skipped by the server (it would mask less)
+    const bad = pcreFailures(JSON.parse(next).rules);
+    if (bad && bad.length) { console.error(`✖ PCRE cannot compile: ${bad.join(', ')}`); process.exit(1); }
+    console.log(`✔ server/lib/pii-rules.json matches the client PII engine${bad ? ' (every rule compiles in PCRE)' : ' (php not found: PCRE compile check skipped)'}`);
   } else {
     fs.writeFileSync(OUT, next);
     console.log(`✔ wrote ${path.relative(ROOT, OUT)} (${JSON.parse(next).rules.length} rules)`);

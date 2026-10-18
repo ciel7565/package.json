@@ -33,12 +33,14 @@
   const PI = Math.PI, TAU = PI * 2;
   const esc = U.escapeHtml;
   const fmt = (n) => U.fmt(n);
-  /** Korean particle: josa('콩', '이/가') -> '콩이', josa('고추', '을/를') -> '고추를' (first form follows a final consonant) */
+  /** Korean particle: josa('콩', '이/가') -> '콩이', josa('고추', '을/를') -> '고추를' (first form follows a final consonant);
+   *  digits are read in Sino-Korean (josa('35', '을/를') -> '35를'), other endings take the vowel form */
   function josa(word, pair) {
     const w = String(word ?? '');
     const [withB, withoutB] = pair.split('/');
-    const code = w.trim().slice(-1).charCodeAt(0) - 0xac00;
-    if (!(code >= 0 && code <= 11171)) return `${w}${withB}(${withoutB})`;
+    const last = w.trim().slice(-1);
+    const code = last.charCodeAt(0) - 0xac00;
+    if (!(code >= 0 && code <= 11171)) return w + (/[013678]/.test(last) ? withB : withoutB);
     const fin = code % 28;
     if (withB === '으로') return w + (fin === 0 || fin === 8 ? '로' : '으로');
     return w + (fin ? withB : withoutB);
@@ -792,6 +794,9 @@
   // farming system
   // ===========================================================================================
   const RAIN_WATER_RATE = 0.6; // water % per second under full rain (a dry bed is soaked in ~2-3 min)
+  // rain soaks a bed up to here, never to 100 %: a bed always still takes a watering can (the "물 주기" quest steps,
+  // the 💧 tap and the water button all need water < 100 %, and a long rain spell would otherwise block them)
+  const RAIN_WATER_CAP = 92;
   const DEF_CFG = { waterPerAction: 45, waterCooldown: 2.5, dryThreshold: 25, healthDecayDry: 0.25, healthRegen: 0.08, basketBonus: 1, offlineCatchUpMax: 3600 };
   let CFG = null;
   const cfg = () => CFG || (CFG = Object.assign({}, DEF_CFG, G.data.farming || {}));
@@ -808,6 +813,8 @@
   const isHerbPlot = (def) => def.zone === 'ZONE_HERB';
   const plotCategory = (def) => (isHerbPlot(def) ? 'herb' : 'crop');
   const CIRCLED = { 0: '⓪', 1: '①', 2: '②', 3: '③', 4: '④', 5: '⑤', 6: '⑥', 7: '⑦', 8: '⑧', 9: '⑨', A: 'Ⓐ', B: 'Ⓑ', C: 'Ⓒ', D: 'Ⓓ', E: 'Ⓔ', F: 'Ⓕ' };
+  /** ms of watering cooldown left (a stamp from the future — clock moved back — counts as no cooldown) */
+  const waterCoolLeft = (s) => { const d = now() - (Number(s?.lastWaterAt) || 0); return d < 0 ? 0 : Math.max(0, cfg().waterCooldown * 1000 - d); };
   const plotTitle = (def, crop) => (crop ? `${crop.name}밭` : isHerbPlot(def) ? '빈 허브밭' : '빈 밭');
   const now = () => G.time.now();
   const LABEL_HZ = 0.25;
@@ -863,6 +870,8 @@
         try { this._buildPlot(def); } catch (e) { G.log.error('FARM', `plot ${def.id} build failed`, e); }
       }
       G.bus.on('state:before-save', () => { if (G.state) this._simulateAll(); });
+      // graphics quality changed in the settings: crop shadows and the low-preset plant spacing follow it
+      G.bus.on('engine:quality', (p) => this._applyQuality(p?.preset || G.sys.engine?.preset || {}));
       // a bed registered later (props rebuilt) replaces our fallback / old bed
       G.bus.on('world:object', ({ id, obj }) => {
         const P = this._plots.get(id);
@@ -897,8 +906,10 @@
         if (!s.cropId) s.growth = 0;
         if (!Number.isFinite(s.lastUpdate) || s.lastUpdate <= 0 || s.lastUpdate > t + 60000) s.lastUpdate = t;
         s.harvests = Number(s.harvests) || 0;
+        // a save from a device whose clock ran ahead: a future stamp would keep the watering cooldown on for hours
         s.lastWaterAt = Number(s.lastWaterAt) || 0;
-        s.plantedAt = Number(s.plantedAt) || (s.cropId ? t : 0);
+        if (s.lastWaterAt > t) s.lastWaterAt = 0;
+        s.plantedAt = Math.min(Number(s.plantedAt) || (s.cropId ? t : 0), t);
         this._simulate(def.id, t);
         P.vis.g = P.vis.gT = s.growth; P.vis.w = P.vis.wT = s.water; P.vis.wApplied = -99; P.vis.trans = 1; P.vis.harvestT = -1; P.vis.key = '';
         P.busyUntil = 0;
@@ -1023,8 +1034,8 @@
       let any = false;
       for (const id of this._plots.keys()) {
         const s = this._state(id);
-        if (!s || s.water >= 100) continue;
-        s.water = Math.min(100, s.water + add);
+        if (!s || s.water >= RAIN_WATER_CAP) continue;
+        s.water = Math.min(RAIN_WATER_CAP, s.water + add);
         const P = this._plots.get(id);
         if (P) P.vis.wT = s.water;
         any = true;
@@ -1076,7 +1087,11 @@
       const s = this._simulate(id);
       if (!s) return;
       const P = this._plots.get(id);
-      if (P && performance.now() < P.busyUntil) return;
+      if (P && performance.now() < P.busyUntil) {
+        // still watering / harvesting / planting: the prompt shows ⏳ — the tap answers instead of doing nothing
+        if (kidOn()) { kidSay(P.busyLine || '조금만 기다려요!', { priority: 1 }); G.kidKit?.shake?.(document.getElementById('interact-prompt')); }
+        return;
+      }
       if (kidOn()) { this._kidPrimary(id, s); return; }
       if (!s.cropId) { this.openPlot(id); return; }
       if (s.growth >= 100) { this.harvest(id); return; }
@@ -1094,7 +1109,7 @@
     /** 쉬운 모드 one tap: plant (seed pictures) / harvest / water / big picture card */
     _kidPrimary(id, s) {
       if (!s.cropId) { this._kidPlant(id); return; }
-      const cool = now() - s.lastWaterAt < cfg().waterCooldown * 1000;
+      const cool = waterCoolLeft(s) > 0;
       // the tap does what the gold prompt SAYS: the words were picked a moment ago (the quest focus can move on in
       // between — e.g. the step turns to 💧 the frame a zone visit completes), so follow the shown action while it is fresh
       const shown = this._kidShown?.get(id);
@@ -1122,8 +1137,10 @@
       const s = this._state(id);
       const crop = cropOf(s?.cropId);
       if (!s) return { label: '밭 보기', emoji: '👀', act: 'view' };
+      const P = this._plots.get(id);
+      if (P && performance.now() < P.busyUntil) return { label: '잠깐만요', emoji: '⏳', act: 'wait' };
       if (!crop) return { label: isHerbPlot(this._plots.get(id)?.def || {}) ? '모종 심기' : '씨앗 심기', emoji: '🌱', act: 'plant' };
-      const cool = now() - s.lastWaterAt < cfg().waterCooldown * 1000;
+      const cool = waterCoolLeft(s) > 0;
       if (!cool && s.water < 100 && this._questWantsWater()) return { label: '물 주기', emoji: '💧', act: 'water' };
       if (s.growth >= 100) return { label: `${crop.name} 거두기`, emoji: cropPic(crop), act: 'harvest' };
       if (s.water < KID_WATER_AT && !cool) return { label: '물 주기', emoji: '💧', act: 'water' };
@@ -1150,7 +1167,7 @@
       if (!this._hasItem('ITEM_WATERING_CAN')) { this._offerWateringCan(id); return false; }
       const C = cfg();
       const t = now();
-      if (t - s.lastWaterAt < C.waterCooldown * 1000) {
+      if (waterCoolLeft(s) > 0) {
         if (!opts.silent) {
           if (kid) G.ui.toast('물이 스며들고 있어요. 조금만 기다려요!', { type: 'info', emoji: '💧', sound: false, duration: 1800, say: '물이 스며들고 있어요. 조금만 기다려요!' });
           else G.ui.toast('물이 흙에 스며드는 중이에요. 잠시 후에 다시 주세요.', { type: 'info', emoji: '💧', sound: false, duration: 1600 });
@@ -1163,6 +1180,7 @@
       s.lastWaterAt = t;
       s.lastUpdate = t;
       P.busyUntil = performance.now() + 2300;
+      P.busyLine = '물이 스며들고 있어요. 조금만 기다려요!';
       this._doWaterFx(P);
       G.sfx('water');
       if (kid) {
@@ -1201,6 +1219,7 @@
       Object.assign(s, { cropId: crop.id, growth: 0, health: 100, plantedAt: t, lastUpdate: t });
       if (!(s.water > 0)) s.water = 20;
       P.busyUntil = performance.now() + 900;
+      P.busyLine = '씨앗을 심고 있어요. 조금만 기다려요!';
       const pl = G.sys.player;
       pl?.faceTowards?.(P.cx, P.cz);
       pl?.playAction?.('interact', { duration: 0.9 });
@@ -1231,13 +1250,15 @@
       if (!P || !s || !crop) return null;
       if (s.growth < 100) { G.ui.toast(`아직 다 자라지 않았어요. (성장률 ${Math.floor(s.growth)}%)`, { type: 'info', emoji: '🌱' }); return null; }
       const C = cfg();
+      const itemId = crop.harvestItem;
+      // a full stack in the bag: keep the crop in the bed (nothing would reach the bag)
+      if (G.sys.inventory?.room && G.sys.inventory.room(itemId) <= 0) { G.sys.inventory.fullNotice?.(itemId); return null; }
       const [lo, hi] = Array.isArray(crop.harvestAmount) ? crop.harvestAmount : [1, 3];
       const base = U.randInt(lo, hi);
       let qty = Math.max(1, Math.round(base * (0.55 + 0.45 * s.health / 100)));
       const basket = this._hasItem('ITEM_BASKET') ? (C.basketBonus || 0) : 0;
       qty += basket;
-      const itemId = crop.harvestItem;
-      if (G.sys.inventory?.add) G.sys.inventory.add(itemId, qty, { source: 'harvest' });
+      if (G.sys.inventory?.add) qty = G.sys.inventory.add(itemId, qty, { source: 'harvest' }) || qty; // what really went in
       else if (items()[itemId]) {
         G.state.inventory[itemId] = (Number(G.state.inventory[itemId]) || 0) + qty;
         G.bus.emit('item:added', { itemId, qty, source: 'harvest' });
@@ -1254,6 +1275,7 @@
         Object.assign(s, { cropId: null, growth: 0, health: 100, plantedAt: 0, lastUpdate: t });
       }
       P.busyUntil = performance.now() + 2100;
+      P.busyLine = '거두고 있어요. 조금만 기다려요!';
       const pl = G.sys.player;
       pl?.faceTowards?.(P.cx, P.cz);
       pl?.playAction?.('harvest');
@@ -1650,6 +1672,16 @@
     },
 
     /** sync meshes with the state; full=true snaps easing values */
+    _applyQuality(preset) {
+      const lowQ = preset.name === 'low', shadows = !!preset.shadows;
+      const relayout = lowQ !== this._lowQ;
+      this._lowQ = lowQ;
+      this._shadows = shadows;
+      for (const P of this._plots.values()) {
+        if (relayout) { P.modelId = '__rebuild'; if (G.state && this._ready) this._syncVisual(P, true); }  // new spacing
+        else for (const k of ['body', 'fruit']) if (P.meshes?.[k]) P.meshes[k].castShadow = shadows;
+      }
+    },
     _syncVisual(P, full) {
       const s = this._state(P.id);
       if (!s) return;
@@ -1874,8 +1906,7 @@
       txt(els.face, s.water < cfg().dryThreshold ? '🥵' : kidFace(s.health));
       txt(els.sayT, kidSentence(s, crop));
       if (els.water) {
-        const C = cfg();
-        const cool = now() - s.lastWaterAt < C.waterCooldown * 1000;
+        const cool = waterCoolLeft(s) > 0;
         const full = s.water >= 100;
         const dis = cool || full;
         if (els.water.disabled !== dis) els.water.disabled = dis;
@@ -2047,7 +2078,7 @@
       if (els.yield.textContent !== yTxt) els.yield.textContent = yTxt;
       // tip
       let tip;
-      if (ready) tip = `🧺 다 자랐어요! 수확하면 ${josa(items()[crop.harvestItem]?.name || crop.name, '과/와')} 경험치 ${crop.exp || 0}, 코인 ${crop.coin || 0}을 받아요.${bonus ? '' : ' 바구니가 있으면 수확량이 1개 늘어나요.'}`;
+      if (ready) tip = `🧺 다 자랐어요! 수확하면 ${josa(items()[crop.harvestItem]?.name || crop.name, '과/와')} 경험치 ${crop.exp || 0}, 코인 ${josa(String(crop.coin || 0), '을/를')} 받아요.${bonus ? '' : ' 바구니가 있으면 수확량이 1개 늘어나요.'}`;
       else if (s.water <= 0) tip = '🥀 흙이 완전히 말랐어요. 성장이 멈추고 건강이 조금씩 떨어지고 있어요.';
       else if (s.water < C.dryThreshold) tip = `💧 흙이 말라 가요. 수분이 ${C.dryThreshold}% 아래면 자라는 속도가 절반으로 느려져요.`;
       else if (s.health < 50) tip = '💚 작물이 약해졌어요. 물을 넉넉히 주면 건강이 천천히 회복돼요. 건강할수록 수확량이 많아요.';
@@ -2058,7 +2089,7 @@
       if (els.tip.textContent !== tip) els.tip.textContent = tip;
       // water button cooldown text
       if (md.waterBtn) {
-        const cd = Math.max(0, C.waterCooldown * 1000 - (now() - s.lastWaterAt));
+        const cd = waterCoolLeft(s);
         const full = s.water >= 100;
         md.waterBtn.disabled = cd > 0 || full;
         md.waterBtn.title = full ? '흙이 이미 촉촉해요' : cd > 0 ? '물이 스며드는 중…' : '수분 +' + C.waterPerAction + '%';

@@ -42,9 +42,15 @@
   const esc = U.escapeHtml;
 
   const MAX_MSG = 120, MAX_LEN = 120, RATE_MS = 1200, LOCAL_R = 30;
-  const DUP_MS = 20000, BURST_N = 5, BURST_MS = 10000, BURST_COOL = 8000; // spam guard
+  // spam guard — never looser than the server (config chat.duplicate_window 30 s, rate_limits.chat_send 20 / 60 s),
+  // so a line the client accepts is not refused afterwards
+  const DUP_MS = 30000, BURST_N = 5, BURST_MS = 10000, BURST_COOL = 8000, MINUTE_N = 20, MINUTE_MS = 60000;
   const LABEL_DIST = 40, HIDE_DIST = 90, FAR_DIST = 55, SLEEP_STEP = 0.5;  // visitors: hide + sleep beyond 90 m
   const MAX_REMOTES = 60, MAX_ROWS = 120, WORLD_LIM = 135;               // server payload limits
+  const REMOTE_LOCO = ['idle', 'walk', 'run', 'jump', 'fall'];          // presence locomotion states (not avatar actions)
+  /** a remote this far from where it should be has teleported (or reports were lost): jump there instead of chasing.
+   *  At 18 m/s one or two report gaps are 18–36 m, so the limit grows with the reported speed. */
+  const snapDist = (speed) => Math.max(20, (Number(speed) || 0) * 2.5);
   const QUICK = ['EMO_HELLO', 'EMO_SMILE', 'EMO_THUMBS', 'EMO_CLAP', 'EMO_LIKE', 'EMO_LAUGH', 'EMO_WOW'];
   const DEFLECT = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]; // heading offsets tried when the way ahead is blocked
   const LS_COLLAPSED = 'tfm.v1.chat.collapsed', LS_TAB = 'tfm.v1.chat.tab', LS_REPORTS = 'tfm.v1.chat.reports';
@@ -282,6 +288,13 @@
   const P_ODD_ID = PR`(?:(?=[a-z0-9._#\-]{3,})(?=[a-z0-9._#\-]*[a-z_.#])[a-z0-9]*[0-9_.#][a-z0-9._#\-]*|[0-9]{5,}(?![0-9가-힣]))`;
   const P_HANGUL_ID = PR`(?:[가-힣]{1,10}[0-9][가-힣0-9]{0,10}|[0-9]{1,10}[가-힣]{1,10})`;
   const P_KID_STOP = '(?:우리|오늘|내일|어제|이제|아직|저기|빨리|진짜|정말|엄마|아빠|동생|누나|언니|오빠|친구|같은|무슨|어느|옛날|다른|그냥|매일|요즘|지금)';
+  // a 3–4 digit group in place-value words: 천이백삼십사 (1234) · 오천육백 (5600) · 삼백 (300)
+  const P_PV = '(?:[일이삼사오육칠팔구]?천(?:[일이삼사오육칠팔구]?백)?(?:[일이삼사오육칠팔구]?십)?[일이삼사오육칠팔구]?|[일이삼사오육칠팔구]?백(?:[일이삼사오육칠팔구]?십)?[일이삼사오육칠팔구]?)';
+  const P_PHONE_WORD = PR`(?:전화\s*번호|전번|핸드폰|휴대폰|휴대\s*전화|핸폰|폰\s*번호|전화|번호|폰|연락처|phone|tel)`;
+  // 카톡 / 카카오(톡) / kakao written apart, with _ . - * between the letters, or half in jamo (ㅋㅏ톡)
+  const P_LS = PR`[\s_\-.·*~]*`;
+  const P_MSG_LOOSE = '(?:카' + P_LS + '카' + P_LS + '오' + P_LS + '톡|카' + P_LS + '카' + P_LS + '오|카' + P_LS + '톡|ㅋ' + P_LS + 'ㅏ' + P_LS + '톡|ㅋ' + P_LS + 'ㅌ|kakao(?:' + P_LS + 'talk)?)';
+  const P_MAIL_PROV = '(?:naver|gmail|hanmail|nate|hotmail|outlook|yahoo|icloud|네이버|지메일|한메일|네이트|핫메일|아웃룩|야후)'; // a mail provider by name alone (not 다음 / 카카오: everyday words)
   /** [name, source, flags, predicate?] — ChatFilter::piiPatterns() has the same list in the same order */
   const PII_SRC = [
     // ---- e-mail: "kid@x.com", "kid 골뱅이 naver 닷 com", "kid(at)gmail(dot)com", "kid@gmail" (no TLD), "kid dot dino at gmail dot com"
@@ -291,6 +304,9 @@
     ['emailHostAt', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:look|looks|looking|meet|see|me|you|we|they|it|is|am|are|was|were|be|this|that|go|come|stay|play|eat|sit|wait|good|bad|laugh|smile|point|stare|arrive|here|there|home|school)\s)[\p{L}\p{N}._%+\-]{2,}\s+at\s+` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
     ['emailNoTld', PR`[\p{L}\p{N}._%+\-]{2,}\s*@\s*[a-z][a-z0-9\-]{2,}(?![\p{L}\p{N}.@])`, 'giu'],               // "kid@protonmail"
     ['mailWord', PR`(?:이메일|메일)\s*(?:주소)?\s*(?:은|는|이|가|:)?\s*[a-z0-9][a-z0-9._%+\-]{2,}|e-?mail\s*(?:address\s*)?(?:is|:)\s*` + P_ODD_ID, 'giu'],
+    // the id and the mail provider without any @: "dinokid 네이버", "dino77 지메일", "dinokid 다음 메일", "gmail dino77"
+    ['idProvider', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:hello|hi|hey|love|like|go|play|game|games|my|your|the|open|search|find|use|see|watch|webtoon|map|maps|news|app)\s)[a-z][a-z0-9._%+\-]{3,}\s*(?:` + P_MAIL_PROV + PR`(?:\s*(?:메일|mail|이메일)(?:로|으로|이야|야|이에요|예요|주소)?)?|(?:다음|daum|카카오|kakao)\s*(?:메일|mail)(?:로|으로|이야|야|이에요|예요|주소)?)(?![\p{L}\p{N}])`, 'giu'],
+    ['providerId', PR`(?<![\p{L}\p{N}])(?:` + P_MAIL_PROV + PR`|daum|다음\s*메일)(?:\s*(?:메일|mail|아이디|id|계정))?\s*(?:은|는|:)?\s*` + P_ODD_ID, 'giu'],
     // ---- links: scheme / www, invite & short links, bare domains, disguised dots, IP addresses
     ['url', PR`(?:https?|hxxps?):\/\/[^\s<>"]+|www\.[^\s<>"]+`, 'giu'],
     ['shortLink', PR`(?<![\p{L}\p{N}])(?:t\.me|discord\.gg|bit\.ly|youtu\.be|open\.kakao\.com|qr\.kakao\.com|band\.us|toss\.me|linktr\.ee|naver\.me)(?:\/[^\s<>"]*)?`, 'giu'],
@@ -317,6 +333,14 @@
     ['handleEn', PR`(?<![a-z0-9])` + P_SNS_EN + PR`\s*(?:id\s*:?|:|@)\s*@?` + P_LATIN_ID, 'giu'],
     ['handleEnPlain', PR`(?<![a-z0-9])` + P_SNS_EN_PLAIN + PR`\s+@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + '))', 'giu'],
     ['atHandle', PR`(?<![\p{L}\p{N}])@[a-z0-9][a-z0-9._]{2,}(?=\s*(?:인스타|틱톡|디코|카톡|유튜브|트위터|로블록스|제페토|insta|tiktok|discord|youtube|twitter|roblox|zepeto|ig(?![a-z])))`, 'giu'],
+    // "카_톡 dinokid", "카 톡 아 이 디 dinokid", "ㅋㅏ톡 dinokid", "kakao dinokid", "카톡ㄱㄱ dino77", "카카오톡 아이디 알려줄게 dinokid"
+    ['handleLoose', P_MSG_LOOSE + '(?:' + P_LS + '(?:아' + P_LS + '이' + P_LS + '디|아' + P_LS + '디|id|계' + P_LS + '정|닉' + P_LS + '네' + P_LS + '임|닉))?' + PR`(?:\s*(?:은|는|이|가|:|ㄱ+|고고))?(?:\s+(?:알려\s?줄[게께까]|알려\s?드릴게|알려줘|줄[게께]|이야|야|이에요|예요|은요|는요|검색해|검색|쳐봐|쳐|추가해|추가|친추|해|해줘|하자|ㄱㄱ|고고)){0,2}\s*:?\s*@?(?!(?:friends?|talk|pay|map|games?|webtoon|page|story|tv|mini)(?![a-z0-9]))(?:` + P_ODD_ID + PR`|[a-z][a-z0-9._\-]{3,})`, 'giu'],
+    // "친추 dino77", "친구 추가 해줘 dino_7", "팔로우 kid.77" (an id-like token after a friend / follow request)
+    ['followId', PR`(?<![가-힣])(?:친추|친구\s*추가|친구\s*신청|맞팔|팔로우|팔로|follow|add)\s*(?:해|해줘|해요|하자|ㄱㄱ|부탁해|please|me)?\s*:?\s*@?` + P_ODD_ID, 'giu'],
+    // a mobile number whose 010 is spelled out or hinted ("공일공 붙이고 1234 5678", "ㄱㅇㄱ 1234 5678")
+    ['phoneCueWords', PR`(?:(?:공|영|빵)\s*일\s*[공영빵일육칠팔구]|ㄱ\s*ㅇ\s*ㄱ)[^0-9🔒]{0,16}?[0-9]{3,4}` + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
+    // 010 + the groups in place-value words: "010 천이백삼십사 오천육백칠십팔", "공일공 이천삼백 사천오백"
+    ['phonePlaceValue', PR`(?:(?<![0-9])01[016789]|(?:공|영|빵)일[공영빵일육칠팔구])` + P_GAP + '(?:' + P_PV + PR`|[0-9]{3,4})` + P_GAP + '(?:' + P_PV + PR`|[0-9]{4}(?![0-9]))`, 'gu'],
     // ---- phone numbers: any separator between the groups ("010,1234,5678", "010😀1234😀5678", "010 하고 1234 …")
     ['phone', PR`(?<![0-9])(?:\+` + P_GAP + '82' + P_GAP + '0?|0)1[016789]' + P_GAP + '[0-9]{3,4}' + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
     // any filler between the three groups of a mobile number ("010번 1234번 5678", "010 우리엄마 1234 5678", 7+ emoji)
@@ -324,7 +348,9 @@
     ['landline', PR`(?<![0-9])0(?:2|[3-6][1-5]|70|50[0-9]?|80)` + P_GAP + '[0-9]{3,4}' + P_GAP + PR`[0-9]{4}(?![0-9])`, 'gu'],
     ['digits', PR`(?<![0-9])(?:[0-9]` + P_GAP + PR`){8,}[0-9](?![0-9])`, 'gu', piiNotCounting], // ≥ 9 digits: ids, cards, accounts
     ['localNumber', PR`(?<![0-9])[0-9]{3,4}\s*(?:[\p{Pd}−~.·•ㆍㅡᅳ]\s*)+[0-9]{4}(?![0-9])(?!\s*` + P_COUNTER + ')', 'gu'],
-    ['telHint', PR`(?<![0-9])[0-9]{4}(?![0-9])(?=\s*(?:으로|로|번으로)?\s*(?:연락|전화|문자|카톡))`, 'gu'],
+    // the 8-digit local part after a phone word (010 implied): "전화번호 1234 5678", "폰 1234-5678", "연락처: 1234 5678"
+    ['phoneWordLocal', P_PHONE_WORD + PR`\s*(?:은|는|이|가|:|=)?\s*[0-9]{3,4}` + P_GAP + PR`[0-9]{4}(?![0-9])`, 'giu'],
+    ['telHint', PR`(?<![0-9])(?:[0-9]{3,4}` + P_GAP + PR`)?[0-9]{4}(?![0-9])(?=\s*(?:으로|로|번으로)?\s*(?:연락|전화|문자|카톡))`, 'gu'],
     ['phonePrefix', PR`(?<![0-9])01[016789]` + P_GAP + PR`[0-9]{3,4}(?![0-9])`, 'gu'],
     // digits spelled as words (공일공 일이삼사 오육칠팔 · 하나둘셋넷 · zero one zero …), numerals mixed in
     ['wordDigits', PR`(?:(?<![가-힣])|(?<=[는은번호폰]))` + P_KDW + '(?:' + P_GAP + P_KDW + '){7,15}(?=' + P_JOSA + PR`?(?![가-힣]))`, 'giu', piiWordDigits],
@@ -540,6 +566,12 @@
     if (/학년|[0-9일이삼사오육칠팔구]반$|초등|중학|고등|유치원|어린이집|[가-힣]{2,}초[0-9일이삼사오육]/u.test(f)) return true;
     if (/^(?:ig|yt|tt|dc|snap|kt|insta|fb|tw|tg|dm)[._]/u.test(f)) return true;               // "ig_dino", "snap.dino77"
     if (/[가-힣]{2,}(?<!식)초$|[가-힣]{2,}(?:중|고)[0-9일이삼]|[가-힣]{1,6}동[0-9]{2,}/u.test(f)) return true; // 해바라기초 · 해바라기중1 · 정자동123
+    // school + a person's name ("행복초김민준": 초 + surname + 1–2 syllables; 초코 · 초록 · 초원 … are words, not schools)
+    if (/[가-힣]{2,}초(?!코|록|롱|밥|원|승|대|보|콜|가|침|기|등|점|여|저|성|청|상|식|빙|과|월|봄)(?:김|이|박|최|정|강|조|윤|장|임|한|오|서|신|권|황|안|송|류|유|전|홍|고|문|양|손|배|백|허|남|심|노|하|곽|성|차|주|우|구|민|진|나|지|엄|채|원|천|방|공|현|함|변|염|여|추|도|소|석|선|설|마|길|연|위|표|명|기|반|왕|금|옥|육|인|맹|제|모|탁|국|어|은|편|용|예|봉|경)[가-힣]{1,2}/u.test(f)) return true;
+    // a district ("강남구민준", "해운대구", "분당구")
+    if (/(?:강남|강동|강북|강서|관악|광진|구로|금천|노원|도봉|동대문|동작|마포|서대문|서초|성동|성북|송파|양천|영등포|용산|은평|종로|중랑|해운대|수영|연수|부평|계양|미추홀|분당|수지|기흥|일산동|일산서|덕양|유성|달서|수성|부산진|사하|사상|금정|기장|동래|연제|영도|광산|만안|동안|팔달|권선|장안|영통|처인|원미|소사|오정)구/u.test(f)) return true;
+    // an apartment block in digit words ("일공일동" = 101동, "이공삼동")
+    if (/(?:[일이삼사오육칠팔구][공영][일이삼사오육칠팔구공영]{1,2}|[일이삼사오육칠팔구]{1,2}[공영]{1,2}[일이삼사오육칠팔구])동/u.test(f)) return true;
     return false;
   }
   // <<< PII ENGINE
@@ -770,7 +802,7 @@
     _pool: [], _target: 0, _vroot: null, _lineT: 12, _cycleT: 200, _joinT: -1, _recentLines: [], _replyT: 0,
     _sessionKey: null, _loggedOut: true, _mode: 'local', _srv: null, _timers: new Set(),
     _lastEmote: -1e9, _emoteSeq: 0, _emoteState: null,
-    _sendLog: [], _recentKeys: [], _muteUntil: 0, _typingNames: new Map(), _suggest: null, _gatherAt: -1e9, _mentionAt: -1e9,
+    _sendLog: [], _minuteLog: [], _recentKeys: [], _muteUntil: 0, _typingNames: new Map(), _suggest: null, _gatherAt: -1e9, _mentionAt: -1e9,
     stats: { plans: 0, planFails: 0, arrivals: 0, stuck: 0, lines: 0, replies: 0, joins: 0, leaves: 0 },
 
     get online() { return 1 + this.others.size; },
@@ -1175,7 +1207,7 @@
       if (this._chat) { this._chat.log.replaceChildren(); this._chat.input.value = ''; this._updateCount(); this._hideSuggest(); }
       this._typingNames.clear();
       this._renderTyping();
-      this._recentKeys.length = 0; this._sendLog.length = 0; this._muteUntil = 0;
+      this._recentKeys.length = 0; this._sendLog.length = 0; this._minuteLog.length = 0; this._muteUntil = 0;
       this._markRead();
       this._stick = true;
     },
@@ -1341,7 +1373,9 @@
       this.setTab(this.tab, { silent: true });
     },
 
-    /** opts: {reply: 'greet'|'feel'|'praise'|'play'|'emoji'} how simulated visitors should answer (kid phrases) */
+    /** opts: {reply: 'greet'|'feel'|'praise'|'play'|'emoji'} how simulated visitors should answer (kid phrases);
+     *  onSent() runs once the line really went out — at once in local mode, after the server accepted it in server
+     *  mode (chat:sent too), so quests and missions never count a line the server refused */
     sendChat(text, channel = 'all', opts = {}) {
       if (!G.state) return false;
       let t = cleanText(applyShortcuts(cleanText(text, MAX_LEN * 2), true), MAX_LEN);
@@ -1357,7 +1391,7 @@
         if (!t.replace(/🔒|[\s\p{P}\p{S}]/gu, '')) { G.log.info('UI', 'chat: personal information only — not sent'); return false; }
       }
       const now = performance.now();
-      // spam guard: 1.2 s between messages, ≤ 5 messages per 10 s, no repeating the same text within 20 s
+      // spam guard: 1.2 s between messages, ≤ 5 messages per 10 s and 20 per minute, no repeating the same text within 30 s
       if (now < this._muteUntil) { warn(`잠깐 쉬어 가요! ${Math.ceil((this._muteUntil - now) / 1000)}초 뒤에 다시 보낼 수 있어요.`, '잠깐 쉬었다가 다시 말해요!', '⏳'); return false; }
       if (now - this._lastSent < RATE_MS) { warn('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', '천천히 말해요!', '⏳'); return false; }
       while (this._sendLog.length && now - this._sendLog[0] > BURST_MS) this._sendLog.shift();
@@ -1366,11 +1400,17 @@
         warn('메시지를 너무 많이 보냈어요. 8초 뒤에 다시 보낼 수 있어요.', '말을 많이 했어요. 조금 쉬어요!', '⏳');
         return false;
       }
+      while (this._minuteLog.length && now - this._minuteLog[0] > MINUTE_MS) this._minuteLog.shift();
+      if (this._minuteLog.length >= MINUTE_N) {
+        warn(`1분에 ${MINUTE_N}개까지 보낼 수 있어요. ${Math.max(1, Math.ceil((this._minuteLog[0] + MINUTE_MS - now) / 1000))}초 뒤에 다시 보내 주세요.`, '말을 많이 했어요. 조금 쉬어요!', '⏳');
+        return false;
+      }
       const key = spamKey(t);
       while (this._recentKeys.length && (now - this._recentKeys[0].at > DUP_MS || this._recentKeys.length > 3)) this._recentKeys.shift();
       if (this._recentKeys.some((r) => r.key === key)) { warn('같은 메시지를 연달아 보낼 수 없어요. 조금 뒤에 다시 보내 주세요.', '방금 한 말이에요. 다른 말을 골라 봐요!', '🔁'); return false; }
       this._recentKeys.push({ key, at: now });
       this._sendLog.push(now);
+      this._minuteLog.push(now);
       this._lastSent = now;
       this._lastText = t;
       const ch = channel === 'local' ? 'local' : 'all';
@@ -1380,10 +1420,13 @@
       const msg = this._push({ name: nick, text: masked, channel: ch, kind: 'me', self: true, near: true, uid: G.save?.profile?.id ?? null });
       this.say(masked);
       G.sfx('chat');
-      G.bus.emit('chat:sent', { text: masked, channel: ch });
+      const sent = () => {
+        G.bus.emit('chat:sent', { text: masked, channel: ch });
+        try { opts.onSent?.(); } catch (e) { G.log.warn('SOCIAL', 'onSent failed', e); }
+      };
       G.log.info('UI', `chat sent (${ch}, ${cpLen(masked)}자)`); // never log message contents
-      if (this._mode === 'server') this._serverSend(masked, ch, msg);
-      else this._visitorsHear(masked, ch, opts.reply || null);
+      if (this._mode === 'server') this._serverSend(masked, ch, msg, sent);
+      else { sent(); this._visitorsHear(masked, ch, opts.reply || null); }
       return true;
     },
     /** 옹이's friendly reminder after personal information was masked (at most every 12 s) */
@@ -1803,18 +1846,16 @@
       const p = KID_PHRASES.find((x) => x.id === id);
       if (!p || !G.state) return false;
       const cat = KID_CATS.find((c) => c.id === p.cat);
-      if (!this.sendChat(`${p.text} ${p.emoji}`, 'all', { reply: cat?.reply || 'greet' })) return false;
+      if (!this.sendChat(`${p.text} ${p.emoji}`, 'all', { reply: cat?.reply || 'greet', onSent: () => G.bus.emit('kid:phrase', { phraseId: p.id }) })) return false;
       this._kidListenUntil = performance.now() + 12000;
-      G.bus.emit('kid:phrase', { phraseId: p.id });
       kidSay(p.text, { priority: 1 });
       return true;
     },
     /** send one emoji from the kid emoji row */
     sendKidEmoji(e) {
       if (!KID_EMOJI_SET.has(e) || !G.state) return false;
-      if (!this.sendChat(e, 'all', { reply: 'emoji' })) return false;
+      if (!this.sendChat(e, 'all', { reply: 'emoji', onSent: () => G.bus.emit('kid:phrase', { phraseId: `emoji:${e}` }) })) return false;
       this._kidListenUntil = performance.now() + 8000;
-      G.bus.emit('kid:phrase', { phraseId: `emoji:${e}` });
       return true;
     },
     /**
@@ -1901,7 +1942,8 @@
         else if (pos && G.easy?.goTo) G.easy.goTo({ x: pos.x, z: pos.z, label: who }, { stopDistance: 2 });
         else this._goTo(info, rec, npcRec);
       } else if (id === 'block') {
-        const ok = await G.easy.confirm({ emoji: '🙈', heading: '안 볼래요', title: `${name}의 말을 안 볼까요?`, say: `${who}의 말을 안 볼까요?`, yes: '안 볼래요', no: '아니요' });
+        // the visible question is long-press readable, so it names a stranger "친구" too
+        const ok = await G.easy.confirm({ emoji: '🙈', heading: '안 볼래요', title: `${who}의 말을 안 볼까요?`, say: `${who}의 말을 안 볼까요?`, yes: '안 볼래요', no: '아니요' });
         if (ok) this.block(name);
       } else if (id === 'unblock') {
         if (await G.easy.gate({ reason: 'unblock', title: '다시 보기' })) this.unblock(name);
@@ -1909,7 +1951,8 @@
     },
     /** one-tap report for children: confirm → report (+ block) → "어른에게도 말해 줘요" */
     async _kidReport(info) {
-      const ok = await G.easy?.confirm?.({ emoji: '🚨', heading: '어른에게 알리기', title: `${info.name}의 말이 싫었나요?`, text: '알리면 이 친구의 말이 더 이상 안 보여요.', say: '친구의 말이 싫었나요? 알리면 이 친구의 말이 더 이상 안 보여요.', yes: '알려요', no: '아니요' });
+      const who = this._kidWho(info.name, info.kind);
+      const ok = await G.easy?.confirm?.({ emoji: '🚨', heading: '어른에게 알리기', title: `${who}의 말이 싫었나요?`, text: '알리면 이 친구의 말이 더 이상 안 보여요.', say: '친구의 말이 싫었나요? 알리면 이 친구의 말이 더 이상 안 보여요.', yes: '알려요', no: '아니요' });
       if (!ok || !G.state) return false;
       const lastMsg = info.msgId ? this.messages.find((m) => m.id === info.msgId) : [...this.messages].reverse().find((m) => m.name === info.name && !m.self);
       const done = await this._fileReport(info, 'kid', '', lastMsg, { quiet: true });
@@ -2023,13 +2066,20 @@
     // ================================================================ blocking / reporting
     _blockedList() { const s = G.state; if (!s) return []; if (!Array.isArray(s.blocked)) s.blocked = []; return s.blocked; },
     _isBlocked(name) { return !!name && this._blockedList().includes(String(name)); },
+    /** how kid-mode text (spoken, or readable with a long-press) names someone: names this game wrote (NPCs, simulated
+     *  visitors) as they are, another account — whose nickname a stranger chose — only ever as "친구" */
+    _kidWho(name, kind) {
+      if (kind === 'npc' || kind === 'visitor') return name;
+      if (kind !== 'remote') for (const o of this.others?.values?.() || []) if (o.name === name && o.kind !== 'remote') return name;
+      return '친구';
+    },
     isBlocked(name) { return this._isBlocked(name); },
     block(name) {
       if (!name || !G.state) return false;
       const list = this._blockedList();
       if (!list.includes(name)) { list.push(String(name)); G.dirty('blocked'); }
       this._refreshBlocked();
-      G.ui.toast(kidOn() ? `${name}의 말이 이제 안 보여요.` : `${J.eulreul(J.nim(name))} 차단했어요. 이 사용자의 채팅과 말풍선이 더 이상 보이지 않아요.`, { type: 'success', emoji: kidOn() ? '🙈' : '🚫' });
+      G.ui.toast(kidOn() ? `${this._kidWho(name)}의 말이 이제 안 보여요.` : `${J.eulreul(J.nim(name))} 차단했어요. 이 사용자의 채팅과 말풍선이 더 이상 보이지 않아요.`, { type: 'success', emoji: kidOn() ? '🙈' : '🚫' });
       G.log.info('UI', `blocked ${name}`);
       return true;
     },
@@ -2039,7 +2089,7 @@
       const i = list.indexOf(String(name));
       if (i >= 0) { list.splice(i, 1); G.dirty('blocked'); }
       this._refreshBlocked();
-      G.ui.toast(kidOn() ? `${name}의 말이 다시 보여요.` : `${J.nim(name)}의 차단을 해제했어요.`, { type: 'info', emoji: kidOn() ? '👀' : '🔓' });
+      G.ui.toast(kidOn() ? `${this._kidWho(name)}의 말이 다시 보여요.` : `${J.nim(name)}의 차단을 해제했어요.`, { type: 'info', emoji: kidOn() ? '👀' : '🔓' });
       return true;
     },
     _refreshBlocked() {
@@ -3220,8 +3270,14 @@
       if (!S) return;
       const canWrite = !this._guestReadOnly();
       const now = performance.now();
-      // every 2 s, every second while moving faster than a stroll (3× speed: up to 18 m between updates otherwise)
-      const fast = (G.sys.player?.speed || 0) > (Number(G.sys.player?.WALK) || 9.6) * 0.5;
+      // every 2 s, every second while I or another player moves faster than a stroll (3× speed: up to 36 m between
+      // updates otherwise; a standing player still needs fresh reports to draw a running friend smoothly)
+      const stroll = (Number(G.sys.player?.WALK) || 9.6) * 0.5;
+      const mySpeed = G.sys.player?.speed || 0;
+      const fast = mySpeed > stroll || this._remotesMoving;
+      // stopped after moving: tell the others soon, so their copy of me does not run on past where I stand
+      if (S.wasMoving && mySpeed < 0.2 && !S.fails) S.nextPres = Math.min(S.nextPres, now + 250);
+      S.wasMoving = mySpeed >= 0.2;
       if (canWrite && now >= S.nextPres && !S.presBusy) { S.nextPres = now + this._backoff(fast ? 1 : 2) * 1000; this._presence(); }
       if (now >= S.nextChat && !S.chatBusy) { S.nextChat = now + this._backoff(3) * 1000; this._pollChat(); }
       this._updateRemotes(dt);
@@ -3281,7 +3337,9 @@
       S.presFirst = false;
       this._updateOnline();
     },
-    /** validated remote row -> {name, x, y, z, rot, zoneId, anim, emote, emoteAt, appearance} or null */
+    /** validated remote row -> {name, x, y, z, rot, zoneId, anim, loco, emote, emoteAt, appearance, speed, age} or null.
+     *  anim is a one-shot / looping avatar action (wave, sit…); loco the locomotion state (idle / walk / run / jump /
+     *  fall) that drives dead reckoning — the rig animates those from its own speed. */
     _remoteRow(r) {
       const num = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
       let x = num(r.x), z = num(r.z), y = num(r.y), rot = num(r.rotY ?? r.rot ?? 0);
@@ -3291,6 +3349,7 @@
       rot = Number.isFinite(rot) ? Math.atan2(Math.sin(rot), Math.cos(rot)) : 0;
       const zoneId = typeof r.zoneId === 'string' && /^[A-Z0-9_]{1,40}$/.test(r.zoneId) ? r.zoneId : null;
       const anim = typeof r.anim === 'string' && G.avatar?.actions && Object.prototype.hasOwnProperty.call(G.avatar.actions, r.anim) ? r.anim : null;
+      const loco = typeof r.anim === 'string' && REMOTE_LOCO.includes(r.anim) ? r.anim : null;
       const emote = typeof r.emote === 'string' && (G.data.emotes || []).some((q) => q.id === r.emote) ? r.emote : null;
       const emoteAt = num(r.emoteAt);
       let appearance = null;
@@ -3298,7 +3357,8 @@
         try { appearance = G.avatar?.normalize ? G.avatar.normalize(r.appearance) : null; } catch (e) { appearance = null; }
       }
       const speed = num(r.speed);
-      return { name: cleanName(r.nickname ?? r.name ?? '체험객', 'remote'), x, y, z, rot, zoneId, anim, emote, emoteAt: Number.isFinite(emoteAt) ? emoteAt : 0, appearance, speed: Number.isFinite(speed) ? clamp(speed, 0, 30) : 0 };
+      const age = num(r.age);   // ms since that player's report reached the server (newer servers)
+      return { name: cleanName(r.nickname ?? r.name ?? '체험객', 'remote'), x, y, z, rot, zoneId, anim, loco, emote, emoteAt: Number.isFinite(emoteAt) ? emoteAt : 0, appearance, speed: Number.isFinite(speed) ? clamp(speed, 0, 30) : 0, age: Number.isFinite(age) ? clamp(age, 0, 5000) : null };
     },
     _upsertRemote(key, id, raw) {
       const r = this._remoteRow(raw);
@@ -3317,7 +3377,7 @@
         const tag = h('button', { class: 'nametag remote', type: 'button', title: `${name} · 클릭하면 메뉴가 열려요`, 'data-say': '친구예요. 누르면 친구 메뉴가 열려요.' }, dot, nm);
         const root = h('div', { class: 'soc-label' }, bubble, tag);
         const label = G.ui.label({ el: root, target: rig.headAnchor, offsetY: 0.04, maxDist: LABEL_DIST, fadeDist: 8 });
-        o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId, label, el: { root, bubble, tag, dot, nm }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, anim: null, emoteAt: r.emoteAt, appKey: '', hidden: false };
+        o = { id: key, uid: id, name, kind: 'remote', rig, group, position: group.position, rotY: rot, zoneId: r.zoneId, label, el: { root, bubble, tag, dot, nm }, bub: { bubble, t: 0 }, params: { speed: 0, grounded: true, vy: 0 }, tx: x, tz: z, ty: y, trot: rot, tsp: 0, tAt: 0, repDt: 1.5, loco: null, rsp: 0, anim: null, emoteAt: r.emoteAt, appKey: '', hidden: false };
         tag.addEventListener('click', (e) => { e.stopPropagation(); this._openUser(tag, { name: o.name, kind: 'remote', id }); });
         group.position.set(x, y != null ? y : G.world.surfaceHeight(x, z), z);
         group.rotation.y = rot;
@@ -3332,10 +3392,20 @@
         o.el.root.classList.toggle('blocked', this._isBlocked(name));
       }
       if (r.appearance) { const k = JSON.stringify(r.appearance); if (k !== o.appKey) { o.appKey = k; try { o.rig.setAppearance(r.appearance); } catch (e) { /* keep */ } } }
-      if (Math.hypot(x - o.position.x, z - o.position.z) > 20) { o.position.set(x, y != null ? y : o.position.y, z); } // teleported: snap
+      // the same report again (I poll faster than that player reports): keep extrapolating from when it was made
+      const nowMs = performance.now();
+      const same = o.tAt && x === o.tx && z === o.tz && rot === o.trot && r.loco === o.loco && r.speed === o.rsp;
+      const moving = !!r.loco && r.loco !== 'idle';
+      const tsp = moving ? r.speed : 0;
+      if (Math.hypot(x - o.position.x, z - o.position.z) > snapDist(tsp)) { o.position.set(x, y != null ? y : o.position.y, z); } // teleported: snap
+      if (!same) {
+        const at = r.age != null ? nowMs - r.age : nowMs;
+        if (o.tAt) o.repDt = clamp(o.repDt + ((at - o.tAt) / 1000 - o.repDt) * 0.3, 0.5, 2.5); // typical gap between reports
+        o.tAt = at;
+      }
       o.tx = x; o.tz = z; o.ty = y; o.trot = rot; o.zoneId = r.zoneId || o.zoneId;
-      // dead reckoning between updates: keep going the way the player faces at the reported pace (walk / run only)
-      o.tsp = r.anim === 'walk' || r.anim === 'run' ? r.speed : 0; o.tAt = performance.now();
+      // dead reckoning between updates: keep going the way the player faces at the reported pace (walk / run / jump)
+      o.tsp = tsp; o.loco = r.loco; o.rsp = r.speed;
       const anim = r.anim;
       if (anim !== o.anim) {
         o.anim = anim;
@@ -3354,22 +3424,31 @@
     _updateRemotes(dt) {
       const cam = G.sys.engine.camera.position;
       const nowMs = performance.now();
+      let moving = false;
       for (const o of this.others.values()) {
         if (o.kind !== 'remote') continue;
         const p = o.position;
         const ox = p.x, oz = p.z;
-        // where the player should be by now: the last report + up to 1.2 s of its reported motion (stops at walls)
-        let ex = o.tx, ez = o.tz;
+        if (o.tsp > 2) moving = true;
+        // where the player should be by now: the last report + its reported motion since then, for at most about one
+        // and a half report gaps (a player who stopped is not carried on for ever); stops at walls
+        let ex = o.tx, ez = o.tz, vx = 0, vz = 0;
         if (o.tsp > 0.2 && o.tAt) {
-          const lead = o.tsp * Math.min(1.2, (nowMs - o.tAt) / 1000);
+          const el = (nowMs - o.tAt) / 1000, cap = Math.max(1.2, (o.repDt || 1.5) * 1.5);
+          const lead = o.tsp * clamp(el, 0, cap);
           const fx = o.tx + Math.sin(o.trot) * lead, fz = o.tz + Math.cos(o.trot) * lead;
           let free = true;
           try { free = !G.world.blocked(fx, fz, 0.3, p.y); } catch (e) { free = true; }
-          if (free) { ex = fx; ez = fz; }
+          if (free) {
+            ex = fx; ez = fz;
+            if (el < cap) { vx = Math.sin(o.trot) * o.tsp; vz = Math.cos(o.trot) * o.tsp; } // the target still moves
+          }
         }
         const gap = Math.hypot(ex - p.x, ez - p.z);
-        if (gap > 20) { p.x = ex; p.z = ez; }                                  // far behind: snap
-        const k = damp(3.2 + Math.min(6, gap * 0.35), dt);                     // catch up faster when further behind
+        if (gap > snapDist(o.tsp)) { p.x = ex; p.z = ez; }                     // far behind (teleport, lost reports): snap
+        // move with the target (no steady trailing at 18 m/s), then close the remaining gap — faster when further behind
+        p.x += vx * dt; p.z += vz * dt;
+        const k = damp(3.2 + Math.min(6, gap * 0.35), dt);
         p.x += (ex - p.x) * k; p.z += (ez - p.z) * k;
         const gy = o.ty != null ? o.ty : G.world.heightAt(p.x, p.z, p.y + 0.3);
         p.y += (gy - p.y) * damp(8, dt);
@@ -3383,6 +3462,7 @@
         if (!hide) o.rig.update(dt, o.params);
         this._tickBubble(o.bub, dt);
       }
+      this._remotesMoving = moving;
     },
     _removeRemote(o) {
       try { o.label?.remove(); o.rig?.dispose?.(); o.group?.parent?.remove(o.group); } catch (e) { /* ignore */ }
@@ -3438,8 +3518,9 @@
           if (!Number.isFinite(at) || at < 1.5e12 || at > now + 864e5) at = now; // implausible timestamps
           let remote = null;
           for (const o of this.others.values()) if (o.kind === 'remote' && (o.uid === uid || o.name === name)) { remote = o; break; }
-          const near = remote && pp ? Math.hypot(remote.position.x - pp.x, remote.position.z - pp.z) <= LOCAL_R : false;
-          if (channel === 'local' && !near && !self) continue;
+          // the server delivers 'local' lines only to players near the sender; elsewhere judge by the latest report
+          // (not the drawn position, which trails a running player)
+          const near = channel === 'local' || (remote && pp ? Math.hypot((remote.tx ?? remote.position.x) - pp.x, (remote.tz ?? remote.position.z) - pp.z) <= LOCAL_R : false);
           const pushed = this._push({ name, text, channel, kind: channel === 'system' ? 'system' : self ? 'me' : 'remote', self, near: near || self, uid, sid: id, at, history: S.first });
           // the bubble shows the same masked text as the log (personal information → 🔒)
           if (pushed && !S.first && !self && remote && !this._isBlocked(name)) {
@@ -3456,9 +3537,10 @@
       } catch (e) { if (this._srv === S) this._netFail(e); }
       finally { S.chatBusy = false; }
     },
-    async _serverSend(text, channel) {
+    async _serverSend(text, channel, msg, onSent) {
       const S = this._srv;
       if (!S) return;
+      msg?._el?.classList.add('sending');
       const key = spamKey(text); // the server may mask differently: match my echo by its skeleton
       S.pending.push(key);
       if (S.pending.length > 20) S.pending.shift();
@@ -3472,8 +3554,12 @@
           if (S.sentIds.size > 200) S.sentIds = new Set([...S.sentIds].slice(-100));
         }
         this._netOk();
+        msg?._el?.classList.remove('sending');
+        onSent?.();
       } catch (e) {
         drop();
+        // the line stays in my log, but visibly not delivered (nobody else saw it)
+        if (msg?._el) { msg._el.classList.remove('sending'); msg._el.classList.add('failed'); msg._el.appendChild(G.ui.h('span', { class: 'chat-failed' }, '⚠️ 안 보내졌어요')); }
         if (e?.code === 'RATE_LIMITED' || e?.status === 429) G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn' });
         else G.ui.toast(e?.message || '메시지를 보내지 못했어요.', { type: 'error' });
         this.system('⚠️ 마지막 메시지가 전송되지 않았어요.');

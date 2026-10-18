@@ -93,7 +93,7 @@ final class Presence
         $ttl = (int) Config::get('presence.ttl', 15);
         $max = (int) Config::get('presence.max_players', 60);
         $rows = Db::all(
-            "SELECT p.user_id, p.nickname, p.x, p.y, p.z, p.rot_y, p.anim, p.speed, p.zone_id, p.emote, p.emote_at, p.appearance
+            "SELECT p.user_id, p.nickname, p.x, p.y, p.z, p.rot_y, p.anim, p.speed, p.zone_id, p.emote, p.emote_at, p.appearance, p.updated_at
              FROM presence p JOIN users u ON u.id = p.user_id
              WHERE p.updated_at >= ? AND p.user_id <> ? AND u.status = 'active'
              ORDER BY p.updated_at DESC LIMIT " . max(1, min(200, $max)),
@@ -108,6 +108,8 @@ final class Presence
                 'x' => (float) $r['x'], 'y' => (float) $r['y'], 'z' => (float) $r['z'], 'rotY' => (float) $r['rot_y'],
                 'anim' => $r['anim'], 'speed' => (float) $r['speed'], 'zoneId' => $r['zone_id'],
                 'emote' => $r['emote'], 'emoteAt' => (int) $r['emote_at'],
+                // ms since that report arrived: lets clients extrapolate a moving player from the right moment
+                'age' => max(0, min(60000, $now - (int) $r['updated_at'])),
                 'appearance' => is_array($app) ? $app : null,
             ];
         }

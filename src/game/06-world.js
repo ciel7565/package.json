@@ -3,7 +3,8 @@
 //
 //   G.world.setTerrain(fn(x,z)->y)          terrain module installs the height function
 //   G.world.terrainHeight(x,z)              raw terrain height
-//   G.world.heightAt(x,z, fromY?)           ground under a walker (terrain + walkable platforms)
+//   G.world.heightAt(x,z, fromY?)           ground under a walker (terrain + walkable platforms + the top of a low
+//                                           collider the walker is already standing on, see heightAt)
 //   G.world.addWalkable({shape:'box',x,z,hw,hd,rot,top} | {shape:'circle',x,z,r,top}) -> id
 //   G.world.addCollider({shape:'circle',x,z,r,minY?,maxY?,tag?} | {shape:'box',x,z,hw,hd,rot,...}) -> id
 //   G.world.removeCollider(id) / removeWalkable(id)
@@ -22,55 +23,71 @@
   const STEP = 0.62; // max step-up height for walkers
   const colliders = new Map();
   const walkables = new Map();
-  const grid = new Map();   // cell key -> Set of collider ids
-  const wgrid = new Map();  // cell key -> Set of walkable ids
+  // spatial hashes: cell key -> array of shapes. Queries are allocation-free (they run for every collision
+  // sub-step and every planner sample): no Sets, no iterators, a query stamp de-duplicates shapes in several cells.
+  const grid = new Map();   // colliders
+  const wgrid = new Map();  // walkables + the low colliders (maxY: rocks, shrubs, skirts…) whose tops carry walkers
   let nextId = 1;
+  let qstamp = 0;
+  const _near = [];         // result buffer of near(): entries [0, n) are valid (callers never nest queries; the
+                            // array is never truncated, so its backing store is reused instead of reallocated)
 
   const key = (cx, cz) => cx * 73856093 ^ cz * 19349663;
-  function aabbOf(s) {
-    if (s.shape === 'circle') return [s.x - s.r, s.z - s.r, s.x + s.r, s.z + s.r];
+  /** half extents of shape s's world AABB -> s._ex / s._ez */
+  function extents(s) {
+    if (s.shape === 'circle') { s._ex = s._ez = s.r; return; }
     const c = Math.abs(Math.cos(s.rot || 0)), n = Math.abs(Math.sin(s.rot || 0));
-    const ex = s.hw * c + s.hd * n, ez = s.hw * n + s.hd * c;
-    return [s.x - ex, s.z - ez, s.x + ex, s.z + ez];
+    s._ex = s.hw * c + s.hd * n; s._ez = s.hw * n + s.hd * c;
   }
-  function insert(g, id, s) {
-    const [x0, z0, x1, z1] = aabbOf(s);
-    s._cells = [];
-    for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
-      for (let cz = Math.floor(z0 / CELL); cz <= Math.floor(z1 / CELL); cz++) {
+  /** add shape s to the cells of grid g it overlaps; the cell keys are kept in `cells` (reused array) */
+  function insert(g, s, cells) {
+    extents(s);
+    const ex = s._ex, ez = s._ez;
+    cells.length = 0;
+    for (let cx = Math.floor((s.x - ex) / CELL); cx <= Math.floor((s.x + ex) / CELL); cx++) {
+      for (let cz = Math.floor((s.z - ez) / CELL); cz <= Math.floor((s.z + ez) / CELL); cz++) {
         const k = key(cx, cz);
-        if (!g.has(k)) g.set(k, new Set());
-        g.get(k).add(id);
-        s._cells.push(k);
+        let arr = g.get(k);
+        if (!arr) { arr = []; g.set(k, arr); }
+        arr.push(s);
+        cells.push(k);
       }
     }
   }
-  function removeFrom(g, id, s) { for (const k of s._cells || []) g.get(k)?.delete(id); }
+  function removeFrom(g, s, cells) {
+    for (let i = 0; i < cells.length; i++) {
+      const arr = g.get(cells[i]);
+      const j = arr ? arr.indexOf(s) : -1;
+      if (j >= 0) { arr[j] = arr[arr.length - 1]; arr.pop(); }
+    }
+    cells.length = 0;
+  }
+  /** shapes of grid g whose cells touch the square (x ± r, z ± r) -> how many; they are _near[0 .. n-1] */
   function near(g, x, z, r) {
-    const out = new Set();
-    for (let cx = Math.floor((x - r) / CELL); cx <= Math.floor((x + r) / CELL); cx++)
-      for (let cz = Math.floor((z - r) / CELL); cz <= Math.floor((z + r) / CELL); cz++) {
-        const s = g.get(key(cx, cz));
-        if (s) for (const id of s) out.add(id);
+    const q = ++qstamp, out = _near;
+    let n = 0;
+    const cx1 = Math.floor((x + r) / CELL), cz0 = Math.floor((z - r) / CELL), cz1 = Math.floor((z + r) / CELL);
+    for (let cx = Math.floor((x - r) / CELL); cx <= cx1; cx++)
+      for (let cz = cz0; cz <= cz1; cz++) {
+        const arr = g.get(key(cx, cz));
+        if (!arr) continue;
+        for (let i = 0; i < arr.length; i++) { const s = arr[i]; if (s._q !== q) { s._q = q; out[n++] = s; } }
       }
-    return out;
+    return n;
   }
-  /** local coords of point in an oriented box */
-  function toLocal(s, x, z) {
-    const c = Math.cos(-(s.rot || 0)), n = Math.sin(-(s.rot || 0));
-    const dx = x - s.x, dz = z - s.z;
-    // rotation around Y: x' = x cos + z sin ; z' = -x sin + z cos  (matches THREE rotation.y)
-    return [dx * c + dz * n, -dx * n + dz * c];
-  }
+  /** world coords of a point given in an oriented box's local frame (rotation around Y, matches THREE rotation.y) */
   function toWorld(s, lx, lz) {
     const c = Math.cos(s.rot || 0), n = Math.sin(s.rot || 0);
     return [s.x + lx * c + lz * n, s.z - lx * n + lz * c];
   }
   function contains(s, x, z, pad = 0) {
-    if (s.shape === 'circle') { const dx = x - s.x, dz = z - s.z; return dx * dx + dz * dz <= (s.r + pad) * (s.r + pad); }
-    const [lx, lz] = toLocal(s, x, z);
-    return Math.abs(lx) <= s.hw + pad && Math.abs(lz) <= s.hd + pad;
+    const dx = x - s.x, dz = z - s.z;
+    if (s.shape === 'circle') return dx * dx + dz * dz <= (s.r + pad) * (s.r + pad);
+    const r = s.rot || 0, c = Math.cos(r), n = Math.sin(r); // local box coords (inverse of toWorld)
+    return Math.abs(dx * c - dz * n) <= s.hw + pad && Math.abs(dx * n + dz * c) <= s.hd + pad;
   }
+  /** is collider c in the way of a walker whose feet are at fy? (low tops are stepped over, high ones walked under) */
+  const active = (c, fy) => !c.disabled && !(c.maxY != null && fy >= c.maxY - 0.05) && !(c.minY != null && fy + 1.6 <= c.minY);
 
   const world = {
     STEP,
@@ -98,25 +115,36 @@
     isWater(x, z) { return world._water(x, z); },
     setSurfaceFn(fn) { world._surface = fn; },
     surfaceAt(x, z) {
-      for (const id of near(wgrid, x, z, 0)) { const w = walkables.get(id); if (w && w.surface && contains(w, x, z)) return w.surface; }
+      const n = near(wgrid, x, z, 0);
+      for (let i = 0; i < n; i++) { const w = _near[i]; if (w.surface && contains(w, x, z)) return w.surface; }
       return world._surface ? world._surface(x, z) : 'grass';
     },
 
     addWalkable(w) {
       const id = nextId++;
       const s = { shape: 'box', rot: 0, ...w, id };
-      walkables.set(id, s); insert(wgrid, id, s);
+      walkables.set(id, s); insert(wgrid, s, s._cells = []);
       return id;
     },
-    removeWalkable(id) { const s = walkables.get(id); if (s) { removeFrom(wgrid, id, s); walkables.delete(id); } },
+    removeWalkable(id) { const s = walkables.get(id); if (s) { removeFrom(wgrid, s, s._cells); walkables.delete(id); } },
 
-    /** ground height for a walker whose feet are at fromY (platforms above fromY+STEP are ignored) */
+    /**
+     * ground height for a walker whose feet are at fromY (platforms above fromY+STEP are ignored).
+     * The top (maxY) of a low collider (rock, shrub, crag, skirt) carries a walker that is already up there
+     * (fromY >= maxY — the same rule resolve() uses to let the walker pass over it): crossing a boulder half
+     * buried in a slope keeps the feet on the boulder until they leave it, instead of sinking into it and being
+     * shoved out sideways. fromY = Infinity (surfaceHeight, spawning objects) ignores collider tops.
+     */
     heightAt(x, z, fromY = Infinity) {
       let h = world._terrain(x, z);
-      for (const id of near(wgrid, x, z, 0)) {
-        const w = walkables.get(id);
-        if (!w || !contains(w, x, z)) continue;
-        if (w.top <= fromY + STEP && w.top > h) h = w.top;
+      const n = near(wgrid, x, z, 0);
+      for (let i = 0; i < n; i++) {
+        const w = _near[i];
+        if (w._top) {   // a low collider: only for a walker already up there (fromY = Infinity never)
+          if (w.disabled || !(w.maxY > h) || w.maxY > fromY || fromY === Infinity) continue;
+          if (w.minY != null && fromY + 1.6 <= w.minY) continue;
+          if (contains(w, x, z)) h = w.maxY;
+        } else if (w.top <= fromY + STEP && w.top > h && contains(w, x, z)) h = w.top;
       }
       return h;
     },
@@ -127,11 +155,30 @@
       const id = nextId++;
       const s = { shape: 'circle', rot: 0, ...c, id };
       if (s.shape === 'box') { s.hw = s.hw ?? (s.w || 1) / 2; s.hd = s.hd ?? (s.d || 1) / 2; }
-      colliders.set(id, s); insert(grid, id, s);
+      colliders.set(id, s); insert(grid, s, s._cells = []);
+      if (Number.isFinite(s.maxY)) { s._top = true; insert(wgrid, s, s._tcells = []); }
       return id;
     },
-    removeCollider(id) { const s = colliders.get(id); if (s) { removeFrom(grid, id, s); colliders.delete(id); } },
-    moveCollider(id, x, z) { const s = colliders.get(id); if (!s) return; removeFrom(grid, id, s); s.x = x; s.z = z; insert(grid, id, s); },
+    removeCollider(id) {
+      const s = colliders.get(id);
+      if (!s) return;
+      removeFrom(grid, s, s._cells);
+      if (s._tcells) removeFrom(wgrid, s, s._tcells);
+      colliders.delete(id);
+    },
+    moveCollider(id, x, z) {
+      const s = colliders.get(id);
+      if (!s || !Number.isFinite(x) || !Number.isFinite(z) || (s.x === x && s.z === z)) return;
+      // (walking NPCs move every frame: while the shape stays in the same grid cells nothing is re-filed)
+      const f = Math.floor, ex = s._ex, ez = s._ez;
+      if (f((x - ex) / CELL) === f((s.x - ex) / CELL) && f((x + ex) / CELL) === f((s.x + ex) / CELL)
+        && f((z - ez) / CELL) === f((s.z - ez) / CELL) && f((z + ez) / CELL) === f((s.z + ez) / CELL)) { s.x = x; s.z = z; return; }
+      removeFrom(grid, s, s._cells);
+      if (s._tcells) removeFrom(wgrid, s, s._tcells);
+      s.x = x; s.z = z;
+      insert(grid, s, s._cells);
+      if (s._tcells) insert(wgrid, s, s._tcells);
+    },
 
     /**
      * push pos (THREE.Vector3 or {x,z}) out of colliders overlapping a cylinder of `radius`
@@ -142,11 +189,10 @@
       const fy = feetY ?? pos.y ?? 0;
       for (let iter = 0; iter < 3; iter++) {
         let moved = false;
-        for (const id of near(grid, pos.x, pos.z, radius + 0.5)) {
-          const c = colliders.get(id);
-          if (!c || c.disabled) continue;
-          if (c.maxY != null && fy >= c.maxY - 0.05) continue;
-          if (c.minY != null && fy + 1.6 <= c.minY) continue;
+        const n = near(grid, pos.x, pos.z, radius + 0.5);
+        for (let i = 0; i < n; i++) {
+          const c = _near[i];
+          if (!active(c, fy)) continue;
           if (c.shape === 'circle') {
             const dx = pos.x - c.x, dz = pos.z - c.z;
             const d = Math.hypot(dx, dz), min = c.r + radius;
@@ -155,10 +201,12 @@
               pos.x = c.x + nx * min; pos.z = c.z + nz * min; hit = moved = true;
             }
           } else {
-            const [lx, lz] = toLocal(c, pos.x, pos.z);
+            const ro = c.rot || 0, co = Math.cos(ro), sn = Math.sin(ro);
+            const wx0 = pos.x - c.x, wz0 = pos.z - c.z;
+            const lx = wx0 * co - wz0 * sn, lz = wx0 * sn + wz0 * co;   // local box coords
             const cx = G.util.clamp(lx, -c.hw, c.hw), cz = G.util.clamp(lz, -c.hd, c.hd);
-            let dx = lx - cx, dz = lz - cz;
-            let d = Math.hypot(dx, dz);
+            const dx = lx - cx, dz = lz - cz;
+            const d = Math.hypot(dx, dz);
             if (d < radius) {
               let nlx, nlz;
               if (d < 1e-5) { // center inside the box: push out along the shallowest axis
@@ -166,8 +214,8 @@
                 if (px < pz) { nlx = (lx >= 0 ? c.hw : -c.hw) + (lx >= 0 ? radius : -radius); nlz = lz; }
                 else { nlz = (lz >= 0 ? c.hd : -c.hd) + (lz >= 0 ? radius : -radius); nlx = lx; }
               } else { nlx = cx + (dx / d) * radius; nlz = cz + (dz / d) * radius; }
-              const [wx, wz] = toWorld(c, nlx, nlz);
-              pos.x = wx; pos.z = wz; hit = moved = true;
+              pos.x = c.x + nlx * co + nlz * sn; pos.z = c.z - nlx * sn + nlz * co;   // toWorld
+              hit = moved = true;
             }
           }
         }
@@ -175,13 +223,12 @@
       }
       return hit;
     },
-    /** would a walker of radius r at (x,z) overlap anything? */
+    /** would a walker of radius r at (x,z) with feet at feetY overlap anything? (same height rules as resolve) */
     blocked(x, z, r = 0.35, feetY = 0) {
-      for (const id of near(grid, x, z, r + 0.5)) {
-        const c = colliders.get(id);
-        if (!c || c.disabled) continue;
-        if (c.maxY != null && feetY >= c.maxY - 0.05) continue;
-        if (contains(c, x, z, r)) return true;
+      const n = near(grid, x, z, r + 0.5);
+      for (let i = 0; i < n; i++) {
+        const c = _near[i];
+        if (active(c, feetY) && contains(c, x, z, r)) return true;
       }
       return world.isWater(x, z);
     },

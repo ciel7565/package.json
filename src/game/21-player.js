@@ -50,6 +50,9 @@
   const easyOn = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
 
   const _t1 = new THREE.Vector3();
+  /** would stepping to (x, z) (feet at y) take the walker below the wading limit lim? (a walker already clearly
+   *  below it — never placed there by the game — may move level or climb out, not sink further) */
+  function tooDeep(x, z, y, lim) { const gn = G.world.heightAt(x, z, y + 0.05); return gn < lim && gn < (y < lim - 0.02 ? y : lim) - 1e-4; }
   const _fallbackBasis = { forward: new THREE.Vector3(0, 0, -1), right: new THREE.Vector3(1, 0, 0) };
 
   // =========================================================================== navigation (grid A*)
@@ -146,7 +149,7 @@
    * goalR: any cell within this radius of the target counts as arrival (targets inside props / NPCs).
    */
   function planPath(sx, sz, sy, tx, tz, goalR) {
-    if (![sx, sz, sy, tx, tz].every(fin)) return null;
+    if (!fin(sx) || !fin(sz) || !fin(sy) || !fin(tx) || !fin(tz)) return null;
     goalR = fin(goalR) ? Math.max(0.5, goalR) : 1;
     // straight line clear up to where the walker stops (targets are often inside a prop / an NPC)
     {
@@ -170,9 +173,45 @@
     if (++nav.gen > 0xfffffff0) { nav.gen = 1; nav.stamp.fill(0); }
     const gen = nav.gen;
     nav.hn = 0;
-    const start = cz(sz) * nx + cx(sx);
     const goalCell = cz(tz) * nx + cx(tx);
     const touch = (i) => { if (nav.stamp[i] !== gen) { nav.stamp[i] = gen; nav.flag[i] = 0; nav.g[i] = Infinity; nav.parent[i] = -1; } };
+    // start cell: the nearest cell centre the walker can really reach in a straight line. Rounding the position
+    // can pick a centre on the far side of a 0.2 m fence or rail right beside the walker — the route would then
+    // begin straight through it (pushing against the rail until 'stuck').
+    let start = cz(sz) * nx + cx(sx), startY = sy, startOk = false;
+    {
+      const fx = Math.floor((sx - x0) / cell), fz = Math.floor((sz - z0) / cell);
+      const cand = [];
+      for (let jz = fz - 1; jz <= fz + 2; jz++) for (let jx = fx - 1; jx <= fx + 2; jx++) {
+        if (jx < 0 || jz < 0 || jx >= nx || jz >= nz) continue;
+        const ddx = x0 + jx * cell - sx, ddz = z0 + jz * cell - sz;
+        cand.push(ddx * ddx + ddz * ddz, jz * nx + jx);
+      }
+      const order = [];
+      for (let k = 0; k < cand.length; k += 2) order.push(k);
+      order.sort((a, b) => cand[a] - cand[b]);
+      for (const k of order) {
+        const i = cand[k + 1], x = wx(i), z = wz(i);
+        if (!lineClear(sx, sz, sy, x, z)) continue;
+        const y = W.heightAt(x, z, sy + 0.05);
+        if (!fin(y) || !freeAt(x, z, y)) continue;
+        start = i; startY = y; startOk = true;
+        break;
+      }
+    }
+    /** can the walker go straight from cell i to the target? (always true for a target nobody can stand on) */
+    const goalSeen = (i) => {
+      const x = wx(i), z = wz(i), ty = W.heightAt(tx, tz, nav.y[i] + 0.05);
+      return !(fin(ty) && freeAt(tx, tz, ty)) || lineClear(x, z, nav.y[i], tx, tz);
+    };
+    // edges longer than the clearance band of the thinnest rail (2 × (0.05 + NAV.clear) ≈ 1.04 m) can hop over a
+    // rail with both cell centres free: on the coarse grid of a long trip every edge is also sampled inside
+    const EDGE_GAP = 0.85, coarse = cell > 0.9;
+    const edgeClear = (ax, az, bx, bz, y) => {
+      const len = Math.hypot(bx - ax, bz - az), m = Math.ceil(len / EDGE_GAP);
+      for (let s = 1; s < m; s++) { const t = s / m; if (!freeAt(ax + (bx - ax) * t, az + (bz - az) * t, y)) return false; }
+      return true;
+    };
     /** evaluate passability of cell i when entered from a parent with feet at y0; caches y */
     const passable = (i, y0, run) => {
       touch(i);
@@ -186,7 +225,7 @@
       return ok;
     };
     touch(start);
-    nav.flag[start] = 3; nav.y[start] = sy; nav.g[start] = 0;
+    nav.flag[start] = 3; nav.y[start] = startY; nav.g[start] = 0;
     const octile = (i) => { const dx = Math.abs(wx(i) - tx), dz = Math.abs(wz(i) - tz); return Math.max(dx, dz) + 0.4142 * Math.min(dx, dz); };
     heapPush(start, octile(start));
     let found = -1, best = start, bestH = Math.hypot(sx - tx, sz - tz), expanded = 0;
@@ -200,7 +239,9 @@
       const px = wx(i), pz = wz(i);
       const h = Math.hypot(px - tx, pz - tz);
       if (h < bestH) { bestH = h; best = i; }
-      if (i === goalCell || h <= goalR) { found = i; break; }
+      // a cell near the goal only counts when the goal is not on the far side of a rail from it (a target the walker
+      // cannot stand on — inside a prop, an NPC — is only steered at, so any cell in reach will do)
+      if ((i === goalCell || h <= goalR) && goalSeen(i)) { found = i; break; }
       const y0 = nav.y[i], g0 = nav.g[i];
       for (let k = 0; k < 8; k++) {
         const d = D[k];
@@ -214,6 +255,7 @@
         if (nav.flag[j] & 4) continue;
         const ng = g0 + d[2] * cell;
         if (ng < nav.g[j]) {
+          if (coarse && !edgeClear(px, pz, wx(j), wz(j), Math.min(y0, nav.y[j]))) continue;
           nav.g[j] = ng; nav.parent[j] = i;
           if (!heapPush(j, ng + octile(j))) { expanded = NAV.maxExpand; break; }
         }
@@ -229,6 +271,9 @@
     for (let i = end, guard = 0; i >= 0 && guard < 20000; i = nav.parent[i], guard++) { cells.push(i); if (i === start) break; }
     cells.reverse();
     const pts = [{ x: sx, z: sz, y: sy }];
+    // the start cell centre is a real corner when it was checked reachable (string pulling drops it when the walker
+    // can see past it); a rounded, unchecked one is never a target of its own
+    if (startOk && Math.hypot(wx(start) - sx, wz(start) - sz) > 0.05) pts.push({ x: wx(start), z: wz(start), y: startY });
     for (let k = 1; k < cells.length; k++) pts.push({ x: wx(cells[k]), z: wz(cells[k]), y: nav.y[cells[k]] });
     // the exact target joins the corner list only when it is standable (inside a prop it is the steering goal only)
     if (found >= 0 && freeAt(tx, tz, pts[pts.length - 1].y)) pts.push({ x: tx, z: tz, y: pts[pts.length - 1].y });
@@ -346,12 +391,15 @@
   }
 
   // =========================================================================== route trail (easy mode)
+  // A sliding window of TRAIL_MAX footprints, TRAIL_GAP apart: prints the walker has passed are recycled as new ones
+  // ahead, so a route of any length shows the way to its very end (not just its first ~90 m).
   const TRAIL_MAX = 96, TRAIL_GAP = 0.95;
   const _m4 = new THREE.Matrix4();
   const trail = {
     mesh: null, star: null, built: false, visible: false,
-    dots: new Float32Array(TRAIL_MAX * 5), // x, y, z, yaw, s(arc length)
-    n: 0, goal: { x: 0, y: 0, z: 0 }, t: 0,
+    dots: new Float32Array(TRAIL_MAX * 5), // ring buffer (slot = print index % TRAIL_MAX): x, y, z, yaw, s(arc length)
+    path: null, lo: 0, hi: 0, count: 0, seg: 0, segS: 0, ly: 0,
+    goal: { x: 0, y: 0, z: 0 }, t: 0,
     build() {
       if (this.built) return !!this.mesh;
       this.built = true;
@@ -415,40 +463,52 @@
         return false;
       }
     },
-    /** lay footprints along a path ([{x,z}], first point = start) */
+    /** footprints along a path ([{x,z}], first point = start): the first TRAIL_MAX now, the rest as the walker advances */
     set(path, feetY) {
       if (!this.build() || !path || path.length < 2) { this.hide(); return; }
       const W = G.world;
-      let n = 0, s = 0, next = TRAIL_GAP, y = fin(feetY) ? feetY : 0, side = 1;
-      for (let k = 0; k < path.length - 1 && n < TRAIL_MAX; k++) {
-        const a = path[k], b = path[k + 1];
-        const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
-        if (!(len > 1e-4)) continue;
-        const yaw = Math.atan2(dx, dz), rx = Math.cos(yaw), rz = -Math.sin(yaw);
-        while (next <= s + len && n < TRAIL_MAX) {
-          const t = (next - s) / len;
-          const px = a.x + dx * t + rx * 0.11 * side, pz = a.z + dz * t + rz * 0.11 * side;
-          let gy = W.heightAt(px, pz, y + 0.4);
-          if (!fin(gy)) gy = y;
-          y = gy;
-          const o = n * 5;
-          this.dots[o] = px; this.dots[o + 1] = gy + 0.07; this.dots[o + 2] = pz; this.dots[o + 3] = yaw; this.dots[o + 4] = next;
-          n++; side = -side; next += TRAIL_GAP;
-        }
-        s += len;
+      let total = 0, y = fin(feetY) ? feetY : 0;
+      for (let k = 0; k < path.length - 1; k++) {
+        const l = Math.hypot(path[k + 1].x - path[k].x, path[k + 1].z - path[k].z);
+        if (fin(l)) total += l;
+        // goal height: follow the route's levels (deck, stairs, bridge) vertex by vertex
+        const gy = W.heightAt(path[k + 1].x, path[k + 1].z, y + 0.4);
+        if (fin(gy)) y = gy;
       }
-      this.n = n;
       const end = path[path.length - 1];
-      let gy = W.heightAt(end.x, end.z, y + 0.4);
-      if (!fin(gy)) gy = y;
-      this.goal.x = end.x; this.goal.y = gy; this.goal.z = end.z;
-      this.visible = n > 0;
+      this.goal.x = end.x; this.goal.y = y; this.goal.z = end.z;
+      this.path = path;
+      this.count = Math.max(0, Math.floor(total / TRAIL_GAP));
+      this.lo = 0; this.hi = 0; this.seg = 0; this.segS = 0; this.ly = fin(feetY) ? feetY : 0;
+      while (this.hi < this.count && this.hi < TRAIL_MAX) this._lay();
+      this.visible = this.hi > 0;
       if (this.mesh) this.mesh.visible = this.visible;
       if (this.star) this.star.visible = this.visible;
       this.t = 0;
     },
+    /** lay print number hi (arc length (hi + 1) · TRAIL_GAP) into its ring slot; the segment cursor only moves forward */
+    _lay() {
+      const path = this.path, m = this.hi, sArc = (m + 1) * TRAIL_GAP;
+      let k = this.seg, s0 = this.segS, len = 0;
+      for (; k < path.length - 1; k++) {
+        len = Math.hypot(path[k + 1].x - path[k].x, path[k + 1].z - path[k].z);
+        if (len > 1e-4 && s0 + len >= sArc) break;
+        if (fin(len)) s0 += len;
+      }
+      if (k >= path.length - 1) { this.count = this.hi; return; } // (rounding: the route ended a hair early)
+      this.hi++;
+      this.seg = k; this.segS = s0;
+      const a = path[k], b = path[k + 1], dx = b.x - a.x, dz = b.z - a.z, t = (sArc - s0) / len;
+      const side = m % 2 ? -1 : 1, yaw = Math.atan2(dx, dz), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+      const px = a.x + dx * t + rx * 0.11 * side, pz = a.z + dz * t + rz * 0.11 * side;
+      let gy = G.world.heightAt(px, pz, this.ly + 0.4);
+      if (!fin(gy)) gy = this.ly;
+      this.ly = gy;
+      const o = (m % TRAIL_MAX) * 5;
+      this.dots[o] = px; this.dots[o + 1] = gy + 0.07; this.dots[o + 2] = pz; this.dots[o + 3] = yaw; this.dots[o + 4] = sArc;
+    },
     hide() {
-      this.visible = false; this.n = 0;
+      this.visible = false; this.path = null; this.lo = this.hi = this.count = 0;
       if (this.mesh) { this.mesh.visible = false; this.mesh.count = 0; }
       if (this.star) this.star.visible = false;
     },
@@ -456,11 +516,16 @@
     update(dt, progress) {
       if (!this.visible || !this.mesh) return;
       this.t += dt;
+      // recycle the prints behind the walker as new ones at the far end of the window
+      while (this.lo < this.hi && this.dots[(this.lo % TRAIL_MAX) * 5 + 4] - progress < 0.35) {
+        this.lo++;
+        if (this.hi < this.count) this._lay();
+      }
       const rm = !!G.settings?.reduceMotion;
       const t = this.t;
       let c = 0;
-      for (let i = 0; i < this.n; i++) {
-        const o = i * 5, s = this.dots[o + 4];
+      for (let i = this.lo; i < this.hi; i++) {
+        const o = (i % TRAIL_MAX) * 5, s = this.dots[o + 4];
         const ahead = s - progress;
         if (ahead < 0.35) continue;
         const appear = clamp((ahead - 0.35) / 0.9, 0, 1) * clamp((t * 14 - i * 0.6) / 3, 0, 1); // pop in one by one
@@ -936,11 +1001,11 @@
       if (!fin(tx) || !fin(tz)) return false;
       if (W.isWater(tx, tz)) return false;
       const wy = G.data.layout?.waterY ?? -1.1;
-      if (p.y < wy + 0.6) {
-        // shallow banks below the water surface: ankle-deep wading only (climbing out is always allowed)
-        const gn = W.heightAt(tx, tz, p.y + 0.05);
-        if (gn < wy - WADE_DEPTH && gn < p.y - 0.005) return false;
-      }
+      // shallow banks below the water surface: ankle-deep wading only, climbing out is always allowed. The limit is
+      // fixed (not "a little below the current feet"): a per-step tolerance adds up, step after step, until the
+      // walker stands knee-deep. Checked for the target and again for the spot the colliders push the walker to.
+      const wade = p.y < wy + 0.6, lim = wy - WADE_DEPTH;
+      if (wade && tooDeep(tx, tz, p.y, lim)) return false;
       const tc = W.terrainHeight(p.x, p.z), tn = W.terrainHeight(tx, tz);
       if (tn > p.y + 0.02) {
         const g = W.heightAt(tx, tz, p.y);
@@ -959,6 +1024,7 @@
       }
       W.clampToBounds(_t1);
       if (!fin(_t1.x) || !fin(_t1.z) || W.isWater(_t1.x, _t1.z)) return false;
+      if (wade && (_t1.x !== tx || _t1.z !== tz) && tooDeep(_t1.x, _t1.z, p.y, lim)) return false;
       p.x = _t1.x; p.z = _t1.z;
       return true;
     },

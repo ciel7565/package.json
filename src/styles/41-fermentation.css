@@ -81,7 +81,8 @@
 .g-hyg .jm-g-track { background: linear-gradient(90deg, rgba(255, 107, 94, .4), rgba(255, 255, 255, .12)); }
 .g-hum .jm-g-track { background: linear-gradient(90deg, rgba(255, 159, 67, .35), rgba(255, 255, 255, .12) 50%, rgba(74, 168, 255, .4)); }
 .jm-g-ideal { position: absolute; top: -1px; bottom: -1px; border-radius: 999px; background: rgba(52, 195, 107, .55); box-shadow: inset 0 0 0 1px rgba(134, 227, 168, .7); }
-.jm-g-mark { position: absolute; top: 50%; width: .95rem; height: .95rem; margin: -.475rem 0 0 -.475rem; border-radius: 50%; background: #fff; border: 3px solid var(--gold); box-shadow: 0 2px 6px rgba(0, 0, 0, .45); transition: left .5s var(--ease); }
+.jm-g-pos { position: absolute; inset: 0; pointer-events: none; transition: transform .5s var(--ease); }
+.jm-g-mark { position: absolute; left: 0; top: 50%; width: .95rem; height: .95rem; margin: -.475rem 0 0 -.475rem; border-radius: 50%; background: #fff; border: 3px solid var(--gold); box-shadow: 0 2px 6px rgba(0, 0, 0, .45); }
 .jm-g-scale { display: flex; justify-content: space-between; gap: .3rem; }
 .jm-g-ideal-txt { color: var(--green-l); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jm-env-note { line-height: 1.5; }

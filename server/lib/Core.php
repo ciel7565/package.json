@@ -270,10 +270,25 @@ final class Http
         return self::$ip = $ip;
     }
 
+    /**
+     * A browser on the server machine talking to it directly (first-admin bootstrap, anonymous health check).
+     * A reverse proxy, tunnel (ngrok, cloudflared) or CDN on the same machine also connects from loopback, so a
+     * relayed request never counts: the socket must be loopback AND not a trusted proxy AND carry no forwarding
+     * header AND be addressed to a loopback host name (a tunnel or proxy forwards the public Host).
+     */
     public static function isLocalhost(): bool
     {
         $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
-        return in_array($ip, ['127.0.0.1', '::1', '::ffff:127.0.0.1'], true);
+        if (!in_array($ip, ['127.0.0.1', '::1', '::ffff:127.0.0.1'], true)) return false;
+        try { if (self::fromTrustedProxy()) return false; } catch (\Throwable) { return false; }
+        foreach (['HTTP_X_FORWARDED_FOR', 'HTTP_FORWARDED', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_HOST', 'HTTP_X_FORWARDED_PROTO',
+                  'HTTP_X_FORWARDED_SERVER', 'HTTP_VIA', 'HTTP_CF_CONNECTING_IP', 'HTTP_CF_RAY', 'HTTP_TRUE_CLIENT_IP',
+                  'HTTP_X_CLIENT_IP', 'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FASTLY_CLIENT_IP', 'HTTP_X_ORIGINAL_FORWARDED_FOR'] as $h) {
+            if (isset($_SERVER[$h]) && trim((string) $_SERVER[$h]) !== '') return false;
+        }
+        $host = strtolower(trim((string) ($_SERVER['HTTP_HOST'] ?? '')));
+        if (!preg_match('/^(?:\[::1\]|(?:[a-z0-9-]+\.)*localhost|127(?:\.\d{1,3}){3})(?::\d{1,5})?$/', $host)) return false;
+        return true;
     }
 
     /**

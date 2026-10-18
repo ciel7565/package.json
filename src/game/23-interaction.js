@@ -60,6 +60,17 @@
     } catch (err) { /* broken provider */ }
     return null;
   }
+  /** obj holds a visible mesh the engine can outline (not just the invisible pick proxy of a merged prop) */
+  function hasMesh(obj) {
+    let found = false;
+    obj?.traverse?.((o) => { if (!found && o.isMesh && o.visible && o.name !== 'pick-proxy' && o.name !== 'blocker') found = true; });
+    return found;
+  }
+  /** every ancestor of obj is visible (a culled / hidden prop group does not take taps) */
+  function shownAbove(obj) {
+    for (let o = obj.parent, d = 0; o && d < 14; o = o.parent, d++) if (!o.visible) return false;
+    return true;
+  }
   function isEnabled(e) {
     if (e.disabled) return false;
     if (!e.enabled) return true;
@@ -509,6 +520,7 @@
         && !(cur.kind === 'bench' && G.sys.player?.sitting) ? cur : null;
       const key = (hv ? hv.id : '') + '|' + (cu ? cu.id : '');
       const eng = G.sys.engine;
+      let e = hv || cu;
       if (typeof eng?.setOutline === 'function') {
         if (key !== this._glowKey) {
           this._glowKey = key;
@@ -516,11 +528,13 @@
           if (hv) list.push(hv.object);
           if (cu) list.push(cu.object);
           try { eng.setOutline(list.length ? list : null, { color: 0xffd36a, strength: hv ? 1.1 : 0.85 }); } catch (err) { G.log.warn('UI', 'outline failed', err); }
+          // merged props keep only an invisible pick proxy under their entry object (nothing to outline): halo instead
+          this._glowHalo = hv && !hasMesh(hv.object) ? hv : null;
         }
-        return;
+        e = this._glowHalo;
+        if (!e && !this._halo) return;
       }
       // fallback: a soft halo sprite behind the hovered / focused object
-      const e = hv || cu;
       const H = this._halo ?? (this._halo = this._buildHalo() || false);   // false: failed once, never retried per frame
       if (!H) return;
       if (!e || !readPos(e, _p)) { if (H.sprite.visible) H.sprite.visible = false; this._haloFor = null; return; }
@@ -634,7 +648,10 @@
       const fade = clamp(fx.t / 0.18, 0, 1);
       const cx = _p.x + fx.offX, cz = _p.z + fx.offZ;
       const gy = G.world.heightAt(cx, cz, _p.y + 0.6);
-      const pulse = 1 + Math.sin(t * 4.2) * 0.035;
+      // reduceMotion: a steady ring / frame (no size or opacity pulse, no spinning dashes, no grow-in)
+      const reduce = !!G.settings.reduceMotion;
+      const wave = reduce ? 0 : Math.sin(t * 4.2), grow = reduce ? 1 : fade;
+      const pulse = 1 + wave * 0.035;
       if (fx.rect && rect) {
         ring.visible = false;
         rect.visible = true;
@@ -643,19 +660,18 @@
         rect.position.set(cx, ry, cz);
         rect.rotation.y = fx.rect.yaw;
         const s = 1 + (pulse - 1) * 0.5;
-        rect.scale.set(s * (0.94 + 0.06 * fade), 1, s * (0.94 + 0.06 * fade));
-        this._rectMat.opacity = (0.82 + 0.18 * Math.sin(t * 4.2)) * fade;
-        this._rectCornerMat.opacity = (0.6 + 0.4 * Math.sin(t * 4.2 + 1.2)) * fade;
+        rect.scale.set(s * (0.94 + 0.06 * grow), 1, s * (0.94 + 0.06 * grow));
+        this._rectMat.opacity = (0.82 + 0.18 * wave) * fade;
+        this._rectCornerMat.opacity = (0.6 + 0.4 * (reduce ? 0 : Math.sin(t * 4.2 + 1.2))) * fade;
       } else {
         if (rect) rect.visible = false;
         ring.visible = true;
         ring.position.set(cx, gy + 0.04, cz);
-        ring.scale.setScalar(fx.ringR * 2 * pulse * (0.85 + 0.15 * fade));
-        this._ringA.material.opacity = (0.72 + 0.18 * Math.sin(t * 4.2)) * fade;
+        ring.scale.setScalar(fx.ringR * 2 * pulse * (0.85 + 0.15 * grow));
+        this._ringA.material.opacity = (0.72 + 0.18 * wave) * fade;
         this._ringB.material.opacity = 0.7 * fade;
-        this._ringB.rotation.y = t * 0.6;
+        if (!reduce) this._ringB.rotation.y = t * 0.6;
       }
-      const reduce = G.settings.reduceMotion;
       // 쉬운 모드 shows the bouncing 👆 label instead of the 3D arrow (one pointer, not two)
       arrow.visible = !easyOn() || !this._hand;
       if (arrow.visible) {
@@ -767,7 +783,9 @@
       let hits = [];
       if (list && list.length) { try { hits = E.raycastScreen(x, y, list, true); } catch (err) { hits = []; } }
       for (const h of hits) {
-        if (!h.object.visible) continue;
+        // props are merged into per-cell meshes: their entry object only holds an invisible 'pick-proxy' box
+        // (never drawn — its material is invisible), which counts as long as its own group is shown
+        if (h.object.name === 'pick-proxy' ? !shownAbove(h.object) : !h.object.visible) continue;
         if (h.object.name === 'interactArrow' || h.object.parent === this._ring || h.object.parent === this._rect || h.object.parent === this._destG) continue;
         const e = this._entryOf(h.object);
         if (e) return { entry: e, point: h.point };
@@ -815,6 +833,13 @@
       if (!pl || !pl.isWalking || pl._walkSeq !== d.id) { this._hideDest(); return; }
       if (d.forEntry) return;
       d.t += dt;
+      if (G.settings.reduceMotion) {
+        // one still ring around the dot instead of the looping ripples
+        this._destR1.scale.setScalar(0.9); this._destR1.material.opacity = 0.7;
+        this._destR2.material.opacity = 0;
+        this._destDot.material.opacity = 0.85;
+        return;
+      }
       const ph1 = (d.t * 0.9) % 1, ph2 = (d.t * 0.9 + 0.5) % 1;
       this._destR1.scale.setScalar(0.35 + ph1 * 1.1); this._destR1.material.opacity = 0.9 * (1 - ph1);
       this._destR2.scale.setScalar(0.35 + ph2 * 1.1); this._destR2.material.opacity = 0.9 * (1 - ph2);

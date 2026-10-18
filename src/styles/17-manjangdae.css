@@ -13,6 +13,8 @@
 /* ---------------------------------------------------------------- intro overlay */
 .md-cine { position: fixed; inset: 0; z-index: 45; pointer-events: auto; cursor: pointer; overflow: hidden; }
 .md-cine[hidden] { display: none; }
+/* fading out after the intro: the HUD is already back, so the letterbox no longer catches taps */
+.md-cine.leaving { pointer-events: none; cursor: default; }
 .md-bar { position: absolute; left: 0; right: 0; height: var(--md-bar); background: #050806; transition: transform 640ms var(--md-ease); will-change: transform; }
 .md-bar.top { top: 0; transform: translateY(-100%); }
 .md-bar.bottom { bottom: 0; transform: translateY(100%); }

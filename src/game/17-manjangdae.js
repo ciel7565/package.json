@@ -384,6 +384,7 @@
       const preset = eng.preset || { name: 'medium', shadows: true };
       this._low = preset.name === 'low';
       this._shadows = !!preset.shadows;
+      this._camProxy = [];   // camera-only proxy shapes collected by the builders, merged in _flush
       const steps = [
         ['materials', () => this._materials()],
         ['plateau', () => this._buildPlateau(md, top)],
@@ -481,15 +482,18 @@
       add(B.metal.build(m.metal, { cast: sh }), 'metal');
       add(B.glow.build(m.glow, { cast: false, receive: false }), 'glow');
       if (roof) G.world.cameraBlockers.push(roof);
-      if (this.meshes.paint) G.world.cameraBlockers.push(this.meshes.paint);
+      // the decorative paint mesh (columns, beams, brackets, rafters, railings: ~8k triangles) is NOT a camera blocker:
+      // the follow camera's rays would walk every one of its triangles on the deck, where the game starts. Low-poly
+      // invisible proxies stand in for what the camera must not enter: the roof hull (below), the columns and the
+      // pine canopies (_camProxy, merged into one mesh).
       // the tiled roof is single-sided, so a follow-camera ray coming up from the deck slips under the eaves and the
       // camera could settle on (or in) the tiles. An invisible closed octagonal hull that wraps the whole roof with a
       // margin (double-sided: hit from outside and from under the eaves) keeps the camera out of it.
       const hb = this._roofHull;
       if (hb) {
-        // octagonal lathe: flat underside under the eaves, a rim that also covers the upturned corners (앙곡), and a
-        // cone above the concave tiles up to the finial
-        const R = hb.Rc + 0.6, yLo = hb.yE - 0.45, yRim = hb.yE + (hb.lift || 0.62) + 0.45;
+        // octagonal lathe: flat underside below the dancheong beam ring (창방), a rim that also covers the upturned
+        // corners (앙곡), and a cone above the concave tiles up to the finial
+        const R = hb.Rc + 0.6, yLo = (hb.yTop ?? hb.yE) - 0.48, yRim = hb.yE + (hb.lift || 0.62) + 0.45;
         const prof = [[0.02, hb.yA + 0.6], [R * 0.42, hb.yE + (hb.yA - hb.yE) * 0.62], [R, yRim], [R, yLo], [0.02, yLo]].map(([r, y]) => new THREE.Vector2(r, y));
         const g = new THREE.LatheGeometry(prof, 8, hb.A0, TAU);
         g.translate(hb.cx, 0, hb.cz);
@@ -502,6 +506,32 @@
         this.meshes.roofHull = hull;
         G.world.cameraBlockers.push(hull);
       }
+      const px = this._camProxy;
+      if (px && px.length) {
+        const parts = [];
+        for (const q of px) {
+          const g = q.kind === 'col' ? new THREE.CylinderGeometry(q.r, q.r, q.h, 6, 1) : new THREE.IcosahedronGeometry(1, 0);
+          if (q.kind === 'col') g.translate(q.x, q.y + q.h / 2, q.z);
+          else { g.scale(q.rx, q.ry, q.rx); g.translate(q.x, q.y, q.z); }
+          parts.push(g.index ? g.toNonIndexed() : g);
+          if (g.index) g.dispose();
+        }
+        let geo = null;
+        try { geo = parts.length === 1 ? parts[0] : BGU.mergeGeometries(parts, false); } catch (e) { G.log.warn('WORLD', 'manjangdae: camera proxies failed', e); }
+        if (geo !== parts[0]) for (const g of parts) g.dispose();
+        if (geo) {
+          geo.computeBoundingBox(); geo.computeBoundingSphere();
+          const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false }));
+          m.name = 'manjangdae-camera-proxies';
+          m.visible = false; m.castShadow = false; m.receiveShadow = false; m.frustumCulled = false;
+          m.userData.cameraOnly = true;
+          this.root.add(m);
+          m.updateMatrixWorld(true);
+          this.meshes.cameraProxies = m;
+          G.world.cameraBlockers.push(m);
+        }
+      }
+      this._camProxy = null;
     },
     _col(c) { const id = G.world.addCollider({ tag: 'manjangdae', ...c }); this.colliders.push(id); return id; },
     /** a geometry that already carries vertex colours -> non-indexed position/normal/color only */
@@ -607,6 +637,7 @@
         B.stone.add(new THREE.CylinderGeometry(0.27, 0.31, 0.14, 8), M(x, yF + 0.07, z), '#c2bbad', 0.04, rnd);
         B.paint.add(new THREE.CylinderGeometry(0.16, 0.175, colH, 12), M(x, yF + 0.14 + colH / 2, z), RED, 0.03, rnd);
         this._col({ shape: 'circle', x, z, r: 0.22, minY: yF - 0.4 });
+        this._camProxy.push({ kind: 'col', x, z, r: 0.24, y: yF, h: colH + 0.2 });
       }
       const yTop = yF + 0.14 + colH;                     // column tops
       // ---- railing (계자난간) on the floor edge, open at the north and south steps
@@ -650,7 +681,7 @@
       }
       // ---- roof: 8 concave facets, upturned corners (앙곡), inward-bowed eaves (안허리), tile texture
       const yE = yTop + 0.62, yA = yTop + 3.35, lift = 0.62, Rc = colR + 2.05, bow = 0.2, VMAX = 0.94;
-      this._roofHull = { cx, cz, Rc, yE, yA, A0, lift };
+      this._roofHull = { cx, cz, Rc, yE, yA, A0, lift, yTop };
       const corner = (k, r) => bearingPt(cx, cz, r, A0 + k * (PI / 4));
       const eaveAt = (k, u, out) => {
         const [ax, az] = corner(k, Rc), [bx, bz] = corner(k + 1, Rc);
@@ -912,6 +943,7 @@
           const shade = 0.82 + rnd() * 0.3;
           B.needles.add(g, M(px, py, pz, 0, rnd() * TAU, 0), new THREE.Color('#2f5a2c').multiplyScalar(shade), 0);
           g.dispose();
+          this._camProxy.push({ kind: 'pad', x: px, y: py, z: pz, rx: rr * 1.12, ry: hh * 1.15 });
         }
         this._col({ shape: 'circle', x: x0, z: z0, r: 0.34 * s });
       }
@@ -1062,6 +1094,7 @@
       this._hud(false);
       const ui = this._ensureUi();
       ui.root.hidden = false;
+      ui.root.classList.remove('leaving'); ui.root.removeAttribute('aria-hidden');
       ui.root.classList.toggle('reduced', reduced);
       ui.skip.hidden = false;
       ui.title.classList.remove('on');
@@ -1075,14 +1108,17 @@
       G.log.info('WORLD', `manjangdae intro start${reduced ? ' (reduced motion)' : ''}`);
       if (reduced) {
         // a short fade instead of flying: title card in 2D, camera cut behind the player
+        // (a skip / logout during any await ends this intro: every step after an await checks it is still the one)
         (async () => {
           await G.ui.fade(true, 260);
+          if (this._intro !== it) return;
           try { cam.setMode('follow', { duration: 0 }); cam.behind?.(pl.rotY, true); cam.snap?.(); } catch (e) { /* camera optional */ }
           ui.title.classList.add('on');
           await G.ui.fade(false, 420);
+          if (this._intro !== it || it.ending) return;
           if (easyOn()) say('정선 만장대에 왔어요! 체험관이 다 보여요.', { priority: 1, intro: true });
           await G.util.sleep(1700);
-          if (this._intro === it) this._finishIntro(false);
+          if (this._intro === it && !it.ending) this._finishIntro(false);
         })();
       } else {
         this._prepIntroPath();
@@ -1125,7 +1161,15 @@
       this.introActive = false;
       window.removeEventListener('keydown', it.onKey, true);
       const ui = this._ui;
-      if (ui) { ui.root.removeEventListener('pointerdown', it.onKey); ui.root.classList.remove('on'); ui.title.classList.remove('on'); setTimeout(() => { if (!this._intro && ui) ui.root.hidden = true; }, 700); }
+      if (ui) {
+        // the letterbox fades out over ~0.7 s; it stops catching taps right away (the HUD is back now) and leaves
+        // the accessibility tree with its skip button
+        ui.root.removeEventListener('pointerdown', it.onKey);
+        if (ui.root.contains(document.activeElement)) document.activeElement.blur?.();
+        ui.root.classList.remove('on'); ui.root.classList.add('leaving'); ui.root.setAttribute('aria-hidden', 'true');
+        ui.title.classList.remove('on');
+        setTimeout(() => { if (!this._intro && ui) { ui.root.hidden = true; ui.root.classList.remove('leaving'); } }, 700);
+      }
       this._cardOff(true);
       const cam = G.sys.camera, pl = G.sys.player;
       try {
@@ -1289,11 +1333,20 @@
       requestAnimationFrame(() => ui.scope.classList.add('on'));
       this._tourShow(true);
       tr.offEsc = G.ui.onEscape(() => { if (this._tour === tr) { this._endTour(); return true; } return false; }, 300);
+      // physical keys (e.code): with a Korean input source e.key is 'ㅇ' / 'ㅁ' / 'ㄷ' for D / A / E. A key the view
+      // uses stops here (capture phase on window): closing with Enter must not also reach the chat's Enter shortcut,
+      // nor E the interact key, once the view has given the controls back.
       tr.onKey = (e) => {
-        if (this._tour !== tr) return;
-        if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') { e.preventDefault(); this._tourGo(1); }
-        else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') { e.preventDefault(); this._tourGo(-1); }
-        else if (e.key === 'e' || e.key === 'E' || e.key === 'Enter') { e.preventDefault(); this._endTour(); }
+        if (this._tour !== tr || e.isComposing || G.util.isTyping?.()) return;
+        const c = e.code;
+        let act = 0;
+        if (c === 'ArrowRight' || c === 'KeyD') act = 1;
+        else if (c === 'ArrowLeft' || c === 'KeyA') act = -1;
+        else if (c === 'KeyE' || c === 'Enter' || c === 'NumpadEnter') act = 2;
+        if (!act) return;
+        e.preventDefault(); e.stopPropagation();
+        if (e.repeat && act === 2) return;
+        if (act === 2) this._endTour(); else this._tourGo(act);
       };
       window.addEventListener('keydown', tr.onKey, true);
       G.sfx('open');
@@ -1410,7 +1463,7 @@
       skip.addEventListener('click', (e) => { e.stopPropagation(); this._skipIntro(); });
       const sub = h('div', { class: 'md-sub' }, '산과 계곡이 품은 전통발효체험관');
       const title = h('div', { class: 'md-title2d' }, h('small', null, '旌善 萬丈臺'), h('b', null, '정선 만장대'), h('span', null, '전통발효체험관이 한눈에 내려다보여요'));
-      const root = h('div', { class: 'md-cine', hidden: true, 'aria-hidden': 'true' }, h('div', { class: 'md-bar top' }), h('div', { class: 'md-bar bottom' }), sub, title, skip);
+      const root = h('div', { class: 'md-cine', hidden: true, 'aria-hidden': 'true' }, h('div', { class: 'md-bar top', 'aria-hidden': 'true' }), h('div', { class: 'md-bar bottom', 'aria-hidden': 'true' }), sub, title, skip);
       const zEmoji = h('span', { class: 'md-z-emoji', 'aria-hidden': 'true' }), zName = h('b', { class: 'md-z-name' }), zDesc = h('p', { class: 'md-z-desc' }), zMeta = h('small', { class: 'md-z-meta' });
       const dots = h('div', { class: 'md-dots', 'aria-hidden': 'true' });
       const prev = h('button', { type: 'button', class: 'md-nav prev', 'aria-label': '이전 구역' }, '◀');
@@ -1428,14 +1481,20 @@
 
     /**
      * a short, safe walking target on the deck (tutorial "tap the ground" steps): 1.8-3 m from the player,
-     * in front of the follow camera, never past the balustrade. null when the player is not on the plateau.
+     * in front of the follow camera (or of the player while a cinematic owns the camera), never past the
+     * balustrade. null when the player is not on the plateau.
      */
     walkSpot(from) {
-      const md = MDL(), p = from || G.sys.player?.position;
+      const md = MDL(), pl = G.sys.player, p = from || pl?.position;
       if (!md || !p || !this.built || Math.hypot(p.x - md.x, p.z - md.z) > md.r) return null;
+      // "in front": the follow camera's heading (its yaw, not the rendered camera of a mid-blend frame). While the
+      // intro, the telescope or a camera hand-off owns the view, the screen says nothing about where the child will
+      // look next: the player's facing is used instead (the follow camera ends up behind it), with no on-screen test.
+      const C = G.sys.camera, follow = C?.mode === 'follow' && !C._trans && !this._intro && !this._tour;
       let fx = 0, fz = -1;
-      const cam = G.sys.engine?.camera;
-      if (cam) { cam.getWorldDirection(_camLook); const l = Math.hypot(_camLook.x, _camLook.z); if (l > 1e-4) { fx = _camLook.x / l; fz = _camLook.z / l; } }
+      if (follow && C.getMoveBasis) { const f = C.getMoveBasis().forward; fx = f.x; fz = f.z; }
+      else if (pl && fin(pl.rotY)) { fx = Math.sin(pl.rotY); fz = Math.cos(pl.rotY); }
+      const cam = follow ? G.sys.engine?.camera : null;
       const a0 = Math.atan2(fx, fz), y = this.lookout.y;
       const free = (x, z) => {
         if (Math.hypot(x - md.x, z - md.z) > md.r - 1.2) return false;

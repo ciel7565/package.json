@@ -1,7 +1,7 @@
 <?php
 /**
  * POST api/presence/update.php  {x, y, z, rotY, anim, speed, zoneId, emote, emoteAt, appearance?}
- * → {players:[{id, nickname, x, y, z, rotY, anim, speed, zoneId, emote, emoteAt, appearance}], online}
+ * → {players:[{id, nickname, x, y, z, rotY, anim, speed, zoneId, emote, emoteAt, age, appearance}], online}   (age: ms since that report)
  * The nickname always comes from the account; positions are clamped; appearance is whitelisted.
  */
 declare(strict_types=1);

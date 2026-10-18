@@ -8,12 +8,13 @@
 //   answer(quizId, index)   programmatic answer (same rules as clicking)
 //   openLibrary({tab})      배움터: every content with completion / quiz progress
 //   openExhibit(id)         fermented-food card (layout.exhibits) with a small 3D model + "자세히 알아보기"
+//   openTool(id)            traditional tool card (layout.tools, G.data.toolInfo) — same card look as the exhibits
 //   openHallGuide()         체험관 안내 (HALL_DOOR): floors & related contents
 //   readSign(id) / openInfo(title, text, opts)
 //   isCompleted(id), isQuizSolved(id), pickQuiz(eduId?), stats()
 //   G.sys.education.Viewer  small separate WebGLRenderer turntable viewer (disposed with its modal)
 //
-// Interactables: layout.signs (kind 'sign'), layout.kiosks ('kiosk'), layout.exhibits ('exhibit'),
+// Interactables: layout.signs (kind 'sign'), layout.kiosks ('kiosk'), layout.exhibits ('exhibit'), layout.tools ('tool'),
 // layout.eduBoard ('board'), layout.hallDoor ('door').
 // State: G.state.education = { viewed:{id:{at,pages[],last}}, completed:{id:ts}, quiz:{id:{correct,attempts,at,firstTry,lastAt}} }
 // =============================================================================
@@ -101,10 +102,20 @@
     if (k.ox) return typeof k.answer === 'boolean' ? k : null;
     return Array.isArray(k.choices) && k.choices.length >= 2 && Number.isInteger(k.answer) && k.choices[k.answer] ? k : null;
   }
-  function kidChoicesOf(k) {
+  /** the kid tiles in slot order; `order` (from kidOrder) shuffles picture choices — colours stay with the slot */
+  function kidChoicesOf(k, order) {
     if (k.ox) return [{ e: '⭕', t: '맞아요', ok: k.answer === true, c: '#55d187' }, { e: '❌', t: '아니에요', ok: k.answer === false, c: '#ff8a5c' }];
     const colors = ['#4fb3ff', '#ffc93c', '#b48bff'];
-    return k.choices.slice(0, 3).map((c, i) => ({ e: c.e || '⭐', t: c.t || '', ok: i === k.answer, c: colors[i % colors.length] }));
+    const list = k.choices.slice(0, 3).map((c, i) => ({ e: c.e || '⭐', t: c.t || '', ok: i === k.answer }));
+    const shown = Array.isArray(order) && order.length === list.length ? order.map((j) => list[j]) : list;
+    return shown.map((c, i) => ({ ...c, c: colors[i % colors.length] }));
+  }
+  /** a fresh slot order per quiz opening (the data lists the right picture first; ⭕ / ❌ keep their places) */
+  function kidOrder(k) {
+    if (k.ox) return null;
+    const o = k.choices.slice(0, 3).map((_, i) => i);
+    for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; }
+    return o;
   }
   function kidTitle(e) { return kidOf(e)?.title || e?.title || '교육'; }
   function mascotSvg(mood, size) {
@@ -1817,6 +1828,39 @@ ${fl}
       return m;
     },
 
+    // ------------------------------------------------------------ traditional tools (layout.tools: quest Q_CULTURE + 도감)
+    openTool(toolId) {
+      const t = (L().tools || []).find((o) => o.id === toolId);
+      if (!t) return null;
+      const info = G.data.toolInfo?.[toolId] || {};
+      const col = G.data.collection?.[`COL_${toolId}`] || null;
+      const x = { id: t.id, title: t.name, edu: 'EDU_TOOLS' };
+      const item = { name: t.name, icon: info.icon || col?.icon || '🛠️' };
+      const e = EDU()[x.edu] || null;
+      const st = { viewer: null };
+      const desc = info.text || col?.desc || '';
+      if (kidOn()) return this._kidExhibit(x, info, item, e, st, desc);
+      const facts = (info.facts || []).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+      const box = visualBox('exh-visual');
+      const right = h('div', { class: 'exh-info' });
+      right.innerHTML = `<div class="exh-head"><span class="exh-ico emoji">${esc(item.icon)}</span><div><div class="exh-tag">${esc(info.tagline || '전통 생활 도구')}</div><div class="exh-name">${esc(t.name)}</div></div></div>
+        <p class="exh-text">${esc(desc)}</p>
+        ${facts ? `<dl class="exh-facts">${facts}</dl>` : ''}
+        ${e ? `<div class="exh-edu">${catChip(e)}<span>관련 교육 「${esc(e.title)}」${this.isCompleted(x.edu) ? ' <b class="green">✓ 학습 완료</b>' : ''}</span></div>` : ''}`;
+      const m = G.ui.modal.open({
+        id: 'edu-exhibit', size: 'lg', className: 'exhibit-modal tool-modal', title: `${t.name} · 전통도구`, icon: item.icon,
+        body: (b) => { b.appendChild(h('div', { class: 'exh-layout' }, box, right)); },
+        actions: [
+          { label: '닫기', class: 'btn-ghost' },
+          ...(e ? [{ label: '자세히 알아보기', class: 'btn-primary', icon: 'book', onClick: () => { setTimeout(() => this.open(x.edu), 0); } }] : []),
+        ],
+        onClose: () => { st.viewer?.dispose(); st.viewer = null; },
+      });
+      renderVisual(box, info.model ? { type: 'model', model: info.model } : { type: 'emoji', emoji: item.icon }, st, item.icon);
+      G.activity('exhibit', `「${t.name}」 전통도구 관람`, { exhibitId: t.id, eduId: x.edu });
+      return m;
+    },
+
     // ------------------------------------------------------------ hall guide
     openHallGuide() {
       const H = G.data.hallGuide;
@@ -1977,7 +2021,7 @@ ${fl}
     // ------------------------------------------------------------ kid quiz: 2–3 big pictures or ⭕ / ❌
     _openKidQuiz(id, q, e) {
       const K = kidQuizOf(q);
-      const ctx = { quizId: id, q, e, K, kid: true, phase: 'ask', wrong: new Set(), picked: -1, reward: null };
+      const ctx = { quizId: id, q, e, K, kid: true, phase: 'ask', wrong: new Set(), picked: -1, reward: null, order: kidOrder(K) };
       const m = G.ui.modal.open({
         id: 'edu-quiz', size: 'md', className: 'quiz-modal quiz-kid', title: '퀴즈 놀이', icon: '✏️', say: K.q,
         onClose: () => { if (this._quiz === ctx) this._quiz = null; setTimeout(() => this._refreshOpen(), 0); },
@@ -2001,7 +2045,7 @@ ${fl}
       const qEl = h('p', { class: 'kq-q' }, qT);
       body.appendChild(h('div', { class: 'kq-head' }, face, h('div', { class: 'kq-bubble' }, qEl)));
       kidSpeakable(qEl, () => qT.textContent);
-      const list = kidChoicesOf(K);
+      const list = kidChoicesOf(K, ctx.order);
       const grid = h('div', { class: `kq-choices n${list.length}${K.ox ? ' ox' : ''}`, role: 'group', 'aria-label': '골라요' });
       list.forEach((c, i) => {
         let cls = 'easy-tile kq-choice';
@@ -2047,7 +2091,7 @@ ${fl}
     },
     _kidPick(ctx, i, btn) {
       if (!ctx || ctx.m.closed || ctx.phase === 'right') return;
-      const list = kidChoicesOf(ctx.K);
+      const list = kidChoicesOf(ctx.K, ctx.order);
       const c = list[i];
       if (!c) return;
       if (ctx.wrong.has(i)) { kidSay('그건 아니었어요. 다른 그림을 골라 봐요!', { priority: 1 }); return; }
@@ -2144,7 +2188,9 @@ ${fl}
       else if (link && EDU()[link]) actions.push({ label: `${EDU()[link].icon || '📖'} 배워 볼까요?`, class: 'btn-soft', onClick: () => { setTimeout(() => this.open(link), 0); } });
       for (const l of opts.links || []) actions.push({ label: l.label, class: 'btn-soft', onClick: () => { setTimeout(() => (l.edu ? this.open(l.edu) : l.fn?.()), 0); } });
       actions.push({ label: '👍 알았어요', class: 'btn-primary' });
-      const t = String(title || '안내'), x = String(text || '');
+      // signboards carry grown-up 합니다체 text: children see (and hear) their own short words
+      const ks = s ? G.data.kidSigns?.[s.id] : null;
+      const t = String(ks?.title || title || '안내'), x = String(ks?.text || (s ? '안내판이에요. 같이 둘러봐요! 👀' : text) || '');
       return G.ui.modal.open({
         id: 'edu-sign', size: 'sm', className: 'sign-modal sign-kid', title: '안내판', icon: '🪧', say: `${t}. ${x}`,
         body: (b) => {
@@ -2226,6 +2272,11 @@ ${fl}
       }
       for (const x of lay.exhibits || []) {
         reg({ id: x.id, kind: 'exhibit', label: `전시 살펴보기 · ${short(x.title)}`, kidLabel: '구경하기', emoji: G.data.items?.[x.food]?.icon || '🍲', radius: 2.4, onInteract: () => this.openExhibit(x.id) }, x.x, x.z, 0.95);
+      }
+      // 전통도구 전시장: each tool is its own stop (quest Q_CULTURE counts 3 different ones, COL_TOOL_* stickers unlock)
+      for (const t of lay.tools || []) {
+        const icon = G.data.toolInfo?.[t.id]?.icon || G.data.collection?.[`COL_${t.id}`]?.icon || '🛠️';
+        reg({ id: t.id, kind: 'tool', label: `전통도구 살펴보기 · ${short(t.name)}`, kidLabel: `${t.name} 보기`, emoji: icon, radius: 1.9, onInteract: () => this.openTool(t.id) }, t.x, t.z, 0.6);
       }
       const eb = lay.eduBoard;
       if (eb) reg({ id: eb.id || 'EDU_BOARD', kind: 'board', label: '교육 게시판 보기', kidLabel: '배움터', emoji: '📚', radius: 3.6, onInteract: () => this.openLibrary() }, eb.x, eb.z, 1.9);

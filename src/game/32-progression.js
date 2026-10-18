@@ -42,13 +42,15 @@
   const $ = (id) => document.getElementById(id);
 
   // ---------------------------------------------------------------- collection rule index
-  const ruleIdx = {};
+  // prototype-free maps: lookups use keys straight from the save (an imported '__proto__' / 'toString' item id
+  // must find nothing, not Object.prototype or a function)
+  const ruleIdx = Object.create(null);
   function buildIndex() {
     for (const k of Object.keys(ruleIdx)) delete ruleIdx[k];
     for (const [id, c] of Object.entries(G.data.collection || {})) {
       for (const r of c.unlock || []) {
         const key = r.crop || r.item || r.npc || r.edu || r.id || r.zone || r.recipe || '*';
-        const m = ruleIdx[r.on] || (ruleIdx[r.on] = {});
+        const m = ruleIdx[r.on] || (ruleIdx[r.on] = Object.create(null));
         (m[key] || (m[key] = [])).push(id);
       }
     }
@@ -448,8 +450,14 @@
       if (r.coin) this.addCoin(r.coin, { silent: true });
       if (r.edu) this.addEdu(r.edu, { silent: true });
       for (const [id, q] of Object.entries(r.items)) {
-        if (G.sys.inventory?.add) G.sys.inventory.add(id, q, { source: opts.reason || 'reward', silent: quiet });
-        else { G.state.inventory[id] = (G.state.inventory[id] || 0) + q; G.bus.emit('item:added', { itemId: id, qty: q, source: opts.reason || 'reward' }); }
+        if (G.sys.inventory?.add) {
+          const got = G.sys.inventory.add(id, q, { source: opts.reason || 'reward', silent: quiet });
+          // a (nearly) full stack: the popup lists what really went in, and the player is told even when quiet
+          if (got < q) {
+            if (got > 0) r.items[id] = got; else delete r.items[id];
+            if (quiet) G.sys.inventory.fullNotice?.(id);
+          }
+        } else { G.state.inventory[id] = (G.state.inventory[id] || 0) + q; G.bus.emit('item:added', { itemId: id, qty: q, source: opts.reason || 'reward' }); }
       }
       if (r.title) this.addTitle(r.title, { silent: popup || !!opts.silent });
       if (popup) {

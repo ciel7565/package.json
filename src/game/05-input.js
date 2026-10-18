@@ -6,7 +6,9 @@
 //   G.input.consumeJump()   true once per jump press
 //   G.input.consumeLook()   {dx, dy} accumulated camera drag (pixels * sensitivity)
 //   G.input.consumeZoom()   accumulated zoom delta (+ = zoom out)
-//   G.input.onKey(code, fn, {allowInModal, allowTyping, repeat})  -> off()
+//   G.input.onKey(code, fn, {allowInModal, allowTyping, repeat, onControl})  -> off()
+//                           Enter / Space handlers are skipped while a control has keyboard focus unless onControl
+//   G.input.keyboardFocus() a button / tab / link was reached with Tab / arrows: it owns Enter / Space
 //   G.input.isDown(code)
 //   events: 'input:interact' (E / mobile / d-pad center), 'input:click' {x, y, button, target}
 //           'input:move-start' (first movement input; cancels click-to-move / sitting)
@@ -41,6 +43,11 @@
   const GHOST_PX = 48;             // the trailing click lands where the finger was
   let press = null;                // {el, id, t, x, y, type, shieldUntil, up}
   const ACTIVATION_KEYS = new Set(['Enter', 'NumpadEnter', 'Space']);
+  const ARROWS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+  // the element the keyboard moved the focus to (Tab / arrows, incl. the focus traps); cleared by any pointer press
+  let navAt = -1e9, navFocus = null;
+  document.addEventListener('focusin', (e) => { navFocus = performance.now() - navAt < 400 && e.target instanceof Element ? e.target : null; }, true);
+  window.addEventListener('pointerdown', () => { navFocus = null; navAt = -1e9; }, { capture: true, passive: true });
   /** force-swallow the next trusted pointer click of the current press (the control already acted) */
   function shieldPress(ms = GHOST_MS) {
     const now = performance.now();
@@ -48,6 +55,9 @@
     press.shieldUntil = now + Math.max(0, Math.min(3000, Number(ms) || GHOST_MS));
   }
   function swallow(e) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }
+  /** the nearest actionable element around a node (what a click on it activates) */
+  const CONTROL_SEL = 'button, a[href], input, select, textarea, summary, label, [data-action], [role="button"], [role="tab"], [role="option"], [role="switch"], [role="menuitem"], [role="radio"], [role="checkbox"], [role="link"]';
+  function controlOf(el) { try { return el?.closest?.(CONTROL_SEL) || null; } catch (e) { return null; } }
   function bindGhostShield() {
     if (window._tfmGhostShield) return;
     window._tfmGhostShield = true;
@@ -68,9 +78,13 @@
       let ghost = false;
       if (p.shieldUntil > now && near) ghost = true;               // a control that acted on press / release
       else if (p.el && p.el.isConnected && t && near && !p.el.contains(t) && !t.contains(p.el)) {
-        // the DOM changed under the finger between press and click: a new element took the click
-        const lab = p.el.closest?.('label');
-        ghost = !(lab && (lab.control === t || lab.contains(t)));
+        // the DOM changed under the finger between press and click: a new element took the click — unless both are
+        // parts of the same control (a tile's emoji pressed, its label clicked once :active scaled the emoji away)
+        const c = controlOf(p.el);
+        if (!(c && c === controlOf(t))) {
+          const lab = p.el.closest?.('label');
+          ghost = !(lab && (lab.control === t || lab.contains(t)));
+        }
       }
       if (!ghost) return;
       press = null;
@@ -104,11 +118,17 @@
     consumeZoom() { const z = zoom; zoom = 0; return z; },
     /** gameplay allowed right now? */
     gameplay() { return input.enabled && !G.ui?.isBlocking?.(); },
+    /** a button / tab / link was reached with Tab / arrows — Enter / Space then belong to it, not to the game. Focus that
+     *  a mouse click left on a HUD button, or that a closing window gives back, does not count (Space still jumps). */
+    keyboardFocus() {
+      const ae = document.activeElement;
+      return !!(ae && ae !== document.body && ae === navFocus && ae.isConnected && ae.matches?.(ACTIVATE_SEL));
+    },
     setMobileRun(v) { mobileRun = !!v; document.querySelector('[data-mobile=run]')?.classList.toggle('on', mobileRun); },
     queueJump() { jumpQueued = true; },
     /** swallow the trailing browser click of the press in progress (or of the one that just ended) */
     shieldClicks(ms = GHOST_MS) { shieldPress(ms); },
-    reset() { keys.clear(); look.dx = look.dy = 0; zoom = 0; jumpQueued = false; joy.x = joy.y = 0; dpad.x = dpad.y = 0; },
+    reset() { keys.clear(); look.dx = look.dy = 0; zoom = 0; jumpQueued = false; joy.x = joy.y = 0; dpad.x = dpad.y = 0; input.setMobileRun(false); },
 
     /** recompute axis; called by the player each frame */
     update() {
@@ -132,10 +152,27 @@
     },
   };
   G.input = input;
+  // every profile starts with clean input: no held keys, no 달리기 toggle left on by the previous child
+  for (const ev of ['game:logout', 'game:login']) G.bus.on(ev, () => input.reset());
   if (input.touchUI) document.body?.classList.add('is-touch');
   else if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { if (input.touchUI) document.body.classList.add('is-touch'); });
 
   // ---------------------------------------------------------------- keyboard
+  const ACTIVATE_SEL = 'button, [role="button"], [role="option"], [role="tab"], [role="switch"], [role="menuitem"], [role="radio"], [role="checkbox"], a[href], summary, input[type="checkbox"], input[type="radio"]';
+  const ARROW_SEL = 'input, select, textarea, [role="slider"], [role="radio"], [role="tab"], [role="option"], [role="listbox"], [role="menuitem"], [role="spinbutton"], [contenteditable]';
+  const FOCUSABLE_SEL = 'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  /** keep Tab inside the top-most open window (aria-modal dialog); 70-app traps the title / coach cards itself */
+  function trapDialogTab(e) {
+    const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].filter((d) => !d.inert && !d.closest('[hidden], [inert]') && d.getClientRects().length);
+    const top = dialogs[dialogs.length - 1];
+    if (!top) return;
+    const items = [...top.querySelectorAll(FOCUSABLE_SEL)].filter((el) => !el.closest('[hidden], [inert]') && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    if (!items.length) { e.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1], a = document.activeElement;
+    if (!top.contains(a)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+    else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+  }
   window.addEventListener('keydown', (e) => {
     const typing = G.util.isTyping();
     if (e.code === 'Escape') {
@@ -145,19 +182,27 @@
       e.preventDefault();
       return;
     }
+    // a control reached with the keyboard (Tab, arrows) takes Enter / Space itself; one that only kept the focus after a
+    // mouse click (a HUD button) does not: Space still jumps and Enter still opens the chat
+    if (e.code === 'Tab' || ARROWS.has(e.code)) navAt = performance.now();
+    const kbdFocus = !typing && input.keyboardFocus();
     if (!typing) {
       if (!e.repeat) keys.add(e.code);
       const ae = document.activeElement;
-      const onControl = !!(ae && ae !== document.body && ae.matches?.('button, [role="button"], [role="option"], [role="tab"], [role="switch"], a[href], summary, input[type="checkbox"], input[type="radio"]'));
+      const onControl = !!(ae && ae !== document.body && ae.matches?.(ACTIVATE_SEL));
       // a held Enter / Space must not re-activate a focused button 30× a second (open → close → open … flicker)
       if (e.repeat && onControl && ACTIVATION_KEYS.has(e.code)) { e.preventDefault(); return; }
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
-      // Space = jump while playing; inside a window (modal, dialogue) it activates the focused button as usual
-      else if (e.code === 'Space' && (!onControl || !G.ui?.isBlocking?.())) e.preventDefault();
+      // arrows move the player (no page scroll) — but never inside a window, a slider, a list or a tab row
+      if (ARROWS.has(e.code)) { if (input.gameplay() && !(ae && ae !== document.body && ae.matches?.(ARROW_SEL))) e.preventDefault(); }
+      // Space = jump while playing; on a keyboard-focused control, or inside a window, it activates the button
+      else if (e.code === 'Space' && !kbdFocus && (!onControl || !G.ui?.isBlocking?.())) e.preventDefault();
     }
+    // Tab moves the focus (title, forms, menus, windows); inside an open window it wraps instead of leaving it
+    if (e.code === 'Tab' && !e.defaultPrevented) trapDialogTab(e);
     const list = handlers.get(e.code);
     if (list && list.length) {
       for (const { fn, opts } of list.slice()) {
+        if (kbdFocus && ACTIVATION_KEYS.has(e.code) && !opts.onControl) continue; // the focused control acts
         if (e.repeat && !opts.repeat) continue;
         if (typing && !opts.allowTyping) continue;
         if (!typing && !opts.allowInModal && G.ui?.isBlocking?.()) continue;
@@ -167,7 +212,7 @@
     }
     if (typing || e.repeat) return;
     if (!input.gameplay()) return;
-    if (input.bindings.jump.includes(e.code)) jumpQueued = true;
+    if (input.bindings.jump.includes(e.code) && !kbdFocus) jumpQueued = true;
     if (input.bindings.interact.includes(e.code)) G.bus.emit('input:interact', { source: 'key' });
   });
   window.addEventListener('keyup', (e) => { keys.delete(e.code); });
@@ -187,6 +232,8 @@
       if (e.pointerType === 'touch') {
         touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (touches.size === 2) { const [a, b] = [...touches.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); }
+        // a second finger (pinch, palm, two-finger tap) turns the press into a gesture: never a tap-to-walk
+        if (touches.size >= 2 && drag) { drag.moved = 999; return; }
       }
       if (drag && e.pointerType !== 'touch') return;
       drag = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: 0, button: e.button, touch: e.pointerType === 'touch', t: performance.now() };

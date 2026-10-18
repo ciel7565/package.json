@@ -43,6 +43,49 @@
 
   const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
   const _dir = new THREE.Vector3();
+
+  // ---- occlusion queries against G.world.cameraBlockers (allocation-light, both faces)
+  // vertical clearance the camera keeps from blocker surfaces (near plane 0.1 m): roofs are the open (single-sheet)
+  // blockers, sloped at most ~45°, so 0.45 m straight up / down ≈ 0.32 m off the slope. Closed blockers (hulls,
+  // wall boxes, canopy proxies) are caught by the line of sight itself when the camera would be inside them.
+  const NEAR_CLEAR = 0.45;
+  const PROBES = [new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0)];
+  const _box = new THREE.Box3(), _bp = new THREE.Vector3(), _probe = new THREE.Vector3(), _hits = [];
+  /** can the segment origin -> origin + dir·far touch blocker o? (world AABB pre-test: most blockers are far away) */
+  function mayHit(o, ray, far) {
+    const g = o.geometry;
+    if (!g || (o.children && o.children.length)) return true;   // groups / odd objects: let three test them
+    if (!g.boundingBox) g.computeBoundingBox();
+    _box.copy(g.boundingBox).applyMatrix4(o.matrixWorld);
+    if (_box.containsPoint(ray.origin)) return true;
+    const p = ray.intersectBox(_box, _bp);
+    return !!p && p.distanceToSquared(ray.origin) <= far * far;
+  }
+  /**
+   * distance to the nearest blocker surface along the ray between near and far (Infinity when none). Both faces
+   * count: a single-sided roof seen from under its eaves, or from inside its volume, still stops the camera.
+   */
+  function castBlockers(rc, origin, dir, far, blockers, near = 0) {
+    rc.set(origin, dir); rc.near = near; rc.far = far;
+    let best = Infinity;
+    for (let i = 0; i < blockers.length; i++) {
+      const o = blockers[i];
+      if (!o || !mayHit(o, rc.ray, far)) continue;
+      const m = o.material, side = m && !Array.isArray(m) && m.side !== THREE.DoubleSide ? m.side : -1;
+      if (side >= 0) m.side = THREE.DoubleSide;           // restored right below (nothing renders in between)
+      _hits.length = 0;
+      try { rc.intersectObject(o, true, _hits); } catch (e) { _hits.length = 0; }
+      if (side >= 0) m.side = side;
+      if (_hits.length && _hits[0].distance < best) best = _hits[0].distance;
+    }
+    _hits.length = 0;
+    return best;
+  }
+  /** is a blocker surface closer than NEAR_CLEAR above or below point p? */
+  function crowded(rc, p, blockers) {
+    for (let i = 0; i < PROBES.length; i++) if (castBlockers(rc, p, PROBES[i], NEAR_CLEAR, blockers) < NEAR_CLEAR) return true;
+    return false;
+  }
   const NO_OPTS = Object.freeze({});
   /** [x,y,z] | {x,y,z} -> out (false when missing / not finite) */
   function readVec(v, out) {
@@ -73,6 +116,7 @@
     _shot: { pos: new THREE.Vector3(0, 30, 60), look: new THREE.Vector3(0, 0, 0), fov: null },
     _lead: new THREE.Vector3(), _prevTarget: new THREE.Vector3(), _hasPrev: false, _speedK: 0,
     _ray: null,
+    _occ: { n: -1, look: new THREE.Vector3(), dir: new THREE.Vector3(), wanted: 0 },   // last occlusion query (reused at rest)
 
     init() {
       this._ray = new THREE.Raycaster();
@@ -230,7 +274,7 @@
       this._ftInit = false;
       this._lead.set(0, 0, 0); this._hasPrev = false; this._speedK = 0;
       this._trans = null;
-      this._blockTimer = 0;
+      this._blockTimer = 0; this._occ.n = -1;
       this._computeDesired(0);
       this._pos.copy(this._dPos); this._look.copy(this._dLook);
       this._applyToCamera();
@@ -366,25 +410,40 @@
       const blockers = G.world.cameraBlockers;
       if (this._blockTimer <= 0) {
         this._blockTimer = 0.08;
-        this._blockDist = Infinity;
+        const oc = this._occ;
         if (blockers && blockers.length && (this.mode === 'follow' || this.mode === 'photo')) {
           const look = this._dLook;
           _dir.subVectors(this._dPos, look);
           const len = _dir.length();
+          const wanted = this.mode === 'follow' ? this.distance : len;
+          if (len > 0.3) _dir.multiplyScalar(1 / len);
+          // nothing moved (a child standing still, the photo view at rest): the last answer still holds
+          if (len > 0.3 && oc.n === blockers.length && oc.look.distanceToSquared(look) < 0.0025 && oc.dir.dot(_dir) > 0.9999 && Math.abs(oc.wanted - wanted) < 0.05) return this._effFollow(dt);
+          this._blockDist = Infinity;
           if (len > 0.3) {
-            _dir.multiplyScalar(1 / len);
-            const r = this._ray;
-            r.set(look, _dir);
             // test the whole WANTED distance, not just the current (already pulled-in) one: otherwise the ray stops
             // short of the blocker once the camera has moved in, the pull-in is released, the camera slides back
             // into the roof and is pulled in again — a frame-by-frame flicker in and out of roofs
-            r.far = Math.max(len, this.mode === 'follow' ? this.distance + 1.2 : len) + 0.3;
-            let hits = null;
-            try { hits = r.intersectObjects(blockers, true); } catch (e) { hits = null; }
-            if (hits && hits.length) this._blockDist = Math.max(1.05, hits[0].distance - 0.35);
-          }
-        }
+            const hit = castBlockers(this._ray, look, _dir, Math.max(len, wanted + 1.2) + 0.3, blockers, 0.2);
+            let d = Number.isFinite(hit) ? Math.max(1.05, hit - 0.35) : Infinity;
+            // clearance at the spot the camera would take: a roof just above (camera under the eaves) or just below
+            // fills the near plane although the line of sight slips past it — step in until it is clear
+            let at = Math.min(d, wanted);
+            for (let k = 0; k < 4 && at > 1.05; k++) {
+              _probe.copy(look).addScaledVector(_dir, at);
+              if (!crowded(this._ray, _probe, blockers)) break;
+              at = Math.max(1.05, at - 0.6);
+              d = at;
+            }
+            this._blockDist = d;
+            oc.n = blockers.length; oc.look.copy(look); oc.dir.copy(_dir); oc.wanted = wanted;
+          } else oc.n = -1;
+        } else { this._blockDist = Infinity; oc.n = -1; }
       }
+      this._effFollow(dt);
+    },
+    /** ease the effective follow distance towards min(zoom, occlusion limit): in fast, out slowly */
+    _effFollow(dt) {
       if (this.mode === 'follow') {
         const want = Math.min(this.distance, this._blockDist);
         this._effDist += (want - this._effDist) * damp(want < this._effDist ? 20 : 3, dt);

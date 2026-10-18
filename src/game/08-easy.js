@@ -21,7 +21,8 @@
 //        (8 directions, round buttons touched on their rim) and the label spot (behind or beside the hand) that
 //        cover the least of the fixed HUD, and keeps the label on screen
 //   G.easy.nextStep() -> {key, emoji, text, say, target:{x,z,label}|null, act?, actLabel?, actEmoji?, progress?}
-//   G.easy.goTo(target {x,z} | zoneOrPoiId, {label, stopDistance}) -> Promise<bool>   (auto-walk / travel)
+//   G.easy.goTo(target {x,z} | zoneOrPoiId, {label, stopDistance, person}) -> Promise<bool>   (auto-walk / travel;
+//        person: the label is someone, not a place — "친구에게 같이 가요!")
 //   G.easy.travelMenu() -> Promise<zoneId|null>   picture "어디 갈까?" menu
 //   G.easy.t(normalText, easyText)         easyText while easy mode is on
 //   G.easy.nameIdeas(n=6) -> ['용감한다람쥐', ...]   kid-safe nicknames (valid for the 2–12 char nickname rule)
@@ -59,8 +60,21 @@
     if (/[0-9]$/.test(s)) return /[013678]$/.test(s);
     return false;
   }
+  /** '으로/로' follows its own rule: no final consonant OR ㄹ takes 로 (한옥마을로, 참가자1로), any other 으로 (밭으로) */
+  function roJosa(word) {
+    const s = String(word ?? '').trim();
+    if (!s) return '로';
+    const c = s.charCodeAt(s.length - 1);
+    if (c >= 0xac00 && c <= 0xd7a3) { const j = (c - 0xac00) % 28; return j === 0 || j === 8 ? '로' : '으로'; }
+    if (/[0-9]$/.test(s)) return /[036]$/.test(s) ? '으로' : '로'; // 영·삼·육 end in a consonant other than ㄹ
+    return '로';
+  }
   /** josa('콩', '을/를') -> '콩을' */
-  function josa(word, pair) { const [a, b] = String(pair).split('/'); return `${word}${hasJong(word) ? a : b}`; }
+  function josa(word, pair) {
+    if (pair === '으로/로') return `${word}${roJosa(word)}`;
+    const [a, b] = String(pair).split('/');
+    return `${word}${hasJong(word) ? a : b}`;
+  }
 
   function mascot(mood, size) {
     try { const s = G.mascot?.svg?.(mood, size); return typeof s === 'string' && s.trim().startsWith('<svg') ? s : ''; } catch (e) { return ''; }
@@ -292,32 +306,48 @@
   const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register']);
   // the grown-up screens a session may live on (04-ui passes the modal's className with ui:modal-open)
   const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal)(\s|$)/;
-  const Gate = { sess: null, wrong: 0, pending: null, streak: 0, tick: 0 };
+  // wrong / wt / until: the in-memory copy of the persisted round (used when site storage is blocked)
+  const Gate = { sess: null, wrong: 0, wt: 0, until: 0, pending: null, streak: 0, tick: 0 };
   /** persisted gate state: cool-down end, failed rounds (doubling) and the wrong answers of the current round
    *  (so a reload between wrong taps does not hand out fresh tries). Wrong answers older than 10 min expire. */
   const GATE_WRONG_TTL = 10 * 60 * 1000;
+  const freshWrong = (wt) => wt > 0 && Date.now() - wt < GATE_WRONG_TTL && Date.now() >= wt;
   function gateLoad() {
     try {
       const o = JSON.parse(localStorage.getItem(LS_GATE) || 'null');
       if (o && typeof o === 'object') {
         const wt = Number(o.wt) || 0;
-        const fresh = wt > 0 && Date.now() - wt < GATE_WRONG_TTL && Date.now() >= wt;
-        return { until: Number(o.until) || 0, strikes: clamp(Math.floor(Number(o.strikes) || 0), 0, 10), wrong: fresh ? clamp(Math.floor(Number(o.wrong) || 0), 0, GATE_TRIES) : 0, wt: fresh ? wt : 0 };
+        const fresh = freshWrong(wt);
+        let until = Number(o.until) || 0;
+        // a cool-down never lies more than GATE_COOLDOWN_MAX ahead: after the device clock moved back (time sync of a
+        // fast tablet clock, a reset battery) the stored end could be hours or days away and would never run down
+        const cap = Date.now() + GATE_COOLDOWN_MAX;
+        if (until > cap) { until = cap; try { localStorage.setItem(LS_GATE, JSON.stringify({ ...o, until })); } catch (e) { /* storage blocked */ } }
+        return { until, strikes: clamp(Math.floor(Number(o.strikes) || 0), 0, 10), wrong: fresh ? clamp(Math.floor(Number(o.wrong) || 0), 0, GATE_TRIES) : 0, wt: fresh ? wt : 0 };
       }
     } catch (e) { /* corrupt -> reset */ }
     return { until: 0, strikes: 0, wrong: 0, wt: 0 };
   }
   function gateSave(o) {
     const wrong = clamp(Math.floor(Number(o.wrong) || 0), 0, GATE_TRIES);
+    Gate.wrong = wrong; Gate.wt = wrong > 0 ? Date.now() : 0; Gate.until = Math.round(Number(o.until) || 0);
     try {
       localStorage.setItem(LS_GATE, JSON.stringify({
-        until: Math.round(Number(o.until) || 0), strikes: clamp(Math.floor(Number(o.strikes) || 0), 0, 10),
-        wrong, wt: wrong > 0 ? Date.now() : 0,
+        until: Gate.until, strikes: clamp(Math.floor(Number(o.strikes) || 0), 0, 10),
+        wrong, wt: Gate.wt,
       }));
-    } catch (e) { /* storage blocked */ }
+    } catch (e) { /* storage blocked: the in-memory copy still counts for this page */ }
   }
-  /** remaining cool-down (ms). A clock moved backwards cannot make it longer than the cap. */
-  function cooldownLeft() { return clamp(gateLoad().until - Date.now(), 0, GATE_COOLDOWN_MAX); }
+  /** wrong answers of the current round (storage, or memory when storage is blocked); both expire after 10 min */
+  function curWrong() {
+    if (Gate.wrong && !freshWrong(Gate.wt)) { Gate.wrong = 0; Gate.wt = 0; }
+    return Math.max(Gate.wrong, gateLoad().wrong);
+  }
+  /** remaining cool-down (ms); the end is capped the same way in memory, so it always runs down */
+  function cooldownLeft() {
+    if (Gate.until > Date.now() + GATE_COOLDOWN_MAX) Gate.until = Date.now() + GATE_COOLDOWN_MAX;
+    return clamp(Math.max(gateLoad().until, Gate.until) - Date.now(), 0, GATE_COOLDOWN_MAX);
+  }
 
   /** unbiased integer in [a, b] (crypto when available: the next question cannot be guessed from the last) */
   function gateRand(a, b) {
@@ -421,12 +451,11 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) lockGate('hidden'); });
 
   function gateStatus(reason) {
-    Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong);
     const alive = sessAlive();
     const s = Gate.sess;
     return {
       unlocked: reason ? canReuse(String(reason)) : alive, unlockLeft: alive ? Math.max(0, s.until - nowMs()) : 0,
-      screens: alive ? [...s.modals] : [], cooldownLeft: cooldownLeft(), wrong: Gate.wrong, streak: Gate.streak, need: GATE_NEED,
+      screens: alive ? [...s.modals] : [], cooldownLeft: cooldownLeft(), wrong: curWrong(), streak: Gate.streak, need: GATE_NEED,
       choices: GATE_CHOICES, tries: GATE_TRIES, open: !!Gate.pending, required: isOn() && S().parentGate !== false,
     };
   }
@@ -460,7 +489,6 @@
     // new question only becomes tappable after a short pause, so rapid tapping gets ONE guess per question.
     let finished = false, q = null, qid = 0, armed = false, coolTimer = 0, armTimer = 0, m = null;
     const fin = (ok) => { if (finished) return; finished = true; clearInterval(coolTimer); clearTimeout(armTimer); Gate.streak = 0; done(ok); };
-    Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong);
     Gate.streak = 0;
     const qEl = h('div', { class: 'easy-gate-q' });
     const grid = h('div', { class: 'easy-gate-choices', role: 'group', 'aria-label': '답을 골라요' });
@@ -522,7 +550,6 @@
         b.classList.add('ok');
         Gate.streak++;
         if (Gate.streak >= GATE_NEED) {
-          Gate.wrong = 0;
           gateSave({ until: 0, strikes: 0, wrong: 0 });
           status.textContent = '✅ 확인했어요!';
           steps.textContent = '●'.repeat(GATE_NEED);
@@ -537,20 +564,19 @@
         return;
       }
       Gate.streak = 0;
-      Gate.wrong = Math.max(Gate.wrong, gateLoad().wrong) + 1;
+      const wrong = curWrong() + 1;
       G.sfx('wrong');
       b.classList.add('bad');
       shake(grid);
       const st = gateLoad();
-      if (Gate.wrong >= GATE_TRIES) {
+      if (wrong >= GATE_TRIES) {
         const wait = Math.min(GATE_COOLDOWN_MAX, GATE_COOLDOWN * Math.pow(2, st.strikes));
         gateSave({ until: Date.now() + wait, strikes: st.strikes + 1, wrong: 0 });
-        Gate.wrong = 0;
         status.textContent = '조금 쉬었다가 어른과 다시 해요.';
         showCool();
       } else {
-        gateSave({ until: st.until, strikes: st.strikes, wrong: Gate.wrong });
-        status.textContent = `앗, 아니에요. 처음부터 다시 해요. (${GATE_TRIES - Gate.wrong}번 더 할 수 있어요)`;
+        gateSave({ until: st.until, strikes: st.strikes, wrong });
+        status.textContent = `앗, 아니에요. 처음부터 다시 해요. (${GATE_TRIES - wrong}번 더 할 수 있어요)`;
         const my = qid;
         setTimeout(() => { if (!finished && cool.hidden && my === qid) render(600); }, 450);
       }
@@ -788,10 +814,12 @@
     const vis = Math.max(0, Math.min(a.r, innerWidth) - Math.max(a.l, 0)) * Math.max(0, Math.min(a.b, innerHeight) - Math.max(a.t, 0));
     return (a.r - a.l) * (a.b - a.t) - vis;
   }
+  /** the compact hand (phone bottom controls, 08-easy.css .compact) is ~2/3 the size: placement scores it as such */
+  const handK = (c) => (c.compact ? 0.66 : 1);
   /** label centre distance from the tip along the hand's axis (clears the hand for sideways hands too) */
   function labelDist(c, rot) {
     const a = rot / 57.29578;
-    return 84 + Math.max(((c.lh || 38) / 2) * Math.abs(Math.cos(a)), ((c.lw || 120) / 2) * Math.abs(Math.sin(a)));
+    return 84 * handK(c) + Math.max(((c.lh || 38) / 2) * Math.abs(Math.cos(a)), ((c.lw || 120) / 2) * Math.abs(Math.sin(a)));
   }
   /** sideways steps (in label half-sizes) tried for the label when the spot straight along the hand is taken */
   const LABEL_SHIFTS = [0, 0.75, -0.75, 1.4, -1.4];
@@ -804,9 +832,9 @@
   }
   /** the 👆 glyph (52 px, bobbing 2–14 px) as a short capsule of squares along the hand's axis: right for diagonal
    *  hands too (one rotated box's bounding square would reach back over the very target the finger touches) */
-  function handScore(x, y, dx, dy, box, obs) {
+  function handScore(x, y, dx, dy, box, obs, k = 1) {
     let s = 0;
-    for (const [d, hs] of HAND_CAPS) s += scoreBox(x + dx * d, y + dy * d, hs, hs, box, obs, 1);
+    for (const [d, hs] of HAND_CAPS) s += scoreBox(x + dx * d * k, y + dy * d * k, hs * k, hs * k, box, obs, 1);
     return s;
   }
   /** best label spot for a hand at (x, y) pointing along (dx, dy): straight behind the hand, else a little to the
@@ -821,8 +849,9 @@
       let sc = scoreBox(lx, ly, hw, hh, box, obs, 1.2) + Math.abs(k) * 40;
       // a shifted label must not sit on its own hand
       _lb.left = lx - hw; _lb.right = lx + hw; _lb.top = ly - hh; _lb.bottom = ly + hh;
+      const hk = handK(c);
       for (const [hd, hs] of HAND_CAPS) {
-        _sb.l = x + dx * hd - hs; _sb.r = x + dx * hd + hs; _sb.t = y + dy * hd - hs; _sb.b = y + dy * hd + hs;
+        _sb.l = x + dx * hd * hk - hs * hk; _sb.r = x + dx * hd * hk + hs * hk; _sb.t = y + dy * hd * hk - hs * hk; _sb.b = y + dy * hd * hk + hs * hk;
         sc += boxOverlap(_sb, _lb) * 1.5;
       }
       if (sc < best) { best = sc; if (out) { out[0] = lx - x; out[1] = ly - y; } }
@@ -831,7 +860,7 @@
   }
   function placeScore(c, x, y, rot, box, obs, rank, lo) {
     const a = rot / 57.29578, dx = -Math.sin(a), dy = Math.cos(a);
-    let s = rank * 60 + handScore(x, y, dx, dy, box, obs);
+    let s = rank * 60 + handScore(x, y, dx, dy, box, obs, handK(c));
     if (c.lbl) s += labelSpot(c, x, y, rot, dx, dy, box, obs, lo);
     return s;
   }
@@ -861,8 +890,18 @@
     const d = HAND_DIRS[di];
     const [x, y] = d.f(r);
     const lo = c.lo || (c.lo = [0, 0]);
-    if (c.lbl) placeScore(c, x, y, d.rot, box, obs, 0, lo);
-    return { x, y, rot: d.rot, edge: false, lo: c.lbl ? lo : null };
+    let lblHide = false;
+    if (c.lbl) {
+      placeScore(c, x, y, d.rot, box, obs, 0, lo);
+      // the crowded phone corner (compact hand): a "눌러요!" that would sit on another control is left out — the
+      // fingertip ring shows the button and the coach card / voice say the words
+      if (c.compact) {
+        const lx = x + lo[0], ly = y + lo[1];
+        _sb.l = lx - c.lw / 2; _sb.r = lx + c.lw / 2; _sb.t = ly - c.lh / 2; _sb.b = ly + c.lh / 2;
+        lblHide = obs.some((o) => boxOverlap(_sb, o) > 24);
+      }
+    }
+    return { x, y, rot: d.rot, edge: false, lo: c.lbl ? lo : null, lblHide };
   }
   function handPos(c) {
     const t = c.target;
@@ -874,9 +913,10 @@
       if (r.width < 2 || r.height < 2) return null;
       const st = getComputedStyle(el);
       if (st.visibility === 'hidden' || Number(st.opacity) === 0) return null;
+      // (compact first: the placement below scores the hand at the size it will be drawn)
+      if (c.compactEl !== el) { c.compactEl = el; c.compact = innerWidth < 700 && !!el.closest?.('#mobile-controls, #bottom-bar, .mobile-controls, .bottom-bar'); }
       // below the target when there is room, otherwise above — then whichever side covers the least HUD (NEW-4)
       const p = bestPlace(c, r, el, r.bottom + 96 < innerHeight ? HAND_PREFER_BELOW : HAND_PREFER_ABOVE);
-      if (c.compactEl !== el) { c.compactEl = el; c.compact = innerWidth < 700 && !!el.closest?.('#mobile-controls, #bottom-bar, .mobile-controls, .bottom-bar'); }
       p.compact = c.compact;
       return p;
     }
@@ -918,7 +958,8 @@
       if (c.shown) { c.shown = false; c.el.style.opacity = '0'; if (c.lbl) c.lbl.style.opacity = '0'; }
     } else {
       c.missing = 0;
-      if (!c.shown) { c.shown = true; c.el.style.opacity = ''; if (c.lbl) c.lbl.style.opacity = ''; }
+      if (!c.shown) { c.shown = true; c.el.style.opacity = ''; c.lblHide = null; }
+      if (c.lbl && c.lblHide !== !!p.lblHide) { c.lblHide = !!p.lblHide; c.lbl.style.opacity = c.lblHide ? '0' : ''; }
       const x = Math.round(p.x), y = Math.round(p.y), rot = Math.round(p.rot);
       const lox = p.lo ? Math.round(p.lo[0]) : 1e9, loy = p.lo ? Math.round(p.lo[1]) : 1e9; // 1e9 = straight behind
       if (x !== c.x || y !== c.y || rot !== c.rot || lox !== c.lox || loy !== c.loy) {
@@ -1011,12 +1052,34 @@
       case 'collect': { const n = itemName(o.item); return { text: n ? `${josa(n, '을/를')} 모아요` : '재료를 모아요' }; }
       case 'ferment_check': return { text: '내 장독을 살펴봐요' };
       case 'ferment_start': return { text: '장독에 장을 담가요' };
-      case 'ferment_claim': return { text: '다 익은 장을 꺼내요' };
+      case 'ferment_claim': return fermentClaimStep(o);
       case 'edu': return { text: '그림 이야기를 봐요' };
       case 'quiz': return { text: '퀴즈를 풀어요' };
       case 'journal': return { text: '오늘 일기를 써요', act: () => G.ui.triggerAction('journal'), actLabel: '일기 쓰기', actEmoji: '📝' };
-      case 'photo': return { text: '사진을 찍어요', act: () => G.ui.triggerAction('photo'), actLabel: '사진 찍기', actEmoji: '📸' };
-      case 'emote': case 'gesture': return { text: '내 마음을 보여 줘요', act: () => openExpress(), actLabel: '표현하기', actEmoji: '😊' };
+      case 'photo': {
+        // a photo only counts inside a photo zone ('*' = any of them): outside one, the step walks there first
+        if (o.photoZone) {
+          const p = G.sys.player?.position;
+          let pz = null;
+          try { pz = p ? G.sys.photo?.photoZoneAt?.(p.x, p.z) : null; } catch (e) { pz = null; }
+          if (!pz || (o.photoZone !== '*' && pz.id !== o.photoZone)) return { text: '사진 찍는 곳으로 가요', say: '사진 찍는 곳으로 같이 가요. 거기서 사진을 찍어요!', keyX: ':go', speakX: ':go' };
+        }
+        return { text: '사진을 찍어요', act: () => G.ui.triggerAction('photo'), actLabel: '사진 찍기', actEmoji: '📸', keyX: ':snap', speakX: ':snap' };
+      }
+      case 'emote': case 'gesture': {
+        // a quest that wants ONE emote / gesture (반가운 인사 = 👋) does exactly that on the button
+        const soc = G.sys.social;
+        const want = o.type === 'emote' ? o.emote : o.gesture;
+        const def = want ? ((o.type === 'emote' ? G.data.emotes : G.data.gestures) || []).find((x) => x.id === want) : null;
+        if (def && typeof soc?.[o.type] === 'function') {
+          const hello = want === 'EMO_HELLO';
+          return {
+            text: hello ? '손 흔들어 인사해요' : `${josa(String(def.name), '을/를')} 해 봐요`, emoji: def.icon || null,
+            act: () => { if (!soc[o.type](want)) openExpress(); }, actLabel: hello ? '인사하기' : String(def.name).slice(0, 8), actEmoji: def.icon || '😊',
+          };
+        }
+        return { text: '내 마음을 보여 줘요', act: () => openExpress(), actLabel: '표현하기', actEmoji: '😊' };
+      }
       case 'chat': return { text: '친구에게 인사해요', act: () => (isOn() ? openKidChat() : G.ui.triggerAction('chat')), actLabel: '인사하기', actEmoji: '💬' };
       case 'craft': {
         // short of an ingredient (메주 = 콩 3개): collect it first — 31-quest points the marker at its bed or the shop
@@ -1035,6 +1098,22 @@
       case 'level': return { text: '더 놀면서 별을 모아요' };
       default: return { text: '금빛 표시를 따라가요' };
     }
+  }
+  /** "다 익은 장을 꺼내요" only when one of MY jars holds it ripe; a batch on the way says wait, no batch says start one */
+  function fermentClaimStep(o) {
+    const fe = G.sys.fermentation;
+    let jars = [];
+    try { jars = (fe?.myJarIds?.() || ['J1']).map((id) => fe?.getJar?.(id)).filter(Boolean); } catch (e) { jars = []; }
+    const recipe = String(G.data.recipes?.[o.recipe]?.name || '').replace(/\s*체험$/, '').trim() || '장';
+    if (!jars.length) return { text: `다 익은 ${josa(recipe, '을/를')} 꺼내요` };
+    // jar 1 holds the gifted starter batch before its state exists
+    const rid = (j) => j.recipeId ?? (j.id === 'J1' && !j.state ? (G.data.fermentation?.starterRecipe || 'FER001') : null);
+    const ours = jars.filter((j) => !o.recipe || rid(j) === o.recipe);
+    if (ours.some((j) => j.status === 'COMPLETE')) return { text: `다 익은 ${josa(recipe, '을/를')} 꺼내요`, keyX: ':ripe', speakX: ':ripe' };
+    if (ours.some((j) => ['PREPARING', 'FERMENTING', 'AGING'].includes(j.status))) {
+      return { text: `${josa(recipe, '이/가')} 익을 때까지 기다려요`, emoji: '⏳', say: `${josa(recipe, '이/가')} 익고 있어요. 다른 놀이를 하다가 다시 와요!`, keyX: ':wait', speakX: ':wait' };
+    }
+    return { text: `장독에 ${josa(recipe, '을/를')} 담가요`, emoji: '🫙', say: `장독에 ${josa(recipe, '을/를')} 담가요. 다 익으면 꺼내요!`, keyX: ':start', speakX: ':start' };
   }
   function exploreStep() {
     return { key: 'explore', speakKey: 'explore', emoji: '🗺️', text: '구경해요', say: '어디로 가 볼까요? 지도를 눌러 골라요.', target: null, act: () => openWhere(), actLabel: '어디 갈까?', actEmoji: '🗺️', progress: null };
@@ -1086,7 +1165,7 @@
     hudRefreshSoon();
     try { w.resolve(ok); } catch (e) { /* ignore */ }
     if (ok) {
-      say(w.label ? `${w.label}에 도착했어요!` : '도착했어요!', { priority: 1 });
+      say(!w.label ? '도착했어요!' : w.person ? `${w.label} 옆에 왔어요!` : `${w.label}에 도착했어요!`, { priority: 1 });
       setTimeout(() => {
         const p = document.getElementById('interact-prompt');
         if (p && !p.hidden && isOn()) point(p, { label: '눌러요!', duration: 4500 });
@@ -1111,6 +1190,7 @@
         if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.z) || typeof pl.walkTo !== 'function') return resolve(false);
         if (Walk.cur) finishWalk(false, 'replaced');
         const label = String(opts.label ?? target.label ?? '').slice(0, 20);
+        const person = !!opts.person; // walking to a friend: "친구에게 같이 가요!" / "친구 옆에 왔어요!" (places: 로 / 에)
         const dest = { x: target.x, z: target.z };
         const zoneFor = () => { try { const z = G.world?.zoneAt?.(dest.x, dest.z); return z && (G.data.zones || []).some((x) => x.id === z.id) ? z : null; } catch (e) { return null; } };
         const travelFirst = async () => {
@@ -1123,7 +1203,7 @@
         };
         const start = (allowRetry) => {
           const d = Math.hypot(dest.x - pl.position.x, dest.z - pl.position.z);
-          const w = { id: 0, target: dest, label, resolve };
+          const w = { id: 0, target: dest, label, person, resolve };
           Walk.cur = w;
           const id = pl.walkTo(dest, {
             stopDistance: Number.isFinite(opts.stopDistance) ? opts.stopDistance : 1.8, run: d > (Number(pl.WALK) || 9.6) * 2.5,
@@ -1150,7 +1230,7 @@
         const onHill = !!md && Math.hypot(pl.position.x - md.x, pl.position.z - md.z) < md.r + 3;
         if (far > (onHill ? 170 : 70)) travelFirst().then(() => start(true), () => start(true));
         else start(true);
-        if (label) say(`${label}${hasJong(label) ? '으로' : '로'} 같이 가요!`, { priority: 1 });
+        if (label) say(person ? `${label}에게 같이 가요!` : `${josa(label, '으로/로')} 같이 가요!`, { priority: 1 });
         else say('같이 가요!', { priority: 1 });
       } catch (e) {
         G.log.warn('PLAYER', 'easy.goTo failed', e);
@@ -1198,7 +1278,7 @@
   }
 
   // ================================================================ healthy play: reminder card + rest screen
-  const Play = { active: 0, lastInput: nowMs(), saveAcc: 0, card: null, cardTimer: 0 };
+  const Play = { active: 0, lastInput: nowMs(), saveAcc: 0, card: null, cardTimer: 0, last: 0 };
   try { const v = Number(sessionStorage.getItem(SS_PLAY)); if (Number.isFinite(v) && v > 0) Play.active = Math.min(v, 6 * 3600); } catch (e) { /* storage blocked */ }
   const markInput = () => { Play.lastInput = nowMs(); };
   for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.addEventListener(ev, markInput, { capture: true, passive: true });
@@ -1276,11 +1356,16 @@
     say('쉬는 시간이에요. 숨을 크게 들이쉬고, 천천히 내쉬어요.', { priority: 2 });
     return el;
   }
-  function playTick(dt) {
+  function playTick() {
+    // real (wall-clock) seconds, not the frame dt: the engine clamps dt to 0.1 s, so a device under 10 fps would count
+    // play time too slowly and the "take a rest" card would come late. A longer gap (hidden tab, stall) counts 5 s.
+    const t = nowMs();
+    const dt = Play.last ? Math.min(5, Math.max(0, (t - Play.last) / 1000)) : 0;
+    Play.last = t;
     const min = Number(S().playReminderMin) || 0;
     if (!min || !isOn() || !G.state || !G.ready || document.hidden || Play.card || Rest.el) return;
     if (!document.body.classList.contains('in-game')) return;
-    if (nowMs() - Play.lastInput > 90000) return; // idle: not active play
+    if (t - Play.lastInput > 90000) return; // idle: not active play
     Play.active += dt;
     Play.saveAcc += dt;
     if (Play.saveAcc > 15) { Play.saveAcc = 0; persistPlay(); }
@@ -1289,7 +1374,7 @@
 
   // ================================================================ HUD wiring (easy-mode layout, §12.3)
   // throttles use wall-clock time (not the clamped frame dt) so slow devices still refresh promptly
-  const Hud = { bound: false, el: null, emo: null, text: null, pips: null, go: null, goEmo: null, goLbl: null, mode: '', key: '', speakKey: '', pendingSay: null, pendingAt: 0, stepAt: -1e9, badgeAt: -1e9, badge: -1, step: null, lvObs: null };
+  const Hud = { bound: false, el: null, emo: null, text: null, pips: null, go: null, goEmo: null, goLbl: null, mode: '', key: '', speakKey: '', pendingSay: null, pendingAt: 0, stepAt: -1e9, badgeAt: -1e9, badge: -1, step: null, lvObs: null, goAt: -1e9 };
   function hudRefreshSoon() { Hud.key = ''; Hud.stepAt = -1e9; }
 
   function openExpress(anchor) {
@@ -1389,6 +1474,10 @@
   }
 
   function onGo() {
+    // children double tap: the second tap (40–500 ms later) must not stop the walk the first one just started
+    const t = nowMs();
+    if (t - Hud.goAt < 650) return;
+    Hud.goAt = t;
     const st = Hud.step || nextStep();
     if (Walk.cur) {
       const w = Walk.cur;
@@ -1548,7 +1637,7 @@
     onStateLoaded() { hudRefreshSoon(); Hud.speakKey = ''; Hud.badge = -1; Hud.badgeAt = -1e9; syncLevelChip(); },
     update(dt) {
       hudTick(dt);
-      playTick(dt);
+      playTick();
     },
     onLogout() {
       Voice.stop();

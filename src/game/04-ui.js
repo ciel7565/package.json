@@ -10,6 +10,8 @@
 //   G.ui.onAction(action, fn)  delegated [data-action] clicks
 //   G.ui.onEscape(fn, priority) / handleEscape()
 //   G.ui.block(key) / unblock(key) / isBlocking()
+//   G.ui.shieldTaps(ms?)  swallow pointer presses on controls for a moment (opening / closing a dialog does it itself)
+//   G.ui.resetSession()   drop the queued rewards / held and live toasts of a player who logged out
 //   motion (CONTRACT §13.5): G.ui.motion {d1..d4, ease}, reducedMotion(), stagger(els, opts), countUp(el, to, opts),
 //   setBar(el, pct), skeleton(opts), pulse(el) — modals grow out of the element that opened them, toasts stack with
 //   FLIP, every `.bar > i` fill becomes transform-based, G.ui.tabs gets a sliding ink. reduceMotion → instant/opacity.
@@ -49,6 +51,25 @@
   }, true);
   /** the recent tap point (≤ maxAge ms ago) or null */
   function tapOrigin(maxAge = 900) { return perfNow() - lastPtr.t <= maxAge ? { x: lastPtr.x, y: lastPtr.y } : null; }
+
+  // tap shield: right after a dialog opens or closes, a pointer press on a control is the second half of a double
+  // tap (children double tap a lot), never a decision about the screen that just appeared / is still fading out. So
+  // for SHIELD_MS trusted pointer presses and clicks on controls are swallowed: the second tap can neither close the
+  // dialog it opened, nor press a tile on the next screen, nor buy / save twice through a closing dialog. Keyboard
+  // activation (click with detail 0), synthetic clicks and taps on the 3D world are never touched.
+  const SHIELD_MS = 360;
+  const SHIELD_SEL = 'button, a[href], input, select, textarea, label, summary, [role=button], [role=option], [role=tab], [role=radio], [role=checkbox], [role=switch], [data-action], [data-act], .modal-backdrop, .modal-closing';
+  let shieldUntil = 0;
+  function shieldTaps(ms = SHIELD_MS) { shieldUntil = Math.max(shieldUntil, perfNow() + ms); }
+  const shieldGuard = (e) => {
+    if (!e.isTrusted || perfNow() >= shieldUntil) return;
+    if (e.type === 'click' && !(e.detail >= 1)) return;
+    const t = e.target instanceof Element ? e.target : null;
+    if (!t || !t.closest(SHIELD_SEL)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  for (const type of ['pointerdown', 'mousedown', 'click']) document.addEventListener(type, shieldGuard, true);
 
   /**
    * stagger(elements | parent, {delay, step, y, scale, duration, max, skipAnimated=true}) — one-shot entrance with the
@@ -403,10 +424,27 @@
     box.removeAttribute('role'); box.removeAttribute('aria-modal');
     bd.setAttribute('aria-hidden', 'true');
     bd.setAttribute('data-kid-exempt', '');
-    bd.inert = true;
+    // the box is inert (no focus, no clicks); the backdrop itself stays hit-testable so a tap during the fade lands
+    // on it (and does nothing) instead of falling through to the HUD / the row behind (an inert backdrop would not)
+    box.inert = true;
     bd.classList.add('is-out');
     closingModals.add(bd);
     bd.__outT = setTimeout(() => { bd.remove(); closingModals.delete(bd); }, MOTION.d2 + 40);
+  }
+
+  /** after a dialog closed: focus goes back to the control that opened it (unless a newer dialog took over) */
+  function restoreFocus(m, hadFocus) {
+    const opener = m.opener;
+    if (!opener) return;
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (a && a !== document.body && !hadFocus && !m.el.contains(a)) return; // the player already moved on
+      const top = modalStack[modalStack.length - 1];
+      if (top && !top.el.contains(opener)) return;
+      if (!opener.isConnected || opener.disabled || opener.closest('[inert], [hidden]')) return;
+      if (G.input?.touchUI && opener.matches('input, textarea, select, [contenteditable]')) return; // no surprise keyboard
+      try { opener.focus({ preventScroll: true }); } catch (e) { /* not focusable any more */ }
+    }, 0);
   }
 
   // ---------------------------------------------------------------- modal stack
@@ -470,7 +508,11 @@
           m.closed = true;
           const i = modalStack.indexOf(m);
           if (i >= 0) modalStack.splice(i, 1);
-          leaveModal(m, !!(how && how.instant));
+          const instant = !!(how && how.instant);
+          if (!instant) shieldTaps();
+          const hadFocus = box.contains(document.activeElement);
+          leaveModal(m, instant);
+          if (!instant) restoreFocus(m, hadFocus);
           if (opts.blocking !== false) unblock('modal:' + m.id);
           if (!modalStack.length) document.body.classList.remove('modal-open');
           try { opts.onClose?.(m); } catch (e) { G.log.error('UI', e); }
@@ -482,6 +524,10 @@
       else if (opts.body != null) m.setBody(opts.body);
       m.setActions(opts.actions);
       if (opts.closable !== false && opts.backdropClose !== false) backdrop.addEventListener('pointerdown', (e) => { if (e.target === backdrop) m.close(); });
+      // keyboard / switch users get their place back when the dialog closes
+      const opener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body && !root.contains(document.activeElement) ? document.activeElement : null;
+      m.opener = opener;
+      if (!replacing) shieldTaps();
       root.appendChild(backdrop);
       enterModal(m, origin, replacing);
       modalStack.push(m);
@@ -539,13 +585,14 @@
 
   // ---------------------------------------------------------------- reward popup (queued)
   const rewardQueue = [];
-  let rewardShowing = false;
+  let rewardShowing = false, rewardCur = null, rewardSeq = 0;
   /** rewardPopup({ eyebrow:'QUEST CLEAR', title, coin, exp, edu, items:{ITEM:qty}, titleName, note }) */
   function rewardPopup(r) { rewardQueue.push(r); if (!rewardShowing) nextReward(); }
   function nextReward() {
     const r = rewardQueue.shift();
-    if (!r) { rewardShowing = false; return; }
+    if (!r) { rewardShowing = false; rewardCur = null; return; }
     rewardShowing = true;
+    const seq = rewardSeq;
     const root = $('#reward-root');
     const items = [];
     const easy = easyOn();
@@ -575,13 +622,28 @@
       if (el.__closing) return;
       el.__closing = true;
       el.classList.add('out');
-      setTimeout(() => { el.remove(); unblock('reward'); nextReward(); }, reduced() ? 0 : MOTION.d2 + 20);
+      setTimeout(() => { el.remove(); if (seq !== rewardSeq) return; unblock('reward'); nextReward(); }, reduced() ? 0 : MOTION.d2 + 20);
       offEsc(); clearTimeout(auto);
     };
     el.querySelector('button').addEventListener('click', close);
     block('reward');
     const offEsc = onEscape(() => { close(); return true; }, 150);
     const auto = setTimeout(close, r.duration || (easy ? 8000 : 6000));
+    rewardCur = { el, offEsc, auto };
+  }
+
+  /**
+   * a session ended (logout / account switch): rewards still queued, the popup on screen, toasts held back by the
+   * intro and the toasts still showing all belong to the player who left — they are dropped, never shown to the next
+   */
+  function resetSession() {
+    rewardSeq++;
+    rewardQueue.length = 0;
+    if (rewardCur) { clearTimeout(rewardCur.auto); rewardCur.offEsc(); rewardCur.el.remove(); rewardCur = null; }
+    rewardShowing = false;
+    unblock('reward');
+    heldToasts.length = 0; heldSay.length = 0;
+    for (const t of Array.from($('#toast-root')?.children || [])) dismissToast(t, true);
   }
 
   // ---------------------------------------------------------------- popovers (emote/gesture/weather pickers)
@@ -965,6 +1027,7 @@
     bar, setBar, itemIcon, itemName, tabs,
     // motion system (§13.5)
     motion: MOTION, reducedMotion: reduced, tapOrigin, stagger, countUp, pulse, skeleton, dismissToast,
+    shieldTaps, resetSession,
   };
 
   // hydrate static template icons asap; start the bar / HUD motion observers once the template exists
