@@ -5,4 +5,4 @@ test-output/
 release/*.zip
 .omc/
 dist/
-.claude/agent-workflow/
+.claude/
