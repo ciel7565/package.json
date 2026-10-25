@@ -225,4 +225,22 @@ body.reduce-motion .fk-pic { animation: none; }
   .fk-say { font-size: 1.15rem; }
   .fk-btns .easy-big-btn { width: 100%; }
 }
+.fk-info { display: flex; flex-direction: column; align-items: center; gap: .85rem; min-width: 0; }
+/* phones held sideways (≤ 520 px high): the card turns sideways too — picture and words on the left, the buttons
+   (in the dialog footer) on the right, the head across the top — so the whole card fits with nothing to scroll.
+   Keyed on .farm-kid, not .modal: the closing box (.modal-closing) keeps this layout through its exit animation. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .modal.farm-kid { width: min(46rem, 100%); }
+  .farm-kid:is(.modal, .modal-closing) { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); }
+  .farm-kid .modal-head { grid-column: 1 / -1; }
+  .farm-kid .modal-body.fk-body { flex-direction: row; justify-content: center; gap: 1.1rem; padding: .7rem .4rem .9rem 1.1rem; }
+  .farm-kid .modal-foot { flex-direction: column; justify-content: center; border-top: 0; padding: .7rem 1.1rem .9rem .4rem; overflow-y: auto; }
+  .fk-ring { width: 6.4rem; height: 6.4rem; padding: .45rem; }
+  .fk-pic { font-size: 3.2rem; }
+  .fk-info { gap: .5rem; }
+  .fk-step { width: 2.6rem; height: 2.6rem; font-size: 1.5rem; }
+  .fk-say { font-size: 1.12rem; }
+  .fk-btns { flex-direction: column; flex-wrap: nowrap; width: auto; }
+  .fk-btns .easy-big-btn { min-width: 10.5rem; }
+}
 .ffx-float.kid .ffx-float-in { font-size: 1.05rem; padding: .3rem .8rem; border-color: rgba(255, 255, 255, .5); }

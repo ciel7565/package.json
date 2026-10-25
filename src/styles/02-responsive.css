@@ -58,6 +58,23 @@ body.is-touch .chat-panel { bottom: 11rem; width: 17rem; }
 body.is-touch .chat-panel .chat-log { height: 5rem; }
 body.is-touch .bottom-bar { bottom: .5rem; }
 
+/* touch targets in normal mode (CONTRACT §12.0: ≥ 40 px = --tap; easy mode has its own 56 px rules). The rem-sized
+   desktop controls shrink with the phone root font (13 px) to 18–31 px, so on touch screens the shared controls grow
+   to one tap: buttons, tabs, segments, chip buttons, fields, checkbox rows, sliders, and the small ✕ / icon buttons of
+   dialogs, popovers and the title. (HUD panel icons keep their own layout.) */
+body.is-touch:not(.easy) :is(.btn, .tab, .seg button, button.chip, .chip[role=button], .input, .check,
+  .field input:not([type=checkbox]):not([type=radio]), .field select) { min-height: var(--tap); }
+/* sliders: a one-tap-high box, the drawn track stays thin (the box's padding is not painted) */
+body.is-touch:not(.easy) input[type=range] { min-height: var(--tap); padding-block: calc((var(--tap) - 8px) / 2); background-clip: content-box; box-shadow: none; }
+body.is-touch:not(.easy) :is(#modal-root, #popover-root, .title-screen) .icon-btn { min-width: var(--tap); min-height: var(--tap); }
+body.is-touch:not(.easy) :is(.check, label) input:is([type=checkbox], [type=radio]) { width: 1.4rem; height: 1.4rem; }
+@media (max-width: 560px) {
+  /* phones: one row of one-tap-high tabs that scrolls sideways (G.ui.tabs keeps the active one in view) */
+  body.is-touch:not(.easy) .tabs { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  body.is-touch:not(.easy) .tabs::-webkit-scrollbar { display: none; }
+  body.is-touch:not(.easy) .tabs > .tab { flex: none; }
+}
+
 @media (max-width: 820px), (max-height: 520px) {
   :root { --gap: 8px; }
   html { font-size: calc(13px * var(--ui-scale)); }
@@ -82,7 +99,7 @@ body.is-touch .bottom-bar { bottom: .5rem; }
   .chat-panel { width: 14rem; }
   .zone-label b { font-size: 1.4rem; }
   .hud-top-center { width: 60vw; top: 4.4rem; }
-  .modal-backdrop { padding: .5rem; }
+  .modal-backdrop { --bd-pad: .5rem; }
   .modal, .modal-closing { max-height: 94vh; border-radius: 16px; }
   .modal-head { padding: .75rem .85rem .55rem; }
   .modal-body { padding: .8rem .85rem; }
@@ -122,7 +139,7 @@ body.is-touch .bottom-bar { bottom: .5rem; }
 body.modal-open .toast-root { top: max(.55rem, env(safe-area-inset-top)) !important; }
 body.modal-open .toast-root .toast:not(:last-child):not(.out) { display: none; }
 body.modal-open .toast-root .toast.out:not(:last-child) { visibility: hidden; }
-body.modal-open .modal-backdrop { padding-top: 3.6rem; }
+body.modal-open .modal-backdrop { padding-top: max(3.6rem, calc(env(safe-area-inset-top, 0px) + 3.1rem)); }
 @media (max-width: 820px), (max-height: 520px) {
   body.modal-open .modal { max-height: min(94vh, 100%); }
 }

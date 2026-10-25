@@ -180,3 +180,18 @@ INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (1, UNIX_TI
 -- (they only feed the 30-second repeat-spam check). Re-running this file later only touches rows older than v2.
 UPDATE chat_messages SET text_key = '' WHERE text_key <> '' AND created_at < COALESCE((SELECT applied_at FROM schema_version WHERE version = 2), 9007199254740991);
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (2, UNIX_TIMESTAMP() * 1000, 'chat text_key from masked text');
+
+-- v3 (moderation reaches players who are online): a hidden message or a banned sender is "taken back" from every
+-- open game, not only filtered out of new chat/list.php results. Each row retracts one message (hide, 3 reports) or
+-- every message of one account (ban); chat/list.php hands them out after the client's retraction cursor (rafter).
+CREATE TABLE IF NOT EXISTS chat_retractions (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  message_id BIGINT UNSIGNED NULL,
+  user_id    BIGINT UNSIGNED NULL,
+  created_at BIGINT NOT NULL,
+  KEY ix_retractions_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- v3 also: a report without a message id used to keep the text the REPORTER typed as message_text, which admin.php
+-- shows as the target's words; it moves into the memo, marked as unverified (MySQL assigns left to right: memo first)
+UPDATE chat_reports SET memo = CONCAT('신고자가 적은 내용(확인 안 됨): “', message_text, '”', IF(memo <> '', CONCAT(' · ', memo), '')), message_text = '' WHERE message_id IS NULL AND message_text <> '';
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (3, UNIX_TIMESTAMP() * 1000, 'chat retractions');

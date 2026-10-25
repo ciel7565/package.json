@@ -69,7 +69,8 @@ final class Api
             }
             $ctx->user = Auth::current();
             if (!empty($opt['auth']) || !empty($opt['admin'])) {
-                if (!$ctx->user) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.');
+                // data.why when this request found the session invalid ('epoch' | 'banned' | 'deleted' | 'other account')
+                if (!$ctx->user) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.', Auth::$lostWhy !== null ? ['why' => Auth::$lostWhy] : null);
             }
             if (!empty($opt['admin']) && !$ctx->isAdmin()) {
                 Audit::log('admin_denied', $ctx->uid(), ['path' => basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''))], 'warn');
@@ -129,6 +130,8 @@ final class Auth
 {
     private static ?array $cached = null;
     private static bool $loaded = false;
+    /** why current() just ended this request's session (null: it was fine, or there was none) */
+    public static ?string $lostWhy = null;
 
     /** the logged-in user, re-validated against the DB on every request (ban, epoch, role changes) */
     public static function current(): ?array
@@ -138,15 +141,16 @@ final class Auth
         $uid = Session::userId();
         if ($uid <= 0) return null;
         $u = Users::byId($uid);
-        if (!$u || $u['status'] !== 'active' || (int) $u['session_epoch'] !== Session::epoch()) {
-            Log::info('AUTH', 'session invalidated', ['uid' => $uid, 'why' => !$u ? 'deleted' : ($u['status'] !== 'active' ? 'banned' : 'epoch')]);
+        if (!$u || $u['status'] !== 'active' || (int) $u['session_epoch'] !== Session::epoch() || !Session::ownsAccount($u)) {
+            self::$lostWhy = !$u ? 'deleted' : ($u['status'] !== 'active' ? 'banned' : ((int) $u['session_epoch'] !== Session::epoch() ? 'epoch' : 'other account'));
+            Log::info('AUTH', 'session invalidated', ['uid' => $uid, 'why' => self::$lostWhy]);
             Session::logout();
             return self::$cached = null;
         }
         return self::$cached = $u;
     }
 
-    public static function forget(): void { self::$cached = null; self::$loaded = false; }
+    public static function forget(): void { self::$cached = null; self::$loaded = false; self::$lostWhy = null; }
 
     /**
      * The one login path (api/auth/login.php and admin.php): throttling with exponential lockout, constant-time

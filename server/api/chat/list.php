@@ -10,7 +10,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, ChatFilter, Config, Ctx, Db, Presence, Session};
+use Tfm\{Api, ApiException, ChatFilter, Config, Ctx, Db, Presence, Retractions, Session};
 
 Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
     Session::close();
@@ -51,5 +51,9 @@ Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
             'createdAt' => (int) $r['created_at'],
         ];
     }
-    return ['messages' => $out, 'online' => max(1, Presence::onlineCount($now)), 'lastId' => $last];
+    // moderation since the client's last poll (rafter = its retraction cursor): lines it may already show are taken back
+    $rafter = $_GET['rafter'] ?? null;
+    $gone = Retractions::since($after > 0 && is_string($rafter) && preg_match('/^\d{1,18}$/', $rafter) ? (int) $rafter : null);
+    return ['messages' => $out, 'online' => max(1, Presence::onlineCount($now)), 'lastId' => $last,
+        'retracted' => ['messages' => $gone['messages'], 'users' => $gone['users']], 'retractId' => $gone['retractId']];
 });

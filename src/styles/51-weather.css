@@ -10,7 +10,13 @@
 .weather-btn[data-phase="night"] .weather-now #weather-icon[data-wx="cloudy"] { color: #c6cfe6; }
 .weather-now b { font-variant-numeric: tabular-nums; }
 
-.popover.wx-popover { width: 22rem; padding: .85rem .9rem .75rem; }
+.popover.wx-popover {
+  width: 22rem; padding: .85rem .9rem .75rem; overflow-y: auto; overscroll-behavior: contain;
+  /* both cards (the kid one too): never taller than the room 04-ui's placement leaves (8 px or the notch / home-indicator
+     inset at each end), so on a short landscape phone or with large text the card scrolls instead of running off screen */
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - max(8px, env(safe-area-inset-top, 0px)) - max(8px, env(safe-area-inset-bottom, 0px)));
+}
 .wx-pop { display: flex; flex-direction: column; }
 
 .wx-now {
@@ -99,7 +105,7 @@ body.easy #bottom-bar #easy-wx-btn { order: 4; } /* inserted before 🔊 (also o
   width: min(25rem, calc(100vw - 1rem)); padding: .8rem; border-radius: 26px;
   background: linear-gradient(180deg, rgba(23, 40, 33, .96), rgba(13, 24, 19, .97));
   border: 2px solid rgba(255, 255, 255, .22); box-shadow: 0 18px 44px rgba(0, 0, 0, .5);
-  pointer-events: auto; max-height: calc(100vh - 1rem); overflow-y: auto; overscroll-behavior: contain;
+  pointer-events: auto;
 }
 .wxk { position: relative; display: flex; flex-direction: column; gap: .55rem; }
 .wxk-x {
@@ -202,8 +208,25 @@ body.reduce-motion .wxk-fx, body.reduce-motion .wxk-big { animation: none !impor
   .wxk-tile .wxk-emo { font-size: 1.7rem; }
   .wxk-picks, .wxk-times { gap: .3rem; }
 }
+/* very narrow phones (< 360 px wide): five tiles in one row would be under the 56 px kid tap size, so 3 + 2, centred
+   (the same fallback as the diary moods; .3rem = the gap above) */
+@media (max-width: 359px) {
+  .wxk-picks { display: flex; flex-wrap: wrap; justify-content: center; }
+  .wxk-tile { flex: 0 0 calc((100% - 2 * .3rem) / 3); }
+}
 @media (max-height: 560px) {
-  .popover.wxk-popover { width: min(34rem, calc(100vw - 1rem)); }
   .wxk-scene { width: 5rem; height: 5rem; }
   .wxk-big { font-size: 3rem; }
+}
+/* short and wide (a phone on its side): the picture and its sentence on the left, the choices on the right, so every
+   button is on the screen without scrolling. The base .popover max-width (26rem) would squeeze the two columns. */
+@media (max-height: 560px) and (min-width: 540px) {
+  .popover.wxk-popover { width: min(40rem, calc(100vw - 1rem)); max-width: calc(100vw - 1rem); }
+  .wxk { display: grid; grid-template-columns: 10rem minmax(0, 1fr); align-items: start; gap: .45rem .8rem; }
+  .wxk-head { grid-row: 1 / span 5; flex-direction: column; align-items: flex-start; gap: .5rem; padding-right: 0; }
+  .wxk > :not(.wxk-head):not(.wxk-x) { grid-column: 2; }
+  .wxk-head + .wxk-title { min-height: calc(var(--tap, 56px) - .4rem); margin-top: 0; padding-right: var(--tap, 56px); } /* beside the ✖ */
+  .wxk-tile { min-height: var(--tap, 56px); }
+  .wxk-tile .wxk-emo { font-size: 1.6rem; }
+  .wxk-auto { justify-self: center; }
 }

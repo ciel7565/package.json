@@ -302,3 +302,27 @@ body.reduce-motion .jk-ring.done, body.reduce-motion .jk-care-btn.rec, body.redu
   .jk-care-ico { font-size: 2.3rem; }
   .jk-btns .easy-big-btn { width: 100%; }
 }
+.jk-info { display: flex; flex-direction: column; align-items: center; gap: .8rem; min-width: 0; }
+/* phones held sideways (≤ 520 px high): the card turns sideways too — jar and words on the left, the buttons (in the
+   dialog footer) on the right, the head across the top — so the whole card fits with nothing to scroll.
+   Keyed on .jar-kid, not .modal: the closing box (.modal-closing) keeps this layout through its exit animation. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .modal.jar-kid { width: min(46rem, 100%); }
+  .jar-kid:is(.modal, .modal-closing) { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); }
+  .jar-kid .modal-head { grid-column: 1 / -1; }
+  .jar-kid .modal-body.jk-body { flex-direction: row; justify-content: center; gap: 1.1rem; padding: .6rem .4rem .75rem 1.1rem; }
+  .jar-kid .modal-foot { flex-direction: column; justify-content: center; border-top: 0; padding: .6rem 1.1rem .75rem .4rem; overflow-y: auto; }
+  .jk-ring { width: 6.6rem; height: 6.6rem; padding: .4rem; }
+  .jk-info { gap: .4rem; }
+  .jk-moon { width: 2.2rem; height: 2.2rem; font-size: 1.3rem; }
+  .jk-say { font-size: 1.12rem; }
+  .jk-reward .emoji { font-size: 1.5rem; }
+  .jk-care-btn { min-height: 4.6rem; padding: .35rem .3rem; }
+  .jk-care-ico { font-size: 2rem; }
+  .jk-btns { flex-direction: column; flex-wrap: nowrap; width: auto; }
+  .jk-btns .easy-big-btn { min-width: 10.5rem; }
+  /* the care pictures stack down the right side as one-row buttons */
+  .jk-btns .jk-care { grid-template-columns: minmax(0, 1fr); gap: .5rem; width: 11.5rem; }
+  .jk-btns .jk-care-btn { flex-direction: row; justify-content: flex-start; gap: .55rem; min-height: var(--tap, 56px); padding: .3rem .9rem; border-radius: 18px; }
+  .jk-btns .jk-care-ico { font-size: 1.9rem; }
+}

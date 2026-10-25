@@ -691,9 +691,11 @@
         KK.vars(G.ui.h('div', { class: 'kitem-type' }, G.ui.h('span', { class: 'emoji', 'aria-hidden': 'true' }, kt.emoji), kt.label), { '--tile': kt.color }),
         G.ui.h('p', { class: 'kitem-desc' }, desc),
         it.type === 'fermented' ? G.ui.h('p', { class: 'kitem-note' }, '게임 속 체험이에요.') : null,
-        note ? G.ui.h('p', { class: 'kitem-hint' }, note) : null,
-        btns);
+        note ? G.ui.h('p', { class: 'kitem-hint' }, note) : null);
       const m = G.ui.modal.open({ id: 'inv-item', title: it.name, icon: it.icon || '🎒', size: 'sm', className: 'kk-card-modal', say: `${it.name}. ${fmt(qty)}개 있어요. ${desc}`, body, actions: [] });
+      // the buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
+      // sideways) they stay in view instead of sliding below the screen edge
+      m.foot.appendChild(btns);
       m._itemId = id;
       m._count = count;
       setTimeout(() => { if (!m.closed) btns.querySelector('button')?.focus({ preventScroll: true }); }, 60);

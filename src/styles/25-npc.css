@@ -58,7 +58,11 @@ body.dialogue-open .dlg-shade { opacity: 1; }
 body.dialogue-open #hud { opacity: .45; }
 body.dialogue-open #hud, body.dialogue-open #hud * { pointer-events: none !important; }
 body.dialogue-open #interact-prompt { display: none !important; }
-body.dialogue-open #labels-layer .nametag.me { visibility: hidden; }
+/* world labels (옹이 tag + bubble, other NPCs, jars, plots, visitors) are not part of the talk: they fade out with the
+   HUD dim and stay hidden while the box is up — under the see-through HUD they showed through its tiles, and they must
+   not be tappable under the box (the speaker's name is in the box; the layer fades back in on its base .35s, 66-fx.css) */
+body.dialogue-open #labels-layer { opacity: 0; visibility: hidden; transition: opacity .35s ease, visibility 0s .35s; }
+body.dialogue-open #labels-layer * { pointer-events: none !important; }
 
 /* ---------------------------------------------------------------- dialogue box */
 .dlg {

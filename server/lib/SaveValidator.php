@@ -7,7 +7,7 @@
  * have produced in the elapsed *server* time:
  *
  *   1. shape & ranges           numbers finite, ids well-formed, quantities within limits
- *   2. identity                 profile.id / profile.role must match the account (immutable)
+ *   2. identity                 profile.id must match the account (immutable); profile.role is set to the account's
  *   3. farming timing           growth/harvests cannot outpace crop growthTime × harvestSpeedTolerance
  *   4. fermentation timing      progress/claims cannot outpace recipe baseDuration (max speed, tolerance)
  *   4b. movement / play time    Δstats.distance ≤ move_max_speed × elapsed (+ slack): legit running at RUN 18 m/s
@@ -110,8 +110,11 @@ final class SaveValidator
         $prof = self::o(self::p($n, 'profile'));
         $pid = self::p($prof, 'id');
         if (!(is_string($pid) || is_int($pid)) || (string) $pid !== (string) $user['id']) $this->violate('PROFILE_ID');
+        // the role is the account's (player/save.php stores it so): a tab that missed a role change (admin.php 관리자
+        // 지정 / 해제) is not refused — refusing would bring its stored copy back with the same old role, save after save
         $role = self::s(self::p($prof, 'role'));
-        if ($role !== ($user['role'] === 'admin' ? 'admin' : 'user')) $this->violate('PROFILE_ROLE', ['sent' => mb_substr($role, 0, 16)]);
+        $want = $user['role'] === 'admin' ? 'admin' : 'user';
+        if ($role !== $want) { if ($prof !== null) $prof->role = $want; $this->notes[] = 'role'; }
 
         // ---------------------------------------------------------- progress reset (설정 → 진행 초기화)
         if ($p !== null && $this->looksLikeReset($n, $p)) {

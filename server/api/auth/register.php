@@ -3,6 +3,8 @@
  * POST api/auth/register.php  {email, nickname, password, password_confirm, agree, remember?}
  * → {user:{id,email,nickname,role}}  (logged in; new session id + CSRF token)
  * Errors: EMAIL_INVALID / EMAIL_TAKEN / NICKNAME_INVALID / NICKNAME_TAKEN / PASSWORD_WEAK / PASSWORD_MISMATCH / TERMS_REQUIRED
+ *         429 RATE_LIMITED (this browser's tries) / 429 REGISTER_IP_LIMIT (sign-ups from this network address,
+ *         rate_limits.register_ip) — both with data.retryAfter and a Retry-After header
  */
 declare(strict_types=1);
 
@@ -26,7 +28,12 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], functio
     if ($e = Users::validPassword($pw, $email, $nick)) throw new ApiException(400, 'PASSWORD_WEAK', $e);
     if (!hash_equals($pw, $pw2)) throw new ApiException(400, 'PASSWORD_MISMATCH', '비밀번호가 일치하지 않아요.');
     if (($b['agree'] ?? false) !== true) throw new ApiException(400, 'TERMS_REQUIRED', '이용약관 및 개인정보 처리 안내에 동의해 주세요.');
-    RateLimit::hit('register_ip', 'ip:' . Sec::hashId(Http::clientIp()));
+    try { RateLimit::hit('register_ip', 'ip:' . Sec::hashId(Http::clientIp())); }
+    catch (ApiException $e) {
+        // its own code: the client can say the limit is this network's (a school or home address), not this browser's
+        if ($e->errorCode !== 'RATE_LIMITED') throw $e;
+        throw new ApiException(429, 'REGISTER_IP_LIMIT', '이 인터넷 주소에서 가입이 너무 많았어요. 잠시 후 다시 시도해 주세요.', $e->data, $e->headers);
+    }
     if (Users::byEmail($email)) throw new ApiException(409, 'EMAIL_TAKEN', '이미 가입된 이메일이에요. 로그인해 주세요.');
     if (Users::byNickname($nick)) throw new ApiException(409, 'NICKNAME_TAKEN', '이미 사용 중인 닉네임이에요.');
     try {

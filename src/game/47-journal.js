@@ -917,11 +917,13 @@
       const all = this.list().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       const btn = ctx.m.el.querySelector('.kd-switch-btn:last-child span:last-child');
       if (btn) btn.textContent = `일기장 ${all.length}`;
+      ctx.m.setActions([]);
       if (!all.length) {
         book.appendChild(G.kidKit ? G.kidKit.empty('📔', '아직 일기가 없어요.', '오늘 한 일을 그림일기로 남겨 봐요!') : h('p', null, '아직 일기가 없어요.'));
         const w = h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes kd-write-first' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📝'), h('span', null, '일기 쓰기'));
         w.addEventListener('click', () => { ctx.m.close(); this.open(); });
-        book.appendChild(w);
+        // in the footer, outside the scrolling page: on a phone held sideways the button stays on screen
+        ctx.m.foot.appendChild(w);
         return;
       }
       const grid = h('div', { class: 'kd-cards', role: 'list' });

@@ -613,6 +613,7 @@
     { id: 'praise', emoji: '🙌', label: '칭찬', color: '#ff7eb6', say: '칭찬하는 말이에요', reply: 'praise' },
     { id: 'play', emoji: '🌱', label: '놀이', color: '#55d187', say: '같이 노는 말이에요', reply: 'play' },
   ];
+  const KID_QUIET = '지금은 말하기를 잠깐 쉬어요.'; // a grown-up paused this account's chat (server MUTED)
   const KID_PHRASES = [
     { id: 'hi', cat: 'hello', emoji: '👋', text: '안녕하세요!' },
     { id: 'nice', cat: 'hello', emoji: '😊', text: '반가워요!' },
@@ -803,7 +804,7 @@
     _pool: [], _target: 0, _vroot: null, _lineT: 12, _cycleT: 200, _joinT: -1, _recentLines: [], _replyT: 0,
     _sessionKey: null, _loggedOut: true, _mode: 'local', _srv: null, _timers: new Set(),
     _lastEmote: -1e9, _emoteSeq: 0, _emoteState: null,
-    _sendLog: [], _minuteLog: [], _recentKeys: [], _muteUntil: 0, _typingNames: new Map(), _suggest: null, _gatherAt: -1e9, _mentionAt: -1e9,
+    _sendLog: [], _minuteLog: [], _recentKeys: [], _muteUntil: 0, _srvMuteUntil: 0, _typingNames: new Map(), _suggest: null, _gatherAt: -1e9, _mentionAt: -1e9,
     stats: { plans: 0, planFails: 0, arrivals: 0, stuck: 0, lines: 0, replies: 0, joins: 0, leaves: 0 },
 
     get online() { return 1 + this.others.size; },
@@ -827,6 +828,8 @@
     },
 
     onStateLoaded(state) {
+      // older versions kept a device log of who reported which words (nothing read it): it goes on the next load
+      try { localStorage.removeItem(LS_REPORTS); } catch (e) { /* storage blocked */ }
       const mode = G.net?.mode === 'server' ? 'server' : 'local';
       const key = `${state?.profile?.id || 'guest'}|${mode}`;
       const fresh = this._loggedOut || key !== this._sessionKey;
@@ -860,6 +863,7 @@
       this.closeKidChat();
       this._kidListenUntil = 0;
       this._kidCat = null;
+      this._lastText = ''; // a shared device: none of this player's words stay behind for the next child
       this._loggedOut = true;
       this._stopServer();
       this._clearRemotes();
@@ -1197,10 +1201,15 @@
     _markRead() {
       this._unread = 0;
       this._unreadMention = false;
+      for (const m of this.messages) m.unread = false;
+      this._paintUnread();
+    },
+    /** the unread counter on the chat header and the HUD chat buttons (gold when a line names me) */
+    _paintUnread() {
       const C = this._chat;
-      if (C) { C.unread.hidden = true; C.unread.classList.remove('mention'); }
-      G.ui.setBadge('chat', 0);
-      for (const b of document.querySelectorAll('#hud-left-menu [data-action="chat"] .badge, #bottom-bar [data-action="chat"] .badge')) b.classList.remove('mention');
+      if (C) { C.unread.hidden = !this._unread; C.unread.textContent = this._unread > 99 ? '99+' : String(this._unread); C.unread.classList.toggle('mention', !!this._unreadMention); }
+      G.ui.setBadge('chat', this._unread);
+      for (const b of document.querySelectorAll('#hud-left-menu [data-action="chat"] .badge, #bottom-bar [data-action="chat"] .badge')) b.classList.toggle('mention', !!this._unreadMention);
     },
 
     _resetChat() {
@@ -1208,7 +1217,7 @@
       if (this._chat) { this._chat.log.replaceChildren(); this._chat.input.value = ''; this._updateCount(); this._hideSuggest(); }
       this._typingNames.clear();
       this._renderTyping();
-      this._recentKeys.length = 0; this._sendLog.length = 0; this._minuteLog.length = 0; this._muteUntil = 0;
+      this._recentKeys.length = 0; this._sendLog.length = 0; this._minuteLog.length = 0; this._muteUntil = 0; this._srvMuteUntil = 0; this._lastText = '';
       this._markRead();
       this._stick = true;
     },
@@ -1268,11 +1277,9 @@
         }
         if (visibleHere && !this._chatShown()) {
           this._unread++;
+          msg.unread = true;
           if (msg.mention) this._unreadMention = true;
-          const C = this._chat;
-          if (C) { C.unread.hidden = false; C.unread.textContent = this._unread > 99 ? '99+' : String(this._unread); C.unread.classList.toggle('mention', !!this._unreadMention); }
-          G.ui.setBadge('chat', this._unread);
-          if (this._unreadMention) for (const b of document.querySelectorAll('#hud-left-menu [data-action="chat"] .badge, #bottom-bar [data-action="chat"] .badge')) b.classList.add('mention');
+          this._paintUnread();
         }
       }
       return msg;
@@ -1384,6 +1391,9 @@
       const kid = kidOn();
       const warn = (adult, child, emoji) => { G.ui.toast(kid ? child : adult, { type: 'warn', emoji, say: kid ? child : undefined }); };
       if (this._guestReadOnly()) { warn('게스트는 채팅을 보낼 수 없어요. 로그인 후 이용해 주세요.', '로그인하면 친구와 이야기할 수 있어요.', '🔒'); return false; }
+      // a grown-up paused this account's chat (server MUTED, data.until): nothing goes out, nothing is shown or spoken
+      const quiet = this._srvMuteUntil - (Date.now() + (Number(G.time?.serverOffset) || 0));
+      if (quiet > 0) { const m = Math.ceil(quiet / 60000); warn(`채팅이 잠시 제한되었어요. (${m >= 120 ? `${Math.ceil(m / 60)}시간` : `${m}분`} 남음)`, KID_QUIET, '🤫'); return false; }
       // personal information never leaves the device (the server masks again): 🔒 + a friendly tip from 옹이
       const pii = maskPIIInfo(t);
       if (pii.hits) {
@@ -1827,11 +1837,12 @@
         if (!st.raf) st.raf = requestAnimationFrame(renderRecent);
         if (msg && !msg.self) this._markRead();
       });
+      st.offGone = G.bus.on('chat:retracted', () => { if (!st.raf) st.raf = requestAnimationFrame(renderRecent); }); // moderation took a line back
       const m = G.ui.modal.open({
         id: 'kid-chat', title: '친구에게 말해요', icon: '💬', size: 'lg', className: 'skc-modal easy-pick-modal', autofocus: false,
         say: '친구에게 무슨 말을 할까요? 그림을 눌러요.', body, actions: [],
         onClose: () => {
-          try { st.off?.(); } catch (e) { /* ignore */ }
+          try { st.off?.(); st.offGone?.(); } catch (e) { /* ignore */ }
           cancelAnimationFrame(st.raf);
           if (this._kidUi === st) this._kidUi = null;
           G.ui.setActive('kid-chat', showing());
@@ -2119,13 +2130,8 @@
           return false;
         }
       } else {
-        try {
-          const list = JSON.parse(lsGet(LS_REPORTS, '[]')) || [];
-          list.push({ ...payload, reporter: G.state?.profile?.nickname || '' });
-          while (list.length > 50) list.shift();
-          lsSet(LS_REPORTS, JSON.stringify(list));
-        } catch (e) { /* storage blocked */ }
-        if (!opts.quiet) G.ui.toast('신고 내용이 기록되었어요. (로컬 모드에서는 이 기기에만 저장돼요)', { type: 'success', emoji: '🚨' });
+        // local mode has nobody to send it to: no log of who reported which words stays on a shared device
+        if (!opts.quiet) G.ui.toast('신고했어요. 로컬 모드에서는 운영자에게 보내지 않아요.', { type: 'success', emoji: '🚨' });
       }
       G.log.info('UI', `report ${info.name} (${reason})`);
       return true;
@@ -2254,6 +2260,7 @@
       });
       G.bus.on('easy:changed', () => this._syncKidChat());
       G.bus.on('engine:quality', () => { /* visitors keep their meshes; shadows follow the renderer */ });
+      G.bus.on('state:saved', () => this._sessionBack()); // a save went through: the login works again (70-app re-login)
     },
 
     _updateOnline() {
@@ -3243,7 +3250,7 @@
     _startServer() {
       const now = performance.now();
       // network timers run on the wall clock (game dt is capped and slows down on weak devices)
-      this._srv = { nextPres: now + 300, nextChat: now + 150, presBusy: false, chatBusy: false, fails: 0, lastId: 0, first: true, presFirst: true, online: 0, appKey: '', appT: 0, pending: [], sentIds: new Set(), missing: new Map(), warned: false, authLost: false };
+      this._srv = { nextPres: now + 300, nextChat: now + 150, presBusy: false, chatBusy: false, fails: 0, lastId: 0, rafter: 0, first: true, presFirst: true, online: 0, appKey: '', appT: 0, pending: [], sentIds: new Set(), missing: new Map(), warned: false, authLost: false };
       G.log.info('NETWORK', 'social: server presence & chat polling started');
     },
     _stopServer() { this._srv = null; },
@@ -3269,15 +3276,28 @@
       const S = this._srv;
       if (!S || S.authLost || !(Number(e?.status) === 401 || e?.code === 'AUTH_REQUIRED')) return false;
       S.authLost = true;
+      // presence stops until the session is back: nobody's position comes in, so their avatars go (no frozen crowd)
+      this._clearRemotes();
+      this._updateOnline();
       G.bus.emit('save:auth-lost', { source: 'social' });
       return true;
     },
-    _netOk() {
+    /** a request worked; authed: it needed the login (presence, send) — chat/list.php also answers guests, so it
+     *  says nothing about the session */
+    _netOk(authed) {
       const S = this._srv;
       if (!S) return;
-      S.authLost = false;
+      if (authed) S.authLost = false;
       if (S.warned) { S.warned = false; this.system('✅ 서버에 다시 연결되었어요.'); }
       S.fails = 0;
+    },
+    /** the session is back (a save needs the login too): presence starts again, the crowd it brings back is not
+     *  announced one by one */
+    _sessionBack() {
+      const S = this._srv;
+      if (!S?.authLost) return;
+      S.authLost = false;
+      S.presFirst = true;
     },
     _updateServer(dt) {
       const S = this._srv;
@@ -3292,7 +3312,8 @@
       // stopped after moving: tell the others soon, so their copy of me does not run on past where I stand
       if (S.wasMoving && mySpeed < 0.2 && !S.fails) S.nextPres = Math.min(S.nextPres, now + 250);
       S.wasMoving = mySpeed >= 0.2;
-      if (canWrite && now >= S.nextPres && !S.presBusy) { S.nextPres = now + this._backoff(fast ? 1 : 2) * 1000; this._presence(); }
+      // presence needs the login: while the session is gone (S.authLost) it waits for a save that works (state:saved) or a new login
+      if (canWrite && !S.authLost && now >= S.nextPres && !S.presBusy) { S.nextPres = now + this._backoff(fast ? 1 : 2) * 1000; this._presence(); }
       if (now >= S.nextChat && !S.chatBusy) { S.nextChat = now + this._backoff(3) * 1000; this._pollChat(); }
       this._updateRemotes(dt);
     },
@@ -3316,7 +3337,7 @@
         if (sendApp) { body.appearance = app; S.appKey = appKey; S.appT = 10; }
         const data = await G.net.request('presence/update.php', { body, timeout: 6000, quiet: true });
         if (this._srv !== S) return;
-        this._netOk();
+        this._netOk(true);
         this._applyPresence(data);
       } catch (e) { if (this._srv === S) this._netFail(e); }
       finally { S.presBusy = false; }
@@ -3324,6 +3345,7 @@
     _applyPresence(data) {
       const S = this._srv;
       if (!S) return;
+      if (Number.isSafeInteger(data?.mutedUntil)) this._srvMuteUntil = data.mutedUntil; // a grown-up's chat pause (0 = none)
       const raw = Array.isArray(data) ? data : Array.isArray(data?.players) ? data.players : [];
       const me = String(G.save?.profile?.id ?? '');
       const seen = new Set();
@@ -3502,7 +3524,8 @@
       S.chatBusy = true;
       try {
         const after = Number.isSafeInteger(S.lastId) && S.lastId >= 0 ? S.lastId : 0;
-        const data = await G.net.request(`chat/list.php?after=${encodeURIComponent(String(after))}`, { timeout: 6000, quiet: true });
+        // rafter: the moderation cursor — lines this game already shows that were hidden since then come back as retracted
+        const data = await G.net.request(`chat/list.php?after=${encodeURIComponent(String(after))}${after ? `&rafter=${encodeURIComponent(String(S.rafter))}` : ''}`, { timeout: 6000, quiet: true });
         if (this._srv !== S) return;
         this._netOk();
         const raw = Array.isArray(data) ? data : Array.isArray(data?.messages) ? data.messages : [];
@@ -3546,16 +3569,46 @@
           if (pushed && !S.first && !self && remote && !this._isBlocked(name)) {
             const hid = this._kidHidden(pushed);
             this._bubble(remote.bub, hid ? '✉️' : this._kidText(pushed), { emote: hid, say: this._kidSpeakText(pushed) });
+            remote.bub.msgId = pushed.id; // so a retraction can take the bubble back too
             G.sfx('chat', { volume: 0.6 });
           }
         }
         const lastId = Number(data?.lastId);
         if (Number.isSafeInteger(lastId) && lastId > S.lastId && lastId < S.lastId + 1e6) S.lastId = lastId; // skipped hidden rows
+        const gone = data?.retracted;
+        if (gone && typeof gone === 'object') this._retract(Array.isArray(gone.messages) ? gone.messages : [], Array.isArray(gone.users) ? gone.users : []);
+        const rid = Number(data?.retractId);
+        if (Number.isSafeInteger(rid) && rid >= 0) S.rafter = rid;
         S.first = false;
         const online = Number(data?.online);
         if (Number.isFinite(online) && online > 0) { S.online = Math.min(Math.floor(online), 99999); this._updateOnline(); }
       } catch (e) { if (this._srv === S) this._netFail(e); }
       finally { S.chatBusy = false; }
+    },
+    /** moderation reached this game (an admin hid a line, 3 reports, a banned sender): those lines leave the log */
+    _retract(mids, uids) {
+      const ids = new Set(mids.map((n) => `s${Number(n)}`));
+      const users = new Set(uids.map((u) => String(u)));
+      let n = 0, unread = 0;
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const m = this.messages[i];
+        if (!ids.has(m.id) && !(m.uid && m.kind !== 'system' && users.has(m.uid))) continue;
+        m._el?.remove();
+        this.messages.splice(i, 1);
+        n++;
+        if (m.unread) unread++;
+      }
+      if (unread) {
+        this._unread = Math.max(0, this._unread - unread);
+        this._unreadMention = this.messages.some((m) => m.unread && m.mention);
+        this._paintUnread();
+      }
+      for (const o of this.others.values()) {
+        if (o.kind === 'remote' && o.bub && !o.bub.bubble.hidden && (ids.has(o.bub.msgId) || users.has(o.uid))) this._hideBubble(o.bub);
+      }
+      // the 알림함 (62-engagement) and others drop what they kept of these lines — also ones that left the log already
+      if (ids.size || users.size) G.bus.emit('chat:retracted', { ids: [...ids], users: [...users] });
+      return n;
     },
     async _serverSend(text, channel, msg, onSent) {
       const S = this._srv;
@@ -3573,7 +3626,7 @@
           drop();
           if (S.sentIds.size > 200) S.sentIds = new Set([...S.sentIds].slice(-100));
         }
-        this._netOk();
+        this._netOk(true);
         msg?._el?.classList.remove('sending');
         onSent?.();
       } catch (e) {
@@ -3581,7 +3634,10 @@
         if (this._srv === S) this._authCheck(e);
         // the line stays in my log, but visibly not delivered (nobody else saw it)
         if (msg?._el) { msg._el.classList.remove('sending'); msg._el.classList.add('failed'); msg._el.appendChild(G.ui.h('span', { class: 'chat-failed' }, '⚠️ 안 보내졌어요')); }
+        if (e?.code === 'MUTED') this._srvMuteUntil = Number(e.data?.until) || 0; // the next taps stay quiet (sendChat)
         if (e?.code === 'RATE_LIMITED' || e?.status === 429) G.ui.toast('메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.', { type: 'warn' });
+        // a grown-up paused this account's chat (admin.php): a child hears a line made for a child
+        else if (e?.code === 'MUTED' && kidOn()) G.ui.toast(KID_QUIET, { type: 'warn', emoji: '🤫', say: KID_QUIET });
         else G.ui.toast(e?.message || '메시지를 보내지 못했어요.', { type: 'error' });
         this.system('⚠️ 마지막 메시지가 전송되지 않았어요.');
       }

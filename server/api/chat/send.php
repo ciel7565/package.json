@@ -23,7 +23,9 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_send'], function (
     $now = $c->now;
     if ((int) $u['muted_until'] > $now) {
         $min = (int) ceil(((int) $u['muted_until'] - $now) / 60000);
-        throw new ApiException(403, 'MUTED', "채팅이 잠시 제한되었어요. ({$min}분 남음)");
+        // a long mute reads in hours (a day is not "1440분"); the game gets the end time and keeps a child's taps quiet
+        $left = $min >= 120 ? (int) ceil($min / 60) . '시간' : "{$min}분";
+        throw new ApiException(403, 'MUTED', "채팅이 잠시 제한되었어요. ({$left} 남음)", ['until' => (int) $u['muted_until']]);
     }
     $masked = ChatFilter::mask(ChatFilter::maskPII($text, $piiHits));
     // the repeat-spam key is built from the MASKED text: the original (phone numbers, e-mails…) is never stored

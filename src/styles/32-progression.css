@@ -142,6 +142,7 @@ body.reduce-motion .levelup-fx .lu-rays { display: none; }
 .pf-title { padding: .36rem .8rem; border-radius: 999px; background: var(--bg-elev); border: 1px solid var(--line); font-size: .82rem; font-weight: 600; color: var(--text-dim); transition: background .15s, border-color .15s; }
 .pf-title:hover { background: var(--bg-elev-2); color: var(--text); }
 .pf-title.active { background: rgba(52,195,107,.18); border-color: rgba(52,195,107,.6); color: var(--green-l); }
+body.is-touch:not(.easy) .pf-title { min-height: var(--tap); } /* touch, normal mode: one tap (CONTRACT §12.0) */
 .pf-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .4rem; }
 .pf-stat { display: flex; flex-direction: column; gap: .1rem; padding: .5rem .65rem; border-radius: 11px; background: var(--bg-elev); border: 1px solid var(--line); }
 .pf-stat span { font-size: .7rem; color: var(--text-mute); }
@@ -311,7 +312,7 @@ body.reduce-motion .col-d-art.got::before, body.reduce-motion .toast.ach-toast .
 .kme-stat b { font-size: 1.32rem; font-weight: 900; font-variant-numeric: tabular-nums; }
 .kme-stat-lbl { font-size: .92rem; font-weight: 700; color: var(--text-dim); }
 .kme-titles { display: flex; flex-wrap: wrap; gap: .5rem; }
-.kme-tag { min-height: max(48px, 3rem); padding: .3rem 1rem; border-radius: 999px; background: rgba(255,255,255,.07); border: 2px solid var(--line-strong); color: var(--text); font-weight: 800; font-size: 1rem; touch-action: manipulation; }
+.kme-tag { min-height: max(var(--tap, 56px), 3rem); padding: .3rem 1rem; border-radius: 999px; background: rgba(255,255,255,.07); border: 2px solid var(--line-strong); color: var(--text); font-weight: 800; font-size: 1rem; touch-action: manipulation; }
 .kme-tag.active { background: linear-gradient(180deg, #6fe39a, var(--kid-green-d, #1f9e52)); border-color: #fff; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
 .kme-note { margin-top: .6rem; text-align: center; }
 

@@ -314,7 +314,10 @@ final class AdminOps
         if ($uid === (int) $actor['id']) throw new ApiException(409, 'SELF', '자기 자신은 정지할 수 없어요.');
         if ($ban && $u['role'] === 'admin') throw new ApiException(409, 'ADMIN_TARGET', '관리자는 먼저 권한을 해제한 뒤 정지하세요.');
         Users::update($uid, ['status' => $ban ? 'banned' : 'active'], true);
-        if ($ban) Presence::remove($uid);
+        if ($ban) {
+            Presence::remove($uid);
+            Retractions::add(null, $uid); // games online take every line of that account back
+        }
         Audit::log($ban ? 'user_banned' : 'user_unbanned', $uid, [], 'warn', (int) $actor['id']);
         return $ban ? "{$u['nickname']} 님을 이용 정지했어요." : "{$u['nickname']} 님의 정지를 풀었어요.";
     }
@@ -341,6 +344,7 @@ final class AdminOps
     {
         $n = Db::exec('UPDATE chat_messages SET hidden = ? WHERE id = ?', [$hide ? 1 : 0, $mid]);
         if (!$n) throw new ApiException(404, 'NOT_FOUND', '메시지를 찾을 수 없어요.');
+        if ($hide) Retractions::add($mid, null); // games that already show it take it back
         Audit::log($hide ? 'message_hidden' : 'message_unhidden', null, ['message' => $mid], 'info', (int) $actor['id']);
         return $hide ? '메시지를 숨겼어요.' : '메시지를 다시 보이게 했어요.';
     }
@@ -349,12 +353,19 @@ final class AdminOps
     public static function restoreBackup(array $actor, int $uid): string
     {
         $u = self::target($uid);
-        $r = Db::one('SELECT data, saved_at, backup_data, backup_saved_at FROM player_saves WHERE user_id = ?', [$uid]);
-        if (!$r || !$r['backup_data']) throw new ApiException(404, 'NO_BACKUP', '되돌릴 백업 저장본이 없어요.');
-        // explicit values: MySQL evaluates SET assignments left to right, so a column swap must not reference columns
-        Db::exec('UPDATE player_saves SET data = ?, backup_data = ?, saved_at = ?, backup_saved_at = ?, size_bytes = ?, revision = revision + 1, meta = ? WHERE user_id = ?', [
-            (string) $r['backup_data'], (string) $r['data'], Clock::ms(), (int) $r['saved_at'], strlen((string) $r['backup_data']), '{}', $uid,
-        ]);
+        $r = Db::tx(function () use ($uid) {
+            $r = Db::one('SELECT data, saved_at, backup_data, backup_saved_at, revision FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+            if (!$r || !$r['backup_data']) throw new ApiException(404, 'NO_BACKUP', '되돌릴 백업 저장본이 없어요.');
+            // the ledger starts over with the restored copy, stamped with the revision it is stored at: while the row is
+            // still that copy, a save from a tab with the overwritten progress hears so (player/save.php 409 data.restored)
+            $rev = (int) $r['revision'] + 1;
+            $meta = json_encode(['restoredRev' => $rev, 'restoredAt' => Clock::ms()]);
+            // explicit values: MySQL evaluates SET assignments left to right, so a column swap must not reference columns
+            Db::exec('UPDATE player_saves SET data = ?, backup_data = ?, saved_at = ?, backup_saved_at = ?, size_bytes = ?, revision = ?, meta = ? WHERE user_id = ?', [
+                (string) $r['backup_data'], (string) $r['data'], Clock::ms(), (int) $r['saved_at'], strlen((string) $r['backup_data']), $rev, $meta, $uid,
+            ]);
+            return $r;
+        });
         Users::update($uid, [], true); // sign the player out so the restored save is loaded fresh
         Audit::log('save_restored', $uid, ['backupFrom' => (int) $r['backup_saved_at']], 'warn', (int) $actor['id']);
         return "{$u['nickname']} 님의 저장 데이터를 직전 백업으로 되돌렸어요.";
@@ -370,6 +381,7 @@ final class AdminOps
             'login_attempts' => Db::exec('DELETE FROM login_attempts WHERE created_at < ?', [$now - (int) Config::get('retention.login_attempts_days', 30) * 86400000]),
             'audit_log' => Db::exec('DELETE FROM audit_log WHERE created_at < ?', [$now - (int) Config::get('retention.audit_days', 180) * 86400000]),
             'chat_messages' => Db::exec('DELETE FROM chat_messages WHERE created_at < ?', [$now - (int) Config::get('chat.retention_days', 30) * 86400000]),
+            'chat_retractions' => Db::exec('DELETE FROM chat_retractions WHERE created_at < ?', [$now - (int) Config::get('chat.retention_days', 30) * 86400000]),
             'log_files' => Log::cleanup(),
             'sessions' => is_dir(Config::dataDir() . '/sessions') ? Session::gcAnonymous(Config::dataDir() . '/sessions', (int) Config::get('session.idle_timeout', 7200)) : 0,
         ];

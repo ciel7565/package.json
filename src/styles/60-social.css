@@ -236,6 +236,7 @@ body.reduce-motion .chat-quick .cq-btn.hit .emoji, body.reduce-motion .chat-log 
 .soc-pk-tab .emoji { font-size: .95rem; line-height: 1; }
 .soc-pk-tab:hover:not(.active) { color: var(--text-dim); background: rgba(255, 255, 255, .06); }
 .soc-pk-tab.active { color: #fff; background: rgba(52, 195, 107, .38); }
+body.is-touch:not(.easy) .soc-pk-tab { min-height: var(--tap); } /* touch, normal mode: one tap (CONTRACT §12.0) */
 
 /* ================================================================ 쉬운 모드 (CONTRACT §12) */
 /* chat log as a kid card: no text box (kid chat), no tabs, bigger text, one big 말하기 button */
@@ -267,6 +268,7 @@ body.easy .nametag.visitor:hover, body.easy .nametag.remote:hover {
 }
 /* chat names open the kid user menu (🙈 안 볼래요 · 🚨 어른에게): a full --tap row instead of a 19 px word */
 body.easy .chat-log .chat-msg.visitor, body.easy .chat-log .chat-msg.remote, body.easy .chat-log .chat-msg.npc { min-height: var(--tap); display: flex; flex-wrap: wrap; align-items: center; column-gap: .3rem; }
+body.easy .chat-log .chat-msg.blocked { display: none; } /* 🙈 안 볼래요 hides them here too (same weight, later rule) */
 body.easy .chat-msg button.who { min-height: var(--tap); min-width: var(--tap); padding: 0 .45rem; margin-left: -.45rem; border-radius: 14px; touch-action: manipulation; }
 body.easy .chat-msg button.who:active { background: rgba(255, 255, 255, .08); }
 /* kid chat: another account's free text is replaced by a quiet placeholder (60-social _applyKidView) */
@@ -331,6 +333,15 @@ body.easy .soc-bubble.emote { font-size: 2.8rem; }
   .skc-cat .emoji { font-size: 1.6rem; }
   .skc-recent .skc-msg:nth-last-child(n+3) { display: none; }
   .skc-foot .skc-log { flex: 1; }
+}
+/* phones: the emoji row (a pre-reader's way to talk) sits right under the last lines, before the phrases */
+@media (max-height: 560px), (max-width: 560px) {
+  .skc-recent { order: -2; }
+  .skc-sub, .skc-emoji-row { order: -1; }
+}
+/* sideways: one line and no caption, so the picture tabs fit whole above the fold */
+@media (max-height: 560px) {
+  .skc-recent .skc-msg:nth-last-child(n+2), .skc-sub { display: none; }
 }
 body.reduce-motion .skc-msg { animation: none; }
 @media (prefers-reduced-motion: reduce) { .skc-msg { animation: none; } }

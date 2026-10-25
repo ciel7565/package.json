@@ -58,6 +58,7 @@
 .eng-tab:hover { background: var(--bg-elev); color: var(--text); }
 .eng-tab.active { background: rgba(52,195,107,.18); border-color: rgba(52,195,107,.5); color: var(--green-l); }
 .eng-tab-ico { font-size: 1.05rem; }
+body.is-touch:not(.easy) .eng-tab { min-height: var(--tap); } /* touch, normal mode: one tap (CONTRACT §12.0) */
 .eng-tab-badge { min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: .66rem; font-weight: 800; background: var(--red); color: #fff; }
 body.easy .eng-tab-badge:not(.gold) { background: #d6372a; }
 .eng-tab-badge.gold { background: linear-gradient(180deg, #ffd766, #e2aa22); color: #2b1d02; }
@@ -348,6 +349,7 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
   .eng-hero { padding: .55rem .65rem; gap: .6rem; }
   .eng-hero-ava { width: 3rem; height: 3rem; }
   .eng-tab { padding: .35rem .6rem; font-size: .8rem; }
+  .eng-hero-hi { white-space: normal; overflow-wrap: anywhere; } /* a long nickname + 좋은 저녁이에요 wraps, never "…" */
   .eng-cal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .eng-day { min-height: 7.6rem; }
   .eng-mis { grid-template-columns: 2.6rem minmax(0, 1fr); }
@@ -446,6 +448,28 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
 @media (max-width: 640px) {
   .eng-kcal { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 12px; }
   .eng-kday-gift { font-size: 1.7rem; }
+}
+/* phones held sideways (≤ 520 px high): the greeting card and the two rows of tabs filled the whole card and every
+   page (the stamp circles, 📅 도장 찍기 …) started below the screen edge. Sideways the greeting steps aside (the
+   voice line says it, the tab badges keep the counts) and the tabs become a rail on the left that stays put while
+   the page beside it scrolls, so each page starts at the top of the screen. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .modal.eng-modal.eng-kid { width: min(60rem, 100%); }
+  .eng-kid .modal-body.eng-body { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .9rem; align-items: start; padding-top: .6rem; }
+  .eng-kid .eng-hero { display: none; }
+  .eng-kid .eng-ktabs { position: sticky; top: 0; z-index: 1; grid-template-columns: repeat(2, 4.7rem); gap: 6px; margin: 0; padding: 0; }
+  .eng-kid .eng-ktab { min-height: var(--tap); padding: .15rem; gap: 0; border-radius: 14px; }
+  .eng-kid .eng-ktab .eng-tab-ico { font-size: 1.45rem; }
+  .eng-kid .eng-pane { min-width: 0; }
+  .eng-kid .eng-khead { margin: 0 0 .45rem; }
+  .eng-kid .eng-khead-emo { font-size: 2rem; }
+  .eng-kid .eng-kcal { padding: .55rem .7rem .85rem; gap: 8px; }
+  .eng-kid .eng-kclaim-row { flex-direction: row; justify-content: center; margin-top: .55rem; }
+}
+/* … and the seven stamps stay in one row while each circle is still a 56 px tap (two rows of big circles pushed
+   📅 도장 찍기 off a 640 × 360 screen) */
+@media (orientation: landscape) and (max-height: 520px) and (min-width: 600px) {
+  .eng-kid .eng-kcal { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 }
 
 /* ---- 🎯 오늘의 놀이: picture cards */

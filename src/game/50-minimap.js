@@ -1156,13 +1156,13 @@
       const h = G.ui.h;
       const cur = this.currentZone;
       const headChip = h('span', { class: 'chip chip-green wm-here' }, h('span', { class: 'ico ico-xs', 'data-icon': 'pin' }), cur && cur.r > 0 ? cur.name : (cur?.name || '체험관'));
-      const st = { m: null, view: { ...WORLD_VIEW }, sel: opts.zoneId || null, hover: null, raf: 0, last: 0, dirty: true, drag: null, font: getComputedStyle(document.body).fontFamily || 'sans-serif' };
+      const st = { m: null, view: { ...WORLD_VIEW }, sel: opts.zoneId || null, hover: null, raf: 0, last: 0, dirty: true, drag: null, pinch: null, noClick: null, font: getComputedStyle(document.body).fontFamily || 'sans-serif' };
       this._wm = st;
       const m = G.ui.modal.open({
         id: 'world-map', size: 'xl', className: 'wm-modal', title: '전체 지도', icon: 'map', headExtra: headChip,
         body: (body) => this._wmBuild(body, st),
         actions: [],
-        onClose: () => { cancelAnimationFrame(st.raf); st.ro?.disconnect?.(); if (this._wm === st) this._wm = null; },
+        onClose: () => { cancelAnimationFrame(st.raf); st.ro?.disconnect?.(); st.offPress?.(); if (this._wm === st) this._wm = null; },
       });
       st.m = m;
       this._wmRenderCard();
@@ -1199,7 +1199,7 @@
           h('button', { type: 'button', class: 'icon-btn', dataset: { wm: 'fit' }, title: '전체 보기', 'aria-label': '전체 보기' }, h('span', { class: 'ico ico-sm', 'data-icon': 'expand' }))),
         h('div', { class: 'wm-compass', 'aria-hidden': 'true' }, h('i'), h('span', null, 'N')),
         h('div', { class: 'wm-scale', 'aria-hidden': 'true' }, h('i'), h('span', null, '')),
-        h('div', { class: 'wm-hint' }, '끌어서 이동 · 휠로 확대 · 구역을 눌러 자세히 보기'));
+        h('div', { class: 'wm-hint' }, `끌어서 이동 · ${G.input?.touchUI ? '두 손가락으로 확대' : '휠로 확대'} · 구역을 눌러 자세히 보기`));
       const side = h('aside', { class: 'wm-side' }, h('div', { class: 'wm-card' }), this._wmLegend());
       body.appendChild(h('div', { class: 'wm' }, mapbox, side));
       st.canvas = canvas; st.ctx = canvas.getContext('2d'); st.mapbox = mapbox; st.chipEls = chips; st.card = side.querySelector('.wm-card');
@@ -1223,33 +1223,93 @@
         else if (a === 'fit') { Object.assign(st.view, WORLD_VIEW); st.dirty = true; }
         else if (a === 'me') { const p = G.sys.player?.position; if (p) { st.view.cx = p.x; st.view.cz = p.z; st.view.size = Math.min(st.view.size, 120); this._wmClampView(); st.dirty = true; } }
       });
-      // pan / zoom / click
-      canvas.addEventListener('pointerdown', (ev) => {
-        st.drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: 0 };
-        try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      // pan / zoom / pick anywhere on the map — on the zone chips too (a finger that lands on one still drags or
+      // pinches the map), never on the tool buttons: one finger (or the mouse) drags, two fingers pinch (zoom about
+      // their midpoint, pan with it), a press that does not move picks (a chip: its own click; the canvas: the zone
+      // under it, _wmClick)
+      const pts = new Map(); // pointers down on the map: id -> {x, y (client px), chip (the chip it began on)}
+      // a chip keeps its pointer uncaptured (so its click still comes), so a mouse released outside the map box never
+      // sends its pointerup here: while a press is tracked the window hears the release too (capture phase: before
+      // anything outside can stop it); the listener goes away with the last tracked press
+      let winUp = null;
+      const watchRelease = (on) => {
+        if (on && !winUp) {
+          winUp = (ev) => { if (pts.has(ev.pointerId)) up(ev); };
+          window.addEventListener('pointerup', winUp, true);
+          window.addEventListener('pointercancel', winUp, true);
+        } else if (!on && winUp) {
+          window.removeEventListener('pointerup', winUp, true);
+          window.removeEventListener('pointercancel', winUp, true);
+          winUp = null;
+        }
+      };
+      // the map closed with a press still down: forget it (its release must not act on a map opened later)
+      st.offPress = () => { watchRelease(false); pts.clear(); st.drag = null; st.pinch = null; };
+      mapbox.addEventListener('pointerdown', (ev) => {
+        const t = ev.target instanceof Element ? ev.target : null;
+        if (!t || t.closest('.wm-tools')) return;
+        st.noClick = null; // a new press: the click of the last gesture has come (or never will)
+        pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY, chip: t.closest('.wm-chip') });
+        watchRelease(true);
+        // the canvas keeps a drag that leaves it; a chip keeps the pointer itself, so its click still arrives
+        if (t === canvas) { try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ } }
+        if (pts.size === 1) st.drag = { id: ev.pointerId, moved: 0, canvas: t === canvas };
+        else { st.drag = null; st.pinch = this._wmPinchOf(pts); } // a second finger: a gesture, never a pick
       });
-      canvas.addEventListener('pointermove', (ev) => {
-        const d = st.drag;
-        if (!d || d.id !== ev.pointerId) { this._wmHover(ev); return; }
-        const dx = ev.clientX - d.x, dy = ev.clientY - d.y;
-        d.x = ev.clientX; d.y = ev.clientY; d.moved += Math.abs(dx) + Math.abs(dy);
-        const sc = this._wmScale() / st.dpr;
-        st.view.cx -= dx / sc; st.view.cz -= dy / sc;
-        this._wmClampView(); st.dirty = true;
-      });
-      const up = (ev) => {
+      mapbox.addEventListener('pointermove', (ev) => {
+        let p = pts.get(ev.pointerId);
+        // a mouse that moves with no button down was released where nobody heard it (outside the window): that press
+        // is over — a plain hover never drags the map
+        if (p && ev.pointerType === 'mouse' && ev.buttons === 0) { up(ev); p = null; }
+        if (!p) { if (ev.target === canvas) this._wmHover(ev); return; }
+        const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+        p.x = ev.clientX; p.y = ev.clientY;
+        if (st.pinch) {
+          const o = st.pinch, q = (st.pinch = this._wmPinchOf(pts));
+          if (!q) return;
+          this._wmPan(q.mx - o.mx, q.my - o.my);
+          if (o.d > 4 && q.d > 4) { const l = this._wmLocal(q.mx, q.my); this._wmZoom(o.d / q.d, l.x, l.y); }
+          return;
+        }
         const d = st.drag;
         if (!d || d.id !== ev.pointerId) return;
+        d.moved += Math.abs(dx) + Math.abs(dy);
+        this._wmPan(dx, dy);
+      });
+      const up = (ev) => {
+        const p = pts.get(ev.pointerId);
+        if (!p) return;
+        pts.delete(ev.pointerId);
+        if (!pts.size) watchRelease(false);
+        const d = st.drag, mine = !!d && d.id === ev.pointerId;
+        // a press that dragged or pinched the map is not a click on the chip it began on
+        if (p.chip && (st.pinch || !mine || d.moved >= 6)) st.noClick = { el: p.chip, until: performance.now() + 600 };
+        if (st.pinch) {
+          // fewer fingers: two still down go on pinching, the last one goes on as a drag (never a pick)
+          st.pinch = this._wmPinchOf(pts);
+          const rest = pts.size === 1 ? pts.keys().next().value : null;
+          st.drag = rest != null ? { id: rest, moved: 99, canvas: false } : null;
+          return;
+        }
+        if (!mine) return;
         st.drag = null;
-        if (ev.type === 'pointerup' && d.moved < 6) this._wmClick(ev);
+        if (ev.type === 'pointerup' && d.moved < 6 && d.canvas) this._wmClick(ev);
       };
-      canvas.addEventListener('pointerup', up);
-      canvas.addEventListener('pointercancel', up);
+      mapbox.addEventListener('pointerup', up);
+      mapbox.addEventListener('pointercancel', up);
+      mapbox.addEventListener('lostpointercapture', up);
+      // (capture phase: before the chips' own click handler)
+      mapbox.addEventListener('click', (ev) => {
+        const n = st.noClick;
+        if (!n || !(ev.detail >= 1) || performance.now() > n.until || !(ev.target instanceof Node) || !n.el.contains(ev.target)) return; // (keyboard clicks pass)
+        st.noClick = null;
+        ev.preventDefault(); ev.stopPropagation();
+      }, true);
       canvas.addEventListener('pointerleave', () => { if (!st.drag && st.hoverZone) { st.hoverZone = null; st.dirty = true; } });
       canvas.addEventListener('wheel', (ev) => {
         ev.preventDefault();
-        const r = canvas.getBoundingClientRect();
-        this._wmZoom(ev.deltaY > 0 ? 1.18 : 1 / 1.18, ev.clientX - r.left, ev.clientY - r.top);
+        const l = this._wmLocal(ev.clientX, ev.clientY);
+        this._wmZoom(ev.deltaY > 0 ? 1.18 : 1 / 1.18, l.x, l.y);
       }, { passive: false });
       if (typeof ResizeObserver !== 'undefined') { st.ro = new ResizeObserver(() => this._wmResize()); st.ro.observe(mapbox); }
     },
@@ -1295,17 +1355,45 @@
       st.W = W; st.H = H; st.dpr = dpr;
       st.dirty = true;
     },
+    /**
+     * a screen point in the canvas' own CSS px, and k = canvas px per screen px: exact while the dialog still grows
+     * in (its transform scales the canvas on screen), so a tap during the opening picks what is under the finger
+     */
+    _wmLocal(clientX, clientY) {
+      const c = this._wm.canvas, r = c.getBoundingClientRect();
+      const k = r.width > 0 && c.clientWidth > 0 ? c.clientWidth / r.width : 1;
+      return { x: (clientX - r.left) * k, y: (clientY - r.top) * k, k };
+    },
+    /** move the view with a pointer that moved (dx, dy) screen px */
+    _wmPan(dx, dy) {
+      const st = this._wm;
+      const k = this._wmLocal(0, 0).k, sc = this._wmScale() / st.dpr; // canvas px per screen px / per metre
+      st.view.cx -= (dx * k) / sc; st.view.cz -= (dy * k) / sc;
+      this._wmClampView(); st.dirty = true;
+    },
+    /** distance and midpoint (client px) of the first two pointers of a pinch, or null */
+    _wmPinchOf(pts) {
+      if (pts.size < 2) return null;
+      const it = pts.values(), a = it.next().value, b = it.next().value;
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+    },
     _wmToWorld(clientX, clientY) {
       const st = this._wm;
-      const r = st.canvas.getBoundingClientRect();
-      const sc = this._wmScale();
-      return { x: st.view.cx + ((clientX - r.left) * st.dpr - st.W / 2) / sc, z: st.view.cz + ((clientY - r.top) * st.dpr - st.H / 2) / sc };
+      const l = this._wmLocal(clientX, clientY), sc = this._wmScale();
+      return { x: st.view.cx + (l.x * st.dpr - st.W / 2) / sc, z: st.view.cz + (l.y * st.dpr - st.H / 2) / sc };
     },
     _wmZoneAtScreen(ev) {
       const p = this._wmToWorld(ev.clientX, ev.clientY);
-      let best = null;
-      for (const z of zones()) { if (Math.hypot(p.x - z.center[0], p.z - z.center[1]) <= z.r && (!best || z.r < best.r)) best = z; }
-      return best;
+      // inside rings the smallest wins; a fingertip (touch / pen) just outside a ring — on the edge of its chip,
+      // between two rings — still picks the nearest one within ~20 px (the mouse picks exact rings only)
+      const slop = ev.pointerType === 'touch' || ev.pointerType === 'pen' ? (20 * this._wm.dpr) / this._wmScale() : 0;
+      let best = null, near = null, nearOut = Infinity;
+      for (const z of zones()) {
+        const out = Math.hypot(p.x - z.center[0], p.z - z.center[1]) - z.r;
+        if (out <= 0) { if (!best || z.r < best.r) best = z; }
+        else if (out <= slop && out < nearOut) { near = z; nearOut = out; }
+      }
+      return best || near;
     },
     _wmHover(ev) {
       const st = this._wm;

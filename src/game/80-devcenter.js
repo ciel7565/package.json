@@ -3,7 +3,10 @@
 //
 //   Open: ?dev=1 (after boot) · Ctrl+Shift+D · F9 / ` (the app shell toggles it) · main menu (action 'devcenter')
 //         · G.sys.devcenter.open(tab). Esc closes. Access: always in local mode; in server mode only for an admin
-//         account (G.auth.current.role from the server — never the save's profile.role) or ?dev=1 on localhost.
+//         account (the role the server last answered for the current account — G.auth.serverUser over the G.auth.current
+//         copy, so an in-game re-login after 관리자 지정 / 해제 counts at once; never the save's profile.role) or ?dev=1 on
+//         localhost. A game dialog that opens by itself while the center is up (re-login form, save card) makes the panel
+//         step aside until it closes.
 //   Tabs: overview 개요 · system 시스템 점검 (+ 🖥️ GPU 안전) · kids 👶 쉬운 모드 점검 · modules 모듈 상태 · data 데이터 검증 ·
 //         save 저장 데이터 · server 서버 점검 · tests 자가 테스트 · debug 디버그 도구 · source 소스 구조 · docs 문서 · handover 인수인계
 //   In easy mode (CONTRACT §12) opening the center asks the parent gate first (G.easy.gate); automation may pass {gate:false}.
@@ -186,10 +189,19 @@
 
   // =========================================================================== access control
   const isLocalHost = () => location.protocol === 'file:' || /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/i.test(location.hostname);
+  /**
+   * the player's role as the server last answered it: for the same account auth.serverUser (auth/me.php, the login or
+   * the in-game re-login after admin.php 관리자 지정 / 해제 ended the session) wins over the profile copy the tab entered
+   * with; guests and local profiles keep their own role (never a remembered session's); no profile yet -> the session's
+   */
+  function accountRole(cur, srv) {
+    if (!cur) return srv?.role || null;
+    return cur.kind === 'server' && srv && srv.id === cur.id ? srv.role : cur.role || null;
+  }
+  const myRole = () => accountRole(G.auth?.current, G.auth?.serverUser);
   function access() {
     if (G.net?.mode !== 'server') return { ok: true, reason: 'local', label: '로컬 모드 (이 브라우저 전용)' };
-    const role = G.auth?.current?.role || G.auth?.serverUser?.role;
-    if (role === 'admin') return { ok: true, reason: 'admin', label: '서버 관리자 계정' };
+    if (myRole() === 'admin') return { ok: true, reason: 'admin', label: '서버 관리자 계정' };
     if (DEV_PARAM && isLocalHost()) return { ok: true, reason: 'dev-localhost', label: '?dev=1 · 서버 PC(localhost)' };
     return { ok: false, reason: 'denied', label: '권한 없음' };
   }
@@ -1817,6 +1829,21 @@
     const bad = (r.results || []).filter((x) => !x.ok).map((x) => x.name);
     return { ok: !!r.ok, detail: bad.length ? `실패: ${bad.join(', ')}` : `${(r.results || []).length}개 항목 통과` };
   });
+  T('🛡️ 보안·이스케이프', '개발자 센터 권한은 서버의 최신 답을 따라요 (다시 로그인한 뒤 관리자 지정·해제)', () => {
+    const acct = (role, id = '7') => ({ id, kind: 'server', role });
+    const cases = [
+      ['지정 뒤 재로그인', acct('user'), acct('admin'), 'admin'],
+      ['해제 뒤 재로그인', acct('admin'), acct('user'), 'user'],
+      ['다른 계정의 답', acct('user'), acct('admin', '8'), 'user'],
+      ['서버 답 없음', acct('admin'), null, 'admin'],
+      ['게스트 + 관리자 세션', { id: 'guest', kind: 'guest', role: 'user' }, acct('admin'), 'user'],
+      ['로컬 관리자', { id: 'u1', kind: 'local', role: 'admin' }, null, 'admin'],
+      ['로그인 전 (기억된 세션)', null, acct('admin'), 'admin'],
+      ['아무도 없음', null, null, null],
+    ];
+    const bad = cases.filter(([, c, s, want]) => accountRole(c, s) !== want).map(([n]) => n);
+    return { ok: !bad.length, detail: bad.length ? `틀림: ${bad.join(', ')}` : `${cases.length}가지 경우 통과` };
+  });
 
   // ---- 저장
   T('💾 저장 (G.save)', 'checksum 은 같은 입력에 같고 1글자만 달라도 바뀌어요', () => { const s = JSON.stringify({ a: 1, b: '된장' }); return G.save.checksum(s) === G.save.checksum(s) && G.save.checksum(s) !== G.save.checksum(s + ' '); });
@@ -2501,6 +2528,186 @@
     return { ok: out == null && n2 === n, detail: out == null ? `찍지 않았어요 · 앨범 ${n2}장 그대로` : '사진을 찍었어요 ❌' };
   });
 
+  // ---- round-2 sweep: moderation, tap guards, kid cards, world map, photo / weather, dialogue screen
+  T('💬 소셜', '모더레이션: 서버가 거둔 줄(_retract)은 채팅 기록에서 빠지고 chat:retracted 로 다른 시스템에 알려요', () => {
+    const S = G.sys.social;
+    if (typeof S?._retract !== 'function' || typeof S._push !== 'function' || !Array.isArray(S.messages)) return SKIP('G.sys.social._retract 가 없어요');
+    const SID = 990001, ID = `s${SID}`, got = [];
+    const off = G.bus.on('chat:retracted', (p) => got.push(p));
+    try {
+      S._push({ name: '시험친구', text: '시험 줄이에요', channel: 'all', kind: 'remote', uid: 'dc-test', sid: SID, history: true, at: G.time.now() });
+      if (!S.messages.some((m) => m.id === ID)) return SKIP('시험 줄을 넣지 못했어요');
+      const n = S._retract([SID], []);
+      const left = S.messages.some((m) => m.id === ID) || !!document.querySelector(`.chat-msg[data-id="${ID}"]`);
+      const told = got.length === 1 && Array.isArray(got[0]?.ids) && got[0].ids.includes(ID);
+      return { ok: n === 1 && !left && told, detail: `거둔 줄 ${n} · 남은 줄 ${left ? '있음 ❌' : '없음'} · 알림 ${told ? '✔' : '❌'}` };
+    } finally {
+      off();
+      const i = S.messages.findIndex((m) => m.id === ID);
+      if (i >= 0) { S.messages[i]._el?.remove(); S.messages.splice(i, 1); }
+    }
+  });
+  T('💬 소셜', '쉬운 모드: 🙈 안 볼래요 한 친구의 줄은 아이 채팅 줄 모양(display:flex)에서도 숨어요', () => {
+    if (!easyOn()) return SKIP('쉬운 모드에서만 확인해요');
+    const row = G.ui.h('div', { class: 'chat-msg remote blocked' }, '시험');
+    const box = G.ui.h('div', { class: 'chat-log', style: { position: 'fixed', left: '-9999px', top: '0', visibility: 'hidden' } }, row);
+    document.body.appendChild(box);
+    try { const d = getComputedStyle(row).display; return { ok: d === 'none', detail: `display ${d}` }; } finally { box.remove(); }
+  });
+  T('💬 소셜', '알림함: 친구가 부른 알림은 채팅 글·이름을 저장하지 않고, 서버가 그 줄을 거두면 함께 사라져요', () => {
+    const E = G.sys.engagement;
+    if (typeof E?._onChat !== 'function' || typeof E._onRetracted !== 'function' || !(E._mentionLive instanceof Map)) return SKIP('알림함이 거둔 줄을 몰라요');
+    const e = E._E?.();
+    if (!e || !Array.isArray(e.notifications)) return SKIP('알림함이 없어요');
+    const keep = { list: e.notifications, mention: E._mention, live: E._mentionLive };
+    try {
+      e.notifications = keep.list.filter((n) => n.type !== 'mention'); // a fresh notice: no merging with an unread one
+      E._mentionLive = new Map();
+      E._mention = { at: 0, id: null };
+      const call = (id, uid, name, text) => E._onChat({ id, uid, name, text, kind: 'remote', channel: 'all', mention: true, at: G.time.now() });
+      call('s990011', '9911', '낯선이', '놀이터 뒤 숲으로 와 선물 줄게');
+      const n1 = e.notifications.find((n) => n.type === 'mention');
+      const raw = JSON.stringify(n1 || {});
+      const clean = !!n1 && !raw.includes('숲') && !raw.includes('낯선이');
+      E._onRetracted(['s990011'], []);
+      const byLine = !e.notifications.some((n) => n.type === 'mention');
+      call('s990012', '9912', '낯선이둘', '안녕');
+      E._onRetracted([], ['9912']);
+      const byUser = !e.notifications.some((n) => n.type === 'mention');
+      return { ok: clean && byLine && byUser, detail: `저장된 글 ${!n1 ? '알림 없음 ❌' : clean ? '고정 문구' : '채팅 글 ❌'} · 줄로 거둠 ${byLine ? '✔' : '❌'} · 계정으로 거둠 ${byUser ? '✔' : '❌'}` };
+    } finally {
+      e.notifications = keep.list; E._mention = keep.mention; E._mentionLive = keep.live;
+      E._refreshBadge?.();
+    }
+  });
+  T('👶 쉬운 모드', '놀이 시간(sessionStorage tfm.v1.playActive): 아이마다 {종류:id → 초}, 6명까지 (숫자 하나가 아니에요)', () => {
+    let raw = null;
+    try { raw = sessionStorage.getItem('tfm.v1.playActive'); } catch (e) { return SKIP('sessionStorage 를 쓸 수 없어요'); }
+    if (raw == null) return SKIP('아직 기록이 없어요');
+    let v = null;
+    try { v = JSON.parse(raw); } catch (e) { return { ok: false, detail: 'JSON 이 아니에요' }; }
+    const keys = v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v) : null;
+    const ok = !!keys && keys.length <= 6 && keys.every((k) => /^[\w-]*:.+$/.test(k) && Number.isFinite(v[k]) && v[k] >= 0);
+    return { ok, detail: keys ? `${keys.length}명 · ${keys.slice(0, 3).join(', ')}` : `형식 ${typeof v}` };
+  });
+  T('👶 쉬운 모드', '쉬는 시간 알림 카드: G.easy.remind() 로 나오고, 키보드·프로그램 클릭(detail 0)의 계속은 바로 닫아요', async () => {
+    if (!easyOn() || typeof G.easy?.remind !== 'function') return SKIP('쉬운 모드에서만 확인해요');
+    if (document.querySelector('.easy-rest-card:not(.out), .easy-rest:not(.out)')) return SKIP('쉬는 시간 카드가 이미 떠 있어요');
+    const card = G.easy.remind();
+    const el = card instanceof Element ? card : document.querySelector('.easy-rest-card:not(.out)');
+    if (!el || !el.isConnected) return { ok: false, detail: '카드가 나오지 않았어요' };
+    const goOn = el.querySelector('.easy-btn-no');
+    goOn?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+    await nextFrame();
+    const closed = el.classList.contains('out') || !el.isConnected;
+    return { ok: !!goOn && closed, detail: !goOn ? '계속 단추가 없어요 ❌' : closed ? '계속 → 닫혀요' : '계속을 눌러도 그대로예요 ❌' };
+  });
+  T('👶 쉬운 모드', '아이 카드의 큰 단추는 대화창 아래 줄(.modal-foot)에 있어요: 밭 · 장독 · 가방 (어떤 화면 크기에서도 보여요)', async () => {
+    if (!easyOn()) return SKIP('쉬운 모드에서만 확인해요');
+    if (G.ui.modal.isOpen?.()) return SKIP('다른 창이 열려 있어요');
+    const Fm = G.sys.fermentation, Inv = G.sys.inventory, Fa = G.sys.farming;
+    // a jar the player owns would count as "checked" (quest · journal · stats) when its card opens: an unowned one only
+    const mine = new Set(Fm?.myJarIds?.() || []);
+    const jar = [...(Fm?._jars?.keys?.() || [])].find((id) => !mine.has(id));
+    const item = Inv?.list?.()?.[0]?.id;
+    const cards = [
+      ['밭', Fa?.openPlot && (() => Fa.openPlot('P1')), '.easy-big-btn'],
+      ['장독', jar && Fm?.openJar && (() => Fm.openJar(jar)), '.easy-big-btn, .jk-care-btn'],
+      ['가방', item && Inv?.openItem && (() => Inv.openItem(item)), '.easy-big-btn'],
+    ].filter(([, open]) => open);
+    if (!cards.length) return SKIP('열 카드가 없어요');
+    const out = [];
+    try {
+      for (const [label, open, sel] of cards) {
+        G.ui.modal.closeAll();
+        open();
+        await nextFrame();
+        const box = G.ui.modal.top()?.el;
+        const b = box?.querySelector(sel);
+        out.push([label, !box ? '창 없음' : !b ? '단추 없음' : b.closest('.modal-foot') ? 'foot' : b.closest('.modal-body') ? 'body' : '?']);
+      }
+    } finally { G.ui.modal.closeAll(); }
+    const bad = out.filter(([, w]) => w !== 'foot');
+    return { ok: !bad.length, detail: `${out.map(([l, w]) => `${l} ${w === 'foot' ? '✔' : `${w} ❌`}`).join(' · ')}${jar ? '' : ' · 장독: 빈 장독이 없어 건너뜀'} · 배움 카드는 본 기록이 남아 열지 않아요` };
+  });
+  T('🖱️ 상호작용', 'G.ui.armTaps(el, ms) 가 있어요 (혼자 뜨는 카드가 이미 오던 톡톡에 눌리지 않게)', () => typeof G.ui.armTaps === 'function');
+  T('🖱️ 상호작용', '[data-action] 단추: 클릭 한 번에 동작도 한 번 (두 번째 손가락 처리와 겹치지 않아요)', () => {
+    const act = 'dc-test-once';
+    let n = 0;
+    const off = G.ui.onAction(act, () => { n++; });
+    const b = G.ui.h('button', { type: 'button', 'data-action': act, style: { position: 'fixed', left: '-9999px', top: '0' } }, '시험');
+    document.body.appendChild(b);
+    try {
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { ok: n === 1, detail: `동작 ${n}번` };
+    } finally { off(); b.remove(); }
+  });
+  T('🖱️ 상호작용', '대화 중: 월드 이름표 층이 숨고 눌리지 않아요 (흐린 HUD 뒤로 비치지 않게)', () => {
+    const rules = [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules]; } catch (e) { return []; } });
+    const hide = rules.find((r) => r.selectorText === 'body.dialogue-open #labels-layer');
+    const tap = rules.find((r) => r.selectorText === 'body.dialogue-open #labels-layer *');
+    const ok = !!hide && hide.style.visibility === 'hidden' && hide.style.opacity === '0' && !!tap && tap.style.pointerEvents === 'none';
+    return { ok, detail: `숨김 규칙 ${hide ? `visibility ${hide.style.visibility} · opacity ${hide.style.opacity}` : '없음'} · 누르기 막기 ${tap ? tap.style.pointerEvents : '없음'}` };
+  });
+  T('🌍 월드 (G.world)', '만장대: 새 플레이어 로그인은 인트로 보류(body.md-intro)를 곧바로 켜고, 시작 못 하면 풀어요', () => {
+    const M = G.sys.manjangdae, b = document.body.classList;
+    if (!M?.built || typeof M._onLogin !== 'function' || typeof M._unholdLogin !== 'function') return SKIP('만장대 시스템이 없어요');
+    if (M.introActive || M.tourActive || b.contains('md-intro') || G.flags?.noTutorial || G.flags?.nointro || /[?&]nointro=1/.test(location.search)) return SKIP('인트로·망원경이 화면을 쓰고 있어요');
+    const p = G.sys.player?.position;
+    if (!p || Math.hypot(p.x - M.lookout.x, p.z - M.lookout.z) > 6) return SKIP('전망대 위에 있을 때만 확인해요');
+    M._onLogin(true);
+    const held = b.contains('md-intro') && !!M._loginT;
+    M._unholdLogin(false);
+    return held && !b.contains('md-intro') && !M._loginT && !M._intro;
+  });
+  T('🌍 월드 (G.world)', '월드맵: 커지는 중인 대화창(크기 변환)에서도 화면 좌표를 정확한 월드 좌표로 읽어요', () => {
+    const Mm = G.sys.minimap;
+    if (typeof Mm?._wmLocal !== 'function' || typeof Mm?._wmToWorld !== 'function') return SKIP('월드맵 도우미가 없어요');
+    const saved = Mm._wm;
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:0;top:0;width:200px;height:100px;scale:0.5;transform-origin:0 0;visibility:hidden;pointer-events:none';
+    const c = document.createElement('canvas');
+    c.style.cssText = 'display:block;width:200px;height:100px';
+    host.appendChild(c);
+    document.body.appendChild(host);
+    try {
+      Mm._wm = { canvas: c, view: { cx: 10, cz: 20, size: 100 }, W: 400, H: 200, dpr: 2 };
+      const r = c.getBoundingClientRect();
+      const mid = Mm._wmToWorld(r.left + r.width / 2, r.top + r.height / 2), corner = Mm._wmToWorld(r.left, r.top);
+      return near(mid.x, 10, 0.01) && near(mid.z, 20, 0.01) && near(corner.x, -90, 0.01) && near(corner.z, -30, 0.01);
+    } finally { Mm._wm = saved; host.remove(); }
+  });
+  T('🖥️ 렌더', '📸 사진: 셔터 두 번 톡톡(0.6초 안)은 사진 한 장', () => {
+    const P = G.sys.photo;
+    if (typeof P?.shoot !== 'function') return SKIP('사진 기능이 없어요');
+    if (P.active || P._busy || P._countdown) return SKIP('사진 모드가 열려 있어요');
+    const keep = { active: P.active, timer: P.timer, capture: P.capture, kid: P._kidShutter, ts: P._shotTs };
+    let n = 0;
+    try {
+      P.active = true; P.timer = 0;
+      P.capture = () => { n++; return null; };
+      P._kidShutter = () => { n++; };
+      const t = performance.now() + 1e6;
+      P.shoot({ timeStamp: t }); P.shoot({ timeStamp: t + 90 });
+      const two = n;
+      P.shoot({ timeStamp: t + 700 });
+      return { ok: two === 1 && n === 2, detail: `0.09초 간격 두 번 → ${two}장 · 0.7초 뒤 → 모두 ${n}장` };
+    } finally { P.active = keep.active; P.timer = keep.timer; P.capture = keep.capture; P._kidShutter = keep.kid; P._shotTs = keep.ts; }
+  });
+  T('🖥️ 렌더', '🌤️ 날씨 카드: 화면보다 길면 스크롤해요 (높이 상한 + overflow-y auto)', async () => {
+    const W = G.sys.weather;
+    if (typeof W?.openPopover !== 'function') return SKIP('날씨 카드가 없어요');
+    if (document.querySelector('.popover.wx-popover')) return SKIP('날씨 카드가 이미 열려 있어요');
+    if (!W.openPopover()) return SKIP('날씨 단추가 안 보여요');
+    try {
+      await nextFrame();
+      const el = document.querySelector('.popover.wx-popover');
+      if (!el) return SKIP('날씨 카드가 열리지 않았어요');
+      const cs = getComputedStyle(el);
+      return { ok: cs.maxHeight !== 'none' && cs.overflowY === 'auto', detail: `max-height ${cs.maxHeight} · overflow-y ${cs.overflowY}` };
+    } finally { G.ui.popover?.close?.(); }
+  });
+
   const Tests = {
     result: null, running: false, live: null,
     count: () => TESTS.length,
@@ -2717,7 +2924,7 @@
     return {
       app: 'tfm-metaverse', kind: 'diagnostic-report', generatedAt: new Date().toISOString(),
       build: { version: B.version || G.VERSION, builtAt: B.builtAt || null, three: B.three || null, threeRevision: THREE.REVISION, fragments: B.fragments ?? (G.__fragments || []).length, fontEmbedded: !!B.manifest?.fontEmbedded },
-      runtime: { mode: G.net?.mode || 'local', access: acc.reason, uptimeSec: Math.round((now() - Probe.bootAt) / 1000), url: location.protocol + '//' + location.host + location.pathname, flags: { ...G.flags }, quality: G.sys.engine?.quality || null, loggedIn: !!G.app?.loggedIn, profileKind: G.auth?.current?.kind || null, role: G.auth?.current?.role || null },
+      runtime: { mode: G.net?.mode || 'local', access: acc.reason, uptimeSec: Math.round((now() - Probe.bootAt) / 1000), url: location.protocol + '//' + location.host + location.pathname, flags: { ...G.flags }, quality: G.sys.engine?.quality || null, loggedIn: !!G.app?.loggedIn, profileKind: G.auth?.current?.kind || null, role: G.auth?.current ? myRole() : null },
       health: health(),
       system: { browser: browserInfo(), webgl: (() => { const g = glInfo(); return g ? { ...g, extensions: g.extensions.length } : null; })(), renderer: rendererStats(), storage: { ...est, localStorageBytes: lsUsage().total, stateBytes: stateSize() }, csp: (() => { const c = cspInfo(); return { present: c.present, checks: c.checks.map(([k, ok, v]) => ({ check: k, ok, value: v })), violations: c.violations }; })() },
       modules: mods.rows.map((r) => ({ name: r.name, order: r.order, label: r.label, status: r.status, api: r.api.length, errors: r.errors.length })), missingSystems: mods.missing,
@@ -2992,7 +3199,7 @@
     docs: null, docCache: new Map(), docId: null, docQuery: '',
     srv: { running: false, results: null, health: null, at: 0, err: '' },
     lint: { sev: 'all', cat: 'all', q: '' }, modQ: '', srcQ: '', evQ: '',
-    kid: { sev: 'all', kind: 'all', view: 'live', sayN: -1, gateN: -1 }, away: false, gating: null,
+    kid: { sev: 'all', kind: 'all', view: 'live', sayN: -1, gateN: -1 }, away: false, yielded: false, gating: null,
   };
   const toast = (msg, type = 'info', emoji) => G.ui?.toast?.(msg, { type, emoji, sound: type !== 'info' });
   const yes = (v, y = '예', n = '아니오') => (v ? `<span class="dc-yes">✅ ${y}</span>` : `<span class="dc-no">— ${n}</span>`);
@@ -3280,6 +3487,7 @@
     Spot.hide(true);
     if (Tour.running) Tour.stop = true;
     ui.away = false;
+    ui.yielded = false;
     ui.opened = false;
     ui.root.hidden = true;
     document.body.classList.remove('dc-open');
@@ -3408,7 +3616,7 @@
         <section class="dc-card dc-in" style="--i:3"><h4>🧭 실행 환경</h4><dl class="dc-kv">${kvRows([
           ['모드', G.net?.mode === 'server' ? `🌐 서버 <span class="muted">(API v${esc(G.net.serverInfo?.version || '?')} · ${esc(G.net.serverInfo?.db || '?')})</span>` : '💻 로컬 (이 브라우저에 저장)'],
           ['접근 권한', esc(access().label)],
-          ['프로필', cur ? `${esc(kindLabel(cur.kind))} · ${cur.role === 'admin' ? pill('gold', '관리자') : '사용자'}` : '<span class="muted">로그인 전</span>'],
+          ['프로필', cur ? `${esc(kindLabel(cur.kind))} · ${myRole() === 'admin' ? pill('gold', '관리자') : '사용자'}` : '<span class="muted">로그인 전</span>'],
           ['그래픽 품질', `${esc(G.sys.engine?.preset?.label || G.sys.engine?.quality || '-')} <span class="muted">(설정: ${esc(G.settings?.quality || 'auto')})</span>`],
           ['URL 플래그', Object.entries(G.flags || {}).filter(([, v]) => v).map(([k, v]) => mono(v === true ? k : `${k}=${v}`)).join(' ') + (DEV_PARAM ? ` ${mono('dev')}` : '') || '<span class="muted">없음</span>'],
           ['실행 시간', `<span data-live="uptime">${esc(U.formatDuration((now() - Probe.bootAt) / 1000))}</span>`],
@@ -3959,7 +4167,7 @@
         <dl class="dc-kv dc-kv-3">${kvRows([
           ['API', `${esc(si.app || '-')} v${esc(si.version || '?')}`], ['DB', esc(si.db || '?')], ['주소', mono(`${location.origin}${location.pathname.replace(/[^/]*$/, '')}${G.net.base}`)],
           ['CSRF 토큰', G.net.csrf ? pill('ok', '보유 (값은 숨김)') : pill('warn', '없음')], ['서버 시계 차이', `${fmt(Math.round(G.time.serverOffset || 0))} ms`],
-          ['로그인', G.auth?.current ? `${esc(kindLabel(G.auth.current.kind))} · ${G.auth.current.role === 'admin' ? pill('gold', '관리자') : '사용자'}` : '로그인 전'],
+          ['로그인', G.auth?.current ? `${esc(kindLabel(G.auth.current.kind))} · ${myRole() === 'admin' ? pill('gold', '관리자') : '사용자'}` : '로그인 전'],
           ['HTTPS', yes(location.protocol === 'https:', '사용 중', 'http — 운영 전 HTTPS 필요')],
         ])}</dl>
       </section>
@@ -4559,6 +4767,26 @@
         return true;
       }, 125);
       G.bus.on('dev:open', (p) => this.open(p?.tab));
+      // a game dialog that opens by itself while the center is up (the re-login form when the session ended — e.g.
+      // admin.php 관리자 지정 / 해제 —, the 다른 창 save card) would sit under the panel (z 60 over the modal layer) with the
+      // keyboard left here: step aside like the tour does, come back when the last one has closed (a kid card that
+      // leads to the gate and the form keeps it away), or stay closed when the re-login left an account without access
+      G.bus.on('ui:modal-open', () => {
+        if (!ui.opened || ui.away || Tour.running || Tests.running) return;
+        ui.yielded = true;
+        panelAway(true);
+      });
+      G.bus.on('ui:modal-close', () => {
+        if (!ui.yielded) return;
+        clearTimeout(this._yt);
+        this._yt = setTimeout(() => {
+          if (!ui.yielded || G.ui.modal.isOpen()) return;
+          ui.yielded = false;
+          if (!ui.opened || !ui.away) return;
+          if (access().ok) panelAway(false);
+          else { close(); toast('권한이 바뀌어 개발자 센터를 닫았어요.', 'info', '🔒'); }
+        }, 150);
+      });
       // kid-mode event logs for the 👶 tab (texts are prompts, never typed by the child)
       G.bus.on('easy:say', (p) => pushRing(KidLog.say, { at: now(), text: String(p?.text ?? '').replace(/\s+/g, ' ').slice(0, 140) }));
       G.bus.on('easy:gate', (p) => pushRing(KidLog.gate, { at: now(), reason: String(p?.reason ?? '').slice(0, 40), ok: !!p?.ok }));

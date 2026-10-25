@@ -147,20 +147,22 @@ client_max_body_size 8m;
 
 모든 응답: `{success:true, data, csrf, serverTime}` 또는 `{success:false, error:{code, message}, data?, csrf, serverTime}`.
 상태 변경 요청(POST)은 헤더 `X-CSRF-Token`(sendBeacon 저장은 본문 `csrf`)이 필요합니다.
+로그인이 필요한 요청에 세션이 없으면 401 `AUTH_REQUIRED` — 이번 요청에서 세션이 무효가 된 경우에는 `data.why` 로 이유를 알려 줘요
+(`epoch` 모든 기기 로그아웃 — 비밀번호 재설정·권한 변경·저장 되돌리기 등, `banned` 이용 정지, `deleted` 계정 삭제, `other account` DB 복구 뒤 다른 계정).
 
 | 경로 | 방식 | 권한 | 설명 · 응답 data |
 |---|---|---|---|
 | `ping.php` | GET | 누구나 | `{app:'tfm-metaverse', version, db, serverTime, csrf, loggedIn}` — 세션·CSRF 발급 |
 | `time.php` | GET | 누구나 | `{serverTime, iso, timezone, day}` |
-| `auth/register.php` | POST | 비로그인 | `{email, nickname, password, password_confirm, agree:true, remember?}` → `{user}` |
+| `auth/register.php` | POST | 비로그인 | `{email, nickname, password, password_confirm, agree:true, remember?}` → `{user}` · 이 브라우저의 시도가 많으면 429 `RATE_LIMITED`, 같은 인터넷 주소(학교·집)의 가입이 `rate_limits.register_ip` 를 넘으면 429 `REGISTER_IP_LIMIT` (둘 다 `data.retryAfter` + `Retry-After`) |
 | `auth/login.php` | POST | 누구나 | `{login 또는 email, password, remember}` → `{user}` · 실패 401 `INVALID_CREDENTIALS`, 잠금 429 `TOO_MANY_ATTEMPTS` |
 | `auth/logout.php` | POST | 누구나 | `{loggedOut:true}` (새 CSRF) |
 | `auth/me.php` | GET | 누구나 | `{user:{id,email,nickname,role} 또는 null}` |
 | `player/get.php` | GET | 로그인 | `{save:{version, revision, savedAt, data} 또는 null}` |
-| `player/save.php` | POST | 로그인 | `{version, checksum, data}` → `{savedAt, revision, size}` · 검증 실패 **409** `VALIDATION_FAILED` + `data.save`(서버 저장본) |
-| `chat/list.php?after=ID` | GET | 누구나 읽기 | `{messages:[{id,userId,nickname,text,channel,createdAt}], online, lastId}` |
+| `player/save.php` | POST | 로그인 | `{version, checksum, base?, data}` → `{savedAt, revision, size}` · 검증 실패 **409** `VALIDATION_FAILED` + `data.save`(서버 저장본) · `base` 보다 새 저장본이 있으면 **409** `STALE_SAVE` + `data.save` (관리자가 "직전 저장으로 되돌리기" 한 저장본 그대로면 `data.restored: true`) · `profile.role` 은 계정의 역할로 고쳐 저장(거절하지 않음) |
+| `chat/list.php?after=ID&rafter=R` | GET | 누구나 읽기 | `{messages:[{id,userId,nickname,text,channel,createdAt}], online, lastId, retracted:{messages:[id], users:[uid]}, retractId}` — `retracted`: 관리자가 숨긴 줄·신고 3건으로 숨겨진 줄·이용 정지된 계정의 줄(게임이 이미 받은 것도 지움), `rafter`에는 지난 응답의 `retractId`를 보냄 |
 | `chat/send.php` | POST | 로그인 | `{text, channel:'all'|'local'}` → `{message}` · 429 `RATE_LIMITED`, 409 `DUPLICATE_MESSAGE`, 403 `MUTED` |
-| `chat/report.php` | POST | 로그인 | `{target, targetId?, messageId?, reason, memo?}` → `{reportId, duplicate}` |
+| `chat/report.php` | POST | 로그인 | `{target, targetId?, messageId?, text?, reason, memo?}` → `{reportId, duplicate}` — 신고한 글은 서버에 있는 메시지(`messageId`)에서 가져와요. 번호 없이 보낸 `text`는 신고자가 적은 글이라 대상의 말로 저장하지 않고 메모에 ‘신고자가 적은 내용(확인 안 됨)’으로 남겨요 |
 | `presence/update.php` | POST | 로그인 | `{x,y,z,rotY,anim,speed,zoneId,emote,emoteAt,appearance?}` → `{players:[…], online}` (최근 15초, 각 줄의 `age` = 그 위치를 받은 뒤 지난 ms) |
 | `journal/upload.php` | POST(multipart `photo`) | 로그인 | `{url:'uploads/journal/…', width, height, size, mime, id}` |
 | `ranking/top.php` | GET | 누구나 | `{ranking:[{rank,nickname,level,exp,title,me}], me, total, updatedAt}` (닉네임만 공개) |
@@ -210,7 +212,7 @@ client_max_body_size 8m;
 | SQL 인젝션 | PDO **prepared statements 만** 사용 (에뮬레이션 끔, MySQL 다중 쿼리 끔). 식별자는 코드 상수만 |
 | XSS | API 는 JSON 만 (`Content-Type: application/json`, `nosniff`, `<`·`>`·`&`·따옴표 `\uXXXX` 이스케이프). 게임은 모든 원격 문자열을 textContent/escape 로 렌더링. `admin.php` 는 모든 출력 `htmlspecialchars`, **스크립트 0개**, nonce 기반 CSP. 아바타 외형은 화이트리스트 값만 다른 사람에게 전달 |
 | CSRF | 세션별 32바이트 토큰(`hash_equals`), 로그인·로그아웃 때 교체, POST 마다 검사 + `Origin`/`Sec-Fetch-Site` 교차 사이트 차단, SameSite=Lax 쿠키 |
-| 세션 탈취·고정 | 쿠키 이름 `TFMSESSID`, HttpOnly, SameSite=Lax, HTTPS 면 Secure, 경로 = 설치 폴더, `use_strict_mode`, 로그인/권한 변경 시 `session_regenerate_id`, 유휴 2시간·최대 24시간(로그인 유지: 7일·30일), User-Agent 지문, 사용자별 세션 epoch(정지·권한 변경·비밀번호 재설정 시 모든 기기 로그아웃), 전용 세션 폴더 |
+| 세션 탈취·고정 | 쿠키 이름 `TFMSESSID`, HttpOnly, SameSite=Lax, HTTPS 면 Secure, 경로 = 설치 폴더, `use_strict_mode`, 로그인/권한 변경 시 `session_regenerate_id`, 유휴 2시간·최대 24시간(로그인 유지: 7일·30일), User-Agent 지문, 사용자별 세션 epoch(정지·권한 변경·비밀번호 재설정 시 모든 기기 로그아웃), 로그인 = 계정 번호 + 가입 시각(DB 복구 뒤 같은 번호의 새 계정으로 넘어가지 않음), 전용 세션 폴더 |
 | 무차별 대입 | `login_attempts`: 같은 IP+계정 5회 실패 → 30초부터 2배씩(최대 1시간) 잠금, 계정 단위 15회, IP 단위 60회(15분) 잠금, 모르는 계정도 같은 시간(더미 해시) |
 | 비밀번호 | `password_hash` Argon2id(없으면 bcrypt cost 12) + `password_needs_rehash`, 8~64자 영문+숫자, 흔한 비밀번호·이메일/닉네임 포함 거부 |
 | 과다 요청 | 엔드포인트별 제한(`rate_limits`): 로그인 사용자=계정별, 비로그인=세션별 + IP 전체 상한(×25), 로그인=IP별, 가입=시도는 세션별·만들어진 계정 수와 '이미 가입된 이메일/닉네임' 응답은 IP별(`register_ip`, 시간당 60). 채팅 1초 1개·분당 20개·30초 내 같은 말 반복 금지. 쿠키 없는 요청은 세션 파일을 만들지 않음 |
@@ -230,7 +232,11 @@ IP 원문이 남습니다(관리자만 열람, 180일 후 정리). 채팅은 30�
 ## 9. 백업·복구
 
 - SQLite: `php cli/tfm.php backup` → `data/backups/tfm-날짜.sqlite` (실행 중에도 안전한 VACUUM INTO 사본).
-  `data/secret.php` 도 함께 보관하세요 (DB 파일 이름·IP 해시 키). 복구: Apache 를 멈추고 파일을 `data/` 의 DB 이름으로 되돌립니다.
+  `data/secret.php` 도 함께 보관하세요 (DB 파일 이름·IP 해시 키). 복구: Apache 를 멈추고 파일을 `data/` 의 DB 이름으로 되돌립니다
+  (같은 이름의 `-wal`·`-shm` 파일이 남아 있으면 다른 곳으로 옮겨 두세요). 그다음 **`data/sessions/` 안의 `sess_*` 파일을 모두
+  지워** 모든 기기를 로그아웃시키고 Apache 를 다시 시작하세요 — 백업 뒤에 한 이용 정지·비밀번호 재설정이 DB 와 함께 되돌아가도
+  그 사이의 로그인이 다시 살아나지 않아요. (백업 뒤에 생긴 계정의 로그인은 서버가 스스로 거부해요: 로그인은 계정의 가입 시각과
+  묶여 있어서, 복구 뒤 같은 번호를 받은 새 계정으로 들어가지 않습니다.)
 - MySQL: `mysqldump --single-transaction fermentation_metaverse > backup.sql` 또는 phpMyAdmin 내보내기.
 - 사진: `uploads/journal/` 폴더를 함께 백업하세요.
 - 한 사람의 저장을 직전 저장본으로 되돌리기: 관리자 센터 → 사용자 → ⚙️ 관리 → "직전 저장으로 되돌리기".
@@ -239,7 +245,7 @@ IP 원문이 남습니다(관리자만 열람, 180일 후 정리). 채팅은 30�
 
 - `data/logs/app-YYYY-MM-DD.log.php` (한 줄에 JSON 하나, 5 MB 마다 회전, 14일 보관). 오류 화면의 참조 번호(`rid`)로 검색하세요.
 - 정리 작업은 요청 중 낮은 확률로 자동 실행되며, 관리자 센터 → 유지보수 또는 `php cli/tfm.php cleanup` 으로 바로 실행할 수 있습니다.
-- 스키마 버전은 `schema_version` 테이블에 기록되고 시작 시 자동 설치·업그레이드됩니다 (`Db::SCHEMA_VERSION`, 현재 **2** — v2: 예전 채팅의 원문 기반 `text_key` 비우기).
+- 스키마 버전은 `schema_version` 테이블에 기록되고 시작 시 자동 설치·업그레이드됩니다 (`Db::SCHEMA_VERSION`, 현재 **3** — v2: 예전 채팅의 원문 기반 `text_key` 비우기, v3: `chat_retractions`(접속 중인 게임에 숨김·정지 알리기, 채팅 보관 기간만큼 보관) + 메시지 번호 없는 옛 신고의 글을 ‘신고자가 적은 내용(확인 안 됨)’ 메모로 옮기기).
 
 ## 11. 테스트
 

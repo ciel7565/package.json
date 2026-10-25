@@ -19,6 +19,8 @@
 // a soft single flash (eased, ≤ 0.5 white; a gold glow instead with reduce-motion). Photos go to the album
 // (G.state.photos) exactly as in normal mode; no automatic PNG download in easy mode.
 // The flash is the soft one in both modes (photosensitivity: no hard full-screen white).
+// Double taps: one shutter press = one shot (a press within SHOT_REARM of the last is ignored), and entering / leaving
+// the overlay shields taps (G.ui.shieldTaps), so the second tap never presses what appears under the finger.
 // =============================================================================
 (function () {
   const U = G.util;
@@ -37,6 +39,7 @@
     { id: 'vivid', name: '선명', css: 'contrast(1.16) saturate(1.42) brightness(1.02)' },
   ];
   const TIMERS = [0, 3, 10];
+  const SHOT_REARM = 600; // ms after a shutter press before the next one counts (double tap = one photo; flash < 3 Hz)
   // ---- 쉬운 모드
   const KID_FRAMES = [
     { id: 'none', emoji: '🚫', label: '없음', say: '액자 없이 찍어요.' },
@@ -324,7 +327,7 @@
     filter: 'none', frame: true, grid: false, hidePlayer: false, lookAtCam: false, autoSave: true, timer: 0,
     filters: FILTERS,
     _ui: null, _busy: false, _zoneT: 0, _syncT: 0, _lookT: 0, _countdown: null, _labels: [], _full: new Map(),
-    _cardTimer: 0, _clean: false,
+    _cardTimer: 0, _clean: false, _shotTs: -1e9,
     kidFrame: 'flower', _stickers: [], _stickerN: 0, _kidFront: false, _kidHinted: false, _kidCardTimer: 0,
     get kidFrames() { return KID_FRAMES; },
 
@@ -344,7 +347,7 @@
         if (!G.state || G.ui.isBlocking()) return false;
         return this.enter() !== false;
       }, { allowInModal: true });
-      const shoot = () => { if (!this.active || G.ui.modal.isOpen() || U.isTyping()) return false; this.shoot(); return true; };
+      const shoot = (e) => { if (!this.active || G.ui.modal.isOpen() || U.isTyping()) return false; this.shoot(e); return true; };
       G.input?.onKey?.('Space', shoot, { allowInModal: true });
       G.input?.onKey?.('Enter', shoot, { allowInModal: true });
       G.input?.onKey?.('KeyH', () => { if (!this.active || G.ui.modal.isOpen() || easyOn()) return false; this._toggleClean(); return true; }, { allowInModal: true });
@@ -486,7 +489,7 @@
       // never keep focus on photo-ui buttons: Space / Enter are the shutter keys
       const btn = t.closest('button');
       if (btn) btn.blur();
-      if (t.closest('.ph-kid') && this._onKidClick(t)) return;
+      if (t.closest('.ph-kid') && this._onKidClick(t, ev)) return;
       const pose = t.closest('[data-pose]');
       if (pose) { this._playPose(pose.dataset.pose); return; }
       const f = t.closest('[data-filter]');
@@ -496,7 +499,7 @@
       const b = t.closest('[data-ph]');
       if (!b) return;
       const a = b.dataset.ph;
-      if (a === 'shoot') this.shoot();
+      if (a === 'shoot') this.shoot(ev);
       else if (a === 'exit') this.exit();
       else if (a === 'gallery' || a === 'card-gallery') this.openGallery();
       else if (a === 'card-journal') { const p = this._lastPhoto; if (p) this._attachToJournal(p); }
@@ -606,6 +609,7 @@
       G.ui.block('photo');
       document.body.classList.add('hud-hidden', 'photo-mode');
       if (this._ui) this._ui.hidden = false;
+      G.ui.shieldTaps?.(); // the second tap of a double tap on 📸 must not press the shutter row that just appeared under it
       this._updateZone(true);
       const cam = G.sys.camera;
       cam?.setMode?.('photo');
@@ -649,6 +653,7 @@
       G.ui.unblock('photo');
       document.body.classList.remove('hud-hidden', 'photo-mode');
       if (this._ui) { this._ui.hidden = true; this._ui.querySelector('.ph-card').hidden = true; this._hideKidCard(); }
+      if (!opts.silent) G.ui.shieldTaps?.(); // a double tap on ⬅️ 나가기: the second tap must not press the HUD under it (👕꾸미기)
       this._clearStickers();
       try { G.easy?.stopPoint?.(); } catch (e) { /* optional */ }
       if (opts.logout) this._hidPlayer = false; // the player module hides the model itself on logout
@@ -733,8 +738,15 @@
     },
 
     // ------------------------------------------------------------ capture
-    shoot() {
+    shoot(ev) {
       if (!this.active || this._busy) return;
+      // one press, one shot: a press within SHOT_REARM of the last is the second tap of a double tap (or a child mashing
+      // the button) — no second photo, no countdown cancelled right away, and the soft flash stays under 3 Hz (§12.4).
+      // Event time stamps (when the finger came down), not handler time: a capture keeps the main thread busy a while.
+      const ts = ev && ev.timeStamp > 0 ? ev.timeStamp : performance.now();
+      const since = ts - this._shotTs;
+      if (since >= 0 && since < SHOT_REARM) return;
+      this._shotTs = ts;
       if (this._countdown) { this._cancelCountdown(); return; }
       if (easyOn()) { this._kidShutter(); return; }
       if (!this.timer) { this.capture(); return; }
@@ -904,7 +916,7 @@
     },
 
     /** kid overlay buttons; true when handled */
-    _onKidClick(t) {
+    _onKidClick(t, ev) {
       const pose = t.closest('[data-pose]');
       if (pose) { this._playPose(pose.dataset.pose); kidSay(pose.getAttribute('data-say') || '', { priority: 1 }); return true; }
       const fr = t.closest('[data-kid-frame]');
@@ -918,7 +930,7 @@
       const b = t.closest('[data-phk]');
       if (!b) return false;
       const a = b.dataset.phk;
-      if (a === 'shoot') this.shoot();
+      if (a === 'shoot') this.shoot(ev);
       else if (a === 'exit') this.exit();
       else if (a === 'album' || a === 'card-album') { this._hideKidCard(); this.openGallery(); }
       else if (a === 'card-again') { this._hideKidCard(); kidSay('또 찍어요!', { priority: 1 }); }

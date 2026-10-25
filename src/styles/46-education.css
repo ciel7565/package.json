@@ -18,6 +18,11 @@
 .edu-dot:not(:disabled):hover { background: var(--green-l); }
 .edu-dot.on:hover { background: var(--gold); }
 .edu-dot:disabled { opacity: .45; cursor: default; }
+/* touch, normal mode: each dot stays a dot with a one-tap area around it (::before); the dots sit one tap apart so
+   no area covers the next dot (overlapping areas would hand a tap on one dot to its neighbour) */
+body.is-touch:not(.easy) .edu-dots { gap: calc(var(--tap) - .62rem); padding-inline: calc((var(--tap) - .62rem) / 2); }
+body.is-touch:not(.easy) .edu-dot { position: relative; }
+body.is-touch:not(.easy) .edu-dot::before { content: ''; position: absolute; inset: calc((var(--tap) - .62rem) / -2); border-radius: 50%; }
 
 /* ---------------------------------------------------------------- content modal */
 .modal.edu-modal { width: min(66rem, 100%); height: min(42rem, 92vh); }
@@ -280,7 +285,8 @@ body.is-touch .edu-gl { cursor: default; }
    쉬운 모드 (CONTRACT §12): 3 picture slides, picture quiz, picture library, kid sign / exhibit / hall
    ============================================================================= */
 /* ---- slides */
-.modal.edu-modal.edu-kid { width: min(42rem, 100%); height: auto; max-height: 94vh; }
+/* min(…, 100%): never taller than the backdrop's slot (it leaves room for the toast lane above an open dialog) */
+.modal.edu-modal.edu-kid { width: min(42rem, 100%); height: auto; max-height: min(94vh, 100%); }
 .edu-kid .modal-body.ek-body { display: flex; flex-direction: column; align-items: center; gap: .8rem; padding: 1rem 1.1rem 1.2rem; overflow: auto; text-align: center; }
 .edu-kid .ek-visual { width: 100%; min-height: 0; height: clamp(13rem, 40vh, 20rem); flex: none; margin: 0; }
 /* kid slides: the slide line below the picture says it (and reads it aloud); the grown-up caption inside an
@@ -308,6 +314,19 @@ body.is-touch .edu-gl { cursor: default; }
 .ek-btns .easy-big-btn .emoji { font-size: 1.6rem; }
 .ek-btns .ek-prev, .ek-btns .ek-more { background: linear-gradient(180deg, #f3f6ff, #c9d6ff); color: var(--kid-ink, #2b1d02); text-shadow: none; }
 .ek-btns .ek-quiz { background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d, #e3a412)); color: #2b1d02; text-shadow: none; }
+/* phones held sideways (≤ 520 px high): the card fills the slot, the picture fills the left half and the dots /
+   sentence / ribbon sit beside it; the buttons stay in the dialog footer — the slide fits with nothing to scroll */
+@media (orientation: landscape) and (max-height: 520px) {
+  .modal.edu-modal.edu-kid { width: min(48rem, 100%); height: min(94vh, 100%); }
+  .edu-kid .modal-body.ek-body {
+    display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto auto auto minmax(0, 1fr);
+    column-gap: 1.1rem; row-gap: .5rem; align-items: center; justify-items: center; padding: .7rem 1rem .8rem;
+  }
+  .edu-kid .ek-visual { grid-area: 1 / 1 / -1 / 2; height: auto; align-self: stretch; }
+  .edu-kid .ek-dots { grid-area: 2 / 2; }
+  .edu-kid .ek-text { grid-area: 3 / 2; font-size: 1.2rem; }
+  .edu-kid .ek-done { grid-area: 4 / 2; }
+}
 
 /* ---- picture quiz */
 .modal.quiz-modal.quiz-kid { width: min(40rem, 100%); }

@@ -124,8 +124,9 @@
     return s;
   }
 
+  const AWAY_FRESH = 15000; // a line held while the tab was hidden is still worth reading this long after it was said
   const Voice = {
-    q: [], cur: null, recent: new Map(), voice: null, cancelAt: -1e9, mutedHintAt: -1e9, held: [],
+    q: [], cur: null, recent: new Map(), voice: null, cancelAt: -1e9, mutedHintAt: -1e9, held: [], away: [],
     ok() {
       try { return !!window.speechSynthesis && typeof window.SpeechSynthesisUtterance === 'function'; } catch (e) { return false; }
     },
@@ -223,6 +224,14 @@
       for (const [k, at] of Voice.recent) if (t - at > 4000) Voice.recent.delete(k);
       if (Voice.cur && Voice.cur.text === clean) return Promise.resolve(false);       // already reading it
       if (!force && Voice.recent.has(clean)) return Promise.resolve(false);           // same line within 4 s
+      // a hidden tab (another tab or app in front): the browser would go on reading aloud for a page nobody sees.
+      // The last two lines wait; the ones still fresh when the player is back are read then (see visibilitychange)
+      if (document.hidden) {
+        Voice.away = Voice.away.filter((x) => x.text !== clean);
+        Voice.away.push({ text: clean, at: t });
+        while (Voice.away.length > 2) Voice.away.shift();
+        return Promise.resolve(false);
+      }
       // a cinematic owns the screen (정선 만장대 intro / telescope view): only its own lines are read; the rest waits
       if (!opts.intro && !force && (document.body.classList.contains('md-intro') || document.body.classList.contains('md-scoping'))) {
         if (!Voice.held.includes(clean)) Voice.held.push(clean);
@@ -247,7 +256,7 @@
   };
   G.bus.on('manjangdae:intro', releaseHeld);
   G.bus.on('manjangdae:tour', releaseHeld);
-  G.bus.on('game:logout', () => { Voice.held.length = 0; });
+  G.bus.on('game:logout', () => { Voice.held.length = 0; Voice.away.length = 0; });
 
   /** the text a 🔊 button / long-press reads for an element */
   function textOf(el) {
@@ -292,7 +301,8 @@
   // 계정 삭제, 관리자 (GATE_ROOT_CLASS), or the title's 어른 메뉴 view. Screens a child can open themselves (가방, 도움말,
   // 스티커북, kid menu…) are never adopted, and dialogs opened on top of a grown-up screen do not keep the session
   // alive on their own. The session ends when the last grown-up screen closes (650 ms grace for a hop between two of
-  // them), on logout / login / profile load, easy-mode switch, tab hide, or after GATE_IDLE. A pass for an action that
+  // them), on logout / login / profile load, easy-mode switch, tab hide, or after GATE_IDLE without a tap on its screens
+  // (a tab hide or that idle end also closes those screens: the grown-up left). A pass for an action that
   // opens no screen (unblock, export…) only serves that action. Logout / developer center / admin / account deletion
   // always ask again; dangerous switches (아이 채팅 끄기, 보호자 확인 끄기, 쉬운 모드 끄기, 초기화, 가져오기) need a pass from
   // the last GATE_FRESH.
@@ -306,6 +316,8 @@
   const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register']);
   // the grown-up screens a session may live on (04-ui passes the modal's className with ui:modal-open)
   const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal)(\s|$)/;
+  // session ends that mean the grown-up left: the screens the pass opened close with it (lockGate)
+  const GATE_LEFT = new Set(['hidden', 'expired']);
   // wrong / wt / until: the in-memory copy of the persisted round (used when site storage is blocked)
   const Gate = { sess: null, wrong: 0, wt: 0, until: 0, pending: null, streak: 0, tick: 0 };
   /** persisted gate state: cool-down end, failed rounds (doubling) and the wrong answers of the current round
@@ -449,6 +461,18 @@
   });
   for (const ev of ['game:login', 'state:loaded', 'easy:changed']) G.bus.on(ev, () => lockGate(ev));
   document.addEventListener('visibilitychange', () => { if (document.hidden) lockGate('hidden'); });
+  // GATE_IDLE counts the time the grown-up does nothing on the screens the pass opened: a tap, key or scroll there
+  // keeps the session (and the screen) open, so a parent busy in 어른 설정 is never thrown out
+  const onAdultInput = (e) => {
+    const s = Gate.sess;
+    const el = e.target instanceof Element ? e.target : null;
+    if (!s || !el || !e.isTrusted) return;
+    const box = el.closest('.modal, .title-screen.parent');
+    if (!box) return;
+    const mine = box.classList.contains('title-screen') ? s.title : [...s.modals].some((id) => G.ui?.modal?.get?.(id)?.el === box);
+    if (mine) s.until = Math.max(s.until, nowMs() + GATE_IDLE);
+  };
+  for (const ev of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(ev, onAdultInput, { capture: true, passive: true });
 
   function gateStatus(reason) {
     const alive = sessAlive();
@@ -460,9 +484,22 @@
     };
   }
   function lockGate(why = 'manual') {
-    if (Gate.sess) G.log.info('UI', `parent gate locked (${String(why).slice(0, 20)})`);
+    const s = Gate.sess;
+    if (s) G.log.info('UI', `parent gate locked (${String(why).slice(0, 20)})`);
     Gate.sess = null;
     if (Gate.tick) { clearInterval(Gate.tick); Gate.tick = 0; }
+    // the grown-up walked away (tab hidden / GATE_IDLE without a tap on their screens): what the pass opened must not
+    // stay usable for the child who picks the device up — its switches do not ask the gate again
+    if (!s || !GATE_LEFT.has(why)) return;
+    // the screens AND every dialog stacked on them go, top first: a confirm left open there (진행 초기화, 보호자 확인
+    // 끄기…) would act on one tap; closing it answers false (its onClose)
+    const ui = G.ui?.modal;
+    const adultOpen = () => [...s.modals].some((id) => ui?.get?.(id));
+    for (let n = 0; n < 40 && adultOpen(); n++) { const top = ui?.top?.(); if (!top) break; try { top.close(); } catch (e) { break; } }
+    for (const id of s.modals) { try { ui?.get?.(id)?.close?.(); } catch (e) { /* already gone */ } }
+    // the title's 어른 메뉴 view: the dialogs opened from it (목록에서 지우기…) go with it
+    if ((s.title || document.querySelector('.title-screen.parent')) && document.querySelector('.title-screen')) { try { ui?.closeAll?.(); } catch (e) { /* ignore */ } }
+    emit('easy:gate-left', { why, title: !!s.title }); // 70-app: the title's 어른 메뉴 view goes back to the kid view
   }
 
   function gate(opts = {}) {
@@ -1278,11 +1315,36 @@
   }
 
   // ================================================================ healthy play: reminder card + rest screen
-  const Play = { active: 0, lastInput: nowMs(), saveAcc: 0, card: null, cardTimer: 0, last: 0 };
-  try { const v = Number(sessionStorage.getItem(SS_PLAY)); if (Number.isFinite(v) && v > 0) Play.active = Math.min(v, 6 * 3600); } catch (e) { /* storage blocked */ }
-  const markInput = () => { Play.lastInput = nowMs(); };
-  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) window.addEventListener(ev, markInput, { capture: true, passive: true });
-  function persistPlay() { try { sessionStorage.setItem(SS_PLAY, String(Math.round(Play.active))); } catch (e) { /* storage blocked */ } }
+  // owner: whose continuous play this is. The counter survives that child's reload (sessionStorage) but is never handed
+  // to the next child who plays in the same tab (a shared classroom device): each profile starts at 0
+  const Play = { active: 0, lastInput: nowMs(), saveAcc: 0, card: null, cardTimer: 0, last: 0, owner: '' };
+  // a move with a finger or button down (steering the joystick, dragging the camera) is play too; a bare hover is not
+  const markInput = (e) => { if (e?.type === 'pointermove' && !e.buttons) return; Play.lastInput = nowMs(); };
+  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'pointermove', 'touchmove']) window.addEventListener(ev, markInput, { capture: true, passive: true });
+  const playOwner = () => { const p = G.save?.profile; return p && p.id != null ? `${p.kind || ''}:${p.id}` : ''; };
+  // SS_PLAY holds { owner: seconds } for the last few children of this tab, so a child who hands the device over and
+  // comes back goes on with their own count (logging out is no way around the reminder)
+  function readPlay() {
+    try {
+      const o = JSON.parse(sessionStorage.getItem(SS_PLAY) || 'null');
+      return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+    } catch (e) { return {}; } // storage blocked or an older format: start at 0
+  }
+  function persistPlay() {
+    if (!Play.owner) return;
+    const all = readPlay();
+    delete all[Play.owner];
+    all[Play.owner] = Math.round(Play.active);
+    const keys = Object.keys(all);
+    for (const k of keys.slice(0, -6)) delete all[k];
+    try { sessionStorage.setItem(SS_PLAY, JSON.stringify(all)); } catch (e) { /* storage blocked */ }
+  }
+  /** a profile was loaded: continue its own counter from this tab session, or start at 0 */
+  function loadPlay() {
+    Play.owner = playOwner(); Play.active = 0; Play.last = 0; Play.saveAcc = 0;
+    const v = Play.owner ? Number(readPlay()[Play.owner]) : 0;
+    if (Number.isFinite(v) && v > 0) Play.active = Math.min(v, 6 * 3600);
+  }
   function hideReminder() {
     clearTimeout(Play.cardTimer);
     if (!Play.card) return;
@@ -1303,6 +1365,7 @@
     rest.addEventListener('click', () => { openRest(); }); // openRest hides this card once the rest screen is up
     goOn.addEventListener('click', () => { hideReminder(); say('좋아요! 조금만 더 놀아요.', { priority: 1 }); });
     layer().appendChild(card);
+    G.ui?.armTaps?.(card); // it appears by itself over the play area: a tap already on its way must not answer it
     Play.card = card;
     Play.cardTimer = setTimeout(hideReminder, 45000);
     emit('easy:remind', { open: true });
@@ -1343,6 +1406,7 @@
         btn));
     btn.addEventListener('click', closeRest);
     layer().appendChild(el);
+    G.ui?.armTaps?.(el); // the second tap of a double tap on 쉬기 must not hit 다시 놀기 at once
     Rest.el = el;
     hideReminder(); // after the rest screen exists, so listeners see card -> rest (not card -> nothing -> rest)
     G.ui.block('easy-rest');
@@ -1595,7 +1659,12 @@
   G.bus.on('state:loaded', () => { syncOn(); syncSoundBtn(); hudRefreshSoon(); Hud.speakKey = ''; });
   // quest changes re-render the card right away instead of waiting for the next poll
   for (const ev of ['quest:accepted', 'quest:progress', 'quest:completed', 'quest:claimed']) G.bus.on(ev, () => { Hud.stepAt = -1e9; });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) Voice.stop(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { Voice.stop(); return; }
+    // back from another tab / app: the lines said meanwhile that are still news are read now (stale ones are dropped)
+    const t = nowMs(), lines = Voice.away.splice(0).filter((x) => t - x.at < AWAY_FRESH).map((x) => x.text);
+    if (lines.length) setTimeout(() => { for (const l of lines) say(l, { interrupt: false }); }, 700);
+  });
 
   // ================================================================ public API
   G.easy = {
@@ -1634,7 +1703,7 @@
   G.register({
     name: 'easy', order: 88, label: '쉬운 모드',
     init() { bindHud(); },
-    onStateLoaded() { hudRefreshSoon(); Hud.speakKey = ''; Hud.badge = -1; Hud.badgeAt = -1e9; syncLevelChip(); },
+    onStateLoaded() { hudRefreshSoon(); Hud.speakKey = ''; Hud.badge = -1; Hud.badgeAt = -1e9; syncLevelChip(); if (playOwner() !== Play.owner) loadPlay(); },
     update(dt) {
       hudTick(dt);
       playTick();
@@ -1644,6 +1713,8 @@
       stopPoint();
       hideReminder();
       closeRest();
+      persistPlay(); // the leaving child's counter stays theirs (a reload or re-login of the same child goes on with it)
+      Object.assign(Play, { owner: '', active: 0, last: 0, saveAcc: 0 });
       if (Walk.cur) { const w = Walk.cur; Walk.cur = null; try { w.resolve(false); } catch (e) { /* ignore */ } }
       lockGate();
       Hud.key = ''; Hud.speakKey = ''; Hud.step = null; Hud.pendingSay = null; Hud.badge = -1;

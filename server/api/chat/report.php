@@ -8,7 +8,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Audit, ChatFilter, Config, Ctx, Db, Users};
+use Tfm\{Api, ApiException, Audit, ChatFilter, Config, Ctx, Db, Retractions, Users};
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function (Ctx $c): array {
     $b = $c->json(8192);
@@ -30,6 +30,12 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function
     // an unknown target name is free text typed by the reporter: admins never see personal information in it either
     if ($tid === 0) $target = ChatFilter::maskPII($target);
     if ($tid === $c->uid()) throw new ApiException(400, 'SELF_REPORT', '자기 자신은 신고할 수 없어요.');
+    // without a message the server knows, the "quote" is what the REPORTER typed: it never becomes the target's message
+    // (admins would read it as the target's words), it is kept in the memo, marked as unverified
+    if (!$msg && $text !== '') {
+        $memo = '신고자가 적은 내용(확인 안 됨): “' . $text . '”' . ($memo !== '' ? ' · ' . $memo : '');
+        $text = '';
+    }
     $dup = $msg ? Db::one('SELECT id FROM chat_reports WHERE reporter_id = ? AND message_id = ?', [$c->uid(), (int) $msg['id']]) : null;
     if ($dup) return ['reportId' => (int) $dup['id'], 'duplicate' => true];
     $id = Db::insert('chat_reports', [
@@ -40,6 +46,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function
     if ($msg) {
         $n = (int) Db::value("SELECT COUNT(DISTINCT reporter_id) FROM chat_reports WHERE message_id = ? AND status = 'open'", [(int) $msg['id']]);
         if ($n >= 3 && Db::exec('UPDATE chat_messages SET hidden = 1 WHERE id = ? AND hidden = 0', [(int) $msg['id']])) {
+            Retractions::add((int) $msg['id'], null); // games online take it back
             Audit::log('message_auto_hidden', $tid ?: null, ['message' => (int) $msg['id'], 'reports' => $n], 'warn');
         }
     }

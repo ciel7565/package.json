@@ -6,13 +6,15 @@
  *
  * base (optional int): the revision this state was loaded from / last saved as (get.php / save.php answers). When
  * the stored revision is newer — another tab or device saved since — the save is refused with HTTP 409
- * {error:{code:'STALE_SAVE'}, data:{save:{…stored copy…}}} so an old copy never overwrites newer progress.
- * Without base (older clients) the save is accepted as before.
+ * {error:{code:'STALE_SAVE'}, data:{save:{…stored copy…}[, restored:true]}} so an old copy never overwrites newer
+ * progress. restored:true = the stored copy is the one admin.php "직전 저장으로 되돌리기" put back (meta.restoredRev is
+ * still the row's revision): the client loads it and drops the progress it kept for later. Without base (older
+ * clients) the save is accepted as before.
  *
  * The save is validated against the previously accepted save (lib/SaveValidator.php). On violation:
  * HTTP 409 {error:{code:'VALIDATION_FAILED'}, data:{save:{version, revision, savedAt, data}, violations:[codes]}}
- * and the client restores the stored copy. profile.id / role are immutable; nickname / email are forced
- * to the account values.
+ * and the client restores the stored copy. profile.id is immutable; role / nickname / email are forced to the account
+ * values (a stale role from a tab that missed a role change is stored as the account's, not refused).
  */
 declare(strict_types=1);
 
@@ -76,6 +78,8 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         $data->profile->email = (string) $user['email'];
         $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if ($json === false) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
+        if (is_array($res['meta'])) unset($res['meta']['restoredRev'], $res['meta']['restoredAt']); // a new copy: not the restored one
+        if (in_array('role', $res['notes'] ?? [], true)) Log::info('SAVE', 'profile.role differed from the account role (stored as the account role)', ['uid' => $uid]);
         $metaJson = json_encode($res['meta'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
         $rev = $row ? (int) $row['revision'] + 1 : 1;
         Db::upsert('player_saves', [
@@ -106,8 +110,11 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         'data' => $prev,
     ];
     if (!empty($result['stale'])) {
-        Log::info('SAVE', 'stale save refused', ['uid' => $uid, 'base' => $base, 'stored' => (int) $result['row']['revision']]);
-        throw new ApiException(409, 'STALE_SAVE', '다른 창이나 기기에서 더 새로 저장했어요. 이 창의 진행 상황은 저장하지 않았어요.', ['save' => $stored($result['row'], $result['prev'])]);
+        $row = $result['row'];
+        $m = json_decode((string) ($row['meta'] ?? '{}'), true);
+        $restored = is_array($m) && isset($m['restoredRev']) && (int) $m['restoredRev'] === (int) $row['revision'];
+        Log::info('SAVE', 'stale save refused', ['uid' => $uid, 'base' => $base, 'stored' => (int) $row['revision'], 'restored' => $restored]);
+        throw new ApiException(409, 'STALE_SAVE', '다른 창이나 기기에서 더 새로 저장했어요. 이 창의 진행 상황은 저장하지 않았어요.', ['save' => $stored($row, $result['prev'])] + ($restored ? ['restored' => true] : []));
     }
     if (!$result['ok']) {
         $res = $result['res'];

@@ -68,6 +68,9 @@
 .stp-max { padding: .2rem .4rem; border-radius: 7px; font-size: .68rem; font-weight: 700; color: var(--text-dim); }
 .stp-max:hover { background: rgba(255,255,255,.1); color: var(--text); }
 .stepper-fixed { padding: .38rem .8rem; font-size: .8rem; font-weight: 700; color: var(--text-dim); justify-content: center; }
+/* touch, normal mode: − / + / 최대 and the number are one tap each (CONTRACT §12.0 --tap) */
+body.is-touch:not(.easy) :is(.stp-btn, .stp-max) { min-width: var(--tap); min-height: var(--tap); }
+body.is-touch:not(.easy) .stp-input { height: var(--tap); }
 
 /* ------------------------------------------------------------------ shop */
 .shop-greet { display: flex; align-items: center; gap: .75rem; margin-bottom: .85rem; padding: .65rem .85rem; border-radius: 14px; background: linear-gradient(90deg, rgba(52,195,107,.14), rgba(52,195,107,.04)); border: 1px solid rgba(52,195,107,.32); }

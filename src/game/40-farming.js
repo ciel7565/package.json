@@ -10,7 +10,8 @@
 //     harvest(id) -> {itemId, qty}|null  only at 100 % (yield scaled by health, + basket bonus)
 //     clear(id) -> Promise<bool>         empty the plot (confirm)
 //     openPlot(id)                       modal: crop, stage, 성장률/수분/건강 bars, ETA, tips, actions, seed picker
-//     primary(id)                        what E does: plant (empty) / harvest (ready) / water (< 90 %) / open modal
+//     primary(id)                        what E does: plant (empty) / water while the quest step is 💧 / harvest (ready) /
+//                                        water (< 90 %) / open modal — the prompt label follows the same decision
 //     setPlot(id, patch)                 debug / test helper (growth, water, health, cropId)
 //     growAll(pct) / fastForward(sec)    debug helpers (dev center)
 //   Emits farm:watered {plotId, cropId}, farm:planted {plotId, cropId}, farm:harvested {plotId, cropId, itemId, qty}.
@@ -1093,10 +1094,10 @@
         return;
       }
       if (kidOn()) { this._kidPrimary(id, s); return; }
-      if (!s.cropId) { this.openPlot(id); return; }
-      if (s.growth >= 100) { this.harvest(id); return; }
-      if (s.water < 90) { this.water(id); return; }
-      this.openPlot(id);
+      const act = this._primaryAction(id).act;
+      if (act === 'harvest') this.harvest(id);
+      else if (act === 'water') this.water(id);
+      else this.openPlot(id);
     },
     /** the "다음 할 일" step right now is 💧 watering (then one tap waters any bed that still takes water, ripe or not) */
     _questWantsWater() {
@@ -1146,14 +1147,18 @@
       if (s.water < KID_WATER_AT && !cool) return { label: '물 주기', emoji: '💧', act: 'water' };
       return { label: `${crop.name}밭 보기`, emoji: '👀', act: 'view' };
     },
-    _primaryLabel(id) {
+    _primaryLabel(id) { return this._primaryAction(id).label; },
+    /** what E does in normal mode -> {act, label}: the prompt words and the key press share this one decision */
+    _primaryAction(id) {
       const s = this._state(id), P = this._plots.get(id);
-      if (!s || !P) return '밭 살펴보기';
+      if (!s || !P) return { act: 'view', label: '밭 살펴보기' };
       const crop = cropOf(s.cropId);
-      if (!crop) return '씨앗 심기';
-      if (s.growth >= 100) return `${crop.name} 수확하기`;
-      if (s.water < 90) return `${crop.name}밭에 물 주기`;
-      return `${crop.name}밭 살펴보기`;
+      if (!crop) return { act: 'view', label: '씨앗 심기' };
+      // the quest step is 💧 watering: water first, even a ripe bed (the step could never be done with E otherwise)
+      if (s.water < 100 && !(waterCoolLeft(s) > 0) && this._questWantsWater()) return { act: 'water', label: `${crop.name}밭에 물 주기` };
+      if (s.growth >= 100) return { act: 'harvest', label: `${crop.name} 수확하기` };
+      if (s.water < 90) return { act: 'water', label: `${crop.name}밭에 물 주기` };
+      return { act: 'view', label: `${crop.name}밭 살펴보기` };
     },
 
     water(id, opts = {}) {
@@ -1866,7 +1871,7 @@
       };
       if (!crop) {
         els.sayT.textContent = herb ? '빈 허브 밭이에요. 모종을 심어 볼까요?' : '빈 밭이에요. 씨앗을 심어 볼까요?';
-        body.append(h('div', { class: 'fk-hero' }, els.ring), els.say);
+        body.append(h('div', { class: 'fk-hero' }, els.ring), h('div', { class: 'fk-info' }, els.say));
         if (near) big('easy-btn-yes', '🌱', herb ? '모종 심기' : '씨앗 심기', () => { m.close(); this._kidPlant(P.id); });
         else big('easy-btn-yes', '👉', '밭으로 가기', () => this._goTo(P, false));
       } else {
@@ -1879,15 +1884,17 @@
         const meter = h('div', { class: 'fk-meter' },
           h('div', { class: 'fk-m water' }, h('span', { class: 'fk-m-ico emoji', 'aria-hidden': 'true' }, '💧'), h('span', { class: 'fk-drops' }, els.drops)),
           h('div', { class: 'fk-m feel' }, els.face));
-        body.append(h('div', { class: 'fk-hero' }, els.ring), track, meter, els.say);
+        body.append(h('div', { class: 'fk-hero' }, els.ring), h('div', { class: 'fk-info' }, track, meter, els.say));
         if (near) {
           if (s.growth >= 100) big('easy-btn-yes fk-harvest', cropPic(crop), '거두기', () => { if (this.harvest(P.id)) m.close(); });
           else els.water = big('easy-btn-yes fk-water', '💧', '물 주기', () => { if (this.water(P.id)) m.close(); });
         } else big('easy-btn-yes', '👉', '밭으로 가기', () => this._goTo(P, s.growth >= 100));
       }
-      body.appendChild(btns);
-      try { G.easy?.speakable?.(els.say, () => els.sayT.textContent); } catch (e) { /* optional */ }
+      // the buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
+      // sideways) the card's one action stays in view instead of sliding below the screen edge
       m.setActions([]);
+      m.foot.appendChild(btns);
+      try { G.easy?.speakable?.(els.say, () => els.sayT.textContent); } catch (e) { /* optional */ }
       md.els = els;
     },
     _updateKid(md, P, s, crop) {

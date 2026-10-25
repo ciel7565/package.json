@@ -254,7 +254,7 @@ function viewModeration(): string
                 . ($r['message_id'] ? ((int) $r['msg_hidden'] ? actionForm('unhide', '메시지 다시 보이기', ['mid' => $r['message_id']], 'btn ghost', 'moderation') : actionForm('hide', '🙈 메시지 숨기기', ['mid' => $r['message_id']], 'btn', 'moderation')) : '')
                 . ($tid ? actionForm('mute', '🔇 대상 채팅 1시간 제한', ['uid' => $tid, 'minutes' => 60], 'btn ghost', 'moderation') . actionForm('ban', '⛔ 대상 이용 정지', ['uid' => $tid], 'btn danger', 'moderation') : '')
                 . '</div></details>';
-            $h .= '<tr><td>' . (int) $r['id'] . '</td><td><b>' . e($r['target_name']) . '</b></td><td>' . e(REASONS[$r['reason']] ?? $r['reason']) . '</td><td class="msg">' . e($r['message_text']) . ((int) ($r['msg_hidden'] ?? 0) ? ' <span class="badge warn">숨김</span>' : '') . '</td><td class="dim">' . e($r['memo']) . '</td><td>' . e($r['reporter'] ?? '-') . '</td><td>' . e(when($r['created_at'])) . '</td><td>' . e(['open' => '대기', 'resolved' => '완료', 'dismissed' => '기각'][$r['status']] ?? $r['status']) . '</td><td>' . $acts . '</td></tr>';
+            $h .= '<tr><td>' . (int) $r['id'] . '</td><td><b>' . e($r['target_name']) . '</b></td><td>' . e(REASONS[$r['reason']] ?? $r['reason']) . '</td><td class="msg">' . e($r['message_text']) . ((int) ($r['msg_hidden'] ?? 0) ? ' <span class="badge warn">숨김</span>' : '') . '</td><td class="dim memo">' . e($r['memo']) . '</td><td>' . e($r['reporter'] ?? '-') . '</td><td>' . e(when($r['created_at'])) . '</td><td>' . e(['open' => '대기', 'resolved' => '완료', 'dismissed' => '기각'][$r['status']] ?? $r['status']) . '</td><td>' . $acts . '</td></tr>';
         }
         $h .= '</tbody></table></div>';
     }
@@ -278,8 +278,13 @@ function viewAudit(): string
     $p = [];
     if ($ev !== '') { $w[] = 'a.event = ?'; $p[] = $ev; }
     if ($sev !== '') { $w[] = 'a.severity = ?'; $p[] = $sev; }
+    // pages go by id (entries older than ?before=): the log grows while it is read, so an offset would shift
+    $before = is_string($_GET['before'] ?? null) && ctype_digit($_GET['before']) ? (int) $_GET['before'] : 0;
+    if ($before > 0) { $w[] = 'a.id < ?'; $p[] = $before; }
     $rows = Db::all('SELECT a.*, u.nickname AS subject, ac.nickname AS actor FROM audit_log a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN users ac ON ac.id = a.actor_id '
-        . ($w ? 'WHERE ' . implode(' AND ', $w) . ' ' : '') . 'ORDER BY a.id DESC LIMIT 200', $p);
+        . ($w ? 'WHERE ' . implode(' AND ', $w) . ' ' : '') . 'ORDER BY a.id DESC LIMIT 201', $p);
+    $more = count($rows) > 200;
+    $rows = array_slice($rows, 0, 200);
     $events = array_column(Db::all('SELECT DISTINCT event FROM audit_log ORDER BY event'), 'event');
     $h = '<section class="card"><form method="get" action="admin.php" class="search"><input type="hidden" name="tab" value="audit"><select name="ev"><option value="">모든 이벤트</option>';
     foreach ($events as $x) $h .= '<option value="' . e($x) . '"' . ($x === $ev ? ' selected' : '') . '>' . e($x) . '</option>';
@@ -289,6 +294,10 @@ function viewAudit(): string
     $h .= table(['#', '시각', '이벤트', '등급', '대상', '처리자', 'IP', '내용'], array_map(fn ($r) => [
         $r['id'], when($r['created_at']), $r['event'], $r['severity'], $r['subject'] ?? ($r['user_id'] ? '#' . $r['user_id'] : '-'), $r['actor'] ?? '-', $r['ip'], mb_substr((string) $r['detail'], 0, 180),
     ], $rows));
+    $h .= '<div class="row">';
+    if ($before > 0) $h .= '<a class="btn ghost" href="admin.php?' . e(http_build_query(['tab' => 'audit', 'ev' => $ev, 'sev' => $sev])) . '">← 처음</a>';
+    if ($more) $h .= '<a class="btn ghost" href="admin.php?' . e(http_build_query(['tab' => 'audit', 'ev' => $ev, 'sev' => $sev, 'before' => (int) $rows[count($rows) - 1]['id']])) . '">다음 →</a>';
+    $h .= '</div>';
     return $h . '<p class="dim small">감사 로그는 ' . e(Config::get('retention.audit_days', 180)) . '일 동안 보관돼요.</p></section>';
 }
 
@@ -351,9 +360,9 @@ main{padding:8px max(16px,4vw) 32px;display:grid;gap:16px;max-width:1500px;margi
 .tile .ico{font-size:22px}.tile b{font-size:1.5rem;letter-spacing:-.02em}.tile small{color:var(--dim)}.d1{animation-delay:.04s}.d2{animation-delay:.08s}.d3{animation-delay:.12s}.d4{animation-delay:.16s}.d5{animation-delay:.2s}.d6{animation-delay:.24s}
 .barrow{display:grid;grid-template-columns:110px 1fr 48px;gap:10px;align-items:center;margin:6px 0}.barrow span{color:var(--dim);font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.barrow b{text-align:right}
 meter{width:100%;height:12px;border-radius:99px;background:rgba(255,255,255,.08);border:0}meter::-webkit-meter-bar{background:rgba(255,255,255,.08);border-radius:99px;border:0;height:12px}meter::-webkit-meter-optimum-value{background:linear-gradient(90deg,var(--green-d),#86e3a8);border-radius:99px}meter::-moz-meter-bar{background:linear-gradient(90deg,var(--green-d),#86e3a8);border-radius:99px}
-.tablewrap{overflow-x:auto;border-radius:12px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:9px 10px;text-align:left;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top}th{background:rgba(0,0,0,.25);color:var(--dim);font-weight:600;white-space:nowrap;position:sticky;top:0}tr:hover td{background:rgba(255,255,255,.03)}tr.muted td{opacity:.5}td.msg{max-width:360px;word-break:break-word}
+.tablewrap{overflow-x:auto;border-radius:12px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:9px 10px;text-align:left;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;word-break:keep-all}th{background:rgba(0,0,0,.25);color:var(--dim);font-weight:600;white-space:nowrap;position:sticky;top:0}tr:hover td{background:rgba(255,255,255,.03)}tr.muted td{opacity:.5}td.msg,td.memo{min-width:10em;max-width:360px;overflow-wrap:anywhere}
 .badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;white-space:nowrap;background:rgba(255,255,255,.1)}.badge.ok{background:rgba(52,195,107,.18);color:#86e3a8}.badge.warn{background:rgba(255,159,67,.18);color:#ffc58f}.badge.fail{background:rgba(255,107,94,.2);color:#ffaaa2}.badge.gold{background:rgba(244,197,74,.2);color:var(--gold)}
-.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.08);color:var(--text);font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:.15s}.btn:hover{background:rgba(255,255,255,.14);transform:translateY(-1px)}.btn:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.btn{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.08);color:var(--text);font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:.15s}.btn:hover{background:rgba(255,255,255,.14);transform:translateY(-1px)}.btn:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .btn.primary{background:linear-gradient(135deg,#4fd683,var(--green-d));border-color:transparent;color:#06120a}.btn.gold{background:linear-gradient(135deg,#ffe08a,var(--gold));border-color:transparent;color:#2b1d00}.btn.danger{background:rgba(255,107,94,.18);border-color:rgba(255,107,94,.45);color:#ffd1cc}.btn.ghost{background:transparent}.btn.sm{padding:6px 10px;font-size:.85rem}
 form.inline{display:inline}.stack{display:grid;gap:12px;text-align:left;margin-top:12px}label{display:grid;gap:6px;color:var(--dim);font-size:.9rem}input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font:inherit}
 .search{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.search input{flex:1 1 220px;width:auto}.search select{width:auto;flex:0 1 200px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;justify-content:center}.search+.tablewrap{margin-top:4px}

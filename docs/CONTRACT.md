@@ -112,6 +112,8 @@ education 64, journal 66, minimap 70, weather 72, photo 74, social 80, audio 85,
 | `emote:played` / `gesture:played` | `{emoteId}` / `{gestureId}` | social |
 | `chat:sent` / `chat:message` | `{text, channel}` / `{msg}` | social |
 | `chat:mention` | `{msg}` (a chat message that @mentions my nickname) | social → engagement 알림함 |
+| `chat:retracted` | `{ids:['s<n>'], users:['<uid>']}` (moderation took those lines / every line of those accounts back, 13.10) | social → engagement 알림함 |
+| `save:auth-lost` / `save:recovered` | `{reason, notify}` (03) or `{source:'social'}` (60) / – | core, social → app (13.10) |
 | `quest:accepted` / `quest:progress` / `quest:completed` / `quest:claimed` | `{questId}` / `{questId, objective, value, target}` / `{questId}` / `{questId, reward}` | quest |
 | `reward:granted` | `{reward, reason}` | progression |
 | `level:up` | `{level}` | progression |
@@ -216,8 +218,9 @@ appearance option values: hair short|long|bun|ponytail|buzz|curly ; top tshirt|h
   when near, name tag label (`.nametag.npc` + role) with an optional marker slot; `get(id) -> {id, data, rig, group, position}`,
   `list()`, `talk(id)`, `setMarker(id, '!'|'?'|null)` (quest system calls it). Registers each NPC as interactable kind `'npc'`.
 - `G.sys.dialogue` (order 46): bottom-center dialogue box in `#dialogue-root` (speaker, typewriter text, choice buttons,
-  keyboard 1–4/Enter/Space, Esc to close), camera `focusOn`, player disabled while open (`G.ui.block('dialogue')`), optional
-  TTS when `G.settings.voiceOver` (`G.sys.audio?.speak`). `start(dialogueId, {npcId})`, `close()`, `active`.
+  keyboard 1–4/Enter/Space, Esc to close), camera `focusOn`, player disabled while open (`G.ui.block('dialogue')`; while open the
+  HUD dims to .45 and `#labels-layer` fades out (.35 s) and is hidden and not tappable (25-npc.css); labels fade back in
+  on close), optional TTS when `G.settings.voiceOver` (`G.sys.audio?.speak`). `start(dialogueId, {npcId})`, `close()`, `active`.
   Emits `npc:talk` on start and `dialogue:end`. `{nickname}` placeholder in text.
 - `G.data.dialogues = { npc_master: {npc:'NPC001', entries:[{if:{...}, node:'x'}, {node:'start'}], nodes:{ id:{ text, speaker?, emote?,
   actions:[...], choices:[{text, next?, end?, if?, actions?}], next? } } } }` for npc_master, npc_farmer, npc_culture, npc_keeper, npc_guide.
@@ -295,8 +298,11 @@ appearance option values: hair short|long|bun|ponytail|buzz|curly ; top tshirt|h
   `G.state.player.zoneId`, `G.state.visited` / `poisVisited` first-visit timestamps; minimap canvas `#minimap-canvas`
   (pre-rendered base map from terrain colours, water, roads, paths, buildings, plots, jangdokdae rings + live markers:
   player arrow with heading, NPCs, other players `G.sys.social.others`, quest markers `G.sys.quest.getMarkers()`, photo zones),
-  zoom +/- buttons, collapse/close, click → world map. `openWorldMap()` (M; large map, zone labels clickable → description +
-  "여기로 이동"), `openFastTravel()` (action `move`), `currentZone`, `worldToMap(x,z)`. Actions: `minimap`, `move`,
+  zoom +/- buttons, collapse/close, click → world map. `openWorldMap()` (M; large map: one finger or the mouse drags, two fingers pinch
+  (zoom about the midpoint), wheel and +/− zoom, also when the gesture starts on a zone chip; a press ends wherever it is
+  released — outside the map box or the window too — so a plain mouse hover never drags; a tap or click picks the zone
+  under it (touch: the nearest ring within ~20 px; correct while the dialog grows in) → description + "여기로 이동", which
+  stays pinned at the bottom of the card's scroller), `openFastTravel()` (action `move`), `currentZone`, `worldToMap(x,z)`. Actions: `minimap`, `move`,
   `minimap-collapse`, `minimap-close`, `minimap-zoom-in`, `minimap-zoom-out`.
 - `G.sys.weather` (order 72): weather CLEAR/CLOUDY/RAIN/FOG/SNOW and day phases MORNING/DAY/EVENING/NIGHT (game clock,
   `G.data.time`), drives `engine.setSun`, sky uniforms, fog colour/density, hemi/sun colours & intensities, exposure,
@@ -448,8 +454,12 @@ zoneAt, bad-word mask, escape helpers…, green/red results), 디버그 도구 (
 weather/grow/ferment/colliders/fps — the single place for debug tools), 소스 구조 (file tree + owner + purpose +
 lines from the manifest), 문서 (renders `#build-docs` JSON markdown: README, ARCHITECTURE, CONTRACT, HANDOVER,
 README-SERVER), 인수인계 (checklist: build, test, deploy, configure server, known issues, roadmap). Button: download
-a full diagnostic report (JSON + Markdown). Admin/debug access in production: only when `?dev=1`, local mode, or
-profile role `admin`.
+a full diagnostic report (JSON + Markdown). Admin/debug access in production: only in local mode, with `?dev=1` on the
+server PC (localhost), or for an admin account — the role the server last answered for the current account
+(`G.auth.serverUser` over the `G.auth.current` copy for that same account, so an in-game re-login after admin.php
+관리자 지정 / 해제 counts at once; a guest never borrows a remembered session's role; never the save's `profile.role`).
+A `G.ui` dialog that opens by itself while the center is up (re-login form, 다른 창 save card) makes the panel step
+aside until the last such dialog closes; when the account lost access meanwhile, the center closes instead.
 
 ## 12. Phase 3 — 쉬운 모드 (usable by a 5-year-old) & kid safety
 
@@ -510,7 +520,11 @@ change); CSS var `--tap` = 56px / 40px on `<html>`.
   The session ends when the last adopted screen closes (650 ms grace for a hop between two), on logout / login /
   profile load, easy-mode switch, tab hide, or after 3 min idle (`GATE_IDLE`). `logout · devcenter · admin ·
   delete-account` always ask again (`GATE_NO_CACHE`); `kid-chat · parent-gate · easy-off · reset · import · forget`
-  need a pass from the last 90 s (`GATE_FRESH`). `G.easy.lockGate(why)` ends the session.
+  need a pass from the last 90 s (`GATE_FRESH`). `G.easy.lockGate(why)` ends the session. When it ends because the
+  grown-up left (`hidden` / `expired`) the adopted screens close together with every dialog stacked on them, top first
+  (a confirm answers false), and the dialogs of the title's 어른 메뉴 view close too. A confirm that stands between a pass
+  and its action (진행 초기화, 아이 채팅 / 보호자 확인 끄기, 목록에서 지우기, 가져오기) asks `G.easy.gate` again after its
+  yes, so one left over from an ended session can never act.
   `G.easy.gateStatus()` → {unlocked, unlockLeft, screens, cooldownLeft, wrong, streak, need, choices, tries, open, required}.
   Anti-mashing: a tap locks the choices at once and the next question becomes tappable only after a short pause
   (`.easy-gate-choices.is-locked`; stale question ids ignored) → one answer per question. The wrong count of the
@@ -599,7 +613,7 @@ Verified free of overlaps at 1600×900, 1366×768, 390×844 and 844×390.
 `easy:changed {on}` · `easy:say {text}` · `easy:gate {reason, ok, skipped?, cached?}` · `easy:point {label}` ·
 `easy:celebrate {text, emoji, reduced}` (every `G.easy.celebrate`; 66-fx adds the kid party) · `easy:remind {open}`
 (healthy-play card shown / hidden) · `easy:rest {open}` (rest screen; 65-companion naps and wakes) ·
-`kid:phrase {phraseId}` (emoji sends use `'emoji:<e>'`) · `player:arrived {id, x, z, rescued}` ·
+`kid:phrase {phraseId}` (emoji sends use `'emoji:<e>'`) · `easy:gate-left {why, title}` (13.10) · `player:arrived {id, x, z, rescued}` ·
 `travel:arrived {id, zoneId, x, z}`. Settings: `settings:changed {key, value}` is also emitted when a profile load changes a key.
 
 ### 12.5b Integration APIs added by the phase-3 modules (the implementations are the reference)
@@ -724,7 +738,12 @@ server register ignores chosen play mode (70-app).
   ends at 8.3 s), applies a soft grade layer `'md-intro'` (vignette / warmth / contrast, removed at the hand-off),
   hides the HUD, the coach, the pointing hand, `#interact-prompt` and `#labels-layer`, and HOLDS toasts (04-ui; `toast(…,
   {urgent:true})` still shows) and kid voice lines (`G.easy.say` queues while `body.md-intro` / `body.md-scoping`
-  unless `opts.intro` / `opts.force`; released on `phase:'end'`). Any key / tap after 450 ms skips it.
+  unless `opts.intro` / `opts.force`; released on `phase:'end'`). For a new player on the deck the hold starts at
+  `game:login`: 17-manjangdae's login handler sets `body.md-intro` synchronously (the cinematic starts 60 ms later), so
+  what the login itself unlocks (the first-visit medal toast and voice from 32-progression's later `game:login` handler)
+  waits too — its 🏆 chime is not played while `body.md-intro` is on (04-ui's release plays one sound). If the intro does
+  not start after all, the class is removed; a logout drops what was held, otherwise `manjangdae:intro {phase:'end',
+  skipped:true}` releases it. Any key / tap after 450 ms skips it.
 - **Telescope (`tour(startZoneId = 'ZONE_MAIN')`):** each zone is aimed at its largest building (gate ×4 weight; look
   height = ground + 8 m hall / 4.2 m gate / 3 m else); near targets get a closer, higher lens so the foreground fence
   never hides them. Labels and the coach step back while scoping. The guide adds a kid line "게임 속 풍경이에요. 진짜
@@ -813,8 +832,7 @@ server register ignores chosen play mode (70-app).
   The revision resets on every `useProfile` (login / logout). The server refuses (400 `INVALID_SAVE`) any map key down to
   three levels that is an Object.prototype member name (`__proto__`, `constructor`, `toString`, …), validation on or off.
 - **Session end:** 60-social reports a 401 / `AUTH_REQUIRED` from chat or presence polling as
-  `save:auth-lost {source:'social'}` once per server session (re-armed by the next successful request); 70-app's relogin
-  dialog is idempotent.
+  `save:auth-lost {source:'social'}` once per loss; 70-app's relogin dialog is idempotent (round-2 rules in 13.10).
 - **Network (03):** `G.net.request` treats an answer whose body did not finish before the time limit as
   `NETWORK_ERROR` (status 0, retried like any timeout) — never as a refusal `HTTP_200`.
 - **Kid text sizes:** in easy mode 3D name tags (`.wl.nametag .nm / .role`) are ≥ 14 px; kid chat bubbles, the 오늘
@@ -829,3 +847,74 @@ server register ignores chosen play mode (70-app).
   its on-screen size, skips colour contrast for drawings (their `fill` sits on the drawing's own shapes) and ignores
   emoji joiners / variation selectors. Self-tests: 94 (16 added for these fixes).
 
+### 13.10 Phase 5 (bug sweep) round 2 — behaviour and APIs added by the fixes
+- **Moderation reaches open games (server + 60 + 62):** `chat/list.php?after=<id>&rafter=<cursor>` also answers
+  `retracted {messages:[id], users:[uid]}` — lines hidden (admin.php, 3 reports) and accounts banned since the client's
+  retraction cursor (nothing on the first poll, `after=0`) — and `retractId`, the new cursor (pages of 200). Schema v3:
+  table `chat_retractions` (`Retractions::add / since`, ChatFilter.php); the v3 migration also moves the text a reporter
+  typed for a report without a message id into `chat_reports.memo`, marked unverified (chat/report.php stores it that way
+  now). 60-social `_retract(mids, uids)` drops those lines from the log, the kid chat, the unread count and the speech
+  bubbles and emits `chat:retracted {ids:['s<n>'], users:['<uid>']}`.
+- **알림함 mentions (62):** a mention notice is fixed text — title "친구가 나를 불렀어요", line "눌러서 채팅을 봐요." — and keeps
+  no nickname and no chat words; it is saved that way (also to the server), and older saves are scrubbed at load. Who said
+  what lives in memory for this session only (`_mentionLive`: the grown-up inbox shows the latest line); a
+  `chat:retracted` naming that line or its account removes the notice (a coalesced notice only loses those mentions).
+- **Chat pause (server + 60):** chat/send.php `403 MUTED` carries `data.until` (ms); presence/update.php answers
+  `mutedUntil` (0 = not paused). 60-social holds sends until then (no line, no bubble, nothing read aloud) and a child in
+  easy mode hears "지금은 말하기를 잠깐 쉬어요." — never the grown-up text. Local mode keeps no report log:
+  `localStorage['tfm.v1.chat.reports']` is removed on profile load.
+- **Session ownership (server):** a login stores the account row's creation time (`'born'`); `Session::ownsAccount($user)`
+  is false for a remembered session whose id now names another account row (after a database restore, README-SERVER §9)
+  and `Auth::current()` ends it ('other account'). A 401 `AUTH_REQUIRED` carries `data.why` (`'epoch'` | `'banned'` |
+  `'deleted'` | `'other account'`) when that request found its session invalid (none for an expired or absent session).
+- **Session end (03 / 60 / 70):** 03-state emits `save:auth-lost {reason, notify}` on the first 401 of a loss and again for a
+  save the player asked for; 60-social reports once per loss (`{source:'social'}`), pauses presence while the session is
+  gone (other players' avatars are cleared, a guest-readable chat poll does not re-arm the report) and resumes on
+  `state:saved` or a new login. 70-app: "나중에" — on the kid card, when the parent gate is left, or when the re-login
+  form closes without logging in — holds for the rest of that login (`app._loginSeq`): later reports do not ask again; a
+  save the player asks for (`reason:'manual'` or `notify`) does; `state:saved`, `save:recovered` or a new login clear it.
+  Modal autofocus (04-ui) takes `[autofocus]` first, then the first drawn, enabled field (the re-login form focuses its
+  password box, not the hidden username field kept for password managers).
+- **Restored saves (server + 03):** admin.php "직전 저장으로 되돌리기" (`AdminOps::restoreBackup`, one transaction) stamps
+  `player_saves.meta = {restoredRev, restoredAt}` (the ledger starts over). While the row's revision is still
+  `restoredRev`, a stale save is refused with 409 `STALE_SAVE` and `data.restored: true`; 03-state then loads the row as
+  `SAVE_RESTORED` (drops the pending copy, toast "운영자가 되돌린 저장 기록을 불러왔어요…") whoever saved that copy. Without
+  the flag, `ServerAdapter.confirmed` (savedAt → revision of the copies this tab saw confirmed) still recognises a restore
+  of a copy this tab saved. An accepted save clears the stamp.
+- **Roles and sign-up (server):** `SaveValidator` sets `profile.role` to the account's role (a stale or forged role is
+  overwritten and logged, never refused — `PROFILE_ROLE` is gone); 70-app adopts the server's role / nickname on re-login
+  and the dev center trusts `G.auth.serverUser` for the same account. register.php answers the per-address limit
+  (`rate_limits.register_ip`) with 429 `REGISTER_IP_LIMIT` (`data.retryAfter`, `Retry-After`); 70-app says the limit
+  belongs to this network (학교·집) and when to try again.
+- **Taps (04 / 08 / 65):** the global tap shield (`G.ui.shieldTaps(ms)`) and `G.ui.armTaps(el, ms = 360)` judge a press
+  by its event time stamp (when the finger came down, not when a slow frame ran the handler) and also swallow the click
+  of a swallowed press that arrives after the window; keyboard and synthetic clicks pass. `armTaps` guards every card
+  that pops up by itself: the reward popup, the healthy-play reminder and rest screen, and 옹이's speech card. A
+  second-finger touch on a `[data-action]` control acts on its release (< 550 ms, < 16 px, still on it); a click that
+  follows is swallowed (700 ms).
+- **Layout:** `.modal-backdrop` padding and popover placement respect `env(safe-area-inset-*)` (`--bd-pad`, `.safe-probe`
+  in 00-base). On touch screens in normal mode `body.is-touch:not(.easy)` controls are ≥ `var(--tap)` (40 px): the shared
+  rules in 02-responsive plus module rules (shop stepper, journal chips, hub tabs, emote picker tabs, dev-center icons,
+  title chips, world-map zone rows). World-map zone chips and lesson page dots keep their drawn size and get a one-tap
+  area around them (`::before`; the dots sit one tap apart); the title's inline text links get a one-tap-high box that
+  does not make their line taller (padding + negative margin), and form checkbox rows centre the box on its text. A tab
+  row that scrolls sideways (phones) shows the chosen tab once the row is laid out, also when a dialog opens straight
+  onto a later tab (`G.ui.tabs`). Kid views: 옹이's card face ≥ `var(--tap)` on phones, the kid
+  weather tiles go 3 + 2 under 360 px, kid dialog titles never split a word (`keep-all`; one longer than the line still
+  wraps), the hub greeting wraps on phones (no "…").
+- **Easy mode (08 / 70):** `easy:gate-left {why, title}` — a gate session ended by a tab hide or `GATE_IDLE` (3 min, counted
+  as idle time on the grown-up screens: a tap, key or scroll there extends it) closes the screens its pass opened; the
+  title's 어른 메뉴 view goes back to the kid view, and in easy mode the developer center and debug panel close on a tab
+  hide. Voice lines said while the tab is hidden are held (last 2) and read on return if < 15 s old. The healthy-play
+  counter is per child: `sessionStorage['tfm.v1.playActive'] = {'kind:id': seconds}` for the last 6 children.
+  `stats.playTime` counts visible time with input in the last 90 s, only while a game session runs. Input is a press,
+  key, wheel or touch, and also a pointer / touch MOVE with a finger or button down (steering the joystick, dragging the
+  camera; a bare hover is not), so steady steering counts in full — the healthy-play counter uses the same rule.
+- **Photo / weather (52 / 51):** one shutter press = one photo — presses within 600 ms of the last are ignored, by event
+  time stamp (this also keeps the soft flash under 3 Hz); entering or leaving photo mode calls `G.ui.shieldTaps()`. Both
+  weather cards are capped at `100dvh` minus the placement margins (or safe-area insets) and scroll; the kid weather card
+  turns 2-column at `(max-height: 560px) and (min-width: 540px)`. At `max-height: 560px` the album body has no minimum
+  (it scrolls, its 📸 / 닫기 row stays on screen) and the opened photo is 2-column with a height-fitted stage.
+- **Developer center (80):** self-tests: 108 (13 added for these fixes: retraction, blocked rows in easy chat, mention
+  notices, play counter format, rest card, kid card footers, `armTaps`, `[data-action]` once, dialogue label layer,
+  intro hold at login, world-map transform mapping, shutter double tap, weather card scroll).

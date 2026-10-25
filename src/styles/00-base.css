@@ -360,7 +360,11 @@ button.slot:active:not(:disabled), .slot[role="button"]:active { transform: scal
    tap point → shared-element feel), content staggers in. Exit: quick shrink + fade toward the same origin. */
 #modal-root { position: fixed; inset: 0; z-index: var(--z-modal); pointer-events: none; }
 .modal-backdrop {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 1.2rem;
+  /* --bd-pad: the room around a dialog; notched phones add their safe-area insets (home indicator, rounded corners) */
+  --bd-pad: 1.2rem;
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: max(var(--bd-pad), env(safe-area-inset-top, 0px)) max(var(--bd-pad), env(safe-area-inset-right, 0px))
+    max(var(--bd-pad), env(safe-area-inset-bottom, 0px)) max(var(--bd-pad), env(safe-area-inset-left, 0px));
   background: rgba(4, 9, 6, .5); pointer-events: auto; animation: fadeIn var(--dur-3) var(--ease-out) both;
 }
 .modal, .modal-closing {
@@ -443,6 +447,11 @@ button.slot:active:not(:disabled), .slot[role="button"]:active { transform: scal
 
 /* ------------------------------------------------------------------ popovers (grow out of their anchor) */
 #popover-root { position: fixed; inset: 0; pointer-events: none; z-index: var(--z-popover); }
+/* 04-ui reads the notch / home-indicator insets off this hidden probe to keep popovers clear of them */
+.safe-probe {
+  position: fixed; left: 0; top: 0; width: 0; height: 0; visibility: hidden; pointer-events: none;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
 .popover {
   position: absolute; pointer-events: auto; padding: .7rem; min-width: 14rem; max-width: min(26rem, 94vw);
   background: var(--bg-glass-strong); border: 1px solid var(--line-strong); border-radius: var(--radius);

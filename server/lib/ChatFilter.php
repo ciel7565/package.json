@@ -396,3 +396,30 @@ final class ChatFilter
         return mb_substr($k, 0, 200);
     }
 }
+
+/**
+ * Moderation that reaches players who are online: a hidden message (admin, 3 reports) or a banned sender is taken
+ * back from every open game, not only filtered out of new chat/list.php results (table chat_retractions, schema v3).
+ */
+final class Retractions
+{
+    /** take back one message ($mid) or every message of one account ($uid) */
+    public static function add(?int $mid, ?int $uid): void
+    {
+        Db::insert('chat_retractions', ['message_id' => $mid, 'user_id' => $uid, 'created_at' => Clock::ms()]);
+    }
+
+    /** what was taken back after the client's cursor → {messages:[id], users:[uid], retractId: the new cursor} */
+    public static function since(?int $cursor, int $limit = 200): array
+    {
+        $out = ['messages' => [], 'users' => [], 'retractId' => (int) Db::value('SELECT COALESCE(MAX(id), 0) FROM chat_retractions')];
+        if ($cursor === null) return $out;
+        $rows = Db::all('SELECT id, message_id, user_id FROM chat_retractions WHERE id > ? ORDER BY id ASC LIMIT ' . max(1, $limit), [$cursor]);
+        foreach ($rows as $r) {
+            if ($r['message_id'] !== null) $out['messages'][] = (int) $r['message_id'];
+            if ($r['user_id'] !== null) $out['users'][] = (string) $r['user_id'];
+        }
+        if (count($rows) >= $limit) $out['retractId'] = (int) $rows[count($rows) - 1]['id']; // a full page: the rest next time
+        return $out;
+    }
+}

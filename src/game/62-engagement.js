@@ -207,11 +207,15 @@
   // ---------------------------------------------------------------- notifications
   const NTYPES = { achievement: '🏆', quest: '📜', level: '⭐', collection: '📖', reward: '🎁', mention: '💬', ferment: '🏺', mission: '🎯', checkin: '📅', cert: '🎓', decor: '🏡', system: '🔔' };
   const NACTS = new Set(['quests', 'achievements', 'collection', 'profile', 'jar', 'chat', 'inventory', 'checkin', 'missions', 'inbox', 'cert', 'rank', 'decor']);
+  // a mention keeps no chat words in the saved inbox (it goes to the server save too): fixed title and line; who
+  // said what lives only in memory for this session (_mentionLive) and leaves with a moderation retraction
+  const MENTION_TITLE = '친구가 나를 불렀어요';
+  const MENTION_TEXT = '눌러서 채팅을 봐요.';
   function cleanNoti(n) {
     if (!isObj(n)) return null;
-    const title = str(n.title, 80);
-    if (!title) return null;
     const type = typeof n.type === 'string' && own(NTYPES, n.type) ? n.type : 'system';
+    const title = type === 'mention' ? MENTION_TITLE : str(n.title, 80);
+    if (!title) return null;
     const t = num(n.t, 0);
     return {
       id: typeof n.id === 'string' && ID_RE.test(n.id) ? n.id : U.uid('n'),
@@ -219,7 +223,7 @@
       type,
       icon: str(n.icon, 8) || NTYPES[type],
       title,
-      text: str(n.text, 200),
+      text: type === 'mention' ? MENTION_TEXT : str(n.text, 200),
       read: n.read === true,
       act: typeof n.act === 'string' && NACTS.has(n.act) ? n.act : null,
       ref: typeof n.ref === 'string' && ID_RE.test(n.ref) ? n.ref : null,
@@ -546,7 +550,7 @@
     _rank: null, _rankAt: 0, _rankBusy: null, _rankGen: 0,
     _certCanvas: null, _certKey: '',
     _refunds: [], _yard: null, _edit: null, _starting: false, _bar: null, _recs: new Map(), _byType: {}, _pops: [], _3d: null,
-    _mention: { at: 0, id: null }, _claimAt: 0,
+    _mention: { at: 0, id: null }, _mentionLive: new Map(), _claimAt: 0,
 
     // ============================================================ lifecycle
     init() {
@@ -607,6 +611,8 @@
       const e = normalizeState(cur, this._refunds);
       st.engagement = e;
       NORMALIZED.add(e);
+      // an inbox saved by an older build may hold chat words in a mention: normalizeState wrote over them, save that
+      if (Array.isArray(cur?.notifications) && cur.notifications.some((n) => n?.type === 'mention' && (n.text !== MENTION_TEXT || n.title !== MENTION_TITLE))) G.dirty('engagement');
       return e;
     },
     /** today's mission record (generates / rolls forward; never rolls back when the clock goes backwards) */
@@ -737,6 +743,7 @@
         this._loginAt = now();
         this._today = dayKey();
         this._mention = { at: 0, id: null };
+        this._mentionLive = new Map();
         setTimeout(() => this._placeBell(), 60);
         setTimeout(() => this._placeBell(), 900); // after the HUD entry animation
         this._autoTries = 0;
@@ -787,6 +794,7 @@
         this.notify({ type: 'ferment', icon: r?.icon || '🏺', title: `${r?.name || '발효'} 완성!`, text: '장독대의 내 장독에서 결과물을 받아 가세요.', act: 'jar', ref: jar, key: `ferment:${jar}` });
       });
       on('chat:message', ({ msg }) => this._onChat(msg));
+      on('chat:retracted', ({ ids, users }) => this._onRetracted(ids, users));
       on('profile:changed', () => { this._drawSign(); this._certKey = ''; this._renderHero(); });
       on('item:added', ({ itemId }) => { if (DECOR_ITEMS.includes(itemId)) this._decorInvChanged(); });
       on('item:removed', ({ itemId }) => { if (DECOR_ITEMS.includes(itemId)) this._decorInvChanged(); });
@@ -816,10 +824,35 @@
       const name = str(msg.name, 24) || '체험객';
       if (G.sys.social?.isBlocked?.(name)) return;
       this._mention.id = id;
-      // another account's nickname is a stranger's free text: the title (what the kid inbox shows and reads aloud)
-      // says only "친구"; the name stays in the detail line for grown-ups. msg.text is already kid-safe (60-social).
-      const remote = msg.kind === 'remote';
-      this.notify({ type: 'mention', icon: '💬', title: remote ? '친구가 나를 불렀어요' : `${name}님이 나를 불렀어요`, text: remote ? `${name}: “${str(msg.text, 120)}”` : `“${str(msg.text, 120)}”`, act: 'chat', key: 'mention' });
+      // the saved notice is fixed text (cleanNoti): another account's nickname and words are a stranger's free text.
+      // The grown-up inbox shows who said what from memory, this session only (msg.text is already kid-safe, 60-social)
+      const x = this.notify({ type: 'mention', icon: '💬', title: MENTION_TITLE, text: MENTION_TEXT, act: 'chat', key: 'mention' });
+      if (!x) return;
+      const live = this._mentionLive.get(x.id) || [];
+      live.push({ id, uid: msg.kind === 'remote' ? str(msg.uid, 40) : '', line: `${name}: “${str(msg.text, 120)}”` });
+      if (live.length > 20) live.shift();
+      this._mentionLive.set(x.id, live); // (notify's inbox re-render runs after this)
+    },
+    /** moderation took chat lines back ({ids: ['s<n>'], users: [uid]} from 60-social _retract): mentions of them go too */
+    _onRetracted(ids, users) {
+      const e = this._E();
+      if (!e || !this._mentionLive.size) return;
+      const gone = new Set((Array.isArray(ids) ? ids : []).map(String));
+      const who = new Set((Array.isArray(users) ? users : []).map(String).filter(Boolean));
+      let changed = false;
+      for (const [nid, live] of [...this._mentionLive]) {
+        const keep = live.filter((s) => !(s.id && gone.has(s.id)) && !(s.uid && who.has(s.uid)));
+        const cut = live.length - keep.length;
+        if (!cut) continue;
+        changed = true;
+        if (keep.length) this._mentionLive.set(nid, keep); else this._mentionLive.delete(nid);
+        const i = e.notifications.findIndex((n) => n.id === nid);
+        if (i < 0) continue;
+        const n = e.notifications[i];
+        if ((n.count || 1) - cut <= 0) e.notifications.splice(i, 1); // a coalesced notice keeps the mentions still there
+        else n.count -= cut;
+      }
+      if (changed) { G.dirty('engagement'); this._refreshBadge(); this._uiDirty('inbox'); }
     },
 
     // ============================================================ hotkeys
@@ -1440,7 +1473,7 @@
           h('span', { class: 'eng-noti-ico emoji', 'aria-hidden': 'true' }, n.icon || NTYPES[n.type] || '🔔'),
           h('div', { class: 'eng-noti-main' },
             h('div', { class: 'eng-noti-title' }, n.title, n.count > 1 ? h('span', { class: 'eng-noti-count' }, `×${n.count}`) : null),
-            n.text ? h('div', { class: 'eng-noti-text' }, n.text) : null),
+            n.text ? h('div', { class: 'eng-noti-text' }, (n.type === 'mention' && this._mentionLive.get(n.id)?.slice(-1)[0]?.line) || n.text) : null),
           h('span', { class: 'eng-noti-ago', 'data-t': String(n.t) }, ago(n.t)),
           n.read ? null : h('i', { class: 'eng-noti-dot', title: '읽지 않음' }));
         row.style.setProperty('--i', String(Math.min(i, 12)));

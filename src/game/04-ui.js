@@ -7,10 +7,11 @@
 //   G.ui.popover.open(...)
 //   G.ui.label(...)  world-anchored DOM labels (updated every frame)
 //   G.ui.loading / fade / flash / setHudVisible
-//   G.ui.onAction(action, fn)  delegated [data-action] clicks
+//   G.ui.onAction(action, fn)  delegated [data-action] clicks (a second-finger touch acts on its release)
 //   G.ui.onEscape(fn, priority) / handleEscape()
 //   G.ui.block(key) / unblock(key) / isBlocking()
 //   G.ui.shieldTaps(ms?)  swallow pointer presses on controls for a moment (opening / closing a dialog does it itself)
+//   G.ui.armTaps(el, ms?) the same for one card that pops up on its own (reward popup, rest reminder)
 //   G.ui.resetSession()   drop the queued rewards / held and live toasts of a player who logged out
 //   motion (CONTRACT §13.5): G.ui.motion {d1..d4, ease}, reducedMotion(), stagger(els, opts), countUp(el, to, opts),
 //   setBar(el, pct), skeleton(opts), pulse(el) — modals grow out of the element that opened them, toasts stack with
@@ -60,16 +61,51 @@
   const SHIELD_MS = 360;
   const SHIELD_SEL = 'button, a[href], input, select, textarea, label, summary, [role=button], [role=option], [role=tab], [role=radio], [role=checkbox], [role=switch], [data-action], [data-act], .modal-backdrop, .modal-closing';
   let shieldUntil = 0;
+  let shieldAte = -1e9, shieldKept = -1e9; // time stamps of the last press on a control swallowed / let through
   function shieldTaps(ms = SHIELD_MS) { shieldUntil = Math.max(shieldUntil, perfNow() + ms); }
   const shieldGuard = (e) => {
-    if (!e.isTrusted || perfNow() >= shieldUntil) return;
-    if (e.type === 'click' && !(e.detail >= 1)) return;
-    const t = e.target instanceof Element ? e.target : null;
-    if (!t || !t.closest(SHIELD_SEL)) return;
+    if (!e.isTrusted) return;
+    // when the finger came down (the event's time stamp), not when a slow frame let the handler run
+    const t = e.timeStamp > 0 ? e.timeStamp : perfNow();
+    // cheap way out for the usual press long after any dialog moved (no control lookup)
+    if (t >= shieldUntil && e.type !== 'pointerdown' && !(e.type === 'click' && shieldAte > shieldKept)) return;
+    const c = e.target instanceof Element ? e.target : null;
+    if (!c || !c.closest(SHIELD_SEL)) return;
+    if (e.type === 'click') {
+      // keyboard clicks pass; the click of a swallowed press goes with it even when it arrives after the window
+      if (!(e.detail >= 1) || (t >= shieldUntil && !(shieldAte > shieldKept && t - shieldAte < 1500))) return;
+    } else if (t >= shieldUntil) { if (e.type === 'pointerdown') shieldKept = t; return; }
+    else if (e.type === 'pointerdown') shieldAte = t;
     e.preventDefault();
     e.stopImmediatePropagation();
   };
   for (const type of ['pointerdown', 'mousedown', 'click']) document.addEventListener(type, shieldGuard, true);
+  /**
+   * armTaps(el, ms?) — the same guard for one card that appears on its own (reward popup, the healthy-play rest card):
+   * for a moment its controls ignore pointer presses, so the second tap of a double tap meant for the screen under it
+   * cannot dismiss it before the child has seen it. A press swallowed here also loses its click; keyboard is untouched.
+   */
+  function armTaps(el, ms = SHIELD_MS) {
+    if (!el) return el;
+    const until = perfNow() + ms;
+    let ate = -1e9, kept = -1e9; // time stamps of the last press swallowed / let through
+    const guard = (e) => {
+      if (!e.isTrusted) return;
+      const c = e.target instanceof Element ? e.target : null;
+      if (!c || !c.closest(SHIELD_SEL)) return;
+      // when the finger came down (the event's time stamp), not when a busy main thread got to it
+      const t = e.timeStamp > 0 ? e.timeStamp : perfNow();
+      if (e.type === 'click') {
+        // keyboard clicks pass; the click of a swallowed press goes with it even when it arrives after the window
+        if (!(e.detail >= 1) || (t >= until && !(ate > kept && t - ate < 1500))) return;
+      } else if (t >= until) { if (e.type === 'pointerdown') kept = t; return; }
+      else if (e.type === 'pointerdown') ate = t;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    for (const type of ['pointerdown', 'mousedown', 'click']) el.addEventListener(type, guard, true);
+    return el;
+  }
 
   /**
    * stagger(elements | parent, {delay, step, y, scale, duration, max, skipAnimated=true}) — one-shot entrance with the
@@ -212,6 +248,38 @@
     const handled = triggerAction(el.dataset.action, el, ev);
     if (handled) G.sfx('click');
   });
+  // a second finger (the other thumb holds the joystick): browsers synthesize no click for a touch that goes down and
+  // up while another touch is down, so a [data-action] control pressed that way acts on its release — still on it,
+  // short and not dragged, like the 점프 / 달리기 buttons. A click that may still follow is swallowed. A press the tap
+  // shield ate never gets here (its capture listener runs first and stops it).
+  let multi = null, multiDone = null;
+  document.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || e.isPrimary || !e.isTrusted) return; // isPrimary: no other touch is down
+    const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
+    multi = el ? { id: e.pointerId, el, x: e.clientX, y: e.clientY, t: e.timeStamp } : null;
+  }, true);
+  const multiEnd = (e) => {
+    const m = multi;
+    if (!m || e.pointerId !== m.id) return;
+    multi = null;
+    if (e.type !== 'pointerup' || m.el.disabled || !m.el.isConnected) return;
+    // a hold / a drag. Event time stamps, not handler time: a busy main thread must not turn a quick tap into a hold
+    if (e.timeStamp - m.t > 550 || Math.abs(e.clientX - m.x) + Math.abs(e.clientY - m.y) > 16) return;
+    const hit = document.elementFromPoint(e.clientX, e.clientY);
+    if (!hit || !m.el.contains(hit)) return;
+    multiDone = { el: m.el, until: perfNow() + 700 };
+    if (triggerAction(m.el.dataset.action, m.el, e)) G.sfx('click');
+  };
+  document.addEventListener('pointerup', multiEnd, true);
+  document.addEventListener('pointercancel', multiEnd, true);
+  document.addEventListener('click', (e) => {
+    const d = multiDone;
+    if (!d || !e.isTrusted || !(e.detail >= 1)) return;
+    multiDone = null;
+    if (perfNow() > d.until || !(e.target instanceof Element) || !d.el.contains(e.target)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation(); // it acted on release already
+  }, true);
   function setActive(action, on) { $$(`[data-action="${action}"]`).forEach((b) => b.classList.toggle('active', !!on)); }
   // easy-mode tiles that merge several adult buttons show the sum of their badges (§12.3)
   const BADGE_ALIASES = { stickerbook: ['collection', 'quests'], 'kid-chat': ['chat'] };
@@ -539,7 +607,12 @@
       G.sfx('open');
       if (opts.say !== false && easyOn()) { try { G.easy?.say?.(sayLine(), { priority: 0 }); } catch (e) { /* voice optional */ } }
       // focus first input for keyboard users
-      setTimeout(() => { const f = box.querySelector('[autofocus], input:not([type=hidden]), textarea, select'); if (f && opts.autofocus !== false) f.focus(); }, 30);
+      // ([autofocus] first, then the first field that is drawn: a hidden username box for password managers is not)
+      setTimeout(() => {
+        if (opts.autofocus === false) return;
+        const f = box.querySelector('[autofocus]') || [...box.querySelectorAll('input:not([type=hidden]), textarea, select')].find((x) => !x.disabled && x.getClientRects().length > 0);
+        f?.focus();
+      }, 30);
       return m;
     },
     get(id) { return modalStack.find((m) => m.id === id) || null; },
@@ -615,6 +688,7 @@
     hydrateIcons(el);
     root.innerHTML = '';
     root.appendChild(el);
+    armTaps(el); // it pops up by itself: a tap already on its way must not close it unseen
     el.querySelectorAll('.rp-item').forEach((it, i) => it.style.setProperty('--i', String(i)));
     el.querySelectorAll('.rp-num[data-cu]').forEach((b, i) => countUp(b, Number(b.dataset.cu), { from: 0, prefix: '+', delay: 220 + i * 70, duration: 900 }));
     G.sfx(r.sound || 'reward');
@@ -649,6 +723,13 @@
 
   // ---------------------------------------------------------------- popovers (emote/gesture/weather pickers)
   let currentPopover = null;
+  // the notch / home-indicator insets (env(safe-area-inset-*)) in px, read off a hidden probe (.safe-probe, 00-base)
+  let safeProbe = null;
+  function safeInsets() {
+    if (!safeProbe?.isConnected) { safeProbe = h('div', { class: 'safe-probe', 'aria-hidden': 'true', 'data-kid-exempt': '' }); document.body.appendChild(safeProbe); }
+    const cs = getComputedStyle(safeProbe), px = (v) => parseFloat(v) || 0;
+    return { top: px(cs.paddingTop), right: px(cs.paddingRight), bottom: px(cs.paddingBottom), left: px(cs.paddingLeft) };
+  }
   const popover = {
     /** open(anchorEl, contentNodeOrHtml, { id, placement:'top'|'bottom'|'left'|'right', onClose }) -> {el, close} ; toggles if same id */
     open(anchor, content, opts = {}) {
@@ -672,8 +753,9 @@
         if (pl === 'bottom') y = r.bottom + 10;
         if (pl === 'right') { x = r.right + 10; y = r.top + r.height / 2 - pr.height / 2; }
         if (pl === 'left') { x = r.left - pr.width - 10; y = r.top + r.height / 2 - pr.height / 2; }
-        x = G.util.clamp(x, 8, innerWidth - pr.width - 8);
-        y = G.util.clamp(y, 8, innerHeight - pr.height - 8);
+        const sa = safeInsets(); // not under a notch / the home indicator
+        x = G.util.clamp(x, Math.max(8, sa.left), innerWidth - pr.width - Math.max(8, sa.right));
+        y = G.util.clamp(y, Math.max(8, sa.top), innerHeight - pr.height - Math.max(8, sa.bottom));
         el.style.left = x + 'px'; el.style.top = y + 'px';
       };
       place();
@@ -871,7 +953,14 @@
     const btns = list.map((t) => { const b = h('button', { class: 'tab', type: 'button', dataset: { tab: t.id } }, t.icon ? h('span', { class: 'emoji' }, t.icon + ' ') : null, t.label); b.addEventListener('click', () => set(t.id)); container.appendChild(b); return b; });
     const ink = h('i', { class: 'tab-ink', 'aria-hidden': 'true' });
     container.appendChild(ink);
-    let cur = null, tries = 0;
+    let cur = null, tries = 0, reveal = false;
+    // a row that scrolls sideways (phones, 02-responsive) keeps the chosen tab in view
+    const keepInView = (b) => {
+      if (container.scrollWidth <= container.clientWidth + 1) return;
+      const l = b.offsetLeft - 8, r = b.offsetLeft + b.offsetWidth + 8 - container.clientWidth;
+      if (container.scrollLeft > l) container.scrollLeft = l;
+      else if (container.scrollLeft < r) container.scrollLeft = r;
+    };
     const place = (snap) => {
       const b = btns.find((x) => x.dataset.tab === cur);
       if (!b || !container.isConnected || !b.offsetWidth) {
@@ -881,6 +970,9 @@
         return;
       }
       tries = 0;
+      // the chosen tab is scrolled into view once the row has its real size (a dialog opened straight onto a later
+      // tab builds the row before it is attached, when nothing scrolls yet)
+      if (reveal) { reveal = false; keepInView(b); }
       const first = !ink.classList.contains('on');
       if (snap || first || reduced()) ink.classList.add('snap');
       ink.style.setProperty('--ink-x', `${b.offsetLeft}px`);
@@ -894,6 +986,7 @@
     function set(id) {
       cur = id;
       btns.forEach((b) => b.classList.toggle('active', b.dataset.tab === id));
+      reveal = true;
       place(false);
       onChange?.(id);
     }
@@ -1028,7 +1121,7 @@
     bar, setBar, itemIcon, itemName, tabs,
     // motion system (§13.5)
     motion: MOTION, reducedMotion: reduced, tapOrigin, stagger, countUp, pulse, skeleton, dismissToast,
-    shieldTaps, resetSession,
+    shieldTaps, armTaps, resetSession,
   };
 
   // hydrate static template icons asap; start the bar / HUD motion observers once the template exists

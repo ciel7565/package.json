@@ -179,7 +179,7 @@ body.easy .ong-card-name { font-size: max(16px, .9rem); }
 /* ------------------------------------------------------------------ responsive */
 @media (max-width: 820px), (max-height: 520px) {
   .ong-card { min-width: 12rem; padding: .45rem 1.9rem .55rem .4rem; }
-  .ong-card-face { width: 3.6rem; height: 3.6rem; margin-top: -1.2rem; }
+  .ong-card-face { width: max(3.6rem, var(--tap)); height: max(3.6rem, var(--tap)); margin-top: -1.2rem; }
   .ong-card-face .ong-svg { width: 3.5rem; }
   .ong-card-text { font-size: .86rem; }
   .ong-radial { --r: 6.2rem; }
@@ -222,7 +222,8 @@ body.reduce-motion .ong-svg.ong-bob, body.reduce-motion .ong-svg.ong-blink .ong-
 
 @media (max-width: 820px), (max-height: 520px) {
   .ong-card.ong-kid { min-width: 14rem; }
-  .ong-card.ong-kid .ong-card-face { width: 4.2rem; height: 4.2rem; margin-top: -1.5rem; }
+  /* 4.2rem is 54.6 px on a 13 px phone root: never under the 56 px kid tap size (kid-audit 옹이와 놀기) */
+  .ong-card.ong-kid .ong-card-face { width: max(4.2rem, var(--tap)); height: max(4.2rem, var(--tap)); margin-top: -1.5rem; }
   .ong-card.ong-kid .ong-card-face .ong-svg { width: 4.1rem; }
   .ong-card.ong-kid .ong-card-text { font-size: 1.04rem; }
 }

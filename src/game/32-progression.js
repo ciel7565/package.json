@@ -529,7 +529,8 @@
       if (r.title) parts.push(`칭호 「${r.title}」`);
       if (easyOn()) toastQ(`메달을 받았어요! ${a.name}`, { emoji: a.icon || '🏆', type: 'reward', cls: 'ach-toast', duration: 3600, gap: 420, say: `메달을 받았어요! ${a.name}!` });
       else toastQ(`<b>업적 달성!</b> ${esc(a.name)}${parts.length ? ` <span class="t-sub">${esc(parts.join(' · '))}</span>` : ''}`, { html: true, emoji: a.icon || '🏆', type: 'reward', cls: 'ach-toast', duration: 3600, gap: 420 });
-      G.sfx('achievement');
+      // the 만장대 intro holds the toast (04-ui plays its sound when it shows it): no chime now for a medal not yet seen
+      if (!document.body.classList.contains('md-intro')) G.sfx('achievement');
       this.grant(r, { popup: false, silent: true, reason: `achievement:${id}` });
       this._newAch.add(id);
       this._hubBadge();

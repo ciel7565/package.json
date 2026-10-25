@@ -368,7 +368,7 @@
     lookout: { x: 52, y: 22, z: 109.4 },
     root: null, meshes: {}, colliders: [], walkables: [], built: false,
     introActive: false, tourActive: false,
-    _intro: null, _introDone: null, _tour: null, _ui: null, _card: null, _t: 0,
+    _intro: null, _introDone: null, _loginT: 0, _tour: null, _ui: null, _card: null, _t: 0,
 
     get data() { return MDL(); },
 
@@ -432,7 +432,7 @@
       });
     },
 
-    onLogout() { this._abortIntro(); this._endTour(true); },
+    onLogout() { this._unholdLogin(false); this._abortIntro(); this._endTour(true); },
 
     _groundY(x, z, fallback = 0) {
       const y = G.world?.terrainHeight?.(x, z);
@@ -1077,7 +1077,25 @@
       // only when the new player really stands on the deck
       const p = G.sys.player?.position;
       if (!p || Math.hypot(p.x - this.lookout.x, p.z - this.lookout.z) > 6) return;
-      setTimeout(() => { if (G.state && G.ready) this.intro(); }, 60);
+      // the cinematic owns the screen from the login on: what the login itself sets off right after this handler
+      // (the first-visit medal toast + its voice line: the game:login handler of 32-progression, a later system) is
+      // held back by 04-ui / 08-easy like everything else and shown when the intro ends, not over its opening
+      document.body.classList.add('md-intro');
+      clearTimeout(this._loginT);
+      this._loginT = setTimeout(() => {
+        this._loginT = 0;
+        if (G.state && G.ready) this.intro();
+        if (!this._intro) this._unholdLogin(!!G.state);
+      }, 60);
+    },
+    /** the intro announced at login does not play after all (logout, no camera): the screen is given back */
+    _unholdLogin(release) {
+      clearTimeout(this._loginT);
+      this._loginT = 0;
+      if (this._intro) return;
+      document.body.classList.remove('md-intro');
+      // still logged in: what was held for the intro is shown now (a logout drops it: 04-ui resetSession, 08-easy)
+      if (release) G.bus.emit('manjangdae:intro', { phase: 'end', skipped: true, reduced: false });
     },
     /** first-entry cinematic. Resolves {skipped, reduced} when the follow camera has control again. */
     intro(opts = {}) {

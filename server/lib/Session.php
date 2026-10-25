@@ -162,6 +162,19 @@ final class Session
 
     public static function userId(): int { return self::started() ? (int) ($_SESSION['_tfm']['uid'] ?? 0) : 0; }
     public static function epoch(): int { return (int) ($_SESSION['_tfm']['epoch'] ?? 0); }
+    /**
+     * Is this login for this very account row? An id alone is not: after a database restore (README §9) the id counter
+     * goes back and the next new account gets the id of one that disappeared, while remembered sessions survive in
+     * data/sessions. A login keeps the row's creation time ('born', it never changes); a session from before that key
+     * existed only accepts an account that is older than the login itself.
+     */
+    public static function ownsAccount(array $user): bool
+    {
+        $born = (int) ($user['created_at'] ?? 0);
+        $s = $_SESSION['_tfm'] ?? [];
+        if (isset($s['born'])) return (int) $s['born'] === $born;
+        return $born <= ((int) ($s['created'] ?? 0) + 1) * 1000;
+    }
     public static function get(string $k, mixed $d = null): mixed { return $_SESSION['_tfm']['data'][$k] ?? $d; }
     public static function set(string $k, mixed $v): void { $_SESSION['_tfm']['data'][$k] = $v; }
 
@@ -177,6 +190,7 @@ final class Session
             'fp'       => self::fingerprint(),
             'csrf'     => bin2hex(random_bytes(32)),
             'uid'      => (int) $user['id'],
+            'born'     => (int) ($user['created_at'] ?? 0), // which account row this id meant (ownsAccount)
             'epoch'    => (int) ($user['session_epoch'] ?? 0),
             'remember' => $remember,
             'role'     => (string) ($user['role'] ?? 'user'),

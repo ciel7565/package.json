@@ -672,14 +672,25 @@
   class AuthError extends Error {
     constructor(message, field = null, code = null, extra = {}) { super(message); this.name = 'AuthError'; this.field = field; this.code = code; Object.assign(this, extra); }
   }
-  function serverAuthError(e) {
+  /** server error -> AuthError for the forms. what: 'register' adds what a grown-up can do about a full sign-up limit */
+  function serverAuthError(e, what) {
     if (e instanceof AuthError) return e;
     const code = String(e?.code || '');
     const field = /EMAIL/.test(code) ? 'email' : /NICK/.test(code) ? 'nickname' : /MISMATCH/.test(code) ? 'confirm' : /TERMS/.test(code) ? 'agree'
       : /PASS|CREDENTIAL|LOGIN|INVALID|ATTEMPT/.test(code) ? 'password' : null;
     let msg = typeof e?.message === 'string' && e.message ? e.message.slice(0, 200) : '요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.';
     if (code === 'NETWORK_ERROR') msg = '서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.';
-    if ((code === 'RATE_LIMITED' || e?.status === 429) && !/TOO_MANY/.test(code)) msg = '요청이 너무 많아요. 잠시 후 다시 시도해 주세요.';
+    if ((code === 'RATE_LIMITED' || e?.status === 429) && !/TOO_MANY/.test(code)) {
+      // the limits are hourly windows (a class behind one school address can fill register_ip): say how long, not "잠시"
+      const sec = Math.ceil(Number(e?.data?.retryAfter) || 0);
+      const when = sec >= 90 ? `약 ${Math.ceil(sec / 60)}분 후에` : sec > 0 ? `${waitText(sec)}후에` : '잠시 후';
+      // REGISTER_IP_LIMIT: the sign-ups of this whole network address (a classroom behind one school address)
+      msg = code === 'REGISTER_IP_LIMIT'
+        ? `이 인터넷 주소(학교·집)에서 가입이 너무 많았어요. ${when} 다시 가입할 수 있어요. 이미 만든 계정은 지금 바로 로그인할 수 있어요. (서버 관리자는 config/config.local.php 의 rate_limits.register_ip 에서 한도를 늘릴 수 있어요)`
+        : what === 'register'
+          ? `가입 요청이 너무 많아요. ${when} 다시 가입할 수 있어요. 이미 만든 계정은 지금 바로 로그인할 수 있어요. (서버 관리자는 config/config.local.php 의 rate_limits 에서 가입 한도를 늘릴 수 있어요)`
+          : `요청이 너무 많아요. ${when} 다시 시도해 주세요.`;
+    }
     return new AuthError(msg, field, code);
   }
   function normServerUser(d) {
@@ -761,7 +772,7 @@
           // SRV-REG-MODE: the register form's "누가 놀아요?" choice decides the NEW account's play mode (same as local mode)
           if (prof && typeof form.easy === 'boolean') { prof.initialEasy = form.easy; prof.forceEasy = true; }
           return prof;
-        } catch (e) { throw serverAuthError(e); }
+        } catch (e) { throw serverAuthError(e, 'register'); }
       }
       if (Accounts.emailTaken(email)) throw new AuthError('이미 가입된 이메일이에요. 로그인해 주세요.', 'email');
       if (Accounts.nicknameTaken(nickname, keepId)) throw new AuthError('이미 사용 중인 닉네임이에요.', 'nickname');
@@ -1919,7 +1930,7 @@
           ava,
           h('span', { class: 'ts-pinfo' }, h('b', null, nick), h('small', null, h('span', { class: 'lv' }, `Lv.${Number(p.level) || 1}`), ` · ${kindLabel(p.kind)} · ${ago(p.lastPlayed)}`)),
           h('span', { class: 'ts-pgo' }, one ? '이어하기' : '로그인', h('span', { class: 'ico ico-xs', 'data-icon': 'chevron-right' })));
-        const del = h('button', { type: 'button', class: 'icon-btn ts-pdel', 'data-act': 'forget', 'data-id': p.id, 'aria-label': `${nick} 목록에서 지우기`, title: '목록에서 지우기 (저장 데이터는 남아 있어요)' }, h('span', { class: 'ico ico-sm', 'data-icon': 'x' }));
+        const del = h('button', { type: 'button', class: 'icon-btn ts-pdel', 'data-act': 'forget', 'data-id': p.id, 'aria-label': `${nick} 목록에서 지우기`, title: p.kind === 'guest' ? '목록에서 지우기 (진행 상황도 함께 지워져요)' : '목록에서 지우기 (저장 데이터는 남아 있어요)' }, h('span', { class: 'ico ico-sm', 'data-icon': 'x' }));
         list.appendChild(h('li', { class: 'ts-pitem' }, main, del));
       }
       G.ui.hydrateIcons(list);
@@ -2014,14 +2025,17 @@
           const p = Profiles.get(b.dataset.id);
           if (!p) return;
           if (!(await parentGate('forget', '목록에서 지우기'))) return;
-          // a kid slot other than 'guest' can only be reached through this row: forgetting it deletes its progress too
-          const kidSlot = p.kind === 'guest' && p.id !== 'guest' && RX_GUEST_ID.test(p.id);
+          // a guest row is a kid profile (the first kid on a device gets the 'guest' slot): nothing but this row leads
+          // back to its progress except the 게스트 button and the register form's "이어받기", which would hand that
+          // child's diary, photos and blocked list to the next person — forgetting it deletes its progress too
+          const kidSlot = p.kind === 'guest' && RX_GUEST_ID.test(p.id);
           const nm = esc(p.nickname), jo = esc(josa(p.nickname, '을/를').slice(String(p.nickname).length));
           const ok = kidSlot
             ? await askConfirm({ emoji: '🗑️', heading: '친구 지우기', title: `${josa(String(p.nickname), '을/를')} 지울까요?`, text: '놀던 기록도 함께 지워져요. 되돌릴 수 없어요.', yes: '지우기', no: '그만두기', danger: true },
               `「${nm}」${jo} 목록에서 지울까요?<br><span class="small dim">이 친구(게스트)의 진행 상황도 함께 지워져요. 되돌릴 수 없어요.</span>`, { title: '친구 지우기', icon: 'trash', okText: '진행 상황까지 지우기', danger: true })
             : await G.ui.confirm(`「${nm}」${jo} 최근 플레이 목록에서 지울까요?<br><span class="small dim">저장된 진행 상황은 지워지지 않아요. 다시 로그인하면 이어서 할 수 있어요.</span>`, { title: '목록에서 지우기', icon: 'trash', okText: '지우기', html: true });
-          if (!ok) return;
+          // a question left open after the grown-up left (the gate locked) asks again before deleting
+          if (!ok || !(await parentGate('forget', '목록에서 지우기'))) return;
           Profiles.remove(p.id);
           if (kidSlot) { delSave(p.id); G.log.info('AUTH', 'kid profile removed with its save'); }
           this.renderHome();
@@ -3631,7 +3645,8 @@
             if (!(await parentGate(reason, label))) return;
             if (!want && confirmOff) {
               const ok = await askConfirm(confirmOff.kid, confirmOff.html, { title: label, okText: '끄기', danger: true });
-              if (!ok) return;
+              // a card left open after the grown-up left (the gate locked) asks again instead of switching
+              if (!ok || !(await parentGate(reason, label))) return;
             }
             setSetting(key, want);
             G.sfx('click');
@@ -3733,7 +3748,8 @@
       resetBtn.addEventListener('click', async () => {
         if (!(await parentGate('reset', '진행 초기화'))) return;
         const ok = await G.ui.confirm('레벨·코인·가방·퀘스트·농장·장독·작업일지·사진 등 <b>모든 진행 상황</b>이 지워지고 처음부터 다시 시작해요.<br>이 작업은 되돌릴 수 없어요. 정말 초기화할까요?', { title: '진행 초기화', icon: 'trash', okText: '모두 지우고 초기화', danger: true, html: true });
-        if (!ok || !G.state) return;
+        // the grown-up may have left while the question was open (the gate locked): a stale "yes" asks again
+        if (!ok || !G.state || !(await parentGate('reset', '진행 초기화'))) return;
         G.ui.modal.closeAll();
         try {
           await G.save.resetProgress();
@@ -5052,33 +5068,60 @@
    * after which the save is retried; "나중에" keeps playing and the copy is offered at the next login.
    */
   let reloginAsking = false;
-  function onAuthLost() {
+  // "나중에" (the kid card, the gate or the form left without logging in) holds for the rest of that login
+  // (app._loginSeq): the polls and autosaves that notice the same ended session do not ask again. A save the player
+  // asks for (reason 'manual' / notify) does; a save that works (state:saved, save:recovered) or a new login clears it.
+  let reloginLater = -1;
+  function onAuthLost(p = {}) {
     const cur = auth.current;
     if (!app.loggedIn || !isServer() || cur?.kind !== 'server' || reloginAsking || G.ui.modal.get('app-relogin')) return;
-    if (!easyOn()) { openRelogin(cur); return; }
+    if (reloginLater === app._loginSeq && !(p?.reason === 'manual' || p?.notify)) return;
+    const seq = app._loginSeq;
+    if (!easyOn()) { openRelogin(cur, () => { reloginLater = seq; }); return; }
     // easy mode (§12.4): the child never gets a password box — a kid card asks for a grown-up, the parent gate comes
     // next, and only then the form. "나중에" keeps playing; the progress stays in the pending copy on this device.
     reloginAsking = true;
-    const seq = app._loginSeq;
     const same = () => app.loggedIn && seq === app._loginSeq && auth.current?.id === cur.id;
+    const later = () => { if (same()) reloginLater = seq; };
     Promise.resolve(askConfirm({ emoji: '🧑‍🏫', heading: '저장이 멈췄어요', title: '어른을 불러 주세요', text: '놀던 것은 잘 보관하고 있어요.', say: '어른을 불러 주세요. 놀던 것은 잘 보관하고 있어요.', yes: '어른이 왔어요', no: '나중에' },
-      '로그인 시간이 끝나서 저장이 멈췄어요.<br><span class="small dim">놀던 것은 이 기기에 보관하고 있어요. 어른이 다시 로그인해 주세요.</span>', { title: '저장이 멈췄어요', icon: 'lock', okText: '다시 로그인', cancelText: '나중에' }))
+      '로그인이 풀려서 저장이 멈췄어요.<br><span class="small dim">놀던 것은 이 기기에 보관하고 있어요. 어른이 다시 로그인해 주세요.</span>', { title: '저장이 멈췄어요', icon: 'lock', okText: '다시 로그인', cancelText: '나중에' }))
       .then(async (ok) => {
-        if (!ok || !same()) return;
-        if (!(await parentGate('login', '다시 로그인', '어른이 비밀번호를 넣어 주세요.')) || !same()) return;
-        openRelogin(cur);
+        if (!ok) { later(); return; }
+        if (!same()) return;
+        if (!(await parentGate('login', '다시 로그인', '어른이 비밀번호를 넣어 주세요.'))) { later(); return; }
+        if (!same()) return;
+        openRelogin(cur, later);
       })
       .catch((e) => G.log.warn('AUTH', 'relogin card failed', e?.message || e))
       .finally(() => { reloginAsking = false; });
   }
-  /** the re-login form (normal mode, or after the parent gate in easy mode) */
-  function openRelogin(cur) {
+  /**
+   * after a re-login: the account as the server has it now. A grown-up may have changed it while this tab was signed
+   * out (admin.php 관리자 지정 / 해제 ends the session). Every save sends profile.role: the server stores the account's
+   * role in its place (SaveValidator note 'role'; older servers refused a stale one with PROFILE_ROLE, so the old role
+   * made every later save fail). auth.current also feeds the admin / dev-center checks.
+   */
+  function adoptAccount(u) {
+    const cur = auth.current;
+    if (!u || cur?.kind !== 'server' || cur.id !== u.id) return;
+    const field = cur.nickname !== u.nickname ? 'nickname' : cur.role !== u.role ? 'role' : '';
+    for (const o of [cur, G.save.profile, G.state?.profile]) {
+      if (!o || typeof o !== 'object') continue;
+      o.role = u.role;
+      o.nickname = u.nickname;
+      if (u.email) o.email = u.email;
+    }
+    if (field && G.state) G.bus.emit('profile:changed', { profile: G.state.profile, field });
+  }
+  /** the re-login form (normal mode, or after the parent gate in easy mode); onLater: left without logging in */
+  function openRelogin(cur, onLater) {
     if (G.ui.modal.get('app-relogin')) return;
+    let done = false;
     const pw = h('input', { type: 'password', class: 'input', name: 'password', autocomplete: 'current-password', 'aria-label': '비밀번호', placeholder: '비밀번호', maxlength: '256' });
     const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
     const body = h('div', { class: 'relogin' },
       h('p', { class: 'easy-only kid-lead' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🧑‍🏫'), ' 어른에게 보여 주세요.'),
-      h('p', null, '로그인 시간이 끝나서 저장이 멈췄어요. 놀던 것은 이 기기에 잠시 보관하고 있어요.'),
+      h('p', null, '로그인이 풀려서 저장이 멈췄어요. 놀던 것은 이 기기에 잠시 보관하고 있어요.'),
       h('p', { class: 'small dim' }, `${cur.nickname} 계정의 비밀번호를 다시 넣으면 이어서 저장해요.`),
       h('input', { type: 'text', name: 'username', autocomplete: 'username', value: cur.email || cur.nickname, hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
       pw, err);
@@ -5101,6 +5144,8 @@
         return fail('다른 계정이에요. 같은 계정으로 로그인해 주세요.');
       }
       auth.serverUser = u;
+      adoptAccount(u);
+      done = true;
       G.ui.modal.get('app-relogin')?.close();
       await saveNow('manual', true);
       return true;
@@ -5113,6 +5158,7 @@
         { label: '나중에', class: 'btn-ghost' },
         { label: '로그인하고 저장', class: 'btn-primary', icon: 'save', onClick: async () => (await submit()) === true },
       ],
+      onClose: () => { if (!done) onLater?.(); },
     });
   }
   /** server mode, right after login: progress the server never confirmed (session ended, outage, closed tab) */
@@ -5465,9 +5511,26 @@
         const av = G.ui.modal.get('app-avatar');
         if (av && av._kind && av._kind !== (easyOn() ? 'kid' : 'full')) av.close(); // pending picks are dropped: reopen from the menu
       });
+      // the developer center / debug panel are grown-up screens too (behind the gate in easy mode) but no G.ui modals,
+      // so no gate session lives on them: a tab hidden in easy mode closes them like the gate's own screens
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden || !easyOn()) return;
+        try { if (devCenter()?.isOpen?.()) devCenter().close?.(); } catch (e) { /* ignore */ }
+        if (Debug.open) Debug.hide();
+      });
       G.bus.on('save:conflict', () => onSaveConflict());
-      G.bus.on('save:auth-lost', () => onAuthLost());
+      G.bus.on('save:auth-lost', (p) => onAuthLost(p));
+      G.bus.on('save:recovered', () => { reloginLater = -1; });
+      // the parent gate session ended because the grown-up left (tab hidden / idle): the title's 어른 메뉴 view (forms,
+      // 최근 플레이 with its delete buttons) closes too, like the grown-up screens 08-easy closes in the game
+      G.bus.on('easy:gate-left', ({ title } = {}) => {
+        if (!title || !Title.open || !Title.parent || app.loggedIn || app._entering) return;
+        Title.parent = false;
+        Title.renderHome();
+        Title.setView('kid');
+      });
       G.bus.on('state:saved', () => {
+        reloginLater = -1;
         const cur = auth.current;
         if (!cur || !G.state || !app.loggedIn) return;
         Profiles.upsert({ id: indexId(cur), level: num(G.state.stats?.level) || 1, playTime: num(G.state.stats?.playTime), lastPlayed: now(), nickname: G.state.profile?.nickname || cur.nickname });

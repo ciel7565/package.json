@@ -1417,10 +1417,12 @@
         return b;
       };
       const goBtn = () => big('easy-btn-yes', '👉', '장독으로 가기', () => this._goTo(J));
-      body.appendChild(h('div', { class: 'jk-hero' }, els.ring));
+      // picture on top (on the left when a phone is held sideways), the words and gauges in one column beside it
+      const info = h('div', { class: 'jk-info' });
+      body.append(h('div', { class: 'jk-hero' }, els.ring), info);
       if (!s.owned) {
         const price = FD().extraJarPrice, coin = G.state.stats?.coin || 0;
-        body.append(els.say, h('div', { class: 'jk-price' }, h('span', { class: 'ico ico-lg', 'data-icon': 'coin', 'aria-hidden': 'true' }), h('b', null, fmt(price)), h('span', { class: 'jk-have' }, `내 코인 ${fmt(coin)}`)));
+        info.append(els.say, h('div', { class: 'jk-price' }, h('span', { class: 'ico ico-lg', 'data-icon': 'coin', 'aria-hidden': 'true' }), h('b', null, fmt(price)), h('span', { class: 'jk-have' }, `내 코인 ${fmt(coin)}`)));
         if (near) {
           const b = big(coin >= price ? 'easy-btn-yes' : 'jk-soft', '🔓', '열기', () => {
             if ((G.state?.stats?.coin || 0) < price) { kidSay('코인이 조금 더 필요해요. 거둔 작물을 가게에 팔아 봐요!'); kidShake(b); return; }
@@ -1431,13 +1433,13 @@
       } else if (complete) {
         const it = items()[rec.resultItem];
         const qty = (rec.resultQty || 1) + (clamp(Math.round(s.quality || 0), 0, 100) >= 90 ? 1 : 0);
-        body.append(this._kidMoons(els, s), els.say,
+        info.append(this._kidMoons(els, s), els.say,
           h('div', { class: 'jk-reward' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, it?.icon || rec.icon || '🎁'), h('b', null, `${it?.name || shortName(rec)} ×${qty}`)),
           this._kidStarsEl(els));
         if (near) big('easy-btn-yes jk-claim', '🎁', '꺼내기', () => { this.claim(J.id); });
         else goBtn();
       } else if (active) {
-        body.append(this._kidMoons(els, s), this._kidStarsEl(els), els.say);
+        info.append(this._kidMoons(els, s), this._kidStarsEl(els), els.say);
         els.care = {};
         const grid = h('div', { class: 'jk-care', role: 'group', 'aria-label': '장독 돌보기' });
         for (const k of Object.keys(KID_CARE)) {
@@ -1450,19 +1452,22 @@
           els.care[k] = b;
           grid.appendChild(b);
         }
-        body.appendChild(grid);
-        if (!near) goBtn();
+        // near: the care pictures ARE the card's actions (docked with the buttons); far: a preview in the card
+        if (near) btns.appendChild(grid);
+        else { info.appendChild(grid); goBtn(); }
       } else {
-        body.appendChild(els.say);
+        info.appendChild(els.say);
         if (near) {
           big('easy-btn-yes', '🥣', '담그기', () => { m.close(); this._kidStart(J.id); });
           big('jk-soft', '🔨', '재료 만들기', () => { m.close(); this.openCraft(); });
         } else goBtn();
       }
-      if (btns.childNodes.length) body.appendChild(btns);
+      // the buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
+      // sideways) the card's action stays in view instead of sliding below the screen edge
+      m.setActions([]);
+      if (btns.childNodes.length) m.foot.appendChild(btns);
       try { G.easy?.speakable?.(els.say, () => els.sayT.textContent); } catch (e) { /* voice optional */ }
       G.ui.hydrateIcons(body);
-      m.setActions([]);
       md.els = els;
     },
     /** live values (called every simulation tick; touches the DOM only when something changed) */

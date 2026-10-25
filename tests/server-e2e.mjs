@@ -345,11 +345,18 @@ async function main() {
     const r = await A.req('api/player/save.php', { json: saveBody(s) });
     assert(r.status === 409 && r.error?.code === 'VALIDATION_FAILED', `status ${r.status} ${r.error?.code}`);
   });
-  await step('cheating save: role escalation profile.role=admin → 409', async () => {
+  await step('forged save role profile.role=admin → stored as the account role (user), no admin rights', async () => {
+    // the role is the account's: a stale or forged profile.role is overwritten, not refused (a tab that missed a role
+    // change would otherwise get its stored copy back with the same old role, save after save)
     const s = structuredClone(stored);
     s.profile.role = 'admin';
     const r = await A.req('api/player/save.php', { json: saveBody(s) });
-    assert(r.status === 409 && (r.json?.data?.violations || []).includes('PROFILE_ROLE'), `status ${r.status} ${r.json?.data?.violations}`);
+    assert(r.status === 200, `status ${r.status} ${r.error?.code || ''} ${r.json?.data?.violations || ''}`);
+    const g = await A.req('api/player/get.php');
+    assert(g.status === 200 && g.data?.save?.data?.profile?.role === 'user', `stored role ${g.data?.save?.data?.profile?.role}`);
+    const a = await A.req('api/admin/stats.php');
+    assert(a.status === 403, `admin api after the forged role: ${a.status}`);
+    stored = g.data.save.data;
   });
   await step('cheating save: instant crop growth (plant + 100% in 1 s) → 409', async () => {
     const s = structuredClone(stored);

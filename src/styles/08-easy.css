@@ -89,7 +89,7 @@ body.easy .easy-reading { box-shadow: 0 0 0 4px var(--kid-gold), 0 0 22px rgba(2
 .easy-back:active { transform: translateY(3px) scale(.96); box-shadow: 0 1px 0 rgba(0, 0, 0, .28); }
 .easy-back:focus-visible { outline: 4px solid var(--kid-gold); outline-offset: 2px; }
 body.easy .modal-head { gap: .75rem; padding: .85rem 1rem .75rem; }
-body.easy .modal-head h2 { font-size: 1.32rem; font-weight: 800; }
+body.easy .modal-head h2 { font-size: 1.32rem; font-weight: 800; word-break: keep-all; overflow-wrap: anywhere; min-width: 0; } /* 된장 never splits; a too-long word still wraps */
 body.easy .modal-head .modal-icon { font-size: 1.7rem; }
 body.easy .modal-foot .btn, body.easy .btn-lg { min-height: var(--tap); font-size: max(16px, 1.05rem); border-radius: 16px; padding-left: 1.2rem; padding-right: 1.2rem; }
 /* white on green reaches 4.5:1 for kid buttons (same green as .easy-btn-yes) */
@@ -264,7 +264,8 @@ body.easy .modal-body { font-size: max(16px, 1rem); }
 /* ------------------------------------------------------------------ healthy play: reminder card + rest screen */
 .easy-rest-card {
   position: fixed; left: 50%; bottom: calc(7.6rem + env(safe-area-inset-bottom, 0px)); translate: -50% 0; pointer-events: auto !important;
-  display: flex; align-items: center; gap: .9rem; width: min(34rem, calc(100vw - 1.5rem)); padding: .8rem .9rem .8rem .8rem;
+  display: flex; align-items: center; gap: .9rem; padding: .8rem .9rem .8rem .8rem;
+  width: min(34rem, calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
   border-radius: 26px; background: linear-gradient(180deg, #fffaf0, #ffeccc); color: var(--kid-ink); border: 3px solid #fff;
   box-shadow: 0 8px 0 rgba(150, 100, 30, .35), 0 24px 48px rgba(0, 0, 0, .4); animation: easyCardIn .5s var(--ease-pop) both;
 }
@@ -334,7 +335,8 @@ body.easy .toast .t-retry { min-height: var(--tap, 56px); min-width: var(--tap, 
 @media (max-height: 520px) and (orientation: landscape) {
   .easy-tile .et-emoji { min-height: 3.2rem; font-size: 2.4rem; }
   .easy-tile { min-height: calc(var(--tap) * 1.7); }
-  .easy-rest-card { bottom: 4.6rem; }
+  /* clear of the 2×2 tile column on the left (and so of the tiles' twin space on the right), also with large text */
+  .easy-rest-card { bottom: calc(4.6rem + env(safe-area-inset-bottom, 0px)); width: min(34rem, calc(100vw - 2 * (var(--gap) + 1.2rem + 2 * max(3.7rem, var(--tap))))); }
   .easy-rest .er-breath { width: 5.5rem; height: 5.5rem; }
   .easy-rest .er-ball { width: 4.4rem; height: 4.4rem; }
   .easy-rest .er-face { display: none; }

@@ -125,6 +125,7 @@ body.dc-open #interact-prompt, body.dc-open .ong-say, body.dc-open .easy-hand, b
 .dc-icon:hover { color: #fff; background: var(--bg-elev-2); }
 .dc-icon:active { transform: scale(.95); }
 .dc-close:hover { background: rgba(255, 107, 94, .22); border-color: rgba(255, 107, 94, .5); }
+body.is-touch:not(.easy) .dc-icon { min-width: var(--tap); min-height: var(--tap); } /* touch, normal mode: one tap */
 .dc-only-mobile { display: none; }
 .dc-body {
   flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y;

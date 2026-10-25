@@ -1947,9 +1947,12 @@ ${fl}
       ctx.done = h('div', { class: 'ek-done', hidden: true });
       ctx.btns = h('div', { class: 'ek-btns' });
       m.body.classList.add('ek-body');
-      m.body.append(ctx.box, ctx.dots, ctx.say, ctx.done, ctx.btns);
+      m.body.append(ctx.box, ctx.dots, ctx.say, ctx.done);
       kidSpeakable(ctx.say, () => ctx.sayT.textContent);
+      // the slide buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
+      // sideways) 👉 다음 stays in view instead of sliding below the screen edge
       m.setActions([]);
+      m.foot.appendChild(ctx.btns);
       this._edu = ctx;
       this._logView(eduId, e);
       this._go(ctx, start);
@@ -2089,7 +2092,10 @@ ${fl}
       } else if (ctx.e && kidOf(ctx.e)) {
         big('ek-more', '📖', '이야기 보기', () => this._toContent(ctx));
       }
-      if (btns.childNodes.length) body.appendChild(btns);
+      // the buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
+      // sideways) 👉 다음 퀴즈 stays in view below the answer instead of sliding below the screen edge
+      m.setActions([]);
+      if (btns.childNodes.length) m.foot.appendChild(btns);
     },
     _kidPick(ctx, i, btn) {
       if (!ctx || ctx.m.closed || ctx.phase === 'right') return;

@@ -141,7 +141,7 @@ body.photo-mode #game-container canvas:active { cursor: grabbing; }
 .photo-ui.clean .ph-top { transform: translate(-50%, -1rem); }
 
 /* ---------------------------------------------------------------- album */
-.pg-modal .modal-body { min-height: 14rem; }
+.pg-modal .modal-body { min-height: min(14rem, 40vh); }
 .pg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr)); gap: .75rem; }
 .pg-item {
   position: relative; display: block; padding: 0; overflow: hidden; aspect-ratio: 16 / 10; border-radius: 12px;
@@ -206,6 +206,20 @@ body.photo-mode #game-container canvas:active { cursor: grabbing; }
   .photo-ui.clean .ph-left { transform: translate(-50%, 1rem); }
   .photo-ui.clean .ph-right { transform: translateX(1rem); }
   .pg-viewer { grid-template-columns: 1fr; }
+}
+/* short screens (a phone on its side, large text): the album body has no minimum, so its 📸 / 닫기 row stays on the
+   screen (a body that could not shrink pushed that row out of the dialog, below the bottom edge) */
+@media (max-height: 560px) {
+  .pg-modal .modal-body { min-height: 0; }
+}
+/* …and, wide enough, an opened photo fits that short body whole with its ◀ ▶, the details beside it
+   (18rem ≈ the dialog's head, footer and paddings in 쉬운 모드; dvh: the height left by the browser's own bars) */
+@media (max-height: 560px) and (min-width: 540px) {
+  .pg-viewer { grid-template-columns: minmax(0, 1fr) 12rem; }
+  .pg-stage {
+    aspect-ratio: auto; grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    height: max(7rem, calc(100vh - 18rem)); height: max(7rem, calc(100dvh - 18rem));
+  }
 }
 
 /* short landscape phones: side rails instead of floating panels */

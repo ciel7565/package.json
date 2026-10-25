@@ -468,8 +468,13 @@
     /** savedAt of the copies this tab sent lately (saves and page-hide beacons): a STALE_SAVE whose stored copy is one
      *  of them is this tab's own save (a beacon, or a save whose answer was lost) — adopt its revision, no restore */
     sent: [],
-    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; },
+    /** savedAt -> revision of this tab's copies the server confirmed. A confirmed copy that comes back under another
+     *  revision was put back on the server (admin.php "직전 저장으로 되돌리기" swaps the backup in at a new revision):
+     *  that restore is the newer state — this tab never writes over it */
+    confirmed: new Map(),
+    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; ServerAdapter.confirmed = new Map(); },
     mark(savedAt) { const L = ServerAdapter.sent; L.push(savedAt); if (L.length > 8) L.shift(); },
+    confirm(savedAt, rev) { const C = ServerAdapter.confirmed; C.delete(savedAt); C.set(savedAt, rev); if (C.size > 8) C.delete(C.keys().next().value); },
     async load() {
       ServerAdapter.reset();
       const d = await G.net.request('player/get.php');
@@ -500,27 +505,34 @@
           return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data) });
         }
       };
-      const done = (res) => { const r = revOf(Number(res?.revision)); if (r != null) ServerAdapter.rev = r; return res; };
+      const done = (res) => { const r = revOf(Number(res?.revision)); if (r != null) { ServerAdapter.rev = r; ServerAdapter.confirm(state.savedAt, r); } return res; };
       try {
         try { return done(await post()); }
         catch (e) {
           // the newer stored copy is one this very tab sent (its page-hide beacon, or a save whose answer never
           // arrived): adopt that revision and save again
           const st = e?.data?.save, at = st?.data?.savedAt;
+          // the server marks the copy admin.php put back (data.restored): load it whoever sent it, never save over it
+          if (e?.code === 'STALE_SAVE' && e.data?.restored === true) { e.restored = true; throw e; }
           if (e.code !== 'STALE_SAVE' || !st || !at || !ServerAdapter.sent.includes(at) || revOf(st.revision) == null) throw e;
+          // ...unless the server had already confirmed that copy under another revision: it was restored, not lost
+          const was = ServerAdapter.confirmed.get(at);
+          if (was != null && was !== st.revision) { e.restored = true; throw e; }
           ServerAdapter.rev = st.revision;
+          ServerAdapter.confirm(at, st.revision);
           return done(await post());
         }
       } catch (e) {
         const st = e && e.data && e.data.save;
         if ((e.code === 'VALIDATION_FAILED' || e.code === 'STALE_SAVE') && st) {
           // VALIDATION_FAILED: the server rejected suspicious progress; STALE_SAVE: another tab / device saved newer
-          // progress since this tab loaded. Either way the stored copy comes back and later saves build on it.
+          // progress since this tab loaded, or a grown-up restored an earlier save (e.restored). Either way the stored
+          // copy comes back and later saves build on it.
           if (revOf(st.revision) != null) ServerAdapter.rev = st.revision;
           if ((st.data && typeof st.data === 'object') || typeof st.data === 'string') {
-            G.log.warn('SAVE', e.code === 'STALE_SAVE' ? 'a newer save exists on the server, restoring it' : 'server rejected save, restoring server state', e.message);
+            G.log.warn('SAVE', e.restored ? 'the server save was restored to an earlier copy, loading it' : e.code === 'STALE_SAVE' ? 'a newer save exists on the server, restoring it' : 'server rejected save, restoring server state', e.message);
             G.save._pendingServerRestore = st;
-            G.save._pendingServerRestoreCode = e.code;
+            G.save._pendingServerRestoreCode = e.restored ? 'SAVE_RESTORED' : e.code;
           }
         }
         throw e;
@@ -531,9 +543,35 @@
 
   // ---------------------------------------------------------------- manager
   let autosaveTimer = 0, debounceTimer = 0;
+  // 플레이 시간 (stats.playTime, shown to grown-ups): wall-clock time the tab was visible with input in the last 90 s.
+  // A tab left in the background or a device left lying around adds nothing (the same rule as 08-easy's healthy-play
+  // reminder). play.at..now is one stretch of one visibility (play.vis); input after a long idle closes the stretch.
+  const ACTIVE_GAP = 90000;
+  const play = { input: 0, at: 0, vis: false };
+  function accruePlay() {
+    if (!play.at) return; // no game session running (title screen, between two children): nothing to count
+    const t = performance.now();
+    if (G.state && play.vis) {
+      const end = Math.min(t, play.input + ACTIVE_GAP);
+      if (end > play.at) G.state.stats.playTime = (Number(G.state.stats.playTime) || 0) + (end - play.at) / 1000;
+    }
+    play.at = t;
+    play.vis = !document.hidden;
+  }
+  // steady play is mostly moves (a finger steering the joystick, a camera drag): a move with a finger or button down is
+  // input too — a hover with nothing pressed is not
+  const playInput = (e) => {
+    if (e?.type === 'pointermove' && !e.buttons) return;
+    const t = performance.now();
+    if (t - play.input > ACTIVE_GAP) accruePlay();
+    play.input = t;
+  };
+  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'pointermove', 'touchmove']) window.addEventListener(ev, playInput, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', accruePlay);
   /** the state as it is persisted: modules write their live values first (state:before-save), settings and savedAt
    *  are stamped, runtime-only '_' keys are dropped. Shared by save() and the server-mode beacon. */
   function snapshot() {
+    accruePlay();
     G.bus.emit('state:before-save', G.state);
     G.state.savedAt = G.time.now();
     G.state.settings = { ...G.settings };
@@ -579,7 +617,7 @@
     // the server session ended (idle / lifetime / password reset / ban review): ask a grown-up to log in again
     if (server && (Number(e?.status) === 401 || e?.code === 'AUTH_REQUIRED')) {
       const again = opts.notify || opts.reason === 'manual';
-      if (!F.authLost || again) { F.authLost = true; G.bus.emit('save:auth-lost', { reason: opts.reason }); }
+      if (!F.authLost || again) { F.authLost = true; G.bus.emit('save:auth-lost', { reason: opts.reason, notify: !!opts.notify }); }
       return;
     }
     if (opts.notify || opts.reason === 'manual') {
@@ -713,7 +751,11 @@
           G.save.applyProfileSettings(G.state);
           G.applyState();
           G.save.dirty = false;
-          if (code === 'STALE_SAVE') G.ui?.toast?.('다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.', { type: 'info', icon: 'save', easy: '다른 곳에서 논 것을 불러왔어요!' });
+          if (code === 'SAVE_RESTORED') {
+            // the progress this tab kept for a later login is what the restore took back: it must not undo the restore
+            pending.drop(G.save.profile.id);
+            G.ui?.toast?.('운영자가 되돌린 저장 기록을 불러왔어요. 그 기록부터 이어서 해요.', { type: 'info', icon: 'save', duration: 7000, easy: '전에 저장한 곳부터 다시 놀아요!' });
+          } else if (code === 'STALE_SAVE') G.ui?.toast?.('다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.', { type: 'info', icon: 'save', easy: '다른 곳에서 논 것을 불러왔어요!' });
           else G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
         } else onFailed(e, snap, opts);
         return false;
@@ -734,13 +776,15 @@
     startAutosave(intervalMs = 30000) {
       clearInterval(autosaveTimer);
       if (G.save.conflict) return;
+      // a new session: play time counts from now (loading and the title screen are not play)
+      play.at = performance.now();
+      play.vis = !document.hidden;
       autosaveTimer = setInterval(() => {
         if (!G.state) return;
-        G.state.stats.playTime = (G.state.stats.playTime || 0) + intervalMs / 1000;
-        G.save.save({ reason: 'autosave' });
+        G.save.save({ reason: 'autosave' }); // the snapshot adds the play time since the last one
       }, intervalMs);
     },
-    stopAutosave() { clearInterval(autosaveTimer); clearTimeout(debounceTimer); },
+    stopAutosave() { clearInterval(autosaveTimer); clearTimeout(debounceTimer); play.at = 0; },
 
     /** wipe progress for the current profile and start over */
     async resetProgress() {

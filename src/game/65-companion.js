@@ -492,6 +492,8 @@
         card.__easySpeak = { btn: null, text: item.text };
       }
       root.appendChild(card);
+      // it pops up by itself (like the reward popup): a tap already on its way must not press 보상 받기 / ✖ unseen
+      G.ui.armTaps?.(card);
       this.cardEl = card;
       G.ui.hydrateIcons?.(card);
       this.place();
