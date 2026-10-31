@@ -9,7 +9,7 @@
 -- With db.auto_migrate = true the tables are also created / upgraded automatically once the database exists
 -- (CREATE DATABASE / USE lines are skipped by the auto-installer). Re-running this file is safe (IF NOT EXISTS).
 -- All timestamps are server time in milliseconds (BIGINT).
--- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 4).
+-- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 5).
 -- =============================================================================
 
 -- 데이터베이스를 아직 만들지 않았다면 아래 두 줄의 주석(--)을 풀고 서버 전체(데이터베이스 선택 없이)에서 가져오세요:
@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS chat_retractions (
   id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   message_id BIGINT UNSIGNED NULL,
   user_id    BIGINT UNSIGNED NULL,
+  upto_id    BIGINT UNSIGNED NULL,
   created_at BIGINT NOT NULL,
   KEY ix_retractions_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
@@ -248,3 +249,15 @@ CREATE TABLE IF NOT EXISTS payment_events (
   KEY ix_pevents_order (order_id, event, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (4, UNIX_TIMESTAMP() * 1000, 'subscriptions (speed tiers, 토스페이먼츠 orders, payment events)');
+
+-- v5 (phase 6): a ban's retraction carries a watermark — the highest chat_messages.id at ban time (upto_id) — so a
+-- game that polls only after a ban AND an unban takes back the old lines and keeps the ones posted after the unban.
+-- New installs get the column from CREATE TABLE above; an existing table gets it here. MySQL has no
+-- "ADD COLUMN IF NOT EXISTS", so the ALTER runs only when information_schema does not list the column yet
+-- (safe to re-run: phpMyAdmin import, mysql < schema.sql, and the automatic upgrade all take this path).
+SET @tfm_has_upto = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_retractions' AND COLUMN_NAME = 'upto_id');
+SET @tfm_sql = IF(@tfm_has_upto = 0, 'ALTER TABLE chat_retractions ADD COLUMN upto_id BIGINT UNSIGNED NULL AFTER user_id', 'DO 0');
+PREPARE tfm_stmt FROM @tfm_sql;
+EXECUTE tfm_stmt;
+DEALLOCATE PREPARE tfm_stmt;
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (5, UNIX_TIMESTAMP() * 1000, 'chat retraction watermark (upto_id)');

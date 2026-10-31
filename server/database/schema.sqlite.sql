@@ -2,7 +2,7 @@
 -- 전통발효체험관 메타버스 — SQLite schema (default, zero-config)
 -- Created automatically by lib/Db.php on first request (data/db-<random>.sqlite, WAL mode).
 -- All timestamps are server time in milliseconds (INTEGER).
--- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 4).
+-- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 5).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS chat_retractions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   message_id INTEGER,
   user_id    INTEGER,
+  upto_id    INTEGER,                              -- v5: ban watermark (highest chat_messages.id at ban time)
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_retractions_created ON chat_retractions (created_at);
@@ -230,3 +231,9 @@ CREATE TABLE IF NOT EXISTS payment_events (
 );
 CREATE INDEX IF NOT EXISTS ix_pevents_order ON payment_events (order_id, event, status);
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (4, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'subscriptions (speed tiers, 토스페이먼츠 orders, payment events)');
+
+-- v5 (phase 6): a ban's retraction carries a watermark (chat_retractions.upto_id = the highest chat_messages.id at ban
+-- time), so a game that polls only after a ban AND an unban keeps the lines posted after the unban. New databases get
+-- the column from CREATE TABLE above; SQLite has no conditional ADD COLUMN, so lib/Db.php adds it to an existing
+-- table (Db::ensureColumns, same transaction as this file).
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (5, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'chat retraction watermark (upto_id)');

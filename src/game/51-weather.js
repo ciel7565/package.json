@@ -213,6 +213,9 @@
     const mesh = new THREE.Mesh(geo, mat);
     mesh.scale.setScalar(2300);
     mesh.frustumCulled = false; mesh.renderOrder = -9; mesh.name = 'sky-overlay';
+    // §14.4.1 sanitation (a screen-sized sky quad); not hidden by watchdog ladder step 1: it IS the night / weather sky —
+    // without it the night sky turns pure black, which the watchdog would read as a new black block
+    G.gfx.guard?.watch?.(mesh, { uniforms: true, quarantine: false });
     mesh.raycast = () => {};
     return mesh;
   }
@@ -266,6 +269,7 @@
     });
     const pts = new THREE.Points(geo, mat);
     pts.frustumCulled = false; pts.renderOrder = -8; pts.name = 'stars';
+    G.gfx.guard?.watch?.(pts, { uniforms: true });
     pts.raycast = () => {};
     pts.visible = false;
     return pts;
@@ -294,6 +298,7 @@
     const s = new THREE.Sprite(mat);
     s.scale.setScalar(210);
     s.renderOrder = -7; s.name = 'moon'; s.frustumCulled = false; s.visible = false;
+    G.gfx.guard?.watch?.(s);
     s.raycast = () => {};
     return s;
   }
@@ -335,6 +340,7 @@
     });
     const m = new THREE.Mesh(geo, mat);
     m.frustumCulled = false; m.renderOrder = -7; m.name = 'shooting-star'; m.visible = false;
+    G.gfx.guard?.watch?.(m, { uniforms: true });
     m.raycast = () => {};
     return m;
   }
@@ -395,6 +401,7 @@
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false; mesh.renderOrder = 12; mesh.name = 'rain'; mesh.visible = false;
+    G.gfx.guard?.watch?.(mesh, { uniforms: true });
     mesh.raycast = () => {};
     return mesh;
   }
@@ -443,6 +450,7 @@
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false; mesh.renderOrder = 11; mesh.name = 'rain-splashes'; mesh.visible = false;
+    G.gfx.guard?.watch?.(mesh, { uniforms: true });
     mesh.raycast = () => {};
     return mesh;
   }
@@ -458,7 +466,7 @@
     const mat = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 }, uIntensity: { value: 0 }, uCenter: { value: new THREE.Vector3() }, uBox: { value: new THREE.Vector3(30, 18, 30) },
-        uWind: { value: new THREE.Vector2(0.6, 0.3) }, uSize: { value: 0.05 }, uScale: { value: 800 }, uColor: { value: new THREE.Color(0xffffff) }, uOpacity: { value: 0.9 },
+        uWind: { value: new THREE.Vector2(0.6, 0.3) }, uSize: { value: 0.05 }, uScale: { value: 420 }, uColor: { value: new THREE.Color(0xffffff) }, uOpacity: { value: 0.9 },
       },
       vertexShader: `
         attribute vec4 aSeed;
@@ -475,7 +483,7 @@
           vec4 mv = viewMatrix * vec4(p, 1.0);
           gl_Position = projectionMatrix * mv;
           float dist = max(0.1, -mv.z);
-          gl_PointSize = clamp(uSize * (0.55 + aSeed.x * 0.9) * uScale / dist, 1.0, 15.0);
+          gl_PointSize = clamp(uSize * (0.55 + aSeed.x * 0.9) * uScale * projectionMatrix[1][1] / dist, 1.0, 15.0);
           vA = smoothstep(0.6, 2.2, dist) * (1.0 - smoothstep(12.0, 17.0, dist));
         }`,
       fragmentShader: `
@@ -492,6 +500,7 @@
     });
     const pts = new THREE.Points(geo, mat);
     pts.frustumCulled = false; pts.renderOrder = 12; pts.name = 'snow'; pts.visible = false;
+    G.gfx.guard?.watch?.(pts, { uniforms: true });
     pts.raycast = () => {};
     return pts;
   }
@@ -608,6 +617,7 @@
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.name = 'puddles'; mesh.visible = false;
+    G.gfx.guard?.watch?.(mesh, { uniforms: true });
     mesh.raycast = () => {};
     mesh.userData.count = spots.length;
     return mesh;
@@ -1203,10 +1213,9 @@
       if (!E || !E.renderer) return;
       const pr = E.renderer.getPixelRatio() || 1;
       if (this._stars) this._stars.material.uniforms.uPR.value = pr * clamp(window.innerHeight / 900, 0.75, 1.5);
-      if (this._snow) {
-        const fov = (E.camera?.fov || 55) * DEG;
-        this._snow.material.uniforms.uScale.value = (window.innerHeight * pr * 0.5) / Math.tan(fov / 2);
-      }
+      // half the drawing-buffer height; the snow shader multiplies by the live projectionMatrix[1][1] (1 / tan(fov / 2))
+      // so the telescope / FOV kicks keep the flakes world-sized (R3-render-1: the FOV used to be read on resize only)
+      if (this._snow) this._snow.material.uniforms.uScale.value = window.innerHeight * pr * 0.5;
     },
 
     // ------------------------------------------------------------ temperature / humidity

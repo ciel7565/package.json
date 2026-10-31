@@ -307,7 +307,13 @@ body.easy .soc-bubble.emote { font-size: 2.8rem; }
   touch-action: manipulation;
 }
 .skc-cat .emoji { font-size: 1.85rem; line-height: 1; }
-.skc-cat.active { background: radial-gradient(120% 110% at 50% 20%, color-mix(in srgb, var(--tile) 35%, #fff), var(--tile)); color: var(--kid-ink, #23301f); border-color: #fff; transform: translateY(-2px); box-shadow: 0 5px 0 color-mix(in srgb, var(--tile) 55%, #000); }
+.skc-cat.active {
+  background: radial-gradient(120% 110% at 50% 20%, #fff, var(--tile)); /* fallback: no color-mix() (Safari ≤ 16.1) */
+  background: radial-gradient(120% 110% at 50% 20%, color-mix(in srgb, var(--tile) 35%, #fff), var(--tile));
+  color: var(--kid-ink, #23301f); border-color: #fff; transform: translateY(-2px);
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .35);
+  box-shadow: 0 5px 0 color-mix(in srgb, var(--tile) 55%, #000);
+}
 .skc-cat:active { transform: translateY(2px) scale(.96); }
 .skc-cat:focus-visible { outline: 4px solid var(--kid-gold, #ffcf4a); outline-offset: 2px; }
 .skc-tile { min-height: calc(var(--tap) * 1.9); }

@@ -437,17 +437,36 @@
     },
 
     // ---------------------------------------------------------------- HUD chip
+    /**
+     * #hud-speed next to the level chip, from speed:changed {tier, prev}: hidden at tier 1; text G.sys.speed.label()
+     * ('⚡2×' …) in normal mode, labelKo() ('⚡ 2배 빨라요') in easy mode, where 01-hud.css draws it as a ribbon on the
+     * avatar card ('⚡ 2배' shown, the rest kept for screen readers). A real tier change (prev != null) pulses it
+     * (CSS scale + opacity, ≤ 1.04, none with reduce motion) and 옹이 cheers once; the load-time announcement
+     * (prev === null, a profile just loaded) never does.
+     */
     _chip(p) {
       const el = $('#hud-speed');
       if (!el) return;
       const t = G.app?.loggedIn ? this.tier() : 1;
-      const label = t > 1 ? (easyOn() ? `⚡ ${t}배 빨라요` : `⚡${t}×`) : '';
-      if (el.textContent !== label) el.textContent = label;
+      const sp = G.sys.speed;
+      let label = '';
+      if (t > 1) {
+        label = easyOn() ? (typeof sp?.labelKo === 'function' ? sp.labelKo(t) : '') : (typeof sp?.label === 'function' ? sp.label(t) : '');
+        if (!label) label = easyOn() ? `⚡ ${t}배 빨라요` : `⚡${t}×`;
+      }
+      if (el.textContent !== label) {
+        // easy mode: the chip is a ribbon on the avatar card with room for '⚡ 2배' only; ' 빨라요' stays in the DOM
+        // (.sc-tail, visually hidden) so the live announcement still says the whole thing
+        const cut = easyOn() ? label.lastIndexOf(' ') : -1;
+        if (cut > 0) el.replaceChildren(document.createTextNode(label.slice(0, cut)), h('span', { class: 'sc-tail' }, label.slice(cut)));
+        else el.textContent = label;
+      }
       el.hidden = !label;
       el.dataset.tier = String(t);
       if (label) el.setAttribute('aria-label', `진행 속도 ${t}배`); else el.removeAttribute('aria-label');
-      if (p && Number(p.tier) !== Number(p.prev) && t > 1) {
-        if (!reduceMotion()) G.ui.pulse?.(el, { duration: 420 });
+      const changed = !!p && p.prev != null && Number(p.tier) !== Number(p.prev);
+      if (changed && t > 1) {
+        if (!reduceMotion()) { el.classList.remove('is-pulse'); void el.offsetWidth; el.classList.add('is-pulse'); }
         if (!this._cheered && G.app?.loggedIn && G.ready) {
           this._cheered = true;
           try { G.mascot?.say?.('와, 더 빨라졌어요!', { mood: 'cheer', source: 'speed' }); } catch (e) { /* mascot optional */ }

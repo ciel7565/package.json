@@ -469,6 +469,8 @@
       });
       const sheet = new THREE.Mesh(sg, sheetMat);
       sheet.renderOrder = 3; sheet.name = 'waterfall-sheet'; sheet.raycast = () => {};
+      // §14.4.1 sanitation; the falling water is part of the world, not an effect: watchdog ladder step 1 keeps it
+      G.gfx.guard?.watch?.(sheet, { uniforms: true, quarantine: false });
       grp.add(sheet);
       this.meshes.fall = sheet;
 
@@ -495,6 +497,7 @@
       });
       const foam = new THREE.Mesh(fg, foamMat);
       foam.renderOrder = 2; foam.name = 'waterfall-foam'; foam.raycast = () => {};
+      G.gfx.guard?.watch?.(foam, { uniforms: true });
       grp.add(foam);
       this.meshes.foam = foam;
 
@@ -523,7 +526,8 @@
             p.y = max(p.y, position.y);
             vec4 mv = modelViewMatrix * vec4(p, 1.0);
             vA = sin(life * 3.14159) * (0.35 + aSeed.w * 0.3);
-            gl_PointSize = uScale * (18.0 + life * 46.0) * (6.0 / max(1.0, -mv.z));
+            // live projection / 1.921 (55° design FOV): world-sized through the telescope and FOV kicks (R3-render-1)
+            gl_PointSize = uScale * (projectionMatrix[1][1] / 1.921) * (18.0 + life * 46.0) * (6.0 / max(1.0, -mv.z));
             gl_Position = projectionMatrix * mv;
           }`,
         fragmentShader: `
@@ -540,6 +544,7 @@
       });
       const spray = new THREE.Points(pg, sprayMat);
       spray.renderOrder = 4; spray.name = 'waterfall-spray'; spray.raycast = () => {};
+      G.gfx.guard?.watch?.(spray, { uniforms: true });
       grp.add(spray);
       this.meshes.spray = spray;
       this._sprayMat = sprayMat;

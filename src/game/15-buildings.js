@@ -1013,7 +1013,11 @@
       this.name = name; this.W = W; this.H = H;
       this.canvas = document.createElement('canvas'); this.canvas.width = W; this.canvas.height = H;
       this.ctx = this.canvas.getContext('2d');
-      this.ctx.fillStyle = '#5b3a22'; this.ctx.fillRect(0, 0, W, H);
+      // no 2D context (§14.4): plain wood boards (a 1×1 wood-coloured texel) instead of a throw here at load time or an
+      // undrawn — black — sign; slots are still handed out so every board keeps valid UVs
+      this.blank = !this.ctx;
+      if (this.ctx) { this.ctx.fillStyle = '#5b3a22'; this.ctx.fillRect(0, 0, W, H); }
+      else G.log.warn('WORLD', `sign atlas ${name}: no 2D context — plain boards`);
       this.x = 0; this.y = 0; this.rowH = 0; this.texture = null;
     }
     /** reserve a w x h pixel slot; draw(ctx, w, h) paints it. Returns uv rect [u0, v0, u1, v1]. */
@@ -1023,9 +1027,11 @@
       if (this.y + h > this.H) { G.log.warn('WORLD', `sign atlas ${this.name} is full`); return [0, 0, 0.02, 0.02]; }
       const x = this.x, y = this.y;
       this.x += w; this.rowH = Math.max(this.rowH, h);
-      this.ctx.save(); this.ctx.translate(x, y); this.ctx.beginPath(); this.ctx.rect(0, 0, w, h); this.ctx.clip();
-      try { draw(this.ctx, w, h); } catch (e) { G.log.warn('WORLD', 'sign draw failed', e); }
-      this.ctx.restore();
+      if (this.ctx) {
+        this.ctx.save(); this.ctx.translate(x, y); this.ctx.beginPath(); this.ctx.rect(0, 0, w, h); this.ctx.clip();
+        try { draw(this.ctx, w, h); } catch (e) { G.log.warn('WORLD', 'sign draw failed', e); }
+        this.ctx.restore();
+      }
       if (this.texture) this.texture.needsUpdate = true;
       // half-texel inset avoids bleeding from neighbouring slots
       const ix = 0.5 / this.W, iy = 0.5 / this.H;
@@ -1040,6 +1046,7 @@
       });
     }
     getTexture() {
+      if (!this.texture && this.blank) this.texture = G.gfx.blankTexture({ rgba: [0x5b, 0x3a, 0x22, 255] });
       if (!this.texture) {
         this.texture = new THREE.CanvasTexture(this.canvas);
         this.texture.colorSpace = THREE.SRGBColorSpace;

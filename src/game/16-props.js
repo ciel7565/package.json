@@ -668,7 +668,8 @@
           mapTex = G.gfx.canvasTexture(1024, 640, drawMap, { anisotropy: 8 });
           registerMaterial('mapboard', () => new THREE.MeshStandardMaterial({ map: mapTex, roughness: 0.8 }));
         }
-        P.add('mapboard', geo.quad(bw, bh), M(0, by, 0.03));
+        // no 2D context (§14.4): the map face is skipped — the wooden backing board shows instead of an undrawn face
+        if (!mapTex.userData?.blank) P.add('mapboard', geo.quad(bw, bh), M(0, by, 0.03));
       } else {
         const sub = s.action === 'edu' ? '가까이 와서 E 키로 살펴보기' : isEntrance ? '한국 전통발효문화와 농업을 배우는 3D 체험관' : null;
         rect = PSIGN.sign(s.title, sub, { size: isEntrance ? 62 : 54 }, isEntrance ? 1024 : 384, isEntrance ? 320 : 192);
@@ -1105,13 +1106,16 @@
     g.setAttribute('aPivot', new THREE.BufferAttribute(pv, 4));
     const m = new THREE.ShaderMaterial({
       // gl_PointSize is in drawing-buffer pixels: the halo scale carries the renderer pixel ratio (props.update keeps it)
+      // and the live projection (projectionMatrix[1][1] / 1.921 = 1 at the 55° design FOV): the halo keeps its world
+      // size through the 만장대 telescope (14-30°) and the sprint FOV kick instead of shrinking ~4× (R3-render-1)
       uniforms: { uMap: { value: G.gfx.radialTexture(64, 'rgba(255,214,150,1)', 'rgba(255,160,60,0)') }, uOpacity: { value: 0 }, uScale: { value: glowScale() }, ...SWAY_U },
-      vertexShader: SWAY_GLSL + '\nattribute float size; uniform float uScale; void main(){ vec3 p = aPivot.xyz + tfSwing(aPivot.w) * (position - aPivot.xyz); vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = size * 2.4 * uScale / max(-mv.z, 0.5); gl_Position = projectionMatrix * mv; }',
+      vertexShader: SWAY_GLSL + '\nattribute float size; uniform float uScale; void main(){ vec3 p = aPivot.xyz + tfSwing(aPivot.w) * (position - aPivot.xyz); vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = size * 2.4 * uScale * (projectionMatrix[1][1] / 1.921) / max(-mv.z, 0.5); gl_Position = projectionMatrix * mv; }',
       fragmentShader: 'uniform sampler2D uMap; uniform float uOpacity; void main(){ vec4 c = texture2D(uMap, gl_PointCoord); gl_FragColor = vec4(c.rgb, c.a * uOpacity); }',
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     });
     const pts = new THREE.Points(g, m);
     pts.name = 'lantern-glow'; pts.frustumCulled = false; pts.renderOrder = 5; pts.visible = false;
+    G.gfx.guard?.watch?.(pts, { uniforms: true });   // §14.4.1 sanitation
     pts.raycast = () => {};
     root.add(pts);
     return pts;
@@ -1291,7 +1295,7 @@
     P.add('wood', geo.box(w + 0.3, h + 0.3, 0.14, 'grain'), M(0, by, -0.04), '#5a3a22');
     const tx = G.gfx.canvasTexture(1024, 512, drawChalk, { anisotropy: 8 });
     registerMaterial('chalk', () => new THREE.MeshStandardMaterial({ map: tx, roughness: 0.95 }));
-    P.add('chalk', geo.quad(w, h), M(0, by, 0.04));
+    if (!tx.userData?.blank) P.add('chalk', geo.quad(w, h), M(0, by, 0.04));   // §14.4: no undrawn face (wooden board shows)
     P.add('wood', geo.box(w, 0.08, 0.18, 'grain'), M(0, by - h / 2 - 0.02, 0.1), '#7a5236');
     for (let i = 0; i < 4; i++) P.add('paint', geo.box(0.12, 0.025, 0.025), M(-w / 2 + 0.6 + i * 0.25, by - h / 2 + 0.04, 0.12), ['#ffffff', '#f1d48a', '#ffb3b3', '#9fd7ff'][i]);
     const ro = { mode: 'gable', hw: w / 2 + 0.35, hd: 0.4, ov: 0.45, rise: 0.55, t: 0.16, tint: '#ffffff', gableColor: '#6b4a30', wallTop: by + h / 2 + 0.55, ridge: { w: 0.26, h: 0.26 } };

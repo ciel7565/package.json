@@ -1,7 +1,9 @@
 <?php
 /**
  * GET api/chat/list.php?after=<lastId>&limit=<n>&rafter=<cursor>
- * → {messages:[{id, userId, nickname, text, channel, createdAt}], online, lastId, retracted:{messages, users}, retractId}
+ * → {messages:[{id, userId, nickname, text, channel, createdAt}], online, lastId, retracted:{messages, users, upTo}, retractId}
+ * retracted.upTo = {userId: highest message id}: a banned account's lines are taken back only up to that id (the
+ * lines it posts after an unban stay); a user listed in retracted.users without an upTo entry loses every line.
  * Readable by any session (guests can read, only accounts can write). Hidden messages and messages from
  * banned accounts are never returned. 'local' messages are only delivered to players near the sender.
  * Personal information is masked again on the way out (defense in depth: rows stored before the PII filter).
@@ -63,5 +65,5 @@ Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
     $rafter = isset($_GET['rafter']) ? $_GET['rafter'] : null;
     $gone = Retractions::since($after > 0 && is_string($rafter) && preg_match('/^\d{1,18}$/', $rafter) ? (int) $rafter : null);
     return ['messages' => $out, 'online' => max(1, Presence::onlineCount($now)), 'lastId' => $last,
-        'retracted' => ['messages' => $gone['messages'], 'users' => $gone['users']], 'retractId' => $gone['retractId']];
+        'retracted' => ['messages' => $gone['messages'], 'users' => $gone['users'], 'upTo' => $gone['upTo']], 'retractId' => $gone['retractId']];
 });

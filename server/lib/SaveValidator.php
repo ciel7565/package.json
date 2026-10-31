@@ -768,4 +768,28 @@ final class SaveValidator
             'zone_id' => preg_match('/^[A-Z0-9_]{1,40}$/', $zone) ? $zone : '',
         ];
     }
+
+    // ------------------------------------------------------------------ operator restore stamp (admin.php)
+    /**
+     * admin.php "직전 저장으로 되돌리기" (AdminOps::restoreBackup) stamps the row's meta with {restoredRev, restoredAt}.
+     * While the row is still that restored copy (meta.restoredRev === revision; the next accepted save clears the
+     * stamp) → ['restoredAt' => ms of the restore, 'restoredRev' => that revision], otherwise zeros. player/get, login,
+     * me and the 409 answers of player/save carry it, so a copy a device kept from before the restore is never offered
+     * over it (R3-c2-r2-seams-lost-1). $row: a player_saves row with at least revision + meta (null: no save).
+     */
+    public static function restoreStamp(?array $row): array
+    {
+        $none = ['restoredAt' => 0, 'restoredRev' => 0];
+        if (!$row || !isset($row['revision']) || !isset($row['meta'])) return $none;
+        $m = Json::tryDecode((string) $row['meta'], true);
+        if (!is_array($m) || !isset($m['restoredRev']) || (int) $m['restoredRev'] !== (int) $row['revision'] || (int) $row['revision'] <= 0) return $none;
+        return ['restoredAt' => isset($m['restoredAt']) ? max(0, (int) $m['restoredAt']) : 0, 'restoredRev' => (int) $row['revision']];
+    }
+
+    /** restoreStamp() of an account's stored save (one primary-key read) */
+    public static function restoreStampFor(int $uid): array
+    {
+        if ($uid <= 0) return self::restoreStamp(null);
+        return self::restoreStamp(Db::one('SELECT revision, meta FROM player_saves WHERE user_id = ?', [$uid]));
+    }
 }

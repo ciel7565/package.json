@@ -426,25 +426,46 @@ final class ChatFilter
 /**
  * Moderation that reaches players who are online: a hidden message (admin, 3 reports) or a banned sender is taken
  * back from every open session, not only filtered out of new chat/list.php results (table chat_retractions, schema v3).
+ * A user retraction carries a watermark (upto_id, schema v5): the highest chat_messages.id when the account was banned.
+ * A game that polls only after a ban AND an unban takes back that account's lines up to the watermark and keeps the
+ * lines posted after the unban (R3-c2-r2-seams-lost-5). Rows from before v5 have no watermark: every line goes.
  */
 final class Retractions
 {
-    /** take back one message ($mid) or every message of one account ($uid) */
+    /**
+     * take back one message ($mid) or every message of one account ($uid). A user retraction is stamped with the
+     * highest message id at this moment (its watermark); a banned account cannot post, so its lines are all ≤ it.
+     */
     public static function add(?int $mid, ?int $uid): void
     {
-        Db::insert('chat_retractions', ['message_id' => $mid, 'user_id' => $uid, 'created_at' => Clock::ms()]);
+        $upto = null;
+        if ($uid !== null && $mid === null) $upto = (int) Db::value('SELECT COALESCE(MAX(id), 0) FROM chat_messages');
+        Db::insert('chat_retractions', ['message_id' => $mid, 'user_id' => $uid, 'upto_id' => $upto, 'created_at' => Clock::ms()]);
     }
 
-    /** what was taken back after the client's cursor → {messages:[id], users:[uid], retractId: the new cursor} */
+    /**
+     * what was taken back after the client's cursor →
+     * {messages:[id], users:[uid], upTo:{uid: highest message id to take back}, retractId: the new cursor}.
+     * upTo lists a user only when every retraction of that user in this answer has a watermark (the largest one wins);
+     * a user without an entry loses every line (a pre-v5 row, or nothing better known).
+     */
     public static function since(?int $cursor, int $limit = 200): array
     {
-        $out = ['messages' => [], 'users' => [], 'retractId' => (int) Db::value('SELECT COALESCE(MAX(id), 0) FROM chat_retractions')];
+        $out = ['messages' => [], 'users' => [], 'upTo' => new \stdClass(), 'retractId' => (int) Db::value('SELECT COALESCE(MAX(id), 0) FROM chat_retractions')];
         if ($cursor === null) return $out;
-        $rows = Db::all('SELECT id, message_id, user_id FROM chat_retractions WHERE id > ? ORDER BY id ASC LIMIT ' . max(1, $limit), [$cursor]);
+        $rows = Db::all('SELECT id, message_id, user_id, upto_id FROM chat_retractions WHERE id > ? ORDER BY id ASC LIMIT ' . max(1, $limit), [$cursor]);
+        $marks = []; // uid => highest watermark, or null once a row without one was seen
         foreach ($rows as $r) {
             if ($r['message_id'] !== null) $out['messages'][] = (int) $r['message_id'];
-            if ($r['user_id'] !== null) $out['users'][] = (string) $r['user_id'];
+            if ($r['user_id'] !== null) {
+                $uid = (string) $r['user_id'];
+                if (!in_array($uid, $out['users'], true)) $out['users'][] = $uid;
+                $w = $r['upto_id'] === null ? null : (int) $r['upto_id'];
+                if (!array_key_exists($uid, $marks)) $marks[$uid] = $w;
+                elseif ($marks[$uid] !== null) $marks[$uid] = $w === null ? null : max($marks[$uid], $w);
+            }
         }
+        foreach ($marks as $uid => $w) if ($w !== null) $out['upTo']->{$uid} = $w;
         if (count($rows) >= $limit) $out['retractId'] = (int) $rows[count($rows) - 1]['id']; // a full page: the rest next time
         return $out;
     }

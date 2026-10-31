@@ -5,7 +5,11 @@
 //   node tests/server-e2e.mjs http://127.0.0.1:8099/     test a running server (e.g. php -S 127.0.0.1:8099 -t dist/metaverse)
 //   node tests/server-e2e.mjs                            spawn its own `php -S` on a free port over dist/metaverse with a
 //                                                        throw-away data dir (TFM_DATA_DIR), then clean up
-//   options: --verbose (print every response)
+//   options: --verbose (print every response) · --docroot <dir> (spawn php -S over that copy instead of dist/metaverse)
+//   env:     TFM_DB_DRIVER=mysql TFM_DB_HOST/PORT/USER/PASS/NAME → the spawned server (and the DB inspections) use MySQL /
+//            MariaDB · TFM_E2E_RUN_ID=<8 hex> pins this run's random id (reproduce a run; spawned SQLite servers only)
+//   Steps that look into the database (stored repeat-spam keys, report memos, the ban watermark) need the spawned server:
+//   they go through ITS lib/Db.php, so they run on SQLite and on MySQL alike.
 //   The spawned server runs with TFM_TOSS_MOCK=1 (mock 토스 payments, CONTRACT §14.6); against an external server the
 //   subscription steps run only when api/sub/status.php reports mode 'mock', and the CLI steps (sub:renew, promote)
 //   only when this script started the server itself.
@@ -159,6 +163,22 @@ function cli(...args) {
   const r = spawnSync('php', [path.join(DOCROOT, 'cli/tfm.php'), ...args], { env: { ...process.env, TFM_DATA_DIR: tmpData, TFM_TOSS_MOCK: '1' }, encoding: 'utf8', timeout: 60000 });
   return { status: r.status, out: String(r.stdout || '') + String(r.stderr || '') };
 }
+/**
+ * Evaluate one PHP expression against the server this script spawned, with ITS lib/bootstrap.php, data dir and
+ * database (the SQLite file, or the MySQL / MariaDB of TFM_DB_*): $in is the JSON input, the value is echoed as JSON.
+ */
+function srvPhp(expr, input = null) {
+  const code = 'require getenv("TFM_E2E_BOOT"); $in = json_decode((string) stream_get_contents(STDIN), true); '
+    + `echo json_encode(${expr}, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);`;
+  const r = spawnSync('php', ['-r', code], {
+    input: JSON.stringify(input), encoding: 'utf8', timeout: 60000, maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, TFM_DATA_DIR: tmpData, TFM_TOSS_MOCK: '1', TFM_E2E_BOOT: path.join(DOCROOT, 'lib/bootstrap.php') },
+  });
+  if (r.status !== 0) throw new Error(`server PHP failed (exit ${r.status}): ${String(r.stderr || r.stdout).trim().slice(0, 300)}`);
+  return JSON.parse(r.stdout);
+}
+/** rows from the spawned server's own database (prepared statement through its Tfm\Db) */
+const dbAll = (sql, params = []) => srvPhp('Tfm\\Db::all($in["sql"], $in["params"])', { sql, params });
 async function freePort() {
   return new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 }
@@ -213,7 +233,9 @@ async function main() {
   const A = new Client('A');            // main player
   const B = new Client('B');            // second player (presence / chat / report)
   const anon = new Client('anon');      // never logs in
-  const id = rnd();
+  // TFM_E2E_RUN_ID=<8 hex> pins the run id (reproduce a run; spawned SQLite servers only — a shared MySQL database
+  // already holds that run's accounts)
+  const id = /^[0-9a-f]{8}$/.test(process.env.TFM_E2E_RUN_ID || '') ? process.env.TFM_E2E_RUN_ID : rnd();
   // nickname / innocent-text tails are digits only: random hex can spell platform names ("…fb", "…ig") that the
   // nickname and PII rules refuse on purpose, which made a run fail now and then
   const tag = String(parseInt(id, 16)).padStart(10, '0');
@@ -576,20 +598,25 @@ async function main() {
     }
     return outs.join(' · ');
   });
-  const MYSQL = (process.env.TFM_DB_DRIVER || '').toLowerCase() === 'mysql';
   await step('chat: the stored repeat-spam key holds no personal information (built from the masked text)', async () => {
-    if (!tmpData) return 'skipped (external server: no access to its database)';
-    if (MYSQL) return 'skipped (MySQL run: the stored rows are inspected in the SQLite run)';
-    const dbf = fs.readdirSync(tmpData).find((f) => /^db-.*\.sqlite$/.test(f));
-    assert(dbf, `sqlite file in ${tmpData}`);
-    const q = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); echo json_encode($p->query("SELECT text, text_key FROM chat_messages")->fetchAll(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);', path.join(tmpData, dbf)], { encoding: 'utf8' });
-    assert(q.status === 0, `php ${q.status} ${String(q.stderr).slice(0, 200)}`);
-    const rows = JSON.parse(q.stdout);
-    const leak = rows.filter((r) => /[0-9]{9,}|gmail|kiddino|dinokid|evil|테헤란로/.test(String(r.text_key)) || /[0-9]{4}[^0-9]?[0-9]{4}/.test(String(r.text_key)));
-    assert(rows.length >= 3 && !leak.length, `leaking keys: ${leak.map((r) => r.text_key).slice(0, 3).join(' | ')}`);
-    const sv = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); echo (int) $p->query("SELECT MAX(version) FROM schema_version")->fetchColumn();', path.join(tmpData, dbf)], { encoding: 'utf8' });
-    assert(Number(sv.stdout) >= 2, `schema version ${sv.stdout}`);
-    return `${rows.length} rows, keys clean, schema v${sv.stdout}`;
+    if (!phpProc) return 'skipped (external server: no access to its database)';
+    // this run's rows only (a MySQL database is shared between runs)
+    const rows = dbAll('SELECT id, text, text_key FROM chat_messages WHERE user_id IN (?, ?) ORDER BY id', [Number(me.id), Number(userB.id)]);
+    assert(rows.length >= 3, `only ${rows.length} stored rows`);
+    // 1) every key is ChatFilter::key() of the STORED text, which is already PII-masked — computed by the server's own
+    //    function, so a key can never hold more than the masked line other players see. Digits the shared PII rules
+    //    leave alone (this run's id in "반복 43127067", a level, a count) are in both, which is fine — an earlier
+    //    version of this check flagged any 4+4 digits and failed whenever the random run id was all decimal digits.
+    const want = srvPhp('array_map(function ($t) { return Tfm\\ChatFilter::key((string) $t); }, $in)', rows.map((x) => String(x.text)));
+    const off = rows.filter((x, k) => String(x.text_key) !== want[k]);
+    assert(!off.length, `keys not built from the stored masked text: ${off.slice(0, 3).map((x) => `#${x.id} "${x.text_key}" ≠ key("${x.text}")`).join(' | ')}`);
+    // 2) none of the contact details the PII steps sent (in any of their disguises) reached a key or a stored text
+    const SECRET = /12345678|98765432|１２３４|일이삼사|오육칠팔|kid\.?dino|dinokid|gmail|evil\.?example|테헤란로|강남구|badcom|bad\[\.\]com/i;
+    const leak = rows.filter((x) => SECRET.test(String(x.text_key)) || SECRET.test(String(x.text)));
+    assert(!leak.length, `leaking rows: ${leak.slice(0, 3).map((x) => `#${x.id} key "${x.text_key}"`).join(' | ')}`);
+    const v = Number(srvPhp('Tfm\\Db::schemaVersion()'));
+    assert(v >= 5 && srvPhp('Tfm\\Db::hasColumn("chat_retractions", "upto_id")') === true, `schema v${v}, chat_retractions.upto_id missing?`);
+    return `${rows.length} rows of this run: every key = key(stored masked text), no secret · schema v${v}`;
   });
   await step('chat: report', async () => {
     const r = await B.req('api/chat/report.php', { json: { target: userA.nickname, targetId: String(me.id), messageId: msgId, text: 'ignored client copy', reason: 'abuse', memo: '테스트 신고' } });
@@ -602,10 +629,8 @@ async function main() {
   await step('chat: a report about an unknown name stores no personal information for the admins', async () => {
     const r = await B.req('api/chat/report.php', { json: { target: '모르는친구 010-2468-1357', reason: 'privacy', memo: '전화번호 공일공 이사육팔 일삼오칠 을 보냈어요' } });
     assert(r.status === 200 && r.data?.reportId, `status ${r.status} ${r.error?.code}`);
-    if (!tmpData || MYSQL) return 'stored copy not checked (external server or MySQL run)';
-    const dbf = fs.readdirSync(tmpData).find((f) => /^db-.*\.sqlite$/.test(f));
-    const q = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); $s = $p->prepare("SELECT target_name, memo FROM chat_reports WHERE id = ?"); $s->execute([(int) $argv[2]]); echo json_encode($s->fetch(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);', path.join(tmpData, dbf), String(r.data.reportId)], { encoding: 'utf8' });
-    const row = JSON.parse(q.stdout || 'null');
+    if (!phpProc) return 'stored copy not checked (external server)';
+    const row = dbAll('SELECT target_name, memo FROM chat_reports WHERE id = ?', [Number(r.data.reportId)])[0] || null;
     assert(row && !/2468|1357|이사육팔|일삼오칠/.test(row.target_name + row.memo) && row.target_name.includes('🔒'), `stored ${JSON.stringify(row)}`);
     return `${row.target_name} · ${row.memo}`;
   });
@@ -952,6 +977,86 @@ async function main() {
     const lst = cli('sub:list');
     assert(lst.status === 0 && lst.out.includes(userB.nickname), `sub:list ${lst.out.slice(0, 200)}`);
     return 'grant → tier 4 → revoke → tier 1 · admin.php 구독 tab ok';
+  });
+
+  // ------------------------------------------------------------- operator restore stamp + sub on every save answer
+  await step('admin restore: player/get · login · me carry restoredAt/restoredRev; a stale save hears restored + the stamp; every save answer carries sub', async () => {
+    if (!phpProc) return 'skipped (external server: needs the admin made by cli promote)';
+    assert(userC.id, 'C was registered by the billing steps');
+    // C (A is locked out by the brute-force step) saves twice, so the row has a one-step backup to restore
+    const s1 = freshState({ ...userC, role: 'user' });
+    const w1 = await CC.req('api/player/save.php', { json: saveBody(s1) });
+    assert(w1.status === 200 && w1.data?.sub && typeof w1.data.subChanged === 'boolean', `C first save ${w1.status} ${w1.error?.code}`);
+    await sleep(50);
+    const s2 = { ...s1, savedAt: Date.now() };
+    const w2 = await CC.req('api/player/save.php', { json: saveBody(s2) });
+    assert(w2.status === 200, `C second save ${w2.status} ${w2.error?.code}`);
+    const g0 = await CC.req('api/player/get.php');
+    assert(g0.status === 200 && g0.data?.save && g0.data.restoredAt === 0 && g0.data.restoredRev === 0, `before: ${g0.status} stamp ${g0.data?.restoredAt}/${g0.data?.restoredRev}`);
+    const oldRev = g0.data.save.revision;
+    // B is an admin since the grant step: admin.php "직전 저장으로 되돌리기" for C (signs C out)
+    const pg = await B.req('admin.php?tab=users');
+    const tok = (pg.text.match(/name="_csrf" value="([0-9a-f]+)"/) || [])[1];
+    assert(tok, `admin.php form token (HTTP ${pg.status})`);
+    const t0 = Date.now();
+    const rs = await B.req('admin.php', { form: new URLSearchParams({ action: 'restore', uid: String(userC.id), tab: 'users', _csrf: tok }) });
+    assert(rs.status === 303, `restore POST ${rs.status}`);
+    const lg = await CC.req('api/auth/login.php', { json: { login: userC.email, password: PASSWORD, remember: false } });
+    assert(lg.status === 200 && lg.data?.restoredRev > oldRev && lg.data.restoredAt >= t0 - 5000 && lg.data.restoredAt <= Date.now() + 5000, `login stamp ${lg.status} ${lg.data?.restoredAt}/${lg.data?.restoredRev} (old rev ${oldRev})`);
+    const m = await CC.req('api/auth/me.php');
+    assert(m.data?.restoredAt === lg.data.restoredAt && m.data.restoredRev === lg.data.restoredRev, `me stamp ${m.data?.restoredAt}/${m.data?.restoredRev}`);
+    const g1 = await CC.req('api/player/get.php');
+    const sv = g1.data?.save;
+    assert(g1.status === 200 && sv && g1.data.restoredAt === lg.data.restoredAt && g1.data.restoredRev === sv.revision && sv.restoredAt === g1.data.restoredAt && sv.restoredRev === sv.revision,
+      `get stamp ${g1.data?.restoredAt}/${g1.data?.restoredRev} save ${sv?.restoredAt}/${sv?.restoredRev} rev ${sv?.revision}`);
+    // a tab that still holds the overwritten progress (based on the old revision) is told so — and gets the server's sub
+    const stale = { ...sv.data, savedAt: Date.now() };
+    const st = await CC.req('api/player/save.php', { json: { version: 1, checksum: cyrb53(JSON.stringify(stale)), base: oldRev, data: stale } });
+    assert(st.status === 409 && st.error?.code === 'STALE_SAVE' && st.data?.restored === true && st.data.save?.restoredAt === g1.data.restoredAt && st.data.save.restoredRev === sv.revision,
+      `stale: ${st.status} ${st.error?.code} restored=${st.data?.restored} stamp ${st.data?.save?.restoredAt}/${st.data?.save?.restoredRev}`);
+    assert(st.data.sub && Number.isInteger(st.data.sub.tier) && typeof st.data.subChanged === 'boolean', `409 carries sub: ${JSON.stringify(st.data.sub)} subChanged=${st.data.subChanged}`);
+    // a 400 answer carries the server's sub too (fetch save: the CSRF header was checked before any work)
+    const bad = await CC.req('api/player/save.php', { json: { version: 1, checksum: '00000000000000', base: sv.revision, data: stale } });
+    assert(bad.status === 400 && bad.error?.code === 'CHECKSUM_MISMATCH' && bad.data?.sub && bad.data.sub.tier === st.data.sub.tier, `400: ${bad.status} ${bad.error?.code} sub ${JSON.stringify(bad.data?.sub)}`);
+    // the next accepted save is a new copy: the stamp is gone, the answer has sub; a forged client tier is reported as changed
+    const next = { ...sv.data, savedAt: Date.now(), sub: { ...(sv.data.sub || {}), tier: 3 } };
+    const ok = await CC.req('api/player/save.php', { json: { version: 1, checksum: cyrb53(JSON.stringify(next)), base: sv.revision, data: next } });
+    assert(ok.status === 200 && ok.data?.sub && ok.data.sub.tier === st.data.sub.tier && ok.data.subChanged === (st.data.sub.tier !== 3), `save after restore ${ok.status} ${ok.error?.code} sub ${JSON.stringify(ok.data?.sub)} subChanged=${ok.data?.subChanged}`);
+    const g2 = await CC.req('api/player/get.php');
+    assert(g2.data?.restoredAt === 0 && g2.data.restoredRev === 0 && g2.data.save?.restoredRev === 0 && g2.data.save.data.sub?.tier === st.data.sub.tier, `after: stamp ${g2.data?.restoredAt}/${g2.data?.restoredRev}, stored tier ${g2.data?.save?.data?.sub?.tier}`);
+    return `restored rev ${sv.revision} at +${lg.data.restoredAt - t0} ms · stale 409 restored · 400/409/200 carry sub (tier ${st.data.sub.tier}) · stamp cleared by the next save`;
+  });
+  // ------------------------------------------------------------- moderation: a ban's retraction has a watermark
+  await step('chat: a ban retraction carries upTo (highest message id at ban time): a client polling after ban + unban keeps the newer line', async () => {
+    if (!phpProc) return 'skipped (external server: ban/unban need the cli)';
+    const O = new Client('observer');                                   // a guest that keeps reading
+    await sleep(1100);
+    const l1 = await CC.req('api/chat/send.php', { json: { text: `정지 전 한마디 ${tag.slice(-3)}`, channel: 'all' } });
+    assert(l1.status === 200 && l1.data?.message?.id, `line 1: ${l1.status} ${l1.error?.code}`);
+    const first = await O.req('api/chat/list.php?after=0');
+    assert(first.status === 200 && (first.data?.messages || []).some((x) => x.id === l1.data.message.id), 'the observer shows line 1');
+    const lastId = first.data.lastId, rafter = first.data.retractId;
+    let r = cli('ban', userC.email);
+    assert(r.status === 0, `ban: ${r.out.slice(0, 200)}`);
+    r = cli('unban', userC.email);
+    assert(r.status === 0, `unban: ${r.out.slice(0, 200)}`);
+    const lg = await CC.req('api/auth/login.php', { json: { login: userC.email, password: PASSWORD, remember: false } });
+    assert(lg.status === 200, `relogin after unban: ${lg.status} ${lg.error?.code}`);
+    await sleep(1100);
+    const l2 = await CC.req('api/chat/send.php', { json: { text: `다시 왔어요 ${tag.slice(-3)}`, channel: 'all' } });
+    assert(l2.status === 200 && l2.data?.message?.id > l1.data.message.id, `line 2: ${l2.status} ${l2.error?.code}`);
+    // the lagging poll: the new line AND the ban's retraction in one answer
+    const lag = await O.req(`api/chat/list.php?after=${lastId}&rafter=${rafter}`);
+    const uid = String(userC.id), up = lag.data?.retracted?.upTo || {};
+    assert(lag.status === 200 && (lag.data.messages || []).some((x) => x.id === l2.data.message.id), 'the lagging poll returns line 2');
+    assert((lag.data.retracted?.users || []).includes(uid), `retracted.users ${JSON.stringify(lag.data.retracted)}`);
+    assert(Number.isInteger(up[uid]) && up[uid] >= l1.data.message.id && up[uid] < l2.data.message.id, `upTo[${uid}] = ${up[uid]} (line 1 #${l1.data.message.id}, line 2 #${l2.data.message.id})`);
+    const row = dbAll('SELECT upto_id FROM chat_retractions WHERE user_id = ? ORDER BY id DESC LIMIT 1', [Number(userC.id)])[0];
+    assert(row && Number(row.upto_id) === up[uid], `stored watermark ${JSON.stringify(row)}`);
+    // a poll after that answer's cursor hears nothing more; a fresh joiner simply sees both lines
+    const again = await O.req(`api/chat/list.php?after=${lag.data.lastId}&rafter=${lag.data.retractId}`);
+    assert(again.status === 200 && !(again.data.retracted?.users || []).length, 'the retraction is handed out once');
+    return `upTo[${uid}] = ${up[uid]} · line 1 #${l1.data.message.id} taken back, line 2 #${l2.data.message.id} kept`;
   });
 
   // ------------------------------------------------------------- summary

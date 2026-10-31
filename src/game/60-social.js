@@ -3520,7 +3520,8 @@
         // never slide the copy backwards against its reported facing (a stop or a turn reported late left it ahead of
         // the truth): close to the truth it turns and WALKS back the way it moves, at a walk; far behind it is put right
         // in one quiet correction — no 40 m/s moonwalk with a running gait
-        const back = gap > 0.5 && (cx * hx + cz * hz) < 0;
+        const along = cx * hx + cz * hz;
+        const back = gap > 0.5 && along < 0;
         let face = o.trot;
         if (back) {
           if (gap > DR_BACK_SNAP) { p.x = ex; p.z = ez; cx = 0; cz = 0; }
@@ -3529,6 +3530,13 @@
             if (bl > bmax) { cx *= bmax / bl; cz *= bmax / bl; }
             if (Math.hypot(cx, cz) > 1e-4) face = Math.atan2(cx, cz);
           }
+        } else if (gap > 0.5) {
+          // off the path sideways (a turn told late): cut across at a jog, facing the actual motion — no crab-slide
+          let lx = cx - hx * along, lz = cz - hz * along;
+          const ll = Math.hypot(lx, lz), lmax = Math.max(DR_BACK, o.tsp * 0.5) * dt;
+          if (ll > lmax) { lx *= lmax / ll; lz *= lmax / ll; cx = hx * along + lx; cz = hz * along + lz; }
+          const mx = vx * dt + cx, mz = vz * dt + cz;
+          if (Math.hypot(mx, mz) > 1e-3) face = Math.atan2(mx, mz);
         }
         p.x += cx; p.z += cz;
         const gy = o.ty != null ? o.ty : G.world.heightAt(p.x, p.z, p.y + 0.3);

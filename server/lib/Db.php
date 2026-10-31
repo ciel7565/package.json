@@ -14,7 +14,7 @@ if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
 
 final class Db
 {
-    public const SCHEMA_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
     /** @var PDO|null */
     private static $pdo = null;
     /** @var string */
@@ -245,16 +245,55 @@ final class Db
             if (self::$driver === 'sqlite') {
                 $pdo->exec('BEGIN IMMEDIATE');
                 try {
-                    if (self::schemaVersion() < self::SCHEMA_VERSION) foreach ($stmts as $s) $pdo->exec($s);
+                    if (self::schemaVersion() < self::SCHEMA_VERSION) {
+                        foreach ($stmts as $s) $pdo->exec($s);
+                        self::ensureColumns(); // same transaction: the version rows commit only with the columns
+                    }
                     $pdo->exec('COMMIT');
                 } catch (\Throwable $e) { $pdo->exec('ROLLBACK'); throw $e; }
             } else {
                 foreach ($stmts as $s) $pdo->exec($s); // MySQL DDL auto-commits; statements are idempotent (IF NOT EXISTS)
+                self::ensureColumns(); // schema.sql already adds them (information_schema check); this is the safety net
             }
             Log::info('DB', 'schema installed/upgraded', ['from' => $have, 'to' => self::SCHEMA_VERSION, 'driver' => self::$driver]);
         } finally {
             if ($locked) self::value("SELECT RELEASE_LOCK('tfm_migrate')");
         }
+    }
+
+    /**
+     * Columns added to an existing table by a later schema version. CREATE TABLE IF NOT EXISTS gives a new database
+     * every column; an older table gets the missing ones here (SQLite has no "ADD COLUMN IF NOT EXISTS"; on MySQL /
+     * MariaDB schema.sql adds them itself and this only repairs a partial import). Nullable columns only.
+     */
+    private const ADDED_COLUMNS = [
+        // v5: the ban watermark of a user retraction (highest chat_messages.id at ban time)
+        ['chat_retractions', 'upto_id', 'INTEGER', 'BIGINT UNSIGNED NULL'],
+    ];
+
+    private static function ensureColumns(): void
+    {
+        foreach (self::ADDED_COLUMNS as $c) {
+            list($table, $col, $sqliteType, $mysqlType) = $c;
+            self::ident($table);
+            self::ident($col);
+            if (self::hasColumn($table, $col)) continue;
+            self::$pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $col . ' ' . (self::$driver === 'mysql' ? $mysqlType : $sqliteType));
+            Log::info('DB', 'column added', ['table' => $table, 'column' => $col]);
+        }
+    }
+
+    /** does $table have $column (PRAGMA table_info / information_schema) */
+    public static function hasColumn(string $table, string $column): bool
+    {
+        self::ident($table);
+        if (self::driver() === 'mysql') {
+            return (int) self::value('SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?', [$table, $column]) > 0;
+        }
+        foreach (self::all('PRAGMA table_info(' . $table . ')') as $r) {
+            if (isset($r['name']) && (string) $r['name'] === $column) return true;
+        }
+        return false;
     }
 
     /** split a schema file into statements; skips comments and CREATE DATABASE/USE (the DSN selects the DB) */

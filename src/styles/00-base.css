@@ -482,6 +482,15 @@ button.slot:active:not(:disabled), .slot[role="button"]:active { transform: scal
 .fade.on { opacity: 1; pointer-events: auto; }
 .fatal { position: fixed; inset: 0; z-index: var(--z-fatal); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8rem; padding: 2rem; text-align: center; background: #0b1410; color: var(--text); }
 .fatal pre { max-width: 90vw; max-height: 40vh; overflow: auto; text-align: left; font-size: .75rem; background: rgba(255,255,255,.06); padding: .8rem; border-radius: 10px; user-select: text; }
+/* 00-core G.showFatal builds the card from nodes: tips list, 새로고침, the grown-up details toggle */
+.fatal h2 { margin: 0; font-size: clamp(1.2rem, 3.2vw, 1.6rem); }
+.fatal .fatal-lead { margin: 0; font-size: max(16px, 1rem); }
+.fatal .fatal-tips { max-width: 34rem; text-align: left; }
+.fatal .fatal-tips p { margin: .15rem 0; }
+.fatal .btn { min-height: var(--tap, 40px); }
+.fatal details { max-width: 90vw; }
+.fatal summary { cursor: pointer; padding: .3rem .5rem; border-radius: 8px; }
+.fatal summary:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
 
 /* ------------------------------------------------------------------ world labels */
 #labels-layer { position: fixed; inset: 0; pointer-events: none; z-index: var(--z-labels); overflow: hidden; }
@@ -562,7 +571,9 @@ body.no-3d #game-container, #game-container.no-3d {
   }
   .kd-mood.on .kd-mood-face, .skc-cat.active .emoji, .wxk-tile.active .wxk-emo { forced-color-adjust: auto; }
   .bar { border: 1px solid CanvasText; background: Canvas; }
-  .bar > i { forced-color-adjust: none; background: CanvasText; }
+  /* !important: the module fills (.bar-exp > i gradient in 01-hud, quest / plot bars) come later in the bundle with the
+     same specificity and would put a forced-out gradient back (re-measured: the EXP fill had no ink) */
+  .bar > i { forced-color-adjust: none; background: CanvasText !important; }
   .bar.fx > i::after { display: none; }
   .tab-ink { forced-color-adjust: none; background: Highlight; }
   .speed-chip, .lv-chip { forced-color-adjust: none; background: Highlight; color: HighlightText; }

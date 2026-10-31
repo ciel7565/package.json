@@ -1016,9 +1016,16 @@ body.easy .ts-modebar button { min-height: var(--tap); font-size: 1rem; }
 .coach.kid button { pointer-events: auto; }
 
 /* ================================================================== EASY AVATAR CUSTOMIZER */
-/* the kid dialog's head (79 px) and foot (81 px) are taller than the grown-up ones: on a 768 px laptop a 66vh layout
-   overflowed the body by ~31 px and the footer cut the pose row in half (R3-ui-6) — size it to the room the body has */
+/* the kid dialog's head (79 px) and foot (81 px) are taller than the grown-up ones, and in easy mode the backdrop keeps
+   a 7rem toast lane above every dialog (02-responsive, R3-ui-2): a fixed 66vh / 100dvh-based layout overflowed the body
+   and the footer cut the pose row (R3-ui-6, re-measured 1366x768: pose row 624–680 under a footer at 669). Two-column
+   screens: the body is a flex column and the layout asks for min(66vh, 40rem) but shrinks to the room the body really
+   has, so the pose row always ends above the footer (1366x768: 604–660 vs 669; 1600x900: 731–787 vs 796). */
 .avatar-modal.kid .av-layout.av-kid { grid-template-columns: minmax(15rem, 5fr) minmax(0, 6fr); height: min(66vh, 40rem, calc(100vh - 20rem)); height: min(66vh, 40rem, calc(100dvh - 20rem)); }
+@media (min-width: 821px) {
+  .avatar-modal.kid .modal-body { display: flex; flex-direction: column; }
+  .avatar-modal.kid .av-layout.av-kid { flex: 1 1 min(66vh, 40rem); min-height: 0; height: auto; }
+}
 .av-kid-right { display: flex; flex-direction: column; gap: .8rem; min-height: 0; }
 .av-kid-name { display: flex; align-items: center; gap: .55rem; }
 .akn-text {
@@ -1160,3 +1167,40 @@ body.reduce-motion .kid-look, body.reduce-motion .kh-card, body.reduce-motion .k
 .no3d-note { margin: .2rem 0 0; max-width: 32rem; }
 .no3d-reason { margin: 0; user-select: text; }
 body.easy .no3d-lead, body.easy .no3d-tips { font-size: max(16px, 1rem); }
+/* 2D-only mode (그래도 열기): the 3D parts of the HUD step aside — no canvas, labels, travel, minimap, photo, joystick,
+   walking coach or "다음 할 일" (it is about walking) — and the dock in the middle offers the four 2D things */
+body.no-3d-on #game-container canvas, body.no-3d-on #labels-layer, body.no-3d-on #easy-next, body.no-3d-on #objective-hint,
+body.no-3d-on #zone-label, body.no-3d-on #minimap-panel, body.no-3d-on #easy-where, body.no-3d-on #dpad, body.no-3d-on #mobile-controls,
+body.no-3d-on #interact-prompt, body.no-3d-on .coach-layer, body.no-3d-on .easy-point,
+body.no-3d-on #hud [data-action="photo"], body.no-3d-on #hud [data-action="move"], body.no-3d-on #hud [data-action="minimap"],
+body.no-3d-on #hud [data-action="express"], body.no-3d-on #hud [data-action="emote"], body.no-3d-on #hud [data-action="gesture"] { display: none !important; }
+.no3d-dock { display: none; }
+body.no-3d-on .no3d-dock {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; /* transform: the 2D-only audience has older browsers */
+  display: flex; flex-direction: column; align-items: center; gap: .6rem;
+  width: min(31rem, calc(100vw - 2 * var(--gap, 1rem))); padding: .9rem 1rem 1rem; border-radius: 22px;
+  animation: fadeIn var(--dur-3) var(--ease-out) both;
+}
+.no3d-dock-title { margin: 0; font-weight: 800; font-size: 1.05rem; line-height: 1.3; }
+.no3d-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; width: 100%; }
+.no3d-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .25rem; min-height: 5.4rem; padding: .5rem .3rem;
+  border-radius: 16px; border: 1px solid var(--line); background: rgba(255, 255, 255, .07); color: var(--text); font: inherit; font-weight: 700;
+  cursor: pointer; transition: background-color var(--dur-2) var(--ease-out), transform var(--dur-1) var(--ease-out), outline-color var(--dur-2) var(--ease-out);
+}
+.no3d-tile .emoji { font-size: 1.9rem; line-height: 1; }
+.no3d-tile:hover { background: rgba(255, 255, 255, .13); }
+.no3d-tile:active { transform: scale(.97); }
+.no3d-tile:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+body.easy .no3d-tile { min-height: max(var(--tap, 56px), 5.8rem); font-size: max(16px, 1rem); }
+/* phones: 2 × 2 tiles, clear of the side menus (portrait: the left tile column; landscape: both side columns) */
+@media (max-width: 560px) {
+  body.no-3d-on .no3d-dock { width: min(17.5rem, calc(100vw - 2 * var(--gap, 1rem))); left: calc(50% + 2.4rem); }
+  .no3d-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-height: 480px) and (min-width: 561px) {
+  body.no-3d-on .no3d-dock { width: min(27rem, calc(100vw - 15rem)); gap: .4rem; padding: .6rem .8rem .7rem; }
+  body.easy .no3d-tile { min-height: var(--tap, 56px); }
+  .no3d-tile .emoji { font-size: 1.5rem; }
+}
+@media (forced-colors: active) { .no3d-tile { border: 1px solid CanvasText; } .no3d-tile:focus-visible { outline-color: Highlight; } }

@@ -731,6 +731,8 @@
   const auth = {
     current: null,
     serverUser: null,
+    _lastSub: null,        // the plan (sub) the last me / login / register answer carried (CONTRACT §14.1)
+    _lastRestoredAt: 0,    // its operator-restore stamp (ms, 0 = none) for offerPending
     AuthError,
     validate: V,
     strength,
@@ -764,7 +766,7 @@
           }
           const d = await G.net.request('auth/register.php', { body: { email, nickname, password, password_confirm: confirm, agree: true, remember: !!form.remember } });
           let user = normServerUser(d);
-          this._lastSub = d && d.sub ? d.sub : null;
+          this._lastSub = d && d.sub ? d.sub : null; this._lastRestoredAt = Number(d?.restoredAt) || 0;
           if (!user) user = await this._serverLogin(email, password, !!form.remember);
           else Profiles.upsert({ id: indexId(user), kind: 'server', nickname: user.nickname, role: user.role, ...rememberFields(!!form.remember) });
           this.serverUser = user;
@@ -898,7 +900,7 @@
       try {
         const d = await G.net.request('auth/me.php', { quiet: true, timeout: 5000 });
         this.serverUser = normServerUser(d);
-        this._lastSub = d && d.sub ? d.sub : null;
+        this._lastSub = d && d.sub ? d.sub : null; this._lastRestoredAt = Number(d?.restoredAt) || 0;
       } catch (e) { this.serverUser = null; }
       return this.serverUser;
     },
@@ -924,7 +926,7 @@
       const d = await G.net.request('auth/login.php', { body: { email: login, login, password, remember: !!remember } });
       const u = normServerUser(d);
       if (!u) throw new AuthError('로그인 응답을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.');
-      this._lastSub = d && d.sub ? d.sub : null;
+      this._lastSub = d && d.sub ? d.sub : null; this._lastRestoredAt = Number(d?.restoredAt) || 0;
       store.del(KEYS.logoutPending); // a fresh session replaced the one whose logout was pending
       this.serverUser = u;
       Profiles.upsert({ id: indexId(u), kind: 'server', nickname: u.nickname, role: u.role, ...rememberFields(!!remember) });
@@ -1068,7 +1070,7 @@
     },
     async _run() {
       if (this._busy) { this._again = true; return; }
-      if (!G.state || !app.loggedIn) return;
+      if (!G.state || !app.loggedIn || G.unsupported || !G.sys.engine?.renderer) return; // no 3D: the icon stays
       this._busy = true;
       const seq = ++this._seq;
       const owner = indexId(auth.current);
@@ -1625,7 +1627,7 @@
       G.ui.setHudVisible(false);
       G.ui.objective?.(null);
       // 3D background: the slow orbit around the 정선 만장대 pavilion (§13.2 titleShot), with pointer / tilt parallax
-      if (!wasOpen || G.sys.camera?.mode !== 'cinematic') TitleCam.start();
+      if ((!wasOpen || G.sys.camera?.mode !== 'cinematic') && !NoThree.active) TitleCam.start();
       // every fresh title starts on the child's screen; only the gated paths (upgradeGuest...) pass parent:true
       if (!wasOpen) { this.parent = !!opts.parent; this.kid = { mode: 'home', ideas: [], ni: 0, look: U.randInt(0, 5) }; this._transferFrom = 'guest'; }
       else if (opts.parent) this.parent = true;
@@ -1639,7 +1641,7 @@
       if (opts.login) { const i = this.el.querySelector('[data-form=login] [name=login]'); if (i) i.value = opts.login; }
       if (opts.transfer) { const cb = this.el.querySelector('[data-form=register] [name=transferGuest]'); if (cb && !cb.closest('[hidden]')) cb.checked = true; }
       this._mascotStart();
-      if (!wasOpen) Hero.start(this.el);
+      if (!wasOpen && !NoThree.active) Hero.start(this.el); // 2D-only: no 3D orbit to parallax
       if (v === 'kid' && !wasOpen) { this._greetPending = true; setTimeout(() => { if (this.open && this.view === 'kid') this._greet(); }, 900); }
       requestAnimationFrame(() => requestAnimationFrame(() => {
         this.el?.classList.add('in');
@@ -2576,6 +2578,7 @@
     sync(state, isNew) {
       this.stop();
       if (!state) return;
+      if (NoThree.active) return; // 2D-only mode (§14.4.3): nothing to walk to — no "손가락이 가리키는 땅을 눌러요"
       const t = state.tutorial && typeof state.tutorial === 'object' ? state.tutorial : (state.tutorial = { step: 0, done: false });
       if (G.flags.noTutorial || t.done) return;
       // saves from before onboarding existed: step 0, never started, already played. A tutorial that started but
@@ -2589,7 +2592,7 @@
     },
 
     start(step = 0) {
-      if (!G.state) return;
+      if (!G.state || NoThree.active) return;
       this.active = true;
       const t = G.state.tutorial || (G.state.tutorial = { step: 0, done: false });
       if (!t.startedAt) { t.startedAt = G.time.now(); G.dirty('tutorial'); } // the mark must survive a tab close
@@ -3207,8 +3210,10 @@
       { id: 'stickerbook', emoji: '📖', label: '스티커북', color: '#ffc93c', badge: G.ui.getBadge?.('stickerbook') || 0, say: '스티커북. 모은 스티커를 봐요.' },
       eng && { id: 'today', emoji: '🔔', label: '오늘', color: '#ff9f43', badge: unread, say: '오늘. 출석 도장과 오늘의 놀이를 봐요.' },
       { id: 'avatar', emoji: '👕', label: '꾸미기', color: '#ff7eb6', say: '꾸미기. 내 옷을 바꿔요.' },
-      { id: 'where', emoji: '🗺️', label: '어디 갈까', color: '#4fb3ff', say: '어디 갈까? 가고 싶은 곳을 골라요.' },
-      comp && { id: 'ongi', emoji: '🏺', label: '옹이랑', color: '#36cfc0', say: '옹이랑 놀아요.' },
+      // 2D-only mode (§14.4.3): nothing to travel to, no 3D 옹이 — the 배움터 tile takes their place
+      !NoThree.active && { id: 'where', emoji: '🗺️', label: '어디 갈까', color: '#4fb3ff', say: '어디 갈까? 가고 싶은 곳을 골라요.' },
+      NoThree.active && G.sys.education?.openLibrary && { id: 'learn', emoji: '📚', label: '배움터', color: '#4fb3ff', say: '배움터. 전통 발효를 배워요.' },
+      comp && !NoThree.active && { id: 'ongi', emoji: '🏺', label: '옹이랑', color: '#36cfc0', say: '옹이랑 놀아요.' },
       { id: 'sound', emoji: '🔊', label: '소리', color: '#b48bff', say: '소리. 소리 크기를 바꿔요.' },
       { id: 'help', emoji: '❓', label: '도와줘요', color: '#6c8cff', say: '도와줘요. 노는 방법을 봐요.' },
       typeof G.easy?.rest === 'function' && { id: 'rest', emoji: '😴', label: '쉬기', color: '#8fd14f', say: '쉬기. 잠깐 눈을 쉬어요.' },
@@ -3258,6 +3263,7 @@
       case 'today': return G.sys.engagement?.open?.();
       case 'avatar': return openAvatar();
       case 'where': return G.ui.triggerAction('where');
+      case 'learn': return G.sys.education?.openLibrary?.();
       case 'ongi': return G.sys.companion?.openMenu?.();
       case 'sound': return openSettings();
       case 'help': return openHelp();
@@ -3287,7 +3293,8 @@
       { act: 'profile', emoji: '🙋', label: '내 정보', desc: '레벨·칭호·체험 기록', tint: '#9b8cff' },
       { act: 'collection', emoji: '📚', label: '도감·업적', desc: '모은 작물·발효식품·업적', key: 'C', tint: '#6fe0d2' },
       { act: 'avatar', emoji: '👕', label: '아바타 꾸미기', desc: '옷차림·헤어·닉네임', tint: '#ff9fc7' },
-      G.sys.minimap?.openWorldMap && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
+      G.sys.minimap?.openWorldMap && !NoThree.active && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
+      NoThree.active && G.sys.education?.openLibrary && { act: 'learn', emoji: '📖', label: '배움터', desc: '전통 발효 배우기·퀴즈 (3D 없이)', tint: '#7fc4ff' },
       { act: 'settings', emoji: '⚙️', label: '설정', desc: '소리·그래픽·조작·계정', tint: '#c9d3c6' },
       // CONTRACT §14.6: the subscription screen is reachable only from grown-up screens (this menu, the settings 체험 tab)
       G.sys.subscription && !G.sys.subscription._failed && typeof G.sys.subscription.open === 'function' && { act: 'subscription', emoji: '⚡', label: '진행 속도 구독', desc: subTileDesc(), tint: '#ffd766' },
@@ -3374,6 +3381,7 @@
       case 'collection': if (P?.openCollection) P.openCollection(); else missing('도감'); return;
       case 'avatar': openAvatar(); return;
       case 'map': G.sys.minimap?.openWorldMap?.(); return;
+      case 'learn': G.sys.education?.openLibrary?.(); return;
       case 'settings': openSettings({ adult: true }); return;
       case 'subscription': if (G.sys.subscription?.open) G.sys.subscription.open(); else missing('구독'); return;
       case 'help': openHelp(null, { full: true }); return;
@@ -4195,6 +4203,8 @@
     gl: null,
     get() {
       if (this.gl && !this.gl.lost) return this.gl;
+      // no 3D on this device (§14.4.3): the static fallback, without a renderer that would only fail (and log) again
+      if (G.unsupported) throw new Error('3D unavailable: ' + String(G.unsupported.reason || '-').slice(0, 60));
       const canvas = document.createElement('canvas');
       canvas.className = 'av-canvas';
       canvas.tabIndex = 0;
@@ -5204,6 +5214,9 @@
       }
       auth.serverUser = u;
       adoptAccount(u);
+      // the login answer carries the account's plan (and restore stamp): the server's word, not the save's (§14.1)
+      try { G.sys.subscription?.fromServer?.(auth._lastSub, 'relogin'); } catch (e) { G.log.warn('SUB', 'apply plan after re-login failed', e?.message || e); }
+      app._restoredAt = Math.max(Number(app._restoredAt) || 0, Number(auth._lastRestoredAt) || 0);
       done = true;
       G.ui.modal.get('app-relogin')?.close();
       await saveNow('manual', true);
@@ -5220,36 +5233,75 @@
       onClose: () => { if (!done) onLater?.(); },
     });
   }
-  /** server mode, right after login: progress the server never confirmed (session ended, outage, closed tab) */
+  /** "10월 31일 14:05" for a save time stamp */
+  function atText(ts) {
+    const when = new Date(Number(ts) || 0);
+    return `${when.getMonth() + 1}월 ${when.getDate()}일 ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+  }
+  /**
+   * server mode, right after login: progress the server never confirmed (session ended, outage, closed tab) — the
+   * pending copy — and then the copy a STALE_SAVE restore pushed aside while this device was offline
+   * (G.save.pending.getLost: the newer copy from another device was loaded over it; R3-c2-device-env-1 asks that
+   * offline progress is never thrown away). The pushed-aside copy is offered once even when it is older than the state
+   * the server has now ("연결이 끊겼을 때의 기록"), then dropped. A copy from before an operator restore (admin.php
+   * 직전 저장으로 되돌리기: restoredAt from get.php / login.php / me.php) is never offered — it would undo the restore.
+   */
   async function offerPending(seq) {
     const cur = auth.current;
     if (!isServer() || cur?.kind !== 'server' || !G.state || !G.save.pending) return;
-    const pend = G.save.pending.get(cur.id);
-    if (!pend) return;
-    // a grown-up restored the account's previous save in admin.php (HANDOVER §운영자 복원): a copy this device kept
-    // from before that restore would write the overwritten progress back over it — it is dropped, with a word
-    // (R3-c2-r2-seams-lost-1; app._restoredAt comes from player/get.php at login)
+    const P = G.save.pending;
+    const same = () => app.loggedIn && seq === app._loginSeq && auth.current?.id === cur.id && !!G.state;
     const restoredAt = Number(app._restoredAt) || 0;
-    if (restoredAt && Number(pend.savedAt) < restoredAt) {
-      G.save.pending.drop(cur.id);
-      G.log.info('SAVE', 'pending copy predates an operator restore -> dropped');
+    let restoreSaid = false;
+    const sayRestored = () => {
+      if (restoreSaid) return;
+      restoreSaid = true;
       G.ui.toast('운영자가 되돌린 기록이 있어서, 이 기기에 남아 있던 임시 기록은 쓰지 않아요.', { type: 'info', duration: 7000, easy: '어른이 기록을 되돌렸어요. 지금 기록으로 놀아요!' });
-      return;
+    };
+    const adopt = async (copy) => {
+      G.state = G.save.normalize(copy.data, G.save.profile);
+      G.save.applyProfileSettings(G.state);
+      G.applyState();
+      await saveNow('manual', true);
+    };
+    // ---- 1. the pending copy (saves that never reached the server)
+    const pend = P.get(cur.id);
+    let offeredAt = null;
+    if (pend) {
+      if (restoredAt && Number(pend.savedAt) < restoredAt) {
+        // (R3-c2-r2-seams-lost-1) a copy from before the restore would write the overwritten progress back
+        P.drop(cur.id);
+        G.log.info('SAVE', 'pending copy predates an operator restore -> dropped');
+        sayRestored();
+      } else if (!(Number(pend.savedAt) > (Number(G.state.savedAt) || 0))) {
+        P.drop(cur.id); // the server already has it (or something newer): nothing to offer
+      } else {
+        const at = atText(pend.savedAt || pend.at);
+        const ok = await askConfirm({ emoji: '💾', heading: '저장 안 된 기록', title: '저장 안 된 기록이 있어요', text: `${at}에 놀던 기록이에요. 이어서 할까요?`, yes: '이어서 하기', no: '버리기' },
+          `서버에 저장되지 못한 기록이 이 기기에 남아 있어요 (${esc(at)}).<br><span class="small dim">이어서 하면 그 기록을 서버에 저장해요. 버리면 지금 서버의 기록으로 계속해요.</span>`,
+          { title: '저장 안 된 기록', icon: 'save', okText: '이어서 하기', cancelText: '버리기' });
+        if (!same()) return;
+        P.drop(cur.id);
+        offeredAt = Number(pend.savedAt) || 0;
+        if (ok) await adopt(pend);
+        if (!same()) return;
+      }
     }
-    // the server already has it (or something newer): nothing to offer
-    if (!(Number(pend.savedAt) > (Number(G.state.savedAt) || 0))) { G.save.pending.drop(cur.id); return; }
-    const when = new Date(Number(pend.savedAt) || pend.at);
-    const at = `${when.getMonth() + 1}월 ${when.getDate()}일 ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
-    const ok = await askConfirm({ emoji: '💾', heading: '저장 안 된 기록', title: '저장 안 된 기록이 있어요', text: `${at}에 놀던 기록이에요. 이어서 할까요?`, yes: '이어서 하기', no: '버리기' },
-      `서버에 저장되지 못한 기록이 이 기기에 남아 있어요 (${esc(at)}).<br><span class="small dim">이어서 하면 그 기록을 서버에 저장해요. 버리면 지금 서버의 기록으로 계속해요.</span>`,
-      { title: '저장 안 된 기록', icon: 'save', okText: '이어서 하기', cancelText: '버리기' });
-    if (!app.loggedIn || seq !== app._loginSeq || auth.current?.id !== cur.id) return;
-    G.save.pending.drop(cur.id);
-    if (!ok) return;
-    G.state = G.save.normalize(pend.data, G.save.profile);
-    G.save.applyProfileSettings(G.state);
-    G.applyState();
-    await saveNow('manual', true);
+    // ---- 2. the copy a restore pushed aside (offered once, whatever its age)
+    const lost = typeof P.getLost === 'function' ? P.getLost(cur.id) : null;
+    if (!lost) return;
+    const lostAt = Number(lost.savedAt) || 0;
+    if (restoredAt && lostAt < restoredAt) { P.dropLost(cur.id); G.log.info('SAVE', 'pushed-aside copy predates an operator restore -> dropped'); sayRestored(); return; }
+    // the same progress was just offered (pending and pushed-aside copy are one save) or is what the server has now
+    if (lostAt === offeredAt || lostAt === (Number(G.state.savedAt) || 0)) { P.dropLost(cur.id); return; }
+    const at = atText(lostAt || lost.lostAt);
+    const ok = await askConfirm({ emoji: '📶', heading: '연결이 끊겼을 때의 기록', title: '연결이 끊겼을 때 놀던 기록이 있어요', text: `${at}에 이 기기에서 놀던 기록이에요. 이 기록으로 바꿀까요?`, yes: '이 기록으로', no: '지금 기록으로' },
+      `인터넷 연결이 끊겼을 때 이 기기에서 놀던 기록이 있어요 (${esc(at)}).<br><span class="small dim">다른 창(기기)에서 더 새로 저장한 기록을 불러오면서 따로 보관해 두었어요. 이 기록으로 바꾸면 지금 서버의 기록 대신 저장해요. 지금 기록으로 계속하면 이 기록은 지워져요.</span>`,
+      { title: '연결이 끊겼을 때의 기록', icon: 'save', okText: '이 기록으로 바꾸기', cancelText: '지금 기록으로 계속' });
+    if (!same()) return;
+    P.dropLost(cur.id); // offered: never asked again
+    G.log.info('SAVE', `pushed-aside copy offered at login -> ${ok ? 'adopted' : 'dropped'}`);
+    if (ok) await adopt(lost);
   }
   /** the server did not answer at start (busy / slow network): keep asking while the title is up, then switch */
   function watchServer() {
@@ -5273,38 +5325,60 @@
   }
 
   // ================================================================ no WebGL2 / renderer failure (CONTRACT §14.4.3)
-  // 10-engine probes WebGL2 before boot; when it is missing (or the renderer throws) it sets G.unsupported and emits
-  // 'engine:unsupported' and the world modules build into a drawless scene. The app then shows this friendly screen
-  // instead of the title — never a black dead world with the HUD over it. 그래도 열기 starts the 2D-only mode.
+  // ONE no-3D path. Detection: 10-engine probes WebGL2 before boot (missing → 'no-webgl2' | 'no-webgl' | 'webgl1-only',
+  // a renderer that throws → 'renderer: …') and 00-core reports an engine / player whose init threw; both set
+  // G.unsupported and emit 'engine:unsupported' once, inside G.initSystems, and the world modules build into a drawless
+  // scene. Presentation: this friendly screen (never the black dead world with the HUD over it, never 00-core's fatal
+  // card): '이 기기에서는 3D를 열 수 없어요' + browser tips, 🔄 새로고침 and 그래도 열기 → the 2D-only mode. app.start()
+  // shows it right after G.initSystems; a report outside the boot (module-scope listener below) shows it at once.
+  // Fallback: 00-core's boot guard shows its card 4 s after init / at game:login only when no screen took over
+  // (body.no-3d is set synchronously by ask()).
   const NoThree = {
-    el: null,
+    el: null, reason: null, _p: null, dock: null,
+    /** 'error' = a part of the app failed to start (critical system); anything else = the device / browser */
+    kind(r) { return /^critical/.test(String(r || '')) ? 'error' : 'device'; },
     reasonText(r) {
       r = String(r || '');
       if (r === 'webgl1-only') return '이 브라우저는 WebGL 1만 돼요. 3D 체험관은 WebGL 2가 필요해요.';
       if (r === 'no-webgl2' || r === 'no-webgl') return '이 브라우저에서 WebGL 2를 켤 수 없어요.';
       if (r.startsWith('renderer')) return '그래픽 장치를 열지 못했어요.';
+      if (/^(engine|critical)/.test(r)) return '체험관의 3D 화면을 준비하지 못했어요. 새로고침하면 나아질 수 있어요.';
       return '3D 그래픽을 켤 수 없어요.';
     },
-    /** show the screen; resolves true when a grown-up chooses 그래도 열기 (2D-only mode). 다시 시도 reloads the page. */
+    /** a failure reported outside app.start (or before the shell booted): one screen, shown now or right after boot */
+    notice(reason) {
+      this.reason = this.reason || String(reason || 'unknown');
+      if (app._booting || !app._booted) return; // app.start() asks right after G.initSystems
+      this.ask(this.reason).then((go) => { if (go) this.enter2d(); }).catch((e) => G.log.warn('UI', 'no-3D screen failed', e?.message || e));
+    },
+    /**
+     * the screen (idempotent: the engine's report, app.start and a late report share one screen and one answer);
+     * resolves true when 그래도 열기 is chosen (the 2D-only mode starts); 🔄 새로고침 reloads the page
+     */
     ask(reason) {
-      if (this.el) { this.el.remove(); this.el = null; }
+      if (this.active) return Promise.resolve(true);
+      if (this._p) return this._p;
+      this.reason = String(reason || this.reason || 'unknown');
+      // synchronously: 00-core's boot guard sees a screen and stays quiet (no fatal card on top of this one)
       document.body.classList.add('no-3d');
-      return new Promise((resolve) => {
-        const el = h('section', { class: 'no3d-screen', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'no3d-title' });
+      this._p = new Promise((resolve) => {
+        const r = this.reason, err = this.kind(r) === 'error';
+        const el = h('section', { class: 'no3d-screen', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'no3d-title', 'aria-describedby': 'no3d-lead' });
         const mascot = h('div', { class: 'no3d-mascot', 'aria-hidden': 'true' });
-        mascot.innerHTML = mascotSvg('sad', 96);
+        mascot.innerHTML = mascotSvg('sad', 96); // our own static SVG (no user text)
         el.append(mascot,
-          h('h1', { id: 'no3d-title' }, '이 기기에서는 3D를 열 수 없어요'),
-          h('p', { class: 'no3d-lead' }, this.reasonText(reason)),
+          h('h1', { id: 'no3d-title' }, err ? '3D 화면을 열지 못했어요' : '이 기기에서는 3D를 열 수 없어요'),
+          h('p', { class: 'no3d-lead', id: 'no3d-lead' }, this.reasonText(r)),
           h('ul', { class: 'no3d-tips' },
-            h('li', null, '🌐 크롬·엣지·사파리 최신 버전으로 열어 주세요.'),
+            err ? h('li', null, '🔄 새로고침을 눌러 다시 열어 주세요.') : null,
+            h('li', null, '🌐 크롬·엣지·사파리 최신 버전으로 열어 주세요. (WebGL 2가 필요해요)'),
             h('li', null, '⚙️ 브라우저 설정에서 그래픽(하드웨어) 가속을 켜 주세요.'),
             h('li', null, '📱 메신저 앱 안의 브라우저라면 "다른 브라우저로 열기"를 눌러 주세요.')),
           h('div', { class: 'no3d-btns' },
-            h('button', { type: 'button', class: 'btn btn-primary btn-lg', 'data-no3d': 'retry' }, '🔄 다시 시도'),
+            h('button', { type: 'button', class: 'btn btn-primary btn-lg', 'data-no3d': 'retry' }, '🔄 새로고침'),
             h('button', { type: 'button', class: 'btn btn-soft btn-lg', 'data-no3d': 'go' }, '그래도 열기 (3D 없이)')),
           h('p', { class: 'no3d-note small dim' }, '3D 없이 열면 배움터·일기·설정·도움말은 쓸 수 있고, 걸어 다니기는 할 수 없어요.'),
-          h('p', { class: 'no3d-reason tiny muted' }, `(${String(reason || 'unknown').slice(0, 80)})`));
+          h('p', { class: 'no3d-reason tiny muted' }, `(${r.slice(0, 80)})`));
         el.addEventListener('click', (e) => {
           const b = e.target.closest('[data-no3d]');
           if (!b) return;
@@ -5315,21 +5389,61 @@
           this.el = null;
           resolve(true);
         });
+        el.addEventListener('keydown', (e) => { if (e.key === 'Tab') trapTab(el, e); });
         ($('#screen-root') || document.body).appendChild(el);
         this.el = el;
-        say('이 기기에서는 3D를 열 수 없어요. 어른을 불러 주세요.', { force: true });
-        setTimeout(() => { if (!touchUI()) el.querySelector('[data-no3d=retry]')?.focus(); }, 60);
+        say(err ? '3D 화면을 열지 못했어요. 어른을 불러 주세요.' : '이 기기에서는 3D를 열 수 없어요. 어른을 불러 주세요.', { force: true });
+        setTimeout(() => { if (!touchUI() && el.isConnected) el.querySelector('[data-no3d=retry]')?.focus(); }, 60);
       });
+      return this._p;
     },
-    /** 2D-only mode: HUD, 배움, 일기, 설정, 도움말 usable; no canvas, no walking (gameplay input is blocked) */
+    /** 2D-only mode: HUD, 배움터, 일기, 설정, 도움말 usable; no canvas, no walking (gameplay input blocked), no travel,
+     *  photo, joystick or walking coach (70-app.css body.no-3d-on); the dock in the HUD offers the four 2D things */
     enter2d() {
+      if (this.active) return;
       document.body.classList.add('no-3d', 'no-3d-on');
-      G.ui.block('no-3d');
-      G.log.warn('UI', '2D-only mode: 3D unavailable');
-      G.bus.emit('app:2d-only', { reason: G.unsupported?.reason || null });
+      // gameplay input (walking, E, hotkeys) is off for good; the 'modal:' key tells 30/31/32/62 that only a plain 2D
+      // layer is in front, so 가방 · 스티커북 · 오늘 still open over it (they refuse behind dialogue / rewards only)
+      G.ui.block('modal:no-3d');
+      Hero.stop(); TitleCam.stop(); LookArt.cancel();
+      if (Onboarding.active) Onboarding.stop();
+      try { G.sys.player?.cancelWalk?.('action'); } catch (e) { /* optional */ }
+      try { G.easy?.stopPoint?.(); } catch (e) { /* optional */ }
+      this._dock();
+      G.log.warn('UI', `2D-only mode: 3D unavailable (${this.reason || G.unsupported?.reason || '-'})`);
+      G.bus.emit('app:2d-only', { reason: this.reason || G.unsupported?.reason || null });
     },
     get active() { return document.body.classList.contains('no-3d-on'); },
+    /** the 2D launcher where the world would be: 📚 배움터 · 📝 일기 · ⚙️ 설정 · ❓ 도움말 (inside #hud: shown with it) */
+    _dock() {
+      const hud = $('#hud');
+      if (!hud || this.dock?.isConnected) return;
+      const tile = (act, emo, label, say1) => h('button', { type: 'button', class: 'no3d-tile', 'data-no3d-act': act, 'data-say': say1 },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, emo), h('span', { class: 'lbl' }, label));
+      const dock = h('nav', { class: 'glass no3d-dock', 'aria-label': '3D 없이 할 수 있는 것' },
+        h('p', { class: 'no3d-dock-title' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🫙'), ' 3D 없이 놀아요'),
+        h('div', { class: 'no3d-tiles' },
+          tile('learn', '📚', '배움터', '배움터. 전통 발효를 배워요.'),
+          tile('journal', '📝', '일기', '일기. 오늘 한 일을 남겨요.'),
+          tile('settings', '⚙️', '설정', '설정. 소리를 바꿔요.'),
+          tile('help', '❓', '도움말', '도움말. 어떻게 하는지 봐요.')));
+      dock.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-no3d-act]');
+        if (!b || !app.loggedIn) return;
+        G.sfx('click');
+        const act = b.dataset.no3dAct;
+        const missing = (what) => G.ui.toast(`${what}을(를) 열지 못했어요.`, { type: 'warn', easy: '앗, 지금은 열 수 없어요.' });
+        if (act === 'learn') { if (G.sys.education?.openLibrary) G.sys.education.openLibrary(); else missing('배움터'); }
+        else if (act === 'journal') { if (G.sys.journal?.open) G.sys.journal.open(); else missing('일기'); }
+        else if (act === 'settings') openSettings();
+        else if (act === 'help') { if (!G.ui.modal.get('app-help')) openHelp(); }
+      });
+      hud.appendChild(dock);
+      this.dock = dock;
+    },
   };
+  // a report outside app.start (a late engine failure, or one before the shell booted) still gets the one screen
+  G.bus.on('engine:unsupported', ({ reason } = {}) => NoThree.notice(reason));
 
   // ================================================================ app core
   const app = {
@@ -5352,6 +5466,7 @@
     async start() {
       if (this._booted) return;
       this._booted = true;
+      this._booting = true;
       const L = G.ui.loading;
       try {
         L.show();
@@ -5359,19 +5474,23 @@
         try { await G.net.detect(); } catch (e) { G.log.warn('NETWORK', 'detect failed', e?.message || e); }
         if (isServer()) { L.set(0.04, '계정 확인 중'); await auth.checkServer(); }
         await G.initSystems((f, label) => L.set(0.05 + f * 0.85, `${label} 준비 중`));
-        // no WebGL2 / renderer failure (§14.4.3): the friendly screen first; 그래도 열기 continues in the 2D-only mode,
-        // 다시 시도 reloads (00-core's G.start defers to this when G.app.noThree exists)
-        const unsupported = G.unsupported?.reason || G.sys.engine?.unsupported || null;
-        if (unsupported) {
+        // no 3D (§14.4.3: no WebGL2, a renderer that threw, an engine / player whose init failed — 00-core's
+        // criticalFailure() covers all of them): the friendly screen first, behind nothing; 그래도 열기 continues in the
+        // 2D-only mode (title, HUD, 배움터, 일기, 설정, 도움말), 🔄 새로고침 reloads. Never the dead world, never #fatal.
+        const dead = G.criticalFailure?.() || (G.unsupported ? { reason: G.unsupported.reason } : null);
+        if (dead) {
           L.set(1, '3D를 열 수 없어요');
           L.hide();
-          if (!(await NoThree.ask(unsupported))) return;
+          const go2d = await NoThree.ask(dead.reason || NoThree.reason);
+          this._booting = false;
+          if (!go2d) return;
         }
+        this._booting = false;
         L.set(0.93, '체험관 문을 여는 중');
         syncLiteUi();
-        G.bus.on('engine:quality', () => { syncLiteUi(); if (Title.open) { Hero.stop(); Hero.start(Title.el); } });
+        G.bus.on('engine:quality', () => { syncLiteUi(); if (Title.open && !NoThree.active) { Hero.stop(); Hero.start(Title.el); } });
         G.ui.setHudVisible(false);
-        TitleCam.start(0);
+        if (!NoThree.active) TitleCam.start(0);
         G.loop.start();
         // the first frames compile shaders: keep them behind the loading screen
         await U.nextFrame();
@@ -5417,7 +5536,7 @@
             if (pre && pre.sub) serverSub = pre.sub;
             // admin.php 직전 저장으로 되돌리기 stamps the row (meta.restoredRev / restoredAt); when get.php tells us,
             // offerPending drops a pending copy from before the restore (R3-c2-r2-seams-lost-1)
-            this._restoredAt = Number(pre?.restoredAt || pre?.save?.restoredAt || pre?.meta?.restoredAt) || 0;
+            this._restoredAt = Math.max(Number(auth._lastRestoredAt) || 0, Number(pre?.restoredAt || pre?.save?.restoredAt || pre?.meta?.restoredAt) || 0);
           } catch (e) {
             const st = Number(e?.status) || 0;
             if (st === 401) throw new AuthError('로그인이 만료되었어요. 다시 로그인해 주세요.');
@@ -5468,7 +5587,7 @@
         }, opts.auto ? 400 : 1100);
         setTimeout(() => { if (this.loggedIn && seq === this._loginSeq && G.state === state) Onboarding.sync(state, isNew); }, opts.auto ? 600 : 1600);
         Portrait.schedule(1400);
-        if (mode === 'server' && G.save.pending?.get(profile.id)) {
+        if (mode === 'server' && (G.save.pending?.get(profile.id) || G.save.pending?.getLost?.(profile.id))) {
           const offer = () => {
             if (!this.loggedIn || seq !== this._loginSeq) return;
             if (document.body.classList.contains('md-intro') || G.ui.modal.isOpen()) { setTimeout(offer, 600); return; }

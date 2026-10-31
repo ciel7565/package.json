@@ -420,7 +420,7 @@
   const UNLOCK_ON = new Set(['harvest', 'item', 'talk', 'edu', 'interact', 'claim', 'visit', 'quiz', 'craft', 'ferment', 'photo']);
   const DIALOGUE_ACTIONS = new Set(['openEdu', 'openQuiz', 'openLibrary', 'openShop', 'openCraft', 'openJar', 'openMap', 'openFastTravel', 'openJournal', 'openQuestLog', 'openInventory', 'openCollection', 'teleport', 'acceptQuest', 'claimQuest', 'giveItem', 'takeItem', 'setFlag', 'clearFlag', 'emote', 'npcAnim', 'event', 'toast', 'sfx', 'activity']);
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
-  const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts'];
+  const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   const HANGUL = /[가-힣]/;
@@ -2012,83 +2012,160 @@
   T('🧩 시스템', '모든 시스템 초기화 성공', () => { const bad = G.systems().filter((s) => s._failed || !s._initialized).map((s) => s.name); return { ok: !bad.length, detail: bad.length ? bad.join(', ') : `${G.systems().length}개 정상` }; });
   T('🧩 시스템', '조각(fragment) 로드 오류 없음', () => { const e = G.__fragmentErrors || []; return { ok: !e.length, detail: e.map((x) => x.name).join(', ') || `${(G.__fragments || []).length}개 로드` }; });
   // ---- ⚡ 속도·구독 + 두 번 점프 (CONTRACT §14.1 / §14.2 / §14.6)
-  T('⚡ 속도·구독', '속도 단계 3 → 이동 ×3 · 성장 ×3', () => {
-    const sp = G.sys.speed;
-    if (!sp || typeof sp.devTier !== 'function') return SKIP('속도 모듈(07-speed)이 없어요');
-    if (G.easy && G.easy.on) return SKIP('쉬운 모드에서는 개발용 단계 전환이 꺼져요');
-    const prev = sp._dev || 0;
-    const forced = sp.devTier(3);
-    const got = { tier: sp.tier, mv: sp.movement(), pr: sp.progression() };
-    sp.devTier(prev);
-    if (forced !== 3) return SKIP('개발자 센터를 먼저 열면 단계를 바꿀 수 있어요 (지금은 닫혀 있어요)');
-    return { ok: got.tier === 3 && got.mv === 3 && got.pr === 3, detail: `단계 ${got.tier} · 이동 ×${got.mv} · 성장 ×${got.pr}` };
+  // These tests set the effective tier through G.sys.speed._dev directly (what devTier() stores) instead of devTier():
+  // they also run with the center closed (devTier refuses then) and announce nothing (no speed:changed → no HUD chip
+  // pulse, no 옹이 cheer from a test). Every scratch value is restored in `finally` — the real save is never touched.
+  /** wait until the game loop has run n more frames (≤ maxMs) */
+  const waitFrames = async (n = 1, maxMs = 4000) => {
+    const f0 = G.time?.frame || 0, until = perf() + maxMs;
+    while ((G.time?.frame || 0) < f0 + n && perf() < until) await sleep(16);
+    return (G.time?.frame || 0) - f0;
+  };
+  T('⚡ 속도·구독', 'speed: tier 3 → player target speed ×3 and crop rate ×3', () => {
+    const sp = G.sys.speed, P = G.sys.player, Fm = G.sys.farming, J = G.sys.fermentation;
+    if (!sp || typeof sp.movement !== 'function' || typeof sp.progression !== 'function') return SKIP('속도 모듈(07-speed)이 없어요');
+    if (!G.state || !P || typeof Fm?._simulate !== 'function') return SKIP('체험관에 들어온 뒤에 실행해요');
+    const plots = G.state.farm?.plots, pid = plots && Object.keys(plots)[0];
+    const crop = Object.values(G.data.crops || {}).find((c) => c && c.growthTime > 0);
+    if (!pid || !crop) return SKIP('밭이 없어요');
+    const jars = G.state.jars, jid = jars && Object.keys(jars)[0];
+    const rec = Object.values(G.data.recipes || {}).find((r) => r && r.baseDuration > 0);
+    const st = G.data.fermentation?.stages || {};
+    const dev0 = sp._dev, plot0 = plots[pid], jar0 = jid ? jars[jid] : undefined;
+    const t0 = G.time.now();
+    const el = Math.min(20, crop.growthTime * 0.15);   // seconds of growth: tier 4 stays below 100 %
+    const jel = 2;                                       // seconds of fermentation (never crosses a stage)
+    const pMid = Number.isFinite(st.FERMENTING) && Number.isFinite(st.AGING) ? (st.FERMENTING + st.AGING) / 2 : 40;
+    const run = (tier) => {
+      sp._dev = tier;
+      plots[pid] = { cropId: crop.id, growth: 0, water: 100, health: 100, plantedAt: t0, lastUpdate: t0 - el * 1000, lastWaterAt: 0, harvests: 0 };
+      const g = Fm._simulate(pid, t0)?.growth;
+      let f = null;
+      if (jid && rec && typeof J?._simulate === 'function') {
+        jars[jid] = { owned: true, status: 'FERMENTING', recipeId: rec.id || Object.keys(G.data.recipes).find((k) => G.data.recipes[k] === rec), progress: pMid, hygiene: 100, tempOff: 0, humOff: 0,
+          acc: { t: 0, temp: 0, hum: 0, hyg: 0 }, temp: 20, humidity: 60, quality: 0, startedAt: t0 - 60000, lastUpdate: t0 - jel * 1000 };
+        const s = J._simulate(jid, t0, false);
+        f = s ? s.progress - pMid : null;
+      }
+      return { tier: sp.tier, mv: P.speedMul, walk: P.WALK * P.speedMul, run: P.RUN * P.speedMul, pr: sp.progression(), g, f };
+    };
+    let a, b, c;
+    try { a = run(1); b = run(3); c = run(4); } finally { plots[pid] = plot0; if (jid) jars[jid] = jar0; sp._dev = dev0; }
+    const r3 = b.g / a.g, r4 = c.g / a.g;
+    const f3 = a.f ? b.f / a.f : null, f4 = a.f ? c.f / a.f : null;
+    const ok = a.mv === 1 && b.mv === 3 && c.mv === 3 && b.pr === 3 && c.pr === 4 && near(b.walk, P.WALK * 3) && near(b.run, P.RUN * 3)
+      && a.g > 0 && near(r3, 3, 1e-6) && near(r4, 4, 1e-6) && (f3 === null || (near(f3, 3, 1e-6) && near(f4, 4, 1e-6)));
+    return { ok, detail: `이동 ×${a.mv}/${b.mv}/${c.mv} (걷기 ${b.walk.toFixed(1)} · 달리기 ${b.run.toFixed(1)} m/s) · 작물 ${a.g.toFixed(2)}→×${r3.toFixed(3)}/×${r4.toFixed(3)} · 발효 ${f3 === null ? '장독 없음' : `×${f3.toFixed(3)}/×${f4.toFixed(3)}`}` };
   });
-  T('⚡ 속도·구독', 'setFromServer 는 잘못된 값을 1단계로 막아요', () => {
-    const sp = G.sys.speed, Sb = G.sys.subscription;
-    if (sp && typeof sp.setFromServer === 'function') {
-      const a = sp.setFromServer({ tier: 99 }), b = sp.setFromServer(null), c = sp.setFromServer({ tier: 'x' });
-      return { ok: a.tier === 1 && b.tier === 1 && c.tier === 1, detail: `99→${a.tier} · null→${b.tier} · "x"→${c.tier}` };
+  T('⚡ 속도·구독', 'sub: setFromServer clamps garbage to tier 1', () => {
+    const sp = G.sys.speed, S = G.save;
+    if (!sp || typeof sp.setFromServer !== 'function' || typeof S?.sanitizeSub !== 'function') return SKIP('속도/구독 모듈이 없어요');
+    const junk = ['garbage', null, undefined, 7, [4], { tier: 9 }, { tier: 'x' }, { tier: -2 }, { tier: 0 }, { tier: NaN }, { tier: Infinity }, { tier: '3; DROP TABLE' }, { tier: { valueOf: () => 2 } }];
+    const pure = junk.map((g) => S.sanitizeSub(g, 'server').tier);
+    const good = S.sanitizeSub({ tier: '3', status: 'active', expiresAt: 1893456000000, autoRenew: 1 }, 'server');
+    // the live path writes G.state.sub: the effective tier is frozen meanwhile (no speed:changed) and the copy restored
+    let live = null;
+    if (G.state) {
+      const snap = G.state.sub, dev0 = sp._dev;
+      sp._dev = sp.tier;
+      try { sp.setFromServer('garbage'); live = G.state.sub && G.state.sub.tier; } finally { G.state.sub = snap; sp._dev = dev0; }
     }
-    if (Sb && typeof Sb.sanitize === 'function') {
-      const a = Sb.sanitize({ tier: 99 }), b = Sb.sanitize(null), c = Sb.sanitize({ tier: 'x' });
-      return { ok: a.tier === 1 && b.tier === 1 && c.tier === 1, detail: `99→${a.tier} · null→${b.tier}` };
-    }
-    return SKIP('속도/구독 모듈이 없어요');
+    const allOne = pure.every((t) => t === 1);
+    const ok = allOne && good.tier === 3 && good.status === 'active' && good.autoRenew === true && (live === null || live === 1);
+    return { ok, detail: `잘못된 값 ${junk.length}개 → ${allOne ? '모두 1단계' : pure.join(',')} · {tier:'3'} → ${good.tier}단계 · setFromServer('garbage') → ${live === null ? '(체험관 밖)' : `${live}단계`}` };
   });
-  T('⚡ 속도·구독', '두 번 점프는 공중에서 한 번만 돼요', () => {
-    const p = G.sys.player;
-    if (!p || typeof p._doubleJump !== 'function') return SKIP('플레이어가 없어요');
+  T('⚡ 속도·구독', 'double jump once per airtime', async () => {
+    const p = G.sys.player, inp = G.input;
+    if (!p || typeof p._doubleJump !== 'function' || typeof inp?.queueJump !== 'function') return SKIP('플레이어가 없어요');
+    if (!G.state || !p.enabled) return SKIP('체험관에 들어온 뒤에 실행해요');
     if (typeof p._cinematic === 'function' && p._cinematic()) return SKIP('연출 중이에요');
-    const save = { g: p.grounded, aj: p._airJump, du: p._doubleUsed, sl: p._slide };
+    if (p.sitting || p._slide || p.isWalking) return SKIP('앉아 있거나 걷는 중이에요');
+    // an open window (this center, the onboarding card, a kid card) blocks gameplay input: it is opened for these four
+    // frames only (G.input.gameplay), so the real update() path runs; restored in finally
+    if (Object.isFrozen(inp)) return SKIP('G.input 을 잠시 바꿀 수 없어요');
+    const blockers = [...(G.ui?.blockers || [])].join(',') || '없음';
+    const ogp = Object.prototype.hasOwnProperty.call(inp, 'gameplay') ? inp.gameplay : null;
+    inp.gameplay = () => true;
+    const save = { pos: p.position.clone(), vel: p.velocity.clone(), g: p.grounded, aj: p._airJump, du: p._doubleUsed, co: p._coyote, jb: p._jumpBuf };
+    const seen = [];
+    const emit0 = G.bus.emit, ownEmit = Object.prototype.hasOwnProperty.call(G.bus, 'emit');
+    G.bus.emit = function (name, payload) { if (name === 'player:jump') { seen.push(payload && payload.n); return; } return emit0.apply(this, arguments); };
+    const off = () => { if (ownEmit) G.bus.emit = emit0; else delete G.bus.emit; };
     try {
-      // airborne after a first jump, not sliding: update() allows the second press exactly once (the !_doubleUsed gate)
-      p.grounded = false; p._airJump = true; p._doubleUsed = false; p._slide = false;
-      const canFirst = !p.grounded && p._airJump && !p._doubleUsed && !p._slide;
-      p._doubleUsed = true; // what _doubleJump() sets when it consumes the one double jump of this airtime
-      const canSecond = !p.grounded && p._airJump && !p._doubleUsed && !p._slide;
-      p.grounded = true; p._airJump = false; p._doubleUsed = false; // landing clears it for the next airtime
-      const afterLand = !p._doubleUsed;
-      return { ok: canFirst && !canSecond && afterLand, detail: `첫 번째 ${canFirst ? '가능' : '불가'} · 두 번째 ${canSecond ? '허용(버그)' : '막힘'} · 착지 후 초기화 ${afterLand}` };
-    } finally { p.grounded = save.g; p._airJump = save.aj; p._doubleUsed = save.du; p._slide = save.sl; }
+      // airborne after a first jump (the coyote window is over), not sliding
+      p.grounded = false; p._airJump = true; p._doubleUsed = false; p._coyote = 0; p._jumpBuf = 0;
+      p.velocity.y = Math.max(p.velocity.y, 1.5);
+      inp.queueJump();
+      const f1 = await waitFrames(2);
+      inp.queueJump();
+      const f2 = await waitFrames(2);
+      const n2 = seen.filter((n) => n === 2).length;
+      return { ok: n2 === 1 && f1 >= 1 && f2 >= 1, detail: `두 번 눌러서 두 번 점프 ${n2}번 (1번이어야 해요) · 점프 이벤트 [${seen.join(',') || '없음'}] · 프레임 ${f1}+${f2} · 막고 있던 창 ${blockers}` };
+    } finally {
+      off();
+      if (ogp) inp.gameplay = ogp; else delete inp.gameplay;
+      p.position.copy(save.pos); p.velocity.copy(save.vel);
+      p.grounded = save.g; p._airJump = save.aj; p._doubleUsed = save.du; p._coyote = save.co; p._jumpBuf = save.jb;
+    }
   });
-  // ---- 🖥️ GPU 안전: 가드 (NaN · 빈 캔버스) + 화면 감시 (검은 사각형)
-  T('🖥️ GPU 안전', 'guard: NaN opacity 인 감시 대상은 숨기고 되돌려요', () => {
-    const guard = G.gfx && G.gfx.guard;
-    if (!guard || typeof guard.watch !== 'function' || !window.THREE) return SKIP('엔진(G.gfx.guard)이 없어요');
-    const THREE = window.THREE;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ transparent: true, opacity: 1 }));
-    m.name = 'dc-guard-nan-probe';
-    guard.watch(m, { uniforms: true });
-    m.material.opacity = NaN;
-    const repaired = guard.check(m);
-    const fixed = Number.isFinite(m.material.opacity);
-    guard.unwatch(m);
-    try { m.geometry.dispose(); m.material.dispose(); } catch (e) { /* ignore */ }
-    return { ok: repaired > 0 && fixed, detail: `고친 값 ${repaired}개 · opacity 유한=${fixed}` };
-  });
-  T('🖥️ GPU 안전', 'guard: 빈 캔버스 텍스처(2D 컨텍스트 없음)는 건너뛰어요', () => {
-    const gfx = G.gfx;
-    if (!gfx || typeof gfx.blankTexture !== 'function') return SKIP('엔진(G.gfx)이 없어요');
-    const t = gfx.blankTexture();
-    const blank = !!(t && t.userData && t.userData.blank);
-    try { t.dispose && t.dispose(); } catch (e) { /* ignore */ }
-    return { ok: blank, detail: `빈 텍스처 표시(userData.blank)=${blank}` };
-  });
-  T('🖥️ GPU 안전', 'watchdog: 주입한 검은 사각형을 찾아 격리해요', () => {
-    const E = G.sys.engine, wd = G.gfx && G.gfx.guard && G.gfx.guard.watchdog;
-    if (!wd || !E || !E.renderer || typeof wd.inject !== 'function' || typeof wd.probeNow !== 'function') return SKIP('렌더러가 없어요');
+  // ---- 🖥️ GPU 안전: 가드 (NaN · 빈 캔버스) + 화면 감시 (검은 사각형) — CONTRACT §14.4
+  T('🖥️ GPU 안전', 'guard: NaN opacity on a watched quad is hidden', () => {
+    const E = G.sys.engine, gd = G.gfx?.guard, THREE = window.THREE;
+    if (!E?.renderer || !gd || typeof gd.watch !== 'function' || !THREE) return SKIP('3D 장면이 아직 없어요');
     if (typeof E._isLost === 'function' && E._isLost()) return SKIP('WebGL 컨텍스트 없음');
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0xff00ff, transparent: true, opacity: 1 }));
+    m.name = 'dc-guard-test'; m.frustumCulled = false; m.position.copy(E.camera.position);
+    E.scene.add(m); gd.watch(m);
+    const before = gd.stats.fixed;
+    m.material.opacity = NaN;
+    let hiddenInFrame = null;
+    const r = E.renderer, own = Object.prototype.hasOwnProperty.call(r, 'render'), raw = r.render;
+    r.render = function (s, c) { if (s === E.scene && hiddenInFrame === null) hiddenInFrame = !m.visible; return raw.call(this, s, c); };
+    try { E.render({ force: true }); } finally {
+      if (own) r.render = raw; else delete r.render;
+      E.scene.remove(m); gd.unwatch(m); m.geometry.dispose(); m.material.dispose();
+    }
+    return { ok: hiddenInFrame === true && Number.isFinite(m.material.opacity) && m.visible === true && gd.stats.fixed > before, detail: `프레임 중 숨김 ${hiddenInFrame} · 복구 opacity ${m.material.opacity} · 고친 값 ${gd.stats.fixed - before}개 · 감시 중 ${gd.stats.watched}개` };
+  });
+  T('🖥️ GPU 안전', 'guard: blank canvas texture is skipped', () => {
+    const gfx = G.gfx;
+    if (!gfx || typeof gfx.canvasTexture !== 'function') return SKIP('엔진(G.gfx)이 없어요');
+    const og = HTMLCanvasElement.prototype.getContext, ogc = gfx.canvasTexture, W = G.world, ozb = W && W.zoneById;
+    // the zone board (66-fx CM.banner) is checked only when the motion layer is already built: building it while the
+    // browser "has no 2D context" would bake blank textures into it for the rest of the session
+    const built = !!G.fx?.stats?.()?.motion?.built;
+    let blank = false, shown = null, boards = 0, blankBoards = 0;
+    HTMLCanvasElement.prototype.getContext = function (t, ...a) { if (t === '2d') return null; return og.call(this, t, ...a); };
     try {
-      wd.reset();
-      wd.inject(true);
-      let res = null, detected = false;
-      for (let i = 0; i < 4 && !detected; i++) { res = wd.probeNow(); detected = !!(res && res.block && res.block.kind === 'black' && (res.anomaly || res.block.frac >= wd.minArea)); }
-      const step = wd.step;
-      wd.inject(false);
-      wd.reset();
-      if (!res) return SKIP('프레임을 읽지 못했어요 (헤드리스)');
-      return { ok: detected, detail: `블록 ${res.block ? `${res.block.w}×${res.block.h} (${((res.block.frac || 0) * 100).toFixed(0)}%)` : '없음'} · 격리단계 ${step}` };
-    } catch (e) { try { wd.inject(false); wd.reset(); } catch (e2) { /* ignore */ } return SKIP('프로브 실패: ' + String(e && e.message || e).slice(0, 60)); }
+      const t = gfx.canvasTexture(64, 64, (ctx, w, h) => { ctx.fillStyle = '#f00'; ctx.fillRect(0, 0, w, h); });
+      blank = !!t && t.userData?.blank === true && t.image?.width === 1 && t.image?.height === 1;
+      t?.dispose?.();
+      if (built && G.state && typeof G.fx?.zoneBanner === 'function' && typeof ozb === 'function') {
+        // a fresh fake zone: no cached board, so the banner really draws one (and must skip it)
+        const fake = { id: `DC_BLANK_${Date.now().toString(36)}`, name: '점검', emoji: '🧪', r: 5, center: { x: 0, z: 0 } };
+        W.zoneById = function (id) { return id === fake.id ? fake : ozb.call(this, id); };
+        gfx.canvasTexture = function (...a) { const r = ogc.apply(this, a); boards++; if (r?.userData?.blank) blankBoards++; return r; };
+        shown = G.fx.zoneBanner(fake.id);
+      }
+    } catch (e) { return { ok: false, detail: `예외: ${String(e?.message || e).slice(0, 120)}` }; }
+    finally { HTMLCanvasElement.prototype.getContext = og; gfx.canvasTexture = ogc; if (W && ozb) W.zoneById = ozb; }
+    const boardOk = shown === null || shown === false;
+    return { ok: blank && boardOk, detail: `blank=${blank} · 현판 ${shown === null ? '(움직임 효과가 아직 없어 건너뜀)' : `표시 ${shown} (false 여야 해요) · 그린 판 ${boards} (빈 판 ${blankBoards})`}` };
+  });
+  T('🖥️ GPU 안전', 'watchdog: injected black block is detected and quarantined', () => {
+    const W = G.gfx?.guard?.watchdog, E = G.sys.engine;
+    if (!E?.renderer || !W || typeof W.inject !== 'function' || typeof W.probeNow !== 'function') return SKIP('3D 장면이 아직 없어요');
+    if (!G.state) return SKIP('체험관에 들어온 뒤에 실행해요 (감시는 놀이 중에만)');
+    if (typeof E._isLost === 'function' && E._isLost()) return SKIP('WebGL 컨텍스트 없음');
+    let clean, p1, p2, step, state, after;
+    try {
+      W.reset(); clean = W.probeNow();
+      W.inject(true); p1 = W.probeNow(); p2 = W.probeNow(); step = W.step; state = W.state;
+    } finally { W.inject(false); W.reset(); }
+    after = W.probeNow();
+    if (!clean && !p1 && !after) return SKIP('프레임을 읽지 못했어요');
+    const ok = !!clean && !clean.anomaly && !!p1 && p1.anomaly && !!p2 && p2.anomaly && step >= 1 && state === 'quarantine' && W.step === 0 && !!after && !after.anomaly;
+    return { ok, detail: `깨끗한 화면 이상 ${clean?.anomaly} → 검은 사각형 2회 감지 ${p1?.anomaly}/${p2?.anomaly} (검정 ${p1 ? (p1.black * 100).toFixed(0) : '?'} %) → 격리 단계 ${step} (${state}) → 다시 켜기 후 단계 ${W.step}, 이상 ${after?.anomaly}` };
   });
   // a new module must be added to the SOURCE map and EXPECTED_SYSTEMS (otherwise the 모듈 상태 tab can not report it missing)
   T('🧩 시스템', '새 파일·새 시스템이 소스 지도와 필수 시스템 목록에 있어요', () => {
@@ -2264,7 +2341,7 @@
           if (!g || g.hidden || g.classList.contains('is-locked')) return null;
           const b = g.querySelector('.easy-gate-choice:not([disabled])');
           return b && b.dataset.q !== lastQ ? b : null;
-        }, 5000);
+        }, 12000);
         if (!armed) return null;
         lastQ = armed.dataset.q;
         const m = armed.closest('.easy-gate-modal');
@@ -2989,6 +3066,9 @@
     const Gs = Gpu.last;
     if (Gs && !Gs.ok) minus(8, 'GPU 안전 문제 (노멀·NaN·후처리)');
     if (Gpu.nan && !Gpu.nan.skip && !Gpu.nan.ok) minus(10, 'NaN 주입 테스트 실패');
+    const WD = G.gfx?.guard?.watchdog;
+    if (WD && Number(WD.step) > 0) minus(6, '검은 영역 격리 중 (GPU 안전 › 다시 켜기)');
+    if (G.unsupported) minus(10, `3D 사용 불가 (${String(G.unsupported.reason || '-').slice(0, 40)})`);
     score = Math.round(clamp(score, 0, 100));
     const grade = score >= 90 ? { label: '아주 건강해요', emoji: '🟢', tone: 'ok', mood: 'cheer' } : score >= 75 ? { label: '양호해요', emoji: '🟢', tone: 'ok', mood: 'happy' } : score >= 50 ? { label: '살펴볼 곳이 있어요', emoji: '🟡', tone: 'warn', mood: 'think' } : { label: '점검이 필요해요', emoji: '🔴', tone: 'bad', mood: 'surprised' };
     return { score, grade, reasons, modules: { total: mods.rows.length, ok: mods.rows.filter((r) => r.status === 'ok').length, failed, disabled, missing: mods.missing }, errors: err, lint: lint.counts, tests: tests ? { passed: tests.passed, failed: tests.failed, skipped: tests.skipped, total: tests.total } : null, fps, kids: K ? { score: K.score, ...K.counts } : null, gpu: Gs ? { ok: Gs.ok, nan: Gpu.nan ? (Gpu.nan.skip ? 'skip' : Gpu.nan.ok) : null } : null };
@@ -3673,6 +3753,7 @@
         ${tiers.length ? `<div class="dc-chips">${tiers.map((t) => `<span class="chip">${esc(t.name || (t.tier + '배'))} <small class="muted">₩${fmt(t.price || 0)}</small></span>`).join('')}</div>` : ''}
         <div class="dc-sub-h">🧪 개발용 단계 전환 ${easy ? pill('skip', '쉬운 모드에서는 꺼져요') : '<span class="muted small">(저장되지 않아요 · 서버 값이 아니에요)</span>'}</div>
         <div class="dc-chips dc-sub-dev">${devBtns}</div>
+        ${server ? '<p class="dc-note">⚠️ 서버 모드: 서버는 저장할 때마다 진짜 구독 단계로 이동 거리·작물·발효 속도를 확인해요. 개발용 단계로 더 빨리 움직이거나 키우면 그 저장은 거절되고 마지막으로 받아들여진 저장으로 되돌아가요. 측정이 끝나면 끄기(0)를 눌러 주세요.</p>' : ''}
         <p class="dc-note">기본 이동은 2배예요. 서버에 설치하고 구독하면 이동·작물 자라기·발효를 2·3·4배로 올릴 수 있어요 (토스페이먼츠 결제). 로컬 모드(이 파일 하나로 열기)에서는 항상 1단계예요.</p>
       </section>`;
   };
@@ -3773,7 +3854,7 @@
           ['네트워크', `${yes(bi.online, '온라인', '오프라인')} · 쿠키 ${bi.cookies ? '허용' : '차단'}`],
           ['접근성 선호', `${bi.reducedMotion ? '동작 줄이기 · ' : ''}${bi.dark ? '다크 모드' : '라이트 모드'}`],
         ])}</dl></section>
-        <section class="dc-card dc-in" style="--i:1"><h4>🎮 WebGL · GPU</h4>${gi ? `<dl class="dc-kv">${kvRows([
+        <section class="dc-card dc-in" style="--i:1"><h4>🎮 WebGL · GPU${G.unsupported ? ` ${pill('bad', `⛔ 3D 사용 불가: ${esc(String(G.unsupported.reason || '알 수 없음').slice(0, 80))}`)}` : ''}</h4>${G.unsupported ? `<p class="dc-note">이 기기에서는 3D 를 열 수 없어 2D 화면(배움·일기·설정·도움말)만 쓰고 있어요. WebGL2 를 지원하는 크롬·엣지·사파리 최신 버전에서 열어 주세요.</p>` : ''}${gi ? `<dl class="dc-kv">${kvRows([
           ['버전', `<b>${esc(gi.version)}</b> <span class="muted">${esc(gi.glVersion || '')}</span>`],
           ['지원', `WebGL1 ${gi.webgl1 ? '✅' : '—'} · WebGL2 ${gi.webgl2 ? '✅' : '—'}`],
           ['GPU', `<span class="dc-wrap">${esc(gi.renderer || '-')}</span>${gi.unmasked ? '' : ' <span class="muted">(브라우저가 가림)</span>'}`],
@@ -4060,21 +4141,27 @@
     </section>`;
   }
   function wdCardHtml() {
-    const wd = G.gfx && G.gfx.guard && G.gfx.guard.watchdog;
+    const gd = G.gfx && G.gfx.guard, wd = gd && gd.watchdog;
     if (!wd) return '';
+    const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
     const stTone = wd.state === 'quarantine' ? 'bad' : wd.state === 'suspect' ? 'warn' : 'ok';
-    const stName = { idle: '대기', watching: '감시 중', suspect: '의심(1회)', quarantine: '격리' }[wd.state] || esc(String(wd.state || '-'));
-    const blk = wd.lastBlock ? `${wd.lastBlock.kind === 'white' ? '흰' : '검은'} 블록 ${wd.lastBlock.w}×${wd.lastBlock.h} (${((wd.lastBlock.frac || 0) * 100).toFixed(0)}%)` : '없음';
-    return `<div class="dc-sub-h">🛡️ 화면 감시 — 검은 사각형 2초마다 점검 ${pill(stTone, stName)}${wd.step ? ` ${pill('bad', `격리 ${wd.step}/4단계`)}` : ''}</div>
+    const stName = { idle: '대기 (놀이 중에만 감시)', watching: '감시 중', suspect: '의심 (1회)', quarantine: '격리 중' }[wd.state] || String(wd.state || '-');
+    const LADDER = ['', '효과·화면 고정 판 숨김', '후처리 끔', '그림 판 숨김', '낮은 품질'];
+    const b = wd.lastBlock;
+    const blk = b ? `${b.kind === 'white' ? '흰' : '검은'} 블록 ${n(b.w)}×${n(b.h)} 칸 (${(n(b.frac) * 100).toFixed(0)} %)` : '없음';
+    const L = wd.last, st = gd.stats || {};
+    return `<div class="dc-sub-h">🛡️ 검은 영역 감시 <span class="muted small">2초마다 화면을 96×54 로 줄여 검정·흰 블록(≥ 5 %)을 찾아요</span> ${pill(stTone, esc(stName))}${wd.step ? ` ${pill('bad', `⛔ 격리 ${n(wd.step)}/4단계`)}` : ''}</div>
       <dl class="dc-kv dc-kv-3">${kvRows([
         ['상태', esc(stName)],
-        ['격리 단계', `${wd.step} / 4`],
-        ['점검 횟수', fmt(wd.probes || 0)],
-        ['이상 감지(누적)', fmt(wd.anomalies || 0)],
+        ['격리 단계', `${n(wd.step)} / 4${wd.step ? ` <span class="muted small">${esc(LADDER.slice(1, n(wd.step) + 1).join(' → '))}</span>` : ''}`],
+        ['점검 · 이상 감지', `${fmt(n(wd.probes))}회 · ${fmt(n(wd.anomalies))}회`],
         ['마지막 블록', esc(blk)],
-        ['켜짐', yes(wd.enabled !== false, '켜짐', '꺼짐')],
+        ['마지막 화면', L ? `검정 ${(n(L.black) * 100).toFixed(1)} % · 흰색 ${(n(L.white) * 100).toFixed(1)} %${L.anomaly ? ` ${pill('bad', '이상')}` : ''}` : '<span class="muted small">아직 점검 전</span>'],
+        ['감시', yes(wd.enabled !== false, '켜짐', '꺼짐 (점검 실패)')],
+        ['가드: 감시 대상', `${fmt(n(st.watched))}개 <span class="muted small">화면 고정 판 · 효과 셰이더</span>`],
+        ['가드: 고친 값 · 숨긴 프레임', `${fmt(n(st.fixed))}개 · ${fmt(n(st.hidden))}번${n(st.fixed) ? ` ${pill('warn', 'NaN 을 고쳤어요')}` : ''}`],
       ])}</dl>
-      ${wd.step ? `<div class="dc-row"><button type="button" class="btn btn-gold btn-sm" data-dc="gpu-wd-reset">🔄 다시 켜기 (격리 해제)</button></div>` : ''}`;
+      <div class="dc-row wrap">${wd.step ? '<button type="button" class="btn btn-gold btn-sm" data-dc="gpu-wd-reset">🔄 다시 켜기</button>' : ''}<button type="button" class="btn btn-soft btn-sm" data-dc="gpu-wd-probe">🔍 지금 점검</button></div>`;
   }
   function drawNan(scope) {
     const n = Gpu.nan;
@@ -4765,6 +4852,15 @@
       }
       case 'sub-tier-off': { const sp = G.sys.speed; if (sp && typeof sp.devTier === 'function' && !easyOn()) sp.devTier(0); if (ui.opened && ui.tab === 'sub') RENDER.sub(ui.body); return; }
       case 'gpu-wd-reset': { try { G.gfx?.guard?.watchdog?.reset?.(); } catch (e) { /* optional */ } if (ui.opened) render(); toast('화면 감시를 다시 켰어요.', 'success', '🖥️'); return; }
+      case 'gpu-wd-probe': {
+        const wd = G.gfx?.guard?.watchdog;
+        if (!wd || typeof wd.probeNow !== 'function') { toast('화면 감시가 없어요.', 'warn', '🖥️'); return; }
+        let r = null;
+        try { r = wd.probeNow(); } catch (e) { r = null; }
+        if (ui.opened) render();
+        toast(!r ? '화면을 읽지 못했어요 (3D 장면이 없거나 컨텍스트를 잃었어요).' : r.anomaly ? `이상한 블록이 보여요: ${r.block?.kind === 'white' ? '흰' : '검은'} ${((r.block?.frac || 0) * 100).toFixed(0)} %` : '화면 점검: 검은·흰 블록이 없어요 ✅', !r ? 'warn' : r.anomaly ? 'warn' : 'success', '🛡️');
+        return;
+      }
       case 'srv-run': await runServerChecks(); return;
       case 'kid-audit': KidAudit.run(); ui.kid.view = 'live'; render(); toast(`지금 화면: 치명 ${KidAudit.last.counts.critical} · 경고 ${KidAudit.last.counts.warn} · 참고 ${KidAudit.last.counts.info}`, KidAudit.last.counts.critical ? 'warn' : 'success', '👶'); return;
       case 'kid-tour': await kidTourUi(); return;
@@ -4929,6 +5025,11 @@
         return true;
       }, 125);
       G.bus.on('dev:open', (p) => this.open(p?.tab));
+      G.bus.on('gpu:anomaly', () => {
+        if (!ui.opened || ui.away || ui.tab !== 'system' || Tests.running) return;
+        clearTimeout(this._gt);
+        this._gt = setTimeout(() => { if (ui.opened && !ui.away && ui.tab === 'system') render(); }, 120);
+      });
       // a game dialog that opens by itself while the center is up (the re-login form when the session ended — e.g.
       // admin.php 관리자 지정 / 해제 —, the 다른 창 save card) would sit under the panel (z 60 over the modal layer) with the
       // keyboard left here: step aside like the tour does, come back when the last one has closed (a kid card that

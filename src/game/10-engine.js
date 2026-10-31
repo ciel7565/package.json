@@ -28,11 +28,12 @@
 //       2D context (Chrome caps live canvases): callers that draw text boards skip the mesh when `blank`.
 //   G.gfx.nanScrubShader         the NaN/Inf scrub shader that runs before bloom (dev-center GPU checks)
 //   G.gfx.guard                  black-region guard (CONTRACT §14.4): the user's GPU draws NaN as opaque black.
-//     .watch(obj, {uniforms})    sanitation — every frame material.opacity / scale / position / quaternion and the
-//                                listed uniforms (true = all) of watched objects are checked; a non-finite value hides
+//     .watch(obj, {uniforms,     sanitation — every frame material.opacity / scale / position / quaternion and the
+//        quarantine = true})     listed uniforms (true = all) of watched objects are checked; a non-finite value hides
 //                                the object for that frame, resets the value and counts in guard.stats. Screen-space
 //                                quads, sprites and transparent ShaderMaterials found in the scene are enrolled by
-//                                themselves (~1.5 s scan); .unwatch(obj) · .check(obj) · .quarantine(on)
+//                                themselves (~1.5 s scan); .unwatch(obj) · .check(obj) · .quarantine(on) hides the
+//                                FX / quads (quarantine: false = sanitation only; scanned opaque meshes never)
 //     .watchdog                  every 2 s the final frame is copied, box-filtered into 96×54 and read back; the
 //                                largest pure-black (< 6) / pure-white (> 250) block ≥ 5 % of the area in 2 probes in a
 //                                row is an anomaly → quarantine ladder (1 hide FX/quads · 2 composer off · 3 canvas
@@ -231,9 +232,13 @@
       float chroma = (cMax - cMin) / max(cMax, 1e-4);
       float satK = mix(uSaturation, 1.0 + (uSaturation - 1.0) * 0.35, clamp(chroma, 0.0, 1.0));
       c = max(mix(vec3(L), c, satK), vec3(0.0));
-      c += uLift * (1.0 - smoothstep(0.0, 0.3, L));
+      // (all but) exactly black stays black: what the NaN scrub writes and an undrawn texture are not lifted (nor
+      // flashed) — at dusk / night the lift would turn them into a dark grey-blue ~(0,1,8) that the screen watchdog
+      // (< 6) no longer sees as the black block it is. Real dark surfaces (L > 0.002) keep the full lift.
+      float liftK = smoothstep(0.0005, 0.002, L);
+      c += uLift * (1.0 - smoothstep(0.0, 0.3, L)) * liftK;
       c *= mix(vec3(1.0), uGain, smoothstep(0.3, 1.8, L));
-      c += vec3(0.6, 0.68, 0.92) * uFlash * (0.05 + min(L, 2.0) * 0.45);
+      c += vec3(0.6, 0.68, 0.92) * uFlash * (0.05 + min(L, 2.0) * 0.45) * liftK;
       vec2 q = (vUv - 0.5) * 2.0 * vec2(min(uAspect, 2.2) / 1.55, 1.0);
       c *= 1.0 - smoothstep(0.55, 1.55, length(q)) * uVignette;
       c *= 1.0 + (tfIgn(gl_FragCoord.xy) - 0.5) * 0.012;
@@ -341,10 +346,14 @@
     get normalsRepaired() { return fixNormals.repaired; },
     /** the NaN/Inf scrub that runs before bloom (read by the dev center's GPU checks) */
     nanScrubShader: NAN_SCRUB,
-    /** 1×1 fully transparent texture (texture.userData.blank = true): what canvasTexture hands out when the browser
-     *  gives no 2D context, so a board whose text never drew is skipped instead of showing an undefined (black) map */
+    /** 1×1 transparent texture (texture.userData.blank = true): what canvasTexture hands out when the browser gives
+     *  no 2D context. Callers that draw text boards skip the mesh when `blank`. The texel is transparent WHITE: on an
+     *  opaque material (terrain, paving, walls) it leaves the material colour (a transparent-black texel would turn
+     *  the surface black — the very defect §14.4 removes); on transparent / additive materials it draws nothing.
+     *  opts.rgba = [r, g, b, a] (0..255) picks another texel (SignAtlas: plain wood) */
     blankTexture(opts = {}) {
-      const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+      const c = Array.isArray(opts.rgba) && opts.rgba.length === 4 ? opts.rgba.map((v) => Math.max(0, Math.min(255, Math.round(+v) || 0))) : [255, 255, 255, 0];
+      const t = new THREE.DataTexture(new Uint8Array(c), 1, 1);
       if (opts.srgb !== false) t.colorSpace = THREE.SRGBColorSpace;
       t.userData.blank = true;
       t.needsUpdate = true;
@@ -453,12 +462,15 @@
   // the watched objects (every screen-space / camera-attached quad, sprite and transparent ShaderMaterial: enrolled
   // by their owners through guard.watch, or found by the ~1.5 s scene scan) are checked for non-finite values; an
   // offender is hidden for that frame, its value reset to a safe one, and the event counted (guard.stats).
-  const GUARD_NAME_RE = /fx-|banner|title|portal|pillar|sky-|rain|snow|stars|moon|meteor|halo|glow|firefl|petal|mist|spray|card|marker|ghost|ribbon|prints|splash|rainbow|overlay|afterimage|lantern/i;
-  const guardList = [];                 // [{ obj, uniforms }]   uniforms: true = every uniform, string[] = these, null = none
+  // (`\brain`: 'rain-splashes' yes, 'terrain-core' no — the terrain is not an effect)
+  const GUARD_NAME_RE = /fx-|banner|title|portal|pillar|sky-|\brain|snow|stars|moon|meteor|halo|glow|firefl|petal|mist|spray|card|marker|ghost|ribbon|prints|splash|rainbow|overlay|afterimage|lantern/i;
+  // [{ obj, uniforms, q }]   uniforms: true = every uniform, string[] = these, null = none · q: ladder step 1 hides it
+  const guardList = [];
   const guardSet = new WeakSet();       // watched objects
   const guardSeen = new WeakSet();      // objects the auto-enrol scan already judged
   const guardHidden = [];               // objects hidden for the frame being drawn
-  const guardQuarantined = [];          // objects hidden by the quarantine ladder (restored by watchdog.reset)
+  const guardQuarantined = [];          // materials masked by the quarantine ladder (restored by watchdog.reset)
+  let guardScanStamp = 0;
   const finV = (v) => {
     if (v == null) return true;
     if (typeof v === 'number') return Number.isFinite(v);
@@ -482,20 +494,38 @@
     else if (v.isMatrix3 || v.isMatrix4) v.identity();
     else if (Array.isArray(v)) for (let i = 0; i < v.length; i++) { if (typeof v[i] === 'number' && !Number.isFinite(v[i])) v[i] = 0; else if (v[i] && typeof v[i] === 'object' && !finV(v[i])) safeV({ value: v[i] }); }
   };
+  /** material-level hiding for the quarantine ladder (flag = the userData key of the step, list = what to restore) */
+  function maskMaterials(root, flag, list) {
+    root.traverse((o) => {
+      if (!(o.isMesh || o.isSprite || o.isPoints || o.isLine) || !o.material) return;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (let i = 0; i < ms.length; i++) { const m = ms[i]; if (m && m.visible && !m.userData[flag]) { m.userData[flag] = true; m.visible = false; list.push(m); } }
+    });
+  }
+  function unmaskMaterials(flag, list) {
+    for (let i = 0; i < list.length; i++) { const m = list[i]; if (m.userData[flag]) { delete m.userData[flag]; m.visible = true; } }
+    list.length = 0;
+  }
   const guard = {
     stats: { watched: 0, checked: 0, fixed: 0, hidden: 0, frames: 0, last: [] },
     /** watch obj (and, for a group, its drawable descendants). opts.uniforms: true = all uniforms, [names], default:
-     *  all uniforms of ShaderMaterials, none for built-in materials (whose numeric properties are checked anyway) */
+     *  all uniforms of ShaderMaterials, none for built-in materials (whose numeric properties are checked anyway).
+     *  opts.quarantine (default true): an owner's registration is an FX / quad that ladder step 1 hides; false =
+     *  sanitation only (a world object). The scene scan decides it from the material (see scan). */
     watch(obj, opts = {}) {
       if (!obj || !obj.isObject3D) return obj;
+      const q = opts.quarantine !== false;
       if (!guardSet.has(obj)) {
         guardSet.add(obj);
         guardSeen.add(obj);
         const u = opts.uniforms === true || opts.uniforms === '*' ? true : Array.isArray(opts.uniforms) ? opts.uniforms.slice() : null;
-        guardList.push({ obj, uniforms: u });
+        guardList.push({ obj, uniforms: u, q });
         guard.stats.watched = guardList.length;
+      } else if (!opts._scan) {
+        const e = guardList.find((x) => x.obj === obj);   // found by the scan first: the owner's registration decides
+        if (e) e.q = q;
       }
-      if (opts.deep !== false && obj.children && obj.children.length) obj.traverse((c) => { if (c !== obj && (c.isMesh || c.isSprite || c.isPoints || c.isLine)) guard.watch(c, { uniforms: opts.uniforms, deep: false }); });
+      if (opts.deep !== false && obj.children && obj.children.length) obj.traverse((c) => { if (c !== obj && (c.isMesh || c.isSprite || c.isPoints || c.isLine)) guard.watch(c, { uniforms: opts.uniforms, deep: false, quarantine: opts.quarantine }); });
       return obj;
     },
     unwatch(obj) {
@@ -510,14 +540,14 @@
       const e = guardList.find((x) => x.obj === obj);
       return guardCheck(e || { obj, uniforms: uniforms === undefined ? null : uniforms }, false);
     },
-    /** hide (on) / show (off) every watched object — ladder step 1 of the screen watchdog */
+    /** hide (on) / show (off) every watched FX / quad (entries with q: the owners' registrations and the transparent
+     *  / sprite / point / depth-less objects the scan found; never the terrain, the sky dome or opaque props) —
+     *  ladder step 1 of the screen watchdog. It masks the MATERIALS (material.visible), never obj.visible: owners keep
+     *  showing / hiding their objects meanwhile, and the release (다시 켜기) cannot bring back a board or a portal its
+     *  owner has put away during the quarantine */
     quarantine(on) {
-      if (on) {
-        for (const e of guardList) { const o = e.obj; if (o.visible && !o.userData._gq) { o.userData._gq = true; o.visible = false; guardQuarantined.push(o); } }
-      } else {
-        for (const o of guardQuarantined) { if (o.userData._gq) { delete o.userData._gq; o.visible = true; } }
-        guardQuarantined.length = 0;
-      }
+      if (on) { for (const e of guardList) if (e.q) maskMaterials(e.obj, '_gq', guardQuarantined); }
+      else unmaskMaterials('_gq', guardQuarantined);
       guard.quarantined = !!on;
     },
     quarantined: false,
@@ -525,17 +555,30 @@
      *  frustumCulled-less meshes, transparent ShaderMaterials, FX-like names) */
     scan(root) {
       let n = 0;
+      const stamp = ++guardScanStamp;
       root.traverse((o) => {
+        o.userData._gs = stamp;   // reachable in this scan (entries left out of two scans in a row are released below)
         if (guardSeen.has(o) || !(o.isMesh || o.isSprite || o.isPoints)) return;
         guardSeen.add(o);
         const m = Array.isArray(o.material) ? o.material[0] : o.material;
         if (!m) return;
-        if (o.name === 'pick-proxy' || o.name === 'blocker' || m.visible === false) return;
+        if (o.name === 'pick-proxy' || o.name === 'blocker' || m.visible === false || o.userData.guardSkip) return;
         const fxLike = o.isSprite || m.depthTest === false || (o.frustumCulled === false && !o.isInstancedMesh) || (m.isShaderMaterial && m.transparent) || GUARD_NAME_RE.test(o.name || '');
         if (!fxLike) return;
-        guard.watch(o, { deep: false });
+        // checked every frame either way; hidden by ladder step 1 only when it is effect-like (an opaque mesh — the
+        // terrain, the sky dome, a lantern, a lit window — is world geometry: hiding it would punch holes in the world)
+        const q = !!(o.isSprite || o.isPoints || m.depthTest === false || m.transparent);
+        guard.watch(o, { deep: false, quarantine: q, _scan: true });
         n++;
       });
+      // release what left the scene (a visitor's name tag, a disposed board): the list never keeps dead objects alive
+      for (let i = guardList.length - 1; i >= 0; i--) {
+        const o = guardList[i].obj;
+        if (o.userData._gs === stamp || o.userData._gs === stamp - 1) continue;
+        if (o.userData._gs === undefined) { o.userData._gs = stamp - 1; continue; }   // watched before it was added: one scan of grace
+        guardList.splice(i, 1); guardSet.delete(o); guardSeen.delete(o);
+      }
+      guard.stats.watched = guardList.length;
       return n;
     },
     /** the frame hook: check everything, hide offenders until the draw is done */
@@ -560,6 +603,20 @@
     if (!finV(o.position)) { o.position.set(0, -9999, 0); bad++; _gs.push('position'); }
     if (!finV(o.scale)) { o.scale.setScalar(1e-4); bad++; _gs.push('scale'); }
     if (!finV(o.quaternion)) { o.quaternion.identity(); bad++; _gs.push('quaternion'); }
+    if (o.matrixAutoUpdate === false && !finV(o.matrix)) { o.matrix.identity(); bad++; _gs.push('matrix'); }
+    // a non-finite PARENT transform (a group its owner moves: banner, portal, pillar) reaches the GPU through the
+    // children's world matrices — check the chain up to the scene (the camera / scene themselves are never reset)
+    for (let p = o.parent, d = 0; p && !p.isScene && d < 6; p = p.parent, d++) {
+      if (finV(p.position) && finV(p.scale) && finV(p.quaternion) && (p.matrixAutoUpdate !== false || finV(p.matrix))) continue;
+      if (!p.isCamera) {
+        if (!finV(p.position)) p.position.set(0, -9999, 0);
+        if (!finV(p.scale)) p.scale.setScalar(1e-4);
+        if (!finV(p.quaternion)) p.quaternion.identity();
+        if (p.matrixAutoUpdate === false && !finV(p.matrix)) p.matrix.identity();
+      }
+      bad++; _gs.push('parent:' + (p.name || p.type));
+      break;
+    }
     if (o.isSprite && o.material && !Number.isFinite(o.material.rotation)) { o.material.rotation = 0; bad++; _gs.push('rotation'); }
     const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : null;
     if (mats) {
@@ -660,20 +717,36 @@
       } catch (e) { G.log.warn('ENGINE', 'watchdog probe failed', e); return null; }
       return watchdog.last;
     },
-    /** test helper: a full-screen black quad in front of the camera (on) / removed (off) */
-    inject(on) {
+    /** test helper: an opaque black quad drawn over the scene (on) / removed (off). opts (screen fractions):
+     *  {w = 1, h = 1, cx = 0.5 (centre x), top = 0 (top edge, from the top)} — e.g. {w: 0.45, h: 0.56} is the block of
+     *  the user's screenshot (top-centre). opts.fx = true makes it an FX quad the guard watches (ladder step 1 then
+     *  hides it); by default the guard leaves it alone, like a defect no FX switch can reach. */
+    inject(on, opts = {}) {
       const E = engine;
       if (!E.scene || !E.camera) return;
-      if (on && !watchdog._inject) {
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0x000000, depthTest: false, depthWrite: false, toneMapped: false, fog: false }));
-        m.name = 'watchdog-inject'; m.frustumCulled = false; m.renderOrder = 100000;
+      if (on && watchdog._inject) watchdog.inject(false);
+      if (on) {
+        const fr = (v, d) => (Number.isFinite(+v) ? Math.max(0, Math.min(1, +v)) : d);
+        const w = fr(opts.w, 1), h = fr(opts.h, 1), cx = fr(opts.cx, 0.5), top = fr(opts.top, 0);
+        // clip-space rectangle (NDC): covers that part of the screen whatever the camera does
+        const x0 = (cx - w / 2) * 2 - 1, x1 = (cx + w / 2) * 2 - 1, y1 = 1 - top * 2, y0 = 1 - (top + h) * 2;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute([x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y0, 0, x1, y1, 0, x0, y1, 0], 3));
+        const mat = new THREE.ShaderMaterial({
+          name: 'WatchdogInject', vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+          fragmentShader: 'void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); }', depthTest: false, depthWrite: false, toneMapped: false,
+          // drawn in the transparent pass, after everything (renderOrder below): a solid block like a NaN quad's —
+          // an opaque-pass quad would get rain streaks, sprites and FX painted over it
+          transparent: true,
+        });
+        const m = new THREE.Mesh(g, mat);
+        m.name = 'watchdog-inject'; m.frustumCulled = false; m.renderOrder = 100000; m.raycast = () => {};
         m.userData.noOutline = true;
-        // clip-space quad: covers the whole screen whatever the camera does
-        m.onBeforeRender = function (renderer, scene, camera) { this.matrixWorld.copy(camera.matrixWorld); this.matrixWorld.multiply(_wdM.makeTranslation(0, 0, -0.2)); this.matrixWorld.multiply(_wdS.makeScale(camera.aspect * 0.11 * 1.2, 0.11 * 1.2, 1)); };
-        m.matrixAutoUpdate = false; m.matrixWorldAutoUpdate = false;
+        if (opts.fx) guard.watch(m); else m.userData.guardSkip = true;
         E.scene.add(m);
         watchdog._inject = m;
       } else if (!on && watchdog._inject) {
+        guard.unwatch(watchdog._inject);
         E.scene.remove(watchdog._inject);
         watchdog._inject.geometry.dispose(); watchdog._inject.material.dispose();
         watchdog._inject = null;
@@ -684,7 +757,7 @@
       const E = engine;
       if (watchdog.step >= 1) { guard.quarantine(false); try { G.fx?.quarantine?.(false); } catch (e) { /* fx optional */ } }
       if (watchdog.composerOff) { watchdog.composerOff = false; if (E.renderer) E._setupComposer(); }
-      if (watchdog._boards) { for (const o of watchdog._boards) if (o.userData._gqb) { delete o.userData._gqb; o.visible = true; } watchdog._boards = null; }
+      if (watchdog._boards) { unmaskMaterials('_gqb', watchdog._boards); watchdog._boards = null; }
       if (watchdog._prevQuality) { const q = watchdog._prevQuality; watchdog._prevQuality = null; if (E.renderer && E.quality !== q) E.setQuality(q); }
       watchdog.step = 0; watchdog.suspect = 0; watchdog.lastBlock = null;
       watchdog.state = G.ready && G.state ? 'watching' : 'idle';
@@ -702,12 +775,13 @@
         case 1: guard.quarantine(true); try { G.fx?.quarantine?.(true); } catch (e) { /* fx optional */ } break;
         case 2: watchdog.composerOff = true; E._setupComposer(); break;
         case 3: {
+          // canvas-texture boards (signs, banners, cards, labels, sprites): their materials are masked (see guard.quarantine)
           const list = [];
           E.scene.traverse((o) => {
             if (!(o.isMesh || o.isSprite) || !o.visible) return;
             const m = Array.isArray(o.material) ? o.material[0] : o.material;
-            if (!m || !m.map || !m.map.isCanvasTexture) return;
-            if (o.isSprite || (o.geometry && o.geometry.type === 'PlaneGeometry') || /board|sign|banner|card|title|label|hyeonpan|marker/i.test(o.name || '')) { o.userData._gqb = true; o.visible = false; list.push(o); }
+            if (!m || !m.map || !(m.map.isCanvasTexture || m.map.userData?.blank)) return;
+            if (o.isSprite || (o.geometry && o.geometry.type === 'PlaneGeometry') || /board|sign|banner|card|title|label|hyeonpan|marker/i.test(o.name || '')) maskMaterials(o, '_gqb', list);
           });
           watchdog._boards = list;
           break;
@@ -720,6 +794,15 @@
       G.log.warn('ENGINE', `gpu:anomaly step ${watchdog.step} — ${block.kind} block ${block.w}×${block.h} cells (${(block.frac * 100).toFixed(0)} %) at ${block.x},${block.y}`);
       G.bus.emit('gpu:anomaly', { step: watchdog.step, block });
       watchdog.hold(1200);   // the next probe sees the frame after this step took effect
+    },
+    /** the 96×54 target, the downsample quad and the read-back buffer (lazy; dropped on a context restore) */
+    _ensure() {
+      if (watchdog._rt) return;
+      watchdog._rt = new THREE.WebGLRenderTarget(WD_W, WD_H, { depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+      watchdog._mat = new THREE.ShaderMaterial({ name: 'WatchdogDownsample', uniforms: { tDiffuse: { value: null }, uCell: { value: new THREE.Vector2(1 / WD_W, 1 / WD_H) } }, vertexShader: FS_VERT, fragmentShader: WD_DOWN_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
+      watchdog._quad = new THREE.Mesh(fsGeometry(), watchdog._mat);
+      watchdog._quad.frustumCulled = false;
+      watchdog._buf = new Uint8Array(WD_W * WD_H * 4);
     },
     /** analyse one 96×54 RGBA read-back */
     _analyse(buf) {
@@ -747,13 +830,7 @@
       const E = engine, r = E.renderer, gl = r.getContext();
       const size = r.getDrawingBufferSize(_wdV2);
       if (!(size.x > 0 && size.y > 0)) return null;
-      if (!watchdog._rt) {
-        watchdog._rt = new THREE.WebGLRenderTarget(WD_W, WD_H, { depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-        watchdog._mat = new THREE.ShaderMaterial({ name: 'WatchdogDownsample', uniforms: { tDiffuse: { value: null }, uCell: { value: new THREE.Vector2(1 / WD_W, 1 / WD_H) } }, vertexShader: FS_VERT, fragmentShader: WD_DOWN_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
-        watchdog._quad = new THREE.Mesh(fsGeometry(), watchdog._mat);
-        watchdog._quad.frustumCulled = false;
-        watchdog._buf = new Uint8Array(WD_W * WD_H * 4);
-      }
+      watchdog._ensure();
       if (!watchdog._tex || watchdog._tex.image.width !== size.x || watchdog._tex.image.height !== size.y) {
         watchdog._tex?.dispose();
         watchdog._tex = new THREE.FramebufferTexture(size.x, size.y);
@@ -786,7 +863,7 @@
       return res;
     },
   };
-  const _wdV2 = new THREE.Vector2(), _wdM = new THREE.Matrix4(), _wdS = new THREE.Matrix4();
+  const _wdV2 = new THREE.Vector2();
   guard.watchdog = watchdog;
 
   // ---------------------------------------------------------------- grade state
@@ -900,6 +977,10 @@
       if (fm) fm.hidden = !G.settings.showFps;
       // the screen watchdog waits out transient frames: a login, a tab coming back, the first frames after boot
       G.bus.on('state:loaded', () => { watchdog.hold(4000); watchdog.state = 'watching'; });
+      // login builds meshes after the boot precompile (crops: instanced + instanceColor, and their shadow-depth
+      // variant): link their programs now, synchronously inside applyState, while the loading screen is still up
+      // — not on the first view of the farm (R3-render-3)
+      G.bus.on('state:loaded', () => { try { this._loginWarm(); } catch (e) { G.log.warn('ENGINE', 'login warm-up failed', e?.message || e); } });
       G.bus.on('game:ready', () => watchdog.hold(4000));
       document.addEventListener('visibilitychange', () => { if (!document.hidden) watchdog.hold(2500); });
       watchdog.hold(4000);
@@ -1178,7 +1259,65 @@
       this._envDirty = false;
     },
     /** behind the loading screen (core runs postInit before the loader hides): every system has built its scene */
-    async postInit() { await this.precompile(); },
+    async postInit() { await this.precompile(); this._markWarm(); },
+
+    /** remember every shadow caster that exists now: the login warm-up draws only casters added after this */
+    _markWarm() {
+      const seen = this._warmSeen || (this._warmSeen = new WeakSet());
+      this.scene?.traverse((o) => { if (o.castShadow) seen.add(o); });
+    },
+    /** state:loaded: compile what the login added (already-linked programs are reused) and warm the shadow-depth
+     *  programs of the new shadow casters, which renderer.compile() never prepares (R3-render-3) */
+    _loginWarm() {
+      const r = this.renderer;
+      if (!r || !this.scene || !this.camera || this._isLost()) return;
+      const t0 = performance.now(), n0 = r.info.programs?.length || 0;
+      this.precompile();   // issued now; its async tail only waits for a parallel compile
+      // the screen watchdog's own downsample program (its first probe comes ~4 s after login)
+      if (watchdog.enabled) {
+        const prev = r.getRenderTarget();
+        try { watchdog._ensure(); r.setRenderTarget(watchdog._rt); r.compile(watchdog._quad, fsCam); } catch (e) { /* compiled on the first probe instead */ } finally { r.setRenderTarget(prev); }
+      }
+      let warmed = 0;
+      if (r.shadowMap.enabled && this.sun?.castShadow) {
+        const seen = this._warmSeen || (this._warmSeen = new WeakSet());
+        const fresh = [];
+        this.scene.traverse((o) => { if (o.castShadow && (o.isMesh || o.isPoints || o.isLine) && !seen.has(o)) { seen.add(o); fresh.push(o); } });
+        if (fresh.length) warmed = this._shadowWarm(fresh);
+      }
+      G.log.info('ENGINE', `login warm-up: ${(r.info.programs?.length || 0) - n0} programs linked, ${warmed} new shadow casters drawn, ${Math.round(performance.now() - t0)} ms`);
+    },
+    /** draw only `list` once (frustum culling off for them, every other drawable hidden) into a 4×4 target, so the
+     *  shadow pass links their depth programs; the main pass uses the frame's target kind (composer target or canvas) */
+    _shadowWarm(list) {
+      const r = this.renderer, scene = this.scene, cam = this.camera;
+      const keep = new Set();
+      for (const o of list) { let p = o; while (p && !keep.has(p)) { keep.add(p); p = p.parent; } }
+      const hidden = [], culled = [];
+      scene.traverse((o) => { if (o.visible && !keep.has(o) && (o.isMesh || o.isPoints || o.isLine || o.isSprite)) { o.visible = false; hidden.push(o); } });
+      for (const o of list) if (o.frustumCulled) { o.frustumCulled = false; culled.push(o); }
+      const prevRT = r.getRenderTarget();
+      let rt = null;
+      try {
+        if (this.composer) {
+          rt = new THREE.WebGLRenderTarget(4, 4);   // a render target = the RenderPass program variant (linear, no tone mapping)
+          r.setRenderTarget(rt);
+          r.render(scene, cam);
+        } else {
+          // canvas variant: a 4×4 corner of the canvas, behind the loading screen (the next frame redraws everything)
+          const vp = r.getViewport(new THREE.Vector4()), sc = r.getScissor(new THREE.Vector4()), st = r.getScissorTest();
+          r.setRenderTarget(null);
+          r.setViewport(0, 0, 4, 4); r.setScissor(0, 0, 4, 4); r.setScissorTest(true);
+          try { r.render(scene, cam); } finally { r.setViewport(vp); r.setScissor(sc); r.setScissorTest(st); }
+        }
+      } finally {
+        r.setRenderTarget(prevRT);
+        if (rt) rt.dispose();
+        for (const o of culled) o.frustumCulled = true;
+        for (const o of hidden) o.visible = true;
+      }
+      return list.length;
+    },
 
     /**
      * compile the shader program of every material in the scene, hidden ones included (rain, snow, puddles, night

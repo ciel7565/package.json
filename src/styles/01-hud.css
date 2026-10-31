@@ -32,6 +32,9 @@ body.hud-hidden .hud, body.hud-hidden #labels-layer { display: none; }
 /* 진행 속도 chip (CONTRACT §14.1, G.sys.subscription): hidden at tier 1; ⚡2× in normal mode, ⚡ 2배 빨라요 in easy mode */
 .speed-chip { padding: .08rem .45rem; border-radius: 7px; background: linear-gradient(180deg, #fff1b8, #ffd24a); color: #3a2a00; font-weight: 800; font-size: .76rem; flex: none; white-space: nowrap; box-shadow: 0 0 0 1px rgba(255, 210, 74, .35); }
 .speed-chip[hidden] { display: none; }
+/* a tier change (72-subscription _chip, never the load-time announcement): scale ≤ 1.04 + a soft opacity dip, no overshoot */
+.speed-chip.is-pulse { animation: speedChipPulse .42s var(--ease-out) 1; }
+@keyframes speedChipPulse { 0% { scale: 1; opacity: 1; } 35% { scale: 1.04; opacity: .82; } 100% { scale: 1; opacity: 1; } }
 .hud-nick { font-weight: 700; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title-chip { padding: .05rem .45rem; border-radius: 999px; font-size: .68rem; font-weight: 700; color: var(--green-l); background: rgba(52,195,107,.15); border: 1px solid rgba(52,195,107,.4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 7rem; }
 .bar-exp { height: .55rem; }
@@ -348,7 +351,17 @@ body.easy .hud-player-row { gap: .55rem; }
 body.easy .hud-nick { font-size: max(16px, 1.12rem); font-weight: 800; }
 body.easy .lv-chip { order: 2; font-size: 0; padding: .12rem .55rem .12rem .45rem; border-radius: 999px; line-height: 1; }
 body.easy .lv-chip::after { content: '⭐ ' attr(data-n); font-size: 1.02rem; font-weight: 900; }
-body.easy .speed-chip { order: 3; font-size: max(16px, .92rem); font-weight: 900; padding: .12rem .6rem; border-radius: 999px; line-height: 1.2; }
+/* the ⚡ chip rides on the avatar card as a ribbon, so the stats card keeps its room for the name, ⭐ and 🪙 at every size
+   (in the row it squeezed the name to nothing on phones and ran past the card at 844×390). It is drawn from #hud-player
+   (left = gap + --easy-card + .5rem; the avatar card is --easy-card - .1rem + 2 px wide), centred on the avatar card and
+   clear of the avatar's middle; pointer-events: none keeps the avatar tappable. Visible text '⚡ 2배' (72-subscription).
+   transform, not the translate property: static placement must hold on Chrome 87–103 too (the pulse's scale composes). */
+body.easy .speed-chip {
+  position: absolute; left: calc(-.55rem - var(--easy-card) / 2); bottom: .25rem; transform: translateX(-50%); z-index: 1; pointer-events: none;
+  font-size: max(16px, .92rem); font-weight: 900; padding: .1rem .5rem; border-radius: 999px; line-height: 1.2;
+  box-shadow: 0 0 0 2px rgba(30, 22, 0, .6), 0 3px 8px rgba(0, 0, 0, .35);
+}
+body.easy .speed-chip .sc-tail { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 body.easy .hud-currency { font-size: 1.22rem; gap: .5rem; color: var(--text); }
 body.easy .hud-currency .cur-coin { gap: .35rem; }
 body.easy .hud-currency .cur-coin .ico { width: 1.45rem; height: 1.45rem; }

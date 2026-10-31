@@ -4,6 +4,7 @@
 //
 //   node tools/kid-audit.mjs                                  audit dist/metaverse/index.html in easy mode (1366×768)
 //   node tools/kid-audit.mjs --file /abs/game.html --mobile   phone viewport 390×844 with touch
+//   node tools/kid-audit.mjs /abs/game.html                   (a leading path = --file)
 //   options:
 //     --file <html>        built game (default dist/metaverse/index.html)
 //     --viewport WxH       default 1366x768 (--mobile: 390x844, touch, DPR 2)
@@ -45,7 +46,10 @@ catch {
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(n);
 const opt = (n, d = null) => { const i = args.indexOf(n); return i >= 0 && i + 1 < args.length ? args[i + 1] : d; };
-const file = path.resolve(opt('--file', path.join(ROOT, 'dist/metaverse/index.html')));
+// `node tools/kid-audit.mjs /abs/game.html` works too: a leading path is the --file (it used to be ignored silently,
+// which audited dist/ instead of the page that was named)
+const positional = args[0] && !args[0].startsWith('--') ? args[0] : null;
+const file = path.resolve(opt('--file', positional || path.join(ROOT, 'dist/metaverse/index.html')));
 const jsonOnly = flag('--json');
 const strict = flag('--strict');
 const normal = flag('--normal');

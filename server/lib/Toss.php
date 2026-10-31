@@ -174,7 +174,9 @@ final class Toss
         $errno = curl_errno($ch);
         $err = curl_error($ch);
         $http = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
+        // PHP 8 frees the CurlHandle object by itself; curl_close() is a no-op there and deprecated since 8.5 (a deprecation
+        // notice would become an exception under the API error handler)
+        if (PHP_VERSION_ID < 80000) curl_close($ch);
         if ($raw === false || $errno !== 0) {
             Log::error('TOSS', 'transport error', ['path' => $path, 'errno' => $errno, 'err' => mb_substr((string) $err, 0, 120)]);
             throw new TossException('NETWORK_ERROR', '결제 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.', 0);

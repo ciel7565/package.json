@@ -285,6 +285,7 @@
   function drawGrain(ctx, w, h) {
     const t = document.createElement('canvas'); t.width = 128; t.height = 128;
     const tc = t.getContext('2d');
+    if (!tc) return;   // no 2D context (§14.4: Chrome caps live canvases): the picture without grain
     const img = tc.createImageData(128, 128);
     for (let i = 0; i < img.data.length; i += 4) { const v = 110 + Math.random() * 60; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 28; }
     tc.putImageData(img, 0, 0);
@@ -559,6 +560,7 @@
       const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
       if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
       const ctx = cv.getContext('2d');
+      if (!ctx) return;   // no 2D context (§14.4): no frame preview rather than an error
       ctx.clearRect(0, 0, w, h);
       const info = this._info();
       if (easyOn()) drawKidFrame(ctx, w, h, this.kidFrame, info, true);
@@ -798,6 +800,8 @@
         const out = document.createElement('canvas');
         out.width = w; out.height = h;
         const ctx = out.getContext('2d');
+        // no 2D context (§14.4: Chrome caps live canvases): a calm "could not save" instead of a TypeError
+        if (!ctx) { const err = new Error('no 2D context for the photo'); err.no2d = true; throw err; }
         const native = typeof ctx.filter === 'string';
         if (native && f.css !== 'none') ctx.filter = f.css;
         ctx.drawImage(src, 0, 0, w, h);
@@ -816,6 +820,7 @@
         const tc = document.createElement('canvas');
         tc.width = tw; tc.height = th;
         const tctx = tc.getContext('2d');
+        if (!tctx) { const err = new Error('no 2D context for the thumbnail'); err.no2d = true; throw err; }
         tctx.imageSmoothingQuality = 'high';
         tctx.drawImage(out, 0, 0, tw, th);
         const thumb = tc.toDataURL('image/jpeg', 0.8);
@@ -849,7 +854,8 @@
         G.log.info('UI', `photo taken ${photo.id} ${w}x${h}${pz ? ` @${pz.id}` : ''}`);
         return photo;
       } catch (e) {
-        G.log.error('UI', 'photo capture failed', e);
+        if (e && e.no2d) G.log.warn('UI', 'photo capture skipped: ' + e.message);   // a browser limit, not a code error
+        else G.log.error('UI', 'photo capture failed', e);
         G.ui.toast('사진을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error', easy: '앗, 사진이 안 찍혔어요. 다시 눌러 봐요!', retry: () => { if (this.active) this.shoot(); } });
         return null;
       } finally {

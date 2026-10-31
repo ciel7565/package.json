@@ -459,6 +459,7 @@
         pivot.add(ex, qm);
         rec.markAnchor.add(pivot, glow);
         pivot.visible = false; glow.visible = false;
+        G.gfx.guard?.watch?.(pivot); G.gfx.guard?.watch?.(glow);   // §14.4.1 sanitation (camera-facing quest marks)
         rec.mark3d = { pivot, ex, qm, glow, glowMat };
         rec.el.mark.classList.add('has3d');
       } catch (e) {
@@ -875,12 +876,22 @@
     // Runs after the game is ready, off the loading path: shaders compile in parallel (compileAsync) and
     // pixels come back through an async PBO read, so neither loading nor gameplay frames stall.
     // Until a portrait exists the dialogue shows the NPC's emoji.
+    // A WebGL context loss while the job runs stops it ('lost'); when the context comes back ('engine:context'
+    // {lost: false} from 10-engine) the job runs again for the NPCs that still have no portrait (R3-runtime-4).
     _schedulePortraits() {
+      if (!this._portraitCtxHooked) {
+        this._portraitCtxHooked = true;
+        G.bus.on('engine:context', ({ lost } = {}) => {
+          if (lost) return;
+          if (this._portraitJob === 'running' || this._portraitJob === 'pending') { this._portraitRetry = true; return; }
+          if ([...this.records.values()].some((r) => !r.portrait)) { this._portraitJob = null; this._schedulePortraits(); }
+        });
+      }
       if (this._portraitJob) return;
       const go = () => {
         if (this._portraitJob) return;
         this._portraitJob = 'pending';
-        const run = () => { this._renderPortraits().catch((e) => G.log.warn('NPC', 'portraits skipped', e)); };
+        const run = () => { this._renderPortraits().catch((e) => { if (this._portraitJob === 'running' || this._portraitJob === 'pending') this._portraitJob = 'done'; G.log.warn('NPC', 'portraits skipped', e); }); };
         setTimeout(() => { if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 3000 }); else run(); }, 1500);
       };
       if (G.ready) go(); else G.bus.once('game:ready', go);
@@ -888,8 +899,10 @@
 
     async _renderPortraits() {
       const E = G.sys.engine, r = E?.renderer;
-      if (!r || !G.avatar?.create || typeof r.readRenderTargetPixels !== 'function' || !this.records.size) return;
+      if (!r || !G.avatar?.create || typeof r.readRenderTargetPixels !== 'function' || !this.records.size) { this._portraitJob = 'done'; return; }
+      if (E._isLost?.()) { this._portraitJob = 'lost'; return; }   // the restore event runs the job again
       this._portraitJob = 'running';
+      this._portraitRetry = false;
       const S = 192, K = 0.5; // lights at half power to stay below 8-bit clipping; the gain restores them
       const scene = new THREE.Scene();
       scene.environment = E.scene?.environment || null;
@@ -903,6 +916,7 @@
       const t0 = performance.now();
       const jobs = [];
       for (const rec of this.records.values()) {
+        if (rec.portrait) continue;   // a re-run (after a context loss) renders only the missing ones
         try {
           const rig = G.avatar.create(rec.data.appearance || {}, { shadow: false });
           rig.setExpression?.('happy', 60);
@@ -920,16 +934,18 @@
         cam.position.set(0.42, cy + 0.1, 1.78);
         cam.lookAt(0, cy, 0);
       };
-      let made = 0;
+      let made = 0, lost = false;
       try {
         if (!jobs.length) return;
         frame(jobs[0].rig);
-        // parallel compile only where the driver supports it (otherwise three warns and compiles on first render anyway)
+        // parallel compile only where the driver supports it (otherwise three warns and compiles on first render anyway);
+        // bounded: three's compileAsync never resolves when the context is lost while it polls
         if (typeof r.compileAsync === 'function' && r.extensions?.has?.('KHR_parallel_shader_compile')) {
-          try { await r.compileAsync(scene, cam); } catch (e) { /* compile on first render instead */ }
+          try { await Promise.race([r.compileAsync(scene, cam), new Promise((res) => setTimeout(res, 4000))]); } catch (e) { /* compile on first render instead */ }
         }
         for (const { rec, rig } of jobs) {
           if (!this.records.has(rec.id)) continue;
+          if (E._isLost?.()) { lost = true; break; }
           const rt = new THREE.WebGLRenderTarget(S, S, { samples: 4 });
           const buf = new Uint8Array(S * S * 4);
           try {
@@ -946,9 +962,12 @@
             }
             if (typeof r.readRenderTargetPixelsAsync === 'function') await r.readRenderTargetPixelsAsync(rt, 0, 0, S, S, buf);
             else r.readRenderTargetPixels(rt, 0, 0, S, S, buf);
+            // a read that finished on a lost context holds no picture: keep the emoji until the re-run
+            if (E._isLost?.()) { lost = true; break; }
             rec.portrait = await encodePortrait(buf, S, 0.72 / K);
             made++;
           } catch (e) {
+            if (E._isLost?.()) { lost = true; break; }
             G.log.warn('NPC', `portrait for ${rec.id} failed`, e);
           } finally {
             rt.dispose();
@@ -957,10 +976,12 @@
         }
       } finally {
         for (const { rig } of jobs) { scene.remove(rig.group); try { rig.dispose(); } catch (e) { /* ignore */ } }
-        this._portraitJob = 'done';
+        this._portraitJob = lost ? 'lost' : 'done';
       }
-      G.log.info('NPC', `rendered ${made} portraits in ${Math.round(performance.now() - t0)}ms`);
+      G.log.info('NPC', lost ? `portraits paused by a lost WebGL context (${made} made): they follow when it is restored` : `rendered ${made} portraits in ${Math.round(performance.now() - t0)}ms`);
       try { G.sys.dialogue?._refreshSpeaker?.(); } catch (e) { /* cosmetic */ }
+      // the context came back while this job was still running: run again for whatever is still missing
+      if (this._portraitRetry && !E._isLost?.() && [...this.records.values()].some((x) => !x.portrait)) { this._portraitRetry = false; this._portraitJob = null; this._schedulePortraits(); }
     },
   };
   G.register(npc);

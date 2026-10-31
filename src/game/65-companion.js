@@ -2350,13 +2350,14 @@
     _bindEvents() {
       const B = G.bus;
       const celebrate = (bubble, aff) => { if (!G.state) return; this.react('jump', { bubble }); if (aff) this._addAffection(aff, 'event'); };
-      // speed tier (§14.1): one happy line when the tier went up (never for the load-time announcement, prev = null)
+      // speed tier (§14.1): the 3D 옹이 hops once when the tier went up (never for the load-time announcement, prev =
+      // null). The line '와, 더 빨라졌어요!' is said by the HUD speed chip (72-subscription _chip, once per tier change) —
+      // saying it here too would make 옹이 repeat itself
       B.on('speed:changed', ({ tier, prev } = {}) => {
         if (!G.state || prev == null || !(Number(tier) > Number(prev))) return;
         if (this._speedSaidTier === tier) return;
         this._speedSaidTier = tier;
         this.react('celebrate', { bubble: '⚡' });
-        say('와, 더 빨라졌어요!', { mood: 'cheer', source: 'event', ttl: 8000 });
       });
       // double jump (§14.2): after a few single jumps 옹이 tips the second press once ever; a double jump itself settles it
       B.on('player:jump', ({ n } = {}) => {

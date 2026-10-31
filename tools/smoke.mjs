@@ -11,6 +11,10 @@
 //        [--eval "return G.sys.player.position"] JS (function body) evaluated in page, result printed
 //        [--script steps.mjs]                    ESM module: export default async (page, ctx) => {...}
 //        [--url http://127.0.0.1:8080/]          use a URL instead of --file (server mode tests)
+//        [--mode easy|normal]                    normal: this device is switched to normal mode and a guest enters
+//                                                through the title's 만장대 button (autostart is dropped from --params:
+//                                                an autostart guest is a new, easy-mode profile); the run fails if the
+//                                                session is not in normal mode. easy (default): as given
 //        [--json]                                print only the JSON report
 //
 // Exit code 1 when page errors / console errors / fragment or system errors happened, when G.ready never set, or
@@ -42,9 +46,12 @@ const shot = opt('--shot');
 const evalSrc = opt('--eval');
 const script = opt('--script');
 const jsonOnly = flag('--json');
+const mode = opt('--mode', 'easy') === 'normal' ? 'normal' : 'easy';
+// normal mode enters through the title (a grown-up's path): no autostart guest
+const query = mode === 'normal' ? params.split('&').filter((p) => p && !/^autostart=/.test(p)).join('&') : params;
 
-const target = url ? url + (params ? (url.includes('?') ? '&' : '?') + params : '')
-  : pathToFileURL(path.resolve(file)).href + (params ? '?' + params : '');
+const target = url ? url + (query ? (url.includes('?') ? '&' : '?') + query : '')
+  : pathToFileURL(path.resolve(file)).href + (query ? '?' + query : '');
 
 const report = { target, ready: false, loadMs: null, pageErrors: [], consoleErrors: [], consoleWarnings: [], fragmentErrors: [], systemErrors: [], evalResult: undefined, scriptResult: undefined, shots: [] };
 
@@ -60,6 +67,10 @@ const context = await browser.newContext({
   locale: 'ko-KR',
   timezoneId: 'Asia/Seoul',
 });
+if (mode === 'normal') {
+  // the device setting the title reads (03-state device store, _v 2): the title opens in normal mode
+  await context.addInitScript(() => { try { const s = JSON.parse(localStorage.getItem('tfm.v1.settings') || '{}'); s.easyMode = false; s._v = 2; localStorage.setItem('tfm.v1.settings', JSON.stringify(s)); } catch (e) { /* storage blocked */ } });
+}
 const page = await context.newPage();
 // Offline: block external network (fonts CDN etc.) except the --url origin.
 await page.route('**/*', (route) => {
@@ -82,6 +93,10 @@ page.on('console', (m) => {
 const t0 = Date.now();
 await page.goto(target, { waitUntil: 'load', timeout });
 try {
+  if (mode === 'normal') {
+    await page.waitForFunction(() => document.querySelector('.title-screen.in .ts-start') && document.getElementById('loading-screen')?.hidden, null, { timeout, polling: 250 });
+    await page.evaluate(() => document.querySelector('.title-screen .ts-start').click());
+  }
   await page.waitForFunction(() => window.G && window.G.ready === true, null, { timeout, polling: 250 });
   report.ready = true;
   report.loadMs = Date.now() - t0;
@@ -113,9 +128,12 @@ try {
     systemErrors: (window.G && window.G.__systemErrors) || [],
     fps: window.G && window.G.sys && window.G.sys.engine ? Math.round(window.G.sys.engine.fps || 0) : null,
     systems: window.G && window.G.sys ? Object.keys(window.G.sys) : [],
+    easyOn: window.G && window.G.easy ? !!window.G.easy.on : null,
   }));
   Object.assign(report, info);
 } catch (e) { report.pageErrors.push('evaluate failed: ' + e); }
+report.mode = mode;
+if (mode === 'normal' && report.ready && report.easyOn !== false) failed.push('--mode normal (the session is in easy mode)');
 
 await browser.close();
 const bad = !report.ready || report.pageErrors.length || report.consoleErrors.length || report.fragmentErrors.length || report.systemErrors.length || failed.length;

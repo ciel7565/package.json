@@ -341,7 +341,8 @@
   function sanitizeSub(sub, source) {
     const out = { tier: 1, status: 'none', expiresAt: 0, autoRenew: false, source: source === 'server' ? 'server' : 'local' };
     if (!isMap(sub)) return out;
-    const t = Math.floor(Number(sub.tier));
+    const raw = sub.tier;
+    const t = typeof raw === 'number' || (typeof raw === 'string' && /^\s*\d{1,2}\s*$/.test(raw)) ? Math.floor(Number(raw)) : NaN;
     out.tier = Number.isFinite(t) && t >= 1 && t <= 4 ? t : 1;
     out.status = typeof sub.status === 'string' && SUB_STATUS.includes(sub.status) ? sub.status : (out.tier > 1 ? 'active' : 'none');
     const ex = Number(sub.expiresAt);

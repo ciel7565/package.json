@@ -1303,7 +1303,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vec4 mv = modelViewMatrix * vec4(p, 1.0);
             float blink = smoothstep(0.35, 1.0, sin(uTime * (1.2 + aSeed) + s * 3.0) * 0.5 + 0.5);
             vA = blink * uNight;
-            gl_PointSize = uScale * (0.35 + blink * 0.65) * 40.0 * (10.0 / max(1.0, -mv.z));
+            // live projection / 1.921 (55° design FOV): world-sized through the telescope and FOV kicks (R3-render-1)
+            gl_PointSize = uScale * (projectionMatrix[1][1] / 1.921) * (0.35 + blink * 0.65) * 40.0 * (10.0 / max(1.0, -mv.z));
             gl_Position = projectionMatrix * mv;
           }`,
         fragmentShader: `
@@ -1319,6 +1320,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       });
       const pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false; pts.name = 'fireflies'; pts.raycast = () => {};
+      G.gfx.guard?.watch?.(pts, { uniforms: true });   // §14.4.1 sanitation
       pts.visible = false;
       root.add(pts);
       this.meshes.fireflies = pts;
@@ -1379,7 +1381,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             gl_Position = projectionMatrix * mv;
             float dist = max(0.2, -mv.z);
             float size = aKind < 0.62 ? 0.075 : 0.1;
-            gl_PointSize = clamp(size * (0.75 + aSeed.y * 0.6) * uScale / dist, 1.0, 22.0);
+            gl_PointSize = clamp(size * (0.75 + aSeed.y * 0.6) * uScale * projectionMatrix[1][1] / dist, 1.0, 22.0);
             vA = edge * smoothstep(0.4, 1.6, dist) * (1.0 - smoothstep(24.0, 30.0, dist));
             vSpin = uTime * (1.5 + aSeed.z * 2.5) + aSeed.x * 6.283;
             vCol = aKind < 0.62 ? mix(vec3(1.0, 0.72, 0.84), vec3(1.0, 0.95, 0.96), step(0.42, aKind)) : aKind < 0.85 ? vec3(0.42, 0.66, 0.26) : vec3(0.95, 0.72, 0.28);
@@ -1404,11 +1406,14 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       });
       const pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false; pts.name = 'petals'; pts.renderOrder = 7; pts.visible = false;
+      G.gfx.guard?.watch?.(pts, { uniforms: true });
       pts.raycast = () => {};
       root.add(pts);
       this.meshes.petals = pts;
       this._petalMat = mat;
-      const scale = () => { const E = G.sys.engine; const fov = (E.camera?.fov || 55) * PI / 180; mat.uniforms.uScale.value = (window.innerHeight * (E.renderer?.getPixelRatio?.() || 1) * 0.5) / Math.tan(fov / 2); };
+      // half the drawing-buffer height; the shader multiplies by the live projectionMatrix[1][1] (= 1 / tan(fov / 2)),
+      // so a telescope / FOV change keeps the petals world-sized (R3-render-1: the FOV used to be read on resize only)
+      const scale = () => { const E = G.sys.engine; mat.uniforms.uScale.value = window.innerHeight * (E.renderer?.getPixelRatio?.() || 1) * 0.5; };
       scale();
       G.sys.engine?.onResize?.(scale);
       this.counts.petals = count;
@@ -1476,6 +1481,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         });
         const m = new THREE.Mesh(geo, mat);
         m.frustumCulled = false; m.renderOrder = 1; m.name = 'mist-' + ly.y; m.raycast = () => {};
+        G.gfx.guard?.watch?.(m, { uniforms: true });
         m.userData.sp = ly.sp;
         grp.add(m);
         mats.push(mat);
@@ -1514,7 +1520,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             vec4 mv = viewMatrix * vec4(p, 1.0);
             float blink = smoothstep(0.3, 1.0, sin(uTime * (0.9 + aSeed.w * 0.8) + aSeed.z * 20.0) * 0.5 + 0.5);
             vA = blink * uNight * edge;
-            gl_PointSize = uScale * (0.4 + blink * 0.6) * 36.0 * (10.0 / max(1.0, -mv.z));
+            gl_PointSize = uScale * (projectionMatrix[1][1] / 1.921) * (0.4 + blink * 0.6) * 36.0 * (10.0 / max(1.0, -mv.z));
             gl_Position = projectionMatrix * mv;
           }`,
         fragmentShader: `
@@ -1530,6 +1536,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       });
       const pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false; pts.name = 'fireflies-near'; pts.visible = false; pts.raycast = () => {};
+      G.gfx.guard?.watch?.(pts, { uniforms: true });
       root.add(pts);
       this.meshes.nightFlies = pts;
       this._nightFlyMat = mat;

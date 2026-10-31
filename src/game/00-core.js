@@ -306,10 +306,15 @@ G.time = {
     // §14.4.3 / R3 device-env-3: without the engine (or the player) there is nothing to play. 10-engine's own WebGL2
     // probe sets G.unsupported and emits 'engine:unsupported' (a drawless scene, the app shows the friendly 2D-only
     // screen); an engine whose init threw is reported through the same channel, so the app shows one screen for both.
+    // A player whose init threw is the same case for the child (a world nobody can walk in): one flag, one event, one
+    // screen ('critical: …' reasons get the "체험관을 열지 못했어요" wording there), and every module's G.unsupported
+    // check (17-manjangdae intro / telescope, the avatar preview, portraits) applies to it too.
     const critical = systems.filter((s) => s._failed && CRITICAL.has(s.name)).map((s) => s.name);
-    if (critical.includes('engine') && !G.unsupported) {
-      const err = G.__systemErrors.find((e) => e.system === 'engine');
-      G.unsupported = { reason: 'engine: ' + String(err?.message || 'init failed').split('\n')[0].slice(0, 160), at: Date.now() };
+    if (critical.length && !G.unsupported) {
+      const who = critical.includes('engine') ? 'engine' : critical[0];
+      const err = G.__systemErrors.find((e) => e.system === who);
+      const msg = String(err?.message || 'init failed').split('\n')[0].slice(0, 140);
+      G.unsupported = { reason: who === 'engine' ? 'engine: ' + msg : `critical: ${critical.join(', ')} — ${msg}`, at: Date.now() };
       G.bus.emit('engine:unsupported', { reason: G.unsupported.reason });
     }
     G.bootReport = { failed: systems.filter((s) => s._failed).map((s) => s.name), critical, unsupported: G.unsupported?.reason || null };

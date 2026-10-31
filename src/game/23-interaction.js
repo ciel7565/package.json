@@ -256,6 +256,7 @@
       this._ringA.renderOrder = 3; this._ringB.renderOrder = 4;
       scene.add(ring);
       this._ring = ring;
+      G.gfx.guard?.watch?.(ring);   // §14.4.1 sanitation (hover ring, highlight, arrow, destination marker)
 
       // rectangular outline for large footprints (farm beds): 4 glowing strips, glow across the strip width
       const stripTex = G.gfx.canvasTexture(8, 64, (ctx, w, h) => {
@@ -286,6 +287,7 @@
       rect.visible = false; rect.renderOrder = 3;
       scene.add(rect);
       this._rect = rect;
+      G.gfx.guard?.watch?.(rect);
 
       // bobbing arrow (shaft + head), own material (never shared)
       const head = new THREE.ConeGeometry(0.15, 0.26, 20).rotateX(Math.PI).translate(0, -0.13, 0);
@@ -298,6 +300,7 @@
       this._arrow.visible = false;
       this._arrow.renderOrder = 5;
       scene.add(this._arrow);
+      G.gfx.guard?.watch?.(this._arrow);
 
       // click-to-move destination marker (ripple + dot)
       const destTex = G.gfx.canvasTexture(128, 128, (ctx, w) => {
@@ -316,6 +319,7 @@
       dest.visible = false;
       scene.add(dest);
       this._destG = dest;
+      G.gfx.guard?.watch?.(dest);
       // fx are never pick targets (other modules may raycast the whole scene)
       const noRay = () => {};
       for (const m of [this._ringA, this._ringB, this._arrow, this._destR1, this._destR2, this._destDot, ...this._rectStrips, ...this._rectCorners]) m.raycast = noRay;
@@ -557,6 +561,7 @@
         const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
         const sprite = new THREE.Sprite(mat);
         sprite.name = 'interactHalo'; sprite.visible = false; sprite.renderOrder = 2; sprite.raycast = () => {};
+        G.gfx.guard?.watch?.(sprite);
         G.sys.engine.scene.add(sprite);
         return { sprite, mat, t: 0, m: null };
       } catch (err) { return null; }

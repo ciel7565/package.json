@@ -8,6 +8,9 @@
 //   node tools/build.mjs --exclude 70         -> everything except fragments starting with 70
 //   node tools/build.mjs --no-font            -> skip embedding the Pretendard webfont (smaller/faster dev build)
 //   node tools/build.mjs --strict             -> fail if any fragment has a syntax error (default: skip it + warn)
+//   node tools/build.mjs --out <dir>/index.html --data-out <dir>/data/game-data.json
+//                                             -> also export the server's game data (a server copy outside dist/:
+//                                                cp -r server/. <dir>/ first; the default build writes server/data/)
 //
 // Each src/game/*.js file is a "fragment": plain script code (no import/export, no top-level
 // await). Fragments are concatenated in filename order inside ONE closure and each one is
@@ -35,6 +38,7 @@ const DEFAULT_OUT = OUT === path.join(ROOT, 'dist/metaverse/index.html');
 const ONLY = opt('--only') ? opt('--only').split(',').map((s) => s.trim()).filter(Boolean) : null;
 const EXCLUDE = opt('--exclude') ? opt('--exclude').split(',').map((s) => s.trim()).filter(Boolean) : [];
 const EMBED_FONT = !flag('--no-font');
+const DATA_OUT = opt('--data-out') ? path.resolve(opt('--data-out')) : null;
 const STRICT = flag('--strict');
 const QUIET = flag('--quiet');
 // Core fragments are always included, even with --only.
@@ -286,9 +290,13 @@ html = html.replace('</body>', () => `<script type="application/json" id="build-
 const scriptHashes = [];
 html.replace(/<script>([\s\S]*?)<\/script>/g, (m, body) => { scriptHashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`); return m; });
 // 토스페이먼츠 (CONTRACT §14.6): the payment SDK (js.tosspayments.com/v2/standard) is loaded on demand, only in server
-// mode after a grown-up action; its payment window is an iframe / XHR to *.tosspayments.com. The same HTML is the
-// standalone file, where nothing ever loads it — the allowance is inert offline. Everything else stays as strict.
+// mode after a grown-up action; it talks to api.tosspayments.com, its payment window is an iframe on *.tosspayments.com,
+// and on phones it may hand the page over to that window with a form submit (the browser comes back through
+// api/sub/return.php, a same-origin top-level GET, which needs nothing here). The same HTML is the standalone file,
+// where nothing ever loads it — the allowance is inert offline. Everything else stays as strict: only these Toss hosts
+// are added (script-src, connect-src, frame-src, form-action) and nothing else is loosened.
 const TOSS_SCRIPT = 'https://js.tosspayments.com';
+const TOSS_API = 'https://api.tosspayments.com';
 const TOSS_HOSTS = 'https://*.tosspayments.com';
 const csp = [
   "default-src 'none'",
@@ -296,14 +304,14 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  `connect-src 'self' ${TOSS_HOSTS}`,
+  `connect-src 'self' ${TOSS_API} ${TOSS_HOSTS}`,
   `frame-src ${TOSS_HOSTS}`,
   "media-src 'self' data: blob:",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",
-  "form-action 'self'",
+  `form-action 'self' ${TOSS_HOSTS}`,
 ].join('; ');
 replaceOnce('<!--@CSP-->', `<meta http-equiv="Content-Security-Policy" content="${csp}">`);
 
@@ -320,6 +328,12 @@ if (DEFAULT_OUT) {
     fs.writeFileSync(path.join(dataDir, 'game-data.json'), JSON.stringify(data, null, 2));
   }
   serverFiles = copyDir(path.join(ROOT, 'server'), path.dirname(OUT));
+}
+// a server copy built elsewhere (tests, a scratch php -S): the same game data the release copy gets
+if (DATA_OUT) {
+  fs.mkdirSync(path.dirname(DATA_OUT), { recursive: true });
+  fs.writeFileSync(DATA_OUT, JSON.stringify(exportGameData(), null, 2));
+  log(`  game data: ${DATA_OUT}`);
 }
 
 const kb = (n) => (n / 1024).toFixed(0) + ' KB';

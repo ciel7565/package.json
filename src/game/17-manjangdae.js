@@ -460,7 +460,8 @@
           return m;
         }),
         text: mat('marker-text', () => new THREE.MeshStandardMaterial({ map: markerTexture(), transparent: true, depthWrite: false, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })),
-        board: mat('board', () => new THREE.MeshStandardMaterial({ map: boardTexture(), roughness: 0.82 })),
+        // no 2D context (§14.4): a plain wooden face instead of an undrawn board
+        board: mat('board', () => { const t = boardTexture(); return t.userData?.blank ? new THREE.MeshStandardMaterial({ color: 0x6e4a2c, roughness: 0.82 }) : new THREE.MeshStandardMaterial({ map: t, roughness: 0.82 }); }),
       };
       this.B = {
         stone: new Bucket('stone', true), paint: new Bucket('paint', false), beam: new Bucket('beam', true), roof: new Bucket('roof', true),
@@ -1251,6 +1252,8 @@
       if (this._card) return;
       const lk = this.lookout;
       const tex = titleCardTexture();
+      // no 2D context (§14.4): the card would be an undrawn board — skip it (the 2D title still shows)
+      if (tex?.userData?.blank) { tex.dispose(); return; }
       const mat = new THREE.ShaderMaterial({
         uniforms: { map: { value: tex }, uOpacity: { value: 0 }, uSweep: { value: -0.4 } },
         vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -1272,6 +1275,7 @@
       mesh.renderOrder = 20; mesh.frustumCulled = false;
       mesh.name = 'manjangdae-title-card';
       G.sys.engine.scene.add(mesh);
+      G.gfx.guard?.watch?.(mesh, { uniforms: ['uOpacity', 'uSweep'] });   // §14.4.1: camera-facing card
       this._card = { mesh, mat, tex, t: 0, out: false };
     },
     _cardOff(now) {
@@ -1279,6 +1283,7 @@
       if (!c) return;
       if (!now) { c.out = true; c.outT = 0; return; }
       c.mesh.parent?.remove(c.mesh);
+      G.gfx.guard?.unwatch?.(c.mesh);
       c.mesh.geometry.dispose(); c.mat.dispose(); c.tex.dispose();
       this._card = null;
     },

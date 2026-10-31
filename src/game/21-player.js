@@ -7,7 +7,8 @@
 //   tier changes): tier 1 walks 6.4 / runs 12, tier 2 12.8 / 24, tier 3 and 4 19.2 / 36 m/s.
 //   Double jump (§14.2): a second Space / jump-button press while airborne after a jump (before landing) sets
 //   v.y = max(v.y, 0) × 0.25 + JUMP2_V (5.2), once per airtime (_doubleUsed, reset on landing), never from a plain fall,
-//   while sitting / sliding or in a cinematic. Emits player:jump {n: 1|2}; rig.flip(), 'jump2' sfx, G.fx.doubleJump(pos).
+//   while sitting / sliding or in a cinematic. Emits player:jump {n: 1|2, pos: {x, y, z} (feet)}; rig.flip(), 'jump2' sfx,
+//   G.fx.doubleJump(pos) (66-fx also plays it from the event, deduped within 150 ms).
 //   teleport(x, z, rotY?, {fade=true}) -> Promise
 //   walkTo({x,z}, {stopDistance=1.2, onArrive, onFail, run, path=true, rescue, trail, label}) -> walk id | false
 //        path: plan around colliders (grid A* + string pulling, re-planned when blocked)
@@ -26,7 +27,9 @@
 // Navigation: grid A* + string pulling, plus layout route hints (G.data.layout.navLinks: hand-made
 // routes such as the 정선 만장대 switchback stairs) that the planner stitches in front of / behind A*.
 // Events: player:moved {x,z} (<=4/s), player:distance {meters} (batched >= 5 m),
-//         player:arrived {id, x, z, rescued} (a walkTo reached its goal), player:appearance {appearance}.
+//         player:arrived {id, x, z, rescued, clamped} (a walkTo reached its goal — clamped: the goal itself was
+//         unreachable (outside the play area / inside a collider) and the closest spot is the arrival),
+//         player:walk-clamped {id, x, z, short}, player:jump {n, pos}, player:appearance {appearance}.
 // Every number that reaches a matrix is checked with Number.isFinite (a NaN here would poison the
 // camera, the shadow map and — on Direct3D — bloom).
 // =============================================================================
@@ -964,6 +967,19 @@
     _dropWalk() { this._walk = null; trail.hide(); },
 
     _stuck(w, t, why) {
+      // a goal INSIDE a collider (a footprint, a jar row — R3 movement-4) can never be reached: standing within
+      // stopDistance + 2.5 m of it without progress is the arrival, not 3 re-plans + a rescue hop ~6 s later. A goal on a
+      // platform (deck, pavilion floor) is blocked only at the walker's own level, so it keeps the re-plan path below.
+      const p = this.position, W = G.world;
+      const dGoal = Math.hypot(w.x - p.x, w.z - p.z);
+      const topY = fin(dGoal) && dGoal <= w.stop + 2.5 && W.blocked(w.x, w.z, RADIUS, p.y) ? W.heightAt(w.x, w.z, p.y + 4) : NaN;
+      if (fin(topY) && W.blocked(w.x, w.z, RADIUS, topY)) {
+        w.clamped = w.clamped || { x: w.x, z: w.z, short: dGoal };
+        G.log.info('PLAYER', `walk ${w.id}: the goal is inside a collider, ${dGoal.toFixed(1)} m away -> arrive here`);
+        this.faceTowards(w.x, w.z);
+        this._arrive(w, false);
+        return;
+      }
       if (w.replans < 3 && t - w.lastPlanT > 0.6) {
         w.replans++;
         G.log.debug('PLAYER', `walk ${w.id}: ${why} -> re-plan #${w.replans}`);
@@ -1102,8 +1118,9 @@
       if (this.rig.actionFullBody) this.rig.stopAction();
       try { this.rig.flip?.(0.5); } catch (e) { /* visual only */ }
       G.sfx('jump2');
-      try { G.fx?.doubleJump?.(this.position); } catch (e) { /* visual only */ }
-      G.bus.emit('player:jump', { n: 2 });
+      const pos = { x: this.position.x, y: this.position.y, z: this.position.z };   // a snapshot, never the live vector
+      try { G.fx?.doubleJump?.(pos); } catch (e) { /* visual only */ }
+      G.bus.emit('player:jump', { n: 2, pos });
     },
     /** a scripted camera (intro drone flight, telescope tour, title orbit) is running */
     _cinematic() {
@@ -1166,7 +1183,7 @@
         this._airJump = true; this._doubleUsed = false;
         if (this.rig.actionFullBody) this.rig.stopAction();
         G.sfx('jump');
-        G.bus.emit('player:jump', { n: 1 });
+        G.bus.emit('player:jump', { n: 1, pos: { x: p.x, y: p.y, z: p.z } });
       }
 
       // ---- sub-stepped locomotion: steering + velocity + turning + collisions + ground, <= MAX_SUBSTEP each

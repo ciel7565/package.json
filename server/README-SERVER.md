@@ -33,7 +33,7 @@
 1. `npm run build` → `dist/metaverse/` 폴더가 만들어집니다. (배포 zip 의 `metaverse/` 폴더와 같습니다)
 2. 그 폴더를 `C:\xampp\htdocs\metaverse` 로 복사하고 XAMPP Control Panel 에서 **Apache** 와 **MySQL** 을 시작합니다.
 3. `http://localhost/metaverse/install.php` 를 엽니다: 환경 점검 → DB(XAMPP 기본값 root/빈 비밀번호, 없으면 생성) → 첫 관리자 → 토스 키(선택)
-   → **설치하기**. `config/config.local.php` 와 테이블(스키마 v4), 관리자가 만들어지고 `data/install.lock` 으로 마법사가 잠깁니다.
+   → **설치하기**. `config/config.local.php` 와 테이블(스키마 v5), 관리자가 만들어지고 `data/install.lock` 으로 마법사가 잠깁니다.
    (명령줄: `php cli/tfm.php install --driver=mysql --admin-email=… --admin-nick=… --admin-pass=…`, 단계별 그림 설명: `docs/SERVER-INSTALL-KO.md`)
 4. `http://localhost/metaverse/` 접속 → 칩이 **서버** 인지 확인. `admin.php` 는 설치 때 만든 관리자로 로그인합니다.
 5. 관리자 센터 → **시스템 점검** 탭에서 ⛔/⚠️ 항목을 확인하고 안내대로 고칩니다 (data/ 노출 검사 = AllowOverride).
@@ -165,12 +165,12 @@ client_max_body_size 8m;
 | `ping.php` | GET | 누구나 | `{app:'tfm-metaverse', version, db, serverTime, csrf, loggedIn}` — 세션·CSRF 발급 |
 | `time.php` | GET | 누구나 | `{serverTime, iso, timezone, day}` |
 | `auth/register.php` | POST | 비로그인 | `{email, nickname, password, password_confirm, agree:true, remember?}` → `{user}` · 이 브라우저의 시도가 많으면 429 `RATE_LIMITED`, 같은 인터넷 주소(학교·집)의 가입이 `rate_limits.register_ip` 를 넘으면 429 `REGISTER_IP_LIMIT` (둘 다 `data.retryAfter` + `Retry-After`) |
-| `auth/login.php` | POST | 누구나 | `{login 또는 email, password, remember}` → `{user, sub}` · 실패 401 `INVALID_CREDENTIALS`, 잠금 429 `TOO_MANY_ATTEMPTS` |
+| `auth/login.php` | POST | 누구나 | `{login 또는 email, password, remember}` → `{user, sub, restoredAt, restoredRev}` · 실패 401 `INVALID_CREDENTIALS`, 잠금 429 `TOO_MANY_ATTEMPTS` · `restoredAt`/`restoredRev` 는 아래 `player/get.php` 와 같아요 |
 | `auth/logout.php` | POST | 누구나 | `{loggedOut:true}` (새 CSRF) |
-| `auth/me.php` | GET | 누구나 | `{user:{id,email,nickname,role} 또는 null, mutedUntil, sub:{tier,status,expiresAt,autoRenew}}` — `sub` 는 서버가 정한 진행 속도 단계(만료·자동 갱신을 한 시간에 한 번 스스로 정리) |
-| `player/get.php` | GET | 로그인 | `{save:{version, revision, savedAt, data} 또는 null, sub}` — 저장본 안의 `data.sub` 도 서버 값으로 바꿔서 줌 |
-| `player/save.php` | POST | 로그인 | `{version, checksum, base?, data}` → `{savedAt, revision, size, sub}` · 검증 실패 **409** `VALIDATION_FAILED` + `data.save`(서버 저장본) · `base` 보다 새 저장본이 있으면 **409** `STALE_SAVE` + `data.save` (관리자가 "직전 저장으로 되돌리기" 한 저장본 그대로면 `data.restored: true`) · `profile.role` 과 **`sub`** 는 계정·구독 테이블의 값으로 고쳐 저장(거절하지 않음) · 시간 기준 검증은 구독 단계(tier)에 비례 |
-| `chat/list.php?after=ID&rafter=R` | GET | 누구나 읽기 | `{messages:[{id,userId,nickname,text,channel,createdAt}], online, lastId, retracted:{messages:[id], users:[uid]}, retractId}` — `retracted`: 관리자가 숨긴 줄·신고 3건으로 숨겨진 줄·이용 정지된 계정의 줄(체험관이 이미 받은 것도 지움), `rafter`에는 지난 응답의 `retractId`를 보냄 |
+| `auth/me.php` | GET | 누구나 | `{user:{id,email,nickname,role} 또는 null, mutedUntil, sub:{tier,status,expiresAt,autoRenew}, restoredAt, restoredRev}` — `sub` 는 서버가 정한 진행 속도 단계(만료·자동 갱신을 한 시간에 한 번 스스로 정리) |
+| `player/get.php` | GET | 로그인 | `{save:{version, revision, savedAt, restoredAt, restoredRev, data} 또는 null, sub, restoredAt, restoredRev}` — 저장본 안의 `data.sub` 도 서버 값으로 바꿔서 줌 · `restoredAt`(ms)/`restoredRev`: 지금 저장본이 관리자 센터 "직전 저장으로 되돌리기" 로 돌려놓은 것이면 그 시각과 판(revision), 아니면 0 (다음 저장이 받아들여지면 0 으로 돌아감) — 체험관은 그 시각보다 오래된, 기기에 남은 임시 기록을 다시 쓰지 않아요 |
+| `player/save.php` | POST | 로그인 | `{version, checksum, base?, data}` → `{savedAt, revision, size, sub, subChanged}` · **모든 응답**(오류 응답도 `data.sub`)이 서버의 구독 `sub` 를 담고, 올린 저장본의 단계가 서버와 다르면 `subChanged: true` (CSRF 확인 뒤부터) · 검증 실패 **409** `VALIDATION_FAILED` + `data.save`(서버 저장본) · `base` 보다 새 저장본이 있으면 **409** `STALE_SAVE` + `data.save` (관리자가 "직전 저장으로 되돌리기" 한 저장본 그대로면 `data.restored: true` 와 `data.save.restoredAt`/`restoredRev`) · `profile.role` 과 **`sub`** 는 계정·구독 테이블의 값으로 고쳐 저장(거절하지 않음) · 시간 기준 검증은 구독 단계(tier)에 비례 |
+| `chat/list.php?after=ID&rafter=R` | GET | 누구나 읽기 | `{messages:[{id,userId,nickname,text,channel,createdAt}], online, lastId, retracted:{messages:[id], users:[uid], upTo:{uid: id}}, retractId}` — `retracted`: 관리자가 숨긴 줄·신고 3건으로 숨겨진 줄·이용 정지된 계정의 줄(체험관이 이미 받은 것도 지움), `rafter`에는 지난 응답의 `retractId`를 보냄 · `upTo[uid]`: 정지한 순간의 가장 큰 메시지 번호 — 그 번호까지만 지우면 정지를 풀어 준 뒤 새로 쓴 줄은 남아요 (`upTo` 에 없는 계정은 모든 줄을 지움, 스키마 v5 이전에 만든 정지) |
 | `chat/send.php` | POST | 로그인 | `{text, channel:'all'\|'local'}` → `{message, piiMasked}` · 429 `RATE_LIMITED`, 409 `DUPLICATE_MESSAGE`, 403 `MUTED` |
 | `chat/report.php` | POST | 로그인 | `{target, targetId?, messageId?, text?, reason, memo?}` → `{reportId, duplicate}` — 신고한 글은 서버에 있는 메시지(`messageId`)에서 가져와요. 번호 없이 보낸 `text`는 신고자가 적은 글이라 대상의 말로 저장하지 않고 메모에 ‘신고자가 적은 내용(확인 안 됨)’으로 남겨요 |
 | `presence/update.php` | POST | 로그인 | `{x,y,z,rotY,anim,speed,zoneId,emote,emoteAt,appearance?}` → `{players:[…], online}` (최근 15초, 각 줄의 `age` = 그 위치를 받은 뒤 지난 ms) |
@@ -268,7 +268,7 @@ IP 원문이 남습니다(관리자만 열람, 180일 후 정리). 채팅은 30�
 
 - `data/logs/app-YYYY-MM-DD.log.php` (한 줄에 JSON 하나, 5 MB 마다 회전, 14일 보관). 오류 화면의 참조 번호(`rid`)로 검색하세요.
 - 정리 작업은 요청 중 낮은 확률로 자동 실행되며, 관리자 센터 → 유지보수 또는 `php cli/tfm.php cleanup` 으로 바로 실행할 수 있습니다.
-- 스키마 버전은 `schema_version` 테이블에 기록되고 시작 시 자동 설치·업그레이드됩니다 (`Db::SCHEMA_VERSION`, 현재 **4** — v2: 예전 채팅의 원문 기반 `text_key` 비우기, v3: `chat_retractions`(접속 중인 체험관에 숨김·정지 알리기, 채팅 보관 기간만큼 보관) + 메시지 번호 없는 옛 신고의 글을 ‘신고자가 적은 내용(확인 안 됨)’ 메모로 옮기기, v4: `subscriptions`·`orders`·`payment_events`(진행 속도 구독·토스 결제)). 기존 설치는 첫 요청 때 v4 테이블이 추가됩니다.
+- 스키마 버전은 `schema_version` 테이블에 기록되고 시작 시 자동 설치·업그레이드됩니다 (`Db::SCHEMA_VERSION`, 현재 **5** — v2: 예전 채팅의 원문 기반 `text_key` 비우기, v3: `chat_retractions`(접속 중인 체험관에 숨김·정지 알리기, 채팅 보관 기간만큼 보관) + 메시지 번호 없는 옛 신고의 글을 ‘신고자가 적은 내용(확인 안 됨)’ 메모로 옮기기, v4: `subscriptions`·`orders`·`payment_events`(진행 속도 구독·토스 결제), v5: `chat_retractions.upto_id`(정지할 때의 메시지 번호 — 정지를 풀어 준 뒤 쓴 줄은 지우지 않음)). 기존 설치는 첫 요청 때 v4 테이블과 v5 열이 추가됩니다 — 열 추가는 MySQL/MariaDB 에서 `schema.sql` 이 information_schema 로 확인한 뒤에만 하고(phpMyAdmin 으로 다시 가져와도 안전), SQLite 는 `lib/Db.php` 가 같은 트랜잭션에서 더해요.
 - 자동 갱신 결제: `php cli/tfm.php sub:renew` 를 하루 한 번 (Windows 작업 스케줄러 / cron). 로그인·`me` 요청도 한 시간에 한 번 스스로 확인합니다.
 
 ## 11. 테스트
@@ -281,9 +281,17 @@ node tests/server-e2e.mjs http://127.0.0.1:8099/
 업로드(정상 PNG / PHP 폴리글롯 2종 / 가짜 이미지)·관리자 권한·비공개 파일·로그아웃→로그인 복원·**무차별 대입 잠금**,
 그리고 6단계의 **세션 없는 탭의 401**, **구독(모의 결제)**: 상태 → 준비 → 금액 조작·타인 주문·재사용 거부 → 승인 → `me.sub.tier` →
 단계에 비례한 저장 검증(같은 거리가 1배는 거부, 2배는 통과) → 해지 → 빌링키 발급·자동 갱신 → `sub:renew` 연장 → 실패 빌링키 → `past_due` →
-웹훅(검증 불가 무시 · 취소 → 하향 · 중복 무시) → 관리자 부여/해지(비관리자 403) → 모든 구독 POST 의 CSRF — 67단계를
-PASS/FAIL 로 보여 주고, 실패가 있으면 종료 코드 1 을 돌려줍니다. 스스로 띄운 서버는 모의 결제(`TFM_TOSS_MOCK=1`)로 돕니다.
+웹훅(검증 불가 무시 · 취소 → 하향 · 중복 무시) → 관리자 부여/해지(비관리자 403) → 모든 구독 POST 의 CSRF, 그리고 **관리자 되돌리기 표시**(get·login·me 의
+`restoredAt`/`restoredRev`, 옛 탭의 저장은 409 `restored`, 400·409·200 모든 저장 응답의 `sub`)와 **정지 회수의 기준 번호**(정지 → 해제 → 새 줄이 남음, `upTo`) —
+70단계를 PASS/FAIL 로 보여 주고, 실패가 있으면 종료 코드 1 을 돌려줍니다. 스스로 띄운 서버는 모의 결제(`TFM_TOSS_MOCK=1`)로 돕니다.
+스스로 띄운 서버에서는 DB 를 직접 살펴보는 단계(반복 스팸 키가 **가린 글**에서 만들어졌는지 — 서버의 `ChatFilter::key()` 로 다시 계산해 비교, 신고 메모의 개인정보)를
+SQLite·MySQL 모두에서 돌려요. 같은 실행을 다시 재현하려면 `TFM_E2E_RUN_ID=<16진수 8자>` (SQLite 로 스스로 띄운 서버에서만).
 한 IP 에서 15분 안에 여러 번(약 10회 이상) 돌리면 IP 단위 로그인 잠금(정상 동작)에 걸릴 수 있습니다.
+
+`tests/` 폴더는 개발용이라 배포 zip(`node tools/package.mjs`)에 들어가지 않아요. 특히 `tests/server-unit.php` 는 PHP 8 문법을 쓰는
+개발 PC 용 단위 점검이라 **PHP 7.2 호환의 근거가 아니에요** — PHP 7.2 호환은 `tools/php-compat.sh`(PHPCompatibility **10**, testVersion 7.2- — 9.x 는
+PHP 8 이전에 나와 `fn`·`match`·`?->`·이름 붙은 인수·`str_contains()` 같은 것을 못 잡아요)와
+`php -l`, 그리고 위 E2E 로 확인합니다. 배포 묶음 확인만 하려면 `node tools/package.mjs --dry-run --dist <빌드 폴더>` (zip 을 만들지 않고 목록·검사만).
 
 ## 12. 문제 해결
 

@@ -478,10 +478,11 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
   --tile: #ffc93c;
   position: relative; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .9rem; padding: .8rem 1rem; overflow: hidden;
   border-radius: 22px; background: var(--kid-cream, #fffaf0); color: var(--kid-ink, #23301f); border: 4px solid var(--tile);
+  box-shadow: 0 6px 0 rgba(0, 0, 0, .35), 0 12px 24px rgba(0, 0, 0, .25); /* fallback: no color-mix() (Safari ≤ 16.1) */
   box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 60%, #000), 0 12px 24px rgba(0, 0, 0, .25);
 }
 .eng-in .eng-kmis { animation: eng-kpop .35s var(--ease) both; animation-delay: calc(var(--i, 0) * 80ms); }
-.eng-kmis-ico { width: 4rem; height: 4rem; display: grid; place-items: center; border-radius: 50%; font-size: 2.3rem; background: radial-gradient(circle at 40% 35%, #fff, color-mix(in srgb, var(--tile) 55%, #fff)); }
+.eng-kmis-ico { width: 4rem; height: 4rem; display: grid; place-items: center; border-radius: 50%; font-size: 2.3rem; background: radial-gradient(circle at 40% 35%, #fff, var(--tile)); background: radial-gradient(circle at 40% 35%, #fff, color-mix(in srgb, var(--tile) 55%, #fff)); }
 .eng-kmis-main { min-width: 0; display: flex; flex-direction: column; gap: .45rem; }
 .eng-kmis-main b { font-size: 1.25rem; font-weight: 900; line-height: 1.2; word-break: keep-all; }
 .eng-kmis-side { position: relative; z-index: 1; display: flex; align-items: center; }
@@ -496,7 +497,7 @@ body.eng-decor-on #bottom-bar, body.eng-decor-on #dpad, body.eng-decor-on #inter
 .eng-kbar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #8ce99a, #2f9e44); }
 .eng-kbar .emoji { position: absolute; right: .35rem; font-size: 1rem; }
 .eng-kpulse { animation: eng-kpulse 1.6s ease-in-out infinite; }
-@keyframes eng-kpulse { 0%, 100% { scale: 1; } 50% { scale: 1.06; } }
+@keyframes eng-kpulse { 0%, 100% { scale: 1; } 50% { scale: 1.04; } } /* ≤ 1.04: the §13.8 scale cap (R3-ui-9) */
 .eng-kchest { display: flex; align-items: center; gap: .8rem; margin-top: 1rem; padding: .8rem 1rem; border-radius: 22px; background: rgba(0, 0, 0, .25); border: 3px dashed rgba(255, 255, 255, .25); font-size: 1.2rem; }
 .eng-kchest b { flex: 1; }
 .eng-kchest-ico { font-size: 2.6rem; line-height: 1; }
@@ -574,7 +575,7 @@ button.eng-knoti:active { translate: 0 3px; box-shadow: 0 1px 0 rgba(0, 0, 0, .2
 .edb-kitem .emoji { font-size: 2rem; line-height: 1.1; }
 .edb-kitem b { font-size: 1rem; font-weight: 900; }
 .edb-kitem small { font-size: .85rem; font-weight: 800; color: #6b5a40; }
-.edb-kitem.active { border-color: var(--tile); background: color-mix(in srgb, var(--tile) 30%, #fffaf0); transform: translateY(-2px); box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 60%, #000); }
+.edb-kitem.active { border-color: var(--tile); background: #fff3d1; background: color-mix(in srgb, var(--tile) 30%, #fffaf0); transform: translateY(-2px); box-shadow: 0 6px 0 rgba(0, 0, 0, .35); box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 60%, #000); }
 .edb-kitem.empty { filter: grayscale(.8); opacity: .7; }
 .edb-kacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .edb-kacts .easy-big-btn { min-width: 0; gap: .3rem; padding: .3rem .4rem; font-size: 1rem; white-space: nowrap; }

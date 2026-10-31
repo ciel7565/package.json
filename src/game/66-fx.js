@@ -23,6 +23,12 @@
 //   G.fx.pillar(pos?, {kind:'quest'|'level'})                           light pillar + falling star shower
 //   G.fx.zoneBanner(zoneId)                                             3D hanging name board (현판) on a first visit
 //   G.fx.itemFly(from, itemId|emoji, {qty})                             3D pop + arc into the 🎒 가방 tile
+//   G.fx.doubleJump(pos?) -> spawned count                              double jump (CONTRACT §14.2): a small ring + 6–10
+//        pooled sparkles at the feet; off at fxLevel 'off'; also played on G.bus 'player:jump' {n: 2, pos?} — calls
+//        within 150 ms are one effect (21-player calls it AND emits the event)
+//   G.fx.quarantine(on) / G.fx.quarantined()                            black-region guard (CONTRACT §14.4, watchdog
+//        ladder step 1): every 3D effect of this module off (pools emptied, motion layer + banner hidden, no new 3D
+//        effects) until quarantine(false); the 2D celebrations (stamp, level-up show, coins) stay
 //
 // Phase 4 character motion (CONTRACT §13.4, tuned for WALK 9.6 / RUN 18 m/s from G.sys.player):
 //   sprint speed lines (one instanced clip-space draw, animated in the vertex shader — no per-frame uploads)
@@ -73,6 +79,8 @@
   let RMQ = null;
   try { RMQ = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null; } catch (e) { RMQ = null; }
   const osReduce = () => !!(RMQ && RMQ.matches);
+  // §14.4 watchdog ladder step 1 (G.fx.quarantine): no 3D effect is drawn or started while this is on
+  let QUAR = false;
   /** 0 off, 1 low, 2 high (reduceMotion caps at 1) */
   function lv() {
     let l = LEVEL_NAMES.indexOf(G.settings ? G.settings.fxLevel : DEFAULT_LEVEL);
@@ -343,6 +351,7 @@
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'fx-' + name;
+    G.gfx.guard?.watch?.(mesh, { uniforms: true });   // §14.4.1: a non-finite value never reaches the GPU as a black quad
     mesh.frustumCulled = false;
     mesh.matrixAutoUpdate = false;
     mesh.renderOrder = renderOrder;
@@ -469,7 +478,7 @@
     _flights: [], _coinEls: 0, _coinDisp: null, _coinOverride: false, _coinText: '',
     _luQ: [], _lu: null, _stampEl: null, _stampT: 0, _pendingStamp: null, _rain: null, _pulseEl: null, _root: null,
     _lastFarm: null, _timers: new Set(), _offs: [], _gen: 0, _wLast: 0, _ev: new THREE.Vector3(),
-    _pulseAt: -1e9, _partyAt: -1e9, _itemEls: 0, _itemAt: 0,
+    _pulseAt: -1e9, _partyAt: -1e9, _itemEls: 0, _itemAt: 0, _djAt: -1e9,
 
     // ------------------------------------------------------------ lifecycle
     init() {
@@ -504,7 +513,7 @@
 
     update(dt, t) {
       if (G.ffx?.update) G.ffx.update(dt); // frame-guarded inside: safe if farming already stepped it
-      const ok = this._ready;
+      const ok = this._ready && !QUAR;   // quarantined (§14.4): the 3D layer stays empty and hidden
       if (ok) {
         const nf = clamp(Number(G.world?.nightFactor) || 0, 0, 1);
         this._normal.mat.uniforms.uBright.value = 1 - 0.5 * nf;
@@ -837,6 +846,46 @@
       if (!p) return false;
       return CM.portal(p, o.mode === 'out' ? 'out' : 'in');
     },
+    /** the double jump (CONTRACT §14.2): one small ring + 6–10 sparkles kicked out at the feet (the additive billboard
+     *  pool: nothing allocated). Off at fxLevel 'off' (0); one soft pulse per airtime — no flash faster than 3 Hz.
+     *  21-player calls it and also emits 'player:jump' {n: 2}: calls within 150 ms are one effect. -> spawned count */
+    doubleJump(pos) {
+      if (!lv() || !this._ensure3D()) return 0;
+      const now = pnow();
+      if (now - this._djAt < 150) return 0;
+      const p = pos == null ? playerPos(_pv) : resolvePos(pos, _pv);
+      if (!p) return 0;
+      this._djAt = now;
+      const l = lv(), mo = motion();
+      let k = 0;
+      resetSP(); SP.kind = K.RING; SP.flags = F_FLAT | F_GROW; SP.life = 0.42; SP.s0 = 0.25; SP.s1 = 1.3; SP.a0 = 0.8; SP.drag = 0; SP.fout = 0.35; SP.bri = 1.2;
+      SP.color = PAL.stars[1]; SP.rot = rnd() * TAU;
+      if (spawn(this._add, p.x, p.y + 0.04, p.z, 0, 0, 0) >= 0) k++;
+      const n = l > 1 ? 10 : 6, a0 = rnd() * TAU;
+      for (let i = 0; i < n; i++) {
+        const a = a0 + (i / n) * TAU + R(-0.2, 0.2), v = mo ? R(1.1, 1.9) : 0.35;
+        resetSP(); SP.kind = rnd() < 0.55 ? K.SPARK : K.STAR; SP.life = R(0.35, 0.6); SP.s0 = R(0.1, 0.17); SP.s1 = 0.02; SP.grav = -2.2; SP.drag = 2.4;
+        SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.5; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0];
+        if (spawn(this._add, p.x + Math.cos(a) * 0.22, p.y + 0.05, p.z + Math.sin(a) * 0.22, Math.cos(a) * v, mo ? R(-0.6, -0.1) : 0, Math.sin(a) * v) >= 0) k++;
+      }
+      return k;
+    },
+    /** §14.4 black-region guard, watchdog ladder step 1: on = every 3D effect of this module is emptied and hidden and
+     *  none starts until quarantine(false). The 2D layer (stamp, level-up show, coins, edge pulse) keeps working. */
+    quarantine(on) {
+      on = !!on;
+      if (on === QUAR) return QUAR;
+      QUAR = on;
+      if (on) {
+        for (const P of [this._normal, this._add, this._emo]) if (P) { P.n = 0; P.geo.instanceCount = 0; P.mesh.visible = false; }
+        this._emoInst.length = 0; this._emoQ.length = 0;
+        if (this._pillar) { this._pillar.active = false; this._pillar.group.visible = false; }
+        try { CM.clear(); } catch (e) { /* not built yet */ }
+      }
+      G.log.info('UI', `fx quarantine ${on ? 'on (3D effects hidden)' : 'off'}`);
+      return QUAR;
+    },
+    quarantined() { return QUAR; },
     /** light pillar + star shower at pos (default: the player); kind 'quest' (jade-gold) or 'level' (gold) */
     pillar(pos, opts) {
       if (!lv() || !this._ensure3D()) return false;
@@ -921,6 +970,7 @@
 
     // ------------------------------------------------------------ internals: 3D setup
     _ensure3D() {
+      if (QUAR) return false;   // §14.4 quarantine: no new 3D effect
       if (this._ready) return true;
       const scene = G.sys.engine?.scene;
       if (!scene) return false;
@@ -964,6 +1014,7 @@
         cell = best;
       }
       const ctx = this._emoCtx, x = (cell % 8) * 64, y = Math.floor(cell / 8) * 64;
+      if (!ctx) return -1;   // no 2D context for the emoji atlas (§14.4): no emoji, never an undrawn (black) cell
       ctx.clearRect(x, y, 64, 64);
       ctx.save();
       ctx.beginPath(); ctx.rect(x, y, 64, 64); ctx.clip();
@@ -1051,6 +1102,7 @@
       group.add(outer, inner);
       group.visible = false;
       this._scene.add(group);
+      G.gfx.guard?.watch?.(group, { uniforms: true });
       this._pillar = { group, outer, inner, t: 0, dur: 2.8, active: false, spawnAcc: 0, showerAcc: 0, kind: 'level', follow: true, tall: 16 };
       return this._pillar;
     },
@@ -1511,6 +1563,8 @@
       }));
 
       on('level:up', ({ level }) => { this.levelUp(level); });
+      // the double jump (§14.2): 21-player calls G.fx.doubleJump itself too — deduped inside (150 ms)
+      on('player:jump', ({ n, pos }) => { if (n === 2) this.doubleJump(pos || null); });
 
       on('quest:completed', ({ questId }) => {
         if (pnow() < this._questQuietUntil) return;
@@ -2002,19 +2056,20 @@
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
     }`;
+  // the facing term is computed per FRAGMENT (R3-render-2): per vertex, on a 40-segment cylinder, the fade only
+  // covered the last segment (1-2 px) and the column read as a translucent box with hard sides
   const PORTAL_VS = `
-    varying vec2 vUv; varying float vFace;
+    varying vec2 vUv; varying vec3 vWN; varying vec3 vWP;
     void main() {
       vUv = uv;
       vec4 wp = modelMatrix * vec4(position, 1.0);
-      vec3 n = mat3(modelMatrix) * normal; float nl = length(n); n = nl > 1e-6 ? n / nl : vec3(0.0, 1.0, 0.0);
-      vec3 v = cameraPosition - wp.xyz; float vl = length(v); v = vl > 1e-6 ? v / vl : vec3(0.0, 0.0, 1.0);
-      vFace = clamp(abs(dot(n, v)), 0.0, 1.0);
+      vWP = wp.xyz;
+      vWN = mat3(modelMatrix) * normal;
       gl_Position = projectionMatrix * viewMatrix * wp;
     }`;
   const PORTAL_FS = `
     uniform float uProg; uniform float uTime; uniform float uOp; uniform float uDir; uniform vec3 uColor; uniform vec3 uEdge;
-    varying vec2 vUv; varying float vFace;
+    varying vec2 vUv; varying vec3 vWN; varying vec3 vWP;
     float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
     float vnoise(vec2 p) {
       vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -2031,13 +2086,21 @@
       float edge = (1.0 - smoothstep(0.0, 0.07, abs(field - thr))) * live;
       float dy = (y - uProg) * 12.0;
       float scan = exp(-dy * dy) * live;
-      // brightest just inside the silhouette, fading to nothing AT it: soft sides instead of a hard-edged box
-      float side = smoothstep(0.02, 0.32, vFace);
-      float rim = (0.3 + 0.7 * (1.0 - vFace)) * side;
+      // NaN-safe normalizes (a column scaled thin must never feed normalize(vec3(0)) to the GPU)
+      float nl = length(vWN); vec3 nw = nl > 1e-6 ? vWN / nl : vec3(0.0, 1.0, 0.0);
+      vec3 vv = cameraPosition - vWP; float vl = length(vv); vv = vl > 1e-6 ? vv / vl : vec3(0.0, 0.0, 1.0);
+      // signed facing (the inner wall seen through the column counts with its flipped normal): an anti-aliased edge
+      // pixel shaded at its centre, past the tangent, reads as fully edge-on instead of facing the camera again
+      float face = clamp(dot(nw, vv) * (gl_FrontFacing ? 1.0 : -1.0), 0.0, 1.0);
+      // projected radius: 0 on the axis, 1 at the silhouette. Full light to half the radius, fading to nothing before
+      // the silhouette (soft sides instead of a hard-edged box); the brighter "tube" rim stays inside that window
+      float sr = sqrt(max(1.0 - face * face, 0.0));
+      float side = 1.0 - smoothstep(0.5, 0.92, sr);
+      float rim = side * (0.55 + 0.45 * smoothstep(0.1, 0.6, sr));
       float fade = (1.0 - smoothstep(0.72, 1.0, vUv.y)) * smoothstep(0.0, 0.04, vUv.y);
       // the solid part is a soft, noisy veil brightest at the feet (no flat "box of light"); the burning edge carries the shape
       float body = keep * rim * (0.3 + 0.32 * n) * mix(1.0, 0.45, vUv.y);
-      float a = (body + (edge * 1.1 + scan * 0.55) * (0.35 + 0.65 * side)) * fade * uOp;
+      float a = (body + (edge * 1.1 + scan * 0.55) * side) * fade * uOp;
       if (a < 0.003) discard;
       vec3 c = mix(uColor, uEdge, clamp(edge + scan, 0.0, 1.0));
       gl_FragColor = vec4(c, clamp(a, 0.0, 1.0));
@@ -2202,6 +2265,7 @@
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = 'fx-speed-lines'; mesh.frustumCulled = false; mesh.renderOrder = 998; mesh.visible = false; mesh.raycast = noRay; mesh.matrixAutoUpdate = false;
+      G.gfx.guard?.watch?.(mesh, { uniforms: true });
       scene.add(mesh);
       this.sl = { mesh, mat, geo };
     },
@@ -2222,6 +2286,7 @@
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = 'fx-sprint-ribbon'; mesh.frustumCulled = false; mesh.renderOrder = 4; mesh.visible = false; mesh.raycast = noRay; mesh.matrixAutoUpdate = false;
+      G.gfx.guard?.watch?.(mesh, { uniforms: true });
       scene.add(mesh);
       this.rb = { mesh, mat, pos, alpha, pa, aa };
     },
@@ -2243,6 +2308,7 @@
       _cm4.makeTranslation(0, -9999, 0);
       for (let i = 0; i < FP_CAP; i++) mesh.setMatrixAt(i, _cm4);
       mesh.name = 'fx-footprints'; mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.visible = false; mesh.raycast = noRay;
+      G.gfx.guard?.watch?.(mesh, { uniforms: true });
       mesh.castShadow = false; mesh.receiveShadow = false;
       scene.add(mesh);
       this.fp = { mesh, mat, data, col, ad, ac };
@@ -2260,6 +2326,7 @@
         const col = new THREE.Mesh(colGeo, colMat), disc = new THREE.Mesh(discGeo, discMat);
         col.renderOrder = 13; disc.renderOrder = 3;
         const g = new THREE.Group(); g.name = 'fx-portal'; g.add(col, disc); g.visible = false;
+        G.gfx.guard?.watch?.(g, { uniforms: true });
         for (const m of [col, disc]) { m.frustumCulled = false; m.raycast = noRay; }
         scene.add(g);
         this.pt.push({ g, col, disc, colMat, discMat, t: 0, dur: 1.3, active: false, mode: 'in', acc: 0, burst: false });
@@ -2274,13 +2341,16 @@
       for (const m of [board, glow]) { m.frustumCulled = false; m.raycast = noRay; }
       const g = new THREE.Group(); g.name = 'fx-zone-banner'; g.add(glow, board); g.visible = false;
       scene.add(g);
+      G.gfx.guard?.watch?.(g);   // camera-attached board + glow (§14.4.1)
       this.ban = { g, board, glow, t: 0, dur: 3.4, active: false, pos: new THREE.Vector3(), cam: new THREE.Vector3(), snap: true, burst: false, scale: 1, zone: null,
         chk: 0, top: 0, covered: false };
     },
     /** where the board rests on screen (px): centred, ~30 % above the middle, but under the top HUD bars (top: their
      *  bottom edge, measured unless given) — on a phone the fixed spot ran under "다음 할 일" / the objective bar */
     _banSpot(cam, top) {
-      const W = innerWidth, H = innerHeight, f = banFit(cam);
+      // ≥ 1 px: one 0-height frame (a window being snapped / resized, a collapsed iframe) must not turn the board's
+      // spot into 0 / 0 = NaN — a NaN board is exactly the quad the user's GPU draws black (§14.4)
+      const W = Math.max(1, innerWidth), H = Math.max(1, innerHeight), f = banFit(cam);
       const bw = ((2.8 * f.sc) / f.visW) * W, bh = ((0.9 * f.sc) / f.visH) * H;
       const l = (W - bw) / 2, r = (W + bw) / 2;
       if (top == null) top = hudTopUnder(l, r);
@@ -2390,6 +2460,7 @@
         const g = new THREE.SkinnedMesh(src.geometry, mat);
         g.bind(src.skeleton, src.bindMatrix);
         g.name = 'fx-afterimage'; g.frustumCulled = false; g.castShadow = false; g.receiveShadow = false;
+        G.gfx.guard?.watch?.(g, { uniforms: true });
         g.matrixAutoUpdate = false; g.matrixWorldAutoUpdate = false; g.raycast = noRay; g.renderOrder = 12; g.visible = false;
         const off = new THREE.Vector3();
         g.userData.off = off;
@@ -2601,6 +2672,8 @@
         const emoji = cleanEmoji(zone.emoji) || ZE[zone.id] || '📍';
         const sub = kid ? '새로운 곳이에요!' : '새로운 구역 발견';
         tex = G.gfx.canvasTexture(1024, 330, (ctx, w, h) => drawBanner(ctx, w, h, name, sub, emoji));
+        // no 2D context (§14.4): the board would be an undrawn quad — skip it (and try again on the next first visit)
+        if (tex?.userData?.blank) { tex.dispose(); return false; }
         if (this.banTex.size > 16) { const first = this.banTex.keys().next().value; this.banTex.get(first)?.dispose?.(); this.banTex.delete(first); }
         this.banTex.set(key, tex);
       }
@@ -2630,7 +2703,10 @@
       // BAN_DIST m in front of the camera, ~30 % above the screen centre or just under the top HUD bars
       _cv.set(0, 0, -1).applyQuaternion(cam.quaternion);
       _cv2.set(0, 1, 0).applyQuaternion(cam.quaternion);
-      const want = _cb.copy(cam.position).addScaledVector(_cv, BAN_DIST).addScaledVector(_cv2, spot.f.visH * (0.5 - spot.yc / innerHeight));
+      const vh = Math.max(1, innerHeight);
+      const want = _cb.copy(cam.position).addScaledVector(_cv, BAN_DIST).addScaledVector(_cv2, spot.f.visH * (0.5 - spot.yc / vh));
+      if (!Number.isFinite(want.x + want.y + want.z)) { B.g.visible = false; B.snap = true; return; }   // a broken camera this frame: skip it
+      B.g.visible = true;
       // a soft spring gives it depth when the camera turns; the camera's own travel carries the board along (left to the
       // spring it trailed ~v/10 m: at the 18 m/s run it hung 1.5 m closer, half again as big, over the HUD)
       if (B.snap || !mo) { B.pos.copy(want); B.snap = false; }
@@ -2640,10 +2716,11 @@
         // bars may sit right above it
         const f = spot.f, dv = _cd.subVectors(B.pos, want);
         _ce.set(1, 0, 0).applyQuaternion(cam.quaternion);
-        const mx = Math.max(0, (f.visW - 2.8 * sc * 1.06) / 2), my = Math.max(0, ((spot.t - spot.top - 6) / innerHeight) * f.visH);
+        const mx = Math.max(0, (f.visW - 2.8 * sc * 1.06) / 2), my = Math.max(0, ((spot.t - spot.top - 6) / vh) * f.visH);
         B.pos.copy(want).addScaledVector(_ce, clamp(dv.dot(_ce), -mx, mx)).addScaledVector(_cv2, clamp(dv.dot(_cv2), -0.4 * sc, my))
           .addScaledVector(_cv, clamp(dv.dot(_cv), -0.4, 0.4));
       }
+      if (!Number.isFinite(B.pos.x + B.pos.y + B.pos.z)) B.pos.copy(want);   // never carry a NaN spring state on
       B.cam.copy(cam.position);
       const tOut = B.dur - 0.6;
       const out = B.t > tOut ? clamp((B.t - tOut) / 0.6, 0, 1) : 0;
@@ -2759,6 +2836,9 @@
     pillar: (p, o) => fx.pillar(p, o),
     zoneBanner: (z) => fx.zoneBanner(z),
     itemFly: (f, w, o) => fx.itemFly(f, w, o),
+    doubleJump: (p) => fx.doubleJump(p),
+    quarantine: (on) => fx.quarantine(on),
+    quarantined: () => fx.quarantined(),
     shimmerExp: () => fx.shimmerExp(),
     shine: (el, o) => fx.shine(el, o),
     level: () => fx.level(),

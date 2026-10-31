@@ -138,7 +138,7 @@ final class Upload
                 imagesavealpha($dst, true);
                 imagefill($dst, 0, 0, (int) imagecolorallocatealpha($dst, 0, 0, 0, 127));
                 imagecopyresampled($dst, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
-                imagedestroy($img);
+                self::freeImage($img);
                 $img = $dst;
                 $w = $nw;
                 $h = $nh;
@@ -160,7 +160,18 @@ final class Upload
             if (!$okWrite || $data === '') return null;
             return ['bytes' => $data, 'mime' => $outMime, 'w' => $w, 'h' => $h];
         } finally {
-            if (is_resource($img) || is_object($img)) imagedestroy($img);
+            self::freeImage($img);
         }
+    }
+
+    /**
+     * GD images are resources on PHP 7 (imagedestroy frees them right away — photos are big) and GdImage objects on PHP 8,
+     * where imagedestroy() does nothing and is deprecated since 8.5 (the API error handler would turn the notice into an
+     * exception): there the object goes when the last reference does.
+     */
+    private static function freeImage(&$img): void
+    {
+        if (PHP_VERSION_ID < 80000 && is_resource($img)) imagedestroy($img);
+        $img = null;
     }
 }
