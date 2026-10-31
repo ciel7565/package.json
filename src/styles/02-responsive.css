@@ -140,8 +140,14 @@ body.modal-open .toast-root { top: max(.55rem, env(safe-area-inset-top)) !import
 body.modal-open .toast-root .toast:not(:last-child):not(.out) { display: none; }
 body.modal-open .toast-root .toast.out:not(:last-child) { visibility: hidden; }
 body.modal-open .modal-backdrop { padding-top: max(3.6rem, calc(env(safe-area-inset-top, 0px) + 3.1rem)); }
+/* easy-mode toasts are 64–76 px tall (16 px text, 44 px mascot face, 🔄 다시 button): the lane above a dialog is sized
+   for them, so a save-failure toast never sits on the dialog head / ⬅️ 닫기 (R3-ui-2). Static, so the dialog never jumps. */
+body.easy.modal-open .modal-backdrop { padding-top: max(7rem, calc(env(safe-area-inset-top, 0px) + 6.5rem)); }
 @media (max-width: 820px), (max-height: 520px) {
   body.modal-open .modal { max-height: min(94vh, 100%); }
+}
+@media (max-height: 520px) {
+  body.easy.modal-open .modal-backdrop { padding-top: max(6.7rem, calc(env(safe-area-inset-top, 0px) + 6.2rem)); }
 }
 
 /* Phones (portrait): stack bottom bar → joystick/buttons → menu/chat so nothing overlaps. */
@@ -249,7 +255,9 @@ body:has(.coach-layer .coach):not(.modal-open) .toast-root { top: auto !importan
   body.easy .mobile-buttons { transform: none; } /* the .85 scale above would take jump / run under 56 px */
   body.easy.is-touch .interact-prompt { bottom: 6.2rem; }
   body.easy.is-touch .joystick { width: 7.6rem; height: 7.6rem; bottom: .9rem; }
-  body.easy.show-chat #chat-panel { left: calc(var(--gap) + 8.2rem); top: 6.8rem; bottom: auto; width: 15rem; }
+  /* the panel starts right of the 2×2 tile block: the same tokens as the grid above (2 columns of max(3.7rem, --tap),
+     .3rem padding + gap) plus a .6rem gap — a 56 px tap size no longer puts the panel on the 📖 / ☰ tiles (R3-ui-7) */
+  body.easy.show-chat #chat-panel { left: calc(var(--gap) + .6rem + 2 * max(3.7rem, var(--tap)) + .3rem + .6rem); top: 6.8rem; bottom: auto; width: 15rem; }
   body.easy.show-chat #chat-panel .chat-log { height: 4.6rem; }
 }
 /* landscape phones, normal mode: chat panel and joystick sit right of the slim left menu instead of on top of it */

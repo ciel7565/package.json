@@ -1574,7 +1574,7 @@
       // ---- arrive steering (phase 4: the player runs 18 m/s — 옹이 accelerates with the player's pace and
       //      bounds after them in long catch-up hops; far behind for a moment → a puff and it pops up next to them)
       const dx = this._tgt.x - this.pos.x, dz = this._tgt.z - this.pos.z, dist = Math.hypot(dx, dz);
-      const RUN = Number(P.RUN) || 18;
+      const RUN = (Number(P.RUN) || 12) * (Number(P.speedMul) || 1); // the tier's run pace: 옹이 keeps up to 36 m/s (§14.1)
       let maxS = Math.max(3.4, pSpeed * 1.16 + 0.6);
       if (dPl > 4.5) maxS += Math.min(14, (dPl - 4.5) * 1.7);
       maxS = Math.min(maxS, RUN * 1.6);
@@ -2350,6 +2350,25 @@
     _bindEvents() {
       const B = G.bus;
       const celebrate = (bubble, aff) => { if (!G.state) return; this.react('jump', { bubble }); if (aff) this._addAffection(aff, 'event'); };
+      // speed tier (§14.1): one happy line when the tier went up (never for the load-time announcement, prev = null)
+      B.on('speed:changed', ({ tier, prev } = {}) => {
+        if (!G.state || prev == null || !(Number(tier) > Number(prev))) return;
+        if (this._speedSaidTier === tier) return;
+        this._speedSaidTier = tier;
+        this.react('celebrate', { bubble: '⚡' });
+        say('와, 더 빨라졌어요!', { mood: 'cheer', source: 'event', ttl: 8000 });
+      });
+      // double jump (§14.2): after a few single jumps 옹이 tips the second press once ever; a double jump itself settles it
+      B.on('player:jump', ({ n } = {}) => {
+        if (!G.state) return;
+        G.state.flags = G.state.flags || {};
+        if (Number(n) === 2) { if (!G.state.flags['companion:jump2']) { G.state.flags['companion:jump2'] = G.time.now(); G.dirty('companion'); } return; }
+        if (G.state.flags['companion:jump2']) return;
+        this._singleJumps = (this._singleJumps || 0) + 1;
+        if (this._singleJumps < 3 || this._quiet()) return;
+        if (!say('점프하고 한 번 더 누르면 두 번 점프!', { mood: 'wink', source: 'tip', ttl: 12000 })) return;
+        G.state.flags['companion:jump2'] = G.time.now(); G.dirty('companion');
+      });
       B.on('quest:claimed', () => celebrate('🎉', 1));
       B.on('achievement:unlocked', () => celebrate('🏆', 1));
       B.on('ferment:claimed', () => celebrate('🏺✨', 1));

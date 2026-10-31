@@ -1,0 +1,88 @@
+/* =============================================================================
+   72-subscription.css — 진행 속도 구독 screen (G.sys.subscription, CONTRACT §14.6): current plan, tier cards,
+   테스트 결제 dialog, install guide. Motion: entrances only (opacity/transform), no layout animation, pops ≤ 4 %.
+   The HUD chip #hud-speed lives in 01-hud.css.
+   ============================================================================= */
+.app-sub-modal .modal-body { display: flex; flex-direction: column; gap: .9rem; }
+
+/* current plan */
+.sub-now {
+  display: flex; align-items: flex-start; gap: .85rem; padding: .9rem 1rem; border-radius: 16px; position: relative;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, .03)); border: 1px solid var(--line);
+}
+.sub-now.is-fast { border-color: rgba(244, 197, 74, .55); background: linear-gradient(180deg, rgba(244, 197, 74, .16), rgba(244, 197, 74, .05)); }
+.sub-now-emo { font-size: 2rem; line-height: 1; flex: none; margin-top: .1rem; }
+.sub-now-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .3rem; }
+.sub-now-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.sub-now-tier { font-size: 1.15rem; }
+.sub-now-line { margin: 0; color: var(--text-dim); font-size: .9rem; line-height: 1.45; }
+.sub-status { font-size: .74rem; }
+.sub-status-active { color: var(--green-l); border-color: rgba(52, 195, 107, .45); background: rgba(52, 195, 107, .14); }
+.sub-status-past_due { color: var(--gold); border-color: rgba(244, 197, 74, .45); background: rgba(244, 197, 74, .14); }
+.sub-status-canceled { color: var(--text-dim); }
+.sub-now .easy-speak { position: absolute; right: .6rem; top: .6rem; }
+
+/* notes (local mode / guest) */
+.sub-note { display: flex; gap: .7rem; align-items: flex-start; padding: .8rem .95rem; border-radius: 14px; background: rgba(74, 168, 255, .1); border: 1px solid rgba(74, 168, 255, .35); }
+.sub-note > .emoji { font-size: 1.5rem; line-height: 1; flex: none; }
+.sub-note b { display: block; margin-bottom: .2rem; }
+.sub-note p { margin: 0 0 .5rem; color: var(--text-dim); font-size: .88rem; line-height: 1.5; }
+.sub-loading { margin: 0; }
+
+/* tier cards */
+.sub-tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; }
+.sub-tier {
+  display: flex; flex-direction: column; gap: .55rem; padding: .95rem .95rem 1rem; border-radius: 16px; min-width: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, .025)); border: 1px solid var(--line);
+  transition: transform var(--dur-3) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+}
+.sub-tier:hover { transform: translateY(var(--lift, -2px)); }
+.sub-tier.is-current { border-color: rgba(244, 197, 74, .7); box-shadow: 0 0 0 3px rgba(244, 197, 74, .18); }
+.sub-tiers.is-off .sub-tier { opacity: .62; }
+.sub-tiers.is-off .sub-tier:hover { transform: none; }
+.st-head { display: flex; align-items: center; justify-content: space-between; gap: .4rem; }
+.st-name { font-size: 1.05rem; }
+.st-cur { font-size: .72rem; }
+.st-price { font-size: 1.55rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.st-price small { font-size: .8rem; font-weight: 600; color: var(--text-dim); margin-left: .15rem; }
+.st-perks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; font-size: .88rem; color: var(--text-dim); }
+.st-perks li { display: flex; align-items: center; gap: .4rem; }
+.st-btns { display: flex; flex-direction: column; gap: .45rem; margin-top: auto; }
+.st-btns .btn { min-height: 2.6rem; font-size: .9rem; }
+body.easy .st-btns .btn { min-height: var(--tap); font-size: max(16px, 1rem); }
+.sub-cancel-row { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
+
+/* legal */
+.sub-legal { padding-top: .6rem; border-top: 1px dashed var(--line); font-size: .78rem; color: var(--text-mute); line-height: 1.55; }
+.sub-legal p { margin: 0 0 .3rem; }
+.sub-legal b { color: var(--text-dim); font-weight: 700; }
+
+/* 테스트 결제 (mock) */
+.sub-mock { display: flex; flex-direction: column; gap: .7rem; }
+.sub-mock-badge { margin: 0; padding: .45rem .7rem; border-radius: 10px; background: rgba(244, 197, 74, .16); border: 1px solid rgba(244, 197, 74, .5); color: #ffe08a; font-weight: 700; font-size: .88rem; }
+.sub-mock-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .35rem .9rem; margin: 0; font-size: .9rem; }
+.sub-mock-kv dt { color: var(--text-mute); }
+.sub-mock-kv dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.sub-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
+
+/* install guide */
+.sub-guide { font-size: .9rem; line-height: 1.6; }
+.sub-guide h1 { font-size: 1.2rem; margin: 0 0 .5rem; }
+.sub-guide h2 { font-size: 1.05rem; margin: 1rem 0 .4rem; color: #ffe7a6; }
+.sub-guide h3 { font-size: .95rem; margin: .8rem 0 .3rem; }
+.sub-guide pre, .sub-guide-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; background: rgba(255, 255, 255, .06); padding: .7rem; border-radius: 10px; }
+.sub-guide table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+.sub-guide td, .sub-guide th { border: 1px solid var(--line); padding: .3rem .5rem; text-align: left; vertical-align: top; }
+
+/* phones / narrow */
+@media (max-width: 720px) {
+  .sub-tiers { grid-template-columns: minmax(0, 1fr); }
+  .sub-tier { flex-direction: column; }
+  .st-price { font-size: 1.35rem; }
+}
+@media (min-width: 721px) and (max-width: 980px) {
+  .sub-tiers { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
+  .sub-tier { padding: .75rem .7rem .85rem; }
+  .st-price { font-size: 1.3rem; }
+  .st-btns .btn { font-size: .82rem; padding-left: .4rem; padding-right: .4rem; }
+}

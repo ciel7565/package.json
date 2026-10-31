@@ -65,6 +65,43 @@
   const ground = (x, z) => { try { const y = G.world.surfaceHeight(x, z); return Number.isFinite(y) ? y : 0; } catch (e) { return 0; } };
   const zoneDef = (id) => (G.data.zones || []).find((z) => z.id === id) || null;
   const poiDef = (id) => (G.data.pois || []).find((p) => p.id === id) || null;
+  /**
+   * where a 'visit' objective points: the zone centre when the child can stand there, otherwise the nearest stand-in
+   * the walker really reaches — the door anchor of the building that holds the centre, then the minimap's hand-tuned
+   * arrival spot (R3 movement-4: ZONE_HALL's centre (0,-80) lies inside the hall's collider, so 👉 같이 가기 walked the
+   * child into the facade, "그곳까지는 갈 수 없어요", and the marker's beam rose inside the building).
+   * Cached per zone once the world is built (colliders never move).
+   */
+  const _zoneSpots = new Map();
+  function zoneSpot(z) {
+    if (!z || !Array.isArray(z.center)) return null;
+    const cx = Number(z.center[0]), cz = Number(z.center[1]);
+    if (!Number.isFinite(cx) || !Number.isFinite(cz)) return null;
+    const hit = _zoneSpots.get(z.id);
+    if (hit) return hit;
+    const W = G.world;
+    const free = (x, zz, r = 0.4) => { try { return Number.isFinite(x) && Number.isFinite(zz) && !W.blocked(x, zz, r, ground(x, zz)); } catch (e) { return true; } };
+    // the centre stays the target when the walker can stop within its stop distance of it: free ground at the centre
+    // (a jar or a post right next to it does not matter) or on a 1.2 m ring around it
+    let ok = free(cx, cz);
+    for (let i = 0; !ok && i < 8; i++) { const a = (i / 8) * Math.PI * 2; ok = free(cx + Math.cos(a) * 1.2, cz + Math.sin(a) * 1.2); }
+    let spot = null;
+    if (ok) spot = { x: cx, z: cz, via: 'center' };
+    else {
+      const cands = [];
+      const r = Number(z.r) || 0;
+      for (const a of Object.values(L().anchors || {})) {
+        if (!a || !/DOOR/.test(String(a.id)) || !Number.isFinite(a.x) || !Number.isFinite(a.z)) continue;
+        if (Math.hypot(a.x - cx, a.z - cz) <= r + 2) cands.push({ x: a.x, z: a.z, via: 'door' });
+      }
+      let arr = null;
+      try { arr = G.sys.minimap?.arrivalFor?.(z.id) || null; } catch (e) { arr = null; }
+      if (arr && Number.isFinite(arr.x) && Number.isFinite(arr.z)) cands.push({ x: arr.x, z: arr.z, via: 'arrival' });
+      spot = cands.find((c) => free(c.x, c.z, 0.6)) || cands[0] || { x: cx, z: cz, via: 'center' };
+    }
+    if (G.ready) _zoneSpots.set(z.id, spot);
+    return spot;
+  }
   const npcName = (id) => G.data.npcs?.[id]?.name || '안내원';
   const cropOk = (o, cropId) => (!o.crop || o.crop === cropId) && (!o.category || G.data.crops?.[cropId]?.category === o.category);
 
@@ -1029,13 +1066,13 @@
       switch (o.type) {
         case 'talk': return o.npc ? this._npcTarget(o.npc, o.text) : null;
         case 'visit': {
-          if (o.zone) { const z = zoneDef(o.zone); return z ? loc(z.center[0], z.center[1], 2.6, 'zone', z.name) : null; }
+          if (o.zone) { const z = zoneDef(o.zone), s = zoneSpot(z); return s ? loc(s.x, s.z, 2.6, 'zone', z.name) : null; }
           if (o.poi) { const p = poiDef(o.poi); return p ? loc(p.x, p.z, 2.6, 'poi', p.name) : null; }
           return null;
         }
         case 'visit_all': {
           const v = G.state.visited || {};
-          const z = nearestOf((G.data.visitZones || []).filter((zid) => !v[zid]).map((zid) => { const zd = zoneDef(zid); return zd ? { x: zd.center[0], z: zd.center[1], name: zd.name } : null; }));
+          const z = nearestOf((G.data.visitZones || []).filter((zid) => !v[zid]).map((zid) => { const zd = zoneDef(zid), s = zoneSpot(zd); return s ? { x: s.x, z: s.z, name: zd.name } : null; }));
           return z ? loc(z.x, z.z, 2.6, 'zone', z.name) : null;
         }
         case 'water': case 'harvest': case 'plant': return this._plotTarget(o);

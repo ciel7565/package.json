@@ -1324,8 +1324,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       this.meshes.fireflies = pts;
       this._fireflyMat = mat;
       this.counts.fireflies = count;
-      G.sys.engine?.onResize?.(() => { mat.uniforms.uScale.value = (G.sys.engine.renderer.getPixelRatio() || 1) * (window.innerHeight / 900); });
-      mat.uniforms.uScale.value = (G.sys.engine.renderer.getPixelRatio() || 1) * (window.innerHeight / 900);
+      const setScale = () => { mat.uniforms.uScale.value = (G.sys.engine?.renderer?.getPixelRatio?.() || 1) * (window.innerHeight / 900); };
+      G.sys.engine?.onResize?.(setScale);
+      setScale();
     },
 
     // ============================================================== phase-4 atmosphere (lazy, preset-gated)
@@ -1407,7 +1408,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       root.add(pts);
       this.meshes.petals = pts;
       this._petalMat = mat;
-      const scale = () => { const E = G.sys.engine; const fov = (E.camera?.fov || 55) * PI / 180; mat.uniforms.uScale.value = (window.innerHeight * (E.renderer.getPixelRatio() || 1) * 0.5) / Math.tan(fov / 2); };
+      const scale = () => { const E = G.sys.engine; const fov = (E.camera?.fov || 55) * PI / 180; mat.uniforms.uScale.value = (window.innerHeight * (E.renderer?.getPixelRatio?.() || 1) * 0.5) / Math.tan(fov / 2); };
       scale();
       G.sys.engine?.onResize?.(scale);
       this.counts.petals = count;
@@ -1532,7 +1533,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       root.add(pts);
       this.meshes.nightFlies = pts;
       this._nightFlyMat = mat;
-      const setScale = () => { mat.uniforms.uScale.value = (G.sys.engine.renderer.getPixelRatio() || 1) * (window.innerHeight / 900); };
+      const setScale = () => { mat.uniforms.uScale.value = (G.sys.engine?.renderer?.getPixelRatio?.() || 1) * (window.innerHeight / 900); };
       setScale();
       G.sys.engine?.onResize?.(setScale);
     },

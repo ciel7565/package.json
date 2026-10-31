@@ -24,7 +24,25 @@
 //   G.sys.engine.worldToScreen(vec3) -> {x, y, visible}
 //   G.sys.engine.atmos           {sunGlow, rays} weather-driven strengths of the sun glow / god rays (0..1)
 //   G.gfx.canvasTexture(w, h, drawFn(ctx,w,h), opts) / G.gfx.material(key, factory) / G.gfx.fixNormals(geo)
+//       canvasTexture returns a 1×1 transparent texture with texture.userData.blank = true when the browser gives no
+//       2D context (Chrome caps live canvases): callers that draw text boards skip the mesh when `blank`.
 //   G.gfx.nanScrubShader         the NaN/Inf scrub shader that runs before bloom (dev-center GPU checks)
+//   G.gfx.guard                  black-region guard (CONTRACT §14.4): the user's GPU draws NaN as opaque black.
+//     .watch(obj, {uniforms})    sanitation — every frame material.opacity / scale / position / quaternion and the
+//                                listed uniforms (true = all) of watched objects are checked; a non-finite value hides
+//                                the object for that frame, resets the value and counts in guard.stats. Screen-space
+//                                quads, sprites and transparent ShaderMaterials found in the scene are enrolled by
+//                                themselves (~1.5 s scan); .unwatch(obj) · .check(obj) · .quarantine(on)
+//     .watchdog                  every 2 s the final frame is copied, box-filtered into 96×54 and read back; the
+//                                largest pure-black (< 6) / pure-white (> 250) block ≥ 5 % of the area in 2 probes in a
+//                                row is an anomaly → quarantine ladder (1 hide FX/quads · 2 composer off · 3 canvas
+//                                boards off · 4 low preset), re-probing after each step; emits 'gpu:anomaly' {step,
+//                                block}; .state/.step/.lastBlock/.history · .probeNow() · .reset() ("다시 켜기") ·
+//                                .inject(on) (test: a full-screen black quad)
+//   engine.unsupported / G.unsupported {reason, at}   set before anything else when WebGL2 is missing or the renderer
+//       cannot be created; 'engine:unsupported' {reason} is emitted once (70-app shows the friendly 2D-only screen).
+//       scene + camera still exist so the world modules build; renderer is null and render() draws nothing.
+//   'engine:context' {lost: true|false}   the WebGL context was lost / restored (25-npc re-renders portraits).
 //
 // Post chain (medium / high): RenderPass → [NaNScrub → UnrealBloom] → AtmosPass(god rays on high, sun glow, grade,
 // vignette, dither) → OutputPass (ACES + sRGB). Low renders straight to the canvas exactly as before.
@@ -323,11 +341,21 @@
     get normalsRepaired() { return fixNormals.repaired; },
     /** the NaN/Inf scrub that runs before bloom (read by the dev center's GPU checks) */
     nanScrubShader: NAN_SCRUB,
+    /** 1×1 fully transparent texture (texture.userData.blank = true): what canvasTexture hands out when the browser
+     *  gives no 2D context, so a board whose text never drew is skipped instead of showing an undefined (black) map */
+    blankTexture(opts = {}) {
+      const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+      if (opts.srgb !== false) t.colorSpace = THREE.SRGBColorSpace;
+      t.userData.blank = true;
+      t.needsUpdate = true;
+      return t;
+    },
     /** CanvasTexture from a 2D drawing function */
     canvasTexture(w, h, draw, opts = {}) {
       let c = document.createElement('canvas');
       c.width = w; c.height = h;
       const ctx = c.getContext('2d');
+      if (!ctx) { G.log.warn('ENGINE', `canvasTexture ${w}×${h}: no 2D context (blank texture)`); return G.gfx.blankTexture(opts); }
       draw(ctx, w, h);
       // low preset: big drawings (≥ 1024×640) are uploaded at half size — 4× less texture memory and upload time on
       // the first frame, which is what a slow GPU feels at start-up (the drawing code keeps its full-size coordinates)
@@ -420,6 +448,347 @@
     },
   };
 
+  // ---------------------------------------------------------------- render guard: sanitation (CONTRACT §14.4.1)
+  // The user's Windows GPU draws a NaN opacity / scale / uniform as an opaque black quad. Every frame, before the draw,
+  // the watched objects (every screen-space / camera-attached quad, sprite and transparent ShaderMaterial: enrolled
+  // by their owners through guard.watch, or found by the ~1.5 s scene scan) are checked for non-finite values; an
+  // offender is hidden for that frame, its value reset to a safe one, and the event counted (guard.stats).
+  const GUARD_NAME_RE = /fx-|banner|title|portal|pillar|sky-|rain|snow|stars|moon|meteor|halo|glow|firefl|petal|mist|spray|card|marker|ghost|ribbon|prints|splash|rainbow|overlay|afterimage|lantern/i;
+  const guardList = [];                 // [{ obj, uniforms }]   uniforms: true = every uniform, string[] = these, null = none
+  const guardSet = new WeakSet();       // watched objects
+  const guardSeen = new WeakSet();      // objects the auto-enrol scan already judged
+  const guardHidden = [];               // objects hidden for the frame being drawn
+  const guardQuarantined = [];          // objects hidden by the quarantine ladder (restored by watchdog.reset)
+  const finV = (v) => {
+    if (v == null) return true;
+    if (typeof v === 'number') return Number.isFinite(v);
+    if (typeof v !== 'object') return true;
+    if (v.isColor) return Number.isFinite(v.r) && Number.isFinite(v.g) && Number.isFinite(v.b);
+    if (v.isVector2) return Number.isFinite(v.x) && Number.isFinite(v.y);
+    if (v.isVector3) return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+    if (v.isVector4 || v.isQuaternion) return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z) && Number.isFinite(v.w);
+    if (v.isMatrix3 || v.isMatrix4) { const e = v.elements; for (let i = 0; i < e.length; i++) if (!Number.isFinite(e[i])) return false; return true; }
+    if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) if (!finV(v[i])) return false; return true; }
+    return true;
+  };
+  /** reset a non-finite uniform value in place (0 / black / identity): invisible, never a black quad */
+  const safeV = (u) => {
+    const v = u.value;
+    if (typeof v === 'number') { u.value = 0; return; }
+    if (!v || typeof v !== 'object') return;
+    if (v.isColor) v.setRGB(0, 0, 0);
+    else if (v.isVector2 || v.isVector3 || v.isVector4) v.set(0, 0, 0, 0);
+    else if (v.isQuaternion) v.identity();
+    else if (v.isMatrix3 || v.isMatrix4) v.identity();
+    else if (Array.isArray(v)) for (let i = 0; i < v.length; i++) { if (typeof v[i] === 'number' && !Number.isFinite(v[i])) v[i] = 0; else if (v[i] && typeof v[i] === 'object' && !finV(v[i])) safeV({ value: v[i] }); }
+  };
+  const guard = {
+    stats: { watched: 0, checked: 0, fixed: 0, hidden: 0, frames: 0, last: [] },
+    /** watch obj (and, for a group, its drawable descendants). opts.uniforms: true = all uniforms, [names], default:
+     *  all uniforms of ShaderMaterials, none for built-in materials (whose numeric properties are checked anyway) */
+    watch(obj, opts = {}) {
+      if (!obj || !obj.isObject3D) return obj;
+      if (!guardSet.has(obj)) {
+        guardSet.add(obj);
+        guardSeen.add(obj);
+        const u = opts.uniforms === true || opts.uniforms === '*' ? true : Array.isArray(opts.uniforms) ? opts.uniforms.slice() : null;
+        guardList.push({ obj, uniforms: u });
+        guard.stats.watched = guardList.length;
+      }
+      if (opts.deep !== false && obj.children && obj.children.length) obj.traverse((c) => { if (c !== obj && (c.isMesh || c.isSprite || c.isPoints || c.isLine)) guard.watch(c, { uniforms: opts.uniforms, deep: false }); });
+      return obj;
+    },
+    unwatch(obj) {
+      if (!obj || !guardSet.has(obj)) return;
+      guardSet.delete(obj);
+      const i = guardList.findIndex((e) => e.obj === obj);
+      if (i >= 0) guardList.splice(i, 1);
+      guard.stats.watched = guardList.length;
+    },
+    /** check one object now: returns how many values were repaired (the object is hidden for this frame when > 0) */
+    check(obj, uniforms) {
+      const e = guardList.find((x) => x.obj === obj);
+      return guardCheck(e || { obj, uniforms: uniforms === undefined ? null : uniforms }, false);
+    },
+    /** hide (on) / show (off) every watched object — ladder step 1 of the screen watchdog */
+    quarantine(on) {
+      if (on) {
+        for (const e of guardList) { const o = e.obj; if (o.visible && !o.userData._gq) { o.userData._gq = true; o.visible = false; guardQuarantined.push(o); } }
+      } else {
+        for (const o of guardQuarantined) { if (o.userData._gq) { delete o.userData._gq; o.visible = true; } }
+        guardQuarantined.length = 0;
+      }
+      guard.quarantined = !!on;
+    },
+    quarantined: false,
+    /** enrol the screen-space / FX objects of a scene that nobody registered (sprites, depthTest-less quads,
+     *  frustumCulled-less meshes, transparent ShaderMaterials, FX-like names) */
+    scan(root) {
+      let n = 0;
+      root.traverse((o) => {
+        if (guardSeen.has(o) || !(o.isMesh || o.isSprite || o.isPoints)) return;
+        guardSeen.add(o);
+        const m = Array.isArray(o.material) ? o.material[0] : o.material;
+        if (!m) return;
+        if (o.name === 'pick-proxy' || o.name === 'blocker' || m.visible === false) return;
+        const fxLike = o.isSprite || m.depthTest === false || (o.frustumCulled === false && !o.isInstancedMesh) || (m.isShaderMaterial && m.transparent) || GUARD_NAME_RE.test(o.name || '');
+        if (!fxLike) return;
+        guard.watch(o, { deep: false });
+        n++;
+      });
+      return n;
+    },
+    /** the frame hook: check everything, hide offenders until the draw is done */
+    tick() {
+      guard.stats.frames++;
+      for (let i = 0; i < guardList.length; i++) {
+        const e = guardList[i], o = e.obj;
+        if (!o.visible) continue;
+        if (guardCheck(e, true)) { guardHidden.push(o); o.visible = false; }
+      }
+    },
+    restore() {
+      for (let i = 0; i < guardHidden.length; i++) guardHidden[i].visible = true;
+      guardHidden.length = 0;
+    },
+  };
+  const _gs = [];   // reusable "what" list of the current check
+  function guardCheck(e, count) {
+    const o = e.obj;
+    let bad = 0;
+    _gs.length = 0;
+    if (!finV(o.position)) { o.position.set(0, -9999, 0); bad++; _gs.push('position'); }
+    if (!finV(o.scale)) { o.scale.setScalar(1e-4); bad++; _gs.push('scale'); }
+    if (!finV(o.quaternion)) { o.quaternion.identity(); bad++; _gs.push('quaternion'); }
+    if (o.isSprite && o.material && !Number.isFinite(o.material.rotation)) { o.material.rotation = 0; bad++; _gs.push('rotation'); }
+    const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : null;
+    if (mats) {
+      for (let k = 0; k < mats.length; k++) {
+        const m = mats[k];
+        if (!m) continue;
+        if (!Number.isFinite(m.opacity)) { m.opacity = 0; bad++; _gs.push('opacity'); }
+        if (m.color && !finV(m.color)) { m.color.setRGB(0, 0, 0); bad++; _gs.push('color'); }
+        if (m.emissive && !finV(m.emissive)) { m.emissive.setRGB(0, 0, 0); bad++; _gs.push('emissive'); }
+        if (m.emissiveIntensity !== undefined && !Number.isFinite(m.emissiveIntensity)) { m.emissiveIntensity = 0; bad++; _gs.push('emissiveIntensity'); }
+        const U = m.uniforms;
+        if (U) {
+          const want = e.uniforms === true || (e.uniforms == null && m.isShaderMaterial) ? null : e.uniforms;
+          if (want === null) { for (const key in U) { const u = U[key]; if (u && !finV(u.value)) { safeV(u); bad++; _gs.push('uniform:' + key); } } }
+          else if (Array.isArray(want)) for (let j = 0; j < want.length; j++) { const u = U[want[j]]; if (u && !finV(u.value)) { safeV(u); bad++; _gs.push('uniform:' + want[j]); } }
+        }
+      }
+    }
+    if (count) {
+      guard.stats.checked++;
+      if (bad) {
+        guard.stats.fixed += bad; guard.stats.hidden++;
+        const L = guard.stats.last;
+        L.push({ obj: o.name || o.type, what: _gs.join(','), frame: guard.stats.frames, at: Date.now() });
+        if (L.length > 12) L.shift();
+        if (!o.userData._gWarned) { o.userData._gWarned = true; G.log.warn('ENGINE', `guard: non-finite ${_gs.join(',')} on "${o.name || o.type}" — hidden for the frame and reset`); }
+      }
+    }
+    return bad;
+  }
+  G.gfx.guard = guard;
+
+  // ---------------------------------------------------------------- render guard: screen watchdog (CONTRACT §14.4.2)
+  // Every 2 s the frame that was just shown is copied off the canvas (GPU copy), box-filtered into 96×54 and read
+  // back. The largest axis-aligned block of pure black (every channel < 6) or pure white (> 250) that covers ≥ 5 % of
+  // the area in two probes in a row is an anomaly → quarantine ladder, re-probing after every step:
+  //   1 hide every registered FX / quad (guard.quarantine + G.fx.quarantine) · 2 composer off (plain render) ·
+  //   3 canvas-texture boards off · 4 low preset.  'gpu:anomaly' {step, block} per step; the child sees no toast;
+  //   the developer center shows the state and offers 다시 켜기 (watchdog.reset()).
+  const WD_W = 96, WD_H = 54;
+  const WD_DOWN_FRAG = `
+    uniform sampler2D tDiffuse; uniform vec2 uCell; varying vec2 vUv;
+    void main() {
+      vec3 s = vec3(0.0);
+      for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        vec2 o = ((vec2(float(i), float(j)) + 0.5) / 4.0 - 0.5) * uCell;
+        s += texture2D(tDiffuse, vUv + o).rgb;
+      }
+      gl_FragColor = vec4(s / 16.0, 1.0);
+    }`;
+  /** largest all-true axis-aligned rectangle in a W×H boolean grid (histogram + stack, O(W·H)) */
+  function largestBlock(mask, W, H) {
+    const hgt = new Int32Array(W), stack = new Int32Array(W + 1);
+    let best = { area: 0, x: 0, y: 0, w: 0, h: 0 };
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) hgt[x] = mask[y * W + x] ? hgt[x] + 1 : 0;
+      let top = 0;
+      for (let x = 0; x <= W; x++) {
+        const cur = x < W ? hgt[x] : 0;
+        while (top > 0 && hgt[stack[top - 1]] >= cur) {
+          const h = hgt[stack[--top]];
+          const left = top > 0 ? stack[top - 1] + 1 : 0;
+          const w = x - left;
+          if (h * w > best.area) best = { area: h * w, x: left, y: y - h + 1, w, h };
+        }
+        stack[top++] = x;
+      }
+    }
+    return best;
+  }
+  const watchdog = {
+    W: WD_W, H: WD_H,
+    interval: 2000, minArea: 0.05, blackMax: 6, whiteMin: 250,
+    enabled: true,
+    state: 'idle',          // idle (not in a game) · watching · suspect (1 anomalous probe) · quarantine (ladder step ≥ 1)
+    step: 0,                // ladder step 0..4
+    probes: 0, anomalies: 0, suspect: 0,
+    lastBlock: null, last: null, history: [],
+    nextAt: 0, holdUntil: 0,
+    _rt: null, _tex: null, _mat: null, _quad: null, _buf: null, _inject: null, _boards: null, _prevQuality: null,
+    composerOff: false,
+    /** probes are skipped for `ms` (after login, a quality change, a resize, a hidden tab: transient frames) */
+    hold(ms = 3000) { watchdog.holdUntil = Math.max(watchdog.holdUntil, performance.now() + ms); },
+    /** is a probe due on this frame? */
+    due(now) {
+      if (!watchdog.enabled || !G.ready || !G.state || document.hidden) return false;
+      if (now < watchdog.holdUntil || now < watchdog.nextAt) return false;
+      return true;
+    },
+    /** copy + downsample + read the frame that was just drawn (call right after the final render of a frame) */
+    probeNow() {
+      const E = engine, r = E.renderer;
+      if (!r || E._isLost()) return null;
+      const now = performance.now();
+      watchdog.nextAt = now + watchdog.interval;
+      try {
+        E.render({ force: true, probe: true });   // a fresh frame on the canvas, then the probe below (render calls _probeFrame)
+      } catch (e) { G.log.warn('ENGINE', 'watchdog probe failed', e); return null; }
+      return watchdog.last;
+    },
+    /** test helper: a full-screen black quad in front of the camera (on) / removed (off) */
+    inject(on) {
+      const E = engine;
+      if (!E.scene || !E.camera) return;
+      if (on && !watchdog._inject) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0x000000, depthTest: false, depthWrite: false, toneMapped: false, fog: false }));
+        m.name = 'watchdog-inject'; m.frustumCulled = false; m.renderOrder = 100000;
+        m.userData.noOutline = true;
+        // clip-space quad: covers the whole screen whatever the camera does
+        m.onBeforeRender = function (renderer, scene, camera) { this.matrixWorld.copy(camera.matrixWorld); this.matrixWorld.multiply(_wdM.makeTranslation(0, 0, -0.2)); this.matrixWorld.multiply(_wdS.makeScale(camera.aspect * 0.11 * 1.2, 0.11 * 1.2, 1)); };
+        m.matrixAutoUpdate = false; m.matrixWorldAutoUpdate = false;
+        E.scene.add(m);
+        watchdog._inject = m;
+      } else if (!on && watchdog._inject) {
+        E.scene.remove(watchdog._inject);
+        watchdog._inject.geometry.dispose(); watchdog._inject.material.dispose();
+        watchdog._inject = null;
+      }
+    },
+    /** 다시 켜기: undo every ladder step, start watching again */
+    reset() {
+      const E = engine;
+      if (watchdog.step >= 1) { guard.quarantine(false); try { G.fx?.quarantine?.(false); } catch (e) { /* fx optional */ } }
+      if (watchdog.composerOff) { watchdog.composerOff = false; if (E.renderer) E._setupComposer(); }
+      if (watchdog._boards) { for (const o of watchdog._boards) if (o.userData._gqb) { delete o.userData._gqb; o.visible = true; } watchdog._boards = null; }
+      if (watchdog._prevQuality) { const q = watchdog._prevQuality; watchdog._prevQuality = null; if (E.renderer && E.quality !== q) E.setQuality(q); }
+      watchdog.step = 0; watchdog.suspect = 0; watchdog.lastBlock = null;
+      watchdog.state = G.ready && G.state ? 'watching' : 'idle';
+      watchdog.hold(1500);
+      watchdog.nextAt = 0;
+      G.bus.emit('gpu:anomaly', { step: 0, block: null, reset: true });
+    },
+    _escalate(block) {
+      const E = engine;
+      if (watchdog.step >= 4) return;
+      watchdog.step++;
+      watchdog.state = 'quarantine';
+      watchdog.anomalies++;
+      switch (watchdog.step) {
+        case 1: guard.quarantine(true); try { G.fx?.quarantine?.(true); } catch (e) { /* fx optional */ } break;
+        case 2: watchdog.composerOff = true; E._setupComposer(); break;
+        case 3: {
+          const list = [];
+          E.scene.traverse((o) => {
+            if (!(o.isMesh || o.isSprite) || !o.visible) return;
+            const m = Array.isArray(o.material) ? o.material[0] : o.material;
+            if (!m || !m.map || !m.map.isCanvasTexture) return;
+            if (o.isSprite || (o.geometry && o.geometry.type === 'PlaneGeometry') || /board|sign|banner|card|title|label|hyeonpan|marker/i.test(o.name || '')) { o.userData._gqb = true; o.visible = false; list.push(o); }
+          });
+          watchdog._boards = list;
+          break;
+        }
+        case 4: if (E.quality !== 'low') { watchdog._prevQuality = E.quality; E.setQuality('low'); } break;
+      }
+      const rec = { step: watchdog.step, block, at: Date.now() };
+      watchdog.history.push(rec);
+      if (watchdog.history.length > 20) watchdog.history.shift();
+      G.log.warn('ENGINE', `gpu:anomaly step ${watchdog.step} — ${block.kind} block ${block.w}×${block.h} cells (${(block.frac * 100).toFixed(0)} %) at ${block.x},${block.y}`);
+      G.bus.emit('gpu:anomaly', { step: watchdog.step, block });
+      watchdog.hold(1200);   // the next probe sees the frame after this step took effect
+    },
+    /** analyse one 96×54 RGBA read-back */
+    _analyse(buf) {
+      const W = WD_W, H = WD_H, n = W * H;
+      const black = new Uint8Array(n), white = new Uint8Array(n);
+      let nb = 0, nw = 0;
+      const bm = watchdog.blackMax, wm = watchdog.whiteMin;
+      for (let i = 0; i < n; i++) {
+        const r = buf[i * 4], g = buf[i * 4 + 1], b = buf[i * 4 + 2];
+        if (r < bm && g < bm && b < bm) { black[i] = 1; nb++; }
+        else if (r > wm && g > wm && b > wm) { white[i] = 1; nw++; }
+      }
+      const minCells = Math.ceil(n * watchdog.minArea);
+      const bb = nb >= minCells ? largestBlock(black, W, H) : { area: 0 };
+      const wb = nw >= minCells ? largestBlock(white, W, H) : { area: 0 };
+      const pick = bb.area >= wb.area ? { kind: 'black', ...bb } : { kind: 'white', ...wb };
+      pick.frac = pick.area / n;
+      const res = { at: Date.now(), black: nb / n, white: nw / n, blockBlack: bb.area ? { ...bb, frac: bb.area / n } : null, blockWhite: wb.area ? { ...wb, frac: wb.area / n } : null, block: pick.area ? pick : null, anomaly: pick.area >= minCells };
+      watchdog.last = res;
+      watchdog.probes++;
+      return res;
+    },
+    /** the frame hook: runs right after the final draw of a frame that was due (or forced by probeNow) */
+    _probeFrame() {
+      const E = engine, r = E.renderer, gl = r.getContext();
+      const size = r.getDrawingBufferSize(_wdV2);
+      if (!(size.x > 0 && size.y > 0)) return null;
+      if (!watchdog._rt) {
+        watchdog._rt = new THREE.WebGLRenderTarget(WD_W, WD_H, { depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+        watchdog._mat = new THREE.ShaderMaterial({ name: 'WatchdogDownsample', uniforms: { tDiffuse: { value: null }, uCell: { value: new THREE.Vector2(1 / WD_W, 1 / WD_H) } }, vertexShader: FS_VERT, fragmentShader: WD_DOWN_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
+        watchdog._quad = new THREE.Mesh(fsGeometry(), watchdog._mat);
+        watchdog._quad.frustumCulled = false;
+        watchdog._buf = new Uint8Array(WD_W * WD_H * 4);
+      }
+      if (!watchdog._tex || watchdog._tex.image.width !== size.x || watchdog._tex.image.height !== size.y) {
+        watchdog._tex?.dispose();
+        watchdog._tex = new THREE.FramebufferTexture(size.x, size.y);
+        watchdog._tex.colorSpace = THREE.NoColorSpace;
+      }
+      const prevRT = r.getRenderTarget();
+      try {
+        r.setRenderTarget(null);
+        r.copyFramebufferToTexture(watchdog._tex);
+        watchdog._mat.uniforms.tDiffuse.value = watchdog._tex;
+        r.setRenderTarget(watchdog._rt);
+        r.render(watchdog._quad, fsCam);
+        // three's readRenderTargetPixelsAsync (NPC portraits) keeps a PIXEL_PACK_BUFFER bound while it waits; a sync
+        // read with it bound returns zeros (= a "black" screen): unbind for the read, rebind afterwards
+        const gl2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+        const pack = gl2 ? gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) : null;
+        if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        try { r.readRenderTargetPixels(watchdog._rt, 0, 0, WD_W, WD_H, watchdog._buf); } finally { if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack); }
+      } finally { r.setRenderTarget(prevRT); }
+      const res = watchdog._analyse(watchdog._buf);
+      if (res.anomaly) {
+        watchdog.lastBlock = res.block;
+        watchdog.suspect++;
+        if (watchdog.step >= 1 || watchdog.suspect >= 2) watchdog._escalate(res.block);
+        else watchdog.state = 'suspect';
+      } else {
+        watchdog.suspect = 0;
+        if (watchdog.step === 0) watchdog.state = 'watching';
+      }
+      return res;
+    },
+  };
+  const _wdV2 = new THREE.Vector2(), _wdM = new THREE.Matrix4(), _wdS = new THREE.Matrix4();
+  guard.watchdog = watchdog;
+
   // ---------------------------------------------------------------- grade state
   const GRADE_KEYS = ['exposure', 'contrast', 'saturation', 'warmth', 'vignette', 'flash'];
   const GRADE_NEUTRAL = { exposure: 0.92, contrast: 1, saturation: 1, warmth: 0, vignette: 0.22, flash: 0 };
@@ -455,13 +824,22 @@
       const container = document.getElementById('game-container');
       this.quality = resolveQuality();
       this.preset = PRESETS[this.quality];
-      const renderer = new THREE.WebGLRenderer({
-        // MSAA happens in the composer target when post-processing is on (medium/high); the low preset stays direct
-        antialias: this.preset.antialias && !this._wantsComposer(this.preset),
-        powerPreference: 'high-performance',
-        preserveDrawingBuffer: false,
-        alpha: false,
-      });
+      // §14.4.3: three r170 needs WebGL2. Probe first; a renderer that still throws is the same case. Either way the
+      // scene and camera are built so the world modules initialise, nothing is drawn, and 70-app shows the friendly
+      // 2D-only screen on 'engine:unsupported' — never a black dead world with the HUD over it.
+      let renderer = null, reason = this._probeWebGL2();
+      if (!reason) {
+        try {
+          renderer = new THREE.WebGLRenderer({
+            // MSAA happens in the composer target when post-processing is on (medium/high); the low preset stays direct
+            antialias: this.preset.antialias && !this._wantsComposer(this.preset),
+            powerPreference: 'high-performance',
+            preserveDrawingBuffer: false,
+            alpha: false,
+          });
+        } catch (e) { renderer = null; reason = 'renderer: ' + String((e && e.message) || e).slice(0, 160); }
+      }
+      if (!renderer) { this._initUnsupported(container, reason); return; }
       renderer.setPixelRatio(this._pixelRatio());
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -471,26 +849,20 @@
       renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
       renderer.info.autoReset = false; // one reset per frame in render(): composer frames count every pass
       renderer.domElement.setAttribute('tabindex', '0');
-      renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this._lost = true; G.ui?.toast?.('그래픽 장치가 잠깐 쉬고 있어요. 계속 멈춰 있으면 새로고침해 주세요.', { type: 'warn', duration: 6000 }); });
+      renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this._lost = true; G.ui?.toast?.('그래픽 장치가 잠깐 쉬고 있어요. 계속 멈춰 있으면 새로고침해 주세요.', { type: 'warn', duration: 6000 }); G.bus.emit('engine:context', { lost: true }); });
       renderer.domElement.addEventListener('webglcontextrestored', () => {
         // the environment bake targets belong to the lost context: drop them without dispose() (that would delete
-        // objects of the old context on the new one) and re-bake
+        // objects of the old context on the new one) and re-bake; the watchdog's copy texture / target too
         this._lost = false; this._envRT = null; this._envCam = null; this._envDir = null; this._envDirty = true; this._envTimer = 0;
+        watchdog._tex = null; watchdog._rt = null; watchdog._mat = null; watchdog._quad = null; watchdog.hold(3000);
         G.log.info('ENGINE', 'WebGL context restored');
+        G.bus.emit('engine:context', { lost: false });
       });
       container.appendChild(renderer.domElement);
       this.renderer = renderer;
 
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x9cc7ea);
-      scene.fog = new THREE.FogExp2(0xbcd6e8, 0.0028);
-      this.scene = scene;
-
-      const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 3000);
-      camera.position.set(0, 12, 30);
-      camera.lookAt(0, 0, 0);
-      scene.add(camera); // allows camera-attached children (rain emitters, flare anchor)
-      this.camera = camera;
+      this._initScene();
+      const scene = this.scene, camera = this.camera;
 
       // sky dome (Preetham)
       if (ADDONS.Sky) {
@@ -510,26 +882,7 @@
         this._pmrem = new THREE.PMREMGenerator(renderer);
       }
 
-      // lights
-      const hemi = new THREE.HemisphereLight(0xcfe3ff, 0x5c6b3c, 0.85);
-      scene.add(hemi);
-      this.hemi = hemi;
-      const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
-      sun.castShadow = renderer.shadowMap.enabled;
-      if (sun.castShadow) this._configureShadow(sun);
-      scene.add(sun);
-      scene.add(sun.target);
-      this.sun = sun;
-      const fill = new THREE.DirectionalLight(0xbfd6ff, 0.35); // soft sky bounce from the opposite side
-      fill.position.set(-50, 40, -60);
-      scene.add(fill);
-      this.fill = fill;
-
-      // outline glow root (hulls copy their source's world matrix at render time: no lag, no scene-graph edits)
-      this._outlineRoot = new THREE.Group();
-      this._outlineRoot.name = 'outline-glow';
-      this._outlineRoot.matrixAutoUpdate = false;
-      scene.add(this._outlineRoot);
+      this._initLights(renderer.shadowMap.enabled);
 
       this._setupComposer();
       this.setSun(this.sunElevation, this.sunAzimuth);
@@ -545,10 +898,76 @@
       });
       const fm = document.getElementById('fps-meter');
       if (fm) fm.hidden = !G.settings.showFps;
+      // the screen watchdog waits out transient frames: a login, a tab coming back, the first frames after boot
+      G.bus.on('state:loaded', () => { watchdog.hold(4000); watchdog.state = 'watching'; });
+      G.bus.on('game:ready', () => watchdog.hold(4000));
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) watchdog.hold(2500); });
+      watchdog.hold(4000);
       G.log.info('ENGINE', `three r${THREE.REVISION}, quality=${this.quality}, post=${this.composer ? this.composer.passes.length + ' passes' : 'direct'}`);
     },
 
+    /** null when a WebGL2 context can be made, otherwise the reason ('no-webgl2' | 'no-webgl' | 'webgl1-only') */
+    _probeWebGL2() {
+      try {
+        if (typeof WebGL2RenderingContext === 'undefined') return typeof WebGLRenderingContext === 'undefined' ? 'no-webgl' : 'webgl1-only';
+        const c = document.createElement('canvas');
+        const gl = c.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
+        if (!gl) return c.getContext('webgl') ? 'webgl1-only' : 'no-webgl2';
+        try { gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch (e) { /* probe context: let it go */ }
+        return null;
+      } catch (e) { return 'probe: ' + String((e && e.message) || e).slice(0, 120); }
+    },
+    /** scene + camera (shared by the normal and the unsupported path: world modules build into it either way) */
+    _initScene() {
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x9cc7ea);
+      scene.fog = new THREE.FogExp2(0xbcd6e8, 0.0028);
+      this.scene = scene;
+      const camera = new THREE.PerspectiveCamera(55, window.innerWidth / Math.max(1, window.innerHeight), 0.1, 3000);
+      camera.position.set(0, 12, 30);
+      camera.lookAt(0, 0, 0);
+      scene.add(camera); // allows camera-attached children (rain emitters, flare anchor)
+      this.camera = camera;
+    },
+    _initLights(shadows) {
+      const scene = this.scene;
+      const hemi = new THREE.HemisphereLight(0xcfe3ff, 0x5c6b3c, 0.85);
+      scene.add(hemi);
+      this.hemi = hemi;
+      const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
+      sun.castShadow = !!shadows;
+      if (sun.castShadow) this._configureShadow(sun);
+      scene.add(sun);
+      scene.add(sun.target);
+      this.sun = sun;
+      const fill = new THREE.DirectionalLight(0xbfd6ff, 0.35); // soft sky bounce from the opposite side
+      fill.position.set(-50, 40, -60);
+      scene.add(fill);
+      this.fill = fill;
+      // outline glow root (hulls copy their source's world matrix at render time: no lag, no scene-graph edits)
+      this._outlineRoot = new THREE.Group();
+      this._outlineRoot.name = 'outline-glow';
+      this._outlineRoot.matrixAutoUpdate = false;
+      scene.add(this._outlineRoot);
+    },
+    /** no WebGL2 / renderer failure: a drawless engine. World modules still get a scene and a camera; render() is a
+     *  no-op; the flag + event let 70-app show '이 기기에서는 3D를 열 수 없어요' with the 2D-only mode. */
+    _initUnsupported(container, reason) {
+      this.renderer = null; this.composer = null; this.bloomPass = null; this.atmosPass = null;
+      this.unsupported = reason;
+      G.unsupported = { reason, at: Date.now() };
+      this._initScene();
+      this._initLights(false);
+      this.setSun(this.sunElevation, this.sunAzimuth);
+      if (container) container.classList.add('no-3d');
+      watchdog.enabled = false; watchdog.state = 'idle';
+      window.addEventListener('resize', () => this.resize());
+      G.log.warn('ENGINE', `3D unavailable (${reason}): running without a renderer`);
+      G.bus.emit('engine:unsupported', { reason });
+    },
+
     _wantsComposer(p = this.preset) {
+      if (watchdog.composerOff) return false;   // quarantine ladder step 2: plain render
       return !!ADDONS.EffectComposer && (!!p.grade || (!!p.bloom && G.settings.bloom !== false));
     },
 
@@ -587,7 +1006,7 @@
 
     _setupComposer() {
       this._disposeComposer();
-      if (!this._wantsComposer()) { G.bus.emit('engine:features', { quality: this.quality }); return; }
+      if (!this.renderer || !this._wantsComposer()) { G.bus.emit('engine:features', { quality: this.quality }); return; }
       try {
         const r = this.renderer;
         const size = r.getDrawingBufferSize(new THREE.Vector2());
@@ -623,6 +1042,7 @@
 
     setShadows(on) {
       on = !!on && !!this.preset.shadows;
+      if (!this.renderer) return;
       this.renderer.shadowMap.enabled = on;
       this.sun.castShadow = on;
       if (on) this._configureShadow(this.sun);
@@ -634,11 +1054,13 @@
       const prevDensity = this.preset.treeDensity;
       this.quality = name;
       this.preset = PRESETS[name];
+      if (!this.renderer) { G.bus.emit('engine:quality', { quality: name, preset: this.preset, reloadSuggested: false }); return; }
       this.renderer.setPixelRatio(this._pixelRatio());
       this.renderer.shadowMap.type = name === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
       this.setShadows(G.settings.shadows !== false);
       this._setupComposer();
       this.resize();
+      watchdog.hold(3000);
       G.bus.emit('engine:quality', { quality: name, preset: this.preset, reloadSuggested: prevDensity !== this.preset.treeDensity });
     },
 
@@ -808,7 +1230,8 @@
     /** the GL context is gone (the 'webglcontextlost' event arrives asynchronously, after the loss itself) */
     _isLost() {
       if (this._lost) return true;
-      try { return !!this.renderer?.getContext?.()?.isContextLost?.(); } catch (e) { return true; }
+      if (!this.renderer) return false;
+      try { return !!this.renderer.getContext?.()?.isContextLost?.(); } catch (e) { return true; }
     },
 
     /** add an object to the environment-bake scene (e.g. weather cloud overlay) */
@@ -921,14 +1344,15 @@
       else if (mq.addListener) { const once = () => { mq.removeListener(once); changed(); }; mq.addListener(once); }
     },
     resize() {
-      const w = window.innerWidth, h = window.innerHeight;
+      const w = window.innerWidth, h = Math.max(1, window.innerHeight);
       const pr = this._pixelRatio();
+      if (this.camera) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
+      if (!this.renderer) return;
       if (pr !== this.renderer.getPixelRatio()) this.renderer.setPixelRatio(pr);
       this.renderer.setSize(w, h);
-      this.camera.aspect = w / h;
-      this.camera.updateProjectionMatrix();
       if (this.composer) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); }
       if (this.bloomPass) this.bloomPass.resolution.set(w / 2, h / 2);
+      watchdog.hold(2000);
       for (const fn of this._resizeFns) { try { fn(w, h, pr); } catch (e) { G.log.error('ENGINE', e); } }
     },
     /** fn(cssWidth, cssHeight, pixelRatio) after every resize / pixel-ratio / quality change */
@@ -1008,7 +1432,7 @@
     update(dt) {
       // repair normals of geometries added since the last scan (crops regrowing, decorations, effects) ~every 1.5 s
       this._normScan = (this._normScan ?? 9) + dt; // first frame scans immediately
-      if (this._normScan > 1.5 && this.scene) { this._normScan = 0; scanSceneNormals(this.scene); }
+      if (this._normScan > 1.5 && this.scene) { this._normScan = 0; scanSceneNormals(this.scene); guard.scan(this.scene); }
       // shadow camera + sun follow the focus point (player)
       const f = this.focus;
       if (this.sun && Number.isFinite(f.x) && Number.isFinite(f.z)) {
@@ -1050,8 +1474,9 @@
 
     /** draw one frame. opts.force: never thinned out (a photo reads the frame right after) — the loop passes dt */
     render(opts) {
-      // also between the real loss and its (asynchronous) event: a first-use program would throw inside three
-      if (this._isLost()) return;
+      // no renderer (WebGL2 unavailable, §14.4.3) draws nothing; also between a real context loss and its
+      // (asynchronous) event: a first-use program would throw inside three
+      if (!this.renderer || this._isLost()) return;
       // The opaque developer center hides the world (render ~1/6); a large blocking modal covers most of it (~1/3).
       const cover = opts?.force ? 1 : document.body.classList.contains('dc-open') ? 6
         : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3 : 1;
@@ -1062,10 +1487,18 @@
       const info = this.renderer.info;
       info.reset();
       if (this.atmosPass) { this.camera.updateMatrixWorld(); this._updateSunScreen(); } // this frame's camera: no glow lag
-      if (this.composer) this.composer.render();
-      else this.renderer.render(this.scene, this.camera);
+      guard.tick();   // §14.4.1: a non-finite opacity / scale / uniform never reaches the GPU
+      try {
+        if (this.composer) this.composer.render();
+        else this.renderer.render(this.scene, this.camera);
+      } finally { guard.restore(); }
       this.frameInfo.calls = info.render.calls;
       this.frameInfo.triangles = info.render.triangles;
+      // §14.4.2: every 2 s the shown frame is read back at 96×54 and searched for a black / white block
+      if (opts?.probe || watchdog.due(performance.now())) {
+        watchdog.nextAt = performance.now() + watchdog.interval;
+        try { watchdog._probeFrame(); } catch (e) { watchdog.enabled = false; G.log.warn('ENGINE', 'screen watchdog disabled (probe failed)', e?.message || e); }
+      }
     },
 
     /** raycast from screen coords against objects */

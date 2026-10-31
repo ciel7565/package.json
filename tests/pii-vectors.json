@@ -37,7 +37,11 @@
     "bad . com",
     "해바라기 초등학교",
     "해바라기초등학교",
-    "3학년 2반"
+    "3학년 2반",
+    "@my_secret_friend",
+    "트위터 @cool_kid_77",
+    "스냅 dinokid2026",
+    "@dinokid77"
   ],
   "partial": [
     "메일 kid.dino@gmail.com 로 줘",
@@ -47,7 +51,11 @@
     "전화 +82 10 1234 5678, 메일 kid.dino@gmail.com",
     "카톡 아이디 dino123 친추해",
     "인스타 @dino_kid 놀러와",
-    "우리집 서울시 강남구 역삼동 123-4 야"
+    "우리집 서울시 강남구 역삼동 123-4 야",
+    "@my_secret_friend 여기로 와",
+    "인스타 @dino_kid_play 놀러와",
+    "나 인스타 @abc_def 야",
+    "로블록스 유저 dinokid_play 찾아"
   ],
   "keep": [
     "오늘 콩 3개 심었어요!",
@@ -371,7 +379,10 @@
     "1000 2000 3000 4000",
     "minecraft 네이버 검색해봐",
     "pokemon 네이버 웹툰 봤어",
-    "roblox 네이버 지도에 나와"
+    "roblox 네이버 지도에 나와",
+    "@민준 같이 놀자",
+    "@sunny 안녕",
+    "우리 @ 같이 놀자"
   ],
   "leak": [
     {
@@ -2391,6 +2402,53 @@
       "t": "dinokid 네이버 메일로 보내",
       "secrets": [
         "dinokid"
+      ]
+    },
+    {
+      "id": "at-handle-underscore-tail",
+      "t": "인스타 @dino_kid_play 놀러와",
+      "secrets": [
+        "dino",
+        "kidplay"
+      ]
+    },
+    {
+      "id": "at-handle-bare",
+      "t": "@my_secret_friend 여기로 와",
+      "secrets": [
+        "secretfriend",
+        "my_secret"
+      ]
+    },
+    {
+      "id": "at-handle-twitter-tail",
+      "t": "트위터 @cool_kid_77",
+      "secrets": [
+        "cool",
+        "kid77"
+      ]
+    },
+    {
+      "id": "at-handle-particle",
+      "t": "나 인스타 @abc_def 야",
+      "secrets": [
+        "abc",
+        "def"
+      ]
+    },
+    {
+      "id": "snap-plain-id",
+      "t": "스냅 dinokid2026",
+      "secrets": [
+        "dinokid2026"
+      ]
+    },
+    {
+      "id": "platform-user-id",
+      "t": "로블록스 유저 dinokid_play 찾아",
+      "secrets": [
+        "dinokid",
+        "kidplay"
       ]
     }
   ],

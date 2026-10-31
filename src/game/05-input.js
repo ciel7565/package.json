@@ -34,6 +34,19 @@
   const dpad = { x: 0, y: 0 };
   let mobileRun = false;
   let wasMoving = false;
+  // a finger resting on the joystick / a held d-pad button sends no DOM events, yet the child keeps walking: every
+  // HOLD_NOTE_MS the held control re-tells the play counters (03-state playTime, 08-easy healthy play) that there is
+  // input — a synthetic pointermove with a button down, exactly what a steering finger produces (R3 seams-lost-9)
+  const HOLD_NOTE_MS = 20000;
+  const hold = { el: null, id: 0, x: 0, y: 0, last: 0, notes: 0 };
+  function noteHold() {
+    hold.notes++;
+    try { G.save?.noteInput?.(); } catch (e) { /* counters optional */ }
+    const el = hold.el;
+    if (!el) return;
+    try { el.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: hold.id, pointerType: 'touch', buttons: 1, clientX: hold.x, clientY: hold.y })); }
+    catch (e) { try { el.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, buttons: 1, clientX: hold.x, clientY: hold.y })); } catch (e2) { /* very old engine */ } }
+  }
 
   const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
   const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
@@ -148,8 +161,14 @@
       const moving = len > 0.05;
       if (moving && !wasMoving) G.bus.emit('input:move-start');
       wasMoving = moving;
+      if (hold.el && (joy.active || dpad.x || dpad.y)) {
+        const now = performance.now();
+        if (now - hold.last >= HOLD_NOTE_MS) { hold.last = now; noteHold(); }
+      }
       return input.axis;
     },
+    /** test seam: the held on-screen control and how often it re-told the play counters */
+    holdInfo() { return { held: !!hold.el, notes: hold.notes, sinceMs: hold.el ? performance.now() - hold.last : 0 }; },
   };
   G.input = input;
   // every profile starts with clean input: no held keys, no 달리기 toggle left on by the previous child
@@ -161,12 +180,14 @@
   const ACTIVATE_SEL = 'button, [role="button"], [role="option"], [role="tab"], [role="switch"], [role="menuitem"], [role="radio"], [role="checkbox"], a[href], summary, input[type="checkbox"], input[type="radio"]';
   const ARROW_SEL = 'input, select, textarea, [role="slider"], [role="radio"], [role="tab"], [role="option"], [role="listbox"], [role="menuitem"], [role="spinbutton"], [contenteditable]';
   const FOCUSABLE_SEL = 'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
-  /** keep Tab inside the top-most open window (aria-modal dialog); 70-app traps the title / coach cards itself */
+  /** keep Tab inside the top-most open window (aria-modal dialog); 70-app traps the title / coach cards itself.
+   *  Only elements in the tab order count (tabIndex >= 0): a roving tile with tabindex="-1" is reached with the arrows,
+   *  never with Tab — taking it as `last` let Tab leave the dialog and Shift+Tab land on it (R3 ui-3) */
   function trapDialogTab(e) {
     const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].filter((d) => !d.inert && !d.closest('[hidden], [inert]') && d.getClientRects().length);
     const top = dialogs[dialogs.length - 1];
     if (!top) return;
-    const items = [...top.querySelectorAll(FOCUSABLE_SEL)].filter((el) => !el.closest('[hidden], [inert]') && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    const items = [...top.querySelectorAll(FOCUSABLE_SEL)].filter((el) => el.tabIndex >= 0 && !el.closest('[hidden], [inert]') && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
     if (!items.length) { e.preventDefault(); return; }
     const first = items[0], last = items[items.length - 1], a = document.activeElement;
     if (!top.contains(a)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
@@ -296,6 +317,7 @@
       e.preventDefault();
       shieldPress();
       const dir = b.dataset.dir;
+      if (dir !== 'center') { hold.el = pad; hold.id = e.pointerId; hold.x = e.clientX; hold.y = e.clientY; hold.last = performance.now(); }
       if (dir === 'center') {
         centre = { id: e.pointerId, el: b };
         b.classList.add('pressed');
@@ -313,7 +335,7 @@
         if (e.type === 'pointerup' && overEl(c.el, e)) { shieldPress(); G.bus.emit('input:interact', { source: 'dpad' }); }
         return;
       }
-      if (active.has(e.pointerId)) { active.delete(e.pointerId); pad.querySelectorAll('.pressed').forEach((x) => x.classList.remove('pressed')); recompute(); }
+      if (active.has(e.pointerId)) { active.delete(e.pointerId); pad.querySelectorAll('.pressed').forEach((x) => x.classList.remove('pressed')); recompute(); if (!active.size && hold.el === pad) hold.el = null; }
     };
     pad.addEventListener('pointerup', up);
     pad.addEventListener('pointercancel', up);
@@ -350,9 +372,10 @@
       cx = r.left + r.width / 2; cy = r.top + r.height / 2; R = r.width * 0.36;
       try { stick.setPointerCapture(id); } catch (err) { /* ignore */ }
       set(e.clientX, e.clientY);
+      hold.el = stick; hold.id = id; hold.x = e.clientX; hold.y = e.clientY; hold.last = performance.now();
     });
-    stick.addEventListener('pointermove', (e) => { if (e.pointerId === id) set(e.clientX, e.clientY); });
-    const end = (e) => { if (e.pointerId !== id) return; id = null; joy.x = joy.y = 0; joy.active = false; knob.style.transform = ''; };
+    stick.addEventListener('pointermove', (e) => { if (e.pointerId === id) { set(e.clientX, e.clientY); if (e.isTrusted) { hold.x = e.clientX; hold.y = e.clientY; } } });
+    const end = (e) => { if (e.pointerId !== id) return; id = null; joy.x = joy.y = 0; joy.active = false; knob.style.transform = ''; if (hold.el === stick) hold.el = null; };
     stick.addEventListener('pointerup', end);
     stick.addEventListener('pointercancel', end);
 

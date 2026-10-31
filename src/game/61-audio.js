@@ -38,13 +38,13 @@
   // fanfares at full volume stays below -2 dBFS thanks to the limiter + soft clip)
   const BASE = { music: 2.5, sfx: 1.7, ambient: 2.3 };
   const THROTTLE = {                // minimum seconds between two plays of the same sfx
-    click: 0.045, open: 0.08, close: 0.08, notify: 0.12, error: 0.2, coin: 0.06, step: 0.07, land: 0.12, jump: 0.1,
+    click: 0.045, open: 0.08, close: 0.08, notify: 0.12, error: 0.2, coin: 0.06, step: 0.07, land: 0.12, jump: 0.1, jump2: 0.12,
     chat: 0.09, emote: 0.15, page: 0.07, water: 0.25, harvest: 0.15, plant: 0.15, jar: 0.15, bubble: 0.03, drip: 0.02,
     reward: 0.3, quest: 0.4, levelup: 0.8, achievement: 0.5, correct: 0.25, wrong: 0.25, teleport: 0.4, shutter: 0.12,
     tap: 0.06, oops: 0.3, sparkle: 0.3, stamp: 0.2,
   };
   const FANFARE = { levelup: 2.6, achievement: 2.0, quest: 1.6, reward: 1.4 }; // duck the music under these (s)
-  const WET = { notify: 0.5, coin: 0.4, reward: 0.7, quest: 0.7, levelup: 0.8, achievement: 0.8, correct: 0.5, emote: 0.3, teleport: 0.8, open: 0.25, craft: 0.4, jar: 0.35, tap: 0.15, sparkle: 0.7, stamp: 0.4, oops: 0.2 };
+  const WET = { notify: 0.5, coin: 0.4, reward: 0.7, quest: 0.7, levelup: 0.8, achievement: 0.8, correct: 0.5, emote: 0.3, teleport: 0.8, open: 0.25, craft: 0.4, jar: 0.35, tap: 0.15, sparkle: 0.7, stamp: 0.4, oops: 0.2, jump2: 0.35 };
   // 쉬운 모드 (CONTRACT §12): buzzers become a gentle "uh-oh", clicks a soft bloop; big fanfares a little softer
   const EASY_SWAP = { click: 'tap', error: 'oops', wrong: 'oops' };
   const EASY_GAIN = { levelup: 0.8, achievement: 0.85, reward: 0.9, quest: 0.9, teleport: 0.85, shutter: 0.75, splash: 0.85, land: 0.85 };
@@ -305,6 +305,12 @@
     jump(S, t) {
       noise(S, { kind: 'pink', ft: 'bandpass', f: 480, f2: 1450, sweep: 0.16, q: 0.8, t, a: 0.02, d: 0.18, g: 0.17 });
       return tone(S, { type: 'sine', f: 260, f2: 430, glide: 0.09, t, a: 0.006, d: 0.1, g: 0.06 });
+    },
+    /** double jump (CONTRACT §14.2): the jump whoosh plus a short rising two-note chime — same synth, no new asset */
+    jump2(S, t) {
+      noise(S, { kind: 'pink', ft: 'bandpass', f: 620, f2: 1900, sweep: 0.14, q: 0.9, t, a: 0.012, d: 0.16, g: 0.13 });
+      tone(S, { type: 'sine', f: 523, f2: 784, glide: 0.07, t, a: 0.004, d: 0.12, g: 0.07, wet: 0.35 });
+      return bell(S, 1318.5, t + 0.07, 0.03, 0.42, { wet: 0.4 });
     },
     splash(S, t) {
       const end = noise(S, { kind: 'white', ft: 'bandpass', f: 1500, f2: 600, sweep: 0.3, q: 0.7, t, a: 0.003, d: 0.38, g: 0.2 });

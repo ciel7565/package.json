@@ -1,7 +1,8 @@
 <?php
 /**
- * Core helpers: Config, Clock, Log, ApiException, Http (request facts + security headers).
+ * Core helpers: Config, Clock, Log, ApiException, Json, Cookie, Http (request facts + security headers).
  * Every file in lib/ refuses to run unless included through lib/bootstrap.php.
+ * PHP 7.2 syntax only (CONTRACT §14.5).
  */
 declare(strict_types=1);
 
@@ -12,14 +13,22 @@ if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
 /** An error that becomes a JSON error response {success:false, error:{code,message}, data?}. */
 final class ApiException extends \RuntimeException
 {
-    public function __construct(
-        public readonly int $status,
-        public readonly string $errorCode,
-        string $message,
-        public readonly mixed $data = null,
-        public readonly array $headers = [],
-    ) {
+    /** @var int */
+    public $status;
+    /** @var string */
+    public $errorCode;
+    /** @var mixed */
+    public $data;
+    /** @var string[] */
+    public $headers;
+
+    public function __construct(int $status, string $errorCode, string $message, $data = null, array $headers = [])
+    {
         parent::__construct($message, $status);
+        $this->status = $status;
+        $this->errorCode = $errorCode;
+        $this->data = $data;
+        $this->headers = $headers;
     }
 }
 
@@ -28,14 +37,85 @@ final class Clock
     /** server time in milliseconds (the client syncs G.time to this) */
     public static function ms(): int { return (int) floor(microtime(true) * 1000); }
     /** calendar day in the configured time zone, e.g. 2026-10-10 */
-    public static function day(?int $ms = null): string { return date('Y-m-d', intdiv($ms ?? self::ms(), 1000)); }
-    public static function startOfDayMs(): int { return strtotime('today') * 1000; }
+    public static function day(?int $ms = null): string { return date('Y-m-d', intdiv($ms === null ? self::ms() : $ms, 1000)); }
+    public static function startOfDayMs(): int { return (int) strtotime('today') * 1000; }
+}
+
+/**
+ * json_encode / json_decode with json_last_error() checks (JSON_THROW_ON_ERROR / JsonException are PHP 7.3+).
+ * decode() / encode() throw \UnexpectedValueException on failure; tryDecode() returns null instead.
+ */
+final class Json
+{
+    public static function decode(string $json, bool $assoc = true, int $depth = 512, int $flags = 0)
+    {
+        $v = json_decode($json, $assoc, max(1, $depth), $flags);
+        if (json_last_error() !== JSON_ERROR_NONE) throw new \UnexpectedValueException('invalid JSON: ' . json_last_error_msg());
+        return $v;
+    }
+
+    /** null when the text is not valid JSON (a valid "null" also yields null) */
+    public static function tryDecode(string $json, bool $assoc = true, int $depth = 512, int $flags = 0)
+    {
+        $v = json_decode($json, $assoc, max(1, $depth), $flags);
+        return json_last_error() === JSON_ERROR_NONE ? $v : null;
+    }
+
+    public static function encode($value, int $flags = 0, int $depth = 512): string
+    {
+        $s = json_encode($value, $flags, max(1, $depth));
+        if ($s === false || json_last_error() !== JSON_ERROR_NONE) {
+            // with JSON_PARTIAL_OUTPUT_ON_ERROR json_encode still returns a (partial) string: keep it
+            if (is_string($s) && ($flags & JSON_PARTIAL_OUTPUT_ON_ERROR)) return $s;
+            throw new \UnexpectedValueException('json encode failed: ' . json_last_error_msg());
+        }
+        return $s;
+    }
+}
+
+/**
+ * Cookies with SameSite on every PHP version. setcookie() / session_set_cookie_params() learnt the options array
+ * (and SameSite) only in PHP 7.3: on 7.2 the session cookie gets its attribute through the path parameter (the
+ * session module copies it verbatim into Set-Cookie) and other cookies are written as a raw Set-Cookie header.
+ */
+final class Cookie
+{
+    /** parameters for the session cookie — call before session_start() */
+    public static function session(string $path, bool $secure): void
+    {
+        if (PHP_VERSION_ID >= 70300) {
+            session_set_cookie_params(['lifetime' => 0, 'path' => $path, 'domain' => '', 'secure' => $secure, 'httponly' => true, 'samesite' => 'Lax']);
+            return;
+        }
+        session_set_cookie_params(0, $path . '; SameSite=Lax', '', $secure, true);
+    }
+
+    /**
+     * Set-Cookie header by hand. $expires: unix seconds (> 0 persistent, 0 = session cookie, < 0 = delete).
+     * The value is sent raw when it is cookie-safe (session ids are), percent-encoded otherwise (PHP decodes $_COOKIE).
+     */
+    public static function set(string $name, string $value, int $expires, string $path, bool $secure, bool $httpOnly = true, string $sameSite = 'Lax'): void
+    {
+        if (headers_sent()) return;
+        if (!preg_match('/^[A-Za-z0-9!#$%&\'*+.^_`|~-]+$/', $name)) throw new \InvalidArgumentException('cookie name');
+        $v = preg_match('/^[A-Za-z0-9,_.-]*$/', $value) ? $value : rawurlencode($value);
+        $h = $name . '=' . $v;
+        if ($expires > 0) $h .= '; expires=' . gmdate('D, d-M-Y H:i:s', $expires) . ' GMT; Max-Age=' . max(0, $expires - time());
+        elseif ($expires < 0) $h .= '; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0';
+        if ($path !== '') $h .= '; path=' . str_replace([';', ',', ' ', "\r", "\n"], '', $path);
+        if ($secure) $h .= '; secure';
+        if ($httpOnly) $h .= '; HttpOnly';
+        if ($sameSite !== '') $h .= '; SameSite=' . $sameSite;
+        header('Set-Cookie: ' . $h, false);
+    }
 }
 
 final class Config
 {
-    private static ?array $cfg = null;
-    private static ?array $secret = null;
+    /** @var array|null */
+    private static $cfg = null;
+    /** @var array|null */
+    private static $secret = null;
 
     public static function all(): array
     {
@@ -46,13 +126,16 @@ final class Config
                 $over = require $local;
                 if (is_array($over)) $base = self::merge($base, $over);
             }
-            self::$cfg = $base;
+            self::$cfg = is_array($base) ? $base : [];
         }
         return self::$cfg;
     }
 
+    /** forget the cached configuration (the installer wrote config.local.php) */
+    public static function reset(): void { self::$cfg = null; }
+
     /** dotted lookup: Config::get('chat.max_length', 120) */
-    public static function get(string $path, mixed $default = null): mixed
+    public static function get(string $path, $default = null)
     {
         $v = self::all();
         foreach (explode('.', $path) as $k) {
@@ -66,7 +149,7 @@ final class Config
     private static function merge(array $a, array $b): array
     {
         foreach ($b as $k => $v) {
-            if (is_array($v) && isset($a[$k]) && is_array($a[$k]) && !array_is_list($v) && !array_is_list($a[$k])) $a[$k] = self::merge($a[$k], $v);
+            if (is_array($v) && isset($a[$k]) && is_array($a[$k]) && !Arr::isList($v) && !Arr::isList($a[$k])) $a[$k] = self::merge($a[$k], $v);
             else $a[$k] = $v;
         }
         return $a;
@@ -77,7 +160,7 @@ final class Config
         static $dir = null;
         if ($dir !== null) return $dir;
         $d = (string) self::get('paths.data', '');
-        $d = $d !== '' ? rtrim($d, '/\\') : TFM_ROOT . '/data';
+        $d = $d !== '' ? rtrim($d, '/\\') : TFM_ROOT . DIRECTORY_SEPARATOR . 'data';
         self::ensureDir($d, true);
         return $dir = $d;
     }
@@ -87,7 +170,7 @@ final class Config
         static $dir = null;
         if ($dir !== null) return $dir;
         $d = (string) self::get('paths.uploads', '');
-        $d = $d !== '' ? rtrim($d, '/\\') : TFM_ROOT . '/uploads';
+        $d = $d !== '' ? rtrim($d, '/\\') : TFM_ROOT . DIRECTORY_SEPARATOR . 'uploads';
         self::ensureDir($d, false);
         return $dir = $d;
     }
@@ -99,9 +182,9 @@ final class Config
             throw new \RuntimeException('cannot create directory');
         }
         if ($private) {
-            $ht = $dir . '/.htaccess';
+            $ht = $dir . DIRECTORY_SEPARATOR . '.htaccess';
             if (!is_file($ht)) @file_put_contents($ht, "# deny all web access\n<IfModule mod_authz_core.c>\n  Require all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n  Order allow,deny\n  Deny from all\n</IfModule>\n");
-            $ix = $dir . '/index.php';
+            $ix = $dir . DIRECTORY_SEPARATOR . 'index.php';
             if (!is_file($ix)) @file_put_contents($ix, "<?php http_response_code(404); exit;\n");
         }
     }
@@ -115,9 +198,9 @@ final class Config
     public static function secret(string $key): string
     {
         if (self::$secret === null) {
-            $file = self::dataDir() . '/secret.php';
+            $file = self::dataDir() . DIRECTORY_SEPARATOR . 'secret.php';
             if (!is_file($file)) {
-                $lock = fopen(self::dataDir() . '/.init.lock', 'c');
+                $lock = fopen(self::dataDir() . DIRECTORY_SEPARATOR . '.init.lock', 'c');
                 if ($lock) flock($lock, LOCK_EX);
                 try {
                     clearstatcache(true, $file);
@@ -142,7 +225,7 @@ final class Config
             $s = require $file;
             self::$secret = is_array($s) ? $s : [];
         }
-        $v = self::$secret[$key] ?? '';
+        $v = isset(self::$secret[$key]) ? self::$secret[$key] : '';
         if (!is_string($v) || $v === '') throw new \RuntimeException("secret '$key' missing");
         return $v;
     }
@@ -151,11 +234,13 @@ final class Config
 final class Log
 {
     private const LEVELS = ['debug' => 10, 'info' => 20, 'warn' => 30, 'error' => 40, 'security' => 35];
-    private static ?string $requestId = null;
+    /** @var string|null */
+    private static $requestId = null;
 
     public static function requestId(): string
     {
-        return self::$requestId ??= bin2hex(random_bytes(6));
+        if (self::$requestId === null) self::$requestId = bin2hex(random_bytes(6));
+        return self::$requestId;
     }
 
     public static function debug(string $cat, string $msg, array $ctx = []): void { self::write('debug', $cat, $msg, $ctx); }
@@ -166,26 +251,27 @@ final class Log
 
     public static function dir(): string
     {
-        $d = Config::dataDir() . '/logs';
+        $d = Config::dataDir() . DIRECTORY_SEPARATOR . 'logs';
         if (!is_dir($d)) Config::ensureDir($d, true);
         return $d;
     }
 
     /**
      * One JSON object per line in data/logs/app-YYYY-MM-DD.log.php. The file starts with a PHP exit guard, so
-     * a misconfigured server that exposes data/ still cannot show it. Never logs passwords or tokens.
+     * a misconfigured server that exposes data/ still cannot show it. Never logs passwords, tokens or payment keys.
      */
     public static function write(string $level, string $cat, string $msg, array $ctx = []): void
     {
         try {
-            $min = self::LEVELS[strtolower((string) Config::get('logs.level', 'info'))] ?? 20;
-            if ((self::LEVELS[$level] ?? 20) < $min) return;
+            $lvl = strtolower((string) Config::get('logs.level', 'info'));
+            $min = isset(self::LEVELS[$lvl]) ? self::LEVELS[$lvl] : 20;
+            if ((isset(self::LEVELS[$level]) ? self::LEVELS[$level] : 20) < $min) return;
             $dir = self::dir();
-            $file = $dir . '/app-' . date('Y-m-d') . '.log.php';
+            $file = $dir . DIRECTORY_SEPARATOR . 'app-' . date('Y-m-d') . '.log.php';
             $max = (int) Config::get('logs.max_file_bytes', 5242880);
             clearstatcache(true, $file);
             if (is_file($file) && filesize($file) > $max) {
-                for ($i = 1; $i < 100 && is_file($rot = $dir . '/app-' . date('Y-m-d') . ".$i.log.php"); $i++);
+                for ($i = 1; $i < 100 && is_file($rot = $dir . DIRECTORY_SEPARATOR . 'app-' . date('Y-m-d') . ".$i.log.php"); $i++);
                 @rename($file, $rot);
             }
             $line = json_encode([
@@ -197,6 +283,7 @@ final class Log
                 'ip'  => Http::clientIp(),
                 'ctx' => $ctx ?: null,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+            if (!is_string($line)) $line = '{"lvl":"' . $level . '","msg":"(unencodable log line)"}';
             $new = !is_file($file);
             $fh = @fopen($file, 'ab');
             if (!$fh) { @error_log('[tfm] ' . $level . ' ' . $cat . ': ' . $msg . ' (data/logs not writable)'); return; }
@@ -219,7 +306,7 @@ final class Log
         $days = max(1, (int) Config::get('logs.retention_days', 14));
         $limit = time() - $days * 86400;
         $n = 0;
-        foreach (glob(self::dir() . '/app-*.log.php') ?: [] as $f) {
+        foreach (glob(self::dir() . DIRECTORY_SEPARATOR . 'app-*.log.php') ?: [] as $f) {
             if (@filemtime($f) < $limit && @unlink($f)) $n++;
         }
         return $n;
@@ -228,17 +315,18 @@ final class Log
 
 final class Http
 {
-    private static ?string $ip = null;
+    /** @var string|null */
+    private static $ip = null;
 
-    public static function method(): string { return strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')); }
+    public static function method(): string { return strtoupper((string) (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET')); }
 
     /** HTTPS directly, or through a configured trusted proxy */
     public static function isHttps(): bool
     {
         if (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off') return true;
-        if ((string) ($_SERVER['SERVER_PORT'] ?? '') === '443') return true;
+        if ((string) (isset($_SERVER['SERVER_PORT']) ? $_SERVER['SERVER_PORT'] : '') === '443') return true;
         if (self::fromTrustedProxy()) {
-            $p = strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+            $p = strtolower((string) (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ''));
             if ($p === 'https') return true;
         }
         return false;
@@ -246,7 +334,7 @@ final class Http
 
     private static function fromTrustedProxy(): bool
     {
-        $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        $remote = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
         $trusted = (array) Config::get('security.trusted_proxies', []);
         return $remote !== '' && in_array($remote, $trusted, true);
     }
@@ -255,7 +343,7 @@ final class Http
     public static function clientIp(): string
     {
         if (self::$ip !== null) return self::$ip;
-        $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        $ip = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
         if (PHP_SAPI === 'cli' && $ip === '') $ip = 'cli';
         try {
             if (self::fromTrustedProxy() && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
@@ -265,7 +353,7 @@ final class Http
                     if (filter_var($hop, FILTER_VALIDATE_IP) && !in_array($hop, $trusted, true)) { $ip = $hop; break; }
                 }
             }
-        } catch (\Throwable) { /* config not ready */ }
+        } catch (\Throwable $e) { /* config not ready */ }
         if ($ip !== 'cli' && !filter_var($ip, FILTER_VALIDATE_IP)) $ip = '0.0.0.0';
         return self::$ip = $ip;
     }
@@ -278,15 +366,15 @@ final class Http
      */
     public static function isLocalhost(): bool
     {
-        $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        $ip = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
         if (!in_array($ip, ['127.0.0.1', '::1', '::ffff:127.0.0.1'], true)) return false;
-        try { if (self::fromTrustedProxy()) return false; } catch (\Throwable) { return false; }
+        try { if (self::fromTrustedProxy()) return false; } catch (\Throwable $e) { return false; }
         foreach (['HTTP_X_FORWARDED_FOR', 'HTTP_FORWARDED', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_HOST', 'HTTP_X_FORWARDED_PROTO',
                   'HTTP_X_FORWARDED_SERVER', 'HTTP_VIA', 'HTTP_CF_CONNECTING_IP', 'HTTP_CF_RAY', 'HTTP_TRUE_CLIENT_IP',
                   'HTTP_X_CLIENT_IP', 'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FASTLY_CLIENT_IP', 'HTTP_X_ORIGINAL_FORWARDED_FOR'] as $h) {
             if (isset($_SERVER[$h]) && trim((string) $_SERVER[$h]) !== '') return false;
         }
-        $host = strtolower(trim((string) ($_SERVER['HTTP_HOST'] ?? '')));
+        $host = strtolower(trim((string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '')));
         if (!preg_match('/^(?:\[::1\]|(?:[a-z0-9-]+\.)*localhost|127(?:\.\d{1,3}){3})(?::\d{1,5})?$/', $host)) return false;
         return true;
     }
@@ -294,22 +382,24 @@ final class Http
     /**
      * URL path of the installation root (the folder that holds index.html), e.g. "/metaverse/".
      * Derived from SCRIPT_NAME minus the script's path relative to TFM_ROOT — never from the Host header.
+     * Windows safe: both paths are normalised to forward slashes and compared without case.
      */
     public static function basePath(): string
     {
         static $base = null;
         if ($base !== null) return $base;
-        $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? '/'));
+        $script = str_replace('\\', '/', (string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/'));
         // both paths below are resolved by PHP itself (no web-server formatting differences, e.g. drive-letter case)
-        $entry = str_replace('\\', '/', (string) (get_included_files()[0] ?? ''));
+        $included = get_included_files();
+        $entry = str_replace('\\', '/', (string) (isset($included[0]) ? $included[0] : ''));
         $root = str_replace('\\', '/', (string) TFM_ROOT);
         $ci = PHP_OS_FAMILY === 'Windows';
-        $inRoot = $entry !== '' && ($ci ? stripos($entry, $root . '/') === 0 : str_starts_with($entry, $root . '/'));
-        $rel = $inRoot ? substr($entry, strlen($root)) : '';
-        $tail = $rel !== '' ? substr($script, -strlen($rel)) : '';
+        $inRoot = $entry !== '' && ($ci ? stripos($entry, $root . '/') === 0 : Str::startsWith($entry, $root . '/'));
+        $rel = $inRoot ? Str::sub($entry, strlen($root)) : '';
+        $tail = $rel !== '' ? Str::sub($script, -strlen($rel)) : '';
         if ($rel !== '' && ($ci ? strcasecmp($tail, $rel) === 0 : $tail === $rel)) {
-            $b = substr($script, 0, -strlen($rel)) . '/';
-        } elseif (preg_match('#^(.*/)(?:api/.+\.php|admin\.php|cli/.+)$#i', $script, $m)) {
+            $b = Str::sub($script, 0, -strlen($rel)) . '/';
+        } elseif (preg_match('#^(.*/)(?:api/.+\.php|admin\.php|install\.php|cli/.+)$#i', $script, $m)) {
             $b = $m[1]; // known layout fallback
         } else {
             $b = rtrim(dirname($script), '/') . '/';
@@ -319,10 +409,18 @@ final class Http
         return $base = $b;
     }
 
+    /** absolute URL of the installation root for redirects (scheme + host from the request, path from basePath) */
+    public static function baseUrl(): string
+    {
+        $host = (string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost');
+        if (!preg_match('/^[A-Za-z0-9.\-\[\]:]{1,253}$/', $host)) $host = 'localhost';
+        return (self::isHttps() ? 'https' : 'http') . '://' . $host . self::basePath();
+    }
+
     /** raw request body, refusing anything larger than $max bytes */
     public static function body(int $max): string
     {
-        $len = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+        $len = (int) (isset($_SERVER['CONTENT_LENGTH']) ? $_SERVER['CONTENT_LENGTH'] : 0);
         if ($len > $max) throw new ApiException(413, 'PAYLOAD_TOO_LARGE', '보낸 데이터가 너무 커요.');
         $in = fopen('php://input', 'rb');
         if (!$in) return '';
@@ -335,8 +433,8 @@ final class Http
 
     public static function isJsonRequest(): bool
     {
-        $ct = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? ''));
-        return str_starts_with($ct, 'application/json'); // never text/plain (that would be a CORS "simple" request)
+        $ct = isset($_SERVER['CONTENT_TYPE']) ? $_SERVER['CONTENT_TYPE'] : (isset($_SERVER['HTTP_CONTENT_TYPE']) ? $_SERVER['HTTP_CONTENT_TYPE'] : '');
+        return Str::startsWith(strtolower((string) $ct), 'application/json'); // never text/plain (that would be a CORS "simple" request)
     }
 
     /** decode a JSON request body into an associative array (objects only) */
@@ -345,16 +443,16 @@ final class Http
         if (!self::isJsonRequest()) throw new ApiException(415, 'UNSUPPORTED_MEDIA_TYPE', 'JSON 형식으로 보내 주세요.');
         $raw = self::body($max);
         if (trim($raw) === '') return [];
-        try { $v = json_decode($raw, true, 32, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING); }
-        catch (\JsonException) { throw new ApiException(400, 'INVALID_JSON', '요청 형식이 올바르지 않아요.'); }
-        if (!is_array($v) || (array_is_list($v) && $v !== [])) throw new ApiException(400, 'INVALID_JSON', '요청 형식이 올바르지 않아요.');
+        try { $v = Json::decode($raw, true, 32, JSON_BIGINT_AS_STRING); }
+        catch (\UnexpectedValueException $e) { throw new ApiException(400, 'INVALID_JSON', '요청 형식이 올바르지 않아요.'); }
+        if (!is_array($v) || (Arr::isList($v) && $v !== [])) throw new ApiException(400, 'INVALID_JSON', '요청 형식이 올바르지 않아요.');
         return $v;
     }
 
     /**
      * Security headers.
      *   api   : JSON endpoints — nothing may be rendered or framed
-     *   admin : server-rendered admin page with a nonce-based CSP
+     *   admin : server-rendered pages (admin.php, install.php, sub/return.php) with a nonce-based CSP
      */
     public static function securityHeaders(string $kind, string $nonce = ''): void
     {
@@ -379,6 +477,6 @@ final class Http
         }
         try {
             if (self::isHttps() && Config::get('security.hsts', true)) header('Strict-Transport-Security: max-age=31536000');
-        } catch (\Throwable) { /* ignore */ }
+        } catch (\Throwable $e) { /* ignore */ }
     }
 }

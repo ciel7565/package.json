@@ -2,6 +2,7 @@
 /**
  * Security primitives: rate limiting (rate_limits), login throttling with exponential lockout
  * (login_attempts), audit log (audit_log), origin checks, privacy-preserving identifiers.
+ * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
@@ -24,13 +25,13 @@ final class Sec
     public static function checkOrigin(): void
     {
         if (!Config::get('security.check_origin', true)) return;
-        $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
+        $site = strtolower((string) (isset($_SERVER['HTTP_SEC_FETCH_SITE']) ? $_SERVER['HTTP_SEC_FETCH_SITE'] : ''));
         if ($site === 'cross-site') throw new ApiException(403, 'CROSS_SITE_REQUEST', '허용되지 않은 요청이에요.');
-        $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+        $origin = (string) (isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '');
         if ($origin === '' || $origin === 'null') return;
-        $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
+        $host = strtolower((string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : ''));
         $o = parse_url($origin);
-        $oh = strtolower(($o['host'] ?? '') . (isset($o['port']) ? ':' . $o['port'] : ''));
+        $oh = strtolower((string) (is_array($o) && isset($o['host']) ? $o['host'] : '') . (is_array($o) && isset($o['port']) ? ':' . $o['port'] : ''));
         if ($host === '' || $oh !== $host) {
             Log::security('CSRF', 'origin mismatch', ['origin' => mb_substr($origin, 0, 120)]);
             throw new ApiException(403, 'CROSS_SITE_REQUEST', '허용되지 않은 요청이에요.');
@@ -47,11 +48,11 @@ final class RateLimit
     public static function hit(string $name, string $ident, ?int $limit = null, ?int $window = null): void
     {
         $conf = Config::get("rate_limits.$name");
-        $limit ??= (int) ($conf[0] ?? 60);
-        $window ??= (int) ($conf[1] ?? 60);
+        if ($limit === null) $limit = (int) (is_array($conf) && isset($conf[0]) ? $conf[0] : 60);
+        if ($window === null) $window = (int) (is_array($conf) && isset($conf[1]) ? $conf[1] : 60);
         if ($limit <= 0) return;
         $now = Clock::ms();
-        $win = intdiv($now, $window * 1000);
+        $win = intdiv($now, max(1, $window) * 1000);
         $bucket = substr($name . '|' . $ident . '|' . $win, 0, 190);
         $expires = ($win + 1) * $window * 1000;
         $hits = Db::tx(function () use ($bucket, $expires) {
@@ -86,13 +87,13 @@ final class RateLimit
         if ($ident !== $ipId && !$ctx->user) {
             $conf = Config::get("rate_limits.$name");
             $mult = max(1, (int) Config::get('rate_limit_ip_multiplier', 25));
-            self::hit($name . '@ip', $ipId, (int) ($conf[0] ?? 60) * $mult, (int) ($conf[1] ?? 60));
+            self::hit($name . '@ip', $ipId, (int) (is_array($conf) && isset($conf[0]) ? $conf[0] : 60) * $mult, (int) (is_array($conf) && isset($conf[1]) ? $conf[1] : 60));
         }
     }
 
     public static function cleanup(): void
     {
-        try { Db::exec('DELETE FROM rate_limits WHERE expires_at < ?', [Clock::ms()]); } catch (\Throwable) { /* ignore */ }
+        try { Db::exec('DELETE FROM rate_limits WHERE expires_at < ?', [Clock::ms()]); } catch (\Throwable $e) { /* ignore */ }
     }
 }
 
@@ -110,32 +111,34 @@ final class LoginThrottle
     {
         $c = (array) Config::get('login', []);
         $now = Clock::ms();
-        $since = $now - (int) ($c['window'] ?? 900) * 1000;
+        $since = $now - (int) (isset($c['window']) ? $c['window'] : 900) * 1000;
         $ip = Sec::hashId(Http::clientIp());
         $acct = Sec::hashId('acct:' . mb_strtolower($login));
         $wait = 0;
         // per ip + account
         $rows = Db::all('SELECT created_at FROM login_attempts WHERE ip_hash = ? AND account_key = ? AND success = 0 AND created_at > ? ORDER BY created_at DESC LIMIT 40', [$ip, $acct, $since]);
-        $wait = max($wait, self::lockFor(count($rows), $rows[0]['created_at'] ?? 0, (int) ($c['max_failures'] ?? 5), $c, $now));
+        $wait = max($wait, self::lockFor(count($rows), isset($rows[0]['created_at']) ? $rows[0]['created_at'] : 0, (int) (isset($c['max_failures']) ? $c['max_failures'] : 5), $c, $now));
         // per account (any ip)
         $n = (int) Db::value('SELECT COUNT(*) FROM login_attempts WHERE account_key = ? AND success = 0 AND created_at > ?', [$acct, $since]);
-        if ($n >= (int) ($c['account_max'] ?? 15)) {
+        $accountMax = (int) (isset($c['account_max']) ? $c['account_max'] : 15);
+        if ($n >= $accountMax) {
             $last = (int) Db::value('SELECT MAX(created_at) FROM login_attempts WHERE account_key = ? AND success = 0', [$acct]);
-            $wait = max($wait, self::lockFor($n, $last, (int) ($c['account_max'] ?? 15), $c, $now));
+            $wait = max($wait, self::lockFor($n, $last, $accountMax, $c, $now));
         }
         // per ip (any account)
         $n = (int) Db::value('SELECT COUNT(*) FROM login_attempts WHERE ip_hash = ? AND success = 0 AND created_at > ?', [$ip, $since]);
-        if ($n >= (int) ($c['ip_max_failures'] ?? 30)) {
+        if ($n >= (int) (isset($c['ip_max_failures']) ? $c['ip_max_failures'] : 30)) {
             $last = (int) Db::value('SELECT MAX(created_at) FROM login_attempts WHERE ip_hash = ? AND success = 0', [$ip]);
-            $wait = max($wait, (int) ceil(($last + (int) ($c['ip_lock'] ?? 900) * 1000 - $now) / 1000));
+            $wait = max($wait, (int) ceil(($last + (int) (isset($c['ip_lock']) ? $c['ip_lock'] : 900) * 1000 - $now) / 1000));
         }
         return max(0, $wait);
     }
 
-    private static function lockFor(int $failures, int|string $lastAt, int $threshold, array $c, int $now): int
+    /** @param int|string $lastAt */
+    private static function lockFor(int $failures, $lastAt, int $threshold, array $c, int $now): int
     {
         if ($failures < $threshold) return 0;
-        $lock = min((int) ($c['max_lock'] ?? 3600), (int) ($c['base_lock'] ?? 30) * (2 ** min(16, $failures - $threshold)));
+        $lock = min((int) (isset($c['max_lock']) ? $c['max_lock'] : 3600), (int) (isset($c['base_lock']) ? $c['base_lock'] : 30) * (2 ** min(16, $failures - $threshold)));
         return (int) ceil(((int) $lastAt + $lock * 1000 - $now) / 1000);
     }
 
@@ -143,9 +146,9 @@ final class LoginThrottle
     public static function remaining(string $login): int
     {
         $c = (array) Config::get('login', []);
-        $since = Clock::ms() - (int) ($c['window'] ?? 900) * 1000;
+        $since = Clock::ms() - (int) (isset($c['window']) ? $c['window'] : 900) * 1000;
         $n = (int) Db::value('SELECT COUNT(*) FROM login_attempts WHERE ip_hash = ? AND account_key = ? AND success = 0 AND created_at > ?', [Sec::hashId(Http::clientIp()), Sec::hashId('acct:' . mb_strtolower($login)), $since]);
-        return max(0, (int) ($c['max_failures'] ?? 5) - $n);
+        return max(0, (int) (isset($c['max_failures']) ? $c['max_failures'] : 5) - $n);
     }
 
     public static function record(string $login, bool $success): void
@@ -166,10 +169,11 @@ final class LoginThrottle
 
 final class Audit
 {
-    /** security-relevant events (auth, admin actions, rejected saves, uploads). Never throws. */
+    /** security-relevant events (auth, admin actions, rejected saves, uploads, subscriptions). Never throws. */
     public static function log(string $event, ?int $userId = null, array $detail = [], string $severity = 'info', ?int $actorId = null): void
     {
         try {
+            $json = json_encode($detail, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
             Db::insert('audit_log', [
                 'created_at' => Clock::ms(),
                 'user_id'    => $userId ?: null,
@@ -177,7 +181,7 @@ final class Audit
                 'ip'         => substr(Http::clientIp(), 0, 64),
                 'event'      => substr($event, 0, 60),
                 'severity'   => in_array($severity, ['info', 'warn', 'alert'], true) ? $severity : 'info',
-                'detail'     => json_encode($detail, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR) ?: '{}',
+                'detail'     => is_string($json) && $json !== '' ? $json : '{}',
             ]);
             if ($severity !== 'info') Log::security('AUDIT', $event, ['uid' => $userId] + $detail);
             if (random_int(1, 500) === 1) {

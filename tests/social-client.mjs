@@ -132,25 +132,35 @@ try {
   // the server session ended (ban, restore, role change, expiry): presence answers 401 while chat reading still works
   // for guests — the end is reported to 70-app once, a chat poll that succeeds without a login does not re-arm it
   await page.evaluate(() => { window.__lost = 0; G.bus.on('save:auth-lost', () => { window.__lost++; }); });
-  const tick = (what) => page.evaluate(async (w) => {
-    const S = G.sys.social._srv, F = __fake, n = F.calls.length;
+  // one poller turn. The pollers run in 60-social's update(), i.e. once per frame: on a busy machine headless
+  // SwiftShader draws 1–15 frames per second, so the wait is on the condition, never on a fixed number of sleeps
+  // (R3 runtime-5: 200 x 25 ms saw no frame and blamed the product). want = true: a call is expected (its answer
+  // handled) — up to 60 s; want = false: silence is expected — enough frames for the poller to have had its turn.
+  const tick = (what, want = true) => page.evaluate(async ([w, want]) => {
+    const S = G.sys.social._srv, F = __fake, n = F.calls.length, f0 = G.time.frame, t0 = performance.now();
     if (w === 'pres') S.nextPres = 0; else S.nextChat = 0;
-    for (let i = 0; i < 200 && (F.calls.length === n || S.presBusy || S.chatBusy); i++) await new Promise((r) => setTimeout(r, 25));
+    const limit = want ? 60000 : 30000;
+    while (performance.now() - t0 < limit) {
+      const got = F.calls.length > n && !S.presBusy && !S.chatBusy;
+      if (want && got) break;
+      if (!want && (got || (G.time.frame - f0 >= 6 && performance.now() - t0 >= 1500))) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
     S.nextPres = S.nextChat = Infinity;
     return F.calls.slice(n);
-  }, what);
+  }, [what, want]);
   const e401 = () => page.evaluate(() => { __fake.pres.push(new G.net.ApiError('AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.', 401)); });
   await e401();
   await tick('pres');
   await poll({ messages: [], lastId: 14, retracted: { messages: [], users: [] }, retractId: 10, online: 2 });
   await e401();
-  await tick('pres');
+  await tick('pres', false); // presence stays paused: this 401 is never asked for
   const lost = await page.evaluate(() => window.__lost);
   check('an ended session is reported once, not again after a chat poll that works without a login', lost === 1,
     lost === 1 ? '' : `expected 1 save:auth-lost after 401 → chat 200 → presence tick; received: ${lost} (a successful guest chat poll re-armed the report)`);
 
   // while the session is gone, presence (which needs the login) is not sent at all: no 401 every 2 s
-  const idle = await tick('pres');
+  const idle = await tick('pres', false);
   const quiet = !idle.some((c) => c.startsWith('presence/update.php'));
   check('presence is not sent while the session is gone', quiet, quiet ? '' : `expected no presence/update.php after the 401; received: ${JSON.stringify(idle)}`);
 

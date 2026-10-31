@@ -9,6 +9,7 @@
  * admin role (403), per-endpoint rate limits (429), JSON-only output with security headers, and turns
  * any unexpected error into a generic 500 (details only in data/logs).
  * Response: {success, data | error:{code,message}, csrf, serverTime}
+ * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
@@ -18,14 +19,17 @@ if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
 
 final class Ctx
 {
-    public ?array $user = null;
-    public int $now;
-    public bool $csrfPending = false;
+    /** @var array|null the logged-in users row */
+    public $user = null;
+    /** @var int */
+    public $now;
+    /** @var bool */
+    public $csrfPending = false;
 
     public function __construct() { $this->now = Clock::ms(); }
 
-    public function uid(): int { return (int) ($this->user['id'] ?? 0); }
-    public function isAdmin(): bool { return ($this->user['role'] ?? '') === 'admin'; }
+    public function uid(): int { return (int) (isset($this->user['id']) ? $this->user['id'] : 0); }
+    public function isAdmin(): bool { return (isset($this->user['role']) ? $this->user['role'] : '') === 'admin'; }
     /** rate-limit identity: the account when logged in, else this browser session, else a keyed hash of the IP */
     public function ident(): string
     {
@@ -36,7 +40,7 @@ final class Ctx
     public function json(int $max = 65536): array { return Http::json($max); }
 
     /** for navigator.sendBeacon requests that cannot set headers: the token travels in the JSON body */
-    public function checkBodyCsrf(mixed $token): void
+    public function checkBodyCsrf($token): void
     {
         if (!$this->csrfPending) return;
         if (!Session::checkCsrf(is_string($token) ? $token : null)) Api::csrfFail();
@@ -46,37 +50,45 @@ final class Ctx
 
 final class Api
 {
-    public static function run(array $opt, callable $fn): never
+    public static function run(array $opt, callable $fn)
     {
         Boot::forApi();
         try {
             $method = Http::method();
-            $allowed = array_map('strtoupper', (array) ($opt['method'] ?? 'GET'));
+            $allowed = array_map('strtoupper', (array) (isset($opt['method']) ? $opt['method'] : 'GET'));
             if (!in_array($method, $allowed, true)) {
                 throw new ApiException(405, 'METHOD_NOT_ALLOWED', '허용되지 않은 요청 방식이에요.', null, ['Allow: ' . implode(', ', $allowed)]);
             }
             $ctx = new Ctx();
             $write = !in_array($method, ['GET', 'HEAD'], true);
+            $needsLogin = !empty($opt['auth']) || !empty($opt['admin']);
             // only ping (and pages that must hand out a CSRF token) create sessions; everything else resumes one
-            Session::start(($opt['session'] ?? 'resume') === 'create');
+            Session::start((isset($opt['session']) ? $opt['session'] : 'resume') === 'create');
             if ($write) {
                 Sec::checkOrigin();
-                if (($opt['csrf'] ?? true) !== false) {
-                    $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
+                if ((isset($opt['csrf']) ? $opt['csrf'] : true) !== false) {
+                    // R3-runtime-1: a write request that carries no session at all (cookies cleared while the tab stayed open)
+                    // has no session a CSRF token could protect. For an endpoint that needs a login the truthful answer is
+                    // 401 AUTH_REQUIRED — the client shows its re-login card — never a 403 CSRF_INVALID it would retry forever.
+                    if ($needsLogin && !Session::started()) {
+                        Log::info('AUTH', 'write without a session', ['path' => basename((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''))]);
+                        throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.');
+                    }
+                    $hdr = isset($_SERVER['HTTP_X_CSRF_TOKEN']) ? $_SERVER['HTTP_X_CSRF_TOKEN'] : null;
                     if ($hdr === null && !empty($opt['csrfBody'])) $ctx->csrfPending = true;
                     elseif (!Session::checkCsrf(is_string($hdr) ? $hdr : null)) self::csrfFail();
                 }
             }
             $ctx->user = Auth::current();
-            if (!empty($opt['auth']) || !empty($opt['admin'])) {
+            if ($needsLogin) {
                 // data.why when this request found the session invalid ('epoch' | 'banned' | 'deleted' | 'other account')
                 if (!$ctx->user) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.', Auth::$lostWhy !== null ? ['why' => Auth::$lostWhy] : null);
             }
             if (!empty($opt['admin']) && !$ctx->isAdmin()) {
-                Audit::log('admin_denied', $ctx->uid(), ['path' => basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''))], 'warn');
+                Audit::log('admin_denied', $ctx->uid(), ['path' => basename((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''))], 'warn');
                 throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
             }
-            if (!empty($opt['rate'])) RateLimit::forRequest((string) $opt['rate'], $ctx, (string) ($opt['rateBy'] ?? 'auto'));
+            if (!empty($opt['rate'])) RateLimit::forRequest((string) $opt['rate'], $ctx, (string) (isset($opt['rateBy']) ? $opt['rateBy'] : 'auto'));
             $data = $fn($ctx);
             if ($ctx->csrfPending) self::csrfFail(); // handler forgot to verify the body token
             self::send(200, ['success' => true, 'data' => $data]);
@@ -89,31 +101,34 @@ final class Api
         }
     }
 
-    public static function csrfFail(): never
+    public static function csrfFail()
     {
-        Log::security('CSRF', 'csrf token missing or invalid', ['path' => basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''))]);
+        Log::security('CSRF', 'csrf token missing or invalid', ['path' => basename((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''))]);
         throw new ApiException(403, 'CSRF_INVALID', '보안 토큰이 만료되었어요. 다시 시도해 주세요.');
     }
 
     /** generic 500 — the reference id lets an admin find the details in data/logs */
-    public static function fail(\Throwable $e): never
+    public static function fail(\Throwable $e)
     {
         $ref = Log::requestId();
+        $trace = array_map(function ($f) {
+            return (isset($f['class']) ? $f['class'] : '') . (isset($f['type']) ? $f['type'] : '') . (isset($f['function']) ? $f['function'] : '') . '@' . basename(isset($f['file']) ? $f['file'] : '?') . ':' . (isset($f['line']) ? $f['line'] : 0);
+        }, array_slice($e->getTrace(), 0, 8));
         Log::error('API', get_class($e) . ': ' . $e->getMessage(), [
             'at' => basename($e->getFile()) . ':' . $e->getLine(),
-            'trace' => array_slice(array_map(fn ($f) => ($f['class'] ?? '') . ($f['type'] ?? '') . ($f['function'] ?? '') . '@' . basename($f['file'] ?? '?') . ':' . ($f['line'] ?? 0), $e->getTrace()), 0, 8),
-            'path' => (string) ($_SERVER['SCRIPT_NAME'] ?? ''),
+            'trace' => $trace,
+            'path' => (string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''),
         ]);
         self::send(500, ['success' => false, 'error' => ['code' => 'SERVER_ERROR', 'message' => '서버에서 문제가 생겼어요. 잠시 후 다시 시도해 주세요.', 'ref' => $ref]]);
     }
 
-    public static function send(int $status, array $payload, array $headers = []): never
+    public static function send(int $status, array $payload, array $headers = [])
     {
         while (ob_get_level() > 0) @ob_end_clean(); // never leak stray output (warnings, BOMs)
-        try { $t = Session::currentCsrf(); if ($t !== null) $payload['csrf'] = $t; } catch (\Throwable) { /* ignore */ }
+        try { $t = Session::currentCsrf(); if ($t !== null) $payload['csrf'] = $t; } catch (\Throwable $e) { /* ignore */ }
         $payload['serverTime'] = Clock::ms();
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
-        if ($json === false) { $status = 500; $json = '{"success":false,"error":{"code":"SERVER_ERROR","message":"응답을 만들지 못했어요."}}'; }
+        if (!is_string($json)) { $status = 500; $json = '{"success":false,"error":{"code":"SERVER_ERROR","message":"응답을 만들지 못했어요."}}'; }
         if (!headers_sent()) {
             http_response_code($status);
             Http::securityHeaders('api');
@@ -128,10 +143,12 @@ final class Api
 
 final class Auth
 {
-    private static ?array $cached = null;
-    private static bool $loaded = false;
-    /** why current() just ended this request's session (null: it was fine, or there was none) */
-    public static ?string $lostWhy = null;
+    /** @var array|null */
+    private static $cached = null;
+    /** @var bool */
+    private static $loaded = false;
+    /** @var string|null why current() just ended this request's session (null: it was fine, or there was none) */
+    public static $lostWhy = null;
 
     /** the logged-in user, re-validated against the DB on every request (ban, epoch, role changes) */
     public static function current(): ?array
@@ -187,7 +204,8 @@ final class Auth
             Audit::log('role_changed', (int) $u['id'], ['from' => 'user', 'to' => 'admin', 'via' => 'config admin_emails'], 'warn');
         }
         Users::update((int) $u['id'], $fields);
-        $u = Users::byId((int) $u['id']) ?? throw new \RuntimeException('user vanished');
+        $u = Users::byId((int) $u['id']);
+        if (!$u) throw new \RuntimeException('user vanished');
         Session::login($u, $remember);
         self::$cached = $u;
         self::$loaded = true;
@@ -198,7 +216,8 @@ final class Auth
 
 final class Boot
 {
-    private static bool $done = false;
+    /** @var bool */
+    private static $done = false;
 
     /** error handling: warnings become exceptions, nothing is ever displayed, fatals still answer in JSON */
     public static function forApi(): void

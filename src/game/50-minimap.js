@@ -778,7 +778,10 @@
       this.zoom = clamp(parseInt(lsGet(LS_ZOOM, DEFAULT_ZOOM), 10) || DEFAULT_ZOOM, 0, ZOOMS.length - 1);
       this.collapsed = lsGet(LS_COLLAPSED, '0') === '1';
       this.visible = G.settings.minimapVisible !== false;
-      this.base = renderBase();
+      // the base map (~0.1–0.7 s of canvas work) is not needed before the HUD shows after login: built at idle time
+      // off the loading path, or on first use (§14.7)
+      this.base = null;
+      this._deferBase();
       this._setupPanel();
       this._applyPanelState();
       this._setZoom(this.zoom);
@@ -870,7 +873,7 @@
       if (wrap && !wrap.querySelector('.mm-zone')) {
         wrap.appendChild(G.ui.h('div', { class: 'mm-zone', 'aria-live': 'polite' }, G.ui.h('span', { class: 'ico ico-xs', 'data-icon': 'pin' }), G.ui.h('b', null, '')));
         wrap.appendChild(G.ui.h('div', { class: 'mm-compass', 'aria-hidden': 'true' }, G.ui.h('i'), G.ui.h('span', null, 'N')));
-        wrap.appendChild(G.ui.h('div', { class: 'mm-clock', title: '게임 시간' }, G.ui.h('span', { class: 'ico ico-xs', 'data-icon': 'clock' }), G.ui.h('b', null, '')));
+        wrap.appendChild(G.ui.h('div', { class: 'mm-clock', title: '체험관 시간' }, G.ui.h('span', { class: 'ico ico-xs', 'data-icon': 'clock' }), G.ui.h('b', null, '')));
         wrap.appendChild(G.ui.h('div', { class: 'mm-scale', 'aria-hidden': 'true' }, G.ui.h('i'), G.ui.h('span', null, '')));
       }
       this._zoneEl = wrap?.querySelector('.mm-zone b');
@@ -1022,6 +1025,14 @@
 
     /** re-render the base map (e.g. after the world layout changed) */
     redrawBase() { this.base = renderBase(); this._drawT = 1; if (this._wm) this._wm.dirty = true; return this.base; },
+    /** schedule the base map build for idle time (once) */
+    _deferBase() {
+      if (this.base || this._baseIdle) return;
+      const build = () => { this._baseIdle = 0; if (!this.base) this.base = renderBase(); };
+      this._baseIdle = typeof requestIdleCallback === 'function' ? requestIdleCallback(build, { timeout: 6000 }) : setTimeout(build, 600);
+    },
+    /** the base map, built now when a draw needs it before the idle build ran */
+    _getBase() { if (!this.base) this.base = renderBase(); return this.base; },
 
     // ------------------------------------------------------------ helpers
     worldToMap(x, z) {
@@ -1046,7 +1057,7 @@
       const scale = W / meters;
       const big = easy ? 1.45 : 1;      // bigger, chunkier markers for small fingers / eyes
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      blitBase(ctx, this.base, cx, cz, scale, W, H);
+      blitBase(ctx, this._getBase(), cx, cz, scale, W, H);
       const X = (x) => (x - cx) * scale + W / 2, Y = (z) => (z - cz) * scale + H / 2;
       const inView = (px, py, m = 0) => px >= -m && px <= W + m && py >= -m && py <= H + m;
       // night tint
@@ -1511,7 +1522,7 @@
       const ctx = st.ctx, W = st.W, H = st.H, v = st.view, s = st.dpr;
       const sc = this._wmScale();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      blitBase(ctx, this.base, v.cx, v.cz, sc, W, H);
+      blitBase(ctx, this._getBase(), v.cx, v.cz, sc, W, H);
       const X = (x) => (x - v.cx) * sc + W / 2, Y = (z) => (z - v.cz) * sc + H / 2;
       const inView = (px, py, m = 0) => px >= -m && px <= W + m && py >= -m && py <= H + m;
       const nf = G.world.nightFactor || 0;

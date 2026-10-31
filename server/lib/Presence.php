@@ -4,6 +4,7 @@
  * Everything other players receive about you passes through here, so every field is validated:
  * positions are clamped to the world, animation/zone/emote ids must match known patterns,
  * and appearance keeps only known keys with whitelisted values (no free text).
+ * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
@@ -26,7 +27,7 @@ final class Presence
     private const COLORS = ['skin', 'hairColor', 'topColor', 'bottomColor', 'shoes', 'bagColor', 'accessoryColor'];
 
     /** whitelist-sanitized appearance as a JSON string, or null */
-    public static function appearance(mixed $a): ?string
+    public static function appearance($a): ?string
     {
         if ($a instanceof \stdClass) $a = get_object_vars($a);
         if (!is_array($a)) return null;
@@ -40,10 +41,12 @@ final class Presence
         if (isset($a['height']) && (is_int($a['height']) || is_float($a['height'])) && is_finite((float) $a['height'])) {
             $out['height'] = round(max(0.9, min(1.1, (float) $a['height'])), 2);
         }
-        return $out ? json_encode($out, JSON_UNESCAPED_SLASHES) : null;
+        if (!$out) return null;
+        $j = json_encode($out, JSON_UNESCAPED_SLASHES);
+        return is_string($j) ? $j : null;
     }
 
-    private static function num(mixed $v, float $min, float $max, float $def = 0.0): float
+    private static function num($v, float $min, float $max, float $def = 0.0): float
     {
         if (!(is_int($v) || is_float($v)) || !is_finite((float) $v)) return $def;
         return max($min, min($max, (float) $v));
@@ -52,35 +55,37 @@ final class Presence
     /** upsert my presence row from a client body */
     public static function update(array $user, array $b, int $now): void
     {
-        $anim = is_string($b['anim'] ?? null) && in_array($b['anim'], self::ANIMS, true) ? $b['anim'] : null;
-        $zone = is_string($b['zoneId'] ?? null) && preg_match('/^ZONE_[A-Z0-9_]{1,30}$/', $b['zoneId']) ? $b['zoneId'] : null;
-        $emote = is_string($b['emote'] ?? null) && preg_match('/^EMO_[A-Z0-9_]{1,30}$/', $b['emote']) ? $b['emote'] : null;
-        $emoteAt = (int) self::num($b['emoteAt'] ?? 0, 0, 9.9e15);
+        $anim = isset($b['anim']) && is_string($b['anim']) && in_array($b['anim'], self::ANIMS, true) ? $b['anim'] : null;
+        $zone = isset($b['zoneId']) && is_string($b['zoneId']) && preg_match('/^ZONE_[A-Z0-9_]{1,30}$/', $b['zoneId']) ? $b['zoneId'] : null;
+        $emote = isset($b['emote']) && is_string($b['emote']) && preg_match('/^EMO_[A-Z0-9_]{1,30}$/', $b['emote']) ? $b['emote'] : null;
+        $emoteAt = (int) self::num(isset($b['emoteAt']) ? $b['emoteAt'] : 0, 0, 9.9e15);
         if ($emoteAt && abs($emoteAt - $now) > 86400000) $emoteAt = 0; // client clock wildly off → ignore
-        $rot = self::num($b['rotY'] ?? 0, -1000, 1000);
+        $rot = self::num(isset($b['rotY']) ? $b['rotY'] : 0, -1000, 1000);
         $rot = fmod($rot, 2 * M_PI);
         $row = [
             'user_id' => (int) $user['id'],
             'nickname' => (string) $user['nickname'],
-            'x' => round(self::num($b['x'] ?? 0, -400, 400), 2),
-            'y' => round(self::num($b['y'] ?? 0, -50, 200), 2),
-            'z' => round(self::num($b['z'] ?? 0, -400, 400), 2),
+            'x' => round(self::num(isset($b['x']) ? $b['x'] : 0, -400, 400), 2),
+            'y' => round(self::num(isset($b['y']) ? $b['y'] : 0, -50, 200), 2),
+            'z' => round(self::num(isset($b['z']) ? $b['z'] : 0, -400, 400), 2),
             'rot_y' => round($rot, 3),
             'anim' => $anim,
-            'speed' => round(self::num($b['speed'] ?? 0, 0, 30), 1),
+            'speed' => round(self::num(isset($b['speed']) ? $b['speed'] : 0, 0, 40), 1),
             'zone_id' => $zone,
             'emote' => $emote,
             'emote_at' => $emote ? $emoteAt : 0,
             'updated_at' => $now,
         ];
         $app = array_key_exists('appearance', $b) ? self::appearance($b['appearance']) : null;
-        if ($app !== null) {
-            $row['appearance'] = $app;
-            Db::upsert('presence', $row, ['user_id']);
-        } else {
-            // keep the stored appearance when the client did not resend it
-            Db::upsert('presence', $row + ['appearance' => null], ['user_id'], array_values(array_diff(array_keys($row), ['user_id'])));
-        }
+        Db::tx(function () use ($row, $app) {
+            if ($app !== null) {
+                $row['appearance'] = $app;
+                Db::upsert('presence', $row, ['user_id']);
+            } else {
+                // keep the stored appearance when the client did not resend it
+                Db::upsert('presence', $row + ['appearance' => null], ['user_id'], array_values(array_diff(array_keys($row), ['user_id'])));
+            }
+        });
         if (random_int(1, 100) <= 2) {
             $hours = (int) Config::get('retention.presence_hours', 24);
             Db::exec('DELETE FROM presence WHERE updated_at < ?', [$now - $hours * 3600000]);
@@ -101,7 +106,7 @@ final class Presence
         );
         $out = [];
         foreach ($rows as $r) {
-            $app = $r['appearance'] ? json_decode((string) $r['appearance'], true) : null;
+            $app = $r['appearance'] ? Json::tryDecode((string) $r['appearance'], true) : null;
             $out[] = [
                 'id' => (string) $r['user_id'],
                 'nickname' => (string) $r['nickname'],
@@ -132,6 +137,6 @@ final class Presence
 
     public static function remove(int $userId): void
     {
-        try { Db::exec('DELETE FROM presence WHERE user_id = ?', [$userId]); } catch (\Throwable) { /* ignore */ }
+        try { Db::exec('DELETE FROM presence WHERE user_id = ?', [$userId]); } catch (\Throwable $e) { /* ignore */ }
     }
 }

@@ -8,10 +8,10 @@
  *
  *   1. shape & ranges           numbers finite, ids well-formed, quantities within limits
  *   2. identity                 profile.id must match the account (immutable); profile.role is set to the account's
- *   3. farming timing           growth/harvests cannot outpace crop growthTime × harvestSpeedTolerance
- *   4. fermentation timing      progress/claims cannot outpace recipe baseDuration (max speed, tolerance)
- *   4b. movement / play time    Δstats.distance ≤ move_max_speed × elapsed (+ slack): legit running at RUN 18 m/s
- *                               (phase 4: 3× speed) passes with room to spare, a teleported 10,000 km does not;
+ *   3. farming timing           growth/harvests cannot outpace crop growthTime × harvestSpeedTolerance (× speed tier)
+ *   4. fermentation timing      progress/claims cannot outpace recipe baseDuration (max speed × speed tier, tolerance)
+ *   4b. movement / play time    Δstats.distance ≤ move_max_speed × min(tier, 3) × elapsed (+ slack): the base run of
+ *                               12 m/s (phase 6: 2× pace) passes with room to spare, a teleported 10,000 km does not;
  *                               Δstats.playTime ≤ elapsed server time (+ slack)
  *   5. economy                  Δ(net worth = coin + item replacement value + decor + extra jars), Δexp, Δedu
  *                               must be explained by rewards the server can account for (quests, achievements,
@@ -20,9 +20,14 @@
  *                               allowance (grows with elapsed time) AND a daily budget; plus hard per-save caps
  *                               from game-data limits.
  *
+ * Speed tier (CONTRACT §14.1): the user's subscription tier (1..4) scales the time-based thresholds. A tier change
+ * mid-session is accepted either way for the next save: the previous save's tier (ledger meta.tier) and the current
+ * one are both tried — the larger wins once.
+ *
  * Any violation → HTTP 409 VALIDATION_FAILED with the stored save, so the client restores it.
  * All tolerances live in config 'save.tolerance' and are documented in README-SERVER.md.
  * State objects are stdClass trees (json_decode(..., false)) so {} and [] survive a round trip.
+ * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
@@ -42,20 +47,25 @@ final class SaveValidator
     private const PROTO_KEYS = ['__proto__', 'constructor', 'prototype', 'toString', 'toLocaleString', 'valueOf', 'hasOwnProperty',
         'isPrototypeOf', 'propertyIsEnumerable', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'];
 
-    private array $violations = [];
-    private array $notes = [];
-    private array $tol;
+    /** @var array */
+    private $violations = [];
+    /** @var array */
+    private $notes = [];
+    /** @var array */
+    private $tol;
+    /** @var int effective speed tier for this save (1..4) */
+    private $tier = 1;
 
     private function __construct() { $this->tol = (array) Config::get('save.tolerance', []); }
 
     // ------------------------------------------------------------------ tiny typed accessors (stdClass trees)
-    private static function o(mixed $v): ?object { return $v instanceof \stdClass ? $v : null; }
-    private static function p(?object $o, string $k): mixed { return ($o !== null && property_exists($o, $k)) ? $o->$k : null; }
-    private static function n(mixed $v, float $d = 0.0): float { return (is_int($v) || is_float($v)) && is_finite((float) $v) ? (float) $v : $d; }
-    private static function i(mixed $v): int { return (is_int($v) || is_float($v)) && is_finite((float) $v) ? (int) floor((float) $v) : 0; }
-    private static function s(mixed $v): string { return is_string($v) ? $v : ''; }
+    private static function o($v): ?object { return $v instanceof \stdClass ? $v : null; }
+    private static function p(?object $o, string $k) { return ($o !== null && property_exists($o, $k)) ? $o->$k : null; }
+    private static function n($v, float $d = 0.0): float { return (is_int($v) || is_float($v)) && is_finite((float) $v) ? (float) $v : $d; }
+    private static function i($v): int { return (is_int($v) || is_float($v)) && is_finite((float) $v) ? (int) floor((float) $v) : 0; }
+    private static function s($v): string { return is_string($v) ? $v : ''; }
     /** properties of an object as [string key => value] */
-    private static function kv(mixed $o): array
+    private static function kv($o): array
     {
         if (!$o instanceof \stdClass) return [];
         $out = [];
@@ -63,6 +73,8 @@ final class SaveValidator
         return $out;
     }
     private function t(string $k, float $d): float { return isset($this->tol[$k]) && is_numeric($this->tol[$k]) ? (float) $this->tol[$k] : $d; }
+    /** movement multiplier of the speed tier: tier 4 still moves 3× (CONTRACT §14.1) */
+    private function moveMul(): int { return min($this->tier, 3); }
 
     private function violate(string $code, array $detail = []): void
     {
@@ -70,7 +82,7 @@ final class SaveValidator
     }
 
     /** malformed (not merely suspicious) input → 400 */
-    private static function bad(string $why): never
+    private static function bad(string $why)
     {
         throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.', ['reason' => $why]);
     }
@@ -95,16 +107,21 @@ final class SaveValidator
      * @param array       $meta   server ledger from player_saves.meta
      * @param array       $user   users row
      * @param int         $prevAt server ms of the previous accepted save (or account creation)
+     * @param int         $tier   the user's current speed tier (subscriptions table), 1..4
      * @return array{ok:bool, violations:array, notes:array, meta:array, summary:array}
      */
-    public static function validate(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now): array
+    public static function validate(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier = 1): array
     {
         $v = new self();
-        return $v->run($n, $p, $meta, $user, $prevAt, $now);
+        return $v->run($n, $p, $meta, $user, $prevAt, $now, $tier);
     }
 
-    private function run(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now): array
+    private function run(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier): array
     {
+        // the tier of the previous accepted save is tried too (a change mid-session): the larger wins once
+        $tier = max(1, min(4, $tier));
+        $prevTier = max(1, min(4, (int) (isset($meta['tier']) ? $meta['tier'] : 1)));
+        $this->tier = max($tier, $prevTier);
         $this->shape($n);
         // ---------------------------------------------------------- identity (immutable fields)
         $prof = self::o(self::p($n, 'profile'));
@@ -121,25 +138,26 @@ final class SaveValidator
             $this->notes[] = 'reset';
             // a fresh start begins at 0 m: allow what can be walked in the 10 minutes before its first save
             $resetD = self::n(self::p(self::o(self::p($n, 'stats')), 'distance'));
-            $capD = max(1.0, $this->t('move_max_speed', 27)) * 600 + max(0.0, $this->t('move_slack_m', 300));
+            $capD = max(1.0, $this->t('move_max_speed', 18)) * $this->moveMul() * 600 + max(0.0, $this->t('move_slack_m', 300));
             if ($resetD > $capD) $this->violate('DISTANCE_TOO_FAST', ['gain' => (int) round($resetD), 'allowed' => (int) round($capD), 'reset' => true]);
-            $meta = ['v' => 1, 'resets' => (int) ($meta['resets'] ?? 0) + 1, 'budget' => $meta['budget'] ?? null];
+            $meta = ['v' => 1, 'resets' => (int) (isset($meta['resets']) ? $meta['resets'] : 0) + 1, 'budget' => isset($meta['budget']) ? $meta['budget'] : null];
             $p = null;
         }
         $first = $p === null;
         $meta['v'] = 1;
-        $paid = is_array($meta['paid'] ?? null) ? $meta['paid'] : [];
+        $meta['tier'] = $tier;
+        $paid = isset($meta['paid']) && is_array($meta['paid']) ? $meta['paid'] : [];
         foreach (['q', 'a', 'z', 'e', 'g'] as $k) if (!isset($paid[$k]) || !is_array($paid[$k])) $paid[$k] = [];
         // ids an older copy took back (see "regressed" below) and the losses that copy gave back: claiming such an
         // id again is explained only from that credit, so a child can finish the quest again but nothing pays twice
-        $reg = is_array($meta['regressed'] ?? null) ? $meta['regressed'] : [];
+        $reg = isset($meta['regressed']) && is_array($meta['regressed']) ? $meta['regressed'] : [];
         foreach (['q', 'a', 'z', 'e'] as $k) if (!isset($reg[$k]) || !is_array($reg[$k])) $reg[$k] = [];
-        $cr = is_array($meta['credit'] ?? null) ? $meta['credit'] : [];
-        $credit = ['value' => max(0, (int) ($cr['value'] ?? 0)), 'exp' => max(0, (int) ($cr['exp'] ?? 0)), 'edu' => max(0, (int) ($cr['edu'] ?? 0))];
+        $cr = isset($meta['credit']) && is_array($meta['credit']) ? $meta['credit'] : [];
+        $credit = ['value' => max(0, (int) (isset($cr['value']) ? $cr['value'] : 0)), 'exp' => max(0, (int) (isset($cr['exp']) ? $cr['exp'] : 0)), 'edu' => max(0, (int) (isset($cr['edu']) ? $cr['edu'] : 0))];
         $fromCredit = ['value' => 0, 'exp' => 0, 'edu' => 0];
 
         $dt = max(0.0, ($now - $prevAt) / 1000);
-        $statsNOf = fn (?object $s): ?object => $s ? self::o(self::p($s, 'stats')) : null;
+        $statsNOf = function (?object $s): ?object { return $s ? self::o(self::p($s, 'stats')) : null; };
         $explain = ['value' => 0, 'exp' => 0, 'edu' => 0];
         $pay = function (string $kind, string $id, array $r) use (&$reg, &$explain, &$fromCredit): void {
             $again = isset($reg[$kind][$id]);
@@ -156,7 +174,7 @@ final class SaveValidator
         // harvests / claims / crafts (bounded by time above)
         $statsN = self::o(self::p($n, 'stats'));
         $statsP = $p ? self::o(self::p($p, 'stats')) : null;
-        $d = fn (string $k) => max(0, self::i(self::p($statsN, $k)) - self::i(self::p($statsP, $k)));
+        $d = function (string $k) use ($statsN, $statsP): int { return max(0, self::i(self::p($statsN, $k)) - self::i(self::p($statsP, $k))); };
         $dHarv = $d('harvests');
         if ($dHarv > $farm['harvests'] + 1) $this->violate('HARVEST_COUNT', ['stat' => $dHarv, 'plots' => $farm['harvests']]);
         $harv = min($dHarv, $farm['harvests'] + 1);
@@ -166,7 +184,12 @@ final class SaveValidator
         // crafting consumes ≥ 3 crop items per craft, and crops only come from harvests (the shop sells seeds)
         $dCrafts = $d('crafts');
         $cropItems = 0;
-        if ($p) foreach (self::kv(self::p($p, 'inventory')) as $iid => $q) if ((GameData::item($iid)['type'] ?? '') === 'crop') $cropItems += max(0, self::i($q));
+        if ($p) {
+            foreach (self::kv(self::p($p, 'inventory')) as $iid => $q) {
+                $it = GameData::item($iid);
+                if ($it && (isset($it['type']) ? $it['type'] : '') === 'crop') $cropItems += max(0, self::i($q));
+            }
+        }
         $craftCap = min(3 + (int) floor(min($dt, 86400) / 2), intdiv($cropItems + $farm['harvests'] * 6, 3) + 1);
         if ($dCrafts > $craftCap) $this->violate('CRAFT_COUNT', ['stat' => $dCrafts, 'possible' => $craftCap]);
         $crafts = min($dCrafts, $craftCap);
@@ -182,10 +205,10 @@ final class SaveValidator
             if (self::s(self::p(self::o($q), 'status')) !== 'claimed' || isset($paid['q'][$qid])) continue;
             $paid['q'][$qid] = $now;
             if (self::s(self::p(self::o(self::p($pQuests, $qid)), 'status')) === 'claimed') continue; // already claimed before the ledger knew
-            $def = $gd['quests'][$qid] ?? null;
+            $def = isset($gd['quests'][$qid]) ? $gd['quests'][$qid] : null;
             if (!is_array($def)) { $this->notes[] = "unknown quest $qid"; continue; }
             $this->checkQuestObjectives($qid, $def, $n);
-            $pay('q', $qid, GameData::rewardOf($def['reward'] ?? null));
+            $pay('q', $qid, GameData::rewardOf(isset($def['reward']) && is_array($def['reward']) ? $def['reward'] : null));
             $newQuests++;
         }
         $pAch = $p ? self::o(self::p($p, 'achievements')) : null;
@@ -194,26 +217,27 @@ final class SaveValidator
             if (!$at || isset($paid['a'][$aid])) continue;
             $paid['a'][$aid] = $now;
             if (self::p($pAch, $aid)) continue;
-            $def = $gd['achievements'][$aid] ?? null;
+            $def = isset($gd['achievements'][$aid]) ? $gd['achievements'][$aid] : null;
             if (!is_array($def)) { $this->notes[] = "unknown achievement $aid"; continue; }
             if (isset($def['condition']['stat'], $def['condition']['gte']) && is_string($def['condition']['stat'])) {
                 // a missing / null counter is 0 (the client never unlocks on one), never "cannot check"
                 $have = self::n(self::p($statsN, $def['condition']['stat']), 0.0);
                 if ($have < (float) $def['condition']['gte']) $this->violate('ACHIEVEMENT_CONDITION', ['id' => $aid]);
             }
-            $pay('a', $aid, GameData::rewardOf($def['reward'] ?? null));
+            $pay('a', $aid, GameData::rewardOf(isset($def['reward']) && is_array($def['reward']) ? $def['reward'] : null));
         }
         $eduN = self::o(self::p($n, 'education'));
         $eduP = $p ? self::o(self::p($p, 'education')) : null;
         $quizP = self::o(self::p($eduP, 'quiz'));
-        $solved = fn ($rec) => $rec === true || (self::o($rec) && self::p(self::o($rec), 'correct') === true);
+        $solved = function ($rec): bool { return $rec === true || (self::o($rec) && self::p(self::o($rec), 'correct') === true); };
+        $quizDefault = ['exp' => 100, 'edu' => 10];
         foreach (self::kv(self::p($eduN, 'quiz')) as $zid => $rec) {
             if (!preg_match(self::ID_RE, $zid)) self::bad('quiz id');
             if (!$solved($rec) || isset($paid['z'][$zid])) continue;
             $paid['z'][$zid] = $now;
             if ($solved(self::p($quizP, $zid))) continue;
-            $def = $gd['quizzes'][$zid] ?? null;
-            $pay('z', $zid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? ['exp' => 100, 'edu' => 10]) : ['exp' => 100, 'edu' => 10]));
+            $def = isset($gd['quizzes'][$zid]) ? $gd['quizzes'][$zid] : null;
+            $pay('z', $zid, GameData::rewardOf(is_array($def) ? (isset($def['reward']) && is_array($def['reward']) ? $def['reward'] : $quizDefault) : $quizDefault));
         }
         $compP = self::o(self::p($eduP, 'completed'));
         foreach (self::kv(self::p($eduN, 'completed')) as $eid => $at) {
@@ -232,7 +256,11 @@ final class SaveValidator
             foreach ([-1, 0, 1] as $off) if ($d === Clock::day($now + $off * 86400000)) return true;
             return false;
         };
-        $maxVal = fn (array $ids): int => array_reduce($ids, fn ($m, $id) => max($m, GameData::itemValue($id)), 0);
+        $maxVal = function (array $ids): int {
+            $m = 0;
+            foreach ($ids as $id) $m = max($m, GameData::itemValue($id));
+            return $m;
+        };
         $ckDay = self::s(self::p(self::o(self::p($engN, 'checkin')), 'lastDay'));
         $ckDayP = self::s(self::p(self::o(self::p($engP, 'checkin')), 'lastDay'));
         if ($ckDay !== '' && $ckDay !== $ckDayP && $nearDay($ckDay) && !isset($paid['g']['c' . $ckDay])) {
@@ -252,7 +280,7 @@ final class SaveValidator
                 return $c;
             };
             $claimedN = $countClaimed($dailyN);
-            $already = max($countClaimed($dailyP), (int) ($paid['g']['m' . $dDay] ?? 0));
+            $already = max($countClaimed($dailyP), (int) (isset($paid['g']['m' . $dDay]) ? $paid['g']['m' . $dDay] : 0));
             if ($claimedN > $already) {
                 $k = $claimedN - $already;
                 $paid['g']['m' . $dDay] = $claimedN;
@@ -290,19 +318,19 @@ final class SaveValidator
         $allowX = $this->t('base_exp', 300) + $this->t('exp_per_second', 4) * $span;
         $allowE = $this->t('base_edu', 30) + $this->t('edu_per_second', 0.2) * $span;
         $day = Clock::day($now);
-        $budget = is_array($meta['budget'] ?? null) && ($meta['budget']['day'] ?? '') === $day ? $meta['budget'] : ['day' => $day, 'value' => 0, 'exp' => 0, 'edu' => 0];
+        $budget = isset($meta['budget']) && is_array($meta['budget']) && (isset($meta['budget']['day']) ? $meta['budget']['day'] : '') === $day ? $meta['budget'] : ['day' => $day, 'value' => 0, 'exp' => 0, 'edu' => 0];
         $uW = max(0, $dW - $explain['value']);
         $uX = max(0, $dX - $explain['exp']);
         $uE = max(0, $dE - $explain['edu']);
-        $remW = $this->t('daily_value', 12000) - (float) $budget['value'];
-        $remX = $this->t('daily_exp', 4000) - (float) $budget['exp'];
-        $remE = $this->t('daily_edu', 200) - (float) $budget['edu'];
+        $remW = $this->t('daily_value', 12000) - (float) (isset($budget['value']) ? $budget['value'] : 0);
+        $remX = $this->t('daily_exp', 4000) - (float) (isset($budget['exp']) ? $budget['exp'] : 0);
+        $remE = $this->t('daily_edu', 200) - (float) (isset($budget['edu']) ? $budget['edu'] : 0);
         if ($uW > min($allowW, $remW)) $this->violate('UNEXPLAINED_VALUE', ['gain' => $dW, 'explained' => $explain['value'], 'allowed' => (int) max(0, min($allowW, $remW))]);
         if ($uX > min($allowX, $remX)) $this->violate('UNEXPLAINED_EXP', ['gain' => $dX, 'explained' => $explain['exp'], 'allowed' => (int) max(0, min($allowX, $remX))]);
         if ($uE > min($allowE, $remE)) $this->violate('UNEXPLAINED_EDU', ['gain' => $dE, 'explained' => $explain['edu'], 'allowed' => (int) max(0, min($allowE, $remE))]);
-        $budget['value'] = (int) $budget['value'] + $uW;
-        $budget['exp'] = (int) $budget['exp'] + $uX;
-        $budget['edu'] = (int) $budget['edu'] + $uE;
+        $budget['value'] = (int) (isset($budget['value']) ? $budget['value'] : 0) + $uW;
+        $budget['exp'] = (int) (isset($budget['exp']) ? $budget['exp'] : 0) + $uX;
+        $budget['edu'] = (int) (isset($budget['edu']) ? $budget['edu'] : 0) + $uE;
         $meta['budget'] = $budget;
 
         // ---------------------------------------------------------- regressed rewards (an older copy won)
@@ -324,22 +352,22 @@ final class SaveValidator
             foreach (array_keys($paid['q']) as $qid) {
                 $qid = (string) $qid;
                 if (self::s(self::p(self::o(self::p($pQuests, $qid)), 'status')) === 'claimed' && self::s(self::p(self::o(self::p($nQuests, $qid)), 'status')) !== 'claimed') {
-                    $def = $gd['quests'][$qid] ?? null;
-                    $took('q', $qid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? null) : null));
+                    $def = isset($gd['quests'][$qid]) ? $gd['quests'][$qid] : null;
+                    $took('q', $qid, GameData::rewardOf(is_array($def) && isset($def['reward']) && is_array($def['reward']) ? $def['reward'] : null));
                 }
             }
             foreach (array_keys($paid['a']) as $aid) {
                 $aid = (string) $aid;
                 if (self::p($pAch, $aid) && !self::p($nAch, $aid)) {
-                    $def = $gd['achievements'][$aid] ?? null;
-                    $took('a', $aid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? null) : null));
+                    $def = isset($gd['achievements'][$aid]) ? $gd['achievements'][$aid] : null;
+                    $took('a', $aid, GameData::rewardOf(is_array($def) && isset($def['reward']) && is_array($def['reward']) ? $def['reward'] : null));
                 }
             }
             foreach (array_keys($paid['z']) as $zid) {
                 $zid = (string) $zid;
                 if ($solved(self::p($quizP, $zid)) && !$solved(self::p($quizN, $zid))) {
-                    $def = $gd['quizzes'][$zid] ?? null;
-                    $took('z', $zid, GameData::rewardOf(is_array($def) ? ($def['reward'] ?? ['exp' => 100, 'edu' => 10]) : ['exp' => 100, 'edu' => 10]));
+                    $def = isset($gd['quizzes'][$zid]) ? $gd['quizzes'][$zid] : null;
+                    $took('z', $zid, GameData::rewardOf(is_array($def) ? (isset($def['reward']) && is_array($def['reward']) ? $def['reward'] : $quizDefault) : $quizDefault));
                 }
             }
             foreach (array_keys($paid['e']) as $eid) {
@@ -364,7 +392,7 @@ final class SaveValidator
             'notes' => $this->notes,
             'meta' => $meta,
             'summary' => [
-                'dt' => round($dt, 1), 'first' => $first, 'dValue' => $dW, 'dExp' => $dX, 'dEdu' => $dE,
+                'dt' => round($dt, 1), 'first' => $first, 'tier' => $this->tier, 'dValue' => $dW, 'dExp' => $dX, 'dEdu' => $dE,
                 'explained' => $explain, 'unexplained' => ['value' => $uW, 'exp' => $uX, 'edu' => $uE],
                 'harvests' => $harv, 'claims' => $claims, 'crafts' => $crafts, 'quests' => $newQuests,
             ],
@@ -381,7 +409,7 @@ final class SaveValidator
             $v = self::p($n, $k);
             if ($v !== null && !self::o($v) && $v !== []) self::bad($k);
         }
-        foreach (['companion', 'engagement'] as $k) {
+        foreach (['companion', 'engagement', 'sub'] as $k) {
             $v = self::p($n, $k);
             if ($v !== null && !self::o($v)) self::bad($k);
         }
@@ -403,14 +431,14 @@ final class SaveValidator
                 if ($v === null) continue;
                 self::bad('stat type');
             }
-            if (!is_finite((float) $v) || $v < 0 || $v > ($ceil[$k] ?? 1e7)) $this->violate('STAT_RANGE', ['stat' => mb_substr($k, 0, 24)]);
+            if (!is_finite((float) $v) || $v < 0 || $v > (isset($ceil[$k]) ? $ceil[$k] : 1e7)) $this->violate('STAT_RANGE', ['stat' => mb_substr($k, 0, 24)]);
         }
         $level = self::i(self::p($stats, 'level'));
         $lc = (array) Config::get('save.level_exp', []);
-        $maxLevel = (int) ($lc['max'] ?? 50);
+        $maxLevel = (int) (isset($lc['max']) ? $lc['max'] : 50);
         if ($level < 1 || $level > $maxLevel) $this->violate('LEVEL_RANGE', ['level' => $level]);
         $exp = self::i(self::p($stats, 'exp'));
-        $need = (int) round(((float) ($lc['base'] ?? 120)) * (max(1, min($maxLevel, $level)) ** (float) ($lc['pow'] ?? 1.35)));
+        $need = (int) round(((float) (isset($lc['base']) ? $lc['base'] : 120)) * (max(1, min($maxLevel, $level)) ** (float) (isset($lc['pow']) ? $lc['pow'] : 1.35)));
         if ($exp > $need + 1) $this->violate('EXP_RANGE', ['exp' => $exp, 'need' => $need]);
         $inv = self::kv(self::p($n, 'inventory'));
         if (count($inv) > 300) self::bad('inventory size');
@@ -433,15 +461,15 @@ final class SaveValidator
     // ------------------------------------------------------------------ movement / play time
     /**
      * The client counts walked metres (player:distance, teleports / fast travel excluded) and active play seconds.
-     * Since phase 4 the player runs at 18 m/s (walk 9.6): move_max_speed (default 27 m/s = RUN × 1.5 for jumps, the
-     * easy-mode rescue hop and frame jitter) × the elapsed server time between accepted saves, plus a fixed slack.
+     * Phase 6: the base run is 12 m/s (walk 6.4); move_max_speed (default 18 m/s = RUN × 1.5 for jumps, the easy-mode
+     * rescue hop and frame jitter) × min(tier, 3) × the elapsed server time between accepted saves, plus a fixed slack.
      */
     private function movement(?object $sN, ?object $sP, float $dt): void
     {
         $slackT = $this->t('time_slack', 5);
         $dD = self::n(self::p($sN, 'distance')) - self::n(self::p($sP, 'distance'));
-        $allowD = max(1.0, $this->t('move_max_speed', 27)) * ($dt + $slackT) + max(0.0, $this->t('move_slack_m', 300));
-        if ($dD > $allowD) $this->violate('DISTANCE_TOO_FAST', ['gain' => (int) round($dD), 'allowed' => (int) round($allowD), 'elapsed' => round($dt, 1)]);
+        $allowD = max(1.0, $this->t('move_max_speed', 18)) * $this->moveMul() * ($dt + $slackT) + max(0.0, $this->t('move_slack_m', 300));
+        if ($dD > $allowD) $this->violate('DISTANCE_TOO_FAST', ['gain' => (int) round($dD), 'allowed' => (int) round($allowD), 'elapsed' => round($dt, 1), 'tier' => $this->tier]);
         $dT = self::n(self::p($sN, 'playTime')) - self::n(self::p($sP, 'playTime'));
         $allowT = $dt * 1.05 + $slackT + max(0.0, $this->t('playtime_slack', 120));
         if ($dT > $allowT) $this->violate('PLAYTIME_TOO_FAST', ['gain' => (int) round($dT), 'allowed' => (int) round($allowT)]);
@@ -456,10 +484,11 @@ final class SaveValidator
         $gs = $this->t('growth_slack', 3);
         $slackT = $this->t('time_slack', 5);
         $minGrowth = GameData::maxima()['minGrowth'];
+        $tierMul = (float) $this->tier; // crops grow tier× faster for a subscriber (CONTRACT §14.1 progression())
         // %/s at the fastest legal speed for a crop (null = fastest crop of all)
-        $rate = function (?array $c) use ($tolH, $minGrowth): float {
-            $gt = $c && ($c['growthTime'] ?? 0) > 0 ? (float) $c['growthTime'] : (float) $minGrowth;
-            return 100.0 / max(1.0, $gt * $tolH);
+        $rate = function (?array $c) use ($tolH, $minGrowth, $tierMul): float {
+            $gt = $c && (isset($c['growthTime']) ? $c['growthTime'] : 0) > 0 ? (float) $c['growthTime'] : (float) $minGrowth;
+            return $tierMul * 100.0 / max(1.0, $gt * $tolH);
         };
         $plotsN = self::kv(self::p(self::o(self::p($n, 'farm')), 'plots'));
         $plotsP = $p ? self::kv(self::p(self::o(self::p($p, 'farm')), 'plots')) : [];
@@ -479,7 +508,7 @@ final class SaveValidator
                 $x = self::p($s, $k);
                 if ($x !== null && (!is_int($x) && !is_float($x) || $x < 0 || $x > 100.0001)) $this->violate('PLOT_RANGE', ['plot' => $id, 'field' => $k]);
             }
-            $ps = self::o($plotsP[$id] ?? null);
+            $ps = self::o(isset($plotsP[$id]) ? $plotsP[$id] : null);
             $hN = max(0, self::i(self::p($s, 'harvests')));
             $hP = $ps ? max(0, self::i(self::p($ps, 'harvests'))) : 0;
             $k = max(0, $hN - $hP);
@@ -488,10 +517,10 @@ final class SaveValidator
                 // first harvest = the crop that stood here at the previous save (prefill on a first save: assume the
                 // crop still/now on the plot); later ones in the same interval = the current crop (herb regrowth) or unknown
                 $pc = $ps ? GameData::crop(self::s(self::p($ps, 'cropId'))) : null;
-                [$v1, $x1] = self::cropReward($first ? ($crop ?? $pc) : $pc);
-                [$vn, $xn] = self::cropReward($crop);
-                $values[] = $v1; $exps[] = $x1;
-                for ($j = 1; $j < min($k, 200); $j++) { $values[] = $vn; $exps[] = $xn; }
+                $r1 = self::cropReward($first ? ($crop ? $crop : $pc) : $pc);
+                $rn = self::cropReward($crop);
+                $values[] = $r1[0]; $exps[] = $r1[1];
+                for ($j = 1; $j < min($k, 200); $j++) { $values[] = $rn[0]; $exps[] = $rn[1]; }
             }
             if ($first) {
                 // baseline = client prefill (not known to the server): the first harvest may be immediate
@@ -511,7 +540,7 @@ final class SaveValidator
                     if ($cropId !== '') $need += max(0, $g - self::REGROW - $gs) / $rate($crop);
                 }
             }
-            if ($need > $dt + $slackT) $this->violate('GROWTH_TOO_FAST', ['plot' => $id, 'need' => round($need, 1), 'elapsed' => round($dt, 1)]);
+            if ($need > $dt + $slackT) $this->violate('GROWTH_TOO_FAST', ['plot' => $id, 'need' => round($need, 1), 'elapsed' => round($dt, 1), 'tier' => $this->tier]);
         }
         return ['harvests' => $total, 'values' => $values, 'exps' => $exps];
     }
@@ -521,11 +550,13 @@ final class SaveValidator
     private function fermentation(object $n, ?object $p, bool $first, float $dt): array
     {
         $tolF = $this->t('ferment_tolerance', 0.5);
-        $speed = max(1.0, $this->t('ferment_max_speed', 1.2));
+        $speed = max(1.0, $this->t('ferment_max_speed', 1.2)) * $this->tier; // ferment_max_speed × tier (CONTRACT §14.1)
         $gs = $this->t('growth_slack', 3);
         $slackT = $this->t('time_slack', 5);
         $minF = GameData::maxima()['minFerment'];
-        $rate = fn (?array $r): float => 100.0 * $speed / max(1.0, (($r && ($r['baseDuration'] ?? 0) > 0) ? (float) $r['baseDuration'] : (float) $minF) * $tolF);
+        $rate = function (?array $r) use ($speed, $minF, $tolF): float {
+            return 100.0 * $speed / max(1.0, (($r && (isset($r['baseDuration']) ? $r['baseDuration'] : 0) > 0) ? (float) $r['baseDuration'] : (float) $minF) * $tolF);
+        };
         $fullMin = 100.0 / $rate(null);
         $jarsN = self::kv(self::p($n, 'jars'));
         $jarsP = $p ? self::kv(self::p($p, 'jars')) : [];
@@ -550,11 +581,11 @@ final class SaveValidator
             if ($first) {
                 $extra = (int) floor($dt / $fullMin);
                 $slots += ($owned ? 1 : 0) + $extra;
-                if ($owned) { [$v, $x] = self::recipeReward($rec); $values[] = $v; $exps[] = $x; }
+                if ($owned) { $rr = self::recipeReward($rec); $values[] = $rr[0]; $exps[] = $rr[1]; }
                 for ($j = 0; $j < min($extra, 50); $j++) { $values[] = $maxR[0]; $exps[] = $maxR[1]; }
                 continue;
             }
-            $ps = self::o($jarsP[$id] ?? null);
+            $ps = self::o(isset($jarsP[$id]) ? $jarsP[$id] : null);
             $pRecId = $ps ? self::s(self::p($ps, 'recipeId')) : '';
             $pRec = $pRecId !== '' ? GameData::recipe($pRecId) : null;
             $pStatus = $ps ? self::s(self::p($ps, 'status')) : 'EMPTY';
@@ -574,12 +605,12 @@ final class SaveValidator
                     if ($status === 'CLAIMED') $claimsHere++;
                 }
             }
-            if ($need > $dt + $slackT) $this->violate('FERMENT_TOO_FAST', ['jar' => $id, 'need' => round($need, 1), 'elapsed' => round($dt, 1)]);
+            if ($need > $dt + $slackT) $this->violate('FERMENT_TOO_FAST', ['jar' => $id, 'need' => round($need, 1), 'elapsed' => round($dt, 1), 'tier' => $this->tier]);
             if ($owned || ($ps && self::p($ps, 'owned') === true)) {
                 $extra = (int) floor(max(0.0, $dt - $need) / $fullMin);
                 $slots += $claimsHere + $extra;
                 // the batch claimed first is the one that was in the jar at the previous save
-                for ($j = 0; $j < $claimsHere; $j++) { [$v, $x] = self::recipeReward($j === 0 && $pOpen && $pRec ? $pRec : $rec); $values[] = $v; $exps[] = $x; }
+                for ($j = 0; $j < $claimsHere; $j++) { $rr = self::recipeReward($j === 0 && $pOpen && $pRec ? $pRec : $rec); $values[] = $rr[0]; $exps[] = $rr[1]; }
                 for ($j = 0; $j < min($extra, 50); $j++) { $values[] = $maxR[0]; $exps[] = $maxR[1]; }
             }
         }
@@ -591,22 +622,23 @@ final class SaveValidator
     private static function cropReward(?array $c): array
     {
         if (!$c) { $m = GameData::maxima(); return [$m['harvestValue'], $m['harvestExp']]; }
-        $hi = (int) max((array) ($c['harvestAmount'] ?? [3]) ?: [3]) + 1; // + basket bonus
-        return [(int) ($c['coin'] ?? 0) + $hi * GameData::itemValue((string) ($c['harvestItem'] ?? '')), (int) ($c['exp'] ?? 0)];
+        $amt = (array) (isset($c['harvestAmount']) ? $c['harvestAmount'] : [3]);
+        $hi = (int) max($amt ?: [3]) + 1; // + basket bonus
+        return [(int) (isset($c['coin']) ? $c['coin'] : 0) + $hi * GameData::itemValue((string) (isset($c['harvestItem']) ? $c['harvestItem'] : '')), (int) (isset($c['exp']) ? $c['exp'] : 0)];
     }
 
     /** value / exp one claim of this recipe can produce (resultQty is not exported: up to 3 incl. quality bonus) */
     private static function recipeReward(?array $r): array
     {
         if (!$r) { $m = GameData::maxima(); return [$m['claimValue'], $m['claimExp']]; }
-        return [(int) ($r['coin'] ?? 0) + 3 * GameData::itemValue((string) ($r['resultItem'] ?? '')), (int) ($r['exp'] ?? 0)];
+        return [(int) (isset($r['coin']) ? $r['coin'] : 0) + 3 * GameData::itemValue((string) (isset($r['resultItem']) ? $r['resultItem'] : '')), (int) (isset($r['exp']) ? $r['exp'] : 0)];
     }
 
     /** sum of the $n largest candidates; any count beyond the candidates is valued at $fallback each */
     private static function topSum(array $candidates, int $n, int $fallback): int
     {
         rsort($candidates);
-        $sum = array_sum(array_slice($candidates, 0, max(0, $n)));
+        $sum = (int) array_sum(array_slice($candidates, 0, max(0, $n)));
         return $sum + max(0, $n - count($candidates)) * $fallback;
     }
 
@@ -640,16 +672,16 @@ final class SaveValidator
     /** if the build ever exports quest objectives, stat-type objectives must be backed by the stats */
     private function checkQuestObjectives(string $qid, array $def, object $n): void
     {
-        $objs = $def['objectives'] ?? null;
+        $objs = isset($def['objectives']) ? $def['objectives'] : null;
         if (!is_array($objs)) return;
         $map = ['water' => 'waters', 'harvest' => 'harvests', 'plant' => 'plants', 'journal' => 'journals', 'quiz' => 'quizCorrect',
             'photo' => 'photos', 'craft' => 'crafts', 'ferment_claim' => 'fermentsClaimed', 'ferment_start' => 'fermentsStarted',
             'ferment_check' => 'fermentChecks', 'emote' => 'emotes', 'interact' => 'interacts', 'talk' => 'talks'];
         $st = self::o(self::p($n, 'stats'));
         foreach ($objs as $o) {
-            $type = is_array($o) ? (string) ($o['type'] ?? '') : '';
+            $type = is_array($o) ? (string) (isset($o['type']) ? $o['type'] : '') : '';
             if (!isset($map[$type])) continue;
-            $count = (int) ($o['count'] ?? 1);
+            $count = (int) (is_array($o) && isset($o['count']) ? $o['count'] : 1);
             if (self::i(self::p($st, $map[$type])) < $count) { $this->violate('QUEST_OBJECTIVE', ['quest' => $qid, 'type' => $type]); return; }
         }
     }
@@ -669,12 +701,13 @@ final class SaveValidator
         $h1 = 0xdeadbeef;
         $h2 = 0x41c6ce57;
         $len = strlen($utf8);
+        $b = function (int $i) use ($utf8, $len): int { return $i < $len ? ord($utf8[$i]) : 0; };
         for ($i = 0; $i < $len;) {
             $c = ord($utf8[$i]);
             if ($c < 0x80) { $cp = $c; $i++; }
-            elseif ($c < 0xE0) { $cp = (($c & 0x1F) << 6) | (ord($utf8[$i + 1] ?? "\0") & 0x3F); $i += 2; }
-            elseif ($c < 0xF0) { $cp = (($c & 0x0F) << 12) | ((ord($utf8[$i + 1] ?? "\0") & 0x3F) << 6) | (ord($utf8[$i + 2] ?? "\0") & 0x3F); $i += 3; }
-            else { $cp = (($c & 0x07) << 18) | ((ord($utf8[$i + 1] ?? "\0") & 0x3F) << 12) | ((ord($utf8[$i + 2] ?? "\0") & 0x3F) << 6) | (ord($utf8[$i + 3] ?? "\0") & 0x3F); $i += 4; }
+            elseif ($c < 0xE0) { $cp = (($c & 0x1F) << 6) | ($b($i + 1) & 0x3F); $i += 2; }
+            elseif ($c < 0xF0) { $cp = (($c & 0x0F) << 12) | (($b($i + 1) & 0x3F) << 6) | ($b($i + 2) & 0x3F); $i += 3; }
+            else { $cp = (($c & 0x07) << 18) | (($b($i + 1) & 0x3F) << 12) | (($b($i + 2) & 0x3F) << 6) | ($b($i + 3) & 0x3F); $i += 4; }
             if ($cp >= 0x10000) {
                 $cp -= 0x10000;
                 $u = 0xD800 | ($cp >> 10);
@@ -698,8 +731,8 @@ final class SaveValidator
     public static function rawDataSlice(string $body): ?string
     {
         if (!preg_match('/^\{"version":\d{1,6},"checksum":"[0-9a-f]{1,32}",(?:"base":\d{1,12},)?"data":/', $body, $m)) return null;
-        $rest = substr($body, strlen($m[0]));
-        if (preg_match('/(?:,"base":\d{1,12})?(?:,"csrf":"[A-Za-z0-9]{1,128}")?\}$/', $rest, $c)) $rest = substr($rest, 0, -strlen($c[0]));
+        $rest = Str::sub($body, strlen($m[0]));
+        if (preg_match('/(?:,"base":\d{1,12})?(?:,"csrf":"[A-Za-z0-9]{1,128}")?\}$/', $rest, $c)) $rest = Str::sub($rest, 0, -strlen($c[0]));
         else return null;
         return ($rest !== '' && $rest[0] === '{') ? $rest : null;
     }
@@ -710,8 +743,8 @@ final class SaveValidator
         $st = self::o(self::p($s, 'stats'));
         $prof = self::o(self::p($s, 'profile'));
         $title = self::s(self::p($prof, 'title'));
-        $title = mb_substr(trim(preg_replace('/[^\x{AC00}-\x{D7A3}a-zA-Z0-9 _·\-]/u', '', $title) ?? ''), 0, 20);
-        // the ranking shows this to everyone: only titles the game can award (exported list); older exports fall
+        $title = mb_substr(trim((string) preg_replace('/[^\x{AC00}-\x{D7A3}a-zA-Z0-9 _·\-]/u', '', $title)), 0, 20);
+        // the ranking shows this to everyone: only titles the app can award (exported list); older exports fall
         // back to the chat filters so the title can never smuggle bad words or personal information
         $known = GameData::titles();
         if ($known ? !in_array($title, $known, true) : (ChatFilter::containsBadWord($title) || ChatFilter::hasPII($title))) $title = '';

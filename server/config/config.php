@@ -7,12 +7,13 @@
  *       <?php return ['db' => ['driver' => 'mysql', 'mysql' => ['password' => '비밀번호']]];
  * ▶ 환경 변수(TFM_*)로도 덮어쓸 수 있습니다 (Apache: SetEnv, Nginx/PHP-FPM: env[...] / fastcgi_param).
  *
- * XAMPP 빠른 시작
- *   1) dist/metaverse 폴더를 C:\xampp\htdocs\metaverse 로 복사
- *   2) XAMPP Control Panel 에서 Apache 시작 (SQLite 기본 사용 → MySQL 없어도 동작)
- *   3) http://localhost/metaverse/ 접속 → 상단 칩이 "서버"로 보이면 서버 모드
- *   MySQL/MariaDB 를 쓰려면: phpMyAdmin 에서 database/schema.sql 가져오기(Import) 후
- *   config.local.php 에 'db' => ['driver' => 'mysql', ...] 지정 (XAMPP 기본 계정: root / 빈 비밀번호)
+ * XAMPP 빠른 시작 (Apache 2.4 · PHP 7.2 이상(64비트) · MariaDB 10.3 이상 — docs/SERVER-INSTALL-KO.md 참고)
+ *   1) 배포 zip 의 metaverse 폴더를 C:\xampp\htdocs\metaverse 로 복사
+ *   2) XAMPP Control Panel 에서 Apache(+ MySQL) 시작
+ *   3) http://localhost/metaverse/install.php 를 열어 설치 마법사를 따라가면 이 파일 옆에 config.local.php 가 만들어지고
+ *      데이터베이스 테이블과 첫 관리자가 생겨요 (완료 후 data/install.lock 으로 잠김)
+ *   4) http://localhost/metaverse/ 접속 → 상단 칩이 "서버"로 보이면 서버 모드
+ *   phpMyAdmin 으로 직접 만들 때는 database/schema.sql 가져오기(Import) 후 아래 'db' 값을 config.local.php 에 적으세요.
  *
  * 보안 메모
  *   - data/ (DB·로그·세션·비밀키)는 웹에서 직접 열리면 안 됩니다. Apache 는 .htaccess 로 막혀 있고,
@@ -45,7 +46,7 @@ return [
 
     // ------------------------------------------------------------------ database
     'db' => [
-        'driver'       => $env('TFM_DB_DRIVER', 'sqlite'),  // sqlite (기본, 설정 불필요) | mysql (MySQL 5.7+/MariaDB 10.3+)
+        'driver'       => $env('TFM_DB_DRIVER', 'sqlite'),  // sqlite (기본, 설정 불필요) | mysql (MySQL 5.7+/MariaDB 10.3+; install.php 가 설정)
         // 비워 두면 data/ 안에 추측하기 어려운 이름(db-<무작위>.sqlite)으로 자동 생성합니다.
         'sqlite_path'  => $env('TFM_SQLITE_PATH', ''),
         'mysql' => [
@@ -125,6 +126,11 @@ return [
         'ranking'      => [40, 60],
         'admin'        => [120, 60],
         'admin_page'   => [240, 60],
+        'sub_status'   => [60, 60],
+        'sub_write'    => [20, 600],     // prepare · confirm · billing-issue · cancel (per account)
+        'sub_return'   => [30, 600],     // 토스 결제창에서 돌아오는 페이지 (IP 별)
+        'sub_webhook'  => [120, 60],     // 토스 웹훅 (IP 별)
+        'install'      => [30, 600],
     ],
 
     // ------------------------------------------------------------------ chat
@@ -137,7 +143,7 @@ return [
         'local_radius'     => 30,     // '주변' 채널 메시지를 받을 거리(m)
         'retention_days'   => 30,     // 이보다 오래된 메시지는 정리
         'reasons'          => ['abuse', 'spam', 'harass', 'privacy', 'etc', 'kid'],   // kid = 쉬운 모드 아이의 한 번 누르기 신고
-        // 게임(01-data.js badWords)과 같은 목록 + 추가 단어. 글자 사이 공백·기호도 걸러냅니다.
+        // 체험관(01-data.js badWords)과 같은 목록 + 추가 단어. 글자 사이 공백·기호도 걸러냅니다.
         'bad_words'        => ['시발', '씨발', 'ㅅㅂ', '병신', 'ㅂㅅ', '개새끼', '좆', '지랄', 'fuck', 'shit', 'bitch', '썅', '느금', '니애미', 'ㅄ'],
     ],
 
@@ -179,17 +185,35 @@ return [
             'growth_slack'      => 3,      // 성장률/발효 진행률 허용 오차(%p)
             'time_slack'        => 5,      // 시간 판정 여유(초): 네트워크 지연·시계 오차
             'ferment_tolerance' => 0.5,    // 발효 최소 시간 = 기본 시간 / 최대 속도 × 이 값
-            'ferment_max_speed' => 1.2,    // 게임의 최대 발효 속도 배율 (0.8 + 0.25 + 0.1 = 1.15) + 여유
+            'ferment_max_speed' => 1.2,    // 최대 발효 속도 배율 (0.8 + 0.25 + 0.1 = 1.15) + 여유 — 구독 단계(tier)를 곱해 판정
             'jar_value'         => 1500,   // 추가 장독 1개(열기 비용)를 자산으로 계산
             'craft_value_gain'  => 260,    // 작업대 제작 1회로 늘 수 있는 최대 자산 가치
             'craft_exp'         => 40,
-            'move_max_speed'    => 27,     // 이동 거리 판정 최대 속도(m/s): 달리기 18 m/s(3배 속도) × 1.5 — 점프·도움 이동·프레임 오차 여유
+            'move_max_speed'    => 18,     // 이동 거리 판정 최대 속도(m/s, 기본 1배): 달리기 12 m/s(2배 기본 속도) × 1.5 — 점프·도움 이동·프레임 오차 여유.
+                                           //   구독 단계에 따라 × min(tier, 3) (2배 36 · 3배/4배 54)
             'move_slack_m'      => 300,    // 이동 거리 고정 여유(m)
             'playtime_slack'    => 120,    // 플레이 시간 고정 여유(초)
             'edu_complete'      => 5,      // 교육 콘텐츠 완료 시 교육 포인트
         ],
         // 레벨 경험치 공식 (01-data.js G.data.levels.expFor 와 같아야 함): round(base × level^pow)
         'level_exp' => ['base' => 120, 'pow' => 1.35, 'max' => 50],
+    ],
+
+    // ------------------------------------------------------------------ 구독(진행 속도 2·3·4배) · 토스페이먼츠 (CONTRACT §14.6)
+    // 기본 키는 토스페이먼츠 "문서용 테스트 키"(실제 돈이 오가지 않음). 운영 때는 개발자센터의 내 키를 환경 변수나
+    // config.local.php 에 넣으세요. secret_key 는 어디에도 기록(로그)되지 않습니다. 가격은 운영자가 정하는 자리표시자(원).
+    'toss' => [
+        'client_key'  => $env('TFM_TOSS_CLIENT_KEY', 'test_ck_D5GePWvyJnrK0W0k6q8gLzN97Eoq'),
+        'secret_key'  => $env('TFM_TOSS_SECRET_KEY', 'test_sk_zXLkKEypNArWmo50nX3lmeaxYG5R'),
+        'mock'        => $env('TFM_TOSS_MOCK', false),   // true: 결제 서버에 연결하지 않는 모의 결제 (테스트·시연·E2E)
+        'api_base'    => 'https://api.tosspayments.com',
+        'period_days' => 30,                             // 한 번 결제 = 이용 기간(일)
+        'grace_days'  => 3,                              // 자동 갱신 실패 후 유예 기간(일) — 지나면 기본 속도로
+        'tiers' => [
+            2 => ['price' => 2900, 'name' => '⚡ 2배'],
+            3 => ['price' => 4900, 'name' => '⚡⚡ 3배'],
+            4 => ['price' => 6900, 'name' => '⚡⚡⚡ 4배'],
+        ],
     ],
 
     // ------------------------------------------------------------------ logs & maintenance

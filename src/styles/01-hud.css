@@ -29,6 +29,9 @@ body.hud-hidden .hud, body.hud-hidden #labels-layer { display: none; }
 }
 .hud-player-row { display: flex; align-items: center; gap: .45rem; min-width: 0; }
 .lv-chip { padding: .08rem .45rem; border-radius: 7px; background: linear-gradient(180deg, #ffd766, #e2aa22); color: #2b1d02; font-weight: 800; font-size: .76rem; flex: none; }
+/* 진행 속도 chip (CONTRACT §14.1, G.sys.subscription): hidden at tier 1; ⚡2× in normal mode, ⚡ 2배 빨라요 in easy mode */
+.speed-chip { padding: .08rem .45rem; border-radius: 7px; background: linear-gradient(180deg, #fff1b8, #ffd24a); color: #3a2a00; font-weight: 800; font-size: .76rem; flex: none; white-space: nowrap; box-shadow: 0 0 0 1px rgba(255, 210, 74, .35); }
+.speed-chip[hidden] { display: none; }
 .hud-nick { font-weight: 700; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title-chip { padding: .05rem .45rem; border-radius: 999px; font-size: .68rem; font-weight: 700; color: var(--green-l); background: rgba(52,195,107,.15); border: 1px solid rgba(52,195,107,.4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 7rem; }
 .bar-exp { height: .55rem; }
@@ -345,6 +348,7 @@ body.easy .hud-player-row { gap: .55rem; }
 body.easy .hud-nick { font-size: max(16px, 1.12rem); font-weight: 800; }
 body.easy .lv-chip { order: 2; font-size: 0; padding: .12rem .55rem .12rem .45rem; border-radius: 999px; line-height: 1; }
 body.easy .lv-chip::after { content: '⭐ ' attr(data-n); font-size: 1.02rem; font-weight: 900; }
+body.easy .speed-chip { order: 3; font-size: max(16px, .92rem); font-weight: 900; padding: .12rem .6rem; border-radius: 999px; line-height: 1.2; }
 body.easy .hud-currency { font-size: 1.22rem; gap: .5rem; color: var(--text); }
 body.easy .hud-currency .cur-coin { gap: .35rem; }
 body.easy .hud-currency .cur-coin .ico { width: 1.45rem; height: 1.45rem; }

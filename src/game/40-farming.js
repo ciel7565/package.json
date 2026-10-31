@@ -26,6 +26,8 @@
 //     G.ffx.floatText(html, vec3, cls)  rising world-anchored text
 // Growth is simulated in fixed steps from each plot's lastUpdate to G.time.now() (catch-up capped by
 // G.data.farming.offlineCatchUpMax), so offline time counts. Visuals/labels refresh 4x per second.
+// Phase 6 (CONTRACT §14.1): the growth rate is × G.sys.speed.progression() (the subscription tier, 1..4) — offline
+// catch-up included; water use, drying and health are wall-clock as before (nothing protective speeds up).
 // Live rain from G.sys.weather (precipitation.rain) slowly waters every bed while the player is online.
 // =============================================================================
 (function () {
@@ -799,6 +801,8 @@
   // the 💧 tap and the water button all need water < 100 %, and a long rain spell would otherwise block them)
   const RAIN_WATER_CAP = 92;
   const DEF_CFG = { waterPerAction: 45, waterCooldown: 2.5, dryThreshold: 25, healthDecayDry: 0.25, healthRegen: 0.08, basketBonus: 1, offlineCatchUpMax: 3600 };
+  /** growth multiplier of the speed tier (1..4), read at every simulation step */
+  const progression = () => { const p = Number(G.sys.speed?.progression?.()); return p >= 1 && p <= 4 ? p : 1; };
   let CFG = null;
   const cfg = () => CFG || (CFG = Object.assign({}, DEF_CFG, G.data.farming || {}));
   const crops = () => G.data.crops || {};
@@ -1004,7 +1008,7 @@
       const crop = cropOf(s.cropId);
       const steps = Math.ceil(el);
       const h = el / steps;
-      const rate = crop ? 100 / Math.max(1, crop.growthTime) : 0;
+      const rate = crop ? (100 / Math.max(1, crop.growthTime)) * progression() : 0; // × the speed tier (§14.1)
       const use = crop ? crop.waterUse : 0.12; // bare soil still dries out slowly
       for (let k = 0; k < steps; k++) {
         if (s.water <= 0 && !crop) break;
@@ -1054,7 +1058,7 @@
       if (!crop || s.growth >= 100) return { full: 0, now: 0 };
       const C = cfg();
       const hf = 0.6 + 0.4 * s.health / 100;
-      const rate = (100 / Math.max(1, crop.growthTime)) * hf;
+      const rate = (100 / Math.max(1, crop.growthTime)) * hf * progression();
       const need = 100 - s.growth;
       const full = need / rate;
       let g = 0, tt = 0, w = s.water;

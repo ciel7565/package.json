@@ -764,6 +764,7 @@
           }
           const d = await G.net.request('auth/register.php', { body: { email, nickname, password, password_confirm: confirm, agree: true, remember: !!form.remember } });
           let user = normServerUser(d);
+          this._lastSub = d && d.sub ? d.sub : null;
           if (!user) user = await this._serverLogin(email, password, !!form.remember);
           else Profiles.upsert({ id: indexId(user), kind: 'server', nickname: user.nickname, role: user.role, ...rememberFields(!!form.remember) });
           this.serverUser = user;
@@ -894,7 +895,11 @@
     async checkServer() {
       if (!isServer()) return null;
       if (store.get(KEYS.logoutPending, null) && !(await this._serverLogout())) { this.serverUser = null; return null; } // never offer that session
-      try { this.serverUser = normServerUser(await G.net.request('auth/me.php', { quiet: true, timeout: 5000 })); } catch (e) { this.serverUser = null; }
+      try {
+        const d = await G.net.request('auth/me.php', { quiet: true, timeout: 5000 });
+        this.serverUser = normServerUser(d);
+        this._lastSub = d && d.sub ? d.sub : null;
+      } catch (e) { this.serverUser = null; }
       return this.serverUser;
     },
     /** logout.php with retries; until the server confirms, a flag keeps the old session from being resumed */
@@ -919,6 +924,7 @@
       const d = await G.net.request('auth/login.php', { body: { email: login, login, password, remember: !!remember } });
       const u = normServerUser(d);
       if (!u) throw new AuthError('로그인 응답을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.');
+      this._lastSub = d && d.sub ? d.sub : null;
       store.del(KEYS.logoutPending); // a fresh session replaced the one whose logout was pending
       this.serverUser = u;
       Profiles.upsert({ id: indexId(u), kind: 'server', nickname: u.nickname, role: u.role, ...rememberFields(!!remember) });
@@ -1082,28 +1088,49 @@
         if (this._again) { this._again = false; this.schedule(300); }
       }
     },
+    // one private scene (lights, camera), one render target per size and ONE rig for the whole session: the portrait
+    // light setup needs its own variant of the avatar body shader, and a rig disposed after every render took that
+    // program with it, so every HUD / kid-look portrait compiled and linked the shader again (R3-render-4). The rig
+    // is re-dressed per render (setAppearance) and disposed on logout / a quality change (Portrait.dispose).
+    _scene: null, _cam: null, _rig: null, _rt: null, _rtS: 0,
+    _ensureScene(E) {
+      if (!this._scene) {
+        const K = 0.5; // lights at half power keep 8-bit targets from clipping; the gain restores them
+        const scene = new THREE.Scene();
+        scene.environmentIntensity = 0.55;
+        const key = new THREE.DirectionalLight(0xfff0d8, 3.2 * K); key.position.set(1.4, 2.4, 3);
+        const fill = new THREE.DirectionalLight(0xd2e4ff, 1.2 * K); fill.position.set(-2.6, 1.0, 1.6);
+        const rim = new THREE.DirectionalLight(0xffe0a8, 2.0 * K); rim.position.set(-1.2, 2.4, -2.6);
+        scene.add(new THREE.HemisphereLight(0xfff4e2, 0x56674a, 1.5 * K), key, fill, rim);
+        this._scene = scene;
+        this._cam = new THREE.PerspectiveCamera(22, 1, 0.05, 20);
+      }
+      this._scene.environment = E.scene?.environment || null;
+      return this._scene;
+    },
+    /** drop the portrait rig + target (logout, quality change): the next render builds them again */
+    dispose() {
+      if (this._rig) { try { this._scene?.remove(this._rig.group); this._rig.dispose?.(); } catch (e) { /* ignore */ } this._rig = null; }
+      if (this._rt) { try { this._rt.dispose(); } catch (e) { /* ignore */ } this._rt = null; this._rtS = 0; }
+    },
     /** render a head-and-shoulders portrait -> canvas | null. o: {dist (camera distance), drop (look-at below the head), gain} */
     async render(appearance, S = 128, o = {}) {
       const E = G.sys.engine, r = E?.renderer;
       if (!r || !G.avatar?.create || typeof r.readRenderTargetPixels !== 'function') return null;
-      const K = 0.5; // lights at half power keep 8-bit targets from clipping; the gain restores them
-      const scene = new THREE.Scene();
-      scene.environment = E.scene?.environment || null;
-      scene.environmentIntensity = 0.55;
-      const key = new THREE.DirectionalLight(0xfff0d8, 3.2 * K); key.position.set(1.4, 2.4, 3);
-      const fill = new THREE.DirectionalLight(0xd2e4ff, 1.2 * K); fill.position.set(-2.6, 1.0, 1.6);
-      const rim = new THREE.DirectionalLight(0xffe0a8, 2.0 * K); rim.position.set(-1.2, 2.4, -2.6);
-      scene.add(new THREE.HemisphereLight(0xfff4e2, 0x56674a, 1.5 * K), key, fill, rim);
-      const cam = new THREE.PerspectiveCamera(22, 1, 0.05, 20);
+      const K = 0.5;
+      const scene = this._ensureScene(E), cam = this._cam;
       // low preset: no MSAA for portraits (software / weak GPUs: a multisampled target costs a lot for 128 px)
-      const rt = new THREE.WebGLRenderTarget(S, S, { samples: lowPreset() ? 0 : 4 });
+      if (!this._rt || this._rtS !== S) { this._rt?.dispose(); this._rt = new THREE.WebGLRenderTarget(S, S, { samples: lowPreset() ? 0 : 4 }); this._rtS = S; }
+      const rt = this._rt;
       const buf = new Uint8Array(S * S * 4);
-      let rig = null;
+      let rig = this._rig;
       try {
-        rig = G.avatar.create(appearance, { shadow: false });
+        if (!rig) { rig = this._rig = G.avatar.create(appearance, { shadow: false }); scene.add(rig.group); }
+        else if (typeof rig.setAppearance === 'function') rig.setAppearance(appearance);
+        else { scene.remove(rig.group); rig.dispose?.(); rig = this._rig = G.avatar.create(appearance, { shadow: false }); scene.add(rig.group); }
+        rig.group.visible = true;
         rig.setExpression?.('happy', 60);
         for (let i = 0; i < 4; i++) rig.update(1 / 30, IDLE);
-        scene.add(rig.group);
         scene.updateMatrixWorld(true);
         rig.headAnchor.getWorldPosition(_pv);
         const cy = _pv.y - (Number.isFinite(o.drop) ? o.drop : 0.36);
@@ -1126,9 +1153,7 @@
         else r.readRenderTargetPixels(rt, 0, 0, S, S, buf);
         return encodePixels(buf, S, (Number.isFinite(o.gain) ? o.gain : 0.66) / K);
       } finally {
-        rt.dispose();
-        if (rig) { scene.remove(rig.group); try { rig.dispose(); } catch (e) { /* ignore */ } }
-        key.dispose?.(); fill.dispose?.(); rim.dispose?.();
+        if (rig) rig.group.visible = false; // kept (program alive); hidden so a stray render of the scene draws nothing
       }
     },
     apply(url) {
@@ -1138,7 +1163,7 @@
         else { b.style.backgroundImage = ''; b.classList.remove('has-portrait'); }
       }
     },
-    reset() { clearTimeout(this._timer); this._seq++; this.apply(null); },
+    reset() { clearTimeout(this._timer); this._seq++; this.apply(null); this.dispose(); }, // logout: the rig goes too (t-portrait-reset)
   };
 
   /** the cheapest quality preset is active (weak GPU / software rendering): skip optional offscreen renders */
@@ -1212,7 +1237,7 @@
   /** short lines for children (≤ 12 words, one idea each) */
   const KID_LINES = [
     ['happy', '안녕! 나는 옹이야 🏺'],
-    ['cheer', '▶ 놀러 가기를 눌러 봐요!'],
+    ['cheer', '▶ 만장대를 눌러 봐요!'],
     ['wink', '🎲를 누르면 이름이 바뀌어요!'],
     ['happy', '마음에 드는 옷을 골라요 👕'],
     ['cheer', '같이 콩을 키워요 🌱'],
@@ -1684,7 +1709,7 @@
         return { kind: 'login', entry: last, label: `${josa(last.nickname, '으로/로')} 로그인하기` };
       }
       if (last?.kind === 'server' && isServer()) return { kind: 'login', entry: last, label: `${josa(last.nickname, '으로/로')} 로그인하기` };
-      return { kind: 'guest', label: '설치 없이 바로 체험을 시작해요' };
+      return { kind: 'guest', label: '정선 만장대에서 시작해요' };
     },
 
     renderHome() {
@@ -1695,8 +1720,8 @@
       const hadFocus = home.contains(document.activeElement);
       home.innerHTML = `
         <button type="button" class="btn btn-gold btn-lg btn-block ts-start" data-act="start">
-          <span class="ts-start-ico"><span class="emoji">🏺</span></span>
-          <span class="ts-start-txt"><b>게임 시작</b><small></small></span>
+          <span class="ts-start-ico"><span class="emoji">🏔️</span></span>
+          <span class="ts-start-txt"><b>만장대</b><small></small></span>
           <span class="ts-start-arrow">${ico('chevron-right')}</span>
         </button>
         <div class="ts-row">
@@ -1785,7 +1810,7 @@
           ava,
           h('b', { class: 'kf-name' }, nick),
           h('span', { class: 'kf-lv', 'aria-label': `레벨 ${Number(first.level) || 1}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⭐'), String(Number(first.level) || 1)),
-          h('span', { class: 'kf-go' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, needsGrownUp ? '🔒' : '▶'), needsGrownUp ? '어른이 열어 줘요' : '놀러 가기!'));
+          h('span', { class: 'kf-go' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, needsGrownUp ? '🔒' : '▶'), needsGrownUp ? '어른이 열어 줘요' : '만장대'));
         box.appendChild(card);
         const row = h('div', { class: 'kid-friends', role: 'group', 'aria-label': '다른 친구' });
         for (const p of rest) {
@@ -1823,8 +1848,9 @@
           b.style.setProperty('--i', String(i));
           grid.appendChild(b);
         });
-        const go = h('button', { type: 'button', class: 'kid-go kid-go-big', 'data-act': 'kid-go', 'data-say': '놀러 가기' },
-          h('span', { class: 'emoji', 'aria-hidden': 'true' }, '▶'), h('span', null, '놀러 가기!'));
+        // CONTRACT §14.3 (t-kidgo): the start button says 만장대, voice '만장대로 놀러 가요!'
+        const go = h('button', { type: 'button', class: 'kid-go kid-go-big', 'data-act': 'kid-go', 'data-say': '만장대로 놀러 가요!' },
+          h('span', { class: 'emoji', 'aria-hidden': 'true' }, '▶'), h('span', null, '만장대'));
         box.append(head, nameRow, h('div', { class: 'kid-label-row', 'aria-hidden': 'true' }, '👕'), grid, go);
         // the picked look is drawn first (its picture becomes the new friend's face card), then the others
         LookArt.ensure([looks[k.look], ...looks.filter((_, i) => i !== k.look)], () => this._looksReady());
@@ -1888,6 +1914,7 @@
       const look = looks[this.kid.look] || looks[0];
       const nickname = this._kidIdeas();
       G.sfx('click');
+      say('만장대로 놀러 가요!', { force: true, priority: 1 });
       let created = null;
       return this._go(async () => {
         const prof = await auth.guest({ fresh: true, nickname, look: look?.app, lookId: look?.id, easy: true });
@@ -1997,7 +2024,7 @@
         case 'kid-back': G.sfx('close'); this.parent = false; this.renderHome(); return this.setView('kid');
         case 'kid-go': return this._kidGo(b);
         case 'kid-resume': return this._kidResume(b.dataset.id, b);
-        case 'kid-new': G.sfx('click'); this.kid.mode = 'new'; this._renderKid(); say('이름과 옷을 골라요. 그리고 놀러 가기를 눌러요!', { force: true, priority: 1 }); setTimeout(() => this._focusView('kid'), 40); return null;
+        case 'kid-new': G.sfx('click'); this.kid.mode = 'new'; this._renderKid(); say('이름과 옷을 골라요. 그리고 만장대를 눌러요!', { force: true, priority: 1 }); setTimeout(() => this._focusView('kid'), 40); return null;
         case 'kid-home': G.sfx('close'); this.kid.mode = 'home'; this._renderKid(); setTimeout(() => this._focusView('kid'), 40); return null;
         case 'kid-dice': {
           G.sfx('pop');
@@ -2678,7 +2705,7 @@
       this._key = '';
       if (step === 0 && G.sys.player?.position) this._start.copy(G.sys.player.position);
       this._ground = null;
-      this._going = false;
+      if (!opts.keepGoing) this._going = false; // a 2 ↔ 3 hop during the 👉 같이 가기 walk keeps the walk's state (R3-runtime-2)
       this._dropHand();
       const t = G.state?.tutorial;
       if (t && step <= 4 && Number(t.step || 0) !== step) { t.step = step; G.dirty('tutorial'); }
@@ -2698,7 +2725,8 @@
     },
 
     _blocked() {
-      return !G.state || !app.loggedIn || document.body.classList.contains('hud-hidden') || $('#hud')?.hidden || G.ui.modal.isOpen() || !!G.sys.dialogue?.active || !!this.final;
+      // an open popover (🌤️ 날씨, 😊 표현하기…) paints under the coach layer: the coach steps aside as for modals (R3-ui-1, t-blocked-popover)
+      return !G.state || !app.loggedIn || document.body.classList.contains('hud-hidden') || $('#hud')?.hidden || G.ui.modal.isOpen() || !!G.ui.popover?.isOpen?.() || !!G.sys.dialogue?.active || !!this.final;
     },
 
     update(dt) {
@@ -2724,8 +2752,9 @@
             if (this._goingIdle > 3) { this._going = false; this._goingIdle = 0; this._key = ''; this._handKey = ''; }
           }
           const near = this._npcPromptVisible();
-          if (this.step === 2 && near) this._go(3, { silent: true });
-          else if (this.step === 3) { this._talkSeen = near ? 0 : this._talkSeen + dt; if (this._talkSeen > 1.6) this._go(2, { silent: true }); }
+          const walking = !!G.sys.player?.isWalking || !!G.sys.minimap?._travel;
+          if (this.step === 2 && near) this._go(3, { silent: true, keepGoing: true });
+          else if (this.step === 3) { this._talkSeen = near ? 0 : this._talkSeen + dt; if (this._talkSeen > 1.6) this._go(2, { silent: true, keepGoing: walking }); }
         }
       }
       if (this.step >= 4) { this._showCoach(false); this.ring.hidden = true; this._dropHand(); return; }
@@ -2748,6 +2777,9 @@
       const pr = $('#interact-prompt');
       if (!pr || pr.hidden) return false;
       const cur = G.interact?.current;
+      // during the 👉 같이 가기 walk only the destination counts: passing 안내원 (NPC005) must not flip the coach to
+      // '인사해요' and back while the child is still being walked to 발효마스터 (R3-runtime-2, t-npc005)
+      if (this._going) return !!cur && cur.id === 'NPC001';
       return !cur || cur.id === 'NPC001' || cur.kind === 'npc';
     },
 
@@ -3099,7 +3131,7 @@
     if (!canDashboard() && !canDebug()) { G.ui.toast('관리자 권한이 있는 계정만 볼 수 있어요.', { type: 'warn' }); return false; }
     return parentGate('devcenter', '개발자 센터는 어른만').then((ok) => {
       if (!ok || !app.loggedIn) return false;
-      if (canDashboard()) openAdmin(tab); else Debug.toggle();
+      if (canDashboard()) openAdminNow(tab); else Debug.toggle(); // the 'devcenter' pass covers the dashboard: no second gate
       return true;
     });
   }
@@ -3236,6 +3268,13 @@
     }
   }
 
+  /** the 진행 속도 구독 tile / settings row caption (no prices: those live on the gated subscription screen only) */
+  function subTileDesc() {
+    const S = G.sys.subscription;
+    const t = Number(S?.tier?.()) || 1;
+    if (t > 1) return `지금 ${t}배 빨라요 · 구독 관리`;
+    return isServer() ? '이동·작물·발효 2·3·4배 (토스 결제)' : '서버에 설치하면 구독할 수 있어요';
+  }
   function openAdultMenu() {
     const st = G.state, s = st.stats || {}, p = st.profile || {};
     const guest = auth.current?.kind === 'guest';
@@ -3250,6 +3289,8 @@
       { act: 'avatar', emoji: '👕', label: '아바타 꾸미기', desc: '옷차림·헤어·닉네임', tint: '#ff9fc7' },
       G.sys.minimap?.openWorldMap && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
       { act: 'settings', emoji: '⚙️', label: '설정', desc: '소리·그래픽·조작·계정', tint: '#c9d3c6' },
+      // CONTRACT §14.6: the subscription screen is reachable only from grown-up screens (this menu, the settings 체험 tab)
+      G.sys.subscription && !G.sys.subscription._failed && typeof G.sys.subscription.open === 'function' && { act: 'subscription', emoji: '⚡', label: '진행 속도 구독', desc: subTileDesc(), tint: '#ffd766' },
       { act: 'help', emoji: '❓', label: '도움말', desc: '조작법·게임 방법·구역', key: 'H', tint: '#7fc4ff' },
       { act: 'save', emoji: '💾', label: '저장하기', desc: lastSavedText(), tint: '#86e3a8' },
       (devCenter() ? canDevCenter() : (canDashboard() || canDebug())) && { act: 'devcenter', emoji: '🛠️', label: '개발자·관리자 센터', desc: devCenter() ? '점검·통계·인수인계·디버그' : (isAdmin() ? '체험 통계·디버그 도구' : '내 체험 통계 (로컬)'), key: 'F9', tint: '#ff8f8f' },
@@ -3334,6 +3375,7 @@
       case 'avatar': openAvatar(); return;
       case 'map': G.sys.minimap?.openWorldMap?.(); return;
       case 'settings': openSettings({ adult: true }); return;
+      case 'subscription': if (G.sys.subscription?.open) G.sys.subscription.open(); else missing('구독'); return;
       case 'help': openHelp(null, { full: true }); return;
       case 'devcenter': openDevCenter(); return;
       case 'upgrade': upgradeGuest(); return;
@@ -3463,11 +3505,16 @@
     const music = h('button', { type: 'button', class: `easy-big-btn ks-toggle ${musicOn ? 'easy-btn-yes' : 'easy-btn-no'}`, 'data-ks': 'music', 'aria-pressed': musicOn ? 'true' : 'false', 'data-say': musicOn ? '음악 켜짐' : '음악 꺼짐' },
       h('span', { class: 'emoji', 'aria-hidden': 'true' }, musicOn ? '🎵' : '🔕'), musicOn ? '켜져 있어요' : '꺼져 있어요');
     const musicCard = card('ks-music', '🎵', '음악', '음악. 눌러서 켜고 꺼요.', music);
-    // 3) 🗣️ read aloud
+    // 3) 🗣️ read aloud — t-voice-unavail (red: card still said 켜져 있어요): a browser without speech synthesis
+    // (in-app WebViews) shows the voice as unavailable instead of a working toggle (R3-c2-device-env-7)
     const voiceOn = S.voiceGuide !== false;
-    const voice = h('button', { type: 'button', class: `easy-big-btn ks-toggle ${voiceOn ? 'easy-btn-yes' : 'easy-btn-no'}`, 'data-ks': 'voice', 'aria-pressed': voiceOn ? 'true' : 'false', 'data-say': voiceOn ? '읽어주기 켜짐' : '읽어주기 꺼짐' },
-      h('span', { class: 'emoji', 'aria-hidden': 'true' }, voiceOn ? '🗣️' : '🤐'), voiceOn ? '켜져 있어요' : '꺼져 있어요');
-    const voiceCard = card('ks-voice', '🗣️', '읽어주기', '읽어주기. 글을 소리로 읽어 줘요.', voice);
+    const voiceOk = typeof G.easy?.voiceAvailable === 'function' ? G.easy.voiceAvailable() !== false : true;
+    const voice = voiceOk
+      ? h('button', { type: 'button', class: `easy-big-btn ks-toggle ${voiceOn ? 'easy-btn-yes' : 'easy-btn-no'}`, 'data-ks': 'voice', 'aria-pressed': voiceOn ? 'true' : 'false', 'data-say': voiceOn ? '읽어주기 켜짐' : '읽어주기 꺼짐' },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, voiceOn ? '🗣️' : '🤐'), voiceOn ? '켜져 있어요' : '꺼져 있어요')
+      : h('p', { class: 'ks-state ks-unavail' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🚫'), '이 기기는 안 돼요');
+    const voiceCard = card('ks-voice', '🗣️', '읽어주기', voiceOk ? '읽어주기. 글을 소리로 읽어 줘요.' : '읽어주기. 이 브라우저는 읽어주기를 못 해요. 어른에게 크롬으로 열어 달라고 해요.', voice,
+      voiceOk ? null : h('p', { class: 'ks-hint small' }, '크롬·엣지·사파리로 열면 돼요.'));
     // 4) 👶 easy mode (turning it off asks a grown-up)
     const easyBtn = h('button', { type: 'button', class: 'easy-big-btn easy-btn-no ks-toggle', 'data-ks': 'easy', 'data-say': '쉬운 모드 끄기. 어른이 해요.' },
       h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔒'), '끄기 (어른)');
@@ -3597,6 +3644,11 @@
         settingRow('🏺 동반자 옹이', hasCompanion ? '장독 요정 옹이가 따라다니며 도와줘요' : '장독 요정 옹이가 따라다니며 도와줘요 (이 버전에서는 준비 중)', switchCtl('companion', { label: '동반자 옹이' })),
         settingRow('💬 채팅 창', '왼쪽 아래 채팅 창을 보여 줘요 (Enter 키로 입력)', switchCtl('chatVisible', { label: '채팅 창' })),
       );
+      // t-settings-row (red: pane text lacks 진행 속도 구독): CONTRACT §14.6 — the 체험 tab opens the subscription screen
+      const S = G.sys.subscription;
+      const subBtn = h('button', { type: 'button', class: 'btn btn-sm btn-gold', disabled: S && typeof S.open === 'function' ? null : true }, '⚡ 구독 관리');
+      subBtn.addEventListener('click', () => { S?.open?.(); });
+      f.append(settingRow('⚡ 진행 속도 구독', subTileDesc(), subBtn));
       return f;
     },
     access() {
@@ -4825,7 +4877,14 @@
 
   function openAdmin(tab = 'overview') {
     if (!G.state || !app.loggedIn) return null;
-    if (easyOn() && gateWillShow('admin')) { parentGate('admin', '관리자 화면은 어른만').then((ok) => { if (ok && app.loggedIn) openAdmin(tab); }); return null; }
+    // 'admin' is never reused from the gate session (GATE_NO_CACHE): a passed gate opens the dashboard directly,
+    // never through openAdmin again, which asked a fresh gate forever (R3-runtime-3 / R3-c2-r2-seams-lost-6)
+    if (easyOn() && gateWillShow('admin')) { parentGate('admin', '관리자 화면은 어른만').then((ok) => { if (ok && app.loggedIn) openAdminNow(tab); }); return null; }
+    return openAdminNow(tab);
+  }
+  /** the dashboard itself; the caller passed the gate when one was needed */
+  function openAdminNow(tab = 'overview') {
+    if (!G.state || !app.loggedIn) return null;
     if (!canDashboard()) { G.ui.toast('관리자 권한이 있는 계정만 볼 수 있어요.', { type: 'warn' }); return null; }
     const ex = G.ui.modal.get('app-admin');
     if (ex) ex.close();
@@ -5167,6 +5226,16 @@
     if (!isServer() || cur?.kind !== 'server' || !G.state || !G.save.pending) return;
     const pend = G.save.pending.get(cur.id);
     if (!pend) return;
+    // a grown-up restored the account's previous save in admin.php (HANDOVER §운영자 복원): a copy this device kept
+    // from before that restore would write the overwritten progress back over it — it is dropped, with a word
+    // (R3-c2-r2-seams-lost-1; app._restoredAt comes from player/get.php at login)
+    const restoredAt = Number(app._restoredAt) || 0;
+    if (restoredAt && Number(pend.savedAt) < restoredAt) {
+      G.save.pending.drop(cur.id);
+      G.log.info('SAVE', 'pending copy predates an operator restore -> dropped');
+      G.ui.toast('운영자가 되돌린 기록이 있어서, 이 기기에 남아 있던 임시 기록은 쓰지 않아요.', { type: 'info', duration: 7000, easy: '어른이 기록을 되돌렸어요. 지금 기록으로 놀아요!' });
+      return;
+    }
     // the server already has it (or something newer): nothing to offer
     if (!(Number(pend.savedAt) > (Number(G.state.savedAt) || 0))) { G.save.pending.drop(cur.id); return; }
     const when = new Date(Number(pend.savedAt) || pend.at);
@@ -5203,6 +5272,65 @@
     }, 15000);
   }
 
+  // ================================================================ no WebGL2 / renderer failure (CONTRACT §14.4.3)
+  // 10-engine probes WebGL2 before boot; when it is missing (or the renderer throws) it sets G.unsupported and emits
+  // 'engine:unsupported' and the world modules build into a drawless scene. The app then shows this friendly screen
+  // instead of the title — never a black dead world with the HUD over it. 그래도 열기 starts the 2D-only mode.
+  const NoThree = {
+    el: null,
+    reasonText(r) {
+      r = String(r || '');
+      if (r === 'webgl1-only') return '이 브라우저는 WebGL 1만 돼요. 3D 체험관은 WebGL 2가 필요해요.';
+      if (r === 'no-webgl2' || r === 'no-webgl') return '이 브라우저에서 WebGL 2를 켤 수 없어요.';
+      if (r.startsWith('renderer')) return '그래픽 장치를 열지 못했어요.';
+      return '3D 그래픽을 켤 수 없어요.';
+    },
+    /** show the screen; resolves true when a grown-up chooses 그래도 열기 (2D-only mode). 다시 시도 reloads the page. */
+    ask(reason) {
+      if (this.el) { this.el.remove(); this.el = null; }
+      document.body.classList.add('no-3d');
+      return new Promise((resolve) => {
+        const el = h('section', { class: 'no3d-screen', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'no3d-title' });
+        const mascot = h('div', { class: 'no3d-mascot', 'aria-hidden': 'true' });
+        mascot.innerHTML = mascotSvg('sad', 96);
+        el.append(mascot,
+          h('h1', { id: 'no3d-title' }, '이 기기에서는 3D를 열 수 없어요'),
+          h('p', { class: 'no3d-lead' }, this.reasonText(reason)),
+          h('ul', { class: 'no3d-tips' },
+            h('li', null, '🌐 크롬·엣지·사파리 최신 버전으로 열어 주세요.'),
+            h('li', null, '⚙️ 브라우저 설정에서 그래픽(하드웨어) 가속을 켜 주세요.'),
+            h('li', null, '📱 메신저 앱 안의 브라우저라면 "다른 브라우저로 열기"를 눌러 주세요.')),
+          h('div', { class: 'no3d-btns' },
+            h('button', { type: 'button', class: 'btn btn-primary btn-lg', 'data-no3d': 'retry' }, '🔄 다시 시도'),
+            h('button', { type: 'button', class: 'btn btn-soft btn-lg', 'data-no3d': 'go' }, '그래도 열기 (3D 없이)')),
+          h('p', { class: 'no3d-note small dim' }, '3D 없이 열면 배움터·일기·설정·도움말은 쓸 수 있고, 걸어 다니기는 할 수 없어요.'),
+          h('p', { class: 'no3d-reason tiny muted' }, `(${String(reason || 'unknown').slice(0, 80)})`));
+        el.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-no3d]');
+          if (!b) return;
+          if (b.dataset.no3d === 'retry') { location.reload(); return; }
+          this.enter2d();
+          el.classList.add('out');
+          setTimeout(() => el.remove(), 260);
+          this.el = null;
+          resolve(true);
+        });
+        ($('#screen-root') || document.body).appendChild(el);
+        this.el = el;
+        say('이 기기에서는 3D를 열 수 없어요. 어른을 불러 주세요.', { force: true });
+        setTimeout(() => { if (!touchUI()) el.querySelector('[data-no3d=retry]')?.focus(); }, 60);
+      });
+    },
+    /** 2D-only mode: HUD, 배움, 일기, 설정, 도움말 usable; no canvas, no walking (gameplay input is blocked) */
+    enter2d() {
+      document.body.classList.add('no-3d', 'no-3d-on');
+      G.ui.block('no-3d');
+      G.log.warn('UI', '2D-only mode: 3D unavailable');
+      G.bus.emit('app:2d-only', { reason: G.unsupported?.reason || null });
+    },
+    get active() { return document.body.classList.contains('no-3d-on'); },
+  };
+
   // ================================================================ app core
   const app = {
     loggedIn: false,
@@ -5214,6 +5342,7 @@
     title: Title,
     onboarding: Onboarding,
     portrait: Portrait,
+    noThree: NoThree,
     debug: Debug,
     avatarEditor: AvatarEditor,
     auth,
@@ -5230,6 +5359,14 @@
         try { await G.net.detect(); } catch (e) { G.log.warn('NETWORK', 'detect failed', e?.message || e); }
         if (isServer()) { L.set(0.04, '계정 확인 중'); await auth.checkServer(); }
         await G.initSystems((f, label) => L.set(0.05 + f * 0.85, `${label} 준비 중`));
+        // no WebGL2 / renderer failure (§14.4.3): the friendly screen first; 그래도 열기 continues in the 2D-only mode,
+        // 다시 시도 reloads (00-core's G.start defers to this when G.app.noThree exists)
+        const unsupported = G.unsupported?.reason || G.sys.engine?.unsupported || null;
+        if (unsupported) {
+          L.set(1, '3D를 열 수 없어요');
+          L.hide();
+          if (!(await NoThree.ask(unsupported))) return;
+        }
         L.set(0.93, '체험관 문을 여는 중');
         syncLiteUi();
         G.bus.on('engine:quality', () => { syncLiteUi(); if (Title.open) { Hero.stop(); Hero.start(Title.el); } });
@@ -5270,10 +5407,18 @@
       try {
         auth.current = profile;
         let hadServerSave = false;
+        let serverSub = auth._lastSub || null; // the plan login.php / me.php answered with (CONTRACT §14.1: server-authoritative)
+        this._restoredAt = 0;
         if (mode === 'server') {
           // never start from an empty state because the server was briefly unreachable (autosave would overwrite it)
-          try { const pre = await G.net.request('player/get.php', { timeout: 9000 }); hadServerSave = !!(pre && pre.save); }
-          catch (e) {
+          try {
+            const pre = await G.net.request('player/get.php', { timeout: 9000 });
+            hadServerSave = !!(pre && pre.save);
+            if (pre && pre.sub) serverSub = pre.sub;
+            // admin.php 직전 저장으로 되돌리기 stamps the row (meta.restoredRev / restoredAt); when get.php tells us,
+            // offerPending drops a pending copy from before the restore (R3-c2-r2-seams-lost-1)
+            this._restoredAt = Number(pre?.restoredAt || pre?.save?.restoredAt || pre?.meta?.restoredAt) || 0;
+          } catch (e) {
             const st = Number(e?.status) || 0;
             if (st === 401) throw new AuthError('로그인이 만료되었어요. 다시 로그인해 주세요.');
             if (e?.code === 'NETWORK_ERROR' || !(st >= 400 && st < 500)) throw new AuthError('서버에서 저장 데이터를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
@@ -5300,6 +5445,8 @@
         this._applying = true;
         try { G.applyState(); } finally { this._applying = false; }
         applied = true;
+        // the server's word on the progression tier replaces whatever the save carried (local saves: always tier 1)
+        if (mode === 'server') { try { G.sys.subscription?.fromServer?.(serverSub, 'login'); } catch (e) { G.log.warn('SUB', 'apply plan failed', e?.message || e); } }
         try { G.sys.camera?.setMode?.('follow'); } catch (e) { G.log.warn('UI', 'camera follow failed', e?.message || e); }
         G.ui.setHudVisible(true);
         hudEnter();
@@ -5450,6 +5597,8 @@
     openAdultMenu: () => parentGate('parents', '어른 메뉴').then((ok) => (ok ? openMenu({ adult: true }) : null)),
     openAdultSettings: (tab) => openSettings(tab || 'kids', { adult: true }),
     kidLooks,
+    _restoredAt: 0,            // player/get.php restore stamp of this login (operator restore, see offerPending)
+    _offerPending: offerPending, // dev seam (self-tests)
     toggleDebug() { return toggleDevCenter(); },
     closeMenu() { G.ui.modal.get('app-menu')?.close(); },
     saveNow,
@@ -5523,6 +5672,9 @@
       G.bus.on('save:recovered', () => { reloginLater = -1; });
       // the parent gate session ended because the grown-up left (tab hidden / idle): the title's 어른 메뉴 view (forms,
       // 최근 플레이 with its delete buttons) closes too, like the grown-up screens 08-easy closes in the game
+      // a re-login form / kid card closed by the gate lock (tab hidden, idle) is not the grown-up choosing 나중에:
+      // the next failed save may ask again (R3-c2-r2-seams-lost-4)
+      G.bus.on('easy:gate-left', () => { reloginLater = -1; });
       G.bus.on('easy:gate-left', ({ title } = {}) => {
         if (!title || !Title.open || !Title.parent || app.loggedIn || app._entering) return;
         Title.parent = false;
@@ -5540,6 +5692,7 @@
         const m = G.ui.modal.get('app-settings');
         if (m && m._tab === 'graphics') m._renderPane?.();
         if (Debug.open) Debug._sync();
+        Portrait.dispose(); // the portrait target's MSAA follows the preset: rebuild on the next portrait
       });
       // keep an open settings tab in sync when another module changes a setting (minimap close button, chat toggle...)
       G.bus.on('settings:changed', ({ key } = {}) => {

@@ -1994,8 +1994,10 @@
           fn(site, b);
           tris += site.B.tris;
           // tiled roofs: the eave underside (soffit) and its edge strips (fascia) block the camera too — a follow ray
-          // that slips under the tiles must not leave the camera above the roof (only buckets that exist are added)
-          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' ? ['thatch'] : ['roof', 'soffit', 'fascia'] });
+          // that slips under the tiles must not leave the camera above the roof (only buckets that exist are added).
+          // The gate's big 현판 hangs at head height right where the follow camera sits when a child walks through to the
+          // plaza: it blocks the camera as well, so the camera pulls in instead of showing only the board's letters
+          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' ? ['thatch'] : b.type === 'gate' ? ['roof', 'soffit', 'fascia', 'sign'] : ['roof', 'soffit', 'fascia'] });
           site.group.userData.building = b;
           site.group.userData.colliders = site.colliders;
           this.groups[b.id] = site.group;

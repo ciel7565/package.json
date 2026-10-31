@@ -38,7 +38,17 @@ const EMBED_FONT = !flag('--no-font');
 const STRICT = flag('--strict');
 const QUIET = flag('--quiet');
 // Core fragments are always included, even with --only.
-const CORE_PREFIXES = ['00', '01', '02', '03', '04', '05', '06', '10'];
+// 07-speed.js (CONTRACT §14.1, G.sys.speed) is core too: everything that moves or grows reads it.
+const CORE_PREFIXES = ['00', '01', '02', '03', '04', '05', '06', '07', '10'];
+// Fragments run in filename order (see listSorted). These pairs document the orderings other fragments rely on
+// (CONTRACT §14.1 / §14.6): the build fails loudly when a rename breaks one instead of booting a broken game.
+const ORDER_RULES = [
+  ['03-state.js', '07-speed.js'],          // G.state.sub default before the speed mirror
+  ['07-speed.js', '08-easy.js'],           // speed before every system that moves or grows
+  ['07-speed.js', '21-player.js'],
+  ['70-app.js', '72-subscription.js'],     // the app shell (menus, settings) before the subscription screen
+  ['72-subscription.js', '80-devcenter.js'], // the dev center's 구독·속도 panel reads G.sys.subscription
+];
 
 const log = (...a) => { if (!QUIET) console.log(...a); };
 
@@ -105,6 +115,13 @@ for (const f of listSorted(gameDir, '.js')) {
     continue;
   }
   fragments.push({ name: f, code });
+}
+// fragment order sanity (ORDER_RULES): only pairs that are both in this build are checked
+{
+  const idx = new Map(fragments.map((f, i) => [f.name, i]));
+  for (const [a, b] of ORDER_RULES) {
+    if (idx.has(a) && idx.has(b) && idx.get(a) > idx.get(b)) { console.error(`✖ fragment order: ${a} must come before ${b}`); process.exit(1); }
+  }
 }
 
 // --strict: the server's PII rule file must match the client engine (one rule list, CONTRACT §12.4)
@@ -268,13 +285,19 @@ html = html.replace('</body>', () => `<script type="application/json" id="build-
 // Inline scripts are allowed only by their exact SHA-256 hash: injected markup can never run script.
 const scriptHashes = [];
 html.replace(/<script>([\s\S]*?)<\/script>/g, (m, body) => { scriptHashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`); return m; });
+// 토스페이먼츠 (CONTRACT §14.6): the payment SDK (js.tosspayments.com/v2/standard) is loaded on demand, only in server
+// mode after a grown-up action; its payment window is an iframe / XHR to *.tosspayments.com. The same HTML is the
+// standalone file, where nothing ever loads it — the allowance is inert offline. Everything else stays as strict.
+const TOSS_SCRIPT = 'https://js.tosspayments.com';
+const TOSS_HOSTS = 'https://*.tosspayments.com';
 const csp = [
   "default-src 'none'",
-  `script-src ${scriptHashes.join(' ')}`,
+  `script-src ${scriptHashes.join(' ')} ${TOSS_SCRIPT}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  `connect-src 'self' ${TOSS_HOSTS}`,
+  `frame-src ${TOSS_HOSTS}`,
   "media-src 'self' data: blob:",
   "worker-src 'self' blob:",
   "manifest-src 'self'",

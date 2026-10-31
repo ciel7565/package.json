@@ -247,6 +247,7 @@ body.easy.dialogue-open .dlg-tap { pointer-events: auto; cursor: pointer; touch-
   flex-direction: column; justify-content: center; gap: .35rem; min-height: calc(var(--tap) * 2); padding: .65rem .5rem .7rem;
   border-radius: 22px; text-align: center; color: var(--kid-ink, #23301f); font-size: 1.15rem; font-weight: 900; line-height: 1.2;
   background: linear-gradient(180deg, #fffdf6, #fff0cf); border: 3px solid var(--tile);
+  box-shadow: 0 6px 0 rgba(0, 0, 0, .38), 0 12px 24px rgba(0, 0, 0, .3); /* plain fallback (no color-mix support) */
   box-shadow: 0 6px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 12px 24px rgba(0, 0, 0, .3);
   animation: dlgKidIn .42s cubic-bezier(.22, 1, .36, 1) backwards; touch-action: manipulation;
 }
@@ -256,8 +257,8 @@ body.easy.dialogue-open .dlg-tap { pointer-events: auto; cursor: pointer; touch-
 .dlg-choice.kid.claim::after { inset: -3px; box-shadow: 0 0 26px rgba(255, 201, 60, .7); }
 .dlg-choice.kid .dc-emo { font-size: 2.5rem; line-height: 1; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .2)); }
 .dlg-choice.kid .dc-text { flex: none; }
-.dlg-choice.kid:hover, .dlg-choice.kid.focus { transform: translateY(-3px); background: linear-gradient(180deg, #ffffff, #fff4d6); border-color: var(--tile); box-shadow: 0 9px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 14px 26px rgba(0, 0, 0, .32); }
-.dlg-choice.kid:active { transform: translateY(5px) scale(.97); box-shadow: 0 1px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 4px 10px rgba(0, 0, 0, .25); }
+.dlg-choice.kid:hover, .dlg-choice.kid.focus { transform: translateY(-3px); background: linear-gradient(180deg, #ffffff, #fff4d6); border-color: var(--tile); box-shadow: 0 9px 0 rgba(0, 0, 0, .38), 0 14px 26px rgba(0, 0, 0, .32); box-shadow: 0 9px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 14px 26px rgba(0, 0, 0, .32); }
+.dlg-choice.kid:active { transform: translateY(5px) scale(.97); box-shadow: 0 1px 0 rgba(0, 0, 0, .38), 0 4px 10px rgba(0, 0, 0, .25); box-shadow: 0 1px 0 color-mix(in srgb, var(--tile) 62%, #000), 0 4px 10px rgba(0, 0, 0, .25); }
 .dlg-choice.kid.focus { outline: 4px solid #fff; outline-offset: 2px; }
 .dlg-choices.kid.nudge .dlg-choice { animation: dlgKidNudge .5s ease-in-out 1; }
 @keyframes dlgKidIn { from { opacity: 0; transform: translateY(14px) scale(.92); } }

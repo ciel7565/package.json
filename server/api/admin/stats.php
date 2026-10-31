@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, Ctx, Session, Stats};
+use Tfm\Api;
+use Tfm\Ctx;
+use Tfm\Session;
+use Tfm\Stats;
 
 Api::run(['method' => 'GET', 'admin' => true, 'rate' => 'admin'], function (Ctx $c): array {
     Session::close();

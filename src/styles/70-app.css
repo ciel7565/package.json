@@ -277,7 +277,8 @@ body.easy .relogin .input { min-height: var(--tap); font-size: 1.05rem; }
 .ts-bubble.pop { animation: ts-bubble .45s var(--ease) both; }
 @keyframes ts-bubble { from { opacity: 0; scale: .85; translate: -38% 8px; } to { opacity: 1; scale: 1; translate: -38% 0; } }
 @keyframes ts-bob { 0%, 100% { translate: 0 0; rotate: -2deg; } 50% { translate: 0 -7px; rotate: 2deg; } }
-@keyframes ts-hop { 0% { scale: 1 1; } 25% { scale: 1.07 .92; } 55% { scale: .96 1.05; translate: 0 -14px; } 100% { scale: 1 1; translate: 0 0; } }
+/* squash/stretch within the 4 % cap (§13.8): the hop itself is a translate */
+@keyframes ts-hop { 0% { scale: 1 1; } 25% { scale: 1.04 .96; } 55% { scale: .98 1.03; translate: 0 -14px; } 100% { scale: 1 1; translate: 0 0; } }
 @keyframes ts-wave { 0%, 60%, 100% { rotate: 0deg; } 10% { rotate: 18deg; } 20% { rotate: -10deg; } 30% { rotate: 16deg; } 40% { rotate: -6deg; } 50% { rotate: 10deg; } }
 @keyframes ts-mascot-in { from { opacity: 0; translate: 0 30px; scale: .8; } 70% { scale: 1.03; } to { opacity: 1; translate: 0 0; scale: 1; } }
 
@@ -438,7 +439,7 @@ body.easy .relogin .input { min-height: var(--tap); font-size: 1.05rem; }
 .cv-marker svg { width: 1.7rem; height: auto; animation: cv-marker 1.8s ease-in-out infinite; filter: drop-shadow(0 0 8px rgba(244, 197, 74, .7)); }
 @keyframes cv-marker { 0%, 100% { translate: 0 0; rotate: 0deg; } 50% { translate: 0 -5px; rotate: 0deg; } }
 .cv-e kbd { width: 2.3rem; height: 2.3rem; font-size: 1.15rem; border-radius: 9px; animation: cv-e 1.4s ease-in-out infinite; }
-@keyframes cv-e { 0%, 100% { scale: 1; box-shadow: 0 2px 0 rgba(0, 0, 0, .35), 0 0 0 0 rgba(244, 197, 74, .6); } 50% { scale: 1.08; box-shadow: 0 2px 0 rgba(0, 0, 0, .35), 0 0 0 8px rgba(244, 197, 74, 0); } }
+@keyframes cv-e { 0%, 100% { scale: 1; box-shadow: 0 2px 0 rgba(0, 0, 0, .35), 0 0 0 0 rgba(244, 197, 74, .6); } 50% { scale: 1.04; box-shadow: 0 2px 0 rgba(0, 0, 0, .35), 0 0 0 8px rgba(244, 197, 74, 0); } }
 
 /* final card */
 .coach-final-wrap { position: fixed; inset: 0; z-index: 46; pointer-events: auto; background: rgba(4, 9, 6, .5); animation: fadeIn .3s ease both; transition: opacity .25s; }
@@ -915,9 +916,9 @@ body.easy .ts-modebar button { min-height: var(--tap); font-size: 1rem; }
 .kid-look:hover { transform: translateY(-2px); }
 .kid-look.on { border-color: var(--kid-gold, #ffcf4a); box-shadow: 0 0 0 4px rgba(255, 207, 74, .45), 0 5px 0 rgba(140, 95, 0, .5); }
 .kid-look.on .kl-check { opacity: 1; transform: scale(1); }
-.kid-look.pop { animation: kid-look-pop .42s var(--ease-pop) 1; }
+.kid-look.pop { animation: kid-look-pop .42s var(--ease-out) 1; }
 .kid-look:focus-visible { outline: 4px solid #fff; outline-offset: 3px; }
-@keyframes kid-look-pop { 0% { scale: 1; } 45% { scale: 1.06; } 100% { scale: 1; } }
+@keyframes kid-look-pop { 0% { scale: 1; } 45% { scale: 1.04; } 100% { scale: 1; } }
 
 /* register: who will play? */
 .ts-playmode { margin-bottom: .7rem; }
@@ -1015,7 +1016,9 @@ body.easy .ts-modebar button { min-height: var(--tap); font-size: 1rem; }
 .coach.kid button { pointer-events: auto; }
 
 /* ================================================================== EASY AVATAR CUSTOMIZER */
-.avatar-modal.kid .av-layout.av-kid { grid-template-columns: minmax(15rem, 5fr) minmax(0, 6fr); }
+/* the kid dialog's head (79 px) and foot (81 px) are taller than the grown-up ones: on a 768 px laptop a 66vh layout
+   overflowed the body by ~31 px and the footer cut the pose row in half (R3-ui-6) — size it to the room the body has */
+.avatar-modal.kid .av-layout.av-kid { grid-template-columns: minmax(15rem, 5fr) minmax(0, 6fr); height: min(66vh, 40rem, calc(100vh - 20rem)); height: min(66vh, 40rem, calc(100dvh - 20rem)); }
 .av-kid-right { display: flex; flex-direction: column; gap: .8rem; min-height: 0; }
 .av-kid-name { display: flex; align-items: center; gap: .55rem; }
 .akn-text {
@@ -1138,3 +1141,22 @@ body.reduce-motion .kid-look, body.reduce-motion .kh-card, body.reduce-motion .k
 @media (prefers-reduced-motion: reduce) {
   .kf-go::after, .kid-go-big::after, .kid-go .emoji, .kid-look, .kh-card, .kn-text.roll, .akn-text.roll { animation: none !important; }
 }
+
+/* ================================================================== NO 3D (CONTRACT §14.4.3): friendly screen + 2D-only mode */
+.no3d-screen {
+  position: fixed; inset: 0; z-index: 88; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .55rem;
+  padding: max(1.2rem, env(safe-area-inset-top, 0px)) 1.2rem max(1.2rem, env(safe-area-inset-bottom, 0px)); text-align: center; overflow: auto;
+  background: radial-gradient(90% 60% at 50% 0%, rgba(143, 198, 239, .35), rgba(11, 20, 16, 0) 60%), linear-gradient(180deg, #13261c, #0b1410);
+  color: var(--text); animation: fadeIn var(--dur-3) var(--ease-out) both; transition: opacity var(--dur-2) var(--ease-in);
+}
+.no3d-screen.out { opacity: 0; pointer-events: none; }
+.no3d-mascot svg { width: 6rem; height: auto; filter: drop-shadow(0 10px 18px rgba(0, 0, 0, .45)); }
+.no3d-screen h1 { font-size: clamp(1.25rem, 3.4vw, 1.7rem); margin: .2rem 0 0; }
+.no3d-lead { margin: 0; max-width: 34rem; color: var(--text-dim); font-size: 1rem; line-height: 1.5; }
+.no3d-tips { list-style: none; margin: .4rem 0 .2rem; padding: .8rem 1rem; max-width: 34rem; display: flex; flex-direction: column; gap: .4rem; text-align: left;
+  border-radius: 16px; background: rgba(255, 255, 255, .06); border: 1px solid var(--line); font-size: .92rem; line-height: 1.45; }
+.no3d-btns { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; margin-top: .4rem; }
+.no3d-btns .btn { min-height: var(--tap, 40px); min-width: 11rem; }
+.no3d-note { margin: .2rem 0 0; max-width: 32rem; }
+.no3d-reason { margin: 0; user-select: text; }
+body.easy .no3d-lead, body.easy .no3d-tips { font-size: max(16px, 1rem); }

@@ -253,10 +253,23 @@
   // short and not dragged, like the 점프 / 달리기 buttons. A click that may still follow is swallowed. A press the tap
   // shield ate never gets here (its capture listener runs first and stops it).
   let multi = null, multiDone = null;
+  const topModalEl = () => { try { const t = G.ui?.modal?.top?.(); return t && t.el ? t.el : null; } catch (e) { return null; } };
   document.addEventListener('pointerdown', (e) => {
     if (e.pointerType !== 'touch' || e.isPrimary || !e.isTrusted) return; // isPrimary: no other touch is down
-    const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
-    multi = el ? { id: e.pointerId, el, x: e.clientX, y: e.clientY, t: e.timeStamp } : null;
+    const t = e.target instanceof Element ? e.target : null;
+    let el = t ? t.closest('[data-action]') : null;
+    let kind = 'action';
+    if (!el && t) {
+      // a button inside the top dialog, pressed by the second finger (the first thumb holds the joystick): the browser
+      // synthesizes no click for it either, so it must act on release like the 점프 / 달리기 buttons do
+      // the finger's real target (touch hit-testing can retarget e.target to the 3D canvas behind the dialog on
+      // some engines, so trust the point, not the event target)
+      const top = topModalEl();
+      const hitEl = top ? (document.elementFromPoint(e.clientX, e.clientY) || t) : null;
+      const btn = hitEl && hitEl.closest ? hitEl.closest('button:not([disabled]), [role=button]') : null;
+      if (btn && top.contains(btn)) { el = btn; kind = 'modal'; }
+    }
+    multi = el ? { id: e.pointerId, el, kind, x: e.clientX, y: e.clientY, t: e.timeStamp } : null;
   }, true);
   const multiEnd = (e) => {
     const m = multi;
@@ -268,7 +281,8 @@
     const hit = document.elementFromPoint(e.clientX, e.clientY);
     if (!hit || !m.el.contains(hit)) return;
     multiDone = { el: m.el, until: perfNow() + 700 };
-    if (triggerAction(m.el.dataset.action, m.el, e)) G.sfx('click');
+    if (m.kind === 'modal') { try { m.el.click(); G.sfx('click'); } catch (err) { /* button gone */ } }
+    else if (triggerAction(m.el.dataset.action, m.el, e)) G.sfx('click');
   };
   document.addEventListener('pointerup', multiEnd, true);
   document.addEventListener('pointercancel', multiEnd, true);
@@ -607,10 +621,12 @@
       G.sfx('open');
       if (opts.say !== false && easyOn()) { try { G.easy?.say?.(sayLine(), { priority: 0 }); } catch (e) { /* voice optional */ } }
       // focus first input for keyboard users
-      // ([autofocus] first, then the first field that is drawn: a hidden username box for password managers is not)
+      // ([autofocus] first, then the first text-entry field that is drawn: a hidden username box for password managers
+      // is not; sliders, checkboxes and radios are not — a focused slider swallows the first Escape (R3-ui-4, t-autofocus))
       setTimeout(() => {
         if (opts.autofocus === false) return;
-        const f = box.querySelector('[autofocus]') || [...box.querySelectorAll('input:not([type=hidden]), textarea, select')].find((x) => !x.disabled && x.getClientRects().length > 0);
+        const TEXTISH = 'input:not([type=hidden]):not([type=range]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=color]):not([type=file]), textarea';
+        const f = box.querySelector('[autofocus]') || [...box.querySelectorAll(TEXTISH)].find((x) => !x.disabled && x.getClientRects().length > 0);
         f?.focus();
       }, 30);
       return m;

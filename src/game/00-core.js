@@ -303,12 +303,51 @@ G.time = {
       }
       await G.util.nextFrame(); // keep the loading bar animating
     }
+    // §14.4.3 / R3 device-env-3: without the engine (or the player) there is nothing to play. 10-engine's own WebGL2
+    // probe sets G.unsupported and emits 'engine:unsupported' (a drawless scene, the app shows the friendly 2D-only
+    // screen); an engine whose init threw is reported through the same channel, so the app shows one screen for both.
+    const critical = systems.filter((s) => s._failed && CRITICAL.has(s.name)).map((s) => s.name);
+    if (critical.includes('engine') && !G.unsupported) {
+      const err = G.__systemErrors.find((e) => e.system === 'engine');
+      G.unsupported = { reason: 'engine: ' + String(err?.message || 'init failed').split('\n')[0].slice(0, 160), at: Date.now() };
+      G.bus.emit('engine:unsupported', { reason: G.unsupported.reason });
+    }
+    G.bootReport = { failed: systems.filter((s) => s._failed).map((s) => s.name), critical, unsupported: G.unsupported?.reason || null };
+    if (critical.length) G.log.error('CORE', 'critical system(s) failed:', critical.join(', '));
     for (const sys of systems) {
       if (sys._failed || !sys.postInit) continue;
       try { await sys.postInit(); } catch (e) { recordError(sys, 'postInit', e); }
     }
     onProgress?.(1, '완료');
+    G.bus.emit('core:init', G.bootReport);
+    bootGuard();
+    return G.bootReport;
   };
+
+  /** systems the child cannot play without (their failure never leads into the world) */
+  const CRITICAL = new Set(['engine', 'player']);
+  /** a critical failure / unsupported device: {reason} or null */
+  G.criticalFailure = function () {
+    if (G.unsupported) return { reason: G.unsupported.reason, systems: G.bootReport?.critical || [] };
+    const c = G.bootReport?.critical || [];
+    return c.length ? { reason: 'critical system failed: ' + c.join(', '), systems: c } : null;
+  };
+  // safety net: the app shell (70-app NoThree) shows '이 기기에서는 3D를 열 수 없어요' with the 2D-only mode. If nobody
+  // has shown such a screen a few seconds after init, the core's friendly card does — the child never gets the HUD
+  // over a dead world (R3 device-env-3). body.no-3d is what the app's screen sets; a 'done' fatal card counts too.
+  function bootGuard() {
+    if (!G.criticalFailure()) return;
+    const check = () => {
+      if (document.body.classList.contains('no-3d') || G.app?.noThree?.active) return;
+      const f = document.getElementById('fatal');
+      if (f && !f.hidden) return;
+      const c = G.criticalFailure();
+      G.log.warn('CORE', 'no screen for the failed engine within 4 s -> fatal card', c?.reason);
+      G.showFatal(new Error(c?.reason || 'unsupported'), { reason: G.unsupported ? 'no3d' : 'error' });
+    };
+    setTimeout(check, 4000);
+    G.bus.once('game:login', () => setTimeout(check, 0)); // a login before the timer: the child must not enter the dead world
+  }
 
   /** push the freshly loaded/created G.state into every system */
   G.applyState = function () {
@@ -381,19 +420,52 @@ G.activity = function (type, text, extra) {
 /** unified "this changed, please persist soon" */
 G.dirty = function (reason) { G.save?.markDirty?.(reason); };
 
-G.showFatal = function (err) {
+/**
+ * the last-resort screen: a kid-friendly card ('어른에게 알려 주세요'), browser / device tips, 새로고침; the technical
+ * message and stack stay behind a grown-up <details> toggle (never a raw stack trace in a child's face — R3
+ * device-env-3). opts.reason: 'no3d' | 'no-webgl2' | 'webgl1-only' | 'renderer…' (3D wording) or anything else.
+ */
+G.showFatal = function (err, opts = {}) {
   const el = document.getElementById('fatal');
   if (!el) return;
+  const msg = String((err && err.message) || err || '');
+  const detail = String((err && err.stack) || err || '').slice(0, 4000);
+  const reason = String(opts.reason || '');
+  const no3d = /^(no3d|no-?webgl|webgl1|renderer|probe)/i.test(reason) || (!reason && /webgl|three|renderer|gpu|그래픽|3d/i.test(msg));
+  const mk = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  el.textContent = ''; // built from nodes: no innerHTML, no inline handlers (CSP); .fatal lays its children out as a column
+  el.setAttribute('role', 'alertdialog');
+  el.setAttribute('aria-labelledby', 'fatal-title');
+  const title = mk('h2', null, no3d ? '🧩 이 기기에서는 3D 화면을 켤 수 없어요' : '🫙 체험관을 열지 못했어요');
+  title.id = 'fatal-title';
+  el.append(title, mk('p', 'fatal-lead', '어른에게 알려 주세요.'));
+  const tips = no3d
+    ? ['🌐 크롬·엣지·사파리 최신 버전으로 열어 주세요.', '⚙️ 브라우저 설정에서 그래픽(하드웨어) 가속을 켜 주세요.', '📱 메신저 앱 안의 브라우저라면 "다른 브라우저로 열기"를 눌러 주세요.']
+    : ['🔄 페이지를 새로고침해 주세요.', '🌐 크롬·엣지·사파리 최신 버전으로 열어 주세요.'];
+  const list = mk('div', 'fatal-tips small');
+  for (const t of tips) list.append(mk('p', null, t));
+  el.append(list);
+  const reload = mk('button', 'btn btn-primary btn-lg', '🔄 새로고침');
+  reload.type = 'button'; reload.id = 'fatal-reload';
+  reload.addEventListener('click', () => location.reload());
+  el.append(reload);
+  const det = mk('details', 'fatal-details small dim');
+  det.append(mk('summary', null, '자세히 보기 (어른용)'), mk('pre', null, msg && !detail.includes(msg) ? msg + '\n' + detail : detail));
+  el.append(det);
   el.hidden = false;
-  el.innerHTML = `<h2>게임을 시작하지 못했습니다</h2><p>브라우저가 WebGL을 지원하는지 확인하고, 페이지를 새로고침해 주세요.</p><pre>${G.util.escapeHtml(String((err && err.stack) || err))}</pre><button class="btn btn-primary" type="button" id="fatal-reload">새로고침</button>`;
-  el.querySelector('#fatal-reload')?.addEventListener('click', () => location.reload()); // no inline handlers (CSP)
   document.getElementById('loading-screen')?.classList.add('done');
+  try { G.easy?.say?.('어른에게 알려 주세요.', { force: true }); } catch (e) { /* voice optional */ }
 };
 
+/** can three r170 draw here? = a WebGL2 context can be created (a WebGL1-only device shows a black, dead world otherwise) */
 G.webglAvailable = function () {
   try {
+    if (typeof WebGL2RenderingContext === 'undefined') return false;
     const c = document.createElement('canvas');
-    return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl')));
+    const gl = c.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
+    if (!gl) return false;
+    try { gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch (e) { /* probe context: let it go */ }
+    return true;
   } catch (e) { return false; }
 };
 
@@ -405,9 +477,14 @@ G.webglAvailable = function () {
  * any module can be tested on its own.
  */
 G.start = async function () {
-  if (!window.THREE) { G.showFatal(new Error('three.js failed to load')); return; }
-  if (!G.webglAvailable()) { G.showFatal(new Error('WebGL을 사용할 수 없습니다.')); return; }
-  if (G.app && typeof G.app.start === 'function') return G.app.start();
+  if (!window.THREE) { G.showFatal(new Error('three.js failed to load'), { reason: 'error' }); return; }
+  const shell = G.app && typeof G.app.start === 'function';
+  if (!G.webglAvailable()) {
+    // §14.4.3: with the app shell, 10-engine's probe emits 'engine:unsupported' and 70-app shows '이 기기에서는 3D를
+    // 열 수 없어요' with the 2D-only mode (bootGuard covers it); without a shell the friendly card is all there is
+    if (!shell || typeof G.app.noThree?.ask !== 'function') { G.showFatal(new Error('WebGL2를 사용할 수 없습니다.'), { reason: 'no-webgl2' }); return; }
+  }
+  if (shell) return G.app.start();
   return G.devBoot();
 };
 
@@ -416,6 +493,8 @@ G.devBoot = async function () {
   G.ui?.loading?.set(0.02, '네트워크 확인');
   try { await G.net?.detect?.(); } catch (e) { G.log.warn('NETWORK', 'detect failed', e); }
   await G.initSystems((f, label) => G.ui?.loading?.set(0.05 + f * 0.85, `${label} 준비 중`));
+  const dead = G.criticalFailure();
+  if (dead) { G.showFatal(new Error(dead.reason), { reason: G.unsupported ? 'no3d' : 'error' }); return; }
   G.ui?.loading?.set(0.93, '저장 데이터 불러오기');
   const profile = { id: 'guest', nickname: '게스트', role: G.flags.debug ? 'admin' : 'user' };
   G.save.useProfile(profile, 'local');

@@ -9,7 +9,15 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Audit, Config, Ctx, Health, Http, Session, Users};
+use Tfm\Api;
+use Tfm\ApiException;
+use Tfm\Audit;
+use Tfm\Config;
+use Tfm\Ctx;
+use Tfm\Health;
+use Tfm\Http;
+use Tfm\Session;
+use Tfm\Users;
 
 Api::run(['method' => 'GET', 'rate' => 'admin'], function (Ctx $c): array {
     if (!$c->isAdmin()) {
@@ -22,7 +30,7 @@ Api::run(['method' => 'GET', 'rate' => 'admin'], function (Ctx $c): array {
         }
     }
     Session::close();
-    $h = Health::collect(($_GET['quick'] ?? '') !== '1');
+    $h = Health::collect((isset($_GET['quick']) ? $_GET['quick'] : '') !== '1');
     $h['access'] = $c->isAdmin() ? 'admin' : 'localhost-bootstrap';
     return $h;
 });

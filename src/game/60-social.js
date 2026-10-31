@@ -51,6 +51,9 @@
   /** a remote this far from where it should be has teleported (or reports were lost): jump there instead of chasing.
    *  At 18 m/s one or two report gaps are 18–36 m, so the limit grows with the reported speed. */
   const snapDist = (speed) => Math.max(20, (Number(speed) || 0) * 2.5);
+  const DR_CAP = 1.2;        // s of dead reckoning along a remote player's last velocity (CONTRACT §13.8)
+  const DR_BACK = 6.4;       // m/s: a copy that overshot a late-reported stop / turn walks back at a walk, facing its way
+  const DR_BACK_SNAP = 12;   // m: further behind than this it is put right in one quiet correction
   const QUICK = ['EMO_HELLO', 'EMO_SMILE', 'EMO_THUMBS', 'EMO_CLAP', 'EMO_LIKE', 'EMO_LAUGH', 'EMO_WOW'];
   const DEFLECT = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]; // heading offsets tried when the way ahead is blocked
   const LS_COLLAPSED = 'tfm.v1.chat.collapsed', LS_TAB = 'tfm.v1.chat.tab', LS_REPORTS = 'tfm.v1.chat.reports';
@@ -274,7 +277,7 @@
   const P_TLD_STRONG = '(?:com|net|org|kr|io|gg|xyz|cc|jp|cn|tk|ml|ga|cf|gq|pw|ws|info|biz|club|online|site|shop|store|website|link|games?|app|dev)';
   const P_TLD_WEAK = '(?:me|to|be|us|co|so|ai|fm|tv|ly|top|fun|live|life|art|kids|chat|zone|today|world|space|page|pro|vip|lol|click|social)';
   const P_PROV = '(?:naver|gmail|daum|hanmail|kakao|nate|hotmail|outlook|yahoo|icloud|네이버|지메일|다음|한메일|카카오|네이트|핫메일|아웃룩|야후)';
-  const P_SNS_KO = '(?:카톡|카카오톡|카카오|인스타(?:그램)?|틱톡|디엠|텔레그램|텔레|라인|디코|디스코드|페메|페북|페이스북|유튜브|트위터|스냅챗|위챗|왓츠앱|ㅋㅌ|ㅇㅅㅌ|아이디|아디)';
+  const P_SNS_KO = '(?:카톡|카카오톡|카카오|인스타(?:그램)?|틱톡|디엠|텔레그램|텔레|라인|디코|디스코드|페메|페북|페이스북|유튜브|트위터|스냅챗|스냅|위챗|왓츠앱|ㅋㅌ|ㅇㅅㅌ|아이디|아디)';
   const P_SNS_GAME = '(?:로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤스타즈|브롤|쿠키런|메이플|roblox|zepeto|minecraft|fortnite)';
   const P_SNS_EN = '(?:insta(?:gram)?|ig|tiktok|dm|telegram|line|discord|facebook|fb|youtube|yt|twitter|snapchat|snap|wechat|whatsapp|kakao(?:talk)?|roblox|zepeto|minecraft|fortnite|twitch)';
   const P_SNS_EN_PLAIN = '(?:insta(?:gram)?|ig|discord|tiktok|telegram|snapchat|snap|kakao(?:talk)?|roblox|zepeto|minecraft|fortnite|twitch|youtube|yt)';
@@ -302,7 +305,8 @@
     ['emailWords', PR`[\p{L}\p{N}._%+\-]+(?:\s+dot\s+[\p{L}\p{N}._%+\-]+)*\s+at\s+[\p{L}\p{N}\-]+(?:\s+(?!dot\s)[a-z0-9\-]{1,12}){0,2}(?:\s+dot\s+(?=[a-z0-9]*[a-z])[a-z0-9]{2,})+`, 'giu'],
     ['emailHost', PR`[\p{L}\p{N}._%+\-]{2,}\s*(?:@|\(at\)|\[at\]|\{at\}|골뱅이|앳)\s*` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
     ['emailHostAt', PR`(?<![\p{L}\p{N}._%+\-])(?!(?:look|looks|looking|meet|see|me|you|we|they|it|is|am|are|was|were|be|this|that|go|come|stay|play|eat|sit|wait|good|bad|laugh|smile|point|stare|arrive|here|there|home|school)\s)[\p{L}\p{N}._%+\-]{2,}\s+at\s+` + P_PROV + PR`(?![\p{L}\p{N}])`, 'giu'],
-    ['emailNoTld', PR`[\p{L}\p{N}._%+\-]{2,}\s*@\s*[a-z][a-z0-9\-]{2,}(?![\p{L}\p{N}.@])`, 'giu'],               // "kid@protonmail"
+    // the host part swallows the whole token ("인스타 @dino_kid_play" is not an e-mail, but its "_kid_play" tail must not survive)
+    ['emailNoTld', PR`[\p{L}\p{N}._%+\-]{2,}\s*@\s*[a-z][a-z0-9_\-]{2,}(?![\p{L}\p{N}.@_\-])`, 'giu'],               // "kid@protonmail"
     ['mailWord', PR`(?:이메일|메일)\s*(?:주소)?\s*(?:은|는|이|가|:)?\s*[a-z0-9][a-z0-9._%+\-]{2,}|e-?mail\s*(?:address\s*)?(?:is|:)\s*` + P_ODD_ID, 'giu'],
     // the id and the mail provider without any @: "dinokid 네이버", "dino77 지메일", "dinokid 다음 메일", "gmail dino77" —
     // not a word to look up there ("minecraft 네이버 검색해봐", "pokemon 네이버 웹툰")
@@ -320,8 +324,8 @@
     ['hangulDomain', PR`[가-힣a-z0-9]{2,15}\s?(?:닷|쩜|점)\s?(?:컴|넷)(?![가-힣])`, 'giu'],
     ['ip', PR`(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])`, 'gu'],
     // ---- messenger / SNS / game ids: "카톡 아이디 dino123", "로블록스 dino12 친추", "insta dinokid 팔로우해", "@dino 인스타로 와"
-    ['handleKo', P_SNS_KO + PR`\s*(?:(?:아이디|아디|id|계정|주소|닉네임|닉|코드)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|(?:은|는|이|가|:)?\s*(?:@` + P_LATIN_ID + '|' + P_ODD_ID + PR`|[a-z0-9]{6,}|` + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')|' + P_HANGUL_ID + '))', 'giu'],
-    ['handleGame', P_SNS_GAME + PR`\s*(?:(?:아이디|아디|id|닉네임|닉|계정|친구\s*코드|코드)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
+    ['handleKo', P_SNS_KO + PR`\s*(?:(?:아이디|아디|id|계정|주소|닉네임|닉|코드|유저|user|플레이어)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|(?:은|는|이|가|:)?\s*(?:@` + P_LATIN_ID + '|' + P_ODD_ID + PR`|[a-z0-9]{6,}|` + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')|' + P_HANGUL_ID + '))', 'giu'],
+    ['handleGame', P_SNS_GAME + PR`\s*(?:(?:아이디|아디|id|닉네임|닉|계정|친구\s*코드|코드|유저|user|플레이어)\s*(?:은|는|이|가|:)?\s*@?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
     // a platform with a particle / pointer / "친구 추가" before the id, a tag, a channel, or a nickname after "이름"
     ['handleKo2', P_SNS_KO + P_SNS_PART + PR`\s*(?:(?:친구\s*추가|친추|검색|팔로우|팔로|추가)(?:해|해줘|해요|하면)?\s*:?\s*@?` + P_LATIN_ID + PR`|(?:채널|태그)\s*(?:은|는|:)?\s*@?` + P_LATIN_ID + PR`|(?:으로|로)?\s*` + P_POINT + PR`\s*@?[a-z0-9][a-z0-9._#\-]{1,}|@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
     ['handleGame2', P_SNS_GAME + P_SNS_PART + PR`\s*(?:내\s*)?(?:(?:아이디|아디|id|닉네임|닉|이름|계정|친구\s*코드|코드|태그|tag)\s*(?:은|는|이|가|:)?\s*(?:[@#]?(?:` + P_LATIN_ID + '|' + P_HANGUL_ID + PR`)|[가-힣]{2,12}(?=\s*` + P_FOLLOW + PR`))|[@#]?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + ')))', 'giu'],
@@ -333,7 +337,9 @@
     ['openChat', PR`(?:오픈채팅|오픈톡|오픈카톡|단톡)\s*(?:방)?\s*(?:이름|제목)?\s*(?:은|는|:)?\s*[가-힣a-z0-9][가-힣a-z0-9._#\-]+`, 'giu'],
     ['handleEn', PR`(?<![a-z0-9])` + P_SNS_EN + PR`\s*(?:id\s*:?|:|@)\s*@?` + P_LATIN_ID, 'giu'],
     ['handleEnPlain', PR`(?<![a-z0-9])` + P_SNS_EN_PLAIN + PR`\s+@?(?:` + P_ODD_ID + '|' + P_LATIN_ID + PR`(?=\s*` + P_FOLLOW + '))', 'giu'],
-    ['atHandle', PR`(?<![\p{L}\p{N}])@[a-z0-9][a-z0-9._]{2,}(?=\s*(?:인스타|틱톡|디코|카톡|유튜브|트위터|로블록스|제페토|insta|tiktok|discord|youtube|twitter|roblox|zepeto|ig(?![a-z])))`, 'giu'],
+    // a leading @ makes a handle on its own (R3 persist-server-1): "@my_secret_friend", "@cool_kid_77", "@dinokid77" — an id
+    // with a digit / _ . # - or 6+ Latin letters, or any @token right before a platform word ("@dino 인스타로 와")
+    ['atHandle', PR`(?<![\p{L}\p{N}._#@\-])@(?:` + P_ODD_ID + PR`|[a-z][a-z0-9._\-]{5,}|[a-z0-9][a-z0-9._\-]{2,}(?=\s*(?:인스타|틱톡|디코|카톡|유튜브|트위터|스냅|로블록스|제페토|insta|tiktok|discord|youtube|twitter|snap|roblox|zepeto|ig(?![a-z]))))`, 'giu'],
     // "카_톡 dinokid", "카 톡 아 이 디 dinokid", "ㅋㅏ톡 dinokid", "kakao dinokid", "카톡ㄱㄱ dino77", "카카오톡 아이디 알려줄게 dinokid"
     ['handleLoose', P_MSG_LOOSE + '(?:' + P_LS + '(?:아' + P_LS + '이' + P_LS + '디|아' + P_LS + '디|id|계' + P_LS + '정|닉' + P_LS + '네' + P_LS + '임|닉))?' + PR`(?:\s*(?:은|는|이|가|:|ㄱ+|고고))?(?:\s+(?:알려\s?줄[게께까]|알려\s?드릴게|알려줘|줄[게께]|이야|야|이에요|예요|은요|는요|검색해|검색|쳐봐|쳐|추가해|추가|친추|해|해줘|하자|ㄱㄱ|고고)){0,2}\s*:?\s*@?(?!(?:friends?|talk|pay|map|games?|webtoon|page|story|tv|mini)(?![a-z0-9]))(?:` + P_ODD_ID + PR`|[a-z][a-z0-9._\-]{3,})`, 'giu'],
     // "친추 dino77", "친구 추가 해줘 dino_7", "팔로우 kid.77" (an id-like token after a friend / follow request)
@@ -1258,9 +1264,18 @@
       // @mention of my nickname (or the plain nickname) in someone else's message
       const nick = G.state?.profile?.nickname;
       if (!msg.self && kind !== 'system' && nick && cpLen(nick) >= 2 && msg.text.toLowerCase().includes(String(nick).toLowerCase())) msg.mention = true;
-      this.messages.push(msg);
+      if (m.history) {
+        // server history (the first poll) takes its place by time among the lines already shown — the welcome / NPC
+        // lines of this login came first, the history is older (R3 seams-lost-8: the log read 22:31 ×6, then 21:56 …)
+        let i = this.messages.length;
+        while (i > 0 && this.messages[i - 1].at > msg.at) i--;
+        this.messages.splice(i, 0, msg);
+        this._render(msg, this.messages[i + 1] || null);
+      } else {
+        this.messages.push(msg);
+        this._render(msg);
+      }
       while (this.messages.length > MAX_MSG) { const old = this.messages.shift(); old._el?.remove(); }
-      this._render(msg);
       const pub = { ...msg }; delete pub._el; delete pub._txt; delete pub._kidHid;
       // listeners (알림함 …) get what a child may see: another account's free text stays hidden in kid chat, and a
       // preset phrase arrives as the local phrase-book text (never the received characters)
@@ -1303,7 +1318,8 @@
       return parts;
     },
 
-    _render(msg) {
+    /** draw one line; `before` = the message whose element it goes in front of (history placed by time) */
+    _render(msg, before) {
       const C = this._chat;
       if (!C) return;
       const h = G.ui.h;
@@ -1322,7 +1338,7 @@
       const txtEl = h('span', { class: 'txt' }, txt);
       el.append(who, txtEl, h('time', { class: 'time', datetime: new Date(msg.at).toISOString() }, hhmm(msg.at)));
       if (msg.kind === 'remote') { msg._txt = txtEl; this._applyKidView(msg); }
-      C.log.appendChild(el);
+      if (before && before._el && before._el.parentNode === C.log) C.log.insertBefore(el, before._el); else C.log.appendChild(el);
       msg._el = el;
       if (this._stick) this._scrollBottom(true);
       else if (!el.classList.contains('blocked')) C.pill.hidden = false;
@@ -1729,8 +1745,12 @@
         return null;
       }
       const h = G.ui.h;
-      const st = { cat: KID_CATS.some((c) => c.id === this._kidCat) ? this._kidCat : 'hello', off: null, raf: 0, modal: null };
+      const st = { cat: KID_CATS.some((c) => c.id === this._kidCat) ? this._kidCat : 'hello', off: null, raf: 0, modal: null, openedAt: performance.now() };
       this._kidUi = st;
+      // the Enter that opened the picker must not send: a keyboard activation (click detail 0) of a send tile within
+      // KEY_GUARD_MS of opening is ignored (R3 ui-5: Enter, Enter posted "안녕하세요! 👋" to everyone)
+      const KEY_GUARD_MS = 450;
+      const keyTooSoon = (e) => e.detail === 0 && performance.now() - st.openedAt < KEY_GUARD_MS;
       // last few messages as big bubbles, so a pre-reader sees (and hears) the answers right here
       const recent = h('div', { class: 'skc-recent', 'aria-live': 'polite' });
       const renderRecent = () => {
@@ -1799,13 +1819,13 @@
       };
       grid.addEventListener('click', (e) => {
         const b = e.target.closest('.skc-tile');
-        if (!b) return;
+        if (!b || keyTooSoon(e)) return;
         if (this.sendKidPhrase(b.dataset.id)) sent(b);
         else { b.classList.remove('easy-shake'); void b.offsetWidth; b.classList.add('easy-shake'); }
       });
       emo.addEventListener('click', (e) => {
         const b = e.target.closest('.skc-emo');
-        if (!b) return;
+        if (!b || keyTooSoon(e)) return;
         if (this.sendKidEmoji(b.dataset.e)) sent(b);
         else { b.classList.remove('easy-shake'); void b.offsetWidth; b.classList.add('easy-shake'); }
       });
@@ -1850,7 +1870,8 @@
       });
       st.modal = m;
       G.ui.setActive('kid-chat', true);
-      if (!G.input?.touchUI) setTimeout(() => { if (!m.closed) grid.querySelector('.skc-tile')?.focus({ preventScroll: true }); }, 60);
+      // keyboard users land on the chosen category tab (Enter there re-selects it: nothing is sent), never on a send tile
+      if (!G.input?.touchUI) setTimeout(() => { if (!m.closed) (cats.querySelector('.skc-cat.active') || cats.firstElementChild)?.focus({ preventScroll: true }); }, 60);
       return m;
     },
     /** send one preset phrase (kid chat). Visitors answer in kind; replies are read aloud for 12 s */
@@ -3306,7 +3327,7 @@
       const now = performance.now();
       // every 2 s, every second while I or another player moves faster than a stroll (3× speed: up to 36 m between
       // updates otherwise; a standing player still needs fresh reports to draw a running friend smoothly)
-      const stroll = (Number(G.sys.player?.WALK) || 9.6) * 0.5;
+      const stroll = (Number(G.sys.player?.WALK) || 6.4) * 0.5 * (Number(G.sys.player?.speedMul) || 1);
       const mySpeed = G.sys.player?.speed || 0;
       const fast = mySpeed > stroll || this._remotesMoving;
       // stopped after moving: tell the others soon, so their copy of me does not run on past where I stand
@@ -3327,7 +3348,8 @@
         const appKey = JSON.stringify(app || {});
         S.appT -= 1;
         const sendApp = appKey !== S.appKey || S.appT <= 0;
-        const runAt = ((Number(pl.WALK) || 9.6) + (Number(pl.RUN) || 18)) / 2;   // between walk and run pace
+        // between walk and run pace at the current speed tier (WALK / RUN × G.sys.speed.movement(), CONTRACT §14.1)
+        const runAt = (((Number(pl.WALK) || 6.4) + (Number(pl.RUN) || 12)) / 2) * (Number(pl.speedMul) || 1);
         const anim = pl.rig?.currentAction || (pl.sitting ? 'sit' : pl.speed > runAt ? 'run' : pl.speed > 0.2 ? 'walk' : 'idle');
         const body = {
           x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100, z: Math.round(p.z * 100) / 100, rotY: Math.round((pl.rotY || 0) * 1000) / 1000,
@@ -3467,34 +3489,51 @@
         const p = o.position;
         const ox = p.x, oz = p.z;
         if (o.tsp > 2) moving = true;
-        // where the player should be by now: the last report + its reported motion since then, for at most about one
-        // and a half report gaps (a player who stopped is not carried on for ever); stops at walls
+        // where the player should be by now: the last report + its reported motion since then, for at most DR_CAP
+        // seconds (CONTRACT §13.8: dead reckoning ≤ 1.2 s along the last velocity — a player who stopped is not carried
+        // on 20 m past the stop, R3 movement-5); a lead point inside a wall marches back along the ray to the last free
+        // point instead of falling back to the stale report (which pulled the copy backwards)
         let ex = o.tx, ez = o.tz, vx = 0, vz = 0;
         o.repAge = (o.repAge || 0) + dt;
+        const hx = Math.sin(o.trot), hz = Math.cos(o.trot);
         if (o.tsp > 0.2 && o.tAt) {
-          const el = o.repAge, cap = Math.max(1.2, (o.repDt || 1.5) * 1.5);
-          const lead = o.tsp * clamp(el, 0, cap);
-          const fx = o.tx + Math.sin(o.trot) * lead, fz = o.tz + Math.cos(o.trot) * lead;
-          let free = true;
-          try { free = !G.world.blocked(fx, fz, 0.3, p.y); } catch (e) { free = true; }
-          if (free) {
-            ex = fx; ez = fz;
-            if (el < cap) { vx = Math.sin(o.trot) * o.tsp; vz = Math.cos(o.trot) * o.tsp; } // the target still moves
+          const el = o.repAge;
+          let lead = o.tsp * clamp(el, 0, DR_CAP);
+          for (let s = 0; s < 5 && lead > 0.05; s++) {
+            let free = true;
+            try { free = !G.world.blocked(o.tx + hx * lead, o.tz + hz * lead, 0.3, p.y); } catch (e) { free = true; }
+            if (free) break;
+            lead = s === 4 ? 0 : lead * 0.6;
           }
+          ex = o.tx + hx * lead; ez = o.tz + hz * lead;
+          if (el < DR_CAP && lead > 0.05) { vx = hx * o.tsp; vz = hz * o.tsp; } // the target still moves
         }
         const gap = Math.hypot(ex - p.x, ez - p.z);
         if (gap > snapDist(o.tsp)) { p.x = ex; p.z = ez; }                     // far behind (teleport, lost reports): snap
-        // move with the target (no steady trailing at 18 m/s), then close the remaining gap — faster when further behind,
+        // move with the target (no steady trailing at 36 m/s), then close the remaining gap — faster when further behind,
         // but never in one lurch: a turn or a stop that a report tells late bends the path over a few frames
         p.x += vx * dt; p.z += vz * dt;
         const k = damp(3.2 + Math.min(6, gap * 0.35), dt);
         let cx = (ex - p.x) * k, cz = (ez - p.z) * k;
         const cl = Math.hypot(cx, cz), cmax = (Math.max(8, o.tsp) + gap * 1.5) * dt;
         if (cl > cmax) { cx *= cmax / cl; cz *= cmax / cl; }
+        // never slide the copy backwards against its reported facing (a stop or a turn reported late left it ahead of
+        // the truth): close to the truth it turns and WALKS back the way it moves, at a walk; far behind it is put right
+        // in one quiet correction — no 40 m/s moonwalk with a running gait
+        const back = gap > 0.5 && (cx * hx + cz * hz) < 0;
+        let face = o.trot;
+        if (back) {
+          if (gap > DR_BACK_SNAP) { p.x = ex; p.z = ez; cx = 0; cz = 0; }
+          else {
+            const bmax = DR_BACK * dt, bl = Math.hypot(cx, cz);
+            if (bl > bmax) { cx *= bmax / bl; cz *= bmax / bl; }
+            if (Math.hypot(cx, cz) > 1e-4) face = Math.atan2(cx, cz);
+          }
+        }
         p.x += cx; p.z += cz;
         const gy = o.ty != null ? o.ty : G.world.heightAt(p.x, p.z, p.y + 0.3);
         p.y += (gy - p.y) * damp(8, dt);
-        o.rotY += angleDiff(o.rotY, o.trot) * damp(6, dt);
+        o.rotY += angleDiff(o.rotY, face) * damp(back ? 10 : 6, dt);
         o.group.rotation.y = o.rotY;
         const sp = dt > 0 ? Math.hypot(p.x - ox, p.z - oz) / dt : 0;
         o.params.speed += (sp - o.params.speed) * damp(6, dt);
@@ -3538,12 +3577,17 @@
           rows.push([id, m]);
         }
         rows.sort((a, b) => a[0] - b[0]);
+        // moderation first: a user retraction (an account banned since my cursor) takes that account's OLD lines; the
+        // rows of this very answer are what the server shows now (posted after an unban) and stay (R3 seams-lost-5)
+        const gone = data?.retracted;
+        const goneMsgs = new Set(gone && typeof gone === 'object' && Array.isArray(gone.messages) ? gone.messages.map((n) => Number(n)) : []);
+        if (gone && typeof gone === 'object') this._retract(Array.isArray(gone.messages) ? gone.messages : [], Array.isArray(gone.users) ? gone.users : []);
         const me = String(G.save?.profile?.id ?? '');
         const pp = G.sys.player?.position;
         const now = G.time.now();
         for (const [id, m] of rows) {
           S.lastId = id;
-          if (S.sentIds.has(id)) continue;
+          if (S.sentIds.has(id) || goneMsgs.has(id)) continue;
           const uid = String(m.userId ?? m.user_id ?? '').slice(0, 40);
           const text = this.filter(cleanText(m.text ?? m.message, MAX_LEN * 2));
           if (!text) continue;
@@ -3575,8 +3619,6 @@
         }
         const lastId = Number(data?.lastId);
         if (Number.isSafeInteger(lastId) && lastId > S.lastId && lastId < S.lastId + 1e6) S.lastId = lastId; // skipped hidden rows
-        const gone = data?.retracted;
-        if (gone && typeof gone === 'object') this._retract(Array.isArray(gone.messages) ? gone.messages : [], Array.isArray(gone.users) ? gone.users : []);
         const rid = Number(data?.retractId);
         if (Number.isSafeInteger(rid) && rid >= 0) S.rafter = rid;
         S.first = false;

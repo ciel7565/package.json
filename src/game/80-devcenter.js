@@ -222,6 +222,7 @@
       F('04-ui.js', 'core', 'UI 도구: 모달·토스트·보상 팝업·팝오버·월드 라벨·로딩·이스케이프'),
       F('05-input.js', 'core', '키보드·마우스·터치 조이스틱·D-패드 입력과 단축키 등록'),
       F('06-world.js', 'core', '지형 높이·충돌·구역·앵커 레지스트리, 충돌체 디버그 표시'),
+      F('07-speed.js', 'player', '진행 속도 G.sys.speed: 기본 2배 이동·단계(1~4) 배수·구독 반영(sub:changed→speed:changed)·두 번 점프'),
       F('08-easy.js', 'core', '쉬운 모드 G.easy: 읽어주기·보호자 확인(마구 누르기 방지)·그림 고르기·다음 할 일·같이 가기·축하·놀이 시간 알림'),
       F('10-engine.js', 'core', '렌더러·씬·카메라·하늘·태양·그림자·블룸·그래픽 품질 프리셋'),
       F('11-terrain.js', 'terrain', '지형 높이장·산·강 바닥·도로·오솔길·지표 판정'),
@@ -253,6 +254,7 @@
       F('65-companion.js', 'companion', '마스코트 옹이(2D SVG·3D 동반자)·상황별 도움말·읽어주기·멈춰 있을 때 안내·쉬는 시간 연기'),
       F('66-fx.js', 'fx', '파티클·3D 이모지·레벨업·코인 비행·도장 연출·아이 축하(kidParty)·광과민 안전'),
       F('70-app.js', 'app', '부팅·인증(PBKDF2)·아이 타이틀(타자 없음)·그림 메뉴/설정/도움말·보호자 확인 연결·아바타 꾸미기·쉬운 튜토리얼'),
+      F('72-subscription.js', 'app', '진행 속도 구독 화면 G.sys.subscription: 단계 카드·토스 결제(서버 모드)·테스트 결제·HUD 속도 칩·설치 안내'),
       F('80-devcenter.js', 'devcenter', '개발자 점검·인수인계 센터 (이 화면)'),
     ] },
     { dir: 'src/styles', emoji: '🎨', desc: '스타일 — 같은 번호의 JS 모듈 화면을 꾸밉니다', files: [
@@ -278,6 +280,7 @@
       F('65-companion.css', 'companion', '옹이 말풍선·놀이 메뉴'),
       F('66-fx.css', 'fx', '2D 연출(레벨업·도장·코인)'),
       F('70-app.css', 'app', '타이틀·로그인·메뉴·설정·도움말·아바타·튜토리얼'),
+      F('72-subscription.css', 'app', '구독 화면·단계 카드·테스트 결제 대화상자·HUD 속도 칩'),
       F('80-devcenter.css', 'devcenter', '개발자 센터 화면'),
     ] },
     { dir: 'server', emoji: '🐘', desc: '선택형 PHP 서버 모드 (빌드 시 dist/metaverse 로 복사)', files: [
@@ -418,7 +421,7 @@
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
-  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'app', 'devcenter'];
+  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -2007,6 +2010,85 @@
   });
   T('🧩 시스템', '모든 시스템 초기화 성공', () => { const bad = G.systems().filter((s) => s._failed || !s._initialized).map((s) => s.name); return { ok: !bad.length, detail: bad.length ? bad.join(', ') : `${G.systems().length}개 정상` }; });
   T('🧩 시스템', '조각(fragment) 로드 오류 없음', () => { const e = G.__fragmentErrors || []; return { ok: !e.length, detail: e.map((x) => x.name).join(', ') || `${(G.__fragments || []).length}개 로드` }; });
+  // ---- ⚡ 속도·구독 + 두 번 점프 (CONTRACT §14.1 / §14.2 / §14.6)
+  T('⚡ 속도·구독', '속도 단계 3 → 이동 ×3 · 성장 ×3', () => {
+    const sp = G.sys.speed;
+    if (!sp || typeof sp.devTier !== 'function') return SKIP('속도 모듈(07-speed)이 없어요');
+    if (G.easy && G.easy.on) return SKIP('쉬운 모드에서는 개발용 단계 전환이 꺼져요');
+    const prev = sp._dev || 0;
+    const forced = sp.devTier(3);
+    const got = { tier: sp.tier, mv: sp.movement(), pr: sp.progression() };
+    sp.devTier(prev);
+    if (forced !== 3) return SKIP('개발자 센터를 먼저 열면 단계를 바꿀 수 있어요 (지금은 닫혀 있어요)');
+    return { ok: got.tier === 3 && got.mv === 3 && got.pr === 3, detail: `단계 ${got.tier} · 이동 ×${got.mv} · 성장 ×${got.pr}` };
+  });
+  T('⚡ 속도·구독', 'setFromServer 는 잘못된 값을 1단계로 막아요', () => {
+    const sp = G.sys.speed, Sb = G.sys.subscription;
+    if (sp && typeof sp.setFromServer === 'function') {
+      const a = sp.setFromServer({ tier: 99 }), b = sp.setFromServer(null), c = sp.setFromServer({ tier: 'x' });
+      return { ok: a.tier === 1 && b.tier === 1 && c.tier === 1, detail: `99→${a.tier} · null→${b.tier} · "x"→${c.tier}` };
+    }
+    if (Sb && typeof Sb.sanitize === 'function') {
+      const a = Sb.sanitize({ tier: 99 }), b = Sb.sanitize(null), c = Sb.sanitize({ tier: 'x' });
+      return { ok: a.tier === 1 && b.tier === 1 && c.tier === 1, detail: `99→${a.tier} · null→${b.tier}` };
+    }
+    return SKIP('속도/구독 모듈이 없어요');
+  });
+  T('⚡ 속도·구독', '두 번 점프는 공중에서 한 번만 돼요', () => {
+    const p = G.sys.player;
+    if (!p || typeof p._doubleJump !== 'function') return SKIP('플레이어가 없어요');
+    if (typeof p._cinematic === 'function' && p._cinematic()) return SKIP('연출 중이에요');
+    const save = { g: p.grounded, aj: p._airJump, du: p._doubleUsed, sl: p._slide };
+    try {
+      // airborne after a first jump, not sliding: update() allows the second press exactly once (the !_doubleUsed gate)
+      p.grounded = false; p._airJump = true; p._doubleUsed = false; p._slide = false;
+      const canFirst = !p.grounded && p._airJump && !p._doubleUsed && !p._slide;
+      p._doubleUsed = true; // what _doubleJump() sets when it consumes the one double jump of this airtime
+      const canSecond = !p.grounded && p._airJump && !p._doubleUsed && !p._slide;
+      p.grounded = true; p._airJump = false; p._doubleUsed = false; // landing clears it for the next airtime
+      const afterLand = !p._doubleUsed;
+      return { ok: canFirst && !canSecond && afterLand, detail: `첫 번째 ${canFirst ? '가능' : '불가'} · 두 번째 ${canSecond ? '허용(버그)' : '막힘'} · 착지 후 초기화 ${afterLand}` };
+    } finally { p.grounded = save.g; p._airJump = save.aj; p._doubleUsed = save.du; p._slide = save.sl; }
+  });
+  // ---- 🖥️ GPU 안전: 가드 (NaN · 빈 캔버스) + 화면 감시 (검은 사각형)
+  T('🖥️ GPU 안전', 'guard: NaN opacity 인 감시 대상은 숨기고 되돌려요', () => {
+    const guard = G.gfx && G.gfx.guard;
+    if (!guard || typeof guard.watch !== 'function' || !window.THREE) return SKIP('엔진(G.gfx.guard)이 없어요');
+    const THREE = window.THREE;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ transparent: true, opacity: 1 }));
+    m.name = 'dc-guard-nan-probe';
+    guard.watch(m, { uniforms: true });
+    m.material.opacity = NaN;
+    const repaired = guard.check(m);
+    const fixed = Number.isFinite(m.material.opacity);
+    guard.unwatch(m);
+    try { m.geometry.dispose(); m.material.dispose(); } catch (e) { /* ignore */ }
+    return { ok: repaired > 0 && fixed, detail: `고친 값 ${repaired}개 · opacity 유한=${fixed}` };
+  });
+  T('🖥️ GPU 안전', 'guard: 빈 캔버스 텍스처(2D 컨텍스트 없음)는 건너뛰어요', () => {
+    const gfx = G.gfx;
+    if (!gfx || typeof gfx.blankTexture !== 'function') return SKIP('엔진(G.gfx)이 없어요');
+    const t = gfx.blankTexture();
+    const blank = !!(t && t.userData && t.userData.blank);
+    try { t.dispose && t.dispose(); } catch (e) { /* ignore */ }
+    return { ok: blank, detail: `빈 텍스처 표시(userData.blank)=${blank}` };
+  });
+  T('🖥️ GPU 안전', 'watchdog: 주입한 검은 사각형을 찾아 격리해요', () => {
+    const E = G.sys.engine, wd = G.gfx && G.gfx.guard && G.gfx.guard.watchdog;
+    if (!wd || !E || !E.renderer || typeof wd.inject !== 'function' || typeof wd.probeNow !== 'function') return SKIP('렌더러가 없어요');
+    if (typeof E._isLost === 'function' && E._isLost()) return SKIP('WebGL 컨텍스트 없음');
+    try {
+      wd.reset();
+      wd.inject(true);
+      let res = null, detected = false;
+      for (let i = 0; i < 4 && !detected; i++) { res = wd.probeNow(); detected = !!(res && res.block && res.block.kind === 'black' && (res.anomaly || res.block.frac >= wd.minArea)); }
+      const step = wd.step;
+      wd.inject(false);
+      wd.reset();
+      if (!res) return SKIP('프레임을 읽지 못했어요 (헤드리스)');
+      return { ok: detected, detail: `블록 ${res.block ? `${res.block.w}×${res.block.h} (${((res.block.frac || 0) * 100).toFixed(0)}%)` : '없음'} · 격리단계 ${step}` };
+    } catch (e) { try { wd.inject(false); wd.reset(); } catch (e2) { /* ignore */ } return SKIP('프로브 실패: ' + String(e && e.message || e).slice(0, 60)); }
+  });
   // a new module must be added to the SOURCE map and EXPECTED_SYSTEMS (otherwise the 모듈 상태 tab can not report it missing)
   T('🧩 시스템', '새 파일·새 시스템이 소스 지도와 필수 시스템 목록에 있어요', () => {
     const man = window.__BUILD__?.manifest || {};
@@ -3182,6 +3264,7 @@
     { id: 'data', emoji: '🔍', label: '데이터 검증', desc: 'G.data 교차 참조 검사 — 퀘스트·도감·상점·대화·배치·교육' },
     { id: 'save', emoji: '💾', label: '저장 데이터', desc: '현재 상태 트리 · 내보내기/가져오기/초기화 · 저장소 키 · 로컬 계정' },
     { id: 'server', emoji: '🌐', label: '서버 점검', desc: 'PHP API 연결 · 세션 · 관리자 상태 점검 · 응답 시간' },
+    { id: 'sub', emoji: '⚡', label: '구독·속도', desc: '진행 속도 구독 상태 · 단계(1~4) · 이동/성장 배수 · 토스 결제 설정 · HUD 속도 칩 · 개발용 단계 전환' },
     { id: 'tests', emoji: '🧪', label: '자가 테스트', desc: '실제 저장을 건드리지 않는 브라우저 안 단위 테스트' },
     { id: 'debug', emoji: '🛠️', label: '디버그 도구', desc: '자원 · 퀘스트 · 농장/발효 · 날씨/시간 · 순간이동 · 표시 · 연출 미리보기' },
     { id: 'source', emoji: '🗂️', label: '소스 구조', desc: '파일 지도(담당·역할·크기) · 이벤트 흐름 지도' },
@@ -3189,7 +3272,7 @@
     { id: 'handover', emoji: '🤝', label: '인수인계', desc: '인수인계 체크리스트 · 어디를 고치면 되나요?' },
   ];
   const TAB_IDS = new Set(TABS.map((t) => t.id));
-  const TAB_ALIAS = { dashboard: 'overview', stats: 'overview', admin: 'overview', home: 'overview', health: 'server', test: 'tests', cheats: 'debug', cheat: 'debug', tools: 'debug', files: 'source', events: 'source', doc: 'docs', readme: 'docs', checklist: 'handover', lint: 'data', storage: 'save', saves: 'save', env: 'system', modules: 'modules', kid: 'kids', easy: 'kids', audit: 'kids', child: 'kids', a11y: 'kids', gpu: 'system' };
+  const TAB_ALIAS = { dashboard: 'overview', stats: 'overview', admin: 'overview', home: 'overview', health: 'server', test: 'tests', cheats: 'debug', cheat: 'debug', tools: 'debug', files: 'source', events: 'source', doc: 'docs', readme: 'docs', checklist: 'handover', lint: 'data', storage: 'save', saves: 'save', env: 'system', modules: 'modules', kid: 'kids', easy: 'kids', audit: 'kids', child: 'kids', a11y: 'kids', gpu: 'system', speed: 'sub', subscription: 'sub', tier: 'sub', toss: 'sub' };
   const normTab = (t) => { const s = String(t || '').toLowerCase(); return TAB_IDS.has(s) ? s : TAB_ALIAS[s] || null; };
   const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
@@ -3556,6 +3639,42 @@
 
   // ---------------------------------------------------------------- tab renderers
   const RENDER = {};
+
+  RENDER.sub = (b) => {
+    const Sb = G.sys.subscription, sp = G.sys.speed;
+    const info = Sb && typeof Sb.info === 'function' ? Sb.info() : null;
+    const server = G.net && G.net.mode === 'server';
+    const easy = easyOn();
+    const tier = sp && Number.isInteger(Number(sp.tier)) ? Number(sp.tier) : (info ? info.tier : 1);
+    const mv = sp && typeof sp.movement === 'function' ? sp.movement() : (info ? info.movement : Math.min(tier, 3));
+    const pr = sp && typeof sp.progression === 'function' ? sp.progression() : (info ? info.progression : tier);
+    const plan = info && info.plan ? info.plan : { tier: tier, status: server ? 'none' : 'local', expiresAt: 0, autoRenew: false };
+    const tiers = info && Array.isArray(info.tiers) ? info.tiers : [];
+    const chipEl = document.getElementById('hud-speed');
+    const chipOn = !!chipEl && !chipEl.hidden;
+    const expiry = plan.expiresAt ? U.formatDate(plan.expiresAt, true) : '—';
+    const devBtns = [1, 2, 3, 4].map((n) => `<button type="button" class="btn btn-soft btn-sm${tier === n ? ' on' : ''}" data-dc="sub-tier" data-tier="${n}"${easy ? ' disabled' : ''}>${n}단계</button>`).join('')
+      + `<button type="button" class="btn btn-soft btn-sm" data-dc="sub-tier-off"${easy ? ' disabled' : ''}>끄기(0)</button>`;
+    b.innerHTML = `
+      <section class="dc-card dc-in dc-sub" style="--i:0" data-tone="${tier > 1 ? 'ok' : 'info'}">
+        <div class="dc-card-head"><h4>⚡ 진행 속도 <span class="muted small">${esc(server ? '서버 모드' : '로컬 모드')}</span></h4>
+          <div class="dc-row wrap"><button type="button" class="btn btn-soft btn-sm" data-dc="sub-refresh">↻ 새로 읽기</button><button type="button" class="btn btn-primary btn-sm" data-dc="sub-open">구독 화면 열기</button></div></div>
+        <dl class="dc-kv dc-kv-3">${kvRows([
+          ['현재 단계', `<b>${tier}단계</b> <span class="muted small">이동 ×${mv} · 성장 ×${pr}</span>`],
+          ['구독 상태', esc(String(plan.status || 'none'))],
+          ['만료', esc(expiry)],
+          ['자동 갱신', yes(!!plan.autoRenew, '켜짐', '꺼짐')],
+          ['G.sys.speed', yes(!!sp, '있음', '없음')],
+          ['토스 SDK', yes(info ? !!info.sdk : (typeof window.TossPayments === 'function'))],
+          ['결제 모드', esc(info ? String(info.mode || (server ? 'server' : 'local')) : (server ? 'server' : 'local'))],
+          ['HUD 속도 칩', yes(chipOn, '보임', '숨김')],
+        ])}</dl>
+        ${tiers.length ? `<div class="dc-chips">${tiers.map((t) => `<span class="chip">${esc(t.name || (t.tier + '배'))} <small class="muted">₩${fmt(t.price || 0)}</small></span>`).join('')}</div>` : ''}
+        <div class="dc-sub-h">🧪 개발용 단계 전환 ${easy ? pill('skip', '쉬운 모드에서는 꺼져요') : '<span class="muted small">(저장되지 않아요 · 서버 값이 아니에요)</span>'}</div>
+        <div class="dc-chips dc-sub-dev">${devBtns}</div>
+        <p class="dc-note">기본 이동은 2배예요. 서버에 설치하고 구독하면 이동·작물 자라기·발효를 2·3·4배로 올릴 수 있어요 (토스페이먼츠 결제). 로컬 모드(이 파일 하나로 열기)에서는 항상 1단계예요.</p>
+      </section>`;
+  };
 
   RENDER.overview = (b) => {
     const H = health();
@@ -3936,7 +4055,25 @@
       <div class="dc-sub-h">🧪 NaN 주입 테스트 ${n ? (n.skip ? pill('skip', '⏭️ 건너뜀') : n.ok ? pill('ok', '✅ 통과') : pill('bad', '⛔ 실패')) : '<span class="muted small">(버튼을 눌러 실행 · 게임 화면은 바뀌지 않아요)</span>'}</div>
       ${n && !n.skip ? `<div class="dc-nan"><figure><canvas data-nan="noScrub" width="64" height="64" aria-label="청소 없이"></canvas><figcaption>청소 없이<br><b>${(n.blackNoScrub * 100).toFixed(1)}%</b> 검정</figcaption></figure><span class="dc-arrow" aria-hidden="true">→</span><figure><canvas data-nan="scrub" width="64" height="64" aria-label="청소 후"></canvas><figcaption>NaN 청소 후<br><b>${(n.blackScrub * 100).toFixed(2)}%</b> 검정</figcaption></figure><p class="dc-note">${esc(n.detail || '')} · 셰이더: ${esc(n.source)} · ${n.ms.toFixed(0)} ms</p></div>` : n?.skip ? `<p class="dc-note">${esc(n.detail)}</p>` : ''}
       ${g.shaders.length ? `<details class="dc-details"><summary>커스텀 셰이더 ${g.shaders.length}개 — 0 나누기·normalize·pow·sqrt 를 쓰면 입력이 0/음수일 때를 막았는지 확인하세요</summary><div class="dc-chips">${g.shaders.map((x) => `<span class="chip">${esc(x.name)}${x.ops.length ? ` <small class="muted">${esc(x.ops.join(' · '))}</small>` : ''}</span>`).join('')}</div></details>` : ''}
+      ${wdCardHtml()}
     </section>`;
+  }
+  function wdCardHtml() {
+    const wd = G.gfx && G.gfx.guard && G.gfx.guard.watchdog;
+    if (!wd) return '';
+    const stTone = wd.state === 'quarantine' ? 'bad' : wd.state === 'suspect' ? 'warn' : 'ok';
+    const stName = { idle: '대기', watching: '감시 중', suspect: '의심(1회)', quarantine: '격리' }[wd.state] || esc(String(wd.state || '-'));
+    const blk = wd.lastBlock ? `${wd.lastBlock.kind === 'white' ? '흰' : '검은'} 블록 ${wd.lastBlock.w}×${wd.lastBlock.h} (${((wd.lastBlock.frac || 0) * 100).toFixed(0)}%)` : '없음';
+    return `<div class="dc-sub-h">🛡️ 화면 감시 — 검은 사각형 2초마다 점검 ${pill(stTone, stName)}${wd.step ? ` ${pill('bad', `격리 ${wd.step}/4단계`)}` : ''}</div>
+      <dl class="dc-kv dc-kv-3">${kvRows([
+        ['상태', esc(stName)],
+        ['격리 단계', `${wd.step} / 4`],
+        ['점검 횟수', fmt(wd.probes || 0)],
+        ['이상 감지(누적)', fmt(wd.anomalies || 0)],
+        ['마지막 블록', esc(blk)],
+        ['켜짐', yes(wd.enabled !== false, '켜짐', '꺼짐')],
+      ])}</dl>
+      ${wd.step ? `<div class="dc-row"><button type="button" class="btn btn-gold btn-sm" data-dc="gpu-wd-reset">🔄 다시 켜기 (격리 해제)</button></div>` : ''}`;
   }
   function drawNan(scope) {
     const n = Gpu.nan;
@@ -4597,12 +4734,36 @@
         if (!G.state) return;
         const ok = await confirmBox({ title: '진행 상황을 처음부터 다시 시작할까요?', message: '레벨·코인·퀘스트·밭·장독·일지·사진이 모두 초기화돼요. 되돌릴 수 없으니 먼저 내보내기를 권장해요.', okText: '초기화', danger: true, emoji: '♻️' });
         if (!ok) return;
+        // in easy mode a destructive action inside the (grown-up) dev center re-confirms the adult is present (seams-lost-3b)
+        if (easyOn() && G.settings?.parentGate !== false && typeof G.easy?.gate === 'function') {
+          let pass = false;
+          try { pass = await G.easy.gate({ reason: 'reset', fresh: true, title: '진행 초기화는 어른만', text: '정말 처음부터 다시 시작할까요?' }); } catch (e) { pass = false; }
+          if (pass !== true) { toast('보호자 확인이 필요해요.', 'info', '🔒'); return; }
+        }
         try { await G.save.resetProgress(); toast('진행 상황을 초기화했어요.', 'success', '♻️'); G.log.warn('DEV', 'progress reset from dev center'); }
         catch (err) { toast('초기화하지 못했어요.', 'error'); G.log.error('DEV', 'reset failed', err); }
         if (ui.opened) render();
         return;
       }
       case 'tree-refresh': renderTree(ui.body.querySelector('#dc-tree')); return;
+      case 'sub-refresh': {
+        const Sb = G.sys.subscription;
+        if (Sb && typeof Sb.refresh === 'function') { try { await Sb.refresh({ quiet: true }); } catch (e) { /* offline is fine */ } }
+        if (ui.opened && ui.tab === 'sub') RENDER.sub(ui.body);
+        toast('구독 상태를 새로 읽었어요.', 'info', '↻');
+        return;
+      }
+      case 'sub-open': { const Sb = G.sys.subscription; if (Sb && typeof Sb.open === 'function') Sb.open({ gate: false }); else toast('구독 화면이 아직 없어요.', 'warn'); return; }
+      case 'sub-tier': {
+        const sp = G.sys.speed;
+        if (!sp || typeof sp.devTier !== 'function') { toast('속도 모듈(07-speed)이 없어요.', 'warn'); return; }
+        if (easyOn()) { toast('쉬운 모드에서는 단계를 바꿀 수 없어요.', 'info', '🔒'); return; }
+        sp.devTier(Number(el.dataset.tier) || 1);
+        if (ui.opened && ui.tab === 'sub') RENDER.sub(ui.body);
+        return;
+      }
+      case 'sub-tier-off': { const sp = G.sys.speed; if (sp && typeof sp.devTier === 'function' && !easyOn()) sp.devTier(0); if (ui.opened && ui.tab === 'sub') RENDER.sub(ui.body); return; }
+      case 'gpu-wd-reset': { try { G.gfx?.guard?.watchdog?.reset?.(); } catch (e) { /* optional */ } if (ui.opened) render(); toast('화면 감시를 다시 켰어요.', 'success', '🖥️'); return; }
       case 'srv-run': await runServerChecks(); return;
       case 'kid-audit': KidAudit.run(); ui.kid.view = 'live'; render(); toast(`지금 화면: 치명 ${KidAudit.last.counts.critical} · 경고 ${KidAudit.last.counts.warn} · 참고 ${KidAudit.last.counts.info}`, KidAudit.last.counts.critical ? 'warn' : 'success', '👶'); return;
       case 'kid-tour': await kidTourUi(); return;

@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-10-25T04:47:56.596Z",
+  "exportedAt": "2026-10-31T10:24:55.467Z",
   "quests": {
     "QUEST001": {
       "reward": {
@@ -262,6 +262,15 @@
       "condition": {
         "stat": "crafts",
         "gte": 3
+      }
+    },
+    "ACH_DOUBLE_JUMP": {
+      "reward": {
+        "coin": 200
+      },
+      "condition": {
+        "stat": "doubleJumps",
+        "gte": 10
       }
     }
   },

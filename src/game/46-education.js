@@ -1806,7 +1806,7 @@ ${fl}
       const item = G.data.items?.[x.food] || null;
       const e = EDU()[x.edu] || null;
       const st = { viewer: null };
-      const desc = info.text || (item?.desc || '').replace(/\s*\(게임 체험 결과물\)\s*$/, '');
+      const desc = info.text || (item?.desc || '').replace(/\s*\([^()]{0,8}체험 결과물\)\s*$/, '') // '(… 체험 결과물)' suffix of fermented items (01-data), whatever word leads it;
       if (kidOn()) return this._kidExhibit(x, info, item, e, st, desc);
       const facts = (info.facts || []).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
       const box = visualBox('exh-visual');

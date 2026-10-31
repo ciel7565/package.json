@@ -5,6 +5,7 @@
  *  - whitespace may split a word only when the whole word stands alone ("f u c k", "개 새끼"), so innocent
  *    text such as "this hit" or "그 병 신경" is left alone,
  *  - allow-listed real words (시발점, 시발역, …) are never masked; matches are replaced with '♡♡'.
+ * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
@@ -14,20 +15,21 @@ if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
 
 final class ChatFilter
 {
-    private static ?string $re = null;
+    /** @var string|null */
+    private static $re = null;
     private const DEFAULT_ALLOW = ['시발점', '시발역', '시발택시', '시발자동차'];
 
     private static function regex(): ?string
     {
         if (self::$re !== null) return self::$re === '' ? null : self::$re;
-        $words = array_values(array_filter(array_map(fn ($w) => trim((string) $w), (array) Config::get('chat.bad_words', [])), 'strlen'));
+        $words = array_values(array_filter(array_map(function ($w) { return trim((string) $w); }, (array) Config::get('chat.bad_words', [])), 'strlen'));
         if (!$words) { self::$re = ''; return null; }
-        usort($words, fn ($a, $b) => mb_strlen($b) <=> mb_strlen($a));
+        usort($words, function ($a, $b) { return mb_strlen($b) <=> mb_strlen($a); });
         $tight = '[._\-*~!@#^]*';
         $loose = '(?:\s+|[._\-*~!@#^]+)?';
         $parts = [];
         foreach ($words as $w) {
-            $chars = array_map(fn ($c) => preg_quote($c, '/'), preg_split('//u', $w, -1, PREG_SPLIT_NO_EMPTY) ?: []);
+            $chars = array_map(function ($c) { return preg_quote($c, '/'); }, Str::chars($w));
             if (!$chars) continue;
             $parts[] = implode($tight, $chars);
             if (count($chars) > 1) $parts[] = '(?<![\p{L}\p{N}])' . implode($loose, $chars) . '(?![\p{L}\p{N}])';
@@ -50,7 +52,7 @@ final class ChatFilter
 
     private static function allowed(array $ranges, int $start, int $len): bool
     {
-        foreach ($ranges as [$a, $b]) if ($start >= $a && $start + $len <= $b) return true;
+        foreach ($ranges as $r) if ($start >= $r[0] && $start + $len <= $r[1]) return true;
         return false;
     }
 
@@ -58,9 +60,19 @@ final class ChatFilter
     {
         $re = self::regex();
         if (!$re) return $text;
+        // preg_replace_callback() learnt match offsets (PREG_OFFSET_CAPTURE) only in PHP 7.4: find them with preg_match_all
+        if (!preg_match_all($re, $text, $all, PREG_OFFSET_CAPTURE)) return $text;
         $allow = self::allowRanges($text);
-        $out = preg_replace_callback($re, fn ($m) => self::allowed($allow, $m[0][1], strlen($m[0][0])) ? $m[0][0] : '♡♡', $text, -1, $count, PREG_OFFSET_CAPTURE);
-        return $out ?? $text;
+        $out = '';
+        $cursor = 0;
+        foreach ($all[0] as $hit) {
+            $m = $hit[0];
+            $off = (int) $hit[1];
+            $out .= Str::sub($text, $cursor, $off - $cursor);
+            $out .= self::allowed($allow, $off, strlen($m)) ? $m : '♡♡';
+            $cursor = $off + strlen($m);
+        }
+        return $out . Str::sub($text, $cursor);
     }
 
     public static function containsBadWord(string $text): bool
@@ -68,7 +80,7 @@ final class ChatFilter
         $re = self::regex();
         if (!$re || !preg_match_all($re, $text, $all, PREG_OFFSET_CAPTURE)) return false;
         $allow = self::allowRanges($text);
-        foreach ($all[0] as [$s, $off]) if (!self::allowed($allow, $off, strlen($s))) return true;
+        foreach ($all[0] as $hit) if (!self::allowed($allow, $hit[1], strlen($hit[0]))) return true;
         return false;
     }
 
@@ -87,8 +99,10 @@ final class ChatFilter
     /** invisible characters removed by Users::cleanText (same list as INVISIBLE_RANGES in 60-social.js) */
     public const INVISIBLE_CLASS = '\x{0000}-\x{001F}\x{007F}-\x{009F}\x{00AD}\x{034F}\x{061C}\x{115F}-\x{1160}\x{17B4}-\x{17B5}\x{180E}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}\x{3164}\x{FEFF}\x{FFA0}\x{FFF0}-\x{FFFB}\x{E0000}-\x{E007F}';
 
-    private static ?array $rules = null;
-    private static array $foldCache = [];
+    /** @var array|null */
+    private static $rules = null;
+    /** @var array */
+    private static $foldCache = [];
 
     /**
      * Ordered rules from lib/pii-rules.json: [name => [pcre, predicate|null]]. A missing / broken file is a deploy
@@ -98,16 +112,18 @@ final class ChatFilter
     {
         if (self::$rules !== null) return self::$rules;
         $out = [];
-        $file = __DIR__ . '/pii-rules.json';
-        $j = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
-        $list = is_array($j) && is_array($j['rules'] ?? null) ? $j['rules'] : [];
+        $file = __DIR__ . DIRECTORY_SEPARATOR . 'pii-rules.json';
+        $j = is_file($file) ? Json::tryDecode((string) file_get_contents($file), true) : null;
+        $list = is_array($j) && isset($j['rules']) && is_array($j['rules']) ? $j['rules'] : [];
         foreach ($list as $r) {
-            if (!is_array($r) || !is_string($r['src'] ?? null) || !is_string($r['name'] ?? null)) continue;
-            $flags = preg_replace('/[^iu]/', '', (string) ($r['flags'] ?? 'u')) ?: 'u';
-            if (!str_contains($flags, 'u')) $flags .= 'u';
+            if (!is_array($r) || !isset($r['src']) || !is_string($r['src']) || !isset($r['name']) || !is_string($r['name'])) continue;
+            $flags = (string) preg_replace('/[^iu]/', '', (string) (isset($r['flags']) ? $r['flags'] : 'u'));
+            if ($flags === '') $flags = 'u';
+            if (!Str::contains($flags, 'u')) $flags .= 'u';
             $re = '/' . $r['src'] . '/' . $flags;
             if (@preg_match($re, '') === false) { Log::error('CHAT', 'PII rule does not compile', ['rule' => $r['name']]); continue; }
-            $pred = match ($r['pred'] ?? null) { 'piiNotCounting' => [self::class, 'notCounting'], 'piiWordDigits' => [self::class, 'wordDigits'], default => null };
+            $pn = isset($r['pred']) ? $r['pred'] : null;
+            $pred = $pn === 'piiNotCounting' ? [self::class, 'notCounting'] : ($pn === 'piiWordDigits' ? [self::class, 'wordDigits'] : null);
             $out[$r['name']] = [$re, $pred];
         }
         if (!$out) {
@@ -141,7 +157,9 @@ final class ChatFilter
             $d = $v[1] - $v[0];
             if ($d !== 0) {
                 $ap = true;
-                for ($i = 1, $n = count($v); $i < $n; $i++) if ($v[$i] - $v[$i - 1] !== $d) { $ap = false; break; }
+                for ($i = 1, $n = count($v); $i < $n; $i++) {
+                    if ($v[$i] - $v[$i - 1] !== $d) { $ap = false; break; }
+                }
                 if ($ap) return false;
             }
             if ($v[0] >= 1900 && $v[0] <= 2099 && $v[1] >= 1 && $v[1] <= 12 && $v[2] >= 1 && $v[2] <= 31) return false;
@@ -172,10 +190,10 @@ final class ChatFilter
     /** a run of digit words (maybe with numerals) shaped like a phone / local number, not counting */
     public static function wordDigits(string $m): bool
     {
-        $t = preg_replace('/하고|이랑|그리고|랑|and/u', ' ', mb_strtolower($m)) ?? '';
+        $t = (string) preg_replace('/하고|이랑|그리고|랑|and/u', ' ', mb_strtolower($m));
         if (!preg_match(self::WORD_DIGIT_RE, $t)) return false; // numerals only: the digit rules decide
-        $d = preg_replace_callback(self::WORD_DIGIT_RE, fn (array $x): string => self::WORD_DIGITS[$x[0]] ?? $x[0], $t) ?? '';
-        $d = trim(preg_replace('/[^0-9]+/', ' ', $d) ?? '');
+        $d = (string) preg_replace_callback(self::WORD_DIGIT_RE, function (array $x): string { return isset(self::WORD_DIGITS[$x[0]]) ? self::WORD_DIGITS[$x[0]] : $x[0]; }, $t);
+        $d = trim((string) preg_replace('/[^0-9]+/', ' ', $d));
         $g = array_values(array_filter(explode(' ', $d), 'strlen'));
         $all = implode('', $g);
         $len = strlen($all);
@@ -205,13 +223,13 @@ final class ChatFilter
     /** NFKC of one character; without the intl extension the common compatibility forms by hand */
     private static function nfkc(string $c): string
     {
-        if (class_exists(\Normalizer::class)) {
+        if (class_exists('Normalizer')) {
             $n = \Normalizer::normalize($c, \Normalizer::FORM_KC);
             return is_string($n) ? $n : $c;
         }
         $cp = mb_ord($c, 'UTF-8');
         if ($cp === false) return $c;
-        if ($cp >= 0xFF01 && $cp <= 0xFF5E) return mb_chr($cp - 0xFEE0, 'UTF-8');                       // full-width ASCII
+        if ($cp >= 0xFF01 && $cp <= 0xFF5E) return (string) mb_chr($cp - 0xFEE0, 'UTF-8');                       // full-width ASCII
         if ($cp === 0x3000 || $cp === 0x00A0 || ($cp >= 0x2000 && $cp <= 0x200A) || $cp === 0x202F || $cp === 0x205F) return ' ';
         if ($cp >= 0x1D7CE && $cp <= 0x1D7FF) return (string) (($cp - 0x1D7CE) % 10);                    // math digits
         if ($cp >= 0x1FBF0 && $cp <= 0x1FBF9) return (string) ($cp - 0x1FBF0);
@@ -247,13 +265,13 @@ final class ChatFilter
         elseif (isset(self::CJK_DIGITS[$c])) $f = self::CJK_DIGITS[$c];
         else {
             $f = '';
-            foreach (mb_str_split(self::nfkc($c), 1, 'UTF-8') as $ch) {
+            foreach (Str::chars(self::nfkc($c)) as $ch) {
                 if (preg_match('/^[\p{Cf}\p{Mn}\p{Me}\x{3164}\x{115F}\x{1160}\x{FFA0}]$/u', $ch)) continue;
                 if (preg_match('/^\p{Nd}$/u', $ch) && !($ch >= '0' && $ch <= '9' && strlen($ch) === 1)) {
                     // Unicode encodes every decimal digit set as 10 contiguous code points 0..9
-                    $z0 = mb_ord($ch, 'UTF-8');
+                    $z0 = (int) mb_ord($ch, 'UTF-8');
                     $z = $z0;
-                    while ($z0 - $z < 9 && $z > 0 && preg_match('/^\p{Nd}$/u', mb_chr($z - 1, 'UTF-8'))) $z--;
+                    while ($z0 - $z < 9 && $z > 0 && preg_match('/^\p{Nd}$/u', (string) mb_chr($z - 1, 'UTF-8'))) $z--;
                     $f .= (string) (($z0 - $z) % 10);
                 } else {
                     $f .= mb_strtolower($ch, 'UTF-8');
@@ -314,13 +332,16 @@ final class ChatFilter
         $pos[] = count($units);
         if ($s === '' || !preg_match_all($re, $s, $all, PREG_OFFSET_CAPTURE)) return 0;
         $spans = [];
-        foreach ($all[0] as [$m, $off]) {
+        foreach ($all[0] as $hit) {
+            $m = $hit[0];
+            $off = $hit[1];
             if ($m === '') continue;
             if ($pred && !$pred($m)) continue;
             $spans[] = [$pos[$off], $pos[$off + strlen($m) - 1]];
         }
         for ($k = count($spans) - 1; $k >= 0; $k--) {
-            [$i, $j] = $spans[$k];
+            $i = $spans[$k][0];
+            $j = $spans[$k][1];
             while ($j + 1 < count($units) && $units[$j + 1]['s'] === '' && !$units[$j + 1]['m']) $j++; // marks right after go too
             array_splice($units, $i, $j - $i + 1, [['s' => self::PII_MARK, 'a' => $units[$i]['a'], 'b' => $units[$j]['b'], 'm' => true]]);
         }
@@ -335,15 +356,15 @@ final class ChatFilter
     {
         $hits = 0;
         if ($text === '') return $text;
-        if (!mb_check_encoding($text, 'UTF-8')) $text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
-        if (class_exists(\Normalizer::class)) $text = \Normalizer::normalize($text, \Normalizer::FORM_C) ?: $text;
-        $cps = mb_str_split($text, 1, 'UTF-8');
+        if (!mb_check_encoding($text, 'UTF-8')) $text = (string) mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+        if (class_exists('Normalizer')) { $n = \Normalizer::normalize($text, \Normalizer::FORM_C); if (is_string($n) && $n !== '') $text = $n; }
+        $cps = Str::chars($text);
         if (count($cps) > self::PII_MAX) $cps = array_slice($cps, 0, self::PII_MAX);
         $units = self::units($cps);
-        foreach (self::piiPatterns() as [$re, $pred]) $hits += self::applyRule($units, $re, $pred);
+        foreach (self::piiPatterns() as $rule) $hits += self::applyRule($units, $rule[0], $rule[1]);
         $out = '';
         foreach ($units as $x) $out .= $x['m'] ? self::PII_MARK : implode('', array_slice($cps, $x['a'], $x['b'] - $x['a']));
-        if ($hits > 0) $out = preg_replace('/🔒(?:(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]){0,8}🔒)+/u', self::PII_MARK, $out) ?? $out;
+        if ($hits > 0) { $c = preg_replace('/🔒(?:(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]){0,8}🔒)+/u', self::PII_MARK, $out); if (is_string($c)) $out = $c; }
         return $out;
     }
 
@@ -357,7 +378,7 @@ final class ChatFilter
     /** the folded matching copy of a whole string (tests / admin tools) */
     public static function fold(string $text): string
     {
-        return implode('', array_map(fn ($u) => $u['s'], self::units(mb_str_split($text, 1, 'UTF-8'))));
+        return implode('', array_map(function ($u) { return $u['s']; }, self::units(Str::chars($text))));
     }
 
     /**
@@ -368,11 +389,14 @@ final class ChatFilter
     {
         if ($nick === '') return false;
         if (self::hasPII($nick)) return true;
-        $f = self::fold(class_exists(\Normalizer::class) ? (\Normalizer::normalize($nick, \Normalizer::FORM_C) ?: $nick) : $nick);
+        $src = $nick;
+        if (class_exists('Normalizer')) { $n = \Normalizer::normalize($nick, \Normalizer::FORM_C); if (is_string($n) && $n !== '') $src = $n; }
+        $f = self::fold($src);
         if (preg_match_all('/[0-9공영빵일이삼사오육륙칠팔구]/u', $f) >= 7) return true; // digits, also as words
         if (preg_match('/01[016789][0-9]{3,}|공일공|영일영/u', $f)) return true;
         $platform = '/카톡|카카오톡|인스타|틱톡|디코|디스코드|텔레그램|페메|유튜브|로블록스|로블|제페토|마인크래프트|마크|포트나이트|브롤|insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu';
-        $tail = preg_replace('/insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu', '', $f) ?? $f;
+        $tail = preg_replace('/insta|kakao|tiktok|discord|telegram|youtube|snapchat|roblox|zepeto|minecraft|fortnite/iu', '', $f);
+        if (!is_string($tail)) $tail = $f;
         if (preg_match($platform, $f) && preg_match('/[0-9a-z_]{3,}|[0-9]{2,}/i', $tail)) return true;
         if (preg_match('/학년|[0-9일이삼사오육칠팔구]반$|초등|중학|고등|유치원|어린이집|[가-힣]{2,}초[0-9일이삼사오육]/u', $f)) return true;
         if (preg_match('/^(?:ig|yt|tt|dc|snap|kt|insta|fb|tw|tg|dm)[._]/u', $f)) return true;                 // "ig_dino", "snap.dino77"
@@ -390,8 +414,10 @@ final class ChatFilter
     public static function key(string $text): string
     {
         $k = mb_strtolower($text);
-        $k = preg_replace('/[\s\p{P}\p{S}]+/u', '', $k) ?? $k;
-        $k = preg_replace('/(.)\1{2,}/u', '$1$1', $k) ?? $k;
+        $k1 = preg_replace('/[\s\p{P}\p{S}]+/u', '', $k);
+        if (is_string($k1)) $k = $k1;
+        $k2 = preg_replace('/(.)\1{2,}/u', '$1$1', $k);
+        if (is_string($k2)) $k = $k2;
         if ($k === '') $k = mb_strtolower($text); // emoji-only messages
         return mb_substr($k, 0, 200);
     }
@@ -399,7 +425,7 @@ final class ChatFilter
 
 /**
  * Moderation that reaches players who are online: a hidden message (admin, 3 reports) or a banned sender is taken
- * back from every open game, not only filtered out of new chat/list.php results (table chat_retractions, schema v3).
+ * back from every open session, not only filtered out of new chat/list.php results (table chat_retractions, schema v3).
  */
 final class Retractions
 {

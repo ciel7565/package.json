@@ -245,6 +245,8 @@ G.data.achievements = {
   ACH_NPC_ALL: { name: '마당발', icon: '🧑‍🤝‍🧑', desc: '모든 NPC와 대화했습니다.', condition: { stat: 'npcsTalked', gte: 5 }, reward: { coin: 400 } },
   ACH_FIRST_CHAT: { name: '첫 인사말', icon: '💬', desc: '채팅으로 처음 이야기했습니다.', condition: { stat: 'chats', gte: 1 }, reward: { coin: 50 } },
   ACH_CRAFTER: { name: '손재주꾼', icon: '🛠️', desc: '작업대에서 재료를 3번 만들었습니다.', condition: { stat: 'crafts', gte: 3 }, reward: { coin: 300 } },
+  // phase 6 (CONTRACT §14.2): the second Space press in the air — stats.doubleJumps counts them (62-engagement)
+  ACH_DOUBLE_JUMP: { name: '두 번 점프', icon: '🤸', desc: '두 번 점프를 10번 했습니다.', condition: { stat: 'doubleJumps', gte: 10 }, reward: { coin: 200 } },
 };
 for (const [id, a] of Object.entries(G.data.achievements)) a.id = id;
 

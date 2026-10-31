@@ -8,20 +8,30 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Audit, ChatFilter, Config, Ctx, Db, Retractions, Users};
+use Tfm\Api;
+use Tfm\ApiException;
+use Tfm\Audit;
+use Tfm\ChatFilter;
+use Tfm\Config;
+use Tfm\Ctx;
+use Tfm\Db;
+use Tfm\Retractions;
+use Tfm\Users;
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function (Ctx $c): array {
     $b = $c->json(8192);
     // 'kid' is the one-tap report of a child in easy mode (60-social _kidReport); always accepted, even when an older
     // config.local.php lists its own reasons, so a child's report never turns into a plain '기타'
     $reasons = array_merge((array) Config::get('chat.reasons', ['abuse', 'spam', 'harass', 'privacy', 'etc']), ['kid']);
-    $reason = is_string($b['reason'] ?? null) && in_array($b['reason'], $reasons, true) ? $b['reason'] : 'etc';
-    $target = Users::cleanText(is_string($b['target'] ?? null) ? $b['target'] : '', 40);
+    $reason = isset($b['reason']) && is_string($b['reason']) && in_array($b['reason'], $reasons, true) ? $b['reason'] : 'etc';
+    $target = Users::cleanText(isset($b['target']) && is_string($b['target']) ? $b['target'] : '', 40);
     // reports may quote personal information (reason "privacy"): admins see that something was shared, not the data
-    $memo = ChatFilter::maskPII(Users::cleanText(is_string($b['memo'] ?? null) ? $b['memo'] : '', 200));
-    $mid = (is_int($b['messageId'] ?? null) || (is_string($b['messageId'] ?? null) && ctype_digit($b['messageId']))) ? (int) $b['messageId'] : 0;
-    $tid = (is_int($b['targetId'] ?? null) || (is_string($b['targetId'] ?? null) && ctype_digit($b['targetId']))) ? (int) $b['targetId'] : 0;
-    $text = ChatFilter::maskPII(Users::cleanText(is_string($b['text'] ?? null) ? $b['text'] : '', 300));
+    $memo = ChatFilter::maskPII(Users::cleanText(isset($b['memo']) && is_string($b['memo']) ? $b['memo'] : '', 200));
+    $midRaw = isset($b['messageId']) ? $b['messageId'] : null;
+    $tidRaw = isset($b['targetId']) ? $b['targetId'] : null;
+    $mid = (is_int($midRaw) || (is_string($midRaw) && $midRaw !== '' && ctype_digit($midRaw))) ? (int) $midRaw : 0;
+    $tid = (is_int($tidRaw) || (is_string($tidRaw) && $tidRaw !== '' && ctype_digit($tidRaw))) ? (int) $tidRaw : 0;
+    $text = ChatFilter::maskPII(Users::cleanText(isset($b['text']) && is_string($b['text']) ? $b['text'] : '', 300));
     $msg = $mid > 0 ? Db::one('SELECT id, user_id, nickname, text FROM chat_messages WHERE id = ?', [$mid]) : null;
     if ($msg) { $tid = (int) $msg['user_id']; $target = (string) $msg['nickname']; $text = (string) $msg['text']; }
     elseif ($tid > 0) { $tu = Users::byId($tid); $tid = $tu ? (int) $tu['id'] : 0; if ($tu) $target = (string) $tu['nickname']; }
@@ -46,7 +56,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function
     if ($msg) {
         $n = (int) Db::value("SELECT COUNT(DISTINCT reporter_id) FROM chat_reports WHERE message_id = ? AND status = 'open'", [(int) $msg['id']]);
         if ($n >= 3 && Db::exec('UPDATE chat_messages SET hidden = 1 WHERE id = ? AND hidden = 0', [(int) $msg['id']])) {
-            Retractions::add((int) $msg['id'], null); // games online take it back
+            Retractions::add((int) $msg['id'], null); // sessions online take it back
             Audit::log('message_auto_hidden', $tid ?: null, ['message' => (int) $msg['id'], 'reports' => $n], 'warn');
         }
     }

@@ -8,7 +8,10 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, Ctx, Db, Session};
+use Tfm\Api;
+use Tfm\Ctx;
+use Tfm\Db;
+use Tfm\Session;
 
 Api::run(['method' => 'GET', 'rate' => 'ranking'], function (Ctx $c): array {
     Session::close();
@@ -26,7 +29,9 @@ Api::run(['method' => 'GET', 'rate' => 'ranking'], function (Ctx $c): array {
         $p = Db::one('SELECT level, exp_total, updated_at FROM user_profiles WHERE user_id = ?', [$me]);
         if ($p) {
             // the same order as the list (ties: earlier updated first, then lower id), so "내 순위" matches my row
-            [$lv, $xp, $up] = [(int) $p['level'], (int) $p['exp_total'], (int) $p['updated_at']];
+            $lv = (int) $p['level'];
+            $xp = (int) $p['exp_total'];
+            $up = (int) $p['updated_at'];
             $above = (int) Db::value("SELECT COUNT(*) FROM user_profiles p JOIN users u ON u.id = p.user_id WHERE u.status = 'active' AND p.user_id <> ?
                 AND (p.level > ? OR (p.level = ? AND (p.exp_total > ? OR (p.exp_total = ? AND (p.updated_at < ? OR (p.updated_at = ? AND p.user_id < ?))))))",
                 [$me, $lv, $lv, $xp, $xp, $up, $up, $me]);

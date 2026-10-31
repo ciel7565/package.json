@@ -15,7 +15,8 @@
 //     openJarDisplay(id)          onggi type info (독/중두리/항아리/단지)
 //     setJar(id, patch) / fastForward(seconds)   debug & test helpers
 //   State machine EMPTY -> PREPARING -> FERMENTING -> AGING -> COMPLETE -> CLAIMED (-> new start).
-//   Progress advances from timestamps (offline time counts) at a small environment-dependent speed.
+//   Progress advances from timestamps (offline time counts) at a small environment-dependent speed, × the speed
+//   tier (G.sys.speed.progression(), CONTRACT §14.1) — hygiene decay and care cool-downs stay wall-clock.
 //   Quality = base + 온도(0–15) + 습도(0–10) + 숙성(0–15) − 위생 감점(0–20) — an educational game simulation.
 // =============================================================================
 (function () {
@@ -94,6 +95,8 @@
   const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
   const kt = (normal, kid) => (kidOn() ? kid : normal);
   const kidSay = (text, opts) => { try { G.easy?.say?.(text, opts || { priority: 1 }); } catch (e) { /* voice optional */ } };
+  /** progress multiplier of the speed tier (1..4) */
+  const progression = () => { const p = Number(G.sys.speed?.progression?.()); return p >= 1 && p <= 4 ? p : 1; };
   const h0 = (...a) => G.ui.h(...a);
   const MOONS = ['🌑', '🌒', '🌓', '🌔', '🌕'];
   const moonIdx = (p) => (p >= 100 ? 4 : clamp(Math.floor((Number(p) || 0) / 25), 0, 3));
@@ -443,9 +446,10 @@
       const steps = Math.min(4000, Math.max(1, Math.ceil(el)));
       const h = el / steps;
       const prev = s.status;
+      const prog = progression(); // the speed tier multiplies the progress only (not hygiene, not the care cool-downs)
       for (let k = 0; k < steps; k++) {
         const sp = this._speed(s, rec, env);
-        s.progress = Math.min(100, s.progress + (h / rec.baseDuration) * 100 * sp.speed);
+        s.progress = Math.min(100, s.progress + (h / rec.baseDuration) * 100 * sp.speed * prog);
         const hum = sp.hum;
         s.hygiene = clamp(s.hygiene - h * (0.12 + (hum > 80 ? 0.06 : 0) + (env.raining ? 0.03 : 0)), 0, 100);
         const decay = Math.pow(0.5, h / 60);
@@ -523,7 +527,7 @@
       return {
         id, def: J.def, state: s, owned: !!s.owned, status: s.status, statusName: STATE_NAMES()[s.status] || s.status,
         recipeId: s.recipeId, recipe: rec, progress: s.progress,
-        remaining: rec && ACTIVE.has(s.status) ? ((100 - s.progress) / 100) * rec.baseDuration / (sp?.speed || 1) : 0,
+        remaining: rec && ACTIVE.has(s.status) ? ((100 - s.progress) / 100) * rec.baseDuration / ((sp?.speed || 1) * progression()) : 0,
         quality: q ? q.total : 0, grade: q ? q.grade : '', qualityParts: q, hygiene: s.hygiene,
         temp: sp ? sp.temp : env.temp, humidity: sp ? sp.hum : env.humidity, speed: sp ? sp.speed : 1, env: Object.assign({}, env),
       };

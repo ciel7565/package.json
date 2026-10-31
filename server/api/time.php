@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 require __DIR__ . '/../lib/bootstrap.php';
 
-use Tfm\{Api, Clock, Ctx};
+use Tfm\Api;
+use Tfm\Clock;
+use Tfm\Ctx;
 
 Api::run(['method' => 'GET', 'rate' => 'time'], function (Ctx $c): array {
     $ms = Clock::ms();

@@ -6,6 +6,9 @@
 //   node tests/server-e2e.mjs                            spawn its own `php -S` on a free port over dist/metaverse with a
 //                                                        throw-away data dir (TFM_DATA_DIR), then clean up
 //   options: --verbose (print every response)
+//   The spawned server runs with TFM_TOSS_MOCK=1 (mock 토스 payments, CONTRACT §14.6); against an external server the
+//   subscription steps run only when api/sub/status.php reports mode 'mock', and the CLI steps (sub:renew, promote)
+//   only when this script started the server itself.
 //
 // Prints PASS/FAIL per step and exits 1 when any step fails. Each run uses fresh random accounts, so it can be
 // repeated against the same server. Note: the brute-force step records 5 failed logins from this IP; the
@@ -24,7 +27,7 @@ import { judgeAll, allTexts, allNicks, norm } from './pii-client.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const VERBOSE = args.includes('--verbose');
-let BASE = args.find((a) => /^https?:\/\//.test(a)) || null;
+let BASE = args.find((a) => /^https?:\/\//.test(a)) || null; // --docroot <dir>: spawn php -S over that copy instead of dist/metaverse
 
 // ------------------------------------------------------------------ result bookkeeping
 const results = [];
@@ -150,19 +153,26 @@ function photoForm(buf, name = 'journal.png', type = 'image/png') {
 }
 
 // ------------------------------------------------------------------ optional: spawn our own php -S
-let phpProc = null, tmpData = null;
+let phpProc = null, tmpData = null, DOCROOT = null;
+/** run cli/tfm.php against the server this script spawned (same data dir, mock payments) */
+function cli(...args) {
+  const r = spawnSync('php', [path.join(DOCROOT, 'cli/tfm.php'), ...args], { env: { ...process.env, TFM_DATA_DIR: tmpData, TFM_TOSS_MOCK: '1' }, encoding: 'utf8', timeout: 60000 });
+  return { status: r.status, out: String(r.stdout || '') + String(r.stderr || '') };
+}
 async function freePort() {
   return new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 }
 async function startServer() {
-  const docroot = path.join(ROOT, 'dist/metaverse');
+  const di = args.indexOf('--docroot');
+  const docroot = di >= 0 && args[di + 1] ? path.resolve(args[di + 1]) : path.join(ROOT, 'dist/metaverse');
   if (!fs.existsSync(path.join(docroot, 'api/ping.php'))) {
     console.error('dist/metaverse/api/ping.php not found — run "node tools/build.mjs" first, or pass a server URL.');
     process.exit(2);
   }
   tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-e2e-'));
   const port = await freePort();
-  phpProc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: tmpData }, stdio: ['ignore', 'ignore', 'pipe'] });
+  phpProc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: tmpData, TFM_TOSS_MOCK: '1' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  DOCROOT = docroot;
   phpProc.stderr.on('data', (d) => { if (VERBOSE) process.stderr.write(C.d(String(d))); });
   BASE = `http://127.0.0.1:${port}/`;
   for (let i = 0; i < 50; i++) {
@@ -180,12 +190,12 @@ function cleanup() {
   if (tmpData) { try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* ignore */ } }
   if (phpProc) {
     // remove the photos this run uploaded into dist/metaverse/uploads
-    for (const u of uploadedFiles) { try { fs.unlinkSync(path.join(ROOT, 'dist/metaverse', u)); } catch { /* ignore */ } }
+    for (const u of uploadedFiles) { try { fs.unlinkSync(path.join(DOCROOT || path.join(ROOT, 'dist/metaverse'), u)); } catch { /* ignore */ } }
     // and the then-empty dated folders (uploads/journal/YYYY/MM), so no test residue ends up in the release zip
     // (rmdirSync only removes empty folders; the server re-creates them on the next upload)
-    const base = path.join(ROOT, 'dist/metaverse/uploads');
+    const base = path.join(DOCROOT || path.join(ROOT, 'dist/metaverse'), 'uploads');
     for (const u of uploadedFiles) {
-      let d = path.dirname(path.join(ROOT, 'dist/metaverse', u));
+      let d = path.dirname(path.join(DOCROOT || path.join(ROOT, 'dist/metaverse'), u));
       while (d.startsWith(base + path.sep) && d !== base) { try { fs.rmdirSync(d); } catch { break; } d = path.dirname(d); }
     }
   }
@@ -400,18 +410,19 @@ async function main() {
     const bad = await A.req('api/player/save.php', { raw: JSON.stringify({ ...saveBody(s), csrf: 'f'.repeat(64) }), csrf: false });
     assert(bad.status === 403 && bad.error?.code === 'CSRF_INVALID', `forged beacon: ${bad.status}`);
   });
-  await step('player/save: 3× speed — running at 18 m/s for the elapsed time is accepted', async () => {
+  await step('player/save: 2× base pace — running at RUN 12 m/s for the elapsed time is accepted at tier 1', async () => {
     await sleep(2100);
     const s = structuredClone(stored);
     const elapsed = (Date.now() - savedAtMs) / 1000;
-    // RUN = 18 m/s (phase 4) the whole time since the last save, plus the ≤ 5 m the client batches per event
-    s.stats.distance = Math.round(s.stats.distance + 18 * elapsed + 5);
+    // RUN = 12 m/s (phase 6: 2× base movement) the whole time since the last save, plus the ≤ 5 m the client batches per event
+    s.stats.distance = Math.round(s.stats.distance + 12 * elapsed + 5);
     s.stats.playTime = Math.round((s.stats.playTime || 0) + elapsed);
     s.savedAt = Date.now();
     const r = await A.req('api/player/save.php', { json: saveBody(s) });
     assert(r.status === 200, `status ${r.status} ${r.error?.code || ''} ${JSON.stringify(r.json?.data?.violations || '')}`);
+    assert(r.data?.sub?.tier === 1 && r.data.sub.status === 'none', `save answer carries sub: ${JSON.stringify(r.data?.sub)}`);
     stored = s; savedAtMs = Date.now();
-    return `+${Math.round(18 * elapsed + 5)} m in ${elapsed.toFixed(1)} s`;
+    return `+${Math.round(12 * elapsed + 5)} m in ${elapsed.toFixed(1)} s`;
   });
   await step('cheating save: teleport-sized distance (+10,000,000 m) → 409 DISTANCE_TOO_FAST', async () => {
     const s = structuredClone(stored);
@@ -565,8 +576,10 @@ async function main() {
     }
     return outs.join(' · ');
   });
+  const MYSQL = (process.env.TFM_DB_DRIVER || '').toLowerCase() === 'mysql';
   await step('chat: the stored repeat-spam key holds no personal information (built from the masked text)', async () => {
     if (!tmpData) return 'skipped (external server: no access to its database)';
+    if (MYSQL) return 'skipped (MySQL run: the stored rows are inspected in the SQLite run)';
     const dbf = fs.readdirSync(tmpData).find((f) => /^db-.*\.sqlite$/.test(f));
     assert(dbf, `sqlite file in ${tmpData}`);
     const q = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); echo json_encode($p->query("SELECT text, text_key FROM chat_messages")->fetchAll(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);', path.join(tmpData, dbf)], { encoding: 'utf8' });
@@ -589,7 +602,7 @@ async function main() {
   await step('chat: a report about an unknown name stores no personal information for the admins', async () => {
     const r = await B.req('api/chat/report.php', { json: { target: '모르는친구 010-2468-1357', reason: 'privacy', memo: '전화번호 공일공 이사육팔 일삼오칠 을 보냈어요' } });
     assert(r.status === 200 && r.data?.reportId, `status ${r.status} ${r.error?.code}`);
-    if (!tmpData) return 'stored copy not checked (external server)';
+    if (!tmpData || MYSQL) return 'stored copy not checked (external server or MySQL run)';
     const dbf = fs.readdirSync(tmpData).find((f) => /^db-.*\.sqlite$/.test(f));
     const q = spawnSync('php', ['-r', '$p = new PDO("sqlite:" . $argv[1]); $s = $p->prepare("SELECT target_name, memo FROM chat_reports WHERE id = ?"); $s->execute([(int) $argv[2]]); echo json_encode($s->fetch(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);', path.join(tmpData, dbf), String(r.data.reportId)], { encoding: 'utf8' });
     const row = JSON.parse(q.stdout || 'null');
@@ -728,14 +741,217 @@ async function main() {
   await step('brute force: lockout after 5 wrong passwords (429, even with the right password)', async () => {
     const c = new Client('brute'); await c.req('api/ping.php');
     const codes = [];
+    // the victim is A (already logged in: a lockout never touches a live session); B logs in again later in the suite
     for (let i = 0; i < 5; i++) {
-      const r = await c.req('api/auth/login.php', { json: { login: userB.email, password: `Wrong${i}pass9` } });
+      const r = await c.req('api/auth/login.php', { json: { login: userA.email, password: `Wrong${i}pass9` } });
       codes.push(r.status);
       assert(r.status === 401 && r.error?.code === 'INVALID_CREDENTIALS', `attempt ${i + 1}: ${r.status} ${r.error?.code}`);
     }
-    const locked = await c.req('api/auth/login.php', { json: { login: userB.email, password: PASSWORD } });
+    const locked = await c.req('api/auth/login.php', { json: { login: userA.email, password: PASSWORD } });
     assert(locked.status === 429 && locked.error?.code === 'TOO_MANY_ATTEMPTS' && Number(locked.headers.get('retry-after')) > 0, `6th: ${locked.status} ${locked.error?.code}`);
     return `statuses ${codes.join(',')} → 429 (retry after ${locked.headers.get('retry-after')}s)`;
+  });
+
+  // ------------------------------------------------------------- R3-runtime-1 (cookies cleared while the tab stays open)
+  await step('R3-runtime-1: a write with NO session cookie on a login-only endpoint → 401 AUTH_REQUIRED (never 403 CSRF_INVALID)', async () => {
+    const bare = new Client('nocookie'); // never pinged: no TFMSESSID at all (DevTools "clear site data" while playing)
+    const save = await bare.req('api/player/save.php', { json: saveBody(freshState(me)), csrf: 'f'.repeat(64) });
+    assert(save.status === 401 && save.error?.code === 'AUTH_REQUIRED', `save: ${save.status} ${save.error?.code}`);
+    const pres = await bare.req('api/presence/update.php', { json: { x: 0, y: 0, z: 0 }, csrf: false });
+    assert(pres.status === 401 && pres.error?.code === 'AUTH_REQUIRED', `presence: ${pres.status} ${pres.error?.code}`);
+    const beacon = await bare.req('api/player/save.php', { raw: JSON.stringify({ ...saveBody(freshState(me)), csrf: 'f'.repeat(64) }), csrf: false });
+    assert(beacon.status === 401 && beacon.error?.code === 'AUTH_REQUIRED', `beacon: ${beacon.status} ${beacon.error?.code}`);
+    // anonymous write endpoints keep their CSRF answer (a login form always pings first and has a session)
+    const login = await bare.req('api/auth/login.php', { json: { login: 'x@example.com', password: 'whatever1' }, csrf: false });
+    assert(login.status === 403 && login.error?.code === 'CSRF_INVALID', `login: ${login.status} ${login.error?.code}`);
+    // with a session but a stale token the answer stays 403 and carries the current token (the client's one retry fixes it)
+    const stale = await A.req('api/presence/update.php', { json: { x: 0, y: 0, z: 0 }, csrf: 'f'.repeat(64) });
+    assert(stale.status === 403 && stale.error?.code === 'CSRF_INVALID' && typeof stale.json?.csrf === 'string', `stale token: ${stale.status} csrf=${typeof stale.json?.csrf}`);
+  });
+
+  // ------------------------------------------------------------- subscription tiers (CONTRACT §14.6, mock 토스)
+  let subMock = false, orderA = null, tiers = [];
+  await step('sub/status: tiers 2·3·4 with prices, mode, clientKey; a fresh account is tier 1', async () => {
+    const r = await A.req('api/sub/status.php');
+    assert(r.status === 200 && Array.isArray(r.data?.tiers), `status ${r.status}`);
+    tiers = r.data.tiers;
+    assert(tiers.map((t) => t.tier).join(',') === '2,3,4' && tiers.every((t) => Number.isInteger(t.price) && t.price > 0 && typeof t.name === 'string'), `tiers ${JSON.stringify(tiers)}`);
+    assert(r.data.sub?.tier === 1 && r.data.sub.status === 'none' && r.data.sub.autoRenew === false, `sub ${JSON.stringify(r.data.sub)}`);
+    assert(typeof r.data.clientKey === 'string' && /^(test|live)_(ck|gck)_/.test(r.data.clientKey) && r.data.periodDays >= 1, 'clientKey / periodDays');
+    subMock = r.data.mode === 'mock';
+    const m = await A.req('api/auth/me.php');
+    const g = await A.req('api/player/get.php');
+    assert(m.data?.sub?.tier === 1 && g.data?.sub?.tier === 1 && g.data?.save?.data?.sub?.tier === 1 && g.data.save.data.sub.source === 'server', 'me / get / stored save carry sub tier 1');
+    const anonS = await anon.req('api/sub/status.php');
+    assert(anonS.status === 200 && anonS.data?.sub?.tier === 1, 'guest status → tier 1');
+    return `mode=${r.data.mode} prices=${tiers.map((t) => t.price).join('/')}`;
+  });
+  const skipSub = () => (subMock ? null : 'skipped: server is not in mock mode (TFM_TOSS_MOCK=1)');
+  await step('sub: CSRF on every subscription POST (prepare · confirm · billing-issue · cancel)', async () => {
+    for (const p of ['api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/cancel.php']) {
+      const r = await A.req(p, { json: { tier: 2, kind: 'card' }, csrf: false });
+      assert(r.status === 403 && r.error?.code === 'CSRF_INVALID', `${p}: ${r.status} ${r.error?.code}`);
+    }
+    const g = await anon.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } });
+    assert(g.status === 401 || g.status === 403, `guest prepare ${g.status}`);
+  });
+  await step('sub: a baseline save, then +600 m in a few seconds is refused at tier 1 (DISTANCE_TOO_FAST)', async () => {
+    if (skipSub()) return skipSub();
+    const s0 = structuredClone(stored); s0.savedAt = Date.now();
+    const b = await A.req('api/player/save.php', { json: saveBody(s0) });
+    assert(b.status === 200, `baseline ${b.status} ${b.error?.code}`);
+    stored = s0; savedAtMs = Date.now();
+    await sleep(3200);
+    const s = structuredClone(stored); s.stats.distance += 600; s.savedAt = Date.now();
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 409 && (r.json?.data?.violations || []).includes('DISTANCE_TOO_FAST'), `status ${r.status} ${r.json?.data?.violations}`);
+    return `elapsed ≈ ${((Date.now() - savedAtMs) / 1000).toFixed(1)} s → refused at tier 1`;
+  });
+  await step('sub/prepare (card): a created order with the configured price, our customerKey and return URLs', async () => {
+    if (skipSub()) return skipSub();
+    const r = await A.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } });
+    assert(r.status === 200 && typeof r.data?.orderId === 'string' && r.data.orderId.length === 32, `status ${r.status} ${r.error?.code} ${r.error?.message || ''}`);
+    orderA = r.data;
+    assert(orderA.amount === tiers.find((t) => t.tier === 2).price && orderA.tier === 2, `amount ${orderA.amount}`);
+    assert(/^cus_[0-9a-f]{32}$/.test(orderA.customerKey) && /api\/sub\/return\.php\?kind=card$/.test(orderA.successUrl) && /fail=1$/.test(orderA.failUrl) && orderA.mock === true, `payload ${JSON.stringify(orderA)}`);
+    const bad = await A.req('api/sub/prepare.php', { json: { tier: 9, kind: 'card' } });
+    assert(bad.status === 400 && bad.error?.code === 'INVALID_TIER', `tier 9: ${bad.status} ${bad.error?.code}`);
+    return `order ${orderA.orderId} ₩${orderA.amount}`;
+  });
+  await step('sub/confirm: amount tampering → 400 AMOUNT_MISMATCH; another user\'s order → 404; wrong mock key → 402', async () => {
+    if (skipSub()) return skipSub();
+    const t = await A.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, amount: orderA.amount - 100 } });
+    assert(t.status === 400 && t.error?.code === 'AMOUNT_MISMATCH', `tamper: ${t.status} ${t.error?.code}`);
+    const f = await B.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, amount: orderA.amount } });
+    assert(f.status === 404 && f.error?.code === 'ORDER_NOT_FOUND', `foreign: ${f.status} ${f.error?.code}`);
+    const me1 = await A.req('api/auth/me.php');
+    assert(me1.data?.sub?.tier === 1, 'still tier 1 after refused confirms');
+    // a payment key the mock gateway does not know (not "mock_…") fails the order; a fresh order is needed afterwards
+    const bogus = await A.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } });
+    const w = await A.req('api/sub/confirm.php', { json: { paymentKey: 'real_' + bogus.data.orderId, orderId: bogus.data.orderId, amount: bogus.data.amount } });
+    assert(w.status === 402 && w.error?.code === 'PAYMENT_FAILED', `bogus key: ${w.status} ${w.error?.code}`);
+  });
+  await step('sub/confirm (mock): tier 2 active → me / get / status report tier 2, replay → 409 ORDER_NOT_OPEN', async () => {
+    if (skipSub()) return skipSub();
+    const r = await A.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, amount: orderA.amount } });
+    assert(r.status === 200 && r.data?.sub?.tier === 2 && r.data.sub.status === 'active' && r.data.sub.expiresAt > Date.now() + 29 * 86400000, `status ${r.status} ${r.error?.code} ${JSON.stringify(r.data?.sub)}`);
+    const m = await A.req('api/auth/me.php');
+    const g = await A.req('api/player/get.php');
+    assert(m.data?.sub?.tier === 2 && g.data?.sub?.tier === 2 && g.data?.save?.data?.sub?.tier === 2, 'me / get carry tier 2');
+    const again = await A.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, amount: orderA.amount } });
+    assert(again.status === 409 && again.error?.code === 'ORDER_NOT_OPEN', `replay: ${again.status} ${again.error?.code}`);
+    return `expires ${new Date(r.data.sub.expiresAt).toISOString().slice(0, 10)}`;
+  });
+  await step('sub: tier-scaled validation — the same +600 m save is now accepted at tier 2 (move 36 m/s max)', async () => {
+    if (skipSub()) return skipSub();
+    // allowance = 18 × min(tier,3) × (elapsed + 5 s) + 300 m: +600 m needs elapsed > 3.3 s at tier 2 and is refused
+    // below 11.7 s at tier 1 — land in the middle of that window (≈ 6.5 s after the baseline save)
+    await sleep(Math.max(0, 6500 - (Date.now() - savedAtMs)));
+    const s = structuredClone(stored); s.stats.distance += 600; s.savedAt = Date.now();
+    const elapsed = ((Date.now() - savedAtMs) / 1000).toFixed(1);
+    const r = await A.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 200 && r.data?.sub?.tier === 2, `status ${r.status} ${r.error?.code || ''} ${JSON.stringify(r.json?.data?.violations || '')} after ${elapsed} s`);
+    stored = s; savedAtMs = Date.now();
+    const g = await A.req('api/player/get.php');
+    assert(g.data?.save?.data?.stats?.distance === s.stats.distance && g.data.save.data.sub.tier === 2, 'stored with the server sub');
+    // the client cannot raise its own tier through the save: a forged sub is overwritten with the server's
+    const forged = structuredClone(stored); forged.sub = { tier: 4, status: 'active', expiresAt: Date.now() + 9e9, autoRenew: true, source: 'local' }; forged.savedAt = Date.now();
+    const f = await A.req('api/player/save.php', { json: saveBody(forged) });
+    assert(f.status === 200 && f.data.sub.tier === 2, `forged sub save ${f.status}`);
+    stored = forged; stored.sub = { tier: 2 };
+    const g2 = await A.req('api/player/get.php');
+    assert(g2.data?.save?.data?.sub?.tier === 2 && g2.data.save.data.sub.source === 'server', `forged sub stored as ${JSON.stringify(g2.data?.save?.data?.sub)}`);
+    return `+600 m accepted ${elapsed} s after the baseline (tier 2) · forged sub overwritten with the server's`;
+  });
+  await step('sub/cancel: auto-renew off, access kept until expiry (tier stays 2)', async () => {
+    if (skipSub()) return skipSub();
+    const r = await A.req('api/sub/cancel.php', { json: {} });
+    assert(r.status === 200 && r.data?.sub?.tier === 2 && r.data.sub.autoRenew === false && r.data.sub.status === 'active', `status ${r.status} ${JSON.stringify(r.data?.sub)}`);
+  });
+  let orderB = null;
+  await step('sub/prepare (billing) → billing-issue (mock authKey): first charge, auto-renew on, tier 3 for B', async () => {
+    if (skipSub()) return skipSub();
+    const p = await B.req('api/sub/prepare.php', { json: { tier: 3, kind: 'billing' } });
+    assert(p.status === 200 && p.data?.orderId && /kind=billing$/.test(p.data.successUrl), `prepare ${p.status} ${p.error?.code}`);
+    orderB = p.data;
+    const wrongCustomer = await B.req('api/sub/billing-issue.php', { json: { authKey: 'mock_auth_ok', customerKey: 'cus_' + 'ab'.repeat(16), orderId: orderB.orderId } });
+    assert(wrongCustomer.status === 400 && wrongCustomer.error?.code === 'INVALID_CUSTOMER', `wrong customerKey: ${wrongCustomer.status} ${wrongCustomer.error?.code}`);
+    const r = await B.req('api/sub/billing-issue.php', { json: { authKey: 'mock_auth_ok', customerKey: orderB.customerKey, orderId: orderB.orderId } });
+    assert(r.status === 200 && r.data?.sub?.tier === 3 && r.data.sub.autoRenew === true && r.data.sub.status === 'active', `issue ${r.status} ${r.error?.code} ${JSON.stringify(r.data?.sub)}`);
+    const m = await B.req('api/auth/me.php');
+    assert(m.data?.sub?.tier === 3 && m.data.sub.autoRenew === true, 'me → tier 3 auto-renew');
+    return `expires ${new Date(r.data.sub.expiresAt).toISOString().slice(0, 10)}`;
+  });
+  await step('sub: renewal (cli sub:renew --force) charges the billing key and extends expiresAt by one period', async () => {
+    if (skipSub()) return skipSub();
+    if (!phpProc) return 'skipped: external server (no cli access)';
+    const before = (await B.req('api/sub/status.php')).data.sub.expiresAt;
+    const r = cli('sub:renew', '--force', userB.email);
+    assert(r.status === 0 && /✔/.test(r.out) && /active/.test(r.out), `cli exit ${r.status}: ${r.out.slice(0, 300)}`);
+    const after = (await B.req('api/sub/status.php')).data.sub;
+    assert(after.tier === 3 && after.status === 'active' && after.expiresAt - before >= 29 * 86400000, `expiresAt ${before} → ${after.expiresAt}`);
+    return `+${Math.round((after.expiresAt - before) / 86400000)} days`;
+  });
+  const CC = new Client('C');
+  const userC = { email: `e2e_c${id}@example.com`, nickname: `Renew_${tag.slice(-5)}` };
+  await step('sub: a failing billing key (authKey …_fail) — first charge ok, forced renewal fails → past_due, access kept in the grace period', async () => {
+    if (skipSub()) return skipSub();
+    if (!phpProc) return 'skipped: external server (no cli access)';
+    await CC.req('api/ping.php');
+    const reg = await CC.req('api/auth/register.php', { json: { email: userC.email, nickname: userC.nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(reg.status === 200, `register C ${reg.status} ${reg.error?.code}`);
+    userC.id = reg.data.user.id;
+    const p = await CC.req('api/sub/prepare.php', { json: { tier: 2, kind: 'billing' } });
+    const r = await CC.req('api/sub/billing-issue.php', { json: { authKey: 'mock_auth_fail', customerKey: p.data.customerKey, orderId: p.data.orderId } });
+    assert(r.status === 200 && r.data?.sub?.tier === 2 && r.data.sub.autoRenew === true, `issue ${r.status} ${r.error?.code}`);
+    const ren = cli('sub:renew', '--force', userC.email);
+    assert(ren.status === 0 && /past_due/.test(ren.out), `cli: ${ren.out.slice(0, 300)}`);
+    const m = await CC.req('api/auth/me.php');
+    assert(m.data?.sub?.status === 'past_due' && m.data.sub.tier === 2, `me after failed renewal ${JSON.stringify(m.data?.sub)}`);
+    return 'past_due, tier 2 kept (grace)';
+  });
+  await step('sub/webhook: an unverifiable event is ignored; a verified CANCELED event on the paid order downgrades to tier 1 (never raises)', async () => {
+    if (skipSub()) return skipSub();
+    const hook = new Client('toss');
+    const bad = await hook.req('api/sub/webhook.php', { json: { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_wrong_key', orderId: orderA.orderId, status: 'CANCELED' } }, csrf: false });
+    assert(bad.status === 200 && bad.data?.ignored === true, `unverifiable: ${bad.status} ${JSON.stringify(bad.data)}`);
+    assert((await A.req('api/auth/me.php')).data.sub.tier === 2, 'still tier 2 after an unverifiable webhook');
+    const unknown = await hook.req('api/sub/webhook.php', { json: { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_x', orderId: 'nope', status: 'DONE' } }, csrf: false });
+    assert(unknown.status === 200 && unknown.data?.ignored === true, 'unknown order ignored');
+    const raise = await hook.req('api/sub/webhook.php', { json: { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, status: 'DONE', tier: 4 } }, csrf: false });
+    assert(raise.status === 200 && raise.data?.ignored === false && raise.data.downgraded === false, 'DONE event recorded, nothing raised');
+    assert((await A.req('api/auth/me.php')).data.sub.tier === 2, 'tier unchanged by a DONE event');
+    const cancel = await hook.req('api/sub/webhook.php', { json: { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, status: 'CANCELED' } }, csrf: false });
+    assert(cancel.status === 200 && cancel.data?.downgraded === true, `cancel: ${JSON.stringify(cancel.data)}`);
+    const dup = await hook.req('api/sub/webhook.php', { json: { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_' + orderA.orderId, orderId: orderA.orderId, status: 'CANCELED' } }, csrf: false });
+    assert(dup.status === 200 && dup.data?.ignored === true && dup.data.why === 'duplicate', 'idempotent');
+    const m = await A.req('api/auth/me.php');
+    assert(m.data?.sub?.tier === 1 && m.data.sub.status === 'canceled', `A after refund ${JSON.stringify(m.data?.sub)}`);
+  });
+  await step('sub: a player cannot grant (403); an admin grants tier 4 for 7 days and revokes (API + admin.php 구독 tab)', async () => {
+    if (skipSub()) return skipSub();
+    const no = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
+    assert(no.status === 403 && no.error?.code === 'FORBIDDEN', `player grant: ${no.status} ${no.error?.code}`);
+    const ren = await B.req('api/sub/renew.php', { json: {} });
+    assert(ren.status === 403, `player renew: ${ren.status}`);
+    if (!phpProc) return 'grant/revoke skipped: external server (no cli to promote an admin)';
+    const pr = cli('promote', userB.email);
+    assert(pr.status === 0, `promote: ${pr.out.slice(0, 200)}`);
+    // the promotion bumps B's session epoch: log in again
+    const lg = await B.req('api/auth/login.php', { json: { login: userB.email, password: PASSWORD, remember: false } });
+    assert(lg.status === 200 && lg.data?.user?.role === 'admin', `relogin ${lg.status} ${lg.error?.code || lg.data?.user?.role}`);
+    const g = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
+    assert(g.status === 200 && g.data?.sub?.tier === 4 && g.data.sub.status === 'active', `grant ${g.status} ${g.error?.code} ${JSON.stringify(g.data)}`);
+    assert((await A.req('api/auth/me.php')).data.sub.tier === 4, 'A is tier 4 now');
+    const page = await B.req('admin.php?tab=sub');
+    assert(page.status === 200 && /구독 현황/.test(page.text) && /수동 부여/.test(page.text) && page.text.includes(userA.nickname), 'admin.php 구독 tab renders the subscription');
+    assert(!/게임/.test(page.text), 'admin.php shows no "게임" wording');
+    const rv = await B.req('api/sub/grant.php', { json: { userId: me.id, revoke: true } });
+    assert(rv.status === 200 && rv.data?.sub?.tier === 1, `revoke ${rv.status} ${JSON.stringify(rv.data?.sub)}`);
+    assert((await A.req('api/auth/me.php')).data.sub.tier === 1, 'A back to tier 1');
+    const lst = cli('sub:list');
+    assert(lst.status === 0 && lst.out.includes(userB.nickname), `sub:list ${lst.out.slice(0, 200)}`);
+    return 'grant → tier 4 → revoke → tier 1 · admin.php 구독 tab ok';
   });
 
   // ------------------------------------------------------------- summary

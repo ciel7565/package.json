@@ -2,7 +2,7 @@
 -- 전통발효체험관 메타버스 — SQLite schema (default, zero-config)
 -- Created automatically by lib/Db.php on first request (data/db-<random>.sqlite, WAL mode).
 -- All timestamps are server time in milliseconds (INTEGER).
--- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION.
+-- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 4).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -181,3 +181,52 @@ CREATE INDEX IF NOT EXISTS ix_retractions_created ON chat_retractions (created_a
 -- shows as the target's words; it moves into the memo, marked as unverified (chat/report.php stores it that way now)
 UPDATE chat_reports SET memo = '신고자가 적은 내용(확인 안 됨): “' || message_text || '”' || CASE WHEN memo <> '' THEN ' · ' || memo ELSE '' END, message_text = '' WHERE message_id IS NULL AND message_text <> '';
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (3, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'chat retractions');
+
+-- v4 (phase 6, CONTRACT §14.6): progression-speed subscription tiers (2× · 3× · 4×) paid through 토스페이먼츠.
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id       INTEGER NOT NULL PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+  tier          INTEGER NOT NULL DEFAULT 1 CHECK (tier BETWEEN 1 AND 4),
+  status        TEXT NOT NULL DEFAULT 'none' CHECK (status IN ('none', 'active', 'past_due', 'canceled')),
+  started_at    INTEGER NOT NULL DEFAULT 0,
+  expires_at    INTEGER NOT NULL DEFAULT 0,
+  auto_renew    INTEGER NOT NULL DEFAULT 0,
+  billing_key   TEXT NOT NULL DEFAULT '',
+  customer_key  TEXT NOT NULL DEFAULT '',
+  last_order_id TEXT NOT NULL DEFAULT '',
+  checked_at    INTEGER NOT NULL DEFAULT 0,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_sub_status ON subscriptions (status, expires_at);
+
+CREATE TABLE IF NOT EXISTS orders (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id     TEXT NOT NULL,
+  user_id      INTEGER NOT NULL,
+  tier         INTEGER NOT NULL,
+  amount       INTEGER NOT NULL,                 -- integer KRW
+  currency     TEXT NOT NULL DEFAULT 'KRW',
+  kind         TEXT NOT NULL DEFAULT 'first' CHECK (kind IN ('first', 'renewal', 'manual')),
+  status       TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'confirmed', 'failed', 'canceled', 'refunded')),
+  payment_key  TEXT NOT NULL DEFAULT '',
+  method       TEXT NOT NULL DEFAULT '',
+  receipt_url  TEXT NOT NULL DEFAULT '',
+  toss_status  TEXT NOT NULL DEFAULT '',
+  raw          TEXT,
+  requested_at INTEGER NOT NULL,
+  approved_at  INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_order ON orders (order_id);
+CREATE INDEX IF NOT EXISTS ix_orders_user ON orders (user_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_orders_status ON orders (status, requested_at);
+
+CREATE TABLE IF NOT EXISTS payment_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id   TEXT NOT NULL,
+  event      TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT '',
+  payload    TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_pevents_order ON payment_events (order_id, event, status);
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (4, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'subscriptions (speed tiers, 토스페이먼츠 orders, payment events)');

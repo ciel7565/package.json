@@ -854,8 +854,13 @@
         const tilt = 0.18 + rnd() * 0.22;
         B.stone.add(g, M(x, y - s * 0.4, z, Math.cos(b) * tilt, b + (rnd() - 0.5) * 0.8, -Math.sin(b) * tilt * 0.6, s, s * (0.8 + rnd() * 0.4), s * (0.8 + rnd() * 0.3)), c, 0);
         g.dispose();
-        // walk-blocking only at the rock's own height (never reaches the deck above)
-        this._col({ shape: 'circle', x, z, r: s * 1.15, minY: y - 1, maxY: y + s * 0.5 });
+        // walk-blocking only at the rock's own height (never reaches the deck above). The slope under a big crag spans
+        // several metres: the band starts below the LOWEST ground along the rim (06-world switches a collider off for
+        // feet more than 1.6 m under its minY — measured at the centre, the downhill side let a runner into the rock)
+        const cr = s * 1.15;
+        let lo = y;
+        for (let k = 0; k < 12; k++) { const h = W.terrainHeight(x + Math.cos((k / 12) * TAU) * cr, z + Math.sin((k / 12) * TAU) * cr); if (fin(h) && h < lo) lo = h; }
+        this._col({ shape: 'circle', x, z, r: cr, minY: lo - 0.5, maxY: y + s * 0.5 });
       }
       base.dispose();
     },
@@ -1073,6 +1078,7 @@
     whenIntroDone() { return this._introDone || Promise.resolve(); },
     _onLogin(isNew) {
       if (!isNew || !this.built) return;
+      if (G.unsupported || !G.sys.engine?.renderer) return;   // §14.4.3: no 3D → no camera flight over nothing
       if (G.flags?.noTutorial || G.flags?.nointro || /[?&]nointro=1/.test(location.search)) return;
       // only when the new player really stands on the deck
       const p = G.sys.player?.position;
@@ -1133,9 +1139,12 @@
           try { cam.setMode('follow', { duration: 0 }); cam.behind?.(pl.rotY, true); cam.snap?.(); } catch (e) { /* camera optional */ }
           ui.title.classList.add('on');
           await G.ui.fade(false, 420);
+          // a hidden tab waits: the line is said and the intro ends when the child is looking again
+          while (document.hidden && this._intro === it && !it.ending) await G.util.sleep(200);
           if (this._intro !== it || it.ending) return;
           if (easyOn()) say('정선 만장대에 왔어요! 체험관이 다 보여요.', { priority: 1, intro: true });
           await G.util.sleep(1700);
+          while (document.hidden && this._intro === it && !it.ending) await G.util.sleep(200);
           if (this._intro === it && !it.ending) this._finishIntro(false);
         })();
       } else {
@@ -1214,8 +1223,13 @@
       const it = this._intro;
       if (!it || it.reduced) return;
       // the flight runs on game time, but never slower than the wall clock: on a slow device (the loop clamps dt to
-      // 0.1 s, so < 10 fps would stretch it) the cinematic still hands the controls back after 8.3 s of real time
-      it.t = Math.max(it.t + dt, (performance.now() - it.rt0) / 1000);
+      // 0.1 s, so < 10 fps would stretch it) the cinematic still hands the controls back after ~8.3 s of real time.
+      // Only the wall time between two DRAWN frames counts (≤ 0.5 s each): a hidden tab draws no frames, so the
+      // flight pauses instead of skipping to its end — title card, subtitle and voice all firing — in the first frame back
+      const now = performance.now();
+      const wall = it.lastNow ? Math.min((now - it.lastNow) / 1000, 0.5) : dt;
+      it.lastNow = now;
+      it.t += Math.max(dt, wall);
       const T = 8.3, t = it.t;
       if (!it.ending) {
         const k = easeIO(clamp(t / 7.6, 0, 1));
@@ -1273,7 +1287,7 @@
       if (!c) return;
       const now = performance.now();
       if (!c.rt) c.rt = now;
-      const rdt = Math.min(1, Math.max(dt, (now - c.rt) / 1000));   // wall-clock pacing on slow devices too
+      const rdt = Math.min(0.5, Math.max(dt, (now - c.rt) / 1000));   // wall-clock pacing on slow devices too (a hidden tab does not jump it)
       c.rt = now;
       dt = rdt;
       c.t += dt;
@@ -1323,7 +1337,7 @@
     /** telescope view over the valley; resolves when closed */
     tour(startId) {
       if (this._tour) return this._tour.promise;
-      if (this._intro || !G.sys.camera || !G.state) return Promise.resolve(false);
+      if (this._intro || !G.sys.camera || !G.state || G.unsupported) return Promise.resolve(false);
       const targets = this._tourTargets();
       if (!targets.length) return Promise.resolve(false);
       let resolve;

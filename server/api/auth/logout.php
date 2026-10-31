@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, Audit, Ctx, Presence, Session};
+use Tfm\Api;
+use Tfm\Audit;
+use Tfm\Ctx;
+use Tfm\Presence;
+use Tfm\Session;
 
 Api::run(['method' => 'POST', 'rate' => 'logout'], function (Ctx $c): array {
     if ($c->user) {

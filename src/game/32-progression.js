@@ -21,8 +21,9 @@
 (function () {
   const STAT_KEYS = ['level', 'exp', 'expTotal', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems',
     'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos',
-    'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts'];
+    'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps']; // doubleJumps: §14.2 (62-engagement counts, ACH_DOUBLE_JUMP)
   const STAT_INFO = { // label + unit for achievements / profile
+    doubleJumps: ['두 번 점프', '회'],
     logins: ['접속 횟수', '회'], playTime: ['플레이 시간', ''], distance: ['이동 거리', 'm'], waters: ['물 주기', '회'], plants: ['씨앗 심기', '회'],
     harvests: ['수확', '회'], harvestedItems: ['수확한 작물', '개'], fermentsStarted: ['발효 시작', '회'], fermentsClaimed: ['발효 완성', '회'],
     fermentChecks: ['장독 확인', '회'], quizCorrect: ['퀴즈 정답', '개'], quizAnswered: ['퀴즈 응답', '회'], eduCompleted: ['교육 완료', '개'],
@@ -860,7 +861,7 @@
         h('h3', { class: 'kc-card-name' }, has ? c.name : '???'),
         has ? h('p', { class: 'kitem-desc' }, c.desc || '') : h('p', { class: 'kitem-desc' }, '아직 못 찾았어요!'),
         has ? (c.location ? h('p', { class: 'kc-where' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📍'), c.location) : null) : h('p', { class: 'kitem-hint' }, `💡 ${hint}`),
-        has && c.category === 'fermented' ? h('p', { class: 'kitem-note' }, '게임 속 체험이에요.') : null,
+        has && c.category === 'fermented' ? h('p', { class: 'kitem-note' }, '체험관 속 놀이예요.') : null,
         btns);
       const m = G.ui.modal.open({ id: 'col-card', title: has ? '스티커' : '숨은 스티커', icon: has ? (c.icon || '📖') : '❓', size: 'sm', className: 'kk-card-modal kk-col-card', say: words, body, actions: [] });
       setTimeout(() => { if (!m.closed) btns.querySelector('button')?.focus({ preventScroll: true }); }, 60);
@@ -989,7 +990,7 @@
       box.appendChild(mk('', '🙈 안 달기'));
       for (const t of p.titles) box.appendChild(mk(t, `🏅 ${t}`));
       pane.appendChild(box);
-      pane.appendChild(h('p', { class: 'kitem-note kme-note' }, '이름표는 게임 속 놀이예요.'));
+      pane.appendChild(h('p', { class: 'kitem-note kme-note' }, '이름표는 체험관 속 놀이예요.'));
     },
 
     // ---- 도감 pane

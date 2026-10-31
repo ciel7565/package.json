@@ -10,9 +10,13 @@
 //   shake(amount 0..1), snap(), yaw / pitch / distance, gentle (easy-mode camera active)
 //   shot(pos, look, {fov, duration}) / setMode('shot')   scripted cinematography (intro, telescope tour):
 //                                               the caller moves pos/look every frame; setMode('follow') ends it
-// Follow at speed (phase 4: 9.6 / 18 m/s): the target is fed forward with the player's own motion (zero
-// lag, zero jitter), the view leads a little in the direction of travel, pulls back and widens the FOV a
-// touch at a sprint (normal mode only), and auto-swings behind the runner with a capped turn rate.
+// Follow at speed (phase 6: 6.4 / 12 m/s at tier 1, up to 19.2 / 36 m/s at tier 3+ — RUN × G.sys.speed.movement()):
+// the target is fed forward with the player's own motion (zero lag, zero jitter), the view leads a little in the
+// direction of travel, pulls back and widens the FOV a touch at a sprint (normal mode only; easy mode keeps a fixed
+// FOV at every tier), and auto-swings behind the runner with a capped turn rate.
+// Occlusion (phase 6): rays from the look point AND from the head and chest to the camera spot at the WANTED distance
+// (never the pulled-in one), the nearest hit wins; a pull-in is released only after the view has been clear for
+// CLEAR_HOLD seconds — no parking over roofs with the child hidden, no pumping in and out at a door.
 // Drag (G.input.consumeLook) rotates, wheel / pinch (G.input.consumeZoom) zooms 2.5–16 m.
 // The camera never goes below the terrain and pulls in when G.world.cameraBlockers occlude the player.
 // 쉬운 모드 (CONTRACT §12): a gentle camera for small children — softer drag (x0.62), a comfortable
@@ -34,15 +38,19 @@
   const SAMPLES = [0.35, 0.7, 1];
   const MODES = ['follow', 'cinematic', 'dialogue', 'photo', 'focus', 'shot'];
   // speed-aware follow (phase 4): numbers relative to the player's WALK / RUN constants
-  const WALK = () => G.sys.player?.WALK || 9.6;
-  const RUN = () => G.sys.player?.RUN || 18;
+  const WALK = () => G.sys.player?.WALK || 6.4;
+  const RUN = () => G.sys.player?.RUN || 12;
+  /** the run pace at the current speed tier (12 / 24 / 36 m/s) — what "full sprint" means for lead, dolly and FOV */
+  const RUNX = () => RUN() * (Number(G.sys.player?.speedMul) || Number(G.sys.speed?.movement?.()) || 1);
+  const OCC_STEP = 0.08;                // s between occlusion casts
+  const CLEAR_HOLD = 0.5;               // s a clear sight line must hold before a pull-in is released (hysteresis)
   const LEAD = 1.7, LEAD_EASY = 0.9;   // m the view leads at a full sprint
   const DOLLY = 0.9, DOLLY_EASY = 0.45; // m pulled back at a full sprint
   const FOV_KICK = 7;                   // deg at a full sprint (normal mode only)
   const SWING_MAX = 1.5;                // rad/s cap for automatic swings behind the runner
 
   const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
-  const _dir = new THREE.Vector3();
+  const _dir = new THREE.Vector3(), _dir2 = new THREE.Vector3(), _occLook = new THREE.Vector3(), _camSpot = new THREE.Vector3();
 
   // ---- occlusion queries against G.world.cameraBlockers (allocation-light, both faces)
   // vertical clearance the camera keeps from blocker surfaces (near plane 0.1 m): roofs are the open (single-sheet)
@@ -102,7 +110,7 @@
     yaw: DEF.yaw, pitch: DEF.pitch, distance: DEF.distance,
     _yawT: DEF.yaw, _pitchT: DEF.pitch, _distT: DEF.distance,
     _effDist: DEF.distance,          // distance after occlusion pull-in
-    _blockDist: Infinity, _blockTimer: 0,
+    _blockDist: Infinity, _blockTimer: 0, _clearT: 0,
     _ft: new THREE.Vector3(),        // smoothed follow target
     _ftInit: false,
     _pos: new THREE.Vector3(0, 12, 30), _look: new THREE.Vector3(),
@@ -116,7 +124,7 @@
     _shot: { pos: new THREE.Vector3(0, 30, 60), look: new THREE.Vector3(0, 0, 0), fov: null },
     _lead: new THREE.Vector3(), _prevTarget: new THREE.Vector3(), _hasPrev: false, _speedK: 0,
     _ray: null,
-    _occ: { n: -1, look: new THREE.Vector3(), dir: new THREE.Vector3(), wanted: 0 },   // last occlusion query (reused at rest)
+    _occ: { n: -1, look: new THREE.Vector3(), dir: new THREE.Vector3(), wanted: 0, lim: Infinity },   // last occlusion query (reused at rest)
 
     init() {
       this._ray = new THREE.Raycaster();
@@ -274,7 +282,7 @@
       this._ftInit = false;
       this._lead.set(0, 0, 0); this._hasPrev = false; this._speedK = 0;
       this._trans = null;
-      this._blockTimer = 0; this._occ.n = -1;
+      this._blockTimer = 0; this._occ.n = -1; this._clearT = 0; this._blockDist = Infinity;
       this._computeDesired(0);
       this._pos.copy(this._dPos); this._look.copy(this._dLook);
       this._applyToCamera();
@@ -327,7 +335,8 @@
           // feed forward with the player's own motion (continuous movement: zero lag, zero jitter) and only
           // smooth what is left (step-ups, small corrections); jumps are followed softly in height
           const mx = _v.x - this._prevTarget.x, my = _v.y - this._prevTarget.y, mz = _v.z - this._prevTarget.z;
-          if (Math.abs(mx) < 4 && Math.abs(mz) < 4) { this._ft.x += mx; this._ft.z += mz; }
+          const ff = Math.max(4, RUNX() * 0.2); // one frame of travel at the tier's sprint (a 36 m/s runner at 10 fps moves 3.6 m)
+          if (Math.abs(mx) < ff && Math.abs(mz) < ff) { this._ft.x += mx; this._ft.z += mz; }
           if (pl?.grounded !== false && Math.abs(my) < 1) this._ft.y += my * 0.85;
           const kh = damp(14, dt), kv = damp(pl?.grounded === false ? 4 : 8, dt);
           this._ft.x += (_v.x - this._ft.x) * kh; this._ft.z += (_v.z - this._ft.z) * kh; this._ft.y += (_v.y - this._ft.y) * kv;
@@ -336,7 +345,7 @@
         // speed factor 0 (<= walk pace) .. 1 (full sprint): look-ahead, dolly
         const vel = pl?.velocity;
         const sp = vel ? Math.hypot(vel.x, vel.z) : 0;
-        const sk = Number.isFinite(sp) ? clamp(sp / RUN(), 0, 1) : 0;
+        const sk = Number.isFinite(sp) ? clamp(sp / RUNX(), 0, 1) : 0;
         this._speedK += (sk - this._speedK) * damp(3, dt || 1);
         if (mode === 'follow' && vel && sp > 0.5 && Number.isFinite(sp)) {
           // reduce motion: no speed look-ahead (and no dolly / FOV kick below) — the view stays put
@@ -405,51 +414,79 @@
     },
 
     _occlusion(dt) {
-      // throttled raycast from the look target to the desired camera position against camera blockers
+      // throttled raycasts against camera blockers, all aimed at the camera spot at the WANTED distance (yaw / pitch /
+      // zoom — never the already pulled-in one): from the look point, and from the head and the chest (R3 movement-1 /
+      // seams-lost-2: the lifted look ray passed above the eaves while the body sat behind a roof). The origin does not
+      // move with the pull-in any more, so an answer cannot flip with it (R3 movement-2: pumping at the hall door).
       this._blockTimer -= dt;
       const blockers = G.world.cameraBlockers;
       if (this._blockTimer <= 0) {
-        this._blockTimer = 0.08;
+        this._blockTimer = OCC_STEP;
         const oc = this._occ;
         if (blockers && blockers.length && (this.mode === 'follow' || this.mode === 'photo')) {
-          const look = this._dLook;
-          _dir.subVectors(this._dPos, look);
-          const len = _dir.length();
-          const wanted = this.mode === 'follow' ? this.distance : len;
-          if (len > 0.3) _dir.multiplyScalar(1 / len);
-          // nothing moved (a child standing still, the photo view at rest): the last answer still holds
-          if (len > 0.3 && oc.n === blockers.length && oc.look.distanceToSquared(look) < 0.0025 && oc.dir.dot(_dir) > 0.9999 && Math.abs(oc.wanted - wanted) < 0.05) return this._effFollow(dt);
-          this._blockDist = Infinity;
-          if (len > 0.3) {
-            // test the whole WANTED distance, not just the current (already pulled-in) one: otherwise the ray stops
-            // short of the blocker once the camera has moved in, the pull-in is released, the camera slides back
-            // into the roof and is pulled in again — a frame-by-frame flicker in and out of roofs
-            const hit = castBlockers(this._ray, look, _dir, Math.max(len, wanted + 1.2) + 0.3, blockers, 0.2);
-            let d = Number.isFinite(hit) ? Math.max(1.05, hit - 0.35) : Infinity;
-            // clearance at the spot the camera would take: a roof just above (camera under the eaves) or just below
-            // fills the near plane although the line of sight slips past it — move in to the largest clear distance
-            // between 1.05 m and here (bisection, 4 probes: within 1/16 of that span): a low roof (정자) keeps the
-            // distance it allows instead of losing up to 0.6 m to fixed steps
-            let at = Math.min(d, wanted);
-            if (at > 1.05) {
-              _probe.copy(look).addScaledVector(_dir, at);
-              if (crowded(this._ray, _probe, blockers)) {
-                let lo = 1.05, hi = at;
-                for (let k = 0; k < 4; k++) {
-                  const mid = (lo + hi) * 0.5;
-                  _probe.copy(look).addScaledVector(_dir, mid);
-                  if (crowded(this._ray, _probe, blockers)) hi = mid; else lo = mid;
-                }
-                at = lo;
-                d = at;
-              }
+          const follow = this.mode === 'follow';
+          const pl = G.sys.player;
+          let yaw, pitch, wanted, lift;
+          if (follow) {
+            yaw = this.yaw; pitch = this.pitch; wanted = this.distance;
+            lift = clamp((5 - wanted) / 2.5, 0, 1) * 0.28 + clamp((2.4 - wanted) / 1.4, 0, 1) * 0.32 + clamp((wanted - 2.6) / 5.4, 0, 1.45) * 0.85;
+          } else { const ph = this._photo; yaw = ph.yaw; pitch = ph.pitch; wanted = ph.dist; lift = ph.height - 0.2; }
+          const look = _occLook.copy(this._ft).add(this._lead); look.y += lift;
+          const cp = Math.cos(pitch);
+          _dir.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp);
+          if (!Number.isFinite(wanted) || wanted < 0.5) { this._settle(Infinity, OCC_STEP); return this._effFollow(dt); }
+          // nothing moved (a child standing still, the photo view at rest): the last answer still holds — only the
+          // clear-hold timer keeps running, so a pull-in that is over is released after CLEAR_HOLD
+          if (oc.n === blockers.length && oc.look.distanceToSquared(look) < 0.0025 && oc.dir.dot(_dir) > 0.9999 && Math.abs(oc.wanted - wanted) < 0.05) { this._settle(oc.lim, OCC_STEP); return this._effFollow(dt); }
+          const hit = castBlockers(this._ray, look, _dir, wanted + 1.5, blockers, 0.2);
+          let d = Number.isFinite(hit) ? Math.max(1.05, hit - 0.35) : Infinity;
+          // the body's own sight lines: head and chest to the wanted camera spot (a roof eave below the lifted look
+          // point, but between the camera and the body). A hit at fraction f of that line pulls the camera in to f×wanted.
+          if (pl && pl.position) {
+            const h = pl.rig?.height || 1.45, feet = this._ft.y - h * 0.78;
+            _camSpot.copy(look).addScaledVector(_dir, wanted);
+            for (let k = 0; k < 2; k++) {
+              _probe.set(this._ft.x, feet + (k === 0 ? h : 0.9), this._ft.z);
+              _dir2.subVectors(_camSpot, _probe);
+              const L = _dir2.length();
+              if (!(L > 0.5)) continue;
+              _dir2.multiplyScalar(1 / L);
+              const bh = castBlockers(this._ray, _probe, _dir2, L, blockers, 0.25);
+              if (Number.isFinite(bh)) d = Math.min(d, Math.max(1.05, (bh / L) * wanted - 0.35));
             }
-            this._blockDist = d;
-            oc.n = blockers.length; oc.look.copy(look); oc.dir.copy(_dir); oc.wanted = wanted;
-          } else oc.n = -1;
-        } else { this._blockDist = Infinity; oc.n = -1; }
+          }
+          // clearance at the spot the camera would take: a roof just above (camera under the eaves) or just below
+          // fills the near plane although the line of sight slips past it — move in to the largest clear distance
+          // between 1.05 m and here (bisection, 4 probes: within 1/16 of that span): a low roof (정자) keeps the
+          // distance it allows instead of losing up to 0.6 m to fixed steps
+          let at = Math.min(d, wanted);
+          if (at > 1.05) {
+            _probe.copy(look).addScaledVector(_dir, at);
+            if (crowded(this._ray, _probe, blockers)) {
+              let lo = 1.05, hi = at;
+              for (let k = 0; k < 4; k++) {
+                const mid = (lo + hi) * 0.5;
+                _probe.copy(look).addScaledVector(_dir, mid);
+                if (crowded(this._ray, _probe, blockers)) hi = mid; else lo = mid;
+              }
+              at = lo;
+              d = at;
+            }
+          }
+          oc.n = blockers.length; oc.look.copy(look); oc.dir.copy(_dir); oc.wanted = wanted; oc.lim = d;
+          this._settle(d, OCC_STEP);
+        } else { this._blockDist = Infinity; this._clearT = 0; oc.n = -1; }
       }
       this._effFollow(dt);
+    },
+    /** hysteresis: a tighter limit applies at once; a looser one only after it has held for CLEAR_HOLD seconds */
+    _settle(lim, step) {
+      const cur = this._blockDist;
+      if (lim < cur + 0.05) { this._blockDist = lim; this._clearT = 0; return; }          // tighter: in at once
+      if (!(lim > cur + 0.05)) { this._clearT = 0; return; }                                // the same answer
+      this._clearT += step;                                                                  // looser: hold first
+      if (this._clearT < CLEAR_HOLD) return;
+      this._blockDist = lim; this._clearT = 0;
     },
     /** ease the effective follow distance towards min(zoom, occlusion limit): in fast, out slowly */
     _effFollow(dt) {
@@ -584,7 +621,7 @@
       const sp = p?.velocity ? Math.hypot(p.velocity.x, p.velocity.z) : 0;
       let target = FOV;
       if (this.mode === 'shot' && Number.isFinite(this._shot.fov)) target = this._shot.fov;
-      else if (this.mode === 'follow' && !this._wasGentle && !G.settings?.reduceMotion && Number.isFinite(sp)) target = FOV + clamp((sp - WALK() * 1.05) / (RUN() - WALK() * 1.05), 0, 1) * FOV_KICK;
+      else if (this.mode === 'follow' && !this._wasGentle && !G.settings?.reduceMotion && Number.isFinite(sp)) { const w = WALK() * 1.05 * (RUNX() / RUN()); target = FOV + clamp((sp - w) / (RUNX() - w), 0, 1) * FOV_KICK; }
       this._fov += (target - this._fov) * damp(this.mode === 'shot' ? 6 : 3, dt || 1);
       if (!Number.isFinite(this._fov)) this._fov = FOV;
       if (Math.abs(c.fov - this._fov) > 0.01) { c.fov = this._fov; c.updateProjectionMatrix(); }

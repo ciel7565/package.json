@@ -1,7 +1,7 @@
 <?php
 /**
- * GET api/chat/list.php?after=<lastId>&limit=<n>
- * → {messages:[{id, userId, nickname, text, channel, createdAt}], online, lastId}
+ * GET api/chat/list.php?after=<lastId>&limit=<n>&rafter=<cursor>
+ * → {messages:[{id, userId, nickname, text, channel, createdAt}], online, lastId, retracted:{messages, users}, retractId}
  * Readable by any session (guests can read, only accounts can write). Hidden messages and messages from
  * banned accounts are never returned. 'local' messages are only delivered to players near the sender.
  * Personal information is masked again on the way out (defense in depth: rows stored before the PII filter).
@@ -10,13 +10,21 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, ChatFilter, Config, Ctx, Db, Presence, Retractions, Session};
+use Tfm\Api;
+use Tfm\ApiException;
+use Tfm\ChatFilter;
+use Tfm\Config;
+use Tfm\Ctx;
+use Tfm\Db;
+use Tfm\Presence;
+use Tfm\Retractions;
+use Tfm\Session;
 
 Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
     Session::close();
     // query values are strings, or arrays for ?after[]=… (never cast those: "Array to string" would be a 500)
-    $afterRaw = $_GET['after'] ?? '0';
-    $limitRaw = $_GET['limit'] ?? '60';
+    $afterRaw = isset($_GET['after']) ? $_GET['after'] : '0';
+    $limitRaw = isset($_GET['limit']) ? $_GET['limit'] : '60';
     if (!is_string($afterRaw) || !preg_match('/^\d{1,18}$/', $afterRaw) || !is_string($limitRaw) || !preg_match('/^\d{1,4}$/', $limitRaw)) {
         throw new ApiException(400, 'INVALID_PARAM', '요청 값이 올바르지 않아요.');
     }
@@ -52,7 +60,7 @@ Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
         ];
     }
     // moderation since the client's last poll (rafter = its retraction cursor): lines it may already show are taken back
-    $rafter = $_GET['rafter'] ?? null;
+    $rafter = isset($_GET['rafter']) ? $_GET['rafter'] : null;
     $gone = Retractions::since($after > 0 && is_string($rafter) && preg_match('/^\d{1,18}$/', $rafter) ? (int) $rafter : null);
     return ['messages' => $out, 'online' => max(1, Presence::onlineCount($now)), 'lastId' => $last,
         'retracted' => ['messages' => $gone['messages'], 'users' => $gone['users']], 'retractId' => $gone['retractId']];

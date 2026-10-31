@@ -13,6 +13,8 @@
 //                                                speed, playback = speed / stride: no foot sliding)
 //     rig.gait -> {speed, stride, cadence, fast, sprint}  (read-only; for fx / audio / camera)
 //     rig.setAnim(name, {loop, duration, speed, seatY, onEnd})  layered actions
+//     rig.flip(dur = 0.5)                        double jump (§14.2): a 360° forward tuck-flip about the body centre,
+//                                                eased in/out (no overshoot), knees up and arms in, landing squash as usual
 //     rig.stopAction(), rig.currentAction, rig.setAppearance(app), rig.setHeld(name|null),
 //     rig.setLookTarget(vec3|null), rig.setExpression(expr, seconds), rig.dispose()
 //
@@ -741,7 +743,7 @@
     'shLX', 'shLY', 'shLZ', 'elLX', 'elLY', 'elLZ', 'hdLX', 'hdLY', 'hdLZ',
     'shRX', 'shRY', 'shRZ', 'elRX', 'elRY', 'elRZ', 'hdRX', 'hdRY', 'hdRZ',
     'thLX', 'thLY', 'thLZ', 'knLX', 'ftLX', 'ftLZ', 'thRX', 'thRY', 'thRZ', 'knRX', 'ftRX', 'ftRZ',
-    'ponyX', 'ponyZ', 'bagX', 'skirtX', 'skirtZ', 'fgP', 'fgV', 'fgT', 'seatW', 'seatY'];
+    'ponyX', 'ponyZ', 'bagX', 'skirtX', 'skirtZ', 'fgP', 'fgV', 'fgT', 'seatW', 'seatY', 'rootRX', 'rootZ'];
   const C = {};
   CH.forEach((n, i) => { C[n] = i; });
   const NCH = CH.length;
@@ -1035,6 +1037,7 @@
       this._act = null;
       this._sitL = null;
       this._seatY = 0;
+      this._flip = null; // {t, dur}: the double-jump tuck-flip in progress
       this._t = 0;
       this._blinkT = 1 + Math.random() * 3; this._blinking = 0;
       this._exprOverride = null; this._exprT = 0;
@@ -1127,12 +1130,19 @@
       if (this._act && !this._act.stopping) { this._act.stopping = true; this._syncCurrent(); return; }
       if (this._sitL && !this._sitL.stopping) { this._sitL.stopping = true; this._syncCurrent(); }
     }
-    /** stop everything (action + sitting) */
+    /** stop everything (action + sitting + a flip) */
     stopAll() {
       if (this._act && !this._act.stopping) this._act.stopping = true;
       if (this._sitL && !this._sitL.stopping) this._sitL.stopping = true;
+      this._flip = null;
       this._syncCurrent();
     }
+    /** double jump: one forward somersault over `dur` seconds (eased, no overshoot), arms and knees tucked at the middle */
+    flip(dur = 0.5) {
+      const d = Number(dur);
+      this._flip = { t: 0, dur: d > 0.15 && d < 3 ? d : 0.5 };
+    }
+    get flipping() { return !!this._flip; }
     get sitting() { return !!(this._sitL && !this._sitL.stopping); }
     /** current gait (read-only numbers): ground speed, metres per cycle, cycles per second, blend weights */
     get gait() {
@@ -1237,6 +1247,25 @@
       this._lookY += (ly - this._lookY) * ld; this._lookX += (lx - this._lookX) * ld;
       F[C.neckY] += this._lookY * 0.35; F[C.headY] += this._lookY * 0.65;
       F[C.neckX] += this._lookX * 0.35; F[C.headX] += this._lookX * 0.65;
+
+      // double-jump tuck-flip: the root turns a full forward circle about the body centre (0.72 m up), eased in and out
+      // (smoothstep: no overshoot), while knees and arms tuck in at the middle of the turn
+      const fl = this._flip;
+      if (fl) {
+        fl.t += dt;
+        const k = clamp(fl.t / fl.dur, 0, 1), e = k * k * (3 - 2 * k);
+        const th = e * TAU, c = 0.72;
+        F[C.rootRX] += th;
+        F[C.rootY] += c * (1 - Math.cos(th));
+        F[C.rootZ] += -c * Math.sin(th);
+        const w = Math.sin(Math.PI * k) * 0.9;
+        mix(F, C.thLX, -1.35, w); mix(F, C.thRX, -1.35, w); mix(F, C.knLX, 2.0, w); mix(F, C.knRX, 2.0, w);
+        mix(F, C.ftLX, 0.3, w); mix(F, C.ftRX, 0.3, w);
+        mix(F, C.shLX, -1.15, w); mix(F, C.shRX, -1.15, w); mix(F, C.shLZ, 0.22, w); mix(F, C.shRZ, -0.22, w);
+        mix(F, C.elLX, -1.75, w); mix(F, C.elRX, -1.75, w);
+        mix(F, C.spineX, 0.45, w); mix(F, C.neckX, 0.15, w); mix(F, C.headX, 0.35, w);
+        if (k >= 1) this._flip = null;
+      }
 
       this._apply(F);
       this._updateFace(dt);
@@ -1354,6 +1383,8 @@
       const sw = clamp(F[C.seatW], 0, 1);
       const sq = F[C.squash];
       b.root.position.y = lerp(groundY, seatRoot, sw) + F[C.rootY];
+      b.root.position.z = F[C.rootZ];
+      b.root.rotation.x = F[C.rootRX];
       b.root.rotation.y = F[C.rootRY];
       b.root.scale.set(1 - sq * 0.5, 1 + sq, 1 - sq * 0.5);
       b.hips.rotation.set(F[C.hipsX], F[C.hipsY], F[C.hipsZ]);

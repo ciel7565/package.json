@@ -540,3 +540,30 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
 }
 /* low preset (body.ui-lite): no masked, rotating ray layers */
 body.ui-lite .reward-pop::before { display: none; }
+
+/* ------------------------------------------------------------------ 3D unavailable (CONTRACT §14.4.3, 70-app NoThree)
+   The engine made no canvas: a calm sky / field backdrop behind the HUD instead of a black dead world. */
+body.no-3d #game-container, #game-container.no-3d {
+  background:
+    radial-gradient(120% 70% at 50% 100%, rgba(60, 107, 58, .95) 0%, rgba(42, 79, 51, .9) 35%, rgba(42, 79, 51, 0) 62%),
+    linear-gradient(180deg, #8fc6ef 0%, #cfe6f7 46%, #4f7f4a 47%, #2f5733 100%);
+}
+
+/* ------------------------------------------------------------------ Windows high contrast / forced colors (R3-c2-device-env-6)
+   Selected states and switches were drawn only with backgrounds and shadows, which forced colors reset. System colours
+   (Highlight / CanvasText) with forced-color-adjust:none keep the state visible; the thumb and bar fills get solid ink. */
+@media (forced-colors: active) {
+  .app-switch .sw-track { forced-color-adjust: none; background: Canvas; border: 1px solid CanvasText; box-shadow: none; }
+  .app-switch .sw-thumb { forced-color-adjust: none; background: CanvasText; box-shadow: none; }
+  .app-switch input:checked + .sw-track { background: Highlight; border-color: Highlight; }
+  .app-switch input:checked + .sw-track .sw-thumb { background: HighlightText; }
+  .seg button.active, .tab.active, .chat-tabs button[data-channel].active, .kd-mood.on, .skc-cat.active, .wxk-tile.active, .wxk-time.active, .sub-tier.is-current, .kid-look.on {
+    forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; outline: 2px solid CanvasText; outline-offset: 1px;
+  }
+  .kd-mood.on .kd-mood-face, .skc-cat.active .emoji, .wxk-tile.active .wxk-emo { forced-color-adjust: auto; }
+  .bar { border: 1px solid CanvasText; background: Canvas; }
+  .bar > i { forced-color-adjust: none; background: CanvasText; }
+  .bar.fx > i::after { display: none; }
+  .tab-ink { forced-color-adjust: none; background: Highlight; }
+  .speed-chip, .lv-chip { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}

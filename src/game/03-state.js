@@ -89,6 +89,27 @@
     if (isBadKey(k) || k.charAt(0) === '_') continue;
     G.settings[k] = sanitize(k, v);
   }
+  // OS "reduce motion" (R3 device-env-4): one effective flag. While the player never chose the in-app switch (no
+  // 'reduceMotion' key in the device store), the setting follows the OS preference — and follows it when it changes —
+  // so the 3D layer (intro flight, FOV kick, lightning, portal …) calms down together with the 2D layer.
+  const RMQ = (() => { try { return window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null; } catch (e) { return null; } })();
+  const rmChosen = () => { try { return Object.prototype.hasOwnProperty.call(readDevice(), 'reduceMotion'); } catch (e) { return true; } };
+  G.osReducedMotion = () => !!(RMQ && RMQ.matches);
+  G.reduceMotionChosen = rmChosen;
+  /** the setting, or the OS preference while the player never chose (what every motion call site should read) */
+  G.motionReduced = () => !!G.settings.reduceMotion || (G.osReducedMotion() && !rmChosen());
+  if (RMQ && RMQ.matches && !rmChosen()) G.settings.reduceMotion = true;
+  if (RMQ) {
+    const onRM = (e) => {
+      if (rmChosen()) return;
+      const v = !!(e && e.matches);
+      if (G.settings.reduceMotion === v) return;
+      G.settings.reduceMotion = v;
+      G.applySettingsToDom();
+      G.bus.emit('settings:changed', { key: 'reduceMotion', value: v });
+    };
+    try { if (RMQ.addEventListener) RMQ.addEventListener('change', onRM); else if (RMQ.addListener) RMQ.addListener(onRM); } catch (e) { /* old engine */ }
+  }
   G.settingsDefaults = DEFAULTS;
   G.settingsProfileKeys = PROFILE_KEYS;
   G.sanitizeSetting = sanitize;
@@ -277,7 +298,10 @@
         fermentsStarted: 0, fermentsClaimed: 0, fermentChecks: 0,
         quizCorrect: 0, quizAnswered: 0, eduCompleted: 0,
         journals: 0, photos: 0, emotes: 0, gestures: 0, chats: 0, talks: 0, crafts: 0, interacts: 0,
+        doubleJumps: 0,
       },
+      // speed tiers (CONTRACT §14.1): server-authoritative; the server ignores the client's `sub` on save (like `role`)
+      sub: { tier: 1, status: 'none', expiresAt: 0, autoRenew: false, source: 'local' },
       player: { x: sp.x, y: 0, z: sp.z, rotY: sp.rotY, zoneId: 'ZONE_MAIN' },
       inventory: G.util.clone(G.data.startingInventory || {}),
       quests: {},          // questId -> { status, progress:[n...], acceptedAt, completedAt, claimedAt, tracked }
@@ -311,6 +335,20 @@
     return data;
   }
   const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const SUB_STATUS = ['none', 'active', 'past_due', 'canceled'];
+  /** a subscription record from the server / a save -> a clean {tier 1..4, status, expiresAt, autoRenew, source};
+   *  anything unreadable is tier 1 (G.sys.speed reads the tier from here; local mode never goes above 1) */
+  function sanitizeSub(sub, source) {
+    const out = { tier: 1, status: 'none', expiresAt: 0, autoRenew: false, source: source === 'server' ? 'server' : 'local' };
+    if (!isMap(sub)) return out;
+    const t = Math.floor(Number(sub.tier));
+    out.tier = Number.isFinite(t) && t >= 1 && t <= 4 ? t : 1;
+    out.status = typeof sub.status === 'string' && SUB_STATUS.includes(sub.status) ? sub.status : (out.tier > 1 ? 'active' : 'none');
+    const ex = Number(sub.expiresAt);
+    out.expiresAt = Number.isFinite(ex) && ex > 0 ? Math.floor(ex) : 0;
+    out.autoRenew = sub.autoRenew === true || sub.autoRenew === 1 || sub.autoRenew === '1';
+    return out;
+  }
   /** keys that name Object.prototype members ('__proto__', 'constructor', 'toString'…) are dropped: modules index
    *  their maps with `map[id]` and a hand-edited save must not shadow those names */
   function dropProtoKeys(o, depth) {
@@ -340,6 +378,8 @@
       data.stats[k] = Number.isFinite(n) ? n : (def.stats[k] ?? 0);
     }
     for (const k of ['x', 'y', 'z', 'rotY']) if (!Number.isFinite(data.player[k])) data.player[k] = def.player[k];
+    // speed tier: clamped 1..4 in server mode (the server's answer overwrites it anyway); always tier 1 in local mode
+    data.sub = G.net?.mode === 'server' ? sanitizeSub(data.sub, 'server') : sanitizeSub(null, 'local');
     if (profile) { data.profile.id = profile.id; if (profile.nickname) data.profile.nickname = profile.nickname; if (profile.role) data.profile.role = profile.role; if (profile.email) data.profile.email = profile.email; }
     return data;
   }
@@ -472,12 +512,20 @@
      *  revision was put back on the server (admin.php "직전 저장으로 되돌리기" swaps the backup in at a new revision):
      *  that restore is the newer state — this tab never writes over it */
     confirmed: new Map(),
-    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; ServerAdapter.confirmed = new Map(); },
-    mark(savedAt) { const L = ServerAdapter.sent; L.push(savedAt); if (L.length > 8) L.shift(); },
-    confirm(savedAt, rev) { const C = ServerAdapter.confirmed; C.delete(savedAt); C.set(savedAt, rev); if (C.size > 8) C.delete(C.keys().next().value); },
+    /** the server's current subscription from player/get.php (G.sys.speed applies it on state load) */
+    sub: null,
+    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; ServerAdapter.confirmed = new Map(); ServerAdapter.sub = null; },
+    /** every copy sent since the last confirmed one is remembered (R3 device-env-1: a bounded list let 8 failed offline
+     *  attempts push out the one save whose answer was lost, so that own copy was taken for another device's) */
+    mark(savedAt) { const L = ServerAdapter.sent; if (!L.includes(savedAt)) L.push(savedAt); if (L.length > 400) L.splice(0, L.length - 400); },
+    confirm(savedAt, rev) {
+      const C = ServerAdapter.confirmed; C.delete(savedAt); C.set(savedAt, rev); if (C.size > 8) C.delete(C.keys().next().value);
+      ServerAdapter.sent = ServerAdapter.sent.filter((at) => at > savedAt); // older copies are superseded by this one
+    },
     async load() {
       ServerAdapter.reset();
       const d = await G.net.request('player/get.php');
+      ServerAdapter.sub = d && d.sub && typeof d.sub === 'object' && !Array.isArray(d.sub) ? d.sub : null;
       if (!d || !d.save || !d.save.data) {
         // a new player is based on "nothing stored yet" (0); an unreadable stored copy keeps the old rules (no base)
         ServerAdapter.rev = d && !d.save && !d.corrupted ? 0 : null;
@@ -493,19 +541,29 @@
       const rev = ServerAdapter.rev;
       return { version: STATE_VERSION, checksum: checksum(data), ...(rev != null ? { base: rev } : {}), data: state };
     },
+    /** the upload limit grows with the body (R3 device-env-2: a fixed 12 s let no full-album save through a slow
+     *  classroom link): 12 s + 1 s per 20 KB, at most 90 s */
+    timeoutFor(bytes) { return Math.min(90000, 12000 + Math.ceil((Number(bytes) || 0) / 20)); },
     async save(id, state) {
       const data = JSON.stringify(state);
       ServerAdapter.mark(state.savedAt);
+      const timeout = ServerAdapter.timeoutFor(data.length);
       const post = async () => {
-        try { return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data) }); }
+        try { return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data), timeout }); }
         catch (e) {
           // a rotated session (login elsewhere, expiry) leaves this tab with an old CSRF token; the error answer
           // carries the current one — one retry tells a stale token apart from a real refusal (then 401 / 403)
           if (e.code !== 'CSRF_INVALID') throw e;
-          return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data) });
+          return await G.net.request('player/save.php', { body: ServerAdapter.body(state, data), timeout });
         }
       };
-      const done = (res) => { const r = revOf(Number(res?.revision)); if (r != null) { ServerAdapter.rev = r; ServerAdapter.confirm(state.savedAt, r); } return res; };
+      const done = (res) => {
+        const r = revOf(Number(res?.revision));
+        if (r != null) { ServerAdapter.rev = r; ServerAdapter.confirm(state.savedAt, r); }
+        // the subscription is the server's: every save answer carries the current tier (§14.1)
+        if (res && res.sub && typeof res.sub === 'object') { try { G.sys.speed?.setFromServer?.(res.sub); } catch (e) { G.log.warn('SAVE', 'sub from save answer', e); } }
+        return res;
+      };
       try {
         try { return done(await post()); }
         catch (e) {
@@ -568,6 +626,9 @@
   };
   for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'pointermove', 'touchmove']) window.addEventListener(ev, playInput, { capture: true, passive: true });
   document.addEventListener('visibilitychange', accruePlay);
+  /** input that sends no DOM event (a finger resting on the joystick, a held d-pad button): 05-input calls it while a
+   *  stick is held (R3 seams-lost-9: the counters stopped 90 s after the last touchmove although the child kept walking) */
+  const noteInput = () => playInput({ type: 'hold' });
   /** the state as it is persisted: modules write their live values first (state:before-save), settings and savedAt
    *  are stamped, runtime-only '_' keys are dropped. Shared by save() and the server-mode beacon. */
   function snapshot() {
@@ -598,6 +659,21 @@
       catch (e) { G.log.warn('SAVE', 'could not keep an offline copy', e?.name || e); }
     },
     drop(id) { try { localStorage.removeItem(PENDING(id)); } catch (e) { /* ignore */ } },
+    /** a pending copy that a STALE_SAVE restore pushed aside (newer than the copy the server handed back): kept under
+     *  its own key for the next login (70-app offers it; a later successful save never deletes it) */
+    getLost(id) {
+      try {
+        const o = JSON.parse(localStorage.getItem(PENDING(id) + '.lost') || 'null');
+        return isMap(o) && isMap(o.data) && Number.isFinite(Number(o.savedAt)) ? o : null;
+      } catch (e) { return null; }
+    },
+    keepLost(id) {
+      const cur = pending.get(id);
+      if (!cur) return false;
+      try { localStorage.setItem(PENDING(id) + '.lost', JSON.stringify({ ...cur, lost: true, lostAt: Date.now() })); return true; }
+      catch (e) { G.log.warn('SAVE', 'could not keep the pushed-aside copy', e?.name || e); return false; }
+    },
+    dropLost(id) { try { localStorage.removeItem(PENDING(id) + '.lost'); } catch (e) { /* ignore */ } },
   };
   const freshFail = () => ({ count: 0, warnedAt: 0, authLost: false, pendingSelf: false });
   function onSaved() {
@@ -662,6 +738,8 @@
     checksum,
     migrate,
     normalize,
+    sanitizeSub,
+    noteInput,
     pending,
     LocalAdapter,
     ServerAdapter,
@@ -679,6 +757,8 @@
       const set = (k, v) => { v = G.sanitizeSetting(k, v); if (G.settings[k] !== v) { G.settings[k] = v; changed.push([k, v]); } };
       for (const [k, v] of Object.entries(src)) if (k in defs && !profileKeys.includes(k)) set(k, v);
       for (const k of profileKeys) set(k, Object.prototype.hasOwnProperty.call(src, k) ? src[k] : defs[k]);
+      // the OS asks for less motion and the player never chose otherwise: the profile's stored value does not override it
+      if (G.osReducedMotion?.() && !G.reduceMotionChosen?.()) set('reduceMotion', true);
       G.applySettingsToDom();
       for (const [key, value] of changed) G.bus.emit('settings:changed', { key, value });
       return changed.length;
@@ -755,7 +835,14 @@
             // the progress this tab kept for a later login is what the restore took back: it must not undo the restore
             pending.drop(G.save.profile.id);
             G.ui?.toast?.('운영자가 되돌린 저장 기록을 불러왔어요. 그 기록부터 이어서 해요.', { type: 'info', icon: 'save', duration: 7000, easy: '전에 저장한 곳부터 다시 놀아요!' });
-          } else if (code === 'STALE_SAVE') G.ui?.toast?.('다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.', { type: 'info', icon: 'save', easy: '다른 곳에서 논 것을 불러왔어요!' });
+          } else if (code === 'STALE_SAVE') {
+            // the progress this device kept while saves failed is NEVER thrown away by the restore: a pending copy that
+            // is newer than the copy the server handed back stays aside for the next login (R3 device-env-1)
+            const pend = pending.get(G.save.profile.id);
+            if (pend && Number(pend.savedAt) > (Number(G.state.savedAt) || 0) && pending.keepLost(G.save.profile.id)) G.log.warn('SAVE', 'offline progress kept aside for the next login (pending.lost)');
+            G.save._fail.pendingSelf = false;
+            G.ui?.toast?.('다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.', { type: 'info', icon: 'save', easy: '다른 곳에서 논 것을 불러왔어요!' });
+          }
           else G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
         } else onFailed(e, snap, opts);
         return false;

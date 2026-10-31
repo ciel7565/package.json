@@ -2,7 +2,7 @@
 /**
  * POST api/player/save.php  {version, checksum, base?, data:{…state…}}     (fetch, header X-CSRF-Token)
  *                           {version, checksum, base?, data:{…}, csrf:"…"} (navigator.sendBeacon on page hide)
- * → {savedAt, revision, size}
+ * → {savedAt, revision, size, sub}
  *
  * base (optional int): the revision this state was loaded from / last saved as (get.php / save.php answers). When
  * the stored revision is newer — another tab or device saved since — the save is refused with HTTP 409
@@ -11,16 +11,29 @@
  * still the row's revision): the client loads it and drops the progress it kept for later. Without base (older
  * clients) the save is accepted as before.
  *
- * The save is validated against the previously accepted save (lib/SaveValidator.php). On violation:
- * HTTP 409 {error:{code:'VALIDATION_FAILED'}, data:{save:{version, revision, savedAt, data}, violations:[codes]}}
- * and the client restores the stored copy. profile.id is immutable; role / nickname / email are forced to the account
- * values (a stale role from a tab that missed a role change is stored as the account's, not refused).
+ * The save is validated against the previously accepted save (lib/SaveValidator.php) with the user's speed tier
+ * (subscriptions table) scaling the time thresholds. On violation: HTTP 409 {error:{code:'VALIDATION_FAILED'},
+ * data:{save:{version, revision, savedAt, data}, violations:[codes]}} and the client restores the stored copy.
+ * profile.id is immutable; role / nickname / email and `sub` are forced to the account values (the client's `sub`
+ * is ignored, like a stale role: stored as the server's, never refused).
  */
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, Audit, Clock, Config, Ctx, Db, GameData, Http, Log, SaveValidator, Users};
+use Tfm\Api;
+use Tfm\ApiException;
+use Tfm\Audit;
+use Tfm\Clock;
+use Tfm\Config;
+use Tfm\Ctx;
+use Tfm\Db;
+use Tfm\GameData;
+use Tfm\Http;
+use Tfm\Json;
+use Tfm\Log;
+use Tfm\SaveValidator;
+use Tfm\Subscription;
 
 Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'player_save'], function (Ctx $c): array {
     $max = (int) Config::get('save.max_bytes', 0) ?: (int) GameData::limit('saveMaxBytes', 1500000);
@@ -30,15 +43,15 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
     } catch (ApiException $e) {
         throw new ApiException(413, 'SAVE_TOO_LARGE', '저장 데이터가 너무 커요. 오래된 사진이나 작업일지 사진을 정리한 뒤 다시 저장해 주세요.');
     }
-    try { $env = json_decode($raw, false, 64, JSON_THROW_ON_ERROR); }
-    catch (\JsonException) { throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.'); }
+    try { $env = Json::decode($raw, false, 64); }
+    catch (\UnexpectedValueException $e) { throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.'); }
     if (!$env instanceof \stdClass) throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.');
-    $c->checkBodyCsrf($env->csrf ?? null); // only enforced when the X-CSRF-Token header was absent (beacon)
-    $data = $env->data ?? null;
+    $c->checkBodyCsrf(isset($env->csrf) ? $env->csrf : null); // only enforced when the X-CSRF-Token header was absent (beacon)
+    $data = isset($env->data) ? $env->data : null;
     if (!$data instanceof \stdClass) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
     SaveValidator::assertNoProtoKeys($data); // 'constructor' / '__proto__' map keys would be served on every login
-    $checksum = is_string($env->checksum ?? null) ? substr($env->checksum, 0, 32) : '';
-    $base = is_int($env->base ?? null) && $env->base >= 0 ? $env->base : null;
+    $checksum = isset($env->checksum) && is_string($env->checksum) ? substr($env->checksum, 0, 32) : '';
+    $base = isset($env->base) && is_int($env->base) && $env->base >= 0 ? $env->base : null;
 
     // integrity: the client's cyrb53 checksum over JSON.stringify(state) (detects truncated/corrupted uploads)
     if ($checksum !== '' && Config::get('save.verify_checksum', true) && strlen($raw) <= (int) Config::get('save.checksum_max_bytes', 800000)) {
@@ -53,38 +66,45 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
     $uid = $c->uid();
     $now = Clock::ms();
     $validate = (bool) Config::get('save.validate', true) && !($c->isAdmin() && Config::get('save.admin_bypass', false));
+    // the subscription is the server's: the client's `sub` is ignored (stored as the server state, like a stale role)
+    $sub = Subscription::state($uid, $now);
+    $tier = (int) $sub['tier'];
 
-    $result = Db::tx(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base) {
+    $result = Db::tx(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base, $sub, $tier) {
         $row = Db::one('SELECT * FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
         $prev = null;
         if ($row) {
-            $prev = json_decode((string) $row['data'], false, 512);
+            $prev = Json::tryDecode((string) $row['data'], false, 512);
             if (!$prev instanceof \stdClass) $prev = null;
         }
         if ($base !== null && $row && $base < (int) $row['revision']) return ['ok' => false, 'stale' => true, 'row' => $row, 'prev' => $prev];
-        $meta = $row ? (json_decode((string) $row['meta'], true) ?: []) : [];
+        $meta = $row ? Json::tryDecode((string) $row['meta'], true) : [];
+        if (!is_array($meta)) $meta = [];
         $prevAt = $row ? (int) $row['saved_at'] : (int) $user['created_at'];
         $res = ['ok' => true, 'meta' => $meta, 'violations' => [], 'summary' => [], 'notes' => []];
-        if ($validate) $res = SaveValidator::validate($data, $prev, is_array($meta) ? $meta : [], $user, $prevAt, $now);
+        if ($validate) $res = SaveValidator::validate($data, $prev, $meta, $user, $prevAt, $now, $tier);
+        else $res['meta']['tier'] = $tier;
         if (!$res['ok']) {
             if ($row) Db::exec('UPDATE player_saves SET rejects = rejects + 1, last_reject_at = ? WHERE user_id = ?', [$now, $uid]);
             return ['ok' => false, 'row' => $row, 'prev' => $prev, 'res' => $res];
         }
-        // immutable / account-owned profile fields
+        // immutable / account-owned fields
         if (!isset($data->profile) || !$data->profile instanceof \stdClass) $data->profile = new \stdClass();
         $data->profile->id = (string) $uid;
         $data->profile->role = $user['role'] === 'admin' ? 'admin' : 'user';
         $data->profile->nickname = (string) $user['nickname'];
         $data->profile->email = (string) $user['email'];
+        $data->sub = (object) ($sub + ['source' => 'server']);
         $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        if ($json === false) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
+        if (!is_string($json)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
         if (is_array($res['meta'])) unset($res['meta']['restoredRev'], $res['meta']['restoredAt']); // a new copy: not the restored one
-        if (in_array('role', $res['notes'] ?? [], true)) Log::info('SAVE', 'profile.role differed from the account role (stored as the account role)', ['uid' => $uid]);
-        $metaJson = json_encode($res['meta'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+        if (in_array('role', isset($res['notes']) ? $res['notes'] : [], true)) Log::info('SAVE', 'profile.role differed from the account role (stored as the account role)', ['uid' => $uid]);
+        $metaJson = json_encode($res['meta'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($metaJson)) $metaJson = '{}';
         $rev = $row ? (int) $row['revision'] + 1 : 1;
         Db::upsert('player_saves', [
             'user_id' => $uid,
-            'version' => is_int($data->version ?? null) ? $data->version : 1,
+            'version' => isset($data->version) && is_int($data->version) ? $data->version : 1,
             'revision' => $rev,
             'data' => $json,
             'checksum' => $checksum,
@@ -99,35 +119,39 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         ], ['user_id']);
         $p = SaveValidator::profileSummary($data);
         Db::upsert('user_profiles', ['user_id' => $uid] + $p + ['updated_at' => $now], ['user_id']);
-        if (in_array('reset', $res['notes'] ?? [], true)) Audit::log('save_reset', $uid);
-        return ['ok' => true, 'rev' => $rev, 'size' => strlen($json), 'summary' => $res['summary'] ?? []];
+        if (in_array('reset', isset($res['notes']) ? $res['notes'] : [], true)) Audit::log('save_reset', $uid);
+        return ['ok' => true, 'rev' => $rev, 'size' => strlen($json), 'summary' => isset($res['summary']) ? $res['summary'] : []];
     });
 
-    $stored = fn (?array $row, ?object $prev): array => [
-        'version' => $row ? (int) $row['version'] : 1,
-        'revision' => $row ? (int) $row['revision'] : 0,
-        'savedAt' => $row ? (int) $row['saved_at'] : 0,
-        'data' => $prev,
-    ];
+    $stored = function (?array $row, ?object $prev) use ($sub): array {
+        if ($prev instanceof \stdClass) $prev->sub = (object) ($sub + ['source' => 'server']);
+        return [
+            'version' => $row ? (int) $row['version'] : 1,
+            'revision' => $row ? (int) $row['revision'] : 0,
+            'savedAt' => $row ? (int) $row['saved_at'] : 0,
+            'data' => $prev,
+        ];
+    };
     if (!empty($result['stale'])) {
         $row = $result['row'];
-        $m = json_decode((string) ($row['meta'] ?? '{}'), true);
+        $m = Json::tryDecode((string) (isset($row['meta']) ? $row['meta'] : '{}'), true);
         $restored = is_array($m) && isset($m['restoredRev']) && (int) $m['restoredRev'] === (int) $row['revision'];
         Log::info('SAVE', 'stale save refused', ['uid' => $uid, 'base' => $base, 'stored' => (int) $row['revision'], 'restored' => $restored]);
         throw new ApiException(409, 'STALE_SAVE', '다른 창이나 기기에서 더 새로 저장했어요. 이 창의 진행 상황은 저장하지 않았어요.', ['save' => $stored($row, $result['prev'])] + ($restored ? ['restored' => true] : []));
     }
     if (!$result['ok']) {
         $res = $result['res'];
-        $codes = array_values(array_unique(array_map(fn ($v) => $v['code'], $res['violations'])));
-        Audit::log('save_rejected', $uid, ['violations' => array_slice($res['violations'], 0, 8), 'summary' => $res['summary'] ?? []], 'warn');
+        $codes = array_values(array_unique(array_map(function ($v) { return $v['code']; }, $res['violations'])));
+        Audit::log('save_rejected', $uid, ['violations' => array_slice($res['violations'], 0, 8), 'summary' => isset($res['summary']) ? $res['summary'] : []], 'warn');
         $row = $result['row'];
         throw new ApiException(409, 'VALIDATION_FAILED', '서버 검증에 실패해 이번 진행 상황은 저장하지 않았어요. 서버에 저장된 진행 상황으로 되돌립니다.', [
             'save' => $stored($row, $result['prev']),
             'violations' => $codes,
         ]);
     }
-    if (($result['summary']['unexplained']['value'] ?? 0) > 0 || ($result['summary']['unexplained']['exp'] ?? 0) > 0) {
+    $un = isset($result['summary']['unexplained']) ? $result['summary']['unexplained'] : [];
+    if ((isset($un['value']) ? $un['value'] : 0) > 0 || (isset($un['exp']) ? $un['exp'] : 0) > 0) {
         Log::debug('SAVE', 'accepted with tolerance', ['uid' => $uid] + $result['summary']);
     }
-    return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size']];
+    return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub];
 });

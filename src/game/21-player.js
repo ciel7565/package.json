@@ -2,7 +2,12 @@
 // 21-player.js — local player controller (G.sys.player)
 //
 //   object, position, rotY, velocity, grounded, rig, radius, enabled, speed, sitting, isWalking, walkInfo
-//   WALK (9.6) / RUN (18) m/s, speedScale (3 = phase-4 pace vs. phase 1), maxSubstep (0.25 m)
+//   WALK (6.4) / RUN (12) m/s, speedScale (2 = phase-6 base pace vs. phase 1), maxSubstep (0.25 m), speedMul (tier)
+//   G.sys.speed.movement() (1..3, CONTRACT §14.1) multiplies every target speed EVERY frame (nothing is cached across
+//   tier changes): tier 1 walks 6.4 / runs 12, tier 2 12.8 / 24, tier 3 and 4 19.2 / 36 m/s.
+//   Double jump (§14.2): a second Space / jump-button press while airborne after a jump (before landing) sets
+//   v.y = max(v.y, 0) × 0.25 + JUMP2_V (5.2), once per airtime (_doubleUsed, reset on landing), never from a plain fall,
+//   while sitting / sliding or in a cinematic. Emits player:jump {n: 1|2}; rig.flip(), 'jump2' sfx, G.fx.doubleJump(pos).
 //   teleport(x, z, rotY?, {fade=true}) -> Promise
 //   walkTo({x,z}, {stopDistance=1.2, onArrive, onFail, run, path=true, rescue, trail, label}) -> walk id | false
 //        path: plan around colliders (grid A* + string pulling, re-planned when blocked)
@@ -11,7 +16,7 @@
 //        trail  (default: easy mode): golden footprints along the planned route + a bouncing star at the goal
 //   cancelWalk(reason), planPath(from, to) -> [{x,z}...] | null, playAction(anim, {duration, loop}),
 //   stopAction(), faceTowards(x, z), sit(benchAnchor?), standUp(), setAppearance(app)
-// Camera-relative WASD (walk WALK = 9.6 m/s, Shift run RUN = 18 m/s — phase 4: 3x the old pace,
+// Camera-relative WASD (walk WALK = 6.4 m/s, Shift run RUN = 12 m/s — phase 6: 2x the phase-1 pace, × the speed tier,
 // G.sys.player.WALK / RUN / speedScale), Space jump, smooth turning, step-up via G.world.heightAt,
 // colliders via G.world.resolve, water/bounds/steep-slope blocking, footsteps on animation contacts
 // (distance based: one step per half stride).
@@ -32,9 +37,11 @@
   const fin = Number.isFinite;
 
   // ---- locomotion tuning (everything below derives from WALK / RUN)
-  const SPEED_SCALE = 3;               // phase 4: three times the phase-1 pace
-  const WALK = 9.6, RUN = 18;          // m/s (normal / Shift)
-  const GRAVITY = 22, JUMP_V = 5.7;
+  const SPEED_SCALE = 2;               // phase 6: twice the phase-1 pace (CONTRACT §14.1)
+  const WALK = 6.4, RUN = 12;          // m/s (normal / Shift) at tier 1 — × G.sys.speed.movement() per frame
+  const GRAVITY = 22, JUMP_V = 5.7, JUMP2_V = 5.2;
+  /** movement multiplier of the speed tier (1..3), read every frame — never cached across tier changes */
+  const moveMul = () => { const m = Number(G.sys.speed?.movement?.()); return m >= 1 && m <= 3 ? m : 1; };
   const ACCEL = WALK * 5.6;            // ~54 m/s²: walk speed in 0.18 s, run speed in 0.33 s
   const DECEL = RUN * 4.2;             // ~76 m/s²: a crisp stop (0.24 s / 2 m from a sprint)
   const AIR_ACCEL = WALK * 1.9;        // steering while airborne
@@ -124,6 +131,8 @@
   }
   /** straight walkable line a -> b (sampled), starting with feet at y0 */
   let lineBudget = Infinity; // max samples a single planning pass may spend on line checks
+  /** set by planPath when the last route it returned stops short of its target (walk as close as we can) */
+  let lastPlanPartial = false;
   function lineClear(ax, az, y0, bx, bz) {
     const dx = bx - ax, dz = bz - az;
     const len = Math.hypot(dx, dz);
@@ -266,6 +275,7 @@
       // unreachable / budget: walk as close as we can (only when that is real progress)
       if (best === start || Math.hypot(sx - tx, sz - tz) - bestH < 2) return null;
       end = best;
+      lastPlanPartial = true; // the caller clamps its goal to the route's end (R3 movement-3: no hop past the valley)
     }
     const cells = [];
     for (let i = end, guard = 0; i >= 0 && guard < 20000; i = nav.parent[i], guard++) { cells.push(i); if (i === start) break; }
@@ -348,6 +358,7 @@
   }
   /** planPath + layout route hints */
   function planRoute(sx, sz, sy, tx, tz, goalR) {
+    lastPlanPartial = false;
     const links = G.data.layout?.navLinks;
     if (Array.isArray(links)) {
       for (const link of links) {
@@ -557,10 +568,12 @@
     object: null, position: null, rotY: Math.PI,
     velocity: new THREE.Vector3(), grounded: true, rig: null, radius: RADIUS, enabled: true,
     speed: 0, sitting: null,
-    /** locomotion constants for other modules (companion / visitors keep up with speedScale) */
-    WALK, RUN, speedScale: SPEED_SCALE, maxSubstep: MAX_SUBSTEP,
+    /** locomotion constants for other modules (companion / visitors keep up with speedScale × speedMul) */
+    WALK, RUN, speedScale: SPEED_SCALE, maxSubstep: MAX_SUBSTEP, JUMP_V, JUMP2_V,
+    /** the speed tier's movement multiplier right now (1..3) */
+    get speedMul() { return moveMul(); },
     _walk: null, _walkSeq: 0, _faceT: null, _slide: null,
-    _jumpBuf: 0, _coyote: 0,
+    _jumpBuf: 0, _coyote: 0, _airJump: false, _doubleUsed: false, _clampToastAt: -1e9,
     _rigParams: { speed: 0, grounded: true, vy: 0 },
     _stepOpts: { surface: 'grass', run: false },
     _steps: 0, _stepT: 0, wantSpeed: 0, _lastEmit: new THREE.Vector3(), _emitT: 0, _distAcc: 0, _saveT: 0, _tagT: 0, _tagKey: '',
@@ -654,7 +667,7 @@
       this.rotY = fin(ry) ? ry : (sp.rotY ?? Math.PI);
       this.object.rotation.y = this.rotY;
       this.velocity.set(0, 0, 0);
-      this.grounded = true;
+      this.grounded = true; this._airJump = false; this._doubleUsed = false;
       this.sitting = null; this._faceT = null; this._slide = null;
       this._dropWalk();
       this.rig.stopAll();
@@ -723,7 +736,7 @@
         if (rotY != null && fin(rotY)) this.rotY = rotY;
         this.object.rotation.y = this.rotY;
         this.velocity.set(0, 0, 0);
-        this.grounded = true;
+        this.grounded = true; this._airJump = false; this._doubleUsed = false;
         this._prevPos.copy(this.position);
         this._lastEmit.copy(this.position);
         G.sys.engine.focus.copy(this.position);
@@ -856,10 +869,22 @@
       const p = this.position;
       w.lastPlanT = t;
       let path = null;
+      lastPlanPartial = false; // (planRoute sets it; a walk without a path never sees a stale flag)
       if (w.usePath) {
-        try { path = planRoute(p.x, p.z, p.y, w.x, w.z, Math.max(w.stop, 0.6)); } catch (e) { G.log.warn('PLAYER', 'path planning failed', e); path = null; }
+        try { path = planRoute(p.x, p.z, p.y, w.x, w.z, Math.max(w.stop, 0.6)); } catch (e) { G.log.warn('PLAYER', 'path planning failed', e); path = null; lastPlanPartial = false; }
       }
       if (!path || path.length < 2) path = [{ x: p.x, z: p.z }, { x: w.x, z: w.z }];
+      else if (lastPlanPartial) {
+        // the target lies beyond reachable ground (behind the valley slopes, across the river): the walk ends at the
+        // route's end — the closest reachable spot — instead of stalling there and hopping outside (R3 movement-3)
+        const end = path[path.length - 1];
+        const short = Math.hypot(end.x - w.x, end.z - w.z);
+        if (short > 2) {
+          w.clamped = { x: w.x, z: w.z, short };
+          w.x = end.x; w.z = end.z; w.stop = Math.max(w.stop, 0.6);
+          this._noteClamped(w);
+        }
+      }
       // the goal is the real target: the walker steers there on the last leg and stops at stopDistance
       const last = path[path.length - 1];
       if (Math.hypot(last.x - w.x, last.z - w.z) > 0.05) path.push({ x: w.x, z: w.z });
@@ -882,8 +907,26 @@
       if (this._walk !== w) return;
       this._walk = null;
       trail.hide();
-      G.bus.emit('player:arrived', { id: w.id, x: this.position.x, z: this.position.z, rescued: !!rescued });
+      G.bus.emit('player:arrived', { id: w.id, x: this.position.x, z: this.position.z, rescued: !!rescued, clamped: !!w.clamped });
       try { w.onArrive?.(); } catch (e) { G.log.error('PLAYER', 'onArrive', e); }
+    },
+    /** a walk whose goal was moved to the closest reachable spot: one short toast (≤ 1 per 6 s) + an event */
+    _noteClamped(w) {
+      G.bus.emit('player:walk-clamped', { id: w.id, x: w.clamped.x, z: w.clamped.z, short: Math.round(w.clamped.short * 10) / 10 });
+      G.log.info('PLAYER', `walk ${w.id}: goal ${w.clamped.short.toFixed(1)} m beyond reachable ground -> ends at the closest spot`);
+      const t = G.time.elapsed;
+      if (t - this._clampToastAt < 6) return;
+      this._clampToastAt = t;
+      G.ui?.toast?.('그곳까지는 갈 수 없어요. 가까운 곳까지 갈게요.', { type: 'info', emoji: '🚧', duration: 3200, easy: '거기는 못 가요. 가까운 곳까지 가요!' });
+    },
+    /** is (x, z) inside the play area? = a complete route exists from the plaza (never beyond the slope ring / the river) */
+    _playable(x, z, goalR = 1) {
+      const hub = G.data.layout?.plaza || G.data.layout?.plazaSpawn || { x: 0, z: 0 };
+      try {
+        const hy = G.world.heightAt(hub.x, hub.z);
+        const r = planRoute(hub.x, hub.z, fin(hy) ? hy : 0, x, z, Math.max(0.6, goalR));
+        return !!r && r.length >= 2 && !lastPlanPartial;
+      } catch (e) { return false; }
     },
 
     /** last resort: fade, hop next to the goal, arrive (the walk keeps its id so callers see a normal arrival) */
@@ -892,6 +935,16 @@
       w.rescuing = true;
       this.velocity.x = 0; this.velocity.z = 0;
       const p = this.position;
+      // a goal nobody can reach from the plaza (behind the terrain ring, across the river) is never hopped to: the
+      // closest reachable spot — where the walker stands now — is the arrival (R3 movement-3)
+      if (!this._playable(w.x, w.z, w.stop)) {
+        G.log.info('PLAYER', `walk ${w.id}: stuck and the goal is outside the play area -> arrive here`);
+        w.clamped = w.clamped || { x: w.x, z: w.z, short: Math.hypot(p.x - w.x, p.z - w.z) };
+        w.rescuing = false;
+        this.faceTowards(w.x, w.z);
+        this._arrive(w, false);
+        return;
+      }
       let dx = p.x - w.x, dz = p.z - w.z;
       const l = Math.hypot(dx, dz);
       if (l > 1e-3) { dx /= l; dz /= l; } else { dx = 0; dz = 1; }
@@ -948,9 +1001,10 @@
       // progress (remaining route length) -> braking, stuck detection / re-plan / rescue
       const remaining = d + (w.rem ? w.rem[Math.min(w.pi, w.rem.length - 1)] : 0);
       // speed: cruise, brake kinematically (v = sqrt(2as)) to stop right at stopDistance, and slow down
-      // before sharp corners so 18 m/s still follows switchbacks and door openings precisely
-      const vmax = w.run ? RUN : WALK;
-      let want = Math.min(vmax, Math.sqrt(2 * ARRIVE_DECEL * Math.max(0, Math.min(remaining, dFinal + 0.5) - w.stop)) + 0.9);
+      // before sharp corners so 36 m/s still follows switchbacks and door openings precisely
+      const mv = moveMul();
+      const vmax = (w.run ? RUN : WALK) * mv, ARRIVE = ARRIVE_DECEL * mv;
+      let want = Math.min(vmax, Math.sqrt(2 * ARRIVE * Math.max(0, Math.min(remaining, dFinal + 0.5) - w.stop)) + 0.9);
       if (!lastLeg) {
         const nx = path[w.pi + 1];
         const bx = nx.x - wp.x, bz = nx.z - wp.z, bl = Math.hypot(bx, bz);
@@ -958,7 +1012,7 @@
           const cos = (out.dx * bx + out.dz * bz) / bl;
           const sharp = clamp((1 - cos) / 1.5, 0, 1);
           const vc = vmax + (Math.min(vmax, CORNER_SPEED) - vmax) * sharp;
-          want = Math.min(want, Math.sqrt(vc * vc + 2 * ARRIVE_DECEL * Math.max(0, d - 0.7)));
+          want = Math.min(want, Math.sqrt(vc * vc + 2 * ARRIVE * Math.max(0, d - 0.7)));
         }
       }
       out.want = fin(want) ? Math.max(0.6, want) : WALK;
@@ -1040,6 +1094,23 @@
 
     _steerOut: { dx: 0, dz: 0, want: 0 },
 
+    /** the double jump: a kick from whatever upward speed is left, a forward tuck-flip, a chime, a ring at the feet */
+    _doubleJump() {
+      const v = this.velocity;
+      v.y = Math.max(v.y, 0) * 0.25 + JUMP2_V;
+      this.grounded = false; this._doubleUsed = true; this._jumpBuf = 0; this._coyote = 0;
+      if (this.rig.actionFullBody) this.rig.stopAction();
+      try { this.rig.flip?.(0.5); } catch (e) { /* visual only */ }
+      G.sfx('jump2');
+      try { G.fx?.doubleJump?.(this.position); } catch (e) { /* visual only */ }
+      G.bus.emit('player:jump', { n: 2 });
+    },
+    /** a scripted camera (intro drone flight, telescope tour, title orbit) is running */
+    _cinematic() {
+      const m = G.sys.camera?.mode;
+      return m === 'cinematic' || m === 'shot' || !!G.sys.manjangdae?.introActive || !!G.sys.manjangdae?.tourActive;
+    },
+
     update(dt, t) {
       const input = G.input;
       input?.update?.();
@@ -1047,6 +1118,8 @@
       if (!(dt > 0) || !fin(dt)) dt = 0;
       const W = G.world, p = this.position, v = this.velocity;
       const ctl = this.enabled && (input ? input.gameplay() : true);
+      // the speed tier's movement multiplier, read every frame (tier 1 → 6.4 / 12, tier 3+ → 19.2 / 36 m/s)
+      const mv = moveMul(), RUNX = RUN * mv, WALKX = WALK * mv;
 
       // ---- smooth reposition (sit / stand up)
       if (this._slide) {
@@ -1066,7 +1139,7 @@
         mdx = bs.forward.x * ax.y + bs.right.x * ax.x;
         mdz = bs.forward.z * ax.y + bs.right.z * ax.x;
         const l = Math.hypot(mdx, mdz);
-        if (l > 1e-6 && fin(l)) { mdx /= l; mdz /= l; mwant = (input.running ? RUN : WALK) * mag; } else { mdx = 0; mdz = 0; }
+        if (l > 1e-6 && fin(l)) { mdx /= l; mdz /= l; mwant = (input.running ? RUNX : WALKX) * mag; } else { mdx = 0; mdz = 0; }
         this._faceT = null;
       } else if (this._walk && !ctl) {
         // paused by a modal / dialogue: freeze the stuck & time budget clocks
@@ -1077,23 +1150,28 @@
       const frozen = !!(this.sitting || this._slide);
       if (!frozen && (manual || (this._walk && ctl)) && this.rig.actionFullBody) this.rig.stopAction();
 
-      // ---- jump (buffered input + coyote time) — once per frame, before the sub-steps
+      // ---- jump (buffered input + coyote time) — once per frame, before the sub-steps. A second press while airborne
+      //      after a jump is the DOUBLE JUMP (§14.2): consumed here instead of being buffered, once per airtime, never
+      //      from a plain fall (coyote time still gives a normal jump), while sitting / sliding or in a cinematic
       const jumped = input ? input.consumeJump() : false;
       if (jumped && ctl) {
         if (this.sitting) this.standUp();
+        else if (!this.grounded && this._airJump && !this._doubleUsed && this._coyote <= 0 && !this._slide && !this._cinematic()) this._doubleJump();
         else this._jumpBuf = 0.15;
       }
       this._jumpBuf -= dt;
       this._coyote = this.grounded ? 0.1 : this._coyote - dt;
       if (this._jumpBuf > 0 && this._coyote > 0 && !this.sitting && !this._slide) {
         v.y = JUMP_V; this.grounded = false; this._coyote = 0; this._jumpBuf = 0;
+        this._airJump = true; this._doubleUsed = false;
         if (this.rig.actionFullBody) this.rig.stopAction();
         G.sfx('jump');
+        G.bus.emit('player:jump', { n: 1 });
       }
 
       // ---- sub-stepped locomotion: steering + velocity + turning + collisions + ground, <= MAX_SUBSTEP each
       // (a fall counts too: at a low frame rate one slice of a jump's descent could otherwise pass a rock top)
-      const reach = Math.max(Math.hypot(v.x, v.z), manual ? mwant : (this._walk ? RUN : 0), this.grounded ? 0 : Math.abs(v.y) + GRAVITY * dt) * dt;
+      const reach = Math.max(Math.hypot(v.x, v.z), manual ? mwant : (this._walk ? RUNX : 0), this.grounded ? 0 : Math.abs(v.y) + GRAVITY * dt) * dt;
       const n = frozen ? 1 : clamp(Math.ceil(reach / MAX_SUBSTEP), 1, MAX_SUBSTEPS);
       const sdt = dt / n;
       let moved = false, pushed = false, lastWant = 0;
@@ -1109,10 +1187,10 @@
         lastWant = want;
         // velocity (turning against the current motion brakes at DECEL: crisp reversals at speed)
         const tvx = dx * want, tvz = dz * want;
-        let acc;
-        if (!this.grounded) acc = AIR_ACCEL;
-        else if (want > 0) acc = (v.x * tvx + v.z * tvz) < 0 ? DECEL : ACCEL;
-        else acc = DECEL;
+        let acc; // accelerations scale with the tier so the feel stays the same (walk pace in 0.18 s at every tier)
+        if (!this.grounded) acc = AIR_ACCEL * mv;
+        else if (want > 0) acc = ((v.x * tvx + v.z * tvz) < 0 ? DECEL : ACCEL) * mv;
+        else acc = DECEL * mv;
         let ddx = tvx - v.x, ddz = tvz - v.z;
         const dl = Math.hypot(ddx, ddz), maxd = acc * sdt;
         if (dl > maxd && dl > 1e-9) { ddx *= maxd / dl; ddz *= maxd / dl; }
@@ -1121,7 +1199,7 @@
         // turning (a touch softer at a full sprint: no jitter, still precise)
         if (want > 0.1) {
           const sp = Math.hypot(v.x, v.z);
-          const rate = this.grounded ? 16 - 5 * clamp(sp / RUN, 0, 1) : 6;
+          const rate = this.grounded ? 16 - 5 * clamp(sp / RUNX, 0, 1) : 6;
           this.rotY += angleDiff(this.rotY, Math.atan2(dx, dz)) * damp(rate, sdt);
         } else if (this._faceT != null && !this.sitting) {
           const diff = angleDiff(this.rotY, this._faceT);
@@ -1164,6 +1242,7 @@
             if (p.y <= g2 && v.y <= 0) {
               const impact = -v.y;
               p.y = g2; v.y = 0; this.grounded = true;
+              this._airJump = false; this._doubleUsed = false; // the next airtime may double-jump again
               // landed on something that is no platform (a bush, small decor) or against a trunk: slide off it
               _t1.set(p.x, p.y, p.z);
               if (W.resolve(_t1, RADIUS, p.y) && !W.isWater(_t1.x, _t1.z) && !W.blocked(_t1.x, _t1.z, RADIUS - 0.03, p.y)) {
@@ -1208,7 +1287,7 @@
         if (this._stepT >= 0.075) {
           this._stepT = 0;
           this._stepOpts.surface = p.y < (G.data.layout?.waterY ?? -1.1) - 0.02 ? 'water' : W.surfaceAt(p.x, p.z);
-          this._stepOpts.run = hs > RUN_STEP;
+          this._stepOpts.run = hs > RUN_STEP * mv;
           G.sfx('step', this._stepOpts);
         }
       }

@@ -757,6 +757,12 @@
         if (!a) return;
         this.notify({ type: 'achievement', icon: a.icon || '🏆', title: `업적 달성: ${a.name}`, text: a.desc || '', act: 'achievements', ref: id });
       });
+      // the double jump (CONTRACT §14.2): stats.doubleJumps counts them; ACH_DOUBLE_JUMP (01-data) unlocks at 10
+      on('player:jump', ({ n }) => {
+        if (Number(n) !== 2) return;
+        if (G.sys.progression?.incStat) G.sys.progression.incStat('doubleJumps', 1);
+        else { G.state.stats.doubleJumps = (Number(G.state.stats.doubleJumps) || 0) + 1; G.dirty('stats'); }
+      });
       on('quest:completed', ({ questId }) => {
         const q = G.data.quests?.[questId];
         if (!q) return;

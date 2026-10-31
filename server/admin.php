@@ -3,17 +3,36 @@
  * 전통발효체험관 메타버스 — 관리자 센터 (server-rendered, no JavaScript)
  *
  *   /admin.php                 login (shared throttled login path) → role check → dashboard tabs
- *   tabs: overview(대시보드) · health(시스템 점검) · users(사용자) · moderation(신고·채팅) · audit(감사 로그) · maintenance(유지보수)
+ *   tabs: overview(대시보드) · health(시스템 점검) · users(사용자) · sub(구독) · moderation(신고·채팅) · audit(감사 로그) · maintenance(유지보수)
  *
  * Security: own strict CSP (default-src 'none'; style only by nonce; no scripts at all), X-Frame-Options DENY,
  * every value printed through e() (htmlspecialchars), every action is POST + CSRF token + same-origin check,
  * audited, and followed by a 303 redirect (PRG). First admin: only from the server machine while no admin exists.
+ * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
 require __DIR__ . '/lib/bootstrap.php';
 
-use Tfm\{AdminOps, ApiException, Audit, Auth, Clock, Config, Ctx, Db, Health, Http, Log, Presence, RateLimit, Sec, Session, Stats, Users};
+use Tfm\AdminOps;
+use Tfm\ApiException;
+use Tfm\Audit;
+use Tfm\Auth;
+use Tfm\Clock;
+use Tfm\Config;
+use Tfm\Ctx;
+use Tfm\Db;
+use Tfm\Health;
+use Tfm\Http;
+use Tfm\Log;
+use Tfm\Presence;
+use Tfm\RateLimit;
+use Tfm\Sec;
+use Tfm\Session;
+use Tfm\Stats;
+use Tfm\Subscription;
+use Tfm\Toss;
+use Tfm\Users;
 
 ob_start();
 set_error_handler(static function (int $no, string $msg, string $file = '', int $line = 0): bool {
@@ -26,21 +45,25 @@ const TABS = [
     'overview' => ['📊', '대시보드'],
     'health' => ['🩺', '시스템 점검'],
     'users' => ['👥', '사용자'],
+    'sub' => ['⚡', '구독'],
     'moderation' => ['🚨', '신고·채팅'],
     'audit' => ['📜', '감사 로그'],
     'maintenance' => ['🧰', '유지보수'],
 ];
 const REASONS = ['kid' => '🧒 어린이 신고', 'abuse' => '욕설·비방', 'spam' => '도배·광고', 'harass' => '불쾌한 행동', 'privacy' => '개인정보 노출', 'etc' => '기타'];
+const SUB_STATUS = ['none' => '없음', 'active' => '이용 중', 'past_due' => '갱신 실패(유예)', 'canceled' => '해지됨'];
+const ORDER_STATUS = ['created' => '대기', 'confirmed' => '완료', 'failed' => '실패', 'canceled' => '취소', 'refunded' => '환불'];
+const ORDER_KIND = ['first' => '첫 결제', 'renewal' => '자동 갱신', 'manual' => '수동 부여'];
 
-function e(mixed $v): string { return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8'); }
-function when(int|string|null $ms): string { $ms = (int) $ms; return $ms > 0 ? date('Y-m-d H:i', intdiv($ms, 1000)) : '-'; }
-function num(int|float|string|null $n): string { return number_format((float) $n); }
+function e($v): string { return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8'); }
+function when($ms): string { $ms = (int) $ms; return $ms > 0 ? date('Y-m-d H:i', intdiv($ms, 1000)) : '-'; }
+function num($n): string { return number_format((float) $n); }
 function flash(string $type, string $msg): void { Session::set('flash', ['type' => $type, 'msg' => $msg]); }
-function tabParam(mixed $t): string { return is_string($t) && isset(TABS[$t]) ? $t : 'overview'; }
-function redirect(string $tab, array $q = []): never
+function tabParam($t): string { return is_string($t) && isset(TABS[$t]) ? $t : 'overview'; }
+function redirect(string $tab, array $q = [])
 {
     while (ob_get_level() > 0) ob_end_clean();
-    $q = array_filter(['tab' => $tab] + $q, fn ($v) => $v !== '' && $v !== null);
+    $q = array_filter(['tab' => $tab] + $q, function ($v) { return $v !== '' && $v !== null; });
     header('Location: admin.php?' . http_build_query($q), true, 303);
     Session::close();
     exit;
@@ -55,24 +78,30 @@ function actionForm(string $action, string $label, array $fields = [], string $c
 }
 function badge(string $status): string
 {
-    [$cls, $txt] = match ($status) { 'ok' => ['ok', '✅ 정상'], 'warn' => ['warn', '⚠️ 주의'], 'fail' => ['fail', '⛔ 위험'], default => ['', $status] };
+    switch ($status) {
+        case 'ok': $cls = 'ok'; $txt = '✅ 정상'; break;
+        case 'warn': $cls = 'warn'; $txt = '⚠️ 주의'; break;
+        case 'fail': $cls = 'fail'; $txt = '⛔ 위험'; break;
+        default: $cls = ''; $txt = $status;
+    }
     return '<span class="badge ' . $cls . '">' . e($txt) . '</span>';
 }
+function postStr(string $k): string { return isset($_POST[$k]) && is_string($_POST[$k]) ? $_POST[$k] : ''; }
 
 // =============================================================================== actions (POST → 303)
-function handlePost(Ctx $c): never
+function handlePost(Ctx $c)
 {
-    $tab = tabParam($_POST['tab'] ?? 'overview');
-    $back = ['q' => is_string($_POST['q'] ?? null) ? mb_substr($_POST['q'], 0, 60) : ''];
+    $tab = tabParam(isset($_POST['tab']) ? $_POST['tab'] : 'overview');
+    $back = ['q' => mb_substr(postStr('q'), 0, 60)];
     try {
         Sec::checkOrigin();
-        if (!Session::checkCsrf(is_string($_POST['_csrf'] ?? null) ? $_POST['_csrf'] : null)) {
+        if (!Session::checkCsrf(isset($_POST['_csrf']) && is_string($_POST['_csrf']) ? $_POST['_csrf'] : null)) {
             Log::security('CSRF', 'admin form token invalid');
             throw new ApiException(403, 'CSRF_INVALID', '보안 토큰이 만료되었어요. 다시 시도해 주세요.');
         }
-        $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
+        $action = postStr('action');
         if ($action === 'login') {
-            $u = Auth::attemptLogin(is_string($_POST['login'] ?? null) ? $_POST['login'] : '', is_string($_POST['password'] ?? null) ? $_POST['password'] : '', false);
+            $u = Auth::attemptLogin(postStr('login'), postStr('password'), false);
             flash($u['role'] === 'admin' ? 'ok' : 'warn', $u['role'] === 'admin' ? "👋 {$u['nickname']} 님, 관리자 센터에 오신 것을 환영해요." : '로그인했지만 관리자 권한이 없는 계정이에요.');
             redirect('overview');
         }
@@ -95,22 +124,42 @@ function handlePost(Ctx $c): never
             throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
         }
         $admin = $c->user;
-        $uid = (int) ($_POST['uid'] ?? 0);
-        $msg = match ($action) {
-            'role' => AdminOps::setRole($admin, $uid, is_string($_POST['role'] ?? null) ? $_POST['role'] : ''),
-            'ban' => AdminOps::setBanned($admin, $uid, true),
-            'unban' => AdminOps::setBanned($admin, $uid, false),
-            'mute' => AdminOps::mute($admin, $uid, (int) ($_POST['minutes'] ?? 0)),
-            'report' => AdminOps::report($admin, (int) ($_POST['rid'] ?? 0), is_string($_POST['status'] ?? null) ? $_POST['status'] : ''),
-            'hide' => AdminOps::hideMessage($admin, (int) ($_POST['mid'] ?? 0), true),
-            'unhide' => AdminOps::hideMessage($admin, (int) ($_POST['mid'] ?? 0), false),
-            'restore' => AdminOps::restoreBackup($admin, $uid),
-            'cleanup' => (function () use ($admin) {
+        $uid = (int) postStr('uid');
+        switch ($action) {
+            case 'role': $msg = AdminOps::setRole($admin, $uid, postStr('role')); break;
+            case 'ban': $msg = AdminOps::setBanned($admin, $uid, true); break;
+            case 'unban': $msg = AdminOps::setBanned($admin, $uid, false); break;
+            case 'mute': $msg = AdminOps::mute($admin, $uid, (int) postStr('minutes')); break;
+            case 'report': $msg = AdminOps::report($admin, (int) postStr('rid'), postStr('status')); break;
+            case 'hide': $msg = AdminOps::hideMessage($admin, (int) postStr('mid'), true); break;
+            case 'unhide': $msg = AdminOps::hideMessage($admin, (int) postStr('mid'), false); break;
+            case 'restore': $msg = AdminOps::restoreBackup($admin, $uid); break;
+            case 'cleanup': {
                 $r = AdminOps::cleanup($admin);
-                return '🧹 정리 완료 — ' . implode(' · ', array_map(fn ($k, $v) => "$k $v", array_keys($r), $r));
-            })(),
-            default => throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.'),
-        };
+                $parts = [];
+                foreach ($r as $k => $v) $parts[] = "$k $v";
+                $msg = '🧹 정리 완료 — ' . implode(' · ', $parts);
+                break;
+            }
+            case 'sub_grant': {
+                // the target may be typed as a user id, a nickname or an e-mail
+                $who = trim(postStr('who'));
+                if ($uid <= 0 && $who !== '') { $u = ctype_digit($who) ? Users::byId((int) $who) : Users::byLogin($who); if (!$u) throw new ApiException(404, 'NOT_FOUND', '그런 사용자를 찾을 수 없어요.'); $uid = (int) $u['id']; }
+                $r = Subscription::grant($admin, $uid, (int) postStr('tier'), (int) postStr('days'));
+                $msg = '⚡ ' . $r['message'];
+                break;
+            }
+            case 'sub_revoke': { $r = Subscription::revoke($admin, $uid); $msg = $r['message']; break; }
+            case 'sub_renew': {
+                $results = Subscription::renewDue($uid > 0 ? $uid : null, postStr('force') === '1');
+                Audit::log('sub_renew_run', $uid > 0 ? $uid : null, ['force' => postStr('force') === '1', 'count' => count($results), 'via' => 'admin.php'], 'info', (int) $admin['id']);
+                $okN = 0;
+                foreach ($results as $r) if (!empty($r['ok']) && empty($r['skipped'])) $okN++;
+                $msg = '🔁 갱신 검사 ' . count($results) . '건 — 갱신 ' . $okN . '건';
+                break;
+            }
+            default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
+        }
         flash('ok', $msg);
     } catch (ApiException $e) {
         flash('error', $e->getMessage());
@@ -122,12 +171,12 @@ function handlePost(Ctx $c): never
 function viewLogin(Ctx $c): string
 {
     $boot = Http::isLocalhost() && !Users::adminExists() && Config::get('security.allow_localhost_bootstrap', true);
-    $h = '<section class="card narrow hero"><div class="mascot" aria-hidden="true">🏺</div><h2>관리자 로그인</h2><p class="dim">게임과 같은 계정으로 로그인해요. 5번 틀리면 잠시 잠겨요.</p>';
+    $h = '<section class="card narrow hero"><div class="mascot" aria-hidden="true">🏺</div><h2>관리자 로그인</h2><p class="dim">체험관과 같은 계정으로 로그인해요. 5번 틀리면 잠시 잠겨요.</p>';
     $h .= '<form method="post" action="admin.php" class="stack">' . csrfField() . '<input type="hidden" name="action" value="login">'
         . '<label>아이디(닉네임) 또는 이메일<input name="login" autocomplete="username" required maxlength="120"></label>'
         . '<label>비밀번호<input type="password" name="password" autocomplete="current-password" required maxlength="128"></label>'
         . '<button class="btn primary" type="submit">🔐 로그인</button></form>';
-    if ($boot) $h .= '<p class="notice">🌱 아직 관리자가 없어요. 이 서버 PC에서 게임 계정으로 로그인하면 <b>첫 관리자로 지정</b>할 수 있어요.</p>';
+    if ($boot) $h .= '<p class="notice">🌱 아직 관리자가 없어요. 이 서버 PC에서 체험관 계정으로 로그인하면 <b>첫 관리자로 지정</b>할 수 있어요. (install.php 로 설치하면 관리자가 함께 만들어져요.)</p>';
     return $h . '</section>';
 }
 
@@ -149,15 +198,15 @@ function viewOverview(): string
 {
     $s = Stats::collect();
     $tiles = [
-        ['👥', '가입자', $s['users']], ['🟢', '접속 중', $s['online']], ['🆕', '오늘 가입', $s['usersToday']], ['🎮', '오늘 플레이', $s['activeToday']],
+        ['👥', '가입자', $s['users']], ['🟢', '접속 중', $s['online']], ['🆕', '오늘 가입', $s['usersToday']], ['🧒', '오늘 체험', $s['activeToday']],
         ['💾', '저장 데이터', $s['saves']], ['🚨', '열린 신고', $s['chatReports']], ['🛡️', '오늘 거부된 저장', $s['rejectedSavesToday']], ['⛔', '정지 계정', $s['bannedUsers']],
-        ['🏆', '퀘스트 완료', $s['questCompletions']], ['🌾', '수확', $s['harvests']], ['🏺', '발효 수령', $s['ferments']], ['📝', '작업일지', $s['journals']],
-        ['📷', '업로드 사진', $s['uploads']], ['💬', '채팅(24시간)', $s['chatMessages']],
+        ['⚡', '구독 이용 중', $s['subsActive']], ['💳', '오늘 결제', $s['ordersToday']], ['🏆', '퀘스트 완료', $s['questCompletions']], ['🌾', '수확', $s['harvests']],
+        ['🏺', '발효 수령', $s['ferments']], ['📝', '작업일지', $s['journals']], ['📷', '업로드 사진', $s['uploads']], ['💬', '채팅(24시간)', $s['chatMessages']],
     ];
     $h = '<div class="tiles">';
-    foreach ($tiles as $i => [$ico, $label, $v]) $h .= '<div class="tile d' . ($i % 7) . '"><span class="ico" aria-hidden="true">' . $ico . '</span><b>' . e(num($v)) . '</b><small>' . e($label) . '</small></div>';
+    foreach ($tiles as $i => $t) $h .= '<div class="tile d' . ($i % 7) . '"><span class="ico" aria-hidden="true">' . $t[0] . '</span><b>' . e(num($t[2])) . '</b><small>' . e($t[1]) . '</small></div>';
     $h .= '</div><div class="grid2">';
-    $max = max(1, ...array_values($s['levels']));
+    $max = max(1, max(array_values($s['levels'])));
     $h .= '<section class="card"><h3>⭐ 레벨 분포</h3>';
     foreach ($s['levels'] as $k => $n) $h .= '<div class="barrow"><span>' . e($k) . '</span><meter min="0" max="' . e($max) . '" value="' . e($n) . '"></meter><b>' . e(num($n)) . '</b></div>';
     $h .= '</section><section class="card"><h3>🗺️ 지금 어느 구역에 있나요?</h3>';
@@ -166,10 +215,10 @@ function viewOverview(): string
     $h .= '</section></div>';
     $hc = Health::collect(false);
     $h .= '<section class="card"><h3>🩺 시스템 점검 요약 ' . badge($hc['status']) . '</h3><p class="dim">정상 ' . e($hc['summary']['ok']) . ' · 주의 ' . e($hc['summary']['warn']) . ' · 위험 ' . e($hc['summary']['fail']) . ' — <a href="admin.php?tab=health">자세히 보기 →</a></p>';
-    $bad = array_filter($hc['checks'], fn ($x) => $x['status'] !== 'ok');
-    if ($bad) { $h .= '<ul class="checklist">'; foreach (array_slice($bad, 0, 6) as $x) $h .= '<li>' . badge($x['status']) . ' <b>' . e($x['label']) . '</b> <span class="dim">' . e($x['hint'] ?: $x['value']) . '</span></li>'; $h .= '</ul>'; }
-    $h .= '</section><div class="grid2"><section class="card"><h3>🆕 최근 가입</h3>' . table(['닉네임', '권한', '레벨', '상태', '가입', '마지막 접속'], array_map(fn ($r) => [$r['nickname'], $r['role'], 'Lv.' . $r['level'], $r['status'], $r['joined'], $r['lastLogin']], $s['recentUsers'])) . '</section>';
-    $h .= '<section class="card"><h3>📜 최근 감사 로그</h3>' . table(['이벤트', '등급', '대상', '시각'], array_map(fn ($r) => [$r['event'], $r['severity'], $r['user'], $r['at']], $s['recentAudit'])) . '</section></div>';
+    $bad = array_filter($hc['checks'], function ($x) { return $x['status'] !== 'ok'; });
+    if ($bad) { $h .= '<ul class="checklist">'; foreach (array_slice($bad, 0, 6) as $x) $h .= '<li>' . badge($x['status']) . ' <b>' . e($x['label']) . '</b> <span class="dim">' . e($x['hint'] !== '' ? $x['hint'] : $x['value']) . '</span></li>'; $h .= '</ul>'; }
+    $h .= '</section><div class="grid2"><section class="card"><h3>🆕 최근 가입</h3>' . table(['닉네임', '권한', '레벨', '상태', '가입', '마지막 접속'], array_map(function ($r) { return [$r['nickname'], $r['role'], 'Lv.' . $r['level'], $r['status'], $r['joined'], $r['lastLogin']]; }, $s['recentUsers'])) . '</section>';
+    $h .= '<section class="card"><h3>📜 최근 감사 로그</h3>' . table(['이벤트', '등급', '대상', '시각'], array_map(function ($r) { return [$r['event'], $r['severity'], $r['user'], $r['at']]; }, $s['recentAudit'])) . '</section></div>';
     return $h;
 }
 
@@ -186,10 +235,10 @@ function table(array $head, array $rows, string $empty = '기록이 없어요.')
 function viewHealth(): string
 {
     $hc = Health::collect(true);
-    $groups = ['php' => '🐘 PHP', 'db' => '🗄️ 데이터베이스', 'files' => '📁 파일·폴더', 'security' => '🛡️ 보안', 'server' => '🖥️ 웹 서버', 'app' => '🎮 앱'];
-    $h = '<section class="card"><h3>🩺 종합 상태 ' . badge($hc['status']) . '</h3><p class="dim">PHP ' . e($hc['php']['version']) . ' (' . e($hc['php']['sapi']) . ', ' . e($hc['php']['os']) . ') · 앱 v' . e($hc['app']['version']) . ' · 설치 경로 ' . e($hc['app']['basePath']) . ' · ' . e(when($hc['generatedAt'])) . '</p></section>';
+    $groups = ['php' => '🐘 PHP', 'db' => '🗄️ 데이터베이스', 'files' => '📁 파일·폴더', 'security' => '🛡️ 보안', 'server' => '🖥️ 웹 서버', 'app' => '🏺 체험관'];
+    $h = '<section class="card"><h3>🩺 종합 상태 ' . badge($hc['status']) . '</h3><p class="dim">PHP ' . e($hc['php']['version']) . ' (' . e($hc['php']['sapi']) . ', ' . e($hc['php']['os']) . ', ' . e($hc['php']['bits']) . '비트) · 앱 v' . e($hc['app']['version']) . ' · 설치 경로 ' . e($hc['app']['basePath']) . ' · ' . e(when($hc['generatedAt'])) . '</p></section>';
     foreach ($groups as $g => $title) {
-        $rows = array_filter($hc['checks'], fn ($x) => $x['group'] === $g);
+        $rows = array_filter($hc['checks'], function ($x) use ($g) { return $x['group'] === $g; });
         if (!$rows) continue;
         $h .= '<section class="card"><h3>' . e($title) . '</h3><div class="tablewrap"><table><thead><tr><th>항목</th><th>상태</th><th>값</th><th>안내</th></tr></thead><tbody>';
         foreach ($rows as $x) $h .= '<tr><td><b>' . e($x['label']) . '</b></td><td>' . badge($x['status']) . '</td><td>' . e(is_scalar($x['value']) ? $x['value'] : json_encode($x['value'], JSON_UNESCAPED_UNICODE)) . '</td><td class="dim">' . e($x['hint']) . '</td></tr>';
@@ -200,8 +249,8 @@ function viewHealth(): string
 
 function viewUsers(): string
 {
-    $q = is_string($_GET['q'] ?? null) ? mb_substr(trim($_GET['q']), 0, 60) : '';
-    $page = max(0, min(10000, (int) ($_GET['p'] ?? 0)));
+    $q = isset($_GET['q']) && is_string($_GET['q']) ? mb_substr(trim($_GET['q']), 0, 60) : '';
+    $page = max(0, min(10000, (int) (isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : 0)));
     $where = '';
     $params = [];
     if ($q !== '') {
@@ -211,14 +260,15 @@ function viewUsers(): string
         $params = [$like, $like];
     }
     $rows = Db::all("SELECT u.id, u.email, u.nickname, u.role, u.status, u.muted_until, u.created_at, u.last_login_at, p.level, p.exp_total, p.coin,
-        (SELECT s.backup_saved_at FROM player_saves s WHERE s.user_id = u.id) AS backup_at, (SELECT s.rejects FROM player_saves s WHERE s.user_id = u.id) AS rejects
-        FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id $where ORDER BY u.id DESC LIMIT 51 OFFSET " . ($page * 50), $params);
+        (SELECT s.backup_saved_at FROM player_saves s WHERE s.user_id = u.id) AS backup_at, (SELECT s.rejects FROM player_saves s WHERE s.user_id = u.id) AS rejects,
+        (SELECT b.tier FROM subscriptions b WHERE b.user_id = u.id AND b.status IN ('active', 'past_due') AND b.expires_at > ?) AS sub_tier
+        FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id $where ORDER BY u.id DESC LIMIT 51 OFFSET " . ($page * 50), array_merge([Clock::ms()], $params));
     $more = count($rows) > 50;
     $rows = array_slice($rows, 0, 50);
     $now = Clock::ms();
     $h = '<section class="card"><form method="get" action="admin.php" class="search"><input type="hidden" name="tab" value="users"><input name="q" value="' . e($q) . '" placeholder="닉네임 또는 이메일 검색" maxlength="60"><button class="btn" type="submit">🔎 검색</button></form>';
     if (!$rows) return $h . '<p class="empty">🍃 사용자가 없어요.</p></section>';
-    $h .= '<div class="tablewrap"><table><thead><tr><th>#</th><th>닉네임</th><th>이메일</th><th>권한</th><th>상태</th><th>레벨</th><th>코인</th><th>저장 거부</th><th>가입</th><th>마지막 접속</th><th>관리</th></tr></thead><tbody>';
+    $h .= '<div class="tablewrap"><table><thead><tr><th>#</th><th>닉네임</th><th>이메일</th><th>권한</th><th>상태</th><th>레벨</th><th>코인</th><th>속도</th><th>저장 거부</th><th>가입</th><th>마지막 접속</th><th>관리</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $uid = (int) $r['id'];
         $muted = (int) $r['muted_until'] > $now;
@@ -227,10 +277,11 @@ function viewUsers(): string
             . ($r['status'] === 'banned' ? actionForm('unban', '정지 해제', ['uid' => $uid, 'q' => $q], 'btn', 'users') : actionForm('ban', '⛔ 이용 정지', ['uid' => $uid, 'q' => $q], 'btn danger', 'users'))
             . ($muted ? actionForm('mute', '채팅 제한 해제', ['uid' => $uid, 'minutes' => 0, 'q' => $q], 'btn', 'users') : actionForm('mute', '🔇 채팅 1시간 제한', ['uid' => $uid, 'minutes' => 60, 'q' => $q], 'btn ghost', 'users') . actionForm('mute', '🔇 채팅 하루 제한', ['uid' => $uid, 'minutes' => 1440, 'q' => $q], 'btn ghost', 'users'))
             . ((int) $r['backup_at'] > 0 ? actionForm('restore', '↩️ 직전 저장으로 되돌리기', ['uid' => $uid, 'q' => $q], 'btn ghost', 'users') : '')
+            . '<a class="btn ghost" href="admin.php?tab=sub&amp;uid=' . $uid . '">⚡ 구독 관리</a>'
             . '</div></details>';
         $h .= '<tr><td>' . $uid . '</td><td><b>' . e($r['nickname']) . '</b></td><td>' . e($r['email']) . '</td><td>' . ($r['role'] === 'admin' ? '<span class="badge gold">관리자</span>' : '사용자') . '</td><td>'
             . ($r['status'] === 'banned' ? '<span class="badge fail">정지</span>' : ($muted ? '<span class="badge warn">채팅 제한</span>' : '<span class="badge ok">정상</span>'))
-            . '</td><td>Lv.' . e($r['level'] ?? 1) . '</td><td>' . e(num($r['coin'] ?? 0)) . '</td><td>' . e(num($r['rejects'] ?? 0)) . '</td><td>' . e(when($r['created_at'])) . '</td><td>' . e(when($r['last_login_at'])) . '</td><td>' . $acts . '</td></tr>';
+            . '</td><td>Lv.' . e(isset($r['level']) ? $r['level'] : 1) . '</td><td>' . e(num(isset($r['coin']) ? $r['coin'] : 0)) . '</td><td>' . ((int) $r['sub_tier'] > 1 ? '<span class="badge gold">⚡' . (int) $r['sub_tier'] . '배</span>' : '기본') . '</td><td>' . e(num(isset($r['rejects']) ? $r['rejects'] : 0)) . '</td><td>' . e(when($r['created_at'])) . '</td><td>' . e(when($r['last_login_at'])) . '</td><td>' . $acts . '</td></tr>';
     }
     $h .= '</tbody></table></div><div class="row">';
     if ($page > 0) $h .= '<a class="btn ghost" href="admin.php?' . e(http_build_query(['tab' => 'users', 'q' => $q, 'p' => $page - 1])) . '">← 이전</a>';
@@ -238,23 +289,67 @@ function viewUsers(): string
     return $h . '</div></section>';
 }
 
+function viewSub(): string
+{
+    $now = Clock::ms();
+    $pre = isset($_GET['uid']) && is_string($_GET['uid']) && ctype_digit($_GET['uid']) ? (int) $_GET['uid'] : 0;
+    $tiers = Toss::tiers();
+    $h = '<div class="grid2"><section class="card"><h3>⚡ 수동 부여</h3><p class="dim small">학교·행사용으로 결제 없이 진행 속도 단계를 줄 수 있어요. 기존 기간이 남아 있으면 그 뒤에 이어 붙고, 단계가 다르면 지금부터 새로 시작해요. 감사 로그에 남아요.</p>'
+        . '<form method="post" action="admin.php" class="stack">' . csrfField() . '<input type="hidden" name="action" value="sub_grant"><input type="hidden" name="tab" value="sub">'
+        . '<label>사용자 (번호 · 닉네임 · 이메일)<input name="who" value="' . ($pre ? e($pre) : '') . '" required maxlength="120"></label>'
+        . '<label>단계<select name="tier">';
+    foreach ($tiers as $t => $v) $h .= '<option value="' . $t . '">' . e($v['name']) . ' (' . e(num($v['price'])) . '원/월 상당)</option>';
+    $h .= '</select></label><label>기간(일)<input name="days" value="30" inputmode="numeric" maxlength="4"></label><button class="btn primary" type="submit">⚡ 부여하기</button></form></section>';
+    $h .= '<section class="card"><h3>💳 결제 설정</h3><p class="dim">모드: <b>' . (Toss::mock() ? '모의 결제(mock)' : (Toss::liveKeys() ? '실결제(live)' : (Toss::keysConfigured() ? '가맹점 테스트 키' : '문서용 테스트 키'))) . '</b> · 이용 기간 ' . e(Toss::periodDays()) . '일 · 유예 ' . e(Toss::graceDays()) . '일</p><ul class="checklist">';
+    foreach ($tiers as $t => $v) $h .= '<li><b>' . e($v['name']) . '</b> <span class="dim">' . e(num($v['price'])) . '원 / ' . e(Toss::periodDays()) . '일</span></li>';
+    $h .= '</ul><p class="dim small">가격·키는 config/config.local.php 의 <code>toss</code> 항목이나 환경 변수(TFM_TOSS_*)로 바꿔요. 웹훅 주소: <code>' . e(Http::baseUrl()) . 'api/sub/webhook.php</code></p>'
+        . '<div class="row">' . actionForm('sub_renew', '🔁 지금 갱신 검사 실행', [], 'btn ghost', 'sub') . '</div><p class="dim small">하루 한 번 자동으로 돌리려면 Windows 작업 스케줄러에 <code>php.exe cli\\tfm.php sub:renew</code> 를 등록하세요.</p></section></div>';
+    $subs = Subscription::listAll(200);
+    $h .= '<section class="card"><h3>👥 구독 현황 (' . count($subs) . ')</h3>';
+    if (!$subs) $h .= '<p class="empty">🍃 아직 구독이 없어요.</p>';
+    else {
+        $h .= '<div class="tablewrap"><table><thead><tr><th>#</th><th>닉네임</th><th>단계</th><th>상태</th><th>만료</th><th>자동 갱신</th><th>마지막 주문</th><th>처리</th></tr></thead><tbody>';
+        foreach ($subs as $s) {
+            $live = in_array((string) $s['status'], ['active', 'past_due'], true) && (int) $s['expires_at'] + Toss::graceDays() * 86400000 > $now;
+            $acts = '<details class="acts"><summary>⚙️ 처리</summary><div class="actgrid">'
+                . ($live ? actionForm('sub_revoke', '⛔ 해지 (기본 속도로)', ['uid' => (int) $s['user_id']], 'btn danger', 'sub') : '')
+                . ((int) $s['auto_renew'] === 1 ? actionForm('sub_renew', '🔁 지금 갱신 시도', ['uid' => (int) $s['user_id'], 'force' => 1], 'btn ghost', 'sub') : '')
+                . '<a class="btn ghost" href="admin.php?tab=sub&amp;uid=' . (int) $s['user_id'] . '">⚡ 부여/연장</a></div></details>';
+            $h .= '<tr><td>' . (int) $s['user_id'] . '</td><td><b>' . e($s['nickname']) . '</b><br><span class="dim small">' . e($s['email']) . '</span></td><td>' . ($live ? '<span class="badge gold">⚡' . (int) $s['tier'] . '배</span>' : '기본') . '</td><td>' . e(isset(SUB_STATUS[$s['status']]) ? SUB_STATUS[$s['status']] : $s['status']) . '</td><td>' . e(when($s['expires_at'])) . '</td><td>' . ((int) $s['auto_renew'] === 1 ? '켬' : '꺼짐') . '</td><td class="small">' . e($s['last_order_id']) . '</td><td>' . $acts . '</td></tr>';
+        }
+        $h .= '</tbody></table></div>';
+    }
+    $h .= '</section>';
+    $orders = Subscription::listOrders(100);
+    $h .= '<section class="card"><h3>🧾 주문 (최근 100)</h3>';
+    if (!$orders) return $h . '<p class="empty">🍃 주문이 없어요.</p></section>';
+    $h .= '<div class="tablewrap"><table><thead><tr><th>주문 번호</th><th>사용자</th><th>단계</th><th>금액</th><th>종류</th><th>상태</th><th>수단</th><th>토스 상태</th><th>요청</th><th>승인</th><th>영수증</th></tr></thead><tbody>';
+    foreach ($orders as $o) {
+        $receipt = (string) $o['receipt_url'];
+        $okUrl = preg_match('#^https://[a-z0-9.\-]+\.tosspayments\.com/#i', $receipt) === 1;
+        $h .= '<tr><td class="small">' . e($o['order_id']) . '</td><td>' . e(isset($o['nickname']) ? $o['nickname'] : '#' . $o['user_id']) . '</td><td>' . (int) $o['tier'] . '배</td><td>' . e(num($o['amount'])) . '원</td><td>' . e(isset(ORDER_KIND[$o['kind']]) ? ORDER_KIND[$o['kind']] : $o['kind']) . '</td><td>' . e(isset(ORDER_STATUS[$o['status']]) ? ORDER_STATUS[$o['status']] : $o['status']) . '</td><td>' . e($o['method']) . '</td><td>' . e($o['toss_status']) . '</td><td>' . e(when($o['requested_at'])) . '</td><td>' . e(when($o['approved_at'])) . '</td><td>' . ($okUrl ? '<a href="' . e($receipt) . '" rel="noopener noreferrer">보기</a>' : '-') . '</td></tr>';
+    }
+    return $h . '</tbody></table></div></section>';
+}
+
 function viewModeration(): string
 {
-    $all = ($_GET['show'] ?? '') === 'all';
+    $all = (isset($_GET['show']) ? $_GET['show'] : '') === 'all';
     $reports = Db::all('SELECT r.*, ru.nickname AS reporter, m.hidden AS msg_hidden FROM chat_reports r LEFT JOIN users ru ON ru.id = r.reporter_id LEFT JOIN chat_messages m ON m.id = r.message_id '
         . ($all ? '' : "WHERE r.status = 'open' ") . "ORDER BY CASE WHEN r.status = 'open' AND r.reason = 'kid' THEN 0 ELSE 1 END, r.id DESC LIMIT 100"); // open child reports first
     $h = '<section class="card"><h3>🚨 신고 ' . ($all ? '(전체)' : '(처리 대기)') . '</h3><p class="row"><a class="btn ghost" href="admin.php?tab=moderation' . ($all ? '' : '&amp;show=all') . '">' . ($all ? '처리 대기만 보기' : '전체 보기') . '</a></p>';
     if (!$reports) $h .= '<p class="empty">🎉 처리할 신고가 없어요.</p>';
     else {
         $h .= '<div class="tablewrap"><table><thead><tr><th>#</th><th>대상</th><th>사유</th><th>메시지</th><th>메모</th><th>신고자</th><th>시각</th><th>상태</th><th>처리</th></tr></thead><tbody>';
+        $statusKo = ['open' => '대기', 'resolved' => '완료', 'dismissed' => '기각'];
         foreach ($reports as $r) {
-            $tid = (int) ($r['target_user_id'] ?? 0);
+            $tid = (int) (isset($r['target_user_id']) ? $r['target_user_id'] : 0);
             $acts = '<details class="acts"><summary>⚙️ 처리</summary><div class="actgrid">'
                 . ($r['status'] === 'open' ? actionForm('report', '✅ 처리 완료', ['rid' => $r['id'], 'status' => 'resolved'], 'btn', 'moderation') . actionForm('report', '기각', ['rid' => $r['id'], 'status' => 'dismissed'], 'btn ghost', 'moderation') : actionForm('report', '다시 열기', ['rid' => $r['id'], 'status' => 'open'], 'btn ghost', 'moderation'))
                 . ($r['message_id'] ? ((int) $r['msg_hidden'] ? actionForm('unhide', '메시지 다시 보이기', ['mid' => $r['message_id']], 'btn ghost', 'moderation') : actionForm('hide', '🙈 메시지 숨기기', ['mid' => $r['message_id']], 'btn', 'moderation')) : '')
                 . ($tid ? actionForm('mute', '🔇 대상 채팅 1시간 제한', ['uid' => $tid, 'minutes' => 60], 'btn ghost', 'moderation') . actionForm('ban', '⛔ 대상 이용 정지', ['uid' => $tid], 'btn danger', 'moderation') : '')
                 . '</div></details>';
-            $h .= '<tr><td>' . (int) $r['id'] . '</td><td><b>' . e($r['target_name']) . '</b></td><td>' . e(REASONS[$r['reason']] ?? $r['reason']) . '</td><td class="msg">' . e($r['message_text']) . ((int) ($r['msg_hidden'] ?? 0) ? ' <span class="badge warn">숨김</span>' : '') . '</td><td class="dim memo">' . e($r['memo']) . '</td><td>' . e($r['reporter'] ?? '-') . '</td><td>' . e(when($r['created_at'])) . '</td><td>' . e(['open' => '대기', 'resolved' => '완료', 'dismissed' => '기각'][$r['status']] ?? $r['status']) . '</td><td>' . $acts . '</td></tr>';
+            $h .= '<tr><td>' . (int) $r['id'] . '</td><td><b>' . e($r['target_name']) . '</b></td><td>' . e(isset(REASONS[$r['reason']]) ? REASONS[$r['reason']] : $r['reason']) . '</td><td class="msg">' . e($r['message_text']) . ((int) (isset($r['msg_hidden']) ? $r['msg_hidden'] : 0) ? ' <span class="badge warn">숨김</span>' : '') . '</td><td class="dim memo">' . e($r['memo']) . '</td><td>' . e(isset($r['reporter']) ? $r['reporter'] : '-') . '</td><td>' . e(when($r['created_at'])) . '</td><td>' . e(isset($statusKo[$r['status']]) ? $statusKo[$r['status']] : $r['status']) . '</td><td>' . $acts . '</td></tr>';
         }
         $h .= '</tbody></table></div>';
     }
@@ -272,14 +367,14 @@ function viewModeration(): string
 
 function viewAudit(): string
 {
-    $ev = is_string($_GET['ev'] ?? null) && preg_match('/^[a-z_]{1,40}$/', $_GET['ev']) ? $_GET['ev'] : '';
-    $sev = is_string($_GET['sev'] ?? null) && in_array($_GET['sev'], ['info', 'warn', 'alert'], true) ? $_GET['sev'] : '';
+    $ev = isset($_GET['ev']) && is_string($_GET['ev']) && preg_match('/^[a-z_]{1,40}$/', $_GET['ev']) ? $_GET['ev'] : '';
+    $sev = isset($_GET['sev']) && is_string($_GET['sev']) && in_array($_GET['sev'], ['info', 'warn', 'alert'], true) ? $_GET['sev'] : '';
     $w = [];
     $p = [];
     if ($ev !== '') { $w[] = 'a.event = ?'; $p[] = $ev; }
     if ($sev !== '') { $w[] = 'a.severity = ?'; $p[] = $sev; }
     // pages go by id (entries older than ?before=): the log grows while it is read, so an offset would shift
-    $before = is_string($_GET['before'] ?? null) && ctype_digit($_GET['before']) ? (int) $_GET['before'] : 0;
+    $before = isset($_GET['before']) && is_string($_GET['before']) && $_GET['before'] !== '' && ctype_digit($_GET['before']) ? (int) $_GET['before'] : 0;
     if ($before > 0) { $w[] = 'a.id < ?'; $p[] = $before; }
     $rows = Db::all('SELECT a.*, u.nickname AS subject, ac.nickname AS actor FROM audit_log a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN users ac ON ac.id = a.actor_id '
         . ($w ? 'WHERE ' . implode(' AND ', $w) . ' ' : '') . 'ORDER BY a.id DESC LIMIT 201', $p);
@@ -291,9 +386,9 @@ function viewAudit(): string
     $h .= '</select><select name="sev"><option value="">모든 등급</option>';
     foreach (['info' => '정보', 'warn' => '주의', 'alert' => '경고'] as $k => $v) $h .= '<option value="' . $k . '"' . ($k === $sev ? ' selected' : '') . '>' . $v . '</option>';
     $h .= '</select><button class="btn" type="submit">필터</button></form>';
-    $h .= table(['#', '시각', '이벤트', '등급', '대상', '처리자', 'IP', '내용'], array_map(fn ($r) => [
-        $r['id'], when($r['created_at']), $r['event'], $r['severity'], $r['subject'] ?? ($r['user_id'] ? '#' . $r['user_id'] : '-'), $r['actor'] ?? '-', $r['ip'], mb_substr((string) $r['detail'], 0, 180),
-    ], $rows));
+    $h .= table(['#', '시각', '이벤트', '등급', '대상', '처리자', 'IP', '내용'], array_map(function ($r) {
+        return [$r['id'], when($r['created_at']), $r['event'], $r['severity'], isset($r['subject']) ? $r['subject'] : ($r['user_id'] ? '#' . $r['user_id'] : '-'), isset($r['actor']) ? $r['actor'] : '-', $r['ip'], mb_substr((string) $r['detail'], 0, 180)];
+    }, $rows));
     $h .= '<div class="row">';
     if ($before > 0) $h .= '<a class="btn ghost" href="admin.php?' . e(http_build_query(['tab' => 'audit', 'ev' => $ev, 'sev' => $sev])) . '">← 처음</a>';
     if ($more) $h .= '<a class="btn ghost" href="admin.php?' . e(http_build_query(['tab' => 'audit', 'ev' => $ev, 'sev' => $sev, 'before' => (int) $rows[count($rows) - 1]['id']])) . '">다음 →</a>';
@@ -304,20 +399,20 @@ function viewAudit(): string
 function viewMaintenance(): string
 {
     $driver = Db::driver();
-    $h = '<div class="grid2"><section class="card"><h3>🧹 정리 작업</h3><p class="dim">만료된 요청 제한 기록, 오래된 접속 정보·로그인 시도·감사 로그·채팅·로그 파일을 보관 기간에 맞춰 지워요.</p>'
+    $h = '<div class="grid2"><section class="card"><h3>🧹 정리 작업</h3><p class="dim">만료된 요청 제한 기록, 오래된 접속 정보·로그인 시도·감사 로그·채팅·로그 파일, 7일 넘게 대기 중인 주문을 보관 기간에 맞춰 지워요.</p>'
         . actionForm('cleanup', '🧹 지금 정리하기', [], 'btn primary', 'maintenance') . '</section>';
     $h .= '<section class="card"><h3>💾 백업</h3>';
     if ($driver === 'sqlite') {
-        $path = Db::sqlitePath();
+        $path = Db::dbFilePath();
         $h .= '<p>SQLite 파일: <code>' . e(basename($path)) . '</code> (' . e(num(is_file($path) ? filesize($path) : 0)) . ' bytes)</p>'
             . '<p class="dim small">서버 PC에서 <code>php cli/tfm.php backup</code> 을 실행하면 data/backups/ 에 안전한 사본(VACUUM INTO)이 만들어져요. data/secret.php 도 함께 보관하세요.</p>';
     } else {
-        $h .= '<p class="dim small">MySQL: <code>mysqldump -u root -p fermentation_metaverse &gt; backup.sql</code> 또는 phpMyAdmin → 내보내기.</p>';
+        $h .= '<p class="dim small">MySQL/MariaDB: <code>mysqldump -u root -p fermentation_metaverse &gt; backup.sql</code> 또는 phpMyAdmin → 내보내기.</p>';
     }
     $h .= '</section></div><section class="card"><h3>🗒️ 로그 파일</h3>';
-    $files = glob(Log::dir() . '/app-*.log.php') ?: [];
+    $files = glob(Log::dir() . DIRECTORY_SEPARATOR . 'app-*.log.php') ?: [];
     rsort($files);
-    $h .= table(['파일', '크기', '수정'], array_map(fn ($f) => [basename($f), num(filesize($f)) . ' bytes', date('Y-m-d H:i', (int) filemtime($f))], array_slice($files, 0, 30)), '로그 파일이 없어요.');
+    $h .= table(['파일', '크기', '수정'], array_map(function ($f) { return [basename($f), num(filesize($f)) . ' bytes', date('Y-m-d H:i', (int) filemtime($f))]; }, array_slice($files, 0, 30)), '로그 파일이 없어요.');
     return $h . '<p class="dim small">로그는 data/logs 에 있으며 웹에서는 열리지 않아요 (각 파일 첫 줄의 PHP 종료 코드). 서버 PC에서 텍스트 편집기로 확인하세요.</p></section>';
 }
 
@@ -327,15 +422,15 @@ function page(Ctx $c, string $tab, string $body, string $nonce, ?array $flash): 
     $nav = '';
     if ($c->isAdmin()) {
         $nav = '<nav class="tabs" aria-label="관리 메뉴">';
-        foreach (TABS as $k => [$ico, $label]) $nav .= '<a href="admin.php?tab=' . $k . '"' . ($k === $tab ? ' class="on" aria-current="page"' : '') . '><span aria-hidden="true">' . $ico . '</span> ' . e($label) . '</a>';
+        foreach (TABS as $k => $t) $nav .= '<a href="admin.php?tab=' . $k . '"' . ($k === $tab ? ' class="on" aria-current="page"' : '') . '><span aria-hidden="true">' . $t[0] . '</span> ' . e($t[1]) . '</a>';
         $nav .= '</nav>';
     }
     $who = $c->user ? '<div class="who"><span class="avatar" aria-hidden="true">' . e(mb_substr((string) $c->user['nickname'], 0, 1)) . '</span><span><b>' . e($c->user['nickname']) . '</b><small>' . ($c->isAdmin() ? '👑 관리자' : '체험객') . '</small></span>' . actionForm('logout', '로그아웃', [], 'btn ghost sm') . '</div>' : '';
-    $fl = $flash ? '<div class="flash ' . e($flash['type'] ?? 'ok') . '" role="status">' . e($flash['msg'] ?? '') . '</div>' : '';
+    $fl = $flash ? '<div class="flash ' . e(isset($flash['type']) ? $flash['type'] : 'ok') . '" role="status">' . e(isset($flash['msg']) ? $flash['msg'] : '') . '</div>' : '';
     return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">'
         . '<title>관리자 센터 · 전통발효체험관 메타버스</title><style nonce="' . e($nonce) . '">' . css() . '</style></head><body>'
         . '<header class="top"><div class="brand"><span class="logo" aria-hidden="true">🏺</span><div><h1>전통발효체험관 <em>관리자 센터</em></h1><p>METAVERSE · ' . e(strtoupper(Db::driverSafe())) . ' · v' . e(TFM_VERSION) . '</p></div></div>' . $who . '</header>'
-        . $nav . '<main>' . $fl . $body . '</main><footer>🔒 이 페이지는 스크립트 없이 동작하며 모든 작업은 감사 로그에 기록됩니다. · <a href="./">🎮 게임으로 돌아가기</a></footer></body></html>';
+        . $nav . '<main>' . $fl . $body . '</main><footer>🔒 이 페이지는 스크립트 없이 동작하며 모든 작업은 감사 로그에 기록됩니다. · <a href="./">🏺 체험관으로 돌아가기</a></footer></body></html>';
 }
 
 function css(): string
@@ -385,18 +480,19 @@ try {
     $method = Http::method();
     if ($method === 'POST') handlePost($ctx);
     if (!in_array($method, ['GET', 'HEAD'], true)) throw new ApiException(405, 'METHOD_NOT_ALLOWED', '허용되지 않은 요청 방식이에요.', null, ['Allow: GET, POST']);
-    $tab = tabParam($_GET['tab'] ?? 'overview');
+    $tab = tabParam(isset($_GET['tab']) ? $_GET['tab'] : 'overview');
     if (!$ctx->user) $body = viewLogin($ctx);
     elseif (!$ctx->isAdmin()) $body = viewNoAccess($ctx);
     else {
-        $body = match ($tab) {
-            'health' => viewHealth(),
-            'users' => viewUsers(),
-            'moderation' => viewModeration(),
-            'audit' => viewAudit(),
-            'maintenance' => viewMaintenance(),
-            default => viewOverview(),
-        };
+        switch ($tab) {
+            case 'health': $body = viewHealth(); break;
+            case 'users': $body = viewUsers(); break;
+            case 'sub': $body = viewSub(); break;
+            case 'moderation': $body = viewModeration(); break;
+            case 'audit': $body = viewAudit(); break;
+            case 'maintenance': $body = viewMaintenance(); break;
+            default: $body = viewOverview();
+        }
     }
     $flash = Session::get('flash');
     if ($flash) Session::set('flash', null);
@@ -404,7 +500,7 @@ try {
 } catch (ApiException $e) {
     $status = $e->status;
     foreach ($e->headers as $hd) header($hd);
-    $html = page($ctx ?? new Ctx(), 'overview', '<section class="card narrow hero"><div class="mascot" aria-hidden="true">🙈</div><h2>' . e($e->getMessage()) . '</h2><p class="row"><a class="btn" href="admin.php">다시 시도</a></p></section>', $NONCE, null);
+    $html = page($ctx !== null ? $ctx : new Ctx(), 'overview', '<section class="card narrow hero"><div class="mascot" aria-hidden="true">🙈</div><h2>' . e($e->getMessage()) . '</h2><p class="row"><a class="btn" href="admin.php">다시 시도</a></p></section>', $NONCE, null);
 } catch (Throwable $e) {
     $status = 500;
     $ref = Log::requestId();

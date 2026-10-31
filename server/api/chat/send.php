@@ -1,6 +1,6 @@
 <?php
 /**
- * POST api/chat/send.php  {text, channel:'all'|'local'}  → {message:{id, userId, nickname, text, channel, createdAt}}
+ * POST api/chat/send.php  {text, channel:'all'|'local'}  → {message:{id, userId, nickname, text, channel, createdAt}, piiMasked}
  * Accounts only. ≤ 120 chars, control/invisible characters removed, personal information (phone numbers,
  * e-mail, URLs / messenger ids, street addresses, school names) masked with 🔒 BEFORE storing (kid safety,
  * CONTRACT §12.4 — the response carries piiMasked:true so the client can show the mascot tip), bad words
@@ -10,23 +10,32 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
-use Tfm\{Api, ApiException, ChatFilter, Config, Ctx, Db, Log, Presence, Users};
+use Tfm\Api;
+use Tfm\ApiException;
+use Tfm\ChatFilter;
+use Tfm\Config;
+use Tfm\Ctx;
+use Tfm\Db;
+use Tfm\Log;
+use Tfm\Presence;
+use Tfm\Users;
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_send'], function (Ctx $c): array {
     $b = $c->json(4096);
     $max = (int) Config::get('chat.max_length', 120);
-    $text = Users::cleanText(is_string($b['text'] ?? null) ? $b['text'] : '', 1000);
+    $text = Users::cleanText(isset($b['text']) && is_string($b['text']) ? $b['text'] : '', 1000);
     if ($text === '') throw new ApiException(400, 'EMPTY_MESSAGE', '메시지를 입력해 주세요.');
     if (mb_strlen($text) > $max) throw new ApiException(400, 'MESSAGE_TOO_LONG', "메시지는 {$max}자까지 보낼 수 있어요.");
-    $channel = ($b['channel'] ?? 'all') === 'local' ? 'local' : 'all';
+    $channel = (isset($b['channel']) ? $b['channel'] : 'all') === 'local' ? 'local' : 'all';
     $u = $c->user;
     $now = $c->now;
     if ((int) $u['muted_until'] > $now) {
         $min = (int) ceil(((int) $u['muted_until'] - $now) / 60000);
-        // a long mute reads in hours (a day is not "1440분"); the game gets the end time and keeps a child's taps quiet
+        // a long mute reads in hours (a day is not "1440분"); the app gets the end time and keeps a child's taps quiet
         $left = $min >= 120 ? (int) ceil($min / 60) . '시간' : "{$min}분";
         throw new ApiException(403, 'MUTED', "채팅이 잠시 제한되었어요. ({$left} 남음)", ['until' => (int) $u['muted_until']]);
     }
+    $piiHits = 0;
     $masked = ChatFilter::mask(ChatFilter::maskPII($text, $piiHits));
     // the repeat-spam key is built from the MASKED text: the original (phone numbers, e-mails…) is never stored
     $key = ChatFilter::key($masked);
@@ -44,7 +53,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_send'], function (
         }
         return Db::insert('chat_messages', [
             'user_id' => $c->uid(), 'nickname' => (string) $u['nickname'], 'channel' => $channel, 'text' => $masked, 'text_key' => $key,
-            'x' => $pos['x'] ?? null, 'z' => $pos['z'] ?? null, 'hidden' => 0, 'created_at' => $now,
+            'x' => $pos ? $pos['x'] : null, 'z' => $pos ? $pos['z'] : null, 'hidden' => 0, 'created_at' => $now,
         ]);
     });
     if ($masked !== $text) Log::info('CHAT', 'message masked', ['uid' => $c->uid(), 'id' => $id, 'pii' => $piiHits]); // never log the original text

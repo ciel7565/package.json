@@ -212,6 +212,14 @@
     G.ui?.toast?.('소리가 꺼져 있어요. 🔊 소리 버튼을 눌러요!', { emoji: '🔇', type: 'info', sound: false });
   }
 
+  // a browser with no speechSynthesis (some in-app WebViews): a forced 🔊 tap tells the child, throttled (device-env-7)
+  let voiceHintAt = -1e9;
+  function voiceHint() {
+    const t = nowMs();
+    if (t - voiceHintAt < 8000) return;
+    voiceHintAt = t;
+    try { G.ui?.toast?.('이 브라우저는 읽어주기를 못 해요. 어른에게 크롬으로 열어 달라고 해요.', { type: 'info', emoji: '🔇', sound: false }); } catch (e) { /* toast optional */ }
+  }
   /** read text aloud (easy mode + voiceGuide + not muted, or opts.force for explicit 🔊 taps) */
   function say(text, opts = {}) {
     try {
@@ -240,7 +248,7 @@
       }
       Voice.recent.set(clean, t);
       emit('easy:say', { text: clean });
-      if (!Voice.ok()) return Promise.resolve(false);
+      if (!Voice.ok()) { if (force) voiceHint(); return Promise.resolve(false); }
       return new Promise((resolve) => Voice.enqueue({ text: clean, resolve, priority: Number(opts.priority) || 0, interrupt: opts.interrupt !== false, rate: opts.rate }));
     } catch (e) {
       G.log.debug('UI', 'easy.say failed', e);
@@ -313,9 +321,9 @@
   const GATE_NO_CACHE = new Set(['logout', 'devcenter', 'admin', 'delete-account']);
   const GATE_DANGER = new Set(['kid-chat', 'parent-gate', 'easy-off', 'reset', 'import', 'forget']);
   // gated actions that open a grown-up screen right after the pass (the others only serve their own action)
-  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register']);
+  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register', 'subscription', 'devcenter']);
   // the grown-up screens a session may live on (04-ui passes the modal's className with ui:modal-open)
-  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal)(\s|$)/;
+  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal|app-sub-modal)(\s|$)/;
   // session ends that mean the grown-up left: the screens the pass opened close with it (lockGate)
   const GATE_LEFT = new Set(['hidden', 'expired']);
   // wrong / wt / until: the in-memory copy of the persisted round (used when site storage is blocked)
@@ -412,6 +420,8 @@
     return pass / rounds;
   }
 
+  // the developer center / debug panel are grown-up screens too (not modals): the gate session lives while one is open
+  const devOpen = () => { try { return !!(G.sys.devcenter && G.sys.devcenter.isOpen && G.sys.devcenter.isOpen()) || !!(G.app && G.app.debug && G.app.debug.open); } catch (e) { return false; } };
   // ---- grown-up session (what a pass unlocks, and for how long)
   function sessAlive() {
     // apply the screen rules right now as well (the 400 ms timer can lag behind on a busy main thread)
@@ -443,6 +453,7 @@
     const t = nowMs();
     if (t > s.until) { lockGate('expired'); return; }
     if (document.querySelector('.title-screen.parent')) { s.title = true; s.closedAt = 0; return; }
+    if (devOpen()) { s.dev = true; s.closedAt = 0; return; } // the open dev center / debug panel keeps the session alive
     if (s.title && !s.modals.size) { lockGate('screen-closed'); return; }
     if (s.modals.size) return;
     if (s.closedAt) { if (t - s.closedAt > 650) lockGate('screen-closed'); return; }
@@ -467,9 +478,12 @@
     const s = Gate.sess;
     const el = e.target instanceof Element ? e.target : null;
     if (!s || !el || !e.isTrusted) return;
-    const box = el.closest('.modal, .title-screen.parent');
+    const box = el.closest('.modal, .title-screen.parent, .dc-root, .app-debug');
     if (!box) return;
-    const mine = box.classList.contains('title-screen') ? s.title : [...s.modals].some((id) => G.ui?.modal?.get?.(id)?.el === box);
+    let mine;
+    if (box.classList.contains('title-screen')) mine = s.title;
+    else if (box.classList.contains('dc-root') || box.classList.contains('app-debug')) { mine = devOpen(); if (mine) s.dev = true; }
+    else mine = [...s.modals].some((id) => G.ui?.modal?.get?.(id)?.el === box);
     if (mine) s.until = Math.max(s.until, nowMs() + GATE_IDLE);
   };
   for (const ev of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(ev, onAdultInput, { capture: true, passive: true });
@@ -497,6 +511,8 @@
     const adultOpen = () => [...s.modals].some((id) => ui?.get?.(id));
     for (let n = 0; n < 40 && adultOpen(); n++) { const top = ui?.top?.(); if (!top) break; try { top.close(); } catch (e) { break; } }
     for (const id of s.modals) { try { ui?.get?.(id)?.close?.(); } catch (e) { /* already gone */ } }
+    // the developer center / debug panel opened behind this session are grown-up screens too: close them (seams-lost-3)
+    if (s.dev) { try { G.sys.devcenter?.close?.(); } catch (e) { /* optional */ } try { G.app?.debug?.hide?.(); } catch (e) { /* optional */ } }
     // the title's 어른 메뉴 view: the dialogs opened from it (목록에서 지우기…) go with it
     if ((s.title || document.querySelector('.title-screen.parent')) && document.querySelector('.title-screen')) { try { ui?.closeAll?.(); } catch (e) { /* ignore */ } }
     emit('easy:gate-left', { why, title: !!s.title }); // 70-app: the title's 어른 메뉴 view goes back to the kid view
@@ -506,7 +522,7 @@
     const reason = String(opts.reason || 'settings').slice(0, 40);
     const finish = (ok, extra) => { emit('easy:gate', { reason, ok, ...(extra || {}) }); return ok; };
     if (!isOn() || S().parentGate === false) return Promise.resolve(finish(true, { skipped: true }));
-    if (canReuse(reason)) { Gate.sess.until = nowMs() + GATE_IDLE; return Promise.resolve(finish(true, { cached: true })); }
+    if (!opts.fresh && canReuse(reason)) { Gate.sess.until = nowMs() + GATE_IDLE; return Promise.resolve(finish(true, { cached: true })); }
     if (Gate.pending) return Gate.pending;
     if (!G.ui?.modal) return Promise.resolve(finish(false, { error: 'no-ui' }));
     Gate.pending = new Promise((resolve) => {
@@ -1345,16 +1361,29 @@
     const v = Play.owner ? Number(readPlay()[Play.owner]) : 0;
     if (Number.isFinite(v) && v > 0) Play.active = Math.min(v, 6 * 3600);
   }
+  // focus moves to the rest card's buttons while it is up; when it closes, keyboard / switch users get their place
+  // back — the control they were on, or the top dialog's first control (R3-ui-10)
+  function restoreFocus(pf) {
+    try {
+      if (pf && pf.isConnected && (pf.offsetParent !== null || pf.getClientRects().length > 0)) { pf.focus({ preventScroll: true }); return; }
+      const top = G.ui?.modal?.top?.();
+      const el = top && top.el ? top.el.querySelector('button:not([disabled]), [href], input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') : null;
+      el?.focus({ preventScroll: true });
+    } catch (e) { /* focus is best-effort */ }
+  }
   function hideReminder() {
     clearTimeout(Play.cardTimer);
     if (!Play.card) return;
     const c = Play.card; Play.card = null;
+    const pf = Play.cardFocus; Play.cardFocus = null;
     c.classList.add('out');
     setTimeout(() => c.remove(), 260);
     emit('easy:remind', { open: false });
+    if (!Rest.el) restoreFocus(pf); // the rest screen (when it takes over) focuses its own button instead
   }
   function showReminder() {
     hideReminder();
+    Play.cardFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     const min = Math.round(Number(S().playReminderMin) || 30);
     const rest = h('button', { type: 'button', class: 'easy-big-btn easy-btn-yes' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '😴'), h('span', null, '쉬기'));
     const goOn = h('button', { type: 'button', class: 'easy-big-btn easy-btn-no' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '▶️'), h('span', null, '계속'));
@@ -1385,10 +1414,13 @@
     G.ui.unblock('easy-rest');
     try { G.sys.audio?.unduck?.('easy-rest'); } catch (e) { /* audio optional */ }
     Play.active = 0; persistPlay();
+    const pf = Rest.prevFocus; Rest.prevFocus = null;
+    restoreFocus(pf);
     emit('easy:rest', { open: false });
   }
   function openRest() {
     if (Rest.el) return Rest.el;
+    Rest.prevFocus = (Play.cardFocus && Play.cardFocus.isConnected) ? Play.cardFocus : (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null);
     let left = 20;
     const step = h('p', { class: 'er-step' }, '숨을 크게 들이쉬어요');
     const btnLbl = h('span', null, `다시 놀기 (${left})`);
@@ -1674,6 +1706,7 @@
     stop: () => Voice.stop(),
     get speaking() { return !!Voice.cur; },
     speakable,
+    voiceAvailable: () => Voice.ok(),
     textOf,
     gate,
     gateStatus,
