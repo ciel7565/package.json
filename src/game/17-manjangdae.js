@@ -331,7 +331,7 @@
         ctx.fillStyle = '#2f261c'; ctx.fillText(t, x, y - 32);
       }
       ctx.fillStyle = '#4a3a2c'; ctx.font = `600 26px ${SANS}`;
-      ctx.fillText('망원경으로 구역을 하나씩 살펴보세요 · 게임 속 풍경 안내예요', w / 2, h - 52);
+      ctx.fillText('망원경으로 구역을 하나씩 살펴보세요 · 체험관 속 풍경 안내예요', w / 2, h - 52);
     });
   }
   function titleCardTexture() {
@@ -1478,7 +1478,7 @@
           onclick: () => { G.ui.modal.get('md-guide')?.close(); setTimeout(() => this.tour(tg.id), 60); },
         }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, tg.emoji), h('b', null, easy ? tg.short : tg.name), easy ? null : h('small', null, `${Math.round(tg.d)}m · ${this._dirName(tg)}`)))),
         // kids get one plain sentence; grown-ups also see the data's address note (display-only, not verified geography)
-        h('p', { class: 'md-guide-note' }, easy ? '게임 속 풍경이에요. 진짜 만장대와는 조금 달라요.' : '※ 게임 속 전망대와 풍경은 실제 지형·시설을 그대로 옮긴 것이 아니에요. ' + (G.data.meta?.addressNote || '')),
+        h('p', { class: 'md-guide-note' }, easy ? '체험관 속 풍경이에요. 진짜 만장대와는 조금 달라요.' : '※ 체험관 속 전망대와 풍경은 실제 지형·시설을 그대로 옮긴 것이 아니에요. ' + (G.data.meta?.addressNote || '')),
       );
       return G.ui.modal.open({
         id: 'md-guide', title: easy ? '만장대 안내' : '정선 만장대 전망 안내', icon: '🏔️', size: 'md', className: 'md-guide-modal', body,

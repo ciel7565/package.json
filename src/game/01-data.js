@@ -12,8 +12,8 @@ G.data.meta = {
   title: '전통발효체험관 메타버스',
   address: '정선군 화암면 소금강로 1511',
   addressNote: '참고 이미지에 표시된 주소입니다. 실제 지도 좌표·행정정보는 별도 검증 후 확정해야 합니다.',
-  disclaimer: '게임 속 발효·재배 수치는 교육용 가상 시뮬레이션이며 실제 식품 제조법이나 효과를 보장하지 않습니다.',
-  titleDisclaimer: '게임 내 칭호이며 실제 자격증·전문 자격과 무관합니다.',
+  disclaimer: '체험관 속 발효·재배 수치는 교육용 가상 시뮬레이션이며 실제 식품 제조법이나 효과를 보장하지 않습니다.',
+  titleDisclaimer: '체험관 칭호이며 실제 자격증·전문 자격과 무관합니다.',
 };
 
 // ------------------------------------------------------------------ zones (circles; smallest containing radius wins)
@@ -79,11 +79,11 @@ G.data.items = {
   ITEM_GOCHUGARU: { name: '고춧가루', type: 'ingredient', icon: '🌶️', price: 220, sell: 90, desc: '말린 고추를 빻은 가루입니다.' },
   ITEM_RICE: { name: '찹쌀', type: 'ingredient', icon: '🍚', price: 120, sell: 50, desc: '고추장·식초를 만들 때 쓰는 찹쌀입니다.' },
   // fermented foods
-  ITEM_DOENJANG: { name: '된장', type: 'fermented', icon: '🟤', price: 0, sell: 400, desc: '메주를 소금물에 담가 숙성시켜 만든 장입니다. (게임 체험 결과물)' },
-  ITEM_GANJANG: { name: '간장', type: 'fermented', icon: '🫙', price: 0, sell: 420, desc: '메주를 담근 소금물을 걸러 숙성시킨 장입니다. (게임 체험 결과물)' },
-  ITEM_GOCHUJANG: { name: '고추장', type: 'fermented', icon: '🔴', price: 0, sell: 500, desc: '고춧가루·찹쌀·메줏가루로 만든 장입니다. (게임 체험 결과물)' },
-  ITEM_KIMCHI: { name: '김치', type: 'fermented', icon: '🥬', price: 0, sell: 450, desc: '절인 채소에 양념을 버무려 발효시킨 음식입니다. (게임 체험 결과물)' },
-  ITEM_VINEGAR: { name: '전통 식초', type: 'fermented', icon: '🍶', price: 0, sell: 480, desc: '곡물을 발효시켜 만든 식초입니다. (게임 체험 결과물)' },
+  ITEM_DOENJANG: { name: '된장', type: 'fermented', icon: '🟤', price: 0, sell: 400, desc: '메주를 소금물에 담가 숙성시켜 만든 장입니다. (체험 결과물)' },
+  ITEM_GANJANG: { name: '간장', type: 'fermented', icon: '🫙', price: 0, sell: 420, desc: '메주를 담근 소금물을 걸러 숙성시킨 장입니다. (체험 결과물)' },
+  ITEM_GOCHUJANG: { name: '고추장', type: 'fermented', icon: '🔴', price: 0, sell: 500, desc: '고춧가루·찹쌀·메줏가루로 만든 장입니다. (체험 결과물)' },
+  ITEM_KIMCHI: { name: '김치', type: 'fermented', icon: '🥬', price: 0, sell: 450, desc: '절인 채소에 양념을 버무려 발효시킨 음식입니다. (체험 결과물)' },
+  ITEM_VINEGAR: { name: '전통 식초', type: 'fermented', icon: '🍶', price: 0, sell: 480, desc: '곡물을 발효시켜 만든 식초입니다. (체험 결과물)' },
   // tools
   ITEM_WATERING_CAN: { name: '물뿌리개', type: 'tool', icon: '🚿', price: 300, sell: 0, desc: '작물에 물을 줄 때 사용합니다. (가방에 있으면 자동 사용)' },
   ITEM_HOMI: { name: '호미', type: 'tool', icon: '⛏️', price: 300, sell: 0, desc: '씨앗을 심고 밭을 고를 때 쓰는 전통 농기구입니다.' },
@@ -158,7 +158,7 @@ G.data.fermentation = {
 };
 // Simple processing recipes (fermentation zone work table)
 G.data.crafts = {
-  CRAFT_MEJU: { name: '메주 빚기', icon: '🧱', in: { ITEM_BEAN: 3 }, out: { ITEM_MEJU: 1 }, exp: 40, desc: '콩 3개를 삶아 찧은 뒤 네모나게 빚어 메주를 만듭니다. (게임 과정 단순화)' },
+  CRAFT_MEJU: { name: '메주 빚기', icon: '🧱', in: { ITEM_BEAN: 3 }, out: { ITEM_MEJU: 1 }, exp: 40, desc: '콩 3개를 삶아 찧은 뒤 네모나게 빚어 메주를 만듭니다. (실제 과정을 단순화)' },
   CRAFT_GOCHUGARU: { name: '고춧가루 빻기', icon: '🌶️', in: { ITEM_PEPPER: 3 }, out: { ITEM_GOCHUGARU: 1 }, exp: 30, desc: '말린 고추 3개를 빻아 고춧가루를 만듭니다.' },
   CRAFT_HERB_TEA: { name: '허브 다발 묶기', icon: '💐', in: { ITEM_MINT: 2, ITEM_LAVENDER: 1 }, out: { ITEM_FLOWERPOT: 1 }, exp: 30, desc: '허브로 향기로운 화분 장식을 만듭니다.' },
 };
@@ -373,7 +373,7 @@ G.data.tips = [
   ['팁', '돌계단 길은 밧줄 난간을 따라 지그재그로 내려가요. 가고 싶은 곳을 누르면 길을 따라 알아서 걸어가요.'],
   ['팁', '날씨와 시간에 따라 장독의 발효 환경(온도·습도)이 달라져요.'],
   ['팁', '퀘스트 패널에서 “보상 받기”를 눌러야 보상이 지급돼요.'],
-  ['알림', '게임 속 발효·재배 수치는 교육용 가상 시뮬레이션입니다.'],
+  ['알림', '체험관 속 발효·재배 수치는 교육용 가상 시뮬레이션입니다.'],
 ];
 
 // ------------------------------------------------------------------ simulated visitors (local mode) & chat safety

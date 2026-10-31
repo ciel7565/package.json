@@ -2,7 +2,7 @@
   "name": "fermentation-metaverse",
   "version": "1.0.0",
   "private": true,
-  "description": "전통발효체험관 메타버스 — Three.js 기반 단일 HTML 3D 교육형 웹게임 (+ 선택형 PHP 서버 모드)",
+  "description": "전통발효체험관 메타버스 — Three.js 기반 단일 HTML 3D 교육형 체험관 (+ 선택형 PHP 서버 모드)",
   "type": "module",
   "scripts": {
     "build": "node tools/build.mjs",

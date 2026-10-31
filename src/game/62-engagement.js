@@ -1617,7 +1617,7 @@
         p.append(
           h('div', { class: 'eng-cert-head' }, h('div', { class: 'grow' }, h('b', null, '🎓 전통발효체험 수료증'), h('small', null, `증서 번호 ${e.certificate?.no || '-'} · 발급일 ${U.formatDate(e.certificate?.issuedAt || now())}`)), save, print),
           h('div', { class: 'eng-cert-frame' }, canvas),
-          h('div', { class: 'notice-box eng-note' }, `${G.data.meta?.titleDisclaimer || '게임 내 칭호이며 실제 자격과 무관합니다.'} 이 수료증은 게임 속 체험을 기념하는 증서로, 공식 교육 이수증이나 자격증이 아니에요.`));
+          h('div', { class: 'notice-box eng-note' }, `${G.data.meta?.titleDisclaimer || '체험관 칭호이며 실제 자격과 무관합니다.'} 이 수료증은 체험관 속 활동을 기념하는 증서로, 공식 교육 이수증이나 자격증이 아니에요.`));
         return;
       }
       const prog = G.sys.quest?.progress?.('QUEST001');
@@ -3202,8 +3202,8 @@
     goldSeal(ctx, 246, 930, 72);
     // disclaimer
     ctx.fillStyle = '#7d6a50'; ctx.font = `500 16px ${FONT}`;
-    ctx.fillText('※ 이 증서는 게임 속 체험을 기념하는 인증서로, 공식 교육 이수증이나 국가·민간 자격이 아닙니다.', W / 2, 1006);
-    ctx.fillText(`※ ${G.data.meta?.titleDisclaimer || '게임 내 칭호이며 실제 자격증·전문 자격과 무관합니다.'}`, W / 2, 1028);
+    ctx.fillText('※ 이 증서는 체험관 속 활동을 기념하는 인증서로, 공식 교육 이수증이나 국가·민간 자격이 아닙니다.', W / 2, 1006);
+    ctx.fillText(`※ ${G.data.meta?.titleDisclaimer || '체험관 칭호이며 실제 자격증·전문 자격과 무관합니다.'}`, W / 2, 1028);
     if (D.preview) {
       ctx.save();
       ctx.translate(W / 2, H / 2); ctx.rotate(-0.32);
@@ -3355,7 +3355,7 @@
     ctx.restore();
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#8a7356'; ctx.font = `600 20px ${FONT}`;
-    ctx.fillText('※ 게임 속 체험을 기념하는 상장이에요. 진짜 자격증은 아니에요.', W / 2, H - 70);
+    ctx.fillText('※ 체험관 놀이를 기념하는 상장이에요. 진짜 자격증은 아니에요.', W / 2, H - 70);
     if (D.preview) {
       ctx.save();
       ctx.translate(W / 2, H / 2 + 40); ctx.rotate(-0.28);

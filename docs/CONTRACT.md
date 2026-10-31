@@ -333,7 +333,7 @@ appearance option values: hair short|long|bun|ponytail|buzz|curly ; top tshirt|h
 
 ### 6.10 App shell (`70-app.js`, `70-app.css`)
 `G.app.start()` replaces devBoot: loading (progress per system + tips) → title screen in `#screen-root` over a cinematic
-camera orbit (METAVERSE / 전통발효체험관, 게임 시작·로그인·회원가입·게스트로 둘러보기) → auth (`G.auth`: local accounts in
+camera orbit (METAVERSE / 전통발효체험관, 만장대(시작)·로그인·회원가입·게스트로 둘러보기) → auth (`G.auth`: local accounts in
 localStorage with salted SHA-256 (crypto.subtle, fallback hash); server mode → `auth/register.php`, `auth/login.php`,
 `auth/logout.php`, `auth/me.php`) with validation (email format, nickname duplicate, password ≥ 8 with letters+digits,
 약관 동의) → `G.save.useProfile(profile, G.net.mode)` → `G.state = await G.save.load()` → `G.applyState()` →
@@ -746,7 +746,7 @@ server register ignores chosen play mode (70-app).
   skipped:true}` releases it. Any key / tap after 450 ms skips it.
 - **Telescope (`tour(startZoneId = 'ZONE_MAIN')`):** each zone is aimed at its largest building (gate ×4 weight; look
   height = ground + 8 m hall / 4.2 m gate / 3 m else); near targets get a closer, higher lens so the foreground fence
-  never hides them. Labels and the coach step back while scoping. The guide adds a kid line "게임 속 풍경이에요. 진짜
+  never hides them. Labels and the coach step back while scoping. The guide adds a kid line "체험관 속 풍경이에요. 진짜
   만장대와는 조금 달라요."
 - **`walkSpot(from?)`:** a 2.2–3 m deck spot in front of the camera, line-clear, on screen, preferring spots with no
   interactable prompt (telescope / board / marker) nearby. 70-app `_groundPoint()` (the onboarding "tap here" hand)

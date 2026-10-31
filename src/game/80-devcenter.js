@@ -214,8 +214,8 @@
   };
   const F = (name, owner, purpose) => ({ name, owner, purpose });
   const SOURCE = [
-    { dir: 'src/game', emoji: '🧠', desc: '게임 로직 조각(fragment) — 파일명 순서대로 한 클로저에 합쳐집니다', files: [
-      F('00-core.js', 'core', '로거·이벤트 버스·유틸·아이콘·시스템 등록·게임 루프·부팅 폴백'),
+    { dir: 'src/game', emoji: '🧠', desc: '체험관 로직 조각(fragment) — 파일명 순서대로 한 클로저에 합쳐집니다', files: [
+      F('00-core.js', 'core', '로거·이벤트 버스·유틸·아이콘·시스템 등록·메인 루프·부팅 폴백'),
       F('01-data.js', 'core', '콘텐츠 데이터: 구역·아이템·작물·레시피·NPC·퀘스트·업적·도감·팁·서버 검증 한도'),
       F('02-layout.js', 'core', '월드 배치 좌표(건물·밭·장독·안내판·포토존)와 앵커 조회 layout.get(id)'),
       F('03-state.js', 'core', '설정(기기 ↔ 프로필 키 분리·검증)·네트워크(G.net)·저장(G.save: 체크섬·백업·마이그레이션·가져오기)'),
@@ -311,7 +311,7 @@
       F('lib/SaveValidator.php', 'server', '저장 데이터 부정 진행 검증'),
       F('lib/GameData.php', 'server', 'data/game-data.json 보상표 읽기'),
       F('lib/ChatFilter.php', 'server', '채팅 욕설 필터 · 어린이 개인정보 가림(🔒)'),
-      F('lib/pii-rules.json', 'server', '개인정보 가림 규칙 목록 — tests/pii-sync.mjs 가 게임(60-social)에서 만들어요 (손으로 고치지 않기)'),
+      F('lib/pii-rules.json', 'server', '개인정보 가림 규칙 목록 — tests/pii-sync.mjs 가 체험관(60-social)에서 만들어요 (손으로 고치지 않기)'),
       F('lib/Presence.php', 'server', '접속자 관리'),
       F('lib/Upload.php', 'server', '업로드 검사·재인코딩'),
       F('lib/Admin.php', 'server', '관리자 기능·통계·상태 점검'),
@@ -326,10 +326,11 @@
       F('tools/smoke.mjs', 'core', '헤드리스 브라우저 스모크 테스트·스크린샷'),
       F('tools/package.mjs', 'core', '배포 zip 만들기 (엄격 빌드 + 소스)'),
       F('tools/kid-audit.mjs', 'devcenter', '쉬운 모드 화면 자동 점검 (QA용 · JSON + 표)'),
+      F('tools/text-audit.mjs', 'core', '금지 낱말 점검 (CONTRACT §14.3) — 소스·문서·빌드된 HTML 에 옛 호칭이 남아 있으면 실패'),
       F('tests/server-e2e.mjs', 'server', '서버 보안·기능 E2E 테스트 (개인정보 가림 벡터·DB 스팸 키 확인 포함)'),
-      F('tests/pii-vectors.json', 'server', '개인정보 가림 공통 테스트 벡터 — 서버 ChatFilter 와 게임 maskPII 가 같이 통과해야 해요'),
-      F('tests/pii-sync.mjs', 'server', '게임의 개인정보 가림 규칙 → server/lib/pii-rules.json 생성 (--check: 최신인지 확인)'),
-      F('tests/pii-client.mjs', 'server', '빌드된 게임의 maskPII·닉네임 검사를 공통 벡터로 확인 (서버 필터와 비교)'),
+      F('tests/pii-vectors.json', 'server', '개인정보 가림 공통 테스트 벡터 — 서버 ChatFilter 와 체험관 maskPII 가 같이 통과해야 해요'),
+      F('tests/pii-sync.mjs', 'server', '체험관의 개인정보 가림 규칙 → server/lib/pii-rules.json 생성 (--check: 최신인지 확인)'),
+      F('tests/pii-client.mjs', 'server', '빌드된 체험관의 maskPII·닉네임 검사를 공통 벡터로 확인 (서버 필터와 비교)'),
       F('tests/pii-server.php', 'server', '테스트용 CLI: 진짜 서버 필터(ChatFilter·닉네임 검사)를 실행 (웹에 올리지 않음)'),
       F('vendor/three-entry.js', 'core', 'three.js r170 + 애드온 번들 진입점'),
       F('src/template.html', 'core', 'HUD 뼈대 (빌드가 CSS·JS·글꼴·CSP 를 주입)'),
@@ -347,7 +348,7 @@
 
   /** CONTRACT §4 + phase-2 events: name -> [emitter, main listeners, description] */
   const EVENTS = {
-    'game:ready': ['app · core', 'engagement · companion · devcenter', '로그인 후 게임 시작'],
+    'game:ready': ['app · core', 'engagement · companion · devcenter', '로그인 후 체험 시작'],
     'game:login': ['app', 'engagement · progression', '로그인 {profile, isNew}'],
     'state:loaded': ['core', '여러 모듈', 'G.state 적용 완료'],
     'state:before-save': ['core', '플레이어·각 모듈', '저장 직전 동기화'],
@@ -1399,7 +1400,7 @@
   const firstKey = (o) => (o && typeof o === 'object' ? Object.keys(o)[0] : undefined);
   const fnOf = (obj, ...names) => { for (const n of names) if (typeof obj?.[n] === 'function') return obj[n].bind(obj); return null; };
   const KID_SCREENS = [
-    { id: 'hud', emoji: '🏠', label: '게임 화면 (HUD)', hud: true, fn: () => (G.state ? () => true : null) },
+    { id: 'hud', emoji: '🏠', label: '체험 화면 (HUD)', hud: true, fn: () => (G.state ? () => true : null) },
     { id: 'bag', emoji: '🎒', label: '가방', fn: () => fnOf(G.sys.inventory, 'open') },
     { id: 'shop', emoji: '🛒', label: '가게', fn: () => { const f = fnOf(G.sys.inventory, 'openShop'); return f && (() => f(firstKey(G.data.shops))); } },
     { id: 'sticker', emoji: '📖', label: '스티커북 (도감·업적)', fn: () => fnOf(G.sys.progression, 'openStickerbook', 'openHub', 'openCollection') },
@@ -2897,12 +2898,12 @@
         total += bytes;
         let kind = '기타', emoji = '📦';
         if (/^tfm\.v1\.save\..+\.bak$/.test(k)) { kind = '저장 백업'; emoji = '🗄️'; }
-        else if (/^tfm\.v1\.save\./.test(k)) { kind = '게임 저장'; emoji = '💾'; }
+        else if (/^tfm\.v1\.save\./.test(k)) { kind = '체험 기록'; emoji = '💾'; }
         else if (k === 'tfm.v1.accounts') { kind = '로컬 계정 (비밀번호 해시 · 내용 비공개)'; emoji = '🔐'; }
         else if (k === 'tfm.v1.settings') { kind = '기기 설정'; emoji = '⚙️'; }
         else if (k === 'tfm.v1.profiles') { kind = '최근 플레이 목록'; emoji = '🧑'; }
         else if (/^tfm\.v1\.dev\./.test(k)) { kind = '개발자 센터'; emoji = '🛠️'; }
-        else if (/^tfm\./.test(k)) { kind = '게임 환경값'; emoji = '🎮'; }
+        else if (/^tfm\./.test(k)) { kind = '체험관 환경값'; emoji = '🎮'; }
         rows.push({ key: k, bytes, kind, emoji });
       }
     } catch (e) { return { rows: [], total: 0, blocked: true }; }
@@ -3125,7 +3126,7 @@
       const label = CHEAT_LABEL[cmd] || cmd;
       const a = access();
       if (!a.ok) return { ok: false, msg: '권한이 없어 디버그 도구를 쓸 수 없어요.' };
-      if (NEEDS_STATE.has(cmd) && !G.state) return { ok: false, msg: '게임에 입장한 뒤에 쓸 수 있어요.' };
+      if (NEEDS_STATE.has(cmd) && !G.state) return { ok: false, msg: '체험관에 입장한 뒤에 쓸 수 있어요.' };
       let res;
       try { res = this._run(cmd, arg) || { ok: true, msg: label }; } catch (e) { G.log.error('DEV', `cheat ${cmd} failed`, e); res = { ok: false, msg: `실행하지 못했어요: ${String(e?.message || e).slice(0, 80)}` }; }
       const argText = arg == null ? '' : String(arg).slice(0, 24);
@@ -3719,7 +3720,7 @@
         ${card('data', '🔍', '데이터 검증', `<span data-countup="${H.lint.error}">${H.lint.error}</span><small> 오류</small>`, `경고 ${H.lint.warn} · 참고 ${H.lint.info}`, H.lint.error ? 'bad' : H.lint.warn ? 'warn' : 'ok')}
         ${testsCard}
         ${card('system', '⚡', 'FPS', `<span data-live="fps">${fps.cur}</span>`, `<span data-live="fps-sub">평균 ${fps.avg} · 최소 ${fps.min} · 최대 ${fps.max}</span>`, fps.cur >= 45 ? 'ok' : fps.cur >= 25 ? 'warn' : 'bad', `<span class="dc-stat-spark" data-live="spark">${sparkline(fps.series)}</span>`)}
-        ${card('save', '💾', '저장 데이터', st ? kb(stateSize()) : '<small>로그인 전</small>', st ? `마지막 저장 ${esc(ago(G.save?.lastSavedAt || st.savedAt))}${G.save?.dirty ? ' · 변경 있음' : ''}` : '게임에 입장하면 보여요', st ? 'ok' : 'info')}
+        ${card('save', '💾', '저장 데이터', st ? kb(stateSize()) : '<small>로그인 전</small>', st ? `마지막 저장 ${esc(ago(G.save?.lastSavedAt || st.savedAt))}${G.save?.dirty ? ' · 변경 있음' : ''}` : '체험관에 입장하면 보여요', st ? 'ok' : 'info')}
       </div>
       <div class="dc-grid2">
         <section class="dc-card dc-in" style="--i:2"><h4>🏗️ 빌드 정보</h4><dl class="dc-kv">${kvRows([
@@ -4014,7 +4015,7 @@
     if (Tour.running) return;
     // the tour closes whatever is open underneath the center (an unsent journal draft would be lost): ask first
     if (G.ui?.modal?.isOpen?.() || G.sys.photo?.active) {
-      const ok = await confirmBox({ title: '열려 있는 게임 창을 닫고 점검할까요?', message: '화면을 하나씩 열어 보려면 지금 열린 창(작성 중인 일기 등)을 먼저 닫아야 해요.', okText: '닫고 점검', emoji: '🎬' });
+      const ok = await confirmBox({ title: '열려 있는 체험관 창을 닫고 점검할까요?', message: '화면을 하나씩 열어 보려면 지금 열린 창(작성 중인 일기 등)을 먼저 닫아야 해요.', okText: '닫고 점검', emoji: '🎬' });
       if (!ok) return;
     }
     toast('주요 화면을 차례로 열어 점검해요. 끝나면 돌아와요 🎬', 'info', '👶');
@@ -4052,7 +4053,7 @@
       ${[...g.badNormalGeos.map((x) => `노멀 ${x.n}개 · ${x.obj}`), ...g.nanPosGeos.map((x) => `NaN 위치 ${x.n}개 · ${x.obj}`), ...g.flat.map((x) => `납작 ${x.scale.join('·')} · ${x.obj}`), ...g.flatInstMeshes.map((x) => `납작 인스턴스 ${x.n}/${x.count} · ${x.obj}`)].length ? `<ul class="dc-errlist">${[...g.badNormalGeos.map((x) => `노멀 ${x.n}개 · ${x.obj}`), ...g.nanPosGeos.map((x) => `NaN 위치 ${x.n}개 · ${x.obj}`), ...g.flat.map((x) => `납작 ${x.scale.join('·')} · ${x.obj}`), ...g.flatInstMeshes.map((x) => `납작 인스턴스 ${x.n}/${x.count} · ${x.obj}`)].slice(0, 12).map((t) => `<li><b>⛔</b><span>${esc(t)}</span></li>`).join('')}</ul>` : ''}
       <div class="dc-sub-h">🎞️ 후처리 순서 ${p.ok === false ? pill('bad', '⛔ NaN 청소가 블룸 뒤에 있어요') : p.ok ? pill('ok', '✅ 청소 → 블룸') : ''}</div>
       <div class="dc-chips dc-passes">${passTxt}</div>
-      <div class="dc-sub-h">🧪 NaN 주입 테스트 ${n ? (n.skip ? pill('skip', '⏭️ 건너뜀') : n.ok ? pill('ok', '✅ 통과') : pill('bad', '⛔ 실패')) : '<span class="muted small">(버튼을 눌러 실행 · 게임 화면은 바뀌지 않아요)</span>'}</div>
+      <div class="dc-sub-h">🧪 NaN 주입 테스트 ${n ? (n.skip ? pill('skip', '⏭️ 건너뜀') : n.ok ? pill('ok', '✅ 통과') : pill('bad', '⛔ 실패')) : '<span class="muted small">(버튼을 눌러 실행 · 체험 화면은 바뀌지 않아요)</span>'}</div>
       ${n && !n.skip ? `<div class="dc-nan"><figure><canvas data-nan="noScrub" width="64" height="64" aria-label="청소 없이"></canvas><figcaption>청소 없이<br><b>${(n.blackNoScrub * 100).toFixed(1)}%</b> 검정</figcaption></figure><span class="dc-arrow" aria-hidden="true">→</span><figure><canvas data-nan="scrub" width="64" height="64" aria-label="청소 후"></canvas><figcaption>NaN 청소 후<br><b>${(n.blackScrub * 100).toFixed(2)}%</b> 검정</figcaption></figure><p class="dc-note">${esc(n.detail || '')} · 셰이더: ${esc(n.source)} · ${n.ms.toFixed(0)} ms</p></div>` : n?.skip ? `<p class="dc-note">${esc(n.detail)}</p>` : ''}
       ${g.shaders.length ? `<details class="dc-details"><summary>커스텀 셰이더 ${g.shaders.length}개 — 0 나누기·normalize·pow·sqrt 를 쓰면 입력이 0/음수일 때를 막았는지 확인하세요</summary><div class="dc-chips">${g.shaders.map((x) => `<span class="chip">${esc(x.name)}${x.ops.length ? ` <small class="muted">${esc(x.ops.join(' · '))}</small>` : ''}</span>`).join('')}</div></details>` : ''}
       ${wdCardHtml()}
@@ -4155,7 +4156,7 @@
         <button type="button" class="dc-lint-big" data-dc="lint-sev" data-sev="warn" data-tone="${r.counts.warn ? 'warn' : 'ok'}" aria-pressed="${f.sev === 'warn'}"><b data-countup="${r.counts.warn}">${r.counts.warn}</b><span>⚠️ 경고</span></button>
         <button type="button" class="dc-lint-big" data-dc="lint-sev" data-sev="info" data-tone="info" aria-pressed="${f.sev === 'info'}"><b data-countup="${r.counts.info}">${r.counts.info}</b><span>💡 참고</span></button>
         <div class="dc-lint-meta">
-          <p>${r.counts.error ? '오류는 게임이 깨질 수 있는 잘못된 참조예요. 먼저 고쳐 주세요.' : '치명적인 데이터 오류가 없어요! 🎉'}</p>
+          <p>${r.counts.error ? '오류는 체험관이 깨질 수 있는 잘못된 참조예요. 먼저 고쳐 주세요.' : '치명적인 데이터 오류가 없어요! 🎉'}</p>
           <p class="muted small">${esc(dateTime(r.at))} 검사 · ${r.ms.toFixed(1)} ms</p>
           <button type="button" class="btn btn-primary btn-sm" data-dc="relint">🔁 다시 검사</button>
         </div>
@@ -4209,7 +4210,7 @@
           <button type="button" class="btn btn-soft btn-sm" data-dc="save-import">⬆️ 가져오기</button>
           <button type="button" class="btn btn-danger btn-sm" data-dc="save-reset">♻️ 진행 초기화</button>
         </div>
-        <p class="dc-note">가져온 파일은 검증·정규화(normalize)된 뒤 적용돼요.${server ? ' 서버 모드에서는 서버가 다시 검사해 부정 진행이면 서버 저장본으로 되돌려요.' : ''}</p>` : emptyBox('게임에 입장하면 저장 상태와 상태 트리를 볼 수 있어요.', 'sleepy')}
+        <p class="dc-note">가져온 파일은 검증·정규화(normalize)된 뒤 적용돼요.${server ? ' 서버 모드에서는 서버가 다시 검사해 부정 진행이면 서버 저장본으로 되돌려요.' : ''}</p>` : emptyBox('체험관에 입장하면 저장 상태와 상태 트리를 볼 수 있어요.', 'sleepy')}
       </section>
       ${st ? `<section class="dc-card dc-in" style="--i:1"><div class="dc-card-head"><h4>🌳 G.state 트리 <span class="muted">(읽기 전용 · 클릭해서 펼치기)</span></h4><button type="button" class="btn btn-ghost btn-sm" data-dc="tree-refresh">↻ 새로 읽기</button></div><div class="dc-tree" id="dc-tree"></div></section>` : ''}
       <div class="dc-grid2">
@@ -4279,7 +4280,7 @@
         <section class="dc-hero dc-hero-2 dc-in" data-tone="info" style="--i:0">
           <div class="dc-hero-mascot" aria-hidden="true">${mascot('think', 88)}</div>
           <div class="dc-hero-text"><div class="dc-eyebrow">LOCAL MODE</div><h3>💻 지금은 로컬 모드예요</h3>
-            <p>게임이 ${httpish ? `이 주소(${esc(location.host)})에서 <code>api/ping.php</code> 를 찾지 못해` : '파일(file://)로 열려서'} 이 브라우저(localStorage)에 저장하고 있어요. 서버 점검은 서버 모드에서만 실행돼요.</p>
+            <p>체험관이 ${httpish ? `이 주소(${esc(location.host)})에서 <code>api/ping.php</code> 를 찾지 못해` : '파일(file://)로 열려서'} 이 브라우저(localStorage)에 저장하고 있어요. 서버 점검은 서버 모드에서만 실행돼요.</p>
             <div class="dc-row wrap">${httpish ? '<button type="button" class="btn btn-primary btn-sm" data-dc="srv-detect">🔁 서버 다시 찾기</button>' : ''}<button type="button" class="btn btn-soft btn-sm" data-dc="doc-open" data-doc="README-SERVER.md">📚 서버 안내 문서</button></div>
           </div>
         </section>
@@ -4453,7 +4454,7 @@
     b.innerHTML = `
       ${!a.ok ? '<p class="dc-note">🔒 권한이 없어 디버그 도구를 쓸 수 없어요.</p>' : ''}
       ${G.net?.mode === 'server' ? '<div class="notice-box dc-in" style="--i:0">🛡️ 서버 모드예요. 서버가 저장을 검증하므로 치트로 늘린 코인·경험치는 저장할 때 거부되고 서버 저장본으로 되돌아갈 수 있어요. 모든 명령은 기록돼요.</div>' : ''}
-      ${!st ? '<div class="notice-box info dc-in" style="--i:0">🎮 게임에 입장하면 자원·퀘스트·농장 명령을 쓸 수 있어요. 날씨·표시·품질은 지금도 바꿀 수 있어요.</div>' : ''}
+      ${!st ? '<div class="notice-box info dc-in" style="--i:0">🎮 체험관에 입장하면 자원·퀘스트·농장 명령을 쓸 수 있어요. 날씨·표시·품질은 지금도 바꿀 수 있어요.</div>' : ''}
       <section class="dc-card dc-in dc-live-strip" style="--i:1"><div class="dc-dbg-live" data-live="dbg"></div></section>
       <div class="dc-cheat-grid">
         <section class="dc-card dc-in" style="--i:2"><h4>💰 자원</h4><div class="dc-cheats">${btn('coin', null, CHEAT_LABEL.coin)}${btn('exp', null, CHEAT_LABEL.exp)}${btn('edu', null, CHEAT_LABEL.edu)}${btn('seeds', null, CHEAT_LABEL.seeds)}${btn('ingredients', null, CHEAT_LABEL.ingredients)}${btn('decor', null, CHEAT_LABEL.decor)}${btn('save', null, CHEAT_LABEL.save)}</div></section>
@@ -4868,7 +4869,7 @@
       const file = el.files?.[0];
       el.value = '';
       if (!file) return;
-      if (!G.state) { toast('게임에 입장한 뒤에 가져올 수 있어요.', 'warn'); return; }
+      if (!G.state) { toast('체험관에 입장한 뒤에 가져올 수 있어요.', 'warn'); return; }
       if (file.size > 3 * 1024 * 1024) { toast('파일이 너무 커요 (최대 3 MB).', 'error'); return; }
       let text = '';
       try { text = await file.text(); } catch (err) { toast('파일을 읽지 못했어요.', 'error'); return; }

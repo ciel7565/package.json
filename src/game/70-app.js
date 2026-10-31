@@ -1945,7 +1945,7 @@
       const entries = Profiles.all().filter((p) => p.kind === 'guest' || (server ? p.kind === 'server' : p.kind === 'local')).slice(0, 5);
       list.textContent = '';
       if (!entries.length) {
-        list.appendChild(h('li', { class: 'ts-pempty' }, h('span', { class: 'emoji' }, '🌱'), h('span', null, '아직 플레이 기록이 없어요.', h('br'), h('b', null, '게임 시작'), '을 눌러 첫 체험을 시작해 보세요!')));
+        list.appendChild(h('li', { class: 'ts-pempty' }, h('span', { class: 'emoji' }, '🌱'), h('span', null, '아직 플레이 기록이 없어요.', h('br'), h('b', null, '만장대'), '를 눌러 첫 체험을 시작해 보세요!')));
         return;
       }
       for (const p of entries) {
@@ -2149,7 +2149,7 @@
         await app.enterGame(profile);
       } catch (e) {
         G.log.error('AUTH', 'start failed', e?.message || e);
-        G.ui.toast(e instanceof AuthError ? e.message : '게임을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error', easy: e?.code === 'KID_FULL' ? '친구 자리가 꽉 찼어요. 어른을 불러요!' : undefined, retry: e?.code === 'KID_FULL' ? undefined : () => btn?.isConnected && btn.click() });
+        G.ui.toast(e instanceof AuthError ? e.message : '체험관을 열지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error', easy: e?.code === 'KID_FULL' ? '친구 자리가 꽉 찼어요. 어른을 불러요!' : undefined, retry: e?.code === 'KID_FULL' ? undefined : () => btn?.isConnected && btn.click() });
       } finally { this._setBusy(false, btn); }
     },
 
@@ -3203,7 +3203,7 @@
     try { unread = Number(eng?.unreadCount?.()) || 0; } catch (e) { unread = 0; }
     const comp = G.sys.companion && !G.sys.companion._failed && typeof G.sys.companion.openMenu === 'function' && G.settings.companion !== false ? G.sys.companion : null;
     const tiles = [
-      { id: 'resume', emoji: '▶️', label: '계속 놀기', color: '#55d187', say: '계속 놀기. 게임으로 돌아가요.' },
+      { id: 'resume', emoji: '▶️', label: '계속 놀기', color: '#55d187', say: '계속 놀기. 체험관으로 돌아가요.' },
       { id: 'stickerbook', emoji: '📖', label: '스티커북', color: '#ffc93c', badge: G.ui.getBadge?.('stickerbook') || 0, say: '스티커북. 모은 스티커를 봐요.' },
       eng && { id: 'today', emoji: '🔔', label: '오늘', color: '#ff9f43', badge: unread, say: '오늘. 출석 도장과 오늘의 놀이를 봐요.' },
       { id: 'avatar', emoji: '👕', label: '꾸미기', color: '#ff7eb6', say: '꾸미기. 내 옷을 바꿔요.' },
@@ -3281,7 +3281,7 @@
     const eng = G.sys.engagement && !G.sys.engagement._failed && typeof G.sys.engagement.open === 'function' ? G.sys.engagement : null;
     const unread = Number(eng?.unreadCount?.() ?? eng?.unread ?? 0) || 0;
     const tiles = [
-      { act: 'resume', emoji: '▶️', label: '계속하기', desc: '게임으로 돌아가기', key: 'Esc', cls: 'tile-primary' },
+      { act: 'resume', emoji: '▶️', label: '계속하기', desc: '체험관으로 돌아가기', key: 'Esc', cls: 'tile-primary' },
       easyOn() && { act: 'kidmenu', emoji: '👶', label: '아이 메뉴', desc: '큰 그림 메뉴로 돌아가요', tint: '#ffd766' },
       eng && { act: 'engagement', emoji: '📅', label: '오늘의 체험', desc: '출석·오늘의 미션·알림함', badge: unread, tint: '#ffb26b' },
       { act: 'profile', emoji: '🙋', label: '내 정보', desc: '레벨·칭호·체험 기록', tint: '#9b8cff' },
@@ -3291,7 +3291,7 @@
       { act: 'settings', emoji: '⚙️', label: '설정', desc: '소리·그래픽·조작·계정', tint: '#c9d3c6' },
       // CONTRACT §14.6: the subscription screen is reachable only from grown-up screens (this menu, the settings 체험 tab)
       G.sys.subscription && !G.sys.subscription._failed && typeof G.sys.subscription.open === 'function' && { act: 'subscription', emoji: '⚡', label: '진행 속도 구독', desc: subTileDesc(), tint: '#ffd766' },
-      { act: 'help', emoji: '❓', label: '도움말', desc: '조작법·게임 방법·구역', key: 'H', tint: '#7fc4ff' },
+      { act: 'help', emoji: '❓', label: '도움말', desc: '조작법·체험 방법·구역', key: 'H', tint: '#7fc4ff' },
       { act: 'save', emoji: '💾', label: '저장하기', desc: lastSavedText(), tint: '#86e3a8' },
       (devCenter() ? canDevCenter() : (canDashboard() || canDebug())) && { act: 'devcenter', emoji: '🛠️', label: '개발자·관리자 센터', desc: devCenter() ? '점검·통계·인수인계·디버그' : (isAdmin() ? '체험 통계·디버그 도구' : '내 체험 통계 (로컬)'), key: 'F9', tint: '#ff8f8f' },
       guest && !isServer() && { act: 'upgrade', emoji: '🌟', label: '계정 만들기', desc: '게스트 기록을 계정으로 옮겨요', tint: '#ffd766' },
@@ -3404,7 +3404,7 @@
   // ================================================================ settings
   const SETTINGS_TABS = [
     { id: 'sound', label: '소리', icon: '🔊' }, { id: 'graphics', label: '그래픽', icon: '🖥️' }, { id: 'controls', label: '조작', icon: '🎮' },
-    { id: 'game', label: '게임', icon: '🌿' }, { id: 'access', label: '접근성', icon: '♿' }, { id: 'kids', label: '아이 보호', icon: '👶' },
+    { id: 'game', label: '체험', icon: '🌿' }, { id: 'access', label: '접근성', icon: '♿' }, { id: 'kids', label: '아이 보호', icon: '👶' },
     { id: 'account', label: '계정', icon: '👤' }, { id: 'data', label: '데이터', icon: '💾' },
   ];
   /**
@@ -3591,7 +3591,7 @@
     sound() {
       const f = document.createDocumentFragment();
       f.append(
-        settingRow('🔈 전체 볼륨', '게임의 모든 소리', sliderCtl('volumeMaster', { label: '전체 볼륨', after: sfxPreview })),
+        settingRow('🔈 전체 볼륨', '체험관의 모든 소리', sliderCtl('volumeMaster', { label: '전체 볼륨', after: sfxPreview })),
         settingRow('🎵 배경음악', '가야금 느낌의 잔잔한 음악', sliderCtl('volumeMusic', { label: '배경음악' })),
         settingRow('🔔 효과음', '버튼·물 주기·수확 소리', sliderCtl('volumeSfx', { label: '효과음', after: sfxPreview })),
         settingRow('🍃 환경음', '바람·새·풀벌레·계곡 물소리', sliderCtl('volumeAmbient', { label: '환경음' })),
@@ -4037,7 +4037,7 @@
         const pane = h('div', { class: 'help-pane' });
         body.append(tabsEl, pane);
         G.ui.tabs(tabsEl, [
-          { id: 'controls', label: '조작법', icon: '⌨️' }, { id: 'loop', label: '게임 방법', icon: '🌱' },
+          { id: 'controls', label: '조작법', icon: '⌨️' }, { id: 'loop', label: '체험 방법', icon: '🌱' },
           { id: 'zones', label: '구역 안내', icon: '🗺️' }, { id: 'tips', label: '꿀팁', icon: '💡' }, { id: 'faq', label: '자주 묻는 질문', icon: '💬' },
         ], (id) => { pane.textContent = ''; pane.appendChild(HELP_PANES[id]()); G.ui.hydrateIcons(pane); pane.scrollTop = 0; body.scrollTop = 0; }, HELP_PANES[tab] ? tab : 'controls');
       },
@@ -4102,7 +4102,7 @@
         ['공용 컴퓨터에서 해도 되나요?', '로그인할 때 ‘로그인 상태 유지’를 끄고, 다 쓴 뒤에는 꼭 로그아웃해 주세요.'],
         ['브라우저 기록을 지우면 어떻게 되나요?', '로컬 모드의 계정과 진행 상황도 함께 지워져요. 중요한 기록은 저장 파일로 백업해 두세요.'],
         ['발효·재배 수치는 실제와 같나요?', G.data.meta?.disclaimer || '교육용 가상 시뮬레이션이에요.'],
-        ['칭호는 자격증인가요?', G.data.meta?.titleDisclaimer || '게임 내 칭호예요.'],
+        ['칭호는 자격증인가요?', G.data.meta?.titleDisclaimer || '체험관 칭호예요.'],
         ['화면이 끊기거나 느려요.', '설정 → 그래픽에서 품질을 ‘낮음’으로 바꾸고 그림자·효과 연출을 꺼 보세요. 자동 품질은 프레임이 낮으면 스스로 품질을 낮춰요.'],
         ['소리가 안 나요.', '화면을 한 번 클릭한 뒤 설정 → 소리에서 음소거와 볼륨을 확인해 주세요.'],
       ];
@@ -4132,11 +4132,11 @@
     return G.ui.modal.open({
       id: 'app-terms', title: '이용약관 · 개인정보 처리 안내', icon: 'shield', size: 'md', className: 'app-terms-modal',
       body: `<div class="terms">
-        <h4>1. 서비스 소개</h4><p>전통발효체험관 메타버스는 한국 전통발효문화와 농업을 배우는 교육용 체험 게임이에요. 게임 속 발효·재배 수치와 결과물은 가상 시뮬레이션이에요.</p>
-        <h4>2. 계정과 저장</h4><p>${server ? '이메일·닉네임·비밀번호(암호화하여 보관)와 게임 진행 데이터가 체험관 서버에 저장돼요. 비밀번호는 원문으로 보관하지 않아요.' : '로컬 모드의 계정과 진행 데이터는 이 브라우저에만 저장되고 외부로 전송되지 않아요. 비밀번호는 무작위 솔트와 함께 PBKDF2-SHA256으로 변환해 보관하며 원문은 저장하지 않아요. 브라우저 데이터를 지우면 계정도 함께 지워져요.'}</p>
+        <h4>1. 서비스 소개</h4><p>전통발효체험관 메타버스는 한국 전통발효문화와 농업을 배우는 교육용 체험관이에요. 체험관 속 발효·재배 수치와 결과물은 가상 시뮬레이션이에요.</p>
+        <h4>2. 계정과 저장</h4><p>${server ? '이메일·닉네임·비밀번호(암호화하여 보관)와 체험 진행 데이터가 체험관 서버에 저장돼요. 비밀번호는 원문으로 보관하지 않아요.' : '로컬 모드의 계정과 진행 데이터는 이 브라우저에만 저장되고 외부로 전송되지 않아요. 비밀번호는 무작위 솔트와 함께 PBKDF2-SHA256으로 변환해 보관하며 원문은 저장하지 않아요. 브라우저 데이터를 지우면 계정도 함께 지워져요.'}</p>
         <h4>3. 개인정보</h4><p>이메일은 로그인 확인 용도로만 쓰여요. 닉네임은 다른 체험객에게 보일 수 있어요. 실명·연락처 등 불필요한 개인정보를 닉네임이나 채팅에 쓰지 마세요. 설정 → 계정에서 언제든 계정을 삭제할 수 있어요${server ? ' (서버 계정은 관리자에게 요청)' : ''}.</p>
         <h4>4. 이용 규칙</h4><p>욕설·비방·도배·광고는 금지돼요. 부적절한 채팅은 가려지며, 신고된 내용은 관리자가 확인할 수 있어요.</p>
-        <h4>5. 칭호와 보상</h4><p>${esc(G.data.meta?.titleDisclaimer || '게임 내 칭호예요.')}</p></div>`,
+        <h4>5. 칭호와 보상</h4><p>${esc(G.data.meta?.titleDisclaimer || '체험관 칭호예요.')}</p></div>`,
       actions: [
         { label: '닫기', class: 'btn-ghost' },
         {
@@ -4287,7 +4287,7 @@
     _fallback() {
       this.failed = true; // (dispose() already took the shared canvas back)
       const fb = h('div', { class: 'av-fallback' }, h('span', { class: 'emoji' }, '🧑‍🌾'),
-        h('p', null, '이 기기에서는 3D 미리보기를 표시할 수 없어요.', h('br'), '저장하면 게임 속 캐릭터에 바로 적용돼요.'));
+        h('p', null, '이 기기에서는 3D 미리보기를 표시할 수 없어요.', h('br'), '저장하면 체험관 속 캐릭터에 바로 적용돼요.'));
       this.host.appendChild(fb);
     }
     // input (bound once on the shared canvas by PreviewGL; `this` = the preview that owns it)
@@ -5488,7 +5488,7 @@
           if (!Title.open) Title.show();
         }
         auth.current = null;
-        G.ui.toast(e instanceof AuthError ? e.message : '게임에 들어가지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error' });
+        G.ui.toast(e instanceof AuthError ? e.message : '체험관에 들어가지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error' });
         return false;
       } finally { this._entering = false; }
     },

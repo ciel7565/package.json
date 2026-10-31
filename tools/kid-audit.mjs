@@ -55,7 +55,7 @@ const screens = opt('--screens') ? opt('--screens').split(',').map((s) => s.trim
 const log = (...a) => { if (!jsonOnly) console.log(...a); };
 
 if (!fs.existsSync(file)) {
-  console.error(`빌드된 게임이 없어요: ${file}\n먼저 "node tools/build.mjs" (또는 --out 으로 만든 파일을 --file 로) 실행해 주세요.`);
+  console.error(`빌드된 체험관이 없어요: ${file}\n먼저 "node tools/build.mjs" (또는 --out 으로 만든 파일을 --file 로) 실행해 주세요.`);
   process.exit(2);
 }
 
@@ -77,7 +77,7 @@ let exitCode = 0;
 
 try {
   for (const run of runs) {
-    log(`\n👶 ${run.name} ${run.vw}×${run.vh}${run.mobile ? ' (touch)' : ''} · ${normal ? '보통 모드' : '쉬운 모드'} — 게임을 여는 중…`);
+    log(`\n👶 ${run.name} ${run.vw}×${run.vh}${run.mobile ? ' (touch)' : ''} · ${normal ? '보통 모드' : '쉬운 모드'} — 체험관을 여는 중…`);
     const context = await browser.newContext({ viewport: { width: run.vw, height: run.vh }, deviceScaleFactor: run.mobile ? 2 : 1, isMobile: run.mobile, hasTouch: run.mobile, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
     const page = await context.newPage();
     // offline: the build is self-contained (CSP blocks other origins anyway)

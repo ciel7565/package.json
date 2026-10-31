@@ -1661,7 +1661,7 @@
       }
       body.appendChild(list);
       body.appendChild(h('div', { class: 'notice-box info mt-1' }, '💡 콩은 전통작물 구역 콩밭에서, 고추는 고추밭에서, 허브는 허브 구역에서 수확할 수 있어요.'));
-      body.appendChild(h('p', { class: 'tiny muted mt-1' }, '게임 속 재료 만들기 과정은 실제 과정을 단순화한 교육용 체험이에요.'));
+      body.appendChild(h('p', { class: 'tiny muted mt-1' }, '체험관 속 재료 만들기 과정은 실제 과정을 단순화한 교육용 체험이에요.'));
       G.ui.hydrateIcons(body);
       body.scrollTop = scroll;
     },
