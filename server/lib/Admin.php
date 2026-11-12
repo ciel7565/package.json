@@ -891,9 +891,12 @@ final class AdminGate
 
     /**
      * Is this account elevated now? $page = an admin page request: it also needs the folder cookie and keeps the
-     * elevation alive. An API request needs the session data only and never extends it.
+     * elevation alive. An API request needs the session data only and never extends it. $extend = false: a page
+     * request that is not the administrator's own doing (the 20-second live refresh of a tab, a report photo) is
+     * checked the same way but does not keep the elevation alive — an unattended live tab still ends after
+     * security.admin_idle.
      */
-    public static function check(?array $user, bool $page): bool
+    public static function check(?array $user, bool $page, bool $extend = true): bool
     {
         if (!$user || (isset($user['role']) ? $user['role'] : '') !== 'admin') return false;
         $a = self::state();
@@ -903,8 +906,10 @@ final class AdminGate
         if ($page) {
             $c = isset($_COOKIE[self::COOKIE]) && is_string($_COOKIE[self::COOKIE]) ? $_COOKIE[self::COOKIE] : '';
             if ($c === '' || strlen($c) > 128 || !hash_equals((string) $a['tok'], hash('sha256', $c))) return false;
-            $a['last'] = $now;
-            Session::set('adm', $a);
+            if ($extend) {
+                $a['last'] = $now;
+                Session::set('adm', $a);
+            }
         }
         return true;
     }

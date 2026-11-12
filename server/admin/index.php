@@ -68,6 +68,7 @@ set_error_handler(static function (int $no, string $msg, string $file = '', int 
 
 const TABS = [
     'overview' => ['📊', '대시보드'],
+    'beds' => ['🌱', '재배 현황'],
     'health' => ['🩺', '시스템 점검'],
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
@@ -90,6 +91,14 @@ const KIND_KO = [
     'ip_blocked' => '차단된 주소의 접속', 'ai_abuse' => 'AI 도우미 남용', 'auto_block' => '자동 차단',
 ];
 const SINCE = ['1h' => [3600, '1시간'], '24h' => [86400, '24시간'], '7d' => [604800, '7일'], '30d' => [2592000, '30일'], '90d' => [7776000, '90일']];
+/** rows per page of the farm lists */
+const PAGE_ROWS = 50;
+/** 🌱 bed states (the server clock judges growing / ready of a real-time bed — Farm::listBeds) */
+const BED_STATUS = ['growing' => ['🌱', '자라는 중', ''], 'ready' => ['🎉', '다 자람', 'ok'], 'harvested' => ['🧺', '수확함', 'gold'], 'cleared' => ['🍂', '뽑음', '']];
+const BED_FILTER = ['' => '모든 상태', 'active' => '자라는 중 + 다 자람', 'growing' => '🌱 자라는 중', 'ready' => '🎉 다 자람 (수확 기다림)', 'harvested' => '🧺 수확함', 'cleared' => '🍂 뽑음'];
+const BED_KIND = ['rt' => '⏰ 실시간 텃밭', 'plot' => '🥕 연습 밭'];
+/** ✅ completion request states (CONTRACT §15.3) */
+const REPORT_STATUS = ['pending' => ['⏳', '확인 기다림', 'warn'], 'approved' => ['✅', '완료 처리함', 'ok'], 'rejected' => ['↩️', '돌려보냄', '']];
 /** audit events of the admin sign-in history (🛡️ tab) */
 const SIGNIN_EVENTS = ['admin_signin' => '로그인 성공', 'admin_signout' => '로그아웃', 'admin_denied' => '권한 없는 계정의 시도', 'admin_2fa_fail' => '2단계 코드 틀림',
     'admin_2fa_ok' => '2단계 코드 확인', 'admin_2fa_enrolled' => '2단계 인증 켬', 'admin_2fa_disabled' => '2단계 인증 끔', 'admin_2fa_backup' => '백업 코드 새로 만듦',
@@ -180,6 +189,45 @@ function maskIp(string $ip): string
     return implode(':', array_slice($p, 0, 3)) . ':•';
 }
 function modeLabel(string $mode): string { $m = ['off' => '꺼짐', 'optional' => '선택(등록 권장)', 'required' => '필수']; return isset($m[$mode]) ? $m[$mode] : $mode; }
+/** ?p= as a page number 0…10000 (anything else is page 0) */
+function pageParam(): int { $p = getStr('p'); return ctype_digit($p) && strlen($p) <= 5 ? min(10000, (int) $p) : 0; }
+/** ms left → "1시간 5분" · "12분 30초" · "40초" */
+function leftText(int $ms): string
+{
+    $s = (int) ceil(max(0, $ms) / 1000);
+    if ($s >= 86400) return intdiv($s, 86400) . '일 ' . intdiv($s % 86400, 3600) . '시간';
+    if ($s >= 3600) return intdiv($s, 3600) . '시간 ' . intdiv($s % 3600, 60) . '분';
+    if ($s >= 60) return intdiv($s, 60) . '분 ' . ($s % 60) . '초';
+    return $s . '초';
+}
+/**
+ * The live refresh of this page (CONTRACT §15.4: <meta http-equiv="refresh" content="20"> when live=1): a view sets the
+ * address to reload (it carries auto=1, so the refresh never counts as the administrator's own activity); page() reads it.
+ */
+function pageRefresh(?string $url = null): string
+{
+    static $u = '';
+    if ($url !== null) $u = $url;
+    return $u;
+}
+/** "← 이전 · 다음 →" links of a list ($q = the list's own validated query, $more = a next page exists) */
+function pager(array $q, int $page, bool $more): string
+{
+    unset($q['p']);
+    $h = '<div class="row">';
+    if ($page > 0) $h .= '<a class="btn ghost" href="' . e(href($q + ['p' => $page - 1 > 0 ? $page - 1 : null])) . '">← 이전</a>';
+    if ($more) $h .= '<a class="btn ghost" href="' . e(href($q + ['p' => $page + 1])) . '">다음 →</a>';
+    return $h . ($page > 0 || $more ? '<span class="dim small">' . e($page + 1) . '쪽</span>' : '') . '</div>';
+}
+/** a <select> of a GET filter form: $options value => label, the current value selected */
+function selectBox(string $name, array $options, string $current): string
+{
+    $h = '<select name="' . e($name) . '">';
+    foreach ($options as $v => $label) $h .= '<option value="' . e($v) . '"' . ((string) $v === $current ? ' selected' : '') . '>' . e($label) . '</option>';
+    return $h . '</select>';
+}
+/** "★★☆" for 0–3 stars */
+function stars(int $n): string { $n = max(0, min(3, $n)); return str_repeat('★', $n) . str_repeat('☆', 3 - $n); }
 
 // =============================================================================== the gate (before any session)
 function gateRequest(): void
@@ -292,6 +340,7 @@ function handlePost(Ctx $c)
                 $msg = '🔁 갱신 검사 ' . count($results) . '건 — 갱신 ' . $okN . '건';
                 break;
             }
+            case 'farm_scale': $msg = doFarmScale($admin); break;
             case 'ip_block': $msg = doIpBlock($c); break;
             case 'ip_unblock': $msg = doIpUnblock($c); break;
             case 'twofa_disable': $msg = doDisable($c); break;
@@ -487,6 +536,18 @@ function doDisable(Ctx $c): string
     return AdminTotp::mode() === 'required' ? '2단계 인증을 껐어요. 이 서버는 2단계 인증이 필수라서 다음 로그인 때 다시 등록해야 해요.' : '2단계 인증을 껐어요. 다시 켜는 것을 권해요.';
 }
 
+/** ⏱️ the real-time time scale (Farm::setScale → Settings farm.rt_scale; audited by Settings as setting_changed) */
+function doFarmScale(array $admin): string
+{
+    if (!class_exists('Tfm\Farm')) throw new ApiException(503, 'NOT_READY', '실시간 텃밭 기능이 아직 준비 중이에요.');
+    $raw = trim(postStr('scale'));
+    if ($raw === '' || strlen($raw) > 16 || !is_numeric($raw)) {
+        throw new ApiException(400, 'INVALID_SETTING', '시간 배율은 0.1부터 3600까지의 숫자로 적어 주세요 (1 = 진짜 시간, 60 = 60배 빠르게).');
+    }
+    Farm::setScale($admin, (float) $raw);
+    return '⏱️ 시간 배율을 ' . scaleText(Farm::scale()) . '(으)로 바꿨어요. 이제부터 심는 작물에 적용돼요.';
+}
+
 /** block an address by hand (address or the hash of an event row) for some minutes */
 function doIpBlock(Ctx $c): string
 {
@@ -670,7 +731,9 @@ function viewOverview(): string
         foreach (SecEvent::counts(Clock::startOfDayMs()) as $n) $sec += (int) $n;
         $tiles[] = ['🛡️', '오늘 보안 기록', $sec];
     }
-    $h = tiles($tiles) . '<div class="grid2">' . farmCard() . alertsCard() . '</div><div class="grid2">';
+    $live = getStr('live') === '1';
+    if ($live) pageRefresh(href(['tab' => 'overview', 'live' => 1, 'auto' => 1]));
+    $h = '<div class="row">' . liveSwitch(['tab' => 'overview'], $live) . '</div>' . tiles($tiles) . '<div class="grid2">' . farmCard() . alertsCard() . '</div><div class="grid2">';
     $max = max(1, max(array_values($s['levels'])));
     $h .= '<section class="card"><h3>⭐ 레벨 분포</h3>';
     foreach ($s['levels'] as $k => $n) $h .= '<div class="barrow"><span>' . e($k) . '</span><meter min="0" max="' . e($max) . '" value="' . e($n) . '"></meter><b>' . e(num($n)) . '</b></div>';
@@ -685,6 +748,78 @@ function viewOverview(): string
     $h .= '</section><div class="grid2"><section class="card"><h3>🆕 최근 가입</h3>' . table(['닉네임', '권한', '레벨', '상태', '가입', '마지막 접속'], array_map(function ($r) { return [$r['nickname'], $r['role'], 'Lv.' . $r['level'], $r['status'], $r['joined'], $r['lastLogin']]; }, $s['recentUsers'])) . '</section>';
     $h .= '<section class="card"><h3>📜 최근 감사 로그</h3>' . table(['이벤트', '등급', '대상', '시각'], array_map(function ($r) { return [$r['event'], $r['severity'], $r['user'], $r['at']]; }, $s['recentAudit'])) . '</section></div>';
     return $h;
+}
+
+/** the live switch of a tab: a link that turns the 20-second refresh on / off ($q = the tab's validated query) */
+function liveSwitch(array $q, bool $live): string
+{
+    unset($q['live'], $q['auto']);
+    return $live
+        ? '<span class="badge ok">🔄 20초마다 새로 고침 중</span> <a class="btn ghost sm" href="' . e(href($q)) . '">⏸️ 자동 새로 고침 끄기</a>'
+        : '<a class="btn ghost sm" href="' . e(href($q + ['live' => 1])) . '">🔄 20초마다 자동 새로 고침</a>';
+}
+
+/** 🌱 the validated filter of the beds list (unknown values fall back to "all") */
+function bedsQuery(): array
+{
+    $st = getStr('status');
+    $kind = getStr('kind');
+    return ['tab' => 'beds', 'status' => isset(BED_FILTER[$st]) ? $st : '', 'kind' => isset(BED_KIND[$kind]) ? $kind : '', 'q' => mb_substr(trim(getStr('q')), 0, 60)];
+}
+
+/** 🌱 재배 현황 — every bed of every account (Farm::listBeds: times measured by the server), filters, paging, live refresh, the time scale */
+function viewBeds(): string
+{
+    if (!class_exists('Tfm\Farm')) return notReady('🌱 재배 현황', '실시간 텃밭(lib/Farm.php)');
+    $q = bedsQuery();
+    $page = pageParam();
+    $live = getStr('live') === '1';
+    if ($live) pageRefresh(href($q + ['p' => $page > 0 ? $page : null, 'live' => 1, 'auto' => 1]));
+    $rows = Farm::listBeds(['status' => $q['status'], 'kind' => $q['kind'], 'q' => $q['q']], PAGE_ROWS + 1, $page * PAGE_ROWS);
+    $more = count($rows) > PAGE_ROWS;
+    $rows = array_slice($rows, 0, PAGE_ROWS);
+    $h = '<section class="card"><h3>🌱 재배 현황 — 모든 계정의 텃밭 ' . liveSwitch($q + ['p' => $page > 0 ? $page : null], $live) . '</h3>'
+        . '<p class="dim small">심은 시각 · 완료 예정 · 남은 시간은 체험관이 보낸 값이 아니라 <b>서버 시계</b>로 잰 값이에요. 자라는 중이거나 다 자란 텃밭이 먼저(곧 다 자라는 것부터), 그다음 최근 기록이 보여요. 연습 밭은 체험관의 빠른 연습용 밭이에요.</p>'
+        . '<form method="get" action="./" class="search"><input type="hidden" name="tab" value="beds">' . selectBox('status', BED_FILTER, $q['status']) . selectBox('kind', ['' => '모든 밭'] + BED_KIND, $q['kind'])
+        . '<input name="q" value="' . e($q['q']) . '" placeholder="계정 (닉네임 · 이메일 · #번호)" maxlength="60">' . ($live ? '<input type="hidden" name="live" value="1">' : '')
+        . '<button class="btn" type="submit">🔎 보기</button>' . ($q['status'] !== '' || $q['kind'] !== '' || $q['q'] !== '' ? '<a class="btn ghost" href="./?tab=beds">모두 보기</a>' : '') . '</form>';
+    if (!$rows) {
+        $h .= '<p class="empty">🍃 ' . ($page > 0 ? '이 쪽에는 텃밭 기록이 없어요.' : '조건에 맞는 텃밭이 없어요.') . '</p>';
+    } else {
+        $h .= '<div class="tablewrap"><table><thead><tr><th>계정</th><th>밭</th><th>작물</th><th>심은 시각</th><th>완료 예정</th><th>남은 시간</th><th>상태</th><th>별 · 수확</th><th>완료 확인</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $st = isset(BED_STATUS[$r['status']]) ? BED_STATUS[$r['status']] : ['', (string) $r['status'], ''];
+            $rt = $r['kind'] === 'rt';
+            if ($rt && $r['status'] === 'growing') $left = leftText((int) $r['leftMs']) . ' 남음';
+            elseif ($rt && $r['status'] === 'ready') $left = '다 자랐어요';
+            elseif (!$rt && in_array($r['status'], ['growing', 'ready'], true)) $left = (int) $r['growth'] . ' %';
+            else $left = '-';
+            $harvest = $r['status'] === 'harvested' ? e(num($r['amount'])) . '개 · ' . e(when($r['harvestedAt'])) : '';
+            $rep = isset(REPORT_STATUS[$r['report']]) ? REPORT_STATUS[$r['report']] : null;
+            $h .= '<tr class="bed ' . e($r['status']) . '" id="bed-' . (int) $r['id'] . '"><td><b>' . e($r['nickname']) . '</b> <span class="dim small">#' . (int) $r['userId'] . '</span><br><span class="dim small">' . e($r['email']) . '</span></td>'
+                . '<td>' . e($r['bedId']) . '<br><span class="dim small">' . e(isset(BED_KIND[$r['kind']]) ? BED_KIND[$r['kind']] : $r['kind']) . ($rt && (int) $r['tier'] > 1 ? ' · ⚡' . (int) $r['tier'] . '배' : '') . '</span></td>'
+                . '<td>' . e($r['cropName']) . ($r['cropName'] !== $r['cropId'] ? '<br><span class="dim small">' . e($r['cropId']) . '</span>' : '') . '</td>'
+                . '<td class="nowrap">' . e(when($r['firstSeenAt'])) . '</td><td class="nowrap">' . ($rt ? e(when($r['readyAt'])) : '-') . '</td><td class="nowrap">' . e($left) . '</td>'
+                . '<td><span class="badge ' . e($st[2]) . '">' . e($st[0] . ' ' . $st[1]) . '</span></td>'
+                . '<td class="nowrap">' . ($rt ? '<span title="돌본 정도">' . e(stars((int) $r['stars'])) . '</span>' : '') . ($harvest !== '' ? ($rt ? '<br>' : '') . $harvest : '') . '</td>'
+                . '<td>' . ($rep ? '<a href="' . e(href(['tab' => 'reports', 'q' => '#' . (int) $r['userId']])) . '">' . e($rep[0] . ' ' . $rep[1]) . '</a>' : '-') . '</td></tr>';
+        }
+        $h .= '</tbody></table></div>';
+    }
+    $h .= pager($q, $page, $more) . '</section>';
+    return $h . scaleCard();
+}
+
+/** ⏱️ the real-time scale form (Farm::setScale → Settings farm.rt_scale, 0.1–3600) */
+function scaleCard(): string
+{
+    $s = scaleText(Farm::scale());
+    return '<section class="card"><h3>⏱️ 시간 배율 — 실시간 텃밭이 자라는 빠르기</h3>'
+        . '<p>지금 배율: <b>' . e($s) . '</b> · <b>1 = 진짜 시간, 60 = 60배 빠르게(수업 시연용)</b>. 예를 들어 박하는 진짜 시간으로 10분이 걸리는데, 배율이 60이면 10초면 다 자라요.</p>'
+        . '<p class="dim small">바꾸면 그다음에 심는 작물부터 적용돼요. 이미 자라고 있는 작물은 원래 다 자라는 시각을 그대로 지켜요. 0.1(10배 느리게)부터 3600까지 정할 수 있어요. 수업 시연이 끝나면 1로 되돌려 주세요. 바꾼 기록은 감사 로그에 남아요.</p>'
+        . '<form method="post" action="./" class="search">' . csrfField() . '<input type="hidden" name="action" value="farm_scale"><input type="hidden" name="tab" value="beds">'
+        . '<label>배율<input name="scale" value="' . e($s) . '" inputmode="decimal" maxlength="12" required></label><button class="btn primary" type="submit">⏱️ 배율 바꾸기</button></form>'
+        . '<div class="row">' . actionForm('farm_scale', '1 (진짜 시간으로)', ['scale' => '1'], 'btn ghost sm', 'beds') . actionForm('farm_scale', '60 (수업 시연)', ['scale' => '60'], 'btn ghost sm', 'beds') . '</div></section>';
 }
 
 function viewHealth(): string
@@ -1032,7 +1167,9 @@ function page(Ctx $c, string $tab, string $body, ?array $flash, bool $inside): s
     $fl = $flash ? '<div class="flash ' . e(isset($flash['type']) ? $flash['type'] : 'ok') . '" role="status">' . e(isset($flash['msg']) ? $flash['msg'] : '') . '</div>' : '';
     // F15: nothing about versions or the database for a visitor — only inside
     $meta = $inside ? 'METAVERSE · ' . e(strtoupper(Db::driverSafe())) . ' · v' . e(TFM_VERSION) : 'METAVERSE';
-    return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow, noarchive"><meta name="referrer" content="no-referrer">'
+    // a live tab (live=1) reloads itself every 20 s — only inside, never the sign-in / code forms
+    $refresh = $inside && pageRefresh() !== '' ? '<meta http-equiv="refresh" content="20; url=' . e(pageRefresh()) . '">' : '';
+    return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow, noarchive"><meta name="referrer" content="no-referrer">' . $refresh
         . '<title>관리자 센터 · 전통발효체험관 메타버스</title><link rel="stylesheet" href="' . e(cssHref()) . '"></head><body>'
         . '<header class="top"><div class="brand"><span class="logo" aria-hidden="true">🏺</span><div><h1>전통발효체험관 <em>관리자 센터</em></h1><p>' . $meta . '</p></div></div>' . $who . '</header>'
         . $nav . '<main>' . $banner . $fl . $body . '</main><footer>🔒 이 페이지는 스크립트 없이 동작하며 모든 작업은 감사 로그에 기록됩니다. · <a href="../">🏺 체험관으로 돌아가기</a></footer></body></html>';
@@ -1045,8 +1182,10 @@ function render(Ctx $c): string
     $parts = takeFlash();
     $flash = $parts[0];
     $codes = $parts[1];
-    if (AdminGate::check($c->user, true)) {
+    // auto=1: the 20-second refresh of a live tab — checked like any page, but it does not keep the elevation alive
+    if (AdminGate::check($c->user, true, getStr('auto') !== '1')) {
         switch ($tab) {
+            case 'beds': $body = viewBeds(); break;
             case 'health': $body = viewHealth(); break;
             case 'users': $body = viewUsers(); break;
             case 'sub': $body = viewSub(); break;

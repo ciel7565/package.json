@@ -626,7 +626,7 @@ async function main() {
     await step('S06', 'every tab works for the elevated admin without JavaScript; each response carries the lock headers; links never name the folder', async () => {
       const home = await b1.req(ADM);
       const tabs = [...home.text.matchAll(/<nav class="tabs"[\s\S]*?<\/nav>/g)].flatMap((m) => [...m[0].matchAll(/href="\.\/\?tab=([a-z0-9_]+)"/g)].map((x) => x[1]));
-      for (const need of ['overview', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
+      for (const need of ['overview', 'beds', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
       for (const t of tabs) {
         const p = await b1.req(`${ADM}?tab=${t}`);
         assert(p.status === 200 && isInside(p.text), `tab ${t} → ${p.status}`);
@@ -658,12 +658,28 @@ async function main() {
   if (section('csrf')) {
     const b = new Browser(srv.base, 'csrf');
     const src = fs.readFileSync(path.join(main1.site, STUB_DIR, 'index.php'), 'utf8');
-    const actions = [...new Set([...src.matchAll(/case '([a-z0-9_]+)':/g), ...src.matchAll(/\$action === '([a-z0-9_]+)'/g)].map((m) => m[1]))].filter((a) => !['overview', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa', 'ok', 'warn', 'fail'].includes(a));
-    const fieldsFor = (a) => ({ action: a, tab: 'users', uid: String(admins.user.id), role: 'admin', minutes: '60', rid: '1', mid: '1', status: 'resolved', who: admins.user.email, tier: '4', days: '7', ip: '203.0.113.99', ip_hash: 'a'.repeat(32), reason: 'x', login: admins.a.email, password: PASSWORD, code: '000000' });
+    // the tab names (const TABS of the page) are cases of the page switch, not actions
+    const tabNames = [...((src.match(/const TABS = \[([\s\S]*?)\];/) || ['', ''])[1]).matchAll(/'([a-z0-9_]+)' =>/g)].map((m) => m[1]);
+    const actions = [...new Set([...src.matchAll(/case '([a-z0-9_]+)':/g), ...src.matchAll(/\$action === '([a-z0-9_]+)'/g)].map((m) => m[1]))].filter((a) => ![...tabNames, 'ok', 'warn', 'fail'].includes(a));
+    // a pending completion request, so the decision actions have something they could change
+    const csrfReport = php(main1, `Tfm\\Db::insert('crop_reports', ['user_id' => (int) $in, 'kind' => 'rt', 'bed_id' => 'RB1', 'pid' => '0123456789abcdef', 'crop_id' => 'CROP_MINT', 'stars' => 2, 'amount' => 0,
+      'note' => '', 'photo' => '', 'status' => 'pending', 'memo' => null, 'requested_at' => Tfm\\Clock::ms(), 'decided_at' => 0, 'decided_by' => null, 'seen_at' => 0])`, admins.user.id);
+    /** the fields each action would need to change something (the phase-7 actions get real targets) */
+    const ACTION_FIELDS = {
+      farm_scale: { scale: '60', tab: 'beds' },
+      report_decide: { rid: String(csrfReport), status: 'approved', memo: 'csrf', tab: 'reports' },
+      ai_memo: { rid: String(csrfReport), tab: 'reports' },
+      handover_save: { key: 'admin_2fa', done: '1', note: 'csrf', tab: 'dev' },
+      inspect_run: { tab: 'dev' },
+      ai_kid: { on: '1', tab: 'ai' }, ai_summary: { tab: 'ai' }, ai_ask: { prompt: 'csrf', tab: 'ai' },
+    };
+    const fieldsFor = (a) => ({ action: a, tab: 'users', uid: String(admins.user.id), role: 'admin', minutes: '60', rid: '1', mid: '1', status: 'resolved', who: admins.user.email, tier: '4', days: '7', ip: '203.0.113.99', ip_hash: 'a'.repeat(32), reason: 'x', login: admins.a.email, password: PASSWORD, code: '000000', ...(ACTION_FIELDS[a] || {}) });
     const snapshot = () => JSON.stringify({
       u: dbAll(main1, 'SELECT id, role, status, muted_until, session_epoch FROM users ORDER BY id'),
       audit: Number(dbVal(main1, "SELECT COUNT(*) FROM audit_log WHERE event NOT IN ('login', 'logout', 'login_failed', 'admin_denied', 'admin_signin', 'admin_signout')")),
       subs: Number(dbVal(main1, 'SELECT COUNT(*) FROM subscriptions')), totp: Number(dbVal(main1, 'SELECT COUNT(*) FROM admin_totp')), blocks: Number(dbVal(main1, 'SELECT COUNT(*) FROM ip_blocks')),
+      settings: dbAll(main1, 'SELECT k, v FROM settings ORDER BY k'), reports: dbAll(main1, 'SELECT id, status, memo, decided_at FROM crop_reports ORDER BY id'),
+      handover: dbAll(main1, 'SELECT k, done, note FROM handover_items ORDER BY k'), runs: Number(dbVal(main1, 'SELECT COUNT(*) FROM inspection_runs')), ai: Number(dbVal(main1, 'SELECT COUNT(*) FROM ai_usage')),
     });
     await step('S06', 'every admin POST without a CSRF token is refused (403) and changes nothing', async () => {
       const page = await signInFull(b, ADM, admins.a);
@@ -745,7 +761,7 @@ async function main() {
       assert(isInside((await signInFull(b, ADM, admins.a)).text), 'signed in');
       const P = `"'><script>alert(1)</script><img src=x onerror=alert(2)>`;
       const enc = encodeURIComponent(P);
-      const urls = [`?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
+      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
         `?tab=${enc}`, `?tab=sub&uid=${enc}`, `?tab=moderation&show=${enc}`, `?tab=twofa&x=${enc}`, `?tab=health&${enc}=${enc}`, `?${enc}`];
       for (const u of urls) {
         const r = await b.req(ADM + u);
@@ -1287,6 +1303,93 @@ async function main() {
         assert(!rawEvil(p.text).length, `raw markup: ${rawEvil(p.text).join(', ')}`);
         assert(/href="\.\/\?tab=reports/.test(p.text) && /href="\.\/\?tab=beds/.test(p.text), 'links to 완료 확인 and 재배 현황');
         return `growing ${d.growing} · ready ${d.ready} · harvested today ${d.harvestedToday} · pending ${d.reportsPending} · 곳간 ${d.storageTotal} · alert listed`;
+      });
+      const bedRows = (html) => [...html.matchAll(/<tr class="bed[^"]*"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => m[1]);
+      const phpTime = (ms) => php(s, 'date("Y-m-d H:i", intdiv((int) $in, 1000))', ms);
+      await step('15.4', '🌱 재배 현황: every bed of every account — account, bed, crop, 심은 시각, 완료 예정, 남은 시간, status (server clock), growing / ready first, markup escaped', async () => {
+        await signedIn();
+        const p = await b.req(`${ADM}?tab=beds`);
+        assert(p.status === 200 && isInside(p.text), `→ ${p.status}`);
+        assertLocked(p, 'beds tab', { payload: true });
+        const head = (p.text.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0];
+        for (const h of ['계정', '밭', '작물', '심은 시각', '완료 예정', '남은 시간', '상태']) assert(head.includes(h), `column "${h}"`);
+        const rows = bedRows(p.text);
+        assert(rows.length === 50, `first page shows ${rows.length} rows (63 seeded, 50 per page)`);
+        const active = rows.slice(0, 6).join('\n');
+        for (const u of [K[0], K[1]]) assert(active.includes(u.nickname), `active rows list ${u.nickname}`);
+        assert(!/수확함|뽑음/.test(active), 'growing / ready beds come first');
+        const listed = php(s, 'Tfm\\Farm::listBeds(["userId" => $in], 10, 0)', K[0].id);
+        const rb1 = listed.find((r) => r.bedId === 'RB1');
+        const row1 = rows.find((r) => r.includes(K[0].nickname) && r.includes('RB1'));
+        assert(row1 && row1.includes('박하') && row1.includes(phpTime(rb1.firstSeenAt)) && row1.includes(phpTime(rb1.readyAt)), `RB1 row: crop, 심은 시각 ${phpTime(rb1.firstSeenAt)}, 완료 예정 ${phpTime(rb1.readyAt)}`);
+        assert(/\d+분/.test(row1) && /자라는 중/.test(row1), 'RB1: time left in minutes and "자라는 중"');
+        const row2 = rows.find((r) => r.includes(K[0].nickname) && r.includes('RB2'));
+        assert(row2 && /다 자람/.test(row2) && row2.includes('콩'), 'RB2 is past its server ready time: "다 자람" (stored as growing, judged by the server clock)');
+        const plot = rows.find((r) => r.includes(K[0].nickname) && r.includes('P1'));
+        assert(plot && /50\s*%/.test(plot) && /연습 밭/.test(plot), 'a quick plot shows its growth in %');
+        assert(p.text.includes('&lt;svg onload=alert(&#039;crop&#039;)&gt;') || p.text.includes('&lt;svg onload=alert(&apos;crop&apos;)&gt;'), 'the markup crop id comes back as text');
+        assert(p.text.includes('&lt;img src=x onerror=alert('), 'the markup nickname comes back as text');
+        assert(!rawEvil(p.text).length, `raw markup: ${rawEvil(p.text).join(', ')}`);
+        return `${rows.length} rows on page 1 · server times · 다 자람 by the server clock · markup inert`;
+      });
+      await step('15.4', '🌱 재배 현황: filters (status, kind rt / plot, account search by nickname or #id) and paging (50 per page)', async () => {
+        const n = async (q) => bedRows((await b.req(`${ADM}?tab=beds${q}`)).text).length;
+        const want = { '&status=ready': 2, '&status=growing': 4, '&status=active': 6, '&status=cleared': 1, '&kind=rt': 6, '&kind=plot&status=active': 2,
+          [`&q=${encodeURIComponent(K[0].nickname)}`]: 6, [`&q=${encodeURIComponent('#' + K[2].id)}`]: 1, '&status=harvested&p=1': 6, '&p=1': 13, '&status=nope&kind=nope': 50 };
+        for (const [q, w] of Object.entries(want)) { const got = await n(q); assert(got === w, `${q}: ${got} rows, want ${w}`); }
+        const p0 = await b.req(`${ADM}?tab=beds`);
+        assert(/href="\.\/\?tab=beds[^"]*(&amp;|&)p=1/.test(p0.text), 'page 1 links to page 2');
+        const p1 = await b.req(`${ADM}?tab=beds&p=1`);
+        assert(/href="\.\/\?tab=beds[^"]*"[^>]*>[^<]*이전/.test(p1.text) || /← 이전/.test(p1.text), 'page 2 links back');
+        const ready = (await b.req(`${ADM}?tab=beds&status=ready`)).text;
+        assert(/<option value="ready" selected/.test(ready), 'the chosen filter stays selected');
+        return Object.entries(want).map(([q, w]) => `${q.replace(/^&/, '') || 'all'} ${w}`).join(' · ');
+      });
+      await step('15.4', '🌱 재배 현황: live=1 adds <meta http-equiv="refresh" content="20"> (a refresh that does not count as admin activity); without live=1 there is none', async () => {
+        const off = await b.req(`${ADM}?tab=beds`);
+        assert(!/http-equiv="refresh"/i.test(off.text), 'no refresh without live=1');
+        assert(/href="\.\/\?tab=beds[^"]*live=1/.test(off.text), 'a link turns live refresh on');
+        const on = await b.req(`${ADM}?tab=beds&status=active&live=1`);
+        const m = on.text.match(/<meta http-equiv="refresh" content="20; url=([^"]+)">/);
+        assert(m, 'meta refresh with content="20"');
+        const url = decode(m[1]);
+        assert(/^\.\/\?tab=beds&/.test(url) && /status=active/.test(url) && /live=1/.test(url) && /auto=1/.test(url), `refresh keeps the filter and marks itself: ${url}`);
+        assertLocked(on, 'live beds tab', { payload: true });
+        assert(isInside((await b.req(ADM + url.replace(/^\.\//, ''))).text), 'the refresh address works');
+        // the idle timeout still ends the elevation while only the page's own refreshes arrive
+        const sv2 = await startPhp(s, { TFM_ADMIN_IDLE: '2' });
+        try {
+          const c = new Browser(sv2.base, 'live-idle');
+          assert(isInside((await signIn(c, ADM, A)).page.text), 'signed in (idle 2 s)');
+          let last = null;
+          for (let i = 0; i < 4; i++) { await sleep(900); last = await c.req(`${ADM}?tab=beds&live=1&auto=1`); }
+          assert(isSignIn(last.text) && !isInside(last.text), 'after 3.6 s of refreshes only, the sign-in form is back');
+          assert(!/http-equiv="refresh"/i.test(last.text), 'and the sign-in form does not refresh itself');
+        } finally { await sv2.stop(); }
+        return 'refresh only with live=1 · keeps filters · auto refreshes never extend the 30-minute idle time';
+      });
+      await step('15.4', '🌱 재배 현황: the time-scale form (farm.rt_scale 0.1–3600, explained in plain words) — POST + CSRF + audit, bad values refused', async () => {
+        const p = await b.req(`${ADM}?tab=beds`);
+        assert(p.text.includes('1 = 진짜 시간, 60 = 60배 빠르게(수업 시연용)'), 'the scale is explained in plain words');
+        assert(/name="action" value="farm_scale"/.test(p.text) && /name="scale"/.test(p.text), 'the scale form');
+        let r = await admF(b, ADM, { action: 'farm_scale', tab: 'beds', scale: '60' }, { page: '?tab=beds' });
+        assert(flashOf(r.text)?.type === 'ok', `scale 60: ${flashOf(r.text)?.msg}`);
+        assert(php(s, 'Tfm\\Farm::scale()') === 60, 'Farm::scale() = 60');
+        const set = dbAll(s, "SELECT * FROM settings WHERE k = 'farm.rt_scale'")[0];
+        assert(set && JSON.parse(set.v) === 60 && Number(set.updated_by) === A.id, `settings row ${JSON.stringify(set)}`);
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'setting_changed' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && Number(au.actor_id) === A.id && /farm\.rt_scale/.test(au.detail), `audit ${JSON.stringify(au)}`);
+        assert(/value="60"/.test(r.text), 'the form shows the new scale');
+        for (const bad of ['0.05', '5000', 'abc', '', '1e400', '-1', '60; DROP TABLE settings']) {
+          r = await admF(b, ADM, { action: 'farm_scale', tab: 'beds', scale: bad }, { page: '?tab=beds' });
+          assert(flashOf(r.text)?.type === 'error', `scale "${bad}" → ${flashOf(r.text)?.type} ${flashOf(r.text)?.msg}`);
+        }
+        assert(php(s, 'Tfm\\Farm::scale()') === 60, 'bad values changed nothing');
+        r = await admF(b, ADM, { action: 'farm_scale', tab: 'beds', scale: '0.5' }, { page: '?tab=beds' });
+        assert(flashOf(r.text)?.type === 'ok' && php(s, 'Tfm\\Farm::scale()') === 0.5 && /value="0\.5"/.test(r.text), 'scale 0.5 (not rounded to 1)');
+        r = await admF(b, ADM, { action: 'farm_scale', tab: 'beds', scale: '1' }, { page: '?tab=beds' });
+        assert(php(s, 'Tfm\\Farm::scale()') === 1, 'back to 1');
+        return '60 · 0.5 · 1 accepted (settings row + setting_changed audit) · 0.05 / 5000 / abc / empty / 1e400 / -1 / SQL text refused';
       });
     } finally { await sv.stop(); }
   }
