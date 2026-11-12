@@ -199,6 +199,84 @@ check('Installer::writeConfig — still writes the whole array (as before), now 
 @unlink($cfgFile);
 Tfm\Config::reset();
 
+// ------------------------------------------------------------------ Db: connection hardening, account audit, schema guard (item 1b–1e)
+$local = ['host' => '127.0.0.1', 'port' => 3306, 'database' => 'x', 'username' => 'u', 'password' => 'p'];
+check('Db::mysqlOptions — prepared statements are real (no emulation), multi-statements off, LOCAL INFILE off', function () use ($local) {
+    $o = Tfm\Db::mysqlOptions($local);
+    return $o[PDO::ATTR_EMULATE_PREPARES] === false && $o[PDO::MYSQL_ATTR_MULTI_STATEMENTS] === false && $o[PDO::MYSQL_ATTR_LOCAL_INFILE] === false
+        && $o[PDO::ATTR_ERRMODE] === PDO::ERRMODE_EXCEPTION;
+});
+check('Db::mysqlOptions — db.mysql.ssl_ca turns TLS on with certificate verification; ssl_verify = false keeps the encryption only', function () use ($local) {
+    $o = Tfm\Db::mysqlOptions($local + ['ssl_ca' => '/etc/ssl/ca.pem']);
+    $n = Tfm\Db::mysqlOptions($local + ['ssl_ca' => '/etc/ssl/ca.pem', 'ssl_verify' => false]);
+    return $o[PDO::MYSQL_ATTR_SSL_CA] === '/etc/ssl/ca.pem' && $o[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] === true && $n[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] === false
+        && !isset(Tfm\Db::mysqlOptions($local)[PDO::MYSQL_ATTR_SSL_CA]);
+});
+check('Db::mysqlOptions — a database on another machine without TLS is refused (clear message), unless allow_insecure_remote', function () use ($local) {
+    $remote = ['host' => 'db.example.internal'] + $local;
+    $msg = '';
+    try { Tfm\Db::mysqlOptions($remote); } catch (RuntimeException $e) { $msg = $e->getMessage(); }
+    if (strpos($msg, 'allow_insecure_remote') === false || strpos($msg, 'ssl_ca') === false) return 'no clear refusal: ' . $msg;
+    Tfm\Db::mysqlOptions($remote + ['allow_insecure_remote' => true]);
+    Tfm\Db::mysqlOptions($remote + ['ssl_ca' => '/etc/ssl/ca.pem']);
+    foreach (['localhost', '127.0.0.1', '127.0.0.9', '::1', '[::1]', ''] as $h) Tfm\Db::mysqlOptions(['host' => $h] + $local);
+    Tfm\Db::mysqlOptions(['host' => '10.1.2.3', 'socket' => '/run/mysqld/mysqld.sock'] + $local); // a socket is always local
+    return true;
+});
+check('Db::accountAudit — every key the health page reads is there (driver, user, host, isRoot, emptyPassword, globalPrivileges, ddlPrivileges, grants)', function () {
+    $a = Tfm\Db::accountAudit();
+    foreach (['driver', 'user', 'host', 'isRoot', 'emptyPassword', 'globalPrivileges', 'ddlPrivileges', 'grants'] as $k) if (!array_key_exists($k, $a)) return "missing $k";
+    return is_bool($a['isRoot']) && is_bool($a['emptyPassword']) && is_bool($a['globalPrivileges']) && is_bool($a['ddlPrivileges']) && is_array($a['grants']) && $a['driver'] === Tfm\Db::driver();
+});
+if (!$IS_MYSQL) {
+    check('SQLite — the database file has an unguessable name and mode 0600 (also the -wal / -shm files)', function () use ($tmp) {
+        $f = Tfm\Db::dbFilePath();
+        if (!preg_match('/^db-[0-9a-f]{24}\.sqlite$/', basename($f))) return 'name: ' . basename($f);
+        if (DIRECTORY_SEPARATOR === '\\') return true;
+        clearstatcache();
+        foreach ([$f, $f . '-wal', $f . '-shm'] as $p) if (is_file($p) && (fileperms($p) & 0777) !== 0600) return sprintf('%s mode %o', basename($p), fileperms($p) & 0777);
+        return true;
+    });
+    check('Db::accountAudit (SQLite) — reports the file, its mode and whether it sits inside the web root', function () {
+        $a = Tfm\Db::accountAudit();
+        return $a['driver'] === 'sqlite' && $a['insideWebRoot'] === false && $a['worldReadable'] === false && $a['randomName'] === true && (DIRECTORY_SEPARATOR === '\\' || $a['mode'] === '0600')
+            ? true : json_encode($a);
+    });
+}
+check('Db — schema behind + db.auto_migrate off → 503 SCHEMA_OUTDATED with the migrate command (not a missing-table error)', function () {
+    $top = (int) Tfm\Db::value('SELECT MAX(version) FROM schema_version');
+    Tfm\Db::exec('DELETE FROM schema_version WHERE version = ?', [$top]);
+    Tfm\Installer::mergeLocalConfig(['db' => ['auto_migrate' => false]]);
+    Tfm\Db::reset();
+    $caught = null;
+    try { Tfm\Db::pdo(); } catch (Tfm\ApiException $e) { $caught = $e; }
+    $again = throwsApi(function () { Tfm\Db::one('SELECT 1'); }, 'SCHEMA_OUTDATED'); // every later use keeps saying so
+    Tfm\Installer::mergeLocalConfig(['db' => ['auto_migrate' => true]]);
+    Tfm\Db::reset();
+    $back = Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION && $top === Tfm\Db::SCHEMA_VERSION;
+    if (!$caught) return 'no exception';
+    return $caught->status === 503 && $caught->errorCode === 'SCHEMA_OUTDATED' && strpos($caught->getMessage(), 'cli/tfm.php migrate') !== false && $again && $back;
+});
+check('Db — schema up to date + db.auto_migrate off → works without touching the schema', function () {
+    Tfm\Installer::mergeLocalConfig(['db' => ['auto_migrate' => false]]);
+    Tfm\Db::reset();
+    $ok = (int) Tfm\Db::value('SELECT MAX(version) FROM schema_version') === Tfm\Db::SCHEMA_VERSION;
+    Tfm\Installer::mergeLocalConfig(['db' => ['auto_migrate' => true]]);
+    Tfm\Db::reset();
+    return $ok;
+});
+mysqlOnly('MariaDB — the connection refuses LOAD DATA LOCAL INFILE and a second statement in one query', function () use ($tmp) {
+    file_put_contents($tmp . '/infile.txt', "x\n");
+    $infile = false;
+    try { Tfm\Db::pdo()->exec('LOAD DATA LOCAL INFILE ' . Tfm\Db::pdo()->quote($tmp . '/infile.txt') . ' INTO TABLE rate_limits (bucket)'); } catch (Throwable $e) { $infile = true; }
+    $multi = false;
+    try { Tfm\Db::pdo()->exec("SELECT 1; DELETE FROM rate_limits WHERE bucket = 'never'"); } catch (Throwable $e) { $multi = true; }
+    return $infile && $multi ? true : 'infile refused: ' . json_encode($infile) . ' · multi refused: ' . json_encode($multi);
+});
+@unlink($cfgFile);
+Tfm\Config::reset();
+Tfm\Db::reset();
+
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all security-data unit checks passed" : "✖ $failed check(s) failed") . PHP_EOL;
 exit($failed === 0 ? 0 : 1);
