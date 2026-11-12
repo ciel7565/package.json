@@ -1241,6 +1241,135 @@ async function main() {
     return `upTo[${uid}] = ${up[uid]} · line 1 #${l1.data.message.id} taken back, line 2 #${l2.data.message.id} kept`;
   });
 
+  // ------------------------------------------------------------- real-time beds "실시간 텃밭" + 곳간 (CONTRACT §15.1 / §15.2)
+  // The server measures the time itself (lib/Farm.php). With farm.rt_scale = 300 (Settings, set through the spawned
+  // server's own lib) a 10-minute mint takes 2 s and a 60-minute bean 12 s, so the steps can wait for real.
+  const F = new Client('F');
+  const userF = { email: `e2e_farm${id}@example.com`, nickname: `텃밭${tag.slice(-5)}` };
+  let fUser = null, fStored = null, fRt = null;
+  const fPid = () => crypto.randomBytes(8).toString('hex');
+  const mint = fPid(), bean = fPid();
+  const fSave = (s) => F.req('api/player/save.php', { json: saveBody(s) });
+  /** $s with bed $bedId harvested on the client: bed gone, a `last` entry, stats.rtHarvests + 1, the items in the 곳간 */
+  const fHarvest = (s, bedId, amount, stars, item) => {
+    const n = structuredClone(s), b = n.rtfarm.beds[bedId];
+    delete n.rtfarm.beds[bedId];
+    n.rtfarm.last = [{ pid: b.pid, bedId, cropId: b.cropId, amount, stars, at: Date.now() }, ...n.rtfarm.last].slice(0, 8);
+    n.stats.rtHarvests += 1;
+    n.storage.items[item] = (n.storage.items[item] || 0) + amount;
+    n.savedAt = Date.now();
+    return n;
+  };
+  await step('farm: ping carries rtScale; a player registers and the first save answers rt = {scale, tier, beds:{}}', async () => {
+    const p = await F.req('api/ping.php');
+    assert(p.status === 200 && typeof p.data?.rtScale === 'number' && p.data.rtScale >= 0.1, `ping rtScale ${p.data?.rtScale}`);
+    const r = await F.req('api/auth/register.php', { json: { email: userF.email, nickname: userF.nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(r.status === 200 && r.data?.user?.id, `register ${r.status} ${r.error?.code || ''}`);
+    fUser = r.data.user;
+    const s = freshState(fUser);
+    s.rtfarm = { beds: {}, last: [], reports: [] };
+    s.storage = { items: {}, cap: 300 };
+    s.stats.rtHarvests = 0;
+    const sv = await fSave(s);
+    assert(sv.status === 200 && sv.data?.rt && typeof sv.data.rt.scale === 'number' && sv.data.rt.tier === 1, `first save ${sv.status} ${sv.error?.code || ''} rt ${JSON.stringify(sv.data?.rt)}`);
+    assert(sv.json && /"beds":\{\}/.test(sv.text), 'rt.beds is an empty object');
+    fStored = s;
+    return `rtScale ${p.data.rtScale}, user #${fUser.id}`;
+  });
+  await step('farm: the operator time scale (Settings farm.rt_scale = 300 → 10 min ≈ 2 s) is what ping reports', async () => {
+    if (!phpProc) return 'skipped (external server: the scale is set through the spawned server)';
+    const v = srvPhp('(function () { Tfm\\Settings::set("farm.rt_scale", 300.0, null); return Tfm\\Farm::scale(); })()');
+    assert(v === 300, `scale ${v}`);
+    const p = await F.req('api/ping.php');
+    assert(p.data?.rtScale === 300, `ping rtScale ${p.data?.rtScale}`);
+    return 'rtScale 300';
+  });
+  await step('farm: plant a mint (RB1) and a bean (RB2) → the answer carries the SERVER readyAt (a faked plantedAt / readyAt a day back changes nothing)', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const s = structuredClone(fStored);
+    const t = Date.now();
+    s.rtfarm.beds.RB1 = { cropId: 'CROP_MINT', pid: mint, plantedAt: t - 86400000, readyAt: t - 1, dur: 1, tier: 1, care: 50, lastCareAt: 0 };
+    s.rtfarm.beds.RB2 = { cropId: 'CROP_BEAN', pid: bean, plantedAt: t - 86400000, readyAt: t - 1, dur: 1, tier: 1, care: 0, lastCareAt: 0 };
+    s.savedAt = t;
+    const r = await fSave(s);
+    assert(r.status === 200, `save ${r.status} ${r.error?.code || ''} ${r.json?.data?.violations || ''}`);
+    const a = r.data.rt?.beds?.RB1, b = r.data.rt?.beds?.RB2;
+    assert(a && a.pid === mint && a.cropId === 'CROP_MINT' && a.status === 'growing' && a.readyAt - a.firstSeenAt === 2000, `RB1 ${JSON.stringify(a)}`);
+    assert(b && b.pid === bean && b.readyAt - b.firstSeenAt === 12000, `RB2 ${JSON.stringify(b)}`);
+    assert(Math.abs(a.firstSeenAt - r.json.serverTime) < 5000, `firstSeenAt ${a.firstSeenAt} vs server ${r.json.serverTime}`);
+    fStored = s; fRt = r.data.rt;
+    return `RB1 ready +${a.readyAt - a.firstSeenAt} ms, RB2 +${b.readyAt - b.firstSeenAt} ms after the server first saw them`;
+  });
+  await step('farm: player/get carries the same rt (the server\'s times), next to save and sub', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const g = await F.req('api/player/get.php');
+    assert(g.status === 200 && g.data?.rt?.beds?.RB1?.readyAt === fRt.beds.RB1.readyAt && g.data.rt.beds.RB2.firstSeenAt === fRt.beds.RB2.firstSeenAt, `get rt ${JSON.stringify(g.data?.rt)}`);
+    assert(g.data.save && !('rt' in g.data.save), 'rt sits next to save, not inside it');
+  });
+  await step('farm: harvesting the bean before its readyAt → 409 VALIDATION_FAILED · RT_HARVEST_TOO_EARLY, the stored save and rt come back', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const h = fHarvest(fStored, 'RB2', 4, 1, 'ITEM_BEAN');
+    h.stats.coin += 80; h.stats.exp += 100;
+    const r = await fSave(h);
+    assert(r.status === 409 && r.error?.code === 'VALIDATION_FAILED' && (r.json?.data?.violations || []).includes('RT_HARVEST_TOO_EARLY'), `${r.status} ${r.error?.code} ${r.json?.data?.violations}`);
+    assert(r.json.data.save?.data?.rtfarm?.beds?.RB2?.pid === bean, 'the stored copy (bean still growing) is returned');
+    assert(r.json.data.rt?.beds?.RB2?.status === 'growing', `data.rt ${JSON.stringify(r.json.data.rt)}`);
+    const row = dbAll('SELECT status FROM farm_beds WHERE user_id = ? AND pid = ?', [Number(fUser.id), bean])[0];
+    assert(row && row.status === 'growing', `farm_beds ${JSON.stringify(row)}`);
+    return (r.json.data.violations || []).join(',');
+  });
+  await step('farm: after the mint\'s readyAt the harvest is accepted with its reward (5 mint into the 곳간, +45 coin, +60 exp); the 곳간 mirror equals the save', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const wait = fRt.beds.RB1.readyAt - Date.now() + 300;
+    if (wait > 0) await sleep(wait);
+    const h = fHarvest(fStored, 'RB1', 5, 2, 'ITEM_MINT');
+    h.stats.coin += 45; h.stats.exp += 60;
+    const r = await fSave(h);
+    assert(r.status === 200, `harvest ${r.status} ${r.error?.code || ''} ${r.json?.data?.violations || ''}`);
+    assert(!r.data.rt?.beds?.RB1 && r.data.rt?.beds?.RB2?.pid === bean, `rt after the harvest ${JSON.stringify(r.data.rt)}`);
+    const row = dbAll('SELECT status, amount, stars, harvested_at FROM farm_beds WHERE user_id = ? AND pid = ?', [Number(fUser.id), mint])[0];
+    assert(row && row.status === 'harvested' && Number(row.amount) === 5 && Number(row.stars) === 2 && Number(row.harvested_at) >= fRt.beds.RB1.readyAt - 5000, `farm_beds ${JSON.stringify(row)}`);
+    const mirror = Object.fromEntries(dbAll('SELECT item_id, qty FROM farm_storage WHERE user_id = ?', [Number(fUser.id)]).map((x) => [x.item_id, Number(x.qty)]));
+    assert(JSON.stringify(mirror) === JSON.stringify(h.storage.items), `farm_storage ${JSON.stringify(mirror)} vs save ${JSON.stringify(h.storage.items)}`);
+    const g = await F.req('api/player/get.php');
+    assert(g.data?.save?.data?.stats?.coin === h.stats.coin && g.data.save.data.storage.items.ITEM_MINT === 5 && g.data.save.data.stats.rtHarvests === 1, 'the reward is in the stored save');
+    fStored = h;
+    return `harvested ${row.amount} at +${Number(row.harvested_at) - fRt.beds.RB1.firstSeenAt} ms · 곳간 ${JSON.stringify(mirror)}`;
+  });
+  await step('farm: the same mint harvested twice is refused (RT_HARVEST_COUNT) and putting it back in the bed is refused (RT_PID_REUSE)', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const twice = structuredClone(fStored);
+    twice.rtfarm.last = [{ ...twice.rtfarm.last[0], at: Date.now() }, ...twice.rtfarm.last];
+    twice.stats.rtHarvests += 1; twice.storage.items.ITEM_MINT += 5; twice.stats.coin += 45;
+    const a = await fSave(twice);
+    assert(a.status === 409 && (a.json?.data?.violations || []).includes('RT_HARVEST_COUNT'), `twice: ${a.status} ${a.json?.data?.violations}`);
+    const back = structuredClone(fStored);
+    back.rtfarm.beds.RB1 = { cropId: 'CROP_MINT', pid: mint, plantedAt: Date.now(), readyAt: Date.now() + 2000, dur: 2000, tier: 1, care: 0, lastCareAt: 0 };
+    const b = await fSave(back);
+    assert(b.status === 409 && (b.json?.data?.violations || []).includes('RT_PID_REUSE'), `put back: ${b.status} ${b.json?.data?.violations}`);
+    return `${a.json.data.violations} · ${b.json.data.violations}`;
+  });
+  await step('farm: a 곳간 over its cap (301) and a seed in the 곳간 are refused (STORAGE_OVER_CAP · STORAGE_BAD_ITEM); bag ↔ 곳간 moves are accepted', async () => {
+    const base = fStored || (() => { throw new Error('no farm save'); })();
+    const over = structuredClone(base); over.storage.items.ITEM_BEAN = 300 - (over.storage.items.ITEM_MINT || 0) + 1; over.storage.cap = 9999;
+    const a = await fSave(over);
+    assert(a.status === 409 && (a.json?.data?.violations || []).includes('STORAGE_OVER_CAP'), `over cap: ${a.status} ${a.json?.data?.violations}`);
+    const seed = structuredClone(base); seed.storage.items.ITEM_SEED_BEAN = 1; seed.inventory.ITEM_SEED_BEAN -= 1;
+    const b = await fSave(seed);
+    assert(b.status === 409 && (b.json?.data?.violations || []).includes('STORAGE_BAD_ITEM'), `seed: ${b.status} ${b.json?.data?.violations}`);
+    let moved = 'no move (the 곳간 is empty on an external server)';
+    if ((base.storage.items.ITEM_MINT || 0) >= 2) {
+      const move = structuredClone(base); move.storage.items.ITEM_MINT -= 2; move.inventory.ITEM_MINT = (move.inventory.ITEM_MINT || 0) + 2; move.savedAt = Date.now();
+      const c = await fSave(move);
+      assert(c.status === 200, `move: ${c.status} ${c.error?.code || ''} ${c.json?.data?.violations || ''}`);
+      const mirror = Object.fromEntries(dbAll('SELECT item_id, qty FROM farm_storage WHERE user_id = ?', [Number(fUser.id)]).map((x) => [x.item_id, Number(x.qty)]));
+      assert(JSON.stringify(mirror) === JSON.stringify(move.storage.items), `mirror after the move ${JSON.stringify(mirror)}`);
+      fStored = move;
+      moved = `move 2 mint 곳간 → bag: 200, mirror ${JSON.stringify(mirror)}`;
+    }
+    return `${a.json.data.violations} · ${b.json.data.violations} · ${moved}`;
+  });
+
   // ------------------------------------------------------------- summary
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${failed.length ? C.r('✖') : C.g('✔')} ${results.length - failed.length}/${results.length} passed${failed.length ? ` — failed: ${failed.map((f) => f.name).join(' | ')}` : ''}`);

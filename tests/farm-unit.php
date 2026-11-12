@@ -286,5 +286,271 @@ check('SaveValidator — Object.prototype names as bed / 곳간 ids are a malfor
         && throwsApi(function () use ($b) { Tfm\SaveValidator::assertNoProtoKeys($b); }, 'INVALID_SAVE', 400);
 });
 
+// =============================================================================================== 2 · Farm::sync (server authority)
+/** a growing real-time bed as the client stores it */
+function bed(string $crop, string $pid, int $t, array $o = []): stdClass
+{
+    return (object) ($o + ['cropId' => $crop, 'pid' => $pid, 'plantedAt' => $t, 'readyAt' => $t + 600000, 'dur' => 600000, 'tier' => 1, 'care' => 0, 'lastCareAt' => 0]);
+}
+/** $s with bed $bedId harvested on the client: bed gone, a `last` entry, stats.rtHarvests + 1 */
+function harvested(stdClass $s, string $bedId, int $amount, int $stars, int $t): stdClass
+{
+    $n = cl($s);
+    $b = $n->rtfarm->beds->$bedId;
+    unset($n->rtfarm->beds->$bedId);
+    array_unshift($n->rtfarm->last, (object) ['pid' => $b->pid, 'bedId' => $bedId, 'cropId' => $b->cropId, 'amount' => $amount, 'stars' => $stars, 'at' => $t]);
+    $n->rtfarm->last = array_slice($n->rtfarm->last, 0, 8);
+    $n->stats->rtHarvests++;
+    return $n;
+}
+/** the farm_beds rows of a planting */
+function row(int $uid, string $pid): ?array { return Tfm\Db::one('SELECT * FROM farm_beds WHERE user_id = ? AND pid = ? ORDER BY id DESC', [$uid, $pid]); }
+function vcodes(array $plan): array { return array_values(array_unique(array_map(function ($v) { return $v['code']; }, $plan['violations']))); }
+Tfm\Config::override('farm.rt_scale', 1.0);
+if (class_exists('Tfm\Settings')) Tfm\Settings::reset();
+
+check('Farm::durationMs — minutes × 60000 ÷ (tier × scale): mint 10 min, tier 2 halves it, scale 60 makes it 10 s', function () {
+    return Tfm\Farm::durationMs('CROP_MINT', 1, 1.0) === 600000 && Tfm\Farm::durationMs('CROP_MINT', 2, 1.0) === 300000
+        && Tfm\Farm::durationMs('CROP_MINT', 1, 60.0) === 10000 && Tfm\Farm::durationMs('CROP_CORN', 4, 2.0) === 3600000;
+});
+$ADM = newUser('admin');
+check('Farm::scale / setScale — the config default, an admin sets 60, out-of-range and NaN are refused, a player cannot', function () use ($ADM, $U1) {
+    if (Tfm\Farm::scale() !== 1.0) return 'default ' . Tfm\Farm::scale();
+    $player = apiCode(function () use ($U1) { Tfm\Farm::setScale($U1, 5.0); });
+    Tfm\Farm::setScale($ADM, 60.0);
+    $set = Tfm\Farm::scale();
+    $low = apiCode(function () use ($ADM) { Tfm\Farm::setScale($ADM, 0.05); });
+    $high = apiCode(function () use ($ADM) { Tfm\Farm::setScale($ADM, 3601.0); });
+    $nan = apiCode(function () use ($ADM) { Tfm\Farm::setScale($ADM, NAN); });
+    $audit = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'setting_changed' AND actor_id = ?", [(int) $ADM['id']]);
+    Tfm\Farm::setScale($ADM, 1.0);
+    return $player === '403 FORBIDDEN' && $set === 60.0 && $low === '400 INVALID_SETTING' && $high === '400 INVALID_SETTING' && $nan === '400 INVALID_SETTING' && $audit >= 1 && Tfm\Farm::scale() === 1.0
+        ? true : "player=$player set=$set low=$low high=$high nan=$nan audit=$audit now=" . Tfm\Farm::scale();
+});
+
+$U2 = newUser();
+$T = Tfm\Clock::ms();
+$s0 = fresh($U2, $T - 60000);
+$X = pid();
+$s1 = cl($s0);
+// the client claims the mint was planted a day ago and is ready already: the server ignores plantedAt / readyAt / dur
+$s1->rtfarm->beds->RB1 = bed('CROP_MINT', $X, $T - 86400000, ['readyAt' => $T - 1, 'dur' => 1]);
+$plant = null;
+check('Farm::sync — (1) a new planting: first_seen_at = now, ready_at = now + 10 min by the server clock (a faked plantedAt in the past changes nothing)', function () use (&$plant, $U2, $s0, $s1, $T, $X) {
+    $plant = Tfm\Farm::sync((int) $U2['id'], cl($s1), cl($s0), $T, 1);
+    $r = row((int) $U2['id'], $X);
+    if (!$plant['ok']) return 'violations ' . implode(',', vcodes($plant));
+    return $r && (int) $r['first_seen_at'] === $T && (int) $r['ready_at'] === $T + 600000 && $r['status'] === 'growing' && $r['kind'] === 'rt'
+        && $r['bed_id'] === 'RB1' && $r['crop_id'] === 'CROP_MINT' && (int) $r['tier'] === 1 ? true : json_encode($r);
+});
+check('Farm::view — data.rt: {scale, tier, beds:{RB1:{pid, cropId, firstSeenAt, readyAt, status}}} from the server records', function () use ($U2, $T, $X) {
+    $v = Tfm\Farm::view((int) $U2['id'], 1, $T + 1000);
+    $b = $v['beds']['RB1'] ?? null;
+    return $v['scale'] === 1.0 && $v['tier'] === 1 && $b && $b['pid'] === $X && $b['cropId'] === 'CROP_MINT' && $b['firstSeenAt'] === $T && $b['readyAt'] === $T + 600000 && $b['status'] === 'growing'
+        ? true : json_encode($v);
+});
+check('Farm::view — no bed growing: beds is an empty JSON object ({}), not a list', function () {
+    $u = newUser();
+    return json_encode(Tfm\Farm::view((int) $u['id'], 1)['beds']) === '{}';
+});
+check('Farm::sync — a save that keeps the planting changes nothing (same ready_at, still growing)', function () use ($U2, $s1, $T, $X) {
+    $r = Tfm\Farm::sync((int) $U2['id'], cl($s1), cl($s1), $T + 30000, 1);
+    $row = row((int) $U2['id'], $X);
+    return $r['ok'] && (int) $row['ready_at'] === $T + 600000 && $row['status'] === 'growing' ? true : implode(',', vcodes($r)) . ' ' . json_encode($row);
+});
+$h1 = harvested($s1, 'RB1', 4, 1, $T + 60000);
+check('Farm::sync — (2) a harvest before ready_at − 5 s → RT_HARVEST_TOO_EARLY, nothing is written', function () use ($U2, $s1, $h1, $T, $X) {
+    $r = Tfm\Farm::sync((int) $U2['id'], cl($h1), cl($s1), $T + 60000, 1);
+    $row = row((int) $U2['id'], $X);
+    return !$r['ok'] && in_array('RT_HARVEST_TOO_EARLY', vcodes($r), true) && !in_array('RT_HARVEST_COUNT', vcodes($r), true) && $row['status'] === 'growing'
+        ? true : implode(',', vcodes($r)) . ' ' . $row['status'];
+});
+check('Farm::sync — (2) the same harvest at ready_at − 5.5 s is still too early (the slack is 5 s)', function () use ($U2, $s1, $h1, $T) {
+    $r = Tfm\Farm::plan((int) $U2['id'], cl($h1), cl($s1), $T + 600000 - 5500, 1);
+    return vcodes($r) === ['RT_HARVEST_TOO_EARLY'] ? true : implode(',', vcodes($r));
+});
+$harv = null;
+check('Farm::sync — (2) at ready_at − 4 s the harvest is accepted: row harvested (harvested_at, amount, stars), reward explained (4 × 40 + 45, 60 exp)', function () use (&$harv, $U2, $s1, $h1, $T, $X) {
+    $harv = Tfm\Farm::sync((int) $U2['id'], cl($h1), cl($s1), $T + 600000 - 4000, 1);
+    $row = row((int) $U2['id'], $X);
+    return $harv['ok'] && $harv['harvests'] === 1 && $harv['explain'] === ['value' => 4 * 40 + 45, 'exp' => 60] && $row['status'] === 'harvested'
+        && (int) $row['harvested_at'] === $T + 600000 - 4000 && (int) $row['amount'] === 4 && (int) $row['stars'] === 1
+        ? true : implode(',', vcodes($harv)) . ' ' . json_encode($harv['explain']) . ' ' . json_encode($row);
+});
+check('Farm::sync — a second harvest of the same pid is refused (the bed put back → RT_PID_REUSE; the harvest counted again → RT_HARVEST_COUNT)', function () use ($U2, $h1, $T, $X) {
+    $back = cl($h1);
+    $back->rtfarm->beds->RB1 = bed('CROP_MINT', $X, $T);
+    $a = Tfm\Farm::plan((int) $U2['id'], $back, cl($h1), $T + 700000, 1);
+    $again = cl($h1);
+    array_unshift($again->rtfarm->last, cl($again->rtfarm->last[0]));
+    $again->stats->rtHarvests++;
+    $b = Tfm\Farm::plan((int) $U2['id'], $again, cl($h1), $T + 700000, 1);
+    return in_array('RT_PID_REUSE', vcodes($a), true) && in_array('RT_HARVEST_COUNT', vcodes($b), true) ? true : 'put back: ' . implode(',', vcodes($a)) . ' · counted again: ' . implode(',', vcodes($b));
+});
+check('Farm::sync — (3) stats.rtHarvests that grows without a harvested planting → RT_HARVEST_COUNT', function () use ($U2, $h1, $T) {
+    $n = cl($h1);
+    $n->stats->rtHarvests += 1;
+    $r = Tfm\Farm::plan((int) $U2['id'], $n, cl($h1), $T + 700000, 1);
+    return vcodes($r) === ['RT_HARVEST_COUNT'] ? true : implode(',', vcodes($r));
+});
+check('Farm::sync — an amount above harvestAmount.max + 1 → RT_HARVEST_COUNT (mint: max 5 + 1 = 6)', function () use ($U2, $T) {
+    $uid = (int) $U2['id'];
+    $p = pid();
+    $a = fresh($U2, $T);
+    $a->rtfarm->beds->RB2 = bed('CROP_MINT', $p, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $seven = Tfm\Farm::plan($uid, harvested($a, 'RB2', 7, 3, $T), cl($a), $T + 600000, 1);
+    $six = Tfm\Farm::plan($uid, harvested($a, 'RB2', 6, 3, $T), cl($a), $T + 600000, 1);
+    return vcodes($seven) === ['RT_HARVEST_COUNT'] && $six['ok'] ? true : '7 → ' . implode(',', vcodes($seven)) . ' · 6 → ' . implode(',', vcodes($six));
+});
+check('Farm::sync — RT_PID_REUSE: a planting id seen before on another bed or with another crop', function () use ($U2, $T) {
+    $uid = (int) $U2['id'];
+    $p = pid();
+    $a = fresh($U2, $T);
+    $a->rtfarm->beds->RB3 = bed('CROP_BEAN', $p, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $moved = cl($a); unset($moved->rtfarm->beds->RB3); $moved->rtfarm->beds->RB4 = bed('CROP_BEAN', $p, $T);
+    $other = cl($a); $other->rtfarm->beds->RB3 = bed('CROP_CORN', $p, $T);
+    $m = Tfm\Farm::plan($uid, $moved, cl($a), $T + 1000, 1);
+    $o = Tfm\Farm::plan($uid, $other, cl($a), $T + 1000, 1);
+    return in_array('RT_PID_REUSE', vcodes($m), true) && in_array('RT_PID_REUSE', vcodes($o), true) ? true : 'moved: ' . implode(',', vcodes($m)) . ' · other crop: ' . implode(',', vcodes($o));
+});
+check('Farm::sync — a planting pulled out without a harvest (뽑기) → row cleared, no reward', function () use ($U2, $T) {
+    $uid = (int) $U2['id'];
+    $p = pid();
+    $a = fresh($U2, $T);
+    $a->rtfarm->beds->RB4 = bed('CROP_RADISH', $p, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $b = cl($a); unset($b->rtfarm->beds->RB4);
+    $r = Tfm\Farm::sync($uid, $b, cl($a), $T + 5000, 1);
+    return $r['ok'] && $r['harvests'] === 0 && $r['explain'] === ['value' => 0, 'exp' => 0] && row($uid, $p)['status'] === 'cleared' ? true : json_encode(row($uid, $p));
+});
+check('Farm::sync — tier 2 halves the time: a mint planted at tier 2 is ready after 5 minutes', function () use ($T) {
+    $u = newUser();
+    $p = pid();
+    $a = fresh($u, $T);
+    $a->rtfarm->beds->RB1 = bed('CROP_MINT', $p, $T, ['tier' => 2]);
+    Tfm\Farm::sync((int) $u['id'], cl($a), null, $T, 2);
+    $row = row((int) $u['id'], $p);
+    return (int) $row['ready_at'] === $T + 300000 && (int) $row['tier'] === 2 ? true : json_encode($row);
+});
+check('Farm::sync — (5) a tier change re-times a growing row: 500 s left at tier 1 → 250 s at tier 2', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $p = pid();
+    $a = fresh($u, $T);
+    $a->rtfarm->beds->RB1 = bed('CROP_MINT', $p, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $r = Tfm\Farm::sync($uid, cl($a), cl($a), $T + 100000, 2);
+    $row = row($uid, $p);
+    return $r['ok'] && (int) $row['ready_at'] === $T + 100000 + 250000 && (int) $row['tier'] === 2 ? true : json_encode($row);
+});
+check('Farm::sync — (6) a row whose ready_at has passed becomes ready on the next save', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $p = pid();
+    $a = fresh($u, $T);
+    $a->rtfarm->beds->RB2 = bed('CROP_MINT', $p, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    Tfm\Farm::sync($uid, cl($a), cl($a), $T + 600001, 1);
+    return row($uid, $p)['status'] === 'ready' && Tfm\Farm::view($uid, 1, $T + 600001)['beds']['RB2']['status'] === 'ready' ? true : json_encode(row($uid, $p));
+});
+check('Farm::sync — a progress reset (fresh state, no previous save) clears the plantings the server still had', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $p = pid();
+    $a = fresh($u, $T);
+    $a->rtfarm->beds->RB1 = bed('CROP_MINT', $p, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $r = Tfm\Farm::sync($uid, fresh($u, $T + 9000), null, $T + 9000, 1);
+    return $r['ok'] && row($uid, $p)['status'] === 'cleared' ? true : implode(',', vcodes($r)) . ' ' . json_encode(row($uid, $p));
+});
+check('Farm::sync — an operator-restored copy that still shows a harvested bed is tolerated (no RT_PID_REUSE), and cannot be harvested twice', function () use ($U2, $s1, $h1, $T, $X) {
+    // the stored copy ($s1, restored by the operator) still has the mint that the server already saw harvested
+    $r = Tfm\Farm::plan((int) $U2['id'], cl($s1), cl($s1), $T + 900000, 1);
+    $twice = Tfm\Farm::plan((int) $U2['id'], cl($h1), cl($s1), $T + 900000, 1);
+    return $r['ok'] && row((int) $U2['id'], $X)['status'] === 'harvested' && in_array('RT_HARVEST_COUNT', vcodes($twice), true)
+        ? true : 'restored: ' . implode(',', vcodes($r)) . ' · harvest again: ' . implode(',', vcodes($twice));
+});
+check('Farm::sync — (7) quick plots are mirrored: one row per planting (pid = String(plantedAt)), growth, ready at 100, harvested when gone', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $a = fresh($u, $T);
+    $planted = (int) $a->farm->plots->P1->plantedAt;
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $r0 = Tfm\Db::one("SELECT * FROM farm_beds WHERE user_id = ? AND kind = 'plot' AND bed_id = 'P1'", [$uid]);
+    $b = cl($a); $b->farm->plots->P1->growth = 100;
+    Tfm\Farm::sync($uid, cl($b), cl($a), $T + 60000, 1);
+    $r1 = Tfm\Db::one("SELECT * FROM farm_beds WHERE user_id = ? AND kind = 'plot' AND bed_id = 'P1'", [$uid]);
+    $c = cl($b); $c->farm->plots->P1 = (object) ['cropId' => null, 'growth' => 0, 'water' => 40, 'health' => 100, 'plantedAt' => 0, 'lastUpdate' => $T, 'lastWaterAt' => 0, 'harvests' => 1];
+    Tfm\Farm::sync($uid, cl($c), cl($b), $T + 70000, 1);
+    $r2 = Tfm\Db::one("SELECT * FROM farm_beds WHERE user_id = ? AND kind = 'plot' AND bed_id = 'P1'", [$uid]);
+    $n = (int) Tfm\Db::value("SELECT COUNT(*) FROM farm_beds WHERE user_id = ? AND kind = 'plot'", [$uid]);
+    return $r0 && $r0['pid'] === (string) $planted && (int) $r0['growth'] === 65 && $r0['status'] === 'growing' && $r0['crop_id'] === 'CROP_BEAN'
+        && $r1['status'] === 'ready' && (int) $r1['growth'] === 100 && $r2['status'] === 'harvested' && (int) $r2['harvested_at'] === $T + 70000 && $n === 2
+        ? true : json_encode([$r0, $r1, $r2, $n]);
+});
+check('Farm::sync — (7) a quick plot emptied without a harvest → cleared; a herb regrown (new plantedAt) → a new row', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $a = fresh($u, $T);
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $b = cl($a);
+    $b->farm->plots->P6 = (object) ['cropId' => null, 'growth' => 0, 'water' => 40, 'health' => 100, 'plantedAt' => 0, 'lastUpdate' => $T, 'lastWaterAt' => 0, 'harvests' => 0];
+    $b->farm->plots->P1->plantedAt = $T - 1000;
+    $b->farm->plots->P1->growth = 30;
+    $b->farm->plots->P1->harvests = 1;
+    Tfm\Farm::sync($uid, cl($b), cl($a), $T + 5000, 1);
+    $p6 = Tfm\Db::one("SELECT status FROM farm_beds WHERE user_id = ? AND kind = 'plot' AND bed_id = 'P6'", [$uid]);
+    $p1 = Tfm\Db::all("SELECT pid, status FROM farm_beds WHERE user_id = ? AND kind = 'plot' AND bed_id = 'P1' ORDER BY id", [$uid]);
+    return $p6['status'] === 'cleared' && count($p1) === 2 && $p1[0]['status'] === 'harvested' && $p1[1]['pid'] === (string) ($T - 1000) && $p1[1]['status'] === 'growing'
+        ? true : json_encode([$p6, $p1]);
+});
+check('Farm::sync — (8) the 곳간 is mirrored into farm_storage on every accepted save (added, changed and removed items)', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $a = fresh($u, $T);
+    $a->storage->items = (object) ['ITEM_MINT' => 4, 'ITEM_BEAN' => 2];
+    Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $m1 = Tfm\Db::all('SELECT item_id, qty FROM farm_storage WHERE user_id = ? ORDER BY item_id', [$uid]);
+    $b = cl($a);
+    $b->storage->items = (object) ['ITEM_MINT' => 1, 'ITEM_KIMCHI' => 3];
+    Tfm\Farm::sync($uid, cl($b), cl($a), $T + 1000, 1);
+    $m2 = Tfm\Db::all('SELECT item_id, qty FROM farm_storage WHERE user_id = ? ORDER BY item_id', [$uid]);
+    $norm = function (array $rows) { $o = []; foreach ($rows as $r) $o[$r['item_id']] = (int) $r['qty']; return $o; };
+    return $norm($m1) === ['ITEM_BEAN' => 2, 'ITEM_MINT' => 4] && $norm($m2) === ['ITEM_KIMCHI' => 3, 'ITEM_MINT' => 1] ? true : json_encode([$m1, $m2]);
+});
+check('Farm::sync — a refused farm check writes nothing (no planting row, no mirror change)', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $a = fresh($u, $T);
+    $a->rtfarm->beds->RB1 = bed('CROP_MINT', pid(), $T);
+    $a->storage->items = (object) ['ITEM_MINT' => 4];
+    $a->stats->rtHarvests = 3;   // harvests the server never saw
+    $r = Tfm\Farm::sync($uid, cl($a), null, $T, 1);
+    $rows = (int) Tfm\Db::value('SELECT COUNT(*) FROM farm_beds WHERE user_id = ?', [$uid]);
+    $st = (int) Tfm\Db::value('SELECT COUNT(*) FROM farm_storage WHERE user_id = ?', [$uid]);
+    return !$r['ok'] && vcodes($r) === ['RT_HARVEST_COUNT'] && $rows === 0 && $st === 0 ? true : implode(',', vcodes($r)) . " rows=$rows storage=$st";
+});
+check('Farm::plan as the SaveValidator hook — a validated corn harvest passes the economy check; the same harvest early is refused', function () use ($T) {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $p = pid();
+    $a = fresh($u, $T);
+    $first = Tfm\SaveValidator::validate(cl($a), null, [], $u, $T - 1000, $T, 1, null);
+    $a2 = cl($a);
+    $a2->rtfarm->beds->RB1 = bed('CROP_CORN', $p, $T);
+    $hook = function ($t) use ($uid) { return function ($n, $pp) use ($uid, $t) { return Tfm\Farm::plan($uid, $n, $pp, $t, 1); }; };
+    $planted = Tfm\SaveValidator::validate(cl($a2), cl($a), $first['meta'], $u, $T, $T + 1000, 1, $hook($T + 1000));
+    Tfm\Farm::sync($uid, cl($a2), cl($a), $T + 1000, 1);
+    $h = harvested($a2, 'RB1', 5, 3, $T);
+    $h->storage->items = (object) ['ITEM_CORN' => 5];
+    $h->stats->coin += 250; $h->stats->level = 2; $h->stats->exp = 200;
+    $early = Tfm\SaveValidator::validate(cl($h), cl($a2), $planted['meta'], $u, $T + 1000, $T + 2000, 1, $hook($T + 2000));
+    $late = Tfm\SaveValidator::validate(cl($h), cl($a2), $planted['meta'], $u, $T + 1000, $T + 1000 + 28800000, 1, $hook($T + 1000 + 28800000));
+    return $planted['ok'] && !$early['ok'] && in_array('RT_HARVEST_TOO_EARLY', codes($early), true) && $late['ok'] && $late['summary']['rt'] === ['harvests' => 1, 'value' => 250 + 5 * 50, 'exp' => 320]
+        ? true : 'planted ' . implode(',', codes($planted)) . ' · early ' . implode(',', codes($early)) . ' · late ' . implode(',', codes($late)) . ' ' . json_encode($late['summary']['rt']);
+});
+
 echo PHP_EOL . ($failed === 0 ? "✔ all $passed farm unit checks passed" : "✖ $failed of " . ($failed + $passed) . " farm check(s) failed") . " (driver " . Tfm\Db::driver() . ')' . PHP_EOL;
 exit($failed === 0 ? 0 : 1);

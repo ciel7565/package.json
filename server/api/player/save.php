@@ -19,6 +19,13 @@
  * data:{save:{version, revision, savedAt, data}, violations:[codes]}} and the client restores the stored copy.
  * profile.id is immutable; role / nickname / email and `sub` are forced to the account values (the client's `sub`
  * is ignored, like a stale role: stored as the server's, never refused).
+ *
+ * Real-time beds (CONTRACT §15.1, lib/Farm.php): Tfm\Farm::plan judges data.rtfarm against the server's own records
+ * inside the same transaction, as the validator's farm hook (planting times measured by the server clock, early
+ * harvests → RT_HARVEST_TOO_EARLY, reused planting ids → RT_PID_REUSE, harvest counts → RT_HARVEST_COUNT); its records
+ * (farm_beds, the quick-plot and 곳간 mirrors) are written only when the save is accepted. The accepted answer and both
+ * 409 answers carry rt = {scale, tier, beds: {RB1: {pid, cropId, firstSeenAt, readyAt, status}, …}} — the server's times
+ * (data.rt on a 409), which the client adopts with G.sys.realfarm.applyServer(rt).
  */
 declare(strict_types=1);
 
@@ -31,6 +38,7 @@ use Tfm\Clock;
 use Tfm\Config;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Farm;
 use Tfm\GameData;
 use Tfm\Http;
 use Tfm\Json;
@@ -103,7 +111,13 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
             if (!is_array($meta)) $meta = [];
             $prevAt = $row ? (int) $row['saved_at'] : (int) $user['created_at'];
             $res = ['ok' => true, 'meta' => $meta, 'violations' => [], 'summary' => [], 'notes' => []];
-            if ($validate) $res = SaveValidator::validate($data, $prev, $meta, $user, $prevAt, $now, $tier);
+            // the real-time farm judge (CONTRACT §15.1): runs inside this transaction after the validator's shape checks
+            $farmPlan = null;
+            $farmHook = class_exists('Tfm\Farm') ? function (object $n, ?object $p) use (&$farmPlan, $uid, $now, $tier): array {
+                $farmPlan = Farm::plan($uid, $n, $p, $now, $tier);
+                return $farmPlan;
+            } : null;
+            if ($validate) $res = SaveValidator::validate($data, $prev, $meta, $user, $prevAt, $now, $tier, $farmHook);
             else $res['meta']['tier'] = $tier;
             if (!$res['ok']) {
                 if ($row) Db::exec('UPDATE player_saves SET rejects = rejects + 1, last_reject_at = ? WHERE user_id = ?', [$now, $uid]);
@@ -140,6 +154,9 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
             ], ['user_id']);
             $p = SaveValidator::profileSummary($data);
             Db::upsert('user_profiles', ['user_id' => $uid] + $p + ['updated_at' => $now], ['user_id']);
+            // the farm records of an accepted save (validation off: recorded as far as possible, nothing refused)
+            if ($farmPlan !== null) Farm::apply($farmPlan);
+            elseif (class_exists('Tfm\Farm')) Farm::sync($uid, $data, $prev, $now, $tier, false);
             if (in_array('reset', isset($res['notes']) ? $res['notes'] : [], true)) Audit::log('save_reset', $uid);
             return ['ok' => true, 'rev' => $rev, 'size' => strlen($json), 'summary' => isset($res['summary']) ? $res['summary'] : []];
         });
@@ -152,11 +169,13 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
                 'savedAt' => $row ? (int) $row['saved_at'] : 0,
             ] + SaveValidator::restoreStamp($row) + ['data' => $prev];
         };
+        // the server's own times of the real-time beds (CONTRACT §15.1) — also on a 409, next to the stored copy
+        $rt = function () use ($uid, $tier): array { return class_exists('Tfm\Farm') ? ['rt' => Farm::view($uid, $tier)] : []; };
         if (!empty($result['stale'])) {
             $row = $result['row'];
             $restored = SaveValidator::restoreStamp($row)['restoredRev'] > 0;
             Log::info('SAVE', 'stale save refused', ['uid' => $uid, 'base' => $base, 'stored' => (int) $row['revision'], 'restored' => $restored]);
-            throw new ApiException(409, 'STALE_SAVE', '다른 창이나 기기에서 더 새로 저장했어요. 이 창의 진행 상황은 저장하지 않았어요.', ['save' => $stored($row, $result['prev'])] + ($restored ? ['restored' => true] : []));
+            throw new ApiException(409, 'STALE_SAVE', '다른 창이나 기기에서 더 새로 저장했어요. 이 창의 진행 상황은 저장하지 않았어요.', ['save' => $stored($row, $result['prev'])] + ($restored ? ['restored' => true] : []) + $rt());
         }
         if (!$result['ok']) {
             $res = $result['res'];
@@ -169,13 +188,13 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
             throw new ApiException(409, 'VALIDATION_FAILED', '서버 검증에 실패해 이번 진행 상황은 저장하지 않았어요. 서버에 저장된 진행 상황으로 되돌립니다.', [
                 'save' => $stored($row, $result['prev']),
                 'violations' => $codes,
-            ]);
+            ] + $rt());
         }
         $un = isset($result['summary']['unexplained']) ? $result['summary']['unexplained'] : [];
         if ((isset($un['value']) ? $un['value'] : 0) > 0 || (isset($un['exp']) ? $un['exp'] : 0) > 0) {
             Log::debug('SAVE', 'accepted with tolerance', ['uid' => $uid] + $result['summary']);
         }
-        return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub, 'subChanged' => $clientTier !== $tier];
+        return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub, 'subChanged' => $clientTier !== $tier] + $rt();
     } catch (ApiException $e) {
         if ($sub !== null && ($e->data === null || is_array($e->data))) {
             $e->data = (is_array($e->data) ? $e->data : []) + ['sub' => $sub, 'subChanged' => $clientTier !== (int) $sub['tier']];

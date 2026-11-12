@@ -1,8 +1,8 @@
 <?php
 /**
  * GET api/ping.php — server-mode detection (client: G.net.detect).
- * data: {app:'tfm-metaverse', version, db, serverTime, csrf, loggedIn, php}; also starts the (anonymous) session
- * that carries the CSRF token used by login/register.
+ * data: {app:'tfm-metaverse', version, db, serverTime, csrf, loggedIn, php, rtScale}; also starts the (anonymous) session
+ * that carries the CSRF token used by login/register. rtScale = the real-time farm time scale (CONTRACT §15.1, farm.rt_scale).
  */
 declare(strict_types=1);
 
@@ -12,6 +12,7 @@ use Tfm\Api;
 use Tfm\Clock;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Farm;
 use Tfm\Log;
 use Tfm\Session;
 use Tfm\Toss;
@@ -30,6 +31,7 @@ Api::run(['method' => ['GET', 'HEAD'], 'rate' => 'ping', 'rateBy' => 'ip', 'sess
         'loggedIn' => $c->user !== null,
         'subscriptions' => ['enabled' => true],
     ];
+    if (class_exists('Tfm\Farm')) $out['rtScale'] = Farm::scale();
     if ($c->isAdmin()) {
         $out['db'] = $dbOk ? Db::driver() : 'unavailable';
         $out['subscriptions']['mock'] = Toss::mock();
