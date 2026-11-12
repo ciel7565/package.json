@@ -24,6 +24,8 @@
  *   php cli/tfm.php db:account --admin-user <DB 관리자>        move an installation that runs as root to a dedicated account
  *   php cli/tfm.php db:rotate-password --admin-user <DB 관리자> new random password for the runtime DB account
  *   php cli/tfm.php setup-code                      one-time setup code for install.php / the first admin (24 h)
+ *   php cli/tfm.php secret:rotate [--app-key] [--data-key]   new app / data keys in data/secret.php (none given: both);
+ *                                                  --data-key re-seals the sealed columns, --app-key signs everyone out
  *
  * Secrets are never typed on the command line (other users could read them in the process list or the shell
  * history): they are asked for without echo, or read from the environment — TFM_DB_ADMIN_PASS (database
@@ -378,6 +380,27 @@ try {
                 $r = Installer::rotateDbPassword($adminUser, $adminPass);
                 out("✔ {$r['user']} 계정 (" . implode(', ', $r['hosts']) . ') 의 비밀번호를 32자 무작위로 바꾸고 config/config.local.php 에 적었어요. 예전 비밀번호는 이제 쓸 수 없어요.');
             }
+            break;
+        }
+        case 'secret:rotate': {
+            $app = !empty($opts['app-key']);
+            $data = !empty($opts['data-key']);
+            if (!$app && !$data) { $app = true; $data = true; }
+            $r = Installer::rotateSecrets($app, $data);
+            if ($r['dataKey']) {
+                out("✔ 데이터 키(data_key)를 새로 만들고 봉인된 값 {$r['resealed']}개를 새 키로 다시 봉인했어요. 예전 키는 지웠어요.");
+                if ($r['unreadable'] > 0) out("  ⚠ 어떤 키로도 열 수 없는 값이 {$r['unreadable']}개 있어요 (예전 백업에서 가져온 값일 수 있어요). 그 사용자의 자동 갱신은 다시 등록해야 해요.");
+                out('  예전 데이터베이스 백업 속 결제 수단 정보는 이제 열 수 없어요: 백업과 data/secret.php 는 함께 보관하고, 키를 바꾼 뒤에는 새로 백업하세요.');
+            }
+            if ($r['appKey']) {
+                out("✔ 앱 키(app_key)를 새로 만들었어요: 모든 사용자가 로그아웃됐고 (세션 {$r['sessions']}개 정리), 요청 횟수·로그인 실패 기록을 비우고, 차단·보안 기록의 주소 표시를 새 키로 바꿨어요 ({$r['ipHashes']}건).");
+            }
+            out('');
+            out('밖에서 발급받은 키는 이 명령으로 바뀌지 않아요. 새어 나갔을 수 있으면 직접 바꾸세요:');
+            out('  · 토스페이먼츠: 개발자센터 (developers.tosspayments.com) → 내 개발 정보 → API 키 → 시크릿 키 재발급 → config/config.local.php 의 toss.client_key / toss.secret_key 를 새 값으로 (예전 키는 재발급하면 바로 못 써요)');
+            out('  · Anthropic (Claude): console.anthropic.com → API Keys → 예전 키 Disable·Delete → 새 키 만들기 → ANTHROPIC_API_KEY 환경 변수 또는 config.local.php 의 anthropic.api_key');
+            out('  · 데이터베이스 비밀번호: php cli/tfm.php db:rotate-password --admin-user root');
+            out('  · 관리자 비밀번호: php cli/tfm.php reset-password <이메일> (무작위 비밀번호를 한 번 보여 줘요)');
             break;
         }
         case 'setup-code': {

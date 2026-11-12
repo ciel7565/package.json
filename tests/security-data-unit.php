@@ -528,6 +528,54 @@ check('payments not configured (no keys, mock off): status mode unconfigured, no
     }
     return $mode === 'unconfigured' && $ck === '' && $refused && $n1 === $n0 && $mixed === false && $own ? true : json_encode([$mode, $ck, $refused, $n0, $n1, $mixed, $own]);
 });
+// ------------------------------------------------------------------ secret:rotate (item 21)
+check('secret:rotate --data-key — every sealed billing key is sealed again with the new key, the old key is gone, rotated_at is set', function () use ($payUser) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'billing');
+    Tfm\Subscription::billingIssue($u, 'mock_auth_ok', $o['customerKey'], $o['orderId']);
+    $before = Tfm\Db::all("SELECT user_id, billing_key FROM subscriptions WHERE billing_key <> '' ORDER BY user_id");
+    $plain = [];
+    foreach ($before as $r) $plain[(int) $r['user_id']] = Tfm\Crypto::open((string) $r['billing_key']);
+    $oldKey = Tfm\Secrets::read(true)['data_key'];
+    $kept = Tfm\Crypto::seal('sealed with the old key');
+    $r = Tfm\Installer::rotateSecrets(false, true);
+    $s = Tfm\Secrets::read(true);
+    if ($s['data_key'] === $oldKey || isset($s['data_key_prev']) || empty($s['rotated_at']['data_key'])) return 'secret.php: ' . json_encode(array_keys($s));
+    foreach (Tfm\Db::all("SELECT user_id, billing_key FROM subscriptions WHERE billing_key <> '' ORDER BY user_id") as $row) {
+        $v = (string) $row['billing_key'];
+        if (strpos($v, 'enc:v1:') !== 0 || Tfm\Crypto::open($v) !== $plain[(int) $row['user_id']] || Tfm\Crypto::needsReseal($v)) return 'user ' . $row['user_id'] . ' not re-sealed';
+    }
+    $renew = Tfm\Subscription::renewDue((int) $u['id'], true);
+    return $r['dataKey'] === true && $r['resealed'] >= count($before) && Tfm\Crypto::open($kept) === null && $renew[0]['ok'] === true ? true : json_encode([$r, $renew]);
+});
+check('secret:rotate --app-key — sessions end (files + session_epoch), rate-limit / login-attempt rows cleared, IP block hashes rebuilt with the new key', function () use ($tmp, $payUser) {
+    $u = $payUser();
+    $sessDir = Tfm\Config::dataDir() . '/sessions';
+    if (!is_dir($sessDir)) mkdir($sessDir, 0700, true);
+    file_put_contents($sessDir . '/sess_unitrotate', 'x');
+    Tfm\RateLimit::hit('unit_rotate', 'someone', 100, 60);
+    Tfm\LoginThrottle::record('rotate@example.com', false);
+    $blocked = class_exists('Tfm\\Firewall');
+    if ($blocked) Tfm\Firewall::block('203.0.113.99', 600, 'unit rotate');
+    $epoch = (int) Tfm\Db::value('SELECT session_epoch FROM users WHERE id = ?', [(int) $u['id']]);
+    $oldApp = Tfm\Secrets::read(true)['app_key'];
+    $r = Tfm\Installer::rotateSecrets(true, false);
+    $newApp = Tfm\Secrets::read(true)['app_key'];
+    if ($newApp === $oldApp || empty(Tfm\Secrets::read(true)['rotated_at']['app_key'])) return 'app_key unchanged';
+    if (is_file($sessDir . '/sess_unitrotate')) return 'a session file survived';
+    if ((int) Tfm\Db::value('SELECT COUNT(*) FROM rate_limits') !== 0 || (int) Tfm\Db::value('SELECT COUNT(*) FROM login_attempts') !== 0) return 'counters not cleared';
+    if ((int) Tfm\Db::value('SELECT session_epoch FROM users WHERE id = ?', [(int) $u['id']]) !== $epoch + 1) return 'session_epoch not bumped';
+    if ($blocked && (string) Tfm\Db::value('SELECT ip_hash FROM ip_blocks WHERE ip = ?', ['203.0.113.99']) !== substr(hash_hmac('sha256', '203.0.113.99', $newApp), 0, 32)) return 'the block hash was not rebuilt';
+    return $r['appKey'] === true && $r['sessions'] >= 1;
+});
+check('cli secret:rotate — prints what changed and the steps for the external keys (토스, Anthropic), never a key value', function () use ($srv, $tmp) {
+    $out = (string) shell_exec('TFM_DATA_DIR=' . escapeshellarg($tmp) . ' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($srv . '/cli/tfm.php') . ' secret:rotate --data-key 2>&1');
+    $s = Tfm\Secrets::read(true);
+    if (strpos($out, '토스페이먼츠') === false || strpos($out, 'console.anthropic.com') === false || strpos($out, '데이터 키') === false) return 'output: ' . substr($out, 0, 300);
+    foreach (['app_key', 'data_key'] as $k) if (strpos($out, (string) $s[$k]) !== false) return "$k printed";
+    Tfm\Crypto::reset();
+    return true;
+});
 Tfm\Db::reset();
 
 // ------------------------------------------------------------------ Installer: dedicated least-privilege account (item 1a, 1b, 21) — MariaDB only

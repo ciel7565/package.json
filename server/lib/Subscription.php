@@ -266,7 +266,10 @@ final class Subscription
         $fields = [
             'user_id' => $uid, 'tier' => $tier, 'status' => 'active', 'started_at' => $row && (int) $row['started_at'] > 0 && (int) $row['tier'] === $tier && (int) $row['expires_at'] > $now ? (int) $row['started_at'] : $now,
             'expires_at' => $base + $periodMs, 'auto_renew' => $row ? (int) $row['auto_renew'] : 0,
-            'billing_key' => $row ? (string) $row['billing_key'] : '', 'customer_key' => self::customerKey($uid),
+            // a billing key belongs to the customer key it was issued for: kept while it exists (secret:rotate --app-key
+            // changes the derived key; re-deriving it here would make the next renewal charge fail)
+            'billing_key' => $row ? (string) $row['billing_key'] : '',
+            'customer_key' => $row && (string) $row['customer_key'] !== '' && (string) $row['billing_key'] !== '' ? (string) $row['customer_key'] : self::customerKey($uid),
             'last_order_id' => $row ? (string) $row['last_order_id'] : '', 'checked_at' => $now, 'updated_at' => $now,
         ];
         foreach ($extra as $k => $v) $fields[$k] = $v;

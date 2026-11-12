@@ -244,6 +244,109 @@ final class Installer
         return (string) preg_replace('#(?:[A-Za-z]:)?[\\\\/](?:[^\\\\/\s\'"]+[\\\\/])+[^\\\\/\s\'"]*#', '…', $m);
     }
 
+    // ------------------------------------------------------------------ secret rotation (CONTRACT §15.7 #21)
+    /**
+     * `php cli/tfm.php secret:rotate [--app-key] [--data-key]`: new random secrets in data/secret.php (rotated_at per key).
+     *   data key: the old key stays as data_key_prev until every sealed column is sealed again with the new key inside one
+     *             transaction (subscriptions.billing_key — plain legacy keys are sealed too; admin_totp.secret_enc);
+     *             any failure puts the old key back. Afterwards the old key is gone.
+     *   app key:  every session ends (session files removed, users.session_epoch + 1), rate-limit and login-attempt rows
+     *             (keyed by the old hashes) are cleared, ip_blocks / security_events get their address hashes again.
+     * → ['dataKey' => bool, 'appKey' => bool, 'resealed' => n, 'unreadable' => n, 'sessions' => n, 'ipHashes' => n]
+     */
+    public static function rotateSecrets(bool $appKey, bool $dataKey): array
+    {
+        $out = ['dataKey' => false, 'appKey' => false, 'resealed' => 0, 'unreadable' => 0, 'sessions' => 0, 'ipHashes' => 0];
+        Db::pdo();
+        if ($dataKey) {
+            if (!Crypto::available()) throw new ApiException(500, 'NO_OPENSSL', '이 PHP 에는 openssl(aes-256-gcm)이 없어 데이터 키를 바꿀 수 없어요.');
+            $old = Secrets::ensure('data_key', function () { return bin2hex(random_bytes(32)); });
+            $new = bin2hex(random_bytes(32));
+            Secrets::update(function (array $s) use ($old, $new) { $s['data_key_prev'] = $old; $s['data_key'] = $new; return $s; });
+            Crypto::reset();
+            try {
+                $r = Db::tx(function () { return self::resealColumns(); });
+            } catch (\Throwable $e) {
+                Secrets::update(function (array $s) use ($old) { $s['data_key'] = $old; unset($s['data_key_prev']); return $s; });
+                Crypto::reset();
+                Log::error('SECRETS', 'data key rotation failed and was undone', ['error' => get_class($e)]);
+                throw new ApiException(500, 'ROTATE_FAILED', '봉인된 값을 새 키로 바꾸지 못해서 예전 데이터 키로 되돌렸어요. 다시 해 보거나 로그를 확인하세요.');
+            }
+            Secrets::update(function (array $s) {
+                unset($s['data_key_prev']);
+                $s['rotated_at'] = isset($s['rotated_at']) && is_array($s['rotated_at']) ? $s['rotated_at'] : [];
+                $s['rotated_at']['data_key'] = gmdate('c');
+                return $s;
+            });
+            Crypto::reset();
+            $out['dataKey'] = true;
+            $out['resealed'] = $r['resealed'];
+            $out['unreadable'] = $r['unreadable'];
+        }
+        if ($appKey) {
+            $key = bin2hex(random_bytes(32));
+            Secrets::update(function (array $s) use ($key) {
+                $s['app_key'] = $key;
+                $s['rotated_at'] = isset($s['rotated_at']) && is_array($s['rotated_at']) ? $s['rotated_at'] : [];
+                $s['rotated_at']['app_key'] = gmdate('c');
+                return $s;
+            });
+            // the same keyed hash as Sec::hashId(), with the new key (this process still holds the old one)
+            $hash = function (string $ip) use ($key): string { return substr(hash_hmac('sha256', $ip, $key), 0, 32); };
+            $out['ipHashes'] = (int) Db::tx(function () use ($hash) {
+                $n = 0;
+                foreach (Db::all('SELECT ip_hash, ip FROM ip_blocks') as $b) {
+                    $ip = Http::normIp((string) $b['ip']);
+                    if ($ip !== '') $n += Db::exec('UPDATE ip_blocks SET ip_hash = ? WHERE ip_hash = ?', [$hash($ip), (string) $b['ip_hash']]);
+                }
+                foreach (Db::all("SELECT DISTINCT ip FROM security_events WHERE ip <> ''") as $e) {
+                    $ip = Http::normIp((string) $e['ip']);
+                    if ($ip !== '') $n += Db::exec('UPDATE security_events SET ip_hash = ? WHERE ip = ?', [$hash($ip), (string) $e['ip']]);
+                }
+                Db::exec('DELETE FROM rate_limits');
+                Db::exec('DELETE FROM login_attempts');
+                Db::exec('UPDATE users SET session_epoch = session_epoch + 1');
+                return $n;
+            });
+            $dir = Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions';
+            foreach (glob($dir . DIRECTORY_SEPARATOR . 'sess_*') ?: [] as $f) if (@unlink($f)) $out['sessions']++;
+            $out['appKey'] = true;
+        }
+        Audit::log('secret_rotated', null, ['appKey' => $out['appKey'], 'dataKey' => $out['dataKey'], 'resealed' => $out['resealed'], 'unreadable' => $out['unreadable'], 'sessions' => $out['sessions']], 'alert');
+        return $out;
+    }
+
+    /**
+     * Seal the sealed columns with the current data key (inside the caller's transaction): billing keys that are plain
+     * text or sealed with data_key_prev; TOTP secrets that are sealed with data_key_prev (their own code seals plain ones).
+     */
+    private static function resealColumns(): array
+    {
+        $done = 0;
+        $bad = 0;
+        foreach (Db::all("SELECT user_id, billing_key FROM subscriptions WHERE billing_key <> ''") as $r) {
+            $v = (string) $r['billing_key'];
+            $plain = Crypto::open($v);
+            if ($plain === null) { $bad++; continue; }
+            if (!Crypto::needsReseal($v)) continue;
+            $done += Db::exec('UPDATE subscriptions SET billing_key = ? WHERE user_id = ? AND billing_key = ?', [Crypto::seal($plain), (int) $r['user_id'], $v]);
+        }
+        try {
+            $totp = Db::all("SELECT user_id, secret_enc FROM admin_totp WHERE secret_enc <> ''");
+        } catch (\PDOException $e) {
+            $totp = []; // an older schema without the table
+        }
+        foreach ($totp as $r) {
+            $v = (string) $r['secret_enc'];
+            if (!Crypto::isSealed($v)) continue;
+            $plain = Crypto::open($v);
+            if ($plain === null) { $bad++; continue; }
+            if (!Crypto::needsReseal($v)) continue;
+            $done += Db::exec('UPDATE admin_totp SET secret_enc = ? WHERE user_id = ? AND secret_enc = ?', [Crypto::seal($plain), (int) $r['user_id'], $v]);
+        }
+        return ['resealed' => $done, 'unreadable' => $bad];
+    }
+
     // ------------------------------------------------------------------ MySQL / MariaDB accounts (CONTRACT §15.7 #1, #21)
     /** `name` with the backtick doubled (names here are validated to [A-Za-z0-9_] anyway) */
     private static function quoteIdent(string $name): string { return '`' . str_replace('`', '``', $name) . '`'; }
