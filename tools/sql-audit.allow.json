@@ -85,12 +85,12 @@
     "reason": "db:rotate-password: the configured runtime account (host from mysql.user) and the generated password are quoted by the driver."
   },
   {
-    "file": "server/admin.php",
+    "file": "server/admin/index.php",
     "snippet": "FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id $where ORDER BY u.id DESC LIMIT 51 OFFSET \" . ($page * 50)",
     "reason": "Reviewed (admin agent's file): $where is one of two fixed strings with ? placeholders (the search term is bound with a LIKE escape); $page = max(0, min(10000, (int) …))."
   },
   {
-    "file": "server/admin.php",
+    "file": "server/admin/index.php",
     "snippet": "($w ? 'WHERE ' . implode(' AND ', $w) . ' ':'')",
     "reason": "Reviewed (admin agent's file): $w only holds fixed condition strings ('a.event = ?', 'a.severity = ?', 'a.id < ?'); the values are bound in $p."
   },

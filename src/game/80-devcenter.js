@@ -191,7 +191,7 @@
   const isLocalHost = () => location.protocol === 'file:' || /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/i.test(location.hostname);
   /**
    * the player's role as the server last answered it: for the same account auth.serverUser (auth/me.php, the login or
-   * the in-game re-login after admin.php 관리자 지정 / 해제 ended the session) wins over the profile copy the tab entered
+   * the in-game re-login after 관리자 센터의 관리자 지정 / 해제 ended the session) wins over the profile copy the tab entered
    * with; guests and local profiles keep their own role (never a remembered session's); no profile yet -> the session's
    */
   function accountRole(cur, srv) {
@@ -284,7 +284,7 @@
       F('80-devcenter.css', 'devcenter', '개발자 센터 화면'),
     ] },
     { dir: 'server', emoji: '🐘', desc: '선택형 PHP 서버 모드 (빌드 시 dist/metaverse 로 복사)', files: [
-      F('admin.php', 'server', '관리자 센터: 대시보드·시스템 점검·사용자·신고·감사 로그·유지보수'),
+      F('(관리자 폴더)/index.php', 'server', '관리자 센터 — 폴더 이름은 설치마다 달라요(php cli/tfm.php admin:path): 대시보드·시스템 점검·사용자·구독·신고·보안·2단계 인증·감사 로그·유지보수 (스크립트 없는 화면)'),
       F('api/ping.php', 'server', '서버 모드 감지·CSRF 토큰·서버 시각'),
       F('api/time.php', 'server', '서버 시계 동기화'),
       F('api/auth/register.php', 'server', '회원가입 (검증·password_hash)'),
@@ -314,7 +314,9 @@
       F('lib/pii-rules.json', 'server', '개인정보 가림 규칙 목록 — tests/pii-sync.mjs 가 체험관(60-social)에서 만들어요 (손으로 고치지 않기)'),
       F('lib/Presence.php', 'server', '접속자 관리'),
       F('lib/Upload.php', 'server', '업로드 검사·재인코딩'),
-      F('lib/Admin.php', 'server', '관리자 기능·통계·상태 점검'),
+      F('lib/Admin.php', 'server', '관리자 기능·통계·상태 점검 · 관리자 주소 잠금(허용 주소·2단계 인증·유휴 시간)'),
+      F('lib/Totp.php', 'server', '관리자 2단계 인증 (휴대폰 인증 앱 6자리 · 한 번 쓰는 백업 코드)'),
+      F('cli/admin-path.php', 'server', '관리자 폴더 이름 바꾸기 · 2단계 인증 초기화 (php cli/tfm.php admin:path / admin:2fa-reset)'),
       F('cli/tfm.php', 'server', '서버 PC 전용 관리 명령 (관리자 지정·정리·백업)'),
       F('config/config.php', 'server', '기본 설정 (덮어쓰기는 config.local.php)'),
       F('database/schema.sql', 'server', 'MySQL/MariaDB 스키마'),
@@ -4305,7 +4307,7 @@
           ${ls.blocked ? '<p class="dc-note">⚠️ 저장소 접근이 차단돼 있어요.</p>' : `<div class="dc-table-wrap"><table class="dc-table"><thead><tr><th>키</th><th>종류</th><th>크기</th></tr></thead><tbody>${ls.rows.map((r) => `<tr><td>${mono(r.key)}</td><td>${r.emoji} ${esc(r.kind)}</td><td class="dc-num">${kb(r.bytes)}</td></tr>`).join('')}</tbody></table></div><p class="dc-note">값은 보여 주지 않아요. 계정 키에는 PBKDF2 해시만 들어 있어요.</p>`}
         </section>
         <section class="dc-card dc-in" style="--i:3"><h4>👥 이 브라우저의 로컬 계정 <span class="muted">${accounts.length}개</span></h4>
-          ${server ? '<p class="dc-note">서버 모드에서는 계정이 서버 DB 에 있어요. 관리는 admin.php 에서 하세요.</p>' : ''}
+          ${server ? '<p class="dc-note">서버 모드에서는 계정이 서버 DB 에 있어요. 관리는 관리자 센터에서 하세요 (서버 점검 탭에 관리자 센터 링크가 있어요).</p>' : ''}
           ${accounts.length ? `<div class="dc-table-wrap"><table class="dc-table"><thead><tr><th>닉네임</th><th>이메일</th><th>권한</th><th>보호</th><th>가입</th><th>마지막 접속</th></tr></thead><tbody>${accounts.map((a) => `<tr><td><b>${esc(a.nickname)}</b>${cur?.id === a.id ? ' <span class="chip chip-green">나</span>' : ''}</td><td>${esc(maskEmail(a.email))}</td><td>${a.role === 'admin' ? pill('gold', '관리자') : '사용자'}</td><td>${/pbkdf2/i.test(String(a.algo || '')) ? pill('ok', `PBKDF2 ${fmt(num(a.iter))}회`) : pill('warn', '이전 방식 (다음 로그인 때 갱신)')}</td><td>${esc(U.formatDate(num(a.createdAt)))}</td><td>${esc(ago(num(a.lastLogin)))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="dc-note">로컬 계정이 없어요 (게스트만 사용).</p>'}
         </section>
       </div>`;
@@ -4376,8 +4378,9 @@
             <li><b>빌드</b> — <code>node tools/build.mjs</code> → <code>dist/metaverse/</code> (index.html + PHP 서버 파일)</li>
             <li><b>XAMPP</b> — 그 폴더를 <code>C:\\xampp\\htdocs\\metaverse</code> 로 복사하고 Apache 시작 (SQLite 기본, MySQL 선택)</li>
             <li><b>접속</b> — <code>http://localhost/metaverse/</code> → 화면 위 칩이 <b>서버</b> 인지 확인</li>
-            <li><b>관리자</b> — 서버 PC 에서 <code>admin.php</code> 로그인 → "이 계정을 관리자로 지정"</li>
-            <li><b>점검</b> — 이 탭의 "점검 실행" 과 admin.php 의 시스템 점검에서 ⛔/⚠️ 를 모두 해결</li>
+            <li><b>관리자</b> — <code>install.php</code> 로 설치하면 첫 관리자가 함께 만들어져요. 나중에는 관리자 센터 로그인 화면의 "첫 관리자 지정"(서버 컴퓨터의 설치 코드 <code>php cli/tfm.php setup-code</code> 필요) 또는 <code>php cli/tfm.php promote 이메일</code></li>
+            <li><b>잠금</b> — <code>php cli/tfm.php admin:path --random</code> 으로 관리자 폴더 이름을 바꾸고, 관리자 센터 🔐 탭에서 2단계 인증을 켜요</li>
+            <li><b>점검</b> — 이 탭의 "점검 실행" 과 관리자 센터 🩺 시스템 점검에서 ⛔/⚠️ 를 모두 해결</li>
             <li><b>개발용</b> — <code>php -S 127.0.0.1:8080 -t dist/metaverse</code> 후 <code>node tests/server-e2e.mjs http://127.0.0.1:8080/</code></li>
           </ol>
           <p class="dc-note">⚠️ 운영은 반드시 HTTPS 로 하세요. 로컬 모드는 서버가 없어 클라이언트 저장이 전부라 부정 진행을 막을 수 없어요.</p>
@@ -4404,8 +4407,8 @@
   };
   const HEALTH_GROUP = { php: '🐘 PHP · 확장', security: '🔐 보안', files: '📁 폴더 · 권한', db: '🗃️ 데이터베이스', app: '🧩 앱 설정', server: '🖥️ 웹 서버', session: '🍪 세션' };
   function renderHealth(h) {
-    if (!h) return '<p class="dc-note">점검을 실행하면 PHP·확장·DB·폴더 권한·세션·HTTPS·보안 헤더 점검 결과가 여기에 나와요. (관리자 또는 관리자가 없을 때의 서버 PC 만)</p>';
-    if (h.error) return `<p class="dc-note">🔒 ${esc(h.error)}</p>`;
+    if (!h) return '<p class="dc-note">점검을 실행하면 PHP·확장·DB·폴더 권한·세션·HTTPS·보안 헤더 점검 결과가 여기에 나와요. (관리자 페이지에 로그인한 관리자만)</p>';
+    if (h.error) return `<p class="dc-note">🔒 ${esc(h.error)}${h.adminUrl ? ` <a href="${esc(h.adminUrl)}" target="_blank" rel="noopener noreferrer">관리자 페이지 열기 ↗</a>` : ''}</p>`;
     const tone = (s) => (s === 'ok' || s === 'pass' ? 'ok' : s === 'warn' ? 'warn' : s === 'fail' || s === 'error' ? 'bad' : 'info');
     const icon = (s) => (tone(s) === 'ok' ? '✅' : tone(s) === 'warn' ? '⚠️' : tone(s) === 'bad' ? '⛔' : 'ℹ️');
     const checks = (Array.isArray(h.checks) ? h.checks : []).filter(isObj);
@@ -4421,6 +4424,8 @@
       ${attention.length ? `<div class="dc-sub-h">👀 먼저 확인할 항목 ${attention.length}개</div><ul class="dc-checks">${attention.map(item).join('')}</ul>` : '<p class="dc-note">✅ 경고·실패 항목이 없어요.</p>'}
       ${[...groups.entries()].map(([g, list]) => `<details class="dc-details"><summary>${esc(HEALTH_GROUP[g] || g)} · ${list.length}개 (${list.filter((c) => tone(c.status) === 'ok').length} 정상)</summary><ul class="dc-checks">${list.map(item).join('')}</ul></details>`).join('')}`;
   }
+  /** the admin site's folder as the server hands it to admins ("name/"), validated — '' otherwise */
+  const adminHref = (v) => (typeof v === 'string' && /^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}\/$/.test(v.trim()) ? v.trim() : '');
   const SERVER_CHECKS = [
     { path: 'ping.php', label: '서버 감지 · CSRF' },
     { path: 'time.php', label: '서버 시계' },
@@ -4463,7 +4468,11 @@
       } catch (e) {
         row.ms = perf() - t0;
         const st = Number(e?.status) || 0;
-        if (st === 401 || st === 403 || /AUTH|FORBIDDEN|LOGIN/.test(String(e?.code))) { row.tone = 'warn'; row.text = '🔒 권한 필요'; row.note = String(e?.code || st); if (c.health) S.health = { error: e?.message || '관리자 권한이 필요해요.' }; }
+        if (String(e?.code) === 'ADMIN_REAUTH') {
+          // CONTRACT §15.4 (d): admin numbers need the admin site's own sign-in — link there (address from the server)
+          row.tone = 'warn'; row.text = '🔒 관리자 페이지'; row.note = '관리자 페이지 로그인 필요';
+          if (c.health) S.health = { error: '관리자 정보는 관리자 페이지에서 확인해 주세요. 관리자 페이지에 로그인(비밀번호 + 2단계 인증)하면 30분 동안 여기에서도 보여요.', adminUrl: adminHref(e?.data?.adminUrl) || adminHref(await G.auth?.adminUrl?.()) };
+        } else if (st === 401 || st === 403 || /AUTH|FORBIDDEN|LOGIN/.test(String(e?.code))) { row.tone = 'warn'; row.text = '🔒 권한 필요'; row.note = String(e?.code || st); if (c.health) S.health = { error: e?.message || '관리자 권한이 필요해요.' }; }
         else if (st === 429) { row.tone = 'warn'; row.text = '⏳ 빈도 제한'; row.note = '잠시 후 다시'; }
         else { row.tone = 'bad'; row.text = '⛔ 실패'; row.note = `${e?.code || 'ERROR'}${st ? ` (HTTP ${st})` : ''}`; }
       }
@@ -4709,9 +4718,10 @@
       ['d4', '배포 후 진단 보고서(.md)를 받아 버전·빌드 시각을 기록했어요'] ] },
     { id: 'server', emoji: '🐘', title: '서버 설정', items: [
       ['s1', 'XAMPP <code>htdocs/metaverse</code> 에 복사하고 Apache 를 시작했어요 (SQLite 기본)'],
-      ['s2', '서버 PC 에서 <code>admin.php</code> 로 첫 관리자를 지정했어요'],
+      ['s2', '첫 관리자를 지정했어요 (install.php 설치 · 관리자 센터의 "첫 관리자 지정" + 설치 코드 · <code>php cli/tfm.php promote</code>)'],
       ['s3', '<code>config/config.local.php</code> 에 DB·admin_emails·data 경로(웹 루트 밖)를 적었어요'],
-      ['s4', '서버 점검 탭과 admin.php 시스템 점검의 ⛔/⚠️ 를 모두 해결했어요'],
+      ['s4', '서버 점검 탭과 관리자 센터 🩺 시스템 점검의 ⛔/⚠️ 를 모두 해결했어요'],
+      ['s6', '관리자 폴더 이름을 바꾸고(<code>php cli/tfm.php admin:path --random</code>) 관리자마다 2단계 인증을 켰어요'],
       ['s5', 'data/ 폴더와 DB 백업 일정을 정했어요'] ] },
     { id: 'security', emoji: '🔐', title: '보안 점검', items: [
       ['x1', '시스템 점검의 CSP 항목이 모두 ✅ 이고 CSP 위반이 0건이에요'],
@@ -4719,7 +4729,7 @@
       ['x3', '로컬 계정이 PBKDF2 로 보호돼요 (저장 데이터 탭의 계정 목록)'],
       ['x4', '서버는 HTTPS · Secure 쿠키 · data/ 웹 접근 차단을 확인했어요'],
       ['x5', '관리자 비밀번호를 공유하지 않고, 인수인계 때 새로 바꿨어요'],
-      ['x6', '자가 테스트 › 🔒 개인정보 가림 · 👶 쉬운 모드(보호자 확인) 가 통과하고, admin.php 의 "어린이 개인정보 가림" 점검이 ✅ 예요'] ] },
+      ['x6', '자가 테스트 › 🔒 개인정보 가림 · 👶 쉬운 모드(보호자 확인) 가 통과하고, 관리자 센터 🩺 시스템 점검의 "어린이 개인정보 가림" 이 ✅ 예요'] ] },
     { id: 'content', emoji: '✍️', title: '콘텐츠 추가 방법', items: [
       ['c1', '작물 추가 절차를 읽었어요 (HANDOVER.md §6 — items · crops · collection)'],
       ['c2', '퀘스트·NPC 대사·교육/퀴즈 추가 절차를 읽었어요'],
@@ -5031,7 +5041,7 @@
         this._gt = setTimeout(() => { if (ui.opened && !ui.away && ui.tab === 'system') render(); }, 120);
       });
       // a game dialog that opens by itself while the center is up (the re-login form when the session ended — e.g.
-      // admin.php 관리자 지정 / 해제 —, the 다른 창 save card) would sit under the panel (z 60 over the modal layer) with the
+      // 관리자 센터의 관리자 지정 / 해제 —, the 다른 창 save card) would sit under the panel (z 60 over the modal layer) with the
       // keyboard left here: step aside like the tour does, come back when the last one has closed (a kid card that
       // leads to the gate and the form keeps it away), or stay closed when the re-login left an account without access
       G.bus.on('ui:modal-open', () => {

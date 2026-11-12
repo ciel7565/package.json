@@ -1,36 +1,25 @@
 <?php
 /**
  * GET api/admin/health.php — environment & security self-check (see Tfm\Health).
- * Access: admins; or, while no admin account exists yet, a logged-in player browsing on the server machine itself
- * (Http::isLocalhost: loopback, no proxy / tunnel / forwarding header, loopback Host).
+ * Access: an admin whose session is elevated in the admin site (password + 2-step sign-in there — CONTRACT §15.4 (d));
+ * an app login alone gets 403 ADMIN_REAUTH (data.adminUrl points to the admin site). Finding F4: no exception for
+ * "the server machine" any more — while no admin exists the first admin is made with the setup code on the admin site.
  * ?quick=1 skips the loopback exposure probe.
  */
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
+use Tfm\AdminGate;
 use Tfm\Api;
-use Tfm\ApiException;
-use Tfm\Audit;
-use Tfm\Config;
 use Tfm\Ctx;
 use Tfm\Health;
-use Tfm\Http;
 use Tfm\Session;
-use Tfm\Users;
 
-Api::run(['method' => 'GET', 'rate' => 'admin'], function (Ctx $c): array {
-    if (!$c->isAdmin()) {
-        // never anonymous: the report lists PHP / ini / DB / path details
-        if (!$c->user) throw new ApiException(401, 'AUTH_REQUIRED', '관리자 계정으로 로그인해야 볼 수 있어요.');
-        $bootstrap = Http::isLocalhost() && !Users::adminExists() && Config::get('security.allow_localhost_bootstrap', true);
-        if (!$bootstrap) {
-            Audit::log('admin_denied', $c->uid(), ['path' => 'health'], 'warn');
-            throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
-        }
-    }
+Api::run(['method' => 'GET', 'admin' => true, 'rate' => 'admin'], function (Ctx $c): array {
+    AdminGate::requireApi($c);
     Session::close();
     $h = Health::collect((isset($_GET['quick']) ? $_GET['quick'] : '') !== '1');
-    $h['access'] = $c->isAdmin() ? 'admin' : 'localhost-bootstrap';
+    $h['access'] = 'admin';
     return $h;
 });

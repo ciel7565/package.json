@@ -191,10 +191,15 @@ function makeSite(tag, local = {}) {
   writeLocal(s, local);
   return s;
 }
-/** config/config.local.php of a site: generous page limits (the suite is one busy "administrator") + the overrides */
+/**
+ * config/config.local.php of a site: generous page limits (the suite is one busy "administrator") + the overrides.
+ * The per-address cap of stored security events (security.events_per_minute, 120) is lifted for the same reason: the
+ * CSRF section alone causes ~150 refusals from 127.0.0.1 within a minute, and the cap would then silently drop the
+ * events later sections look for (the cap itself is the core owner's feature, tested in tests/security-*.php).
+ */
 function writeLocal(s, local = {}) {
-  const base = { rate_limits: { admin_page: [100000, 60], admin: [100000, 60], me: [100000, 60], ping: [100000, 60], login: [1000, 60], admin_login: [1000, 60] } };
-  const merged = { ...base, ...local, rate_limits: { ...base.rate_limits, ...(local.rate_limits || {}) } };
+  const base = { rate_limits: { admin_page: [100000, 60], admin: [100000, 60], me: [100000, 60], ping: [100000, 60], login: [1000, 60], admin_login: [1000, 60] }, security: { events_per_minute: 100000 } };
+  const merged = { ...base, ...local, rate_limits: { ...base.rate_limits, ...(local.rate_limits || {}) }, security: { ...base.security, ...(local.security || {}) } };
   fs.writeFileSync(path.join(s.site, 'config/config.local.php'),
     `<?php\n// written by tests/admin-lock.mjs\nif (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn json_decode(${JSON.stringify(JSON.stringify(merged)).replace(/\$/g, '\\$')}, true);\n`);
 }
@@ -352,7 +357,9 @@ async function main() {
       const ht = fs.readFileSync(path.join(main1.site, STUB_DIR, '.htaccess'), 'utf8');
       assert(/^Options\s+.*-Indexes/m.test(ht), 'Options -Indexes');
       assert(/^DirectoryIndex\s+index\.php/m.test(ht), 'DirectoryIndex index.php (the installation root says index.html)');
-      assert(/<FilesMatch[^>]*index\\\.php[^>]*admin\\\.css/.test(ht) && /Require all denied/.test(ht), 'everything except index.php and admin.css is denied');
+      // a FilesMatch, or (what the folder uses: a directory request is matched against the folder's own — free — name,
+      // so a file whitelist must leave directories alone) an Apache 2.4 <If> on existing files
+      assert(/<(?:FilesMatch|If)\b[^>]*index\\\.php[^>]*admin\\\.css/.test(ht) && /Require all denied/.test(ht), 'everything except index.php and admin.css is denied');
       assert(/^\s*#\s*Require ip\s+\S+/m.test(ht), 'a commented "Require ip" block');
       assert(/^\s*#\s*AuthType Basic/m.test(ht) && /^\s*#\s*AuthUserFile\s+\S+/m.test(ht) && /^\s*#\s*Require valid-user/m.test(ht), 'a commented Basic-Auth block');
       assert(/X-Robots-Tag/.test(ht), 'X-Robots-Tag for the static file');
@@ -371,6 +378,30 @@ async function main() {
       const sc = r.setCookie.join(' ; ');
       assert(/HttpOnly/i.test(sc) && /SameSite=Lax/i.test(sc), `session cookie flags: ${sc}`);
       return 'headers ok · admin.css static, no url() / @import';
+    });
+    await step('S06', 'finding F9: visits without a session (no cookie, or a made-up session cookie) create no session file — the sign-in form carries a stateless token', async () => {
+      const dir = path.join(main1.data, 'sessions');
+      const count = () => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.startsWith('sess_')).length : 0);
+      const before = count();
+      for (let i = 0; i < 25; i++) {
+        const r = await new Browser(srv.base).req(ADM);
+        assert(r.status === 200 && isSignIn(r.text) && tokenOf(r.text), `visit ${i + 1} → ${r.status}`);
+        assert(!r.setCookie.some((c) => /^TFMSESSID=/.test(c)), `visit ${i + 1} set a session cookie`);
+      }
+      for (let i = 0; i < 5; i++) {
+        const b = new Browser(srv.base);
+        b.put('TFMSESSID', crypto.randomBytes(24).toString('hex'), '/');
+        const r = await b.req(ADM + '?tab=users');
+        assert(r.status === 200 && isSignIn(r.text) && !r.setCookie.some((c) => /^TFMSESSID=/.test(c)), `made-up session cookie ${i + 1} → ${r.status}`);
+      }
+      const after = count();
+      assert(after === before, `session files ${before} → ${after}`);
+      // the stateless token is only good for signing in: any other action without a session is refused
+      const b = new Browser(srv.base);
+      const tok = tokenOf((await b.req(ADM)).text);
+      const r = await b.req(ADM, { form: { action: 'cleanup', tab: 'maintenance', _csrf: tok } });
+      assert(r.status === 403 && count() === before, `an action with the sign-in token → ${r.status}`);
+      return `30 visits → ${after - before} new session files · the sign-in token opens nothing else`;
     });
     await srv.stop(); srv = null;
   }
@@ -1023,7 +1054,9 @@ async function main() {
         const hash = (r.text.match(/name="ip_hash" value="([0-9a-f]{32})"/) || [])[1];
         assert(hash === row.ip_hash, 'the unblock form carries the hash of the row');
         r = await admF(b, ADM, { action: 'ip_unblock', tab: 'security', ip_hash: hash }, { page: '?tab=security' });
-        assert(flashOf(r.text)?.type === 'ok' && dbAll(s, 'SELECT * FROM ip_blocks').length === 0 && !r.text.includes('203.0.113.50'), `unblock: ${flashOf(r.text)?.msg}`);
+        // the real Firewall::unblock keeps the row with until_at = now (strikes forgiven, history kept): "no active block"
+        const active = () => dbAll(s, 'SELECT * FROM ip_blocks WHERE until_at > ?', [Date.now()]);
+        assert(flashOf(r.text)?.type === 'ok' && active().length === 0 && !r.text.includes('203.0.113.50'), `unblock: ${flashOf(r.text)?.msg} · active blocks ${active().length}`);
         const au = dbAll(s, "SELECT event FROM audit_log WHERE event IN ('ip_block_manual', 'ip_unblock_manual') ORDER BY id").map((x) => x.event);
         assert(au.join(',') === 'ip_block_manual,ip_unblock_manual', `audit: ${au.join(',')}`);
         // from an event row: "이 주소 차단" by hash (the full address never has to be shown)
@@ -1032,7 +1065,7 @@ async function main() {
         const h2 = (ev.text.match(/name="from_hash" value="([0-9a-f]{32})"/) || [])[1];
         assert(h2 && !ev.text.includes('198.51.100.77'), 'the event row offers a block button by hash, the address stays masked');
         r = await admF(b, ADM, { action: 'ip_block', tab: 'security', from_hash: h2, minutes: '10', reason: '기록에서 차단' }, { page: '?tab=security' });
-        assert(flashOf(r.text)?.type === 'ok' && dbAll(s, 'SELECT ip FROM ip_blocks')[0]?.ip === '198.51.100.77', `block from an event row: ${flashOf(r.text)?.msg}`);
+        assert(flashOf(r.text)?.type === 'ok' && active().map((x) => x.ip).join(',') === '198.51.100.77', `block from an event row: ${flashOf(r.text)?.msg} · active ${active().map((x) => x.ip).join(',')}`);
         return 'broken / own address refused · block 45 min · listed · unblock · block from an event row';
       });
       await step('S05', '🛡️ 보안 tab: the admin sign-in history (audit rows) and the 2-step state of every admin account', async () => {
@@ -1254,16 +1287,18 @@ async function apacheSection() {
       assert(isInside(page.page.text) && /path=\/admin\//i.test(page.post.setCookie.find((c) => /^TFMADM=/.test(c)) || ''), 'sign-in works under Apache');
       return `/${ADM} 200 · /${STUB_DIR} → ${n.status} · admin.css with headers · 6 other files denied · no listing`;
     });
-    await step('S06', 'Apache: the old admin.php answers 404 like a file that is not there (same status, a plain "Not Found" page, no cookie)', async () => {
+    await step('S06', 'Apache: the old admin.php answers 404 like a file that is not there (same status, the same "not found" page, no cookie)', async () => {
       const b = new Browser(base);
       const stub = await b.req('admin.php');
       const gone = await b.req('no-such-page-' + rnd() + '.php');
       assert(stub.status === 404 && gone.status === 404, `stub ${stub.status}, missing ${gone.status}`);
-      assert(/<title>404 Not Found<\/title>/.test(stub.text) && /<title>404 Not Found<\/title>/.test(gone.text), 'both pages are the "404 Not Found" page');
       assert(stub.setCookie.length === 0 && !stub.headers.get('x-powered-by') && !stub.headers.get('x-robots-tag'), 'no cookie, no PHP header');
+      // the installation's .htaccess may name its own missing-page file (ErrorDocument 404 → e404.html): the stub then
+      // shows that same file, otherwise the generic "404 Not Found" page — either way the two answers look alike
       const strip = (t) => t.replace(/<address>[\s\S]*?<\/address>/, '').replace(/<hr>/, '').replace(/\s+/g, ' ').trim();
-      const same = strip(stub.text) === strip(gone.text);
-      return same ? 'the body equals this Apache\'s own 404 page (signature line aside)' : 'status and title equal; the wording of this Apache\'s own 404 page differs (custom ErrorDocument) — see DOCS-NOTES for the .htaccess rule';
+      assert(strip(stub.text) === strip(gone.text), `the stub's body (${stub.text.length} bytes) differs from a missing file's (${gone.text.length} bytes): ${strip(stub.text).slice(0, 80)} | ${strip(gone.text).slice(0, 80)}`);
+      assert(!/admin|관리|<form|<script/i.test(stub.text), 'the 404 says nothing about an admin area');
+      return /<title>404 Not Found<\/title>/.test(gone.text) ? 'the body equals this Apache\'s own 404 page (signature line aside)' : 'the body equals the site\'s own missing-page file (ErrorDocument)';
     });
     await step('S06', 'Apache: the ready-to-uncomment blocks work — "Require ip" closes the folder for other addresses, the password block asks first (401)', async () => {
       const file = path.join(s.site, STUB_DIR, '.htaccess');

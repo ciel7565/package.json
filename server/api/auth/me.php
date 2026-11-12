@@ -18,5 +18,8 @@ use Tfm\Users;
 
 Api::run(['method' => 'GET', 'rate' => 'me'], function (Ctx $c): array {
     if (!$c->user) return ['user' => null, 'sub' => Subscription::none()] + SaveValidator::restoreStamp(null);
-    return ['user' => Users::publicUser($c->user), 'mutedUntil' => (int) $c->user['muted_until'], 'sub' => Subscription::state($c->uid())] + SaveValidator::restoreStampFor($c->uid());
+    $out = ['user' => Users::publicUser($c->user), 'mutedUntil' => (int) $c->user['muted_until'], 'sub' => Subscription::state($c->uid())] + SaveValidator::restoreStampFor($c->uid());
+    // CONTRACT §15.4 (a): the admin site's address (relative to the installation, e.g. "admin-1a2b3c4d5e/") — admins only
+    if ($c->isAdmin() && class_exists('Tfm\AdminPath') && Tfm\AdminPath::relUrl() !== '') $out['adminUrl'] = Tfm\AdminPath::relUrl();
+    return $out;
 });

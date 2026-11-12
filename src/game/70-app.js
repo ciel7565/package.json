@@ -699,6 +699,14 @@
     const nick = normText(u.nickname || u.name || '체험객').slice(0, 24);
     return { id: String(u.id), kind: 'server', email: String(u.email || '').slice(0, 120), nickname: nick || '체험객', role: u.role === 'admin' ? 'admin' : 'user', guest: false };
   }
+  /**
+   * the admin site's address as auth/me.php gives it to admins (CONTRACT §15.4: a folder relative to the installation,
+   * its name is free — never written into this page). Anything that is not a plain folder name + "/" is ignored.
+   */
+  function adminLink(v) {
+    const s = typeof v === 'string' ? v.trim() : '';
+    return /^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}\/$/.test(s) ? s : '';
+  }
   function toProfile(acc) {
     return { id: acc.id, kind: 'local', email: acc.email, nickname: acc.nickname, role: acc.role === 'admin' ? 'admin' : 'user', guest: false };
   }
@@ -901,8 +909,16 @@
         const d = await G.net.request('auth/me.php', { quiet: true, timeout: 5000 });
         this.serverUser = normServerUser(d);
         this._lastSub = d && d.sub ? d.sub : null; this._lastRestoredAt = Number(d?.restoredAt) || 0;
+        this._adminUrl = adminLink(d?.adminUrl);
       } catch (e) { this.serverUser = null; }
       return this.serverUser;
+    },
+    /** where the 관리자 links go: the admin site's folder from me.php ('' for a non-admin or when the server has none) */
+    async adminUrl() {
+      if (!isServer() || this.current?.role !== 'admin') return '';
+      if (this._adminUrl) return this._adminUrl;
+      try { const d = await G.net.request('auth/me.php', { quiet: true, timeout: 5000 }); this._adminUrl = adminLink(d?.adminUrl); } catch (e) { /* keep '' */ }
+      return this._adminUrl || '';
     },
     /** logout.php with retries; until the server confirms, a flag keeps the old session from being resumed */
     async _serverLogout() {
@@ -5022,8 +5038,15 @@
         try { d = await G.net.request('admin/stats.php', { timeout: 10000 }); }
         catch (e) {
           if (!pane.isConnected) return;
+          // CONTRACT §15.4 (d): the server's admin numbers need the admin site's own sign-in (password + 2-step), not
+          // only this login — say so calmly and link to the admin site (its address comes from the server, admins only)
+          const reauth = String(e?.code || '') === 'ADMIN_REAUTH';
+          const url = reauth ? (adminLink(e?.data?.adminUrl) || (await auth.adminUrl())) : '';
+          if (!pane.isConnected) return;
           const denied = e?.status === 401 || e?.status === 403 || /FORBIDDEN|UNAUTHORIZED|ADMIN/.test(String(e?.code || ''));
-          pane.innerHTML = `<div class="empty">${ico('shield')}<p>${denied ? '관리자 권한이 있는 서버 계정으로 로그인해야 볼 수 있어요.' : esc(String(e?.message || '서버 통계를 불러오지 못했어요.').slice(0, 160))}</p><button type="button" class="btn btn-soft btn-sm adm-retry">다시 시도</button></div>`;
+          const msg = reauth ? '관리자 정보는 관리자 페이지에서 확인해 주세요. 관리자 페이지에 로그인(비밀번호 + 2단계 인증)하면 30분 동안 여기에서도 보여요.'
+            : denied ? '관리자 권한이 있는 서버 계정으로 로그인해야 볼 수 있어요.' : esc(String(e?.message || '서버 통계를 불러오지 못했어요.').slice(0, 160));
+          pane.innerHTML = `<div class="empty">${ico('shield')}<p>${msg}</p>${url ? `<a class="btn btn-soft btn-sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ico('shield', 'ico-sm')}관리자 페이지 열기</a> ` : ''}<button type="button" class="btn btn-soft btn-sm adm-retry">다시 시도</button></div>`;
           G.ui.hydrateIcons(pane);
           pane.querySelector('.adm-retry')?.addEventListener('click', load);
           return;
@@ -5166,7 +5189,7 @@
   }
   /**
    * after a re-login: the account as the server has it now. A grown-up may have changed it while this tab was signed
-   * out (admin.php 관리자 지정 / 해제 ends the session). Every save sends profile.role: the server stores the account's
+   * out (관리자 센터의 관리자 지정 / 해제 ends the session). Every save sends profile.role: the server stores the account's
    * role in its place (SaveValidator note 'role'; older servers refused a stale one with PROFILE_ROLE, so the old role
    * made every later save fail). auth.current also feeds the admin / dev-center checks.
    */
@@ -5243,7 +5266,7 @@
    * pending copy — and then the copy a STALE_SAVE restore pushed aside while this device was offline
    * (G.save.pending.getLost: the newer copy from another device was loaded over it; R3-c2-device-env-1 asks that
    * offline progress is never thrown away). The pushed-aside copy is offered once even when it is older than the state
-   * the server has now ("연결이 끊겼을 때의 기록"), then dropped. A copy from before an operator restore (admin.php
+   * the server has now ("연결이 끊겼을 때의 기록"), then dropped. A copy from before an operator restore (관리자 센터
    * 직전 저장으로 되돌리기: restoredAt from get.php / login.php / me.php) is never offered — it would undo the restore.
    */
   async function offerPending(seq) {
@@ -5534,7 +5557,7 @@
             const pre = await G.net.request('player/get.php', { timeout: 9000 });
             hadServerSave = !!(pre && pre.save);
             if (pre && pre.sub) serverSub = pre.sub;
-            // admin.php 직전 저장으로 되돌리기 stamps the row (meta.restoredRev / restoredAt); when get.php tells us,
+            // 관리자 센터 "직전 저장으로 되돌리기" stamps the row (meta.restoredRev / restoredAt); when get.php tells us,
             // offerPending drops a pending copy from before the restore (R3-c2-r2-seams-lost-1)
             this._restoredAt = Math.max(Number(auth._lastRestoredAt) || 0, Number(pre?.restoredAt || pre?.save?.restoredAt || pre?.meta?.restoredAt) || 0);
           } catch (e) {

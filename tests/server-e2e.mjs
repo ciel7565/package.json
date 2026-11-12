@@ -697,9 +697,9 @@ async function main() {
     const g = await anon.req('api/admin/stats.php');
     assert(g.status === 401, `anonymous ${g.status}`);
   });
-  await step('admin: health (localhost bootstrap or admin only)', async () => {
+  await step('admin: health is for admins signed in to the admin site (a player gets 403 — no localhost shortcut since finding F4)', async () => {
     const r = await A.req('api/admin/health.php?quick=1');
-    if (r.status === 403) return 'admin already exists → 403 for non-admins (expected)';
+    if (r.status === 403) return `403 ${r.error?.code} for a player (expected)`;
     assert(r.status === 200 && Array.isArray(r.data?.checks) && r.data.db?.ok === true, `status ${r.status}`);
     const fails = r.data.checks.filter((c) => c.status === 'fail').map((c) => c.id);
     for (const id of ['pii_rules', 'pii_filter']) {
@@ -1074,7 +1074,28 @@ async function main() {
     }
     return 'GET 404 · POST 404';
   });
-  await step('sub: a player cannot grant (403); an admin grants tier 4 for 7 days and revokes (API + admin.php 구독 tab)', async () => {
+  /**
+   * CONTRACT §15.4: the admin site lives in its own folder (me.php hands its address to admins) and needs its own
+   * sign-in — the app login is not enough. Signs the client in there (2-step sign-in is "optional" and not enrolled
+   * here, so the password is all it takes) and returns the folder ("admin/"). The sign-in rotates the session id and
+   * the CSRF token: me.php is read again so the client's API token is the new one.
+   */
+  let adminSite = null;
+  async function adminSignIn(c, email) {
+    const me = await c.req('api/auth/me.php');
+    const site = typeof me.data?.adminUrl === 'string' && me.data.adminUrl ? me.data.adminUrl : 'admin/';
+    const html = { Accept: 'text/html' };
+    const pg = await c.req(site, { headers: html });
+    const tok = (pg.text.match(/name="_csrf" value="([0-9a-f]+)"/) || [])[1];
+    assert(pg.status === 200 && tok, `admin site sign-in form (HTTP ${pg.status})`);
+    const r = await c.req(site, { form: new URLSearchParams({ action: 'login', login: email, password: PASSWORD, _csrf: tok }), headers: html });
+    assert(r.status === 303, `admin site sign-in POST ${r.status}`);
+    const home = await c.req(site, { headers: html });
+    assert(home.status === 200 && /<nav class="tabs"/.test(home.text), `admin site dashboard after the sign-in (HTTP ${home.status})`);
+    await c.req('api/auth/me.php');
+    return site;
+  }
+  await step('sub: a player cannot grant (403); an admin grants tier 4 for 7 days and revokes (API + the admin site 구독 tab)', async () => {
     if (skipSub()) return skipSub();
     const no = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
     assert(no.status === 403 && no.error?.code === 'FORBIDDEN', `player grant: ${no.status} ${no.error?.code}`);
@@ -1089,15 +1110,18 @@ async function main() {
     const g = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
     assert(g.status === 200 && g.data?.sub?.tier === 4 && g.data.sub.status === 'active', `grant ${g.status} ${g.error?.code} ${JSON.stringify(g.data)}`);
     assert((await A.req('api/auth/me.php')).data.sub.tier === 4, 'A is tier 4 now');
-    const page = await B.req('admin.php?tab=sub');
-    assert(page.status === 200 && /구독 현황/.test(page.text) && /수동 부여/.test(page.text) && page.text.includes(userA.nickname), 'admin.php 구독 tab renders the subscription');
-    assert(!/게임/.test(page.text), 'admin.php shows no "게임" wording');
+    // the phase-6 address is a plain 404 now; the admin site is reached through its own sign-in
+    assert((await B.req('admin.php', { headers: { Accept: 'text/html' } })).status === 404, 'the old admin.php answers 404');
+    adminSite = await adminSignIn(B, userB.email);
+    const page = await B.req(adminSite + '?tab=sub', { headers: { Accept: 'text/html' } });
+    assert(page.status === 200 && /구독 현황/.test(page.text) && /수동 부여/.test(page.text) && page.text.includes(userA.nickname), 'the admin site 구독 tab renders the subscription');
+    assert(!/게임/.test(page.text), 'the admin site shows no "게임" wording');
     const rv = await B.req('api/sub/grant.php', { json: { userId: me.id, revoke: true } });
     assert(rv.status === 200 && rv.data?.sub?.tier === 1, `revoke ${rv.status} ${JSON.stringify(rv.data?.sub)}`);
     assert((await A.req('api/auth/me.php')).data.sub.tier === 1, 'A back to tier 1');
     const lst = cli('sub:list');
     assert(lst.status === 0 && lst.out.includes(userB.nickname), `sub:list ${lst.out.slice(0, 200)}`);
-    return 'grant → tier 4 → revoke → tier 1 · admin.php 구독 tab ok';
+    return 'grant → tier 4 → revoke → tier 1 · admin site 구독 tab ok · old admin.php 404';
   });
 
   // ------------------------------------------------------------- operator restore stamp + sub on every save answer
@@ -1115,12 +1139,13 @@ async function main() {
     const g0 = await CC.req('api/player/get.php');
     assert(g0.status === 200 && g0.data?.save && g0.data.restoredAt === 0 && g0.data.restoredRev === 0, `before: ${g0.status} stamp ${g0.data?.restoredAt}/${g0.data?.restoredRev}`);
     const oldRev = g0.data.save.revision;
-    // B is an admin since the grant step: admin.php "직전 저장으로 되돌리기" for C (signs C out)
-    const pg = await B.req('admin.php?tab=users');
+    // B is an admin since the grant step: the admin site's "직전 저장으로 되돌리기" for C (signs C out)
+    if (!adminSite) adminSite = await adminSignIn(B, userB.email);
+    const pg = await B.req(adminSite + '?tab=users', { headers: { Accept: 'text/html' } });
     const tok = (pg.text.match(/name="_csrf" value="([0-9a-f]+)"/) || [])[1];
-    assert(tok, `admin.php form token (HTTP ${pg.status})`);
+    assert(tok && /<nav class="tabs"/.test(pg.text), `admin site form token (HTTP ${pg.status})`);
     const t0 = Date.now();
-    const rs = await B.req('admin.php', { form: new URLSearchParams({ action: 'restore', uid: String(userC.id), tab: 'users', _csrf: tok }) });
+    const rs = await B.req(adminSite, { form: new URLSearchParams({ action: 'restore', uid: String(userC.id), tab: 'users', _csrf: tok }), headers: { Accept: 'text/html' } });
     assert(rs.status === 303, `restore POST ${rs.status}`);
     const lg = await CC.req('api/auth/login.php', { json: { login: userC.email, password: PASSWORD, remember: false } });
     assert(lg.status === 200 && lg.data?.restoredRev > oldRev && lg.data.restoredAt >= t0 - 5000 && lg.data.restoredAt <= Date.now() + 5000, `login stamp ${lg.status} ${lg.data?.restoredAt}/${lg.data?.restoredRev} (old rev ${oldRev})`);
