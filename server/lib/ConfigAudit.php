@@ -44,6 +44,8 @@ final class ConfigAudit
         } catch (\Throwable $e) {
             $add('app_key', '앱 비밀키', 'fail', '만들 수 없음', 'data/ 폴더가 쓰기 가능한지 확인하세요 (secret.php 를 만들지 못했어요).');
         }
+        // ---------------------------------------------------------------- key ages (data/secret.php: created, rotated_at)
+        self::keyAgeRow($add);
 
         // ---------------------------------------------------------------- private files: not world-writable, not web-readable
         foreach ([['config/config.local.php', '설정 파일(config.local.php)'], ['data/secret.php', '비밀키 파일(secret.php)']] as $pair) {
@@ -99,9 +101,12 @@ final class ConfigAudit
         $add('app_env', '실행 모드(app.env)', $isProd ? 'ok' : 'warn', $env,
             $isProd ? '' : 'development 모드는 로그가 더 자세해요. 운영 서버에서는 production 으로 두세요.');
 
-        // ---------------------------------------------------------------- display_errors / expose_php (effective)
-        $add('display_errors', 'display_errors(효과값)', $on(ini_get('display_errors')) ? 'warn' : 'ok', $on(ini_get('display_errors')) ? 'On' : 'Off',
-            $on(ini_get('display_errors')) ? '앱은 실행 중 끄지만 php.ini 에서도 Off 로 두세요 (오류가 브라우저에 보이지 않게).' : '');
+        // ---------------------------------------------------------------- display_errors (php.ini) / expose_php (effective)
+        // bootstrap.php switches display_errors off for the request, so ini_get() would always say Off: the value the
+        // operator set (php.ini, -d) is what matters — an error before the app starts (a broken file) is shown with it
+        $de = $on(get_cfg_var('display_errors'));
+        $add('display_errors', 'display_errors (php.ini)', $de ? 'warn' : 'ok', $de ? 'On' : 'Off',
+            $de ? '앱은 실행 중 끄지만 php.ini 에서도 Off 로 두세요 (앱이 시작되기 전의 오류도 브라우저에 보이지 않게).' : '');
         $add('expose_php', 'expose_php(효과값)', $on(ini_get('expose_php')) ? 'warn' : 'ok', $on(ini_get('expose_php')) ? 'On' : 'Off',
             $on(ini_get('expose_php')) ? 'php.ini 에서 expose_php = Off 로 두세요 (PHP 버전 노출 방지). 서버(Apache)도 ServerTokens Prod 로.' : '');
 
@@ -179,6 +184,51 @@ final class ConfigAudit
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** the server's own keys get a ⚠ once they were made or last changed longer ago than this */
+    private const KEY_MAX_AGE_DAYS = 365;
+
+    /**
+     * Key ages (CONTRACT §15.7 #8): days since app_key / data_key were made or last changed by `secret:rotate`
+     * (data/secret.php: rotated_at.<key>, else created — the data key is made later than the file, so its age is at
+     * most that). Only day counts are printed, never a key. External keys (토스, Anthropic) and the DB password are
+     * renewed in their own consoles / with db:rotate-password; the server cannot see when they were issued.
+     */
+    private static function keyAgeRow(callable $add): void
+    {
+        try {
+            $s = Secrets::read(true);
+        } catch (\Throwable $e) {
+            return; // the app_key row above already reports an unreadable secret file
+        }
+        $rot = isset($s['rotated_at']) && is_array($s['rotated_at']) ? $s['rotated_at'] : [];
+        $born = isset($s['created']) && is_string($s['created']) ? strtotime($s['created']) : false;
+        /** days since the key was made or changed; null = the key is not made yet, -1 = no date recorded */
+        $age = function (string $key) use ($s, $rot, $born): ?int {
+            if (!isset($s[$key]) || !is_string($s[$key]) || $s[$key] === '') return null;
+            $t = isset($rot[$key]) && is_string($rot[$key]) ? strtotime($rot[$key]) : false;
+            if ($t === false) $t = $born;
+            return $t === false ? -1 : max(0, intdiv(time() - (int) $t, 86400));
+        };
+        $parts = [];
+        $old = false;
+        $unknown = false;
+        foreach (['app_key' => '앱 키', 'data_key' => '데이터 키'] as $key => $name) {
+            $d = $age($key);
+            if ($d === null) { $parts[] = $name . ' 아직 없음'; continue; }
+            if ($d < 0) { $parts[] = $name . ' 기록 없음'; $unknown = true; continue; }
+            $parts[] = $name . ' ' . $d . '일';
+            if ($d > self::KEY_MAX_AGE_DAYS) $old = true;
+        }
+        $hint = '';
+        if ($old) {
+            $hint = '만들거나 바꾼 지 1년이 넘은 키가 있어요. 서버 컴퓨터에서 php cli/tfm.php secret:rotate 로 새로 만드세요 '
+                . '(모든 사용자가 한 번 로그아웃되고, 결제 수단 정보는 새 키로 다시 잠겨요 — 그 뒤에 백업을 새로 받아 두세요).';
+        } elseif ($unknown) {
+            $hint = '키를 언제 만들었는지 기록이 없어요. 서버 컴퓨터에서 php cli/tfm.php secret:rotate 로 한 번 새로 만들면 그때부터 날짜가 기록돼요.';
+        }
+        $add('key_age', '비밀키 나이 (앱 키 · 데이터 키)', $old || $unknown ? 'warn' : 'ok', implode(' · ', $parts), $hint);
+    }
 
     private static function worldWritable(string $path): bool
     {

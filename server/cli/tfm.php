@@ -48,6 +48,7 @@ if (PHP_SAPI !== 'cli') { if (function_exists('header_remove')) header_remove('X
 require __DIR__ . '/../lib/bootstrap.php';
 
 use Tfm\AdminOps;
+use Tfm\AdminPath;
 use Tfm\ApiException;
 use Tfm\Audit;
 use Tfm\Clock;
@@ -268,6 +269,11 @@ try {
                 }
             }
             out('  config/config.local.php 와 data/install.lock 을 만들었어요.');
+            // the admin site lock (CONTRACT §15.4): the address, then the next steps the web installer also lists
+            $admDir = AdminPath::dirName();
+            out('  관리자 센터: <체험관 주소>/' . ($admDir !== '' ? $admDir : AdminPath::DEFAULT_NAME) . '/'
+                . ($admDir === AdminPath::DEFAULT_NAME || $admDir === '' ? '  ⚠ 누구나 짐작할 수 있는 기본 이름이에요 — php cli/tfm.php admin:path --random 으로 아무도 모르는 이름으로 바꾸세요.' : ''));
+            out('  다음 할 일: 관리자 센터 🔐 2단계 인증 탭에서 휴대폰 인증 앱 등록 · security.admin_ip_allowlist (TFM_ADMIN_IPS) 에 관리자 주소 적기 · php cli/tfm.php config:check 로 보안 설정 점검');
             break;
         }
         case 'users': {

@@ -1062,7 +1062,8 @@ $webData = $webRoot . '/data';
 mkdir($webData, 0700, true);
 copyTree(__DIR__ . '/../server', $webSrv);
 @unlink($webSrv . '/config/config.local.php');
-$webPort = 18771;
+// TFM_SECDATA_WEB_PORT picks the port (parallel runs of the workflow agents); else the OS chooses a free one
+$webPort = getenv('TFM_SECDATA_WEB_PORT') ? (int) getenv('TFM_SECDATA_WEB_PORT') : $freePort();
 $webProc = proc_open([PHP_BINARY, '-d', 'display_errors=1', '-d', 'expose_php=1', '-S', "127.0.0.1:$webPort", '-t', $webSrv],
     [0 => ['pipe', 'r'], 1 => ['file', $webRoot . '/php-s.log', 'a'], 2 => ['file', $webRoot . '/php-s.log', 'a']], $pipes, $webSrv,
     ['TFM_DATA_DIR' => $webData, 'TFM_TOSS_MOCK' => '1', 'PATH' => (string) getenv('PATH')]);
@@ -1081,6 +1082,11 @@ check('install.php (open, fresh server) — the form asks for the setup code and
     if (strpos($body, PHP_VERSION) !== false || strpos($body, $webSrv) !== false || strpos($body, $webData) !== false) return 'the page shows the PHP version or a server path';
     if (isset($hd['x-powered-by'])) return 'X-Powered-By: ' . $hd['x-powered-by'];
     return strpos((string) (isset($hd['content-security-policy']) ? $hd['content-security-policy'] : ''), "script-src 'none'") !== false || strpos($body, '<script') === false ? true : 'scripts on the page';
+});
+check('install.php (open) — offers a random admin folder name, ticked by default, without naming any folder on the public page (CONTRACT §15.4 a)', function () use (&$page) {
+    $body = $page[2];
+    if (!preg_match('/<input type="checkbox" name="admin_random" value="1"[^>]*\bchecked\b/', $body)) return 'no ticked admin_random box on the form';
+    return preg_match('/admin-[0-9a-f]{10}/', $body) ? 'the public page names an admin folder' : true;
 });
 /** the code in data/setup-code.php of the web instance (read the way the operator does: from the file) */
 function setupCodeOf(string $dataDir): string
@@ -1104,9 +1110,11 @@ check('install.php POST without / with a wrong setup code — 403, nothing writt
     }
     return true;
 });
-check('install.php POST with the setup code — installs (SQLite), the code is used up, then GET and POST answer a plain 404', function () use ($base, &$jar, &$page, $formOf, $webSrv, $webData) {
+$done = [0, [], ''];
+check('install.php POST with the setup code — installs (SQLite), the code is used up, then GET and POST answer a plain 404', function () use ($base, &$jar, &$page, &$done, $formOf, $webSrv, $webData) {
     $code = setupCodeOf($webData);
-    $r = http('POST', $base . 'install.php', ['setup_code' => strtolower($code)] + $formOf($page[2]), $jar);
+    $r = http('POST', $base . 'install.php', ['setup_code' => strtolower($code), 'admin_random' => '1'] + $formOf($page[2]), $jar);
+    $done = $r;
     if ($r[0] !== 200 || strpos($r[2], '설치가 끝났어요') === false) return "POST → {$r[0]} " . substr(strip_tags($r[2]), 0, 200);
     if (strpos($r[2], PHP_VERSION) !== false) return 'the done page shows the PHP version';
     if (is_file($webData . '/setup-code.php')) return 'the setup code was not used up';
@@ -1117,6 +1125,24 @@ check('install.php POST with the setup code — installs (SQLite), the code is u
     }
     return true;
 });
+check('install.php done page (box ticked) — the admin folder got a random name (admin-…), recorded in security.admin_dir; the page shows the new address once, how to find it again and the next locks (2-step sign-in, allow-list)', function () use (&$done, $webSrv) {
+    $body = $done[2];
+    if (!preg_match('#(admin-[0-9a-f]{10})/#', $body, $m)) return 'no new admin address on the done page: ' . substr(strip_tags($body), 0, 200);
+    $name = $m[1];
+    if (!is_file("$webSrv/$name/index.php") || is_dir("$webSrv/admin")) return "the folder was not renamed to $name";
+    $cfg = (string) file_get_contents("$webSrv/config/config.local.php");
+    if (strpos($cfg, "'admin_dir' => '$name'") === false) return 'security.admin_dir is not recorded in config.local.php';
+    if (strpos($body, 'admin:path') === false) return 'the page does not say how to find the address again (php cli/tfm.php admin:path)';
+    return strpos($body, '2단계 인증') !== false && strpos($body, 'admin_ip_allowlist') !== false ? true : 'the next steps (2-step sign-in, allow-list) are missing';
+});
+check('install.php done page — runs the security configuration audit (ConfigAudit) and lists what to fix, without a key or the PHP version (CONTRACT §15.7 #8)', function () use (&$done, $webData) {
+    $body = $done[2];
+    if (strpos($body, '설치 후 보안 점검') === false) return 'no audit section on the done page';
+    if (strpos($body, 'display_errors') === false) return 'the display_errors row is not listed (this php -S runs with display_errors=1)';
+    $secret = (string) @file_get_contents($webData . '/secret.php');
+    if (preg_match("/'app_key' => '([0-9a-f]{64})'/", $secret, $k) && strpos($body, substr($k[1], 0, 16)) !== false) return 'the app key is on the page';
+    return strpos($body, PHP_VERSION) === false ? true : 'the PHP version is on the page';
+});
 check('install.php — closed (404) while accounts exist or config.local.php exists, even without install.lock', function () use ($base, &$jar, $webSrv, $webData) {
     @unlink($webData . '/install.lock');
     $x = http('GET', $base . 'install.php', [], $jar);
@@ -1125,6 +1151,28 @@ check('install.php — closed (404) while accounts exist or config.local.php exi
     $y = http('GET', $base . 'install.php', [], $jar);
     rename($webSrv . '/config/config.local.php.off', $webSrv . '/config/config.local.php');
     return $y[0] === 404 ? true : "accounts only → {$y[0]}";
+});
+/** delete every file below $dir (the folders stay): the web instance's data starts over like a fresh server */
+function emptyTree(string $dir): void
+{
+    foreach (scandir($dir) ?: [] as $f) {
+        if ($f === '.' || $f === '..') continue;
+        if (is_dir("$dir/$f")) emptyTree("$dir/$f");
+        else @unlink("$dir/$f");
+    }
+}
+check('install.php (box not ticked) — the admin folder keeps its name; the done page shows admin/ and recommends php cli/tfm.php admin:path --random', function () use ($base, $formOf, $webSrv, $webData) {
+    // a fresh server again: no configuration, no data, the admin folder back at its default name
+    foreach (glob($webSrv . '/admin-*', GLOB_ONLYDIR) ?: [] as $d) rename($d, $webSrv . '/admin');
+    @unlink($webSrv . '/config/config.local.php');
+    emptyTree($webData);
+    $jar2 = [];
+    $form = http('GET', $base . 'install.php', [], $jar2);
+    if ($form[0] !== 200) return "the fresh server's installer → {$form[0]}";
+    $r = http('POST', $base . 'install.php', ['setup_code' => setupCodeOf($webData)] + $formOf($form[2]), $jar2);
+    if ($r[0] !== 200 || strpos($r[2], '설치가 끝났어요') === false) return "POST → {$r[0]} " . substr(strip_tags($r[2]), 0, 200);
+    if (!is_file($webSrv . '/admin/index.php') || glob($webSrv . '/admin-*', GLOB_ONLYDIR)) return 'the folder was renamed although the box was not ticked';
+    return strpos($r[2], 'admin/') !== false && strpos($r[2], 'admin:path --random') !== false ? true : 'the done page shows no admin/ address or no admin:path --random advice';
 });
 if (is_resource($webProc)) { proc_terminate($webProc); proc_close($webProc); }
 

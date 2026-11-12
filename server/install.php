@@ -16,13 +16,18 @@
  *     forwarders); the code is never shown over HTTP and is used up by a successful installation
  *   - MySQL / MariaDB: the typed administrator account (root on XAMPP) is used once and never stored; a dedicated
  *     account with SELECT / INSERT / UPDATE / DELETE on the app database only goes into config.local.php
+ *   - the admin folder (CONTRACT §15.4 a): the form offers a random name (ticked by default); the new name is made only
+ *     after the setup code was accepted and is shown once, on the done page — never on the public form
+ *   - the done page runs the configuration audit (ConfigAudit, §15.7 #8) and lists what to fix next
  *   - strict CSP (no scripts), POST + CSRF token + same-origin check, every value escaped, no PHP version, no paths
  */
 declare(strict_types=1);
 
 require __DIR__ . '/lib/bootstrap.php';
 
+use Tfm\AdminPath;
 use Tfm\ApiException;
+use Tfm\ConfigAudit;
 use Tfm\Ctx;
 use Tfm\Firewall;
 use Tfm\Http;
@@ -144,7 +149,7 @@ function viewForm(array $checks, ?string $error): string
         . '<label>이메일<input type="email" name="admin_email" value="' . ie(ival('admin_email')) . '" required maxlength="120"></label>'
         . '<label>닉네임 (2~12자)<input name="admin_nickname" value="' . ie(ival('admin_nickname')) . '" required maxlength="12"></label>'
         . '<label>비밀번호<input type="password" name="admin_password" value="" required autocomplete="new-password" maxlength="64"></label>'
-        . '</div></section>'
+        . '</div><label class="check"><input type="checkbox" name="admin_random" value="1"' . (ichecked('admin_random', true) ? ' checked' : '') . '> 관리자 센터 주소를 아무도 모르는 이름으로 바꾸기 (권장) — 기본 주소 <code>…/admin/</code> 는 누구나 짐작할 수 있어요. 새 주소는 설치가 끝난 화면에 한 번만 보여 드려요 (서버 컴퓨터에서 <code>php cli/tfm.php admin:path</code> 로 다시 확인할 수 있어요).</label></section>'
         . '<section class="card"><h3><span class="step">4</span> 토스페이먼츠 (선택 · 진행 속도 구독 결제)</h3><p class="dim small">토스페이먼츠 개발자센터에서 발급받은 <b>내 API 키</b>를 넣으면 2배·3배·4배 구독을 팔 수 있어요. 비워 두면 결제가 "설정 필요" 상태로 꺼져 있어요 (나중에 config/config.local.php 에 넣을 수 있어요). "모의 결제" 를 켜면 결제 서버에 연결하지 않고 이 서버 컴퓨터에서 흐름을 시험할 수 있어요 — 운영 서버에서는 켜지 마세요.</p><div class="grid">'
         . '<label>클라이언트 키 (test_ck_… / live_ck_…)<input name="toss_client" value="' . ie(ival('toss_client')) . '" maxlength="120"></label>'
         . '<label>시크릿 키 (test_sk_… / live_sk_…)<input type="password" name="toss_secret" value="" autocomplete="new-password" maxlength="120"></label>'
@@ -154,7 +159,80 @@ function viewForm(array $checks, ?string $error): string
     return $h;
 }
 
-function viewDone(array $r): string
+/**
+ * After a successful installation: the admin folder gets a random name when the box was ticked (CONTRACT §15.4 a).
+ * A folder the web server may not rename (Linux web roots, a program holding it open on Windows) is not an install
+ * failure: the done page tells the operator to run `php cli/tfm.php admin:path --random` instead.
+ * → ['name' => current folder name ('' when none), 'renamed' => bool, 'error' => Korean reason or '']
+ */
+function installAdminFolder(bool $random): array
+{
+    $out = ['name' => AdminPath::dirName(), 'renamed' => false, 'error' => ''];
+    if (!$random || $out['name'] === '') return $out;
+    try {
+        $out['name'] = AdminPath::rename(AdminPath::random());
+        $out['renamed'] = true;
+    } catch (ApiException $e) {
+        Log::warn('INSTALL', 'admin folder not renamed', ['code' => $e->errorCode]);
+        $out['error'] = $e->getMessage();
+    }
+    return $out;
+}
+
+/** the configuration audit right after the installation (CONTRACT §15.7 #8) — [] when the audit is not available */
+function installAudit(): array
+{
+    if (!class_exists('Tfm\ConfigAudit')) return [];
+    try {
+        return ConfigAudit::run();
+    } catch (Throwable $e) {
+        Log::error('INSTALL', 'config audit after the installation failed: ' . get_class($e));
+        return [];
+    }
+}
+
+/** the done page's admin-site lines: the address (shown only here), how to find it again, the next locks */
+function viewAdminSteps(array $dir): string
+{
+    $name = $dir['name'] !== '' ? $dir['name'] : AdminPath::DEFAULT_NAME;
+    $url = Http::baseUrl() . $name . '/';
+    $link = '<a href="' . ie($name . '/') . '"><code>' . ie($url) . '</code></a>';
+    if ($dir['renamed']) {
+        $h = '<li>🔒 관리자 센터 주소: ' . $link . ' — 폴더 이름을 아무도 모르는 이름으로 바꿨어요. <b>이 주소는 지금 이 화면에만 보여요. 즐겨찾기에 넣어 두세요.</b>'
+            . ' 잊어버리면 서버 컴퓨터에서 <code>php cli/tfm.php admin:path</code> 로 확인할 수 있어요 (관리자 계정으로 체험관에 로그인하면 메뉴의 관리자 센터 버튼도 새 주소로 가요).</li>';
+    } elseif ($dir['error'] !== '') {
+        $h = '<li>⚠️ 관리자 센터 주소: ' . $link . ' — 폴더 이름을 바꾸지 못했어요 (' . ie($dir['error']) . ').'
+            . ' 서버 컴퓨터에서 <code>php cli/tfm.php admin:path --random</code> 을 실행하면 아무도 모르는 이름으로 바뀌고 새 주소가 한 번 보여요.</li>';
+    } elseif ($name === AdminPath::DEFAULT_NAME) {
+        $h = '<li>⚠️ 관리자 센터 주소: ' . $link . ' — 누구나 짐작할 수 있는 기본 이름이에요.'
+            . ' 서버 컴퓨터에서 <code>php cli/tfm.php admin:path --random</code> 을 실행해 아무도 모르는 이름으로 바꾸세요 (새 주소는 그 화면에 한 번 보여요).</li>';
+    } else {
+        $h = '<li>🔒 관리자 센터 주소: ' . $link . ' (서버 컴퓨터에서 <code>php cli/tfm.php admin:path</code> 로 다시 확인할 수 있어요).</li>';
+    }
+    return $h . '<li>🔐 관리자 센터에 로그인한 뒤 <b>2단계 인증</b> 탭에서 휴대폰 인증 앱(예: Google Authenticator)을 등록하세요. 비밀번호가 새어 나가도 그 휴대폰이 없으면 아무도 들어올 수 없어요.'
+        . ' 모든 관리자가 등록하면 <code>security.admin_2fa</code> 를 <code>required</code> 로 바꾸세요 (환경 변수 <code>TFM_ADMIN_2FA</code>).</li>'
+        . '<li>🌐 관리자가 일하는 곳의 인터넷 주소에서만 관리자 센터가 열리게 하세요: <code>config/config.local.php</code> 의 <code>security.admin_ip_allowlist</code> (또는 환경 변수 <code>TFM_ADMIN_IPS</code>)에 주소를 적어요 (예: <code>203.0.113.7</code>, <code>192.168.0.0/24</code>). 다른 곳에서는 "없는 페이지"로 보여요.</li>';
+}
+
+/** the done page's audit card: the rows that need attention, never a key (ConfigAudit prints none) nor the server's version */
+function viewInstallAudit(array $rows): string
+{
+    if (!$rows) return '';
+    $sum = ConfigAudit::summary($rows);
+    $h = '<section class="card"><h2>🛡️ 설치 후 보안 점검</h2><p class="dim small">설정 파일과 서버 환경을 한 번 살펴봤어요 (관리자 센터의 🩺 시스템 점검과 같은 내용이에요). 정상 '
+        . ie($sum['ok']) . ' · 주의 ' . ie($sum['warn']) . ' · 위험 ' . ie($sum['fail']) . '</p>';
+    $todo = array_values(array_filter($rows, function ($r) { return $r['status'] !== 'ok'; }));
+    if (!$todo) return $h . '<p class="flash ok">✅ 지금 고칠 것이 없어요.</p></section>';
+    $h .= '<div class="tablewrap"><table><thead><tr><th>항목</th><th>상태</th><th>값</th><th>이렇게 고쳐요</th></tr></thead><tbody>';
+    foreach ($todo as $r) {
+        // the web server's banner carries version numbers: say what is wrong without repeating it
+        $value = $r['id'] === 'server_hardening' ? '버전이 보여요' : (string) $r['value'];
+        $h .= '<tr><td><b>' . ie($r['label']) . '</b></td><td>' . ibadge((string) $r['status']) . '</td><td>' . ie($value) . '</td><td class="dim">' . ie($r['hint']) . '</td></tr>';
+    }
+    return $h . '</tbody></table></div><p class="dim small">나중에 다시 보려면 관리자 센터 → 🩺 시스템 점검, 또는 서버 컴퓨터에서 <code>php cli/tfm.php config:check</code>.</p></section>';
+}
+
+function viewDone(array $r, array $adminDir, array $audit): string
 {
     $acct = isset($r['dbAccount']) && is_array($r['dbAccount']) ? $r['dbAccount'] : ['dedicated' => false, 'reason' => 'sqlite', 'manual' => []];
     if ($r['driver'] !== 'mysql') {
@@ -172,11 +250,12 @@ function viewDone(array $r): string
     $h = '<div class="flash ok" role="status">🎉 설치가 끝났어요!</div><section class="card"><h2>이제 이렇게 하세요</h2><ol class="todo">'
         . '<li>' . $dbLine . '</li>'
         . '<li>관리자 <b>' . ie($r['adminNickname']) . '</b> ' . ($r['adminCreated'] ? '계정을 만들었어요.' : '계정에 관리자 권한을 주었어요.') . ' 관리자 센터에서 같은 이메일·비밀번호로 로그인하세요.</li>'
+        . viewAdminSteps($adminDir)
         . '<li>구독 결제: ' . ($r['mock'] ? '<b>모의 결제 모드</b> (이 서버 컴퓨터에서만 시험용)' : ($r['tossKeys'] ? '<b>입력한 토스 키</b> 사용' : '<b>설정 필요</b> — 결제를 열려면 토스페이먼츠 개발자센터에서 발급받은 내 키를 config/config.local.php 에 넣어 주세요')) . ' — 토스 개발자센터의 웹훅 주소는 <code>' . ie(Http::baseUrl()) . 'api/sub/webhook.php</code></li>'
         . '<li>자동 갱신: Windows 작업 스케줄러에 <code>php.exe cli\\tfm.php sub:renew</code> 를 하루 한 번 등록하세요 (docs/SERVER-INSTALL-KO.md).</li>'
         . '<li>운영 서버는 HTTPS 로 서비스하세요 (토스 결제창과 마이크 입력이 HTTPS 를 요구해요).</li></ol>'
         . '<div class="row"><a class="btn" href="./">🏺 체험관 열기</a></div></section>';
-    return $h;
+    return $h . viewInstallAudit($audit);
 }
 
 /** Firewall::guardPage() of the security layer (blocked addresses, plain HTTP where HTTPS is required, uploads) */
@@ -221,7 +300,8 @@ try {
                     'toss_client' => ival('toss_client'), 'toss_secret' => ival('toss_secret'), 'toss_mock' => isset($_POST['toss_mock']),
                 ]);
                 SetupCode::consume();
-                $html = installPage(viewDone($r), $NONCE, '설치 완료');
+                $adminDir = installAdminFolder(isset($_POST['admin_random']));
+                $html = installPage(viewDone($r, $adminDir, installAudit()), $NONCE, '설치 완료');
             } catch (ApiException $e) {
                 $status = $e->status >= 400 && $e->status < 600 ? $e->status : 400;
                 $html = installPage(viewForm(Installer::checks($driverIn), $e->getMessage()), $NONCE);

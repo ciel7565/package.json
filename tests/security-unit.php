@@ -544,6 +544,46 @@ check('ConfigAudit::run — on a development / local host the same switches are 
     foreach ($rows as $r) if ($r['id'] === 'sw_toss_mock') return $r['status'] === 'warn' ? true : 'status ' . $r['status'];
     return 'no toss.mock row';
 });
+/** run ConfigAudit with data/secret.php changed by $edit (the file of this test's temp data dir), then put the file back */
+function keyAgeRow(callable $edit): ?array
+{
+    $before = Tfm\Secrets::read(true);
+    Tfm\Secrets::update(function (array $s) use ($edit) { return $edit($s); });
+    try {
+        foreach (Tfm\ConfigAudit::run() as $r) if ($r['id'] === 'key_age') return $r;
+        return null;
+    } finally {
+        Tfm\Secrets::update(function (array $s) use ($before) { return $before; });
+    }
+}
+check('ConfigAudit::run — key ages (#8): the app key / data key age comes from data/secret.php (rotated_at, else created); over a year → warn with secret:rotate', function () {
+    $day = 86400;
+    $old = keyAgeRow(function (array $s) use ($day) {
+        $s['created'] = gmdate('c', time() - 500 * $day);
+        $s['data_key'] = bin2hex(random_bytes(32));
+        $s['rotated_at'] = ['app_key' => gmdate('c', time() - 400 * $day), 'data_key' => gmdate('c', time() - 10 * $day)];
+        return $s;
+    });
+    if (!$old) return 'no key_age row';
+    if ($old['status'] !== 'warn' || strpos($old['value'], '400일') === false || strpos($old['value'], '10일') === false) return 'a 400-day-old app key: ' . json_encode($old, JSON_UNESCAPED_UNICODE);
+    if (strpos($old['hint'], 'secret:rotate') === false) return 'the hint does not name php cli/tfm.php secret:rotate: ' . $old['hint'];
+    $fresh = keyAgeRow(function (array $s) {
+        $s['created'] = gmdate('c', time() - 30 * 86400);
+        $s['data_key'] = bin2hex(random_bytes(32));
+        $s['rotated_at'] = ['app_key' => gmdate('c'), 'data_key' => gmdate('c')];
+        return $s;
+    });
+    if (!$fresh || $fresh['status'] !== 'ok' || strpos($fresh['value'], '0일') === false) return 'keys changed today: ' . json_encode($fresh, JSON_UNESCAPED_UNICODE);
+    $created = keyAgeRow(function (array $s) use ($day) { unset($s['rotated_at'], $s['data_key']); $s['created'] = gmdate('c', time() - 20 * $day); return $s; });
+    return $created && $created['status'] === 'ok' && strpos($created['value'], '20일') !== false ? true : 'never rotated, made 20 days ago, no data key yet: ' . json_encode($created, JSON_UNESCAPED_UNICODE);
+});
+check('ConfigAudit::run — key ages: no date anywhere in secret.php → warn "기록 없음"; the row never prints a key, only days', function () {
+    $keys = [];
+    $row = keyAgeRow(function (array $s) use (&$keys) { unset($s['rotated_at'], $s['created']); $s['data_key'] = bin2hex(random_bytes(32)); $keys = [$s['app_key'], $s['data_key']]; return $s; });
+    if (!$row) return 'no key_age row';
+    foreach ($keys as $k) if (strpos($row['value'] . $row['hint'], $k) !== false || strpos($row['value'] . $row['hint'], substr($k, 0, 12)) !== false) return 'a key value is printed';
+    return $row['status'] === 'warn' && strpos($row['value'], '기록 없음') !== false ? true : json_encode($row, JSON_UNESCAPED_UNICODE);
+});
 
 // ================================================================== #12 Session::regenerate / #14 Upload::image exist
 check('Session::regenerate — exists (admin elevation anti-fixation) and Upload::image — exists (reusable photo core)', function () {
