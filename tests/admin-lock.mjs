@@ -638,7 +638,7 @@ async function main() {
     await step('S06', 'every tab works for the elevated admin without JavaScript; each response carries the lock headers; links never name the folder', async () => {
       const home = await b1.req(ADM);
       const tabs = [...home.text.matchAll(/<nav class="tabs"[\s\S]*?<\/nav>/g)].flatMap((m) => [...m[0].matchAll(/href="\.\/\?tab=([a-z0-9_]+)"/g)].map((x) => x[1]));
-      for (const need of ['overview', 'beds', 'storage', 'reports', 'dev', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
+      for (const need of ['overview', 'beds', 'storage', 'reports', 'dev', 'ai', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
       for (const t of tabs) {
         const p = await b1.req(`${ADM}?tab=${t}`);
         assert(p.status === 200 && isInside(p.text), `tab ${t} → ${p.status}`);
@@ -773,7 +773,7 @@ async function main() {
       assert(isInside((await signInFull(b, ADM, admins.a)).text), 'signed in');
       const P = `"'><script>alert(1)</script><img src=x onerror=alert(2)>`;
       const enc = encodeURIComponent(P);
-      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=reports&show=${enc}&q=${enc}&p=${enc}`, `?tab=dev&sec=${enc}&doc=${enc}&run=${enc}&p=${enc}`, `?tab=dev&sec=docs&doc=${enc}`, `?tab=dev&sec=inspect&run=${enc}`, `?tab=dev&sec=checklist&x=${enc}`, `?tab=dev&sec=env&${enc}=1`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
+      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=reports&show=${enc}&q=${enc}&p=${enc}`, `?tab=dev&sec=${enc}&doc=${enc}&run=${enc}&p=${enc}`, `?tab=dev&sec=docs&doc=${enc}`, `?tab=dev&sec=inspect&run=${enc}`, `?tab=dev&sec=checklist&x=${enc}`, `?tab=dev&sec=env&${enc}=1`, `?tab=ai&x=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
         `?tab=${enc}`, `?tab=sub&uid=${enc}`, `?tab=moderation&show=${enc}`, `?tab=twofa&x=${enc}`, `?tab=health&${enc}=${enc}`, `?${enc}`];
       for (const u of urls) {
         const r = await b.req(ADM + u);
@@ -1669,6 +1669,140 @@ async function main() {
         assert(rows === 200, `${rows} log rows (want the last 200)`);
         assert(p.text.indexOf('line 259') < p.text.indexOf('line 100') && !p.text.includes('>line 59<') && !/line 59</.test(p.text), 'newest first, only the last 200');
         return 'versions · extensions · disk · ini · 200 log rows, newest first, secrets hidden';
+      });
+    } finally { await sv.stop(); }
+  }
+
+  // ================================================================= 🤖 AI 도우미 (CONTRACT §15.6 admin part, workflow interface 5)
+  if (section('ai')) {
+    const haveClaude = fs.existsSync(path.join(SRC, 'lib/Claude.php'));
+    const FAKE_KEY = 'sk-' + 'ant-api03-ADMINLOCKFAKE' + 'Q'.repeat(24);
+    {
+      const s = makeSite('ai-plain');
+      fs.rmSync(path.join(s.site, 'lib/Claude.php'), { force: true });
+      const sv = await startPhp(s);
+      try {
+        await step('15.6', '🤖 AI 도우미 tab works while lib/Claude.php is not installed: it says "준비 중" and offers no AI form', async () => {
+          const A = mkUser(s, 'admin');
+          const b = new Browser(sv.base);
+          assert(isInside((await signIn(b, ADM, A)).page.text), 'signed in');
+          const p = await b.req(`${ADM}?tab=ai`);
+          assert(p.status === 200 && isInside(p.text) && /준비 중/.test(p.text), `→ ${p.status}`);
+          assertLocked(p, 'ai tab (no Claude)');
+          assert(!/value="ai_summary"|value="ai_ask"/.test(p.text), 'no AI forms');
+          const r = await admF(b, ADM, { action: 'ai_ask', tab: 'ai', prompt: '안녕' }, { page: '?tab=ai' });
+          assert(flashOf(r.text)?.type === 'error', `ask without Claude: ${flashOf(r.text)?.msg}`);
+          const rep = await b.req(`${ADM}?tab=reports`);
+          assert(!/value="ai_memo"/.test(rep.text), 'no 🤖 메모 초안 button either');
+          return 'guard path: no lib/Claude.php in this copy';
+        });
+      } finally { await sv.stop(); }
+    }
+    const s = makeSite('ai', { anthropic: { api_key: FAKE_KEY, model: 'double-model-x', effort: 'low', daily_user: 20, daily_total: 2000 }, rate_limits: { ai_admin: [4, 60] } });
+    useClaudeDouble(s);
+    const sv = await startPhp(s);
+    try {
+      const A = mkUser(s, 'admin');
+      const K = mkUser(s, 'user');
+      const b = new Browser(sv.base, 'ai');
+      assert(isInside((await signIn(b, ADM, A)).page.text), 'signed in');
+      php(s, `(function ($in) { $now = Tfm\\Clock::ms(); foreach ([['kid', 30, 40], ['kid', 10, 12], ['admin', 5, 6]] as $r) Tfm\\Db::insert('ai_usage', ['created_at' => $now, 'user_id' => $in, 'scope' => $r[0], 'model' => 'double-model',
+        'input_tokens' => $r[1], 'output_tokens' => $r[2], 'stop_reason' => 'end_turn', 'ok' => 1, 'ms' => 9]); return 1; })($in)`, K.id);
+      await step('15.6', '🤖 AI 도우미: status — configured / enabled / model / effort / today\'s usage (Claude::usageToday) — and the API key never appears on any admin page', async () => {
+        const p = await b.req(`${ADM}?tab=ai`);
+        assert(p.status === 200 && isInside(p.text) && !/준비 중/.test(p.text), `→ ${p.status}`);
+        assertLocked(p, 'ai tab');
+        for (const x of ['double-model-x', 'low', '설정됨', '켜짐']) assert(p.text.includes(x), `status shows ${x}`);
+        assert(tileNum(p.text, '오늘 질문') === 3, `today's questions: ${tileNum(p.text, '오늘 질문')}`);
+        assert(/45/.test(p.text) && /58/.test(p.text), 'today\'s tokens in / out (45 / 58)');
+        const home = await b.req(ADM);
+        const tabs = [...home.text.matchAll(/href="\.\/\?tab=([a-z0-9_]+)"/g)].map((m) => m[1]);
+        for (const t of new Set(tabs)) {
+          const x = await b.req(`${ADM}?tab=${t}`);
+          assert(!x.text.includes(FAKE_KEY) && !x.text.includes('ADMINLOCKFAKE'), `tab ${t} shows the key`);
+        }
+        return `configured · enabled · model · effort · usage 3 / 45 / 58 · key on none of ${new Set(tabs).size} tabs`;
+      });
+      await step('15.6', '🤖 AI 도우미: the kid-helper switch (Settings ai.kid_helper) — POST + CSRF + audit setting_changed', async () => {
+        let r = await admF(b, ADM, { action: 'ai_kid', tab: 'ai', on: '1' }, { page: '?tab=ai' });
+        assert(flashOf(r.text)?.type === 'ok' && php(s, 'Tfm\\Claude::kidEnabled()') === true, `on: ${flashOf(r.text)?.msg}`);
+        const set = dbAll(s, "SELECT * FROM settings WHERE k = 'ai.kid_helper'")[0];
+        assert(set && JSON.parse(set.v) === true && Number(set.updated_by) === A.id, `settings ${JSON.stringify(set)}`);
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'setting_changed' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && /ai\.kid_helper/.test(au.detail) && Number(au.actor_id) === A.id, 'audit setting_changed');
+        assert(/value="ai_kid"[\s\S]{0,200}name="on" value="0"/.test(r.text) || /name="on" value="0"/.test(r.text), 'the page now offers to switch it off');
+        r = await admF(b, ADM, { action: 'ai_kid', tab: 'ai', on: '0' }, { page: '?tab=ai' });
+        assert(flashOf(r.text)?.type === 'ok' && php(s, 'Tfm\\Claude::kidEnabled()') === false, 'off');
+        return 'on → settings true + audit · off → false';
+      });
+      await step('15.6', '🤖 AI 도우미: 오늘 요약 — Claude::daySummary gets today\'s numbers only (no account details); the answer is shown escaped with its line breaks; audit ai_admin_ask', async () => {
+        const r = await admF(b, ADM, { action: 'ai_summary', tab: 'ai' }, { page: '?tab=ai' });
+        assert(flashOf(r.text)?.type === 'ok', `summary: ${flashOf(r.text)?.msg}`);
+        const box = (r.text.match(/<div class="aianswer"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '';
+        assert(box.includes('&lt;script&gt;alert(') && box.includes('&lt;b&gt;굵게&lt;/b&gt;') && box.includes('\n둘째 줄') && !rawEvil(r.text).length && !/<b>굵게/.test(r.text), `the answer escaped: ${box.slice(0, 160)}`);
+        const sent = doubleLog(s).filter((x) => x.what === 'summary').pop();
+        const blob = JSON.stringify(sent && sent.input);
+        assert(sent && Number(sent.uid) === A.id && /users|activeToday/.test(blob), `daySummary got the numbers: ${blob.slice(0, 200)}`);
+        assert(!blob.includes(K.nickname) && !blob.includes(K.email) && !blob.includes(A.email) && !/@example\.com/.test(blob), 'no nickname / e-mail in the numbers');
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'ai_admin_ask' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && /summary/.test(au.detail) && !au.detail.includes('굵게'), 'audit ai_admin_ask (kind summary, no answer text)');
+        return 'numbers only · answer escaped with line breaks · audit';
+      });
+      await step('15.6', '🤖 AI 도우미: the free prompt box — Claude::adminAsk gets the question with personal data and keys hidden; the answer is shown escaped; empty / too long refused; rate ai_admin; a failing call shows its reason escaped', async () => {
+        const q = '오늘 텃밭 상태를 알려 줘. kid@example.com 010-1234-5678 password=hunter2';
+        let r = await admF(b, ADM, { action: 'ai_ask', tab: 'ai', prompt: q }, { page: '?tab=ai' });
+        assert(flashOf(r.text)?.type === 'ok', `ask: ${flashOf(r.text)?.msg}`);
+        const box = (r.text.match(/<div class="aianswer"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '';
+        assert(box.includes('&lt;img src=x onerror=alert(7)&gt;') && !/<img src=x/.test(r.text), 'the answer escaped');
+        const sent = doubleLog(s).filter((x) => x.what === 'ask').pop();
+        assert(sent && typeof sent.input === 'string' && sent.input.includes('텃밭 상태') && !/kid@example\.com|010-1234-5678|hunter2/.test(sent.input), `adminAsk got the hidden question: ${sent && sent.input}`);
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'ai_admin_ask' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && /"kind":"ask"/.test(au.detail) && !au.detail.includes('텃밭'), `audit ai_admin_ask without the question: ${au && au.detail}`);
+        for (const bad of ['', '   ', '가'.repeat(2001)]) {
+          r = await admF(b, ADM, { action: 'ai_ask', tab: 'ai', prompt: bad }, { page: '?tab=ai' });
+          assert(flashOf(r.text)?.type === 'error', `prompt "${bad.slice(0, 8)}" (${bad.length}) → ${flashOf(r.text)?.type}`);
+        }
+        // ai_admin is 4 per minute in this copy: summary + ask used 2 (refused prompts never reach the AI) — two more pass, the next is refused
+        r = await admF(b, ADM, { action: 'ai_ask', tab: 'ai', prompt: '하나 더' }, { page: '?tab=ai' });
+        r = await admF(b, ADM, { action: 'ai_ask', tab: 'ai', prompt: '둘 더' }, { page: '?tab=ai' });
+        r = await admF(b, ADM, { action: 'ai_ask', tab: 'ai', prompt: '셋 더' }, { page: '?tab=ai' });
+        assert(flashOf(r.text)?.type === 'error' && /많아요|잠시/.test(flashOf(r.text).msg), `rate ai_admin: ${flashOf(r.text)?.msg}`);
+        const A2 = mkUser(s, 'admin'); // its own ai_admin budget (the limit counts per account)
+        const sv2 = await startPhp(s, { TFM_T_AI: 'fail' });
+        try {
+          const c = new Browser(sv2.base, 'ai-fail');
+          assert(isInside((await signIn(c, ADM, A2)).page.text), 'signed in (failing AI)');
+          const f = await admF(c, ADM, { action: 'ai_summary', tab: 'ai' }, { page: '?tab=ai' });
+          assert(flashOf(f.text)?.type === 'error' && flashOf(f.text).msg.includes('upstream') && !/<b>error/.test(f.text), `failing call: ${flashOf(f.text)?.msg}`);
+        } finally { await sv2.stop(); }
+        const sv3 = await startPhp(s, { TFM_T_AI: 'disabled' });
+        try {
+          const c = new Browser(sv3.base, 'ai-off');
+          assert(isInside((await signIn(c, ADM, A2)).page.text), 'signed in (AI switched off)');
+          const p = await c.req(`${ADM}?tab=ai`);
+          assert(/꺼져/.test(p.text) && !/value="ai_ask"/.test(p.text) && !/value="ai_summary"/.test(p.text), 'switched off: status says so, no AI forms');
+          const x = await admF(c, ADM, { action: 'ai_ask', tab: 'ai', prompt: '안녕' }, { page: '?tab=ai' });
+          assert(flashOf(x.text)?.type === 'error', 'and a forged ask is refused');
+        } finally { await sv3.stop(); }
+        return 'question hidden (e-mail, phone, password) · answer escaped · audit · empty / long refused · 5th AI call in a minute refused · failure reason escaped · switched off';
+      });
+      await step('15.6', '🤖 AI 도우미 with the real lib/Claude.php in mock mode (TFM_AI_MOCK=1): 오늘 요약 and the prompt box answer end to end', async () => {
+        if (!haveClaude) throw new Skip('lib/Claude.php is not in the tree yet (the claude track) — the double above stood in');
+        const r2 = makeSite('ai-real', { rate_limits: { ai_admin: [100, 60] } });
+        const sv4 = await startPhp(r2, { TFM_AI_MOCK: '1' });
+        try {
+          const A2 = mkUser(r2, 'admin');
+          const c = new Browser(sv4.base, 'ai-real');
+          assert(isInside((await signIn(c, ADM, A2)).page.text), 'signed in');
+          const p = await c.req(`${ADM}?tab=ai`);
+          assertLocked(p, 'ai tab (real Claude, mock)');
+          const s1 = await admF(c, ADM, { action: 'ai_summary', tab: 'ai' }, { page: '?tab=ai' });
+          assert(flashOf(s1.text)?.type === 'ok' && /<div class="aianswer"/.test(s1.text), `summary: ${flashOf(s1.text)?.msg}`);
+          const s2 = await admF(c, ADM, { action: 'ai_ask', tab: 'ai', prompt: '오늘 할 일을 알려 줘' }, { page: '?tab=ai' });
+          assert(flashOf(s2.text)?.type === 'ok' && /<div class="aianswer"/.test(s2.text), `ask: ${flashOf(s2.text)?.msg}`);
+          assert(Number(dbVal(r2, "SELECT COUNT(*) FROM ai_usage WHERE scope = 'admin'")) >= 2, 'ai_usage rows (scope admin)');
+          return 'real Tfm\\Claude in mock mode: summary + ask answered';
+        } finally { await sv4.stop(); }
       });
     } finally { await sv.stop(); }
   }

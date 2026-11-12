@@ -57,6 +57,7 @@ use Tfm\Sec;
 use Tfm\SecEvent;
 use Tfm\Session;
 use Tfm\SetupCode;
+use Tfm\Settings;
 use Tfm\Stats;
 use Tfm\Subscription;
 use Tfm\Toss;
@@ -82,6 +83,7 @@ const TABS = [
     'twofa' => ['🔐', '2단계 인증'],
     'health' => ['🩺', '시스템 점검'],
     'dev' => ['🧑‍💻', '개발자'],
+    'ai' => ['🤖', 'AI 도우미'],
     'audit' => ['📜', '감사 로그'],
     'maintenance' => ['🧰', '유지보수'],
 ];
@@ -358,6 +360,9 @@ function handlePost(Ctx $c)
             case 'ai_memo': $msg = doAiMemo($c); break;
             case 'handover_save': $msg = doHandover($admin); break;
             case 'inspect_run': $msg = doInspectRun($admin); break;
+            case 'ai_kid': $msg = doAiKid($admin); break;
+            case 'ai_summary': $msg = doAiSummary($c); break;
+            case 'ai_ask': $msg = doAiAsk($c); break;
             case 'ip_block': $msg = doIpBlock($c); break;
             case 'ip_unblock': $msg = doIpUnblock($c); break;
             case 'twofa_disable': $msg = doDisable($c); break;
@@ -1500,6 +1505,154 @@ function viewMaintenance(): string
     return $h . '<p class="dim small">로그는 data/logs 에 있으며 웹에서는 열리지 않아요 (각 파일 첫 줄의 PHP 종료 코드). 서버 컴퓨터에서 텍스트 편집기로 확인하세요.</p></section>';
 }
 
+// ------------------------------------------------------------------ 🤖 AI 도우미 (CONTRACT §15.6 admin part, workflow interface 5)
+/** the latest admin AI answer of this session (shown for 30 minutes): {kind summary | ask, text, prompt, model, stop, usage, at} */
+function aiAnswer(): ?array
+{
+    if (!Session::started()) return null;
+    $a = Session::get('ai_answer');
+    if (!is_array($a) || !isset($a['kind'], $a['text'], $a['at']) || !is_string($a['text'])) return null;
+    if (Clock::ms() - (int) $a['at'] > 1800000) { Session::set('ai_answer', null); return null; }
+    return $a;
+}
+
+/** a boolean of an optional interface function that must never break the page */
+function aiFlag(string $fn): bool
+{
+    try { return (bool) call_user_func(['Tfm\Claude', $fn]); } catch (\Throwable $e) { return false; }
+}
+
+/** today's numbers for 오늘 요약 — counts only (never a nickname, an e-mail or an address) */
+function aiTodayNumbers(): array
+{
+    $s = Stats::collect();
+    $n = ['date' => Clock::day(), 'accounts' => (int) $s['users'], 'newAccountsToday' => (int) $s['usersToday'], 'onlineNow' => (int) $s['online'], 'activeToday' => (int) $s['activeToday'],
+        'chatMessages24h' => (int) $s['chatMessages'], 'openChatReports' => (int) $s['chatReports'], 'rejectedSavesToday' => (int) $s['rejectedSavesToday'], 'bannedAccounts' => (int) $s['bannedUsers'],
+        'activeSubscriptions' => (int) (isset($s['subsActive']) ? $s['subsActive'] : 0), 'paymentsToday' => (int) (isset($s['ordersToday']) ? $s['ordersToday'] : 0)];
+    if (class_exists('Tfm\Farm')) {
+        $d = Farm::dashboard();
+        $n['farm'] = ['growingBeds' => (int) $d['growing'], 'readyBeds' => (int) $d['ready'], 'harvestedToday' => (int) $d['harvestedToday'], 'pendingCompletionRequests' => (int) $d['reportsPending'],
+            'storageTotal' => (int) $d['storageTotal'], 'timeScale' => (float) $d['scale']];
+    }
+    if (class_exists('Tfm\SecEvent')) $n['securityEventsToday'] = SecEvent::counts(Clock::startOfDayMs());
+    return $n;
+}
+
+/**
+ * The administrator's own question for the AI: control characters out (line breaks stay), keys / tokens / passwords
+ * hidden (Inspect::redact) and personal data masked line by line (ChatFilter::maskPII looks at 400 characters at a time)
+ * — nothing a child typed or an account detail leaves the server by accident.
+ */
+function aiPrompt(string $raw): string
+{
+    if (!mb_check_encoding($raw, 'UTF-8')) throw new ApiException(400, 'INVALID_INPUT', '질문에 쓸 수 없는 글자가 들어 있어요.');
+    $t = (string) preg_replace('/[\x{0}-\x{8}\x{B}-\x{1F}\x{7F}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', '', str_replace(["\r\n", "\r"], "\n", $raw));
+    if (class_exists('Tfm\Inspect')) $t = Inspect::redact($t);
+    $out = [];
+    foreach (explode("\n", $t) as $line) {
+        $parts = [];
+        while (mb_strlen($line) > 380) { $parts[] = ChatFilter::maskPII(mb_substr($line, 0, 380)); $line = mb_substr($line, 380); }
+        $parts[] = ChatFilter::maskPII($line);
+        $out[] = implode('', $parts);
+    }
+    return trim(implode("\n", $out));
+}
+
+/** keep an answer for the next page (the session file lives in data/, never on the web) */
+function aiKeep(string $kind, array $res, string $prompt = ''): void
+{
+    $u = isset($res['usage']) && is_array($res['usage']) ? $res['usage'] : [];
+    Session::set('ai_answer', ['kind' => $kind, 'text' => mb_substr((string) $res['text'], 0, 8000), 'prompt' => mb_substr($prompt, 0, 2000),
+        'model' => mb_substr(isset($res['model']) && is_string($res['model']) ? $res['model'] : '', 0, 60), 'stop' => mb_substr(isset($res['stop']) && is_string($res['stop']) ? $res['stop'] : '', 0, 20),
+        'in' => isset($u['in']) ? (int) $u['in'] : 0, 'out' => isset($u['out']) ? (int) $u['out'] : 0, 'at' => Clock::ms()]);
+}
+
+/** an answer of the AI (escaped; the line breaks are kept by the stylesheet) */
+function aiAnswerBox(array $a): string
+{
+    return '<div class="aianswer">' . e($a['text']) . '</div><p class="dim small">🤖 ' . e($a['model'] !== '' ? $a['model'] : 'AI') . ' · ' . e(when($a['at']))
+        . ($a['in'] + $a['out'] > 0 ? ' · 토큰 ' . e(num($a['in'])) . ' → ' . e(num($a['out'])) : '') . ($a['stop'] === 'max_tokens' ? ' · 답이 길어서 중간에 멈췄어요' : '')
+        . ' — AI의 답은 틀릴 수 있어요. 중요한 일은 직접 확인하세요.</p>';
+}
+
+/** 🤖 AI 도우미 — status (never the key), the kid-helper switch, 오늘 요약, a free prompt box */
+function viewAi(): string
+{
+    if (!class_exists('Tfm\Claude')) {
+        return notReady('🤖 AI 도우미', 'Claude AI 도우미(lib/Claude.php)')
+            . '<section class="card"><p class="dim small">준비되면 이 탭에서 AI 연결 상태 · 오늘 사용량을 보고, 아이용 "옹이 선생님"을 켜고 끄고, 오늘 요약과 자유 질문을 쓸 수 있어요. ✅ 완료 확인 탭에는 🤖 메모 초안 버튼이 생겨요.</p></section>';
+    }
+    $configured = aiFlag('configured');
+    $enabled = aiFlag('enabled');
+    $kid = aiFlag('kidEnabled');
+    try { $u = Claude::usageToday(); } catch (\Throwable $e) { $u = []; }
+    $by = isset($u['byScope']) && is_array($u['byScope']) ? $u['byScope'] : [];
+    $mock = in_array(strtolower((string) Config::get('anthropic.mock', false)), ['1', 'true', 'on', 'yes'], true) || Config::get('anthropic.mock', false) === true;
+    $scopeKo = ['kid' => '아이 (옹이 선생님)', 'admin' => '관리자', 'cli' => '서버 명령'];
+    $h = '<section class="card"><h3>🤖 AI 도우미 상태 ' . ($enabled ? '<span class="badge ok">켜짐</span>' : '<span class="badge warn">꺼져 있어요</span>') . '</h3>'
+        . tiles([['📨', '오늘 질문 (모두)', isset($u['total']) ? (int) $u['total'] : 0], ['🔤', '오늘 보낸 토큰', isset($u['tokensIn']) ? (int) $u['tokensIn'] : 0], ['💬', '오늘 받은 토큰', isset($u['tokensOut']) ? (int) $u['tokensOut'] : 0]])
+        . '<dl class="facts">'
+        . '<dt>연결</dt><dd>' . ($configured ? '✅ 설정됨' . ($mock ? ' (모의 모드 — 밖으로 보내지 않는 시험용 답)' : ' (키는 서버 설정 파일에만 있고 이 화면에는 나오지 않아요)') : '⚠️ 설정 안 됨 — config.local.php 의 anthropic.api_key(또는 환경 변수 ANTHROPIC_API_KEY)에 키를 넣으면 켜져요') . '</dd>'
+        . '<dt>사용</dt><dd>' . ($enabled ? '✅ 켜짐' : '⏸️ 꺼져 있어요') . '</dd>'
+        . '<dt>모델</dt><dd><code>' . e((string) Config::get('anthropic.model', '')) . '</code></dd>'
+        . '<dt>생각하는 정도(effort)</dt><dd>' . e((string) Config::get('anthropic.effort', 'low')) . ' <span class="dim small">(low 는 짧은 질문·답에 알맞아요)</span></dd>'
+        . '<dt>하루 한도</dt><dd>한 계정 ' . e(num(Config::get('anthropic.daily_user', 20))) . '번 · 서버 전체 ' . e(num(Config::get('anthropic.daily_total', 2000))) . '번</dd>'
+        . '<dt>오늘 쓰임</dt><dd>' . ($by ? e(implode(' · ', array_map(function ($k, $v) use ($scopeKo) { return (isset($scopeKo[$k]) ? $scopeKo[$k] : $k) . ' ' . (int) $v . '번'; }, array_keys($by), array_values($by)))) : '-') . '</dd>'
+        . '</dl></section>';
+    // the kid helper switch (Settings ai.kid_helper; Settings::set audits setting_changed)
+    $h .= '<section class="card"><h3>🧒 아이용 "옹이 선생님" ' . ($kid ? '<span class="badge ok">켜짐</span>' : '<span class="badge">꺼짐</span>') . '</h3>'
+        . '<p class="dim small">켜면 체험관의 옹이 메뉴에 "🤖 옹이 선생님에게 물어보기"가 열려요. 아이 질문은 개인정보를 가리고 나쁜 말을 거른 뒤에만 AI에게 가고, 답도 다시 걸러서 짧게 보여 줘요. 한 계정이 하루에 물을 수 있는 수가 정해져 있어요. 쉬운 모드에서는 준비된 질문 버튼만 보여요.</p>'
+        . '<div class="row">' . ($kid ? actionForm('ai_kid', '⏸️ 옹이 선생님 끄기', ['on' => '0'], 'btn ghost', 'ai') : actionForm('ai_kid', '🧒 옹이 선생님 켜기', ['on' => '1'], 'btn primary', 'ai')) . '</div></section>';
+    $a = aiAnswer();
+    if (!$enabled) {
+        return $h . '<section class="card"><h3>📝 오늘 요약 · 💬 자유 질문</h3><p class="notice">AI 도우미가 꺼져 있어서 쓸 수 없어요. 키를 넣거나(운영) 모의 모드(TFM_AI_MOCK=1, 시험·시연)를 켜면 이곳과 ✅ 완료 확인의 🤖 메모 초안이 열려요.</p></section>';
+    }
+    $h .= '<div class="grid2"><section class="card"><h3>📝 오늘 요약</h3><p class="dim small">오늘의 숫자(가입 · 접속 · 텃밭 · 완료 확인 · 신고 · 보안 기록)만 AI에게 보내고, 짧게 정리한 글을 받아요. 계정 이름이나 이메일은 보내지 않아요.</p>'
+        . '<div class="row">' . actionForm('ai_summary', '📝 오늘 요약 만들기', [], 'btn primary', 'ai') . '</div>' . ($a && $a['kind'] === 'summary' ? aiAnswerBox($a) : '') . '</section>'
+        . '<section class="card"><h3>💬 자유 질문</h3><p class="dim small">운영에 관해 무엇이든 물어봐요. 보내기 전에 이메일 · 전화번호 같은 개인정보와 키 · 비밀번호는 저절로 가려져요. 2000자까지.</p>'
+        . '<form method="post" action="./" class="stack">' . csrfField() . '<input type="hidden" name="action" value="ai_ask"><input type="hidden" name="tab" value="ai">'
+        . '<label>질문<textarea name="prompt" maxlength="2000" rows="4" required placeholder="예: 완료 확인 요청이 많을 때 메모를 빨리 쓰는 요령을 알려 줘">' . ($a && $a['kind'] === 'ask' ? e($a['prompt']) : '') . '</textarea></label>'
+        . '<button class="btn primary" type="submit">💬 물어보기</button></form>' . ($a && $a['kind'] === 'ask' ? aiAnswerBox($a) : '') . '</section></div>';
+    return $h . '<p class="dim small">관리자만 쓸 수 있어요 · 1분에 ' . e(num(is_array(Config::get('rate_limits.ai_admin')) ? Config::get('rate_limits.ai_admin')[0] : 20)) . '번까지 · 모든 요청은 감사 로그(ai_admin_ask)에 남아요 (질문과 답의 글은 남기지 않아요).</p>';
+}
+
+/** 🧒 the kid helper on / off (Settings ai.kid_helper — audited as setting_changed) */
+function doAiKid(array $admin): string
+{
+    if (!class_exists('Tfm\Settings')) throw new ApiException(503, 'NOT_READY', '설정 저장 기능이 아직 준비 중이에요.');
+    $on = postStr('on') === '1';
+    Settings::set('ai.kid_helper', $on, (int) $admin['id']);
+    return $on ? '🧒 아이용 옹이 선생님을 켰어요. 체험관의 옹이 메뉴에서 물어볼 수 있어요.' : '⏸️ 아이용 옹이 선생님을 껐어요.';
+}
+
+/** 📝 오늘 요약 — Claude::daySummary with today's numbers only; rate ai_admin; audit ai_admin_ask */
+function doAiSummary(Ctx $c): string
+{
+    if (!aiReady()) throw new ApiException(503, 'AI_OFF', '🤖 AI 도우미가 꺼져 있어요.');
+    RateLimit::forRequest('ai_admin', $c);
+    $res = Claude::daySummary(aiTodayNumbers(), $c->uid());
+    aiAudit($c, 'summary', $res);
+    if (!is_array($res) || empty($res['ok']) || !isset($res['text']) || !is_string($res['text']) || trim($res['text']) === '') throw new ApiException(502, 'AI_FAILED', '🤖 요약을 만들지 못했어요. 잠시 뒤에 다시 해 주세요.' . aiError($res));
+    aiKeep('summary', $res);
+    return '📝 오늘 요약을 만들었어요.';
+}
+
+/** 💬 자유 질문 — Claude::adminAsk with the question cleaned (aiPrompt); rate ai_admin; audit ai_admin_ask (no text) */
+function doAiAsk(Ctx $c): string
+{
+    if (!aiReady()) throw new ApiException(503, 'AI_OFF', '🤖 AI 도우미가 꺼져 있어요.');
+    $raw = postStr('prompt');
+    if (strlen($raw) > 8000 || mb_strlen($raw, 'UTF-8') > 2000) throw new ApiException(400, 'INVALID_INPUT', '질문은 2000자까지 쓸 수 있어요.');
+    $prompt = aiPrompt($raw);
+    if ($prompt === '') throw new ApiException(400, 'INVALID_INPUT', '물어볼 내용을 적어 주세요.');
+    RateLimit::forRequest('ai_admin', $c);
+    $res = Claude::adminAsk($prompt, $c->uid());
+    aiAudit($c, 'ask', $res, ['promptChars' => mb_strlen($prompt)]);
+    if (!is_array($res) || empty($res['ok']) || !isset($res['text']) || !is_string($res['text']) || trim($res['text']) === '') throw new ApiException(502, 'AI_FAILED', '🤖 답을 받지 못했어요. 잠시 뒤에 다시 해 주세요.' . aiError($res));
+    aiKeep('ask', $res, $prompt);
+    return '💬 답을 받았어요.';
+}
+
 // =============================================================================== page shell
 function takeFlash(): array
 {
@@ -1556,6 +1709,7 @@ function render(Ctx $c): string
             case 'storage': $body = viewStorage(); break;
             case 'reports': $body = viewReports(); break;
             case 'dev': $body = viewDev(); break;
+            case 'ai': $body = viewAi(); break;
             case 'health': $body = viewHealth(); break;
             case 'users': $body = viewUsers(); break;
             case 'sub': $body = viewSub(); break;

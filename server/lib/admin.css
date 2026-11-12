@@ -147,5 +147,7 @@ label.check input{width:auto;margin:0}
 tr.hand.done td:first-child b{color:#86e3a8}
 tr.log.lvl-error td,tr.log.lvl-security td{color:#ffb3ab}
 tr.log.lvl-warn td{color:#ffe6a3}
+/* 🤖 AI tab: an answer keeps its line breaks (escaped text, no markup) */
+.aianswer{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:12px;padding:12px 14px;border-radius:12px;border:1px solid rgba(74,168,255,.35);background:rgba(74,168,255,.08);line-height:1.6}
 @media (max-width:640px){.reportgrid{grid-template-columns:1fr}.top{position:static}.barrow{grid-template-columns:84px 1fr 40px}th,td{padding:8px}.tiles{grid-template-columns:repeat(2,1fr)}code.secret{font-size:1rem;letter-spacing:.06em}}
 @media print{body{background:#fff;color:#000}body::before,.tabs,.top .who,footer,.btn{display:none}.card{box-shadow:none;border-color:#999;background:#fff;backdrop-filter:none}code,code.bk,code.secret{color:#000;background:#eee}}
