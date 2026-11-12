@@ -136,6 +136,18 @@ final class ConfigAudit
         // ---------------------------------------------------------------- DB runtime account (read the config only; Db::accountAudit for the live side)
         self::dbRow($add, $on);
 
+        // ---------------------------------------------------------------- web server hardening (httpd.conf-only directives)
+        // ServerTokens (the Server: version banner) and TraceEnable (the TRACE method) cannot be changed from .htaccess —
+        // Apache answers TRACE from its core before any .htaccess rule runs, and the Server banner is a server-config
+        // decision. When this audit runs behind a web server that still shows a version, remind the operator.
+        $sw = (string) (isset($_SERVER['SERVER_SOFTWARE']) ? $_SERVER['SERVER_SOFTWARE'] : '');
+        if ($sw !== '') {
+            $showsVersion = (bool) preg_match('#/\d#', $sw);
+            $add('server_hardening', '웹 서버 설정(ServerTokens · TraceEnable)', $showsVersion ? 'warn' : 'ok',
+                $showsVersion ? mb_substr($sw, 0, 40) : '숨김',
+                $showsVersion ? 'httpd.conf 에 "ServerTokens Prod"(서버 버전 숨김)와 "TraceEnable Off"(TRACE 메서드 차단)를 넣으세요. 이 두 가지는 .htaccess 로는 바꿀 수 없어요.' : '');
+        }
+
         // ---------------------------------------------------------------- session cookie flags (effective values)
         $sess = (array) Config::rawGet('session', []);
         $bindUa = $on(isset($sess['bind_user_agent']) ? $sess['bind_user_agent'] : true) || (isset($sess['bind_user_agent']) ? $sess['bind_user_agent'] === true : true);

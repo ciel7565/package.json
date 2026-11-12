@@ -1,12 +1,22 @@
 # =============================================================================
 # 전통발효체험관 메타버스 — Apache rules for the installation folder (XAMPP: htdocs/metaverse)
-# Requires AllowOverride All (XAMPP default for htdocs). PHP endpoints set their own security
-# headers, so the headers below are applied only to static files (index.html, images, models).
+# Requires AllowOverride All (XAMPP default for htdocs). CONTRACT §15.7 #2 #5 #11 #19.
+#   - PHP endpoints send their own security headers; the Header rules here add the set to STATIC files and to the small
+#     static error pages, and never touch a PHP response (so nothing is doubled).
+#   - scanner bait (dot-files/folders, wp-*, phpmyadmin, config.php.bak …) is rewritten to api/trap.php, a logged
+#     honeypot that answers a plain 404. Ordinary leftovers (*.sql *.log *.md *.ini backups archives editor copies …)
+#     are denied with 403. The two sets do not overlap, so neither pre-empts the other.
+#   - HTTPS is forced for a public host (localhost left alone); directory listing is off; ETags off.
+#   The Server version banner and TRACE cannot be changed from .htaccess — set "ServerTokens Prod" and "TraceEnable Off"
+#   in httpd.conf (health / 점검 reminds the operator). Upload size caps live in .user.ini + LimitRequestBody below.
 # =============================================================================
 
-Options -Indexes -MultiViews
+Options -Indexes -MultiViews -Includes
 DirectoryIndex index.html
 AddDefaultCharset UTF-8
+ServerSignature Off
+FileETag None
+LimitRequestBody 8388608
 
 <IfModule mod_mime.c>
   AddType image/webp .webp
@@ -14,8 +24,37 @@ AddDefaultCharset UTF-8
   AddType font/woff2 .woff2
 </IfModule>
 
-# ---------------------------------------------------------------- never serve private / build files
-<FilesMatch "(?i)(^\.|\.(sqlite3?|sqlite-wal|sqlite-shm|db|sql|log|ini|env|bak|old|orig|swp|lock|md|dist|sh|bat|ps1|yml|yaml|tmp)$|^config\.local\.php$|^composer\.(json|lock)$|^package(-lock)?\.json$)">
+# small static error pages (carry the static headers below; no server signature)
+ErrorDocument 403 /e403.html
+ErrorDocument 404 /e404.html
+
+# ---------------------------------------------------------------- scanner bait → the honeypot (api/trap.php: 404 + log)
+# A real visitor never asks for these. Runs before the HTTPS redirect so a probe is trapped even over plain http.
+# Relative target, so a sub-folder install (…/metaverse/) works too. NOTE: these patterns never match a leftover that
+# the FilesMatch below denies (dot-files and *.bak are handled only here), so the deny never pre-empts the trap.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # TRACE / TRACK — best-effort refusal (the real switch is TraceEnable Off in httpd.conf)
+  RewriteCond %{REQUEST_METHOD} ^(TRACE|TRACK)$ [NC]
+  RewriteRule ^ - [F]
+  # dot-files and dot-folders (.git/ .svn/ .hg/ .env .htaccess .user.ini .aws/ …), except .well-known
+  RewriteRule "(^|/)\.(?!well-known/)" api/trap.php [L,NC]
+  # classic scanner bait paths and the one backup name scanners always try
+  RewriteRule "(^|/)(wp-login\.php|wp-admin|wp-includes|wp-content|xmlrpc\.php|phpmyadmin|phpmyadm|mysqladmin|server-status|server-info|vendor/phpunit|config\.php\.bak)(/|$)" api/trap.php [L,NC]
+  RewriteRule "\.bak$" api/trap.php [L,NC]
+
+  # ------------------------------------------------------------- force HTTPS (CONTRACT §15.7 #2)
+  # A public host over plain http (or http reported by a proxy) is sent to https (permanent); localhost / 127.0.0.1 keep
+  # working over http (a certificate-less internal network install). Static files are redirected too.
+  RewriteCond %{HTTPS} off
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+  RewriteCond %{HTTP:X-Forwarded-Ssl} !on [NC]
+  RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1|\[?::1\]?)(:[0-9]+)?$ [NC]
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=308,L,E=TFM_NOAPP:1]
+</IfModule>
+
+# ---------------------------------------------------------------- leftovers → denied (403). Not dot-files, not *.bak.
+<FilesMatch "(?i)(\.(sqlite3?|sqlite-wal|sqlite-shm|db|sql|log|md|ini|old|orig|swp|swo|save|lock|dist|sh|bat|ps1|yml|yaml|tmp|zip|tar|tgz|gz|7z|rar)|~)$|^config\.local\.php$|^composer\.(json|lock)$|^package(-lock)?\.json$">
   <IfModule mod_authz_core.c>
     Require all denied
   </IfModule>
@@ -25,28 +64,50 @@ AddDefaultCharset UTF-8
   </IfModule>
 </FilesMatch>
 
-# ---------------------------------------------------------------- security headers for static files
+# ---------------------------------------------------------------- security headers (STATIC + error pages only)
 <IfModule mod_headers.c>
-  <FilesMatch "(?i)\.(html?|js|css|png|jpe?g|webp|gif|svg|ico|woff2?|glb|gltf|bin|txt|mp3|ogg|wav)$">
+  Header always unset X-Powered-By
+  # non-HTML static assets (css, js, fonts, models, media, json): the full set + a default-src 'none' CSP. Images are
+  # handled by the block below (and uploads/.htaccess owns the uploaded ones). These never match a .php response, so a
+  # PHP endpoint keeps exactly its own headers.
+  <FilesMatch "(?i)\.(js|css|woff2?|ttf|otf|glb|gltf|bin|txt|mp3|ogg|wav|mp4|json|map)$">
     Header always set X-Content-Type-Options "nosniff"
     Header always set Referrer-Policy "no-referrer"
     Header always set Permissions-Policy "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
     Header always set Cross-Origin-Opener-Policy "same-origin"
-    Header always set X-Frame-Options "SAMEORIGIN"
-    Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+    Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header always set X-Frame-Options "DENY"
+    Header always set Content-Security-Policy "default-src 'none'"
   </FilesMatch>
-  # index.html carries its own strict <meta> CSP; frame-ancestors only works as a header
+  # images: the same set but WITHOUT a CSP here — a Files-scoped CSP at the root would override the stricter
+  # uploads/.htaccess CSP (sandbox, img-src 'self') on uploaded photos. (The app's own images live in the page.)
+  <FilesMatch "(?i)\.(png|jpe?g|webp|gif|svg|ico)$">
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header always set X-Frame-Options "DENY"
+  </FilesMatch>
+  # HTML carries its own strict <meta> CSP; the header only adds frame-ancestors (never default-src 'none', which would
+  # fight the page's own policy). This also covers the static error pages (e403.html / e404.html).
   <FilesMatch "(?i)\.html?$">
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header always set X-Frame-Options "SAMEORIGIN"
     Header always set Content-Security-Policy "frame-ancestors 'self'"
     Header always set Cache-Control "no-cache"
   </FilesMatch>
-  Header always unset X-Powered-By
-</IfModule>
+  Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
 
-# ---------------------------------------------------------------- optional: force HTTPS (uncomment on a server with a certificate)
-# <IfModule mod_rewrite.c>
-#   RewriteEngine On
-#   RewriteCond %{HTTPS} !=on
-#   RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1)(:\d+)?$
-#   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
-# </IfModule>
+  # Apache answers that never reach PHP (the HTTPS redirect, a LimitRequestBody / error page, a TRACE echo) still carry a
+  # strict CSP + nosniff. Scoped so an ordinary PHP or static HTML response is untouched (no doubled header on those):
+  #   · the HTTPS redirect (env set on the RewriteRule) · any 4xx/5xx status · a TRACE request.
+  Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" env=TFM_NOAPP
+  Header always set X-Content-Type-Options "nosniff" env=TFM_NOAPP
+  Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" "expr=%{REQUEST_STATUS} >= 400"
+  Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" "expr=%{REQUEST_METHOD} =~ /^(TRACE|TRACK)$/"
+</IfModule>

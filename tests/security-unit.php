@@ -417,6 +417,125 @@ check('SecEvent alerts — off by default; the webhook must be https and is neve
         && Tfm\SecEvent::alertTargets(['alert_email' => 'ops@example.org', 'alert_webhook' => 'https://hooks.example.org/x?y=1']) === ['email' => 'ops@example.org', 'webhook' => 'https://hooks.example.org/x?y=1'];
 });
 
+// ================================================================== #2 HTTPS forced — Tfm\Http (lib/Core.php)
+check('Http::forceHttpsMode — auto by default; on / off honoured; unknown falls back to auto', function () {
+    $modes = [];
+    foreach (['auto' => 'auto', 'on' => 'on', 'off' => 'off', 'weird' => 'auto', '' => 'auto'] as $set => $want) {
+        Tfm\Config::override('security.force_https', $set === '' ? null : $set);
+        $modes[$set] = Tfm\Http::forceHttpsMode();
+    }
+    Tfm\Config::override('security.force_https', null);
+    return $modes === ['auto' => 'auto', 'on' => 'on', 'off' => 'off', 'weird' => 'auto', '' => 'auto'] ? true : json_encode($modes);
+});
+check('Http::httpsRequired — auto: a localhost request is exempt, a public host is required; off: never; on: always', function () {
+    $r = function (array $server) { return withServer($server, function () { return Tfm\Http::httpsRequired(); }); };
+    Tfm\Config::override('security.force_https', 'auto');
+    $localhost = $r(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_HOST' => '127.0.0.1:8080', 'HTTPS' => null]);
+    $public = $r(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_HOST' => 'play.example.test', 'HTTPS' => null]);
+    Tfm\Config::override('security.force_https', 'off');
+    $off = $r(['REMOTE_ADDR' => '203.0.113.9', 'HTTP_HOST' => 'play.example.test', 'HTTPS' => null]);
+    Tfm\Config::override('security.force_https', 'on');
+    $on = $r(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_HOST' => '127.0.0.1', 'HTTPS' => null]);
+    Tfm\Config::override('security.force_https', null);
+    return (!$localhost && $public && !$off && $on) ? true : "localhost=$localhost public=$public off=$off on=$on";
+});
+check('Http::isLoopbackRequest — ignores a spoofed X-Forwarded-Proto when no proxy is configured', function () {
+    return withServer(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_HOST' => 'localhost', 'HTTP_X_FORWARDED_PROTO' => 'https', 'HTTPS' => null], function () {
+        return Tfm\Http::isLoopbackRequest() === true;
+    });
+});
+
+// ================================================================== #10 CORS — Tfm\Http::corsAllowedOrigins
+check('Http::corsAllowedOrigins — exact scheme://host[:port] only; "*" and malformed entries dropped', function () {
+    Tfm\Config::override('security.cors_allowed_origins', ['https://allowed.test', 'https://ok.test:8443', '*', 'http://x', 'not a url', 'https://a b.test']);
+    $out = Tfm\Http::corsAllowedOrigins();
+    Tfm\Config::override('security.cors_allowed_origins', null);
+    return $out === ['https://allowed.test', 'https://ok.test:8443', 'http://x'] ? true : json_encode($out);
+});
+
+// ================================================================== #16 production lock — Tfm\Config
+check('Config production lock — on a non-local production host, mock / admin_bypass are forced off; rawGet keeps the written value', function () {
+    Tfm\Config::override('app.env', 'production');
+    Tfm\Config::override('toss.mock', true);
+    Tfm\Config::override('anthropic.mock', true);
+    Tfm\Config::override('save.admin_bypass', true);
+    try {
+        $public = withServer(['REMOTE_ADDR' => '203.0.113.9', 'HTTP_HOST' => 'play.example.test', 'REQUEST_METHOD' => 'GET'], function () {
+            return [Tfm\Config::get('toss.mock'), Tfm\Config::get('anthropic.mock'), Tfm\Config::get('save.admin_bypass'), Tfm\Config::rawGet('toss.mock')];
+        });
+        // a request from the server machine itself keeps the mock (local demos)
+        $local = withServer(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_HOST' => 'localhost', 'REQUEST_METHOD' => 'GET'], function () {
+            return Tfm\Config::get('toss.mock');
+        });
+    } finally {
+        foreach (['app.env', 'toss.mock', 'anthropic.mock', 'save.admin_bypass'] as $k) Tfm\Config::override($k, null);
+    }
+    return ($public === [false, false, false, true] && $local === true) ? true : json_encode(['public' => $public, 'local' => $local]);
+});
+check('Config production lock — development env is never locked', function () {
+    Tfm\Config::override('app.env', 'development');
+    Tfm\Config::override('toss.mock', true);
+    try {
+        $v = withServer(['REMOTE_ADDR' => '203.0.113.9', 'HTTP_HOST' => 'play.example.test', 'REQUEST_METHOD' => 'GET'], function () { return Tfm\Config::get('toss.mock'); });
+    } finally { Tfm\Config::override('app.env', null); Tfm\Config::override('toss.mock', null); }
+    return $v === true ? true : 'development was locked';
+});
+
+// ================================================================== #8 ConfigAudit (lib/ConfigAudit.php)
+check('ConfigAudit::run — returns rows {id,label,status,value,hint}; status is ok|warn|fail; never a secret value', function () {
+    $rows = Tfm\ConfigAudit::run();
+    if (!is_array($rows) || !$rows) return 'no rows';
+    foreach ($rows as $r) {
+        foreach (['id', 'label', 'status', 'value', 'hint'] as $k) if (!array_key_exists($k, $r)) return "row missing $k";
+        if (!in_array($r['status'], ['ok', 'warn', 'fail'], true)) return 'bad status ' . $r['status'];
+        if (!is_string($r['label']) || !is_string($r['hint'])) return 'label/hint not strings';
+    }
+    // the app key value must never appear verbatim in any row
+    $key = Tfm\Config::secret('app_key');
+    foreach ($rows as $r) if (is_string($r['value']) && strpos($r['value'], $key) !== false) return 'a row printed the app_key';
+    return true;
+});
+check('ConfigAudit::run — admin_emails set → warn (F2); toss.mock on a non-local prod host → fail; root DB account → fail', function () {
+    $find = function (array $rows, string $id) { foreach ($rows as $r) if ($r['id'] === $id) return $r; return null; };
+    Tfm\Config::override('security.admin_emails', ['teacher@example.com']);
+    Tfm\Config::override('app.env', 'production');
+    Tfm\Config::override('toss.mock', true);
+    Tfm\Config::override('db.driver', 'mysql');
+    Tfm\Config::override('db.mysql', ['username' => 'root', 'password' => '']);
+    try {
+        $rows = withServer(['REMOTE_ADDR' => '203.0.113.9', 'HTTP_HOST' => 'play.example.test', 'REQUEST_METHOD' => 'GET'], function () { return Tfm\ConfigAudit::run(); });
+    } finally {
+        foreach (['security.admin_emails', 'app.env', 'toss.mock', 'db.driver', 'db.mysql'] as $k) Tfm\Config::override($k, null);
+    }
+    $emails = $find($rows, 'admin_emails');
+    $mock = $find($rows, 'sw_toss_mock');
+    $db = $find($rows, 'db_account');
+    if (!$emails || $emails['status'] !== 'warn') return 'admin_emails not warned';
+    if (!$mock || $mock['status'] !== 'fail') return 'toss.mock not failed on a prod host';
+    if (!$db || $db['status'] !== 'fail') return 'root DB account not failed';
+    return true;
+});
+check('ConfigAudit::run — on a development / local host the same switches are warn (not fail)', function () {
+    Tfm\Config::override('app.env', 'development');
+    Tfm\Config::override('toss.mock', true);
+    try {
+        $rows = withServer(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_HOST' => 'localhost', 'REQUEST_METHOD' => 'GET'], function () { return Tfm\ConfigAudit::run(); });
+    } finally { Tfm\Config::override('app.env', null); Tfm\Config::override('toss.mock', null); }
+    foreach ($rows as $r) if ($r['id'] === 'sw_toss_mock') return $r['status'] === 'warn' ? true : 'status ' . $r['status'];
+    return 'no toss.mock row';
+});
+
+// ================================================================== #12 Session::regenerate / #14 Upload::image exist
+check('Session::regenerate — exists (admin elevation anti-fixation) and Upload::image — exists (reusable photo core)', function () {
+    return method_exists('Tfm\Session', 'regenerate')
+        && method_exists('Tfm\Upload', 'image')
+        && method_exists('Tfm\Upload', 'journalPhoto')
+        && method_exists('Tfm\Http', 'enforceHttps')
+        && method_exists('Tfm\Http', 'cors')
+        && method_exists('Tfm\Http', 'refuseUpload')
+        && method_exists('Tfm\Firewall', 'guardPage');
+});
+
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all $ran security unit checks passed" : "✖ $failed of $ran check(s) failed") . PHP_EOL;
 exit($failed === 0 ? 0 : 1);

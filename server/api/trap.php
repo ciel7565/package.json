@@ -39,19 +39,24 @@ $respond = function (int $status, array $headers = []): void {
 };
 
 try {
-    Firewall::check(); // a blocked address never even reaches the honeypot logic
+    // A blocked address is logged but still gets the same bare 404: a honeypot must never reveal itself (an IP_BLOCKED
+    // or a 429 would tell a scanner it found something real), so the firewall / rate limit here only gate the LOGGING.
+    $blocked = false;
+    try { Firewall::check(); } catch (ApiException $e) { $blocked = true; }
     // the path the scanner really asked for: the Apache rewrite keeps REQUEST_URI; ?p=<path> is the php -S fallback
     $want = isset($_GET['p']) && is_string($_GET['p']) ? $_GET['p'] : (string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '');
     $want = substr((string) preg_replace('/[\x00-\x1f]+/', '', $want), 0, 200);
     // the honeypot itself must not become a log-flood vector: a lenient per-address limit (config rate_limits.trap)
-    RateLimit::hit('trap', 'ip:' . Sec::hashId(Http::clientIp()));
-    SecEvent::log('honeypot', 'warn', ['want' => $want, 'ua' => substr((string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''), 0, 80)]);
-    Firewall::noteAttack('honeypot');
+    // throttles the LOG only — when it is reached, the hit is simply not logged (still a plain 404 to the scanner).
+    $overLimit = false;
+    try { RateLimit::hit('trap', 'ip:' . Sec::hashId(Http::clientIp())); } catch (ApiException $e) { $overLimit = true; }
+    if (!$blocked && !$overLimit) {
+        SecEvent::log('honeypot', 'warn', ['want' => $want, 'ua' => substr((string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''), 0, 80)]);
+        Firewall::noteAttack('honeypot');
+    }
     $method = Http::method();
     if ($method !== 'GET' && $method !== 'HEAD') $respond(405, ['Allow: GET, HEAD']);
     $respond(404);
-} catch (ApiException $e) {
-    $respond($e->status, $e->headers);
 } catch (\Throwable $e) {
     $respond(404);
 }

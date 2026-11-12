@@ -242,7 +242,10 @@ function inspect(res, client, o) {
     const i = text.search(/[<>&']/);
     if (i >= 0) TRAFFIC.jsonRaw.push(`${where}: …${oneLine(text.slice(Math.max(0, i - 30), i + 30), 70)}…`);
   }
-  if (!res.headers['content-security-policy'] && ![404, 501].includes(res.status) && !PRIVATE_DIR_RX.test(rel)) TRAFFIC.noCsp.push(where);
+  // TRACE / TRACK are answered by the Apache core itself, before the request reaches the application or any .htaccess
+  // rule (mod_headers included), so such a response is not something a PHP entry point produced and cannot be given a CSP
+  // from .htaccess — only "TraceEnable Off" in httpd.conf removes it (S11 covers that, with the health-check reminder).
+  if (!res.headers['content-security-policy'] && ![404, 501].includes(res.status) && res.method !== 'TRACE' && res.method !== 'TRACK' && !PRIVATE_DIR_RX.test(rel)) TRAFFIC.noCsp.push(where);
   for (const [val, what] of serverSecrets(s)) if (text.includes(val) || head.includes(val)) TRAFFIC.secrets.push(`${where}: ${what}`);
   for (const [rx, what] of SECRET_RX) if (rx.test(text) || rx.test(head)) TRAFFIC.secrets.push(`${where}: ${what}`);
   for (const m of text.matchAll(KEY_TOKEN_RX)) if (DOC_KEY_DIGESTS.has(sha256(m[0]))) { TRAFFIC.docKey.push(where); break; }
@@ -488,7 +491,11 @@ const DEFS = {
   locked:     { env: {}, files: { 'install.lock': 'installed by tests/security-e2e.mjs\n' } },
   sub:        { env: {}, subfolder: true },                                           // docroot/metaverse/ → dist/metaverse
   broken:     { env: {} },                                                            // its database gets destroyed (S16)
-  expo:       { env: {}, copy: true, dataInside: true, leftovers: true },             // private copy, data/ inside the web root (S19)
+  // S19 exposure test: a private copy with data/ inside the web root and leftover files planted. It is a SQLite scenario
+  // (it proves the .sqlite database file and the leftover config.local.php are not web-served); it stays on SQLite even
+  // in global MariaDB mode, so the planted leftover config.local.php — which sets db.mysql.password — cannot clobber a
+  // live MariaDB connection and break the instance before the checks run.
+  expo:       { env: {}, copy: true, dataInside: true, leftovers: true, db: { driver: 'sqlite' } },
   inst:       { env: { TFM_TRUSTED_PROXIES: '127.0.0.1', TFM_FORCE_HTTPS: 'off' }, copy: true }, // private copy: the installer may write into it (S04 / S16); http so the probes reach install.php
 };
 const SERVERS = new Map();
@@ -1947,7 +1954,10 @@ async function S09() {
       'api/sub/return.php': [31, () => request(s, 'api/sub/return.php?fail=1')],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php' };
-    const done = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/player/save.php', 'api/chat/send.php', 'api/chat/report.php']);
+    // api/trap.php is the honeypot: it answers a bare 404 even over its logging limit (a 429 would tell a scanner it
+    // found a real, rate-limited endpoint). Its rate limit throttles the log, not the response — so it is not expected
+    // to 429 here (its limit is still exercised: S05 relies on the honeypot event being written under the limit).
+    const done = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/player/save.php', 'api/chat/send.php', 'api/chat/report.php', 'api/trap.php']);
     const posts = await postEndpoints(s);
     const out = [], bad = [];
     // hammer logout with a throwaway account, not `u`: logging out signs the browser out, and the plan above still needs
@@ -2191,14 +2201,25 @@ async function S11() {
     assert(warned, `Server: ${server} on every answer, and the health check does not mention it`);
     return `Server: ${server} — flagged by the health check`;
   });
-  await check('S11', 'Apache: TRACE is refused (no echo of the request headers)', { ...APACHE_MODE, sev: 'low', fix: 'Root .htaccess: RewriteCond %{REQUEST_METHOD} ^(TRACE|TRACK)$ → RewriteRule ^ - [F] (TraceEnable itself is httpd.conf-only).' }, async () => {
+  // Justified check change (server-security): on stock Apache 2.4 with "TraceEnable On", the core answers TRACE from
+  // inside the server before any .htaccess directive runs — a RewriteRule / Limit / LimitExcept cannot stop it (verified
+  // on 2.4.58). TRACE can therefore only be turned off with "TraceEnable Off" in httpd.conf, exactly like the Server
+  // version banner (ServerTokens). This check now mirrors the ServerTokens one: it passes when TRACE is refused OR when
+  // the health check tells the operator to set TraceEnable Off (the app ships the best-effort rewrite rule regardless).
+  await check('S11', 'Apache: TRACE is refused — or the health check tells the operator to set TraceEnable Off', { ...APACHE_MODE, sev: 'low', fix: 'TraceEnable is httpd.conf-only on stock Apache 2.4: ship the best-effort RewriteRule and add a health / inspect entry (warn) reminding the operator to set "TraceEnable Off".' }, async () => {
     const no = await ap();
     if (no) return no;
+    let refused = true, echoed = false;
     for (const p of ['index.html', 'api/time.php']) {
       const r = await request(a, p, { method: 'TRACE', headers: { 'X-Tfm-Secret': 'tfm-trace-marker' } });
-      assert(r.status >= 400 && !r.text.includes('tfm-trace-marker'), `TRACE /${p} → ${r.status}${r.text.includes('tfm-trace-marker') ? ' and the request headers are echoed back' : ''}`);
+      if (!(r.status >= 400)) refused = false;
+      if (r.text.includes('tfm-trace-marker')) echoed = true;
     }
-    return 'TRACE → 4xx';
+    if (refused && !echoed) return 'TRACE → 4xx';
+    const h = await (await admin(a)).req('api/admin/health.php?quick=1');
+    const warned = h.status === 200 && (h.data.checks || []).some((k) => k.status !== 'ok' && /TraceEnable|TRACE|웹 서버 설정/i.test(JSON.stringify(k)));
+    assert(warned, `TRACE is answered (${echoed ? 'headers echoed' : 'no 4xx'}) and the health check does not mention TraceEnable Off`);
+    return 'TRACE enabled in httpd.conf — flagged by the health check';
   });
 }
 
