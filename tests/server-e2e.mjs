@@ -1489,6 +1489,24 @@ async function main() {
     assert((st.data.beds || []).some((b) => b.kind === 'plot'), 'the quick-plot mirror is in the state');
     return `reports ${list.data.reports.length} · approved → unseen 1 → seen → 0 · state beds ${st.data.beds.length}, 곳간 ${st.data.storage.total}/${st.data.storage.cap}`;
   });
+  await step('farm cli: farm:scale shows / sets / refuses the time scale (ping follows); farm:beds lists an account\'s beds with the server times', async () => {
+    if (!phpProc) return 'skipped (external server: the cli runs on the server machine)';
+    let r = cli('farm:scale');
+    assert(r.status === 0 && /300배/.test(r.out), `farm:scale → ${r.status} ${r.out.slice(0, 160)}`);
+    r = cli('farm:scale', '9999');
+    assert(r.status === 1, `farm:scale 9999 → exit ${r.status}`);
+    r = cli('farm:scale', 'fast');
+    assert(r.status === 1, `farm:scale fast → exit ${r.status}`);
+    r = cli('farm:scale', '60');
+    assert(r.status === 0 && /300배 → 60배/.test(r.out), `farm:scale 60 → ${r.status} ${r.out.slice(0, 200)}`);
+    const p = await F.req('api/ping.php');
+    assert(p.data?.rtScale === 60, `ping after the cli: ${p.data?.rtScale}`);
+    r = cli('farm:beds', userF.email);
+    assert(r.status === 0 && /박하/.test(r.out) && /수확함/.test(r.out) && /콩/.test(r.out) && /완료 확인 완료/.test(r.out), `farm:beds → ${r.status} ${r.out.slice(0, 400)}`);
+    const all = cli('farm:beds');
+    assert(all.status === 0 && /자라는 중|다 자람/.test(all.out), `farm:beds (all) → ${all.status} ${all.out.slice(0, 200)}`);
+    return `${r.out.trim().split('\n').length} lines for ${userF.nickname}`;
+  });
   await step('farm: the time scale back to the default (Settings farm.rt_scale = 1)', async () => {
     if (!phpProc) return 'skipped (external server)';
     const v = srvPhp('(function () { Tfm\\Settings::set("farm.rt_scale", 1.0, null); return Tfm\\Farm::scale(); })()');
