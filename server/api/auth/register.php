@@ -23,6 +23,7 @@ use Tfm\Session;
 use Tfm\Str;
 use Tfm\Subscription;
 use Tfm\Users;
+use Tfm\V;
 
 // attempts (typos, weak passwords) count per browser session; complete forms — accounts created, or an e-mail /
 // nickname already taken — count per IP (register_ip): a classroom behind one NAT address is not locked out by
@@ -30,16 +31,22 @@ use Tfm\Users;
 Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], function (Ctx $c): array {
     if ($c->user) throw new ApiException(409, 'ALREADY_LOGGED_IN', '이미 로그인되어 있어요. 로그아웃한 뒤 가입해 주세요.');
     $b = $c->json(8192);
+    // CONTRACT §15.7 #3: known keys only; `agree` and `remember` must be real booleans (not the word "true" or a 1).
+    // The e-mail / nickname / password strings keep their own detailed rules below (coerced from a non-string to '' there,
+    // which those rules then reject) so a child's typo still gets a kind, specific message.
+    V::keys($b, ['email', 'nickname', 'password', 'password_confirm', 'confirm', 'agree', 'remember']);
     $str = function ($v): string { return is_string($v) ? $v : ''; };
     $email = mb_strtolower(trim($str(isset($b['email']) ? $b['email'] : '')));
     $nick = Users::cleanText($str(isset($b['nickname']) ? $b['nickname'] : ''), 40);
     $pw = $str(isset($b['password']) ? $b['password'] : '');
     $pw2 = array_key_exists('password_confirm', $b) ? $str($b['password_confirm']) : (array_key_exists('confirm', $b) ? $str($b['confirm']) : $pw);
+    $agree = V::has($b, 'agree') ? V::bool($b['agree'], 'agree') : false;
+    $remember = V::has($b, 'remember') ? V::bool($b['remember'], 'remember') : false;
     if ($e = Users::validEmail($email)) throw new ApiException(400, 'EMAIL_INVALID', $e);
     if ($e = Users::validNickname($nick)) throw new ApiException(400, 'NICKNAME_INVALID', $e);
     if ($e = Users::validPassword($pw, $email, $nick)) throw new ApiException(400, 'PASSWORD_WEAK', $e);
     if (!hash_equals($pw, $pw2)) throw new ApiException(400, 'PASSWORD_MISMATCH', '비밀번호가 일치하지 않아요.');
-    if ((isset($b['agree']) ? $b['agree'] : false) !== true) throw new ApiException(400, 'TERMS_REQUIRED', '이용약관 및 개인정보 처리 안내에 동의해 주세요.');
+    if (!$agree) throw new ApiException(400, 'TERMS_REQUIRED', '이용약관 및 개인정보 처리 안내에 동의해 주세요.');
     try { RateLimit::hit('register_ip', 'ip:' . Sec::hashId(Http::clientIp())); }
     catch (ApiException $e) {
         // its own code: the client can say the limit is this network's (a school or home address), not this browser's
@@ -59,7 +66,7 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], functio
         throw $e;
     }
     // "이 기기에서 로그인 상태 유지" on the register form: the same long-lived session login.php gives
-    Session::login($u, (isset($b['remember']) ? $b['remember'] : false) === true);
+    Session::login($u, $remember);
     Audit::log('register', (int) $u['id'], ['role' => $u['role']], $u['role'] === 'admin' ? 'warn' : 'info');
     Log::info('AUTH', 'account created', ['uid' => (int) $u['id']]);
     return ['user' => Users::publicUser($u), 'isNew' => true, 'sub' => Subscription::none()];

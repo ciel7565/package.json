@@ -19,14 +19,18 @@ use Tfm\Db;
 use Tfm\Log;
 use Tfm\Presence;
 use Tfm\Users;
+use Tfm\V;
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_send'], function (Ctx $c): array {
+    // CONTRACT §15.7 #3: known keys only; the channel must be one of the two known names (an unknown word is refused,
+    // not quietly turned into 'all'); the text must be a string (the length / filter rules follow).
     $b = $c->json(4096);
+    V::keys($b, ['text', 'channel']);
     $max = (int) Config::get('chat.max_length', 120);
-    $text = Users::cleanText(isset($b['text']) && is_string($b['text']) ? $b['text'] : '', 1000);
+    $text = Users::cleanText(V::has($b, 'text') ? V::str($b['text'], 'text', 1000) : '', 1000);
     if ($text === '') throw new ApiException(400, 'EMPTY_MESSAGE', '메시지를 입력해 주세요.');
     if (mb_strlen($text) > $max) throw new ApiException(400, 'MESSAGE_TOO_LONG', "메시지는 {$max}자까지 보낼 수 있어요.");
-    $channel = (isset($b['channel']) ? $b['channel'] : 'all') === 'local' ? 'local' : 'all';
+    $channel = V::has($b, 'channel') ? V::enum($b['channel'], 'channel', ['all', 'local']) : 'all';
     $u = $c->user;
     $now = $c->now;
     if ((int) $u['muted_until'] > $now) {

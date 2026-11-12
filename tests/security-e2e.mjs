@@ -469,11 +469,17 @@ const DEFS = {
   main:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // default configuration
   val:        { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // validation matrix, uploads, payments (own rate budgets)
   rate:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // gets hammered
-  fw:         { env: { TFM_ADMIN_EMAILS: ADMINS, TFM_TRUSTED_PROXIES: '127.0.0.1' } }, // attackers arrive through a trusted proxy: one address each
+  // attackers arrive through a trusted proxy (one address each). force_https is off: these instances exercise the
+  // attack-logging / install / admin-IP behaviour over plain http — HTTPS forcing is tested on its own instances
+  // ('https', 'httpsproxy', 'main', 'prod'). With a trusted proxy configured, force_https=auto would (correctly) treat
+  // every proxied request as remote and redirect it to https, so http probes would never reach the code under test.
+  // TFM_ENV=development so the production lock (which would force mock payments off on a proxied, non-local host — the
+  // correct behaviour, exercised on 'prod') does not disable the mock gateway the payment_tamper check needs here.
+  fw:         { env: { TFM_ADMIN_EMAILS: ADMINS, TFM_TRUSTED_PROXIES: '127.0.0.1', TFM_FORCE_HTTPS: 'off', TFM_ENV: 'development' } },
   https:      { env: { TFM_FORCE_HTTPS: 'on' } },
   httpsproxy: { env: { TFM_FORCE_HTTPS: 'on', TFM_TRUSTED_PROXIES: '127.0.0.1' } },
   cors:       { env: { TFM_CORS_ORIGINS: 'https://allowed.test' } },
-  adminip:    { env: { TFM_ADMIN_EMAILS: ADMINS, TFM_ADMIN_IPS: '203.0.113.9', TFM_TRUSTED_PROXIES: '127.0.0.1' } },
+  adminip:    { env: { TFM_ADMIN_EMAILS: ADMINS, TFM_ADMIN_IPS: '203.0.113.9', TFM_TRUSTED_PROXIES: '127.0.0.1', TFM_FORCE_HTTPS: 'off' } },
   admin2fa:   { env: { TFM_ADMIN_EMAILS: ADMINS, TFM_ADMIN_2FA: 'required' } },
   adminidle:  { env: { TFM_ADMIN_EMAILS: ADMINS, TFM_ADMIN_IDLE: '2' } },
   idle:       { env: { TFM_SESSION_IDLE: '2' } },
@@ -483,7 +489,7 @@ const DEFS = {
   sub:        { env: {}, subfolder: true },                                           // docroot/metaverse/ → dist/metaverse
   broken:     { env: {} },                                                            // its database gets destroyed (S16)
   expo:       { env: {}, copy: true, dataInside: true, leftovers: true },             // private copy, data/ inside the web root (S19)
-  inst:       { env: { TFM_TRUSTED_PROXIES: '127.0.0.1' }, copy: true },              // private copy: the installer may write into it (S04 / S16)
+  inst:       { env: { TFM_TRUSTED_PROXIES: '127.0.0.1', TFM_FORCE_HTTPS: 'off' }, copy: true }, // private copy: the installer may write into it (S04 / S16); http so the probes reach install.php
 };
 const SERVERS = new Map();
 function srv(name) { if (!SERVERS.has(name)) SERVERS.set(name, startServer(name)); return SERVERS.get(name); }
@@ -689,12 +695,26 @@ async function newUser(s, prefix = 'Usr', o = {}) {
   c.user = r.data.user; c.email = email; c.nick = nick; c.admin = r.data.user.role === 'admin';
   return c;
 }
-/** a named account of an instance, created once (o.admin: registered with an address of TFM_ADMIN_EMAILS) */
+/**
+ * A named account of an instance, created once. o.admin: made an admin by the operator CLI (`php cli/tfm.php promote`),
+ * the way a real server does it. F2 (CONTRACT §15.7 #6) removed the automatic promotion by e-mail — security.admin_emails
+ * no longer grants admin at register / login (anyone could have claimed a listed address first) — so the suite promotes
+ * through the CLI and logs in again (promotion bumps the session epoch, which signs the open session out).
+ */
 function actor(s, key, o = {}) {
   if (!s.actors[key]) {
     s.actors[key] = (async () => {
       const c = await newUser(s, o.admin ? 'Adm' : 'Usr', o.admin ? { email: key === 'admin2' ? ADMIN2_EMAIL : ADMIN_EMAIL } : {});
-      if (o.admin && c.user.role !== 'admin') throw new Fail(`TFM_ADMIN_EMAILS did not make ${c.email} an admin on "${s.name}"`);
+      if (o.admin) {
+        const r = cli(s, 'promote', c.email);
+        if (r.status !== 0) throw new Fail(`cli promote failed for ${c.email} on "${s.name}": ${oneLine(r.out, 140)}`);
+        const lg = await login(c, c.email);
+        if (lg.status !== 200 || !lg.data || !lg.data.user || lg.data.user.role !== 'admin') {
+          throw new Fail(`admin re-login after cli promote on "${s.name}" → ${lg.status} ${(lg.error && lg.error.code) || (lg.data && lg.data.user && lg.data.user.role) || ''}`);
+        }
+        c.user = lg.data.user;
+        c.admin = true;
+      }
       return c;
     })();
   }
@@ -1089,7 +1109,10 @@ async function S03() {
     for (const f of ['email', 'nickname', 'password', 'password_confirm']) for (const [label, v] of STR) cases.push([`${f} = ${label}`, () => ({ ...base(), [f]: v })]);
     for (const [label, v] of [['a word', 'true'], ['a number', 1], ['an array', [true]]]) cases.push([`agree = ${label}`, () => ({ ...base(), agree: v })]);
     for (const [label, v] of [['a word', 'yes'], ['a number', 1]]) cases.push([`remember = ${label}`, () => ({ ...base(), remember: v })]);
-    return strict('api/auth/register.php', cases, { user: () => anon(s), after: (r, c) => c.json('api/auth/logout.php', {}) });
+    // every wrong-type case is now refused (F for register: remember must be a real boolean), so none of them creates an
+    // account that would log out and reset the session; rotate the browser every 12 cases so the refusals do not pile up
+    // against the register budget (that limit is exercised on its own in S09).
+    return strict('api/auth/register.php', cases, { user: () => anon(s), perUser: 12, after: (r, c) => c.json('api/auth/logout.php', {}) });
   });
   // CONTRACT §15.7 #3 — chat/send: text type + length, channel enum
   await check('S03', 'api/chat/send.php · wrong types, an unknown channel and an over-long text are refused', { sev: 'low', fix: STRICT_FIX }, async () => {
@@ -1867,6 +1890,10 @@ async function S08() {
 async function S09() {
   if (!want('S09')) return;
   const s = await srv('rate');
+  // create (and promote + sign in) the admin before the login budget is hammered below: promotion now goes through the
+  // CLI and a fresh login (F2), and the generic rate-limit check needs an admin whose sign-in is not refused by the very
+  // login limit this suite is exercising. Caching it here means the generic check reuses the already-signed-in admin.
+  await admin(s);
   const hammer = async (max, fn) => { for (let i = 1; i <= max; i++) { const r = await fn(i); if (r.status === 429) return { at: i, r }; } return { at: 0 }; };
   const judge = (h, label, max) => {
     assert(h.at, `${label}: ${max} requests in a row and no 429`);
@@ -1923,21 +1950,29 @@ async function S09() {
     const done = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/player/save.php', 'api/chat/send.php', 'api/chat/report.php']);
     const posts = await postEndpoints(s);
     const out = [], bad = [];
-    const logout = await hammer(760, () => u.json('api/auth/logout.php', {}));   // a new session each time: the per-address ceiling (30 × 25) has to stop it
+    // hammer logout with a throwaway account, not `u`: logging out signs the browser out, and the plan above still needs
+    // `u` logged in for the auth-only endpoints (player/get, presence, prepare, upload, and the sub endpoints that share
+    // prepare's budget). A new session each logout means the per-address ceiling (30 × 25) is what has to stop the flood.
+    const lu = await newUser(s, 'Lgo');
+    const logout = await hammer(760, () => lu.json('api/auth/logout.php', {}));
     if (logout.at) out.push(`logout@${logout.at}`); else bad.push('api/auth/logout.php: 760 requests, no 429');
     done.add('api/auth/logout.php');
     const u2 = await newUser(s, 'Rev');
-    for (const f of apiFiles(s.docroot)) {
-      if (done.has(f)) continue;
-      const [max, fn] = plan[f] || [shared[f] ? 0 : 401, posts.includes(f) ? () => u2.json(f, {}) : () => u2.req(f)];
-      if (shared[f]) {   // shares the bucket of an endpoint that is exhausted by now: one more request must be a 429
-        const c = /admin|grant|renew/.test(f) ? adm : u;
-        const r = posts.includes(f) ? await c.json(f, {}) : await c.req(f);
-        if (r.status === 429 && Number(r.headers['retry-after']) >= 1) out.push(`${path.basename(f, '.php')}(shared)`); else bad.push(`${f}: shares the exhausted budget of ${shared[f]} but answered ${r.status}`);
-        continue;
-      }
+    // two passes: first hammer every endpoint that owns a budget (so its bucket is full), then test the endpoints that
+    // share a bucket. A single alphabetical pass checks a shared endpoint (api/sub/billing-issue, api/admin/health)
+    // before its primary (api/sub/prepare, api/admin/stats) and sees an empty budget.
+    const files = apiFiles(s.docroot).filter((f) => !done.has(f));
+    for (const f of files) {
+      if (shared[f]) continue;
+      const [max, fn] = plan[f] || [401, posts.includes(f) ? () => u2.json(f, {}) : () => u2.req(f)];
       const h = await hammer(max, fn);
       if (h.at && Number(h.r.headers['retry-after']) >= 1) out.push(`${path.basename(f, '.php')}@${h.at}`); else bad.push(`${f}: ${max} requests, ${h.at ? 'a 429 without Retry-After' : 'no 429'}`);
+    }
+    for (const f of files) {
+      if (!shared[f]) continue;   // shares the bucket of an endpoint that is exhausted by now: one more request must be a 429
+      const c = /admin|grant|renew/.test(f) ? adm : u;
+      const r = posts.includes(f) ? await c.json(f, {}) : await c.req(f);
+      if (r.status === 429 && Number(r.headers['retry-after']) >= 1) out.push(`${path.basename(f, '.php')}(shared)`); else bad.push(`${f}: shares the exhausted budget of ${shared[f]} but answered ${r.status}`);
     }
     assert(!bad.length, bad.join('; '));
     return out.join(' ');

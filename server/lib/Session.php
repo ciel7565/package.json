@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 final class Session
 {
@@ -203,6 +203,18 @@ final class Session
             $cfg = (array) Config::get('session', []);
             Cookie::set(session_name(), session_id(), $now + (int) (isset($cfg['remember_days']) ? $cfg['remember_days'] : 30) * 86400, Http::basePath(), Http::isHttps());
         }
+    }
+
+    /**
+     * New session id + fresh CSRF token, keeping the current logged-in state. Used on admin elevation / a privilege
+     * step-up where the account itself does not change (CONTRACT §15.4, admin agent) — a plain anti-fixation rotation.
+     */
+    public static function regenerate(): void
+    {
+        if (!self::started()) self::start();
+        if (session_status() !== PHP_SESSION_ACTIVE) return;
+        session_regenerate_id(true);
+        if (isset($_SESSION['_tfm']) && is_array($_SESSION['_tfm'])) $_SESSION['_tfm']['csrf'] = bin2hex(random_bytes(32));
     }
 
     /** privilege change for the current user (role update): new id, keep login */

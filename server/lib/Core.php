@@ -8,7 +8,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 /** An error that becomes a JSON error response {success:false, error:{code,message}, data?}. */
 final class ApiException extends \RuntimeException
@@ -114,8 +114,10 @@ final class Config
 {
     /** @var array|null config.php + config.local.php as written */
     private static $cfg = null;
-    /** @var array|null the configuration this request works with (files + overrides) */
+    /** @var array|null the configuration as written (files + overrides), before the production lock */
     private static $eff = null;
+    /** @var array|null the configuration this request works with (files + overrides + production lock) */
+    private static $locked = null;
     /** @var array runtime overrides by dotted path (unit tests, CLI tools) */
     private static $over = [];
     /** @var array|null */
@@ -135,7 +137,8 @@ final class Config
         return self::$cfg;
     }
 
-    public static function all(): array
+    /** the configuration as written (files + overrides) — without the production lock. For ConfigAudit / install. */
+    public static function raw(): array
     {
         if (self::$eff === null) {
             $c = self::files();
@@ -145,11 +148,59 @@ final class Config
         return self::$eff;
     }
 
+    /** one written value (CONTRACT §15.7 #16): what config.php / config.local.php asked for, before the production lock */
+    public static function rawGet(string $path, $default = null)
+    {
+        return self::dig(self::raw(), $path, $default);
+    }
+
+    public static function all(): array
+    {
+        if (self::$locked === null) self::$locked = self::productionLock(self::raw());
+        return self::$locked;
+    }
+
+    /**
+     * CONTRACT §15.7 #16 — on a real (non-local) production host, switches meant only for tests / demos are refused at
+     * runtime no matter what the file says: mock payment, mock AI and the save-validation bypass are forced off and a
+     * debug log level is raised to info, so a careless config.local.php on a live server cannot hand out paid tiers for
+     * free or silence the save checks. ConfigAudit reads the written values (Config::rawGet) and flags them ⛔ as well.
+     * Never runs on the command line or for a request from the server machine itself (local demos keep working).
+     */
+    private static function productionLock(array $c): array
+    {
+        $env = isset($c['app']['env']) ? (string) $c['app']['env'] : 'production';
+        if ($env !== 'production' || self::localProcess()) return $c;
+        if (isset($c['toss']['mock'])) $c['toss']['mock'] = false;
+        if (isset($c['anthropic']['mock'])) $c['anthropic']['mock'] = false;
+        if (isset($c['save']['admin_bypass'])) $c['save']['admin_bypass'] = false;
+        if (isset($c['logs']['level']) && strtolower((string) $c['logs']['level']) === 'debug') $c['logs']['level'] = 'info';
+        return $c;
+    }
+
+    /**
+     * A config-free locality test for the production lock only (Http::isLocalhost needs the config, which would recurse
+     * here). True on the command line and for a request that comes straight from the server machine: loopback socket,
+     * no forwarding header, a loopback Host. A relay or public visitor fails one of those, so the lock applies to it.
+     */
+    private static function localProcess(): bool
+    {
+        if (PHP_SAPI === 'cli' && !isset($_SERVER['REQUEST_METHOD'])) return true;
+        $ip = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
+        if (!in_array($ip, ['127.0.0.1', '::1', '::ffff:127.0.0.1'], true)) return false;
+        foreach (['HTTP_X_FORWARDED_FOR', 'HTTP_FORWARDED', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_HOST', 'HTTP_X_FORWARDED_PROTO',
+                  'HTTP_VIA', 'HTTP_CF_CONNECTING_IP', 'HTTP_TRUE_CLIENT_IP', 'HTTP_X_CLIENT_IP'] as $h) {
+            if (isset($_SERVER[$h]) && trim((string) $_SERVER[$h]) !== '') return false;
+        }
+        $host = strtolower(trim((string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '')));
+        return $host === '' || (bool) preg_match('/^(?:\[::1\]|(?:[a-z0-9-]+\.)*localhost|127(?:\.\d{1,3}){3})(?::\d{1,5})?$/', $host);
+    }
+
     /** forget the cached configuration (the installer wrote config.local.php) */
-    public static function reset(): void { self::$cfg = null; self::$eff = null; }
+    public static function reset(): void { self::$cfg = null; self::$eff = null; self::$locked = null; }
 
     /** forget what was derived for the current request only (the files stay cached) */
-    public static function resetRequest(): void { self::$eff = null; }
+    public static function resetRequest(): void { self::$eff = null; self::$locked = null; }
 
     /**
      * Replace one value for the rest of this process (unit tests, CLI tools); null removes the override again.
@@ -160,6 +211,7 @@ final class Config
         if ($value === null) unset(self::$over[$path]);
         else self::$over[$path] = $value;
         self::$eff = null;
+        self::$locked = null;
     }
 
     private static function put(array $a, array $keys, $value): array
@@ -225,7 +277,7 @@ final class Config
             $ht = $dir . DIRECTORY_SEPARATOR . '.htaccess';
             if (!is_file($ht)) @file_put_contents($ht, "# deny all web access\n<IfModule mod_authz_core.c>\n  Require all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n  Order allow,deny\n  Deny from all\n</IfModule>\n");
             $ix = $dir . DIRECTORY_SEPARATOR . 'index.php';
-            if (!is_file($ix)) @file_put_contents($ix, "<?php http_response_code(404); exit;\n");
+            if (!is_file($ix)) @file_put_contents($ix, "<?php if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit;\n");
         }
     }
 
@@ -250,7 +302,7 @@ final class Config
                             'db_file' => 'db-' . bin2hex(random_bytes(12)) . '.sqlite',
                             'created' => gmdate('c'),
                         ];
-                        $php = "<?php\n// generated secrets — keep private, do not commit, back up together with the database\nif (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn " . var_export($s, true) . ";\n";
+                        $php = "<?php\n// generated secrets — keep private, do not commit, back up together with the database\nif (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }\nreturn " . var_export($s, true) . ";\n";
                         $tmp = $file . '.' . bin2hex(random_bytes(4)) . '.tmp';
                         if (file_put_contents($tmp, $php, LOCK_EX) === false || !rename($tmp, $file)) {
                             @unlink($tmp);
@@ -314,6 +366,9 @@ final class Log
                 for ($i = 1; $i < 100 && is_file($rot = $dir . DIRECTORY_SEPARATOR . 'app-' . date('Y-m-d') . ".$i.log.php"); $i++);
                 @rename($file, $rot);
             }
+            // F7: < > & ' " are hex-escaped so a logged value (which may be attacker-supplied) is never raw markup; the
+            // message is capped and control characters become \uXXXX through json_encode, so one log line cannot be a
+            // huge or binary payload. The whole line is bounded as a last resort.
             $line = json_encode([
                 't'   => date('c'),
                 'lvl' => $level,
@@ -322,13 +377,19 @@ final class Log
                 'rid' => self::requestId(),
                 'ip'  => Http::clientIp(),
                 'ctx' => $ctx ?: null,
-            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
             if (!is_string($line)) $line = '{"lvl":"' . $level . '","msg":"(unencodable log line)"}';
-            $new = !is_file($file);
-            $fh = @fopen($file, 'ab');
+            if (strlen($line) > 16384) $line = substr($line, 0, 16384);
+            // F7: the PHP exit guard must be the FIRST bytes of the file even when two requests create it at once. The
+            // write-or-not decision is made under the exclusive lock (size === 0) — never from an is_file() check taken
+            // before the lock, which a second process could race between — so a log line can never land before the guard.
+            $guard = "<?php if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; ?>\n";
+            $fh = @fopen($file, 'cb');
             if (!$fh) { @error_log('[tfm] ' . $level . ' ' . $cat . ': ' . $msg . ' (data/logs not writable)'); return; }
+            $new = false;
             if (flock($fh, LOCK_EX)) {
-                if ($new) fwrite($fh, "<?php http_response_code(404); exit; ?>\n");
+                fseek($fh, 0, SEEK_END);
+                if (ftell($fh) === 0) { fwrite($fh, $guard); $new = true; }
                 fwrite($fh, $line . "\n");
                 flock($fh, LOCK_UN);
             }
@@ -364,7 +425,12 @@ final class Http
     public static function isHttps(): bool
     {
         if (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off') return true;
-        if ((string) (isset($_SERVER['SERVER_PORT']) ? $_SERVER['SERVER_PORT'] : '') === '443') return true;
+        // F12: SERVER_PORT is derived from the Host header on Apache (UseCanonicalName Off), so a visitor can claim 443.
+        // Trust it only on a direct connection (no reverse proxy configured); behind a proxy the scheme must come from
+        // X-Forwarded-Proto via trusted_proxies, never from the port.
+        $trusted = (array) Config::get('security.trusted_proxies', []);
+        if (!$trusted && (string) (isset($_SERVER['SERVER_PORT']) ? $_SERVER['SERVER_PORT'] : '') === '443'
+            && empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && empty($_SERVER['HTTP_X_FORWARDED_SSL'])) return true;
         if (self::fromTrustedProxy()) {
             $p = strtolower((string) (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : ''));
             if ($p === 'https') return true;
@@ -595,5 +661,152 @@ final class Http
         try {
             if (self::isHttps() && Config::get('security.hsts', true)) header('Strict-Transport-Security: max-age=31536000');
         } catch (\Throwable $e) { /* ignore */ }
+    }
+
+    // ------------------------------------------------------------------ CONTRACT §15.7 #2 — HTTPS forced
+
+    /** security.force_https effective mode: 'off' | 'on' | 'auto' (default; enforced unless the request is for localhost) */
+    public static function forceHttpsMode(): string
+    {
+        $m = strtolower(trim((string) Config::get('security.force_https', 'auto')));
+        return in_array($m, ['off', 'on', 'auto'], true) ? $m : 'auto';
+    }
+
+    /**
+     * A request straight from the server machine: a loopback socket and a loopback Host, and — when a reverse proxy is
+     * configured — not relayed through it. Unlike isLocalhost() this ignores forwarding headers when no proxy is
+     * configured: on a plain install a visitor can send a bogus X-Forwarded-Proto directly, and that spoof must not
+     * turn a genuine localhost request into a "public" one for the force_https=auto decision.
+     */
+    public static function isLoopbackRequest(): bool
+    {
+        $ip = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
+        if (!in_array($ip, ['127.0.0.1', '::1', '::ffff:127.0.0.1'], true)) return false;
+        try { if (self::fromTrustedProxy()) return false; } catch (\Throwable $e) { return false; }
+        $host = strtolower(trim((string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '')));
+        return $host === '' || (bool) preg_match('/^(?:\[::1\]|(?:[a-z0-9-]+\.)*localhost|127(?:\.\d{1,3}){3})(?::\d{1,5})?$/', $host);
+    }
+
+    /** should this request be served only over https? (mode + localhost exception for 'auto') */
+    public static function httpsRequired(): bool
+    {
+        $m = self::forceHttpsMode();
+        if ($m === 'off') return false;
+        if ($m === 'auto' && self::isLoopbackRequest()) return false; // a certificate-less local install keeps working over http
+        return true;
+    }
+
+    /**
+     * First thing in every entry point (Api::run; pages through Firewall::guardPage). Over plain HTTP where HTTPS is
+     * required: a safe GET / HEAD is moved to the https address with 308 (same host, path, query) and the script ends;
+     * any other method is refused with 403 HTTPS_REQUIRED before the session, CSRF or body are touched, so no credential
+     * is ever read over http. No cookie is set on either answer. Never throws for GET / HEAD (it exits); the 403 is an
+     * ApiException the caller turns into its JSON / page.
+     */
+    public static function enforceHttps(): void
+    {
+        if (self::isHttps() || !self::httpsRequired()) return;
+        $method = self::method();
+        if ($method === 'GET' || $method === 'HEAD') {
+            if (!headers_sent()) {
+                $host = (string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost');
+                if (!preg_match('/^[A-Za-z0-9.\-\[\]:]{1,253}$/', $host)) $host = 'localhost';
+                $uri = (string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '/');
+                $uri = (string) preg_replace('/[\x00-\x1f\s]+/', '', $uri);
+                if ($uri === '' || $uri[0] !== '/') $uri = '/' . $uri;
+                header_remove('Set-Cookie');
+                http_response_code(308);
+                self::securityHeaders('api'); // the full header set (incl. CSP) on the redirect too
+                header('Location: https://' . $host . $uri);
+            }
+            exit;
+        }
+        try { if (class_exists('Tfm\SecEvent')) SecEvent::log('https_required', 'warn', ['method' => $method, 'path' => self::scriptPath()]); } catch (\Throwable $e) { /* logging only */ }
+        throw new ApiException(403, 'HTTPS_REQUIRED', '이 요청은 보안 연결(HTTPS)에서만 할 수 있어요.');
+    }
+
+    // ------------------------------------------------------------------ CONTRACT §15.7 #10 — CORS narrowed
+
+    /** the exact origins (scheme://host[:port]) other sites may read our public GET endpoints from; '*' is refused */
+    public static function corsAllowedOrigins(): array
+    {
+        $out = [];
+        foreach ((array) Config::get('security.cors_allowed_origins', []) as $o) {
+            if (!is_string($o)) continue;
+            $o = trim($o);
+            if ($o === '' || $o === '*') continue;
+            if (preg_match('#^https?://[A-Za-z0-9.\-]{1,253}(?::\d{1,5})?$#', $o)) $out[] = strtolower($o);
+        }
+        return $out;
+    }
+
+    /**
+     * $publicRead = the endpoint is one of the read-only public GET endpoints (Api::run 'public'). A preflight (OPTIONS)
+     * is answered here and the script ends: 204 with Access-Control-Allow-Methods: GET for an allowed origin on a public
+     * endpoint, otherwise 403 with no allow headers. For an allowed origin on a public GET the actual answer gets
+     * Access-Control-Allow-Origin + Vary: Origin (never credentials, never a write method). Everything else: no header.
+     */
+    public static function cors(bool $publicRead): void
+    {
+        $origin = (string) (isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '');
+        $allowed = $origin !== '' && $origin !== 'null' && in_array(strtolower($origin), self::corsAllowedOrigins(), true);
+        if (self::method() === 'OPTIONS') {
+            if (!headers_sent()) {
+                $reqMethod = strtoupper(trim((string) (isset($_SERVER['HTTP_ACCESS_CONTROL_REQUEST_METHOD']) ? $_SERVER['HTTP_ACCESS_CONTROL_REQUEST_METHOD'] : '')));
+                if ($publicRead && $allowed && ($reqMethod === '' || $reqMethod === 'GET' || $reqMethod === 'HEAD')) {
+                    http_response_code(204);
+                    header('Access-Control-Allow-Origin: ' . $origin);
+                    header('Vary: Origin');
+                    header('Access-Control-Allow-Methods: GET, HEAD');
+                    header('Access-Control-Max-Age: 600');
+                } else {
+                    http_response_code(403);
+                }
+                header('Content-Length: 0');
+                self::securityHeaders('api');
+                header('Content-Type: text/plain; charset=utf-8');
+            }
+            Session::close();
+            exit;
+        }
+        if ($publicRead && $allowed && !headers_sent()) {
+            header('Access-Control-Allow-Origin: ' . $origin);
+            header('Vary: Origin');
+        }
+    }
+
+    // ------------------------------------------------------------------ CONTRACT §15.7 #14 — uploads only where allowed
+
+    /** this request carries an uploaded file (multipart body or a populated $_FILES) */
+    public static function hasUpload(): bool
+    {
+        if (!empty($_FILES)) return true;
+        $ct = strtolower((string) (isset($_SERVER['CONTENT_TYPE']) ? $_SERVER['CONTENT_TYPE'] : (isset($_SERVER['HTTP_CONTENT_TYPE']) ? $_SERVER['HTTP_CONTENT_TYPE'] : '')));
+        return Str::startsWith($ct, 'multipart/form-data');
+    }
+
+    /**
+     * $allowed = the endpoint may receive files (Api::run 'upload'). Anywhere else a multipart body or a file is refused
+     * with 400 UPLOAD_NOT_ALLOWED and an upload_rejected event — a file never reaches an endpoint that does not expect one.
+     */
+    public static function refuseUpload(bool $allowed): void
+    {
+        if ($allowed || !self::hasUpload()) return;
+        try { if (class_exists('Tfm\SecEvent')) SecEvent::log('upload_rejected', 'warn', ['why' => 'not an upload endpoint', 'path' => self::scriptPath()]); } catch (\Throwable $e) { /* logging only */ }
+        throw new ApiException(400, 'UPLOAD_NOT_ALLOWED', '이 주소로는 파일을 올릴 수 없어요.');
+    }
+
+    /** a tiny server-rendered page for guardPage (blocked address, HTTPS required, upload refused): headers + exit */
+    public static function plainPage(int $status, string $message, array $headers = []): void
+    {
+        if (!headers_sent()) {
+            http_response_code($status);
+            self::securityHeaders('admin');
+            header('X-Robots-Tag: noindex, nofollow');
+            foreach ($headers as $h) header($h);
+        }
+        $msg = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+        echo "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>전통발효체험관</title></head><body style=\"font-family:system-ui,sans-serif;margin:3rem auto;max-width:28rem;padding:0 1rem;color:#333;text-align:center\"><p style=\"font-size:1.1rem\">{$msg}</p></body></html>";
+        exit;
     }
 }

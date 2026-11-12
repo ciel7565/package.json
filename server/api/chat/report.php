@@ -17,21 +17,24 @@ use Tfm\Ctx;
 use Tfm\Db;
 use Tfm\Retractions;
 use Tfm\Users;
+use Tfm\V;
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function (Ctx $c): array {
+    // CONTRACT §15.7 #3: every field is typed. 'at' is the client's timestamp (unused by the server, accepted so a real
+    // report is not refused). ids are positive integers (or the digit strings the client sends), the reason is one of the
+    // known words, and the free-text fields must be strings before they are cleaned and PII-masked.
     $b = $c->json(8192);
+    V::keys($b, ['target', 'targetId', 'messageId', 'text', 'reason', 'memo', 'at']);
     // 'kid' is the one-tap report of a child in easy mode (60-social _kidReport); always accepted, even when an older
     // config.local.php lists its own reasons, so a child's report never turns into a plain '기타'
     $reasons = array_merge((array) Config::get('chat.reasons', ['abuse', 'spam', 'harass', 'privacy', 'etc']), ['kid']);
-    $reason = isset($b['reason']) && is_string($b['reason']) && in_array($b['reason'], $reasons, true) ? $b['reason'] : 'etc';
-    $target = Users::cleanText(isset($b['target']) && is_string($b['target']) ? $b['target'] : '', 40);
+    $reason = V::has($b, 'reason') ? V::enum($b['reason'], 'reason', $reasons) : 'etc';
+    $target = Users::cleanText(V::has($b, 'target') ? V::str($b['target'], 'target', 80) : '', 40);
     // reports may quote personal information (reason "privacy"): admins see that something was shared, not the data
-    $memo = ChatFilter::maskPII(Users::cleanText(isset($b['memo']) && is_string($b['memo']) ? $b['memo'] : '', 200));
-    $midRaw = isset($b['messageId']) ? $b['messageId'] : null;
-    $tidRaw = isset($b['targetId']) ? $b['targetId'] : null;
-    $mid = (is_int($midRaw) || (is_string($midRaw) && $midRaw !== '' && ctype_digit($midRaw))) ? (int) $midRaw : 0;
-    $tid = (is_int($tidRaw) || (is_string($tidRaw) && $tidRaw !== '' && ctype_digit($tidRaw))) ? (int) $tidRaw : 0;
-    $text = ChatFilter::maskPII(Users::cleanText(isset($b['text']) && is_string($b['text']) ? $b['text'] : '', 300));
+    $memo = ChatFilter::maskPII(Users::cleanText(V::has($b, 'memo') ? V::str($b['memo'], 'memo', 300) : '', 200));
+    $mid = V::has($b, 'messageId') ? V::id($b['messageId'], 'messageId') : 0;
+    $tid = V::has($b, 'targetId') ? V::id($b['targetId'], 'targetId') : 0;
+    $text = ChatFilter::maskPII(Users::cleanText(V::has($b, 'text') ? V::str($b['text'], 'text', 300) : '', 300));
     $msg = $mid > 0 ? Db::one('SELECT id, user_id, nickname, text FROM chat_messages WHERE id = ?', [$mid]) : null;
     if ($msg) { $tid = (int) $msg['user_id']; $target = (string) $msg['nickname']; $text = (string) $msg['text']; }
     elseif ($tid > 0) { $tu = Users::byId($tid); $tid = $tu ? (int) $tu['id'] : 0; if ($tu) $target = (string) $tu['nickname']; }

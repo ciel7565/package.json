@@ -21,17 +21,15 @@ use Tfm\Db;
 use Tfm\Presence;
 use Tfm\Retractions;
 use Tfm\Session;
+use Tfm\V;
 
 Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
     Session::close();
-    // query values are strings, or arrays for ?after[]=… (never cast those: "Array to string" would be a 500)
-    $afterRaw = isset($_GET['after']) ? $_GET['after'] : '0';
-    $limitRaw = isset($_GET['limit']) ? $_GET['limit'] : '60';
-    if (!is_string($afterRaw) || !preg_match('/^\d{1,18}$/', $afterRaw) || !is_string($limitRaw) || !preg_match('/^\d{1,4}$/', $limitRaw)) {
-        throw new ApiException(400, 'INVALID_PARAM', '요청 값이 올바르지 않아요.');
-    }
-    $after = (int) $afterRaw;
-    $page = max(1, min((int) Config::get('chat.page_size', 60), (int) $limitRaw));
+    // CONTRACT §15.7 #3: the numeric cursors go through V::int — a non-numeric, negative, zero (limit), huge or array
+    // value (?after[]=1) is a clean 400, never a silent default or a 500. `after` may be 0 (the first poll).
+    $pageSize = (int) Config::get('chat.page_size', 60);
+    $after = V::int(V::query('after', '0'), 'after', 0, V::INT_MAX);
+    $page = V::int(V::query('limit', (string) $pageSize), 'limit', 1, $pageSize);
     $now = $c->now;
     $cols = 'm.id, m.user_id, m.nickname, m.channel, m.text, m.x, m.z, m.created_at';
     $join = "JOIN users u ON u.id = m.user_id AND u.status = 'active'";
@@ -62,8 +60,9 @@ Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
         ];
     }
     // moderation since the client's last poll (rafter = its retraction cursor): lines it may already show are taken back
-    $rafter = isset($_GET['rafter']) ? $_GET['rafter'] : null;
-    $gone = Retractions::since($after > 0 && is_string($rafter) && preg_match('/^\d{1,18}$/', $rafter) ? (int) $rafter : null);
+    $rafterRaw = V::query('rafter');
+    $rafter = $rafterRaw !== null ? V::int($rafterRaw, 'rafter', 0, V::INT_MAX) : null;
+    $gone = Retractions::since($after > 0 && $rafter !== null ? $rafter : null);
     return ['messages' => $out, 'online' => max(1, Presence::onlineCount($now)), 'lastId' => $last,
         'retracted' => ['messages' => $gone['messages'], 'users' => $gone['users'], 'upTo' => $gone['upTo']], 'retractId' => $gone['retractId']];
 });

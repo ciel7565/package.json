@@ -14,7 +14,7 @@ use Tfm\Ctx;
 use Tfm\Session;
 use Tfm\Upload;
 
-Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'upload'], function (Ctx $c): array {
+Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'upload', 'upload' => true], function (Ctx $c): array {
     Session::close();
     $len = (int) (isset($_SERVER['CONTENT_LENGTH']) ? $_SERVER['CONTENT_LENGTH'] : 0);
     if (empty($_FILES) && $len > 0) throw new ApiException(413, 'UPLOAD_TOO_LARGE', '사진이 너무 커요. 5MB 이하로 올려 주세요.');

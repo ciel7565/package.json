@@ -15,7 +15,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 final class Ctx
 {
@@ -54,11 +54,19 @@ final class Api
     {
         Boot::forApi();
         try {
+            // CONTRACT §15.7 #5 / #2 / #10 / #14: the request-level guards run first, before the session, body or
+            // credentials are touched — a blocked address, a plain-HTTP request or a stray file never gets that far.
+            if (class_exists('Tfm\Firewall')) Firewall::check();        // #5  blocked address → 403 IP_BLOCKED
+            Http::enforceHttps();                                       // #2  http GET → 308, other http → 403 HTTPS_REQUIRED
+            $public = !empty($opt['public']);
+            Http::cors($public);                                        // #10 OPTIONS preflight handled here; public GET gets ACAO
             $method = Http::method();
             $allowed = array_map('strtoupper', (array) (isset($opt['method']) ? $opt['method'] : 'GET'));
             if (!in_array($method, $allowed, true)) {
                 throw new ApiException(405, 'METHOD_NOT_ALLOWED', '허용되지 않은 요청 방식이에요.', null, ['Allow: ' . implode(', ', $allowed)]);
             }
+            Http::refuseUpload(!empty($opt['upload']));                 // #14 a file to a non-upload endpoint → 400 UPLOAD_NOT_ALLOWED
+            if (class_exists('Tfm\V')) V::watch($_GET, 'query');        // #5  log hostile-looking query strings (never the protection)
             $ctx = new Ctx();
             $write = !in_array($method, ['GET', 'HEAD'], true);
             $needsLogin = !empty($opt['auth']) || !empty($opt['admin']);
@@ -85,7 +93,10 @@ final class Api
                 if (!$ctx->user) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.', Auth::$lostWhy !== null ? ['why' => Auth::$lostWhy] : null);
             }
             if (!empty($opt['admin']) && !$ctx->isAdmin()) {
-                Audit::log('admin_denied', $ctx->uid(), ['path' => basename((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''))], 'warn');
+                $path = Http::scriptPath();
+                // CONTRACT §15.7 #5: a player knocking on an admin endpoint is a security event (+ the audit row admin.php reads)
+                if (class_exists('Tfm\SecEvent')) SecEvent::log('admin_denied', 'warn', ['path' => $path], $ctx->uid() ?: null);
+                Audit::log('admin_denied', $ctx->uid(), ['path' => $path], 'warn');
                 throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
             }
             if (!empty($opt['rate'])) RateLimit::forRequest((string) $opt['rate'], $ctx, (string) (isset($opt['rateBy']) ? $opt['rateBy'] : 'auto'));
@@ -103,6 +114,10 @@ final class Api
 
     public static function csrfFail()
     {
+        // CONTRACT §15.7 #5: recorded as a security event. Logged at 'info', not 'warn': a stale token after the session
+        // ran out is the common cause (a classroom's tabs left open), so it must not count toward the automatic block —
+        // a genuinely cross-site forgery is caught one step earlier by the Origin check (origin_mismatch, 'warn').
+        if (class_exists('Tfm\SecEvent')) SecEvent::log('csrf_fail', 'info', ['path' => Http::scriptPath()]);
         Log::security('CSRF', 'csrf token missing or invalid', ['path' => basename((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''))]);
         throw new ApiException(403, 'CSRF_INVALID', '보안 토큰이 만료되었어요. 다시 시도해 주세요.');
     }
@@ -184,6 +199,9 @@ final class Auth
         $wait = LoginThrottle::check($login);
         if ($wait > 0) {
             Audit::log('login_locked', null, ['wait' => $wait], 'warn');
+            // CONTRACT §15.7 #5: a lock-out is a security event. Not attack-like — the login throttle already handles the
+            // guessing, so repeated lock-outs (a classroom getting a password wrong together) must not auto-block the address.
+            if (class_exists('Tfm\SecEvent')) SecEvent::log('login_locked', 'warn', ['wait' => $wait]);
             throw new ApiException(429, 'TOO_MANY_ATTEMPTS', "로그인 시도가 너무 많아요. {$wait}초 후에 다시 시도해 주세요.", ['retryAfter' => $wait], ['Retry-After: ' . $wait]);
         }
         $u = Users::byLogin($login);
@@ -199,10 +217,9 @@ final class Auth
         LoginThrottle::record($login, true);
         Users::maybeRehash($u, $pw);
         $fields = ['last_login_at' => Clock::ms(), 'last_login_ip' => substr(Http::clientIp(), 0, 64)];
-        if ($u['role'] !== 'admin' && Users::isConfiguredAdmin((string) $u['email'])) {
-            $fields['role'] = 'admin';
-            Audit::log('role_changed', (int) $u['id'], ['from' => 'user', 'to' => 'admin', 'via' => 'config admin_emails'], 'warn');
-        }
+        // F2 (CONTRACT §15.7 #6): no automatic admin promotion by e-mail. security.admin_emails has no proof that the
+        // person who registered an address owns it, so whoever claimed it first would become admin. An admin is made
+        // only by the installer's first account, or by `php cli/tfm.php promote <e-mail>` on the server machine.
         Users::update((int) $u['id'], $fields);
         $u = Users::byId((int) $u['id']);
         if (!$u) throw new \RuntimeException('user vanished');

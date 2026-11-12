@@ -8,7 +8,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 final class Users
 {
@@ -159,7 +159,9 @@ final class Users
     public static function create(string $email, string $nick, string $pw, string $role = ''): array
     {
         $now = Clock::ms();
-        if ($role !== 'admin') $role = self::isConfiguredAdmin($email) ? 'admin' : 'user';
+        // F2 (CONTRACT §15.7 #6): a new account is always a plain user unless the caller is the installer's first-admin
+        // path (which passes $role = 'admin'). No promotion by e-mail (security.admin_emails) — see Auth::attemptLogin.
+        if ($role !== 'admin') $role = 'user';
         $id = Db::insert('users', [
             'email' => mb_strtolower($email), 'nickname' => $nick, 'nickname_key' => mb_strtolower($nick),
             'password_hash' => self::hashPassword($pw), 'role' => $role, 'status' => 'active', 'muted_until' => 0,

@@ -16,11 +16,16 @@ use Tfm\Ctx;
 use Tfm\SaveValidator;
 use Tfm\Subscription;
 use Tfm\Users;
+use Tfm\V;
 
 Api::run(['method' => 'POST', 'rate' => 'login', 'rateBy' => 'ip'], function (Ctx $c): array {
+    // CONTRACT §15.7 #3: every field is typed through V — a number / array where a string belongs is a 400, not a
+    // silent coercion (the detailed length / lock-out rules live in Auth::attemptLogin).
     $b = $c->json(4096);
-    $login = isset($b['login']) && is_string($b['login']) ? $b['login'] : (isset($b['email']) && is_string($b['email']) ? $b['email'] : '');
-    $pw = isset($b['password']) && is_string($b['password']) ? $b['password'] : '';
-    $u = Auth::attemptLogin($login, $pw, (isset($b['remember']) ? $b['remember'] : false) === true);
+    V::keys($b, ['login', 'email', 'password', 'remember']);
+    $login = V::has($b, 'login') ? V::str($b['login'], 'login', 120) : (V::has($b, 'email') ? V::str($b['email'], 'email', 120) : '');
+    $pw = V::has($b, 'password') ? V::str($b['password'], 'password', 512) : '';
+    $remember = V::has($b, 'remember') ? V::bool($b['remember'], 'remember') : false;
+    $u = Auth::attemptLogin($login, $pw, $remember);
     return ['user' => Users::publicUser($u), 'sub' => Subscription::state((int) $u['id'])] + SaveValidator::restoreStampFor((int) $u['id']);
 });

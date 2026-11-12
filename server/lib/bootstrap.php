@@ -8,8 +8,9 @@
 declare(strict_types=1);
 
 if (defined('TFM_BOOT')) return;
-// requested directly over the web (servers that ignore lib/.htaccess)? → behave like a missing file
+// requested directly over the web (servers that ignore lib/.htaccess)? → behave like a missing file, no version banner
 if (PHP_SAPI !== 'cli' && isset($_SERVER['SCRIPT_FILENAME']) && realpath((string) $_SERVER['SCRIPT_FILENAME']) === __FILE__) {
+    if (function_exists('header_remove')) header_remove('X-Powered-By'); // CONTRACT §15.7 #11
     http_response_code(404);
     exit;
 }

@@ -8,7 +8,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 final class Sec
 {
@@ -26,24 +26,44 @@ final class Sec
     {
         if (!Config::get('security.check_origin', true)) return;
         $site = strtolower((string) (isset($_SERVER['HTTP_SEC_FETCH_SITE']) ? $_SERVER['HTTP_SEC_FETCH_SITE'] : ''));
-        if ($site === 'cross-site') throw new ApiException(403, 'CROSS_SITE_REQUEST', '허용되지 않은 요청이에요.');
+        if ($site === 'cross-site') self::originFail('sec-fetch-site: ' . $site);
         $origin = (string) (isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '');
+        // F16: a missing Origin, or the literal 'null' (a sandboxed iframe, a file:// page, some privacy tools), carries no
+        // host to compare — the CSRF token still has to be right, so these are left to that check, not accepted outright.
+        // A present Origin must match this host AND the request's scheme (an http origin on an https request is cross-site).
         if ($origin === '' || $origin === 'null') return;
         $host = strtolower((string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : ''));
         $o = parse_url($origin);
-        $oh = strtolower((string) (is_array($o) && isset($o['host']) ? $o['host'] : '') . (is_array($o) && isset($o['port']) ? ':' . $o['port'] : ''));
-        if ($host === '' || $oh !== $host) {
-            Log::security('CSRF', 'origin mismatch', ['origin' => mb_substr($origin, 0, 120)]);
-            throw new ApiException(403, 'CROSS_SITE_REQUEST', '허용되지 않은 요청이에요.');
+        if (!is_array($o) || !isset($o['host'])) self::originFail($origin);
+        $oh = strtolower((string) $o['host'] . (isset($o['port']) ? ':' . $o['port'] : ''));
+        $scheme = strtolower((string) (isset($o['scheme']) ? $o['scheme'] : ''));
+        // the host (incl. port) must match; on an https request an http Origin is a downgrade attempt (cross-site).
+        // On a plain-http install (local, certificate-less) either scheme is accepted so same-origin posts keep working.
+        if ($host === '' || $oh !== $host || (Http::isHttps() && $scheme !== '' && $scheme !== 'https')) {
+            self::originFail($origin);
         }
+    }
+
+    /** one place for the cross-site refusal: a security event (origin_mismatch, attack-like) + the generic 403 */
+    private static function originFail(string $origin)
+    {
+        if (class_exists('Tfm\SecEvent')) SecEvent::log('origin_mismatch', 'warn', ['origin' => mb_substr($origin, 0, 120), 'path' => Http::scriptPath()]);
+        Log::security('CSRF', 'origin mismatch', ['origin' => mb_substr($origin, 0, 120)]);
+        throw new ApiException(403, 'CROSS_SITE_REQUEST', '허용되지 않은 요청이에요.');
     }
 }
 
 final class RateLimit
 {
     /**
-     * Fixed-window counter. Throws 429 RATE_LIMITED (+ Retry-After) when exceeded.
+     * Sliding-window counter. Throws 429 RATE_LIMITED (+ Retry-After) when exceeded.
      * $ident: "u:<id>" for logged-in users, otherwise "ip:<hash>".
+     *
+     * The classic fixed window resets its count at each window boundary, so a burst that straddles the boundary (part in
+     * window N, part in N+1) is never seen as one burst and the limit does not trip. We keep one counter per window as
+     * before, but on each hit we also read the previous window and estimate the rate over the trailing full window as
+     * `prev × (fraction of the previous window still inside the trailing window) + current`. The estimate never drops
+     * below the real count, so `limit` requests in any rolling window are enough to trip it, whatever the clock.
      */
     public static function hit(string $name, string $ident, ?int $limit = null, ?int $window = null): void
     {
@@ -52,21 +72,34 @@ final class RateLimit
         if ($window === null) $window = (int) (is_array($conf) && isset($conf[1]) ? $conf[1] : 60);
         if ($limit <= 0) return;
         $now = Clock::ms();
-        $win = intdiv($now, max(1, $window) * 1000);
-        $bucket = substr($name . '|' . $ident . '|' . $win, 0, 190);
-        $expires = ($win + 1) * $window * 1000;
-        $hits = Db::tx(function () use ($bucket, $expires) {
-            if (Db::exec('UPDATE rate_limits SET hits = hits + 1 WHERE bucket = ?', [$bucket]) === 0) {
+        $winLen = max(1, $window) * 1000;
+        $curWin = intdiv($now, $winLen);
+        $curBucket = substr($name . '|' . $ident . '|' . $curWin, 0, 190);
+        $prevBucket = substr($name . '|' . $ident . '|' . ($curWin - 1), 0, 190);
+        // keep the row two windows: the next window needs this one as its "previous" for the weighting
+        $expires = ($curWin + 2) * $winLen;
+        $res = Db::tx(function () use ($curBucket, $prevBucket, $expires) {
+            if (Db::exec('UPDATE rate_limits SET hits = hits + 1 WHERE bucket = ?', [$curBucket]) === 0) {
                 Db::exec(Db::driver() === 'mysql'
                     ? 'INSERT IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)'
-                    : 'INSERT OR IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)', [$bucket, $expires]);
+                    : 'INSERT OR IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)', [$curBucket, $expires]);
             }
-            return (int) Db::value('SELECT hits FROM rate_limits WHERE bucket = ?', [$bucket]);
+            return [
+                (int) Db::value('SELECT hits FROM rate_limits WHERE bucket = ?', [$curBucket]),
+                (int) Db::value('SELECT hits FROM rate_limits WHERE bucket = ?', [$prevBucket]),
+            ];
         });
+        $cur = $res[0];
+        $prev = $res[1];
+        $elapsed = $now - $curWin * $winLen;                 // ms into the current window
+        $prevWeight = max(0.0, 1.0 - $elapsed / $winLen);    // how much of the previous window is still in the trailing window
+        $estimate = (int) floor($prev * $prevWeight) + $cur;
         if (random_int(1, 100) <= 2) self::cleanup();
-        if ($hits > $limit) {
-            $retry = max(1, (int) ceil(($expires - $now) / 1000));
-            if ($hits === $limit + 1) Log::security('RATE', "rate limit '$name' exceeded", ['ident' => substr($ident, 0, 40)]);
+        if ($estimate > $limit) {
+            // wait until the current window ends (the previous window has fully aged out by then); a full window when
+            // the current count alone is already over the limit
+            $retry = $cur > $limit ? $window : max(1, (int) ceil((($curWin + 1) * $winLen - $now) / 1000));
+            if ($estimate === $limit + 1) Log::security('RATE', "rate limit '$name' exceeded", ['ident' => substr($ident, 0, 40)]);
             throw new ApiException(429, 'RATE_LIMITED', '요청이 너무 많아요. 잠시 후 다시 시도해 주세요.', ['retryAfter' => $retry], ['Retry-After: ' . $retry]);
         }
     }

@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 final class Upload
 {
@@ -31,6 +31,11 @@ final class Upload
         if ($audit) {
             $cu = Auth::current();
             Audit::log('upload_rejected', $cu ? (int) $cu['id'] : null, $audit + ['code' => $code], 'warn');
+            // CONTRACT §15.7 #5: a rejected upload is a security event. A deliberately hostile file (a script / markup
+            // polyglot) is attack-like (warn → counts toward the automatic block); a benign wrong type / oversize photo
+            // is logged at 'info' so a child picking the wrong file a few times never locks the classroom out.
+            $dangerous = in_array($code, ['UPLOAD_REJECTED', 'UPLOAD_INVALID'], true);
+            if (class_exists('Tfm\SecEvent')) SecEvent::log('upload_rejected', $dangerous ? 'warn' : 'info', $audit + ['code' => $code], $cu ? (int) $cu['id'] : null);
         }
         throw new ApiException(400, $code, $msg);
     }
@@ -38,28 +43,58 @@ final class Upload
     /** @return array{url:string, width:int, height:int, size:int, mime:string, id:int} */
     public static function journalPhoto(array $user, string $field = 'photo'): array
     {
+        // the journal uses the configured defaults; the one-line call for a later report photo (≤ 1 MB, ≤ 1280 px) is
+        //   Upload::image($user, 'photo', ['maxBytes' => 1048576, 'maxDimension' => 1280, 'subdir' => 'reports', 'dailyLimit' => 10, 'totalLimit' => 200]);
+        return self::image($user, $field, ['subdir' => 'journal']);
+    }
+
+    /**
+     * The reusable photo-upload core (CONTRACT §15.7 #14). $opt: maxBytes, maxDimension, subdir, dailyLimit, totalLimit
+     * (each falls back to the config 'uploads' block). Pipeline: is_uploaded_file → size cap → per-user quota → finfo MIME
+     * whitelist (png/jpeg/webp) → getimagesize (type agrees, dimension / pixel / memory caps) → reject script/markup
+     * polyglots → GD re-encode (strips EXIF/GPS and anything appended) → random name + forced extension under
+     * uploads/<subdir>/YYYY/MM/. F8: GD is required — without it there is no safe way to strip metadata or a trailing
+     * payload, so the upload is refused with a clear message rather than storing the original bytes.
+     * @return array{url:string, width:int, height:int, size:int, mime:string, id:int}
+     */
+    public static function image(array $user, string $field, array $opt): array
+    {
         $cfg = (array) Config::get('uploads', []);
-        $max = (int) (isset($cfg['max_bytes']) ? $cfg['max_bytes'] : 5242880);
+        $max = (int) (isset($opt['maxBytes']) ? $opt['maxBytes'] : (isset($cfg['max_bytes']) ? $cfg['max_bytes'] : 5242880));
+        $maxDim = (int) (isset($opt['maxDimension']) ? $opt['maxDimension'] : (isset($cfg['max_dimension']) ? $cfg['max_dimension'] : 1600));
+        $subdir = (string) preg_replace('/[^a-z0-9_]/', '', strtolower((string) (isset($opt['subdir']) ? $opt['subdir'] : 'journal')));
+        if ($subdir === '') $subdir = 'journal';
+        $dailyLimit = (int) (isset($opt['dailyLimit']) ? $opt['dailyLimit'] : (isset($cfg['per_user_daily']) ? $cfg['per_user_daily'] : 40));
+        $totalLimit = (int) (isset($opt['totalLimit']) ? $opt['totalLimit'] : (isset($cfg['per_user_total']) ? $cfg['per_user_total'] : 400));
+        $mb = $max >= 1048576 ? rtrim(rtrim(number_format($max / 1048576, 1), '0'), '.') . 'MB' : ceil($max / 1024) . 'KB';
+        $tooLarge = "사진은 {$mb} 이하만 올릴 수 있어요.";
+
         $f = isset($_FILES[$field]) ? $_FILES[$field] : null;
         if (!is_array($f) || (isset($f['error']) && is_array($f['error']))) self::reject('UPLOAD_MISSING', '사진 파일을 찾을 수 없어요.');
         $err = (int) (isset($f['error']) ? $f['error'] : UPLOAD_ERR_NO_FILE);
-        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) self::reject('UPLOAD_TOO_LARGE', '사진은 5MB 이하만 올릴 수 있어요.');
+        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) self::reject('UPLOAD_TOO_LARGE', $tooLarge);
         if ($err !== UPLOAD_ERR_OK) self::reject('UPLOAD_FAILED', '사진을 올리지 못했어요. 다시 시도해 주세요.');
         $tmp = (string) (isset($f['tmp_name']) ? $f['tmp_name'] : '');
         if ($tmp === '' || !is_uploaded_file($tmp)) self::reject('UPLOAD_FAILED', '사진을 올리지 못했어요. 다시 시도해 주세요.', ['why' => 'not uploaded file']);
         $size = (int) filesize($tmp);
         if ($size <= 0) self::reject('UPLOAD_EMPTY', '빈 파일이에요.');
-        if ($size > $max) self::reject('UPLOAD_TOO_LARGE', '사진은 5MB 이하만 올릴 수 있어요.');
+        if ($size > $max) self::reject('UPLOAD_TOO_LARGE', $tooLarge);
+
+        // GD is mandatory: without it a re-encode (the only safe metadata / trailing-payload strip) is impossible — refuse
+        // up front rather than reach the end and store the original bytes (F8).
+        if (!extension_loaded('gd') || !function_exists('imagecreatefromstring')) {
+            self::reject('UPLOAD_UNSUPPORTED', '서버에 이미지 처리 기능(GD)이 없어 사진을 안전하게 저장할 수 없어요. 운영자에게 GD 확장 설치를 요청해 주세요.');
+        }
+        // real type from the bytes (never trust the client's name or Content-Type)
+        if (!class_exists('finfo')) self::reject('UPLOAD_UNSUPPORTED', '서버에서 사진 형식을 확인할 수 없어요. (fileinfo 확장 필요)');
 
         // quotas
         $now = Clock::ms();
         $today = (int) Db::value('SELECT COUNT(*) FROM journal_uploads WHERE user_id = ? AND created_at >= ?', [(int) $user['id'], $now - 86400000]);
-        if ($today >= (int) (isset($cfg['per_user_daily']) ? $cfg['per_user_daily'] : 40)) throw new ApiException(429, 'UPLOAD_QUOTA', '오늘 올릴 수 있는 사진 수를 넘었어요. 내일 다시 시도해 주세요.');
+        if ($today >= $dailyLimit) throw new ApiException(429, 'UPLOAD_QUOTA', '오늘 올릴 수 있는 사진 수를 넘었어요. 내일 다시 시도해 주세요.');
         $total = (int) Db::value('SELECT COUNT(*) FROM journal_uploads WHERE user_id = ?', [(int) $user['id']]);
-        if ($total >= (int) (isset($cfg['per_user_total']) ? $cfg['per_user_total'] : 400)) throw new ApiException(429, 'UPLOAD_QUOTA', '저장할 수 있는 사진 수를 넘었어요.');
+        if ($total >= $totalLimit) throw new ApiException(429, 'UPLOAD_QUOTA', '저장할 수 있는 사진 수를 넘었어요.');
 
-        // real type from the bytes (never trust the client's name or Content-Type)
-        if (!class_exists('finfo')) self::reject('UPLOAD_UNSUPPORTED', '서버에서 사진 형식을 확인할 수 없어요. (fileinfo 확장 필요)');
         $mime = (string) (new \finfo(FILEINFO_MIME_TYPE))->file($tmp);
         if (!isset(self::TYPES[$mime])) self::reject('UPLOAD_TYPE', 'PNG·JPEG·WEBP 사진만 올릴 수 있어요.', ['mime' => mb_substr($mime, 0, 40)]);
         $info = @getimagesize($tmp);
@@ -80,20 +115,11 @@ final class Upload
         }
 
         // re-encode (drops EXIF/GPS metadata, comments and anything appended after the image data)
-        $out = null;
-        $gd = extension_loaded('gd') && function_exists('imagecreatefromstring');
-        if ($gd) {
-            $out = self::reencode($bytes, $mime, $w, $h, $cfg);
-            if ($out === null) self::reject('UPLOAD_INVALID', '사진을 읽지 못했어요. 다른 사진을 골라 주세요.', ['why' => 'decode']);
-        } elseif (!empty($cfg['require_gd'])) {
-            self::reject('UPLOAD_UNSUPPORTED', '서버에 이미지 처리 기능(GD)이 없어 업로드할 수 없어요.');
-        } else {
-            $out = ['bytes' => $bytes, 'mime' => $mime, 'w' => $w, 'h' => $h];
-            Log::warn('UPLOAD', 'GD missing: storing original bytes (validated, not re-encoded)');
-        }
+        $out = self::reencode($bytes, $mime, $w, $h, ['max_dimension' => $maxDim] + $cfg);
+        if ($out === null) self::reject('UPLOAD_INVALID', '사진을 읽지 못했어요. 다른 사진을 골라 주세요.', ['why' => 'decode']);
 
         $ext = self::TYPES[$out['mime']]['ext'];
-        $sub = 'journal/' . date('Y') . '/' . date('m');
+        $sub = $subdir . '/' . date('Y') . '/' . date('m');
         $dir = Config::uploadDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $sub);
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) throw new \RuntimeException('upload dir not writable');
         $name = bin2hex(random_bytes(16)) . '.' . $ext;
@@ -105,7 +131,7 @@ final class Upload
             'user_id' => (int) $user['id'], 'path' => $url, 'mime' => $out['mime'], 'size_bytes' => strlen($out['bytes']),
             'width' => $out['w'], 'height' => $out['h'], 'sha256' => hash('sha256', $out['bytes']), 'created_at' => $now,
         ]);
-        Log::info('UPLOAD', 'journal photo stored', ['uid' => (int) $user['id'], 'bytes' => strlen($out['bytes']), 'mime' => $out['mime']]);
+        Log::info('UPLOAD', 'photo stored', ['uid' => (int) $user['id'], 'bytes' => strlen($out['bytes']), 'mime' => $out['mime'], 'subdir' => $subdir]);
         return ['id' => $id, 'url' => $url, 'width' => $out['w'], 'height' => $out['h'], 'size' => strlen($out['bytes']), 'mime' => $out['mime']];
     }
 

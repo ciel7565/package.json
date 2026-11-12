@@ -13,7 +13,7 @@ use Tfm\Ctx;
 use Tfm\Db;
 use Tfm\Session;
 
-Api::run(['method' => 'GET', 'rate' => 'ranking'], function (Ctx $c): array {
+Api::run(['method' => 'GET', 'rate' => 'ranking', 'public' => true], function (Ctx $c): array {
     Session::close();
     $rows = Db::all("SELECT p.user_id, u.nickname, p.level, p.exp_total, p.title, p.updated_at
         FROM user_profiles p JOIN users u ON u.id = p.user_id

@@ -24,7 +24,7 @@
  */
 declare(strict_types=1);
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 /** typed env reader: TFM_FOO=... (bool: 1/0/true/false/on/off, int, float, csv list) */
 $env = static function (string $key, $default) {
@@ -167,6 +167,16 @@ return [
         'sub_return'   => [30, 600],     // 토스 결제창에서 돌아오는 페이지 (IP 별)
         'sub_webhook'  => [120, 60],     // 토스 웹훅 (IP 별)
         'install'      => [30, 600],
+        'trap'         => [30, 60],      // 함정(honeypot) 경로 — IP 별 (스캐너가 로그를 넘치게 만드는 것 방지)
+        'admin_login'  => [20, 300],     // 관리자 로그인 시도 — IP 별 (CONTRACT §15.4, admin agent)
+        // ↓ 7단계 기능(실시간 텃밭·AI)에서 쓰도록 미리 잡아 둔 한도 (owner: server-farm / claude). 엔드포인트가 생기면 그대로 사용.
+        'farm_state'   => [60, 60],
+        'farm_report'  => [10, 600],
+        'farm_reports' => [60, 60],
+        'farm_photo'   => [10, 3600],
+        'ai_ask'       => [10, 60],
+        'ai_status'    => [60, 60],
+        'ai_admin'     => [20, 60],
     ],
 
     // ------------------------------------------------------------------ chat

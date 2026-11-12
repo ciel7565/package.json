@@ -53,13 +53,22 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         } catch (ApiException $e) {
             throw new ApiException(413, 'SAVE_TOO_LARGE', '저장 데이터가 너무 커요. 오래된 사진이나 작업일지 사진을 정리한 뒤 다시 저장해 주세요.');
         }
-        try { $env = Json::decode($raw, false, 64); }
+        // CONTRACT §15.7 #3: the save is decoded with the same depth-32 cap as every other body (a 40-level deep value is
+        // a 400, not a 500), and the envelope fields are typed: a wrong version / checksum / base is refused here instead
+        // of being silently dropped, so the client's integrity check cannot be skipped by sending the wrong shape.
+        try { $env = Json::decode($raw, false, 32); }
         catch (\UnexpectedValueException $e) { throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.'); }
         if (!$env instanceof \stdClass) throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.');
         $c->checkBodyCsrf(isset($env->csrf) ? $env->csrf : null); // only enforced when the X-CSRF-Token header was absent (beacon)
         if ($sub === null) $sub = Subscription::state($c->uid()); // a beacon: genuine only from here on
+        if (isset($env->version) && (!is_int($env->version) || $env->version < 1 || $env->version > 1000)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
+        if (isset($env->checksum) && !is_string($env->checksum)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
+        if (isset($env->base) && (!is_int($env->base) || $env->base < 0)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
         $data = isset($env->data) ? $env->data : null;
         if (!$data instanceof \stdClass) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
+        // farm.plots must be an object (a map of bed id → state): a string / list would otherwise be read as "no plots"
+        if (isset($data->farm) && $data->farm instanceof \stdClass && isset($data->farm->plots)
+            && !($data->farm->plots instanceof \stdClass) && $data->farm->plots !== []) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
         // what the client believed (its G.state.sub): answers say subChanged when the server's tier is another one
         $clientTier = isset($data->sub) && $data->sub instanceof \stdClass && isset($data->sub->tier) && is_int($data->sub->tier) ? $data->sub->tier : null;
         SaveValidator::assertNoProtoKeys($data); // 'constructor' / '__proto__' map keys would be served on every login
@@ -153,6 +162,9 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
             $res = $result['res'];
             $codes = array_values(array_unique(array_map(function ($v) { return $v['code']; }, $res['violations'])));
             Audit::log('save_rejected', $uid, ['violations' => array_slice($res['violations'], 0, 8), 'summary' => isset($res['summary']) ? $res['summary'] : []], 'warn');
+            // CONTRACT §15.7 #5: a save the server refuses is a security event (a cheat attempt or a corrupted client). Not
+            // attack-like — it has its own validation and does not count toward the automatic block (a child's unusual run).
+            if (class_exists('Tfm\SecEvent')) \Tfm\SecEvent::log('save_rejected', 'warn', ['violations' => array_slice($codes, 0, 8)], $uid);
             $row = $result['row'];
             throw new ApiException(409, 'VALIDATION_FAILED', '서버 검증에 실패해 이번 진행 상황은 저장하지 않았어요. 서버에 저장된 진행 상황으로 되돌립니다.', [
                 'save' => $stored($row, $result['prev']),
