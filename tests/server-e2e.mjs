@@ -1107,12 +1107,16 @@ async function main() {
     // the promotion bumps B's session epoch: log in again
     const lg = await B.req('api/auth/login.php', { json: { login: userB.email, password: PASSWORD, remember: false } });
     assert(lg.status === 200 && lg.data?.user?.role === 'admin', `relogin ${lg.status} ${lg.error?.code || lg.data?.user?.role}`);
-    const g = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
-    assert(g.status === 200 && g.data?.sub?.tier === 4 && g.data.sub.status === 'active', `grant ${g.status} ${g.error?.code} ${JSON.stringify(g.data)}`);
-    assert((await A.req('api/auth/me.php')).data.sub.tier === 4, 'A is tier 4 now');
+    // like api/admin/*, the subscription admin endpoints need the admin site's own sign-in (CONTRACT §15.4 (d)):
+    // the app login alone is refused, after the sign-in the grant works
+    const early = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
+    assert(early.status === 403 && early.error?.code === 'ADMIN_REAUTH', `grant with the app login only: ${early.status} ${early.error?.code}`);
     // the phase-6 address is a plain 404 now; the admin site is reached through its own sign-in
     assert((await B.req('admin.php', { headers: { Accept: 'text/html' } })).status === 404, 'the old admin.php answers 404');
     adminSite = await adminSignIn(B, userB.email);
+    const g = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });
+    assert(g.status === 200 && g.data?.sub?.tier === 4 && g.data.sub.status === 'active', `grant ${g.status} ${g.error?.code} ${JSON.stringify(g.data)}`);
+    assert((await A.req('api/auth/me.php')).data.sub.tier === 4, 'A is tier 4 now');
     const page = await B.req(adminSite + '?tab=sub', { headers: { Accept: 'text/html' } });
     assert(page.status === 200 && /구독 현황/.test(page.text) && /수동 부여/.test(page.text) && page.text.includes(userA.nickname), 'the admin site 구독 tab renders the subscription');
     assert(!/게임/.test(page.text), 'the admin site shows no "게임" wording');

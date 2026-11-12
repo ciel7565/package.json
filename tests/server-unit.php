@@ -47,11 +47,21 @@ check('Retractions::since — a full page moves the cursor only past what it ret
 
 // retractions are only needed while a game could still show the line: they go with the chat retention
 Tfm\Db::insert('chat_retractions', ['message_id' => 99, 'user_id' => null, 'created_at' => Tfm\Clock::ms() - 40 * 86400000]);
+// orders left 'created' for more than a week: an abandoned payment window (no payment_key) is removed; a claimed
+// confirmation (payment_key set, CONFIRMING) never got the gateway's answer — the customer may have paid, so it stays
+$old = Tfm\Clock::ms() - 8 * 86400000;
+foreach ([['unit-abandoned', ''], ['unit-claimed', 'pk_unit_claimed']] as $o) {
+    Tfm\Db::insert('orders', ['order_id' => $o[0], 'user_id' => 1, 'tier' => 2, 'amount' => 1000, 'kind' => 'first', 'status' => 'created',
+        'payment_key' => $o[1], 'toss_status' => $o[1] === '' ? '' : 'CONFIRMING', 'requested_at' => $old, 'created_at' => $old]);
+}
 $before = Retractions::since(0, 100)['messages'];
 Tfm\AdminOps::cleanup();
 $after = Retractions::since(0, 100)['messages'];
 check('AdminOps::cleanup — retractions older than the chat retention are removed, newer ones kept',
     in_array(99, $before, true) && !in_array(99, $after, true) && in_array(5, $after, true), 'before ' . json_encode($before) . ' after ' . json_encode($after));
+$left = array_column(Tfm\Db::all("SELECT order_id FROM orders WHERE order_id LIKE 'unit-%' ORDER BY order_id"), 'order_id');
+check('AdminOps::cleanup — a stale abandoned order is removed, a stale claimed confirmation (payment_key set) is kept for the operator',
+    $left === ['unit-claimed'], 'left ' . json_encode($left));
 
 // ------------------------------------------------------------------ schema v3: reports from before the framing fix
 // a v2 report without a message id kept the reporter's typed text as message_text (shown to admins as the target's

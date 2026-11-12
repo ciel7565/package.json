@@ -18,15 +18,37 @@ ServerSignature Off
 FileETag None
 LimitRequestBody 8388608
 
+# PHP upload limits for mod_php (XAMPP runs PHP as an Apache module, and mod_php never reads .user.ini — that file is
+# for PHP-FPM / CGI). The same values as .user.ini; inside IfModule, so a server without mod_php skips the block (a bare
+# php_value there would be an error). Needs AllowOverride Options, like the Options line above (XAMPP: All).
+<IfModule mod_php7.c>
+  php_value upload_max_filesize 6M
+  php_value post_max_size 8M
+  php_value max_file_uploads 2
+</IfModule>
+<IfModule mod_php.c>
+  php_value upload_max_filesize 6M
+  php_value post_max_size 8M
+  php_value max_file_uploads 2
+</IfModule>
+
 <IfModule mod_mime.c>
   AddType image/webp .webp
   AddType model/gltf-binary .glb
   AddType font/woff2 .woff2
 </IfModule>
 
-# small static error pages (carry the static headers below; no server signature)
-ErrorDocument 403 /e403.html
-ErrorDocument 404 /e404.html
+# small static error pages (carry the static headers below; no server signature). An ErrorDocument path is counted
+# from the web root, so a fixed "/e404.html" misses the pages of an installation in a sub-folder (XAMPP: htdocs/metaverse
+# → /metaverse/e404.html). TFM_BASEREL is the installation's folder ("" at the web root, "metaverse/" there), found by
+# the first rewrite rule below (Apache 2.4.13+ reads the line as an expression). Apache checks the access rules (the 403s
+# of private folders and leftovers) BEFORE rewriting, so this earlier line already names a one-level folder whose
+# e403.html is really there (htdocs/metaverse); where neither ran (no mod_setenvif / mod_rewrite) it is "/e403.html".
+<IfModule mod_setenvif.c>
+  SetEnvIfExpr "%{REQUEST_URI} =~ m#^/([^/]+/)# && -f '%{DOCUMENT_ROOT}/$1e403.html'" TFM_BASEREL=$1
+</IfModule>
+ErrorDocument 403 /%{reqenv:TFM_BASEREL}e403.html
+ErrorDocument 404 /%{reqenv:TFM_BASEREL}e404.html
 
 # ---------------------------------------------------------------- scanner bait → the honeypot (api/trap.php: 404 + log)
 # A real visitor never asks for these. Runs before the HTTPS redirect so a probe is trapped even over plain http.
@@ -34,6 +56,9 @@ ErrorDocument 404 /e404.html
 # the FilesMatch below denies (dot-files and *.bak are handled only here), so the deny never pre-empts the trap.
 <IfModule mod_rewrite.c>
   RewriteEngine On
+  # the installation's folder for the error pages above: REQUEST_URI minus the path below this folder (no rewrite)
+  RewriteCond %{REQUEST_URI}::$1 ^/(.*?)(.*)::\2$
+  RewriteRule ^(.*)$ - [E=TFM_BASEREL:%1]
   # TRACE / TRACK — best-effort refusal (the real switch is TraceEnable Off in httpd.conf)
   RewriteCond %{REQUEST_METHOD} ^(TRACE|TRACK)$ [NC]
   RewriteRule ^ - [F]

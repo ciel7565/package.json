@@ -52,8 +52,9 @@ const skipReason = (p) => {
   if (/(^|\/)node_modules(\/|$)/.test(p)) return 'node_modules/';
   if (/(^|\/)vendor(\/|$)/.test(p)) return 'composer vendor/';
   if (/(^|\/)test-output(\/|$)/.test(p)) return 'test-output/';
-  // hidden files and folders (tool state such as .omc/, .claude/) — except the .htaccess / .gitignore guards
-  if (/(^|\/)\.(?!htaccess$|gitignore$)[^/]+(\/|$)/.test(p)) return 'hidden tool state';
+  // hidden files and folders (tool state such as .omc/, .claude/) — except the .htaccess / .gitignore guards and the
+  // .user.ini that caps PHP upload sizes per folder (PHP-FPM / CGI read it; CONTRACT §15.7 #14)
+  if (/(^|\/)\.(?!htaccess$|gitignore$|user\.ini$)[^/]+(\/|$)/.test(p)) return 'hidden tool state';
   if (/\.sqlite(-wal|-shm|-journal)?$/.test(p)) return '*.sqlite';
   if (/install\.lock$/.test(p)) return 'install.lock';
   if (/config\.local\.php$/.test(p)) return 'config.local.php';
@@ -102,7 +103,7 @@ function walk(dir, base = dir, out = []) {
 // metaverse/admin.php is the 404 stub of the phase-6 address (copying a release over an old install replaces the old page);
 // the admin site itself is the admin/ folder (CONTRACT §15.4 — the operator may rename it after installing)
 const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/install.php', 'metaverse/admin.php', 'metaverse/admin/index.php', 'metaverse/admin/.htaccess',
-  'metaverse/admin/admin.css', 'metaverse/lib/Totp.php', 'metaverse/cli/admin-path.php', 'metaverse/.htaccess', 'metaverse/api/ping.php',
+  'metaverse/admin/admin.css', 'metaverse/lib/Totp.php', 'metaverse/cli/admin-path.php', 'metaverse/.htaccess', 'metaverse/.user.ini', 'metaverse/api/ping.php',
   'metaverse/api/sub/status.php', 'metaverse/database/schema.sql', 'metaverse/database/schema.sqlite.sql', 'metaverse/lib/compat.php',
   'metaverse/lib/pii-rules.json', 'metaverse/data/game-data.json', 'metaverse/data/.htaccess', 'metaverse/cli/tfm.php', 'docs/SERVER-INSTALL-KO.md', 'README.md', 'server/README-SERVER.md'];
 /** a shipped path that must never be in the release (secrets, locks, databases, sessions, logs, test suites, deps) */

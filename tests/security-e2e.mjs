@@ -13,7 +13,8 @@
 //   Their PHP ini is hostile on purpose (display_errors=1, expose_php=1): the application itself has to keep error
 //   text and version banners out of every answer.
 //   --apache    also starts Apache 2.4 + mod_php on 127.0.0.1:18780 over a private copy of the docroot (AllowOverride
-//               All, stock ServerTokens / ServerSignature / TraceEnable, the copy is also mounted as /metaverse/) and
+//               All, stock ServerTokens / ServerSignature / TraceEnable, the copy is also mounted as /metaverse/; on
+//               18781 the copy is a real sub-folder /htdocs/ of the document root, like XAMPP's htdocs/metaverse) and
 //               runs the .htaccess-dependent checks.
 //   --only      comma separated items (S01 … S16, S19)
 //   --json      writes [{item, check, status: pass|gap|skipped|info, severity, evidence, fixProposal, contract, mode}]
@@ -53,6 +54,7 @@ const DOCROOT = path.resolve(optv('--docroot') || path.join(ROOT, 'dist/metavers
 const PORT_BASE = Number(process.env.TFM_SEC_PORT_BASE) || 18710;
 const PHP_PORTS = Array.from({ length: 20 }, (_, i) => PORT_BASE + i);
 const APACHE_PORT = Number(process.env.TFM_SEC_APACHE_PORT) || 18780;
+const APACHE_SUB_PORT = APACHE_PORT + 1; // the same Apache, the copy as a real sub-folder of the document root
 const APACHE_MODULES = '/usr/lib/apache2/modules';
 const DRIVER = process.env.TFM_DB_DRIVER === 'mysql' ? 'mysql' : 'sqlite';
 const MY = { host: process.env.TFM_DB_HOST || '127.0.0.1', port: Number(process.env.TFM_DB_PORT || 33106), user: process.env.TFM_DB_USER || 'root', pass: process.env.TFM_DB_PASS || '' };
@@ -612,11 +614,19 @@ async function startApache() {
     mysqlRoot([`DROP DATABASE IF EXISTS \`${db.name}\``, `CREATE DATABASE \`${db.name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`]);
     DROP_DBS.add(db.name);
     Object.assign(env, { TFM_DB_DRIVER: 'mysql', TFM_DB_HOST: MY.host, TFM_DB_PORT: String(MY.port), TFM_DB_NAME: db.name, TFM_DB_USER: MY.user, TFM_DB_PASS: MY.pass });
+    // the planted config.local.php leftover overrides config.php, so its marker password would replace this run's
+    // database login and lock the instance out of its own database (every answer a 500 in MariaDB mode). The marker
+    // stays in the file — it only has to prove whether the file is ever served — the login is the run's.
+    fs.writeFileSync(path.join(htdocs, 'config/config.local.php'), "<?php\nif (!defined('TFM_BOOT')) { http_response_code(404); exit; }\n// TFMSEC-MARK-config-local\nreturn [];\n");
   }
   const mod = (id, file) => `LoadModule ${id}_module ${APACHE_MODULES}/${file}`;
+  // a second port where the same copy is a real sub-folder of the document root (/htdocs/ — like XAMPP's
+  // htdocs/metaverse): the Alias below maps /metaverse/ onto the document root itself, which hides any rule that only
+  // works at the web root (an ErrorDocument path, for one)
+  const subFree = await new Promise((res) => { const t = net.createServer(); t.once('error', () => res(false)); t.listen(APACHE_SUB_PORT, '127.0.0.1', () => t.close(() => res(true))); });
   const conf = [
     `ServerRoot "${tmp}"`, `PidFile "${tmp}/run/httpd.pid"`, `DefaultRuntimeDir "${tmp}/run"`, `Mutex file:${tmp}/run default`,
-    `Listen 127.0.0.1:${APACHE_PORT}`, 'ServerName 127.0.0.1',
+    `Listen 127.0.0.1:${APACHE_PORT}`, subFree ? `Listen 127.0.0.1:${APACHE_SUB_PORT}` : '', 'ServerName 127.0.0.1',
     // a stock distribution setup: whatever the application wants hidden it has to hide itself (.htaccess) or flag (health check)
     'ServerTokens OS', 'ServerSignature On', 'TraceEnable On',
     mod('mpm_prefork', 'mod_mpm_prefork.so'), mod('authz_core', 'mod_authz_core.so'), mod('authz_host', 'mod_authz_host.so'), mod('dir', 'mod_dir.so'), mod('mime', 'mod_mime.so'),
@@ -628,6 +638,7 @@ async function startApache() {
     '<FilesMatch "\\.php$">\n  SetHandler application/x-httpd-php\n</FilesMatch>',
     'php_flag display_errors On', 'php_flag html_errors On', 'php_value upload_max_filesize 6M', 'php_value post_max_size 8M',
     ...Object.entries(env).map(([k, v]) => `SetEnv ${k} "${v}"`),
+    subFree ? `<VirtualHost 127.0.0.1:${APACHE_SUB_PORT}>\n  DocumentRoot "${tmp}"\n</VirtualHost>` : '',
   ].filter(Boolean).join('\n') + '\n';
   fs.writeFileSync(path.join(tmp, 'httpd.conf'), conf);
   // detached: prefork signals its whole process group when it shuts down — that group must not be ours
@@ -650,6 +661,8 @@ async function startApache() {
     paths: [htdocs, tmp, ROOT], tmp,
     /** the same copy seen as a sub-folder installation */
     alias() { return { ...this, name: 'apache/metaverse', base: base + 'metaverse/', actors: {}, pings: this.pings }; },
+    /** the same copy as a real sub-folder of the document root (second port), or null when that port was busy */
+    subdir() { return subFree ? { ...this, name: 'apache/subdir', base: `http://127.0.0.1:${APACHE_SUB_PORT}/htdocs/`, actors: {}, pings: {} } : null; },
     log: () => { try { return fs.readFileSync(path.join(tmp, 'logs/error.log'), 'utf8'); } catch { return out; } },
     async stop() {
       CHILDREN.delete(child);
@@ -2216,6 +2229,31 @@ async function S11() {
     }
     assert(!bad.length, bad.slice(0, 3).join(' | '));
     return '5 error pages';
+  });
+  // CONTRACT §15.7 #11 / §15.4 — the documented XAMPP install is a sub-folder (htdocs/metaverse): the error pages work
+  // there too, and the old admin address still looks exactly like a page that is not there
+  await check('S11', 'Apache, installed in a real sub-folder (like htdocs/metaverse): a missing page and the old admin.php answer the site\'s own 404 page; error pages carry nosniff + a CSP and no server signature', { ...APACHE_MODE, sev: 'low', fix: 'Root .htaccess: the ErrorDocument paths follow the installation folder (not "/e404.html" at the web root), and nosniff is set on every 4xx / 5xx answer.' }, async () => {
+    const no = await ap();
+    if (no) return no;
+    const sub = a.subdir();
+    if (!sub) return skip(`port ${APACHE_SUB_PORT} is in use`);
+    const page = fs.readFileSync(path.join(a.docroot, 'e404.html'), 'utf8');
+    const bad = [];
+    for (const p of ['no-such-file-' + RUN, `api/no-such-${RUN}.php`, 'admin.php']) {
+      const r = await request(sub, p, { headers: HTML });
+      if (r.status !== 404 || r.text !== page) bad.push(`/htdocs/${p} → ${r.status}${r.status === 404 ? ' (not the site\'s e404.html)' : ''}`);
+    }
+    for (const p of ['no-such-file-' + RUN, 'lib/Core.php', 'data/', 'uploads/x.php', 'backup.sql']) {
+      const r = await request(sub, p, { headers: HTML });
+      const miss = [];
+      if (![403, 404].includes(r.status)) miss.push(`status ${r.status}`);
+      if (r.headers['x-content-type-options'] !== 'nosniff') miss.push('no nosniff');
+      if (!r.headers['content-security-policy']) miss.push('no CSP');
+      if (/<address>|Apache\/\d|Server at /i.test(r.text)) miss.push('server signature');
+      if (miss.length) bad.push(`/htdocs/${p} → ${r.status}: ${miss.join(', ')}`);
+    }
+    assert(!bad.length, bad.slice(0, 4).join(' | '));
+    return '3 missing pages = the site\'s e404.html · 5 error pages with nosniff + CSP, no signature';
   });
   // CONTRACT §15.7 #11 — no Server version (ServerTokens lives in httpd.conf: the app can only warn the operator)
   await check('S11', 'Apache: the Server header shows no version — or the health check tells the operator to set ServerTokens Prod', { ...APACHE_MODE, sev: 'low', fix: 'ServerTokens cannot be set from .htaccess: add a health / inspect entry (warn) when SERVER_SOFTWARE carries a version, and the httpd.conf line to the install guide.' }, async () => {

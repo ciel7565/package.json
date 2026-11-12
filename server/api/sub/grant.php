@@ -1,13 +1,16 @@
 <?php
 /**
- * POST api/sub/grant.php — admin only (the same actions as admin.php 구독 탭).
+ * POST api/sub/grant.php — admin only (the same actions as the admin site's 구독 탭).
  *   {userId, tier:2|3|4, days}  수동 부여 (schools, events) → {message, sub}
  *   {userId, revoke:true}       해지: back to tier 1 now        → {message, sub}
+ * Access: like api/admin/*, an admin whose session is elevated in the admin site (CONTRACT §15.4 (d)) — a paid tier for
+ * free must not be one stolen app cookie away; an app login alone gets 403 ADMIN_REAUTH.
  */
 declare(strict_types=1);
 
 require __DIR__ . '/../../lib/bootstrap.php';
 
+use Tfm\AdminGate;
 use Tfm\Api;
 use Tfm\Ctx;
 use Tfm\Subscription;
@@ -15,6 +18,7 @@ use Tfm\V;
 
 // JSON integers only: userId ≥ 1, tier 2–4 (INVALID_TIER), days 1–3650; revoke a real boolean
 Api::run(['method' => 'POST', 'admin' => true, 'rate' => 'admin'], function (Ctx $c): array {
+    AdminGate::requireApi($c);
     $b = $c->json(2048);
     V::keys($b, ['userId', 'tier', 'days', 'revoke']);
     $uid = Subscription::jsonInt(isset($b['userId']) ? $b['userId'] : null, 'userId', 1, V::INT_MAX);

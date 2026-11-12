@@ -5,6 +5,8 @@
 //                         up), 자동 갱신 구독 (토스) / 한 달 이용권 (1회 결제), 해지하기, the legal note. Easy mode asks the
 //                         parent gate (reason 'subscription') first; reachable only from 어른 메뉴 and the settings 체험 tab.
 //                         Local mode: the cards are disabled with 서버에 설치하면 구독할 수 있어요 + the install guide.
+//                         Server without 토스 keys (status.php mode 'unconfigured'): the cards are disabled with
+//                         결제 설정이 필요해요 (prepare.php would answer 503 PAYMENT_NOT_CONFIGURED).
 //   buy(tier, kind)       prepare.php → 토스 SDK (https://js.tosspayments.com/v2/standard, loaded on demand, server
 //                         mode only) requestPayment / requestBillingAuth → the browser comes back through
 //                         api/sub/return.php → index.html?sub=ok|fail. Mock mode (server TFM_TOSS_MOCK=1): a built-in
@@ -15,8 +17,8 @@
 //                         into G.state.sub and emits 'speed:changed'); keeps the HUD chip #hud-speed in sync.
 //   current() / tier()    the effective plan / tier (1..4); local mode is always 1.
 //   HUD: #hud-speed (hidden at tier 1): normal ⚡2×, easy ⚡ 2배 빨라요; pulses on speed:changed; 옹이 cheers once.
-//   ?sub=ok&tier=N → after login: status refresh + celebration + toast '⚡ N배 빠르게 시작!'; ?sub=fail&msg=… → a calm
-//   error. The query is cleaned with history.replaceState.
+//   ?sub=ok&tier=N → after login: status refresh + celebration + toast '⚡ N배 빠르게 시작!'; ?sub=fail&code=…&msg=… → a
+//   calm error (a cancel code: a calm info note). The query is cleaned with history.replaceState.
 // Security / kid safety: no prices on kid screens (the screen is behind the gate; the HUD chip shows no price); the
 // secret key never reaches the client (status.php sends the public clientKey only); every write is a same-origin JSON
 // POST with the CSRF token (G.net.request); no innerHTML with server text (textContent / G.ui.h); no inline handlers.
@@ -76,21 +78,28 @@
     const m = String(e?.message || '').trim();
     return m && m.length <= 120 && !/[<>{}]/.test(m) ? m : fallback;
   }
-  /** ?sub=ok|fail&tier=N&msg=… (api/sub/return.php): read once, clean the address and G.params */
+  /**
+   * ?sub=ok|fail&tier=N&code=…&msg=… (api/sub/return.php): read once, clean the address and G.params. The server maps the
+   * payment window's failure to a known code (or OTHER) and a fixed sentence (finding F11), so nothing the window sent
+   * is shown; the code only decides between a calm "canceled" note and the "not finished" message.
+   */
   function readReturn() {
     const P = G.params || new URLSearchParams(location.search);
     const v = P.get('sub');
     if (v !== 'ok' && v !== 'fail') return null;
     const tierN = parseInt(P.get('tier') || '', 10);
-    const r = { ok: v === 'ok', tier: Number.isInteger(tierN) ? clamp(tierN, 1, 4) : 0, msg: String(P.get('msg') || '').replace(/\s+/g, ' ').trim().slice(0, 120) };
+    const code = String(P.get('code') || '');
+    const r = { ok: v === 'ok', tier: Number.isInteger(tierN) ? clamp(tierN, 1, 4) : 0, code: /^[A-Z_]{1,60}$/.test(code) ? code : '', msg: String(P.get('msg') || '').replace(/\s+/g, ' ').trim().slice(0, 120) };
     try {
       const u = new URL(location.href);
-      for (const k of ['sub', 'tier', 'msg']) u.searchParams.delete(k);
+      for (const k of ['sub', 'tier', 'code', 'msg']) u.searchParams.delete(k);
       history.replaceState(history.state, '', u.pathname + (u.search || '') + u.hash);
     } catch (e) { /* file:// or a locked-down browser: the address stays, nothing else depends on it */ }
-    for (const k of ['sub', 'tier', 'msg']) { try { P.delete(k); } catch (e) { /* ignore */ } }
+    for (const k of ['sub', 'tier', 'code', 'msg']) { try { P.delete(k); } catch (e) { /* ignore */ } }
     return r;
   }
+  /** the server has no 토스 keys yet (api/sub/status.php mode 'unconfigured'): nothing can be bought until the operator adds them */
+  const UNCONFIGURED_KO = '운영자가 토스페이먼츠 키를 서버에 넣으면 구독할 수 있어요. 지금은 결제를 시작할 수 없어요.';
 
   const Sub = {
     name: 'subscription', order: 91, label: '구독·속도',
@@ -105,7 +114,7 @@
     init() {
       G.ui.onAction('subscription', () => this.open());
       this._ret = readReturn();
-      if (this._ret && !this._ret.ok) this._failToast(this._ret.msg);
+      if (this._ret && !this._ret.ok) this._failToast(this._ret.msg, this._ret.code);
       G.bus.on('game:login', () => { this._cheered = false; this._onLogin(); });
       G.bus.on('game:logout', () => { this.status = null; this.fetchedAt = 0; this._cheered = false; this._chip(); });
       G.bus.on('state:loaded', () => this._chip());
@@ -207,6 +216,7 @@
       const guest = isServer() && !server;
       const live = server && !!this.status && this.status.mode === 'live';
       const mockMode = server && this.mock();
+      const unconfigured = server && !!this.status && this.status.mode === 'unconfigured';
       // ---- current plan
       const nowCard = h('section', { class: `sub-now${tier > 1 ? ' is-fast' : ''}`, 'data-say': tier > 1 ? `지금 ${tier}배 빨라요` : '지금은 기본 속도예요' });
       const bigLabel = tier > 1 ? `⚡ ${tier}배 빨라요` : '기본 속도 (1배)';
@@ -236,9 +246,12 @@
           h('div', null, h('b', null, '계정으로 로그인하면 구독할 수 있어요'), h('p', null, '게스트 기록은 이 브라우저에만 있어요. 어른이 계정을 만들고 로그인한 뒤 구독해 주세요.'))));
       } else if (!this.status) {
         body.appendChild(h('p', { class: 'sub-loading dim small' }, '서버에서 구독 정보를 가져오는 중…'));
+      } else if (unconfigured) {
+        body.appendChild(h('div', { class: 'sub-note', role: 'note' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔧'),
+          h('div', null, h('b', null, '결제 설정이 필요해요'), h('p', null, UNCONFIGURED_KO))));
       }
       // ---- tier cards
-      const canBuy = server && !!this.status && !this._busy;
+      const canBuy = server && !!this.status && !unconfigured && !this._busy;
       const grid = h('div', { class: `sub-tiers${canBuy ? '' : ' is-off'}`, role: 'list' });
       for (const t of this.tiers()) {
         const isCur = tier === t.tier && tier > 1;
@@ -292,6 +305,7 @@
       if (kind !== 'billing') kind = 'card';
       if (this._busy) return false;
       if (!serverAccount()) { toast(isServer() ? '계정으로 로그인한 뒤에 구독할 수 있어요.' : '서버에 설치하면 구독할 수 있어요.', { type: 'info' }); return false; }
+      if (this.status && this.status.mode === 'unconfigured') { toast(UNCONFIGURED_KO, { type: 'info', easy: '아직 구독할 수 없어요. 어른에게 알려 줘요!' }); return false; }
       if (easyOn() && typeof G.easy?.gateStatus === 'function' && G.settings?.parentGate !== false && !G.easy.gateStatus('subscription')?.unlocked) {
         // the grown-up session ended while the screen was up (it closes with it, but a tap may race the close)
         toast('어른 확인이 끝났어요. 다시 열어 주세요.', { type: 'info' }); return false;
@@ -416,12 +430,14 @@
       };
       setTimeout(wait, 1400);
     },
-    _failToast(msg) {
+    _failToast(msg, code = '') {
       clearTimeout(this._retTimer);
+      const canceled = code === 'USER_CANCEL' || code === 'PAY_PROCESS_CANCELED';
       const show = () => {
         const ls = $('#loading-screen');
         if (ls && !ls.hidden) { this._retTimer = setTimeout(show, 800); return; }
-        toast(`결제가 끝나지 않았어요. ${msg || '결제창이 닫혔거나 승인되지 않았어요.'} 구독 화면에서 다시 할 수 있어요.`, { type: 'error', duration: 8000, easy: '결제가 안 됐어요. 어른에게 알려 줘요!' });
+        if (canceled) toast(`${msg || '결제를 취소했어요.'} 구독 화면에서 언제든 다시 할 수 있어요.`, { type: 'info', duration: 6000, easy: '결제를 그만뒀어요.' });
+        else toast(`결제가 끝나지 않았어요. ${msg || '결제창이 닫혔거나 승인되지 않았어요.'} 구독 화면에서 다시 할 수 있어요.`, { type: 'error', duration: 8000, easy: '결제가 안 됐어요. 어른에게 알려 줘요!' });
       };
       this._retTimer = setTimeout(show, 1200);
     },

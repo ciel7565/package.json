@@ -521,7 +521,18 @@ async function main() {
         const n = await app.req('api/admin/' + f);
         assert([403, 405].includes(n.status) && (n.status === 405 || n.error?.code === 'ADMIN_REAUTH'), `api/admin/${f} without elevation → ${n.status} ${n.error?.code}`);
       }
-      return `${files.length} endpoints: ${files.join(', ')}`;
+      // the subscription admin endpoints hand out a paid tier for free (grant / revoke) or charge stored cards (renew):
+      // the same elevation as api/admin/* — an app login alone is refused before anything changes
+      const subEps = [['api/sub/grant.php', { userId: admins.user.id, tier: 4, days: 1 }], ['api/sub/grant.php', { userId: admins.user.id, revoke: true }], ['api/sub/renew.php', {}]];
+      for (const [ep, body] of subEps) {
+        const n = await app.req(ep, { json: body });
+        assert(n.status === 403 && n.error?.code === 'ADMIN_REAUTH', `${ep} admin without elevation → ${n.status} ${n.error?.code}`);
+      }
+      for (const [ep, body] of subEps) {
+        const y = await b1.req(ep, { json: body });
+        assert(y.status === 200 && y.json?.success === true, `${ep} elevated → ${y.status} ${y.error?.code}`);
+      }
+      return `${files.length} endpoints: ${files.join(', ')} · sub/grant · sub/renew`;
     });
     await step('S06', 'every tab works for the elevated admin without JavaScript; each response carries the lock headers; links never name the folder', async () => {
       const home = await b1.req(ADM);

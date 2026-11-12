@@ -129,8 +129,9 @@ final class ConfigAudit
         try {
             $keysConfigured = Toss::keysConfigured();
             $mock = $on(Config::rawGet('toss.mock', false)) || Config::rawGet('toss.mock', false) === true;
-            $add('toss_keys', '결제 키(토스페이먼츠)', $keysConfigured ? 'ok' : ($mock ? 'warn' : 'warn'), $keysConfigured ? '설정됨' : '문서용 기본 키',
-                $keysConfigured ? '' : ($mock ? '모의 결제 중이에요. 실제 결제는 토스 개발자센터의 키를 넣고 mock 을 끄세요.' : '실제 결제를 받으려면 토스 키를 TFM_TOSS_CLIENT_KEY / TFM_TOSS_SECRET_KEY 로 넣으세요 (지금은 문서용 키라 "설정 필요").'));
+            // there is no built-in (documentation) key any more: without the operator's keys payments are 'unconfigured'
+            $add('toss_keys', '결제 키(토스페이먼츠)', $keysConfigured ? 'ok' : 'warn', $keysConfigured ? '설정됨' : '설정 안 됨 (키 없음)',
+                $keysConfigured ? '' : ($mock ? '모의 결제 중이에요. 실제 결제는 토스 개발자센터의 키를 넣고 mock 을 끄세요.' : '키가 없어서 구독 결제를 받을 수 없어요 (구독 화면에 "결제 설정이 필요해요"가 보여요). 토스페이먼츠 개발자센터의 키를 TFM_TOSS_CLIENT_KEY / TFM_TOSS_SECRET_KEY 나 config.local.php 에 넣으세요.'));
         } catch (\Throwable $e) { /* Toss not loaded */ }
 
         // ---------------------------------------------------------------- DB runtime account (read the config only; Db::accountAudit for the live side)

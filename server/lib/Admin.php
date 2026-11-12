@@ -292,8 +292,8 @@ final class Health
         $mock = Toss::mock();
         $keys = Toss::keysConfigured();
         $live = Toss::liveKeys();
-        $this->add('app', 'toss_mode', '구독 결제 모드', $mock ? 'warn' : ($keys ? 'ok' : 'warn'), $mock ? '모의 결제(mock)' : ($live ? '실결제(live 키)' : ($keys ? '가맹점 테스트 키' : '문서용 테스트 키')),
-            $mock ? '테스트·시연용이에요. 실제 결제는 config 의 toss.mock 을 false 로 두고 토스 키를 넣으세요.' : ($keys ? '' : '토스페이먼츠 개발자센터에서 받은 키를 TFM_TOSS_CLIENT_KEY / TFM_TOSS_SECRET_KEY 로 넣어 주세요 (지금은 문서용 키).'));
+        $this->add('app', 'toss_mode', '구독 결제 모드', $mock ? 'warn' : ($keys ? 'ok' : 'warn'), $mock ? '모의 결제(mock)' : ($live ? '실결제(live 키)' : ($keys ? '가맹점 테스트 키' : '결제 설정 필요 (키 없음)')),
+            $mock ? '테스트·시연용이에요. 실제 결제는 config 의 toss.mock 을 false 로 두고 토스 키를 넣으세요.' : ($keys ? '' : '토스페이먼츠 개발자센터에서 받은 키를 TFM_TOSS_CLIENT_KEY / TFM_TOSS_SECRET_KEY 나 config.local.php 에 넣어 주세요. 지금은 키가 없어서 구독 결제를 받을 수 없어요.'));
         $this->add('app', 'toss_curl', '결제 서버 연결(curl)', function_exists('curl_init') ? 'ok' : ($mock ? 'warn' : 'fail'), function_exists('curl_init') ? '가능' : '없음', function_exists('curl_init') ? '' : 'php.ini 에서 extension=curl 을 켜 주세요.');
         // kid safety: the personal-information filter must load its whole rule list (lib/pii-rules.json, generated from
         // the client by tests/pii-sync.mjs), mask the canonical disguises and leave ordinary kid sentences alone
@@ -615,7 +615,10 @@ final class AdminOps
             'audit_log' => Db::exec('DELETE FROM audit_log WHERE created_at < ?', [$now - (int) Config::get('retention.audit_days', 180) * 86400000]),
             'chat_messages' => Db::exec('DELETE FROM chat_messages WHERE created_at < ?', [$now - (int) Config::get('chat.retention_days', 30) * 86400000]),
             'chat_retractions' => Db::exec('DELETE FROM chat_retractions WHERE created_at < ?', [$now - (int) Config::get('chat.retention_days', 30) * 86400000]),
-            'stale_orders' => Db::exec("DELETE FROM orders WHERE status = 'created' AND requested_at < ?", [$now - 7 * 86400000]),
+            // abandoned payment windows only: a 'created' order that carries a payment_key is a claimed confirmation whose
+            // gateway answer never came (Subscription::claimOrder) — the customer may have paid, so the row stays for the
+            // operator (토스 상점관리자) and the next status check looks it up
+            'stale_orders' => Db::exec("DELETE FROM orders WHERE status = 'created' AND payment_key = '' AND requested_at < ?", [$now - 7 * 86400000]),
             'log_files' => Log::cleanup(),
             'sessions' => is_dir(Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions') ? Session::gcAnonymous(Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions', (int) Config::get('session.idle_timeout', 7200)) : 0,
         ];

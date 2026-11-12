@@ -19,8 +19,9 @@
  *   - data/ (DB·로그·세션·비밀키)는 웹에서 직접 열리면 안 됩니다. Apache 는 .htaccess 로 막혀 있고,
  *     Nginx 는 README-SERVER.md 의 location 규칙을 추가하세요. 가장 안전한 방법은 TFM_DATA_DIR 로
  *     웹 루트 밖(예: C:\xampp\metaverse-data)을 지정하는 것입니다.
- *   - 관리자 계정: security.admin_emails 에 이메일을 넣거나, 관리자가 없을 때 이 PC(localhost)에서
- *     admin.php 로 접속해 "관리자로 지정"을 누르거나, CLI: php cli/tfm.php promote 이메일
+ *   - 관리자 계정: 설치 마법사의 첫 계정, 또는 CLI: php cli/tfm.php promote 이메일. 관리자가 한 명도 없을 때는
+ *     관리자 페이지(admin/ 폴더)에서 "관리자로 지정"을 할 수 있는데, 서버 PC 에서만 볼 수 있는 한 번용 설치 코드
+ *     (php cli/tfm.php setup-code)가 꼭 있어야 해요. 이메일 목록만으로 관리자가 되지는 않아요. 예전 주소 admin.php 는 언제나 404.
  */
 declare(strict_types=1);
 
@@ -77,9 +78,12 @@ return [
         // 리버스 프록시(로드밸런서) 뒤에 있을 때만 그 IP 를 적으세요. 그 외에는 X-Forwarded-* 헤더를 믿지 않습니다.
         'trusted_proxies'           => $env('TFM_TRUSTED_PROXIES', []),
         'hsts'                      => $env('TFM_HSTS', true),          // https 일 때만 전송
-        // 이 이메일로 가입/로그인한 계정은 관리자(admin) 권한을 받습니다.
+        // 예전 설정: 이 목록의 이메일로 가입/로그인하면 관리자로 올렸지만, 지금은 아무 권한도 주지 않아요 (이메일 주인이
+        //   맞는지 확인할 방법이 없어, 먼저 가입한 사람이 관리자가 될 수 있었어요). 비워 두세요 — 점검 화면이 알려 줘요.
+        //   관리자는 설치 마법사의 첫 계정이나 `php cli/tfm.php promote 이메일` 로만 지정해요.
         'admin_emails'              => $env('TFM_ADMIN_EMAILS', []),
-        // 관리자가 한 명도 없을 때, 이 서버 PC(127.0.0.1/::1)에서만 admin.php 로 첫 관리자 지정 허용
+        // 관리자가 한 명도 없을 때 관리자 페이지에서 첫 관리자를 지정할 수 있게 해요. 서버 PC 에서만 읽을 수 있는 한 번용
+        //   설치 코드(php cli/tfm.php setup-code)가 꼭 필요해요 (접속 주소가 localhost 인지는 믿지 않아요). false = 이 기능 끄기.
         'allow_localhost_bootstrap' => $env('TFM_LOCAL_BOOTSTRAP', true),
         // 출처 검사: 브라우저가 보내는 Origin/Sec-Fetch-Site 가 다른 사이트이면 상태 변경 요청 거부
         'check_origin'              => $env('TFM_CHECK_ORIGIN', true),
