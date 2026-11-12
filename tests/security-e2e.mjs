@@ -1340,6 +1340,42 @@ async function S04() {
     assert(reportShown, 'the reports are not visible on any admin tab (cannot judge the escaping)');
     return `${tabs.length} tabs: payloads only as &lt;…&gt; text`;
   });
+  // CONTRACT §15.7 #4 (lens: IDOR on another player's chat line) — a report may only act on a message the reporter
+  // could actually receive: a 'local' line is delivered only to players within chat.local_radius of the sender
+  // (chat/list.php), so three far-away accounts must not be able to silence a line they were never shown.
+  await check('S04', 'chat/report: a \'local\' message cannot be auto-hidden by accounts that were never in range to receive it', { sev: 'medium', fix: 'In chat/report.php, for a known local message require the reporter\'s recent presence within chat.local_radius of the message\'s stored x/z (the same test chat/list.php applies) before the report counts; keep an admin override.' }, async () => {
+    const far = { x: 250, z: 250 }, near = { x: -250, z: -250 };
+    // A stands at `far` and posts a 'local' line there (a letters-only tag: a numeric one would be PII-masked to the
+    // same token, and the two lines would look like a duplicate repeat to chat/send)
+    const postLocal = async (pos, tag) => {
+      await A.json('api/presence/update.php', { x: pos.x, y: 0, z: pos.z });
+      const r = await A.json('api/chat/send.php', { text: `주변 메시지 ${tag}`, channel: 'local' });
+      assert(r.status === 200 && r.data && r.data.message, `local send → ${r.status} ${(r.error && r.error.code) || ''}`);
+      await sleep(1100);
+      return Number(r.data.message.id);
+    };
+    const hidden = (id) => Number(dbQuery(s, 'SELECT hidden FROM chat_messages WHERE id = ?', [id])[0].hidden);
+    const report = async (c, id) => c.json('api/chat/report.php', { messageId: id, reason: 'abuse' });
+    // three fresh accounts far away (at `near`, ~700 m from the line) try to hide it
+    const id1 = await postLocal(far, `nearA${TAG}`);
+    for (let i = 0; i < 3; i++) {
+      const r = await newUser(s, 'Far');
+      await r.json('api/presence/update.php', { x: near.x, y: 0, z: near.z });
+      const rep = await report(r, id1);
+      assert(rep.status === 200 || isCleanError(rep), `far report → ${rep.status}`);
+    }
+    assert(hidden(id1) === 0, 'a local line was auto-hidden by three accounts that were never in range to see it');
+    // positive control: three accounts standing WITH the sender (eligible receivers) still hide a line as designed
+    const id2 = await postLocal(far, `nearB${TAG}`);
+    for (let i = 0; i < 3; i++) {
+      const r = await newUser(s, 'Near');
+      await r.json('api/presence/update.php', { x: far.x, y: 0, z: far.z });
+      const rep = await report(r, id2);
+      assert(rep.status === 200, `near report → ${rep.status} ${(rep.error && rep.error.code) || ''}`);
+    }
+    assert(hidden(id2) === 1, 'three in-range reporters did not auto-hide the line (the moderation itself is broken)');
+    return 'far-away reporters cannot hide a local line; in-range reporters still can';
+  });
   // CONTRACT §15.7 #4 — nothing reflected raw by the admin page
   await check('S04', 'admin page: payloads in every query parameter are never reflected raw', { sev: 'high', fix: 'Keep e() / whitelists for tab, q, p, ev, sev, uid, show, before and every new parameter.' }, async () => {
     const { c, entry, page } = await adminBrowser(s);

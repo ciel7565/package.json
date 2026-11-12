@@ -15,6 +15,7 @@ use Tfm\ChatFilter;
 use Tfm\Config;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Presence;
 use Tfm\Retractions;
 use Tfm\Users;
 use Tfm\V;
@@ -35,7 +36,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function
     $mid = V::has($b, 'messageId') ? V::id($b['messageId'], 'messageId') : 0;
     $tid = V::has($b, 'targetId') ? V::id($b['targetId'], 'targetId') : 0;
     $text = ChatFilter::maskPII(Users::cleanText(V::has($b, 'text') ? V::str($b['text'], 'text', 300) : '', 300));
-    $msg = $mid > 0 ? Db::one('SELECT id, user_id, nickname, text FROM chat_messages WHERE id = ?', [$mid]) : null;
+    $msg = $mid > 0 ? Db::one('SELECT id, user_id, nickname, text, channel, x, z FROM chat_messages WHERE id = ?', [$mid]) : null;
     if ($msg) { $tid = (int) $msg['user_id']; $target = (string) $msg['nickname']; $text = (string) $msg['text']; }
     elseif ($tid > 0) { $tu = Users::byId($tid); $tid = $tu ? (int) $tu['id'] : 0; if ($tu) $target = (string) $tu['nickname']; }
     elseif ($target !== '') { $tu = Users::byNickname($target); $tid = $tu ? (int) $tu['id'] : 0; }
@@ -43,6 +44,18 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_report'], function
     // an unknown target name is free text typed by the reporter: admins never see personal information in it either
     if ($tid === 0) $target = ChatFilter::maskPII($target);
     if ($tid === $c->uid()) throw new ApiException(400, 'SELF_REPORT', '자기 자신은 신고할 수 없어요.');
+    // IDOR guard (another player's chat line): a 'local' line reaches only players within chat.local_radius of the
+    // sender (chat/list.php never hands it to anyone else), so only someone who could actually have received it may
+    // report it. Otherwise three accounts could take any id and auto-hide a line they were never shown — a line aimed
+    // at one child included. The reporter's own recent presence must be in range; admins moderate freely.
+    if ($msg && (string) $msg['channel'] === 'local' && !$c->isAdmin()) {
+        $mx = $msg['x'];
+        $mz = $msg['z'];
+        $pos = Presence::position($c->uid(), $c->now);
+        $radius = (float) Config::get('chat.local_radius', 30);
+        $inRange = $pos !== null && $mx !== null && $mz !== null && hypot((float) $mx - $pos['x'], (float) $mz - $pos['z']) <= $radius;
+        if (!$inRange) throw new ApiException(403, 'REPORT_NOT_VISIBLE', '주변에서 받은 메시지만 신고할 수 있어요.');
+    }
     // without a message the server knows, the "quote" is what the REPORTER typed: it never becomes the target's message
     // (admins would read it as the target's words), it is kept in the memo, marked as unverified
     if (!$msg && $text !== '') {
