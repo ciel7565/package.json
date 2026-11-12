@@ -160,19 +160,63 @@ final class Installer
         return (string) preg_replace('/password[^,;]*/i', 'password …', $m);
     }
 
-    /** config/config.local.php written atomically (temp file + rename), with a PHP exit guard like every private file */
+    /**
+     * config/config.local.php replaced in one step (temp file + rename, mode 0600 where the OS has modes), with a PHP
+     * exit guard like every private file. The whole array is written; mergeLocalConfig() changes single values.
+     */
     public static function writeConfig(array $local): void
     {
         $file = self::configPath();
-        $php = "<?php\n// 전통발효체험관 메타버스 — install.php 가 만든 설정 (" . gmdate('c') . ")\n"
+        $php = "<?php\n// 전통발효체험관 메타버스 — 설치 마법사와 관리 명령이 쓰는 설정 (" . gmdate('c') . ")\n"
             . "// 비밀번호와 결제 키가 들어 있어요: config/.htaccess 가 웹 접근을 막고, 공개 저장소에 올리면 안 돼요.\n"
             . "// 값을 바꾼 뒤에는 새로고침만 하면 돼요 (캐시 없음).\n"
             . "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn " . var_export($local, true) . ";\n";
-        $tmp = $file . '.' . bin2hex(random_bytes(4)) . '.tmp';
-        if (file_put_contents($tmp, $php, LOCK_EX) === false) throw new ApiException(500, 'CONFIG_WRITE', 'config/config.local.php 를 쓸 수 없어요 (config 폴더 쓰기 권한).');
-        if (!@rename($tmp, $file)) { @unlink($tmp); throw new ApiException(500, 'CONFIG_WRITE', 'config/config.local.php 를 쓸 수 없어요.'); }
-        @chmod($file, 0640);
-        $check = @include $file;
-        if (!is_array($check)) throw new ApiException(500, 'CONFIG_WRITE', 'config/config.local.php 를 다시 읽지 못했어요.');
+        try {
+            PrivateFile::write($file, $php);
+        } catch (\RuntimeException $e) {
+            throw new ApiException(500, 'CONFIG_WRITE', 'config/config.local.php 를 쓸 수 없어요 (config 폴더 쓰기 권한).');
+        }
+        if (self::readLocalConfig() !== $local) throw new ApiException(500, 'CONFIG_WRITE', 'config/config.local.php 를 다시 읽지 못했어요.');
+    }
+
+    /**
+     * The array config/config.local.php returns now ([] when there is no file) — from the disk, not from Config's
+     * per-request copy. A file that exists but does not return an array (hand-written, damaged) is an error: it is
+     * never treated as empty, because the next write would then throw its contents away.
+     */
+    public static function readLocalConfig(): array
+    {
+        $file = self::configPath();
+        clearstatcache(true, $file);
+        if (!is_file($file)) return [];
+        $cur = PrivateFile::load($file);
+        if (!is_array($cur)) throw new ApiException(500, 'CONFIG_READ', 'config/config.local.php 를 읽지 못했어요 (배열을 돌려주는 PHP 파일이어야 해요). 파일을 확인한 뒤 다시 해 주세요.');
+        return $cur;
+    }
+
+    /**
+     * Change values in config/config.local.php: the current array is read, $patch is merged in (arrays with names
+     * merge key by key, lists and plain values are replaced — the rule Config uses for config.php + config.local.php)
+     * and the file is replaced in one step. Config::get() returns the new values right away.
+     */
+    public static function mergeLocalConfig(array $patch): void
+    {
+        $lock = @fopen(Config::dataDir() . DIRECTORY_SEPARATOR . '.config.lock', 'c');
+        if ($lock) flock($lock, LOCK_EX);
+        try {
+            self::writeConfig(self::deepMerge(self::readLocalConfig(), $patch));
+        } finally {
+            if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+        }
+        Config::reset();
+    }
+
+    private static function deepMerge(array $a, array $b): array
+    {
+        foreach ($b as $k => $v) {
+            if (is_array($v) && isset($a[$k]) && is_array($a[$k]) && !Arr::isList($v) && !Arr::isList($a[$k])) $a[$k] = self::deepMerge($a[$k], $v);
+            else $a[$k] = $v;
+        }
+        return $a;
     }
 }

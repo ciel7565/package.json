@@ -14,11 +14,26 @@
 declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
-$tmp = sys_get_temp_dir() . '/tfm-secdata-' . bin2hex(random_bytes(6));
+/** copy a directory tree (the server sources are ~1 MB) */
+function copyTree(string $from, string $to): void
+{
+    if (!is_dir($to)) mkdir($to, 0700, true);
+    foreach (scandir($from) ?: [] as $f) {
+        if ($f === '.' || $f === '..') continue;
+        if (is_dir("$from/$f")) copyTree("$from/$f", "$to/$f");
+        elseif (!preg_match('/\.sqlite(-wal|-shm)?$|config\.local\.php$|secret\.php$|install\.lock$/', $f)) copy("$from/$f", "$to/$f");
+    }
+}
+// A private copy of the server tree: the installer checks write config/config.local.php and rename files, which must
+// never happen inside the repository. The data directory is separate (like TFM_DATA_DIR outside the web root).
+$root = sys_get_temp_dir() . '/tfm-secdata-' . bin2hex(random_bytes(6));
+$srv = $root . '/srv';
+$tmp = $root . '/data';
 mkdir($tmp, 0700, true);
+copyTree(__DIR__ . '/../server', $srv);
 putenv("TFM_DATA_DIR=$tmp");
 putenv('TFM_TOSS_MOCK=1');
-require __DIR__ . '/../server/lib/bootstrap.php';
+require $srv . '/lib/bootstrap.php';
 
 $failed = 0;
 /** $test returns true (pass), false or a string (fail + detail); a thrown error is a fail with its message */
@@ -141,6 +156,48 @@ check('Crypto::needsReseal — true for non-empty legacy plaintext, false for an
 check('Crypto::seal — a 158-character key still fits a VARCHAR(255) column; fits() tells before it is stored', function () {
     return strlen(Tfm\Crypto::seal(str_repeat('k', 158))) <= 255 && Tfm\Crypto::fits(str_repeat('k', 158), 255) === true && Tfm\Crypto::fits(str_repeat('k', 159), 255) === false;
 });
+
+// ------------------------------------------------------------------ Installer: config/config.local.php (items 1, 21)
+$cfgFile = $srv . '/config/config.local.php';
+check('Installer::mergeLocalConfig — creates config.local.php with the patch; Config sees it at once', function () use ($cfgFile) {
+    if (is_file($cfgFile)) return 'the private copy already has a config.local.php';
+    Tfm\Installer::mergeLocalConfig(['security' => ['admin_dir' => 'manage-7f3a']]);
+    return is_file($cfgFile) && Tfm\Config::get('security.admin_dir') === 'manage-7f3a';
+});
+check('Installer::mergeLocalConfig — deep merge: other keys and sibling keys stay, plain values and lists are replaced', function () {
+    Tfm\Installer::mergeLocalConfig(['db' => ['mysql' => ['username' => 'tfm_ab12cd34', 'password' => 'p1']], 'security' => ['admin_ip_allowlist' => ['10.0.0.1', '10.0.0.2']]]);
+    Tfm\Installer::mergeLocalConfig(['db' => ['mysql' => ['password' => 'p2']], 'security' => ['admin_ip_allowlist' => ['10.0.0.9']]]);
+    $c = Tfm\Installer::readLocalConfig();
+    return $c['security']['admin_dir'] === 'manage-7f3a' && $c['db']['mysql'] === ['username' => 'tfm_ab12cd34', 'password' => 'p2']
+        && $c['security']['admin_ip_allowlist'] === ['10.0.0.9'] && Tfm\Config::get('db.mysql.password') === 'p2';
+});
+check('Installer::mergeLocalConfig — the file is a guarded PHP file, mode 0600, no temp file left in config/', function () use ($cfgFile, $srv) {
+    $raw = (string) file_get_contents($cfgFile);
+    if (strpos($raw, '<?php') !== 0 || strpos($raw, "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }") === false) return 'no PHP guard';
+    clearstatcache();
+    if (DIRECTORY_SEPARATOR !== '\\' && (fileperms($cfgFile) & 0777) !== 0600) return sprintf('mode %o', fileperms($cfgFile) & 0777);
+    $left = array_values(array_filter(scandir($srv . '/config') ?: [], function ($f) { return (bool) preg_match('/tmp|\.read-/', $f); }));
+    return $left === [] ? true : 'left: ' . implode(', ', $left);
+});
+check('Installer::mergeLocalConfig — a config.local.php that does not return an array is never overwritten (CONFIG_READ)', function () use ($cfgFile) {
+    $good = (string) file_get_contents($cfgFile);
+    file_put_contents($cfgFile, "<?php\nif (!defined('TFM_BOOT')) { http_response_code(404); exit; }\n\$handWritten = ['db' => ['driver' => 'mysql']];\n");
+    $refused = throwsApi(function () { Tfm\Installer::mergeLocalConfig(['security' => ['admin_dir' => 'x']]); }, 'CONFIG_READ');
+    $kept = strpos((string) file_get_contents($cfgFile), '$handWritten') !== false;
+    file_put_contents($cfgFile, $good);
+    return $refused && $kept;
+});
+check('Installer::writeConfig — still writes the whole array (as before), now 0600', function () use ($cfgFile) {
+    $cur = Tfm\Installer::readLocalConfig();
+    $cur['security']['admin_dir'] = 'admin';
+    Tfm\Installer::writeConfig($cur);
+    Tfm\Config::reset();
+    clearstatcache();
+    return Tfm\Installer::readLocalConfig() === $cur && Tfm\Config::get('security.admin_dir') === 'admin' && (DIRECTORY_SEPARATOR === '\\' || (fileperms($cfgFile) & 0777) === 0600);
+});
+// the following sections start from a clean local configuration (SQLite / the environment's MariaDB, mock payments)
+@unlink($cfgFile);
+Tfm\Config::reset();
 
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all security-data unit checks passed" : "✖ $failed check(s) failed") . PHP_EOL;

@@ -62,6 +62,29 @@ final class PrivateFile
         if (function_exists('opcache_invalidate')) @opcache_invalidate($file, true);
     }
 
+    /**
+     * What a PHP file that `return`s a value returns — exactly what is on the disk. An opcode cache can hand out the
+     * previous version of a file that was rewritten a moment ago (or for good when it is told not to check
+     * timestamps); a key read from a stale copy would be generated twice. So an array result is compared with the
+     * file text, and when they differ the text is loaded once more through a private copy with a new name, which no
+     * cache can know.
+     */
+    public static function load(string $file)
+    {
+        self::forget($file);
+        $raw = @file_get_contents($file);
+        $v = require $file;
+        if (!is_string($raw) || (is_array($v) && strpos($raw, 'return ' . var_export($v, true) . ';') !== false)) return $v;
+        $copy = dirname($file) . DIRECTORY_SEPARATOR . '.read-' . bin2hex(random_bytes(8)) . '.php';
+        if (@file_put_contents($copy, $raw, LOCK_EX) === false) return $v;
+        @chmod($copy, 0600);
+        try {
+            return require $copy;
+        } finally {
+            @unlink($copy);
+        }
+    }
+
     private static function keepOwner(string $tmp, array $prev): void
     {
         $mine = @fileowner($tmp);
@@ -101,6 +124,12 @@ final class Secrets
         return self::$cache = self::load($file);
     }
 
+    private static function load(string $file): array
+    {
+        $s = PrivateFile::load($file);
+        return is_array($s) ? $s : [];
+    }
+
     /** the value of $key; when it is missing it is made with $make() and stored (once, even with parallel requests) */
     public static function ensure(string $key, callable $make): string
     {
@@ -130,30 +159,6 @@ final class Secrets
         } finally {
             if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
         }
-    }
-
-    /**
-     * Load the array a secrets file returns — exactly what is on the disk. An opcode cache can hand out the previous
-     * version of a file that was rewritten a moment ago (or for good when it is told not to check timestamps); a key
-     * read from a stale copy would be generated twice. So the result is compared with the file text, and when they
-     * differ the text is loaded once more through a private copy with a new name, which no cache can know.
-     */
-    private static function load(string $file): array
-    {
-        PrivateFile::forget($file);
-        $raw = @file_get_contents($file);
-        $s = require $file;
-        if (!is_array($s)) $s = [];
-        if (!is_string($raw) || strpos($raw, 'return ' . var_export($s, true) . ';') !== false) return $s;
-        $copy = dirname($file) . DIRECTORY_SEPARATOR . '.read-' . bin2hex(random_bytes(8)) . '.php';
-        if (@file_put_contents($copy, $raw, LOCK_EX) === false) return $s;
-        @chmod($copy, 0600);
-        try {
-            $again = require $copy;
-        } finally {
-            @unlink($copy);
-        }
-        return is_array($again) ? $again : $s;
     }
 
     private static function render(array $s): string
