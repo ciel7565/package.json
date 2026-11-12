@@ -42,7 +42,7 @@
  */
 declare(strict_types=1);
 
-if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+if (PHP_SAPI !== 'cli') { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 require __DIR__ . '/../lib/bootstrap.php';
 
