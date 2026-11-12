@@ -72,9 +72,11 @@ final class Subscription
         if ($status === 'active' && $exp > $now) return $row;
         $uid = (int) $row['user_id'];
         $auto = (int) $row['auto_renew'] === 1 && (string) $row['billing_key'] !== '';
-        if ($auto && (int) $row['checked_at'] + self::LAZY_INTERVAL_MS < $now) {
-            Db::exec('UPDATE subscriptions SET checked_at = ? WHERE user_id = ?', [$now, $uid]);
-            try { self::renewOne($row, $now, false); } catch (\Throwable $e) { Log::error('SUB', 'lazy renewal failed: ' . $e->getMessage(), ['uid' => $uid]); }
+        // finding F5: the page load fires me / get / status at once — exactly one of them may try the renewal. The claim is
+        // one conditional UPDATE on the checked_at value this request read; the losers carry on with the stored state.
+        if ($auto && (int) $row['checked_at'] + self::LAZY_INTERVAL_MS < $now
+            && Db::exec('UPDATE subscriptions SET checked_at = ? WHERE user_id = ? AND checked_at = ?', [$now, $uid, (int) $row['checked_at']]) === 1) {
+            try { self::renewOne($row, $now, false); } catch (\Throwable $e) { Log::error('SUB', 'lazy renewal failed: ' . get_class($e), ['uid' => $uid]); }
             $fresh = self::row($uid);
             if ($fresh) $row = $fresh;
             $status = (string) $row['status'];
@@ -146,21 +148,111 @@ final class Subscription
         return $o;
     }
 
-    /** store what 토스 answered for an order (never the secret key; the raw object is kept for the admin) */
-    private static function finishOrder(string $orderId, string $status, array $payment, int $now): void
+    /**
+     * Store what 토스 answered for an order (never the secret key; the raw object is kept for the admin). Finding F6: only
+     * a `created` order moves (and, with $claim, only the confirmation that claimed it), so a late or duplicate request
+     * can never turn a paid order into a failed one. Returns whether this call moved the order.
+     */
+    private static function finishOrder(string $orderId, string $status, array $payment, int $now, ?string $claim = null): bool
     {
         $receipt = isset($payment['receipt']) && is_array($payment['receipt']) && isset($payment['receipt']['url']) && is_string($payment['receipt']['url']) ? $payment['receipt']['url'] : '';
         $raw = json_encode($payment, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
-        Db::exec('UPDATE orders SET status = ?, payment_key = ?, method = ?, receipt_url = ?, toss_status = ?, raw = ?, approved_at = ? WHERE order_id = ?', [
+        $params = [
             $status,
-            mb_substr((string) (isset($payment['paymentKey']) && is_string($payment['paymentKey']) ? $payment['paymentKey'] : ''), 0, 200),
+            mb_substr((string) (isset($payment['paymentKey']) && is_string($payment['paymentKey']) ? $payment['paymentKey'] : ($claim !== null ? $claim : '')), 0, 200),
             mb_substr((string) (isset($payment['method']) && is_string($payment['method']) ? $payment['method'] : ''), 0, 40),
             mb_substr($receipt, 0, 500),
             mb_substr((string) (isset($payment['status']) && is_string($payment['status']) ? $payment['status'] : ''), 0, 40),
             is_string($raw) ? mb_substr($raw, 0, 60000) : '',
             $status === 'confirmed' ? $now : 0,
             $orderId,
-        ]);
+        ];
+        $sql = "UPDATE orders SET status = ?, payment_key = ?, method = CASE WHEN ? <> '' THEN ? ELSE method END, receipt_url = ?, toss_status = ?, raw = ?, approved_at = ? WHERE order_id = ? AND status = 'created'";
+        array_splice($params, 2, 0, [$params[2]]); // the method appears twice (keep the prepared card / billing word when 토스 sends none)
+        if ($claim !== null) { $sql .= ' AND payment_key = ?'; $params[] = $claim; }
+        return Db::exec($sql, $params) === 1;
+    }
+
+    /**
+     * §15.7 #15 / finding F10: what the gateway answered must be exactly this order — status DONE, totalAmount present and
+     * equal to the server's amount (an integer), the same orderId, currency KRW, the same paymentKey. '' when it is, else
+     * the reason (amount_missing | amount | order | currency | status | payment_key).
+     */
+    private static function paymentMismatch(array $p, string $orderId, int $amount, ?string $paymentKey = null): string
+    {
+        if ((string) (isset($p['status']) ? $p['status'] : '') !== 'DONE') return 'status';
+        if (!array_key_exists('totalAmount', $p)) return 'amount_missing';
+        if (!is_int($p['totalAmount']) || $p['totalAmount'] !== $amount) return 'amount';
+        if (!isset($p['orderId']) || !is_string($p['orderId']) || !hash_equals($orderId, $p['orderId'])) return 'order';
+        if (!isset($p['currency']) || $p['currency'] !== 'KRW') return 'currency';
+        if ($paymentKey !== null && isset($p['paymentKey']) && (!is_string($p['paymentKey']) || !hash_equals($paymentKey, $p['paymentKey']))) return 'payment_key';
+        return '';
+    }
+
+    /** payment_tamper (security event + audit): a request or a gateway answer that does not match the server's order */
+    private static function tamper(int $uid, string $why, array $detail, string $severity = 'alert'): void
+    {
+        $detail = ['why' => $why] + $detail;
+        if (class_exists('Tfm\\SecEvent')) SecEvent::log('payment_tamper', $severity, $detail, $uid > 0 ? $uid : null);
+        Audit::log('sub_payment_tamper', $uid > 0 ? $uid : null, $detail, $severity === 'info' ? 'info' : 'alert');
+    }
+
+    /** a payment taken for an order that will not be honoured is given back (best effort; the admin sees the order) */
+    private static function refundQuietly(array $payment, string $why): void
+    {
+        $key = isset($payment['paymentKey']) && is_string($payment['paymentKey']) ? $payment['paymentKey'] : '';
+        if ($key === '' || (string) (isset($payment['status']) ? $payment['status'] : '') !== 'DONE') return;
+        try { Toss::cancel($key, '주문 정보와 결제 정보가 달라 자동으로 취소했어요 (' . $why . ')'); }
+        catch (\Throwable $e) { Log::error('SUB', 'automatic cancel failed', ['why' => $why, 'error' => get_class($e)]); }
+    }
+
+    // ------------------------------------------------------------------ billing keys (sealed, §15.7 #1)
+    /** the billing key as stored: sealed with Tfm\\Crypto (enc:v1:…); a copied database alone cannot charge cards */
+    private static function sealBillingKey(string $plain): string
+    {
+        if (!Crypto::fits($plain, 255)) throw new ApiException(500, 'BILLING_KEY_TOO_LONG', '결제 수단 정보가 너무 길어 저장하지 못했어요. 운영자에게 알려 주세요.');
+        return Crypto::seal($plain);
+    }
+
+    /**
+     * The billing key of a subscription row in plain text ('' when there is none or it cannot be opened — a lost
+     * data_key). A key stored before sealing existed (or with the previous data key) is sealed again right away.
+     */
+    private static function billingKeyOf(array $row): string
+    {
+        $stored = (string) (isset($row['billing_key']) ? $row['billing_key'] : '');
+        if ($stored === '') return '';
+        $plain = Crypto::open($stored);
+        if ($plain === null) {
+            Log::error('SUB', 'a stored billing key cannot be opened (data_key changed or lost?)', ['uid' => (int) $row['user_id']]);
+            return '';
+        }
+        if (Crypto::needsReseal($stored)) {
+            try {
+                Db::exec('UPDATE subscriptions SET billing_key = ? WHERE user_id = ? AND billing_key = ?', [self::sealBillingKey($plain), (int) $row['user_id'], $stored]);
+            } catch (\Throwable $e) { Log::warn('SUB', 'billing key could not be sealed now', ['error' => get_class($e)]); }
+        }
+        return $plain;
+    }
+
+    /** seal every billing key that is still plain text or sealed with the previous key (secret:rotate --data-key, upgrades) */
+    public static function resealBillingKeys(): int
+    {
+        $n = 0;
+        foreach (Db::all("SELECT user_id, billing_key FROM subscriptions WHERE billing_key <> ''") as $r) {
+            if (!Crypto::needsReseal((string) $r['billing_key'])) continue;
+            $plain = Crypto::open((string) $r['billing_key']);
+            if ($plain === null) continue;
+            $n += Db::exec('UPDATE subscriptions SET billing_key = ? WHERE user_id = ? AND billing_key = ?', [self::sealBillingKey($plain), (int) $r['user_id'], (string) $r['billing_key']]);
+        }
+        return $n;
+    }
+
+    /** an integer from a JSON body: a JSON integer only (a digit string, float, exponent, boolean or array is refused) */
+    public static function jsonInt($v, string $field, int $min, int $max): int
+    {
+        if (!is_int($v)) V::fail($field, '값은 정수로 보내 주세요.');
+        return V::int($v, $field, $min, $max);
     }
 
     // ------------------------------------------------------------------ activation
@@ -204,41 +296,84 @@ final class Subscription
         ];
     }
 
+    /** the largest amount a single payment may have (KRW) — anything above is a typing error or tampering */
+    public const MAX_AMOUNT = 10000000;
+    /** a confirmation that ended without an answer (network) may be looked up again after this many seconds */
+    private const RETRY_AFTER_S = 30;
+
+    /**
+     * Claim a `created` order for one confirmation (finding F6): the order row is locked, its payment_key set to $marker
+     * and toss_status to CONFIRMING in one transaction — a second confirmation (double click, replay, two tabs) finds it
+     * taken. → 'claimed' | 'resume' (the same key, claimed more than RETRY_AFTER_S ago without an answer) | 'busy' | 'closed'
+     */
+    private static function claimOrder(string $orderId, string $marker, int $now): string
+    {
+        return Db::tx(function () use ($orderId, $marker, $now) {
+            $r = Db::one('SELECT status, payment_key, toss_status, raw FROM orders WHERE order_id = ?' . Db::forUpdate(), [$orderId]);
+            if (!$r || (string) $r['status'] !== 'created') return 'closed';
+            if ((string) $r['payment_key'] === '') {
+                $n = Db::exec("UPDATE orders SET payment_key = ?, toss_status = 'CONFIRMING', raw = ? WHERE order_id = ? AND status = 'created' AND payment_key = ''",
+                    [$marker, json_encode(['claimedAt' => $now]), $orderId]);
+                return $n === 1 ? 'claimed' : 'busy';
+            }
+            if (hash_equals((string) $r['payment_key'], $marker) && (string) $r['toss_status'] === 'CONFIRMING') {
+                $j = Json::tryDecode((string) $r['raw'], true);
+                $at = is_array($j) && isset($j['claimedAt']) && is_int($j['claimedAt']) ? $j['claimedAt'] : 0;
+                $wait = (int) Config::get('toss.confirm_retry_after', self::RETRY_AFTER_S) * 1000;
+                if ($now - $at >= $wait) return 'resume';
+            }
+            return 'busy';
+        });
+    }
+
     /** confirm.php / return.php (card): the order must be ours, `created`, and the amount must match exactly */
     public static function confirm(array $user, string $paymentKey, string $orderId, int $amount): array
     {
         $uid = (int) $user['id'];
+        if (!preg_match('/^[A-Za-z0-9_\-]{1,200}$/', $paymentKey)) throw new ApiException(400, 'INVALID_PAYMENT_KEY', '결제 키가 올바르지 않아요.');
         $o = self::order($orderId);
         if (!$o || (int) $o['user_id'] !== $uid) {
             Audit::log('sub_confirm_refused', $uid, ['order' => mb_substr($orderId, 0, 64), 'why' => 'foreign or unknown'], 'warn');
+            self::tamper($uid, 'foreign_order', ['order' => mb_substr($orderId, 0, 64)], 'warn');
             throw new ApiException(404, 'ORDER_NOT_FOUND', '주문을 찾을 수 없어요.');
-        }
-        if ($o['status'] !== 'created') {
-            Audit::log('sub_confirm_refused', $uid, ['order' => $orderId, 'why' => 'status ' . $o['status']], 'warn');
-            throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
         }
         if ($amount !== (int) $o['amount']) {
             Audit::log('sub_confirm_refused', $uid, ['order' => $orderId, 'why' => 'amount', 'sent' => $amount, 'stored' => (int) $o['amount']], 'alert');
+            self::tamper($uid, 'amount', ['order' => $orderId, 'sent' => $amount, 'stored' => (int) $o['amount']]);
             throw new ApiException(400, 'AMOUNT_MISMATCH', '결제 금액이 주문과 달라요.');
         }
-        if (!preg_match('/^[A-Za-z0-9_\-]{1,200}$/', $paymentKey)) throw new ApiException(400, 'INVALID_PAYMENT_KEY', '결제 키가 올바르지 않아요.');
+        if ($o['status'] !== 'created') {
+            Audit::log('sub_confirm_refused', $uid, ['order' => $orderId, 'why' => 'status ' . $o['status']], 'warn');
+            self::tamper($uid, 'replay', ['order' => $orderId, 'status' => (string) $o['status']], 'info');
+            throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
+        }
         $now = Clock::ms();
+        $claim = self::claimOrder($orderId, $paymentKey, $now);
+        if ($claim === 'closed' || $claim === 'busy') {
+            Audit::log('sub_confirm_refused', $uid, ['order' => $orderId, 'why' => $claim], 'warn');
+            throw new ApiException(409, 'ORDER_NOT_OPEN', $claim === 'busy' ? '이 주문은 지금 확인하고 있어요. 잠시 뒤 구독 화면에서 상태를 확인해 주세요.' : '이미 처리된 주문이에요.');
+        }
         try {
-            $payment = Toss::confirm($paymentKey, $orderId, $amount);
+            $payment = $claim === 'resume' ? Toss::lookup($paymentKey, $orderId, (int) $o['amount']) : Toss::confirm($paymentKey, $orderId, (int) $o['amount']);
         } catch (TossException $e) {
-            self::finishOrder($orderId, 'failed', ['paymentKey' => $paymentKey, 'status' => $e->tossCode], $now);
+            if (in_array($e->tossCode, ['NETWORK_ERROR', 'BAD_RESPONSE'], true)) {
+                // no answer: the payment may have gone through — the order stays claimed and is looked up on the next try
+                Audit::log('sub_confirm_pending', $uid, ['order' => $orderId, 'code' => $e->tossCode], 'warn');
+                throw new ApiException(503, 'PAYMENT_PENDING', '결제 서버의 답이 늦어지고 있어요. 결제가 되었다면 잠시 뒤 다시 확인할 때 반영돼요.', null, ['Retry-After: ' . self::RETRY_AFTER_S]);
+            }
+            self::finishOrder($orderId, 'failed', ['paymentKey' => $paymentKey, 'status' => $e->tossCode], $now, $paymentKey);
             Audit::log('sub_payment_failed', $uid, ['order' => $orderId, 'code' => $e->tossCode], 'warn');
             throw new ApiException(402, 'PAYMENT_FAILED', '결제가 완료되지 않았어요: ' . $e->getMessage(), ['tossCode' => $e->tossCode]);
         }
-        if ((string) (isset($payment['status']) ? $payment['status'] : '') !== 'DONE' || (int) (isset($payment['totalAmount']) ? $payment['totalAmount'] : $amount) !== $amount) {
-            self::finishOrder($orderId, 'failed', $payment, $now);
-            Audit::log('sub_payment_failed', $uid, ['order' => $orderId, 'code' => 'STATUS'], 'warn');
-            throw new ApiException(402, 'PAYMENT_FAILED', '결제가 완료되지 않았어요.');
+        $why = self::paymentMismatch($payment, $orderId, (int) $o['amount'], $paymentKey);
+        if ($why !== '') {
+            self::finishOrder($orderId, 'failed', $payment, $now, $paymentKey);
+            self::tamper($uid, 'gateway_' . $why, ['order' => $orderId, 'stored' => (int) $o['amount'], 'answered' => isset($payment['totalAmount']) && is_int($payment['totalAmount']) ? $payment['totalAmount'] : null]);
+            self::refundQuietly($payment, $why);
+            throw new ApiException(402, 'PAYMENT_FAILED', '결제 정보가 주문과 달라서 처리하지 않았어요. 결제가 되었다면 자동으로 취소를 요청했어요.');
         }
-        return Db::tx(function () use ($uid, $o, $orderId, $payment, $now) {
-            $again = Db::one('SELECT status FROM orders WHERE order_id = ?' . Db::forUpdate(), [$orderId]);
-            if (!$again || $again['status'] !== 'created') throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
-            self::finishOrder($orderId, 'confirmed', $payment, $now);
+        return Db::tx(function () use ($uid, $o, $orderId, $payment, $now, $paymentKey) {
+            if (!self::finishOrder($orderId, 'confirmed', $payment, $now, $paymentKey)) throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
             $row = self::activate($uid, (int) $o['tier'], Toss::periodDays() * self::DAY_MS, $now, ['last_order_id' => $orderId]);
             Audit::log('sub_activated', $uid, ['order' => $orderId, 'tier' => (int) $o['tier'], 'kind' => 'card', 'expiresAt' => (int) $row['expires_at']], 'info');
             return self::publicState($row, $now);
@@ -250,37 +385,51 @@ final class Subscription
     {
         $uid = (int) $user['id'];
         $o = self::order($orderId);
-        if (!$o || (int) $o['user_id'] !== $uid) throw new ApiException(404, 'ORDER_NOT_FOUND', '주문을 찾을 수 없어요.');
+        if (!$o || (int) $o['user_id'] !== $uid) {
+            self::tamper($uid, 'foreign_order', ['order' => mb_substr($orderId, 0, 64), 'kind' => 'billing'], 'warn');
+            throw new ApiException(404, 'ORDER_NOT_FOUND', '주문을 찾을 수 없어요.');
+        }
         if ($o['status'] !== 'created') throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
         if (!hash_equals(self::customerKey($uid), $customerKey)) {
             Audit::log('sub_confirm_refused', $uid, ['order' => $orderId, 'why' => 'customerKey'], 'alert');
+            self::tamper($uid, 'customer_key', ['order' => $orderId], 'warn');
             throw new ApiException(400, 'INVALID_CUSTOMER', '고객 키가 올바르지 않아요.');
         }
         if (!preg_match('/^[A-Za-z0-9_\-]{1,300}$/', $authKey)) throw new ApiException(400, 'INVALID_AUTH_KEY', '인증 키가 올바르지 않아요.');
+        if (!Crypto::available()) throw new ApiException(503, 'PAYMENT_NOT_CONFIGURED', '이 서버는 결제 수단을 안전하게 보관할 수 없어 자동 갱신 구독을 열 수 없어요 (openssl 확장 필요).');
         $now = Clock::ms();
+        $marker = 'billing:' . substr(hash('sha256', $authKey), 0, 40);
+        $claim = self::claimOrder($orderId, $marker, $now);
+        if ($claim !== 'claimed') throw new ApiException(409, 'ORDER_NOT_OPEN', $claim === 'busy' || $claim === 'resume' ? '이 주문은 지금 확인하고 있어요. 잠시 뒤 구독 화면에서 상태를 확인해 주세요.' : '이미 처리된 주문이에요.');
+        $payment = [];
         try {
             $issued = Toss::issueBillingKey($authKey, $customerKey);
-            $billingKey = (string) (isset($issued['billingKey']) ? $issued['billingKey'] : '');
+            $billingKey = (string) (isset($issued['billingKey']) && is_string($issued['billingKey']) ? $issued['billingKey'] : '');
             if ($billingKey === '') throw new TossException('NO_BILLING_KEY', '빌링키를 받지 못했어요.', 0);
+            $sealed = self::sealBillingKey($billingKey); // before any money moves: a key that cannot be kept is never charged
             $payment = Toss::charge($billingKey, $customerKey, (int) $o['amount'], $orderId, self::orderName((int) $o['tier']), (string) $user['email'], (string) $user['nickname']);
         } catch (TossException $e) {
-            self::finishOrder($orderId, 'failed', ['status' => $e->tossCode], $now);
+            self::finishOrder($orderId, 'failed', ['status' => $e->tossCode], $now, $marker);
             Audit::log('sub_payment_failed', $uid, ['order' => $orderId, 'code' => $e->tossCode, 'kind' => 'billing'], 'warn');
             throw new ApiException(402, 'PAYMENT_FAILED', '결제가 완료되지 않았어요: ' . $e->getMessage(), ['tossCode' => $e->tossCode]);
+        } catch (ApiException $e) {
+            self::finishOrder($orderId, 'failed', ['status' => $e->errorCode], $now, $marker);
+            throw $e;
         }
-        if ((string) (isset($payment['status']) ? $payment['status'] : '') !== 'DONE') {
-            self::finishOrder($orderId, 'failed', $payment, $now);
-            throw new ApiException(402, 'PAYMENT_FAILED', '결제가 완료되지 않았어요.');
+        $why = self::paymentMismatch($payment, $orderId, (int) $o['amount']);
+        if ($why !== '') {
+            self::finishOrder($orderId, 'failed', $payment, $now, $marker);
+            self::tamper($uid, 'gateway_' . $why, ['order' => $orderId, 'kind' => 'billing', 'stored' => (int) $o['amount'], 'answered' => isset($payment['totalAmount']) && is_int($payment['totalAmount']) ? $payment['totalAmount'] : null]);
+            self::refundQuietly($payment, $why);
+            throw new ApiException(402, 'PAYMENT_FAILED', '결제 정보가 주문과 달라서 처리하지 않았어요. 결제가 되었다면 자동으로 취소를 요청했어요.');
         }
         $card = isset($issued['card']) && is_array($issued['card']) ? $issued['card'] : [];
-        return Db::tx(function () use ($uid, $o, $orderId, $payment, $billingKey, $customerKey, $card, $now) {
-            $again = Db::one('SELECT status FROM orders WHERE order_id = ?' . Db::forUpdate(), [$orderId]);
-            if (!$again || $again['status'] !== 'created') throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
-            self::finishOrder($orderId, 'confirmed', $payment, $now);
+        return Db::tx(function () use ($uid, $o, $orderId, $payment, $sealed, $customerKey, $card, $now, $marker) {
+            if (!self::finishOrder($orderId, 'confirmed', $payment, $now, $marker)) throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
             $row = self::activate($uid, (int) $o['tier'], Toss::periodDays() * self::DAY_MS, $now, [
-                'auto_renew' => 1, 'billing_key' => mb_substr($billingKey, 0, 255), 'customer_key' => $customerKey, 'last_order_id' => $orderId,
+                'auto_renew' => 1, 'billing_key' => $sealed, 'customer_key' => $customerKey, 'last_order_id' => $orderId,
             ]);
-            Audit::log('sub_activated', $uid, ['order' => $orderId, 'tier' => (int) $o['tier'], 'kind' => 'billing', 'card' => isset($card['company']) ? $card['company'] : '', 'expiresAt' => (int) $row['expires_at']], 'info');
+            Audit::log('sub_activated', $uid, ['order' => $orderId, 'tier' => (int) $o['tier'], 'kind' => 'billing', 'card' => isset($card['company']) && is_string($card['company']) ? mb_substr($card['company'], 0, 40) : '', 'expiresAt' => (int) $row['expires_at']], 'info');
             return self::publicState($row, $now);
         });
     }
@@ -318,26 +467,49 @@ final class Subscription
         return $out;
     }
 
-    /** one renewal: order (kind renewal) → charge → extend, or past_due / none */
+    /**
+     * One renewal: order (kind renewal) → charge → extend, or past_due / none. Finding F5: the decision to charge is taken
+     * inside one transaction that locks the subscription row — the expiry is read again there and an open renewal order
+     * of the last 2 minutes means another process is on it — so parallel requests or a cron run never charge twice.
+     */
     private static function renewOne(array $row, int $now, bool $force): array
     {
         $uid = (int) $row['user_id'];
-        $tier = max(2, min(4, (int) $row['tier']));
-        $exp = (int) $row['expires_at'];
-        if (!$force && $exp - self::DAY_MS >= $now) return ['userId' => $uid, 'ok' => true, 'skipped' => 'not due', 'expiresAt' => $exp];
-        if ((int) $row['auto_renew'] !== 1 || (string) $row['billing_key'] === '') return ['userId' => $uid, 'ok' => false, 'skipped' => 'no billing key'];
-        // one renewal at a time per user: a renewal order still open for the last 2 minutes means another process is on it
-        $open = Db::one("SELECT id FROM orders WHERE user_id = ? AND kind = 'renewal' AND status = 'created' AND requested_at > ?", [$uid, $now - 120000]);
-        if ($open) return ['userId' => $uid, 'ok' => false, 'skipped' => 'in progress'];
-        $amount = Toss::price($tier);
-        $orderId = self::orderId();
-        // mock mode: a billing key issued with an authKey ending in _fail always fails (tests)
-        if (Toss::mock() && Str::endsWith((string) $row['billing_key'], '_fail')) $orderId .= '_fail';
-        $o = self::createOrder($uid, $tier, $amount, 'renewal', $now, $orderId);
+        $start = Db::tx(function () use ($uid, $now, $force) {
+            $cur = Db::one('SELECT * FROM subscriptions WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+            if (!$cur) return ['skip' => ['userId' => $uid, 'ok' => false, 'skipped' => 'no subscription']];
+            $exp = (int) $cur['expires_at'];
+            if (!$force && $exp - self::DAY_MS >= $now) return ['skip' => ['userId' => $uid, 'ok' => true, 'skipped' => 'not due', 'expiresAt' => $exp]];
+            if ((int) $cur['auto_renew'] !== 1 || (string) $cur['billing_key'] === '' || !in_array((string) $cur['status'], ['active', 'past_due'], true)) {
+                return ['skip' => ['userId' => $uid, 'ok' => false, 'skipped' => 'no billing key']];
+            }
+            $open = Db::one("SELECT id FROM orders WHERE user_id = ? AND kind = 'renewal' AND status = 'created' AND requested_at > ?", [$uid, $now - 120000]);
+            if ($open) return ['skip' => ['userId' => $uid, 'ok' => false, 'skipped' => 'in progress']];
+            $tier = max(2, min(4, (int) $cur['tier']));
+            $orderId = self::orderId();
+            $key = self::billingKeyOf($cur);
+            // mock mode: a billing key issued with an authKey ending in _fail always fails (tests)
+            if (Toss::mock() && Str::endsWith($key, '_fail')) $orderId .= '_fail';
+            $o = self::createOrder($uid, $tier, Toss::price($tier), 'renewal', $now, $orderId);
+            return ['row' => $cur, 'order' => $o, 'key' => $key];
+        });
+        if (isset($start['skip'])) return $start['skip'];
+        $cur = $start['row'];
+        $o = $start['order'];
+        $orderId = (string) $o['order_id'];
+        $tier = (int) $o['tier'];
+        $amount = (int) $o['amount'];
+        $exp = (int) $cur['expires_at'];
         $user = Users::byId($uid);
         try {
-            $payment = Toss::charge((string) $row['billing_key'], (string) $row['customer_key'], $amount, $orderId, self::orderName($tier), $user ? (string) $user['email'] : null, $user ? (string) $user['nickname'] : null);
-            if ((string) (isset($payment['status']) ? $payment['status'] : '') !== 'DONE') throw new TossException('STATUS', '결제 상태가 완료가 아니에요.', 0);
+            if ($start['key'] === '') throw new TossException('NO_BILLING_KEY', '저장된 결제 수단을 열 수 없어요.', 0);
+            $payment = Toss::charge($start['key'], (string) $cur['customer_key'], $amount, $orderId, self::orderName($tier), $user ? (string) $user['email'] : null, $user ? (string) $user['nickname'] : null);
+            $why = self::paymentMismatch($payment, $orderId, $amount);
+            if ($why !== '') {
+                self::tamper($uid, 'gateway_' . $why, ['order' => $orderId, 'kind' => 'renewal', 'stored' => $amount, 'answered' => isset($payment['totalAmount']) && is_int($payment['totalAmount']) ? $payment['totalAmount'] : null]);
+                self::refundQuietly($payment, $why);
+                throw new TossException('MISMATCH', '결제 정보가 주문과 달라요.', 0);
+            }
         } catch (TossException $e) {
             self::finishOrder($orderId, 'failed', ['status' => $e->tossCode], $now);
             $graceEnd = $exp + Toss::graceDays() * self::DAY_MS;
@@ -350,10 +522,10 @@ final class Subscription
             Audit::log('sub_renew_failed', $uid, ['order' => $orderId, 'code' => $e->tossCode, 'result' => 'past_due'], 'warn');
             return ['userId' => $uid, 'ok' => false, 'status' => 'past_due', 'code' => $e->tossCode];
         }
-        return Db::tx(function () use ($uid, $tier, $orderId, $payment, $now, $o) {
-            self::finishOrder($orderId, 'confirmed', $payment, $now);
+        return Db::tx(function () use ($uid, $tier, $orderId, $payment, $now, $amount) {
+            if (!self::finishOrder($orderId, 'confirmed', $payment, $now)) throw new \RuntimeException('renewal order changed while it was charged');
             $row = self::activate($uid, $tier, Toss::periodDays() * self::DAY_MS, $now, ['last_order_id' => $orderId, 'auto_renew' => 1]);
-            Audit::log('sub_renewed', $uid, ['order' => $orderId, 'tier' => $tier, 'amount' => (int) $o['amount'], 'expiresAt' => (int) $row['expires_at']]);
+            Audit::log('sub_renewed', $uid, ['order' => $orderId, 'tier' => $tier, 'amount' => $amount, 'expiresAt' => (int) $row['expires_at']]);
             return ['userId' => $uid, 'ok' => true, 'status' => 'active', 'expiresAt' => (int) $row['expires_at'], 'order' => $orderId];
         });
     }

@@ -7,6 +7,8 @@
  * A top-level GET navigation carries the SameSite=Lax session cookie, so the logged-in player's order is confirmed
  * server-to-server and the browser is redirected to the app: index.html?sub=ok&tier=N or index.html?sub=fail&msg=….
  * The order must belong to the logged-in session (confirm/billingIssue refuse foreign or replayed orders).
+ * Finding F11: what the payment window sends back in ?code= / ?message= is never passed on — the code is mapped to a
+ * known word (or OTHER) and the app shows a fixed Korean sentence for it; logs get the mapped code only.
  */
 declare(strict_types=1);
 
@@ -37,17 +39,36 @@ $redirect = function (string $query) use ($base): void {
     exit;
 };
 $fail = function (string $msg) use ($redirect): void { $redirect('sub=fail&msg=' . rawurlencode(mb_substr($msg, 0, 120))); };
+/** 토스 결제창 failure codes → the code the app gets and the sentence it shows (anything else: OTHER) */
+$failText = function (string $code): array {
+    $known = [
+        'PAY_PROCESS_CANCELED' => '결제를 취소했어요.',
+        'USER_CANCEL' => '결제를 취소했어요.',
+        'PAY_PROCESS_ABORTED' => '결제가 중간에 멈췄어요. 잠시 후 다시 해 주세요.',
+        'REJECT_CARD_COMPANY' => '카드사가 결제를 거절했어요. 다른 카드로 해 주세요.',
+        'REJECT_CARD_PAYMENT' => '카드사가 결제를 거절했어요. 다른 카드로 해 주세요.',
+        'EXCEED_MAX_DAILY_PAYMENT_COUNT' => '오늘 결제할 수 있는 횟수를 넘었어요.',
+        'INVALID_CARD_EXPIRATION' => '카드 유효기간을 확인해 주세요.',
+    ];
+    $c = strtoupper($code);
+    if (!preg_match('/^[A-Z_]{1,60}$/', $c) || !isset($known[$c])) return ['OTHER', '결제가 취소되었거나 완료되지 않았어요.'];
+    return [$c, $known[$c]];
+};
 
 try {
     Http::securityHeaders('admin', $nonce);
+    // the security layer's page guard (blocked addresses, plain HTTP where HTTPS is required, uploads) when it is there
+    if (method_exists('Tfm\\Firewall', 'guardPage') && method_exists('Tfm\\Http', 'plainPage') && method_exists('Tfm\\Http', 'enforceHttps') && method_exists('Tfm\\Http', 'refuseUpload')) \Tfm\Firewall::guardPage();
+    elseif (class_exists('Tfm\\Firewall')) \Tfm\Firewall::check();
     if (Http::method() !== 'GET') { http_response_code(405); header('Allow: GET'); exit; }
     Session::start(false);
     $ctx = new Ctx();
     $ctx->user = Auth::current();
     RateLimit::forRequest('sub_return', $ctx, 'ip');
     if ($q('code') !== '' || $q('fail') === '1') {
-        Log::info('SUB', 'payment window returned a failure', ['code' => $q('code'), 'uid' => $ctx->uid()]);
-        $fail($q('message') !== '' ? $q('message') : '결제가 취소되었거나 완료되지 않았어요.');
+        list($code, $text) = $failText($q('code'));
+        Log::info('SUB', 'payment window returned a failure', ['code' => $code, 'uid' => $ctx->uid()]);
+        $redirect('sub=fail&code=' . rawurlencode($code) . '&msg=' . rawurlencode($text));
     }
     if (!$ctx->user) $fail('로그인이 풀렸어요. 다시 로그인한 뒤 구독 화면에서 상태를 확인해 주세요.');
     $kind = $q('kind');

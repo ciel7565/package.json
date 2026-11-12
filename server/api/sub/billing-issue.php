@@ -8,15 +8,15 @@ declare(strict_types=1);
 require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\Api;
-use Tfm\ApiException;
 use Tfm\Ctx;
 use Tfm\Subscription;
+use Tfm\V;
 
 Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'sub_write'], function (Ctx $c): array {
     $b = $c->json(4096);
-    $authKey = isset($b['authKey']) && is_string($b['authKey']) ? $b['authKey'] : '';
-    $customerKey = isset($b['customerKey']) && is_string($b['customerKey']) ? $b['customerKey'] : '';
-    $orderId = isset($b['orderId']) && is_string($b['orderId']) ? $b['orderId'] : '';
-    if ($authKey === '' || $customerKey === '' || $orderId === '') throw new ApiException(400, 'INVALID_PARAM', '결제 정보가 올바르지 않아요.');
+    V::keys($b, ['authKey', 'customerKey', 'orderId']);
+    $authKey = V::str(isset($b['authKey']) ? $b['authKey'] : null, 'authKey', 300, 1);
+    $customerKey = V::str(isset($b['customerKey']) ? $b['customerKey'] : null, 'customerKey', 64, 1);
+    $orderId = V::str(isset($b['orderId']) ? $b['orderId'] : null, 'orderId', 64, 8);
     return ['sub' => Subscription::billingIssue($c->user, $authKey, $customerKey, $orderId)];
 });

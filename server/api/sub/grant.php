@@ -9,16 +9,17 @@ declare(strict_types=1);
 require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\Api;
-use Tfm\ApiException;
 use Tfm\Ctx;
 use Tfm\Subscription;
+use Tfm\V;
 
+// JSON integers only: userId ≥ 1, tier 2–4 (INVALID_TIER), days 1–3650; revoke a real boolean
 Api::run(['method' => 'POST', 'admin' => true, 'rate' => 'admin'], function (Ctx $c): array {
     $b = $c->json(2048);
-    $uid = isset($b['userId']) && (is_int($b['userId']) || (is_string($b['userId']) && ctype_digit($b['userId']))) ? (int) $b['userId'] : 0;
-    if ($uid <= 0) throw new ApiException(400, 'INVALID_PARAM', '사용자 번호가 필요해요.');
-    if ((isset($b['revoke']) ? $b['revoke'] : false) === true) return Subscription::revoke($c->user, $uid);
-    $tier = isset($b['tier']) && (is_int($b['tier']) || (is_string($b['tier']) && ctype_digit($b['tier']))) ? (int) $b['tier'] : 0;
-    $days = isset($b['days']) && (is_int($b['days']) || (is_string($b['days']) && ctype_digit($b['days']))) ? (int) $b['days'] : 30;
+    V::keys($b, ['userId', 'tier', 'days', 'revoke']);
+    $uid = Subscription::jsonInt(isset($b['userId']) ? $b['userId'] : null, 'userId', 1, V::INT_MAX);
+    if (V::has($b, 'revoke') && V::bool($b['revoke'], 'revoke')) return Subscription::revoke($c->user, $uid);
+    $tier = Subscription::jsonInt(isset($b['tier']) ? $b['tier'] : null, 'tier', PHP_INT_MIN, PHP_INT_MAX);
+    $days = V::has($b, 'days') ? Subscription::jsonInt($b['days'], 'days', 1, 3650) : 30;
     return Subscription::grant($c->user, $uid, $tier, $days);
 });

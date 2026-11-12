@@ -12,11 +12,13 @@ use Tfm\Api;
 use Tfm\Audit;
 use Tfm\Ctx;
 use Tfm\Subscription;
+use Tfm\V;
 
 Api::run(['method' => 'POST', 'admin' => true, 'rate' => 'admin'], function (Ctx $c): array {
     $b = $c->json(2048);
-    $uid = isset($b['userId']) && (is_int($b['userId']) || (is_string($b['userId']) && ctype_digit($b['userId']))) ? (int) $b['userId'] : null;
-    $force = (isset($b['force']) ? $b['force'] : false) === true;
+    V::keys($b, ['userId', 'force']);
+    $uid = V::has($b, 'userId') ? Subscription::jsonInt($b['userId'], 'userId', 1, V::INT_MAX) : null;
+    $force = V::has($b, 'force') ? V::bool($b['force'], 'force') : false;
     $results = Subscription::renewDue($uid, $force);
     Audit::log('sub_renew_run', $uid, ['force' => $force, 'count' => count($results), 'via' => 'api'], 'info', $c->uid());
     return ['results' => $results];

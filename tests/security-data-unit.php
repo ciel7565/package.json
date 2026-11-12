@@ -309,6 +309,17 @@ check('Db::mysqlOptions — a database on another machine without TLS is refused
     Tfm\Db::mysqlOptions(['host' => '10.1.2.3', 'socket' => '/run/mysqld/mysqld.sock'] + $local); // a socket is always local
     return true;
 });
+check('Db::upsert — conflict keys and the update list go through the identifier check too (F14); a normal upsert still works', function () {
+    $bad = 0;
+    foreach ([[['bucket = 1; DROP TABLE users; --'], null], [['bucket'], ['hits = 0, expires_at']], [['nope'], null], [['bucket'], ['nope']]] as $case) {
+        try { Tfm\Db::upsert('rate_limits', ['bucket' => 'unit-upsert', 'hits' => 1, 'expires_at' => 0], $case[0], $case[1]); } catch (InvalidArgumentException $e) { $bad++; }
+    }
+    Tfm\Db::upsert('rate_limits', ['bucket' => 'unit-upsert', 'hits' => 2, 'expires_at' => 0], ['bucket']);
+    Tfm\Db::upsert('rate_limits', ['bucket' => 'unit-upsert', 'hits' => 3, 'expires_at' => 0], ['bucket'], ['hits']);
+    $hits = (int) Tfm\Db::value('SELECT hits FROM rate_limits WHERE bucket = ?', ['unit-upsert']);
+    Tfm\Db::exec('DELETE FROM rate_limits WHERE bucket = ?', ['unit-upsert']);
+    return $bad === 4 && $hits === 3 ? true : "refused $bad of 4, hits $hits";
+});
 check('Db::accountAudit — every key the health page reads is there (driver, user, host, isRoot, emptyPassword, globalPrivileges, ddlPrivileges, grants)', function () {
     $a = Tfm\Db::accountAudit();
     foreach (['driver', 'user', 'host', 'isRoot', 'emptyPassword', 'globalPrivileges', 'ddlPrivileges', 'grants'] as $k) if (!array_key_exists($k, $a)) return "missing $k";
@@ -361,6 +372,162 @@ mysqlOnly('MariaDB — the connection refuses LOAD DATA LOCAL INFILE and a secon
 });
 @unlink($cfgFile);
 Tfm\Config::reset();
+Tfm\Db::reset();
+
+// ------------------------------------------------------------------ payments (items 1f, 15; findings F5, F6, F10) — mock gateway, both drivers
+Tfm\Db::pdo();
+$payN = 0;
+/** a fresh player for the payment checks */
+$payUser = function () use (&$payN): array {
+    $payN++;
+    $tag = substr(bin2hex(random_bytes(4)), 0, 6);
+    return Tfm\Db::tx(function () use ($payN, $tag) { return Tfm\Users::create("pay{$payN}_{$tag}@example.com", '결제' . $payN . 'x' . substr($tag, 0, 3), 'Sunny-Jar-4821', 'user'); });
+};
+$secEvents = function (string $kind): int { return (int) Tfm\Db::value('SELECT COUNT(*) FROM security_events WHERE kind = ?', [$kind]); };
+check('billing — the billing key is stored sealed (enc:v1:…), opens to the gateway key, and renewals charge with it', function () use ($payUser) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 3, 'billing');
+    $s = Tfm\Subscription::billingIssue($u, 'mock_auth_ok', $o['customerKey'], $o['orderId']);
+    $stored = (string) Tfm\Db::value('SELECT billing_key FROM subscriptions WHERE user_id = ?', [(int) $u['id']]);
+    if (strpos($stored, 'enc:v1:') !== 0 || strpos($stored, 'mock_bk_') !== false) return 'stored: ' . substr($stored, 0, 20);
+    if (strpos((string) Tfm\Crypto::open($stored), 'mock_bk_') !== 0) return 'does not open to the billing key';
+    $r = Tfm\Subscription::renewDue((int) $u['id'], true);
+    return $s['tier'] === 3 && isset($r[0]['ok']) && $r[0]['ok'] === true && $r[0]['status'] === 'active' ? true : json_encode($r);
+});
+check('billing — a key stored in the clear before sealing existed is sealed on its first use (and still charges)', function () use ($payUser) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'billing');
+    Tfm\Subscription::billingIssue($u, 'mock_auth_ok', $o['customerKey'], $o['orderId']);
+    $plain = (string) Tfm\Crypto::open((string) Tfm\Db::value('SELECT billing_key FROM subscriptions WHERE user_id = ?', [(int) $u['id']]));
+    Tfm\Db::exec('UPDATE subscriptions SET billing_key = ? WHERE user_id = ?', [$plain, (int) $u['id']]);
+    $r = Tfm\Subscription::renewDue((int) $u['id'], true);
+    $after = (string) Tfm\Db::value('SELECT billing_key FROM subscriptions WHERE user_id = ?', [(int) $u['id']]);
+    return strpos($after, 'enc:v1:') === 0 && Tfm\Crypto::open($after) === $plain && $r[0]['ok'] === true ? true : json_encode([$r, substr($after, 0, 12)]);
+});
+check('confirm — the gateway answers another amount / no amount / another order / USD / not DONE: refused, order failed, payment_tamper, tier stays 1', function () use ($payUser, $secEvents) {
+    foreach (['amount1_', 'noamount_', 'otherorder_', 'usd_', 'waiting_'] as $flag) {
+        $u = $payUser();
+        $o = Tfm\Subscription::prepare($u, 4, 'card');
+        $before = $secEvents('payment_tamper');
+        $code = '';
+        try { Tfm\Subscription::confirm($u, 'mock_' . $flag . $o['orderId'], $o['orderId'], $o['amount']); } catch (Tfm\ApiException $e) { $code = $e->errorCode; }
+        $st = (string) Tfm\Db::value('SELECT status FROM orders WHERE order_id = ?', [$o['orderId']]);
+        if ($code !== 'PAYMENT_FAILED' || $st !== 'failed' || Tfm\Subscription::tierFor((int) $u['id']) !== 1) return "$flag: $code / order $st / tier " . Tfm\Subscription::tierFor((int) $u['id']);
+        if ($secEvents('payment_tamper') <= $before) return "$flag: no payment_tamper event";
+    }
+    return true;
+});
+check('confirm — a client amount that differs is refused (payment_tamper, order untouched); the exact amount then works; a JSON non-integer never reaches it', function () use ($payUser, $secEvents) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'card');
+    $before = $secEvents('payment_tamper');
+    $code = '';
+    try { Tfm\Subscription::confirm($u, 'mock_' . $o['orderId'], $o['orderId'], $o['amount'] - 1); } catch (Tfm\ApiException $e) { $code = $e->errorCode; }
+    $row = Tfm\Db::one('SELECT status, payment_key FROM orders WHERE order_id = ?', [$o['orderId']]);
+    if ($code !== 'AMOUNT_MISMATCH' || $row['status'] !== 'created' || $row['payment_key'] !== '' || $secEvents('payment_tamper') <= $before) return json_encode([$code, $row]);
+    $s = Tfm\Subscription::confirm($u, 'mock_' . $o['orderId'], $o['orderId'], $o['amount']);
+    foreach (['2900', 2900.0, [2900], true, null] as $bad) {
+        if (!throwsApi(function () use ($bad) { Tfm\Subscription::jsonInt($bad, 'amount', 1, 10000000); }, 'INVALID_INPUT')) return 'jsonInt accepted ' . json_encode($bad);
+    }
+    return $s['tier'] === 2;
+});
+check('confirm — a confirmed order is never turned into a failed one by a later request (F6); a replay is 409 and does not extend the period', function () use ($payUser) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'card');
+    $s = Tfm\Subscription::confirm($u, 'mock_' . $o['orderId'], $o['orderId'], $o['amount']);
+    $codes = [];
+    foreach (['mock_' . $o['orderId'], 'forged_' . $o['orderId'], 'mock_amount1_' . $o['orderId']] as $k) {
+        try { Tfm\Subscription::confirm($u, $k, $o['orderId'], $o['amount']); $codes[] = 'ok'; } catch (Tfm\ApiException $e) { $codes[] = $e->errorCode; }
+    }
+    $st = (string) Tfm\Db::value('SELECT status FROM orders WHERE order_id = ?', [$o['orderId']]);
+    return $codes === ['ORDER_NOT_OPEN', 'ORDER_NOT_OPEN', 'ORDER_NOT_OPEN'] && $st === 'confirmed' && Tfm\Subscription::state((int) $u['id'])['expiresAt'] === $s['expiresAt'] ? true : json_encode([$codes, $st]);
+});
+check('confirm — no answer from the gateway (timeout): 503 PAYMENT_PENDING, the order stays open and claimed; a quick retry is 409; a later one looks it up and activates', function () use ($payUser) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 3, 'card');
+    $k = 'mock_timeout_' . $o['orderId'];
+    $c1 = $c2 = '';
+    try { Tfm\Subscription::confirm($u, $k, $o['orderId'], $o['amount']); } catch (Tfm\ApiException $e) { $c1 = $e->errorCode . $e->status; }
+    $row = Tfm\Db::one('SELECT status, payment_key, toss_status FROM orders WHERE order_id = ?', [$o['orderId']]);
+    try { Tfm\Subscription::confirm($u, $k, $o['orderId'], $o['amount']); } catch (Tfm\ApiException $e) { $c2 = $e->errorCode; }
+    Tfm\Config::override('toss.confirm_retry_after', 0);
+    try { $s = Tfm\Subscription::confirm($u, $k, $o['orderId'], $o['amount']); } finally { Tfm\Config::override('toss.confirm_retry_after', null); }
+    return $c1 === 'PAYMENT_PENDING503' && $row['status'] === 'created' && $row['payment_key'] === $k && $row['toss_status'] === 'CONFIRMING' && $c2 === 'ORDER_NOT_OPEN' && $s['tier'] === 3
+        ? true : json_encode([$c1, $row, $c2]);
+});
+/** run PHP code in $n parallel processes against this test's database: the outputs */
+$parallel = function (string $code, int $n) use ($srv): array {
+    $procs = [];
+    for ($i = 0; $i < $n; $i++) {
+        $p = proc_open([PHP_BINARY, '-r', 'require $argv[1]; ' . $code, $srv . '/lib/bootstrap.php'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $procs[] = [$p, $pipes];
+    }
+    $out = [];
+    foreach ($procs as $pp) { $out[] = trim(stream_get_contents($pp[1][1]) . stream_get_contents($pp[1][2])); fclose($pp[1][1]); fclose($pp[1][2]); proc_close($pp[0]); }
+    sort($out);
+    return $out;
+};
+check('confirm — 4 processes confirm the same order at the same moment: exactly one succeeds, the period is added once', function () use ($payUser, $parallel) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'card');
+    $t0 = Tfm\Clock::ms();
+    $code = '$u = Tfm\\Users::byId(' . (int) $u['id'] . '); try { Tfm\\Subscription::confirm($u, ' . var_export('mock_slow300_' . $o['orderId'], true) . ', ' . var_export($o['orderId'], true) . ', ' . (int) $o['amount'] . '); echo "ok"; } catch (Tfm\\ApiException $e) { echo $e->errorCode; }';
+    $out = $parallel($code, 4);
+    $ok = count(array_filter($out, function ($x) { return $x === 'ok'; }));
+    $exp = (int) Tfm\Subscription::state((int) $u['id'])['expiresAt'];
+    $period = Tfm\Toss::periodDays() * 86400000;
+    return $ok === 1 && $exp - $t0 < $period + 120000 && (string) Tfm\Db::value('SELECT status FROM orders WHERE order_id = ?', [$o['orderId']]) === 'confirmed' ? true : json_encode([$out, ($exp - $t0) / 86400000]);
+});
+check('lazy renewal — 4 processes read an expired auto-renew subscription at once (me / get / status of one page load): one charge (F5)', function () use ($payUser, $parallel) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'billing');
+    Tfm\Subscription::billingIssue($u, 'mock_auth_ok', $o['customerKey'], $o['orderId']);
+    $past = Tfm\Clock::ms() - 3600000;
+    Tfm\Db::exec('UPDATE subscriptions SET expires_at = ?, checked_at = 0 WHERE user_id = ?', [$past, (int) $u['id']]);
+    $out = $parallel('$s = Tfm\\Subscription::state(' . (int) $u['id'] . '); echo $s["tier"];', 4);
+    $renewals = (int) Tfm\Db::value("SELECT COUNT(*) FROM orders WHERE user_id = ? AND kind = 'renewal'", [(int) $u['id']]);
+    $st = Tfm\Subscription::state((int) $u['id']);
+    return $renewals === 1 && $st['tier'] === 2 && $st['expiresAt'] > Tfm\Clock::ms() ? true : json_encode([$out, $renewals, $st]);
+});
+check('renewal — the gateway answers another amount for a renewal charge: no extension, past_due, payment_tamper', function () use ($payUser, $secEvents) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 2, 'billing');
+    Tfm\Subscription::billingIssue($u, 'mock_auth_ok', $o['customerKey'], $o['orderId']);
+    Tfm\Db::exec('UPDATE subscriptions SET billing_key = ? WHERE user_id = ?', [Tfm\Crypto::seal('mock_bk_amount1_' . bin2hex(random_bytes(6))), (int) $u['id']]);
+    $exp = (int) Tfm\Subscription::state((int) $u['id'])['expiresAt'];
+    $before = $secEvents('payment_tamper');
+    $r = Tfm\Subscription::renewDue((int) $u['id'], true);
+    $st = Tfm\Subscription::state((int) $u['id']);
+    return $r[0]['ok'] === false && $r[0]['status'] === 'past_due' && $st['expiresAt'] === $exp && $secEvents('payment_tamper') > $before ? true : json_encode([$r, $st]);
+});
+check('billing-issue — the first charge answers another amount (authKey mock_amount1_…): refused, nothing stored, payment_tamper', function () use ($payUser, $secEvents) {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, 4, 'billing');
+    $before = $secEvents('payment_tamper');
+    $code = '';
+    try { Tfm\Subscription::billingIssue($u, 'mock_amount1_auth', $o['customerKey'], $o['orderId']); } catch (Tfm\ApiException $e) { $code = $e->errorCode; }
+    $stored = Tfm\Db::value('SELECT billing_key FROM subscriptions WHERE user_id = ?', [(int) $u['id']]);
+    return $code === 'PAYMENT_FAILED' && ($stored === null || $stored === '') && $secEvents('payment_tamper') > $before && Tfm\Subscription::tierFor((int) $u['id']) === 1 ? true : json_encode([$code, $stored]);
+});
+check('payments not configured (no keys, mock off): status mode unconfigured, no client key, prepare 503 PAYMENT_NOT_CONFIGURED without an order', function () use ($payUser) {
+    $u = $payUser();
+    Tfm\Config::override('toss.mock', false);
+    try {
+        $mode = Tfm\Toss::mode();
+        $ck = Tfm\Toss::clientKey();
+        $n0 = (int) Tfm\Db::value('SELECT COUNT(*) FROM orders WHERE user_id = ?', [(int) $u['id']]);
+        $refused = throwsApi(function () use ($u) { Tfm\Subscription::prepare($u, 2, 'card'); }, 'PAYMENT_NOT_CONFIGURED');
+        $n1 = (int) Tfm\Db::value('SELECT COUNT(*) FROM orders WHERE user_id = ?', [(int) $u['id']]);
+        Tfm\Config::override('toss.client_key', 'test_ck_' . str_repeat('A1', 10));
+        Tfm\Config::override('toss.secret_key', 'live_sk_' . str_repeat('B2', 10));
+        $mixed = Tfm\Toss::keysConfigured();
+        Tfm\Config::override('toss.secret_key', 'test_sk_' . str_repeat('B2', 10));
+        $own = Tfm\Toss::mode() === 'live' && Tfm\Toss::clientKey() === 'test_ck_' . str_repeat('A1', 10) && !Tfm\Toss::liveKeys();
+    } finally {
+        foreach (['toss.mock', 'toss.client_key', 'toss.secret_key'] as $k) Tfm\Config::override($k, null);
+    }
+    return $mode === 'unconfigured' && $ck === '' && $refused && $n1 === $n0 && $mixed === false && $own ? true : json_encode([$mode, $ck, $refused, $n0, $n1, $mixed, $own]);
+});
 Tfm\Db::reset();
 
 // ------------------------------------------------------------------ Installer: dedicated least-privilege account (item 1a, 1b, 21) — MariaDB only

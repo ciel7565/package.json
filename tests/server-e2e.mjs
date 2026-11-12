@@ -956,6 +956,85 @@ async function main() {
     const m = await A.req('api/auth/me.php');
     assert(m.data?.sub?.tier === 1 && m.data.sub.status === 'canceled', `A after refund ${JSON.stringify(m.data?.sub)}`);
   });
+  // ------------------------------------------------------------- phase 7 payment checks (§15.7 #15, findings F5 F6 F10 F11) — player D
+  const DD = new Client('D');
+  const userD = { email: `e2e_d${id}@example.com`, nickname: `Pay_${tag.slice(-5)}` };
+  const prepD = async (tier = 2, kind = 'card') => { const p = await DD.req('api/sub/prepare.php', { json: { tier, kind } }); assert(p.status === 200 && p.data?.orderId, `prepare ${p.status} ${p.error?.code}`); return p.data; };
+  const tierD = async () => (await DD.req('api/auth/me.php')).data.sub.tier;
+  await step('sub/confirm: the gateway\'s answer must match the order — another amount, no amount, another orderId, USD → 402, order failed, tier unchanged', async () => {
+    if (skipSub()) return skipSub();
+    await DD.req('api/ping.php');
+    const reg = await DD.req('api/auth/register.php', { json: { email: userD.email, nickname: userD.nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(reg.status === 200, `register D ${reg.status} ${reg.error?.code}`);
+    userD.id = reg.data.user.id;
+    for (const flag of ['amount100_', 'noamount_', 'otherorder_', 'usd_']) {
+      const o = await prepD(3);
+      const r = await DD.req('api/sub/confirm.php', { json: { paymentKey: `mock_${flag}${o.orderId}`, orderId: o.orderId, amount: o.amount } });
+      assert(r.status === 402 && r.error?.code === 'PAYMENT_FAILED', `${flag}: ${r.status} ${r.error?.code}`);
+      if (phpProc) assert(dbAll('SELECT status FROM orders WHERE order_id = ?', [o.orderId])[0].status === 'failed', `${flag}: order not failed`);
+      assert(await tierD() === 1, `${flag} raised the tier`);
+    }
+    // the amount must be a JSON integer: the digit string the old endpoint accepted is a type error now
+    const o = await prepD(2);
+    const s = await DD.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + o.orderId, orderId: o.orderId, amount: String(o.amount) } });
+    assert(s.status === 400 && s.error?.code === 'INVALID_AMOUNT', `digit-string amount: ${s.status} ${s.error?.code}`);
+    const x = await DD.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card', amount: 1 } });
+    assert(x.status === 400, `prepare with a client amount: ${x.status}`);
+    return '4 mismatching gateway answers refused · string amount 400 · client amount refused';
+  });
+  await step('sub/confirm: two confirms of one order at the same moment → exactly one 200, the period is added once', async () => {
+    if (skipSub()) return skipSub();
+    const o = await prepD(2);
+    const body = { paymentKey: 'mock_slow300_' + o.orderId, orderId: o.orderId, amount: o.amount };
+    const t0 = Date.now();
+    const rs = await Promise.all([DD.req('api/sub/confirm.php', { json: body }), DD.req('api/sub/confirm.php', { json: body })]);
+    const ok = rs.filter((r) => r.status === 200);
+    assert(ok.length === 1 && rs.some((r) => r.status === 409), `answers ${rs.map((r) => `${r.status} ${r.error?.code || ''}`).join(' / ')}`);
+    const sub = (await DD.req('api/auth/me.php')).data.sub;
+    assert(sub.tier === 2 && sub.expiresAt - t0 < 31 * 86400000, `expiresAt ${new Date(sub.expiresAt).toISOString()}`);
+    return 'one 200, one 409 · +30 days once';
+  });
+  await step('sub: two renewal runs at once (cli sub:renew twice, due within a day) → one charge, one extension (F5)', async () => {
+    if (skipSub()) return skipSub();
+    if (!phpProc) return 'skipped: external server (no cli access)';
+    const o = await prepD(3, 'billing');
+    const b = await DD.req('api/sub/billing-issue.php', { json: { authKey: 'mock_auth_ok', customerKey: o.customerKey, orderId: o.orderId } });
+    assert(b.status === 200 && b.data.sub.autoRenew === true, `billing-issue ${b.status} ${b.error?.code}`);
+    assert(String(dbAll('SELECT billing_key FROM subscriptions WHERE user_id = ?', [userD.id])[0].billing_key).startsWith('enc:v1:'), 'the billing key is not stored sealed');
+    const soon = Date.now() + 3600000;
+    srvPhp('Tfm\\Db::exec("UPDATE subscriptions SET expires_at = ? WHERE user_id = ?", $in)', [soon, userD.id]);
+    const run = () => new Promise((resolve) => {
+      const p = spawn('php', [path.join(DOCROOT, 'cli/tfm.php'), 'sub:renew', userD.email], { env: { ...process.env, TFM_DATA_DIR: tmpData, TFM_TOSS_MOCK: '1' } });
+      let out = '';
+      p.stdout.on('data', (d) => { out += d; }); p.stderr.on('data', (d) => { out += d; });
+      p.on('close', (code) => resolve({ code, out }));
+    });
+    const runs = await Promise.all([run(), run()]);
+    assert(runs.every((r) => r.code === 0), `cli: ${runs.map((r) => r.out.slice(0, 120)).join(' | ')}`);
+    const renewals = dbAll("SELECT status FROM orders WHERE user_id = ? AND kind = 'renewal'", [userD.id]);
+    assert(renewals.length === 1 && renewals[0].status === 'confirmed', `renewal orders ${JSON.stringify(renewals)}`);
+    const sub = (await DD.req('api/auth/me.php')).data.sub;
+    assert(Math.round((sub.expiresAt - soon) / 86400000) === 30, `extended by ${((sub.expiresAt - soon) / 86400000).toFixed(1)} days`);
+    return 'one renewal order, +30 days';
+  });
+  await step('sub/return.php: the payment window\'s ?code= / ?message= are never reflected (F11) — a known code or OTHER, a fixed sentence', async () => {
+    const evil = '<script>alert(1)</script>https://evil.example';
+    const r = await DD.req(`api/sub/return.php?code=${encodeURIComponent('PAY_PROCESS_CANCELED')}&message=${encodeURIComponent(evil)}`, { headers: { Accept: 'text/html' } });
+    const loc = r.headers.get('location') || '';
+    assert([302, 303].includes(r.status) && /index\.html\?sub=fail&code=PAY_PROCESS_CANCELED&msg=/.test(loc) && !/evil|script/i.test(decodeURIComponent(loc)), `known code → ${r.status} ${loc}`);
+    const u = await DD.req(`api/sub/return.php?code=${encodeURIComponent(evil)}&message=${encodeURIComponent(evil)}`, { headers: { Accept: 'text/html' } });
+    const loc2 = u.headers.get('location') || '';
+    assert([302, 303].includes(u.status) && /sub=fail&code=OTHER&msg=/.test(loc2) && !/evil|script/i.test(decodeURIComponent(loc2)), `unknown code → ${u.status} ${loc2}`);
+    return 'mapped code + fixed message, nothing reflected';
+  });
+  await step('install.php on a server in use (accounts exist): a plain 404 for GET and POST, no installer words, no form', async () => {
+    const g = await anon.req('install.php', { headers: { Accept: 'text/html' } });
+    const p = await anon.req('install.php', { raw: 'driver=sqlite&admin_email=x%40example.com', contentType: 'application/x-www-form-urlencoded', csrf: false, headers: { Accept: 'text/html' } });
+    for (const [m, r] of [['GET', g], ['POST', p]]) {
+      assert(r.status === 404 && !/install|설치|config\.local|<form/i.test(r.text || ''), `${m} install.php → ${r.status} ${(r.text || '').slice(0, 80)}`);
+    }
+    return 'GET 404 · POST 404';
+  });
   await step('sub: a player cannot grant (403); an admin grants tier 4 for 7 days and revokes (API + admin.php 구독 tab)', async () => {
     if (skipSub()) return skipSub();
     const no = await B.req('api/sub/grant.php', { json: { userId: me.id, tier: 4, days: 7 } });

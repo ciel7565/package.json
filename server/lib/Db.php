@@ -351,7 +351,10 @@ final class Db
         self::ident($table);
         $cols = array_keys($row);
         foreach ($cols as $c) self::ident((string) $c);
+        // finding F14: the conflict keys and an explicit update list are identifiers too, and must be columns of the row
+        foreach ($keys as $k) { self::ident((string) $k); if (!array_key_exists($k, $row)) throw new \InvalidArgumentException('upsert key is not a column of the row'); }
         if ($update === null) $update = array_values(array_diff($cols, $keys));
+        foreach ($update as $u) { self::ident((string) $u); if (!array_key_exists($u, $row)) throw new \InvalidArgumentException('upsert update column is not a column of the row'); }
         $ph = implode(', ', array_fill(0, count($cols), '?'));
         if (self::driver() === 'mysql') {
             $set = implode(', ', array_map(function ($c) { return "$c = VALUES($c)"; }, $update));
