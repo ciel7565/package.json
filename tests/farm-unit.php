@@ -416,6 +416,16 @@ check('Farm::sync — RT_PID_REUSE: a planting id seen before on another bed or 
     $o = Tfm\Farm::plan($uid, $other, cl($a), $T + 1000, 1);
     return in_array('RT_PID_REUSE', vcodes($m), true) && in_array('RT_PID_REUSE', vcodes($o), true) ? true : 'moved: ' . implode(',', vcodes($m)) . ' · other crop: ' . implode(',', vcodes($o));
 });
+check('Farm::plan — one planting id on two beds of one save → RT_PID_REUSE even without the validator (validation switched off)', function () use ($T) {
+    $u = newUser();
+    $p = pid();
+    $a = fresh($u, $T);
+    $a->rtfarm->beds->RB1 = bed('CROP_MINT', $p, $T);
+    $a->rtfarm->beds->RB2 = bed('CROP_MINT', $p, $T);
+    $r = Tfm\Farm::sync((int) $u['id'], cl($a), null, $T, 1, false);
+    $rows = (int) Tfm\Db::value("SELECT COUNT(*) FROM farm_beds WHERE user_id = ? AND kind = 'rt'", [(int) $u['id']]);
+    return in_array('RT_PID_REUSE', vcodes($r), true) && $rows === 1 ? true : implode(',', vcodes($r)) . " rows=$rows";
+});
 check('Farm::sync — a planting pulled out without a harvest (뽑기) → row cleared, no reward', function () use ($U2, $T) {
     $uid = (int) $U2['id'];
     $p = pid();

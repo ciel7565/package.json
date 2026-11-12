@@ -185,8 +185,12 @@ final class Farm
                 $active[(string) $r['pid']] = $r;
             }
             $keep = [];
+            $inSave = [];
             foreach ($beds as $bedId => $b) {
                 $pid = $b['pid'];
+                // one planting id on two beds of this save (SaveValidator refuses it first; with validation off it is skipped here)
+                if (isset($inSave[$pid])) { $bad('RT_PID_REUSE', ['bed' => $bedId, 'other' => $inSave[$pid]]); continue; }
+                $inSave[$pid] = $bedId;
                 $row = isset($active[$pid]) ? $active[$pid]
                     : Db::one('SELECT ' . self::ROW_COLS . " FROM farm_beds WHERE user_id = ? AND kind = 'rt' AND pid = ? ORDER BY id DESC LIMIT 1", [$uid, $pid]);
                 if (!$row) {
