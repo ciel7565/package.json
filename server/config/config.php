@@ -78,6 +78,15 @@ return [
         'allow_localhost_bootstrap' => $env('TFM_LOCAL_BOOTSTRAP', true),
         // 출처 검사: 브라우저가 보내는 Origin/Sec-Fetch-Site 가 다른 사이트이면 상태 변경 요청 거부
         'check_origin'              => $env('TFM_CHECK_ORIGIN', true),
+        // ---- 관리자 페이지 잠금 (CONTRACT §15.4) — owner: admin agent ----
+        // 관리자 폴더 이름. 폴더 이름을 바꾸면(php cli/tfm.php admin:path --random) 여기에 기록돼요. 예전 주소 admin.php 는 언제나 404.
+        'admin_dir'                 => 'admin',
+        // 이 주소(IPv4/IPv6, CIDR 가능)에서만 관리자 페이지가 열려요. 비어 있으면 어디서나(로그인 + 권한 필요). 예: ['203.0.113.7', '192.168.0.0/24']
+        'admin_ip_allowlist'        => $env('TFM_ADMIN_IPS', []),
+        // 관리자 2단계 인증(휴대폰 인증 앱의 6자리 숫자): off | optional(기본 — 등록 전까지 점검 화면이 경고) | required
+        'admin_2fa'                 => $env('TFM_ADMIN_2FA', 'optional'),
+        // 관리자 화면을 이 시간(초) 동안 쓰지 않으면 다시 확인(비밀번호 + 2단계)을 받아요
+        'admin_idle'                => $env('TFM_ADMIN_IDLE', 1800),
     ],
 
     // ------------------------------------------------------------------ sessions
