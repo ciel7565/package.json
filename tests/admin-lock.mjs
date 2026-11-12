@@ -626,7 +626,7 @@ async function main() {
     await step('S06', 'every tab works for the elevated admin without JavaScript; each response carries the lock headers; links never name the folder', async () => {
       const home = await b1.req(ADM);
       const tabs = [...home.text.matchAll(/<nav class="tabs"[\s\S]*?<\/nav>/g)].flatMap((m) => [...m[0].matchAll(/href="\.\/\?tab=([a-z0-9_]+)"/g)].map((x) => x[1]));
-      for (const need of ['overview', 'beds', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
+      for (const need of ['overview', 'beds', 'storage', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
       for (const t of tabs) {
         const p = await b1.req(`${ADM}?tab=${t}`);
         assert(p.status === 200 && isInside(p.text), `tab ${t} → ${p.status}`);
@@ -761,7 +761,7 @@ async function main() {
       assert(isInside((await signInFull(b, ADM, admins.a)).text), 'signed in');
       const P = `"'><script>alert(1)</script><img src=x onerror=alert(2)>`;
       const enc = encodeURIComponent(P);
-      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
+      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
         `?tab=${enc}`, `?tab=sub&uid=${enc}`, `?tab=moderation&show=${enc}`, `?tab=twofa&x=${enc}`, `?tab=health&${enc}=${enc}`, `?${enc}`];
       for (const u of urls) {
         const r = await b.req(ADM + u);
@@ -1390,6 +1390,38 @@ async function main() {
         r = await admF(b, ADM, { action: 'farm_scale', tab: 'beds', scale: '1' }, { page: '?tab=beds' });
         assert(php(s, 'Tfm\\Farm::scale()') === 1, 'back to 1');
         return '60 · 0.5 · 1 accepted (settings row + setting_changed audit) · 0.05 / 5000 / abc / empty / 1e400 / -1 / SQL text refused';
+      });
+      const storeRows = (html) => [...html.matchAll(/<tr class="store"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => m[1]);
+      await step('15.4', '🏚️ 곳간: totals per item over every account and the 곳간 of each account (items, total / cap) — markup item ids and nicknames escaped', async () => {
+        const p = await b.req(`${ADM}?tab=storage`);
+        assert(p.status === 200 && isInside(p.text), `→ ${p.status}`);
+        assertLocked(p, 'storage tab', { payload: true });
+        assert(p.text.includes('아이템별 합계') && p.text.includes('계정별 곳간'), 'both sections');
+        const items = [...p.text.matchAll(/<tr class="item"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => m[1]);
+        const cell = (r, n) => new RegExp(`<td[^>]*>${n}</td>`).test(r);
+        const mint = items.find((r) => r.includes('박하'));
+        assert(mint && cell(mint, 7) && cell(mint, 2), `박하: 7 in 2 accounts (${mint})`);
+        assert(items.some((r) => r.includes('콩') && cell(r, 7) && cell(r, 1)) && items.some((r) => r.includes('옥수수') && cell(r, 4)), '콩 7 · 옥수수 4');
+        assert(items.length === 4, `${items.length} item rows (박하 · 콩 · 옥수수 · the markup id)`);
+        const rows = storeRows(p.text);
+        assert(rows.length === 3, `${rows.length} accounts`);
+        const k0 = rows.find((r) => r.includes(K[0].nickname));
+        assert(k0 && /12\s*\/\s*300/.test(k0) && /박하\s*5/.test(k0) && /콩\s*7/.test(k0), `K0: 12 / 300, 박하 5, 콩 7 (${k0 && k0.slice(0, 300)})`);
+        assert(rows.indexOf(k0) === 0, 'the fullest 곳간 first');
+        assert(p.text.includes('&lt;b onmouseover=alert(') && p.text.includes('&lt;img src=x onerror=alert('), 'the markup item id and nickname come back as text');
+        assert(!rawEvil(p.text).length, `raw markup: ${rawEvil(p.text).join(', ')}`);
+        return `${items.length} items · ${rows.length} accounts · K0 12 / 300`;
+      });
+      await step('15.4', '🏚️ 곳간: account search (nickname / e-mail / #id) and paging (50 accounts per page)', async () => {
+        const ids = bulkUsers(s, 52, 'Gotgan');
+        php(s, '(function ($in) { foreach ($in as $i => $id) Tfm\\Db::insert("farm_storage", ["user_id" => $id, "item_id" => "ITEM_BEAN", "qty" => 1, "updated_at" => Tfm\\Clock::ms()]); return 1; })($in)', ids);
+        const n = async (q) => storeRows((await b.req(`${ADM}?tab=storage${q}`)).text).length;
+        const want = { '': 50, '&p=1': 5, [`&q=${encodeURIComponent('#' + K[0].id)}`]: 1, [`&q=${encodeURIComponent(K[1].nickname)}`]: 1, '&q=gotgan': 50, '&q=gotgan&p=1': 2, '&q=nobody-like-this': 0 };
+        for (const [q, w] of Object.entries(want)) { const got = await n(q); assert(got === w, `${q || 'all'}: ${got} rows, want ${w}`); }
+        const p0 = await b.req(`${ADM}?tab=storage&q=gotgan`);
+        assert(/href="\.\/\?tab=storage[^"]*q=gotgan[^"]*(&amp;|&)p=1/.test(p0.text), 'the next link keeps the search');
+        assert(/value="gotgan"/.test(p0.text), 'the search box keeps the text');
+        return Object.entries(want).map(([q, w]) => `${q.replace(/^&/, '') || 'all'} ${w}`).join(' · ');
       });
     } finally { await sv.stop(); }
   }

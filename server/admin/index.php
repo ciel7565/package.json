@@ -69,6 +69,7 @@ set_error_handler(static function (int $no, string $msg, string $file = '', int 
 const TABS = [
     'overview' => ['📊', '대시보드'],
     'beds' => ['🌱', '재배 현황'],
+    'storage' => ['🏚️', '곳간'],
     'health' => ['🩺', '시스템 점검'],
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
@@ -810,6 +811,44 @@ function viewBeds(): string
     return $h . scaleCard();
 }
 
+/** 🏚️ 곳간 — totals per item over every account (Farm::storageTotals) and each account's 곳간 (Farm::listStorage), search, paging */
+function viewStorage(): string
+{
+    if (!class_exists('Tfm\Farm')) return notReady('🏚️ 곳간', '곳간(lib/Farm.php)');
+    $q = ['tab' => 'storage', 'q' => mb_substr(trim(getStr('q')), 0, 60)];
+    $page = pageParam();
+    $h = '<section class="card"><h3>🧮 아이템별 합계 — 모든 계정</h3><p class="dim small">곳간은 체험객이 수확한 작물과 다 만든 발효 음식을 넣어 두는 창고예요. 아래는 서버에 마지막으로 저장된 곳간을 모두 더한 값이에요.</p>';
+    $tot = Farm::storageTotals();
+    if (!$tot) $h .= '<p class="empty">🍃 아직 곳간에 넣은 것이 없어요.</p>';
+    else {
+        $h .= '<div class="tablewrap"><table><thead><tr><th>아이템</th><th>이름</th><th>모든 계정 합계</th><th>가진 계정 수</th></tr></thead><tbody>';
+        foreach ($tot as $t) $h .= '<tr class="item"><td><code>' . e($t['itemId']) . '</code></td><td>' . e($t['name']) . '</td><td class="nowrap">' . e(num($t['qty'])) . '</td><td class="nowrap">' . e(num($t['accounts'])) . '</td></tr>';
+        $h .= '</tbody></table></div>';
+    }
+    $h .= '</section><section class="card"><h3>🏚️ 계정별 곳간</h3>'
+        . '<form method="get" action="./" class="search"><input type="hidden" name="tab" value="storage"><input name="q" value="' . e($q['q']) . '" placeholder="계정 (닉네임 · 이메일 · #번호)" maxlength="60">'
+        . '<button class="btn" type="submit">🔎 검색</button>' . ($q['q'] !== '' ? '<a class="btn ghost" href="./?tab=storage">모두 보기</a>' : '') . '</form>';
+    $rows = Farm::listStorage(PAGE_ROWS + 1, $page * PAGE_ROWS, $q['q']);
+    $more = count($rows) > PAGE_ROWS;
+    $rows = array_slice($rows, 0, PAGE_ROWS);
+    if (!$rows) {
+        $h .= '<p class="empty">🍃 ' . ($q['q'] !== '' ? '그 계정의 곳간 기록이 없어요.' : '곳간 기록이 없어요.') . '</p>';
+    } else {
+        $h .= '<div class="tablewrap"><table><thead><tr><th>계정</th><th>종류</th><th>모두 / 한도</th><th>채운 정도</th><th>들어 있는 것</th><th>마지막 변경</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $cap = max(1, (int) $r['cap']);
+            $items = [];
+            foreach ($r['itemList'] as $it) $items[] = e($it['name']) . ' ' . e(num($it['qty']));
+            $h .= '<tr class="store"><td><b>' . e($r['nickname']) . '</b> <span class="dim small">#' . (int) $r['userId'] . '</span><br><span class="dim small">' . e($r['email']) . '</span></td>'
+                . '<td class="nowrap">' . e(num($r['kinds'])) . '가지</td><td class="nowrap">' . e(num($r['total'])) . ' / ' . e(num($cap)) . '</td>'
+                . '<td><meter min="0" max="' . e($cap) . '" value="' . e(min($cap, (int) $r['total'])) . '"></meter></td>'
+                . '<td class="msg">' . implode(' · ', $items) . '</td><td class="nowrap">' . e(when($r['updatedAt'])) . '</td></tr>';
+        }
+        $h .= '</tbody></table></div>';
+    }
+    return $h . pager($q, $page, $more) . '</section>';
+}
+
 /** ⏱️ the real-time scale form (Farm::setScale → Settings farm.rt_scale, 0.1–3600) */
 function scaleCard(): string
 {
@@ -1186,6 +1225,7 @@ function render(Ctx $c): string
     if (AdminGate::check($c->user, true, getStr('auto') !== '1')) {
         switch ($tab) {
             case 'beds': $body = viewBeds(); break;
+            case 'storage': $body = viewStorage(); break;
             case 'health': $body = viewHealth(); break;
             case 'users': $body = viewUsers(); break;
             case 'sub': $body = viewSub(); break;
