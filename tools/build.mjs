@@ -224,7 +224,28 @@ function exportGameData() {
       ...[d.quests, d.achievements, d.quizzes].flatMap((m) => Object.values(m || {}).map((x) => x?.reward?.title)),
     ].filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()))].sort(),
     limits: d.serverLimits || {},
+    // real-time beds + storage (CONTRACT §15.1 / §15.2): the server computes ready times and checks harvests / the 곳간
+    rtfarm: d.rtfarm ? {
+      beds: d.rtfarm.beds, careCooldownMin: d.rtfarm.careCooldownMin, carePerAction: d.rtfarm.carePerAction,
+      starAt: d.rtfarm.starAt, bonusAtStars: d.rtfarm.bonusAtStars, reportNotes: d.rtfarm.reportNotes,
+      crops: pick(d.rtfarm.crops, (c) => ({ minutes: c.minutes, exp: c.exp || 0, coin: c.coin || 0 })),
+    } : {},
+    storage: d.storage ? { cap: d.storage.cap, itemIds: d.storage.itemIds } : {},
   };
+}
+
+// docs for the admin site's developer tab (CONTRACT §15.5), copied into lib/docs/ of a server copy. lib/ is never
+// web-readable (lib/.htaccess denies it); Tfm\Markdown renders them for signed-in admins only.
+const ADMIN_DOCS = ['docs/HANDOVER.md', 'docs/ARCHITECTURE.md', 'docs/SERVER-INSTALL-KO.md', 'docs/SECURITY-REPORT-KO.md', 'server/README-SERVER.md'];
+function copyAdminDocs(serverDir) {
+  const dst = path.join(serverDir, 'lib', 'docs');
+  fs.mkdirSync(dst, { recursive: true });
+  let n = 0;
+  for (const rel of ADMIN_DOCS) {
+    const src = path.join(ROOT, rel);
+    if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(dst, path.basename(rel))); n++; }
+  }
+  return n;
 }
 
 function copyDir(src, dst) {
@@ -328,12 +349,19 @@ if (DEFAULT_OUT) {
     fs.writeFileSync(path.join(dataDir, 'game-data.json'), JSON.stringify(data, null, 2));
   }
   serverFiles = copyDir(path.join(ROOT, 'server'), path.dirname(OUT));
+  if (fs.existsSync(path.join(ROOT, 'server'))) serverFiles += copyAdminDocs(path.dirname(OUT));
 }
-// a server copy built elsewhere (tests, a scratch php -S): the same game data the release copy gets
+// a server copy built elsewhere (tests, a scratch php -S): the same game data (and admin docs) the release copy gets
 if (DATA_OUT) {
   fs.mkdirSync(path.dirname(DATA_OUT), { recursive: true });
   fs.writeFileSync(DATA_OUT, JSON.stringify(exportGameData(), null, 2));
   log(`  game data: ${DATA_OUT}`);
+  // <copy>/data/game-data.json → <copy>/lib/docs/ (only for that layout, so a stray --data-out path never gets a lib/;
+  // never into the source tree server/ itself — its docs live in docs/ and are copied only into built copies)
+  const copyRoot = path.dirname(path.dirname(DATA_OUT));
+  if (path.basename(path.dirname(DATA_OUT)) === 'data' && path.resolve(copyRoot) !== path.join(ROOT, 'server')) {
+    log(`  admin docs: ${copyAdminDocs(copyRoot)} → ${path.join(copyRoot, 'lib', 'docs')}`);
+  }
 }
 
 const kb = (n) => (n / 1024).toFixed(0) + ' KB';

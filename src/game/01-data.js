@@ -125,6 +125,38 @@ G.data.crops = {
   CROP_LEMONBALM: { name: '레몬밤', seedItem: 'ITEM_SEED_LEMONBALM', harvestItem: 'ITEM_LEMONBALM', harvestAmount: [3, 5], growthTime: 100, waterUse: 0.15, exp: 35, coin: 30, model: 'lemonbalm', color: '#8cc95c', fruit: '#c8e67a', category: 'herb', desc: '레몬 향이 나는 허브입니다.' },
 };
 for (const [id, c] of Object.entries(G.data.crops)) c.id = id;
+
+// ------------------------------------------------------------------ real-time beds "실시간 텃밭" (CONTRACT §15.1)
+// Four beds that grow by the wall clock, also while the browser is closed. `minutes` = real minutes at speed tier 1 and
+// time scale 1; dur(ms) = minutes × 60000 ÷ (tier × scale). In server mode the server measures the time itself.
+// The harvest item / amount come from G.data.crops[id]; no seed is used up and nothing withers.
+G.data.rtfarm = {
+  beds: ['RB1', 'RB2', 'RB3', 'RB4'],
+  careCooldownMin: 5,          // minutes between two waterings of one bed (same divisor as the growth time)
+  carePerAction: 25,           // care += 25 per watering, up to 100
+  starAt: [0, 40, 75],         // care ≥ 0 → ★, ≥ 40 → ★★, ≥ 75 → ★★★
+  bonusAtStars: 3,             // ★★★ → one extra harvest item
+  localScale: 1,               // local mode time scale (grown-up gate in the dev center only)
+  reportNotes: ['물을 열심히 줬어요!', '매일 보러 왔어요!', '쑥쑥 자라서 기뻐요!', '다음에도 또 키울래요!'],
+  crops: {
+    CROP_MINT: { minutes: 10, exp: 60, coin: 45 },
+    CROP_LEMONBALM: { minutes: 20, exp: 70, coin: 55 },
+    CROP_RADISH: { minutes: 30, exp: 80, coin: 60 },
+    CROP_BEAN: { minutes: 60, exp: 100, coin: 80 },
+    CROP_PERILLA: { minutes: 90, exp: 120, coin: 95 },
+    CROP_CABBAGE: { minutes: 120, exp: 140, coin: 110 },
+    CROP_PEPPER: { minutes: 180, exp: 170, coin: 135 },
+    CROP_LAVENDER: { minutes: 240, exp: 200, coin: 160 },
+    CROP_ROSEMARY: { minutes: 360, exp: 260, coin: 200 },
+    CROP_CORN: { minutes: 480, exp: 320, coin: 250 },
+  },
+};
+// 곳간 (storage, CONTRACT §15.2): crop / herb harvest items and finished fermentation goods; total quantity ≤ cap
+G.data.storage = {
+  cap: 300,
+  itemIds: Object.keys(G.data.items).filter((id) => G.data.items[id].type === 'crop' || G.data.items[id].type === 'fermented'),
+};
+
 G.data.farming = {
   waterPerAction: 45,       // +water % per watering
   waterCooldown: 2.5,       // seconds per plot

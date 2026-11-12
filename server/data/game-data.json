@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-10-31T10:24:55.467Z",
+  "exportedAt": "2026-11-12T21:30:15.576Z",
   "quests": {
     "QUEST001": {
       "reward": {
@@ -761,5 +761,99 @@
     "maxCoinGainPerSave": 60000,
     "maxExpGainPerSave": 20000,
     "harvestSpeedTolerance": 0.5
+  },
+  "rtfarm": {
+    "beds": [
+      "RB1",
+      "RB2",
+      "RB3",
+      "RB4"
+    ],
+    "careCooldownMin": 5,
+    "carePerAction": 25,
+    "starAt": [
+      0,
+      40,
+      75
+    ],
+    "bonusAtStars": 3,
+    "reportNotes": [
+      "물을 열심히 줬어요!",
+      "매일 보러 왔어요!",
+      "쑥쑥 자라서 기뻐요!",
+      "다음에도 또 키울래요!"
+    ],
+    "crops": {
+      "CROP_MINT": {
+        "minutes": 10,
+        "exp": 60,
+        "coin": 45
+      },
+      "CROP_LEMONBALM": {
+        "minutes": 20,
+        "exp": 70,
+        "coin": 55
+      },
+      "CROP_RADISH": {
+        "minutes": 30,
+        "exp": 80,
+        "coin": 60
+      },
+      "CROP_BEAN": {
+        "minutes": 60,
+        "exp": 100,
+        "coin": 80
+      },
+      "CROP_PERILLA": {
+        "minutes": 90,
+        "exp": 120,
+        "coin": 95
+      },
+      "CROP_CABBAGE": {
+        "minutes": 120,
+        "exp": 140,
+        "coin": 110
+      },
+      "CROP_PEPPER": {
+        "minutes": 180,
+        "exp": 170,
+        "coin": 135
+      },
+      "CROP_LAVENDER": {
+        "minutes": 240,
+        "exp": 200,
+        "coin": 160
+      },
+      "CROP_ROSEMARY": {
+        "minutes": 360,
+        "exp": 260,
+        "coin": 200
+      },
+      "CROP_CORN": {
+        "minutes": 480,
+        "exp": 320,
+        "coin": 250
+      }
+    }
+  },
+  "storage": {
+    "cap": 300,
+    "itemIds": [
+      "ITEM_BEAN",
+      "ITEM_PEPPER",
+      "ITEM_CABBAGE",
+      "ITEM_PERILLA",
+      "ITEM_CORN",
+      "ITEM_RADISH",
+      "ITEM_MINT",
+      "ITEM_LAVENDER",
+      "ITEM_ROSEMARY",
+      "ITEM_LEMONBALM",
+      "ITEM_DOENJANG",
+      "ITEM_GANJANG",
+      "ITEM_GOCHUJANG",
+      "ITEM_KIMCHI",
+      "ITEM_VINEGAR"
+    ]
   }
 }
