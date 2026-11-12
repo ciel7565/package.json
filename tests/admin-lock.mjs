@@ -308,6 +308,80 @@ async function apiLogin(b, u) {
 }
 const section = (name) => !ONLY || ONLY.test(name);
 
+// ------------------------------------------------------------------ phase-7 feature data (CONTRACT §15.1–§15.4) for the farm tabs
+/** markup that must come back as inert text on every new tab (nickname, crop id, item id, note, memo, log line, AI answer) */
+const EVIL = {
+  nick: `<img src=x onerror=alert('nick')>`,
+  crop: `<svg onload=alert('crop')>`,
+  item: `<b onmouseover=alert('item')>ITEM</b>`,
+  note: `<script>alert('note')</script> 물을 줬어요 "큰따옴표" '작은따옴표'`,
+  memo: `<i>기존</i> 메모 <script>alert('memo')</script>`,
+};
+/** raw markup of EVIL that must never appear unescaped in a page */
+const rawEvil = (html) => ['<img src=x onerror', '<svg onload', '<b onmouseover', "<script>alert('note')", "<script>alert('memo')", '<i>기존</i>'].filter((x) => html.includes(x));
+/**
+ * Beds, 곳간 rows and completion requests written straight into the site's database (the admin site only reads them; the
+ * player-side rules are farm-server's tests). $K = three player accounts; the third gets the markup nickname. Returns ids.
+ *   K0: RB1 박하 growing (ready in 8 min) · RB2 콩 past its ready time (= ready by the server clock) · RB3 무 harvested
+ *       a second ago (3 items, ★★★) · RB4 들깨 cleared · quick plots P1 콩 50 % growing, P2 고추 100 % ready
+ *   K1: RB1 with a markup crop id, growing · 55 finished quick-plot rows (P9) for paging
+ *   K2: RB1 옥수수 growing
+ *   곳간: K0 박하 5 + 콩 7 · K1 박하 2 + a markup item id 1 · K2 옥수수 4 (19 in all)
+ *   requests: R1 K0 RB2 pending (★★★, markup note, a real JPEG photo) · R2 K0 RB3 approved (markup memo) ·
+ *             R3 K2 P2 rejected · R4 K1 RB1 pending with a photo path that is not a report photo
+ */
+function seedFarm(s, K, adminId) {
+  return php(s, `(function ($in) {
+    $now = Tfm\\Clock::ms(); $min = 60000;
+    $bed = function ($uid, $bed, $kind, $pid, $crop, $first, $ready, $status, $x = []) use ($now) {
+      return Tfm\\Db::insert('farm_beds', $x + ['user_id' => $uid, 'bed_id' => $bed, 'kind' => $kind, 'pid' => $pid, 'crop_id' => $crop, 'tier' => 1,
+        'first_seen_at' => $first, 'ready_at' => $ready, 'growth' => 0, 'care' => 0, 'status' => $status, 'harvested_at' => 0, 'amount' => 0, 'stars' => 0, 'updated_at' => $now]);
+    };
+    list($k0, $k1, $k2) = $in['k'];
+    Tfm\\Db::exec('UPDATE users SET nickname = ? WHERE id = ?', [$in['evil']['nick'], $k2]);
+    $b = [];
+    $b['k0rb1'] = $bed($k0, 'RB1', 'rt', 'a1a1a1a1a1a1a1a1', 'CROP_MINT', $now - 2 * $min, $now + 8 * $min, 'growing', ['care' => 50]);
+    $b['k0rb2'] = $bed($k0, 'RB2', 'rt', 'b2b2b2b2b2b2b2b2', 'CROP_BEAN', $now - 70 * $min, $now - 10 * $min, 'growing', ['care' => 100]);
+    $b['k0rb3'] = $bed($k0, 'RB3', 'rt', 'c3c3c3c3c3c3c3c3', 'CROP_RADISH', $now - 180 * $min, $now - 150 * $min, 'harvested', ['harvested_at' => $now - 1000, 'amount' => 3, 'stars' => 3]);
+    $b['k0rb4'] = $bed($k0, 'RB4', 'rt', 'd4d4d4d4d4d4d4d4', 'CROP_PERILLA', $now - 50 * $min, $now + 40 * $min, 'cleared');
+    $b['k0p1'] = $bed($k0, 'P1', 'plot', '1731400000001', 'CROP_BEAN', $now - 5 * $min, 0, 'growing', ['growth' => 50]);
+    $b['k0p2'] = $bed($k0, 'P2', 'plot', '1731400000002', 'CROP_PEPPER', $now - 9 * $min, 0, 'ready', ['growth' => 100]);
+    $b['k1rb1'] = $bed($k1, 'RB1', 'rt', 'e5e5e5e5e5e5e5e5', $in['evil']['crop'], $now - $min, $now + 30 * $min, 'growing');
+    $b['k2rb1'] = $bed($k2, 'RB1', 'rt', 'f6f6f6f6f6f6f6f6', 'CROP_CORN', $now - 5 * $min, $now + 475 * $min, 'growing');
+    for ($i = 1; $i <= 55; $i++) $bed($k1, 'P9', 'plot', (string) (1731300000000 + $i), 'CROP_RADISH', $now - 900 * $min, 0, 'harvested', ['growth' => 100, 'harvested_at' => $now - 800 * $min, 'amount' => 1, 'updated_at' => $now - 500 * $min - $i * 1000]);
+    foreach ([[$k0, 'ITEM_MINT', 5], [$k0, 'ITEM_BEAN', 7], [$k1, 'ITEM_MINT', 2], [$k1, $in['evil']['item'], 1], [$k2, 'ITEM_CORN', 4]] as $r) {
+      Tfm\\Db::insert('farm_storage', ['user_id' => $r[0], 'item_id' => $r[1], 'qty' => $r[2], 'updated_at' => $now]);
+    }
+    // a real JPEG where a report photo lives (uploads/reports/YYYY/MM/<32 hex>.jpg), made by GD like Upload does
+    $rel = 'uploads/reports/' . date('Y') . '/' . date('m') . '/' . bin2hex(random_bytes(16)) . '.jpg';
+    $file = Tfm\\Config::uploadDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, substr($rel, 8));
+    @mkdir(dirname($file), 0755, true);
+    $im = imagecreatetruecolor(8, 8); imagefill($im, 0, 0, imagecolorallocate($im, 52, 195, 107)); imagejpeg($im, $file, 80); imagedestroy($im);
+    $rep = function ($uid, $kind, $bedId, $pid, $crop, $status, $x = []) use ($now) {
+      return Tfm\\Db::insert('crop_reports', $x + ['user_id' => $uid, 'kind' => $kind, 'bed_id' => $bedId, 'pid' => $pid, 'crop_id' => $crop, 'stars' => 0, 'amount' => 0,
+        'note' => '', 'photo' => '', 'status' => $status, 'memo' => null, 'requested_at' => $now - 60000, 'decided_at' => 0, 'decided_by' => null, 'seen_at' => 0]);
+    };
+    $r = [];
+    $r['r1'] = $rep($k0, 'rt', 'RB2', 'b2b2b2b2b2b2b2b2', 'CROP_BEAN', 'pending', ['stars' => 3, 'note' => $in['evil']['note'], 'photo' => $rel, 'requested_at' => $now - 120000]);
+    $r['r2'] = $rep($k0, 'rt', 'RB3', 'c3c3c3c3c3c3c3c3', 'CROP_RADISH', 'approved', ['stars' => 3, 'amount' => 3, 'memo' => $in['evil']['memo'], 'decided_at' => $now - 30000, 'decided_by' => $in['admin']]);
+    $r['r3'] = $rep($k2, 'plot', 'P2', '1731400000002', 'CROP_PEPPER', 'rejected', ['memo' => '다시 해 봐요', 'decided_at' => $now - 20000, 'decided_by' => $in['admin']]);
+    $r['r4'] = $rep($k1, 'rt', 'RB1', 'e5e5e5e5e5e5e5e5', $in['evil']['crop'], 'pending', ['photo' => '../../config/config.php', 'requested_at' => $now - 90000]);
+    return ['beds' => $b, 'reports' => $r, 'photo' => $rel, 'photoBytes' => filesize($file)];
+  })($in)`, { k: K.map((u) => u.id), evil: EVIL, admin: adminId });
+}
+/** many accounts at once (no password hashing: these accounts never sign in) — for the paging checks */
+function bulkUsers(s, n, tag) {
+  return php(s, `(function ($in) { $now = Tfm\\Clock::ms(); $ids = [];
+    for ($i = 0; $i < $in['n']; $i++) {
+      $nick = $in['tag'] . str_pad((string) $i, 3, '0', STR_PAD_LEFT);
+      $ids[] = Tfm\\Db::insert('users', ['email' => strtolower($nick) . '@example.com', 'nickname' => $nick, 'nickname_key' => mb_strtolower($nick), 'password_hash' => '!',
+        'role' => 'user', 'status' => 'active', 'muted_until' => 0, 'session_epoch' => 0, 'created_at' => $now, 'updated_at' => $now, 'last_login_at' => 0, 'last_login_ip' => '', 'password_changed_at' => $now]);
+    }
+    return $ids; })($in)`, { n, tag });
+}
+/** the number on a dashboard tile with this label ("<b>3</b><small>자라는 중 …") — null when the tile is missing */
+const tileNum = (html, label) => { const m = html.match(new RegExp(`<b>([0-9,]+)</b><small>${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)); return m ? Number(m[1].replace(/,/g, '')) : null; };
+
 // =============================================================================
 async function main() {
   console.log(`\n관리자 페이지 잠금 점검 — source ${path.relative(ROOT, SRC) || SRC}\n`);
@@ -1182,6 +1256,37 @@ async function main() {
         const row = bad.data.checks.find((c) => c.id === 'admin_old_path');
         assert(row.status === 'fail', `a real page at admin.php → ${row.status}`);
         return `${note}${hasAcct ? '' : ' · Db::accountAudit not in the tree (guard only)'}`;
+      });
+    } finally { await sv.stop(); }
+  }
+
+  // ================================================================= phase-7 tabs: 📊 farm numbers · 🌱 재배 현황 · 🏚️ 곳간 · ✅ 완료 확인 (CONTRACT §15.4)
+  if (section('farm')) {
+    const s = makeSite('farm');
+    const sv = await startPhp(s);
+    try {
+      const A = mkUser(s, 'admin');
+      const K = [mkUser(s, 'user'), mkUser(s, 'user'), mkUser(s, 'user')];
+      const F = seedFarm(s, K, A.id);
+      const b = new Browser(sv.base, 'farm');
+      const signedIn = async () => { if (!isInside((await b.req(ADM)).text)) assert(isInside((await signIn(b, ADM, A)).page.text), 'signed in'); };
+      await step('15.4', '📊 대시보드: the farm numbers of Farm::dashboard (growing / ready beds, harvested today, pending confirmations, 곳간 total) and today\'s security alerts (escaped)', async () => {
+        php(s, 'Tfm\\SecEvent::log("payment_tamper", "alert", ["note" => $in["p"]])', { p: EVIL.note });
+        php(s, 'Tfm\\SecEvent::log("probe_xss", "warn", ["q" => "x"])');
+        await signedIn();
+        const p = await b.req(`${ADM}?tab=overview`);
+        assert(p.status === 200 && isInside(p.text), `→ ${p.status}`);
+        assertLocked(p, 'overview', { payload: true });
+        const d = php(s, 'Tfm\\Farm::dashboard()');
+        assert(d.growing === 3 && d.ready === 1 && d.harvestedToday === 1 && d.reportsPending === 2 && d.storageTotal === 19, `seeded numbers: ${JSON.stringify(d)}`);
+        const want = { '자라는 중': d.growing, '다 자란 텃밭': d.ready, '오늘 수확': d.harvestedToday, '완료 확인 대기': d.reportsPending, '곳간 전체': d.storageTotal };
+        for (const [label, n] of Object.entries(want)) assert(tileNum(p.text, label) === n, `tile "${label}" shows ${tileNum(p.text, label)}, want ${n}`);
+        const al = p.text.slice(p.text.indexOf('오늘의 보안 알림'));
+        assert(p.text.includes('오늘의 보안 알림') && /payment_tamper|결제 금액 조작/.test(al), 'today\'s alerts list the payment_tamper alert');
+        assert(al.includes('&lt;script&gt;alert(&#039;note&#039;)&lt;/script&gt;') || al.includes('&lt;script&gt;alert(&apos;note&apos;)&lt;/script&gt;'), 'the alert detail is escaped');
+        assert(!rawEvil(p.text).length, `raw markup: ${rawEvil(p.text).join(', ')}`);
+        assert(/href="\.\/\?tab=reports/.test(p.text) && /href="\.\/\?tab=beds/.test(p.text), 'links to 완료 확인 and 재배 현황');
+        return `growing ${d.growing} · ready ${d.ready} · harvested today ${d.harvestedToday} · pending ${d.reportsPending} · 곳간 ${d.storageTotal} · alert listed`;
       });
     } finally { await sv.stop(); }
   }

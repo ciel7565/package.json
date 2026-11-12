@@ -40,6 +40,7 @@ use Tfm\Config;
 use Tfm\Crypto;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Farm;
 use Tfm\Firewall;
 use Tfm\Health;
 use Tfm\Http;
@@ -598,6 +599,63 @@ function viewCodes(array $codes): string
 }
 
 // =============================================================================== tabs
+/** a grid of number tiles: [[icon, label, number], …] */
+function tiles(array $tiles): string
+{
+    $h = '<div class="tiles">';
+    foreach ($tiles as $i => $t) $h .= '<div class="tile d' . ($i % 7) . '"><span class="ico" aria-hidden="true">' . $t[0] . '</span><b>' . e(num($t[2])) . '</b><small>' . e($t[1]) . '</small></div>';
+    return $h . '</div>';
+}
+/** the real-time time scale in plain digits: 1 · 0.5 · 60 · 3600 (never rounded to a whole number) */
+function scaleText(float $s): string { return rtrim(rtrim(number_format($s, 2, '.', ''), '0'), '.'); }
+/** "준비 중" card for a feature whose library has not landed in this tree */
+function notReady(string $title, string $what): string
+{
+    return '<section class="card"><h3>' . e($title) . '</h3><p class="notice">' . e($what) . ' 기능은 아직 준비 중이에요. 이 서버에 그 기능 파일이 들어오면 저절로 보여요.</p></section>';
+}
+
+/** 📊 the real-time beds today — Farm::dashboard() (the server clock decides growing / ready) */
+function farmCard(): string
+{
+    if (!class_exists('Tfm\Farm')) return notReady('🌱 실시간 텃밭 · 곳간 · 완료 확인', '실시간 텃밭·곳간·완료 확인(lib/Farm.php)');
+    $d = Farm::dashboard();
+    $h = '<section class="card"><h3>🌱 실시간 텃밭 · 곳간 · 완료 확인</h3>'
+        . tiles([['🌱', '자라는 중 (실시간 텃밭)', $d['growing']], ['🎉', '다 자란 텃밭 (수확 기다림)', $d['ready']], ['🧺', '오늘 수확', $d['harvestedToday']],
+            ['📮', '완료 확인 대기', $d['reportsPending']], ['🏚️', '곳간 전체 (모든 계정)', $d['storageTotal']], ['🥕', '연습 밭 자라는 중', $d['plotsGrowing']]])
+        . '<p class="dim small">시간 배율 <b>' . e(scaleText((float) $d['scale'])) . '</b> (1 = 진짜 시간) · 지금 텃밭을 쓰는 계정 ' . e(num($d['accounts'])) . '명 — 자라는 중 / 다 자람은 서버 시계로 판단해요.</p>'
+        . '<p class="row"><a class="btn ghost" href="' . e(href(['tab' => 'beds'])) . '">🌱 재배 현황 보기 →</a>'
+        . '<a class="btn' . ((int) $d['reportsPending'] > 0 ? ' primary' : ' ghost') . '" href="' . e(href(['tab' => 'reports', 'status' => 'pending'])) . '">✅ 완료 확인 ' . e(num($d['reportsPending'])) . '건 보기 →</a>'
+        . '<a class="btn ghost" href="' . e(href(['tab' => 'storage'])) . '">🏚️ 곳간 보기 →</a></p></section>';
+    return $h;
+}
+
+/** 📊 today's security alerts (severity alert — e.g. payment tampering, an automatic block) + today's warn count */
+function alertsCard(): string
+{
+    if (!class_exists('Tfm\SecEvent')) return notReady('🚨 오늘의 보안 알림', '수상한 활동 기록(lib/SecurityEvents.php)');
+    $day0 = Clock::startOfDayMs();
+    $by = ['info' => 0, 'warn' => 0, 'alert' => 0];
+    foreach (Db::all('SELECT severity, COUNT(*) AS n FROM security_events WHERE created_at >= ? GROUP BY severity', [$day0]) as $r) {
+        if (isset($by[(string) $r['severity']])) $by[(string) $r['severity']] = (int) $r['n'];
+    }
+    $rows = SecEvent::recent(['severity' => 'alert', 'sinceMs' => $day0], 8);
+    $h = '<section class="card"><h3>🚨 오늘의 보안 알림 ' . ($by['alert'] > 0 ? '<span class="badge fail">경고 ' . e(num($by['alert'])) . '건</span>' : '<span class="badge ok">경고 없음</span>') . '</h3>'
+        . '<p class="dim small">오늘 기록: 🚨 경고 ' . e(num($by['alert'])) . ' · ⚠️ 주의 ' . e(num($by['warn'])) . ' · ℹ️ 정보 ' . e(num($by['info'])) . ' — 경고는 결제 금액 조작이나 주소 자동 차단처럼 바로 살펴봐야 하는 일이에요.</p>';
+    if (!$rows) {
+        $h .= '<p class="empty">🎉 오늘은 경고 등급의 보안 알림이 없어요.</p>';
+    } else {
+        $h .= '<div class="tablewrap"><table><thead><tr><th>시각</th><th>종류</th><th>주소</th><th>내용</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $d = isset($r['detailData']) && is_array($r['detailData']) ? $r['detailData'] : [];
+            $detail = $d ? (string) json_encode($d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR) : '';
+            $h .= '<tr><td class="nowrap">' . e(whenSec($r['created_at'])) . '</td><td>' . e($r['kind']) . (isset(KIND_KO[$r['kind']]) ? '<br><span class="dim small">' . e(KIND_KO[$r['kind']]) . '</span>' : '') . '</td>'
+                . '<td class="nowrap">' . e(maskIp((string) $r['ip'])) . '</td><td class="msg small">' . e(mb_substr($detail, 0, 160)) . '</td></tr>';
+        }
+        $h .= '</tbody></table></div>';
+    }
+    return $h . '<p class="row"><a class="btn ghost" href="' . e(href(['tab' => 'security', 'since' => '24h'])) . '">🛡️ 보안 탭에서 모두 보기 →</a></p></section>';
+}
+
 function viewOverview(): string
 {
     $s = Stats::collect();
@@ -612,9 +670,7 @@ function viewOverview(): string
         foreach (SecEvent::counts(Clock::startOfDayMs()) as $n) $sec += (int) $n;
         $tiles[] = ['🛡️', '오늘 보안 기록', $sec];
     }
-    $h = '<div class="tiles">';
-    foreach ($tiles as $i => $t) $h .= '<div class="tile d' . ($i % 7) . '"><span class="ico" aria-hidden="true">' . $t[0] . '</span><b>' . e(num($t[2])) . '</b><small>' . e($t[1]) . '</small></div>';
-    $h .= '</div><div class="grid2">';
+    $h = tiles($tiles) . '<div class="grid2">' . farmCard() . alertsCard() . '</div><div class="grid2">';
     $max = max(1, max(array_values($s['levels'])));
     $h .= '<section class="card"><h3>⭐ 레벨 분포</h3>';
     foreach ($s['levels'] as $k => $n) $h .= '<div class="barrow"><span>' . e($k) . '</span><meter min="0" max="' . e($max) . '" value="' . e($n) . '"></meter><b>' . e(num($n)) . '</b></div>';
