@@ -112,12 +112,16 @@ final class Cookie
 
 final class Config
 {
-    /** @var array|null */
+    /** @var array|null config.php + config.local.php as written */
     private static $cfg = null;
+    /** @var array|null the configuration this request works with (files + overrides) */
+    private static $eff = null;
+    /** @var array runtime overrides by dotted path (unit tests, CLI tools) */
+    private static $over = [];
     /** @var array|null */
     private static $secret = null;
 
-    public static function all(): array
+    private static function files(): array
     {
         if (self::$cfg === null) {
             $base = require TFM_ROOT . '/config/config.php';
@@ -131,18 +135,54 @@ final class Config
         return self::$cfg;
     }
 
-    /** forget the cached configuration (the installer wrote config.local.php) */
-    public static function reset(): void { self::$cfg = null; }
-
-    /** dotted lookup: Config::get('chat.max_length', 120) */
-    public static function get(string $path, $default = null)
+    public static function all(): array
     {
-        $v = self::all();
+        if (self::$eff === null) {
+            $c = self::files();
+            foreach (self::$over as $path => $value) $c = self::put($c, explode('.', (string) $path), $value);
+            self::$eff = $c;
+        }
+        return self::$eff;
+    }
+
+    /** forget the cached configuration (the installer wrote config.local.php) */
+    public static function reset(): void { self::$cfg = null; self::$eff = null; }
+
+    /** forget what was derived for the current request only (the files stay cached) */
+    public static function resetRequest(): void { self::$eff = null; }
+
+    /**
+     * Replace one value for the rest of this process (unit tests, CLI tools); null removes the override again.
+     * Never fed from request data.
+     */
+    public static function override(string $path, $value): void
+    {
+        if ($value === null) unset(self::$over[$path]);
+        else self::$over[$path] = $value;
+        self::$eff = null;
+    }
+
+    private static function put(array $a, array $keys, $value): array
+    {
+        $k = array_shift($keys);
+        if (!$keys) { $a[$k] = $value; return $a; }
+        $a[$k] = self::put(isset($a[$k]) && is_array($a[$k]) ? $a[$k] : [], $keys, $value);
+        return $a;
+    }
+
+    private static function dig(array $v, string $path, $default)
+    {
         foreach (explode('.', $path) as $k) {
             if (!is_array($v) || !array_key_exists($k, $v)) return $default;
             $v = $v[$k];
         }
         return $v;
+    }
+
+    /** dotted lookup: Config::get('chat.max_length', 120) */
+    public static function get(string $path, $default = null)
+    {
+        return self::dig(self::all(), $path, $default);
     }
 
     /** recursive merge: associative arrays merge, lists and scalars are replaced */
@@ -332,11 +372,12 @@ final class Http
         return false;
     }
 
+    /** the connection comes from a configured reverse proxy (security.trusted_proxies: addresses or CIDR ranges) */
     private static function fromTrustedProxy(): bool
     {
         $remote = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
         $trusted = (array) Config::get('security.trusted_proxies', []);
-        return $remote !== '' && in_array($remote, $trusted, true);
+        return $remote !== '' && $trusted && self::ipInList($remote, $trusted);
     }
 
     /** client IP: REMOTE_ADDR, or the right-most untrusted X-Forwarded-For hop when behind a trusted proxy */
@@ -346,16 +387,92 @@ final class Http
         $ip = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
         if (PHP_SAPI === 'cli' && $ip === '') $ip = 'cli';
         try {
-            if (self::fromTrustedProxy() && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            if (self::fromTrustedProxy() && !empty($_SERVER['HTTP_X_FORWARDED_FOR']) && is_string($_SERVER['HTTP_X_FORWARDED_FOR'])) {
                 $trusted = (array) Config::get('security.trusted_proxies', []);
-                $hops = array_reverse(array_map('trim', explode(',', (string) $_SERVER['HTTP_X_FORWARDED_FOR'])));
+                $hops = array_reverse(array_map('trim', explode(',', substr($_SERVER['HTTP_X_FORWARDED_FOR'], 0, 1000))));
                 foreach ($hops as $hop) {
-                    if (filter_var($hop, FILTER_VALIDATE_IP) && !in_array($hop, $trusted, true)) { $ip = $hop; break; }
+                    if (filter_var($hop, FILTER_VALIDATE_IP) && !self::ipInList($hop, $trusted)) { $ip = $hop; break; }
                 }
             }
         } catch (\Throwable $e) { /* config not ready */ }
-        if ($ip !== 'cli' && !filter_var($ip, FILTER_VALIDATE_IP)) $ip = '0.0.0.0';
+        if ($ip !== 'cli') {
+            $norm = self::normIp($ip);
+            $ip = $norm !== '' ? $norm : '0.0.0.0';
+        }
         return self::$ip = $ip;
+    }
+
+    /** forget what was derived from $_SERVER (unit tests simulate several requests in one process) */
+    public static function resetRequestCache(): void
+    {
+        self::$ip = null;
+        Config::resetRequest();
+    }
+
+    /** packed address (4 or 16 bytes); an IPv4-mapped IPv6 address becomes its IPv4 form; null when it is not an address */
+    private static function ipBin(string $ip): ?string
+    {
+        if ($ip === '' || strlen($ip) > 64 || !filter_var($ip, FILTER_VALIDATE_IP)) return null;
+        $bin = @inet_pton($ip);
+        if (!is_string($bin)) return null;
+        if (strlen($bin) === 16 && strncmp($bin, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12) === 0) $bin = substr($bin, 12);
+        return $bin;
+    }
+
+    /** one spelling per address ('' when it is not an IP address): 2001:0db8::0001 → 2001:db8::1, ::ffff:1.2.3.4 → 1.2.3.4 */
+    public static function normIp(string $ip): string
+    {
+        $bin = self::ipBin($ip);
+        if ($bin === null) return '';
+        $s = @inet_ntop($bin);
+        return is_string($s) ? $s : '';
+    }
+
+    /** is $ip one of the entries: single addresses or CIDR ranges, IPv4 and IPv6 (invalid entries never match) */
+    public static function ipInList(string $ip, array $cidrs): bool
+    {
+        $bin = self::ipBin($ip);
+        if ($bin === null) return false;
+        foreach ($cidrs as $c) {
+            if (!is_string($c)) continue;
+            $c = trim($c);
+            $bits = null;
+            $p = strpos($c, '/');
+            if ($p !== false) {
+                $m = substr($c, $p + 1);
+                if (!preg_match('/^\d{1,3}$/', (string) $m)) continue;
+                $bits = (int) $m;
+                $c = substr($c, 0, $p);
+            }
+            $net = self::ipBin((string) $c);
+            if ($net === null || strlen($net) !== strlen($bin)) continue;
+            $max = strlen($net) * 8;
+            if ($bits === null) $bits = $max;
+            if ($bits > $max) continue;
+            $bytes = intdiv($bits, 8);
+            if ($bytes > 0 && strncmp($bin, $net, $bytes) !== 0) continue;
+            $rest = $bits % 8;
+            if ($rest > 0) {
+                $mask = (0xff << (8 - $rest)) & 0xff;
+                if ((ord($bin[$bytes]) & $mask) !== (ord($net[$bytes]) & $mask)) continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** 127.0.0.0/8 or ::1 */
+    public static function isLoopbackIp(string $ip): bool
+    {
+        return self::ipInList($ip, ['127.0.0.0/8', '::1']);
+    }
+
+    /** the running script relative to the installation folder, e.g. "api/auth/login.php" (for logs and events) */
+    public static function scriptPath(): string
+    {
+        $s = str_replace('\\', '/', (string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''));
+        if (preg_match('#(?:^|/)((?:api|admin|cli)/[A-Za-z0-9_./-]{1,150})$#', $s, $m)) return $m[1];
+        return substr((string) preg_replace('/[^A-Za-z0-9_.-]/', '', basename($s)), 0, 80);
     }
 
     /**

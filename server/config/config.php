@@ -78,6 +78,28 @@ return [
         'allow_localhost_bootstrap' => $env('TFM_LOCAL_BOOTSTRAP', true),
         // 출처 검사: 브라우저가 보내는 Origin/Sec-Fetch-Site 가 다른 사이트이면 상태 변경 요청 거부
         'check_origin'              => $env('TFM_CHECK_ORIGIN', true),
+        // ---- 요청 잠금 (CONTRACT §15.7 #2 #5 #10) ----
+        // HTTPS 강제: auto(기본 — localhost / 127.0.0.1 / ::1 로 연 경우만 빼고 항상) | on | off
+        //   http 로 온 GET 은 https 주소로 옮기고(308), 그 밖의 요청(로그인·저장 등)은 403 HTTPS_REQUIRED 로 거절해요.
+        //   인증서가 없는 교육장 내부망에서만 off 로 두세요 (점검 화면에 ⛔ 로 보여요).
+        'force_https'               => $env('TFM_FORCE_HTTPS', 'auto'),
+        // 다른 사이트에서 읽어도 되는 주소 목록 (정확히 "https://호스트[:포트]"; '*' 는 쓸 수 없어요). 비어 있으면 같은 사이트만.
+        //   허용된 주소도 공개 읽기 API(ping · time · ranking/top · sub/status)의 GET 만 읽을 수 있고, 로그인 정보는 따라가지 않아요.
+        'cors_allowed_origins'      => $env('TFM_CORS_ORIGINS', []),
+        // 수상한 요청이 한 주소에서 window(초) 안에 threshold 번 넘게 오면 duration(초) 동안 그 주소를 막아요
+        //   (다시 걸릴 때마다 2배, 최대 24시간). 이 서버 PC(localhost)와 exempt 의 주소(IP·CIDR)는 자동으로 막지 않아요.
+        'block' => [
+            'threshold' => $env('TFM_BLOCK_THRESHOLD', 25),
+            'window'    => 600,
+            'duration'  => 1800,
+            'exempt'    => $env('TFM_BLOCK_EXEMPT', []),      // 예: 학교·교육장의 인터넷 주소 ['203.0.113.7', '192.168.0.0/24']
+        ],
+        'events_days'               => 90,      // 보안 기록(security_events) 보관 기간(일)
+        'events_per_minute'         => 120,     // 한 주소에서 1분에 남기는 보안 기록의 상한 (기록 넘침 방지)
+        // 큰 일(자동 차단 등)이 생기면 알림을 보낼 곳 — 비워 두면 보내지 않아요. 요청에 담긴 값은 쓰지 않고 여기 적힌 곳으로만 보내요.
+        'alert_email'               => $env('TFM_ALERT_EMAIL', ''),     // 예: 'ops@example.org' (PHP mail() 이 되는 서버)
+        'alert_webhook'             => $env('TFM_ALERT_WEBHOOK', ''),   // 예: 'https://hooks.example.org/...' (https 만, 3초 안에 응답)
+        'alert_interval'            => 600,     // 같은 종류의 알림은 이 시간(초)에 한 번만
         // ---- 관리자 페이지 잠금 (CONTRACT §15.4) — owner: admin agent ----
         // 관리자 폴더 이름. 폴더 이름을 바꾸면(php cli/tfm.php admin:path --random) 여기에 기록돼요. 예전 주소 admin.php 는 언제나 404.
         'admin_dir'                 => 'admin',

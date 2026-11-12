@@ -277,6 +277,142 @@ mysqlOnly('MariaDB — the connection refuses LOAD DATA LOCAL INFILE and a secon
 Tfm\Config::reset();
 Tfm\Db::reset();
 
+// ------------------------------------------------------------------ Installer: dedicated least-privilege account (item 1a, 1b, 21) — MariaDB only
+$DB2 = 'tfm_secdata2';
+$adm = ['host' => (string) (getenv('TFM_DB_HOST') ?: '127.0.0.1'), 'port' => (int) (getenv('TFM_DB_PORT') ?: 3306), 'username' => (string) (getenv('TFM_DB_USER') ?: 'root'), 'password' => (string) getenv('TFM_DB_PASS'), 'database' => $DB2];
+$adminPdo = null;
+$accountsBefore = [];
+$listAccounts = function () use (&$adminPdo): array {
+    return array_map(function ($r) { return $r['User'] . '@' . $r['Host']; }, $adminPdo->query("SELECT User, Host FROM mysql.user WHERE User LIKE 'tfm\\_%' ORDER BY User, Host")->fetchAll());
+};
+$installInput = function (array $over = []) use ($adm, $DB2): array {
+    return $over + ['driver' => 'mysql', 'host' => $adm['host'], 'port' => (string) $adm['port'], 'database' => $DB2, 'username' => $adm['username'], 'password' => $adm['password'], 'create_db' => true,
+        'admin_email' => 'owner@example.com', 'admin_nickname' => '운영자', 'admin_password' => 'Sunny-Jar-4821', 'toss_mock' => true];
+};
+if ($IS_MYSQL) {
+    $adminPdo = Tfm\Db::connectMysql($adm, false);
+    $adminPdo->exec("DROP DATABASE IF EXISTS `$DB2`");
+    $accountsBefore = $listAccounts();
+}
+$run1 = null;
+mysqlOnly('install — a dedicated account tfm_<8 hex> is created; only it (never the administrator) is written to config.local.php, auto_migrate off', function () use (&$run1, $installInput, $cfgFile, $adm) {
+    @unlink(Tfm\Installer::lockPath());
+    $run1 = Tfm\Installer::run($installInput());
+    $c = Tfm\Installer::readLocalConfig();
+    $raw = (string) file_get_contents($cfgFile);
+    if (empty($run1['dbAccount']['dedicated'])) return 'not dedicated: ' . json_encode($run1['dbAccount']);
+    if (!preg_match('/^tfm_[0-9a-f]{8}$/', (string) $c['db']['mysql']['username']) || $c['db']['mysql']['username'] !== $run1['dbAccount']['user']) return 'user: ' . $c['db']['mysql']['username'];
+    if (!preg_match('/^[A-Za-z0-9]{32}$/', (string) $c['db']['mysql']['password'])) return 'the password is not 32 random letters / digits';
+    if ($c['db']['auto_migrate'] !== false) return 'auto_migrate is not false';
+    if (strpos($raw, "'" . $adm['username'] . "'") !== false) return 'the administrator name is in config.local.php';
+    return $run1['schema'] === Tfm\Db::SCHEMA_VERSION && $run1['adminCreated'] === true;
+});
+mysqlOnly('install — the runtime account: not root, a password, no global and no DDL privileges, exactly SELECT / INSERT / UPDATE / DELETE on the app database', function () use ($DB2) {
+    $a = Tfm\Db::accountAudit();
+    if ($a['isRoot'] || $a['emptyPassword'] || $a['globalPrivileges'] || $a['ddlPrivileges'] || $a['otherDatabases']) return json_encode($a);
+    $all = implode(' | ', $a['grants']);
+    if (!preg_match('/GRANT SELECT, INSERT, UPDATE, DELETE ON `tfm\\\\?_secdata2`\.\* TO/', $all)) return 'grants: ' . $all;
+    return !preg_match("/'\*[0-9A-F]{40}'/", $all) && $a['database'] === $DB2 ? true : 'a password hash is in the grants: ' . $all;
+});
+mysqlOnly('install — the runtime account reads and writes rows but cannot CREATE / ALTER / DROP, read mysql.user or use another database', function () {
+    $pdo = Tfm\Db::pdo();
+    Tfm\Db::exec('INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, 0)', ['unit-probe']);
+    $n = Tfm\Db::exec('DELETE FROM rate_limits WHERE bucket = ?', ['unit-probe']);
+    if ($n !== 1) return 'rows cannot be written';
+    foreach (['CREATE TABLE tfm_x (id INT)', 'ALTER TABLE users ADD COLUMN x INT', 'DROP TABLE rate_limits', 'SELECT User FROM mysql.user', 'SELECT 1 FROM tfm_secdata.users LIMIT 1', "CREATE USER 'tfm_evil'@'localhost'", 'CREATE DATABASE tfm_evil'] as $sql) {
+        try { $pdo->exec($sql); return 'allowed: ' . $sql; } catch (PDOException $e) { /* refused */ }
+    }
+    return true;
+});
+mysqlOnly('install again (lock removed) — the same account is kept, its password is new, the old password no longer works', function () use (&$run1, $installInput, $adm, $DB2) {
+    $old = Tfm\Installer::readLocalConfig()['db']['mysql'];
+    @unlink(Tfm\Installer::lockPath());
+    $r = Tfm\Installer::run($installInput());
+    $new = Tfm\Installer::readLocalConfig()['db']['mysql'];
+    if ($new['username'] !== $old['username'] || $new['password'] === $old['password'] || empty($r['dbAccount']['dedicated'])) return 'account not reused or password unchanged';
+    try { Tfm\Db::connectMysql($old, true); return 'the old password still works'; } catch (PDOException $e) { /* refused */ }
+    return (int) Tfm\Db::value('SELECT COUNT(*) FROM users') === 1 && $r['adminCreated'] === false;
+});
+mysqlOnly('upgrade — schema behind: the runtime account answers SCHEMA_OUTDATED; migrateAsAdmin applies it with a temporary administrator connection', function () use (&$adminPdo, $adm, $DB2) {
+    $adminPdo->exec("DELETE FROM `$DB2`.schema_version WHERE version = " . Tfm\Db::SCHEMA_VERSION);
+    Tfm\Db::reset();
+    if (!throwsApi(function () { Tfm\Db::pdo(); }, 'SCHEMA_OUTDATED')) return 'no SCHEMA_OUTDATED';
+    $r = Tfm\Installer::migrateAsAdmin($adm['username'], $adm['password']);
+    if ($r['from'] !== Tfm\Db::SCHEMA_VERSION - 1 || $r['to'] !== Tfm\Db::SCHEMA_VERSION) return json_encode($r);
+    $a = Tfm\Db::accountAudit(); // back on the runtime account
+    return preg_match('/^tfm_[0-9a-f]{8}$/', $a['user']) === 1 && !$a['ddlPrivileges'] && strpos((string) file_get_contents(Tfm\Installer::configPath()), "'" . $adm['username'] . "'") === false;
+});
+mysqlOnly('upgrade — migrateAsAdmin with a wrong administrator password: a Korean DB_CONNECT error, nothing changes', function () use ($adm) {
+    return throwsApi(function () use ($adm) { Tfm\Installer::migrateAsAdmin($adm['username'], 'definitely-wrong-' . bin2hex(random_bytes(4))); }, 'DB_CONNECT')
+        && Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION;
+});
+mysqlOnly('db:rotate-password — a new random password for the runtime account on every host, config.local.php rewritten (0600), the old one refused', function () use ($adm, $cfgFile) {
+    $old = Tfm\Installer::readLocalConfig()['db']['mysql'];
+    $r = Tfm\Installer::rotateDbPassword($adm['username'], $adm['password']);
+    $new = Tfm\Installer::readLocalConfig()['db']['mysql'];
+    if ($new['username'] !== $old['username'] || $new['password'] === $old['password'] || !preg_match('/^[A-Za-z0-9]{32}$/', $new['password'])) return 'password not rotated';
+    try { Tfm\Db::connectMysql($old, true); return 'the old password still works'; } catch (PDOException $e) { /* refused */ }
+    foreach (['127.0.0.1', 'localhost'] as $h) { try { Tfm\Db::connectMysql(['host' => $h] + $new, true); } catch (PDOException $e) { if ($h === '127.0.0.1') return 'the new password does not work'; } }
+    clearstatcache();
+    return count($r['hosts']) >= 1 && (int) Tfm\Db::value('SELECT COUNT(*) FROM users') === 1 && (fileperms($cfgFile) & 0777) === 0600 && Tfm\Installer::readLocalConfig()['db']['auto_migrate'] === false;
+});
+mysqlOnly('db:rotate-password — refuses to change the password of the administrator account itself (no dedicated account yet)', function () use ($adm) {
+    $keep = Tfm\Installer::readLocalConfig();
+    Tfm\Installer::mergeLocalConfig(['db' => ['mysql' => ['username' => $adm['username'], 'password' => $adm['password']]]]);
+    Tfm\Db::reset();
+    $refused = throwsApi(function () use ($adm) { Tfm\Installer::rotateDbPassword($adm['username'], $adm['password']); }, 'DB_SAME_ACCOUNT');
+    Tfm\Installer::writeConfig($keep);
+    Tfm\Config::reset();
+    Tfm\Db::reset();
+    return $refused;
+});
+mysqlOnly('db:account — an installation that runs as the administrator is moved to a dedicated account (existing data kept)', function () use ($adm, $DB2) {
+    Tfm\Installer::writeConfig(['db' => ['driver' => 'mysql', 'mysql' => ['host' => $adm['host'], 'port' => $adm['port'], 'database' => $DB2, 'username' => $adm['username'], 'password' => $adm['password']]]]);
+    Tfm\Config::reset();
+    Tfm\Db::reset();
+    if (!Tfm\Db::accountAudit()['isRoot'] && $adm['username'] === 'root') return 'setup: not running as root';
+    $r = Tfm\Installer::switchToAppAccount($adm['username'], $adm['password']);
+    $a = Tfm\Db::accountAudit();
+    $c = Tfm\Installer::readLocalConfig();
+    return preg_match('/^tfm_[0-9a-f]{8}$/', $a['user']) === 1 && $a['user'] === $r['user'] && !$a['ddlPrivileges'] && !$a['globalPrivileges'] && $c['db']['auto_migrate'] === false
+        && (int) Tfm\Db::value('SELECT COUNT(*) FROM users') === 1 ? true : json_encode($a);
+});
+mysqlOnly('install — an administrator without CREATE USER: the typed account is used and flagged, the SQL to run by hand is returned (no password in it)', function () use (&$adminPdo, $installInput, $DB2) {
+    $lim = 'tfm_lim_' . bin2hex(random_bytes(3));
+    $pw = 'Lim' . bin2hex(random_bytes(8));
+    foreach (['localhost', '127.0.0.1'] as $h) {
+        $adminPdo->exec("CREATE USER '$lim'@'$h' IDENTIFIED BY '$pw'");
+        $adminPdo->exec("GRANT ALL PRIVILEGES ON `tfm\\_secdata2`.* TO '$lim'@'$h'");
+    }
+    @unlink(Tfm\Installer::lockPath());
+    $r = Tfm\Installer::run($installInput(['username' => $lim, 'password' => $pw, 'create_db' => false]));
+    $c = Tfm\Installer::readLocalConfig();
+    $acct = $r['dbAccount'];
+    if ($acct['dedicated'] !== false || $acct['reason'] !== 'no_create_user') return json_encode($acct);
+    $sql = implode("\n", $acct['manual']);
+    if (strpos($sql, 'CREATE USER') === false || strpos($sql, 'GRANT SELECT, INSERT, UPDATE, DELETE ON') === false || strpos($sql, $pw) !== false) return 'manual SQL: ' . $sql;
+    return $c['db']['mysql']['username'] === $lim && !array_key_exists('auto_migrate', $c['db']) && Tfm\Db::accountAudit()['ddlPrivileges'] === true;
+});
+mysqlOnly('install — the checkbox off: the typed account is used (flagged as chosen), no account is created', function () use (&$adminPdo, $installInput, $listAccounts) {
+    $before = $listAccounts();
+    @unlink(Tfm\Installer::lockPath());
+    $r = Tfm\Installer::run($installInput(['app_account' => false]));
+    return $r['dbAccount']['dedicated'] === false && $r['dbAccount']['reason'] === 'not_requested' && $listAccounts() === $before && Tfm\Db::accountAudit()['isRoot'] === true;
+});
+if ($IS_MYSQL) {
+    // leave the scratch server as it was: only the tfm_ accounts this run created are dropped
+    foreach (array_diff($listAccounts(), $accountsBefore) as $acct) {
+        list($u, $h) = explode('@', $acct, 2);
+        $adminPdo->exec('DROP USER IF EXISTS ' . $adminPdo->quote($u) . '@' . $adminPdo->quote($h));
+    }
+    $adminPdo->exec("DROP DATABASE IF EXISTS `$DB2`");
+    $adminPdo = null;
+}
+@unlink(Tfm\Installer::lockPath());
+@unlink($cfgFile);
+Tfm\Config::reset();
+Tfm\Db::reset();
+
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all security-data unit checks passed" : "✖ $failed check(s) failed") . PHP_EOL;
 exit($failed === 0 ? 0 : 1);

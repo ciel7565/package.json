@@ -190,6 +190,233 @@ check('V::probe — ordinary kid sentences, e-mails, nicknames and numbers are n
     return true;
 });
 
+// ================================================================== #5 suspicious activity — SecEvent + Firewall (lib/SecurityEvents.php)
+/** a new simulated request from $ip: per-request caches are forgotten */
+function asIp(string $ip, callable $fn, array $more = [])
+{
+    return withServer(['REMOTE_ADDR' => $ip, 'REQUEST_METHOD' => 'POST', 'SCRIPT_NAME' => '/api/auth/login.php', 'HTTP_HOST' => 'play.example.org', 'HTTP_X_FORWARDED_FOR' => null] + $more, function () use ($fn) {
+        if (method_exists('Tfm\SecEvent', 'resetRequest')) Tfm\SecEvent::resetRequest();
+        if (method_exists('Tfm\V', 'resetWatch')) Tfm\V::resetWatch();
+        return $fn();
+    });
+}
+function evCount(string $where = '1=1', array $p = []): int { return (int) Tfm\Db::value("SELECT COUNT(*) FROM security_events WHERE $where", $p); }
+function wipeSec(): void { Tfm\Db::exec('DELETE FROM security_events'); Tfm\Db::exec('DELETE FROM ip_blocks'); Tfm\Db::exec("DELETE FROM rate_limits WHERE bucket LIKE 'secalert%'"); }
+
+check('SecEvent::log — writes one security_events row (ms time, ip, ip_hash = Sec::hashId(ip), kind, severity, path, detail JSON)', function () {
+    wipeSec();
+    $t0 = Tfm\Clock::ms();
+    asIp('203.0.113.7', function () { Tfm\SecEvent::log('csrf_fail', 'warn', ['why' => 'missing'], 42); });
+    $r = Tfm\Db::one('SELECT * FROM security_events ORDER BY id DESC LIMIT 1');
+    if (!$r) return 'no row';
+    $d = json_decode((string) $r['detail'], true);
+    return $r['kind'] === 'csrf_fail' && $r['severity'] === 'warn' && $r['ip'] === '203.0.113.7' && $r['ip_hash'] === Tfm\Sec::hashId('203.0.113.7')
+        && (int) $r['user_id'] === 42 && (int) $r['created_at'] >= $t0 && $r['path'] === 'api/auth/login.php' && is_array($d) && $d['why'] === 'missing'
+        ? true : json_encode($r);
+});
+check('SecEvent::log — default severity is warn; an unknown severity becomes warn; a long kind is cut to 40 characters', function () {
+    wipeSec();
+    asIp('203.0.113.7', function () { Tfm\SecEvent::log('honeypot'); Tfm\SecEvent::log('probe_xss', 'loud'); Tfm\SecEvent::log(str_repeat('k', 90), 'info'); });
+    $rows = Tfm\Db::all('SELECT kind, severity FROM security_events ORDER BY id');
+    return count($rows) === 3 && $rows[0]['severity'] === 'warn' && $rows[1]['severity'] === 'warn' && strlen($rows[2]['kind']) === 40 && $rows[2]['severity'] === 'info' ? true : json_encode($rows);
+});
+check('SecEvent::log — never throws (unencodable detail, missing table) and never stores raw markup in detail', function () {
+    wipeSec();
+    asIp('203.0.113.7', function () {
+        Tfm\SecEvent::log('probe_xss', 'warn', ['sample' => '<script>alert(1)</script>', 'bin' => "\xff\xfe", 'deep' => ['a' => ['b' => ['c' => str_repeat('x', 9000)]]]]);
+    });
+    $raw = (string) Tfm\Db::value('SELECT detail FROM security_events ORDER BY id DESC LIMIT 1');
+    if ($raw === '' || strpos($raw, '<') !== false || strpos($raw, '>') !== false) return 'raw markup in the stored JSON: ' . substr($raw, 0, 80);
+    if (strlen($raw) > 4000) return 'detail not bounded: ' . strlen($raw);
+    $d = json_decode($raw, true);
+    if (!is_array($d) || $d['sample'] !== '<script>alert(1)</script>') return 'decoded value changed';
+    Tfm\Db::exec('ALTER TABLE security_events RENAME TO security_events_gone');
+    try { asIp('203.0.113.7', function () { Tfm\SecEvent::log('honeypot', 'warn', ['x' => 1]); }); }
+    finally { Tfm\Db::exec('ALTER TABLE security_events_gone RENAME TO security_events'); }
+    return true;
+});
+check('SecEvent::log — the event also reaches the file log (data/logs)', function () use ($tmp) {
+    asIp('203.0.113.7', function () { Tfm\SecEvent::log('honeypot', 'warn', ['marker' => 'filelog-check']); });
+    foreach (glob($tmp . '/logs/app-*.log.php') ?: [] as $f) { if (strpos((string) file_get_contents($f), 'filelog-check') !== false) return true; }
+    return 'marker not in data/logs';
+});
+check('SecEvent::recent — newest first, filters kind / severity / ipHash / sinceMs, limit + offset', function () {
+    wipeSec();
+    asIp('203.0.113.7', function () { Tfm\SecEvent::log('csrf_fail', 'warn'); });
+    asIp('203.0.113.8', function () { Tfm\SecEvent::log('honeypot', 'alert'); });
+    asIp('203.0.113.8', function () { Tfm\SecEvent::log('honeypot', 'warn', ['n' => 2]); });
+    $all = Tfm\SecEvent::recent([]);
+    if (count($all) !== 3 || $all[0]['kind'] !== 'honeypot' || (int) $all[0]['id'] < (int) $all[2]['id']) return 'order';
+    if (!is_string($all[0]['detail']) || !is_array($all[0]['detailData']) || $all[0]['detailData']['n'] !== 2) return 'detail / detailData';
+    if (count(Tfm\SecEvent::recent(['kind' => 'honeypot'])) !== 2) return 'kind';
+    if (count(Tfm\SecEvent::recent(['severity' => 'alert'])) !== 1) return 'severity';
+    if (count(Tfm\SecEvent::recent(['ipHash' => Tfm\Sec::hashId('203.0.113.7')])) !== 1) return 'ipHash';
+    if (count(Tfm\SecEvent::recent(['sinceMs' => Tfm\Clock::ms() + 5000])) !== 0) return 'sinceMs';
+    if (count(Tfm\SecEvent::recent([], 2)) !== 2 || count(Tfm\SecEvent::recent([], 2, 2)) !== 1) return 'limit / offset';
+    return count(Tfm\SecEvent::recent(['kind' => "x' OR '1'='1"])) === 0 ? true : 'filter value is not bound';
+});
+check('SecEvent::counts — kind → n since a time', function () {
+    $c = Tfm\SecEvent::counts(0);
+    return isset($c['honeypot'], $c['csrf_fail']) && $c['honeypot'] === 2 && $c['csrf_fail'] === 1 && Tfm\SecEvent::counts(Tfm\Clock::ms() + 5000) === [] ? true : json_encode($c);
+});
+check('SecEvent::cleanup — removes events older than security.events_days (90)', function () {
+    Tfm\Db::exec('UPDATE security_events SET created_at = ? WHERE kind = ?', [Tfm\Clock::ms() - 91 * 86400000, 'csrf_fail']);
+    $n = Tfm\SecEvent::cleanup();
+    return $n === 1 && evCount() === 2 ? true : "deleted $n, left " . evCount();
+});
+check('SecEvent::log — a flood from one address stops being stored (security.events_per_minute)', function () {
+    wipeSec();
+    Tfm\Config::override('security.events_per_minute', 10);
+    try { for ($i = 0; $i < 30; $i++) asIp('198.51.100.9', function () { Tfm\SecEvent::log('login_locked', 'info'); }); }
+    finally { Tfm\Config::override('security.events_per_minute', null); }
+    $n = evCount();
+    return $n === 10 ? true : "stored $n";
+});
+
+check('Firewall::ipInList — IPv4 single addresses and CIDR ranges', function () {
+    $l = ['203.0.113.7', '10.0.0.0/8', '192.168.1.0/24', '172.16.5.4/32'];
+    foreach (['203.0.113.7', '10.255.1.2', '192.168.1.200', '172.16.5.4'] as $in) if (!Tfm\Firewall::ipInList($in, $l)) return "should match $in";
+    foreach (['203.0.113.8', '11.0.0.1', '192.168.2.1', '172.16.5.5'] as $out) if (Tfm\Firewall::ipInList($out, $l)) return "should not match $out";
+    return true;
+});
+check('Firewall::ipInList — IPv6 single addresses and CIDR ranges, IPv4-mapped addresses', function () {
+    $l = ['2001:db8::1', '2001:db8:abcd::/48', '::1', '192.0.2.0/24'];
+    foreach (['2001:db8::1', '2001:0db8:0000:0000:0000:0000:0000:0001', '2001:db8:abcd:12::9', '::1', '::ffff:192.0.2.5'] as $in) if (!Tfm\Firewall::ipInList($in, $l)) return "should match $in";
+    foreach (['2001:db8::2', '2001:db8:abce::1', '::2', '::ffff:192.0.3.5'] as $out) if (Tfm\Firewall::ipInList($out, $l)) return "should not match $out";
+    return true;
+});
+check('Firewall::ipInList — invalid entries, invalid addresses and impossible prefixes never match', function () {
+    foreach (['', 'abc', '1.2.3', '999.1.1.1', "1.2.3.4\n"] as $bad) if (Tfm\Firewall::ipInList($bad, ['0.0.0.0/0', '::/0'])) return 'matched invalid address ' . json_encode($bad);
+    return !Tfm\Firewall::ipInList('1.2.3.4', ['1.2.3.4/33', '1.2.3.4/-1', 'x/8', '', '1.2.3.4/', '1.2.3/8', ['1.2.3.4']])
+        && Tfm\Firewall::ipInList('1.2.3.4', ['0.0.0.0/0']) && Tfm\Firewall::ipInList('2001:db8::5', ['::/0']) && !Tfm\Firewall::ipInList('1.2.3.4', ['::/0']);
+});
+check('Firewall::block → isBlocked, check() answers 403 IP_BLOCKED with Retry-After, other addresses pass', function () {
+    wipeSec();
+    Tfm\Firewall::block('198.51.100.20', 600, 'manual test', 1);
+    if (!Tfm\Firewall::isBlocked('198.51.100.20') || Tfm\Firewall::isBlocked('198.51.100.21')) return 'isBlocked';
+    $e = asIp('198.51.100.20', function () { return apiError(function () { Tfm\Firewall::check(); }); });
+    if (!$e || $e->status !== 403 || $e->errorCode !== 'IP_BLOCKED') return 'check did not refuse';
+    $ra = implode('|', $e->headers);
+    if (!preg_match('/Retry-After: (\d+)/', $ra, $m) || (int) $m[1] < 590 || (int) $m[1] > 600) return 'Retry-After: ' . $ra;
+    return asIp('198.51.100.21', function () { Tfm\Firewall::check(); return true; });
+});
+check('Firewall::check — counts hits and logs ip_blocked once at first (not once per request)', function () {
+    for ($i = 0; $i < 6; $i++) asIp('198.51.100.20', function () { apiError(function () { Tfm\Firewall::check(); }); });
+    $hits = (int) Tfm\Db::value('SELECT hits FROM ip_blocks WHERE ip_hash = ?', [Tfm\Sec::hashId('198.51.100.20')]);
+    $ev = evCount("kind = 'ip_blocked'");
+    return $hits === 7 && $ev === 1 ? true : "hits=$hits events=$ev";
+});
+check('Firewall::listBlocks — active blocks with ip, reason, until_at, hits, strikes', function () {
+    $l = Tfm\Firewall::listBlocks();
+    return count($l) === 1 && $l[0]['ip'] === '198.51.100.20' && $l[0]['reason'] === 'manual test' && (int) $l[0]['until_at'] > Tfm\Clock::ms() && (int) $l[0]['hits'] === 7 && (int) $l[0]['strikes'] >= 1 && (int) $l[0]['created_by'] === 1
+        ? true : json_encode($l);
+});
+check('Firewall::unblock — by address and by hash; false when nothing was blocked', function () {
+    if (Tfm\Firewall::unblock('198.51.100.99')) return 'unblocked a free address';
+    if (!Tfm\Firewall::unblock('198.51.100.20', 1) || Tfm\Firewall::isBlocked('198.51.100.20')) return 'by address';
+    Tfm\Firewall::block('2001:db8::77', 600, 'v6', null);
+    if (!Tfm\Firewall::isBlocked('2001:0db8:0:0:0:0:0:77')) return 'IPv6 spelling';
+    return Tfm\Firewall::unblock(Tfm\Sec::hashId('2001:db8::77')) && !Tfm\Firewall::isBlocked('2001:db8::77') && Tfm\Firewall::listBlocks() === [];
+});
+check('Firewall::block — an expired block no longer blocks; a bad address is INVALID_INPUT', function () {
+    Tfm\Firewall::block('198.51.100.30', 600, 'short', null);
+    Tfm\Db::exec('UPDATE ip_blocks SET until_at = ? WHERE ip = ?', [Tfm\Clock::ms() - 1000, '198.51.100.30']);
+    if (Tfm\Firewall::isBlocked('198.51.100.30')) return 'expired block still active';
+    asIp('198.51.100.30', function () { Tfm\Firewall::check(); });
+    return throwsApi(function () { Tfm\Firewall::block('not-an-ip', 600, 'x', null); }, 'INVALID_INPUT')
+        && throwsApi(function () { Tfm\Firewall::block('198.51.100.31', 0, 'x', null); }, 'INVALID_INPUT');
+});
+check('Firewall auto-block — 24 attack-like events do nothing, the 25th blocks the address for 1800 s', function () {
+    wipeSec();
+    for ($i = 0; $i < 24; $i++) asIp('198.51.100.40', function () { Tfm\SecEvent::log('csrf_fail', 'warn'); });
+    if (Tfm\Firewall::isBlocked('198.51.100.40')) return 'blocked too early';
+    asIp('198.51.100.40', function () { Tfm\SecEvent::log('probe_sqli', 'warn'); });
+    $row = Tfm\Db::one('SELECT * FROM ip_blocks WHERE ip = ?', ['198.51.100.40']);
+    if (!$row || !Tfm\Firewall::isBlocked('198.51.100.40')) return 'not blocked after 25';
+    $secs = (int) round(((int) $row['until_at'] - Tfm\Clock::ms()) / 1000);
+    return $secs >= 1795 && $secs <= 1800 && (int) $row['strikes'] === 1 && Tfm\Firewall::isBlocked('198.51.100.41') === false ? true : "secs=$secs strikes={$row['strikes']}";
+});
+check('Firewall auto-block — the block doubles per strike (3600 s, …) and is capped at 24 h', function () {
+    $again = function () {
+        Tfm\Db::exec('UPDATE ip_blocks SET until_at = ? WHERE ip = ?', [Tfm\Clock::ms() - 1000, '198.51.100.40']); // the block ran out
+        Tfm\Db::exec('DELETE FROM security_events');
+        for ($i = 0; $i < 25; $i++) asIp('198.51.100.40', function () { Tfm\SecEvent::log('honeypot', 'warn'); });
+        $row = Tfm\Db::one('SELECT * FROM ip_blocks WHERE ip = ?', ['198.51.100.40']);
+        return [(int) round(((int) $row['until_at'] - Tfm\Clock::ms()) / 1000), (int) $row['strikes']];
+    };
+    list($s2, $k2) = $again();
+    if ($k2 !== 2 || $s2 < 3595 || $s2 > 3600) return "2nd strike: {$s2}s strikes=$k2";
+    list($s3, $k3) = $again();
+    if ($k3 !== 3 || $s3 < 7195 || $s3 > 7200) return "3rd strike: {$s3}s strikes=$k3";
+    Tfm\Db::exec('UPDATE ip_blocks SET strikes = 12 WHERE ip = ?', ['198.51.100.40']);
+    list($s, $k) = $again();
+    return $k === 13 && $s >= 86395 && $s <= 86400 ? true : "cap: {$s}s strikes=$k";
+});
+check('Firewall auto-block — only attack-like kinds of severity warn / alert count (not login_locked, save_rejected, https_required, info events)', function () {
+    wipeSec();
+    for ($i = 0; $i < 40; $i++) asIp('198.51.100.50', function () use ($i) {
+        Tfm\SecEvent::log(['login_locked', 'save_rejected', 'https_required', 'ip_blocked'][$i % 4], 'warn');
+        Tfm\SecEvent::log('csrf_fail', 'info', ['stale' => true]);
+        Tfm\SecEvent::log('upload_rejected', 'info', ['why' => 'type']);
+    });
+    return !Tfm\Firewall::isBlocked('198.51.100.50');
+});
+check('Firewall auto-block — events outside the window (600 s) do not count', function () {
+    wipeSec();
+    for ($i = 0; $i < 24; $i++) asIp('198.51.100.60', function () { Tfm\SecEvent::log('honeypot', 'warn'); });
+    Tfm\Db::exec('UPDATE security_events SET created_at = created_at - 601000');
+    asIp('198.51.100.60', function () { Tfm\SecEvent::log('honeypot', 'warn'); });
+    return !Tfm\Firewall::isBlocked('198.51.100.60');
+});
+check('Firewall auto-block — localhost and security.block.exempt entries are never blocked automatically', function () {
+    wipeSec();
+    Tfm\Config::override('security.block.exempt', ['198.51.100.0/28', '2001:db8:5::/64']);
+    try {
+        foreach (['127.0.0.1', '::1', '198.51.100.3', '2001:db8:5::9'] as $ip) {
+            for ($i = 0; $i < 30; $i++) asIp($ip, function () { Tfm\SecEvent::log('honeypot', 'warn'); }, ['HTTP_HOST' => 'localhost']);
+            if (Tfm\Firewall::isBlocked($ip)) return "$ip was blocked";
+        }
+        for ($i = 0; $i < 30; $i++) asIp('198.51.100.77', function () { Tfm\SecEvent::log('honeypot', 'warn'); });
+        return Tfm\Firewall::isBlocked('198.51.100.77') ? true : 'a non-exempt address was not blocked';
+    } finally { Tfm\Config::override('security.block.exempt', null); }
+});
+check('Firewall::noteAttack — records the attack itself when no event was logged; log + noteAttack in one request is one row', function () {
+    wipeSec();
+    asIp('198.51.100.80', function () { Tfm\Firewall::noteAttack('honeypot'); });
+    if (evCount("kind = 'honeypot'") !== 1) return 'noteAttack alone: ' . evCount() . ' rows';
+    asIp('198.51.100.80', function () { Tfm\SecEvent::log('honeypot', 'warn', ['uri' => '/.env']); Tfm\Firewall::noteAttack('honeypot'); Tfm\Firewall::noteAttack('honeypot'); });
+    if (evCount("kind = 'honeypot'") !== 2) return 'log + noteAttack: ' . evCount() . ' rows';
+    for ($i = 0; $i < 23; $i++) asIp('198.51.100.80', function () { Tfm\Firewall::noteAttack('admin_denied'); });
+    return Tfm\Firewall::isBlocked('198.51.100.80') ? true : 'noteAttack ×25 did not block';
+});
+check('Firewall::noteAttack — a kind that is not attack-like is ignored; thresholds come from security.block.*', function () {
+    wipeSec();
+    for ($i = 0; $i < 30; $i++) asIp('198.51.100.90', function () { Tfm\Firewall::noteAttack('login_locked'); });
+    if (Tfm\Firewall::isBlocked('198.51.100.90')) return 'login_locked blocked the address';
+    Tfm\Config::override('security.block', ['threshold' => 3, 'window' => 600, 'duration' => 60, 'exempt' => []]);
+    try { for ($i = 0; $i < 3; $i++) asIp('198.51.100.91', function () { Tfm\Firewall::noteAttack('payment_tamper'); }); }
+    finally { Tfm\Config::override('security.block', null); }
+    $row = Tfm\Db::one('SELECT * FROM ip_blocks WHERE ip = ?', ['198.51.100.91']);
+    $secs = $row ? (int) round(((int) $row['until_at'] - Tfm\Clock::ms()) / 1000) : -1;
+    return $secs >= 55 && $secs <= 60 ? true : "secs=$secs";
+});
+check('Firewall auto-block — the block itself is one alert event and one audit line', function () {
+    $a = evCount("kind = 'auto_block' AND severity = 'alert'");
+    $b = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'ip_auto_blocked'");
+    return $a === 1 && $b >= 1 ? true : "auto_block events=$a audit=$b";
+});
+check('Firewall::check — never breaks a request when the block table is missing (fails open)', function () {
+    Tfm\Db::exec('ALTER TABLE ip_blocks RENAME TO ip_blocks_gone');
+    try { asIp('198.51.100.91', function () { Tfm\Firewall::check(); }); return Tfm\Firewall::isBlocked('198.51.100.91') === false; }
+    finally { Tfm\Db::exec('ALTER TABLE ip_blocks_gone RENAME TO ip_blocks'); }
+});
+check('SecEvent alerts — off by default; the webhook must be https and is never taken from the request', function () {
+    if (Tfm\Config::get('security.alert_email', 'x') !== '' || Tfm\Config::get('security.alert_webhook', 'x') !== '') return 'alerts are not off by default';
+    return Tfm\SecEvent::alertTargets() === ['email' => '', 'webhook' => '']
+        && Tfm\SecEvent::alertTargets(['alert_email' => "ops@example.org\r\nBcc: x@evil.example", 'alert_webhook' => 'http://hooks.example.org/x']) === ['email' => '', 'webhook' => '']
+        && Tfm\SecEvent::alertTargets(['alert_email' => 'ops@example.org', 'alert_webhook' => 'https://hooks.example.org/x?y=1']) === ['email' => 'ops@example.org', 'webhook' => 'https://hooks.example.org/x?y=1'];
+});
+
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all $ran security unit checks passed" : "✖ $failed of $ran check(s) failed") . PHP_EOL;
 exit($failed === 0 ? 0 : 1);
