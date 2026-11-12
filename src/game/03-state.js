@@ -299,6 +299,7 @@
         quizCorrect: 0, quizAnswered: 0, eduCompleted: 0,
         journals: 0, photos: 0, emotes: 0, gestures: 0, chats: 0, talks: 0, crafts: 0, interacts: 0,
         doubleJumps: 0,
+        rtHarvests: 0,           // real-time bed harvests (CONTRACT §15.1; the server checks its growth per save)
       },
       // speed tiers (CONTRACT §14.1): server-authoritative; the server ignores the client's `sub` on save (like `role`)
       sub: { tier: 1, status: 'none', expiresAt: 0, autoRenew: false, source: 'local' },
@@ -306,6 +307,11 @@
       inventory: G.util.clone(G.data.startingInventory || {}),
       quests: {},          // questId -> { status, progress:[n...], acceptedAt, completedAt, claimedAt, tracked }
       farm: { plots: {} }, // plotId -> { cropId, growth, water, health, plantedAt, lastUpdate, lastWaterAt, harvests }
+      // 실시간 텃밭 (CONTRACT §15.1): bedId -> { cropId, pid, plantedAt, readyAt, dur, tier, care, lastCareAt } (an empty
+      // bed has no key), last = the newest 8 harvests, reports = completion requests (local mode only, §15.3)
+      rtfarm: { beds: {}, last: [], reports: [] },
+      // 곳간 (CONTRACT §15.2): itemId -> qty, total ≤ cap
+      storage: { items: {}, cap: (G.data.storage && G.data.storage.cap) || 300 },
       jars: {},            // jarId  -> { owned, recipeId, status, progress, quality, temp, humidity, hygiene, startedAt, lastUpdate, ... }
       education: { viewed: {}, completed: {}, quiz: {} },
       journal: [],         // { id, date, zoneId, activity, harvest, ferment, learned, memo, photo, createdAt }
@@ -358,6 +364,110 @@
       else if (depth > 0 && isMap(o[k])) dropProtoKeys(o[k], depth - 1);
     }
   }
+  // ---------------------------------------------------------------- 실시간 텃밭 + 곳간 (CONTRACT §15.1 – §15.3)
+  // Interface 1 of the phase-7 build: the save carries exactly these shapes; the server re-validates every one of them.
+  const RT_PID = /^[0-9a-f]{16}$/;            // a real-time planting: 16 lowercase hex chars (crypto.getRandomValues)
+  const RT_PLOT_PID = /^[1-9]\d{0,14}$/;      // a quick plot's planting = String(plantedAt)
+  const RT_LAST_MAX = 8, RT_REPORT_MAX = 50, RT_NOTE_MAX = 80, RT_MEMO_MAX = 500;
+  const RT_STATUS = ['pending', 'approved', 'rejected'];
+  const ownKey = (o, k) => typeof k === 'string' && !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
+  const finNum = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN);
+  const intIn = (v, a, b, d) => { const n = finNum(v); return Number.isFinite(n) ? Math.min(b, Math.max(a, Math.round(n))) : d; };
+  const cleanStr = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  /** one bed of a save -> a clean bed, or null (unknown crop, bad pid, impossible times) */
+  function sanitizeRtBed(b) {
+    const crops = (G.data.rtfarm && G.data.rtfarm.crops) || {};
+    if (!isMap(b) || !ownKey(crops, b.cropId) || typeof b.pid !== 'string' || !RT_PID.test(b.pid)) return null;
+    const plantedAt = finNum(b.plantedAt), readyAt = finNum(b.readyAt);
+    if (!(plantedAt > 0) || !Number.isFinite(readyAt) || readyAt < plantedAt) return null;
+    // the longest a planting can take: tier 1 at the smallest operator time scale (0.1)
+    const maxDur = Math.ceil((Number(crops[b.cropId].minutes) || 0) * 60000 / 0.1);
+    if (readyAt - plantedAt > maxDur + 60000) return null;
+    let dur = finNum(b.dur);
+    if (!(dur > 0) || dur > maxDur + 60000) dur = readyAt - plantedAt;
+    const caredAt = finNum(b.lastCareAt);
+    return {
+      cropId: b.cropId, pid: b.pid, plantedAt: Math.round(plantedAt), readyAt: Math.round(readyAt), dur: Math.round(dur),
+      tier: intIn(b.tier, 1, 4, 1), care: intIn(b.care, 0, 100, 0), lastCareAt: caredAt > 0 ? Math.round(caredAt) : 0,
+    };
+  }
+  /** rtfarm.last: the newest 8 harvests {pid, bedId, cropId, amount, stars, at} */
+  function sanitizeRtLast(list) {
+    const D = G.data.rtfarm || {};
+    const out = [];
+    for (const x of Array.isArray(list) ? list : []) {
+      if (!isMap(x) || typeof x.pid !== 'string' || !RT_PID.test(x.pid) || !(D.beds || []).includes(x.bedId) || !ownKey(D.crops, x.cropId)) continue;
+      const at = finNum(x.at);
+      if (!(at > 0)) continue;
+      out.push({ pid: x.pid, bedId: x.bedId, cropId: x.cropId, amount: intIn(x.amount, 0, 99, 0), stars: intIn(x.stars, 1, 3, 1), at: Math.round(at) });
+    }
+    return out.slice(-RT_LAST_MAX);
+  }
+  /** a completion request kept on this device (local mode, §15.3): the same object the server's book returns */
+  function sanitizeRtReport(r) {
+    if (!isMap(r)) return null;
+    const kind = r.kind === 'rt' || r.kind === 'plot' ? r.kind : null;
+    if (!kind) return null;
+    const plots = ((G.data.layout && G.data.layout.farmPlots) || []).map((p) => p.id);
+    const bedOk = kind === 'rt' ? ((G.data.rtfarm && G.data.rtfarm.beds) || []).includes(r.bedId) : plots.includes(r.bedId);
+    const pid = typeof r.pid === 'string' ? r.pid : '';
+    if (!bedOk || !(kind === 'rt' ? RT_PID : RT_PLOT_PID).test(pid) || !ownKey(G.data.crops, r.cropId)) return null;
+    const id = intIn(r.id, 0, 1e12, 0), requestedAt = finNum(r.requestedAt);
+    if (!(id > 0) || !(requestedAt > 0)) return null;
+    const status = RT_STATUS.includes(r.status) ? r.status : 'pending';
+    const decidedAt = finNum(r.decidedAt);
+    return {
+      id, kind, bedId: r.bedId, pid, cropId: r.cropId, stars: intIn(r.stars, 1, 3, 1), amount: intIn(r.amount, 0, 99, 0),
+      note: cleanStr(r.note, RT_NOTE_MAX), status, memo: status === 'pending' ? '' : cleanStr(r.memo, RT_MEMO_MAX),
+      requestedAt: Math.round(requestedAt), decidedAt: status !== 'pending' && decidedAt > 0 ? Math.round(decidedAt) : 0,
+      photoUrl: null, source: 'local', seen: status !== 'pending' && r.seen === true,
+    };
+  }
+  /** the 곳간: known storable item ids only, integer 0..9999 each, total ≤ cap (the data's item order decides what a
+   *  damaged save that holds more than the cap keeps) */
+  function sanitizeStorage(s) {
+    const D = G.data.storage || {};
+    const cap = Math.max(0, Math.floor(Number(D.cap) || 300));
+    const out = { items: {}, cap };
+    const src = isMap(s) && isMap(s.items) ? s.items : {};
+    let total = 0;
+    for (const id of Array.isArray(D.itemIds) ? D.itemIds : []) {
+      if (!ownKey(src, id)) continue;
+      const q = Math.min(intIn(src[id], 0, 9999, 0), cap - total);
+      if (q > 0) { out.items[id] = q; total += q; }
+    }
+    return out;
+  }
+  /**
+   * phase-7 upgrade + shape rules, run on every load / import / server restore: an older save (no rtfarm, storage or
+   * stats.rtHarvests) gets the empty defaults and keeps everything else; unknown beds, crops, items and keys are
+   * dropped (so no local-only value — e.g. a local time scale — ever rides along into a server-mode save), numbers are
+   * clamped, a pid is used by one bed only, `last` keeps the newest 8, the 곳간 total stays ≤ cap. The completion
+   * requests of `reports` belong to local mode only: a server-mode profile keeps none (the server holds them).
+   */
+  function sanitizeRealFarm(data, mode) {
+    const rt = isMap(data.rtfarm) ? data.rtfarm : {};
+    const beds = {}, pids = new Set();
+    for (const id of (G.data.rtfarm && G.data.rtfarm.beds) || []) {
+      if (!isMap(rt.beds) || !ownKey(rt.beds, id)) continue;
+      const b = sanitizeRtBed(rt.beds[id]);
+      if (b && !pids.has(b.pid)) { beds[id] = b; pids.add(b.pid); }
+    }
+    let reports = [];
+    if (mode !== 'server') {
+      const keys = new Set();
+      for (const r of (Array.isArray(rt.reports) ? rt.reports : []).map(sanitizeRtReport)) {
+        const k = r && `${r.kind}|${r.bedId}|${r.pid}`;
+        if (r && !keys.has(k)) { keys.add(k); reports.push(r); } // one request per planting
+      }
+      reports = reports.slice(-RT_REPORT_MAX);
+    }
+    data.rtfarm = { beds, last: sanitizeRtLast(rt.last), reports };
+    data.storage = sanitizeStorage(data.storage);
+    if (isMap(data.stats)) data.stats.rtHarvests = intIn(data.stats.rtHarvests, 0, 1e7, 0);
+    return data;
+  }
+
   function normalize(data, profile) {
     const def = createDefaultState(profile);
     if (!isMap(data)) return def;
@@ -381,6 +491,8 @@
     for (const k of ['x', 'y', 'z', 'rotY']) if (!Number.isFinite(data.player[k])) data.player[k] = def.player[k];
     // speed tier: clamped 1..4 in server mode (the server's answer overwrites it anyway); always tier 1 in local mode
     data.sub = G.net?.mode === 'server' ? sanitizeSub(data.sub, 'server') : sanitizeSub(null, 'local');
+    // 실시간 텃밭 / 곳간 (phase 7): upgrade older saves, drop what does not fit the shape
+    sanitizeRealFarm(data, G.net?.mode === 'server' ? 'server' : 'local');
     if (profile) { data.profile.id = profile.id; if (profile.nickname) data.profile.nickname = profile.nickname; if (profile.role) data.profile.role = profile.role; if (profile.email) data.profile.email = profile.email; }
     return data;
   }
@@ -515,7 +627,10 @@
     confirmed: new Map(),
     /** the server's current subscription from player/get.php (G.sys.speed applies it on state load) */
     sub: null,
-    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; ServerAdapter.confirmed = new Map(); ServerAdapter.sub = null; },
+    /** the server's own view of the real-time beds from player/get.php (CONTRACT §15.1 interface 2: {scale, tier, beds}):
+     *  42-realfarm applies it on state load; every accepted save answer carries a fresh one (applied right away) */
+    rt: null,
+    reset() { ServerAdapter.rev = null; ServerAdapter.sent = []; ServerAdapter.confirmed = new Map(); ServerAdapter.sub = null; ServerAdapter.rt = null; },
     /** every copy sent since the last confirmed one is remembered (R3 device-env-1: a bounded list let 8 failed offline
      *  attempts push out the one save whose answer was lost, so that own copy was taken for another device's) */
     mark(savedAt) { const L = ServerAdapter.sent; if (!L.includes(savedAt)) L.push(savedAt); if (L.length > 400) L.splice(0, L.length - 400); },
@@ -527,6 +642,7 @@
       ServerAdapter.reset();
       const d = await G.net.request('player/get.php');
       ServerAdapter.sub = d && d.sub && typeof d.sub === 'object' && !Array.isArray(d.sub) ? d.sub : null;
+      ServerAdapter.rt = d && isMap(d.rt) ? d.rt : null;
       if (!d || !d.save || !d.save.data) {
         // a new player is based on "nothing stored yet" (0); an unreadable stored copy keeps the old rules (no base)
         ServerAdapter.rev = d && !d.save && !d.corrupted ? 0 : null;
@@ -563,6 +679,8 @@
         if (r != null) { ServerAdapter.rev = r; ServerAdapter.confirm(state.savedAt, r); }
         // the subscription is the server's: every save answer carries the current tier (§14.1)
         if (res && res.sub && typeof res.sub === 'object') { try { G.sys.speed?.setFromServer?.(res.sub); } catch (e) { G.log.warn('SAVE', 'sub from save answer', e); } }
+        // the real-time beds as the server measured them (§15.1): its readyAt is the only judge of "ready"
+        if (res && isMap(res.rt)) { ServerAdapter.rt = res.rt; try { G.sys.realfarm?.applyServer?.(res.rt); } catch (e) { G.log.warn('SAVE', 'rt from save answer', e); } }
         return res;
       };
       try {
@@ -592,6 +710,8 @@
             G.log.warn('SAVE', e.restored ? 'the server save was restored to an earlier copy, loading it' : e.code === 'STALE_SAVE' ? 'a newer save exists on the server, restoring it' : 'server rejected save, restoring server state', e.message);
             G.save._pendingServerRestore = st;
             G.save._pendingServerRestoreCode = e.restored ? 'SAVE_RESTORED' : e.code;
+            // the violation codes (VALIDATION_FAILED): RT_HARVEST_TOO_EARLY & co. get their own calm words (§15.1)
+            G.save._pendingServerRestoreViolations = Array.isArray(e.data.violations) ? e.data.violations.filter((c) => typeof c === 'string').slice(0, 20) : [];
           }
         }
         throw e;
@@ -740,6 +860,8 @@
     migrate,
     normalize,
     sanitizeSub,
+    // phase 7 (CONTRACT §15.1 – §15.3): the shape rules of the real-time beds, the 곳간 and the local completion book
+    sanitizeRealFarm, sanitizeRtBed, sanitizeRtReport, sanitizeStorage,
     noteInput,
     pending,
     LocalAdapter,
@@ -827,7 +949,8 @@
         else G.log.error('SAVE', 'save failed', e);
         if (G.save._pendingServerRestore) {
           const srv = G.save._pendingServerRestore, code = G.save._pendingServerRestoreCode;
-          G.save._pendingServerRestore = null; G.save._pendingServerRestoreCode = null;
+          const violations = G.save._pendingServerRestoreViolations || [];
+          G.save._pendingServerRestore = null; G.save._pendingServerRestoreCode = null; G.save._pendingServerRestoreViolations = null;
           G.state = normalize(typeof srv.data === 'string' ? JSON.parse(srv.data) : srv.data, G.save.profile);
           G.save.applyProfileSettings(G.state);
           G.applyState();
@@ -844,7 +967,13 @@
             G.save._fail.pendingSelf = false;
             G.ui?.toast?.('다른 창(기기)에서 더 새로 저장한 진행 상황을 불러왔어요.', { type: 'info', icon: 'save', easy: '다른 곳에서 논 것을 불러왔어요!' });
           }
-          else G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
+          else {
+            // a real-time bed harvested before the server's own clock said ready (RT_HARVEST_TOO_EARLY, §15.1): the
+            // farm module tells the child calmly that it is not ready yet instead of the grown-up refusal line
+            let handled = false;
+            try { handled = G.sys.realfarm?.onSaveRefused?.(violations) === true; } catch (err) { handled = false; }
+            if (!handled) G.ui?.toast?.('서버 검증에 실패해 서버에 저장된 진행 상황으로 복구했습니다.', { type: 'warn' });
+          }
         } else onFailed(e, snap, opts);
         return false;
       } finally {
