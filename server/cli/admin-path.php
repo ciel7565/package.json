@@ -7,6 +7,7 @@
  *   admin:path --random         관리자 폴더 이름을 아무도 모르는 이름(admin-무작위 10글자)으로 바꾸고 새 주소를 보여 줘요
  *   admin:path <이름>            관리자 폴더 이름을 직접 정해요 (영어 소문자·숫자·- 로 4~40자). 바꾼 이름은 config.local.php 에 기록돼요
  *   admin:2fa-reset <이메일>      그 관리자의 2단계 인증을 지워요 (휴대폰과 백업 코드를 모두 잃어버렸을 때, 서버 컴퓨터에서만)
+ *   admin:2fa-unlock <이메일>     코드를 여러 번 틀려서 잠긴 2단계 인증을 바로 풀어요 (등록과 백업 코드는 그대로 남아요)
  *
  * PHP 7.2 syntax only.
  */
@@ -58,6 +59,23 @@ $tfmAdminCommands = [
         }
         fwrite(STDOUT, '✔ ' . $u['nickname'] . ' 계정의 2단계 인증을 지웠어요. 이제 비밀번호만으로 관리자 센터에 들어갈 수 있어요.' . PHP_EOL
             . '  들어가자마자 🔐 2단계 인증 탭에서 새 휴대폰으로 다시 등록하세요' . (AdminTotp::mode() === 'required' ? ' (이 서버는 필수라서 로그인하면 등록 화면이 먼저 나와요).' : '.') . PHP_EOL);
+        return 0;
+    },
+
+    // -------------------------------------------------------------- admin:2fa-unlock
+    'admin:2fa-unlock' => function (array $args): int {
+        $login = trim(isset($args[0]) ? (string) $args[0] : '');
+        if ($login === '') { fwrite(STDERR, '✖ 이메일(또는 닉네임)을 적어 주세요: php cli/tfm.php admin:2fa-unlock 이메일' . PHP_EOL); return 1; }
+        $u = Users::byLogin($login);
+        if (!$u) { fwrite(STDERR, '✖ 그런 계정이 없어요: ' . $login . PHP_EOL); return 1; }
+        $f = AdminTotp::failures((int) $u['id']);
+        if (!AdminTotp::unlock((int) $u['id'], null)) {
+            fwrite(STDOUT, $u['nickname'] . ' 계정은 2단계 인증 코드가 잠겨 있지 않아요 (틀린 코드 기록이 없어요). 할 일이 없어요.' . PHP_EOL);
+            return 0;
+        }
+        fwrite(STDOUT, '✔ ' . $u['nickname'] . ' 계정의 2단계 인증 잠금을 풀었어요 (풀기 전: 틀린 코드 ' . $f['count'] . '번'
+            . ($f['wait'] > 0 ? ', 남은 잠금 ' . AdminTotp::waitText((int) $f['wait']) : '') . '). 휴대폰 인증 앱과 백업 코드는 그대로 쓸 수 있어요.' . PHP_EOL
+            . '  직접 코드를 틀린 적이 없다면 누군가 이 계정의 비밀번호를 알고 있을 수 있어요. 체험관에서 비밀번호를 먼저 바꿔 주세요.' . PHP_EOL);
         return 0;
     },
 ];

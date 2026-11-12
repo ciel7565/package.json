@@ -11,6 +11,10 @@
  *              password never clears it, only a correct code does), reset / disable, the list for the 🛡️ tab.
  *
  * Mode security.admin_2fa (env TFM_ADMIN_2FA): off | optional (default) | required.
+ * The wrong-code lock has its own numbers, security.admin_2fa_lock (not the password throttle's login.*: someone who
+ * knows the password passes that one every time): 4 wrong codes are free, from the 5th the code step is locked for
+ * 1 minute doubling with every further one up to 1 day, and the count is kept for 30 days unless a correct code comes
+ * in — about 15 codes in the first day, then 1 a day (the password throttle's numbers let ~600 a day through).
  * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -143,8 +147,10 @@ final class AdminTotp
     public const BACKUP_COUNT = 10;
     /** backup code letters: no 0 o 1 l i (look-alikes) */
     public const BACKUP_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
-    /** audit events after which the wrong-code count starts again */
-    private const RESET_EVENTS = "'admin_2fa_ok', 'admin_2fa_enrolled', 'admin_2fa_reset', 'admin_2fa_disabled'";
+    /** audit events after which the wrong-code count starts again (admin_2fa_unlocked: cli admin:2fa-unlock) */
+    private const RESET_EVENTS = "'admin_2fa_ok', 'admin_2fa_enrolled', 'admin_2fa_reset', 'admin_2fa_disabled', 'admin_2fa_unlocked'";
+    /** the wrong-code lock when security.admin_2fa_lock does not say otherwise (see lockPolicy()) */
+    private const LOCK_DEFAULTS = ['free' => 5, 'base' => 60, 'max' => 86400, 'memory' => 2592000];
 
     /** security.admin_2fa: off | optional | required — anything else means optional */
     public static function mode(): string
@@ -267,26 +273,82 @@ final class AdminTotp
     }
 
     /**
-     * The wrong-code count of the code step: admin_2fa_fail rows of this account inside login.window since its last
-     * correct code (or enrolment / reset). From login.max_failures (5) on, the step is locked for
-     * login.base_lock × 2^(extra failures) seconds (≤ login.max_lock). ['count' => n, 'wait' => seconds to wait].
+     * The numbers of the wrong-code lock, security.admin_2fa_lock: free = the wrong code that starts the lock (5),
+     * base = its first lock in seconds (60), max = the longest lock (86400 = 1 day), memory = how long a wrong code is
+     * counted when no correct code follows (2592000 = 30 days). A value that is missing, not a number or out of range
+     * (free 1–10, base 30 s–1 day, max 30 s–7 days and never below base, memory 1–365 days) is the default. The memory
+     * never ends before the escalation does: it lasts at least (wrong codes needed to reach max + 1) × max, so wrong
+     * codes cannot age out faster than the lock grows (with the password throttle's 900 s window they did, and the lock
+     * kept falling back to 30 s).
+     */
+    public static function lockPolicy(): array
+    {
+        $c = Config::get('security.admin_2fa_lock', []);
+        if (!is_array($c)) $c = [];
+        $pick = function (string $k, int $min, int $max) use ($c): int {
+            $v = isset($c[$k]) && (is_int($c[$k]) || (is_string($c[$k]) && ctype_digit($c[$k]))) ? (int) $c[$k] : -1;
+            return $v >= $min && $v <= $max ? $v : self::LOCK_DEFAULTS[$k];
+        };
+        $p = ['free' => $pick('free', 1, 10), 'base' => $pick('base', 30, 86400), 'max' => $pick('max', 30, 604800), 'memory' => $pick('memory', 86400, 31536000)];
+        if ($p['max'] < $p['base']) $p['max'] = $p['base'];
+        $steps = 0;
+        for ($lock = $p['base']; $lock < $p['max']; $lock *= 2) $steps++;
+        $p['memory'] = min(31536000, max($p['memory'], ($p['free'] + $steps + 1) * $p['max']));
+        return $p;
+    }
+
+    /** how long the code step stays locked after the n-th counted wrong code: 0 before `free`, then base × 2^(n − free), at most max */
+    public static function lockSeconds(int $n, ?array $policy = null): int
+    {
+        $p = $policy !== null ? $policy : self::lockPolicy();
+        if ($n < $p['free']) return 0;
+        $lock = $p['base'];
+        for ($i = $n - $p['free']; $i > 0 && $lock < $p['max']; $i--) $lock *= 2; // a loop, never 2 ** n: no int overflow on 32-bit PHP
+        return min($p['max'], $lock);
+    }
+
+    /**
+     * The wrong-code count of the code step: admin_2fa_fail rows of this account since its last correct code (or
+     * enrolment / reset / unlock), at most `memory` old. From the `free`-th on the step stays locked for lockSeconds(n)
+     * after the last wrong code. ['count' => n, 'wait' => seconds to wait].
      */
     public static function failures(int $uid): array
     {
-        $c = (array) Config::get('login', []);
-        $window = max(60, (int) (isset($c['window']) ? $c['window'] : 900));
-        $threshold = max(1, (int) (isset($c['max_failures']) ? $c['max_failures'] : 5));
+        $p = self::lockPolicy();
         $now = Clock::ms();
         $since = (int) Db::value('SELECT MAX(id) FROM audit_log WHERE user_id = ? AND event IN (' . self::RESET_EVENTS . ')', [$uid]);
         $row = Db::one("SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM audit_log WHERE user_id = ? AND event = 'admin_2fa_fail' AND id > ? AND created_at > ?",
-            [$uid, $since, $now - $window * 1000]);
+            [$uid, $since, $now - $p['memory'] * 1000]);
         $n = $row ? (int) $row['n'] : 0;
         $wait = 0;
-        if ($n >= $threshold) {
-            $lock = min((int) (isset($c['max_lock']) ? $c['max_lock'] : 3600), (int) (isset($c['base_lock']) ? $c['base_lock'] : 30) * (2 ** min(16, $n - $threshold)));
-            $wait = max(0, (int) ceil(((int) $row['last_at'] + $lock * 1000 - $now) / 1000));
+        if ($n >= $p['free']) {
+            $wait = max(0, (int) ceil(((int) $row['last_at'] + self::lockSeconds($n, $p) * 1000 - $now) / 1000));
         }
         return ['count' => $n, 'wait' => $wait];
+    }
+
+    /**
+     * Lift the wrong-code lock on the server PC (cli admin:2fa-unlock): the count starts again, the enrolment and the
+     * backup codes stay. true when wrong codes were counted, false when there was nothing to lift.
+     */
+    public static function unlock(int $uid, ?int $actorId = null): bool
+    {
+        $f = self::failures($uid);
+        if ($f['count'] === 0) return false;
+        Audit::log('admin_2fa_unlocked', $uid, ['count' => $f['count'], 'wait' => $f['wait'], 'via' => PHP_SAPI === 'cli' ? 'cli' : 'web'], 'warn', $actorId);
+        return true;
+    }
+
+    /** a wait in plain words, never shorter than it is: "40초", "3분", "2시간 15분", "1일 3시간" */
+    public static function waitText(int $seconds): string
+    {
+        $s = max(1, $seconds);
+        if ($s < 60) return $s . '초';
+        $m = intdiv($s + 59, 60);
+        if ($m < 60) return $m . '분';
+        $h = intdiv($m, 60);
+        if ($h < 24) return $h . '시간' . ($m % 60 > 0 ? ' ' . ($m % 60) . '분' : '');
+        return intdiv($h, 24) . '일' . ($h % 24 > 0 ? ' ' . ($h % 24) . '시간' : '');
     }
 
     /** a wrong code: the audit row the lock counts, the security event, the automatic-block counter */

@@ -89,7 +89,7 @@ const SINCE = ['1h' => [3600, '1시간'], '24h' => [86400, '24시간'], '7d' => 
 /** audit events of the admin sign-in history (🛡️ tab) */
 const SIGNIN_EVENTS = ['admin_signin' => '로그인 성공', 'admin_signout' => '로그아웃', 'admin_denied' => '권한 없는 계정의 시도', 'admin_2fa_fail' => '2단계 코드 틀림',
     'admin_2fa_ok' => '2단계 코드 확인', 'admin_2fa_enrolled' => '2단계 인증 켬', 'admin_2fa_disabled' => '2단계 인증 끔', 'admin_2fa_backup' => '백업 코드 새로 만듦',
-    'admin_2fa_reset' => '2단계 인증 초기화(서버)', 'admin_bootstrap' => '첫 관리자 지정', 'admin_path_renamed' => '관리자 폴더 이름 바꿈'];
+    'admin_2fa_reset' => '2단계 인증 초기화(서버)', 'admin_2fa_unlocked' => '2단계 잠금 풀기(서버)', 'admin_bootstrap' => '첫 관리자 지정', 'admin_path_renamed' => '관리자 폴더 이름 바꿈'];
 
 function e($v): string { return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401, 'UTF-8'); }
 function when($ms): string { $ms = (int) $ms; return $ms > 0 ? date('Y-m-d H:i', intdiv($ms, 1000)) : '-'; }
@@ -344,7 +344,9 @@ function doCode(Ctx $c)
     $r = AdminTotp::attempt($uid, $code);
     if ($r === 'locked') {
         $w = max(1, (int) AdminTotp::failures($uid)['wait']);
-        flash('error', "코드를 여러 번 틀려서 잠시 잠겼어요. {$w}초 기다린 뒤 다시 해 주세요.");
+        flash('error', '코드를 여러 번 틀려서 2단계 인증이 잠겼어요. ' . AdminTotp::waitText($w) . ' 기다린 뒤 다시 해 주세요. '
+            . '직접 틀린 적이 없다면 누군가 비밀번호를 알고 있을 수 있어요: 체험관에서 비밀번호를 바꾸고, 서버 컴퓨터에서 '
+            . 'php cli/tfm.php admin:2fa-unlock 이메일 을 실행하면 잠금이 바로 풀려요.');
         redirectTo('overview');
     }
     if ($r === 'fail') {
@@ -435,7 +437,7 @@ function reauth(Ctx $c): string
         throw new ApiException(401, 'INVALID_CREDENTIALS', '비밀번호가 맞지 않아요.');
     }
     $r = AdminTotp::attempt($c->uid(), $code);
-    if ($r === 'locked') throw new ApiException(429, 'TWOFA_LOCKED', '코드를 여러 번 틀려서 잠시 잠겼어요. 조금 기다린 뒤 다시 해 주세요.');
+    if ($r === 'locked') throw new ApiException(429, 'TWOFA_LOCKED', '코드를 여러 번 틀려서 2단계 인증이 잠겼어요. ' . AdminTotp::waitText(max(1, (int) AdminTotp::failures($c->uid())['wait'])) . ' 기다린 뒤 다시 해 주세요.');
     if ($r === 'fail') throw new ApiException(400, 'TWOFA_CODE', '인증 코드가 맞지 않아요.');
     return $r;
 }
@@ -844,7 +846,10 @@ function viewTwofa(Ctx $c): string
         . '<p>이 서버의 설정: <b>' . e(modeLabel($mode)) . '</b> <span class="dim small">(config.local.php 의 security.admin_2fa — off / optional / required)</span></p></section>';
     if (AdminTotp::enabled($uid)) {
         $left = AdminTotp::backupLeft($uid);
-        $h .= '<section class="card"><h3>✅ 켜져 있어요</h3><p>남은 백업 코드: <b>' . e($left) . '개</b>' . ($left <= 3 ? ' <span class="badge warn">얼마 안 남았어요</span>' : '') . '</p></section>';
+        $lp = AdminTotp::lockPolicy();
+        $h .= '<section class="card"><h3>✅ 켜져 있어요</h3><p>남은 백업 코드: <b>' . e($left) . '개</b>' . ($left <= 3 ? ' <span class="badge warn">얼마 안 남았어요</span>' : '') . '</p>'
+            . '<p class="dim small">코드를 ' . e($lp['free']) . '번 틀리면 ' . e(AdminTotp::waitText($lp['base'])) . ' 동안 잠기고, 그 뒤로 틀릴 때마다 잠기는 시간이 두 배로 늘어나요 (가장 길게 '
+            . e(AdminTotp::waitText($lp['max'])) . '). 맞는 코드를 넣으면 처음부터 다시 세요. 잠겼을 때는 서버 컴퓨터에서 <code>php cli/tfm.php admin:2fa-unlock 이메일</code> 로 바로 풀 수 있어요.</p></section>';
         $re = '<label>비밀번호<input type="password" name="password" autocomplete="current-password" required maxlength="128"></label>'
             . '<label>인증 앱의 지금 숫자 (또는 백업 코드)<input name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="20"></label>';
         $h .= '<div class="grid2"><section class="card"><h3>🔑 백업 코드 새로 만들기</h3><p class="dim small">예전 백업 코드는 모두 쓸 수 없게 되고 새 코드 10개가 한 번만 보여요.</p>'

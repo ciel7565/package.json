@@ -816,6 +816,26 @@ async function main() {
       assert(Number(dbVal(main1, 'SELECT last_step FROM admin_totp WHERE user_id = ?', [L.id])) === L.step, 'a locked try does not use up the code');
       return `5 × admin_2fa_fail (audit ${mine.length}, security_events ${ev.sec.length}) · password form "…너무 많아요" · code step locked`;
     });
+    await step('S06', '2-step lock: the wait is said in plain words with what to do; cli admin:2fa-unlock <email> lifts it on the server PC (the enrolment stays) and the right code opens the area', async () => {
+      const U = enrol(main1, mkUser(main1, 'admin'));
+      const bu = new Browser(srv.base, 'unlock');
+      assert(isCodeForm((await signIn(bu, ADM, U)).page.text), 'code form');
+      for (let i = 0; i < 5; i++) await admF(bu, ADM, { action: 'code', code: '88888' + i });
+      let p = await admF(bu, ADM, { action: 'code', code: totpAt(U.secret, U.step + 1) });
+      const msg = flashOf(p.text)?.msg || '';
+      assert(!isInside(p.text) && /\d+\s?(초|분|시간|일)\S*\s*기다린 뒤/.test(msg) && /admin:2fa-unlock/.test(msg), `locked message: ${msg}`);
+      const none = cli(main1, 'admin:2fa-unlock', 'nobody-' + rnd() + '@example.com');
+      assert(none.status !== 0, `unknown account → exit ${none.status}: ${none.out.slice(0, 120)}`);
+      const r = cli(main1, 'admin:2fa-unlock', U.email);
+      assert(r.status === 0 && /✔/.test(r.out), `exit ${r.status}: ${r.out.slice(0, 200)}`);
+      assert(Number(dbVal(main1, 'SELECT enabled FROM admin_totp WHERE user_id = ?', [U.id])) === 1, 'the enrolment stays');
+      assert(dbAll(main1, "SELECT 1 AS x FROM audit_log WHERE event = 'admin_2fa_unlocked' AND user_id = ?", [U.id]).length === 1, 'audit row admin_2fa_unlocked');
+      p = await admF(bu, ADM, { action: 'code', code: totpAt(U.secret, U.step + 1) });
+      assert(isInside(p.text) && bu.cookie('TFMADM'), `the right code after the unlock: ${flashOf(p.text)?.msg || ''}`);
+      const again = cli(main1, 'admin:2fa-unlock', U.email);
+      assert(again.status === 0 && !/✔/.test(again.out), `nothing to lift → exit ${again.status}: ${again.out.slice(0, 120)}`);
+      return `"${msg.slice(0, 48)}…" · unlock → inside · enrolment kept`;
+    });
     await step('S06', 'cli admin:2fa-reset <email> removes an enrolment (recovery on the server PC)', async () => {
       const R = enrol(main1, mkUser(main1, 'admin'));
       const br = new Browser(srv.base);

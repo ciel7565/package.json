@@ -337,6 +337,100 @@ check('AdminTotp::reset — recovery from the server PC: true when an enrolment 
     return $a === true && $b === false && Tfm\AdminTotp::enabled($uid) === false && $audit === 1 ? true : json_encode([$a, $b, $audit]);
 });
 
+// ------------------------------------------------------------------ AdminTotp: the wrong-code lock against an attacker who knows the password
+/** a new admin with 2-step sign-in on: [user id, secret] */
+function enrolledAdmin(string $tag): array
+{
+    $u = Tfm\Db::tx(function () use ($tag) { return Tfm\Users::create("guess-$tag@example.com", '추측' . $tag, 'Ferment2026ok', 'admin'); });
+    $uid = (int) $u['id'];
+    $secret = Tfm\AdminTotp::begin($uid);
+    Tfm\AdminTotp::confirm($uid, Tfm\Totp::code($secret), null);
+    return [$uid, $secret];
+}
+/**
+ * Finding (reviewer-auth, item 6): someone who knows an admin's password sends wrong 6-digit codes as fast as the lock
+ * lets them through, for $seconds of virtual time — time passes by moving this account's audit rows into the past (as
+ * the reviewer's harness did), one second per request. Returns the number of wrong codes that were checked and the
+ * shortest wait seen right after a wrong code once at least $capAt wrong codes were counted (PHP_INT_MAX: never got there).
+ */
+function guessRun(int $uid, string $secret, int $seconds, int $stopAt, int $capAt = 16): array
+{
+    $t = time();
+    $valid = [Tfm\Totp::code($secret, $t - 30), Tfm\Totp::code($secret, $t), Tfm\Totp::code($secret, $t + 30), Tfm\Totp::code($secret, $t + 60)];
+    $wrong = '000000';
+    for ($i = 0; in_array($wrong, $valid, true); $i++) $wrong = (string) (123457 + $i); // never one of the codes that are valid now
+    $virtual = 0;
+    $checked = 0;
+    $capWait = PHP_INT_MAX;
+    $move = function (int $s) use ($uid) { Tfm\Db::exec('UPDATE audit_log SET created_at = created_at - ? WHERE user_id = ?', [$s * 1000, $uid]); };
+    while ($virtual < $seconds && $checked < $stopAt) {
+        $f = Tfm\AdminTotp::failures($uid);
+        if ($f['wait'] > 0) { $move($f['wait']); $virtual += $f['wait']; continue; }
+        $r = Tfm\AdminTotp::attempt($uid, $wrong);
+        if ($r !== 'fail') throw new RuntimeException("a wrong code answered \"$r\"");
+        $checked++;
+        $after = Tfm\AdminTotp::failures($uid);
+        if ($after['count'] >= $capAt) $capWait = min($capWait, $after['wait']);
+        $move(1);
+        $virtual += 1;
+    }
+    return ['checked' => $checked, 'capWait' => $capWait, 'virtual' => $virtual];
+}
+check('AdminTotp lock — someone who knows the password gets at most 16 wrong codes checked in the first 24 hours (it was ~600 a day)', function () {
+    list($uid, $secret) = enrolledAdmin('day');
+    $r = guessRun($uid, $secret, 86400, 40);
+    return $r['checked'] <= 16 ? true : "{$r['checked']}+ wrong codes were checked within 24 h";
+});
+check('AdminTotp lock — over 365 days at most ~1 wrong code a day after the first day (≤ 400: chance to hit one of the 3 valid codes ≤ 0.12 %), and a long lock never falls back to a short one', function () {
+    list($uid, $secret) = enrolledAdmin('year');
+    $r = guessRun($uid, $secret, 365 * 86400, 500);
+    $chance = 100 * (1 - pow(1 - 3e-6, $r['checked']));
+    if ($r['checked'] > 400) return "{$r['checked']}+ wrong codes in a year (chance " . round($chance, 2) . ' %)';
+    if ($r['capWait'] === PHP_INT_MAX) return 'the lock never reached its longest step (16 wrong codes counted at once)';
+    return $r['capWait'] >= 86400 - 2 ? true : "after the 16th wrong code a further one waited only {$r['capWait']} s";
+});
+check('AdminTotp::lockSeconds — 4 wrong codes are free, from the 5th: 1 min doubling with each one, at most 1 day', function () {
+    $got = [];
+    foreach ([0, 1, 4, 5, 6, 7, 10, 15, 16, 17, 40, 10000] as $n) $got[$n] = Tfm\AdminTotp::lockSeconds($n);
+    $want = [0 => 0, 1 => 0, 4 => 0, 5 => 60, 6 => 120, 7 => 240, 10 => 1920, 15 => 61440, 16 => 86400, 17 => 86400, 40 => 86400, 10000 => 86400];
+    return $got === $want ? true : json_encode($got);
+});
+check('AdminTotp::lockPolicy — security.admin_2fa_lock is honoured; broken values fall back to safe ones; the memory always outlasts the escalation', function () {
+    $d = Tfm\AdminTotp::lockPolicy();
+    Tfm\Config::override('security.admin_2fa_lock', ['free' => 3, 'base' => 120, 'max' => 3600, 'memory' => 10]);
+    $o = Tfm\AdminTotp::lockPolicy();
+    $l = [Tfm\AdminTotp::lockSeconds(2), Tfm\AdminTotp::lockSeconds(3), Tfm\AdminTotp::lockSeconds(4), Tfm\AdminTotp::lockSeconds(9)];
+    Tfm\Config::override('security.admin_2fa_lock', ['free' => 'x', 'base' => -5, 'max' => 0, 'memory' => []]);
+    $b = Tfm\AdminTotp::lockPolicy();
+    Tfm\Config::override('security.admin_2fa_lock', 'nonsense');
+    $s = Tfm\AdminTotp::lockPolicy();
+    Tfm\Config::override('security.admin_2fa_lock', null);
+    $okDefault = $d === ['free' => 5, 'base' => 60, 'max' => 86400, 'memory' => 2592000];
+    // free 3 · base 120 · max 3600 → the cap is reached at the 8th wrong code: the memory is at least (8 + 1) × 3600 s and at least a day
+    $okOver = $o['free'] === 3 && $o['base'] === 120 && $o['max'] === 3600 && $o['memory'] >= 86400 && $o['memory'] >= 9 * 3600 && $l === [0, 120, 240, 3600];
+    $okBroken = $b['free'] >= 1 && $b['base'] >= 30 && $b['max'] >= $b['base'] && $b['memory'] >= 86400 && $s === $d;
+    return $okDefault && $okOver && $okBroken ? true : json_encode([$d, $o, $l, $b, $s]);
+});
+check('AdminTotp::unlock — lifts the lock (cli admin:2fa-unlock) without removing the enrolment; the right code works again; nothing to lift → false', function () {
+    list($uid, $secret) = enrolledAdmin('unlock');
+    for ($i = 0; $i < 5; $i++) Tfm\AdminTotp::attempt($uid, '00000' . $i, time());
+    $locked = Tfm\AdminTotp::failures($uid)['wait'] > 0 && Tfm\AdminTotp::attempt($uid, Tfm\Totp::code($secret, time() + 30), time() + 30) === 'locked';
+    $a = Tfm\AdminTotp::unlock($uid);
+    $f = Tfm\AdminTotp::failures($uid);
+    $right = Tfm\AdminTotp::attempt($uid, Tfm\Totp::code($secret, time() + 30), time() + 30);
+    $b = Tfm\AdminTotp::unlock($uid);
+    $audit = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'admin_2fa_unlocked' AND user_id = ?", [$uid]);
+    return $locked && $a === true && $f === ['count' => 0, 'wait' => 0] && $right === 'totp' && $b === false && Tfm\AdminTotp::enabled($uid) && $audit === 1
+        ? true : json_encode([$locked, $a, $f, $right, $b, $audit]);
+});
+check('AdminTotp::waitText — the wait in plain words (초 · 분 · 시간 · 일)', function () {
+    $got = [];
+    foreach ([0, 1, 59, 60, 61, 3599, 3600, 3660, 7322, 86399, 86400, 90000, 200000] as $s) $got[] = Tfm\AdminTotp::waitText($s);
+    // minutes are rounded up (a wait is never shown shorter than it is): 3599 s → 1시간, 86399 s → 1일
+    $want = ['1초', '1초', '59초', '1분', '2분', '1시간', '1시간', '1시간 1분', '2시간 3분', '1일', '1일', '1일 1시간', '2일 7시간'];
+    return $got === $want ? true : json_encode($got, JSON_UNESCAPED_UNICODE);
+});
+
 // ------------------------------------------------------------------ Health: the admin-lock rows of the system check
 check('Health::collect — admin-lock rows: folder name (warn while it is "admin"), allow-list, 2-step, old address, install lock', function () {
     $h = Tfm\Health::collect(false);
