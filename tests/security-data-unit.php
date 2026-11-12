@@ -772,6 +772,68 @@ check('Toss — a failed gateway call never writes the billing key or the paymen
     }
     return strpos($log, 'billing/{billingKey}') !== false && strpos($log, 'payments/{paymentKey}') !== false ? true : 'the log does not name the calls: ' . json_encode($seen);
 });
+
+// ------------------------------------------------------------------ control characters never reach a log or a terminal (item 5)
+/** raw C0 (but newline), DEL, C1 (U+0080–U+009F: U+009B is an 8-bit CSI) and the bidi marks / overrides / isolates */
+$CTL_RE = '/[\x00-\x09\x0b-\x1f\x7f]|\xc2[\x80-\x9f]|\xe2\x80[\x8e\x8f\xaa-\xae]|\xe2\x81[\xa6-\xa9]/';
+check('log / audit — control characters from a request are stored escaped (C1 such as U+009B, DEL, bidi overrides): audit_log.detail and the log file hold no raw control character, and the text decodes back unchanged', function () use ($CTL_RE) {
+    $evil = "\u{9b}2J\u{9b}1;1H\u{9b}31mFAKE\x7f\u{85}\u{202e}esrever\u{2066}x\u{2069}\u{200f}";
+    Tfm\Audit::log('unit_ctl_probe', null, ['violations' => [['stat' => $evil]], 'action' => $evil], 'warn'); // warn: the log file gets the line too
+    Tfm\Log::warn('UNIT', 'control probe ' . $evil, ['v' => $evil]);
+    $detail = (string) Tfm\Db::value("SELECT detail FROM audit_log WHERE event = 'unit_ctl_probe' ORDER BY id DESC LIMIT 1");
+    if (preg_match($CTL_RE, $detail)) return 'audit_log.detail holds raw control characters: ' . bin2hex(substr($detail, 0, 40));
+    $back = json_decode($detail, true);
+    if (!is_array($back) || $back['violations'][0]['stat'] !== $evil || $back['action'] !== $evil) return 'the stored detail does not decode back to the text';
+    $lines = [];
+    foreach (glob(Tfm\Log::dir() . '/app-*.log.php') ?: [] as $f) {
+        foreach (file($f) ?: [] as $l) if (strpos($l, 'unit_ctl_probe') !== false || strpos($l, 'control probe') !== false) $lines[] = rtrim($l, "\n");
+    }
+    if (count($lines) < 2) return 'expected the audit line and the warn line in the log, found ' . count($lines);
+    foreach ($lines as $l) {
+        if (preg_match($CTL_RE, $l)) return 'a log line holds raw control characters: ' . bin2hex(substr($l, 0, 60));
+        $j = json_decode($l, true);
+        if (!is_array($j)) return 'a log line is no JSON any more';
+        if ($j['cat'] === 'UNIT' && ($j['msg'] !== 'control probe ' . $evil || $j['ctx']['v'] !== $evil)) return 'the log line does not decode back to the text';
+    }
+    return true;
+});
+check('cli audit / users / sub:list — a terminal never gets control characters from the database (rows written before the fix too): ESC, DEL, C1, bidi controls and broken UTF-8 print as "?"', function () use ($srv, $tmp, $payUser, $IS_MYSQL, $CTL_RE) {
+    // an audit row as an older version stored it (raw characters inside the JSON) and a nickname with an escape sequence
+    // (a restored or hand-edited database); MariaDB refuses broken UTF-8 in a utf8mb4 column, SQLite keeps the bytes
+    $nasty = "\u{9b}2J\x1b[31mRED\x7f\u{202e}\u{85}" . ($IS_MYSQL ? '' : "\xff");
+    Tfm\Db::insert('audit_log', ['created_at' => Tfm\Clock::ms(), 'user_id' => null, 'actor_id' => null, 'ip' => '127.0.0.1', 'event' => 'unit_raw_row', 'severity' => 'warn', 'detail' => '{"stat":"' . $nasty . '"}']);
+    $u = $payUser();
+    Tfm\Db::exec('UPDATE users SET nickname = ? WHERE id = ?', ["Nk\x1b[2J\u{9b}x", (int) $u['id']]);
+    Tfm\Subscription::grant(['id' => 0], (int) $u['id'], 2, 3);
+    $cmd = 'TFM_DATA_DIR=' . escapeshellarg($tmp) . ' TFM_TOSS_MOCK=1 ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($srv . '/cli/tfm.php');
+    $outs = [];
+    foreach (['audit 30', 'users', 'sub:list'] as $c) $outs[$c] = (string) shell_exec($cmd . ' ' . $c . ' 2>&1');
+    foreach ($outs as $c => $o) {
+        if (preg_match($CTL_RE, $o, $m)) return "$c prints the control byte(s) " . bin2hex($m[0]);
+        if (!mb_check_encoding($o, 'UTF-8')) return "$c prints broken UTF-8";
+    }
+    if (strpos($outs['audit 30'], 'unit_raw_row') === false || strpos($outs['audit 30'], '?2J?[31mRED') === false) return 'audit does not show the row readably: ' . substr($outs['audit 30'], -300);
+    if (strpos($outs['users'], 'Nk?[2J?x') === false) return 'users does not show the nickname readably';
+    return strpos($outs['sub:list'], 'Nk?[2J?x') !== false ? true : 'sub:list does not show the nickname readably';
+});
+check('save validation — a stats key that is not a plain id (C1 controls, a space, a tab, symbols, more than 48 characters) is a bad save (400 INVALID_SAVE, nothing echoed into a violation); the real stat names pass', function () use ($payUser) {
+    $u = $payUser();
+    $now = Tfm\Clock::ms();
+    $try = function (string $key, $value) use ($u, $now): string {
+        $n = json_decode((string) json_encode(['version' => 1, 'profile' => ['id' => (string) $u['id']], 'stats' => ['level' => 1, 'exp' => 0, $key => $value]]));
+        try { $r = Tfm\SaveValidator::validate($n, null, [], $u, $now - 60000, $now); return $r['ok'] ? 'ok' : 'violations ' . json_encode($r['violations']); }
+        catch (Tfm\ApiException $e) { return $e->errorCode . ' ' . (is_array($e->data) && isset($e->data['reason']) ? $e->data['reason'] : ''); }
+    };
+    foreach (["\u{9b}2J\u{9b}31mFAKE" => -1, 'two words' => 1, "tab\tkey" => 1, 'a<b>' => 1, 'x.y' => 1, str_repeat('a', 49) => 1] as $k => $v) {
+        $r = $try((string) $k, $v);
+        if ($r !== 'INVALID_SAVE stat id') return json_encode((string) $k) . ' → ' . $r;
+    }
+    foreach (['distance', 'playTime', 'zonesVisited', 'doubleJumps', 'fermentsClaimed', 'quizCorrect', 'harvestedItems', str_repeat('a', 48)] as $k) {
+        $r = $try($k, 0);
+        if ($r !== 'ok') return "$k → $r";
+    }
+    return true;
+});
 // ------------------------------------------------------------------ secret:rotate (item 21)
 check('secret:rotate --data-key — every sealed billing key is sealed again with the new key, the old key is gone, rotated_at is set', function () use ($payUser) {
     $u = $payUser();

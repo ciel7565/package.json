@@ -71,6 +71,21 @@ final class Json
         }
         return $s;
     }
+
+    /**
+     * $json (json_encode output, JSON_UNESCAPED_UNICODE) with every character a terminal or a text viewer acts on
+     * written as a \uXXXX escape. json_encode escapes U+0000–U+001F only, so DEL, the C1 range U+0080–U+009F (U+009B
+     * is an 8-bit "CSI": erase the screen, move the cursor) and the bidi marks / overrides / isolates stayed raw in the
+     * log and the audit table (review finding, CONTRACT §15.7 #5). Raw characters only occur inside JSON strings, so
+     * the result is equivalent JSON: it decodes to the same text.
+     */
+    public static function escapeControls(string $json): string
+    {
+        $r = preg_replace_callback('/[\x{7F}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', function (array $m): string {
+            return sprintf('\\u%04x', mb_ord($m[0], 'UTF-8'));
+        }, $json);
+        return is_string($r) ? $r : $json;
+    }
 }
 
 /**
@@ -367,8 +382,9 @@ final class Log
                 @rename($file, $rot);
             }
             // F7: < > & ' " are hex-escaped so a logged value (which may be attacker-supplied) is never raw markup; the
-            // message is capped and control characters become \uXXXX through json_encode, so one log line cannot be a
-            // huge or binary payload. The whole line is bounded as a last resort.
+            // message is capped and control characters become \uXXXX (U+0000–U+001F through json_encode; DEL, C1 and the
+            // bidi controls through Json::escapeControls — review finding), so one log line cannot be a huge or binary
+            // payload, nor steer the terminal of an operator who reads it. The whole line is bounded as a last resort.
             $line = json_encode([
                 't'   => date('c'),
                 'lvl' => $level,
@@ -379,6 +395,7 @@ final class Log
                 'ctx' => $ctx ?: null,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
             if (!is_string($line)) $line = '{"lvl":"' . $level . '","msg":"(unencodable log line)"}';
+            $line = Json::escapeControls($line);
             if (strlen($line) > 16384) $line = substr($line, 0, 16384);
             // F7: the PHP exit guard must be the FIRST bytes of the file even when two requests create it at once. The
             // write-or-not decision is made under the exclusive lock (size === 0) — never from an is_file() check taken

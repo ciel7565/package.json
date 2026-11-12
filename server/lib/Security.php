@@ -234,6 +234,8 @@ final class Audit
     {
         try {
             $json = json_encode($detail, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+            // DEL, C1 and bidi controls as \u escapes: a detail never carries a raw control character (review finding)
+            if (is_string($json)) $json = Json::escapeControls($json);
             Db::insert('audit_log', [
                 'created_at' => Clock::ms(),
                 'user_id'    => $userId ?: null,

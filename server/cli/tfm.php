@@ -83,8 +83,25 @@ unset($i, $n, $a, $m);
 $arg = isset($pos[0]) ? $pos[0] : '';
 $CLI = ['id' => 0, 'nickname' => 'CLI'];
 
-function out(string $s = ''): void { fwrite(STDOUT, $s . PHP_EOL); }
-function fail(string $s) { fwrite(STDERR, "✖ $s" . PHP_EOL); exit(1); }
+/**
+ * Review finding (log injection, CONTRACT §15.7 #5): text that reaches the operator's terminal carries no control
+ * character. C0 (ESC …), DEL, the C1 range U+0080–U+009F (U+009B is an 8-bit "CSI": erase the screen, move the cursor,
+ * change colours — a way to hide or forge lines while an operator reads the audit log) and the bidi marks / overrides /
+ * isolates that reorder what is shown each become "?". Broken UTF-8 (a lone 0x9B byte is a CSI too) becomes "?" first.
+ * $keepLines: newlines and tabs stay (this script's own messages); a database value never keeps them — it could
+ * forge a line of its own.
+ */
+function termSafe(string $s, bool $keepLines = false): string
+{
+    if (!mb_check_encoding($s, 'UTF-8')) $s = (string) mb_convert_encoding($s, 'UTF-8', 'UTF-8');
+    $ctl = $keepLines ? '\x{0}-\x{8}\x{B}-\x{1F}' : '\x{0}-\x{1F}';
+    $r = preg_replace('/[' . $ctl . '\x{7F}-\x{9F}\x{200E}\x{200F}\x{2028}\x{2029}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', '?', $s);
+    return is_string($r) ? $r : (string) preg_replace('/[^\x20-\x7E' . ($keepLines ? '\n\t' : '') . ']/', '?', $s);
+}
+/** a value from the database or a log for one line of output (no control character, no line break) */
+function cell($v): string { return termSafe((string) $v); }
+function out(string $s = ''): void { fwrite(STDOUT, termSafe($s, true) . PHP_EOL); }
+function fail(string $s) { fwrite(STDERR, termSafe("✖ $s", true) . PHP_EOL); exit(1); }
 function findUser(string $q): array
 {
     if ($q === '') fail('이메일 또는 닉네임을 적어 주세요.');
@@ -258,7 +275,7 @@ try {
                 ? Db::all("SELECT u.*, p.level FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.nickname_key LIKE ? OR u.email LIKE ? ORDER BY u.id LIMIT 200", ['%' . mb_strtolower($arg) . '%', '%' . mb_strtolower($arg) . '%'])
                 : Db::all('SELECT u.*, p.level FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id ORDER BY u.id DESC LIMIT 200');
             out(sprintf('%-6s %s %s %-6s %-7s %s', '#', pad('닉네임', 14), pad('이메일', 32), '권한', '상태', '레벨'));
-            foreach ($rows as $r) out(sprintf('%-6d %s %s %-6s %-7s Lv.%d', (int) $r['id'], pad((string) $r['nickname'], 14), pad((string) $r['email'], 32), $r['role'], $r['status'], (int) (isset($r['level']) ? $r['level'] : 1)));
+            foreach ($rows as $r) out(sprintf('%-6d %s %s %-6s %-7s Lv.%d', (int) $r['id'], pad(cell($r['nickname']), 14), pad(cell($r['email']), 32), cell($r['role']), cell($r['status']), (int) (isset($r['level']) ? $r['level'] : 1)));
             out(count($rows) . '명');
             break;
         }
@@ -290,7 +307,7 @@ try {
         case 'sub:list': {
             $rows = Subscription::listAll(500);
             out(sprintf('%-6s %s %-4s %-9s %-17s %-5s %s', '#', pad('닉네임', 14), '단계', '상태', '만료', '자동', '마지막 주문'));
-            foreach ($rows as $r) out(sprintf('%-6d %s %-4s %-9s %-17s %-5s %s', (int) $r['user_id'], pad((string) $r['nickname'], 14), (int) $r['tier'] . '배', $r['status'], whenMs($r['expires_at']), (int) $r['auto_renew'] ? '켬' : '꺼짐', (string) $r['last_order_id']));
+            foreach ($rows as $r) out(sprintf('%-6d %s %-4s %-9s %-17s %-5s %s', (int) $r['user_id'], pad(cell($r['nickname']), 14), (int) $r['tier'] . '배', cell($r['status']), whenMs($r['expires_at']), (int) $r['auto_renew'] ? '켬' : '꺼짐', cell($r['last_order_id'])));
             out(count($rows) . '건');
             break;
         }
@@ -312,7 +329,7 @@ try {
             $uid = $arg !== '' ? (int) findUser($arg)['id'] : null;
             $results = Subscription::renewDue($uid, !empty($opts['force']));
             foreach ($results as $r) {
-                out(sprintf('  user #%d %s %s', (int) $r['userId'], $r['ok'] ? '✔' : '✖', isset($r['skipped']) ? 'skip: ' . $r['skipped'] : (isset($r['status']) ? $r['status'] : '') . (isset($r['expiresAt']) ? ' → ' . whenMs($r['expiresAt']) : '') . (isset($r['code']) ? ' (' . $r['code'] . ')' : '') . (isset($r['error']) ? ' ' . $r['error'] : '')));
+                out(sprintf('  user #%d %s %s', (int) $r['userId'], $r['ok'] ? '✔' : '✖', cell(isset($r['skipped']) ? 'skip: ' . $r['skipped'] : (isset($r['status']) ? $r['status'] : '') . (isset($r['expiresAt']) ? ' → ' . whenMs($r['expiresAt']) : '') . (isset($r['code']) ? ' (' . $r['code'] . ')' : '') . (isset($r['error']) ? ' ' . $r['error'] : ''))));
             }
             Audit::log('sub_renew_run', $uid, ['force' => !empty($opts['force']), 'count' => count($results), 'via' => 'cli']);
             out('✔ 갱신 검사 ' . count($results) . '건');
@@ -345,7 +362,7 @@ try {
         case 'audit': {
             $n = max(1, min(500, (int) ($arg !== '' ? $arg : 30)));
             foreach (array_reverse(Db::all('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?', [$n])) as $r) {
-                out(sprintf('%s  %-6s %-24s user=%s actor=%s ip=%s %s', date('Y-m-d H:i:s', intdiv((int) $r['created_at'], 1000)), $r['severity'], $r['event'], isset($r['user_id']) ? $r['user_id'] : '-', isset($r['actor_id']) ? $r['actor_id'] : '-', $r['ip'], mb_substr((string) $r['detail'], 0, 160)));
+                out(sprintf('%s  %-6s %-24s user=%s actor=%s ip=%s %s', date('Y-m-d H:i:s', intdiv((int) $r['created_at'], 1000)), cell($r['severity']), cell($r['event']), isset($r['user_id']) ? (int) $r['user_id'] : '-', isset($r['actor_id']) ? (int) $r['actor_id'] : '-', cell($r['ip']), mb_substr(cell($r['detail']), 0, 160)));
             }
             break;
         }

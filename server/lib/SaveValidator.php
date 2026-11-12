@@ -426,6 +426,9 @@ final class SaveValidator
         $ceil = ['distance' => 1e8, 'playTime' => 3.2e8];
         if (count(self::kv($stats)) > 200) self::bad('stats size');
         foreach (self::kv($stats) as $k => $v) {
+            // review finding (log injection, §15.7 #5): a stat name is a plain id like every other key of the save — free
+            // text (control characters, spaces, markup) would be echoed into a STAT_RANGE violation and the audit log
+            if (!preg_match(self::ID_RE, (string) $k)) self::bad('stat id');
             // every counter is a number: a string / object / bool would slip past the movement and range checks
             if (!is_int($v) && !is_float($v)) {
                 if ($v === null) continue;
