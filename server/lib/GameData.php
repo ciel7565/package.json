@@ -28,11 +28,70 @@ final class GameData
             Log::warn('DATA', 'game-data.json missing or invalid — run "node tools/build.mjs" to regenerate it');
             $d = [];
         }
-        foreach (['quests', 'achievements', 'quizzes', 'crops', 'recipes', 'items', 'limits', 'titles'] as $k) {
+        foreach (['quests', 'achievements', 'quizzes', 'crops', 'recipes', 'items', 'limits', 'titles', 'rtfarm', 'storage'] as $k) {
             if (!isset($d[$k]) || !is_array($d[$k])) $d[$k] = [];
         }
         return self::$d = $d;
     }
+
+    // ------------------------------------------------------------------ real-time beds "실시간 텃밭" / 곳간 (CONTRACT §15.1 / §15.2)
+    /**
+     * The exported rtfarm block with safe defaults: beds (ids), crops (id → {minutes, exp, coin}), careCooldownMin,
+     * carePerAction, starAt, bonusAtStars, reportNotes. An export that predates phase 7 gives no beds and no crops.
+     */
+    public static function rtfarm(): array
+    {
+        static $m = null;
+        if ($m !== null) return $m;
+        $r = self::all()['rtfarm'];
+        $beds = [];
+        foreach ((array) (isset($r['beds']) ? $r['beds'] : []) as $b) if (is_string($b) && preg_match('/^[A-Z0-9_]{1,16}$/', $b)) $beds[] = $b;
+        $crops = [];
+        foreach ((array) (isset($r['crops']) ? $r['crops'] : []) as $id => $c) {
+            if (!is_string($id) || !is_array($c) || !isset($c['minutes']) || !is_numeric($c['minutes']) || (float) $c['minutes'] <= 0) continue;
+            $crops[$id] = ['minutes' => (float) $c['minutes'], 'exp' => max(0, (int) (isset($c['exp']) ? $c['exp'] : 0)), 'coin' => max(0, (int) (isset($c['coin']) ? $c['coin'] : 0))];
+        }
+        $starAt = [];
+        foreach ((array) (isset($r['starAt']) ? $r['starAt'] : [0, 40, 75]) as $s) if (is_numeric($s)) $starAt[] = (int) $s;
+        $notes = [];
+        foreach ((array) (isset($r['reportNotes']) ? $r['reportNotes'] : []) as $s) if (is_string($s)) $notes[] = $s;
+        return $m = [
+            'beds' => $beds,
+            'crops' => $crops,
+            'careCooldownMin' => isset($r['careCooldownMin']) && is_numeric($r['careCooldownMin']) ? (float) $r['careCooldownMin'] : 5.0,
+            'carePerAction' => isset($r['carePerAction']) && is_numeric($r['carePerAction']) ? (int) $r['carePerAction'] : 25,
+            'starAt' => $starAt ?: [0, 40, 75],
+            'bonusAtStars' => isset($r['bonusAtStars']) && is_numeric($r['bonusAtStars']) ? (int) $r['bonusAtStars'] : 3,
+            'reportNotes' => $notes,
+        ];
+    }
+
+    /** the real-time bed ids (['RB1', 'RB2', 'RB3', 'RB4']) */
+    public static function rtBeds(): array { return self::rtfarm()['beds']; }
+
+    /** {minutes, exp, coin} of a real-time crop, null when the crop cannot grow in a real-time bed */
+    public static function rtCrop(string $id): ?array
+    {
+        $c = self::rtfarm()['crops'];
+        return isset($c[$id]) ? $c[$id] : null;
+    }
+
+    /** the 곳간: ['cap' => int, 'itemIds' => string[]] (cap 300 when the export predates phase 7) */
+    public static function storage(): array
+    {
+        static $m = null;
+        if ($m !== null) return $m;
+        $s = self::all()['storage'];
+        $ids = [];
+        foreach ((array) (isset($s['itemIds']) ? $s['itemIds'] : []) as $id) if (is_string($id) && $id !== '') $ids[] = $id;
+        return $m = ['cap' => isset($s['cap']) && is_numeric($s['cap']) && (int) $s['cap'] > 0 ? (int) $s['cap'] : 300, 'itemIds' => $ids];
+    }
+
+    /** the total quantity the 곳간 may hold */
+    public static function storageCap(): int { return self::storage()['cap']; }
+
+    /** can this item be kept in the 곳간 (crop / herb harvests and finished fermentation goods) */
+    public static function storable(string $id): bool { return $id !== '' && in_array($id, self::storage()['itemIds'], true); }
 
     public static function loaded(): bool { return !empty(self::all()['items']); }
     public static function exportedAt(): string { $a = self::all(); return (string) (isset($a['exportedAt']) ? $a['exportedAt'] : ''); }

@@ -24,6 +24,14 @@
  * mid-session is accepted either way for the next save: the previous save's tier (ledger meta.tier) and the current
  * one are both tried — the larger wins once.
  *
+ * Phase 7 (CONTRACT §15.1 / §15.2): the real-time beds (data.rtfarm) and the 곳간 (data.storage) are shape-checked here
+ * (RT_BAD_BED, RT_BAD_CROP, RT_BAD_SHAPE, STORAGE_BAD_ITEM, STORAGE_BAD_QTY, STORAGE_OVER_CAP; the client's storage cap is
+ * stored as the server's, like the role); the 곳간 is part of the net worth, so moving items between the bag and the 곳간
+ * never changes the economy check. The server's own judgement of the real-time beds (Tfm\Farm: planting times measured
+ * by the server clock, early harvests, reused planting ids) arrives through the optional $rt hook of validate(): it runs
+ * after the shape checks — only when the rt shape is clean — and returns its violations plus the explained reward of
+ * every harvest it validated (item value × amount + rt coin, rt exp), which joins the economy check below.
+ *
  * Any violation → HTTP 409 VALIDATION_FAILED with the stored save, so the client restores it.
  * All tolerances live in config 'save.tolerance' and are documented in README-SERVER.md.
  * State objects are stdClass trees (json_decode(..., false)) so {} and [] survive a round trip.
@@ -108,21 +116,25 @@ final class SaveValidator
      * @param array       $user   users row
      * @param int         $prevAt server ms of the previous accepted save (or account creation)
      * @param int         $tier   the user's current speed tier (subscriptions table), 1..4
+     * @param callable|null $rt   the real-time farm judge (player/save.php: Tfm\Farm::plan): function (object $n, ?object $p): array
+     *                            ['violations' => [['code' => …] …], 'explain' => ['value' => int, 'exp' => int], 'harvests' => int];
+     *                            called after the shape checks, only when data.rtfarm / data.storage have a clean shape
      * @return array{ok:bool, violations:array, notes:array, meta:array, summary:array}
      */
-    public static function validate(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier = 1): array
+    public static function validate(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier = 1, ?callable $rt = null): array
     {
         $v = new self();
-        return $v->run($n, $p, $meta, $user, $prevAt, $now, $tier);
+        return $v->run($n, $p, $meta, $user, $prevAt, $now, $tier, $rt);
     }
 
-    private function run(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier): array
+    private function run(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier, ?callable $rtHook): array
     {
         // the tier of the previous accepted save is tried too (a change mid-session): the larger wins once
         $tier = max(1, min(4, $tier));
         $prevTier = max(1, min(4, (int) (isset($meta['tier']) ? $meta['tier'] : 1)));
         $this->tier = max($tier, $prevTier);
         $this->shape($n);
+        $rtClean = $this->rtShape($n);
         // ---------------------------------------------------------- identity (immutable fields)
         $prof = self::o(self::p($n, 'profile'));
         $pid = self::p($prof, 'id');
@@ -170,13 +182,16 @@ final class SaveValidator
         $farm = $this->farming($n, $p, $first, $dt);
         $ferm = $this->fermentation($n, $p, $first, $dt);
         $max = GameData::maxima();
+        $rt = $rtClean && $rtHook !== null ? $this->rtJudge($rtHook, $n, $p) : ['explain' => ['value' => 0, 'exp' => 0], 'harvests' => 0];
 
         // harvests / claims / crafts (bounded by time above)
         $statsN = self::o(self::p($n, 'stats'));
         $statsP = $p ? self::o(self::p($p, 'stats')) : null;
         $d = function (string $k) use ($statsN, $statsP): int { return max(0, self::i(self::p($statsN, $k)) - self::i(self::p($statsP, $k))); };
         $dHarv = $d('harvests');
-        if ($dHarv > $farm['harvests'] + 1) $this->violate('HARVEST_COUNT', ['stat' => $dHarv, 'plots' => $farm['harvests']]);
+        // a client may count its validated real-time harvests in stats.harvests too (achievements): they are allowed here,
+        // their reward is the rt hook's (stats.rtHarvests is checked by Tfm\Farm: RT_HARVEST_COUNT)
+        if ($dHarv > $farm['harvests'] + 1 + $rt['harvests']) $this->violate('HARVEST_COUNT', ['stat' => $dHarv, 'plots' => $farm['harvests'], 'rt' => $rt['harvests']]);
         $harv = min($dHarv, $farm['harvests'] + 1);
         $dClaims = $d('fermentsClaimed');
         if ($dClaims > $ferm['slots'] + 1) $this->violate('FERMENT_CLAIMS', ['stat' => $dClaims, 'possible' => $ferm['slots']]);
@@ -185,9 +200,12 @@ final class SaveValidator
         $dCrafts = $d('crafts');
         $cropItems = 0;
         if ($p) {
-            foreach (self::kv(self::p($p, 'inventory')) as $iid => $q) {
-                $it = GameData::item($iid);
-                if ($it && (isset($it['type']) ? $it['type'] : '') === 'crop') $cropItems += max(0, self::i($q));
+            // crops kept in the 곳간 are ingredients too (taken out and crafted within one save interval)
+            foreach ([self::p($p, 'inventory'), self::p(self::o(self::p($p, 'storage')), 'items')] as $box) {
+                foreach (self::kv($box) as $iid => $q) {
+                    $it = GameData::item($iid);
+                    if ($it && (isset($it['type']) ? $it['type'] : '') === 'crop') $cropItems += max(0, min(9999, self::i($q)));
+                }
             }
         }
         $craftCap = min(3 + (int) floor(min($dt, 86400) / 2), intdiv($cropItems + $farm['harvests'] * 6, 3) + 1);
@@ -195,6 +213,9 @@ final class SaveValidator
         $crafts = min($dCrafts, $craftCap);
         $explain['value'] += self::topSum($farm['values'], $harv, $max['harvestValue']) + self::topSum($ferm['values'], $claims, $max['claimValue']) + $crafts * $max['craftValue'];
         $explain['exp'] += self::topSum($farm['exps'], $harv, $max['harvestExp']) + self::topSum($ferm['exps'], $claims, $max['claimExp']) + $crafts * $max['craftExp'];
+        // every real-time harvest the server validated (Tfm\Farm, measured by the server clock): item value × amount + rt coin / exp
+        $explain['value'] += $rt['explain']['value'];
+        $explain['exp'] += $rt['explain']['exp'];
 
         // ---------------------------------------------------------- one-time rewards (server ledger: each paid once)
         $gd = GameData::all();
@@ -395,7 +416,133 @@ final class SaveValidator
                 'dt' => round($dt, 1), 'first' => $first, 'tier' => $this->tier, 'dValue' => $dW, 'dExp' => $dX, 'dEdu' => $dE,
                 'explained' => $explain, 'unexplained' => ['value' => $uW, 'exp' => $uX, 'edu' => $uE],
                 'harvests' => $harv, 'claims' => $claims, 'crafts' => $crafts, 'quests' => $newQuests,
+                'rt' => ['harvests' => $rt['harvests']] + $rt['explain'],
             ],
+        ];
+    }
+
+    // ------------------------------------------------------------------ real-time beds / 곳간 (CONTRACT §15.1 / §15.2)
+    /** a client-sent id for a violation detail / the audit log: plain ids only (free text never reaches the log) */
+    private static function safeId(string $id): string { return preg_match(self::ID_RE, $id) ? mb_substr($id, 0, 24) : '?'; }
+
+    /** a finite JSON number in $min..$max */
+    private static function numIn($v, float $min, float $max): bool
+    {
+        return (is_int($v) || is_float($v)) && is_finite((float) $v) && $v >= $min && $v <= $max;
+    }
+
+    /**
+     * Shape of data.rtfarm (beds RB1–RB4 → {cropId, pid, plantedAt, readyAt, dur, tier, care, lastCareAt}, last ≤ 8
+     * harvests {pid, bedId, cropId, amount, stars, at}, reports — local mode only), data.storage ({items: {id: qty}, cap})
+     * and stats.rtHarvests. Violations, not a 400: the client restores the stored copy (workflow interface 2).
+     * Missing blocks are fine (an older client). The client's storage cap is replaced by the server's (stored like the
+     * account role). @return bool true when the rt / storage shape is clean (the farm hook may trust it)
+     */
+    private function rtShape(object $n): bool
+    {
+        $before = count($this->violations);
+        $beds = GameData::rtBeds();
+        $rf = self::p($n, 'rtfarm');
+        if ($rf !== null && $beds) {
+            if (!self::o($rf)) {
+                $this->violate('RT_BAD_SHAPE', ['field' => 'rtfarm']);
+            } else {
+                $b = self::p($rf, 'beds');
+                if ($b !== null && !self::o($b) && $b !== []) {
+                    $this->violate('RT_BAD_SHAPE', ['field' => 'beds']);
+                } else {
+                    $pids = [];
+                    foreach (self::kv($b) as $bedId => $bed) {
+                        if (!in_array($bedId, $beds, true)) { $this->violate('RT_BAD_BED', ['bed' => self::safeId($bedId)]); continue; }
+                        $bed = self::o($bed);
+                        if (!$bed || count(self::kv($bed)) > 24) { $this->violate('RT_BAD_SHAPE', ['bed' => $bedId, 'field' => 'bed']); continue; }
+                        $crop = self::p($bed, 'cropId');
+                        if (!is_string($crop)) $this->violate('RT_BAD_SHAPE', ['bed' => $bedId, 'field' => 'cropId']);
+                        elseif (GameData::rtCrop($crop) === null) $this->violate('RT_BAD_CROP', ['bed' => $bedId, 'crop' => self::safeId($crop)]);
+                        $pid = self::p($bed, 'pid');
+                        if (!is_string($pid) || !preg_match('/^[0-9a-f]{16}$/', $pid)) $this->violate('RT_BAD_SHAPE', ['bed' => $bedId, 'field' => 'pid']);
+                        elseif (isset($pids[$pid])) $this->violate('RT_PID_REUSE', ['bed' => $bedId, 'other' => $pids[$pid]]);
+                        else $pids[$pid] = $bedId;
+                        foreach (['plantedAt', 'readyAt', 'dur', 'lastCareAt'] as $k) {
+                            $x = self::p($bed, $k);
+                            if ($x !== null && !self::numIn($x, 0, 1e15)) $this->violate('RT_BAD_SHAPE', ['bed' => $bedId, 'field' => $k]);
+                        }
+                        $t = self::p($bed, 'tier');
+                        if ($t !== null && (!is_int($t) || $t < 1 || $t > 4)) $this->violate('RT_BAD_SHAPE', ['bed' => $bedId, 'field' => 'tier']);
+                        $care = self::p($bed, 'care');
+                        if ($care !== null && !self::numIn($care, 0, 100)) $this->violate('RT_BAD_SHAPE', ['bed' => $bedId, 'field' => 'care']);
+                    }
+                }
+                $last = self::p($rf, 'last');
+                if ($last !== null && !is_array($last)) {
+                    $this->violate('RT_BAD_SHAPE', ['field' => 'last']);
+                } elseif (is_array($last)) {
+                    if (count($last) > 8) $this->violate('RT_BAD_SHAPE', ['field' => 'last', 'count' => count($last)]);
+                    foreach (array_slice($last, 0, 8) as $i => $e) {
+                        $e = self::o($e);
+                        $why = '';
+                        if (!$e) $why = 'entry';
+                        elseif (!is_string(self::p($e, 'pid')) || !preg_match('/^[0-9a-f]{16}$/', (string) self::p($e, 'pid'))) $why = 'pid';
+                        elseif (!in_array(self::p($e, 'bedId'), $beds, true)) $why = 'bedId';
+                        elseif (!is_string(self::p($e, 'cropId')) || GameData::rtCrop((string) self::p($e, 'cropId')) === null) $why = 'cropId';
+                        elseif (!is_int(self::p($e, 'amount')) || self::p($e, 'amount') < 0 || self::p($e, 'amount') > 99) $why = 'amount';
+                        elseif (self::p($e, 'stars') !== null && (!is_int(self::p($e, 'stars')) || self::p($e, 'stars') < 0 || self::p($e, 'stars') > 3)) $why = 'stars';
+                        elseif (self::p($e, 'at') !== null && !self::numIn(self::p($e, 'at'), 0, 1e15)) $why = 'at';
+                        if ($why !== '') $this->violate('RT_BAD_SHAPE', ['field' => 'last', 'index' => (int) $i, 'why' => $why]);
+                    }
+                }
+                $rep = self::p($rf, 'reports');
+                if ($rep !== null && (!is_array($rep) || count($rep) > 200)) $this->violate('RT_BAD_SHAPE', ['field' => 'reports']);
+            }
+        }
+        $rh = self::p(self::o(self::p($n, 'stats')), 'rtHarvests');
+        if ($rh !== null && !is_int($rh)) $this->violate('RT_BAD_SHAPE', ['field' => 'rtHarvests']);
+
+        $st = self::p($n, 'storage');
+        $ids = GameData::storage()['itemIds'];
+        if ($st !== null && $ids) {
+            $cap = GameData::storageCap();
+            if (!self::o($st)) {
+                $this->violate('STORAGE_BAD_ITEM', ['field' => 'storage']);
+            } else {
+                $items = self::p($st, 'items');
+                if ($items !== null && !self::o($items) && $items !== []) {
+                    $this->violate('STORAGE_BAD_ITEM', ['field' => 'items']);
+                } else {
+                    $kv = self::kv($items);
+                    if (count($kv) > 100) $this->violate('STORAGE_BAD_ITEM', ['field' => 'items', 'count' => count($kv)]);
+                    $total = 0;
+                    foreach (array_slice($kv, 0, 100, true) as $id => $q) {
+                        $id = (string) $id;
+                        if (!preg_match(self::ID_RE, $id) || !GameData::storable($id)) $this->violate('STORAGE_BAD_ITEM', ['item' => self::safeId($id)]);
+                        if (!is_int($q) || $q < 0 || $q > 9999) $this->violate('STORAGE_BAD_QTY', ['item' => self::safeId($id)]);
+                        else $total += $q;
+                    }
+                    if ($total > $cap) $this->violate('STORAGE_OVER_CAP', ['total' => $total, 'cap' => $cap]);
+                }
+                // the capacity is the server's (game data), never the client's: stored as the server value, not refused
+                if (self::p($st, 'cap') !== $cap) { $st->cap = $cap; $this->notes[] = 'storage cap'; }
+            }
+        }
+        return count($this->violations) === $before;
+    }
+
+    /**
+     * Ask the real-time farm judge (Tfm\Farm::plan through player/save.php) about this save: its violations join this
+     * validation, its validated harvests explain their reward. A malformed answer explains nothing.
+     * @return array{explain: array{value:int, exp:int}, harvests: int}
+     */
+    private function rtJudge(callable $hook, object $n, ?object $p): array
+    {
+        $r = $hook($n, $p);
+        $r = is_array($r) ? $r : [];
+        foreach ((isset($r['violations']) && is_array($r['violations']) ? $r['violations'] : []) as $v) {
+            if (is_array($v) && isset($v['code']) && is_string($v['code']) && preg_match('/^[A-Z_]{2,40}$/', $v['code'])) $this->violate($v['code'], array_diff_key($v, ['code' => 1]));
+        }
+        $ex = isset($r['explain']) && is_array($r['explain']) ? $r['explain'] : [];
+        return [
+            'explain' => ['value' => max(0, (int) (isset($ex['value']) ? $ex['value'] : 0)), 'exp' => max(0, (int) (isset($ex['exp']) ? $ex['exp'] : 0))],
+            'harvests' => max(0, (int) (isset($r['harvests']) ? $r['harvests'] : 0)),
         ];
     }
 
@@ -646,12 +793,13 @@ final class SaveValidator
     }
 
     // ------------------------------------------------------------------ economy helpers
-    /** coin + Σ items × replacement value + decorations + unlocked extra jars */
+    /** coin + Σ items × replacement value (bag and 곳간 alike: moving between them changes nothing) + decorations + unlocked extra jars */
     private function netWorth(object $s): int
     {
         $st = self::o(self::p($s, 'stats'));
         $w = max(0, self::i(self::p($st, 'coin')));
         foreach (self::kv(self::p($s, 'inventory')) as $id => $q) $w += GameData::itemValue($id) * max(0, min(999, self::i($q)));
+        foreach (array_slice(self::kv(self::p(self::o(self::p($s, 'storage')), 'items')), 0, 100, true) as $id => $q) $w += GameData::itemValue((string) $id) * max(0, min(9999, self::i($q)));
         $eng = self::o(self::p($s, 'engagement'));
         $decor = self::p($eng, 'decor');
         if (is_array($decor)) {
