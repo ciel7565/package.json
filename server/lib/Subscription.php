@@ -256,10 +256,25 @@ final class Subscription
     }
 
     // ------------------------------------------------------------------ activation
-    /** extend / activate: expires_at = max(now, expires_at) + period; status active; tier set */
+    /**
+     * extend / activate: expires_at = max(now, expires_at) + period; status active; tier set.
+     * Always one transaction that holds the account's locks (review finding: two payments of one account at the same
+     * moment on MySQL / MariaDB): the users row is locked first — it always exists, so two first subscriptions queue on
+     * it instead of both taking the gap lock of the missing subscriptions row (an InnoDB deadlock) — then the
+     * subscription is read with a locking read. A plain SELECT reads an old snapshot there: both payments would add
+     * their period to the same old expiry and one paid period would be lost. SQLite: BEGIN IMMEDIATE already serialises.
+     */
     private static function activate(int $uid, int $tier, int $periodMs, int $now, array $extra = []): array
     {
-        $row = self::row($uid);
+        return Db::tx(function () use ($uid, $tier, $periodMs, $now, $extra) {
+            Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]);
+            return self::activateLocked($uid, $tier, $periodMs, $now, $extra, Db::one('SELECT * FROM subscriptions WHERE user_id = ?' . Db::forUpdate(), [$uid]));
+        });
+    }
+
+    /** activate() once the account is locked; $row = the subscription as it is now (null: none yet) */
+    private static function activateLocked(int $uid, int $tier, int $periodMs, int $now, array $extra, ?array $row): array
+    {
         $base = $row ? max($now, (int) $row['expires_at']) : $now;
         // a different tier starts a fresh period from now (no mixing of two prices in one period)
         if ($row && (int) $row['tier'] !== $tier) $base = $now;

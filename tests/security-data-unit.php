@@ -36,10 +36,13 @@ putenv('TFM_TOSS_MOCK=1');
 require $srv . '/lib/bootstrap.php';
 
 $failed = 0;
-/** $test returns true (pass), false or a string (fail + detail); a thrown error is a fail with its message */
+/** $test returns true (pass), false or a string (fail + detail); a thrown error is a fail with its message.
+ *  TFM_UNIT_ONLY=<text> runs only the checks whose name contains <text> (the set-up between checks still runs). */
 function check(string $name, callable $test): void
 {
     global $failed;
+    $only = (string) getenv('TFM_UNIT_ONLY');
+    if ($only !== '' && strpos($name, $only) === false) return;
     try {
         $r = $test();
         $ok = $r === true;
@@ -527,6 +530,72 @@ check('payments not configured (no keys, mock off): status mode unconfigured, no
         foreach (['toss.mock', 'toss.client_key', 'toss.secret_key'] as $k) Tfm\Config::override($k, null);
     }
     return $mode === 'unconfigured' && $ck === '' && $refused && $n1 === $n0 && $mixed === false && $own ? true : json_encode([$mode, $ck, $refused, $n0, $n1, $mixed, $own]);
+});
+
+// ------------------------------------------------------------------ payments, review round (item 15: lost update, auto-renew tier, forced renewal)
+/** start PHP $code in a child process against this test's database (its stdout is read line by line with $waitFor) */
+$child = function (string $code) use ($srv): array {
+    $p = proc_open([PHP_BINARY, '-r', 'require $argv[1]; ' . $code, $srv . '/lib/bootstrap.php'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    return [$p, $pipes];
+};
+/** read the child's stdout until a line equals $marker (true) or it ends / the time is up (false) */
+$waitFor = function (array $c, string $marker, float $seconds = 20.0): bool {
+    $end = microtime(true) + $seconds;
+    while (microtime(true) < $end) {
+        $line = fgets($c[1][1]);
+        if ($line === false) return false;
+        if (rtrim($line, "\r\n") === $marker) return true;
+    }
+    return false;
+};
+/** the rest of the child's output (stdout + stderr) after it ended */
+$finish = function (array $c): string {
+    $out = stream_get_contents($c[1][1]) . stream_get_contents($c[1][2]);
+    fclose($c[1][1]);
+    fclose($c[1][2]);
+    proc_close($c[0]);
+    return trim((string) $out);
+};
+check('activate — two payments of one account at the same moment each add their period (no lost update; matters on MariaDB, where a plain read sees an old snapshot)', function () use ($payUser, $child, $waitFor, $finish) {
+    $period = 30 * 86400000;
+    foreach (['no subscription yet', 'an active subscription'] as $case) {
+        $u = $payUser();
+        $uid = (int) $u['id'];
+        if ($case === 'an active subscription') Tfm\Subscription::grant(['id' => 0], $uid, 2, 30);
+        $t0 = Tfm\Clock::ms();
+        $exp0 = (int) Tfm\Db::value('SELECT expires_at FROM subscriptions WHERE user_id = ?', [$uid]);
+        $base = max($t0, $exp0);
+        // the first payment writes its period and keeps its transaction open for 1.5 s; the second one runs inside that window
+        $a = $child('Tfm\\Db::tx(function () { Tfm\\Subscription::grant(["id" => 0], ' . $uid . ', 2, 30); echo "written\n"; fflush(STDOUT); usleep(1500000); }); echo "a-done";');
+        if (!$waitFor($a, 'written')) return "$case: the first payment did not start: " . $finish($a);
+        $b = $child('Tfm\\Subscription::grant(["id" => 0], ' . $uid . ', 2, 30); echo "b-done";');
+        $ob = $finish($b);
+        $oa = $finish($a);
+        if ($oa !== 'a-done' || $ob !== 'b-done') return "$case: children said " . json_encode([$oa, $ob]);
+        $exp = (int) Tfm\Db::value('SELECT expires_at FROM subscriptions WHERE user_id = ?', [$uid]);
+        $added = ($exp - $base) / 86400000;
+        if ($exp - $base < 2 * $period - 1000 || $exp - $base > 2 * $period + 120000) return sprintf('%s: two 30-day periods added %.2f days', $case, $added);
+    }
+    return true;
+});
+check('confirm — two different paid orders of one account confirmed at the same moment (4 rounds): both payments add their period', function () use ($payUser, $child, $finish) {
+    $period = Tfm\Toss::periodDays() * 86400000;
+    for ($round = 0; $round < 4; $round++) {
+        $u = $payUser();
+        $t0 = Tfm\Clock::ms();
+        $kids = [];
+        foreach ([Tfm\Subscription::prepare($u, 2, 'card'), Tfm\Subscription::prepare($u, 2, 'card')] as $o) {
+            // both wait 300 ms at the (mock) gateway, so their activations meet
+            $kids[] = $child('$u = Tfm\\Users::byId(' . (int) $u['id'] . '); try { Tfm\\Subscription::confirm($u, ' . var_export('mock_slow300_' . $o['orderId'], true) . ', '
+                . var_export($o['orderId'], true) . ', ' . (int) $o['amount'] . '); echo "ok"; } catch (Tfm\\ApiException $e) { echo $e->errorCode; }');
+        }
+        $out = array_map($finish, $kids);
+        $exp = (int) Tfm\Subscription::state((int) $u['id'])['expiresAt'];
+        $paid = (int) Tfm\Db::value("SELECT COUNT(*) FROM orders WHERE user_id = ? AND status = 'confirmed'", [(int) $u['id']]);
+        if ($out !== ['ok', 'ok'] || $paid !== 2) return "round $round: " . json_encode($out) . " · $paid confirmed";
+        if ($exp - $t0 < 2 * $period - 1000) return sprintf('round %d: two paid periods but %.2f days', $round, ($exp - $t0) / 86400000);
+    }
+    return true;
 });
 // ------------------------------------------------------------------ secret:rotate (item 21)
 check('secret:rotate --data-key — every sealed billing key is sealed again with the new key, the old key is gone, rotated_at is set', function () use ($payUser) {
