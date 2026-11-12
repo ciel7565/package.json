@@ -638,7 +638,7 @@ async function main() {
     await step('S06', 'every tab works for the elevated admin without JavaScript; each response carries the lock headers; links never name the folder', async () => {
       const home = await b1.req(ADM);
       const tabs = [...home.text.matchAll(/<nav class="tabs"[\s\S]*?<\/nav>/g)].flatMap((m) => [...m[0].matchAll(/href="\.\/\?tab=([a-z0-9_]+)"/g)].map((x) => x[1]));
-      for (const need of ['overview', 'beds', 'storage', 'reports', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
+      for (const need of ['overview', 'beds', 'storage', 'reports', 'dev', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
       for (const t of tabs) {
         const p = await b1.req(`${ADM}?tab=${t}`);
         assert(p.status === 200 && isInside(p.text), `tab ${t} → ${p.status}`);
@@ -773,7 +773,7 @@ async function main() {
       assert(isInside((await signInFull(b, ADM, admins.a)).text), 'signed in');
       const P = `"'><script>alert(1)</script><img src=x onerror=alert(2)>`;
       const enc = encodeURIComponent(P);
-      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=reports&show=${enc}&q=${enc}&p=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
+      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=reports&show=${enc}&q=${enc}&p=${enc}`, `?tab=dev&sec=${enc}&doc=${enc}&run=${enc}&p=${enc}`, `?tab=dev&sec=docs&doc=${enc}`, `?tab=dev&sec=inspect&run=${enc}`, `?tab=dev&sec=checklist&x=${enc}`, `?tab=dev&sec=env&${enc}=1`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
         `?tab=${enc}`, `?tab=sub&uid=${enc}`, `?tab=moderation&show=${enc}`, `?tab=twofa&x=${enc}`, `?tab=health&${enc}=${enc}`, `?${enc}`];
       for (const u of urls) {
         const r = await b.req(ADM + u);
@@ -1551,6 +1551,124 @@ async function main() {
         const again = cards((await b.req(`${ADM}?tab=reports&show=approved`)).text).find((x) => x.id === target.id);
         assert(again && !/AI가 쓴 초안/.test(again.html) && again.html.includes('고친 초안이에요'), 'after saving, the box holds the saved memo');
         return 'button · draft in the box (escaped, unsaved) · request without account details · audit · cleared after saving';
+      });
+    } finally { await sv.stop(); }
+  }
+
+  // ================================================================= 🧑‍💻 개발자 — handover & inspection (CONTRACT §15.5)
+  if (section('dev')) {
+    const s = makeSite('dev');
+    const sv = await startPhp(s);
+    try {
+      const A = mkUser(s, 'admin');
+      const U = mkUser(s, 'user');
+      const b = new Browser(sv.base, 'dev');
+      const signedIn = async () => { if (!isInside((await b.req(ADM)).text)) assert(isInside((await signIn(b, ADM, A)).page.text), 'signed in'); };
+      const noPhp = (t) => !/TFM_BOOT|<\?php|declare\(strict_types/.test(t);
+      await step('15.5', '🧑‍💻 개발자 · 문서: a calm note while lib/docs is missing; the build\'s documents listed and rendered by Tfm\\Markdown (headings, tables, the "<script>" text of HANDOVER as text, links only http(s)); a document name can never reach another file', async () => {
+        await signedIn();
+        let p = await b.req(`${ADM}?tab=dev`);
+        assert(p.status === 200 && isInside(p.text), `→ ${p.status}`);
+        assertLocked(p, 'dev tab');
+        assert(/lib\/docs/.test(p.text) && /아직/.test(p.text) && /tools\/build\.mjs/.test(p.text), 'a calm note says where the documents are');
+        // the build copies the documents into lib/docs/ of every server copy (tools/build.mjs ADMIN_DOCS) — the same here
+        fs.mkdirSync(path.join(s.site, 'lib/docs'), { recursive: true });
+        for (const f of ['docs/HANDOVER.md', 'docs/ARCHITECTURE.md', 'docs/SERVER-INSTALL-KO.md', 'docs/SECURITY-REPORT-KO.md', 'server/README-SERVER.md']) fs.copyFileSync(path.join(ROOT, f), path.join(s.site, 'lib/docs', path.basename(f)));
+        fs.writeFileSync(path.join(s.site, 'lib/docs/EVIL.md'), "# 시험 <script>alert('doc')</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(2)>\n\n| a | b |\n|---|---|\n| <svg onload=alert(3)> | [ok](https://example.com/?a=1&b=2) |\n");
+        fs.writeFileSync(path.join(s.site, 'lib/docs/secret.txt'), 'TOPSECRET-123');
+        p = await b.req(`${ADM}?tab=dev&sec=docs`);
+        for (const n of ['HANDOVER', 'SERVER-INSTALL-KO', 'SECURITY-REPORT-KO', 'README-SERVER', 'ARCHITECTURE', 'EVIL']) assert(p.text.includes(`doc=${n}"`), `listed: ${n}`);
+        assert(!/doc=secret/.test(p.text) && !p.text.includes('TOPSECRET'), 'only .md files are documents');
+        const h = await b.req(`${ADM}?tab=dev&sec=docs&doc=HANDOVER`);
+        assertLocked(h, 'HANDOVER rendered');
+        const doc = h.text.slice(h.text.indexOf('<div class="mdoc">'));
+        assert(/<h2>/.test(doc) && /<table>/.test(doc) && /<pre><code>/.test(doc) && doc.includes('&lt;script&gt;'), 'HANDOVER: headings, tables, code, the <script> text as text');
+        const ev = await b.req(`${ADM}?tab=dev&sec=docs&doc=EVIL`);
+        assertLocked(ev, 'EVIL rendered', { payload: true });
+        const at = ev.text.indexOf('<div class="mdoc">');
+        const evd = ev.text.slice(at, ev.text.indexOf('</section>', at));
+        assert(!/<script|<img|<svg|href="javascript|on[a-z]+=alert\(/i.test(evd.replace(/&lt;[\s\S]*?&gt;/g, '')) && evd.includes('&lt;svg onload=alert(3)&gt;'), 'markup of a document is text');
+        assert(evd.includes('<a href="https://example.com/?a=1&amp;b=2" rel="noopener noreferrer">ok</a>') && !/href="[^h]/.test(evd), 'only the http(s) link is a link');
+        for (const bad of ['../config/config', '../../lib/Core', 'HANDOVER.md', 'handover', 'EVIL/../HANDOVER', '.htaccess', 'secret', '%2e%2e%2fconfig', 'index', '']) {
+          const r = await b.req(`${ADM}?tab=dev&sec=docs&doc=${encodeURIComponent(bad)}`);
+          assert(r.status === 200 && isInside(r.text) && noPhp(r.text) && !r.text.includes('TOPSECRET') && !r.text.includes('<div class="mdoc">'), `doc=${bad}: no document`);
+        }
+        return '5 handover documents + 1 test document · rendered whitelisted · the calm note without lib/docs · 10 bad names refused';
+      });
+      await step('15.5', '🧑‍💻 개발자 · 인수인계 체크리스트: every Inspect::checklist item with a done checkbox and a note (POST + CSRF + audit); markup in a note comes back escaped, a pasted key is hidden', async () => {
+        const list = php(s, 'Tfm\\Inspect::checklist()');
+        const keys = Object.keys(list);
+        let p = await b.req(`${ADM}?tab=dev&sec=checklist`);
+        assertLocked(p, 'checklist');
+        assert((p.text.match(/name="action" value="handover_save"/g) || []).length === keys.length, 'one form per item');
+        for (const k of keys) assert(p.text.includes(`name="key" value="${k}"`) && p.text.includes(decode(list[k].label).replace(/&/g, '&amp;').replace(/</g, '&lt;')), `item ${k}`);
+        for (const k of ['admin_2fa', 'db_account', 'https_cert', 'toss_keys', 'claude_key', 'backup_schedule', 'renew_schedule', 'log_location', 'secret_storage']) assert(keys.includes(k), `CONTRACT item ${k}`);
+        let r = await admF(b, ADM, { action: 'handover_save', tab: 'dev', sec: 'checklist', key: 'admin_2fa', done: '1', note: `<script>alert('n')</script> 휴대폰 앱 등록 · ${'live' + '_sk_'}AbCdEfGh12345678IjKl` }, { page: '?tab=dev&sec=checklist' });
+        assert(flashOf(r.text)?.type === 'ok' && /sec=checklist/.test(r.url), `save: ${flashOf(r.text)?.msg}`);
+        const row = dbAll(s, "SELECT * FROM handover_items WHERE k = 'admin_2fa'")[0];
+        assert(row && Number(row.done) === 1 && Number(row.updated_by) === A.id && !row.note.includes('live_sk_') && row.note.includes('휴대폰 앱 등록'), `row ${JSON.stringify(row)}`);
+        assert(r.text.includes('&lt;script&gt;alert(') && !r.text.includes("<script>alert('n')"), 'the note shows escaped');
+        assert(/name="done" value="1" checked/.test(r.text.slice(r.text.indexOf('value="admin_2fa"'))), 'the box is ticked');
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'handover_item_changed' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && Number(au.actor_id) === A.id && /admin_2fa/.test(au.detail), 'audit handover_item_changed');
+        r = await admF(b, ADM, { action: 'handover_save', tab: 'dev', sec: 'checklist', key: 'admin_2fa', note: '다시 확인' }, { page: '?tab=dev&sec=checklist' });
+        assert(Number(dbAll(s, "SELECT done FROM handover_items WHERE k = 'admin_2fa'")[0].done) === 0, 'an unticked box saves "not done"');
+        for (const f of [{ key: 'no_such_item' }, { key: "admin_2fa' OR '1'='1" }, { key: '' }, { note: '가'.repeat(501) }]) {
+          r = await admF(b, ADM, { action: 'handover_save', tab: 'dev', sec: 'checklist', key: 'db_account', done: '1', note: 'x', ...f }, { page: '?tab=dev&sec=checklist' });
+          assert(flashOf(r.text)?.type === 'error', `${JSON.stringify(f).slice(0, 40)} → ${flashOf(r.text)?.type}`);
+        }
+        assert(dbAll(s, "SELECT * FROM handover_items WHERE k = 'db_account'").length === 0, 'refused saves changed nothing');
+        return `${keys.length} items · save / untick · escaped · key hidden · audit · 4 bad saves refused`;
+      });
+      let runId = 0;
+      await step('15.5', '🧑‍💻 개발자 · 점검 실행: Inspect::run from the page (POST + CSRF + audit inspection_run) — stored, listed, opened with its groups and versions', async () => {
+        const post = await adm(b, ADM, { action: 'inspect_run', tab: 'dev', sec: 'inspect' }, { page: '?tab=dev&sec=inspect' });
+        assert(post.status === 303 && /tab=dev/.test(post.location) && /sec=inspect/.test(post.location) && /run=\d+/.test(post.location), `303 to the run: ${post.location}`);
+        runId = Number(post.location.match(/run=(\d+)/)[1]);
+        const p = await b.follow(post);
+        assert(flashOf(p.text)?.type === 'ok' && /점검 #\d+/.test(flashOf(p.text).msg), `flash ${flashOf(p.text)?.msg}`);
+        assertLocked(p, 'run page', { payload: true });
+        const row = dbAll(s, 'SELECT id, source, actor_id, status, ok_count, warn_count, fail_count FROM inspection_runs WHERE id = ?', [runId])[0];
+        assert(row && row.source === 'admin' && Number(row.actor_id) === A.id, `row ${JSON.stringify(row)}`);
+        for (const g of ['인수인계 · 버전', '관리자 페이지 잠금', '보안 설정', 'DB 계정', 'PHP']) assert(p.text.includes(g), `group "${g}"`);
+        const ver = php(s, 'TFM_VERSION');
+        assert(p.text.includes(ver) && /스키마/.test(p.text), 'the versions');
+        assert(new RegExp(`href="\\./\\?download=${runId}"`).test(p.text), 'a Markdown download link through the admin entry');
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'inspection_run' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && Number(au.actor_id) === A.id, 'audit inspection_run');
+        const list = await b.req(`${ADM}?tab=dev&sec=inspect`);
+        assert(new RegExp(`run=${runId}"`).test(list.text) && /<tr class="run"/.test(list.text), 'the run is listed');
+        return `run #${runId}: ok ${row.ok_count} · warn ${row.warn_count} · fail ${row.fail_count}`;
+      });
+      await step('15.5', '🧑‍💻 개발자 · 점검 실행: a run downloads as a text/markdown attachment through the admin entry (nosniff, no-store); everybody else and every bad id gets the plain 404', async () => {
+        const r = await b.bytes(`${ADM}?download=${runId}`);
+        assert(r.status === 200 && /^text\/markdown; charset=utf-8$/i.test(r.headers.get('content-type') || ''), `→ ${r.status} ${r.headers.get('content-type')}`);
+        assert(/^attachment; filename="tfm-inspect-\d+-\d{8}-\d{6}\.md"$/.test(r.headers.get('content-disposition') || ''), `disposition ${r.headers.get('content-disposition')}`);
+        assert(r.headers.get('x-content-type-options') === 'nosniff' && /no-store/.test(r.headers.get('cache-control') || '') && /sandbox/.test(r.headers.get('content-security-policy') || ''), 'nosniff, no-store, sandbox');
+        const md = r.buf.toString('utf8');
+        assert(md.startsWith(`# 서버 점검 보고서 #${runId}`) && /\| 항목 \| 상태 \| 값 \| 안내 \|/.test(md) && !/<script/.test(md), `the report: ${md.slice(0, 80)}`);
+        const plain404 = (x, who) => assert(x.status === 404 && /404 Not Found/i.test(x.text) && !/서버 점검/.test(x.buf.toString('utf8')), `${who} → ${x.status}`);
+        plain404(await new Browser(sv.base).bytes(`${ADM}?download=${runId}`), 'anonymous');
+        const player = new Browser(sv.base); await apiLogin(player, U);
+        plain404(await player.bytes(`${ADM}?download=${runId}`), 'a player');
+        const appOnly = new Browser(sv.base); await apiLogin(appOnly, A);
+        plain404(await appOnly.bytes(`${ADM}?download=${runId}`), 'an app-only admin');
+        for (const bad of ['999999', 'abc', '-1', '', `${runId}x`, '../../data/secret']) plain404(await b.bytes(`${ADM}?download=${encodeURIComponent(bad)}`), `download=${bad}`);
+        return 'text/markdown attachment · anonymous / player / app-only admin / 6 bad ids → plain 404';
+      });
+      await step('15.5', '🧑‍💻 개발자 · 환경·로그: versions, extensions, disk use, PHP settings and the last 200 log lines — keys, tokens, passwords, cookies, e-mail addresses and phone numbers hidden, markup escaped', async () => {
+        php(s, `(function ($in) { Tfm\\Log::warn('TEST', 'login password=hunter2 for kid@example.com 010-1234-5678 ' . $in['p'], ['token' => 'tok-secret-123', 'apiKey' => 'sk-ant-api03-' . str_repeat('z', 30), 'Cookie' => 'TFMSESSID=cookie-value-99']); return 1; })($in)`, { p: EVIL.note });
+        let p = await b.req(`${ADM}?tab=dev&sec=env`);
+        assertLocked(p, 'env + logs', { payload: true });
+        for (const x of [php(s, 'PHP_VERSION'), 'pdo', 'mbstring', 'memory_limit', 'upload_max_filesize', '로그']) assert(p.text.includes(x), `shows ${x}`);
+        for (const x of ['hunter2', 'kid@example.com', '010-1234-5678', 'tok-secret-123', 'z'.repeat(30), 'cookie-value-99']) assert(!p.text.includes(x), `the log shows ${x}`);
+        assert(p.text.includes('[가림') && p.text.includes('&lt;script&gt;alert(') && !rawEvil(p.text).length, 'hidden + escaped');
+        php(s, '(function () { for ($i = 0; $i < 260; $i++) Tfm\\Log::info("FILL", "line " . $i); return 1; })()');
+        p = await b.req(`${ADM}?tab=dev&sec=env`);
+        const rows = (p.text.match(/<tr class="log/g) || []).length;
+        assert(rows === 200, `${rows} log rows (want the last 200)`);
+        assert(p.text.indexOf('line 259') < p.text.indexOf('line 100') && !p.text.includes('>line 59<') && !/line 59</.test(p.text), 'newest first, only the last 200');
+        return 'versions · extensions · disk · ini · 200 log rows, newest first, secrets hidden';
       });
     } finally { await sv.stop(); }
   }

@@ -46,9 +46,11 @@ use Tfm\Farm;
 use Tfm\Firewall;
 use Tfm\Health;
 use Tfm\Http;
+use Tfm\Inspect;
 use Tfm\Json;
 use Tfm\Log;
 use Tfm\LoginThrottle;
+use Tfm\Markdown;
 use Tfm\Presence;
 use Tfm\RateLimit;
 use Tfm\Sec;
@@ -73,15 +75,18 @@ const TABS = [
     'beds' => ['🌱', '재배 현황'],
     'storage' => ['🏚️', '곳간'],
     'reports' => ['✅', '완료 확인'],
-    'health' => ['🩺', '시스템 점검'],
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
     'moderation' => ['🚨', '신고·채팅'],
     'security' => ['🛡️', '보안'],
     'twofa' => ['🔐', '2단계 인증'],
+    'health' => ['🩺', '시스템 점검'],
+    'dev' => ['🧑‍💻', '개발자'],
     'audit' => ['📜', '감사 로그'],
     'maintenance' => ['🧰', '유지보수'],
 ];
+/** 🧑‍💻 the four parts of the developer tab (CONTRACT §15.5) */
+const DEV_SECTIONS = ['docs' => ['📚', '문서'], 'checklist' => ['✅', '인수인계 체크리스트'], 'inspect' => ['🔎', '점검 실행'], 'env' => ['🧪', '환경·로그']];
 const REASONS = ['kid' => '🧒 어린이 신고', 'abuse' => '욕설·비방', 'spam' => '도배·광고', 'harass' => '불쾌한 행동', 'privacy' => '개인정보 노출', 'etc' => '기타'];
 const SUB_STATUS = ['none' => '없음', 'active' => '이용 중', 'past_due' => '갱신 실패(유예)', 'canceled' => '해지됨'];
 const ORDER_STATUS = ['created' => '대기', 'confirmed' => '완료', 'failed' => '실패', 'canceled' => '취소', 'refunded' => '환불'];
@@ -311,6 +316,7 @@ function handlePost(Ctx $c)
     // the list the form came from (only known values; http_build_query encodes them for the Location header)
     if (isset(REPORT_STATUS[postStr('show')])) $back['show'] = postStr('show');
     if (ctype_digit(postStr('p')) && strlen(postStr('p')) <= 5 && (int) postStr('p') > 0) $back['p'] = (int) postStr('p');
+    if (isset(DEV_SECTIONS[postStr('sec')])) $back['sec'] = postStr('sec');
     $admin = $c->user;
     $uid = (int) postStr('uid');
     try {
@@ -350,6 +356,8 @@ function handlePost(Ctx $c)
             case 'farm_scale': $msg = doFarmScale($admin); break;
             case 'report_decide': $msg = doReportDecide($admin); break;
             case 'ai_memo': $msg = doAiMemo($c); break;
+            case 'handover_save': $msg = doHandover($admin); break;
+            case 'inspect_run': $msg = doInspectRun($admin); break;
             case 'ip_block': $msg = doIpBlock($c); break;
             case 'ip_unblock': $msg = doIpUnblock($c); break;
             case 'twofa_disable': $msg = doDisable($c); break;
@@ -359,7 +367,36 @@ function handlePost(Ctx $c)
     } catch (ApiException $e) {
         flash('error', $e->getMessage());
     }
-    redirectTo($tab, $back);
+    redirectTo($tab, backExtra() + $back);
+}
+
+/** extra query values an action wants on its 303 (e.g. the run it just made); integers and known words only */
+function backExtra(?array $add = null): array
+{
+    static $extra = [];
+    if ($add !== null) foreach ($add as $k => $v) if (is_int($v) || (is_string($v) && preg_match('/^[a-z0-9_]{1,24}$/', $v))) $extra[(string) $k] = $v;
+    return $extra;
+}
+
+/** ✅ / ⬜ one handover item (Inspect::setItem: admins only, the note cleaned and a pasted key hidden, audit handover_item_changed) */
+function doHandover(array $admin): string
+{
+    if (!class_exists('Tfm\Inspect')) throw new ApiException(503, 'NOT_READY', '개발자 인수인계 기능이 아직 준비 중이에요.');
+    $key = postStr('key');
+    if (!preg_match('/^[a-z0-9_]{2,64}$/', $key)) throw new ApiException(400, 'INVALID_INPUT', '체크리스트 항목을 고르지 못했어요. 목록에서 다시 눌러 주세요.');
+    $note = postStr('note');
+    if (strlen($note) > Inspect::NOTE_MAX * 4 || mb_strlen($note, 'UTF-8') > Inspect::NOTE_MAX) throw new ApiException(400, 'INVALID_INPUT', '메모는 ' . Inspect::NOTE_MAX . '자까지 쓸 수 있어요.');
+    $it = Inspect::setItem($admin, $key, postStr('done') === '1', $note);
+    return ($it['done'] ? '✅ ' : '⬜ ') . $it['label'] . ' — ' . ($it['done'] ? '끝냈다고 표시했어요.' : '아직 남은 일로 표시했어요.');
+}
+
+/** 🔎 one inspection from the page (Inspect::run: stored in inspection_runs, audited inspection_run) → 303 to that run */
+function doInspectRun(array $admin): string
+{
+    if (!class_exists('Tfm\Inspect')) throw new ApiException(503, 'NOT_READY', '점검 기능이 아직 준비 중이에요.');
+    $run = Inspect::run('admin', $admin);
+    backExtra(['sec' => 'inspect', 'run' => (int) $run['id']]);
+    return '🔎 점검 #' . (int) $run['id'] . '을 마쳤어요 — ' . $run['text'];
 }
 
 /** the admin sign-in form: the shared throttled login, then the role, then the second step */
@@ -1022,18 +1059,151 @@ function scaleCard(): string
 function viewHealth(): string
 {
     $hc = Health::collect(true, AdminGate::htaccessSeen());
-    $groups = ['adminlock' => '🔐 관리자 페이지 잠금', 'config' => '🧾 보안 설정', 'dbacct' => '🗄️ DB 계정', 'security' => '🛡️ 보안', 'php' => '🐘 PHP',
-        'db' => '🗃️ 데이터베이스', 'files' => '📁 파일·폴더', 'server' => '🖥️ 웹 서버', 'app' => '🏺 체험관'];
     $h = '<section class="card"><h3>🩺 종합 상태 ' . badge($hc['status']) . '</h3><p class="dim">PHP ' . e($hc['php']['version']) . ' (' . e($hc['php']['sapi']) . ', ' . e($hc['php']['os']) . ', ' . e($hc['php']['bits']) . '비트) · 앱 v' . e($hc['app']['version']) . ' · ' . e(when($hc['generatedAt'])) . '</p>'
-        . '<p class="dim small">⛔ 위험은 바로 고쳐야 하는 것, ⚠️ 주의는 고치면 더 안전해지는 것이에요. 바꾼 뒤 이 화면을 새로 고치면 다시 점검해요.</p></section>';
-    foreach ($groups as $g => $title) {
-        $rows = array_filter($hc['checks'], function ($x) use ($g) { return $x['group'] === $g; });
-        if (!$rows) continue;
-        $h .= '<section class="card"><h3>' . e($title) . '</h3><div class="tablewrap"><table><thead><tr><th>항목</th><th>상태</th><th>값</th><th>안내</th></tr></thead><tbody>';
-        foreach ($rows as $x) $h .= '<tr><td><b>' . e($x['label']) . '</b></td><td>' . badge($x['status']) . '</td><td>' . e(is_scalar($x['value']) ? $x['value'] : json_encode($x['value'], JSON_UNESCAPED_UNICODE)) . '</td><td class="dim">' . e($x['hint']) . '</td></tr>';
+        . '<p class="dim small">⛔ 위험은 바로 고쳐야 하는 것, ⚠️ 주의는 고치면 더 안전해지는 것이에요. 바꾼 뒤 이 화면을 새로 고치면 다시 점검해요. 점검 결과를 기록하고 Markdown 으로 내려받으려면 <a href="./?tab=dev&amp;sec=inspect">🧑‍💻 개발자 → 점검 실행</a>을 써요.</p></section>';
+    return $h . checkGroups($hc['checks']);
+}
+
+/** the rows of a health check / an inspection run, one card per group (titles of Inspect::GROUPS, in that order) */
+function checkGroups(array $checks): string
+{
+    $titles = class_exists('Tfm\Inspect') ? Inspect::GROUPS : [];
+    $by = [];
+    foreach ($checks as $x) if (is_array($x) && isset($x['group'])) $by[(string) $x['group']][] = $x;
+    $h = '';
+    foreach ($titles + array_fill_keys(array_keys($by), '') as $g => $title) {
+        if (empty($by[$g])) continue;
+        $h .= '<section class="card"><h3>' . e($title !== '' ? $title : $g) . '</h3><div class="tablewrap"><table><thead><tr><th>항목</th><th>상태</th><th>값</th><th>안내</th></tr></thead><tbody>';
+        foreach ($by[$g] as $x) $h .= '<tr><td><b>' . e($x['label']) . '</b></td><td>' . badge((string) $x['status']) . '</td><td>' . e(is_scalar($x['value']) ? $x['value'] : json_encode($x['value'], JSON_UNESCAPED_UNICODE)) . '</td><td class="dim">' . e($x['hint']) . '</td></tr>';
         $h .= '</tbody></table></div></section>';
     }
     return $h;
+}
+
+// ------------------------------------------------------------------ 🧑‍💻 개발자 (CONTRACT §15.5)
+function devSection(): string { $s = getStr('sec'); return isset(DEV_SECTIONS[$s]) ? $s : 'docs'; }
+
+/** 🧑‍💻 개발자 — 문서 · 인수인계 체크리스트 · 점검 실행 · 환경·로그 */
+function viewDev(): string
+{
+    if (!class_exists('Tfm\Inspect') || !class_exists('Tfm\Markdown')) return notReady('🧑‍💻 개발자', '개발자 인수인계 · 점검(lib/Inspect.php · lib/Markdown.php)');
+    $sec = devSection();
+    $h = '<nav class="subtabs" aria-label="개발자 메뉴">';
+    foreach (DEV_SECTIONS as $k => $t) $h .= '<a href="' . e(href(['tab' => 'dev', 'sec' => $k])) . '"' . ($k === $sec ? ' class="on" aria-current="page"' : '') . '><span aria-hidden="true">' . $t[0] . '</span> ' . e($t[1]) . '</a>';
+    $h .= '</nav>';
+    if ($sec === 'checklist') return $h . devChecklist();
+    if ($sec === 'inspect') return $h . devInspect();
+    if ($sec === 'env') return $h . devEnv();
+    return $h . devDocs();
+}
+
+/** (1) 문서 — lib/docs/*.md (copied by the build; never web-readable) rendered by Tfm\Markdown */
+function devDocs(): string
+{
+    $docs = Inspect::docs();
+    $want = getStr('doc');
+    $h = '<section class="card"><h3>📚 인수인계 문서</h3><p class="dim small">빌드할 때 저장소 docs/ 의 문서가 서버의 lib/docs 폴더로 복사돼요. 이 폴더는 웹에서 바로 열 수 없고, 로그인한 관리자에게만 여기에서 보여요.</p>';
+    if (!$docs) {
+        return $h . '<p class="notice">📂 이 서버에는 아직 문서 폴더(lib/docs)가 없어요. 걱정하지 않아도 돼요 — 배포 zip 의 metaverse 폴더나 <code>node tools/build.mjs</code> 로 만든 서버 사본에는 들어 있어요. '
+            . '같은 문서는 저장소의 docs/ 폴더(HANDOVER.md · SERVER-INSTALL-KO.md · SECURITY-REPORT-KO.md · ARCHITECTURE.md)와 server/README-SERVER.md 에서도 읽을 수 있어요.</p></section>';
+    }
+    $h .= '<ul class="doclist">';
+    foreach ($docs as $d) {
+        $h .= '<li><a href="' . e(href(['tab' => 'dev', 'sec' => 'docs', 'doc' => $d['name']])) . '"' . ($d['name'] === $want ? ' aria-current="page"' : '') . '>📖 <b>' . e($d['title']) . '</b></a> '
+            . '<span class="dim small">' . e($d['file']) . ' · ' . e(Inspect::bytesText((int) $d['bytes'])) . ' · ' . e(date('Y-m-d H:i', (int) $d['mtime'])) . '</span></li>';
+    }
+    $h .= '</ul></section>';
+    if ($want === '') return $h;
+    $doc = Inspect::doc($want);
+    if ($doc === null) return $h . '<section class="card"><p class="empty">🍃 그런 문서는 없어요. 위 목록에서 골라 주세요.</p></section>';
+    return $h . '<section class="card"><h3>📖 ' . e($doc['title']) . ' <span class="dim small">' . e($doc['file']) . '</span></h3><div class="mdoc">' . Markdown::render((string) $doc['md']) . '</div></section>';
+}
+
+/** (2) 인수인계 체크리스트 — Inspect::items(): a done box + a note per item (POST handover_save) */
+function devChecklist(): string
+{
+    $items = Inspect::items();
+    $done = count(array_filter($items, function ($i) { return $i['done']; }));
+    $last = Inspect::runs(1, 0);
+    $run = $last ? Inspect::get((int) $last[0]['id']) : null;
+    $state = [];
+    if ($run) foreach ($run['checks'] as $c) $state[$c['id']] = $c['status'];
+    $h = '<section class="card"><h3>✅ 인수인계 체크리스트 <span class="badge ' . ($done === count($items) ? 'ok' : 'warn') . '">' . e($done . ' / ' . count($items)) . ' 완료</span></h3>'
+        . '<p class="dim small">서버를 넘겨받는 사람이 하나씩 확인하고 표시해요. 메모에는 "어디에 두었는지 · 누가 맡는지"만 적고 비밀번호나 키 자체는 적지 마세요 (적어도 저장할 때 가려져요). 바꾼 기록은 감사 로그에 남아요.</p>'
+        . '<meter min="0" max="' . e(count($items)) . '" value="' . e($done) . '"></meter></section>'
+        . '<section class="card"><div class="tablewrap"><table><thead><tr><th>할 일</th><th>최근 점검</th><th>표시 · 메모</th><th>마지막 변경</th></tr></thead><tbody>';
+    foreach ($items as $it) {
+        $chk = '';
+        foreach ($it['checks'] as $cid) if (isset($state[$cid])) $chk .= badge($state[$cid]) . ' ';
+        $h .= '<tr class="hand' . ($it['done'] ? ' done' : '') . '" id="h-' . e($it['key']) . '"><td><b>' . e($it['label']) . '</b><br><span class="dim small">' . e($it['hint']) . '</span></td>'
+            . '<td>' . ($chk !== '' ? $chk : '<span class="dim small">-</span>') . '</td>'
+            . '<td><form method="post" action="./" class="handform">' . csrfField() . '<input type="hidden" name="action" value="handover_save"><input type="hidden" name="tab" value="dev"><input type="hidden" name="sec" value="checklist">'
+            . '<input type="hidden" name="key" value="' . e($it['key']) . '"><label class="check"><input type="checkbox" name="done" value="1"' . ($it['done'] ? ' checked' : '') . '> 끝냈어요</label>'
+            . '<input name="note" value="' . e($it['note']) . '" maxlength="500" placeholder="메모 (어디에 두었는지 · 누가 맡는지)" aria-label="' . e($it['label']) . ' 메모"><button class="btn sm" type="submit">저장</button></form></td>'
+            . '<td class="small nowrap">' . ((int) $it['at'] > 0 ? e(when($it['at'])) . '<br>' . e($it['byNick'] !== '' ? $it['byNick'] : '#' . (int) $it['by']) : '-') . '</td></tr>';
+    }
+    return $h . '</tbody></table></div><p class="dim small">"최근 점검"은 🔎 점검 실행의 가장 최근 기록에서 관련된 항목의 상태예요.</p></section>';
+}
+
+/** (3) 점검 실행 — run (POST inspect_run), the stored runs, one run opened (?run=), its Markdown download (./?download=) */
+function devInspect(): string
+{
+    $h = '<section class="card"><h3>🔎 점검 실행</h3><p class="dim">🩺 시스템 점검과 같은 항목에 보안 설정 점검 · data 폴더 노출 검사 · DB 계정 권한 · 버전 · 인수인계 상태를 더해 한 번에 확인하고 기록해요. '
+        . '서버 컴퓨터에서 <code>php cli/tfm.php inspect</code> 를 실행해도 같은 점검을 해요 (위험이 있으면 종료 코드 1).</p>'
+        . '<div class="row">' . actionForm('inspect_run', '🔎 지금 점검 실행', ['sec' => 'inspect'], 'btn primary', 'dev') . '</div></section>';
+    $rid = getStr('run');
+    if (ctype_digit($rid) && strlen($rid) <= 12 && (int) $rid > 0) {
+        $run = Inspect::get((int) $rid);
+        $h .= $run === null ? '<section class="card"><p class="empty">🍃 그 점검 기록은 없어요 (최근 ' . e(Inspect::KEEP_RUNS) . '개만 보관해요).</p></section>' : runView($run);
+    }
+    $page = pageParam();
+    $rows = Inspect::runs(21, $page * 20);
+    $more = count($rows) > 20;
+    $rows = array_slice($rows, 0, 20);
+    $h .= '<section class="card"><h3>📋 점검 기록 <span class="dim small">(최근 ' . e(Inspect::KEEP_RUNS) . '개를 보관해요)</span></h3>';
+    if (!$rows) return $h . '<p class="empty">🍃 아직 점검 기록이 없어요. 위의 "지금 점검 실행"을 눌러 보세요.</p></section>';
+    $h .= '<div class="tablewrap"><table><thead><tr><th>#</th><th>시각</th><th>실행</th><th>결과</th><th>정상 · 주의 · 위험</th><th>요약</th><th></th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        $id = (int) $r['id'];
+        $h .= '<tr class="run"><td>' . $id . '</td><td class="nowrap">' . e(when($r['createdAt'])) . '</td><td>' . e($r['source'] === 'cli' ? '서버 명령' : '관리자 센터' . ($r['actorNick'] !== '' ? ' · ' . $r['actorNick'] : '')) . '</td>'
+            . '<td>' . badge($r['status']) . '</td><td class="nowrap">' . e($r['ok'] . ' · ' . $r['warn'] . ' · ' . $r['fail']) . '</td><td class="msg small">' . e(mb_substr($r['summary'], 0, 160)) . '</td>'
+            . '<td class="nowrap"><a href="' . e(href(['tab' => 'dev', 'sec' => 'inspect', 'run' => $id])) . '">열기</a> · <a href="./?download=' . $id . '">⬇️ Markdown</a></td></tr>';
+    }
+    return $h . '</tbody></table></div>' . pager(['tab' => 'dev', 'sec' => 'inspect'], $page, $more) . '</section>';
+}
+
+/** one stored inspection run: result, versions, the rows by group (checkGroups — the same cards as 🩺) */
+function runView(array $run): string
+{
+    $labels = ['app' => '앱', 'php' => 'PHP', 'os' => '운영체제', 'db' => '데이터베이스', 'schema' => '스키마 (지금 / 필요)', 'gameData' => '체험 데이터', 'server' => '웹 서버'];
+    $h = '<section class="card"><h3>🧾 점검 #' . (int) $run['id'] . ' ' . badge((string) $run['status']) . '</h3><p class="dim">' . e(when($run['createdAt'])) . ' · '
+        . e($run['source'] === 'cli' ? '서버 명령 (php cli/tfm.php inspect)' : '관리자 센터' . ($run['actorNick'] !== '' ? ' · ' . $run['actorNick'] : '')) . ' · ' . e($run['text']) . '</p>'
+        . '<p class="row"><a class="btn" href="./?download=' . (int) $run['id'] . '">⬇️ Markdown 으로 내려받기</a></p>';
+    $rows = [];
+    foreach ($run['versions'] as $k => $v) $rows[] = [isset($labels[$k]) ? $labels[$k] : $k, $v];
+    return $h . table(['항목', '값'], $rows, '버전 정보가 없어요.') . '</section>' . checkGroups($run['checks']);
+}
+
+/** (4) 환경·로그 — versions, extensions, disk use, PHP settings, the last 200 log lines (redacted by Inspect::logTail) */
+function devEnv(): string
+{
+    $env = Inspect::environment();
+    $h = '<div class="grid2"><section class="card"><h3>🏷️ 버전</h3>' . table(['항목', '값'], array_map(function ($v) { return [$v['label'], $v['value']]; }, $env['versions'])) . '</section>'
+        . '<section class="card"><h3>💽 디스크</h3>' . table(['항목', '크기', '파일'], array_map(function ($d) { return [$d['label'], Inspect::bytesText((int) $d['bytes']) . ($d['capped'] ? ' 이상' : ''), $d['files'] > 0 ? num($d['files']) . ($d['capped'] ? '+' : '') : '-']; }, $env['disk'])) . '</section></div>'
+        . '<div class="grid2"><section class="card"><h3>🧩 PHP 확장</h3>' . table(['확장', '상태', '꼭 필요', '쓰임', '버전'], array_map(function ($x) { return [$x['name'], $x['loaded'] ? '✅ 있음' : ($x['required'] ? '⛔ 없음' : '⚠️ 없음'), $x['required'] ? '필요' : '선택', $x['why'], $x['version']]; }, $env['extensions']))
+        . '<p class="dim small">켜져 있는 확장 ' . e(count($env['loaded'])) . '개: ' . e(implode(', ', $env['loaded'])) . '</p></section>'
+        . '<section class="card"><h3>⚙️ PHP 설정</h3>' . table(['설정', '값'], array_map(function ($x) { return [$x['label'], $x['value']]; }, $env['ini'])) . '</section></div>';
+    $tail = array_reverse(Inspect::logTail(200));
+    $h .= '<section class="card"><h3>🗒️ 로그 — 마지막 ' . e(count($tail)) . '줄 <span class="dim small">(최근 것이 위)</span></h3>'
+        . '<p class="dim small">로그 파일은 data/logs/app-날짜.log.php 에 있고 웹에서는 열리지 않아요. 여기에서는 비밀번호 · 키 · 토큰 · 쿠키 · 이메일 · 전화번호를 <b>[가림]</b> 으로 바꿔서 보여 줘요. 주소는 끝자리를 가려요.</p>';
+    if (!$tail) return $h . '<p class="empty">🍃 아직 로그가 없어요.</p></section>';
+    $h .= '<div class="tablewrap"><table><thead><tr><th>시각</th><th>등급</th><th>분류</th><th>내용</th><th>주소</th></tr></thead><tbody>';
+    foreach ($tail as $l) {
+        $lvl = preg_match('/^[a-z]{1,10}$/', $l['lvl']) ? $l['lvl'] : 'raw';
+        $h .= '<tr class="log lvl-' . e($lvl) . '"><td class="nowrap small">' . e($l['t'] !== '' ? str_replace('T', ' ', mb_substr($l['t'], 0, 19)) : '-') . '</td><td>' . e($l['lvl'] !== '' ? $l['lvl'] : '-') . '</td><td>' . e($l['cat']) . '</td>'
+            . '<td class="msg">' . e($l['msg']) . ($l['ctx'] !== '' ? '<br><span class="dim small">' . e($l['ctx']) . '</span>' : '') . '</td><td class="nowrap small">' . e($l['ip']) . '</td></tr>';
+    }
+    return $h . '</tbody></table></div></section>';
 }
 
 function viewUsers(): string
@@ -1385,6 +1555,7 @@ function render(Ctx $c): string
             case 'beds': $body = viewBeds(); break;
             case 'storage': $body = viewStorage(); break;
             case 'reports': $body = viewReports(); break;
+            case 'dev': $body = viewDev(); break;
             case 'health': $body = viewHealth(); break;
             case 'users': $body = viewUsers(); break;
             case 'sub': $body = viewSub(); break;
@@ -1439,6 +1610,30 @@ function servePhoto(Ctx $c): void
     exit;
 }
 
+/**
+ * GET ./?download=<run id>: a stored inspection run as a Markdown report (Inspect::markdown) — a text/markdown attachment
+ * through this entry after its own check; everybody else and a bad id get the plain 404 of a missing page.
+ */
+function serveDownload(Ctx $c): void
+{
+    if (AdminGate::expired() || !AdminGate::check($c->user, true) || !class_exists('Tfm\Inspect')) AdminGate::notFound();
+    $id = getStr('download');
+    if (!ctype_digit($id) || strlen($id) > 12 || (int) $id <= 0) AdminGate::notFound();
+    $run = Inspect::get((int) $id);
+    if ($run === null) AdminGate::notFound();
+    $md = Inspect::markdown($run);
+    while (ob_get_level() > 0) ob_end_clean();
+    AdminGate::headers();
+    header('Content-Type: text/markdown; charset=utf-8');
+    header("Content-Security-Policy: default-src 'none'; sandbox");
+    header('Content-Disposition: attachment; filename="tfm-inspect-' . (int) $id . '-' . date('Ymd-His', intdiv((int) $run['createdAt'], 1000)) . '.md"');
+    header('Content-Length: ' . strlen($md));
+    http_response_code(200);
+    Session::close();
+    if (Http::method() !== 'HEAD') echo $md;
+    exit;
+}
+
 // =============================================================================== request
 $status = 200;
 $ctx = new Ctx();
@@ -1452,6 +1647,7 @@ try {
     $ctx->user = Auth::current();
     RateLimit::forRequest('admin_page', $ctx);
     if ($method !== 'POST' && isset($_GET['photo'])) servePhoto($ctx);
+    if ($method !== 'POST' && isset($_GET['download'])) serveDownload($ctx);
     if ($method === 'POST') handlePost($ctx);
     $html = render($ctx);
 } catch (ApiException $e) {

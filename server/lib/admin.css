@@ -120,5 +120,32 @@ dl.facts dd{margin:0;overflow-wrap:anywhere}
 blockquote.note{margin:10px 0 0;padding:10px 12px;border-left:3px solid var(--green);border-radius:8px;background:rgba(255,255,255,.05);overflow-wrap:anywhere}
 .report form.stack{margin-top:0}
 .report .row{justify-content:flex-start}
+/* 🧑‍💻 developer tab (CONTRACT §15.5): sections, documents, checklist, logs */
+.subtabs{display:flex;gap:6px;flex-wrap:wrap}
+.subtabs a{padding:7px 12px;border-radius:999px;text-decoration:none;color:var(--dim);background:var(--glass2);border:1px solid var(--line);font-size:.9rem}
+.subtabs a.on{color:#1d1503;background:linear-gradient(135deg,#ffe08a,var(--gold));border-color:transparent;font-weight:700}
+.doclist{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.doclist a{text-decoration:none}
+.doclist a[aria-current]{color:var(--gold)}
+.mdoc{line-height:1.7;overflow-wrap:anywhere}
+.mdoc h2,.mdoc h3,.mdoc h4,.mdoc h5,.mdoc h6{margin:1.4em 0 .5em;line-height:1.35}
+.mdoc h2{font-size:1.25rem;border-bottom:1px solid var(--line);padding-bottom:.3em}
+.mdoc h3{font-size:1.1rem}
+.mdoc h4,.mdoc h5,.mdoc h6{font-size:1rem;color:var(--dim)}
+.mdoc p,.mdoc ul,.mdoc ol{margin:.6em 0}
+.mdoc ul,.mdoc ol{padding-left:1.5em}
+.mdoc li{margin:.2em 0}
+.mdoc pre{background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-x:auto;line-height:1.5}
+.mdoc pre code{background:none;padding:0;white-space:pre;overflow-wrap:normal}
+.mdoc blockquote{margin:.8em 0;padding:6px 12px;border-left:3px solid var(--gold);background:rgba(244,197,74,.07);border-radius:8px}
+.mdoc hr{border:0;border-top:1px solid var(--line);margin:1.4em 0}
+.mdoc .tablewrap{margin:.8em 0}
+.handform{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.handform input[name=note]{flex:1 1 220px;width:auto}
+label.check{display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text);white-space:nowrap}
+label.check input{width:auto;margin:0}
+tr.hand.done td:first-child b{color:#86e3a8}
+tr.log.lvl-error td,tr.log.lvl-security td{color:#ffb3ab}
+tr.log.lvl-warn td{color:#ffe6a3}
 @media (max-width:640px){.reportgrid{grid-template-columns:1fr}.top{position:static}.barrow{grid-template-columns:84px 1fr 40px}th,td{padding:8px}.tiles{grid-template-columns:repeat(2,1fr)}code.secret{font-size:1rem;letter-spacing:.06em}}
 @media print{body{background:#fff;color:#000}body::before,.tabs,.top .who,footer,.btn{display:none}.card{box-shadow:none;border-color:#999;background:#fff;backdrop-filter:none}code,code.bk,code.secret{color:#000;background:#eee}}
