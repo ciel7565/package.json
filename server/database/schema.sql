@@ -9,7 +9,7 @@
 -- With db.auto_migrate = true the tables are also created / upgraded automatically once the database exists
 -- (CREATE DATABASE / USE lines are skipped by the auto-installer). Re-running this file is safe (IF NOT EXISTS).
 -- All timestamps are server time in milliseconds (BIGINT).
--- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 5).
+-- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 6).
 -- =============================================================================
 
 -- 데이터베이스를 아직 만들지 않았다면 아래 두 줄의 주석(--)을 풀고 서버 전체(데이터베이스 선택 없이)에서 가져오세요:
@@ -261,3 +261,147 @@ PREPARE tfm_stmt FROM @tfm_sql;
 EXECUTE tfm_stmt;
 DEALLOCATE PREPARE tfm_stmt;
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (5, UNIX_TIMESTAMP() * 1000, 'chat retraction watermark (upto_id)');
+
+-- v6 (phase 7, CONTRACT §15.8): real-time farm records measured by the server clock (farm_beds), storage mirror
+-- (farm_storage), completion confirmations with the admin's memo (crop_reports), operator settings (settings),
+-- suspicious-activity log and IP blocks (security_events, ip_blocks), admin 2-step sign-in (admin_totp),
+-- Claude API usage (ai_usage), developer handover checklist and inspection history (handover_items, inspection_runs).
+-- Secrets inside rows (admin_totp.secret_enc, subscriptions.billing_key) are sealed by lib/Crypto.php ("enc:v1:").
+CREATE TABLE IF NOT EXISTS settings (
+  k          VARCHAR(64) NOT NULL PRIMARY KEY,
+  v          TEXT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  updated_by BIGINT UNSIGNED NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  created_at BIGINT NOT NULL,
+  ip         VARCHAR(64) NOT NULL DEFAULT '',
+  ip_hash    VARCHAR(32) NOT NULL DEFAULT '',
+  user_id    BIGINT UNSIGNED NULL,
+  kind       VARCHAR(40) NOT NULL,
+  severity   ENUM('info', 'warn', 'alert') NOT NULL DEFAULT 'warn',
+  path       VARCHAR(190) NOT NULL DEFAULT '',
+  detail     TEXT NOT NULL,
+  KEY ix_secev_created (created_at),
+  KEY ix_secev_ip (ip_hash, created_at),
+  KEY ix_secev_kind (kind, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS ip_blocks (
+  ip_hash    VARCHAR(32) NOT NULL PRIMARY KEY,
+  ip         VARCHAR(64) NOT NULL DEFAULT '',
+  reason     VARCHAR(120) NOT NULL DEFAULT '',
+  until_at   BIGINT NOT NULL,
+  created_at BIGINT NOT NULL,
+  created_by BIGINT UNSIGNED NULL,
+  hits       INT NOT NULL DEFAULT 0,
+  strikes    INT NOT NULL DEFAULT 1,
+  KEY ix_ipblocks_until (until_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS admin_totp (
+  user_id      BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  secret_enc   VARCHAR(255) NOT NULL DEFAULT '',
+  enabled      TINYINT NOT NULL DEFAULT 0,
+  confirmed_at BIGINT NOT NULL DEFAULT 0,
+  backup_codes TEXT NULL,
+  last_step    BIGINT NOT NULL DEFAULT 0,
+  updated_at   BIGINT NOT NULL,
+  CONSTRAINT fk_totp_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS farm_beds (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id       BIGINT UNSIGNED NOT NULL,
+  bed_id        VARCHAR(16) NOT NULL,
+  kind          ENUM('rt', 'plot') NOT NULL DEFAULT 'rt',
+  pid           VARCHAR(32) NOT NULL,
+  crop_id       VARCHAR(40) NOT NULL,
+  tier          TINYINT NOT NULL DEFAULT 1,
+  first_seen_at BIGINT NOT NULL,
+  ready_at      BIGINT NOT NULL DEFAULT 0,
+  growth        INT NOT NULL DEFAULT 0,
+  care          INT NOT NULL DEFAULT 0,
+  status        ENUM('growing', 'ready', 'harvested', 'cleared') NOT NULL DEFAULT 'growing',
+  harvested_at  BIGINT NOT NULL DEFAULT 0,
+  amount        INT NOT NULL DEFAULT 0,
+  stars         TINYINT NOT NULL DEFAULT 0,
+  updated_at    BIGINT NOT NULL,
+  UNIQUE KEY ux_beds_planting (user_id, bed_id, pid),
+  KEY ix_beds_status (status, ready_at),
+  KEY ix_beds_user (user_id, updated_at),
+  KEY ix_beds_pid (user_id, pid),
+  CONSTRAINT fk_beds_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS farm_storage (
+  user_id    BIGINT UNSIGNED NOT NULL,
+  item_id    VARCHAR(40) NOT NULL,
+  qty        INT NOT NULL DEFAULT 0,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, item_id),
+  CONSTRAINT fk_storage_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS crop_reports (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id      BIGINT UNSIGNED NOT NULL,
+  kind         ENUM('rt', 'plot') NOT NULL DEFAULT 'rt',
+  bed_id       VARCHAR(16) NOT NULL,
+  pid          VARCHAR(32) NOT NULL,
+  crop_id      VARCHAR(40) NOT NULL,
+  stars        TINYINT NOT NULL DEFAULT 0,
+  amount       INT NOT NULL DEFAULT 0,
+  note         VARCHAR(200) NOT NULL DEFAULT '',
+  photo        VARCHAR(190) NOT NULL DEFAULT '',
+  status       ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  memo         TEXT NULL,
+  requested_at BIGINT NOT NULL,
+  decided_at   BIGINT NOT NULL DEFAULT 0,
+  decided_by   BIGINT UNSIGNED NULL,
+  seen_at      BIGINT NOT NULL DEFAULT 0,
+  UNIQUE KEY ux_reports_planting (user_id, kind, bed_id, pid),
+  KEY ix_reports_status (status, requested_at),
+  KEY ix_reports_user (user_id, requested_at),
+  CONSTRAINT fk_reports_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  created_at    BIGINT NOT NULL,
+  user_id       BIGINT UNSIGNED NULL,
+  scope         VARCHAR(20) NOT NULL DEFAULT 'kid',
+  model         VARCHAR(60) NOT NULL DEFAULT '',
+  input_tokens  INT NOT NULL DEFAULT 0,
+  output_tokens INT NOT NULL DEFAULT 0,
+  stop_reason   VARCHAR(30) NOT NULL DEFAULT '',
+  ok            TINYINT NOT NULL DEFAULT 1,
+  ms            INT NOT NULL DEFAULT 0,
+  KEY ix_ai_created (created_at),
+  KEY ix_ai_user (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS handover_items (
+  k          VARCHAR(64) NOT NULL PRIMARY KEY,
+  done       TINYINT NOT NULL DEFAULT 0,
+  note       TEXT NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  updated_at BIGINT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS inspection_runs (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  created_at BIGINT NOT NULL,
+  actor_id   BIGINT UNSIGNED NULL,
+  source     VARCHAR(10) NOT NULL DEFAULT 'admin',
+  status     VARCHAR(10) NOT NULL DEFAULT 'ok',
+  ok_count   INT NOT NULL DEFAULT 0,
+  warn_count INT NOT NULL DEFAULT 0,
+  fail_count INT NOT NULL DEFAULT 0,
+  summary    TEXT NULL,
+  result     MEDIUMTEXT NULL,
+  KEY ix_inspect_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (6, UNIX_TIMESTAMP() * 1000, 'phase 7: real-time farm, storage, completion reports, settings, security events, ip blocks, admin totp, ai usage, handover, inspections');

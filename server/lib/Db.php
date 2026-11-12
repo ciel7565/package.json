@@ -14,7 +14,7 @@ if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
 
 final class Db
 {
-    public const SCHEMA_VERSION = 5;
+    public const SCHEMA_VERSION = 6;
     /** @var PDO|null */
     private static $pdo = null;
     /** @var string */

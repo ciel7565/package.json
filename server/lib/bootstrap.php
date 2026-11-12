@@ -53,6 +53,13 @@ require __DIR__ . '/Toss.php';
 require __DIR__ . '/Subscription.php';
 require __DIR__ . '/Admin.php';
 require __DIR__ . '/Installer.php';
+// phase 7 (CONTRACT §15): libraries added by the phase-7 owners. Loaded when present so the parallel builds can land
+// one by one; the gate turns this into plain requires once every file exists.
+foreach (['Settings', 'Crypto', 'Validator', 'SecurityEvents', 'ConfigAudit', 'Totp', 'Farm', 'Claude', 'Markdown', 'Inspect'] as $tfmLib) {
+    $tfmLibFile = __DIR__ . '/' . $tfmLib . '.php';
+    if (is_file($tfmLibFile)) require $tfmLibFile;
+}
+unset($tfmLib, $tfmLibFile);
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');

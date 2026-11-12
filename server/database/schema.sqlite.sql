@@ -2,7 +2,7 @@
 -- 전통발효체험관 메타버스 — SQLite schema (default, zero-config)
 -- Created automatically by lib/Db.php on first request (data/db-<random>.sqlite, WAL mode).
 -- All timestamps are server time in milliseconds (INTEGER).
--- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 5).
+-- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 6).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -237,3 +237,142 @@ INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (4, CAST
 -- the column from CREATE TABLE above; SQLite has no conditional ADD COLUMN, so lib/Db.php adds it to an existing
 -- table (Db::ensureColumns, same transaction as this file).
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (5, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'chat retraction watermark (upto_id)');
+
+-- v6 (phase 7, CONTRACT §15.8): real-time farm records measured by the server clock (farm_beds), storage mirror
+-- (farm_storage), completion confirmations with the admin's memo (crop_reports), operator settings (settings),
+-- suspicious-activity log and IP blocks (security_events, ip_blocks), admin 2-step sign-in (admin_totp),
+-- Claude API usage (ai_usage), developer handover checklist and inspection history (handover_items, inspection_runs).
+CREATE TABLE IF NOT EXISTS settings (
+  k          TEXT NOT NULL PRIMARY KEY,
+  v          TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  updated_by INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  ip         TEXT NOT NULL DEFAULT '',
+  ip_hash    TEXT NOT NULL DEFAULT '',
+  user_id    INTEGER,
+  kind       TEXT NOT NULL,
+  severity   TEXT NOT NULL DEFAULT 'warn' CHECK (severity IN ('info', 'warn', 'alert')),
+  path       TEXT NOT NULL DEFAULT '',
+  detail     TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS ix_secev_created ON security_events (created_at);
+CREATE INDEX IF NOT EXISTS ix_secev_ip ON security_events (ip_hash, created_at);
+CREATE INDEX IF NOT EXISTS ix_secev_kind ON security_events (kind, created_at);
+
+CREATE TABLE IF NOT EXISTS ip_blocks (
+  ip_hash    TEXT NOT NULL PRIMARY KEY,
+  ip         TEXT NOT NULL DEFAULT '',
+  reason     TEXT NOT NULL DEFAULT '',
+  until_at   INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  created_by INTEGER,
+  hits       INTEGER NOT NULL DEFAULT 0,
+  strikes    INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS ix_ipblocks_until ON ip_blocks (until_at);
+
+CREATE TABLE IF NOT EXISTS admin_totp (
+  user_id      INTEGER NOT NULL PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+  secret_enc   TEXT NOT NULL DEFAULT '',
+  enabled      INTEGER NOT NULL DEFAULT 0,
+  confirmed_at INTEGER NOT NULL DEFAULT 0,
+  backup_codes TEXT,
+  last_step    INTEGER NOT NULL DEFAULT 0,
+  updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS farm_beds (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  bed_id        TEXT NOT NULL,
+  kind          TEXT NOT NULL DEFAULT 'rt' CHECK (kind IN ('rt', 'plot')),
+  pid           TEXT NOT NULL,
+  crop_id       TEXT NOT NULL,
+  tier          INTEGER NOT NULL DEFAULT 1,
+  first_seen_at INTEGER NOT NULL,               -- server clock when the planting first reached the server
+  ready_at      INTEGER NOT NULL DEFAULT 0,     -- server-computed; the only judge of "ready"
+  growth        INTEGER NOT NULL DEFAULT 0,     -- percent (quick plots)
+  care          INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'growing' CHECK (status IN ('growing', 'ready', 'harvested', 'cleared')),
+  harvested_at  INTEGER NOT NULL DEFAULT 0,
+  amount        INTEGER NOT NULL DEFAULT 0,
+  stars         INTEGER NOT NULL DEFAULT 0,
+  updated_at    INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_beds_planting ON farm_beds (user_id, bed_id, pid);
+CREATE INDEX IF NOT EXISTS ix_beds_status ON farm_beds (status, ready_at);
+CREATE INDEX IF NOT EXISTS ix_beds_user ON farm_beds (user_id, updated_at);
+CREATE INDEX IF NOT EXISTS ix_beds_pid ON farm_beds (user_id, pid);
+
+CREATE TABLE IF NOT EXISTS farm_storage (
+  user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  item_id    TEXT NOT NULL,
+  qty        INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS crop_reports (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL DEFAULT 'rt' CHECK (kind IN ('rt', 'plot')),
+  bed_id       TEXT NOT NULL,
+  pid          TEXT NOT NULL,
+  crop_id      TEXT NOT NULL,
+  stars        INTEGER NOT NULL DEFAULT 0,
+  amount       INTEGER NOT NULL DEFAULT 0,
+  note         TEXT NOT NULL DEFAULT '',
+  photo        TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  memo         TEXT,
+  requested_at INTEGER NOT NULL,
+  decided_at   INTEGER NOT NULL DEFAULT 0,
+  decided_by   INTEGER,
+  seen_at      INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_reports_planting ON crop_reports (user_id, kind, bed_id, pid);
+CREATE INDEX IF NOT EXISTS ix_reports_status ON crop_reports (status, requested_at);
+CREATE INDEX IF NOT EXISTS ix_reports_user ON crop_reports (user_id, requested_at);
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at    INTEGER NOT NULL,
+  user_id       INTEGER,
+  scope         TEXT NOT NULL DEFAULT 'kid',
+  model         TEXT NOT NULL DEFAULT '',
+  input_tokens  INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  stop_reason   TEXT NOT NULL DEFAULT '',
+  ok            INTEGER NOT NULL DEFAULT 1,
+  ms            INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_ai_created ON ai_usage (created_at);
+CREATE INDEX IF NOT EXISTS ix_ai_user ON ai_usage (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS handover_items (
+  k          TEXT NOT NULL PRIMARY KEY,
+  done       INTEGER NOT NULL DEFAULT 0,
+  note       TEXT,
+  updated_by INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inspection_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  actor_id   INTEGER,
+  source     TEXT NOT NULL DEFAULT 'admin',
+  status     TEXT NOT NULL DEFAULT 'ok',
+  ok_count   INTEGER NOT NULL DEFAULT 0,
+  warn_count INTEGER NOT NULL DEFAULT 0,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  summary    TEXT,
+  result     TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_inspect_created ON inspection_runs (created_at);
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (6, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 7: real-time farm, storage, completion reports, settings, security events, ip blocks, admin totp, ai usage, handover, inspections');

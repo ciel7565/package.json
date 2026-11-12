@@ -216,6 +216,35 @@ return [
         ],
     ],
 
+    // ------------------------------------------------------------------ 실시간 텃밭 · 곳간 · 재배 완료 확인 (CONTRACT §15.1–15.3) — owner: server-farm
+    'farm' => [
+        'rt_scale'        => $env('TFM_RT_SCALE', 1.0),   // 실시간 재배 시간 배율의 기본값 (관리자 화면에서 바꾸면 settings 테이블 값이 우선). 1 = 진짜 시간, 60 = 60배 빠르게(시연)
+        'report_daily'    => 30,                           // 한 계정이 하루에 보낼 수 있는 완료 확인 요청 수
+        'report_note_max' => 80,                           // 요청에 붙이는 한마디 길이(글자)
+        'memo_max'        => 500,                          // 관리자 메모 길이(글자)
+        'photo_max_bytes' => 1024 * 1024,                  // 완료 확인 사진 최대 크기 (1 MB)
+        'photo_max_dimension' => 1280,
+        'harvest_keep_days'   => 7,                        // 수확 뒤 이 기간 안에는 완료 확인을 보낼 수 있어요
+    ],
+
+    // ------------------------------------------------------------------ Claude API (CONTRACT §15.6) — owner: claude
+    // 키는 환경 변수 ANTHROPIC_API_KEY 또는 config.local.php 에만 두세요 (저장소·DB·로그·브라우저 어디에도 남기지 않아요).
+    // 호스팅이 PHP 7.2 라서 공식 PHP SDK(PHP 8 이상) 대신 curl 확장으로 Messages API 를 직접 불러요.
+    'anthropic' => [
+        'api_key'     => $env('ANTHROPIC_API_KEY', ''),      // 비어 있으면 AI 기능이 꺼져요
+        'model'       => $env('TFM_AI_MODEL', 'claude-opus-5-5'),
+        'effort'      => $env('TFM_AI_EFFORT', 'low'),       // low | medium | high | xhigh | max (짧은 질문·답은 low 로 충분)
+        'max_tokens'  => $env('TFM_AI_MAX_TOKENS', 4096),
+        'timeout'     => $env('TFM_AI_TIMEOUT', 60),         // 초
+        'api_base'    => $env('TFM_AI_API_BASE', 'https://api.anthropic.com'),
+        'mock'        => $env('TFM_AI_MOCK', false),         // true: 외부로 보내지 않는 모의 응답 (테스트·시연)
+        'kid_helper'  => false,                              // 아이용 "옹이 선생님" 기본값 (관리자 화면 AI 탭에서 켜면 settings 값이 우선)
+        'daily_user'  => 20,                                 // 한 계정이 하루에 할 수 있는 질문 수
+        'daily_total' => 2000,                               // 서버 전체 하루 질문 수 (비용 상한)
+        'question_max' => 200,                               // 질문 길이(글자)
+        'answer_max'   => 600,                               // 아이에게 보여 줄 답 길이(글자)
+    ],
+
     // ------------------------------------------------------------------ logs & maintenance
     'logs' => [
         'level'          => $env('TFM_LOG_LEVEL', 'info'),  // debug | info | warn | error
