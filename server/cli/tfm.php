@@ -353,7 +353,7 @@ try {
             // unguessable name: even if a misconfigured server exposed data/, a backup cannot be fetched by guessing the date
             $file = $dir . DIRECTORY_SEPARATOR . 'tfm-' . date('Ymd-His') . '-' . bin2hex(random_bytes(6)) . '.sqlite';
             Db::pdo()->exec('VACUUM INTO ' . Db::pdo()->quote($file));
-            @chmod($file, 0640);
+            \Tfm\PrivateFile::tighten($file); // 0600 like the live database (the copy holds the same accounts and payments)
             Audit::log('backup', null, ['file' => basename($file)]);
             out("✔ 백업 완료: $file (" . number_format((int) filesize($file)) . ' bytes)');
             out('  data/secret.php 도 함께 보관하세요 (IP 해시 키·DB 파일 이름).');

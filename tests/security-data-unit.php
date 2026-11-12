@@ -1210,6 +1210,16 @@ check('cli reset-password — no argument: a random password shown once; --ask w
     return $ok === 'yes' ? true : 'the password from standard input was not set: ' . substr($ok, 0, 120);
 });
 
+check('cli backup (SQLite) — the copy gets a random suffix (tfm-<date>-<time>-<12 hex>.sqlite) and mode 0600 like the live database (CONTRACT §15.7 #1)', function () use ($cliRun, $webData) {
+    if (Tfm\Db::driverSafe() === 'mysql') return true; // the web copy runs on SQLite in both modes; MySQL backups are mysqldump
+    list($code, $out) = $cliRun(['backup']);
+    $files = glob($webData . '/backups/tfm-*.sqlite') ?: [];
+    if ($code !== 0 || !$files) return "backup exit $code: " . substr($out, 0, 160);
+    $f = end($files);
+    if (!preg_match('/^tfm-\d{8}-\d{6}-[0-9a-f]{12}\.sqlite$/', basename($f))) return 'name ' . basename($f);
+    return DIRECTORY_SEPARATOR === '\\' || (fileperms($f) & 0777) === 0600 ? true : sprintf('mode %o', fileperms($f) & 0777);
+});
+
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all security-data unit checks passed" : "✖ $failed check(s) failed") . PHP_EOL;
 exit($failed === 0 ? 0 : 1);
