@@ -19,6 +19,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 $tmp = sys_get_temp_dir() . '/tfm-farm-' . bin2hex(random_bytes(6));
 mkdir($tmp, 0700, true);
 putenv("TFM_DATA_DIR=$tmp");
+putenv("TFM_UPLOAD_DIR=$tmp/uploads");   // report-photo files of these checks never land in the repository's server/uploads
 require __DIR__ . '/../server/lib/bootstrap.php';
 
 $failed = 0;
@@ -490,6 +491,10 @@ check('Farm::sync — (7) quick plots are mirrored: one row per planting (pid = 
         && $r1['status'] === 'ready' && (int) $r1['growth'] === 100 && $r2['status'] === 'harvested' && (int) $r2['harvested_at'] === $T + 70000 && $n === 2
         ? true : json_encode([$r0, $r1, $r2, $n]);
 });
+check('Farm::plotPid — String(Math.round(plantedAt)) like 42-realfarm.js; nothing for 0, negatives, text or NaN', function () {
+    return Tfm\Farm::plotPid(1731400000000) === '1731400000000' && Tfm\Farm::plotPid(1731400000000.5) === '1731400000001' && Tfm\Farm::plotPid(1731400000000.4) === '1731400000000'
+        && Tfm\Farm::plotPid(0) === null && Tfm\Farm::plotPid(-5) === null && Tfm\Farm::plotPid('1731400000000') === null && Tfm\Farm::plotPid(NAN) === null && Tfm\Farm::plotPid(1e16) === null;
+});
 check('Farm::sync — (7) a quick plot emptied without a harvest → cleared; a herb regrown (new plantedAt) → a new row', function () use ($T) {
     $u = newUser();
     $uid = (int) $u['id'];
@@ -714,6 +719,134 @@ check('Farm::state — {scale, tier, beds:[rt + plot rows], storage:{items, tota
     return $st['scale'] === 1.0 && $st['tier'] === 1 && ($kinds['rt'] ?? 0) === 1 && ($kinds['plot'] ?? 0) === 2 && $rb1 && $rb1['status'] === 'ready' && $rb1['pid'] === $p
         && $st['storage'] === ['items' => ['ITEM_KIMCHI' => 2, 'ITEM_MINT' => 4], 'total' => 6, 'cap' => 300] && $st['reports'] === ['pending' => 1, 'unseen' => 0]
         ? true : json_encode($st, JSON_UNESCAPED_UNICODE);
+});
+
+// =============================================================================================== 4 · the admin site API (interface 4)
+$TA = Tfm\Clock::ms();
+$A1 = newUser(); $A2 = newUser();
+$a1 = fresh($A1, $TA - 700000);
+$a1p = pid(); $a1q = pid();
+$a1->rtfarm->beds->RB1 = bed('CROP_MINT', $a1p, $TA - 700000, ['care' => 80]);   // ready by the clock
+$a1->rtfarm->beds->RB2 = bed('CROP_CORN', $a1q, $TA - 700000);                   // growing for hours
+$a1->storage->items = (object) ['ITEM_MINT' => 5, 'ITEM_DOENJANG' => 1];
+Tfm\Farm::sync((int) $A1['id'], cl($a1), null, $TA - 700000, 1);
+$a2 = fresh($A2, $TA);
+$a2->storage->items = (object) ['ITEM_MINT' => 2];
+Tfm\Farm::sync((int) $A2['id'], cl($a2), null, $TA, 1);
+$adminRep = Tfm\Farm::report($A1, 'rt', 'RB1', $a1p, '쑥쑥 자라서 기뻐요!');
+check('Farm::listBeds — every account\'s beds with nickname, crop name, server times, live status, ★ and the request status; filters', function () use ($A1, $A2, $a1p, $a1q, $TA) {
+    $mine = Tfm\Farm::listBeds(['userId' => (int) $A1['id']], 50, 0);
+    $byPid = [];
+    foreach ($mine as $r) $byPid[$r['pid']] = $r;
+    $m = $byPid[$a1p] ?? null; $c = $byPid[$a1q] ?? null;
+    if (!$m || !$c) return 'rows missing: ' . json_encode(array_keys($byPid));
+    $ok = $m['nickname'] === $A1['nickname'] && $m['userId'] === (int) $A1['id'] && $m['cropName'] === '박하' && $m['status'] === 'ready' && $m['stars'] === 3 && $m['report'] === 'pending'
+        && $m['firstSeenAt'] === $TA - 700000 && $m['readyAt'] === $TA - 100000 && $m['leftMs'] === 0 && $c['status'] === 'growing' && $c['leftMs'] > 27000000 && $c['cropName'] === '옥수수' && $c['report'] === '';
+    $ready = Tfm\Farm::listBeds(['userId' => (int) $A1['id'], 'status' => 'ready', 'kind' => 'rt'], 50, 0);
+    $growing = Tfm\Farm::listBeds(['userId' => (int) $A1['id'], 'status' => 'growing', 'kind' => 'rt'], 50, 0);
+    $plots = Tfm\Farm::listBeds(['userId' => (int) $A2['id'], 'kind' => 'plot'], 50, 0);
+    $byNick = Tfm\Farm::listBeds(['q' => mb_strtoupper($A2['nickname'])], 50, 0);
+    $byId = Tfm\Farm::listBeds(['q' => '#' . $A2['id']], 50, 0);
+    $sqli = Tfm\Farm::listBeds(['q' => "' OR 1=1 --", 'status' => "active' OR '1'='1", 'kind' => 'rt; DROP TABLE farm_beds'], 50, 0);
+    $page = Tfm\Farm::listBeds(['userId' => (int) $A1['id']], 1, 1);
+    $ok = $ok && count($ready) === 1 && $ready[0]['pid'] === $a1p && count($growing) === 1 && $growing[0]['pid'] === $a1q && count($plots) === 2 && $plots[0]['kind'] === 'plot'
+        && $byNick && count(array_filter($byNick, function ($r) use ($A2) { return $r['userId'] !== (int) $A2['id']; })) === 0 && count($byId) === count($plots)
+        && $sqli === [] && count($page) === 1 && (int) Tfm\Db::value('SELECT COUNT(*) FROM farm_beds') > 0;
+    return $ok ? true : json_encode(['m' => $m, 'c' => $c, 'ready' => count($ready), 'growing' => count($growing), 'plots' => count($plots), 'nick' => count($byNick), 'id' => count($byId), 'sqli' => count($sqli), 'page' => count($page)], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::listStorage / storageTotals — the 곳간 per account (items, names, total, cap) and the totals per item', function () use ($A1, $A2) {
+    $rows = Tfm\Farm::listStorage(50, 0, $A1['nickname']);
+    $r = $rows[0] ?? null;
+    $tot = [];
+    foreach (Tfm\Farm::storageTotals() as $t) $tot[$t['itemId']] = $t;
+    $none = Tfm\Farm::listStorage(50, 0, "%' UNION SELECT 1 --");
+    return count($rows) === 1 && $r['userId'] === (int) $A1['id'] && $r['nickname'] === $A1['nickname'] && $r['items'] === ['ITEM_DOENJANG' => 1, 'ITEM_MINT' => 5] && $r['total'] === 6 && $r['cap'] === 300
+        && $r['itemList'][1] === ['itemId' => 'ITEM_MINT', 'name' => '박하', 'qty' => 5] && isset($tot['ITEM_MINT']) && $tot['ITEM_MINT']['qty'] >= 7 && $tot['ITEM_MINT']['accounts'] >= 2 && $tot['ITEM_MINT']['name'] === '박하' && $none === []
+        ? true : json_encode([$rows, $tot['ITEM_MINT'] ?? null, $none], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::listReports / countReports — pending first with the account, crop, bed times measured by the server and the note; status filter and search', function () use ($A1, $adminRep, $a1p, $TA) {
+    $all = Tfm\Farm::listReports('', 500, 0, '');
+    $pendingFirst = true; $seenDecided = false;
+    foreach ($all as $r) { if ($r['status'] !== 'pending') $seenDecided = true; elseif ($seenDecided) $pendingFirst = false; }
+    $mine = Tfm\Farm::listReports('pending', 50, 0, $A1['nickname']);
+    $r = $mine[0] ?? null;
+    $counts = Tfm\Farm::countReports();
+    return $pendingFirst && count($mine) === 1 && $r['id'] === $adminRep['id'] && $r['nickname'] === $A1['nickname'] && $r['cropName'] === '박하' && $r['bedId'] === 'RB1' && $r['note'] === '쑥쑥 자라서 기뻐요!'
+        && $r['firstSeenAt'] === $TA - 700000 && $r['readyAt'] === $TA - 100000 && $r['status'] === 'pending' && $r['hasPhoto'] === false && $r['decidedByNick'] === ''
+        && Tfm\Farm::listReports('approved', 50, 0, $A1['nickname']) === [] && array_keys($counts) === ['pending', 'approved', 'rejected'] && $counts['pending'] >= 1
+        ? true : json_encode([$pendingFirst, $r, $counts], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::decide — approve with a memo (PII-masked, bad words masked): decided_at / decided_by set, audit crop_report_decided, the child sees it (unseen)', function () use ($ADM, $A1, $adminRep) {
+    $r = Tfm\Farm::decide($ADM, $adminRep['id'], 'approved', '참 잘했어요! 010-9876-5432 로 연락 시발');
+    $row = Tfm\Db::one('SELECT * FROM crop_reports WHERE id = ?', [$adminRep['id']]);
+    $audit = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'crop_report_decided' AND actor_id = ? AND user_id = ?", [(int) $ADM['id'], (int) $A1['id']]);
+    $kid = Tfm\Farm::reports((int) $A1['id']);
+    return $r['status'] === 'approved' && $r['decidedAt'] > 0 && $r['decidedBy'] === (int) $ADM['id'] && $r['decidedByNick'] === $ADM['nickname'] && strpos($r['memo'], '9876') === false && strpos($r['memo'], '시발') === false
+        && strpos($r['memo'], '참 잘했어요!') === 0 && $row['status'] === 'approved' && (int) $row['decided_by'] === (int) $ADM['id'] && (int) $row['seen_at'] === 0 && $audit === 1 && $kid['unseen'] === 1 && $kid['reports'][0]['memo'] === $r['memo']
+        ? true : json_encode([$r, $audit, $kid['unseen']], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::decide — a decided report can get its memo edited (the stamp time stays); a changed decision gets a new stamp', function () use ($ADM, $A1, $adminRep) {
+    $before = (int) Tfm\Db::value('SELECT decided_at FROM crop_reports WHERE id = ?', [$adminRep['id']]);
+    Tfm\Farm::markSeen((int) $A1['id'], [$adminRep['id']]);
+    usleep(2000);
+    $e = Tfm\Farm::decide($ADM, $adminRep['id'], 'approved', '메모를 고쳤어요. 다음에도 또 키워요!');
+    $after = Tfm\Db::one('SELECT decided_at, memo, seen_at, status FROM crop_reports WHERE id = ?', [$adminRep['id']]);
+    $back = Tfm\Farm::decide($ADM, $adminRep['id'], 'rejected', '사진을 다시 찍어 볼까요?');
+    $audits = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'crop_report_decided' AND user_id = ?", [(int) $A1['id']]);
+    return (int) $after['decided_at'] === $before && $after['memo'] === '메모를 고쳤어요. 다음에도 또 키워요!' && (int) $after['seen_at'] === 0 && $after['status'] === 'approved' && $e['memo'] === $after['memo']
+        && $back['status'] === 'rejected' && $back['decidedAt'] >= $before && $back['memo'] === '사진을 다시 찍어 볼까요?' && $audits === 3
+        ? true : json_encode([$before, $after, $back, $audits], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::decide — refused: a player (403), an unknown status (400), an over-long memo (400), an unknown report (404)', function () use ($ADM, $A1, $adminRep) {
+    $player = apiCode(function () use ($A1, $adminRep) { Tfm\Farm::decide($A1, $adminRep['id'], 'approved', 'x'); });
+    $status = apiCode(function () use ($ADM, $adminRep) { Tfm\Farm::decide($ADM, $adminRep['id'], 'pending', 'x'); });
+    $long = apiCode(function () use ($ADM, $adminRep) { Tfm\Farm::decide($ADM, $adminRep['id'], 'approved', str_repeat('가', (int) Tfm\Config::get('farm.memo_max', 500) + 1)); });
+    $none = apiCode(function () use ($ADM) { Tfm\Farm::decide($ADM, 987654321, 'approved', 'x'); });
+    return $player === '403 FORBIDDEN' && $status === '400 INVALID_INPUT' && $long === '400 INVALID_INPUT' && $none === '404 NOT_FOUND' ? true : "player=$player status=$status long=$long none=$none";
+});
+check('Farm::dashboard — growing / ready / harvested today / pending requests / 곳간 total', function () {
+    $d = Tfm\Farm::dashboard();
+    $keys = ['growing', 'ready', 'harvestedToday', 'reportsPending', 'storageTotal'];
+    foreach ($keys as $k) if (!isset($d[$k]) || !is_int($d[$k])) return "missing $k: " . json_encode($d);
+    $growing = (int) Tfm\Db::value("SELECT COUNT(*) FROM farm_beds WHERE kind = 'rt' AND status = 'growing' AND ready_at > ?", [Tfm\Clock::ms()]);
+    $stored = (int) Tfm\Db::value('SELECT COALESCE(SUM(qty), 0) FROM farm_storage');
+    return $d['growing'] === $growing && $d['ready'] >= 1 && $d['harvestedToday'] >= 1 && $d['storageTotal'] === $stored && $d['reportsPending'] === Tfm\Farm::countReports()['pending'] ? true : json_encode($d);
+});
+check('Farm::photoPath — null without a photo or for a path that is not a report photo; the absolute file path otherwise', function () use ($ADM) {
+    list($u, $s, $p) = planted('CROP_MINT', 'RB1', Tfm\Clock::ms() - 700000);
+    $r = Tfm\Farm::report($u, 'rt', 'RB1', $p, '');
+    $none = Tfm\Farm::photoPath($r['id']);
+    $rel = 'uploads/reports/2026/11/' . bin2hex(random_bytes(16)) . '.jpg';
+    $abs = Tfm\Config::uploadDir() . DIRECTORY_SEPARATOR . 'reports' . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '11';
+    if (!is_dir($abs)) mkdir($abs, 0755, true);
+    file_put_contents(Tfm\Config::uploadDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, substr($rel, 8)), "\xFF\xD8\xFF");
+    Tfm\Farm::setPhoto((int) $u['id'], $r['id'], $rel);
+    $path = Tfm\Farm::photoPath($r['id']);
+    Tfm\Db::exec('UPDATE crop_reports SET photo = ? WHERE id = ?', ['uploads/reports/../../config/config.php', $r['id']]);
+    $tampered = Tfm\Farm::photoPath($r['id']);
+    @unlink(Tfm\Config::uploadDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, substr($rel, 8)));
+    return $none === null && is_string($path) && substr(str_replace('\\', '/', $path), -strlen($rel) + 8) === substr($rel, 8) && $tampered === null && Tfm\Farm::photoPath(987654321) === null
+        ? true : json_encode([$none, $path, $tampered]);
+});
+
+check('Farm::cleanup — finished rows older than N days go (no request refers to them); growing / ready / reported / recent rows stay', function () {
+    $u = newUser();
+    $uid = (int) $u['id'];
+    $old = Tfm\Clock::ms() - 40 * 86400000;
+    $mk = function (string $bed, string $kind, string $status, int $at) use ($uid) {
+        $p = $kind === 'rt' ? pid() : (string) random_int(1000000000000, 1999999999999);
+        Tfm\Db::insert('farm_beds', ['user_id' => $uid, 'bed_id' => $bed, 'kind' => $kind, 'pid' => $p, 'crop_id' => 'CROP_MINT', 'tier' => 1, 'first_seen_at' => $at, 'ready_at' => $at,
+            'growth' => 100, 'care' => 0, 'status' => $status, 'harvested_at' => $status === 'harvested' ? $at : 0, 'amount' => 3, 'stars' => 1, 'updated_at' => $at]);
+        return $p;
+    };
+    $gone1 = $mk('P1', 'plot', 'harvested', $old); $gone2 = $mk('RB1', 'rt', 'cleared', $old);
+    $keepGrowing = $mk('RB2', 'rt', 'growing', $old); $keepRecent = $mk('P2', 'plot', 'harvested', Tfm\Clock::ms());
+    $keepReported = $mk('RB3', 'rt', 'harvested', $old);
+    Tfm\Db::insert('crop_reports', ['user_id' => $uid, 'kind' => 'rt', 'bed_id' => 'RB3', 'pid' => $keepReported, 'crop_id' => 'CROP_MINT', 'stars' => 1, 'amount' => 3, 'note' => '', 'photo' => '',
+        'status' => 'approved', 'memo' => null, 'requested_at' => $old, 'decided_at' => $old, 'decided_by' => null, 'seen_at' => 0]);
+    $n = Tfm\Farm::cleanup(30);
+    $left = array_map(function ($r) { return $r['pid']; }, Tfm\Db::all('SELECT pid FROM farm_beds WHERE user_id = ? ORDER BY id', [$uid]));
+    return $n >= 2 && !in_array($gone1, $left, true) && !in_array($gone2, $left, true) && $left === [$keepGrowing, $keepRecent, $keepReported] ? true : "removed $n, left " . json_encode($left);
 });
 
 echo PHP_EOL . ($failed === 0 ? "✔ all $passed farm unit checks passed" : "✖ $failed of " . ($failed + $passed) . " farm check(s) failed") . " (driver " . Tfm\Db::driver() . ')' . PHP_EOL;

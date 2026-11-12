@@ -1459,14 +1459,24 @@ async function main() {
     assert(other.status === 200 && other.data.reports.length === 0, `G sees ${JSON.stringify(other.data)}`);
     const q = await F.req('api/farm/reports.php?all=1');
     assert(q.status === 400, `an unknown query parameter → ${q.status}`);
-    srvPhp('Tfm\\Db::exec("UPDATE crop_reports SET status = \'approved\', memo = ?, decided_at = ? WHERE id = ?", [$in["memo"], Tfm\\Clock::ms(), $in["id"]])', { id: fReport.id, memo: '정말 잘 키웠어요!' });
+    // the admin site's ✅ 완료 처리 (Tfm\Farm::decide — interface 4), through the spawned server's own lib; the memo is PII-masked
+    const decide = (status, memo) => srvPhp('Tfm\\Farm::decide(["id" => 0, "role" => "admin"], (int) $in["id"], $in["status"], $in["memo"])', { id: fReport.id, status, memo });
+    const d1 = decide('approved', '정말 잘 키웠어요! 010-2222-3333');
+    assert(d1.status === 'approved' && d1.decidedAt > 0 && !/2222|3333/.test(d1.memo) && d1.nickname === fUser.nickname && d1.cropName === '박하', `decide ${JSON.stringify(d1)}`);
     const after = await F.req('api/farm/reports.php');
     const dec = after.data.reports.find((x) => x.id === fReport.id);
-    assert(after.data.unseen === 1 && dec.status === 'approved' && dec.memo === '정말 잘 키웠어요!' && dec.decidedAt > 0 && dec.seen === false, `after the decision ${JSON.stringify(dec)} unseen ${after.data.unseen}`);
+    assert(after.data.unseen === 1 && dec.status === 'approved' && dec.memo === d1.memo && dec.decidedAt === d1.decidedAt && dec.seen === false, `after the decision ${JSON.stringify(dec)} unseen ${after.data.unseen}`);
     const intr = await G.req('api/farm/seen.php', { json: { ids: [fReport.id] } });
     assert(intr.status === 200 && intr.data.updated === 0, `G marking F's report ${intr.status} ${JSON.stringify(intr.data)}`);
     const seen = await F.req('api/farm/seen.php', { json: { ids: [fReport.id] } });
     assert(seen.status === 200 && seen.data.updated === 1 && seen.data.unseen === 0, `seen ${seen.status} ${JSON.stringify(seen.data)}`);
+    // a decided report can get its memo edited: the stamp time stays, the child is shown the new memo again
+    const d2 = decide('approved', '정말 잘 키웠어요! 다음에도 또 키워요!');
+    const edited = (await F.req('api/farm/reports.php')).data;
+    const e = edited.reports.find((x) => x.id === fReport.id);
+    assert(d2.decidedAt === d1.decidedAt && e.memo === '정말 잘 키웠어요! 다음에도 또 키워요!' && edited.unseen === 1, `memo edit ${JSON.stringify(e)} unseen ${edited.unseen}`);
+    const seen2 = await F.req('api/farm/seen.php', { json: { ids: [fReport.id] } });
+    assert(seen2.data?.updated === 1 && seen2.data.unseen === 0, `seen after the edit ${JSON.stringify(seen2.data)}`);
     const bad = [];
     for (const body of [{ ids: 'x' }, { ids: ['1'] }, { ids: [1.5] }, { ids: [-1] }, { ids: { a: 1 } }, { ids: Array.from({ length: 51 }, (_, i) => i + 1) }, { list: [1] }]) {
       const r = await F.req('api/farm/seen.php', { json: body });

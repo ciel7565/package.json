@@ -119,11 +119,14 @@ final class Farm
         return ['value' => (int) ($rc ? $rc['coin'] : 0) + $amount * GameData::itemValue($item), 'exp' => (int) ($rc ? $rc['exp'] : 0)];
     }
 
-    /** String(plantedAt) of a quick plot as JavaScript prints it; null when the mirror cannot reproduce it (not mirrored) */
+    /**
+     * The planting id of a quick plot: String(Math.round(plantedAt)) — what 42-realfarm.js sends (a whole number of ms in
+     * practice); null for anything that is not a positive time (not mirrored, not reportable).
+     */
     public static function plotPid($plantedAt): ?string
     {
         if (is_int($plantedAt)) return $plantedAt > 0 && $plantedAt < 1000000000000000 ? (string) $plantedAt : null;
-        if (is_float($plantedAt) && is_finite($plantedAt) && $plantedAt > 0 && $plantedAt < 1e15 && floor($plantedAt) === $plantedAt) return sprintf('%.0f', $plantedAt);
+        if (is_float($plantedAt) && is_finite($plantedAt) && $plantedAt >= 0.5 && $plantedAt < 1e15) return sprintf('%.0f', floor($plantedAt + 0.5));
         return null;
     }
 
@@ -564,5 +567,261 @@ final class Farm
         if (Db::exec("UPDATE crop_reports SET photo = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND photo = ''", [$url, $reportId, $uid]) !== 1) {
             throw new ApiException(409, 'PHOTO_EXISTS', '이 요청에는 벌써 사진이 있어요.');
         }
+    }
+
+    // ------------------------------------------------------------------ the admin site (workflow interface 4, CONTRACT §15.4)
+    // Static SQL only: every filter is a bound parameter ("? = '' OR column = ?"), searches use LIKE with '!' as the escape
+    // character (portable between SQLite and MariaDB). The admin site checks the admin sign-in itself and escapes every
+    // value with e(); these functions never trust their filter values either.
+    /** Korean names for the admin lists (game-data.json does not export names; an export that adds `name` wins) */
+    private const CROP_NAMES = ['CROP_BEAN' => '콩', 'CROP_PEPPER' => '고추', 'CROP_CABBAGE' => '배추', 'CROP_PERILLA' => '들깨', 'CROP_CORN' => '옥수수',
+        'CROP_RADISH' => '무', 'CROP_MINT' => '박하', 'CROP_LAVENDER' => '라벤더', 'CROP_ROSEMARY' => '로즈마리', 'CROP_LEMONBALM' => '레몬밤'];
+    private const ITEM_NAMES = ['ITEM_BEAN' => '콩', 'ITEM_PEPPER' => '고추', 'ITEM_CABBAGE' => '배추', 'ITEM_PERILLA' => '들깨', 'ITEM_CORN' => '옥수수',
+        'ITEM_RADISH' => '무', 'ITEM_MINT' => '박하', 'ITEM_LAVENDER' => '라벤더', 'ITEM_ROSEMARY' => '로즈마리', 'ITEM_LEMONBALM' => '레몬밤',
+        'ITEM_DOENJANG' => '된장', 'ITEM_GANJANG' => '간장', 'ITEM_GOCHUJANG' => '고추장', 'ITEM_KIMCHI' => '김치', 'ITEM_VINEGAR' => '전통 식초'];
+
+    public static function cropName(string $id): string
+    {
+        $c = GameData::crop($id);
+        if ($c && isset($c['name']) && is_string($c['name']) && $c['name'] !== '') return $c['name'];
+        return isset(self::CROP_NAMES[$id]) ? self::CROP_NAMES[$id] : $id;
+    }
+
+    public static function itemName(string $id): string
+    {
+        $i = GameData::item($id);
+        if ($i && isset($i['name']) && is_string($i['name']) && $i['name'] !== '') return $i['name'];
+        return isset(self::ITEM_NAMES[$id]) ? self::ITEM_NAMES[$id] : $id;
+    }
+
+    /** an account search: '' (all), '#12' / '12' (account id) or a part of the nickname / e-mail → [userId, LIKE pattern] */
+    private static function search(string $q): array
+    {
+        $q = trim(mb_substr($q, 0, 60));
+        if ($q === '') return [0, ''];
+        if (preg_match('/^#?(\d{1,12})$/', $q, $m)) return [(int) $m[1], ''];
+        return [0, '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($q)) . '%'];
+    }
+
+    private static function page(int $limit, int $offset): array { return [max(1, min(500, $limit)), max(0, min(1000000, $offset))]; }
+
+    /** one farm_beds row as the admin lists show it (times measured by the server; status / leftMs live) */
+    private static function bedRow(array $r, int $now): array
+    {
+        $status = self::liveStatus($r, $now);
+        $kind = (string) $r['kind'];
+        $first = (int) $r['first_seen_at'];
+        $readyAt = (int) $r['ready_at'];
+        $growth = (int) $r['growth'];
+        if ($kind === 'rt') $growth = $status === 'growing' && $readyAt > $first ? (int) max(0, min(99, floor(($now - $first) * 100 / ($readyAt - $first)))) : ($status === 'cleared' ? 0 : 100);
+        return [
+            'id' => (int) $r['id'], 'userId' => (int) $r['user_id'], 'nickname' => (string) $r['nickname'], 'email' => (string) $r['email'],
+            'bedId' => (string) $r['bed_id'], 'kind' => $kind, 'pid' => (string) $r['pid'], 'cropId' => (string) $r['crop_id'], 'cropName' => self::cropName((string) $r['crop_id']),
+            'tier' => (int) $r['tier'], 'firstSeenAt' => $first, 'readyAt' => $readyAt, 'leftMs' => $kind === 'rt' && $status === 'growing' ? max(0, $readyAt - $now) : 0,
+            'growth' => $growth, 'care' => (int) $r['care'],
+            'stars' => $kind !== 'rt' ? 0 : ($status === 'harvested' ? (int) $r['stars'] : self::starsOf((int) $r['care'])),
+            'status' => $status, 'harvestedAt' => (int) $r['harvested_at'], 'amount' => (int) $r['amount'], 'updatedAt' => (int) $r['updated_at'],
+            'report' => (string) (isset($r['report_status']) && $r['report_status'] !== null ? $r['report_status'] : ''),
+        ];
+    }
+
+    /**
+     * 🌱 재배 현황 — the beds of every account. $filter: status ('' all | 'active' growing + ready | 'growing' | 'ready' |
+     * 'harvested' | 'cleared' — growing / ready of a real-time bed are judged by the server clock), kind ('' | 'rt' | 'plot'),
+     * q (a part of the nickname / e-mail, or #id), userId. Growing / ready first (soonest ready first), then the newest.
+     * Rows: {id, userId, nickname, email, bedId, kind, pid, cropId, cropName, tier, firstSeenAt, readyAt, leftMs, growth,
+     * care, stars, status, harvestedAt, amount, updatedAt, report ('' | pending | approved | rejected)}.
+     */
+    public static function listBeds(array $filter, int $limit, int $offset): array
+    {
+        $now = Clock::ms();
+        $status = isset($filter['status']) && in_array($filter['status'], ['active', 'growing', 'ready', 'harvested', 'cleared'], true) ? (string) $filter['status'] : '';
+        $kind = isset($filter['kind']) && in_array($filter['kind'], ['rt', 'plot'], true) ? (string) $filter['kind'] : '';
+        list($uid, $like) = self::search(isset($filter['q']) && is_string($filter['q']) ? $filter['q'] : '');
+        if (isset($filter['userId']) && (is_int($filter['userId']) || (is_string($filter['userId']) && ctype_digit($filter['userId'])))) $uid = (int) $filter['userId'];
+        list($limit, $offset) = self::page($limit, $offset);
+        $rows = Db::all("SELECT b.id, b.user_id, u.nickname, u.email, b.bed_id, b.kind, b.pid, b.crop_id, b.tier, b.first_seen_at, b.ready_at, b.growth, b.care, b.status,
+                b.harvested_at, b.amount, b.stars, b.updated_at,
+                (SELECT r.status FROM crop_reports r WHERE r.user_id = b.user_id AND r.kind = b.kind AND r.bed_id = b.bed_id AND r.pid = b.pid) AS report_status
+            FROM farm_beds b JOIN users u ON u.id = b.user_id
+            WHERE (? = '' OR (? = 'active' AND b.status IN ('growing', 'ready'))
+                    OR (? = 'growing' AND b.status = 'growing' AND (b.kind = 'plot' OR b.ready_at > ?))
+                    OR (? = 'ready' AND (b.status = 'ready' OR (b.status = 'growing' AND b.kind = 'rt' AND b.ready_at <= ?)))
+                    OR (? IN ('harvested', 'cleared') AND b.status = ?))
+              AND (? = '' OR b.kind = ?)
+              AND (? = 0 OR b.user_id = ?)
+              AND (? = '' OR u.nickname_key LIKE ? ESCAPE '!' OR u.email LIKE ? ESCAPE '!')
+            ORDER BY CASE WHEN b.status IN ('growing', 'ready') THEN 0 ELSE 1 END ASC, CASE WHEN b.status IN ('growing', 'ready') THEN b.ready_at ELSE 0 END ASC,
+                b.updated_at DESC, b.id DESC
+            LIMIT ? OFFSET ?", [$status, $status, $status, $now, $status, $now, $status, $status, $kind, $kind, $uid, $uid, $like, $like, $like, $limit, $offset]);
+        return array_map(function ($r) use ($now) { return self::bedRow($r, $now); }, $rows);
+    }
+
+    /**
+     * 🏚️ 곳간 — the storage of each account (largest first): {userId, nickname, email, items: {ITEM_X: qty}, itemList: [{itemId,
+     * name, qty}], kinds, total, cap, updatedAt}. $q: a part of the nickname / e-mail, or #id.
+     */
+    public static function listStorage(int $limit, int $offset, string $q): array
+    {
+        list($uid, $like) = self::search($q);
+        list($limit, $offset) = self::page($limit, $offset);
+        $users = Db::all("SELECT s.user_id, u.nickname, u.email, SUM(s.qty) AS total, COUNT(*) AS kinds, MAX(s.updated_at) AS updated_at
+            FROM farm_storage s JOIN users u ON u.id = s.user_id
+            WHERE (? = 0 OR s.user_id = ?) AND (? = '' OR u.nickname_key LIKE ? ESCAPE '!' OR u.email LIKE ? ESCAPE '!')
+            GROUP BY s.user_id, u.nickname, u.email
+            ORDER BY total DESC, s.user_id ASC
+            LIMIT ? OFFSET ?", [$uid, $uid, $like, $like, $like, $limit, $offset]);
+        $cap = GameData::storageCap();
+        $out = [];
+        foreach ($users as $u) {
+            $items = [];
+            $list = [];
+            foreach (Db::all('SELECT item_id, qty FROM farm_storage WHERE user_id = ? ORDER BY item_id ASC', [(int) $u['user_id']]) as $r) {
+                $items[(string) $r['item_id']] = (int) $r['qty'];
+                $list[] = ['itemId' => (string) $r['item_id'], 'name' => self::itemName((string) $r['item_id']), 'qty' => (int) $r['qty']];
+            }
+            $out[] = ['userId' => (int) $u['user_id'], 'nickname' => (string) $u['nickname'], 'email' => (string) $u['email'], 'items' => $items, 'itemList' => $list,
+                'kinds' => (int) $u['kinds'], 'total' => (int) $u['total'], 'cap' => $cap, 'updatedAt' => (int) $u['updated_at']];
+        }
+        return $out;
+    }
+
+    /** 🏚️ 곳간 totals per item over every account: [{itemId, name, qty, accounts}] (largest first) */
+    public static function storageTotals(): array
+    {
+        return array_map(function ($r) {
+            return ['itemId' => (string) $r['item_id'], 'name' => self::itemName((string) $r['item_id']), 'qty' => (int) $r['qty'], 'accounts' => (int) $r['accounts']];
+        }, Db::all('SELECT item_id, SUM(qty) AS qty, COUNT(*) AS accounts FROM farm_storage GROUP BY item_id ORDER BY qty DESC, item_id ASC'));
+    }
+
+    /** one crop_reports row (with the joined account / admin / bed columns) as the admin lists show it */
+    private static function adminReport(array $r): array
+    {
+        return [
+            'id' => (int) $r['id'], 'userId' => (int) $r['user_id'], 'nickname' => (string) $r['nickname'], 'email' => (string) $r['email'],
+            'kind' => (string) $r['kind'], 'bedId' => (string) $r['bed_id'], 'pid' => (string) $r['pid'], 'cropId' => (string) $r['crop_id'], 'cropName' => self::cropName((string) $r['crop_id']),
+            'stars' => (int) $r['stars'], 'amount' => (int) $r['amount'], 'note' => (string) $r['note'], 'status' => (string) $r['status'],
+            'memo' => $r['memo'] === null ? '' : (string) $r['memo'], 'requestedAt' => (int) $r['requested_at'], 'decidedAt' => (int) $r['decided_at'],
+            'decidedBy' => $r['decided_by'] === null ? 0 : (int) $r['decided_by'], 'decidedByNick' => (string) ($r['decided_nick'] === null ? '' : $r['decided_nick']),
+            'seenAt' => (int) $r['seen_at'], 'hasPhoto' => self::validPhoto((string) $r['photo']),
+            'firstSeenAt' => (int) ($r['first_seen_at'] === null ? 0 : $r['first_seen_at']), 'readyAt' => (int) ($r['ready_at'] === null ? 0 : $r['ready_at']),
+            'harvestedAt' => (int) ($r['harvested_at'] === null ? 0 : $r['harvested_at']), 'bedStatus' => (string) ($r['bed_status'] === null ? '' : $r['bed_status']),
+        ];
+    }
+
+    /** the admin report query; $id > 0 = that one report */
+    private static function reportQuery(string $status, int $limit, int $offset, string $q, int $id): array
+    {
+        $status = in_array($status, self::REPORT_STATUSES, true) ? $status : '';
+        list($uid, $like) = self::search($q);
+        list($limit, $offset) = self::page($limit, $offset);
+        return Db::all("SELECT r.id, r.user_id, r.kind, r.bed_id, r.pid, r.crop_id, r.stars, r.amount, r.note, r.photo, r.status, r.memo, r.requested_at,
+                r.decided_at, r.decided_by, r.seen_at, u.nickname, u.email, d.nickname AS decided_nick,
+                b.first_seen_at, b.ready_at, b.harvested_at, b.status AS bed_status
+            FROM crop_reports r JOIN users u ON u.id = r.user_id
+            LEFT JOIN users d ON d.id = r.decided_by
+            LEFT JOIN farm_beds b ON b.user_id = r.user_id AND b.kind = r.kind AND b.bed_id = r.bed_id AND b.pid = r.pid
+            WHERE (? = 0 OR r.id = ?) AND (? = '' OR r.status = ?) AND (? = 0 OR r.user_id = ?)
+              AND (? = '' OR u.nickname_key LIKE ? ESCAPE '!' OR u.email LIKE ? ESCAPE '!')
+            ORDER BY CASE WHEN r.status = 'pending' THEN 0 ELSE 1 END ASC, CASE WHEN r.status = 'pending' THEN r.requested_at ELSE 0 END ASC,
+                r.decided_at DESC, r.id DESC
+            LIMIT ? OFFSET ?", [$id, $id, $status, $status, $uid, $uid, $like, $like, $like, $limit, $offset]);
+    }
+
+    /**
+     * ✅ 완료 확인 — completion requests of every account, pending first (oldest first), then the latest decisions.
+     * $status: '' | pending | approved | rejected; $q: a part of the nickname / e-mail, or #id. Rows: {id, userId, nickname,
+     * email, kind, bedId, pid, cropId, cropName, stars, amount, note, status, memo, requestedAt, decidedAt, decidedBy,
+     * decidedByNick, seenAt, hasPhoto, firstSeenAt, readyAt, harvestedAt, bedStatus} — times measured by the server.
+     * The note is already PII-masked; the admin site still escapes everything. The photo: photoPath($id).
+     */
+    public static function listReports(string $status, int $limit, int $offset, string $q): array
+    {
+        return array_map(function ($r) { return self::adminReport($r); }, self::reportQuery($status, $limit, $offset, $q, 0));
+    }
+
+    /** ['pending' => n, 'approved' => n, 'rejected' => n] */
+    public static function countReports(): array
+    {
+        $out = ['pending' => 0, 'approved' => 0, 'rejected' => 0];
+        foreach (Db::all('SELECT status, COUNT(*) AS n FROM crop_reports GROUP BY status') as $r) if (isset($out[(string) $r['status']])) $out[(string) $r['status']] = (int) $r['n'];
+        return $out;
+    }
+
+    /**
+     * ✅ 완료 처리 / ↩️ 돌려보내기 with a memo (≤ farm.memo_max characters; cleaned, PII-masked and bad-word-filtered — the
+     * child reads it). A pending report (or a changed decision) gets decided_at = now and decided_by = the admin; the same
+     * decision again only edits the memo (the stamp time stays). Either way the child is shown it again (seen_at = 0).
+     * Audit crop_report_decided. 403 FORBIDDEN for a non-admin actor, 400 INVALID_INPUT for another status / an over-long
+     * memo, 404 NOT_FOUND for an unknown report. @return array the report as listReports() shows it
+     */
+    public static function decide(array $actor, int $reportId, string $status, string $memo): array
+    {
+        if ((isset($actor['role']) ? $actor['role'] : '') !== 'admin') throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
+        if (!in_array($status, ['approved', 'rejected'], true)) V::fail('status', '값은 approved 또는 rejected 여야 해요.');
+        $max = max(1, (int) Config::get('farm.memo_max', 500));
+        V::str($memo, 'memo', $max);
+        $memo = self::cleanNote($memo, $max);
+        $actorId = (int) (isset($actor['id']) ? $actor['id'] : 0);
+        return Db::tx(function () use ($reportId, $status, $memo, $actorId) {
+            $r = Db::one('SELECT id, user_id, status, memo FROM crop_reports WHERE id = ?' . Db::forUpdate(), [$reportId]);
+            if (!$r) throw new ApiException(404, 'NOT_FOUND', '완료 확인 요청을 찾을 수 없어요.');
+            $was = (string) $r['status'];
+            $edit = $was === $status;
+            if (!$edit) {
+                Db::exec('UPDATE crop_reports SET status = ?, memo = ?, decided_at = ?, decided_by = ?, seen_at = 0 WHERE id = ?', [$status, $memo, Clock::ms(), $actorId > 0 ? $actorId : null, $reportId]);
+            } elseif ((string) $r['memo'] !== $memo) {
+                Db::exec('UPDATE crop_reports SET memo = ?, seen_at = 0 WHERE id = ?', [$memo, $reportId]);
+            }
+            Audit::log('crop_report_decided', (int) $r['user_id'], ['id' => $reportId, 'status' => $status, 'was' => $was, 'memoEdit' => $edit, 'memoChars' => mb_strlen($memo)], 'info', $actorId > 0 ? $actorId : null);
+            $rows = self::reportQuery('', 1, 0, '', $reportId);
+            return self::adminReport($rows[0]);
+        });
+    }
+
+    /** 📊 대시보드: real-time beds growing / ready (server clock), harvested today, pending requests, 곳간 total (+ quick plots, scale) */
+    public static function dashboard(): array
+    {
+        $now = Clock::ms();
+        $today = Clock::startOfDayMs();
+        $v = function (string $sql, array $p = []): int { return (int) Db::value($sql, $p); };
+        return [
+            'growing' => $v("SELECT COUNT(*) FROM farm_beds WHERE kind = 'rt' AND status = 'growing' AND ready_at > ?", [$now]),
+            'ready' => $v("SELECT COUNT(*) FROM farm_beds WHERE kind = 'rt' AND (status = 'ready' OR (status = 'growing' AND ready_at <= ?))", [$now]),
+            'harvestedToday' => $v("SELECT COUNT(*) FROM farm_beds WHERE kind = 'rt' AND status = 'harvested' AND harvested_at >= ?", [$today]),
+            'reportsPending' => $v("SELECT COUNT(*) FROM crop_reports WHERE status = 'pending'"),
+            'storageTotal' => $v('SELECT COALESCE(SUM(qty), 0) FROM farm_storage'),
+            'plotsGrowing' => $v("SELECT COUNT(*) FROM farm_beds WHERE kind = 'plot' AND status = 'growing'"),
+            'plotsReady' => $v("SELECT COUNT(*) FROM farm_beds WHERE kind = 'plot' AND status = 'ready'"),
+            'accounts' => $v("SELECT COUNT(DISTINCT user_id) FROM farm_beds WHERE status IN ('growing', 'ready')"),
+            'scale' => self::scale(),
+        ];
+    }
+
+    /**
+     * Retention (cli farm:cleanup): finished rows (harvested / cleared) not updated for $days days and not referred to by a
+     * completion request are removed — mostly the quick-plot mirror, one row per planting. Growing / ready rows always stay;
+     * a removed real-time pid is harmless (a planting id the server does not know gets the server's full growing time).
+     * @return int rows removed
+     */
+    public static function cleanup(int $days = 90): int
+    {
+        $before = Clock::ms() - max(1, min(36500, $days)) * 86400000;
+        return Db::exec("DELETE FROM farm_beds WHERE status IN ('harvested', 'cleared') AND updated_at < ?
+            AND NOT EXISTS (SELECT 1 FROM crop_reports r WHERE r.user_id = farm_beds.user_id AND r.kind = farm_beds.kind AND r.bed_id = farm_beds.bed_id AND r.pid = farm_beds.pid)", [$before]);
+    }
+
+    /**
+     * The absolute path of a report's photo for the admin site to stream after ITS OWN admin check (e.g. ?tab=reports&photo=id);
+     * null without a photo, for a stored path that is not a report photo, or when the file is missing / outside uploads/.
+     */
+    public static function photoPath(int $reportId): ?string
+    {
+        $p = Db::value('SELECT photo FROM crop_reports WHERE id = ?', [$reportId]);
+        if (!is_string($p) || !self::validPhoto($p)) return null;
+        $base = realpath(Config::uploadDir());
+        $real = realpath(Config::uploadDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, Str::sub($p, strlen('uploads/'))));
+        if ($base === false || $real === false || strpos($real, rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) !== 0 || !is_file($real)) return null;
+        return $real;
     }
 }
