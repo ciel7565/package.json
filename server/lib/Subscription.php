@@ -248,6 +248,44 @@ final class Subscription
         return $n;
     }
 
+    // ------------------------------------------------------------------ auto-renew: what the stored card was registered for
+    /**
+     * Review finding (auto-renew tier): a billing key is a recurring authorization for ONE tier — the tier of the order
+     * that issued it (billingIssue marks that order method = 'billing'; 토스 itself names the method 카드). Renewals
+     * charge that tier's price, never the tier a one-month pass or a free grant put on the subscription. A subscription
+     * registered before the mark existed falls back to its stored tier.
+     */
+    private static function billingTier(int $uid, int $fallback): int
+    {
+        $t = Db::value("SELECT tier FROM orders WHERE user_id = ? AND kind = 'first' AND method = 'billing' AND status IN ('confirmed', 'refunded', 'canceled') ORDER BY id DESC LIMIT 1", [$uid]);
+        return max(2, min(4, $t === null ? $fallback : (int) $t));
+    }
+
+    /** will the stored card be charged (what renewDue picks): auto-renew on, a billing key, active or past_due */
+    private static function armed(?array $row): bool
+    {
+        return $row !== null && (int) $row['auto_renew'] === 1 && (string) $row['billing_key'] !== '' && in_array((string) $row['status'], ['active', 'past_due'], true);
+    }
+
+    /**
+     * Review finding (auto-renew tier): while auto-renew is on, a one-month pass or a free grant for ANOTHER tier would
+     * change what the next automatic charge buys (and start a fresh, shorter period), so it is refused before any money
+     * moves — 409 SUB_AUTO_RENEW_ON. The same tier only adds days. $who: 'player' | 'admin' (the sentence differs).
+     */
+    private static function refuseOtherTierWhileAutoRenew(int $uid, int $tier, int $now, string $who, string $nickname = '', string $orderId = ''): void
+    {
+        $row = self::row($uid);
+        if ($row) $row = self::settle($row, $now);
+        if (!self::armed($row)) return;
+        $registered = self::billingTier($uid, (int) $row['tier']);
+        if ($registered === $tier) return;
+        Audit::log('sub_autorenew_tier_refused', $uid, ['registered' => $registered, 'asked' => $tier, 'by' => $who] + ($orderId !== '' ? ['order' => $orderId] : []), 'warn');
+        $msg = $who === 'admin'
+            ? "{$nickname} 님은 {$registered}배 자동 갱신 구독 중이에요. 다른 단계를 무료로 주면 다음 자동 결제 금액과 이미 결제한 기간이 바뀌어요. {$registered}배로 기간을 늘려 주거나, 사용자가 자동 갱신을 해지한 뒤에 부여해 주세요."
+            : "지금 {$registered}배 자동 갱신 구독 중이라 {$tier}배 한 달 이용권은 살 수 없어요. 자동 결제는 등록한 {$registered}배로만 해요. 바꾸려면 {$tier}배 자동 갱신을 새로 하거나 먼저 해지해 주세요.";
+        throw new ApiException(409, 'SUB_AUTO_RENEW_ON', $msg, ['registeredTier' => $registered, 'tier' => $tier]);
+    }
+
     /** an integer from a JSON body: a JSON integer only (a digit string, float, exponent, boolean or array is refused) */
     public static function jsonInt($v, string $field, int $min, int $max): int
     {
@@ -288,6 +326,16 @@ final class Subscription
             'last_order_id' => $row ? (string) $row['last_order_id'] : '', 'checked_at' => $now, 'updated_at' => $now,
         ];
         foreach ($extra as $k => $v) $fields[$k] = $v;
+        // review finding (auto-renew tier): auto-renew stays on only at the tier its billing key was issued for. A pass or
+        // a grant of another tier is refused before any payment (refuseOtherTierWhileAutoRenew); should one get here all
+        // the same (a race with a new registration), auto-renew is turned off rather than charging a price nobody agreed to.
+        if (!array_key_exists('billing_key', $extra) && self::armed($row) && (int) $fields['auto_renew'] === 1) {
+            $registered = self::billingTier($uid, (int) $row['tier']);
+            if ($registered !== $tier) {
+                $fields['auto_renew'] = 0;
+                Audit::log('sub_autorenew_off', $uid, ['why' => 'tier_changed', 'registered' => $registered, 'tier' => $tier], 'warn');
+            }
+        }
         Db::upsert('subscriptions', $fields, ['user_id']);
         $fresh = self::row($uid);
         return $fresh ? $fresh : $fields;
@@ -302,6 +350,9 @@ final class Subscription
         Toss::requireAvailable(); // no keys and no (allowed) mock mode: 503 PAYMENT_NOT_CONFIGURED, no order is made
         $uid = (int) $user['id'];
         $now = Clock::ms();
+        // a one-month pass for another tier while auto-renew is on: 409 SUB_AUTO_RENEW_ON, no order (a new registration —
+        // kind billing — is a new authorization for its own tier and replaces the old key: allowed)
+        if ($kind === 'card') self::refuseOtherTierWhileAutoRenew($uid, $tier, $now, 'player');
         $amount = Toss::price($tier);
         $o = self::createOrder($uid, $tier, $amount, 'first', $now);
         Db::exec('UPDATE orders SET method = ? WHERE id = ?', [$kind === 'billing' ? 'billing' : 'card', (int) $o['id']]);
@@ -366,6 +417,9 @@ final class Subscription
             throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
         }
         $now = Clock::ms();
+        // a card order made before auto-renew was turned on: refused here, before it is claimed or the gateway is asked
+        // (the payment window's approval lapses on its own; no money moves)
+        self::refuseOtherTierWhileAutoRenew($uid, (int) $o['tier'], $now, 'player', '', $orderId);
         $claim = self::claimOrder($orderId, $paymentKey, $now);
         if ($claim === 'closed' || $claim === 'busy') {
             Audit::log('sub_confirm_refused', $uid, ['order' => $orderId, 'why' => $claim], 'warn');
@@ -444,6 +498,8 @@ final class Subscription
         $card = isset($issued['card']) && is_array($issued['card']) ? $issued['card'] : [];
         return Db::tx(function () use ($uid, $o, $orderId, $payment, $sealed, $customerKey, $card, $now, $marker) {
             if (!self::finishOrder($orderId, 'confirmed', $payment, $now, $marker)) throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
+            // the order that issued this billing key: its tier is what renewals charge (billingTier)
+            Db::exec("UPDATE orders SET method = 'billing' WHERE order_id = ?", [$orderId]);
             $row = self::activate($uid, (int) $o['tier'], Toss::periodDays() * self::DAY_MS, $now, [
                 'auto_renew' => 1, 'billing_key' => $sealed, 'customer_key' => $customerKey, 'last_order_id' => $orderId,
             ]);
@@ -503,7 +559,9 @@ final class Subscription
             }
             $open = Db::one("SELECT id FROM orders WHERE user_id = ? AND kind = 'renewal' AND status = 'created' AND requested_at > ?", [$uid, $now - 120000]);
             if ($open) return ['skip' => ['userId' => $uid, 'ok' => false, 'skipped' => 'in progress']];
-            $tier = max(2, min(4, (int) $cur['tier']));
+            // review finding (auto-renew tier): the price of the tier the card was registered for, whatever the stored tier says
+            $tier = self::billingTier($uid, (int) $cur['tier']);
+            if ($tier !== (int) $cur['tier']) Audit::log('sub_renew_tier', $uid, ['stored' => (int) $cur['tier'], 'registered' => $tier], 'alert');
             $orderId = self::orderId();
             $key = self::billingKeyOf($cur);
             // mock mode: a billing key issued with an authKey ending in _fail always fails (tests)
@@ -542,7 +600,8 @@ final class Subscription
         }
         return Db::tx(function () use ($uid, $tier, $orderId, $payment, $now, $amount) {
             if (!self::finishOrder($orderId, 'confirmed', $payment, $now)) throw new \RuntimeException('renewal order changed while it was charged');
-            $row = self::activate($uid, $tier, Toss::periodDays() * self::DAY_MS, $now, ['last_order_id' => $orderId, 'auto_renew' => 1]);
+            // auto_renew is left as it is now: a player who turned it off while this charge was on its way keeps it off
+            $row = self::activate($uid, $tier, Toss::periodDays() * self::DAY_MS, $now, ['last_order_id' => $orderId]);
             Audit::log('sub_renewed', $uid, ['order' => $orderId, 'tier' => $tier, 'amount' => $amount, 'expiresAt' => (int) $row['expires_at']]);
             return ['userId' => $uid, 'ok' => true, 'status' => 'active', 'expiresAt' => (int) $row['expires_at'], 'order' => $orderId];
         });
@@ -557,6 +616,8 @@ final class Subscription
         $u = Users::byId($uid);
         if (!$u) throw new ApiException(404, 'NOT_FOUND', '사용자를 찾을 수 없어요.');
         $now = Clock::ms();
+        // a free grant of another tier while auto-renew is on would change the next charge and cut the paid period short
+        self::refuseOtherTierWhileAutoRenew($uid, $tier, $now, 'admin', (string) $u['nickname']);
         return Db::tx(function () use ($actor, $uid, $tier, $days, $now, $u) {
             $o = self::createOrder($uid, $tier, 0, 'manual', $now);
             self::finishOrder($o['order_id'], 'confirmed', ['status' => 'MANUAL', 'method' => '수동 부여'], $now);

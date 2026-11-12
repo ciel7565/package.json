@@ -20,8 +20,8 @@
  * paymentKeys that start with "mock_"; test prefixes after "mock_": amount<N>_ (the gateway answers totalAmount N),
  * noamount_ (no totalAmount), otherorder_ (another orderId), usd_ (currency USD), waiting_ (status not DONE),
  * slow<ms>_ (answers after a pause: races), timeout_ (a network error after the payment). issue hands out
- * "mock_bk_…" billing keys (an authKey "mock_amount<N>_…" gives a key whose charges answer N), and a charge always
- * succeeds unless the orderId ends with "_fail" (tests).
+ * "mock_bk_…" billing keys (an authKey "mock_amount<N>_…" gives a key whose charges answer N, "mock_slow<ms>_…" one
+ * whose charges answer after a pause), and a charge always succeeds unless the orderId ends with "_fail" (tests).
  * The secret key is never logged. PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -192,7 +192,8 @@ final class Toss
     {
         if (self::mock()) {
             $amt = preg_match('/^mock_amount(\d{1,9})_/', $authKey, $m) ? 'amount' . $m[1] . '_' : '';
-            $key = 'mock_bk_' . $amt . substr(hash('sha256', $authKey . '|' . $customerKey), 0, 24) . (Str::endsWith($authKey, '_fail') ? '_fail' : '');
+            $slow = preg_match('/^mock_slow(\d{1,4})_/', $authKey, $m) ? 'slow' . $m[1] . '_' : '';
+            $key = 'mock_bk_' . $amt . $slow . substr(hash('sha256', $authKey . '|' . $customerKey), 0, 24) . (Str::endsWith($authKey, '_fail') ? '_fail' : '');
             return ['billingKey' => $key, 'customerKey' => $customerKey, 'card' => ['company' => '모의카드', 'number' => '****-****-****-0000'], 'mock' => true];
         }
         self::needKeys();
@@ -203,6 +204,7 @@ final class Toss
     {
         if (self::mock()) {
             if (!Str::startsWith($billingKey, 'mock_bk_')) throw new TossException('INVALID_BILLING_KEY', '모의 빌링키가 아니에요.', 400);
+            if (preg_match('/^mock_bk_(?:amount\d{1,9}_)?slow(\d{1,4})_/', $billingKey, $m)) usleep(min(5000, (int) $m[1]) * 1000);
             if (Str::endsWith($orderId, '_fail')) throw new TossException('REJECT_CARD_PAYMENT', '모의 결제가 거절되었어요 (테스트).', 400);
             $p = self::mockPayment('mock_pay_' . substr(hash('sha256', $orderId), 0, 20), $orderId, $amount, 'DONE');
             if (preg_match('/^mock_bk_amount(\d{1,9})_/', $billingKey, $m)) $p['totalAmount'] = (int) $m[1];

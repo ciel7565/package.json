@@ -597,6 +597,105 @@ check('confirm — two different paid orders of one account confirmed at the sam
     }
     return true;
 });
+/** a player with a tier-$tier auto-renew subscription (billing key, first charge done); $authKey picks the mock behaviour */
+$autoRenewUser = function (int $tier, string $authKey = 'mock_auth_ok') use ($payUser): array {
+    $u = $payUser();
+    $o = Tfm\Subscription::prepare($u, $tier, 'billing');
+    Tfm\Subscription::billingIssue($u, $authKey, $o['customerKey'], $o['orderId']);
+    return $u;
+};
+/** the newest renewal order of a player (tier, amount, status) */
+$lastRenewal = function (int $uid): ?array { return Tfm\Db::one("SELECT tier, amount, status FROM orders WHERE user_id = ? AND kind = 'renewal' ORDER BY id DESC LIMIT 1", [$uid]); };
+$codeOf = function (callable $fn): string { try { $fn(); return 'ok'; } catch (Tfm\ApiException $e) { return $e->errorCode . ' ' . $e->status; } };
+check('auto-renew — a one-month pass for another tier is refused while auto-renew is on (prepare, and confirm before the gateway is asked); the same tier adds a month and the renewal still charges the registered price', function () use ($payUser, $autoRenewUser, $lastRenewal, $codeOf) {
+    $u = $autoRenewUser(2);
+    $uid = (int) $u['id'];
+    $exp0 = (int) Tfm\Subscription::state($uid)['expiresAt'];
+    $n0 = (int) Tfm\Db::value('SELECT COUNT(*) FROM orders WHERE user_id = ?', [$uid]);
+    $c = $codeOf(function () use ($u) { Tfm\Subscription::prepare($u, 4, 'card'); });
+    $n1 = (int) Tfm\Db::value('SELECT COUNT(*) FROM orders WHERE user_id = ?', [$uid]);
+    if ($c !== 'SUB_AUTO_RENEW_ON 409' || $n1 !== $n0) return "prepare tier 4 card while tier-2 auto-renew is on: $c, orders $n0 → $n1";
+    // a card order made before auto-renew was turned on: refused at confirm, nothing claimed, no payment taken
+    $v = $payUser();
+    $card = Tfm\Subscription::prepare($v, 4, 'card');
+    $ob = Tfm\Subscription::prepare($v, 2, 'billing');
+    Tfm\Subscription::billingIssue($v, 'mock_auth_ok', $ob['customerKey'], $ob['orderId']);
+    $c2 = $codeOf(function () use ($v, $card) { Tfm\Subscription::confirm($v, 'mock_' . $card['orderId'], $card['orderId'], $card['amount']); });
+    $row = Tfm\Db::one('SELECT status, payment_key FROM orders WHERE order_id = ?', [$card['orderId']]);
+    $sv = Tfm\Subscription::state((int) $v['id']);
+    if ($c2 !== 'SUB_AUTO_RENEW_ON 409' || $row['status'] !== 'created' || $row['payment_key'] !== '' || $sv['tier'] !== 2 || $sv['autoRenew'] !== true) return 'confirm of an older tier-4 card order: ' . json_encode([$c2, $row, $sv]);
+    // the same tier: one more month, auto-renew stays on
+    $same = Tfm\Subscription::prepare($u, 2, 'card');
+    $s = Tfm\Subscription::confirm($u, 'mock_' . $same['orderId'], $same['orderId'], $same['amount']);
+    if ($s['tier'] !== 2 || $s['autoRenew'] !== true || abs($s['expiresAt'] - ($exp0 + 30 * 86400000)) > 60000) return 'same-tier pass: ' . json_encode($s);
+    Tfm\Db::exec('UPDATE subscriptions SET expires_at = ? WHERE user_id = ?', [Tfm\Clock::ms() + 3600000, $uid]);
+    $r = Tfm\Subscription::renewDue($uid);
+    $ren = $lastRenewal($uid);
+    return isset($r[0]['ok']) && $r[0]['ok'] === true && $ren && (int) $ren['tier'] === 2 && (int) $ren['amount'] === Tfm\Toss::price(2) && $ren['status'] === 'confirmed' ? true : 'renewal: ' . json_encode([$r, $ren]);
+});
+check('auto-renew — an admin grant of another tier is refused while auto-renew is on (API / admin site / cli sub:grant): the next charge and the paid days stay; the same tier only adds days; after the player turns auto-renew off any tier can be granted', function () use ($srv, $tmp, $autoRenewUser, $lastRenewal, $codeOf) {
+    $u = $autoRenewUser(2);
+    $uid = (int) $u['id'];
+    $exp0 = (int) Tfm\Subscription::state($uid)['expiresAt'];
+    $c = $codeOf(function () use ($uid) { Tfm\Subscription::grant(['id' => 0], $uid, 4, 7); });
+    $st = Tfm\Subscription::state($uid);
+    if ($c !== 'SUB_AUTO_RENEW_ON 409' || $st['tier'] !== 2 || $st['expiresAt'] !== $exp0 || $st['autoRenew'] !== true) return 'grant tier 4: ' . json_encode([$c, $st]);
+    exec('TFM_DATA_DIR=' . escapeshellarg($tmp) . ' TFM_TOSS_MOCK=1 ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($srv . '/cli/tfm.php') . ' sub:grant ' . escapeshellarg((string) $u['email']) . ' 4 7 2>&1', $cliOut, $cliCode);
+    if ($cliCode === 0 || strpos(implode("\n", $cliOut), '자동 갱신') === false || Tfm\Subscription::state($uid)['tier'] !== 2) return 'cli sub:grant 4 7: exit ' . $cliCode . ' ' . implode(' / ', $cliOut);
+    $g = Tfm\Subscription::grant(['id' => 0], $uid, 2, 7);
+    if ($g['sub']['tier'] !== 2 || $g['sub']['autoRenew'] !== true || abs($g['sub']['expiresAt'] - ($exp0 + 7 * 86400000)) > 60000) return 'same-tier grant: ' . json_encode($g['sub']);
+    Tfm\Db::exec('UPDATE subscriptions SET expires_at = ? WHERE user_id = ?', [Tfm\Clock::ms() + 3600000, $uid]);
+    Tfm\Subscription::renewDue($uid);
+    $ren = $lastRenewal($uid);
+    if (!$ren || (int) $ren['tier'] !== 2 || (int) $ren['amount'] !== Tfm\Toss::price(2)) return 'renewal after the grant: ' . json_encode($ren);
+    Tfm\Subscription::cancelAutoRenew($u);
+    $g4 = Tfm\Subscription::grant(['id' => 0], $uid, 4, 7);
+    return $g4['sub']['tier'] === 4 && $g4['sub']['autoRenew'] === false ? true : 'grant after auto-renew off: ' . json_encode($g4['sub']);
+});
+check('auto-renew — a renewal charges the tier the card was registered for, even when the stored tier was changed behind its back (a database edit): no higher price, an alert in the audit log', function () use ($autoRenewUser, $lastRenewal) {
+    $u = $autoRenewUser(2);
+    $uid = (int) $u['id'];
+    Tfm\Db::exec('UPDATE subscriptions SET tier = 4, expires_at = ? WHERE user_id = ?', [Tfm\Clock::ms() + 3600000, $uid]);
+    $r = Tfm\Subscription::renewDue($uid);
+    $ren = $lastRenewal($uid);
+    $st = Tfm\Subscription::state($uid);
+    $alert = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE user_id = ? AND event = 'sub_renew_tier' AND severity = 'alert'", [$uid]);
+    return $ren && (int) $ren['tier'] === 2 && (int) $ren['amount'] === Tfm\Toss::price(2) && $st['tier'] === 2 && $st['autoRenew'] === true && $alert === 1 ? true : json_encode([$r, $ren, $st, $alert]);
+});
+check('auto-renew — turning auto-renew off while a renewal is being charged is kept (the finished renewal does not switch it back on)', function () use ($autoRenewUser, $child, $finish) {
+    $u = $autoRenewUser(2, 'mock_slow1500_auth'); // its charges answer after 1.5 s
+    $uid = (int) $u['id'];
+    Tfm\Db::exec('UPDATE subscriptions SET expires_at = ? WHERE user_id = ?', [Tfm\Clock::ms() + 3600000, $uid]);
+    $k = $child('echo json_encode(Tfm\\Subscription::renewDue(' . $uid . '));');
+    $charging = false;
+    for ($i = 0; $i < 100 && !$charging; $i++) {
+        $charging = (int) Tfm\Db::value("SELECT COUNT(*) FROM orders WHERE user_id = ? AND kind = 'renewal' AND status = 'created'", [$uid]) === 1;
+        if (!$charging) usleep(50000);
+    }
+    if ($charging) Tfm\Subscription::cancelAutoRenew($u);
+    $out = $finish($k);
+    $row = Tfm\Db::one('SELECT auto_renew, status, expires_at FROM subscriptions WHERE user_id = ?', [$uid]);
+    $ren = Tfm\Db::value("SELECT status FROM orders WHERE user_id = ? AND kind = 'renewal' ORDER BY id DESC LIMIT 1", [$uid]);
+    return $charging && (int) $row['auto_renew'] === 0 && $ren === 'confirmed' && $row['status'] === 'active' ? true : json_encode([$charging, $out, $row, $ren]);
+});
+check('auto-renew — a race the refusal cannot see (a tier-4 pass is confirmed while a tier-2 registration finishes): auto-renew ends up off, never armed at tier 4', function () use ($payUser, $child, $finish) {
+    $u = $payUser();
+    $uid = (int) $u['id'];
+    $card = Tfm\Subscription::prepare($u, 4, 'card');
+    $bill = Tfm\Subscription::prepare($u, 2, 'billing');
+    // the pass passes the auto-renew check (nothing registered yet), then waits 1.5 s at the (mock) gateway
+    $k = $child('$u = Tfm\\Users::byId(' . $uid . '); try { Tfm\\Subscription::confirm($u, ' . var_export('mock_slow1500_' . $card['orderId'], true) . ', ' . var_export($card['orderId'], true) . ', ' . (int) $card['amount'] . '); echo "ok"; } catch (Tfm\\ApiException $e) { echo $e->errorCode; }');
+    $claimed = false;
+    for ($i = 0; $i < 100 && !$claimed; $i++) {
+        $claimed = (string) Tfm\Db::value('SELECT toss_status FROM orders WHERE order_id = ?', [$card['orderId']]) === 'CONFIRMING';
+        if (!$claimed) usleep(20000);
+    }
+    Tfm\Subscription::billingIssue($u, 'mock_auth_ok', $bill['customerKey'], $bill['orderId']);
+    $out = $finish($k);
+    $row = Tfm\Db::one('SELECT tier, auto_renew FROM subscriptions WHERE user_id = ?', [$uid]);
+    $off = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE user_id = ? AND event = 'sub_autorenew_off'", [$uid]);
+    return $claimed && $out === 'ok' && (int) $row['tier'] === 4 && (int) $row['auto_renew'] === 0 && $off === 1 ? true : json_encode([$claimed, $out, $row, $off]);
+});
 // ------------------------------------------------------------------ secret:rotate (item 21)
 check('secret:rotate --data-key — every sealed billing key is sealed again with the new key, the old key is gone, rotated_at is set', function () use ($payUser) {
     $u = $payUser();
