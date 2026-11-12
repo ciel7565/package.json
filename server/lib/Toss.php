@@ -22,7 +22,8 @@
  * slow<ms>_ (answers after a pause: races), timeout_ (a network error after the payment). issue hands out
  * "mock_bk_…" billing keys (an authKey "mock_amount<N>_…" gives a key whose charges answer N, "mock_slow<ms>_…" one
  * whose charges answer after a pause), and a charge always succeeds unless the orderId ends with "_fail" (tests).
- * The secret key is never logged. PHP 7.2 syntax only.
+ * The secret key is never logged, and neither is a billing key or a payment key: they are part of some addresses, so a
+ * log line names the endpoint's shape (/v1/billing/{billingKey}) and error texts lose the key. PHP 7.2 syntax only.
  */
 declare(strict_types=1);
 
@@ -295,21 +296,46 @@ final class Toss
         // PHP 8 frees the CurlHandle object by itself; curl_close() is a no-op there and deprecated since 8.5 (a deprecation
         // notice would become an exception under the API error handler)
         if (PHP_VERSION_ID < 80000) curl_close($ch);
+        $ep = self::endpoint($path);
         if ($raw === false || $errno !== 0) {
-            Log::error('TOSS', 'transport error', ['path' => $path, 'errno' => $errno, 'err' => mb_substr((string) $err, 0, 120)]);
+            Log::error('TOSS', 'transport error', ['path' => $ep, 'errno' => $errno, 'err' => mb_substr(self::scrub((string) $err, $path), 0, 120)]);
             throw new TossException('NETWORK_ERROR', '결제 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.', 0);
         }
         $j = Json::tryDecode((string) $raw, true);
         if (!is_array($j)) {
-            Log::error('TOSS', 'non-JSON answer', ['path' => $path, 'http' => $http]);
+            Log::error('TOSS', 'non-JSON answer', ['path' => $ep, 'http' => $http]);
             throw new TossException('BAD_RESPONSE', '결제 서버 응답을 읽지 못했어요.', $http);
         }
         if ($http >= 400 || isset($j['code'])) {
-            $code = isset($j['code']) && is_string($j['code']) ? $j['code'] : 'HTTP_' . $http;
-            $msg = isset($j['message']) && is_string($j['message']) ? $j['message'] : '결제가 처리되지 않았어요.';
-            Log::warn('TOSS', 'api error', ['path' => $path, 'http' => $http, 'code' => $code]);
+            $code = self::scrub(isset($j['code']) && is_string($j['code']) ? $j['code'] : 'HTTP_' . $http, $path);
+            $msg = self::scrub(isset($j['message']) && is_string($j['message']) ? $j['message'] : '결제가 처리되지 않았어요.', $path);
+            Log::warn('TOSS', 'api error', ['path' => $ep, 'http' => $http, 'code' => $code]);
             throw new TossException(substr($code, 0, 60), mb_substr($msg, 0, 200), $http);
         }
         return $j;
+    }
+
+    /**
+     * What a log line may say about a call (review finding: keys in the logs). Some addresses hold a key —
+     * /v1/billing/{billingKey} (a reusable card-charging credential: the database keeps it sealed) and
+     * /v1/payments/{paymentKey} — so the log names the endpoint's shape, never the key in it.
+     */
+    private static function endpoint(string $path): string
+    {
+        if ($path === '/v1/payments/confirm' || $path === '/v1/billing/authorizations/issue') return $path;
+        if (preg_match('#^/v1/payments/[^/]+/cancel$#', $path)) return '/v1/payments/{paymentKey}/cancel';
+        if (preg_match('#^/v1/payments/[^/]+$#', $path)) return '/v1/payments/{paymentKey}';
+        if (preg_match('#^/v1/billing/[^/]+$#', $path)) return '/v1/billing/{billingKey}';
+        return '/v1/{…}';
+    }
+
+    /** $text without the key parts of $path (a transport error or the gateway's message may repeat the address) */
+    private static function scrub(string $text, string $path): string
+    {
+        foreach (explode('/', $path) as $seg) {
+            if ($seg === '' || in_array($seg, ['v1', 'payments', 'billing', 'confirm', 'cancel', 'authorizations', 'issue'], true)) continue;
+            foreach (array_unique([$seg, rawurldecode($seg)]) as $s) if (strlen($s) >= 4) $text = str_replace($s, '…', $text);
+        }
+        return $text;
     }
 }

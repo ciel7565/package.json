@@ -722,6 +722,56 @@ check('renewal — a forced renewal ("지금 갱신 시도", renew.php force, su
     $f2 = $skipOf(Tfm\Subscription::renewDue((int) $w['id'], true), (int) $w['id']);
     return $f1 === 'failed:past_due' && $f2 === 'failed:past_due' && count($renewals((int) $w['id'])) === 2 ? true : 'retry after a failure: ' . json_encode([$f1, $f2, $renewals((int) $w['id'])]);
 });
+
+// ------------------------------------------------------------------ the gateway keys never reach the log (item 1: the billing key is a card-charging credential)
+/** a TCP port nobody listens on right now (the OS picks it) */
+$freePort = function (): int {
+    $s = stream_socket_server('tcp://127.0.0.1:0', $en, $es);
+    $name = (string) stream_socket_get_name($s, false);
+    fclose($s);
+    return (int) substr($name, strrpos($name, ':') + 1);
+};
+check('Toss — a failed gateway call never writes the billing key or the payment key to the log (no connection, an HTML answer, a 4xx answer; charge, look-up, cancel); the line still names the call', function () use ($tmp, $freePort) {
+    // a stand-in gateway: 4xx JSON whose message repeats the address, or an HTML 502 for addresses with HTMLX in them
+    $dir = $tmp . '/toss-stub-' . bin2hex(random_bytes(3));
+    mkdir($dir, 0700);
+    file_put_contents($dir . '/router.php', '<?php $u = (string) $_SERVER["REQUEST_URI"]; if (strpos($u, "HTMLX") !== false) { http_response_code(502); header("Content-Type: text/html"); echo "<html><body>bad gateway " . htmlspecialchars($u) . "</body></html>"; return true; } http_response_code(400); header("Content-Type: application/json"); echo json_encode(["code" => "REJECT_CARD_PAYMENT", "message" => "refused " . $u]); return true;');
+    $port = $freePort();
+    $stub = proc_open([PHP_BINARY, '-S', "127.0.0.1:$port", $dir . '/router.php'], [0 => ['pipe', 'r'], 1 => ['file', $dir . '/stub.log', 'a'], 2 => ['file', $dir . '/stub.log', 'a']], $pp, $dir);
+    for ($i = 0; $i < 100; $i++) { $s = @fsockopen('127.0.0.1', $port, $en, $es, 0.2); if ($s) { fclose($s); break; } usleep(50000); }
+    $bk = 'bk_SECRETBILLINGKEY_' . bin2hex(random_bytes(6));
+    $pk = 'pk_SECRETPAYMENTKEY_' . bin2hex(random_bytes(6));
+    $calls = [
+        'charge 4xx' => function () use ($bk) { Tfm\Toss::charge($bk, 'cus_unit', 2900, 'ORDERUNIT0001', '진행 속도 2배'); },
+        'charge HTML' => function () use ($bk) { Tfm\Toss::charge($bk . 'HTMLX', 'cus_unit', 2900, 'ORDERUNIT0002', '진행 속도 2배'); },
+        'look-up 4xx' => function () use ($pk) { Tfm\Toss::payment($pk); },
+        'cancel 4xx' => function () use ($pk) { Tfm\Toss::cancel($pk, '테스트'); },
+        'charge, no connection' => function () use ($bk, $freePort) { Tfm\Config::override('toss.api_base', 'http://127.0.0.1:' . $freePort()); Tfm\Toss::charge($bk, 'cus_unit', 2900, 'ORDERUNIT0003', '진행 속도 2배'); },
+    ];
+    $seen = [];
+    try {
+        Tfm\Config::override('toss.mock', false);
+        Tfm\Config::override('toss.client_key', 'test_ck_' . str_repeat('C3', 10));
+        Tfm\Config::override('toss.secret_key', 'test_sk_' . str_repeat('D4', 10));
+        foreach ($calls as $label => $fn) {
+            Tfm\Config::override('toss.api_base', "http://127.0.0.1:$port");
+            try { $fn(); $seen[$label] = 'no error'; } catch (Tfm\TossException $e) { $seen[$label] = $e->tossCode . ' ' . $e->getMessage(); }
+        }
+    } finally {
+        foreach (['toss.mock', 'toss.client_key', 'toss.secret_key', 'toss.api_base'] as $k) Tfm\Config::override($k, null);
+        proc_terminate($stub);
+        proc_close($stub);
+    }
+    $log = '';
+    foreach (glob(Tfm\Log::dir() . '/app-*.log.php') ?: [] as $f) $log .= (string) file_get_contents($f);
+    $leaks = preg_match_all('/[^\n]*SECRET(?:BILLING|PAYMENT)KEY[^\n]*/', $log, $m) ? $m[0] : [];
+    if ($leaks) return count($leaks) . ' log line(s) hold a key, e.g. ' . substr($leaks[0], 0, 200);
+    foreach ($seen as $label => $what) {
+        if ($what === 'no error') return "$label: the call did not fail";
+        if (strpos($what, 'SECRET') !== false) return "$label: the error message carries the key: $what";
+    }
+    return strpos($log, 'billing/{billingKey}') !== false && strpos($log, 'payments/{paymentKey}') !== false ? true : 'the log does not name the calls: ' . json_encode($seen);
+});
 // ------------------------------------------------------------------ secret:rotate (item 21)
 check('secret:rotate --data-key — every sealed billing key is sealed again with the new key, the old key is gone, rotated_at is set', function () use ($payUser) {
     $u = $payUser();
