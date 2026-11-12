@@ -63,6 +63,14 @@ final class Session
         if (!is_dir($dir)) Config::ensureDir($dir, true);
         session_save_path($dir);
         session_name($name);
+        // CONTRACT §15.7 #9: in resume mode, adopt a cookie only when it names a session we actually issued. A bogus
+        // or rotated id would otherwise make use_strict_mode mint a brand-new session on every request — a fresh
+        // data/sessions file and a new per-session rate bucket each time — so a client sending a different TFMSESSID
+        // per request could defeat the per-session limit and pile up session files. An id with no stored file is
+        // treated as no session (guest): no file is written, no Set-Cookie is sent, and the per-address rate bucket
+        // (the generous aggregate) is what bounds the flood. Sessions are still created where they must be (ping and
+        // the pages that hand out a token pass $create = true).
+        if (!$create && !self::issuedSessionExists($dir, (string) $cookie)) return;
         Cookie::session(Http::basePath(), $https);
         if (!@session_start()) {
             // corrupt/locked session file: start over with a fresh id
@@ -72,6 +80,17 @@ final class Session
         self::$started = true;
         self::checkLifetime($cfg);
         if (random_int(1, 150) === 1) self::gcAnonymous($dir, (int) (isset($cfg['idle_timeout']) ? $cfg['idle_timeout'] : 7200));
+    }
+
+    /**
+     * Does a stored session file exist for this id? Resume-mode guard against bogus / rotated session cookies: a
+     * well-formed id (the files handler names its file sess_<id>; with sid_bits_per_character = 6 an id is made of
+     * [0-9a-zA-Z,-]) with no file under the save path was never issued by us, so it must not start a session.
+     */
+    private static function issuedSessionExists(string $dir, string $id): bool
+    {
+        if ($id === '' || preg_match('/^[A-Za-z0-9,\\-]{20,64}$/', $id) !== 1) return false;
+        return is_file($dir . DIRECTORY_SEPARATOR . 'sess_' . $id);
     }
 
     /**

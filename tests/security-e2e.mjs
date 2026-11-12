@@ -2061,6 +2061,21 @@ async function S09() {
     const u = await newUser(s, 'Rrp');
     return judge(await hammer(14, (i) => u.json('api/chat/report.php', { target: `someone${i}`, reason: 'spam' })), 'chat/report', 14);
   });
+  // CONTRACT §15.7 #9 — a rotating / bogus session cookie must not defeat the per-session rate bucket by minting a
+  // fresh session (a new data/sessions file + a new bucket) on every request to a resume-only endpoint.
+  await check('S09', 'rotating / bogus session cookies on a resume-only endpoint do not pile up session files (the per-session rate bucket cannot be defeated by a new cookie each request)', { sev: 'low', fix: 'In Session::start resume mode, adopt a cookie only when a session file it issued exists for that id; an unknown / rotated id is treated as no session (no new file, no new bucket), so the per-address aggregate bounds the flood.' }, async () => {
+    const sessDir = path.join(s.dataDir, 'sessions');
+    const count = () => { try { return fs.readdirSync(sessDir).filter((f) => f.startsWith('sess_')).length; } catch { return 0; } };
+    const before = count();
+    for (let i = 0; i < 12; i++) {
+      const bogus = ('rev' + RUN + String(i).padStart(2, '0')).padEnd(40, 'a');   // well-formed-looking, but never issued
+      const r = await request(s, 'api/time.php', { headers: { Cookie: `TFMSESSID=${bogus}` } });
+      assert(r.status === 200, `api/time.php (bogus cookie) → ${r.status}`);
+    }
+    const grew = count() - before;
+    assert(grew === 0, `${grew} new session files after 12 requests with distinct bogus cookies — a resume endpoint minted a session for an id it never issued`);
+    return `12 distinct bogus cookies → ${grew} new session files`;
+  });
   // CONTRACT §15.7 #9 — every endpoint has a named limit
   await check('S09', 'every other endpoint answers 429 + Retry-After within its documented budget', { sev: 'medium', fix: 'Give every endpoint (also new ones) a \'rate\' => name in Api::run and an entry in config rate_limits.' }, async () => {
     const u = await newUser(s, 'Rev'), adm = await admin(s);
