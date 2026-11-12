@@ -62,8 +62,9 @@ final class RateLimit
      * The classic fixed window resets its count at each window boundary, so a burst that straddles the boundary (part in
      * window N, part in N+1) is never seen as one burst and the limit does not trip. We keep one counter per window as
      * before, but on each hit we also read the previous window and estimate the rate over the trailing full window as
-     * `prev × (fraction of the previous window still inside the trailing window) + current`. The estimate never drops
-     * below the real count, so `limit` requests in any rolling window are enough to trip it, whatever the clock.
+     * `prev × (fraction of the previous window still inside the trailing window) + current`. We round that previous-window
+     * contribution UP (ceil), so the estimate never drops below the real count — a burst of `limit + 1` that straddles a
+     * boundary still trips (floor would shed the fraction and quietly allow one extra request in the rolling window).
      */
     public static function hit(string $name, string $ident, ?int $limit = null, ?int $window = null): void
     {
@@ -93,7 +94,7 @@ final class RateLimit
         $prev = $res[1];
         $elapsed = $now - $curWin * $winLen;                 // ms into the current window
         $prevWeight = max(0.0, 1.0 - $elapsed / $winLen);    // how much of the previous window is still in the trailing window
-        $estimate = (int) floor($prev * $prevWeight) + $cur;
+        $estimate = (int) ceil($prev * $prevWeight) + $cur;
         if (random_int(1, 100) <= 2) self::cleanup();
         if ($estimate > $limit) {
             // wait until the current window ends (the previous window has fully aged out by then); a full window when
