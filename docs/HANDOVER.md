@@ -29,10 +29,10 @@
 ### B. XAMPP 서버 모드
 1. `npm run build` → `dist/metaverse/` 폴더 전체를 `C:\xampp\htdocs\metaverse` 로 복사
 2. XAMPP 에서 **Apache** 시작 (DB 는 SQLite 기본이라 MySQL 없이 동작)
-3. `http://localhost/metaverse/` 접속 → 화면 위 칩이 **서버** 인지 확인 → 회원가입
-4. 서버 PC 에서 `http://localhost/metaverse/admin.php` → 로그인 → "이 계정을 관리자로 지정"
-5. 개발자 센터 › 🌐 서버 점검 과 `admin.php` › 시스템 점검에서 ⛔/⚠️ 를 모두 해결
-6. 자세한 설정(MySQL·Nginx·HTTPS·환경 변수)은 `server/README-SERVER.md`
+3. `http://localhost/metaverse/install.php` → 서버 PC 에서 `php cli/tfm.php setup-code` 로 본 **설치 코드** + DB + 첫 관리자 → 설치 (완료 화면의 **새 관리자 센터 주소**를 적어 두기)
+4. `http://localhost/metaverse/` 접속 → 화면 위 칩이 **서버** 인지 확인
+5. 개발자 센터 › 🌐 서버 점검 과 관리자 센터 › 🩺 시스템 점검에서 ⛔/⚠️ 를 모두 해결 (관리자 센터 잠그기·DB 잠그기: `docs/SECURITY-REPORT-KO.md` §2)
+6. 자세한 설정(MySQL·Nginx·HTTPS·환경 변수)은 `server/README-SERVER.md`, 단계별 설치는 `docs/SERVER-INSTALL-KO.md`
 
 ### C. 개발용 PHP 내장 서버
 ```bash
@@ -84,7 +84,7 @@ node tests/server-e2e.mjs http://127.0.0.1:8080/ # 서버 보안·기능 E2E
 | 66 | fx | 연출 | 파티클·레벨업·코인·도장·달리기 선·순간이동 문·구역 배너·퀘스트 빛기둥 |
 | 70 | app | 앱 셸 | 부팅·로그인(PBKDF2)·타이틀·메뉴·설정·튜토리얼 |
 | 80 | devcenter | 개발자 센터 | 점검·데이터 검증·자가 테스트·디버그·문서·인수인계 |
-| `server/` | PHP API·admin.php·lib | 서버 | 인증·검증 저장·채팅·접속자·업로드·관리 |
+| `server/` | PHP API·관리자 센터(`admin/`)·lib·cli | 서버 | 인증·검증 저장·채팅·접속자·업로드·관리·보안 잠금(§18) |
 | `tools/` `tests/` | build·smoke·package·server-e2e | 코어·서버 | 빌드·테스트·배포 |
 
 - 파일별 담당·역할·줄 수·sha 는 개발자 센터 › 🗂️ 소스 구조 에서 실시간으로 볼 수 있어요(빌드 매니페스트 기반).
@@ -94,7 +94,7 @@ node tests/server-e2e.mjs http://127.0.0.1:8080/ # 서버 보안·기능 E2E
 
 | 여는 법 | `?dev=1`(부팅 후 자동) · **F9** / **`** · **Ctrl+Shift+D** · Esc 메뉴 › 🛠️ 개발자·관리자 센터 · `G.sys.devcenter.open('tests')` |
 |---|---|
-| 권한 | 로컬 모드는 항상, 서버 모드는 **서버 관리자 계정** 또는 **서버 PC(localhost)의 `?dev=1`** 만. 관리자인지는 서버가 마지막으로 알려 준 권한으로 봐요(`G.auth.serverUser`) — admin.php 에서 관리자로 지정·해제된 뒤 체험관 안에서 다시 로그인하면 로그아웃 없이 바로 바뀌어요. **쉬운 모드에서는 먼저 보호자 확인**(곱셈 문제)이 나와요 — 자동화는 `G.sys.devcenter.open(tab, {gate:false})` |
+| 권한 | 로컬 모드는 항상, 서버 모드는 **서버 관리자 계정** 또는 **서버 PC(localhost)의 `?dev=1`** 만. 관리자인지는 서버가 마지막으로 알려 준 권한으로 봐요(`G.auth.serverUser`) — 관리자 센터에서 관리자로 지정·해제된 뒤 체험관 안에서 다시 로그인하면 로그아웃 없이 바로 바뀌어요. **쉬운 모드에서는 먼저 보호자 확인**(곱셈 문제)이 나와요 — 자동화는 `G.sys.devcenter.open(tab, {gate:false})` |
 | 다른 창이 뜰 때 | 센터가 열려 있는데 체험관 창이 스스로 뜨면(다시 로그인 창, 다른 창 저장 카드) 센터가 잠시 비켜 줘요. 그 창을 닫으면 센터가 돌아오고, 다시 로그인한 계정이 관리자가 아니면 센터는 닫힌 채로 있어요 |
 
 | 탭 | 확인할 것 |
@@ -183,6 +183,7 @@ FER006: { name: '청국장 체험', resultItem: 'ITEM_CHEONGGUKJANG', resultQty:
 | XSS | 사용자·서버·가져온 문자열은 `textContent` / `G.ui.h()` / `G.ui.esc()` 로만 출력. 이미지는 `data:image/(png|jpeg|webp)` 또는 같은 출처만 |
 | 로컬 계정 | PBKDF2-HMAC-SHA256 60만 회 + 계정별 16바이트 솔트(WebCrypto, 없으면 같은 알고리즘의 JS 구현), 상수 시간 비교, 5회 실패 시 잠금 |
 | 서버 | PDO prepared statement, `password_hash`(Argon2id 지원 시), 세션 쿠키 HttpOnly·SameSite=Lax·(HTTPS 시) Secure, CSRF(`X-CSRF-Token`), 빈도 제한, 업로드 MIME·크기 검사·재인코딩, 저장 검증 |
+| 서버 보안 잠금 (7단계) | HTTPS 강제 · 모든 입력 `Tfm\V` 검사 · 보안 기록·자동 차단 · 관리자 센터 경로 잠금(무작위 폴더·허용 주소·2단계 인증·승격) · 엔드포인트별 한도 · 좁힌 CORS · 머리글 한 벌 · 결제 금액·토스 답 확인 · DB 전용 계정 · 빌링키·2단계 비밀 키 봉인 · 설정 점검(`ConfigAudit`) — §18 과 `docs/SECURITY-REPORT-KO.md` |
 | 개발자 센터 | 서버 모드에서는 관리자/서버 PC 만, 쉬운 모드에서는 보호자 확인 먼저, 치트는 모두 기록, 보고서·화면에 해시·토큰·전체 이메일·화면 글자(닉네임) 미표시 |
 | 어린이 안전 | 쉬운 모드 글자 입력 0개(kidChat·nameIdeas), 보호자 확인, 채팅 개인정보 🔒 가림(클라이언트 + 서버 저장 전), 개인정보 닉네임 거부, 랭킹 칭호 화이트리스트, 놀이 시간 알림, 3 Hz 이하 깜빡임 (§13) |
 
@@ -221,7 +222,7 @@ FER006: { name: '청국장 체험', resultItem: 'ITEM_CHEONGGUKJANG', resultQty:
 | 화면이 검거나 매우 느림 | 설정 › 그래픽 품질 '낮음', 개발자 센터 › 시스템 점검의 GPU 이름 확인(소프트웨어 렌더러인지) |
 | 화면에 검은 사각형이 번쩍임 | §14 — 시스템 점검 › GPU 안전의 노멀·납작한 메시·후처리 순서와 NaN 주입 테스트 |
 | 아이가 어른 화면(설정 등)에 들어감 | 👶 쉬운 모드 점검 › 🎬 화면 차례로 의 🔒 보호자 확인 항목, `parentGate` 설정 |
-| 채팅에 전화번호가 보임 | 자가 테스트 › 🔒 개인정보 가림, 서버는 admin.php 시스템 점검 "어린이 개인정보 가림" |
+| 채팅에 전화번호가 보임 | 자가 테스트 › 🔒 개인정보 가림, 서버는 관리자 센터 🩺 시스템 점검 "어린이 개인정보 가림" |
 | 특정 기능만 안 됨 | 개발자 센터 › 모듈 상태 — ⛔ 초기화 실패/⚠️ 업데이트 중지 시스템과 마지막 오류 메시지 |
 | 빌드 경고 "skipping NN (syntax error)" | 해당 조각 문법 오류 — 메시지의 줄 번호 확인, `--strict` 로 배포 차단 |
 | 퀘스트·도감이 진행 안 됨 | 데이터 검증 탭에서 잘못된 ID 참조 확인, 이벤트 흐름 지도에서 이벤트 발행 횟수 확인 |
@@ -302,7 +303,7 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 - **클라이언트**: `G.sys.social.maskPII(text)` (60-social.js) — 로컬 모드·말풍선·체험객 대사에도 적용.
 - **서버**: `server/lib/ChatFilter.php` 의 `maskPII()` 가 **DB 에 저장하기 전에** 가리고(응답 `piiMasked:true`), 목록을 내보낼 때 한 번 더 가리고(예전 메시지), 신고 메모도 가려요. 닉네임이 개인정보처럼 보이면 가입 거부(`NICKNAME_INVALID`). 랭킹 칭호는 `game-data.json` 의 `titles` 에 있는 것만 보여요(저장 파일의 자유 문장 차단).
 - **숨긴 형태도 가려요**: 먼저 쓴 그대로 가리고, 한 번 더 "펼친" 글자(NFKC: 전각 `０１０`·`＠`·`．`, 수학 글꼴 `𝟎𝟏𝟎`, 키캡 `0️⃣`, 아랍·인도 숫자 `٠١٠` → `010`)로 검사해요. 숫자 사이 구분자 `/ _ ~ * · – — ㅡ ( ) [ ]`, 한글 숫자와 아라비아 숫자 섞기("010 일이삼사 5678", "공1공…"), "공일공-일이삼사-오육칠팔", 국번 없는 "1234-5678", 영어로 쓴 "abc at gmail dot com", "지메일 닷컴", "bad[.]com · bad(.)com · bad . com", 주소 뒤 번지("역삼동 123-4"), 띄어 쓴 "해바라기 초등학교" 까지 🔒.
-- 두 구현은 **규칙 목록이 하나**예요(4단계). 규칙은 `60-social.js` 의 `// >>> PII ENGINE` 블록에만 쓰고, `node tests/pii-sync.mjs` 가 그것을 **`server/lib/pii-rules.json`** 으로 내보내요(배포 때 `ChatFilter.php` 옆에 같이 올라가요; 접기·숫자 단위·닉네임 판단은 `ChatFilter.php` 가 같은 방식으로 따라 해요). `--strict` 빌드는 `pii-sync --check` 로 둘이 다르면 실패해요. 공통 테스트 벡터는 **`tests/pii-vectors.json`**(전체 🔒 · 일부 🔒 · 그대로 · 새면 안 되는 것 · 닉네임 거부/허용, 지금 587문장 + 닉네임 40개) — `node tests/pii-client.mjs` 가 빌드된 체험관과 PHP(intl 있음·없음) 결과가 **글자 하나까지 같은지** 보고, 서버 E2E 와 자가 테스트(`window.__BUILD__.piiVectors`)도 같은 벡터를 돌려요. 규칙을 바꾸면: PII ENGINE 블록 수정 → 벡터 추가 → `node tests/pii-sync.mjs` → `node tests/pii-client.mjs --file …` + `node tests/server-e2e.mjs` + admin.php 시스템 점검의 "어린이 개인정보 가림" 을 확인하세요. "새로 30개", "2층으로 3번", "서울 친구", "유치원 가기 싫어", "@닉네임", "1000 2000 코인", "I am at home. so tired" 같은 보통 문장은 그대로여야 해요.
+- 두 구현은 **규칙 목록이 하나**예요(4단계). 규칙은 `60-social.js` 의 `// >>> PII ENGINE` 블록에만 쓰고, `node tests/pii-sync.mjs` 가 그것을 **`server/lib/pii-rules.json`** 으로 내보내요(배포 때 `ChatFilter.php` 옆에 같이 올라가요; 접기·숫자 단위·닉네임 판단은 `ChatFilter.php` 가 같은 방식으로 따라 해요). `--strict` 빌드는 `pii-sync --check` 로 둘이 다르면 실패해요. 공통 테스트 벡터는 **`tests/pii-vectors.json`**(전체 🔒 · 일부 🔒 · 그대로 · 새면 안 되는 것 · 닉네임 거부/허용, 지금 587문장 + 닉네임 40개) — `node tests/pii-client.mjs` 가 빌드된 체험관과 PHP(intl 있음·없음) 결과가 **글자 하나까지 같은지** 보고, 서버 E2E 와 자가 테스트(`window.__BUILD__.piiVectors`)도 같은 벡터를 돌려요. 규칙을 바꾸면: PII ENGINE 블록 수정 → 벡터 추가 → `node tests/pii-sync.mjs` → `node tests/pii-client.mjs --file …` + `node tests/server-e2e.mjs` + 관리자 센터 🩺 시스템 점검의 "어린이 개인정보 가림" 을 확인하세요. "새로 30개", "2층으로 3번", "서울 친구", "유치원 가기 싫어", "@닉네임", "1000 2000 코인", "I am at home. so tired" 같은 보통 문장은 그대로여야 해요.
 - 서버 DB 의 반복 스팸 키(`chat_messages.text_key`)는 **가린 글**에서 만들어요(예전에는 원문 → 전화번호가 30일 동안 남았음). 스키마 v2 가 예전 키를 비웁니다(`Db::SCHEMA_VERSION = 2`, 자동 마이그레이션).
 - 쉬운 모드 채팅(`kidChat`)은 글자 입력 없이 문장·이모지만 골라요 — 가림 이전에 애초에 쓸 수 없게.
 
@@ -354,6 +355,8 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 - [ ] smoke 테스트 ✔ SMOKE OK, 자가 테스트 전부 통과, 데이터 검증 오류 0건
 - [ ] (서버) XAMPP 설치·첫 관리자 지정·`config.local.php`·HTTPS·백업 일정
 - [ ] 보안 점검: CSP 위반 0건, 관리자 비밀번호 교체
+- [ ] 🔒 (서버, 7단계) 관리자 센터 주소를 무작위 이름으로(`php cli/tfm.php admin:path` 로 확인) · 관리자마다 2단계 인증 등록 → `admin_2fa = required` · 관리자 허용 주소 · 떠나는 사람의 2단계 인증 지우기(`admin:2fa-reset`)와 권한 해제(`demote`)
+- [ ] 🔒 (서버, 7단계) DB 전용 계정(🩺 "DB 계정" ✅) · 내 토스 키 · `php cli/tfm.php config:check` ⛔ 0 · 백업에 `data/secret.php` 포함 · 키 바꾸기 계획(`secret:rotate`, `db:rotate-password`, 토스·Claude 콘솔) — `docs/SECURITY-REPORT-KO.md` §2
 - [ ] 👶 `node tools/kid-audit.mjs --both` ⛔ 치명 0건 · 🖥️ GPU 안전 ✅ · 🔒 개인정보 가림 자가 테스트·서버 E2E 통과
 - [ ] 🔒 프로필 설정이 기기에 새지 않는지(§13.4) · 보호자 확인 마구 누르기(§13.1) · 온보딩 카드가 금빛 버튼을 가리지 않는지(§13.5)
 - [ ] 🔒 `node tests/pii-sync.mjs --check` · `node tests/pii-client.mjs --file dist/metaverse/index.html` 통과
@@ -368,6 +371,7 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 | 이전 담당자 / 연락처 | |
 | 새 담당자 / 연락처 | |
 | 서버 주소 · 관리자 계정 보관 위치 | (비밀번호는 문서에 적지 말 것) |
+| 관리자 센터 주소 · 2단계 인증 백업 코드 보관 위치 | (주소는 서버 PC 에서 `php cli/tfm.php admin:path` · 코드 자체는 적지 말 것) |
 | 마지막 배포 버전 · 날짜 | |
 | 백업 위치 · 주기 | |
 
@@ -408,7 +412,7 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 - **알림함 "친구가 나를 불렀어요":** 저장되는 알림에는 다른 사람의 닉네임도 채팅 글도 없어요(고정 문구 "눌러서 채팅을 봐요."). 누가 무엇을 썼는지는 이번 접속 동안 메모리에만 있고(어른 알림함에 보여요), 그 줄이 거둬지면 알림도 지워져요. 예전 저장에 남은 글은 불러올 때 지워요.
 - **채팅 쉬기(MUTED):** 서버가 `data.until`·접속자 응답 `mutedUntil` 로 언제까지인지 알려 주고, 그동안은 보내지 않아요. 아이에게는 "지금은 말하기를 잠깐 쉬어요." 만 들려요. 로컬 모드는 신고 기록을 남기지 않아요(`tfm.v1.chat.reports` 는 프로필을 불러올 때 지워요).
 - **로그인이 풀렸을 때:** 채팅·접속자 폴링은 한 번만 알리고 접속자 보내기를 멈춰요(다른 친구 모습도 사라져요). 저장이 다시 되거나 새로 로그인하면 다시 시작해요. 아이가 "나중에" 를 누르면(보호자 확인을 그만두거나 다시 로그인 창을 그냥 닫아도) 이번 로그인 동안은 다시 묻지 않아요 — 직접 "저장하기" 를 누르면 다시 물어요. 다시 로그인 창이 열리면 비밀번호 칸에 바로 글을 쓸 수 있어요. 서버는 401 에 이유를 붙여요(`data.why`: epoch · banned · deleted · other account). 데이터베이스를 되돌린 뒤 같은 번호의 다른 계정에 예전 세션이 붙지 않게 세션이 계정의 만든 시각(`born`)을 기억해요(`Session::ownsAccount`, README-SERVER §9).
-- **운영자 복원:** admin.php 의 "직전 저장으로 되돌리기" 는 그 저장에 표시(`meta.restoredRev`)를 남겨요. 다른 기기에서 놀던 창이 저장하려 하면 서버가 `STALE_SAVE` + `data.restored: true` 로 알려 주고, 체험관은 되돌린 기록을 불러와 "운영자가 되돌린 저장 기록을 불러왔어요." 라고 말하며 이 기기에 보관한 기록은 버려요.
+- **운영자 복원:** 관리자 센터(6단계에는 admin.php)의 "직전 저장으로 되돌리기" 는 그 저장에 표시(`meta.restoredRev`)를 남겨요. 다른 기기에서 놀던 창이 저장하려 하면 서버가 `STALE_SAVE` + `data.restored: true` 로 알려 주고, 체험관은 되돌린 기록을 불러와 "운영자가 되돌린 저장 기록을 불러왔어요." 라고 말하며 이 기기에 보관한 기록은 버려요.
 - **역할·가입 한도:** 저장의 `profile.role` 이 계정과 다르면 서버가 계정 역할로 고쳐 저장해요(거절해서 저장이 계속 실패하던 문제 해결). 같은 인터넷 주소(학교·집)에서 가입이 너무 많으면 `REGISTER_IP_LIMIT` 로 알려 주고, 체험관은 "이 인터넷 주소에서 가입이 너무 많았어요. 약 N분 후에…" 라고 말해요.
 - **두 번 톡톡 막기:** 창이 열리고 닫힐 때의 보호(`shieldTaps`)와 혼자 뜨는 카드의 보호(`G.ui.armTaps`)는 손가락이 닿은 시각(이벤트 시각)으로 판단해요 — 느린 기기에서도 두 번째 톡톡이 새지 않아요. 옹이 말풍선(보상 받기 단추가 있는 카드)도 이 보호를 받아요. 두 번째 손가락으로 누른 [data-action] 단추는 손을 뗄 때 한 번 동작해요.
 - **화면 크기:** 대화창 바깥 여백·팝오버가 노치·홈 막대(`safe-area-inset`)를 피해요. 보통 모드 터치 화면의 단추는 모두 40 px 이상이에요(상점 수량, 일지 칩, 오늘 탭, 이모지 탭, 개발자 센터 아이콘, 칭호, 지도 구역 줄). 지도 위 구역 이름표와 배움 페이지 점은 모양은 그대로, 누르는 자리만 40 px 로 넓어요. 쉬운 모드: 옹이 말풍선 얼굴 56 px, 아주 좁은 화면(360 px 미만)의 날씨 그림 3 + 2 줄, 아이 창 제목은 낱말 중간에서 줄이 바뀌지 않아요. 오늘(출석) 인사말은 휴대폰에서 줄을 바꿔 다 보여요.
@@ -416,3 +420,56 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 - **지도·탭·글 속 링크:** 지도 구역 이름표에서 시작한 마우스 끌기를 지도 밖(오른쪽 칸, 창 밖)에서 놓아도 끌기가 끝나요 — 그냥 마우스를 움직여서는 지도가 움직이지 않아요. 휴대폰에서 옆으로 넘기는 탭 줄은 설정을 뒤쪽 탭(아이 보호·데이터·계정)으로 바로 열어도 그 탭이 보이게 넘어가 있어요. 보통 모드 휴대폰의 처음 화면 글 속 링크(이용약관, 로그인)는 누르는 자리만 40 px 이고 줄 높이는 그대로예요. 체크 상자는 글자 가운데에 맞춰요.
 - **사진·날씨:** 셔터는 0.6초 안에 다시 눌러도 한 장만 찍어요. 날씨 카드는 화면보다 길면 스크롤해요. 낮은 가로 화면에서 앨범은 아래 단추 줄이 화면 안에 남아요.
 - **개발자 센터:** 자가 테스트 108개(이번에 13개 추가: 거둔 줄, 쉬운 채팅의 안 볼래요 줄, 알림함 언급, 놀이 시간 기록 형식, 쉬는 시간 카드, 아이 카드 아래 단추 줄, armTaps, [data-action] 한 번, 대화 중 이름표 층, 로그인 때 인트로 보류, 월드맵 좌표, 셔터 두 번 톡톡, 날씨 카드 스크롤). 배움 카드와 내 장독 카드는 열면 "봤어요/살펴봤어요" 기록이 남아서 자가 테스트가 열지 않아요(빈 장독만 열어요).
+
+## 17. 6단계: 서버 환경(Apache 2.4 · PHP 7.2 · MariaDB 10.3) · 진행 속도 구독 (기준: CONTRACT §14)
+
+> 이 절은 6단계 문서 정리 때 채워요. 지금은 `server/README-SERVER.md`(구독·토스 결제·PHP 7.2 호환·저장 검증)와 `docs/CONTRACT.md` §14 를 보세요.
+
+## 18. 7단계: 보안 잠금 — "해커가 못 들어오게" (기준: CONTRACT §15.7 · §15.4 · §15.8)
+
+23개 항목의 발견·수리·시험·운영자 할 일은 **`docs/SECURITY-REPORT-KO.md`** 에 있어요. 여기에는 다음 개발자가 알아야 할 **구조와 규칙**만 적어요.
+
+### 18.1 요청이 지나가는 길 (`lib/Api.php` 의 `Api::run`)
+Boot → `Firewall::check()`(막힌 주소 403 `IP_BLOCKED`) → `Http::enforceHttps()`(308 / 403 `HTTPS_REQUIRED`) → `Http::cors()`(공개 GET 만, 사전 요청 403) → 방식 검사(405)
+→ 업로드 거절(`'upload' => true` 가 아닌 곳의 파일 → 400 `UPLOAD_NOT_ALLOWED`) → `V::watch($_GET)`(공격 문자열 기록) → 세션 → 쓰기 요청이면 출처 검사 · 세션 없으면 401 · CSRF
+→ 로그인 확인 → **요청 한도**(`rate`) → 401 / 403(관리자 API 는 관리자 센터 승격까지) → 처리 함수. 페이지(`install.php`, 관리자 센터)는 `Firewall::guardPage()` 로 같은 앞부분을 거쳐요.
+
+### 18.2 새 엔드포인트를 만들 때
+1. `Api::run(['method' => 'POST', 'auth' => true, 'rate' => '새_이름'], function (Ctx $c) { … })` — `config.php` 의 `rate_limits` 에 `새_이름 => [횟수, 초]` 를 더해요. 공격 시험 S09 가 모든 엔드포인트의 한도와 `Retry-After` 를 확인해요.
+2. 본문은 `$b = $c->json(최대 바이트);` → `V::keys($b, [허용 키…])` → 칸마다 `V::str / int / num / bool / enum / id`. 공격 시험 S03 의 검사표에도 그 엔드포인트를 더해요 — 빠지면 "every POST endpoint of the build has a field-level validation matrix" 시험이 실패해요.
+3. 다른 사이트가 읽어야 하는 공개 GET 이면 `'public' => true`(CORS 허용 목록 대상). 파일을 받으면 `'upload' => true` + `Upload::image(...)`.
+4. 수상한 일은 `SecEvent::log('종류', 'warn', [...])`. 공격 같은 종류(`SecurityEvents.php` 의 목록)는 자동 차단에 셈해요. 기록 내용에 비밀 값·키를 넣지 마세요.
+5. SQL 은 `Db::run / one / all / value / exec / insert / upsert` 와 `?` 값만. 이름이 변수일 수밖에 없으면 `Db::ident()` + `tools/sql-audit.allow.json` 에 이유를 적어요.
+6. 돌릴 것: 해당 공격 시험 절(`--only Sxx`), `node tools/sql-audit.mjs`, `bash tools/php-compat.sh`(PHP 7.2 문법), `php -l`.
+
+### 18.3 파일 지도
+| 파일 | 하는 일 |
+|---|---|
+| `lib/SecurityEvents.php` | `SecEvent`(보안 기록) · `Firewall`(차단·자동 차단·해제) |
+| `lib/Validator.php` | `V`(입력 검사, 공격 문자열 감지) |
+| `lib/ConfigAudit.php` | 설정 점검(키 나이 포함) — 🩺 탭, `cli config:check`, 설치 완료 화면 |
+| `lib/Crypto.php` | `PrivateFile`(0600 쓰기) · `Secrets`(`data/secret.php`: 앱 키·데이터 키·날짜) · `Crypto`(AES-256-GCM 봉인 `enc:v1:`) |
+| `lib/Totp.php` | `Totp`(RFC 6238) · `AdminTotp`(등록·백업 코드·코드 잠금) |
+| `lib/Admin.php` | `Health`(점검) · `AdminOps` · `AdminGate`(허용 주소·승격·잠금 머리글) · `AdminPath`(폴더 이름) |
+| `admin/index.php` · `lib/admin.css` | 관리자 센터 (스크립트 0개, 모양 파일은 주소 확인 뒤 `./?css=<해시>`) |
+| `lib/Installer.php` | 설치(전용 DB 계정) · `SetupCode`(설치 코드) · `secret:rotate` · `db:account` · `db:rotate-password` |
+| `install.php` | 설치 마법사 (설치 코드, 무작위 관리자 폴더, 설치 후 점검, 쓰는 서버에서는 404) |
+| `api/trap.php` · 루트 `.htaccess` · `.user.ini` | 함정 · https 이동 · 비공개 파일 차단 · 머리글 · 업로드 상한 |
+| `cli/security.php` · `cli/admin-path.php` | CLI 플러그인 (보안 기록·차단·설정 점검 / 관리자 폴더·2단계 인증) |
+| `tools/sql-audit.mjs` · `tools/secret-scan.mjs` · `tools/exposure-audit.mjs` | 검사 도구 (+ `*.allow.json` 검토 목록) |
+| `tests/security-e2e.mjs` · `tests/admin-lock.mjs` · `tests/*-unit.php` | 공격 흉내 시험 · 관리자 센터 잠금 시험 · 단위 시험 |
+
+### 18.4 사람이 바뀔 때 (운영 인수인계)
+- 관리자 센터 주소는 설치마다 달라요: 서버 PC 에서 `php cli/tfm.php admin:path`.
+- 새 관리자는 직접 🔐 2단계 인증을 등록하고, 떠나는 사람은 `php cli/tfm.php admin:2fa-reset 이메일` + `php cli/tfm.php demote 이메일`. 허용 주소(`admin_ip_allowlist`)에서 그 사람의 주소를 빼요.
+- 떠나는 사람이 키를 알았다면: `secret:rotate`, `db:rotate-password --admin-user root`, 토스 시크릿 키 재발급, (쓴다면) Anthropic 키 재발급 — 보고서 §21.
+- 개발자 센터 인수인계 목록의 "관리자 폴더 이름을 바꾸고 관리자마다 2단계 인증을 켰어요" 와 §15 의 7단계 항목을 함께 체크해요.
+
+### 18.5 시험 (QA 가 돌린 것)
+보고서 §1 의 표: 공격 흉내 시험 SQLite 183/183 · MariaDB 181/181(Apache 포함), 관리자 센터 잠금 52/52, 기능 시험 77/77 × 2, 관리 화면 10/10, 단위 시험(보안 62 · 데이터 76 + 13 건너뜀 / MariaDB 87 · 관리자 53 · 7단계 10 · 서버 7), sql-audit · secret-scan · exposure-audit · npm audit 0, php-compat 0, text-audit 0.
+개발 환경에 PHP 7.2·MariaDB 10.3·Windows Apache 가 없어 그 위에서는 돌리지 못했어요 — 운영 서버에서 확인하는 순서는 보고서 부록 C.
+이 작업 동안 `dist/metaverse` 는 다시 빌드하지 않았어요(시험은 비공개 사본으로): 배포 전에는 `npm run package`(엄격 빌드 포함)로 새로 만드세요.
+
+### 18.6 다음 단계로 미룬 것
+실시간 텃밭·곳간·완료 확인(§15.1–15.3), 개발자 인수인계·점검 탭(`Tfm\Inspect`, §15.5), Claude AI(§15.6). 주인이 보안을 먼저 골랐어요. 요청 한도 이름(`farm_*`, `ai_*`)과 스키마 v6 의 표는 미리 있어요.
+그 기능을 넣을 때는 18.2 를 따르고, 보고서의 항목 3·5·9·13·14 시험을 넓히고, 보고서 부록 B-11 을 지우세요.
