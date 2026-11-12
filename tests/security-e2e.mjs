@@ -2164,22 +2164,27 @@ async function S09() {
     if (logout.at) out.push(`logout@${logout.at}`); else bad.push('api/auth/logout.php: 760 requests, no 429');
     done.add('api/auth/logout.php');
     const u2 = await newUser(s, 'Rev');
-    // two passes: first hammer every endpoint that owns a budget (so its bucket is full), then test the endpoints that
-    // share a bucket. A single alphabetical pass checks a shared endpoint (api/sub/billing-issue, api/admin/health)
-    // before its primary (api/sub/prepare, api/admin/stats) and sees an empty budget.
+    // hammer every endpoint that owns a budget; right after its bucket is full, test the endpoints that share it.
+    // A single alphabetical pass would check a shared endpoint (api/sub/billing-issue, api/admin/health) before its
+    // primary (api/sub/prepare, api/admin/stats) and see an empty budget; checking the sharers only at the very end
+    // lets the thousands of requests to the other endpoints outlast the primary's 60 s window, so the bucket refills
+    // (that is the limiter working, not a gap) and the result would depend on the machine's speed.
     const files = apiFiles(s.docroot).filter((f) => !done.has(f));
+    const sharedChecked = new Set();
     for (const f of files) {
       if (shared[f]) continue;
       const [max, fn] = plan[f] || [401, posts.includes(f) ? () => u2.json(f, {}) : () => u2.req(f)];
       const h = await hammer(max, fn);
       if (h.at && Number(h.r.headers['retry-after']) >= 1) out.push(`${path.basename(f, '.php')}@${h.at}`); else bad.push(`${f}: ${max} requests, ${h.at ? 'a 429 without Retry-After' : 'no 429'}`);
+      for (const g of files) {
+        if (shared[g] !== f) continue;   // shares the bucket that is exhausted right now: one more request must be a 429
+        sharedChecked.add(g);
+        const c = /admin|grant|renew/.test(g) ? adm : u;
+        const r = posts.includes(g) ? await c.json(g, {}) : await c.req(g);
+        if (r.status === 429 && Number(r.headers['retry-after']) >= 1) out.push(`${path.basename(g, '.php')}(shared)`); else bad.push(`${g}: shares the exhausted budget of ${f} but answered ${r.status}`);
+      }
     }
-    for (const f of files) {
-      if (!shared[f]) continue;   // shares the bucket of an endpoint that is exhausted by now: one more request must be a 429
-      const c = /admin|grant|renew/.test(f) ? adm : u;
-      const r = posts.includes(f) ? await c.json(f, {}) : await c.req(f);
-      if (r.status === 429 && Number(r.headers['retry-after']) >= 1) out.push(`${path.basename(f, '.php')}(shared)`); else bad.push(`${f}: shares the exhausted budget of ${shared[f]} but answered ${r.status}`);
-    }
+    for (const f of files) if (shared[f] && !sharedChecked.has(f)) bad.push(`${f}: shares the budget of ${shared[f]}, which this run never exhausted`);
     assert(!bad.length, bad.join('; '));
     return out.join(' ');
   });
