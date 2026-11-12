@@ -73,7 +73,8 @@ a.hash{text-decoration:none}
 form.inline{display:inline}
 .stack{display:grid;gap:12px;text-align:left;margin-top:12px}
 label{display:grid;gap:6px;color:var(--dim);font-size:.9rem}
-input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font:inherit}
+input,select,textarea{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font:inherit}
+textarea{resize:vertical;min-height:4.6em;line-height:1.5}
 .search{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .search input{flex:1 1 220px;width:auto}
 .search select{width:auto;flex:0 1 200px}
@@ -107,5 +108,17 @@ code.secret{display:inline-block;font-size:1.25rem;letter-spacing:.12em;padding:
 .codes{border-color:rgba(244,197,74,.55);background:rgba(36,30,12,.78)}
 .bklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;padding-left:1.4em}
 code.bk{font-size:1.05rem;letter-spacing:.06em;color:var(--gold);user-select:all}
-@media (max-width:640px){.top{position:static}.barrow{grid-template-columns:84px 1fr 40px}th,td{padding:8px}.tiles{grid-template-columns:repeat(2,1fr)}code.secret{font-size:1rem;letter-spacing:.06em}}
+/* phase 7 tabs (CONTRACT §15.4): ✅ completion requests */
+.report{display:grid;gap:12px}
+.report.pending{border-color:rgba(244,197,74,.45)}
+.reportgrid{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:16px;align-items:start}
+img.photo{display:block;max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.3)}
+.nophoto{margin:0;padding:28px 12px;text-align:center;border:1px dashed var(--line);border-radius:12px;color:var(--mute)}
+dl.facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 12px;margin:0;font-size:.9rem}
+dl.facts dt{color:var(--dim)}
+dl.facts dd{margin:0;overflow-wrap:anywhere}
+blockquote.note{margin:10px 0 0;padding:10px 12px;border-left:3px solid var(--green);border-radius:8px;background:rgba(255,255,255,.05);overflow-wrap:anywhere}
+.report form.stack{margin-top:0}
+.report .row{justify-content:flex-start}
+@media (max-width:640px){.reportgrid{grid-template-columns:1fr}.top{position:static}.barrow{grid-template-columns:84px 1fr 40px}th,td{padding:8px}.tiles{grid-template-columns:repeat(2,1fr)}code.secret{font-size:1rem;letter-spacing:.06em}}
 @media print{body{background:#fff;color:#000}body::before,.tabs,.top .who,footer,.btn{display:none}.card{box-shadow:none;border-color:#999;background:#fff;backdrop-filter:none}code,code.bk,code.secret{color:#000;background:#eee}}

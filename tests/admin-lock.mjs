@@ -129,6 +129,18 @@ class Browser {
     if (VERBOSE) console.log(`   ${this.label} ${method} ${url.pathname}${url.search} -> ${res.status} ${text.slice(0, 160).replace(/\s+/g, ' ')}`);
     return { status: res.status, text, headers: res.headers, location: res.headers.get('location'), setCookie: set, json, data: json?.data, error: json?.error, url: url.href, sent: send.map((c) => c.name) };
   }
+  /** a GET whose body is binary (an image): {status, headers, buf} — the cookies are sent and stored like req() */
+  async bytes(p, opts = {}) {
+    const url = new URL(p, this.base);
+    const headers = { ...(opts.headers || {}) };
+    const send = this.jar.filter((c) => Browser.match(url.pathname, c.path));
+    if (send.length) headers.Cookie = send.map((c) => `${c.name}=${c.value}`).join('; ');
+    const res = await fetch(url, { method: opts.method || 'GET', headers, redirect: 'manual' });
+    for (const line of (typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [])) this.store(line, url.pathname);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (VERBOSE) console.log(`   ${this.label} ${opts.method || 'GET'} ${url.pathname}${url.search} -> ${res.status} ${buf.length} bytes`);
+    return { status: res.status, headers: res.headers, buf, text: buf.toString('latin1') };
+  }
   async follow(r) {
     let n = 0;
     while ([301, 302, 303, 307, 308].includes(r.status) && r.location && n++ < 6) r = await this.req(new URL(r.location, r.url).href);
@@ -626,7 +638,7 @@ async function main() {
     await step('S06', 'every tab works for the elevated admin without JavaScript; each response carries the lock headers; links never name the folder', async () => {
       const home = await b1.req(ADM);
       const tabs = [...home.text.matchAll(/<nav class="tabs"[\s\S]*?<\/nav>/g)].flatMap((m) => [...m[0].matchAll(/href="\.\/\?tab=([a-z0-9_]+)"/g)].map((x) => x[1]));
-      for (const need of ['overview', 'beds', 'storage', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
+      for (const need of ['overview', 'beds', 'storage', 'reports', 'health', 'users', 'sub', 'moderation', 'audit', 'maintenance', 'security', 'twofa']) assert(tabs.includes(need), `tab ${need} is in the bar (${tabs.join(', ')})`);
       for (const t of tabs) {
         const p = await b1.req(`${ADM}?tab=${t}`);
         assert(p.status === 200 && isInside(p.text), `tab ${t} → ${p.status}`);
@@ -761,7 +773,7 @@ async function main() {
       assert(isInside((await signInFull(b, ADM, admins.a)).text), 'signed in');
       const P = `"'><script>alert(1)</script><img src=x onerror=alert(2)>`;
       const enc = encodeURIComponent(P);
-      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
+      const urls = [`?tab=beds&status=${enc}&kind=${enc}&q=${enc}&p=${enc}&live=${enc}`, `?tab=overview&live=${enc}&auto=${enc}`, `?tab=storage&q=${enc}&p=${enc}`, `?tab=reports&show=${enc}&q=${enc}&p=${enc}`, `?tab=users&q=${enc}`, `?tab=users&q=${enc}&p=${enc}`, `?tab=audit&ev=${enc}&sev=${enc}&before=${enc}`, `?tab=security&kind=${enc}&sev=${enc}&since=${enc}&ip=${enc}&p=${enc}`,
         `?tab=${enc}`, `?tab=sub&uid=${enc}`, `?tab=moderation&show=${enc}`, `?tab=twofa&x=${enc}`, `?tab=health&${enc}=${enc}`, `?${enc}`];
       for (const u of urls) {
         const r = await b.req(ADM + u);
@@ -1279,6 +1291,7 @@ async function main() {
   // ================================================================= phase-7 tabs: 📊 farm numbers · 🌱 재배 현황 · 🏚️ 곳간 · ✅ 완료 확인 (CONTRACT §15.4)
   if (section('farm')) {
     const s = makeSite('farm');
+    useClaudeDouble(s); // the 🤖 메모 초안 button of the ✅ tab (Claude::enabled, Claude::memoDraft)
     const sv = await startPhp(s);
     try {
       const A = mkUser(s, 'admin');
@@ -1422,6 +1435,122 @@ async function main() {
         assert(/href="\.\/\?tab=storage[^"]*q=gotgan[^"]*(&amp;|&)p=1/.test(p0.text), 'the next link keeps the search');
         assert(/value="gotgan"/.test(p0.text), 'the search box keeps the text');
         return Object.entries(want).map(([q, w]) => `${q.replace(/^&/, '') || 'all'} ${w}`).join(' · ');
+      });
+      const cards = (html) => [...html.matchAll(/<article class="[^"]*\breport\b[^"]*" id="r(\d+)"[^>]*>([\s\S]*?)<\/article>/g)].map((m) => ({ id: Number(m[1]), html: m[2] }));
+      const R = F.reports;
+      await step('15.4', '✅ 완료 확인: pending first (oldest first), then the latest decisions — each with account, crop, bed, the server\'s first-seen / ready / harvested times, stars, the note, the photo and the memo form', async () => {
+        const p = await b.req(`${ADM}?tab=reports`);
+        assert(p.status === 200 && isInside(p.text), `→ ${p.status}`);
+        assertLocked(p, 'reports tab', { payload: true });
+        const c = cards(p.text);
+        assert(c.map((x) => x.id).join(',') === [R.r1, R.r4, R.r3, R.r2].join(','), `order ${c.map((x) => x.id).join(',')} (want pending ${R.r1}, ${R.r4}, then decided ${R.r3}, ${R.r2})`);
+        assert(tileNum(p.text, '확인 기다림') === 2 && tileNum(p.text, '완료 처리함') === 1 && tileNum(p.text, '돌려보냄') === 1, 'counts: 2 pending · 1 approved · 1 returned');
+        const r1 = c[0].html;
+        const bed = php(s, 'Tfm\\Db::one("SELECT first_seen_at, ready_at FROM farm_beds WHERE id = ?", [$in])', F.beds.k0rb2);
+        for (const x of [K[0].nickname, '콩', 'RB2', '★★★', phpTime(bed.first_seen_at), phpTime(bed.ready_at)]) assert(r1.includes(x), `R1 shows "${x}"`);
+        assert(r1.includes('&lt;script&gt;alert(') && /&quot;큰따옴표&quot;/.test(r1), 'the note comes back as text');
+        assert(r1.includes(`<img class="photo" src="./?photo=${R.r1}"`), 'R1 shows its photo through the admin entry');
+        assert(/name="action" value="report_decide"/.test(r1) && new RegExp(`name="rid" value="${R.r1}"`).test(r1) && /<textarea name="memo"[^>]*maxlength="500"/.test(r1), 'R1 has the memo form (≤ 500 characters)');
+        assert(/<button[^>]*name="status" value="approved"[^>]*>✅ 완료 처리/.test(r1) && /<button[^>]*name="status" value="rejected"[^>]*>↩️ 돌려보내기/.test(r1), 'the two buttons');
+        assert(!/<img/.test(c[1].html), 'R4 (a stored photo path that is not a report photo) shows no image');
+        const r2 = c.find((x) => x.id === R.r2).html;
+        assert(r2.includes('&lt;i&gt;기존&lt;/i&gt; 메모') && r2.includes(A.nickname), 'R2 (approved): its memo in the box (escaped) and who decided');
+        const r3 = c.find((x) => x.id === R.r3).html;
+        assert(r3.includes('&lt;img src=x onerror=alert(') && /연습 밭/.test(r3), 'R3: the markup nickname is text; a quick-plot request');
+        assert(!/uploads\//.test(p.text), 'the page never links into uploads/');
+        assert(!rawEvil(p.text).length, `raw markup: ${rawEvil(p.text).join(', ')}`);
+        return `order ${c.map((x) => x.id).join(' → ')} · server times · note / memo / nickname inert · photo via ./?photo=`;
+      });
+      await step('15.4', '✅ 완료 확인: the photo is streamed by the admin entry after its own check (the right type, nosniff, no-store, a sandbox CSP); everybody else and every bad id gets the plain 404 of a missing page', async () => {
+        const url = `${ADM}?photo=${R.r1}`;
+        const ok = await b.bytes(url);
+        assert(ok.status === 200 && ok.headers.get('content-type') === 'image/jpeg', `admin → ${ok.status} ${ok.headers.get('content-type')}`);
+        assert(ok.buf.length === F.photoBytes && ok.buf[0] === 0xff && ok.buf[1] === 0xd8, `the JPEG bytes (${ok.buf.length} of ${F.photoBytes})`);
+        assert(ok.headers.get('x-content-type-options') === 'nosniff' && /no-store/.test(ok.headers.get('cache-control') || ''), 'nosniff + no-store');
+        assert(/default-src 'none'/.test(ok.headers.get('content-security-policy') || '') && /sandbox/.test(ok.headers.get('content-security-policy') || ''), `CSP ${ok.headers.get('content-security-policy')}`);
+        const missing = await new Browser(sv.base).req('no-such-file-' + rnd() + '.php');
+        const plain404 = (r, who) => { assert(r.status === 404 && !/^image\//.test(r.headers.get('content-type') || ''), `${who} → ${r.status} ${r.headers.get('content-type')}`); assert(!r.text.includes('\xff\xd8') && /404 Not Found/i.test(r.text) && !/관리|admin/i.test(r.text), `${who}: the plain 404 body`); };
+        plain404(await new Browser(sv.base).bytes(url), 'anonymous');
+        const player = new Browser(sv.base); await apiLogin(player, K[0]);
+        plain404(await player.bytes(url), 'the player who sent it');
+        const appOnly = new Browser(sv.base); await apiLogin(appOnly, A);
+        plain404(await appOnly.bytes(url), 'an admin signed in to the app only (no admin elevation)');
+        for (const bad of [String(R.r4), '999999', 'abc', '-1', '1e3', '../../config/config.php', '', `${R.r1}x`]) plain404(await b.bytes(`${ADM}?photo=${encodeURIComponent(bad)}`), `photo=${bad}`);
+        assert(missing.status === 404, 'control: a missing file is 404 too');
+        assert(isInside((await b.req(ADM)).text), 'the administrator is still signed in');
+        return `admin 200 image/jpeg ${ok.buf.length} B · anonymous / player / app-only admin / 8 bad ids → plain 404`;
+      });
+      await step('15.4', '✅ 완료 확인: ✅ 완료 처리 / ↩️ 돌려보내기 with a memo (≤ 500 characters) — POST + CSRF → Farm::decide (audit crop_report_decided) → 303; a decided report gets its memo edited, the stamp time stays', async () => {
+        const row = (id) => dbAll(s, 'SELECT status, memo, decided_at, decided_by FROM crop_reports WHERE id = ?', [id])[0];
+        let r = await admF(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(R.r1), status: 'approved', memo: '잘 키웠어요! <b>최고</b> 010-1234-5678' }, { page: '?tab=reports' });
+        assert(flashOf(r.text)?.type === 'ok', `approve: ${flashOf(r.text)?.msg}`);
+        let x = row(R.r1);
+        assert(x.status === 'approved' && Number(x.decided_by) === A.id && Number(x.decided_at) > 0, `row ${JSON.stringify(x)}`);
+        assert(x.memo.includes('최고') && !x.memo.includes('010-1234-5678'), `the memo is cleaned (the phone number masked): ${x.memo}`);
+        const card = cards(r.text).find((c) => c.id === R.r1);
+        assert(card && card.html.includes('&lt;b&gt;최고&lt;/b&gt;') && !card.html.includes('<b>최고'), 'the saved memo shows escaped');
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'crop_report_decided' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && Number(au.actor_id) === A.id && Number(au.user_id) === K[0].id, `audit ${JSON.stringify(au)}`);
+        const stamp = Number(x.decided_at);
+        await sleep(20);
+        r = await admF(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(R.r1), status: 'approved', memo: '메모만 고쳤어요' }, { page: '?tab=reports' });
+        x = row(R.r1);
+        assert(flashOf(r.text)?.type === 'ok' && x.memo === '메모만 고쳤어요' && Number(x.decided_at) === stamp, `memo edit keeps the stamp: ${JSON.stringify(x)}`);
+        r = await admF(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(R.r1), status: 'rejected', memo: '조금 더 키워 봐요' }, { page: '?tab=reports' });
+        x = row(R.r1);
+        assert(x.status === 'rejected' && x.memo === '조금 더 키워 봐요' && Number(x.decided_at) >= stamp, 'the decision can change');
+        const before = JSON.stringify(row(R.r1));
+        for (const f of [{ memo: '가'.repeat(501) }, { status: 'pending' }, { status: 'resolved' }, { status: '' }, { rid: '999999' }, { rid: 'abc' }, { rid: '' }]) {
+          r = await admF(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(R.r1), status: 'approved', memo: 'x', ...f }, { page: '?tab=reports' });
+          assert(flashOf(r.text)?.type === 'error', `${JSON.stringify(f).slice(0, 40)} → ${flashOf(r.text)?.type} ${flashOf(r.text)?.msg}`);
+        }
+        assert(JSON.stringify(row(R.r1)) === before, 'refused decisions changed nothing');
+        r = await admF(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(R.r1), status: 'approved', memo: '가'.repeat(500) }, { page: '?tab=reports' });
+        // the admin site accepts 500; what Farm::decide stores of it is the farm owner's rule (ChatFilter::maskPII reads 400 code points — reported)
+        const kept = row(R.r1).memo.length;
+        assert(flashOf(r.text)?.type === 'ok' && kept >= 400, `exactly 500 characters is accepted (${flashOf(r.text)?.msg}; stored ${kept})`);
+        const post = await adm(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(R.r4), status: 'approved', memo: '좋아요', show: 'pending', q: '#' + K[1].id }, { page: '?tab=reports' });
+        assert(post.status === 303 && /tab=reports/.test(post.location) && /show=pending/.test(post.location) && /q=%23/.test(post.location), `the 303 goes back to the same list: ${post.location}`);
+        return `approve (memo cleaned + escaped, audit) · memo edit keeps the stamp · change to rejected · 501 chars / bad status / bad id refused · 500 accepted (stored ${kept}) · 303 keeps the filter`;
+      });
+      await step('15.4', '✅ 완료 확인: filter by status, account search, paging (20 per page)', async () => {
+        const n = async (q) => cards((await b.req(`${ADM}?tab=reports${q}`)).text).length;
+        php(s, `(function ($in) { $now = Tfm\\Clock::ms(); for ($i = 0; $i < 21; $i++) Tfm\\Db::insert("crop_reports", ["user_id" => $in, "kind" => "plot", "bed_id" => "P9", "pid" => (string) (1731300000000 + $i + 1),
+          "crop_id" => "CROP_RADISH", "stars" => 0, "amount" => 1, "note" => "", "photo" => "", "status" => "pending", "memo" => null, "requested_at" => $now - 5000 + $i, "decided_at" => 0, "decided_by" => null, "seen_at" => 0]); return 1; })($in)`, K[1].id);
+        const counts = php(s, 'Tfm\\Farm::countReports()');
+        const want = { '&show=pending': 20, '&show=pending&p=1': counts.pending - 20, '&show=approved': counts.approved, '&show=rejected': counts.rejected, [`&q=${encodeURIComponent('#' + K[2].id)}`]: 1, '': 20, '&p=1': 5, '&show=nope': 20 };
+        for (const [q, w] of Object.entries(want)) { const got = await n(q); assert(got === w, `${q || 'all'}: ${got} cards, want ${w}`); }
+        const p = await b.req(`${ADM}?tab=reports&show=approved`);
+        assert(/<option value="approved" selected/.test(p.text), 'the filter stays selected');
+        assert(/href="\.\/\?tab=reports[^"]*(&amp;|&)p=1/.test((await b.req(`${ADM}?tab=reports`)).text), 'a next link');
+        return Object.entries(want).map(([q, w]) => `${q.replace(/^&/, '') || 'all'} ${w}`).join(' · ');
+      });
+      await step('15.6', '✅ 완료 확인: 🤖 메모 초안 (Claude::enabled) puts Claude::memoDraft into that report\'s memo box on the next page (escaped, not saved) — only the crop, stars and note leave the server; audit ai_admin_ask', async () => {
+        const p = await b.req(`${ADM}?tab=reports&show=pending`);
+        const c = cards(p.text);
+        const target = c.find((x) => x.id === R.r4) || c[0];
+        assert(/name="action" value="ai_memo"/.test(target.html), 'the 🤖 메모 초안 button');
+        const before = dbAll(s, 'SELECT memo, status FROM crop_reports WHERE id = ?', [target.id])[0];
+        const r = await admF(b, ADM, { action: 'ai_memo', tab: 'reports', rid: String(target.id), show: 'pending' }, { page: '?tab=reports&show=pending' });
+        assert(flashOf(r.text)?.type === 'ok', `draft: ${flashOf(r.text)?.msg}`);
+        const box = cards(r.text).find((x) => x.id === target.id);
+        assert(box, 'the report is on the page after the 303');
+        const ta = (box.html.match(/<textarea name="memo"[^>]*>([\s\S]*?)<\/textarea>/) || [])[1] || '';
+        assert(ta.includes('&lt;script&gt;alert(') && ta.includes('메모 초안') && !ta.includes('<script'), `the draft is in the box, escaped: ${ta.slice(0, 120)}`);
+        assert(/AI가 쓴 초안/.test(box.html), 'it says that the AI wrote it');
+        assert(JSON.stringify(dbAll(s, 'SELECT memo, status FROM crop_reports WHERE id = ?', [target.id])[0]) === JSON.stringify(before), 'nothing is saved until the administrator decides');
+        const sent = doubleLog(s).filter((x) => x.what === 'memo').pop();
+        const blob = JSON.stringify(sent.input);
+        assert(sent && Number(sent.uid) === A.id && /cropName|cropId/.test(blob) && /stars/.test(blob), `memoDraft got the crop and stars: ${blob}`);
+        for (const u of [K[0], K[1], K[2]]) assert(!blob.includes(u.nickname) && !blob.includes(u.email), 'no nickname / e-mail went to the AI');
+        assert(!blob.includes('onerror'), 'the account fields are not in the request at all');
+        const au = dbAll(s, "SELECT * FROM audit_log WHERE event = 'ai_admin_ask' ORDER BY id DESC LIMIT 1")[0];
+        assert(au && Number(au.actor_id) === A.id && /memo/.test(au.detail) && !au.detail.includes('메모 초안'), `audit ai_admin_ask (no answer text): ${au && au.detail}`);
+        // saving with the (edited) draft clears it
+        await admF(b, ADM, { action: 'report_decide', tab: 'reports', rid: String(target.id), status: 'approved', memo: '고친 초안이에요' }, { page: '?tab=reports' });
+        const again = cards((await b.req(`${ADM}?tab=reports&show=approved`)).text).find((x) => x.id === target.id);
+        assert(again && !/AI가 쓴 초안/.test(again.html) && again.html.includes('고친 초안이에요'), 'after saving, the box holds the saved memo');
+        return 'button · draft in the box (escaped, unsaved) · request without account details · audit · cleared after saving';
       });
     } finally { await sv.stop(); }
   }
@@ -1774,6 +1903,61 @@ final class ConfigAudit
     }
 }
 `;
+
+/**
+ * TEST DOUBLE of Tfm\Claude (workflow interface 5) — the agreed signatures, nothing more. Every helper answers with markup
+ * (it must come back escaped), writes one ai_usage row (scope admin) and records what the admin site sent in
+ * <data>/claude-double.json, so a check can see that no account details left the server. TFM_T_AI=off: not configured;
+ * TFM_T_AI=disabled: configured but switched off; TFM_T_AI=fail: every call fails (ok false).
+ */
+const CLAUDE_DOUBLE = `<?php
+// TEST DOUBLE written by tests/admin-lock.mjs — the interface agreed for lib/Claude.php (workflow interface 5), nothing more
+declare(strict_types=1);
+namespace Tfm;
+if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+final class Claude
+{
+    public const ANSWERS = [
+        'memo' => "<script>alert('ai')</script> 메모 초안: 정말 잘 키웠어요 \\"따옴표\\"",
+        'summary' => "<script>alert('sum')</script> 오늘 요약 <b>굵게</b>\\n둘째 줄",
+        'ask' => "<script>alert('ask')</script> 대답 <img src=x onerror=alert(7)>\\n둘째 줄",
+    ];
+    private static function answer(string $what, $input, ?int $uid): array
+    {
+        $file = Config::dataDir() . DIRECTORY_SEPARATOR . 'claude-double.json';
+        $log = is_file($file) ? json_decode((string) file_get_contents($file), true) : [];
+        $log[] = ['what' => $what, 'input' => $input, 'uid' => $uid];
+        file_put_contents($file, json_encode($log, JSON_UNESCAPED_UNICODE));
+        $fail = getenv('TFM_T_AI') === 'fail';
+        Db::insert('ai_usage', ['created_at' => Clock::ms(), 'user_id' => $uid, 'scope' => 'admin', 'model' => 'double-model', 'input_tokens' => 11, 'output_tokens' => $fail ? 0 : 22,
+            'stop_reason' => $fail ? '' : 'end_turn', 'ok' => $fail ? 0 : 1, 'ms' => 5]);
+        if ($fail) return ['ok' => false, 'text' => '', 'stop' => '', 'model' => 'double-model', 'usage' => ['in' => 11, 'out' => 0], 'error' => 'upstream <b>error</b>'];
+        return ['ok' => true, 'text' => self::ANSWERS[$what], 'stop' => 'end_turn', 'model' => 'double-model', 'usage' => ['in' => 11, 'out' => 22], 'error' => null];
+    }
+    public static function configured(): bool { return getenv('TFM_T_AI') !== 'off'; }
+    public static function enabled(): bool { return self::configured() && getenv('TFM_T_AI') !== 'disabled'; }
+    public static function kidEnabled(): bool { return (bool) Settings::get('ai.kid_helper', false); }
+    public static function ask(array $opt): array { return self::answer('ask', $opt, isset($opt['userId']) ? $opt['userId'] : null); }
+    public static function selfTest(): array { return ['ok' => true, 'model' => 'double-model', 'ms' => 1, 'usage' => ['in' => 1, 'out' => 1], 'error' => null]; }
+    public static function usageToday(): array
+    {
+        $by = [];
+        $in = 0; $out = 0; $n = 0;
+        foreach (Db::all('SELECT scope, input_tokens, output_tokens FROM ai_usage WHERE created_at >= ?', [Clock::startOfDayMs()]) as $r) {
+            $n++; $in += (int) $r['input_tokens']; $out += (int) $r['output_tokens'];
+            $by[(string) $r['scope']] = (isset($by[(string) $r['scope']]) ? $by[(string) $r['scope']] : 0) + 1;
+        }
+        return ['total' => $n, 'tokensIn' => $in, 'tokensOut' => $out, 'byScope' => $by];
+    }
+    public static function memoDraft(array $report, int $actorId): array { return self::answer('memo', $report, $actorId); }
+    public static function daySummary(array $numbers, int $actorId): array { return self::answer('summary', $numbers, $actorId); }
+    public static function adminAsk(string $prompt, int $actorId): array { return self::answer('ask', $prompt, $actorId); }
+}
+`;
+/** what the Claude double was asked (oldest first) */
+const doubleLog = (s) => { const f = path.join(s.data, 'claude-double.json'); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; };
+/** put the Claude double into a site (replacing a real lib/Claude.php of that copy) */
+const useClaudeDouble = (s) => fs.writeFileSync(path.join(s.site, 'lib/Claude.php'), CLAUDE_DOUBLE);
 
 // ------------------------------------------------------------------ run
 function cleanup() {

@@ -35,6 +35,8 @@ use Tfm\AdminTotp;
 use Tfm\ApiException;
 use Tfm\Audit;
 use Tfm\Auth;
+use Tfm\ChatFilter;
+use Tfm\Claude;
 use Tfm\Clock;
 use Tfm\Config;
 use Tfm\Crypto;
@@ -70,6 +72,7 @@ const TABS = [
     'overview' => ['📊', '대시보드'],
     'beds' => ['🌱', '재배 현황'],
     'storage' => ['🏚️', '곳간'],
+    'reports' => ['✅', '완료 확인'],
     'health' => ['🩺', '시스템 점검'],
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
@@ -305,6 +308,9 @@ function handlePost(Ctx $c)
 
     $tab = tabParam(postStr('tab'));
     $back = ['q' => mb_substr(postStr('q'), 0, 60)];
+    // the list the form came from (only known values; http_build_query encodes them for the Location header)
+    if (isset(REPORT_STATUS[postStr('show')])) $back['show'] = postStr('show');
+    if (ctype_digit(postStr('p')) && strlen(postStr('p')) <= 5 && (int) postStr('p') > 0) $back['p'] = (int) postStr('p');
     $admin = $c->user;
     $uid = (int) postStr('uid');
     try {
@@ -342,6 +348,8 @@ function handlePost(Ctx $c)
                 break;
             }
             case 'farm_scale': $msg = doFarmScale($admin); break;
+            case 'report_decide': $msg = doReportDecide($admin); break;
+            case 'ai_memo': $msg = doAiMemo($c); break;
             case 'ip_block': $msg = doIpBlock($c); break;
             case 'ip_unblock': $msg = doIpUnblock($c); break;
             case 'twofa_disable': $msg = doDisable($c); break;
@@ -549,6 +557,71 @@ function doFarmScale(array $admin): string
     return '⏱️ 시간 배율을 ' . scaleText(Farm::scale()) . '(으)로 바꿨어요. 이제부터 심는 작물에 적용돼요.';
 }
 
+/** a report id from the form ("rid": digits only) */
+function postReportId(): int
+{
+    $rid = postStr('rid');
+    if (!ctype_digit($rid) || strlen($rid) > 12 || (int) $rid <= 0) throw new ApiException(400, 'INVALID_INPUT', '완료 확인 요청을 고르지 못했어요. 목록에서 다시 눌러 주세요.');
+    return (int) $rid;
+}
+
+/** ✅ 완료 처리 / ↩️ 돌려보내기 (or a memo edit of a decided report) — Farm::decide audits crop_report_decided */
+function doReportDecide(array $admin): string
+{
+    if (!class_exists('Tfm\Farm')) throw new ApiException(503, 'NOT_READY', '재배 완료 확인 기능이 아직 준비 중이에요.');
+    $rid = postReportId();
+    $status = postStr('status');
+    if (!in_array($status, ['approved', 'rejected'], true)) throw new ApiException(400, 'INVALID_INPUT', '✅ 완료 처리나 ↩️ 돌려보내기 버튼을 눌러 주세요.');
+    $memo = postStr('memo');
+    $max = max(1, (int) Config::get('farm.memo_max', 500));
+    if (strlen($memo) > $max * 4 || mb_strlen($memo, 'UTF-8') > $max) throw new ApiException(400, 'INVALID_INPUT', "메모는 {$max}자까지 쓸 수 있어요. 조금 줄여 주세요.");
+    $r = Farm::decide($admin, $rid, $status, $memo);
+    $d = aiDraft();
+    if ($d !== null && (int) $d['rid'] === $rid) Session::set('ai_draft', null);
+    return $status === 'approved'
+        ? "✅ {$r['nickname']} 님의 {$r['cropName']} 요청을 완료 처리했어요. 아이의 확인 기록장에 도장과 메모가 보여요."
+        : "↩️ {$r['nickname']} 님의 {$r['cropName']} 요청을 돌려보냈어요. 아이가 메모를 보고 다시 해 볼 수 있어요.";
+}
+
+/**
+ * 🤖 메모 초안 — Claude::memoDraft with only what the memo needs (crop, stars, amount, the note masked once more; never the
+ * account), rate ai_admin, audit ai_admin_ask (no prompt or answer text). The draft waits in the session and fills that
+ * report's memo box on the next page; nothing is saved until the administrator presses a decision button.
+ */
+function doAiMemo(Ctx $c): string
+{
+    if (!aiReady()) throw new ApiException(503, 'AI_OFF', '🤖 AI 도우미가 꺼져 있어요. 🤖 AI 도우미 탭에서 상태를 확인해 주세요.');
+    $rid = postReportId();
+    RateLimit::forRequest('ai_admin', $c);
+    $row = Db::one('SELECT id, kind, bed_id, crop_id, stars, amount, note, status FROM crop_reports WHERE id = ?', [$rid]);
+    if (!$row) throw new ApiException(404, 'NOT_FOUND', '완료 확인 요청을 찾을 수 없어요.');
+    $report = ['kind' => (string) $row['kind'], 'bedId' => (string) $row['bed_id'], 'cropId' => (string) $row['crop_id'],
+        'cropName' => class_exists('Tfm\Farm') ? Farm::cropName((string) $row['crop_id']) : (string) $row['crop_id'],
+        'stars' => (int) $row['stars'], 'amount' => (int) $row['amount'], 'note' => ChatFilter::maskPII((string) $row['note']), 'status' => (string) $row['status']];
+    $res = Claude::memoDraft($report, $c->uid());
+    aiAudit($c, 'memo', $res, ['report' => $rid]);
+    $text = is_array($res) && !empty($res['ok']) && isset($res['text']) && is_string($res['text']) ? trim($res['text']) : '';
+    if ($text === '') throw new ApiException(502, 'AI_FAILED', '🤖 초안을 만들지 못했어요. 잠시 뒤에 다시 해 보거나 직접 써 주세요.' . aiError($res));
+    Session::set('ai_draft', ['rid' => $rid, 'text' => mb_substr($text, 0, max(1, (int) Config::get('farm.memo_max', 500))), 'at' => Clock::ms()]);
+    return '🤖 메모 초안을 그 요청의 메모 칸에 넣었어요. 읽어 보고 고친 다음 ✅ 완료 처리나 ↩️ 돌려보내기를 눌러야 저장돼요.';
+}
+
+/** audit ai_admin_ask: what kind of help, whether it worked, the model and the token counts — never the prompt or the answer */
+function aiAudit(Ctx $c, string $kind, $res, array $extra = []): void
+{
+    $r = is_array($res) ? $res : [];
+    $u = isset($r['usage']) && is_array($r['usage']) ? $r['usage'] : [];
+    Audit::log('ai_admin_ask', null, $extra + ['kind' => $kind, 'ok' => !empty($r['ok']), 'model' => mb_substr(isset($r['model']) && is_string($r['model']) ? $r['model'] : '', 0, 60),
+        'stop' => mb_substr(isset($r['stop']) && is_string($r['stop']) ? $r['stop'] : '', 0, 20), 'in' => isset($u['in']) ? (int) $u['in'] : 0, 'out' => isset($u['out']) ? (int) $u['out'] : 0], 'info', $c->uid());
+}
+
+/** a short, plain reason of a failed AI call for the administrator (" (…)"), never more than 120 characters */
+function aiError($res): string
+{
+    $e = is_array($res) && isset($res['error']) && is_string($res['error']) ? trim(Users::cleanText($res['error'], 120)) : '';
+    return $e !== '' ? ' (' . $e . ')' : '';
+}
+
 /** block an address by hand (address or the hash of an event row) for some minutes */
 function doIpBlock(Ctx $c): string
 {
@@ -686,7 +759,7 @@ function farmCard(): string
             ['📮', '완료 확인 대기', $d['reportsPending']], ['🏚️', '곳간 전체 (모든 계정)', $d['storageTotal']], ['🥕', '연습 밭 자라는 중', $d['plotsGrowing']]])
         . '<p class="dim small">시간 배율 <b>' . e(scaleText((float) $d['scale'])) . '</b> (1 = 진짜 시간) · 지금 텃밭을 쓰는 계정 ' . e(num($d['accounts'])) . '명 — 자라는 중 / 다 자람은 서버 시계로 판단해요.</p>'
         . '<p class="row"><a class="btn ghost" href="' . e(href(['tab' => 'beds'])) . '">🌱 재배 현황 보기 →</a>'
-        . '<a class="btn' . ((int) $d['reportsPending'] > 0 ? ' primary' : ' ghost') . '" href="' . e(href(['tab' => 'reports', 'status' => 'pending'])) . '">✅ 완료 확인 ' . e(num($d['reportsPending'])) . '건 보기 →</a>'
+        . '<a class="btn' . ((int) $d['reportsPending'] > 0 ? ' primary' : ' ghost') . '" href="' . e(href(['tab' => 'reports', 'show' => 'pending'])) . '">✅ 완료 확인 ' . e(num($d['reportsPending'])) . '건 보기 →</a>'
         . '<a class="btn ghost" href="' . e(href(['tab' => 'storage'])) . '">🏚️ 곳간 보기 →</a></p></section>';
     return $h;
 }
@@ -847,6 +920,91 @@ function viewStorage(): string
         $h .= '</tbody></table></div>';
     }
     return $h . pager($q, $page, $more) . '</section>';
+}
+
+/** completion requests per page (each has a photo, a note and a form) */
+const REPORT_ROWS = 20;
+
+/** ✅ the validated list query (show = '' all, pending first | pending | approved | rejected) */
+function reportsQuery(): array
+{
+    $show = getStr('show');
+    return ['tab' => 'reports', 'show' => isset(REPORT_STATUS[$show]) ? $show : '', 'q' => mb_substr(trim(getStr('q')), 0, 60)];
+}
+
+/** is the admin AI helper usable here? (lib/Claude.php present, configured and not switched off) */
+function aiReady(): bool
+{
+    if (!class_exists('Tfm\Claude')) return false;
+    try { return Claude::enabled(); } catch (\Throwable $e) { return false; }
+}
+
+/** the 🤖 memo draft waiting in this session for one report (30 minutes; cleared when that report is decided) */
+function aiDraft(): ?array
+{
+    if (!Session::started()) return null;
+    $d = Session::get('ai_draft');
+    if (!is_array($d) || !isset($d['rid'], $d['text'], $d['at']) || !is_string($d['text'])) return null;
+    if (Clock::ms() - (int) $d['at'] > 1800000) { Session::set('ai_draft', null); return null; }
+    return $d;
+}
+
+/** ✅ 완료 확인 — the requests of every account (Farm::listReports: pending first, oldest first; then the latest decisions) */
+function viewReports(): string
+{
+    if (!class_exists('Tfm\Farm')) return notReady('✅ 완료 확인', '재배 완료 확인(lib/Farm.php)');
+    $q = reportsQuery();
+    $page = pageParam();
+    $cnt = Farm::countReports();
+    $h = '<section class="card"><h3>✅ 재배 완료 확인 — 아이들이 보낸 "다 키웠어요!"</h3>'
+        . tiles([['⏳', '확인 기다림', $cnt['pending']], ['✅', '완료 처리함', $cnt['approved']], ['↩️', '돌려보냄', $cnt['rejected']]])
+        . '<p class="dim small">실시간 텃밭이 다 자랐거나 연습 밭이 100 %가 되면 체험객이 "완료 확인"을 보내요. 서버가 잰 시각(처음 본 시각 · 다 자란 시각 · 수확한 시각)과 사진·한마디를 보고, 메모와 함께 <b>✅ 완료 처리</b>하거나 <b>↩️ 돌려보내기</b>를 누르세요. 아이의 "📬 확인 기록장"에 도장과 메모가 보여요. 메모는 아이가 읽어요 — 다정하게, 500자까지 쓸 수 있고 전화번호 같은 개인정보와 나쁜 말은 저절로 가려져요.</p>'
+        . '<form method="get" action="./" class="search"><input type="hidden" name="tab" value="reports">' . selectBox('show', ['' => '모두 (기다림 먼저)', 'pending' => '⏳ 확인 기다림', 'approved' => '✅ 완료 처리함', 'rejected' => '↩️ 돌려보냄'], $q['show'])
+        . '<input name="q" value="' . e($q['q']) . '" placeholder="계정 (닉네임 · 이메일 · #번호)" maxlength="60"><button class="btn" type="submit">🔎 보기</button>'
+        . ($q['show'] !== '' || $q['q'] !== '' ? '<a class="btn ghost" href="./?tab=reports">모두 보기</a>' : '') . '</form></section>';
+    $rows = Farm::listReports($q['show'], REPORT_ROWS + 1, $page * REPORT_ROWS, $q['q']);
+    $more = count($rows) > REPORT_ROWS;
+    $rows = array_slice($rows, 0, REPORT_ROWS);
+    if (!$rows) return $h . '<section class="card"><p class="empty">' . ($q['show'] === 'pending' || ($q['show'] === '' && $q['q'] === '') ? '🎉 확인을 기다리는 요청이 없어요.' : '🍃 조건에 맞는 요청이 없어요.') . '</p>' . pager($q, $page, $more) . '</section>';
+    $ai = aiReady();
+    $draft = aiDraft();
+    foreach ($rows as $r) $h .= reportCard($r, $q + ['p' => $page > 0 ? $page : null], $ai, $draft);
+    return $h . '<section class="card">' . pager($q, $page, $more) . '</section>';
+}
+
+/** one completion request: the facts measured by the server, the note, the photo and the decision form */
+function reportCard(array $r, array $q, bool $ai, ?array $draft): string
+{
+    $rid = (int) $r['id'];
+    $st = isset(REPORT_STATUS[$r['status']]) ? REPORT_STATUS[$r['status']] : ['', (string) $r['status'], ''];
+    $rt = $r['kind'] === 'rt';
+    $mine = $draft !== null && (int) $draft['rid'] === $rid;
+    $memo = $mine ? (string) $draft['text'] : (string) $r['memo'];
+    $keep = ['show' => $q['show'], 'q' => $q['q'], 'p' => isset($q['p']) ? $q['p'] : null];
+    $hidden = '';
+    foreach ($keep as $k => $v) if ($v !== '' && $v !== null) $hidden .= '<input type="hidden" name="' . e($k) . '" value="' . e($v) . '">';
+    $fact = function (string $k, string $v): string { return '<dt>' . e($k) . '</dt><dd>' . $v . '</dd>'; };
+    $h = '<article class="card report ' . e($r['status']) . '" id="r' . $rid . '"><h3><span class="badge ' . e($st[2]) . '">' . e($st[0] . ' ' . $st[1]) . '</span> '
+        . e($r['cropName']) . ' · ' . e($r['bedId']) . ' <span class="dim small">' . e(isset(BED_KIND[$r['kind']]) ? BED_KIND[$r['kind']] : $r['kind']) . ' · 요청 #' . $rid . '</span></h3><div class="reportgrid">'
+        . ($r['hasPhoto'] ? '<a class="photolink" href="./?photo=' . $rid . '"><img class="photo" src="./?photo=' . $rid . '" alt="체험객이 보낸 텃밭 사진 (요청 #' . $rid . ')" width="320" height="240"></a>' : '<p class="nophoto">📷 사진 없음</p>')
+        . '<div><dl class="facts">'
+        . $fact('계정', '<b>' . e($r['nickname']) . '</b> <span class="dim small">#' . (int) $r['userId'] . ' · ' . e($r['email']) . '</span>')
+        . $fact('작물', e($r['cropName']) . ($r['cropName'] !== $r['cropId'] ? ' <span class="dim small">' . e($r['cropId']) . '</span>' : '') . ((int) $r['amount'] > 0 ? ' · 수확 ' . e(num($r['amount'])) . '개' : ''))
+        . ($rt ? $fact('돌본 정도', '<span title="별 3개가 가장 많이 돌본 것">' . e(stars((int) $r['stars'])) . '</span>') : '')
+        . $fact('처음 본 시각', e(when($r['firstSeenAt'])) . ' <span class="dim small">(서버 시계)</span>')
+        . ($rt ? $fact('다 자란 시각', e(when($r['readyAt']))) : '')
+        . $fact('수확한 시각', e(when($r['harvestedAt'])))
+        . $fact('요청한 시각', e(when($r['requestedAt'])))
+        . ($r['status'] !== 'pending' ? $fact('확인한 시각', e(when($r['decidedAt'])) . ($r['decidedByNick'] !== '' ? ' · ' . e($r['decidedByNick']) : '') . ' · ' . ((int) $r['seenAt'] > 0 ? '아이가 봤어요' : '아직 안 봤어요')) : '')
+        . '</dl><blockquote class="note">' . ($r['note'] !== '' ? '💬 ' . e($r['note']) : '<span class="dim">(한마디 없음)</span>') . '</blockquote></div></div>'
+        . '<form method="post" action="./" class="stack">' . csrfField() . '<input type="hidden" name="action" value="report_decide"><input type="hidden" name="tab" value="reports"><input type="hidden" name="rid" value="' . $rid . '">' . $hidden
+        . '<label>메모 (아이에게 보여요 · 500자까지)<textarea name="memo" maxlength="500" rows="3">' . e($memo) . '</textarea></label>'
+        . ($mine ? '<p class="notice small">🤖 AI가 쓴 초안이에요. 읽어 보고 고친 다음 저장하세요 — 저장하기 전에는 아이에게 보이지 않아요.</p>' : '')
+        . '<div class="row"><button class="btn primary" type="submit" name="status" value="approved">✅ 완료 처리</button><button class="btn" type="submit" name="status" value="rejected">↩️ 돌려보내기</button></div>'
+        . ($r['status'] !== 'pending' ? '<p class="dim small">이미 확인한 요청이에요. 같은 버튼을 다시 누르면 메모만 고쳐요(도장 시각은 그대로), 다른 버튼을 누르면 결정이 바뀌어요.</p>' : '')
+        . '</form>';
+    if ($ai) $h .= '<div class="row">' . actionForm('ai_memo', '🤖 메모 초안 만들기', ['rid' => $rid] + array_filter($keep, function ($v) { return $v !== '' && $v !== null; }), 'btn ghost sm', 'reports') . '<span class="dim small">작물 · 별 · 한마디만 AI에게 보내요 (계정 정보는 보내지 않아요).</span></div>';
+    return $h . '</article>';
 }
 
 /** ⏱️ the real-time scale form (Farm::setScale → Settings farm.rt_scale, 0.1–3600) */
@@ -1226,6 +1384,7 @@ function render(Ctx $c): string
         switch ($tab) {
             case 'beds': $body = viewBeds(); break;
             case 'storage': $body = viewStorage(); break;
+            case 'reports': $body = viewReports(); break;
             case 'health': $body = viewHealth(); break;
             case 'users': $body = viewUsers(); break;
             case 'sub': $body = viewSub(); break;
@@ -1249,6 +1408,37 @@ function errorPage(Ctx $c, ApiException $e): string
     return page($c, '', '<section class="card narrow hero"><div class="mascot" aria-hidden="true">🙈</div><h2>' . e($e->getMessage()) . '</h2><p class="row"><a class="btn" href="./">다시 시도</a></p></section>', null, false);
 }
 
+/**
+ * GET ./?photo=<report id>: a completion request's photo, streamed by this entry after ITS OWN check — never a link into
+ * uploads/. Only the elevated administrator gets it (the check does not extend the idle time); anybody else, a bad id, a
+ * stored path that is not a report photo or a file whose content does not match its type gets the plain 404 of a missing
+ * page. The answer: the sniffed type (image/jpeg | image/png), nosniff, no-store, a sandbox CSP.
+ */
+function servePhoto(Ctx $c): void
+{
+    if (AdminGate::expired() || !AdminGate::check($c->user, true, false) || !class_exists('Tfm\Farm')) AdminGate::notFound();
+    $id = getStr('photo');
+    if (!ctype_digit($id) || strlen($id) > 12 || (int) $id <= 0) AdminGate::notFound();
+    $file = Farm::photoPath((int) $id);
+    if ($file === null) AdminGate::notFound();
+    $size = @filesize($file);
+    $info = @getimagesize($file);
+    $types = [IMAGETYPE_JPEG => ['image/jpeg', 'jpg'], IMAGETYPE_PNG => ['image/png', 'png']];
+    $t = is_array($info) && isset($types[$info[2]]) ? $types[$info[2]] : null;
+    $ext = strtolower((string) pathinfo($file, PATHINFO_EXTENSION));
+    if ($t === null || !is_int($size) || $size <= 0 || $size > 8388608 || ($ext === 'png') !== ($t[1] === 'png')) AdminGate::notFound();
+    while (ob_get_level() > 0) ob_end_clean();
+    AdminGate::headers();
+    header('Content-Type: ' . $t[0]);
+    header("Content-Security-Policy: default-src 'none'; sandbox");
+    header('Content-Disposition: inline; filename="report-' . (int) $id . '.' . $t[1] . '"');
+    header('Content-Length: ' . $size);
+    http_response_code(200);
+    Session::close();
+    if (Http::method() !== 'HEAD') readfile($file);
+    exit;
+}
+
 // =============================================================================== request
 $status = 200;
 $ctx = new Ctx();
@@ -1261,6 +1451,7 @@ try {
     AdminGate::resumeSession();
     $ctx->user = Auth::current();
     RateLimit::forRequest('admin_page', $ctx);
+    if ($method !== 'POST' && isset($_GET['photo'])) servePhoto($ctx);
     if ($method === 'POST') handlePost($ctx);
     $html = render($ctx);
 } catch (ApiException $e) {
