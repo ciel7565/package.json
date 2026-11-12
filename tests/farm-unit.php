@@ -552,5 +552,169 @@ check('Farm::plan as the SaveValidator hook — a validated corn harvest passes 
         ? true : 'planted ' . implode(',', codes($planted)) . ' · early ' . implode(',', codes($early)) . ' · late ' . implode(',', codes($late)) . ' ' . json_encode($late['summary']['rt']);
 });
 
+// =============================================================================================== 3 · completion requests (재배 완료 확인)
+/** a user with one real-time planting synced at $t (ready at $t + duration) — returns [user, state, pid] */
+function planted(string $crop, string $bedId, int $t, int $tier = 1): array
+{
+    $u = newUser();
+    $p = pid();
+    $s = fresh($u, $t);
+    $s->rtfarm->beds->$bedId = bed($crop, $p, $t, ['care' => 80]);
+    Tfm\Farm::sync((int) $u['id'], cl($s), null, $t, $tier);
+    return [$u, $s, $p];
+}
+/** store $s as the account's accepted save (what player/save.php would have written) */
+function storeSave(array $u, stdClass $s, int $t): void
+{
+    Tfm\Db::upsert('player_saves', ['user_id' => (int) $u['id'], 'version' => 1, 'revision' => 1, 'data' => json_encode($s, JSON_UNESCAPED_UNICODE),
+        'checksum' => '', 'size_bytes' => 0, 'meta' => '{}', 'backup_data' => null, 'backup_saved_at' => 0, 'saved_at' => $t, 'created_at' => $t,
+        'rejects' => 0, 'last_reject_at' => 0], ['user_id']);
+}
+$TR = Tfm\Clock::ms();
+list($RU, $RS, $RP) = planted('CROP_MINT', 'RB1', $TR - 600000 - 1000);
+$rep = null;
+check('Farm::report — a bed the SERVER clock calls ready (ready_at passed, row not flipped yet) → a pending report; crop / stars from the server records', function () use (&$rep, $RU, $RP) {
+    $rep = Tfm\Farm::report($RU, 'rt', 'RB1', $RP, '');
+    $row = Tfm\Db::one('SELECT * FROM crop_reports WHERE id = ?', [$rep['id']]);
+    return $rep['status'] === 'pending' && $rep['kind'] === 'rt' && $rep['bedId'] === 'RB1' && $rep['cropId'] === 'CROP_MINT' && $rep['stars'] === 3
+        && $rep['note'] === '' && $rep['memo'] === '' && $rep['decidedAt'] === 0 && $rep['photoUrl'] === null && is_int($rep['requestedAt'])
+        && $row && (int) $row['user_id'] === (int) $RU['id'] && $row['pid'] === $RP ? true : json_encode([$rep, $row]);
+});
+check('Farm::report — the same planting again → 409 ALREADY_REPORTED', function () use ($RU, $RP) {
+    return apiCode(function () use ($RU, $RP) { Tfm\Farm::report($RU, 'rt', 'RB1', $RP, ''); }) === '409 ALREADY_REPORTED';
+});
+check('Farm::report — a growing bed (ready_at in the future) → 409 NOT_READY, nothing stored', function () {
+    list($u, $s, $p) = planted('CROP_CORN', 'RB2', Tfm\Clock::ms());
+    $code = apiCode(function () use ($u, $p) { Tfm\Farm::report($u, 'rt', 'RB2', $p, ''); });
+    return $code === '409 NOT_READY' && (int) Tfm\Db::value('SELECT COUNT(*) FROM crop_reports WHERE user_id = ?', [(int) $u['id']]) === 0 ? true : $code;
+});
+check('Farm::report — another account\'s planting id → 409 NOT_READY (the same answer as a growing bed: no way to probe other accounts), nothing stored', function () use ($RP) {
+    list($other, $s, $p) = planted('CROP_MINT', 'RB3', Tfm\Clock::ms() - 700000);
+    $mine = apiCode(function () use ($other, $RP) { Tfm\Farm::report($other, 'rt', 'RB1', $RP, ''); });
+    return $mine === '409 NOT_READY' && (int) Tfm\Db::value('SELECT COUNT(*) FROM crop_reports WHERE user_id = ?', [(int) $other['id']]) === 0 ? true : $mine;
+});
+check('Farm::report — a harvest within farm.harvest_keep_days (7) may still be reported; an older one → NOT_READY', function () {
+    $u = newUser();
+    $now = Tfm\Clock::ms();
+    $ins = function (string $bed, string $p, int $harvestedAt) use ($u) {
+        Tfm\Db::insert('farm_beds', ['user_id' => (int) $u['id'], 'bed_id' => $bed, 'kind' => 'rt', 'pid' => $p, 'crop_id' => 'CROP_BEAN', 'tier' => 1, 'first_seen_at' => $harvestedAt - 3600000,
+            'ready_at' => $harvestedAt - 1000, 'growth' => 0, 'care' => 40, 'status' => 'harvested', 'harvested_at' => $harvestedAt, 'amount' => 5, 'stars' => 2, 'updated_at' => $harvestedAt]);
+    };
+    $fresh = pid(); $old = pid();
+    $ins('RB1', $fresh, $now - 6 * 86400000);
+    $ins('RB2', $old, $now - 8 * 86400000);
+    $r = Tfm\Farm::report($u, 'rt', 'RB1', $fresh, '');
+    $o = apiCode(function () use ($u, $old) { Tfm\Farm::report($u, 'rt', 'RB2', $old, ''); });
+    return $r['status'] === 'pending' && $r['amount'] === 5 && $r['stars'] === 2 && $o === '409 NOT_READY' ? true : json_encode($r) . " old=$o";
+});
+check('Farm::report — the note is cleaned, PII-masked and bad-word-filtered like chat, and capped at farm.report_note_max', function () {
+    list($u, $s, $p) = planted('CROP_MINT', 'RB4', Tfm\Clock::ms() - 700000);
+    $r = Tfm\Farm::report($u, 'rt', 'RB4', $p, "  물을 줬어요\u{200B} 010-1234-5678 시발 kid@example.com  ");
+    $stored = (string) Tfm\Db::value('SELECT note FROM crop_reports WHERE id = ?', [$r['id']]);
+    $long = planted('CROP_MINT', 'RB1', Tfm\Clock::ms() - 700000);
+    $l = Tfm\Farm::report($long[0], 'rt', 'RB1', $long[2], str_repeat('가', 200));
+    return $stored === $r['note'] && strpos($stored, '010') === false && strpos($stored, '1234') === false && strpos($stored, 'example.com') === false && strpos($stored, '시발') === false
+        && strpos($stored, '🔒') !== false && strpos($stored, '물을 줬어요') === 0 && mb_strlen($l['note']) === (int) Tfm\Config::get('farm.report_note_max', 80)
+        ? true : json_encode([$stored, mb_strlen($l['note'])], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::report — farm.report_daily per account per day → 429 REPORT_LIMIT (+ Retry-After)', function () {
+    Tfm\Config::override('farm.report_daily', 2);
+    try {
+        $u = newUser();
+        $t = Tfm\Clock::ms() - 700000;
+        $s = fresh($u, $t);
+        $ps = [];
+        foreach (['RB1', 'RB2', 'RB3'] as $b) { $ps[$b] = pid(); $s->rtfarm->beds->$b = bed('CROP_MINT', $ps[$b], $t); }
+        Tfm\Farm::sync((int) $u['id'], cl($s), null, $t, 1);
+        Tfm\Farm::report($u, 'rt', 'RB1', $ps['RB1'], '');
+        Tfm\Farm::report($u, 'rt', 'RB2', $ps['RB2'], '');
+        $headers = [];
+        try { Tfm\Farm::report($u, 'rt', 'RB3', $ps['RB3'], ''); $code = ''; } catch (Tfm\ApiException $e) { $code = $e->status . ' ' . $e->errorCode; $headers = $e->headers; }
+        $retry = (bool) array_filter($headers, function ($h) { return preg_match('/^Retry-After: [1-9]\d*$/', $h) === 1; });
+        return $code === '429 REPORT_LIMIT' && $retry ? true : $code . ' ' . json_encode($headers);
+    } finally {
+        Tfm\Config::override('farm.report_daily', null);
+    }
+});
+check('Farm::report — a quick plot at 100 % in the stored save (no mirror row) → accepted; at 96 % → NOT_READY', function () {
+    $u = newUser();
+    $t = Tfm\Clock::ms();
+    $s = fresh($u, $t);
+    $s->farm->plots->P1->growth = 100;
+    storeSave($u, $s, $t);
+    $ok = Tfm\Farm::report($u, 'plot', 'P1', (string) $s->farm->plots->P1->plantedAt, '');
+    $no = apiCode(function () use ($u, $s) { Tfm\Farm::report($u, 'plot', 'P6', (string) $s->farm->plots->P6->plantedAt, ''); });
+    $wrong = apiCode(function () use ($u, $s) { Tfm\Farm::report($u, 'plot', 'P1', (string) ($s->farm->plots->P1->plantedAt + 1), ''); });
+    return $ok['kind'] === 'plot' && $ok['cropId'] === 'CROP_BEAN' && $ok['status'] === 'pending' && $no === '409 NOT_READY' && $wrong === '409 ALREADY_REPORTED' || ($ok['kind'] === 'plot' && $no === '409 NOT_READY' && $wrong === '409 NOT_READY')
+        ? true : json_encode($ok) . " P6=$no wrongPid=$wrong";
+});
+check('Farm::report — a quick plot the mirror saw at 100 % (ready row) → accepted without looking at the save', function () {
+    $u = newUser();
+    $t = Tfm\Clock::ms();
+    $s = fresh($u, $t);
+    $s->farm->plots->P1->growth = 100;
+    Tfm\Farm::sync((int) $u['id'], cl($s), null, $t, 1);
+    $r = Tfm\Farm::report($u, 'plot', 'P1', (string) $s->farm->plots->P1->plantedAt, '');
+    return $r['status'] === 'pending' && $r['bedId'] === 'P1' ? true : json_encode($r);
+});
+check('Farm::report — kind / bedId / pid of the wrong shape → 400 INVALID_INPUT (nothing looked up)', function () use ($RU) {
+    $bad = [];
+    foreach ([['field', 'RB1', pid()], ['rt', 'RB9', pid()], ['rt', 'RB1', 'nothex'], ['rt', '<b>', pid()], ['plot', 'P1', 'abc'], ['plot', str_repeat('P', 17), '123'], ['plot', 'P1', '12345678901234567']] as $c) {
+        $code = apiCode(function () use ($RU, $c) { Tfm\Farm::report($RU, $c[0], $c[1], $c[2], ''); });
+        if ($code !== '400 INVALID_INPUT') $bad[] = implode('/', $c) . " → $code";
+    }
+    return $bad ? implode(' | ', $bad) : true;
+});
+check('Farm::reports — the caller\'s own reports only (newest first, ≤ 50) with unseen = decided but not yet seen', function () use ($RU, $rep) {
+    $list = Tfm\Farm::reports((int) $RU['id']);
+    $other = Tfm\Farm::reports((int) newUser()['id']);
+    Tfm\Db::exec("UPDATE crop_reports SET status = 'approved', memo = '잘 키웠어요', decided_at = ?, seen_at = 0 WHERE id = ?", [Tfm\Clock::ms(), $rep['id']]);
+    $after = Tfm\Farm::reports((int) $RU['id']);
+    return count($list['reports']) === 1 && $list['reports'][0]['id'] === $rep['id'] && $list['unseen'] === 0 && $other['reports'] === [] && $other['unseen'] === 0
+        && $after['unseen'] === 1 && $after['reports'][0]['status'] === 'approved' && $after['reports'][0]['memo'] === '잘 키웠어요'
+        ? true : json_encode([$list, $other, $after], JSON_UNESCAPED_UNICODE);
+});
+check('Farm::markSeen — marks only the caller\'s decided reports; another account\'s ids and pending ones stay untouched', function () use ($RU, $rep) {
+    $intruder = newUser();
+    $n0 = Tfm\Farm::markSeen((int) $intruder['id'], [$rep['id']]);
+    $still = (int) Tfm\Db::value('SELECT seen_at FROM crop_reports WHERE id = ?', [$rep['id']]);
+    list($u, $s, $p) = planted('CROP_MINT', 'RB2', Tfm\Clock::ms() - 700000);
+    $pending = Tfm\Farm::report($u, 'rt', 'RB2', $p, '');
+    $n1 = Tfm\Farm::markSeen((int) $u['id'], [$pending['id']]);
+    $n2 = Tfm\Farm::markSeen((int) $RU['id'], [$rep['id'], $rep['id'], 999999999]);
+    return $n0 === 0 && $still === 0 && $n1 === 0 && $n2 === 1 && (int) Tfm\Db::value('SELECT seen_at FROM crop_reports WHERE id = ?', [$rep['id']]) > 0 && Tfm\Farm::reports((int) $RU['id'])['unseen'] === 0
+        ? true : "intruder=$n0 still=$still pending=$n1 own=$n2";
+});
+check('Farm::photoTarget / setPhoto — own pending report only (another account / a decided one → 404 NOT_FOUND); one photo per report (409 PHOTO_EXISTS)', function () use ($RU, $rep) {
+    list($u, $s, $p) = planted('CROP_MINT', 'RB3', Tfm\Clock::ms() - 700000);
+    $mine = Tfm\Farm::report($u, 'rt', 'RB3', $p, '');
+    $foreign = apiCode(function () use ($RU, $mine) { Tfm\Farm::photoTarget((int) $RU['id'], $mine['id']); });
+    $decided = apiCode(function () use ($RU, $rep) { Tfm\Farm::photoTarget((int) $RU['id'], $rep['id']); });
+    $row = Tfm\Farm::photoTarget((int) $u['id'], $mine['id']);
+    Tfm\Farm::setPhoto((int) $u['id'], $mine['id'], 'uploads/reports/2026/11/' . str_repeat('a', 32) . '.jpg');
+    $again = apiCode(function () use ($u, $mine) { Tfm\Farm::photoTarget((int) $u['id'], $mine['id']); });
+    $twice = apiCode(function () use ($u, $mine) { Tfm\Farm::setPhoto((int) $u['id'], $mine['id'], 'uploads/reports/2026/11/' . str_repeat('b', 32) . '.jpg'); });
+    $list = Tfm\Farm::reports((int) $u['id'])['reports'][0];
+    return $foreign === '404 NOT_FOUND' && $decided === '404 NOT_FOUND' && (int) $row['id'] === $mine['id'] && $again === '409 PHOTO_EXISTS' && $twice === '409 PHOTO_EXISTS'
+        && $list['photoUrl'] === 'uploads/reports/2026/11/' . str_repeat('a', 32) . '.jpg'
+        ? true : "foreign=$foreign decided=$decided again=$again twice=$twice url=" . json_encode($list['photoUrl']);
+});
+check('Farm::state — {scale, tier, beds:[rt + plot rows], storage:{items, total, cap}, reports:{pending, unseen}} of the caller only', function () {
+    $u = newUser();
+    $t = Tfm\Clock::ms() - 700000;
+    $s = fresh($u, $t);
+    $p = pid();
+    $s->rtfarm->beds->RB1 = bed('CROP_MINT', $p, $t);
+    $s->storage->items = (object) ['ITEM_MINT' => 4, 'ITEM_KIMCHI' => 2];
+    Tfm\Farm::sync((int) $u['id'], cl($s), null, $t, 1);
+    Tfm\Farm::report($u, 'rt', 'RB1', $p, '');
+    $st = Tfm\Farm::state((int) $u['id'], 1);
+    $kinds = array_count_values(array_map(function ($b) { return $b['kind']; }, $st['beds']));
+    $rb1 = array_values(array_filter($st['beds'], function ($b) { return $b['bedId'] === 'RB1'; }))[0] ?? null;
+    return $st['scale'] === 1.0 && $st['tier'] === 1 && ($kinds['rt'] ?? 0) === 1 && ($kinds['plot'] ?? 0) === 2 && $rb1 && $rb1['status'] === 'ready' && $rb1['pid'] === $p
+        && $st['storage'] === ['items' => ['ITEM_KIMCHI' => 2, 'ITEM_MINT' => 4], 'total' => 6, 'cap' => 300] && $st['reports'] === ['pending' => 1, 'unseen' => 0]
+        ? true : json_encode($st, JSON_UNESCAPED_UNICODE);
+});
+
 echo PHP_EOL . ($failed === 0 ? "✔ all $passed farm unit checks passed" : "✖ $failed of " . ($failed + $passed) . " farm check(s) failed") . " (driver " . Tfm\Db::driver() . ')' . PHP_EOL;
 exit($failed === 0 ? 0 : 1);

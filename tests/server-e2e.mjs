@@ -1370,6 +1370,121 @@ async function main() {
     return `${a.json.data.violations} · ${b.json.data.violations} · ${moved}`;
   });
 
+  // ------------------------------------------------------------- completion requests "재배 완료 확인" (CONTRACT §15.3)
+  const G = new Client('G');            // another player: must never reach F's plantings / requests
+  let fReport = null;
+  const reportForm = (buf, reportId, name = 'bed.jpg', type = 'image/jpeg', extra = {}) => {
+    const f = new FormData();
+    f.append('reportId', String(reportId));
+    for (const [k, v] of Object.entries(extra)) f.append(k, v);
+    f.append('photo', new Blob([buf], { type }), name);
+    return f;
+  };
+  await step('farm report: the harvested mint → 200 pending (crop / amount / stars from the server records); again → 409 ALREADY_REPORTED', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const r = await F.req('api/farm/report.php', { json: { kind: 'rt', bedId: 'RB1', pid: mint, note: '물을 열심히 줬어요!' } });
+    assert(r.status === 200 && r.data?.report, `report ${r.status} ${r.error?.code || ''}`);
+    const rep = r.data.report;
+    assert(rep.status === 'pending' && rep.kind === 'rt' && rep.bedId === 'RB1' && rep.cropId === 'CROP_MINT' && rep.amount === 5 && rep.stars === 2 && rep.note === '물을 열심히 줬어요!' && rep.photoUrl === null && rep.decidedAt === 0, `report ${JSON.stringify(rep)}`);
+    const again = await F.req('api/farm/report.php', { json: { kind: 'rt', bedId: 'RB1', pid: mint } });
+    assert(again.status === 409 && again.error?.code === 'ALREADY_REPORTED', `again ${again.status} ${again.error?.code}`);
+    fReport = rep;
+    return `report #${rep.id}`;
+  });
+  await step('farm report: a growing bed (the bean) → 409 NOT_READY; another account using F\'s pid → the same 409 NOT_READY; bad shapes → 400', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const early = await F.req('api/farm/report.php', { json: { kind: 'rt', bedId: 'RB2', pid: bean } });
+    assert(early.status === 409 && early.error?.code === 'NOT_READY', `bean ${early.status} ${early.error?.code}`);
+    await G.req('api/ping.php');
+    const reg = await G.req('api/auth/register.php', { json: { email: `e2e_farmg${id}@example.com`, nickname: `옆밭${tag.slice(-5)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(reg.status === 200, `register G ${reg.status} ${reg.error?.code || ''}`);
+    const idor = await G.req('api/farm/report.php', { json: { kind: 'rt', bedId: 'RB1', pid: mint } });
+    assert(idor.status === 409 && idor.error?.code === 'NOT_READY', `G with F's pid ${idor.status} ${idor.error?.code}`);
+    assert(dbAll('SELECT COUNT(*) AS n FROM crop_reports WHERE user_id = ?', [Number(reg.data.user.id)])[0].n == 0, 'G got a report row');
+    const bad = [];
+    for (const body of [{ kind: 'x', bedId: 'RB1', pid: mint }, { kind: 'rt', bedId: 'RB9', pid: mint }, { kind: 'rt', bedId: 'RB1', pid: 'XYZ' }, { kind: 'rt', bedId: 'RB1', pid: mint, extra: 1 }, { kind: 'rt', bedId: 1, pid: mint }, { kind: 'rt', bedId: 'RB1', pid: mint, note: 'x'.repeat(81) }]) {
+      const r = await F.req('api/farm/report.php', { json: body });
+      if (!(r.status === 400 && r.error?.code === 'INVALID_INPUT')) bad.push(`${JSON.stringify(body).slice(0, 60)} → ${r.status} ${r.error?.code}`);
+    }
+    assert(!bad.length, bad.join(' | '));
+    return 'NOT_READY · NOT_READY (IDOR) · 6 bad shapes → 400';
+  });
+  await step('farm report photo: another account → 404; GIF / WEBP / a 1 MB+ file / a text file → 400; without login → 401', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const idor = await G.req('api/farm/report-photo.php', { form: reportForm(makePng(8, 8), fReport.id, 'a.png', 'image/png') });
+    assert(idor.status === 404 && idor.error?.code === 'NOT_FOUND', `G → F's report ${idor.status} ${idor.error?.code}`);
+    const GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    const out = [];
+    const cases = [['GIF', GIF, 'a.gif', 'image/gif', 'UPLOAD_TYPE'], ['over 1 MB', Buffer.concat([makePng(4, 4), Buffer.alloc(1024 * 1024 + 512, 0x41)]), 'big.png', 'image/png', 'UPLOAD_TOO_LARGE'], ['text', Buffer.from('hello, I am not an image'), 'x.jpg', 'image/jpeg', 'UPLOAD_TYPE']];
+    const webp = srvPhp('function_exists("imagewebp") ? (function () { $im = imagecreatetruecolor(8, 8); ob_start(); imagewebp($im); return base64_encode((string) ob_get_clean()); })() : ""');
+    if (webp) cases.push(['WEBP', Buffer.from(webp, 'base64'), 'a.webp', 'image/webp', 'UPLOAD_TYPE']);
+    for (const [label, buf, name, type, code] of cases) {
+      const r = await F.req('api/farm/report-photo.php', { form: reportForm(buf, fReport.id, name, type) });
+      assert(r.status === 400 && r.error?.code === code, `${label} → ${r.status} ${r.error?.code}`);
+      out.push(`${label} ${r.error.code}`);
+    }
+    const anonR = await anon.req('api/farm/report-photo.php', { form: reportForm(makePng(4, 4), fReport.id, 'a.png', 'image/png') });
+    assert(anonR.status === 401 || anonR.status === 403, `anon ${anonR.status}`);
+    const extra = await F.req('api/farm/report-photo.php', { form: reportForm(makePng(4, 4), fReport.id, 'a.png', 'image/png', { userId: '1' }) });
+    assert(extra.status === 400 && extra.error?.code === 'INVALID_INPUT', `an extra field ${extra.status} ${extra.error?.code}`);
+    return `404 (other account) · ${out.join(' · ')} · anon ${anonR.status} · extra field 400`;
+  });
+  await step('farm report photo: a 1500×1000 JPEG with GPS metadata → 200, re-encoded ≤ 1280 px, no GPS left, served as an image; a second photo → 409', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const jpeg = Buffer.from(srvPhp('(function () { $im = imagecreatetruecolor(1500, 1000); imagefill($im, 0, 0, imagecolorallocate($im, 80, 160, 90)); ob_start(); imagejpeg($im, null, 80); return base64_encode((string) ob_get_clean()); })()'), 'base64');
+    const exif = Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), Buffer.from('TFM-GPS-37.5665N-126.9780E', 'latin1')]);
+    const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, (exif.length + 2) >> 8, (exif.length + 2) & 0xff]), exif]);
+    const withGps = Buffer.concat([jpeg.subarray(0, 2), app1, jpeg.subarray(2)]);
+    const r = await F.req('api/farm/report-photo.php', { form: reportForm(withGps, fReport.id, 'bed.jpg', 'image/jpeg') });
+    assert(r.status === 200 && /^uploads\/reports\/\d{4}\/\d{2}\/[a-f0-9]{32}\.jpg$/.test(r.data?.url || ''), `upload ${r.status} ${r.error?.code || ''} ${r.data?.url}`);
+    uploadedFiles.push(r.data.url);
+    assert(r.data.width === 1280 && r.data.height <= 1280 && r.data.mime === 'image/jpeg' && r.data.size <= 1024 * 1024, `stored ${r.data.width}×${r.data.height} ${r.data.mime} ${r.data.size}`);
+    const img = await fetch(new URL(r.data.url, BASE));
+    const buf = Buffer.from(await img.arrayBuffer());
+    assert(img.status === 200 && buf[0] === 0xff && buf[1] === 0xd8, `fetch ${img.status}`);
+    assert(!buf.includes('TFM-GPS') && !buf.includes('Exif'), 'GPS / EXIF survived the re-encode');
+    const second = await F.req('api/farm/report-photo.php', { form: reportForm(makePng(8, 8), fReport.id, 'b.png', 'image/png') });
+    assert(second.status === 409 && second.error?.code === 'PHOTO_EXISTS', `second ${second.status} ${second.error?.code}`);
+    const row = dbAll('SELECT photo FROM crop_reports WHERE id = ?', [fReport.id])[0];
+    assert(row && row.photo === r.data.url, `crop_reports.photo ${JSON.stringify(row)}`);
+    fReport.photoUrl = r.data.url;
+    return `${withGps.length} → ${r.data.size} bytes, ${r.data.width}×${r.data.height}, no GPS · second 409`;
+  });
+  await step('farm reports / seen / state: the owner sees the request with photoUrl, another account sees none; a decision → unseen 1 → seen → 0', async () => {
+    if (!phpProc) return 'skipped (needs the time scale)';
+    const list = await F.req('api/farm/reports.php');
+    const mine = (list.data?.reports || []).find((x) => x.id === fReport.id);
+    assert(list.status === 200 && mine && mine.photoUrl === fReport.photoUrl && list.data.unseen === 0, `reports ${list.status} ${JSON.stringify(list.data).slice(0, 200)}`);
+    const other = await G.req('api/farm/reports.php');
+    assert(other.status === 200 && other.data.reports.length === 0, `G sees ${JSON.stringify(other.data)}`);
+    const q = await F.req('api/farm/reports.php?all=1');
+    assert(q.status === 400, `an unknown query parameter → ${q.status}`);
+    srvPhp('Tfm\\Db::exec("UPDATE crop_reports SET status = \'approved\', memo = ?, decided_at = ? WHERE id = ?", [$in["memo"], Tfm\\Clock::ms(), $in["id"]])', { id: fReport.id, memo: '정말 잘 키웠어요!' });
+    const after = await F.req('api/farm/reports.php');
+    const dec = after.data.reports.find((x) => x.id === fReport.id);
+    assert(after.data.unseen === 1 && dec.status === 'approved' && dec.memo === '정말 잘 키웠어요!' && dec.decidedAt > 0 && dec.seen === false, `after the decision ${JSON.stringify(dec)} unseen ${after.data.unseen}`);
+    const intr = await G.req('api/farm/seen.php', { json: { ids: [fReport.id] } });
+    assert(intr.status === 200 && intr.data.updated === 0, `G marking F's report ${intr.status} ${JSON.stringify(intr.data)}`);
+    const seen = await F.req('api/farm/seen.php', { json: { ids: [fReport.id] } });
+    assert(seen.status === 200 && seen.data.updated === 1 && seen.data.unseen === 0, `seen ${seen.status} ${JSON.stringify(seen.data)}`);
+    const bad = [];
+    for (const body of [{ ids: 'x' }, { ids: ['1'] }, { ids: [1.5] }, { ids: [-1] }, { ids: { a: 1 } }, { ids: Array.from({ length: 51 }, (_, i) => i + 1) }, { list: [1] }]) {
+      const r = await F.req('api/farm/seen.php', { json: body });
+      if (r.status !== 400) bad.push(`${JSON.stringify(body).slice(0, 40)} → ${r.status}`);
+    }
+    assert(!bad.length, bad.join(' | '));
+    const st = await F.req('api/farm/state.php');
+    const rb2 = (st.data?.beds || []).find((b) => b.bedId === 'RB2');
+    assert(st.status === 200 && rb2 && rb2.kind === 'rt' && rb2.pid === bean && st.data.storage.cap === 300 && st.data.storage.total === Object.values(fStored.storage.items).reduce((a, b) => a + b, 0) && st.data.reports.pending === 0 && st.data.reports.unseen === 0, `state ${st.status} ${JSON.stringify(st.data).slice(0, 300)}`);
+    assert((st.data.beds || []).some((b) => b.kind === 'plot'), 'the quick-plot mirror is in the state');
+    return `reports ${list.data.reports.length} · approved → unseen 1 → seen → 0 · state beds ${st.data.beds.length}, 곳간 ${st.data.storage.total}/${st.data.storage.cap}`;
+  });
+  await step('farm: the time scale back to the default (Settings farm.rt_scale = 1)', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const v = srvPhp('(function () { Tfm\\Settings::set("farm.rt_scale", 1.0, null); return Tfm\\Farm::scale(); })()');
+    assert(v === 1, `scale ${v}`);
+  });
+
   // ------------------------------------------------------------- summary
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${failed.length ? C.r('✖') : C.g('✔')} ${results.length - failed.length}/${results.length} passed${failed.length ? ` — failed: ${failed.map((f) => f.name).join(' | ')}` : ''}`);

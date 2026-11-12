@@ -371,4 +371,198 @@ final class Farm
         }
         return ['scale' => self::scale(), 'tier' => max(1, min(4, $tier)), 'beds' => $beds ? $beds : new \stdClass()];
     }
+
+    /**
+     * api/farm/state.php: the caller's authoritative view — {scale, tier, beds: [{bedId, kind, pid, cropId, firstSeenAt,
+     * readyAt, growth, status}] (growing / ready rows of both kinds, real-time first), storage: {items, total, cap},
+     * reports: {pending, unseen}}.
+     */
+    public static function state(int $uid, int $tier, ?int $now = null): array
+    {
+        $now = $now === null ? Clock::ms() : $now;
+        $beds = [];
+        foreach (Db::all("SELECT bed_id, kind, pid, crop_id, first_seen_at, ready_at, growth, status FROM farm_beds WHERE user_id = ? AND status IN ('growing', 'ready') ORDER BY kind DESC, bed_id ASC, id ASC", [$uid]) as $r) {
+            $beds[] = ['bedId' => (string) $r['bed_id'], 'kind' => (string) $r['kind'], 'pid' => (string) $r['pid'], 'cropId' => (string) $r['crop_id'],
+                'firstSeenAt' => (int) $r['first_seen_at'], 'readyAt' => (int) $r['ready_at'], 'growth' => (int) $r['growth'], 'status' => self::liveStatus($r, $now)];
+        }
+        $items = [];
+        $total = 0;
+        foreach (Db::all('SELECT item_id, qty FROM farm_storage WHERE user_id = ? ORDER BY item_id ASC', [$uid]) as $r) {
+            $items[(string) $r['item_id']] = (int) $r['qty'];
+            $total += (int) $r['qty'];
+        }
+        return [
+            'scale' => self::scale(), 'tier' => max(1, min(4, $tier)), 'beds' => $beds,
+            'storage' => ['items' => $items ? $items : new \stdClass(), 'total' => $total, 'cap' => GameData::storageCap()],
+            'reports' => ['pending' => (int) Db::value("SELECT COUNT(*) FROM crop_reports WHERE user_id = ? AND status = 'pending'", [$uid]), 'unseen' => self::unseen($uid)],
+        ];
+    }
+
+    // ------------------------------------------------------------------ completion requests "재배 완료 확인" (CONTRACT §15.3)
+    private const REPORT_COLS = 'id, user_id, kind, bed_id, pid, crop_id, stars, amount, note, photo, status, memo, requested_at, decided_at, decided_by, seen_at';
+    /** the only photo paths a report may carry (what Upload::image stores under subdir 'reports') */
+    private const PHOTO_RE = '#^uploads/reports/\d{4}/\d{2}/[a-f0-9]{32}\.(?:jpg|png)$#';
+
+    /** ★ of a care value by rtfarm.starAt ([0, 40, 75]: care ≥ 0 → 1, ≥ 40 → 2, ≥ 75 → 3) */
+    public static function starsOf(int $care): int
+    {
+        $s = 1;
+        foreach (GameData::rtfarm()['starAt'] as $i => $at) if ($care >= (int) $at) $s = (int) $i + 1;
+        return max(1, min(3, $s));
+    }
+
+    /** how long after a harvest it may still be reported (farm.harvest_keep_days, default 7) */
+    private static function keepMs(): int { return max(1, (int) Config::get('farm.harvest_keep_days', 7)) * 86400000; }
+
+    /** the shape of a report target (api/farm/report.php checks the same through V): 400 INVALID_INPUT */
+    private static function checkTarget(string $kind, string $bedId, string $pid): void
+    {
+        if (!in_array($kind, ['rt', 'plot'], true)) V::fail('kind', '값이 올바르지 않아요.');
+        if ($kind === 'rt') {
+            if (!in_array($bedId, GameData::rtBeds(), true)) V::fail('bedId', '값이 올바르지 않아요.');
+            if (!preg_match(self::PID_RE, $pid)) V::fail('pid', '값은 16자리 16진수여야 해요.');
+            return;
+        }
+        if (!preg_match(self::PLOT_RE, $bedId)) V::fail('bedId', '값이 올바르지 않아요.');
+        if (!preg_match('/^[1-9]\d{0,15}$/', $pid)) V::fail('pid', '값이 올바르지 않아요.');
+    }
+
+    /** a child's note: invisible characters removed, personal information 🔒-masked, bad words ♡♡-masked (like chat), ≤ $max */
+    private static function cleanNote(string $note, int $max): string
+    {
+        $t = Users::cleanText($note, 1000);
+        if ($t === '') return '';
+        return mb_substr(trim(ChatFilter::mask(ChatFilter::maskPII($t))), 0, $max);
+    }
+
+    /**
+     * What the server's OWN records say about a planting (never the request): ['crop', 'stars', 'amount'] when it may be
+     * reported — a real-time row that is ready by the server clock, or harvested within farm.harvest_keep_days; a quick
+     * plot whose mirrored row is ready / recently harvested, or whose stored save shows 100 % — else null.
+     */
+    private static function readyTarget(int $uid, string $kind, string $bedId, string $pid, int $now): ?array
+    {
+        $row = Db::one('SELECT crop_id, status, ready_at, harvested_at, amount, stars, care FROM farm_beds WHERE user_id = ? AND kind = ? AND bed_id = ? AND pid = ? ORDER BY id DESC LIMIT 1', [$uid, $kind, $bedId, $pid]);
+        if ($row) {
+            $st = (string) $row['status'];
+            $ready = $st === 'ready' || ($kind === 'rt' && $st === 'growing' && (int) $row['ready_at'] <= $now);
+            $harvested = $st === 'harvested' && (int) $row['harvested_at'] >= $now - self::keepMs();
+            if ($ready || $harvested) {
+                return [
+                    'crop' => (string) $row['crop_id'],
+                    'stars' => $kind !== 'rt' ? 0 : ($harvested ? max(0, min(3, (int) $row['stars'])) : self::starsOf((int) $row['care'])),
+                    'amount' => $harvested ? max(0, (int) $row['amount']) : 0,
+                ];
+            }
+        }
+        if ($kind === 'rt') return null;
+        // a quick plot at 100 % in the stored (accepted) save — the server's copy, not the request
+        $data = Db::value('SELECT data FROM player_saves WHERE user_id = ?', [$uid]);
+        $s = is_string($data) ? Json::tryDecode($data, false, 512) : null;
+        $plot = self::o(self::p(self::o(self::p(self::o(self::p(self::o($s), 'farm')), 'plots')), $bedId));
+        if (!$plot || self::plotPid(self::p($plot, 'plantedAt')) !== $pid) return null;
+        $crop = self::p($plot, 'cropId');
+        if (!is_string($crop) || GameData::crop($crop) === null || self::int(self::p($plot, 'growth')) < 100) return null;
+        return ['crop' => $crop, 'stars' => 0, 'amount' => 0];
+    }
+
+    /**
+     * api/farm/report.php — one completion request per planting: 409 ALREADY_REPORTED for a second one, 429 REPORT_LIMIT
+     * after farm.report_daily requests in 24 h, 409 NOT_READY unless the server's records say the planting is ready (also
+     * for a planting of another account — the same answer, so other accounts cannot be probed). @return array the report
+     */
+    public static function report(array $user, string $kind, string $bedId, string $pid, string $note = '', ?int $now = null): array
+    {
+        $uid = (int) $user['id'];
+        $now = $now === null ? Clock::ms() : $now;
+        self::checkTarget($kind, $bedId, $pid);
+        $note = self::cleanNote($note, max(1, (int) Config::get('farm.report_note_max', 80)));
+        $dup = function () { return new ApiException(409, 'ALREADY_REPORTED', '이 작물은 벌써 완료 확인을 보냈어요.'); };
+        return Db::tx(function () use ($uid, $kind, $bedId, $pid, $note, $now, $dup) {
+            // one account's requests one after another (MariaDB row lock; SQLite already holds the write lock)
+            Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]);
+            if (Db::value('SELECT id FROM crop_reports WHERE user_id = ? AND kind = ? AND bed_id = ? AND pid = ?', [$uid, $kind, $bedId, $pid]) !== null) throw $dup();
+            $daily = max(1, (int) Config::get('farm.report_daily', 30));
+            $since = $now - 86400000;
+            if ((int) Db::value('SELECT COUNT(*) FROM crop_reports WHERE user_id = ? AND requested_at > ?', [$uid, $since]) >= $daily) {
+                $oldest = (int) Db::value('SELECT MIN(requested_at) FROM crop_reports WHERE user_id = ? AND requested_at > ?', [$uid, $since]);
+                $retry = max(1, (int) ceil(($oldest + 86400000 - $now) / 1000));
+                throw new ApiException(429, 'REPORT_LIMIT', '오늘은 완료 확인을 충분히 보냈어요. 내일 다시 보내 주세요.', ['retryAfter' => $retry], ['Retry-After: ' . $retry]);
+            }
+            $t = self::readyTarget($uid, $kind, $bedId, $pid, $now);
+            if ($t === null) throw new ApiException(409, 'NOT_READY', '아직 다 자라지 않았어요. 다 자라면 보내 주세요.');
+            try {
+                $id = Db::insert('crop_reports', [
+                    'user_id' => $uid, 'kind' => $kind, 'bed_id' => $bedId, 'pid' => $pid, 'crop_id' => $t['crop'], 'stars' => $t['stars'], 'amount' => $t['amount'],
+                    'note' => $note, 'photo' => '', 'status' => 'pending', 'memo' => null, 'requested_at' => $now, 'decided_at' => 0, 'decided_by' => null, 'seen_at' => 0,
+                ]);
+            } catch (\PDOException $e) {
+                if ((string) $e->getCode() === '23000') throw $dup();   // the same planting at the same moment (UNIQUE)
+                throw $e;
+            }
+            Audit::log('crop_report_requested', $uid, ['id' => $id, 'kind' => $kind, 'bed' => $bedId, 'crop' => $t['crop']]);
+            return self::reportOut((array) Db::one('SELECT ' . self::REPORT_COLS . ' FROM crop_reports WHERE id = ?', [$id]));
+        });
+    }
+
+    /** a stored photo path the app may hand out (defense in depth: only the report-photo pattern) */
+    private static function validPhoto(string $p): bool { return preg_match(self::PHOTO_RE, $p) === 1; }
+
+    /** the owner's view of a report (api/farm/report.php, reports.php) — photoUrl only here, never to other players */
+    private static function reportOut(array $r): array
+    {
+        $photo = (string) $r['photo'];
+        return [
+            'id' => (int) $r['id'], 'kind' => (string) $r['kind'], 'bedId' => (string) $r['bed_id'], 'pid' => (string) $r['pid'], 'cropId' => (string) $r['crop_id'],
+            'stars' => (int) $r['stars'], 'amount' => (int) $r['amount'], 'note' => (string) $r['note'], 'status' => (string) $r['status'],
+            'memo' => $r['memo'] === null ? '' : (string) $r['memo'], 'requestedAt' => (int) $r['requested_at'], 'decidedAt' => (int) $r['decided_at'],
+            'seen' => (int) $r['seen_at'] > 0, 'photoUrl' => self::validPhoto($photo) ? $photo : null,
+        ];
+    }
+
+    /** decided reports the owner has not marked seen yet */
+    public static function unseen(int $uid): int
+    {
+        return (int) Db::value("SELECT COUNT(*) FROM crop_reports WHERE user_id = ? AND status <> 'pending' AND seen_at = 0", [$uid]);
+    }
+
+    /** api/farm/reports.php: {reports: the caller's last $limit (≤ 50), newest first; unseen} */
+    public static function reports(int $uid, int $limit = 50): array
+    {
+        $rows = Db::all('SELECT ' . self::REPORT_COLS . ' FROM crop_reports WHERE user_id = ? ORDER BY id DESC LIMIT ?', [$uid, max(1, min(50, $limit))]);
+        return ['reports' => array_map(function ($r) { return self::reportOut($r); }, $rows), 'unseen' => self::unseen($uid)];
+    }
+
+    /** api/farm/seen.php: mark the caller's DECIDED reports seen (others' ids and pending ones are untouched) → rows changed */
+    public static function markSeen(int $uid, array $ids, ?int $now = null): int
+    {
+        $now = $now === null ? Clock::ms() : $now;
+        $n = 0;
+        foreach (array_unique(array_map('intval', array_slice(array_values($ids), 0, 50))) as $id) {
+            if ($id < 1) continue;
+            $n += Db::exec("UPDATE crop_reports SET seen_at = ? WHERE id = ? AND user_id = ? AND status <> 'pending' AND seen_at = 0", [$now, $id, $uid]);
+        }
+        return $n;
+    }
+
+    /**
+     * api/farm/report-photo.php, before the file is read: the caller's own PENDING report without a photo. Another account's
+     * id, an unknown one and a decided one are the same 404 NOT_FOUND; a report with a photo → 409 PHOTO_EXISTS.
+     */
+    public static function photoTarget(int $uid, int $reportId): array
+    {
+        $r = Db::one('SELECT id, user_id, status, photo FROM crop_reports WHERE id = ? AND user_id = ?', [$reportId, $uid]);
+        if (!$r || (string) $r['status'] !== 'pending') throw new ApiException(404, 'NOT_FOUND', '사진을 붙일 완료 확인 요청을 찾을 수 없어요.');
+        if ((string) $r['photo'] !== '') throw new ApiException(409, 'PHOTO_EXISTS', '이 요청에는 벌써 사진이 있어요.');
+        return $r;
+    }
+
+    /** attach the stored photo (once: two uploads at the same moment → the second gets 409 PHOTO_EXISTS) */
+    public static function setPhoto(int $uid, int $reportId, string $url): void
+    {
+        if (!self::validPhoto($url)) throw new \InvalidArgumentException('not a report photo path');
+        if (Db::exec("UPDATE crop_reports SET photo = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND photo = ''", [$url, $reportId, $uid]) !== 1) {
+            throw new ApiException(409, 'PHOTO_EXISTS', '이 요청에는 벌써 사진이 있어요.');
+        }
+    }
 }

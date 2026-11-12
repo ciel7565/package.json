@@ -1253,9 +1253,24 @@ async function S03() {
     const cases = [['userId = a word', { userId: 'abc' }], ['userId = negative', { userId: -1 }], ['userId = an array', { userId: [1] }], ['userId = a float', { userId: 1.5 }], ['force = a word', { userId: victim.user.id, force: 'yes' }], ['force = a number', { userId: victim.user.id, force: 1 }]];
     return strict('api/sub/renew.php', cases, { user: async () => adm });
   });
+  // CONTRACT §15.7 #3 / §15.3 — farm/report: kind enum, bed id of the kind, pid shape, note string ≤ farm.report_note_max
+  await check('S03', 'api/farm/report.php · kind / bedId / pid / note of the wrong type, unknown words, a wrong pid shape, an over-long note and an unknown key are refused', { sev: 'low', fix: STRICT_FIX }, async () => {
+    const base = { kind: 'rt', bedId: 'RB1', pid: 'a'.repeat(16), note: '물을 열심히 줬어요!' };
+    const cases = [...mut('kind', STR, base), ['kind = an unknown word', { ...base, kind: 'tree' }], ...mut('bedId', STR, base), ['bedId = an unknown bed', { ...base, bedId: 'RB9' }], ['bedId = markup', { ...base, bedId: '<b>' }],
+      ...mut('pid', STR, base), ['pid = 15 hex', { ...base, pid: 'a'.repeat(15) }], ['pid = not hex', { ...base, pid: 'z'.repeat(16) }], ['pid = upper-case hex', { ...base, pid: 'A'.repeat(16) }], ['plot pid = not digits', { kind: 'plot', bedId: 'P1', pid: '12ab' }],
+      ...mut('note', STR, base), ['note = 81 characters', { ...base, note: '가'.repeat(81) }], ['an unknown key (userId)', { ...base, userId: victim.user.id }]];
+    return strict('api/farm/report.php', cases, { perUser: 8 });
+  });
+  // CONTRACT §15.7 #3 / §15.3 — farm/seen: a list of ≤ 50 positive JSON integers
+  await check('S03', 'api/farm/seen.php · ids must be a list of at most 50 positive JSON integers (no strings, floats, nesting, objects, unknown keys)', { sev: 'low', fix: STRICT_FIX }, async () => {
+    const cases = [['ids = a word', { ids: 'x' }], ['ids = a number', { ids: 5 }], ['ids = an object', { ids: { a: 1 } }], ['ids = digit strings', { ids: ['1'] }], ['ids = a float', { ids: [1.5] }], ['ids = negative', { ids: [-1] }], ['ids = zero', { ids: [0] }],
+      ['ids = nested', { ids: [[1]] }], ['ids = huge', { ids: [1e30] }], ['ids = 51 entries', { ids: Array.from({ length: 51 }, (_, i) => i + 1) }], ['ids missing', {}], ['an unknown key', { ids: [1], all: true }]];
+    return strict('api/farm/seen.php', cases);
+  });
   // CONTRACT §15.7 #3 — every POST endpoint has a field-level spec in this suite
   await check('S03', 'every POST endpoint of the build has a field-level validation matrix in this suite', { sev: 'low', fix: 'New endpoint: add its valid body and wrong-type variants to S03() in tests/security-e2e.mjs.' }, async () => {
     const covered = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/chat/send.php', 'api/chat/report.php', 'api/presence/update.php', 'api/player/save.php', 'api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/grant.php', 'api/sub/renew.php',
+      'api/farm/report.php', 'api/farm/seen.php', 'api/farm/report-photo.php',   // report-photo: its reportId / file matrix is in S14
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
@@ -1556,6 +1571,12 @@ async function S05() {
     const ip = '203.0.113.122';
     const u = await newUser(s, 'Upl', { xff: ip });
     return logged(['upload_rejected'], ip, () => u.req('api/journal/upload.php', { multipart: { files: [{ name: 'a.png', data: makePng(4, 4, [pngText('Comment', '<?php system($_GET["c"]); ?>')]) }] } }));
+  });
+  // CONTRACT §15.7 #5 / §15.3 — the completion-request photo goes through the same pipeline
+  await check('S05', 'a rejected completion-request photo (PHP inside a PNG) is written to security_events (upload_rejected)', { sev: 'medium', fix: EV_FIX }, async () => {
+    const ip = '203.0.113.123';
+    const { c, id } = await pendingReport(s, 'Rpe', { xff: ip });
+    return logged(['upload_rejected'], ip, () => c.req('api/farm/report-photo.php', reportPhotoOf(id, 'a.png', makePng(4, 4, [pngText('Comment', '<?php system($_GET["c"]); ?>')]))));
   });
   // CONTRACT §15.7 #5 — kind save_rejected
   await check('S05', 'a cheating save (+1,000,000 coins) is written to security_events (save_rejected)', { sev: 'medium', fix: EV_FIX }, async () => {
@@ -2148,8 +2169,12 @@ async function S09() {
       'api/sub/prepare.php': [21, () => u.json('api/sub/prepare.php', { tier: 0, kind: 'card' })], 'api/journal/upload.php': [21, () => u.req('api/journal/upload.php', tiny)],
       'api/admin/stats.php': [121, () => adm.req('api/admin/stats.php')], 'api/sub/webhook.php': [121, () => request(s, WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })],
       'api/sub/return.php': [31, () => request(s, 'api/sub/return.php?fail=1')],
+      // CONTRACT §15.3 — farm_state [60, 60] · farm_report [10, 600] · farm_photo [10, 3600] · farm_reports [60, 60] (seen.php shares it)
+      'api/farm/state.php': [61, () => u.req('api/farm/state.php')], 'api/farm/reports.php': [61, () => u.req('api/farm/reports.php')],
+      'api/farm/report.php': [11, () => u.json('api/farm/report.php', { kind: 'rt', bedId: 'RB1', pid: '0'.repeat(16) })], 'api/farm/report-photo.php': [11, () => u.req('api/farm/report-photo.php', reportPhotoOf(1, 'a.png', Buffer.from('not an image')))],
     };
-    const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php' };
+    const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
+      'api/farm/seen.php': 'api/farm/reports.php' };
     // api/trap.php is the honeypot: it answers a bare 404 even over its logging limit (a 429 would tell a scanner it
     // found a real, rate-limited endpoint). Its rate limit throttles the log, not the response — so it is not expected
     // to 429 here (its limit is still exercised: S05 relies on the honeypot event being written under the limit).
@@ -2756,6 +2781,20 @@ async function S13() {
 // =============================================================================
 const uploadOf = (name, data, type = 'image/png', field = 'photo') => ({ multipart: { files: [{ field, name, type, data }] } });
 const isStoredImage = (r) => r.status === 200 && r.data && /^uploads\/journal\/\d{4}\/\d{2}\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(r.data.url || '');
+/** CONTRACT §15.3: a player with one pending completion request (a quick plot at 100 % in its first save → api/farm/report.php) */
+async function pendingReport(s, prefix = 'Rph', o = {}) {
+  const c = await newUser(s, prefix, o);
+  const st = freshState(c.user);
+  st.farm.plots.P6.growth = 100;
+  const sv = await c.json('api/player/save.php', saveBody(st));
+  if (sv.status !== 200) throw new Fail(`the first save for a completion request was refused: ${sv.status} ${(sv.error && sv.error.code) || ''}`);
+  const r = await c.json('api/farm/report.php', { kind: 'plot', bedId: 'P6', pid: String(st.farm.plots.P6.plantedAt) });
+  if (r.status !== 200 || !r.data || !r.data.report) throw new Fail(`api/farm/report.php → ${r.status} ${(r.error && r.error.code) || ''}`);
+  return { c, id: r.data.report.id };
+}
+/** multipart for api/farm/report-photo.php: field reportId (+ more fields) and one file */
+const reportPhotoOf = (id, name, data, type = 'image/png', field = 'photo', fields = {}) => ({ multipart: { fields: { reportId: String(id), ...fields }, files: [{ field, name, type, data }] } });
+const isStoredReportPhoto = (r) => r.status === 200 && r.data && /^uploads\/reports\/\d{4}\/\d{2}\/[a-f0-9]{32}\.(png|jpg)$/.test(r.data.url || '');
 async function S14() {
   if (!want('S14')) return;
   const s = await srv('val');
@@ -2831,6 +2870,59 @@ async function S14() {
     }
     assert(!bad.length, bad.join(', '));
     return 'every non-upload endpoint → 400 UPLOAD_NOT_ALLOWED';
+  });
+  // ---- CONTRACT §15.3 / §15.7 #14 — the completion-request photo (api/farm/report-photo.php): JPEG / PNG ≤ 1 MB, ≤ 1280 px
+  const RFIX = 'api/farm/report-photo.php: Upload::image with types jpeg / png, maxBytes farm.photo_max_bytes, maxDimension farm.photo_max_dimension; the caller\'s own pending report only.';
+  let rp = null, rpUsed = 0;
+  /** an upload to a pending report of an account that still has photo budget (farm_photo: 10 an hour each) */
+  const sendReport = async (name, data, type = 'image/png', field = 'photo', fields = {}) => {
+    if (!rp || ++rpUsed > 8) { rp = await pendingReport(s, 'Rph'); rpUsed = 1; }
+    const r = await rp.c.req('api/farm/report-photo.php', reportPhotoOf(rp.id, name, data, type, field, fields));
+    if (isStoredReportPhoto(r) && s.docroot === DOCROOT) UPLOADS.push([s.docroot, r.data.url]);
+    if (isStoredReportPhoto(r)) rp = null;   // that report has its photo now
+    return r;
+  };
+  await check('S14', 'report photo: GIF / SVG / PDF / PHP / HTML and PHP polyglots / WEBP / a file over 1 MB / a huge-dimension PNG / an empty or text file are rejected', { sev: 'high', fix: RFIX }, async () => {
+    const webp = (() => { const r = spawnSync('php', ['-r', 'if (!function_exists("imagewebp")) exit(3); $im = imagecreatetruecolor(8, 8); ob_start(); imagewebp($im); echo base64_encode((string) ob_get_clean());'], { encoding: 'utf8' }); return r.status === 0 && r.stdout ? Buffer.from(r.stdout, 'base64') : null; })();
+    const cases = [['a.gif', GIF, 'image/gif'], ['a.png', GIF, 'image/png'], ['a.svg', SVG, 'image/svg+xml'], ['a.png', SVG, 'image/png'], ['a.pdf', PDF, 'application/pdf'], ['shell.php.png', PHP, 'image/png'],
+      ['a.png', makePng(4, 4, [pngText('Comment', '<html><body><script>alert(1)</script></body></html>')]), 'image/png'], ['b.png', Buffer.concat([makePng(4, 4), Buffer.from('<?php echo 1; ?>')]), 'image/png'],
+      ['big.png', Buffer.concat([makePng(4, 4), Buffer.alloc(1024 * 1024 + 4096, 0x41)]), 'image/png'], ['huge.png', makePng(4, 4, [], [30000, 30000]), 'image/png'], ['bomb.png', makePng(1, 1, [], [5000, 5000]), 'image/png'],
+      ['a.png', Buffer.alloc(0), 'image/png'], ['a.jpg', Buffer.from('hello, I am not an image'), 'image/jpeg']];
+    if (webp) cases.push(['a.webp', webp, 'image/webp']);
+    const out = [];
+    for (const [name, data, type] of cases) out.push(refused(await sendReport(name, data, type), `${name} (${type})`));
+    return `${cases.length} files${webp ? ' (incl. WEBP)' : ''}: ${[...new Set(out)].join(' · ')}`;
+  });
+  await check('S14', 'report photo: reportId must be the caller\'s own pending report (a word, 0, -1, 1.5, a list, missing, another account\'s, an unknown id → 4xx) and no other field or file field is accepted', { sev: 'high', fix: RFIX }, async () => {
+    const mine = await pendingReport(s, 'Rpo');
+    const other = await pendingReport(s, 'Rpx');
+    const png = makePng(8, 8);
+    const out = [];
+    const cases = [['reportId = a word', { multipart: { fields: { reportId: 'abc' }, files: [{ name: 'a.png', data: png }] } }], ['reportId = 0', reportPhotoOf(0, 'a.png', png)], ['reportId = -1', reportPhotoOf(-1, 'a.png', png)],
+      ['reportId = 1.5', reportPhotoOf('1.5', 'a.png', png)], ['reportId[] = a list', { multipart: { fields: { 'reportId[]': String(mine.id) }, files: [{ name: 'a.png', data: png }] } }], ['no reportId', uploadOf('a.png', png)],
+      ['another account\'s report', reportPhotoOf(other.id, 'a.png', png)], ['an unknown id', reportPhotoOf(987654321, 'a.png', png)], ['an extra field (userId)', reportPhotoOf(mine.id, 'a.png', png, 'image/png', 'photo', { userId: String(other.c.user.id) })],
+      ['the file in another field', reportPhotoOf(mine.id, 'a.png', png, 'image/png', 'file')]];
+    for (const [label, o] of cases) {
+      const r = await mine.c.req('api/farm/report-photo.php', o);
+      assert(r.status >= 400 && r.status < 500 && r.error && r.error.code, `${label} → ${r.status} ${r.data ? JSON.stringify(r.data).slice(0, 80) : ''}`);
+      out.push(`${r.status} ${r.error.code}`);
+    }
+    const g = await other.c.req('api/farm/reports.php');
+    assert(g.status === 200 && (g.data.reports || []).every((x) => x.photoUrl === null), 'a photo reached the other account\'s report');
+    return `${cases.length} variants → ${[...new Set(out)].join(' · ')}`;
+  });
+  await check('S14', 'report photo: a valid 1500 px PNG with metadata markers is re-encoded (markers and trailing data gone, ≤ 1280 px) under uploads/reports/YYYY/MM/<32 hex>.png; a visitor cannot upload', { sev: 'high', fix: RFIX }, async () => {
+    const original = Buffer.concat([makePng(1500, 40, [pngText('Author', 'TFMSEC-GPS-37.5665N-126.9780E'), pngText('Comment', 'tfmsec-meta-marker')]), Buffer.from('TFMSEC-TRAILER')]);
+    const r = await sendReport('bed.png', original);
+    assert(isStoredReportPhoto(r), `a valid PNG was refused: ${r.status} ${(r.error && r.error.code) || ''} ${r.data ? JSON.stringify(r.data).slice(0, 80) : ''}`);
+    assert(r.data.width === 1280 && r.data.height <= 40 && r.data.mime === 'image/png', `stored as ${r.data.width}×${r.data.height} ${r.data.mime}`);
+    const g = await request(s, r.data.url, { headers: { Accept: 'image/*' } });
+    assert(g.status === 200 && g.buf.subarray(1, 4).toString('latin1') === 'PNG', `GET ${r.data.url} → ${g.status}`);
+    assert(!g.buf.includes('TFMSEC-GPS') && !g.buf.includes('tfmsec-meta-marker') && !g.buf.includes('TFMSEC-TRAILER'), 'metadata / trailing data survived');
+    const v = await anon(s);
+    const a = await v.req('api/farm/report-photo.php', reportPhotoOf(1, 'a.png', makePng()));
+    assert(a.status === 401 || a.status === 403, `a visitor → ${a.status}`);
+    return `${original.length} → ${g.buf.length} bytes, 1500 → ${r.data.width} px, no markers · visitor ${a.status}`;
   });
   // ---- Apache: uploads/.htaccess
   await check('S14', 'Apache: nothing below uploads/ executes and only [a-f0-9]{32}.(png|jpg|webp) names are served', { ...APACHE_MODE, sev: 'high', fix: 'Keep uploads/.htaccess (php engine off, RemoveHandler, deny all but image names).' }, async () => {

@@ -50,7 +50,10 @@ final class Upload
 
     /**
      * The reusable photo-upload core (CONTRACT §15.7 #14). $opt: maxBytes, maxDimension, subdir, dailyLimit, totalLimit
-     * (each falls back to the config 'uploads' block). Pipeline: is_uploaded_file → size cap → per-user quota → finfo MIME
+     * (each falls back to the config 'uploads' block), types (allowed MIME types, a subset of png / jpeg / webp — by the
+     * bytes, never the client's name or Content-Type; default all three), record (default true: the photo counts toward the
+     * journal quotas and gets a journal_uploads row; false = the caller keeps its own record and quota, e.g. a report photo
+     * of api/farm/report-photo.php, id 0). Pipeline: is_uploaded_file → size cap → per-user quota → finfo MIME
      * whitelist (png/jpeg/webp) → getimagesize (type agrees, dimension / pixel / memory caps) → reject script/markup
      * polyglots → GD re-encode (strips EXIF/GPS and anything appended) → random name + forced extension under
      * uploads/<subdir>/YYYY/MM/. F8: GD is required — without it there is no safe way to strip metadata or a trailing
@@ -64,6 +67,9 @@ final class Upload
         $maxDim = (int) (isset($opt['maxDimension']) ? $opt['maxDimension'] : (isset($cfg['max_dimension']) ? $cfg['max_dimension'] : 1600));
         $subdir = (string) preg_replace('/[^a-z0-9_]/', '', strtolower((string) (isset($opt['subdir']) ? $opt['subdir'] : 'journal')));
         if ($subdir === '') $subdir = 'journal';
+        $types = isset($opt['types']) && is_array($opt['types']) ? array_values(array_intersect(array_keys(self::TYPES), $opt['types'])) : array_keys(self::TYPES);
+        if (!$types) $types = array_keys(self::TYPES);
+        $record = !array_key_exists('record', $opt) || $opt['record'] !== false;
         $dailyLimit = (int) (isset($opt['dailyLimit']) ? $opt['dailyLimit'] : (isset($cfg['per_user_daily']) ? $cfg['per_user_daily'] : 40));
         $totalLimit = (int) (isset($opt['totalLimit']) ? $opt['totalLimit'] : (isset($cfg['per_user_total']) ? $cfg['per_user_total'] : 400));
         $mb = $max >= 1048576 ? rtrim(rtrim(number_format($max / 1048576, 1), '0'), '.') . 'MB' : ceil($max / 1024) . 'KB';
@@ -88,15 +94,20 @@ final class Upload
         // real type from the bytes (never trust the client's name or Content-Type)
         if (!class_exists('finfo')) self::reject('UPLOAD_UNSUPPORTED', '서버에서 사진 형식을 확인할 수 없어요. (fileinfo 확장 필요)');
 
-        // quotas
+        // quotas (journal photos; a caller with its own record keeps its own quota)
         $now = Clock::ms();
-        $today = (int) Db::value('SELECT COUNT(*) FROM journal_uploads WHERE user_id = ? AND created_at >= ?', [(int) $user['id'], $now - 86400000]);
-        if ($today >= $dailyLimit) throw new ApiException(429, 'UPLOAD_QUOTA', '오늘 올릴 수 있는 사진 수를 넘었어요. 내일 다시 시도해 주세요.');
-        $total = (int) Db::value('SELECT COUNT(*) FROM journal_uploads WHERE user_id = ?', [(int) $user['id']]);
-        if ($total >= $totalLimit) throw new ApiException(429, 'UPLOAD_QUOTA', '저장할 수 있는 사진 수를 넘었어요.');
+        if ($record) {
+            $today = (int) Db::value('SELECT COUNT(*) FROM journal_uploads WHERE user_id = ? AND created_at >= ?', [(int) $user['id'], $now - 86400000]);
+            if ($today >= $dailyLimit) throw new ApiException(429, 'UPLOAD_QUOTA', '오늘 올릴 수 있는 사진 수를 넘었어요. 내일 다시 시도해 주세요.');
+            $total = (int) Db::value('SELECT COUNT(*) FROM journal_uploads WHERE user_id = ?', [(int) $user['id']]);
+            if ($total >= $totalLimit) throw new ApiException(429, 'UPLOAD_QUOTA', '저장할 수 있는 사진 수를 넘었어요.');
+        }
 
         $mime = (string) (new \finfo(FILEINFO_MIME_TYPE))->file($tmp);
-        if (!isset(self::TYPES[$mime])) self::reject('UPLOAD_TYPE', 'PNG·JPEG·WEBP 사진만 올릴 수 있어요.', ['mime' => mb_substr($mime, 0, 40)]);
+        $names = ['image/png' => 'PNG', 'image/jpeg' => 'JPEG', 'image/webp' => 'WEBP'];
+        if (!isset(self::TYPES[$mime]) || !in_array($mime, $types, true)) {
+            self::reject('UPLOAD_TYPE', implode('·', array_map(function ($t) use ($names) { return $names[$t]; }, $types)) . ' 사진만 올릴 수 있어요.', ['mime' => mb_substr($mime, 0, 40)]);
+        }
         $info = @getimagesize($tmp);
         if (!$info || (isset($info[2]) ? $info[2] : 0) !== self::TYPES[$mime]['it']) self::reject('UPLOAD_INVALID', '올바른 사진 파일이 아니에요.', ['mime' => $mime, 'why' => 'getimagesize']);
         $w = (int) $info[0];
@@ -127,12 +138,23 @@ final class Upload
         if (file_put_contents($path, $out['bytes'], LOCK_EX) === false) throw new \RuntimeException('upload write failed');
         @chmod($path, 0644);
         $url = 'uploads/' . $sub . '/' . $name;
-        $id = Db::insert('journal_uploads', [
+        $id = !$record ? 0 : Db::insert('journal_uploads', [
             'user_id' => (int) $user['id'], 'path' => $url, 'mime' => $out['mime'], 'size_bytes' => strlen($out['bytes']),
             'width' => $out['w'], 'height' => $out['h'], 'sha256' => hash('sha256', $out['bytes']), 'created_at' => $now,
         ]);
         Log::info('UPLOAD', 'photo stored', ['uid' => (int) $user['id'], 'bytes' => strlen($out['bytes']), 'mime' => $out['mime'], 'subdir' => $subdir]);
         return ['id' => $id, 'url' => $url, 'width' => $out['w'], 'height' => $out['h'], 'size' => strlen($out['bytes']), 'mime' => $out['mime']];
+    }
+
+    /**
+     * Remove a photo stored by image() that could not be attached (e.g. a report that got its photo from another upload at
+     * the same moment). Only a path image() produces (uploads/<subdir>/YYYY/MM/<32 hex>.<ext>) is ever touched.
+     */
+    public static function discard(string $url): bool
+    {
+        if (!preg_match('#^uploads/([a-z0-9_]{1,40})/(\d{4})/(\d{2})/([a-f0-9]{32}\.(?:jpg|png|webp))$#', $url, $m)) return false;
+        $path = Config::uploadDir() . DIRECTORY_SEPARATOR . $m[1] . DIRECTORY_SEPARATOR . $m[2] . DIRECTORY_SEPARATOR . $m[3] . DIRECTORY_SEPARATOR . $m[4];
+        return is_file($path) && @unlink($path);
     }
 
     private static function iniBytes(string $v): int
