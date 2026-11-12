@@ -186,14 +186,14 @@ final class Db
         $out = ['driver' => strtolower((string) Config::get('db.driver', 'sqlite')) === 'mysql' ? 'mysql' : 'sqlite', 'user' => '', 'host' => '', 'isRoot' => false,
             'emptyPassword' => false, 'globalPrivileges' => false, 'ddlPrivileges' => false, 'grants' => []];
         try {
-            return self::driver() === 'mysql' ? self::mysqlAudit($out) : self::sqliteAudit($out);
+            return self::driver() === 'mysql' ? self::auditMysql($out) : self::auditSqlite($out);
         } catch (\Throwable $e) {
             $out['error'] = get_class($e); // the class only: a PDO message can carry connection details
             return $out;
         }
     }
 
-    private static function mysqlAudit(array $out): array
+    private static function auditMysql(array $out): array
     {
         $m = (array) Config::get('db.mysql', []);
         $cur = (string) self::value('SELECT CURRENT_USER()');
@@ -238,7 +238,7 @@ final class Db
         return (string) preg_replace("/'\*?[0-9A-Fa-f]{32,}'/", "'(hidden)'", $g);
     }
 
-    private static function sqliteAudit(array $out): array
+    private static function auditSqlite(array $out): array
     {
         $f = self::dbFilePath();
         clearstatcache(false, $f);
