@@ -4403,7 +4403,8 @@
         ${res ? `<div class="dc-table-wrap"><table class="dc-table"><thead><tr><th>엔드포인트</th><th>용도</th><th>결과</th><th>응답 시간</th><th>비고</th></tr></thead><tbody>${res.map((r) => `<tr><td>${mono(r.path)}</td><td>${esc(r.label)}</td><td>${pill(r.tone, r.text)}</td><td class="dc-num">${r.ms != null ? `${Math.round(r.ms)} ms` : '-'}</td><td>${esc(r.note || '')}</td></tr>`).join('')}</tbody></table></div>` : `<p class="dc-note">"점검 실행" 을 누르면 GET 요청만 보내요 (저장·채팅을 바꾸지 않아요).</p>`}
         ${S.err ? `<p class="dc-note">⚠️ ${esc(S.err)}</p>` : ''}
       </section>
-      <section class="dc-card dc-in" style="--i:2"><h4>🩺 관리자 상태 점검 <span class="muted">(api/admin/health.php)</span></h4>${renderHealth(S.health)}</section>`;
+      <section class="dc-card dc-in" style="--i:2"><h4>🩺 관리자 상태 점검 <span class="muted">(api/admin/health.php)</span></h4>${renderHealth(S.health)}</section>
+      <section class="dc-card dc-in" style="--i:3"><h4>🧑‍💻 서버 점검 <span class="muted">(관리자 센터)</span></h4>${renderInspectCard()}</section>`;
   };
   const HEALTH_GROUP = { php: '🐘 PHP · 확장', security: '🔐 보안', files: '📁 폴더 · 권한', db: '🗃️ 데이터베이스', app: '🧩 앱 설정', server: '🖥️ 웹 서버', session: '🍪 세션' };
   function renderHealth(h) {
@@ -4426,6 +4427,19 @@
   }
   /** the admin site's folder as the server hands it to admins ("name/"), validated — '' otherwise */
   const adminHref = (v) => (typeof v === 'string' && /^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}\/$/.test(v.trim()) ? v.trim() : '');
+  /** "서버 점검" (CONTRACT §15.5): admins get a link to the admin site's 🧑‍💻 개발자 → 점검 실행 — the folder comes from auth/me.php (admins only) */
+  const inspectLink = { asked: false, done: false, href: '' };
+  function renderInspectCard() {
+    const intro = '<p class="dc-note">시스템 점검 · 보안 설정 점검 · data 폴더 노출 검사 · DB 계정 권한 · 버전 · 인수인계 상태를 한 번에 확인하고 기록해요 (Markdown 으로 내려받을 수 있어요). 서버 컴퓨터에서는 <code>php cli/tfm.php inspect</code> 로도 돼요.</p>';
+    if (myRole() !== 'admin') return `${intro}<p class="dc-note">🔒 관리자 계정으로 로그인하면 관리자 센터로 가는 길이 여기에 보여요.</p>`;
+    if (!inspectLink.asked) {
+      inspectLink.asked = true;
+      Promise.resolve(G.auth?.adminUrl?.()).then((u) => { inspectLink.href = adminHref(u); }).catch(() => { inspectLink.href = ''; })
+        .then(() => { inspectLink.done = true; if (ui.tab === 'server' && ui.opened) render(); });
+    }
+    if (!inspectLink.href) return `${intro}<p class="dc-note">${inspectLink.done ? '관리자 센터 주소를 받지 못했어요. 잠시 뒤에 다시 열어 보세요.' : '⏳ 관리자 센터 주소를 확인하는 중이에요…'}</p>`;
+    return `${intro}<div class="dc-row wrap"><a class="btn btn-primary btn-sm" href="${esc(inspectLink.href)}?tab=dev&amp;sec=inspect" target="_blank" rel="noopener noreferrer">🔎 서버 점검 열기 ↗</a><span class="muted small">관리자 센터 → 🧑‍💻 개발자 → 점검 실행 · 비밀번호(+ 2단계 인증)로 로그인한 뒤 열려요</span></div>`;
+  }
   const SERVER_CHECKS = [
     { path: 'ping.php', label: '서버 감지 · CSRF' },
     { path: 'time.php', label: '서버 시계' },

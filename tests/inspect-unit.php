@@ -450,9 +450,12 @@ check('Inspect::environment — versions, extensions (required / optional), disk
 
 // ------------------------------------------------------------------ cli/inspect.php
 check('cli inspect — `php cli/tfm.php inspect` prints the report and exits 1 exactly when a check fails (stored with source cli)', function () use ($tmp) {
-    $run = function (array $env) use ($tmp) {
+    // the child sees the same database as this process (TFM_DB_* when the suite runs on MariaDB)
+    $base = ['TFM_DATA_DIR' => $tmp, 'PATH' => (string) getenv('PATH')];
+    foreach (['TFM_DB_DRIVER', 'TFM_DB_HOST', 'TFM_DB_PORT', 'TFM_DB_USER', 'TFM_DB_PASS', 'TFM_DB_NAME'] as $k) if (getenv($k) !== false) $base[$k] = (string) getenv($k);
+    $run = function (array $env) use ($tmp, $base) {
         $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(dirname(__DIR__) . '/server/cli/tfm.php') . ' inspect';
-        $p = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, ['TFM_DATA_DIR' => $tmp, 'PATH' => (string) getenv('PATH')] + $env);
+        $p = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $env + $base);
         $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
         fclose($pipes[1]); fclose($pipes[2]);
         return [proc_close($p), $out];
@@ -467,7 +470,7 @@ check('cli inspect — `php cli/tfm.php inspect` prints the report and exits 1 e
     if ($row2['status'] !== 'fail' || $code2 !== 1) return "with TFM_TOSS_MOCK=1: status {$row2['status']}, exit $code2";
     // the Markdown form of the same report
     $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(dirname(__DIR__) . '/server/cli/tfm.php') . ' inspect --markdown';
-    $p = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, ['TFM_DATA_DIR' => $tmp, 'PATH' => (string) getenv('PATH')]);
+    $p = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $base);
     $md = stream_get_contents($pipes[1]); fclose($pipes[1]); fclose($pipes[2]); proc_close($p);
     return strpos($md, '# 서버 점검 보고서 #') === 0 ?: 'markdown: ' . substr($md, 0, 120);
 });

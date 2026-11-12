@@ -107,7 +107,16 @@ const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/i
   'metaverse/api/sub/status.php', 'metaverse/database/schema.sql', 'metaverse/database/schema.sqlite.sql', 'metaverse/lib/compat.php',
   'metaverse/lib/pii-rules.json', 'metaverse/data/game-data.json', 'metaverse/data/.htaccess', 'metaverse/cli/tfm.php', 'docs/SERVER-INSTALL-KO.md',
   // CONTRACT §15.7 #23: the security report (found → fixed → tested → what the operator does) ships with every release
-  'docs/SECURITY-REPORT-KO.md', 'README.md', 'server/README-SERVER.md'];
+  'docs/SECURITY-REPORT-KO.md', 'README.md', 'server/README-SERVER.md',
+  // CONTRACT §15.5: the admin site's 🧑‍💻 개발자 tab — the renderer, the inspection (+ `cli inspect`) and the handover
+  // documents the build copies into lib/docs/ (the names of tools/build.mjs ADMIN_DOCS)
+  'metaverse/lib/Markdown.php', 'metaverse/lib/Inspect.php', 'metaverse/cli/inspect.php',
+  ...['HANDOVER.md', 'ARCHITECTURE.md', 'SERVER-INSTALL-KO.md', 'SECURITY-REPORT-KO.md', 'README-SERVER.md'].map((d) => `metaverse/lib/docs/${d}`),
+  // every file of the built admin folder ships (it is index.php + .htaccess — CONTRACT §15.11 #6; any part added there must ship too)
+  ...(fs.existsSync(path.join(DIST, 'admin')) ? walk(path.join(DIST, 'admin')).filter((p) => !skipReason(`admin/${p}`)).map((p) => `metaverse/admin/${p}`) : [])]
+  .filter((p, i, all) => all.indexOf(p) === i);
+/** the admin folder holds only its entry and its .htaccess (anything else is a leftover: the health check warns about it) */
+const ADMIN_EXTRA = (p) => /^metaverse\/admin\//.test(p) && !/^metaverse\/admin\/(?:index\.php|\.htaccess)$/.test(p);
 /** a shipped path that must never be in the release (secrets, locks, databases, sessions, logs, test suites, deps) */
 const FORBIDDEN = (p) => /^tests\//.test(p)
   || /\.sqlite(-wal|-shm|-journal)?$|install\.lock$|config\.local\.php$|(^|\/)secret\.php$/.test(p)
@@ -117,7 +126,7 @@ const FORBIDDEN = (p) => /^tests\//.test(p)
 function verify(list) {
   const files = list.filter((p) => !p.endsWith('/'));
   const missing = MUST.filter((m) => !files.includes(m));
-  const forbidden = files.filter(FORBIDDEN);
+  const forbidden = [...files.filter(FORBIDDEN), ...files.filter(ADMIN_EXTRA).map((p) => `${p} (the admin folder holds only index.php and .htaccess)`)];
   return { files, missing, forbidden };
 }
 function report(files) {
