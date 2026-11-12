@@ -76,6 +76,16 @@ ErrorDocument 404 /%{reqenv:TFM_BASEREL}e404.html
   RewriteCond %{HTTP:X-Forwarded-Ssl} !on [NC]
   RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1|\[?::1\]?)(:[0-9]+)?$ [NC]
   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=308,L,E=TFM_NOAPP:1]
+
+  # ------------------------------------------------------------- the admin folder without its trailing slash (§15.4 b)
+  # A folder asked for without its slash whose own index.php is there is handed to that index.php. Only the admin folder
+  # (any name) sets "DirectorySlash Off" in its .htaccess; everywhere else mod_dir's 301 still answers first. The admin
+  # entry checks security.admin_ip_allowlist BEFORE it sends the visitor on to "…/": a refused address gets the same 404
+  # as a missing page instead of a redirect that shows the folder exists. Here, not in the admin folder's .htaccess: a
+  # RewriteEngine there would switch the rules above off for the whole folder.
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteCond %{REQUEST_FILENAME}/index.php -f
+  RewriteRule ^([^/]+)$ %{REQUEST_URI}/index.php [L]
 </IfModule>
 
 # ---------------------------------------------------------------- leftovers → denied (403). Not dot-files, not *.bak.

@@ -408,6 +408,12 @@ final class Health
         }
         $copies = count(AdminPath::scan());
         if ($copies > 1) $this->add($g, 'admin_dir_copies', '관리자 폴더 개수', 'warn', $copies . '개', '관리자 센터 폴더가 여러 개 있어요. 쓰지 않는 복사본을 지워 주세요 (그 주소로도 관리자 로그인 화면이 열려요).');
+        if ($dir !== '') {
+            $extra = AdminPath::extraFiles(TFM_ROOT . DIRECTORY_SEPARATOR . $dir);
+            $this->add($g, 'admin_dir_files', '관리자 폴더 안의 파일', $extra ? 'warn' : 'ok', $extra ? count($extra) . '개 더 있음' : 'index.php · .htaccess 만',
+                $extra ? '관리자 폴더에는 index.php 와 .htaccess 만 있으면 돼요. 이 파일은 지워 주세요: ' . mb_substr(implode(', ', $extra), 0, 160)
+                    . (in_array('admin.css', $extra, true) ? ' (admin.css 는 예전 버전이 남긴 화면 모양 파일이에요. 지금은 lib/admin.css 를 써요.)' : '') : '');
+        }
 
         $list = AdminGate::allowList();
         $bad = array_values(array_filter($list, function ($x) { return !AdminGate::validRule($x); }));
@@ -991,6 +997,22 @@ final class AdminPath
         if (!is_file($f)) return false;
         $head = (string) @file_get_contents($f, false, null, 0, 4096);
         return strpos($head, self::MARK) !== false;
+    }
+
+    /**
+     * What else lies in an admin folder besides index.php and .htaccess (sorted; folders end in "/"): a stylesheet an
+     * older release left there (since 2026-11 it is lib/admin.css, sent by the entry after its address check), an editor
+     * copy, a note. Apache denies them (an old admin.css answers 404), but they do not belong there.
+     */
+    public static function extraFiles(string $dir): array
+    {
+        $out = [];
+        foreach ((is_dir($dir) ? (scandir($dir) ?: []) : []) as $f) {
+            if ($f === '.' || $f === '..' || $f === 'index.php' || $f === '.htaccess') continue;
+            $out[] = $f . (is_dir($dir . DIRECTORY_SEPARATOR . $f) ? '/' : '');
+        }
+        sort($out);
+        return $out;
     }
 
     /** every folder of the installation that holds the admin entry (sorted) */

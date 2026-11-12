@@ -1,4 +1,5 @@
-/* 전통발효체험관 메타버스 — 관리자 센터 (static: the admin pages allow styles from this folder only, CSP style-src 'self').
+/* 전통발효체험관 메타버스 — 관리자 센터. Lives in lib/ (never web-readable): the admin entry sends it at "./?css=" + a hash
+   of this file after its address check, so no file of the admin folder answers before PHP (CONTRACT §15.4 b; CSP style-src 'self').
    Self-contained on purpose: no external images, imports or web fonts — the page loads nothing but this file. */
 :root{--bg:#0b1410;--glass:rgba(16,26,21,.72);--glass2:rgba(255,255,255,.06);--line:rgba(255,255,255,.12);--text:#f4f6f1;--dim:#b9c4b5;--mute:#8e9a8b;--green:#34c36b;--green-d:#1f9e52;--gold:#f4c54a;--red:#ff6b5e;--orange:#ff9f43;--blue:#4aa8ff;--r:16px;--font:'Pretendard','Apple SD Gothic Neo','Malgun Gothic','맑은 고딕',system-ui,-apple-system,sans-serif;--mono:ui-monospace,'Cascadia Mono','Consolas','D2Coding',monospace}
 *{box-sizing:border-box}

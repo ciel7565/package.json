@@ -781,6 +781,12 @@ async function adminSite(s) {
   }
   return (s.adminSite = null);
 }
+/** the request path of the stylesheet an admin page names (relative to the admin folder `site`), '' when it names none */
+function adminCssPath(site, html) {
+  const href = ((String(html).match(/<link rel="stylesheet" href="([^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
+  if (!href || /^[a-z]+:|^\/\//i.test(href)) return '';
+  return site + href.replace(/^\.\//, '');
+}
 /** whichever admin page this build has (the contract's folder, else the phase-6 admin.php) — for checks about escaping, SQL and CSRF */
 async function adminPage(s) {
   const site = await adminSite(s);
@@ -1696,17 +1702,46 @@ async function S06() {
     const site = await adminSite(s);
     assert(site, NO_ADMIN_SITE + ' — without it a 404 proves nothing');
     const lock = await srv('adminip');
-    for (const xff of ['198.51.100.20', null]) {
-      for (const p of [site, `${site}?tab=users`, 'admin.php']) {
-        const r = await request(lock, p, { headers: HTML, xff });
-        assert(r.status === 404 && !/<form|password/i.test(r.text), `${p} from ${xff || '127.0.0.1'} → ${r.status}`);
-      }
-    }
     const ok = await request(lock, site, { headers: HTML, xff: '203.0.113.9' });
     assert(isSignIn(ok), `the listed address 203.0.113.9 → ${ok.status}`);
+    // the admin folder's other answers too (finding, item 6): the stylesheet the page names, the old static admin.css and
+    // the folder without its slash must not tell a refused address that the folder exists (no CSS, no redirect)
+    const css = adminCssPath(site, ok.text);
+    for (const xff of ['198.51.100.20', null]) {
+      for (const p of [site, `${site}?tab=users`, 'admin.php', ...(css ? [css] : []), `${site}admin.css`, site.replace(/\/$/, '')]) {
+        const r = await request(lock, p, { headers: HTML, xff });
+        assert(r.status === 404 && !/<form|password/i.test(r.text) && !r.headers.location && !/text\/css/.test(r.headers['content-type'] || ''), `${p} from ${xff || '127.0.0.1'} → ${r.status}${r.headers.location ? ' → ' + r.headers.location : ''} ${r.headers['content-type'] || ''}`);
+      }
+    }
     const ev = events(lock);
     assert(!ev.error && ev.some((e) => e.kind === 'admin_ip_denied'), 'no admin_ip_denied event');
-    return '198.51.100.20 and 127.0.0.1 → 404 · 203.0.113.9 → sign-in page · event logged';
+    return `198.51.100.20 and 127.0.0.1 → 404 (folder, ?tab=users, admin.php, ${css || 'no stylesheet'}, admin.css, folder without slash) · 203.0.113.9 → sign-in page · event logged`;
+  });
+  // CONTRACT §15.4 (b) under Apache: a static file of the admin folder and mod_dir's slash redirect answer before PHP,
+  // i.e. before the allow-list — so the folder holds no static file and the slashless address goes to the entry
+  await check('S06', 'Apache: with the IP allow-list set, a refused address gets the same 404 as a missing page for the admin folder, the folder without its slash and its stylesheet (no 301, no CSS) + admin_ip_denied', { ...APACHE_MODE, sev: 'low', fix: 'Keep the stylesheet out of the admin folder (lib/admin.css, served by the entry after its address check), "DirectorySlash Off" in the admin folder .htaccess and the root .htaccess rule that hands the slashless folder to its index.php.' }, async () => {
+    const a = await apache();
+    const site = await adminSite(a);
+    assert(site, NO_ADMIN_SITE);
+    const css = adminCssPath(site, (await request(a, site, { headers: HTML })).text);
+    const gone = await request(a, `no-such-folder-${RUN}/`, { headers: HTML });
+    const strip = (t) => String(t).replace(/<address>[\s\S]*?<\/address>/, '').replace(/<hr>/, '').replace(/\s+/g, ' ').trim();
+    const file = path.join(a.docroot, site, '.htaccess');
+    const orig = fs.readFileSync(file, 'utf8');
+    const bare = site.replace(/\/$/, '');
+    const seen = [];
+    try {
+      fs.writeFileSync(file, orig + '\n# tests/security-e2e.mjs S06: a refused address (127.0.0.1 is not on the list)\nSetEnv TFM_ADMIN_IPS "203.0.113.9"\n');
+      for (const p of [site, bare, `${bare}?tab=users`, `${site}index.php`, `${site}?css=1`, ...(css ? [css] : []), `${site}admin.css`]) {
+        const r = await request(a, p, { headers: HTML });
+        seen.push(`${p} ${r.status}`);
+        assert(r.status === 404 && !r.headers.location && !/text\/css/.test(r.headers['content-type'] || '') && !/<form|password/i.test(r.text), `${p} → ${r.status}${r.headers.location ? ' → ' + r.headers.location : ''} ${r.headers['content-type'] || ''}`);
+        assert(strip(r.text) === strip(gone.text), `${p}: the body (${r.text.length} bytes) is not the missing-page body (${gone.text.length} bytes)`);
+      }
+    } finally { fs.writeFileSync(file, orig); }
+    const ev = events(a);
+    assert(!ev.error && ev.filter((e) => e.kind === 'admin_ip_denied').length >= 4, `admin_ip_denied events: ${ev.error || ev.filter((e) => e.kind === 'admin_ip_denied').length}`);
+    return seen.join(' · ');
   });
   // CONTRACT §15.4 (c) — TOTP 2-step (RFC 6238 SHA-1 / 30 s / 6 digits, replay-protected by last_step)
   await check('S06', '2-step sign-in (TFM_ADMIN_2FA=required): the password alone does not open the admin site; a TOTP code does, a wrong or replayed code does not', { sev: 'high', fix: 'Tfm\\Totp + admin_totp table: enrolment page (secret as text + otpauth:// URI), code form, ±1 step, last_step replay guard, 10 hashed backup codes.' }, async () => {

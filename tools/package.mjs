@@ -103,7 +103,7 @@ function walk(dir, base = dir, out = []) {
 // metaverse/admin.php is the 404 stub of the phase-6 address (copying a release over an old install replaces the old page);
 // the admin site itself is the admin/ folder (CONTRACT §15.4 — the operator may rename it after installing)
 const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/install.php', 'metaverse/admin.php', 'metaverse/admin/index.php', 'metaverse/admin/.htaccess',
-  'metaverse/admin/admin.css', 'metaverse/lib/Totp.php', 'metaverse/cli/admin-path.php', 'metaverse/.htaccess', 'metaverse/.user.ini', 'metaverse/api/ping.php',
+  'metaverse/lib/admin.css', 'metaverse/lib/Totp.php', 'metaverse/cli/admin-path.php', 'metaverse/.htaccess', 'metaverse/.user.ini', 'metaverse/api/ping.php',
   'metaverse/api/sub/status.php', 'metaverse/database/schema.sql', 'metaverse/database/schema.sqlite.sql', 'metaverse/lib/compat.php',
   'metaverse/lib/pii-rules.json', 'metaverse/data/game-data.json', 'metaverse/data/.htaccess', 'metaverse/cli/tfm.php', 'docs/SERVER-INSTALL-KO.md', 'README.md', 'server/README-SERVER.md'];
 /** a shipped path that must never be in the release (secrets, locks, databases, sessions, logs, test suites, deps) */

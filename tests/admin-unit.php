@@ -201,6 +201,26 @@ check('AdminPath::dirName / relUrl — the folder that holds the admin entry (fo
     $entry = (string) file_get_contents(TFM_ROOT . '/' . $d . '/index.php');
     return $d !== '' && strpos($entry, Tfm\AdminPath::MARK) !== false && Tfm\AdminPath::relUrl() === $d . '/' ? true : "dir=$d";
 });
+check('AdminPath::extraFiles — what else lies in an admin folder besides index.php and .htaccess (an old admin.css, an editor copy, a folder)', function () {
+    $d = sys_get_temp_dir() . '/tfm-admx-' . bin2hex(random_bytes(4));
+    mkdir($d);
+    file_put_contents("$d/index.php", "<?php // TFM-ADMIN-ENTRY\n");
+    file_put_contents("$d/.htaccess", "# rules\n");
+    $none = Tfm\AdminPath::extraFiles($d);
+    file_put_contents("$d/admin.css", 'body{}');
+    file_put_contents("$d/index.php~", 'x');
+    mkdir("$d/parts");
+    $some = Tfm\AdminPath::extraFiles($d);
+    foreach (['index.php', '.htaccess', 'admin.css', 'index.php~'] as $f) @unlink("$d/$f");
+    @rmdir("$d/parts");
+    @rmdir($d);
+    return $none === [] && $some === ['admin.css', 'index.php~', 'parts/'] ? true : json_encode([$none, $some]);
+});
+check('finding (item 6): the admin stylesheet lives in lib/ (never web-readable) — the admin folder holds only index.php and .htaccess, so no file of it answers before the address check', function () {
+    $dir = TFM_ROOT . '/' . Tfm\AdminPath::dirName();
+    $css = (string) @file_get_contents(TFM_ROOT . '/lib/admin.css');
+    return strlen($css) > 2000 && !is_file($dir . '/admin.css') && Tfm\AdminPath::extraFiles($dir) === [] ? true : json_encode(['css' => strlen($css), 'extra' => Tfm\AdminPath::extraFiles($dir)]);
+});
 check('AdminPath::rename — a bad name is refused before anything is touched (ADMIN_PATH_INVALID)', function () {
     $before = Tfm\AdminPath::dirName();
     $r = throwsApi(function () { Tfm\AdminPath::rename('Bad Name'); }, 'ADMIN_PATH_INVALID') && throwsApi(function () { Tfm\AdminPath::rename('../outside'); }, 'ADMIN_PATH_INVALID')
@@ -436,13 +456,13 @@ check('Health::collect — admin-lock rows: folder name (warn while it is "admin
     $h = Tfm\Health::collect(false);
     $by = [];
     foreach ($h['checks'] as $c) $by[$c['id']] = $c;
-    foreach (['admin_dir', 'admin_ip_allowlist', 'admin_2fa', 'admin_old_path', 'install_lock'] as $id) {
+    foreach (['admin_dir', 'admin_dir_files', 'admin_ip_allowlist', 'admin_2fa', 'admin_old_path', 'install_lock'] as $id) {
         if (!isset($by[$id])) return "missing row $id";
         if (!in_array($by[$id]['status'], ['ok', 'warn', 'fail'], true) || !is_string($by[$id]['label']) || $by[$id]['label'] === '') return "bad row $id";
     }
     $dirWarn = Tfm\AdminPath::dirName() === 'admin' ? $by['admin_dir']['status'] === 'warn' : $by['admin_dir']['status'] === 'ok';
-    return $dirWarn && $by['admin_ip_allowlist']['status'] === 'warn' && $by['admin_old_path']['status'] === 'ok' && $by['admin_2fa']['status'] === 'warn'
-        ? true : json_encode([$by['admin_dir'], $by['admin_ip_allowlist'], $by['admin_old_path'], $by['admin_2fa']], JSON_UNESCAPED_UNICODE);
+    return $dirWarn && $by['admin_ip_allowlist']['status'] === 'warn' && $by['admin_old_path']['status'] === 'ok' && $by['admin_2fa']['status'] === 'warn' && $by['admin_dir_files']['status'] === 'ok'
+        ? true : json_encode([$by['admin_dir'], $by['admin_dir_files'], $by['admin_ip_allowlist'], $by['admin_old_path'], $by['admin_2fa']], JSON_UNESCAPED_UNICODE);
 });
 check('Health::collect — the old address check fails when a real page is still at admin.php (file content, not the name)', function () {
     $stub = Tfm\AdminGate::oldPathState(TFM_ROOT . '/admin.php');

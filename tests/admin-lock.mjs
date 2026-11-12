@@ -143,6 +143,12 @@ const isSignIn = (html) => /name="action" value="login"/.test(html);
 const isCodeForm = (html) => /name="action" value="code"/.test(html);
 const isInside = (html) => /<nav class="tabs"/.test(html);
 const BANNER = /2단계 인증을 켜 주세요/;
+/** the stylesheet address an admin page names, relative to the admin folder (entities decoded); '' when there is none */
+const cssOf = (html) => decode((String(html).match(/<link rel="stylesheet" href="([^"]+)"/) || [])[1] || '');
+/** a request path for an address that a page of the admin folder ADM names relatively ("./?css=1" → "admin/?css=1") */
+const inFolder = (ADM, rel) => ADM + String(rel).replace(/^\.\//, '');
+/** the start of the admin stylesheet's source (wherever this tree keeps it) — a leak of the file would contain it */
+const cssSourceHead = (site) => { for (const f of ['lib/admin.css', 'admin/admin.css']) { const p = path.join(site, f); if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8').slice(0, 160); } return null; };
 
 /** the headers of point 5 + zero scripts; returns a list of problems (empty = fine) */
 function lockProblems(r, { payload = false } = {}) {
@@ -348,36 +354,45 @@ async function main() {
       const r = await b.req(ADM + 'index.php/extra/path');
       assert(r.status === 404 && !isSignIn(r.text) && r.setCookie.length === 0, `index.php/extra → ${r.status}`);
       const names = fs.readdirSync(path.join(main1.site, STUB_DIR)).sort();
-      assert(names.includes('index.php') && names.includes('.htaccess') && names.includes('admin.css'), `folder: ${names.join(', ')}`);
-      const php = names.filter((n) => /\.php$/.test(n));
-      assert(php.length === 1, `only one PHP entry in the folder: ${php.join(', ')}`);
+      // finding (reviewer-infra, item 6): a static admin.css in the folder was served before the address check, so a
+      // refused address could read it and learn that the (renamed) folder exists. The folder holds the entry only.
+      assert(names.join(',') === '.htaccess,index.php', `the folder holds only index.php and .htaccess (the stylesheet comes through the entry): ${names.join(', ')}`);
+      assert(fs.existsSync(path.join(main1.site, 'lib/admin.css')), 'the stylesheet source is lib/admin.css (lib/ is never web-readable)');
       return `folder: ${names.join(', ')}`;
     });
-    await step('S06', 'the folder .htaccess: listing off, index.php is the index, only index.php + admin.css reachable, ready-to-uncomment IP and password blocks', async () => {
+    await step('S06', 'the folder .htaccess: listing off, index.php is the index, only index.php reachable (a leftover admin.css = a missing page), the slashless folder goes to the entry, ready-to-uncomment IP and password blocks', async () => {
       const ht = fs.readFileSync(path.join(main1.site, STUB_DIR, '.htaccess'), 'utf8');
       assert(/^Options\s+.*-Indexes/m.test(ht), 'Options -Indexes');
       assert(/^DirectoryIndex\s+index\.php/m.test(ht), 'DirectoryIndex index.php (the installation root says index.html)');
       // a FilesMatch, or (what the folder uses: a directory request is matched against the folder's own — free — name,
       // so a file whitelist must leave directories alone) an Apache 2.4 <If> on existing files
-      assert(/<(?:FilesMatch|If)\b[^>]*index\\\.php[^>]*admin\\\.css/.test(ht) && /Require all denied/.test(ht), 'everything except index.php and admin.css is denied');
+      assert(/<(?:FilesMatch|If)\b[^>]*index\\\.php/.test(ht) && /Require all denied/.test(ht), 'everything except index.php is denied');
+      assert(/^\s*RedirectMatch 404 .*admin\\\.css/m.test(ht), 'a leftover admin.css of an older release answers the 404 of a missing page');
+      assert(/<IfModule mod_rewrite\.c>\s*\n\s*DirectorySlash Off/.test(ht), 'DirectorySlash Off (with mod_rewrite): mod_dir must not answer the slashless folder before the address check');
+      const top = fs.readFileSync(path.join(main1.site, '.htaccess'), 'utf8');
+      assert(/RewriteCond %\{REQUEST_FILENAME\}\/index\.php -f\s*\n\s*RewriteRule \^\(\[\^\/\]\+\)\$ %\{REQUEST_URI\}\/index\.php \[L\]/.test(top), 'the root .htaccess hands the slashless admin folder to its index.php');
       assert(/^\s*#\s*Require ip\s+\S+/m.test(ht), 'a commented "Require ip" block');
       assert(/^\s*#\s*AuthType Basic/m.test(ht) && /^\s*#\s*AuthUserFile\s+\S+/m.test(ht) && /^\s*#\s*Require valid-user/m.test(ht), 'a commented Basic-Auth block');
-      assert(/X-Robots-Tag/.test(ht), 'X-Robots-Tag for the static file');
       assert(/[가-힣]{2,}/.test(ht), 'Korean comments for the operator');
       assert(!/게임/.test(ht), 'wording');
       return `${ht.split('\n').length} lines`;
     });
-    await step('S06', 'the sign-in page carries the lock headers (CSP without scripts, noindex, no-store, no-referrer, DENY) and no <script', async () => {
+    await step('S06', 'the sign-in page carries the lock headers (CSP without scripts, noindex, no-store, no-referrer, DENY) and no <script; the stylesheet comes through the entry (no session, no url() / @import)', async () => {
       const b = new Browser(srv.base);
       const r = await b.req(ADM);
       assertLocked(r, 'sign-in page');
-      assert(/<link rel="stylesheet" href="admin\.css/.test(r.text), 'the styles come from the static admin.css');
+      const href = cssOf(r.text);
+      assert(/^\.\/\?css=[0-9a-f]{10}$/.test(href), `the styles come through the admin entry after its address check: href="${href}"`);
       assert(/style-src 'self'/.test(r.headers.get('content-security-policy') || ''), "CSP style-src 'self'");
-      const css = await b.req(ADM + 'admin.css');
-      assert(css.status === 200 && css.text.length > 2000 && !/<|javascript:|expression\(|@import|url\(/i.test(css.text), `admin.css → ${css.status} (${css.text.length} bytes)`);
+      const css = await new Browser(srv.base).req(inFolder(ADM, href));
+      assert(css.status === 200 && /^text\/css/.test(css.headers.get('content-type') || '') && css.text.length > 2000 && !/<|javascript:|expression\(|@import|url\(/i.test(css.text), `${href} → ${css.status} ${css.headers.get('content-type')} (${css.text.length} bytes)`);
+      assert(css.headers.get('x-content-type-options') === 'nosniff' && /noindex/.test(css.headers.get('x-robots-tag') || '') && css.headers.get('x-frame-options') === 'DENY' && css.headers.get('referrer-policy') === 'no-referrer', `stylesheet headers: ${JSON.stringify([...css.headers].filter(([k]) => /^x-|referrer|cache/.test(k)))}`);
+      assert(css.setCookie.length === 0, `the stylesheet starts no session: ${css.setCookie.join(' ; ')}`);
+      const old = await b.req(ADM + 'admin.css');
+      assert(old.status === 404, `${ADM}admin.css (the old static address) → ${old.status}`);
       const sc = r.setCookie.join(' ; ');
       assert(/HttpOnly/i.test(sc) && /SameSite=Lax/i.test(sc), `session cookie flags: ${sc}`);
-      return 'headers ok · admin.css static, no url() / @import';
+      return `headers ok · ${href} text/css, no url() / @import · admin.css 404`;
     });
     await step('S06', 'finding F15: a visitor sees no app version, database driver or PHP version on the sign-in page — not even in the stylesheet address', async () => {
       const version = (fs.readFileSync(path.join(SRC, 'lib/bootstrap.php'), 'utf8').match(/define\('TFM_VERSION', '([^']+)'\)/) || [])[1];
@@ -951,6 +966,9 @@ async function main() {
 
   // ================================================================= IP allow-list
   if (section('allowlist')) {
+    // the stylesheet address the sign-in page names (asked from a server without the allow-list)
+    let cssRel = '';
+    { const s0 = await startPhp(main1); try { cssRel = cssOf((await new Browser(s0.base).req(ADM)).text); } finally { await s0.stop(); } }
     const s5 = await startPhp(main1, { TFM_ADMIN_IPS: '203.0.113.7, 2001:db8::/32' });
     try {
       await step('S06', 'IP allow-list set to another address: the admin folder answers the same plain 404 as a missing page (no session, no hint) and records admin_ip_denied', async () => {
@@ -974,6 +992,29 @@ async function main() {
         const api = await app.req('api/admin/stats.php');
         assert(api.status === 403 && api.error?.code === 'ADMIN_REAUTH', `api from an address outside the list → ${api.status} ${api.error?.code}`);
         return `404 × 5 (body = old address 404) · +${n} admin_ip_denied (${after.sec.length ? 'security_events' : 'audit_log'})`;
+      });
+      // finding (reviewer-infra, item 6): the static admin.css (and, under Apache, mod_dir's slash redirect) answered
+      // before the address check — a refused address read the stylesheet and learned that the folder exists
+      await step('S06', 'IP allow-list: the stylesheet the sign-in page names, the old static admin.css and the folder without its slash answer a refused address the same 404 too (no CSS, no redirect) and are recorded', async () => {
+        assert(cssRel, 'the sign-in page names no stylesheet');
+        const head = cssSourceHead(main1.site);
+        assert(head, 'no stylesheet source in the tree');
+        const b = new Browser(s5.base, 'deny-css');
+        const stub = (await b.req('admin.php')).text;
+        const before = eventsOf(main1, 'admin_ip_denied');
+        const css = await b.req(inFolder(ADM, cssRel));
+        assert(css.status === 404 && css.text === stub && !/text\/css/.test(css.headers.get('content-type') || '') && css.setCookie.length === 0, `${cssRel} → ${css.status} ${css.headers.get('content-type')} (${css.text.length} bytes)`);
+        const old = await b.req(ADM + 'admin.css');
+        assert(old.status === 404 && !old.text.includes(head) && !/text\/css/.test(old.headers.get('content-type') || ''), `${ADM}admin.css → ${old.status} ${old.headers.get('content-type')} (${old.text.length} bytes)`);
+        for (const p of [STUB_DIR, STUB_DIR + '?tab=users']) {
+          const bare = await b.req(p);
+          assert(bare.status === 404 && !bare.location && bare.text === stub && bare.setCookie.length === 0, `/${p} → ${bare.status} ${bare.location || ''}`);
+        }
+        assert(b.jar.length === 0, 'no cookie at all');
+        const after = eventsOf(main1, 'admin_ip_denied');
+        const n = (after.sec.length + after.audit.length) - (before.sec.length + before.audit.length);
+        assert(n >= 3, `admin_ip_denied rows for the stylesheet and the bare folder: +${n}`);
+        return `${cssRel} · ${ADM}admin.css · /${STUB_DIR} → 404 (no CSS, no redirect) · +${n} admin_ip_denied`;
       });
     } finally { await s5.stop(); }
     const s6 = await startPhp(main1, { TFM_ADMIN_IPS: '203.0.113.7,127.0.0.0/8,::1' });
@@ -1273,7 +1314,7 @@ async function apacheSection() {
   const MODS = '/usr/lib/apache2/modules';
   const bin = ['/usr/sbin/apache2', '/usr/sbin/httpd'].find((p) => fs.existsSync(p));
   const phpSo = fs.existsSync(MODS) ? fs.readdirSync(MODS).find((f) => /^libphp\d*(\.\d+)?\.so$/.test(f)) : null;
-  const name = 'Apache 2.4 honours the folder .htaccess: index.php is the index, admin.css is served with headers, every other file is denied, no listing';
+  const name = 'Apache 2.4 honours the folder .htaccess: index.php is the index, the slashless folder and the stylesheet are answered by the entry (with headers), a leftover admin.css is a missing page, every other file is denied, no listing';
   if (NO_APACHE || !bin || !phpSo) { record('S06', name, null, NO_APACHE ? '--no-apache' : 'no Apache + mod_php on this machine'); return; }
   const s = makeSite('apache');
   const ADM = STUB_DIR + '/';
@@ -1281,6 +1322,9 @@ async function apacheSection() {
   fs.mkdirSync(run);
   // files that must never be served from the folder (a backup an editor left behind, a note, a second script)
   for (const f of ['index.php.bak', 'notes.txt', 'tool.php', 'index.php~']) fs.writeFileSync(path.join(s.site, STUB_DIR, f), '<?php echo "LEAK-" . "MARK"; // LEAK-MARK\n');
+  // a stylesheet left in the folder by an older release (copying a new release over an installation keeps old files)
+  const leftoverCss = path.join(s.site, STUB_DIR, 'admin.css');
+  if (!fs.existsSync(leftoverCss)) fs.writeFileSync(leftoverCss, '/* LEAK-MARK old admin.css */ body { color: red }\n');
   let user = '';
   if (process.getuid && process.getuid() === 0) {
     user = ['www-data', 'apache', 'daemon', 'nobody'].find((u) => spawnSync('id', ['-u', u]).status === 0) || '';
@@ -1319,9 +1363,15 @@ async function apacheSection() {
       assertLocked(r, 'sign-in page under Apache');
       const n = await b.req(STUB_DIR);
       assert([301, 302, 308].includes(n.status) && new URL(n.location, n.url).pathname === '/' + ADM, `GET /${STUB_DIR} → ${n.status} ${n.location}`);
-      const css = await b.req(ADM + 'admin.css');
-      assert(css.status === 200 && /text\/css/.test(css.headers.get('content-type') || ''), `admin.css → ${css.status}`);
-      assert(css.headers.get('x-content-type-options') === 'nosniff' && /noindex/.test(css.headers.get('x-robots-tag') || '') && css.headers.get('x-frame-options') === 'DENY' && css.headers.get('referrer-policy') === 'no-referrer', `admin.css headers: ${JSON.stringify([...css.headers].filter(([k]) => /^x-|referrer|cache/.test(k)))}`);
+      // the redirect comes from the admin entry (its lock headers), i.e. after its address check — not from mod_dir
+      assert(/noindex/.test(n.headers.get('x-robots-tag') || ''), `GET /${STUB_DIR}: the slash redirect was not sent by the admin entry (mod_dir answered before the address check): ${JSON.stringify([...n.headers])}`);
+      const href = cssOf(r.text);
+      const css = await new Browser(base).req(inFolder(ADM, href));
+      assert(css.status === 200 && /^text\/css/.test(css.headers.get('content-type') || '') && css.text.length > 2000, `${href} → ${css.status} ${css.headers.get('content-type')}`);
+      assert(css.headers.get('x-content-type-options') === 'nosniff' && /noindex/.test(css.headers.get('x-robots-tag') || '') && css.headers.get('x-frame-options') === 'DENY' && css.headers.get('referrer-policy') === 'no-referrer', `stylesheet headers: ${JSON.stringify([...css.headers].filter(([k]) => /^x-|referrer|cache/.test(k)))}`);
+      const missing = await b.req('no-such-' + rnd() + '.css');
+      const old = await b.req(ADM + 'admin.css');
+      assert(old.status === 404 && !/LEAK-MARK/.test(old.text) && old.text === missing.text, `a leftover ${ADM}admin.css → ${old.status} (${old.text.length} bytes; a missing page has ${missing.text.length})`);
       for (const f of ['.htaccess', 'index.php.bak', 'notes.txt', 'tool.php', 'index.php~', 'nothing-here.php']) {
         const x = await b.req(ADM + f);
         assert([403, 404].includes(x.status) && !/LEAK-MARK|Require all denied|<\?php/.test(x.text), `${ADM}${f} → ${x.status}`);
@@ -1332,7 +1382,32 @@ async function apacheSection() {
       assert([403, 404].includes(list.status) && !/Index of|admin\.css/.test(list.text), `no directory listing without the index: ${list.status}`);
       const page = await signIn(b, ADM, A);
       assert(isInside(page.page.text) && /path=\/admin\//i.test(page.post.setCookie.find((c) => /^TFMADM=/.test(c)) || ''), 'sign-in works under Apache');
-      return `/${ADM} 200 · /${STUB_DIR} → ${n.status} · admin.css with headers · 6 other files denied · no listing`;
+      return `/${ADM} 200 · /${STUB_DIR} → ${n.status} by the entry · ${href} text/css with headers · leftover admin.css 404 · 6 other files denied · no listing`;
+    });
+    // finding (reviewer-infra, item 6): under Apache the static admin.css and mod_dir's slash redirect answered before
+    // the address check of security.admin_ip_allowlist (CONTRACT §15.4 (b): "the same 404 as a missing page")
+    await step('S06', 'Apache + IP allow-list (TFM_ADMIN_IPS via SetEnv in the folder .htaccess): a refused address gets the same 404 as a missing page for the folder, the folder without its slash, index.php, ?tab=users and the stylesheet — no 301, no CSS — and admin_ip_denied is recorded', async () => {
+      const file = path.join(s.site, STUB_DIR, '.htaccess');
+      const orig = fs.readFileSync(file, 'utf8');
+      const b = new Browser(base, 'apache-deny');
+      const href = cssOf((await new Browser(base).req(ADM)).text);
+      const gone = await b.req('no-such-folder-' + rnd() + '/');
+      const strip = (t) => t.replace(/<address>[\s\S]*?<\/address>/, '').replace(/<hr>/, '').replace(/\s+/g, ' ').trim();
+      const before = eventsOf(s, 'admin_ip_denied');
+      const seen = [];
+      try {
+        fs.writeFileSync(file, orig + '\n# test: tests/admin-lock.mjs\nSetEnv TFM_ADMIN_IPS "203.0.113.7"\n');
+        for (const p of [ADM, STUB_DIR, STUB_DIR + '?tab=users', ADM + 'index.php', ADM + '?tab=users', inFolder(ADM, href || 'admin.css'), ADM + 'admin.css']) {
+          const r = await b.req(p);
+          seen.push(`/${p} ${r.status}`);
+          assert(r.status === 404 && !r.location && r.setCookie.length === 0 && !/text\/css/.test(r.headers.get('content-type') || '') && !/LEAK-MARK/.test(r.text), `/${p} → ${r.status}${r.location ? ' → ' + r.location : ''} ${r.headers.get('content-type') || ''}`);
+          assert(strip(r.text) === strip(gone.text), `/${p}: the body differs from a missing page's (${r.text.length} vs ${gone.text.length} bytes)`);
+        }
+      } finally { fs.writeFileSync(file, orig); }
+      const after = eventsOf(s, 'admin_ip_denied');
+      const n = (after.sec.length + after.audit.length) - (before.sec.length + before.audit.length);
+      assert(n >= 5, `admin_ip_denied rows: +${n}`);
+      return `${seen.join(' · ')} · +${n} admin_ip_denied`;
     });
     await step('S06', 'Apache: the old admin.php answers 404 like a file that is not there (same status, the same "not found" page, no cookie)', async () => {
       const b = new Browser(base);
@@ -1360,13 +1435,14 @@ async function apacheSection() {
         return lines.join('\n');
       };
       const b = new Browser(base);
+      const href = cssOf((await new Browser(base).req(ADM)).text);
       try {
         // 1) Require ip with an address that is not ours
         let ht = uncomment(orig, /^#\s*Require ip\s/).replace(/^(\s*Require ip)\s+.*$/m, '$1 203.0.113.7');
         fs.writeFileSync(file, ht);
         let r = await b.req(ADM);
         assert(r.status === 403 && !isSignIn(r.text), `Require ip 203.0.113.7 → ${r.status} ${errLog().replace(/\s+/g, ' ').slice(-160)}`);
-        assert((await b.req(ADM + 'admin.css')).status === 403, 'the stylesheet is closed too');
+        assert((await b.req(inFolder(ADM, href || 'admin.css'))).status === 403 && (await b.req(STUB_DIR)).status === 403, 'the stylesheet and the slashless folder are closed too');
         fs.writeFileSync(file, ht.replace(/^(\s*Require ip)\s+.*$/m, '$1 127.0.0.1 ::1'));
         r = await b.req(ADM);
         assert(r.status === 200 && isSignIn(r.text), `Require ip 127.0.0.1 → ${r.status}`);

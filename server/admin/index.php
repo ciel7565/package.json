@@ -9,7 +9,10 @@
  *
  * The lock (security item 6), in the order it is applied:
  *   1. only "./" and "./index.php" are pages (index.php/anything is a missing page)
- *   2. security.admin_ip_allowlist: another address gets the plain 404 of a missing page (no session, no cookie)
+ *   2. security.admin_ip_allowlist: another address gets the plain 404 of a missing page (no session, no cookie) — for
+ *      every answer of the folder: the page, its stylesheet (./?css=…, the file is lib/admin.css: the folder holds no
+ *      static file Apache could serve before PHP) and the folder without its slash (the root .htaccess hands it here;
+ *      the redirect to "…/" is sent below, after the check)
  *   3. a blocked address, plain http where https is required, a file upload: refused before the session starts
  *   4. every answer: a CSP without scripts, X-Robots-Tag noindex, nofollow, noarchive, Cache-Control no-store,
  *      Referrer-Policy no-referrer, X-Frame-Options DENY
@@ -107,11 +110,33 @@ function postStr(string $k): string { return isset($_POST[$k]) && is_string($_PO
 function getStr(string $k): string { return isset($_GET[$k]) && is_string($_GET[$k]) ? $_GET[$k] : ''; }
 /** a link inside the admin folder: "./?tab=…" (relative, so the folder can have any name) */
 function href(array $q): string { return './?' . http_build_query(array_filter($q, function ($v) { return $v !== '' && $v !== null; })); }
-/** F15: the stylesheet's cache-buster is a hash of admin.css (a public file anyway), never the app version */
+/**
+ * The stylesheet is lib/admin.css (lib/ is never web-readable) and comes through this entry, "./?css=<hash>", AFTER the
+ * address check of gateRequest(). A static file of this folder would be answered by Apache before PHP runs, so an
+ * address outside security.admin_ip_allowlist could read it and learn that the (renamed) folder exists — CONTRACT §15.4
+ * (b) promises the same 404 as a missing page. F15: the cache-buster is a hash of the file, never the app version.
+ */
+function cssFile(): string { return TFM_ROOT . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'admin.css'; }
 function cssHref(): string
 {
-    $h = @sha1_file(__DIR__ . '/admin.css');
-    return 'admin.css' . (is_string($h) ? '?v=' . substr($h, 0, 10) : '');
+    $h = @sha1_file(cssFile());
+    return './?css=' . (is_string($h) ? substr($h, 0, 10) : '0');
+}
+/** GET / HEAD ./?css=…: the stylesheet — no session, no cookie; cacheable for a day (the address changes with the file) */
+function serveCss(): void
+{
+    while (ob_get_level() > 0) ob_end_clean();
+    $css = @file_get_contents(cssFile());
+    if (!is_string($css) || $css === '') AdminGate::notFound();
+    header_remove('Set-Cookie');
+    Http::securityHeaders('api');
+    header_remove('Pragma');
+    header('Content-Type: text/css; charset=utf-8');
+    header('X-Robots-Tag: noindex, nofollow, noarchive');
+    header('Cache-Control: private, max-age=86400');
+    http_response_code(200);
+    if (Http::method() !== 'HEAD') echo $css;
+    exit;
 }
 function redirectTo(string $tab, array $q = [])
 {
@@ -994,6 +1019,7 @@ $status = 200;
 $ctx = new Ctx();
 try {
     gateRequest();
+    if (isset($_GET['css']) && in_array(Http::method(), ['GET', 'HEAD'], true)) serveCss(); // after the address check, before any session
     AdminGate::headers();
     $method = Http::method();
     if (!in_array($method, ['GET', 'HEAD', 'POST'], true)) throw new ApiException(405, 'METHOD_NOT_ALLOWED', '허용되지 않은 요청 방식이에요.', null, ['Allow: GET, HEAD, POST']);
@@ -1012,7 +1038,7 @@ try {
     $ref = Log::requestId();
     Log::error('ADMIN', get_class($e) . ': ' . $e->getMessage(), ['at' => basename($e->getFile()) . ':' . $e->getLine()]);
     AdminGate::headers();
-    $html = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow, noarchive"><title>오류</title><link rel="stylesheet" href="admin.css"></head>'
+    $html = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow, noarchive"><title>오류</title><link rel="stylesheet" href="' . e(cssHref()) . '"></head>'
         . '<body><main><section class="card narrow hero"><div class="mascot" aria-hidden="true">🛠️</div><h2>관리자 센터를 여는 중 문제가 생겼어요</h2><p>오류 번호: <code>' . e($ref) . '</code> — 서버 컴퓨터의 data/logs 에서 확인하세요.</p><p class="row"><a class="btn" href="./">다시 시도</a></p></section></main></body></html>';
 }
 while (ob_get_level() > 0) ob_end_clean();
