@@ -542,6 +542,20 @@ final class Subscription
     }
 
     /**
+     * Review finding (forced renewal): "지금 갱신 시도" (admin site), renew.php {force} and cli sub:renew --force skip the
+     * "ends within a day" rule — but never charge one period twice. When the running period was itself paid by a
+     * renewal (last_order_id is a confirmed renewal order, the subscription active and not over yet), another forced
+     * renewal would only charge the card again: a double click, a retry, two admins, a run for every subscriber. A failed
+     * renewal (past_due) or a period that is over can always be tried again.
+     */
+    private static function renewedThisPeriod(array $cur, int $now): bool
+    {
+        if ((string) $cur['status'] !== 'active' || (int) $cur['expires_at'] <= $now || (string) $cur['last_order_id'] === '') return false;
+        $o = Db::one('SELECT kind, status FROM orders WHERE order_id = ? AND user_id = ?', [(string) $cur['last_order_id'], (int) $cur['user_id']]);
+        return $o !== null && (string) $o['kind'] === 'renewal' && (string) $o['status'] === 'confirmed';
+    }
+
+    /**
      * One renewal: order (kind renewal) → charge → extend, or past_due / none. Finding F5: the decision to charge is taken
      * inside one transaction that locks the subscription row — the expiry is read again there and an open renewal order
      * of the last 2 minutes means another process is on it — so parallel requests or a cron run never charge twice.
@@ -557,6 +571,7 @@ final class Subscription
             if ((int) $cur['auto_renew'] !== 1 || (string) $cur['billing_key'] === '' || !in_array((string) $cur['status'], ['active', 'past_due'], true)) {
                 return ['skip' => ['userId' => $uid, 'ok' => false, 'skipped' => 'no billing key']];
             }
+            if ($force && self::renewedThisPeriod($cur, $now)) return ['skip' => ['userId' => $uid, 'ok' => true, 'skipped' => 'already renewed', 'expiresAt' => $exp]];
             $open = Db::one("SELECT id FROM orders WHERE user_id = ? AND kind = 'renewal' AND status = 'created' AND requested_at > ?", [$uid, $now - 120000]);
             if ($open) return ['skip' => ['userId' => $uid, 'ok' => false, 'skipped' => 'in progress']];
             // review finding (auto-renew tier): the price of the tier the card was registered for, whatever the stored tier says

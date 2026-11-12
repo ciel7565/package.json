@@ -696,6 +696,32 @@ check('auto-renew — a race the refusal cannot see (a tier-4 pass is confirmed 
     $off = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE user_id = ? AND event = 'sub_autorenew_off'", [$uid]);
     return $claimed && $out === 'ok' && (int) $row['tier'] === 4 && (int) $row['auto_renew'] === 0 && $off === 1 ? true : json_encode([$claimed, $out, $row, $off]);
 });
+check('renewal — a forced renewal ("지금 갱신 시도", renew.php force, sub:renew --force) charges at most once per period: a repeat (double click, two admins, all users, cli) is skipped, also 3 at once; a failed renewal can be retried', function () use ($srv, $tmp, $autoRenewUser, $parallel) {
+    $renewals = function (int $uid): array { return Tfm\Db::all("SELECT status FROM orders WHERE user_id = ? AND kind = 'renewal' ORDER BY id", [$uid]); };
+    $skipOf = function (array $results, int $uid): string {
+        foreach ($results as $r) if ((int) $r['userId'] === $uid) return isset($r['skipped']) ? (string) $r['skipped'] : ($r['ok'] ? 'charged' : 'failed:' . (isset($r['status']) ? $r['status'] : ''));
+        return 'absent';
+    };
+    $u = $autoRenewUser(2);
+    $uid = (int) $u['id'];
+    $first = $skipOf(Tfm\Subscription::renewDue($uid, true), $uid); // one early renewal on request is allowed
+    $exp1 = (int) Tfm\Subscription::state($uid)['expiresAt'];
+    $again = $skipOf(Tfm\Subscription::renewDue($uid, true), $uid);
+    $everyone = $skipOf(Tfm\Subscription::renewDue(null, true), $uid);
+    exec('TFM_DATA_DIR=' . escapeshellarg($tmp) . ' TFM_TOSS_MOCK=1 ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($srv . '/cli/tfm.php') . ' sub:renew --force ' . escapeshellarg((string) $u['email']) . ' 2>&1', $cliOut, $cliCode);
+    $n = count($renewals($uid));
+    $exp2 = (int) Tfm\Subscription::state($uid)['expiresAt'];
+    if ($first !== 'charged' || $again !== 'already renewed' || $everyone !== 'already renewed' || strpos(implode("\n", $cliOut), 'already renewed') === false || $n !== 1 || $exp2 !== $exp1) {
+        return 'repeat: ' . json_encode([$first, $again, $everyone, implode(' / ', $cliOut), $n, ($exp2 - $exp1) / 86400000]);
+    }
+    $v = $autoRenewUser(3);
+    $parallel('echo json_encode(Tfm\\Subscription::renewDue(' . (int) $v['id'] . ', true));', 3);
+    if (count($renewals((int) $v['id'])) !== 1) return '3 forced renewals at once: ' . json_encode($renewals((int) $v['id']));
+    $w = $autoRenewUser(2, 'mock_auth_fail'); // the first charge works, every renewal is declined
+    $f1 = $skipOf(Tfm\Subscription::renewDue((int) $w['id'], true), (int) $w['id']);
+    $f2 = $skipOf(Tfm\Subscription::renewDue((int) $w['id'], true), (int) $w['id']);
+    return $f1 === 'failed:past_due' && $f2 === 'failed:past_due' && count($renewals((int) $w['id'])) === 2 ? true : 'retry after a failure: ' . json_encode([$f1, $f2, $renewals((int) $w['id'])]);
+});
 // ------------------------------------------------------------------ secret:rotate (item 21)
 check('secret:rotate --data-key — every sealed billing key is sealed again with the new key, the old key is gone, rotated_at is set', function () use ($payUser) {
     $u = $payUser();
