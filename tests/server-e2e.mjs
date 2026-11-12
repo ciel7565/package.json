@@ -1017,15 +1017,47 @@ async function main() {
     assert(Math.round((sub.expiresAt - soon) / 86400000) === 30, `extended by ${((sub.expiresAt - soon) / 86400000).toFixed(1)} days`);
     return 'one renewal order, +30 days';
   });
-  await step('sub/return.php: the payment window\'s ?code= / ?message= are never reflected (F11) — a known code or OTHER, a fixed sentence', async () => {
+  await step('sub/return.php: the payment window\'s ?code= / ?message= are never reflected (F11) — a known code or OTHER, no sentence (C1)', async () => {
     const evil = '<script>alert(1)</script>https://evil.example';
     const r = await DD.req(`api/sub/return.php?code=${encodeURIComponent('PAY_PROCESS_CANCELED')}&message=${encodeURIComponent(evil)}`, { headers: { Accept: 'text/html' } });
     const loc = r.headers.get('location') || '';
-    assert([302, 303].includes(r.status) && /index\.html\?sub=fail&code=PAY_PROCESS_CANCELED&msg=/.test(loc) && !/evil|script/i.test(decodeURIComponent(loc)), `known code → ${r.status} ${loc}`);
+    // C1 (§15.7 #4): the app has the sentence for each word (72-subscription.js), so the redirect ends with the code
+    assert([302, 303].includes(r.status) && /index\.html\?sub=fail&code=PAY_PROCESS_CANCELED$/.test(loc) && !/evil|script/i.test(decodeURIComponent(loc)), `known code → ${r.status} ${loc}`);
     const u = await DD.req(`api/sub/return.php?code=${encodeURIComponent(evil)}&message=${encodeURIComponent(evil)}`, { headers: { Accept: 'text/html' } });
     const loc2 = u.headers.get('location') || '';
-    assert([302, 303].includes(u.status) && /sub=fail&code=OTHER&msg=/.test(loc2) && !/evil|script/i.test(decodeURIComponent(loc2)), `unknown code → ${u.status} ${loc2}`);
-    return 'mapped code + fixed message, nothing reflected';
+    assert([302, 303].includes(u.status) && /index\.html\?sub=fail&code=OTHER$/.test(loc2) && !/evil|script/i.test(decodeURIComponent(loc2)), `unknown code → ${u.status} ${loc2}`);
+    return 'mapped code only, nothing reflected, no sentence';
+  });
+  await step('sub/return.php: every way back to the app carries words from fixed lists only, never a sentence — no session LOGIN, amount not a number or tampered AMOUNT, unknown order ORDER, replay DONE, gateway refusal DECLINED, gateway answer ≠ order MISMATCH; paid: sub=ok&tier=N (C1, §15.7 #4)', async () => {
+    if (skipSub()) return skipSub();
+    // a fresh player F: the orders below would use up D's sub_write budget (20 per 10 minutes)
+    const FF = new Client('F');
+    await FF.req('api/ping.php');
+    const reg = await FF.req('api/auth/register.php', { json: { email: `e2e_f${id}@example.com`, nickname: `Ret_${tag.slice(-5)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(reg.status === 200, `register F ${reg.status} ${reg.error?.code}`);
+    const prepF = async () => { const p = await FF.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } }); assert(p.status === 200 && p.data?.orderId, `prepare F ${p.status} ${p.error?.code}`); return p.data; };
+    const back = async (c, qs) => {
+      const r = await c.req(`api/sub/return.php?${qs}`, { headers: { Accept: 'text/html' } });
+      const loc = r.headers.get('location') || '';
+      assert([302, 303].includes(r.status) && loc, `${qs.slice(0, 70)} → ${r.status} ${loc}`);
+      const to = new URL(loc, BASE);
+      assert(to.origin === new URL(BASE).origin && to.pathname.endsWith('/index.html'), `${qs.slice(0, 70)} → Location ${loc}`);
+      return { loc, q: to.searchParams, keys: [...to.searchParams.keys()].sort().join(',') };
+    };
+    const fails = (r, why, label) => assert(r.keys === 'sub,why' && r.q.get('sub') === 'fail' && r.q.get('why') === why, `${label}: expected exactly sub=fail&why=${why}; received ${r.loc}`);
+    fails(await back(new Client('F-nobody'), 'kind=card&paymentKey=mock_x&orderId=x&amount=2900'), 'LOGIN', 'no session');
+    fails(await back(FF, 'kind=card&paymentKey=mock_x&orderId=x&amount=abc'), 'AMOUNT', 'amount not a number');
+    fails(await back(FF, `kind=card&paymentKey=mock_x&orderId=${'z'.repeat(32)}&amount=2900`), 'ORDER', 'unknown order');
+    const o1 = await prepF();
+    fails(await back(FF, `kind=card&paymentKey=mock_${o1.orderId}&orderId=${o1.orderId}&amount=1`), 'AMOUNT', 'tampered amount');
+    const paid = await back(FF, `kind=card&paymentKey=mock_${o1.orderId}&orderId=${o1.orderId}&amount=${o1.amount}`);
+    assert(paid.keys === 'sub,tier' && paid.q.get('sub') === 'ok' && paid.q.get('tier') === '2', `paid: expected exactly sub=ok&tier=2; received ${paid.loc}`);
+    fails(await back(FF, `kind=card&paymentKey=mock_${o1.orderId}&orderId=${o1.orderId}&amount=${o1.amount}`), 'DONE', 'replay of a paid order');
+    const o2 = await prepF();
+    fails(await back(FF, `kind=card&paymentKey=nomock_${o2.orderId}&orderId=${o2.orderId}&amount=${o2.amount}`), 'DECLINED', 'the gateway refused the payment');
+    const o3 = await prepF();
+    fails(await back(FF, `kind=card&paymentKey=mock_amount100_${o3.orderId}&orderId=${o3.orderId}&amount=${o3.amount}`), 'MISMATCH', 'the gateway answered another amount');
+    return '8 returns: 7 × sub=fail&why=<word>, 1 × sub=ok&tier=2 — no sentence in any redirect';
   });
   await step('sub endpoints: SQL injection in tier / orderId / paymentKey / customerKey / authKey / webhook / return.php → clean 4xx or ignored, tables intact (§15.7 #7)', async () => {
     if (skipSub()) return skipSub();

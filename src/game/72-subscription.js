@@ -17,8 +17,11 @@
 //                         into G.state.sub and emits 'speed:changed'); keeps the HUD chip #hud-speed in sync.
 //   current() / tier()    the effective plan / tier (1..4); local mode is always 1.
 //   HUD: #hud-speed (hidden at tier 1): normal ⚡2×, easy ⚡ 2배 빨라요; pulses on speed:changed; 옹이 cheers once.
-//   ?sub=ok&tier=N → after login: status refresh + celebration + toast '⚡ N배 빠르게 시작!'; ?sub=fail&code=…&msg=… → a
-//   calm error (a cancel code: a calm info note). The query is cleaned with history.replaceState.
+//   ?sub=ok&tier=N → after login: status refresh, then the celebration + toast '⚡ N배 빠르게 시작!' for the tier the
+//   SERVER confirms (never N from the address); ?sub=fail&code=…|why=… → a calm error with the app's own sentence for
+//   that word (a cancel code: a calm info note). The query is cleaned with history.replaceState.
+// Payment returns (finding C1, CONTRACT §15.7 #4): anyone can write an index.html?sub=… link, so nothing from the
+// address is ever shown — return.php sends words from closed lists only, the sentences live here (RETURN_*_KO).
 // Security / kid safety: no prices on kid screens (the screen is behind the gate; the HUD chip shows no price); the
 // secret key never reaches the client (status.php sends the public clientKey only); every write is a same-origin JSON
 // POST with the CSRF token (G.net.request); no innerHTML with server text (textContent / G.ui.h); no inline handlers.
@@ -79,23 +82,55 @@
     return m && m.length <= 120 && !/[<>{}]/.test(m) ? m : fallback;
   }
   /**
-   * ?sub=ok|fail&tier=N&code=…&msg=… (api/sub/return.php): read once, clean the address and G.params. The server maps the
-   * payment window's failure to a known code (or OTHER) and a fixed sentence (finding F11), so nothing the window sent
-   * is shown; the code only decides between a calm "canceled" note and the "not finished" message.
+   * The words a payment return may carry → the sentence the app shows (finding C1, CONTRACT §15.7 #4). Anyone can
+   * write a link to index.html?sub=fail&…, so the address never supplies text: api/sub/return.php sends words from
+   * closed lists only — code: the payment window's failure, which the server maps to a known code or OTHER (finding
+   * F11); why: what the server found when the window came back — and the sentences live here. A link can at most pick
+   * one of these sentences; an unknown word gets the plain fallback. A ?msg= (sent by older servers) is never shown.
+   */
+  const RETURN_KEYS = ['sub', 'tier', 'code', 'why', 'msg'];
+  const RETURN_CANCEL = new Set(['USER_CANCEL', 'PAY_PROCESS_CANCELED']);
+  const RETURN_CODE_KO = new Map([
+    ['PAY_PROCESS_ABORTED', '결제가 중간에 멈췄어요.'],
+    ['REJECT_CARD_COMPANY', '카드사가 결제를 거절했어요. 다른 카드로 해 주세요.'],
+    ['REJECT_CARD_PAYMENT', '카드사가 결제를 거절했어요. 다른 카드로 해 주세요.'],
+    ['EXCEED_MAX_DAILY_PAYMENT_COUNT', '오늘 결제할 수 있는 횟수를 넘었어요.'],
+    ['INVALID_CARD_EXPIRATION', '카드 유효기간을 확인해 주세요.'],
+  ]);
+  const RETURN_WHY_KO = new Map([
+    ['LOGIN', '로그인이 풀려서 결제를 확인하지 못했어요. 다시 로그인해 주세요.'],
+    ['AMOUNT', '결제 금액이 주문과 맞지 않아서 처리하지 않았어요.'],
+    ['ORDER', '주문을 찾지 못했거나 주문 정보가 맞지 않았어요.'],
+    ['DONE', '이 주문은 이미 처리됐거나 지금 확인하고 있어요.'],
+    ['DECLINED', '결제가 승인되지 않았어요. 카드나 결제 수단을 확인해 주세요.'],
+    ['MISMATCH', '결제 정보가 주문과 달라서 처리하지 않았어요. 돈이 빠져나갔다면 자동으로 취소를 요청했어요.'],
+    ['PENDING', '결제 서버(토스페이먼츠)의 답이 늦어지고 있어요. 결제가 되었다면 잠시 뒤 반영돼요.'],
+    ['CONFIG', '이 서버는 아직 자동 갱신 구독을 받을 수 없어요. 운영자에게 알려 주세요.'],
+    ['SERVER', '서버에서 결제를 처리하다가 문제가 생겼어요.'],
+  ]);
+  const RETURN_FALLBACK_KO = '결제창이 닫혔거나 결제가 승인되지 않았어요.';
+  /** a ?sub=fail return's words → the app's own sentence (OTHER and every unknown word: the fallback) */
+  function returnReason(code, why) {
+    if (code) return RETURN_CODE_KO.get(code) || RETURN_FALLBACK_KO;
+    return RETURN_WHY_KO.get(why) || RETURN_FALLBACK_KO;
+  }
+  /**
+   * ?sub=ok|fail&tier=N&code=…&why=… (api/sub/return.php): read once, clean the address and G.params. Only the words
+   * are kept (a word is A–Z / _ — anything else counts as none); tier is a hint, the celebration waits for the server.
    */
   function readReturn() {
     const P = G.params || new URLSearchParams(location.search);
     const v = P.get('sub');
     if (v !== 'ok' && v !== 'fail') return null;
     const tierN = parseInt(P.get('tier') || '', 10);
-    const code = String(P.get('code') || '');
-    const r = { ok: v === 'ok', tier: Number.isInteger(tierN) ? clamp(tierN, 1, 4) : 0, code: /^[A-Z_]{1,60}$/.test(code) ? code : '', msg: String(P.get('msg') || '').replace(/\s+/g, ' ').trim().slice(0, 120) };
+    const word = (k) => { const s = String(P.get(k) || ''); return /^[A-Z_]{1,60}$/.test(s) ? s : ''; };
+    const r = { ok: v === 'ok', tier: Number.isInteger(tierN) ? clamp(tierN, 1, 4) : 0, code: word('code'), why: word('why') };
     try {
       const u = new URL(location.href);
-      for (const k of ['sub', 'tier', 'code', 'msg']) u.searchParams.delete(k);
+      for (const k of RETURN_KEYS) u.searchParams.delete(k);
       history.replaceState(history.state, '', u.pathname + (u.search || '') + u.hash);
     } catch (e) { /* file:// or a locked-down browser: the address stays, nothing else depends on it */ }
-    for (const k of ['sub', 'tier', 'code', 'msg']) { try { P.delete(k); } catch (e) { /* ignore */ } }
+    for (const k of RETURN_KEYS) { try { P.delete(k); } catch (e) { /* ignore */ } }
     return r;
   }
   /** the server has no 토스 keys yet (api/sub/status.php mode 'unconfigured'): nothing can be bought until the operator adds them */
@@ -114,7 +149,7 @@
     init() {
       G.ui.onAction('subscription', () => this.open());
       this._ret = readReturn();
-      if (this._ret && !this._ret.ok) this._failToast(this._ret.msg, this._ret.code);
+      if (this._ret && !this._ret.ok) this._failToast(this._ret.code, this._ret.why);
       G.bus.on('game:login', () => { this._cheered = false; this._onLogin(); });
       G.bus.on('game:logout', () => { this.status = null; this.fetchedAt = 0; this._cheered = false; this._chip(); });
       G.bus.on('state:loaded', () => this._chip());
@@ -418,9 +453,11 @@
         let sub = null;
         try { sub = await this.refresh({ quiet: true }); }
         catch (e) { toast('결제는 끝났어요. 잠시 후 구독 화면에서 상태를 확인해 주세요.', { type: 'warn', duration: 7000 }); return; }
-        const t = sub && sub.tier > 1 ? sub.tier : (ret.tier > 1 ? ret.tier : this.tier());
+        // only the server's word: ?tier= (and ?sub=ok itself) can come from a link anyone wrote (finding C1)
+        const t = sub && sub.tier > 1 ? sub.tier : 1;
+        if (ret.tier > 1 && ret.tier !== t) G.log.info('SUB', `the return link said tier ${ret.tier}, the server says ${t}: showing the server's word`);
         if (t > 1) this._celebrate(t);
-        else toast('결제가 끝났어요. 구독 상태를 확인하고 있어요.', { type: 'info', duration: 6000 });
+        else toast('결제가 아직 확인되지 않았어요. 지금은 기본 속도예요. 구독 화면에서 상태를 확인해 주세요.', { type: 'info', duration: 7000 });
       };
       // after the login choreography (welcome toast / intro) — never over the 만장대 intro
       const wait = () => {
@@ -430,14 +467,16 @@
       };
       setTimeout(wait, 1400);
     },
-    _failToast(msg, code = '') {
+    /** the ?sub=fail note: words in, one of the app's own sentences out (never text from the address) */
+    _failToast(code = '', why = '') {
       clearTimeout(this._retTimer);
-      const canceled = code === 'USER_CANCEL' || code === 'PAY_PROCESS_CANCELED';
+      const canceled = RETURN_CANCEL.has(code);
+      const reason = returnReason(code, why);
       const show = () => {
         const ls = $('#loading-screen');
         if (ls && !ls.hidden) { this._retTimer = setTimeout(show, 800); return; }
-        if (canceled) toast(`${msg || '결제를 취소했어요.'} 구독 화면에서 언제든 다시 할 수 있어요.`, { type: 'info', duration: 6000, easy: '결제를 그만뒀어요.' });
-        else toast(`결제가 끝나지 않았어요. ${msg || '결제창이 닫혔거나 승인되지 않았어요.'} 구독 화면에서 다시 할 수 있어요.`, { type: 'error', duration: 8000, easy: '결제가 안 됐어요. 어른에게 알려 줘요!' });
+        if (canceled) toast('결제를 취소했어요. 구독 화면에서 언제든 다시 할 수 있어요.', { type: 'info', duration: 6000, easy: '결제를 그만뒀어요.' });
+        else toast(`결제가 끝나지 않았어요. ${reason} 구독 화면에서 상태를 확인하고 다시 할 수 있어요.`, { type: 'error', duration: 8000, easy: '결제가 안 됐어요. 어른에게 알려 줘요!' });
       };
       this._retTimer = setTimeout(show, 1200);
     },

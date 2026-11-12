@@ -1441,7 +1441,32 @@ async function S04() {
       }
       assert(!r.setCookie.some((x) => /tfmr/.test(x)) && !r.headers['tfmr'], 'header injection through the message');
     }
-    return `${variants.length} requests → 303 ${basePath}index.html?sub=fail&msg=<percent-encoded>`;
+    return `${variants.length} requests → 303 ${basePath}index.html?sub=fail&code=…|why=…`;
+  });
+  // CONTRACT §15.7 #4 — finding C1: anyone can write an index.html?sub=fail&… link, so the app shows its own sentence
+  // for each word and nothing from the address; the server's half is to hand the app words, never a sentence
+  await check('S04', 'api/sub/return.php: the redirect to the app carries only words from fixed lists (sub, tier, code, why) — never a sentence the app would show', { sev: 'low', fix: 'Redirect with sub=fail&code=<known|OTHER> or sub=fail&why=<WORD> only; the Korean sentences live in src/game/72-subscription.js (RETURN_*_KO), which ignores ?msg=.' }, async () => {
+    const basePath = new URL(s.base).pathname;
+    const bait = '보안 확인: 결제를 마치려면 tfm-pay.example 에서 카드 번호를 다시 넣어 주세요';
+    const asks = [
+      ['no session', () => request(s, 'api/sub/return.php?kind=card&paymentKey=mock_x&orderId=x&amount=1', { headers: HTML })],
+      ['window failure, known code', () => A.req(`api/sub/return.php?${formEncode({ code: 'USER_CANCEL', message: bait })}`, { headers: HTML })],
+      ['window failure, unknown code', () => A.req(`api/sub/return.php?${formEncode({ code: 'TFM FAKE', message: bait })}`, { headers: HTML })],
+      ['amount not a number', () => A.req('api/sub/return.php?kind=card&paymentKey=mock_x&orderId=x&amount=abc', { headers: HTML })],
+      ['unknown order', () => A.req(`api/sub/return.php?kind=card&paymentKey=mock_x&orderId=${'q'.repeat(32)}&amount=2900`, { headers: HTML })],
+    ];
+    const seen = [];
+    for (const [label, ask] of asks) {
+      const r = await ask();
+      const loc = r.headers.location || '';
+      assert([302, 303].includes(r.status) && loc.startsWith(`${basePath}index.html?`), `${label} → ${r.status} ${loc.slice(0, 120)}`);
+      const q = new URLSearchParams(loc.slice(loc.indexOf('?') + 1));
+      const bad = [...q.entries()].filter(([k, v]) => !['sub', 'tier', 'code', 'why'].includes(k)
+        || (k === 'sub' ? !['ok', 'fail'].includes(v) : k === 'tier' ? !/^[1-4]$/.test(v) : !/^[A-Z_]{1,60}$/.test(v)));
+      assert(!bad.length, `${label}: the redirect hands the app ${bad.map(([k, v]) => `${k}=${v.slice(0, 40)}`).join(', ')} (${loc.slice(0, 160)})`);
+      seen.push(`${label}: ${loc.slice(loc.indexOf('?') + 1)}`);
+    }
+    return `${asks.length} returns, words only — ${seen.join(' · ')}`;
   });
   // CONTRACT §15.7 #4 — app: strict hash CSP
   await check('S04', 'index.html ships a strict hash-based CSP (no unsafe-inline / unsafe-eval scripts, object-src none, base-uri none)', { sev: 'high', fix: 'Keep the build-time sha256 hashes in the <meta http-equiv="Content-Security-Policy">.' }, async () => {
