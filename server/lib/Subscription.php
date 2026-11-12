@@ -617,11 +617,11 @@ final class Subscription
     // ------------------------------------------------------------------ admin lists
     public static function listAll(int $limit = 200): array
     {
-        return Db::all('SELECT s.*, u.nickname, u.email FROM subscriptions s JOIN users u ON u.id = s.user_id ORDER BY s.updated_at DESC LIMIT ' . max(1, min(1000, $limit)));
+        return Db::all('SELECT s.*, u.nickname, u.email FROM subscriptions s JOIN users u ON u.id = s.user_id ORDER BY s.updated_at DESC LIMIT ?', [max(1, min(1000, $limit))]);
     }
 
     public static function listOrders(int $limit = 100): array
     {
-        return Db::all('SELECT o.*, u.nickname FROM orders o LEFT JOIN users u ON u.id = o.user_id ORDER BY o.id DESC LIMIT ' . max(1, min(1000, $limit)));
+        return Db::all('SELECT o.*, u.nickname FROM orders o LEFT JOIN users u ON u.id = o.user_id ORDER BY o.id DESC LIMIT ?', [max(1, min(1000, $limit))]);
     }
 }

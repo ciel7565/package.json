@@ -343,7 +343,7 @@ try {
         }
         case 'audit': {
             $n = max(1, min(500, (int) ($arg !== '' ? $arg : 30)));
-            foreach (array_reverse(Db::all("SELECT * FROM audit_log ORDER BY id DESC LIMIT $n")) as $r) {
+            foreach (array_reverse(Db::all('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?', [$n])) as $r) {
                 out(sprintf('%s  %-6s %-24s user=%s actor=%s ip=%s %s', date('Y-m-d H:i:s', intdiv((int) $r['created_at'], 1000)), $r['severity'], $r['event'], isset($r['user_id']) ? $r['user_id'] : '-', isset($r['actor_id']) ? $r['actor_id'] : '-', $r['ip'], mb_substr((string) $r['detail'], 0, 160)));
             }
             break;

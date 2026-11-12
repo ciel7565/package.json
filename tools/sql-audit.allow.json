@@ -1,0 +1,122 @@
+[
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "'INSERT INTO ' . $table . ' (' . implode(', ', $cols) . ') VALUES (' . implode(', ', array_fill(0, count($cols), '?')) . ')'",
+    "reason": "Db::insert(): the table and every column name pass Db::ident() (^[a-z_][a-z0-9_]{0,63}$, never request data); the values are bound placeholders."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "ON DUPLICATE KEY UPDATE $set",
+    "reason": "Db::upsert() (MySQL): table, columns, conflict keys and update columns pass Db::ident() and must be columns of the row (finding F14); $ph / $set are built from those names and '?' only; values bound."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "DO UPDATE SET $set",
+    "reason": "Db::upsert() (SQLite >= 3.24): the same identifier-checked names as above; values bound."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "\"UPDATE $table SET \" . implode(', ', array_map(function($c) { return \"$c = ?\"; }, $update)) . ' WHERE ' . implode(' AND ', $where)",
+    "reason": "Db::upsert() fallback for old SQLite: table / update columns / keys are identifier-checked, every value is a '?' placeholder."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "\"SELECT 1 FROM $table WHERE \" . implode(' AND ', $where)",
+    "reason": "Db::upsert() fallback: identifier-checked table and key names, values bound."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "\"INSERT INTO $table (\" . implode(', ', $cols) . \") VALUES ($ph)\"",
+    "reason": "Db::upsert() fallback insert: identifier-checked table and column names, '?' placeholders."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "'ALTER TABLE ' . $table . ' ADD COLUMN ' . $col . ' '",
+    "reason": "Db::ensureColumns(): table / column / type come from the ADDED_COLUMNS constant of Db.php and pass Db::ident(); DDL cannot take bound parameters."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "'PRAGMA table_info(' . $table . ')'",
+    "reason": "Db::hasColumn() (SQLite): the table name passes Db::ident() first; PRAGMA cannot take bound parameters."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'CREATE DATABASE IF NOT EXISTS ' . self::quoteIdent($m['database'])",
+    "reason": "The database name is validated against ^[A-Za-z0-9_]{1,64}$ before and quoted as an identifier; DDL cannot take bound parameters."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "\"CREATE USER '$user'@'$h' IDENTIFIED BY '새_비밀번호(32자_무작위)';\"",
+    "reason": "Not executed: the text of the SQL an operator runs by hand (shown on the done page); user = tfm_<8 hex>, hosts validated, no password inside."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'GRANT SELECT, INSERT, UPDATE, DELETE ON ' . self::grantDb($db) . \".* TO '$user'@'$h';\"",
+    "reason": "Not executed: manual SQL text for the operator (generated name, validated hosts and database name)."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'ALTER USER ' . $a . ' IDENTIFIED BY ' . $admin->quote($pw)",
+    "reason": "Account statements cannot take bound parameters: $a = PDO::quote(user) @ PDO::quote(host) (generated tfm_<8 hex>, validated hosts), the generated password is quoted by the driver."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'CREATE USER ' . $a . ' IDENTIFIED BY ' . $admin->quote($pw)",
+    "reason": "As above: driver-quoted generated account name and password; CREATE USER cannot take bound parameters."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'GRANT SELECT, INSERT, UPDATE, DELETE ON ' . self::grantDb($db) . '.* TO ' . $a",
+    "reason": "GRANT cannot take bound parameters: the database name is validated (^[A-Za-z0-9_]{1,64}$), wildcards escaped and identifier-quoted; the account is driver-quoted."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'DROP USER ' . self::acct($admin, $user, $h)",
+    "reason": "Clean-up of an account this call just created: acct() quotes user and host with PDO::quote."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'ALTER USER ' . self::acct($pdo, $user, $h) . ' IDENTIFIED BY ' . $pdo->quote($old)",
+    "reason": "db:rotate-password undo: account and password quoted by the driver; ALTER USER cannot take bound parameters."
+  },
+  {
+    "file": "server/lib/Installer.php",
+    "snippet": "'ALTER USER ' . self::acct($pdo, $user, $h) . ' IDENTIFIED BY ' . $pdo->quote($new)",
+    "reason": "db:rotate-password: the configured runtime account (host from mysql.user) and the generated password are quoted by the driver."
+  },
+  {
+    "file": "server/admin.php",
+    "snippet": "FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id $where ORDER BY u.id DESC LIMIT 51 OFFSET \" . ($page * 50)",
+    "reason": "Reviewed (admin agent's file): $where is one of two fixed strings with ? placeholders (the search term is bound with a LIKE escape); $page = max(0, min(10000, (int) …))."
+  },
+  {
+    "file": "server/admin.php",
+    "snippet": "($w ? 'WHERE ' . implode(' AND ', $w) . ' ':'')",
+    "reason": "Reviewed (admin agent's file): $w only holds fixed condition strings ('a.event = ?', 'a.severity = ?', 'a.id < ?'); the values are bound in $p."
+  },
+  {
+    "file": "server/api/chat/list.php",
+    "snippet": "\"SELECT $cols FROM chat_messages m $join WHERE m.hidden = 0 AND m.created_at > ? ORDER BY m.id DESC LIMIT $hist\"",
+    "reason": "Reviewed (core agent's file): $cols / $join are string constants of the file, $hist = max(1, (int) config)."
+  },
+  {
+    "file": "server/api/chat/list.php",
+    "snippet": "\"SELECT $cols FROM chat_messages m $join WHERE m.id > ? AND m.hidden = 0 ORDER BY m.id ASC LIMIT $page\"",
+    "reason": "Reviewed (core agent's file): constants as above, $page = V::int(…, 1, page_size)."
+  },
+  {
+    "file": "server/lib/ChatFilter.php",
+    "snippet": "'SELECT id, message_id, user_id, upto_id FROM chat_retractions WHERE id > ? ORDER BY id ASC LIMIT ' . max(1, $limit)",
+    "reason": "Reviewed: $limit is a typed int parameter (int $limit = 200), clamped with max()."
+  },
+  {
+    "file": "server/lib/Presence.php",
+    "snippet": "ORDER BY p.updated_at DESC LIMIT \" . max(1, min(200, $max))",
+    "reason": "Reviewed: $max = (int) config presence.max_players, clamped to 1..200."
+  },
+  {
+    "file": "server/lib/Users.php",
+    "snippet": "'UPDATE users SET ' . implode(', ', $set) . ' WHERE id = ?'",
+    "reason": "Reviewed (core agent's file): every $set entry is \"<column> = ?\" for a column from the fixed $allowed list (anything else throws); values bound."
+  }
+]

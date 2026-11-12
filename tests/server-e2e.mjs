@@ -1027,6 +1027,45 @@ async function main() {
     assert([302, 303].includes(u.status) && /sub=fail&code=OTHER&msg=/.test(loc2) && !/evil|script/i.test(decodeURIComponent(loc2)), `unknown code → ${u.status} ${loc2}`);
     return 'mapped code + fixed message, nothing reflected';
   });
+  await step('sub endpoints: SQL injection in tier / orderId / paymentKey / customerKey / authKey / webhook / return.php → clean 4xx or ignored, tables intact (§15.7 #7)', async () => {
+    if (skipSub()) return skipSub();
+    const SQLI = ["' OR '1'='1", "1; DROP TABLE orders; --", "x' UNION SELECT password_hash FROM users --", "1) OR (1=1", '%27%20OR%201%3D1', "\\'; DELETE FROM subscriptions; --"];
+    const SQL_ERR = /SQLSTATE|syntax error|near "|You have an error in your SQL|PDOException|sqlite|mysql/i;
+    // a fresh player E: the writes below would use up D's sub_write budget (20 per 10 minutes)
+    const EE = new Client('E');
+    await EE.req('api/ping.php');
+    const reg = await EE.req('api/auth/register.php', { json: { email: `e2e_e${id}@example.com`, nickname: `Sqli_${tag.slice(-5)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(reg.status === 200, `register E ${reg.status} ${reg.error?.code}`);
+    const before = phpProc ? { users: dbAll('SELECT COUNT(*) AS n FROM users')[0].n, orders: dbAll('SELECT COUNT(*) AS n FROM orders')[0].n } : null;
+    const op = await EE.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } });
+    assert(op.status === 200, `prepare E ${op.status}`);
+    const o = op.data;
+    const bad = [];
+    const look = (label, r, okStatus = []) => {
+      if (r.status >= 500 || (r.status < 400 && !okStatus.includes(r.status)) || SQL_ERR.test(r.text || '')) bad.push(`${label} → ${r.status} ${(r.text || '').slice(0, 80)}`);
+    };
+    const hook = new Client('toss-sqli');
+    for (const x of SQLI.slice(0, 3)) {
+      look(`prepare tier ${x}`, await EE.req('api/sub/prepare.php', { json: { tier: x, kind: 'card' } }));
+      look(`prepare kind ${x}`, await EE.req('api/sub/prepare.php', { json: { tier: 2, kind: x } }));
+      look(`confirm orderId ${x}`, await EE.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + o.orderId, orderId: x, amount: o.amount } }));
+      look(`confirm paymentKey ${x}`, await EE.req('api/sub/confirm.php', { json: { paymentKey: x, orderId: o.orderId, amount: o.amount } }));
+      look(`billing-issue ${x}`, await EE.req('api/sub/billing-issue.php', { json: { authKey: x, customerKey: x, orderId: x } }));
+    }
+    for (const x of SQLI) {
+      look(`webhook ${x}`, await hook.req('api/sub/webhook.php', { json: { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: x, orderId: x, status: 'CANCELED' } }, csrf: false }), [200]);
+      const back = await EE.req(`api/sub/return.php?kind=card&paymentKey=${encodeURIComponent(x)}&orderId=${encodeURIComponent(x)}&amount=1`, { headers: { Accept: 'text/html' } });
+      if (![302, 303].includes(back.status) || !/sub=fail/.test(back.headers.get('location') || '')) bad.push(`return.php ${x} → ${back.status}`);
+    }
+    assert(!bad.length, bad.slice(0, 4).join(' | '));
+    if (before) {
+      const after = { users: dbAll('SELECT COUNT(*) AS n FROM users')[0].n, orders: dbAll('SELECT COUNT(*) AS n FROM orders')[0].n };
+      assert(after.users === before.users && after.orders === before.orders + 1, `tables changed: ${JSON.stringify(before)} → ${JSON.stringify(after)}`);
+    }
+    const fin = await EE.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + o.orderId, orderId: o.orderId, amount: o.amount } });
+    assert(fin.status === 200 && fin.data.sub.tier === 2, `the order still confirms normally afterwards: ${fin.status} ${fin.error?.code}`);
+    return `SQL payloads in 7 fields: clean answers, tables intact, the order confirms afterwards`;
+  });
   await step('install.php on a server in use (accounts exist): a plain 404 for GET and POST, no installer words, no form', async () => {
     const g = await anon.req('install.php', { headers: { Accept: 'text/html' } });
     const p = await anon.req('install.php', { raw: 'driver=sqlite&admin_email=x%40example.com', contentType: 'application/x-www-form-urlencoded', csrf: false, headers: { Accept: 'text/html' } });
