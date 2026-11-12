@@ -345,9 +345,15 @@ body.easy .soc-bubble.emote { font-size: 2.8rem; }
   .skc-recent { order: -2; }
   .skc-sub, .skc-emoji-row { order: -1; }
 }
-/* sideways: one line and no caption, so the picture tabs fit whole above the fold */
+/* sideways: one line and no caption, so the picture tabs fit whole above the fold — also under the easy-mode toast
+   lane (02-responsive: the dialog starts ~6.7rem down on short screens), which leaves this card ~40 px shorter:
+   tighter gaps, the friend's name on the same line as the words, emoji circles one tap tall (not a column wide) */
 @media (max-height: 560px) {
   .skc-recent .skc-msg:nth-last-child(n+2), .skc-sub { display: none; }
+  .skc { gap: .55rem; }
+  .skc-recent { min-height: 0; padding: .4rem .6rem; }
+  .skc-bub b { display: inline; margin-right: .4rem; }
+  .skc-emo { width: min(100%, var(--tap)); justify-self: center; }
 }
 body.reduce-motion .skc-msg { animation: none; }
 @media (prefers-reduced-motion: reduce) { .skc-msg { animation: none; } }
