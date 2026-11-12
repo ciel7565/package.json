@@ -21,7 +21,7 @@
 
 ## 1. 요구 사항
 
-- PHP **7.2 이상, 64비트** (확인된 운영 환경: XAMPP Apache/2.4.34 Win32 · PHP 7.2.10 · MariaDB 10.3.8; PHP 8.x 에서도 동일하게 동작) —
+- PHP **7.2 이상, 64비트** (주인의 운영 환경: XAMPP Apache/2.4.34 Win32 · PHP 7.2.10 · MariaDB 10.3.8 — 7.2 는 문법 검사로 확인했고, 시험은 PHP 8.3.6 · MariaDB 10.11.14 · Apache 2.4.58 에서 돌렸어요. PHP 7.2 · MariaDB 10.3 은 보안 업데이트가 끝난 버전이라 PHP 8.2+ · MariaDB 10.11+ 를 권장해요 — `docs/SECURITY-REPORT-KO.md` §17·4장) —
   필수 확장: `pdo`, `pdo_mysql` 또는 `pdo_sqlite`, `mbstring`, `json`, `session`, `curl`(토스 결제), `openssl`; 권장: `fileinfo`·`gd`(사진 업로드)
 - `intl`·`sodium` 은 **없어도 됩니다** (유니코드 정규화는 내장 대체 변환, 비밀번호는 Argon2id → Argon2i → bcrypt 순으로 자동 선택)
 - 서버 코드는 **PHP 7.2 문법만** 씁니다 (`tools/php-compat.sh` 가 PHPCompatibility 로 검사, 0 오류). `lib/compat.php` 가 7.2 에 없는 문자열·배열 함수를 보충합니다
@@ -41,7 +41,8 @@
    (명령줄: `php cli/tfm.php install --driver=mysql --user=root --admin-email=… --admin-nick=…` — 비밀번호와 키는 화면에 보이지 않게 물어요(§5 CLI), 단계별 그림 설명: `docs/SERVER-INSTALL-KO.md`)
 4. `http://localhost/metaverse/` 접속 → 칩이 **서버** 인지 확인. 관리자 센터는 완료 화면의 주소(또는 `php cli/tfm.php admin:path`)에서 설치 때 만든 관리자로 로그인합니다.
 5. 관리자 센터 → **🩺 시스템 점검** 탭에서 ⛔/⚠️ 항목을 확인하고 안내대로 고칩니다 (웹 노출 검사 = AllowOverride, 관리자 페이지 잠금, 보안 설정, DB 계정).
-6. 자동 갱신 결제를 쓰려면 Windows 작업 스케줄러에 `php.exe cli\tfm.php sub:renew` 를 하루 한 번 등록합니다.
+6. Windows 작업 스케줄러에 하루 한 번 **백업**(DB + `data/secret.php`)과, 자동 갱신 결제를 쓰면 `php.exe cli\tfm.php sub:renew` 를 등록합니다 — 표와 `.bat` 예시: `docs/SERVER-INSTALL-KO.md` 8-1·8-2.
+7. 공개 인터넷에 열기 전에 `docs/SECURITY-REPORT-KO.md` 의 "1.3 지금 바로 할 일" 다섯 가지(HTTPS · 관리자 센터 잠그기 · DB 잠그기와 백업 · httpd.conf/php.ini · 토스 키)를 해요.
 
 ### 개발용 PHP 내장 서버
 ```bash
@@ -99,20 +100,27 @@ return [
 | `cors_allowed_origins` | `TFM_CORS_ORIGINS` | 없음 | 공개 GET 4개(ping·time·ranking/top·sub/status)를 읽어도 되는 정확한 `https://호스트[:포트]`. `*` 금지 |
 | `block.threshold` · `window` · `duration` · `exempt` | `TFM_BLOCK_THRESHOLD` · – · – · `TFM_BLOCK_EXEMPT` | 25 · 600초 · 1800초 · 없음 | 자동 차단: 600초에 공격 같은 기록 25번 → 30분(다시 걸리면 2배, 최대 24시간). `exempt` = 자동 차단하지 않을 주소(학교 등) |
 | `events_days` · `events_per_minute` | – | 90 · 120 | 보안 기록 보관 일수 · 한 주소의 1분 기록 상한 |
+| `hsts` | `TFM_HSTS` | 켜짐 | https 응답에 HSTS 머리글(브라우저가 앞으로 https 로만 열게) |
 | `admin_dir` | – | `admin` | 관리자 폴더 이름의 기록 (`php cli/tfm.php admin:path` 가 적어요) |
 | `admin_ip_allowlist` | `TFM_ADMIN_IPS` | 없음(어디서나) | 관리자 센터를 열 수 있는 주소(IPv4/IPv6, CIDR). 다른 주소는 404 + `admin_ip_denied`. localhost 도 예외 없음. `api/admin/*` 도 같은 목록 |
 | `admin_2fa` | `TFM_ADMIN_2FA` | `optional` | `off` · `optional`(등록 안 한 관리자에게 "켜 주세요") · `required`(등록 안 한 관리자는 등록 화면만) |
 | `admin_idle` | `TFM_ADMIN_IDLE` | 1800 | 관리자 화면을 이 초 동안 안 쓰면 비밀번호(+코드)를 다시 물어요 |
 | `allow_localhost_bootstrap` | `TFM_LOCAL_BOOTSTRAP` | 켜짐 | 이름과 달리 이제는 "첫 관리자 지정(관리자가 없을 때, **설치 코드** 필요)" 기능 전체의 켜기/끄기예요. localhost 라서 믿는 일은 없어요 |
 | `check_origin` | `TFM_CHECK_ORIGIN` | 켜짐 | POST 의 출처(`Origin`/`Sec-Fetch-Site`) 검사. 끄지 마세요(점검 ⚠) |
-| `alerts` | – | 꺼짐 | 수상한 활동 알림 메일·https 웹훅 (설정 파일에서만) |
+| `alert_email` · `alert_webhook` · `alert_interval` | `TFM_ALERT_EMAIL` · `TFM_ALERT_WEBHOOK` · – | 없음 · 없음 · 600 | 심각한 일(자동 차단·결제 조작)이 생기면 메일(PHP `mail()` 이 되는 서버) 또는 **https** 웹훅으로 알림. 보낼 곳은 설정 파일·서버 환경 변수로만 정하고 요청에 담긴 값은 쓰지 않아요. 같은 종류는 `alert_interval` 초에 한 번 |
 
+자동 차단에 세는 기록(경고 이상만): `origin_mismatch` · `admin_denied` · `admin_ip_denied` · `admin_2fa_fail` · `probe_sqli/xss/traversal` · `honeypot` · `payment_tamper` · 위험한 `upload_rejected`.
+세지 않는 기록: `csrf_fail`(오래 열어 둔 탭의 낡은 토큰이 흔해서 정보로만) · `login_locked`(로그인은 따로 잠가요) · `save_rejected` · `https_required` · 브라우저가 `Sec-Fetch-Site: cross-site` 로 표시한 함정·출처 불일치·공격 문자열(다른 사이트가 방문자를 시켜 보낸 요청).
+요청 한도의 다른 설정(설정 파일 맨 위 단계): `rate_limit_ip_multiplier`(25 — 로그인 안 한 요청의 주소 전체 상한 = 한도 × 25), `login.max_failures` 5 · `base_lock` 30초 · `max_lock` 3600초 · `account_max` 15(서로 다른 주소 수) · `ip_max_failures` 60 · `ip_lock` 900초 · `window` 900초.
 `rate_limits.admin_login`(관리자 로그인 폼, 주소별 5분 20회)과 엔드포인트별 한도 표는 §6 · `docs/SECURITY-REPORT-KO.md` 부록 A 에 있어요.
 
 | 환경 변수 | 기본값 | 설명 |
 |---|---|---|
 | `TFM_DB_DRIVER` | `sqlite` | `sqlite` / `mysql` |
 | `TFM_DB_HOST` `TFM_DB_PORT` `TFM_DB_NAME` `TFM_DB_USER` `TFM_DB_PASS` | 127.0.0.1 / 3306 / fermentation_metaverse / root / (빈 값) | MySQL 접속 정보 — 운영에서는 install 이 만든 전용 계정을 쓰세요 (root·빈 비밀번호는 점검 ⛔) |
+| `TFM_DB_SOCKET` | (빈 값) | MySQL 을 소켓 파일로 연결할 때 (리눅스) |
+| `TFM_DB_AUTO_MIGRATE` | 1 | 첫 요청 때 표 구조를 스스로 올릴지. **전용 계정 설치는 설치 마법사가 `false` 로 적어요**(그 계정은 표를 바꿀 수 없어서) → 업그레이드는 `cli migrate --admin-user` (MySQL 에서 켜져 있으면 점검 ⚠) |
+| (설정 파일만) `db.mysql.ssl_ca` | (없음) | DB 가 다른 컴퓨터에 있을 때 TLS 로 연결할 CA 인증서 파일. 암호화 없는 원격 DB 에는 연결하지 않아요 |
 | `TFM_ENV` | `production` | `production` / `development`. production + 공개 주소면 모의 결제·모의 AI·저장 검증 건너뛰기를 강제로 끄고 debug 로그를 info 로 |
 | `TFM_SQLITE_PATH` | (자동) | SQLite 파일 위치 지정 |
 | `TFM_DATA_DIR` | `<설치폴더>/data` | DB·로그·세션·비밀키 폴더 (**웹 루트 밖 권장**) |
@@ -120,11 +128,17 @@ return [
 | `TFM_ADMIN_EMAILS` | (없음) | 예전 설정이에요: 이제 **이메일만으로 관리자로 올리지 않아요**(먼저 가입한 사람이 관리자가 될 수 있었음, 보고서 F2). 적혀 있으면 점검 ⚠ — 지워도 돼요 |
 | `TFM_TRUSTED_PROXIES` | (없음) | 리버스 프록시 IP (그때만 X-Forwarded-* 신뢰) |
 | `TFM_SESSION_IDLE` / `TFM_SESSION_MAX` | 7200 / 86400 | 세션 유휴 만료·최대 수명(초) |
+| `TFM_REMEMBER_IDLE` / `TFM_REMEMBER_DAYS` | 604800 / 30 | "로그인 유지" 를 고른 세션의 유휴 만료(초)·최대 수명(일) |
+| `TFM_SESSION_BIND_UA` | 1 | 브라우저 지문(User-Agent)이 바뀌면 세션을 끝냄 (훔친 쿠키를 다른 브라우저에서 못 씀). 끄지 마세요 |
+| `TFM_TIMEZONE` | `Asia/Seoul` | 서버 시각의 시간대 |
 | `TFM_LOG_LEVEL` | `info` | `debug` `info` `warn` `error` |
 | `TFM_LOCAL_BOOTSTRAP` | 1 | 관리자가 한 명도 없을 때 관리자 센터 로그인 화면의 "첫 관리자 지정"(체험관 계정 + 비밀번호 + **설치 코드**)을 허용. 0 이면 `install.php` 또는 `cli promote` 만 |
 | `TFM_UPLOAD_REQUIRE_GD` | 0 | (예전 설정) 이제는 GD 가 없으면 언제나 업로드를 거부해요 — 다시 그리기 없이는 사진 속 위치 정보를 지울 수 없어서 |
 | `TFM_TOSS_CLIENT_KEY` / `TFM_TOSS_SECRET_KEY` | (없음 — 결제 "설정 필요") | 토스페이먼츠 API 개별 연동 **내** 키. 기본 키는 없고, 문서의 공개 예시 키는 넣어도 거절해요. 시크릿 키·빌링키·결제 키는 로그에 절대 기록되지 않음 |
 | `TFM_TOSS_MOCK` | 0 | 1 이면 결제 서버에 연결하지 않는 모의 결제 (E2E·시연) — 서버 PC(또는 `TFM_ENV=development`)에서만 동작 |
+| `TFM_DB_ADMIN_PASS` · `TFM_ADMIN_PASS` · `TFM_TOSS_SECRET_KEY` · `TFM_NEW_PASSWORD` | (없음) | **명령줄 도구용**: `cli install`·`migrate`·`db:*` 의 DB 관리자 비밀번호, 첫 관리자 비밀번호, 토스 시크릿 키, `reset-password` 의 새 비밀번호를 다른 프로그램에서 넘길 때. 명령줄 인수로는 받지 않아요(같은 PC 의 다른 사용자가 프로세스 목록에서 볼 수 있어서). 사람이 칠 때는 화면에 보이지 않게 물어요 |
+| `TFM_ADMIN_HTACCESS` | (내부) | 관리자 폴더의 `.htaccess` 가 스스로 켜는 표시 — 점검 화면이 `.htaccess` 가 동작하는지 알아보는 데 써요. 직접 정하지 마세요 |
+| `ANTHROPIC_API_KEY` · `TFM_AI_*` · `TFM_RT_SCALE` | (없음) | 다음 단계 기능(Claude 도우미 · 실시간 텃밭)용 자리예요. 이번 버전에는 그 기능의 입구(API)가 없어요. Claude 키를 넣는다면 `config.local.php`·환경 변수에만(저장소·DB·로그·브라우저에 남기지 않아요) |
 
 ### MySQL / MariaDB (XAMPP) — 수동 설치 (install.php 를 쓰지 않을 때)
 1. phpMyAdmin (`http://localhost/phpmyadmin`) → 새 데이터베이스 `fermentation_metaverse` (utf8mb4_unicode_ci) → 선택 → **가져오기** → `database/schema.sql` 실행
@@ -133,7 +147,7 @@ return [
    `CREATE USER 'tfm_app01'@'localhost' IDENTIFIED BY '32자-무작위'; GRANT SELECT, INSERT, UPDATE, DELETE ON `fermentation\_metaverse`.* TO 'tfm_app01'@'localhost';`
    (`127.0.0.1` 도 같은 두 줄). `db.auto_migrate` 는 `false` 로 두고, 업그레이드는 `php cli/tfm.php migrate --admin-user root` (그때만 관리자 연결).
 3. `config.local.php` 에 `'db' => ['driver' => 'mysql', 'auto_migrate' => false, 'mysql' => [...]]` 지정 → 관리자 센터 → 🩺 시스템 점검의 "🗄️ DB 계정" 이 ✅ 인지 확인.
-   이미 root 로 도는 설치는 `php cli/tfm.php db:account --admin-user root` 한 번이면 전용 계정으로 바뀌어요(자료 유지). 서버 쪽 잠그기 순서: `docs/SECURITY-REPORT-KO.md` §1.
+   이미 root 로 도는 설치는 `php cli/tfm.php db:account --admin-user root` 한 번이면 전용 계정으로 바뀌어요(자료 유지). 서버 쪽 잠그기 순서(root 비밀번호·익명 계정·test DB·`bind-address`·phpMyAdmin): `docs/SERVER-INSTALL-KO.md` 7장, 이유는 `docs/SECURITY-REPORT-KO.md` §1. 날마다 자동 백업(읽기 전용 백업 계정 + `.bat`)은 SERVER-INSTALL-KO 8장.
 
 ### Nginx
 ```nginx
@@ -219,17 +233,17 @@ JSON 깊이 32 · 한도 초과 429 + `Retry-After` + `data.retryAfter` · 파�
 
 | 경로 | 방식 | 권한 | 설명 · 응답 data |
 |---|---|---|---|
-| `ping.php` | GET | 누구나 | `{app:'tfm-metaverse', version, db, serverTime, csrf, loggedIn}` — 세션·CSRF 발급 |
+| `ping.php` | GET | 누구나 | `{app:'tfm-metaverse', version, serverTime, csrf, loggedIn, subscriptions:{enabled}}` — 세션·CSRF 발급 · DB 종류(`db`)와 모의 결제 표시(`subscriptions.mock`)는 **관리자에게만**(F15) · CORS 허용 목록 대상 |
 | `time.php` | GET | 누구나 | `{serverTime, iso, timezone, day}` |
 | `auth/register.php` | POST | 비로그인 | `{email, nickname, password, password_confirm, agree:true, remember?}` → `{user}` · 이 브라우저의 시도가 많으면 429 `RATE_LIMITED`, 같은 인터넷 주소(학교·집)의 가입이 `rate_limits.register_ip` 를 넘으면 429 `REGISTER_IP_LIMIT` (둘 다 `data.retryAfter` + `Retry-After`) |
 | `auth/login.php` | POST | 누구나 | `{login 또는 email, password, remember}` → `{user, sub, restoredAt, restoredRev}` · 실패 401 `INVALID_CREDENTIALS`, 잠금 429 `TOO_MANY_ATTEMPTS` · `restoredAt`/`restoredRev` 는 아래 `player/get.php` 와 같아요 |
 | `auth/logout.php` | POST | 누구나 | `{loggedOut:true}` (새 CSRF) |
-| `auth/me.php` | GET | 누구나 | `{user:{id,email,nickname,role} 또는 null, mutedUntil, sub:{tier,status,expiresAt,autoRenew}, restoredAt, restoredRev}` — `sub` 는 서버가 정한 진행 속도 단계(만료·자동 갱신을 한 시간에 한 번 스스로 정리) |
+| `auth/me.php` | GET | 누구나 | `{user:{id,email,nickname,role} 또는 null, mutedUntil, sub:{tier,status,expiresAt,autoRenew}, restoredAt, restoredRev, adminUrl?}` — `sub` 는 서버가 정한 진행 속도 단계(만료·자동 갱신을 한 시간에 한 번 스스로 정리) · `adminUrl`(관리자 센터의 상대 주소)은 **관리자에게만** |
 | `player/get.php` | GET | 로그인 | `{save:{version, revision, savedAt, restoredAt, restoredRev, data} 또는 null, sub, restoredAt, restoredRev}` — 저장본 안의 `data.sub` 도 서버 값으로 바꿔서 줌 · `restoredAt`(ms)/`restoredRev`: 지금 저장본이 관리자 센터 "직전 저장으로 되돌리기" 로 돌려놓은 것이면 그 시각과 판(revision), 아니면 0 (다음 저장이 받아들여지면 0 으로 돌아감) — 체험관은 그 시각보다 오래된, 기기에 남은 임시 기록을 다시 쓰지 않아요 |
 | `player/save.php` | POST | 로그인 | `{version, checksum, base?, data}` → `{savedAt, revision, size, sub, subChanged}` · **모든 응답**(오류 응답도 `data.sub`)이 서버의 구독 `sub` 를 담고, 올린 저장본의 단계가 서버와 다르면 `subChanged: true` (CSRF 확인 뒤부터) · 검증 실패 **409** `VALIDATION_FAILED` + `data.save`(서버 저장본) · `base` 보다 새 저장본이 있으면 **409** `STALE_SAVE` + `data.save` (관리자가 "직전 저장으로 되돌리기" 한 저장본 그대로면 `data.restored: true` 와 `data.save.restoredAt`/`restoredRev`) · `profile.role` 과 **`sub`** 는 계정·구독 테이블의 값으로 고쳐 저장(거절하지 않음) · 시간 기준 검증은 구독 단계(tier)에 비례 |
 | `chat/list.php?after=ID&rafter=R` | GET | 누구나 읽기 | `{messages:[{id,userId,nickname,text,channel,createdAt}], online, lastId, retracted:{messages:[id], users:[uid], upTo:{uid: id}}, retractId}` — `retracted`: 관리자가 숨긴 줄·신고 3건으로 숨겨진 줄·이용 정지된 계정의 줄(체험관이 이미 받은 것도 지움), `rafter`에는 지난 응답의 `retractId`를 보냄 · `upTo[uid]`: 정지한 순간의 가장 큰 메시지 번호 — 그 번호까지만 지우면 정지를 풀어 준 뒤 새로 쓴 줄은 남아요 (`upTo` 에 없는 계정은 모든 줄을 지움, 스키마 v5 이전에 만든 정지) |
 | `chat/send.php` | POST | 로그인 | `{text, channel:'all'\|'local'}` → `{message, piiMasked}` · 429 `RATE_LIMITED`, 409 `DUPLICATE_MESSAGE`, 403 `MUTED` |
-| `chat/report.php` | POST | 로그인 | `{target, targetId?, messageId?, text?, reason, memo?}` → `{reportId, duplicate}` — 신고한 글은 서버에 있는 메시지(`messageId`)에서 가져와요. 번호 없이 보낸 `text`는 신고자가 적은 글이라 대상의 말로 저장하지 않고 메모에 ‘신고자가 적은 내용(확인 안 됨)’으로 남겨요 |
+| `chat/report.php` | POST | 로그인 | `{target, targetId?, messageId?, text?, reason, memo?}` → `{reportId, duplicate}` — 신고한 글은 서버에 있는 메시지(`messageId`)에서 가져와요. 번호 없이 보낸 `text`는 신고자가 적은 글이라 대상의 말로 저장하지 않고 메모에 ‘신고자가 적은 내용(확인 안 됨)’으로 남겨요 · 신고 3명이면 자동 숨김 — '주변' 채널 줄은 그 줄을 받을 수 있었던(최근 위치가 `chat.local_radius` 30 m 안인) 사람만 신고할 수 있어요, 아니면 403 `REPORT_NOT_VISIBLE`(7단계, 보고서 3.3 의 3번) |
 | `presence/update.php` | POST | 로그인 | `{x,y,z,rotY,anim,speed,zoneId,emote,emoteAt,appearance?}` → `{players:[…], online}` (최근 15초, 각 줄의 `age` = 그 위치를 받은 뒤 지난 ms) |
 | `journal/upload.php` | POST(multipart `photo`) | 로그인 | `{url:'uploads/journal/…', width, height, size, mime, id}` |
 | `ranking/top.php` | GET | 누구나 | `{ranking:[{rank,nickname,level,exp,title,me}], me, total, updatedAt}` (닉네임만 공개) |
@@ -292,14 +306,14 @@ JSON 깊이 32 · 한도 초과 429 + `Retry-After` + `data.retryAfter` · 파�
 | XSS | API 는 JSON 만 (`Content-Type: application/json`, `nosniff`, `<`·`>`·`&`·따옴표 `\uXXXX` 이스케이프). 체험관은 모든 원격 문자열을 textContent/escape 로 렌더링. 관리자 센터는 모든 출력 `htmlspecialchars`, **스크립트 0개**, CSP `default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`. 결제 복귀(`return.php`)는 정해진 낱말만 넘기고 체험관이 고정 문장을 보여 줌. 아바타 외형은 화이트리스트 값만 다른 사람에게 전달 |
 | HTTPS 강제 (7단계) | `security.force_https = auto`: 공개 주소의 http GET → 308, 그 밖 → 403 `HTTPS_REQUIRED`(자격 증명을 읽기 전), 루트 `.htaccess` 이동 켜짐, `X-Forwarded-Proto` 는 `trusted_proxies` 만, HSTS · Secure 쿠키 |
 | 입력 검사 (7단계) | `Tfm\V`: 모든 엔드포인트가 모르는 키 거절·종류·길이·범위·목록 검사, JSON 깊이 32, 본문 크기 상한, `$_GET` 숫자 → 400 `INVALID_INPUT` + `data.field` |
-| 수상한 활동 (7단계) | `SecEvent` → `security_events`(+파일 로그, 90일, 한 주소 1분 120줄) · `Firewall::check()` 가 모든 입구에서 먼저 · 600초에 25번 → 30분 차단(2배씩, 최대 24시간), localhost·`block.exempt` 제외, 교차 사이트로 꾀어낸 요청은 정보로만 · 함정 주소 → `api/trap.php` · 🛡️ 보안 탭 · `cli security:events`·`ip:block`·`ip:unblock` |
+| 수상한 활동 (7단계) | `SecEvent` → `security_events`(+파일 로그, 90일, 한 주소 1분 120줄, 제어 문자는 `\u` 표시) · `Firewall::check()` 가 모든 입구에서 먼저 · 공격 같은 기록(경고 이상, §4 의 목록) 600초에 25번 → 30분 차단(2배씩, 최대 24시간), localhost·`block.exempt` 제외, 교차 사이트로 꾀어낸 요청은 정보로만 · 함정 주소 → `api/trap.php` · 🛡️ 보안 탭 · `cli security:events`·`ip:block`·`ip:unblock` · 선택: 심각한 일의 메일·https 웹훅 알림 |
 | 관리자 주소 잠금 (7단계) | 폴더 이름 자유(`admin:path`, 설치 때 무작위) · 예전 `admin.php` 는 404 · 허용 주소 밖은 화면·모양 파일·폴더 주소 모두 "없는 페이지" 404(세션·쿠키 없음) · 공유 로그인 + 역할 + 2단계 인증(RFC 6238, 재사용 불가, 백업 코드 해시, 비밀 키 봉인, 코드 전용 잠금) · 승격(세션 + 폴더 쿠키, 30분 유휴, 세션 번호 교체) · 잠금 머리글 · `admin/.htaccess` 의 선택 잠금(Require ip, Basic 인증) |
 | CORS (7단계) | 기본: CORS 머리글 없음(같은 사이트만). `cors_allowed_origins` 의 정확한 https 주소만, 공개 읽기 GET 4개에서만, 자격 증명 없이, 그 밖의 사전 요청 403 |
 | 비밀 값 (7단계) | 기본 키 없음(토스 문서 예시 키 거절) · `data/secret.php`(앱 키·데이터 키, 만든·바꾼 날짜) · 빌링키·2단계 비밀 키는 AES-256-GCM 봉인(`enc:v1:`) · 로그에 키 없음 · `secret:rotate` · `db:rotate-password` · 명령줄에 비밀번호·키 금지 · `node tools/secret-scan.mjs [--history]` · 점검 "키 나이" |
 | CSRF | 세션별 32바이트 토큰(`hash_equals`), 로그인·로그아웃 때 교체, POST 마다 검사 + `Origin`/`Sec-Fetch-Site` 교차 사이트 차단, SameSite=Lax 쿠키 |
 | 세션 탈취·고정 | 쿠키 이름 `TFMSESSID`, HttpOnly, SameSite=Lax, HTTPS 면 Secure, 경로 = 설치 폴더, `use_strict_mode`, 로그인/권한 변경 시 `session_regenerate_id`, 유휴 2시간·최대 24시간(로그인 유지: 7일·30일), User-Agent 지문, 사용자별 세션 epoch(정지·권한 변경·비밀번호 재설정 시 모든 기기 로그아웃), 로그인 = 계정 번호 + 가입 시각(DB 복구 뒤 같은 번호의 새 계정으로 넘어가지 않음), 전용 세션 폴더 |
-| 무차별 대입 | `login_attempts`: 같은 IP+계정 5회 실패 → 30초부터 2배씩(최대 1시간) 잠금, 계정 단위 15회, IP 단위 60회(15분) 잠금, 모르는 계정도 같은 시간(더미 해시) |
-| 비밀번호 | `password_hash` Argon2id(없으면 bcrypt cost 12) + `password_needs_rehash`, 8~64자 영문+숫자, 흔한 비밀번호·이메일/닉네임 포함 거부 |
+| 무차별 대입 | `login_attempts`(15분 창): 같은 IP+계정 5회 실패 → 30초부터 2배씩(최대 1시간) 잠금 · 한 IP 가 여러 계정을 60회 틀림 → 그 IP 15분 잠금 · 계정 전체 잠금은 **서로 다른 IP 15곳 이상**에서 틀렸을 때만, 그리고 **틀린 비밀번호에만** 적용 — 맞는 비밀번호를 넣은 주인은 어느 IP 에서든 들어가요(닉네임이 공개라 남이 계정을 잠가 버리지 못하게, 7단계) · 모르는 계정도 같은 시간(더미 해시) · 관리자 2단계 코드는 따로 잠김(§5) |
+| 비밀번호 | `password_hash` Argon2id → (PHP 7.2) Argon2i → 둘 다 없으면 bcrypt cost 12, + `password_needs_rehash`(PHP 를 올리면 다음 로그인 때 더 강한 방식으로 바꿔 저장), 8~64자 영문+숫자, 흔한 비밀번호·이메일/닉네임 포함 거부 |
 | 과다 요청 | 엔드포인트별 이름 붙은 제한(`rate_limits`, 미끄러지는 시간 창, 429 + `Retry-After`): 로그인 사용자=계정별, 비로그인=세션별 + IP 전체 상한(×25), 로그인=IP별, 가입=시도는 세션별·만들어진 계정 수와 '이미 가입된 이메일/닉네임' 응답은 IP별(`register_ip`, 시간당 60), 관리자 로그인 폼=IP별(`admin_login`, 5분 20회). 채팅 1초 1개·분당 20개·30초 내 같은 말 반복 금지. 쿠키 없는 요청과 처음 보는 쿠키는 세션 파일을 만들지 않음(관리자 로그인 폼의 토큰도 서버에 아무것도 남기지 않는 서명 값) |
 | 업로드 악용 | 파일은 `journal/upload.php` 만 받음(다른 곳의 multipart → 400 `UPLOAD_NOT_ALLOWED` + `upload_rejected`), `is_uploaded_file`, 5 MB, **finfo MIME 화이트리스트**(PNG/JPEG/WEBP), `getimagesize` 형식 일치, 해상도·픽셀 상한(압축 폭탄), PHP/HTML/SVG 폴리글롯 패턴 거부, **GD 재인코딩 필수**(GD 가 없으면 거부 — EXIF·GPS·주석·덧붙인 데이터 제거), 무작위 128비트 이름 + 강제 확장자, 사용자별 일/총 개수 제한, `.user.ini`·`.htaccess` 의 PHP 업로드 상한(6M/8M/2개), `uploads/.htaccess` 스크립트 실행 금지·`[a-f0-9]{32}` 이미지 이름만·nosniff·sandbox CSP |
 | 정보 노출 | 오류는 일반 메시지 + 참조 번호만 (`display_errors` 끔, 스택은 `data/logs` 에만), 모든 직접 열기 가드의 `X-Powered-By` 제거, 랭킹·접속자에 이메일/내부 ID 없음, 공개 응답·관리자 로그인 화면·설치 화면에 버전·DB 종류·경로 없음, SQLite 파일 이름은 어떤 화면에도 안 나옴. 공개 운영 서버에서는 모의 결제·모의 AI·저장 검증 건너뛰기를 강제로 끔(`app.env = production` 기본) |
@@ -325,7 +339,7 @@ IP 원문이 남습니다(관리자만 열람, 180일 후 정리). 채팅은 30�
   지워** 모든 기기를 로그아웃시키고 Apache 를 다시 시작하세요 — 백업 뒤에 한 이용 정지·비밀번호 재설정이 DB 와 함께 되돌아가도
   그 사이의 로그인이 다시 살아나지 않아요. (백업 뒤에 생긴 계정의 로그인은 서버가 스스로 거부해요: 로그인은 계정의 가입 시각과
   묶여 있어서, 복구 뒤 같은 번호를 받은 새 계정으로 들어가지 않습니다.)
-- MySQL: `mysqldump --single-transaction fermentation_metaverse > backup.sql` 또는 phpMyAdmin 내보내기 (+ `data/secret.php`). 백업은 웹 루트 밖에, 한 달에 한 번 다른 PC 에서 되살려 보기.
+- MySQL: `mysqldump --single-transaction fermentation_metaverse > backup.sql` 또는 phpMyAdmin 내보내기 (+ `data/secret.php`). 백업은 웹 루트 밖에, 한 달에 한 번 다른 PC 에서 되살려 보기. 예약 작업은 비밀번호를 쳐 줄 사람이 없으니 읽기만 하는 백업 전용 계정(`SELECT, SHOW VIEW, TRIGGER, LOCK TABLES`) + `--defaults-extra-file` 설정 파일로 돌려요(`docs/SERVER-INSTALL-KO.md` 8-1 — MariaDB 에서 백업·되살리기 확인함).
 - 사진: `uploads/journal/` 폴더를 함께 백업하세요.
 - 한 사람의 저장을 직전 저장본으로 되돌리기: 관리자 센터 → 사용자 → ⚙️ 관리 → "직전 저장으로 되돌리기".
 
@@ -348,18 +362,20 @@ node tests/server-e2e.mjs http://127.0.0.1:8099/
 그리고 6단계의 **세션 없는 탭의 401**, **구독(모의 결제)**: 상태 → 준비 → 금액 조작·타인 주문·재사용 거부 → 승인 → `me.sub.tier` →
 단계에 비례한 저장 검증(같은 거리가 1배는 거부, 2배는 통과) → 해지 → 빌링키 발급·자동 갱신 → `sub:renew` 연장 → 실패 빌링키 → `past_due` →
 웹훅(검증 불가 무시 · 취소 → 하향 · 중복 무시) → 관리자 부여/해지(비관리자 403) → 모든 구독 POST 의 CSRF, 그리고 **관리자 되돌리기 표시**(get·login·me 의
-`restoredAt`/`restoredRev`, 옛 탭의 저장은 409 `restored`, 400·409·200 모든 저장 응답의 `sub`)와 **정지 회수의 기준 번호**(정지 → 해제 → 새 줄이 남음, `upTo`) —
-70단계를 PASS/FAIL 로 보여 주고, 실패가 있으면 종료 코드 1 을 돌려줍니다. 스스로 띄운 서버는 모의 결제(`TFM_TOSS_MOCK=1`)로 돕니다.
+`restoredAt`/`restoredRev`, 옛 탭의 저장은 409 `restored`, 400·409·200 모든 저장 응답의 `sub`)와 **정지 회수의 기준 번호**(정지 → 해제 → 새 줄이 남음, `upTo`),
+그리고 7단계의 **관리자 센터 로그인(승격) 뒤에만 열리는 관리자 API**, **토스 답이 주문과 다르면 거절**(다른 금액·금액 없음·다른 주문·USD), **같은 주문의 동시 승인은 한 번만**, **두 번 동시에 돌린 자동 갱신도 한 번만 청구**,
+**결제 복귀 주소는 정해진 낱말만**, **구독 엔드포인트의 SQL 인젝션**, **쓰고 있는 서버의 `install.php` 는 404** —
+77단계를 PASS/FAIL 로 보여 주고, 실패가 있으면 종료 코드 1 을 돌려줍니다. 스스로 띄운 서버는 모의 결제(`TFM_TOSS_MOCK=1`)로 돕니다.
 스스로 띄운 서버에서는 DB 를 직접 살펴보는 단계(반복 스팸 키가 **가린 글**에서 만들어졌는지 — 서버의 `ChatFilter::key()` 로 다시 계산해 비교, 신고 메모의 개인정보)를
 SQLite·MySQL 모두에서 돌려요. 같은 실행을 다시 재현하려면 `TFM_E2E_RUN_ID=<16진수 8자>` (SQLite 로 스스로 띄운 서버에서만).
 한 IP 에서 15분 안에 여러 번(약 10회 이상) 돌리면 IP 단위 로그인 잠금(정상 동작)에 걸릴 수 있습니다.
 
-**7단계 보안 시험** (결과와 명령 전체: `docs/SECURITY-REPORT-KO.md` §1 — 모두 서버 사본에서 돌려요, `server/` 에서 직접 돌리지 마세요):
+**7단계 보안 시험** (결과는 `docs/SECURITY-REPORT-KO.md` 1.2, 명령 전체·MariaDB 로 돌리기·결과 읽는 법은 같은 문서 5장 — 시험은 스스로 임시 사본을 만들어요, `server/` 에서 직접 서버를 띄우지 마세요). 지금 결과: 공격 흉내 SQLite 183/183 · MariaDB 181/181(+2 건너뜀) · 관리자 잠금 52/52 · 기능 77/77 × 2 · 관리 화면 10/10 · 단위 62 · 76+13 / MariaDB 87 · 53 · 10 · 7:
 
 ```bash
-node tests/security-e2e.mjs --docroot <사본> --apache [--only S02,S10] [--json out.json]   # 공격 흉내 S01~S19 (TFM_SEC_PORT_BASE·TFM_SEC_APACHE_PORT·TFM_SEC_DB_PREFIX 로 포트·DB 이름)
-node tests/admin-lock.mjs --docroot <사본> [--no-apache] [--only path|signin|twofa|allowlist|…]   # 관리자 센터 잠금 (Apache .htaccess, Require ip, Basic 인증 포함)
-node tests/server-moderation.mjs --root <사본>   # 관리자 센터의 숨기기·정지·자동 숨김이 접속 중인 체험관에 닿는지, 신고 표 화면 배치, 감사 로그 쪽 넘김
+node tests/security-e2e.mjs --apache [--docroot <폴더>] [--only S02,S10] [--json out.json]   # 공격 흉내 S01~S19 (기본 dist/metaverse, TFM_SEC_PORT_BASE·TFM_SEC_APACHE_PORT·TFM_SEC_DB_PREFIX 로 포트·DB 이름, TFM_DB_DRIVER=mysql … 로 MariaDB)
+node tests/admin-lock.mjs [--docroot <폴더>] [--no-apache] [--only path|signin|twofa|allowlist|…]   # 관리자 센터 잠금 (기본 server/ 의 사본, Apache .htaccess, Require ip, Basic 인증 포함)
+node tests/server-moderation.mjs --root dist/metaverse   # 관리자 센터의 숨기기·정지·자동 숨김이 접속 중인 체험관에 닿는지, 신고 표 화면 배치, 감사 로그 쪽 넘김
 php tests/security-unit.php        # 입력 검사·보안 기록·차단·HTTPS·CORS·운영 잠금·설정 점검(키 나이 포함)
 php tests/security-data-unit.php   # 설치(설치 코드·전용 DB 계정·무작위 관리자 폴더·설치 후 점검)·결제·봉인·키 교체·백업 (TFM_DB_DRIVER=mysql … 로 MariaDB 전용 검사까지; TFM_SECDATA_WEB_PORT 로 포트)
 php tests/admin-unit.php           # 2단계 인증(RFC 시험 값·재사용 방지·백업 코드·잠금)·허용 주소·폴더 이름
@@ -381,6 +397,12 @@ PHP 8 이전에 나와 `fn`·`match`·`?->`·이름 붙은 인수·`str_contains
 | 사진 업로드 실패 | `fileinfo`·`gd` 확장, `upload_max_filesize`(5M 이상), `uploads/` 쓰기 권한 |
 | data 노출 검사 ⛔ | httpd.conf 에서 `AllowOverride All` 이 꺼져 `.htaccess` 가 무시됨 → 켜거나 `TFM_DATA_DIR` 로 data 를 웹 루트 밖으로 |
 | "요청이 너무 많아요" | 단체 이용 시 `config` 의 `rate_limits`·`login.ip_max_failures`·`rate_limit_ip_multiplier` 를 늘리세요 |
+| "이 인터넷 주소에서는 잠시 접속할 수 없어요" (403 `IP_BLOCKED`) | 자동 차단에 걸렸어요(§4 의 세는 기록이 600초에 25번). 관리자 센터 🛡️ 보안 탭 또는 `php cli/tfm.php ip:unblock <주소>` 로 풀고, 학교처럼 여럿이 쓰는 주소면 `security.block.exempt` 에 |
+| http 로 연 로그인이 403 `HTTPS_REQUIRED` | 공개 주소는 https 만 받아요(§4 HTTPS). 인증서를 달거나, 인증서 없는 내부망에서만 `security.force_https = off` |
+| `install.php` 가 "Not Found" | 이미 설치됐거나(잠금 파일·`config.local.php`·계정이 있음) 쓰고 있는 서버예요. 다시 설치는 서버 PC 에서 `php cli/tfm.php install --force …` |
+| 관리자 센터가 "Not Found" | 폴더 이름이 바뀌었는지(`php cli/tfm.php admin:path`), 지금 있는 곳의 주소가 `security.admin_ip_allowlist` 에 있는지 |
+| 체험관이 "서버를 업데이트하는 중이에요" (503 `SCHEMA_OUTDATED`) | 전용 DB 계정 설치는 표를 바꿀 수 없어요 → 서버 PC 에서 `php cli/tfm.php migrate --admin-user root` |
+| 구독 화면이 "결제 설정이 필요해요" | 토스 키가 없어요(기본 키는 없어요) → `toss.client_key`·`secret_key` 또는 `TFM_TOSS_CLIENT_KEY`·`TFM_TOSS_SECRET_KEY` |
 
 ## 13. 한계
 
@@ -392,5 +414,7 @@ PHP 8 이전에 나와 `fn`·`match`·`?->`·이름 붙은 인수·`str_contains
 - 토스페이먼츠 서버는 개발 샌드박스에서 닿지 않아 결제 흐름은 공개된 API 계약과 모의 모드로 검증했습니다. 실제 키로 첫 결제를 할 때는 토스 개발자센터의 테스트 키로 한 번 결제해 보세요.
 - 32비트 PHP 는 지원하지 않습니다 (밀리초 시각·체크섬에 64비트 정수 필요).
 - 관리자 2단계 인증(휴대폰 인증 앱)은 있지만 기본값은 `optional` 이에요: 모든 관리자가 등록한 뒤 `security.admin_2fa = required` 로 바꾸세요. 관리자 계정은 긴 비밀번호를 쓰고 HTTPS 로만 접속하세요.
-- 알고 남겨 둔 보안상의 한계(위조한 `Sec-Fetch-Site`, 머리글 없는 TCP 전달, 웹훅 JSON 깊이 등)와 그 이유는 `docs/SECURITY-REPORT-KO.md` 부록 B 에 있어요. 개발 환경에는 PHP 7.2·MariaDB 10.3 이 없어 그 위에서는 시험하지 못했어요 — 운영 서버에서 확인하는 순서는 같은 문서 부록 C.
+- 알고 남겨 둔 보안상의 한계(위조한 `Sec-Fetch-Site`, 토큰 없는 요청이 한도보다 먼저 거절됨, 머리글 없는 TCP 전달 뒤의 localhost, 웹훅 JSON 깊이, 가입 화면의 "이미 가입됨" 등 R1~R13)와 그 이유는 `docs/SECURITY-REPORT-KO.md` 4장에 있어요.
+- 개발 환경에는 PHP 7.2·MariaDB 10.3·Windows Apache 가 없어 그 위에서는 시험하지 못했어요(문법은 `tools/php-compat.sh` 로 7.2 기준 0 오류). PHP 7.2 에서만 도는 길(쿠키 SameSite 를 경로 뒤에 덧붙이는 방법, Argon2i)과 MariaDB 10.3 의 권한 글 읽기는 운영 서버에서 확인해 주세요 — 순서는 같은 문서 5.3.
+- Windows 에서는 파일 권한(0600 = 서버 계정만 읽기)이 적용되지 않아요. 비밀 파일은 `.htaccess`(`AllowOverride All`)와 PHP 가드로 지키니, Windows 에서는 `TFM_DATA_DIR` 로 데이터 폴더를 웹 루트 밖에 두는 것이 더 중요해요.
 - 로컬 모드 진행 상황을 서버 계정으로 옮기는 기능은 보안상 제공하지 않습니다.

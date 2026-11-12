@@ -31,7 +31,7 @@
 2. XAMPP 에서 **Apache** 시작 (DB 는 SQLite 기본이라 MySQL 없이 동작)
 3. `http://localhost/metaverse/install.php` → 서버 PC 에서 `php cli/tfm.php setup-code` 로 본 **설치 코드** + DB + 첫 관리자 → 설치 (완료 화면의 **새 관리자 센터 주소**를 적어 두기)
 4. `http://localhost/metaverse/` 접속 → 화면 위 칩이 **서버** 인지 확인
-5. 개발자 센터 › 🌐 서버 점검 과 관리자 센터 › 🩺 시스템 점검에서 ⛔/⚠️ 를 모두 해결 (관리자 센터 잠그기·DB 잠그기: `docs/SECURITY-REPORT-KO.md` §2)
+5. 개발자 센터 › 🌐 서버 점검 과 관리자 센터 › 🩺 시스템 점검에서 ⛔/⚠️ 를 모두 해결 (공개 전에 할 일 다섯 가지: `docs/SECURITY-REPORT-KO.md` 1.3, 전체 점검표: 같은 문서 부록 B, 단계별: `docs/SERVER-INSTALL-KO.md`)
 6. 자세한 설정(MySQL·Nginx·HTTPS·환경 변수)은 `server/README-SERVER.md`, 단계별 설치는 `docs/SERVER-INSTALL-KO.md`
 
 ### C. 개발용 PHP 내장 서버
@@ -356,7 +356,7 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 - [ ] (서버) XAMPP 설치·첫 관리자 지정·`config.local.php`·HTTPS·백업 일정
 - [ ] 보안 점검: CSP 위반 0건, 관리자 비밀번호 교체
 - [ ] 🔒 (서버, 7단계) 관리자 센터 주소를 무작위 이름으로(`php cli/tfm.php admin:path` 로 확인) · 관리자마다 2단계 인증 등록 → `admin_2fa = required` · 관리자 허용 주소 · 떠나는 사람의 2단계 인증 지우기(`admin:2fa-reset`)와 권한 해제(`demote`)
-- [ ] 🔒 (서버, 7단계) DB 전용 계정(🩺 "DB 계정" ✅) · 내 토스 키 · `php cli/tfm.php config:check` ⛔ 0 · 백업에 `data/secret.php` 포함 · 키 바꾸기 계획(`secret:rotate`, `db:rotate-password`, 토스·Claude 콘솔) — `docs/SECURITY-REPORT-KO.md` §2
+- [ ] 🔒 (서버, 7단계) DB 전용 계정(🩺 "DB 계정" ✅) · 내 토스 키 · `php cli/tfm.php config:check` ⛔ 0 · 백업에 `data/secret.php` 포함 · 키 바꾸기 계획(`secret:rotate`, `db:rotate-password`, 토스·Claude 콘솔 — §18.5) · 작업 스케줄러(백업·`sub:renew`) — `docs/SECURITY-REPORT-KO.md` 부록 B
 - [ ] 👶 `node tools/kid-audit.mjs --both` ⛔ 치명 0건 · 🖥️ GPU 안전 ✅ · 🔒 개인정보 가림 자가 테스트·서버 E2E 통과
 - [ ] 🔒 프로필 설정이 기기에 새지 않는지(§13.4) · 보호자 확인 마구 누르기(§13.1) · 온보딩 카드가 금빛 버튼을 가리지 않는지(§13.5)
 - [ ] 🔒 `node tests/pii-sync.mjs --check` · `node tests/pii-client.mjs --file dist/metaverse/index.html` 통과
@@ -431,8 +431,11 @@ node tools/kid-audit.mjs --normal                      # 보통 모드 점검 (�
 
 ### 18.1 요청이 지나가는 길 (`lib/Api.php` 의 `Api::run`)
 Boot → `Firewall::check()`(막힌 주소 403 `IP_BLOCKED`) → `Http::enforceHttps()`(308 / 403 `HTTPS_REQUIRED`) → `Http::cors()`(공개 GET 만, 사전 요청 403) → 방식 검사(405)
-→ 업로드 거절(`'upload' => true` 가 아닌 곳의 파일 → 400 `UPLOAD_NOT_ALLOWED`) → `V::watch($_GET)`(공격 문자열 기록) → 세션 → 쓰기 요청이면 출처 검사 · 세션 없으면 401 · CSRF
-→ 로그인 확인 → **요청 한도**(`rate`) → 401 / 403(관리자 API 는 관리자 센터 승격까지) → 처리 함수. 페이지(`install.php`, 관리자 센터)는 `Firewall::guardPage()` 로 같은 앞부분을 거쳐요.
+→ 업로드 거절(`'upload' => true` 가 아닌 곳의 파일 → 400 `UPLOAD_NOT_ALLOWED`) → `V::watch($_GET)`(공격 문자열 기록) → 세션(`'session' => 'create'` 인 곳만 새로 만들고, 나머지는 이어 쓰기만)
+→ 쓰기 요청이면 `Sec::checkOrigin()`(다른 사이트 403 `CROSS_SITE_REQUEST`) · 로그인이 필요한데 세션이 없으면 401 · CSRF 토큰(틀리면 403 `CSRF_INVALID`, 정보 등급 `csrf_fail`)
+→ 로그인 확인(401 `AUTH_REQUIRED`) → 관리자 확인(`'admin' => true`, 회원이면 403 + `admin_denied`) → **요청 한도**(`rate`, 429 + `Retry-After`) → 처리 함수
+(관리자 API 는 처리 함수 안의 `AdminGate::requireApi()` 가 관리자 센터 승격까지 확인 — 아니면 403 `ADMIN_REAUTH`). 오류는 `ApiException` → JSON, 그 밖의 예외는 `Api::fail()` → 일반 500 + 참조 번호.
+페이지도 같은 앞부분(차단 · HTTPS · 업로드 거절)을 거쳐요: `install.php`·`api/sub/return.php` 는 `Firewall::guardPage()`, 관리자 센터(`admin/index.php`)는 같은 세 줄(`Firewall::check()` · `Http::enforceHttps()` · `Http::refuseUpload(false)`), 함정(`api/trap.php`)은 `Firewall::check()`. CSRF 거절이 요청 한도보다 먼저인 것은 일부러예요(보고서 4장 R2).
 
 ### 18.2 새 엔드포인트를 만들 때
 1. `Api::run(['method' => 'POST', 'auth' => true, 'rate' => '새_이름'], function (Ctx $c) { … })` — `config.php` 의 `rate_limits` 에 `새_이름 => [횟수, 초]` 를 더해요. 공격 시험 S09 가 모든 엔드포인트의 한도와 `Retry-After` 를 확인해요.
@@ -459,17 +462,61 @@ Boot → `Firewall::check()`(막힌 주소 403 `IP_BLOCKED`) → `Http::enforceH
 | `tools/sql-audit.mjs` · `tools/secret-scan.mjs` · `tools/exposure-audit.mjs` | 검사 도구 (+ `*.allow.json` 검토 목록) |
 | `tests/security-e2e.mjs` · `tests/admin-lock.mjs` · `tests/*-unit.php` | 공격 흉내 시험 · 관리자 센터 잠금 시험 · 단위 시험 |
 
-### 18.4 사람이 바뀔 때 (운영 인수인계)
+### 18.4 23개 항목이 사는 곳 (코드 → 시험)
+고칠 때는 그 줄의 시험부터 돌리세요(`node tests/security-e2e.mjs --only Sxx`, `--apache` 를 붙이면 `.htaccess` 까지). 계약은 `docs/CONTRACT.md` §15.7(요구) · §15.11(실제로 만든 것).
+
+| # | 항목 | 코드 (어디서 지키나) | 시험 |
+|---|---|---|---|
+| 1 | DB 잠금 | `lib/Installer.php`(전용 계정 · `migrateAsAdmin` · `switchToAppAccount` · `rotateDbPassword`), `lib/Db.php`(연결 옵션 · `accountAudit` · SQLite 0600), `lib/Crypto.php`(`Crypto::seal/open`), `lib/Subscription.php`(빌링키 봉인), `lib/Toss.php`(로그에 키 없음), `cli/tfm.php backup` | S01 · `security-data-unit.php` |
+| 2 | HTTPS | `Http::enforceHttps / httpsRequired / isHttps`(`lib/Core.php`), 루트 `.htaccess` 이동 규칙, `Http::securityHeaders`(HSTS), `Cookie`(Secure) | S02 |
+| 3 | 입력 검사 | `Tfm\V`(`lib/Validator.php`), `Http::json / body`(깊이 32 · 크기), 엔드포인트마다 `V::keys`, 저장은 `lib/SaveValidator.php` | S03 · `security-unit.php` |
+| 4 | XSS | `Api::send`(JSON 이스케이프), `admin/index.php` 의 `e()` + 스크립트 없는 CSP, `api/sub/return.php`(낱말 목록), `src/game/72-subscription.js`(고정 문장), `tools/build.mjs`(해시 CSP) | S04 · `sub-return-client.mjs` · `social-client.mjs` |
+| 5 | 기록·감시 | `lib/SecurityEvents.php`(`SecEvent` · `Firewall`), `api/trap.php` + 루트 `.htaccess` 미끼 규칙, 관리자 센터 🛡️ 탭, `cli/security.php` | S05 · `security-unit.php` |
+| 6 | 관리자 잠금 | `admin/index.php` + `admin/.htaccess`, `lib/Admin.php`(`AdminGate` · `AdminPath`), `lib/Totp.php`(`Totp` · `AdminTotp`), `cli/admin-path.php`, `install.php`(무작위 이름), `api/auth/me.php`(`adminUrl`) | S06 · `admin-lock.mjs` · `admin-unit.php` |
+| 7 | SQL 인젝션 | `lib/Db.php`(`run/one/all/value/exec/insert/upsert` · `ident`), `tools/sql-audit.mjs` + `sql-audit.allow.json` | S07 · `sql-audit.mjs` |
+| 8 | 설정 점검 | `lib/ConfigAudit.php`, `Config::productionLock`(`lib/Core.php`), `lib/Toss.php`(예시 키 지문 거절), `cli/security.php config:check`, `install.php` 완료 화면 | S08 · `security-unit.php` |
+| 9 | 요청 한도 | `RateLimit` · `LoginThrottle`(`lib/Security.php`), `config.php` 의 `rate_limits` · `login` · `rate_limit_ip_multiplier`, `Session::start`(가짜 쿠키) | S09 |
+| 10 | CORS | `Http::cors`, `Api::run(['public' => true])` | S10 |
+| 11 | 보안 헤더 | `Http::securityHeaders`, 루트·`uploads/`·`admin/` `.htaccess`, `e403.html`·`e404.html`, ConfigAudit `server_hardening` 줄 | S11 |
+| 12 | 세션 쿠키 | `lib/Session.php`, `Cookie::session / set`(PHP 7.2 의 SameSite 경로 방법), `AdminGate`(TFMADM) | S12 |
+| 13 | CSRF | `Api::run`(머리글 토큰 + `Sec::checkOrigin`), `Session::checkCsrf`, 관리자 폼의 `_csrf` · 서명 토큰 | S13 |
+| 14 | 업로드 | `Http::refuseUpload`, `lib/Upload.php`, `.user.ini`, 루트 `.htaccess` 의 `LimitRequestBody`, `uploads/.htaccess` | S14 |
+| 15 | 결제 금액 | `lib/Subscription.php`(`prepare · confirm · activate · renewOne · webhook`), `lib/Toss.php`, `api/sub/*` | S15 · `security-data-unit.php` · `server-e2e.mjs` |
+| 16 | 디버그 끄기 | `Config::productionLock`, `Api::fail`(참조 번호만), `Installer::webClosedReason` + `SetupCode`, `install.php` | S16 |
+| 17 | 패키지 | `package.json` · `package-lock.json` | `npm audit` |
+| 18 | 안 쓰는 패키지 | `tools/package.mjs`(꼭 있어야 할 것 · 들어가면 안 되는 것) | `package.mjs --dry-run` |
+| 19 | 노출 파일 | 루트 `.htaccess`, 비공개 폴더마다 `.htaccess`·`index.php`, PHP 파일의 직접 열기 가드, `tools/exposure-audit.mjs` | S19 · `exposure-audit.mjs` |
+| 20 | 깃 비밀 값 | `tools/secret-scan.mjs` + `secret-scan.allow.json` | `secret-scan.mjs [--history]` |
+| 21 | 키 교체 | `Installer::rotateSecrets` · `rotateDbPassword`, `cli/tfm.php secret:rotate` · `db:rotate-password` | `security-data-unit.php` |
+| 22 | 점검 | 위 시험 전부 + 보고서 3장 | — |
+| 23 | 보고서 | `docs/SECURITY-REPORT-KO.md` (`tools/package.mjs` 가 꼭 있어야 할 파일로 검사) | `package.mjs --dry-run` |
+
+### 18.5 비밀 값 바꾸기 (언제 · 어떻게 · 그 뒤에)
+| 무엇 | 명령 / 장소 | 일어나는 일 | 그 뒤에 할 일 |
+|---|---|---|---|
+| 앱 키(`data/secret.php` 의 `app_key` — 로그인 서명, IP 해시) | `php cli/tfm.php secret:rotate --app-key` | 모든 세션 끝(세션 파일 지움 + `users.session_epoch + 1`), 요청 한도·로그인 시도 기록 지움, 차단 주소·보안 기록의 IP 해시를 새 키로 다시 계산, `rotated_at` 기록 | 모두 다시 로그인 |
+| 데이터 키(`data_key` — 빌링키·2단계 인증 비밀 키 봉인) | `php cli/tfm.php secret:rotate --data-key` | 예전 키를 `data_key_prev` 로 잠깐 두고 봉인된 값 전부(평문으로 남은 예전 빌링키 포함)를 한 트랜잭션에서 새 키로 다시 봉인 → 실패하면 예전 키로 되돌림, 성공하면 예전 키 지움 | **백업을 새로**(예전 백업은 예전 키로만 열림) |
+| 둘 다 | `php cli/tfm.php secret:rotate` | 위 두 가지 + 끝에 토스·Anthropic·DB·관리자 비밀번호 바꾸는 순서를 보여 줌(키 값은 절대 안 보여 줌) | 같음 |
+| DB 전용 계정 비밀번호 | `php cli/tfm.php db:rotate-password --admin-user root` | 32자 무작위 새 비밀번호를 적용하고 `config.local.php` 에 적음(실패하면 되돌림), 예전 비밀번호는 바로 거절 | 없음 |
+| 토스 시크릿 키 | 토스페이먼츠 개발자센터 → 내 개발 정보 → API 키 → 재발급 | 예전 키는 바로 못 씀 | `config.local.php` 의 `toss.secret_key` |
+| Anthropic 키(쓴다면) | console.anthropic.com → API Keys → 끄기 → 새로 만들기 | — | `ANTHROPIC_API_KEY` |
+| 관리자 2단계 인증 | `php cli/tfm.php admin:2fa-reset 이메일` | 그 관리자의 비밀 키·백업 코드 지움 | 그 사람이 로그인하자마자 다시 등록 |
+
+- 언제: 키 나이(🩺 "키 나이")가 1년을 넘을 때, 키를 아는 사람이 떠날 때, 키가 새어 나갔다고 의심될 때, 예전 서버가 `.htaccess` 없이 돈 적이 있을 때.
+- 비밀번호·키는 명령줄 인수로 넘기지 않아요(`cli` 가 거절): 사람은 화면에 보이지 않게 치고, 다른 프로그램은 `TFM_DB_ADMIN_PASS` · `TFM_ADMIN_PASS` · `TFM_TOSS_SECRET_KEY` · `TFM_NEW_PASSWORD`.
+- 회사 쪽 키(토스·Anthropic)는 우리 서버가 대신 폐기할 수 없어요 — 그 회사 화면에서만 돼요. 바꾼 뒤 `node tools/secret-scan.mjs` 로 저장소에 새 키가 들어가지 않았는지 확인하세요.
+
+### 18.6 사람이 바뀔 때 (운영 인수인계)
 - 관리자 센터 주소는 설치마다 달라요: 서버 PC 에서 `php cli/tfm.php admin:path`.
 - 새 관리자는 직접 🔐 2단계 인증을 등록하고, 떠나는 사람은 `php cli/tfm.php admin:2fa-reset 이메일` + `php cli/tfm.php demote 이메일`. 허용 주소(`admin_ip_allowlist`)에서 그 사람의 주소를 빼요.
-- 떠나는 사람이 키를 알았다면: `secret:rotate`, `db:rotate-password --admin-user root`, 토스 시크릿 키 재발급, (쓴다면) Anthropic 키 재발급 — 보고서 §21.
+- 떠나는 사람이 키를 알았다면: 18.5 의 표(`secret:rotate`, `db:rotate-password --admin-user root`, 토스 시크릿 키 재발급, 쓴다면 Anthropic 키 재발급) — 보고서 §21.
 - 개발자 센터 인수인계 목록의 "관리자 폴더 이름을 바꾸고 관리자마다 2단계 인증을 켰어요" 와 §15 의 7단계 항목을 함께 체크해요.
 
-### 18.5 시험 (QA 가 돌린 것)
-보고서 §1 의 표: 공격 흉내 시험 SQLite 183/183 · MariaDB 181/181(Apache 포함), 관리자 센터 잠금 52/52, 기능 시험 77/77 × 2, 관리 화면 10/10, 단위 시험(보안 62 · 데이터 76 + 13 건너뜀 / MariaDB 87 · 관리자 53 · 7단계 10 · 서버 7), sql-audit · secret-scan · exposure-audit · npm audit 0, php-compat 0, text-audit 0.
-개발 환경에 PHP 7.2·MariaDB 10.3·Windows Apache 가 없어 그 위에서는 돌리지 못했어요 — 운영 서버에서 확인하는 순서는 보고서 부록 C.
-이 작업 동안 `dist/metaverse` 는 다시 빌드하지 않았어요(시험은 비공개 사본으로): 배포 전에는 `npm run package`(엄격 빌드 포함)로 새로 만드세요.
+### 18.7 시험 (마지막 전체 점검이 돌린 것)
+마지막 전체 점검(커밋 `645fc51`)은 배포 폴더 `dist/metaverse` 를 새로 빌드해서 그 위에서 모두 돌렸어요: 공격 흉내 시험 SQLite 183/183(+참고 6) · MariaDB 181/181(+건너뜀 2, 둘 다 Apache 포함), 관리자 센터 잠금 52/52, 기능 시험 77/77 × 2(SQLite · MariaDB), 관리 화면 10/10, 복구 2/2, 단위 시험(보안 62 · 데이터 76 + 13 건너뜀 / MariaDB 87 · 관리자 53 · 7단계 10 · 서버 7), sql-audit · secret-scan(+깃 기록) · exposure-audit(Apache) · npm audit 0, php-compat 0 · `php -l` 61/0, text-audit 0, 화면 점검(smoke 4가지 · kid-audit · 채팅 카드 배치 4/4 · 개인정보 가림 0 실패), 배포 묶음 검사 256개 파일. 시작할 때(7f747d4)의 공격 흉내 시험은 113/176 이었어요.
+명령 전체와 결과 읽는 법은 보고서 5장. 개발 환경에 PHP 7.2·MariaDB 10.3·Windows Apache 가 없어 그 위에서는 돌리지 못했어요 — 운영 서버에서 확인하는 순서는 보고서 5.3, 그 이유와 남은 위험(R1~R13)은 4장.
+배포 zip 은 `npm run package`(엄격 빌드 포함)로 만들어요. 테스트는 언제나 `dist/metaverse` 나 사본에서 — `server/` 에서 직접 서버를 띄우지 마세요.
 
-### 18.6 다음 단계로 미룬 것
+### 18.8 다음 단계로 미룬 것
 실시간 텃밭·곳간·완료 확인(§15.1–15.3), 개발자 인수인계·점검 탭(`Tfm\Inspect`, §15.5), Claude AI(§15.6). 주인이 보안을 먼저 골랐어요. 요청 한도 이름(`farm_*`, `ai_*`)과 스키마 v6 의 표는 미리 있어요.
-그 기능을 넣을 때는 18.2 를 따르고, 보고서의 항목 3·5·9·13·14 시험을 넓히고, 보고서 부록 B-11 을 지우세요.
+그 기능을 넣을 때는 18.2 를 따르고, 보고서의 항목 3·5·9·13·14 시험을 넓히고, 보고서 4.4 를 고치세요.
