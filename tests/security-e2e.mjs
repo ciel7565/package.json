@@ -49,8 +49,10 @@ const KEEP = flag('--keep');
 const ONLY = optv('--only') ? new Set(optv('--only').toUpperCase().split(',').map((s) => s.trim()).filter(Boolean)) : null;
 const JSON_OUT = optv('--json');
 const DOCROOT = path.resolve(optv('--docroot') || path.join(ROOT, 'dist/metaverse'));
-const PHP_PORTS = Array.from({ length: 20 }, (_, i) => 18710 + i);
-const APACHE_PORT = 18780;
+// several runs at the same time (parallel agents / CI jobs): give each run its own range
+const PORT_BASE = Number(process.env.TFM_SEC_PORT_BASE) || 18710;
+const PHP_PORTS = Array.from({ length: 20 }, (_, i) => PORT_BASE + i);
+const APACHE_PORT = Number(process.env.TFM_SEC_APACHE_PORT) || 18780;
 const APACHE_MODULES = '/usr/lib/apache2/modules';
 const DRIVER = process.env.TFM_DB_DRIVER === 'mysql' ? 'mysql' : 'sqlite';
 const MY = { host: process.env.TFM_DB_HOST || '127.0.0.1', port: Number(process.env.TFM_DB_PORT || 33106), user: process.env.TFM_DB_USER || 'root', pass: process.env.TFM_DB_PASS || '' };
