@@ -54,8 +54,9 @@ fs.cpSync(DOCROOT, WEB, { recursive: true });
 for (const f of ['config/config.local.php', 'data/secret.php', 'data/install.lock', 'data/setup-code.php']) fs.rmSync(path.join(WEB, f), { force: true });
 const MARK = (name) => `TFMEXPO-${RUN}-${name}`;
 /** [path, content] — a unique marker in each, so a body that carries it proves the file was served */
+// config.local.php: the guard Installer::mergeLocalConfig writes (a direct hit is a 404 without the PHP version banner)
 const PLANT = [
-  ['config/config.local.php', `<?php\nif (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn ['db' => ['mysql' => ['password' => '${MARK('configlocal')}']]];\n`],
+  ['config/config.local.php', `<?php\nif (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }\nreturn ['db' => ['mysql' => ['password' => '${MARK('configlocal')}']]];\n`],
   ['config/config.local.php.bak', `${MARK('configlocalbak')}\n`], ['config/config.php~', `<?php // ${MARK('configtilde')}\n`],
   ['.env', `DB_PASSWORD=${MARK('env')}\n`], ['.env.production', `SECRET=${MARK('envprod')}\n`], ['config.php.bak', `<?php $pw = '${MARK('bak')}';\n`],
   ['backup.sql', `-- ${MARK('sql')}\n`], ['dump.sql.gz', `${MARK('sqlgz')}`], ['debug.log', `${MARK('log')}\n`], ['error_log', `${MARK('errorlog')}\n`],

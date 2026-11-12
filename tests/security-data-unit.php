@@ -116,7 +116,7 @@ check('Crypto — the key is data_key (32 random bytes, 64 hex) in data/secret.p
     if (!isset($s['data_key']) || !preg_match('/^[0-9a-f]{64}$/', (string) $s['data_key'])) return 'data_key missing or not 64 hex';
     if ($s['app_key'] !== $before || !isset($s['db_file'])) return 'the existing secrets changed';
     $raw = (string) file_get_contents($tmp . '/secret.php');
-    return strpos($raw, '<?php') === 0 && strpos($raw, "if (!defined('TFM_BOOT'))") !== false ? true : 'secret.php lost its PHP guard';
+    return strpos($raw, '<?php') === 0 && strpos($raw, "if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }") !== false ? true : 'secret.php lost its PHP guard';
 });
 check('Secrets — secret.php is private after a rewrite (mode 0600 where the OS has modes)', function () use ($tmp) {
     if (DIRECTORY_SEPARATOR === '\\') return true;
@@ -169,7 +169,7 @@ check('SetupCode — the file is a guarded PHP file (prints nothing over the web
     $f = Tfm\SetupCode::path();
     $raw = (string) file_get_contents($f);
     $code = Tfm\SetupCode::ensure();
-    if (strpos($raw, '<?php') !== 0 || strpos($raw, "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }") === false) return 'no PHP guard';
+    if (strpos($raw, '<?php') !== 0 || strpos($raw, "if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }") === false) return 'no PHP guard';
     if (strpos($raw, $code) === false) return 'the operator cannot read the code in the file';
     $out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($f) . ' 2>&1');
     if (trim((string) $out) !== '') return 'running the file directly prints: ' . substr((string) $out, 0, 60);
@@ -259,7 +259,7 @@ check('Installer::mergeLocalConfig — deep merge: other keys and sibling keys s
 });
 check('Installer::mergeLocalConfig — the file is a guarded PHP file, mode 0600, no temp file left in config/', function () use ($cfgFile, $srv) {
     $raw = (string) file_get_contents($cfgFile);
-    if (strpos($raw, '<?php') !== 0 || strpos($raw, "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }") === false) return 'no PHP guard';
+    if (strpos($raw, '<?php') !== 0 || strpos($raw, "if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }") === false) return 'no PHP guard';
     clearstatcache();
     if (DIRECTORY_SEPARATOR !== '\\' && (fileperms($cfgFile) & 0777) !== 0600) return sprintf('mode %o', fileperms($cfgFile) & 0777);
     $left = array_values(array_filter(scandir($srv . '/config') ?: [], function ($f) { return (bool) preg_match('/tmp|\.read-/', $f); }));

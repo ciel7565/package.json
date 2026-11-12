@@ -89,7 +89,7 @@ $handlers = [
 // Direct invocation (`php cli/security.php <command>`): bootstrap, then dispatch. When cli/tfm.php loads us as a
 // plug-in, TFM_BOOT is already defined, so this block is skipped and the map is returned instead.
 if (!defined('TFM_BOOT')) {
-    if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+    if (PHP_SAPI !== 'cli') { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
     require __DIR__ . '/../lib/bootstrap.php';
     $argv = isset($_SERVER['argv']) ? $_SERVER['argv'] : [];
     $cmd = strtolower((string) (isset($argv[1]) ? $argv[1] : ''));

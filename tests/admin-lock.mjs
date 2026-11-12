@@ -1146,9 +1146,15 @@ async function main() {
       });
       await step('S06', 'after the rename: the old folder address is gone (404), the new one works end to end (sign-in, cookie Path, tabs, relative links)', async () => {
         const b = new Browser(sv.base, 'renamed');
+        // php -S has no 404 for a folder that is not there: it answers the nearest parent index file (PHP manual, built-in
+        // web server: "the lookup for index.php and index.html will be continued in the parent directory"). With the
+        // built page in the copy (--docroot dist/metaverse) the vanished folder therefore answers the app's start page —
+        // byte for byte what "/" answers, not the admin site; without it (server/) it is a 404. Apache: 404 either way.
+        const home = await b.req('');
+        const isHome = (r) => r.status === 200 && home.status === 200 && r.text === home.text && !isSignIn(r.text);
         let old = null;
-        for (let i = 0; i < 30; i++) { old = await b.req(ADM); if (old.status === 404) break; await sleep(150); }
-        assert(old.status === 404 && !isSignIn(old.text), `old folder → ${old.status}`);
+        for (let i = 0; i < 30; i++) { old = await b.req(ADM); if (old.status === 404 || isHome(old)) break; await sleep(150); }
+        assert((old.status === 404 || isHome(old)) && !isSignIn(old.text), `old folder → ${old.status}${old.status === 200 ? ' (not the start page of "/")' : ''}`);
         assert((await b.req('admin.php')).status === 404, 'the old admin.php is still a 404');
         const N = name + '/';
         const pg = await b.req(N);

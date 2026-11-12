@@ -35,7 +35,8 @@
  * Windows/XAMPP:  C:\xampp\php\php.exe C:\xampp\htdocs\metaverse\cli\tfm.php status
  *
  * Plug-ins: any other command is looked up in cli/*.php (not tfm.php / index.php). Such a file starts with
- * `if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }` and returns ['command:name' => function (array $args): int]
+ * `if (PHP_SAPI !== 'cli') { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }`
+ * (a direct web hit looks like a missing file, without the PHP version banner) and returns ['command:name' => function (array $args): int]
  * — $args are the words after the command, exactly as typed; the return value is the exit code. Its first doc
  * comment is printed by `help`.
  * PHP 7.2 syntax only.

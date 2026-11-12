@@ -54,7 +54,9 @@ ErrorDocument 404 /e404.html
 </IfModule>
 
 # ---------------------------------------------------------------- leftovers → denied (403). Not dot-files, not *.bak.
-<FilesMatch "(?i)(\.(sqlite3?|sqlite-wal|sqlite-shm|db|sql|log|md|ini|old|orig|swp|swo|save|lock|dist|sh|bat|ps1|yml|yaml|tmp|zip|tar|tgz|gz|7z|rar)|~)$|^config\.local\.php$|^composer\.(json|lock)$|^package(-lock)?\.json$">
+# error_log is the file PHP writes next to a script when log_errors is on without an error_log path (XAMPP / shared
+# hosting): it holds paths, SQL and visitors' data. Thumbs.db is covered by \.db (.DS_Store is a dot-file: the trap).
+<FilesMatch "(?i)(\.(sqlite3?|sqlite-wal|sqlite-shm|db|sql|log|md|ini|old|orig|swp|swo|save|lock|dist|sh|bat|ps1|yml|yaml|tmp|zip|tar|tgz|gz|bz2|xz|7z|rar)|~)$|^config\.local\.php$|^composer\.(json|lock)$|^package(-lock)?\.json$|^error_log$">
   <IfModule mod_authz_core.c>
     Require all denied
   </IfModule>

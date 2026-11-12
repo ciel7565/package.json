@@ -596,7 +596,7 @@ final class Installer
         $php = "<?php\n// 전통발효체험관 메타버스 — 설치 마법사와 관리 명령이 쓰는 설정 (" . gmdate('c') . ")\n"
             . "// 비밀번호와 결제 키가 들어 있어요: config/.htaccess 가 웹 접근을 막고, 공개 저장소에 올리면 안 돼요.\n"
             . "// 값을 바꾼 뒤에는 새로고침만 하면 돼요 (캐시 없음).\n"
-            . "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn " . var_export($local, true) . ";\n";
+            . "if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }\nreturn " . var_export($local, true) . ";\n";
         try {
             PrivateFile::write($file, $php);
         } catch (\RuntimeException $e) {
@@ -697,7 +697,7 @@ final class SetupCode
             $php = "<?php\n// 전통발효체험관 설치 코드 (한 번만 쓸 수 있어요): " . self::format($code) . "\n"
                 . '// ' . date('Y-m-d H:i', $now + self::TTL) . " 까지 유효해요. 설치 화면이나 첫 관리자 지정 화면에 이 코드를 넣으세요.\n"
                 . "// 이 파일은 서버 컴퓨터에서만 볼 수 있어요 (웹으로 열면 아무것도 나오지 않아요). 쓰고 나면 저절로 지워져요.\n"
-                . "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn " . var_export($row, true) . ";\n";
+                . "if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }\nreturn " . var_export($row, true) . ";\n";
             PrivateFile::write(self::path(), $php);
             return $code;
         } finally {

@@ -164,7 +164,7 @@ final class Secrets
     private static function render(array $s): string
     {
         return "<?php\n// generated secrets — keep private, do not commit, back up together with the database\n"
-            . "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn " . var_export($s, true) . ";\n";
+            . "if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }\nreturn " . var_export($s, true) . ";\n";
     }
 }
 

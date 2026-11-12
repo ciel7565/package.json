@@ -10,7 +10,7 @@ declare(strict_types=1);
 
 namespace Tfm;
 
-if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
 final class GameData
 {

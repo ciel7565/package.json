@@ -54,6 +54,9 @@ try {
         SecEvent::log('honeypot', 'warn', ['want' => $want, 'ua' => substr((string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''), 0, 80)]);
         Firewall::noteAttack('honeypot');
     }
+    // CONTRACT §15.7 #10: a preflight (OPTIONS) gets exactly the answer of every private endpoint (Http::cors: 403, no
+    // body, no Access-Control-* header) — after the hit is logged, and without telling the honeypot apart from the rest
+    Http::cors(false);
     $method = Http::method();
     if ($method !== 'GET' && $method !== 'HEAD') $respond(405, ['Allow: GET, HEAD']);
     $respond(404);

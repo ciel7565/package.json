@@ -209,17 +209,23 @@ final class ConfigAudit
     }
 
     /**
-     * Self-probe (only when a base URL is known and curl is available): fetch config.local.php / secret.php over the web
-     * from the server itself. A 200 with content means .htaccess is not protecting data/ — ⛔.
+     * Self-probe (only when a web server answers the request and curl is available): fetch config.local.php / secret.php
+     * over the web from the server itself. A 200 with content means .htaccess is not protecting data/ — ⛔.
+     * Skipped on the CLI (no web server) and under php -S: the built-in server never reads .htaccess and answers one
+     * request at a time, so asking itself would only wait for the timeout (2 × 3 s on every health check) and prove nothing.
      */
     private static function webReadProbe(callable $add): void
     {
-        if (!function_exists('curl_init') || PHP_SAPI === 'cli') { return; }
+        if (!function_exists('curl_init') || PHP_SAPI === 'cli' || PHP_SAPI === 'cli-server') { return; }
         try {
-            $host = (string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '');
-            if ($host === '' || !preg_match('/^[A-Za-z0-9.\-\[\]:]{1,253}$/', $host)) return;
+            // finding F19: the probe never goes to the name in the Host header (a visitor chooses it). The server asks
+            // itself on the loopback address, on a port the request may name only when it is a common web port
+            // (Health::probePort); anything else skips the probe. The Host header only picks the virtual host.
+            $port = Health::probePort();
+            if ($port === 0) return;
             $scheme = Http::isHttps() ? 'https' : 'http';
-            $base = $scheme . '://' . $host . Http::basePath();
+            $base = $scheme . '://127.0.0.1:' . $port . Http::basePath();
+            $vhost = preg_replace('/[^A-Za-z0-9.:\-\[\]]/', '', (string) (isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost'));
             foreach (['config/config.local.php' => '설정 파일', 'data/secret.php' => '비밀키 파일'] as $rel => $label) {
                 $url = $base . $rel;
                 $ch = curl_init($url);
@@ -227,7 +233,7 @@ final class ConfigAudit
                 curl_setopt_array($ch, [
                     CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 3, CURLOPT_CONNECTTIMEOUT => 2,
                     CURLOPT_FOLLOWLOCATION => false, CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
-                    CURLOPT_NOBODY => false,
+                    CURLOPT_NOBODY => false, CURLOPT_HTTPHEADER => ['Host: ' . ($vhost !== '' ? $vhost : 'localhost')],
                 ]);
                 $body = (string) curl_exec($ch);
                 $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

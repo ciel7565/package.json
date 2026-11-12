@@ -60,11 +60,21 @@ try {
     // the security layer's page guard (blocked addresses, plain HTTP where HTTPS is required, uploads) when it is there
     if (method_exists('Tfm\\Firewall', 'guardPage') && method_exists('Tfm\\Http', 'plainPage') && method_exists('Tfm\\Http', 'enforceHttps') && method_exists('Tfm\\Http', 'refuseUpload')) \Tfm\Firewall::guardPage();
     elseif (class_exists('Tfm\\Firewall')) \Tfm\Firewall::check();
+    // CONTRACT §15.7 #10: the payment window comes back by a top-level navigation, never by a cross-origin fetch — a
+    // preflight (OPTIONS) is refused with 403 and no Access-Control-* header, like every private endpoint (Api::run)
+    Http::cors(false);
     if (Http::method() !== 'GET') { http_response_code(405); header('Allow: GET'); exit; }
     Session::start(false);
     $ctx = new Ctx();
     $ctx->user = Auth::current();
-    RateLimit::forRequest('sub_return', $ctx, 'ip');
+    // CONTRACT §15.7 #9: over the budget is a plain 429 page with Retry-After. It is never folded into the redirect to
+    // the app (a 303 would hide the limit from the caller, and a flood would look like failed payments)
+    try {
+        RateLimit::forRequest('sub_return', $ctx, 'ip');
+    } catch (ApiException $e) {
+        Session::close();
+        Http::plainPage($e->status, $e->getMessage(), $e->headers);
+    }
     if ($q('code') !== '' || $q('fail') === '1') {
         list($code, $text) = $failText($q('code'));
         Log::info('SUB', 'payment window returned a failure', ['code' => $code, 'uid' => $ctx->uid()]);

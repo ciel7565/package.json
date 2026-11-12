@@ -13,7 +13,7 @@
 declare(strict_types=1);
 
 namespace {
-    if (!defined('TFM_BOOT')) { http_response_code(404); exit; }
+    if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
     if (!function_exists('str_contains')) {
         function str_contains(string $haystack, string $needle): bool { return $needle === '' || strpos($haystack, $needle) !== false; }
