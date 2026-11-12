@@ -157,6 +157,92 @@ check('Crypto::seal — a 158-character key still fits a VARCHAR(255) column; fi
     return strlen(Tfm\Crypto::seal(str_repeat('k', 158))) <= 255 && Tfm\Crypto::fits(str_repeat('k', 158), 255) === true && Tfm\Crypto::fits(str_repeat('k', 159), 255) === false;
 });
 
+// ------------------------------------------------------------------ SetupCode (finding F1/F4: proof of file-system access, not of network position)
+check('SetupCode::ensure — a 12-character code from an unambiguous alphabet (no 0 O 1 I L), written to data/setup-code.php', function () use ($tmp) {
+    @unlink(Tfm\SetupCode::path());
+    $code = Tfm\SetupCode::ensure();
+    if (!preg_match('/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{12}$/', $code)) return 'code: ' . $code;
+    if (Tfm\SetupCode::path() !== $tmp . DIRECTORY_SEPARATOR . 'setup-code.php') return 'path: ' . Tfm\SetupCode::path();
+    return is_file(Tfm\SetupCode::path());
+});
+check('SetupCode — the file is a guarded PHP file (prints nothing over the web), mode 0600, the code readable for the operator', function () {
+    $f = Tfm\SetupCode::path();
+    $raw = (string) file_get_contents($f);
+    $code = Tfm\SetupCode::ensure();
+    if (strpos($raw, '<?php') !== 0 || strpos($raw, "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }") === false) return 'no PHP guard';
+    if (strpos($raw, $code) === false) return 'the operator cannot read the code in the file';
+    $out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($f) . ' 2>&1');
+    if (trim((string) $out) !== '') return 'running the file directly prints: ' . substr((string) $out, 0, 60);
+    clearstatcache();
+    return DIRECTORY_SEPARATOR === '\\' || (fileperms($f) & 0777) === 0600 ? true : sprintf('mode %o', fileperms($f) & 0777);
+});
+check('SetupCode::ensure — an unexpired code is reused (the same code until it is used or 24 h pass)', function () {
+    return Tfm\SetupCode::ensure() === Tfm\SetupCode::ensure();
+});
+check('SetupCode::check — right code true (also lower case / with spaces or dashes), wrong / empty / partial false', function () {
+    $c = Tfm\SetupCode::ensure();
+    $grouped = substr($c, 0, 4) . '-' . substr($c, 4, 4) . ' ' . substr($c, 8);
+    if (!Tfm\SetupCode::check($c) || !Tfm\SetupCode::check(strtolower($c)) || !Tfm\SetupCode::check($grouped)) return 'the right code was refused';
+    $wrong = ($c[0] === 'A' ? 'B' : 'A') . substr($c, 1);
+    foreach (['', $wrong, substr($c, 0, 11), $c . 'A', str_repeat('A', 12), "\0" . $c] as $bad) if (Tfm\SetupCode::check($bad)) return 'accepted: ' . json_encode($bad);
+    return true;
+});
+check('SetupCode::check — an expired code is refused, and ensure() then makes a new one', function () {
+    $f = Tfm\SetupCode::path();
+    $old = Tfm\SetupCode::ensure();
+    $raw = (string) file_get_contents($f);
+    $past = (string) preg_replace("/'expires_at' => \d+/", "'expires_at' => " . (time() - 5), $raw);
+    if ($past === $raw) return 'no expires_at in the file';
+    file_put_contents($f, $past);
+    Tfm\PrivateFile::forget($f);
+    if (Tfm\SetupCode::check($old)) return 'the expired code still works';
+    $new = Tfm\SetupCode::ensure();
+    return $new !== $old && Tfm\SetupCode::check($new) && !Tfm\SetupCode::check($old);
+});
+check('SetupCode::consume — the code works once: after consume() it is refused and the file is gone', function () {
+    $c = Tfm\SetupCode::ensure();
+    Tfm\SetupCode::consume();
+    clearstatcache();
+    return !is_file(Tfm\SetupCode::path()) && Tfm\SetupCode::check($c) === false;
+});
+check('SetupCode::check — no file at all: false (never an error)', function () {
+    @unlink(Tfm\SetupCode::path());
+    return Tfm\SetupCode::check('ABCDEFGHJKMN') === false;
+});
+check('SetupCode — a damaged file is refused (check false) and replaced by ensure()', function () {
+    file_put_contents(Tfm\SetupCode::path(), "<?php\nif (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn 'not an array';\n");
+    Tfm\PrivateFile::forget(Tfm\SetupCode::path());
+    if (Tfm\SetupCode::check('not an array')) return 'a damaged file was accepted';
+    $c = Tfm\SetupCode::ensure();
+    $ok = Tfm\SetupCode::check($c);
+    Tfm\SetupCode::consume();
+    return $ok;
+});
+check('cli setup-code — prints the code of data/setup-code.php (and creates it when missing)', function () use ($srv, $tmp) {
+    @unlink(Tfm\SetupCode::path());
+    $out = (string) shell_exec('TFM_DATA_DIR=' . escapeshellarg($tmp) . ' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($srv . '/cli/tfm.php') . ' setup-code 2>&1');
+    Tfm\PrivateFile::forget(Tfm\SetupCode::path());
+    $c = Tfm\SetupCode::ensure();
+    $grouped = substr($c, 0, 4) . '-' . substr($c, 4, 4) . '-' . substr($c, 8);
+    $ok = strpos($out, $grouped) !== false || strpos($out, $c) !== false;
+    Tfm\SetupCode::consume();
+    return $ok ? true : 'output: ' . substr($out, 0, 200);
+});
+
+// ------------------------------------------------------------------ cli/tfm.php plug-ins (other owners ship cli/<name>.php returning a command map)
+check('cli plug-in loader — an unknown command is looked up in cli/*.php (not tfm.php / index.php) and its exit code is kept', function () use ($srv, $tmp) {
+    $plug = $srv . '/cli/zz-unit-probe.php';
+    file_put_contents($plug, "<?php\nif (PHP_SAPI !== 'cli') { http_response_code(404); exit; }\n/**\n * php cli/tfm.php unit:probe <word>   probe command of the unit test\n */\nreturn ['unit:probe' => function (array \$args): int { fwrite(STDOUT, 'probe:' . implode(',', \$args) . PHP_EOL); return 7; }];\n");
+    $cmd = 'TFM_DATA_DIR=' . escapeshellarg($tmp) . ' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($srv . '/cli/tfm.php');
+    exec($cmd . ' unit:probe alpha --beta=1 2>&1', $out, $code);
+    $help = (string) shell_exec($cmd . ' help 2>&1');
+    exec($cmd . ' no:such:command 2>&1', $out2, $code2);
+    @unlink($plug);
+    if ($code !== 7 || trim(implode("\n", $out)) !== 'probe:alpha,--beta=1') return 'run: exit ' . $code . ' ' . implode(' / ', $out);
+    if (strpos($help, 'unit:probe') === false) return 'help does not list the plug-in command';
+    return $code2 !== 0 ? true : 'an unknown command exited 0';
+});
+
 // ------------------------------------------------------------------ Installer: config/config.local.php (items 1, 21)
 $cfgFile = $srv . '/config/config.local.php';
 check('Installer::mergeLocalConfig — creates config.local.php with the patch; Config sees it at once', function () use ($cfgFile) {

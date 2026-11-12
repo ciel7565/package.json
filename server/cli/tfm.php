@@ -18,8 +18,14 @@
  *   php cli/tfm.php cleanup                         retention cleanup (rate limits, presence, attempts, audit, chat, logs)
  *   php cli/tfm.php audit [개수]                    recent audit log
  *   php cli/tfm.php migrate                         create/upgrade the schema
+ *   php cli/tfm.php setup-code                      one-time setup code for install.php / the first admin (24 h)
  *
  * Windows/XAMPP:  C:\xampp\php\php.exe C:\xampp\htdocs\metaverse\cli\tfm.php status
+ *
+ * Plug-ins: any other command is looked up in cli/*.php (not tfm.php / index.php). Such a file starts with
+ * `if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }` and returns ['command:name' => function (array $args): int]
+ * — $args are the words after the command, exactly as typed; the return value is the exit code. Its first doc
+ * comment is printed by `help`.
  * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -36,6 +42,7 @@ use Tfm\Config;
 use Tfm\Db;
 use Tfm\Health;
 use Tfm\Installer;
+use Tfm\SetupCode;
 use Tfm\Subscription;
 use Tfm\Users;
 
@@ -63,6 +70,57 @@ function findUser(string $q): array
 }
 function pad(string $s, int $w): string { $l = mb_strwidth($s); return $s . str_repeat(' ', max(0, $w - $l)); }
 function whenMs($ms): string { $ms = (int) $ms; return $ms > 0 ? date('Y-m-d H:i', intdiv($ms, 1000)) : '-'; }
+/** the first doc comment of a PHP file, without the comment markers */
+function docOf(string $file): string
+{
+    $src = (string) @file_get_contents($file);
+    $parts = explode('/**', $src, 2);
+    $doc = isset($parts[1]) ? explode('*/', $parts[1], 2)[0] : '';
+    return trim((string) preg_replace('/^ *\* ?/m', '', $doc));
+}
+/**
+ * Commands of the plug-in files cli/*.php (other owners: security events, admin path …): command (lower case) →
+ * ['run' => callable(array $args): int, 'file' => basename]. A file that fails to load or returns no array is
+ * skipped with a warning; the first file (by name) wins when two files name the same command.
+ */
+function cliPlugins(): array
+{
+    static $map = null;
+    if ($map !== null) return $map;
+    $map = [];
+    $files = glob(__DIR__ . DIRECTORY_SEPARATOR . '*.php') ?: [];
+    sort($files);
+    foreach ($files as $f) {
+        $base = basename($f);
+        if ($base === 'tfm.php' || $base === 'index.php') continue;
+        try {
+            $r = (static function (string $tfmPluginFile) { return require $tfmPluginFile; })($f);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, "⚠ 추가 명령 파일 cli/$base 을 읽지 못했어요 (" . get_class($e) . ')' . PHP_EOL);
+            continue;
+        }
+        if (!is_array($r)) { fwrite(STDERR, "⚠ cli/$base 이 명령 목록(배열)을 돌려주지 않아 건너뛰었어요." . PHP_EOL); continue; }
+        foreach ($r as $name => $fn) {
+            if (!is_string($name) || !preg_match('/^[a-z0-9][a-z0-9:\-_]{0,60}$/i', $name) || !is_callable($fn)) continue;
+            $k = strtolower($name);
+            if (isset($map[$k])) { fwrite(STDERR, "⚠ 명령 $k 이 cli/{$map[$k]['file']} 과 cli/$base 에 함께 있어요: cli/{$map[$k]['file']} 것을 써요." . PHP_EOL); continue; }
+            $map[$k] = ['run' => $fn, 'file' => $base];
+        }
+    }
+    return $map;
+}
+function printHelp(): void
+{
+    out(docOf(__FILE__));
+    $byFile = [];
+    foreach (cliPlugins() as $name => $p) $byFile[$p['file']][] = $name;
+    foreach ($byFile as $file => $names) {
+        out('');
+        out("추가 명령 (cli/$file): " . implode(', ', $names));
+        $doc = docOf(__DIR__ . DIRECTORY_SEPARATOR . $file);
+        if ($doc !== '') foreach (explode("\n", $doc) as $line) out('  ' . $line);
+    }
+}
 
 try {
     switch ($cmd) {
@@ -192,11 +250,25 @@ try {
             out('✔ 스키마 버전 ' . Db::schemaVersion() . ' (' . Db::driver() . ')');
             break;
         }
+        case 'setup-code': {
+            $code = SetupCode::ensure();
+            out('설치 코드: ' . SetupCode::format($code) . '   (하이픈은 넣어도 되고 빼도 돼요)');
+            out('  install.php 의 "설치 코드" 칸이나 관리자 센터의 첫 관리자 지정 화면에 넣으세요.');
+            out('  24시간 동안 쓸 수 있고, 한 번 쓰면 사라져요. 이 코드는 서버 컴퓨터에서만 볼 수 있어요: ' . SetupCode::path());
+            break;
+        }
+        case 'help':
+        case '--help':
+        case '-h': {
+            printHelp();
+            break;
+        }
         default: {
-            $src = (string) file_get_contents(__FILE__);
-            $parts = explode('/**', $src, 2);
-            $doc = isset($parts[1]) ? explode('*/', $parts[1], 2)[0] : '';
-            out(trim((string) preg_replace('/^ \* ?/m', '', $doc)));
+            $plugins = cliPlugins();
+            if (isset($plugins[$cmd])) exit((int) call_user_func($plugins[$cmd]['run'], $rest));
+            fwrite(STDERR, "✖ 알 수 없는 명령이에요: $cmd" . PHP_EOL . PHP_EOL);
+            printHelp();
+            exit(1);
         }
     }
 } catch (ApiException $e) {

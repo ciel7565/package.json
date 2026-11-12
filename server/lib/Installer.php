@@ -220,3 +220,86 @@ final class Installer
         return $a;
     }
 }
+
+/**
+ * One-time setup code (finding F1 / F4): proves that the person at the browser can read a file on the server
+ * computer — which a visitor from the internet cannot — instead of trusting the network position ("the request comes
+ * from localhost"), which any TCP forwarder (tunnel, port forwarding, a reverse proxy that adds no header) can fake.
+ *
+ *   ensure()   the current code; creates data/setup-code.php (random 12 characters from an alphabet without the
+ *              look-alikes 0 O 1 I L, valid 24 hours, PHP exit guard, mode 0600) or reuses an unexpired one
+ *   check()    constant-time comparison; upper / lower case, spaces and dashes do not matter; false when there is no
+ *              code, it expired or the file is damaged — never throws
+ *   consume()  the code was used: the file is deleted (the next ensure() makes a new one)
+ * The code is never shown over HTTP: the operator reads it with `php cli/tfm.php setup-code` or opens
+ * data/setup-code.php on the server PC. Used by install.php and the first-admin bootstrap of the admin site.
+ */
+final class SetupCode
+{
+    public const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    public const LENGTH = 12;
+    public const TTL = 86400;
+
+    public static function path(): string { return Config::dataDir() . DIRECTORY_SEPARATOR . 'setup-code.php'; }
+
+    /** the stored code when it is valid now, else null (missing, expired, damaged) */
+    private static function current(): ?array
+    {
+        $f = self::path();
+        clearstatcache(true, $f);
+        if (!is_file($f)) return null;
+        try { $v = PrivateFile::load($f); } catch (\Throwable $e) { return null; }
+        if (!is_array($v) || !isset($v['code'], $v['expires_at']) || !is_string($v['code']) || !is_int($v['expires_at'])) return null;
+        if (strlen($v['code']) !== self::LENGTH || strspn($v['code'], self::ALPHABET) !== self::LENGTH) return null;
+        return $v['expires_at'] > time() ? $v : null;
+    }
+
+    public static function ensure(): string
+    {
+        $cur = self::current();
+        if ($cur !== null) return $cur['code'];
+        $lock = @fopen(Config::dataDir() . DIRECTORY_SEPARATOR . '.setup-code.lock', 'c');
+        if ($lock) flock($lock, LOCK_EX);
+        try {
+            $cur = self::current(); // another request may have made one while this one waited
+            if ($cur !== null) return $cur['code'];
+            $code = '';
+            $n = strlen(self::ALPHABET);
+            for ($i = 0; $i < self::LENGTH; $i++) $code .= self::ALPHABET[random_int(0, $n - 1)];
+            $now = time();
+            $row = ['code' => $code, 'created_at' => $now, 'expires_at' => $now + self::TTL];
+            $php = "<?php\n// 전통발효체험관 설치 코드 (한 번만 쓸 수 있어요): " . self::format($code) . "\n"
+                . '// ' . date('Y-m-d H:i', $now + self::TTL) . " 까지 유효해요. 설치 화면이나 첫 관리자 지정 화면에 이 코드를 넣으세요.\n"
+                . "// 이 파일은 서버 컴퓨터에서만 볼 수 있어요 (웹으로 열면 아무것도 나오지 않아요). 쓰고 나면 저절로 지워져요.\n"
+                . "if (!defined('TFM_BOOT')) { http_response_code(404); exit; }\nreturn " . var_export($row, true) . ";\n";
+            PrivateFile::write(self::path(), $php);
+            return $code;
+        } finally {
+            if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+        }
+    }
+
+    public static function check(string $code): bool
+    {
+        $cur = self::current();
+        $given = strtoupper((string) preg_replace('/[\s\-_.]+/u', '', $code));
+        if ($cur === null) {
+            hash_equals(str_repeat('-', self::LENGTH), str_pad(substr($given, 0, self::LENGTH), self::LENGTH)); // same work either way
+            return false;
+        }
+        return strlen($given) === self::LENGTH && hash_equals($cur['code'], $given);
+    }
+
+    public static function consume(): void
+    {
+        $f = self::path();
+        @unlink($f);
+        PrivateFile::forget($f);
+    }
+
+    /** ABCD-EFGH-JKMN: easier to read aloud and to type (check() ignores the dashes) */
+    public static function format(string $code): string
+    {
+        return implode('-', str_split($code, 4));
+    }
+}
