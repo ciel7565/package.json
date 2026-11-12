@@ -10,8 +10,18 @@
  *   cancel    POST /v1/payments/{paymentKey}/cancel {cancelReason}
  *   errors    4xx {code, message} → TossException
  *
- * Mock mode (config toss.mock, TFM_TOSS_MOCK=1): confirm accepts paymentKeys that start with "mock_", issue hands out
- * "mock_bk_…" billing keys, and a charge always succeeds unless the orderId ends with "_fail" (tests).
+ * Keys (CONTRACT §15.7 #8): there is no default key in the repository. Without the operator's own client + secret key
+ * (config.local.php or TFM_TOSS_CLIENT_KEY / TFM_TOSS_SECRET_KEY) payments are 'unconfigured': status says so and
+ * prepare answers 503 PAYMENT_NOT_CONFIGURED. The public sample keys of the 토스 documentation are recognised by their
+ * SHA-256 only and treated as "not configured".
+ *
+ * Mock mode (config toss.mock, TFM_TOSS_MOCK=1) is for tests and demos and works only on the server PC or outside
+ * production: with app.env = production a request for a public host never gets mock payments. confirm accepts
+ * paymentKeys that start with "mock_"; test prefixes after "mock_": amount<N>_ (the gateway answers totalAmount N),
+ * noamount_ (no totalAmount), otherorder_ (another orderId), usd_ (currency USD), waiting_ (status not DONE),
+ * slow<ms>_ (answers after a pause: races), timeout_ (a network error after the payment). issue hands out
+ * "mock_bk_…" billing keys (an authKey "mock_amount<N>_…" gives a key whose charges answer N), and a charge always
+ * succeeds unless the orderId ends with "_fail" (tests).
  * The secret key is never logged. PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -37,25 +47,92 @@ final class TossException extends \RuntimeException
 
 final class Toss
 {
-    /** the public documentation test keys (never real money) */
-    public const DOC_CLIENT_KEY = 'test_ck_D5GePWvyJnrK0W0k6q8gLzN97Eoq';
-    public const DOC_SECRET_KEY = 'test_sk_zXLkKEypNArWmo50nX3lmeaxYG5R';
+    /**
+     * SHA-256 of the two public sample keys printed in the 토스페이먼츠 documentation (client, secret). They used to be
+     * the defaults; now they are only recognised (and refused) — the keys themselves are not in the repository.
+     */
+    private const DOC_KEY_SHA256 = ['ec1393ef0fce194e6bad234a8445cb7196048b6470bc36636eeba4148aa50030', '587dc23841794a4259bfbab17611c1a37a71e70a8ca2c82237539dc2e38d8bb3'];
+
+    /** @var bool one log line per request about a refused mock mode */
+    private static $mockWarned = false;
 
     public static function cfg(): array { return (array) Config::get('toss', []); }
-    public static function mock(): bool { $c = self::cfg(); return !empty($c['mock']); }
-    public static function clientKey(): string { $c = self::cfg(); return (string) (isset($c['client_key']) && $c['client_key'] !== '' ? $c['client_key'] : self::DOC_CLIENT_KEY); }
-    private static function secretKey(): string { $c = self::cfg(); return (string) (isset($c['secret_key']) && $c['secret_key'] !== '' ? $c['secret_key'] : self::DOC_SECRET_KEY); }
+
+    /** does $text contain one of the public documentation sample keys? */
+    public static function isDocumentationKey(string $text): bool
+    {
+        if (!preg_match_all('/(?:test|live)_g?[cs]k_[A-Za-z0-9]{8,}/', $text, $m)) return false;
+        foreach ($m[0] as $tok) if (in_array(hash('sha256', $tok), self::DOC_KEY_SHA256, true)) return true;
+        return false;
+    }
+
+    /** a configured key, '' when it is empty or a documentation sample key */
+    private static function key(string $name): string
+    {
+        $c = self::cfg();
+        $v = isset($c[$name]) && is_string($c[$name]) ? trim($c[$name]) : '';
+        return $v === '' || self::isDocumentationKey($v) ? '' : $v;
+    }
+
+    /** mock mode switched on in the configuration (whether this request may use it: mock()) */
+    public static function mockConfigured(): bool { $c = self::cfg(); return !empty($c['mock']); }
+
+    /**
+     * Mock payments hand out tiers without money, so they are refused for a public host in production: allowed on the
+     * command line, outside app.env = production, or for a request from this machine to a loopback host name.
+     */
+    public static function mockAllowed(): bool
+    {
+        if (PHP_SAPI === 'cli') return true;
+        if (strtolower((string) Config::get('app.env', 'production')) !== 'production') return true;
+        $remote = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
+        $host = strtolower(trim((string) (isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '')));
+        $localHost = (bool) preg_match('/^(?:\[::1\]|(?:[a-z0-9-]+\.)*localhost|127(?:\.\d{1,3}){3})(?::\d{1,5})?$/', $host);
+        return $localHost && Http::isLoopbackIp($remote);
+    }
+
+    public static function mock(): bool
+    {
+        if (!self::mockConfigured()) return false;
+        if (self::mockAllowed()) return true;
+        if (!self::$mockWarned) {
+            self::$mockWarned = true;
+            Log::warn('TOSS', 'mock payments are on (toss.mock) but refused for a public host in production');
+        }
+        return false;
+    }
+
+    /** the client key the browser may see ('' when payments are not configured or run in mock mode) */
+    public static function clientKey(): string { return self::keysConfigured() ? self::key('client_key') : ''; }
+    private static function secretKey(): string { return self::key('secret_key'); }
     private static function apiBase(): string { $c = self::cfg(); return rtrim((string) (isset($c['api_base']) && $c['api_base'] !== '' ? $c['api_base'] : 'https://api.tosspayments.com'), '/'); }
     public static function periodDays(): int { $c = self::cfg(); return max(1, (int) (isset($c['period_days']) ? $c['period_days'] : 30)); }
     public static function graceDays(): int { $c = self::cfg(); return max(0, (int) (isset($c['grace_days']) ? $c['grace_days'] : 3)); }
 
-    /** are real (live or merchant test) keys configured, or still the public documentation keys? (admin health) */
-    public static function liveKeys(): bool
+    /** the operator's own client + secret key of the same kind (both test_… or both live_…), never a documentation key */
+    public static function keysConfigured(): bool
     {
-        $s = self::secretKey();
-        return $s !== self::DOC_SECRET_KEY && self::clientKey() !== self::DOC_CLIENT_KEY && Str::startsWith($s, 'live_sk_');
+        $ck = self::key('client_key');
+        $sk = self::key('secret_key');
+        if ($ck === '' || $sk === '') return false;
+        if (!preg_match('/^(test|live)_g?ck_/', $ck, $a) || !preg_match('/^(test|live)_g?sk_/', $sk, $b)) return false;
+        return $a[1] === $b[1];
     }
-    public static function keysConfigured(): bool { return self::secretKey() !== self::DOC_SECRET_KEY && self::clientKey() !== self::DOC_CLIENT_KEY; }
+
+    /** real money: live keys configured (admin health) */
+    public static function liveKeys(): bool { return self::keysConfigured() && (bool) preg_match('/^live_g?sk_/', self::secretKey()); }
+
+    /** 'mock' (test payments, this request may use them) | 'live' (the operator's keys) | 'unconfigured' */
+    public static function mode(): string { return self::mock() ? 'mock' : (self::keysConfigured() ? 'live' : 'unconfigured'); }
+
+    public static function available(): bool { return self::mode() !== 'unconfigured'; }
+
+    /** 503 PAYMENT_NOT_CONFIGURED unless payments can be taken (mock or the operator's keys) */
+    public static function requireAvailable(): void
+    {
+        if (self::available()) return;
+        throw new ApiException(503, 'PAYMENT_NOT_CONFIGURED', '결제가 아직 준비되지 않았어요. 운영자가 토스페이먼츠 키를 설정하면 구독할 수 있어요.');
+    }
 
     /** [tier => ['price' => int KRW, 'name' => string]] for tiers 2..4, validated */
     public static function tiers(): array
@@ -88,16 +165,25 @@ final class Toss
     // ------------------------------------------------------------------ API calls
     public static function confirm(string $paymentKey, string $orderId, int $amount): array
     {
-        if (self::mock()) {
-            if (!Str::startsWith($paymentKey, 'mock_')) throw new TossException('NOT_FOUND_PAYMENT', '모의 결제 키가 아니에요.', 404);
-            return self::mockPayment($paymentKey, $orderId, $amount, 'DONE');
-        }
+        if (self::mock()) return self::mockConfirm($paymentKey, $orderId, $amount, false);
+        self::needKeys();
         return self::call('POST', '/v1/payments/confirm', ['paymentKey' => $paymentKey, 'orderId' => $orderId, 'amount' => $amount], $orderId . ':confirm');
+    }
+
+    /**
+     * The payment as the gateway knows it now (a confirmation that ended in a network error is looked up instead of
+     * being confirmed twice). Mock: the same answer confirm() would give, without the timeout.
+     */
+    public static function lookup(string $paymentKey, string $orderId, int $amount): array
+    {
+        if (self::mock()) return self::mockConfirm($paymentKey, $orderId, $amount, true);
+        return self::payment($paymentKey);
     }
 
     public static function payment(string $paymentKey): array
     {
         if (self::mock()) return ['paymentKey' => $paymentKey, 'status' => 'DONE', 'mock' => true];
+        self::needKeys();
         if (!preg_match('/^[A-Za-z0-9_\-]{1,200}$/', $paymentKey)) throw new TossException('INVALID_PAYMENT_KEY', '결제 키 형식이 올바르지 않아요.', 400);
         return self::call('GET', '/v1/payments/' . rawurlencode($paymentKey), null);
     }
@@ -105,18 +191,24 @@ final class Toss
     public static function issueBillingKey(string $authKey, string $customerKey): array
     {
         if (self::mock()) {
-            $key = 'mock_bk_' . substr(hash('sha256', $authKey . '|' . $customerKey), 0, 24) . (Str::endsWith($authKey, '_fail') ? '_fail' : '');
+            $amt = preg_match('/^mock_amount(\d{1,9})_/', $authKey, $m) ? 'amount' . $m[1] . '_' : '';
+            $key = 'mock_bk_' . $amt . substr(hash('sha256', $authKey . '|' . $customerKey), 0, 24) . (Str::endsWith($authKey, '_fail') ? '_fail' : '');
             return ['billingKey' => $key, 'customerKey' => $customerKey, 'card' => ['company' => '모의카드', 'number' => '****-****-****-0000'], 'mock' => true];
         }
+        self::needKeys();
         return self::call('POST', '/v1/billing/authorizations/issue', ['authKey' => $authKey, 'customerKey' => $customerKey]);
     }
 
     public static function charge(string $billingKey, string $customerKey, int $amount, string $orderId, string $orderName, ?string $customerEmail = null, ?string $customerName = null): array
     {
         if (self::mock()) {
+            if (!Str::startsWith($billingKey, 'mock_bk_')) throw new TossException('INVALID_BILLING_KEY', '모의 빌링키가 아니에요.', 400);
             if (Str::endsWith($orderId, '_fail')) throw new TossException('REJECT_CARD_PAYMENT', '모의 결제가 거절되었어요 (테스트).', 400);
-            return self::mockPayment('mock_pay_' . substr(hash('sha256', $orderId), 0, 20), $orderId, $amount, 'DONE');
+            $p = self::mockPayment('mock_pay_' . substr(hash('sha256', $orderId), 0, 20), $orderId, $amount, 'DONE');
+            if (preg_match('/^mock_bk_amount(\d{1,9})_/', $billingKey, $m)) $p['totalAmount'] = (int) $m[1];
+            return $p;
         }
+        self::needKeys();
         if (!preg_match('/^[A-Za-z0-9_\-=.+\/]{1,200}$/', $billingKey)) throw new TossException('INVALID_BILLING_KEY', '빌링키 형식이 올바르지 않아요.', 400);
         $body = ['customerKey' => $customerKey, 'amount' => $amount, 'orderId' => $orderId, 'orderName' => $orderName];
         if ($customerEmail !== null && $customerEmail !== '') $body['customerEmail'] = $customerEmail;
@@ -127,14 +219,38 @@ final class Toss
     public static function cancel(string $paymentKey, string $reason): array
     {
         if (self::mock()) return ['paymentKey' => $paymentKey, 'status' => 'CANCELED', 'mock' => true];
+        self::needKeys();
         if (!preg_match('/^[A-Za-z0-9_\-]{1,200}$/', $paymentKey)) throw new TossException('INVALID_PAYMENT_KEY', '결제 키 형식이 올바르지 않아요.', 400);
         return self::call('POST', '/v1/payments/' . rawurlencode($paymentKey) . '/cancel', ['cancelReason' => mb_substr($reason, 0, 200)], $paymentKey . ':cancel');
+    }
+
+    /** a real API call without the operator's keys is never made (no default key exists) */
+    private static function needKeys(): void
+    {
+        if (!self::keysConfigured()) throw new TossException('NOT_CONFIGURED', '결제가 아직 준비되지 않았어요 (토스페이먼츠 키가 없어요).', 0);
+    }
+
+    /** mock confirm with the test prefixes of the class comment; $lookup = the later look-up (no timeout, no pause) */
+    private static function mockConfirm(string $paymentKey, string $orderId, int $amount, bool $lookup): array
+    {
+        if (!Str::startsWith($paymentKey, 'mock_')) throw new TossException('NOT_FOUND_PAYMENT', '모의 결제 키가 아니에요.', 404);
+        $flags = (string) substr($paymentKey, 5);
+        if (!$lookup && preg_match('/^slow(\d{1,4})_/', $flags, $m)) usleep(min(5000, (int) $m[1]) * 1000);
+        $flags = (string) preg_replace('/^slow\d{1,4}_/', '', $flags);
+        if (!$lookup && Str::startsWith($flags, 'timeout_')) throw new TossException('NETWORK_ERROR', '결제 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.', 0);
+        $p = self::mockPayment($paymentKey, $orderId, $amount, 'DONE');
+        if (preg_match('/^amount(\d{1,9})_/', $flags, $m)) $p['totalAmount'] = (int) $m[1];
+        if (Str::startsWith($flags, 'noamount_')) unset($p['totalAmount']);
+        if (Str::startsWith($flags, 'otherorder_')) $p['orderId'] = (substr($orderId, 0, 1) === 'X' ? 'Y' : 'X') . substr($orderId, 1);
+        if (Str::startsWith($flags, 'usd_')) $p['currency'] = 'USD';
+        if (Str::startsWith($flags, 'waiting_')) $p['status'] = 'WAITING_FOR_DEPOSIT';
+        return $p;
     }
 
     private static function mockPayment(string $paymentKey, string $orderId, int $amount, string $status): array
     {
         return [
-            'paymentKey' => $paymentKey, 'orderId' => $orderId, 'status' => $status, 'method' => '카드', 'totalAmount' => $amount,
+            'paymentKey' => $paymentKey, 'orderId' => $orderId, 'status' => $status, 'method' => '카드', 'totalAmount' => $amount, 'currency' => 'KRW',
             'approvedAt' => date('c'), 'receipt' => ['url' => 'about:blank#mock-receipt'], 'mock' => true,
         ];
     }

@@ -166,7 +166,9 @@ final class Db
         $dsn = !empty($m['socket'])
             ? sprintf('mysql:unix_socket=%s;%scharset=utf8mb4', $m['socket'], $selectDb ? 'dbname=' . $db . ';' : '')
             : sprintf('mysql:host=%s;port=%d;%scharset=utf8mb4', isset($m['host']) && $m['host'] !== '' ? $m['host'] : '127.0.0.1', (int) (isset($m['port']) ? $m['port'] : 3306), $selectDb ? 'dbname=' . $db . ';' : '');
-        $pdo = new PDO($dsn, (string) (isset($m['username']) ? $m['username'] : 'root'), (string) (isset($m['password']) ? $m['password'] : ''), $opts);
+        $user = (string) (isset($m['username']) ? $m['username'] : '');
+        if ($user === '') throw new \RuntimeException('db.mysql.username is empty: run install.php or php cli/tfm.php install (no default account)');
+        $pdo = new PDO($dsn, $user, (string) (isset($m['password']) ? $m['password'] : ''), $opts);
         $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
         $pdo->exec("SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ENGINE_SUBSTITUTION,ERROR_FOR_DIVISION_BY_ZERO'");
         return $pdo;
@@ -177,7 +179,10 @@ final class Db
      * The runtime database account and what it may do — for the admin health page and the configuration audit.
      *   MySQL / MariaDB: user, host, isRoot, emptyPassword (the configured password is empty), globalPrivileges
      *     (anything but USAGE on *.*), ddlPrivileges (more than SELECT / INSERT / UPDATE / DELETE anywhere; the names
-     *     are in extraPrivileges), otherDatabases, remote, tls, grants (SHOW GRANTS with every password hash removed).
+     *     are in extraPrivileges), otherDatabases, remote, tls, grants (SHOW GRANTS with every password hash removed),
+     *     publicGrants (grants of the PUBLIC role: every account has them), visibleDatabases (databases besides its own the
+     *     account can see), testDatabaseOpen (the "test" databases of a default installation are open to every account:
+     *     a server setting to remove — DB-HARDENING).
      *   SQLite: file (name only), mode, worldReadable, randomName, insideWebRoot.
      * Never throws: `error` holds the exception class when the database cannot be asked.
      */
@@ -206,9 +211,18 @@ final class Db
         $out['emptyPassword'] = (string) (isset($m['password']) ? $m['password'] : '') === '';
         $out['remote'] = !self::isLocalDb($m);
         $out['otherDatabases'] = false;
+        $out['publicGrants'] = [];
+        $out['testDatabaseOpen'] = false;
         $extra = [];
         foreach (self::all('SHOW GRANTS') as $row) {
             $g = (string) reset($row);
+            // MariaDB 10.11+: grants of the PUBLIC role apply to every account — usually the "test" databases of a default
+            // installation. They are a server setting (docs: DB-HARDENING), reported apart from this account's own rights.
+            if (preg_match('/\sTO\s+PUBLIC\s*$/i', $g)) {
+                $out['publicGrants'][] = self::redactGrant($g);
+                if (preg_match('/\sON\s+`?test(?:\\\\?_%)?`?\./i', $g)) $out['testDatabaseOpen'] = true;
+                continue;
+            }
             $out['grants'][] = self::redactGrant($g);
             if (stripos($g, 'WITH GRANT OPTION') !== false) $extra[] = 'GRANT OPTION';
             if (!preg_match('/^GRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s/i', $g, $mm)) { $extra[] = 'ROLE'; continue; } // GRANT `role` TO …
@@ -224,6 +238,17 @@ final class Db
         }
         $out['extraPrivileges'] = array_values(array_unique($extra));
         $out['ddlPrivileges'] = $out['extraPrivileges'] !== [];
+        // the databases this account can see besides its own: older servers grant the "test" databases to every account
+        // through anonymous rows in mysql.db, which SHOW GRANTS does not list
+        try {
+            $vis = [];
+            foreach (self::all('SHOW DATABASES') as $row) {
+                $d = (string) reset($row);
+                if (strcasecmp($d, 'information_schema') !== 0 && strcasecmp($d, $out['database']) !== 0) $vis[] = $d;
+            }
+            $out['visibleDatabases'] = $vis;
+            foreach ($vis as $d) if (preg_match('/^test(?:_|$)/i', $d)) $out['testDatabaseOpen'] = true;
+        } catch (\Throwable $e) { $out['visibleDatabases'] = []; }
         try {
             $ssl = self::one("SHOW SESSION STATUS LIKE 'Ssl_cipher'");
             $out['tls'] = $ssl !== null && (string) (isset($ssl['Value']) ? $ssl['Value'] : '') !== '';

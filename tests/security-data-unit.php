@@ -4,7 +4,7 @@
  * (CONTRACT §15.7 items 1, 7, 8, 15, 20, 21). No web server: a throw-away SQLite database in the temp dir.
  *
  *   php tests/security-data-unit.php                 prints PASS/FAIL per check, exits 1 when one fails
- *   TFM_DB_DRIVER=mysql TFM_DB_HOST=127.0.0.1 TFM_DB_PORT=33106 TFM_DB_USER=root TFM_DB_NAME=tfm_secdata php tests/security-data-unit.php
+ *   TFM_DB_DRIVER=mysql TFM_DB_HOST=127.0.0.1 TFM_DB_PORT=33106 TFM_DB_USER=root TFM_DB_NAME=tfm_data_u1 php tests/security-data-unit.php
  *                                                    the same checks plus the MariaDB-only ones (dedicated account, grants)
  *
  * Every check runs inside its own try/catch: a missing class / method is that check's FAIL (with the error message)
@@ -364,12 +364,16 @@ Tfm\Config::reset();
 Tfm\Db::reset();
 
 // ------------------------------------------------------------------ Installer: dedicated least-privilege account (item 1a, 1b, 21) — MariaDB only
-$DB2 = 'tfm_secdata2';
+// databases and accounts of this file carry the data agent's prefix (tfm_data…); other runs share the scratch server
+$DB2 = 'tfm_data_u2';
+$DB1 = (string) (getenv('TFM_DB_NAME') ?: 'tfm_data_u1');
 $adm = ['host' => (string) (getenv('TFM_DB_HOST') ?: '127.0.0.1'), 'port' => (int) (getenv('TFM_DB_PORT') ?: 3306), 'username' => (string) (getenv('TFM_DB_USER') ?: 'root'), 'password' => (string) getenv('TFM_DB_PASS'), 'database' => $DB2];
 $adminPdo = null;
-$accountsBefore = [];
-$listAccounts = function () use (&$adminPdo): array {
-    return array_map(function ($r) { return $r['User'] . '@' . $r['Host']; }, $adminPdo->query("SELECT User, Host FROM mysql.user WHERE User LIKE 'tfm\\_%' ORDER BY User, Host")->fetchAll());
+/** the accounts with a grant on $DB2 (made by this file only: the installer runs, the limited account) */
+$listAccounts = function () use (&$adminPdo, $DB2): array {
+    $st = $adminPdo->prepare("SELECT User, Host FROM mysql.db WHERE REPLACE(Db, '\\\\', '') = ? ORDER BY User, Host");
+    $st->execute([$DB2]);
+    return array_map(function ($r) { return $r['User'] . '@' . $r['Host']; }, $st->fetchAll());
 };
 $installInput = function (array $over = []) use ($adm, $DB2): array {
     return $over + ['driver' => 'mysql', 'host' => $adm['host'], 'port' => (string) $adm['port'], 'database' => $DB2, 'username' => $adm['username'], 'password' => $adm['password'], 'create_db' => true,
@@ -378,7 +382,6 @@ $installInput = function (array $over = []) use ($adm, $DB2): array {
 if ($IS_MYSQL) {
     $adminPdo = Tfm\Db::connectMysql($adm, false);
     $adminPdo->exec("DROP DATABASE IF EXISTS `$DB2`");
-    $accountsBefore = $listAccounts();
 }
 $run1 = null;
 mysqlOnly('install — a dedicated account tfm_<8 hex> is created; only it (never the administrator) is written to config.local.php, auto_migrate off', function () use (&$run1, $installInput, $cfgFile, $adm) {
@@ -397,15 +400,23 @@ mysqlOnly('install — the runtime account: not root, a password, no global and 
     $a = Tfm\Db::accountAudit();
     if ($a['isRoot'] || $a['emptyPassword'] || $a['globalPrivileges'] || $a['ddlPrivileges'] || $a['otherDatabases']) return json_encode($a);
     $all = implode(' | ', $a['grants']);
-    if (!preg_match('/GRANT SELECT, INSERT, UPDATE, DELETE ON `tfm\\\\?_secdata2`\.\* TO/', $all)) return 'grants: ' . $all;
+    if (!preg_match('/GRANT SELECT, INSERT, UPDATE, DELETE ON `' . str_replace('_', '\\\\_', $DB2) . '`\.\* TO/', $all)) return 'grants (the database name must be exact: _ escaped): ' . $all;
     return !preg_match("/'\*[0-9A-F]{40}'/", $all) && $a['database'] === $DB2 ? true : 'a password hash is in the grants: ' . $all;
 });
-mysqlOnly('install — the runtime account reads and writes rows but cannot CREATE / ALTER / DROP, read mysql.user or use another database', function () {
+mysqlOnly('Db::accountAudit — grants every account has (PUBLIC role / the default "test" databases) are reported apart: testDatabaseOpen, not the account\'s own DDL', function () use (&$adminPdo) {
+    $a = Tfm\Db::accountAudit();
+    foreach (['publicGrants', 'visibleDatabases', 'testDatabaseOpen'] as $k) if (!array_key_exists($k, $a)) return "missing $k";
+    $open = (bool) $adminPdo->query("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'test%'")->fetchColumn() || $a['publicGrants'] !== [];
+    if ($a['ddlPrivileges'] || $a['otherDatabases']) return 'server-wide grants counted as the account\'s own: ' . json_encode($a['extraPrivileges']);
+    foreach (array_merge($a['grants'], $a['publicGrants']) as $g) if (preg_match("/'\\*[0-9A-F]{40}'/", $g)) return 'a password hash in: ' . $g;
+    return is_bool($a['testDatabaseOpen']) && ($open ? true : $a['testDatabaseOpen'] === false) ? true : json_encode($a);
+});
+mysqlOnly('install — the runtime account reads and writes rows but cannot CREATE / ALTER / DROP, read mysql.user or use another database', function () use ($DB1) {
     $pdo = Tfm\Db::pdo();
     Tfm\Db::exec('INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, 0)', ['unit-probe']);
     $n = Tfm\Db::exec('DELETE FROM rate_limits WHERE bucket = ?', ['unit-probe']);
     if ($n !== 1) return 'rows cannot be written';
-    foreach (['CREATE TABLE tfm_x (id INT)', 'ALTER TABLE users ADD COLUMN x INT', 'DROP TABLE rate_limits', 'SELECT User FROM mysql.user', 'SELECT 1 FROM tfm_secdata.users LIMIT 1', "CREATE USER 'tfm_evil'@'localhost'", 'CREATE DATABASE tfm_evil'] as $sql) {
+    foreach (['CREATE TABLE tfm_x (id INT)', 'ALTER TABLE users ADD COLUMN x INT', 'DROP TABLE rate_limits', 'SELECT User FROM mysql.user', 'SELECT 1 FROM `' . $DB1 . '`.users LIMIT 1', "CREATE USER 'tfm_data_evil'@'localhost'", 'CREATE DATABASE tfm_data_evil'] as $sql) {
         try { $pdo->exec($sql); return 'allowed: ' . $sql; } catch (PDOException $e) { /* refused */ }
     }
     return true;
@@ -464,11 +475,11 @@ mysqlOnly('db:account — an installation that runs as the administrator is move
         && (int) Tfm\Db::value('SELECT COUNT(*) FROM users') === 1 ? true : json_encode($a);
 });
 mysqlOnly('install — an administrator without CREATE USER: the typed account is used and flagged, the SQL to run by hand is returned (no password in it)', function () use (&$adminPdo, $installInput, $DB2) {
-    $lim = 'tfm_lim_' . bin2hex(random_bytes(3));
+    $lim = 'tfm_data_lim' . bin2hex(random_bytes(3));
     $pw = 'Lim' . bin2hex(random_bytes(8));
     foreach (['localhost', '127.0.0.1'] as $h) {
         $adminPdo->exec("CREATE USER '$lim'@'$h' IDENTIFIED BY '$pw'");
-        $adminPdo->exec("GRANT ALL PRIVILEGES ON `tfm\\_secdata2`.* TO '$lim'@'$h'");
+        $adminPdo->exec("GRANT ALL PRIVILEGES ON `" . str_replace('_', '\\_', $DB2) . "`.* TO '$lim'@'$h'");
     }
     @unlink(Tfm\Installer::lockPath());
     $r = Tfm\Installer::run($installInput(['username' => $lim, 'password' => $pw, 'create_db' => false]));
@@ -486,8 +497,8 @@ mysqlOnly('install — the checkbox off: the typed account is used (flagged as c
     return $r['dbAccount']['dedicated'] === false && $r['dbAccount']['reason'] === 'not_requested' && $listAccounts() === $before && Tfm\Db::accountAudit()['isRoot'] === true;
 });
 if ($IS_MYSQL) {
-    // leave the scratch server as it was: only the tfm_ accounts this run created are dropped
-    foreach (array_diff($listAccounts(), $accountsBefore) as $acct) {
+    // leave the scratch server as it was: the accounts with a grant on this file's own database are the ones it made
+    foreach ($listAccounts() as $acct) {
         list($u, $h) = explode('@', $acct, 2);
         $adminPdo->exec('DROP USER IF EXISTS ' . $adminPdo->quote($u) . '@' . $adminPdo->quote($h));
     }
@@ -498,6 +509,137 @@ if ($IS_MYSQL) {
 @unlink($cfgFile);
 Tfm\Config::reset();
 Tfm\Db::reset();
+
+// ------------------------------------------------------------------ install.php over HTTP (finding F1, attack-suite S16) — a private copy on port 18771
+/** a tiny HTTP client with a cookie jar: [status, headers (lower-case name => value), body] */
+function http(string $method, string $url, array $form = [], array &$jar = [], array $headers = []): array
+{
+    $h = $headers;
+    if ($jar) $h[] = 'Cookie: ' . implode('; ', array_map(function ($k, $v) { return "$k=$v"; }, array_keys($jar), $jar));
+    $opts = ['method' => $method, 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 20, 'header' => implode("\r\n", $h)];
+    if ($method === 'POST') {
+        $opts['content'] = http_build_query($form);
+        $opts['header'] .= ($opts['header'] !== '' ? "\r\n" : '') . 'Content-Type: application/x-www-form-urlencoded';
+    }
+    $body = @file_get_contents($url, false, stream_context_create(['http' => $opts]));
+    $status = 0;
+    $out = [];
+    foreach (isset($http_response_header) ? $http_response_header : [] as $line) {
+        if (preg_match('#^HTTP/\S+ (\d{3})#', $line, $m)) { $status = (int) $m[1]; $out = []; continue; }
+        $p = strpos($line, ':');
+        if ($p === false) continue;
+        $name = strtolower(trim(substr($line, 0, $p)));
+        $val = trim(substr($line, $p + 1));
+        $out[$name] = isset($out[$name]) ? $out[$name] . "\n" . $val : $val;
+        if ($name === 'set-cookie' && preg_match('/^([^=;\s]+)=([^;]*)/', $val, $c)) $jar[$c[1]] = $c[2];
+    }
+    return [$status, $out, (string) $body];
+}
+$webRoot = sys_get_temp_dir() . '/tfm-secdata-web-' . bin2hex(random_bytes(5));
+$webSrv = $webRoot . '/srv';
+$webData = $webRoot . '/data';
+mkdir($webData, 0700, true);
+copyTree(__DIR__ . '/../server', $webSrv);
+@unlink($webSrv . '/config/config.local.php');
+$webPort = 18771;
+$webProc = proc_open([PHP_BINARY, '-d', 'display_errors=1', '-d', 'expose_php=1', '-S', "127.0.0.1:$webPort", '-t', $webSrv],
+    [0 => ['pipe', 'r'], 1 => ['file', $webRoot . '/php-s.log', 'a'], 2 => ['file', $webRoot . '/php-s.log', 'a']], $pipes, $webSrv,
+    ['TFM_DATA_DIR' => $webData, 'TFM_TOSS_MOCK' => '1', 'PATH' => (string) getenv('PATH')]);
+for ($i = 0; $i < 100; $i++) { $s = @fsockopen('127.0.0.1', $webPort, $en, $es, 0.2); if ($s) { fclose($s); break; } usleep(100000); }
+$base = "http://127.0.0.1:$webPort/";
+$jar = [];
+$page = [0, [], ''];
+check('install.php (open, fresh server) — the form asks for the setup code and never shows it; no PHP version, no server path', function () use ($base, &$jar, &$page, $webData, $webSrv) {
+    $page = http('GET', $base . 'install.php', [], $jar);
+    list($st, $hd, $body) = $page;
+    if ($st !== 200) return "GET → $st " . substr($body, 0, 120);
+    if (strpos($body, 'name="setup_code"') === false) return 'no setup code field';
+    $code = (string) (setupCodeOf($webData));
+    if ($code === '' || stripos($body, $code) !== false || stripos($body, implode('-', str_split($code, 4))) !== false) return 'the code is missing on the server or shown on the page';
+    if (strpos($body, 'php cli/tfm.php setup-code') === false) return 'the page does not tell how to read the code';
+    if (strpos($body, PHP_VERSION) !== false || strpos($body, $webSrv) !== false || strpos($body, $webData) !== false) return 'the page shows the PHP version or a server path';
+    if (isset($hd['x-powered-by'])) return 'X-Powered-By: ' . $hd['x-powered-by'];
+    return strpos((string) (isset($hd['content-security-policy']) ? $hd['content-security-policy'] : ''), "script-src 'none'") !== false || strpos($body, '<script') === false ? true : 'scripts on the page';
+});
+/** the code in data/setup-code.php of the web instance (read the way the operator does: from the file) */
+function setupCodeOf(string $dataDir): string
+{
+    $raw = (string) @file_get_contents($dataDir . '/setup-code.php');
+    return preg_match("/'code' => '([A-Z0-9]{12})'/", $raw, $m) ? $m[1] : '';
+}
+$formOf = function (string $html): array {
+    $f = [];
+    if (preg_match('/name="_csrf" value="([^"]+)"/', $html, $m)) $f['_csrf'] = html_entity_decode($m[1]);
+    return $f + ['driver' => 'sqlite', 'admin_email' => 'owner@example.com', 'admin_nickname' => '운영자', 'admin_password' => 'Sunny-Jar-4821', 'app_account' => '1'];
+};
+check('install.php POST without / with a wrong setup code — 403, nothing written, no PHP version in the answer', function () use ($base, &$jar, &$page, $formOf, $webSrv) {
+    foreach (['', 'ABCD-EFGH-JKMN', '" onmouseover="x'] as $wrong) {
+        $r = http('POST', $base . 'install.php', ['setup_code' => $wrong] + $formOf($page[2]), $jar);
+        if ($r[0] !== 403) return "code " . json_encode($wrong) . " → {$r[0]}";
+        if (strpos($r[2], PHP_VERSION) !== false) return 'the answer shows the PHP version';
+        if (strpos($r[2], '" onmouseover="x') !== false) return 'the posted code is printed back raw';
+        if (is_file($webSrv . '/config/config.local.php')) return 'config.local.php was written';
+        $page = $r;
+    }
+    return true;
+});
+check('install.php POST with the setup code — installs (SQLite), the code is used up, then GET and POST answer a plain 404', function () use ($base, &$jar, &$page, $formOf, $webSrv, $webData) {
+    $code = setupCodeOf($webData);
+    $r = http('POST', $base . 'install.php', ['setup_code' => strtolower($code)] + $formOf($page[2]), $jar);
+    if ($r[0] !== 200 || strpos($r[2], '설치가 끝났어요') === false) return "POST → {$r[0]} " . substr(strip_tags($r[2]), 0, 200);
+    if (strpos($r[2], PHP_VERSION) !== false) return 'the done page shows the PHP version';
+    if (is_file($webData . '/setup-code.php')) return 'the setup code was not used up';
+    if (!is_file($webSrv . '/config/config.local.php') || !is_file($webData . '/install.lock')) return 'config.local.php / install.lock missing';
+    foreach (['GET', 'POST'] as $m) {
+        $x = http($m, $base . 'install.php', ['driver' => 'sqlite'], $jar);
+        if ($x[0] !== 404 || preg_match('/install|설치|config\.local|<form/i', $x[2])) return "$m after the install → {$x[0]} " . substr($x[2], 0, 80);
+    }
+    return true;
+});
+check('install.php — closed (404) while accounts exist or config.local.php exists, even without install.lock', function () use ($base, &$jar, $webSrv, $webData) {
+    @unlink($webData . '/install.lock');
+    $x = http('GET', $base . 'install.php', [], $jar);
+    if ($x[0] !== 404) return "accounts + config.local.php, no lock → {$x[0]}";
+    rename($webSrv . '/config/config.local.php', $webSrv . '/config/config.local.php.off');
+    $y = http('GET', $base . 'install.php', [], $jar);
+    rename($webSrv . '/config/config.local.php.off', $webSrv . '/config/config.local.php');
+    return $y[0] === 404 ? true : "accounts only → {$y[0]}";
+});
+if (is_resource($webProc)) { proc_terminate($webProc); proc_close($webProc); }
+
+// ------------------------------------------------------------------ cli/tfm.php: no secret on the command line (finding F20)
+/** run cli/tfm.php of the web copy: [exit code, stdout + stderr]; $stdin is fed to the command (not a terminal) */
+$cliRun = function (array $args, array $env = [], string $stdin = '') use ($webSrv, $webData): array {
+    $p = proc_open(array_merge([PHP_BINARY, $webSrv . '/cli/tfm.php'], $args), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $webSrv,
+        $env + ['TFM_DATA_DIR' => $webData, 'TFM_TOSS_MOCK' => '1', 'PATH' => (string) getenv('PATH')]);
+    fwrite($pipes[0], $stdin);
+    fclose($pipes[0]);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($p), (string) $out];
+};
+check('cli — a password or key as an option value is refused before anything runs (install / migrate / db:rotate-password / reset-password)', function () use ($cliRun, $webSrv) {
+    $cfgBefore = (string) file_get_contents($webSrv . '/config/config.local.php');
+    foreach ([['install', '--force', '--driver=sqlite', '--admin-email=x@example.com', '--admin-nick=운영자', '--admin-pass=Sunny-Jar-4821'], ['install', '--force', '--pass=hunter2xyz'],
+              ['install', '--force', '--toss-client=test_ck_abcdefghij', '--toss-secret=test_sk_abcdefghij'], ['migrate', '--admin-user', 'root', '--pass=hunter2xyz'],
+              ['db:rotate-password', '--admin-user=root', '--pass=hunter2xyz'], ['reset-password', 'owner@example.com', 'Brand-New-Pass-77']] as $a) {
+        list($code, $out) = $cliRun($a);
+        if ($code === 0 || strpos($out, '명령줄') === false) return implode(' ', $a) . " → exit $code: " . substr($out, 0, 160);
+    }
+    return (string) file_get_contents($webSrv . '/config/config.local.php') === $cfgBefore ? true : 'config.local.php changed';
+});
+check('cli reset-password — no argument: a random password shown once; --ask with TFM_NEW_PASSWORD / standard input: that one (never echoed)', function () use ($cliRun, $webData, $webSrv) {
+    list($c1, $o1) = $cliRun(['reset-password', 'owner@example.com']);
+    if ($c1 !== 0 || !preg_match('/새 비밀번호: (Tfm\S+)/u', $o1)) return 'generated: exit ' . $c1 . ' ' . substr($o1, 0, 160);
+    list($c2, $o2) = $cliRun(['reset-password', 'owner@example.com', '--ask'], ['TFM_NEW_PASSWORD' => 'Env-Given-Pass-42']);
+    list($c3, $o3) = $cliRun(['reset-password', 'owner@example.com', '--ask'], [], "Piped-Pass-Line-43\n");
+    if ($c2 !== 0 || $c3 !== 0 || strpos($o2 . $o3, 'Env-Given-Pass-42') !== false || strpos($o2 . $o3, 'Piped-Pass-Line-43') !== false) return "env exit $c2 / stdin exit $c3: " . substr($o2 . $o3, 0, 200);
+    // the last one (standard input) is the password now
+    $probe = 'require $argv[1]; echo password_verify("Piped-Pass-Line-43", (string) Tfm\\Users::byLogin("owner@example.com")["password_hash"]) ? "yes" : "no";';
+    $ok = trim((string) shell_exec('TFM_DATA_DIR=' . escapeshellarg($webData) . ' ' . escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($probe) . ' ' . escapeshellarg($webSrv . '/lib/bootstrap.php') . ' 2>&1'));
+    return $ok === 'yes' ? true : 'the password from standard input was not set: ' . substr($ok, 0, 120);
+});
 
 // ------------------------------------------------------------------ (sections are appended above this line)
 echo PHP_EOL . ($failed === 0 ? "✔ all security-data unit checks passed" : "✖ $failed check(s) failed") . PHP_EOL;

@@ -802,7 +802,10 @@ async function main() {
     tiers = r.data.tiers;
     assert(tiers.map((t) => t.tier).join(',') === '2,3,4' && tiers.every((t) => Number.isInteger(t.price) && t.price > 0 && typeof t.name === 'string'), `tiers ${JSON.stringify(tiers)}`);
     assert(r.data.sub?.tier === 1 && r.data.sub.status === 'none' && r.data.sub.autoRenew === false, `sub ${JSON.stringify(r.data.sub)}`);
-    assert(typeof r.data.clientKey === 'string' && /^(test|live)_(ck|gck)_/.test(r.data.clientKey) && r.data.periodDays >= 1, 'clientKey / periodDays');
+    // phase 7 (§15.7 #8): no default 토스 key exists any more — a key is only sent in live mode (the operator's own keys);
+    // mock and unconfigured servers send ''. A documentation sample key is never sent.
+    assert(['live', 'mock', 'unconfigured'].includes(r.data.mode), `mode ${r.data.mode}`);
+    assert(typeof r.data.clientKey === 'string' && (r.data.mode === 'live' ? /^(test|live)_(ck|gck)_/.test(r.data.clientKey) : r.data.clientKey === '') && r.data.periodDays >= 1, `clientKey ${JSON.stringify(r.data.clientKey)} in mode ${r.data.mode} / periodDays`);
     subMock = r.data.mode === 'mock';
     const m = await A.req('api/auth/me.php');
     const g = await A.req('api/player/get.php');

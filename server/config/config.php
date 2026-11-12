@@ -54,10 +54,15 @@ return [
             'port'     => $env('TFM_DB_PORT', 3306),
             'socket'   => $env('TFM_DB_SOCKET', ''),
             'database' => $env('TFM_DB_NAME', 'fermentation_metaverse'),
-            'username' => $env('TFM_DB_USER', 'root'),       // XAMPP 기본값. 운영 서버에서는 전용 계정을 만드세요.
+            // 기본값 없음: install.php / php cli/tfm.php install 이 체험관 전용 계정(tfm_무작위, 읽기·쓰기만 가능)을 만들어
+            // config.local.php 에 적어요. root 같은 데이터베이스 관리자 계정은 설치할 때 한 번만 쓰고 저장하지 않아요.
+            'username' => $env('TFM_DB_USER', ''),
             'password' => $env('TFM_DB_PASS', ''),
+            // 데이터베이스가 다른 컴퓨터에 있으면 암호화(TLS)가 필요해요: 'ssl_ca' => 'C:\\xampp\\mysql\\ca.pem'
+            // (같은 내부망이라 암호화 없이 써도 된다면 'allow_insecure_remote' => true)
         ],
-        // 테이블이 없으면 database/schema*.sql 로 자동 생성 (MySQL 은 데이터베이스 자체는 미리 있어야 함)
+        // 테이블이 없거나 오래되면 database/schema*.sql 로 자동으로 만들고 올려요. 전용 계정은 표를 바꿀 수 없으므로 설치 마법사가
+        // false 로 적고, 업데이트는 php cli/tfm.php migrate --admin-user root 로 해요.
         'auto_migrate' => $env('TFM_DB_AUTO_MIGRATE', true),
     ],
 
@@ -230,13 +235,15 @@ return [
         'level_exp' => ['base' => 120, 'pow' => 1.35, 'max' => 50],
     ],
 
-    // ------------------------------------------------------------------ 구독(진행 속도 2·3·4배) · 토스페이먼츠 (CONTRACT §14.6)
-    // 기본 키는 토스페이먼츠 "문서용 테스트 키"(실제 돈이 오가지 않음). 운영 때는 개발자센터의 내 키를 환경 변수나
-    // config.local.php 에 넣으세요. secret_key 는 어디에도 기록(로그)되지 않습니다. 가격은 운영자가 정하는 자리표시자(원).
+    // ------------------------------------------------------------------ 구독(진행 속도 2·3·4배) · 토스페이먼츠 (CONTRACT §14.6, §15.7 #8)
+    // 키의 기본값은 없어요: 토스페이먼츠 개발자센터에서 발급받은 내 키(클라이언트 키 + 시크릿 키)를 환경 변수나 config.local.php 에
+    // 넣으면 결제가 열려요. 키가 없으면 구독 화면은 "결제 설정 필요" 로 보이고 주문(prepare)은 503 PAYMENT_NOT_CONFIGURED 로 거절돼요.
+    // 문서에 실린 공개 예시 키는 넣어도 쓰지 않아요. secret_key 는 어디에도 기록(로그)되지 않고 저장소에 올리면 안 돼요.
+    // 가격은 운영자가 정하는 자리표시자(원).
     'toss' => [
-        'client_key'  => $env('TFM_TOSS_CLIENT_KEY', 'test_ck_D5GePWvyJnrK0W0k6q8gLzN97Eoq'),
-        'secret_key'  => $env('TFM_TOSS_SECRET_KEY', 'test_sk_zXLkKEypNArWmo50nX3lmeaxYG5R'),
-        'mock'        => $env('TFM_TOSS_MOCK', false),   // true: 결제 서버에 연결하지 않는 모의 결제 (테스트·시연·E2E)
+        'client_key'  => $env('TFM_TOSS_CLIENT_KEY', ''),
+        'secret_key'  => $env('TFM_TOSS_SECRET_KEY', ''),
+        'mock'        => $env('TFM_TOSS_MOCK', false),   // true: 결제 서버에 연결하지 않는 모의 결제 (테스트·시연·E2E) — 운영(app.env=production)에서는 이 서버 PC 에서 연 경우만
         'api_base'    => 'https://api.tosspayments.com',
         'period_days' => 30,                             // 한 번 결제 = 이용 기간(일)
         'grace_days'  => 3,                              // 자동 갱신 실패 후 유예 기간(일) — 지나면 기본 속도로

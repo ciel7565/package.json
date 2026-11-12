@@ -56,7 +56,8 @@ const APACHE_PORT = Number(process.env.TFM_SEC_APACHE_PORT) || 18780;
 const APACHE_MODULES = '/usr/lib/apache2/modules';
 const DRIVER = process.env.TFM_DB_DRIVER === 'mysql' ? 'mysql' : 'sqlite';
 const MY = { host: process.env.TFM_DB_HOST || '127.0.0.1', port: Number(process.env.TFM_DB_PORT || 33106), user: process.env.TFM_DB_USER || 'root', pass: process.env.TFM_DB_PASS || '' };
-const DB_PREFIX = 'tfm_secbb';
+// databases / accounts of MariaDB mode carry this prefix; parallel runs (one per agent) set their own: TFM_SEC_DB_PREFIX=tfm_data
+const DB_PREFIX = /^[a-z][a-z0-9_]{2,20}$/.test(process.env.TFM_SEC_DB_PREFIX || '') ? process.env.TFM_SEC_DB_PREFIX : 'tfm_secbb';
 const RUN = crypto.randomBytes(4).toString('hex');
 const TAG = String(parseInt(RUN, 16) % 100).padStart(2, '0'); // digits only: random hex can spell words the nickname rules refuse
 const PASSWORD = 'Ferment2026ok';
@@ -855,14 +856,17 @@ async function S01() {
     DROP_DBS.add(db);
     const created = [];
     try {
-      const r = spawnSync('php', [path.join(copy, 'cli/tfm.php'), 'install', '--driver=mysql', `--host=${MY.host}`, `--port=${MY.port}`, `--db=${db}`, `--user=${MY.user}`, `--pass=${MY.pass}`, `--admin-email=${ADMIN_EMAIL}`, '--admin-nick=InstAdmin1', `--admin-pass=${PASSWORD}`, '--mock'], { env: { ...cleanEnv(), TFM_DATA_DIR: dataDir }, encoding: 'utf8', timeout: 90000 });
+      // secrets go through the environment (finding F20: cli/tfm.php refuses passwords as option values — they would sit in
+      // the process list and the shell history); the nickname avoids "Inst…", which the kid-safety rule reads as a messenger id
+      const r = spawnSync('php', [path.join(copy, 'cli/tfm.php'), 'install', '--driver=mysql', `--host=${MY.host}`, `--port=${MY.port}`, `--db=${db}`, `--user=${MY.user}`, `--admin-email=${ADMIN_EMAIL}`, '--admin-nick=SetupAdmin1', '--mock'], { env: { ...cleanEnv(), TFM_DATA_DIR: dataDir, TFM_DB_ADMIN_PASS: MY.pass, TFM_ADMIN_PASS: PASSWORD }, input: '', encoding: 'utf8', timeout: 90000 });
       assert(r.status === 0, `"php cli/tfm.php install" failed (exit ${r.status}): ${oneLine(String(r.stdout) + String(r.stderr), 200)}`);
       const file = path.join(copy, 'config/config.local.php');
       assert(fs.existsSync(file), 'config/config.local.php was not written');
       const inc = spawnSync('php', ['-r', 'define("TFM_BOOT", true); echo json_encode(include $argv[1]);', file], { encoding: 'utf8' });
       const cfg = JSON.parse(inc.stdout || '{}');
       const m = (cfg.db && cfg.db.mysql) || {};
-      for (const row of mysqlRoot([`SELECT User, Host FROM mysql.db WHERE Db = '${db}'`])[0]) created.push(`'${row.User}'@'${row.Host}'`);
+      // mysql.db keeps the database part of a GRANT as written: a grant for exactly this database escapes the _ wildcard (tfm\_x)
+      for (const row of mysqlRoot([`SELECT User, Host FROM mysql.db WHERE REPLACE(Db, '\\\\', '') = '${db}'`])[0]) created.push(`'${row.User}'@'${row.Host}'`);
       assert(m.username && m.username !== MY.user && m.username !== 'root', `config.local.php keeps the admin account "${m.username}" as the runtime account (no dedicated account was created)`);
       assert(/^tfm_[A-Za-z0-9]{6,}$/.test(m.username), `the runtime account "${m.username}" is not a generated tfm_<random> name`);
       assert(typeof m.password === 'string' && m.password.length >= 32, `the generated password has ${String(m.password || '').length} characters (expected ≥ 32)`);
@@ -1817,7 +1821,7 @@ async function S08() {
     const order = await A.json('api/sub/prepare.php', { tier: 2, kind: 'card' });
     const tokens = [...new Set([...(st.text + order.text).matchAll(KEY_TOKEN_RX)].map((m) => m[0]))];
     const doc = tokens.filter((t) => DOC_KEY_DIGESTS.has(sha256(t)));
-    assert(!doc.length, `api/sub/status.php hands out the public documentation sample key ${doc[0].slice(0, 10)}… as clientKey (a default that lives in the repository)`);
+    assert(!doc.length, `api/sub/status.php hands out the public documentation sample key ${String(doc[0] || '').slice(0, 10)}… as clientKey (a default that lives in the repository)`); // the message is built before the test: no doc[0] when the key is gone
     return tokens.length ? `key served: ${tokens[0].slice(0, 8)}… (not a sample key)` : 'no key served (unconfigured)';
   });
   // CONTRACT §15.7 #8 — nothing about the environment for visitors

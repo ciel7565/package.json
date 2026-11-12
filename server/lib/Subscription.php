@@ -189,6 +189,7 @@ final class Subscription
     {
         $tier = self::validTier($tier);
         if (!in_array($kind, ['card', 'billing'], true)) throw new ApiException(400, 'INVALID_KIND', '결제 방식이 올바르지 않아요.');
+        Toss::requireAvailable(); // no keys and no (allowed) mock mode: 503 PAYMENT_NOT_CONFIGURED, no order is made
         $uid = (int) $user['id'];
         $now = Clock::ms();
         $amount = Toss::price($tier);

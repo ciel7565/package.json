@@ -17,6 +17,32 @@ final class Installer
     public static function configPath(): string { return TFM_ROOT . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'config.local.php'; }
 
     /**
+     * Why the web installer (install.php) is closed — it then answers a plain 404 like a missing page (finding F1):
+     *   'locked'    data/install.lock exists
+     *   'config'    config/config.local.php exists (someone configured this server already)
+     *   'accounts'  the configured database already holds an account (a server in use without the lock file)
+     *   'database'  the configured database cannot be read: it is not certain that nobody uses this server
+     *   ''          open — and even then a POST needs the one-time setup code (SetupCode)
+     * Reinstalling a server that is in use is done on the server computer: `php cli/tfm.php install`.
+     */
+    public static function webClosedReason(): string
+    {
+        if (self::locked()) return 'locked';
+        clearstatcache(true, self::configPath());
+        if (is_file(self::configPath())) return 'config';
+        try {
+            if (Db::value('SELECT id FROM users ORDER BY id LIMIT 1') !== null) return 'accounts';
+        } catch (\Throwable $e) {
+            Log::warn('INSTALL', 'web installer closed: the database cannot be read', ['error' => get_class($e)]);
+            return 'database';
+        }
+        return '';
+    }
+
+    /** the web installer is reachable (health / config audit: ⛔ on a public host) */
+    public static function webOpen(): bool { return self::webClosedReason() === ''; }
+
+    /**
      * Environment checks without touching the database: [{id, label, status: ok|warn|fail, value, hint}].
      * fail = cannot install, warn = works with a missing optional feature.
      */
@@ -60,8 +86,18 @@ final class Installer
 
     /**
      * Run the installation. $in keys: driver (mysql|sqlite), host, port, database, username, password, socket,
-     * create_db (bool), admin_email, admin_nickname, admin_password, toss_client, toss_secret, toss_mock (bool).
-     * Returns a summary; throws ApiException with a Korean message on any problem.
+     * create_db (bool), app_account (bool, default true: make a dedicated least-privilege account), app_host (the host
+     * the web server connects from; empty = automatic), ssl_ca, ssl_verify (bool), allow_insecure_remote (bool),
+     * admin_email, admin_nickname, admin_password, toss_client, toss_secret, toss_mock (bool).
+     *
+     * MySQL / MariaDB (CONTRACT §15.7 #1): username / password are the database ADMINISTRATOR the operator typed (root
+     * on XAMPP). With that connection the database is created, database/schema.sql applied and a dedicated account
+     * tfm_<8 hex>@<host> made with a random 32-character password and only SELECT, INSERT, UPDATE, DELETE on this one
+     * database (a reinstall keeps the configured tfm_ account and gives it a new password). Only that account goes into
+     * config/config.local.php, with db.auto_migrate = false; the administrator's credentials are never stored.
+     * When the administrator may not create accounts, the typed account is used (flagged) and dbAccount.manual holds
+     * the SQL to run by hand. Returns a summary (dbAccount never holds a password); throws ApiException (Korean) on
+     * any problem.
      */
     public static function run(array $in): array
     {
@@ -78,41 +114,80 @@ final class Installer
         if ($e = Users::validNickname($nick, true)) throw new ApiException(400, 'ADMIN_NICK', '관리자 닉네임: ' . $e);
         if ($e = Users::validPassword($pw, $email, $nick)) throw new ApiException(400, 'ADMIN_PASSWORD', '관리자 비밀번호: ' . $e);
 
-        $local = [];
-        $cfgFile = self::configPath();
-        if (is_file($cfgFile)) { $prev = @include $cfgFile; if (is_array($prev)) $local = $prev; }
+        $local = self::readLocalConfig(); // a damaged config.local.php is an error, never silently replaced
         $local['db'] = isset($local['db']) && is_array($local['db']) ? $local['db'] : [];
+        $prevDb = $local['db'];
         $local['db']['driver'] = $driver;
+        $account = ['dedicated' => false, 'user' => '', 'hosts' => [], 'reason' => 'sqlite', 'manual' => [], 'warning' => ''];
+        $adminPdo = null;
         if ($driver === 'mysql') {
+            $prevMysql = isset($prevDb['mysql']) && is_array($prevDb['mysql']) ? $prevDb['mysql'] : [];
             $m = [
                 'host' => $str('host', '127.0.0.1') !== '' ? $str('host', '127.0.0.1') : '127.0.0.1',
                 'port' => (int) ($str('port', '3306') !== '' ? $str('port', '3306') : '3306'),
                 'socket' => $str('socket'),
                 'database' => $str('database', 'fermentation_metaverse') !== '' ? $str('database', 'fermentation_metaverse') : 'fermentation_metaverse',
-                'username' => $str('username', 'root') !== '' ? $str('username', 'root') : 'root',
+                'username' => $str('username'),
                 'password' => isset($in['password']) && is_string($in['password']) ? $in['password'] : '',
             ];
+            // encryption settings: from the input (cli install --ssl-ca=…) or kept from an earlier configuration
+            $ca = $str('ssl_ca', isset($prevMysql['ssl_ca']) && is_string($prevMysql['ssl_ca']) ? $prevMysql['ssl_ca'] : '');
+            if ($ca !== '') $m['ssl_ca'] = $ca;
+            if ((isset($in['ssl_verify']) && $in['ssl_verify'] === false) || (!isset($in['ssl_verify']) && isset($prevMysql['ssl_verify']) && $prevMysql['ssl_verify'] === false)) $m['ssl_verify'] = false;
+            if (!empty($in['allow_insecure_remote']) || (!isset($in['allow_insecure_remote']) && !empty($prevMysql['allow_insecure_remote']))) $m['allow_insecure_remote'] = true;
+            if ($m['username'] === '') throw new ApiException(400, 'DB_USER', '데이터베이스 관리자 사용자 이름을 넣어 주세요 (XAMPP 는 보통 root).');
             if (!preg_match('/^[A-Za-z0-9_]{1,64}$/', $m['database'])) throw new ApiException(400, 'DB_NAME', '데이터베이스 이름은 영문·숫자·밑줄만 쓸 수 있어요 (64자 이하).');
             if ($m['port'] < 1 || $m['port'] > 65535) throw new ApiException(400, 'DB_PORT', '포트 번호가 올바르지 않아요.');
+            if (!preg_match('/^[A-Za-z0-9.\-:\[\]]{1,253}$/', $m['host'])) throw new ApiException(400, 'DB_HOST', '호스트 이름이 올바르지 않아요.');
+            $appHost = $str('app_host');
+            if ($appHost !== '' && (!preg_match('/^[A-Za-z0-9.\-:%_]{1,255}$/', $appHost) || $appHost === '%')) {
+                throw new ApiException(400, 'DB_APP_HOST', '웹 서버의 접속 위치(호스트)가 올바르지 않아요. 모든 곳(%)을 허용할 수는 없어요 — 보통은 비워 두면 돼요.');
+            }
             try {
-                // connect without a database first: create it when the account may (XAMPP root can), else it must exist
+                // the administrator connection, first without a database: create it when the account may (XAMPP root can)
                 try {
                     $pdo = Db::connectMysql($m, false);
-                    if (!empty($in['create_db'])) $pdo->exec('CREATE DATABASE IF NOT EXISTS `' . $m['database'] . '` DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci');
+                    if (!empty($in['create_db'])) $pdo->exec('CREATE DATABASE IF NOT EXISTS ' . self::quoteIdent($m['database']) . ' DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci');
+                    $pdo = null;
                 } catch (\PDOException $e) {
                     // some hosts refuse a connection without a database name: try directly
                     Db::connectMysql($m, true);
                 }
-                $pdo = Db::connectMysql($m, true);
-                $ver = (string) $pdo->getAttribute(\PDO::ATTR_SERVER_VERSION);
+                $adminPdo = Db::connectMysql($m, true);
+                $ver = (string) $adminPdo->getAttribute(\PDO::ATTR_SERVER_VERSION);
             } catch (\PDOException $e) {
                 Log::warn('INSTALL', 'mysql connection failed', ['code' => (string) $e->getCode()]);
                 throw new ApiException(400, 'DB_CONNECT', 'MySQL/MariaDB 에 연결하지 못했어요: ' . mb_substr(self::dbError($e), 0, 200) . ' — 호스트·포트·사용자·비밀번호와 MySQL 이 켜져 있는지 확인하세요.');
+            } catch (\RuntimeException $e) {
+                throw new ApiException(400, 'DB_TLS', '데이터베이스가 다른 컴퓨터에 있으면 암호화(TLS) 연결이 필요해요. 서버 컴퓨터에서 php cli/tfm.php install --ssl-ca=<CA 인증서 파일> … 로 설치해 주세요. (같은 내부망이라 암호화 없이 써도 된다면 --allow-insecure-remote)');
             }
-            $local['db']['mysql'] = $m;
+            // the schema with the administrator connection (the runtime account may not run DDL)
+            Db::adopt($adminPdo, 'mysql');
+            try {
+                Db::migrate();
+            } catch (\Throwable $e) {
+                Db::reset();
+                Log::error('INSTALL', 'schema with the administrator connection failed', ['error' => get_class($e)]);
+                throw new ApiException(500, 'SCHEMA', '테이블을 만들지 못했어요: ' . mb_substr(self::scrub($e->getMessage()), 0, 200));
+            }
+            Db::reset();
+            $wantApp = !array_key_exists('app_account', $in) || !empty($in['app_account']);
+            $account = $wantApp
+                ? self::provisionAppAccount($adminPdo, $m, $appHost, self::configuredAppUser($prevDb))
+                : ['dedicated' => false, 'user' => '', 'hosts' => [], 'reason' => 'not_requested', 'manual' => [], 'warning' => ''];
+            if ($account['dedicated']) {
+                $local['db']['mysql'] = ['username' => $account['user'], 'password' => $account['password']] + $m;
+                $local['db']['auto_migrate'] = false; // upgrades: php cli/tfm.php migrate --admin-user <administrator>
+            } else {
+                $local['db']['mysql'] = $m; // the typed account (the operator chose it, or could not create one): flagged by the health check
+                unset($local['db']['auto_migrate']);
+            }
+            unset($account['password']);
+            $adminPdo = null;
         } else {
             $ver = 'SQLite';
             if (!extension_loaded('pdo_sqlite')) throw new ApiException(400, 'DB_DRIVER', 'pdo_sqlite 확장이 없어요.');
+            unset($local['db']['auto_migrate']);
         }
         $local['toss'] = isset($local['toss']) && is_array($local['toss']) ? $local['toss'] : [];
         $tc = $str('toss_client');
@@ -120,6 +195,7 @@ final class Installer
         if ($tc !== '' && !preg_match('/^(test|live)_(ck|gck)_[A-Za-z0-9]{10,80}$/', $tc)) throw new ApiException(400, 'TOSS_KEY', '토스 클라이언트 키 형식이 올바르지 않아요 (test_ck_… 또는 live_ck_…).');
         if ($ts !== '' && !preg_match('/^(test|live)_(sk|gsk)_[A-Za-z0-9]{10,80}$/', $ts)) throw new ApiException(400, 'TOSS_KEY', '토스 시크릿 키 형식이 올바르지 않아요 (test_sk_… 또는 live_sk_…).');
         if (($tc === '') !== ($ts === '')) throw new ApiException(400, 'TOSS_KEY', '토스 키는 클라이언트 키와 시크릿 키를 함께 넣어 주세요.');
+        if ($tc !== '' && Toss::isDocumentationKey($tc . ' ' . $ts)) throw new ApiException(400, 'TOSS_KEY', '토스 문서에 실린 공개 예시 키는 쓸 수 없어요. 토스페이먼츠 개발자센터에서 내 키를 발급받아 넣어 주세요.');
         if ($tc !== '') { $local['toss']['client_key'] = $tc; $local['toss']['secret_key'] = $ts; }
         $local['toss']['mock'] = !empty($in['toss_mock']);
 
@@ -127,10 +203,10 @@ final class Installer
         Config::reset();
         Db::reset();
         try {
-            Db::pdo();
-            Db::migrate();
+            Db::pdo(); // SQLite / the typed account: creates the schema; the dedicated account finds it ready
+            if (Db::schemaVersion() < Db::SCHEMA_VERSION) Db::migrate();
         } catch (\Throwable $e) {
-            throw new ApiException(500, 'SCHEMA', '테이블을 만들지 못했어요: ' . mb_substr($e->getMessage(), 0, 200));
+            throw new ApiException(500, 'SCHEMA', '테이블을 만들지 못했어요: ' . mb_substr(self::scrub($e->getMessage()), 0, 200));
         }
         $version = Db::schemaVersion();
 
@@ -146,18 +222,265 @@ final class Installer
             $admin = Db::tx(function () use ($email, $nick, $pw) { return Users::create($email, $nick, $pw, 'admin'); });
             $created = true;
         }
-        Audit::log('install', (int) $admin['id'], ['driver' => $driver, 'created' => $created, 'schema' => $version, 'mock' => !empty($in['toss_mock'])], 'alert', (int) $admin['id']);
+        Audit::log('install', (int) $admin['id'], ['driver' => $driver, 'created' => $created, 'schema' => $version, 'mock' => !empty($in['toss_mock']),
+            'dbAccount' => $account['dedicated'] ? 'dedicated' : $account['reason']], 'alert', (int) $admin['id']);
         if (@file_put_contents(self::lockPath(), 'installed ' . gmdate('c') . ' by ' . (PHP_SAPI === 'cli' ? 'cli' : 'web') . "\n", LOCK_EX) === false) {
             throw new ApiException(500, 'LOCK', 'data/install.lock 파일을 만들지 못했어요 (data 폴더 쓰기 권한).');
         }
-        return ['driver' => $driver, 'server' => $ver, 'schema' => $version, 'adminId' => (int) $admin['id'], 'adminNickname' => (string) $admin['nickname'], 'adminCreated' => $created, 'mock' => !empty($in['toss_mock']), 'tossKeys' => $tc !== ''];
+        PrivateFile::tighten(self::lockPath());
+        return ['driver' => $driver, 'server' => $ver, 'schema' => $version, 'adminId' => (int) $admin['id'], 'adminNickname' => (string) $admin['nickname'], 'adminCreated' => $created,
+            'mock' => !empty($in['toss_mock']), 'tossKeys' => $tc !== '', 'dbAccount' => $account];
     }
 
     private static function dbError(\PDOException $e): string
     {
-        $m = $e->getMessage();
-        // never echo a password that could be part of the DSN message
-        return (string) preg_replace('/password[^,;]*/i', 'password …', $m);
+        return self::scrub($e->getMessage());
+    }
+
+    /** an error text without passwords (a DSN message can carry one) or file paths */
+    private static function scrub(string $m): string
+    {
+        $m = (string) preg_replace('/password[^,;]*/i', 'password …', $m);
+        return (string) preg_replace('#(?:[A-Za-z]:)?[\\\\/](?:[^\\\\/\s\'"]+[\\\\/])+[^\\\\/\s\'"]*#', '…', $m);
+    }
+
+    // ------------------------------------------------------------------ MySQL / MariaDB accounts (CONTRACT §15.7 #1, #21)
+    /** `name` with the backtick doubled (names here are validated to [A-Za-z0-9_] anyway) */
+    private static function quoteIdent(string $name): string { return '`' . str_replace('`', '``', $name) . '`'; }
+
+    /**
+     * the database part of a GRANT: `_` and `%` are wildcards there (fermentation_metaverse would also match
+     * fermentationXmetaverse), so they are escaped — the grant covers exactly this one database
+     */
+    private static function grantDb(string $db): string { return self::quoteIdent(str_replace(['\\', '_', '%'], ['\\\\', '\\_', '\\%'], $db)); }
+
+    /** 'user'@'host' with both parts quoted by the connection */
+    private static function acct(\PDO $pdo, string $user, string $host): string { return $pdo->quote($user) . '@' . $pdo->quote($host); }
+
+    /** a random password of letters and digits (no quoting problems in config files, shells or SQL) */
+    public static function randomPassword(int $len = 32): string
+    {
+        $abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        $s = '';
+        for ($i = 0; $i < $len; $i++) $s .= $abc[random_int(0, strlen($abc) - 1)];
+        return $s;
+    }
+
+    /** the dedicated account named in a db configuration block, '' when it names another account */
+    private static function configuredAppUser(array $db): string
+    {
+        $u = isset($db['mysql']['username']) && is_string($db['mysql']['username']) ? $db['mysql']['username'] : '';
+        return preg_match('/^tfm_[0-9a-f]{8}$/', $u) ? $u : '';
+    }
+
+    /**
+     * Where the web server connects from, as the database sees it: the host part of USER() of this connection (the
+     * installer runs on the web server machine), plus localhost and 127.0.0.1 for a database on the same machine
+     * (a socket and a TCP connection are matched against different account hosts). $appHost (typed) replaces them.
+     */
+    private static function accountHosts(\PDO $admin, array $m, string $appHost): array
+    {
+        if ($appHost !== '') return [$appHost];
+        $hosts = [];
+        $who = (string) $admin->query('SELECT USER()')->fetchColumn();
+        $at = strrpos($who, '@');
+        if ($at !== false) $hosts[] = (string) substr($who, $at + 1);
+        if (Db::isLocalDb($m)) {
+            $hosts[] = 'localhost';
+            $hosts[] = '127.0.0.1';
+            $h = strtolower(trim((string) (isset($m['host']) ? $m['host'] : ''), " []"));
+            if ($h === '::1' || $h === 'localhost') $hosts[] = '::1';
+        }
+        $out = [];
+        foreach ($hosts as $h) if ($h !== '' && $h !== '%' && preg_match('/^[A-Za-z0-9.\-:%_]{1,255}$/', $h) && !in_array($h, $out, true)) $out[] = $h;
+        return $out ?: ['localhost'];
+    }
+
+    /** the statements an operator runs by hand when the installer may not create accounts (no password inside) */
+    private static function manualSql(string $user, array $hosts, string $db): array
+    {
+        $lines = [];
+        foreach ($hosts as $h) $lines[] = "CREATE USER '$user'@'$h' IDENTIFIED BY '새_비밀번호(32자_무작위)';";
+        foreach ($hosts as $h) $lines[] = 'GRANT SELECT, INSERT, UPDATE, DELETE ON ' . self::grantDb($db) . ".* TO '$user'@'$h';";
+        return $lines;
+    }
+
+    /** the driver error number of a PDOException (1227 = no CREATE USER privilege, …) */
+    private static function mysqlErrno(\PDOException $e): int
+    {
+        return isset($e->errorInfo[1]) ? (int) $e->errorInfo[1] : 0;
+    }
+
+    /**
+     * Create (or, for a reinstall, reuse with a new password) the dedicated account, grant it SELECT / INSERT / UPDATE /
+     * DELETE on the app database only, and prove it: it reads and writes rows and cannot CREATE TABLE.
+     * → ['dedicated' => bool, 'user', 'password' (only when dedicated), 'hosts', 'reason', 'manual', 'warning']
+     */
+    private static function provisionAppAccount(\PDO $admin, array $m, string $appHost, string $preferUser): array
+    {
+        $db = (string) $m['database'];
+        $hosts = self::accountHosts($admin, $m, $appHost);
+        $user = $preferUser !== '' ? $preferUser : 'tfm_' . bin2hex(random_bytes(4));
+        $pw = self::randomPassword(32);
+        $made = [];
+        try {
+            foreach ($hosts as $h) {
+                $a = self::acct($admin, $user, $h);
+                $exists = false;
+                try { $exists = (bool) $admin->query('SELECT 1 FROM mysql.user WHERE User = ' . $admin->quote($user) . ' AND Host = ' . $admin->quote($h))->fetchColumn(); }
+                catch (\PDOException $e) { /* no read access to mysql.user: CREATE USER below decides */ }
+                if ($exists) {
+                    $admin->exec('ALTER USER ' . $a . ' IDENTIFIED BY ' . $admin->quote($pw)); // reinstall: same account, new password
+                } else {
+                    $admin->exec('CREATE USER ' . $a . ' IDENTIFIED BY ' . $admin->quote($pw));
+                    $made[] = $h;
+                }
+                $admin->exec('GRANT SELECT, INSERT, UPDATE, DELETE ON ' . self::grantDb($db) . '.* TO ' . $a);
+            }
+        } catch (\PDOException $e) {
+            $no = self::mysqlErrno($e);
+            foreach ($made as $h) { try { $admin->exec('DROP USER ' . self::acct($admin, $user, $h)); } catch (\PDOException $e2) { /* best effort */ } }
+            if (in_array($no, [1044, 1045, 1142, 1143, 1227, 1410, 1396], true)) {
+                Log::warn('INSTALL', 'no right to create the dedicated database account: the typed account is used', ['errno' => $no]);
+                return ['dedicated' => false, 'user' => '', 'hosts' => $hosts, 'reason' => $no === 1410 || $no === 1044 ? 'no_grant' : 'no_create_user', 'manual' => self::manualSql($user, $hosts, $db), 'warning' => ''];
+            }
+            throw new ApiException(500, 'DB_ACCOUNT', '전용 DB 계정을 만들지 못했어요: ' . mb_substr(self::dbError($e), 0, 200));
+        }
+        $warning = self::verifyAppAccount(['username' => $user, 'password' => $pw] + $m);
+        Log::info('INSTALL', 'dedicated database account ready', ['user' => $user, 'hosts' => $hosts, 'new' => count($made)]);
+        return ['dedicated' => true, 'user' => $user, 'password' => $pw, 'hosts' => $hosts, 'reason' => '', 'manual' => [], 'warning' => $warning];
+    }
+
+    /** the account reads and writes rows; '' when it cannot run DDL, 'ddl' when it can (other grants: health warns) */
+    private static function verifyAppAccount(array $m): string
+    {
+        try {
+            $app = Db::connectMysql($m, true);
+            $app->query('SELECT MAX(version) FROM schema_version')->fetchColumn();
+            $probe = 'tfm-account-check-' . bin2hex(random_bytes(4));
+            $app->prepare('INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, 0)')->execute([$probe]);
+            $st = $app->prepare('DELETE FROM rate_limits WHERE bucket = ?');
+            $st->execute([$probe]);
+            if ($st->rowCount() !== 1) throw new \RuntimeException('row not written');
+        } catch (\Throwable $e) {
+            throw new ApiException(500, 'DB_ACCOUNT', '새 전용 DB 계정으로 읽고 쓰지 못했어요. 웹 서버의 접속 위치(호스트)를 직접 넣어 다시 해 보세요: ' . mb_substr(self::scrub($e->getMessage()), 0, 160));
+        }
+        try {
+            $app->exec('CREATE TABLE tfm_account_probe (id INT)');
+        } catch (\PDOException $e) {
+            return '';
+        }
+        try { $app->exec('DROP TABLE tfm_account_probe'); } catch (\PDOException $e) { /* best effort */ }
+        Log::warn('INSTALL', 'the dedicated account can run DDL through other grants (wildcard or global privileges)');
+        return 'ddl';
+    }
+
+    /** an administrator connection to the configured database (cli migrate / db:account / db:rotate-password) */
+    private static function adminConnection(string $adminUser, string $adminPass): \PDO
+    {
+        if ($adminUser === '') throw new ApiException(400, 'DB_USER', '데이터베이스 관리자 사용자 이름이 필요해요 (--admin-user root).');
+        $m = (array) Config::get('db.mysql', []);
+        try {
+            return Db::connectMysql(['username' => $adminUser, 'password' => $adminPass] + $m, true);
+        } catch (\PDOException $e) {
+            throw new ApiException(400, 'DB_CONNECT', '데이터베이스 관리자 계정으로 연결하지 못했어요: ' . mb_substr(self::dbError($e), 0, 200) . ' — 사용자 이름과 비밀번호를 확인하세요.');
+        } catch (\RuntimeException $e) {
+            throw new ApiException(400, 'DB_CONNECT', mb_substr($e->getMessage(), 0, 300));
+        }
+    }
+
+    /**
+     * `php cli/tfm.php migrate --admin-user <u>`: apply the pending schema versions with a temporary administrator
+     * connection (the runtime account has no DDL rights; db.auto_migrate is off). The administrator's password is
+     * used for this call only. SQLite: the normal upgrade. → ['driver', 'from', 'to']
+     */
+    public static function migrateAsAdmin(string $adminUser, string $adminPass): array
+    {
+        if (strtolower((string) Config::get('db.driver', 'sqlite')) !== 'mysql') {
+            Db::reset();
+            $to = Db::upgrade();
+            Db::reset();
+            return ['driver' => 'sqlite', 'from' => $to, 'to' => $to];
+        }
+        $pdo = self::adminConnection($adminUser, $adminPass);
+        Db::adopt($pdo, 'mysql');
+        try {
+            $from = Db::schemaVersion();
+            Db::migrate();
+            $to = Db::schemaVersion();
+        } finally {
+            Db::reset();
+            $pdo = null;
+        }
+        Audit::log('db_migrate', null, ['from' => $from, 'to' => $to, 'via' => PHP_SAPI === 'cli' ? 'cli' : 'web'], 'warn');
+        return ['driver' => 'mysql', 'from' => $from, 'to' => $to];
+    }
+
+    /**
+     * `php cli/tfm.php db:account --admin-user <u>`: an installation that runs as the database administrator (root) is
+     * moved to a dedicated least-privilege account; the data stays where it is. → ['user', 'hosts', 'warning']
+     */
+    public static function switchToAppAccount(string $adminUser, string $adminPass): array
+    {
+        if (strtolower((string) Config::get('db.driver', 'sqlite')) !== 'mysql') throw new ApiException(400, 'DB_DRIVER', 'SQLite 를 쓰는 설치에는 DB 계정이 없어요.');
+        $pdo = self::adminConnection($adminUser, $adminPass);
+        Db::adopt($pdo, 'mysql');
+        try {
+            if (Db::schemaVersion() < Db::SCHEMA_VERSION) Db::migrate();
+        } finally {
+            Db::reset();
+        }
+        $m = (array) Config::get('db.mysql', []);
+        $acct = self::provisionAppAccount($pdo, $m, '', self::configuredAppUser(['mysql' => $m]));
+        $pdo = null;
+        if (!$acct['dedicated']) {
+            throw new ApiException(400, 'DB_NO_CREATE_USER', '이 관리자 계정에는 새 계정을 만드는 권한(CREATE USER · GRANT)이 없어요. 권한이 있는 계정(보통 root)으로 다시 하거나, 다음 SQL 을 phpMyAdmin 의 SQL 탭에서 실행한 뒤 config/config.local.php 의 db.mysql 에 그 계정을 적어 주세요: ' . implode(' ', $acct['manual']), ['manual' => $acct['manual']]);
+        }
+        self::mergeLocalConfig(['db' => ['mysql' => ['username' => $acct['user'], 'password' => $acct['password']], 'auto_migrate' => false]]);
+        Db::reset();
+        Audit::log('db_account_switched', null, ['user' => $acct['user'], 'hosts' => $acct['hosts']], 'warn');
+        return ['user' => $acct['user'], 'hosts' => $acct['hosts'], 'warning' => $acct['warning']];
+    }
+
+    /**
+     * `php cli/tfm.php db:rotate-password --admin-user <u>` (§15.7 #21): a new random password for the runtime account
+     * on every host it has, config.local.php rewritten in one step. Any failure puts the old password back.
+     * Refused (DB_SAME_ACCOUNT) while the site runs as the administrator itself. → ['user', 'hosts']
+     */
+    public static function rotateDbPassword(string $adminUser, string $adminPass): array
+    {
+        if (strtolower((string) Config::get('db.driver', 'sqlite')) !== 'mysql') throw new ApiException(400, 'DB_DRIVER', 'SQLite 를 쓰는 설치에는 DB 비밀번호가 없어요.');
+        $m = (array) Config::get('db.mysql', []);
+        $user = (string) (isset($m['username']) ? $m['username'] : '');
+        $old = (string) (isset($m['password']) ? $m['password'] : '');
+        if ($user === '' || strcasecmp($user, $adminUser) === 0 || strtolower($user) === 'root') {
+            throw new ApiException(400, 'DB_SAME_ACCOUNT', "체험관이 데이터베이스 관리자 계정({$user})으로 접속하고 있어요. 관리자 비밀번호는 여기서 바꾸지 않아요: 먼저 php cli/tfm.php db:account --admin-user <관리자> 로 전용 계정을 만드세요.");
+        }
+        $pdo = self::adminConnection($adminUser, $adminPass);
+        try {
+            $hosts = array_map('strval', $pdo->query('SELECT Host FROM mysql.user WHERE User = ' . $pdo->quote($user) . ' ORDER BY Host')->fetchAll(\PDO::FETCH_COLUMN));
+        } catch (\PDOException $e) {
+            throw new ApiException(400, 'DB_PRIVILEGES', '이 관리자 계정으로는 계정 목록(mysql.user)을 읽을 수 없어요. root 처럼 권한이 있는 계정으로 해 주세요.');
+        }
+        if (!$hosts) throw new ApiException(404, 'DB_NO_ACCOUNT', "데이터베이스에 {$user} 계정이 없어요.");
+        $new = self::randomPassword(32);
+        $changed = [];
+        $undo = function () use ($pdo, $user, &$changed, $old): void {
+            foreach ($changed as $h) { try { $pdo->exec('ALTER USER ' . self::acct($pdo, $user, $h) . ' IDENTIFIED BY ' . $pdo->quote($old)); } catch (\PDOException $e) { /* reported below */ } }
+        };
+        try {
+            foreach ($hosts as $h) { $pdo->exec('ALTER USER ' . self::acct($pdo, $user, $h) . ' IDENTIFIED BY ' . $pdo->quote($new)); $changed[] = $h; }
+            Db::connectMysql(['password' => $new] + $m, true); // the site's own connection works with the new password
+            self::mergeLocalConfig(['db' => ['mysql' => ['password' => $new]]]);
+        } catch (\Throwable $e) {
+            $undo();
+            Log::error('DB', 'password rotation failed and was undone', ['error' => get_class($e)]);
+            throw new ApiException(500, 'DB_ROTATE', '비밀번호를 바꾸지 못해서 예전 비밀번호로 되돌렸어요: ' . mb_substr(self::scrub($e->getMessage()), 0, 160));
+        }
+        $pdo = null;
+        Db::reset();
+        Audit::log('db_password_rotated', null, ['user' => $user, 'hosts' => $hosts], 'warn');
+        return ['user' => $user, 'hosts' => $hosts];
     }
 
     /**
