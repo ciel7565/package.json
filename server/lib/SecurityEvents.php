@@ -34,6 +34,15 @@ final class SecEvent
     public const COUNT_SQL = "SELECT COUNT(*) FROM security_events WHERE ip_hash = ? AND created_at > ? AND severity IN ('warn', 'alert')"
         . " AND kind IN ('csrf_fail', 'origin_mismatch', 'admin_denied', 'admin_ip_denied', 'admin_2fa_fail', 'probe_sqli',"
         . " 'probe_xss', 'probe_traversal', 'honeypot', 'payment_tamper', 'upload_rejected')";
+    /**
+     * Attack kinds a third party can make a victim's own browser emit (a forced cross-site <img> / <form> / navigation
+     * to this server): a honeypot bait URL, a cross-site write (origin_mismatch), or an injection string in a GET URL.
+     * For these, a request the browser marks cross-site (Http::isCrossSiteRequest) is stored at 'info' — still logged
+     * and visible to an admin, but non-counting — so it cannot drive the automatic IP block (CONTRACT §15.7 #5). A
+     * direct attack (curl / a scanner, no Sec-Fetch-Site header) from the real source keeps its warn/alert severity
+     * and still counts, so the auto-block still stops a genuine attacker.
+     */
+    public const FORCED_REACHABLE_KINDS = ['honeypot', 'origin_mismatch', 'probe_sqli', 'probe_xss', 'probe_traversal'];
 
     /** @var array kind => highest severity rank logged in this request (0 info, 1 warn, 2 alert) */
     private static $seen = [];
@@ -66,8 +75,14 @@ final class SecEvent
             $kind = substr((string) preg_replace('/[^A-Za-z0-9_.:-]/', '', $kind), 0, 40);
             if ($kind === '') $kind = 'unknown';
             if (!in_array($severity, self::SEVERITIES, true)) $severity = 'warn';
+            $intentRank = (int) array_search($severity, self::SEVERITIES, true);
+            // a forced cross-site request (victim's browser, lured to an attacker page) must not drive the IP block:
+            // keep the event but store it at 'info' (non-counting), the way a stale csrf_fail is already treated.
+            if ($intentRank >= 1 && in_array($kind, self::FORCED_REACHABLE_KINDS, true) && Http::isCrossSiteRequest()) $severity = 'info';
             $rank = (int) array_search($severity, self::SEVERITIES, true);
-            self::$seen[$kind] = max(isset(self::$seen[$kind]) ? self::$seen[$kind] : 0, $rank);
+            // remember the caller's intent (the un-downgraded rank), not the stored rank, so Firewall::noteAttack()
+            // treats the attack as already recorded and never adds a second, counting row for the same request
+            self::$seen[$kind] = max(isset(self::$seen[$kind]) ? self::$seen[$kind] : 0, $intentRank);
             $ip = self::ip();
             $hash = Sec::hashId($ip);
             $now = Clock::ms();

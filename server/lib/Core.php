@@ -421,6 +421,19 @@ final class Http
 
     public static function method(): string { return strtoupper((string) (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET')); }
 
+    /**
+     * The browser reports this request as initiated from another site (Sec-Fetch-Site: cross-site). A third party can
+     * make a victim's own browser emit such a request — a forced <img>/<form>/navigation to this server — so a
+     * cross-site request must never drive the IP auto-block (CONTRACT §15.7 #5): otherwise luring a visitor to a page
+     * that loads bait / injection URLs would lock that visitor's own address out. A direct attacker (curl, a scanner)
+     * sends no Sec-Fetch-Site header, so a real attack from the actual source is unaffected and still counts.
+     */
+    public static function isCrossSiteRequest(): bool
+    {
+        $site = strtolower(trim((string) (isset($_SERVER['HTTP_SEC_FETCH_SITE']) ? $_SERVER['HTTP_SEC_FETCH_SITE'] : '')));
+        return $site === 'cross-site';
+    }
+
     /** HTTPS directly, or through a configured trusted proxy */
     public static function isHttps(): bool
     {

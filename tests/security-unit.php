@@ -368,6 +368,26 @@ check('Firewall auto-block — events outside the window (600 s) do not count', 
     asIp('198.51.100.60', function () { Tfm\SecEvent::log('honeypot', 'warn'); });
     return !Tfm\Firewall::isBlocked('198.51.100.60');
 });
+check('Firewall auto-block — a forced cross-site request (Sec-Fetch-Site: cross-site) does not count: honeypot / origin_mismatch / probe_* floods never block the address (a lured visitor is not locked out)', function () {
+    // CONTRACT §15.7 #5: an attacker page can make a victim\'s own browser emit these (a <img>/form/navigation to the
+    // server); the browser marks them Sec-Fetch-Site: cross-site, so they must stay visible but not drive the IP block.
+    foreach (['honeypot', 'origin_mismatch', 'probe_sqli', 'probe_xss', 'probe_traversal'] as $kind) {
+        wipeSec();
+        for ($i = 0; $i < 30; $i++) asIp('203.0.113.210', function () use ($kind) { Tfm\SecEvent::log($kind, 'warn', ['via' => 'img']); }, ['HTTP_SEC_FETCH_SITE' => 'cross-site']);
+        if (Tfm\Firewall::isBlocked('203.0.113.210')) return "$kind (cross-site) blocked the address";
+        $r = Tfm\Db::one('SELECT severity FROM security_events ORDER BY id DESC LIMIT 1');
+        if (!$r || $r['severity'] !== 'info') return "$kind (cross-site) was not stored at info (visible, non-counting): " . json_encode($r);
+    }
+    return true;
+});
+check('Firewall auto-block — a direct request (no Sec-Fetch-Site, or same-origin) still counts: the same kinds block the address at 25', function () {
+    wipeSec();
+    for ($i = 0; $i < 25; $i++) asIp('203.0.113.211', function () { Tfm\SecEvent::log('honeypot', 'warn'); });
+    if (!Tfm\Firewall::isBlocked('203.0.113.211')) return 'a direct honeypot flood did not block';
+    wipeSec();
+    for ($i = 0; $i < 25; $i++) asIp('203.0.113.212', function () { Tfm\SecEvent::log('probe_sqli', 'warn'); }, ['HTTP_SEC_FETCH_SITE' => 'same-origin']);
+    return Tfm\Firewall::isBlocked('203.0.113.212') ? true : 'a same-origin probe flood did not block';
+});
 check('Firewall auto-block — localhost and security.block.exempt entries are never blocked automatically', function () {
     wipeSec();
     Tfm\Config::override('security.block.exempt', ['198.51.100.0/28', '2001:db8:5::/64']);

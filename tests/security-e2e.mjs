@@ -1536,6 +1536,27 @@ async function S05() {
     assert(!ev.error && ev.some((e) => e.kind === 'ip_blocked'), 'no ip_blocked event');
     return `blocked at request ${at}; ${good} still served`;
   });
+  // CONTRACT §15.7 #5 — the auto-block must not be weaponisable: a third party can lure a victim to a page that makes
+  // the victim's own browser load bait / injection URLs (a forced <img>/navigation, marked Sec-Fetch-Site: cross-site).
+  // Those must stay visible but non-counting, or an attacker could lock a chosen visitor's address (or a whole NAT) out.
+  await check('S05', 'a lured visitor is not auto-blocked: forced cross-site bait / injection requests (Sec-Fetch-Site: cross-site) from one address never end in IP_BLOCKED, and it stays served', { sev: 'high', fix: 'A request the browser marks Sec-Fetch-Site: cross-site must not count toward the IP auto-block — store the honeypot / origin_mismatch / probe_* event at info (non-counting); only a direct attack (no such header) counts.' }, async () => {
+    const victim = '198.51.100.44';
+    const forced = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'image' };
+    let blockedAt = 0;
+    for (let i = 1; i <= 40 && !blockedAt; i++) {
+      // exactly what an attacker page forces the victim's browser to emit: a bait path, or an injection string in a GET URL
+      const r = i % 2 === 0
+        ? await request(s, 'api/trap.php?p=/wp-login.php', { xff: victim, headers: forced })
+        : await request(s, 'api/time.php?q=' + encodeURIComponent("' OR '1'='1"), { xff: victim, headers: forced });
+      if (r.status === 403 && r.error && r.error.code === 'IP_BLOCKED') blockedAt = i;
+    }
+    assert(!blockedAt, `the victim's address was auto-blocked at request ${blockedAt} by forced cross-site requests`);
+    const ok = await request(s, 'api/time.php', { xff: victim });
+    assert(ok.status === 200, `the victim's own ordinary request → ${ok.status} ${(ok.error && ok.error.code) || ''}`);
+    const ev = events(s);
+    assert(!ev.error && ev.some((e) => e.ip === victim && ['honeypot', 'probe_sqli'].includes(e.kind)), 'the forced cross-site requests left no security_events row (they must stay visible, just non-counting)');
+    return '40 forced cross-site requests → not blocked; victim still served; events kept (info)';
+  });
   // CONTRACT §15.7 #5 — bait paths inside the install folder are answered 403 / 404
   await check('S05', 'bait paths give nothing away on the built-in server (403 / 404; a folder URL only gets the public start page)', { sev: 'low', fix: 'Nothing to fix while these stay 403 / 404.' }, async () => {
     const m = await srv('main');
