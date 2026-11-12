@@ -1982,6 +1982,29 @@ async function S09() {
     const c = await anon(s);
     return judge(await hammer(64, (i) => login(c, `nobody${i}_${RUN}@example.com`, `Wrong${i}pass9`)), 'login (many accounts)', 64);
   });
+  // CONTRACT §15.7 #9 — the account-wide lock (one account attacked from many addresses) must not let anyone deny a
+  // named account (or the admin) sign-in: the real owner, with the correct password from an address that never failed,
+  // must still get in; wrong guesses are still slowed once the account is under a genuine distributed attack.
+  await check('S09', 'account lockout cannot deny the owner: after many-IP wrong guesses the correct password from a clean address still signs in', { sev: 'medium', fix: 'Apply the account-wide lock only to a failed guess (never before the password is verified) and only over distinct source addresses; a correct credential from an address with no recent failures is never refused by it.' }, async () => {
+    const fw = await srv('fw');
+    const owner = await newUser(fw, 'Own', { xff: '198.51.100.230' });    // registered + logged in from its own address
+    // 16 distinct addresses each send one wrong password for this account (distributed guessing; account_max = 15)
+    let saw401 = 0;
+    for (let i = 0; i < 16; i++) {
+      const atk = await anon(fw, { xff: `198.51.100.${150 + i}` });
+      const r = await login(atk, owner.email, `Wrong${i}pass9`);
+      if (r.status === 401) saw401++;
+    }
+    assert(saw401 >= 10, `the many-IP guesses were not treated as wrong-password (401) — saw ${saw401}/16`);
+    // a fresh wrong guess is still refused (the account is under attack) …
+    const guess = await login(await anon(fw, { xff: '198.51.100.240' }), owner.email, 'StillWrong9x');
+    assert([401, 429].includes(guess.status), `a fresh wrong guess → ${guess.status}`);
+    // … but the real owner, with the correct password, from a clean address that never failed, must get in
+    const ok = await login(await anon(fw, { xff: '198.51.100.241' }), owner.email, PASSWORD);
+    assert(ok.status === 200 && ok.data && ok.data.user, `the owner's correct password from a clean address → ${ok.status} ${(ok.error && ok.error.code) || ''}`);
+    await stopServer('fw');
+    return `16 many-IP guesses (${saw401} × 401); owner still signs in; a fresh guess → ${guess.status}`;
+  });
   // … register
   await check('S09', 'register: one browser is limited within 21 attempts (429 + Retry-After)', { sev: 'medium', fix: FIX }, async () => {
     const c = await anon(s);

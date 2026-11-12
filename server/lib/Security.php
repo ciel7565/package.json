@@ -143,6 +143,16 @@ final class LoginThrottle
      */
     public static function check(string $login): int
     {
+        return max(self::ipWait($login), self::accountWait($login));
+    }
+
+    /**
+     * The lock-outs tied to the REQUESTER's own address: per ip+account (this address guessing this account) and per
+     * ip (this address stuffing many accounts). Both punish only the abusive address itself, so attemptLogin applies
+     * them before the password is even checked — a stranger at a clean address is never affected. Seconds to wait.
+     */
+    public static function ipWait(string $login): int
+    {
         $c = (array) Config::get('login', []);
         $now = Clock::ms();
         $since = $now - (int) (isset($c['window']) ? $c['window'] : 900) * 1000;
@@ -152,13 +162,6 @@ final class LoginThrottle
         // per ip + account
         $rows = Db::all('SELECT created_at FROM login_attempts WHERE ip_hash = ? AND account_key = ? AND success = 0 AND created_at > ? ORDER BY created_at DESC LIMIT 40', [$ip, $acct, $since]);
         $wait = max($wait, self::lockFor(count($rows), isset($rows[0]['created_at']) ? $rows[0]['created_at'] : 0, (int) (isset($c['max_failures']) ? $c['max_failures'] : 5), $c, $now));
-        // per account (any ip)
-        $n = (int) Db::value('SELECT COUNT(*) FROM login_attempts WHERE account_key = ? AND success = 0 AND created_at > ?', [$acct, $since]);
-        $accountMax = (int) (isset($c['account_max']) ? $c['account_max'] : 15);
-        if ($n >= $accountMax) {
-            $last = (int) Db::value('SELECT MAX(created_at) FROM login_attempts WHERE account_key = ? AND success = 0', [$acct]);
-            $wait = max($wait, self::lockFor($n, $last, $accountMax, $c, $now));
-        }
         // per ip (any account)
         $n = (int) Db::value('SELECT COUNT(*) FROM login_attempts WHERE ip_hash = ? AND success = 0 AND created_at > ?', [$ip, $since]);
         if ($n >= (int) (isset($c['ip_max_failures']) ? $c['ip_max_failures'] : 30)) {
@@ -166,6 +169,29 @@ final class LoginThrottle
             $wait = max($wait, (int) ceil(($last + (int) (isset($c['ip_lock']) ? $c['ip_lock'] : 900) * 1000 - $now) / 1000));
         }
         return max(0, $wait);
+    }
+
+    /**
+     * The account-wide lock-out: one account guessed from MANY addresses (distributed guessing). It must never be a
+     * tool to deny a named account — or the admin — sign-in (CONTRACT §15.7 #9), so it is deliberately narrow:
+     *   - it is counted over DISTINCT source addresses, so a handful of addresses (or one rotating a header) cannot
+     *     trip it; a genuine botnet with many addresses still can;
+     *   - attemptLogin consults it ONLY after a wrong password, never before — so a request that presents the correct
+     *     credential (the real owner, from any address) is never refused by it.
+     * Seconds to wait (0 = allowed).
+     */
+    public static function accountWait(string $login): int
+    {
+        $c = (array) Config::get('login', []);
+        $now = Clock::ms();
+        $since = $now - (int) (isset($c['window']) ? $c['window'] : 900) * 1000;
+        $acct = Sec::hashId('acct:' . mb_strtolower($login));
+        $accountMax = (int) (isset($c['account_max']) ? $c['account_max'] : 15);
+        $distinct = (int) Db::value('SELECT COUNT(DISTINCT ip_hash) FROM login_attempts WHERE account_key = ? AND success = 0 AND created_at > ?', [$acct, $since]);
+        if ($distinct < $accountMax) return 0;
+        $n = (int) Db::value('SELECT COUNT(*) FROM login_attempts WHERE account_key = ? AND success = 0 AND created_at > ?', [$acct, $since]);
+        $last = (int) Db::value('SELECT MAX(created_at) FROM login_attempts WHERE account_key = ? AND success = 0', [$acct]);
+        return self::lockFor($n, $last, $accountMax, $c, $now);
     }
 
     /** @param int|string $lastAt */

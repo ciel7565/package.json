@@ -196,7 +196,12 @@ final class Auth
         if ($pw === '') throw new ApiException(400, 'PASSWORD_REQUIRED', '비밀번호를 입력해 주세요.');
         if (mb_strlen($login) > 120 || strlen($pw) > 512) throw new ApiException(400, 'INVALID_CREDENTIALS', '아이디 또는 비밀번호가 올바르지 않아요.');
         $login = mb_strtolower($login);
-        $wait = LoginThrottle::check($login);
+        // The requester-address lock-outs (ip+account, ip-across-accounts) run first: they only ever slow the abusive
+        // address itself, so applying them before the password is verified is safe. The account-wide lock (one account
+        // guessed from many addresses) is NOT applied here — it would let anyone deny a named account (or the admin)
+        // sign-in; it is consulted only after a wrong password below, so the real owner's correct credential always
+        // gets through (CONTRACT §15.7 #9).
+        $wait = LoginThrottle::ipWait($login);
         if ($wait > 0) {
             Audit::log('login_locked', null, ['wait' => $wait], 'warn');
             // CONTRACT §15.7 #5: a lock-out is a security event. Not attack-like — the login throttle already handles the
@@ -210,6 +215,14 @@ final class Auth
             LoginThrottle::record($login, false);
             Audit::log('login_failed', $u ? (int) $u['id'] : null, ['known' => (bool) $u], 'info');
             if ($ok && $u && $u['status'] === 'banned') throw new ApiException(403, 'ACCOUNT_BANNED', '이용이 정지된 계정이에요. 운영자에게 문의해 주세요.');
+            // the account is under distributed guessing (many distinct addresses): slow further WRONG guesses. This is
+            // reached only on a failed password, so it never refuses the owner's correct one from a clean address.
+            $acctWait = LoginThrottle::accountWait($login);
+            if ($acctWait > 0) {
+                Audit::log('login_locked', $u ? (int) $u['id'] : null, ['wait' => $acctWait, 'scope' => 'account'], 'warn');
+                if (class_exists('Tfm\SecEvent')) SecEvent::log('login_locked', 'warn', ['wait' => $acctWait, 'scope' => 'account']);
+                throw new ApiException(429, 'TOO_MANY_ATTEMPTS', "이 계정에 로그인 시도가 너무 많아요. {$acctWait}초 후에 다시 시도해 주세요.", ['retryAfter' => $acctWait], ['Retry-After: ' . $acctWait]);
+            }
             $left = LoginThrottle::remaining($login);
             $hint = $left <= 2 ? ($left > 0 ? " (남은 시도 {$left}회)" : ' (잠시 후 다시 시도해 주세요)') : '';
             throw new ApiException(401, 'INVALID_CREDENTIALS', '아이디(닉네임·이메일) 또는 비밀번호가 올바르지 않아요.' . $hint, ['attemptsLeft' => $left]);
