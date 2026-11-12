@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // =============================================================================
-// 전통발효체험관 메타버스 — moderation reaches the players who are online (admin.php → chat/list.php)
+// 전통발효체험관 메타버스 — moderation reaches the players who are online (the admin site → chat/list.php)
 //
 //   node tests/server-moderation.mjs                  spawn `php -S` over server/ with a throw-away data dir
 //   node tests/server-moderation.mjs --root <dir>     the same over another install folder (e.g. dist/metaverse)
 //
-// The first admin is made from localhost (admin.php bootstrap). A stranger posts a line that a child already
-// received; the admin hides it. The child's next poll (chat/list.php?after=<last id>&rafter=<retraction cursor>)
-// must tell it to take the line back. Exits 1 when a check fails.
+// The first admin is made with `php cli/tfm.php promote` (the phase-6 localhost bootstrap is gone — finding F4) and
+// signs in at the admin site, whose address me.php gives to admins (its own sign-in: CONTRACT §15.4; the old admin.php
+// is a 404). A stranger posts a line that a child already received; the admin hides it. The child's next poll
+// (chat/list.php?after=<last id>&rafter=<retraction cursor>) must tell it to take the line back. Exits 1 when a check fails.
 // =============================================================================
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -31,14 +32,15 @@ function check(name, ok, detail = '') {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class Client {
-  constructor(base) { this.base = base; this.jar = new Map(); this.csrf = null; this.lastId = 0; this.rafter = 0; }
-  async req(p, { json, form } = {}) {
-    const headers = { Accept: form ? 'text/html' : 'application/json', 'User-Agent': 'tfm-moderation-test' };
+  constructor(base) { this.base = base; this.site = null; this.jar = new Map(); this.csrf = null; this.lastId = 0; this.rafter = 0; }
+  /** p is relative to the install folder — or, with { inSite: true }, to the admin folder (its links and redirects are "./?tab=…") */
+  async req(p, { json, form, inSite } = {}) {
+    const headers = { Accept: form || inSite ? 'text/html' : 'application/json', 'User-Agent': 'tfm-moderation-test' };
     if (this.jar.size) headers.Cookie = [...this.jar].map(([k, v]) => `${k}=${v}`).join('; ');
     let body;
     if (json !== undefined) { headers['Content-Type'] = 'application/json'; if (this.csrf) headers['X-CSRF-Token'] = this.csrf; body = JSON.stringify(json); }
     else if (form) { headers['Content-Type'] = 'application/x-www-form-urlencoded'; body = new URLSearchParams(form).toString(); }
-    const res = await fetch(new URL(p, this.base), { method: body !== undefined ? 'POST' : 'GET', headers, body, redirect: 'manual' });
+    const res = await fetch(new URL(p, inSite ? this.site : this.base), { method: body !== undefined ? 'POST' : 'GET', headers, body, redirect: 'manual' });
     for (const line of res.headers.getSetCookie?.() || []) {
       const [pair] = line.split(';');
       const i = pair.indexOf('=');
@@ -54,13 +56,29 @@ class Client {
     await this.req('api/ping.php');
     return this.req('api/auth/register.php', { json: { email: `${tag}@example.com`, nickname: tag, password: 'Ongi2026kid', password_confirm: 'Ongi2026kid', agree: true } });
   }
-  /** one admin.php form post (fresh CSRF token from the page) → the flash message shown after the redirect */
-  async admin(fields) {
-    const pg = await this.req('admin.php?tab=moderation');
+  /**
+   * The admin site's own sign-in (CONTRACT §15.4): its address from me.php (admins only), the sign-in form's token, the
+   * password — 2-step sign-in is "optional" and not enrolled here — then the dashboard. Sets this.site (absolute URL).
+   */
+  async signInAdmin(login) {
+    const me = await this.req('api/auth/me.php');
+    const rel = typeof me.j?.data?.adminUrl === 'string' && me.j.data.adminUrl ? me.j.data.adminUrl : '';
+    if (!rel) throw new Error(`setup: me.php gave the admin no adminUrl (HTTP ${me.status}, role ${me.j?.data?.user?.role})`);
+    this.site = new URL(rel, this.base).href;
+    const pg = await this.req('./', { inSite: true });
     const tok = (pg.text.match(/name="_csrf" value="([0-9a-f]+)"/) || [])[1];
-    if (!tok) throw new Error(`admin.php gave no form token (HTTP ${pg.status})`);
-    const r = await this.req('admin.php', { form: { tab: 'moderation', _csrf: tok, ...fields } });
-    const page = await this.req(r.location || 'admin.php');
+    if (!tok) throw new Error(`setup: the admin site gave no sign-in form (HTTP ${pg.status})`);
+    const r = await this.req('./', { form: { action: 'login', login, password: 'Ongi2026kid', _csrf: tok }, inSite: true });
+    const home = await this.req(r.location || './', { inSite: true });
+    if (r.status !== 303 || !/<nav class="tabs"/.test(home.text)) throw new Error(`setup: admin site sign-in failed (POST ${r.status}, then HTTP ${home.status})`);
+  }
+  /** one admin-site form post (fresh CSRF token from the page) → the flash message shown after the redirect */
+  async admin(fields) {
+    const pg = await this.req('./?tab=moderation', { inSite: true });
+    const tok = (pg.text.match(/name="_csrf" value="([0-9a-f]+)"/) || [])[1];
+    if (!tok) throw new Error(`the admin site gave no form token (HTTP ${pg.status})`);
+    const r = await this.req('./', { form: { tab: 'moderation', _csrf: tok, ...fields }, inSite: true });
+    const page = await this.req(r.location || './', { inSite: true });
     return (page.text.match(/<div class="flash [^"]*" role="status">([^<]*)<\/div>/) || [])[1] || `(no message, HTTP ${r.status})`;
   }
   /** the game's chat poll: history first (after=0), then both cursors (messages after lastId, retractions after rafter) */
@@ -89,9 +107,12 @@ async function setup() {
   for (let i = 0; i < 50; i++) { try { if ((await fetch(base + 'api/ping.php')).ok) break; } catch { /* not up yet */ } await sleep(100); }
   const adm = new Client(base), kid = new Client(base), evil = new Client(base);
   await adm.register(`adm${tag}`);
-  await adm.admin({ action: 'login', login: `adm${tag}`, password: 'Ongi2026kid' });
-  const boot = await adm.admin({ action: 'bootstrap' });
-  if (!/첫 관리자/.test(boot)) throw new Error(`setup: first admin from localhost failed (${boot})`);
+  // the first admin: `php cli/tfm.php promote` on the server computer (it signs the account out everywhere: log in again)
+  const pr = spawnSync('php', [path.join(DOCROOT, 'cli/tfm.php'), 'promote', `adm${tag}@example.com`], { env: { ...process.env, TFM_DATA_DIR: data }, encoding: 'utf8' });
+  if (pr.status !== 0) throw new Error(`setup: cli promote failed (${(pr.stderr || pr.stdout || '').slice(0, 200)})`);
+  const lg = await adm.req('api/auth/login.php', { json: { login: `adm${tag}`, password: 'Ongi2026kid', remember: false } });
+  if (lg.j?.data?.user?.role !== 'admin') throw new Error(`setup: the promoted account is not an admin after logging in again (HTTP ${lg.status})`);
+  await adm.signInAdmin(`adm${tag}`);
   await kid.register(`kid${tag}`);
   await evil.register(`evil${tag}`);
   await kid.poll();
@@ -114,7 +135,7 @@ try {
   const banned = await kid.poll();
   const banOk = (banned.retracted?.users || []).includes(evilId);
   check('the lines of a banned account are taken back on the next poll', banOk,
-    banOk ? '' : `expected data.retracted.users to hold "${evilId}" after admin.php banned that account; received: ${JSON.stringify(banned.retracted ?? null)}`);
+    banOk ? '' : `expected data.retracted.users to hold "${evilId}" after the admin site banned that account; received: ${JSON.stringify(banned.retracted ?? null)}`);
   // three different children report one line: it is hidden automatically — and taken back like an admin's hide
   const rude = new Client(base);
   await rude.register(`rude${tag}`);
@@ -137,7 +158,7 @@ try {
   const fr = await framer.req('api/chat/report.php', { json: { target: `kid${tag}`, reason: 'abuse', text: framed } });
   const rep = fr.j?.data?.reportId;
   if (!rep) throw new Error(`setup: the report was not filed (${fr.status} ${JSON.stringify(fr.j?.error ?? null)})`);
-  const q = await adm.req('admin.php?tab=moderation');
+  const q = await adm.req('./?tab=moderation', { inSite: true });
   const row = (q.text.match(new RegExp(`<tr><td>${rep}</td>[\\s\\S]*?</tr>`)) || [])[0] || '';
   const msgCell = (row.match(/<td class="msg">([\s\S]*?)<\/td>/) || [])[1] ?? null;
   const frameOk = !!row && msgCell !== null && !msgCell.includes(framed) && row.includes('확인 안 됨');
@@ -153,7 +174,7 @@ try {
     const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, userAgent: 'tfm-moderation-test', locale: 'ko-KR' });
     await ctx.addCookies([...adm.jar].map(([name, value]) => ({ name, value, domain: '127.0.0.1', path: '/' })));
     const page = await ctx.newPage();
-    await page.goto(base + 'admin.php?tab=moderation', { waitUntil: 'load' });
+    await page.goto(new URL('./?tab=moderation', adm.site).href, { waitUntil: 'load' });
     const lay = await page.evaluate(() => {
       const t = document.querySelector('.tablewrap');
       const box = t.getBoundingClientRect();
@@ -167,7 +188,7 @@ try {
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: 'tfm-moderation-test', locale: 'ko-KR' });
     await phone.addCookies([...adm.jar].map(([name, value]) => ({ name, value, domain: '127.0.0.1', path: '/' })));
     const pp = await phone.newPage();
-    await pp.goto(base + 'admin.php?tab=moderation', { waitUntil: 'load' });
+    await pp.goto(new URL('./?tab=moderation', adm.site).href, { waitUntil: 'load' });
     const ph = await pp.evaluate(() => {
       const one = (el) => { const r = el.getBoundingClientRect(), lh = parseFloat(getComputedStyle(el).lineHeight) || 20; return r.height <= lh * 1.6 + 20; };
       const btns = [...document.querySelectorAll('.tablewrap .btn')];
@@ -200,9 +221,9 @@ try {
     { env: { ...process.env, TFM_DATA_DIR: data }, encoding: 'utf8' });
   if (fill.status !== 0) throw new Error(`setup: audit rows not written (${fill.stderr || fill.stdout})`);
   const seen = [];
-  let next = 'admin.php?tab=audit&ev=test_fill', pages = 0;
+  let next = './?tab=audit&ev=test_fill', pages = 0;
   while (next && pages < 5) {
-    const pg = await adm.req(next);
+    const pg = await adm.req(next, { inSite: true });
     pages++;
     for (const m of pg.text.matchAll(/<tr><td>(\d+)<\/td><td>[^<]*<\/td><td>([a-z_]+)<\/td>(?:<td>[^<]*<\/td>){4}<td>([^<]*)<\/td><\/tr>/g)) {
       seen.push({ id: +m[1], ev: m[2], n: +((m[3].match(/n&quot;:(\d+)/) || [])[1] ?? -1) });
@@ -231,7 +252,7 @@ try {
   const p2 = (await kid.req('api/presence/update.php', { json: here })).j?.data?.mutedUntil;
   const presOk = Math.abs(p1 - until) < 1000 && p2 === 0;
   check('presence tells the game its own mute end (and 0 once a grown-up lifts it)', presOk,
-    presOk ? '' : `expected data.mutedUntil ≈ ${until} while muted, then 0 after admin.php lifted it; received: ${p1}, then ${JSON.stringify(p2)}`);
+    presOk ? '' : `expected data.mutedUntil ≈ ${until} while muted, then 0 after the admin site lifted it; received: ${p1}, then ${JSON.stringify(p2)}`);
 } catch (e) {
   check('moderation scenario ran', false, e?.message || String(e));
 } finally {
