@@ -379,6 +379,16 @@ async function main() {
       assert(/HttpOnly/i.test(sc) && /SameSite=Lax/i.test(sc), `session cookie flags: ${sc}`);
       return 'headers ok · admin.css static, no url() / @import';
     });
+    await step('S06', 'finding F15: a visitor sees no app version, database driver or PHP version on the sign-in page — not even in the stylesheet address', async () => {
+      const version = (fs.readFileSync(path.join(SRC, 'lib/bootstrap.php'), 'utf8').match(/define\('TFM_VERSION', '([^']+)'\)/) || [])[1];
+      assert(version, 'TFM_VERSION not found in lib/bootstrap.php');
+      const r = await new Browser(srv.base).req(ADM);
+      assert(r.status === 200, `sign-in page → ${r.status}`);
+      assert(!r.text.includes(version), `the sign-in page carries the app version ${version}: ${(r.text.match(new RegExp(`.{0,40}${version.replace(/\./g, '\\.')}.{0,10}`)) || [''])[0]}`);
+      assert(!/\b(?:sqlite|mysql|mariadb|pdo_\w+)\b/i.test(r.text), `the sign-in page names the database driver: ${(r.text.match(/.{0,30}\b(?:sqlite|mysql|mariadb|pdo_\w+)\b.{0,10}/i) || [''])[0]}`);
+      assert(!/\bPHP\/?\s?\d+\.\d+/i.test(r.text) && !r.headers.get('x-powered-by'), 'the sign-in page reveals the PHP version');
+      return `no "${version}", no driver name, no PHP version`;
+    });
     await step('S06', 'finding F9: visits without a session (no cookie, or a made-up session cookie) create no session file — the sign-in form carries a stateless token', async () => {
       const dir = path.join(main1.data, 'sessions');
       const count = () => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.startsWith('sess_')).length : 0);

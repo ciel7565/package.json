@@ -721,11 +721,33 @@ function actor(s, key, o = {}) {
         }
         c.user = lg.data.user;
         c.admin = true;
+        await elevateAdmin(c);
       }
       return c;
     })();
   }
   return s.actors[key];
+}
+/**
+ * CONTRACT §15.4 (d): the admin area needs its own sign-in — an app login alone gets 403 ADMIN_REAUTH from api/admin/*.php
+ * (the admin agent's lock; tests/admin-lock.mjs proves the refusal). So an admin account signs in at the admin site once,
+ * like a real administrator (password; 2-step sign-in is "optional" and not enrolled here), which elevates its session for
+ * the health / stats checks below. Best effort: where it cannot (2-step "required", no admin site in this build) the
+ * client stays as it was. The sign-in rotates the session id and token, so me.php is read again for the new token.
+ */
+async function elevateAdmin(c) {
+  try {
+    const me = await c.req('api/auth/me.php');
+    const site = me.data && typeof me.data.adminUrl === 'string' && me.data.adminUrl ? me.data.adminUrl.replace(/^\//, '') : 'admin/';
+    const page = await c.req(site, { headers: HTML });
+    const form = parseForms(page.text).find((f) => f.method === 'post' && f.fields.some((x) => x.type === 'password'));
+    if (page.status !== 200 || !form) return false;
+    const values = {};
+    for (const f of form.fields) { if (f.type === 'password') values[f.name] = PASSWORD; else if (f.tag === 'input' && ['text', 'email'].includes(f.type)) values[f.name] = c.email; }
+    await follow(c, await submitForm(c, page.url, form, values));
+    await c.req('api/auth/me.php');
+    return true;
+  } catch { return false; }
 }
 const admin = (s) => actor(s, 'admin', { admin: true });
 
@@ -862,16 +884,19 @@ async function S01() {
   await check('S01', 'MariaDB: the health check flags a root / empty-password runtime account (⛔) and not the least-privilege one', { sev: 'high', fix: 'Health / Inspect: read CURRENT_USER() and SHOW GRANTS; fail for root, an empty password or global privileges, warn for DDL grants.' }, async () => {
     const no = needMaria(my);
     if (no) return no;
-    const flagged = async (s) => {
-      const a = await admin(s);
+    // myroot and myapp share one database (same schema and accounts), so each needs its own admin account: the same
+    // e-mail cannot be registered twice (409 EMAIL_TAKEN) — myroot uses the suite's admin, myapp the second one (admin2)
+    const flagged = async (s, key) => {
+      const a = await actor(s, key, { admin: true });
       const h = await a.req('api/admin/health.php?quick=1');
       assert(h.status === 200 && h.data && Array.isArray(h.data.checks), `api/admin/health.php → ${h.status} ${(h.error && h.error.code) || ''}`);
       return h.data.checks.filter((k) => k.status === 'fail' && DB_ACCOUNT_RX.test(JSON.stringify(k)));
     };
-    const root = await flagged(await srv('myroot'));
+    const root = await flagged(await srv('myroot'), 'admin');
     assert(root.length > 0, `the server runs as ${MY.user}@… ${MY.pass === '' ? 'with an empty password' : ''}: api/admin/health.php has no failing entry about the database account`);
-    const app = await flagged(await srv('myapp'));
-    assert(app.length === 0, `the least-privilege account is flagged as well: ${JSON.stringify(app[0]).slice(0, 160)}`);
+    const app = await flagged(await srv('myapp'), 'admin2');
+    // the message is built before assert() looks at the condition: guard it, or the passing case (app = []) throws a TypeError
+    assert(app.length === 0, `the least-privilege account is flagged as well: ${(JSON.stringify(app[0]) || '').slice(0, 160)}`);
     return `root → ⛔ ${root[0].id}; ${my.user} → no ⛔`;
   });
   // CONTRACT §15.7 #1 — install.php / cli install create a dedicated account and write only that one into config.local.php
@@ -1636,14 +1661,17 @@ async function S06() {
     assert(!isAdminUi(page) && !isAdminUi(await c.req(site, { headers: HTML })), 'a wrong code was accepted');
     form = codeForm(page.text) || codeForm((await c.req(site, { headers: HTML })).text);
     assert(form, 'the code form is gone after a wrong code');
-    await follow(c, await submitForm(c, page.url, form, { [fieldOf(form)]: totp(secret) }));
+    const used = totp(secret);
+    await follow(c, await submitForm(c, page.url, form, { [fieldOf(form)]: used }));
     assert(isAdminUi(await c.req(site, { headers: HTML })), 'the correct TOTP code does not open the admin site');
-    // replay: a second browser with the password and the very same code of this 30-second step
+    // replay: a second browser with the password and the very same code — the string accepted above. Calling totp() again
+    // can land in the next 30-second step and return a new, valid code (which rightly opens the site); the old code is
+    // still inside the ±1 step window there, so resending it is a real replay at any moment
     const c2 = new Client(s2);
     const p2 = await adminSignIn(c2, site, a2.email, PASSWORD);
     const f2 = codeForm(p2.text);
     assert(f2, 'no code form for a second sign-in');
-    await follow(c2, await submitForm(c2, p2.url, f2, { [fieldOf(f2)]: totp(secret) }));
+    await follow(c2, await submitForm(c2, p2.url, f2, { [fieldOf(f2)]: used }));
     assert(!isAdminUi(await c2.req(site, { headers: HTML })), 'the same code was accepted twice within its time step (no replay protection)');
     return 'password → code page; wrong code refused; code accepted once; replay refused';
   });

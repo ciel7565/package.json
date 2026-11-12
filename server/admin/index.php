@@ -107,6 +107,12 @@ function postStr(string $k): string { return isset($_POST[$k]) && is_string($_PO
 function getStr(string $k): string { return isset($_GET[$k]) && is_string($_GET[$k]) ? $_GET[$k] : ''; }
 /** a link inside the admin folder: "./?tab=…" (relative, so the folder can have any name) */
 function href(array $q): string { return './?' . http_build_query(array_filter($q, function ($v) { return $v !== '' && $v !== null; })); }
+/** F15: the stylesheet's cache-buster is a hash of admin.css (a public file anyway), never the app version */
+function cssHref(): string
+{
+    $h = @sha1_file(__DIR__ . '/admin.css');
+    return 'admin.css' . (is_string($h) ? '?v=' . substr($h, 0, 10) : '');
+}
 function redirectTo(string $tab, array $q = [])
 {
     while (ob_get_level() > 0) ob_end_clean();
@@ -941,7 +947,7 @@ function page(Ctx $c, string $tab, string $body, ?array $flash, bool $inside): s
     // F15: nothing about versions or the database for a visitor — only inside
     $meta = $inside ? 'METAVERSE · ' . e(strtoupper(Db::driverSafe())) . ' · v' . e(TFM_VERSION) : 'METAVERSE';
     return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow, noarchive"><meta name="referrer" content="no-referrer">'
-        . '<title>관리자 센터 · 전통발효체험관 메타버스</title><link rel="stylesheet" href="admin.css?v=' . e(TFM_VERSION) . '"></head><body>'
+        . '<title>관리자 센터 · 전통발효체험관 메타버스</title><link rel="stylesheet" href="' . e(cssHref()) . '"></head><body>'
         . '<header class="top"><div class="brand"><span class="logo" aria-hidden="true">🏺</span><div><h1>전통발효체험관 <em>관리자 센터</em></h1><p>' . $meta . '</p></div></div>' . $who . '</header>'
         . $nav . '<main>' . $banner . $fl . $body . '</main><footer>🔒 이 페이지는 스크립트 없이 동작하며 모든 작업은 감사 로그에 기록됩니다. · <a href="../">🏺 체험관으로 돌아가기</a></footer></body></html>';
 }
