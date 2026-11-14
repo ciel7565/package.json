@@ -667,8 +667,12 @@
     });
   }
   const _c = new THREE.Color(), _c2 = new THREE.Color();
+  // [render-assets] what the ground is made of at the last groundColor() point: [rock, worn earth, soil / forest floor,
+  // gravel / sand] 0..1 (the rest is grass). The medium / high terrain shader splats photographed sets with it (§16.2).
+  const SPL = [0, 0, 0, 0];
   /** colour for a vertex with height h, normal y ny, mountain raw height m */
   function groundColor(x, z, h, ny, m, out) {
+    SPL[0] = SPL[1] = SPL[2] = SPL[3] = 0;
     const n1 = N2(x / 55, z / 55), n2 = N2(x / 14 + 11, z / 14 - 3), n3 = N2(x / 4.3, z / 4.3);
     out.copy(C.grassA).lerp(C.grassB, smooth(-0.35, 0.4, n1));
     out.lerp(C.grassC, smooth(0.05, 0.6, n2) * 0.55);
@@ -687,6 +691,7 @@
     let rk = smooth(0.4, 0.62, slope + n2 * 0.12) * (0.35 + 0.65 * mm);
     if (m > 60) rk = Math.max(rk, smooth(0.55, 0.85, N2(x / 22, z / 22) + (m - 60) / 160) * 0.8);
     if (rk > 0) { _c.copy(C.rock).lerp(C.rockB, smooth(-0.4, 0.4, n2)).lerp(C.rockC, smooth(0.2, 0.7, n3) * 0.5); out.lerp(_c, rk); }
+    SPL[0] = rk; SPL[2] = mm * 0.7 * (1 - rk);
     // banks, river bed
     const pr = P.riverD;
     let shore = 1e9, pondShore = 1e9;
@@ -696,27 +701,38 @@
       _c.copy(C.pebble).lerp(C.bed, smooth(WATER_Y + 0.1, WATER_Y - 0.7, h)).lerp(C.bedDeep, smooth(WATER_Y - 0.6, BED_Y, h));
       out.copy(_c);
       out.multiplyScalar(0.9 + n3 * 0.2);
+      SPL[0] = 0; SPL[1] = 0; SPL[2] = 0; SPL[3] = 1;
     } else {
       if (shore < 8 && h < 0.6) {
         const sw = (1 - smooth(3.2, 7.5, shore + n3 * 1.4)) * (1 - P.prot * 0.7);
         _c.copy(C.sand).lerp(C.pebble, smooth(-0.2, 0.5, n2));
         out.lerp(_c, sw);
+        SPL[3] = Math.max(SPL[3], sw);
       }
       if (pondShore < 4 && h < 0.8) { // garden ponds: narrow pebble rim fading into moss
         const sw = (1 - smooth(0.6, 2.4, pondShore + n3 * 0.6)) * (1 - P.prot * 0.6);
         _c.copy(C.pebble).lerp(C.forest, smooth(0.2, 1.8, pondShore) * 0.6);
         out.lerp(_c, sw);
+        SPL[3] = Math.max(SPL[3], sw * 0.8);
       }
     }
     // worn earth along paths and roads
     const pd = Math.min(P.dirtD, P.pathD + 0.4, P.roadD + 0.8);
-    if (pd < 2.4) out.lerp(C.dirt, (1 - smooth(0, 2.2, pd + n3 * 0.5)) * (P.dirtD < 2.4 ? 0.62 : 0.4));
-    if (P.tint && P.tintW > 0) out.lerp(P.tint, P.tintW);
+    if (pd < 2.4) { const wd = (1 - smooth(0, 2.2, pd + n3 * 0.5)) * (P.dirtD < 2.4 ? 0.62 : 0.4); out.lerp(C.dirt, wd); SPL[1] = Math.max(SPL[1], Math.min(1, wd * 1.5)); }
+    if (P.tint && P.tintW > 0) {
+      out.lerp(P.tint, P.tintW);
+      const tw = P.tintW;
+      if (P.tint === COL.soil) SPL[2] = Math.max(SPL[2], tw);
+      else if (P.tint === COL.gravel || P.tint === COL.stone) SPL[3] = Math.max(SPL[3], tw * 0.9);
+      else if (P.tint === COL.dirt) { SPL[1] = Math.max(SPL[1], tw * 0.55); SPL[2] = Math.max(SPL[2], tw * 0.45); }
+      else SPL[1] = Math.max(SPL[1], tw);                       // yards: trodden earth
+    }
     if (falls.length && h > 0.3) {
       const fm = fallMound(x, z);
-      if (fm > 0.3) { _c.copy(C.rockB).lerp(C.forest, 0.35 + 0.4 * smooth(-0.2, 0.5, n3)).lerp(C.grassC, smooth(0.1, 0.6, n2) * 0.35); out.lerp(_c, smooth(0.3, 1.2, fm) * 0.92); }
+      if (fm > 0.3) { _c.copy(C.rockB).lerp(C.forest, 0.35 + 0.4 * smooth(-0.2, 0.5, n3)).lerp(C.grassC, smooth(0.1, 0.6, n2) * 0.35); out.lerp(_c, smooth(0.3, 1.2, fm) * 0.92); SPL[0] = Math.max(SPL[0], smooth(0.3, 1.2, fm) * 0.8); }
     }
     out.multiplyScalar(0.94 + n3 * 0.09);
+    { const sum = SPL[0] + SPL[1] + SPL[2] + SPL[3]; if (sum > 1) { SPL[0] /= sum; SPL[1] /= sum; SPL[2] /= sum; SPL[3] /= sum; } }
     return out;
   }
 
@@ -896,9 +912,126 @@ float terrainH(vec2 p) {
 }
 `;
 
-  /** path material: world/along UV texture with ragged, rounded edges (discard) */
-  function ribbonMaterial(map, { units = 2, rough = 0.95, rag = 0.32, color = 0xffffff, edgeDark = 0 } = {}) {
-    const m = new THREE.MeshLambertMaterial({ map, color, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -units });
+  // ---------------------------------------------------------------- photographed terrain (medium / high) [render-assets]
+  // MeshStandardMaterial (so the sky lights it: IBL) whose albedo is the vertex colour — the valley's colour design —
+  // times a detail layer splatted from five photographed sets by the per-vertex weights `aSplat` (rock, worn earth,
+  // soil / forest floor, gravel; the rest is grass). Every photograph is divided by its own average, so the layer has
+  // mean 1 and only adds what the flat colour lacked: blades, crumbs, pebbles, facets. World-space UVs; each set is
+  // sampled at two scales and far away the large scale takes over, so no tile grid shows from the 만장대 lookout.
+  // Detail normals of soil, gravel and rock bend the lighting near the camera and fade out with distance.
+  const TERRAIN_SETS = ['grass', 'yard_dirt_path', 'field_soil', 'gravel', 'granite_stone'];
+  /** the plain terrain of `low` (and of builds without the pack): vertex colours x a two-scale procedural detail */
+  function terrainLambertMaterial() {
+    const detail = grassDetailTexture();
+    detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detail });
+    mat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
+        #ifdef USE_MAP
+          vec3 tfA = texture2D(map, vMapUv).rgb;
+          vec3 tfB = texture2D(map, vMapUv * 0.231 + vec2(0.37, 0.71)).rgb;
+          diffuseColor.rgb *= mix(tfA, tfB, 0.45) * 1.27;
+        #endif`);
+    };
+    mat.customProgramCacheKey = () => 'tf-terrain';
+    return mat;
+  }
+  /** lite = `medium`: worn earth, soil and gravel are sampled at one scale (10 texture reads instead of 13) */
+  function terrainPbrMaterial(lite) {
+    const P = G.pack, S = G.mat.sets;
+    const two = (smp, tile, k, off, mixv) => lite
+      ? `texture2D(${smp}, tfP * ${tile}).rgb`
+      : `mix(texture2D(${smp}, tfP * ${tile}).rgb, texture2D(${smp}, tfP * ${tile} * ${k} + vec2(${off})).rgb, ${mixv})`;
+    const aniso = G.sys.engine?.preset?.aniso ?? ((G.sys.engine?.quality || 'high') === 'high' ? 8 : 4);
+    const tex = (name, pr) => P.texture(name, { anisotropy: aniso, priority: pr });
+    const gain = (set) => { const a = G.mat._avgLin(set); return new THREE.Vector3(1 / Math.max(a[0], 1e-3), 1 / Math.max(a[1], 1e-3), 1 / Math.max(a[2], 1e-3)); };
+    const U = {
+      tfGrass: { value: tex(S.grass.c, 0) }, tfDirt: { value: tex(S.yard_dirt_path.c, 0) }, tfSoil: { value: tex(S.field_soil.c, 0) },
+      tfGravel: { value: tex(S.gravel.c, 1) }, tfRock: { value: tex(S.granite_stone.c, 1) },
+      tfSoilN: { value: tex(S.field_soil.n, 2) }, tfGravelN: { value: tex(S.gravel.n, 3) }, tfRockN: { value: tex(S.granite_stone.n, 3) },
+      tfGainGrass: { value: gain('grass') }, tfGainDirt: { value: gain('yard_dirt_path') }, tfGainSoil: { value: gain('field_soil') },
+      tfGainGravel: { value: gain('gravel') }, tfGainRock: { value: gain('granite_stone') },
+      // repeats per metre: grass, worn earth, soil, gravel · rock
+      tfTile: { value: new THREE.Vector4(1 / 2.3, 1 / 2.6, 1 / 1.7, 1 / 1.6) }, tfRockTile: { value: 1 / 3.2 },
+      tfDetail: { value: 1.0 }, tfNormal: { value: 1.0 },
+    };
+    const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+    m.userData.tf = U;
+    m.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, U);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute vec4 aSplat;\nvarying vec4 vTfSplat;\nvarying vec3 vTfW;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTfSplat = aSplat;\nvTfW = (modelMatrix * vec4(position, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec4 vTfSplat; varying vec3 vTfW;
+          uniform sampler2D tfGrass; uniform sampler2D tfDirt; uniform sampler2D tfSoil; uniform sampler2D tfGravel; uniform sampler2D tfRock;
+          uniform sampler2D tfSoilN; uniform sampler2D tfGravelN; uniform sampler2D tfRockN;
+          uniform vec3 tfGainGrass; uniform vec3 tfGainDirt; uniform vec3 tfGainSoil; uniform vec3 tfGainGravel; uniform vec3 tfGainRock;
+          uniform vec4 tfTile; uniform float tfRockTile; uniform float tfDetail; uniform float tfNormal;
+          ${GLSL_NOISE}`)
+        .replace('#include <map_fragment>', `
+          vec2 tfP = vTfW.xz;
+          float tfDist = length(vViewPosition);
+          float tfFar = smoothstep(16.0, 85.0, tfDist);
+          float tfNa = tfNoise(tfP * 0.043), tfNb = tfNoise(tfP * 0.29 + 17.0), tfNc = tfNoise(tfP * 1.9 + 5.0);
+          // layer weights: sharpened by a noise so that grass ends in ragged edges, not in the 1.25 m vertex ramp
+          vec4 tfW = clamp((vTfSplat - 0.5) * 2.4 + 0.5 + (vec4(tfNb, tfNc, tfNb, tfNc) - 0.5) * 0.7 * step(0.02, vTfSplat) * step(vTfSplat, vec4(0.98)), 0.0, 1.0);
+          float tfSum = tfW.x + tfW.y + tfW.z + tfW.w;
+          if (tfSum > 1.0) tfW /= tfSum;
+          float tfWg = 1.0 - min(tfSum, 1.0);
+          float tfMixG = clamp(tfFar * 0.85 + (tfNb - 0.5) * 0.6, 0.0, 1.0);
+          vec3 tfG = mix(texture2D(tfGrass, tfP * tfTile.x).rgb, texture2D(tfGrass, tfP * tfTile.x * 0.27 + vec2(0.37, 0.71)).rgb, tfMixG) * tfGainGrass;
+          vec3 tfD = ${two('tfDirt', 'tfTile.y', '0.31', '0.13, 0.57', 'tfFar * 0.8')} * tfGainDirt;
+          vec3 tfS = ${two('tfSoil', 'tfTile.z', '0.29', '0.51, 0.23', 'tfFar * 0.8')} * tfGainSoil;
+          vec3 tfV = ${two('tfGravel', 'tfTile.w', '0.33', '0.71, 0.19', 'tfFar * 0.8')} * tfGainGravel;
+          vec3 tfR = mix(texture2D(tfRock, tfP * tfRockTile).rgb, texture2D(tfRock, tfP * tfRockTile * 0.23 + vec2(0.29, 0.83)).rgb, 0.35 + tfFar * 0.5) * tfGainRock;
+          // dry, yellower patches and darker damp patches in the grass (low frequency)
+          tfG *= mix(vec3(1.0), vec3(1.12, 1.05, 0.84), smoothstep(0.56, 0.86, tfNa) * 0.45) * (0.90 + 0.20 * tfNoise(tfP * 0.11 + 31.0));
+          vec3 tfLayer = tfG * tfWg + tfR * tfW.x + tfD * tfW.y + tfS * tfW.z + tfV * tfW.w;
+          diffuseColor.rgb *= mix(vec3(1.0), clamp(tfLayer, 0.2, 2.4), tfDetail);`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+          roughnessFactor = clamp(0.94 * tfWg + 0.80 * tfW.x + 0.96 * tfW.y + 0.98 * tfW.z + 0.86 * tfW.w - (dot(tfLayer, vec3(0.3333)) - 1.0) * 0.12, 0.3, 1.0);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          {
+            float tfNf = (1.0 - smoothstep(28.0, 105.0, tfDist)) * tfNormal;
+            vec2 tfDn = (texture2D(tfSoilN, tfP * tfTile.z).xy * 2.0 - 1.0) * (tfW.z * 1.0 + tfW.y * 0.55 + tfWg * 0.5)
+                      + (texture2D(tfGravelN, tfP * tfTile.w).xy * 2.0 - 1.0) * tfW.w
+                      + (texture2D(tfRockN, tfP * tfRockTile).xy * 2.0 - 1.0) * tfW.x * 1.4;
+            vec3 tfNw = inverseTransformDirection(normal, viewMatrix);
+            tfNw = normalize(tfNw + vec3(tfDn.x, 0.0, tfDn.y) * tfNf);
+            normal = normalize((viewMatrix * vec4(tfNw, 0.0)).xyz);
+          }`);
+    };
+    m.customProgramCacheKey = () => 'tf-terrain-pbr1' + (lite ? 'l' : '');
+    return m;
+  }
+
+  // [render-assets] ---- photographed sets on what lies on the ground (medium / high; `low` keeps the Lambert look)
+  const groundSet = (set) => !!(G.mat && G.mat.usable && G.mat.usable(set));
+  /** average colour (sRGB 0..255) of a painted canvas texture: the look a photographed set has to keep */
+  function texLook(tex) {
+    try {
+      const c = document.createElement('canvas'); c.width = c.height = 16;
+      const x = c.getContext('2d', { willReadFrequently: true });
+      x.drawImage(tex.image, 0, 0, 16, 16);
+      const d = x.getImageData(0, 0, 16, 16).data;
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+      const n = d.length / 4;
+      return [r / n, g / n, b / n];
+    } catch (e) { return null; }
+  }
+  function applySet(m, set, opt) {
+    try { G.mat.apply(m, set, opt); } catch (e) { G.log.warn('WORLD', `ground set ${set} failed`, e); }
+    return m;
+  }
+  /** path material: world/along UV texture with ragged, rounded edges (discard); `set` = photographed set (uvUnit =
+   *  metres per UV unit of the ribbon) */
+  function ribbonMaterial(map, { units = 2, rough = 0.95, rag = 0.32, color = 0xffffff, edgeDark = 0, set = null, setOpt = null } = {}) {
+    const pbr = !!set && groundSet(set);
+    const base = { map, color, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -units };
+    const m = pbr ? new THREE.MeshStandardMaterial({ ...base, roughness: rough, metalness: 0 }) : new THREE.MeshLambertMaterial(base);
     m.onBeforeCompile = (sh) => {
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nattribute vec2 aEdge;\nvarying vec2 vEdge;\nvarying vec2 vWXZ;')
@@ -913,6 +1046,7 @@ float terrainH(vec2 p) {
         `);
     };
     m.customProgramCacheKey = () => `tf-ribbon-${rag}-${edgeDark}`;
+    if (pbr) applySet(m, set, { look: (map && texLook(map)) || undefined, ...(setOpt || {}) });
     return m;
   }
 
@@ -1162,19 +1296,25 @@ float terrainH(vec2 p) {
 
       // ------------------------------------------------ terrain meshes
       this._colors = { core: null, outer: null };
-      const detail = grassDetailTexture();
-      detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
-      const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detail });
-      mat.onBeforeCompile = (sh) => {
-        sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
-          #ifdef USE_MAP
-            vec3 tfA = texture2D(map, vMapUv).rgb;
-            vec3 tfB = texture2D(map, vMapUv * 0.231 + vec2(0.37, 0.71)).rgb;
-            diffuseColor.rgb *= mix(tfA, tfB, 0.45) * 1.27;
-          #endif`);
-      };
-      mat.customProgramCacheKey = () => 'tf-terrain';
+      // [render-assets] medium / high with the asset pack: photographed ground (splatted PBR sets, IBL); `low` and
+      // builds without the pack keep the Lambert terrain below exactly as it was
+      this._pbr = !!(G.mat && G.mat.usable && ['grass', 'yard_dirt_path', 'field_soil', 'gravel', 'granite_stone'].every((k) => G.mat.usable(k)));
+      let mat = null;
+      if (this._pbr) { try { mat = terrainPbrMaterial((G.sys.engine?.quality || 'high') !== 'high'); } catch (e) { G.log.warn('WORLD', 'photographed terrain failed — the plain terrain is used', e); this._pbr = false; mat = null; } }
+      if (!mat) mat = terrainLambertMaterial();
       this.material = mat;
+      if (this._pbr) {
+        // a switch to `low` while playing (the frame-rate watchdog does it) puts the plain terrain back; the way
+        // back to medium / high returns the photographed one. A game started on `low` never builds it.
+        const pbr = mat; let plain = null;
+        G.bus.on('engine:quality', () => {
+          const low = (G.sys.engine?.quality || 'high') === 'low';
+          const next = low ? (plain || (plain = terrainLambertMaterial())) : pbr;
+          if (this.material === next) return;
+          this.material = next;
+          for (const k of ['core', 'outer']) if (this.meshes[k]) this.meshes[k].material = next;
+        });
+      }
       const coreGeo = this._buildGridGeometry(core, null);
       const outerGeo = this._buildGridGeometry(outer, core);
       const coreMesh = new THREE.Mesh(coreGeo, mat);
@@ -1204,6 +1344,7 @@ float terrainH(vec2 p) {
     _buildGridGeometry(g, hole) {
       const n = g.n, step = g.step;
       const pos = new Float32Array(n * n * 3), nor = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3), uv = new Float32Array(n * n * 2);
+      const spl = this._pbr ? new Uint8Array(n * n * 4) : null;   // [render-assets] splat weights for the photographed ground
       const isCore = !hole;
       const e = isCore ? step : g.step;
       const tmp = new THREE.Color();
@@ -1223,6 +1364,7 @@ float terrainH(vec2 p) {
           probe(x, z);
           groundColor(x, z, h, ny, g.m[k], tmp);
           col[k * 3] = tmp.r; col[k * 3 + 1] = tmp.g; col[k * 3 + 2] = tmp.b;
+          if (spl) { spl[k * 4] = Math.round(SPL[0] * 255); spl[k * 4 + 1] = Math.round(SPL[1] * 255); spl[k * 4 + 2] = Math.round(SPL[2] * 255); spl[k * 4 + 3] = Math.round(SPL[3] * 255); }
           uv[k * 2] = x / 4.5; uv[k * 2 + 1] = z / 4.5;
         }
       }
@@ -1244,6 +1386,7 @@ float terrainH(vec2 p) {
       geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
       geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      if (spl) geo.setAttribute('aSplat', new THREE.BufferAttribute(spl, 4, true));
       geo.setIndex(new THREE.BufferAttribute(n * n > 65535 ? new Uint32Array(idx) : new Uint16Array(idx), 1));
       geo.computeBoundingSphere();
       geo.computeBoundingBox();
@@ -1411,8 +1554,10 @@ float terrainH(vec2 p) {
         if (g) (r.id === 'ROAD_MAIN' ? geos.main : geos.link).push(fixWinding(g));
       }
       const mkMat = (units) => {
-        const m = new THREE.MeshLambertMaterial({ map: tex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -units });
-        return m;
+        const base = { map: tex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -units };
+        if (!groundSet('gravel')) return new THREE.MeshLambertMaterial(base);
+        // [render-assets] the painted asphalt (lane marks) stays; the aggregate comes from the gravel photograph
+        return applySet(new THREE.MeshStandardMaterial({ ...base, roughness: 0.86, metalness: 0 }), 'gravel', { detail: true, world: true, tile: [0.7, 0.7], strength: 0.55, normalScale: 0.35, priority: 4 });
       };
       const group = new THREE.Group(); group.name = 'roads';
       const main = mergeOrNull(geos.main), link = mergeOrNull(geos.link);
@@ -1439,7 +1584,9 @@ float terrainH(vec2 p) {
       }
       const curb = mergeOrNull(curbGeos);
       if (curb) {
-        const cm = new THREE.Mesh(curb, G.gfx.material('tf-curb', () => new THREE.MeshLambertMaterial({ color: 0xc9c4b8, vertexColors: true })));
+        const cm = new THREE.Mesh(curb, G.gfx.material('tf-curb', () => (groundSet('granite_stone')
+          ? applySet(new THREE.MeshStandardMaterial({ color: 0xc9c4b8, vertexColors: true, roughness: 0.9, metalness: 0 }), 'granite_stone', { detail: true, world: true, tile: [1.1, 1.1], strength: 0.8, normal: false, priority: 4 })
+          : new THREE.MeshLambertMaterial({ color: 0xc9c4b8, vertexColors: true }))));
         cm.receiveShadow = true; cm.castShadow = false;
         group.add(cm);
       }
@@ -1507,10 +1654,17 @@ float terrainH(vec2 p) {
         if (g) by[type].push(fixWinding(g));
       }
       const group = new THREE.Group(); group.name = 'paths';
+      // [render-assets] ribbon UVs: dirt = world / 6 m, stone = world / 5.5 m, boardwalk = (across 0..1, along / 1.6 m);
+      // `tile` below is metres per repeat divided by those units
+      const woodPbr = groundSet('pine_planks');
+      const woodBase = { map: tex.wood, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 };
       const mats = {
-        dirt: ribbonMaterial(tex.dirt, { units: 2, rough: 0.98, rag: 0.36 }),
-        stone: ribbonMaterial(tex.stone, { units: 3, rough: 0.86, rag: 0.12 }),
-        wood: new THREE.MeshLambertMaterial({ map: tex.wood, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
+        dirt: ribbonMaterial(tex.dirt, { units: 2, rough: 0.98, rag: 0.36, set: 'yard_dirt_path', setOpt: { tile: [2.6 / 6, 2.6 / 6], normalScale: 0.8, blend: 0.5, macro: 0.08, priority: 2 } }),
+        // stepping stones: the painted stones and their joints stay, the photograph gives each stone its surface
+        stone: ribbonMaterial(tex.stone, { units: 3, rough: 0.86, rag: 0.12, set: 'flagstone', setOpt: { detail: true, look: undefined, tile: [2.0 / 5.5, 2.0 / 5.5], strength: 0.9, normalScale: 0.9, macro: 0.07, priority: 2 } }),
+        wood: woodPbr
+          ? applySet(new THREE.MeshStandardMaterial({ ...woodBase, roughness: 0.8, metalness: 0 }), 'pine_planks', { look: texLook(tex.wood) || undefined, tile: [1, 2.2 / 1.6], normalScale: 1.0, macro: 0.06, priority: 3 })
+          : new THREE.MeshLambertMaterial(woodBase),
       };
       for (const k of ['dirt', 'stone', 'wood']) {
         const geo = mergeOrNull(by[k]);
@@ -1524,7 +1678,12 @@ float terrainH(vec2 p) {
         if (p.type !== 'wood') continue;
         for (const side of [-1, 1]) {
           const g = this._curbGeometry({ pts: p.pts, hw: p.hw - 0.02 }, side, () => false);
-          if (g) { const m = new THREE.Mesh(g, G.gfx.material('tf-beam', () => new THREE.MeshLambertMaterial({ color: 0x6b4a2e, vertexColors: true }))); m.receiveShadow = true; group.add(m); }
+          if (g) {
+            const m = new THREE.Mesh(g, G.gfx.material('tf-beam', () => (groundSet('timber_beam_dark')
+              ? applySet(new THREE.MeshStandardMaterial({ color: 0x6b4a2e, vertexColors: true, roughness: 0.8, metalness: 0 }), 'timber_beam_dark', { detail: true, world: true, tile: [0.9, 0.9], strength: 0.8, normal: false, priority: 4 })
+              : new THREE.MeshLambertMaterial({ color: 0x6b4a2e, vertexColors: true }))));
+            m.receiveShadow = true; group.add(m);
+          }
         }
       }
       group.traverse((o) => { if (o.isMesh) { o.matrixAutoUpdate = false; o.updateMatrix(); o.raycast = () => {}; } });
