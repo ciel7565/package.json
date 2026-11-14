@@ -107,6 +107,8 @@
   const _mixed = { cover: 0, sun: 0, hemi: 0, fog: 0, grey: 0, turb: 0, ray: 0, mie: 0, exp: 0, wind: 0, lamp: 0, haze: 0, tempMod: 0, hum: 0, sat: 0, con: 0, warm: 0, vig: 0 };
   const _lift = new THREE.Color(), _gain = new THREE.Color(), _gradeArg = { exposure: 1, contrast: 1, saturation: 1, warmth: 0, vignette: 0.2, lift: _lift, gain: _gain, instant: false };
   const _flashArg = { flash: 0, exposure: 1 };
+  /** a tuning number of the engine's developer look knobs (?lk=name:value), or its default */
+  const LK = (E, name, def) => (typeof E.lk === 'function' ? E.lk(name, def) : def);
 
   /** Korean particle 으로/로 for a word (ㄹ-final and vowel-final words take 로) */
   function roOf(word) {
@@ -150,6 +152,19 @@
     uniform vec3 uHorizon; uniform vec3 uZenith; uniform float uAH; uniform float uAT; uniform float uBand;
     uniform vec3 uSunDir; uniform vec3 uGlow; uniform float uGlowAmt; uniform float uBelt; uniform float uRainbow;
     varying vec3 vDir;
+    #ifdef TF_SKYTEX
+    // photographed clouds (CONTRACT §16.3): tSky = R cloud mask, G cloud shade (0 base … 1 sunlit top), B overcast
+    // structure — made from the pack's two sky HDRIs (buildSkyTexture). Only the SHAPES come from the photographs;
+    // the colours are this hour's light, so the same clouds are white at noon, gold at dusk and dim at night.
+    uniform sampler2D tSky; uniform float uCloudAmt; uniform float uCloudGain; uniform float uOverAmt;
+    uniform vec3 uCloudLit; uniform vec3 uCloudDark; uniform float uSkyRot; uniform vec2 uSkyDrift;
+    float tfSkyHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+    float tfSkyNoise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(tfSkyHash(i), tfSkyHash(i + vec2(1.0, 0.0)), f.x), mix(tfSkyHash(i + vec2(0.0, 1.0)), tfSkyHash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    #endif
     vec3 tfSpectrum(float x) { // 0 = violet .. 1 = red
       float h = (1.0 - clamp(x, 0.0, 1.0)) * 0.76;
       return clamp(abs(fract(vec3(h) + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
@@ -178,6 +193,31 @@
         col = mix(col, vec3(0.34, 0.4, 0.56), clamp(shade * 0.55, 0.0, 1.0));
         a = max(a, max(belt * 0.75, shade * 0.5));
       }
+      #ifdef TF_SKYTEX
+      if (d.y > 0.0 && (uCloudAmt > 0.003 || uOverAmt > 0.003)) {
+        float az = abs(d.x) + abs(d.z) > 1e-5 ? atan(d.z, d.x) : 0.0;   // (atan(0, 0) at the zenith is undefined)
+        vec2 suv = vec2(az * 0.15915494 + 0.5 + uSkyRot, asin(clamp(d.y, 0.0, 1.0)) * 0.63661977);
+        vec4 st = texture2D(tSky, suv);
+        float up = smoothstep(0.0, 0.22, d.y);
+        // overcast: the veil is not one flat grey — lighter and darker stratus as photographed
+        col *= mix(1.0, 0.74 + 0.52 * st.b, uOverAmt * up);
+        if (uCloudAmt > 0.003) {
+          // the mask is 512 texels round the sky: two octaves of noise carve crisp, wispy edges at any screen size
+          vec2 q = d.xz / (d.y + 0.3) * 3.4 + uSkyDrift;
+          float n = tfSkyNoise(q) * 0.62 + tfSkyNoise(q * 2.9 + 17.3) * 0.38;
+          float ca = smoothstep(0.3, 0.7, st.r * uCloudGain + (n - 0.5) * 0.5) * uCloudAmt * smoothstep(0.015, 0.14, d.y);
+          if (ca > 0.002) {
+            float sh = clamp(st.g + (n - 0.5) * 0.3, 0.0, 1.0);
+            vec3 cc = mix(uCloudDark, uCloudLit, sh);
+            cc += uCloudLit * pow(max(dot(d, uSunDir), 0.0), 10.0) * 0.35 * (1.0 - sh * 0.5);   // silver lining towards the sun
+            cc = mix(uHorizon, cc, 0.35 + 0.65 * up);                                           // haze towards the horizon
+            float na = ca + a * (1.0 - ca);
+            col = (cc * ca + col * a * (1.0 - ca)) / max(na, 1e-4);
+            a = clamp(na, 0.0, 1.0);
+          }
+        }
+      }
+      #endif
       // rainbow: primary bow at ~41-42 deg around the antisolar point, faint reversed secondary at ~51 deg
       if (uRainbow > 0.001) {
         float cosA = clamp(dot(d, -uSunDir), -1.0, 1.0);
@@ -198,14 +238,25 @@
       #include <colorspace_fragment>
     }`;
 
-  function buildOverlay() {
+  /** skyTex: compile the photographed cloud layer in (medium / high with the pack's sky images; `low` never) */
+  function buildOverlay(skyTex) {
+    const uniforms = {
+      uHorizon: { value: new THREE.Color(0xbcd6e8) }, uZenith: { value: new THREE.Color(0xbcd6e8) },
+      uAH: { value: 0 }, uAT: { value: 0 }, uBand: { value: 0.12 },
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uGlow: { value: new THREE.Color(0xff9a5c) }, uGlowAmt: { value: 0 },
+      uBelt: { value: 0 }, uRainbow: { value: 0 },
+    };
+    if (skyTex) {
+      // a 1×1 "no cloud" texel until the photographs are decoded: the program never changes
+      const blank = new THREE.DataTexture(new Uint8Array([0, 128, 128, 255]), 1, 1);
+      blank.needsUpdate = true;
+      Object.assign(uniforms, {
+        tSky: { value: blank }, uCloudAmt: { value: 0 }, uCloudGain: { value: 1 }, uOverAmt: { value: 0 },
+        uCloudLit: { value: new THREE.Color(1, 1, 1) }, uCloudDark: { value: new THREE.Color(0.45, 0.5, 0.58) }, uSkyRot: { value: 0 }, uSkyDrift: { value: new THREE.Vector2() },
+      });
+    }
     const mat = new THREE.ShaderMaterial({
-      uniforms: {
-        uHorizon: { value: new THREE.Color(0xbcd6e8) }, uZenith: { value: new THREE.Color(0xbcd6e8) },
-        uAH: { value: 0 }, uAT: { value: 0 }, uBand: { value: 0.12 },
-        uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uGlow: { value: new THREE.Color(0xff9a5c) }, uGlowAmt: { value: 0 },
-        uBelt: { value: 0 }, uRainbow: { value: 0 },
-      },
+      uniforms, defines: skyTex ? { TF_SKYTEX: '' } : {},
       vertexShader: OVERLAY_VS, fragmentShader: OVERLAY_FS,
       side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: true, fog: false,
     });
@@ -218,6 +269,62 @@
     G.gfx.guard?.watch?.(mesh, { uniforms: true, quarantine: false });
     mesh.raycast = () => {};
     return mesh;
+  }
+
+  /**
+   * The photographed cloud layer (CONTRACT §16.3). The pack's two sky HDRIs hold real clouds but also ONE sun — a noon
+   * sky must never light a night. So only the structure is kept, in an RGBA8 texture of the upper hemisphere (row 0 =
+   * horizon, top row = zenith, three's equirect columns): R cloud mask (a texel is cloud when it is much less
+   * saturated than the clear blue of its own elevation), G cloud shade (its brightness against a sunlit cloud top),
+   * B overcast structure (the overcast sky's brightness against its row). The overlay shader colours them with the
+   * light of the hour. clear / over: { data: Uint16Array half-float RGBA, rows bottom-to-top, w, h }.
+   */
+  function buildSkyTexture(clear, over) {
+    const W = clear.w | 0, H = clear.h | 0, HU = H >> 1;
+    if (!(W >= 16 && HU >= 8) || !clear.data || clear.data.length < W * H * 4) return null;
+    const half = THREE.DataUtils.fromHalfFloat, sm = (a, b, v) => { const x = clamp((v - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); };
+    const n = W * HU, sat = new Float32Array(n), lum = new Float32Array(n), ref = new Float32Array(HU), row = new Float32Array(W);
+    const smoothRows = (src) => { const o = new Float32Array(HU), K = 9; for (let j = 0; j < HU; j++) { let s = 0; for (let k = -K; k <= K; k++) s += src[clamp(j + k, 0, HU - 1)]; o[j] = s / (2 * K + 1); } return o; };
+    for (let j = 0; j < HU; j++) {
+      const r = HU + j;
+      for (let i = 0; i < W; i++) {
+        const k = (r * W + i) * 4, R = half(clear.data[k]), Gc = half(clear.data[k + 1]), B = half(clear.data[k + 2]);
+        const mx = Math.max(R, Gc, B, 1e-6), s = (mx - Math.min(R, Gc, B)) / mx;
+        sat[j * W + i] = s; row[i] = s; lum[j * W + i] = 0.2126 * R + 0.7152 * Gc + 0.0722 * B;
+      }
+      ref[j] = Float32Array.from(row).sort()[Math.floor(W * 0.85)];   // the clear sky of this elevation
+    }
+    const refS = smoothRows(ref), alpha = new Float32Array(n), cl = [];
+    for (let j = 0; j < HU; j++) {
+      const elev = ((j + 0.5) / HU) * 90, hz = sm(3, 11, elev);   // the haze band at the horizon is not cloud
+      for (let i = 0; i < W; i++) {
+        const a = (1 - sm(0.42, 0.9, sat[j * W + i] / Math.max(refS[j], 1e-3))) * hz;
+        alpha[j * W + i] = a;
+        if (a > 0.6) cl.push(lum[j * W + i]);
+      }
+    }
+    const top = cl.length ? Float32Array.from(cl).sort()[Math.floor(cl.length * 0.9)] : 1;   // a sunlit cloud top (the sun's glare is above it)
+    const out = new Uint8Array(n * 4);
+    for (let k = 0; k < n; k++) {
+      out[k * 4] = Math.round(alpha[k] * 255);
+      out[k * 4 + 1] = Math.round(clamp((lum[k] / Math.max(top, 1e-4) - 0.35) / 0.75, 0, 1) * 255);
+      out[k * 4 + 2] = 102; out[k * 4 + 3] = 255;
+    }
+    if (over && over.data && over.w === W && over.h === H && over.data.length >= W * H * 4) {
+      const ol = new Float32Array(n), med = new Float32Array(HU);
+      for (let j = 0; j < HU; j++) {
+        const r = HU + j;
+        for (let i = 0; i < W; i++) { const k = (r * W + i) * 4; const v = 0.2126 * half(over.data[k]) + 0.7152 * half(over.data[k + 1]) + 0.0722 * half(over.data[k + 2]); ol[j * W + i] = v; row[i] = v; }
+        med[j] = Float32Array.from(row).sort()[W >> 1];
+      }
+      const medS = smoothRows(med);
+      for (let j = 0; j < HU; j++) for (let i = 0; i < W; i++) out[(j * W + i) * 4 + 2] = Math.round(clamp((ol[j * W + i] / Math.max(medS[j], 1e-4) - 0.6) / 0.9, 0, 1) * 255);
+    }
+    const tex = new THREE.DataTexture(out, W, HU);
+    tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+    tex.name = 'sky-clouds'; tex.needsUpdate = true;
+    return tex;
   }
 
   function buildStars(count) {
@@ -668,7 +775,7 @@
         const q = preset.name;
         const fx = new THREE.Group(); fx.name = 'weather-sky';
         try {
-          this._overlay = buildOverlay();
+          this._overlay = buildOverlay(q !== 'low' && !!G.pack?.has?.('sky/clear_noon'));
           fx.add(this._overlay);
           // same overlay inside the environment bake so reflections match the sky (night / overcast / fog)
           if (typeof E.addEnvObject === 'function') {
@@ -703,7 +810,8 @@
           this._refreshPopover(true);
         }
       });
-      G.bus.on('engine:quality', () => { this._onResize(); this._ensurePuddles(); });
+      G.bus.on('engine:quality', () => { this._onResize(); this._ensurePuddles(); this._skySync(); });
+      this._skySync();
       this._ready = true;
       // compute everything once so the first rendered frame is already graded
       this._apply(0, 0, true);
@@ -810,6 +918,41 @@
     },
 
     // ------------------------------------------------------------ internals
+    /** the photographed cloud layer follows the quality preset: compiled into the sky overlay on medium / high (once),
+     *  its texture built from the pack's two sky HDRIs when they are decoded (after the first frame) */
+    _skySync() {
+      const E = G.sys.engine, ov = this._overlay, P = G.pack;
+      if (!ov || !E || !P) return;
+      const want = !!(E.preset && E.preset.maps) && !!P.has?.('sky/clear_noon');
+      if (want && !ov.material.uniforms.tSky) {
+        const tmp = buildOverlay(true), old = ov.material;
+        G.gfx.guard?.unwatch?.(tmp);
+        ov.material = tmp.material;
+        if (this._envOverlay) this._envOverlay.material = tmp.material;
+        tmp.geometry.dispose(); old.dispose();
+        if (this._skyTex) { tmp.material.uniforms.tSky.value.dispose(); tmp.material.uniforms.tSky.value = this._skyTex; }
+      }
+      if (!want || this._skyTexOn || this._skyTexBusy || !P.usable?.('sky/clear_noon')) return;
+      this._skyTexBusy = true;
+      const meta = P.meta?.('sky/clear_noon'), sd = meta && Array.isArray(meta.sunDir) ? meta.sunDir : [0.554, 0.742, 0.377];
+      this._skyAz = Math.atan2(Number(sd[2]) || 0, Number(sd[0]) || 1);   // where the photograph has its sun
+      Promise.all([P.hdr('sky/clear_noon', { priority: 3 }), P.hdr('sky/overcast', { priority: 4 })]).then(([clear, over]) => {
+        this._skyTexBusy = false;
+        if (!clear || !this._overlay) return;
+        let tex = null;
+        try { tex = buildSkyTexture(clear, over); } catch (e) { G.log.warn('WEATHER', 'cloud texture failed (procedural sky stays)', e?.message || e); }
+        try { P.unload?.('sky/clear_noon'); P.unload?.('sky/overcast'); } catch (e) { /* the pack keeps them */ }
+        const u = this._overlay.material.uniforms;
+        if (!tex || !u.tSky) return;
+        const old = u.tSky.value;
+        u.tSky.value = tex;
+        if (old && old !== tex) old.dispose();
+        this._skyTex = tex; this._skyTexOn = true;
+        if (G.sys.engine) G.sys.engine._envDirty = true;   // reflections get the clouds too
+        this._apply(0, G.time.elapsed, true);
+      }).catch((e) => { this._skyTexBusy = false; G.log.warn('WEATHER', 'sky images not decoded (procedural sky stays)', e?.message || e); });
+    },
+
     _checkPhase() {
       const ph = phaseOf(this._hour);
       if (ph.id !== this._phase) {
@@ -861,6 +1004,9 @@
       const E = G.sys.engine;
       if (!E || !E.scene) return;
       const m = this._mixLook();
+      // medium / high: the phase-8 light balance (CONTRACT §16.3) — less flat fill, more of the ambient light from the
+      // baked environment (sky + ridges + lit ground); `low` keeps the values it always had
+      const hq = !!(E.preset && E.preset.maps);
       sunAngles(this._hour, _sun);
       const e = _sun.elev;
       this.sunElevation = e; this.sunAzimuth = _sun.az;
@@ -887,7 +1033,7 @@
         this._lastSunE = e; this._lastSunA = _sun.az;
         // a weather blend or a jump (set time / weather) changes the sky itself: re-bake the environment then; a sun
         // that only creeps along its arc re-bakes every few degrees (engine.setSun)
-        E.setSun(e, _sun.az, { env: !!(force || trans) });
+        E.setSun(e, _sun.az, { env: !!(force || trans), now: !!force });
       }
       // moon: opposite side of the sky, high at midnight
       const moonElev = (22 + 40 * Math.sin(PI * clamp(_sun.night, 0, 1))) * DEG;
@@ -898,16 +1044,23 @@
       const sun = E.sun;
       if (sun) {
         if (e > -1.75) {
-          _c1.copy(COL.sunNoon).lerp(COL.sunGold, gold);
+          // (medium / high: the sunlight warms a little as soon as the sun leaves the high part of its arc — a late
+          // afternoon is warm long before the golden hour; `low` keeps the one golden hour it always had)
+          const warmSun = hq ? Math.max(gold, LK(E, 'warmSun', 0.5) * smooth(-5, 2, e) * (1 - smooth(18, 56, e))) : gold;
+          _c1.copy(COL.sunNoon).lerp(COL.sunGold, warmSun);
           if (grey > 0) { _c2.copy(_greyCol).multiplyScalar(1.15); _c1.lerp(_c2, grey * 0.55); }
           sun.color.copy(_c1);
-          sun.intensity = 2.75 * smooth(-1.5, 10, e) * m.sun * (1 - 0.15 * gold);
+          // (a warmer colour carries less light: the extra warmth of the afternoon is paid back in intensity)
+          sun.intensity = (hq ? LK(E, 'sun', 3.05) : 2.75) * smooth(-1.5, 10, e) * m.sun * (1 - 0.15 * gold) * (1 + 0.5 * (warmSun - gold));
+          if (E.keyDir) E.keyDir.copy(E.sunDir);
         } else {
           sun.color.copy(COL.moon);
           sun.intensity = 0.78 * moonK * (1 - 0.72 * grey);
-          const f = E.focus;
-          sun.position.set(f.x + _moonDir.x * 160, f.y + _moonDir.y * 160, f.z + _moonDir.z * 160);
+          // the engine places the key light (with the shadow frustum snapped to its texel grid): it only needs the direction
+          if (E.keyDir) E.keyDir.copy(_moonDir);
+          else { const f = E.focus; sun.position.set(f.x + _moonDir.x * 160, f.y + _moonDir.y * 160, f.z + _moonDir.z * 160); }
         }
+        if (force && typeof E.placeKeyLight === 'function') E.placeKeyLight();   // a time jump: the light is right on this very frame
         // overcast skies and moonlight cast soft, faint shadows (no hard black pools under the trees at night)
         if (sun.shadow && 'intensity' in sun.shadow) sun.shadow.intensity = clamp((1 - grey * 0.6) * (e > -1.75 ? 0.92 : 0.5), 0.25, 1);
       }
@@ -921,10 +1074,12 @@
         const snowW = this.mix.SNOW || 0;
         if (snowW > 0) { _c3.copy(COL.groundSnow).multiplyScalar(light); _c2.lerp(_c3, snowW * 0.6); }
         hemi.groundColor.copy(_c2);
-        hemi.intensity = lerp(0.52, 0.86, dayK) * m.hemi;
+        // (the flat hemisphere light used to do all the ambient work: 0.86 by day next to a sun of 2.75 — shadows had
+        // no depth. Vegetation is lit by it alone, buildings / ground / jars also by the environment.)
+        hemi.intensity = (hq ? lerp(LK(E, 'hemiN', 0.5), LK(E, 'hemiD', 0.52), dayK) * (1 + 0.3 * grey) : lerp(0.52, 0.86, dayK)) * m.hemi;
       }
       if (E.fill) {
-        E.fill.intensity = lerp(0.06, 0.35, dayK) * (1 - 0.4 * grey);
+        E.fill.intensity = (hq ? lerp(0.03, LK(E, 'fill', 0.1), dayK) : lerp(0.06, 0.35, dayK)) * (1 - 0.4 * grey);
         E.fill.color.copy(COL.fillDay).lerp(COL.fillNight, 1 - dayK);
       }
       // ---- fog (also the horizon colour of the sky overlay -> seamless haze)
@@ -933,7 +1088,8 @@
       const fog = E.scene.fog;
       if (fog) {
         fog.color.copy(_fogCol);
-        if (fog.isFogExp2) fog.density = m.fog * lerp(1.12, 1, dayK);
+        // (medium / high: a little less of the flat fog — the air's depth comes from the aerial perspective pass too)
+        if (fog.isFogExp2) fog.density = m.fog * lerp(1.12, 1, dayK) * (hq ? LK(E, 'fogK', 0.86) : 1);
         else { fog.near = 10; fog.far = clamp(2.2 / Math.max(0.0005, m.fog), 60, 1500); }
       }
       if (E.scene.background && E.scene.background.isColor) E.scene.background.copy(_fogCol);
@@ -947,10 +1103,14 @@
         u.mieDirectionalG.value = 0.85 - grey * 0.04;
       }
       // ---- colour grade (one engine pass on medium / high; exposure on every preset) + sun glow / god rays
-      const exposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold);
+      const exposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold) * (hq ? lerp(LK(E, 'expN', 1.0), LK(E, 'expD', 1.0), dayK) : 1);
+      // environment strength: the sky is dim at night (its reflections may count for more), bright by day
+      E.envIntensity = hq ? lerp(LK(E, 'envN', 0.55), LK(E, 'envD', 0.34), dayK) * (1 + 0.2 * grey) : 0.5;
       const wFog = this.mix.FOG || 0, lowLight = 1 - dayK;
       _gradeArg.exposure = exposure;
-      _gradeArg.contrast = m.con + gold * 0.04 - lowLight * 0.03;
+      // (medium / high: the engine's tone trim adds the contrast the flat AgX curve needs by day; at night most of
+      // the picture lies under the pivot and the same trim would crush the dark grass — it gets less of it)
+      _gradeArg.contrast = (m.con + gold * 0.04 - lowLight * 0.03) * (hq ? lerp(LK(E, 'conN', 0.85), 1, dayK) : 1);
       _gradeArg.saturation = m.sat * lerp(0.8, 1, dayK) + gold * 0.1 * (1 - grey);
       _gradeArg.warmth = m.warm + gold * 0.5 * (1 - grey * 0.6) + glowK * 0.08 - lowLight * 0.2;
       _gradeArg.vignette = m.vig + lowLight * 0.12 + gold * 0.05;
@@ -964,10 +1124,12 @@
       if (E.atmos) {
         E.atmos.sunGlow = (1 - grey) * smooth(-2, 3, e) * (1 - wFog * 0.6);
         E.atmos.rays = (1 - smooth(0.25, 0.75, grey)) * (0.7 + 0.8 * gold) * smooth(-1, 3, e);
+        // aerial perspective: the valley's air lights up towards the sun — most of all in the low, golden light
+        E.atmos.haze = hq ? LK(E, 'haze', 0.55) * (0.4 + 0.6 * gold) * (1 - grey) * smooth(-1, 6, e) * (1 - wFog * 0.5) : 0;
         // [places-kit] inside a room (engine.indoor 0..1, CONTRACT §16.4) the engine blends the room's light over the
         // values above; the outdoor-only terms fade here: no sun glow or god rays through a wall
         const inK = 1 - clamp(Number(E.indoor) || 0, 0, 1);
-        if (inK < 1) { E.atmos.sunGlow *= inK; E.atmos.rays *= inK; }
+        if (inK < 1) { E.atmos.sunGlow *= inK; E.atmos.rays *= inK; E.atmos.haze *= inK; }
       }
       // ---- rainbow: opposite the sun when it shines again after rain (low sun, wet air)
       const rbGoal = smooth(0.18, 0.55, this.wetness) * (1 - smooth(0.04, 0.2, this.mix.RAIN || 0)) * smooth(2, 9, e) * (1 - smooth(34, 44, e))
@@ -993,7 +1155,22 @@
         // twilight: pink anti-twilight arch above the earth's blue shadow on the side opposite the sun
         u.uBelt.value = smooth(-7, -1.5, e) * (1 - smooth(1, 7, e)) * (1 - grey) * 0.85;
         u.uRainbow.value = this.rainbow;
-        ov.visible = u.uAH.value > 0.004 || u.uAT.value > 0.004 || u.uGlowAmt.value > 0.004 || u.uBelt.value > 0.004 || u.uRainbow.value > 0.004;
+        let cloudsOn = false;
+        if (u.uCloudAmt) {
+          // photographed clouds (medium / high): how much of them shows, lit by this hour — white at noon, warm at
+          // dusk, a dim grey-blue under the moon; overcast hides them behind its own (photographed) structure
+          const on = !!this._skyTexOn && hq, cover = clamp(m.cover, 0, 1);
+          u.uCloudAmt.value = on ? clamp(1 - grey * 1.15, 0, 1) * smooth(0.05, 0.3, cover) : 0;
+          u.uCloudGain.value = lerp(0.78, 1.5, smooth(0.25, 0.9, cover));
+          u.uOverAmt.value = on ? grey : 0;
+          _c1.copy(_tint).lerp(COL.goldTint, gold * 0.6).lerp(COL.nightTint, nightK * 0.8);
+          u.uCloudLit.value.copy(_c1).multiplyScalar(lerp(0.075, 1.1, dayK) * (1 - 0.25 * grey)).lerp(_c2.copy(COL.glowSunset).multiplyScalar(0.85), glowK * 0.5 * (1 - grey));
+          u.uCloudDark.value.copy(u.uCloudLit.value).multiplyScalar(0.4).add(_c2.copy(COL.hemiDay).lerp(COL.hemiNight, 1 - dayK).multiplyScalar(0.16 * light));
+          u.uSkyRot.value = ((this._skyAz || 0) - Math.atan2(E.sunDir.z, E.sunDir.x)) / (2 * PI);
+          u.uSkyDrift.value.set(t * 0.006, t * 0.0031);
+          cloudsOn = u.uCloudAmt.value > 0.004 || u.uOverAmt.value > 0.004;
+        }
+        ov.visible = cloudsOn || u.uAH.value > 0.004 || u.uAT.value > 0.004 || u.uGlowAmt.value > 0.004 || u.uBelt.value > 0.004 || u.uRainbow.value > 0.004;
         ov.renderOrder = grey > 0.45 ? -3 : -9; // heavy overcast also veils the clouds
         if (this._envOverlay) this._envOverlay.visible = ov.visible;
       }
@@ -1022,6 +1199,7 @@
           _c1.copy(_tint).lerp(COL.goldTint, gold * 0.6).lerp(COL.nightTint, nightK * 0.75);
           N.setCloudTint?.(_c1);
           N.setWind?.(0.86, 0.5, m.wind);
+          if (E.wind) { E.wind.x = 0.86; E.wind.z = 0.5; E.wind.strength = m.wind; }   // the same wind for every module (engine.wind)
           // overcast / fog: clouds melt into the haze (also where they overlap distant mountains)
           N.setCloudVeil?.(clamp(grey * 0.85, 0, 0.92), _fogCol);
           // valley mist: thick at dawn, in fog and after rain, a thin veil on clear afternoons, silvery at night

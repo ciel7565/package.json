@@ -12,6 +12,13 @@
 // Water shading: MeshStandardMaterial (env reflection from scene.environment, sun glints, fog)
 // with an injected flow-mapped normal, depth tint from the terrain height texture,
 // soft shoreline alpha, and foam at the shore, around boulders and under the waterfall.
+// Phase 8 (CONTRACT §16.3, preset knob `reflect` ≥ 1: medium / high): depth-aware water. The water's thickness comes
+// from the scene depth (engine.depthTexture — the frame before, looked up through the previous view-projection
+// matrix, so the lookup is exact for everything that stands still even while the camera turns): the shore fade and
+// the foam follow rocks, posts and the deck, not only the terrain; shallows are clear (the pebbles of the bed show),
+// deep water absorbs; the sky reflection is the baked environment (clouds, ridges) at full strength with Fresnel;
+// the sun glints on the ripples. The water no longer writes depth there (the depth holds the bed). `low` keeps the
+// shader it always had. reflect 2 adds a planar reflection (see _planar).
 // =============================================================================
 (function () {
   const L = G.data.layout || {};
@@ -126,6 +133,11 @@
       uShallow: { value: new THREE.Color('#3a8f80') },
       uDeep: { value: new THREE.Color('#0c3540') },
       uMtnTint: { value: new THREE.Color(0.2, 0.33, 0.22) },
+      // phase 8 (reflect ≥ 1): scene depth of the frame before + the camera that drew it
+      tSceneDepth: { value: null }, uDepthOn: { value: 0 }, uPrevVP: { value: new THREE.Matrix4() }, uCamNF: { value: new THREE.Vector2(0.1, 3000) },
+      uMtnK: { value: 0.85 }, uClear: { value: 0 },
+      // reflect 2: planar reflection (the mirrored scene, drawn by engine.onPreRender)
+      tPlanar: { value: null }, uPlanarOn: { value: 0 }, uPlanarVP: { value: new THREE.Matrix4() },
     },
     meshes: {},
 
@@ -261,24 +273,46 @@
     _waterMaterial(terr) {
       const hasT = !!terr?.uniforms;
       const u = this.uniforms;
+      // phase 8: the depth-aware path is compiled in where the preset asks for it (medium / high); low: as before
+      const deep = this.deep = ((G.sys.engine?.preset?.reflect | 0) >= 1);
       const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.07, metalness: 0, transparent: true });
+      if (deep) { mat.depthWrite = false; mat.envMapIntensity = 2.2; }
       mat.onBeforeCompile = (sh) => {
         Object.assign(sh.uniforms, hasT ? terr.uniforms : {}, {
           uTime: u.uTime, uFlowSpeed: u.uFlowSpeed, uRain: u.uRain, uFoam: u.uFoam, uCaustic: u.uCaustic, uRings: u.uRings,
-          uShallow: u.uShallow, uDeep: u.uDeep, uMtnTint: u.uMtnTint,
+          uShallow: u.uShallow, uDeep: u.uDeep, uMtnTint: u.uMtnTint, uMtnK: u.uMtnK,
           tWaterN: { value: this.tex }, tFoamMask: { value: this.foamMask },
-        });
+        }, deep ? { tSceneDepth: u.tSceneDepth, uDepthOn: u.uDepthOn, uPrevVP: u.uPrevVP, uCamNF: u.uCamNF, uClear: u.uClear, tPlanar: u.tPlanar, uPlanarOn: u.uPlanarOn, uPlanarVP: u.uPlanarVP } : {});
         sh.defines = sh.defines || {};
         if (hasT) sh.defines.TF_TERRAIN = '';
+        if (deep) sh.defines.TF_SCENE_DEPTH = '';
         sh.vertexShader = sh.vertexShader
-          .replace('#include <common>', '#include <common>\nattribute vec2 aFlow;\nvarying vec2 vFlow;\nvarying vec3 vWPos;')
-          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFlow = aFlow;\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+          .replace('#include <common>', `#include <common>
+            attribute vec2 aFlow;
+            varying vec2 vFlow; varying vec3 vWPos;
+            #ifdef TF_SCENE_DEPTH
+            uniform mat4 uPrevVP; uniform mat4 uPlanarVP;
+            varying vec4 vPrevClip; varying vec4 vPlanarClip;
+            #endif`)
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+            vFlow = aFlow;
+            vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+            #ifdef TF_SCENE_DEPTH
+            vPrevClip = uPrevVP * vec4(vWPos, 1.0);
+            vPlanarClip = uPlanarVP * vec4(vWPos, 1.0);
+            #endif`);
         sh.fragmentShader = sh.fragmentShader
           .replace('#include <common>', `#include <common>
             varying vec2 vFlow; varying vec3 vWPos;
             uniform float uTime; uniform float uFlowSpeed; uniform float uRain; uniform float uFoam; uniform float uCaustic; uniform float uRings;
             float tfWHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
-            uniform sampler2D tWaterN; uniform sampler2D tFoamMask; uniform vec3 uShallow; uniform vec3 uDeep; uniform vec3 uMtnTint;
+            uniform sampler2D tWaterN; uniform sampler2D tFoamMask; uniform vec3 uShallow; uniform vec3 uDeep; uniform vec3 uMtnTint; uniform float uMtnK;
+            #ifdef TF_SCENE_DEPTH
+            uniform sampler2D tSceneDepth; uniform float uDepthOn; uniform vec2 uCamNF; uniform float uClear;
+            uniform sampler2D tPlanar; uniform float uPlanarOn;
+            varying vec4 vPrevClip; varying vec4 vPlanarClip;
+            float tfLinZ(float d) { return uCamNF.x * uCamNF.y / max(uCamNF.y - d * (uCamNF.y - uCamNF.x), 1e-4); }
+            #endif
             #ifdef TF_TERRAIN
             ${terr?.glslTerrain || ''}
             #endif
@@ -322,6 +356,26 @@
               #else
                 float depth = 1.2;
               #endif
+              #ifdef TF_SCENE_DEPTH
+              // the water's thickness along the view from the scene depth of the frame before: this very point of the
+              // surface seen by the camera of that frame (exact for whatever stands still). It catches what the
+              // terrain texture cannot: boulders, stepping stones, posts, the deck.
+              vec3 tfVw = cameraPosition - vWPos; float tfVwl = length(tfVw);
+              float tfVy = tfVwl > 1e-5 ? max(tfVw.y / tfVwl, 0.0) : 1.0;
+              float tfPath = depth / max(tfVy, 0.3);
+              if (uDepthOn > 0.5 && vPrevClip.w > 0.05) {
+                vec3 pc = vPrevClip.xyz / vPrevClip.w;
+                vec2 duv = pc.xy * 0.5 + 0.5;
+                if (duv.x > 0.002 && duv.x < 0.998 && duv.y > 0.002 && duv.y < 0.998 && pc.z > -1.0 && pc.z < 1.0) {
+                  float thick = tfLinZ(texture2D(tSceneDepth, duv).x) - tfLinZ(pc.z * 0.5 + 0.5);
+                  if (thick > -0.05) {
+                    thick = max(thick, 0.0);
+                    depth = min(depth, thick * max(tfVy, 0.12) + 0.004);
+                    tfPath = min(tfPath, thick);
+                  }
+                }
+              }
+              #endif
               float deepK = 1.0 - exp(-depth * 1.25);
               vec3 col = mix(uShallow, uDeep, deepK);
               // foam: shoreline, boulders, plunge pool
@@ -344,6 +398,12 @@
               vec3 V = tfVl > 1e-5 ? tfVv / tfVl : vec3(0.0, 1.0, 0.0);
               float fres = pow(1.0 - clamp(dot(tfWaterN, V), 0.0, 1.0), 5.0);
               float alpha = mix(0.42, 0.9, deepK) + fres * 0.45 + foam * 0.6;
+              #ifdef TF_SCENE_DEPTH
+              // a clear mountain stream: little water in the way → the bed shows; the body colour builds up with the
+              // path through the water (not with a fixed tint)
+              float tfBody = 1.0 - exp(-tfPath * mix(1.6, 0.85, uClear));
+              alpha = mix(alpha, mix(0.1, 0.93, tfBody) + fres * 0.5 + foam * 0.7, uClear);
+              #endif
               alpha *= smoothstep(0.0, 0.1, depth);
               diffuseColor.rgb = col;
               diffuseColor.a = clamp(alpha, 0.0, 1.0);
@@ -357,12 +417,24 @@
               vec3 tfV = tfVdl > 1e-5 ? tfVd / tfVdl : vec3(0.0, 1.0, 0.0);
               vec3 tfR = reflect(-tfV, tfWaterN);
               float tfM = smoothstep(0.45, 0.05, tfR.y) * (1.0 - tfFoamAmt);
-              reflectedLight.indirectSpecular *= mix(vec3(1.0), uMtnTint, tfM * 0.85);
+              reflectedLight.indirectSpecular *= mix(vec3(1.0), uMtnTint, tfM * uMtnK);
+              #ifdef TF_SCENE_DEPTH
+              // reflect 2: the mirrored scene replaces the environment where it has something to show (ripples bend it)
+              if (uPlanarOn > 0.5 && vPlanarClip.w > 0.05) {
+                vec2 puv = vPlanarClip.xy / vPlanarClip.w * 0.5 + 0.5 + tfWaterN.xz * 0.035;
+                if (puv.x > 0.0 && puv.x < 1.0 && puv.y > 0.0 && puv.y < 1.0) {
+                  vec4 pr = texture2D(tPlanar, puv);
+                  float tfF = 0.02 + 0.98 * pow(1.0 - clamp(dot(tfWaterN, tfV), 0.0, 1.0), 5.0);
+                  float edge = smoothstep(0.0, 0.06, puv.x) * smoothstep(1.0, 0.94, puv.x) * smoothstep(0.0, 0.06, puv.y) * smoothstep(1.0, 0.94, puv.y);
+                  reflectedLight.indirectSpecular = mix(reflectedLight.indirectSpecular, min(pr.rgb, vec3(8.0)) * tfF, pr.a * edge * (1.0 - tfFoamAmt));
+                }
+              }
+              #endif
               // water body colour comes from scattered sunlight, not from the bright sky dome
               reflectedLight.indirectDiffuse *= 0.42;
             }`);
       };
-      mat.customProgramCacheKey = () => 'tf-water3-' + (hasT ? 1 : 0);
+      mat.customProgramCacheKey = () => 'tf-water4-' + (hasT ? 1 : 0) + (deep ? 'd' : '');
       return mat;
     },
 
@@ -557,6 +629,75 @@
       G.world.registerObject?.('WATERFALL_' + pond.id, grp);
     },
 
+    // ------------------------------------------------------------- planar reflection (preset knob reflect 2)
+    /** The scene mirrored at the water plane, drawn at half size before the frame (engine.onPreRender) with an
+     *  oblique near plane (nothing below the surface gets in). It costs a second colour pass of what the mirrored
+     *  camera sees, so: only at reflect 2 (no preset has it by default: ?reflect=2), only while open water is near
+     *  and in view, never while the dynamic resolution has shed reflections (engine.reflectOn), no shadow update. */
+    _planarTick(eng) {
+      const want = !!eng.reflectOn && !!eng.composer && !!this.meshes.water;
+      const P = this._planar;
+      if (!want) { this.uniforms.uPlanarOn.value = 0; if (P) P.live = false; return; }
+      if (!P) {
+        const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
+        rt.texture.name = 'water-planar';
+        this._planar = { rt, cam: new THREE.PerspectiveCamera(), live: false, frames: 0, calls: 0 };
+        this.uniforms.tPlanar.value = rt.texture;
+        eng.onPreRender((a) => { try { this._planarRender(a.renderer, a.scene, a.camera); } catch (e) { this.uniforms.uPlanarOn.value = 0; if (!this._planarWarned) { this._planarWarned = true; G.log.warn('WORLD', 'planar water reflection failed (environment reflection stays)', e?.message || e); } } });
+        G.bus.on('engine:context', ({ lost } = {}) => { if (!lost && this._planar) this._planar.frames = 0; });
+      }
+      this._planar.live = true;
+    },
+    _planarRender(renderer, scene, camera) {
+      const P = this._planar, eng = G.sys.engine, water = this.meshes.water, U = this.uniforms;
+      if (!P || !P.live || !eng.reflectOn || !water || !water.visible) { U.uPlanarOn.value = 0; return; }
+      const cp = camera.position;
+      // only above the surface, with open water near and the surface in the view
+      if (!(cp.y > WATER_Y + 0.3) || this.distanceToWater(cp.x, cp.z) > 140) { U.uPlanarOn.value = 0; return; }
+      const fr = this._planarFr || (this._planarFr = { f: new THREE.Frustum(), m: new THREE.Matrix4(), q: new THREE.Vector4(), plane: new THREE.Plane(), clip: new THREE.Vector4(), v: new THREE.Vector3(), t: new THREE.Vector3(), up: new THREE.Vector3(), rot: new THREE.Matrix4(), size: new THREE.Vector2() });
+      fr.m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      fr.f.setFromProjectionMatrix(fr.m);
+      if (!water.geometry.boundingSphere) water.geometry.computeBoundingSphere();
+      if (!fr.f.intersectsSphere(water.geometry.boundingSphere)) { U.uPlanarOn.value = 0; return; }
+      // target: half the scene target
+      const st = eng.depthState, w = Math.max(64, Math.floor((st.width || 640) / 2)), h = Math.max(36, Math.floor((st.height || 360) / 2));
+      if (P.rt.width !== w || P.rt.height !== h) { P.rt.setSize(w, h); P.frames = 0; }
+      // the mirrored camera (as three's Reflector builds it)
+      const vc = P.cam;
+      fr.v.set(cp.x, 2 * WATER_Y - cp.y, cp.z);
+      fr.rot.extractRotation(camera.matrixWorld);
+      fr.t.set(0, 0, -1).applyMatrix4(fr.rot).add(cp);
+      fr.t.y = 2 * WATER_Y - fr.t.y;
+      fr.up.set(0, 1, 0).applyMatrix4(fr.rot); fr.up.y = -fr.up.y;
+      vc.position.copy(fr.v); vc.up.copy(fr.up); vc.lookAt(fr.t);
+      vc.near = camera.near; vc.far = Math.min(camera.far, 900); vc.fov = camera.fov; vc.aspect = camera.aspect; vc.layers.mask = camera.layers.mask;
+      vc.updateMatrixWorld(); vc.updateProjectionMatrix();
+      U.uPlanarVP.value.multiplyMatrices(vc.projectionMatrix, vc.matrixWorldInverse);   // before the oblique plane goes in
+      // oblique near plane at the water surface (Lengyel): nothing under water is drawn
+      fr.plane.set(fr.up.set(0, 1, 0), -(WATER_Y - 0.04)).applyMatrix4(vc.matrixWorldInverse);
+      fr.clip.set(fr.plane.normal.x, fr.plane.normal.y, fr.plane.normal.z, fr.plane.constant);
+      const pe = vc.projectionMatrix.elements, q = fr.q;
+      q.x = (Math.sign(fr.clip.x) + pe[8]) / pe[0]; q.y = (Math.sign(fr.clip.y) + pe[9]) / pe[5]; q.z = -1; q.w = (1 + pe[10]) / pe[14];
+      const dq = fr.clip.dot(q);
+      if (!(Math.abs(dq) > 1e-9)) { U.uPlanarOn.value = 0; return; }
+      fr.clip.multiplyScalar(2 / dq);
+      pe[2] = fr.clip.x; pe[6] = fr.clip.y; pe[10] = fr.clip.z + 1; pe[14] = fr.clip.w;
+      const sm = renderer.shadowMap, auto = sm.autoUpdate, needs = sm.needsUpdate, rt = renderer.getRenderTarget(), c0 = renderer.info.render.calls;
+      const hidden = [];
+      for (const name of ['water', 'fall', 'foam', 'spray']) { const m = this.meshes[name]; if (m && m.visible) { m.visible = false; hidden.push(m); } }
+      try {
+        sm.autoUpdate = false; sm.needsUpdate = false;   // the frame's own scene render updates the shadow map
+        renderer.setRenderTarget(P.rt);
+        renderer.render(scene, vc);
+      } finally {
+        sm.autoUpdate = auto; sm.needsUpdate = needs;
+        renderer.setRenderTarget(rt);
+        for (const m of hidden) m.visible = true;
+      }
+      P.frames++; P.calls = renderer.info.render.calls - c0;
+      U.uPlanarOn.value = 1;
+    },
+
     update(dt, t) {
       this.uniforms.uTime.value = t;
       const eng = G.sys.engine;
@@ -570,6 +711,19 @@
         const u = this.uniforms.uCaustic;
         u.value += (goal - u.value) * (1 - Math.exp(-Math.min(dt || 0, 0.25) / 0.8));
         this.uniforms.uRings.value = feat('rainRings') ? 1 : 0;
+        if (this.deep) {
+          // the scene depth of the frame before and the camera that drew it (engine.prevViewProj); off while the post
+          // chain is away (watchdog) or the target was just resized — the terrain-only depth takes over
+          const U = this.uniforms, ds = eng.depthState, on = !!(ds && ds.sampleable && eng.prevViewProj && (eng.preset?.reflect | 0) >= 1);
+          U.tSceneDepth.value = on ? eng.depthTexture : null;
+          U.uDepthOn.value = on ? 1 : 0;
+          if (on) { U.uPrevVP.value.copy(eng.prevViewProj); U.uCamNF.value.set(ds.near, ds.far); }
+          U.uClear.value = on ? (typeof eng.lk === 'function' ? eng.lk('waterClear', 1) : 1) : 0;
+          // the baked environment holds the ridges now: the old green tint of low reflections is only a trace of itself
+          U.uMtnK.value = eng.preset?.maps ? 0.3 : 0.85;
+          if (this.material) { this.material.envMapIntensity = eng.preset?.maps ? (typeof eng.lk === 'function' ? eng.lk('waterEnv', 2.2) : 2.2) : 1; this.material.depthWrite = !eng.composer; }
+          this._planarTick(eng);
+        }
       }
     },
   };

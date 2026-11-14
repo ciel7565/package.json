@@ -8,7 +8,8 @@
 //   G.sys.engine.feature(name)    is a world-ambience feature on right now? (preset + reduceMotion + fxLevel)
 //                                 'grade' 'godrays' 'sunGlow' 'petals' 'mist' 'smoke' 'caustics' 'rainRings' 'splashes'
 //                                 'lightning' 'sway'. Emits 'engine:features' when the answer may have changed.
-//   G.sys.engine.setSun(elevationDeg, azimuthDeg, {intensity, color})
+//   G.sys.engine.setSun(elevationDeg, azimuthDeg, {intensity, color, env, now})   env: the sky look changed (re-bake
+//       the environment), now: … on the very next update (a jump of the clock or the weather)
 //   G.sys.engine.setQuality('low'|'medium'|'high'|'auto')
 //   G.sys.engine.grade({exposure, contrast, saturation, warmth, vignette, lift, gain, flash}, layer = 'base')
 //       colour grade (one combined pass after bloom, before OutputPass). The 'base' layer holds absolute values
@@ -60,9 +61,21 @@
 //       to the framebuffer being drawn). The object lives as long as the post chain: 'engine:post' is emitted when the
 //       chain was rebuilt (quality, bloom setting, watchdog, restored context).
 //   G.sys.engine.depthState      { valid, sampleable, near, far, width, height, frame } of depthTexture
+//   G.sys.engine.prevViewProj    Matrix4 | undefined: projection × view of the last drawn frame — the camera that
+//       produced what depthTexture holds while the next scene pass runs (the water reprojects through it)
+//   G.sys.engine.reflectOn       the planar water reflection may run now (knob reflect 2, not shed by the DRS)
 //   G.sys.engine.fullScale(on, key)   hold the render scale at its maximum (photo mode); dynamic resolution rests
+//   G.sys.engine.dof({ focus, range, amount } | null)   depth of field for photo mode (medium / high) -> on?
 //   G.sys.engine.drs             { on, scale, min, max, cap, level, ema, … } state of the dynamic resolution (read)
 //   G.sys.engine.postInfo        { samples, bytes, pixels, passes } what the post chain allocates right now (estimate)
+//   G.sys.engine.keyDir          Vector3: the direction TO the key light (sun by day, moon by night; 51-weather writes
+//       it). placeKeyLight() puts the light there with its shadow frustum snapped to the shadow texel grid.
+//   G.sys.engine.wind            { x, z, strength } the wind of the weather, for every module that sways something
+//   G.sys.engine.envIntensity    strength of the baked environment (51-weather: by time of day on medium / high)
+//   G.sys.engine.lk(name, def)   developer look knob: ?lk=name:value,… overrides a tuning number without a rebuild
+//   G.sys.engine.gpu             { renderer, software } the GPU's name as the browser tells it; 'auto' quality starts
+//       on `low` on a software rasteriser, and takes ONE step up after 20 s of headroom (see _autoStepUp)
+//   G.sys.engine.tone            'aces' | 'agx' | 'neutral' — the tone curve in use (?tone= overrides the preset's)
 //
 // Post chain (medium / high): ScenePass (the scene into ONE multisampled half-float target with a depth texture) →
 // [NaNScrub → UnrealBloom] → AtmosPass (god rays on high, sun glow, grade, vignette, dither) → OutputPass (tone curve
@@ -87,6 +100,26 @@
   // samples × (RGBA16F 8 + depth24 4) + its resolved colour 8 + the depth texture 4, the two plain ping-pong targets
   // 2 × 8, and what bloom (mip chain ≈ 0.92 px), god rays (1/16 px) and AO (2 half-size RGBA8) add. The budget caps
   // the total: first 4× → 2× MSAA, then the render scale (never the canvas). 260 MB ≈ a 1440p frame at 4× MSAA.
+  // Shadow frustum half-size (m) by preset: [near view, wide view]. The wide one serves the views over the valley
+  // (만장대, the telescope): shadows reach as far as one sees there, at a coarser texel. The light stands SHADOW_DIST
+  // from the frustum centre.
+  const SHADOW_RANGE = { low: [45, 45], medium: [45, 90], high: [55, 120] };
+  const SHADOW_DIST = 220;
+  // wide frustum: what keeps casting however far it is (top-level scene children), and the distance (m) from the
+  // camera within which everything else still casts
+  const SHADOW_KEEP_RE = /^(buildings|nature|manjangdae|terrain|roads|paths|water|waterfall|clouds|valley-mist|weather|outline|player|companion|complex|allot)/;
+  const SHADOW_KEEP = 70;
+  // Tone curves (CONTRACT §16.3). `low` keeps ACES (frozen); medium / high use TONE_HQ, chosen by comparing the fixed
+  // views (see the render-light report); ?tone=aces|agx|neutral overrides it. TONE_TRIM: what the grade adds on top of
+  // a curve so that it makes a finished picture. three's AgX is the bare curve (no "look"): it keeps hues and rolls
+  // highlights off like film, but its long toe lifts the shadows (scene 0.02 → 37/255, ACES 21) — flat and pale on
+  // its own. The trim is the look: contrast about middle grey and the colourfulness that goes with it (51-weather
+  // takes part of the contrast back at night, where everything lies under the pivot). `indoor`: the trim inside a
+  // room (engine.indoor blends towards it) — lamp-lit rooms lie under the pivot too and keep the gentler numbers their
+  // lights were set up with.
+  const TONES = { aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping, neutral: THREE.NeutralToneMapping };
+  const TONE_HQ = 'agx';
+  const TONE_TRIM = { aces: { exposure: 1, contrast: 1, saturation: 1 }, agx: { exposure: 1.02, contrast: 1.38, saturation: 1.2, indoor: { exposure: 1.08, contrast: 1.1, saturation: 1.14 } }, neutral: { exposure: 0.96, contrast: 1.04, saturation: 1 } };
   const POST_BUDGET_BYTES = 260 * 1024 * 1024;
   const postBytesPerPixel = (p, samples) => (samples > 0 ? samples * 12 + 12 : 12) + 16 + (p.bloom ? 7.4 : 0) + (p.godrays ? 0.5 : 0) + (p.ao ? 2 : 0);
   // small-scenery cull distance (m) per preset (see engine._updateCull), measured at the default 55° field of view
@@ -107,7 +140,10 @@
   const fin = (v, d) => (Number.isFinite(v) ? v : d);
   const clampColor = (c, lo, hi, def) => { c.r = clamp(fin(c.r, def), lo, hi); c.g = clamp(fin(c.g, def), lo, hi); c.b = clamp(fin(c.b, def), lo, hi); return c; };
 
+  // a software rasteriser (no GPU: SwiftShader, llvmpipe, the Windows basic driver …) pays every extra pass with the CPU
+  const SOFT_GPU_RE = /swiftshader|llvmpipe|softpipe|lavapipe|swrast|software rasterizer|software renderer|basic render driver|mesa offscreen/i;
   function autoQuality() {
+    if (engine.gpu && engine.gpu.software) return 'low';
     if (G.input?.touchUI) return 'low';
     const mem = navigator.deviceMemory || 8;
     const cores = navigator.hardwareConcurrency || 4;
@@ -217,6 +253,7 @@
     uniform float uRays; uniform vec3 uSun; uniform vec3 uSunCol; uniform float uGlow; uniform float uAspect; uniform float uGlowThr;
     uniform float uContrast; uniform float uSaturation; uniform float uWarmth; uniform float uVignette;
     uniform vec3 uLift; uniform vec3 uGain; uniform float uFlash;
+    uniform sampler2D tDepth; uniform mat4 uProjInv; uniform mat3 uCamRot; uniform vec3 uSunDirW; uniform vec3 uHazeCol; uniform float uHazeAmt; uniform float uHazeDensity;
     varying vec2 vUv;
     ${GLSL_COMMON}
     float tfDisc(vec2 uv, vec2 c, float r, float soft) {
@@ -255,6 +292,22 @@
       // ---- god rays (high preset)
       // shafts read against darker things (ridges, crowns, roofs); the already-bright sky is not washed further
       if (uRays > 0.001) c += texture2D(tRays, vUv).rgb * uRays * mix(vec3(1.0), uSunCol, 0.65) * (1.0 - 0.8 * smoothstep(0.5, 2.2, tfLuma(c)));
+      // ---- aerial perspective (phase 8): the light the haze between here and there scatters towards the eye — bright
+      // and warm looking towards the sun, hardly anything looking away. The scene's fog fades far things to ONE colour;
+      // this gives the valley's air a direction. Needs the scene depth (uHazeAmt is 0 without it); the sky is skipped
+      // (the sky dome has its own glow round the sun).
+      if (uHazeAmt > 0.001) {
+        float d = texture2D(tDepth, vUv).x;
+        if (d < 0.99999) {
+          vec4 vp = uProjInv * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+          vec3 P = vp.xyz / (abs(vp.w) > 1e-9 ? vp.w : 1e-9);
+          float dist = length(P);
+          vec3 dir = dist > 1e-4 ? uCamRot * (P / dist) : vec3(0.0, 0.0, -1.0);
+          float h = 1.0 - exp(-uHazeDensity * uHazeDensity * dist * dist);
+          float mu = max(dot(dir, uSunDirW), 0.0);
+          c += uHazeCol * (h * (0.12 + 0.88 * mu * mu * mu * mu) * uHazeAmt);
+        }
+      }
       // ---- grade (linear HDR; exposure + ACES happen in OutputPass)
       c *= vec3(1.0 + uWarmth * 0.11, 1.0 + uWarmth * 0.015, 1.0 - uWarmth * 0.13);
       float L = tfLuma(c);
@@ -290,6 +343,35 @@
     }
     return fsGeo;
   }
+
+  // ---------------------------------------------------------------- environment proxy (CONTRACT §16.3: sky / IBL)
+  // The environment bake used to hold the sky alone: every surface was lit from below and from behind the mountains
+  // by "sky". The proxy is a coarse bowl of the real ground round the bake point — rings out to 900 m, heights from
+  // G.world.terrainHeight, colours from the surface kind — shaded with the scene's own sun, hemisphere and fog at
+  // bake time. Reflections and the ambient fill now see the ridges' silhouette and the lit ground (warm bounce under
+  // eaves); medium / high only.
+  const ENVP_SEG = 40, ENVP_RINGS = 13;
+  const ENVP_RADII = [6, 9, 13, 19, 28, 40, 58, 84, 120, 172, 250, 360, 520, 900].slice(0, ENVP_RINGS + 1);
+  const ENVP_ALBEDO = { grass: [0.105, 0.19, 0.055], dirt: [0.3, 0.22, 0.14], stone: [0.4, 0.385, 0.35], road: [0.22, 0.21, 0.2], wood: [0.27, 0.17, 0.095], water: [0.03, 0.075, 0.085], sand: [0.48, 0.42, 0.3], forest: [0.04, 0.078, 0.028], rock: [0.2, 0.19, 0.17] };
+  const ENVP_VERT = `
+    attribute vec3 aCol;
+    varying vec3 vCol; varying vec3 vN; varying float vDist;
+    void main() {
+      vCol = aCol; vN = normal; vDist = length(position);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`;
+  const ENVP_FRAG = `
+    uniform vec3 uSunDir; uniform vec3 uSun; uniform vec3 uSky; uniform vec3 uGround; uniform vec3 uFog; uniform float uFogDensity; uniform float uWet;
+    varying vec3 vCol; varying vec3 vN; varying float vDist;
+    void main() {
+      float nl = length(vN);
+      vec3 n = nl > 1e-5 ? vN / nl : vec3(0.0, 1.0, 0.0);
+      vec3 irr = uSun * max(dot(n, uSunDir), 0.0) + mix(uGround, uSky, n.y * 0.5 + 0.5);
+      vec3 c = vCol * mix(1.0, 0.7, uWet) * irr * 0.31831;
+      float f = 1.0 - exp(-uFogDensity * uFogDensity * vDist * vDist);
+      c = mix(c, uFog, clamp(f, 0.0, 1.0));
+      gl_FragColor = vec4(min(max(c, vec3(0.0)), vec3(16.0)), 1.0);
+    }`;
 
   /** the buffer a pass of ours reads: the scene target itself when the scene pass left it for us (no copy was made) */
   const sceneInput = (readBuffer) => { const sp = engine._scenePass; if (sp && sp.pending) { sp.pending = false; return sp.rt; } return readBuffer; };
@@ -362,6 +444,226 @@
     dispose() { this.rt.dispose(); this.copyMat.dispose(); }
   }
 
+  // ---------------------------------------------------------------- ambient occlusion (CONTRACT §16.3, `high`)
+  // Depth only (no second scene render, no override material: GPU-animated grass, sprites and the sky are untouched).
+  // 1 AO at half resolution: view position and normal rebuilt from the scene depth, 8 spiral taps per pixel (the
+  //   "scalable AO" estimator: Σ max(0, v·n − bias) / (v·v + ε) with a cubic falloff inside the radius), rotated per
+  //   pixel by interleaved-gradient noise; fades out with distance and where the radius is under ~2 px; sky = 1.
+  //   The same texel carries its depth (16 bit in G, B) for the two passes below.
+  // 2 separable 9-tap blur, 3 the other axis — both weighted by depth (no bleeding across silhouettes).
+  // 4 composite at full resolution into the composer's buffer: a depth-aware upsample of the four AO texels round the
+  //   pixel, less occlusion in fog and on bright (lit, emissive) pixels, the scene colour times the result.
+  // NaN-safe: every division is guarded and a non-finite term reads as "no occlusion"; the colour itself is passed
+  // through untouched (the NaN scrub runs right after).
+  const AO_ZMAX = 160;
+  const AO_COMMON = `
+    uniform sampler2D tDepth; uniform mat4 uProjInv;
+    varying vec2 vUv;
+    ${GLSL_COMMON}
+    vec3 tfViewPos(vec2 uv, float d) {
+      vec4 c = uProjInv * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+      return c.xyz / (abs(c.w) > 1e-9 ? c.w : 1e-9);
+    }
+    float tfAoZ(vec4 s) { return s.g + s.b / 255.0; }`;
+  const AO_FRAG = `
+    uniform vec2 uRes; uniform float uProjScale; uniform float uRadius; uniform float uIntensity; uniform float uFade;
+    ${AO_COMMON}
+    void main() {
+      float d = texture2D(tDepth, vUv).x;
+      if (d >= 0.99999) { gl_FragColor = vec4(1.0); return; }   // sky / nothing drawn
+      vec3 P = tfViewPos(vUv, d);
+      float z = max(-P.z, 0.0);
+      float zn = clamp(z / ${AO_ZMAX.toFixed(1)}, 0.0, 0.99999);
+      vec2 zp = vec2(floor(zn * 255.0) / 255.0, fract(zn * 255.0));
+      float fade = 1.0 - smoothstep(uFade * 0.55, uFade, z);
+      float rpx = uRadius * uProjScale / max(z, 0.1);            // the radius in pixels of this target
+      fade *= smoothstep(1.5, 4.0, rpx);
+      if (fade <= 0.001) { gl_FragColor = vec4(1.0, zp, 1.0); return; }
+      rpx = min(rpx, 44.0);
+      // view-space normal from the depth: on each axis the neighbour nearer in depth (no bleeding over edges)
+      vec2 px = 1.0 / uRes;
+      vec3 Pr = tfViewPos(vUv + vec2(px.x, 0.0), texture2D(tDepth, vUv + vec2(px.x, 0.0)).x);
+      vec3 Pl = tfViewPos(vUv - vec2(px.x, 0.0), texture2D(tDepth, vUv - vec2(px.x, 0.0)).x);
+      vec3 Pu = tfViewPos(vUv + vec2(0.0, px.y), texture2D(tDepth, vUv + vec2(0.0, px.y)).x);
+      vec3 Pd = tfViewPos(vUv - vec2(0.0, px.y), texture2D(tDepth, vUv - vec2(0.0, px.y)).x);
+      vec3 ax = abs(Pr.z - P.z) < abs(Pl.z - P.z) ? Pr - P : P - Pl;
+      vec3 ay = abs(Pu.z - P.z) < abs(Pd.z - P.z) ? Pu - P : P - Pd;
+      vec3 N = cross(ax, ay);
+      float nl = length(N);
+      N = nl > 1e-9 ? N / nl : vec3(0.0, 0.0, 1.0);
+      float rot = tfIgn(gl_FragCoord.xy) * 6.2831853;
+      float r2 = uRadius * uRadius, occ = 0.0;
+      float bias = 0.012 + 0.0025 * z;
+      for (int i = 0; i < 8; i++) {
+        float t = (float(i) + 0.5) / 8.0;
+        float ang = rot + float(i) * 2.3999632;
+        vec2 suv = vUv + vec2(cos(ang), sin(ang)) * (sqrt(t) * rpx) * px;
+        vec3 v = tfViewPos(suv, texture2D(tDepth, suv).x) - P;
+        float vv = dot(v, v), vn = dot(v, N);
+        float f = max(r2 - vv, 0.0);
+        occ += f * f * f * max((vn - bias) / (vv + 0.01), 0.0);
+      }
+      float ao = 1.0 - occ * uIntensity * 5.0 / (r2 * r2 * r2 * 8.0);
+      if (!(ao >= 0.0)) ao = ao < 0.0 ? 0.0 : 1.0;            // NaN reads as "no occlusion"
+      ao = mix(1.0, min(ao, 1.0), fade);
+      gl_FragColor = vec4(ao, zp, 1.0);
+    }`;
+  const AO_BLUR_FRAG = `
+    uniform sampler2D tAO; uniform vec2 uDir;
+    ${AO_COMMON}
+    void main() {
+      vec4 c = texture2D(tAO, vUv);
+      float z0 = tfAoZ(c) * ${AO_ZMAX.toFixed(1)};
+      float tol = 0.06 + 0.02 * z0;
+      float sum = c.r * 0.227027, wsum = 0.227027;
+      for (int i = 1; i <= 4; i++) {
+        float g = i == 1 ? 0.1945946 : i == 2 ? 0.1216216 : i == 3 ? 0.0540541 : 0.0162162;
+        vec4 a = texture2D(tAO, vUv + uDir * float(i)), b = texture2D(tAO, vUv - uDir * float(i));
+        float wa = g * (1.0 - smoothstep(tol * 0.5, tol, abs(tfAoZ(a) * ${AO_ZMAX.toFixed(1)} - z0)));
+        float wb = g * (1.0 - smoothstep(tol * 0.5, tol, abs(tfAoZ(b) * ${AO_ZMAX.toFixed(1)} - z0)));
+        sum += a.r * wa + b.r * wb; wsum += wa + wb;
+      }
+      gl_FragColor = vec4(sum / max(wsum, 1e-4), c.g, c.b, 1.0);
+    }`;
+  const AO_COMP_FRAG = `
+    uniform sampler2D tDiffuse; uniform sampler2D tAO; uniform vec2 uAORes; uniform float uStrength; uniform float uFogDensity; uniform vec3 uTint; uniform float uShow;
+    ${AO_COMMON}
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float d = texture2D(tDepth, vUv).x;
+      if (d >= 0.99999) { gl_FragColor = uShow > 0.5 ? vec4(1.0) : c; return; }
+      float z = max(-tfViewPos(vUv, d).z, 0.0);
+      float zn = clamp(z / ${AO_ZMAX.toFixed(1)}, 0.0, 0.99999);
+      // depth-aware upsample: the four half-resolution texels round this pixel, each weighted by its depth match
+      vec2 t = vUv * uAORes - 0.5, f = fract(t), px = 1.0 / uAORes, base = (floor(t) + 0.5) * px;
+      vec4 s00 = texture2D(tAO, base), s10 = texture2D(tAO, base + vec2(px.x, 0.0)), s01 = texture2D(tAO, base + vec2(0.0, px.y)), s11 = texture2D(tAO, base + px);
+      float e = 0.0004 + zn * 0.004;
+      float w00 = (1.0 - f.x) * (1.0 - f.y) / (e + abs(tfAoZ(s00) - zn)), w10 = f.x * (1.0 - f.y) / (e + abs(tfAoZ(s10) - zn));
+      float w01 = (1.0 - f.x) * f.y / (e + abs(tfAoZ(s01) - zn)), w11 = f.x * f.y / (e + abs(tfAoZ(s11) - zn));
+      float ao = (s00.r * w00 + s10.r * w10 + s01.r * w01 + s11.r * w11) / max(w00 + w10 + w01 + w11, 1e-6);
+      if (!(ao >= 0.0)) ao = 1.0;
+      float L = tfLuma(max(c.rgb, vec3(0.0)));
+      float k = uStrength * exp(-uFogDensity * uFogDensity * z * z) * (1.0 - 0.6 * smoothstep(1.0, 3.5, L));
+      ao = mix(1.0, clamp(ao, 0.0, 1.0), clamp(k, 0.0, 1.0));
+      if (uShow > 0.5) { gl_FragColor = vec4(vec3(ao), 1.0); return; }
+      gl_FragColor = vec4(c.rgb * mix(uTint, vec3(1.0), ao), c.a);
+    }`;
+  class AOPass {
+    constructor(eng) {
+      this.name = 'AOPass';
+      this.enabled = true; this.needsSwap = true; this.clear = false; this.renderToScreen = false;
+      this.takesScene = true;
+      this.engine = eng;
+      const rt = () => new THREE.WebGLRenderTarget(4, 4, { depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+      this.rtA = rt(); this.rtB = rt();
+      this.rtA.texture.name = 'ao'; this.rtB.texture.name = 'ao-blur';
+      const mat = (name, uniforms, frag) => new THREE.ShaderMaterial({ name, uniforms, vertexShader: FS_VERT, fragmentShader: frag, depthTest: false, depthWrite: false, toneMapped: false });
+      const proj = { value: new THREE.Matrix4() };
+      this.uniforms = {
+        tDepth: { value: null }, uProjInv: proj, uRes: { value: new THREE.Vector2(4, 4) }, uProjScale: { value: 100 },
+        uRadius: { value: 0.9 }, uIntensity: { value: 1.0 }, uFade: { value: 80 },
+      };
+      this.blurUniforms = { tDepth: { value: null }, uProjInv: proj, tAO: { value: null }, uDir: { value: new THREE.Vector2(1, 0) } };
+      this.compUniforms = {
+        tDepth: this.uniforms.tDepth, uProjInv: proj, tDiffuse: { value: null }, tAO: { value: null }, uAORes: this.uniforms.uRes,
+        uStrength: { value: 1 }, uFogDensity: { value: 0.0026 }, uTint: { value: new THREE.Color(0.1, 0.11, 0.14) }, uShow: { value: 0 },
+      };
+      this.aoMat = mat('AOShader', this.uniforms, AO_FRAG);
+      this.blurMat = mat('AOBlurShader', this.blurUniforms, AO_BLUR_FRAG);
+      this.material = mat('AOCompositeShader', this.compUniforms, AO_COMP_FRAG);
+      this.quad = new THREE.Mesh(fsGeometry(), this.aoMat);
+      this.quad.frustumCulled = false;
+    }
+    setSize(w, h) {
+      const hw = Math.max(1, Math.floor(w / 2)), hh = Math.max(1, Math.floor(h / 2));
+      this.rtA.setSize(hw, hh); this.rtB.setSize(hw, hh);
+      this.uniforms.uRes.value.set(hw, hh);
+    }
+    render(renderer, writeBuffer, readBuffer) {
+      const E = this.engine, cam = E.camera, sp = E._scenePass, q = this.quad;
+      const src = sceneInput(readBuffer);
+      const u = this.uniforms, cu = this.compUniforms, res = u.uRes.value;
+      u.tDepth.value = sp ? sp.rt.depthTexture : null;
+      u.uProjInv.value.copy(cam.projectionMatrixInverse);
+      u.uProjScale.value = Math.abs(cam.projectionMatrix.elements[5]) * 0.5 * res.y;
+      const fog = E.scene.fog;
+      cu.uFogDensity.value = fog && fog.isFogExp2 ? clamp(fin(fog.density, 0), 0, 0.05) : 0;
+      // 1 AO → A · 2 blur along x → B · 3 blur along y → A
+      q.material = this.aoMat;
+      renderer.setRenderTarget(this.rtA); renderer.render(q, fsCam);
+      q.material = this.blurMat;
+      this.blurUniforms.tAO.value = this.rtA.texture; this.blurUniforms.uDir.value.set(1 / res.x, 0);
+      renderer.setRenderTarget(this.rtB); renderer.render(q, fsCam);
+      this.blurUniforms.tAO.value = this.rtB.texture; this.blurUniforms.uDir.value.set(0, 1 / res.y);
+      renderer.setRenderTarget(this.rtA); renderer.render(q, fsCam);
+      // 4 composite over the scene colour
+      q.material = this.material;
+      cu.tDiffuse.value = src.texture; cu.tAO.value = this.rtA.texture;
+      renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+      renderer.render(q, fsCam);
+    }
+    dispose() { this.rtA.dispose(); this.rtB.dispose(); this.aoMat.dispose(); this.blurMat.dispose(); this.material.dispose(); }
+  }
+
+  // ---------------------------------------------------------------- depth of field (photo mode, CONTRACT §16.3 P2)
+  // One gather pass on the HDR frame, in the chain only while engine.dof({...}) is on: 24 spiral taps; a tap counts
+  // when its own blur disc (from its depth) reaches the pixel, so the sharp subject keeps its edge and the soft
+  // background does not bleed over it. Sharp from focus − range/2 to focus + range, softer behind than in front.
+  const DOF_FRAG = `
+    uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform vec2 uCamNF; uniform vec2 uPx; uniform float uFocus; uniform float uRange; uniform float uMax;
+    varying vec2 vUv;
+    ${GLSL_COMMON}
+    float tfLin(float d) { return uCamNF.x * uCamNF.y / max(uCamNF.y - d * (uCamNF.y - uCamNF.x), 1e-4); }
+    float tfCoc(float z) {
+      float behind = smoothstep(uRange, uRange * 5.0 + 2.0, z - uFocus);
+      float front = smoothstep(uRange * 0.5, uRange * 2.5 + 1.0, uFocus - z) * 0.5;
+      return max(behind, front) * uMax;
+    }
+    void main() {
+      vec3 c0 = tfSafe(texture2D(tDiffuse, vUv).rgb);
+      if (uMax < 0.25) { gl_FragColor = vec4(c0, 1.0); return; }
+      float z0 = tfLin(texture2D(tDepth, vUv).x), r0 = tfCoc(z0);
+      float rot = tfIgn(gl_FragCoord.xy) * 6.2831853;
+      vec3 sum = c0;
+      float tot = 1.0;
+      for (int i = 0; i < 24; i++) {
+        float rr = sqrt((float(i) + 0.5) / 24.0) * uMax;
+        float ang = rot + float(i) * 2.3999632;
+        vec2 suv = vUv + vec2(cos(ang), sin(ang)) * rr * uPx;
+        float zs = tfLin(texture2D(tDepth, suv).x), rs = tfCoc(zs);
+        if (zs > z0) rs = min(rs, r0 * 2.0);
+        float m = smoothstep(rr - 0.5, rr + 0.5, rs);
+        sum += mix(sum / tot, min(tfSafe(texture2D(tDiffuse, suv).rgb), vec3(12.0)), m);
+        tot += 1.0;
+      }
+      gl_FragColor = vec4(sum / tot, 1.0);
+    }`;
+  class DofPass {
+    constructor(eng) {
+      this.name = 'DofPass';
+      this.enabled = false; this.needsSwap = true; this.clear = false; this.renderToScreen = false;
+      this.takesScene = true;
+      this.engine = eng;
+      this.amount = 1; this.h = 540;
+      this.uniforms = { tDiffuse: { value: null }, tDepth: { value: null }, uCamNF: { value: new THREE.Vector2(0.1, 3000) }, uPx: { value: new THREE.Vector2(1 / 960, 1 / 540) }, uFocus: { value: 8 }, uRange: { value: 3 }, uMax: { value: 0 } };
+      this.material = new THREE.ShaderMaterial({ name: 'DofShader', uniforms: this.uniforms, vertexShader: FS_VERT, fragmentShader: DOF_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
+      this.quad = new THREE.Mesh(fsGeometry(), this.material);
+      this.quad.frustumCulled = false;
+    }
+    setSize(w, h) { this.uniforms.uPx.value.set(1 / Math.max(1, w), 1 / Math.max(1, h)); this.h = Math.max(1, h); }
+    render(renderer, writeBuffer, readBuffer) {
+      const E = this.engine, sp = E._scenePass, u = this.uniforms, cam = E.camera;
+      readBuffer = sceneInput(readBuffer);
+      u.tDiffuse.value = readBuffer.texture;
+      u.tDepth.value = sp ? sp.rt.depthTexture : null;
+      u.uCamNF.value.set(cam.near, cam.far);
+      u.uMax.value = sp ? clamp(fin(this.amount, 1), 0, 2) * this.h * 0.011 : 0;   // the largest blur disc: ~1.1 % of the height
+      renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+      renderer.render(this.quad, fsCam);
+    }
+    dispose() { this.material.dispose(); }
+  }
+
   /** combined atmosphere pass (EffectComposer pass protocol): god rays → sun glow → grade → vignette → dither */
   class AtmosPass {
     constructor(opts) {
@@ -374,6 +676,8 @@
         uGlow: { value: 0 }, uGlowThr: { value: 3.0 }, uAspect: { value: 1.6 },
         uContrast: { value: 1 }, uSaturation: { value: 1 }, uWarmth: { value: 0 }, uVignette: { value: 0 },
         uLift: { value: new THREE.Color(0, 0, 0) }, uGain: { value: new THREE.Color(1, 1, 1) }, uFlash: { value: 0 },
+        tDepth: { value: null }, uProjInv: { value: new THREE.Matrix4() }, uCamRot: { value: new THREE.Matrix3() }, uSunDirW: { value: new THREE.Vector3(0, 1, 0) },
+        uHazeCol: { value: new THREE.Color(1, 0.9, 0.75) }, uHazeAmt: { value: 0 }, uHazeDensity: { value: 0.0026 },
       };
       this.material = new THREE.ShaderMaterial({ name: 'AtmosGradeShader', uniforms: this.uniforms, vertexShader: FS_VERT, fragmentShader: ATMOS_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
       this.quad = new THREE.Mesh(fsGeometry(), this.material);
@@ -979,6 +1283,8 @@
   const GRADE_LIMITS = { exposure: [0.2, 2.5], contrast: [0.7, 1.4], saturation: [0, 1.8], warmth: [-1, 1], vignette: [0, 0.8], flash: [0, 1] };
   const _lift = new THREE.Color(0, 0, 0), _gain = new THREE.Color(1, 1, 1), _liftGoal = new THREE.Color(0, 0, 0), _gainGoal = new THREE.Color(1, 1, 1);
   const _sunV = new THREE.Vector3(), _camFwd = new THREE.Vector3(), _sunCol = new THREE.Color();
+  const _kd = new THREE.Vector3(), _kc = new THREE.Vector3(), _kx = new THREE.Vector3(), _ky = new THREE.Vector3();   // key light placement
+  const _trim = { exposure: 1, contrast: 1, saturation: 1 };   // the tone trim in use this frame (outdoor ↔ indoor)
   const _indoorGrade = { exposure: 1, warmth: 0, saturation: 1 };   // [places-kit] the 'interior' grade layer (reused)
 
   const engine = {
@@ -995,7 +1301,7 @@
     fps: 60,
     // calls / triangles: the whole frame (every pass) · scene: the scene pass alone (shadow maps + colour) · post: the rest
     frameInfo: { calls: 0, triangles: 0, scene: 0, post: 0, pre: 0 },
-    atmos: { sunGlow: 1, rays: 1 },
+    atmos: { sunGlow: 1, rays: 1, haze: 0 },   // haze: aerial perspective towards the sun (51-weather, medium / high)
     flareSuppressed: false,
     gradeState: { ...GRADE_NEUTRAL },
     _gradeBase: { ...GRADE_NEUTRAL },
@@ -1005,18 +1311,19 @@
     _envDirty: true, _envTimer: 0,
     _resizeFns: [],
     _outline: null,
-    _preRenderFns: [], _scenePass: null, _fullKeys: new Set(),
+    _preRenderFns: [], _scenePass: null, aoPass: null, dofPass: null, _dof: null, _fullKeys: new Set(),
     // dynamic resolution (see _drsTick): scale within [min, cap]; cap = min(preset max, the memory budget's limit)
-    _drs: { on: false, scale: 1, min: 1, max: 1, cap: 1, level: 0, ema: 0, slow: 0, fast: 0, cool: 0, upWait: 3, rest: 0, restLen: 30, full: false, inject: null, trial: null, changes: 0, lastDownAt: 0, log: [] },
+    _drs: { on: false, scale: 1, min: 1, max: 1, cap: 1, level: 0, ema: 0, slow: 0, fast: 0, cool: 0, upWait: 3, rest: 0, restLen: 30, full: false, inject: null, trial: null, changes: 0, clock: 0, badScale: 0, badAt: 0, _lastUpAt: 0, shadowLow: false, log: [] },
 
     init() {
       const container = document.getElementById('game-container');
-      this.quality = resolveQuality();
-      this.preset = PRESETS[this.quality];
       // §14.4.3: three r170 needs WebGL2. Probe first; a renderer that still throws is the same case. Either way the
       // scene and camera are built so the world modules initialise, nothing is drawn, and 70-app shows the friendly
       // 2D-only screen on 'engine:unsupported' — never a black dead world with the HUD over it.
+      // (The probe also reads the GPU's name: 'auto' quality starts on `low` on a software rasteriser.)
       let renderer = null, reason = this._probeWebGL2();
+      this.quality = resolveQuality();
+      this.preset = PRESETS[this.quality];
       if (!reason) {
         try {
           renderer = new THREE.WebGLRenderer({
@@ -1034,6 +1341,8 @@
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 0.88;
+      this.renderer = renderer;
+      this._applyTone();
       renderer.shadowMap.enabled = !!this.preset.shadows && G.settings.shadows !== false;
       renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
       renderer.info.autoReset = false; // one reset per frame in render(): composer frames count every pass
@@ -1108,6 +1417,11 @@
         const c = document.createElement('canvas');
         const gl = c.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
         if (!gl) return c.getContext('webgl') ? 'webgl1-only' : 'no-webgl2';
+        try {
+          const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+          const name = String((dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER) || '');
+          this.gpu = { renderer: name.slice(0, 160), software: SOFT_GPU_RE.test(name) };
+        } catch (e) { this.gpu = { renderer: '', software: false }; }
         try { gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch (e) { /* probe context: let it go */ }
         return null;
       } catch (e) { return 'probe: ' + String((e && e.message) || e).slice(0, 120); }
@@ -1178,17 +1492,159 @@
       return true;
     },
 
+    // ------------------------------------------------------------ key light + its shadow (CONTRACT §16.3)
+    // keyDir: the direction TO the key light — the sun by day, the moon by night (51-weather writes it; the light is
+    // placed by placeKeyLight). _sh: the shadow frustum now { R half-size, wide, size, texel }.
+    keyDir: new THREE.Vector3(0.4, 0.8, 0.3).normalize(),
+    // the wind every module shares (51-weather writes it; trees, grass, water and smoke may read it): a unit-ish
+    // direction on the ground plane and a strength 0..2 (1 = a normal day)
+    wind: { x: 0.86, z: 0.5, strength: 1 },
+    _sh: { R: 55, wide: false, size: 0, texel: 0.05, t: 0 },
+    /** shadow map size: the preset's; 4096 on `high` where a real GPU takes 8192² textures and the device has memory
+     *  (a 4096² map is ~134 MB: packed depth + its depth buffer; never on a software rasteriser).
+     *  ?shadow=1024|2048|4096 pins it (tests). The dynamic resolution drops it back to the preset's size while the
+     *  render scale is far down. */
+    _shadowSize() {
+      const p = this.preset, want = p.shadowSize || 1024, r = this.renderer;
+      if (!r) return want;
+      const max = r.capabilities.maxTextureSize || 2048, flag = Number(G.params?.get?.('shadow'));
+      if (flag === 1024 || flag === 2048 || flag === 4096) return Math.min(flag, max);
+      if (p.name !== 'high' || this._drs.shadowLow || (this.gpu && this.gpu.software)) return Math.min(want, max);
+      const mem = Number(navigator.deviceMemory) || 8;
+      return max >= 8192 && mem >= 8 && !G.input?.touchUI ? 4096 : Math.min(want, max);
+    },
     _configureShadow(sun) {
-      const s = sun.shadow;
-      const size = this.preset.shadowSize || 1024;
-      s.mapSize.set(size, size);
-      const R = this.quality === 'high' ? 55 : 45;
-      Object.assign(s.camera, { left: -R, right: R, top: R, bottom: -R, near: 1, far: 400 });
+      const s = sun.shadow, S = this._sh;
+      const size = this._shadowSize();
+      if (s.mapSize.x !== size || s.mapSize.y !== size) {
+        s.mapSize.set(size, size);
+        if (s.map) { s.map.dispose(); s.map = null; }   // a new map size needs a new shadow target
+      }
+      S.size = size;
+      this._shadowFrustum(S.wide, sun);
+    },
+    /** the frustum half-size (near / wide view), depth range, biases and filter radius for the current map size */
+    _shadowFrustum(wide, sun = this.sun) {
+      const s = sun && sun.shadow;
+      if (!s || !s.camera) return;
+      const S = this._sh, range = SHADOW_RANGE[this.quality] || SHADOW_RANGE.medium;
+      const R = S.R = wide ? range[1] : range[0];
+      S.wide = !!wide;
+      S.texel = (2 * R) / Math.max(1, s.mapSize.x);
+      Object.assign(s.camera, { left: -R, right: R, top: R, bottom: -R, near: 1, far: SHADOW_DIST + R + 60 });
       s.camera.updateProjectionMatrix();
-      s.bias = -0.00035;
-      s.normalBias = 0.035;
-      s.radius = 3;
-      if (s.map) { s.map.dispose(); s.map = null; } // a new map size needs a new shadow target
+      // three draws BACK faces into the map, so closed solids never shadow their own lit side. What is left needs
+      // little: a depth offset of 1.5 cm + a quarter texel (double-sided sheets), and the lookup moved ~1.3 texels
+      // along the normal (the soft filter is 3 texels wide). The old constant offset — 0.00035 of a 400 m range, 14 cm
+      // — let light leak under walls and detached every contact shadow.
+      s.bias = -(0.015 + S.texel * 0.25) / (s.camera.far - s.camera.near);
+      s.normalBias = clamp(S.texel * 1.3, 0.02, 0.16);
+      s.radius = this.renderer && this.renderer.shadowMap.type === THREE.PCFSoftShadowMap ? 1 : 1.5;
+    },
+    /** near or wide shadow frustum? Looked at twice a second: wide when the ground ahead lies far below the camera
+     *  (만장대 over the valley) or through the telescope. Also follows a changed map size (dynamic resolution). */
+    _shadowLevel(dt) {
+      const S = this._sh, sun = this.sun, cam = this.camera;
+      if (!sun || !sun.castShadow || !sun.shadow || !cam) return;
+      // (half a second of the wall clock: the loop's dt is clamped, and a slow device would look a long way behind)
+      const now = performance.now();
+      if (now - (S.at || 0) < 500) return;
+      S.at = now;
+      // inside a room the indoor profile owns the frustum; everything casts again (a room entered from a wide view)
+      if (this._indoor && this._indoorGoal) { this._shadowCasters(false); return; }
+      if (this._shadowSize() !== S.size) this._configureShadow(sun);
+      _camFwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
+      const fl = Math.hypot(_camFwd.x, _camFwd.z) || 1, fx = _camFwd.x / fl, fz = _camFwd.z / fl;
+      let low = Infinity;
+      for (let i = 1; i <= 3; i++) {
+        let h = NaN;
+        try { h = G.world.terrainHeight(cam.position.x + fx * 40 * i, cam.position.z + fz * 40 * i); } catch (e) { /* no terrain yet */ }
+        if (Number.isFinite(h) && h < low) low = h;
+      }
+      const drop = Number.isFinite(low) ? cam.position.y - low : 0, tele = fin(cam.fov, 55) < 32;
+      const wide = tele || drop > (S.wide ? 12 : 17);
+      if (wide !== S.wide) this._shadowFrustum(wide);
+      this._shadowCasters(S.wide);
+    },
+    /** Wide frustum: small things far from the camera stop casting — their shadows cannot be seen from there, and each
+     *  is one more draw call of the shadow pass (the whole valley's props would double it). Buildings, trees, the
+     *  만장대 and whatever is within SHADOW_KEEP metres keep theirs. Near frustum: everything casts as its owner set it.
+     *  Units: each child of `props`, each NPC / visitor (they move: their own position), every other top-level group. */
+    _shadowCasters(wide) {
+      const S = this._sh, scene = this.scene, cam = this.camera;
+      if (!scene || !cam) return;
+      if (!wide) {
+        // the usual case: nothing to look for — give back what a wide view switched off, and forget the list
+        if (S.far) { for (const it of S.far) if (it.off) for (const m of it.meshes) m.castShadow = true; S.far = null; }
+        return;
+      }
+      S.farAge = (S.farAge || 0) + 1;
+      const key = scene.children.length;
+      if (!S.far || S.farKey !== key || S.farAge > 20) {
+        for (const it of S.far || []) if (it.off) for (const m of it.meshes) m.castShadow = true;
+        const list = [], box = new THREE.Box3(), sph = new THREE.Sphere();
+        const unit = (obj, moving) => {
+          const meshes = [];
+          box.makeEmpty();
+          obj.traverse((o) => {
+            if (!(o.isMesh || o.isPoints || o.isLine) || !o.castShadow || o.isInstancedMesh || !o.geometry) return;
+            if (!moving) {
+              if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+              const bb = o.geometry.boundingBox;
+              if (!bb || bb.isEmpty()) return;
+              box.union(_cullBox.copy(bb).applyMatrix4(o.matrixWorld));
+            }
+            meshes.push(o);
+          });
+          if (!meshes.length) return;
+          if (moving) { list.push({ obj, x: 0, y: 0, z: 0, r: 2, meshes, off: false }); return; }
+          if (box.isEmpty()) return;
+          box.getBoundingSphere(sph);
+          if (Number.isFinite(sph.center.x) && sph.radius > 0) list.push({ obj: null, x: sph.center.x, y: sph.center.y, z: sph.center.z, r: sph.radius, meshes, off: false });
+        };
+        for (const top of scene.children) {
+          const n = top.name || '';
+          if (!top.visible || SHADOW_KEEP_RE.test(n) || top.isLight || top.isCamera) continue;
+          if (n === 'props') for (const c of top.children) unit(c, false);
+          else if (n === 'npcs' || n === 'visitors') for (const c of top.children) unit(c, true);
+          else unit(top, false);
+        }
+        S.far = list; S.farKey = key; S.farAge = 0;
+      }
+      const cp = cam.position;
+      for (const it of S.far) {
+        if (it.obj) { const e = it.obj.matrixWorld.elements; it.x = e[12]; it.y = e[13]; it.z = e[14]; }
+        const off = Math.hypot(it.x - cp.x, it.y - cp.y, it.z - cp.z) - it.r > SHADOW_KEEP;
+        if (off !== it.off) { it.off = off; for (const m of it.meshes) m.castShadow = !off; }
+      }
+    },
+    /** Place the key light: at SHADOW_DIST along keyDir from a centre a little ahead of the camera, and that centre
+     *  snapped to whole shadow texels in light space — the map's texel grid stays where it is in the world while the
+     *  player walks, so shadow edges do not crawl. (Inside a room the indoor profile places the light afterwards.) */
+    placeKeyLight() {
+      const sun = this.sun, f = this.focus;
+      if (!sun || !Number.isFinite(f.x) || !Number.isFinite(f.y) || !Number.isFinite(f.z)) return;
+      const d = _kd.copy(this.keyDir);
+      if (!(d.lengthSq() > 1e-6) || !Number.isFinite(d.x + d.y + d.z)) d.copy(this.sunDir);
+      if (d.y < 0.08) d.y = 0.08;
+      d.normalize();
+      const c = _kc.copy(f), S = this._sh, cam = this.camera;
+      if (sun.castShadow && sun.shadow && cam && !(this._indoor && this._indoorGoal)) {
+        _camFwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
+        const fl = Math.hypot(_camFwd.x, _camFwd.z);
+        if (fl > 1e-3) { const ahead = S.R * (S.wide ? 0.6 : 0.35); c.x += (_camFwd.x / fl) * ahead; c.z += (_camFwd.z / fl) * ahead; }
+        // the light-space axes exactly as three builds them for the shadow camera (lookAt with up = +Y)
+        const xl = Math.hypot(d.z, d.x);
+        if (xl > 1e-4 && S.texel > 0) {
+          _kx.set(d.z / xl, 0, -d.x / xl);
+          _ky.crossVectors(d, _kx);
+          const px = c.dot(_kx), py = c.dot(_ky);
+          c.addScaledVector(_kx, Math.round(px / S.texel) * S.texel - px).addScaledVector(_ky, Math.round(py / S.texel) * S.texel - py);
+        }
+      }
+      sun.target.position.copy(c);
+      sun.position.copy(c).addScaledVector(d, SHADOW_DIST);
+      sun.target.updateMatrixWorld();
     },
 
     /** drop = true: the GL objects are already gone (a restored context) — forget them without dispose() */
@@ -1199,7 +1655,7 @@
         for (const p of c.passes || []) { try { p.dispose?.(); } catch (e) { /* already gone */ } }
         try { c.dispose?.(); } catch (e) { /* ignore */ }
       }
-      this.composer = null; this.bloomPass = null; this.atmosPass = null; this._scenePass = null;
+      this.composer = null; this.bloomPass = null; this.atmosPass = null; this._scenePass = null; this.aoPass = null; this.dofPass = null;
     },
 
     _setupComposer() {
@@ -1226,6 +1682,15 @@
         const sp = new ScenePass(this, { samples: lay.samples });
         composer.addPass(sp);
         this._scenePass = sp;
+        if (this.preset.ao && G.params?.get?.('ao') !== '0') {
+          // ambient occlusion right after the scene, before the NaN scrub and bloom; the first thing the dynamic
+          // resolution sheds (_applyShed); gone with the composer under watchdog.composerOff
+          const ao = new AOPass(this);
+          ao.uniforms.uRadius.value = this.lk('aoR', 0.9); ao.uniforms.uIntensity.value = this.lk('aoI', 1.0); ao.uniforms.uFade.value = this.lk('aoFade', 80);
+          ao.compUniforms.uStrength.value = this.lk('aoS', 1); ao.compUniforms.uShow.value = G.params?.get?.('ao') === 'show' ? 1 : 0;
+          composer.addPass(ao);
+          this.aoPass = ao;
+        }
         const bloomOn = !!this.preset.bloom && G.settings.bloom !== false && !!ADDONS.UnrealBloomPass;
         if (bloomOn) {
           // NaN/Inf scrub before bloom: one bad pixel (any shader, any GPU) must never be blurred into a black box;
@@ -1235,6 +1700,13 @@
           const bloom = new ADDONS.UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 0.24, 0.4, 1.05);
           composer.addPass(bloom);
           this.bloomPass = bloom;
+        }
+        {
+          // depth of field: in the chain but off until photo mode asks for it (engine.dof); costs nothing while off
+          const dp = new DofPass(this);
+          composer.addPass(dp);
+          this.dofPass = dp;
+          this._applyDof();
         }
         if (this.preset.grade) {
           // the atmosphere pass scrubs its own input, so medium (no bloom) is NaN-safe too
@@ -1247,6 +1719,8 @@
       } catch (e) {
         G.log.warn('ENGINE', 'post-processing unavailable, rendering directly', e);
         this._disposeComposer();
+        // (a chain that failed half-way was never assigned to this.composer: forget its passes too)
+        this.bloomPass = null; this.atmosPass = null; this._scenePass = null; this.aoPass = null; this.dofPass = null;
         D.on = false; D.scale = 1;
       }
       this._applyShed();
@@ -1291,6 +1765,15 @@
       const px = sp.rt.width * sp.rt.height;
       return { samples: sp.samples, pixels: px, width: sp.rt.width, height: sp.rt.height, bytes: Math.round(px * postBytesPerPixel(this.preset, sp.samples)), budget: POST_BUDGET_BYTES, passes: c.passes.length };
     },
+    /** developer look knobs: ?lk=name:value,name:value overrides a tuning number (screenshots A/B without a rebuild) */
+    lk(name, def) {
+      if (!this._lk) {
+        this._lk = {};
+        try { for (const kv of String(G.params?.get?.('lk') || '').split(',')) { const i = kv.indexOf(':'); if (i > 0) { const v = Number(kv.slice(i + 1)); if (Number.isFinite(v)) this._lk[kv.slice(0, i).trim()] = v; } } } catch (e) { /* no overrides */ }
+      }
+      const v = this._lk[name];
+      return v === undefined ? def : v;
+    },
     /** fn({ renderer, scene, camera, engine }) before every drawn frame's scene render (after guard.tick) -> off() */
     onPreRender(fn) {
       if (typeof fn !== 'function') return () => {};
@@ -1333,6 +1816,33 @@
       }
       return { w, h, raw, depth, near, far, frame: sp.frames };
     },
+    /** the ambient-occlusion buffer of the last drawn frame (self-tests): { w, h, min, mean, white: share of texels
+     *  without any occlusion, dark: share under 0.2 } | null when the AO pass is not running */
+    debugAO() {
+      const r = this.renderer, ao = this.aoPass;
+      if (!r || !ao || !ao.enabled || !this._scenePass || !this._scenePass.frames || this._isLost()) return null;
+      const w = ao.rtA.width, h = ao.rtA.height, buf = new Uint8Array(w * h * 4), gl = r.getContext();
+      const pack = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
+      if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      try { r.readRenderTargetPixels(ao.rtA, 0, 0, w, h, buf); } finally { if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack); }
+      let min = 255, sum = 0, white = 0, dark = 0;
+      for (let i = 0; i < buf.length; i += 4) { const v = buf[i]; if (v < min) min = v; sum += v; if (v >= 254) white++; if (v < 51) dark++; }
+      const n = w * h;
+      return { w, h, min: min / 255, mean: sum / n / 255, white: white / n, dark: dark / n };
+    },
+    /** depth of field (photo mode): dof({ focus: m from the camera, range: m kept sharp behind it, amount: 0..1.5 }) turns
+     *  the pass on / updates it, dof(null) turns it off. Nothing happens without the post chain (`low`). -> on? */
+    dof(opts) {
+      this._dof = opts ? { focus: clamp(fin(Number(opts.focus), 8), 0.3, 500), range: clamp(fin(Number(opts.range), 3), 0.1, 200), amount: clamp(fin(Number(opts.amount), 1), 0, 1.5) } : null;
+      return this._applyDof();
+    },
+    _applyDof() {
+      const p = this.dofPass, d = this._dof;
+      if (!p) return false;
+      p.enabled = !!(d && d.amount > 0.01);
+      if (p.enabled) { p.uniforms.uFocus.value = d.focus; p.uniforms.uRange.value = d.range; p.amount = d.amount; }
+      return p.enabled;
+    },
     /** hold the render scale at its maximum while any key is held (photo mode: the picture is taken at full scale) */
     fullScale(on, key = 'api') {
       if (on) this._fullKeys.add(key); else this._fullKeys.delete(key);
@@ -1348,6 +1858,8 @@
       D.scale = clamp(fin(s, D.cap), Math.min(D.min, D.cap), D.cap);
       if (!this.composer || Math.abs(D.scale - before) < 1e-4) return D.scale;
       this._applyPostSize();
+      // far down the scale the 4096² shadow map of `high` goes back to the preset's size too (see _shadowLevel)
+      if (D.on && D.scale < D.cap * 0.8) D.shadowLow = true; else if (D.scale >= D.cap - 1e-3) D.shadowLow = false;
       D.changes++;
       D.log.push({ at: Math.round(performance.now()), scale: +D.scale.toFixed(3), ema: +D.ema.toFixed(1), why: why || '' });
       if (D.log.length > 40) D.log.shift();
@@ -1367,7 +1879,8 @@
      * preset's minimum); below ~19.5 ms (51 fps) for `upWait` seconds it gives back in the reverse order. Between the
      * two bounds nothing moves (hysteresis: one step changes the pixel count by 23 %, the band is 51 % wide). Steps
      * that buy nothing (a display capped at 30 Hz, a slow CPU: two scale steps without 6 % gain) are undone and the
-     * controller rests (30 s, doubling to 5 min). An up-step that is slow again within 8 s doubles `upWait` (max 30 s).
+     * controller rests (30 s, doubling to 5 min). An up-step that is slow again within 8 s doubles `upWait` (max 30 s),
+     * and a scale that was too slow is not tried again for a minute.
      * Stalls (> 1 s), a hidden tab, loading, a thinned render (dev center, big modal) and photo mode are not judged.
      * Below the minimum scale the existing auto step-down of the quality preset takes over (fps < 24 for 6 s).
      */
@@ -1381,6 +1894,7 @@
       const m = Math.min(ms, 250);
       D.ema = D.ema > 0 ? D.ema + (m - D.ema) * (1 - Math.exp(-dt / 0.6)) : m;
       D.cool = Math.max(0, D.cool - dt); D.rest = Math.max(0, D.rest - dt);
+      D.clock = (D.clock || 0) + dt;   // the controller's own clock: seconds of judged frames
       const SLOW = 29.5, FAST = 19.5;
       if (D.ema > SLOW) { D.slow += dt; D.fast = 0; }
       else {
@@ -1388,11 +1902,11 @@
         if (D.ema < FAST) { D.fast += dt; D.slow = 0; } else { D.slow = Math.max(0, D.slow - dt); D.fast = Math.max(0, D.fast - dt); }
       }
       if (D.cool > 0) { D.slow = D.fast = 0; return; }   // the smoothed time is still settling on the last change
-      const now = performance.now();
+      const now = D.clock;
       if (D.slow >= 1) {
         D.slow = 0;
         if (D.rest > 0) return;
-        if (D._lastUpAt && now - D._lastUpAt < 8000) { D.upWait = Math.min(30, D.upWait * 2); D._lastUpAt = 0; }   // giving back was too early
+        if (D._lastUpAt > 0 && now - D._lastUpAt < 8) { D.upWait = Math.min(30, D.upWait * 2); D._lastUpAt = 0; }   // giving back was too early
         const T = D.trial || (D.trial = { ema: D.ema, scale: D.scale, level: D.level, steps: 0 });
         if (T.steps >= 2 && D.ema > T.ema * 0.94) {
           // shedding bought nothing: the resolution is not what limits this device — put everything back and rest
@@ -1403,12 +1917,16 @@
         const ao = this.aoPass, lo = Math.min(D.min, D.cap);
         if (D.level < 1 && ao && ao.enabled) { this._drsLevel(1); D.cool = 1.5; }
         else if (D.level < 2 && this.reflectOn) { this._drsLevel(2); D.cool = 1.5; }
-        else if (D.scale > lo + 1e-3) { T.steps++; this._setScale(Math.max(lo, D.scale * 0.88), 'slow'); D.cool = 1.5; }
+        else if (D.scale > lo + 1e-3) { T.steps++; D.badScale = D.scale; D.badAt = now; this._setScale(Math.max(lo, D.scale * 0.88), 'slow'); D.cool = 1.5; }
         else D.cool = 2;   // at the floor
-        D.lastDownAt = now;
       } else if (D.fast >= D.upWait) {
         D.fast = 0;
-        if (D.scale < D.cap - 1e-3) { this._setScale(Math.min(D.cap, D.scale / 0.88), 'fast'); D.cool = 2.5; }
+        if (D.scale < D.cap - 1e-3) {
+          // a scale that was too slow less than a minute ago is not tried again yet
+          const next = Math.min(D.cap, D.scale / 0.88);
+          if (D.badScale > 0 && next >= D.badScale - 1e-3 && now - D.badAt < 60) { D.cool = 3; return; }
+          this._setScale(next, 'fast'); D.cool = 2.5;
+        }
         else if (D.level > 0) { this._drsLevel(D.level - 1); D.cool = 4; }
         else { D.restLen = 30; if (D.upWait > 3) D.upWait = Math.max(3, D.upWait * 0.75); return; }
         D._lastUpAt = now;
@@ -1429,7 +1947,9 @@
     _applyShed() {
       const lvl = this._drs.level;
       if (this.aoPass) this.aoPass.enabled = lvl < 1 && G.params?.get?.('ao') !== '0';
-      this.reflectOn = (this.preset.reflect | 0) >= 2 && lvl < 2;
+      // planar water reflection: preset knob reflect 2 (no preset has it by default; ?reflect=2 turns it on)
+      const rf = Number(G.params?.get?.('reflect')), level = G.params?.has?.('reflect') && Number.isFinite(rf) ? rf : (this.preset.reflect | 0);
+      this.reflectOn = level >= 2 && this.preset.name !== 'low' && lvl < 2;
     },
     reflectOn: false,
 
@@ -1450,6 +1970,7 @@
       if (!this.renderer) { G.bus.emit('engine:quality', { quality: name, preset: this.preset, reloadSuggested: false }); return; }
       this.renderer.setPixelRatio(this._pixelRatio());
       this.renderer.shadowMap.type = name === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+      this._applyTone();
       this.setShadows(G.settings.shadows !== false);
       this._setupComposer();
       this.resize();
@@ -1474,6 +1995,20 @@
       // and the PMREM blur passes)
       const step = THREE.MathUtils.degToRad(ENV_SUN_STEP[this.preset?.name] ?? 3);
       if (opts.env || !this._envDir || this._envDir.angleTo(this.sunDir) > step) this._envDirty = true;
+      // opts.now: a jump (the clock or the weather was set by hand) — the sky of the old hour must not light the new one
+      if (opts.now && this._envDirty) this._envTimer = 0;
+    },
+
+    /** the tone curve of the preset (see TONES): `low` ACES as always, medium / high the chosen one */
+    _applyTone(pick) {
+      const r = this.renderer;
+      if (!r) return;
+      const flag = String(pick || G.params?.get?.('tone') || '').toLowerCase();
+      const name = TONES[flag] != null ? flag : (this.preset.maps ? TONE_HQ : 'aces');
+      r.toneMapping = TONES[name];
+      this.tone = name;
+      const T = TONE_TRIM[name] || TONE_TRIM.aces, hq = name !== 'aces';
+      this._toneTrim = { exposure: hq ? this.lk('toneE', T.exposure) : 1, contrast: hq ? this.lk('toneC', T.contrast) : 1, saturation: hq ? this.lk('toneS', T.saturation) : 1, indoor: (hq && T.indoor) || null };
     },
 
     /** colour grade targets (see header). Unknown keys are ignored; every value is clamped. */
@@ -1522,11 +2057,14 @@
       }
       _lift.lerp(_liftGoal, k); _gain.lerp(_gainGoal, k);
       // exposure is the renderer's (OutputPass / direct render): works on every preset
-      if (this.renderer) this.renderer.toneMappingExposure = s.exposure * (1 + (this.atmosPass ? 0 : s.flash * 0.35));
+      const T0 = this._toneTrim || TONE_TRIM.aces, ik = T0.indoor ? clamp(fin(Number(this.indoor), 0), 0, 1) : 0, Ti = T0.indoor || T0;
+      _trim.exposure = T0.exposure + (Ti.exposure - T0.exposure) * ik; _trim.contrast = T0.contrast + (Ti.contrast - T0.contrast) * ik; _trim.saturation = T0.saturation + (Ti.saturation - T0.saturation) * ik;
+      const trim = _trim;
+      if (this.renderer) this.renderer.toneMappingExposure = s.exposure * trim.exposure * (1 + (this.atmosPass ? 0 : s.flash * 0.35));
       const ap = this.atmosPass;
       if (ap) {
         const u = ap.uniforms;
-        u.uContrast.value = s.contrast; u.uSaturation.value = s.saturation; u.uWarmth.value = s.warmth;
+        u.uContrast.value = s.contrast * trim.contrast; u.uSaturation.value = s.saturation * trim.saturation; u.uWarmth.value = s.warmth;
         u.uVignette.value = s.vignette; u.uFlash.value = s.flash;
         u.uLift.value.copy(_lift); u.uGain.value.copy(_gain);
       }
@@ -1550,6 +2088,17 @@
       _sunCol.copy(this.sun ? this.sun.color : _sunCol.setRGB(1, 0.95, 0.85));
       const m = Math.max(_sunCol.r, _sunCol.g, _sunCol.b, 1e-4);
       u.uSunCol.value.setRGB(_sunCol.r / m, _sunCol.g / m, _sunCol.b / m);
+      // aerial perspective: needs this frame's scene depth (the scene pass of the post chain) and a sun above the ridge
+      const sp = this._scenePass, haze = sp ? clamp(fin(this.atmos.haze, 0), 0, 1) * up : 0, fog = this.scene.fog;
+      u.uHazeAmt.value = haze;
+      if (haze > 0.001) {
+        u.tDepth.value = sp.rt.depthTexture;
+        u.uProjInv.value.copy(cam.projectionMatrixInverse);
+        u.uCamRot.value.setFromMatrix4(cam.matrixWorld);
+        u.uSunDirW.value.copy(this.sunDir);
+        u.uHazeCol.value.copy(u.uSunCol.value).multiplyScalar(0.26 * clamp(fin(this.sun ? this.sun.intensity : 0, 0) / 3, 0, 1.2));
+        u.uHazeDensity.value = fog && fog.isFogExp2 ? clamp(fin(fog.density, 0.0026), 0, 0.05) : 0.0026;
+      }
     },
 
     /** copy sky look (turbidity etc.) to the env-bake sky and re-bake scene.environment */
@@ -1564,12 +2113,90 @@
       // object, so lit materials keep their programs (pmrem.fromScene allocated a new target per bake, and the new
       // texture made every lit material re-check its program on the next frame)
       if (!this._envCam) this._envCam = new THREE.CubeCamera(0.1, 1100, new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType }));
+      // medium / high: the ground and the ridges round the player are part of the environment (see ENVP_*)
+      try { if (this.preset.maps) this._envProxyUpdate(); else if (this._envProxy) this._envProxy.visible = false; }
+      catch (e) { if (this._envProxy) this._envProxy.visible = false; if (!this._envProxyWarned) { this._envProxyWarned = true; G.log.warn('ENGINE', 'environment ground proxy failed (sky only)', e?.message || e); } }
       this._envCam.update(this.renderer, this._envScene);
       this._envRT = this._pmrem.fromCubemap(this._envCam.renderTarget.texture, this._envRT);
       this.scene.environment = this._envRT.texture;
       this.scene.environmentIntensity = this.envIntensity ?? 0.5; // baked sky ~= sun; keep IBL as a soft fill
       (this._envDir || (this._envDir = new THREE.Vector3())).copy(this.sunDir);
+      (this._envOrigin || (this._envOrigin = new THREE.Vector3())).copy(this.focus);
       this._envDirty = false;
+      this.envBakes = (this.envBakes || 0) + 1;
+    },
+    /** the environment proxy mesh (lazy): a fan of ENVP_SEG × ENVP_RINGS quads round the bake point */
+    _envProxyMesh() {
+      if (this._envProxy) return this._envProxy;
+      const nv = 1 + ENVP_SEG * (ENVP_RINGS + 1);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+      geo.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+      const idx = [];
+      for (let s = 0; s < ENVP_SEG; s++) idx.push(0, 1 + ((s + 1) % ENVP_SEG), 1 + s);   // centre fan (normals up)
+      for (let r = 0; r < ENVP_RINGS; r++) for (let s = 0; s < ENVP_SEG; s++) {
+        const s1 = (s + 1) % ENVP_SEG, a = 1 + r * ENVP_SEG + s, b = 1 + r * ENVP_SEG + s1, c = 1 + (r + 1) * ENVP_SEG + s, d = 1 + (r + 1) * ENVP_SEG + s1;
+        idx.push(a, b, d, a, d, c);
+      }
+      geo.setIndex(idx);
+      const mat = new THREE.ShaderMaterial({
+        name: 'EnvGroundProxy',
+        uniforms: { uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSun: { value: new THREE.Color(2, 2, 2) }, uSky: { value: new THREE.Color(0.6, 0.7, 0.8) }, uGround: { value: new THREE.Color(0.3, 0.3, 0.2) }, uFog: { value: new THREE.Color(0.7, 0.8, 0.9) }, uFogDensity: { value: 0.0026 }, uWet: { value: 0 } },
+        vertexShader: ENVP_VERT, fragmentShader: ENVP_FRAG, side: THREE.DoubleSide, fog: false, toneMapped: false,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = 'env-ground'; mesh.frustumCulled = false;
+      this._envProxyH = new Float32Array(nv);
+      this._envScene.add(mesh);
+      return (this._envProxy = mesh);
+    },
+    /** heights and colours round the player, light and fog as the scene has them right now */
+    _envProxyUpdate() {
+      const mesh = this._envProxyMesh(), W = G.world, f = this.focus, H = this._envProxyH;
+      const ox = fin(f.x, 0), oz = fin(f.z, 0);
+      let gy = 0;
+      try { gy = fin(W.terrainHeight(ox, oz), 0); } catch (e) { gy = 0; }
+      const oy = Math.max(fin(f.y, gy), gy) + 1.7;   // eye height where the player stands (a deck, a platform)
+      const pos = mesh.geometry.attributes.position.array, col = mesh.geometry.attributes.aCol.array;
+      const kinds = this._envProxyK || (this._envProxyK = new Array(H.length));
+      const put = (i, x, z, R) => {
+        let h = gy, kind = 'grass';
+        try { h = fin(W.terrainHeight(ox + x, oz + z), gy); } catch (e) { h = gy; }
+        try { kind = W.isWater(ox + x, oz + z) ? 'water' : R < 130 ? (W.surfaceAt(ox + x, oz + z) || 'grass') : 'grass'; } catch (e) { kind = 'grass'; }
+        pos[i * 3] = x; pos[i * 3 + 1] = h - oy; pos[i * 3 + 2] = z;
+        H[i] = h; kinds[i] = kind;
+      };
+      put(0, 0, 0, 0);
+      for (let r = 0; r <= ENVP_RINGS; r++) {
+        const R = ENVP_RADII[r];
+        for (let s = 0; s < ENVP_SEG; s++) { const a = (s / ENVP_SEG) * Math.PI * 2; put(1 + r * ENVP_SEG + s, Math.cos(a) * R, Math.sin(a) * R, R); }
+      }
+      // steep ground is forest, very steep ground rock (the valley's slopes are wooded)
+      for (let r = 0; r <= ENVP_RINGS; r++) for (let s = 0; s < ENVP_SEG; s++) {
+        const i = 1 + r * ENVP_SEG + s;
+        if (kinds[i] !== 'grass') continue;
+        const r0 = Math.max(0, r - 1), r1 = Math.min(ENVP_RINGS, r + 1);
+        const slope = Math.abs(H[1 + r1 * ENVP_SEG + s] - H[1 + r0 * ENVP_SEG + s]) / Math.max(1, ENVP_RADII[r1] - ENVP_RADII[r0]);
+        if (slope > 1.0) kinds[i] = 'rock'; else if (slope > 0.3 || ENVP_RADII[r] >= 360) kinds[i] = 'forest';
+      }
+      for (let i = 0; i < H.length; i++) { const c = ENVP_ALBEDO[kinds[i]] || ENVP_ALBEDO.grass; col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2]; }
+      mesh.geometry.attributes.position.needsUpdate = true; mesh.geometry.attributes.aCol.needsUpdate = true;
+      mesh.geometry.computeVertexNormals();
+      const u = mesh.material.uniforms, sun = this.sun, hemi = this.hemi, fog = this.scene.fog;
+      if (sun) {
+        u.uSunDir.value.copy(sun.position).sub(sun.target.position);
+        if (u.uSunDir.value.lengthSq() > 1e-6) u.uSunDir.value.normalize(); else u.uSunDir.value.set(0, 1, 0);
+        u.uSun.value.copy(sun.color).multiplyScalar(clamp(fin(sun.intensity, 0), 0, 8) * 0.9);
+      }
+      if (hemi) {
+        // (the ground also receives this very environment: counted as a share on top of the hemisphere light)
+        const k = clamp(fin(hemi.intensity, 0.5), 0, 4) * (1 + 1.2 * clamp(fin(this.envIntensity, 0.5), 0, 2));
+        u.uSky.value.copy(hemi.color).multiplyScalar(k); u.uGround.value.copy(hemi.groundColor).multiplyScalar(k);
+      }
+      if (fog) { u.uFog.value.copy(fog.color); u.uFogDensity.value = fog.isFogExp2 ? clamp(fin(fog.density, 0), 0, 0.05) : 0; }
+      u.uWet.value = clamp(fin(Number(G.sys.weather?.wetness), 0), 0, 1);
+      mesh.visible = true;
     },
     /** behind the loading screen (core runs postInit before the loader hides): every system has built its scene */
     async postInit() {
@@ -1889,13 +2516,9 @@
       // repair normals of geometries added since the last scan (crops regrowing, decorations, effects) ~every 1.5 s
       this._normScan = (this._normScan ?? 9) + dt; // first frame scans immediately
       if (this._normScan > 1.5 && this.scene) { this._normScan = 0; scanSceneNormals(this.scene); guard.scan(this.scene); }
-      // shadow camera + sun follow the focus point (player)
-      const f = this.focus;
-      if (this.sun && Number.isFinite(f.x) && Number.isFinite(f.z)) {
-        this.sun.position.set(f.x + this.sunDir.x * 160, f.y + Math.max(this.sunDir.y, 0.08) * 160, f.z + this.sunDir.z * 160);
-        this.sun.target.position.copy(f);
-        this.sun.target.updateMatrixWorld();
-      }
+      // the key light and its shadow frustum follow the focus point (player), snapped to the shadow texel grid
+      this._shadowLevel(dt);
+      this.placeKeyLight();
       this._updateGrade(dt);
       this._updateOutline(dt);
       this._updateCull(dt);
@@ -1903,8 +2526,15 @@
       const wallNow = performance.now(), wallDt = this._wallT ? (wallNow - this._wallT) / 1000 : 0;
       this._wallT = wallNow;
       if (wallDt > 0 && this._drs.on) this._drsTick(wallDt);
-      // re-bake environment at most every 2s when sun/sky changed
-      this._envTimer -= dt;
+      // the environment holds the ground round the player (medium / high): a new bake after a walk of 30 m
+      const eo = this._envOrigin, fo = this.focus;
+      if (eo && !this._envDirty && this.preset.maps && !this._indoor) { const dx = fo.x - eo.x, dz = fo.z - eo.z; if (dx * dx + dz * dz > 900 || Math.abs(fo.y - eo.y) > 8) this._envDirty = true; }
+      // environment strength by time of day / weather (51-weather sets engine.envIntensity on medium / high)
+      if (!this._indoor && this.scene && this.envIntensity != null) this.scene.environmentIntensity = clamp(fin(Number(this.envIntensity), 0.5), 0, 4);
+      // re-bake environment at most every 2s when sun/sky changed — 2 s of the wall clock: the loop clamps dt to 0.1 s,
+      // and on a device (or a test machine) that needs seconds per frame the clamped clock kept a noon sky in the
+      // reflections for minutes after night had fallen
+      this._envTimer -= Math.max(dt, Math.min(wallDt, 5));
       if (this._envDirty && this._envTimer <= 0) { this._envTimer = 2; this.updateEnvironment(); }
       // fps & auto quality — measured on the wall clock (the loop clamps dt to 0.1 s, which would make a 3 fps device
       // read "10 fps"); a window that spans a hidden tab or a long stall is dropped instead of judged
@@ -1925,11 +2555,41 @@
           if (this._lowFpsTime > 6 && this.quality !== 'low') {
             const next = this.quality === 'high' ? 'medium' : 'low';
             this.setQuality(next);
-            this._lowFpsTime = 0;
+            this._lowFpsTime = 0; this._up = { done: true };   // never stepped up again in this session
             G.ui?.toast?.(`화면이 부드럽게 움직이도록 그래픽 품질을 '${PRESETS[next].label}'(으)로 낮췄어요.`, { type: 'info' });
           }
+          this._autoStepUp();
         }
       }
+    },
+
+    /**
+     * 'auto' quality, the way up (CONTRACT §16.3): ONE step up after 20 s of headroom — ≥ 55 fps with the dynamic
+     * resolution at full scale and nothing shed — on a device that is not a touch device and has a real GPU. The step
+     * is a trial: under 45 fps for 2 s within the next 15 s puts the old preset back, and that was the only try. (The
+     * first 4 s after the step are not judged: new shader programs and texture uploads make any device stumble.)
+     * Called twice a second from update() while the setting is 'auto' (never with the ?quality= flag).
+     */
+    _autoStepUp() {
+      const U = this._up || (this._up = { done: false, roomy: 0, trial: null });
+      if (U.trial) {
+        const T = U.trial;
+        T.t += 0.5;
+        if (T.t <= 4) return;
+        if (this.fps < 45) T.bad += 0.5; else T.bad = Math.max(0, T.bad - 0.5);
+        if (T.bad >= 2) { U.trial = null; this.setQuality(T.from); G.log.info('ENGINE', `auto quality: back to ${T.from} (the step up was too much)`); }
+        else if (T.t >= 19) U.trial = null;
+        return;
+      }
+      if (U.done || this.quality === 'high' || G.input?.touchUI || (this.gpu && this.gpu.software)) return;
+      const D = this._drs, roomy = this.fps >= 55 && (!D.on || (D.level === 0 && D.scale >= D.cap - 1e-3));
+      U.roomy = roomy ? U.roomy + 0.5 : 0;
+      if (U.roomy < 20) return;
+      const from = this.quality, next = from === 'low' ? 'medium' : 'high';
+      U.done = true; U.roomy = 0; U.trial = { from, t: 0, bad: 0 };
+      this.setQuality(next);
+      G.log.info('ENGINE', `auto quality: ${from} → ${next} after 20 s of headroom`);
+      G.ui?.toast?.(`화면이 여유로워서 그래픽 품질을 '${PRESETS[next].label}'(으)로 올렸어요.`, { type: 'info' });
     },
 
     /** draw one frame. opts.force: never thinned out (a photo reads the frame right after) — the loop passes dt */
@@ -1968,6 +2628,8 @@
       this.frameInfo.calls = info.render.calls;
       this.frameInfo.triangles = info.render.triangles;
       this.frameInfo.post = info.render.calls - this.frameInfo.pre - this.frameInfo.scene;
+      // the camera of this frame, for whoever samples depthTexture inside the next scene pass (the water)
+      (this.prevViewProj || (this.prevViewProj = new THREE.Matrix4())).multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
       // §14.4.2: every 2 s the shown frame is read back at 96×54 and searched for a black / white block
       if (opts?.probe || watchdog.due(performance.now())) {
         watchdog.nextAt = performance.now() + watchdog.interval;

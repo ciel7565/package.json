@@ -3093,6 +3093,54 @@
       E._setScale(keep.scale, 'test-end'); D.changes = keep.changes;
     }
   });
+  // [render-light] ---- phase 8 light (CONTRACT §16.3): ambient occlusion, shadows, environment, tone
+  T('🖥️ 렌더', '주변 가림(AO): 높음에서만 · 장면 바로 뒤, NaN 청소·블룸보다 먼저 · 하늘은 가리지 않아요', () => {
+    const E = G.sys.engine, p = Gpu.passes();
+    if (!E?.renderer) return SKIP('엔진이 없어요');
+    const names = p.list.filter((x) => x.enabled).map((x) => x.name), i = names.indexOf('AOPass');
+    if (!E.preset.ao || !p.composer) return { ok: i < 0 && !E.aoPass, detail: `${E.quality}: AO 패스 없음 (높음 품질 · 후처리가 켜져 있을 때만 있어요)` };
+    if (!E.aoPass || !E.aoPass.enabled) return SKIP('AO 가 꺼져 있어요 (동적 해상도가 먼저 줄였거나 ?ao=0)');
+    E.render({ force: true });
+    const a = E.debugAO(), d = E.debugDepth(48, 27);
+    if (!a) return { ok: false, detail: 'AO 버퍼를 읽지 못했어요' };
+    const scrub = names.findIndex((n) => /NaNScrub/.test(n)), bloom = names.findIndex((n) => /Bloom/.test(n));
+    const order = i === 1 && (scrub < 0 || i < scrub) && (bloom < 0 || i < bloom);
+    let sky = 0;
+    if (d) for (let k = 0; k < d.raw.length; k++) if (d.raw[k] >= 1) sky++;
+    // some occlusion somewhere, never a dark frame: most of the picture stays open
+    const ok = order && a.mean > 0.75 && a.mean < 0.9995 && a.dark < 0.03 && a.white > 0.2 && near(E.aoPass.rtA.width, Math.floor(E.postInfo.width / 2), 1.01);
+    return { ok, detail: `${names.join(' → ')} · 절반 해상도 ${a.w}×${a.h} · 평균 밝기 ${(a.mean * 100).toFixed(1)} % · 가장 어두운 곳 ${(a.min * 100).toFixed(0)} % · 가림 없는 칸 ${(a.white * 100).toFixed(0)} % · 하늘 칸 ${sky}` };
+  });
+  T('🖥️ 렌더', '그림자: 빛 공간에서 텍셀 격자에 맞춰 움직여요 (걸어도 가장자리가 떨리지 않아요)', () => {
+    const E = G.sys.engine;
+    if (!E?.sun?.castShadow || !E.renderer?.shadowMap?.enabled || typeof E.placeKeyLight !== 'function' || !E._sh) return SKIP('그림자가 꺼진 품질이에요');
+    if (E._indoor && E._indoorGoal) return SKIP('방 안에서는 방의 창 그림자를 써요');
+    const keep = E.focus.clone(), T2 = E._sh.texel;
+    let worst = 0;
+    try {
+      for (let i = 0; i < 6; i++) {
+        E.focus.set(keep.x + i * 0.37, keep.y, keep.z - i * 0.53);
+        E.placeKeyLight();
+        const c = E.sun.target.position, d = E.sun.position.clone().sub(c).normalize();
+        const x = new THREE.Vector3(d.z, 0, -d.x).normalize(), y = new THREE.Vector3().crossVectors(d, x);
+        const px = c.dot(x) / T2, py = c.dot(y) / T2;
+        worst = Math.max(worst, Math.abs(px - Math.round(px)), Math.abs(py - Math.round(py)));
+      }
+    } finally { E.focus.copy(keep); E.placeKeyLight(); }
+    const s = E.sun.shadow, depth = s.camera.far - s.camera.near;
+    const ok = worst < 0.01 && -s.bias * depth < 0.08 && s.normalBias <= 0.17;
+    return { ok, detail: `격자에서 벗어난 정도 ${worst.toFixed(4)} 텍셀 · 지도 ${s.mapSize.x}px · 텍셀 ${(T2 * 100).toFixed(1)} cm · 범위 ±${E._sh.R} m${E._sh.wide ? ' (넓게)' : ''} · 깊이 여유 ${(-s.bias * depth * 100).toFixed(1)} cm · 노멀 여유 ${(s.normalBias * 100).toFixed(1)} cm` };
+  });
+  T('🖥️ 렌더', '하늘 빛(IBL): 중간·높음은 땅과 산 능선이 함께 구워지고 구름 사진 층이 있어요 · 낮음은 예전 그대로', () => {
+    const E = G.sys.engine, W = G.sys.weather;
+    if (!E?.renderer || !E.scene.environment) return SKIP('하늘 빛이 아직 없어요');
+    if (E._indoor) return SKIP('방 안에서는 방의 빛을 써요');
+    const proxy = !!(E._envProxy && E._envProxy.visible), cloudProg = !!W?._overlay?.material?.uniforms?.tSky;
+    if (!E.preset.maps) return { ok: !proxy && !cloudProg && E.tone === 'aces' && near(E.scene.environmentIntensity, 0.5, 1e-6), detail: `낮음: 하늘만 굽기 · ACES · 하늘 빛 세기 ${E.scene.environmentIntensity}` };
+    const packSky = !!G.pack?.has?.('sky/clear_noon');
+    const ok = proxy && (E.envBakes || 0) > 0 && (!packSky || cloudProg) && E.scene.environmentIntensity > 0.05 && E.scene.environmentIntensity < 1.5;
+    return { ok, detail: `땅 모형 ${proxy ? '있음' : '없음'} · 굽기 ${E.envBakes || 0}번 · 구름 층 ${cloudProg ? (W._skyTexOn ? '사진에서 만든 텍스처' : '준비 중(사진 해독 전)') : packSky ? '없음 ❌' : '자료 묶음 없음'} · 세기 ${E.scene.environmentIntensity.toFixed(2)} · 색 곡선 ${E.tone}` };
+  });
   T('🖥️ 렌더', '사진: GPU 화면을 잃었을 때 찍으면 빈 사진을 앨범에 넣지 않아요', async () => {
     const P = G.sys.photo, gl = G.sys.engine?.renderer?.getContext?.();
     if (typeof P?.capture !== 'function' || !gl || !G.state) return SKIP('사진 기능을 시험할 수 없어요');

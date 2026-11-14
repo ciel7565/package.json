@@ -326,6 +326,7 @@
     name: 'photo', order: 74, label: '사진',
     active: false, currentPhotoZone: null,
     filter: 'none', frame: true, grid: false, hidePlayer: false, lookAtCam: false, autoSave: true, timer: 0,
+    blurBack: true,   // phase 8: a soft background behind the character (depth of field; medium / high)
     filters: FILTERS,
     _ui: null, _busy: false, _zoneT: 0, _syncT: 0, _lookT: 0, _countdown: null, _labels: [], _full: new Map(),
     _cardTimer: 0, _clean: false, _shotTs: -1e9,
@@ -456,6 +457,7 @@
           toggle('frame', 'image', '전통 액자', '단청 무늬 액자와 체험관 로고를 넣어요'),
           toggle('hidePlayer', 'eye-off', '캐릭터 숨기기', '풍경만 찍어요'),
           toggle('lookAtCam', 'smile', '카메라 보기', '캐릭터가 카메라를 바라봐요'),
+          toggle('blurBack', 'target', '배경 흐림', '캐릭터는 또렷하게, 먼 배경은 부드럽게 찍어요 (그래픽 품질 중간·높음)'),
           toggle('autoSave', 'download', 'PNG 자동 저장', '찍을 때마다 원본 PNG를 내려받아요'),
           h('button', { type: 'button', class: 'ph-toggle ph-timer', dataset: { ph: 'timer' }, title: '셀프 타이머' }, h('span', { class: 'ico ico-sm', 'data-icon': 'clock' }), h('span', { class: 'ph-timer-label' }, '타이머 끔'))),
         h('footer', { class: 'ph-bottom' },
@@ -517,6 +519,7 @@
       this[key] = value;
       if (key === 'hidePlayer' && this.active) this._applyHide(!!value);
       if (key === 'lookAtCam' && value && this.active) this._faceCamera();
+      if (key === 'blurBack' && this.active) this._focus();
       try { localStorage.setItem(LS_OPTS, JSON.stringify({ filter: this.filter, frame: this.frame, grid: this.grid, autoSave: this.autoSave, timer: this.timer, kidFrame: this.kidFrame })); } catch (e) { /* ignore */ }
       this._renderOptions();
     },
@@ -606,6 +609,7 @@
       G.ui.popover?.close?.();
       pl.cancelWalk?.('photo');
       this.active = true;
+      G.sys.engine?.fullScale?.(true, 'photo');   // pictures are taken at full render scale (the dynamic resolution rests)
       this._clean = false;
       this._ui?.classList.remove('clean');
       G.ui.block('photo');
@@ -652,6 +656,8 @@
       if (!this.active) return;
       this._cancelCountdown();
       this.active = false;
+      G.sys.engine?.fullScale?.(false, 'photo');
+      G.sys.engine?.dof?.(null);
       G.ui.unblock('photo');
       document.body.classList.remove('hud-hidden', 'photo-mode');
       if (this._ui) { this._ui.hidden = true; this._ui.querySelector('.ph-card').hidden = true; this._hideKidCard(); }
@@ -667,12 +673,24 @@
       G.log.info('UI', 'photo mode off');
     },
     toggle() { if (this.active) this.exit(); else if (!G.ui.isBlocking()) this.enter(); },
+    /** depth of field while the mode is open: the focus sits on the character (medium / high; a no-op on low).
+     *  Landscape pictures (character hidden) stay sharp all the way. */
+    _focus() {
+      const E = G.sys.engine;
+      if (typeof E?.dof !== 'function') return;
+      const pl = G.sys.player, cam = E.camera;
+      if (!this.active || !this.blurBack || this.hidePlayer || !pl?.position || !cam) { E.dof(null); return; }
+      const d = Math.hypot(cam.position.x - pl.position.x, cam.position.y - (pl.position.y + 0.9), cam.position.z - pl.position.z);
+      if (!(d > 0.2)) { E.dof(null); return; }
+      E.dof({ focus: d, range: 1.2 + d * 0.35, amount: 1 });
+    },
 
     // ------------------------------------------------------------ per frame
     update(dt, t) {
       this._zoneT -= dt;
       if (this._zoneT <= 0) { this._zoneT = 0.25; this._updateZone(false); }
       if (!this.active) return;
+      this._focus();   // the focus follows the camera distance to the character
       this._syncT -= dt;
       if (this._syncT <= 0) { this._syncT = 0.12; this._syncSliders(false); }
       if (this.lookAtCam) {
