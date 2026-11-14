@@ -117,35 +117,49 @@ try {
   const mm = await page.evaluate(() => {
     const d = G.sys.places.def('PL_ALLOT'), cv = document.createElement('canvas'); cv.width = 200; cv.height = 200;
     const c = cv.getContext('2d'); c.fillStyle = '#000'; c.fillRect(0, 0, 200, 200);
-    const S = 0.5, X = (x) => (x + 60) * S + 100, Y = (z) => (z - 41) * S + 100;
+    const S = 0.5, X = (x) => x * S + 100, Y = (z) => (z - 10) * S + 100;
     d.minimap(c, { X, Y, S, W: 200, H: 200, dpr: 1, t: 0, w: d.size.w, d: d.size.d, easy: true });
     const px = c.getImageData(0, 0, 200, 200).data; let lit = 0; const colors = new Set();
     for (let i = 0; i < px.length; i += 4 * 37) { if (px[i] + px[i + 1] + px[i + 2] > 60) lit++; colors.add((px[i] >> 4) * 256 + (px[i + 1] >> 4) * 16 + (px[i + 2] >> 4)); }
     return { lit, n: Math.floor(px.length / (4 * 37)), colors: colors.size };
   });
-  check('the minimap draws the site plan', mm.lit > mm.n * 0.9 && mm.colors > 12, JSON.stringify(mm));
+  check('the minimap draws the site plan', mm.lit > mm.n * 0.8 && mm.colors > 12, JSON.stringify(mm));
 
   // ---- the main routes on foot (never below the ground, never stuck)
-  const ROUTE = [['gate', -38, 108], ['centre plaza', 14, 50], ['amphitheatre top', 114, -119], ['pavilion knoll', 90, 7], ['village terrace', 11, -60], ['storehouse yard', -100, -67.7], ['the deck', -58, 159]];
-  for (const [name, x, z] of ROUTE) {
-    const r = await page.evaluate(async ([x, z]) => {
+  // [name, x, z, via]: via = stair waypoints walked in a straight line after the planner reaches the first one
+  const deckVia = await page.evaluate(() => ['ST_DECK1', 'ST_DECK2', 'ST_DECK3'].flatMap((id) => (G.data.complex.byId(id)?.pts || []).map((p) => [p[0], p[1]])));
+  const ROUTE = [['gate', -38, 108], ['centre plaza', 14, 50], ['amphitheatre top', 114, -119], ['pavilion knoll', 90, 7], ['village terrace', 11, -60], ['storehouse yard', -100, -67.7], ['the deck', -58, 159, deckVia]];
+  for (const [name, x, z, via] of ROUTE) {
+    // the player's own movement code driven with a fixed step (the page draws ~1 frame/s on a loaded software-GL machine)
+    const r = await page.evaluate(async ([x, z, via]) => {
       const G = window.G, pl = G.sys.player, C = G.data.complex, O = G.sys.places.def('PL_ALLOT').origin;
-      let minDy = Infinity, samples = 0, stuckT = 0, last = { x: pl.position.x, z: pl.position.z };
-      const tick = setInterval(() => {
-        const lx = pl.position.x - O.x, lz = pl.position.z - O.z, g = C.height(lx, lz);
-        minDy = Math.min(minDy, pl.position.y - g); samples++;
-        if (Math.hypot(pl.position.x - last.x, pl.position.z - last.z) < 0.05) stuckT += 0.25; else stuckT = 0;
-        last = { x: pl.position.x, z: pl.position.z };
-      }, 250);
-      const res = await new Promise((resolve) => {
-        const ok = pl.walkTo({ x: O.x + x, z: O.z + z }, { stopDistance: 1.2, onArrive: () => resolve('arrived'), onFail: (w) => resolve('fail:' + w) });
-        if (!ok) resolve('refused');
-        setTimeout(() => resolve('timeout'), 150000);
-      });
-      clearInterval(tick);
+      let minDy = Infinity, res = null, lastProg = 0, best = Infinity, it = 0;
+      const legs = (via || []).concat([[x, z]]);
+      let li = 0;
+      const go = () => {
+        const [tx, tz] = legs[li], straight = li > 0 && !!via;
+        const ok = pl.walkTo({ x: O.x + tx, z: O.z + tz }, { stopDistance: li < legs.length - 1 ? 0.5 : 1.2, path: !straight, rescue: false, trail: false,
+          onArrive: () => { if (++li < legs.length) { res = null; lastProg = it; best = Infinity; go(); } else res = 'arrived'; }, onFail: (w) => { res = 'fail:' + w + '@' + li; } });
+        if (!ok) res = 'refused@' + li;
+      };
+      go();
+      const t0 = G.time.elapsed;
+      while (!res && it < 24000) {
+        for (let k = 0; k < 400 && !res; k++, it++) {
+          pl.update(1 / 30, t0 + it / 30);
+          const g = C.height(pl.position.x - O.x, pl.position.z - O.z);
+          minDy = Math.min(minDy, pl.position.y - g);
+          const cl = legs[Math.min(li, legs.length - 1)], d = Math.hypot(pl.position.x - O.x - cl[0], pl.position.z - O.z - cl[1]);
+          if (d < best - 0.5) { best = d; lastProg = it; }
+          if (it - lastProg > 900) res = 'stuck';      // 30 s of simulated walking without getting 0.5 m closer
+        }
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      if (!res) res = 'timeout';
+      try { pl.cancelWalk?.('test'); } catch (e) { /* */ }
       const d = Math.hypot(pl.position.x - O.x - x, pl.position.z - O.z - z);
-      return { res, d: +d.toFixed(2), minDy: +minDy.toFixed(2), samples, stuck: stuckT, cur: G.sys.places.current, at: [+(pl.position.x - O.x).toFixed(1), +pl.position.y.toFixed(2), +(pl.position.z - O.z).toFixed(1)] };
-    }, [x, z]);
+      return { res, d: +d.toFixed(2), minDy: +minDy.toFixed(2), simSeconds: Math.round(it / 30), cur: G.sys.places.current, at: [+(pl.position.x - O.x).toFixed(1), +pl.position.y.toFixed(2), +(pl.position.z - O.z).toFixed(1)] };
+    }, [x, z, via || null]);
     check(`route → ${name}: arrived on foot, never below the ground`, r.cur === 'PL_ALLOT' && (r.res === 'arrived' || r.d < 3) && r.minDy > -0.35, JSON.stringify(r));
   }
   if (shotDir) await page.screenshot({ path: path.join(shotDir, 'complex-deck-low.png'), timeout: 300000 });

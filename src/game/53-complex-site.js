@@ -207,8 +207,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     Object.assign(GC, {
       lawn: c('#7d9c45'), lawnB: c('#6b8c3c'), lawnDry: c('#9aa45a'), lawnDeep: c('#5a7c34'),
       forest: c('#33432a'), forestB: c('#2a3922'), rock: c('#7c776d'), rockB: c('#5f5b53'),
-      earth: c('#9c8566'), soil: c('#6a4e38'), soilB: c('#7d5c40'), gravel: c('#a39d8f'), jar: c('#bcb4a3'), jarB: c('#cfc7b5'),
-      paved: c('#b1a690'), road: c('#5e5f60'), bank: c('#8c877a'), bed: c('#5f5b4c'),
+      earth: c('#9c8566'), soil: c('#6a4e38'), soilB: c('#7d5c40'), gravel: c('#958d7f'), jar: c('#9e9483'), jarB: c('#ada392'),
+      paved: c('#a1977f'), road: c('#5e5f60'), bank: c('#8c877a'), bed: c('#5f5b4c'),
     });
     return GC;
   }
@@ -543,10 +543,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   function paveMaterial(ctx, kind) {
     const low = ctx.low;
     const def = {
-      asphalt: { color: '#4f5052', set: 'gravel', look: [78, 79, 80], rough: 0.9, units: -2 },
+      asphalt: { color: '#56585a', set: 'gravel', look: [86, 87, 88], rough: 0.9, units: -2 },
       marks: { color: '#ffffff', set: null, rough: 0.7, units: -5 },
-      granite: { color: '#c4baa6', set: 'flagstone', look: [192, 184, 166], rough: 0.85, units: -3 },
-      walk: { color: '#d3cbb9', set: 'gravel', look: [208, 201, 186], rough: 0.95, units: -3 },
+      granite: { color: '#a9a08d', set: 'flagstone', look: [166, 158, 141], rough: 0.85, units: -3 },
+      walk: { color: '#bab2a1', set: 'gravel', look: [178, 170, 154], rough: 0.95, units: -3 },
       earth: { color: '#a48a68', set: 'yard_dirt_path', look: [164, 140, 108], rough: 1, units: -2 },
     }[kind];
     const base = { vertexColors: true, color: low ? new THREE.Color(def.color) : 0xffffff, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: def.units };
@@ -680,7 +680,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     addDrape(ctx, DM, 'marks', 'markings');
 
     // ================= kerbs: road edges (granite), the island, the parking, the plazas
-    const kerbOf = (pts3, w = 0.18, h = 0.15) => Bk.add('stone', sweep(pts3, w, { caps: true }), null, '#cfc8bb');
+    const kerbOf = (pts3, w = 0.18, h = 0.15) => Bk.add('stone', sweep(pts3, w, { caps: true }), null, '#b4ac9c');
     const yK = (x, z) => Y(x, z);
     for (const r of smoothRoads) {
       const hw = r.e.w / 2 + 0.09;
@@ -1019,6 +1019,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   }
 
   // ---------------------------------------------------------------- stairs of the viewpoint deck (timber, on the slope)
+  let _joints = null;
+  const STAIR_JOINTS = () => _joints || (_joints = el('stair').filter((s) => !s.natural).flatMap((s) => s.pts.map((p) => [p[0], p[1]])));
   /** steps along the plan's legs at max(plan y, ground + 0.15); rise per step ≤ 0.22 m, treads 0.3 … 1.6 m */
   function buildStair(ctx, Bk, s, col) {
     const BK = G.bkit, M = BK.M, geo = BK.geo, w = s.w || 2.4;
@@ -1069,10 +1071,13 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       for (const st of steps) { const nx = Math.cos(st.rot), nz = -Math.sin(st.rot); rail.push({ x: st.x + nx * side * (w / 2 + 0.06), z: st.z + nz * side * (w / 2 + 0.06), y: st.top }); }
       for (let i = 0; i < rail.length; i++) {
         const p = rail[i];
-        if (i % 2 === 0) Bk.add('wood', geo.box(0.09, 1.05, 0.09, 'grain'), M(p.x, p.y + 0.52, p.z), '#6e4a2c');
+        if (i % 2 === 0 && !STAIR_JOINTS().some((j) => Math.hypot(j[0] - p.x, j[1] - p.z) < 2.1)) Bk.add('wood', geo.box(0.09, 1.05, 0.09, 'grain'), M(p.x, p.y + 0.52, p.z), '#6e4a2c');
         if (i < rail.length - 1) {
           const q = rail[i + 1], L = Math.hypot(q.x - p.x, q.z - p.z);
           if (L < 0.05) continue;
+          // where the legs meet (every vertex of every deck stair) the rails open: one leg's rail must not cross the next leg
+          const mx = (p.x + q.x) / 2, mz = (p.z + q.z) / 2;
+          if (STAIR_JOINTS().some((j) => Math.hypot(j[0] - mx, j[1] - mz) < 2.1)) continue;
           const ry = Math.atan2(q.x - p.x, q.z - p.z), pitch = -Math.atan2(q.y - p.y, L);
           Bk.add('wood', geo.box(0.07, 0.07, L + 0.05, 'grain'), M((p.x + q.x) / 2, (p.y + q.y) / 2 + 1.02, (p.z + q.z) / 2, ry, 1, 1, 1, pitch), '#8a6040');
           Bk.add('wood', geo.box(0.04, 0.05, L + 0.05, 'grain'), M((p.x + q.x) / 2, (p.y + q.y) / 2 + 0.55, (p.z + q.z) / 2, ry, 1, 1, 1, pitch), '#7a5236');
@@ -1108,9 +1113,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const railSeg = (ax, az, bx, bz) => {
       const L = Math.hypot(bx - ax, bz - az); if (L < 0.2) return;
       const ry = Math.atan2(bx - ax, bz - az), mx = (ax + bx) / 2, mz = (az + bz) / 2;
-      Bk.add('wood', geo.box(0.1, 0.1, L, 'grain'), M(mx, y + e.rail, mz, ry), '#8a6040');
-      Bk.add('railing', geo.mquad ? geo.mquad(L, 0.85) : geo.box(0.02, 0.85, L), M(mx, y + 0.5, mz, ry + (geo.mquad ? -PI / 2 : 0)));
-      for (let t = 0; t <= 1.0001; t += 1 / Math.max(1, Math.round(L / 1.6))) Bk.add('wood', geo.box(0.11, e.rail, 0.11, 'grain'), M(ax + (bx - ax) * t, y + e.rail / 2, az + (bz - az) * t), '#6e4a2c');
+      // a slim open rail (the deck is where the picture's view is seen from: nothing heavy in front of it)
+      Bk.add('wood', geo.box(0.07, 0.06, L, 'grain'), M(mx, y + e.rail, mz, ry), '#8a6040');
+      for (const hy of [0.42, 0.74]) Bk.add('metal', geo.box(0.025, 0.025, L, 'grain'), M(mx, y + hy, mz, ry), '#6b6f74');
+      for (let t = 0; t <= 1.0001; t += 1 / Math.max(1, Math.round(L / 2.4))) Bk.add('wood', geo.box(0.07, e.rail, 0.07, 'grain'), M(ax + (bx - ax) * t, y + e.rail / 2, az + (bz - az) * t), '#6e4a2c');
       col({ shape: 'box', x: mx, z: mz, hw: 0.08, hd: L / 2 + 0.05, rot: ry });
     };
     railSeg(e.x0, e.z0, e.x1, e.z0); railSeg(e.x1, e.z0, e.x1, e.z1); railSeg(e.x1, e.z1, e.x0, e.z1);
@@ -1161,7 +1167,12 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     Bk.add('stone', geo.box(W + 0.4, 0.14, D + 0.3, 'world'), at(0, 0.07, 0), '#cbc3b1');
     for (const lx of [-W / 2 + 0.2, W / 2 - 0.2]) for (const lz of [-D / 2 + 0.15, D / 2 - 0.2]) Bk.add('wood', geo.box(0.16, 2.6, 0.16, 'grain'), at(lx, 1.36, lz), '#7a5236');
     Bk.add('wood', geo.box(W - 0.3, 1.9, 0.07, 'grain'), at(0, 1.2, -D / 2 + 0.12), '#a8794c');
-    Bk.add('roof', geo.box(W + 1.0, 0.18, D + 0.9, 'world'), at(0, 2.75, 0.1), '#5a5d63');
+    for (const sd of [-1, 1]) {           // two sloped tile planes (a gable along the kerb), ridge on top
+      const m = new THREE.Matrix4().makeRotationX(sd * 0.32);
+      const g = geo.box(W + 1.0, 0.1, (D + 0.9) / 2 + 0.12, 'world'); g.applyMatrix4(m);
+      Bk.add('roof', g, at(0, 2.86 - 0.09, 0.1 + sd * (D + 0.9) / 4), '#8a8e94');
+    }
+    Bk.add('roof', geo.box(W + 1.1, 0.14, 0.26, 'world'), at(0, 3.0, 0.1), '#6d7178');
     Bk.add('wood', geo.box(W + 0.8, 0.14, 0.18, 'grain'), at(0, 2.6, D / 2 + 0.3), '#6e4a2c');
     Bk.add('plank', geo.box(W - 1.2, 0.08, 0.48, 'world'), at(0, 0.5, -D / 2 + 0.55), '#b98a5c');
     for (const lx of [-W / 2 + 1.2, 0, W / 2 - 1.2]) Bk.add('metal', geo.box(0.08, 0.42, 0.4), at(lx, 0.29, -D / 2 + 0.55), '#55595e');
