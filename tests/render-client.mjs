@@ -249,7 +249,7 @@ async function vegetationChecks({ page, preset, tag, N, view }) {
   const st = await page.evaluate(pageVegState, VEG_KEYS);
   N.veg = { real: st.real, trees: st.counts.trees, grass: st.counts.grass };
   if (preset === 'low') {
-    const plain = st.real === false && (st.counts.grass || 0) === 0 && st.names.some((n) => /^trees-campus-/.test(n)) && !st.names.some((n) => /-(near|mid|far)$/.test(n));
+    const plain = st.real === false && (st.counts.grass || 0) === 0 && st.names.some((n) => /^trees-campus-/.test(n)) && !st.names.some((n) => /^trees-.*-(near|mid|far)$/.test(n));   // only the tree batches (the plain rocks' far form is named 'rocks-far' on low too)
     check(`${tag} vegetation: low keeps the plain trees and has no grass (nothing changed)`, plain, JSON.stringify({ real: st.real, grass: st.counts.grass, trees: st.counts.trees }));
     check(`${tag} vegetation: every bounding sphere is finite`, st.bad.length === 0, st.bad.slice(0, 6).join(', '));
     return;
