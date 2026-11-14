@@ -38,7 +38,10 @@
  *     Windows problem). Larger records are written to a temp file and renamed over the old one; when the rename is
  *     refused it is retried, then the record is written in place.
  *   · Readers take no lock. A record is used only when its length and checksum match, so a half-written ("torn") file
- *     is never read: the reader looks again a moment later and otherwise reports a miss.
+ *     is never read: the reader looks again a moment later, and when it still cannot get a whole record it reads once
+ *     more under the stripe lock (no writer is in the middle then). A record that exists is never reported missing —
+ *     a "miss" of the channel list would let visitors into a full house, a "miss" of a channel would send a seated
+ *     player to the waiting room.
  *
  * The command line and APCu: `php cli/tfm.php ban …` runs in another process and cannot reach the web server's
  * memory. A CLI change to a security entry (keys starting with "s:") therefore also touches data/cache/bust; the web
@@ -133,13 +136,24 @@ final class Cache
             if ($want === 'apcu' && self::apcuUsable(true)) return self::$driver = 'apcu';
             if ($want === 'auto' && self::apcuUsable(false)) return self::$driver = 'apcu';
             if ($want === 'db') return self::$driver = 'db';
-            $dir = isset(self::$test['dir']) ? (string) self::$test['dir'] : Config::dataDir() . DIRECTORY_SEPARATOR . 'cache';
-            if (!is_dir($dir)) Config::ensureDir($dir, true);
-            self::$dir = rtrim($dir, '/\\');
+            self::folder();
             return self::$driver = 'file';
         } catch (\Throwable $e) {
             return self::$driver = 'off';
         }
+    }
+
+    /**
+     * The cache folder (data/cache): the records of the file driver, and the lock files (_l/) that the APCu driver's
+     * mutate() uses too. Resolved on first use for every driver — an unresolved folder once made the APCu driver put
+     * its lock files into "/_l" at the root of the file system (and fall back to polling where it could not).
+     */
+    private static function folder(): string
+    {
+        if (self::$dir !== null) return self::$dir;
+        $dir = isset(self::$test['dir']) ? (string) self::$test['dir'] : Config::dataDir() . DIRECTORY_SEPARATOR . 'cache';
+        if (!is_dir($dir)) Config::ensureDir($dir, true);
+        return self::$dir = rtrim($dir, '/\\');
     }
 
     /** can anything be cached at all? */
@@ -173,7 +187,17 @@ final class Cache
                     if (!$ok) return $default;
                     break;
                 case 'file':
-                    $r = self::fRead(self::fPath(sha1(self::k($key))));
+                    $h = sha1(self::k($key));
+                    $r = self::fRead(self::fPath($h));
+                    if ($r === false) {
+                        // three looks without a lock met the record half-written (or unreadable for a moment): read it
+                        // under the stripe lock, where no writer is in the middle. A request that already holds another
+                        // stripe does not wait for a second one (two such requests could wait for each other).
+                        $r = null;
+                        if (self::fLock($h, !self::$held || isset(self::$held[substr($h, 0, 2)]))) {
+                            try { $r = self::fRead(self::fPath($h), true); } finally { self::fUnlock($h); }
+                        }
+                    }
                     if ($r === null) return $default;
                     $v = $r[0];
                     break;
@@ -202,6 +226,7 @@ final class Cache
             switch (self::driver()) {
                 case 'apcu':
                     self::bustCheck();
+                    self::bustMaybe($key);   // a command line with APCu of its own: the web server's memory is another one
                     return (bool) apcu_store(self::k($key), $value, max(0, $ttl));
                 case 'file':
                     $h = sha1(self::k($key));
@@ -294,6 +319,7 @@ final class Cache
         try {
             switch (self::driver()) {
                 case 'apcu':
+                    self::bustMaybe($key);
                     apcu_delete(self::k($key));
                     return true;
                 case 'file':
@@ -340,6 +366,7 @@ final class Cache
                     // 150-worker server busy with nothing (measured: tools/loadtest.mjs). The flag is the fall-back only
                     // where the lock file cannot be opened.
                     $h = sha1($k);
+                    self::bustMaybe($key);
                     $byFile = self::fLock($h);
                     if (!$byFile && !self::apcuSpin($k . "\x01m", 3, 1500)) { self::fail(); return false; }
                     try {
@@ -354,6 +381,7 @@ final class Cache
                     try {
                         $r = self::fRead(self::fPath($h), true);
                         $new = $fn($r === null ? null : $r[0]);
+                        self::bustMaybe($key);
                         if ($new === null) { self::fDelete(self::fPath($h)); return null; }
                         return self::fWrite($h, $new, self::expiry($ttl), true) ? $new : false;
                     } finally { self::fUnlock($h); }
@@ -516,6 +544,7 @@ final class Cache
             if ($d === 'file') {
                 $out['dir'] = self::$dir;
                 $out['writable'] = is_writable(self::$dir);
+                $out['locks'] = 'file';
                 if ($count) {
                     $n = 0;
                     $bytes = 0;
@@ -531,6 +560,11 @@ final class Cache
                     $out['bytes'] = $bytes;
                 }
             } elseif ($d === 'apcu') {
+                // mutate() queues behind a lock file in the cache folder; where the web server may not write there it
+                // polls a flag in the shared memory instead (correct, but it costs CPU when many wait): 'file' | 'flag'
+                $out['locks'] = self::fLock('00') ? 'file' : 'flag';
+                self::fUnlock('00');
+                $out['dir'] = self::$dir;
                 $m = @apcu_sma_info(true);
                 $c = @apcu_cache_info(true);
                 $out['memory'] = is_array($m) ? (int) $m['seg_size'] * (int) $m['num_seg'] : 0;
@@ -564,9 +598,26 @@ final class Cache
     public static function bust(): void
     {
         $f = self::bustFile();
-        @file_put_contents($f, (string) self::now(), LOCK_EX);
-        @touch($f);
         clearstatcache(true, $f);
+        $old = is_file($f) ? (int) @filemtime($f) : 0;
+        $fh = @fopen($f, 'cb');
+        if (!$fh) { @file_put_contents($f, (string) self::now(), LOCK_EX); @touch($f, max(time(), $old + 2)); clearstatcache(true, $f); return; }
+        try {
+            @flock($fh, LOCK_EX);
+            clearstatcache(true, $f);
+            $old = max($old, (int) @filemtime($f));
+            @ftruncate($fh, 0);
+            @fwrite($fh, (string) self::now());
+            @fflush($fh);
+            // The web side compares the file's time, and a file time has whole seconds (two-second steps on FAT). Two
+            // changes inside one second used to look like one: the second ban of a script that bans several accounts
+            // did not reach the web server's memory. Every change therefore moves the time forward by a full step.
+            if (!@touch($f, max(time(), $old + 2))) { @flock($fh, LOCK_UN); @touch($f, max(time(), $old + 2)); }
+        } finally {
+            @flock($fh, LOCK_UN);
+            @fclose($fh);
+            clearstatcache(true, $f);
+        }
     }
 
     /** APCu only, once per request: a newer bust file → the "s:" entries go, s:revall remembers when */
@@ -644,11 +695,14 @@ final class Cache
     }
 
     /**
-     * [value, expires ms] of a whole, unexpired record, else null. Lock-free: a record whose length or checksum does
-     * not match is being rewritten right now (or is damaged) — look again shortly, then give up (a miss).
-     * $locked: the caller holds the stripe lock, so nobody is writing — a mismatch is damage, no second look.
+     * [value, expires ms] of a whole, unexpired record; null when there is none (no file, expired, or — under the
+     * lock — damaged). Lock-free: a record whose length or checksum does not match is being rewritten right now (or
+     * is damaged) — look again shortly; after three such looks the answer is false: "there is a file, but no whole
+     * record could be read" (the caller reads again under the lock). $locked: the caller holds the stripe lock, so
+     * nobody is writing — a mismatch is damage, no second look.
+     * @return array|null|false
      */
-    private static function fRead(string $file, bool $locked = false): ?array
+    private static function fRead(string $file, bool $locked = false)
     {
         $glen = strlen(self::GUARD);
         for ($try = 0; $try < 3; $try++) {
@@ -675,7 +729,7 @@ final class Cache
             self::$stat['torn']++;
             usleep(200 * ($try + 1));
         }
-        return null;
+        return false;
     }
 
     /** the caller holds the stripe lock */
@@ -732,13 +786,15 @@ final class Cache
         return self::fInPlace($file, self::GUARD . self::MAGIC . ' 1 4 ' . sprintf('%08x', crc32('null')) . "\nnull");
     }
 
-    private static function fLock(string $hash): bool
+    /** $wait false: one try (LOCK_NB) — for a caller that already holds another stripe */
+    private static function fLock(string $hash, bool $wait = true): bool
     {
         $s = substr($hash, 0, 2);
         if (isset(self::$held[$s])) { self::$held[$s][1]++; return true; }
         if (isset(self::$lockFh[$s])) {
             $fh = self::$lockFh[$s];
         } else {
+            try { self::folder(); } catch (\Throwable $e) { return false; }   // never a path that starts at the root
             $dir = self::$dir . DIRECTORY_SEPARATOR . '_l';
             $fh = @fopen($dir . DIRECTORY_SEPARATOR . $s . '.lock', 'cb');
             if (!$fh) { self::fMkdir($dir); $fh = @fopen($dir . DIRECTORY_SEPARATOR . $s . '.lock', 'cb'); }
@@ -746,7 +802,7 @@ final class Cache
             self::$lockFh[$s] = $fh;
         }
         // blocking: the critical sections are a few file calls long, and the system frees the lock of a dead process
-        if (!@flock($fh, LOCK_EX)) return false;
+        if (!@flock($fh, $wait ? LOCK_EX : LOCK_EX | LOCK_NB)) return false;
         self::$held[$s] = [$fh, 1];
         return true;
     }

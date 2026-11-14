@@ -71,10 +71,17 @@
  *              hashes of the session cookie and of the CSRF token, so a token is only good together with the very
  *              session and CSRF token it was issued for. It lives sync.token_ttl seconds (300, at most 600). The call
  *              that carries a good token touches no session file and no database: the hot path.
- *   revocation a token is good only while its account sits in its channel. Logout, a ban, a role / password / name
- *              change and a chat pause remove the account from the channel at once (Sync::revoke, called from
- *              Users::update and Presence::remove); the next call then has to pass the session check again. A cache
- *              that lost its content has another boot id: every token ends.
+ *   revocation a token is good only while its account sits in its channel, in the seat the token was issued for.
+ *              Logout, a ban, a role / password / name change and a chat pause remove the account from the channel at
+ *              once (Sync::revoke, called from Users::update and Presence::remove); the next call then has to pass the
+ *              session check again. A token that is older than the account's present seat is dead as well: once an
+ *              account was signed out and has signed in again, the token of the old session (a stolen cookie + CSRF
+ *              token + sync token) does not come back to life. A cache that lost its content has another boot id:
+ *              every token ends.
+ *   looks      an avatar look is stored once under a short id (the first 8 hex digits of its SHA-1; a second id when
+ *              another look already sits under the first) and lives LOOK_TTL seconds; the checked call of a player who
+ *              wears it renews it. An account may store LOOK_BUDGET new looks per LOOK_WINDOW seconds — beyond that
+ *              the player keeps the look the others already see (a page obeying "n" cannot get there).
  *   channels   players are spread over channels of channels.size (60; a channel accepts returning members up to
  *              channels.hard 90). A newcomer joins the fullest channel that still has room, so channels stay lively;
  *              nobody is ever moved to another channel ("rebalancing only on join"). A seat is kept for
@@ -104,10 +111,20 @@ final class Sync
     private const SEEN = 0, X = 1, Y = 2, Z = 3, ROT = 4, SPEED = 5, ANIM = 6, ZONE = 7, EMOTE = 8, EMOTE_AT = 9, NICK = 10, APP = 11,
         TAG = 12, CHANGED = 13, HIDDEN = 14, NEXT = 15, RWIN = 16, RN = 17, DIRTY = 18, JOINED = 19, MUTED = 20;
 
+    /** a stored look lives this long (s) after it was stored or last renewed by a player who wears it */
+    private const LOOK_TTL = 3600;
+    /** new looks one account may store in LOOK_WINDOW seconds (a look that is stored already costs nothing) */
+    private const LOOK_BUDGET = 40;
+    private const LOOK_WINDOW = 600;
+    /** the seat record (sy:u:<uid>) and the look of a seated player are renewed when they are this old (s) */
+    private const KEEP_EVERY = 1200;
+
     /** @var array|null */
     private static $conf = null;
     /** @var array hash => appearance of this request */
     private static $looks = [];
+    /** @var bool seat() wrote the seat record in this request: the look of the player is renewed along with it */
+    private static $keepAlive = false;
 
     public static function conf(): array
     {
@@ -137,7 +154,7 @@ final class Sync
     }
 
     /** tests: forget what was derived for this process */
-    public static function reset(): void { self::$conf = null; self::$looks = []; }
+    public static function reset(): void { self::$conf = null; self::$looks = []; self::$keepAlive = false; }
 
     /** is the channel store usable (a cache, and sync.enabled)? The old endpoints use the database when it is not. */
     public static function enabled(): bool
@@ -297,7 +314,7 @@ final class Sync
         $meta = Cache::get('sy:meta');
         if (!is_array($meta) || !isset($meta['b']) || $meta['b'] !== $claims['boot']) return null;       // the cache started over
         if (Cache::driver() === 'apcu' && (int) Cache::get('s:revall', 0) >= $claims['iat']) return null;  // a command-line change
-        $x = self::exchange($claims['ch'], $claims['uid'], $in, $now, ['load' => (float) (isset($meta['ld']) ? $meta['ld'] : 1.0)]);
+        $x = self::exchange($claims['ch'], $claims['uid'], $in, $now, ['load' => (float) (isset($meta['ld']) ? $meta['ld'] : 1.0), 'iat' => (int) $claims['iat']]);
         if ($x['state'] === 'gone') return null;
         if ($x['state'] !== 'ok') {
             throw new ApiException(429, 'RATE_LIMITED', '요청이 너무 많아요. 잠시 후 다시 시도해 주세요.', ['retryAfter' => $x['retry']], ['Retry-After: ' . $x['retry']]);
@@ -339,6 +356,7 @@ final class Sync
         $muted = (int) (isset($u['muted_until']) ? $u['muted_until'] : 0);
         $ch = self::seat($uid, isset($in['qt']) ? $in['qt'] : null, (isset($u['role']) ? $u['role'] : '') === 'admin', $now);
         $x = self::exchange($ch, $uid, $in, $now, ['join' => ['nick' => (string) $u['nickname'], 'muted' => $muted > $now ? $muted : 0], 'load' => (float) $meta['ld'], 'flush' => true]);
+        self::keepLook($x);
         return ['ch' => $ch, 'out' => self::answer($ch, $uid, $in, $x, $meta, $now), 'meta' => $meta, 'flush' => $x['flush']];
     }
 
@@ -367,7 +385,8 @@ final class Sync
     /** which channel does this account sit in (0 = none known) */
     public static function channelOf(int $uid): int
     {
-        return (int) Cache::get('sy:u:' . $uid, 0);
+        $v = Cache::get('sy:u:' . $uid, 0);
+        return is_array($v) ? (int) (isset($v[0]) ? $v[0] : 0) : (int) $v;
     }
 
     /**
@@ -378,11 +397,22 @@ final class Sync
     private static function seat(int $uid, $ticket, bool $admin, int $now): int
     {
         $c = self::conf();
-        $ch = self::channelOf($uid);
+        self::$keepAlive = false;
+        $rec = Cache::get('sy:u:' . $uid, 0);
+        $ch = is_array($rec) ? (int) (isset($rec[0]) ? $rec[0] : 0) : (int) $rec;
         if ($ch > 0) {
             $blob = Cache::get('sy:c:' . $ch);
             $members = is_array($blob) && isset($blob['m']) && is_array($blob['m']) ? $blob['m'] : [];
-            if (isset($members[$uid]) && $now - (int) $members[$uid][self::SEEN] <= self::seatMs()) return $ch;   // still seated
+            if (isset($members[$uid]) && $now - (int) $members[$uid][self::SEEN] <= self::seatMs()) {                // still seated
+                // The seat record must outlive the seat: revoke() finds the channel through it, and without it this very
+                // player would be taken for a newcomer (the waiting room at a full house, a second seat otherwise). It
+                // used to be written once, for a day — a browser that stayed longer lost it. Renewed every 20 minutes.
+                if (!is_array($rec) || !isset($rec[1]) || intdiv($now, 1000) - (int) $rec[1] >= self::KEEP_EVERY) {
+                    Cache::set('sy:u:' . $uid, [$ch, intdiv($now, 1000)], 86400);
+                    self::$keepAlive = true;
+                }
+                return $ch;
+            }
         }
         // a new seat: the gate decides (the waiting room when the house is full)
         if (class_exists('Tfm\Gate')) {
@@ -413,7 +443,8 @@ final class Sync
             return $reg;
         }, 86400);
         if ($picked === 0) $picked = 1;
-        Cache::set('sy:u:' . $uid, $picked, 86400);
+        Cache::set('sy:u:' . $uid, [$picked, intdiv($now, 1000)], 86400);
+        self::$keepAlive = true;
         if (class_exists('Tfm\Gate')) Gate::settled($uid);
         return $picked;
     }
@@ -465,7 +496,7 @@ final class Sync
         $limit = (array) Config::get('rate_limits.sync', [150, 60]);
         $perMin = (int) (isset($limit[0]) ? $limit[0] : 150);
         $look = null;
-        if ($in['ap'] !== null) $look = self::storeLook($in['ap']);
+        if ($in['ap'] !== null) $look = self::storeLook($in['ap'], $uid, $now);   // null: not stored (the budget) — the old look stays
         $res = ['state' => 'ok', 'retry' => 1, 'rows' => [], 'still' => [], 'count' => 0, 'next' => $c['idle_ms'], 'cid' => 0, 'me' => null, 'flush' => null, 'report' => null];
         $ok = Cache::mutate('sy:c:' . $ch, static function ($blob) use (&$res, $c, $uid, $in, $now, $join, $legacy, $load, $seatMs, $ttlMin, $perMin, $look, $o) {
             if (!is_array($blob) || !isset($blob['m']) || !is_array($blob['m'])) {
@@ -475,6 +506,9 @@ final class Sync
             $prev = isset($blob['m'][$uid]) && is_array($blob['m'][$uid]) && count($blob['m'][$uid]) >= 21 ? $blob['m'][$uid] : null;
             if ($prev === null && $join === null) { $res['state'] = 'gone'; return $blob; }
             if ($prev !== null && $now - (int) $prev[self::SEEN] > $seatMs && $join === null) { unset($blob['m'][$uid]); $res['state'] = 'gone'; return $blob; }
+            // a token from before this seat was taken: the account was signed out (logout, a ban, a new password, a long
+            // silence) and is seated again — the token of the earlier session ended with the earlier seat
+            if ($prev !== null && $join === null && isset($o['iat']) && (int) $o['iat'] < (int) $prev[self::JOINED]) { $res['state'] = 'gone'; return $blob; }
             $rwin = $prev !== null ? (int) $prev[self::RWIN] : 0;
             $rn = $prev !== null ? (int) $prev[self::RN] : 0;
             if ($prev !== null && $join === null && !$legacy) {
@@ -701,18 +735,52 @@ final class Sync
     }
 
     // ------------------------------------------------------------------ looks (hash-addressed appearance)
-    /** whitelist an appearance object, store it under its hash, return the 8-hex hash ('' = nothing usable) */
-    private static function storeLook($appearance): string
+    /**
+     * Whitelist an appearance object and store it under a short id: the 8-hex id, '' when the object holds nothing
+     * usable (the player then has no look), or null when it could not be stored — the account used up its budget of
+     * new looks, or other looks sit under every id this one could take. The caller keeps the player's present look.
+     */
+    private static function storeLook($appearance, int $uid = 0, int $now = 0): ?string
     {
         $json = Presence::appearance($appearance);
         if ($json === null) return '';
-        $h = substr(sha1($json), 0, 8);
-        if (!isset(self::$looks[$h])) {
-            $a = json_decode($json, true);
-            self::$looks[$h] = is_array($a) ? $a : [];
-            if (Cache::get('sy:a:' . $h) === null) Cache::set('sy:a:' . $h, self::$looks[$h], 86400 * 7);
+        $a = json_decode($json, true);
+        if (!is_array($a)) return '';
+        // the id is the start of the look's hash. 32 bits are few: another look may sit there already (by chance among
+        // many players, or put there on purpose before a known look arrived) — this look then takes its second, third
+        // or fourth id instead of being shown as the other one.
+        for ($n = 0; $n < 4; $n++) {
+            $h = substr(sha1($n === 0 ? $json : $json . '#' . $n), 0, 8);
+            $have = array_key_exists($h, self::$looks) ? self::$looks[$h] : Cache::get('sy:a:' . $h);
+            if (is_array($have)) {
+                if ($have != $a) continue;                          // somebody else's look
+                return $h;
+            }
+            // a new record. One account may not fill the cache with them (every colour is free to choose: 2^168 looks).
+            if ($uid > 0) {
+                $win = intdiv(intdiv($now > 0 ? $now : Clock::ms(), 1000), self::LOOK_WINDOW);
+                $hits = Cache::hitWindow('sy:lb|' . $uid, $win, 2 * self::LOOK_WINDOW + 1);
+                if (is_array($hits) && $hits[0] > self::LOOK_BUDGET) return null;
+            }
+            self::$looks[$h] = $a;
+            Cache::set('sy:a:' . $h, $a, self::LOOK_TTL);
+            return $h;
         }
-        return $h;
+        return null;
+    }
+
+    /**
+     * A checked call of a seated player, every KEEP_EVERY seconds (seat() says when): the look it wears lives on for
+     * another LOOK_TTL. A look nobody wears any more is not renewed and expires.
+     */
+    private static function keepLook(array $x): void
+    {
+        if (!self::$keepAlive || !isset($x['me'][self::APP])) return;
+        self::$keepAlive = false;
+        $h = (string) $x['me'][self::APP];
+        if ($h === '' || !preg_match('/^[0-9a-f]{8}$/', $h)) return;
+        $a = Cache::get('sy:a:' . $h);
+        if (is_array($a)) Cache::set('sy:a:' . $h, $a, self::LOOK_TTL);
     }
 
     /** the appearance stored under a hash, or null */
@@ -987,6 +1055,7 @@ final class Sync
         $ch = self::seat($uid, null, (isset($user['role']) ? $user['role'] : '') === 'admin', $now);
         self::meta($now);
         $x = self::exchange($ch, $uid, $in + ['h' => 0, 'f' => 1], $now, ['join' => ['nick' => (string) $user['nickname'], 'muted' => $muted > $now ? $muted : 0], 'legacy' => true, 'rows' => true, 'flush' => true]);
+        self::keepLook($x);
         if ($x['flush']) {
             $rows = $x['flush'];
             Api::after(static function () use ($rows): void { Sync::flush($rows); });
