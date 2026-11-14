@@ -534,13 +534,17 @@ await step('queue', 'a full house (3 seats): the 4th–6th get 503 QUEUE + Retry
   assert(enter.status === 200 && typeof enter.data.t === 'string', `ticket 1 could not enter: ${enter.status} ${JSON.stringify(enter.error || enter.data).slice(0, 160)}`);
   const late = await newUser(s, 'Tw', { xff: nextIp() });
   const lr = await late.sync({ p: at(0, 0) });
-  // tickets so far: 1 (entered), 2, 3, and a 4th that the account trying a foreign ticket was handed: the newcomer is behind all of them
-  assert(lr.status === 503 && lr.data.queue.pos === 4, `a newcomer is not behind the line: ${lr.status} ${JSON.stringify(lr.data)}`);
+  // tickets so far: 1 (entered), 2 and 3 — the account that tried a foreign ticket kept its own place (one place per
+  // account; it used to be handed a 4th): the newcomer is the third in the line
+  assert(thief.data.queue && thief.data.queue.t === waiting[2].ticket && thief.data.queue.pos === 2, `the account that tried a foreign ticket did not keep its own place: ${JSON.stringify(thief.data)}`);
+  assert(lr.status === 503 && lr.data.queue.pos === 3, `a newcomer is not behind the line: ${lr.status} ${JSON.stringify(lr.data)}`);
+  const again = await late.sync({ p: at(0, 0) });      // asking again without the ticket (a reload): the same place, the same ticket
+  assert(again.status === 503 && again.data.queue.pos === 3 && again.data.queue.t === lr.data.queue.t, `asking again moved the newcomer: ${JSON.stringify(again.data)}`);
   const bad = await raw(s.base, 'api/queue.php?t=q1.abc.def');
   const none = await raw(s.base, 'api/queue.php');
   assert(bad.status === 400 && bad.error.code === 'QUEUE_TICKET' && none.status === 400, `a bad ticket → ${bad.status}, no ticket → ${none.status}`);
   const cap = s.cli('capacity');
-  assert(/3 \/ 3명/.test(cap.out) && /대기실[^\n]*4명/.test(cap.out), `cli capacity: ${cap.out.slice(0, 400)}`);
+  assert(/3 \/ 3명/.test(cap.out) && /대기실[^\n]*3명/.test(cap.out), `cli capacity: ${cap.out.slice(0, 400)}`);
   return 'order kept: 1 entered, 2 → pos 1, 3 → pos 2, a newcomer → the end of the line';
 });
 
@@ -574,9 +578,22 @@ await step('shed', 'overload (shed_rps 20): newcomers get 503 BUSY + Retry-After
   assert(ownShed === 0, `${ownShed} of 240 requests from the server PC itself were shed`);
   if (hot.status === 200) assert(hot.data.n > 1000, `"next" was not stretched under load: ${hot.data.n}`);
   await sleep(2500);
-  const logins = await Promise.all(Array.from({ length: 8 }, (_, i) => raw(s.base, 'api/auth/login.php', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': nextIp(), Cookie: u.cookie(), 'X-CSRF-Token': u.csrf }, body: JSON.stringify({ login: `nobody${i}@example.com`, password: 'Wrong2026pw' }) })));
+  // eight visitors, each with a session and CSRF token of its own, post a password at the same moment: the meter sits
+  // where the password is checked (a post that is refused before that — no session, a wrong token — does not use it)
+  const eight = [];
+  for (let i = 0; i < 8; i++) { const c = new Client(s, { xff: nextIp() }); const p = await c.req('api/ping.php'); assert(p.status === 200 && c.csrf, `ping → ${p.status}`); eight.push(c); }
+  const logins = await Promise.all(eight.map((c, i) => c.req('api/auth/login.php', { json: { login: `nobody${i}@example.com`, password: 'Wrong2026pw' } })));
   const busy = logins.filter((r) => r.status === 503 && r.error.code === 'LOGIN_BUSY' && Number(r.headers['retry-after']) >= 1).length;
-  assert(busy >= 3, `8 logins at once, login_per_sec 2: ${logins.map((r) => r.status).join(',')}`);
+  const checked = logins.filter((r) => r.status === 401).length;
+  assert(busy >= 3 && checked >= 1 && busy + checked === 8, `8 logins at once, login_per_sec 2: ${logins.map((r) => r.status).join(',')}`);
+  // posts that never reach a password check (no session at all) are refused without touching the meter: a real login right after them gets through
+  await sleep(1200);
+  const junk = await Promise.all(Array.from({ length: 12 }, () => raw(s.base, 'api/auth/login.php', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.77' }, body: '{}' })));
+  assert(junk.every((r) => r.status === 403 || r.status === 401), `posts without a session → ${junk.map((r) => r.status).join(',')}`);
+  const real = new Client(s, { xff: nextIp() });
+  await real.req('api/ping.php');
+  const rl = await real.req('api/auth/login.php', { json: { login: u.email, password: PASSWORD } });
+  assert(rl.status === 200, `a real login right after 12 refused posts → ${rl.status} ${(rl.error && rl.error.code) || ''}`);
   return `503 BUSY (Retry-After ${shed.headers['retry-after']}s) · seated sync ${hot.status}${hot.status === 200 ? ` next ${hot.data.n} ms` : ''} · save ${save.status} · ${busy}/8 logins metered`;
 });
 

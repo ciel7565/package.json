@@ -11,7 +11,8 @@
  * Response: {success, data | error:{code,message}, csrf, serverTime}
  *
  * Phase 8 (CONTRACT §16.9) — what a request costs before its handler runs:
- *   · the capacity gate first (Tfm\Gate: load figures, shedding with 503 + Retry-After when the server is overloaded);
+ *   · the capacity gate first (Tfm\Gate: shedding with 503 + Retry-After when the server is overloaded); a request
+ *     that was served is counted as load after its handler, a refused one is not;
  *   · 'session' => 'create' | 'resume' | 'read' | 'none' — GET / HEAD endpoints read the session without keeping its
  *     file locked ('read', the default for them); 'none' is for the sync endpoint's signed-token path;
  *   · the account row comes from the shared cache (cache.user_ttl seconds; dropped the moment the account changes);
@@ -130,6 +131,10 @@ final class Api
             if (!empty($opt['rate'])) RateLimit::forRequest((string) $opt['rate'], $ctx, (string) (isset($opt['rateBy']) ? $opt['rateBy'] : 'auto'));
             $data = $fn($ctx);
             if ($ctx->csrfPending) self::csrfFail(); // handler forgot to verify the body token
+            // §16.9: a request that was served counts as load (Gate::rps). Counted here and not at the door: a request
+            // that was refused on the way (rate limit, no login, a bad body) costs next to nothing and must not make
+            // the server shed everybody else — one address answered 429 four hundred times a second did exactly that.
+            if (class_exists('Tfm\Gate')) Gate::count();
             self::housekeeping();
             self::send(200, ['success' => true, 'data' => $data]);
         } catch (ApiException $e) {
@@ -437,8 +442,19 @@ final class Auth
             if (class_exists('Tfm\SecEvent')) SecEvent::log('login_locked', 'warn', ['wait' => $wait]);
             throw new ApiException(429, 'TOO_MANY_ATTEMPTS', "로그인 시도가 너무 많아요. {$wait}초 후에 다시 시도해 주세요.", ['retryAfter' => $wait], ['Retry-After: ' . $wait]);
         }
-        $u = Users::byLogin($login);
-        $ok = Users::verifyPassword($u, $pw);
+        // §16.9: the login meter (Tfm\Gate: capacity.login_per_sec / login_concurrent) is taken here, where a password
+        // is really checked — after the CSRF token, the address limit and the lock-outs above — and given back as soon
+        // as the check is done. At the door of the endpoint it counted every post, also the ones refused a moment
+        // later: six posts a second from anywhere (no session needed) kept every visitor out with 503 LOGIN_BUSY, and
+        // four slow connections held all the slots. The admin sign-in (the same function) is not metered, as before.
+        $metered = class_exists('Tfm\Gate') && Http::scriptPath() === 'api/auth/login.php';
+        if ($metered) Gate::loginSlot();
+        try {
+            $u = Users::byLogin($login);
+            $ok = Users::verifyPassword($u, $pw);
+        } finally {
+            if ($metered) Gate::loginDone();
+        }
         if (!$ok || !$u || $u['status'] !== 'active') {
             LoginThrottle::record($login, false);
             Audit::log('login_failed', $u ? (int) $u['id'] : null, ['known' => (bool) $u], 'info');

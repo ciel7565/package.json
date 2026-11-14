@@ -151,6 +151,22 @@ final class RateLimit
         }
     }
 
+    /**
+     * [verify-scale] The limit of an endpoint whose caller is known by a signed ticket instead of a session (the
+     * waiting room, api/queue.php): one bucket per ticket owner, plus the generous per-address aggregate that guests
+     * have (limit × rate_limit_ip_multiplier) — a class of thirty behind one school address polls 440 times a minute
+     * and must not use up one address's 120. Without a genuine ticket ($owner null) the address bucket alone counts.
+     */
+    public static function forTicket(string $name, ?string $owner): void
+    {
+        $ipId = 'ip:' . Sec::hashId(Http::clientIp());
+        if ($owner === null || $owner === '') { self::hit($name, $ipId); return; }
+        self::hit($name, 't:' . substr($owner, 0, 40));
+        $conf = Config::get("rate_limits.$name");
+        $mult = max(1, (int) Config::get('rate_limit_ip_multiplier', 25));
+        self::hit($name . '@ip', $ipId, (int) (is_array($conf) && isset($conf[0]) ? $conf[0] : 60) * $mult, (int) (is_array($conf) && isset($conf[1]) ? $conf[1] : 60));
+    }
+
     public static function cleanup(): void
     {
         try { Db::exec('DELETE FROM rate_limits WHERE expires_at < ?', [Clock::ms()]); } catch (\Throwable $e) { /* ignore */ }

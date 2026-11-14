@@ -43,6 +43,11 @@
  *     a "miss" of the channel list would let visitors into a full house, a "miss" of a channel would send a seated
  *     player to the waiting room.
  *
+ * The command line as another account (root on a Linux server): every folder, lock file and record it makes inside
+ * the cache folder is handed to the owner of the data folder — the web server's account. A lock file the web server
+ * cannot open would stop every update of that stripe; a record it cannot rewrite would be asked from the database on
+ * every request. (Windows has no such owner: nothing to do there.)
+ *
  * The command line and APCu: `php cli/tfm.php ban …` runs in another process and cannot reach the web server's
  * memory. A CLI change to a security entry (keys starting with "s:") therefore also touches data/cache/bust; the web
  * side notices the newer file on its next request, drops its "s:" entries and remembers the moment as s:revall
@@ -81,6 +86,8 @@ final class Cache
     private static $test = [];
     /** @var bool the bust file was looked at in this request */
     private static $bustSeen = false;
+    /** @var array|null [uid, gid] of the data folder ([] = unknown), for own() */
+    private static $owner = null;
 
     // ------------------------------------------------------------------ set-up
     /** tests / tools: replace settings for this process (['driver' => 'file', 'dir' => …, 'prefix' => …, 'now' => fn]) */
@@ -104,6 +111,7 @@ final class Cache
         self::$named = [];
         self::$test = [];
         self::$bustSeen = false;
+        self::$owner = null;
         self::$stat = ['get' => 0, 'hit' => 0, 'set' => 0, 'del' => 0, 'torn' => 0, 'fail' => 0];
     }
 
@@ -152,8 +160,33 @@ final class Cache
     {
         if (self::$dir !== null) return self::$dir;
         $dir = isset(self::$test['dir']) ? (string) self::$test['dir'] : Config::dataDir() . DIRECTORY_SEPARATOR . 'cache';
-        if (!is_dir($dir)) Config::ensureDir($dir, true);
-        return self::$dir = rtrim($dir, '/\\');
+        $made = !is_dir($dir);
+        if ($made) Config::ensureDir($dir, true);
+        self::$dir = rtrim($dir, '/\\');
+        if ($made) foreach (['', DIRECTORY_SEPARATOR . '.htaccess', DIRECTORY_SEPARATOR . 'index.php'] as $f) self::own(self::$dir . $f);
+        return self::$dir;
+    }
+
+    /**
+     * $path was just made (or written) by this process inside the cache folder. On the command line as another account
+     * it is handed to the owner of the data folder (see the header); in a web request and on Windows this does nothing.
+     */
+    private static function own(string $path): void
+    {
+        if (DIRECTORY_SEPARATOR !== '/' || !self::cli() || self::$dir === null || !function_exists('chown')) return;
+        try {
+            if (self::$owner === null) {
+                $ref = dirname(self::$dir);
+                $o = @fileowner($ref);
+                self::$owner = $o === false ? [] : [$o, @filegroup($ref)];
+            }
+            if (!self::$owner) return;
+            clearstatcache(true, $path);
+            $mine = @fileowner($path);
+            if ($mine === false || $mine === self::$owner[0]) return;
+            @chown($path, self::$owner[0]);
+            if (self::$owner[1] !== false) @chgrp($path, self::$owner[1]);
+        } catch (\Throwable $e) { /* stays ours: the web server asks the database instead */ }
     }
 
     /** can anything be cached at all? */
@@ -457,6 +490,7 @@ final class Cache
                     $fh = @fopen($file, 'cb');
                     if (!$fh) { self::fMkdir($dir); $fh = @fopen($file, 'cb'); }
                     if (!$fh) { self::fail(); return false; }
+                    self::own($file);
                     while (!@flock($fh, LOCK_EX | LOCK_NB)) {
                         if (microtime(true) >= $deadline) { @fclose($fh); return false; }
                         usleep(2000);
@@ -617,6 +651,7 @@ final class Cache
             @flock($fh, LOCK_UN);
             @fclose($fh);
             clearstatcache(true, $f);
+            try { self::folder(); self::own($f); } catch (\Throwable $e) { /* stays ours */ }
         }
     }
 
@@ -685,13 +720,7 @@ final class Cache
     private static function fMkdir(string $dir): void
     {
         if (!is_dir($dir)) @mkdir($dir, 0750, true);
-        // made by the command line as another account (root): hand it to the owner of the data folder, or the web
-        // server could not use this part of the cache
-        if (self::cli() && DIRECTORY_SEPARATOR === '/' && function_exists('chown')) {
-            $o = @fileowner(self::$dir);
-            $g = @filegroup(self::$dir);
-            if ($o !== false && $o !== @fileowner($dir)) { @chown($dir, $o); if ($g !== false) @chgrp($dir, $g); }
-        }
+        self::own($dir);   // made by the command line as another account (root): the web server must be able to use it
     }
 
     /**
@@ -755,6 +784,7 @@ final class Cache
         $ok = @fwrite($fh, $rec) === $len;
         if ($ok) @ftruncate($fh, $len);
         @fclose($fh);
+        self::own($file);
         return $ok;
     }
 
@@ -767,6 +797,7 @@ final class Cache
         $n = @file_put_contents($tmp, $rec);
         if ($n === false) { self::fMkdir(dirname($file)); $n = @file_put_contents($tmp, $rec); }
         if ($n !== strlen($rec)) { @unlink($tmp); return false; }
+        self::own($tmp);
         for ($i = 0; $i < 4; $i++) {
             $ok = isset(self::$test['rename']) ? (bool) call_user_func(self::$test['rename'], $tmp, $file, $i) : @rename($tmp, $file);
             if ($ok) return true;
@@ -799,6 +830,7 @@ final class Cache
             $fh = @fopen($dir . DIRECTORY_SEPARATOR . $s . '.lock', 'cb');
             if (!$fh) { self::fMkdir($dir); $fh = @fopen($dir . DIRECTORY_SEPARATOR . $s . '.lock', 'cb'); }
             if (!$fh) return false;
+            self::own($dir . DIRECTORY_SEPARATOR . $s . '.lock');
             self::$lockFh[$s] = $fh;
         }
         // blocking: the critical sections are a few file calls long, and the system frees the lock of a dead process

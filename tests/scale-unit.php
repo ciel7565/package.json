@@ -1169,12 +1169,14 @@ check('gate — logins are metered: more password checks in one second than logi
         $sec = time();
         for ($i = 0; $i < 6; $i++) {
             request('203.0.113.9', '/api/auth/login.php', 'POST');
-            try { Tfm\Gate::enter([]); $codes[] = 'ok'; } catch (Tfm\ApiException $e) { $codes[] = $e->status . ' ' . $e->errorCode; $hdr = $e->headers; }
+            // [verify-scale] the meter is taken where the password is checked (Auth::attemptLogin → Gate::loginSlot),
+            // not at the door (Gate::enter): posts that are refused on the way must not use it up (tests/scale-attack.php)
+            try { Tfm\Gate::enter([]); Tfm\Gate::loginSlot(); $codes[] = 'ok'; } catch (Tfm\ApiException $e) { $codes[] = $e->status . ' ' . $e->errorCode; $hdr = $e->headers; }
         }
         if (time() === $sec) break;
     }
     request('127.0.0.1', '/api/auth/login.php', 'POST');
-    $local = apiCode(function () { for ($i = 0; $i < 10; $i++) Tfm\Gate::enter([]); });
+    $local = apiCode(function () { for ($i = 0; $i < 10; $i++) { Tfm\Gate::enter([]); Tfm\Gate::loginSlot(); } });
     foreach (['capacity.login_per_sec', 'capacity.shed_rps', 'capacity.login_concurrent'] as $k) Tfm\Config::override($k, null);
     return $codes === ['ok', 'ok', 'ok', '503 LOGIN_BUSY', '503 LOGIN_BUSY', '503 LOGIN_BUSY'] && $local === '' && preg_match('/^Retry-After: [1-9]\d?$/', $hdr[0]) ? true : json_encode($codes) . " local '$local'";
 });
