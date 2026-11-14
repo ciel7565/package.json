@@ -1,1176 +1,1862 @@
 {
- "materials": [
+ "version": 1,
+ "generator": "assets/pack/src/make_pack.py",
+ "bytes": 2923745,
+ "files": [
   {
-   "name": "giwa_roof_tile",
-   "ambientcg_id": "RoofingTiles009",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 6984,
-    "n": 33998,
-    "r": 23962
-   },
-   "source": {
-    "tar": "dataset_05.tar",
-    "ranges": {
-     "Color": [
-      492383744,
-      86585
-     ],
-     "NormalGL": [
-      492108288,
-      273598
-     ],
-     "Roughness": [
-      493305344,
-      253300
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/RoofingTiles009"
-  },
-  {
-   "name": "thatch_choga",
-   "ambientcg_id": "ThatchedRoof001A",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 34656,
-    "n": 56856,
-    "r": 17210
-   },
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      371366912,
-      292513
-     ],
-     "NormalGL": [
-      372071936,
-      399347
-     ],
-     "Roughness": [
-      372472832,
-      201255
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/ThatchedRoof001A"
-  },
-  {
-   "name": "lime_plaster_wall",
-   "ambientcg_id": "Plaster003",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 64516,
-    "n": 57584,
-    "r": 2436
-   },
-   "source": {
-    "tar": "dataset_00.tar",
-    "ranges": {
-     "Color": [
-      857785344,
-      420409
-     ],
-     "NormalGL": [
-      857374208,
-      409200
-     ],
-     "Roughness": [
-      857300480,
-      71749
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Plaster003"
-  },
-  {
-   "name": "hwangto_clay_wall",
-   "ambientcg_id": "Clay002",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 1888,
-    "n": 35554,
-    "r": 26082
-   },
-   "source": {
-    "tar": "dataset_06.tar",
-    "ranges": {
-     "Color": [
-      136498176,
-      41805
-     ],
-     "NormalGL": [
-      135631360,
-      338498
-     ],
-     "Roughness": [
-      136541696,
-      294691
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Clay002"
-  },
-  {
-   "name": "timber_beam_dark",
-   "ambientcg_id": "Wood036",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 15468,
-    "n": 32602,
-    "r": 40560
-   },
-   "source": {
-    "tar": "dataset_00.tar",
-    "ranges": {
-     "Color": [
-      881887744,
-      207605
-     ],
-     "NormalGL": [
-      880753664,
-      284447
-     ],
-     "Roughness": [
-      879923200,
-      320494
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Wood036"
-  },
-  {
-   "name": "wood_planks_dark",
-   "ambientcg_id": "Planks023A",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 16814,
-    "n": 25616,
-    "r": 4248
-   },
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      283064832,
-      187923
-     ],
-     "NormalGL": [
-      283456000,
-      242048
-     ],
-     "Roughness": [
-      284092928,
-      103652
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Planks023A"
-  },
-  {
-   "name": "maru_floor",
-   "ambientcg_id": "WoodFloor041",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 34444,
-    "n": 4630,
-    "r": 3228
-   },
-   "source": {
-    "tar": "dataset_01.tar",
-    "ranges": {
-     "Color": [
-      195866624,
-      286592
-     ],
-     "NormalGL": [
-      197683200,
-      128276
-     ],
-     "Roughness": [
-      196154880,
-      102314
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/WoodFloor041"
-  },
-  {
-   "name": "hanji_paper",
-   "ambientcg_id": "Paper001",
-   "px": {
-    "color": [
-     512,
-     300
-    ],
-    "normalGL": [
-     512,
-     300
-    ],
-    "rough": [
-     512,
-     300
-    ]
-   },
-   "bytes": {
-    "c": 1260,
-    "n": 19112,
-    "r": 27010
-   },
-   "source": {
-    "tar": "dataset_01.tar",
-    "ranges": {
-     "Color": [
-      396660224,
-      80172
-     ],
-     "NormalGL": [
-      394993664,
-      210695
-     ],
-     "Roughness": [
-      396211200,
-      197140
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Paper001"
-  },
-  {
-   "name": "jangpan_floor_paper",
-   "ambientcg_id": "Paper006",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 8438,
-    "n": 546,
-    "r": 11622
-   },
-   "source": {
-    "tar": "dataset_05.tar",
-    "ranges": {
-     "Color": [
-      711598080,
-      194494
-     ],
-     "NormalGL": [
-      713502208,
-      8445
-     ],
-     "Roughness": [
-      712061440,
-      225613
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Paper006"
-  },
-  {
-   "name": "straw_mat",
-   "ambientcg_id": "Tatami001",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 38762,
-    "n": 58102,
-    "r": 35630
-   },
-   "source": {
-    "tar": "dataset_06.tar",
-    "ranges": {
-     "Color": [
-      163747328,
-      290395
-     ],
-     "NormalGL": [
-      165684224,
-      323725
-     ],
-     "Roughness": [
-      163435520,
-      309865
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Tatami001"
-  },
-  {
-   "name": "woven_basket",
-   "ambientcg_id": "Wicker008A",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 17420,
-    "n": 41562,
-    "r": 18638
-   },
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      61692928,
-      178659
-     ],
-     "NormalGL": [
-      59492864,
-      284495
-     ],
-     "Roughness": [
-      59779072,
-      176553
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Wicker008A"
-  },
-  {
-   "name": "hemp_linen",
-   "ambientcg_id": "Fabric062",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 45294,
-    "n": 48028,
-    "r": 16208
-   },
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      301075968,
-      316346
-     ],
-     "NormalGL": [
-      300764160,
-      309837
-     ],
-     "Roughness": [
-      301668352,
-      184309
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Fabric062"
-  },
-  {
-   "name": "onggi_glaze",
-   "ambientcg_id": "GlazedTerracotta001",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     512,
-     512
-    ],
-    "rough": [
-     512,
-     512
-    ]
-   },
-   "bytes": {
-    "c": 7656,
-    "n": 5050,
-    "r": 5044
-   },
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      332525568,
-      126491
-     ],
-     "NormalGL": [
-      332456960,
-      66928
-     ],
-     "Roughness": [
-      331019264,
-      119090
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/GlazedTerracotta001"
-  },
-  {
-   "name": "field_soil",
-   "ambientcg_id": "Ground048",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 88782,
-    "n": 19982,
-    "r": 6184
-   },
-   "source": {
-    "tar": "dataset_01.tar",
-    "ranges": {
-     "Color": [
-      293304320,
-      519320
-     ],
-     "NormalGL": [
-      289966080,
-      539208
-     ],
-     "Roughness": [
-      289252352,
-      270905
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Ground048"
-  },
-  {
-   "name": "yard_dirt_path",
-   "ambientcg_id": "Ground069",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 70064,
-    "n": 13190,
-    "r": 6856
-   },
-   "source": {
-    "tar": "dataset_01.tar",
-    "ranges": {
-     "Color": [
-      562903552,
-      418105
-     ],
-     "NormalGL": [
-      562524672,
-      377102
-     ],
-     "Roughness": [
-      563323392,
-      249750
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Ground069"
-  },
-  {
-   "name": "gravel",
-   "ambientcg_id": "Gravel022",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 68894,
-    "n": 35416,
-    "r": 8286
-   },
-   "source": {
-    "tar": "dataset_06.tar",
-    "ranges": {
-     "Color": [
-      541393920,
-      360873
-     ],
-     "NormalGL": [
-      542195200,
-      570174
-     ],
-     "Roughness": [
-      538899456,
-      191936
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Gravel022"
-  },
-  {
-   "name": "grass",
-   "ambientcg_id": "Grass004",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 90004,
-    "n": 19730,
-    "r": 12824
-   },
-   "source": {
-    "tar": "dataset_04.tar",
-    "ranges": {
-     "Color": [
-      539312128,
-      428726
-     ],
-     "NormalGL": [
-      542836224,
-      507289
-     ],
-     "Roughness": [
-      540248576,
-      450985
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Grass004"
-  },
-  {
-   "name": "granite_stone",
-   "ambientcg_id": "Rock043S",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 87208,
-    "n": 25876,
-    "r": 4546
-   },
-   "source": {
-    "tar": "dataset_06.tar",
-    "ranges": {
-     "Color": [
-      78280704,
-      481809
-     ],
-     "NormalGL": [
-      79375360,
-      501855
-     ],
-     "Roughness": [
-      78111744,
-      167269
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Rock043S"
-  },
-  {
-   "name": "stone_wall_doldam",
-   "ambientcg_id": "Rocks001",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 62900,
-    "n": 22986,
-    "r": 4784
-   },
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      673053184,
-      368944
-     ],
-     "NormalGL": [
-      672333312,
-      358696
-     ],
-     "Roughness": [
-      671025152,
-      139916
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Rocks001"
-  },
-  {
-   "name": "pine_bark",
-   "ambientcg_id": "Bark014",
-   "px": {
-    "color": [
-     512,
-     512
-    ],
-    "normalGL": [
-     256,
-     256
-    ],
-    "rough": [
-     256,
-     256
-    ]
-   },
-   "bytes": {
-    "c": 66012,
-    "n": 8294,
-    "r": 13810
-   },
-   "source": {
-    "tar": "dataset_05.tar",
-    "ranges": {
-     "Color": [
-      868129280,
-      368117
-     ],
-     "NormalGL": [
-      867870720,
-      256834
-     ],
-     "Roughness": [
-      868498944,
-      385620
-     ]
-    }
-   },
-   "license": "CC0-1.0 (ambientCG)",
-   "page": "https://ambientcg.com/a/Bark014"
-  }
- ],
- "art": [
-  {
-   "name": "chaekgeori_screen",
-   "met_objectID": 73134,
-   "px": [
-    1536,
-    635
+   "name": "mat/giwa_roof_tile/c",
+   "file": "mat_giwa_roof_tile_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 19930,
+   "sha256": "0eeed0eedf948e5e379dbf433f0167be1c27023da2d9b9de477cb97d0ced1181",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/RoofingTiles013A",
+   "title": "기와 (골기와) — 색",
+   "credit": "ambientCG — RoofingTiles013A (CC0 1.0): 구운 흙 표면 사진 · 골기와 굴곡은 이 프로젝트가 직접 만든 절차적 무늬 (assets/pack/src/make_pack.py)",
+   "avg": [
+    73,
+    74,
+    75
    ],
-   "bytes": 95652,
+   "use": "기와지붕",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 86
+  },
+  {
+   "name": "mat/giwa_roof_tile/n",
+   "file": "mat_giwa_roof_tile_n.webp",
+   "kind": "normal",
+   "w": 512,
+   "h": 512,
+   "bytes": 5860,
+   "sha256": "61e2cdcc4473c9976e7cd0438b864ad30aa1ef0b98384771ca7154759c185682",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/RoofingTiles013A",
+   "title": "기와 (골기와) — 굴곡(노멀)",
+   "credit": "ambientCG — RoofingTiles013A (CC0 1.0): 구운 흙 표면 사진 · 골기와 굴곡은 이 프로젝트가 직접 만든 절차적 무늬 (assets/pack/src/make_pack.py)",
+   "enc": "xy",
+   "use": "기와지붕",
+   "q": 40,
+   "err": 1.56
+  },
+  {
+   "name": "mat/giwa_roof_tile/r",
+   "file": "mat_giwa_roof_tile_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3462,
+   "sha256": "47eeb107de61904ec4cece23561871f206e164b0fe22aee362ec2e91caa0f0cc",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/RoofingTiles013A",
+   "title": "기와 (골기와) — 거칠기",
+   "credit": "ambientCG — RoofingTiles013A (CC0 1.0): 구운 흙 표면 사진 · 골기와 굴곡은 이 프로젝트가 직접 만든 절차적 무늬 (assets/pack/src/make_pack.py)",
+   "avg": 210,
+   "use": "기와지붕",
+   "q": 58
+  },
+  {
+   "name": "mat/thatch_choga/c",
+   "file": "mat_thatch_choga_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 37776,
+   "sha256": "43c718344ef3aaa3c87fa70a3a5f63620649ad5c8542f008685b05ef5c9ac1a1",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/ThatchedRoof001A",
+   "title": "초가지붕 짚 — 색",
+   "credit": "ambientCG — ThatchedRoof001A (CC0 1.0)",
+   "avg": [
+    111,
+    99,
+    85
+   ],
+   "use": "초가 지붕",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 82
+  },
+  {
+   "name": "mat/thatch_choga/n",
+   "file": "mat_thatch_choga_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 19416,
+   "sha256": "7183da2030cbcada1b6bbf18e30694241ad1908fcfb30072c9bc403a008298a0",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/ThatchedRoof001A",
+   "title": "초가지붕 짚 — 굴곡(노멀)",
+   "credit": "ambientCG — ThatchedRoof001A (CC0 1.0)",
+   "enc": "xy",
+   "use": "초가 지붕",
+   "q": 75,
+   "err": 2.72
+  },
+  {
+   "name": "mat/thatch_choga/r",
+   "file": "mat_thatch_choga_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 2404,
+   "sha256": "b86c0ee039f2db4fdf358d187bc293ac3be1c6d2ca6c951523a420309b16aad9",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/ThatchedRoof001A",
+   "title": "초가지붕 짚 — 거칠기",
+   "credit": "ambientCG — ThatchedRoof001A (CC0 1.0)",
+   "avg": 177,
+   "use": "초가 지붕",
+   "q": 58
+  },
+  {
+   "name": "mat/lime_plaster_wall/c",
+   "file": "mat_lime_plaster_wall_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 54388,
+   "sha256": "e82800f27d33ecbc41212cd6f3e715551c8ebfc0276287ec8b2fbcbcef98b12c",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Plaster003",
+   "title": "회벽 (석회 미장) — 색",
+   "credit": "ambientCG — Plaster003 (CC0 1.0)",
+   "avg": [
+    216,
+    212,
+    209
+   ],
+   "use": "한옥 흰 벽",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 76
+  },
+  {
+   "name": "mat/lime_plaster_wall/n",
+   "file": "mat_lime_plaster_wall_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 15604,
+   "sha256": "bb62a304c59c57be356b1a29d02585e6afe4ef091ce342597f22171530bcf981",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Plaster003",
+   "title": "회벽 (석회 미장) — 굴곡(노멀)",
+   "credit": "ambientCG — Plaster003 (CC0 1.0)",
+   "enc": "xy",
+   "use": "한옥 흰 벽",
+   "q": 78,
+   "err": 2.23
+  },
+  {
+   "name": "mat/lime_plaster_wall/r",
+   "file": "mat_lime_plaster_wall_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 574,
+   "sha256": "cfb8d38c52f048314b4c3c2ab370f8da100d78c8257eccf280c45e648ab8eec7",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Plaster003",
+   "title": "회벽 (석회 미장) — 거칠기",
+   "credit": "ambientCG — Plaster003 (CC0 1.0)",
+   "avg": 214,
+   "use": "한옥 흰 벽",
+   "q": 58
+  },
+  {
+   "name": "mat/hwangto_clay_wall/c",
+   "file": "mat_hwangto_clay_wall_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 6824,
+   "sha256": "5ed6897e8e15934a5f4812b8dde375f7e238f7cf8ec346e403962dc333e39a65",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Clay002",
+   "title": "황토벽 — 색",
+   "credit": "ambientCG — Clay002 (CC0 1.0)",
+   "avg": [
+    150,
+    98,
+    74
+   ],
+   "use": "흙벽·부뚜막",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 96
+  },
+  {
+   "name": "mat/hwangto_clay_wall/n",
+   "file": "mat_hwangto_clay_wall_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 9424,
+   "sha256": "108aee81b5aaf622967910e947c0f5be0fbf0833cebbf2c1ce8aeee3ce0cf13a",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Clay002",
+   "title": "황토벽 — 굴곡(노멀)",
+   "credit": "ambientCG — Clay002 (CC0 1.0)",
+   "enc": "xy",
+   "use": "흙벽·부뚜막",
+   "q": 80,
+   "err": 1.78
+  },
+  {
+   "name": "mat/hwangto_clay_wall/r",
+   "file": "mat_hwangto_clay_wall_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3282,
+   "sha256": "b29c126ce13f6f9e2a6305622d2ab6334b5d165a3c0afd69f56be9d0131772c8",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Clay002",
+   "title": "황토벽 — 거칠기",
+   "credit": "ambientCG — Clay002 (CC0 1.0)",
+   "avg": 148,
+   "use": "흙벽·부뚜막",
+   "q": 58
+  },
+  {
+   "name": "mat/timber_beam_dark/c",
+   "file": "mat_timber_beam_dark_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 34642,
+   "sha256": "a85e8ad00866a5dab0cdd92fb341d4bfa36ee27281d53805888a6cd0e8c14268",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wood036",
+   "title": "오래된 기둥·보 (짙은 나무) — 색",
+   "credit": "ambientCG — Wood036 (CC0 1.0)",
+   "avg": [
+    88,
+    61,
+    43
+   ],
+   "use": "실내 기둥·대들보",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 90
+  },
+  {
+   "name": "mat/timber_beam_dark/n",
+   "file": "mat_timber_beam_dark_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 7800,
+   "sha256": "fb5d4f890959bf9eeeff6d68b5e4309d8b1de887f27be8d8dc75b26aff09d39f",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wood036",
+   "title": "오래된 기둥·보 (짙은 나무) — 굴곡(노멀)",
+   "credit": "ambientCG — Wood036 (CC0 1.0)",
+   "enc": "xy",
+   "use": "실내 기둥·대들보",
+   "q": 85,
+   "err": 1.35
+  },
+  {
+   "name": "mat/timber_beam_dark/r",
+   "file": "mat_timber_beam_dark_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 5088,
+   "sha256": "dcd2cf05a102d6384b07e668d0ee538b362365bce650ad85da7ebf7ec7e7adb1",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wood036",
+   "title": "오래된 기둥·보 (짙은 나무) — 거칠기",
+   "credit": "ambientCG — Wood036 (CC0 1.0)",
+   "avg": 145,
+   "use": "실내 기둥·대들보",
+   "q": 58
+  },
+  {
+   "name": "mat/wood_planks_dark/c",
+   "file": "mat_wood_planks_dark_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 28324,
+   "sha256": "0bfb795655674aec77924ef6e45f356ef68a64ad042b795d53b7a4ec187f5de9",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Planks023A",
+   "title": "오래된 널빤지 — 색",
+   "credit": "ambientCG — Planks023A (CC0 1.0)",
+   "avg": [
+    90,
+    79,
+    70
+   ],
+   "use": "곳간·헛간 널벽",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 88
+  },
+  {
+   "name": "mat/wood_planks_dark/n",
+   "file": "mat_wood_planks_dark_n.webp",
+   "kind": "normal",
+   "w": 384,
+   "h": 384,
+   "bytes": 10546,
+   "sha256": "a0668041e047c3ae672fb0768492b9545c582af4a14507a7c6cf9290c3b80e26",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Planks023A",
+   "title": "오래된 널빤지 — 굴곡(노멀)",
+   "credit": "ambientCG — Planks023A (CC0 1.0)",
+   "enc": "xy",
+   "use": "곳간·헛간 널벽",
+   "q": 69,
+   "err": 1.62
+  },
+  {
+   "name": "mat/wood_planks_dark/r",
+   "file": "mat_wood_planks_dark_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 670,
+   "sha256": "113b04220a95928b6d6d3be74eae92154e9ab809a1d566f1bb92c773b430af8e",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Planks023A",
+   "title": "오래된 널빤지 — 거칠기",
+   "credit": "ambientCG — Planks023A (CC0 1.0)",
+   "avg": 217,
+   "use": "곳간·헛간 널벽",
+   "q": 58
+  },
+  {
+   "name": "mat/maru_floor/c",
+   "file": "mat_maru_floor_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 39318,
+   "sha256": "794a333de3d984c3e42553a43569862ba1b46f456d891d4d7a695fad382d633e",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/WoodFloor041",
+   "title": "우물마루 바닥 — 색",
+   "credit": "ambientCG — WoodFloor041 (CC0 1.0)",
+   "avg": [
+    95,
+    78,
+    60
+   ],
+   "use": "대청마루",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 83
+  },
+  {
+   "name": "mat/maru_floor/n",
+   "file": "mat_maru_floor_n.webp",
+   "kind": "normal",
+   "w": 384,
+   "h": 384,
+   "bytes": 1940,
+   "sha256": "490d40e423d7e7f91eae8dda8cbf311ff3261c8a2e61de0ea51b87f8b1ce0a99",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/WoodFloor041",
+   "title": "우물마루 바닥 — 굴곡(노멀)",
+   "credit": "ambientCG — WoodFloor041 (CC0 1.0)",
+   "enc": "xy",
+   "use": "대청마루",
+   "q": 54,
+   "err": 0.99
+  },
+  {
+   "name": "mat/maru_floor/r",
+   "file": "mat_maru_floor_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 612,
+   "sha256": "ec6091a014ae6817ebc2b89c5dfbff43cbc8da901da2de03eecf97815a86af55",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/WoodFloor041",
+   "title": "우물마루 바닥 — 거칠기",
+   "credit": "ambientCG — WoodFloor041 (CC0 1.0)",
+   "avg": 154,
+   "use": "대청마루",
+   "q": 58
+  },
+  {
+   "name": "mat/hanji_paper/c",
+   "file": "mat_hanji_paper_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 300,
+   "bytes": 11412,
+   "sha256": "8344b0262ac223f2f99b80cf50137602b225d4117b4b57838aa1b383bca54566",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Paper001",
+   "title": "한지 — 색",
+   "credit": "ambientCG — Paper001 (CC0 1.0)",
+   "avg": [
+    245,
+    244,
+    242
+   ],
+   "use": "창호지·벽지",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 93
+  },
+  {
+   "name": "mat/hanji_paper/n",
+   "file": "mat_hanji_paper_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 150,
+   "bytes": 4204,
+   "sha256": "cdfbf527a99136d580f08e09e51c330b6133764c605593a1695228e6734c1181",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Paper001",
+   "title": "한지 — 굴곡(노멀)",
+   "credit": "ambientCG — Paper001 (CC0 1.0)",
+   "enc": "xy",
+   "use": "창호지·벽지",
+   "q": 88,
+   "err": 1.16
+  },
+  {
+   "name": "mat/hanji_paper/r",
+   "file": "mat_hanji_paper_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 150,
+   "bytes": 2746,
+   "sha256": "26ad92b480b3b682e0b258b045f5126dfa472e91c8aa3b82f1f3deb02fa68e3e",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Paper001",
+   "title": "한지 — 거칠기",
+   "credit": "ambientCG — Paper001 (CC0 1.0)",
+   "avg": 161,
+   "use": "창호지·벽지",
+   "q": 58
+  },
+  {
+   "name": "mat/jangpan_floor_paper/c",
+   "file": "mat_jangpan_floor_paper_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 19922,
+   "sha256": "d5313f385ebb5f3c61ab5fe62654ae40d367ca0eef141a15161026010b59759e",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Paper006",
+   "title": "장판지 — 색",
+   "credit": "ambientCG — Paper006 (CC0 1.0)",
+   "avg": [
+    165,
+    135,
+    104
+   ],
+   "use": "온돌방 바닥",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 87
+  },
+  {
+   "name": "mat/jangpan_floor_paper/n",
+   "file": "mat_jangpan_floor_paper_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 310,
+   "sha256": "545d47b5dca5a304d8edc0cb50b12506191a5ab9ab7a7255526180f4bcace687",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Paper006",
+   "title": "장판지 — 굴곡(노멀)",
+   "credit": "ambientCG — Paper006 (CC0 1.0)",
+   "enc": "xy",
+   "use": "온돌방 바닥",
+   "q": 40,
+   "err": 0.01
+  },
+  {
+   "name": "mat/jangpan_floor_paper/r",
+   "file": "mat_jangpan_floor_paper_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 850,
+   "sha256": "abbaf71a670f322b014b0824d0ad0af91ea020f7b604c8c3fa045043c7ed5461",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Paper006",
+   "title": "장판지 — 거칠기",
+   "credit": "ambientCG — Paper006 (CC0 1.0)",
+   "avg": 112,
+   "use": "온돌방 바닥",
+   "q": 58
+  },
+  {
+   "name": "mat/straw_mat/c",
+   "file": "mat_straw_mat_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 38300,
+   "sha256": "f4d1b96f6ef90928783d4966af585fbbf4d257e584020f8b85337b65e013d532",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Tatami001",
+   "title": "돗자리·멍석 — 색",
+   "credit": "ambientCG — Tatami001 (CC0 1.0)",
+   "avg": [
+    217,
+    193,
+    123
+   ],
+   "use": "바닥 깔개",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 79
+  },
+  {
+   "name": "mat/straw_mat/n",
+   "file": "mat_straw_mat_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 16798,
+   "sha256": "84de4d85f58875aae861b735189a244610ed241995be15d4b12459777fb9d61a",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Tatami001",
+   "title": "돗자리·멍석 — 굴곡(노멀)",
+   "credit": "ambientCG — Tatami001 (CC0 1.0)",
+   "enc": "xy",
+   "use": "바닥 깔개",
+   "q": 75,
+   "err": 2.61
+  },
+  {
+   "name": "mat/straw_mat/r",
+   "file": "mat_straw_mat_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3536,
+   "sha256": "11c376ba70527f63687ecba3b19277caaec3bbed28a7191fd733f796fc280307",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Tatami001",
+   "title": "돗자리·멍석 — 거칠기",
+   "credit": "ambientCG — Tatami001 (CC0 1.0)",
+   "avg": 177,
+   "use": "바닥 깔개",
+   "q": 58
+  },
+  {
+   "name": "mat/woven_basket/c",
+   "file": "mat_woven_basket_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 26634,
+   "sha256": "fc35c4c046b5d4ee91c1e292a05183ced601d3cfcf296d77c842d73e39023aa0",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wicker008A",
+   "title": "바구니 엮음 — 색",
+   "credit": "ambientCG — Wicker008A (CC0 1.0)",
+   "avg": [
+    160,
+    136,
+    107
+   ],
+   "use": "소쿠리·채반",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 88
+  },
+  {
+   "name": "mat/woven_basket/n",
+   "file": "mat_woven_basket_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 11794,
+   "sha256": "2de0798fe31d6316f058201eb6a4e1d3608600d87179aa3314c1810bbf7e7943",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wicker008A",
+   "title": "바구니 엮음 — 굴곡(노멀)",
+   "credit": "ambientCG — Wicker008A (CC0 1.0)",
+   "enc": "xy",
+   "use": "소쿠리·채반",
+   "q": 58,
+   "err": 2.35
+  },
+  {
+   "name": "mat/woven_basket/r",
+   "file": "mat_woven_basket_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 6456,
+   "sha256": "6a8629a157478a86f1dc8239e1c8b96cc61d3c5f63c6dbd1ea5590013b21b1bb",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wicker008A",
+   "title": "바구니 엮음 — 거칠기",
+   "credit": "ambientCG — Wicker008A (CC0 1.0)",
+   "avg": 131,
+   "use": "소쿠리·채반",
+   "q": 58
+  },
+  {
+   "name": "mat/hemp_linen/c",
+   "file": "mat_hemp_linen_c.webp",
+   "kind": "color",
+   "w": 384,
+   "h": 384,
+   "bytes": 34810,
+   "sha256": "7b1b89ea6b80fa1e73d588bc9a8b6e14dfecd6a42e655e8897030ceec60a0f07",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Fabric062",
+   "title": "삼베 — 색",
+   "credit": "ambientCG — Fabric062 (CC0 1.0)",
+   "avg": [
+    199,
+    194,
+    185
+   ],
+   "use": "보자기·덮개 천",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 77
+  },
+  {
+   "name": "mat/hemp_linen/n",
+   "file": "mat_hemp_linen_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 6572,
+   "sha256": "72f0d505a0ea33a447870d71a2db16b0baa37ffa1210cf0e6f570634dbf68a48",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Fabric062",
+   "title": "삼베 — 굴곡(노멀)",
+   "credit": "ambientCG — Fabric062 (CC0 1.0)",
+   "enc": "xy",
+   "use": "보자기·덮개 천",
+   "q": 72,
+   "err": 2.29
+  },
+  {
+   "name": "mat/hemp_linen/r",
+   "file": "mat_hemp_linen_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 1332,
+   "sha256": "4ce803e6b825403896eb8b29f83e00ef4f3d6035cd3c95dbff9de60a8d3e8be0",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Fabric062",
+   "title": "삼베 — 거칠기",
+   "credit": "ambientCG — Fabric062 (CC0 1.0)",
+   "avg": 210,
+   "use": "보자기·덮개 천",
+   "q": 58
+  },
+  {
+   "name": "mat/onggi_glaze/c",
+   "file": "mat_onggi_glaze_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 21566,
+   "sha256": "42d22dd5825fc941fd18732d022ebef46c665bb72eaef942d5838d55246b9ddb",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/GlazedTerracotta001",
+   "title": "옹기 유약 — 색",
+   "credit": "ambientCG — GlazedTerracotta001 (CC0 1.0)",
+   "avg": [
+    152,
+    86,
+    47
+   ],
+   "use": "항아리·장독",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 91
+  },
+  {
+   "name": "mat/onggi_glaze/n",
+   "file": "mat_onggi_glaze_n.webp",
+   "kind": "normal",
+   "w": 384,
+   "h": 384,
+   "bytes": 2004,
+   "sha256": "c05c95a1c6e0857835ea7662a4d80966753682015a8028a7f81762c3992d98f4",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/GlazedTerracotta001",
+   "title": "옹기 유약 — 굴곡(노멀)",
+   "credit": "ambientCG — GlazedTerracotta001 (CC0 1.0)",
+   "enc": "xy",
+   "use": "항아리·장독",
+   "q": 40,
+   "err": 0.89
+  },
+  {
+   "name": "mat/onggi_glaze/r",
+   "file": "mat_onggi_glaze_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 1112,
+   "sha256": "e6f80e1003974d01e105528b3004383696e480d11b3a041a9b0969497e9e938b",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/GlazedTerracotta001",
+   "title": "옹기 유약 — 거칠기",
+   "credit": "ambientCG — GlazedTerracotta001 (CC0 1.0)",
+   "avg": 36,
+   "use": "항아리·장독",
+   "q": 58
+  },
+  {
+   "name": "mat/field_soil/c",
+   "file": "mat_field_soil_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 61648,
+   "sha256": "8e39b6687e843be40c283798bc8e7777e5d1194e342d5e5a5241943fc08e1b18",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Ground048",
+   "title": "밭 흙 — 색",
+   "credit": "ambientCG — Ground048 (CC0 1.0)",
+   "avg": [
+    89,
+    68,
+    57
+   ],
+   "use": "텃밭·숲 바닥",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 58
+  },
+  {
+   "name": "mat/field_soil/n",
+   "file": "mat_field_soil_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 25858,
+   "sha256": "6b024588e81d8ba997bb65914221286068434c7229ea072ed6f5bdf78957901f",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Ground048",
+   "title": "밭 흙 — 굴곡(노멀)",
+   "credit": "ambientCG — Ground048 (CC0 1.0)",
+   "enc": "xy",
+   "use": "텃밭·숲 바닥",
+   "q": 64,
+   "err": 3.28
+  },
+  {
+   "name": "mat/field_soil/r",
+   "file": "mat_field_soil_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 4060,
+   "sha256": "4a268b0791ebe05a340d360b3bc9e512a980a6bc1dcd8dab64bfb0ada61af10f",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Ground048",
+   "title": "밭 흙 — 거칠기",
+   "credit": "ambientCG — Ground048 (CC0 1.0)",
+   "avg": 171,
+   "use": "텃밭·숲 바닥",
+   "q": 58
+  },
+  {
+   "name": "mat/yard_dirt_path/c",
+   "file": "mat_yard_dirt_path_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 59084,
+   "sha256": "c52cab56d60776f6c539159a80f52fdc0cd03355908d51a941b1d8652d9f10b4",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Ground069",
+   "title": "마당 흙길 — 색",
+   "credit": "ambientCG — Ground069 (CC0 1.0)",
+   "avg": [
+    150,
+    144,
+    123
+   ],
+   "use": "마당·오솔길",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 76
+  },
+  {
+   "name": "mat/yard_dirt_path/n",
+   "file": "mat_yard_dirt_path_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 19342,
+   "sha256": "7a94b539995a3b1432715b1edd4661370eea6269b4b521b316f8798be805834d",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Ground069",
+   "title": "마당 흙길 — 굴곡(노멀)",
+   "credit": "ambientCG — Ground069 (CC0 1.0)",
+   "enc": "xy",
+   "use": "마당·오솔길",
+   "q": 76,
+   "err": 2.43
+  },
+  {
+   "name": "mat/yard_dirt_path/r",
+   "file": "mat_yard_dirt_path_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 4792,
+   "sha256": "214cea5e81fa2ee8d203a50cf48dbde5abad98ea1c0dfadaa226a937cd1a85d0",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Ground069",
+   "title": "마당 흙길 — 거칠기",
+   "credit": "ambientCG — Ground069 (CC0 1.0)",
+   "avg": 133,
+   "use": "마당·오솔길",
+   "q": 58
+  },
+  {
+   "name": "mat/gravel/c",
+   "file": "mat_gravel_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 61090,
+   "sha256": "328878ef0a0ee3f9fbe3e9858deea1f1249d7204083dbe7dd375d509ef7bb089",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Gravel022",
+   "title": "자갈 — 색",
+   "credit": "ambientCG — Gravel022 (CC0 1.0)",
+   "avg": [
+    131,
+    127,
+    116
+   ],
+   "use": "자갈 마당·물가",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 77
+  },
+  {
+   "name": "mat/gravel/n",
+   "file": "mat_gravel_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 40438,
+   "sha256": "f5df2c3b42f818237a2cd6985520e751149b6948044bea18eefd1ed3092368ad",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Gravel022",
+   "title": "자갈 — 굴곡(노멀)",
+   "credit": "ambientCG — Gravel022 (CC0 1.0)",
+   "enc": "xy",
+   "use": "자갈 마당·물가",
+   "q": 40,
+   "err": 4.74
+  },
+  {
+   "name": "mat/gravel/r",
+   "file": "mat_gravel_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 6272,
+   "sha256": "111a5b9250185e2c8eec552164e210483659c547c8e0d380eb7c1984cd855866",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Gravel022",
+   "title": "자갈 — 거칠기",
+   "credit": "ambientCG — Gravel022 (CC0 1.0)",
+   "avg": 118,
+   "use": "자갈 마당·물가",
+   "q": 58
+  },
+  {
+   "name": "mat/grass/c",
+   "file": "mat_grass_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 61794,
+   "sha256": "3950faca2263c9e4f31f38522af4e6b176a545712119fd3e06246d729ce77e1a",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Grass004",
+   "title": "잔디 — 색",
+   "credit": "ambientCG — Grass004 (CC0 1.0)",
+   "avg": [
+    100,
+    112,
+    53
+   ],
+   "use": "풀밭",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 63
+  },
+  {
+   "name": "mat/grass/n",
+   "file": "mat_grass_n.webp",
+   "kind": "normal",
+   "w": 192,
+   "h": 192,
+   "bytes": 13810,
+   "sha256": "99d91991a4318e5a915d038eb82070caa42a6713ce5f31f6d1f6b17befd45085",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Grass004",
+   "title": "잔디 — 굴곡(노멀)",
+   "credit": "ambientCG — Grass004 (CC0 1.0)",
+   "enc": "xy",
+   "use": "풀밭",
+   "q": 53,
+   "err": 3.92
+  },
+  {
+   "name": "mat/grass/r",
+   "file": "mat_grass_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 6920,
+   "sha256": "410bf65e5aefe6c9334f23ca858477b695db855a2466c69ae2cf6c8b39e4c341",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Grass004",
+   "title": "잔디 — 거칠기",
+   "credit": "ambientCG — Grass004 (CC0 1.0)",
+   "avg": 67,
+   "use": "풀밭",
+   "q": 40
+  },
+  {
+   "name": "mat/granite_stone/c",
+   "file": "mat_granite_stone_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 61990,
+   "sha256": "2ec58c94fdabc936bb1d2c925123c5ca1267bf05a4d576cbb0acbb6e21e8f796",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rock043S",
+   "title": "화강암 — 색",
+   "credit": "ambientCG — Rock043S (CC0 1.0)",
+   "avg": [
+    148,
+    145,
+    136
+   ],
+   "use": "바위·기단·석등",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 59
+  },
+  {
+   "name": "mat/granite_stone/n",
+   "file": "mat_granite_stone_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 29830,
+   "sha256": "ebe1567195f93317ae03a56fe793f5a354a00cd0f76c4ec4ec7c6c3b79ecb874",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rock043S",
+   "title": "화강암 — 굴곡(노멀)",
+   "credit": "ambientCG — Rock043S (CC0 1.0)",
+   "enc": "xy",
+   "use": "바위·기단·석등",
+   "q": 59,
+   "err": 3.59
+  },
+  {
+   "name": "mat/granite_stone/r",
+   "file": "mat_granite_stone_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3464,
+   "sha256": "187b1527a4ef67070d31af9673531f4a81a3998aeeac88f954e8a49f881ab87e",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rock043S",
+   "title": "화강암 — 거칠기",
+   "credit": "ambientCG — Rock043S (CC0 1.0)",
+   "avg": 165,
+   "use": "바위·기단·석등",
+   "q": 58
+  },
+  {
+   "name": "mat/stone_wall_doldam/c",
+   "file": "mat_stone_wall_doldam_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 60000,
+   "sha256": "87917c9ac226e4cd1b6665c6aaf9a11d6d032afa97be42af806c16016e1b767c",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rocks001",
+   "title": "돌담 — 색",
+   "credit": "ambientCG — Rocks001 (CC0 1.0)",
+   "avg": [
+    129,
+    114,
+    95
+   ],
+   "use": "돌담·석축",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 79
+  },
+  {
+   "name": "mat/stone_wall_doldam/n",
+   "file": "mat_stone_wall_doldam_n.webp",
+   "kind": "normal",
+   "w": 384,
+   "h": 384,
+   "bytes": 46960,
+   "sha256": "709b34419cde79e0e50d023813e2324e430c329a794f57a593b7c8cc9bb47a3c",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rocks001",
+   "title": "돌담 — 굴곡(노멀)",
+   "credit": "ambientCG — Rocks001 (CC0 1.0)",
+   "enc": "xy",
+   "use": "돌담·석축",
+   "q": 61,
+   "err": 3.29
+  },
+  {
+   "name": "mat/stone_wall_doldam/r",
+   "file": "mat_stone_wall_doldam_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3882,
+   "sha256": "1a1354ca635ae3a23e7e3272de5d4ff5e087e47a921fd6a5e6e3e09580e99c81",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rocks001",
+   "title": "돌담 — 거칠기",
+   "credit": "ambientCG — Rocks001 (CC0 1.0)",
+   "avg": 133,
+   "use": "돌담·석축",
+   "q": 58
+  },
+  {
+   "name": "mat/pine_bark/c",
+   "file": "mat_pine_bark_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 61792,
+   "sha256": "3697d47ad07e487612ebb0070f0385745deae64c1929c76e64b6b0e7a029656b",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Bark014",
+   "title": "소나무 껍질 — 색",
+   "credit": "ambientCG — Bark014 (CC0 1.0)",
+   "avg": [
+    124,
+    104,
+    83
+   ],
+   "use": "나무 줄기",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 78
+  },
+  {
+   "name": "mat/pine_bark/n",
+   "file": "mat_pine_bark_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 15074,
+   "sha256": "caae00100c263fe4cda5a94571a63df7780231a35ec664932edda921042bb81f",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Bark014",
+   "title": "소나무 껍질 — 굴곡(노멀)",
+   "credit": "ambientCG — Bark014 (CC0 1.0)",
+   "enc": "xy",
+   "use": "나무 줄기",
+   "q": 79,
+   "err": 2.0
+  },
+  {
+   "name": "mat/pine_bark/r",
+   "file": "mat_pine_bark_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 6454,
+   "sha256": "8b44165dae8f0bfa7a1d28b2dfa2e4941a2606ed63f79fda30986136aa8c1d9d",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Bark014",
+   "title": "소나무 껍질 — 거칠기",
+   "credit": "ambientCG — Bark014 (CC0 1.0)",
+   "avg": 158,
+   "use": "나무 줄기",
+   "q": 28
+  },
+  {
+   "name": "mat/pine_timber/c",
+   "file": "mat_pine_timber_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 39620,
+   "sha256": "c3ed6e9fe2cda0ecd0b537f86e3935ef82116420da4264fab2a5d536dfac0871",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wood048",
+   "title": "소나무 목재 (밝은 나뭇결) — 색",
+   "credit": "ambientCG — Wood048 (CC0 1.0)",
+   "avg": [
+    178,
+    145,
+    103
+   ],
+   "use": "기둥·보·문틀 (바깥)",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 83
+  },
+  {
+   "name": "mat/pine_timber/n",
+   "file": "mat_pine_timber_n.webp",
+   "kind": "normal",
+   "w": 384,
+   "h": 384,
+   "bytes": 15726,
+   "sha256": "b06758b0bbb5d655b9f21c6f8a71d6113facf8ddffb6370dab22daa8dcfe3a57",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wood048",
+   "title": "소나무 목재 (밝은 나뭇결) — 굴곡(노멀)",
+   "credit": "ambientCG — Wood048 (CC0 1.0)",
+   "enc": "xy",
+   "use": "기둥·보·문틀 (바깥)",
+   "q": 81,
+   "err": 1.33
+  },
+  {
+   "name": "mat/pine_timber/r",
+   "file": "mat_pine_timber_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3298,
+   "sha256": "e699f0f45b75878a2ca0815c33e0aa69eb9c6e01b885b8a697864bf9f1a6a415",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Wood048",
+   "title": "소나무 목재 (밝은 나뭇결) — 거칠기",
+   "credit": "ambientCG — Wood048 (CC0 1.0)",
+   "avg": 141,
+   "use": "기둥·보·문틀 (바깥)",
+   "q": 58
+  },
+  {
+   "name": "mat/pine_planks/c",
+   "file": "mat_pine_planks_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 34532,
+   "sha256": "832e04a741f47967d3012022fd7b77bfde4d5971a8836c087e3813b16660a0aa",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Planks021",
+   "title": "소나무 널빤지 — 색",
+   "credit": "ambientCG — Planks021 (CC0 1.0)",
+   "avg": [
+    196,
+    171,
+    118
+   ],
+   "use": "마루·데크·울타리",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 85
+  },
+  {
+   "name": "mat/pine_planks/n",
+   "file": "mat_pine_planks_n.webp",
+   "kind": "normal",
+   "w": 384,
+   "h": 384,
+   "bytes": 11110,
+   "sha256": "26edb8b7be6c5556dc6092c98722965544bec4b8f862e9873942f57faf97df92",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Planks021",
+   "title": "소나무 널빤지 — 굴곡(노멀)",
+   "credit": "ambientCG — Planks021 (CC0 1.0)",
+   "enc": "xy",
+   "use": "마루·데크·울타리",
+   "q": 64,
+   "err": 1.83
+  },
+  {
+   "name": "mat/pine_planks/r",
+   "file": "mat_pine_planks_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 4274,
+   "sha256": "31279e02920d7df9ec766a9dded7d53679f4132133ad1f12a3df18d6a3956032",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Planks021",
+   "title": "소나무 널빤지 — 거칠기",
+   "credit": "ambientCG — Planks021 (CC0 1.0)",
+   "avg": 174,
+   "use": "마루·데크·울타리",
+   "q": 58
+  },
+  {
+   "name": "mat/flagstone/c",
+   "file": "mat_flagstone_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 59964,
+   "sha256": "ac99ed7014ffd15a20fb6772e8f94cc17e2c6e43013f347e701d57224f6348e6",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rocks025",
+   "title": "박석 (납작돌 포장) — 색",
+   "credit": "ambientCG — Rocks025 (CC0 1.0)",
+   "avg": [
+    145,
+    139,
+    119
+   ],
+   "use": "광장·디딤돌 길",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 78
+  },
+  {
+   "name": "mat/flagstone/n",
+   "file": "mat_flagstone_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 17624,
+   "sha256": "b05962a5de3de31ed50be3e5aecf045eaa72ded2f66b8ec854a01387a84e2214",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rocks025",
+   "title": "박석 (납작돌 포장) — 굴곡(노멀)",
+   "credit": "ambientCG — Rocks025 (CC0 1.0)",
+   "enc": "xy",
+   "use": "광장·디딤돌 길",
+   "q": 64,
+   "err": 2.81
+  },
+  {
+   "name": "mat/flagstone/r",
+   "file": "mat_flagstone_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 5240,
+   "sha256": "b573fffc51bc46d8a33b4c4ba942f9dc201cd3032c23e8afb8882b76cda5abb3",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rocks025",
+   "title": "박석 (납작돌 포장) — 거칠기",
+   "credit": "ambientCG — Rocks025 (CC0 1.0)",
+   "avg": 123,
+   "use": "광장·디딤돌 길",
+   "q": 58
+  },
+  {
+   "name": "mat/straw_rope/c",
+   "file": "mat_straw_rope_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 256,
+   "bytes": 17986,
+   "sha256": "959aa8d1be34e7c47ebe0b9086feafe976cd58117080b42ae43133f3f3dc3d6d",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rope001",
+   "title": "새끼줄 — 색",
+   "credit": "ambientCG — Rope001 (CC0 1.0)",
+   "avg": [
+    124,
+    109,
+    80
+   ],
+   "use": "금줄·초가 고삿",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 83
+  },
+  {
+   "name": "mat/straw_rope/n",
+   "file": "mat_straw_rope_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 128,
+   "bytes": 13836,
+   "sha256": "ebc633cbcd7e11d80ee0a008d8f9d678acee8e837cc1361ce859a6fb845fe318",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rope001",
+   "title": "새끼줄 — 굴곡(노멀)",
+   "credit": "ambientCG — Rope001 (CC0 1.0)",
+   "enc": "xy",
+   "use": "금줄·초가 고삿",
+   "q": 58,
+   "err": 3.23
+  },
+  {
+   "name": "mat/straw_rope/r",
+   "file": "mat_straw_rope_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 128,
+   "bytes": 4134,
+   "sha256": "17c649ccde0df259d9a0de3a95d2eb16c9a08889862370f38ecfdcbcef12e6c8",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Rope001",
+   "title": "새끼줄 — 거칠기",
+   "credit": "ambientCG — Rope001 (CC0 1.0)",
+   "avg": 166,
+   "use": "금줄·초가 고삿",
+   "q": 58
+  },
+  {
+   "name": "mat/bamboo/c",
+   "file": "mat_bamboo_c.webp",
+   "kind": "color",
+   "w": 512,
+   "h": 512,
+   "bytes": 21938,
+   "sha256": "264fca6673ccf1eaf340a3c19b035817a9f0e874523cdbc7e47ae12a8503f8db",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Bamboo001C",
+   "title": "대나무 — 색",
+   "credit": "ambientCG — Bamboo001C (CC0 1.0)",
+   "avg": [
+    129,
+    110,
+    71
+   ],
+   "use": "대울타리·발",
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)",
+   "q": 88
+  },
+  {
+   "name": "mat/bamboo/n",
+   "file": "mat_bamboo_n.webp",
+   "kind": "normal",
+   "w": 256,
+   "h": 256,
+   "bytes": 4992,
+   "sha256": "b18c5c606fbdb09694cf01d387d86791f0abb47c7c663b716e18f41eb50845ed",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Bamboo001C",
+   "title": "대나무 — 굴곡(노멀)",
+   "credit": "ambientCG — Bamboo001C (CC0 1.0)",
+   "enc": "xy",
+   "use": "대울타리·발",
+   "q": 40,
+   "err": 2.19
+  },
+  {
+   "name": "mat/bamboo/r",
+   "file": "mat_bamboo_r.webp",
+   "kind": "rough",
+   "w": 256,
+   "h": 256,
+   "bytes": 3236,
+   "sha256": "93e1947ec3b6cc7986e00111dc19ed868f931ec550d7caf97122c500603541d3",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Bamboo001C",
+   "title": "대나무 — 거칠기",
+   "credit": "ambientCG — Bamboo001C (CC0 1.0)",
+   "avg": 136,
+   "use": "대울타리·발",
+   "q": 58
+  },
+  {
+   "name": "art/chaekgeori_screen",
+   "file": "art_chaekgeori_screen.webp",
+   "kind": "art",
+   "w": 2048,
+   "h": 790,
+   "bytes": 166758,
+   "sha256": "f6f4862b4e5125a730d559eec16abbf0487b6efff2e5c3df2a3685c3e97742ed",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/73134",
    "title": "Books and Scholars' Possessions",
+   "credit": "Unidentified artist · Korea, early 20th century · Ten-panel folding screen; ink and color on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 2005.385",
+   "titleKo": "책거리 병풍 (책과 문방구)",
    "artist": "Unidentified artist",
    "date": "early 20th century",
-   "accession": "2005.385",
-   "creditLine": "Purchase, Shelby White Gift, 2005",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/73134/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/73134",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "medium": "Ten-panel folding screen; ink and color on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/73134/0.jpg",
+   "crop": [
+    50,
+    43,
+    3949,
+    1547
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 79
   },
   {
-   "name": "birds_flowers_screen",
-   "met_objectID": 44760,
-   "px": [
-    1536,
-    852
-   ],
-   "bytes": 228716,
+   "name": "art/birds_flowers_screen",
+   "file": "art_birds_flowers_screen.webp",
+   "kind": "art",
+   "w": 1920,
+   "h": 1060,
+   "bytes": 211734,
+   "sha256": "20f094d33d2126f2dc15f8b962a58b2d01ab25049477b3bce7327ac106b29ea4",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/44760",
    "title": "Birds and Flowers",
+   "credit": "Unidentified artist · Korea, Joseon dynasty (1392–1910), late 19th–early 20th century · Ten-panel folding screen; ink and color on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 1993.255",
+   "titleKo": "화조도 병풍 (꽃과 새)",
    "artist": "Unidentified artist",
    "date": "late 19th–early 20th century",
-   "accession": "1993.255",
-   "creditLine": "Purchase, The Vincent Astor Foundation Gift and John M. Crawford Jr. Bequest, 1993",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/44760/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/44760",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Ten-panel folding screen; ink and color on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/44760/0.jpg",
+   "crop": [
+    14,
+    22,
+    3791,
+    2107
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 60
   },
   {
-   "name": "rooster_hen_minhwa",
-   "met_objectID": 40073,
-   "px": [
-    441,
-    1024
+   "name": "art/still_life_screen",
+   "file": "art_still_life_screen.webp",
+   "kind": "art",
+   "w": 2048,
+   "h": 945,
+   "bytes": 165522,
+   "sha256": "734851f8085ced2642955f10ec769f16b91f9c5bc8bc7cf517eb3fc4756a4468",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/646996",
+   "title": "Still life with bronze vessels and flowering plants",
+   "credit": "Attributed to Jang Seung-eop (pen name: Owon), Korean, 1843–1897 · Korea, Joseon dynasty (1392–1910), 1894 · Ten-panel folding screen; ink on paper · The Metropolitan Museum of Art, Open Access (CC0) · accession 2014.247",
+   "titleKo": "기명절지도 병풍 (그릇과 꽃)",
+   "artist": "Attributed to Jang Seung-eop (pen name: Owon), Korean, 1843–1897",
+   "date": "1894",
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Ten-panel folding screen; ink on paper",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/646996/0.jpg",
+   "crop": [
+    4,
+    4,
+    3957,
+    1828
    ],
-   "bytes": 54560,
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 58
+  },
+  {
+   "name": "art/rooster_hen_minhwa",
+   "file": "art_rooster_hen_minhwa.webp",
+   "kind": "art",
+   "w": 472,
+   "h": 1152,
+   "bytes": 60366,
+   "sha256": "4ff244acfab5bb985ee6a3402531110a08bafe6484b88b6decea5567c400488f",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/40073",
    "title": "Golden Rooster and Hen",
+   "credit": "Unidentified artist · Korea, Joseon dynasty (1392–1910), 19th century · Hanging scroll; ink and color on paper · The Metropolitan Museum of Art, Open Access (CC0) · accession 19.103.2",
+   "titleKo": "금계도 (황금 수탉과 암탉)",
    "artist": "Unidentified artist",
    "date": "19th century",
-   "accession": "19.103.2",
-   "creditLine": "Rogers Fund, 1919",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/40073/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/40073",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Hanging scroll; ink and color on paper",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/40073/0.jpg",
+   "crop": [
+    22,
+    2,
+    840,
+    1998
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 78
   },
   {
-   "name": "tiger_scroll",
-   "met_objectID": 40069,
-   "px": [
-    767,
-    1024
-   ],
-   "bytes": 39866,
+   "name": "art/tiger_scroll",
+   "file": "art_tiger_scroll.webp",
+   "kind": "art",
+   "w": 509,
+   "h": 1152,
+   "bytes": 45732,
+   "sha256": "51c583da42384fac8319fd6393c8c82169631d45a723e85be9320939664a0aa0",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/40069",
    "title": "Tiger",
-   "artist": "Muqi",
+   "credit": "In the style of Muqi (Chinese, active ca. 1250–80) · Korea or possibly Japan, 16th or 17th century · Hanging scroll; ink on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 12.123.1",
+   "titleKo": "호랑이",
+   "artist": "In the style of Muqi (Chinese, active ca. 1250–80)",
    "date": "16th or 17th century",
-   "accession": "12.123.1",
-   "creditLine": "Rogers Fund, 1912",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/40069/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/40069",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea or possibly Japan",
+   "medium": "Hanging scroll; ink on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/40069/0.jpg",
+   "crop": [
+    634,
+    0,
+    2403,
+    4000
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 79
   },
   {
-   "name": "dragon_carp_minhwa",
-   "met_objectID": 853892,
-   "px": [
-    688,
-    1024
-   ],
-   "bytes": 102952,
+   "name": "art/dragon_carp_minhwa",
+   "file": "art_dragon_carp_minhwa.webp",
+   "kind": "art",
+   "w": 741,
+   "h": 1152,
+   "bytes": 86962,
+   "sha256": "2e74e56f90e70fb3180a1723c7a6b8129a9ea2b32db09345349365ed9486c55a",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/853892",
    "title": "Dragon and carp",
-   "artist": "Unidentified artist",
+   "credit": "Unidentified artist, Korean · Korea, Joseon dynasty (1392–1910), late 19th century · Framed painting; ink and color on paper · The Metropolitan Museum of Art, Open Access (CC0) · accession 2024.89.3",
+   "titleKo": "용과 잉어",
+   "artist": "Unidentified artist, Korean",
    "date": "late 19th century",
-   "accession": "2024.89.3",
-   "creditLine": "Gift of the children of Lea R. Sneider, 2024",
-   "source": "https://huggingface.co/datasets/metmuseum/openaccess (default/train/openaccess-00051-of-00052.parquet row 2276)",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/853892",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Framed painting; ink and color on paper",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/853892/0.jpg",
+   "crop": [
+    125,
+    137,
+    2417,
+    3700
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 58
   },
   {
-   "name": "deer_pines",
-   "met_objectID": 78286,
-   "px": [
-    475,
-    1024
-   ],
-   "bytes": 48306,
+   "name": "art/deer_pines",
+   "file": "art_deer_pines.webp",
+   "kind": "art",
+   "w": 492,
+   "h": 1152,
+   "bytes": 55714,
+   "sha256": "8d126a0d3ad6be2b100d34fdd2db3f7dd1acd169ad4dc4df8ce4e51be3f15922",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/78286",
    "title": "Deer amid Pine Trees",
+   "credit": "Unidentified artist · Korea, Joseon dynasty (1392–1910), 19th century · Pair of hanging scrolls; ink and color on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 2013.29a, b",
+   "titleKo": "소나무 아래 사슴 (송록도)",
    "artist": "Unidentified artist",
    "date": "19th century",
-   "accession": "2013.29a, b",
-   "creditLine": "Purchase, Friends of Asian Art Gifts, 2013",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/78286/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/78286",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Pair of hanging scrolls; ink and color on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/78286/0.jpg",
+   "crop": [
+    40,
+    0,
+    894,
+    2000
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 78
   },
   {
-   "name": "wild_geese_landscape",
-   "met_objectID": 39888,
-   "px": [
-    461,
-    1024
-   ],
-   "bytes": 30308,
+   "name": "art/wild_geese_landscape",
+   "file": "art_wild_geese_landscape.webp",
+   "kind": "art",
+   "w": 514,
+   "h": 1152,
+   "bytes": 39016,
+   "sha256": "28c490e34241e32e4af73edaca019ccd70b4848a16be167f93651c68e862258e",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/39888",
    "title": "Wild geese descending to sandbar",
+   "credit": "Unidentified artist · Korea, Joseon dynasty (1392–1910), late 15th–early 16th century · Hanging scroll; ink on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 1992.337",
+   "titleKo": "모래톱에 내려앉는 기러기 (평사낙안)",
    "artist": "Unidentified artist",
    "date": "late 15th–early 16th century",
-   "accession": "1992.337",
-   "creditLine": "Purchase, Harris Brisbane Dick Fund, John M. Crawford Jr. Bequest, and The Vincent Astor Foundation Gift, 1992",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/39888/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/39888",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Hanging scroll; ink on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/39888/0.jpg",
+   "crop": [
+    10,
+    2,
+    1669,
+    3721
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 80
   },
   {
-   "name": "plum_branch",
-   "met_objectID": 40445,
-   "px": [
-    664,
-    1024
-   ],
-   "bytes": 37310,
+   "name": "art/plum_branch",
+   "file": "art_plum_branch.webp",
+   "kind": "art",
+   "w": 747,
+   "h": 1152,
+   "bytes": 43524,
+   "sha256": "1dbec18060924fdc5c7a1189298c8b1655ada1c6ddaadbc2e0b8c0a30cbe75b3",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/40445",
    "title": "Plum Branch",
-   "artist": "Yi Yu-won",
+   "credit": "Yi Yu-won (Korean, 1814–1888) · Korea, Joseon dynasty (1392–1910), dated 1888 · Hanging scroll; ink on paper · The Metropolitan Museum of Art, Open Access (CC0) · accession 1990.230",
+   "titleKo": "매화 가지",
+   "artist": "Yi Yu-won (Korean, 1814–1888)",
    "date": "dated 1888",
-   "accession": "1990.230",
-   "creditLine": "Purchase, Seymour and Rogers Funds and Bequest of Dorothy Graham Bennett, 1990",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/40445/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/40445",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Hanging scroll; ink on paper",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/40445/0.jpg",
+   "crop": [
+    2,
+    2,
+    2592,
+    3998
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 79
   },
   {
-   "name": "bamboo_wind",
-   "met_objectID": 50486,
-   "px": [
-    453,
-    1024
-   ],
-   "bytes": 43708,
+   "name": "art/bamboo_wind",
+   "file": "art_bamboo_wind.webp",
+   "kind": "art",
+   "w": 491,
+   "h": 1152,
+   "bytes": 44702,
+   "sha256": "ce6f327f4463e9cad464528080b5f0ef3940e1468f3e6baecb074924829dd35d",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/50486",
    "title": "Bamboo in the Wind",
-   "artist": "Yi Jeong (artist name: Taneun)",
+   "credit": "Yi Jeong (artist name: Taneun), Korean, 1541–1626 · Korea, Joseon dynasty (1392–1910), early 17th century · Hanging scroll; ink on silk with gold on colophon · The Metropolitan Museum of Art, Open Access (CC0) · accession 2015.300.299",
+   "titleKo": "바람에 흔들리는 대나무 (풍죽도)",
+   "artist": "Yi Jeong (artist name: Taneun), Korean, 1541–1626",
    "date": "early 17th century",
-   "accession": "2015.300.299",
-   "creditLine": "Mary Griggs Burke Collection, Gift of the Mary and Jackson Burke Foundation, 2015",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/50486/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/50486",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Hanging scroll; ink on silk with gold on colophon",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/50486/0.jpg",
+   "crop": [
+    32,
+    2,
+    1686,
+    3880
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 77
   },
   {
-   "name": "portrait_yun_dongseom",
-   "met_objectID": 656430,
-   "px": [
-    666,
-    1024
-   ],
-   "bytes": 60384,
+   "name": "art/portrait_yun_dongseom",
+   "file": "art_portrait_yun_dongseom.webp",
+   "kind": "art",
+   "w": 611,
+   "h": 1152,
+   "bytes": 59876,
+   "sha256": "c5fef28edf32637add17809cc8b1201dab12a8de2e09e73130e3938effebc092",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/656430",
    "title": "Portrait of Yun Dongseom (1710–1795)",
-   "artist": "Unidentified artist",
+   "credit": "Unidentified artist (Korean, late 18th–early 19th century) · Korea, Joseon dynasty (1392–1910), ca. 1790–1805 · Hanging scroll; ink and color on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 2014.605",
+   "titleKo": "윤동섬 초상",
+   "artist": "Unidentified artist (Korean, late 18th–early 19th century)",
    "date": "ca. 1790–1805",
-   "accession": "2014.605",
-   "creditLine": "Purchase, Harris Brisbane Dick and 2014 Benefit Funds; Friends of Korean Art, Locks Foundation, Hyun Jun M. Kim, and Tchah Sup and Myong Hi Kim Gifts, 2014",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/656430/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/656430",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Hanging scroll; ink and color on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/656430/0.jpg",
+   "crop": [
+    232,
+    0,
+    2291,
+    3880
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 75
   },
   {
-   "name": "still_life_screen",
-   "met_objectID": 646996,
-   "px": [
-    1536,
-    710
-   ],
-   "bytes": 157238,
-   "title": "Still life with bronze vessels and flowering plants",
-   "artist": "Jang Seung-eop (pen name: Owon)",
-   "date": "1894",
-   "accession": "2014.247",
-   "creditLine": "Gift of Mrs. Anita H. Berger, in memory of Ambassador Samuel D. Berger, 2014",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/646996/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/646996",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
-  },
-  {
-   "name": "officials_gathering",
-   "met_objectID": 74448,
-   "px": [
-    620,
-    1024
-   ],
-   "bytes": 45346,
+   "name": "art/officials_gathering",
+   "file": "art_officials_gathering.webp",
+   "kind": "art",
+   "w": 681,
+   "h": 1152,
+   "bytes": 50908,
+   "sha256": "40d22a5fa2e9be8a66f042ed75ae4d2690de595d63cc3f2d46a6402b8bfe4291",
+   "license": "CC0 (The Met Open Access)",
+   "source": "https://www.metmuseum.org/art/collection/search/74448",
    "title": "Gathering of government officials",
+   "credit": "Unidentified artist · Korea, Joseon dynasty (1392–1910), ca. 1551 · Hanging scroll; ink and color on silk · The Metropolitan Museum of Art, Open Access (CC0) · accession 2008.55",
+   "titleKo": "관리들의 모임 그림 (계회도)",
    "artist": "Unidentified artist",
    "date": "ca. 1551",
-   "accession": "2008.55",
-   "creditLine": "Purchase, Acquisitions Fund, and The Vincent Astor Foundation and Hahn Kwang Ho Gifts, 2008",
-   "source": "https://storage.googleapis.com/gcs-public-data--met/74448/0.jpg",
-   "objectURL": "https://www.metmuseum.org/art/collection/search/74448",
-   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
-  }
- ],
- "hdri": [
-  {
-   "name": "sky_clear_noon",
-   "res": "256x128",
-   "bytes": 55901,
-   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
-   "polyhaven_id": "kloofendal_48d_partly_cloudy_puresky",
-   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_48d_partly_cloudy_puresky/kloofendal_48d_partly_cloudy_puresky_1k.exr",
-   "license": "CC0-1.0 (Poly Haven)"
+   "culture": "Korea",
+   "period": "Joseon dynasty (1392–1910)",
+   "medium": "Hanging scroll; ink and color on silk",
+   "image": "https://storage.googleapis.com/gcs-public-data--met/74448/0.jpg",
+   "crop": [
+    28,
+    2,
+    2319,
+    3879
+   ],
+   "evidence": "The Met Open Access: isPublicDomain = true in the official object CSV; \"images of artworks it believes to be in the public domain … unrestricted use … Creative Commons Zero (CC0)\" (metmuseum.org/policies/image-resources)",
+   "q": 80
   },
   {
-   "name": "sky_clear_noon",
-   "res": "512x256",
-   "bytes": 181638,
-   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
-   "polyhaven_id": "kloofendal_48d_partly_cloudy_puresky",
-   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_48d_partly_cloudy_puresky/kloofendal_48d_partly_cloudy_puresky_1k.exr",
-   "license": "CC0-1.0 (Poly Haven)"
+   "name": "sky/clear_noon",
+   "file": "sky_clear_noon.webp",
+   "kind": "sky",
+   "w": 512,
+   "h": 256,
+   "bytes": 127126,
+   "sha256": "736cab268f1bac915405eeb46a59db19b60ab720e0864375f655f8419b19a9f0",
+   "license": "CC0-1.0",
+   "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+   "title": "맑은 낮 하늘 (구름 조금)",
+   "credit": "Poly Haven — kloofendal_48d_partly_cloudy_puresky (CC0)",
+   "enc": "rgbe-split",
+   "alias": [
+    "sky/sky_clear_noon"
+   ],
+   "evidence": "\"Our assets are all licensed as CC0\" (polyhaven.com/license); open-hdri-1k train.csv lists the asset as CC0-1.0",
+   "note": "left half = RGB mantissa, right half = exponent + 128 (grey); value = (rgb + 0.5) / 256 * 2^(E - 128); lossless",
+   "peak": 23104.0,
+   "mean": 0.676,
+   "sunDir": [
+    0.5539,
+    0.7423,
+    0.3771
+   ],
+   "sunElevation": 47.9
   },
   {
-   "name": "sky_overcast",
-   "res": "256x128",
-   "bytes": 37726,
-   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
-   "polyhaven_id": "kloofendal_overcast_puresky",
-   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_overcast_puresky/kloofendal_overcast_puresky_1k.exr",
-   "license": "CC0-1.0 (Poly Haven)"
+   "name": "sky/overcast",
+   "file": "sky_overcast.webp",
+   "kind": "sky",
+   "w": 512,
+   "h": 256,
+   "bytes": 84514,
+   "sha256": "196043789e51da87bf81a25ee151824da5337bf46cc6c7a2986149b05a146d8f",
+   "license": "CC0-1.0",
+   "source": "https://polyhaven.com/a/kloofendal_overcast_puresky",
+   "title": "흐린 하늘",
+   "credit": "Poly Haven — kloofendal_overcast_puresky (CC0)",
+   "enc": "rgbe-split",
+   "alias": [
+    "sky/sky_overcast"
+   ],
+   "evidence": "\"Our assets are all licensed as CC0\" (polyhaven.com/license); open-hdri-1k train.csv lists the asset as CC0-1.0",
+   "note": "left half = RGB mantissa, right half = exponent + 128 (grey); value = (rgb + 0.5) / 256 * 2^(E - 128); lossless",
+   "peak": 6.4,
+   "mean": 0.86,
+   "sunDir": [
+    0.7783,
+    0.3846,
+    0.4964
+   ],
+   "sunElevation": 22.6
   },
   {
-   "name": "sky_overcast",
-   "res": "512x256",
-   "bytes": 119148,
-   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
-   "polyhaven_id": "kloofendal_overcast_puresky",
-   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_overcast_puresky/kloofendal_overcast_puresky_1k.exr",
-   "license": "CC0-1.0 (Poly Haven)"
-  }
- ],
- "alpha": [
-  {
-   "name": "pine_branch_cards",
-   "ambientcg_id": "LeafSet019",
-   "bytes": 80002,
-   "license": "CC0-1.0 (ambientCG)",
-   "source": {
-    "tar": "dataset_01.tar",
-    "ranges": {
-     "Color": [
-      787396608,
-      143421
-     ],
-     "Opacity": [
-      787542016,
-      213636
-     ]
-    }
-   }
+   "name": "alpha/pine_branch",
+   "file": "alpha_pine_branch_cards.webp",
+   "kind": "alpha",
+   "w": 512,
+   "h": 512,
+   "bytes": 86836,
+   "sha256": "3c514d183cc46caffcc50a29f55b31a7453492f9633f82013cb16703da200dd0",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/LeafSet019",
+   "title": "침엽수 가지 카드 (색 + 투명도)",
+   "credit": "ambientCG — LeafSet019 (CC0 1.0)",
+   "alias": [
+    "alpha/pine_branch_cards"
+   ],
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)"
   },
   {
-   "name": "grass_blade_cards",
-   "ambientcg_id": "Foliage006",
-   "bytes": 21578,
-   "license": "CC0-1.0 (ambientCG)",
-   "source": {
-    "tar": "dataset_01.tar",
-    "ranges": {
-     "Color": [
-      695349760,
-      67955
-     ],
-     "Opacity": [
-      695217664,
-      44281
-     ]
-    }
-   }
+   "name": "alpha/pine_needle",
+   "file": "alpha_pine_needle_cards.webp",
+   "kind": "alpha",
+   "w": 512,
+   "h": 512,
+   "bytes": 31624,
+   "sha256": "d070e98af1b3af3c7138d0a7bbb1c17240651ff8d9f4621283f4504755fd10c9",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/PineNeedles001",
+   "title": "솔잎 카드 (색 + 투명도)",
+   "credit": "ambientCG — PineNeedles001 (CC0 1.0)",
+   "alias": [
+    "alpha/pine_needle_cards"
+   ],
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)"
   },
   {
-   "name": "maple_leaf_cards",
-   "ambientcg_id": "LeafSet027",
-   "bytes": 34418,
-   "license": "CC0-1.0 (ambientCG)",
-   "source": {
-    "tar": "dataset_02.tar",
-    "ranges": {
-     "Color": [
-      618977280,
-      125527
-     ],
-     "Opacity": [
-      618124288,
-      58140
-     ]
-    }
-   }
+   "name": "alpha/maple_leaf",
+   "file": "alpha_maple_leaf_cards.webp",
+   "kind": "alpha",
+   "w": 512,
+   "h": 512,
+   "bytes": 41246,
+   "sha256": "da7668e630889e578a7994abfe56c202307fc630057b7ce1f2cf84fab8ceb164",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/LeafSet027",
+   "title": "단풍잎 카드 (색 + 투명도)",
+   "credit": "ambientCG — LeafSet027 (CC0 1.0)",
+   "alias": [
+    "alpha/maple_leaf_cards"
+   ],
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)"
   },
   {
-   "name": "pine_needle_cards",
-   "ambientcg_id": "PineNeedles001",
-   "bytes": 38438,
-   "license": "CC0-1.0 (ambientCG)",
-   "source": {
-    "tar": "dataset_03.tar",
-    "ranges": {
-     "Color": [
-      418529280,
-      105910
-     ],
-     "Opacity": [
-      418265088,
-      61190
-     ]
-    }
-   }
-  }
- ],
- "misc": [
+   "name": "alpha/oak_leaf",
+   "file": "alpha_oak_leaf_cards.webp",
+   "kind": "alpha",
+   "w": 512,
+   "h": 512,
+   "bytes": 26302,
+   "sha256": "219ef7c4c9415e820f24729d1f260dbaf66d2bce19d9bc47a0a8363ea26b2999",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/LeafSet016",
+   "title": "참나무 잎 카드 (색 + 투명도)",
+   "credit": "ambientCG — LeafSet016 (CC0 1.0)",
+   "alias": [
+    "alpha/oak_leaf_cards"
+   ],
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)"
+  },
   {
-   "name": "bluenoise_64_rgba",
+   "name": "alpha/zelkova_leaf",
+   "file": "alpha_zelkova_leaf_cards.webp",
+   "kind": "alpha",
+   "w": 512,
+   "h": 256,
+   "bytes": 22214,
+   "sha256": "1080237c30cf32918f5a72b0153712a316e8db93076dea726d8ea9edc90faf83",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/LeafSet005",
+   "title": "느티나무 잎 (톱니 잎과 잔가지) 카드 (색 + 투명도)",
+   "credit": "ambientCG — LeafSet005 (CC0 1.0)",
+   "alias": [
+    "alpha/zelkova_leaf_cards"
+   ],
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)"
+  },
+  {
+   "name": "alpha/grass_blade",
+   "file": "alpha_grass_blade_cards.webp",
+   "kind": "alpha",
+   "w": 512,
+   "h": 512,
+   "bytes": 26242,
+   "sha256": "21fc94907b45654f015a18a6350b837946162ae9e9c49dbc435ba5d26c1a7fc6",
+   "license": "CC0-1.0",
+   "source": "https://ambientcg.com/a/Foliage006",
+   "title": "풀잎 카드 (색 + 투명도)",
+   "credit": "ambientCG — Foliage006 (CC0 1.0)",
+   "alias": [
+    "alpha/grass_blade_cards"
+   ],
+   "evidence": "\"All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License.\" (docs.ambientcg.com/license)"
+  },
+  {
+   "name": "noise/blue64",
+   "file": "bluenoise_64_rgba.png",
+   "kind": "noise",
+   "w": 64,
+   "h": 64,
    "bytes": 16521,
-   "source": "https://raw.githubusercontent.com/Calinou/free-blue-noise-textures/master/64_64/LDR_RGBA_0.png",
-   "license": "CC0-1.0 (Christoph Peters)"
+   "sha256": "6178e0d3c899ddf38e116daff43eb5f60cff008131c7b66d62907e11d7e31f0f",
+   "license": "CC0-1.0",
+   "source": "https://github.com/Calinou/free-blue-noise-textures",
+   "title": "블루 노이즈 64×64",
+   "credit": "Christoph Peters — free blue noise textures (CC0 1.0)",
+   "evidence": "README: \"Copyright 2016-2017 Christoph Peters. Licensed under CC0 1.0 Universal\"",
+   "image": "https://raw.githubusercontent.com/Calinou/free-blue-noise-textures/master/64_64/LDR_RGBA_0.png"
   }
- ],
- "total_bytes": 2910276,
- "total_base64_bytes": 3880368
+ ]
 }
