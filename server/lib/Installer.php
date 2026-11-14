@@ -248,15 +248,17 @@ final class Installer
     /**
      * `php cli/tfm.php secret:rotate [--app-key] [--data-key]`: new random secrets in data/secret.php (rotated_at per key).
      *   data key: the old key stays as data_key_prev until every sealed column is sealed again with the new key inside one
-     *             transaction (subscriptions.billing_key — plain legacy keys are sealed too; admin_totp.secret_enc);
+     *             transaction (subscriptions.billing_key — plain legacy keys are sealed too; admin_totp.secret_enc; the
+     *             allotment ledger: allot_customers name / phone / address / memo, allot_payments.payment_key_enc);
      *             any failure puts the old key back. Afterwards the old key is gone.
      *   app key:  every session ends (session files removed, users.session_epoch + 1), rate-limit and login-attempt rows
-     *             (keyed by the old hashes) are cleared, ip_blocks / security_events get their address hashes again.
-     * → ['dataKey' => bool, 'appKey' => bool, 'resealed' => n, 'unreadable' => n, 'sessions' => n, 'ipHashes' => n]
+     *             (keyed by the old hashes) are cleared, ip_blocks / security_events get their address hashes again and
+     *             the blind indexes of the allotment customers (phone_hash, name_hash) are computed again.
+     * → ['dataKey' => bool, 'appKey' => bool, 'resealed' => n, 'unreadable' => n, 'sessions' => n, 'ipHashes' => n, 'blindHashes' => n]
      */
     public static function rotateSecrets(bool $appKey, bool $dataKey): array
     {
-        $out = ['dataKey' => false, 'appKey' => false, 'resealed' => 0, 'unreadable' => 0, 'sessions' => 0, 'ipHashes' => 0];
+        $out = ['dataKey' => false, 'appKey' => false, 'resealed' => 0, 'unreadable' => 0, 'sessions' => 0, 'ipHashes' => 0, 'blindHashes' => 0];
         Db::pdo();
         if ($dataKey) {
             if (!Crypto::available()) throw new ApiException(500, 'NO_OPENSSL', '이 PHP 에는 openssl(aes-256-gcm)이 없어 데이터 키를 바꿀 수 없어요.');
@@ -308,6 +310,15 @@ final class Installer
                 Db::exec('UPDATE users SET session_epoch = session_epoch + 1');
                 return $n;
             });
+            // phase 8 [allot-server]: the blind indexes of the allotment customers (phone_hash, name_hash) are keyed with
+            // the app key too: they are computed again from the sealed values, or no customer could be found by phone / name
+            if (class_exists('Tfm\Allot')) {
+                try {
+                    $out['blindHashes'] = (int) Db::tx(function () use ($hash) { return Allot::rehashBlind($hash); });
+                } catch (\PDOException $e) {
+                    $out['blindHashes'] = 0; // an older schema without the allot tables
+                }
+            }
             $dir = Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions';
             foreach (glob($dir . DIRECTORY_SEPARATOR . 'sess_*') ?: [] as $f) if (@unlink($f)) $out['sessions']++;
             $out['appKey'] = true;
@@ -343,6 +354,16 @@ final class Installer
             if ($plain === null) { $bad++; continue; }
             if (!Crypto::needsReseal($v)) continue;
             $done += Db::exec('UPDATE admin_totp SET secret_enc = ? WHERE user_id = ? AND secret_enc = ?', [Crypto::seal($plain), (int) $r['user_id'], $v]);
+        }
+        // phase 8 [allot-server]: the sealed columns of the allotment ledger (customer name / phone / address / memo, 토스 payment keys)
+        if (class_exists('Tfm\Allot')) {
+            try {
+                $allot = Allot::resealAll();
+                $done += $allot['resealed'];
+                $bad += $allot['unreadable'];
+            } catch (\PDOException $e) {
+                // an older schema without the allot tables
+            }
         }
         return ['resealed' => $done, 'unreadable' => $bad];
     }

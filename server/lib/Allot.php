@@ -886,10 +886,20 @@ final class Allot
     }
 
     /**
+     * Why an operator looks at personal data: a code from this list (the admin form offers them as a choice). Free text is
+     * not accepted on purpose — a typed reason would sooner or later carry a name or a number into the audit log.
+     */
+    public const REVEAL_REASONS = ['call' => '전화 · 방문 응대', 'payment' => '입금 · 환불 확인', 'delivery' => '수령 · 배송 안내', 'correction' => '정보 고치기',
+        'request' => '본인 요청 (열람 · 삭제)', 'report' => '세무 · 법적 자료', 'other' => '기타'];
+
+    private static function revealReason(string $why): string { return isset(self::REVEAL_REASONS[$why]) ? $why : 'other'; }
+
+    /**
      * One customer. Masked by default: {id, userId, name "김**", phone "***-****-1234", phoneTail, hasAddr, hasMemo,
      * consentAt, consentVer, guardian, purged, createdAt, updatedAt, contracts}. $reveal adds nameFull, phoneFull, addr,
      * memo — only for an admin actor (403 FORBIDDEN otherwise; the admin site asks for the password again before it
-     * calls this) and every reveal writes the audit row allot_customer_revealed (customer id + $why, never the data).
+     * calls this) and every reveal writes the audit row allot_customer_revealed (customer id + the reason code $why — one
+     * of REVEAL_REASONS, anything else is recorded as 'other' — never the data).
      */
     public static function customer(int $id, bool $reveal = false, ?array $a = null, string $why = ''): array
     {
@@ -901,7 +911,7 @@ final class Allot
         $r = Db::one('SELECT cu.*, (SELECT COUNT(*) FROM allot_contracts c WHERE c.customer_id = cu.id) AS contracts FROM allot_customers cu WHERE cu.id = ?', [$id]);
         if (!$r) throw new ApiException(404, 'NOT_FOUND', '고객을 찾을 수 없어요.');
         if ($reveal) {
-            Audit::log('allot_customer_revealed', $r['user_id'] === null ? null : (int) $r['user_id'], ['customer' => (int) $r['id'], 'why' => self::cleanPublic($why, 80)], 'warn', self::idOrNull($actor));
+            Audit::log('allot_customer_revealed', $r['user_id'] === null ? null : (int) $r['user_id'], ['customer' => (int) $r['id'], 'why' => self::revealReason($why)], 'warn', self::idOrNull($actor));
         }
         return self::customerOut($r, $reveal);
     }
@@ -2752,8 +2762,8 @@ final class Allot
     /**
      * Rows of an export as plain cells, ascending by id (keyset: pass `next` as $afterId until it is 0). $what: one of
      * EXPORTS. Names and phone numbers are masked ("김**", "***-****-1234") and addresses / customer memos left out unless
-     * $reveal — which needs an admin actor and writes the audit row allot_export (what, how many rows, $why; never the
-     * data) for every chunk. → ['rows' => [[cell, …], …], 'next' => cursor or 0]
+     * $reveal — which needs an admin actor and writes the audit row allot_export (what, how many rows, the reason code
+     * $why of REVEAL_REASONS; never the data) for every chunk. → ['rows' => [[cell, …], …], 'next' => cursor or 0]
      */
     public static function exportRows(string $what, int $afterId = 0, int $limit = 500, bool $reveal = false, ?array $a = null, string $why = ''): array
     {
@@ -2806,7 +2816,7 @@ final class Allot
         $more = count($out) > $limit;
         if ($more) array_pop($out);
         foreach ($out as $id => $unused) $last = $id;
-        if ($reveal) Audit::log('allot_export', null, ['what' => $what, 'reveal' => true, 'from' => $after, 'rows' => count($out), 'why' => self::cleanPublic($why, 80)], 'warn', self::idOrNull($actor));
+        if ($reveal) Audit::log('allot_export', null, ['what' => $what, 'reveal' => true, 'from' => $after, 'rows' => count($out), 'why' => self::revealReason($why)], 'warn', self::idOrNull($actor));
         return ['rows' => array_values($out), 'next' => $more ? $last : 0];
     }
 
@@ -2861,8 +2871,8 @@ final class Allot
     /**
      * Import a CSV text. $what = 'ledger': the operator's existing book — columns 일자 · 성명 · 연락처 · 주소 · 비고 and a unit
      * column (단위 / 번호 / 구좌 …: a unit code such as J01-0012, or a zone code such as J01 = "the next free unit of that
-     * zone"); each row becomes a customer (found again by phone + name) and an ACTIVE contract (source import) that starts
-     * on 일자. $what = 'payments': 계약번호 (or 단위) · 금액 · 일자 · 방법 · 비고 — each row is recorded like recordPayment() with
+     * zone"); each row becomes a customer (an operator-entered one with the same phone + name is used again; customers of
+     * app accounts are never matched — see linkCustomer) and an ACTIVE contract (source import) that starts on 일자. $what = 'payments': 계약번호 (or 단위) · 금액 · 일자 · 방법 · 비고 — each row is recorded like recordPayment() with
      * an idempotency key made from the row, so the same file can be imported twice without paying twice.
      * $dryRun (the default) changes nothing and reports every row; a real run imports only when NO row has a problem
      * (all or nothing). The report never contains a whole name or phone number.
@@ -2935,7 +2945,9 @@ final class Allot
             $action = 'new';
             $existing = 0;
             if ($phone !== '' && $name !== '') {
-                $e = Db::value('SELECT id FROM allot_customers WHERE phone_hash = ? AND name_hash = ? AND purged_at = 0 ORDER BY id ASC LIMIT 1', [self::phoneHash($phone), self::nameHash($name)]);
+                // only customers the operator entered / imported are matched: a row that belongs to an app account carries a name and
+                // a phone number its holder typed — matching it would hand this contract to whoever typed someone else's details
+                $e = Db::value('SELECT id FROM allot_customers WHERE phone_hash = ? AND name_hash = ? AND purged_at = 0 AND user_id IS NULL ORDER BY id ASC LIMIT 1', [self::phoneHash($phone), self::nameHash($name)]);
                 if ($e !== null) { $existing = (int) $e; $action = 'existing'; }
             }
             if ($ref === '') {
