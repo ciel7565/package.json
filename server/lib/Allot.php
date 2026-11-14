@@ -3020,6 +3020,9 @@ final class Allot
                 $term = (int) $z['term_months'];
                 $starts = (int) $t['starts'];
                 $ends = $term > 0 ? self::addMonths($starts, $term) : 0;
+                // a row of the running book is a contract that is running today: an old 일자 means it was renewed term after
+                // term, so the end is the end of the term that is running now (never a date in the past)
+                for ($k = 0; $term > 0 && $ends <= $now && $k < 600; $k++) $ends = self::addMonths($ends, $term);
                 $paid = (int) $t['paid'];
                 if ($paid === 0) {
                     // nothing is known about old payments: the book counts as paid up to the period that is running now
@@ -3648,6 +3651,135 @@ final class Allot
                 'active' => (int) $r['n_active'], 'overdue' => (int) $r['n_overdue'], 'ended' => (int) $r['n_ended'], 'revenue' => (int) $r['revenue']];
         }
         return ['days' => $out, 'zones' => self::zones(), 'revenueTotal' => $total];
+    }
+
+    // ------------------------------------------------------------------ demo data (php cli/tfm.php allot:demo)
+    /** what `allot:demo` made on this site, or null: {at, customers: [id], contracts: n, care: [id]} */
+    public static function demoInfo(): ?array
+    {
+        $v = Db::value("SELECT v FROM settings WHERE k = 'allot.demo'");
+        $d = is_string($v) ? json_decode($v, true) : null;
+        return is_array($d) && isset($d['customers']) && is_array($d['customers']) ? $d : null;
+    }
+
+    /**
+     * Synthetic customers ("예시고객01", phone 010-0000-00NN — nobody's number) and contracts in every state, for a TEST
+     * site: about 60 % running and paid, 10 % unpaid (overdue after the next tick), 10 % applications waiting for
+     * approval, 10 % ending within weeks, 10 % ended; plus three care-log lines. A site without zones gets the small
+     * preset (open for applications). Everything is made through the same functions the operator uses, in one
+     * transaction, and remembered (settings row allot.demo) so demoClear() can remove exactly these rows again.
+     * 409 DEMO_EXISTS (already made) · 409 DEMO_REFUSED (a customer or contract exists: never mixed into a real ledger).
+     * → {customers, contracts, active, unpaid, pending, ending, ended, care, zonesSeeded}
+     */
+    public static function demoSeed(array $a, int $count = 40, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        $now = self::now($now);
+        $count = max(10, min(200, $count));
+        if (self::demoInfo() !== null) throw new ApiException(409, 'DEMO_EXISTS', '예시 자료가 이미 있어요. 지우려면 allot:demo --clear 를 실행해 주세요.');
+        if ((int) Db::value('SELECT COUNT(*) FROM allot_contracts') > 0 || (int) Db::value('SELECT COUNT(*) FROM allot_customers') > 0) {
+            throw new ApiException(409, 'DEMO_REFUSED', '이미 고객이나 계약이 있는 곳에는 예시 자료를 만들지 않아요. (진짜 장부와 섞이지 않게 하려는 거예요)');
+        }
+        $out = Db::txRetry(function () use ($a, $count, $now) {
+            $n = ['customers' => 0, 'contracts' => 0, 'active' => 0, 'unpaid' => 0, 'pending' => 0, 'ending' => 0, 'ended' => 0, 'care' => 0, 'zonesSeeded' => 0];
+            if ((int) Db::value('SELECT COUNT(*) FROM allot_zones') === 0) $n['zonesSeeded'] = (int) self::seedPreset($a, 'small', true)['zones'];
+            $units = [];
+            foreach (['jar' => (int) ceil($count * 0.6), 'plot' => (int) ceil($count * 0.3), 'store' => (int) ceil($count * 0.1)] as $kind => $want) {
+                foreach (Db::all("SELECT u.code FROM allot_units u JOIN allot_zones z ON z.id = u.zone_id WHERE u.kind = ? AND u.status = 'open' AND u.contract_id IS NULL AND (u.seq % 2) = 1 ORDER BY z.sort ASC, z.id ASC, u.seq ASC LIMIT ?", [$kind, $want]) as $r) $units[] = (string) $r['code'];
+            }
+            $units = array_slice($units, 0, $count);
+            if (!$units) throw new ApiException(409, 'SOLD_OUT', '빈 자리가 없어 예시 자료를 만들 수 없어요.');
+            $ids = [];
+            $care = [];
+            foreach ($units as $i => $code) {
+                $cu = self::saveCustomer($a, ['name' => sprintf('예시고객%02d', $i + 1), 'phone' => sprintf('010-0000-%04d', $i + 1), 'memo' => '예시 자료예요 (allot:demo).'], $now);
+                $cid = (int) $cu['id'];
+                $ids[] = $cid;
+                $n['customers']++;
+                $shape = $i % 10;
+                if ($shape === 7) { // an application waiting for the operator
+                    self::createContract($a, $code, $cid, ['status' => 'pending', 'notify' => false, 'memo' => '예시 자료'], $now);
+                    $n['contracts']++;
+                    $n['pending']++;
+                    continue;
+                }
+                $months = $shape === 9 ? 14 : ($shape === 8 ? 11 : 1 + $i % 9);
+                $starts = $shape === 6 ? $now - 50 * self::DAY : self::addMonths($now, -$months) + ($shape === 8 ? -15 * self::DAY : 0);
+                $c = self::createContract($a, $code, $cid, ['status' => 'active', 'startsAt' => $starts, 'notify' => false, 'memo' => '예시 자료'], $now);
+                $n['contracts']++;
+                $conId = (int) $c['id'];
+                if ($shape === 6) { $n['unpaid']++; continue; }
+                if ((int) $c['price'] > 0) {
+                    $periods = (string) $c['period'] === 'month' ? $months + 1 : 1;
+                    self::recordPayment($a, $conId, min(self::MAX_AMOUNT, (int) $c['price'] * $periods), 'bank', 'demo-pay-' . $conId, ['periods' => $periods, 'paidAt' => $starts, 'memo' => '예시 납부'], $now);
+                }
+                if ($shape === 9) { self::endContract($a, $conId, '예시: 기간이 끝났어요', $now); $n['ended']++; }
+                elseif ($shape === 8) $n['ending']++;
+                else $n['active']++;
+            }
+            $zone = (string) Db::value("SELECT z.code FROM allot_zones z ORDER BY z.sort ASC, z.id ASC LIMIT 1");
+            $care[] = (int) self::addCare($a, ['zone' => $zone], 'water', '예시 일지: 구역을 돌며 물을 뿌리고 뚜껑을 닦았어요.', true, $now - 2 * self::DAY)['id'];
+            $care[] = (int) self::addCare($a, ['all' => true], 'weather', '예시 일지: 서리가 내려 볏짚 덮개를 덮어 두었어요.', true, $now - self::DAY)['id'];
+            $care[] = (int) self::addCare($a, ['unit' => $units[0]], 'check', '예시 일지: 자리 상태를 살펴보았어요.', true, $now)['id'];
+            $n['care'] = count($care);
+            Db::upsert('settings', ['k' => 'allot.demo', 'v' => (string) json_encode(['at' => $now, 'customers' => $ids, 'contracts' => $n['contracts'], 'care' => $care]), 'updated_at' => $now, 'updated_by' => null], ['k']);
+            return $n;
+        });
+        self::forget();
+        Audit::log('allot_demo_seeded', null, ['customers' => $out['customers'], 'contracts' => $out['contracts']], 'warn', self::idOrNull($actor));
+        return $out;
+    }
+
+    /**
+     * Remove what demoSeed() made — and only that: the remembered synthetic customers with every contract, payment,
+     * notice and waiting-list row of theirs (their units are free again), and the remembered care-log lines. A synthetic
+     * customer that was linked to an app account since is kept (it is somebody's data now). Zones and units stay.
+     * 409 NO_DEMO. → {customers, contracts, payments, notices, care, kept}
+     */
+    public static function demoClear(array $a, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        $now = self::now($now);
+        $d = self::demoInfo();
+        if ($d === null) throw new ApiException(409, 'NO_DEMO', '지울 예시 자료가 없어요.');
+        $cust = array_values(array_unique(array_filter(array_map('intval', $d['customers']))));
+        $care = isset($d['care']) && is_array($d['care']) ? array_values(array_filter(array_map('intval', $d['care']))) : [];
+        $freed = [];
+        $out = Db::txRetry(function () use ($cust, $care, $now, &$freed) {
+            $freed = [];
+            $n = ['customers' => 0, 'contracts' => 0, 'payments' => 0, 'notices' => 0, 'care' => 0, 'kept' => 0];
+            foreach ($cust as $cid) {
+                $cu = Db::one('SELECT id, user_id FROM allot_customers WHERE id = ?' . Db::forUpdate(), [$cid]);
+                if (!$cu) continue;
+                if ($cu['user_id'] !== null) { $n['kept']++; continue; }
+                foreach (Db::all('SELECT id, unit_id FROM allot_contracts WHERE customer_id = ?', [$cid]) as $c) {
+                    $conId = (int) $c['id'];
+                    $u = Db::one('SELECT id, zone_id FROM allot_units WHERE id = ? AND contract_id = ?' . Db::forUpdate(), [(int) $c['unit_id'], $conId]);
+                    if ($u) {
+                        Db::exec("UPDATE allot_units SET status = 'open', contract_id = NULL, hold_until = 0, label = '', label_show = 0, updated_at = ? WHERE id = ?", [$now, (int) $u['id']]);
+                        self::bumpZone((int) $u['zone_id'], $now);
+                        $freed[] = (int) $u['id'];
+                    }
+                    $n['payments'] += Db::exec('DELETE FROM allot_payments WHERE contract_id = ?', [$conId]);
+                    $n['notices'] += Db::exec('DELETE FROM allot_notices WHERE contract_id = ?', [$conId]);
+                    Db::exec('DELETE FROM allot_contracts WHERE id = ?', [$conId]);
+                    $n['contracts']++;
+                }
+                $n['notices'] += Db::exec('DELETE FROM allot_notices WHERE customer_id = ?', [$cid]);
+                Db::exec('DELETE FROM allot_waitlist WHERE customer_id = ?', [$cid]);
+                Db::exec('DELETE FROM allot_customers WHERE id = ?', [$cid]);
+                $n['customers']++;
+            }
+            foreach ($care as $id) $n['care'] += Db::exec('DELETE FROM allot_care_logs WHERE id = ?', [$id]);
+            Db::exec("DELETE FROM settings WHERE k = 'allot.demo'");
+            // a test site that is empty again starts its statistics from nothing
+            if ((int) Db::value('SELECT COUNT(*) FROM allot_contracts') === 0) Db::exec('DELETE FROM allot_stats_daily WHERE zone_id >= 0');
+            return $n;
+        });
+        self::forget();
+        foreach ($freed as $unitId) self::offerQuietly($unitId, $now);
+        Audit::log('allot_demo_cleared', null, $out, 'warn', self::idOrNull($actor));
+        return $out;
     }
 
     // ------------------------------------------------------------------ keys (php cli/tfm.php secret:rotate)

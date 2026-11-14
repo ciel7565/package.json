@@ -1075,6 +1075,9 @@ check('importCsv (ledger) — a clean file: customers (one per phone + name) and
     return $r['ok'] === true && $r['dryRun'] === false && $r['created'] === ['customers' => 3, 'contracts' => 4, 'payments' => 0] && $u['status'] === 'leased' && $c['status'] === 'active' && $c['source'] === 'import'
         && (int) $c['starts_at'] === strtotime('2025-03-10') * 1000 && Tfm\Crypto::open($c['name_enc']) === '연오랑' && Tfm\Crypto::open($c['addr_enc']) === '강원도 정선군 가상길 1' && Tfm\Crypto::open($c['cmemo']) === '첫 손님'
         && $c['consent_ver'] === 'import' && $c['user_id'] === null && (int) $monthly['paid_until'] > Tfm\Clock::ms() && (int) $monthly['ends_at'] === 0
+        // an old 일자: the running book's contract is in the term that runs today — its end and its paid-until are never in the past
+        && (int) $c['ends_at'] > Tfm\Clock::ms() && Tfm\Allot::addMonths((int) $c['ends_at'], -(int) $c['term_months']) <= Tfm\Clock::ms() && (int) $c['paid_until'] > Tfm\Clock::ms()
+        && in_array((int) $c['ends_at'], array_map(function ($k) use ($c) { return Tfm\Allot::addMonths((int) $c['starts_at'], (int) $c['term_months'] * $k); }, range(1, 40)), true)
         && $again['created'] === ['customers' => 0, 'contracts' => 0, 'payments' => 0] && $again['skipped'] === 4 && $actions === ['duplicate', 'duplicate', 'duplicate', 'duplicate']
         && $more['created'] === ['customers' => 0, 'contracts' => 1, 'payments' => 0] && $more['rows'][0]['action'] === 'existing' && unitRow('T1-0022')['status'] === 'leased'
         ? true : json_encode([$r, $again, $actions, $more, $c['status']]);
@@ -1420,6 +1423,109 @@ check('adminSummary — the numbers of the 현황 page: units, pending, overdue,
     return $s['units']['total'] === 10117 && $s['pending'] === 1 && $s['pendingOldest'] === $TK + 4 * 86400000 && $s['active'] === 1 && $s['overdue'] === 0 && $s['waiting'] === 0 && is_array($s['lastRun'])
         && $s['lastRun']['job'] === 'allot:tick' && $s['tickAgeMs'] >= 0 && count($s['zones']) === 15 && isset($s['zones'][0]['open'], $s['rules']['hold_hours']) && $s['holdsExpiring'] === 0 && $s['refundDue'] === 0
         ? true : json_encode($s, JSON_UNESCAPED_UNICODE);
+});
+
+// =============================================================================================== 9b · the command line (cli/allot.php) and the demo data
+resetAllot();
+/** run `php cli/tfm.php <args>` of the private server copy against this test's database → [exit code, stdout, stderr] */
+$cli = function (string ...$args) use ($srv): array {
+    $p = proc_open(array_merge([PHP_BINARY, $srv . '/cli/tfm.php'], $args), [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    $out = (string) stream_get_contents($pipes[1]);
+    $err = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($p), $out, $err];
+};
+$countOf = function (string $table): int { return (int) Tfm\Db::value('SELECT COUNT(*) FROM ' . $table); };
+check('cli allot:seed — idempotent from the command line (nothing new on a seeded site), an unknown preset is refused; help lists the allot commands; cli/allot.php runs on its own', function () use ($cli, $countOf, $srv) {
+    $units = $countOf('allot_units');
+    $zones = $countOf('allot_zones');
+    list($rc, $out) = $cli('allot:seed');
+    list($rc2, , $err2) = $cli('allot:seed', '--preset', 'nope');
+    list($rc3, $help) = $cli('help');
+    $p = proc_open([PHP_BINARY, $srv . '/cli/allot.php', 'allot:status'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    $own = (string) stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $rc4 = proc_close($p);
+    return $rc === 0 && strpos($out, '구역 11곳 · 자리 10,000개') !== false && strpos($out, '이번에 만든 구역 0곳 · 자리 0개') !== false && $countOf('allot_units') === $units && $countOf('allot_zones') === $zones
+        && $rc2 === 1 && strpos($err2, '모르는 묶음') !== false && $rc3 === 0 && strpos($help, 'allot:seed') !== false && strpos($help, 'allot:demo') !== false && $rc4 === 0 && strpos($own, '분양 현황') !== false
+        ? true : json_encode([$rc, $out, $rc2, $err2, $rc3, $rc4, $own], JSON_UNESCAPED_UNICODE);
+});
+check('cli allot:demo — synthetic customers and contracts in every state on an empty ledger; a second run is refused; allot:tick marks the unpaid ones and leaves a job_runs row; --quiet says nothing when nothing is due', function () use ($cli, $countOf, $ADM) {
+    list($rc, $out) = $cli('allot:demo');
+    $by = [];
+    foreach (Tfm\Db::all('SELECT status, COUNT(*) AS n FROM allot_contracts GROUP BY status') as $r) $by[$r['status']] = (int) $r['n'];
+    $first = Tfm\Allot::customer((int) Tfm\Db::value('SELECT MIN(id) FROM allot_customers'), true, $ADM, 'other');
+    list($rcAgain, , $errAgain) = $cli('allot:demo');
+    list($rcT, $outT) = $cli('allot:tick');
+    $overdue = (int) Tfm\Db::value("SELECT COUNT(*) FROM allot_contracts WHERE status = 'overdue'");
+    $run = (array) Tfm\Db::one("SELECT source, ok FROM job_runs WHERE job = 'allot:tick' ORDER BY id DESC LIMIT 1");
+    list($rcQ, $outQ, $errQ) = $cli('allot:tick', '--quiet');
+    list($rcS, $outS) = $cli('allot:status');
+    $made = $rc === 0 && $countOf('allot_customers') === 40 && $countOf('allot_contracts') === 40 && ($by['active'] ?? 0) === 32 && ($by['pending'] ?? 0) === 4 && ($by['ended'] ?? 0) === 4 && count($by) === 3;
+    if (!$made) return json_encode([$rc, $out, $by], JSON_UNESCAPED_UNICODE);
+    return (int) Tfm\Db::value('SELECT COUNT(*) FROM allot_customers WHERE user_id IS NOT NULL') === 0 && $countOf('allot_payments') === 32 && $first['nameFull'] === '예시고객01' && $first['phoneFull'] === '010-0000-0001'
+        && $rcAgain === 1 && strpos($errAgain, '이미 있어요') !== false && $rcT === 0 && strpos($outT, '미납 표시 4') !== false && $overdue === 4 && $run['source'] === 'cli' && (int) $run['ok'] === 1
+        && $rcQ === 0 && trim($outQ . $errQ) === '' && $rcS === 0 && strpos($outS, '미납 4') !== false && strpos($outS, '예시 자료') !== false && strpos($outS, '문제 없음') !== false
+        ? true : json_encode([$first['nameFull'], $rcAgain, $errAgain, $rcT, $outT, $overdue, $run, $rcQ, $outQ, $errQ, $outS], JSON_UNESCAPED_UNICODE);
+});
+check('cli allot:export — masked by default into data/exports (private file, BOM, CRLF); --reveal needs a reason and is audited; never into the web folder; never over an existing file', function () use ($cli, $srv, $tmp) {
+    list($rc, $out) = $cli('allot:export', 'customers');
+    $files = glob($tmp . '/exports/allot-customers-*.csv') ?: [];
+    $masked = $files ? (string) file_get_contents($files[0]) : '';
+    $mode = $files ? fileperms($files[0]) & 0777 : 0;
+    list($rcNoReason, , $errNoReason) = $cli('allot:export', 'customers', $tmp . '/full.csv', '--reveal');
+    $noFile = !file_exists($tmp . '/full.csv');
+    $audits = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'allot_export'");
+    list($rcFull) = $cli('allot:export', 'customers', $tmp . '/full.csv', '--reveal', '--reason', 'call');
+    $full = (string) @file_get_contents($tmp . '/full.csv');
+    $audit = (string) Tfm\Db::value("SELECT detail FROM audit_log WHERE event = 'allot_export' ORDER BY id DESC LIMIT 1");
+    list($rcTwice, , $errTwice) = $cli('allot:export', 'customers', $tmp . '/full.csv', '--reveal', '--reason', 'call');
+    list($rcWeb, , $errWeb) = $cli('allot:export', 'ledger', $srv . '/ledger.csv');
+    list($rcWhat) = $cli('allot:export', 'secrets');
+    @unlink($tmp . '/full.csv');
+    return $rc === 0 && count($files) === 1 && strncmp($masked, "\xEF\xBB\xBF", 3) === 0 && substr_count($masked, "\r\n") === 41 && strpos($masked, '예시고객01') === false && strpos($masked, '010-0000-0001') === false
+        && strpos($masked, '***-****-0001') !== false && (DIRECTORY_SEPARATOR !== '/' || $mode === 0600) && $rcNoReason === 1 && $noFile && strpos($errNoReason, '--reason') !== false
+        && $rcFull === 0 && strpos($full, '예시고객01') !== false && strpos($full, '010-0000-0001') !== false && (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'allot_export'") === $audits + 1
+        && strpos($audit, '"why":"call"') !== false && strpos($audit, '예시고객') === false && $rcTwice === 1 && strpos($errTwice, '--force') !== false && $rcWeb === 1 && !file_exists($srv . '/ledger.csv') && strpos($errWeb, '웹에서 보이는') !== false && $rcWhat === 1
+        ? true : json_encode([$rc, $out, count($files), $mode, $rcNoReason, $noFile, $rcFull, $audit, $rcTwice, $rcWeb, $errWeb, $rcWhat, substr_count($masked, "\r\n")], JSON_UNESCAPED_UNICODE);
+});
+check('cli allot:import — a dry run changes nothing, --commit imports, the same file again imports nothing, a file with a bad row imports nothing; a CP949 file from an old spreadsheet is read', function () use ($cli, $countOf, $tmp) {
+    $csv = "\xEF\xBB\xBF일자,성명,연락처,주소,비고,단위\r\n2024-03-15,마루치,010-4141-0001,\"가상시 가상구 1, 2층\",=SUM(A1),J02-0002\r\n2024.4.1,아라치,01041410002,,메모,P01\r\n";
+    file_put_contents($tmp . '/in.csv', $csv);
+    $before = [$countOf('allot_customers'), $countOf('allot_contracts')];
+    list($rcDry, $outDry) = $cli('allot:import', 'ledger', $tmp . '/in.csv');
+    $afterDry = [$countOf('allot_customers'), $countOf('allot_contracts')];
+    list($rcGo, $outGo) = $cli('allot:import', 'ledger', $tmp . '/in.csv', '--commit');
+    $afterGo = [$countOf('allot_customers'), $countOf('allot_contracts')];
+    list($rcAgain, $outAgain) = $cli('allot:import', 'ledger', $tmp . '/in.csv', '--commit');
+    file_put_contents($tmp . '/bad.csv', $csv . "2024-05-01,미리내,010-****-0003,,,J02-0004\r\n2024-05-02,가람,010-4141-0004,,,J02-0006\r\n");
+    list($rcBad, $outBad) = $cli('allot:import', 'ledger', $tmp . '/bad.csv', '--commit');
+    file_put_contents($tmp . '/old.csv', (string) mb_convert_encoding("성명,연락처,단위\r\n한울,010-4141-0005,J02-0008\r\n", 'CP949', 'UTF-8'));
+    list($rcOld, $outOld) = $cli('allot:import', 'ledger', $tmp . '/old.csv', '--commit');
+    list($rcUsage) = $cli('allot:import', 'ledger');
+    $final = [$countOf('allot_customers'), $countOf('allot_contracts')];
+    $memo = (string) Tfm\Db::value("SELECT cu.memo FROM allot_customers cu JOIN allot_contracts c ON c.customer_id = cu.id JOIN allot_units u ON u.id = c.unit_id WHERE u.code = 'J02-0002'");
+    foreach (['in.csv', 'bad.csv', 'old.csv'] as $f) @unlink($tmp . '/' . $f);
+    return $rcDry === 0 && $afterDry === $before && strpos($outDry, '--commit') !== false && $rcGo === 0 && $afterGo === [$before[0] + 2, $before[1] + 2] && strpos($outGo, '고객 2명 · 계약 2건') !== false
+        && $rcAgain === 0 && strpos($outAgain, '새로 가져올 것이 없어요') !== false && $rcBad === 1 && strpos($outBad, '4번째 줄') !== false && strpos($outBad, '미리내') === false
+        && $rcOld === 0 && strpos($outOld, 'CP949') !== false && $final === [$before[0] + 3, $before[1] + 3] && $rcUsage === 1 && Tfm\Crypto::open($memo) === '=SUM(A1)'
+        ? true : json_encode([$rcDry, $outDry, $rcGo, $outGo, $rcAgain, $outAgain, $rcBad, $outBad, $rcOld, $outOld, $before, $final], JSON_UNESCAPED_UNICODE);
+});
+check('cli allot:demo --clear — removes exactly what the demo made (customers, contracts, payments, notices, care logs; their units are free again) and nothing of the imported book; then a demo is refused on the real ledger', function () use ($cli, $countOf) {
+    $imported = Tfm\Db::all("SELECT c.id, c.unit_id FROM allot_contracts c WHERE c.source = 'import' ORDER BY c.id");
+    list($rc, $out) = $cli('allot:demo', '--clear');
+    $left = Tfm\Db::all('SELECT c.id, c.unit_id FROM allot_contracts c ORDER BY c.id');
+    $leased = (int) Tfm\Db::value("SELECT COUNT(*) FROM allot_units WHERE status <> 'open'");
+    $orphans = (int) Tfm\Db::value('SELECT COUNT(*) FROM allot_payments p LEFT JOIN allot_contracts c ON c.id = p.contract_id WHERE c.id IS NULL')
+        + (int) Tfm\Db::value('SELECT COUNT(*) FROM allot_notices n LEFT JOIN allot_customers cu ON cu.id = n.customer_id WHERE n.customer_id IS NOT NULL AND cu.id IS NULL');
+    list($rcTwice, , $errTwice) = $cli('allot:demo', '--clear');
+    list($rcDemo, , $errDemo) = $cli('allot:demo');
+    $check = Tfm\Allot::integrity(50, false);
+    return $rc === 0 && count($imported) === 3 && $left === $imported && $countOf('allot_customers') === 3 && $countOf('allot_care_logs') === 0 && $leased === 3 && $orphans === 0 && Tfm\Allot::demoInfo() === null
+        && $rcTwice === 1 && strpos($errTwice, '지울 예시 자료가 없어요') !== false && $rcDemo === 1 && strpos($errDemo, '섞이지') !== false && $countOf('allot_customers') === 3 && $check['issues'] === []
+        ? true : json_encode([$rc, $out, count($imported), count($left), $countOf('allot_customers'), $countOf('allot_care_logs'), $leased, $orphans, $rcTwice, $rcDemo, $errDemo, $check], JSON_UNESCAPED_UNICODE);
 });
 
 // =============================================================================================== 10 · the race: many applicants, one unit
