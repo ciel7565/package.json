@@ -62,6 +62,8 @@ final class Inspect
             'secret_storage' => $l('비밀키 보관', 'data/secret.php(앱 비밀키)와 config/config.local.php(DB 비밀번호 · 결제 키)는 웹에서 열리지 않는 곳에 있고, 사본은 암호를 건 USB 같은 안전한 곳에 따로 둬요. 여기에는 어디에 두었는지만 적어요. 키가 새어 나갔으면 php cli/tfm.php secret:rotate 로 바꿔요.', ['cfg_app_key', 'cfg_key_age']),
             'docs_read' => $l('인수인계 문서 읽기', '📚 문서의 인수인계 안내(HANDOVER) · 서버 설치 안내 · 보안 보고서를 읽어요. 모르는 말은 보안 보고서의 "용어 풀이"에 있어요.', ['docs']),
             'contacts' => $l('연락처 · 담당자', '서버 · 도메인 · 결제 · AI 서비스 계정의 주인과 물어볼 사람의 연락처를 정리해 둬요 (비밀번호는 적지 않아요).', []),
+            // [allot-admin] CONTRACT §16.7: the 분양 automation and its customers' personal data
+            'allot_schedule' => $l('분양 자동화 예약 · 개인정보', '분양(항아리 · 밭 · 창고)을 쓰면 Windows 작업 스케줄러에 한 시간마다 php.exe cli\\tfm.php allot:tick 을 예약해요 (예약이 없어도 관리자 페이지를 열 때 조금씩 돌지만, 밤에는 멈춰요). 관리자 센터 🏺 분양 관리 → 자동화 에서 약관 · 개인정보 안내 · 환불 규정의 "예시" 글을 실제 글로 바꾸고 법률 검토를 받아요. 고객 이름 · 전화번호를 보는 관리자는 꼭 필요한 사람만 정해요.', ['allot_schema', 'allot_units', 'allot_tick', 'allot_integrity']),
         ];
     }
 
@@ -122,6 +124,7 @@ final class Inspect
             $checks[] = ['group' => 'inspect', 'id' => 'health', 'label' => '시스템 점검', 'status' => 'fail', 'value' => '실행하지 못함', 'hint' => '점검하는 중에 문제가 생겼어요. data/logs 의 오늘 로그를 확인하세요.'];
         }
         foreach (self::ownChecks() as $c) $checks[] = $c;
+        foreach (self::allotChecks() as $c) $checks[] = $c; // [allot-admin]
         $result = self::redactValue(['versions' => self::versions(), 'checks' => $checks]);
         $sum = ['ok' => 0, 'warn' => 0, 'fail' => 0];
         foreach ($result['checks'] as $c) $sum[$c['status']]++;
@@ -181,6 +184,55 @@ final class Inspect
         $logs = self::dirSize(Log::dir(), 5000);
         $add('log_dir', '로그 폴더 (data/logs)', $logs['bytes'] < 200 * 1048576 ? 'ok' : 'warn', self::bytesText($logs['bytes']) . ' · 파일 ' . $logs['files'] . '개',
             $logs['bytes'] < 200 * 1048576 ? '' : '로그가 많이 쌓였어요. 관리자 센터 🧰 유지보수 → 정리하기를 누르면 오래된 로그가 지워져요.');
+        return $rows;
+    }
+
+    // [allot-admin] ---------------------------------------------------- the 분양 rows (CONTRACT §16.7: schema v7, seeded units, tick age, integrity)
+    /** the allot rows (group app); a site without the allot tables or without Tfm\Allot gets one calm warning instead of an error */
+    private static function allotChecks(): array
+    {
+        $rows = [];
+        $add = function (string $id, string $label, string $status, string $value, string $hint = '') use (&$rows): void {
+            $rows[] = ['group' => 'app', 'id' => $id, 'label' => $label, 'status' => $status, 'value' => $value, 'hint' => $hint];
+        };
+        try {
+            $have = Db::schemaVersion();
+        } catch (\Throwable $e) {
+            $have = 0;
+        }
+        $schemaOk = $have >= 7 && class_exists('Tfm\\Allot');
+        $add('allot_schema', '분양 데이터 (스키마 v7)', $schemaOk ? 'ok' : 'warn', '스키마 ' . $have . ' / 필요 7',
+            $schemaOk ? '' : '분양 표가 아직 없어요. 서버 컴퓨터에서 php cli/tfm.php migrate 를 실행하거나 install.php 로 업데이트하세요.');
+        if (!$schemaOk) return $rows;
+        try {
+            $on = Allot::enabled();
+            $sum = Allot::summary();
+            $total = (int) $sum['total'];
+            $add('allot_units', '분양 단위 (항아리 · 밭 · 창고)', $total > 0 ? 'ok' : ($on ? 'warn' : 'ok'),
+                number_format($total) . '개 · 임대 ' . number_format((int) $sum['leased']) . ' · 빈 자리 ' . number_format((int) $sum['open']) . ($on ? '' : ' · 분양 꺼짐'),
+                $total > 0 ? '' : '아직 만든 자리가 없어요. php cli/tfm.php allot:seed 를 실행하거나 관리자 센터 🏺 분양 관리 → 구역 에서 기본 1만 개를 만드세요.');
+            $last = Allot::lastTickAt();
+            $age = $last > 0 ? max(0, intdiv(Clock::ms() - $last, 1000)) : -1;
+            $fresh = $last > 0 && $age <= 3 * 3600;
+            $add('allot_tick', '분양 자동화 마지막 실행', !$on || $fresh ? 'ok' : ($last > 0 && $age <= 3 * 86400 ? 'warn' : ($total > 0 ? 'fail' : 'warn')),
+                $last > 0 ? date('Y-m-d H:i', intdiv($last, 1000)) . ' · ' . ($age < 3600 ? intdiv($age, 60) . '분 전' : ($age < 172800 ? intdiv($age, 3600) . '시간 전' : intdiv($age, 86400) . '일 전')) : '아직 없음',
+                !$on || $fresh ? '' : '작업 스케줄러에 한 시간마다 php.exe cli\\tfm.php allot:tick 을 예약하세요. 지금 한 번 돌리려면 관리자 센터 🏺 분양 관리 → 자동화 → 지금 실행.');
+            $int = Allot::integrity(200, false);
+            $n = count($int['issues']);
+            $kinds = [];
+            foreach ($int['issues'] as $i) $kinds[(string) $i['kind']] = isset($kinds[(string) $i['kind']]) ? $kinds[(string) $i['kind']] + 1 : 1;
+            $txt = [];
+            foreach ($kinds as $k => $c) $txt[] = $k . ' ' . $c;
+            $add('allot_integrity', '분양 자리 ↔ 계약 맞춤', $n === 0 ? 'ok' : 'warn', $n === 0 ? '어긋난 곳 없음' : $n . '곳 (' . implode(', ', array_slice($txt, 0, 6)) . ')',
+                $n === 0 ? '' : '자동화가 돌 때 안전한 것은 저절로 고쳐요. 남은 것은 🏺 분양 관리 → 자동화 의 "직접 확인이 필요한 항목"에서 하나씩 확인하세요 (환불할 돈이 남은 취소 계약 등).');
+            $texts = Allot::texts();
+            if ($on && !empty($texts['sample'])) {
+                $add('allot_texts', '분양 약관 · 안내 글', 'warn', '예시 글 사용 중', '🏺 분양 관리 → 자동화 에서 약관 · 개인정보 안내 · 환불 규정을 실제 글로 바꾸고 법률 검토를 받으세요.');
+            }
+        } catch (\Throwable $e) {
+            Log::error('INSPECT', 'allot checks failed: ' . get_class($e));
+            $add('allot_units', '분양 점검', 'warn', '확인하지 못함', '분양 표를 읽는 중에 문제가 생겼어요. data/logs 의 오늘 로그를 확인하세요.');
+        }
         return $rows;
     }
 

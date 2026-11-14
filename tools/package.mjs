@@ -112,6 +112,9 @@ const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/i
   // documents the build copies into lib/docs/ (the names of tools/build.mjs ADMIN_DOCS)
   'metaverse/lib/Markdown.php', 'metaverse/lib/Inspect.php', 'metaverse/cli/inspect.php',
   ...['HANDOVER.md', 'ARCHITECTURE.md', 'SERVER-INSTALL-KO.md', 'SECURITY-REPORT-KO.md', 'README-SERVER.md'].map((d) => `metaverse/lib/docs/${d}`),
+  // [allot-admin] CONTRACT §16.7: the 분양 ledger — the library, the admin tab's part (under lib/, never under admin/), the CLI and the endpoints
+  'metaverse/lib/Allot.php', 'metaverse/lib/AdminAllot.php', 'metaverse/cli/allot.php',
+  ...['summary', 'map', 'unit', 'logs', 'mine', 'plans', 'inbox', 'seen', 'apply', 'cancel', 'waitlist', 'nameplate', 'pay-prepare', 'pay-confirm'].map((n) => `metaverse/api/allot/${n}.php`),
   // every file of the built admin folder ships (it is index.php + .htaccess — CONTRACT §15.11 #6; any part added there must ship too)
   ...(fs.existsSync(path.join(DIST, 'admin')) ? walk(path.join(DIST, 'admin')).filter((p) => !skipReason(`admin/${p}`)).map((p) => `metaverse/admin/${p}`) : [])]
   .filter((p, i, all) => all.indexOf(p) === i);
