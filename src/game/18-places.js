@@ -385,6 +385,10 @@
       };
       def.zone = { id: zoneId, name, short: kidName, emoji, center: [origin.x, origin.z], r: 0, color: String(d.color || '#e8c58a'), icon: 'home', desc: String(d.desc || ''), place: id };
       def.bounds = { minX: origin.x - size.w / 2 - def.margin, maxX: origin.x + size.w / 2 + def.margin, minZ: origin.z - size.d / 2 - def.margin, maxZ: origin.z + size.d / 2 + def.margin };
+      // [complex-ground] an outdoor district whose plan is not centred on its origin: bounds in LOCAL metres
+      if (d.bounds && ['minX', 'maxX', 'minZ', 'maxZ'].every((k) => fin(Number(d.bounds[k]))) && d.bounds.maxX > d.bounds.minX && d.bounds.maxZ > d.bounds.minZ) def.bounds = { minX: origin.x + Number(d.bounds.minX) - def.margin, maxX: origin.x + Number(d.bounds.maxX) + def.margin, minZ: origin.z + Number(d.bounds.minZ) - def.margin, maxZ: origin.z + Number(d.bounds.maxZ) + def.margin };
+      // [complex-ground] a door may go without the automatic guide sign (its owner builds a better one)
+      (Array.isArray(d.door) ? d.door : d.door ? [d.door] : []).filter((o) => o && fin(Number(o.x)) && fin(Number(o.z))).forEach((o, i) => { if (o.sign === false && doors[i]) doors[i].noSign = true; });
       const old = defs.get(id);
       if (old) { zoneToPlace.delete(old.zoneId); if (cur && cur.def === old) this._leaveSync('redefine'); const L = live.get(id); if (L) { disposeBuilt(L); live.delete(id); } }
       defs.set(id, def);
@@ -516,7 +520,7 @@
             onInteract: () => { this.enter(d.id); },
           });
           let sign = null;
-          try { sign = this._doorSign(d, o); } catch (e) { G.log.warn('WORLD', `places: guide sign of ${id} failed`, e?.message || e); }
+          if (!o.noSign) try { sign = this._doorSign(d, o); } catch (e) { G.log.warn('WORLD', `places: guide sign of ${id} failed`, e?.message || e); }   // [complex-ground] noSign
           this._doors.set(id, { def: d, handle, sign });
         });
       }
@@ -598,7 +602,7 @@
         const st = G.state && (G.state.places && typeof G.state.places === 'object' ? G.state.places : (G.state.places = { visits: {}, seen: {} }));
         if (st) { if (!st.visits || typeof st.visits !== 'object') st.visits = {}; st.visits[id] = Math.min(9999, (st.visits[id] | 0) + 1); G.dirty?.('place'); }
         G.sfx('open');
-        G.bus.emit('place:enter', { id, prev });
+        G.bus.emit('place:enter', { id, prev, opts: { ...opts } });   // [complex-ground] the options of enter() (focusUnit …)
         try { G.ui.zoneBanner?.(def.name, '집 안 구경'); } catch (e) { /* cosmetic */ }
         if (easyOn()) { try { G.easy?.say?.(`${def.kidName}에 들어왔어요. 나갈 때는 문 그림을 눌러요.`, { priority: 1 }); } catch (e) { /* voice optional */ } }
         return true;

@@ -258,6 +258,7 @@
       F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
       F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
       F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
+      F('53-complex-site.js', 'map', '만장대 단지(PL_ALLOT) 장소·땅(지형·길·주차장·포장·동심원 길·계단밭·돌담·돌다리·계단·전망 데크·가로등·안내판·충돌)·단지 부품 등록부·미니맵 평면도·골짜기 셔틀버스 정류장 (§16.8)'), // [complex-ground]
       F('60-social.js', 'social', '채팅·필터·개인정보 가림(maskPII)·말풍선·아이 말하기(문장 고르기)·표현하기·체험객·서버 접속자'),
       F('61-audio.js', 'social', '절차적 효과음·환경음·국악풍 BGM·음성 합성'),
       F('62-engagement.js', 'engagement', '출석·오늘의 미션·알림함·수료증·랭킹·마당 꾸미기 (쉬운 모드: 🔔 오늘 스티커북)'),
@@ -439,6 +440,7 @@
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
   DERIVED_STATS.push('placesSeen', 'exhibitsSeen', 'exhibitRooms', 'motionsSeen');   // [rooms-b] 집 구경 counters (03-state.js / 49-exhibits.js)
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
+  EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -2315,6 +2317,51 @@
     const ctx = cv.getContext('2d'); C.draw(ctx, C.fitView(160, 140, 2), { labels: false });
     const px = ctx.getImageData(80, 70, 1, 1).data;
     return { ok: !nan && worst <= 0.5 && px[3] === 255, detail: `길 ${C.paths.length}개 · 가장 큰 턱 ${worst.toFixed(2)} m · 높이 오류 ${nan} · 평면도 가운데 rgb(${px[0]},${px[1]},${px[2]})` };
+  });
+  // ---- 🏺 만장대 단지 (PL_ALLOT, §16.8) [complex-ground]: the place, the shuttle door, the part registry
+  T('🏺 만장대 단지', '장소 정의: 경계가 계획과 같고, 시작 자리는 걸을 수 있고, 골짜기 정류장에 문이 있어요', () => {
+    const P = G.sys.places, C = G.data.complex, d = P?.def?.('PL_ALLOT');
+    if (!C || !d) return SKIP('만장대 단지(53-complex-site.js)가 없어요');
+    const b = d.bounds, bad = [];
+    if (b.minX !== d.origin.x + C.bounds.minX || b.maxX !== d.origin.x + C.bounds.maxX || b.minZ !== d.origin.z + C.bounds.minZ || b.maxZ !== d.origin.z + C.bounds.maxZ) bad.push('경계');
+    if (d.indoor || !d.heightAt || Math.abs(d.heightAt(C.spawn.x, C.spawn.z) - C.height(C.spawn.x, C.spawn.z)) > 1e-6) bad.push('바닥 높이');
+    if (!C.walkable(d.spawn.x, d.spawn.z)) bad.push('시작 자리');
+    const door = (G.interact?.list?.('door') || []).find((e) => e.id === 'DOOR_PL_ALLOT');
+    if (!door || !(door.radius >= 3) || !/🚌/.test(String(door.kidLabel || ''))) bad.push('정류장 문');
+    if (P.contains(d.exit.x, d.exit.z, 'PL_ALLOT')) bad.push('나가는 자리');
+    return { ok: !bad.length, detail: bad.length ? bad.join(' · ') : `경계 ${C.bounds.maxX - C.bounds.minX} × ${C.bounds.maxZ - C.bounds.minZ} m · 정류장 (${d.door.x.toFixed(1)}, ${d.door.z.toFixed(1)})` };
+  });
+  T('🏺 만장대 단지', '들어갔다 나오기: 땅 위에 서고, 등록된 부품이 모두 지어지고, 정류장 옆으로 나와요', async () => {
+    const P = G.sys.places, pl = G.sys.player, cs = G.sys.complexSite, C = G.data.complex;
+    if (!P?.def?.('PL_ALLOT') || !cs || !G.state || !pl?.position) return SKIP('만장대 단지나 놀이가 준비되지 않았어요');
+    if (P.current || P.busy) return SKIP('지금 다른 장소 안에 있어요 (밖에서 다시 눌러요)');
+    const at = { x: pl.position.x, z: pl.position.z, r: pl.rotY }, b0 = JSON.stringify(G.world.bounds);
+    const r = { in: false, dy: 99, parts: [], failed: [], want: (G.complexParts?.list || []).map((p) => p.name) };
+    try {
+      r.in = await P.enter('PL_ALLOT', { fade: false, quiet: true });
+      for (let i = 0; i < 4; i++) await nextFrame();
+      const d = P.def('PL_ALLOT');
+      r.dy = Math.abs(pl.position.y - C.height(pl.position.x - d.origin.x, pl.position.z - d.origin.z));
+      r.parts = cs.parts(); r.failed = cs.failed();
+    } finally {
+      await P.exit({ fade: false, quiet: true });
+      const ex = P.def('PL_ALLOT').exit;
+      r.outD = Math.hypot(pl.position.x - ex.x, pl.position.z - ex.z);
+      try { await pl.teleport(at.x, at.z, at.r, { fade: false, silent: true }); } catch (e) { /* stays at the stop */ }
+    }
+    const ok = r.in === true && r.dy < 0.35 && !r.failed.length && r.want.every((n) => r.parts.includes(n)) && r.outD < 1.5 && JSON.stringify(G.world.bounds) === b0 && P.current === null;
+    return { ok, detail: ok ? `부품 ${r.parts.length}개 (${r.parts.join(', ') || '없음'}) · 발 높이 차 ${r.dy.toFixed(2)} m` : JSON.stringify(r).slice(0, 300) };
+  });
+  T('🏺 만장대 단지', '부품 등록부: 잘못된 부품 하나가 나머지를 멈추지 않아요 (경고만 남겨요)', () => {
+    const CX = G.complexParts, cs = G.sys.complexSite;
+    if (!CX || !cs || typeof cs._runParts !== 'function') return SKIP('부품 등록부가 없어요');
+    const ran = [];
+    const list = [{ name: 't-b', order: 5, fn: () => { ran.push('b'); return { dispose() { ran.push('db'); } }; } },
+      { name: 't-bad', order: 1, fn: () => { throw new Error('test part'); } }, { name: 't-a', order: 0, fn: () => { ran.push('a'); return {}; } }];
+    const r = cs._runParts(list, { onUpdate() {} });
+    r.dispose();
+    const ok = ran.join(',') === 'a,b,db' && r.built.join(',') === 't-a,t-b' && r.failed.join(',') === 't-bad';
+    return { ok, detail: `순서 ${ran.join(' → ')} · 실패 ${r.failed.join(', ')}` };
   });
   T('🏠 한옥 전시', '전시 자료: 방마다 8점 이상 · 아이 문장 40자 이하 · 출처 · 그림 없는 전시 2점', () => {
     const X = G.data.exhibits, M = G.data.motions, R = G.data.exhibitRooms;
