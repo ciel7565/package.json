@@ -645,15 +645,20 @@
       const prevRT = r.getRenderTarget(), vp = r.getViewport(new THREE.Vector4()), sc = r.getScissor(new THREE.Vector4()), st = r.getScissorTest(), auto = r.shadowMap.autoUpdate;
       const px = new Uint8ClampedArray(W * H * 4);              // the panorama, bottom row first, left of the view first
       try {
+        // one throw-away frame first, with the shadow maps updating as usual: right after a room was built (new programs,
+        // new lights) the first frame drawn into a fresh target came back empty on `high` (measured: all zeros)
+        cam.rotation.set(0, yaw0, 0, 'YXZ'); cam.updateMatrixWorld(true);
+        r.setRenderTarget(rt); r.clear(); r.render(E.scene, cam);
         r.shadowMap.autoUpdate = false;
-        r.setRenderTarget(rt);
-        r.setScissorTest(true);
+        if (direct) { r.setRenderTarget(null); r.setScissorTest(true); }
         const gl = r.getContext(), one = direct ? new Uint8Array(sw * sh * 4) : null;
         for (let i = 0; i < n; i++) {                           // i = 0: the left of the view
           cam.rotation.set(0, yaw0 + (1 - i) * half * 2, 0, 'YXZ');
           cam.updateMatrixWorld(true);
+          // the screen: the renderer's viewport (CSS pixels, scaled by the pixel ratio); a render target: its own
+          // viewport / scissor in its pixels, applied when it is bound
           if (direct) { r.setViewport(0, 0, sw / pr, sh / pr); r.setScissor(0, 0, sw / pr, sh / pr); }
-          else { r.setViewport(i * sw, 0, sw, sh); r.setScissor(i * sw, 0, sw, sh); }
+          else { rt.viewport.set(i * sw, 0, sw, sh); rt.scissor.set(i * sw, 0, sw, sh); rt.scissorTest = true; r.setRenderTarget(rt); }
           r.clear();
           r.render(E.scene, cam);
           if (direct) {                                         // tone-mapped, display-ready bytes straight from the back buffer
@@ -692,10 +697,10 @@
         for (let x = 0; x < W; x++) {
           const s = src + (W - 1 - x) * 4, t = dst + x * 4;
           d[t] = px[s]; d[t + 1] = px[s + 1]; d[t + 2] = px[s + 2]; d[t + 3] = 255;
-          if (px[s] + px[s + 1] + px[s + 2] > 30) lit++;
+          if (px[s] + px[s + 1] + px[s + 2] > 3) lit++;          // not black (a valley at night is dark, but never 0)
         }
       }
-      if (lit < W * H * 0.02) return false;                     // nothing but darkness came back: the painted view stays
+      if (lit < W * H * 0.02) return false;                     // nothing came back (a failed draw): the painted view stays
       c2.putImageData(img, 0, 0);
       return R.setFarView(cv, clamp(fin(G.world.nightFactor) ? G.world.nightFactor : 0, 0, 1), { display: direct });
     },
