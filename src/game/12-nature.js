@@ -903,6 +903,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
           else { d0[q] = src[k]; d0[q + 1] = src[k + 1]; d0[q + 2] = src[k + 2]; d0[q + 3] = a; }
         }
       }
+      if (cw * ch > 60000) yield;   // a large cell is a step of its own (no long frame while playing)
     }
     const mips = [{ data: d0, width: W, height: H }];
     yield;
@@ -910,8 +911,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     const hist = new Uint32Array(256);
     for (let lv = 1; pw > 1 || ph > 1; lv++) {
       const w = Math.max(1, pw >> 1), h = Math.max(1, ph >> 1), d = new Uint8Array(w * h * 4);
-      const sx = pw / w, sy = ph / h;
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const sx = pw / w, sy = ph / h, band = Math.max(8, Math.floor(60000 / w));
+      for (let y = 0; y < h; y++) { if (y && y % band === 0 && w * h > 120000) yield; for (let x = 0; x < w; x++) {
         let r = 0, g = 0, b = 0, a = 0, wsum = 0, r2 = 0, g2 = 0, b2 = 0, cnt = 0;
         const xa = Math.floor(x * sx), xb = Math.min(pw, Math.max(xa + 1, Math.floor((x + 1) * sx))), ya = Math.floor(y * sy), yb = Math.min(ph, Math.max(ya + 1, Math.floor((y + 1) * sy)));
         for (let yy = ya; yy < yb; yy++) for (let xx = xa; xx < xb; xx++) {
@@ -924,7 +925,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         if (linear) { d[q] = Math.round(r * 255); d[q + 1] = Math.round(g * 255); d[q + 2] = Math.round(b * 255); }
         else { d[q] = L2S[Math.min(1024, Math.round(r * 1024))]; d[q + 1] = L2S[Math.min(1024, Math.round(g * 1024))]; d[q + 2] = L2S[Math.min(1024, Math.round(b * 1024))]; }
         d[q + 3] = Math.round(a / cnt);
-      }
+      } }
       // coverage: per cell, find the alpha that level 0's share of texels reaches, and scale it up to the test value
       const lcw = w / cols, lch = h / rows;
       if (!opts.keepAlpha && lcw >= 2 && lch >= 2) {
@@ -1142,6 +1143,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
   /** tube quads along pts; opts: { radial, flare, c0, c1, yRed (height where the colour has turned), bob } */
   function tubeQuads(Q, pts, r0, r1, o) {
     const n = pts.length, rings = [];
+    // the bark photograph (0.9 m × 1.8 m of fine flakes) is laid twice as large — the plates of an old pine — and keeps
+    // its 1 : 2 shape whatever the girth: whole repeats round the limb, twice that length along it
+    const uRep = Math.max(1, Math.round(TAU * r0 / 1.8)), vLen = (TAU * r0 / uRep) * 2;
     let acc = 0;
     for (let i = 0; i < n; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)], tan = V3.norm(V3.sub(b, a));
@@ -1152,9 +1156,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       let r = r0 + (r1 - r0) * t;
       if (o.flare) r *= 1 + o.flare * Math.pow(1 - clamp((pts[i][1] + 0.5) / 1.5, 0, 1), 2);
       if (i) acc += V3.len(V3.sub(pts[i], pts[i - 1]));
-      rings.push({ c: pts[i], u, w, r, v: acc / 1.8 });
+      rings.push({ c: pts[i], u, w, r, v: acc / vLen });
     }
-    const R = o.radial, uRep = Math.max(1, Math.round(TAU * r0 / 0.9));
+    const R = o.radial;
     for (let i = 0; i < n - 1; i++) for (let j = 0; j < R; j++) {
       const q = Q.quad();
       for (let k = 0; k < 4; k++) {
@@ -1337,15 +1341,25 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         const ww = 2 * t.radius * 1.04, wh = (t.top + 0.3) * 1.03, sx = cellPx / ww, sy = cellPx / wh;
         const x0 = si * cellPx, y0 = v * cellPx;
         cells[si].push({ w: ww, h: wh });
+        // a fir's needles hang in curtains along its branches: seen from one side, half of them are edge-on and the
+        // far tree would be a bare pole — it is drawn twice, a quarter turn apart
+        const turns = VEG.SPECIES[si] === 'conifer' ? 2 : 1;
+        for (let turn = 0; turn < turns; turn++) {
+        let TP = t.P, TN = t.N;
+        if (turn) {
+          TP = new Float32Array(t.n * 12); TN = new Float32Array(t.n * 12);
+          for (let k = 0; k < t.n * 4; k++) { TP[k * 3] = t.P[k * 3 + 2]; TP[k * 3 + 1] = t.P[k * 3 + 1]; TP[k * 3 + 2] = -t.P[k * 3]; TN[k * 3] = t.N[k * 3 + 2]; TN[k * 3 + 1] = t.N[k * 3 + 1]; TN[k * 3 + 2] = -t.N[k * 3]; }
+        }
         // far quads first
         const order = new Int32Array(t.n), key = new Float32Array(t.n);
-        for (let q = 0; q < t.n; q++) { order[q] = q; key[q] = t.P[q * 12 + 2] + t.P[q * 12 + 5] + t.P[q * 12 + 8] + t.P[q * 12 + 11]; }
+        for (let q = 0; q < t.n; q++) { order[q] = q; key[q] = TP[q * 12 + 2] + TP[q * 12 + 5] + TP[q * 12 + 8] + TP[q * 12 + 11]; }
         order.sort((a, b) => key[a] - key[b]);
         for (let oi = 0; oi < t.n; oi++) {
+          if (cellPx > 96 && oi && oi % 40 === 0) yield;
           const q = order[oi], p = q * 12;
-          const ax = x0 + (t.P[p] + ww / 2) * sx, ay = y0 + cellPx - (t.P[p + 1] + 0.3) * sy;
-          const bx = x0 + (t.P[p + 3] + ww / 2) * sx, by = y0 + cellPx - (t.P[p + 4] + 0.3) * sy;
-          const cx = x0 + (t.P[p + 6] + ww / 2) * sx, cy = y0 + cellPx - (t.P[p + 7] + 0.3) * sy;
+          const ax = x0 + (TP[p] + ww / 2) * sx, ay = y0 + cellPx - (TP[p + 1] + 0.3) * sy;
+          const bx = x0 + (TP[p + 3] + ww / 2) * sx, by = y0 + cellPx - (TP[p + 4] + 0.3) * sy;
+          const cx = x0 + (TP[p + 6] + ww / 2) * sx, cy = y0 + cellPx - (TP[p + 7] + 0.3) * sy;
           const e1x = bx - ax, e1y = by - ay, e2x = cx - ax, e2y = cy - ay, det = e1x * e2y - e1y * e2x;
           if (Math.abs(det) < 0.6) continue;   // edge-on
           const dx = bx + e2x, dy = by + e2y;
@@ -1372,11 +1386,12 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             const w0 = (1 - s) * (1 - tt), w1 = s * (1 - tt), w2 = (1 - s) * tt, w3 = s * tt, c = q * 16, n = q * 12;
             const tr = (t.C[c] * w0 + t.C[c + 4] * w1 + t.C[c + 8] * w2 + t.C[c + 12] * w3) / 255, tg = (t.C[c + 1] * w0 + t.C[c + 5] * w1 + t.C[c + 9] * w2 + t.C[c + 13] * w3) / 255, tb = (t.C[c + 2] * w0 + t.C[c + 6] * w1 + t.C[c + 10] * w2 + t.C[c + 14] * w3) / 255;
             r *= tr * tr * 4; g *= tg * tg * 4; b *= tb * tb * 4;
-            const nx = t.N[n] * w0 + t.N[n + 3] * w1 + t.N[n + 6] * w2 + t.N[n + 9] * w3, ny = t.N[n + 1] * w0 + t.N[n + 4] * w1 + t.N[n + 7] * w2 + t.N[n + 10] * w3, nz = t.N[n + 2] * w0 + t.N[n + 5] * w1 + t.N[n + 8] * w2 + t.N[n + 11] * w3;
+            const nx = TN[n] * w0 + TN[n + 3] * w1 + TN[n + 6] * w2 + TN[n + 9] * w3, ny = TN[n + 1] * w0 + TN[n + 4] * w1 + TN[n + 7] * w2 + TN[n + 10] * w3, nz = TN[n + 2] * w0 + TN[n + 5] * w1 + TN[n + 8] * w2 + TN[n + 11] * w3;
             const k2 = py * W + px, ia = 1 - a;
             acc[k2 * 4] = acc[k2 * 4] * ia + r * a; acc[k2 * 4 + 1] = acc[k2 * 4 + 1] * ia + g * a; acc[k2 * 4 + 2] = acc[k2 * 4 + 2] * ia + b * a; acc[k2 * 4 + 3] = acc[k2 * 4 + 3] * ia + a;
             nor[k2 * 3] = nor[k2 * 3] * ia + nx * a; nor[k2 * 3 + 1] = nor[k2 * 3 + 1] * ia + ny * a; nor[k2 * 3 + 2] = nor[k2 * 3 + 2] * ia + nz * a;
           }
+        }
         }
         yield;
       }
@@ -1392,6 +1407,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         nor8[i * 4] = 127.5 + 127.5 * nor[i * 3] / l; nor8[i * 4 + 1] = 127.5 + 127.5 * nor[i * 3 + 1] / l; nor8[i * 4 + 2] = 127.5 + 127.5 * nor[i * 3 + 2] / l;
       } else { nor8[i * 4] = 128; nor8[i * 4 + 1] = 160; nor8[i * 4 + 2] = 230; }
       nor8[i * 4 + 3] = 255;
+      if ((i & 65535) === 65535) yield;
     }
     yield;
     const cg = bakeMips(col8, W, HH, cols, rows);
@@ -1489,6 +1505,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         .replace('#include <map_fragment>', `
           vec4 tfLeafT = texture2D( map, vMapUv );
           vec3 tfBarkT = texture2D( tBark, vMapUv ).rgb * uBarkGain;
+          tfBarkT = clamp( ( tfBarkT - 1.0 ) * 1.8 + 1.0, 0.25, 2.4 );   // furrows and plates read from a few metres away
           float tfIsLeaf = step( 0.5, vTint.a );
           diffuseColor.rgb *= mix( tfBarkT, tfLeafT.rgb * uLeafGain, tfIsLeaf ) * vTint.rgb * vTint.rgb * 4.0;
           diffuseColor.a *= mix( 1.0, tfLeafT.a, tfIsLeaf );`)
@@ -1721,9 +1738,11 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     _bands() {
       const k = this.scale, N = LOD.near * k, M = LOD.mid * k, sq = (v) => (v > 0 ? v * v : 0);
       this.r = { in0: (N + 6) * (N + 6), out0: (N + 12) * (N + 12), lo1in: sq(N - 10), lo1out: sq(N - 14), hi1in: (M + 10) * (M + 10), hi1out: (M + 18) * (M + 18) };
-      this.m0.userData.uFade.value.set(-2, -1, N - 4, N + 2);
-      this.m1.userData.uFade.value.set(N - 4, N + 2, M - 6, M + 4);
-      this.mF.userData.uFade.value.set(M - 6, M + 4, 1e8, 1e9);
+      // a hand-over in two steps, never both levels half-way (two half-covered layers share the same covered samples
+      // and the ground shows through the crown): the next level fades in while this one is whole, then this one goes
+      this.m0.userData.uFade.value.set(-2, -1, N - 1, N + 2);
+      this.m1.userData.uFade.value.set(N - 4, N - 1, M - 1, M + 4);
+      this.mF.userData.uFade.value.set(M - 6, M - 1, 1e8, 1e9);
     }
     /** shrink / restore the level distances (a quality step while playing); never beyond what the batches were sized for */
     setScale(k) {
@@ -4000,7 +4019,12 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         const off = u.uOffset.value;
         off.x = ((off.x + w.x * k) % D2 + D2) % D2; off.y = ((off.y + w.y * k) % D2 + D2) % D2;
       }
-      if (eng?.hemi) uniforms.uVegAmb.value.copy(eng.hemi.color).multiplyScalar(eng.hemi.intensity * 0.16);
+      if (eng?.hemi) {
+        // [render-nature] the ground and the buildings are also lit by the baked sky (engine.envIntensity, strongest at
+        // night); leaves and blades are not, and stood dark on a lit lawn after dusk: they take a share of it
+        const env = this.real && Number.isFinite(eng.envIntensity) ? eng.envIntensity * (0.3 + 0.45 * night) : 0;
+        uniforms.uVegAmb.value.copy(eng.hemi.color).multiplyScalar(eng.hemi.intensity * 0.16 + env);
+      }
       if (this.meshes.fireflies) this.meshes.fireflies.visible = night > 0.04;
       this._updateBirds(t);
       this._updateButterflies(t);
