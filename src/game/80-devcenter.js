@@ -3236,7 +3236,7 @@
     if (!t._pbr) return SKIP('낮음으로 시작한 뒤 품질을 올렸어요 — 새로 고치면 사진 지형이 돼요');
     const U = t.material.userData.tf || {}, tex = Object.values(U).filter((u) => u?.value?.isTexture);
     const a = t.meshes.core.geometry.attributes.aSplat;
-    return { ok: (q === 'low' ? type === 'MeshLambertMaterial' : type === 'MeshStandardMaterial') && splat && a.itemSize === 4 && a.normalized === true && tex.length === 8 && tex.every((x) => x.wrapS === THREE.RepeatWrapping),
+    return { ok: (q === 'low' ? type === 'MeshLambertMaterial' : type === 'MeshStandardMaterial') && splat && a.itemSize === 4 && a.normalized === true && tex.length === 8 && tex.every((u) => u.value.wrapS === THREE.RepeatWrapping && u.value.wrapT === THREE.RepeatWrapping),
       detail: `${type} · 사진 ${tex.length}장(색 5 · 굴곡 3) · 꼭짓점마다 섞는 비율 4개` };
   });
 
