@@ -119,7 +119,7 @@ if (script) {
 }
 if (shot) {
   fs.mkdirSync(path.dirname(path.resolve(shot)), { recursive: true });
-  await page.screenshot({ path: shot });
+  await page.screenshot({ path: shot, timeout: Number(opt('--shot-timeout', '240000')) });   // software GL at quality=high needs far more than the 30 s default
   report.shots.push(shot);
 }
 try {
