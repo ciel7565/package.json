@@ -265,7 +265,7 @@ final class AdminAllot
     {
         $out = ['sec' => isset(self::SECTIONS[self::s($in, 'sec')]) ? self::s($in, 'sec') : 'status'];
         $word = function (string $k, array $allowed) use ($in, &$out): void { $v = self::s($in, $k); if ($v !== '' && in_array($v, $allowed, true)) $out[$k] = $v; };
-        $word('st', ['open', 'held', 'leased', 'closed', 'live', 'pending', 'active', 'overdue', 'ended', 'canceled', 'waiting', 'offered', 'converted', 'expired', 'queued', 'sent', 'seen']);
+        $word('st', ['open', 'held', 'leased', 'closed', 'live', 'pending', 'active', 'overdue', 'ended', 'canceled', 'waiting', 'offered', 'converted', 'expired', 'queued', 'sent', 'seen', 'all']);
         $word('kind', Allot::KINDS);
         $word('flag', ['cancelreq', 'expiring', 'due']);
         $word('off', ['1']);
@@ -321,7 +321,11 @@ final class AdminAllot
             case 'units': return $h . self::viewUnits($q, $get);
             case 'contracts': return $h . (isset($q['con']) ? self::viewContract((int) $q['con'], $q) : self::viewContracts($q));
             case 'customers': return $h . (isset($q['cust']) ? self::viewCustomer((int) $q['cust'], $q, $a) : self::viewCustomers($q));
-            // @@VIEWS@@
+            case 'wait': return $h . self::viewWait($q);
+            case 'notices': return $h . self::viewNotices($q);
+            case 'care': return $h . self::viewCare($q);
+            case 'csv': return $h . self::viewCsv($q, $a);
+            case 'auto': return $h . self::viewAuto($q, $get);
         }
         return $h . self::viewStatus($q);
     }
@@ -1053,6 +1057,370 @@ final class AdminAllot
         return $h . self::tbl(['계약번호', '자리', '고객', '상태', '기간', '납부 기한', '금액', '신청일'], $rows) . '</section>';
     }
 
+    // ------------------------------------------------------------------ ⏳ 대기자
+    private static function viewWait(array $q): string
+    {
+        $st = isset($q['st']) && (isset(self::WAIT_STATUS[$q['st']]) || $q['st'] === 'all') ? $q['st'] : 'waiting';
+        $kind = isset($q['kind']) ? $q['kind'] : '';
+        $zone = isset($q['zone']) ? $q['zone'] : '';
+        $after = isset($q['after']) ? (int) $q['after'] : 0;
+        $here = ['sec' => 'wait', 'st' => $st, 'kind' => $kind, 'zone' => $zone];
+        $s = self::sum();
+        $hours = (int) $s['rules']['waitlist_offer_hours'];
+        $h = '<section class="card"><h3>⏳ 대기자 <span class="dim small">기다리는 중 ' . self::e(self::n($s['waiting'])) . '명 · 자리 제안함 ' . self::e(self::n($s['offered'])) . '명</span></h3>'
+            . '<p class="dim small">빈자리가 없을 때 체험관에서 "대기 신청"을 한 사람들이에요. 자리가 나면 <b>먼저 신청한 사람부터</b> 저절로 제안이 가고, ' . $hours . '시간 안에 확정하지 않으면 다음 사람에게 넘어가요 (시간은 ⚙️ 자동화에서 바꿔요).</p>'
+            . '<form method="get" action="./" class="search"><input type="hidden" name="tab" value="allot"><input type="hidden" name="sec" value="wait">'
+            . self::select('st', ['waiting' => '기다리는 중', 'offered' => '자리 제안함 (답 기다림)', 'converted' => '신청으로 바뀜', 'expired' => '기한 지남', 'canceled' => '취소', 'all' => '모두'], $st, '상태')
+            . self::select('kind', ['' => '모든 종류', 'jar' => '🏺 항아리', 'plot' => '🥬 밭', 'store' => '🏚️ 창고'], $kind, '종류') . self::select('zone', self::zoneOptions(), $zone, '구역')
+            . '<button class="btn" type="submit">보기</button></form>';
+        $r = Allot::listWait(['kind' => $kind, 'zone' => $zone, 'status' => $st === 'all' ? '' : $st], self::ROWS, $after);
+        if (!$r['rows']) {
+            $h .= '<p class="empty">🍃 ' . ($after > 0 ? '더 없어요.' : ($st === 'waiting' ? '지금 기다리는 사람이 없어요.' : '조건에 맞는 대기 신청이 없어요.')) . '</p>';
+        } else {
+            $now = Clock::ms();
+            $rows = [];
+            foreach ($r['rows'] as $w) {
+                $id = (int) $w['id'];
+                $liveRow = $w['status'] === 'waiting' || $w['status'] === 'offered';
+                $rows[] = ['attr' => ' class="wait ' . self::e($w['status']) . '"', 'cells' => [
+                    '#' . $id, self::e(self::kind($w['kind'])), $w['zoneCode'] !== '' ? '<code>' . self::e($w['zoneCode']) . '</code>' : '<span class="dim">어느 구역이든</span>',
+                    '<a href="' . self::e(self::href(['sec' => 'customers', 'cust' => (int) $w['customerId']])) . '">' . self::e($w['customer'] !== '' ? $w['customer'] : '(지워진 고객)') . '</a>'
+                        . ($w['phoneTail'] !== '' ? ' <span class="dim small">끝번호 ' . self::e($w['phoneTail']) . '</span>' : '') . ((int) $w['userId'] > 0 ? '' : ' ' . self::badge('계정 없음')),
+                    self::st(self::WAIT_STATUS, $w['status']),
+                    $w['unitCode'] !== '' ? '<b>' . self::e($w['unitCode']) . '</b>' . ((int) $w['offerUntil'] > 0 ? '<br><span class="dim small">' . self::e(self::at($w['offerUntil'])) . ' 까지' . ((int) $w['offerUntil'] < $now && $w['status'] === 'offered' ? ' (지남)' : '') . '</span>' : '') : '',
+                    [self::e(self::at($w['createdAt'])), 'nowrap small'], [$liveRow ? self::rowBtn('wrow', $id, 'cancel', '✖ 대기 취소', 'btn ghost sm') : '', 'acts'],
+                ]];
+            }
+            $h .= self::tbl(['번호', '종류', '구역', '고객', '상태', '제안한 자리', '신청한 때', '처리'], $rows) . self::rowForm('wrow', 'allot_wait_cancel', $here + ['after' => $after]);
+        }
+        $h .= self::pager($here, $after, (int) $r['next']) . '</section>'
+            . '<section class="card"><h3>🪑 빈자리를 다음 사람에게 지금 제안하기</h3><p class="dim small">보통은 저절로 돼요 (계약이 끝나거나 자동화가 돌 때). 방금 빈 자리를 바로 제안하고 싶을 때만 써요. 그 자리의 종류 · 구역을 기다리는 맨 앞 사람에게 제안이 가요.</p>'
+            . self::open('allot_wait_offer', $here, 'search') . '<input name="unit" required maxlength="24" placeholder="빈자리 번호 (예: J01-0012)" autocomplete="off" spellcheck="false" aria-label="빈자리 번호"><button class="btn" type="submit">🪑 제안하기</button></form></section>';
+        return $h;
+    }
+
+    // ------------------------------------------------------------------ 🔔 알림
+    private static function viewNotices(array $q): string
+    {
+        $st = isset($q['st']) && (isset(self::NOTICE_STATUS[$q['st']]) || $q['st'] === 'all') ? $q['st'] : 'all';
+        $off = isset($q['off']);
+        $after = isset($q['after']) ? (int) $q['after'] : 0;
+        $here = ['sec' => 'notices', 'st' => $st === 'all' ? '' : $st, 'off' => $off ? '1' : ''];
+        // the compose form: who gets it
+        $to = ['all' => '진행 중인 계약이 있는 모든 고객', 'kind_jar' => '🏺 항아리를 분양받은 고객 모두', 'kind_plot' => '🥬 밭을 분양받은 고객 모두', 'kind_store' => '🏚️ 창고를 분양받은 고객 모두'];
+        foreach (self::sum()['zones'] as $z) $to['zone_' . strtolower($z['code'])] = '구역 ' . $z['code'] . ' · ' . $z['name'];
+        $to += ['contract' => '계약 하나 — 아래 칸에 계약번호', 'customer' => '고객 한 명 — 아래 칸에 #고객번호'];
+        $fixed = '';
+        $pick = 'all';
+        $hid = [];
+        if (isset($q['con']) && ($c = Allot::contract((int) $q['con'])) !== null) {
+            $fixed = '계약 ' . $c['contractNo'] . ' (' . $c['unitCode'] . ') 의 고객';
+            $hid = ['to' => 'contract', 'con' => (int) $c['id']];
+        } elseif (isset($q['cust'])) {
+            $fixed = '고객 #' . (int) $q['cust'];
+            $hid = ['to' => 'customer', 'cust' => (int) $q['cust']];
+        }
+        $tpl = null;
+        $tpls = Allot::noticeTemplates();
+        if (isset($q['tpl'])) foreach ($tpls as $t) if ($t['key'] === $q['tpl']) $tpl = $t;
+        $h = '<section class="card"><h3>✍️ 알림 쓰기</h3><p class="dim small">체험관의 "내 분양 → 알림"에 보여요. 체험관 계정이 없는 고객의 알림은 아래 목록에 <b>직접 연락</b>으로 남으니 전화로 알려 주세요. '
+            . '<b>금액은 적지 마세요</b> (아이도 볼 수 있어요) — 전화번호 같은 개인정보와 나쁜 말은 저절로 가려져요.</p>'
+            . self::open('allot_notify', ['sec' => 'notices'] + $hid);
+        if ($fixed !== '') $h .= '<p>받는 사람: <b>' . self::e($fixed) . '</b> <a class="small" href="' . self::e(self::href(['sec' => 'notices'])) . '">다른 사람에게 쓰기</a></p>';
+        else $h .= '<div class="fgrid"><label>받는 사람' . self::select('to', $to, $pick) . '</label><label>계약번호 또는 #고객번호 (하나만 고를 때)<input name="ref" maxlength="24" autocomplete="off" spellcheck="false" placeholder="예: A26-ABCDE-FGHJK 또는 #12"></label></div>';
+        $h .= '<label>제목 (80자까지)<input name="title" required maxlength="80" value="' . self::e($tpl !== null ? $tpl['title'] : '') . '"></label>'
+            . '<label>내용 (300자까지)<textarea name="body" maxlength="300" rows="3">' . self::e($tpl !== null ? $tpl['body'] : '') . '</textarea></label>'
+            . '<label>보내는 날 (비우면 지금 · 날짜를 고르면 그날 아침 9시)<input type="date" name="send" min="' . self::e(date('Y-m-d')) . '"></label>'
+            . '<button class="btn primary" type="submit">🔔 알림 보내기</button></form><p class="dim small">예시 문구로 시작하기: ';
+        foreach ($tpls as $t) $h .= '<a href="' . self::e(self::href(['sec' => 'notices', 'tpl' => $t['key']] + (isset($q['con']) ? ['con' => $q['con']] : []) + (isset($q['cust']) ? ['cust' => $q['cust']] : []))) . '">' . self::e($t['title']) . '</a> · ';
+        $h .= '<span class="dim">(예시예요 — 날짜와 내용을 꼭 고쳐 주세요)</span></p></section>';
+
+        // the outbox
+        $filter = ['status' => $st === 'all' ? '' : $st, 'offline' => $off];
+        if (isset($q['con'])) $filter['contractId'] = (int) $q['con'];
+        if (isset($q['cust'])) $filter['customerId'] = (int) $q['cust'];
+        $r = Allot::listNotices($filter, self::ROWS, $after);
+        $keep = $here + (isset($q['con']) ? ['con' => $q['con']] : []) + (isset($q['cust']) ? ['cust' => $q['cust']] : []);
+        $h .= '<section class="card"><h3>📮 보낸 알림 · 보낼 알림' . ($off ? ' ' . self::badge('직접 연락할 것만', 'warn') : '') . '</h3>'
+            . '<form method="get" action="./" class="search"><input type="hidden" name="tab" value="allot"><input type="hidden" name="sec" value="notices">' . self::hidden(['con' => isset($q['con']) ? $q['con'] : '', 'cust' => isset($q['cust']) ? $q['cust'] : ''])
+            . self::select('st', ['all' => '모든 상태', 'queued' => '기다림 (예약 · 직접 연락)', 'sent' => '보냄 (아직 안 읽음)', 'seen' => '읽음', 'canceled' => '취소'], $st, '상태')
+            . '<label class="check"><input type="checkbox" name="off" value="1"' . ($off ? ' checked' : '') . '> 📞 직접 연락할 것만 (체험관 계정이 없는 고객)</label><button class="btn" type="submit">보기</button></form>';
+        if (!$r['rows']) return $h . '<p class="empty">🍃 ' . ($after > 0 ? '더 없어요.' : ($off ? '🎉 직접 연락할 알림이 없어요.' : '조건에 맞는 알림이 없어요.')) . '</p>' . self::pager($keep, $after, 0) . '</section>';
+        $rows = [];
+        foreach ($r['rows'] as $nt) {
+            $id = (int) $nt['id'];
+            $acts = '';
+            if ($nt['status'] === 'queued') $acts = (!$nt['hasAccount'] ? self::rowBtn('nrow', $id, 'sent', '📞 알렸어요', 'btn sm') . ' ' : '') . self::rowBtn('nrow', $id, 'cancel', '✖ 취소', 'btn ghost sm');
+            $rows[] = ['attr' => ' class="note ' . self::e($nt['status']) . '"', 'cells' => [
+                [self::e(self::at($nt['sentAt'] > 0 ? $nt['sentAt'] : $nt['sendAt'])), 'nowrap small'], self::e(isset(self::NOTICE_KIND[$nt['kind']]) ? self::NOTICE_KIND[$nt['kind']] : $nt['kind']),
+                ((int) $nt['customerId'] > 0 ? '<a href="' . self::e(self::href(['sec' => 'customers', 'cust' => (int) $nt['customerId']])) . '">' . self::e($nt['customer'] !== '' ? $nt['customer'] : '#' . (int) $nt['customerId']) . '</a>' : '')
+                    . ($nt['phoneTail'] !== '' ? ' <span class="dim small">끝번호 ' . self::e($nt['phoneTail']) . '</span>' : '') . ($nt['hasAccount'] ? '' : ' ' . self::badge('직접 연락', 'warn')),
+                $nt['contractNo'] !== '' ? '<span class="small">' . self::e($nt['contractNo']) . '</span>' : '',
+                ['<b>' . self::e($nt['title']) . '</b><br>' . self::e($nt['body']), 'msg'],
+                self::st(self::NOTICE_STATUS, $nt['status']) . ($nt['status'] === 'queued' && $nt['hasAccount'] ? '<br><span class="dim small">' . self::e(self::at($nt['sendAt'])) . ' 예약</span>' : ''),
+                [$acts, 'acts'],
+            ]];
+        }
+        return $h . self::tbl(['때', '종류', '받는 사람', '계약', '내용', '상태', '처리'], $rows) . self::rowForm('nrow', 'allot_notice_done', $keep + ['after' => $after]) . self::pager($keep, $after, (int) $r['next']) . '</section>';
+    }
+
+    // ------------------------------------------------------------------ 📒 관리 일지
+    private static function viewCare(array $q): string
+    {
+        $zone = isset($q['zone']) ? $q['zone'] : '';
+        $unit = isset($q['u']) ? self::unitCode($q['u']) : '';
+        $before = isset($q['before']) ? (int) $q['before'] : 0;
+        $here = ['sec' => 'care', 'zone' => $unit !== '' ? '' : $zone, 'u' => $unit !== '' ? self::unitWord($unit) : ''];
+        $to = ['all' => '모든 구역 (모두에게 보여요)'];
+        foreach (self::sum()['zones'] as $z) $to['zone_' . strtolower($z['code'])] = '구역 ' . $z['code'] . ' · ' . $z['name'];
+        $to['unit'] = '자리 하나 — 아래 칸에 자리 번호';
+        $h = '<section class="card"><h3>✍️ 관리 일지 쓰기</h3><p class="dim small">"장독 뚜껑을 닦았어요"처럼 돌본 일을 적어요. <b>보이기</b>를 켜면 체험관에서 그 자리를 보는 사람 누구나 읽어요 (분양받은 사람에게는 "잘 돌보고 있어요"라는 소식이 돼요). '
+            . '이름 · 전화번호 같은 개인정보와 나쁜 말은 저절로 가려져요.</p>' . self::open('allot_care_add', $here)
+            . '<div class="fgrid"><label>어디에' . self::select('to', $to, $unit !== '' ? 'unit' : ($zone !== '' && isset($to['zone_' . $zone]) ? 'zone_' . $zone : 'all')) . '</label>'
+            . '<label>자리 번호 (자리 하나일 때)<input name="ref" maxlength="24" value="' . self::e($unit) . '" placeholder="예: J01-0012" autocomplete="off" spellcheck="false"></label>'
+            . '<label>무슨 일' . self::select('kind', self::CARE_KIND, 'care') . '</label></div>'
+            . '<label>내용 (300자까지)<textarea name="text" required maxlength="300" rows="2" placeholder="예: 3구역 장독 뚜껑을 닦고 볕이 잘 들게 열어 두었어요."></textarea></label>'
+            . '<label class="check"><input type="checkbox" name="visible" value="1" checked> 체험관에 보이기</label><button class="btn primary" type="submit">📒 일지 남기기</button></form></section>';
+        $r = Allot::careAdmin(['zone' => $unit !== '' ? '' : $zone, 'unit' => $unit], self::ROWS, $before);
+        $h .= '<section class="card"><h3>📒 관리 일지' . ($unit !== '' ? ' <span class="dim small">자리 ' . self::e($unit) . '</span>' : ($zone !== '' ? ' <span class="dim small">구역 ' . self::e(strtoupper($zone)) . '</span>' : '')) . '</h3>'
+            . '<form method="get" action="./" class="search"><input type="hidden" name="tab" value="allot"><input type="hidden" name="sec" value="care">' . self::select('zone', self::zoneOptions(), $unit !== '' ? '' : $zone, '구역')
+            . '<button class="btn" type="submit">보기</button>' . ($zone !== '' || $unit !== '' ? '<a class="btn ghost" href="' . self::e(self::href(['sec' => 'care'])) . '">모두 보기</a>' : '') . '</form>';
+        if (!$r['logs']) return $h . '<p class="empty">🍃 ' . ($before > 0 ? '더 없어요.' : '아직 일지가 없어요.') . '</p>' . self::pager($here, $before, 0, 'before') . '</section>';
+        $rows = [];
+        $last = 0;
+        foreach ($r['logs'] as $l) {
+            $id = (int) $l['id'];
+            $last = $id;
+            $where = $l['scope'] === 'unit' ? '자리 <b>' . self::e($l['unitCode']) . '</b>' : ($l['scope'] === 'zone' ? '구역 <code>' . self::e($l['zoneCode']) . '</code>' : '모든 구역');
+            $rows[] = ['attr' => ' class="care' . ($l['visible'] ? '' : ' muted') . '"', 'cells' => [
+                [self::e(self::at($l['at'])), 'nowrap small'], $where, self::e(isset(self::CARE_KIND[$l['kind']]) ? self::CARE_KIND[$l['kind']] : $l['kind']), [self::e($l['text']), 'msg'],
+                $l['visible'] ? self::badge('보임', 'ok') : self::badge('숨김'), self::e($l['by']),
+                [$l['visible'] ? self::rowBtn('krow', $id, 'hide', '🙈 숨기기', 'btn ghost sm') : self::rowBtn('krow', $id, 'show', '👁️ 보이기', 'btn sm'), 'acts'],
+            ]];
+        }
+        return $h . self::tbl(['때', '어디', '무슨 일', '내용', '체험관', '쓴 사람', '처리'], $rows) . self::rowForm('krow', 'allot_care_visible', $here + ['before' => $before])
+            . self::pager($here, $before, $r['more'] ? $last : 0, 'before') . '</section>';
+    }
+
+    // ------------------------------------------------------------------ 📦 가져오기 · 내보내기
+    /** the dry run that waits for its confirmation: ['what', 'at', 'ticket', 'csv', 'report'] or null (none, unreadable, older than IMPORT_TTL) */
+    private static function importGet(): ?array
+    {
+        $raw = Session::get('allot_import');
+        if ($raw === null) return null;
+        $plain = is_string($raw) ? Crypto::open($raw) : null;
+        $d = is_string($plain) ? Json::tryDecode($plain, true) : null;
+        if (!is_array($d) || !isset($d['what'], $d['at'], $d['ticket'], $d['csv'], $d['report']) || !is_string($d['csv']) || !is_array($d['report']) || Clock::ms() - (int) $d['at'] > self::IMPORT_TTL * 1000) {
+            Session::set('allot_import', null);
+            return null;
+        }
+        return $d;
+    }
+
+    /** keep a dry run (the pasted text and its report) sealed in the session → its ticket */
+    private static function importPut(string $what, string $csv, array $report): string
+    {
+        $report['rows'] = array_slice($report['rows'], 0, 300);
+        $ticket = substr(hash('sha256', $what . "\n" . $csv), 0, 24);
+        Session::set('allot_import', Crypto::seal((string) json_encode(['what' => $what, 'at' => Clock::ms(), 'ticket' => $ticket, 'csv' => $csv, 'report' => $report], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)));
+        return $ticket;
+    }
+
+    /** the rows of a dry run as a table: the rows with a problem first */
+    private static function importReport(array $d): string
+    {
+        $r = $d['report'];
+        $ledger = $d['what'] === 'ledger';
+        $act = ['new' => ['새 고객 + 새 계약', 'ok'], 'existing' => ['있는 고객 + 새 계약', 'ok'], 'duplicate' => ['이미 들어 있음 (건너뜀)', ''], 'payment' => ['입금 기록', 'ok'], 'problem' => ['문제 있음', 'fail']];
+        $ok = (int) $r['invalid'] === 0;
+        $h = '<section class="card' . ($ok ? '' : ' pii') . '"><h3>🔍 미리 보기 — ' . ($ledger ? '장부' : '입금 내역') . ' ' . ($ok ? self::badge('문제 없음', 'ok') : self::badge('문제 있는 줄 ' . self::n($r['invalid']) . '개', 'fail')) . '</h3>'
+            . '<p><b>아직 아무것도 바꾸지 않았어요.</b> 모두 ' . self::e(self::n($r['total'])) . '줄 — 가져올 줄 ' . self::e(self::n($r['valid'])) . ' · 이미 들어 있어 건너뛸 줄 ' . self::e(self::n($r['skipped'])) . ' · 문제 있는 줄 ' . self::e(self::n($r['invalid'])) . '.</p>';
+        if ($ok && (int) $r['valid'] > 0) {
+            $h .= '<div class="row">' . self::button('allot_import_commit', '✅ 이대로 가져오기 (' . self::n($r['valid']) . '줄)', ['sec' => 'csv', 'ticket' => $d['ticket']], 'btn primary') . self::button('allot_import_cancel', '✖ 그만두기', ['sec' => 'csv'], 'btn ghost') . '</div>';
+        } else {
+            $h .= '<p class="notice">' . ($ok ? '새로 가져올 줄이 없어요 (모두 이미 들어 있어요).' : '한 줄이라도 문제가 있으면 <b>아무것도 가져오지 않아요</b>. 엑셀에서 아래 줄을 고친 뒤 다시 붙여 넣어 주세요.') . '</p>'
+                . '<div class="row">' . self::button('allot_import_cancel', '↩️ 다시 붙여 넣기', ['sec' => 'csv'], 'btn') . '</div>';
+        }
+        $rows = [];
+        foreach ($r['rows'] as $x) {
+            $unit = is_string($x['unit']) && preg_match('/^[A-Za-z0-9\-]{1,24}$/', $x['unit']) ? $x['unit'] : ($x['unit'] === '' ? '' : '(알아볼 수 없는 값)');
+            $a = isset($act[$x['action']]) ? $act[$x['action']] : [(string) $x['action'], ''];
+            $rows[] = ['attr' => $x['ok'] ? '' : ' class="bad"', 'cells' => [(int) $x['line'] . '번째 줄', self::badge($a[0], $a[1]), self::e($unit), self::e(is_string($x['who']) ? $x['who'] : ''),
+                [self::e(implode(' · ', is_array($x['problems']) ? array_map('strval', $x['problems']) : [])), 'msg']]];
+        }
+        $h .= self::tbl(['줄', '할 일', $ledger ? '자리' : '자리', $ledger ? '누구 (가림)' : '계약번호', '문제'], $rows);
+        if ((int) $r['total'] > count($r['rows'])) $h .= '<p class="dim small">처음 ' . count($r['rows']) . '줄만 보여요 (문제 있는 줄이 먼저예요).</p>';
+        return $h . '<p class="dim small">이 미리 보기는 ' . intdiv(self::IMPORT_TTL, 60) . '분 동안만 기다려요. 줄 번호는 붙여 넣은 내용의 줄(첫 줄 = 제목 줄)이에요.</p></section>';
+    }
+
+    private static function viewCsv(array $q, array $a): string
+    {
+        $h = '';
+        $pending = self::importGet();
+        if ($pending !== null) $h .= self::importReport($pending);
+        $h .= '<div class="grid2"><section class="card"><h3>⬇️ 내보내기 (CSV)</h3>'
+            . '<p class="dim small">엑셀에서 바로 열리는 파일(CSV)로 내려받아요. 이름과 전화번호는 <b>가려서</b>(김**, ***-****-1234) 내보내고 주소 · 고객 메모는 넣지 않아요. '
+            . '세무 자료처럼 전체가 꼭 필요할 때만 아래 칸에 표시하고 까닭을 골라 주세요 — 누가 · 언제 · 왜 내려받았는지 기록이 남아요.</p>'
+            . self::open('allot_export', ['sec' => 'csv']) . '<label>무엇을' . self::select('what', self::EXPORT_NAMES, 'ledger') . '</label>'
+            . '<label class="check"><input type="checkbox" name="reveal" value="1"> 이름 · 전화번호 · 주소를 가리지 않고 내보내기</label>'
+            . '<label>까닭 (가리지 않을 때 · 기록에 남아요)' . self::select('why', Allot::REVEAL_REASONS, 'report') . '</label>';
+        if (self::piiOpen($a)) $h .= self::piiField($a);
+        else $h .= '<label>관리자 비밀번호 (가리지 않을 때만 필요해요)<input type="password" name="password" autocomplete="current-password" maxlength="128"></label>';
+        $h .= '<button class="btn primary" type="submit">⬇️ CSV 내려받기</button></form>'
+            . '<p class="dim small">파일은 UTF-8(BOM) · 줄 끝 CRLF 이고, <code>=</code> <code>+</code> <code>-</code> <code>@</code> 로 시작하는 칸 앞에는 작은따옴표를 붙여요 (엑셀이 수식으로 실행하지 못하게). 내려받은 파일은 지우기 전까지 그 컴퓨터에 남으니 조심해서 다뤄 주세요. '
+            . '서버 컴퓨터에서는 <code>php cli/tfm.php allot:export contracts 파일.csv</code>.</p></section>';
+        $h .= '<section class="card"><h3>⬆️ 가져오기 (붙여 넣기)</h3>';
+        if ($pending !== null) {
+            $h .= '<p class="notice">위에 확인을 기다리는 미리 보기가 있어요. 가져오거나 그만둔 뒤에 새로 붙여 넣을 수 있어요.</p>';
+        } else {
+            $h .= '<p class="dim small">지금 쓰는 엑셀 장부를 옮겨요. 엑셀에서 <b>제목 줄을 포함해</b> 칸들을 골라 복사(Ctrl+C)한 다음 아래 칸에 붙여 넣으면 돼요 (CSV 파일의 내용을 붙여 넣어도 돼요). 먼저 <b>미리 보기</b>로 줄마다 무엇이 만들어지는지 · 어디가 잘못됐는지 보여 주고, 확인을 눌러야 가져와요.</p>'
+                . self::open('allot_import_preview', ['sec' => 'csv']) . '<label>무엇을' . self::select('what', ['ledger' => '📒 장부 — 이미 분양한 자리 (고객 + 진행 중 계약이 만들어져요)', 'payments' => '💰 입금 내역 — 계약에 입금 기록'], 'ledger') . '</label>'
+                . '<label>붙여 넣기 (첫 줄은 제목 줄)<textarea name="csv" required rows="8" spellcheck="false" autocomplete="off" placeholder="일자,성명,연락처,주소,비고,단위&#10;2024-03-15,홍길동,010-1234-5678,,3년차,J01-0012"></textarea></label>'
+                . '<button class="btn primary" type="submit">🔍 미리 보기 (아무것도 바꾸지 않아요)</button></form>';
+        }
+        $h .= '<details class="acts"><summary>📋 어떤 칸이 필요한가요?</summary><div class="mdoc"><p><b>장부</b>: <code>성명</code> · <code>연락처</code> · <code>단위</code>(자리 번호 J01-0012, 또는 구역 번호 J01 = 그 구역의 다음 빈자리)가 꼭 있어야 하고, '
+            . '<code>일자</code>(계약한 날) · <code>주소</code> · <code>비고</code> · <code>납부기한</code>은 있으면 써요. 한 줄이 고객 한 명 + 진행 중인 계약 하나가 돼요. 같은 파일을 두 번 넣어도 두 번 만들어지지 않아요.</p>'
+            . '<pre class="csv">일자,성명,연락처,주소,비고,단위' . "\n" . '2024-03-15,홍길동,010-1234-5678,강원 정선군,3년차,J01-0012' . "\n" . '2025-04-02,김영희,010-9876-5432,,,J01</pre>'
+            . '<p><b>입금 내역</b>: <code>계약번호</code>(또는 쓰고 있는 <code>단위</code>) · <code>금액</code>이 꼭 있어야 하고, <code>일자</code> · <code>방법</code>(계좌이체 · 현금 · 자동이체 · 기타) · <code>비고</code>는 있으면 써요.</p>'
+            . '<pre class="csv">계약번호,금액,일자,방법,비고' . "\n" . 'A26-ABCDE-FGHJK,120000,2026-03-25,계좌이체,농협</pre>'
+            . '<p>전화번호가 가려진(010-****-5678) 파일은 가져올 수 없어요. 한 번에 약 1만 줄(2 MB)까지 붙여 넣을 수 있고, 더 크면 서버 컴퓨터에서 <code>php cli/tfm.php allot:import ledger 파일.csv</code> (끝에 <code>--commit</code> 을 붙여야 진짜로 가져와요)를 써요. '
+            . '붙여 넣고 누른 뒤 "보안 토큰이 맞지 않아요"가 나오면 내용이 서버가 받는 크기보다 큰 거예요 — 나눠서 넣어 주세요.</p></div></details></section></div>';
+        return $h;
+    }
+
+    // ------------------------------------------------------------------ ⚙️ 자동화
+    /** rule → [label, what it means in plain words, input: bool | int | text | [value => label]] — in the order the form shows them */
+    private const RULES_META = [
+        'enabled' => ['분양 받기', '끄면 체험관의 분양 화면과 신청이 모두 닫히고 자동화도 쉬어요. 이미 맺은 계약은 그대로 남아요.', 'bool'],
+        'auto_approve' => ['신청을 누가 확정하나요', '운영자가 직접 승인하는 것을 권해요 — 어른(보호자)이 신청했는지, 입금이 됐는지 확인할 수 있으니까요.', ['off' => '운영자가 직접 승인 (권장)', 'on_payment' => '입금이 기록되면 저절로 확정', 'always' => '신청하자마자 확정']],
+        'hold_hours' => ['신청한 자리를 잡아 두는 시간', '이 시간(단위: 시간) 안에 승인도 입금 기록도 없으면 신청이 저절로 취소되고 자리가 다시 비어요. 0 = 저절로 취소하지 않음.', 'int'],
+        'apply_per_user' => ['한 계정이 가질 수 있는 수', '체험관 계정 하나가 동시에 가질 수 있는 신청 · 계약 · 대기를 모두 더한 수예요.', 'int'],
+        'notice_days' => ['미리 알리는 날', '납부 기한과 계약이 끝나는 날의 며칠 전에 알림을 보낼지 쉼표로 적어요. 0 = 그날. 예: 30, 7, 0', 'text'],
+        'grace_days' => ['연체로 표시하기까지 기다리는 날', '납부 기한이 지나고 이만큼(일) 더 기다린 뒤에 "연체"로 표시하고 알림을 보내요.', 'int'],
+        'overdue_end_days' => ['연체가 이어지면 저절로 끝내기', '연체가 이만큼(일) 이어지면 계약을 끝내고 자리를 비워요. 0 = 저절로 끝내지 않음 (권장) — 진짜 항아리는 운영자가 확인하고 직접 정리해요.', 'int'],
+        'waitlist_offer_hours' => ['대기자의 답을 기다리는 시간', '자리가 나면 맨 앞 대기자에게 제안하고 이 시간(단위: 시간) 동안 기다려요. 지나면 다음 사람에게 넘어가요.', 'int'],
+        'retention_days' => ['개인정보 보관 기간', '마지막 계약이 끝나고 이만큼(일) 지나면 이름 · 전화번호 · 주소를 저절로 지워요 (계약 · 입금 기록은 이름 없이 남아요). 1825 = 5년. 법으로 정해진 보관 기간이 있는지 꼭 확인해 주세요.', 'int'],
+        'collect_address' => ['신청할 때 주소도 받기', '꼭 필요할 때만 켜세요. 적게 모을수록 안전해요.', 'bool'],
+        'nameplate_default_show' => ['이름표를 처음부터 공개', '끄면 신청자가 "공개"를 고른 이름표만 체험관에 보여요.', 'bool'],
+        'toss_enabled' => ['토스 결제 버튼', '켜면 체험관 "내 분양"에 토스페이먼츠 결제 버튼이 생겨요 (토스 키가 설정되어 있어야 해요). 끄면 입금 안내 문구만 보여요.', 'bool'],
+        'daily_report_mail' => ['하루 요약 메일', '켜면 하루 한 번 분양 현황 숫자를 운영자 메일(config.local.php 의 security.alert_email)로 보내요. 개인정보는 들어가지 않아요.', 'bool'],
+        'consent_version' => ['동의 문구의 판(版) 이름', '바꾸면 모든 신청자가 새로 동의해요. 안내 문구를 고치면 판이 저절로 바뀌니 보통은 그대로 둬요. 영문 · 숫자 · 점 · 줄표 20자까지.', 'text'],
+        'lazy_tick_minutes' => ['자동화 간격 (작업 스케줄러가 없을 때)', '관리자 화면이나 분양 화면을 열 때 이 간격(단위: 분)으로 자동화가 한 번씩 돌아요.', 'int'],
+        'tick_batch' => ['한 번에 처리하는 수', '자동화의 한 단계가 한 번에 처리하는 가장 많은 건수예요. 보통은 그대로 둬요.', 'int'],
+    ];
+    private const TEXTS_META = [
+        'terms_text' => ['terms', '📜 이용 안내 (약관)', '분양이 무엇이고 어떻게 진행되는지. 신청 화면에서 보여 줘요.'],
+        'privacy_text' => ['privacy', '🔐 개인정보 수집 · 이용 안내', '무엇을 왜 모으고 언제까지 보관하는지. 신청자가 동의하는 글이에요.'],
+        'refund_text' => ['refund', '↩️ 취소 · 환불 안내', '취소와 환불을 어떻게 하는지.'],
+        'pay_guide' => ['payGuide', '💳 입금 안내', '신청한 사람에게 보여 주는 입금 방법 (계좌 등).'],
+    ];
+
+    private static function ruleText(string $k, $v): string
+    {
+        if (is_bool($v)) return $v ? '켬' : '끔';
+        if (is_array($v)) return implode(', ', array_map('strval', $v));
+        $m = self::RULES_META[$k][2];
+        return is_array($m) && isset($m[(string) $v]) ? $m[(string) $v] : (string) $v;
+    }
+
+    private static function viewAuto(array $q, array $get): string
+    {
+        $s = self::sum();
+        $rules = $s['rules'];
+        $run = $s['lastRun'];
+        $h = '<div class="grid2">' . self::autoCard($s) . '<section class="card"><h3>🗓️ 저절로 돌게 하기</h3>'
+            . '<p class="dim small">자동화는 두 가지 방법으로 돌아요. <b>① 작업 스케줄러</b> (권장): 서버 컴퓨터가 한 시간에 한 번 아래 명령을 실행해요. <b>② 화면을 열 때</b>: 스케줄러가 없어도 누군가 관리자 화면이나 분양 화면을 열면 '
+            . (int) $rules['lazy_tick_minutes'] . '분 간격으로 한 번씩 돌아요 — 아무도 안 들어오는 날에는 돌지 않으니 ①을 해 두는 것이 좋아요.</p>'
+            . '<ol class="todo small"><li>Windows 시작 → "작업 스케줄러" → "기본 작업 만들기"</li><li>트리거: 매일, 그다음 "반복 간격 1시간"</li>'
+            . '<li>동작: 프로그램 <code>C:\xampp\php\php.exe</code> · 인수 <code>cli\tfm.php allot:tick --quiet</code> · 시작 위치 = 체험관 서버 폴더</li></ol>'
+            . '<p class="dim small">지금 상태만 보려면 서버 컴퓨터에서 <code>php cli/tfm.php allot:status</code>.</p></section></div>';
+
+        // what the last run could not repair by itself
+        $issues = $run !== null && isset($run['summary']['issues']) && is_array($run['summary']['issues']) ? $run['summary']['issues'] : [];
+        if ($issues) {
+            $rows = [];
+            foreach (array_slice($issues, 0, 20) as $i) $rows[] = ['cells' => [self::e(isset($i['ref']) ? (string) $i['ref'] : ''), self::e(isset($i['kind']) ? (string) $i['kind'] : ''), [self::e(isset($i['note']) ? (string) $i['note'] : ''), 'msg']]];
+            $h .= '<section class="card"><h3>🔧 직접 확인이 필요한 항목 ' . self::badge(count($issues) . '건', 'fail') . '</h3><p class="dim small">자동화의 점검이 자리와 계약을 맞춰 보다가, 저절로 고칠 수 없는 것을 찾았어요. 해당 계약 · 자리를 열어 확인해 주세요.</p>'
+                . self::tbl(['어디', '종류', '무슨 일'], $rows) . '</section>';
+        }
+
+        // the rules
+        $h .= '<section class="card"><h3>⚙️ 규칙</h3><p class="dim small">자동화가 따르는 약속이에요. 바꾸면 바로 적용되고, 바꾼 기록은 📜 감사 로그에 남아요. 값이 정해진 범위를 벗어나면 저장되지 않아요.</p>'
+            . self::open('allot_settings', ['sec' => 'auto'], 'rules');
+        foreach (self::RULES_META as $k => $m) {
+            $v = isset($rules[$k]) ? $rules[$k] : '';
+            if ($m[2] === 'bool') $in = self::select($k, ['1' => '켬', '0' => '끔'], $v ? '1' : '0', $m[0]);
+            elseif (is_array($m[2])) $in = self::select($k, $m[2], (string) $v, $m[0]);
+            else $in = '<input name="' . self::e($k) . '" value="' . self::e(is_array($v) ? implode(', ', $v) : (string) $v) . '" maxlength="40"' . ($m[2] === 'int' ? ' inputmode="numeric"' : '') . ' aria-label="' . self::e($m[0]) . '" required>';
+            $h .= '<div class="rule"><div><b>' . self::e($m[0]) . '</b><p class="dim small">' . self::e($m[1]) . '</p></div><div>' . $in . '<p class="dim small">지금: ' . self::e(self::ruleText($k, $v)) . '</p></div></div>';
+        }
+        $h .= '<button class="btn primary" type="submit">💾 규칙 저장</button></form></section>';
+
+        // the operator texts
+        $texts = Allot::texts();
+        $h .= '<section class="card"><h3>📝 안내 문구 ' . ($texts['sample'] ? self::badge('예시 문구가 남아 있어요', 'warn') : self::badge('모두 바꿨어요', 'ok')) . '</h3>'
+            . '<p class="sample">⚠️ <b>예시</b>로 들어 있는 글은 그대로 쓰면 안 돼요. 실제 운영 내용(가격 · 기간 · 환불 · 보관 기간 · 연락처)에 맞게 바꿔 주세요. <b>법률 검토가 필요해요</b> — 약관 · 개인정보 수집 동의 · 환불 규정은 '
+            . '공개하기 전에 변호사나 전문가에게 확인받는 것을 권해요. 이 화면은 법률 자문을 대신하지 않아요.</p>'
+            . '<p class="dim small">지금 동의 판: <code>' . self::e(Allot::consentVersion()) . '</code> — 개인정보 안내나 이용 안내를 고치면 판이 바뀌고, 그 뒤에 신청하는 사람은 새 글에 동의해요. 이미 동의한 사람이 읽은 글은 아래 "동의 문구 기록"에 남아요.</p>'
+            . self::open('allot_texts', ['sec' => 'auto']);
+        foreach (self::TEXTS_META as $k => $m) {
+            $own = class_exists('Tfm\Settings') && Settings::has('allot.' . $k) && is_string(Settings::get('allot.' . $k)) && trim((string) Settings::get('allot.' . $k)) !== '';
+            $cur = (string) $texts[$m[0]];
+            $h .= '<label><b>' . self::e($m[1]) . '</b> ' . ($own ? '' : self::badge('예시', 'warn')) . '<span class="dim small">' . self::e($m[2]) . ' 4,000자까지. ' . ($own ? '모두 지우고 저장하면 예시 문구로 돌아가요.' : '비워 두면 아래 예시 문구가 그대로 보여요.') . '</span>'
+                . '<textarea name="' . self::e($k) . '" maxlength="4000" rows="' . ($own ? '8' : '4') . '"' . ($own ? '' : ' placeholder="여기에 실제 문구를 적어 주세요"') . '>' . ($own ? self::e($cur) : '') . '</textarea></label>';
+            if (!$own) $h .= '<details class="acts"><summary>지금 보이는 예시 문구 보기</summary><blockquote class="note prewrap">' . self::e($cur) . '</blockquote></details>';
+        }
+        $h .= '<button class="btn primary" type="submit">💾 안내 문구 저장</button></form></section>';
+
+        // history
+        $runs = Allot::jobRuns(20);
+        $h .= '<section class="card"><h3>🧾 자동화 기록 <span class="dim small">최근 ' . count($runs) . '번 (180일 동안 보관)</span></h3>';
+        if (!$runs) $h .= '<p class="empty">🍃 아직 기록이 없어요.</p>';
+        else {
+            $rows = [];
+            foreach ($runs as $r) {
+                $sm = $r['summary'];
+                $n = isset($sm['issues']) && is_array($sm['issues']) ? count($sm['issues']) : 0;
+                $rows[] = ['cells' => ['#' . (int) $r['id'], [self::e(self::at($r['startedAt'])), 'nowrap'], self::e(isset(self::TICK_SOURCE[$r['source']]) ? self::TICK_SOURCE[$r['source']] : $r['source']),
+                    $r['ok'] ? self::badge('잘 끝남', 'ok') : ((int) $r['finishedAt'] === 0 ? self::badge('끝나지 않음', 'warn') : self::badge('문제 있음', 'fail')),
+                    [self::e(self::stepsText($sm)) . (isset($sm['errors']) && is_array($sm['errors']) && $sm['errors'] ? '<br><span class="dim small">문제: ' . self::e(implode(', ', array_map('strval', $sm['errors']))) . '</span>' : ''), 'msg'],
+                    $n > 0 ? self::badge($n . '건', 'fail') : '', [isset($sm['ms']) ? self::e(self::n($sm['ms'])) . ' ms' : '', 'nowrap small']]];
+            }
+            $h .= self::tbl(['번호', '때', '누가', '결과', '한 일', '확인 필요', '걸린 시간'], $rows);
+        }
+        $h .= '</section>';
+
+        // consent versions
+        $vers = Allot::termsVersions(20);
+        $h .= '<div class="grid2"><section class="card"><h3>📚 동의 문구 기록</h3><p class="dim small">신청자가 동의할 때 읽은 글을 판마다 그대로 보관해요 (나중에 "무엇에 동의했는지" 보여 줄 수 있어요).</p>';
+        if (!$vers) $h .= '<p class="empty">🍃 아직 체험관에서 동의한 사람이 없어요.</p>';
+        else {
+            $rows = [];
+            foreach ($vers as $v) $rows[] = ['cells' => ['<a href="' . self::e(self::href(['sec' => 'auto', 'tv' => $v['ver']])) . '"><code>' . self::e($v['ver']) . '</code></a>', [self::e(self::at($v['at'])), 'nowrap small'], self::e(self::n($v['customers'])) . '명']];
+            $h .= self::tbl(['판', '처음 쓰인 때', '이 판에 동의한 고객'], $rows);
+        }
+        $tv = self::s($get, 'tv');
+        if (preg_match('/^[A-Za-z0-9.\-]{1,40}$/', $tv) && ($t = Allot::termsOf($tv)) !== null) {
+            $h .= '<h4>판 <code>' . self::e($t['ver']) . '</code> 의 글</h4><blockquote class="note prewrap"><b>개인정보 안내</b>' . "\n" . self::e($t['privacy']) . "\n\n" . '<b>이용 안내</b>' . "\n" . self::e($t['terms']) . "\n\n" . '<b>환불 안내</b>' . "\n" . self::e($t['refund']) . '</blockquote>';
+        }
+        $h .= '</section>';
+
+        // demo data (a test site only)
+        $demo = Allot::demoInfo();
+        $empty = (int) $s['pending'] + (int) $s['active'] + (int) $s['overdue'] === 0;
+        $h .= '<section class="card"><h3>🧪 예시 자료 (시험해 볼 때만)</h3>';
+        if ($demo !== null) {
+            $h .= '<p class="notice">지금 <b>예시 자료</b>가 들어 있어요: 가짜 고객 ' . count($demo['customers']) . '명 ("예시고객01" …, 전화 010-0000-00NN). 진짜 운영을 시작하기 전에 지워 주세요.</p>'
+                . '<div class="row">' . self::button('allot_demo', '🧹 예시 자료 지우기', ['sec' => 'auto', 'op' => 'clear'], 'btn danger') . '</div><p class="dim small">예시 자료가 만든 고객 · 계약 · 입금 · 알림 · 일지만 지워요. 구역과 자리는 남아요.</p>';
+        } elseif ($empty) {
+            $h .= '<p class="dim small">분양 화면이 어떻게 보이는지 미리 보고 싶을 때, 가짜 고객 40명과 여러 상태의 계약(진행 중 · 미납 · 승인 대기 · 곧 끝남 · 끝남)을 만들어요. <b>진짜 고객이나 계약이 하나라도 있으면 만들어지지 않아요</b> (장부와 섞이지 않게요).</p>'
+                . '<div class="row">' . self::button('allot_demo', '🧪 예시 자료 넣어 보기', ['sec' => 'auto', 'op' => 'seed'], 'btn') . '</div>';
+        } else {
+            $h .= '<p class="dim small">이미 계약이 있는 곳에는 예시 자료를 넣지 않아요 (진짜 장부와 섞이지 않게요).</p>';
+        }
+        return $h . '</section></div>';
+    }
+
     // @@VIEW-METHODS@@
 
     // ================================================================== actions
@@ -1086,7 +1454,19 @@ final class AdminAllot
                 case 'allot_customer_link': return self::doCustomerLink($a, $p);
                 case 'allot_reveal': return self::doReveal($a, $p);
                 case 'allot_pii_lock': return self::doPiiLock($a, $p);
-                // @@ACTIONS@@
+                case 'allot_wait_cancel': return self::doWaitCancel($a, $p);
+                case 'allot_wait_offer': return self::doWaitOffer($a, $p);
+                case 'allot_notify': return self::doNotify($a, $p);
+                case 'allot_notice_done': return self::doNoticeDone($a, $p);
+                case 'allot_care_add': return self::doCareAdd($a, $p);
+                case 'allot_care_visible': return self::doCareVisible($a, $p);
+                case 'allot_export': return self::doExport($a, $p);
+                case 'allot_import_preview': return self::doImportPreview($a, $p);
+                case 'allot_import_commit': return self::doImportCommit($a, $p);
+                case 'allot_import_cancel': return self::doImportCancel($a, $p);
+                case 'allot_settings': return self::doSettings($a, $p);
+                case 'allot_texts': return self::doTexts($a, $p);
+                case 'allot_demo': return self::doDemo($a, $p);
             }
         } catch (ApiException $e) {
             // the library names the field of a refused value in its own words: say it in the operator's
@@ -1402,6 +1782,242 @@ final class AdminAllot
         if (!$u) throw new ApiException(404, 'NOT_FOUND', '그런 체험관 계정을 찾을 수 없어요.');
         Allot::linkCustomer($a, $id, (int) $u['id']);
         return self::ok('🔗 #' . $id . ' 고객을 체험관 계정 #' . (int) $u['id'] . ' 과 이었어요. 이제 계약과 알림이 그 계정의 "내 분양"에 보여요.');
+    }
+
+    // ------------------------------------------------------------------ waiting list, notices, care logs
+    private static function doWaitCancel(array $a, array $p): array
+    {
+        list($id, $what) = self::pick($p);
+        if ($what !== 'cancel') throw new ApiException(400, 'INVALID_INPUT', '목록에서 버튼을 다시 눌러 주세요.');
+        Allot::waitCancel($a, $id);
+        return self::ok('✖ 대기 신청 #' . $id . ' 을 취소했어요. 제안했던 자리가 있으면 다음 사람에게 넘어가요.');
+    }
+
+    private static function doWaitOffer(array $a, array $p): array
+    {
+        $code = strtoupper(trim(self::s($p, 'unit')));
+        if (!preg_match('/^[A-Z0-9]{1,12}-\d{1,6}$/', $code)) throw new ApiException(400, 'INVALID_INPUT', '자리 번호를 다시 확인해 주세요 (예: J01-0012).');
+        $r = Allot::offerNext($code);
+        Audit::log('allot_wait_offer_run', null, ['unit' => $code, 'offered' => $r !== null], 'info', self::actor($a));
+        if ($r === null) return self::ok('ℹ️ 제안하지 않았어요 — ' . $code . ' 자리가 비어 있지 않거나, 그 구역이 신청을 받지 않거나, 기다리는 사람이 없어요.');
+        return self::ok('🪑 ' . $r['unit'] . ' 자리를 대기 #' . (int) $r['id'] . ' 에게 제안했어요. ' . self::at($r['offerUntil']) . ' 까지 답을 기다려요.', ['st' => 'offered']);
+    }
+
+    private static function doNotify(array $a, array $p): array
+    {
+        $to = self::s($p, 'to');
+        $ref = trim(self::s($p, 'ref'));
+        $back = ['sec' => 'notices'];
+        if ($to === 'all') $target = ['all' => true];
+        elseif (preg_match('/^kind_(jar|plot|store)$/', $to, $m)) $target = ['kind' => $m[1]];
+        elseif (preg_match('/^zone_([a-z0-9]{1,12})$/', $to, $m)) $target = ['zone' => strtoupper($m[1])];
+        elseif ($to === 'contract') {
+            $id = self::id($p, 'con');
+            if ($id < 1) {
+                if (!preg_match('/^A\d\d-[2-9A-Z]{5}-[2-9A-Z]{5}$/i', $ref)) throw new ApiException(400, 'INVALID_INPUT', '계약번호를 적어 주세요 (예: A26-ABCDE-FGHJK).');
+                $found = Allot::listContracts(['q' => $ref], 1);
+                if (!$found['rows']) throw new ApiException(404, 'NOT_FOUND', '그런 계약번호는 없어요.');
+                $id = (int) $found['rows'][0]['id'];
+            }
+            $target = ['contract' => $id];
+        } elseif ($to === 'customer') {
+            $id = self::id($p, 'cust');
+            if ($id < 1 && preg_match('/^#?(\d{1,15})$/', $ref, $m)) $id = (int) $m[1];
+            if ($id < 1) throw new ApiException(400, 'INVALID_INPUT', '고객번호를 적어 주세요 (예: #12).');
+            $target = ['customer' => $id];
+        } else {
+            throw new ApiException(400, 'INVALID_INPUT', '받는 사람을 골라 주세요.');
+        }
+        $sendAt = null;
+        $send = trim(self::s($p, 'send'));
+        if ($send !== '') {
+            $day = Allot::parseDate($send);
+            if ($day < 1) throw new ApiException(400, 'INVALID_INPUT', '보내는 날을 다시 확인해 주세요.');
+            if ($day + 9 * 3600000 > Clock::ms()) $sendAt = $day + 9 * 3600000; // 09:00 of that day; today or earlier = now
+        }
+        $r = Allot::notify($a, $target, self::s($p, 'title'), self::s($p, 'body'), $sendAt);
+        if ((int) $r['count'] < 1) return self::ok('ℹ️ 받을 사람이 없어서 보내지 않았어요 (진행 중인 계약이 있는 고객에게만 보내요).', $back);
+        return self::ok('🔔 ' . self::n($r['count']) . '명에게 알림을 ' . ($sendAt !== null ? self::at($sendAt) . ' 에 보내도록 예약했어요.' : '보냈어요.') . ' 체험관 계정이 없는 고객은 아래 목록에 "직접 연락"으로 남아요.', $back);
+    }
+
+    private static function doNoticeDone(array $a, array $p): array
+    {
+        list($id, $what) = self::pick($p);
+        if ($what !== 'sent' && $what !== 'cancel') throw new ApiException(400, 'INVALID_INPUT', '목록에서 버튼을 다시 눌러 주세요.');
+        Allot::noticeDone($a, $id, $what === 'sent' ? 'sent' : 'canceled');
+        return self::ok($what === 'sent' ? '📞 알림 #' . $id . ' 을 "알렸어요"로 표시했어요.' : '✖ 알림 #' . $id . ' 을 취소했어요.');
+    }
+
+    private static function doCareAdd(array $a, array $p): array
+    {
+        $to = self::s($p, 'to');
+        $back = ['sec' => 'care'];
+        if ($to === 'all') $target = ['all' => true];
+        elseif (preg_match('/^zone_([a-z0-9]{1,12})$/', $to, $m)) { $target = ['zone' => strtoupper($m[1])]; $back['zone'] = $m[1]; $back['u'] = null; }
+        elseif ($to === 'unit') {
+            $code = strtoupper(trim(self::s($p, 'ref')));
+            if (!preg_match('/^[A-Z0-9]{1,12}-\d{1,6}$/', $code)) throw new ApiException(400, 'INVALID_INPUT', '자리 번호를 다시 확인해 주세요 (예: J01-0012).');
+            $target = ['unit' => $code];
+            $back['u'] = self::unitWord($code);
+            $back['zone'] = null;
+        } else {
+            throw new ApiException(400, 'INVALID_INPUT', '어디에 남길지 골라 주세요.');
+        }
+        $visible = self::s($p, 'visible') === '1';
+        $r = Allot::addCare($a, $target, self::s($p, 'kind'), self::s($p, 'text'), $visible);
+        return self::ok('📒 일지를 남겼어요 (' . ($visible ? '체험관에 보여요' : '숨김') . '). 개인정보와 나쁜 말은 저절로 가려져요.', $back + ['before' => null]);
+    }
+
+    private static function doCareVisible(array $a, array $p): array
+    {
+        list($id, $what) = self::pick($p);
+        if ($what !== 'show' && $what !== 'hide') throw new ApiException(400, 'INVALID_INPUT', '목록에서 버튼을 다시 눌러 주세요.');
+        Allot::setCareVisible($a, $id, $what === 'show');
+        return self::ok($what === 'show' ? '👁️ 일지 #' . $id . ' 을 체험관에 보이게 했어요.' : '🙈 일지 #' . $id . ' 을 숨겼어요.');
+    }
+
+    // ------------------------------------------------------------------ CSV export (the answer is the file) and import
+    /**
+     * Write one export as CSV text through $write: the BOM, the header line and every row (Allot::csvLine: CRLF, quoted
+     * cells, the formula guard). Masked unless $reveal — then Allot::exportRows writes an audit row per chunk (what, how
+     * many rows, the reason code; never the data). @return int rows written
+     */
+    public static function exportCsv(string $what, bool $reveal, ?array $a, string $why, callable $write): int
+    {
+        $chunk = Allot::exportRows($what, 0, 500, $reveal, $reveal ? $a : null, $why); // before the first byte: a refusal is still a normal page
+        $write(Allot::csvBom() . Allot::csvLine(Allot::exportHeader($what, $reveal)));
+        $n = 0;
+        for (;;) {
+            $out = '';
+            foreach ($chunk['rows'] as $row) { $out .= Allot::csvLine($row); $n++; }
+            if ($out !== '') $write($out);
+            if (!$chunk['next']) break;
+            $chunk = Allot::exportRows($what, (int) $chunk['next'], 500, $reveal, $reveal ? $a : null, $why);
+        }
+        return $n;
+    }
+
+    /** the name of an export file: never a name or a number of a person — "tfm-allot-contracts-masked-20261114-103000.csv" */
+    public static function exportName(string $what, bool $reveal, ?int $now = null): string
+    {
+        return 'tfm-allot-' . (in_array($what, Allot::EXPORTS, true) ? $what : 'export') . ($reveal ? '-full' : '-masked') . '-' . date('Ymd-His', $now === null ? time() : intdiv($now, 1000)) . '.csv';
+    }
+
+    /** ⬇️ the POST answers with the file itself (no 303): same origin, token and elevation were checked like for every action */
+    private static function doExport(array $a, array $p): array
+    {
+        $what = self::s($p, 'what');
+        if (!in_array($what, Allot::EXPORTS, true)) throw new ApiException(400, 'INVALID_INPUT', '무엇을 내보낼지 골라 주세요.');
+        $reveal = self::s($p, 'reveal') === '1';
+        $why = self::s($p, 'why');
+        if ($reveal) {
+            if (!isset(Allot::REVEAL_REASONS[$why])) throw new ApiException(400, 'INVALID_INPUT', '가리지 않고 내보내는 까닭을 골라 주세요.');
+            self::stepUp($a, $p);
+        } else {
+            Audit::log('allot_export', null, ['what' => $what, 'reveal' => false, 'via' => 'admin'], 'info', self::actor($a));
+        }
+        $started = false;
+        $name = self::exportName($what, $reveal);
+        $write = function (string $s) use (&$started, $name): void {
+            if (!$started) {
+                // the first bytes exist: nothing can be refused any more — headers, then the stream
+                while (ob_get_level() > 0) ob_end_clean();
+                AdminGate::headers();
+                header('Content-Type: text/csv; charset=utf-8');
+                header("Content-Security-Policy: default-src 'none'; sandbox");
+                header('Content-Disposition: attachment; filename="' . $name . '"');
+                http_response_code(200);
+                Session::close();
+                $started = true;
+            }
+            echo $s;
+            flush();
+        };
+        if (function_exists('set_time_limit')) @set_time_limit(300);
+        self::exportCsv($what, $reveal, $a, $why, $write);
+        exit;
+    }
+
+    private static function doImportPreview(array $a, array $p): array
+    {
+        $what = self::s($p, 'what') === 'payments' ? 'payments' : 'ledger';
+        $csv = self::s($p, 'csv');
+        if (trim($csv) === '') throw new ApiException(400, 'INVALID_INPUT', '붙여 넣은 내용이 없어요. 엑셀에서 제목 줄부터 복사해 붙여 넣어 주세요.');
+        if (strlen($csv) > self::PASTE_MAX) throw new ApiException(413, 'PAYLOAD_TOO_LARGE', '한 번에 붙여 넣기에는 너무 커요 (2 MB까지). 나눠서 넣거나 서버 컴퓨터에서 php cli/tfm.php allot:import 를 써 주세요.');
+        $r = Allot::importCsv($a, $what, $csv, true);
+        self::importPut($what, $csv, $r);
+        Audit::log('allot_import_preview', null, ['what' => $what, 'rows' => (int) $r['total'], 'invalid' => (int) $r['invalid']], 'info', self::actor($a));
+        return self::ok('🔍 미리 보기를 만들었어요 — ' . self::n($r['total']) . '줄 가운데 문제 있는 줄 ' . self::n($r['invalid']) . '개. 아직 아무것도 바꾸지 않았어요.', ['sec' => 'csv']);
+    }
+
+    private static function doImportCommit(array $a, array $p): array
+    {
+        $d = self::importGet();
+        if ($d === null) throw new ApiException(409, 'NO_PREVIEW', '확인할 미리 보기가 없어요 (30분이 지났을 수 있어요). 다시 붙여 넣어 주세요.');
+        if (!hash_equals((string) $d['ticket'], self::s($p, 'ticket'))) throw new ApiException(409, 'NO_PREVIEW', '화면의 미리 보기가 바뀌었어요. 지금 보이는 미리 보기를 다시 확인해 주세요.');
+        $r = Allot::importCsv($a, (string) $d['what'], (string) $d['csv'], false);
+        if ($r['dryRun']) {
+            // something changed since the dry run (a unit was taken, a customer was added): nothing was imported
+            self::importPut((string) $d['what'], (string) $d['csv'], $r);
+            throw new ApiException(409, 'IMPORT_INVALID', '그사이에 상황이 바뀌어 문제 있는 줄이 ' . self::n($r['invalid']) . '개 생겼어요. 아무것도 가져오지 않았어요 — 미리 보기를 다시 확인해 주세요.');
+        }
+        Session::set('allot_import', null);
+        $c = $r['created'];
+        return self::ok('📥 가져왔어요 — 새 고객 ' . self::n($c['customers']) . '명 · 새 계약 ' . self::n($c['contracts']) . '건 · 입금 ' . self::n($c['payments']) . '건'
+            . ((int) $r['skipped'] > 0 ? ' (이미 들어 있어 건너뛴 줄 ' . self::n($r['skipped']) . '개)' : '') . '.', ['sec' => $d['what'] === 'ledger' ? 'contracts' : 'csv']);
+    }
+
+    private static function doImportCancel(array $a, array $p): array
+    {
+        Session::set('allot_import', null);
+        Audit::log('allot_import_dropped', null, [], 'info', self::actor($a));
+        return self::ok('↩️ 미리 보기를 지웠어요. 아무것도 바꾸지 않았어요.', ['sec' => 'csv']);
+    }
+
+    // ------------------------------------------------------------------ rules, texts, demo data
+    private static function doSettings(array $a, array $p): array
+    {
+        $in = [];
+        foreach (self::RULES_META as $k => $m) {
+            $v = trim(self::s($p, $k));
+            if ($m[2] === 'bool') $in[$k] = $v === '1';
+            elseif ($m[2] === 'int') $in[$k] = self::digits($v);
+            else $in[$k] = $v;
+        }
+        $r = Allot::saveSettings($a, $in);
+        self::$sum = null;
+        if (!$r['changed']) return self::ok('ℹ️ 바뀐 규칙이 없어요.', ['sec' => 'auto']);
+        $names = [];
+        foreach ($r['changed'] as $k) $names[] = isset(self::RULES_META[$k]) ? self::RULES_META[$k][0] : $k;
+        return self::ok('💾 규칙 ' . count($names) . '개를 바꿨어요: ' . implode(' · ', $names) . '.', ['sec' => 'auto']);
+    }
+
+    private static function doTexts(array $a, array $p): array
+    {
+        $in = [];
+        foreach (self::TEXTS_META as $k => $m) if (isset($p[$k]) && is_string($p[$k])) $in[$k] = $p[$k];
+        if (!$in) throw new ApiException(400, 'INVALID_INPUT', '저장할 문구가 없어요.');
+        $r = Allot::saveSettings($a, $in);
+        if (!$r['changed']) return self::ok('ℹ️ 바뀐 문구가 없어요.', ['sec' => 'auto']);
+        $names = [];
+        foreach ($r['changed'] as $k) $names[] = isset(self::TEXTS_META[$k]) ? self::TEXTS_META[$k][1] : $k;
+        return self::ok('💾 안내 문구를 바꿨어요: ' . implode(' · ', $names) . '. 지금 동의 판은 ' . Allot::consentVersion() . ' 이에요 — 공개하기 전에 법률 검토를 받아 주세요.', ['sec' => 'auto']);
+    }
+
+    private static function doDemo(array $a, array $p): array
+    {
+        $op = self::s($p, 'op');
+        if ($op === 'clear') {
+            $r = Allot::demoClear($a);
+            self::$sum = null;
+            return self::ok('🧹 예시 자료를 지웠어요 — 고객 ' . self::n($r['customers']) . '명 · 계약 ' . self::n($r['contracts']) . '건 · 입금 ' . self::n($r['payments']) . '건.', ['sec' => 'auto']);
+        }
+        if ($op !== 'seed') throw new ApiException(400, 'INVALID_INPUT', '버튼을 다시 눌러 주세요.');
+        $r = Allot::demoSeed($a, 40);
+        Allot::tick(null, 'admin'); // the unpaid examples become overdue and today's statistics appear
+        self::$sum = null;
+        return self::ok('🧪 예시 자료를 넣었어요 — 가짜 고객 ' . self::n($r['customers']) . '명 · 계약 ' . self::n($r['contracts']) . '건 (승인 대기 ' . self::n($r['pending']) . ' · 미납 ' . self::n($r['unpaid']) . ' · 곧 끝남 ' . self::n($r['ending'])
+            . ' · 끝남 ' . self::n($r['ended']) . '). 진짜 운영 전에 ⚙️ 자동화에서 꼭 지워 주세요.', ['sec' => 'status']);
     }
 
     // @@ACTION-METHODS@@

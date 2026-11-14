@@ -375,6 +375,9 @@ function handlePost(Ctx $c)
             case 'allot_find': case 'allot_decide': case 'allot_contracts_bulk': case 'allot_pay': case 'allot_refund': case 'allot_renew': case 'allot_autorenew':
             case 'allot_move': case 'allot_end': case 'allot_memo': case 'allot_contract_new':
             case 'allot_customer_save': case 'allot_customer_link': case 'allot_reveal': case 'allot_pii_lock':
+            case 'allot_wait_cancel': case 'allot_wait_offer': case 'allot_notify': case 'allot_notice_done': case 'allot_care_add': case 'allot_care_visible':
+            case 'allot_export': case 'allot_import_preview': case 'allot_import_commit': case 'allot_import_cancel':
+            case 'allot_settings': case 'allot_texts': case 'allot_demo':
             case 'allot_tick':
                 $msg = doAllot($c, $action); break;
             default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
