@@ -1661,6 +1661,7 @@
     //   engine.lightPool(n) -> PointLight[]   borrow up to n of the night lamps that already exist in the scene. All
     //       of them move to the scene root while borrowed (their owners' roots are hidden inside a place), so the
     //       light count never changes and no lit program is re-linked. [] on `low` (and when there are none).
+    //   engine.lightPoolSize                  how many it can lend right now (0 on `low`)
     //   engine.releaseLights()                 hand them back: old parent, position, colour, distance, decay, night glow
     //   engine.setIndoor(profile | null, {instant}) -> eases hemisphere / sun direction, colour, intensity / fill /
     //       background / fog / exposure (grade layer 'interior') / environment intensity towards the room's values.
@@ -1679,6 +1680,13 @@
     get indoorShadows() {
       const p = this.preset || {};
       return !!(this.renderer && this.renderer.shadowMap.enabled && this.sun && this.sun.castShadow && (p.indoorShadows ?? (!!p.shadows && p.name !== 'low')));
+    },
+    /** how many lamps lightPool() can lend right now (0 on `low`, or where the valley has no night lamps) */
+    get lightPoolSize() {
+      if (this.preset?.name === 'low') return 0;
+      const P = this._pool;
+      if (P && P.out) return P.items.length;
+      return (G.world?.nightLights || []).filter((nl) => nl && nl.light && nl.light.isPointLight).length;
     },
     lightPool(n) {
       const W = G.world, P = this._pool || (this._pool = { items: [], out: false });

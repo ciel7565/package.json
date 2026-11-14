@@ -2331,6 +2331,84 @@
     const missing = arts.filter((e) => !P.has(e.art)).map((e) => e.art);
     return { ok: !missing.length && arts.every((e) => e.credit && e.titleEn), detail: missing.length ? `묶음에 없는 그림: ${missing.join(', ')}` : `그림 ${arts.length}점 · 모두 출처 표시` };
   });
+  // [places-kit] 집 구경 (§16.4, §16.5): the places system and the hanok kit
+  T('🚪 집 구경', '장소 정의: 구역 이름이 겹치지 않고, 골짜기 밖에 있고, 문은 정의된 장소만 가리켜요', () => {
+    const P = G.sys.places;
+    if (!P || typeof P.list !== 'function') return SKIP('장소 모듈이 없어요');
+    const list = P.list();
+    if (!list.length) return SKIP('정의된 장소가 없어요');
+    const wb = P.worldBounds?.() || G.world.bounds, bad = [], zones = new Set(), boxes = [];
+    for (const p of list) {
+      const d = P.def(p.id), hw = d.size.w / 2, hd = d.size.d / 2;
+      if (!/^ZONE_PL_[A-Z0-9_]+$/.test(d.zoneId) || zones.has(d.zoneId)) bad.push(`${p.id}: 구역 이름`);
+      zones.add(d.zoneId);
+      if (wb && d.origin.x + hw > wb.minX - 50 && d.origin.x - hw < wb.maxX + 50 && d.origin.z + hd > wb.minZ - 50 && d.origin.z - hd < wb.maxZ + 50) bad.push(`${p.id}: 골짜기와 겹쳐요`);
+      if (boxes.some((b) => Math.abs(b.x - d.origin.x) < b.hw + hw + 20 && Math.abs(b.z - d.origin.z) < b.hd + hd + 20)) bad.push(`${p.id}: 다른 장소와 너무 가까워요`);
+      boxes.push({ x: d.origin.x, z: d.origin.z, hw, hd });
+      if (Math.abs(d.spawn.x) > hw || Math.abs(d.spawn.z) > hd) bad.push(`${p.id}: 시작 자리가 밖이에요`);
+      if (d.exit && P.contains(d.exit.x, d.exit.z, p.id)) bad.push(`${p.id}: 나가는 자리가 안이에요`);
+      if (!String(d.kidName || '').trim() || !String(d.emoji || '').trim()) bad.push(`${p.id}: 아이 이름·그림`);
+    }
+    const doors = (G.interact?.list?.('door') || []).filter((e) => /^DOOR_/.test(e.id));
+    for (const e of doors) {
+      if (!list.some((p) => e.id === 'DOOR_' + p.id || e.id.indexOf('DOOR_' + p.id + '_') === 0)) bad.push(`${e.id}: 없는 장소`);
+      if (!(e.radius >= 3) || !String(e.kidLabel || '').trim()) bad.push(`${e.id}: 반경·아이 이름`);
+    }
+    return { ok: !bad.length, detail: bad.length ? bad.slice(0, 6).join(' · ') : `장소 ${list.length}곳 · 문 ${doors.length}개` };
+  });
+  T('🚪 집 구경', '다른 사람 자리: 방 안 좌표로 보내고 정확히 되돌려요 (모르는 방은 버려요)', () => {
+    const P = G.sys.places, p = P?.list?.()[0];
+    if (!p) return SKIP('정의된 장소가 없어요');
+    const d = P.def(p.id);
+    const a = P.presenceIn(1.5, 0, -2, d.zoneId), w = P.toWorld(p.id, 1.5, -2);
+    const far = P.presenceIn(99999, 0, -99999, d.zoneId), lim = Math.max(d.size.w, d.size.d) / 2 + 4;
+    const ok = !!a && Math.abs(a.x - (d.origin.x + 1.5)) < 1e-6 && Math.abs(a.z - (d.origin.z - 2)) < 1e-6 && !!w && Math.abs(w.x - a.x) < 1e-6 && Math.abs(w.z - a.z) < 1e-6
+      && Math.abs(far.x - d.origin.x) <= lim + 1e-6 && Math.abs(far.z - d.origin.z) <= lim + 1e-6
+      && P.presenceIn(1, 0, 1, 'ZONE_PL_NOT_DEFINED_ANYWHERE') === null && P.presenceIn(1, 0, 1, 'ZONE_PLAZA') === undefined;
+    return { ok, detail: ok ? `${d.zoneId} · 벗어난 값은 방 둘레 ${lim.toFixed(0)} m 안으로` : '좌표 변환이 달라요' };
+  });
+  T('🚪 집 구경', '한옥 부품 상자: 창살 6가지가 창틀 안에 그려지고 재질 이름이 모두 통해요', () => {
+    const K = G.hanok;
+    if (!K || typeof K.lattice !== 'function') return SKIP('한옥 부품 상자가 없어요');
+    const bad = [];
+    for (const p of K.PATTERNS) {
+      const segs = K.lattice(p, 1.2, 1.0);
+      if (!Array.isArray(segs) || segs.length < 4) { bad.push(`${p}: 살 ${segs ? segs.length : 0}개`); continue; }
+      if (segs.some((s) => s.length < 4 || s.some((v) => !Number.isFinite(v)) || Math.abs(s[0]) > 0.6001 || Math.abs(s[2]) > 0.6001 || Math.abs(s[1]) > 0.5001 || Math.abs(s[3]) > 0.5001)) bad.push(`${p}: 틀 밖`);
+    }
+    for (const k of ['wood', 'floor', 'furn', 'plaster', 'clay', 'stone', 'earth', 'straw', 'basket', 'onggi', 'cloth', 'hanji', 'jangpan', 'paper', 'brass', 'iron', 'lacquer', 'paint', 'glow']) {
+      let m = null;
+      try { m = K.mat(k); } catch (e) { m = null; }
+      if (!m || !m.isMaterial || !m.vertexColors) bad.push(`재질 ${k}`);
+    }
+    return { ok: !bad.length && K.PATTERNS.length === 6, detail: bad.length ? bad.slice(0, 6).join(' · ') : `창살 ${K.PATTERNS.map((p) => K.PATTERN_NAMES[p]).join(' · ')}` };
+  });
+  T('🚪 집 구경', '들어갔다 나오기: 환경 텍스처·켜진 조명 수·골짜기 경계·보는 거리가 그대로예요', async () => {
+    const P = G.sys.places, E = G.sys.engine, pl = G.sys.player;
+    if (!P || !E?.scene || !G.state || !pl?.position) return SKIP('장소 모듈이나 놀이가 준비되지 않았어요');
+    if (P.current || P.busy) return SKIP('지금 집 안에 있어요 (밖에서 다시 눌러요)');
+    const p = P.list().find((x) => x.indoor) || P.list()[0];
+    if (!p) return SKIP('정의된 장소가 없어요');
+    // lights three.js counts: a light under a hidden parent drops out of the count and every lit program is linked again
+    const lights = () => { let n = 0; E.scene.traverse((o) => { if (!o.isLight) return; let v = true; for (let q = o; q; q = q.parent) if (!q.visible) { v = false; break; } if (v) n++; }); return n; };
+    const at = { x: pl.position.x, z: pl.position.z, r: pl.rotY }, b0 = JSON.stringify(G.world.bounds), far0 = E.camera.far, env0 = E.scene.environment, l0 = lights();
+    const r = { in: false, zone: false, envIn: true, lightsIn: -1 };
+    try {
+      r.in = await P.enter(p.id, { fade: false, quiet: true });
+      for (let i = 0; i < 8; i++) await nextFrame();
+      await sleep(700);          // the room bakes its environment on a drawn frame (the developer centre thins frames)
+      r.zone = G.world.zoneAt(pl.position.x, pl.position.z)?.id === p.zoneId;
+      r.envIn = !env0 || E.scene.environment === env0;
+      r.lightsIn = lights();
+    } finally {
+      await P.exit({ fade: false, quiet: true });
+      try { await pl.teleport(at.x, at.z, at.r, { fade: false, silent: true }); } catch (e) { /* stays at the door */ }
+      await sleep(300);
+    }
+    const out = { env: !env0 || E.scene.environment === env0, lights: lights(), bounds: JSON.stringify(G.world.bounds) === b0, far: E.camera.far === far0, cur: P.current };
+    const ok = r.in === true && r.zone && r.envIn && r.lightsIn === l0 && out.env && out.lights === l0 && out.bounds && out.far && out.cur === null;
+    return { ok, detail: ok ? `${p.name} · 조명 ${l0}개 그대로 · ${env0 ? '같은 환경 텍스처' : '환경 텍스처 없는 품질'}` : `안 ${JSON.stringify(r)} · 밖 ${JSON.stringify(out)} · 처음 조명 ${l0}` };
+  });
   // a new module must be added to the SOURCE map and EXPECTED_SYSTEMS (otherwise the 모듈 상태 tab can not report it missing)
   T('🧩 시스템', '새 파일·새 시스템이 소스 지도와 필수 시스템 목록에 있어요', () => {
     const man = window.__BUILD__?.manifest || {};

@@ -40,6 +40,9 @@
 //                    the camera is outside); cast = it also goes into the invisible shadow caster
 //   R.wm(side, u, v, n = 0, ry = 0) -> Matrix4   a spot on a wall: u metres from its left end (seen from inside), v up,
 //                    n into the room, facing the room                R.bay(side, i) -> {u0, u1, uc, len}
+//   R.wp(side, u, v, n = 0) -> Vector3           the same wall spot as a room position (for ctx.anchor / ctx.board)
+//   R.addMesh(mesh, wall) -> mesh                 a mesh with its own material (artwork, picture): kept out of the merge,
+//                    hidden with `wall` while the camera is outside
 //   R.at(x, y, z, ry = 0, s = 1) -> Matrix4      a spot in the room (= G.bkit.M)
 //   R.roofY(z)       height of the rafters' underside at z (open-rafter roofs)
 //   R.postAt(x, z, {wall, top, r})  ·  R.beam(ax, ay, az, bx, by, bz, {w, h, wall})  ·  R.log(ax…bz, r, {wall})
@@ -50,6 +53,8 @@
 //   R.finish({exit: {x, z}}) -> R   merges everything (one mesh per material and wall), builds the shadow caster, the
 //                    light decal, the wall colliders, the cut-away, the minimap plan and the light profile. Call once,
 //                    after every R.add / generator call. R.onUpdate(fn(dt, t, night)) runs with the room.
+//   R.farArc / R.setFarView(canvas, night)   rooms with open bays: the far view behind the yard wall. 18-places puts a
+//                    picture of the real valley there (taken at the house's door); without it the painted view stays
 //   R.light() -> the 10-engine setIndoor profile (used automatically by 18-places when define() gives no light)
 //   R.plan(ctx2d, map)   the minimap floor plan (used automatically when define() gives no minimap)
 //
@@ -72,8 +77,10 @@
 //   floorMat(T, {w, d, tint, border})     a woven straw mat on the floor (돗자리 / 멍석)
 //   screen(T, {panels = 6, w = 0.45, h = 1.7, fold = 0.35, art: name | [names], tint}) -> {w}   병풍 (art = G.pack names,
 //                    aspect kept, shown across the panels; blank silk without the pack)
-//   scroll(T, {art, h = 1.5, wall}) -> {x, y, z, w, h}   족자: a mounted hanging scroll (aspect kept); hang it with m =
-//                    R.wm(side, u, v) through opts.m
+//   scroll(T, {art, h = 1.5, maxW = 1.6, wall}) -> {x, y, z, w, h}   족자: a mounted hanging scroll (aspect kept); hang
+//                    it with m = R.wm(side, u, v) through opts.m (m = where its top centre hangs)
+//   picture(T, m, G.hanok.art(name), maxW, maxH, {wall}) -> {w, h}   a bare artwork fitted inside maxW × maxH (aspect
+//                    kept) at matrix m, facing +Z of m; plain 한지 when the artwork is not in this build
 //   basket(T, {r = 0.25, h = 0.2, kind: 'round'|'ki'|'sieve'})        rope(T, {points: [[x, y, z], …], r = 0.012, sag})
 //   straw(T, {kind: 'bundle'|'sack'|'coil', s})                       block(T, {w, h, d, bevel, mat, tint})  a bevelled block
 //   jwadeung(T, {h = 0.9})   a standing paper lamp (좌등)             deungjan(T, {h = 0.45})   an oil lamp on its stand
@@ -96,7 +103,33 @@
 //                    (212,160,74) · brass / iron / lacquer / paint / glow: white (the tint is the colour)
 //   G.hanok.art(name) -> {texture, aspect, ok}   a pack artwork ('art/<id>' or '<id>') — ok false = not in this build
 //   G.hanok.geo.timber(len, h, w, bevel) (chamfered, along X) · .post(r, h, entasis) · .slab(w, h, d, bevel)
+//                    .span(ax, ay, az, bx, by, bz, h, w, bevel) (a chamfered timber between two room points, no matrix)
+//                    .quad(w, h) (a plane facing +Z) · .floor(w, d) (facing +Y) · .lathe([[r, y], …], seg) (turned)
+//                    BufferGeometry each, consumed by R.add (pass null as the matrix for .span: it is already placed)
 //   Budget: one room ≤ 200 draw calls on high — R.finish() logs the count of meshes it made.
+//
+// ── 6. EXAMPLE — a small 안방 (see 27-interiors-a.js for the full reference room) ────────────────────────────────────
+//   const P = G.sys.places, K = G.hanok, door = P.doorOf('B_HANOK1');          // {x, z, rotY, exit: {x, z, rotY}}
+//   P.define({ id: 'PL_ANBANG', name: '안방', kidName: '안방', emoji: '🛏️', zoneId: 'ZONE_PL_ANBANG',
+//     origin: { x: -400, z: 2000 }, size: { w: 8, d: 6, h: 3.4 }, spawn: { x: 2.6, z: 0, rotY: -Math.PI / 2 },
+//     door: { buildingId: 'B_HANOK1', x: door.x, z: door.z, label: '🚪 안방 들어가기', kidLabel: '안방 구경' }, exit: door.exit,
+//     camera: { ceil: 2.4 },
+//     build(ctx) {
+//       const R = K.room(ctx, { w: 8, d: 6, post: 2.5, ridge: 3.4, bays: { x: 3, z: 2 }, floor: 'jangpan', roof: 'ceiling',
+//         walls: { N: ['plaster', { window: 'ttisal' }, 'plaster'], E: [{ door: 'changho', exit: true }, 'plaster'],
+//                  S: ['clay', { window: 'aja', w: 1.2 }, 'clay'], W: ['plaster', 'plaster'] } });
+//       const ch = K.chest(R, { x: -2.9, z: -2.4, w: 1.2, d: 0.48, h: 0.85, fittings: 'brass' });   // 반닫이 by the N wall
+//       R.block(-2.9, -2.4, ch.w / 2, ch.d / 2);                                     // children walk around it
+//       ctx.anchor('bandaji', { x: -2.9, y: ch.top + 0.2, z: -2.4 });                // an exhibit (48-interior-data.js)
+//       K.screen(R, { x: -2.6, z: 1.9, rotY: Math.PI, art: 'birds_flowers_screen', panels: 8 });   // 병풍 with a pack artwork
+//       K.cushion(R, { x: 0, z: 0.4, tint: '#9c3b2e', trim: '#d9b24c' });
+//       const b = R.bay('W', 0), p = R.wp('W', b.uc, 1.5, 0.06);
+//       ctx.board('MG_GUDEUL', { x: p.x, y: p.y, z: p.z, rotY: Math.PI / 2, w: 1.4, h: 0.8, title: '구들이 데워지는 길' });
+//       K.jwadeung(R, { x: 3.2, z: -2.3 }); K.lamp(R, { x: 3.2, y: 0.82, z: -2.3, s: 0.6 });   // glow + a pooled lamp
+//       K.dust(R, { count: 40 });                                                    // a living detail
+//       R.finish({ exit: { x: 3.6, z: -0.75 } });                                    // merge, colliders, light, plan
+//       return { dispose() {} };
+//     } });
 // =============================================================================
 (function () {
   const BK = G.bkit;
@@ -821,12 +854,16 @@
       const c = new THREE.Vector3(0, top / 2, 0), v = new THREE.Vector3();
       for (const x of [-hx, hx]) for (const y of [0, top]) for (const z of [-hz, hz]) { v.set(x, y, z).sub(c); rx = Math.max(rx, Math.abs(v.dot(right))); ry = Math.max(ry, Math.abs(v.dot(upv))); }
       const dark = this.tone === 'dark';
+      // lamps that will really burn at night: what the room asked for, as far as the engine can lend them
+      const lit = this.low ? 0 : Math.min(this.ctx.lightCount | 0, E?.lightPoolSize | 0);
       return {
         center: { x: 0, y: top / 2, z: 0 }, radius: rx + 0.3, radiusY: ry + 0.3, dir: sd.clone(), dist: 60,
         // without shadows the sun would light every surface the same: it stays a soft key and the decal draws the window light
         sun: { color: '#fff0da', intensity: shadowed ? 3.9 : 0.7 }, moon: { color: '#8ea4d8', intensity: shadowed ? 0.55 : 0.14 },
         hemi: { sky: dark ? '#e6d8c2' : '#f4eee3', ground: dark ? '#8c7a66' : '#c2a888', intensity: shadowed ? (dark ? 0.32 : 0.42) : 0.86 },
-        hemiNight: { sky: '#56628a', ground: '#4a3a2a', intensity: 0.36 },
+        // night: the lamps carry the room where the preset has them; without them (`low`) the glow of the paper lamps is
+        // an even warm light, bright enough that no dark timber sinks to a black block (the screen watchdog, §14.4)
+        hemiNight: lit ? { sky: '#5d6890', ground: '#523f2c', intensity: 0.42 } : { sky: '#b39a78', ground: '#7a5c3e', intensity: 1.0 },
         // the void: a scene value (the engine brings it down the tone curve; on the screen about (28, 24, 22) by day)
         fill: 0.04, background: '#4d4339', backgroundNight: '#3b3b45', fog: { color: '#4d4339', density: 0.0012 },
         exposure: 1.02, exposureNight: 1.34, warmth: 0.02, envIntensity: this.low ? 0.35 : 0.5,
@@ -1045,7 +1082,8 @@
         }
         paper.emissive.copy(dayC).lerp(nightC, nf); paper.emissiveIntensity = lerp(0.92, 0.2, nf);
         if (this._decal) { const on = !E?.indoorShadows; this._decal.visible = on; if (on) this._decal.material.opacity = lerp(0.5, 0.1, nf); }
-        if (this._backdrop) this._backdrop.material.color.setScalar(lerp(1.0, 0.16, nf));
+        // the painted far view dims with the night; a picture of the real valley already has the light of its hour
+        if (this._backdrop) this._backdrop.material.color.setScalar(this._farNf == null ? lerp(1.0, 0.16, nf) : clamp(lerp(1.0, 0.16, nf) / lerp(1.0, 0.16, this._farNf), 0.14, 3));
         if (this._shafts) { this._shafts.visible = nf < 0.9; this._shafts.material.opacity = lerp(0.055, 0.0, nf); }
         for (let i = 0; i < this.updates.length; i++) this.updates[i](dt, t, nf);
       });
@@ -1094,7 +1132,30 @@
         mesh.name = 'room-backdrop'; mesh.userData.guardSkip = true; mesh.raycast = () => {};
         this.addMesh(mesh, null);
         this._backdrop = mesh;
+        // what a picture for this arc must cover, seen from its axis at eye height 1.5 m: the angle across, and how far
+        // below / above the horizon it reaches (tangents)
+        this.farArc = { arc, down: (1.5 - (3.2 - 4.5)) / R, up: ((3.2 + 4.5) - 1.5) / R };
       }
+    }
+    /** show a picture on the far-view arc instead of the painted one (18-places gives the real valley as it looks from
+     *  the house's door, taken at night factor nf). canvas: `farArc.arc` wide, the left of the view at its RIGHT edge
+     *  (the arc is seen from inside), the horizon at down / (down + up) from the bottom; o.display: true = bytes as they
+     *  were on the screen (tone-mapped), false = scene light in sRGB. false = no arc in this room. */
+    setFarView(canvas, nf = 0, o = {}) {
+      const b = this._backdrop;
+      if (!b || !canvas || !(canvas.width > 0)) return false;
+      // o.display: the picture is already tone-mapped (taken from the screen): it is shown as it is
+      if (b.material.toneMapped !== !o.display) { b.material.toneMapped = !o.display; b.material.needsUpdate = true; }
+      if (!this._farTex) {
+        this._farTex = new THREE.CanvasTexture(canvas);
+        this._farTex.colorSpace = THREE.SRGBColorSpace;
+        this._farTex.generateMipmaps = false; this._farTex.minFilter = THREE.LinearFilter;
+        this.ctx.own(this._farTex);
+      } else this._farTex.image = canvas;
+      this._farTex.needsUpdate = true;
+      if (b.material.map !== this._farTex) { b.material.map = this._farTex; b.material.needsUpdate = true; }
+      this._farNf = clamp(Number(nf) || 0, 0, 1);
+      return true;
     }
   }
   /** the far view behind the yard wall: a soft sky, three ridges fading with distance, a line of pines and broadleaves */

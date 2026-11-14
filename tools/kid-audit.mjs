@@ -14,6 +14,8 @@
 //                          rtbed gotgan rtbook emote chat avatar menu settings-kid settings help photo — rtbed/gotgan/
 //                          rtbook: the 실시간 텃밭 bed card, the 곳간 and the 📬 확인 기록장, CONTRACT §15)
 //                          [exhibits] xbook xcard xmotion: the 집 구경 도감, an exhibit card and the motion player (§16.6)
+//                          [places-kit] place-pick place-inside: the 집 구경 picture menu and the HUD inside a room
+//                          (the 📍 · 🚪 밖으로 chip, §16.4)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report
