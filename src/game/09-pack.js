@@ -30,6 +30,7 @@
 //                                   THREE.DataTexture), w, h, meta } | null
 //   G.pack.credits()                [{ name, kind, title, titleKo, credit, license, source }] of every embedded file
 //   G.pack.idle()                   Promise resolved when nothing is decoding or waiting (tests, environment re-bakes)
+//   G.pack.hold(on)                 true: the queue waits (placeholders stay); false: it runs. ?packhold=1 starts held (tests)
 //   G.pack.unload(name)             drop the decoded image of a texture again (rooms' LRU); it is decoded anew on demand
 //   G.pack.stats                    { files, bytes, decoded, decoding, queued, failed, firstDecodeAt, lastDecodeAt, decodeMs }
 //   events: 'pack:texture' { name } after a swap, 'pack:idle' { decoded, failed } when the queue ran dry
@@ -233,7 +234,11 @@
       pump();
     });
   }
-  function runnable(job) { return job.force || (started && !lowNow()); }
+  // ?packhold=1 (tests): the queue waits until G.pack.hold(false) — the frame with placeholders can be looked at
+  let held = false;
+  try { held = !!(G.params && G.params.get('packhold') === '1'); } catch (e) { held = false; }
+  stats.held = held;
+  function runnable(job) { return job.force || (started && !held && !lowNow()); }
   function pump() {
     while (active < MAX_ACTIVE) {
       let best = -1;
@@ -414,6 +419,12 @@
     credits() {
       scan();
       return [...files.values()].map(({ meta: m }) => ({ name: m.name, kind: m.kind, title: m.title, titleKo: m.titleKo || null, credit: m.credit, license: m.license, source: m.source, artist: m.artist || null, date: m.date || null }));
+    },
+
+    /** hold(true): non-forced decodes wait (textures stay placeholders); hold(false) lets the queue run. → held? */
+    hold(on) {
+      if (on !== undefined) { held = !!on; stats.held = held; if (!held) pump(); }
+      return held;
     },
 
     idle() {
