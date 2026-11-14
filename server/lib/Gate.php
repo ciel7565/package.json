@@ -46,6 +46,8 @@ final class Gate
     private static $rps = null;
     /** @var array|null */
     private static $conf = null;
+    /** @var string|null the slot this request holds while its password check runs (loginSlot) */
+    private static $loginId = null;
 
     /** the capacity block with its defaults (one XAMPP-class machine; docs/SCALING-KO.md explains how to size it) */
     public static function conf(): array
@@ -58,6 +60,7 @@ final class Gate
             'target_rps'    => max(1, $n('target_rps', 150)),
             'shed_rps'      => max(0, $n('shed_rps', 400)),
             'login_per_sec' => max(0, $n('login_per_sec', 5)),
+            'login_concurrent' => max(0, $n('login_concurrent', 4)),
             'seat_ttl'      => max(30, $n('seat_ttl', 180)),
             'ticket_ttl'    => max(60, $n('ticket_ttl', 1800)),
             'sample'        => max(1, $n('sample', 4)),
@@ -65,7 +68,7 @@ final class Gate
     }
 
     /** tests: forget what was read for this request */
-    public static function reset(): void { self::$rps = null; self::$conf = null; }
+    public static function reset(): void { self::$rps = null; self::$conf = null; self::$loginId = null; }
 
     private static function local(): bool
     {
@@ -124,15 +127,64 @@ final class Gate
         return max(1.0, min(20.0, self::rps() / $c['target_rps']));
     }
 
-    /** a password check is about to run: more than login_per_sec in this second → 503 LOGIN_BUSY + Retry-After */
-    public static function loginSlot(): void
+    /**
+     * A password check is about to run. Two limits, both answered with 503 LOGIN_BUSY + Retry-After:
+     *   · login_per_sec — not more checks than this start in one second;
+     *   · login_concurrent — not more than this run at the same time. One check costs about a quarter of a second of
+     *     CPU and 64 MB (argon2id). A server that cannot finish them as fast as they start would otherwise collect
+     *     them: measured on a starved machine, 5 starts a second became 120 checks at once and a login took 24 s. With
+     *     this limit the server paces itself on any hardware. The slot is given back when the request ends (and after
+     *     20 s when a process died).
+     */
+    public static function loginSlot(?int $now = null): void
     {
         $c = self::conf();
-        if ($c['login_per_sec'] <= 0 || self::local()) return;
-        $r = Cache::hitWindow('g:login', time(), 10);
-        if (!is_array($r) || $r[0] <= $c['login_per_sec']) return;
-        $wait = 1 + min(8, intdiv($r[0] - $c['login_per_sec'], max(1, $c['login_per_sec']))) + mt_rand(0, 2);
-        throw new ApiException(503, 'LOGIN_BUSY', '지금 들어오려는 친구가 많아요. 잠시 후에 다시 해 볼게요.', ['retryAfter' => $wait], ['Retry-After: ' . $wait]);
+        if (self::local()) return;
+        if ($c['login_per_sec'] > 0) {
+            $r = Cache::hitWindow('g:login', time(), 10);
+            if (is_array($r) && $r[0] > $c['login_per_sec']) {
+                $wait = 1 + min(8, intdiv($r[0] - $c['login_per_sec'], max(1, $c['login_per_sec']))) + mt_rand(0, 2);
+                throw new ApiException(503, 'LOGIN_BUSY', '지금 들어오려는 친구가 많아요. 잠시 후에 다시 해 볼게요.', ['retryAfter' => $wait], ['Retry-After: ' . $wait]);
+            }
+        }
+        $max = $c['login_concurrent'];
+        if ($max <= 0) return;
+        $now = $now === null ? Clock::ms() : $now;
+        $id = bin2hex(random_bytes(6));
+        $got = false;
+        $r = Cache::mutate('g:lc', static function ($v) use ($now, $max, $id, &$got) {
+            $v = is_array($v) ? $v : [];
+            foreach ($v as $k => $until) {
+                if ((int) $until <= $now) unset($v[$k]);              // a check that never reported back
+            }
+            if (count($v) < $max) { $v[$id] = $now + 20000; $got = true; }
+            return $v ? $v : null;
+        }, 60);
+        if ($r === false) return;                                       // no cache: nothing is gated
+        if (!$got) {
+            // the more are being turned away right now, the later each is asked to come back (1–3 s when a few wait,
+            // up to 15 s when hundreds do): the waiting visitors do not become the load themselves
+            $busy = Cache::hitWindow('g:lbusy', time(), 10);
+            $wait = 1 + min(12, intdiv(is_array($busy) ? max($busy[0], $busy[1]) : 0, max(1, $max))) + mt_rand(0, 2);
+            throw new ApiException(503, 'LOGIN_BUSY', '지금 들어오려는 친구가 많아요. 잠시 후에 다시 해 볼게요.', ['retryAfter' => $wait], ['Retry-After: ' . $wait]);
+        }
+        self::$loginId = $id;
+        register_shutdown_function([self::class, 'loginDone']);
+    }
+
+    /** the password check of this request is over (the request ended): its slot is free again */
+    public static function loginDone(): void
+    {
+        $id = self::$loginId;
+        if ($id === null) return;
+        self::$loginId = null;
+        try {
+            Cache::mutate('g:lc', static function ($v) use ($id) {
+                if (!is_array($v)) return null;
+                unset($v[$id]);
+                return $v ? $v : null;
+            }, 60);
+        } catch (\Throwable $e) { /* the slot ends by itself after 20 s */ }
     }
 
     // ------------------------------------------------------------------ seats and the waiting room
@@ -352,6 +404,8 @@ final class Gate
             'shedding' => $c['shed_rps'] > 0 && self::rps() >= $c['shed_rps'] ? (self::rps() >= 2 * $c['shed_rps'] ? 2 : 1) : 0,
             'loginsLastSecond' => max($login[0], $login[1]),
             'loginPerSec' => $c['login_per_sec'],
+            'loginsRunning' => count(array_filter((array) Cache::get('g:lc', []), static function ($until) use ($now) { return (int) $until > $now; })),
+            'loginConcurrent' => $c['login_concurrent'],
             'seatTtl' => $c['seat_ttl'],
         ];
     }

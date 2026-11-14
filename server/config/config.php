@@ -351,6 +351,7 @@ return [
         'target_rps'    => $env('TFM_TARGET_RPS', 150),   // 1초에 이만큼의 요청까지는 평소 속도. 넘으면 다음 호출 간격(next)을 그만큼 늘려요
         'shed_rps'      => $env('TFM_SHED_RPS', 400),     // 1초에 이만큼을 넘으면 새 방문자 · 새 로그인부터 "잠시 후 다시"(503 BUSY). 0 = 끄기
         'login_per_sec' => $env('TFM_LOGIN_PER_SEC', 5),  // 1초에 처리하는 로그인(비밀번호 확인) 수. 넘으면 503 LOGIN_BUSY. 0 = 제한 없음
+        'login_concurrent' => $env('TFM_LOGIN_CONCURRENT', 4),  // 동시에 돌아가는 비밀번호 확인 수(한 번에 CPU 0.25초 · 메모리 64 MB). 보통 CPU 코어 수만큼. 0 = 제한 없음
         'seat_ttl'      => $env('TFM_SEAT_TTL', 180),     // 마지막 호출 뒤 자리를 지켜 주는 시간(초). 탭을 닫으면 이 시간 뒤에 자리가 비어요
         'ticket_ttl'    => 1800,    // 대기표가 유효한 시간(초)
         'sample'        => 4,       // 요청 4개 중 1개만 세서 초당 요청 수를 어림해요 (세는 비용 줄이기)

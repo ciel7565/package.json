@@ -286,6 +286,24 @@ final class Health
             GameData::loaded() ? sprintf('퀘스트 %d · 작물 %d · 레시피 %d · 아이템 %d (%s)', count($gd['quests']), count($gd['crops']), count($gd['recipes']), count($gd['items']), GameData::exportedAt()) : '없음',
             GameData::loaded() ? '' : '"node tools/build.mjs" 로 다시 빌드하세요. 없으면 저장 검증이 약해집니다.');
         $this->add('app', 'save_validation', '저장 검증', Config::get('save.validate', true) ? 'ok' : 'fail', Config::get('save.validate', true) ? '사용 (경제·성장·발효 시간 검증, 구독 단계 반영)' : '꺼짐');
+        // [scale-server] CONTRACT §16.9: the live capacity numbers, here because the command line cannot see them when the
+        // web server keeps its cache in APCu memory ("php cli/tfm.php capacity" shows zeros then)
+        try {
+            if (class_exists('Tfm\\Gate') && class_exists('Tfm\\Sync')) {
+                $cap = Gate::status();
+                $chan = Sync::status();
+                // without opcache every request compiles the program again: measured 16 ms of CPU for a sync call instead
+                // of 1.5 ms (docs/SCALING-KO.md). Judged under a web server only (the command line has its own setting).
+                $noOpcache = PHP_SAPI !== 'cli' && !(function_exists('opcache_get_status') && filter_var(ini_get('opcache.enable'), FILTER_VALIDATE_BOOLEAN));
+                $this->add('app', 'capacity', '수용 인원 · 부하 (지금)', $cap['cache'] === 'off' || $noOpcache ? 'warn' : 'ok',
+                    sprintf('마을 안 %d / %s · 채널 %d개 · 대기실 %d명 · 초당 요청 %.0f (평소 기준 %d) · 부하 배수 %.2f · 캐시 %s · opcache %s', $cap['seats'],
+                        $cap['maxOnline'] > 0 ? $cap['maxOnline'] . '명' : '제한 없음', $chan['channels'], $cap['waiting'], $cap['rps'], $cap['targetRps'], $cap['load'], $cap['cache'],
+                        PHP_SAPI === 'cli' ? '(웹에서 확인)' : ($noOpcache ? '꺼짐' : '켜짐')),
+                    $cap['cache'] === 'off' ? '캐시가 꺼져 있어 한꺼번에 주고받기(sync)와 대기실을 쓰지 않아요 (config: cache.driver).'
+                        : ($noOpcache ? 'PHP opcache 가 꺼져 있어요. 요청 하나에 CPU 를 약 10배 더 써요. php.ini 에서 opcache 를 켜거나, 정원(capacity.max_online)을 100명 정도로 낮추세요 (docs/SCALING-KO.md 5장).'
+                        : ($cap['shedding'] > 0 ? '지금 서버가 바빠 새 방문자를 잠시 기다리게 하고 있어요. docs/SCALING-KO.md 를 보세요.' : '')));
+            }
+        } catch (\Throwable $e) { /* figures only */ }
         // 토스페이먼츠 / subscriptions: never print a key — only whether real keys are set
         $mock = Toss::mock();
         $keys = Toss::keysConfigured();

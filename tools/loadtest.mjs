@@ -114,6 +114,8 @@ function seed(n) {
   return r.stdout.trim();
 }
 async function startServer() {
+  // a run started right after another one: the earlier server may still be closing
+  for (let i = 0; i < 200 && (await canConnect(O.port)); i++) await sleep(150);
   if (await canConnect(O.port)) throw new Error(`port ${O.port} is in use (--port)`);
   if (O.server !== 'apache') {
     const args = ['-d', `opcache.enable=${O.opcache ? 1 : 0}`, '-d', 'opcache.enable_cli=0', ...(O.apcuSo ? ['-d', `extension=${O.apcuSo}`, '-d', 'apc.shm_size=256M'] : []), '-S', `127.0.0.1:${O.port}`, '-t', DOCROOT];

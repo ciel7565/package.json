@@ -1161,7 +1161,7 @@ check('gate — shedding: above shed_rps new visitors and logins get 503 BUSY + 
 });
 check('gate — logins are metered: more password checks in one second than login_per_sec get 503 LOGIN_BUSY + Retry-After (not the server PC)', function () {
     world();
-    foreach (['capacity.login_per_sec' => 3, 'capacity.shed_rps' => 0] as $k => $v) Tfm\Config::override($k, $v);
+    foreach (['capacity.login_per_sec' => 3, 'capacity.shed_rps' => 0, 'capacity.login_concurrent' => 0] as $k => $v) Tfm\Config::override($k, $v);
     $codes = [];
     $hdr = null;
     for ($try = 0; $try < 3; $try++) {                                                    // again when the clock second turned in the middle
@@ -1175,8 +1175,28 @@ check('gate — logins are metered: more password checks in one second than logi
     }
     request('127.0.0.1', '/api/auth/login.php', 'POST');
     $local = apiCode(function () { for ($i = 0; $i < 10; $i++) Tfm\Gate::enter([]); });
-    foreach (['capacity.login_per_sec', 'capacity.shed_rps'] as $k) Tfm\Config::override($k, null);
+    foreach (['capacity.login_per_sec', 'capacity.shed_rps', 'capacity.login_concurrent'] as $k) Tfm\Config::override($k, null);
     return $codes === ['ok', 'ok', 'ok', '503 LOGIN_BUSY', '503 LOGIN_BUSY', '503 LOGIN_BUSY'] && $local === '' && preg_match('/^Retry-After: [1-9]\d?$/', $hdr[0]) ? true : json_encode($codes) . " local '$local'";
+});
+check('gate — not more than login_concurrent password checks run at once: the next one gets 503 LOGIN_BUSY until a slot is given back (or its 20 s are over)', function () {
+    world();
+    Tfm\Cache::del('g:lc');
+    foreach (['capacity.login_per_sec' => 0, 'capacity.shed_rps' => 0, 'capacity.login_concurrent' => 2] as $k => $v) Tfm\Config::override($k, $v);
+    $now = Tfm\Clock::ms();
+    $try = function (int $at) { request('203.0.113.9', '/api/auth/login.php', 'POST'); return apiCode(function () use ($at) { Tfm\Gate::loginSlot($at); }); };
+    $a = $try($now);                                   // slot 1 (request() forgets which slot "this request" holds: it stays taken)
+    $b = $try($now + 10);                              // slot 2
+    $c = $try($now + 20);                              // full
+    $running = Tfm\Gate::status()['loginsRunning'];
+    request('203.0.113.9', '/api/auth/login.php', 'POST');
+    $d1 = apiCode(function () use ($now) { Tfm\Gate::loginSlot($now + 21000); });   // both earlier slots ran out: this request takes one …
+    Tfm\Gate::loginDone();                                                           // … and gives it back when it ends
+    $left = count((array) Tfm\Cache::get('g:lc', []));
+    request('127.0.0.1', '/api/auth/login.php', 'POST');
+    $local = apiCode(function () use ($now) { for ($i = 0; $i < 5; $i++) Tfm\Gate::loginSlot($now + 21010); });
+    foreach (['capacity.login_per_sec', 'capacity.shed_rps', 'capacity.login_concurrent'] as $k) Tfm\Config::override($k, null);
+    Tfm\Cache::del('g:lc');
+    return $a === '' && $b === '' && $c === '503 LOGIN_BUSY' && $running === 2 && $d1 === '' && $left === 0 && $local === '' ? true : json_encode([$a, $b, $c, $running, $d1, $left, $local]);
 });
 check('gate — without a cache nothing is gated and the old presence code path answers from the table', function () use ($T) {
     Tfm\Cache::configure(['driver' => 'off']);

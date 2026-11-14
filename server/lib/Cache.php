@@ -334,13 +334,20 @@ final class Cache
                 case 'apcu':
                     self::bustCheck();
                     $k = self::k($key);
-                    if (!self::apcuSpin($k . "\x01m", 3, 1500)) { self::fail(); return false; }
+                    // One writer at a time per key. The lock is the file driver's stripe lock file: a blocking lock that
+                    // the system queues and frees by itself when a process dies. A flag in the shared memory would have
+                    // to be asked for again and again — sixty members of one channel doing that kept every worker of a
+                    // 150-worker server busy with nothing (measured: tools/loadtest.mjs). The flag is the fall-back only
+                    // where the lock file cannot be opened.
+                    $h = sha1($k);
+                    $byFile = self::fLock($h);
+                    if (!$byFile && !self::apcuSpin($k . "\x01m", 3, 1500)) { self::fail(); return false; }
                     try {
                         $old = apcu_fetch($k, $ok);
                         $new = $fn($ok ? $old : null);
                         if ($new === null) apcu_delete($k); else apcu_store($k, $new, max(0, $ttl));
                         return $new;
-                    } finally { apcu_delete($k . "\x01m"); }
+                    } finally { if ($byFile) self::fUnlock($h); else apcu_delete($k . "\x01m"); }
                 case 'file':
                     $h = sha1(self::k($key));
                     if (!self::fLock($h)) { self::fail(); return false; }
@@ -584,9 +591,11 @@ final class Cache
     private static function apcuSpin(string $lockKey, int $ttl, int $waitMs): bool
     {
         $deadline = microtime(true) + $waitMs / 1000;
+        $pause = 200;
         while (!apcu_add($lockKey, 1, $ttl)) {
             if (microtime(true) >= $deadline) return false;
-            usleep(100);
+            usleep($pause + mt_rand(0, $pause));                    // backs off: a waiter never spins
+            if ($pause < 6400) $pause *= 2;
         }
         return true;
     }

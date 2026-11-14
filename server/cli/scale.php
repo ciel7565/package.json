@@ -32,7 +32,8 @@ return [
         $line('초당 요청 (rps)', sprintf('%.0f', $g['rps']) . "  (평소 기준 {$g['targetRps']} · 줄이기 시작 " . ($g['shedRps'] > 0 ? (string) $g['shedRps'] : '꺼짐') . ')');
         $line('부하 배수 (load)', sprintf('%.2f', $g['load']) . '  (1.00 = 여유. 커질수록 다음 호출 간격을 늘려요)');
         $line('줄이기 (shedding)', $g['shedding'] === 0 ? '안 함' : ($g['shedding'] === 1 ? '1단계: 새 방문자 · 새 로그인은 잠시 뒤에' : '2단계: 읽기 요청도 잠시 뒤에'));
-        $line('로그인 (지난 1초)', $g['loginsLastSecond'] . ' / ' . ($g['loginPerSec'] > 0 ? $g['loginPerSec'] . '번' : '제한 없음'));
+        $line('로그인 (지난 1초)', $g['loginsLastSecond'] . ' / ' . ($g['loginPerSec'] > 0 ? $g['loginPerSec'] . '번' : '제한 없음')
+            . '  · 지금 비밀번호 확인 중 ' . $g['loginsRunning'] . ' / ' . ($g['loginConcurrent'] > 0 ? $g['loginConcurrent'] . '개' : '제한 없음'));
         $line('자리 유지 (seat_ttl)', $g['seatTtl'] . '초');
         if ($after['n'] > 0) $line('응답 뒤 작업 (after)', $after['n'] . '번 · SQL ' . $after['sql'] . '개  (capacity.stats_header 가 켜져 있을 때만 세요)');
         if (PHP_SAPI === 'cli' && $c['apcuLoaded'] && (string) Config::get('cache.driver', 'auto') !== 'file') {
