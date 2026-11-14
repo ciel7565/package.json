@@ -224,6 +224,7 @@
       F('06-world.js', 'core', '지형 높이·충돌·구역·앵커 레지스트리, 충돌체 디버그 표시'),
       F('07-speed.js', 'player', '진행 속도 G.sys.speed: 기본 2배 이동·단계(1~4) 배수·구독 반영(sub:changed→speed:changed)·두 번 점프'),
       F('08-easy.js', 'core', '쉬운 모드 G.easy: 읽어주기·보호자 확인(마구 누르기 방지)·그림 고르기·다음 할 일·같이 가기·축하·놀이 시간 알림'),
+      F('09-pack.js', 'core', '자료 묶음 G.pack: HTML 안에 담긴 사진 재질·옛 그림·하늘 사진(CC0)을 꺼내 쓰기 — 첫 화면 뒤에 2개씩 풀기, 낮음 품질에서는 풀지 않기 (§16.1)'), // [render-assets]
       F('10-engine.js', 'core', '렌더러·씬·카메라·하늘·태양·그림자·블룸·그래픽 품질 프리셋'),
       F('11-terrain.js', 'terrain', '지형 높이장·산·강 바닥·도로·오솔길·지표 판정'),
       F('12-nature.js', 'terrain', '나무·바위·풀·꽃·구름·새·나비·반딧불 (인스턴싱)'),
@@ -2972,6 +2973,76 @@
       const cs = getComputedStyle(el);
       return { ok: cs.maxHeight !== 'none' && cs.overflowY === 'auto', detail: `max-height ${cs.maxHeight} · overflow-y ${cs.overflowY}` };
     } finally { G.ui.popover?.close?.(); }
+  });
+
+  // [render-assets] ---- 자료 묶음 G.pack (CONTRACT §16.1)
+  T('🖼️ 자료 묶음', '담긴 파일마다 이름·종류·크기·라이선스(CC0)·출처가 있어요', () => {
+    const P = G.pack;
+    if (!P) return { ok: false, detail: 'G.pack 이 없어요' };
+    const b = window.__BUILD__?.pack || {};
+    if (!P.count) return b.embedded ? { ok: false, detail: '빌드는 자료를 담았다고 하는데 블록이 없어요' } : SKIP('자료를 담지 않은 빌드예요 (--no-assets)');
+    const KINDS = ['color', 'normal', 'rough', 'art', 'sky', 'alpha', 'noise'];
+    const bad = P.names().filter((n) => { const m = P.meta(n); return !m || !KINDS.includes(m.kind) || !(m.w > 0 && m.h > 0 && m.bytes > 0) || !/^(CC0|Public Domain)/i.test(m.license || '') || !/^https:\/\//.test(m.source || '') || !m.title || !m.credit; });
+    const sets = new Set(P.names('mat/').map((n) => n.split('/')[1]));
+    const whole = [...sets].filter((s) => !(P.has(`mat/${s}/c`) && P.has(`mat/${s}/n`) && P.has(`mat/${s}/r`)));
+    return { ok: !bad.length && !whole.length && P.count === b.files && P.stats.bytes === b.bytes && P.credits().length === P.count, detail: bad.length ? `정보가 빠진 파일: ${bad.slice(0, 4).join(', ')}` : whole.length ? `색·굴곡·거칠기가 다 없는 재질: ${whole.join(', ')}` : `${P.count}개 · ${(P.stats.bytes / 1e6).toFixed(2)} MB · 재질 ${sets.size}세트 · 그림 ${P.names('art/').length}점` };
+  });
+  T('🖼️ 자료 묶음', '블록의 지문(sha256)이 목록과 같아요 (파일이 깨지지 않았어요)', async () => {
+    const P = G.pack;
+    if (!P?.count) return SKIP('자료를 담지 않은 빌드예요');
+    if (!window.crypto?.subtle) return SKIP('이 주소에서는 지문 계산을 쓸 수 없어요 (보안 연결이 아님)');
+    const bad = [];
+    for (const n of P.names()) {
+      const m = P.meta(n), blob = P.blob(n);
+      if (!blob || blob.size !== m.bytes) { bad.push(n); continue; }
+      if (!m.sha256) continue;
+      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+      if ([...d].map((x) => x.toString(16).padStart(2, '0')).join('') !== m.sha256) bad.push(n);
+    }
+    return { ok: !bad.length, detail: bad.length ? `다른 파일: ${bad.slice(0, 4).join(', ')}` : `${P.count}개 모두 일치` };
+  });
+  T('🖼️ 자료 묶음', '텍스처는 곧바로 1×1 자리 표시로 나오고, 같은 요청은 같은 텍스처예요', () => {
+    const P = G.pack;
+    if (!P) return false;
+    const miss = P.texture('mat/__none__/c');
+    const okMiss = !!miss?.isTexture && miss.userData.pack.missing === true && miss.image.width === 1;
+    if (!P.count) return { ok: okMiss, detail: '자료 없는 빌드: 없는 이름에도 쓸 수 있는 텍스처를 줘요' };
+    const a = P.texture('mat/lime_plaster_wall/c', { repeat: [0.5, 0.5] }), b = P.texture('mat/lime_plaster_wall/c', { repeat: [0.5, 0.5] }), c = P.texture('mat/lime_plaster_wall/c', { repeat: [0.25, 0.25] });
+    const n = P.texture('mat/lime_plaster_wall/n');
+    const ready = a.userData.pack.ready;
+    const texel = ready ? null : Array.from(a.image.data);
+    const avg = P.meta('mat/lime_plaster_wall/c').avg;
+    const ok = okMiss && a === b && a !== c && a.source === c.source && a.colorSpace === THREE.SRGBColorSpace && n.colorSpace === THREE.NoColorSpace && a.wrapS === THREE.RepeatWrapping
+      && (ready ? a.image.width === 512 : a.image.width === 1 && texel[0] === avg[0] && texel[1] === avg[1] && texel[2] === avg[2]);
+    return { ok, detail: ready ? `풀린 그림 ${a.image.width}×${a.image.height} (같은 그림을 ${c === a ? 1 : 2}개 텍스처가 나눠 써요)` : `자리 표시 색 ${texel.slice(0, 3).join(',')} = 그림의 평균색` };
+  });
+  T('🖼️ 자료 묶음', '굴곡(xy 두 칸) 그림에서 Z 를 되살려요 — 길이 1 인 벡터', () => {
+    const f = G.pack?._xyToNormal;
+    if (!f || typeof ImageData !== 'function') return SKIP('이 환경에는 ImageData 가 없어요');
+    // 2×1 map: (x, y) = (0, 0) and (0.6, -0.4)  →  z = 1 and sqrt(1 - 0.36 - 0.16)
+    const u = (v) => Math.round((v * 0.5 + 0.5) * 255);
+    const px = new ImageData(new Uint8ClampedArray([u(0), 0, 0, 255, u(0.6), 0, 0, 255, u(0), 0, 0, 255, u(-0.4), 0, 0, 255]), 4, 1);
+    const d = f(px, 2, 1).data;
+    const z0 = d[2] / 127.5 - 1, z1 = d[6] / 127.5 - 1;
+    return { ok: near(z0, 1, 0.02) && near(z1, Math.sqrt(0.48), 0.02) && d[4] === u(0.6) && d[5] === u(-0.4) && d[3] === 255, detail: `z ${z0.toFixed(2)} · ${z1.toFixed(2)} (기대 1.00 · ${Math.sqrt(0.48).toFixed(2)})` };
+  });
+  T('🖼️ 자료 묶음', '하늘 사진의 밝기 지수 되살리기 · 튀는 값 고르기', () => {
+    const P = G.pack;
+    if (!P?._rgbeToHalf || typeof ImageData !== 'function') return SKIP('이 환경에는 ImageData 가 없어요');
+    // 1×2 map (top, bottom): mantissa 127 with exponent 128+3 → (127.5 / 256) · 8 ≈ 3.98; mantissa 255, exponent 128 → 0.998
+    const px = new ImageData(new Uint8ClampedArray([127, 127, 127, 255, 131, 131, 131, 255, 255, 255, 255, 255, 128, 128, 128, 255]), 2, 2);
+    const h = P._rgbeToHalf(px, 1, 2, false), fromHalf = THREE.DataUtils.fromHalfFloat;
+    const bottomFirst = fromHalf(h[0]), top = fromHalf(h[4]);
+    const f = new Float32Array(9 * 3).fill(1); f[4 * 3] = 2.6; f[4 * 3 + 1] = 2.6; f[4 * 3 + 2] = 2.6; f[0] = 1.3;
+    const fixed = P._despeckle(f, 3, 3);
+    return { ok: near(bottomFirst, 255.5 / 256, 0.01) && near(top, 127.5 / 256 * 8, 0.02) && fromHalf(h[3]) === 1 && fixed === 1 && near(f[12], 1, 1e-4) && near(f[0], 1.3, 1e-6), detail: `아래 줄 먼저: ${bottomFirst.toFixed(3)} · 윗줄 ${top.toFixed(2)} · 튀는 값 ${fixed}개 고침` };
+  });
+  T('🖼️ 자료 묶음', '낮음 품질에서는 그림을 풀지 않아요 · 다른 품질에서는 첫 화면 뒤에 풀어요', () => {
+    const P = G.pack, q = G.sys.engine?.quality;
+    if (!P) return false;
+    if (!P.count) return SKIP('자료를 담지 않은 빌드예요');
+    if (q === 'low') return { ok: P.stats.decoded === 0 && P.stats.decoding === 0 && !P.usable(P.names()[0]), detail: `낮음: 푼 그림 ${P.stats.decoded}개, 기다리는 요청 ${P.stats.queued}개 (그대로 둬요)` };
+    return { ok: P.stats.failed === 0 && P.stats.decoding <= 2 && (P.stats.decoded === 0 || P._started()), detail: `${q}: 푼 그림 ${P.stats.decoded}개 · 푸는 중 ${P.stats.decoding}개(최대 2) · 기다림 ${P.stats.queued}개 · 실패 ${P.stats.failed}개` };
   });
 
   const Tests = {

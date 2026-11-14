@@ -276,8 +276,8 @@ const PACK_BUDGET = 3000000;   // bytes of binary (CONTRACT §16.0: pack <= 3.0 
 const PACK_KINDS = new Set(['color', 'normal', 'rough', 'art', 'sky', 'alpha', 'noise']);
 const PACK_MIME = { '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.avif': 'image/avif' };
 const PACK_ASSET_EXT = /\.(webp|png|jpe?g|avif|gif|bmp|tga|tiff?|hdr|exr|ktx2?|basis|dds|glb|gltf|bin|svg|mp3|ogg|wav|mp4|webm)$/i;
-// what the page needs at run time (G.pack.meta / credits); sha256, evidence and the recipe's notes stay in the repository
-const PACK_RUNTIME_KEYS = ['name', 'kind', 'w', 'h', 'bytes', 'license', 'source', 'title', 'credit', 'titleKo', 'artist', 'date', 'culture', 'period',
+// what the page needs at run time (G.pack.meta / credits, the integrity self-test); evidence and the recipe's notes stay in the repository
+const PACK_RUNTIME_KEYS = ['name', 'kind', 'w', 'h', 'bytes', 'sha256', 'license', 'source', 'title', 'credit', 'titleKo', 'artist', 'date', 'culture', 'period',
   'medium', 'avg', 'enc', 'alias', 'use', 'peak', 'mean', 'sunDir', 'sunElevation'];
 function loadPack() {
   const fail = (msg) => { console.error(`✖ asset pack: ${msg}`); process.exit(1); };
