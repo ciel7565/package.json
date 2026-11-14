@@ -3848,6 +3848,33 @@
     },
   };
 
+  // [render-assets] ---- 설정 → 🖼️ 사용한 자료 (CONTRACT §16.0 / §16.1): what the embedded asset pack holds, read from its
+  // manifest (G.pack.credits()). Text only — titles, makers, licences, the source address as plain text; nothing is
+  // fetched and nothing links out of the 체험관.
+  SETTINGS_TABS.push({ id: 'credits', label: '사용한 자료', icon: '🖼️' });
+  SETTINGS_PANES.credits = () => {
+    const f = document.createDocumentFragment();
+    let list = [];
+    try { list = G.pack?.credits?.() || []; } catch (e) { G.log.warn('UI', 'asset credits failed', e); }
+    if (!list.length) {
+      f.append(h('div', { class: 'empty' }, h('span', { class: 'emoji big' }, '🖼️'), h('p', null, '이 파일에는 사진·그림 자료가 들어 있지 않아요. 보이는 것은 모두 프로그램이 직접 그린 그림이에요.')));
+      return f;
+    }
+    f.append(h('p', { class: 'set-note' }, `여기에 쓰인 사진 재질·옛 그림·하늘 사진 ${list.length}개는 모두 누구나 자유롭게 쓸 수 있게 공개된 자료(CC0 · 퍼블릭 도메인)예요. 인터넷에서 불러오지 않고 이 파일 안에 담겨 있어요.`));
+    const KINDS = [['art', '🖼️ 옛 그림 (박물관 공개 자료)'], ['color', '🧱 사진 재질 (나무 · 돌 · 흙 · 기와 · 옹기 …)'], ['sky', '🌤️ 하늘 사진'], ['alpha', '🍃 잎 · 풀 사진'], ['noise', '▫️ 무늬 자료']];
+    for (const [kind, title] of KINDS) {
+      const rows = list.filter((c) => c.kind === kind);
+      if (!rows.length) continue;
+      const dl = h('dl', { class: 'kv set-kv' });
+      for (const c of rows) {
+        const name = String(c.titleKo || c.title || c.name).replace(/\s*—\s*색$/, '');
+        dl.append(h('dt', null, name), h('dd', null, [c.credit, c.license, c.source].filter(Boolean).join(' — ')));
+      }
+      f.append(h('h4', null, `${title} · ${rows.length}`), dl);
+    }
+    return f;
+  };
+
   // ---------------------------------------------------------------- 계정 tab: info, password change, delete account
   const AccountPane = {
     build() {
