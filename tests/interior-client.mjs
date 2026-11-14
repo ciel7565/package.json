@@ -9,6 +9,7 @@
 //            --watch <s> (how long the night watch stays inside, default 20) · --skip-medium (no second page on medium)
 //            --skip-phone · --context-loss (also lose and restore the GL context inside, medium page)
 //            --assets (embed the asset pack in the private build) · --shots <dir> (a picture of each place)
+//            --only <PL_A,PL_B> (walk in only these places; every definition and door is still checked)   [rooms-b]
 //   Run it through the shared browser lock (at most two browsers on the build machine).
 //
 // For EVERY defined place: a door interactable with a kid label (radius ≥ 3 m) → walk in through it → the HUD chip with
@@ -152,6 +153,10 @@ try {
   check('easy mode is on (the kid checks below assume it)', easy0);
   const places = await page.evaluate(() => G.sys.places.list().map((p) => { const d = G.sys.places.def(p.id); return { id: p.id, name: p.name, kidName: p.kidName, emoji: p.emoji, indoor: p.indoor, zoneId: p.zoneId, origin: d.origin, size: d.size, spawn: d.spawn, exit: d.exit ? { x: d.exit.x, z: d.exit.z, rotY: d.exit.rotY } : null, door: d.door ? { x: d.door.x, z: d.door.z } : null, hasMinimap: typeof d.minimap === 'function', keepAlive: !!d.keepAlive }; }));
   check('at least one place is defined', places.length >= 1, places.map((p) => p.id).join(' '));
+  // [rooms-b] --only <id,id,…>: walk in only these places (the definition / door checks still see every place)
+  const ONLY = String(opt('--only', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const walk = ONLY.length ? places.filter((p) => ONLY.includes(p.id)) : places;
+  if (ONLY.length) check(`--only: every place asked for is defined (${ONLY.join(' ')})`, walk.length === ONLY.length && walk.length > 0, walk.map((p) => p.id).join(' '));
   const valley = await where(page);
   check('outside to begin with: no chip, the valley is shown', valley.cur === null && !valley.chip.visible && valley.roots.buildings === true && valley.engineIndoor === 0, JSON.stringify({ cur: valley.cur, chip: valley.chip.visible, roots: valley.roots }));
 
@@ -195,7 +200,7 @@ try {
 
   // ---------------------------------------------------------------- every defined place
   let first = true;
-  for (const p of places) {
+  for (const p of walk) {   // [rooms-b] walk (= places unless --only)
     log(`— ${p.id} ${p.name}`);
     const exitAt = p.exit;
     // ---- in through the door outside
@@ -295,7 +300,7 @@ try {
     s = await where(page);
     check(`${p.id}: the exit door leads back out to the same spot`, out2 && s.cur === null && (!exitAt || near(s, exitAt, 2.2)) && s.roots.buildings === true, JSON.stringify({ act: actOut, cur: s.cur, pos: [s.x, s.z], want: exitAt }));
   }
-  const P0 = places.find((p) => p.indoor) || places[0];
+  const P0 = walk.find((p) => p.indoor) || walk[0] || places[0];   // [rooms-b] the once-checks run in a place of the walk
 
   // ---------------------------------------------------------------- rain stays outside; the room has its own hush
   if (P0) {
