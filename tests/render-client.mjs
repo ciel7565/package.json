@@ -218,12 +218,18 @@ async function runPreset(preset) {
       check(`${tag} while held every pack texture is a 1×1 placeholder`, sb.pack.held === true && sb.placeholder === sb.tex && sb.ready === 0, JSON.stringify({ held: sb.pack.held, textures: sb.tex, placeholders: sb.placeholder, ready: sb.ready, decoded: sb.pack.decoded }));
       check(`${tag} placeholder frame: less than 2 % black`, before.black < BLACK_MAX, `${(before.black * 100).toFixed(2)} %`);
       // ---- decoded later
-      const dec = await page.evaluate(async () => {
+      // software GL with two browsers on four CPUs needs up to ~10 minutes for the whole queue at high (one decode
+      // ≈ 15 s there); on a real GPU it is a few seconds. Wait for idle, or until the stats show nothing left.
+      const DECODE_WAIT = Math.max(600000, TIMEOUT);
+      const dec = await page.evaluate(async (limit) => {
         const P = window.G.pack, t0 = performance.now();
         P.hold(false);
-        await Promise.race([P.idle(), new Promise((r) => setTimeout(r, 300000))]);
+        const left = () => P.stats.queued + P.stats.decoding;
+        await Promise.race([P.idle(), new Promise((r) => setTimeout(r, limit)), new Promise((r) => {
+          const tick = () => (left() === 0 && P.stats.decoded > 0 ? r() : setTimeout(tick, 2000)); setTimeout(tick, 2000);
+        })]);
         return { ms: Math.round(performance.now() - t0), ...P.stats };
-      });
+      }, DECODE_WAIT);
       await page.waitForTimeout(Math.max(1500, SETTLE / 3));
       const after = await page.evaluate(pageMeasure);
       const sa = await page.evaluate(pageState);
