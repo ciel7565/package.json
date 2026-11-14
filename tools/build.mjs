@@ -7,6 +7,8 @@
 //   node tools/build.mjs --only 11,12         -> core + only fragments whose name starts with 11 / 12
 //   node tools/build.mjs --exclude 70         -> everything except fragments starting with 70
 //   node tools/build.mjs --no-font            -> skip embedding the Pretendard webfont (smaller/faster dev build)
+//   node tools/build.mjs --no-assets          -> skip embedding the asset pack (assets/pack, CONTRACT §16.1): the page is
+//                                                ~3.9 MB smaller and G.pack is empty (procedural fallbacks everywhere)
 //   node tools/build.mjs --strict             -> fail if any fragment has a syntax error (default: skip it + warn)
 //   node tools/build.mjs --out <dir>/index.html --data-out <dir>/data/game-data.json
 //                                             -> also export the server's game data (a server copy outside dist/:
@@ -38,12 +40,15 @@ const DEFAULT_OUT = OUT === path.join(ROOT, 'dist/metaverse/index.html');
 const ONLY = opt('--only') ? opt('--only').split(',').map((s) => s.trim()).filter(Boolean) : null;
 const EXCLUDE = opt('--exclude') ? opt('--exclude').split(',').map((s) => s.trim()).filter(Boolean) : [];
 const EMBED_FONT = !flag('--no-font');
+const EMBED_ASSETS = !flag('--no-assets');   // [render-assets] the licence-checked asset pack (CONTRACT §16.1)
 const DATA_OUT = opt('--data-out') ? path.resolve(opt('--data-out')) : null;
 const STRICT = flag('--strict');
 const QUIET = flag('--quiet');
 // Core fragments are always included, even with --only.
 // 07-speed.js (CONTRACT §14.1, G.sys.speed) is core too: everything that moves or grows reads it.
-const CORE_PREFIXES = ['00', '01', '02', '03', '04', '05', '06', '07', '10'];
+// [render-assets] 09-pack.js (G.pack) and 14-materials.js (G.mat) are core as well: the world fragments ask them for
+// textures and materials, and an isolated module build must look like the full one.
+const CORE_PREFIXES = ['00', '01', '02', '03', '04', '05', '06', '07', '09', '10', '14'];
 // Fragments run in filename order (see listSorted). These pairs document the orderings other fragments rely on
 // (CONTRACT §14.1 / §14.6): the build fails loudly when a rename breaks one instead of booting a broken game.
 const ORDER_RULES = [
@@ -52,6 +57,8 @@ const ORDER_RULES = [
   ['07-speed.js', '21-player.js'],
   ['70-app.js', '72-subscription.js'],     // the app shell (menus, settings) before the subscription screen
   ['72-subscription.js', '80-devcenter.js'], // the dev center's 구독·속도 panel reads G.sys.subscription
+  ['09-pack.js', '14-materials.js'],       // [render-assets] G.pack before G.mat …
+  ['14-materials.js', '15-buildings.js'],  // … and G.mat before the building kit that maps its material keys onto it
 ];
 
 const log = (...a) => { if (!QUIET) console.log(...a); };
@@ -260,6 +267,76 @@ function copyDir(src, dst) {
   return n;
 }
 
+// ---------------------------------------------------------------- asset pack (CONTRACT §16.1) [render-assets]
+// assets/pack/<file> + MANIFEST.json { version: 1, files: [{ name, file, kind, w, h, bytes, sha256, license, source, … }] }.
+// Every build verifies the pack (also with --no-assets): an image that is not in the manifest, a file whose bytes or
+// sha256 differ, a licence that is not CC0 / public domain or a pack over the budget stops the build with a clear message.
+const PACK_DIR = path.resolve(opt('--pack', path.join(ROOT, 'assets/pack')));   // --pack <dir>: another pack directory (tests)
+const PACK_BUDGET = 3000000;   // bytes of binary (CONTRACT §16.0: pack <= 3.0 MB)
+const PACK_KINDS = new Set(['color', 'normal', 'rough', 'art', 'sky', 'alpha', 'noise']);
+const PACK_MIME = { '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.avif': 'image/avif' };
+const PACK_ASSET_EXT = /\.(webp|png|jpe?g|avif|gif|bmp|tga|tiff?|hdr|exr|ktx2?|basis|dds|glb|gltf|bin|svg|mp3|ogg|wav|mp4|webm)$/i;
+// what the page needs at run time (G.pack.meta / credits); sha256, evidence and the recipe's notes stay in the repository
+const PACK_RUNTIME_KEYS = ['name', 'kind', 'w', 'h', 'bytes', 'license', 'source', 'title', 'credit', 'titleKo', 'artist', 'date', 'culture', 'period',
+  'medium', 'avg', 'enc', 'alias', 'use', 'peak', 'mean', 'sunDir', 'sunElevation'];
+function loadPack() {
+  const fail = (msg) => { console.error(`✖ asset pack: ${msg}`); process.exit(1); };
+  if (!fs.existsSync(PACK_DIR)) return null;
+  const present = fs.readdirSync(PACK_DIR, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name);
+  const manifestFile = path.join(PACK_DIR, 'MANIFEST.json');
+  if (!fs.existsSync(manifestFile)) {
+    const stray = present.filter((f) => PACK_ASSET_EXT.test(f));
+    if (stray.length) fail(`assets/pack holds ${stray.length} file(s) but no MANIFEST.json (CONTRACT §16.1) — e.g. ${stray[0]}`);
+    return null;
+  }
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); } catch (e) { fail(`MANIFEST.json is not valid JSON: ${e.message}`); }
+  if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.files)) fail('MANIFEST.json must be { version: 1, files: [...] }');
+  const names = new Set(), listed = new Set(), files = [];
+  let total = 0;
+  for (const e of manifest.files) {
+    const where = `MANIFEST.json entry ${JSON.stringify(e && e.name)}`;
+    if (!e || typeof e.name !== 'string' || !/^(mat\/[a-z0-9_]+\/[cnr]|art\/[a-z0-9_]+|sky\/[a-z0-9_]+|alpha\/[a-z0-9_]+|noise\/[a-z0-9_]+)$/.test(e.name)) fail(`${where}: the name must be mat/<set>/c|n|r, art/<id>, sky/<id>, alpha/<id> or noise/<id>`);
+    if (names.has(e.name)) fail(`${where}: listed twice`);
+    if (typeof e.file !== 'string' || !/^[\w.-]+$/.test(e.file) || listed.has(e.file)) fail(`${where}: bad or repeated file name ${JSON.stringify(e.file)}`);
+    if (!PACK_KINDS.has(e.kind)) fail(`${where}: unknown kind ${JSON.stringify(e.kind)}`);
+    const mime = PACK_MIME[path.extname(e.file).toLowerCase()];
+    if (!mime) fail(`${where}: ${e.file} is not a WebP / PNG / JPEG / AVIF image`);
+    if (!Number.isInteger(e.w) || !Number.isInteger(e.h) || e.w < 1 || e.h < 1) fail(`${where}: w / h missing`);
+    if (typeof e.license !== 'string' || !/^(CC0|Public Domain)/i.test(e.license)) fail(`${where}: licence ${JSON.stringify(e.license)} — only CC0 / public domain material may be embedded (docs/ASSET-CREDITS.md)`);
+    if (typeof e.source !== 'string' || !/^https:\/\//.test(e.source)) fail(`${where}: the source URL is missing`);
+    if (typeof e.title !== 'string' || !e.title || typeof e.credit !== 'string' || !e.credit) fail(`${where}: title / credit missing`);
+    for (const a of e.alias || []) { if (names.has(a)) fail(`${where}: alias ${a} is taken`); names.add(a); }
+    const abs = path.join(PACK_DIR, e.file);
+    if (!fs.existsSync(abs)) fail(`${where}: assets/pack/${e.file} is missing`);
+    const data = fs.readFileSync(abs);
+    if (data.length !== e.bytes) fail(`${where}: assets/pack/${e.file} has ${data.length} bytes, the manifest says ${e.bytes} (run assets/pack/src/make_pack.py again)`);
+    const digest = crypto.createHash('sha256').update(data).digest('hex');
+    if (digest !== e.sha256) fail(`${where}: sha256 of assets/pack/${e.file} does not match the manifest (run assets/pack/src/make_pack.py again)`);
+    names.add(e.name); listed.add(e.file); total += data.length;
+    files.push({ entry: e, mime, data });
+  }
+  const stray = present.filter((f) => f !== 'MANIFEST.json' && !listed.has(f) && PACK_ASSET_EXT.test(f));
+  if (stray.length) fail(`assets/pack/${stray[0]}${stray.length > 1 ? ` (+ ${stray.length - 1} more)` : ''} is not in MANIFEST.json — register it with its source and licence (docs/ASSET-CREDITS.md) or remove it`);
+  if (total > PACK_BUDGET) fail(`${total} bytes of binary — the budget is ${PACK_BUDGET} (CONTRACT §16.0)`);
+  return { files, bytes: total };
+}
+const pack = loadPack();
+/** inert blocks: one manifest (JSON) + one base64 block per file — never executed, not covered by script-src */
+function packBlocks() {
+  const runtime = {
+    version: 1, bytes: pack.bytes,
+    files: pack.files.map(({ entry, mime }) => {
+      const o = { mime };
+      for (const k of PACK_RUNTIME_KEYS) if (entry[k] !== undefined && entry[k] !== null) o[k] = entry[k];
+      return o;
+    }),
+  };
+  const out = [`<script type="application/json" id="pack-manifest">${JSON.stringify(runtime).replace(/</g, '\\u003c')}</script>`];
+  for (const { entry, mime, data } of pack.files) out.push(`<script type="application/octet-stream" data-pack="${entry.name}" data-mime="${mime}">${data.toString('base64')}</script>`);
+  return out.join('\n');
+}
+
 // ---------------------------------------------------------------- assemble
 const t0 = Date.now();
 const vendor = await buildVendor();
@@ -276,6 +353,8 @@ const buildInfo = {
     skipped: skipped.filter((x) => x.reason !== 'filtered'),
     fontEmbedded: EMBED_FONT,
   },
+  // [render-assets] the asset pack of this page (CONTRACT §16.1): embedded = the base64 blocks are in the page
+  pack: { embedded: !!(pack && EMBED_ASSETS), files: pack ? pack.files.length : 0, bytes: pack ? pack.bytes : 0 },
   // kid-safety test vectors shared by the server e2e and the developer center self-tests (CONTRACT §12.4)
   piiVectors: (() => {
     try {
@@ -305,6 +384,14 @@ if (fs.existsSync(path.join(ROOT, 'README.md'))) docs['README.md'] = fs.readFile
 if (fs.existsSync(path.join(ROOT, 'server/README-SERVER.md'))) docs['README-SERVER.md'] = fs.readFileSync(path.join(ROOT, 'server/README-SERVER.md'), 'utf8');
 const docsJson = JSON.stringify(docs).replace(/</g, '\\u003c');
 html = html.replace('</body>', () => `<script type="application/json" id="build-docs">${docsJson}</script>\n</body>`);
+
+// ---------------------------------------------------------------- asset pack blocks, after the main script [render-assets]
+// (the parser reaches them after the game script has run its fragments; G.pack.ready resolves at DOMContentLoaded)
+if (pack && EMBED_ASSETS) {
+  const i = html.lastIndexOf('</body>');
+  if (i < 0) throw new Error('template has no </body>');
+  html = html.slice(0, i) + packBlocks() + '\n' + html.slice(i);
+}
 
 // ---------------------------------------------------------------- Content-Security-Policy with script hashes
 // Inline scripts are allowed only by their exact SHA-256 hash: injected markup can never run script.
@@ -370,3 +457,4 @@ log(`  fragments: ${fragments.map((f) => f.name).join(', ')}`);
 if (skipped.filter((s) => s.reason !== 'filtered').length) log(`  skipped: ${skipped.filter((s) => s.reason !== 'filtered').map((s) => `${s.name} (${s.reason})`).join('; ')}`);
 log(`  css: ${cssFiles.join(', ')}`);
 if (DEFAULT_OUT) log(`  server files copied: ${serverFiles}`);
+if (pack) log(`  asset pack: ${pack.files.length} files, ${kb(pack.bytes)}${EMBED_ASSETS ? ' embedded (base64)' : ' — NOT embedded (--no-assets)'}`);
