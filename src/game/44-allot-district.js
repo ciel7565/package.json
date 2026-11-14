@@ -30,10 +30,10 @@
 //   Level per sub-cell from the camera distance with 3 m hysteresis; instance buffers are rewritten in place, only when a
 //   sub-cell changes level or enters / leaves the view (no per-frame allocations). Budgets (aerial, high): ≤ 30 draw calls
 //   and ≤ 0.9 M triangles for all units; medium ≤ 0.45 M; low = flat colours, low-poly and far forms only.
-//   LOD distances (m, camera → sub-cell)   high: jar full 22 / low 330, bed 26 / 120 · medium: 14 / 150, 16 / 80 · low: — / 90, — / 45
+//   LOD distances (m, camera → sub-cell)   high: jar full 28 / low 380, bed 28 / 120 · medium: 14 / 150, 16 / 80 · low: — / 90, — / 45
 //
 // STATUS  instanceColor = the natural glaze / soil / timber tint (closed: dimmed); jars get a neck ribbon in the Okabe–Ito hue
-//   of the status (held #E69F00, leased cream, mine #0072B2) and a stake; 'allot:map' rewrites ONLY the changed indices.
+//   of the status (held #E69F00, leased a straw tie, mine #0072B2) and a stake; 'allot:map' rewrites ONLY the changed indices.
 // PICKING ONE dynamic interactable 'cu-unit' (G.interact): every 0.12 s L.indexAt is probed ahead of the player; the unit faced
 //   within 2.5 m (edge distance; bays: their door) gets our own highlight (a gold ring on the ground + a soft glow shell; never
 //   engine.setOutline on an instanced mesh) and the prompt '🏺 J01-0012 보기' (easy: '항아리 보기') →
@@ -76,16 +76,17 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   const say = (t) => { try { G.easy?.say?.(t, { priority: 1 }); } catch (e) { /* voice optional */ } };
   const D = () => G.data.allot || {};
   const LOD = {
-    high: { jar: [22, 330], plot: [26, 120], store: [55, 1e9], stake: 80, cover: 230, near: 25, label: 6.5 },
-    medium: { jar: [14, 150], plot: [16, 80], store: [38, 1e9], stake: 55, cover: 150, near: 18, label: 6 },
-    low: { jar: [-1, 90], plot: [-1, 45], store: [24, 1e9], stake: 34, cover: 90, near: 0, label: 5.5 },
+    high: { jar: [28, 380], plot: [28, 120], store: [55, 1e9], stake: 48, cover: 230, near: 25, label: 6.5 },
+    medium: { jar: [14, 150], plot: [16, 80], store: [38, 1e9], stake: 34, cover: 150, near: 18, label: 6 },
+    low: { jar: [-1, 90], plot: [-1, 45], store: [24, 1e9], stake: 22, cover: 90, near: 0, label: 5.5 },
   };
   const HYST = 3;
+  const PROBE = [0.7, 1.3, 1.9, 2.6, 3.2];        // m ahead of the player where L.indexAt is asked (picking)
   const KIND_WORD = { jar: '항아리', plot: '밭', store: '창고 칸' };
   const KIND_EMOJI = { jar: '🏺', plot: '🌱', store: '📦' };
   const ST_WORDS = { open: ['빈 자리', '비어 있어요'], held: ['신청 중', '누가 신청했어요'], leased: ['분양됨', '주인이 있어요'], closed: ['쉬는 자리', '지금은 쉬어요'], mine: ['내 자리', '내 자리예요'] };
-  // ribbon colours (linear) by status: open none · held Okabe–Ito orange · leased a cream cloth · closed none · mine blue
-  const RIBBON = [null, '#E69F00', '#efe4cc', null, '#0072B2'];
+  // ribbon colours by status: open none · held Okabe–Ito orange · leased a straw tie (the usual state: calm) · closed none · mine blue
+  const RIBBON = [null, '#E69F00', '#8a7651', null, '#0072B2'];
   // jar variants: [xz scale, y scale]
   const JV = [[1.0, 1.0], [0.94, 0.95], [1.06, 1.02], [0.98, 1.1], [1.08, 1.16], [0.88, 0.9], [1.03, 0.96], [0.99, 1.05]];
   // crop of a bed by variant: [mesh 0 leafy | 1 upright | 2 bushy | -1 fallow, colour]
@@ -204,37 +205,34 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     { const P = soil.attributes.position; for (let i = 0; i < P.count; i++) { const x = P.getX(i); P.setY(i, 0.2 + 0.025 * Math.cos(x / (W / 2) * PI * 1.5)); } soil.computeVertexNormals(); }
     { const U = soil.attributes.uv; for (let i = 0; i < U.count; i++) U.setXY(i, U.getX(i) * 0.86, U.getY(i) * 1.36); }
     G3.bedSoil = merge([{ g: soil, c: '#ffffff' }]);
-    // crops (bed local; soil top y ≈ 0.2)
-    const leafy = [], upright = [], bushy = [];
-    for (const x of [-0.2, 0.2]) for (const z of [-0.42, 0, 0.42]) {
-      for (let k = 0; k < 5; k++) {
-        const a = (k / 5) * TAU + x * 3 + z, len = 0.2, w = 0.08;
-        const g = new THREE.BufferGeometry();
-        const ca = Math.cos(a), sa = Math.sin(a);
-        const tip = [x + ca * len, 0.3, z + sa * len], b0 = [x - sa * w, 0.21, z + ca * w], b1 = [x + sa * w, 0.21, z - ca * w], mid = [x + ca * len * 0.45, 0.31, z + sa * len * 0.45];
-        g.setAttribute('position', new THREE.Float32BufferAttribute([...b0, ...mid, ...tip, ...b0, ...tip, ...b1, ...b1, ...tip, ...mid], 3));
-        g.setAttribute('color', new THREE.Float32BufferAttribute([0.7, 0.7, 0.7, 0.95, 0.95, 0.95, 1.15, 1.15, 1.1, 0.7, 0.7, 0.7, 1.15, 1.15, 1.1, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 1.15, 1.15, 1.1, 0.95, 0.95, 0.95], 3));
-        g.computeVertexNormals();
-        leafy.push({ g });
+    // crops (bed local; soil top y ≈ 0.2): curved leaves with soft, upward normals (no faceted look)
+    const leafGeo = (list) => {
+      const pos = [], nor = [], col = [];
+      for (const L of list) {
+        const { x, z, a, len, w, rise, droop, y0 = 0.2, c0 = 0.62, c1 = 1.12 } = L;
+        const ca = Math.cos(a), sa = Math.sin(a), px = -sa, pz = ca;
+        const P = (t, side) => { const wv = w * (side ? Math.sin(Math.PI * Math.min(1, t * 1.15)) : 0); const h = y0 + rise * Math.sin(t * Math.PI * 0.62) - droop * t * t; return [x + ca * len * t + px * wv * side, h, z + sa * len * t + pz * wv * side]; };
+        const b0 = P(0, -1), b1 = P(0, 1), m0 = P(0.5, -1), m1 = P(0.5, 1), tip = P(1, 0);
+        const n = [ca * 0.35, 1, sa * 0.35], nl = Math.hypot(n[0], n[1], n[2]);
+        for (const [p, k] of [[b0, c0], [b1, c0], [m1, (c0 + c1) / 2], [b0, c0], [m1, (c0 + c1) / 2], [m0, (c0 + c1) / 2], [m0, (c0 + c1) / 2], [m1, (c0 + c1) / 2], [tip, c1]]) {
+          pos.push(p[0], p[1], p[2]); nor.push(n[0] / nl, n[1] / nl, n[2] / nl); col.push(k, k, k * 0.95);
+        }
       }
-    }
-    for (const z of [-0.45, 0, 0.45]) for (const x of [-0.3, -0.1, 0.1, 0.3]) for (let k = 0; k < 3; k++) {
-      const a = k * 2.1 + x * 5, h = 0.26 + 0.12 * ((k + 1) % 3) / 2, lean = 0.06;
       const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute([x - 0.018 * Math.sin(a), 0.2, z - 0.018 * Math.cos(a), x + 0.018 * Math.sin(a), 0.2, z + 0.018 * Math.cos(a), x + lean * Math.cos(a), 0.2 + h, z + lean * Math.sin(a)], 3));
-      g.setAttribute('color', new THREE.Float32BufferAttribute([0.65, 0.68, 0.6, 0.65, 0.68, 0.6, 1.1, 1.12, 1.0], 3));
-      g.computeVertexNormals();
-      upright.push({ g });
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      return [{ g }];
+    };
+    const leafy = [], upright = [], bushy = [];
+    for (const x of [-0.2, 0.2]) for (const z of [-0.42, 0, 0.42]) for (let k = 0; k < 5; k++) leafy.push({ x, z, a: (k / 5) * TAU + x * 3 + z * 2, len: 0.2, w: 0.075, rise: 0.09, droop: 0.05 });
+    for (const z of [-0.45, 0, 0.45]) for (const xx of [-0.3, -0.1, 0.1, 0.3]) for (let k = 0; k < 3; k++) {
+      const a = k * 2.1 + xx * 5;
+      upright.push({ x: xx, z, a, len: 0.06, w: 0.016, rise: 0.3 + 0.1 * (k % 2), droop: -0.05, c0: 0.6, c1: 1.15 });
     }
-    for (const x of [-0.2, 0.2]) for (const z of [-0.36, 0.36]) {
-      const g = new THREE.OctahedronGeometry(0.17, 0);
-      g.scale(1, 0.75, 1);
-      const P = g.attributes.position, c = [];
-      for (let i = 0; i < P.count; i++) { const v = P.getY(i) > 0.05 ? 1.1 : P.getY(i) < -0.05 ? 0.6 : 0.85; c.push(v, v, v); }
-      g.setAttribute('color', new THREE.Float32BufferAttribute(c, 3));
-      bushy.push({ g, m: M4(x, 0.31, z, x * 4 + z) });
+    for (const x of [-0.2, 0.2]) for (const z of [-0.36, 0.36]) for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * TAU + x * 7, tier = k % 2;
+      bushy.push({ x, z, a, len: 0.16 - tier * 0.04, w: 0.06, rise: 0.16 + tier * 0.1, droop: 0.06, y0: 0.2 + tier * 0.08 });
     }
-    G3.crop = [merge(leafy), merge(upright), merge(bushy)];
+    G3.crop = [merge(leafGeo(leafy)), merge(leafGeo(upright)), merge(leafGeo(bushy))];
     // bed low: a block tinted by its crop (top light, sides darker) · far: border + inner quad
     const blk = box(0.98, 0.26, 1.48);
     { const P = blk.attributes.position, N = blk.attributes.normal, c = []; for (let i = 0; i < P.count; i++) { const v = N.getY(i) > 0.5 ? 1 : 0.42; c.push(v, v * 0.95, v * 0.9); } blk.setAttribute('color', new THREE.Float32BufferAttribute(c, 3)); }
@@ -253,7 +251,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const plate = new THREE.PlaneGeometry(0.44, 0.17);
     G3.plate = merge([{ g: plate, m: M4(0, 2.03, 0.1), c: '#ffffff' }]);
     // markers (unit local; jars are scaled with the jar so their lid is at 1.05)
-    G3.stake = merge([{ g: box(0.045, 0.78, 0.045), m: M4(0, 0.39, 0), c: '#7a5a3a' }, { g: box(0.27, 0.15, 0.022), m: M4(0, 0.68, 0.03), c: '#f4efe4' }, { g: box(0.27, 0.025, 0.024), m: M4(0, 0.6, 0.03), c: '#c9b27c' }]);
+    G3.stake = merge([{ g: box(0.04, 0.62, 0.04), m: M4(0, 0.31, 0), c: '#7a5a3a' }, { g: box(0.24, 0.13, 0.02), m: M4(0, 0.54, 0.028), c: '#f4efe4' }, { g: box(0.24, 0.022, 0.022), m: M4(0, 0.47, 0.028), c: '#c9b27c' }]);
     const star = new THREE.BufferGeometry(), sp = [], R0 = 0.2, R1 = 0.085;
     for (let k = 0; k < 10; k++) {
       const a0 = (k / 10) * TAU + PI / 2, a1 = ((k + 1) / 10) * TAU + PI / 2, r0 = k % 2 ? R1 : R0, r1 = k % 2 ? R0 : R1;
@@ -298,7 +296,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     bg.setAttribute('position', new THREE.Float32BufferAttribute(blob, 3));
     bg.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(blob.length).fill(0).map((v, i) => (i % 3 === 1 ? 1 : 0)), 3));
     const ba = [];
-    for (let k = 0; k < 6; k++) ba.push(1, 1, 1, 0.62, 1, 1, 1, 0, 1, 1, 1, 0);
+    for (let k = 0; k < 6; k++) ba.push(1, 1, 1, 0.7, 1, 1, 1, 0, 1, 1, 1, 0);
     bg.setAttribute('color', new THREE.Float32BufferAttribute(ba, 4));
     G3.blob = bg;
     // highlight: a gold ring on the ground, a beacon column with a vertical fade, an arrow
@@ -316,8 +314,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   // ---------------------------------------------------------------- materials
   const STD = (o) => new THREE.MeshStandardMaterial(o);
   const LAM = (o) => new THREE.MeshLambertMaterial(o);
-  const BAND = new THREE.Vector2(0.745, 0.83);
-  const GLOW = { value: 0.42 };
+  const BAND = new THREE.Vector2(0.792, 0.836);          // object-space y of the neck band (a tied cord under the rim)
+  const GLOW = { value: 0.15 };                           // set every frame from G.world.nightFactor
   /** the status ribbon (neck band) + the warm glow of "mine": instance attribute aMark (rgb, w = band 0..1 + 2·glow) */
   function markPatch(m) {
     const prev = m.onBeforeCompile;
@@ -600,7 +598,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       for (let i = 0; i < n; i++) {
         const k = A.kind[i];
         if (k === 2) continue;
-        const s = k === 0 ? 0.7 * this.sxz[i] : 0;
+        const s = k === 0 ? 0.9 * this.sxz[i] : 0;
         if (k === 0) trs(arr, b * 16, A.x[i], A.y[i] + 0.04, A.z[i], A.rot[i], s, 1, s);
         else trs(arr, b * 16, A.x[i], A.y[i] + 0.04, A.z[i], A.rot[i], 0.72, 1, 0.98);
         b++;
@@ -634,9 +632,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       const S = this.S, c = this.cfg(), o = this.origin;
       this._pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
       this._frustum.setFromProjectionMatrix(this._pm);
-      const changed = [false, false, false];
-      const th = [c.jar, c.plot, c.store];
-      let force = this.dirty;
+      const changed = this._chg || (this._chg = [false, false, false]), th = this._th || (this._th = [null, null, null]);
+      changed[0] = changed[1] = changed[2] = false; th[0] = c.jar; th[1] = c.plot; th[2] = c.store;
+      const force = this.dirty;
       for (let s = 0; s < S.n; s++) {
         const dx = S.x[s] - lx, dy = S.y[s] - ly, dz = S.z[s] - lz;
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz) - S.r[s] * 0.5;
@@ -693,9 +691,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
               copy16(full.instanceMatrix.array, j * 16, this.mat, i * 16); copy3(full.instanceColor.array, j * 3, this.col, i * 3);
               W[i] = j;
               const cr = CROP[A.variant[i] & 7][0];
-              if (cr >= 0 && this.st[i] !== 3) {
+              if (cr >= 0) {                                    // a closed bed keeps its entry with a zero scale (no rebuild later)
                 const m = crops[cr], q = cc[cr]++;
-                copy16(m.instanceMatrix.array, q * 16, this.mat, i * 16); copy3(m.instanceColor.array, q * 3, this.crop, i * 3);
+                this.cropMatrix(m.instanceMatrix.array, q, i); copy3(m.instanceColor.array, q * 3, this.crop, i * 3);
                 W2[i] = (cr << 24) | q;
               }
             } else {
@@ -726,6 +724,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         this.commit(door, nd); this.commit(plate, np); this.commitAttr(plate.geometry.getAttribute('aNum'), np, 1);
       }
     }
+    cropMatrix(dst, q, i) {
+      copy16(dst, q * 16, this.mat, i * 16);
+      if (this.st[i] === 3) for (let k = 0; k < 11; k++) dst[q * 16 + k] = 0;      // under the straw cover: no crop
+    }
     lowBedColor(dst, o, i) {
       const cr = CROP[this.A.variant[i] & 7][0], closed = this.st[i] === 3;
       const src = cr < 0 || closed ? this.col : this.crop;
@@ -752,9 +754,11 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         const L = w >>> 24, j = w & 0xffffff;
         if (L === 0 && !low) {
           part(ms.bedFrame.instanceColor, j, 3, this.col, i);
-          // a closed bed loses its crop (straw cover instead): that list changes size → rebuild the plots
-          const crop = CROP[this.A.variant[i] & 7][0] >= 0;
-          if (crop && (this.where2[i] < 0) !== (this.st[i] === 3)) this.rebuildKind(1);
+          const w2 = this.where2[i];
+          if (w2 >= 0) {                                       // the crop shows / hides in place (straw cover when closed)
+            const m = [ms.crop0, ms.crop1, ms.crop2][w2 >>> 24], q = w2 & 0xffffff, a = m.instanceMatrix;
+            this.cropMatrix(a.array, q, i); a.addUpdateRange?.(q * 16, 16); a.needsUpdate = true;
+          }
         } else {
           const m = L === 1 ? ms.bedLow : ms.bedFar, a = m.instanceColor;
           this.lowBedColor(a.array, j * 3, i); a.addUpdateRange?.(j * 3, 3); a.needsUpdate = true;
@@ -771,7 +775,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       const stake = ms.stake, flag = ms.flag, cover = ms.cover, bars = ms.bars;
       let ns = 0, nf = 0, nc = 0, nb = 0;
       const sa = stake.instanceMatrix.array, scol = stake.instanceColor.array, fa = flag.instanceMatrix.array, ca = cover.instanceMatrix.array, ba = bars.instanceMatrix.array;
-      const fcap = flag.instanceMatrix.count, held = lin('#E69F00'), white = [1, 1, 1];
+      const fcap = flag.instanceMatrix.count, held = lin('#E69F00'), tan = lin('#cdb48c');
       const at = (arr, o, i, lx, ly, lz, ry, s, sy2) => {     // a marker at (lx, ly, lz) in unit i's frame (unit scale kept)
         const b = i * 16, sx = this.sxz[i], sy = this.sy[i];
         const c0 = M[b] / sx, s0 = M[b + 8] / sx;               // cos / sin of the unit's turn
@@ -792,8 +796,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
           }
           if ((v === 1 || v === 2) && stakeOn) {
             const o = ns++;
-            if (k === 0) at(sa, o * 16, i, -0.36, 0, 0.44, 0.3, 1); else if (k === 1) at(sa, o * 16, i, -0.36, 0.1, 0.78, 0, 1); else at(sa, o * 16, i, 0, 0.98, 0.1, 0, 0.9);
-            const tc = v === 1 ? held : white; scol[o * 3] = tc[0]; scol[o * 3 + 1] = tc[1]; scol[o * 3 + 2] = tc[2];
+            if (k === 0) at(sa, o * 16, i, -0.36, 0, 0.44, 0.3, 1); else if (k === 1) at(sa, o * 16, i, -0.36, 0.1, 0.78, 0, 1); else at(sa, o * 16, i, 0.38, 0.98, 0.12, 0, 0.7, 0.22);
+            const tc = v === 1 ? held : tan; scol[o * 3] = tc[0]; scol[o * 3 + 1] = tc[1]; scol[o * 3 + 2] = tc[2];
             continue;
           }
           if (v === 3 && coverOn) {
@@ -1082,9 +1086,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     }
     fxUpdate(dt, t) {
       const red = reduced();
+      GLOW.value = 0.12 + 0.7 * clamp(Number(G.world?.nightFactor) || 0, 0, 1);
       if (this.ring.visible) {
         const p = red ? 1 : 0.9 + 0.1 * Math.sin(t * TAU * 0.8);
-        this.M.ring.opacity = 0.85 * p; this.M.glow.opacity = red ? 0.22 : 0.16 + 0.08 * (0.5 + 0.5 * Math.sin(t * TAU * 0.8));
+        this.M.ring.opacity = 0.85 * p; this.M.glow.opacity = red ? 0.12 : 0.08 + 0.06 * (0.5 + 0.5 * Math.sin(t * TAU * 0.8));
       }
       const B = this.beacon;
       if (B) {
@@ -1111,8 +1116,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         const s = edge + (1 - cos) * 1.4 - (i === this.focus ? 0.3 : 0);
         if (s < bs) { bs = s; best = i; }
       };
-      for (const d of [0.7, 1.3, 1.9, 2.6, 3.2]) consider(L.indexAt(px + fx * d, pz + fz * d, 0.5));
-      for (const a of [-0.6, 0.6]) consider(L.indexAt(px + Math.sin(ry + a) * 1.5, pz + Math.cos(ry + a) * 1.5, 0.5));
+      for (let k = 0; k < PROBE.length; k++) consider(L.indexAt(px + fx * PROBE[k], pz + fz * PROBE[k], 0.5));
+      for (let k = 0; k < 2; k++) { const a = k ? 0.6 : -0.6; consider(L.indexAt(px + Math.sin(ry + a) * 1.5, pz + Math.cos(ry + a) * 1.5, 0.5)); }
       consider(L.indexAt(px, pz, 1.8));
       if (this.focus >= 0) consider(this.focus);
       return best;
@@ -1377,6 +1382,16 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     stats: () => (live ? live.stats() : { built: false }),
     refresh() { if (!live) return false; live.applyMap(true); live.dirty = true; live.markersDirty = true; return true; },
     spotFor(code) { if (!live) return null; const p = parse(code), i = p ? live.L.index(p.zone, p.seq) : -1; return live.spotFor(i); },
+    /** the small unit card (what a tap shows when the 분양 panel is missing; also a kid-audit screen) */
+    card(code) {
+      const p = parse(code);
+      if (!p) return false;
+      if (live) { const i = live.L.index(p.zone, p.seq); if (i < 0) return false; live.card(i, codeOf(live.L, i)); return true; }
+      const L = G.data.complex?.current?.(), u = L && L.unit(p.zone, p.seq);
+      if (!u) return false;
+      District.prototype.card.call({ A: { kind: [Math.max(0, KINDS.indexOf(u.kind))] }, st: [Math.max(0, ST_KEYS.indexOf(G.sys.allot?.statusOf?.(code) || 'open'))], statusKey() { return ST_KEYS[this.st[0]]; } }, 0, code);
+      return true;
+    },
     get _live() { return live; },
   };
 })();
