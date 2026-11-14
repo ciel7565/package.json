@@ -43,7 +43,8 @@
 // COLLIDERS  one box strip per ring arc (chord pieces per sector × group of 3 rows), per bed row pair (per group of 10), per
 //   storehouse bay row pair — the player walks the aisles and ring walks (≈ 600 colliders for 10,000 units).
 // BOARDS  two timber notice boards (entrance plaza by the spawn; the plaza of the great circle, two-sided) with a canvas:
-//   전체 · 빈 자리 · 분양 중 · 내 것 per kind, big numbers and drawn icons, redrawn on 'allot:map' / 'allot:mine'.
+//   전체 · 빈 자리 · 분양 중 · 내 것 per kind, big numbers and drawn icons, redrawn on 'allot:map' / 'allot:mine'. While the
+//   player is inside, G.sys.allot.refreshMap() runs every 2 minutes (map.php?v= answers { same: true } when nothing changed).
 //
 // PUBLIC  G.sys.allotDistrict (present after this file loads; the scene part works once PL_ALLOT is built)
 //   goto(code) -> Promise<bool>    찾아가기: the player stands on the walk beside the unit, facing it, with a beacon (soft light
@@ -626,6 +627,13 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       if (this.pickT <= 0) { this.pickT = 0.12; this.pickUpdate(); }
       this.labelT -= dt;
       if (this.labelT <= 0) { this.labelT = 0.3; this.labelUpdate(); }
+      // while someone walks the district the statuses (and the boards) stay fresh: map.php?v= every 2 minutes
+      // (an unchanged map answers { same: true }; the panel polls on its own while it is open)
+      this.pollT = (this.pollT ?? 120) - dt;
+      if (this.pollT <= 0) {
+        this.pollT = 120;
+        if (typeof document === 'undefined' || document.visibilityState !== 'hidden') { try { const r = G.sys.allot?.refreshMap?.(); if (r && typeof r.catch === 'function') r.catch(() => {}); } catch (e) { /* the panel is optional */ } }
+      }
       this.fxUpdate(dt, t);
     }
     evalLevels(cam, lx, ly, lz) {
@@ -725,8 +733,13 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       }
     }
     cropMatrix(dst, q, i) {
-      copy16(dst, q * 16, this.mat, i * 16);
-      if (this.st[i] === 3) for (let k = 0; k < 11; k++) dst[q * 16 + k] = 0;      // under the straw cover: no crop
+      const o = q * 16;
+      copy16(dst, o, this.mat, i * 16);
+      if (this.st[i] === 3) { for (let k = 0; k < 11; k++) dst[o + k] = 0; return; }   // under the straw cover: no crop
+      // every bed grows a little differently: turned half round (the bed is symmetric) and taller or shorter
+      if (hash(i, 31) < 0.5) for (const k of [0, 1, 2, 8, 9, 10]) dst[o + k] = -dst[o + k];
+      const g = 0.78 + 0.45 * hash(i, 32);
+      dst[o + 4] *= g; dst[o + 5] *= g; dst[o + 6] *= g;
     }
     lowBedColor(dst, o, i) {
       const cr = CROP[this.A.variant[i] & 7][0], closed = this.st[i] === 3;
@@ -1086,7 +1099,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     }
     fxUpdate(dt, t) {
       const red = reduced();
-      GLOW.value = 0.12 + 0.7 * clamp(Number(G.world?.nightFactor) || 0, 0, 1);
+      GLOW.value = 0.035 + 0.6 * clamp(Number(G.world?.nightFactor) || 0, 0, 1);   // a hint by day, a warm lantern by night
       if (this.ring.visible) {
         const p = red ? 1 : 0.9 + 0.1 * Math.sin(t * TAU * 0.8);
         this.M.ring.opacity = 0.85 * p; this.M.glow.opacity = red ? 0.12 : 0.08 + 0.06 * (0.5 + 0.5 * Math.sin(t * TAU * 0.8));

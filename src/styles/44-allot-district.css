@@ -5,9 +5,10 @@
   background: rgba(36, 26, 18, 0.78); color: #fff7e8;
   font-size: 12px; line-height: 1.25; white-space: nowrap; pointer-events: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-  opacity: 1; transition: opacity 0.35s ease-out;
+  animation: cu-label-in 0.35s ease-out;
 }
-.wl.cu-label.hidden { opacity: 0; }
+/* a label fades in each time it is shown (the label layer hides it with display: none) */
+@keyframes cu-label-in { from { opacity: 0; } to { opacity: 1; } }
 .wl.cu-label .cu-l-code { font-weight: 800; letter-spacing: 0.02em; font-size: 13px; }
 .wl.cu-label .cu-l-np { font-size: 11px; color: #ffe2a8; }
 .wl.cu-label .cu-l-np[hidden] { display: none; }
@@ -21,6 +22,6 @@ body.easy .wl.cu-label .cu-l-code { font-size: 15px; }
 .cu-card .cu-card-kind { font-size: 17px; margin: 0; }
 .cu-card .cu-card-note { font-size: 15px; margin: 0; color: var(--text-dim, #6b5a48); }
 @media (prefers-reduced-motion: reduce) {
-  .wl.cu-label { transition: none; }
+  .wl.cu-label { animation: none; }
 }
-body.reduce-motion .wl.cu-label { transition: none; }
+body.reduce-motion .wl.cu-label { animation: none; }
