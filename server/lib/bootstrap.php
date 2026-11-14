@@ -38,6 +38,11 @@ if (PHP_VERSION_ID < 70200 || PHP_INT_SIZE < 8 || !extension_loaded('mbstring') 
 
 mb_internal_encoding('UTF-8');
 
+// phase 8 (CONTRACT §16.9) [scale-server]: an entry point that defines TFM_LIGHT before including this file (the sync
+// and queue endpoints, the polling endpoints) gets the core now and every other library on first use (lib/light.php):
+// on a server without an opcode cache the hot loop no longer compiles 1 MB of PHP it never calls.
+if (defined('TFM_LIGHT') && is_file(__DIR__ . '/light.php')) { require __DIR__ . '/light.php'; return; }
+
 require __DIR__ . '/compat.php';
 require __DIR__ . '/Core.php';
 require __DIR__ . '/Db.php';
@@ -67,6 +72,19 @@ unset($tfmLib, $tfmLibFile);
 spl_autoload_register(static function (string $class): void {
     if ($class === 'Tfm\\Allot' || $class === 'Tfm\\AllotRetry') {
         $file = __DIR__ . '/Allot.php';
+        if (is_file($file)) require_once $file;
+    }
+});
+// phase 8 (CONTRACT §16.9) [scale-server]: the shared cache and the capacity gate serve every request; the sync library
+// is used by the sync, presence and chat endpoints only and is loaded on first use.
+foreach (['Cache', 'Gate'] as $tfmLib) {
+    $tfmLibFile = __DIR__ . '/' . $tfmLib . '.php';
+    if (is_file($tfmLibFile)) require_once $tfmLibFile;
+}
+unset($tfmLib, $tfmLibFile);
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Sync') {
+        $file = __DIR__ . '/Sync.php';
         if (is_file($file)) require_once $file;
     }
 });

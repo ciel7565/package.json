@@ -29,10 +29,8 @@ final class Stats
             $k = $l >= 20 ? 'Lv.20+' : ($l >= 10 ? 'Lv.10–19' : ($l >= 5 ? 'Lv.5–9' : 'Lv.1–4'));
             $levels[$k] += (int) $r['n'];
         }
-        $zones = [];
-        foreach (Db::all('SELECT zone_id, COUNT(*) AS n FROM presence WHERE updated_at >= ? AND zone_id IS NOT NULL GROUP BY zone_id', [$now - (int) Config::get('presence.ttl', 15) * 1000]) as $r) {
-            $zones[(string) $r['zone_id']] = (int) $r['n'];
-        }
+        // [scale-server] CONTRACT §16.9: who is where comes from the sync channels (the presence table is written behind)
+        $zones = Presence::zones($now);
         $fmt = function ($ms): string { return $ms ? date('Y-m-d H:i', intdiv((int) $ms, 1000)) : '-'; };
         $subs = [];
         try {
@@ -626,8 +624,12 @@ final class AdminOps
             // operator (토스 상점관리자) and the next status check looks it up
             'stale_orders' => Db::exec("DELETE FROM orders WHERE status = 'created' AND payment_key = '' AND requested_at < ?", [$now - 7 * 86400000]),
             'log_files' => Log::cleanup(),
-            'sessions' => is_dir(Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions') ? Session::gcAnonymous(Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions', (int) Config::get('session.idle_timeout', 7200)) : 0,
+            // [scale-server] CONTRACT §16.9: old session files are removed here (no request does it at random any more)
+            'sessions' => is_dir(Config::dataDir() . DIRECTORY_SEPARATOR . 'sessions') ? Session::gc() : 0,
         ];
+        // [scale-server] expired cache entries, and the presence rows the sync channels still hold in memory
+        if (class_exists('Tfm\\Cache')) { $p = Cache::purge(); $out['cache'] = (int) $p['removed']; }
+        if (class_exists('Tfm\\Sync')) { try { $out['presence_flushed'] = Sync::flushAll(); } catch (\Throwable $e) { $out['presence_flushed'] = 0; } }
         if (Db::driver() === 'sqlite') { try { Db::pdo()->exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (\Throwable $e) { /* busy */ } }
         Audit::log('maintenance_cleanup', null, $out, 'info', $actor ? (int) $actor['id'] : null);
         return $out;

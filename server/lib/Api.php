@@ -9,6 +9,15 @@
  * admin role (403), per-endpoint rate limits (429), JSON-only output with security headers, and turns
  * any unexpected error into a generic 500 (details only in data/logs).
  * Response: {success, data | error:{code,message}, csrf, serverTime}
+ *
+ * Phase 8 (CONTRACT §16.9) — what a request costs before its handler runs:
+ *   · the capacity gate first (Tfm\Gate: load figures, shedding with 503 + Retry-After when the server is overloaded);
+ *   · 'session' => 'create' | 'resume' | 'read' | 'none' — GET / HEAD endpoints read the session without keeping its
+ *     file locked ('read', the default for them); 'none' is for the sync endpoint's signed-token path;
+ *   · the account row comes from the shared cache (cache.user_ttl seconds; dropped the moment the account changes);
+ *   · answers of 1 KB and more are gzip-compressed when the browser accepts it (then without the CSRF token: a secret
+ *     is never compressed together with text other people typed);
+ *   · Api::after() runs work once the answer is out (write-behind, hourly housekeeping).
  * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -50,6 +59,15 @@ final class Ctx
 
 final class Api
 {
+    /** @var callable[] work for after the answer was sent (Api::after) */
+    private static $after = [];
+
+    /**
+     * Run $fn after the answer of this request has gone out (the write-behind presence flush, hourly housekeeping).
+     * It must not print anything; an error in it is logged and never reaches the visitor.
+     */
+    public static function after(callable $fn): void { self::$after[] = $fn; }
+
     public static function run(array $opt, callable $fn)
     {
         Boot::forApi();
@@ -57,6 +75,7 @@ final class Api
             // CONTRACT §15.7 #5 / #2 / #10 / #14: the request-level guards run first, before the session, body or
             // credentials are touched — a blocked address, a plain-HTTP request or a stray file never gets that far.
             if (class_exists('Tfm\Firewall')) Firewall::check();        // #5  blocked address → 403 IP_BLOCKED
+            if (class_exists('Tfm\Gate')) Gate::enter($opt);            // §16.9 load figures; an overloaded server sheds here (503 + Retry-After)
             Http::enforceHttps();                                       // #2  http GET → 308, other http → 403 HTTPS_REQUIRED
             $public = !empty($opt['public']);
             Http::cors($public);                                        // #10 OPTIONS preflight handled here; public GET gets ACAO
@@ -70,8 +89,11 @@ final class Api
             $ctx = new Ctx();
             $write = !in_array($method, ['GET', 'HEAD'], true);
             $needsLogin = !empty($opt['auth']) || !empty($opt['admin']);
-            // only ping (and pages that must hand out a CSRF token) create sessions; everything else resumes one
-            Session::start((isset($opt['session']) ? $opt['session'] : 'resume') === 'create');
+            // only ping (and pages that must hand out a CSRF token) create sessions; everything else resumes one.
+            // §16.9: a GET / HEAD endpoint reads the session without holding its file ('read'); a changing call inside it
+            // reopens the session by itself (Session::writable). 'none': the request is carried by a signed sync token.
+            $sessMode = (string) (isset($opt['session']) ? $opt['session'] : ($write ? 'resume' : 'read'));
+            if ($sessMode !== 'none') Session::start($sessMode === 'create', $sessMode === 'read');
             if ($write) {
                 Sec::checkOrigin();
                 if ((isset($opt['csrf']) ? $opt['csrf'] : true) !== false) {
@@ -87,7 +109,8 @@ final class Api
                     elseif (!Session::checkCsrf(is_string($hdr) ? $hdr : null)) self::csrfFail();
                 }
             }
-            $ctx->user = Auth::current();
+            Auth::$apiCache = true;                                     // §16.9: the account row may come from the shared cache
+            $ctx->user = isset($opt['user']) && is_array($opt['user']) ? $opt['user'] : Auth::current();
             if ($needsLogin) {
                 // data.why when this request found the session invalid ('epoch' | 'banned' | 'deleted' | 'other account')
                 if (!$ctx->user) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.', Auth::$lostWhy !== null ? ['why' => Auth::$lostWhy] : null);
@@ -102,6 +125,7 @@ final class Api
             if (!empty($opt['rate'])) RateLimit::forRequest((string) $opt['rate'], $ctx, (string) (isset($opt['rateBy']) ? $opt['rateBy'] : 'auto'));
             $data = $fn($ctx);
             if ($ctx->csrfPending) self::csrfFail(); // handler forgot to verify the body token
+            self::housekeeping();
             self::send(200, ['success' => true, 'data' => $data]);
         } catch (ApiException $e) {
             $payload = ['success' => false, 'error' => ['code' => $e->errorCode, 'message' => $e->getMessage()]];
@@ -110,6 +134,24 @@ final class Api
         } catch (\Throwable $e) {
             self::fail($e);
         }
+    }
+
+    /**
+     * §16.9: a request that came in on a signed sync token needs the full checks after all (the seat of the token is
+     * gone). What run() does for a logged-in write request happens now: the session, its CSRF token, the account
+     * (re-validated), the rate limit. The Origin check ran already.
+     */
+    public static function withSession(Ctx $ctx, string $rate): void
+    {
+        Session::start(false);
+        if (!Session::started()) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.');
+        $hdr = isset($_SERVER['HTTP_X_CSRF_TOKEN']) ? $_SERVER['HTTP_X_CSRF_TOKEN'] : null;
+        if (!Session::checkCsrf(is_string($hdr) ? $hdr : null)) self::csrfFail();
+        Auth::forget();
+        Auth::$apiCache = true;
+        $ctx->user = Auth::current();
+        if (!$ctx->user) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.', Auth::$lostWhy !== null ? ['why' => Auth::$lostWhy] : null);
+        RateLimit::forRequest($rate, $ctx);
     }
 
     public static function csrfFail()
@@ -137,22 +179,90 @@ final class Api
         self::send(500, ['success' => false, 'error' => ['code' => 'SERVER_ERROR', 'message' => '서버에서 문제가 생겼어요. 잠시 후 다시 시도해 주세요.', 'ref' => $ref]]);
     }
 
+    /**
+     * Once an hour, after an answer: old session files and expired cache entries are removed (CONTRACT §16.9 — this
+     * used to be a random request scanning the session folder while its visitor waited). `php cli/tfm.php cleanup`
+     * does the same thoroughly; this keeps an installation without a scheduled job tidy.
+     */
+    private static function housekeeping(): void
+    {
+        try {
+            if (class_exists('Tfm\Cache') && Cache::available()) {
+                if (mt_rand(1, 40) !== 1 || !Cache::add('job:housekeeping', 1, 3600)) return;
+            } elseif (mt_rand(1, 3000) !== 1) {
+                return;
+            }
+            self::after(static function (): void {
+                Session::gc(2.0);
+                if (class_exists('Tfm\Cache')) Cache::purge(2.0);
+            });
+        } catch (\Throwable $e) { /* housekeeping never breaks a request */ }
+    }
+
+    /** did the browser say it reads gzip? */
+    private static function acceptsGzip(): bool
+    {
+        $ae = (string) (isset($_SERVER['HTTP_ACCEPT_ENCODING']) ? $_SERVER['HTTP_ACCEPT_ENCODING'] : '');
+        return $ae !== '' && (bool) preg_match('/(?:^|,)\s*(?:x-)?gzip\s*(?:;\s*q=(?!0(?:\.0+)?\s*(?:,|$))[0-9.]+\s*)?(?:,|$)/i', $ae);
+    }
+
     public static function send(int $status, array $payload, array $headers = [])
     {
         while (ob_get_level() > 0) @ob_end_clean(); // never leak stray output (warnings, BOMs)
-        try { $t = Session::currentCsrf(); if ($t !== null) $payload['csrf'] = $t; } catch (\Throwable $e) { /* ignore */ }
-        $payload['serverTime'] = Clock::ms();
+        $csrf = null;
+        try { $csrf = Session::currentCsrf(); } catch (\Throwable $e) { /* ignore */ }
+        unset($payload['csrf'], $payload['serverTime']);
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
-        if (!is_string($json)) { $status = 500; $json = '{"success":false,"error":{"code":"SERVER_ERROR","message":"응답을 만들지 못했어요."}}'; }
+        if (!is_string($json) || $json === '' || $json[0] !== '{') { $status = 500; $json = '{"success":false,"error":{"code":"SERVER_ERROR","message":"응답을 만들지 못했어요."}}'; }
+        // §16.9: an answer of 1 KB or more goes out gzip-compressed when the browser reads gzip. The CSRF token is then
+        // left out of the body (the app keeps the token it has; a new token only ever comes with the small login /
+        // logout answers): a secret is never compressed together with text that other people typed (BREACH).
+        $gzip = false;
+        try {
+            $gzip = strlen($json) >= 1024 && !headers_sent() && function_exists('gzencode') && self::acceptsGzip()
+                && !ini_get('zlib.output_compression') && Config::get('capacity.gzip_json', true);
+        } catch (\Throwable $e) { $gzip = false; }
+        // the envelope ends with csrf (when a session exists) and serverTime, as before
+        $json = substr($json, 0, -1) . ($csrf !== null && !$gzip && ctype_xdigit($csrf) ? ',"csrf":"' . $csrf . '"' : '') . ',"serverTime":' . Clock::ms() . '}';
+        if ($gzip) {
+            $packed = @gzencode($json, 5);
+            if (is_string($packed) && strlen($packed) < strlen($json)) $json = $packed; else $gzip = false;
+        }
         if (!headers_sent()) {
             http_response_code($status);
             Http::securityHeaders('api');
             header('Content-Type: application/json; charset=utf-8');
+            if ($gzip) { header('Content-Encoding: gzip'); header('Vary: Accept-Encoding', false); }
             foreach ($headers as $h) header($h);
+            try {
+                // capacity.stats_header (off by default; the load test turns it on): what this request cost
+                if (Config::get('capacity.stats_header', false)) {
+                    $d = class_exists('Tfm\Db', false) ? Db::stats() : ['statements' => 0, 'commits' => 0, 'connects' => 0];
+                    $c = class_exists('Tfm\Cache', false) ? Cache::stats() : ['get' => 0, 'set' => 0];
+                    $t0 = (float) (isset($_SERVER['REQUEST_TIME_FLOAT']) ? $_SERVER['REQUEST_TIME_FLOAT'] : microtime(true));
+                    header(sprintf('X-Tfm-Stats: sql=%d;tx=%d;db=%d;cget=%d;cset=%d;ms=%.2f', $d['statements'], $d['commits'], $d['connects'], $c['get'], $c['set'], (microtime(true) - $t0) * 1000));
+                }
+            } catch (\Throwable $e) { /* figures only */ }
+            if (self::$after) header('Content-Length: ' . strlen($json)); // the browser has the whole answer before the after-work starts
         }
         Session::close();
         echo $json;
+        if (self::$after) self::runAfter();
         exit;
+    }
+
+    /** the answer is out: let the visitor go, then do the registered work */
+    private static function runAfter(): void
+    {
+        $jobs = self::$after;
+        self::$after = [];
+        try {
+            @ignore_user_abort(true);
+            if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request(); else { @ob_flush(); @flush(); }
+        } catch (\Throwable $e) { /* keep going */ }
+        foreach ($jobs as $job) {
+            try { $job(); } catch (\Throwable $e) { Log::error('API', 'after-work failed: ' . get_class($e) . ': ' . $e->getMessage()); }
+        }
     }
 }
 
@@ -164,15 +274,51 @@ final class Auth
     private static $loaded = false;
     /** @var string|null why current() just ended this request's session (null: it was fine, or there was none) */
     public static $lostWhy = null;
+    /** @var bool set by Api::run: this request may take the account row from the shared cache (never the admin pages) */
+    public static $apiCache = false;
 
-    /** the logged-in user, re-validated against the DB on every request (ban, epoch, role changes) */
+    /**
+     * The account row of an API request (CONTRACT §16.9): from the shared cache for cache.user_ttl seconds (15), else
+     * from the database. The cached row never holds the password hash, and an API handler never gets one either.
+     * Every change of an account goes through Users::update(), which calls forgetUser() — a ban, a role change, a new
+     * password or "sign out everywhere" therefore reaches the very next request, not the end of the 15 seconds.
+     */
+    public static function userRow(int $uid): ?array
+    {
+        if ($uid <= 0) return null;
+        $ttl = 0;
+        try {
+            $ttl = class_exists('Tfm\Cache') ? (int) Config::get('cache.user_ttl', 15) : 0;
+            if ($ttl > 0) {
+                $c = Cache::get('s:u:' . $uid);
+                if (is_array($c) && isset($c['id'], $c['status'], $c['session_epoch']) && (int) $c['id'] === $uid) return $c;
+            }
+        } catch (\Throwable $e) { $ttl = 0; }
+        $u = Users::byId($uid);
+        if (!$u) return null;
+        unset($u['password_hash']);
+        if ($ttl > 0) { try { Cache::set('s:u:' . $uid, $u, $ttl); } catch (\Throwable $e) { /* read again next time */ } }
+        return $u;
+    }
+
+    /**
+     * The account changed (Users::update): drop its cached row; $revoke also ends its sync tokens at once (status,
+     * role, password, a session-epoch bump).
+     */
+    public static function forgetUser(int $uid, bool $revoke = true): void
+    {
+        try { if (class_exists('Tfm\Cache')) Cache::del('s:u:' . $uid); } catch (\Throwable $e) { /* expires in seconds */ }
+        try { if ($revoke && class_exists('Tfm\Sync')) Sync::revoke($uid); } catch (\Throwable $e) { /* the tokens run out by themselves */ }
+    }
+
+    /** the logged-in user, re-validated on every request (ban, epoch, role changes — see userRow for the cache) */
     public static function current(): ?array
     {
         if (self::$loaded) return self::$cached;
         self::$loaded = true;
         $uid = Session::userId();
         if ($uid <= 0) return null;
-        $u = Users::byId($uid);
+        $u = self::$apiCache ? self::userRow($uid) : Users::byId($uid);
         if (!$u || $u['status'] !== 'active' || (int) $u['session_epoch'] !== Session::epoch() || !Session::ownsAccount($u)) {
             self::$lostWhy = !$u ? 'deleted' : ($u['status'] !== 'active' ? 'banned' : ((int) $u['session_epoch'] !== Session::epoch() ? 'epoch' : 'other account'));
             Log::info('AUTH', 'session invalidated', ['uid' => $uid, 'why' => self::$lostWhy]);

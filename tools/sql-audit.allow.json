@@ -118,5 +118,10 @@
     "file": "server/lib/Users.php",
     "snippet": "'UPDATE users SET ' . implode(', ', $set) . ' WHERE id = ?'",
     "reason": "Reviewed (core agent's file): every $set entry is \"<column> = ?\" for a column from the fixed $allowed list (anything else throws); values bound."
+  },
+  {
+    "file": "server/lib/Sync.php",
+    "snippet": "'INSERT INTO presence (user_id, nickname, x, y, z, rot_y, anim, speed, zone_id, emote, emote_at, appearance, updated_at) VALUES ' . implode(', ', array_fill(0, count($rows), '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)'))",
+    "reason": "Sync::flush() [scale-server, CONTRACT §16.9]: the write-behind presence upsert. The statement text is made of literals only; the one varying part is how many '(?, …)' placeholder groups follow VALUES (one per row, array_fill of a literal). Every value is bound."
   }
 ]

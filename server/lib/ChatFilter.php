@@ -440,7 +440,10 @@ final class Retractions
     {
         $upto = null;
         if ($uid !== null && $mid === null) $upto = (int) Db::value('SELECT COALESCE(MAX(id), 0) FROM chat_messages');
-        Db::insert('chat_retractions', ['message_id' => $mid, 'user_id' => $uid, 'upto_id' => $upto, 'created_at' => Clock::ms()]);
+        $rid = Db::insert('chat_retractions', ['message_id' => $mid, 'user_id' => $uid, 'upto_id' => $upto, 'created_at' => Clock::ms()]);
+        // [scale-server] CONTRACT §16.9: players online get it with their next sync call (the cached moderation feed and
+        // the chat rings follow at once; the table stays the record)
+        try { if (class_exists('Tfm\\Sync')) Sync::retracted($rid, $mid, $uid, $upto); } catch (\Throwable $e) { /* the next poll reads the table */ }
     }
 
     /**

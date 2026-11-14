@@ -190,5 +190,9 @@ final class Users
         $vals[] = Clock::ms();
         $vals[] = $id;
         Db::exec('UPDATE users SET ' . implode(', ', $set) . ' WHERE id = ?', $vals);
+        // [scale-server] CONTRACT §16.9: the cached account row goes at once, and with a change of status / role /
+        // password / name / chat pause or a session-epoch bump the account's sync seat ends too — a ban, a role change,
+        // a new password, a pause and "sign out everywhere" reach the very next request
+        if (class_exists('Tfm\\Auth')) Auth::forgetUser($id, $bumpEpoch || isset($fields['status']) || isset($fields['role']) || isset($fields['password_hash']) || isset($fields['nickname']) || isset($fields['muted_until']));
     }
 }

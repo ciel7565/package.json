@@ -285,12 +285,29 @@ final class Firewall
     {
         $n = Http::normIp($ip);
         if ($n === '') return null;
+        $hash = Sec::hashId($n);
+        // [scale-server] CONTRACT §16.9: "this address is not blocked" is remembered for cache.block_ttl seconds (15), so
+        // an ordinary request asks the database nothing here. A block that exists is never cached (its hit counter and
+        // its end are read fresh), and block() / evaluate() drop the remembered answer, so a new block works at once.
+        $ttl = 0;
         try {
-            $row = Db::one('SELECT ip_hash, ip, reason, until_at, created_at, created_by, hits, strikes FROM ip_blocks WHERE ip_hash = ?', [Sec::hashId($n)]);
+            $ttl = class_exists('Tfm\\Cache') ? (int) Config::get('cache.block_ttl', 15) : 0;
+            if ($ttl > 0 && Cache::get('s:ipb:' . $hash) === 0) return null;
+        } catch (\Throwable $e) { $ttl = 0; }
+        try {
+            $row = Db::one('SELECT ip_hash, ip, reason, until_at, created_at, created_by, hits, strikes FROM ip_blocks WHERE ip_hash = ?', [$hash]);
         } catch (\Throwable $e) {
             return null;
         }
-        return $row && (int) $row['until_at'] > Clock::ms() ? $row : null;
+        $live = $row && (int) $row['until_at'] > Clock::ms() ? $row : null;
+        if ($live === null && $ttl > 0) { try { Cache::set('s:ipb:' . $hash, 0, $ttl); } catch (\Throwable $e) { /* asked again next time */ } }
+        return $live;
+    }
+
+    /** [scale-server] a block was written for this address: forget the remembered "not blocked" */
+    private static function forget(string $hash): void
+    {
+        try { if (class_exists('Tfm\\Cache')) Cache::del('s:ipb:' . $hash); } catch (\Throwable $e) { /* expires in seconds */ }
     }
 
     /**
@@ -346,6 +363,7 @@ final class Firewall
             'ip_hash' => $hash, 'ip' => $n, 'reason' => $reason, 'until_at' => $now + $seconds * 1000, 'created_at' => $now,
             'created_by' => $actorId ?: null, 'hits' => 0, 'strikes' => $old ? max(1, (int) $old['strikes']) : 1,
         ], ['ip_hash']); // strikes are remembered: an automatic block after a manual one still doubles
+        self::forget($hash); // [scale-server]
         Audit::log('ip_blocked', null, ['ip' => $n, 'seconds' => $seconds, 'reason' => $reason], 'warn', $actorId);
     }
 
@@ -424,6 +442,7 @@ final class Firewall
                 'ip_hash' => $hash, 'ip' => substr($ip, 0, 64), 'reason' => "자동 차단: {$window}초 안에 수상한 요청 {$n}번", 'until_at' => $now + $secs * 1000,
                 'created_at' => $now, 'created_by' => null, 'hits' => 0, 'strikes' => $strikes,
             ], ['ip_hash']);
+            self::forget($hash); // [scale-server]
             Audit::log('ip_auto_blocked', null, ['ip' => $ip, 'events' => $n, 'seconds' => $secs, 'strikes' => $strikes], 'alert');
             SecEvent::log('auto_block', 'alert', ['events' => $n, 'seconds' => $secs, 'strikes' => $strikes]);
         } catch (\Throwable $e) {

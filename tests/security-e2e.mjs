@@ -475,6 +475,7 @@ const DEFS = {
   val:        { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // validation matrix, uploads, payments (own rate budgets)
   rate:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // gets hammered
   allot:      { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.7: the allotment matrix + its IDOR check (own account budget)
+  sync:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.9 [scale-server]: the sync matrix and token checks (own account budget)
   // attackers arrive through a trusted proxy (one address each). force_https is off: these instances exercise the
   // attack-logging / install / admin-IP behaviour over plain http — HTTPS forcing is tested on its own instances
   // ('https', 'httpsproxy', 'main', 'prod'). With a trusted proxy configured, force_https=auto would (correctly) treat
@@ -706,6 +707,12 @@ async function anon(s, o = {}) {
 }
 function register(c, email, nickname, extra = {}) { return c.json('api/auth/register.php', { email, nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true, ...extra }); }
 function login(c, name, password = PASSWORD, extra = {}) { return c.json('api/auth/login.php', { login: name, password, remember: false, ...extra }); }
+/** CONTRACT §16.9 [scale-server]: one api/sync.php call (o.token → header X-Sync-Token); a hot-path answer carries no new token "t" */
+const SYNC_P = [1, 0, 1, 0, 0, 'idle', 'ZONE_MAIN', null, 0];
+function syncCall(c, body = {}, o = {}) {
+  const { token, ...rest } = o;
+  return c.json('api/sync.php', { p: SYNC_P, c: 0, ...body }, token ? { ...rest, headers: { ...(rest.headers || {}), 'X-Sync-Token': token } } : rest);
+}
 /** a freshly registered, logged-in player */
 async function newUser(s, prefix = 'Usr', o = {}) {
   const c = await anon(s, o);
@@ -1112,7 +1119,7 @@ async function S03() {
     await check('S03', `${ep} · malformed bodies (array / scalar root, cut-off, depth 40 and 300, NaN, bad UTF-8, oversize) → 4xx JSON error, never 5xx`, { sev: 'medium', fix: 'Route every body through Http::json() / Tfm\\V with the depth-32 and size caps; answer 400 / 413.' }, async () => {
       // the allotment endpoints are exercised on their own instance (see below): one address may register 60 accounts
       // an hour on an instance, and "val" needs its budget for the upload and payment checks that follow
-      let u = await newUser(ep.startsWith('api/allot/') ? sa : s, 'Mal');
+      let u = await newUser(ep.startsWith('api/allot/') ? sa : ep === 'api/sync.php' ? await srv('sync') : s, 'Mal');   // [scale-server] sync: its own instance
       const probe = await u.json(ep, {});
       if (probe.status === 403 && probe.error && probe.error.code === 'FORBIDDEN') u = adm;
       const bad = [];
@@ -1198,6 +1205,21 @@ async function S03() {
     for (const [label, v] of [['an unknown animation', 'fly_hack'], ['a number', 5], ['an array', ['idle']]]) cases.push([`anim = ${label}`, { ...base, anim: v }]);
     for (const [label, v] of [['markup', 'ZONE_<b>'], ['a number', 7]]) cases.push([`zoneId = ${label}`, { ...base, zoneId: v }]);
     return strict('api/presence/update.php', cases);
+  });
+  // CONTRACT §16.9 [scale-server] — api/sync.php: the compact body is typed field by field, unknown keys refused
+  await check('S03', 'api/sync.php · a missing / malformed presence list, wrong types, out-of-range numbers, unknown ids and unknown keys are refused', { sev: 'low', fix: STRICT_FIX }, async () => {
+    const base = { p: [1, 0, 1, 0, 0, 'idle', 'ZONE_MAIN', null, 0], h: 0, c: 0 };
+    const p = (i, v) => ({ ...base, p: base.p.map((x, k) => (k === i ? v : x)) });
+    const cases = [['no p', { h: 0 }], ['p = a word', { ...base, p: 'abc' }], ['p = an object', { ...base, p: { x: 1 } }], ['p = 8 items', { ...base, p: base.p.slice(0, 8) }], ['p = 10 items', { ...base, p: [...base.p, 1] }]];
+    for (const i of [0, 1, 2, 3, 4]) for (const [label, v] of [['a word', 'abc'], ['an array', [1]], ['true', true], ['null', null]]) if (!(i >= 3 && v === null)) cases.push([`p[${i}] = ${label}`, p(i, v)]);
+    cases.push(['p[0] = 1e12', p(0, 1e12)], ['p[2] = -1e12', p(2, -1e12)], ['p[4] = -5', p(4, -5)], ['p[4] = 1e9', p(4, 1e9)], ['p[5] = an unknown animation', p(5, 'fly_hack')], ['p[5] = a number', p(5, 5)],
+      ['p[6] = markup', p(6, 'ZONE_<b>')], ['p[6] = a number', p(6, 7)], ['p[7] = markup', p(7, 'EMO_<i>')], ['p[8] = a word', p(8, 'now')], ['p[8] = -1', p(8, -1)]);
+    for (const [k, list] of Object.entries({ h: [2, 'yes', [1]], f: [5, 'x'], c: [-1, 'abc', 1.5, [1]], r: [-1, 'x', 2.5], ns: [-1, 'x'], ap: ['str', [1], 5], q: ['x', [0], ['abc'], Array.from({ length: 25 }, (_, i) => i + 1)], w: ['x', ['zz'], [1], ['ABCDEFGH']], qt: [5, ['x'], 'q'.repeat(300)] })) {
+      for (const v of list) cases.push([`${k} = ${oneLine(JSON.stringify(v), 30)}`, { ...base, [k]: v }]);
+    }
+    cases.push(['an unknown key', { ...base, admin: 1 }], ['a token in the body', { ...base, t: 's1.x.y' }]);
+    const ss = await srv('sync');     // its own instance: "val" needs its registration budget for the upload and payment checks
+    return strict('api/sync.php', cases, { perUser: 20, user: () => newUser(ss, 'Sym') });
   });
   // CONTRACT §15.7 #3 — player/save: envelope + state shapes, depth ≤ 32
   await check('S03', 'api/player/save.php · a wrong envelope, wrong value types in the state and a 40-level deep value are refused', { sev: 'medium', fix: 'Decode the save with depth 32 like every other body; keep the shape checks of SaveValidator for every field.' }, async () => {
@@ -1438,6 +1460,7 @@ async function S03() {
     const covered = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/chat/send.php', 'api/chat/report.php', 'api/presence/update.php', 'api/player/save.php', 'api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/grant.php', 'api/sub/renew.php',
       'api/allot/apply.php', 'api/allot/cancel.php', 'api/allot/nameplate.php', 'api/allot/seen.php', 'api/allot/waitlist.php', 'api/allot/pay-prepare.php', 'api/allot/pay-confirm.php',   // CONTRACT §16.7
       'api/farm/report.php', 'api/farm/seen.php', 'api/farm/report-photo.php',   // report-photo: its reportId / file matrix is in S14
+      'api/sync.php',   // CONTRACT §16.9 [scale-server]
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
@@ -2324,6 +2347,21 @@ async function S09() {
     assert(grew === 0, `${grew} new session files after 12 requests with distinct bogus cookies — a resume endpoint minted a session for an id it never issued`);
     return `12 distinct bogus cookies → ${grew} new session files`;
   });
+  // CONTRACT §16.9 [scale-server] — the token path of api/sync.php is paced without the database: a minimum gap between calls
+  await check('S09', 'api/sync.php with a token: a call sooner than the minimum gap is refused (429 + Retry-After); after the gap it is served again', { sev: 'medium', fix: 'Keep the pacing in Tfm\\Sync::exchange (sync.min_gap_ms, rate_limits.sync) — it works on the channel entry, without SQL.' }, async () => {
+    const u = await newUser(await srv('sync'), 'Syp');
+    const first = await syncCall(u);
+    assert(first.status === 200 && typeof first.data.t === 'string' && first.data.n >= 250, `the first call → ${first.status} ${(first.error && first.error.code) || ''} (no token / no "n")`);
+    await sleep(450);
+    const hot = await syncCall(u, {}, { token: first.data.t });
+    assert(hot.status === 200 && hot.data.t === undefined, `a call with the token → ${hot.status}${hot.data && hot.data.t ? ' (it was judged as a session call: a new token came back)' : ''}`);
+    const h = await hammer(4, () => syncCall(u, {}, { token: first.data.t }));
+    const verdict = judge(h, 'sync (token)', 4);
+    await sleep(450);
+    const again = await syncCall(u, {}, { token: first.data.t });
+    assert(again.status === 200 && again.data.t === undefined, `after the gap → ${again.status}`);
+    return `${verdict}; served again after the gap (next call in ${again.data.n} ms)`;
+  });
   // CONTRACT §15.7 #9 — every endpoint has a named limit
   await check('S09', 'every other endpoint answers 429 + Retry-After within its documented budget', { sev: 'medium', fix: 'Give every endpoint (also new ones) a \'rate\' => name in Api::run and an entry in config rate_limits.' }, async () => {
     const u = await newUser(s, 'Rev'), adm = await admin(s);
@@ -2343,6 +2381,8 @@ async function S09() {
       // map endpoints are hammered by the logged-in account too: the endpoints that share a budget are asked by that account.
       'api/allot/map.php': [61, () => u.req('api/allot/map.php')], 'api/allot/mine.php': [61, () => u.req('api/allot/mine.php')], 'api/allot/inbox.php': [61, () => u.req('api/allot/inbox.php')],
       'api/allot/apply.php': [11, () => u.json('api/allot/apply.php', {})], 'api/allot/cancel.php': [21, () => u.json('api/allot/cancel.php', {})],
+      // CONTRACT §16.9 [scale-server] — sync_issue [30, 60]: calls without a token (each is checked against the session) · queue [120, 60] per address
+      'api/sync.php': [31, () => syncCall(u)], 'api/queue.php': [121, () => request(s, 'api/queue.php?t=not-a-ticket')],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
       'api/farm/seen.php': 'api/farm/reports.php',
@@ -2785,6 +2825,30 @@ async function S12() {
     cli(s, 'demote', u.email);
     return 'old session → 401';
   });
+  // CONTRACT §16.9 [scale-server] — a sync token dies with its login: logout, a ban and a role change reach the very next call
+  await check('S12', 'api/sync.php: logout, a ban and a role change end the sync token at once (the next call with it is 401)', { sev: 'high', fix: 'Keep Sync::revoke() in Presence::remove() and Users::update(): the account leaves its channel, so the token call falls back to the session check.' }, async () => {
+    const out = [];
+    const s = await srv('sync');
+    for (const how of ['logout', 'ban', 'promote']) {
+      const u = await newUser(s, 'Syr');
+      const first = await syncCall(u);
+      assert(first.status === 200 && typeof first.data.t === 'string', `${how}: the first call → ${first.status}`);
+      await sleep(450);
+      const hot = await syncCall(u, {}, { token: first.data.t });
+      assert(hot.status === 200 && hot.data.t === undefined, `${how}: the token was not used on the hot path (${hot.status})`);
+      const jar = u.cookieHeader(), csrf = u.csrf;
+      if (how === 'logout') assert((await u.json('api/auth/logout.php', {})).status === 200, 'logout');
+      else { const r = cli(s, how, u.email); assert(r.status === 0, `cli ${how} failed: ${oneLine(r.out, 120)}`); }
+      await sleep(450);
+      // the browser's old cookie + old CSRF token + the token it still holds
+      const after = await rawRequest(s.base, 'api/sync.php', { method: 'POST', body: JSON.stringify({ p: SYNC_P, c: 0 }), headers: { 'Content-Type': 'application/json', Cookie: jar, 'X-CSRF-Token': csrf, 'X-Sync-Token': first.data.t, 'User-Agent': u.ua } });
+      assert(after.status === 401 || after.status === 403, `${how}: the old token still answers ${after.status}`);
+      out.push(`${how} → ${after.status}`);
+      if (how === 'ban') cli(s, 'unban', u.email);
+      if (how === 'promote') cli(s, 'demote', u.email);
+    }
+    return out.join(' · ');
+  });
   // CONTRACT §15.7 #12 — the admin elevation cookie is SameSite=Strict
   await check('S12', 'admin elevation cookie: SameSite=Strict, HttpOnly and scoped to the admin folder', { sev: 'medium', fix: 'Set a second cookie at admin sign-in: Path=<admin folder>, SameSite=Strict, HttpOnly (+ Secure on https), bound to the elevation flag.' }, async () => {
     const site = await adminSite(s);
@@ -2946,6 +3010,46 @@ async function S13() {
     assert((await c.json('api/auth/logout.php', {})).status === 200, 'logout');
     assert(c.csrf !== t1, 'the token did not change at logout');
     return '3 different tokens, old ones refused';
+  });
+  // CONTRACT §16.9 [scale-server] — the sync token replaces the session + CSRF look-up on the hot path, so it must be worthless without both
+  await check('S13', 'api/sync.php: a sync token only works with the session cookie and the CSRF token it was issued for (another browser, no cookie, another CSRF token, an altered token, a cross-site Origin never ride on it)', { sev: 'high', fix: 'Keep the session mark and the CSRF mark inside the signed token (Tfm\\Sync::claims) and the Origin check in Api::run.' }, async () => {
+    const s = await srv('sync');
+    const a = await newUser(s, 'Sya'), b = await newUser(s, 'Syb');
+    const fa = await syncCall(a, { p: [1, 0, 1, 0, 0, 'idle', 'ZONE_MAIN', null, 0] });
+    assert(fa.status === 200 && typeof fa.data.t === 'string', `first call → ${fa.status}`);
+    const tok = fa.data.t;
+    await sleep(450);
+    const hot = await syncCall(a, {}, { token: tok });
+    assert(hot.status === 200 && hot.data.t === undefined && hot.json.csrf === undefined, `control: the owner's token call → ${hot.status} (not served on the token path)`);
+    const bad = [];
+    // another logged-in browser sends A's token: it must be judged as B (a new token for B comes back, A is still where it was)
+    const rb = await syncCall(b, { p: [9, 0, 9, 0, 0, 'idle', 'ZONE_MAIN', null, 0], f: 1 }, { token: tok });
+    if (rb.status !== 200 || typeof rb.data.t !== 'string' || rb.data.t === tok) bad.push(`another browser with the token → ${rb.status}${rb.data && rb.data.t === undefined ? ' on the token path' : ''}`);
+    const rowA = rb.data && Array.isArray(rb.data.pl) ? rb.data.pl.find((r) => String(r[0]) === String(a.user.id)) : null;
+    if (!rowA || rowA[1] !== 1 || rowA[3] !== 1) bad.push(`after B used A's token, A is seen at ${rowA ? `${rowA[1]},${rowA[3]}` : 'nowhere'} (expected 1,1)`);
+    const raw = (headers) => rawRequest(s.base, 'api/sync.php', { method: 'POST', body: JSON.stringify({ p: SYNC_P, c: 0 }), headers: { 'Content-Type': 'application/json', 'User-Agent': a.ua, ...headers } });
+    const noCookie = await raw({ 'X-CSRF-Token': a.csrf, 'X-Sync-Token': tok });
+    if (noCookie.status !== 401 && noCookie.status !== 403) bad.push(`the token without a cookie → ${noCookie.status}`);
+    const wrongCsrf = await raw({ Cookie: a.cookieHeader(), 'X-CSRF-Token': 'f'.repeat(64), 'X-Sync-Token': tok });
+    if (wrongCsrf.status !== 403) bad.push(`the token with another CSRF token → ${wrongCsrf.status}`);
+    const noCsrf = await raw({ Cookie: a.cookieHeader(), 'X-Sync-Token': tok });
+    if (noCsrf.status !== 403) bad.push(`the token without a CSRF token → ${noCsrf.status}`);
+    await sleep(450);
+    const cross = await raw({ Cookie: a.cookieHeader(), 'X-CSRF-Token': a.csrf, 'X-Sync-Token': tok, Origin: 'https://evil.example' });
+    if (cross.status !== 403) bad.push(`the token from a cross-site Origin → ${cross.status}`);
+    // altered tokens are no tokens: the call is judged by the session (a new token comes back), never by the forged claims
+    const parts = tok.split('.');
+    const flip = (x) => x.slice(0, -1) + (x.endsWith('A') ? 'B' : 'A');
+    const other = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    other[0] = Number(b.user.id);   // claim to be B
+    const forged = `s1.${Buffer.from(JSON.stringify(other)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}.${parts[2]}`;
+    for (const [label, t] of [['a flipped signature', `${parts[0]}.${parts[1]}.${flip(parts[2])}`], ['a flipped payload', `${parts[0]}.${flip(parts[1])}.${parts[2]}`], ['another account id with the old signature', forged], ['garbage', 'not-a-token'], ['an empty signature', `${parts[0]}.${parts[1]}.`]]) {
+      await sleep(120);
+      const r = await syncCall(a, {}, { token: t });
+      if (!(r.status === 200 && typeof r.data.t === 'string') && r.status !== 429) bad.push(`${label} → ${r.status}${r.data && r.data.t === undefined ? ' (accepted as a token)' : ''}`);
+    }
+    assert(!bad.length, bad.join(' | '));
+    return 'the owner: token path; another browser: judged as itself; no cookie / other CSRF token / cross-site: 401 / 403; 5 altered tokens: ignored';
   });
 }
 

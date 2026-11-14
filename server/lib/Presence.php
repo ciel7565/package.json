@@ -4,6 +4,12 @@
  * Everything other players receive about you passes through here, so every field is validated:
  * positions are clamped to the world, animation/zone/emote ids must match known patterns,
  * and appearance keeps only known keys with whitelisted values (no free text).
+ *
+ * Phase 8 (CONTRACT §16.9): with a usable cache the state lives in the sync channels (Tfm\Sync) — update() seats the
+ * account in a channel and others() answers from that channel (stable membership: the same neighbours every time,
+ * nearest first), without a database statement; the presence table is written behind (Sync::flush). Old pages that
+ * still call api/presence/update.php and new pages that call api/sync.php therefore see each other. Without a cache
+ * (cache.driver off) everything below works on the table exactly as before.
  * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -52,9 +58,25 @@ final class Presence
         return max($min, min($max, (float) $v));
     }
 
+    /** @var array|null [uid, players, online] of the channel update() just did (others() / onlineCount() hand it out) */
+    private static $last = null;
+
+    /** is the channel store in use? */
+    private static function shared(): bool
+    {
+        return class_exists('Tfm\\Sync') && Sync::enabled();
+    }
+
     /** upsert my presence row from a client body */
     public static function update(array $user, array $b, int $now): void
     {
+        if (self::shared()) {
+            // [scale-server] the same typing and clamping as below, then one locked step in the account's channel
+            $in = Sync::presence($b) + ['ap' => array_key_exists('appearance', $b) && is_array($b['appearance']) ? $b['appearance'] : null, 'q' => [], 'w' => [], 'c' => 0, 'r' => null, 'ns' => null, 'qt' => null];
+            $r = Sync::legacyUpdate($user, $in, $now);
+            self::$last = [(int) $user['id'], $r['players'], (int) $r['online']];
+            return;
+        }
         $anim = isset($b['anim']) && is_string($b['anim']) && in_array($b['anim'], self::ANIMS, true) ? $b['anim'] : null;
         $zone = isset($b['zoneId']) && is_string($b['zoneId']) && preg_match('/^ZONE_[A-Z0-9_]{1,30}$/', $b['zoneId']) ? $b['zoneId'] : null;
         $emote = isset($b['emote']) && is_string($b['emote']) && preg_match('/^EMO_[A-Z0-9_]{1,30}$/', $b['emote']) ? $b['emote'] : null;
@@ -95,6 +117,7 @@ final class Presence
     /** other active players seen within ttl seconds (never includes emails or internal fields) */
     public static function others(int $myId, int $now): array
     {
+        if (self::$last !== null && self::$last[0] === $myId) return self::$last[1];   // [scale-server] the channel of update()
         $ttl = (int) Config::get('presence.ttl', 15);
         $max = (int) Config::get('presence.max_players', 60);
         $rows = Db::all(
@@ -123,6 +146,8 @@ final class Presence
 
     public static function onlineCount(int $now): int
     {
+        // [scale-server] the seat count of the channels: no statement, no O(online) join per chat poll
+        if (self::shared()) return self::$last !== null ? self::$last[2] : Sync::online();
         $ttl = (int) Config::get('presence.ttl', 15);
         return (int) Db::value("SELECT COUNT(*) FROM presence p JOIN users u ON u.id = p.user_id WHERE p.updated_at >= ? AND u.status = 'active'", [$now - $ttl * 1000]);
     }
@@ -130,6 +155,10 @@ final class Presence
     /** my last known position (for 'local' chat) */
     public static function position(int $userId, int $now): ?array
     {
+        if (self::shared()) {                                           // [scale-server]
+            $p = Sync::position($userId, $now);
+            return $p === null ? null : ['x' => $p['x'], 'z' => $p['z']];
+        }
         $r = Db::one('SELECT x, z, updated_at FROM presence WHERE user_id = ?', [$userId]);
         if (!$r || (int) $r['updated_at'] < $now - 60000) return null;
         return ['x' => (float) $r['x'], 'z' => (float) $r['z']];
@@ -137,6 +166,27 @@ final class Presence
 
     public static function remove(int $userId): void
     {
+        // [scale-server] the seat in the channel ends now (and with it the account's sync tokens)
+        try { if (class_exists('Tfm\\Sync')) Sync::revoke($userId); } catch (\Throwable $e) { /* the seat runs out by itself */ }
         try { Db::exec('DELETE FROM presence WHERE user_id = ?', [$userId]); } catch (\Throwable $e) { /* ignore */ }
+    }
+
+    /** players per zone right now: zone id → count (the admin dashboard) */
+    public static function zones(int $now): array
+    {
+        $out = [];
+        if (self::shared()) {
+            foreach (array_keys(Sync::channels()) as $ch) {
+                foreach (Sync::members($ch, $now) as $m) {
+                    if ($m['zone'] !== null) $out[$m['zone']] = (isset($out[$m['zone']]) ? $out[$m['zone']] : 0) + 1;
+                }
+            }
+            arsort($out);
+            return $out;
+        }
+        foreach (Db::all('SELECT zone_id, COUNT(*) AS n FROM presence WHERE updated_at >= ? AND zone_id IS NOT NULL GROUP BY zone_id', [$now - (int) Config::get('presence.ttl', 15) * 1000]) as $r) {
+            $out[(string) $r['zone_id']] = (int) $r['n'];
+        }
+        return $out;
     }
 }

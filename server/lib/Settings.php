@@ -24,16 +24,31 @@ final class Settings
         'security.notice' => 'str:200',
     ];
 
-    public static function reset(): void { self::$cache = null; }
+    public static function reset(): void { self::$cache = null; self::forgetShared(); }
+
+    /** [scale-server] drop the copy in the shared cache (a row was written): the next read asks the database */
+    private static function forgetShared(): void
+    {
+        try { if (class_exists('Tfm\\Cache', false)) Cache::del('cfg:settings'); } catch (\Throwable $e) { /* expires in seconds */ }
+    }
 
     private static function load(): array
     {
         if (self::$cache !== null) return self::$cache;
+        // [scale-server] CONTRACT §16.9: the rows are kept in the shared cache for cache.settings_ttl seconds (30), so a
+        // request that only needs a setting (ping: the farm time scale) asks the database nothing. set() and reset()
+        // drop the copy at once; on a second web server with a memory cache a change shows after those seconds.
+        $ttl = 0;
+        try {
+            $ttl = class_exists('Tfm\\Cache') ? (int) Config::get('cache.settings_ttl', 30) : 0;
+            if ($ttl > 0) { $c = Cache::get('cfg:settings'); if (is_array($c)) return self::$cache = $c; }
+        } catch (\Throwable $e) { $ttl = 0; }
         $out = [];
         try {
             foreach (Db::all('SELECT k, v FROM settings') as $r) {
                 $out[(string) $r['k']] = Json::tryDecode((string) $r['v'], true);
             }
+            if ($ttl > 0) { try { Cache::set('cfg:settings', $out, $ttl); } catch (\Throwable $e) { /* read again next time */ } }
         } catch (\Throwable $e) {
             $out = []; // a database that has not been upgraded to v6 yet: the config defaults apply
         }
@@ -62,6 +77,7 @@ final class Settings
         if (!is_string($json)) throw new ApiException(400, 'INVALID_SETTING', '설정 값을 저장하지 못했어요.');
         Db::upsert('settings', ['k' => $key, 'v' => $json, 'updated_at' => Clock::ms(), 'updated_by' => $actorId ?: null], ['k']);
         self::$cache = null;
+        self::forgetShared(); // [scale-server]
         Audit::log('setting_changed', $actorId, ['key' => $key, 'value' => $value], 'warn', $actorId);
     }
 

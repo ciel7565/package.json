@@ -61,6 +61,8 @@ return [
             'password' => $env('TFM_DB_PASS', ''),
             // 데이터베이스가 다른 컴퓨터에 있으면 암호화(TLS)가 필요해요: 'ssl_ca' => 'C:\\xampp\\mysql\\ca.pem'
             // (같은 내부망이라 암호화 없이 써도 된다면 'allow_insecure_remote' => true)
+            // [scale-server] true: PHP 프로세스가 데이터베이스 연결을 요청 사이에 그대로 두고 다시 써요 (접속이 아주 많을 때만; docs/SCALING-KO.md)
+            'persistent' => $env('TFM_DB_PERSISTENT', false),
         ],
         // 테이블이 없거나 오래되면 database/schema*.sql 로 자동으로 만들고 올려요. 전용 계정은 표를 바꿀 수 없으므로 설치 마법사가
         // false 로 적고, 업데이트는 php cli/tfm.php migrate --admin-user root 로 해요.
@@ -187,6 +189,10 @@ return [
         'allot_inbox'  => [60, 60],      // inbox · seen (로그인)
         'allot_apply'  => [10, 3600],    // 분양 신청 (계정별, 한 시간에 10번)
         'allot_write'  => [20, 600],     // cancel · waitlist · nameplate · pay-prepare · pay-confirm
+        // ↓ 8단계 1만 명 대비 (CONTRACT §16.9) — [scale-server]
+        'sync'         => [150, 60],     // api/sync.php — 토큰이 있는 보통 호출 (계정별; DB 없이 채널 기록에서 셈)
+        'sync_issue'   => [30, 60],      // api/sync.php — 토큰을 새로 받는 호출 (세션 확인을 거침)
+        'queue'        => [120, 60],     // api/queue.php 대기실 (IP 별)
     ],
 
     // ------------------------------------------------------------------ chat
@@ -323,6 +329,51 @@ return [
         'tick_batch'             => 500,      // 자동화 한 번에 단계마다 처리하는 최대 건수
         'consent_version'        => '2026-11', // 개인정보 동의 문구의 판(版) 이름. 바꾸면 모든 신청자가 새로 동의해요 (문구를 고쳐도 자동으로 새 판이 돼요)
         'daily_report_mail'      => false,    // true: 하루 한 번 분양 현황 요약을 security.alert_email 주소로 보내요 (숫자만, 개인정보 없음)
+    ],
+
+    // ------------------------------------------------------------------ 1만 명 대비 (CONTRACT §16.9) — owner: scale-server
+    // 자세한 설명과 "내 서버에 맞는 숫자 정하는 법"은 docs/SCALING-KO.md 에 있어요. 아래 기본값은 XAMPP 한 대(PC 1대)에 맞춘 값이에요.
+    // 캐시(cache) = 자주 쓰는 값을 잠깐 기억해 두는 곳. 요청 횟수 세기 · 차단 확인 · 계정 확인 · 접속자 위치를 여기서 처리해 데이터베이스를 쉬게 해요.
+    'cache' => [
+        // auto(기본): APCu 확장이 켜져 있으면 메모리(APCu), 없으면 data/cache 폴더의 작은 파일들
+        // apcu | file | db(웹 서버가 여러 대일 때: cache_kv 표) | off(끄기 — 7단계처럼 전부 데이터베이스로)
+        'driver'          => $env('TFM_CACHE_DRIVER', 'auto'),
+        'user_ttl'        => 15,     // 계정 정보(정지 · 권한)를 기억하는 시간(초). 계정이 바뀌면 그 즉시 지워져요
+        'block_ttl'       => 15,     // "이 주소는 차단되지 않음"을 기억하는 시간(초). 새로 차단하면 그 즉시 지워져요
+        'settings_ttl'    => 30,     // 관리자 설정(settings 표)을 기억하는 시간(초)
+        'schema_ttl'      => 30,     // "데이터베이스 표가 최신임"을 기억하는 시간(초). 0 = 요청마다 확인
+        'rate_max_window' => 120,    // 이 시간(초) 이하의 요청 한도는 캐시에서 세요. 더 긴 한도(가입 · 신고 · 업로드: 1시간)는 계속 데이터베이스에서 세요
+    ],
+    // 수용 인원 · 과부하 보호 (lib/Gate.php). 이 서버 PC 에서 직접 연 브라우저(localhost)는 줄이기 · 로그인 조절에 걸리지 않아요.
+    'capacity' => [
+        'max_online'    => $env('TFM_MAX_ONLINE', 300),   // 동시에 마을에 들어와 있을 수 있는 인원. 넘으면 대기실(503 QUEUE + 대기표). 0 = 제한 없음
+        'target_rps'    => $env('TFM_TARGET_RPS', 150),   // 1초에 이만큼의 요청까지는 평소 속도. 넘으면 다음 호출 간격(next)을 그만큼 늘려요
+        'shed_rps'      => $env('TFM_SHED_RPS', 400),     // 1초에 이만큼을 넘으면 새 방문자 · 새 로그인부터 "잠시 후 다시"(503 BUSY). 0 = 끄기
+        'login_per_sec' => $env('TFM_LOGIN_PER_SEC', 5),  // 1초에 처리하는 로그인(비밀번호 확인) 수. 넘으면 503 LOGIN_BUSY. 0 = 제한 없음
+        'seat_ttl'      => $env('TFM_SEAT_TTL', 180),     // 마지막 호출 뒤 자리를 지켜 주는 시간(초). 탭을 닫으면 이 시간 뒤에 자리가 비어요
+        'ticket_ttl'    => 1800,    // 대기표가 유효한 시간(초)
+        'sample'        => 4,       // 요청 4개 중 1개만 세서 초당 요청 수를 어림해요 (세는 비용 줄이기)
+        'gzip_json'     => true,    // 1 KB 이상인 응답을 gzip 으로 줄여 보내요 (브라우저가 받을 수 있을 때)
+        'stats_header'  => $env('TFM_STATS_HEADER', false),   // true: 응답에 X-Tfm-Stats(SQL 횟수 · 걸린 시간)를 붙여요 — 부하 시험용
+    ],
+    // 채널 = 서로 보이는 체험객 묶음. 한 채널이 size 명이 되면 새 채널을 열고, 돌아온 사람은 hard 명까지 원래 채널로 받아요.
+    'channels' => ['size' => $env('TFM_CHANNEL_SIZE', 60), 'hard' => $env('TFM_CHANNEL_HARD', 90)],
+    // api/sync.php (lib/Sync.php 맨 위에 주고받는 형식이 적혀 있어요). *_ms = 다음 호출까지의 시간(밀리초 = 1/1000초)
+    'sync' => [
+        'enabled'     => $env('TFM_SYNC', true),
+        'min_ms'      => 1000,    // 여럿이 빠르게 움직일 때
+        'walk_ms'     => 1500,    // 여럿이 천천히 움직일 때
+        'alone_ms'    => 2500,    // 주변에 아무도 없이 움직일 때
+        'idle_ms'     => 4000,    // 가만히 있을 때
+        'hidden_ms'   => 20000,   // 탭이 가려져 있을 때
+        'max_ms'      => 30000,   // 서버가 바빠 간격을 늘려도 이보다 길어지지 않아요
+        'min_gap_ms'  => 350,     // 이보다 빨리 다시 부르면 429
+        'token_ttl'   => 300,     // 동기화 토큰 수명(초, 최대 600). 지나면 세션을 다시 확인하고 새로 받아요
+        'aoi_radius'  => 90,      // 이 거리(m) 안의 체험객만 보내요 (관심 영역)
+        'max_near'    => 40,      // 한 번에 보내는 주변 체험객 수
+        'flush_every' => 30,      // 접속 위치를 데이터베이스(presence 표)에 옮겨 적는 간격(초)
+        'chat_ring'   => 50,      // 채널마다 기억하는 최근 채팅 줄 수
+        'save_every'  => 60,      // 저장 권장 간격(초). 서버가 바쁘면 그만큼 늘려서 알려 줘요
     ],
 
     // ------------------------------------------------------------------ logs & maintenance

@@ -25,6 +25,15 @@ final class Db
     private static $nativeUpsert = null;
     /** @var bool the schema is older than this code and the account may not change it (db.auto_migrate off) */
     private static $outdated = false;
+    /** @var array [scale-server] what this request asked of the database (CONTRACT §16.9: the statement budget) */
+    private static $stat = ['statements' => 0, 'commits' => 0, 'connects' => 0];
+
+    /**
+     * [scale-server] Statements run through run() (every query of the application), transactions committed and
+     * connections opened by this request. tests/scale-unit.php asserts with it that the sync hot path asks nothing.
+     */
+    public static function stats(): array { return self::$stat; }
+    public static function resetStats(): void { self::$stat = ['statements' => 0, 'commits' => 0, 'connects' => 0]; }
 
     public static function driver(): string { self::pdo(); return self::$driver; }
     /** configured driver name without connecting (never throws) */
@@ -36,6 +45,7 @@ final class Db
     /** drop the connection (the installer switches configuration at runtime) */
     public static function reset(): void
     {
+        self::schemaForget(); // [scale-server] another database may answer next
         self::$pdo = null;
         self::$txDepth = 0;
         self::$nativeUpsert = null;
@@ -55,14 +65,67 @@ final class Db
             return self::$pdo;
         }
         self::$pdo = self::open();
+        // [scale-server] the schema was checked a moment ago by another request: nothing to ask (CONTRACT §16.9)
+        if (self::schemaRemembered()) return self::$pdo;
         if (Config::get('db.auto_migrate', true)) {
             self::migrate();
+            self::schemaRemember();
         } elseif (self::schemaVersion() < self::SCHEMA_VERSION) {
             self::$outdated = true;
             Log::error('DB', 'schema is older than the code and db.auto_migrate is off: run php cli/tfm.php migrate --admin-user <database administrator>', ['have' => self::schemaVersionRaw(), 'need' => self::SCHEMA_VERSION]);
             throw self::outdatedError();
+        } else {
+            self::schemaRemember();
         }
         return self::$pdo;
+    }
+
+    /**
+     * [scale-server] "This database has the schema of this code" is remembered in the cache for cache.schema_ttl
+     * seconds (30), per database: the version query then runs once in a while instead of once per request. The key
+     * names the database (file or host / port / name / account), reset() forgets it, and an SQLite file that is still
+     * nearly empty is never trusted — a brand-new database is always looked at.
+     */
+    private static function schemaKey(): string
+    {
+        if (strtolower((string) Config::get('db.driver', 'sqlite')) === 'mysql') {
+            $m = (array) Config::get('db.mysql', []);
+            $id = 'mysql|' . (isset($m['socket']) ? $m['socket'] : '') . '|' . (isset($m['host']) ? $m['host'] : '') . '|' . (isset($m['port']) ? $m['port'] : '') . '|' . (isset($m['database']) ? $m['database'] : '') . '|' . (isset($m['username']) ? $m['username'] : '');
+        } else {
+            $id = 'sqlite|' . self::dbFilePath();
+        }
+        return 'db:schema:' . substr(sha1($id), 0, 16);
+    }
+
+    private static function schemaRemembered(): bool
+    {
+        try {
+            if (!class_exists('Tfm\Cache') || (int) Config::get('cache.schema_ttl', 30) <= 0) return false;
+            if ((int) Cache::get(self::schemaKey(), 0) !== self::SCHEMA_VERSION) return false;
+            if (self::$driver === 'sqlite') {
+                // a database that was just created is never trusted (in WAL mode its tables may still sit in the -wal file)
+                $f = self::dbFilePath();
+                clearstatcache(true, $f);
+                clearstatcache(true, $f . '-wal');
+                if ((int) @filesize($f) + (int) @filesize($f . '-wal') < 32768) return false;
+            }
+            return true;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    private static function schemaRemember(): void
+    {
+        try {
+            $ttl = (int) Config::get('cache.schema_ttl', 30);
+            if ($ttl > 0 && class_exists('Tfm\Cache')) Cache::set(self::schemaKey(), self::SCHEMA_VERSION, $ttl);
+        } catch (\Throwable $e) { /* asked again next time */ }
+    }
+
+    private static function schemaForget(): void
+    {
+        try { if (class_exists('Tfm\Cache', false)) Cache::del(self::schemaKey()); } catch (\Throwable $e) { /* expires by itself */ }
     }
 
     private static function outdatedError(): ApiException
@@ -73,6 +136,7 @@ final class Db
     /** connect with the configured account (no schema work) */
     private static function open(): PDO
     {
+        self::$stat['connects']++; // [scale-server]
         $driver = strtolower((string) Config::get('db.driver', 'sqlite'));
         if ($driver === 'mysql') {
             $pdo = self::connectMysql((array) Config::get('db.mysql', []));
@@ -144,6 +208,8 @@ final class Db
     public static function mysqlOptions(array $m): array
     {
         $opts = self::options(5);
+        // [scale-server] db.mysql.persistent (off by default): the PHP process keeps its connection between requests
+        if (!empty($m['persistent'])) $opts[PDO::ATTR_PERSISTENT] = true;
         if (defined('PDO::MYSQL_ATTR_MULTI_STATEMENTS')) $opts[PDO::MYSQL_ATTR_MULTI_STATEMENTS] = false;
         if (defined('PDO::MYSQL_ATTR_LOCAL_INFILE')) $opts[PDO::MYSQL_ATTR_LOCAL_INFILE] = false;
         $ca = isset($m['ssl_ca']) && is_string($m['ssl_ca']) ? trim($m['ssl_ca']) : '';
@@ -169,8 +235,14 @@ final class Db
         $user = (string) (isset($m['username']) ? $m['username'] : '');
         if ($user === '') throw new \RuntimeException('db.mysql.username is empty: run install.php or php cli/tfm.php install (no default account)');
         $pdo = new PDO($dsn, $user, (string) (isset($m['password']) ? $m['password'] : ''), $opts);
-        $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
-        $pdo->exec("SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ENGINE_SUBSTITUTION,ERROR_FOR_DIVISION_BY_ZERO'");
+        // [scale-server] one round trip instead of two (MySQL and MariaDB accept NAMES as the first item of a SET list);
+        // a server that refuses the combined form gets the two statements as before
+        try {
+            $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci, SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ENGINE_SUBSTITUTION,ERROR_FOR_DIVISION_BY_ZERO'");
+        } catch (\Throwable $e) {
+            $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $pdo->exec("SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ENGINE_SUBSTITUTION,ERROR_FOR_DIVISION_BY_ZERO'");
+        }
         return $pdo;
     }
 
@@ -304,6 +376,7 @@ final class Db
     // ------------------------------------------------------------------ queries (always prepared)
     public static function run(string $sql, array $params = []): \PDOStatement
     {
+        self::$stat['statements']++; // [scale-server] CONTRACT §16.9: the statement budget of a request
         $st = self::pdo()->prepare($sql);
         foreach (array_values($params) as $i => $v) {
             if (is_bool($v)) { $type = PDO::PARAM_INT; $v = (int) $v; }
@@ -411,6 +484,7 @@ final class Db
         try {
             $r = $fn();
             if (self::$driver === 'sqlite') $pdo->exec('COMMIT'); else $pdo->commit();
+            self::$stat['commits']++; // [scale-server]
             return $r;
         } catch (\Throwable $e) {
             try { if (self::$driver === 'sqlite') $pdo->exec('ROLLBACK'); elseif ($pdo->inTransaction()) $pdo->rollBack(); } catch (\Throwable $e2) { /* ignore */ }

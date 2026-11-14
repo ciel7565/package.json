@@ -55,6 +55,27 @@ final class Sec
 
 final class RateLimit
 {
+    /** @var bool [scale-server] the last hit() was counted in the cache (no table row, nothing to clean up) */
+    private static $cachedHit = false;
+
+    /**
+     * [scale-server] One hit of a short window, counted in Tfm\Cache: [hits in this window, hits in the one before],
+     * or null when this limit belongs to the table (a long window, no cache, a cache that failed just now).
+     */
+    private static function countCached(string $name, string $ident, int $curWin, int $window): ?array
+    {
+        self::$cachedHit = false;
+        try {
+            if ($window > (int) Config::get('cache.rate_max_window', 120) || !class_exists('Tfm\\Cache')) return null;
+            $r = Cache::hitWindow('rl:' . $name . '|' . $ident, $curWin, 2 * $window + 1);
+            if (!is_array($r)) return null;
+            self::$cachedHit = true;
+            return $r;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     /**
      * Sliding-window counter. Throws 429 RATE_LIMITED (+ Retry-After) when exceeded.
      * $ident: "u:<id>" for logged-in users, otherwise "ip:<hash>".
@@ -79,7 +100,12 @@ final class RateLimit
         $prevBucket = substr($name . '|' . $ident . '|' . ($curWin - 1), 0, 190);
         // keep the row two windows: the next window needs this one as its "previous" for the weighting
         $expires = ($curWin + 2) * $winLen;
-        $res = Db::tx(function () use ($curBucket, $prevBucket, $expires) {
+        // [scale-server] CONTRACT §16.9: the counters of the short windows (the polling endpoints: 60 s) live in the
+        // shared cache — the same buckets, the same estimate, the same 429 — so a request no longer pays a database
+        // transaction for being counted. Long windows (register, reports, uploads: an hour) stay in the rate_limits
+        // table: they guard rare actions and must survive a cache restart. No cache (or a failing one) → the table.
+        $res = self::countCached($name, $ident, $curWin, max(1, $window));
+        if ($res === null) $res = Db::tx(function () use ($curBucket, $prevBucket, $expires) {
             if (Db::exec('UPDATE rate_limits SET hits = hits + 1 WHERE bucket = ?', [$curBucket]) === 0) {
                 Db::exec(Db::driver() === 'mysql'
                     ? 'INSERT IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)'
@@ -95,7 +121,7 @@ final class RateLimit
         $elapsed = $now - $curWin * $winLen;                 // ms into the current window
         $prevWeight = max(0.0, 1.0 - $elapsed / $winLen);    // how much of the previous window is still in the trailing window
         $estimate = (int) ceil($prev * $prevWeight) + $cur;
-        if (random_int(1, 100) <= 2) self::cleanup();
+        if (!self::$cachedHit && random_int(1, 100) <= 2) self::cleanup();
         if ($estimate > $limit) {
             // wait until the current window ends (the previous window has fully aged out by then); a full window when
             // the current count alone is already over the limit

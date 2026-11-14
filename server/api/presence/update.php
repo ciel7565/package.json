@@ -7,6 +7,7 @@
  */
 declare(strict_types=1);
 
+define('TFM_LIGHT', true); // [scale-server] CONTRACT §16.9: only the libraries this call names are compiled
 require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\Api;
