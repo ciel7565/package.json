@@ -178,6 +178,11 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       const floor = n.y + 1.5 + Math.pow(Math.max(0, n.d - 10) / W, 1.8) * W * 0.7 + 3 * (1 + gnoise(x / 60, z / 60, 42)) * smooth(10, 40, n.d);     // a U-shaped valley, sides steepen
       const w = smooth(-10, A.ramp, along) * A.depth * Math.exp(-Math.pow(n.d / (W * 1.9), 4));
       if (floor < h) h = lerp(h, floor, w);
+      if (A.id !== 'E' && n.d < 30) {                  // the river's own bed and banks continue along the axis
+        const hw = 9, chan = n.d < hw ? n.y - 0.45 - 1.4 * (1 - (n.d / hw) * (n.d / hw)) : n.y + 0.45 + (n.d - hw) * 0.55;
+        const wc = smooth(-10, A.ramp * 0.6, along);
+        if (chan < h) h = lerp(h, chan, wc);
+      }
     }
     return h;
   }
@@ -190,6 +195,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     if (d <= 180) h = C.height(x, z);
     else if (d >= 430) h = ridgeH(x, z, d);
     else h = lerp(C.height(x, z), ridgeH(x, z, d), smooth(180, 430, d));
+    // the slopes right round the site rise steeper than the plan's own skirt (picture 3: the mountain behind the village
+    // climbs out of the frame); zero at the seam, fading out where the ridge function takes over
+    const B = C.bounds, side = z < B.minZ ? 0.55 : x > B.maxX ? 0.42 : z > B.maxZ ? 0.3 : 0.18;
+    h += side * smooth(3, 70, d) * Math.min(d, 150) * (1 - smooth(260, 430, d)) * (0.75 + 0.5 * vnoise(x / 90, z / 90, 51));
     return carve(C, x, z, h);
   }
 
@@ -267,7 +276,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   const SP = { pine: 0, oak: 1, maple: 1, zelkova: 2, birch: 3, pine_sculpted: 4 };
   const SP_NAMES = ['pine', 'round', 'vase', 'birch', 'sculpted'];
   const BELT = 160;
-  const QPLAN = { low: { dens: 0.12, belt: 120 }, medium: { dens: 0.6, belt: 150 }, high: { dens: 1.0, belt: BELT } };
+  const QPLAN = { low: { dens: 0.12, belt: 120 }, medium: { dens: 0.6, belt: 170 }, high: { dens: 1.0, belt: 230 } };
   function pickSpecies(shares, u) {
     let acc = 0, last = 'pine';
     for (const k of Object.keys(shares)) { acc += shares[k]; last = k; if (u < acc) return k; }
@@ -291,7 +300,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         for (let gx = x0, i = 0; gx < x1; gx += spacing, i++) {
           const x = gx + (hash2(i, j, seed) - 0.5) * spacing * 0.9, z = gz + (hash2(i, j, seed + 1) - 0.5) * spacing * 0.9;
           if (!pointInPoly(x, z, e.poly)) continue;
-          if (outside(x, z, B) > Q.belt) continue;
+          const od = outside(x, z, B);
+          if (od > Q.belt || (od > BELT * 0.75 && hash2(i, j, seed + 6) < 0.3 * smooth(BELT * 0.75, Q.belt, od))) continue;
           if (e.clear && e.clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r)) continue;
           const kind = pickSpecies(e.species || { pine: 1 }, hash2(i, j, seed + 2));
           const s = (0.82 + hash2(i, j, seed + 3) * 0.4) * (kind === 'pine_sculpted' ? 0.6 : 1);
@@ -299,7 +309,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
           const y = H(x, z);
           // too steep for a tree (cliffs carry rocks instead): slope from four probes
           const sl = Math.max(Math.abs(H(x + 2, z) - H(x - 2, z)), Math.abs(H(x, z + 2) - H(x, z - 2))) / 4;
-          if (sl > 1.35) { counts.rejected++; continue; }
+          if (sl > 1.9) { counts.rejected++; continue; }
           push({ x, y, z, sp: SP[kind] ?? 0, kind, s, rot: hash2(i, j, seed + 4) * TAU, src: e.id === 'FO_RIVERSIDE' ? 'riverside' : 'forest', v: hash2(i, j, seed + 5) });
         }
       }
@@ -590,7 +600,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
     for (let i = 0; i < p.length / 3; i++) { uv[i * 2] = p[i * 3] * 0.8 + p[i * 3 + 2] * 0.4; uv[i * 2 + 1] = p[i * 3 + 1] * 0.8 + p[i * 3 + 2] * 0.3; }
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     const col = new Float32Array(p.length);
-    for (let i = 0; i < p.length; i += 3) { const v = 0.75 + 0.4 * vnoise(p[i] * 2 + seed, p[i + 2] * 2 + p[i + 1], 9) + 0.12 * smooth(0.2, 0.6, p[i + 1]); col[i] = v * 0.98; col[i + 1] = v * 0.96; col[i + 2] = v * 0.9; }
+    for (let i = 0; i < p.length; i += 3) { const v = 0.52 + 0.36 * vnoise(p[i] * 2 + seed, p[i + 2] * 2 + p[i + 1], 9) + 0.14 * smooth(-0.1, 0.6, p[i + 1]); col[i] = v * 0.98; col[i + 1] = v * 0.95; col[i + 2] = v * 0.88; }
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.translate(0, 0.12, 0);
     return g;
@@ -669,7 +679,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
     const forests = (C.elements || []).filter((e) => e.type === 'forest' && e.poly).map((e) => ({ e, box: polyBox(e.poly) }));
     const axes = axesOf(C);
     const roads = (C.elements || []).filter((e) => e.type === 'road' && e.pts);
-    const cF = lin('#2f4a1e'), cC = lin('#203519'), cR = lin('#6b6457'), cG = lin('#8f8a78'), cM = lin('#55673a');
+    const cF = lin('#2f4a1e'), cC = lin('#203519'), cR = lin('#5e584d'), cG = lin('#77725f'), cM = lin('#55673a');
     for (let i = 0; i < N; i++) {
       const x = p[i * 3], y = p[i * 3 + 1], z = p[i * 3 + 2], ny = n[i * 3 + 1];
       const slope = 1 - ny;
@@ -713,39 +723,45 @@ vec4 cxCell(vec2 p, out vec2 toF){
       fhead: 'varying vec4 vMix; varying vec3 vCxWN; ' + WP_VARY + GLSL_COMMON + GLSL_CELL + 'float cxDome; float cxCover; vec2 cxToF; float cxDet;',
       fcolor: `{
         vec3 Nw = normalize(vCxWN); float slope = 1.0 - Nw.y;
-        vec2 cp = vCxWP.xz / 5.2 + vec2(cxN(vCxWP.xz / 13.0), cxN(vCxWP.zx / 13.0 + 4.0)) * 0.9;
+        vec2 p = vCxWP.xz + vec2(vCxWP.y * 0.31, -vCxWP.y * 0.23);
+        // canopy: crown clumps of noise at two sizes (no visible cells), crown domes from a soft cell layer, dark holes
+        vec2 cp = p / 4.1;
         vec4 c = cxCell(cp, cxToF);
         float fw = length(fwidth(cp));
-        cxDet = 1.0 - smoothstep(0.25, 0.9, fw);
-        cxDome = 1.0 - clamp(c.x * c.x, 0.0, 1.0);
-        float gap = smoothstep(0.0, 0.32, c.y - c.x) * (1.0 - smoothstep(0.85, 1.15, c.x));
-        cxCover = vMix.z * (1.0 - smoothstep(0.55, 0.8, slope));
-        float patchN = cxFbm(vCxWP.xz / 85.0);
-        float conif = clamp(vMix.w + (patchN - 0.5) * 0.5, 0.0, 1.0);
-        float isCon = step(c.z, conif);
-        float hue = fract(c.z * 13.7);
-        float clus = cxFbm(vCxWP.xz / 38.0);
-        vec3 broad = mix(vec3(0.058, 0.094, 0.024), vec3(0.1, 0.136, 0.036), hue) * mix(0.78, 1.15, clus);
-        vec3 con = mix(vec3(0.03, 0.054, 0.022), vec3(0.048, 0.076, 0.03), fract(hue * 7.3)) * mix(0.85, 1.1, clus);
+        cxDet = 1.0 - smoothstep(0.3, 1.1, fw);
+        float n1 = cxFbm(p / 7.5), n2 = cxN(p / 2.6 + 9.1), n3 = cxFbm(p / 31.0 + 3.7);
+        float clump = n1 * 0.6 + n2 * 0.4;
+        cxDome = mix(clump, 1.0 - clamp(c.x * c.x, 0.0, 1.0), 0.35);
+        float hole = smoothstep(0.36, 0.18, clump) * cxDet;
+        cxCover = vMix.z * (1.0 - smoothstep(0.62, 0.85, slope));
+        float conif = clamp(vMix.w + (cxFbm(vCxWP.xz / 85.0) - 0.5) * 0.55, 0.0, 1.0);
+        float isCon = smoothstep(conif - 0.08, conif + 0.08, cxN(p / 13.0 + 1.7));
+        isCon = 1.0 - isCon;
+        float hue = cxN(p / 5.3 - 4.4);
+        vec3 broad = mix(vec3(0.06, 0.1, 0.026), vec3(0.115, 0.155, 0.04), hue) * mix(0.8, 1.15, n3);
+        vec3 con = mix(vec3(0.032, 0.056, 0.024), vec3(0.05, 0.08, 0.032), hue) * mix(0.85, 1.1, n3);
         vec3 crown = mix(broad, con, isCon);
-        crown *= mix(0.48, 1.1, cxDome);
-        crown += isCon * vec3(0.02, 0.028, 0.007) * smoothstep(0.75, 1.0, cxDome);
-        crown *= mix(0.38, 1.0, gap);
-        vec3 avg = mix(mix(vec3(0.058, 0.094, 0.024), vec3(0.1, 0.136, 0.036), 0.5), vec3(0.039, 0.065, 0.026), conif) * mix(0.66, 0.8, clus);
-        crown = mix(avg, crown, cxDet);
-        vec3 rock = vec3(0.15, 0.135, 0.112) * (0.7 + 0.55 * cxFbm(vCxWP.xz / 7.0 + vCxWP.y / 5.0));
+        crown *= mix(0.62, 1.12, cxDome * cxDet + 0.55 * (1.0 - cxDet));
+        crown += isCon * vec3(0.016, 0.022, 0.006) * smoothstep(0.7, 0.95, cxDome) * cxDet;
+        crown *= 1.0 - 0.45 * hole;
+        vec3 rock = vec3(0.13, 0.12, 0.1) * (0.7 + 0.55 * cxFbm(vCxWP.xz / 7.0 + vCxWP.y / 5.0));
         rock *= 0.82 + 0.36 * cxN(vec2(vCxWP.y * 0.9, (vCxWP.x + vCxWP.z) * 0.04));
-        vec3 gravel = vec3(0.34, 0.32, 0.28) * (0.75 + 0.45 * cxN(vCxWP.xz * 1.3));
-        vec3 meadow = vec3(0.11, 0.135, 0.045) * (0.8 + 0.4 * cxFbm(vCxWP.xz / 5.0));
+        vec3 gravel = vec3(0.2, 0.19, 0.165) * (0.7 + 0.5 * cxN(vCxWP.xz * 1.3));
+        vec3 meadow = vec3(0.1, 0.13, 0.042) * (0.8 + 0.4 * cxFbm(vCxWP.xz / 5.0));
         vec3 ground = mix(meadow, gravel, vMix.y);
-        float rockW = clamp(vMix.x + smoothstep(0.42, 0.7, slope), 0.0, 1.0) * (1.0 - cxCover * 0.55);
+        float rockW = clamp(vMix.x + smoothstep(0.5, 0.78, slope), 0.0, 1.0) * (1.0 - cxCover * 0.55);
         vec3 col = mix(mix(ground, crown, cxCover), rock, rockW);
         diffuseColor.rgb = col;
       }`,
       fnormal: `{
-        float k = 1.25 * cxCover * cxDet;
+        vec2 p = vCxWP.xz + vec2(vCxWP.y * 0.31, -vCxWP.y * 0.23);
+        float e = 0.6;
+        float c0 = cxFbm(p / 7.5) * 0.6 + cxN(p / 2.6 + 9.1) * 0.4;
+        float cx = cxFbm((p + vec2(e, 0.0)) / 7.5) * 0.6 + cxN((p + vec2(e, 0.0)) / 2.6 + 9.1) * 0.4;
+        float cz = cxFbm((p + vec2(0.0, e)) / 7.5) * 0.6 + cxN((p + vec2(0.0, e)) / 2.6 + 9.1) * 0.4;
+        float k = 2.6 * cxCover * cxDet;
         vec3 Nw = normalize(vCxWN);
-        vec3 nW = normalize(Nw + vec3(-cxToF.x, 0.0, -cxToF.y) * k * (0.35 + cxDome));
+        vec3 nW = normalize(Nw - vec3((cx - c0) / e, 0.0, (cz - c0) / e) * k);
         normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
       }`,
     });
@@ -885,15 +901,15 @@ vec4 cxCell(vec2 p, out vec2 toF){
         cxQ = vec2(dot(vCxWP.xz, cxDir), dot(vCxWP.xz, cxSide));
         float t = uTime;
         float d = max(vDepth, 0.0);
-        vec3 shallow = vec3(0.24, 0.235, 0.17), mid = vec3(0.045, 0.12, 0.1), deep = vec3(0.012, 0.05, 0.052);
-        vec3 col = mix(deep, mid, exp(-d * 0.9));
+        vec3 shallow = vec3(0.26, 0.25, 0.18), mid = vec3(0.07, 0.17, 0.14), deep = vec3(0.025, 0.095, 0.095);
+        vec3 col = mix(deep, mid, exp(-d * 0.7));
         col = mix(col, shallow * (0.8 + 0.4 * cxN(vCxWP.xz * 0.9)), exp(-d * 2.6));
         float s1 = cxN(vec2(cxQ.x * 0.22 - t * cxSpd * 1.1, cxQ.y * 2.4));
         float s2 = cxN(vec2(cxQ.x * 0.7 - t * cxSpd * 1.9, cxQ.y * 5.0) + 3.1);
         cxFoamV = smoothstep(0.55, 0.9, s1 * 0.7 + s2 * 0.5 + vFoam * 0.55 - 0.15) * clamp(vFoam * 1.6, 0.0, 1.0);
         col = mix(col, vec3(0.78, 0.8, 0.79), cxFoamV);
         diffuseColor.rgb = col;
-        diffuseColor.a = clamp(mix(0.42, 0.93, smoothstep(0.03, 1.3, d)) + cxFoamV * 0.4, 0.0, 1.0);
+        diffuseColor.a = clamp(mix(0.32, 0.86, smoothstep(0.03, 1.6, d)) + cxFoamV * 0.4, 0.0, 1.0);
       }`,
       fnormal: `{
         float t = uTime, e = 0.12;
@@ -982,7 +998,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
   function rockMaterial(low, U) {
     if (low) return new THREE.MeshLambertMaterial({ vertexColors: true, color: new THREE.Color('#8d877b') });
     const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0, color: 0xffffff });
-    if (G.mat && G.mat.apply) { try { G.mat.apply(m, 'granite_stone', { tile: [2.2, 2.2], look: [150, 146, 136] }); } catch (e) { /* no pack: plain colour */ } }
+    if (G.mat && G.mat.apply) { try { G.mat.apply(m, 'granite_stone', { tile: [2.2, 2.2], look: [124, 119, 108] }); } catch (e) { /* no pack: plain colour */ } }
     return patch(m, 'rock', {
       uniforms: U,
       vhead: 'attribute float aWY; varying float vWY; ' + WP_VARY,
@@ -1378,12 +1394,14 @@ vec4 cxCell(vec2 p, out vec2 toF){
           const slope = Math.hypot(hx, hz) / (2 * Lt.c);
           const x = Lt.x0 + i * Lt.c, z = Lt.z0 + j * Lt.c;
           const far = !!river && Math.abs(z - clamp(z, river.pts[0][1], river.pts[river.pts.length - 1][1])) < 200 && x < riverXAt(river.pts, z) - 10;
-          if (slope < (far ? 0.62 : 0.95) || hash2(i, j, Lt.c) > (far ? 0.85 : 0.35)) continue;
+          if (slope < (far ? 0.85 : 1.35) || hash2(i, j, Lt.c) > (far ? 0.42 : 0.2)) continue;
+          if (!far && outside(x, z, C.bounds) < 40) continue;
           if (blocked(C, x, z, 2, {})) continue;
-          const s = (far ? 4.2 : 3.2) + hash2(i, j, 3) * (far ? 6 : 3.5);
-          cliffs.push({ x: x + (hash2(i, j, 4) - 0.5) * Lt.c * 0.6, z: z + (hash2(i, j, 5) - 0.5) * Lt.c * 0.6, y: h - SEAM_DROP - s * 0.35, s, nx: -hx / Math.hypot(hx, hz), nz: -hz / Math.hypot(hx, hz), far });
+          const s = (far ? 3.6 : 2.6) + hash2(i, j, 3) * (far ? 5 : 2.5);
+          const gl = Math.hypot(hx, hz) / (2 * Lt.c);
+          cliffs.push({ x: x + (hash2(i, j, 4) - 0.5) * Lt.c * 0.6, z: z + (hash2(i, j, 5) - 0.5) * Lt.c * 0.6, y: h - SEAM_DROP - s * 0.12, s, gx: hx / (2 * Lt.c), gz: hz / (2 * Lt.c), gl, far });
           if (far && hash2(i, j, 6) < 0.45) {                 // a pine on the cliff top (picture 4)
-            const px = x + hx / Math.hypot(hx, hz) * s * 0.7, pz = z + hz / Math.hypot(hx, hz) * s * 0.7;
+            const px = x + hx / Math.hypot(hx, hz) * s * 0.9, pz = z + hz / Math.hypot(hx, hz) * s * 0.9;
             if (!blocked(C, px, pz, 2, {})) T.list.push({ x: px, y: hAt(px, pz), z: pz, sp: SP.pine, kind: 'pine', s: 0.75 + hash2(i, j, 7) * 0.3, rot: hash2(i, j, 8) * TAU, src: 'cliff', v: 0.4 });
           }
         }
@@ -1397,6 +1415,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
       try {
         grove = nature.grove(T.list.map((t) => ({ x: t.x, y: t.y, z: t.z, species: t.kind, scale: t.s, rot: t.rot })), { parent: root, space: 'parent', name: 'cxl-grove', heightAt: hSite, colliders: false });
         if (!grove || typeof grove.dispose !== 'function' || !grove.count) { if (grove && grove.dispose) grove.dispose(); grove = null; }
+        else if (grove.group) grove.group.traverse((o) => { o.userData.cxlFamily = 'tree'; });
       } catch (e) { G.log && G.log.warn && G.log.warn('COMPLEX', 'landscape: grove() failed — own trees instead', e); grove = null; }
     }
     const treeMat = own(treeMaterial(low, U, 'near'));
@@ -1412,7 +1431,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
       const realTrees = (x, z) => { if (low || outside(x, z, B) > (QPLAN[q] || QPLAN.high).belt) return false; for (const F of forests) { const b = F.box; if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && pointInPoly(x, z, F.e.poly)) return true; } return false; };
       const mix = md.geo.attributes.aMix.array, mpos = md.geo.attributes.position.array;
       void mix; void mpos;
-      const P = { high: [0.55, 0.85, 0.8, 0.7], medium: [0.35, 0.6, 0.6, 0.55], low: [0, 0.1, 0.18, 0.2] }[q];
+      const P = { high: [0.55, 0.85, 0.8, 0.7], medium: [0.35, 0.6, 0.6, 0.55], low: [0.15, 0.3, 0.3, 0.25] }[q];
       const SC = [8.5, 9.5, 15, 24];
       md.lattices.forEach((Lt, k) => {
         const w = Lt.nx + 1, step = k === 0 ? 2 : 1;
@@ -1426,7 +1445,6 @@ vec4 cxCell(vec2 p, out vec2 toF){
           const ridge = (2 * h - hl - hr) > 0.22 * Lt.c || (2 * h - hu - hd) > 0.22 * Lt.c;
           const u = hash2(i, j, 100 + k);
           if (!ridge && u > P[k]) continue;
-          if (low && !ridge) continue;
           if (realTrees(x, z)) continue;
           const jx = x + (hash2(i, j, 110 + k) - 0.5) * Lt.c * 0.8, jz = z + (hash2(i, j, 120 + k) - 0.5) * Lt.c * 0.8;
           if (blocked(C, jx, jz, SC[k] * 0.4, {})) continue;
@@ -1513,9 +1531,13 @@ vec4 cxCell(vec2 p, out vec2 toF){
       const m = new THREE.Matrix4(), qt = new THREE.Quaternion(), q2 = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), nrm = new THREE.Vector3();
       list.forEach((r, i) => {
         if (cliff) {
-          nrm.set(r.nx * 0.8, 0.6, r.nz * 0.8).normalize(); qt.setFromUnitVectors(up, nrm);
-          q2.setFromEuler(e.set(0, hash2(i, 1, 77) * TAU, 0)); qt.multiply(q2);
-          v.set(r.x, r.y, r.z); s.set(r.s * (0.9 + hash2(i, 2, 77) * 0.5), r.s * (1.1 + hash2(i, 3, 77) * 0.6), r.s * (0.8 + hash2(i, 4, 77) * 0.4));
+          // basis: X along the contour, Y up the slope, Z out of it (the terrain normal) — a slab flush with the face
+          nrm.set(-r.gx, 1, -r.gz).normalize();
+          const X = new THREE.Vector3().crossVectors(up, nrm); if (X.lengthSq() < 1e-6) X.set(1, 0, 0); X.normalize();
+          const Y = new THREE.Vector3().crossVectors(nrm, X).normalize();
+          m.makeBasis(X, Y, nrm); qt.setFromRotationMatrix(m);
+          q2.setFromAxisAngle(nrm, (hash2(i, 1, 77) - 0.5) * 0.9); qt.premultiply(q2);
+          v.set(r.x, r.y, r.z); s.set(r.s * (1.1 + hash2(i, 2, 77) * 0.8), r.s * (0.8 + hash2(i, 3, 77) * 0.6), r.s * (0.45 + hash2(i, 4, 77) * 0.25));
         } else {
           const y = (r.garden ? C.height(r.x, r.z) : hAt(r.x, r.z)) - r.r * 0.22;
           qt.setFromEuler(e.set((hash2(i, 5, 78) - 0.5) * 0.4, hash2(i, 6, 78) * TAU, (hash2(i, 7, 78) - 0.5) * 0.4));
@@ -1599,13 +1621,13 @@ vec4 cxCell(vec2 p, out vec2 toF){
         hedge.name = 'cxl-hedges'; hedge.castShadow = !low; hedge.receiveShadow = !low;
         hedge.userData.colorScale = 1;
         // hedge colour lives in the vertex shades × a material colour (no instance colour here)
-        hedge.material.color = new THREE.Color(0.055, 0.1, 0.036).multiplyScalar(low ? 6 : 1);
+        hedge.material.color = new THREE.Color(0.1, 0.17, 0.06).multiplyScalar(low ? 3.5 : 1);
         root.add(hedge); gardenMeshes.push(hedge);
         stats.counts.hedgeRuns = lines.length;
       }
       // flower drifts (azalea cushions) between the pines, round the fountain paving and at the gate pines
       const fl = [];
-      const pal = [lin('#b8236b'), lin('#e9e4dc'), lin('#e0769a'), lin('#d6a21e'), lin('#7c4aa8')];
+      const pal = [lin('#c2185b'), lin('#e05a8f'), lin('#b8236b'), lin('#d6a21e'), lin('#f0ece4'), lin('#9c2f86')];
       const nd = low ? 6 : high ? 16 : 10;
       for (let k = 0; k < nd; k++) {
         const a = (k + 0.5) / nd * TAU + 0.15, r = (F ? F.r + 2.6 : 3) + hash2(k, 1, 401) * (gd.r - (F ? F.r + 5 : 6));
@@ -1842,11 +1864,15 @@ vec4 cxCell(vec2 p, out vec2 toF){
     const measure = () => {
       const fam = {}; let calls = 0, tris = 0;
       root.traverse((o) => {
-        if (!o.isMesh || !o.visible) return;
-        const g = o.geometry; const per = o.userData.tris || (g.index ? g.index.count / 3 : g.attributes.position.count / 3);
+        if (!o.isMesh || !o.visible || (o.material && o.material.visible === false) || o.userData.dataOnly) return;
+        let hidden = false; for (let p = o.parent; p && p !== root; p = p.parent) if (!p.visible) hidden = true;
+        if (hidden) return;
+        const g = o.geometry;
+        let per = o.userData.tris || (g.index ? g.index.count / 3 : g.attributes.position.count / 3);
+        if (!o.userData.tris && g.drawRange && Number.isFinite(g.drawRange.count)) per = Math.min(per, g.drawRange.count / 3);
         const n = o.isInstancedMesh ? o.count : g.isInstancedBufferGeometry ? g.instanceCount : 1;
-        if (!n) return;
-        const f = o.name.replace(/^cxl-/, '').replace(/-(\d|sedan|suv|body|label|broad|conifer).*$/, '').replace(/-.*$/, '');
+        if (!n || !per) return;
+        const f = o.userData.cxlFamily || o.name.replace(/^cxl-/, '').replace(/-(\d|sedan|suv|body|label|broad|conifer).*$/, '').replace(/-.*$/, '');
         const a = fam[f] || (fam[f] = { calls: 0, tris: 0 }); a.calls++; a.tris += per * n; calls++; tris += per * n;
       });
       return { calls, tris: Math.round(tris), families: fam };
