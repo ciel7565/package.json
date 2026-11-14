@@ -457,7 +457,8 @@ CREATE TABLE IF NOT EXISTS allot_units (
   KEY ix_aunits_kind (kind, status, id),
   KEY ix_aunits_zone (zone_id, status, id),
   KEY ix_aunits_free (zone_id, status, seq),
-  KEY ix_aunits_hold (status, hold_until)
+  KEY ix_aunits_hold (status, hold_until),
+  KEY ix_aunits_state (status, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 
 CREATE TABLE IF NOT EXISTS allot_customers (
@@ -544,7 +545,8 @@ CREATE TABLE IF NOT EXISTS allot_payments (
   UNIQUE KEY ux_apay_order (order_id),
   UNIQUE KEY ux_apay_idem (idem),
   KEY ix_apay_contract (contract_id, id),
-  KEY ix_apay_status (status, created_at)
+  KEY ix_apay_status (status, created_at),
+  KEY ix_apay_paid (paid_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 
 CREATE TABLE IF NOT EXISTS allot_waitlist (

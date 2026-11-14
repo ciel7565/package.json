@@ -184,6 +184,26 @@ final class Allot
         return (int) mktime((int) date('G', $sec), (int) date('i', $sec), (int) date('s', $sec), $m, min((int) date('j', $sec), $last), $y) * 1000 + $ms % 1000;
     }
 
+    /**
+     * addMonths() for a date that belongs to a contract: the day of the month follows $anchor (the start of the contract),
+     * so a payer who started on the 31st stays on "the last day" — Jan 31 → Feb 28 → Mar 31 — instead of sliding to the
+     * 28th for ever after the first February. A date that is not on that grid (the operator set it by hand) keeps its own
+     * day, exactly like addMonths().
+     */
+    private static function addMonthsFrom(int $ms, int $n, int $anchor): int
+    {
+        if ($n === 0) return $ms;
+        if ($anchor <= 0) return self::addMonths($ms, $n);
+        $sec = intdiv($ms, 1000);
+        $want = (int) date('j', intdiv($anchor, 1000));
+        if ((int) date('j', $sec) !== min($want, (int) date('t', $sec))) return self::addMonths($ms, $n);
+        $t = (int) date('Y', $sec) * 12 + ((int) date('n', $sec) - 1) + $n;
+        $y = intdiv($t, 12);
+        $m = $t % 12 + 1;
+        $last = (int) date('t', (int) mktime(0, 0, 0, $m, 1, $y));
+        return (int) mktime((int) date('G', $sec), (int) date('i', $sec), (int) date('s', $sec), $m, min($want, $last), $y) * 1000 + $ms % 1000;
+    }
+
     // ---- optional shared cache (Tfm\Cache, CONTRACT §16.9): every call is guarded, a miss or an error means "ask the database"
     private static function cacheGet(string $key)
     {
@@ -562,7 +582,9 @@ final class Allot
     // ------------------------------------------------------------------ units
     private const UNIT_SELECT = 'SELECT u.id, u.zone_id, z.code AS zone_code, z.name AS zone_name, z.is_open AS zone_open, u.kind, u.code, u.seq, u.status, u.contract_id, u.hold_until, u.label, u.label_show,
             u.updated_at, c.contract_no, c.status AS contract_status
-        FROM allot_units u JOIN allot_zones z ON z.id = u.zone_id LEFT JOIN allot_contracts c ON c.id = u.contract_id';
+        FROM allot_units u LEFT JOIN allot_zones z ON z.id = u.zone_id LEFT JOIN allot_contracts c ON c.id = u.contract_id';
+    // [verify-allot] LEFT JOINs on purpose (every unit has its zone, every contract its unit — none is ever deleted): an inner
+    // join lets MariaDB start from the 11-row zones table and sort ALL units / contracts for a 50-row page (47 ms → 1.4 ms)
 
     private static function unitOut(array $r): array
     {
@@ -597,7 +619,8 @@ final class Allot
     public static function listUnits(array $filter, int $limit = 50, int $afterId = 0): array
     {
         $kind = isset($filter['kind']) && in_array($filter['kind'], self::KINDS, true) ? (string) $filter['kind'] : '';
-        $status = isset($filter['status']) && isset(self::STATUS_CHAR[$filter['status']]) ? (string) $filter['status'] : '';
+        // [verify-allot] a filter value from a query string can be an array (status[]=…): only a string is a status
+        $status = isset($filter['status']) && is_string($filter['status']) && isset(self::STATUS_CHAR[$filter['status']]) ? (string) $filter['status'] : '';
         $zid = 0;
         if (isset($filter['zone']) && $filter['zone'] !== '' && $filter['zone'] !== 0) {
             $z = self::zoneRow($filter['zone']);
@@ -1385,6 +1408,7 @@ final class Allot
             if ($status === 'active') { self::approveLocked($c, self::idOrNull($actor), $now, $memo); return 0; }
             return self::closeLocked($c, 'canceled', 'rejected', self::idOrNull($actor), $now, 'rejected', '신청을 진행하지 못했어요', '{unit} 자리 신청을 진행하지 못했어요.' . ($memo !== '' ? ' ' . $memo : ''));
         });
+        if ($status === 'canceled') self::refundTossQuietly($contractId, $now); // [verify-allot] a rejected application gets its 토스 money back
         self::offerQuietly((int) $freed, $now);
         return (array) self::contract($contractId);
     }
@@ -1483,7 +1507,7 @@ final class Allot
         $term = (int) $c['term_months'];
         $old = (int) $c['ends_at'];
         if ($term < 1 || $old < 1) throw new ApiException(409, 'NOT_RENEWABLE', '기간이 정해지지 않은 계약이라 연장할 것이 없어요.');
-        $new = self::addMonths($old, $term * $terms);
+        $new = self::addMonthsFrom($old, $term * $terms, (int) $c['starts_at']);
         $paid = (int) $c['price'] <= 0 ? $new : (int) $c['paid_until'];
         if (Db::exec('UPDATE allot_contracts SET ends_at = ?, paid_until = ?, end_stage = 999, updated_at = ? WHERE id = ? AND ends_at = ?', [$new, $paid, $now, (int) $c['id'], $old]) !== 1) {
             throw new ApiException(409, 'CONFLICT', '방금 다른 곳에서 이 계약을 바꿨어요. 다시 확인해 주세요.');
@@ -1547,14 +1571,15 @@ final class Allot
         V::str($why, 'why', 40);
         $why = self::cleanPrivate($why, 40);
         $now = self::now($now);
-        $freed = Db::txRetry(function () use ($contractId, $why, $actor, $now) {
+        $res = Db::txRetry(function () use ($contractId, $why, $actor, $now) {
             $c = self::lockContract($contractId);
             $st = (string) $c['status'];
             if (!in_array($st, self::LIVE, true)) throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약이에요.');
-            if ($st === 'pending') return self::closeLocked($c, 'canceled', $why === '' ? 'admin' : $why, self::idOrNull($actor), $now, 'rejected', '신청을 진행하지 못했어요', '{unit} 자리 신청을 진행하지 못했어요.');
-            return self::closeLocked($c, 'ended', $why === '' ? 'admin' : $why, self::idOrNull($actor), $now, 'ended', '분양이 끝났어요', '{unit} 자리 분양이 끝났어요. 그동안 고마웠어요.');
+            if ($st === 'pending') return [self::closeLocked($c, 'canceled', $why === '' ? 'admin' : $why, self::idOrNull($actor), $now, 'rejected', '신청을 진행하지 못했어요', '{unit} 자리 신청을 진행하지 못했어요.'), true];
+            return [self::closeLocked($c, 'ended', $why === '' ? 'admin' : $why, self::idOrNull($actor), $now, 'ended', '분양이 끝났어요', '{unit} 자리 분양이 끝났어요. 그동안 고마웠어요.'), false];
         });
-        self::offerQuietly((int) $freed, $now);
+        if ($res[1]) self::refundTossQuietly($contractId, $now); // [verify-allot] a pending application never started: its 토스 money goes back
+        self::offerQuietly((int) $res[0], $now);
         return (array) self::contract($contractId);
     }
 
@@ -1621,7 +1646,7 @@ final class Allot
 
     private const CON_SELECT = 'SELECT c.*, u.code AS unit_code, u.kind AS unit_kind, u.seq AS unit_seq, u.hold_until, u.label, u.label_show, z.code AS zone_code, z.name AS zone_name,
             cu.name_enc, cu.phone_tail, cu.purged_at
-        FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id JOIN allot_zones z ON z.id = u.zone_id LEFT JOIN allot_customers cu ON cu.id = c.customer_id';
+        FROM allot_contracts c LEFT JOIN allot_units u ON u.id = c.unit_id LEFT JOIN allot_zones z ON z.id = u.zone_id LEFT JOIN allot_customers cu ON cu.id = c.customer_id';
 
     /** the admin view of a contract row (the customer masked) */
     private static function contractOut(array $r): array
@@ -1672,7 +1697,7 @@ final class Allot
         }
         $cust = isset($filter['customerId']) ? max(0, (int) $filter['customerId']) : 0;
         $user = isset($filter['userId']) ? max(0, (int) $filter['userId']) : 0;
-        $flag = isset($filter['flag']) ? (string) $filter['flag'] : '';
+        $flag = isset($filter['flag']) && is_string($filter['flag']) ? $filter['flag'] : '';
         $no = ''; $code = ''; $ph = ''; $tail = ''; $nh = '';
         $q = isset($filter['q']) && is_string($filter['q']) ? trim(mb_substr($filter['q'], 0, 60)) : '';
         if ($q !== '') {
@@ -1806,7 +1831,7 @@ final class Allot
             $to = $from;
             if ($periods > 0 && $from < self::FOREVER) {
                 if ($period === 'once') $to = max($from, (int) $c['ends_at'] > 0 ? (int) $c['ends_at'] : self::addMonths((int) $c['starts_at'], max(1, (int) $c['term_months'])));
-                else $to = self::addMonths($from, ($period === 'year' ? 12 : 1) * $periods);
+                else $to = self::addMonthsFrom($from, ($period === 'year' ? 12 : 1) * $periods, (int) $c['starts_at']);
             }
             $status = (string) $c['status'] === 'overdue' && $to + (int) self::conf('grace_days') * self::DAY >= $now ? 'active' : (string) $c['status'];
             Db::exec('UPDATE allot_contracts SET paid_total = ?, paid_until = ?, status = ?, due_stage = ?, updated_at = ? WHERE id = ?', [$after, $to, $status, $to !== $from ? 999 : (int) $c['due_stage'], $now, $cid]);
@@ -1847,7 +1872,7 @@ final class Allot
         V::keys($opt, ['periods', 'memo', 'paidAt'], 'payment');
         if (!in_array($method, ['bank', 'cash', 'cms', 'etc'], true)) V::fail('method', '값은 bank · cash · cms · etc 가운데 하나여야 해요.');
         if ($amount < 1 || $amount > self::MAX_AMOUNT) V::fail('amount', '금액은 1~' . self::MAX_AMOUNT . ' 사이의 정수여야 해요.');
-        if (!preg_match('/^[A-Za-z0-9_\-:.]{8,64}$/', $idem)) V::fail('idem', '중복 방지 키가 올바르지 않아요.');
+        if (!preg_match('/^[A-Za-z0-9_\-:.]{8,64}\z/', $idem)) V::fail('idem', '중복 방지 키가 올바르지 않아요.');
         $now = self::now($now);
         $periods = self::inInt($opt, 'periods', 0, 120);
         $memo = self::cleanPrivate((string) self::inStr($opt, 'memo', 200, ''), 200);
@@ -1894,14 +1919,89 @@ final class Allot
     /** mark a paid payment refunded and write the refund row (inside the caller's transaction) → the refund row id, 0 when it was not 'paid' any more */
     private static function refundLocked(array $p, string $reason, ?int $actor, int $now): int
     {
+        // the contract row first, then the payment row: the same lock order as recordPayment() and payConfirm()
+        $c = Db::one('SELECT id, status, period, starts_at, paid_until, paid_total, due_stage FROM allot_contracts WHERE id = ?' . Db::forUpdate(), [(int) $p['contract_id']]);
         if (Db::exec("UPDATE allot_payments SET status = 'refunded', updated_at = ? WHERE id = ? AND status = 'paid'", [$now, (int) $p['id']]) !== 1) return 0;
         $rid = Db::insert('allot_payments', [
             'contract_id' => (int) $p['contract_id'], 'customer_id' => (int) $p['customer_id'], 'kind' => 'refund', 'method' => (string) $p['method'], 'amount' => (int) $p['amount'], 'periods' => 0,
             'order_id' => null, 'payment_key_enc' => '', 'claim' => '', 'claimed_at' => 0, 'idem' => null, 'status' => 'paid', 'toss_status' => '', 'paid_at' => $now, 'period_from' => 0, 'period_to' => 0,
             'memo' => self::cleanPrivate($reason, 200), 'created_by' => $actor, 'created_at' => $now, 'updated_at' => $now,
         ]);
-        Db::exec('UPDATE allot_contracts SET paid_total = CASE WHEN paid_total > ? THEN paid_total - ? ELSE 0 END, updated_at = ? WHERE id = ?', [(int) $p['amount'], (int) $p['amount'], $now, (int) $p['contract_id']]);
+        if ($c) {
+            // the money leaves the contract: the total goes down and — on a running contract — the period this payment
+            // bought is no longer paid (the reminder for it can go out again)
+            $paid = (int) $c['paid_until'];
+            $back = self::paidUntilWithout($c, $p);
+            Db::exec('UPDATE allot_contracts SET paid_total = ?, paid_until = ?, due_stage = ?, updated_at = ? WHERE id = ?',
+                [max(0, (int) $c['paid_total'] - (int) $p['amount']), $back, $back !== $paid ? 999 : (int) $c['due_stage'], $now, (int) $c['id']]);
+        }
         return $rid;
+    }
+
+    /**
+     * paid_until of a contract once the payment $p is given back. Only a running contract and only a payment that bought
+     * periods move the date: the newest payment (and the one payment of a "once" contract) is undone exactly — back to
+     * where its period began; an older one takes the same number of periods off the end. Never later than before, never
+     * before the start of the contract.
+     */
+    private static function paidUntilWithout(array $c, array $p): int
+    {
+        $paid = (int) $c['paid_until'];
+        $from = (int) (isset($p['period_from']) ? $p['period_from'] : 0);
+        $to = (int) (isset($p['period_to']) ? $p['period_to'] : 0);
+        $n = (int) (isset($p['periods']) ? $p['periods'] : 0);
+        if (!in_array((string) $c['status'], ['active', 'overdue'], true) || $n < 1 || $to <= $from || $paid <= 0 || $paid >= self::FOREVER) return $paid;
+        $starts = (int) $c['starts_at'];
+        if ($paid === $to || (string) $c['period'] === 'once') $back = $from;
+        else $back = self::addMonthsFrom($paid, -$n * ((string) $c['period'] === 'year' ? 12 : 1), $starts);
+        return max(min($back, $paid), min($paid, $starts));
+    }
+
+    /**
+     * A 토스 payment that was taken for nothing — the contract ended, or another payment covered what was due, while the
+     * payment window was open — goes back: canceled at the gateway, then recorded as 'refunded' with a refund row. It was
+     * never credited, so the totals and dates of the contract do not move and no OTHER payment of the contract is touched.
+     * When the gateway cannot cancel it the money is not hidden: it is credited (paid_total), marked REFUND_FAILED and
+     * reported — as an alert and by the integrity scan (refund_due) — until the operator gives it back with refund().
+     * → true when the money went back
+     */
+    private static function voidTossPayment(int $payId, string $paymentKey, string $why, int $now): bool
+    {
+        $back = true;
+        try {
+            Toss::cancel($paymentKey, '분양 결제 자동 취소');
+        } catch (\Throwable $e) {
+            $back = false;
+            Log::error('ALLOT', 'automatic refund failed: ' . get_class($e), ['payment' => $payId, 'why' => $why]);
+        }
+        try {
+            $p = Db::txRetry(function () use ($payId, $back, $why, $now) {
+                $p = Db::one('SELECT * FROM allot_payments WHERE id = ?', [$payId]);
+                if (!$p || (string) $p['status'] !== 'paid') return null;
+                self::lockContract((int) $p['contract_id']);
+                if ($back) {
+                    if (Db::exec("UPDATE allot_payments SET status = 'refunded', toss_status = 'CANCELED', updated_at = ? WHERE id = ? AND status = 'paid'", [$now, $payId]) !== 1) return null;
+                    Db::insert('allot_payments', [
+                        'contract_id' => (int) $p['contract_id'], 'customer_id' => (int) $p['customer_id'], 'kind' => 'refund', 'method' => 'toss', 'amount' => (int) $p['amount'], 'periods' => 0,
+                        'order_id' => null, 'payment_key_enc' => '', 'claim' => '', 'claimed_at' => 0, 'idem' => null, 'status' => 'paid', 'toss_status' => '', 'paid_at' => $now, 'period_from' => 0, 'period_to' => 0,
+                        'memo' => $why === 'CONTRACT_CLOSED' ? '끝난 계약에 들어온 결제 — 자동 환불' : '이미 납부된 뒤에 들어온 결제 — 자동 환불', 'created_by' => null, 'created_at' => $now, 'updated_at' => $now,
+                    ]);
+                } else {
+                    if (Db::exec("UPDATE allot_payments SET toss_status = 'REFUND_FAILED', updated_at = ? WHERE id = ? AND status = 'paid' AND toss_status <> 'REFUND_FAILED'", [$now, $payId]) !== 1) return null;
+                    Db::exec('UPDATE allot_contracts SET paid_total = paid_total + ?, updated_at = ? WHERE id = ?', [(int) $p['amount'], $now, (int) $p['contract_id']]);
+                }
+                return $p;
+            });
+        } catch (\Throwable $e) {
+            Log::error('ALLOT', 'recording an automatic refund failed: ' . get_class($e), ['payment' => $payId]);
+            return false;
+        }
+        if ($p) {
+            $detail = ['payment' => $payId, 'contract' => (int) $p['contract_id'], 'method' => 'toss', 'amount' => (int) $p['amount'], 'auto' => true, 'why' => strtolower($why), 'done' => $back];
+            Audit::log('allot_refund', null, $detail, $back ? 'warn' : 'alert');
+            if (!$back && class_exists('Tfm\SecEvent')) SecEvent::log('allot_refund_failed', 'alert', ['payment' => $payId, 'contract' => (int) $p['contract_id']]);
+        }
+        return $back && $p !== null;
     }
 
     /**
@@ -2025,8 +2125,10 @@ final class Allot
     /** a payment row with its contract's account by order id (well-formed ids only) */
     private static function payOrder(string $orderId): ?array
     {
-        if (!preg_match('/^[A-Za-z0-9_\-]{8,64}$/', $orderId)) return null;
-        return Db::one('SELECT p.*, c.user_id, c.contract_no FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id WHERE p.order_id = ?', [$orderId]);
+        if (!preg_match('/^[A-Za-z0-9_\-]{8,64}\z/', $orderId)) return null;
+        $r = Db::one('SELECT p.*, c.user_id, c.contract_no FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id WHERE p.order_id = ?', [$orderId]);
+        // [verify-allot] MariaDB compares by collation (another letter case finds the row): the id must be byte-exact
+        return $r && hash_equals((string) $r['order_id'], $orderId) ? $r : null;
     }
 
     /** claim a 'created' payment for one confirmation → 'claimed' | 'resume' (the same key, no answer for a while) | 'busy' | 'closed' */
@@ -2095,6 +2197,18 @@ final class Allot
             throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
         }
         $now = self::now($now);
+        $cid = (int) $o['contract_id'];
+        // [verify-allot] nothing is taken for a contract that ended or has nothing due any more (a stale window, a second
+        // window for one application): an order nobody claimed yet is closed here, BEFORE the gateway is asked for money
+        if ((string) $o['claim'] === '') {
+            $c0 = Db::one('SELECT * FROM allot_contracts WHERE id = ?', [$cid]);
+            $stop = !$c0 || !in_array((string) $c0['status'], self::LIVE, true) ? 'CONTRACT_CLOSED' : (self::payable($c0, $now) ? '' : 'NOTHING_DUE');
+            if ($stop !== '') {
+                Db::exec("UPDATE allot_payments SET status = 'canceled', toss_status = ?, updated_at = ? WHERE order_id = ? AND status = 'created' AND claim = ''", [$stop, $now, $orderId]);
+                Audit::log('allot_pay_refused', $uid, ['order' => $orderId, 'why' => strtolower($stop)], 'info');
+                throw new ApiException(409, $stop, $stop === 'CONTRACT_CLOSED' ? '이 계약은 이미 끝났어요. 결제하지 않았어요.' : '지금 낼 것이 없어요. 결제하지 않았어요.');
+            }
+        }
         $claim = self::claimOf($paymentKey);
         $state = self::claimPayment($orderId, $claim, $now);
         if ($state === 'closed' || $state === 'busy') {
@@ -2122,21 +2236,24 @@ final class Allot
             }
             throw new ApiException(402, 'PAYMENT_FAILED', '결제 정보가 주문과 달라서 처리하지 않았어요. 결제가 되었다면 자동으로 취소를 요청했어요.');
         }
-        $cid = (int) $o['contract_id'];
         $payId = (int) $o['id'];
         $done = Db::txRetry(function () use ($orderId, $claim, $paymentKey, $payment, $cid, $payId, $o, $uid, $now) {
             $c = self::lockContract($cid);
+            // [verify-allot] decided under the lock and BEFORE this payment counts: the contract ended, or another payment
+            // covered what was due, while the gateway took the money
+            $stop = !in_array((string) $c['status'], self::LIVE, true) ? 'CONTRACT_CLOSED' : (self::payable($c, $now) ? '' : 'NOTHING_DUE');
             if (!self::finishPayment($orderId, 'paid', $claim, $paymentKey, (string) (isset($payment['status']) ? $payment['status'] : ''), $now)) throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
-            if (!in_array((string) $c['status'], self::LIVE, true)) return false; // the contract ended while the payment window was open
+            if ($stop !== '') return $stop;
             list($n, , $to) = self::applyPayment($c, $payId, (int) $o['amount'], null, $now);
             self::notePaid($c, $payId, $to, $now, null);
             Audit::log('allot_payment', $uid, ['contract' => (string) $c['contract_no'], 'payment' => $payId, 'method' => 'toss', 'amount' => (int) $o['amount'], 'periods' => $n]);
             self::approveIfPaid($cid, null, $now);
-            return true;
+            return '';
         });
-        if (!$done) {
-            self::refundTossQuietly($cid, $now);
-            throw new ApiException(409, 'CONTRACT_CLOSED', '이 계약은 이미 끝났어요. 결제는 자동으로 취소를 요청했어요.');
+        if ($done !== '') {
+            // only THIS payment goes back; earlier, earned payments of the contract are not touched
+            self::voidTossPayment($payId, $paymentKey, $done, $now);
+            throw new ApiException(409, $done, $done === 'CONTRACT_CLOSED' ? '이 계약은 이미 끝났어요. 결제는 자동으로 취소를 요청했어요.' : '이미 낸 기간이에요. 이번 결제는 자동으로 취소를 요청했어요.');
         }
         $c = (array) Db::one('SELECT contract_no, status, paid_until FROM allot_contracts WHERE id = ?', [$cid]);
         return ['contractNo' => (string) $c['contract_no'], 'status' => (string) $c['status'], 'paidUntil' => (int) $c['paid_until'] >= self::FOREVER ? 0 : (int) $c['paid_until']];
@@ -2165,15 +2282,19 @@ final class Allot
             $status = (string) (isset($p['status']) ? $p['status'] : '');
         }
         if ($status === '') return ['ignored' => true, 'why' => 'no status'];
-        if (Db::one('SELECT id FROM payment_events WHERE order_id = ? AND event = ? AND status = ?', [$orderId, $event, $status])) return ['ignored' => true, 'why' => 'duplicate'];
         $now = Clock::ms();
-        Db::insert('payment_events', ['order_id' => $orderId, 'event' => $event, 'status' => $status, 'payload' => '', 'created_at' => $now]);
-        $refunded = false;
-        if (in_array($status, ['CANCELED', 'PARTIAL_CANCELED'], true)) {
-            $refunded = Db::tx(function () use ($o, $now) { return self::refundLocked($o, '결제 취소 (토스 알림)', null, $now) > 0; });
-            if ($refunded) Audit::log('allot_refund', $o['user_id'] === null ? null : (int) $o['user_id'], ['payment' => (int) $o['id'], 'contract' => (int) $o['contract_id'], 'method' => 'toss', 'amount' => (int) $o['amount'], 'webhook' => true], 'warn');
-        }
-        Db::exec('UPDATE allot_payments SET toss_status = ?, updated_at = ? WHERE id = ?', [$status, $now, (int) $o['id']]);
+        // [verify-allot] "seen", the refund and the new status in ONE transaction under the contract lock: a webhook that
+        // fails half-way leaves nothing behind, so the gateway's retry is not taken for a duplicate (and two at once refund once)
+        $refunded = Db::txRetry(function () use ($o, $orderId, $event, $status, $now) {
+            self::lockContract((int) $o['contract_id']);
+            if (Db::one('SELECT id FROM payment_events WHERE order_id = ? AND event = ? AND status = ?', [$orderId, $event, $status])) return null;
+            Db::insert('payment_events', ['order_id' => $orderId, 'event' => $event, 'status' => $status, 'payload' => '', 'created_at' => $now]);
+            $done = in_array($status, ['CANCELED', 'PARTIAL_CANCELED'], true) && self::refundLocked($o, '결제 취소 (토스 알림)', null, $now) > 0;
+            Db::exec('UPDATE allot_payments SET toss_status = ?, updated_at = ? WHERE id = ?', [$status, $now, (int) $o['id']]);
+            return $done;
+        });
+        if ($refunded === null) return ['ignored' => true, 'why' => 'duplicate'];
+        if ($refunded) Audit::log('allot_refund', $o['user_id'] === null ? null : (int) $o['user_id'], ['payment' => (int) $o['id'], 'contract' => (int) $o['contract_id'], 'method' => 'toss', 'amount' => (int) $o['amount'], 'webhook' => true], 'warn');
         return ['ignored' => false, 'status' => $status, 'refunded' => $refunded, 'allot' => true];
     }
 
@@ -2653,9 +2774,11 @@ final class Allot
     public static function csvCell($v): string
     {
         if ($v === null) return '';
+        if (is_int($v)) return (string) $v; // [verify-allot] a number stays a number (a negative amount is not a formula)
         $s = is_bool($v) ? ($v ? '1' : '0') : (string) $v;
         if ($s === '') return '';
-        if (strpos("=+-@\t\r", $s[0]) !== false) $s = "'" . $s;
+        // [verify-allot] also after leading blanks / line breaks: spreadsheets trim them before they look for a formula
+        if (strpos("=+-@\t\r", $s[0]) !== false || preg_match('/^[ \t\r\n]+[=+\-@]/', $s)) $s = "'" . $s;
         if (strpbrk($s, "\",\r\n") !== false || $s[0] === ' ' || substr($s, -1) === ' ') return '"' . str_replace('"', '""', $s) . '"';
         return $s;
     }
@@ -2795,7 +2918,7 @@ final class Allot
                 } else {
                     $out[(int) $r['id']] = [$r['contract_no'], $r['unit_code'], self::KO_CONTRACT[$r['status']], self::KO_PERIOD[$r['period']], (int) $r['price'], (int) $r['term_months'], self::day((int) $r['starts_at']),
                         self::day((int) $r['ends_at']), self::day((int) $r['paid_until']), (int) $r['paid_total'], (int) $r['auto_renew'] === 1 ? '예' : '', $r['source'], $name($r['name_enc']),
-                        $phone($r['phone_enc'], $r['phone_tail']), self::stamp((int) $r['created_at']), self::stamp((int) $r['decided_at']), self::stamp((int) $r['ended_at']), self::reasonCode((string) $r['end_reason'])];
+                        $phone($r['phone_enc'], $r['phone_tail']), self::stamp((int) $r['created_at']), self::stamp((int) $r['decided_at']), self::stamp((int) $r['ended_at']), in_array((string) $r['status'], self::LIVE, true) ? '' : self::reasonCode((string) $r['end_reason'])];
                 }
             }
         } elseif ($what === 'customers') {
@@ -2824,7 +2947,8 @@ final class Allot
     public static function parseDate(string $s): int
     {
         $s = trim($s);
-        if (preg_match('/^(\d{4})(\d{2})(\d{2})$/', $s, $m) || preg_match('/^(\d{2}|\d{4})\s*[.\-\/년]\s*(\d{1,2})\s*[.\-\/월]\s*(\d{1,2})\s*[.일]?(?:\s.*)?$/u', $s, $m)) {
+        // [verify-allot] ASCII digits only: under /u \d also matches full-width and other scripts' digits, which (int) reads as 0
+        if (preg_match('/^([0-9]{4})([0-9]{2})([0-9]{2})$/', $s, $m) || preg_match('/^([0-9]{2}|[0-9]{4})\s*[.\-\/년]\s*([0-9]{1,2})\s*[.\-\/월]\s*([0-9]{1,2})\s*[.일]?(?:\s.*)?$/u', $s, $m)) {
             $y = (int) $m[1];
             if ($y < 100) $y += 2000;
             if ($y >= 1990 && $y <= 2200 && checkdate((int) $m[2], (int) $m[3], $y)) return (int) mktime(0, 0, 0, (int) $m[2], (int) $m[3], $y) * 1000;
@@ -2853,7 +2977,11 @@ final class Allot
         foreach ($header as $i => $h) {
             $k = mb_strtolower((string) preg_replace('/[\s()\[\]·_\-]+/u', '', (string) $h));
             foreach (self::IMPORT_COLS as $field => $names) {
-                if (!isset($map[$field]) && in_array($k, $names, true)) { $map[$field] = $i; break; }
+                if (!in_array($k, $names, true)) continue;
+                // [verify-allot] a column named twice is ambiguous (which 성명 is the person?): the file is refused as a whole
+                if (isset($map[$field])) V::fail('csv', '첫 줄에 ‘' . $names[0] . '’ 열이 두 번 있어요. 하나만 남겨 주세요.');
+                $map[$field] = $i;
+                break;
             }
         }
         return $map;
@@ -3022,13 +3150,13 @@ final class Allot
                 $ends = $term > 0 ? self::addMonths($starts, $term) : 0;
                 // a row of the running book is a contract that is running today: an old 일자 means it was renewed term after
                 // term, so the end is the end of the term that is running now (never a date in the past)
-                for ($k = 0; $term > 0 && $ends <= $now && $k < 600; $k++) $ends = self::addMonths($ends, $term);
+                for ($k = 0; $term > 0 && $ends <= $now && $k < 600; $k++) $ends = self::addMonthsFrom($ends, $term, $starts);
                 $paid = (int) $t['paid'];
                 if ($paid === 0) {
                     // nothing is known about old payments: the book counts as paid up to the period that is running now
                     $paid = self::paidUntilFor((string) $z['period'], (int) $z['price'], $term, $starts, $ends, 1);
                     $step = (string) $z['period'] === 'year' ? 12 : 1;
-                    for ($k = 0; (string) $z['period'] !== 'once' && (int) $z['price'] > 0 && $paid <= $now && $k < 600; $k++) $paid = self::addMonths($paid, $step);
+                    for ($k = 0; (string) $z['period'] !== 'once' && (int) $z['price'] > 0 && $paid <= $now && $k < 600; $k++) $paid = self::addMonthsFrom($paid, $step, $starts);
                 }
                 $unitId = (int) $t['unit']['id'];
                 list($conId, ) = self::insertContract([
@@ -3136,7 +3264,9 @@ final class Allot
             $now = self::now($now);
             $every = (int) self::conf('lazy_tick_minutes') * 60000;
             $seen = self::cacheGet('tick');
-            if (is_int($seen) && $now - $seen < $every) return false;
+            // [verify-allot] a stamp from the future (a clock that was wrong for a while) freezes nothing: up to one interval
+            // ahead is clock skew between servers, more than that is stale and is taken over below
+            if (is_int($seen) && $now - $seen < $every && $seen - $now <= $every) return false;
             $old = Db::value("SELECT v FROM settings WHERE k = 'allot.tick_at'");
             if ($old === null) {
                 try {
@@ -3146,7 +3276,7 @@ final class Allot
                     throw $e;
                 }
             } else {
-                if ($now - (int) $old < $every) { self::cacheSet('tick', (int) $old, 60); return false; }
+                if ($now - (int) $old < $every && (int) $old - $now <= $every) { self::cacheSet('tick', (int) $old, 60); return false; }
                 if (Db::exec("UPDATE settings SET v = ?, updated_at = ? WHERE k = 'allot.tick_at' AND v = ?", [(string) $now, $now, (string) $old]) !== 1) return false;
             }
             self::cacheSet('tick', $now, 3600);
@@ -3329,25 +3459,30 @@ final class Allot
             // time to pay — not for a contract that is paid to the end of its term (that one gets "the term ends")
             foreach (Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND price > 0 AND paid_until > 0 AND paid_until <= ? AND paid_until < ? AND due_stage > ?
                 AND (period <> 'month' OR ? < 28) AND (ends_at = 0 OR paid_until < ends_at OR auto_renew = 1) ORDER BY paid_until ASC, id ASC LIMIT ?", [$now + $d * self::DAY, self::FOREVER, $d, $d, $batch - $n]) as $c) {
-                if (Db::exec('UPDATE allot_contracts SET due_stage = ? WHERE id = ? AND due_stage > ?', [$d, (int) $c['id'], $d]) !== 1) continue;
-                $due = (int) $c['paid_until'];
-                $left = (int) ceil(($due - $now) / self::DAY);
-                $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
-                $body = $left > 0 ? $code . ' 자리 납부 기한이 ' . $left . '일 남았어요 (' . self::fmtDate($due) . ').' : $code . ' 자리 납부할 때가 되었어요 (' . self::fmtDate($due) . ').';
-                if (self::noteContract($c, $now, 'due', $left > 0 ? '납부 기한이 다가와요' : '납부할 때가 되었어요', $body . ' 금액과 방법은 ‘안내’에서 어른과 함께 확인해 주세요.',
-                    'due:' . $c['id'] . ':' . date('Ymd', intdiv($due, 1000)) . ':' . $d)) $n++;
+                // [verify-allot] the stage and its notice in one transaction: a crash between them never loses the notice
+                if (Db::tx(function () use ($c, $d, $now) {
+                    if (Db::exec('UPDATE allot_contracts SET due_stage = ? WHERE id = ? AND due_stage > ?', [$d, (int) $c['id'], $d]) !== 1) return false;
+                    $due = (int) $c['paid_until'];
+                    $left = (int) ceil(($due - $now) / self::DAY);
+                    $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+                    $body = $left > 0 ? $code . ' 자리 납부 기한이 ' . $left . '일 남았어요 (' . self::fmtDate($due) . ').' : $code . ' 자리 납부할 때가 되었어요 (' . self::fmtDate($due) . ').';
+                    return self::noteContract($c, $now, 'due', $left > 0 ? '납부 기한이 다가와요' : '납부할 때가 되었어요', $body . ' 금액과 방법은 ‘안내’에서 어른과 함께 확인해 주세요.',
+                        'due:' . $c['id'] . ':' . date('Ymd', intdiv($due, 1000)) . ':' . $d);
+                })) $n++;
             }
             if ($n >= $batch) break;
             // the term ends (contracts that do not renew by themselves)
             foreach (Db::all("SELECT * FROM allot_contracts WHERE status IN ('active', 'overdue') AND ends_at > 0 AND ends_at <= ? AND end_stage > ? AND auto_renew = 0 ORDER BY ends_at ASC, id ASC LIMIT ?",
                 [$now + $d * self::DAY, $d, $batch - $n]) as $c) {
-                if (Db::exec('UPDATE allot_contracts SET end_stage = ? WHERE id = ? AND end_stage > ?', [$d, (int) $c['id'], $d]) !== 1) continue;
-                $end = (int) $c['ends_at'];
-                $left = (int) ceil(($end - $now) / self::DAY);
-                $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
-                $body = $left > 0 ? $code . ' 자리 분양 기간이 ' . $left . '일 뒤(' . self::fmtDate($end) . ') 끝나요. 이어서 하시려면 운영자에게 알려 주세요.'
-                    : $code . ' 자리 분양 기간이 ' . self::fmtDate($end) . ' 로 끝났어요. 이어서 할지 운영자에게 알려 주세요.';
-                if (self::noteContract($c, $now, 'ending', $left > 0 ? '분양 기간이 곧 끝나요' : '분양 기간이 끝났어요', $body, 'end:' . $c['id'] . ':' . date('Ymd', intdiv($end, 1000)) . ':' . $d)) $n++;
+                if (Db::tx(function () use ($c, $d, $now) {
+                    if (Db::exec('UPDATE allot_contracts SET end_stage = ? WHERE id = ? AND end_stage > ?', [$d, (int) $c['id'], $d]) !== 1) return false;
+                    $end = (int) $c['ends_at'];
+                    $left = (int) ceil(($end - $now) / self::DAY);
+                    $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+                    $body = $left > 0 ? $code . ' 자리 분양 기간이 ' . $left . '일 뒤(' . self::fmtDate($end) . ') 끝나요. 이어서 하시려면 운영자에게 알려 주세요.'
+                        : $code . ' 자리 분양 기간이 ' . self::fmtDate($end) . ' 로 끝났어요. 이어서 할지 운영자에게 알려 주세요.';
+                    return self::noteContract($c, $now, 'ending', $left > 0 ? '분양 기간이 곧 끝나요' : '분양 기간이 끝났어요', $body, 'end:' . $c['id'] . ':' . date('Ymd', intdiv($end, 1000)) . ':' . $d);
+                })) $n++;
             }
         }
         return $n;
@@ -3359,12 +3494,17 @@ final class Allot
         $limit = $now - (int) self::conf('grace_days') * self::DAY;
         $n = 0;
         foreach (Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND paid_until > 0 AND paid_until < ? ORDER BY paid_until ASC, id ASC LIMIT ?", [$limit, $batch]) as $c) {
-            if (Db::exec("UPDATE allot_contracts SET status = 'overdue', updated_at = ? WHERE id = ? AND status = 'active' AND paid_until = ?", [$now, (int) $c['id'], (int) $c['paid_until']]) !== 1) continue;
+            // [verify-allot] the status and its notice in one transaction (a crash between them never loses the notice)
+            $code = Db::tx(function () use ($c, $now) {
+                if (Db::exec("UPDATE allot_contracts SET status = 'overdue', updated_at = ? WHERE id = ? AND status = 'active' AND paid_until = ?", [$now, (int) $c['id'], (int) $c['paid_until']]) !== 1) return null;
+                $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+                $termOver = (int) $c['ends_at'] > 0 && (int) $c['paid_until'] >= (int) $c['ends_at'];
+                self::noteContract($c, $now, 'overdue', $termOver ? '분양 기간이 지났어요' : '납부 기한이 지났어요',
+                    $code . ($termOver ? ' 자리 분양 기간이 지났어요. 이어서 할지 운영자에게 알려 주세요.' : ' 자리 납부 기한이 지났어요. 운영자에게 연락해 주세요.'), 'overdue:' . $c['id'] . ':' . date('Ymd', intdiv((int) $c['paid_until'], 1000)));
+                return $code;
+            });
+            if ($code === null) continue;
             $n++;
-            $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
-            $termOver = (int) $c['ends_at'] > 0 && (int) $c['paid_until'] >= (int) $c['ends_at'];
-            self::noteContract($c, $now, 'overdue', $termOver ? '분양 기간이 지났어요' : '납부 기한이 지났어요',
-                $code . ($termOver ? ' 자리 분양 기간이 지났어요. 이어서 할지 운영자에게 알려 주세요.' : ' 자리 납부 기한이 지났어요. 운영자에게 연락해 주세요.'), 'overdue:' . $c['id'] . ':' . date('Ymd', intdiv((int) $c['paid_until'], 1000)));
             Audit::log('allot_overdue', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'unit' => $code]);
         }
         return $n;
@@ -3534,6 +3674,10 @@ final class Allot
         }
         foreach (Db::all("SELECT contract_no FROM allot_contracts WHERE status = 'canceled' AND paid_total > 0 ORDER BY id ASC LIMIT ?", [$limit]) as $c) {
             $issues[] = ['kind' => 'refund_due', 'ref' => (string) $c['contract_no'], 'note' => '취소된 신청에 받은 돈이 남아 있어요. 환불을 확인해 주세요'];
+        }
+        // [verify-allot] a 토스 payment that should have gone back automatically but the gateway refused
+        foreach (Db::all("SELECT c.contract_no, p.id FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id WHERE p.status = 'paid' AND p.toss_status = 'REFUND_FAILED' ORDER BY p.id ASC LIMIT ?", [$limit]) as $c) {
+            $issues[] = ['kind' => 'refund_due', 'ref' => (string) $c['contract_no'], 'note' => '자동 환불이 되지 않은 결제가 있어요 (입금 #' . (int) $c['id'] . '). 토스 상점관리자에서 확인해 주세요'];
         }
         foreach (Db::all('SELECT z.code, z.capacity, (SELECT COUNT(*) FROM allot_units u WHERE u.zone_id = z.id) AS n FROM allot_zones z ORDER BY z.id ASC') as $z) {
             if ((int) $z['capacity'] !== (int) $z['n']) $issues[] = ['kind' => 'capacity_mismatch', 'ref' => (string) $z['code'], 'note' => '구역 정원(' . (int) $z['capacity'] . ')과 자리 수(' . (int) $z['n'] . ')가 달라요'];

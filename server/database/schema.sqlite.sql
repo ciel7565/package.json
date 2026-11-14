@@ -426,6 +426,7 @@ CREATE INDEX IF NOT EXISTS ix_aunits_kind ON allot_units (kind, status, id);
 CREATE INDEX IF NOT EXISTS ix_aunits_zone ON allot_units (zone_id, status, id);
 CREATE INDEX IF NOT EXISTS ix_aunits_free ON allot_units (zone_id, status, seq);
 CREATE INDEX IF NOT EXISTS ix_aunits_hold ON allot_units (status, hold_until);
+CREATE INDEX IF NOT EXISTS ix_aunits_state ON allot_units (status, id);
 
 CREATE TABLE IF NOT EXISTS allot_customers (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -513,6 +514,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_apay_order ON allot_payments (order_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_apay_idem ON allot_payments (idem);
 CREATE INDEX IF NOT EXISTS ix_apay_contract ON allot_payments (contract_id, id);
 CREATE INDEX IF NOT EXISTS ix_apay_status ON allot_payments (status, created_at);
+CREATE INDEX IF NOT EXISTS ix_apay_paid ON allot_payments (paid_at);
 
 CREATE TABLE IF NOT EXISTS allot_waitlist (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
