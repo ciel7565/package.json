@@ -43,18 +43,52 @@
 //   engine.unsupported / G.unsupported {reason, at}   set before anything else when WebGL2 is missing or the renderer
 //       cannot be created; 'engine:unsupported' {reason} is emitted once (70-app shows the friendly 2D-only screen).
 //       scene + camera still exist so the world modules build; renderer is null and render() draws nothing.
-//   'engine:context' {lost: true|false}   the WebGL context was lost / restored (25-npc re-renders portraits).
+//   'engine:context' {lost: true|false}   the WebGL context was lost / restored (25-npc re-renders portraits). On a
+//       restore the post chain is built anew (its targets and programs died with the old context).
 //
-// Post chain (medium / high): RenderPass → [NaNScrub → UnrealBloom] → AtmosPass(god rays on high, sun glow, grade,
-// vignette, dither) → OutputPass (ACES + sRGB). Low renders straight to the canvas exactly as before.
-// Every shader guards normalize / division / pow / sqrt; the AtmosPass scrubs NaN itself when bloom is off.
+// Phase 8 (CONTRACT §16.3) — hooks for reflection / probe renders and for passes that need the scene depth:
+//   G.sys.engine.onPreRender(fn) -> off()   fn({ renderer, scene, camera, engine }) once per drawn frame, after
+//       guard.tick and before the scene render (planar reflections, probes). A hook that throws is reported once and
+//       skipped for that frame; it must put the render target back.
+//   G.sys.engine.renderScale     (read) the dynamic-resolution scale of the post chain's targets, 0.x … 1 (1 on `low`)
+//   G.sys.engine.pointRatio      (read) renderer pixel ratio × renderScale: what gl_PointSize maths must use; it is also
+//       the third argument of every onResize callback (they run again whenever the scale changes)
+//   G.sys.engine.depthTexture    THREE.DepthTexture | null (`low`, watchdog composer-off). The depth of the scene pass:
+//       after the scene render of a frame it holds THAT frame (resolved from the multisampled target) and stays valid
+//       for every post pass of the frame; materials drawn INSIDE the scene pass may sample it too and then see the
+//       frame before (engine.depthState.sampleable — the scene target is multisampled, so the texture is not attached
+//       to the framebuffer being drawn). The object lives as long as the post chain: 'engine:post' is emitted when the
+//       chain was rebuilt (quality, bloom setting, watchdog, restored context).
+//   G.sys.engine.depthState      { valid, sampleable, near, far, width, height, frame } of depthTexture
+//   G.sys.engine.fullScale(on, key)   hold the render scale at its maximum (photo mode); dynamic resolution rests
+//   G.sys.engine.drs             { on, scale, min, max, cap, level, ema, … } state of the dynamic resolution (read)
+//   G.sys.engine.postInfo        { samples, bytes, pixels, passes } what the post chain allocates right now (estimate)
+//
+// Post chain (medium / high): ScenePass (the scene into ONE multisampled half-float target with a depth texture) →
+// [NaNScrub → UnrealBloom] → AtmosPass (god rays on high, sun glow, grade, vignette, dither) → OutputPass (tone curve
+// + sRGB). The two ping-pong targets of the composer are plain (no MSAA, no depth). Low renders straight to the
+// canvas exactly as before. Every shader guards normalize / division / pow / sqrt; the AtmosPass scrubs NaN itself
+// when bloom is off.
 // =============================================================================
 (function () {
+  // Phase 8 knobs (CONTRACT §16.3): maps (photographed texture maps: G.mat, terrain) · ao (0 | 1 depth-based ambient
+  // occlusion pass) · drs ([min, max] render scale of the dynamic resolution; null = off) · aniso (anisotropy of the
+  // pack textures) · reflect (water: 0 environment only, 1 + depth-aware shore / ripples / glint, 2 + planar
+  // reflection) · indoorShadows (the window sun casts shadows inside rooms). `low` holds the off value of each.
   const PRESETS = {
-    low: { name: 'low', label: '낮음', pixelRatio: 1, shadows: false, shadowSize: 0, bloom: false, grade: false, godrays: false, atmos: 0, antialias: false, treeDensity: 0.45, grassDensity: 0.0, drawDistance: 700, flare: false },
-    medium: { name: 'medium', label: '중간', pixelRatio: 1.25, shadows: true, shadowSize: 1024, bloom: false, grade: true, godrays: false, atmos: 1, antialias: true, treeDensity: 0.75, grassDensity: 0.5, drawDistance: 1200, flare: true },
-    high: { name: 'high', label: '높음', pixelRatio: 2, shadows: true, shadowSize: 2048, bloom: true, grade: true, godrays: true, atmos: 2, antialias: true, treeDensity: 1.0, grassDensity: 1.0, drawDistance: 2000, flare: true },
+    low: { name: 'low', label: '낮음', pixelRatio: 1, shadows: false, shadowSize: 0, bloom: false, grade: false, godrays: false, atmos: 0, antialias: false, treeDensity: 0.45, grassDensity: 0.0, drawDistance: 700, flare: false,
+      maps: false, ao: 0, drs: null, aniso: 1, reflect: 0, indoorShadows: false },
+    medium: { name: 'medium', label: '중간', pixelRatio: 1.25, shadows: true, shadowSize: 1024, bloom: false, grade: true, godrays: false, atmos: 1, antialias: true, treeDensity: 0.75, grassDensity: 0.5, drawDistance: 1200, flare: true,
+      maps: true, ao: 0, drs: [0.6, 1], aniso: 4, reflect: 1, indoorShadows: true },
+    high: { name: 'high', label: '높음', pixelRatio: 2, shadows: true, shadowSize: 2048, bloom: true, grade: true, godrays: true, atmos: 2, antialias: true, treeDensity: 1.0, grassDensity: 1.0, drawDistance: 2000, flare: true,
+      maps: true, ao: 1, drs: [0.7, 1], aniso: 8, reflect: 1, indoorShadows: true },
   };
+  // Post chain memory (CONTRACT §16.3): the scene target is the only multisampled one. Bytes per rendered pixel =
+  // samples × (RGBA16F 8 + depth24 4) + its resolved colour 8 + the depth texture 4, the two plain ping-pong targets
+  // 2 × 8, and what bloom (mip chain ≈ 0.92 px), god rays (1/16 px) and AO (2 half-size RGBA8) add. The budget caps
+  // the total: first 4× → 2× MSAA, then the render scale (never the canvas). 260 MB ≈ a 1440p frame at 4× MSAA.
+  const POST_BUDGET_BYTES = 260 * 1024 * 1024;
+  const postBytesPerPixel = (p, samples) => (samples > 0 ? samples * 12 + 12 : 12) + 16 + (p.bloom ? 7.4 : 0) + (p.godrays ? 0.5 : 0) + (p.ao ? 2 : 0);
   // small-scenery cull distance (m) per preset (see engine._updateCull), measured at the default 55° field of view
   const CULL_DIST = { low: 72, medium: 125, high: 210 };
   const CULL_TAN = Math.tan(THREE.MathUtils.degToRad(55) / 2);
@@ -257,10 +291,82 @@
     return fsGeo;
   }
 
+  /** the buffer a pass of ours reads: the scene target itself when the scene pass left it for us (no copy was made) */
+  const sceneInput = (readBuffer) => { const sp = engine._scenePass; if (sp && sp.pending) { sp.pending = false; return sp.rt; } return readBuffer; };
+  const COPY_FRAG = 'uniform sampler2D tDiffuse;\nvarying vec2 vUv;\nvoid main() { gl_FragColor = texture2D(tDiffuse, vUv); }';
+  // raw depth (0..1) packed into RGB, alpha 0 = nothing drawn there (sky): engine.debugDepth reads the scene depth back
+  const DEPTH_PROBE_FRAG = `
+    uniform sampler2D tDepth; varying vec2 vUv;
+    void main() {
+      float d = texture2D(tDepth, vUv).x;
+      float sky = step(0.9999999, d);
+      vec3 e = fract(min(d, 0.9999999) * vec3(1.0, 255.0, 65025.0));
+      e.xy -= e.yz / 255.0;
+      gl_FragColor = vec4(e, 1.0 - sky);
+    }`;
+
+  /** Scene render of the post chain (EffectComposer pass protocol; replaces the stock RenderPass). The scene goes into
+   *  ONE multisampled half-float target with a depth TEXTURE (engine.depthTexture); the composer's two ping-pong
+   *  targets are plain. three resolves colour and depth into the textures when the render ends. The resolved colour
+   *  is handed on without a copy when the next enabled pass reads it itself (`takesScene`: the AO and atmosphere
+   *  passes); a stock pass gets one full-screen copy into the read buffer. */
+  class ScenePass {
+    constructor(eng, opts = {}) {
+      this.name = 'ScenePass'; this.isScenePass = true;
+      this.enabled = true; this.needsSwap = false; this.clear = false; this.renderToScreen = false;
+      this.engine = eng;
+      this.samples = opts.samples | 0;
+      // UnsignedInt depth = DEPTH_COMPONENT24, the same format three gives the multisampled depth renderbuffer of this
+      // target (it follows the depth texture's type) — a depth blit needs equal formats
+      const depth = new THREE.DepthTexture(4, 4);
+      depth.name = 'scene-depth';
+      this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: this.samples, depthBuffer: true, stencilBuffer: false, depthTexture: depth });
+      this.rt.texture.name = 'scene-colour';
+      this.pending = false;     // the next pass reads this.rt (set per frame)
+      this.frames = 0;          // scene frames resolved into the target since it was (re)allocated
+      this.copyUniforms = { tDiffuse: { value: null } };
+      this.copyMat = new THREE.ShaderMaterial({ name: 'SceneCopyShader', uniforms: this.copyUniforms, vertexShader: FS_VERT, fragmentShader: COPY_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
+      this.quad = new THREE.Mesh(fsGeometry(), this.copyMat);
+      this.quad.frustumCulled = false;
+    }
+    setSize(w, h) {
+      w = Math.max(1, Math.floor(w)); h = Math.max(1, Math.floor(h));
+      if (w === this.rt.width && h === this.rt.height) return;
+      this.rt.setSize(w, h);
+      this.frames = 0;
+    }
+    /** 4× / 2× MSAA by the memory budget (the GL objects are made anew on the next use) */
+    setSamples(n) {
+      n |= 0;
+      if (n === this.samples) return;
+      this.samples = n; this.rt.samples = n;
+      this.rt.dispose();
+      this.frames = 0;
+    }
+    render(renderer, writeBuffer, readBuffer) {
+      const E = this.engine, info = renderer.info.render, c0 = info.calls;
+      renderer.setRenderTarget(this.rt);
+      renderer.render(E.scene, E.camera);   // clears (the background is a Color), shadows + colour, resolves colour + depth
+      this.frames++;
+      E.frameInfo.scene = info.calls - c0;
+      // does the next enabled pass read the scene target itself?
+      const passes = E.composer ? E.composer.passes : null;
+      let next = null;
+      if (passes) for (let i = passes.indexOf(this) + 1; i < passes.length; i++) if (passes[i].enabled !== false) { next = passes[i]; break; }
+      this.pending = !!(next && next.takesScene);
+      if (this.pending) return;
+      this.copyUniforms.tDiffuse.value = this.rt.texture;
+      renderer.setRenderTarget(readBuffer);
+      renderer.render(this.quad, fsCam);
+    }
+    dispose() { this.rt.dispose(); this.copyMat.dispose(); }
+  }
+
   /** combined atmosphere pass (EffectComposer pass protocol): god rays → sun glow → grade → vignette → dither */
   class AtmosPass {
     constructor(opts) {
       this.enabled = true; this.needsSwap = true; this.clear = false; this.renderToScreen = false;
+      this.takesScene = true;   // right after the scene pass it reads the scene target itself (see ScenePass)
       this.godrays = !!opts.godrays;
       this.uniforms = {
         tDiffuse: { value: null }, tRays: { value: null }, uRays: { value: 0 },
@@ -283,6 +389,7 @@
     }
     render(renderer, writeBuffer, readBuffer) {
       const u = this.uniforms;
+      readBuffer = sceneInput(readBuffer);
       const rays = !!(this.rayRT && u.uRays.value > 0.001 && u.uSun.value.z > 0.002);
       if (rays) {
         this.rayUniforms.tDiffuse.value = readBuffer.texture;
@@ -886,7 +993,8 @@
     preset: PRESETS.high,
     quality: 'high',
     fps: 60,
-    frameInfo: { calls: 0, triangles: 0 },
+    // calls / triangles: the whole frame (every pass) · scene: the scene pass alone (shadow maps + colour) · post: the rest
+    frameInfo: { calls: 0, triangles: 0, scene: 0, post: 0, pre: 0 },
     atmos: { sunGlow: 1, rays: 1 },
     flareSuppressed: false,
     gradeState: { ...GRADE_NEUTRAL },
@@ -897,6 +1005,9 @@
     _envDirty: true, _envTimer: 0,
     _resizeFns: [],
     _outline: null,
+    _preRenderFns: [], _scenePass: null, _fullKeys: new Set(),
+    // dynamic resolution (see _drsTick): scale within [min, cap]; cap = min(preset max, the memory budget's limit)
+    _drs: { on: false, scale: 1, min: 1, max: 1, cap: 1, level: 0, ema: 0, slow: 0, fast: 0, cool: 0, upWait: 3, rest: 0, restLen: 30, full: false, inject: null, trial: null, changes: 0, lastDownAt: 0, log: [] },
 
     init() {
       const container = document.getElementById('game-container');
@@ -933,7 +1044,9 @@
         // objects of the old context on the new one) and re-bake; the watchdog's copy texture / target too
         this._lost = false; this._envRT = null; this._envCam = null; this._envDir = null; this._envDirty = true; this._envTimer = 0;
         watchdog._tex = null; watchdog._rt = null; watchdog._mat = null; watchdog._quad = null; watchdog.hold(3000);
-        G.log.info('ENGINE', 'WebGL context restored');
+        // the post chain too: its targets and programs died with the old context — forget them and build it anew
+        try { this._disposeComposer(true); this._depthProbe = null; this._setupComposer(); } catch (e) { G.log.warn('ENGINE', 'post chain rebuild after the context restore failed', e?.message || e); }
+        G.log.info('ENGINE', `WebGL context restored, post=${this.composer ? this.composer.passes.length + ' passes' : 'direct'}`);
         G.bus.emit('engine:context', { lost: false });
       });
       container.appendChild(renderer.domElement);
@@ -1078,25 +1191,41 @@
       if (s.map) { s.map.dispose(); s.map = null; } // a new map size needs a new shadow target
     },
 
-    _disposeComposer() {
+    /** drop = true: the GL objects are already gone (a restored context) — forget them without dispose() */
+    _disposeComposer(drop) {
       const c = this.composer;
       if (!c) return;
-      for (const p of c.passes || []) { try { p.dispose?.(); } catch (e) { /* already gone */ } }
-      try { c.dispose?.(); } catch (e) { /* ignore */ }
-      this.composer = null; this.bloomPass = null; this.atmosPass = null;
+      if (!drop) {
+        for (const p of c.passes || []) { try { p.dispose?.(); } catch (e) { /* already gone */ } }
+        try { c.dispose?.(); } catch (e) { /* ignore */ }
+      }
+      this.composer = null; this.bloomPass = null; this.atmosPass = null; this._scenePass = null;
     },
 
     _setupComposer() {
       this._disposeComposer();
-      if (!this.renderer || !this._wantsComposer()) { G.bus.emit('engine:features', { quality: this.quality }); return; }
+      const D = this._drs;
+      if (!this.renderer || !this._wantsComposer()) { D.on = false; D.scale = 1; G.bus.emit('engine:features', { quality: this.quality }); G.bus.emit('engine:post', { composer: false, depthTexture: null }); return; }
       try {
         const r = this.renderer;
-        const size = r.getDrawingBufferSize(new THREE.Vector2());
-        const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: this.preset.antialias ? 4 : 0 });
+        const w = window.innerWidth, h = Math.max(1, window.innerHeight), pr = r.getPixelRatio();
+        const lay = this._postLayout(w, h, pr);
+        // dynamic resolution: on for the preset's range unless the quality was pinned by the ?quality= test flag
+        // (screenshots and budgets stay exact); ?drs=1 / ?drs=0 decide either way
+        const range = Array.isArray(this.preset.drs) ? this.preset.drs : null, flag = G.params?.get?.('drs');
+        D.on = !!range && (flag === '1' || flag === 'on' || (!G.flags.quality && flag !== '0' && flag !== 'off'));
+        D.max = range ? clamp(fin(Number(range[1]), 1), 0.3, 1) : 1;
+        D.min = range ? clamp(fin(Number(range[0]), D.max), 0.3, D.max) : 1;
+        D.cap = Math.min(D.max, lay.cap);
+        D.scale = D.on && !D.full ? clamp(fin(D.scale, D.cap), Math.min(D.min, D.cap), D.cap) : D.cap;
+        // plain ping-pong targets: no MSAA, no depth (the scene pass owns the only multisampled target)
+        const rt = new THREE.WebGLRenderTarget(Math.max(1, Math.floor(w * pr * D.scale)), Math.max(1, Math.floor(h * pr * D.scale)), { type: THREE.HalfFloatType, depthBuffer: false, stencilBuffer: false });
         const composer = new ADDONS.EffectComposer(r, rt);
-        composer.setPixelRatio(r.getPixelRatio());
-        composer.setSize(window.innerWidth, window.innerHeight);
-        composer.addPass(new ADDONS.RenderPass(this.scene, this.camera));
+        composer._pixelRatio = pr * D.scale;   // (setPixelRatio would size everything a second time)
+        composer.setSize(w, h);
+        const sp = new ScenePass(this, { samples: lay.samples });
+        composer.addPass(sp);
+        this._scenePass = sp;
         const bloomOn = !!this.preset.bloom && G.settings.bloom !== false && !!ADDONS.UnrealBloomPass;
         if (bloomOn) {
           // NaN/Inf scrub before bloom: one bad pixel (any shader, any GPU) must never be blurred into a black box;
@@ -1118,9 +1247,191 @@
       } catch (e) {
         G.log.warn('ENGINE', 'post-processing unavailable, rendering directly', e);
         this._disposeComposer();
+        D.on = false; D.scale = 1;
       }
+      this._applyShed();
       G.bus.emit('engine:features', { quality: this.quality });
+      G.bus.emit('engine:post', { composer: !!this.composer, depthTexture: this.depthTexture });
     },
+
+    // ------------------------------------------------------------ post chain: size, memory budget, dynamic resolution
+    /** MSAA sample count and the largest render scale the memory budget allows at this size (see POST_BUDGET_BYTES) */
+    _postLayout(w, h, pr) {
+      const p = this.preset, full = Math.max(1, w * h * pr * pr);
+      let samples = p.antialias ? 4 : 0;
+      if (samples === 4 && full * postBytesPerPixel(p, 4) > POST_BUDGET_BYTES) samples = 2;
+      const bpp = postBytesPerPixel(p, samples), cap = Math.min(1, Math.sqrt(POST_BUDGET_BYTES / (full * bpp)));
+      // bytes: what the chain holds at the cap · before: the two 4× MSAA half-float targets of the chain before phase 8
+      return { samples, full, cap, bytes: Math.round(full * cap * cap * bpp), before: Math.round(full * 2 * (4 * 12 + 8)), budget: POST_BUDGET_BYTES };
+    },
+    /** composer size = CSS size × pixel ratio × render scale. renderer.setPixelRatio is never scaled: the canvas, the
+     *  photos and the pixel-ratio self-test stay exact; the output pass stretches the frame onto the canvas. */
+    _applyPostSize(w = window.innerWidth, h = Math.max(1, window.innerHeight), pr = this._pixelRatio()) {
+      const c = this.composer, D = this._drs;
+      if (!c) return;
+      const lay = this._postLayout(w, h, pr);
+      D.cap = Math.min(D.max, lay.cap);
+      D.scale = D.on && !D.full ? clamp(fin(D.scale, D.cap), Math.min(D.min, D.cap), D.cap) : D.cap;
+      this._scenePass?.setSamples(lay.samples);
+      c._pixelRatio = pr * D.scale;   // EffectComposer.setPixelRatio() and setSize() would each allocate every target
+      c.setSize(w, h);
+    },
+    get renderScale() { return this.composer ? this._drs.scale : 1; },
+    get pointRatio() { return (this.renderer ? this.renderer.getPixelRatio() : 1) * this.renderScale; },
+    get depthTexture() { return this._scenePass ? this._scenePass.rt.depthTexture : null; },
+    get depthState() {
+      const sp = this._scenePass, cam = this.camera;
+      return { valid: !!(sp && sp.frames > 0), sampleable: !!(sp && sp.samples > 0 && sp.frames > 0), near: cam ? cam.near : 0.1, far: cam ? cam.far : 3000, width: sp ? sp.rt.width : 0, height: sp ? sp.rt.height : 0, frame: sp ? sp.frames : 0 };
+    },
+    get drs() { const D = this._drs; return { on: D.on, scale: this.renderScale, min: D.min, max: D.max, cap: D.cap, level: D.level, ema: D.ema, full: D.full, rest: D.rest, changes: D.changes, log: D.log.slice(-12) }; },
+    /** what the post chain holds right now: MSAA samples, rendered pixels, estimated bytes (the budget's formula) */
+    get postInfo() {
+      const sp = this._scenePass, c = this.composer;
+      if (!sp || !c) return { samples: 0, pixels: 0, bytes: 0, budget: POST_BUDGET_BYTES, passes: 0 };
+      const px = sp.rt.width * sp.rt.height;
+      return { samples: sp.samples, pixels: px, width: sp.rt.width, height: sp.rt.height, bytes: Math.round(px * postBytesPerPixel(this.preset, sp.samples)), budget: POST_BUDGET_BYTES, passes: c.passes.length };
+    },
+    /** fn({ renderer, scene, camera, engine }) before every drawn frame's scene render (after guard.tick) -> off() */
+    onPreRender(fn) {
+      if (typeof fn !== 'function') return () => {};
+      this._preRenderFns.push(fn);
+      return () => { const i = this._preRenderFns.indexOf(fn); if (i >= 0) this._preRenderFns.splice(i, 1); };
+    },
+    /** read the scene depth of the last drawn frame back at w×h (self-tests, dev center) → { w, h, raw: Float32Array
+     *  0..1 (1 = nothing drawn: sky), depth: Float32Array metres along the view axis (0 = sky), near, far, frame } | null */
+    debugDepth(w = 64, h = 36) {
+      const r = this.renderer, sp = this._scenePass;
+      if (!r || !sp || !sp.frames || this._isLost()) return null;
+      w = clamp(w | 0, 1, 512); h = clamp(h | 0, 1, 512);
+      let P = this._depthProbe;
+      if (!P) {
+        const mat = new THREE.ShaderMaterial({ name: 'DepthProbeShader', uniforms: { tDepth: { value: null } }, vertexShader: FS_VERT, fragmentShader: DEPTH_PROBE_FRAG, depthTest: false, depthWrite: false, toneMapped: false });
+        const quad = new THREE.Mesh(fsGeometry(), mat);
+        quad.frustumCulled = false;
+        P = this._depthProbe = { mat, quad, rt: null };
+      }
+      if (!P.rt || P.rt.width !== w || P.rt.height !== h) {
+        P.rt?.dispose();
+        P.rt = new THREE.WebGLRenderTarget(w, h, { depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+      }
+      const buf = new Uint8Array(w * h * 4), prev = r.getRenderTarget(), gl = r.getContext();
+      try {
+        P.mat.uniforms.tDepth.value = sp.rt.depthTexture;
+        r.setRenderTarget(P.rt);
+        r.render(P.quad, fsCam);
+        // (see the watchdog probe: an async read elsewhere may hold a PIXEL_PACK_BUFFER binding)
+        const pack = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING);
+        if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        try { r.readRenderTargetPixels(P.rt, 0, 0, w, h, buf); } finally { if (pack) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack); }
+      } finally { r.setRenderTarget(prev); }
+      const near = this.camera.near, far = this.camera.far, raw = new Float32Array(w * h), depth = new Float32Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        if (buf[i * 4 + 3] < 128) { raw[i] = 1; continue; }
+        const d = buf[i * 4] / 255 + buf[i * 4 + 1] / 65025 + buf[i * 4 + 2] / 16581375;
+        raw[i] = d;
+        depth[i] = (near * far) / Math.max(1e-9, far - d * (far - near));
+      }
+      return { w, h, raw, depth, near, far, frame: sp.frames };
+    },
+    /** hold the render scale at its maximum while any key is held (photo mode: the picture is taken at full scale) */
+    fullScale(on, key = 'api') {
+      if (on) this._fullKeys.add(key); else this._fullKeys.delete(key);
+      const D = this._drs, full = this._fullKeys.size > 0;
+      if (full === D.full) return this.renderScale;
+      D.full = full; D.slow = D.fast = 0; D.trial = null;
+      if (full && this.composer && D.scale !== D.cap) this._setScale(D.cap, 'full');
+      return this.renderScale;
+    },
+    /** apply a new render scale: the post chain's targets are sized anew, point sprites get the new ratio */
+    _setScale(s, why) {
+      const D = this._drs, before = D.scale;
+      D.scale = clamp(fin(s, D.cap), Math.min(D.min, D.cap), D.cap);
+      if (!this.composer || Math.abs(D.scale - before) < 1e-4) return D.scale;
+      this._applyPostSize();
+      D.changes++;
+      D.log.push({ at: Math.round(performance.now()), scale: +D.scale.toFixed(3), ema: +D.ema.toFixed(1), why: why || '' });
+      if (D.log.length > 40) D.log.shift();
+      this._callResize();
+      G.bus.emit('engine:scale', { scale: D.scale, why: why || '' });
+      return D.scale;
+    },
+    _callResize(w = window.innerWidth, h = Math.max(1, window.innerHeight)) {
+      const pr = this.pointRatio;
+      for (const fn of this._resizeFns) { try { fn(w, h, pr); } catch (e) { G.log.error('ENGINE', e); } }
+    },
+    /** test hook: feed the controller this frame time (ms) instead of the measured one; null = measure again */
+    drsInject(ms) { this._drs.inject = ms == null ? null : Math.max(0.1, Number(ms) || 0.1); this._drs.slow = this._drs.fast = 0; },
+    /**
+     * Dynamic resolution (CONTRACT §16.3), once per frame with the wall-clock frame time. A smoothed frame time above
+     * ~29.5 ms (34 fps) for 1 s sheds, in this order: AO → reflections → render scale (×0.88 per step down to the
+     * preset's minimum); below ~19.5 ms (51 fps) for `upWait` seconds it gives back in the reverse order. Between the
+     * two bounds nothing moves (hysteresis: one step changes the pixel count by 23 %, the band is 51 % wide). Steps
+     * that buy nothing (a display capped at 30 Hz, a slow CPU: two scale steps without 6 % gain) are undone and the
+     * controller rests (30 s, doubling to 5 min). An up-step that is slow again within 8 s doubles `upWait` (max 30 s).
+     * Stalls (> 1 s), a hidden tab, loading, a thinned render (dev center, big modal) and photo mode are not judged.
+     * Below the minimum scale the existing auto step-down of the quality preset takes over (fps < 24 for 6 s).
+     */
+    _drsTick(wallDt) {
+      const D = this._drs;
+      if (!D.on || !this.composer || D.full) return;
+      const inj = D.inject != null;
+      const ms = inj ? D.inject : wallDt * 1000;
+      if (!(ms > 0) || (!inj && (ms > 1000 || document.hidden || !G.ready || (this._thin || 1) > 1))) { D.slow = D.fast = 0; return; }
+      const dt = Math.min(Math.max(wallDt, 0.001), 0.25);
+      const m = Math.min(ms, 250);
+      D.ema = D.ema > 0 ? D.ema + (m - D.ema) * (1 - Math.exp(-dt / 0.6)) : m;
+      D.cool = Math.max(0, D.cool - dt); D.rest = Math.max(0, D.rest - dt);
+      const SLOW = 29.5, FAST = 19.5;
+      if (D.ema > SLOW) { D.slow += dt; D.fast = 0; }
+      else {
+        D.trial = null;   // fast enough again: the shedding (if any) worked
+        if (D.ema < FAST) { D.fast += dt; D.slow = 0; } else { D.slow = Math.max(0, D.slow - dt); D.fast = Math.max(0, D.fast - dt); }
+      }
+      if (D.cool > 0) { D.slow = D.fast = 0; return; }   // the smoothed time is still settling on the last change
+      const now = performance.now();
+      if (D.slow >= 1) {
+        D.slow = 0;
+        if (D.rest > 0) return;
+        if (D._lastUpAt && now - D._lastUpAt < 8000) { D.upWait = Math.min(30, D.upWait * 2); D._lastUpAt = 0; }   // giving back was too early
+        const T = D.trial || (D.trial = { ema: D.ema, scale: D.scale, level: D.level, steps: 0 });
+        if (T.steps >= 2 && D.ema > T.ema * 0.94) {
+          // shedding bought nothing: the resolution is not what limits this device — put everything back and rest
+          this._drsLevel(T.level); this._setScale(T.scale, 'futile');
+          D.trial = null; D.rest = D.restLen; D.restLen = Math.min(300, D.restLen * 2); D.cool = 2;
+          return;
+        }
+        const ao = this.aoPass, lo = Math.min(D.min, D.cap);
+        if (D.level < 1 && ao && ao.enabled) { this._drsLevel(1); D.cool = 1.5; }
+        else if (D.level < 2 && this.reflectOn) { this._drsLevel(2); D.cool = 1.5; }
+        else if (D.scale > lo + 1e-3) { T.steps++; this._setScale(Math.max(lo, D.scale * 0.88), 'slow'); D.cool = 1.5; }
+        else D.cool = 2;   // at the floor
+        D.lastDownAt = now;
+      } else if (D.fast >= D.upWait) {
+        D.fast = 0;
+        if (D.scale < D.cap - 1e-3) { this._setScale(Math.min(D.cap, D.scale / 0.88), 'fast'); D.cool = 2.5; }
+        else if (D.level > 0) { this._drsLevel(D.level - 1); D.cool = 4; }
+        else { D.restLen = 30; if (D.upWait > 3) D.upWait = Math.max(3, D.upWait * 0.75); return; }
+        D._lastUpAt = now;
+      }
+    },
+    /** shed level: 0 everything on · 1 AO off · 2 AO and the planar reflection off */
+    _drsLevel(level) {
+      const D = this._drs;
+      level = clamp(level | 0, 0, 2);
+      if (level === D.level) return;
+      D.level = level;
+      this._applyShed();
+      D.log.push({ at: Math.round(performance.now()), level, ema: +D.ema.toFixed(1), why: 'level' });
+      if (D.log.length > 40) D.log.shift();
+      G.bus.emit('engine:scale', { scale: D.scale, level, why: 'level' });
+    },
+    /** which costly effects run now: the preset, the settings and what the dynamic resolution shed */
+    _applyShed() {
+      const lvl = this._drs.level;
+      if (this.aoPass) this.aoPass.enabled = lvl < 1 && G.params?.get?.('ao') !== '0';
+      this.reflectOn = (this.preset.reflect | 0) >= 2 && lvl < 2;
+    },
+    reflectOn: false,
 
     setShadows(on) {
       on = !!on && !!this.preset.shadows;
@@ -1261,7 +1572,10 @@
       this._envDirty = false;
     },
     /** behind the loading screen (core runs postInit before the loader hides): every system has built its scene */
-    async postInit() { await this.precompile(); this._markWarm(); },
+    async postInit() {
+      await this.precompile(); this._markWarm();
+      if (this.renderScale !== 1) this._callResize();   // modules built after init sized their point sprites for scale 1
+    },
 
     /** remember every shadow caster that exists now: the login warm-up draws only casters added after this */
     _markWarm() {
@@ -1338,7 +1652,7 @@
       let job = null;
       scene.add(warm);
       try {
-        r.setRenderTarget(this.composer ? this.composer.readBuffer : null);
+        r.setRenderTarget(this._scenePass ? this._scenePass.rt : null);
         // compiles now; with the extension the promise waits for the driver to finish (compileAsync would also warn
         // in the console when it is missing — the plain compile hands the same work to the driver)
         if (r.extensions?.has?.('KHR_parallel_shader_compile')) job = r.compileAsync(scene, this.camera);
@@ -1491,12 +1805,13 @@
       if (!this.renderer) return;
       if (pr !== this.renderer.getPixelRatio()) this.renderer.setPixelRatio(pr);
       this.renderer.setSize(w, h);
-      if (this.composer) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); }
+      this._applyPostSize(w, h, pr);
       if (this.bloomPass) this.bloomPass.resolution.set(w / 2, h / 2);
       watchdog.hold(2000);
-      for (const fn of this._resizeFns) { try { fn(w, h, pr); } catch (e) { G.log.error('ENGINE', e); } }
+      this._callResize(w, h);
     },
-    /** fn(cssWidth, cssHeight, pixelRatio) after every resize / pixel-ratio / quality change */
+    /** fn(cssWidth, cssHeight, pointRatio) after every resize / pixel-ratio / quality / render-scale change.
+     *  pointRatio = renderer pixel ratio × render scale: the pixels gl_PointSize counts in */
     onResize(fn) { if (typeof fn === 'function') this._resizeFns.push(fn); },
 
     /**
@@ -1584,6 +1899,10 @@
       this._updateGrade(dt);
       this._updateOutline(dt);
       this._updateCull(dt);
+      // dynamic resolution: judged on the wall clock (the loop clamps dt), see _drsTick
+      const wallNow = performance.now(), wallDt = this._wallT ? (wallNow - this._wallT) / 1000 : 0;
+      this._wallT = wallNow;
+      if (wallDt > 0 && this._drs.on) this._drsTick(wallDt);
       // re-bake environment at most every 2s when sun/sky changed
       this._envTimer -= dt;
       if (this._envDirty && this._envTimer <= 0) { this._envTimer = 2; this.updateEnvironment(); }
@@ -1621,6 +1940,7 @@
       // The opaque developer center hides the world (render ~1/6); a large blocking modal covers most of it (~1/3).
       const cover = opts?.force ? 1 : document.body.classList.contains('dc-open') ? 6
         : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3 : 1;
+      this._thin = cover;   // (the dynamic resolution does not judge a thinned render)
       if (cover > 1) {
         this._skip = ((this._skip || 0) + 1) % cover;
         if (this._skip) return;
@@ -1631,11 +1951,23 @@
       if (this.atmosPass) { this.camera.updateMatrixWorld(); this._updateSunScreen(); } // this frame's camera: no glow lag
       guard.tick();   // §14.4.1: a non-finite opacity / scale / uniform never reaches the GPU
       try {
+        // reflection / probe renders of other modules (engine.onPreRender): after the guard, before the scene
+        const pre = this._preRenderFns;
+        if (pre.length) {
+          const arg = this._preArg || (this._preArg = { renderer: this.renderer, scene: this.scene, camera: this.camera, engine: this });
+          const rt = this.renderer.getRenderTarget();
+          for (let i = 0; i < pre.length; i++) {
+            try { pre[i](arg); } catch (e) { if (!pre[i]._warned) { pre[i]._warned = true; G.log.warn('ENGINE', 'a pre-render hook failed (it keeps being called)', e?.message || e); } }
+          }
+          this.renderer.setRenderTarget(rt);
+        }
+        this.frameInfo.pre = info.render.calls;
         if (this.composer) this.composer.render();
-        else this.renderer.render(this.scene, this.camera);
+        else { this.renderer.render(this.scene, this.camera); this.frameInfo.scene = info.render.calls - this.frameInfo.pre; }
       } finally { guard.restore(); }
       this.frameInfo.calls = info.render.calls;
       this.frameInfo.triangles = info.render.triangles;
+      this.frameInfo.post = info.render.calls - this.frameInfo.pre - this.frameInfo.scene;
       // §14.4.2: every 2 s the shown frame is read back at 96×54 and searched for a black / white block
       if (opts?.probe || watchdog.due(performance.now())) {
         watchdog.nextAt = performance.now() + watchdog.interval;

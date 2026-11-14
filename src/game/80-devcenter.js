@@ -1673,7 +1673,7 @@
       const c = E?.composer;
       if (!c || !Array.isArray(c.passes)) return { composer: false, bloomPreset: !!E?.preset?.bloom, list: [], ok: null };
       const list = c.passes.map((p) => {
-        let name = p.material?.name && p.material.name !== 'unspecified' ? p.material.name : '';
+        let name = (typeof p.name === 'string' && p.name) || (p.material?.name && p.material.name !== 'unspecified' ? p.material.name : '');   // [render-light] the engine's own passes name themselves
         if (A.UnrealBloomPass && p instanceof A.UnrealBloomPass) name = 'UnrealBloomPass';
         else if (A.RenderPass && p instanceof A.RenderPass) name = 'RenderPass';
         else if (A.OutputPass && p instanceof A.OutputPass) name = 'OutputPass';
@@ -2943,8 +2943,102 @@
     const want = Math.min(Number(window.devicePixelRatio) > 0 ? Number(window.devicePixelRatio) : 1, E.preset.pixelRatio);
     const pr = r.getPixelRatio();
     const u = G.sys.props?.glow?.material?.uniforms?.uScale?.value;
-    const glowOk = u == null || near(u, window.innerHeight * 0.5 * pr, 0.5);
+    const glowOk = u == null || near(u, window.innerHeight * 0.5 * pr * (E.renderScale ?? 1), 0.5);   // [render-light] point sprites follow the render scale
     return { ok: near(pr, want, 1e-6) && glowOk && Array.isArray(E._cull?.items ?? []), detail: `배율 ${pr} (기대 ${want})${u == null ? '' : ` · 등불 ${Math.round(u)}${glowOk ? '' : ' ❌'}`}` };
+  });
+  // [render-light] ---- phase 8 post chain (CONTRACT §16.3): scene pass + depth texture, pre-render hook, dynamic resolution
+  T('🖥️ 렌더', '후처리 사슬: 장면 패스가 맨 앞 · 출력 패스가 맨 뒤 · 깊이 텍스처가 장면 크기와 같아요', () => {
+    const E = G.sys.engine, p = Gpu.passes();
+    if (!E?.renderer) return SKIP('엔진이 없어요');
+    if (!p.composer) return { ok: E.depthTexture == null && E.renderScale === 1, detail: `후처리 없는 품질(${E.quality}): 깊이 텍스처 없음 · 렌더 배율 1` };
+    const names = p.list.map((x) => x.name), d = E.depthTexture, s = E.depthState, info = E.postInfo;
+    const ok = names[0] === 'ScenePass' && names[names.length - 1] === 'OutputPass' && !!d?.isDepthTexture && s.width === info.width && s.height === info.height && info.bytes <= info.budget;
+    return { ok, detail: `${names.join(' → ')} · 깊이 ${s.width}×${s.height} · MSAA ${info.samples}× · 약 ${Math.round(info.bytes / 1048576)} MB (상한 ${Math.round(info.budget / 1048576)} MB)` };
+  });
+  T('🖥️ 렌더', '후처리 메모리 상한: 2880×1800 화면 · 배율 2 도 약 260 MB 안이에요 (MSAA 4× → 2×, 그다음 렌더 배율)', () => {
+    const E = G.sys.engine;
+    if (typeof E?._postLayout !== 'function') return SKIP('엔진이 없어요');
+    const mb = (b) => Math.round(b / 1048576);
+    const rows = [[1920, 1080, 1], [1440, 900, 2], [2880, 1800, 2]].map(([w, h, pr]) => ({ w, h, pr, ...E._postLayout(w, h, pr) }));
+    const big = rows[2], hd = rows[0];
+    const ok = rows.every((r) => r.bytes <= r.budget * 1.001 && r.cap > 0.2 && r.cap <= 1) && (!E.preset.antialias || (hd.samples === 4 && hd.cap === 1 && big.samples === 2 && big.cap < 1 && big.before > big.budget * 3));
+    return { ok, detail: rows.map((r) => `${r.w}×${r.h}@${r.pr}: MSAA ${r.samples}× · 배율 ≤ ${r.cap.toFixed(2)} · ${mb(r.bytes)} MB (전에는 ${mb(r.before)} MB)`).join(' / ') };
+  });
+  T('🖥️ 렌더', '장면 깊이: 방금 그린 화면의 깊이가 텍스처에 들어 있어요 (MSAA 해석 뒤 읽기)', () => {
+    const E = G.sys.engine;
+    if (!E?.composer || typeof E.debugDepth !== 'function') return SKIP('후처리가 없는 품질이에요');
+    E.render({ force: true });
+    const r = E.debugDepth(48, 27);
+    if (!r) return { ok: false, detail: '깊이를 읽지 못했어요' };
+    let geo = 0, min = Infinity, max = 0;
+    const seen = new Set();
+    for (let i = 0; i < r.depth.length; i++) { const z = r.depth[i]; if (z > 0) { geo++; if (z < min) min = z; if (z > max) max = z; seen.add(Math.round(z * 4)); } }
+    // the camera looks at the player: something is nearer than 40 m, and depths differ across the frame
+    const ok = geo > r.depth.length * 0.2 && min > r.near * 0.99 && min < 40 && max > min * 1.5 && seen.size > 12;
+    return { ok, detail: `그려진 칸 ${geo}/${r.depth.length} · 가까운 곳 ${Number.isFinite(min) ? min.toFixed(1) : '-'} m · 먼 곳 ${max.toFixed(0)} m · 서로 다른 깊이 ${seen.size}개` };
+  });
+  T('🖥️ 렌더', 'engine.onPreRender: 그리는 프레임마다 한 번, 장면보다 먼저 불러요 · 해제하면 멈춰요', () => {
+    const E = G.sys.engine;
+    if (!E?.renderer || typeof E.onPreRender !== 'function') return SKIP('엔진이 없어요');
+    let n = 0, callsAtHook = -1, framesAtHook = -1;
+    const off = E.onPreRender((a) => { n++; callsAtHook = a.renderer.info.render.calls; framesAtHook = E._scenePass ? E._scenePass.frames : -1; });
+    let pre1 = 0, frames1 = -1;
+    try { E.render({ force: true }); pre1 = E.frameInfo.pre; frames1 = E._scenePass ? E._scenePass.frames : -1; } finally { off(); }
+    const first = n;
+    E.render({ force: true });
+    const before = callsAtHook >= 0 && callsAtHook <= pre1 && (framesAtHook < 0 || framesAtHook + 1 === frames1);
+    return { ok: first === 1 && n === 1 && before, detail: `불린 횟수 ${first} (해제 뒤 ${n - first}) · 그때까지 그린 호출 ${callsAtHook} · 장면은 그 뒤에 ${before ? '그렸어요' : '❌'}` };
+  });
+  T('🖥️ 렌더', '동적 해상도: 느리면 AO → 렌더 배율 순으로 줄이고 (캔버스·렌더러 배율은 그대로) 빨라지면 되돌려요', () => {
+    const E = G.sys.engine, r = E?.renderer;
+    if (!r || !E.composer || !Array.isArray(E.preset?.drs) || typeof E._drsTick !== 'function') return SKIP('동적 해상도가 없는 품질이에요');
+    const D = E._drs, keep = { ...D }, keepLog = D.log.slice(), pr = r.getPixelRatio(), cw = r.domElement.width, ch = r.domElement.height;
+    const order = [], hadAo = !!(E.aoPass && E.aoPass.enabled);
+    const run = (msAt, seconds) => { for (let t = 0; t < seconds; t += 0.25) { const s0 = D.scale, l0 = D.level; D.inject = msAt(); E._drsTick(0.25); if (D.level !== l0) order.push('level' + D.level); if (D.scale !== s0) order.push(D.scale < s0 ? 'down' : 'up'); } };
+    try {
+      Object.assign(D, { on: true, full: false, ema: 0, slow: 0, fast: 0, cool: 0, rest: 0, restLen: 30, upWait: 3, trial: null, level: 0, _lastUpAt: 0 });
+      E._applyShed(); E._setScale(D.cap, 'test');
+      const lo = Math.min(D.min, D.cap);
+      // a fill-bound GPU: 62 ms at full scale, the frame time follows the pixel count
+      run(() => 62 * D.scale * D.scale / (D.cap * D.cap) * (D.level >= 1 && hadAo ? 0.93 : 1), 60);
+      const down = { scale: D.scale, level: D.level, w: E.postInfo.width };
+      const glow = G.sys.props?.glow?.material?.uniforms?.uScale?.value;
+      const glowOk = glow == null || near(glow, window.innerHeight * 0.5 * pr * D.scale, 0.5);
+      const sizeOk = near(E.postInfo.width, Math.floor(window.innerWidth * pr * D.scale), 1.01) && r.getPixelRatio() === pr && r.domElement.width === cw && r.domElement.height === ch;
+      const aoFirst = !hadAo || order[0] === 'level1';
+      run(() => 9, 90);
+      const up = { scale: D.scale, level: D.level };
+      // a display capped at 30 Hz: shedding buys nothing → everything is put back and the controller rests
+      Object.assign(D, { ema: 0, slow: 0, fast: 0, cool: 0, rest: 0, trial: null });
+      run(() => 33.4, 30);
+      const futile = { scale: D.scale, level: D.level, rest: D.rest };
+      const ok = down.scale < D.cap - 0.05 && down.scale >= lo - 1e-6 && aoFirst && sizeOk && glowOk && near(up.scale, D.cap, 1e-6) && up.level === 0 && near(futile.scale, D.cap, 1e-6) && futile.level === 0 && futile.rest > 0;
+      return { ok, detail: `느림: 배율 ${down.scale.toFixed(2)} (범위 ${lo.toFixed(2)}–${D.cap.toFixed(2)})${hadAo ? ` · AO 먼저 ${aoFirst ? '✔' : '❌'}` : ''} · 장면 너비 ${down.w}px ${sizeOk ? '✔' : '❌'} · 빠름: 배율 ${up.scale.toFixed(2)} 단계 ${up.level} · 30Hz 제한: 배율 ${futile.scale.toFixed(2)}, 쉬는 시간 ${Math.round(futile.rest)}초${glowOk ? '' : ' · 등불 크기 ❌'}` };
+    } finally {
+      const cur = D.scale, lvl = D.level;   // what the targets hold right now
+      Object.assign(D, keep); D.scale = cur; D.level = lvl;
+      E._drsLevel(keep.level); E._setScale(keep.scale, 'test-end');
+      D.changes = keep.changes; D.log = keepLog;
+    }
+  });
+  T('🖥️ 렌더', '사진 모드: engine.fullScale 을 켜면 렌더 배율이 최대로 고정돼요', () => {
+    const E = G.sys.engine;
+    if (!E?.composer || !Array.isArray(E.preset?.drs) || typeof E.fullScale !== 'function') return SKIP('동적 해상도가 없는 품질이에요');
+    const D = E._drs, keep = { on: D.on, scale: D.scale, inject: D.inject, ema: D.ema, cool: D.cool, slow: D.slow, changes: D.changes };
+    try {
+      D.on = true; E._setScale(Math.min(D.min, D.cap), 'test');
+      const low = D.scale;
+      E.fullScale(true, 'dc-test');
+      const held = D.scale;
+      D.inject = 80; D.cool = 0;
+      for (let i = 0; i < 40; i++) E._drsTick(0.25);
+      const still = D.scale;
+      return { ok: near(held, D.cap, 1e-6) && near(still, D.cap, 1e-6), detail: `배율 ${low.toFixed(2)} → 고정 ${held.toFixed(2)} (느린 프레임 뒤에도 ${still.toFixed(2)})` };
+    } finally {
+      E.fullScale(false, 'dc-test');
+      Object.assign(D, { on: keep.on, inject: keep.inject, ema: keep.ema, cool: keep.cool, slow: keep.slow });
+      E._setScale(keep.scale, 'test-end'); D.changes = keep.changes;
+    }
   });
   T('🖥️ 렌더', '사진: GPU 화면을 잃었을 때 찍으면 빈 사진을 앨범에 넣지 않아요', async () => {
     const P = G.sys.photo, gl = G.sys.engine?.renderer?.getContext?.();
@@ -3283,7 +3377,10 @@
       this.live = { results, done: 0, total: TESTS.length };
       this._promise = (async () => {
         let lastGroup = '';
+        // [render-light] opts.only (RegExp | string | fn(test)): run a subset — browser time is scarce on software GL
+        const only = opts.only == null ? null : typeof opts.only === 'function' ? opts.only : ((re) => (t) => re.test(`${t.group} / ${t.name}`))(new RegExp(opts.only));
         for (const t of TESTS) {
+          if (only && !only(t)) continue;
           if (t.group !== lastGroup) { lastGroup = t.group; opts.onProgress?.(this.live); await U.nextFrame(); }
           const s = perf();
           let status = 'fail', detail = '';
@@ -3303,7 +3400,7 @@
           skipped: results.filter((x) => x.status === 'skip').length,
           results,
         };
-        this.result = r;
+        if (!only) this.result = r;   // [render-light] a subset run never replaces the last full result
         this.running = false;
         this.live = null;
         G.log.info('DEV', `self test: ${r.passed}/${r.total} passed, ${r.failed} failed, ${r.skipped} skipped (${r.ms.toFixed(0)} ms)`);
@@ -5567,7 +5664,7 @@
     isOpen() { return ui.opened; },
     setTab(tab) { if (normTab(tab)) setTab(tab, { scrollTop: true }); },
     lint() { return Lint.run(); },
-    runTests() { return Tests.runAll(); },
+    runTests(opts) { return Tests.runAll(opts); },   // [render-light] opts.only: see Tests.runAll
     testCount() { return TESTS.length; },
     health() { return health(); },
     report() { return buildReport(); },

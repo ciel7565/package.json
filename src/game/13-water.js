@@ -548,7 +548,8 @@
       grp.add(spray);
       this.meshes.spray = spray;
       this._sprayMat = sprayMat;
-      const setScale = () => { sprayMat.uniforms.uScale.value = (G.sys.engine?.renderer?.getPixelRatio?.() || 1) * (window.innerHeight / 900); };
+      // point sprites count the pixels of the render target: pixel ratio × render scale (engine.pointRatio)
+      const setScale = () => { const E = G.sys.engine; sprayMat.uniforms.uScale.value = (E?.pointRatio || E?.renderer?.getPixelRatio?.() || 1) * (window.innerHeight / 900); };
       setScale();
       G.sys.engine?.onResize?.(setScale);
       scene.add(grp);

@@ -1217,7 +1217,8 @@
     _onResize() {
       const E = G.sys.engine;
       if (!E || !E.renderer) return;
-      const pr = E.renderer.getPixelRatio() || 1;
+      // the pixels a point sprite is drawn in: renderer pixel ratio × the engine's render scale (dynamic resolution)
+      const pr = E.pointRatio || E.renderer.getPixelRatio() || 1;
       if (this._stars) this._stars.material.uniforms.uPR.value = pr * clamp(window.innerHeight / 900, 0.75, 1.5);
       // half the drawing-buffer height; the snow shader multiplies by the live projectionMatrix[1][1] (1 / tan(fov / 2))
       // so the telescope / FOV kicks keep the flakes world-sized (R3-render-1: the FOV used to be read on resize only)
