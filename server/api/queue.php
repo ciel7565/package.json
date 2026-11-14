@@ -21,5 +21,7 @@ Api::run(['method' => 'GET', 'rate' => 'queue', 'rateBy' => 'ip', 'session' => '
     V::keys($_GET, ['t'], 'query');
     $t = V::query('t');
     if ($t === null || $t === '') V::fail('t', '값이 필요해요.');
-    return Gate::poll(V::str($t, 't', 200));
+    $r = Gate::poll(V::str($t, 't', 200));
+    Api::releaseConnection(isset($r['next']) ? (int) $r['next'] : 0); // waiting: the next question is seconds away
+    return $r;
 });

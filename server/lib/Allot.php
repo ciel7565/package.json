@@ -102,6 +102,10 @@ final class Allot
     {
         self::$memo = [];
         if (class_exists('Tfm\Settings')) Settings::reset();
+        // [scale-server] the shared cache exists now (lib/Cache.php): what this class remembered there is forgotten too —
+        // the lazy tick's last start and the map version (tests/allot-attack.php D8 writes the stored stamp and calls this)
+        self::cacheDel('tick');
+        self::cacheDel('mapv');
     }
 
     // ------------------------------------------------------------------ small helpers

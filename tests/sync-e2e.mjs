@@ -138,6 +138,35 @@ async function newUser(srv, prefix = 'Sy', o = {}) {
   return c;
 }
 const at = (x, z, more = {}) => [x, 0, z, 0, more.speed || 0, more.anim || 'idle', more.zone || 'ZONE_MAIN', null, 0];
+/** the page's save checksum (cyrb53 over JSON.stringify(state)) */
+function cyrb53(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0, ch; i < str.length; i++) { ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+}
+/** a state the save validator accepts for a new account (the same fixture as tests/security-e2e.mjs) */
+function freshState(user, t = Date.now()) {
+  const crops = { CROP_BEAN: 120, CROP_PEPPER: 150, CROP_CABBAGE: 140, CROP_PERILLA: 130, CROP_CORN: 160, CROP_RADISH: 110, CROP_MINT: 90, CROP_LAVENDER: 150, CROP_LEMONBALM: 100 };
+  const pre = [['P1', 'CROP_BEAN', 65], ['P2', 'CROP_PEPPER', 70], ['P3', 'CROP_CABBAGE', 60], ['P4', 'CROP_PERILLA', 79], ['P5', 'CROP_CORN', 50], ['P6', 'CROP_RADISH', 96], ['H1', 'CROP_MINT', 75], ['H2', 'CROP_LAVENDER', 40], ['H3', null, 0], ['H4', 'CROP_LEMONBALM', 90]];
+  const plots = {};
+  for (const [id, crop, g] of pre) plots[id] = crop ? { cropId: crop, growth: g, water: 60, health: 80, plantedAt: t - Math.round((g / 100) * crops[crop] * 1000), lastUpdate: t, lastWaterAt: 0, harvests: 0 } : { cropId: null, growth: 0, water: 40, health: 100, plantedAt: 0, lastUpdate: t, lastWaterAt: 0, harvests: 0 };
+  const jar = (owned, extra = {}) => ({ owned, recipeId: null, status: 'EMPTY', progress: 0, quality: 0, hygiene: 100, temp: 22, humidity: 60, tempOff: 0, humOff: 0, startedAt: 0, lastUpdate: t, care: {}, completedAt: 0, claimedAt: 0, acc: { t: 0, temp: 0, hum: 0, hyg: 0 }, ...extra });
+  return {
+    version: 1, createdAt: t, savedAt: t,
+    profile: { id: String(user.id), nickname: user.nickname, email: user.email, role: user.role, avatar: null, title: '', titles: [] },
+    stats: { level: 1, exp: 0, coin: 0, edu: 0, logins: 1, playTime: 0, distance: 0, waters: 0, plants: 0, harvests: 0, harvestedItems: 0, fermentsStarted: 0, fermentsClaimed: 0, fermentChecks: 0, quizCorrect: 0, quizAnswered: 0, eduCompleted: 0, journals: 0, photos: 0, emotes: 0, gestures: 0, chats: 0, talks: 0, crafts: 0, interacts: 0, expTotal: 0 },
+    player: { x: 0, y: 0, z: 9, rotY: Math.PI, zoneId: 'ZONE_MAIN' },
+    inventory: { ITEM_SEED_BEAN: 3, ITEM_SEED_PEPPER: 2, ITEM_SEED_CABBAGE: 2, ITEM_SEED_MINT: 2, ITEM_WATERING_CAN: 1, ITEM_HOMI: 1, ITEM_MEJU: 1, ITEM_SALT: 2, ITEM_GUIDEBOOK: 1 },
+    quests: {}, farm: { plots },
+    jars: { J1: jar(true, { recipeId: 'FER001', status: 'FERMENTING', progress: 35, hygiene: 82, startedAt: t - 63000 }), J2: jar(false), J3: jar(false) },
+    education: { viewed: {}, completed: {}, quiz: {} },
+    journal: [], photos: [], achievements: {}, collection: {}, visited: { ZONE_MAIN: t }, poisVisited: {}, npcsTalked: {}, cropKinds: {},
+    flags: {}, tutorial: { step: 0, done: false }, activity: [{ t, type: 'login', text: 'sync-e2e' }], settings: {}, blocked: [],
+  };
+}
+const saveBody = (state, base = null) => ({ version: 1, checksum: cyrb53(JSON.stringify(state)), ...(base !== null ? { base } : {}), data: state });
 const ids = (r) => (r.data && Array.isArray(r.data.pl) ? r.data.pl.map((row) => row[0]) : []);
 const allIds = (r) => [...ids(r), ...((r.data && r.data.st) || [])];
 
@@ -391,6 +420,53 @@ await step('session', 'read endpoints do not rewrite the session file; a "로그
   const post = await u.req('api/presence/update.php', { json: { x: 1, y: 0, z: 1 } });
   assert(post.status === 200 && !post.setCookie.some((c) => /^TFMSESSID=/.test(c)), `a write call → ${post.status} ${JSON.stringify(post.setCookie)}`);
   return 'no rewrite within the interval, one write after it, no cookie re-sent';
+});
+
+await step('saves', 'a save carries the save hint; the same checksum at the same revision is the unchanged fast path (nothing judged or written, at most 3 statements, also for a forged body); a wrong checksum, a malformed body, an old base, a body without base and a changed state take the ordinary path', async () => {
+  const u = await newUser(main, 'Sv');
+  await u.req('api/player/get.php');
+  const state = freshState(u.user);
+  const first = await u.req('api/player/save.php', { json: saveBody(state) });
+  assert(first.status === 200 && first.data.revision === 1 && first.data.unchanged === undefined, `first save → ${first.status} ${JSON.stringify(first.error || first.data).slice(0, 160)}`);
+  assert(first.data.saveEvery === 60000 && first.data.rt && typeof first.data.rt === 'object', `first answer: saveEvery ${first.data.saveEvery}, rt ${typeof first.data.rt}`);
+  await sleep(1100);
+  const same = await u.req('api/player/save.php', { json: saveBody(state, 1) });
+  assert(same.status === 200 && same.data.unchanged === true && same.data.revision === 1 && same.data.savedAt === first.data.savedAt && same.data.size === first.data.size,
+    `the same body → ${same.status} ${JSON.stringify(same.error || same.data).slice(0, 200)}`);
+  assert(same.data.rt === undefined && same.data.saveEvery === 60000 && same.data.sub && same.data.subChanged === first.data.subChanged, `the unchanged answer is not {…, sub, subChanged, saveEvery} without rt: ${JSON.stringify(same.data).slice(0, 200)}`);
+  const cost = stats(same), costFirst = stats(first);
+  assert(cost.sql <= 3, `the unchanged save ran ${cost.sql} statements`);
+  // another state under the stored checksum: nothing is stored (the fast path writes nothing); under any other
+  // checksum the body is compared with it first; a body that is not a save is refused before either
+  const forged = saveBody(state, 1);
+  forged.data = { ...state, stats: { ...state.stats, coin: 999999 } };
+  await sleep(1100);
+  const claimed = await u.req('api/player/save.php', { json: forged });
+  assert(claimed.status === 200 && claimed.data.unchanged === true && claimed.data.revision === 1, `another state under the stored checksum → ${claimed.status} ${JSON.stringify(claimed.error || claimed.data).slice(0, 160)}`);
+  const kept = await u.req('api/player/get.php');
+  assert(kept.data.save.revision === 1 && kept.data.save.data.stats.coin === 0, 'a state claimed under the stored checksum was stored');
+  await sleep(1100);
+  const tampered = await u.req('api/player/save.php', { json: { ...forged, checksum: 'f'.repeat(14) } });
+  assert(tampered.status === 400 && tampered.error.code === 'CHECKSUM_MISMATCH', `a tampered body with a wrong checksum → ${tampered.status} ${tampered.error && tampered.error.code}`);
+  await sleep(1100);
+  const shape = await u.req('api/player/save.php', { json: { ...saveBody(state, 1), data: 'not a state' } });
+  assert(shape.status === 400 && shape.error.code === 'INVALID_SAVE', `a body that is not a save, with the stored checksum → ${shape.status} ${shape.error && shape.error.code}`);
+  // a changed state is judged and written
+  const moved = { ...state, savedAt: Date.now(), stats: { ...state.stats, playTime: 3, distance: 4 } };
+  await sleep(1100);
+  const changed = await u.req('api/player/save.php', { json: saveBody(moved, 1) });
+  assert(changed.status === 200 && changed.data.revision === 2 && changed.data.unchanged === undefined && changed.data.rt, `a changed state → ${changed.status} ${JSON.stringify(changed.error || changed.data).slice(0, 200)}`);
+  // the first body again with its old base: refused as stale, with the stored copy
+  await sleep(1100);
+  const stale = await u.req('api/player/save.php', { json: saveBody(state, 1) });
+  assert(stale.status === 409 && stale.error.code === 'STALE_SAVE' && stale.data.save.revision === 2, `an old base → ${stale.status} ${stale.error && stale.error.code}`);
+  // a page that names no base (older pages) is never answered from the fast path
+  await sleep(1100);
+  const noBase = await u.req('api/player/save.php', { json: saveBody(moved) });
+  assert(noBase.status === 200 && noBase.data.unchanged === undefined && noBase.data.revision === 3, `no base → ${noBase.status} ${JSON.stringify(noBase.error || noBase.data).slice(0, 160)}`);
+  const stored = await u.req('api/player/get.php');
+  assert(stored.data.save.revision === 3 && stored.data.save.data.stats.playTime === 3 && stored.data.save.data.stats.coin === 0, 'the stored copy is not the last accepted state');
+  return `unchanged: ${cost.sql} statements, ${cost.ms} ms · ordinary: ${costFirst.sql} statements, ${costFirst.ms} ms`;
 });
 
 await step('channels', 'ten clients in channels of four: 4 / 4 / 2, stable over five rounds and a token refresh; nobody is sent a player of another channel', async () => {

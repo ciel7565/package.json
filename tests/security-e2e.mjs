@@ -3515,7 +3515,9 @@ async function S19() {
       if (r.status !== 404 || r.buf.length || /TFMSEC-MARK|app_key|<\?php/.test(r.text)) bad.push(`${f} → ${r.status} (${r.buf.length} bytes)`);
     }
     assert(!bad.length, bad.slice(0, 5).join(' | '));
-    return `${php.length} PHP files → bare 404`;
+    // [scale-server] CONTRACT §16.9: the shared cache's records (account rows, channel members, counters) are among them
+    const cached = php.filter((f) => /^data\/cache\/[0-9a-f]{2}\/[0-9a-f]{40}\.php$/.test(f)).length;
+    return `${php.length} PHP files → bare 404${cached ? ` (${cached} of them cache records)` : ''}`;
   });
   {
     // information, not judged: what a server that ignores .htaccess (php -S, a mis-configured Nginx / AllowOverride None) would hand out
@@ -3587,6 +3589,43 @@ async function S19() {
     }
     assert(!bad.length, bad.slice(0, 6).join(' | '));
     return `${sample.length} files under /metaverse/ + 14 path tricks`;
+  });
+  // [scale-server] CONTRACT §16.9 — the precompressed copies of the page are public by design: they must be exactly the
+  // page, say what they are, and carry the page's security headers
+  await check('S19', 'Apache: the precompressed copies of the page (index.br.html / index.gz.html) are the page itself, served by Accept-Encoding with Content-Encoding, Vary and the HTML security headers; without Accept-Encoding the plain page', { ...APACHE_MODE, sev: 'medium', fix: 'Keep the "precompressed copies" rules of the root .htaccess (the rewrite inside IfModule mod_headers.c, Header set Content-Encoding, Header merge Vary) and build with tools/build.mjs.' }, async () => {
+    const no = await ap();
+    if (no) return no;
+    const has = (f) => fs.existsSync(path.join(a.docroot, f));
+    if (!has('index.gz.html') && !has('index.br.html')) return 'this copy has no precompressed page (built without --data-out or with --no-precompress): the plain page is served';
+    const sha = (b) => crypto.createHash('sha1').update(b).digest('hex');
+    const page = sha(fs.readFileSync(path.join(a.docroot, 'index.html')));
+    const plainOf = (r) => {
+      const ce = String(r.headers['content-encoding'] || '');
+      try { return sha(ce === 'gzip' ? zlib.gunzipSync(r.buf) : ce === 'br' ? zlib.brotliDecompressSync(r.buf) : r.buf); } catch { return 'undecodable'; }
+    };
+    const bad = [];
+    const cases = [
+      [a, '', 'gzip, deflate, br', has('index.br.html') ? 'br' : 'gzip'], [a, 'index.html', 'gzip, deflate', has('index.gz.html') ? 'gzip' : ''], [a, '', 'br;q=0, gzip;q=0', ''], [a, 'index.html', null, ''],
+      [a, 'index.html', 'identity', ''], [a.alias(), '', 'gzip', has('index.gz.html') ? 'gzip' : ''], [a.alias(), 'index.html', null, ''],
+      ...(has('index.gz.html') ? [[a, 'index.gz.html', null, 'gzip']] : []), ...(has('index.br.html') ? [[a, 'index.br.html', null, 'br']] : []),
+    ];
+    for (const [base, p, ae, want] of cases) {
+      const r = await request(base, p, { headers: { Accept: 'text/html', ...(ae !== null ? { 'Accept-Encoding': ae } : {}) }, dynamic: false });
+      const label = `${base === a ? '' : '(sub-folder) '}/${p} [${ae === null ? 'no Accept-Encoding' : ae}]`;
+      const ce = String(r.headers['content-encoding'] || '');
+      if (r.status !== 200) { bad.push(`${label} → ${r.status}`); continue; }
+      if (ce !== want) bad.push(`${label} → Content-Encoding "${ce}" (want "${want}")`);
+      if (plainOf(r) !== page) bad.push(`${label} is not the page`);
+      if (!/accept-encoding/i.test(String(r.headers.vary || ''))) bad.push(`${label} has no Vary: Accept-Encoding`);
+      if (!/text\/html/i.test(String(r.headers['content-type'] || ''))) bad.push(`${label} is ${r.headers['content-type']}`);
+      if (r.headers['x-content-type-options'] !== 'nosniff' || !/frame-ancestors/.test(String(r.headers['content-security-policy'] || '')) || !r.headers['x-frame-options'] || !r.headers['referrer-policy']) bad.push(`${label} lacks the HTML security headers`);
+      if (!r.headers['last-modified']) bad.push(`${label} has no Last-Modified`);
+    }
+    // a copy that is not there is an ordinary 404 page, never an "encoded" one
+    const missing = await request(a, 'index.xz.html', { headers: { Accept: 'text/html', 'Accept-Encoding': 'gzip, br' }, dynamic: false });
+    if (missing.status !== 404 || missing.headers['content-encoding']) bad.push(`/index.xz.html → ${missing.status} ${missing.headers['content-encoding'] || ''}`);
+    assert(!bad.length, bad.slice(0, 5).join(' | '));
+    return `${cases.length} requests: br / gzip / plain as asked, each the page itself`;
   });
   // CONTRACT §15.7 #19 — directory listing off
   await check('S19', 'Apache: no directory shows a listing', { ...APACHE_MODE, sev: 'medium', fix: 'Keep Options -Indexes.' }, async () => {

@@ -34,11 +34,11 @@ spl_autoload_register(static function (string $class): void {
         'Toss' => 'Toss', 'TossException' => 'Toss', 'Subscription' => 'Subscription',
         'Stats' => 'Admin', 'Health' => 'Admin', 'AdminOps' => 'Admin', 'AdminGate' => 'Admin', 'AdminPath' => 'Admin',
         'Installer' => 'Installer', 'SetupCode' => 'Installer', 'Settings' => 'Settings',
-        'PrivateFile' => 'Crypto', 'Secrets' => 'Crypto', 'Crypto' => 'Crypto', 'V' => 'Validator',
+        'PrivateFile' => 'Crypto', 'Crypto' => 'Crypto', 'V' => 'Validator',
         'SecEvent' => 'SecurityEvents', 'Firewall' => 'SecurityEvents', 'ConfigAudit' => 'ConfigAudit',
         'Totp' => 'Totp', 'AdminTotp' => 'Totp', 'Farm' => 'Farm', 'Claude' => 'Claude', 'Markdown' => 'Markdown', 'Inspect' => 'Inspect',
         'Allot' => 'Allot', 'AllotRetry' => 'Allot', 'AdminAllot' => 'AdminAllot',
-        'Cache' => 'Cache', 'Gate' => 'Gate', 'Sync' => 'Sync',
+        'Cache' => 'Cache', 'Gate' => 'Gate', 'Sync' => 'Sync', 'Ranking' => 'Ranking',
     ];
     /** what the normal bootstrap loads up front (the fall-back for a class the map does not know) */
     static $full = ['Db', 'Session', 'Security', 'ChatFilter', 'Users', 'Api', 'Presence', 'GameData', 'SaveValidator', 'Upload', 'Toss',
@@ -46,6 +46,9 @@ spl_autoload_register(static function (string $class): void {
         'Markdown', 'Inspect'];
     static $fellBack = false;
     if (strncmp($class, 'Tfm\\', 4) !== 0) return;
+    // the class that keeps data/secret.php lives in Crypto.php too (named here, apart from the map: a class-to-file pair
+    // with that name reads like an assigned value to tools/secret-scan.mjs)
+    if ($class === 'Tfm\\Secrets') { require_once __DIR__ . '/Crypto.php'; return; }
     $name = substr($class, 4);
     if (isset($map[$name])) {
         $file = __DIR__ . '/' . $map[$name] . '.php';

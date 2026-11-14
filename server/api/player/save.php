@@ -2,7 +2,15 @@
 /**
  * POST api/player/save.php  {version, checksum, base?, data:{…state…}}     (fetch, header X-CSRF-Token)
  *                           {version, checksum, base?, data:{…}, csrf:"…"} (navigator.sendBeacon on page hide)
- * → {savedAt, revision, size, sub, subChanged}
+ * → {savedAt, revision, size, sub, subChanged, saveEvery[, unchanged]}
+ *   saveEvery (CONTRACT §16.9) = the pause the server asks for before the next save, in ms (sync.save_every, longer while
+ *   the server is busy — the same number api/sync.php sends as `sv`). The page saves only when something changed, plus a
+ *   heartbeat every 5 minutes.
+ *   unchanged:true = the unchanged-checksum fast path: `checksum` equals the stored copy's checksum and `base` is the
+ *   stored revision — the page holds exactly what is stored (an idle page's heartbeat). Nothing is judged or written;
+ *   savedAt / revision / size are the stored copy's and `rt` is left out (nothing moved). The body still has to be a
+ *   well-formed save (the type checks run first), but its checksum is not computed: claiming the stored checksum for
+ *   another state stores nothing.
  *   sub = the server's subscription {tier, status, expiresAt, autoRenew}: EVERY answer carries it (also the 4xx ones,
  *   under data.sub, once the request passed its CSRF check), with subChanged:true when the uploaded state showed
  *   another tier than the server's — the client applies it (G.sys.speed.setFromServer) so the HUD chip follows.
@@ -44,15 +52,24 @@ use Tfm\Http;
 use Tfm\Json;
 use Tfm\Log;
 use Tfm\SaveValidator;
+use Tfm\Session;
 use Tfm\Subscription;
+use Tfm\Sync;
 
 Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'player_save'], function (Ctx $c): array {
     // Every answer of this endpoint carries the server's subscription (data.sub, plus subChanged when the client's
     // copy showed another tier) once the request is known to be genuine: a fetch save's X-CSRF-Token was checked by
     // Api::run already; a page-hide beacon is checked from its body below (its answer is never read anyway). Nothing
     // runs before that check — Subscription::state() may settle a renewal (CONTRACT §14.1 / §14.6).
+    // [scale-server] CONTRACT §16.9: nothing below writes the session, so its lock is released as soon as the request is
+    // known to be genuine — the page's other calls (sync, chat) do not wait behind a save of several hundred kilobytes
+    if (!$c->csrfPending) Session::close();
+    Api::releaseConnection(60000); // the next save is a minute away: the web server need not keep this connection for it
     $sub = $c->csrfPending ? null : Subscription::state($c->uid());
     $clientTier = null;
+    $saveEvery = function (): array {
+        try { return class_exists('Tfm\Sync') ? ['saveEvery' => Sync::saveEvery()] : []; } catch (\Throwable $e) { return []; }
+    };
     try {
         $max = (int) Config::get('save.max_bytes', 0) ?: (int) GameData::limit('saveMaxBytes', 1500000);
         if (!Http::isJsonRequest()) throw new ApiException(415, 'UNSUPPORTED_MEDIA_TYPE', 'JSON 형식으로 보내 주세요.');
@@ -68,6 +85,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         catch (\UnexpectedValueException $e) { throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.'); }
         if (!$env instanceof \stdClass) throw new ApiException(400, 'INVALID_JSON', '저장 데이터 형식이 올바르지 않아요.');
         $c->checkBodyCsrf(isset($env->csrf) ? $env->csrf : null); // only enforced when the X-CSRF-Token header was absent (beacon)
+        Session::close(); // [scale-server] a beacon is genuine from here on: release the session lock (see above)
         if ($sub === null) $sub = Subscription::state($c->uid()); // a beacon: genuine only from here on
         if (isset($env->version) && (!is_int($env->version) || $env->version < 1 || $env->version > 1000)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
         if (isset($env->checksum) && !is_string($env->checksum)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
@@ -84,6 +102,20 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         $base = isset($env->base) && is_int($env->base) && $env->base >= 0 ? $env->base : null;
 
         // integrity: the client's cyrb53 checksum over JSON.stringify(state) (detects truncated/corrupted uploads)
+        // [scale-server] CONTRACT §16.9 — the unchanged-checksum fast path: the page says "my state has this checksum and
+        // is revision N", and the stored copy has exactly that checksum at revision N (an idle page's heartbeat). There is
+        // nothing to judge and nothing to write, so nothing is: the answer carries the stored copy's numbers. It needs no
+        // comparison of the checksum with the body (the slow part of a save) — a page that claims the stored checksum for
+        // another state changes nothing on the server. A page that names no base (older pages), another revision (a copy
+        // an operator restored has a new one) or another checksum takes the ordinary path below.
+        if ($checksum !== '' && $base !== null) {
+            $small = Db::one('SELECT revision, checksum, size_bytes, saved_at FROM player_saves WHERE user_id = ?', [$c->uid()]);
+            if ($small && $base === (int) $small['revision'] && (string) $small['checksum'] !== '' && hash_equals((string) $small['checksum'], $checksum)) {
+                return ['savedAt' => (int) $small['saved_at'], 'revision' => (int) $small['revision'], 'size' => (int) $small['size_bytes'], 'sub' => $sub,
+                    'subChanged' => $clientTier !== (int) $sub['tier'], 'unchanged' => true] + $saveEvery();
+            }
+        }
+
         if ($checksum !== '' && Config::get('save.verify_checksum', true) && strlen($raw) <= (int) Config::get('save.checksum_max_bytes', 800000)) {
             $slice = SaveValidator::rawDataSlice($raw);
             if ($slice !== null && !hash_equals(SaveValidator::cyrb53($slice), $checksum)) {
@@ -100,7 +132,9 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         $tier = (int) $sub['tier'];
 
         $result = Db::tx(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base, $sub, $tier) {
-            $row = Db::one('SELECT * FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+            // [scale-server] CONTRACT §16.9: explicit columns — the backup copy (as large as the save itself, up to 1.5 MB)
+            // is never read: the row's own data becomes the new backup
+            $row = Db::one('SELECT user_id, version, revision, data, checksum, size_bytes, meta, saved_at, created_at, rejects, last_reject_at FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
             $prev = null;
             if ($row) {
                 $prev = Json::tryDecode((string) $row['data'], false, 512);
@@ -158,7 +192,8 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
             if ($farmPlan !== null) Farm::apply($farmPlan);
             elseif (class_exists('Tfm\Farm')) Farm::sync($uid, $data, $prev, $now, $tier, false);
             if (in_array('reset', isset($res['notes']) ? $res['notes'] : [], true)) Audit::log('save_reset', $uid);
-            return ['ok' => true, 'rev' => $rev, 'size' => strlen($json), 'summary' => isset($res['summary']) ? $res['summary'] : []];
+            return ['ok' => true, 'rev' => $rev, 'size' => strlen($json), 'summary' => isset($res['summary']) ? $res['summary'] : [],
+                'level' => isset($p['level']) ? (int) $p['level'] : 1, 'exp' => isset($p['exp_total']) ? (int) $p['exp_total'] : 0]; // [scale-server] for the cached ranking
         });
 
         $stored = function (?array $row, ?object $prev) use ($sub): array {
@@ -190,11 +225,14 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
                 'violations' => $codes,
             ] + $rt());
         }
+        // [scale-server] CONTRACT §16.9: the cached ranking — this player's own place is asked again, and the shared top
+        // list when this save can change it (lib/Ranking.php)
+        if (class_exists('Tfm\\Ranking') && isset($result['level'], $result['exp'])) \Tfm\Ranking::saved($uid, (int) $result['level'], (int) $result['exp']);
         $un = isset($result['summary']['unexplained']) ? $result['summary']['unexplained'] : [];
         if ((isset($un['value']) ? $un['value'] : 0) > 0 || (isset($un['exp']) ? $un['exp'] : 0) > 0) {
             Log::debug('SAVE', 'accepted with tolerance', ['uid' => $uid] + $result['summary']);
         }
-        return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub, 'subChanged' => $clientTier !== $tier] + $rt();
+        return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub, 'subChanged' => $clientTier !== $tier] + $saveEvery() + $rt();
     } catch (ApiException $e) {
         if ($sub !== null && ($e->data === null || is_array($e->data))) {
             $e->data = (is_array($e->data) ? $e->data : []) + ['sub' => $sub, 'subChanged' => $clientTier !== (int) $sub['tier']];

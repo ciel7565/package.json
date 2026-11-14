@@ -201,7 +201,9 @@ final class Sync
         try { if (self::enabled()) $claims = self::requestClaims(Clock::ms()); } catch (\Throwable $e) { $claims = null; }
         if ($claims === null) {
             Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'sync_issue'], function (Ctx $c): array {
-                return Sync::issue($c, $c->json(4096));
+                $r = Sync::issue($c, $c->json(4096));
+                Api::releaseConnection(isset($r['n']) ? (int) $r['n'] : 0);
+                return $r;
             });
             return;
         }
@@ -209,11 +211,14 @@ final class Sync
         Api::run(['method' => 'POST', 'session' => 'none', 'csrf' => false, 'shed' => 0], function (Ctx $c) use ($claims): array {
             $b = $c->json(4096);
             $r = Sync::hot($claims, $b, $c->now);
-            if ($r !== null) return $r;
+            // the page calls again in n ms: when that is seconds away the web server need not hold the connection for it
+            if ($r !== null) { Api::releaseConnection(isset($r['n']) ? (int) $r['n'] : 0); return $r; }
             // the seat of this token is gone (logout elsewhere, a ban, a pause, a long silence, an emptied cache):
             // everything is checked again, as for a call without a token
             Api::withSession($c, 'sync_issue');
-            return Sync::issue($c, $b);
+            $r = Sync::issue($c, $b);
+            Api::releaseConnection(isset($r['n']) ? (int) $r['n'] : 0);
+            return $r;
         });
     }
 
@@ -627,6 +632,20 @@ final class Sync
         }, 0);
         if (!is_array($r)) throw new ApiException(503, 'SYNC_OFF', '이 서버는 한꺼번에 주고받기(sync)를 쓰지 않아요.');
         return $r + ['ld' => 1.0, 'on' => 0, 'nt' => null];
+    }
+
+    /**
+     * The pause between two saves the server asks for right now (ms): sync.save_every, longer while the server is busy.
+     * Sync answers carry it as `sv`, save answers as `saveEvery` (api/player/save.php).
+     */
+    public static function saveEvery(): int
+    {
+        $ld = 1.0;
+        try {
+            $m = Cache::get('sy:meta');
+            if (is_array($m) && isset($m['ld'])) $ld = max(1.0, (float) $m['ld']);
+        } catch (\Throwable $e) { $ld = 1.0; }
+        return (int) round(self::conf()['save_every'] * 1000 * $ld);
     }
 
     /** build the answer of a call from what the exchange found */

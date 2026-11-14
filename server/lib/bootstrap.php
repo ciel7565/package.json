@@ -83,8 +83,8 @@ foreach (['Cache', 'Gate'] as $tfmLib) {
 }
 unset($tfmLib, $tfmLibFile);
 spl_autoload_register(static function (string $class): void {
-    if ($class === 'Tfm\\Sync') {
-        $file = __DIR__ . '/Sync.php';
+    if ($class === 'Tfm\\Sync' || $class === 'Tfm\\Ranking') {
+        $file = __DIR__ . '/' . substr($class, 4) . '.php';
         if (is_file($file)) require_once $file;
     }
 });

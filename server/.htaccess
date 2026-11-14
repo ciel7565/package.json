@@ -46,6 +46,9 @@ LimitRequestBody 8388608
 # e403.html is really there (htdocs/metaverse); where neither ran (no mod_setenvif / mod_rewrite) it is "/e403.html".
 <IfModule mod_setenvif.c>
   SetEnvIfExpr "%{REQUEST_URI} =~ m#^/([^/]+/)# && -f '%{DOCUMENT_ROOT}/$1e403.html'" TFM_BASEREL=$1
+  # the precompressed copies of the page (CONTRACT §16.9, below) are never compressed a second time by a server that
+  # compresses text/html on its own (mod_deflate / mod_brotli read these two names)
+  SetEnvIfNoCase Request_URI "/index\.(br|gz)\.html$" no-gzip no-brotli
 </IfModule>
 ErrorDocument 403 /%{reqenv:TFM_BASEREL}e403.html
 ErrorDocument 404 /%{reqenv:TFM_BASEREL}e404.html
@@ -76,6 +79,24 @@ ErrorDocument 404 /%{reqenv:TFM_BASEREL}e404.html
   RewriteCond %{HTTP:X-Forwarded-Ssl} !on [NC]
   RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1|\[?::1\]?)(:[0-9]+)?$ [NC]
   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=308,L,E=TFM_NOAPP:1]
+
+  # ------------------------------------------------------------- precompressed copies of the page (CONTRACT §16.9)
+  # tools/build.mjs writes index.br.html and index.gz.html next to index.html (about a quarter of its size). A browser
+  # that says it accepts the encoding ("br" is offered over https only; ";q=0" means no) gets the small file. The header
+  # rules below name its Content-Encoding and add "Vary: Accept-Encoding" to all three files; each keeps its own
+  # Last-Modified, so "not changed" (304) still works. Only where mod_headers can say what the bytes are, and only when
+  # the copy is there. The server checks once an hour that the copies belong to this index.html (data/page.json) and
+  # removes one that does not — after replacing index.html by hand, delete the two copies or build again.
+  <IfModule mod_headers.c>
+    RewriteCond %{HTTP:Accept-Encoding} "(^|[,\s])br\s*(,|$|;(?!\s*q=0(\.0*)?\s*(,|$)))" [NC]
+    RewriteCond %{REQUEST_FILENAME} "^(.*?)(index\.html)?$"
+    RewriteCond "%1index.br.html" -f
+    RewriteRule "^(index\.html)?$" index.br.html [L]
+    RewriteCond %{HTTP:Accept-Encoding} "(^|[,\s])(x-)?gzip\s*(,|$|;(?!\s*q=0(\.0*)?\s*(,|$)))" [NC]
+    RewriteCond %{REQUEST_FILENAME} "^(.*?)(index\.html)?$"
+    RewriteCond "%1index.gz.html" -f
+    RewriteRule "^(index\.html)?$" index.gz.html [L]
+  </IfModule>
 
   # ------------------------------------------------------------- the admin folder without its trailing slash (§15.4 b)
   # A folder asked for without its slash whose own index.php is there is handed to that index.php. Only the admin folder
@@ -137,6 +158,18 @@ ErrorDocument 404 /%{reqenv:TFM_BASEREL}e404.html
     Header always set X-Frame-Options "SAMEORIGIN"
     Header always set Content-Security-Policy "frame-ancestors 'self'"
     Header always set Cache-Control "no-cache"
+  </FilesMatch>
+  # the precompressed copies of the page (CONTRACT §16.9, see the rewrite rules above): what the bytes are — on an answer
+  # that carries the file only, never on an error page — and that the answer depends on the browser's Accept-Encoding,
+  # also for the plain page, so a cache in between keeps the three apart
+  <FilesMatch "(?i)^index\.br\.html$">
+    Header set Content-Encoding "br"
+  </FilesMatch>
+  <FilesMatch "(?i)^index\.gz\.html$">
+    Header set Content-Encoding "gzip"
+  </FilesMatch>
+  <FilesMatch "(?i)^index(\.br|\.gz)?\.html$">
+    Header merge Vary "Accept-Encoding"
   </FilesMatch>
   Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
 

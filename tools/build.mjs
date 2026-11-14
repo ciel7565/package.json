@@ -13,6 +13,11 @@
 //   node tools/build.mjs --out <dir>/index.html --data-out <dir>/data/game-data.json
 //                                             -> also export the server's game data (a server copy outside dist/:
 //                                                cp -r server/. <dir>/ first; the default build writes server/data/)
+//   node tools/build.mjs --no-precompress     -> [scale-server] do not write index.gz.html / index.br.html. A server copy
+//                                                (the default output, or --out …/index.html with --data-out) gets these
+//                                                precompressed copies of the page (CONTRACT §16.9: .htaccess serves them
+//                                                by Accept-Encoding) and data/page.json, which names the page they belong
+//                                                to. --brotli <0-11> sets the brotli quality (default 11, 9 with --out).
 //
 // Each src/game/*.js file is a "fragment": plain script code (no import/export, no top-level
 // await). Fragments are concatenated in filename order inside ONE closure and each one is
@@ -26,6 +31,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib'; // [scale-server] precompressed copies of the page
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -429,6 +435,35 @@ replaceOnce('<!--@CSP-->', `<meta http-equiv="Content-Security-Policy" content="
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, html);
 
+// [scale-server] CONTRACT §16.9 — precompressed copies of the page for a server copy (.htaccess serves them by
+// Accept-Encoding; lib/Api.php removes a copy that does not belong to the index.html next to it, using data/page.json).
+// Copies of an earlier build are removed first, so a build that writes none never leaves a stale one behind.
+const PRE = { 'index.gz.html': 'gzip', 'index.br.html': 'br' };
+let precompressed = null;
+if (path.basename(OUT) === 'index.html') {
+  for (const name of Object.keys(PRE)) fs.rmSync(path.join(path.dirname(OUT), name), { force: true });
+  if ((DEFAULT_OUT || DATA_OUT) && !flag('--no-precompress')) {
+    const page = Buffer.from(html, 'utf8');
+    const q = Math.max(0, Math.min(11, Number(opt('--brotli', DEFAULT_OUT ? 11 : 9)) || 0));
+    const made = {
+      'index.gz.html': zlib.gzipSync(page, { level: 9 }),
+      'index.br.html': zlib.brotliCompressSync(page, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: q, [zlib.constants.BROTLI_PARAM_LGWIN]: 24, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: page.length } }),
+    };
+    precompressed = { page: 'index.html', bytes: page.length, sha1: crypto.createHash('sha1').update(page).digest('hex'), copies: {} };
+    for (const [name, buf] of Object.entries(made)) {
+      fs.writeFileSync(path.join(path.dirname(OUT), name), buf);
+      precompressed.copies[name] = { encoding: PRE[name], bytes: buf.length, sha1: crypto.createHash('sha1').update(buf).digest('hex') };
+    }
+  }
+}
+/** data/page.json of a server copy: which index.html the precompressed copies were made from */
+const writePageInfo = (dataDir) => {
+  const file = path.join(dataDir, 'page.json');
+  if (!precompressed) { fs.rmSync(file, { force: true }); return; }
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(precompressed, null, 2));
+};
+
 // Server copy + data export only for the default (release) output.
 let serverFiles = 0;
 if (DEFAULT_OUT) {
@@ -440,12 +475,14 @@ if (DEFAULT_OUT) {
   }
   serverFiles = copyDir(path.join(ROOT, 'server'), path.dirname(OUT));
   if (fs.existsSync(path.join(ROOT, 'server'))) serverFiles += copyAdminDocs(path.dirname(OUT));
+  writePageInfo(path.join(path.dirname(OUT), 'data')); // [scale-server]
 }
 // a server copy built elsewhere (tests, a scratch php -S): the same game data (and admin docs) the release copy gets
 if (DATA_OUT) {
   fs.mkdirSync(path.dirname(DATA_OUT), { recursive: true });
   fs.writeFileSync(DATA_OUT, JSON.stringify(exportGameData(), null, 2));
   log(`  game data: ${DATA_OUT}`);
+  if (path.dirname(path.dirname(DATA_OUT)) === path.dirname(OUT)) writePageInfo(path.dirname(DATA_OUT)); // [scale-server]
   // <copy>/data/game-data.json → <copy>/lib/docs/ (only for that layout, so a stray --data-out path never gets a lib/;
   // never into the source tree server/ itself — its docs live in docs/ and are copied only into built copies)
   const copyRoot = path.dirname(path.dirname(DATA_OUT));
@@ -460,4 +497,5 @@ log(`  fragments: ${fragments.map((f) => f.name).join(', ')}`);
 if (skipped.filter((s) => s.reason !== 'filtered').length) log(`  skipped: ${skipped.filter((s) => s.reason !== 'filtered').map((s) => `${s.name} (${s.reason})`).join('; ')}`);
 log(`  css: ${cssFiles.join(', ')}`);
 if (DEFAULT_OUT) log(`  server files copied: ${serverFiles}`);
+if (precompressed) log(`  precompressed copies: ${Object.entries(precompressed.copies).map(([n, c]) => `${n} ${kb(c.bytes)} (${(c.bytes / precompressed.bytes * 100).toFixed(0)}%)`).join(', ')}`);
 if (pack) log(`  asset pack: ${pack.files.length} files, ${kb(pack.bytes)}${EMBED_ASSETS ? ' embedded (base64)' : ' — NOT embedded (--no-assets)'}`);

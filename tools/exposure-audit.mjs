@@ -20,6 +20,10 @@
  *              private files such a server would hand out (information), and checks what PHP itself must guarantee —
  *              no PHP file outside the entry points prints anything when requested directly, and every secret lives in a
  *              PHP-guarded file (exit 1 otherwise).
+ * CONTRACT §16.9: the shared cache (data/cache/<2 hex>/<sha1>.php — account rows, channel members, counters) is created
+ * by the first requests and checked like the other secrets: every entry is a PHP file with the exit guard and is denied
+ * under Apache. The precompressed copies of the page (index.br.html / index.gz.html) are public by design, like
+ * index.html; data/page.json (which page they belong to) sits in the private data/ folder.
  * Read only for the repository; temp files are removed unless --keep.
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -155,7 +159,8 @@ async function stopAll() {
 async function get(base, p) {
   const url = base + p.split('/').map(encodeURIComponent).join('/');
   try {
-    const r = await fetch(url, { redirect: 'manual', headers: { Accept: '*/*', 'User-Agent': 'tfm-exposure-audit/1.0' } });
+    // identity: the bytes as they are on disk (the page has precompressed copies, CONTRACT §16.9 — nothing is to be decoded here)
+    const r = await fetch(url, { redirect: 'manual', headers: { Accept: '*/*', 'Accept-Encoding': 'identity', 'User-Agent': 'tfm-exposure-audit/1.0' } });
     const buf = Buffer.from(await r.arrayBuffer());
     return { status: r.status, body: buf.toString('latin1'), len: buf.length, type: r.headers.get('content-type') || '', poweredBy: r.headers.get('x-powered-by') || '' };
   } catch (e) { return { status: 0, body: '', len: 0, type: '', error: e.message }; }
@@ -203,7 +208,12 @@ try {
     if (c.private && r.status === 200 && leaks(r, p)) report.php.open.push({ path: p, why: c.why, bytes: r.len });
   }
   // every secret the server keeps must be a PHP file with the exit guard (served raw it would run and print nothing)
-  for (const p of ['data/secret.php', 'config/config.local.php', 'data/setup-code.php', ...files.filter((f) => /^data\/logs\/.+\.log\.php$/.test(f))]) {
+  // everything in the cache folder except what holds no data: the folder's own deny / guard files, the stripe locks and
+  // the bust stamp. Records (and a record's temp file before its rename) must be PHP files with the exit guard.
+  const cacheEntries = files.filter((f) => /^data\/cache\/.+/.test(f) && !/^data\/cache\/(?:\.htaccess|index\.(?:php|html)|_l\/[0-9a-f]{2}\.lock|bust)$/.test(f));
+  report.cacheEntries = cacheEntries.length;
+  for (const p of cacheEntries) if (!p.endsWith('.php')) report.php.unguarded.push(p); // a record that is not a guarded PHP file
+  for (const p of ['data/secret.php', 'config/config.local.php', 'data/setup-code.php', ...files.filter((f) => /^data\/logs\/.+\.log\.php$/.test(f)), ...cacheEntries.filter((f) => f.endsWith('.php'))]) {
     const abs = path.join(WEB, p);
     if (!fs.existsSync(abs)) continue;
     const t = fs.readFileSync(abs, 'utf8');
@@ -248,7 +258,7 @@ if (report.php.open.length) {
 }
 for (const o of report.php.phpOutput) console.log(`  FAIL  ${o.path} prints output when requested directly (${o.status}, ${o.bytes} bytes: ${JSON.stringify(o.sample)})`);
 for (const p of report.php.unguarded) console.log(`  FAIL  ${p} holds secrets but is not a PHP file with the exit guard`);
-if (!report.php.phpOutput.length && !report.php.unguarded.length) console.log('  ✔ no PHP file outside the entry points prints anything; data/secret.php, config.local.php, setup-code.php and the logs are PHP-guarded');
+if (!report.php.phpOutput.length && !report.php.unguarded.length) console.log(`  ✔ no PHP file outside the entry points prints anything; data/secret.php, config.local.php, setup-code.php, the logs and the ${report.cacheEntries || 0} cache entries are PHP-guarded`);
 if (report.php.versionHeader.length) console.log(`  WARN  ${report.php.versionHeader.length} direct-access 404(s) still carry X-Powered-By (the PHP version; php.ini expose_php=On here): header_remove('X-Powered-By') before the 404 of the guard, e.g. ${report.php.versionHeader.slice(0, 3).join(', ')}`);
 if (report.php.phpOutput.length || report.php.unguarded.length) exitCode = 1;
 if (APACHE) {

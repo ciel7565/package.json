@@ -1,6 +1,6 @@
 <?php
 /**
- * capacity                  수용 인원 · 부하 · 대기실 · 캐시의 지금 숫자 (CONTRACT §16.9, docs/SCALING-KO.md)
+ * capacity [--json]         수용 인원 · 부하 · 대기실 · 캐시의 지금 숫자 (CONTRACT §16.9, docs/SCALING-KO.md)
  * cache:purge               시간이 지난 캐시 항목 지우기 (cleanup 이 함께 해요)
  * cache:info                캐시가 어디에 있고 얼마나 큰지
  */
@@ -18,6 +18,11 @@ return [
         $g = Gate::status();
         $s = Sync::status();
         $c = Cache::info(false);
+        $after = ['n' => (int) Cache::get('st:after:n', 0), 'sql' => (int) Cache::get('st:after:sql', 0)];
+        if (in_array('--json', $args, true)) {                                   // for tools/loadtest.mjs
+            fwrite(STDOUT, json_encode(['gate' => $g, 'sync' => $s, 'cache' => $c, 'after' => $after], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+            return 0;
+        }
         $line = static function (string $label, string $value): void { fwrite(STDOUT, '  ' . $label . str_repeat(' ', max(1, 24 - mb_strwidth($label, 'UTF-8'))) . $value . PHP_EOL); };
         fwrite(STDOUT, '수용 인원과 부하 (지금)' . PHP_EOL);
         $line('캐시 방식 (driver)', $c['driver'] . ($c['driver'] === 'file' ? ' — data/cache 폴더' : '') . ($c['driver'] === 'off' ? ' — 꺼짐: 동기화 · 대기실을 쓰지 않아요' : ''));
@@ -29,6 +34,7 @@ return [
         $line('줄이기 (shedding)', $g['shedding'] === 0 ? '안 함' : ($g['shedding'] === 1 ? '1단계: 새 방문자 · 새 로그인은 잠시 뒤에' : '2단계: 읽기 요청도 잠시 뒤에'));
         $line('로그인 (지난 1초)', $g['loginsLastSecond'] . ' / ' . ($g['loginPerSec'] > 0 ? $g['loginPerSec'] . '번' : '제한 없음'));
         $line('자리 유지 (seat_ttl)', $g['seatTtl'] . '초');
+        if ($after['n'] > 0) $line('응답 뒤 작업 (after)', $after['n'] . '번 · SQL ' . $after['sql'] . '개  (capacity.stats_header 가 켜져 있을 때만 세요)');
         if (PHP_SAPI === 'cli' && $c['apcuLoaded'] && (string) Config::get('cache.driver', 'auto') !== 'file') {
             fwrite(STDOUT, PHP_EOL . '  ※ 웹 서버가 메모리 캐시(APCu)를 쓰면 이 명령은 그 안을 볼 수 없어 숫자가 0 으로 보여요.' . PHP_EOL
                 . '    그때는 관리자 페이지의 점검 화면을 보거나, config.local.php 에서 cache.driver 를 file 로 바꿔 주세요.' . PHP_EOL);

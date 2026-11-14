@@ -3,41 +3,32 @@
  * GET api/ranking/top.php → {ranking:[{rank, nickname, level, exp, title, me}], me:{rank, nickname, level, exp}|null, total, updatedAt}
  * Top 20 by level, then cumulative exp (ties: who got there first). me.rank uses the same order as the list.
  * Only nicknames are exposed (no ids, no emails).
+ * CONTRACT §16.9 (lib/Ranking.php): the list and the number of players come from the shared cache (cache.ranking_ttl,
+ * 60 s; updatedAt = when the list was read from the database), a player's own place from a per-account entry. A
+ * player's own accepted save and any change of the top 20 show at once; a change further down within a minute.
  */
 declare(strict_types=1);
 
+define('TFM_LIGHT', true);
 require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\Api;
 use Tfm\Ctx;
-use Tfm\Db;
+use Tfm\Ranking;
 use Tfm\Session;
 
 Api::run(['method' => 'GET', 'rate' => 'ranking', 'public' => true], function (Ctx $c): array {
     Session::close();
-    $rows = Db::all("SELECT p.user_id, u.nickname, p.level, p.exp_total, p.title, p.updated_at
-        FROM user_profiles p JOIN users u ON u.id = p.user_id
-        WHERE u.status = 'active' AND (p.exp_total > 0 OR p.level > 1)
-        ORDER BY p.level DESC, p.exp_total DESC, p.updated_at ASC, p.user_id ASC LIMIT 20");
+    $top = Ranking::top($c->now);
     $me = $c->uid();
     $list = [];
-    foreach ($rows as $i => $r) {
-        $list[] = ['rank' => $i + 1, 'nickname' => (string) $r['nickname'], 'level' => (int) $r['level'], 'exp' => (int) $r['exp_total'], 'title' => (string) $r['title'], 'me' => (int) $r['user_id'] === $me];
+    foreach ($top['rows'] as $i => $r) {
+        $list[] = ['rank' => $i + 1, 'nickname' => (string) $r[1], 'level' => (int) $r[2], 'exp' => (int) $r[3], 'title' => (string) $r[4], 'me' => $me > 0 && (int) $r[0] === $me];
     }
     $mine = null;
     if ($me) {
-        $p = Db::one('SELECT level, exp_total, updated_at FROM user_profiles WHERE user_id = ?', [$me]);
-        if ($p) {
-            // the same order as the list (ties: earlier updated first, then lower id), so "내 순위" matches my row
-            $lv = (int) $p['level'];
-            $xp = (int) $p['exp_total'];
-            $up = (int) $p['updated_at'];
-            $above = (int) Db::value("SELECT COUNT(*) FROM user_profiles p JOIN users u ON u.id = p.user_id WHERE u.status = 'active' AND p.user_id <> ?
-                AND (p.level > ? OR (p.level = ? AND (p.exp_total > ? OR (p.exp_total = ? AND (p.updated_at < ? OR (p.updated_at = ? AND p.user_id < ?))))))",
-                [$me, $lv, $lv, $xp, $xp, $up, $up, $me]);
-            $mine = ['rank' => $above + 1, 'nickname' => (string) $c->user['nickname'], 'level' => (int) $p['level'], 'exp' => (int) $p['exp_total']];
-        }
+        $m = Ranking::mine($me, $top);
+        if ($m) $mine = ['rank' => $m['rank'], 'nickname' => (string) $c->user['nickname'], 'level' => $m['level'], 'exp' => $m['exp']];
     }
-    $total = (int) Db::value("SELECT COUNT(*) FROM user_profiles p JOIN users u ON u.id = p.user_id WHERE u.status = 'active'");
-    return ['ranking' => $list, 'me' => $mine, 'total' => $total, 'updatedAt' => $c->now];
+    return ['ranking' => $list, 'me' => $mine, 'total' => (int) $top['total'], 'updatedAt' => (int) $top['at'] ?: $c->now];
 });

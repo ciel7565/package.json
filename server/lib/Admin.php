@@ -630,6 +630,8 @@ final class AdminOps
         // [scale-server] expired cache entries, and the presence rows the sync channels still hold in memory
         if (class_exists('Tfm\\Cache')) { $p = Cache::purge(); $out['cache'] = (int) $p['removed']; }
         if (class_exists('Tfm\\Sync')) { try { $out['presence_flushed'] = Sync::flushAll(); } catch (\Throwable $e) { $out['presence_flushed'] = 0; } }
+        // [scale-server] the precompressed copies of the page must belong to index.html (a stale copy is removed)
+        try { $out['stale_page_copies'] = (int) Api::pageCopies()['removed']; } catch (\Throwable $e) { $out['stale_page_copies'] = 0; }
         if (Db::driver() === 'sqlite') { try { Db::pdo()->exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (\Throwable $e) { /* busy */ } }
         Audit::log('maintenance_cleanup', null, $out, 'info', $actor ? (int) $actor['id'] : null);
         return $out;

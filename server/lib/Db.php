@@ -459,7 +459,10 @@ final class Db
     private static function nativeUpsert(): bool
     {
         if (self::$nativeUpsert === null) {
-            $v = (string) self::value('SELECT sqlite_version()');
+            // [scale-server] the library's version from the driver (no statement); asked the old way when it says nothing
+            $v = '';
+            try { $v = (string) self::pdo()->getAttribute(PDO::ATTR_SERVER_VERSION); } catch (\Throwable $e) { $v = ''; }
+            if (!preg_match('/^\d+\.\d+/', $v)) $v = (string) self::value('SELECT sqlite_version()');
             self::$nativeUpsert = version_compare($v, '3.24.0', '>=');
         }
         return self::$nativeUpsert;

@@ -286,13 +286,27 @@ final class Firewall
         $n = Http::normIp($ip);
         if ($n === '') return null;
         $hash = Sec::hashId($n);
-        // [scale-server] CONTRACT §16.9: "this address is not blocked" is remembered for cache.block_ttl seconds (15), so
-        // an ordinary request asks the database nothing here. A block that exists is never cached (its hit counter and
-        // its end are read fresh), and block() / evaluate() drop the remembered answer, so a new block works at once.
+        // [scale-server] CONTRACT §16.9: the addresses that are blocked right now (normally none) are remembered as one
+        // short list for cache.block_ttl seconds (15): an ordinary request asks the database nothing here, and the whole
+        // server asks once per 15 s instead of once per visitor. An address on the list is still read fresh (its hit
+        // counter and its end), and block() / evaluate() / unblock() drop the list, so a new block works at once. With
+        // more than 500 live blocks no list is kept and "not blocked" is remembered per address instead.
         $ttl = 0;
         try {
             $ttl = class_exists('Tfm\\Cache') ? (int) Config::get('cache.block_ttl', 15) : 0;
-            if ($ttl > 0 && Cache::get('s:ipb:' . $hash) === 0) return null;
+            if ($ttl > 0) {
+                $list = Cache::get('s:ipb:live');
+                if (!is_array($list) || !isset($list['n'], $list['h']) || !is_array($list['h'])) {
+                    $rows = Db::all('SELECT ip_hash, until_at FROM ip_blocks WHERE until_at > ? LIMIT 501', [Clock::ms()]);
+                    $list = ['n' => count($rows), 'h' => []];
+                    if ($list['n'] <= 500) foreach ($rows as $r) $list['h'][(string) $r['ip_hash']] = (int) $r['until_at'];
+                    Cache::set('s:ipb:live', $list, $ttl);
+                }
+                if ((int) $list['n'] <= 500) {
+                    if (!isset($list['h'][$hash]) || (int) $list['h'][$hash] <= Clock::ms()) return null;
+                    $ttl = 0; // on the list: read fresh below, remember nothing
+                } elseif (Cache::get('s:ipb:' . $hash) === 0) return null;
+            }
         } catch (\Throwable $e) { $ttl = 0; }
         try {
             $row = Db::one('SELECT ip_hash, ip, reason, until_at, created_at, created_by, hits, strikes FROM ip_blocks WHERE ip_hash = ?', [$hash]);
@@ -304,10 +318,10 @@ final class Firewall
         return $live;
     }
 
-    /** [scale-server] a block was written for this address: forget the remembered "not blocked" */
+    /** [scale-server] a block was written or lifted for this address: forget the remembered list and "not blocked" */
     private static function forget(string $hash): void
     {
-        try { if (class_exists('Tfm\\Cache')) Cache::del('s:ipb:' . $hash); } catch (\Throwable $e) { /* expires in seconds */ }
+        try { if (class_exists('Tfm\\Cache')) { Cache::del('s:ipb:live'); Cache::del('s:ipb:' . $hash); } } catch (\Throwable $e) { /* expires in seconds */ }
     }
 
     /**
@@ -382,6 +396,7 @@ final class Firewall
         if (!$row) return false;
         // the row stays (ended now, strikes forgiven): what led to this block is not counted again after the release
         Db::exec('UPDATE ip_blocks SET until_at = ?, strikes = 0 WHERE ip_hash = ?', [$now, $hash]);
+        self::forget($hash); // [scale-server]
         Audit::log('ip_unblocked', null, ['ip' => (string) $row['ip']], 'warn', $actorId);
         return true;
     }

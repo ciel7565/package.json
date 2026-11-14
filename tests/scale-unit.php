@@ -418,7 +418,7 @@ check('cache[file] — Windows-safe writes: a refused rename is retried and then
     $big2 = ['body' => str_repeat('s', 21000)];
     if (!Tfm\Cache::set('ren', $big2, 60) || Tfm\Cache::get('ren') !== $big2) return 'fallback: the value was not written in place when every rename failed';
     if ($tries2 !== 4) return "fallback after $tries2 tries (expected 4)";
-    if (glob("$wd/??/*.tmp")) return 'a temp file was left behind';
+    if (glob("$wd/??/*.tmp") || glob("$wd/??/*.tmp.php")) return 'a temp file was left behind';
     Tfm\Cache::configure(['driver' => 'file', 'dir' => $wd, 'prefix' => 'w', 'unlink' => function () { return false; }]);
     if (!Tfm\Cache::del('ren') || Tfm\Cache::get('ren') !== null) return 'a file that cannot be removed still answered';
     if (!Tfm\Cache::add('ren', 'again', 60) || Tfm\Cache::get('ren') !== 'again') return 'the expired mark blocks a new value';
@@ -443,13 +443,13 @@ check('cache[file] — purge() removes expired records and stale temp files, kee
     for ($i = 0; $i < 40; $i++) Tfm\Cache::set("old:$i", $i, 5);
     for ($i = 0; $i < 25; $i++) Tfm\Cache::set("live:$i", $i, 3600);
     for ($i = 0; $i < 5; $i++) Tfm\Cache::set("keep:$i", $i, 0);
-    $stale = glob("$wd/??")[0] . '/' . str_repeat('a', 40) . '.php.1-2.tmp';
-    file_put_contents($stale, 'x');
-    touch($stale, time() - 3600);
+    $stale = glob("$wd/??")[0] . '/' . str_repeat('a', 40) . '.1-2.tmp.php';   // a writer died before its rename
+    $staleOld = glob("$wd/??")[0] . '/' . str_repeat('b', 40) . '.php.1-2.tmp'; // the same, named as an earlier build did
+    foreach ([$stale, $staleOld] as $f) { file_put_contents($f, 'x'); touch($f, time() - 3600); }
     $CLOCK += 60000;
     $r = Tfm\Cache::purge();
     $left = count(glob("$wd/??/*.php"));
-    $ok = $r['removed'] === 41 && $r['kept'] === 30 && $left === 30 && !file_exists($stale) && Tfm\Cache::get('live:3') === 3 && Tfm\Cache::get('keep:4') === 4 && Tfm\Cache::get('old:3') === null;
+    $ok = $r['removed'] === 42 && $r['kept'] === 30 && $left === 30 && !file_exists($stale) && !file_exists($staleOld) && Tfm\Cache::get('live:3') === 3 && Tfm\Cache::get('keep:4') === 4 && Tfm\Cache::get('old:3') === null;
     $CLOCK = 0;
     if (!$ok) return json_encode($r) . " left $left";
     Tfm\Cache::reset();                                   // the real configuration: data/cache with its deny files
@@ -537,6 +537,7 @@ check('diet — a short-window rate limit is counted in the cache: the same 429 
 });
 check('diet — a long window (an hourly limit) stays in the rate_limits table and survives an emptied cache', function () {
     $ident = 'u:' . random_int(100000, 999999);
+    Tfm\Db::exec("DELETE FROM rate_limits WHERE bucket LIKE 'unit_long|%'");   // a database kept from an earlier run (MariaDB) still has that run's row
     for ($i = 0; $i < 3; $i++) Tfm\RateLimit::hit('unit_long', $ident, 3, 3600);
     $rows = (int) Tfm\Db::value("SELECT COUNT(*) FROM rate_limits WHERE bucket LIKE 'unit_long|%'");
     Tfm\Cache::configure(['driver' => 'file', 'dir' => Tfm\Config::dataDir() . '/cache-other']);   // "the cache was emptied"
@@ -578,6 +579,98 @@ check('diet — the automatic block (25 attack events) still closes the address 
     Tfm\SecEvent::resetRequest();
     for ($i = 0; $i < 26; $i++) { Tfm\SecEvent::resetRequest(); Tfm\SecEvent::log('honeypot', 'warn', ['n' => $i]); }
     return apiCode(function () { Tfm\Firewall::check(); }) === '403 IP_BLOCKED' ? true : 'the address still gets through';
+});
+check('diet — a thousand different addresses cost one statement in all (the shared list of live blocks); one block among them closes only that address', function () {
+    Tfm\Cache::del('s:ipb:live');
+    $walk = function (int $count) {                                            // request() would reset the statement counter
+        for ($i = 0; $i < $count; $i++) { $_SERVER['REMOTE_ADDR'] = '198.18.' . intdiv($i, 250) . '.' . ($i % 250 + 1); Tfm\Http::resetRequestCache(); Tfm\Firewall::check(); }
+    };
+    $n = sqlOf(function () use ($walk) { $walk(1000); });
+    Tfm\Firewall::block('198.18.9.9', 600, 'unit');
+    request('198.18.9.9');
+    $blocked = apiCode(function () { Tfm\Firewall::check(); });
+    $m = sqlOf(function () use ($walk) { $walk(200); });
+    Tfm\Firewall::unblock('198.18.9.9');
+    request('198.18.9.9');
+    $lifted = apiCode(function () { Tfm\Firewall::check(); });
+    return $n === 1 && $blocked === '403 IP_BLOCKED' && $m === 0 && $lifted === '' ? true : "$n statements for 1000 addresses, blocked '$blocked', $m statements for 200 others meanwhile, after the release '$lifted'";
+});
+check('ranking — the top list and my place come from the cache (no statement); my own save, a save that reaches the top 20 and a ban show at once', function () {
+    request('203.0.113.10');
+    $mk = function (string $nick, int $level, int $exp): array {
+        $u = Tfm\Users::create($nick . '@example.com', $nick, 'Ferment2026ok');
+        Tfm\Db::upsert('user_profiles', ['user_id' => (int) $u['id'], 'level' => $level, 'exp_total' => $exp, 'coin' => 0, 'edu' => 0, 'title' => '', 'updated_at' => Tfm\Clock::ms()], ['user_id']);
+        return $u;
+    };
+    $tag = substr(bin2hex(random_bytes(3)), 0, 5);
+    $ace = $mk("Ra{$tag}", 90, 900000);                                         // certainly on the list
+    $low = $mk("Rb{$tag}", 1, 3);                                               // certainly not (when the list is full), or its last row
+    Tfm\Ranking::forget();
+    $now = Tfm\Clock::ms();
+    $first = Tfm\Ranking::top($now);
+    $warm = sqlOf(function () use ($now, $ace, $low) { for ($i = 0; $i < 10; $i++) { $t = Tfm\Ranking::top($now + $i); Tfm\Ranking::mine((int) $ace['id'], $t); } });
+    $mineLow = Tfm\Ranking::mine((int) $low['id'], $first);
+    $again = sqlOf(function () use ($first, $low) { Tfm\Ranking::mine((int) $low['id'], $first); });
+    if ($first['rows'][0][1] !== "Ra{$tag}" || $warm !== 0 || $again !== 0 || !$mineLow || $mineLow['rank'] < 2) return "first row {$first['rows'][0][1]}, $warm statements warm, $again for my place again, my place " . json_encode($mineLow);
+    // my own save: my place is asked again (the list stays when I am not on it and do not reach it)
+    Tfm\Db::exec('UPDATE user_profiles SET exp_total = ? WHERE user_id = ?', [4, (int) $low['id']]);
+    Tfm\Ranking::saved((int) $low['id'], 1, 4);
+    $kept = Tfm\Ranking::top($now + 100);
+    $mine2 = Tfm\Ranking::mine((int) $low['id'], $kept);
+    $onList = false;
+    foreach ($kept['rows'] as $r) if ((int) $r[0] === (int) $low['id']) $onList = true;
+    if (!$mine2 || $mine2['exp'] !== 4) return 'my own save did not show in my place: ' . json_encode($mine2);
+    if (!$onList && $kept['at'] !== $first['at']) return 'a save far below the top 20 renewed the shared list';
+    // a save that reaches the top: the shared list is renewed by the next request
+    Tfm\Db::exec('UPDATE user_profiles SET level = ?, exp_total = ? WHERE user_id = ?', [95, 990000, (int) $low['id']]);
+    Tfm\Ranking::saved((int) $low['id'], 95, 990000);
+    $risen = Tfm\Ranking::top($now + 200);
+    if ($risen['rows'][0][1] !== "Rb{$tag}" || $risen['at'] !== $now + 200) return 'a save that reaches the top did not renew the list: first row ' . $risen['rows'][0][1];
+    // after cache.ranking_ttl the list is read again; within it, not
+    $stmts = sqlOf(function () use ($now) { Tfm\Ranking::top($now + 30000); });
+    $due = sqlOf(function () use ($now) { Tfm\Ranking::top($now + 200 + 61000); });
+    if ($stmts !== 0 || $due !== 2) return "$stmts statements within the minute, $due after it";
+    // a ban takes the account off the list at once
+    Tfm\Users::update((int) $low['id'], ['status' => 'banned'], true);
+    $after = Tfm\Ranking::top($now + 200 + 62000);
+    foreach ($after['rows'] as $r) if ((int) $r[0] === (int) $low['id']) return 'a banned account is still on the list';
+    // without the cache every call asks the database
+    Tfm\Cache::configure(['driver' => 'off']);
+    $off = sqlOf(function () use ($now, $ace) { $t = Tfm\Ranking::top($now); Tfm\Ranking::mine((int) $ace['id'], $t); });
+    Tfm\Cache::reset();
+    Tfm\Users::update((int) $ace['id'], ['status' => 'banned'], true);          // leave the list as it was for the checks below
+    return $off === 2 ? true : "$off statements with the cache off";
+});
+check('static — the precompressed copies of the page are kept only while they belong to index.html (a broken upload or a page replaced by hand removes them)', function () {
+    $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'tfm-page-' . bin2hex(random_bytes(4));
+    mkdir($dir . DIRECTORY_SEPARATOR . 'data', 0755, true);
+    $p = function (string $name) use ($dir): string { return $dir . DIRECTORY_SEPARATOR . $name; };
+    $page = '<!doctype html><title>t</title>' . str_repeat('<p>장독대</p>', 400);
+    $write = function () use ($p, $page) {
+        file_put_contents($p('index.html'), $page);
+        file_put_contents($p('index.gz.html'), gzencode($page, 9));
+        file_put_contents($p('index.br.html'), 'not really brotli, only its length matters here');
+        file_put_contents($p('data/page.json'), json_encode(['page' => 'index.html', 'bytes' => strlen($page), 'sha1' => sha1($page), 'copies' => [
+            'index.gz.html' => ['encoding' => 'gzip', 'bytes' => filesize($p('index.gz.html'))], 'index.br.html' => ['encoding' => 'br', 'bytes' => filesize($p('index.br.html'))]]]));
+    };
+    $write();
+    $ok = Tfm\Api::pageCopies($dir);
+    file_put_contents($p('index.gz.html'), substr((string) file_get_contents($p('index.gz.html')), 0, 20));   // an upload that broke off
+    $cut = Tfm\Api::pageCopies($dir);
+    $afterCut = [is_file($p('index.gz.html')), is_file($p('index.br.html'))];
+    $write();
+    file_put_contents($p('index.html'), $page . '<!-- edited by hand -->');
+    $edited = Tfm\Api::pageCopies($dir);
+    $afterEdit = [is_file($p('index.gz.html')), is_file($p('index.br.html')), is_file($p('index.html'))];
+    $write();
+    unlink($p('data/page.json'));                                                                             // copies nobody vouches for
+    $noRecord = Tfm\Api::pageCopies($dir);
+    $none = Tfm\Api::pageCopies($dir);
+    foreach (['index.html', 'index.gz.html', 'index.br.html', 'data/page.json'] as $f) @unlink($p($f));
+    @rmdir($p('data')); @rmdir($dir);
+    return $ok === ['state' => 'ok', 'removed' => 0] && $cut === ['state' => 'stale', 'removed' => 1] && $afterCut === [false, true]
+        && $edited === ['state' => 'stale', 'removed' => 2] && $afterEdit === [false, false, true] && $noRecord['removed'] === 2 && $none['state'] === 'none'
+        ? true : json_encode([$ok, $cut, $afterCut, $edited, $afterEdit, $noRecord, $none]);
 });
 check('diet — the account row of an API request comes from the cache (no statement) and never holds the password hash', function () {
     $u = newUser();

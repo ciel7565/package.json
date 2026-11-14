@@ -130,10 +130,29 @@ final class Api
         } catch (ApiException $e) {
             $payload = ['success' => false, 'error' => ['code' => $e->errorCode, 'message' => $e->getMessage()]];
             if ($e->data !== null) $payload['data'] = $e->data;
+            // "come back in N seconds" (429 / 503 + Retry-After): the connection is not kept open for that long
+            if (($e->status === 429 || $e->status === 503) && is_array($e->data) && isset($e->data['retryAfter'])) self::releaseConnection((int) $e->data['retryAfter'] * 1000);
             self::send($e->status, $payload, $e->headers);
         } catch (\Throwable $e) {
             self::fail($e);
         }
+    }
+
+    /**
+     * CONTRACT §16.9: the answer tells the page when it calls next (sync: n, the waiting room: next, a refusal:
+     * Retry-After; a save or a chat line: not soon). When that is capacity.close_after_ms (1000) or more away, the web
+     * server is asked to close the connection after this answer instead of keeping it open. Apache with mod_php (XAMPP)
+     * ties one worker — a thread or a process — to every open connection: with 150 workers the 151st visitor would wait
+     * although the server is idle, because every visitor holds one for the whole KeepAliveTimeout between two calls.
+     * With this a worker is busy only while it answers (measured: docs/SCALING-KO.md); the price is one TCP handshake
+     * per call. Behind nginx or a CDN the header is theirs to decide and changes nothing. 0 = never ask.
+     */
+    public static function releaseConnection(int $nextMs): void
+    {
+        try {
+            $min = (int) Config::get('capacity.close_after_ms', 1000);
+            if ($min > 0 && $nextMs >= $min && PHP_SAPI !== 'cli' && !headers_sent()) header('Connection: close');
+        } catch (\Throwable $e) { /* a hint to the web server only */ }
     }
 
     /**
@@ -195,8 +214,47 @@ final class Api
             self::after(static function (): void {
                 Session::gc(2.0);
                 if (class_exists('Tfm\Cache')) Cache::purge(2.0);
+                self::pageCopies();
             });
         } catch (\Throwable $e) { /* housekeeping never breaks a request */ }
+    }
+
+    /**
+     * The precompressed copies of the page (CONTRACT §16.9: index.br.html / index.gz.html, written by tools/build.mjs
+     * and served by .htaccess in place of index.html) must belong to the index.html next to them. data/page.json names
+     * the page they were made from (bytes + SHA-1) and how long each copy is. A copy without that record, of another
+     * page (index.html was replaced by hand) or of another length (an upload that broke off) is removed, and the plain
+     * page is served again. Runs once an hour after a response (housekeeping) and in "php cli/tfm.php cleanup".
+     * @return array{state:string,removed:int} state: none (no copies) | ok | stale (removed) | locked (could not remove)
+     */
+    public static function pageCopies(?string $dir = null): array
+    {
+        $root = ($dir === null ? TFM_ROOT : rtrim($dir, '/\\')) . DIRECTORY_SEPARATOR; // $dir: tests
+        $found = [];
+        foreach (['index.br.html', 'index.gz.html'] as $name) if (is_file($root . $name)) $found[] = $name;
+        if (!$found) return ['state' => 'none', 'removed' => 0];
+        $bad = $found;
+        try {
+            $info = null;
+            foreach ($dir === null ? [$root . 'data', Config::dataDir()] : [$root . 'data'] as $d) {
+                $file = $d . DIRECTORY_SEPARATOR . 'page.json';
+                if (is_file($file)) { $info = json_decode((string) @file_get_contents($file), true); break; }
+            }
+            $page = $root . 'index.html';
+            if (is_array($info) && isset($info['sha1'], $info['bytes']) && is_file($page) && (int) @filesize($page) === (int) $info['bytes']
+                && hash_equals((string) $info['sha1'], (string) @sha1_file($page))) {
+                $bad = [];
+                foreach ($found as $name) {
+                    $want = isset($info['copies'][$name]['bytes']) ? (int) $info['copies'][$name]['bytes'] : -1;
+                    if ((int) @filesize($root . $name) !== $want) $bad[] = $name;
+                }
+            }
+        } catch (\Throwable $e) { $bad = $found; }
+        if (!$bad) return ['state' => 'ok', 'removed' => 0];
+        $removed = 0;
+        foreach ($bad as $name) if (@unlink($root . $name)) $removed++;
+        try { Log::warn('STATIC', 'precompressed copies of the page did not belong to index.html', ['removed' => $removed, 'found' => count($bad)]); } catch (\Throwable $e) { /* log only */ }
+        return ['state' => $removed === count($bad) ? 'stale' : 'locked', 'removed' => $removed];
     }
 
     /** did the browser say it reads gzip? */
@@ -256,6 +314,12 @@ final class Api
     {
         $jobs = self::$after;
         self::$after = [];
+        $count = false;
+        $s0 = 0;
+        try {
+            $count = $jobs && Config::get('capacity.stats_header', false);
+            if ($count && class_exists('Tfm\Db', false)) $s0 = Db::stats()['statements'];
+        } catch (\Throwable $e) { $count = false; }
         try {
             @ignore_user_abort(true);
             if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request(); else { @ob_flush(); @flush(); }
@@ -263,6 +327,15 @@ final class Api
         foreach ($jobs as $job) {
             try { $job(); } catch (\Throwable $e) { Log::error('API', 'after-work failed: ' . get_class($e) . ': ' . $e->getMessage()); }
         }
+        // capacity.stats_header: what the after-work cost is not in the answer's header, so it is added up in the cache
+        // ('php cli/tfm.php capacity --json' and tools/loadtest.mjs read it)
+        try {
+            if ($count && class_exists('Tfm\Cache', false)) {
+                Cache::inc('st:after:n', 1, 86400);
+                $d = class_exists('Tfm\Db', false) ? Db::stats()['statements'] - $s0 : 0;
+                if ($d > 0) Cache::inc('st:after:sql', $d, 86400);
+            }
+        } catch (\Throwable $e) { /* figures only */ }
     }
 }
 
@@ -309,6 +382,8 @@ final class Auth
     {
         try { if (class_exists('Tfm\Cache')) Cache::del('s:u:' . $uid); } catch (\Throwable $e) { /* expires in seconds */ }
         try { if ($revoke && class_exists('Tfm\Sync')) Sync::revoke($uid); } catch (\Throwable $e) { /* the tokens run out by themselves */ }
+        // the cached top list (lib/Ranking.php): a banned or renamed account leaves it / changes on it at once
+        try { if ($revoke && class_exists('Tfm\Cache')) Cache::del('rank:top'); } catch (\Throwable $e) { /* renewed within a minute */ }
     }
 
     /** the logged-in user, re-validated on every request (ban, epoch, role changes — see userRow for the cache) */

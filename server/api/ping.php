@@ -12,10 +12,13 @@ define('TFM_LIGHT', true);
 require __DIR__ . '/../lib/bootstrap.php';
 
 use Tfm\Api;
+use Tfm\Cache;
 use Tfm\Clock;
+use Tfm\Config;
 use Tfm\Ctx;
 use Tfm\Db;
 use Tfm\Farm;
+use Tfm\Gate;
 use Tfm\Log;
 use Tfm\Session;
 use Tfm\Sync;
@@ -37,6 +40,11 @@ Api::run(['method' => ['GET', 'HEAD'], 'rate' => 'ping', 'rateBy' => 'ip', 'sess
     ];
     if (class_exists('Tfm\Farm')) $out['rtScale'] = Farm::scale();
     $out['features'] = class_exists('Tfm\Sync') ? Sync::features() : ['sync' => 0, 'queue' => 0];
+    // capacity.stats_header (off by default — tools/loadtest.mjs turns it on for its own instance): the live capacity
+    // numbers and what the after-response work cost, readable with every cache driver (numbers only, nothing personal)
+    if (Config::get('capacity.stats_header', false) && class_exists('Tfm\Gate') && class_exists('Tfm\Sync')) {
+        $out['stats'] = ['gate' => Gate::status(), 'sync' => Sync::status(), 'after' => ['n' => (int) Cache::get('st:after:n', 0), 'sql' => (int) Cache::get('st:after:sql', 0)]];
+    }
     if ($c->isAdmin()) {
         $out['db'] = $dbOk ? Db::driver() : 'unavailable';
         $out['subscriptions']['mock'] = Toss::mock();

@@ -473,7 +473,7 @@ final class Cache
                     foreach (@scandir(self::$dir . DIRECTORY_SEPARATOR . $sub) ?: [] as $f) {
                         if ($maxSeconds > 0 && microtime(true) - $t0 > $maxSeconds) return $out;
                         $path = self::$dir . DIRECTORY_SEPARATOR . $sub . DIRECTORY_SEPARATOR . $f;
-                        if (substr($f, -4) === '.tmp') {            // the leftover of a writer that died
+                        if (substr($f, -8) === '.tmp.php' || substr($f, -4) === '.tmp') { // the leftover of a writer that died
                             if ((int) @filemtime($path) < time() - 600 && @unlink($path)) $out['removed']++;
                             continue;
                         }
@@ -698,7 +698,9 @@ final class Cache
     /** temp file + rename over the old record (atomic); a refused rename (Windows: a reader has it open) is retried */
     private static function fReplace(string $file, string $rec): bool
     {
-        $tmp = $file . '.' . getmypid() . '-' . mt_rand(0, 0xfffffff) . '.tmp';
+        // the temp file ends in .php too: it starts with the same exit guard, so a server that ignores .htaccess runs
+        // the guard instead of showing the record, even in the moment before the rename
+        $tmp = substr($file, 0, -4) . '.' . getmypid() . '-' . mt_rand(0, 0xfffffff) . '.tmp.php';
         $n = @file_put_contents($tmp, $rec);
         if ($n === false) { self::fMkdir(dirname($file)); $n = @file_put_contents($tmp, $rec); }
         if ($n !== strlen($rec)) { @unlink($tmp); return false; }

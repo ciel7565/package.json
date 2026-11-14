@@ -32,6 +32,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'chat_send'], function (
     // CONTRACT §15.7 #3: known keys only; the channel must be one of the two known names (an unknown word is refused,
     // not quietly turned into 'all'); the text must be a string (the length / filter rules follow).
     Session::close(); // the CSRF token and the login were checked by Api::run: nothing below needs the session file
+    Api::releaseConnection(60000); // [scale-server] a chat line is not followed by another call soon (see Api::releaseConnection)
     $b = $c->json(4096);
     V::keys($b, ['text', 'channel']);
     $max = (int) Config::get('chat.max_length', 120);
