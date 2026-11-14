@@ -254,6 +254,13 @@ G.data.quests = {
   Q_CULTURE: { title: '옛 농기구 탐구', icon: '🛠️', category: 'edu', giver: 'NPC003', requires: ['QUEST001'], desc: '전통도구 전시장에서 옛 농기구 3가지를 살펴보세요.', objectives: [{ type: 'interact', kind: 'tool', count: 3, text: '전통도구 살펴보기' }], reward: { coin: 1000, exp: 150, edu: 15 } },
   Q_PHOTO: { title: '추억 남기기', icon: '📷', category: 'social', autoAccept: true, desc: '포토존에서 사진을 한 장 찍어 보세요.', objectives: [{ type: 'photo', photoZone: '*', count: 1, text: '포토존에서 사진 찍기 (P)' }], reward: { coin: 800, exp: 100 } },
   Q_GREET: { title: '반가운 인사', icon: '👋', category: 'social', autoAccept: true, desc: '이모지로 다른 체험객에게 인사해 보세요.', objectives: [{ type: 'emote', emote: 'EMO_HELLO', count: 1, text: '인사 이모지 보내기' }], reward: { coin: 300, exp: 40 } },
+  // 집 구경 (CONTRACT §16.6, 49-exhibits.js): progress comes from 'interact' events — kind 'place' (a room entered),
+  // 'heritage' (an exhibit looked at), 'motion' (a moving picture watched to its end), 'roombook' (a room's 도감 complete);
+  // each counts different rooms / exhibits / pictures only (the quest system keeps the ids it has seen)
+  Q_HOUSE_ROOMS: { title: '한옥 방 구경', icon: '🏠', category: 'explore', autoAccept: true, desc: '한옥 안으로 들어가 방 세 곳을 구경해 보세요. 문 앞에 서면 들어갈 수 있어요.', easyDesc: '한옥 방 세 곳에 들어가 봐요!', objectives: [{ type: 'interact', kind: 'place', count: 3, text: '한옥 방 3곳 들어가 보기', easyText: '한옥 방에 들어가 봐요' }], reward: { coin: 600, exp: 100 } },
+  Q_HOUSE_EXHIBITS: { title: '옛 살림 살펴보기', icon: '🔎', category: 'edu', autoAccept: true, desc: '방 안의 옛 살림과 그림 10가지를 살펴보세요. 살펴본 것은 ‘집 구경 도감’에 도장으로 모여요.', easyDesc: '방 안의 물건 열 가지를 살펴봐요!', objectives: [{ type: 'interact', kind: 'heritage', count: 10, text: '방 안의 전시 10가지 살펴보기', easyText: '방 안의 물건을 살펴봐요' }], reward: { coin: 1000, exp: 180, edu: 15 } },
+  Q_HOUSE_MOTION: { title: '움직이는 그림 보기', icon: '🎞️', category: 'edu', autoAccept: true, desc: '움직이는 그림 3편을 끝까지 보세요. 구들·처마·옹기가 어떻게 일하는지 그림으로 알려 줘요.', easyDesc: '움직이는 그림 세 편을 끝까지 봐요!', objectives: [{ type: 'interact', kind: 'motion', count: 3, text: '움직이는 그림 3편 끝까지 보기', easyText: '움직이는 그림을 끝까지 봐요' }], reward: { coin: 800, exp: 150, edu: 15 } },
+  Q_HOUSE_BOOK: { title: '방 하나 도감 완성', icon: '🏅', category: 'explore', autoAccept: true, desc: '방 한 곳의 전시를 모두 살펴보고 그 방의 도감을 완성하세요.', easyDesc: '방 하나의 도장을 모두 모아요!', objectives: [{ type: 'interact', kind: 'roombook', count: 1, text: '방 한 곳의 도감 완성하기', easyText: '방 하나의 도장을 모두 모아요' }], reward: { coin: 1500, exp: 250, title: '집 구경 박사' } },
 };
 for (const [id, q] of Object.entries(G.data.quests)) { q.id = id; q.objectives.forEach((o, i) => { o.index = i; o.count = o.count || 1; }); }
 
@@ -279,6 +286,15 @@ G.data.achievements = {
   ACH_CRAFTER: { name: '손재주꾼', icon: '🛠️', desc: '작업대에서 재료를 3번 만들었습니다.', condition: { stat: 'crafts', gte: 3 }, reward: { coin: 300 } },
   // phase 6 (CONTRACT §14.2): the second Space press in the air — stats.doubleJumps counts them (62-engagement)
   ACH_DOUBLE_JUMP: { name: '두 번 점프', icon: '🤸', desc: '두 번 점프를 10번 했습니다.', condition: { stat: 'doubleJumps', gte: 10 }, reward: { coin: 200 } },
+  // 집 구경 (CONTRACT §16.6): plain counters kept by 49-exhibits.js — always the sizes of state.places
+  // (placesSeen = rooms entered, exhibitsSeen = 도감 stamps, exhibitRooms = rooms whose 도감 is complete, motionsSeen = pictures watched)
+  ACH_HOUSE_FIRST: { name: '첫 집 구경', icon: '🏠', desc: '한옥 방에 처음 들어가 보았습니다.', condition: { stat: 'placesSeen', gte: 1 }, reward: { coin: 100 } },
+  ACH_HOUSE_ALL: { name: '집 구경 한 바퀴', icon: '🏡', desc: '집 안의 방과 장소 여섯 곳을 구경했습니다.', condition: { stat: 'placesSeen', gte: 6 }, reward: { coin: 500, title: '한옥 길잡이' } },
+  ACH_EXHIBIT10: { name: '눈 밝은 구경꾼', icon: '🔎', desc: '방 안의 전시를 10가지 살펴보았습니다.', condition: { stat: 'exhibitsSeen', gte: 10 }, reward: { coin: 300 } },
+  ACH_EXHIBIT40: { name: '옛 살림 박사', icon: '🧑‍🏫', desc: '방 안의 전시를 40가지 살펴보았습니다.', condition: { stat: 'exhibitsSeen', gte: 40 }, reward: { coin: 800, edu: 20 } },
+  ACH_ROOMBOOK1: { name: '첫 도감 완성', icon: '🏅', desc: '방 한 곳의 집 구경 도감을 완성했습니다.', condition: { stat: 'exhibitRooms', gte: 1 }, reward: { coin: 400 } },
+  ACH_ROOMBOOK_ALL: { name: '집 구경 도감 완성', icon: '🏆', desc: '일곱 곳 모두의 집 구경 도감을 완성했습니다.', condition: { stat: 'exhibitRooms', gte: 7 }, reward: { coin: 1500, title: '한옥 도감 지킴이' } },
+  ACH_MOTION5: { name: '그림으로 배우기', icon: '🎞️', desc: '움직이는 그림 5편을 끝까지 보았습니다.', condition: { stat: 'motionsSeen', gte: 5 }, reward: { coin: 400, edu: 15 } },
 };
 for (const [id, a] of Object.entries(G.data.achievements)) a.id = id;
 

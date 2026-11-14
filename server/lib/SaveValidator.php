@@ -567,6 +567,7 @@ final class SaveValidator
         // {motionId: 1}} — a missing block is fine (an older client); a wrong container is malformed (400), an oversized
         // map, a key that is not a plain id or a value that is not a small count is a violation (the client restores)
         $places = self::p($n, 'places');
+        $placeSizes = ['visits' => 0, 'seen' => 0, 'motions' => 0];
         if ($places !== null) {
             if (!self::o($places)) self::bad('places');
             foreach (['visits' => 64, 'seen' => 400, 'motions' => 64] as $k => $cap) {
@@ -575,11 +576,18 @@ final class SaveValidator
                 if (!self::o($map) && $map !== []) self::bad('places ' . $k);
                 $rows = self::kv($map);
                 if (count($rows) > $cap) { $this->violate('PLACES_BAD_SHAPE', ['field' => $k, 'count' => count($rows)]); continue; }
+                $placeSizes[$k] = count($rows);
                 foreach ($rows as $id => $val) {
                     $okVal = (is_int($val) || is_float($val)) && is_finite((float) $val) && $val >= 0 && $val <= 1000000 && floor((float) $val) == $val;
                     if (!preg_match(self::ID_RE, (string) $id) || !($okVal || $val === true)) { $this->violate('PLACES_BAD_SHAPE', ['field' => $k]); break; }
                 }
             }
+        }
+        // [exhibits] the four 집 구경 counters are the sizes of those maps (the achievements read them): a counter that runs
+        // ahead of its map would unlock them without the stamps (a room's 도감 needs at least one stamp)
+        $placeStats = self::o(self::p($n, 'stats'));
+        foreach (['exhibitsSeen' => 'seen', 'exhibitRooms' => 'seen', 'motionsSeen' => 'motions', 'placesSeen' => 'visits'] as $stat => $k) {
+            if (self::n(self::p($placeStats, $stat)) > $placeSizes[$k]) { $this->violate('PLACES_BAD_SHAPE', ['field' => $stat]); break; }
         }
         foreach (['journal', 'photos', 'activity'] as $k) {
             $v = self::p($n, $k);

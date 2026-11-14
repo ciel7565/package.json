@@ -356,7 +356,8 @@
   const art = (place, id, anchor, emoji, packId, title, kid, what, titleEn, artist, period, creditLine, accession, objectId) => {
     const who = artist ? `${artist}의 작품으로` : '그린 사람은 알려지지 않았고';
     add(place, id, anchor, emoji, title, kid,
-      `${what} ${MET}이 간직한 작품으로, 박물관이 적은 이름은 “${titleEn}”이에요. ${who}, ${period}에 그려졌다고 박물관은 기록해요.`,
+      // no particle after the English title (its last sound decides the particle, and that differs from title to title)
+      `${what} ${MET}이 간직한 작품이에요. 박물관이 적어 둔 영어 이름은 이렇게 써요: “${titleEn}”. ${who}, ${period}에 그려졌다고 박물관은 기록해요.`,
       [src(`메트로폴리탄 미술관 소장품 기록 (${accession})`, `https://www.metmuseum.org/art/collection/search/${objectId}`)],
       { art: `art/${packId}`, titleEn, artist: artist || '', period, credit: `The Metropolitan Museum of Art, New York · ${creditLine} · ${accession} · Open Access (CC0)` });
   };

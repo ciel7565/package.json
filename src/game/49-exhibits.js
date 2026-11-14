@@ -190,7 +190,8 @@
         const cv = h('canvas', { class: 'xh-art', role: 'img', 'aria-label': `${ex.title} 그림` });
         box.appendChild(cv);
         emojiUnder(box, ex);
-        Promise.resolve().then(() => P.image(ex.art)).then((img) => {
+        // force: a picture the player opened in a 2D panel is decoded at every quality (G.pack keeps `low` lazy otherwise)
+        Promise.resolve().then(() => P.image(ex.art, { force: true, priority: 1 })).then((img) => {
           const w = Number(img?.width || img?.naturalWidth) || 0, hh = Number(img?.height || img?.naturalHeight) || 0;
           if (!w || !hh || !cv.isConnected) return;
           const k = Math.min(1, 1024 / Math.max(w, hh));
@@ -285,6 +286,17 @@
       return !!(P && !P._failed && typeof P.def === 'function' && P.def(placeId));
     } catch (e) { return false; }
   }
+  /** such a room counts as visited once the player looks at one of its exhibits in the book (the 집 구경 quests stay reachable) */
+  function visitByBook(placeId) {
+    const p = PL();
+    if (!p || !PLACE_RX.test(String(placeId)) || Number(p.visits[placeId]) > 0) return false;
+    p.visits[placeId] = 1;
+    _visitSnap[placeId] = 1;
+    G.dirty('places');
+    syncStats();
+    emitInteract('place', placeId);
+    return true;
+  }
   function openBook(opts = {}) {
     if (!G.state) return null;
     const rooms = ROOMS();
@@ -349,6 +361,7 @@
       }, h('span', { class: 'xh-stamp-face', 'aria-hidden': 'true' }, h('span', { class: 'emoji' }, seen ? ex.emoji : canWalk ? '❔' : '🔎')), h('span', { class: 'xh-stamp-t' }, ex.title));
       b.style.setProperty('--i', String(Math.min(i, 14)));
       b.addEventListener('click', () => {
+        if (!canWalk) visitByBook(_bookRoom);
         if (isSeen(ex.id) || !canWalk) { G.sfx('click'); openCard(ex.id, { via: 'book' }); return; }
         const line = `${room.name}에서 ${josa(ex.title, '을/를')} 찾아봐요!`;
         toast(line, { type: 'info', emoji: '🔎', sound: false });
@@ -526,7 +539,8 @@
     const tick = (now) => {
       ctl.raf = 0;
       if (ctl.disposed || !ctl.playing || document.hidden) return;
-      const dt = Math.min(0.1, Math.max(0, (now - ctl.last) / 1000));
+      // real time, also on a slow device where frames are far apart (one long stall counts as a second at most)
+      const dt = Math.min(1, Math.max(0, (now - ctl.last) / 1000));
       ctl.last = now;
       ctl.t += dt; ctl.el += dt;
       const anim = ctl.still ? 0.01 : animOf(D, ctl.step);
@@ -2175,6 +2189,16 @@
       st.render(step, p, t == null ? 1.2 : t, o || {});
       _stages.delete(st);
       return cv;
+    },
+    /** developer / test hook: a reusable drawing surface for many frames (static layers are kept) — call dispose() */
+    stage(motionId, w) {
+      const D = DRAW[motionId];
+      if (!D) return null;
+      const cv = document.createElement('canvas');
+      const st = makeStage(cv, motionId);
+      const ww = U.clamp(Math.round(Number(w) || 320), 64, 1280);
+      st.size(ww, Math.round(ww * SH / SW));
+      return { canvas: cv, steps: (MD()[motionId]?.steps || []).length, anim: (i) => animOf(D, i), hold: D.hold ?? 2.2, render: (step, p, t, o) => st.render(step, p, t == null ? 1.2 : t, o || {}), dispose: () => st.dispose() };
     },
     stats: () => ({ stages: _stages.size, boards: _boards.size, attached: _attached.size, playing: !!(_player && _player.playing), fps: FPS }),
   };

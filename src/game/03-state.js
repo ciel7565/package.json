@@ -504,6 +504,13 @@
       out.motions[k] = 1; n++;
     }
     data.places = out;
+    // the four counters are the sizes of these maps (49-exhibits.js recomputes them on load): here they are only kept
+    // from running ahead of the maps, so a save is consistent even when that module is missing (the server checks it)
+    if (isMap(data.stats)) {
+      const s = data.stats, seen = Object.keys(out.seen).length;
+      const cap = { exhibitsSeen: seen, motionsSeen: Object.keys(out.motions).length, placesSeen: Object.keys(out.visits).length, exhibitRooms: seen };
+      for (const k of Object.keys(cap)) if (k in s) s[k] = Math.min(intIn(s[k], 0, 1e6, 0), cap[k]);
+    }
     return data;
   }
 
