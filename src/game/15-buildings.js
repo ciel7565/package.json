@@ -379,6 +379,28 @@
       for (let i = 0; i < 8; i++) { const x = (i + 0.5) * w / 8; ctx.beginPath(); ctx.moveTo(x, h * 0.36 + 6); ctx.quadraticCurveTo(x + 6, h * 0.3, x + 2, h * 0.24); ctx.stroke(); }
       speckle(ctx, w, h, r, 400, ['#1a0e06', '#c08a5a'], 0.05, 0.18);
     }),
+    // [render-assets] the jar under the photographed glaze (medium / high): no painted stripes — the dark foot and mouth,
+    // a few wide, faint runs of thicker glaze from the shoulder down, the 수화문 band; the mottling comes from the photo
+    jarGlaze: () => ctex(256, 512, (ctx, w, h) => {
+      const r = rngOf('jarGlaze');
+      const g = ctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, '#2a170c'); g.addColorStop(0.06, '#40240f'); g.addColorStop(0.45, '#54301a'); g.addColorStop(0.82, '#462713'); g.addColorStop(0.94, '#371e10'); g.addColorStop(1, '#2a170c');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < 9; i++) {
+        const x = r() * w, y0 = h * (0.1 + r() * 0.2), len = h * (0.2 + r() * 0.35), ww = 8 + r() * 18, c = r() < 0.5 ? '20,10,4' : '120,74,40';
+        for (const ox of [-w, 0, w]) {                         // the texture wraps around the jar
+          const gr = ctx.createLinearGradient(x + ox - ww, 0, x + ox + ww, 0);
+          gr.addColorStop(0, `rgba(${c},0)`); gr.addColorStop(0.5, `rgba(${c},0.15)`); gr.addColorStop(1, `rgba(${c},0)`);
+          ctx.fillStyle = gr; ctx.fillRect(x + ox - ww, y0, ww * 2, len);
+        }
+      }
+      ctx.strokeStyle = 'rgba(150,104,66,0.6)'; ctx.lineWidth = 3.6; ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 2) { const y = h * 0.36 + Math.sin(x / w * TAU * 4) * 14; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+      ctx.stroke();
+      for (let i = 0; i < 8; i++) { const x = (i + 0.5) * w / 8; ctx.beginPath(); ctx.moveTo(x, h * 0.36 + 12); ctx.quadraticCurveTo(x + 12, h * 0.3, x + 4, h * 0.24); ctx.stroke(); }
+      speckle(ctx, w, h, r, 500, ['#1a0e06', '#b07a4c'], 0.04, 0.12);
+    }),
     // wooden balustrade with alpha (난간): 1.5 m x 0.9 m (v 0..1 = height)
     railing: () => ctex(256, 128, (ctx, w, h) => {
       ctx.clearRect(0, 0, w, h);
@@ -428,8 +450,21 @@
 
   // ---------------------------------------------------------------- shared materials
   const STD = (o) => new THREE.MeshStandardMaterial(o);
+  // [render-assets] photographed surfaces (CONTRACT §16.2). PM(set, base, proc, opt) builds the material of one key:
+  // on medium / high with the asset pack, G.mat.apply gives it the set's map / normalMap / roughnessMap at creation
+  // (1×1 placeholders until decoded: no later recompile); `opt.look` is the average colour the procedural canvas had,
+  // so the key keeps its colour and the vertex colours keep tinting it. On `low`, or without the pack, the material is
+  // exactly the old one: base + proc() (the procedural canvases are not even painted when the photographs replace them).
+  // opt.detail keeps the canvas (block joints, furrows, the painted band of a jar) and multiplies the photograph in.
+  const PM = (set, base, proc, opt) => () => {
+    const on = !!(G.mat && G.mat.usable && G.mat.usable(set));
+    const m = STD(on && !opt.detail ? base : { ...base, ...proc() });
+    if (on) { try { G.mat.apply(m, set, opt); } catch (e) { G.log.warn('WORLD', `material set ${set} failed`, e); } }
+    return m;
+  };
   const MATDEF = {
-    roof: { make: () => STD({ map: tex('tile'), bumpMap: tex('tileBump'), bumpScale: 3, vertexColors: true, roughness: 0.8, metalness: 0, envMapIntensity: 0.55 }) },
+    roof: { make: PM('giwa_roof_tile', { vertexColors: true, roughness: 0.8, metalness: 0, envMapIntensity: 0.55 }, () => ({ map: tex('tile'), bumpMap: tex('tileBump'), bumpScale: 3 }),
+      { look: [64, 66, 70], tile: [2.4, 2.4], normalScale: 1.3, roughness: 0.82, macro: 0.1, priority: 1 }) },
     fascia: { make: () => STD({ map: tex('fascia'), vertexColors: true, roughness: 0.8 }) },
     soffit: { make: () => STD({ map: tex('soffit'), vertexColors: true, roughness: 0.85 }), cast: false },
     hanji: {
@@ -439,11 +474,18 @@
         return m;
       },
     },
-    plaster: { make: () => STD({ map: tex('plaster'), vertexColors: true, roughness: 0.95 }) },
-    stone: { make: () => STD({ map: tex('stone'), vertexColors: true, roughness: 0.9 }) },
-    field: { make: () => STD({ map: tex('fieldstone'), vertexColors: true, roughness: 0.95 }) },
-    wood: { make: () => STD({ map: tex('wood'), vertexColors: true, roughness: 0.78 }) },
-    plank: { make: () => STD({ map: tex('plank'), vertexColors: true, roughness: 0.82 }) },
+    plaster: { make: PM('lime_plaster_wall', { vertexColors: true, roughness: 0.95 }, () => ({ map: tex('plaster') }),
+      { look: [225, 220, 209], tile: [2.2, 2.2], normalScale: 1.0, blend: 0.55, macro: 0.09, priority: 1 }) },
+    // dressed granite blocks: the canvas keeps its courses and joints, the photograph gives the stone's grain and relief
+    stone: { make: PM('granite_stone', { vertexColors: true, roughness: 0.9 }, () => ({ map: tex('stone') }),
+      { detail: true, tile: [1.8, 1.8], normalScale: 0.8, macro: 0.08, priority: 2 }) },
+    field: { make: PM('stone_wall_doldam', { vertexColors: true, roughness: 0.95 }, () => ({ map: tex('fieldstone') }),
+      { look: [114, 106, 93], tile: [1.6, 1.6], normalScale: 1.3, macro: 0.08, priority: 2 }) },
+    // the photographed grain runs along U: turned so that it runs along V (posts and beams use the 'grain' box UVs)
+    wood: { make: PM('pine_timber', { vertexColors: true, roughness: 0.78 }, () => ({ map: tex('wood') }),
+      { look: [195, 155, 111], tile: [1.1, 1.1], rotation: PI / 2, normalScale: 0.8, macro: 0.05, priority: 1 }) },
+    plank: { make: PM('pine_planks', { vertexColors: true, roughness: 0.82 }, () => ({ map: tex('plank') }),
+      { look: [189, 146, 101], tile: [2.2, 2.2], normalScale: 1.0, priority: 2 }) },
     glass: {
       make: () => {
         const m = STD({ map: tex('glass'), emissiveMap: tex('glassEmit'), emissive: new THREE.Color('#ffd9a0'), vertexColors: true, metalness: 0.55, roughness: 0.1, envMapIntensity: 1.5 });
@@ -451,14 +493,21 @@
         return m;
       },
     },
-    thatch: { make: () => STD({ map: tex('thatch'), vertexColors: true, roughness: 1 }) },
-    gravel: { make: () => STD({ map: tex('gravel'), vertexColors: true, roughness: 1 }), cast: false },
-    soil: { make: () => STD({ map: tex('soil'), vertexColors: true, roughness: 1 }), cast: false },
+    thatch: { make: PM('thatch_choga', { vertexColors: true, roughness: 1 }, () => ({ map: tex('thatch') }),
+      { look: [159, 135, 88], tile: [1.6, 1.6], normalScale: 1.1, blend: 0.35, macro: 0.12, priority: 2 }) },
+    gravel: { make: PM('gravel', { vertexColors: true, roughness: 1 }, () => ({ map: tex('gravel') }),
+      { look: [136, 128, 113], tile: [1.6, 1.6], normalScale: 1.0, blend: 0.5, macro: 0.08, priority: 2 }), cast: false },
+    // raised beds: the furrows stay (canvas), real soil crumbs come in as the detail layer
+    soil: { make: PM('field_soil', { vertexColors: true, roughness: 1 }, () => ({ map: tex('soil') }),
+      { detail: true, tile: [1.4, 1.4], normalScale: 1.0, priority: 3 }), cast: false },
     paint: { make: () => STD({ vertexColors: true, roughness: 0.62, metalness: 0.02 }) },
     metal: { make: () => STD({ vertexColors: true, roughness: 0.38, metalness: 0.7 }) },
     glossy: { make: () => STD({ vertexColors: true, roughness: 0.18, metalness: 0.1 }) },
     darkglass: { make: () => STD({ vertexColors: true, color: 0x1b252c, roughness: 0.08, metalness: 0.7, envMapIntensity: 1.6 }) },
-    glaze: { make: () => STD({ map: tex('jar'), vertexColors: true, roughness: 0.3, metalness: 0.04 }) },
+    // onggi: the painted jar (dark foot and mouth, run marks, the finger-drawn band) stays; the photographed glaze gives
+    // its mottling, the slight waviness of a hand-thrown wall and a low, uneven roughness that catches the sky
+    glaze: { make: PM('onggi_glaze', { vertexColors: true, roughness: 0.3, metalness: 0.04 }, () => ({ map: tex(G.mat?.usable?.('onggi_glaze') ? 'jarGlaze' : 'jar') }),
+      { detail: true, tile: [1 / 2, 1], strength: 0.75, normalScale: 0.5, roughness: 0.25, env: 1.25, priority: 2 }) },
     railing: { make: () => STD({ map: tex('railing'), vertexColors: true, roughness: 0.8, alphaTest: 0.5, side: THREE.DoubleSide }), cast: false },
     awning: { make: () => STD({ map: tex('awning'), vertexColors: true, roughness: 0.9, side: THREE.DoubleSide }) },
     glow: {
@@ -476,6 +525,237 @@
     return G.gfx.material('bk-' + key, d.make);
   }
   function registerMaterial(key, make, opts = {}) { MATDEF[key] = { make, ...opts }; }
+
+  // ---------------------------------------------------------------- baked vertex ambient occlusion [render-assets]
+  // Bucket.build() darkens vertices that sit in corners (CONTRACT §16.2): wall feet, under eaves, where floors meet walls.
+  //   1. every triangle is sampled into a coarse occupancy grid (0.25 m cells; opts.ao.ground adds the ground below),
+  //   2. triangles are refined ONLY where the surroundings change along an edge (a wall foot, the strip under an eave, a
+  //      floor along a wall): an edge is cut in half when a position-only openness measure at its middle differs from
+  //      what its two ends would interpolate to. Position-only = two faces that share an edge take the same decision,
+  //      so the mesh stays free of T-junctions (no sparkling pixels along box edges). Open walls, roofs and floors keep
+  //      their triangles; a bucket that would grow past its budget is refined more coarsely or not at all,
+  //   3. each vertex marches 9 short rays over its hemisphere through the grid — near hits weigh more,
+  //   4. the factor (never below 0.5) is multiplied into the vertex colour.
+  // Medium / high only: `low` keeps its triangles and its init time. ?ao=0 switches it off (comparison screenshots).
+  // build(parent, { ao: false }) opts a bucket out; { ao: { ground: 0 } } = a ground plane at local y 0;
+  // { ao: { ground: (x, z) => y } } = the terrain under a bucket in world coordinates; { ao: { maxAdd: n } } = the most
+  // triangles refinement may add to this bucket (default: 60 % of the bucket, at least 400).
+  const AO_NO_SHADE = { roof: 1, glass: 1, darkglass: 1, glow: 1, hanji: 1, railing: 1, awning: 1, lines: 1, silkBlue: 1, silkRed: 1, screen: 1, psign: 1, sign: 1, mapboard: 1, chalk: 1, emblem: 1 };
+  const AO_NO_SPLIT = { roof: 1, soffit: 1, fascia: 1, paver: 1, glaze: 1, glossy: 1, metal: 1, wood: 1, paint: 1, ...AO_NO_SHADE };
+  const aoStats = { buckets: 0, ms: 0, refineMs: 0, added: 0, vertices: 0, coarser: 0, unrefined: 0 };
+  function aoEnabled() {
+    const q = G.sys.engine?.quality;
+    return !!q && q !== 'low' && !G.unsupported && G.params?.get?.('ao') !== '0';
+  }
+  // openness probe: 14 directions at 0.5 m + 6 axes at 1 m (position only — no normal)
+  const AO_PROBE = (() => {
+    const v = [], d = 1 / Math.sqrt(3);
+    for (const [x, y, z] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) { v.push(x * 0.5, y * 0.5, z * 0.5); v.push(x, y, z); }
+    for (const sx of [-d, d]) for (const sy of [-d, d]) for (const sz of [-d, d]) v.push(sx * 0.5, sy * 0.5, sz * 0.5);
+    return v;
+  })();
+  /**
+   * cut the edges along which `open(x, y, z)` (0..1) is not linear; returns the same geometry when nothing was cut.
+   * tol: how far the middle may be off; minEdge: shorter edges are never cut; edges over maxEdge always are;
+   * maxAdd: more new triangles than this → null (the caller tries a coarser level).
+   */
+  function aoRefine(g, open, tol, minEdge, maxEdge, maxAdd) {
+    const p = g.attributes.position.array, idx = g.index.array;
+    // small things (a lantern, a step, one stone block) have vertices where they need them
+    const bb = g.boundingBox || (g.computeBoundingBox(), g.boundingBox);
+    if (Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) < 1.5) return g;
+    const P = Array.from(p), min2 = minEdge * minEdge, max2 = maxEdge * maxEdge;
+    const O = [];                                              // openness per vertex (lazy)
+    const at = (i) => { let v = O[i]; if (v === undefined) { v = open(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]); O[i] = v; } return v; };
+    const d2 = (a, b) => { const x = P[a * 3] - P[b * 3], y = P[a * 3 + 1] - P[b * 3 + 1], z = P[a * 3 + 2] - P[b * 3 + 2]; return x * x + y * y + z * z; };
+    const needs = new Map();
+    /** the same answer for (a, b) and (b, a) and for another face's copy of the edge: positions only, ends in a fixed order */
+    const need = (a, b, l2) => {
+      if (!(l2 > min2)) return false;
+      if (l2 > max2) return true;
+      const key = a < b ? a * 2097152 + b : b * 2097152 + a;
+      let r = needs.get(key);
+      if (r !== undefined) return r;
+      let i = a, j = b;
+      const ax = P[a * 3], ay = P[a * 3 + 1], az = P[a * 3 + 2], bx = P[b * 3], by = P[b * 3 + 1], bz = P[b * 3 + 2];
+      if (ax > bx || (ax === bx && (ay > by || (ay === by && az > bz)))) { i = b; j = a; }
+      const ix = P[i * 3], iy = P[i * 3 + 1], iz = P[i * 3 + 2], jx = P[j * 3], jy = P[j * 3 + 1], jz = P[j * 3 + 2];
+      const oi = at(i), oj = at(j);
+      r = Math.abs(open((ix + jx) / 2, (iy + jy) / 2, (iz + jz) / 2) - (oi + oj) / 2) > tol;
+      if (!r && l2 > 6.25) {                                    // a long edge: also look at its quarter points
+        r = Math.abs(open(ix + (jx - ix) * 0.25, iy + (jy - iy) * 0.25, iz + (jz - iz) * 0.25) - (oi * 0.75 + oj * 0.25)) > tol
+          || Math.abs(open(ix + (jx - ix) * 0.75, iy + (jy - iy) * 0.75, iz + (jz - iz) * 0.75) - (oi * 0.25 + oj * 0.75)) > tol;
+      }
+      needs.set(key, r);
+      return r;
+    };
+    // first pass: is there anything to cut at all?
+    let any = false;
+    for (let t = 0; t < idx.length && !any; t += 3) {
+      const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+      any = need(a, b, d2(a, b)) || need(b, c, d2(b, c)) || need(c, a, d2(c, a));
+    }
+    if (!any) return g;
+    const N = Array.from(g.attributes.normal.array), U = Array.from(g.attributes.uv.array), C = Array.from(g.attributes.color.array);
+    const mids = new Map(), out = [], stack = Array.from(idx);
+    const mid = (a, b) => {
+      const key = a < b ? a * 2097152 + b : b * 2097152 + a;
+      let m = mids.get(key);
+      if (m === undefined) {
+        m = P.length / 3;
+        P.push((P[a * 3] + P[b * 3]) / 2, (P[a * 3 + 1] + P[b * 3 + 1]) / 2, (P[a * 3 + 2] + P[b * 3 + 2]) / 2);
+        let nx = N[a * 3] + N[b * 3], ny = N[a * 3 + 1] + N[b * 3 + 1], nz = N[a * 3 + 2] + N[b * 3 + 2];
+        const l = Math.hypot(nx, ny, nz);
+        if (l > 1e-6) { nx /= l; ny /= l; nz /= l; } else { nx = N[a * 3]; ny = N[a * 3 + 1]; nz = N[a * 3 + 2]; }
+        N.push(nx, ny, nz);
+        U.push((U[a * 2] + U[b * 2]) / 2, (U[a * 2 + 1] + U[b * 2 + 1]) / 2);
+        C.push((C[a * 3] + C[b * 3]) / 2, (C[a * 3 + 1] + C[b * 3 + 1]) / 2, (C[a * 3 + 2] + C[b * 3 + 2]) / 2);
+        mids.set(key, m);
+      }
+      return m;
+    };
+    let cuts = 0;
+    while (stack.length) {
+      const c = stack.pop(), b = stack.pop(), a = stack.pop();
+      const ab = d2(a, b), bc = d2(b, c), ca = d2(c, a);
+      // the longest edge that has to be cut (every edge that needs it is cut by both of its triangles sooner or later)
+      const nab = need(a, b, ab), nbc = need(b, c, bc), nca = need(c, a, ca);
+      let pick = 0, best = -1;
+      if (nab && ab > best) { best = ab; pick = 1; }
+      if (nbc && bc > best) { best = bc; pick = 2; }
+      if (nca && ca > best) { best = ca; pick = 3; }
+      if (!pick) { out.push(a, b, c); continue; }
+      if (++cuts > maxAdd) return null;                         // every cut adds one triangle
+      if (pick === 1) { const m = mid(a, b); stack.push(a, m, c, m, b, c); }
+      else if (pick === 2) { const m = mid(b, c); stack.push(a, b, m, a, m, c); }
+      else { const m = mid(c, a); stack.push(a, b, m, m, b, c); }
+    }
+    const g2 = new THREE.BufferGeometry();
+    g2.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    g2.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+    g2.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+    g2.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    g2.setIndex(out);
+    return g2;
+  }
+  // ray table in the tangent frame (t, b, n): 4 rays at 38° above the surface, 4 at 68°, 1 along the normal; the sample
+  // heights above the surface start above one grid cell, so a surface never shades itself
+  const AO_RAYS = (() => {
+    const rays = [], H = [0.36, 0.58, 0.86, 1.22];
+    const add = (elev, az) => { const ce = Math.cos(elev), se = Math.sin(elev); rays.push({ x: Math.cos(az) * ce, y: Math.sin(az) * ce, z: se, w: se, t: H.map((h) => h / se) }); };
+    for (let k = 0; k < 4; k++) add(38 * PI / 180, PI / 4 + k * PI / 2);
+    for (let k = 0; k < 4; k++) add(68 * PI / 180, k * PI / 2);
+    add(PI / 2, 0);
+    return rays;
+  })();
+  function bakeAO(parts, o) {
+    const t0 = performance.now();
+    const box = new THREE.Box3();
+    let nVert = 0, nTri = 0;
+    for (const list of parts.values()) for (const g of list) { g.computeBoundingBox(); box.union(g.boundingBox); nVert += g.attributes.position.count; nTri += g.index.count / 3; }
+    if (box.isEmpty() || nVert > 600000) return;
+    const pad = 2.2;
+    const mx = box.min.x - pad, my = box.min.y - pad, mz = box.min.z - pad;
+    const sx = box.max.x - box.min.x + pad * 2, sy = box.max.y - box.min.y + pad * 2, sz = box.max.z - box.min.z + pad * 2;
+    let c = o.cell || 0.25, nx, ny, nz;
+    for (;;) { nx = Math.ceil(sx / c) + 1; ny = Math.ceil(sy / c) + 1; nz = Math.ceil(sz / c) + 1; if (nx * ny * nz <= 5e6) break; c *= 1.26; }
+    const grid = new Uint8Array(nx * ny * nz), ic = 1 / c;
+    // 1. occupancy
+    for (const list of parts.values()) for (const g of list) {
+      const p = g.attributes.position.array, idx = g.index.array;
+      for (let t = 0; t < idx.length; t += 3) {
+        const a = idx[t] * 3, b = idx[t + 1] * 3, d = idx[t + 2] * 3;
+        const ax = p[a], ay = p[a + 1], az = p[a + 2];
+        const ux = p[b] - ax, uy = p[b + 1] - ay, uz = p[b + 2] - az, vx = p[d] - ax, vy = p[d + 1] - ay, vz = p[d + 2] - az;
+        const L = Math.sqrt(Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz, (ux - vx) * (ux - vx) + (uy - vy) * (uy - vy) + (uz - vz) * (uz - vz)));
+        if (!Number.isFinite(L)) continue;
+        const n = Math.min(360, Math.max(1, Math.ceil(L * ic / 0.7)));
+        for (let i = 0; i <= n; i++) for (let j = 0; j <= n - i; j++) {
+          const u = i / n, v = j / n;
+          const gi = ((ax + ux * u + vx * v - mx) * ic) | 0, gj = ((ay + uy * u + vy * v - my) * ic) | 0, gk = ((az + uz * u + vz * v - mz) * ic) | 0;
+          grid[(gk * ny + gj) * nx + gi] = 1;
+        }
+      }
+    }
+    // the ground under the bucket (a number: a plane; a function: the terrain, cached per grid column)
+    const gFn = typeof o.ground === 'function' ? o.ground : null, gY = Number.isFinite(o.ground) ? o.ground : null;
+    const gCol = gFn ? new Float32Array(nx * nz).fill(NaN) : null;
+    const occ = (x, y, z) => {
+      const gi = Math.floor((x - mx) * ic), gk = Math.floor((z - mz) * ic);
+      if (gY !== null) { if (y < gY) return 1; }
+      else if (gCol && gi >= 0 && gk >= 0 && gi < nx && gk < nz) {
+        let h = gCol[gk * nx + gi];
+        if (h !== h) { h = gFn(mx + (gi + 0.5) * c, mz + (gk + 0.5) * c); if (!Number.isFinite(h)) h = -1e9; gCol[gk * nx + gi] = h; }
+        if (y < h) return 1;
+      }
+      const gj = Math.floor((y - my) * ic);
+      if (gi < 0 || gj < 0 || gk < 0 || gi >= nx || gj >= ny || gk >= nz) return 0;
+      return grid[(gk * ny + gj) * nx + gi];
+    };
+    // 2. refine where the surroundings change (inside the bucket's triangle budget)
+    const nProbe = AO_PROBE.length / 3;
+    const open = (x, y, z) => { let n = 0; for (let k = 0; k < AO_PROBE.length; k += 3) n += occ(x + AO_PROBE[k], y + AO_PROBE[k + 1], z + AO_PROBE[k + 2]); return n / nProbe; };
+    const budget = Number.isFinite(o.maxAdd) ? o.maxAdd : Math.max(400, Math.round(nTri * 0.6));
+    let added = 0, level = -1;
+    const tR = performance.now();
+    if (budget > 0) {
+      // [how far the middle may be off (of 1), shortest edge that is cut, edges longer than this are always cut]
+      const LEVELS = [[0.09, 0.42, 7], [0.16, 0.75, 12]];
+      for (let lv = 0; lv < LEVELS.length; lv++) {
+        const [tol, minEdge, maxEdge] = LEVELS[lv], done = [];
+        let sum = 0;
+        scan: for (const [key, list] of parts) {
+          if (AO_NO_SPLIT[key]) continue;
+          for (let i = 0; i < list.length; i++) {
+            const g = list[i], g2 = aoRefine(g, open, tol, minEdge, maxEdge, budget - sum);
+            if (g2 === null) { sum = budget + 1; break scan; }
+            if (g2 !== g) { sum += (g2.index.count - g.index.count) / 3; done.push([list, i, g2]); }
+          }
+        }
+        if (sum <= budget) {
+          for (const [list, i, g2] of done) { nVert += g2.attributes.position.count - list[i].attributes.position.count; list[i].dispose(); list[i] = g2; }
+          added = sum; level = lv;
+          break;
+        }
+      }
+      if (level > 0) aoStats.coarser++; else if (level < 0) aoStats.unrefined++;
+    }
+    aoStats.refineMs += performance.now() - tR;
+    // 3. shade
+    const strength = o.strength ?? 0.9, floor = o.min ?? 0.5;
+    let wsum = 0;
+    for (const r of AO_RAYS) wsum += r.w;
+    for (const [key, list] of parts) {
+      if (AO_NO_SHADE[key]) continue;
+      for (const g of list) {
+        const p = g.attributes.position.array, nr = g.attributes.normal.array, col = g.attributes.color.array, n = g.attributes.position.count;
+        for (let v = 0; v < n; v++) {
+          const k = v * 3, px = p[k], py = p[k + 1], pz = p[k + 2];
+          let Nx = nr[k], Ny = nr[k + 1], Nz = nr[k + 2];
+          const nl = Math.hypot(Nx, Ny, Nz);
+          if (!(nl > 1e-6)) continue;
+          Nx /= nl; Ny /= nl; Nz /= nl;
+          // tangent frame
+          let tx, ty, tz;
+          if (Math.abs(Ny) < 0.9) { tx = -Nz; ty = 0; tz = Nx; } else { tx = 0; ty = Nz; tz = -Ny; }   // n × up  |  x × n
+          const tl = Math.hypot(tx, ty, tz); tx /= tl; ty /= tl; tz /= tl;
+          const bx = Ny * tz - Nz * ty, by = Nz * tx - Nx * tz, bz = Nx * ty - Ny * tx;
+          let sum = 0;
+          for (let r = 0; r < AO_RAYS.length; r++) {
+            const R = AO_RAYS[r];
+            const dx = tx * R.x + bx * R.y + Nx * R.z, dy = ty * R.x + by * R.y + Ny * R.z, dz = tz * R.x + bz * R.y + Nz * R.z;
+            for (let q = 0; q < 4; q++) {
+              const t = R.t[q];
+              if (occ(px + dx * t, py + dy * t, pz + dz * t)) { const f = 1 - q * 0.22; sum += R.w * f * f; break; }
+            }
+          }
+          const ao = Math.max(floor, 1 - strength * (sum / wsum));
+          if (ao < 0.999) { col[k] *= ao; col[k + 1] *= ao; col[k + 2] *= ao; }
+        }
+      }
+    }
+    aoStats.buckets++; aoStats.added += added; aoStats.vertices += nVert; aoStats.ms += performance.now() - t0;
+  }
 
   // ---------------------------------------------------------------- geometry accumulator
   const KEEP = { position: 1, normal: 1, uv: 1, color: 1 };
@@ -510,10 +790,12 @@
       this.tris += geo.index.count / 3;
     }
     has(key) { return this.parts.has(key); }
-    /** merge everything into one mesh per material, added to parent. opts.shadows=false disables casting */
+    /** merge everything into one mesh per material, added to parent. opts.shadows=false disables casting;
+     *  opts.ao: false | { ground: y | (x, z) => y, maxAdd, strength, min } — baked vertex AO (medium / high) */
     build(parent, opts = {}) {
       const out = {};
       const BGU = ADDONS.BufferGeometryUtils;
+      if (opts.ao !== false && aoEnabled()) { try { bakeAO(this.parts, opts.ao || {}); } catch (e) { G.log.warn('WORLD', 'vertex AO failed (the bucket stays unshaded)', e); } }
       for (const [key, list] of this.parts) {
         if (!list.length) continue;
         let geo = list.length === 1 ? list[0] : (BGU && BGU.mergeGeometries(list, false));
@@ -1124,7 +1406,8 @@
     }
     /** merge bucket into the group; roof meshes become camera blockers */
     finish(scene, opts = {}) {
-      const meshes = this.B.build(this.group, { name: this.id, shadows: opts.shadows });
+      // [render-assets] the building stands on the ground at local y 0: wall feet and platform sides get contact shade
+      const meshes = this.B.build(this.group, { name: this.id, shadows: opts.shadows, ao: opts.ao ?? { ground: -0.12 } });
       for (const key of opts.blockKeys || ['roof']) if (meshes[key]) G.world.cameraBlockers.push(meshes[key]);
       scene.add(this.group);
       this.group.updateMatrixWorld(true);
@@ -1137,7 +1420,7 @@
   Site.hullMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false });   // camera-only roof hulls
 
   G.bkit = {
-    col, M, mul, I4, rngOf, tex, mat, registerMaterial, MATDEF, Bucket, geo, roof, roofBaseFor, polyRoof, addRidge,
+    col, M, mul, I4, rngOf, tex, mat, registerMaterial, MATDEF, Bucket, aoStats, geo, roof, roofBaseFor, polyRoof, addRidge,
     JAR_PROFILES, jarTop, jarGeometry, lidGeometry, SignAtlas, HYEONPAN, Site, roundRect, speckle, blotches, ctex, FONT,
   };
 

@@ -229,6 +229,7 @@
       F('11-terrain.js', 'terrain', '지형 높이장·산·강 바닥·도로·오솔길·지표 판정'),
       F('12-nature.js', 'terrain', '나무·바위·풀·꽃·구름·새·나비·반딧불 (인스턴싱)'),
       F('13-water.js', 'terrain', '강·연못 셰이더·폭포·물보라·물까지 거리'),
+      F('14-materials.js', 'buildings', '사진 재질 G.mat: 기와·회벽·나무·돌·흙·옹기 사진 세트를 재질에 입히기(색·굴곡·거칠기), 낮음 품질에서는 쓰지 않기 (§16.2)'), // [render-assets]
       F('15-buildings.js', 'buildings', '체험관 본관·한옥·초가·정자·정문·매점 건물'),
       F('16-props.js', 'buildings', '장독대·밭·안내판·키오스크·석등·벤치·전시 소품'),
       F('17-manjangdae.js', 'terrain', '시작점 정선 만장대: 전망대·팔각정·돌계단 길·첫 입장 인트로 시네마틱·망원경 투어·걷기 안내 지점(walkSpot)'),
@@ -3099,6 +3100,66 @@
     if (!P.count) return SKIP('자료를 담지 않은 빌드예요');
     if (q === 'low') return { ok: P.stats.decoded === 0 && P.stats.decoding === 0 && !P.usable(P.names()[0]), detail: `낮음: 푼 그림 ${P.stats.decoded}개, 기다리는 요청 ${P.stats.queued}개 (그대로 둬요)` };
     return { ok: P.stats.failed === 0 && P.stats.decoding <= 2 && (P.stats.decoded === 0 || P._started()), detail: `${q}: 푼 그림 ${P.stats.decoded}개 · 푸는 중 ${P.stats.decoding}개(최대 2) · 기다림 ${P.stats.queued}개 · 실패 ${P.stats.failed}개` };
+  });
+
+  // [render-assets] ---- 사진 재질 G.mat · 구운 접촉 그림자 · 사진 지형 (CONTRACT §16.2)
+  T('🧱 사진 재질', '세트마다 색·굴곡·거칠기 그림이 있고, 별칭은 실제 세트를 가리켜요', () => {
+    const M = G.mat, P = G.pack;
+    if (!M) return { ok: false, detail: 'G.mat 이 없어요' };
+    const names = Object.keys(M.sets);
+    const badAlias = Object.entries(M.alias).filter(([, v]) => !M.sets[v]).map(([k]) => k);
+    const badTile = names.filter((n) => { const s = M.sets[n]; return !(s.tile?.[0] > 0 && s.tile?.[1] > 0) || !(s.rough > 0 && s.rough <= 1) || s.avg?.length !== 3; });
+    if (!P?.count) return { ok: !badAlias.length && !badTile.length && !M.usable(names[0]), detail: `자료 없는 빌드: 세트 ${names.length}종의 표만 확인했어요 (입히지 않아요)` };
+    const missing = names.filter((n) => !(P.has(M.sets[n].c) && P.has(M.sets[n].n) && P.has(M.sets[n].r)));
+    return { ok: !badAlias.length && !badTile.length && !missing.length, detail: missing.length ? `그림이 빠진 세트: ${missing.slice(0, 4).join(', ')}` : badAlias.length ? `잘못된 별칭: ${badAlias.join(', ')}` : `세트 ${names.length}종 · 별칭 ${Object.keys(M.alias).length}개` };
+  });
+  T('🧱 사진 재질', '입혀도 원래 색이 그대로예요 (재질 색 = 원하는 색 ÷ 사진 평균색) · 낮음에서는 손대지 않아요', () => {
+    const M = G.mat;
+    if (!M) return false;
+    const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+    const n0 = M.applied.length;
+    try {
+      M.apply(m, 'plaster', { look: [231, 226, 214], tile: [2, 2], roughness: 0.9 });
+      if (!M.usable('plaster')) return { ok: m.map === null && m.normalMap === null && M.applied.length === n0, detail: `${G.sys.engine?.quality || '?'}: 그림을 입히지 않고 재질을 그대로 둬요` };
+      const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      const a = M._avgLin('lime_plaster_wall'), want = [lin(231), lin(226), lin(214)], got = [m.color.r * a[0], m.color.g * a[1], m.color.b * a[2]];
+      const ra = (G.pack.meta('mat/lime_plaster_wall/r').avg || 255) / 255;
+      const ok = !!m.map?.userData?.pack && !!m.normalMap?.userData?.pack && !!m.roughnessMap?.userData?.pack && m.map.colorSpace === THREE.SRGBColorSpace && m.normalMap.colorSpace === THREE.NoColorSpace
+        && near(got[0], want[0], 0.01) && near(got[1], want[1], 0.01) && near(got[2], want[2], 0.01) && near(m.roughness * ra, 0.9, 0.01) && near(m.map.repeat.x, 0.5, 1e-6) && m.userData.gmSet === 'lime_plaster_wall';
+      return { ok, detail: `평균색 ${got.map((v) => v.toFixed(3)).join(' · ')} (바라는 값 ${want.map((v) => v.toFixed(3)).join(' · ')}) · 거칠기 평균 ${(m.roughness * ra).toFixed(2)}` };
+    } finally { M.applied.length = n0; m.dispose(); }
+  });
+  T('🧱 사진 재질', '건물·장독·바닥 재질이 사진 세트를 받았어요 (낮음: 하나도 없음)', () => {
+    const M = G.mat;
+    if (!M) return false;
+    const sets = new Set(M.applied.map((a) => a.set));
+    if (!M.usable('giwa')) return { ok: M.applied.length === 0, detail: `${G.sys.engine?.quality || '?'}: 사진을 입힌 재질 ${M.applied.length}개` };
+    if (!G.sys.buildings) return SKIP('건물이 없는 화면이에요');
+    const need = ['giwa_roof_tile', 'lime_plaster_wall', 'pine_timber', 'granite_stone', 'onggi_glaze'];
+    const miss = need.filter((s) => !sets.has(s));
+    const loose = M.applied.filter((a) => !a.material.isMeshStandardMaterial).length;
+    return { ok: !miss.length && !loose, detail: miss.length ? `아직 사진이 없는 재질: ${miss.join(', ')}` : `재질 ${M.applied.length}개 · 세트 ${sets.size}종` };
+  });
+  T('🧱 사진 재질', '벽 밑·처마 밑 접촉 그림자를 꼭짓점 색에 구웠어요 (중간·높음만)', () => {
+    const a = G.bkit?.aoStats;
+    if (!a) return SKIP('건물 도구(G.bkit)가 없는 화면이에요');
+    const q = G.sys.engine?.quality;
+    if (q === 'low' || G.unsupported) return { ok: a.buckets === 0 && a.added === 0, detail: `낮음: 굽지 않아요 (묶음 ${a.buckets}개)` };
+    if (G.params?.get?.('ao') === '0') return SKIP('주소에 ao=0 이 있어요');
+    if (!G.sys.buildings) return SKIP('건물이 없는 화면이에요');
+    return { ok: a.buckets > 0 && a.vertices > 0 && Number.isFinite(a.ms), detail: `묶음 ${a.buckets}개 · 꼭짓점 ${a.vertices.toLocaleString()}개 · 잘게 나눈 삼각형 +${a.added.toLocaleString()}개 · ${Math.round(a.ms)} ms` };
+  });
+  T('🧱 사진 재질', '땅: 중간·높음은 풀·흙·자갈·바위 사진을 섞어 그려요 · 낮음은 예전 그대로예요', () => {
+    const t = G.sys.terrain, q = G.sys.engine?.quality;
+    if (!t?.material || !t.meshes?.core) return SKIP('지형이 없는 화면이에요');
+    const splat = !!t.meshes.core.geometry.attributes.aSplat, type = t.material.type;
+    if (q === 'low' && !t._pbr) return { ok: type === 'MeshLambertMaterial' && !splat, detail: `낮음: ${type}, 섞는 정보 없음` };
+    if (!G.mat?.usable?.('grass')) return { ok: type === 'MeshLambertMaterial' && !splat, detail: `자료 없는 빌드: ${type}` };
+    if (!t._pbr) return SKIP('낮음으로 시작한 뒤 품질을 올렸어요 — 새로 고치면 사진 지형이 돼요');
+    const U = t.material.userData.tf || {}, tex = Object.values(U).filter((u) => u?.value?.isTexture);
+    const a = t.meshes.core.geometry.attributes.aSplat;
+    return { ok: (q === 'low' ? type === 'MeshLambertMaterial' : type === 'MeshStandardMaterial') && splat && a.itemSize === 4 && a.normalized === true && tex.length === 8 && tex.every((x) => x.wrapS === THREE.RepeatWrapping),
+      detail: `${type} · 사진 ${tex.length}장(색 5 · 굴곡 3) · 꼭짓점마다 섞는 비율 4개` };
   });
 
   const Tests = {

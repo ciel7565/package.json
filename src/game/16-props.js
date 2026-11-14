@@ -127,11 +127,20 @@
   // ---------------------------------------------------------------- materials (props only)
   const STD = (o) => new THREE.MeshStandardMaterial(o);
   const OFF = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 };
-  registerMaterial('paver', () => STD({ map: paverTex(), vertexColors: true, roughness: 0.9, ...OFF }), { cast: false });
-  registerMaterial('pavement', () => STD({ map: pavementTex(), vertexColors: true, roughness: 0.88, ...OFF }), { cast: false });
-  registerMaterial('emblem', () => STD({ map: emblemTex(), vertexColors: true, roughness: 0.85, ...OFF }), { cast: false });
+  // [render-assets] paving keeps its painted courses / slabs / emblem; the stone itself (grain, pits, relief) comes from the
+  // granite photograph as a world-space detail layer (medium / high — G.mat.apply is a no-op on `low`)
+  const PAVE = (m, opt) => { if (G.mat?.usable?.('granite_stone')) { try { G.mat.apply(m, 'granite_stone', { detail: true, world: true, priority: 3, ...opt }); } catch (e) { G.log.warn('WORLD', 'paving stone failed', e); } } return m; };
+  registerMaterial('paver', () => PAVE(STD({ map: paverTex(), vertexColors: true, roughness: 0.9, ...OFF }), { tile: [1.5, 1.5], strength: 0.85, normalScale: 0.7 }), { cast: false });
+  registerMaterial('pavement', () => PAVE(STD({ map: pavementTex(), vertexColors: true, roughness: 0.88, ...OFF }), { tile: [1.9, 1.9], strength: 0.8, normalScale: 0.6 }), { cast: false });
+  registerMaterial('emblem', () => PAVE(STD({ map: emblemTex(), vertexColors: true, roughness: 0.85, ...OFF }), { tile: [1.7, 1.7], strength: 0.6, normalScale: 0.45 }), { cast: false });
   registerMaterial('lines', () => STD({ vertexColors: true, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }), { cast: false });
-  registerMaterial('glazeI', () => STD({ map: tex('jar'), roughness: 0.3, metalness: 0.04 }));
+  registerMaterial('glazeI', () => {
+    // [render-assets] the hundreds of instanced jars: photographed onggi glaze over the painted jar (see MATDEF.glaze)
+    const photo = !!G.mat?.usable?.('onggi_glaze');
+    const m = STD({ map: tex(photo ? 'jarGlaze' : 'jar'), roughness: 0.3, metalness: 0.04 });
+    if (photo) { try { G.mat.apply(m, 'onggi_glaze', { detail: true, tile: [1 / 2, 1], strength: 0.75, normalScale: 0.5, roughness: 0.25, env: 1.25, priority: 1 }); } catch (e) { G.log.warn('WORLD', 'onggi glaze failed', e); } }
+    return m;
+  });
   registerMaterial('silkBlue', () => { const m = STD({ vertexColors: true, color: 0x2f56b0, emissive: new THREE.Color('#5a6cff'), roughness: 0.75 }); G.world.addNightMaterial(m, 0.9, 0.0); return m; }, { cast: false });
   registerMaterial('silkRed', () => { const m = STD({ vertexColors: true, color: 0xc63a2c, emissive: new THREE.Color('#ff6a33'), roughness: 0.75 }); G.world.addNightMaterial(m, 1.6, 0.05); return m; }, { cast: false });
   const PSIGN = new SignAtlas('props', 1024, 2560);
@@ -1407,7 +1416,8 @@
       for (const [key, B] of cells) {
         tris += B.tris;
         const grp = new THREE.Group(); grp.name = key[0] === 'd' ? 'props-detail-' + key.slice(1) : 'props-cell-' + key;
-        const out = B.build(grp, { name: 'props' });
+        // [render-assets] baked contact shade against the terrain under the cell (medium / high; see Bucket in 15-buildings.js)
+        const out = B.build(grp, { name: 'props', ao: { ground: (x, z) => ground(x, z) - 0.12, maxAdd: 400 } });
         meshes += Object.keys(out).length;
         root.add(grp);
       }
@@ -1448,7 +1458,8 @@
         try { m = mat(key); } catch (e) { continue; }
         if (!m || !m.isMeshStandardMaterial) continue;
         const dry = m.userData.dry || (m.userData.dry = { r: m.roughness, c: m.color.clone(), e: m.envMapIntensity ?? 1 });
-        m.roughness = lerp(dry.r, Math.min(dry.r, 0.4), k * 0.85);
+        // [render-assets] a photographed roughness map multiplies: 0.4 stays the wet MEAN roughness (gmRoughScale = 1 / the map's mean)
+        m.roughness = lerp(dry.r, Math.min(dry.r, 0.4 * (m.userData.gmRoughScale || 1)), k * 0.85);
         m.color.copy(dry.c).multiplyScalar(1 - 0.3 * k);
         m.envMapIntensity = dry.e * (1 + 0.45 * k);
       }
