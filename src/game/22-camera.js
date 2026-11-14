@@ -146,6 +146,27 @@
       if (this.mode === 'follow') this.snap();
     },
 
+    // [places-kit] a place's own comfort range (CONTRACT §16.4): rooms want a closer, flatter view that stays under
+    // the ceiling. setProfile({dist, min, max, pitch, pmin, pmax, maxY (world y the camera stays below)}) on entering,
+    // setProfile(null, {restore}) on leaving (restore: back to the zoom / pitch from before).
+    _prof: null, _profSaved: null,
+    setProfile(p, opts = {}) {
+      if (p && typeof p === 'object') {
+        const n = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+        if (!this._prof) this._profSaved = { pitch: this._pitchT, dist: this._distT };
+        const min = clamp(n(p.min, 2.4), 1.2, 30), max = clamp(n(p.max, 7.5), min + 0.2, 60);
+        this._prof = { min, max, pmin: clamp(n(p.pmin, -0.12), PMIN, 0.6), pmax: clamp(n(p.pmax, 0.9), 0.1, PMAX), pitch: clamp(n(p.pitch, 0.2), PMIN, PMAX), dist: clamp(n(p.dist, 5.2), min, max), maxY: Number.isFinite(Number(p.maxY)) && p.maxY != null ? Number(p.maxY) : null };
+        this._pitchT = this.pitch = this._prof.pitch;
+        this._distT = this.distance = this._effDist = this._prof.dist;
+      } else if (this._prof) {
+        this._prof = null;
+        const s = this._profSaved; this._profSaved = null;
+        const easy = gentle();
+        this._pitchT = this.pitch = opts.restore && s ? s.pitch : (easy ? EASY.pitch : DEF.pitch);
+        this._distT = this.distance = this._effDist = opts.restore && s ? s.dist : (easy ? EASY.distance : DEF.distance);
+      }
+      this._blockDist = Infinity; this._clearT = 0; this._occ.n = -1;
+    },
     /** easy-mode camera active (soft drag, comfortable zoom, auto-follow, no shake) */
     get gentle() { return gentle(); },
     /** easy <-> normal at runtime: ease into the other comfort range instead of jumping */
@@ -153,6 +174,7 @@
       const easy = gentle();
       if (easy === this._wasGentle) return;
       this._wasGentle = easy;
+      if (this._prof) return;   // [places-kit] a place's range applies in both modes
       if (easy) {
         this._distT = clamp(this._distT, EASY.dmin, EASY.dmax);
         if (Math.abs(this._distT - EASY.distance) > 2.5) this._distT = EASY.distance;
@@ -368,6 +390,13 @@
         }
         const cp = Math.cos(pitch);
         this._dPos.set(this._dLook.x + Math.sin(yaw) * cp * dist, this._dLook.y + Math.sin(pitch) * dist, this._dLook.z + Math.cos(yaw) * cp * dist);
+        // [places-kit] under a room's ceiling the camera slides down its orbit (same distance) instead of rising
+        // through the rafters
+        const PR = this._prof;
+        if (PR && PR.maxY != null && this._dPos.y > PR.maxY) {
+          const sy = clamp((PR.maxY - this._dLook.y) / Math.max(0.5, dist), -0.5, 1), cp2 = Math.sqrt(Math.max(0, 1 - sy * sy));
+          this._dPos.set(this._dLook.x + Math.sin(yaw) * cp2 * dist, this._dLook.y + sy * dist, this._dLook.z + Math.cos(yaw) * cp2 * dist);
+        }
       } else if (mode === 'cinematic') {
         const c = this._cine;
         c.angle += c.speed * dt;
@@ -508,12 +537,13 @@
       if (mode === 'follow') {
         const easy = this._wasGentle;
         const ls = easy ? EASY.look : 1;
+        const PR = this._prof;   // [places-kit] a place's zoom / pitch range
         if (look.dx || look.dy) {
           this._yawT -= look.dx * 0.0055 * ls;
-          this._pitchT = clamp(this._pitchT + look.dy * 0.0042 * ls, easy ? EASY.pmin : PMIN, easy ? EASY.pmax : PMAX);
+          this._pitchT = clamp(this._pitchT + look.dy * 0.0042 * ls, PR ? PR.pmin : easy ? EASY.pmin : PMIN, PR ? PR.pmax : easy ? EASY.pmax : PMAX);
           this._lastUserLook = t;
         }
-        if (zm) this._distT = clamp(this._distT * (1 + zm * (easy ? 0.09 : 0.12)), easy ? EASY.dmin : DMIN, easy ? EASY.dmax : DMAX);
+        if (zm) this._distT = clamp(this._distT * (1 + zm * (easy ? 0.09 : 0.12)), PR ? PR.min : easy ? EASY.dmin : DMIN, PR ? PR.max : easy ? EASY.dmax : DMAX);
         if (easy) this._autoFollow(dt, t); else this._autoAlign(dt, t);
         const k = damp(15, dt);
         this.yaw += angleDiff(this.yaw, this._yawT) * k;
@@ -589,7 +619,7 @@
       if (!Number.isFinite(behind)) return;
       const k = damp((p.isWalking && !manual ? 1.5 : 1.25) * Math.min(1, sp / WALK()), dt);
       this._yawT += clamp(angleDiff(this._yawT, behind) * k, -SWING_MAX * dt, SWING_MAX * dt);
-      this._pitchT += (EASY.pitch - this._pitchT) * damp(0.5, dt);
+      this._pitchT += ((this._prof ? this._prof.pitch : EASY.pitch) - this._pitchT) * damp(0.5, dt);   // [places-kit] a place's own pitch
     },
 
     _autoAlign(dt, t) {

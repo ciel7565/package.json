@@ -3351,9 +3351,11 @@
         // between walk and run pace at the current speed tier (WALK / RUN × G.sys.speed.movement(), CONTRACT §14.1)
         const runAt = (((Number(pl.WALK) || 6.4) + (Number(pl.RUN) || 12)) / 2) * (Number(pl.speedMul) || 1);
         const anim = pl.rig?.currentAction || (pl.sitting ? 'sit' : pl.speed > runAt ? 'run' : pl.speed > 0.2 ? 'walk' : 'idle');
+        // [places-kit] inside a room / district: place-LOCAL x / z + that place's zone id (CONTRACT §16.4)
+        const pm = G.sys.places?.presenceOut?.(p) || null;
         const body = {
-          x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100, z: Math.round(p.z * 100) / 100, rotY: Math.round((pl.rotY || 0) * 1000) / 1000,
-          anim, speed: Math.round((pl.speed || 0) * 10) / 10, zoneId: G.state.player?.zoneId || G.sys.minimap?.currentZone?.id || null,
+          x: Math.round((pm ? pm.x : p.x) * 100) / 100, y: Math.round((pm ? pm.y : p.y) * 100) / 100, z: Math.round((pm ? pm.z : p.z) * 100) / 100, rotY: Math.round((pl.rotY || 0) * 1000) / 1000,
+          anim, speed: Math.round((pl.speed || 0) * 10) / 10, zoneId: (pm && pm.zoneId) || G.state.player?.zoneId || G.sys.minimap?.currentZone?.id || null,
           emote: this._emoteState?.id || null, emoteAt: this._emoteState?.at || 0, nickname: G.state.profile?.nickname || '',
         };
         if (sendApp) { body.appearance = app; S.appKey = appKey; S.appT = 10; }
@@ -3402,10 +3404,14 @@
       const num = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
       let x = num(r.x), z = num(r.z), y = num(r.y), rot = num(r.rotY ?? r.rot ?? 0);
       if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
-      x = clamp(x, -WORLD_LIM, WORLD_LIM); z = clamp(z, -WORLD_LIM, WORLD_LIM);
-      y = Number.isFinite(y) ? clamp(y, -10, 80) : null;
-      rot = Number.isFinite(rot) ? Math.atan2(Math.sin(rot), Math.cos(rot)) : 0;
       const zoneId = typeof r.zoneId === 'string' && /^[A-Z0-9_]{1,40}$/.test(r.zoneId) ? r.zoneId : null;
+      // [places-kit] a row from inside a room / district carries place-local x / z: it is drawn in that place's region
+      // (undefined = a valley row · null = a place this page does not know: the row is skipped)
+      const pin = zoneId && G.sys.places?.presenceIn ? G.sys.places.presenceIn(x, y, z, zoneId) : undefined;
+      if (pin === null) return null;
+      if (pin) { x = pin.x; z = pin.z; y = pin.y; }
+      else { x = clamp(x, -WORLD_LIM, WORLD_LIM); z = clamp(z, -WORLD_LIM, WORLD_LIM); y = Number.isFinite(y) ? clamp(y, -10, 80) : null; }
+      rot = Number.isFinite(rot) ? Math.atan2(Math.sin(rot), Math.cos(rot)) : 0;
       const anim = typeof r.anim === 'string' && G.avatar?.actions && Object.prototype.hasOwnProperty.call(G.avatar.actions, r.anim) ? r.anim : null;
       const loco = typeof r.anim === 'string' && REMOTE_LOCO.includes(r.anim) ? r.anim : null;
       const emote = typeof r.emote === 'string' && (G.data.emotes || []).some((q) => q.id === r.emote) ? r.emote : null;
@@ -3546,7 +3552,7 @@
         const sp = dt > 0 ? Math.hypot(p.x - ox, p.z - oz) / dt : 0;
         o.params.speed += (sp - o.params.speed) * damp(6, dt);
         const cd = Math.hypot(p.x - cam.x, p.z - cam.z);
-        const hide = cd > HIDE_DIST;
+        const hide = cd > HIDE_DIST || G.sys.places?.remoteHidden?.(o.zoneId) === true;   // [places-kit] someone in another place (or the valley while I am inside)
         o.group.visible = !hide;
         if (!hide) o.rig.update(dt, o.params);
         this._tickBubble(o.bub, dt);

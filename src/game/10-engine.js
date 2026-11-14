@@ -872,6 +872,7 @@
   const GRADE_LIMITS = { exposure: [0.2, 2.5], contrast: [0.7, 1.4], saturation: [0, 1.8], warmth: [-1, 1], vignette: [0, 0.8], flash: [0, 1] };
   const _lift = new THREE.Color(0, 0, 0), _gain = new THREE.Color(1, 1, 1), _liftGoal = new THREE.Color(0, 0, 0), _gainGoal = new THREE.Color(1, 1, 1);
   const _sunV = new THREE.Vector3(), _camFwd = new THREE.Vector3(), _sunCol = new THREE.Color();
+  const _indoorGrade = { exposure: 1, warmth: 0, saturation: 1 };   // [places-kit] the 'interior' grade layer (reused)
 
   const engine = {
     name: 'engine',
@@ -1243,6 +1244,7 @@
     /** copy sky look (turbidity etc.) to the env-bake sky and re-bake scene.environment */
     updateEnvironment(force) {
       if (!this._pmrem || !this._envSky || this._isLost()) return;
+      if (this._indoor && this._indoor.env && this._indoorGoal) { if (this._indoorEnvDirty) this._indoorBake(); this._envDirty = false; return; }   // [places-kit] inside a room: its own bake
       if (!force && !this._envDirty) return;
       const su = this.sky.material.uniforms, eu = this._envSky.material.uniforms;
       for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG']) eu[k].value = su[k].value;
@@ -1625,6 +1627,7 @@
       }
       const info = this.renderer.info;
       info.reset();
+      this._placeFrame();   // [places-kit] sky follow + the room's light over the weather's values (after every update)
       if (this.atmosPass) { this.camera.updateMatrixWorld(); this._updateSunScreen(); } // this frame's camera: no glow lag
       guard.tick();   // §14.4.1: a non-finite opacity / scale / uniform never reaches the GPU
       try {
@@ -1653,6 +1656,193 @@
       const v = (this._v3 || (this._v3 = new THREE.Vector3())).copy(p).project(this.camera);
       return { x: (v.x * 0.5 + 0.5) * window.innerWidth, y: (-v.y * 0.5 + 0.5) * window.innerHeight, visible: v.z < 1 && v.z > -1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1 };
     },
+    // ============================================================ [places-kit] indoor profile + pooled lights
+    // (CONTRACT §16.4 / §16.5 — ONE block; the two call sites are the marked lines in updateEnvironment() and render())
+    //   engine.lightPool(n) -> PointLight[]   borrow up to n of the night lamps that already exist in the scene. All
+    //       of them move to the scene root while borrowed (their owners' roots are hidden inside a place), so the
+    //       light count never changes and no lit program is re-linked. [] on `low` (and when there are none).
+    //   engine.releaseLights()                 hand them back: old parent, position, colour, distance, decay, night glow
+    //   engine.setIndoor(profile | null, {instant}) -> eases hemisphere / sun direction, colour, intensity / fill /
+    //       background / fog / exposure (grade layer 'interior') / environment intensity towards the room's values.
+    //       engine.indoor = the eased factor 0..1 (51-weather multiplies its outdoor-only terms by 1 - indoor).
+    //       profile { center: Vector3 (world; sun target and shadow centre), radius (m, half side of the shadow
+    //         frustum), dir: Vector3 (towards the window sun), dist (m), sun {color, intensity}, moon {color,
+    //         intensity}, hemi {sky, ground, intensity}, hemiNight {…}, fill, background, backgroundNight,
+    //         fog {color, density}, exposure, exposureNight, warmth, envIntensity, env: THREE.Scene (baked into the
+    //         persistent environment target — scene.environment stays the same texture object), onBake(night 0..1),
+    //         shadow {bias, normalBias, radius, near, far} }
+    //   engine.indoorShadows                   may the window sun cast shadows now? (preset knob indoorShadows, else
+    //                                          the preset's shadows; the 그림자 setting; a renderer)
+    //   engine.skyFollow(on)                   the sky dome follows the camera (an outdoor place far from the origin)
+    indoor: 0, _indoor: null, _indoorGoal: 0, _indoorSaved: null, _indoorEnvDirty: false, _indoorBakeNf: -1, _skyFollow: false, _pool: null,
+    get indoorShadows() {
+      const p = this.preset || {};
+      return !!(this.renderer && this.renderer.shadowMap.enabled && this.sun && this.sun.castShadow && (p.indoorShadows ?? (!!p.shadows && p.name !== 'low')));
+    },
+    lightPool(n) {
+      const W = G.world, P = this._pool || (this._pool = { items: [], out: false });
+      if (!P.out) {
+        P.items = (W?.nightLights || []).filter((nl) => nl && nl.light && nl.light.isPointLight)
+          .map((nl) => ({ nl, light: nl.light, parent: nl.light.parent, pos: nl.light.position.clone(), color: nl.light.color.clone(), distance: nl.light.distance, decay: nl.light.decay }));
+        for (const it of P.items) {
+          it.nl.light = null;                   // the weather's lamp loop skips it while it is away
+          if (this.scene) this.scene.add(it.light);
+          it.light.intensity = 0; it.light.userData.pooled = true;
+        }
+        P.out = true;
+      }
+      n = Math.max(0, Math.floor(Number(n) || 0));
+      return this.preset?.name === 'low' ? [] : P.items.slice(0, n).map((it) => it.light);
+    },
+    releaseLights() {
+      const P = this._pool;
+      if (!P || !P.out) return;
+      const lampK = clamp(fin(Number(G.sys.weather?._lampK), fin(G.world?.nightFactor, 0)), 0, 1);
+      for (const it of P.items) {
+        const l = it.light;
+        (it.parent || this.scene).add(l);
+        l.position.copy(it.pos); l.color.copy(it.color); l.distance = it.distance; l.decay = it.decay;
+        delete l.userData.pooled; delete l.userData.flicker;
+        it.nl.light = l;
+        l.intensity = (it.nl.intensity ?? 1) * lampK;
+      }
+      P.out = false; P.items = [];
+    },
+    skyFollow(on) {
+      this._skyFollow = !!on;
+      if (!on && this.sky) this.sky.position.set(0, 0, 0);
+    },
+    setIndoor(profile, opts = {}) {
+      if (!this._indoorBound) {
+        this._indoorBound = true;
+        // a quality / shadow change rebuilds the shadow camera, a restored context drops the environment targets
+        G.bus.on('engine:quality', () => { if (this._indoor && this._indoorGoal) { this._indoorSaved = null; this._indoorShadow(true); this._indoorEnvDirty = true; } });
+        G.bus.on('settings:changed', ({ key }) => { if (key === 'shadows' && this._indoor && this._indoorGoal) { this._indoorSaved = null; this._indoorShadow(true); } });
+        G.bus.on('engine:context', ({ lost }) => { if (!lost && this._indoor) this._indoorEnvDirty = true; });
+      }
+      if (profile) {
+        const c = (v, d) => { const o = new THREE.Color(d); try { if (v != null) o.set(v); } catch (e) { o.set(d); } return clampColor(o, 0, 4, 0.5); };
+        const lit = (o, col, int) => ({ color: c(o?.color, col), intensity: clamp(fin(Number(o?.intensity), int), 0, 12) });
+        const hem = (o, sky, ground, int) => ({ sky: c(o?.sky, sky), ground: c(o?.ground, ground), intensity: clamp(fin(Number(o?.intensity), int), 0, 4) });
+        const dir = new THREE.Vector3(0.3, 0.55, 0.78);
+        if (profile.dir && Number.isFinite(profile.dir.x) && Number.isFinite(profile.dir.y) && Number.isFinite(profile.dir.z) && profile.dir.lengthSq?.() > 1e-6) dir.copy(profile.dir);
+        dir.normalize(); if (dir.y < 0.05) { dir.y = 0.05; dir.normalize(); }
+        const center = new THREE.Vector3();
+        if (profile.center && Number.isFinite(profile.center.x) && Number.isFinite(profile.center.z)) center.set(profile.center.x, fin(profile.center.y, 0), profile.center.z);
+        const hemi = hem(profile.hemi, 0xffeedd, 0x6b5138, 0.62);
+        // the void around a room is never pure black (§16.0: ≥ 10/255 — the screen watchdog reads < 6 as a defect)
+        const bg = (v, d) => { const o = c(v, d); const m = 10.5 / 255; if (o.r < m) o.r = m; if (o.g < m) o.g = m; if (o.b < m) o.b = m; return o; };
+        this._indoor = {
+          center, dir, dist: clamp(fin(Number(profile.dist), 60), 20, 150), radius: clamp(fin(Number(profile.radius), 12), 3, 80),
+          sun: lit(profile.sun, 0xffe6c2, 2.6), moon: lit(profile.moon, 0x8fa6d8, 0.35),
+          hemi, hemiNight: profile.hemiNight ? hem(profile.hemiNight, 0x3a4664, 0x2a2018, 0.3) : { sky: hemi.sky.clone().multiplyScalar(0.45), ground: hemi.ground.clone().multiplyScalar(0.5), intensity: hemi.intensity * 0.5 },
+          fill: clamp(fin(Number(profile.fill), 0.08), 0, 2),
+          background: bg(profile.background, 0x1d1712), backgroundNight: bg(profile.backgroundNight ?? profile.background, 0x14110f),
+          fogColor: bg(profile.fog?.color ?? profile.background, 0x1d1712), fogDensity: clamp(fin(Number(profile.fog?.density), 0.0015), 0, 0.05),
+          exposure: clamp(fin(Number(profile.exposure), 1.05), 0.4, 2), exposureNight: clamp(fin(Number(profile.exposureNight), 1.1), 0.4, 2.5),
+          warmth: clamp(fin(Number(profile.warmth), 0.08), -0.5, 0.5), envIntensity: clamp(fin(Number(profile.envIntensity), 0.6), 0, 3),
+          env: profile.env && profile.env.isScene ? profile.env : null, onBake: typeof profile.onBake === 'function' ? profile.onBake : null,
+          shadow: { bias: fin(Number(profile.shadow?.bias), -0.0005), normalBias: fin(Number(profile.shadow?.normalBias), 0.012), radius: fin(Number(profile.shadow?.radius), 1.6), near: fin(Number(profile.shadow?.near), 1), far: fin(Number(profile.shadow?.far), NaN) },
+        };
+        this._indoorGoal = 1;
+        if (opts.instant) this.indoor = 1;
+        this._indoorShadow(true);
+        this._indoorEnvDirty = true; this._indoorBakeNf = -1;
+        this._gradeSnap = this._gradeSnap || !!opts.instant;
+      } else {
+        this._indoorGoal = 0;
+        if (opts.instant || !this._indoor) { this.indoor = 0; this._indoorEnd(); this._gradeSnap = true; }
+      }
+      this._indoorT = performance.now();
+      return this.indoor;
+    },
+    /** the window sun's shadow frustum: tight around the room (a lattice bar is 3 cm wide), the outdoor one put back */
+    _indoorShadow(on) {
+      const s = this.sun && this.sun.shadow, P = this._indoor;
+      if (!s || !s.camera) return;
+      if (on && P) {
+        const cam = s.camera;
+        if (!this._indoorSaved) this._indoorSaved = { left: cam.left, right: cam.right, top: cam.top, bottom: cam.bottom, near: cam.near, far: cam.far, bias: s.bias, normalBias: s.normalBias, radius: s.radius };
+        const R = P.radius;
+        Object.assign(cam, { left: -R, right: R, top: R, bottom: -R, near: P.shadow.near, far: Number.isFinite(P.shadow.far) ? P.shadow.far : P.dist + R * 2.5 });
+        cam.updateProjectionMatrix();
+        s.bias = P.shadow.bias; s.normalBias = P.shadow.normalBias; s.radius = P.shadow.radius;
+      } else if (!on && this._indoorSaved) {
+        const v = this._indoorSaved, cam = s.camera;
+        Object.assign(cam, { left: v.left, right: v.right, top: v.top, bottom: v.bottom, near: v.near, far: v.far });
+        cam.updateProjectionMatrix();
+        s.bias = v.bias; s.normalBias = v.normalBias; s.radius = v.radius;
+        this._indoorSaved = null;
+      }
+    },
+    _indoorEnd() {
+      if (!this._indoor && !this._indoorSaved) return;
+      this._indoorShadow(false);
+      this._indoor = null; this.indoor = 0; this._indoorGoal = 0;
+      this.grade(null, 'interior');
+      if (this.scene) this.scene.environmentIntensity = this.envIntensity ?? 0.5;
+      this._envDirty = true; this._envTimer = 0;   // the sky comes back into the environment on the next update
+    },
+    /** the room's own environment: baked into the same persistent target as the sky (the texture object is kept) */
+    _indoorBake() {
+      const P = this._indoor;
+      if (!P || !P.env || !this._pmrem || !this.renderer || this._isLost()) return false;
+      const nf = clamp(fin(G.world?.nightFactor, 0), 0, 1);
+      try { P.onBake?.(nf); } catch (e) { G.log.warn('ENGINE', 'indoor environment callback failed', e?.message || e); }
+      if (!this._envCam) this._envCam = new THREE.CubeCamera(0.1, 1100, new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType }));
+      this._envCam.update(this.renderer, P.env);
+      this._envRT = this._pmrem.fromCubemap(this._envCam.renderTarget.texture, this._envRT);
+      this.scene.environment = this._envRT.texture;
+      this._indoorEnvDirty = false; this._indoorBakeNf = nf; this._envDirty = false;
+      return true;
+    },
+    /** once per rendered frame, after every system's update (the weather has written its outdoor values by then) */
+    _placeFrame() {
+      if (this._skyFollow && this.sky && this.camera) this.sky.position.copy(this.camera.position);
+      try { G.sys.places?._frame?.(); } catch (e) { /* the places system reports its own errors */ }
+      const P = this._indoor;
+      if (!P) return;
+      const now = performance.now(), dt = Math.min(0.1, Math.max(0, (now - (this._indoorT || now)) / 1000));
+      this._indoorT = now;
+      const goal = this._indoorGoal;
+      if (this.indoor !== goal) { this.indoor += (goal - this.indoor) * (1 - Math.exp(-dt / 0.16)); if (Math.abs(goal - this.indoor) < 0.005) this.indoor = goal; }
+      const k = clamp(fin(this.indoor, goal), 0, 1);
+      if (k <= 0 && goal === 0) { this._indoorEnd(); return; }
+      const nf = clamp(fin(G.world?.nightFactor, 0), 0, 1), mix = THREE.MathUtils.lerp;
+      const sun = this.sun, hemi = this.hemi, scene = this.scene;
+      if (sun) {
+        sun.color.lerp(_sunCol.copy(P.sun.color).lerp(P.moon.color, nf), k);
+        sun.intensity = mix(fin(sun.intensity, 0), mix(P.sun.intensity, P.moon.intensity, nf), k);
+        if (sun.shadow && 'intensity' in sun.shadow) sun.shadow.intensity = mix(fin(sun.shadow.intensity, 1), 1, k);
+        if (k > 0.5) {
+          sun.position.copy(P.center).addScaledVector(P.dir, P.dist);
+          sun.target.position.copy(P.center); sun.target.updateMatrixWorld();
+        }
+      }
+      if (hemi) {
+        hemi.color.lerp(_sunCol.copy(P.hemi.sky).lerp(P.hemiNight.sky, nf), k);
+        hemi.groundColor.lerp(_sunCol.copy(P.hemi.ground).lerp(P.hemiNight.ground, nf), k);
+        hemi.intensity = mix(fin(hemi.intensity, 0.6), mix(P.hemi.intensity, P.hemiNight.intensity, nf), k);
+      }
+      if (this.fill) this.fill.intensity = mix(fin(this.fill.intensity, 0.2), P.fill, k);
+      if (scene) {
+        if (scene.background && scene.background.isColor) scene.background.lerp(_sunCol.copy(P.background).lerp(P.backgroundNight, nf), k);
+        const fog = scene.fog;
+        if (fog) { fog.color.lerp(P.fogColor, k); if (fog.isFogExp2) fog.density = mix(fin(fog.density, 0.0028), P.fogDensity, k); }
+        scene.environmentIntensity = mix(this.envIntensity ?? 0.5, P.envIntensity, k);
+      }
+      _indoorGrade.exposure = 1 + (mix(P.exposure, P.exposureNight, nf) - 1) * k;
+      _indoorGrade.warmth = (P.warmth + 0.22 * nf) * k;   // lamp light at night: the weather's cool night grade stays outside
+      _indoorGrade.saturation = 1 + 0.12 * nf * k;
+      this.grade(_indoorGrade, 'interior');
+      // the room's environment: at once after entering, again when day turned to night (at most every 2 s)
+      if (P.env && k > 0.5 && (this._indoorEnvDirty || Math.abs(nf - this._indoorBakeNf) > 0.12) && (this._indoorBakeNf < 0 || now - (this._indoorBakeAt || 0) > 2000)) {
+        this._indoorBakeAt = now;
+        try { this._indoorBake(); } catch (e) { this._indoorEnvDirty = false; G.log.warn('ENGINE', 'indoor environment bake failed', e?.message || e); }
+      }
+    },
+    // ============================================================ [places-kit] end
+
     add(o) { this.scene.add(o); return o; },
     remove(o) { this.scene.remove(o); },
     PRESETS,

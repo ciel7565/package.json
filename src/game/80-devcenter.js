@@ -231,6 +231,9 @@
       F('15-buildings.js', 'buildings', '체험관 본관·한옥·초가·정자·정문·매점 건물'),
       F('16-props.js', 'buildings', '장독대·밭·안내판·키오스크·석등·벤치·전시 소품'),
       F('17-manjangdae.js', 'terrain', '시작점 정선 만장대: 전망대·팔각정·돌계단 길·첫 입장 인트로 시네마틱·망원경 투어·걷기 안내 지점(walkSpot)'),
+      F('18-places.js', 'buildings', '장소(places): 집 안·단지에 들어가고 나오기 — 문 상호작용·경계/바닥/구역 교체·조명·나가기 칩·저장은 문 앞 자리 (§16.4)'),
+      F('19-hanok-kit.js', 'buildings', '한옥 부품 상자(G.hanok): 기단·기둥·보·서까래 뼈대·벽·마루·장판·창살 창호·문·가구·소품·불/김/등잔 효과·실내 조명 (§16.5)'),
+      F('27-interiors-a.js', 'buildings', '집 안 ①: 대청마루(PL_DAECHEONG) — 한옥 뼈대·우물마루·들어열개·창살 도감'),
       F('20-avatar.js', 'player', '3등신 아바타 리그·애니메이션·꾸미기 옵션·아이 모습 6종(presets)'),
       F('21-player.js', 'player', '플레이어 이동·점프·충돌·순간이동·앉기·길 찾기 걷기(walkTo·금빛 발자국)·위치 저장'),
       F('22-camera.js', 'player', '3인칭 카메라(쉬운 모드: 부드러운 카메라)·시네마틱·대화/사진 모드'),
@@ -265,6 +268,7 @@
       F('02-responsive.css', 'core', '화면 크기별 반응형 규칙(노트북·태블릿·모바일)'),
       F('08-easy.css', 'core', '쉬운 모드 화면 부품(큰 버튼·그림 고르기·보호자 확인·다음 할 일 카드)'),
       F('17-manjangdae.css', 'terrain', '만장대 인트로(레터박스·건너뛰기·2D 제목)·망원경 화면·전망 안내'),
+      F('18-places.css', 'buildings', '집 안 표시 칩(📍 장소 · 🚪 밖으로)·전시 그림 카드'),
       F('23-interaction.css', 'player', '상호작용 프롬프트·도착 표식'),
       F('25-npc.css', 'npc', '대화창·NPC 이름표'),
       F('30-inventory.css', 'progression', '가방·상점 화면'),
@@ -427,7 +431,7 @@
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
-  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
+  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -1430,6 +1434,9 @@
     { id: 'settings-kid', emoji: '🔊', label: '설정 (아이용)', fn: () => fnOf(G.app, 'openKidSettings', 'openSettings') },
     { id: 'settings', emoji: '⚙️', label: '어른 설정 (보호자 확인)', gate: true, fn: () => fnOf(G.app, 'openAdultSettings') || (typeof G.app?.openSettings === 'function' ? () => G.app.openSettings({ adult: true }) : null) },
     { id: 'help', emoji: '❔', label: '도움말', fn: () => fnOf(G.app, 'openHelp') },
+    // [places-kit] 집 구경 (§16.4): the picture menu of rooms, and the HUD inside a room (the 📍 · 🚪 밖으로 chip)
+    { id: 'place-pick', emoji: '🏠', label: '집 구경 (어느 집 갈까)', fn: () => (G.sys.places?.list?.().length ? () => { G.sys.places.pickTravel(); } : null) },
+    { id: 'place-inside', emoji: '🚪', label: '집 안 (나가기 버튼)', hud: true, fn: () => { const p = G.sys.places?.list?.()[0]; return p ? () => G.sys.places.enter(p.id, { fade: false }) : null; }, scope: () => document.getElementById('place-chip'), close: () => { try { G.sys.places?.exit?.({ fade: false }); } catch (e) { /* ignore */ } } },
     { id: 'photo', emoji: '📸', label: '사진 찍기', fn: () => fnOf(G.sys.photo, 'enter'), scope: () => document.getElementById('photo-ui'), close: () => { if (G.sys.photo?.active) G.sys.photo.exit?.({ silent: true }); } },
   ];
   const Tour = {

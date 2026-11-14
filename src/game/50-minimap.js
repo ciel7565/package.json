@@ -1098,6 +1098,9 @@
       const scale = W / meters;
       const big = easy ? 1.45 : 1;      // bigger, chunkier markers for small fingers / eyes
       ctx.setTransform(1, 0, 0, 1, 0, 0);
+      // [places-kit] inside a room / district: its own plan instead of the valley map (CONTRACT §16.4)
+      const PLC = G.sys.places?.current ? G.sys.places.def(G.sys.places.current) : null;
+      if (PLC) { this._drawPlace(ctx, PLC, W, H, s, t, big, hasP ? pl : null); return; }
       blitBase(ctx, this._getBase(), cx, cz, scale, W, H);
       const X = (x) => (x - cx) * scale + W / 2, Y = (z) => (z - cz) * scale + H / 2;
       const inView = (px, py, m = 0) => px >= -m && px <= W + m && py >= -m && py <= H + m;
@@ -1153,6 +1156,58 @@
       }
     },
 
+    /**
+     * [places-kit] the minimap inside a place: the floor plan drawn by the place itself (def.minimap(ctx, map) in
+     * place-LOCAL metres through map.X / map.Y / map.S) or a plain room outline, the door back out, friends in the
+     * same place and the player. Rooms are shown whole; a big place (the district) follows the player.
+     */
+    _drawPlace(ctx, def, W, H, s, t, big, pl) {
+      const ox = def.origin.x, oz = def.origin.z, w = def.size.w, d = def.size.d;
+      const whole = Math.max(w, d) <= 70;
+      const scale = whole ? Math.min(W / (w + 3), H / (d + 3)) : W / ZOOMS[this._zoomIdx()];
+      const cx = whole || !pl ? 0 : pl.position.x - ox, cz = whole || !pl ? 0 : pl.position.z - oz;
+      const X = (lx) => (lx - cx) * scale + W / 2, Y = (lz) => (lz - cz) * scale + H / 2;
+      ctx.fillStyle = def.indoor ? '#2b221a' : '#7d9a62';
+      ctx.fillRect(0, 0, W, H);
+      const map = { X, Y, S: scale, W, H, dpr: s, t, w, d, easy: easyOn() };
+      let drawn = false;
+      if (def.minimap) {
+        ctx.save();
+        try { def.minimap(ctx, map); drawn = true; } catch (e) { if (!def._mmWarn) { def._mmWarn = true; G.log.warn('UI', `minimap plan of ${def.id} failed`, e?.message || e); } }
+        ctx.restore();
+      }
+      if (!drawn) {
+        ctx.fillStyle = def.indoor ? '#c9a878' : '#a8c088';
+        ctx.fillRect(X(-w / 2), Y(-d / 2), w * scale, d * scale);
+        ctx.lineWidth = 3 * s; ctx.strokeStyle = '#4a3423';
+        ctx.strokeRect(X(-w / 2), Y(-d / 2), w * scale, d * scale);
+      }
+      const nf = G.world.nightFactor || 0;
+      if (nf > 0.02) { ctx.fillStyle = `rgba(8,16,40,${nf * 0.22})`; ctx.fillRect(0, 0, W, H); }
+      // the door back out: a gold ring that breathes slowly + the door picture
+      const ex = G.sys.places.exitPoint?.();
+      if (ex) {
+        const px = X(ex.x - ox), py = Y(ex.z - oz), r = 9.5 * s * big;
+        const pulse = G.settings?.reduceMotion ? 0.5 : 0.5 + 0.5 * Math.sin(t * 2.2);
+        ctx.beginPath(); ctx.arc(px, py, r + 3 * s * pulse, 0, TAU); ctx.fillStyle = `rgba(255,210,63,${0.28 + 0.2 * pulse})`; ctx.fill();
+        ctx.beginPath(); ctx.arc(px, py, r, 0, TAU); ctx.fillStyle = '#fff6dc'; ctx.fill();
+        ctx.lineWidth = 2 * s; ctx.strokeStyle = '#b9882a'; ctx.stroke();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `${Math.round(12 * s * big)}px ${EMOJI_FONT}`; ctx.fillStyle = '#000';
+        ctx.fillText('🚪', px, py + 1 * s);
+      }
+      // friends in this place
+      eachOther((x, z) => {
+        if (Math.abs(x - ox) > w / 2 + 3 || Math.abs(z - oz) > d / 2 + 3) return;
+        drawOther(ctx, X(x - ox), Y(z - oz), s * (big > 1 ? 1.15 : 1));
+      });
+      if (pl) {
+        const px = X(pl.position.x - ox), py = Y(pl.position.z - oz);
+        const b = G.sys.camera?.getMoveBasis?.();
+        if (b) drawViewCone(ctx, px, py, b.forward.x, b.forward.z, s * big);
+        drawPlayerArrow(ctx, px, py, Number.isFinite(pl.rotY) ? pl.rotY : 0, s * big);
+      }
+    },
+
     /** easy minimap: round picture badges at the zone centres (the current zone gets a soft gold halo) */
     _drawZoneBadges(ctx, X, Y, inView, s, here) {
       const R = 12.5 * s;
@@ -1179,7 +1234,7 @@
     _easyTap(ev) {
       const c = this._canvas;
       const pl = G.sys.player;
-      if (!c || !this._W || !pl?.position) { this.openPictureTravel(); return; }
+      if (!c || !this._W || !pl?.position || G.sys.places?.current) { this.openPictureTravel(); return; }   // [places-kit] inside: the picture menu
       const r = c.getBoundingClientRect();
       if (!(r.width > 0)) { this.openPictureTravel(); return; }
       const dpr = this._W / r.width;
@@ -1627,7 +1682,9 @@
       }
       const pl = G.sys.player;
       if (pl?.position && G.state) {
-        const px = X(pl.position.x), py = Y(pl.position.z);
+        // [places-kit] inside a room the valley map shows the player at that room's door
+        const at = G.sys.places?.saveSpot?.() || pl.position;
+        const px = X(at.x), py = Y(at.z);
         if (inView(px, py, 12)) {
           const b = G.sys.camera?.getMoveBasis?.();
           if (b) drawViewCone(ctx, px, py, b.forward.x, b.forward.z, s * 1.1);
@@ -1699,6 +1756,10 @@
           say: isHere ? `${name}. 지금 여기 있어요.` : `${name}. ${ZONE_SAY[z.id] || ''}${isGoal ? '. 금빛 별이 있어요!' : ''}`,
         });
       });
+      // [places-kit] 🏠 집 구경: the rooms and districts one can walk into (their own picture page, fed by places.list())
+      let homes = 0;
+      try { homes = (G.sys.places?.list?.() || []).length; } catch (e) { homes = 0; }
+      if (homes) items.push({ id: '@homes', emoji: '🏠', label: '집 구경', color: '#e8c58a', say: '집 안으로 들어가 구경해요.' });
       // ✨ more places (points of interest) on a second page
       const pois = (G.data.pois || []).filter((p) => p && p.id && Number.isFinite(p.x) && Number.isFinite(p.z));
       if (pois.length) items.push({ id: '@more', emoji: '✨', label: '더 보기', color: '#b48bff', say: '다른 곳도 더 볼까요?' });
@@ -1718,6 +1779,7 @@
         }
       } finally { this._pickOpen = false; }
       if (!id || id === '@more' || id === '@back' || !G.state) return null; // (a logout during the menu ends the trip too)
+      if (id === '@homes') { try { return await G.sys.places.pickTravel(); } catch (e) { G.log.warn('UI', 'place menu failed', e); return null; } }   // [places-kit]
       if (id === '@goal' && goal) {
         G.easy.goTo?.({ x: goal.x, z: goal.z }, { label: '' });
         return id;
@@ -1789,6 +1851,8 @@
         if (easy) kidToast('이야기가 끝나면 갈 수 있어요.', '💬'); else G.ui.toast('대화를 마친 뒤에 이동해 주세요.', { type: 'info' });
         return false;
       }
+      // [places-kit] a room / district id: its own door flow
+      if (typeof id === 'string' && G.sys.places?.def?.(id)) return !!(await G.sys.places.travel(id));
       let a = null, name = '', zoneId = null;
       if (id && typeof id === 'object') {
         const x = Number(id.x), z = Number(id.z);
@@ -1800,10 +1864,14 @@
         name = zn ? String((easy && zn.short) || zn.name) : (G.data.pois || []).find((p) => p.id === id)?.name || G.data.npcs?.[id]?.name || '';
       }
       if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) { G.log.warn('UI', 'travelTo: unknown target', id); return false; }
-      const b = G.world.bounds;
-      a.x = clamp(a.x, b.minX + 1, b.maxX - 1); a.z = clamp(a.z, b.minZ + 1, b.maxZ - 1);
-      const spot = safeSpot(a.x, a.z);
-      if (spot) { a.x = spot.x; a.z = spot.z; }
+      const settle = () => {
+        const b = G.world.bounds;
+        a.x = clamp(a.x, b.minX + 1, b.maxX - 1); a.z = clamp(a.z, b.minZ + 1, b.maxZ - 1);
+        const spot = safeSpot(a.x, a.z);
+        if (spot) { a.x = spot.x; a.z = spot.z; }
+      };
+      // [places-kit] a trip that starts inside a room is measured against the valley (the teleport leaves the room)
+      if (G.sys.places?.current && typeof G.sys.places.outside === 'function') G.sys.places.outside(settle); else settle();
       if (G.sys.photo?.active) G.sys.photo.exit?.();
       // whatever screen sent us here (map, picture menu, mission card, bag...) closes: we are leaving
       G.ui.modal.closeAll();

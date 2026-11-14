@@ -964,6 +964,10 @@
       if (E.atmos) {
         E.atmos.sunGlow = (1 - grey) * smooth(-2, 3, e) * (1 - wFog * 0.6);
         E.atmos.rays = (1 - smooth(0.25, 0.75, grey)) * (0.7 + 0.8 * gold) * smooth(-1, 3, e);
+        // [places-kit] inside a room (engine.indoor 0..1, CONTRACT §16.4) the engine blends the room's light over the
+        // values above; the outdoor-only terms fade here: no sun glow or god rays through a wall
+        const inK = 1 - clamp(Number(E.indoor) || 0, 0, 1);
+        if (inK < 1) { E.atmos.sunGlow *= inK; E.atmos.rays *= inK; }
       }
       // ---- rainbow: opposite the sun when it shines again after rain (low sun, wet air)
       const rbGoal = smooth(0.18, 0.55, this.wetness) * (1 - smooth(0.04, 0.2, this.mix.RAIN || 0)) * smooth(2, 9, e) * (1 - smooth(34, 44, e))
@@ -1061,7 +1065,7 @@
           if (this._ltT <= 0) { this._lt = { t: 0, amp: 0.3 + Math.random() * 0.25 }; this._ltT = 24 + Math.random() * 32; }
         } else if (this._ltT < 8) this._ltT = 8 + Math.random() * 10;
       }
-      const v = this.lightning;
+      const v = this.lightning * (1 - clamp(Number(E?.indoor) || 0, 0, 1));   // [places-kit] no flash inside a room
       if (typeof E?.grade === 'function') {
         if (v > 0.001) { _flashArg.flash = v * 0.5; _flashArg.exposure = 1 + v * 0.12; E.grade(_flashArg, 'lightning'); this._ltLayer = true; }
         else if (this._ltLayer) { E.grade(null, 'lightning'); this._ltLayer = false; }
@@ -1107,7 +1111,7 @@
     },
 
     _updatePrecip(dt, t, dayK, cam) {
-      const rainI = this.mix.RAIN || 0, snowI = this.mix.SNOW || 0;
+      let rainI = this.mix.RAIN || 0, snowI = this.mix.SNOW || 0;
       this.precipitation.rain = rainI; this.precipitation.snow = snowI;
       // ground / stream wetness: soaks up in ~40 s of rain, dries over ~4 min (river swells and runs faster after rain)
       const wetGoal = rainI;
@@ -1131,6 +1135,8 @@
         }
       }
       if (!cam) return;
+      // [places-kit] under a roof it neither rains nor snows (the sound stays, muffled — 61-audio)
+      if ((Number(G.sys.engine?.indoor) || 0) > 0.5) { rainI = 0; snowI = 0; }
       // camera-forward biased centre so most drops are in view
       _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion); _fwd.y = 0;
       if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1); else _fwd.normalize();

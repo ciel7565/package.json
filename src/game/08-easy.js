@@ -825,7 +825,7 @@
     c.lbl?.remove();
   }
   // ---- collision-aware placement (NEW-4): the hand and its label keep clear of the fixed HUD boxes
-  const HAND_OBST = '#hud-left-menu > *, #hud-profile, #easy-next, #minimap-panel, #easy-where, #easy-chat-btn, #bottom-bar > *, #mobile-controls .joystick, #mobile-controls button, #dpad button, #chat-panel, #quest-panel, #interact-prompt, .coach-layer .coach';
+  const HAND_OBST = '#place-chip, #hud-left-menu > *, #hud-profile, #easy-next, #minimap-panel, #easy-where, #easy-chat-btn, #bottom-bar > *, #mobile-controls .joystick, #mobile-controls button, #dpad button, #chat-panel, #quest-panel, #interact-prompt, .coach-layer .coach';
   /** tip position on the target box + rotation (0 = 👆 pointing up; the hand's body extends away from the tip) */
   const HAND_DIRS = [
     { f: (r) => [r.cx, r.bottom + 2], rot: 0 },            // 0 below, pointing up
@@ -1246,6 +1246,13 @@
         const label = String(opts.label ?? target.label ?? '').slice(0, 20);
         const person = !!opts.person; // walking to a friend: "친구에게 같이 가요!" / "친구 옆에 왔어요!" (places: 로 / 에)
         const dest = { x: target.x, z: target.z };
+        // [places-kit] inside a room / district and the goal is elsewhere: leave through the door first (one fade),
+        // then go on exactly as from outside
+        const PL = G.sys.places;
+        if (PL?.current && typeof PL.contains === 'function' && !PL.contains(dest.x, dest.z)) {
+          PL.exit().then(() => goTo(target, opts)).then(resolve, () => resolve(false));
+          return;
+        }
         const zoneFor = () => { try { const z = G.world?.zoneAt?.(dest.x, dest.z); return z && (G.data.zones || []).some((x) => x.id === z.id) ? z : null; } catch (e) { return null; } };
         const travelFirst = async () => {
           const z = zoneFor();
@@ -1310,8 +1317,13 @@
     const places = {};
     if (L.rtGarden?.approach) { places['@rtfarm'] = { x: L.rtGarden.approach.x, z: L.rtGarden.approach.z, label: '실시간 텃밭' }; items.push({ id: '@rtfarm', emoji: '⏰', label: '실시간 텃밭', color: '#33d1c1', say: '진짜 시간으로 자라는 텃밭이에요.' }); }
     if (L.gotganDoor) { places['@gotgan'] = { x: L.gotganDoor.x, z: L.gotganDoor.z, label: '곳간' }; items.push({ id: '@gotgan', emoji: '🏚️', label: '곳간', color: '#d8b672', say: '거둔 작물을 넣어 두는 곳간이에요.' }); }
+    // [places-kit] 🏠 집 구경: rooms and districts one can walk into (their own picture page, from places.list())
+    let homes = 0;
+    try { homes = (G.sys.places?.list?.() || []).length; } catch (e) { homes = 0; }
+    if (homes) items.push({ id: '@homes', emoji: '🏠', label: '집 구경', color: '#e8c58a', say: '집 안으로 들어가 구경해요.' });
     const id = await pick({ id: 'easy-where', title: '어디 갈까?', emoji: '🗺️', say: '어디로 갈까요? 그림을 눌러요.', items, columns: 3 });
     if (!id) return null;
+    if (id === '@homes') { try { return await G.sys.places.pickTravel(); } catch (e) { G.log.warn('UI', 'place menu failed', e); return null; } }
     if (places[id]) { await goTo(places[id], { label: places[id].label, stopDistance: 1 }); return id; }
     if (id === here) { say('지금 여기에 있어요!', { force: true }); return id; }
     await goTo(id);
@@ -1644,7 +1656,8 @@
     const t = nowMs();
     if (t - Hud.stepAt >= 450) {
       Hud.stepAt = t;
-      const st = nextStep();
+      let st = nextStep();
+      try { st = G.sys.places?.stepHint?.(st) || st; } catch (e) { /* [places-kit] inside a room: the card shows the door while the goal is elsewhere */ }
       Hud.step = st;
       const key = `${st.key}|${Walk.cur ? 'w' : ''}`;
       if (key !== Hud.key) { Hud.key = key; renderStep(st); }

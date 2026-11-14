@@ -1,0 +1,51 @@
+/* =============================================================================
+   18-places.css — inside a room / district (G.sys.places, CONTRACT §16.4)
+   .place-chip          the HUD chip "📍 <place> · 🚪 밖으로" in #hud-top-center: always there while inside, so a
+                        child can never be stuck in a room (the exit button is ≥ 56 px in easy mode)
+   .place-exhibit-modal the small picture card of an exhibit (used while 49-exhibits.js is not in the build)
+   ============================================================================= */
+.place-chip {
+  display: flex; align-items: center; gap: .6rem; max-width: 100%; padding: .3rem .35rem .3rem .8rem;
+  border-radius: 999px; border: 1px solid rgba(232, 197, 138, .55);
+  background: linear-gradient(180deg, rgba(58, 42, 28, .92), rgba(30, 22, 15, .92));
+  box-shadow: var(--shadow); color: #fff3df;
+}
+.place-chip[hidden] { display: none; }
+.place-chip .pc-here { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; font-weight: 700; }
+.place-chip .pc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: max(15px, .95rem); }
+.place-chip .pc-exit {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+  min-height: var(--tap, 40px); min-width: var(--tap, 40px); padding: 0 .95rem 0 .75rem; border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, .7); background: linear-gradient(180deg, #ffe7a8, #f0b44a); color: #2b1d02;
+  font-weight: 900; font-size: max(15px, .98rem); white-space: nowrap; cursor: pointer; touch-action: manipulation;
+  box-shadow: 0 3px 0 rgba(140, 95, 0, .55), 0 8px 16px rgba(0, 0, 0, .3);
+  transition: transform .12s var(--ease-pop, ease-out);
+}
+.place-chip .pc-exit .emoji { font-size: 1.25rem; }
+.place-chip .pc-exit:hover { transform: translateY(-1px); }
+.place-chip .pc-exit:active { transform: translateY(2px) scale(.97); }
+.place-chip .pc-exit:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.place-chip .pc-exit:disabled { opacity: .6; cursor: default; }
+.hud.hud-enter .place-chip { animation: hudFromTop var(--dur-4) var(--ease-out) 240ms both; }
+
+/* 쉬운 모드: a big, round door button (≥ 56 px), bigger words */
+body.easy .place-chip { padding: .35rem .4rem .35rem 1rem; gap: .7rem; border-width: 2px; }
+body.easy .place-chip .pc-name { font-size: max(17px, 1.12rem); font-weight: 800; }
+body.easy .place-chip .pc-exit { min-height: 56px; min-width: 56px; padding: 0 1.15rem 0 .9rem; font-size: max(17px, 1.12rem); }
+body.easy .place-chip .pc-exit .emoji { font-size: 1.6rem; }
+
+/* narrow screens: the chip keeps one line; the place name gives way first */
+@media (max-width: 560px) {
+  .place-chip { align-self: stretch; justify-content: space-between; }
+  body.easy .place-chip .pc-exit { padding: 0 .9rem 0 .7rem; }
+}
+@media (max-height: 520px) {
+  body.easy .place-chip { padding: .2rem .3rem .2rem .8rem; }
+}
+
+/* ------------------------------------------------------------------ exhibit card (fallback without 49-exhibits.js) */
+.place-exhibit-modal .pex-emoji { font-size: 4rem; line-height: 1; text-align: center; margin: .2rem 0 .6rem; }
+.place-exhibit-modal .pex-kid { font-size: max(18px, 1.25rem); font-weight: 800; line-height: 1.45; text-align: center; word-break: keep-all; margin: 0 0 .8rem; }
+.place-exhibit-modal .pex-detail { border-top: 1px solid var(--line); padding-top: .6rem; color: var(--text-dim); }
+.place-exhibit-modal .pex-detail summary { cursor: pointer; font-weight: 700; min-height: var(--tap, 40px); display: flex; align-items: center; }
+.place-exhibit-modal .pex-detail p { margin: .4rem 0 0; line-height: 1.6; word-break: keep-all; }

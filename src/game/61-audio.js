@@ -181,6 +181,10 @@
       case 'sand':
         end = noise(S, { kind: 'white', ft: 'highpass', f: 1600 * pf, q: 0.6, t, a: 0.012, d: 0.12, g: 0.05 * k, lp: 6500, pan });
         break;
+      case 'mat': case 'paper':   // [places-kit] 장판 / 멍석 inside a room: a soft, dry pad
+        end = noise(S, { kind: 'brown', ft: 'lowpass', f: 420 * pf, q: 0.6, t, a: 0.004, d: 0.07, g: 0.2 * k, pan });
+        noise(S, { kind: 'pink', ft: 'bandpass', f: 1500 * pf, q: 0.8, t: t + 0.006, a: 0.004, d: 0.03, g: 0.018 * k, pan });
+        break;
       case 'water':
         end = noise(S, { kind: 'white', ft: 'bandpass', f: 1150 * pf, f2: 650, q: 1.1, t, a: 0.006, d: 0.15, g: 0.13 * k, pan });
         tone(S, { type: 'sine', f: rand(380, 520), f2: rand(800, 1000), glide: 0.04, t: t + 0.03, a: 0.003, d: 0.05, g: 0.035 * k, pan });
@@ -913,6 +917,12 @@
       A.rainLowF = filter(ac, 'lowpass', 240, 0.6);
       A.rainLowG = gainNode(ac, 0.0001);
       A.rainLow.connect(A.rainLowF); A.rainLowF.connect(A.rainLowG); A.rainLowG.connect(n.amb);
+      // [places-kit] room tone: the hush of a timber room (only while G.sys.places.indoor)
+      A.roomSrc = loop(B.brown, 0.55);
+      A.roomF = filter(ac, 'lowpass', 210, 0.5);
+      A.roomG = gainNode(ac, 0.0001);
+      A.roomSrc.connect(A.roomF); A.roomF.connect(A.roomG); A.roomG.connect(n.amb);
+      A.indoor = 0; A.nextCreak = ac.currentTime + rand(8, 20);
       // scheduling state (ctx time)
       const t = ac.currentTime;
       A.nextBird = t + rand(1, 3); A.nextGust = t + rand(5, 10); A.nextBabble = t; A.nextBubble = t + 1; A.nextDrip = t + 1;
@@ -944,8 +954,14 @@
         A.night = night; A.day = 1 - night; A.rain = rain; A.snow = snow; A.weather = wid;
         A.hour = Number(W?.hour ?? 12);
         // wind
+        // [places-kit] under a roof: wind and rain come through the walls (quieter, duller), birds are far away, the
+        // room has its own hush
+        const inside = G.sys.places?.indoor ? 1 : 0;
+        A.indoor = inside;
         const windBase = { CLEAR: 0.06, CLOUDY: 0.09, RAIN: 0.1, FOG: 0.045, SNOW: 0.11 }[wid] ?? 0.06;
-        A.windBase = windBase * (1 + night * 0.15);
+        A.windBase = windBase * (1 + night * 0.15) * (inside ? 0.3 : 1);
+        if (A.roomG) A.roomG.gain.setTargetAtTime(inside ? 0.05 : 0.0001, now, 0.6);
+        if (A.rainLp) A.rainLp.frequency.setTargetAtTime(inside ? 1100 : 7200, now, 0.5);
         if (!A.gusting) A.windG.gain.setTargetAtTime(A.windBase, now, 1.5);
         // water by distance (river, ponds) + waterfall
         let dw = Infinity;
@@ -984,7 +1000,7 @@
         }
         A.fallG.gain.setTargetAtTime(0.28 * Math.pow(fall, 1.6), now, 0.4);
         // rain bed
-        A.rainG.gain.setTargetAtTime(0.2 * rain, now, 1.2);
+        A.rainG.gain.setTargetAtTime(0.2 * rain * (inside ? 0.55 : 1), now, inside ? 0.5 : 1.2);
         A.rainLowG.gain.setTargetAtTime(0.32 * rain * rain, now, 1.5);
       }
       // ---- events scheduled on the audio clock
@@ -1020,8 +1036,14 @@
         A.nextBird = now + rand(1.6, 5.5) / Math.max(0.3, A.day);
         if (A.day > 0.45 && !quiet) {
           const kind = wpick([['chirps', 4], ['twonote', 3], ['warble', 2], ['trill', 1.5], ['cuckoo', A.hour > 6 && A.hour < 11 ? 1.2 : 0.5]]);
-          AMB.bird(S, now + 0.05, kind, rand(0.022, 0.05) * A.day, rand(-0.85, 0.85));
+          AMB.bird(S, now + 0.05, kind, rand(0.022, 0.05) * A.day * (A.indoor ? 0.28 : 1), rand(-0.85, 0.85));
         }
+      }
+      // [places-kit] inside a timber room: now and then a beam settles (one soft, low creak)
+      if (A.indoor && now >= A.nextCreak) {
+        A.nextCreak = now + rand(14, 34);
+        const f = rand(150, 230);
+        tone(S, { type: 'triangle', f, f2: f * rand(0.82, 0.93), glide: 0.12, t: now + 0.05, a: 0.02, d: 0.22, g: 0.012, pan: rand(-0.7, 0.7) });
       }
       // crickets at night
       if (A.night > 0.5 && A.rain < 0.5) {
@@ -1045,7 +1067,7 @@
         if (A.weather === 'CLEAR' && A.day > 0.8 && A.hour >= 10.5 && A.hour <= 17) AMB.cicada(S, now + 0.1, rand(5, 9), 0.012);
       }
       // rain drips
-      if (A.rain > 0.15 && now >= A.nextDrip) {
+      if (A.rain > 0.15 && !A.indoor && now >= A.nextDrip) {
         A.nextDrip = now + rand(0.04, 0.22) / A.rain;
         tone(S, { type: 'sine', f: rand(1800, 3900), f2: rand(1200, 2000), glide: 0.03, t: now + 0.02, a: 0.001, d: 0.035, g: 0.012 * A.rain, pan: rand(-0.8, 0.8) });
       }

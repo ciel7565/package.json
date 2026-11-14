@@ -703,8 +703,11 @@
     _writeState() {
       const s = G.state?.player;
       if (!s || !this._ready) return;
-      const p = this.position;
+      let p = this.position;
       if (!fin(p.x) || !fin(p.y) || !fin(p.z) || !fin(this.rotY)) return;
+      // [places-kit] inside a room / district the save keeps the spot outside its door (a load always resumes outside)
+      const out = G.sys.places?.saveSpot?.();
+      if (out && fin(out.x) && fin(out.z)) { p = out; s.x = Math.round(p.x * 100) / 100; s.y = Math.round((p.y || 0) * 100) / 100; s.z = Math.round(p.z * 100) / 100; s.rotY = Math.round((fin(out.rotY) ? out.rotY : this.rotY) * 1000) / 1000; return; }
       s.x = Math.round(p.x * 100) / 100;
       s.y = Math.round(p.y * 100) / 100;
       s.z = Math.round(p.z * 100) / 100;
@@ -729,6 +732,8 @@
       if (!fin(x) || !fin(z)) { G.log.warn('PLAYER', 'teleport ignored: non-finite target', x, z); return; }
       const keep = opts._keepWalk || null;
       const run = () => {
+        // [places-kit] a hop out of a room / district puts the valley back first (bounds, ground) — same fade
+        try { G.sys.places?._beforeTeleport?.(x, z); } catch (e) { G.log.warn('PLAYER', 'places hook failed', e); }
         const f = this._findFree(x, z, G.world.surfaceHeight(x, z)) || { x, z };
         if (!keep || this._walk !== keep) this.cancelWalk('teleport');
         this.sitting = null; this._slide = null; this._faceT = null;
@@ -748,7 +753,7 @@
         G.bus.emit('player:moved', { x: this.position.x, z: this.position.z });
         G.log.info('PLAYER', `teleport -> (${f.x.toFixed(1)}, ${f.z.toFixed(1)})`);
       };
-      G.sfx('teleport');
+      if (!opts.silent) G.sfx('teleport');   // (a door has its own sound)
       if (opts.fade !== false && G.ui?.fadeThrough) await G.ui.fadeThrough(run, 260);
       else run();
       return this.position;
@@ -763,6 +768,12 @@
       if (!target || !fin(target.x) || !fin(target.z)) return false;
       opts = opts && typeof opts === 'object' ? opts : {};
       if (!this._ready) return false;
+      // [places-kit] inside a room / district a walk to somewhere else leaves through the door first (one fade)
+      const PL = G.sys.places;
+      if (PL?.current && !PL.contains(target.x, target.z) && typeof PL._walkOutside === 'function') {
+        if (this._walk) this.cancelWalk('replaced');
+        return PL._walkOutside({ x: target.x, z: target.z }, opts);
+      }
       if (this.sitting) this.standUp();
       if (this.rig.actionFullBody) this.rig.stopAction();
       if (this._walk) this.cancelWalk('replaced');
@@ -772,7 +783,7 @@
       const d = Math.hypot(tx - p.x, tz - p.z);
       const stop = Math.max(0.15, fin(opts.stopDistance) ? opts.stopDistance : 1.2);
       const w = {
-        id: ++this._walkSeq, x: tx, z: tz, stop,
+        id: opts._id && opts._id === this._walkSeq ? opts._id : ++this._walkSeq, x: tx, z: tz, stop,   // (_id: a walk that waited for a door)
         onArrive: typeof opts.onArrive === 'function' ? opts.onArrive : null,
         onFail: typeof opts.onFail === 'function' ? opts.onFail : null,
         run: opts.run ?? d > WALK * 2.5, label: String(opts.label || '').slice(0, 24),
@@ -924,7 +935,8 @@
     },
     /** is (x, z) inside the play area? = a complete route exists from the plaza (never beyond the slope ring / the river) */
     _playable(x, z, goalR = 1) {
-      const hub = G.data.layout?.plaza || G.data.layout?.plazaSpawn || { x: 0, z: 0 };
+      // [places-kit] inside a room / district the hub is its spawn point
+      const hub = G.sys.places?.hub?.() || G.data.layout?.plaza || G.data.layout?.plazaSpawn || { x: 0, z: 0 };
       try {
         const hy = G.world.heightAt(hub.x, hub.z);
         const r = planRoute(hub.x, hub.z, fin(hy) ? hy : 0, x, z, Math.max(0.6, goalR));
@@ -1173,7 +1185,7 @@
       const jumped = input ? input.consumeJump() : false;
       if (jumped && ctl) {
         if (this.sitting) this.standUp();
-        else if (!this.grounded && this._airJump && !this._doubleUsed && this._coyote <= 0 && !this._slide && !this._cinematic()) this._doubleJump();
+        else if (!this.grounded && this._airJump && !this._doubleUsed && this._coyote <= 0 && !this._slide && !this._cinematic() && !G.sys.places?.noDoubleJump?.()) this._doubleJump();   // [places-kit] none under a ceiling
         else this._jumpBuf = 0.15;
       }
       this._jumpBuf -= dt;
@@ -1281,7 +1293,7 @@
       if (!fin(this.rotY)) this.rotY = 0;
       // safety net (NaN / fell out of the world)
       if (!fin(p.x) || !fin(p.y) || !fin(p.z) || p.y < -40 || !fin(v.y)) {
-        const sp = G.data.layout?.spawn || { x: 0, z: 9 };
+        const sp = G.sys.places?.hub?.() || G.data.layout?.spawn || { x: 0, z: 9 };   // [places-kit] inside: the place spawn
         p.set(sp.x, W.surfaceHeight(sp.x, sp.z), sp.z); v.set(0, 0, 0); this.grounded = true;
         if (!fin(p.y)) p.y = 0;
         this._dropWalk();
