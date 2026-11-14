@@ -236,6 +236,7 @@
       F('18-places.js', 'buildings', '장소(places): 집 안·단지에 들어가고 나오기 — 문 상호작용·경계/바닥/구역 교체·조명·나가기 칩·저장은 문 앞 자리 (§16.4)'),
       F('19-hanok-kit.js', 'buildings', '한옥 부품 상자(G.hanok): 기단·기둥·보·서까래 뼈대·벽·마루·장판·창살 창호·문·가구·소품·불/김/등잔 효과·실내 조명 (§16.5)'),
       F('27-interiors-a.js', 'buildings', '집 안 ①: 대청마루(PL_DAECHEONG) — 한옥 뼈대·우물마루·들어열개·창살 도감'),
+      F('28-interiors-b.js', 'buildings', '집 안 ②: 안방(PL_ANBANG) — 온돌 장판·보료·병풍·장롱·반닫이·경대·다듬잇돌·화로 · 사랑방(PL_SARANG) — 서안·문갑·사방탁자·책장·책거리 병풍·족자·거문고·바둑판'), // [rooms-b]
       F('20-avatar.js', 'player', '3등신 아바타 리그·애니메이션·꾸미기 옵션·아이 모습 6종(presets)'),
       F('21-player.js', 'player', '플레이어 이동·점프·충돌·순간이동·앉기·길 찾기 걷기(walkTo·금빛 발자국)·위치 저장'),
       F('22-camera.js', 'player', '3인칭 카메라(쉬운 모드: 부드러운 카메라)·시네마틱·대화/사진 모드'),
@@ -436,6 +437,7 @@
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
+  DERIVED_STATS.push('placesSeen', 'exhibitsSeen', 'exhibitRooms', 'motionsSeen');   // [rooms-b] 집 구경 counters (03-state.js / 49-exhibits.js)
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
