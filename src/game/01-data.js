@@ -448,3 +448,223 @@ G.data.serverLimits = {
   maxExpGainPerSave: 20000,
   harvestSpeedTolerance: 0.5, // harvest allowed after growthTime * tolerance seconds since planting (water bonus etc.)
 };
+
+// [allot-client] ------------------------------------------------------------ 분양 (CONTRACT §16.8)
+// G.data.allot — words, colours and the ONE deterministic layout of the allotment district. Pure data + pure functions
+// (no DOM, no THREE, no Map / Set: tools/build.mjs and the tests evaluate this file in bare Node). The layout is shared
+// by the panel's map board (43-allot.js), the minimap and the 3D district (44-allot-district.js); the full contract of
+// layout() is written at the top of 43-allot.js. Prices never live here (only api/allot/plans.php tells them).
+G.data.allot = (function () {
+  const KIND_ORDER = ['jar', 'plot', 'store'];
+  const kinds = {
+    jar: { id: 'jar', name: '항아리', zoneWord: '장독대', emoji: '🏺', kidName: '내 항아리', color: '#8a5a3b', ground: '#cdbfa8',
+      steps: [{ k: 'dam', emoji: '🫙', label: '담그기', kid: '메주와 소금물을 항아리에 넣어요', at: 0 },
+        { k: 'gareugi', emoji: '🥄', label: '가르기', kid: '40~60일쯤 지나 간장과 된장을 나눠요', at: 50 },
+        { k: 'ik', emoji: '☀️', label: '익히기', kid: '햇볕과 바람에 천천히 익어요', at: 60 },
+        { k: 'get', emoji: '🎁', label: '받는 날', kid: '다 익은 장을 받아 가요', at: -1 }] },
+    plot: { id: 'plot', name: '밭', zoneWord: '텃밭', emoji: '🌱', kidName: '내 밭', color: '#6f8f3a', ground: '#b89a6e',
+      steps: [{ k: 'sow', emoji: '🌱', label: '심기', kid: '씨앗과 모종을 심어요', at: 0 },
+        { k: 'care', emoji: '💧', label: '가꾸기', kid: '물을 주고 풀을 뽑아요', at: 14 },
+        { k: 'grow', emoji: '🌿', label: '자라기', kid: '쑥쑥 자라요', at: 45 },
+        { k: 'get', emoji: '🧺', label: '거두기', kid: '다 자란 채소를 거둬요', at: -1 }] },
+    store: { id: 'store', name: '창고', zoneWord: '창고', emoji: '📦', kidName: '내 창고', color: '#7a6a55', ground: '#bfb39e',
+      steps: [{ k: 'keep', emoji: '📦', label: '맡기기', kid: '물건을 창고 칸에 넣어요', at: 0 },
+        { k: 'hold', emoji: '🔒', label: '보관', kid: '창고 칸이 잘 지켜 줘요', at: 1 },
+        { k: 'get', emoji: '🚪', label: '찾아가기', kid: '기간이 끝나면 찾아가요', at: -1 }] },
+  };
+  // map status characters of api/allot/map.php (+ 'm' = mine, drawn by the client). Okabe–Ito colours (safe for the
+  // common colour-vision differences) AND a different shape each, so colour is never the only sign.
+  const status = {
+    o: { key: 'open', label: '빈 자리', kid: '비어 있어요', color: '#009E73', shape: 'fill', emoji: '🟢' },
+    h: { key: 'held', label: '신청 중', kid: '누가 신청했어요', color: '#E69F00', shape: 'ring', emoji: '🟠' },
+    l: { key: 'leased', label: '분양됨', kid: '주인이 있어요', color: '#7d6e60', shape: 'small', emoji: '🟤' },
+    c: { key: 'closed', label: '쉬는 자리', kid: '지금은 쉬어요', color: '#b9b3aa', shape: 'cross', emoji: '⚪' },
+    m: { key: 'mine', label: '내 자리', kid: '내 자리예요', color: '#0072B2', shape: 'star', emoji: '🔵' },
+  };
+  const contract = {
+    pending: { label: '확인 기다리는 중', kid: '어른이 확인하고 있어요', emoji: '⏳', tone: 'wait' },
+    active: { label: '분양 중', kid: '내 자리예요', emoji: '✅', tone: 'ok' },
+    overdue: { label: '납부 확인이 필요해요', kid: '어른에게 알려 주세요', emoji: '🔔', tone: 'warn' },
+    ended: { label: '기간이 끝났어요', kid: '끝났어요', emoji: '🏁', tone: 'off' },
+    canceled: { label: '취소됐어요', kid: '취소했어요', emoji: '↩️', tone: 'off' },
+  };
+  const timeline = { applied: ['📝', '신청'], approved: ['✅', '확정'], paid: ['💳', '납부 확인'], due: ['📅', '다음 납부'], ends: ['🏁', '끝나는 날'], ended: ['🏁', '끝남'], canceled: ['↩️', '취소'] };
+  const notices = { applied: '📝', approved: '✅', rejected: '🙅', canceled: '↩️', hold_expired: '⌛', paid: '💳', due: '📅', ending: '🏁', overdue: '🔔', ended: '🏁',
+    renewed: '🔁', moved: '🚚', offer: '🎉', offer_expired: '⌛', cancel_requested: '✉️', info: '📢' };
+  const care = { care: '🧑‍🌾', water: '💧', clean: '🧽', check: '🔎', weather: '🌦️', event: '🎪', photo: '📷', notice: '📢' };
+  const periods = { once: '한 번', month: '한 달마다', year: '한 해마다' };
+  // easy mode names a unit with one of these (no typing); every one is ≤ 12 characters like the server's nameplate rule
+  const nameplates = [{ t: '우리 가족 장', e: '👨‍👩‍👧' }, { t: '할머니 손맛', e: '👵' }, { t: '새싹 농부', e: '🌱' }, { t: '햇살 가득', e: '☀️' },
+    { t: '꼬마 발효왕', e: '👑' }, { t: '사랑 가득', e: '💛' }];
+
+  // ------------------------------------------------------------------ the layout (metres; x east, z south, −z north)
+  // per kind: px / pz = unit pitch, bc / br = units per block (a raised stone platform, a ridged bed block, a locker
+  // section), gx / gz = path between blocks, uw / ud = the unit footprint, step = terrace rise per block row (jars)
+  const GRID = {
+    jar: { px: 1.3, pz: 1.3, bc: 10, br: 5, gx: 1.6, gz: 1.6, uw: 0.95, ud: 0.95, step: 0.35, plinth: 0.45 },
+    plot: { px: 1.5, pz: 2.0, bc: 10, br: 5, gx: 1.4, gz: 1.4, uw: 1.2, ud: 1.7, step: 0, plinth: 0.12 },
+    store: { px: 1.3, pz: 1.3, bc: 5, br: 2, gx: 0.8, gz: 2.4, uw: 1.2, ud: 1.15, step: 0, plinth: 0.1 },
+  };
+  const MARGIN = 2;          // stone wall + walk around every zone
+  const AVE = 6;             // avenues between zones and rows (≥ 4 m)
+  const MAX_ROW = 200;       // shelf packing: a row of zones is at most this wide
+  const PLAZA = { w: 44, d: 26 };
+  const pad4 = (n) => { const s = String(n); return s.length >= 4 ? s : '0000'.slice(s.length) + s; };
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const span = (n, p, b, g) => (n <= 0 ? 0 : n * p + (Math.ceil(n / b) - 1) * g);
+  const memo = { key: '', out: null };
+
+  function cleanZones(zones) {
+    const out = [];
+    const seen = {};
+    for (const z of Array.isArray(zones) ? zones : []) {
+      if (!z || typeof z !== 'object') continue;
+      const code = String(z.code || '').toUpperCase();
+      if (!/^[A-Z0-9]{1,12}$/.test(code) || seen[code]) continue;
+      seen[code] = 1;
+      const kind = KIND_ORDER.indexOf(z.kind) >= 0 ? z.kind : 'jar';
+      const cap = Math.max(0, Math.min(5000, Math.floor(Number(z.cap != null ? z.cap : z.capacity) || (typeof z.s === 'string' ? z.s.length : 0))));
+      const cols = Math.max(1, Math.min(200, Math.floor(Number(z.cols) || 20)));
+      out.push({ code, kind, name: String(z.name || code).slice(0, 40), cap, cols });
+    }
+    // deterministic order: kind (jar · plot · store), then the code
+    out.sort((a, b) => (KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)) || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+    return out;
+  }
+
+  function layout(zones) {
+    const list = cleanZones(zones);
+    const key = list.map((z) => `${z.code}:${z.kind}:${z.cap}:${z.cols}`).join('|');
+    if (memo.out && memo.key === key) return memo.out;
+    const Z = [];
+    // 1. zone rectangles (sizes from the grid), 2. shelf packing in rows going north from the plaza
+    for (const z of list) {
+      const g = GRID[z.kind];
+      const rows = Math.max(1, Math.ceil(z.cap / z.cols));
+      const w = MARGIN * 2 + span(Math.min(z.cols, Math.max(1, z.cap)), g.px, g.bc, g.gx);
+      const d = MARGIN * 2 + span(rows, g.pz, g.br, g.gz);
+      Z.push({ i: Z.length, code: z.code, kind: z.kind, name: z.name, cap: z.cap, cols: Math.min(z.cols, Math.max(1, z.cap)), rows, w: +w.toFixed(3), d: +d.toFixed(3), g, x0: 0, z0: 0, x1: 0, z1: 0, start: 0, blocks: [] });
+    }
+    const rowsOf = [];
+    let cur = null;
+    for (const z of Z) {
+      if (!cur || (cur.w + AVE + z.w > MAX_ROW && cur.zones.length)) { cur = { zones: [], w: -AVE, d: 0 }; rowsOf.push(cur); }
+      cur.zones.push(z);
+      cur.w += AVE + z.w;
+      cur.d = Math.max(cur.d, z.d);
+    }
+    const plaza = { x0: -PLAZA.w / 2, z0: -PLAZA.d / 2, x1: PLAZA.w / 2, z1: PLAZA.d / 2, cx: 0, cz: 0 };
+    const avenues = [];
+    let south = plaza.z0 - AVE;       // the south edge of the next row (rows grow towards −z)
+    let start = 0;
+    let wMax = PLAZA.w;
+    for (const r of rowsOf) {
+      let x = -r.w / 2;
+      for (const z of r.zones) {
+        z.x0 = +x.toFixed(3); z.x1 = +(x + z.w).toFixed(3);
+        z.z1 = +south.toFixed(3); z.z0 = +(south - z.d).toFixed(3);   // a short zone sits at the row's south edge
+        z.start = start; start += z.cap;
+        x += z.w + AVE;
+      }
+      wMax = Math.max(wMax, r.w);
+      avenues.push({ x0: r3(-r.w / 2 - AVE), z0: r3(south), x1: r3(r.w / 2 + AVE), z1: r3(south + AVE), kind: 'row' });
+      south -= r.d + AVE;
+    }
+    // the last avenue north of the top row, and the two side lanes from the plaza to it (zones never overlap them)
+    const north = south + AVE;
+    avenues.push({ x0: r3(-wMax / 2 - AVE), z0: r3(north - AVE), x1: r3(wMax / 2 + AVE), z1: r3(north), kind: 'row' });
+    avenues.push({ x0: r3(-wMax / 2 - AVE), z0: r3(north - AVE), x1: r3(-wMax / 2), z1: r3(plaza.z0), kind: 'side' });
+    avenues.push({ x0: r3(wMax / 2), z0: r3(north - AVE), x1: r3(wMax / 2 + AVE), z1: r3(plaza.z0), kind: 'side' });
+    // 3. blocks (platforms / bed blocks / locker sections) — rectangles in metres, with their unit ranges
+    for (const z of Z) {
+      const g = z.g;
+      const nbc = Math.ceil(z.cols / g.bc), nbr = Math.ceil(z.rows / g.br);
+      for (let br = 0; br < nbr; br++) {
+        for (let bc = 0; bc < nbc; bc++) {
+          const c0 = bc * g.bc, r0 = br * g.br;
+          const nc = Math.min(g.bc, z.cols - c0);
+          let nr = Math.min(g.br, z.rows - r0);
+          // the last row may be short: count only rows that hold units of this block's columns
+          while (nr > 0 && (r0 + nr - 1) * z.cols + c0 >= z.cap) nr--;
+          if (nc <= 0 || nr <= 0) continue;
+          const bx0 = z.x0 + MARGIN + c0 * g.px + bc * g.gx;
+          const bz1 = z.z1 - MARGIN - (r0 * g.pz + br * g.gz);
+          z.blocks.push({ x0: +bx0.toFixed(3), x1: +(bx0 + nc * g.px).toFixed(3), z0: +(bz1 - nr * g.pz).toFixed(3), z1: +bz1.toFixed(3), c0, r0, nc, nr, y: +(g.plinth + br * g.step).toFixed(3) });
+        }
+      }
+    }
+    const x0 = -Math.max(wMax, PLAZA.w) / 2 - AVE, x1 = -x0;
+    const z0 = Math.min(north - AVE, plaza.z0) - AVE, z1 = plaza.z1 + AVE;
+    const L = {
+      key, total: start, ave: AVE, margin: MARGIN,
+      x0: +x0.toFixed(3), x1: +x1.toFixed(3), z0: +z0.toFixed(3), z1: +z1.toFixed(3), w: +(x1 - x0).toFixed(3), d: +(z1 - z0).toFixed(3),
+      plaza, gate: { x: 0, z: plaza.z1, rotY: 0 }, office: { x: -PLAZA.w / 2 + 8, z: 0, rotY: Math.PI / 2 }, board: { x: PLAZA.w / 2 - 8, z: -PLAZA.d / 2 + 4, rotY: -Math.PI / 2 },
+      zones: Z, avenues,
+      /** the code of unit i (0-based) of zone zi: 'J01-0012' (the server's '%s-%04d') */
+      codeOf(zi, i) { const z = Z[zi]; return z && i >= 0 && i < z.cap ? `${z.code}-${pad4(i + 1)}` : ''; },
+      /** {zi, i} of a code, or null */
+      find(code) {
+        const m = /^([A-Z0-9]{1,12})-(\d{1,6})$/.exec(String(code || '').toUpperCase());
+        if (!m) return null;
+        for (const z of Z) if (z.code === m[1]) { const i = Number(m[2]) - 1; return i >= 0 && i < z.cap ? { zi: z.i, i } : null; }
+        return null;
+      },
+      /** the centre of unit i of zone zi: {x, y (the top of its platform), z, col, row} */
+      unitPos(zi, i) {
+        const z = Z[zi];
+        if (!z || !(i >= 0 && i < z.cap)) return null;
+        const g = z.g, col = i % z.cols, row = Math.floor(i / z.cols);
+        return { x: z.x0 + MARGIN + col * g.px + Math.floor(col / g.bc) * g.gx + g.px / 2, z: z.z1 - MARGIN - row * g.pz - Math.floor(row / g.br) * g.gz - g.pz / 2,
+          y: g.plinth + Math.floor(row / g.br) * g.step, col, row };
+      },
+      /** the zone index under a point (or −1) */
+      zoneAt(x, z) { for (const q of Z) if (x >= q.x0 && x < q.x1 && z >= q.z0 && z < q.z1) return q.i; return -1; },
+      /** the unit under a point by arithmetic (a path between blocks is no unit): {zi, i, code} | null */
+      unitAt(x, z) {
+        const zi = this.zoneAt(x, z);
+        if (zi < 0) return null;
+        const q = Z[zi], g = q.g;
+        const lx = x - (q.x0 + MARGIN), lz = (q.z1 - MARGIN) - z;
+        if (lx < 0 || lz < 0) return null;
+        const bsx = g.bc * g.px + g.gx, bsz = g.br * g.pz + g.gz;
+        const bx = Math.floor(lx / bsx), rx = lx - bx * bsx, bz = Math.floor(lz / bsz), rz = lz - bz * bsz;
+        if (rx >= g.bc * g.px || rz >= g.br * g.pz) return null;
+        const col = bx * g.bc + Math.floor(rx / g.px), row = bz * g.br + Math.floor(rz / g.pz);
+        if (col >= q.cols) return null;
+        const i = row * q.cols + col;
+        return i < q.cap ? { zi, i, code: this.codeOf(zi, i) } : null;
+      },
+    };
+    memo.key = key;
+    memo.out = L;
+    return L;
+  }
+
+  // ------------------------------------------------------------------ the local-mode demo (체험용, read-only)
+  // the default seed preset of the server (6 × 1,000 jars · 3 × 1,000 plots · 2 × 500 stores) with made-up states:
+  // the same every time (a hash of the index), so screenshots and tests compare
+  const DEMO_ZONES = [];
+  for (let n = 1; n <= 6; n++) DEMO_ZONES.push({ code: `J0${n}`, kind: 'jar', name: `장독대 ${n}구역`, cap: 1000, cols: 40 });
+  for (let n = 1; n <= 3; n++) DEMO_ZONES.push({ code: `P0${n}`, kind: 'plot', name: `텃밭 ${n}구역`, cap: 1000, cols: 40 });
+  for (let n = 1; n <= 2; n++) DEMO_ZONES.push({ code: `S0${n}`, kind: 'store', name: `창고 ${n}동`, cap: 500, cols: 25 });
+  function demoMap() {
+    const zones = [];
+    let zi = 0;
+    for (const z of DEMO_ZONES) {
+      let s = '';
+      const fill = [0.72, 0.64, 0.55, 0.48, 0.4, 0.3, 0.6, 0.45, 0.35, 0.7, 0.5][zi] || 0.5;
+      for (let i = 0; i < z.cap; i++) {
+        let x = ((zi + 1) * 2654435761 + (i + 1) * 40503) >>> 0;
+        x ^= x >>> 15; x = Math.imul(x, 2246822519) >>> 0; x ^= x >>> 13;
+        const r = (x % 10000) / 10000;
+        s += r < fill ? 'l' : r < fill + 0.03 ? 'h' : r > 0.985 ? 'c' : 'o';
+      }
+      zones.push({ code: z.code, kind: z.kind, name: z.name, cap: z.cap, cols: z.cols, open: true, s });
+      zi++;
+    }
+    return { v: 1, demo: true, zones };
+  }
+  const demoUnit = 'J01-0012';
+
+  return { KIND_ORDER, kinds, status, contract, timeline, notices, care, periods, nameplates, GRID, layout, demoMap, demoUnit, DEMO_ZONES };
+})();
