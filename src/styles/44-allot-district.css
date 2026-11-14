@@ -1,0 +1,26 @@
+/* 44-allot-district.css — labels over the units of 만장대 단지 and the small unit card (CONTRACT §16.8, complex-units) */
+.wl.cu-label {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 4px 9px 5px; border-radius: 10px;
+  background: rgba(36, 26, 18, 0.78); color: #fff7e8;
+  font-size: 12px; line-height: 1.25; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  opacity: 1; transition: opacity 0.35s ease-out;
+}
+.wl.cu-label.hidden { opacity: 0; }
+.wl.cu-label .cu-l-code { font-weight: 800; letter-spacing: 0.02em; font-size: 13px; }
+.wl.cu-label .cu-l-np { font-size: 11px; color: #ffe2a8; }
+.wl.cu-label .cu-l-np[hidden] { display: none; }
+.wl.cu-label .cu-l-st { font-size: 11px; color: #e9dcc6; }
+.wl.cu-label[data-st="mine"] { background: rgba(0, 72, 116, 0.86); }
+.wl.cu-label[data-st="open"] .cu-l-st { color: #b8f0d8; }
+body.easy .wl.cu-label { font-size: 14px; padding: 6px 11px 7px; }
+body.easy .wl.cu-label .cu-l-code { font-size: 15px; }
+.cu-card { display: grid; gap: 8px; text-align: center; }
+.cu-card .cu-card-code { font-size: 22px; font-weight: 800; margin: 0; }
+.cu-card .cu-card-kind { font-size: 17px; margin: 0; }
+.cu-card .cu-card-note { font-size: 15px; margin: 0; color: var(--text-dim, #6b5a48); }
+@media (prefers-reduced-motion: reduce) {
+  .wl.cu-label { transition: none; }
+}
+body.reduce-motion .wl.cu-label { transition: none; }
