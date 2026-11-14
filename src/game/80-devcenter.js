@@ -251,6 +251,7 @@
       F('46-education.js', 'edu', '교육 뷰어·3D 모형·퀴즈·안내판·키오스크·전시'),
       F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소) + 그림 일기(기분·스티커)'),
       F('48-interior-data.js', 'edu', '한옥 방 전시 75점(조사한 사실 57·박물관 그림 12·분양 안내 6)과 움직이는 그림 10편의 대본 (순수 데이터)'), // [exhibits]
+      F('49-exhibits.js', 'edu', '한옥 전시(G.sys.exhibits): 아이 카드·집 구경 도감(도장)·움직이는 그림 10편(2D 캔버스)·방 안 그림판·전시 붙이기'), // [exhibits]
       F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
       F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
       F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
@@ -280,6 +281,7 @@
       F('42-realfarm.css', 'farm', '실시간 텃밭 이름표·밭 카드·곳간·확인 기록장·어른 확인'),
       F('46-education.css', 'edu', '교육 뷰어·퀴즈·도서관'),
       F('47-journal.css', 'edu', '작업일지'),
+      F('49-exhibits.css', 'edu', '전시 카드·집 구경 도감·움직이는 그림 재생기'), // [exhibits]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
@@ -426,13 +428,13 @@
   const AVATAR_ANIMS = new Set(['idle', 'walk', 'run', 'jump', 'fall', 'sit', 'wave', 'bow', 'clap', 'thumbsup', 'point', 'photo', 'celebrate', 'surprise', 'nod', 'heart', 'dance', 'think', 'water', 'harvest', 'interact', 'talk']);
   const ITEM_TYPES = new Set(['seed', 'crop', 'ingredient', 'fermented', 'quest', 'tool', 'decoration']);
   const OBJECTIVE_TYPES = new Set(['talk', 'visit', 'water', 'plant', 'harvest', 'ferment_check', 'ferment_start', 'ferment_claim', 'edu', 'quiz', 'journal', 'photo', 'emote', 'gesture', 'interact', 'collect', 'craft', 'chat', 'visit_all', 'level']);
-  const INTERACT_KINDS = new Set(['npc', 'jar', 'plot', 'sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'craft', 'shop', 'door', 'board', 'photo', 'bench', 'companion']);
+  const INTERACT_KINDS = new Set(['npc', 'jar', 'plot', 'sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'craft', 'shop', 'door', 'board', 'photo', 'bench', 'companion', 'heritage', 'place', 'motion', 'roombook']); // [exhibits] the last four
   const UNLOCK_ON = new Set(['harvest', 'item', 'talk', 'edu', 'interact', 'claim', 'visit', 'quiz', 'craft', 'ferment', 'photo']);
   const DIALOGUE_ACTIONS = new Set(['openEdu', 'openQuiz', 'openLibrary', 'openShop', 'openCraft', 'openJar', 'openMap', 'openFastTravel', 'openJournal', 'openQuestLog', 'openInventory', 'openCollection', 'teleport', 'acceptQuest', 'claimQuest', 'giveItem', 'takeItem', 'setFlag', 'clearFlag', 'emote', 'npcAnim', 'event', 'toast', 'sfx', 'activity']);
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
-  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
+  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -1426,6 +1428,10 @@
     { id: 'rtbed', emoji: '⏰', label: '실시간 텃밭 (밭 카드)', fn: () => { const f = fnOf(G.sys.realfarm, 'open'); const id = (G.data.rtfarm?.beds || [])[0]; return f && id ? () => f(id) : null; } },
     { id: 'gotgan', emoji: '🏚️', label: '곳간', fn: () => fnOf(G.sys.storage, 'open') },
     { id: 'rtbook', emoji: '📬', label: '확인 기록장', fn: () => fnOf(G.sys.realfarm, 'openBook') },
+    // [exhibits] 한옥 전시 (§16.6): the 집 구경 도감, one exhibit card (preview: no stamp is recorded) and the motion player
+    { id: 'xbook', emoji: '🏠', label: '집 구경 도감', fn: () => fnOf(G.sys.exhibits, 'openBook') },
+    { id: 'xcard', emoji: '🪧', label: '전시 카드', fn: () => { const f = fnOf(G.sys.exhibits, 'open'); const id = firstKey(G.data.exhibits); return f && id ? () => f(id, { preview: true }) : null; } },
+    { id: 'xmotion', emoji: '🎞️', label: '움직이는 그림', fn: () => { const f = fnOf(G.sys.exhibits, 'motion'); const id = (G.sys.exhibits?.motions?.() || [])[0]; return f && id ? () => f(id, { from: { preview: true } }) : null; } },
     { id: 'emote', emoji: '😊', label: '표현하기', fn: () => { const f = fnOf(G.sys.social, 'openExpress', 'openEmotes'); return f && (() => f(document.querySelector('[data-action="emote"]') || undefined)); } },
     { id: 'chat', emoji: '💬', label: '말하기 (채팅)', fn: () => { const f = fnOf(G.sys.social, 'openKidChat', 'openPhrases'); if (f) return f; return typeof G.ui?.triggerAction === 'function' ? () => G.ui.triggerAction('chat') : null; } },
     { id: 'avatar', emoji: '👕', label: '꾸미기 (아바타)', fn: () => fnOf(G.app, 'openAvatar') },
@@ -2273,6 +2279,56 @@
     if (!clean && !p1 && !after) return SKIP('프레임을 읽지 못했어요');
     const ok = !!clean && !clean.anomaly && !!p1 && p1.anomaly && !!p2 && p2.anomaly && step >= 1 && state === 'quarantine' && W.step === 0 && !!after && !after.anomaly;
     return { ok, detail: `깨끗한 화면 이상 ${clean?.anomaly} → 검은 사각형 2회 감지 ${p1?.anomaly}/${p2?.anomaly} (검정 ${p1 ? (p1.black * 100).toFixed(0) : '?'} %) → 격리 단계 ${step} (${state}) → 다시 켜기 후 단계 ${W.step}, 이상 ${after?.anomaly}` };
+  });
+  // ---- 🏠 한옥 전시 (CONTRACT §16.6) [exhibits]: the data, the save rule and the drawings — on scratch objects only
+  T('🏠 한옥 전시', '전시 자료: 방마다 8점 이상 · 아이 문장 40자 이하 · 출처 · 그림 없는 전시 2점', () => {
+    const X = G.data.exhibits, M = G.data.motions, R = G.data.exhibitRooms;
+    if (!X || !M || !R) return SKIP('전시 자료(48-interior-data.js)가 없어요');
+    const bad = [], per = {};
+    for (const e of Object.values(X)) {
+      per[e.place] = (per[e.place] || 0) + 1;
+      if (!R.some((r) => r.id === e.place) || !e.title || !e.kid || [...e.kid].length > 40 || !e.detail || !Array.isArray(e.sources) || !e.sources.length) bad.push(e.id);
+      else if (e.sources.some((s) => !s.label || !/^https?:\/\/[^\s"'<>]+$/.test(s.url)) || (e.motion && !M[e.motion]) || (e.textOnly && e.art)) bad.push(e.id);
+    }
+    const thin = R.filter((r) => (per[r.id] || 0) < 8).map((r) => r.name);
+    const textOnly = ['HX_KKACHI', 'HX_IRWOROBONG'].every((id) => X[id] && X[id].textOnly && !X[id].art);
+    return { ok: !bad.length && !thin.length && textOnly, detail: bad.length ? `고칠 전시: ${bad.slice(0, 6).join(', ')}` : thin.length ? `8점이 안 되는 방: ${thin.join(', ')}` : `전시 ${Object.keys(X).length}점 · 방 ${R.length}곳 · 움직이는 그림 ${Object.keys(M).length}편` };
+  });
+  T('🏠 한옥 전시', '저장 정리: 모르는 전시·잘못된 이름·넘치는 값은 지우고 본 것은 그대로', () => {
+    const San = G.save?.sanitizePlaces;
+    if (typeof San !== 'function') return SKIP('저장 정리 함수가 없어요');
+    const first = firstKey(G.data.exhibits) || 'HX_GIDAN', mo = firstKey(G.data.motions) || 'MG_GUDEUL';
+    const a = San({ places: { visits: { PL_ANBANG: 3, 'bad id': 2, PL_SARANG: -4, PL_BUEOK: 'x' }, seen: { [first]: 1, HX_NOT_THERE: 1, 'a b': 1 }, motions: { [mo]: true, MG_NOPE: 1 }, extra: 9 } });
+    const b = San({ places: 'broken' }), c = San({});
+    const ok = a.places.visits.PL_ANBANG === 3 && Object.keys(a.places.visits).length === 1 && a.places.seen[first] === 1 && Object.keys(a.places.seen).length === 1
+      && a.places.motions[mo] === 1 && Object.keys(a.places.motions).length === 1 && !('extra' in a.places)
+      && [b, c].every((x) => x.places && !Object.keys(x.places.visits).length && !Object.keys(x.places.seen).length && !Object.keys(x.places.motions).length);
+    return { ok, detail: `방 ${Object.keys(a.places.visits).length} · 도장 ${Object.keys(a.places.seen).length} · 그림 ${Object.keys(a.places.motions).length}` };
+  });
+  T('🏠 한옥 전시', '움직이는 그림 10편: 모든 장면이 그려지고 장면은 4~8개', () => {
+    const E = G.sys.exhibits, M = G.data.motions;
+    if (!E || typeof E.frame !== 'function' || !M) return SKIP('한옥 전시 모듈이 없어요');
+    const ids = Object.keys(M), drawn = E.motions(), bad = [];
+    let frames = 0;
+    for (const id of ids) {
+      const n = M[id].steps.length;
+      if (!drawn.includes(id) || n < 4 || n > 8) { bad.push(id); continue; }
+      for (let i = 0; i < n; i++) {
+        const cv = E.frame(id, i, 1, 1.2, 96);
+        const px = cv && cv.width ? cv.getContext('2d').getImageData(cv.width >> 1, cv.height >> 1, 1, 1).data : null;
+        if (!px || px[3] === 0) { bad.push(`${id}#${i + 1}`); break; }
+        frames++;
+      }
+    }
+    return { ok: !bad.length && ids.length >= 10, detail: bad.length ? `그리지 못한 그림: ${bad.join(', ')}` : `${ids.length}편 · 장면 ${frames}개` };
+  });
+  T('🏠 한옥 전시', '박물관 그림: 자료 묶음에 있는 그림만 쓰고, 없는 그림은 글로만 보여요', () => {
+    const X = G.data.exhibits, P = G.pack;
+    if (!X) return SKIP('전시 자료가 없어요');
+    const arts = Object.values(X).filter((e) => e.art);
+    if (!P || typeof P.has !== 'function' || !(P.names?.('art/') || []).length) return SKIP(`자료 묶음이 없는 빌드예요 (그림 ${arts.length}점은 그림 문자로 보여요)`);
+    const missing = arts.filter((e) => !P.has(e.art)).map((e) => e.art);
+    return { ok: !missing.length && arts.every((e) => e.credit && e.titleEn), detail: missing.length ? `묶음에 없는 그림: ${missing.join(', ')}` : `그림 ${arts.length}점 · 모두 출처 표시` };
   });
   // a new module must be added to the SOURCE map and EXPECTED_SYSTEMS (otherwise the 모듈 상태 tab can not report it missing)
   T('🧩 시스템', '새 파일·새 시스템이 소스 지도와 필수 시스템 목록에 있어요', () => {
@@ -3374,6 +3430,7 @@
     colliders: '🧱 충돌체 보기', fps: '⚡ FPS 표시', quality: '🖥️ 그래픽 품질', easy: '👶 쉬운 모드 켜기/끄기',
     fxConfetti: '🎉 축하 파티클', fxCoins: '🪙 코인 연출', fxStamp: '✅ 완료 도장', fxLevel: '⭐ 레벨업 연출', mascot: '🏺 옹이 한마디',
     rtScale: '⏰ 실시간 텃밭 시간 배율',
+    xDemo: '🎞️ 전시·움직이는 그림 차례로 보기', // [exhibits]
   };
   const NEEDS_STATE = new Set(['coin', 'exp', 'edu', 'seeds', 'ingredients', 'decor', 'save', 'objective', 'claimall', 'tutorial', 'grow', 'water', 'ffwd', 'ferment', 'ferment1', 'tp', 'fxCoins', 'fxLevel', 'fxConfetti']);
   const Cheats = {
@@ -3503,6 +3560,11 @@
         case 'fxCoins': if (!G.fx?.coinFly) return { ok: false, msg: '연출 모듈이 없어요.' }; G.fx.coinFly({ x: innerWidth / 2, y: innerHeight / 2 }, 100, { holdHud: false }); return { ok: true, msg: '코인 연출 (지급 없음) 🪙', close: true };
         case 'fxStamp': if (!G.fx?.stamp) return { ok: false, msg: '연출 모듈이 없어요.' }; G.fx.stamp('완료!', { color: '#34c36b' }); return { ok: true, msg: '도장 연출 ✅', close: true };
         case 'fxLevel': if (!G.fx?.levelUp) return { ok: false, msg: '연출 모듈이 없어요.' }; G.fx.levelUp(num(st.stats?.level, 1)); return { ok: true, msg: '레벨업 연출 미리보기 (실제 레벨은 그대로) ⭐', close: true };
+        case 'xDemo': { // [exhibits] every card and motion in turn (preview: nothing is recorded, no reward)
+          if (typeof S.exhibits?.demo !== 'function') return { ok: false, msg: '한옥 전시 모듈이 없어요.' };
+          S.exhibits.demo({ ms: 900 }).then((r) => toast(`전시 ${r.exhibits}점 · 움직이는 그림 ${r.motions}편을 열어 봤어요${r.errors.length ? ` · 오류 ${r.errors.length}건` : ''}`, r.errors.length ? 'warn' : 'success'));
+          return { ok: true, msg: '전시를 차례로 열어요 (다시 누르면 멈춰요) 🎞️', close: true };
+        }
         case 'mascot': {
           if (!G.mascot?.say) return { ok: false, msg: '마스코트 모듈이 없어요.' };
           const hint = G.mascot.hint?.() || '안녕하세요! 저는 옹이예요 🏺';
@@ -4752,7 +4814,7 @@
         <section class="dc-card dc-in" style="--i:7"><h4>🖥️ 표시 · 품질</h4><div class="dc-cheats">${btn('colliders', null, CHEAT_LABEL.colliders, Cheats.colliders)}${btn('fps', null, CHEAT_LABEL.fps, G.settings.showFps)}${btn('easy', null, CHEAT_LABEL.easy, easyOn())}</div>
           <div class="dc-cheats">${[['low', '낮음'], ['medium', '중간'], ['high', '높음'], ['auto', '자동']].map(([v, l]) => btn('quality', v, `🖥️ ${l}`, q === v)).join('')}</div></section>
         <section class="dc-card dc-in" style="--i:8"><h4>⏰ 실시간 텃밭 시간 배율 <span class="muted small">(이 기기만 · 어른 확인)</span></h4>${rtScaleRow()}</section>
-        <section class="dc-card dc-in" style="--i:8"><h4>🎬 연출 미리보기 <span class="muted small">(보상 지급 없음)</span></h4><div class="dc-cheats">${btn('fxConfetti', null, CHEAT_LABEL.fxConfetti)}${btn('fxCoins', null, CHEAT_LABEL.fxCoins)}${btn('fxStamp', null, CHEAT_LABEL.fxStamp)}${btn('fxLevel', null, CHEAT_LABEL.fxLevel)}${btn('mascot', null, CHEAT_LABEL.mascot)}</div></section>
+        <section class="dc-card dc-in" style="--i:8"><h4>🎬 연출 미리보기 <span class="muted small">(보상 지급 없음)</span></h4><div class="dc-cheats">${btn('fxConfetti', null, CHEAT_LABEL.fxConfetti)}${btn('fxCoins', null, CHEAT_LABEL.fxCoins)}${btn('fxStamp', null, CHEAT_LABEL.fxStamp)}${btn('fxLevel', null, CHEAT_LABEL.fxLevel)}${btn('mascot', null, CHEAT_LABEL.mascot)}${btn('xDemo', null, CHEAT_LABEL.xDemo)}</div></section>
       </div>
       <section class="dc-card dc-in" style="--i:9"><div class="dc-card-head"><h4>🧾 명령 기록 <span class="muted small">(이 브라우저 · 최근 50개)</span></h4>${log.length ? '<button type="button" class="btn btn-ghost btn-sm" data-dc="cheat-log-clear">기록 지우기</button>' : ''}</div>
         ${log.length ? `<ul class="dc-errlist dc-cheatlog">${log.map((l) => `<li><b>${l.ok ? '✅' : '⛔'} ${esc(dateTime(l.t))}</b><span>${esc(CHEAT_LABEL[l.cmd] || l.cmd)}${l.arg ? ` · ${esc(l.arg)}` : ''} <span class="muted">(${l.mode === 'server' ? '서버' : '로컬'})</span></span></li>`).join('')}</ul>` : '<p class="dc-note">아직 실행한 명령이 없어요.</p>'}

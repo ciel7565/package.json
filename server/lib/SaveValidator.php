@@ -563,6 +563,24 @@ final class SaveValidator
         if (mb_strlen(self::s(self::p(self::o(self::p($n, 'companion')), 'name'))) > 16) self::bad('companion name');
         $decor = self::p(self::o(self::p($n, 'engagement')), 'decor');
         if ($decor !== null && (!is_array($decor) || count($decor) > 50)) self::bad('engagement decor');
+        // [exhibits] 집 구경 (CONTRACT §16.4 / §16.6): data.places = {visits: {placeId: n}, seen: {exhibitId: 1}, motions:
+        // {motionId: 1}} — a missing block is fine (an older client); a wrong container is malformed (400), an oversized
+        // map, a key that is not a plain id or a value that is not a small count is a violation (the client restores)
+        $places = self::p($n, 'places');
+        if ($places !== null) {
+            if (!self::o($places)) self::bad('places');
+            foreach (['visits' => 64, 'seen' => 400, 'motions' => 64] as $k => $cap) {
+                $map = self::p($places, $k);
+                if ($map === null) continue;
+                if (!self::o($map) && $map !== []) self::bad('places ' . $k);
+                $rows = self::kv($map);
+                if (count($rows) > $cap) { $this->violate('PLACES_BAD_SHAPE', ['field' => $k, 'count' => count($rows)]); continue; }
+                foreach ($rows as $id => $val) {
+                    $okVal = (is_int($val) || is_float($val)) && is_finite((float) $val) && $val >= 0 && $val <= 1000000 && floor((float) $val) == $val;
+                    if (!preg_match(self::ID_RE, (string) $id) || !($okVal || $val === true)) { $this->violate('PLACES_BAD_SHAPE', ['field' => $k]); break; }
+                }
+            }
+        }
         foreach (['journal', 'photos', 'activity'] as $k) {
             $v = self::p($n, $k);
             if ($v !== null && !is_array($v)) self::bad($k);

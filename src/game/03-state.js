@@ -300,6 +300,8 @@
         journals: 0, photos: 0, emotes: 0, gestures: 0, chats: 0, talks: 0, crafts: 0, interacts: 0,
         doubleJumps: 0,
         rtHarvests: 0,           // real-time bed harvests (CONTRACT §15.1; the server checks its growth per save)
+        // 집 구경 (CONTRACT §16.6, 49-exhibits.js): plain counters = the sizes of state.places (achievements read them)
+        exhibitsSeen: 0, placesSeen: 0, exhibitRooms: 0, motionsSeen: 0,
       },
       // speed tiers (CONTRACT §14.1): server-authoritative; the server ignores the client's `sub` on save (like `role`)
       sub: { tier: 1, status: 'none', expiresAt: 0, autoRenew: false, source: 'local' },
@@ -319,6 +321,9 @@
       achievements: {},    // id -> unlockedAt
       collection: {},      // id -> { at, zoneId }
       visited: {},         // zoneId -> first visit ts
+      // 집 구경 (CONTRACT §16.4 / §16.6): visits = placeId -> how often entered, seen = exhibitId -> 1 (the 도감 stamps),
+      // motions = motionId -> 1 (움직이는 그림 watched to the end)
+      places: { visits: {}, seen: {}, motions: {} },
       poisVisited: {},     // poiId -> ts
       npcsTalked: {},      // npcId -> ts
       cropKinds: {},       // cropId -> first harvest ts
@@ -469,6 +474,38 @@
     if (isMap(data.stats)) data.stats.rtHarvests = intIn(data.stats.rtHarvests, 0, 1e7, 0);
     return data;
   }
+  // ---------------------------------------------------------------- 집 구경: places / exhibits (CONTRACT §16.4, §16.6)
+  const PLACE_ID = /^PL_[A-Z0-9_]{1,28}$/;    // G.sys.places ids (18-places.js)
+  const EXHIBIT_ID = /^[A-Z][A-Z0-9_]{1,47}$/; // G.data.exhibits / G.data.motions ids (48-interior-data.js)
+  const PLACES_MAX = { visits: 64, seen: 400, motions: 64 };
+  /**
+   * data.places -> exactly { visits: {placeId: 1..1e6}, seen: {exhibitId: 1}, motions: {motionId: 1} }. An older save gets
+   * the empty maps; ids that do not look like ids are dropped, and so are exhibits / motions this build no longer has
+   * (only when the data fragment is in the build). Counts are capped, so a damaged save cannot grow the server copy.
+   */
+  function sanitizePlaces(data) {
+    const p = isMap(data.places) ? data.places : {};
+    const out = { visits: {}, seen: {}, motions: {} };
+    const X = isMap(G.data.exhibits) ? G.data.exhibits : null, M = isMap(G.data.motions) ? G.data.motions : null;
+    let n = 0;
+    for (const k of Object.keys(isMap(p.visits) ? p.visits : {})) {
+      if (n >= PLACES_MAX.visits || !PLACE_ID.test(k) || !ownKey(p.visits, k)) continue;
+      const v = intIn(p.visits[k], 0, 1e6, 0);
+      if (v > 0) { out.visits[k] = v; n++; }
+    }
+    n = 0;
+    for (const k of Object.keys(isMap(p.seen) ? p.seen : {})) {
+      if (n >= PLACES_MAX.seen || !EXHIBIT_ID.test(k) || !p.seen[k] || (X && !ownKey(X, k))) continue;
+      out.seen[k] = 1; n++;
+    }
+    n = 0;
+    for (const k of Object.keys(isMap(p.motions) ? p.motions : {})) {
+      if (n >= PLACES_MAX.motions || !EXHIBIT_ID.test(k) || !p.motions[k] || (M && !ownKey(M, k))) continue;
+      out.motions[k] = 1; n++;
+    }
+    data.places = out;
+    return data;
+  }
 
   function normalize(data, profile) {
     const def = createDefaultState(profile);
@@ -495,6 +532,7 @@
     data.sub = G.net?.mode === 'server' ? sanitizeSub(data.sub, 'server') : sanitizeSub(null, 'local');
     // 실시간 텃밭 / 곳간 (phase 7): upgrade older saves, drop what does not fit the shape
     sanitizeRealFarm(data, G.net?.mode === 'server' ? 'server' : 'local');
+    sanitizePlaces(data); // 집 구경 (phase 8): { visits, seen, motions } with known ids only
     if (profile) { data.profile.id = profile.id; if (profile.nickname) data.profile.nickname = profile.nickname; if (profile.role) data.profile.role = profile.role; if (profile.email) data.profile.email = profile.email; }
     return data;
   }
@@ -863,7 +901,7 @@
     normalize,
     sanitizeSub,
     // phase 7 (CONTRACT §15.1 – §15.3): the shape rules of the real-time beds, the 곳간 and the local completion book
-    sanitizeRealFarm, sanitizeRtBed, sanitizeRtReport, sanitizeStorage,
+    sanitizeRealFarm, sanitizeRtBed, sanitizeRtReport, sanitizeStorage, sanitizePlaces,
     noteInput,
     pending,
     LocalAdapter,

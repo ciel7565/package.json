@@ -1,0 +1,180 @@
+/* =============================================================================
+   49-exhibits.css — 한옥 전시 (CONTRACT §16.6): the kid card, the 집 구경 도감 (stamp book), the motion player.
+   Look: the app's dark glass dialogs with warm hanji-paper pictures and candy buttons for children.
+   Kid rules (§12): tap targets ≥ var(--tap) (56 px in easy mode; the player buttons are 56 px everywhere), text
+   ≥ 16 px in easy mode, nothing blinks; animations move transform / opacity only and are switched off by
+   body.reduce-motion and the OS setting.
+   ============================================================================= */
+
+/* ------------------------------------------------------------------ the kid card */
+.modal.xh-card-modal { width: min(36rem, 100%); }
+.modal-body.xh-card-body { padding: .9rem 1.1rem 1.1rem; }
+.xh-card { display: flex; flex-direction: column; align-items: center; gap: .75rem; text-align: center; }
+.xh-pic { position: relative; width: 100%; display: grid; place-items: center; border-radius: 18px; overflow: hidden; flex: none; }
+.xh-pic-emoji { min-height: 9rem; background: radial-gradient(120% 100% at 50% 20%, #fffaf0, #f3dfb4); box-shadow: inset 0 0 0 3px #e2c27a; }
+.xh-emoji { font-size: clamp(4rem, 14vw, 6rem); line-height: 1; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .2)); }
+.xh-pic-motion { box-shadow: 0 0 0 3px rgba(226, 194, 122, .75); background: #f4ecd8; }
+.xh-poster { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.xh-pic-play {
+  position: absolute; right: .6rem; bottom: .6rem; width: 56px; height: 56px; display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(180deg, #1e9a4f, #0f6b30); border: 3px solid rgba(255, 255, 255, .85); color: #fff; font-size: 1.5rem; line-height: 1;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .28), 0 8px 18px rgba(0, 0, 0, .25); touch-action: manipulation; transition: transform .12s var(--ease-pop);
+}
+.xh-pic-play:active { transform: translateY(3px) scale(.95); }
+.xh-pic-play:focus-visible { outline: 4px solid var(--kid-gold); outline-offset: 3px; }
+/* a painting of the pack: shown on a dark mount, like a picture on a wall */
+.xh-pic-art { min-height: 8rem; padding: .6rem; background: linear-gradient(180deg, #3a2a1e, #241811); box-shadow: inset 0 0 0 3px #7a5530; }
+.xh-art { display: block; max-width: 100%; max-height: min(46vh, 24rem); width: auto; height: auto; border-radius: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); opacity: 0; transition: opacity var(--dur-3) var(--ease-out); }
+.xh-pic-art.is-loaded .xh-art { opacity: 1; }
+.xh-pic-art .xh-emoji-wait { position: absolute; }
+.xh-pic-art.is-loaded .xh-emoji-wait { display: none; }
+.xh-credit { margin: -.3rem 0 0; font-size: .82rem; line-height: 1.45; color: var(--text-dim); overflow-wrap: anywhere; }
+.xh-kid { margin: 0; max-width: 32rem; display: inline-flex; align-items: center; justify-content: center; gap: .55rem; font-size: 1.3rem; font-weight: 800; line-height: 1.5; word-break: keep-all; text-wrap: balance; }
+.xh-where { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; }
+.xh-chip { display: inline-flex; align-items: center; padding: .2rem .7rem; border-radius: 999px; background: var(--bg-elev-2); border: 1px solid var(--line); font-size: .95rem; font-weight: 700; color: var(--text); }
+.xh-chip-new { background: #ffcf4a; border-color: #fff3c2; color: #3b2a12; animation: xhStampIn .5s var(--ease-pop) both; }
+@keyframes xhStampIn { from { opacity: 0; transform: scale(1.6) rotate(-8deg); } to { opacity: 1; transform: scale(1) rotate(-3deg); } }
+.xh-motion-btn { min-width: 12rem; }
+/* 어른용 설명 */
+.xh-adult { width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-elev); }
+.xh-adult-sum { display: flex; align-items: center; min-height: max(var(--tap), 44px); padding: .4rem .9rem; cursor: pointer; font-weight: 700; list-style: none; border-radius: 14px; }
+.xh-adult-sum::-webkit-details-marker { display: none; }
+.xh-adult-sum::after { content: '▾'; margin-left: auto; padding-left: .6rem; color: var(--text-dim); }
+.xh-adult[open] > .xh-adult-sum::after { content: '▴'; }
+.xh-adult-sum:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.xh-adult-body { padding: 0 .9rem .9rem; display: grid; gap: .55rem; }
+.xh-adult-body p { margin: 0; }
+.xh-detail { line-height: 1.7; word-break: keep-all; }
+.xh-note, .xh-disclaimer { color: var(--text-dim); font-size: .92rem; line-height: 1.55; }
+.xh-src-head { font-weight: 800; color: var(--gold); }
+.xh-sources { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.xh-src-label { display: block; font-weight: 700; }
+.xh-src-url { display: block; font-size: .86rem; line-height: 1.4; color: var(--text-dim); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+a.xh-src-url { color: #a9d4ff; text-decoration: underline; }
+
+/* ------------------------------------------------------------------ the 도감 */
+.modal.xh-book-modal { width: min(52rem, 100%); }
+.modal-body.xh-book-body { display: flex; flex-direction: column; gap: .8rem; padding: .9rem 1.1rem 1.1rem; }
+.xh-book-head { display: flex; align-items: center; gap: .7rem; }
+.xh-book-total { display: inline-flex; align-items: baseline; gap: .2rem; white-space: nowrap; font-size: 1.1rem; font-weight: 700; }
+.xh-book-total b { font-size: 1.45rem; font-weight: 800; color: var(--gold); }
+.xh-book-bar { flex: 1 1 auto; min-width: 2rem; height: 14px; border-radius: 999px; background: rgba(255, 255, 255, .13); overflow: hidden; }
+.xh-book-bar i { display: block; width: 100%; height: 100%; border-radius: 999px; transform-origin: left center; background: linear-gradient(90deg, #f4c54a, #ff9f43); transition: transform var(--dur-4) var(--ease-out); }
+.xh-rooms { display: flex; gap: .5rem; overflow-x: auto; padding: .15rem .1rem .45rem; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.xh-room {
+  flex: 0 0 auto; min-width: 6.2rem; min-height: max(var(--tap), 56px); display: grid; justify-items: center; align-content: center; gap: .05rem; padding: .45rem .7rem;
+  border-radius: 16px; background: var(--bg-elev); border: 2px solid var(--line-strong); color: var(--text); font-weight: 700; scroll-snap-align: start;
+  transition: transform .12s var(--ease-pop), background-color .15s; touch-action: manipulation;
+}
+.xh-room:active { transform: scale(.96); }
+.xh-room:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.xh-room.is-on { background: #fff1d6; border-color: var(--kid-gold); color: var(--kid-ink); box-shadow: 0 4px 0 rgba(0, 0, 0, .25); }
+.xh-room-e { font-size: 1.6rem; line-height: 1.1; }
+.xh-room-n { font-size: 1rem; white-space: nowrap; }
+.xh-room-c { font-size: .92rem; font-weight: 800; color: var(--text-dim); }
+.xh-room.is-on .xh-room-c { color: #6a4a12; }
+.xh-room.is-done .xh-room-c { color: var(--gold); }
+.xh-room.is-on.is-done .xh-room-c { color: #8a5a00; }
+.xh-room-intro { margin: 0; display: inline-flex; align-items: center; gap: .55rem; font-size: 1.08rem; font-weight: 700; word-break: keep-all; }
+.xh-stamps { display: grid; grid-template-columns: repeat(auto-fill, minmax(6.6rem, 1fr)); gap: .6rem; }
+.xh-stamp {
+  display: grid; justify-items: center; align-content: start; gap: .3rem; min-height: 6.6rem; padding: .55rem .3rem .5rem; border-radius: 16px;
+  background: var(--bg-elev); border: 2px dashed var(--line-strong); color: var(--text-dim);
+  animation: xhStampTile .32s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 24ms); transition: transform .12s var(--ease-pop); touch-action: manipulation;
+}
+@keyframes xhStampTile { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.xh-stamp:active { transform: scale(.95); }
+.xh-stamp:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.xh-stamp-face { width: 3.6rem; height: 3.6rem; display: grid; place-items: center; border-radius: 50%; font-size: 1.9rem; line-height: 1; background: rgba(255, 255, 255, .07); border: 3px dashed rgba(255, 255, 255, .28); }
+.xh-stamp-face .emoji { filter: grayscale(1); opacity: .75; }
+.xh-stamp-t { font-size: .95rem; font-weight: 700; line-height: 1.22; word-break: keep-all; overflow-wrap: anywhere; }
+.xh-stamp.is-seen { border-style: solid; border-color: #e2a23a; background: #fff6e0; color: var(--kid-ink); }
+.xh-stamp.is-seen .xh-stamp-face { background: radial-gradient(circle at 40% 35%, #ffffff, #ffe3a6); border: 3px solid #d9482b; box-shadow: inset 0 0 0 3px rgba(217, 72, 43, .22), 0 3px 0 rgba(0, 0, 0, .18); transform: rotate(-6deg); }
+.xh-stamp.is-seen .xh-stamp-face .emoji { filter: none; opacity: 1; }
+/* a room that can not be walked into (2D-only mode, or not in this build): the stamp opens from the book */
+.xh-stamp.is-open { color: var(--text); border-color: rgba(226, 162, 58, .7); }
+.xh-stamp.is-open .xh-stamp-face { border-color: rgba(226, 162, 58, .7); }
+.xh-stamp.is-open .xh-stamp-face .emoji { filter: none; opacity: 1; }
+.xh-mo-head { margin: .2rem 0 -.3rem; font-weight: 800; color: var(--gold); }
+.xh-book-motions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.xh-mo-btn {
+  display: inline-flex; align-items: center; gap: .4rem; min-height: max(var(--tap), 44px); padding: .35rem 1rem; border-radius: 999px;
+  background: rgba(255, 255, 255, .1); border: 2px solid var(--line-strong); color: var(--text); font-size: 1rem; font-weight: 700; touch-action: manipulation; transition: transform .12s var(--ease-pop);
+}
+.xh-mo-btn:active { transform: scale(.96); }
+.xh-mo-btn:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.xh-mo-btn.is-seen { border-color: rgba(52, 195, 107, .6); background: rgba(52, 195, 107, .16); }
+.xh-mo-btn.is-locked { border-style: dashed; color: var(--text-dim); }
+.xh-book-foot { margin: 0; font-size: .9rem; color: var(--text-dim); }
+
+/* ------------------------------------------------------------------ the motion player */
+.modal.xh-motion-modal { width: min(58rem, 100%); }
+.modal-body.xh-motion-body { padding: .8rem 1rem 1rem; }
+.xh-motion { display: grid; gap: .7rem; }
+.xh-stage { position: relative; border-radius: 18px; overflow: hidden; background: #f4ecd8; box-shadow: 0 0 0 3px rgba(226, 194, 122, .75), var(--shadow-sm); }
+.xh-canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.xh-step-chip { position: absolute; top: .5rem; right: .6rem; padding: .12rem .65rem; border-radius: 999px; background: rgba(38, 26, 16, .78); color: #fff6e0; font-size: .95rem; font-weight: 700; }
+.xh-side { display: grid; gap: .55rem; justify-items: center; align-content: center; min-width: 0; }
+.xh-cap { margin: 0; min-height: 3em; display: inline-flex; align-items: center; justify-content: center; gap: .55rem; text-align: center; font-size: 1.25rem; font-weight: 800; line-height: 1.45; word-break: keep-all; text-wrap: balance; }
+.xh-dots { display: flex; gap: .4rem; }
+.xh-dots i { width: .7rem; height: .7rem; border-radius: 50%; background: rgba(255, 255, 255, .24); transition: transform var(--dur-2) var(--ease-out), background-color var(--dur-2); }
+.xh-dots i.seen { background: var(--green); }
+.xh-dots i.on { background: var(--gold); transform: scale(1.35); }
+.xh-ctl { display: flex; flex-wrap: wrap; justify-content: center; gap: .7rem; }
+.xh-btn {
+  min-width: 5.4rem; min-height: 56px; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: .05rem; padding: .3rem .8rem;
+  border-radius: 18px; background: linear-gradient(180deg, #ffffff, var(--kid-cream-2)); border: 2px solid rgba(255, 255, 255, .85); color: var(--kid-ink); font-weight: 800;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .25), 0 8px 18px rgba(0, 0, 0, .2); touch-action: manipulation; transition: transform .12s var(--ease-pop), box-shadow .12s;
+}
+.xh-btn .emoji { font-size: 1.5rem; line-height: 1.1; }
+.xh-btn-l { font-size: 1rem; line-height: 1.15; }
+.xh-btn:active:not(:disabled) { transform: translateY(3px) scale(.96); box-shadow: 0 1px 0 rgba(0, 0, 0, .25), 0 4px 10px rgba(0, 0, 0, .2); }
+.xh-btn:focus-visible { outline: 4px solid var(--kid-gold); outline-offset: 3px; }
+.xh-btn:disabled { opacity: .5; }
+.xh-btn.xh-play { min-width: 6.6rem; background: linear-gradient(180deg, #1e9a4f, #0f6b30); border-color: rgba(255, 255, 255, .55); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.xh-still-note { margin: 0; text-align: center; font-size: .95rem; color: var(--text-dim); }
+
+/* ------------------------------------------------------------------ easy mode: 16 px and up */
+body.easy .xh-credit, body.easy .xh-note, body.easy .xh-disclaimer, body.easy .xh-src-url, body.easy .xh-chip, body.easy .xh-room-n, body.easy .xh-room-c,
+body.easy .xh-stamp-t, body.easy .xh-step-chip, body.easy .xh-btn-l, body.easy .xh-still-note, body.easy .xh-mo-btn, body.easy .xh-book-foot { font-size: max(16px, 1rem); }
+body.easy .xh-kid { font-size: 1.4rem; }
+body.easy .xh-cap { font-size: 1.32rem; }
+body.easy .xh-kid .easy-speak, body.easy .xh-cap .easy-speak, body.easy .xh-room-intro .easy-speak, body.easy .xh-book-head .easy-speak { width: var(--tap); height: var(--tap); flex: none; }
+
+/* ------------------------------------------------------------------ small screens */
+@media (max-width: 560px) {
+  .xh-kid { font-size: 1.15rem; }
+  body.easy .xh-kid { font-size: 1.2rem; }
+  .xh-cap, body.easy .xh-cap { font-size: 1.1rem; }
+  .xh-stamps { grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr)); gap: .45rem; }
+  .xh-ctl { gap: .45rem; }
+  .xh-btn { min-width: 4.6rem; padding: .3rem .5rem; }
+  .xh-btn.xh-play { min-width: 5.4rem; }
+  .modal-body.xh-book-body, .modal-body.xh-card-body { padding: .7rem .75rem .9rem; }
+  .modal-body.xh-motion-body { padding: .6rem .6rem .8rem; }
+}
+/* a phone held sideways: the picture on the left, the words and the buttons on the right — nothing below the fold */
+@media (max-height: 520px) and (orientation: landscape) {
+  .modal-body.xh-motion-body { padding: .45rem .6rem .5rem; }
+  .xh-motion { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .6rem; }
+  .xh-stage { height: clamp(7rem, calc(100vh - 14.8rem), 16rem); aspect-ratio: 16 / 9; }
+  .xh-canvas { width: 100%; height: 100%; }
+  .xh-cap, body.easy .xh-cap { font-size: 1.02rem; min-height: 0; line-height: 1.35; }
+  .xh-side { gap: .35rem; }
+  .xh-btn { min-width: 4.4rem; }
+  .xh-still-note { display: none; }
+  .xh-card { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; }
+  .xh-card > .xh-pic { flex: 0 0 34%; width: 34%; }
+  .xh-card > .xh-kid { flex: 1 1 50%; }
+  .xh-card > .xh-adult, .xh-card > .xh-credit { flex: 1 1 100%; }
+  .xh-pic-emoji { min-height: 5.5rem; }
+  .xh-emoji { font-size: 3.2rem; }
+}
+
+/* ------------------------------------------------------------------ calm mode */
+body.reduce-motion .xh-chip-new, body.reduce-motion .xh-stamp { animation: none; }
+body.reduce-motion .xh-book-bar i, body.reduce-motion .xh-dots i, body.reduce-motion .xh-art { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .xh-chip-new, .xh-stamp { animation: none; }
+  .xh-book-bar i, .xh-dots i, .xh-art, .xh-btn, .xh-room, .xh-stamp, .xh-mo-btn, .xh-pic-play { transition: none; }
+}
