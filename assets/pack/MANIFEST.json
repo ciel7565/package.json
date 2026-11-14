@@ -1,0 +1,1176 @@
+{
+ "materials": [
+  {
+   "name": "giwa_roof_tile",
+   "ambientcg_id": "RoofingTiles009",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 6984,
+    "n": 33998,
+    "r": 23962
+   },
+   "source": {
+    "tar": "dataset_05.tar",
+    "ranges": {
+     "Color": [
+      492383744,
+      86585
+     ],
+     "NormalGL": [
+      492108288,
+      273598
+     ],
+     "Roughness": [
+      493305344,
+      253300
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/RoofingTiles009"
+  },
+  {
+   "name": "thatch_choga",
+   "ambientcg_id": "ThatchedRoof001A",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 34656,
+    "n": 56856,
+    "r": 17210
+   },
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      371366912,
+      292513
+     ],
+     "NormalGL": [
+      372071936,
+      399347
+     ],
+     "Roughness": [
+      372472832,
+      201255
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/ThatchedRoof001A"
+  },
+  {
+   "name": "lime_plaster_wall",
+   "ambientcg_id": "Plaster003",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 64516,
+    "n": 57584,
+    "r": 2436
+   },
+   "source": {
+    "tar": "dataset_00.tar",
+    "ranges": {
+     "Color": [
+      857785344,
+      420409
+     ],
+     "NormalGL": [
+      857374208,
+      409200
+     ],
+     "Roughness": [
+      857300480,
+      71749
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Plaster003"
+  },
+  {
+   "name": "hwangto_clay_wall",
+   "ambientcg_id": "Clay002",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 1888,
+    "n": 35554,
+    "r": 26082
+   },
+   "source": {
+    "tar": "dataset_06.tar",
+    "ranges": {
+     "Color": [
+      136498176,
+      41805
+     ],
+     "NormalGL": [
+      135631360,
+      338498
+     ],
+     "Roughness": [
+      136541696,
+      294691
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Clay002"
+  },
+  {
+   "name": "timber_beam_dark",
+   "ambientcg_id": "Wood036",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 15468,
+    "n": 32602,
+    "r": 40560
+   },
+   "source": {
+    "tar": "dataset_00.tar",
+    "ranges": {
+     "Color": [
+      881887744,
+      207605
+     ],
+     "NormalGL": [
+      880753664,
+      284447
+     ],
+     "Roughness": [
+      879923200,
+      320494
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Wood036"
+  },
+  {
+   "name": "wood_planks_dark",
+   "ambientcg_id": "Planks023A",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 16814,
+    "n": 25616,
+    "r": 4248
+   },
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      283064832,
+      187923
+     ],
+     "NormalGL": [
+      283456000,
+      242048
+     ],
+     "Roughness": [
+      284092928,
+      103652
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Planks023A"
+  },
+  {
+   "name": "maru_floor",
+   "ambientcg_id": "WoodFloor041",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 34444,
+    "n": 4630,
+    "r": 3228
+   },
+   "source": {
+    "tar": "dataset_01.tar",
+    "ranges": {
+     "Color": [
+      195866624,
+      286592
+     ],
+     "NormalGL": [
+      197683200,
+      128276
+     ],
+     "Roughness": [
+      196154880,
+      102314
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/WoodFloor041"
+  },
+  {
+   "name": "hanji_paper",
+   "ambientcg_id": "Paper001",
+   "px": {
+    "color": [
+     512,
+     300
+    ],
+    "normalGL": [
+     512,
+     300
+    ],
+    "rough": [
+     512,
+     300
+    ]
+   },
+   "bytes": {
+    "c": 1260,
+    "n": 19112,
+    "r": 27010
+   },
+   "source": {
+    "tar": "dataset_01.tar",
+    "ranges": {
+     "Color": [
+      396660224,
+      80172
+     ],
+     "NormalGL": [
+      394993664,
+      210695
+     ],
+     "Roughness": [
+      396211200,
+      197140
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Paper001"
+  },
+  {
+   "name": "jangpan_floor_paper",
+   "ambientcg_id": "Paper006",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 8438,
+    "n": 546,
+    "r": 11622
+   },
+   "source": {
+    "tar": "dataset_05.tar",
+    "ranges": {
+     "Color": [
+      711598080,
+      194494
+     ],
+     "NormalGL": [
+      713502208,
+      8445
+     ],
+     "Roughness": [
+      712061440,
+      225613
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Paper006"
+  },
+  {
+   "name": "straw_mat",
+   "ambientcg_id": "Tatami001",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 38762,
+    "n": 58102,
+    "r": 35630
+   },
+   "source": {
+    "tar": "dataset_06.tar",
+    "ranges": {
+     "Color": [
+      163747328,
+      290395
+     ],
+     "NormalGL": [
+      165684224,
+      323725
+     ],
+     "Roughness": [
+      163435520,
+      309865
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Tatami001"
+  },
+  {
+   "name": "woven_basket",
+   "ambientcg_id": "Wicker008A",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 17420,
+    "n": 41562,
+    "r": 18638
+   },
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      61692928,
+      178659
+     ],
+     "NormalGL": [
+      59492864,
+      284495
+     ],
+     "Roughness": [
+      59779072,
+      176553
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Wicker008A"
+  },
+  {
+   "name": "hemp_linen",
+   "ambientcg_id": "Fabric062",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 45294,
+    "n": 48028,
+    "r": 16208
+   },
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      301075968,
+      316346
+     ],
+     "NormalGL": [
+      300764160,
+      309837
+     ],
+     "Roughness": [
+      301668352,
+      184309
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Fabric062"
+  },
+  {
+   "name": "onggi_glaze",
+   "ambientcg_id": "GlazedTerracotta001",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     512,
+     512
+    ],
+    "rough": [
+     512,
+     512
+    ]
+   },
+   "bytes": {
+    "c": 7656,
+    "n": 5050,
+    "r": 5044
+   },
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      332525568,
+      126491
+     ],
+     "NormalGL": [
+      332456960,
+      66928
+     ],
+     "Roughness": [
+      331019264,
+      119090
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/GlazedTerracotta001"
+  },
+  {
+   "name": "field_soil",
+   "ambientcg_id": "Ground048",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 88782,
+    "n": 19982,
+    "r": 6184
+   },
+   "source": {
+    "tar": "dataset_01.tar",
+    "ranges": {
+     "Color": [
+      293304320,
+      519320
+     ],
+     "NormalGL": [
+      289966080,
+      539208
+     ],
+     "Roughness": [
+      289252352,
+      270905
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Ground048"
+  },
+  {
+   "name": "yard_dirt_path",
+   "ambientcg_id": "Ground069",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 70064,
+    "n": 13190,
+    "r": 6856
+   },
+   "source": {
+    "tar": "dataset_01.tar",
+    "ranges": {
+     "Color": [
+      562903552,
+      418105
+     ],
+     "NormalGL": [
+      562524672,
+      377102
+     ],
+     "Roughness": [
+      563323392,
+      249750
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Ground069"
+  },
+  {
+   "name": "gravel",
+   "ambientcg_id": "Gravel022",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 68894,
+    "n": 35416,
+    "r": 8286
+   },
+   "source": {
+    "tar": "dataset_06.tar",
+    "ranges": {
+     "Color": [
+      541393920,
+      360873
+     ],
+     "NormalGL": [
+      542195200,
+      570174
+     ],
+     "Roughness": [
+      538899456,
+      191936
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Gravel022"
+  },
+  {
+   "name": "grass",
+   "ambientcg_id": "Grass004",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 90004,
+    "n": 19730,
+    "r": 12824
+   },
+   "source": {
+    "tar": "dataset_04.tar",
+    "ranges": {
+     "Color": [
+      539312128,
+      428726
+     ],
+     "NormalGL": [
+      542836224,
+      507289
+     ],
+     "Roughness": [
+      540248576,
+      450985
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Grass004"
+  },
+  {
+   "name": "granite_stone",
+   "ambientcg_id": "Rock043S",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 87208,
+    "n": 25876,
+    "r": 4546
+   },
+   "source": {
+    "tar": "dataset_06.tar",
+    "ranges": {
+     "Color": [
+      78280704,
+      481809
+     ],
+     "NormalGL": [
+      79375360,
+      501855
+     ],
+     "Roughness": [
+      78111744,
+      167269
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Rock043S"
+  },
+  {
+   "name": "stone_wall_doldam",
+   "ambientcg_id": "Rocks001",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 62900,
+    "n": 22986,
+    "r": 4784
+   },
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      673053184,
+      368944
+     ],
+     "NormalGL": [
+      672333312,
+      358696
+     ],
+     "Roughness": [
+      671025152,
+      139916
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Rocks001"
+  },
+  {
+   "name": "pine_bark",
+   "ambientcg_id": "Bark014",
+   "px": {
+    "color": [
+     512,
+     512
+    ],
+    "normalGL": [
+     256,
+     256
+    ],
+    "rough": [
+     256,
+     256
+    ]
+   },
+   "bytes": {
+    "c": 66012,
+    "n": 8294,
+    "r": 13810
+   },
+   "source": {
+    "tar": "dataset_05.tar",
+    "ranges": {
+     "Color": [
+      868129280,
+      368117
+     ],
+     "NormalGL": [
+      867870720,
+      256834
+     ],
+     "Roughness": [
+      868498944,
+      385620
+     ]
+    }
+   },
+   "license": "CC0-1.0 (ambientCG)",
+   "page": "https://ambientcg.com/a/Bark014"
+  }
+ ],
+ "art": [
+  {
+   "name": "chaekgeori_screen",
+   "met_objectID": 73134,
+   "px": [
+    1536,
+    635
+   ],
+   "bytes": 95652,
+   "title": "Books and Scholars' Possessions",
+   "artist": "Unidentified artist",
+   "date": "early 20th century",
+   "accession": "2005.385",
+   "creditLine": "Purchase, Shelby White Gift, 2005",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/73134/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/73134",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "birds_flowers_screen",
+   "met_objectID": 44760,
+   "px": [
+    1536,
+    852
+   ],
+   "bytes": 228716,
+   "title": "Birds and Flowers",
+   "artist": "Unidentified artist",
+   "date": "late 19th–early 20th century",
+   "accession": "1993.255",
+   "creditLine": "Purchase, The Vincent Astor Foundation Gift and John M. Crawford Jr. Bequest, 1993",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/44760/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/44760",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "rooster_hen_minhwa",
+   "met_objectID": 40073,
+   "px": [
+    441,
+    1024
+   ],
+   "bytes": 54560,
+   "title": "Golden Rooster and Hen",
+   "artist": "Unidentified artist",
+   "date": "19th century",
+   "accession": "19.103.2",
+   "creditLine": "Rogers Fund, 1919",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/40073/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/40073",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "tiger_scroll",
+   "met_objectID": 40069,
+   "px": [
+    767,
+    1024
+   ],
+   "bytes": 39866,
+   "title": "Tiger",
+   "artist": "Muqi",
+   "date": "16th or 17th century",
+   "accession": "12.123.1",
+   "creditLine": "Rogers Fund, 1912",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/40069/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/40069",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "dragon_carp_minhwa",
+   "met_objectID": 853892,
+   "px": [
+    688,
+    1024
+   ],
+   "bytes": 102952,
+   "title": "Dragon and carp",
+   "artist": "Unidentified artist",
+   "date": "late 19th century",
+   "accession": "2024.89.3",
+   "creditLine": "Gift of the children of Lea R. Sneider, 2024",
+   "source": "https://huggingface.co/datasets/metmuseum/openaccess (default/train/openaccess-00051-of-00052.parquet row 2276)",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/853892",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "deer_pines",
+   "met_objectID": 78286,
+   "px": [
+    475,
+    1024
+   ],
+   "bytes": 48306,
+   "title": "Deer amid Pine Trees",
+   "artist": "Unidentified artist",
+   "date": "19th century",
+   "accession": "2013.29a, b",
+   "creditLine": "Purchase, Friends of Asian Art Gifts, 2013",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/78286/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/78286",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "wild_geese_landscape",
+   "met_objectID": 39888,
+   "px": [
+    461,
+    1024
+   ],
+   "bytes": 30308,
+   "title": "Wild geese descending to sandbar",
+   "artist": "Unidentified artist",
+   "date": "late 15th–early 16th century",
+   "accession": "1992.337",
+   "creditLine": "Purchase, Harris Brisbane Dick Fund, John M. Crawford Jr. Bequest, and The Vincent Astor Foundation Gift, 1992",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/39888/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/39888",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "plum_branch",
+   "met_objectID": 40445,
+   "px": [
+    664,
+    1024
+   ],
+   "bytes": 37310,
+   "title": "Plum Branch",
+   "artist": "Yi Yu-won",
+   "date": "dated 1888",
+   "accession": "1990.230",
+   "creditLine": "Purchase, Seymour and Rogers Funds and Bequest of Dorothy Graham Bennett, 1990",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/40445/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/40445",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "bamboo_wind",
+   "met_objectID": 50486,
+   "px": [
+    453,
+    1024
+   ],
+   "bytes": 43708,
+   "title": "Bamboo in the Wind",
+   "artist": "Yi Jeong (artist name: Taneun)",
+   "date": "early 17th century",
+   "accession": "2015.300.299",
+   "creditLine": "Mary Griggs Burke Collection, Gift of the Mary and Jackson Burke Foundation, 2015",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/50486/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/50486",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "portrait_yun_dongseom",
+   "met_objectID": 656430,
+   "px": [
+    666,
+    1024
+   ],
+   "bytes": 60384,
+   "title": "Portrait of Yun Dongseom (1710–1795)",
+   "artist": "Unidentified artist",
+   "date": "ca. 1790–1805",
+   "accession": "2014.605",
+   "creditLine": "Purchase, Harris Brisbane Dick and 2014 Benefit Funds; Friends of Korean Art, Locks Foundation, Hyun Jun M. Kim, and Tchah Sup and Myong Hi Kim Gifts, 2014",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/656430/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/656430",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "still_life_screen",
+   "met_objectID": 646996,
+   "px": [
+    1536,
+    710
+   ],
+   "bytes": 157238,
+   "title": "Still life with bronze vessels and flowering plants",
+   "artist": "Jang Seung-eop (pen name: Owon)",
+   "date": "1894",
+   "accession": "2014.247",
+   "creditLine": "Gift of Mrs. Anita H. Berger, in memory of Ambassador Samuel D. Berger, 2014",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/646996/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/646996",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  },
+  {
+   "name": "officials_gathering",
+   "met_objectID": 74448,
+   "px": [
+    620,
+    1024
+   ],
+   "bytes": 45346,
+   "title": "Gathering of government officials",
+   "artist": "Unidentified artist",
+   "date": "ca. 1551",
+   "accession": "2008.55",
+   "creditLine": "Purchase, Acquisitions Fund, and The Vincent Astor Foundation and Hahn Kwang Ho Gifts, 2008",
+   "source": "https://storage.googleapis.com/gcs-public-data--met/74448/0.jpg",
+   "objectURL": "https://www.metmuseum.org/art/collection/search/74448",
+   "license": "CC0 (The Met Open Access, isPublicDomain=true)"
+  }
+ ],
+ "hdri": [
+  {
+   "name": "sky_clear_noon",
+   "res": "256x128",
+   "bytes": 55901,
+   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
+   "polyhaven_id": "kloofendal_48d_partly_cloudy_puresky",
+   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_48d_partly_cloudy_puresky/kloofendal_48d_partly_cloudy_puresky_1k.exr",
+   "license": "CC0-1.0 (Poly Haven)"
+  },
+  {
+   "name": "sky_clear_noon",
+   "res": "512x256",
+   "bytes": 181638,
+   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
+   "polyhaven_id": "kloofendal_48d_partly_cloudy_puresky",
+   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_48d_partly_cloudy_puresky/kloofendal_48d_partly_cloudy_puresky_1k.exr",
+   "license": "CC0-1.0 (Poly Haven)"
+  },
+  {
+   "name": "sky_overcast",
+   "res": "256x128",
+   "bytes": 37726,
+   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
+   "polyhaven_id": "kloofendal_overcast_puresky",
+   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_overcast_puresky/kloofendal_overcast_puresky_1k.exr",
+   "license": "CC0-1.0 (Poly Haven)"
+  },
+  {
+   "name": "sky_overcast",
+   "res": "512x256",
+   "bytes": 119148,
+   "encoding": "opaque PNG, left half = RGBE mantissa RGB, right half = exponent+128 as grey; value = rgb/256 * 2^(E-128)",
+   "polyhaven_id": "kloofendal_overcast_puresky",
+   "source": "https://huggingface.co/datasets/leodriesch/open-hdri-1k/resolve/main/data/polyhaven/kloofendal_overcast_puresky/kloofendal_overcast_puresky_1k.exr",
+   "license": "CC0-1.0 (Poly Haven)"
+  }
+ ],
+ "alpha": [
+  {
+   "name": "pine_branch_cards",
+   "ambientcg_id": "LeafSet019",
+   "bytes": 80002,
+   "license": "CC0-1.0 (ambientCG)",
+   "source": {
+    "tar": "dataset_01.tar",
+    "ranges": {
+     "Color": [
+      787396608,
+      143421
+     ],
+     "Opacity": [
+      787542016,
+      213636
+     ]
+    }
+   }
+  },
+  {
+   "name": "grass_blade_cards",
+   "ambientcg_id": "Foliage006",
+   "bytes": 21578,
+   "license": "CC0-1.0 (ambientCG)",
+   "source": {
+    "tar": "dataset_01.tar",
+    "ranges": {
+     "Color": [
+      695349760,
+      67955
+     ],
+     "Opacity": [
+      695217664,
+      44281
+     ]
+    }
+   }
+  },
+  {
+   "name": "maple_leaf_cards",
+   "ambientcg_id": "LeafSet027",
+   "bytes": 34418,
+   "license": "CC0-1.0 (ambientCG)",
+   "source": {
+    "tar": "dataset_02.tar",
+    "ranges": {
+     "Color": [
+      618977280,
+      125527
+     ],
+     "Opacity": [
+      618124288,
+      58140
+     ]
+    }
+   }
+  },
+  {
+   "name": "pine_needle_cards",
+   "ambientcg_id": "PineNeedles001",
+   "bytes": 38438,
+   "license": "CC0-1.0 (ambientCG)",
+   "source": {
+    "tar": "dataset_03.tar",
+    "ranges": {
+     "Color": [
+      418529280,
+      105910
+     ],
+     "Opacity": [
+      418265088,
+      61190
+     ]
+    }
+   }
+  }
+ ],
+ "misc": [
+  {
+   "name": "bluenoise_64_rgba",
+   "bytes": 16521,
+   "source": "https://raw.githubusercontent.com/Calinou/free-blue-noise-textures/master/64_64/LDR_RGBA_0.png",
+   "license": "CC0-1.0 (Christoph Peters)"
+  }
+ ],
+ "total_bytes": 2910276,
+ "total_base64_bytes": 3880368
+}
