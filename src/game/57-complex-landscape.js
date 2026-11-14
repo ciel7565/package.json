@@ -237,6 +237,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         default: break;
       }
     }
+    for (const L of F.lines) { const b = polyBox(L.pts); L.box = { x0: b.x0 - L.w - 4, z0: b.z0 - L.w - 4, x1: b.x1 + L.w + 4, z1: b.z1 + L.w + 4 }; }
     FOOT_CACHE.set(C, F);
     return F;
   }
@@ -251,7 +252,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     if (wy > -Infinity) return true;
     const river = C.byId && C.byId('RIVER');
     if (river) { const n = polyNear(x, z, river.pts); if (n.d < river.w / 2 + 1.2 + r * 0.6) return true; }
-    for (const L of F.lines) { if (polyNear(x, z, L.pts).d < L.w + r * 0.5) return true; }
+    for (const L of F.lines) { const b = L.box; if (b && (x < b.x0 - r || x > b.x1 + r || z < b.z0 - r || z > b.z1 + r)) continue; if (polyNear(x, z, L.pts).d < L.w + r * 0.5) return true; }
     const inB = x > B.minX - 6 && x < B.maxX + 6 && z > B.minZ - 6 && z < B.maxZ + 6;
     if (!inB) return false;
     for (const R of F.rects) { if (R.plaza && o.plaza) continue; if (x > R.x0 - r && x < R.x1 + r && z > R.z0 - r && z < R.z1 + r) return true; }
@@ -276,7 +277,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   const SP = { pine: 0, oak: 1, maple: 1, zelkova: 2, birch: 3, pine_sculpted: 4 };
   const SP_NAMES = ['pine', 'round', 'vase', 'birch', 'sculpted'];
   const BELT = 160;
-  const QPLAN = { low: { dens: 0.12, belt: 120 }, medium: { dens: 0.6, belt: 170 }, high: { dens: 1.0, belt: 230 } };
+  const QPLAN = { low: { dens: 0.12, belt: 120 }, medium: { dens: 0.6, belt: 170 }, high: { dens: 1.25, belt: 230 } };
   function pickSpecies(shares, u) {
     let acc = 0, last = 'pine';
     for (const k of Object.keys(shares)) { acc += shares[k]; last = k; if (u < acc) return k; }
@@ -738,12 +739,12 @@ vec4 cxCell(vec2 p, out vec2 toF){
         float isCon = smoothstep(conif - 0.08, conif + 0.08, cxN(p / 13.0 + 1.7));
         isCon = 1.0 - isCon;
         float hue = cxN(p / 5.3 - 4.4);
-        vec3 broad = mix(vec3(0.06, 0.1, 0.026), vec3(0.115, 0.155, 0.04), hue) * mix(0.8, 1.15, n3);
-        vec3 con = mix(vec3(0.032, 0.056, 0.024), vec3(0.05, 0.08, 0.032), hue) * mix(0.85, 1.1, n3);
+        vec3 broad = mix(vec3(0.042, 0.072, 0.02), vec3(0.08, 0.112, 0.03), hue) * mix(0.78, 1.12, n3);
+        vec3 con = mix(vec3(0.024, 0.044, 0.019), vec3(0.04, 0.064, 0.026), hue) * mix(0.85, 1.1, n3);
         vec3 crown = mix(broad, con, isCon);
         crown *= mix(0.62, 1.12, cxDome * cxDet + 0.55 * (1.0 - cxDet));
         crown += isCon * vec3(0.016, 0.022, 0.006) * smoothstep(0.7, 0.95, cxDome) * cxDet;
-        crown *= 1.0 - 0.45 * hole;
+        crown *= 1.0 - 0.55 * hole;
         vec3 rock = vec3(0.13, 0.12, 0.1) * (0.7 + 0.55 * cxFbm(vCxWP.xz / 7.0 + vCxWP.y / 5.0));
         rock *= 0.82 + 0.36 * cxN(vec2(vCxWP.y * 0.9, (vCxWP.x + vCxWP.z) * 0.04));
         vec3 gravel = vec3(0.2, 0.19, 0.165) * (0.7 + 0.5 * cxN(vCxWP.xz * 1.3));
@@ -942,6 +943,8 @@ vec4 cxCell(vec2 p, out vec2 toF){
       S.push([L[0], L[1], L[2], (L[0] - L2[0]) / ll, (L[1] - L2[1]) / ll, (L2[2] - L[2]) / ll]);
       // smooth the tangents (no kinks at the joints); riffles: faster, white water across the river
       const inWater = rocks.filter((r) => r.wet);
+      const grid = new Map();                          // wet rocks by 8 m cell (each rock in every cell it can foam)
+      for (const r of inWater) { const R = r.r + 2.6; for (let gx = Math.floor((r.x - R) / 8); gx <= Math.floor((r.x + R) / 8); gx++) for (let gz = Math.floor((r.z - R) / 8); gz <= Math.floor((r.z + R) / 8); gz++) { const k = gx * 4096 + gz; let a = grid.get(k); if (!a) grid.set(k, (a = [])); a.push(r); } }
       const RF = riffles(RL);
       let along = 0;
       S.forEach((s, i) => {
@@ -962,7 +965,8 @@ vec4 cxCell(vec2 p, out vec2 toF){
           const spd = (0.5 + 4 * fall + 0.9 * rif) * (1 - 0.55 * u * u);
           flow.push(dx * spd, dz * spd);
           let f = rif * (0.75 + 0.25 * vnoise(u * 3 + i * 0.3, i * 0.21, 708)) + (1 - smooth(0.05, 0.45, dep)) * 0.45 + smooth(0.75, 1, Math.abs(u)) * 0.2;
-          for (const r of inWater) { const dd = Math.hypot(x - r.x, z - r.z) - r.r; if (dd < 2.6) f = Math.max(f, 1 - dd / 2.6 + (dd < 0 ? 0.2 : 0)); }
+          const cell = grid.get(Math.floor(x / 8) * 4096 + Math.floor(z / 8));
+          if (cell) for (const r of cell) { const dd = Math.hypot(x - r.x, z - r.z) - r.r; if (dd < 2.6) f = Math.max(f, 1 - dd / 2.6 + (dd < 0 ? 0.2 : 0)); }
           foam.push(clamp(f, 0, 1.2));
         }
       });
@@ -1076,7 +1080,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
     const owned = [geo, mat];
     const text = opts.label != null ? String(opts.label) : (kind === 'shuttle' ? '만장대 셔틀' : '');
     if (text && !low) {
-      const tex = labelTexture(text, kind === 'shuttle' ? '🏺 마을 ↔ 만장대 단지' : '');
+      const tex = labelTexture(text, kind === 'shuttle' ? '마을 ↔ 만장대 단지' : '');
       if (tex) {
         const L = kind === 'coach' ? 12 : 9, W = kind === 'coach' ? 2.5 : 2.4;
         const lm = new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.5, metalness: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -1394,7 +1398,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
           const slope = Math.hypot(hx, hz) / (2 * Lt.c);
           const x = Lt.x0 + i * Lt.c, z = Lt.z0 + j * Lt.c;
           const far = !!river && Math.abs(z - clamp(z, river.pts[0][1], river.pts[river.pts.length - 1][1])) < 200 && x < riverXAt(river.pts, z) - 10;
-          if (slope < (far ? 0.85 : 1.35) || hash2(i, j, Lt.c) > (far ? 0.42 : 0.2)) continue;
+          if (!far || slope < 0.85 || hash2(i, j, Lt.c) > 0.42) continue;
           if (!far && outside(x, z, C.bounds) < 40) continue;
           if (blocked(C, x, z, 2, {})) continue;
           const s = (far ? 3.6 : 2.6) + hash2(i, j, 3) * (far ? 5 : 2.5);
@@ -1670,6 +1674,8 @@ vec4 cxCell(vec2 p, out vec2 toF){
     let reeds = null;
     if (!low && RL) {
       const list = [];
+      const rockGrid = new Map();
+      for (const r of rocks) { const R = r.r + 0.6; for (let gx = Math.floor((r.x - R) / 8); gx <= Math.floor((r.x + R) / 8); gx++) for (let gz = Math.floor((r.z - R) / 8); gz <= Math.floor((r.z + R) / 8); gz++) { const k = gx * 4096 + gz; let a = rockGrid.get(k); if (!a) rockGrid.set(k, (a = [])); a.push(r); } }
       const P = RL.pts, step = high ? 1.3 : 2.6, hw = RL.w / 2;
       for (let i = 0, s = 0; i < P.length - 1; i++) {
         const a = P[i], b = P[i + 1], l = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -1678,7 +1684,8 @@ vec4 cxCell(vec2 p, out vec2 toF){
           if (hash2(s, side + 5, 501) < 0.3) continue;
           const off = (hw - 0.8 + hash2(s, side + 7, 501) * 3.2) * side;
           const x = lerp(a[0], b[0], u / l) + nx * off, z = lerp(a[1], b[1], u / l) + nz * off;
-          if (rocks.some((r) => Math.abs(r.x - x) < r.r + 0.5 && Math.abs(r.z - z) < r.r + 0.5)) continue;
+          const cell = rockGrid.get(Math.floor(x / 8) * 4096 + Math.floor(z / 8));
+          if (cell && cell.some((r) => Math.abs(r.x - x) < r.r + 0.5 && Math.abs(r.z - z) < r.r + 0.5)) continue;
           if (footprints(C).lines.some((L) => polyNear(x, z, L.pts).d < L.w)) continue;
           const wy = lerp(a[2], b[2], u / l), g = hAt(x, z);
           list.push({ x, z, y: Math.max(g, wy - 0.35), s: 0.7 + hash2(s, side + 9, 501) * 0.6, r: hash2(s, side + 11, 501) * TAU });
@@ -1865,6 +1872,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
       const fam = {}; let calls = 0, tris = 0;
       root.traverse((o) => {
         if (!o.isMesh || !o.visible || (o.material && o.material.visible === false) || o.userData.dataOnly) return;
+        if (o.userData.cxlFamily === 'tree' && grove && grove.stats) return;      // counted from the grove's own statistics below
         let hidden = false; for (let p = o.parent; p && p !== root; p = p.parent) if (!p.visible) hidden = true;
         if (hidden) return;
         const g = o.geometry;
@@ -1875,6 +1883,11 @@ vec4 cxCell(vec2 p, out vec2 toF){
         const f = o.userData.cxlFamily || o.name.replace(/^cxl-/, '').replace(/-(\d|sedan|suv|body|label|broad|conifer).*$/, '').replace(/-.*$/, '');
         const a = fam[f] || (fam[f] = { calls: 0, tris: 0 }); a.calls++; a.tris += per * n; calls++; tris += per * n;
       });
+      if (grove && grove.stats) {
+        const st = grove.stats() || {}, q = Array.isArray(st.quads) ? st.quads : [0, 0];
+        const t = (q[0] + q[1]) * 2 + (st.trees || grove.count || 0) * 2, c = 3;
+        const a = fam.tree || (fam.tree = { calls: 0, tris: 0 }); a.calls += c; a.tris += t; calls += c; tris += t;
+      }
       return { calls, tris: Math.round(tris), families: fam };
     };
     stats.ms.total = Math.round((now() - t0) * 10) / 10;
