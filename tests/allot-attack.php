@@ -1920,6 +1920,25 @@ check('defect D13 — a backlog larger than the tick batch (every contract of an
         : json_encode($res + ['inv' => inv()]);
 });
 
+check('defect D14 — a PARTIAL_CANCELED webhook (part of the money went back at 토스) is not booked as a full refund: the payment stays paid, the operator is told and the integrity scan lists it', function () use ($ADM, $fresh) {
+    Tfm\Allot::saveSettings($ADM, ['toss_enabled' => true]);
+    $u = newUser();
+    $a = Tfm\Allot::apply($u, $fresh('A1'), form());
+    $cid = (int) conRow($a['contractNo'])['id'];
+    $p = Tfm\Allot::payPrepare($u, $a['contractNo']);
+    Tfm\Allot::payConfirm($u, 'mock_' . $p['orderId'], $p['orderId'], $p['amount']);
+    $before = conById($cid);
+    $r = Tfm\Allot::webhook(['eventType' => 'PAYMENT_STATUS_CHANGED', 'data' => ['paymentKey' => 'mock_' . $p['orderId'], 'orderId' => $p['orderId'], 'status' => 'PARTIAL_CANCELED']]);
+    $row = Tfm\Db::one('SELECT status, toss_status FROM allot_payments WHERE order_id = ?', [$p['orderId']]);
+    $after = conById($cid);
+    $refunds = (int) Tfm\Db::value("SELECT COUNT(*) FROM allot_payments WHERE contract_id = ? AND kind = 'refund'", [$cid]);
+    $issues = json_encode(Tfm\Allot::integrity(500, false)['issues'], JSON_UNESCAPED_UNICODE);
+    Tfm\Allot::saveSettings($ADM, ['toss_enabled' => false]);
+    return $row['status'] === 'paid' && $row['toss_status'] === 'PARTIAL_CANCELED' && $refunds === 0 && (int) $after['paid_total'] === (int) $before['paid_total']
+        && (int) $after['paid_until'] === (int) $before['paid_until'] && strpos($issues, $a['contractNo']) !== false && ($r['refunded'] ?? null) === false && inv() === '' ? true
+        : json_encode(['webhook' => $r, 'payment' => $row, 'refund rows' => $refunds, 'paid_total' => [$before['paid_total'], $after['paid_total']], 'issues' => mb_substr($issues, 0, 300), 'inv' => inv()], JSON_UNESCAPED_UNICODE);
+});
+
 // SECTION-MARK (the next sections are appended above this line)
 
 echo PHP_EOL . "allot-attack: $passed passed, $failed failed" . ($skipped ? ", $skipped skipped" : '') . ' (' . Tfm\Db::driverSafe() . ')' . PHP_EOL;

@@ -11,8 +11,9 @@
  * exponent, array or boolean → 400 INVALID_AMOUNT).
  * Login + CSRF. 400 INVALID_INPUT · 400 INVALID_AMOUNT · 400 INVALID_PAYMENT_KEY · 400 AMOUNT_MISMATCH ·
  * 402 PAYMENT_FAILED · 403 ALLOT_DISABLED · 403 PAY_DISABLED · 404 ORDER_NOT_FOUND · 409 ORDER_NOT_OPEN ·
- * 409 CONTRACT_CLOSED (paid, but the contract had ended meanwhile: the payment is refunded) · 503 PAYMENT_PENDING (ask
- * again in a moment). Rate limit allot_write.
+ * 409 CONTRACT_CLOSED (the contract has ended: refused before 토스 is asked, or — when it ended while 토스 took the
+ * money — only that payment is refunded) · 409 NOTHING_DUE (another payment already covered this period / application:
+ * the same two cases) · 503 PAYMENT_PENDING (ask again in a moment). Rate limit allot_write.
  */
 declare(strict_types=1);
 

@@ -2289,12 +2289,15 @@ final class Allot
             self::lockContract((int) $o['contract_id']);
             if (Db::one('SELECT id FROM payment_events WHERE order_id = ? AND event = ? AND status = ?', [$orderId, $event, $status])) return null;
             Db::insert('payment_events', ['order_id' => $orderId, 'event' => $event, 'status' => $status, 'payload' => '', 'created_at' => $now]);
-            $done = in_array($status, ['CANCELED', 'PARTIAL_CANCELED'], true) && self::refundLocked($o, '결제 취소 (토스 알림)', null, $now) > 0;
+            // [verify-allot] only a full cancel is a refund of the payment; a partial one (done in the 토스 store admin) is
+            // not booked as "all of it went back" — the operator settles it by hand (alert + integrity partial_cancel)
+            $done = $status === 'CANCELED' && self::refundLocked($o, '결제 취소 (토스 알림)', null, $now) > 0;
             Db::exec('UPDATE allot_payments SET toss_status = ?, updated_at = ? WHERE id = ?', [$status, $now, (int) $o['id']]);
             return $done;
         });
         if ($refunded === null) return ['ignored' => true, 'why' => 'duplicate'];
         if ($refunded) Audit::log('allot_refund', $o['user_id'] === null ? null : (int) $o['user_id'], ['payment' => (int) $o['id'], 'contract' => (int) $o['contract_id'], 'method' => 'toss', 'amount' => (int) $o['amount'], 'webhook' => true], 'warn');
+        if ($status === 'PARTIAL_CANCELED') Audit::log('allot_partial_cancel', null, ['payment' => (int) $o['id'], 'contract' => (int) $o['contract_id']], 'alert');
         return ['ignored' => false, 'status' => $status, 'refunded' => $refunded, 'allot' => true];
     }
 
@@ -3623,7 +3626,8 @@ final class Allot
      *   an ended contract that still claims its unit (live_unit_id) → the claim is dropped
      *   a waiting-list offer for a unit that is not held for it → the row waits again
      * Everything else is only reported (issues: [{kind, ref, note}], at most $limit): leased_without_contract ·
-     * unit_conflict · refund_due (a canceled contract with money on it) · capacity_mismatch. → {healed, issues}
+     * unit_conflict · refund_due (a canceled contract with money on it, or an automatic 토스 refund that failed) · partial_cancel (토스
+     * canceled part of a payment: settle it by hand) · capacity_mismatch. → {healed, issues}
      */
     public static function integrity(int $limit = 500, bool $heal = false, ?int $now = null): array
     {
@@ -3688,6 +3692,9 @@ final class Allot
         }
         foreach (Db::all("SELECT contract_no FROM allot_contracts WHERE status = 'canceled' AND paid_total > 0 ORDER BY id ASC LIMIT ?", [$limit]) as $c) {
             $issues[] = ['kind' => 'refund_due', 'ref' => (string) $c['contract_no'], 'note' => '취소된 신청에 받은 돈이 남아 있어요. 환불을 확인해 주세요'];
+        }
+        foreach (Db::all("SELECT c.contract_no, p.id FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id WHERE p.status = 'paid' AND p.toss_status = 'PARTIAL_CANCELED' ORDER BY p.id ASC LIMIT ?", [$limit]) as $c) {
+            $issues[] = ['kind' => 'partial_cancel', 'ref' => (string) $c['contract_no'], 'note' => '토스에서 일부만 취소된 결제가 있어요 (입금 #' . (int) $c['id'] . '). 돌려준 금액을 확인해 장부를 고쳐 주세요'];
         }
         // [verify-allot] a 토스 payment that should have gone back automatically but the gateway refused
         foreach (Db::all("SELECT c.contract_no, p.id FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id WHERE p.status = 'paid' AND p.toss_status = 'REFUND_FAILED' ORDER BY p.id ASC LIMIT ?", [$limit]) as $c) {
