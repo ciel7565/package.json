@@ -24,11 +24,15 @@
 //     real                         true when the real trees / grass / rocks are on
 //     grove(list, opts) -> { group, count, stats(), dispose() }
 //                                  plant trees anywhere (places, the 만장대 complex): list of { x, z, y?, species, scale?,
-//                                  rot?, variant?, tint? } in the coordinates of opts.parent (default: the scene; a
-//                                  translated parent is fine). species: 'pine' | 'gardenPine' | 'oak' | 'maple' |
-//                                  'redMaple' | 'zelkova' | 'conifer'. The same levels of detail, wind and shadows as
-//                                  the valley's trees; plain instanced trees on `low`. opts: { parent, name, shadows,
-//                                  colliders: false, heightAt(x, z) -> y }
+//                                  rot?, variant?, tint? }. species: 'pine' | 'gardenPine' | 'oak' | 'maple' |
+//                                  'redMaple' | 'zelkova' | 'conifer' | 'birch' (also read: pine_sculpted =
+//                                  gardenPine, round = oak; unknown = oak). The same levels of detail, wind and shadows as
+//                                  the valley's trees; plain instanced trees on `low`. opts: { parent (default: the
+//                                  scene; a translated parent is fine, a turned or scaled one is not), name, shadows,
+//                                  colliders: false, heightAt(x, z) -> y, space }. space: 'parent' = the list is in
+//                                  the parent's coordinates, 'world' = in world coordinates (z ≈ 2600 for the complex).
+//                                  Not given: the data decides — a list that lies nearer to the parent's world origin
+//                                  than to its local origin is taken as world coordinates. The result says which.
 //     meadow(opts) -> { mesh, count, dispose() }
 //                                  a patch of grass tufts and wild flowers for a place: { parent, x, z, w, d, density,
 //                                  flowers: 0..1, heightAt(x, z), mask(x, z) -> 0..1, seed }
@@ -439,6 +443,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     pine: (r) => hsl(0.27 + (r() - 0.5) * 0.04, 0.4 + r() * 0.12, 0.26 + r() * 0.07),
     oak: (r) => hsl(0.24 + (r() - 0.5) * 0.05, 0.5 + r() * 0.14, 0.3 + r() * 0.08),
     zelkova: (r) => hsl(0.25 + (r() - 0.5) * 0.03, 0.48 + r() * 0.1, 0.31 + r() * 0.06),
+    birch: (r) => hsl(0.225 + (r() - 0.5) * 0.03, 0.5 + r() * 0.1, 0.36 + r() * 0.06),   // [render-nature] groves only (the valley plants none)
     maple: (r) => {
       const k = r();
       if (k < 0.035) return hsl(0.005 + r() * 0.02, 0.6, 0.34 + r() * 0.05);    // red accent
@@ -1069,6 +1074,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     zelkova: { H: 12.6, trunk: 0.23, r0: 0.6, limbs: [5, 7], ang: [0.42, 0.82], len: 3.6, lenK: 0.68, depth: 3, spread: 0.52, curl: 0.22, lift: 0.13, leader: 0, tipR: 0.95, card: 2.2, cells: [CELL.zelA, CELL.zelB] },
     // 단풍나무: low forks, layered spreading sprays
     maple: { H: 6.9, trunk: 0.22, r0: 0.2, limbs: [3, 4], ang: [0.6, 1.0], len: 2.05, lenK: 0.72, depth: 3, spread: 0.72, curl: 0.3, lift: -0.02, leader: 0, tipR: 0.62, card: 1.55, cells: [CELL.mapA, CELL.mapB] },
+    // 자작나무: a slender white stem, short ascending limbs from half-way up, a narrow airy crown of small leaves
+    birch: { H: 12.4, trunk: 0.52, r0: 0.17, limbs: [5, 6], ang: [0.3, 0.62], len: 1.55, lenK: 0.68, depth: 3, spread: 0.42, curl: 0.3, lift: -0.05, leader: 1, low: 0.5, tipR: 0.5, card: 1.3, cells: [CELL.zelA, CELL.zelB], leaf: [1.1, 1.12, 0.8] },
   };
   function growBroad(rnd, v, sp) {
     const B = BROAD[sp], H = B.H * (0.94 + rnd() * 0.12);
@@ -1091,7 +1098,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     const n = B.limbs[0] + Math.floor(rnd() * (B.limbs[1] - B.limbs[0] + 1)), az0 = rnd() * TAU;
     for (let i = 0; i < n; i++) {
       const az = az0 + (i / n) * TAU + (rnd() - 0.5) * 0.5, ang = B.ang[0] + rnd() * (B.ang[1] - B.ang[0]);
-      rec(i < 2 ? top : polyAt(tr.pts, 0.72 + rnd() * 0.26), [Math.cos(az) * Math.sin(ang), Math.cos(ang), Math.sin(az) * Math.sin(ang)], B.len * (0.85 + rnd() * 0.3), B.r0 * 0.5, 1);
+      rec(i < 2 ? top : polyAt(tr.pts, B.low == null ? 0.72 + rnd() * 0.26 : B.low + rnd() * (0.98 - B.low)), [Math.cos(az) * Math.sin(ang), Math.cos(ang), Math.sin(az) * Math.sin(ang)], B.len * (0.85 + rnd() * 0.3), B.r0 * 0.5, 1);
     }
     if (B.leader) rec(top, [(rnd() - 0.5) * 0.3, 1, (rnd() - 0.5) * 0.3], B.len * 0.95, B.r0 * 0.55, 1);
     return T;
@@ -1128,7 +1135,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     zelkova: [[0.27, 0.25, 0.22], [0.31, 0.29, 0.255]],     // smooth grey
     maple: [[0.2, 0.17, 0.145], [0.25, 0.205, 0.17]],
     conifer: [[0.15, 0.115, 0.09], [0.19, 0.145, 0.11]],
+    birch: [[0.2, 0.18, 0.16], [0.8, 0.78, 0.72]],          // dark at the foot and in the twigs, chalk white above
   };
+  const ONE3 = [1, 1, 1];
   const swayOf = (y) => clamp((y / 10) * (y / 10) / 8, 0, 1);
   /** tube quads along pts; opts: { radial, flare, c0, c1, yRed (height where the colour has turned), bob } */
   function tubeQuads(Q, pts, r0, r1, o) {
@@ -1195,8 +1204,8 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
       if (sp === 'conifer' && b.depth) pts = [pts[0], pts[pts.length - 1]];   // hidden in the sprays: one segment is enough
       if (lvl && sp === 'conifer' && b.depth) continue;
       const radial = lvl ? (b.depth ? 3 : 5) : (b.depth === 0 ? 8 : sp === 'conifer' ? 3 : b.depth === 1 ? 5 : b.depth === 2 ? 4 : 3);
-      const red = sp === 'pine';
-      tubeQuads(Q, pts, b.r0, b.r1, { radial, flare: b.depth === 0 && b.pts[0][1] < 0 ? 0.55 : 0, c0: bark[0], c1: bark[1], y0: red ? H * 0.2 : 0.5, y1: red ? H * 0.52 : H * 0.6, bob: b.depth >= 2 ? 0.5 : b.depth ? 0.25 : 0 });
+      const red = sp === 'pine', white = sp === 'birch';
+      tubeQuads(Q, pts, b.r0, b.r1, { radial, flare: b.depth === 0 && b.pts[0][1] < 0 ? 0.55 : 0, c0: bark[0], c1: white && b.depth >= 2 ? bark[0] : bark[1], y0: red ? H * 0.2 : white ? 0.25 : 0.5, y1: red ? H * 0.52 : white ? 1.5 : H * 0.6, bob: b.depth >= 2 ? 0.5 : b.depth ? 0.25 : 0 });
     }
     const wood = Q.n;
     // ---- foliage
@@ -1278,9 +1287,9 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
             const o = [p[0] + (rnd() - 0.5) * tip.r * 0.9 + out[0] * tip.r * 0.25, p[1] + (rnd() - 0.5) * tip.r * 0.7, p[2] + (rnd() - 0.5) * tip.r * 0.9 + out[2] * tip.r * 0.25];
             bl = [o[0] - (ux[0] + uy[0]) * c / 2, o[1] - (ux[1] + uy[1]) * c / 2, o[2] - (ux[2] + uy[2]) * c / 2];
           }
-          const k = jit(0.16), warm = 1 + (rnd() - 0.5) * 0.1;
+          const k = jit(0.16), warm = 1 + (rnd() - 0.5) * 0.1, lf = B.leaf || ONE3;
           const cell = sp === 'maple' && T.red ? CELL.mapRed : B.cells[spray ? 1 : 0];
-          cardQuad(Q, bl, V3.mul(ux, c), V3.mul(uy, c), cell, rnd() < 0.5, (q) => { const g = crownAO(q) * k; return [g * warm, g, g * (2 - warm)]; },
+          cardQuad(Q, bl, V3.mul(ux, c), V3.mul(uy, c), cell, rnd() < 0.5, (q) => { const g = crownAO(q) * k; return [g * warm * lf[0], g * lf[1], g * (2 - warm) * lf[2]]; },
             (q) => { const a = crownN(q); return [a[0] * 0.84 + m[0] * 0.16 * Math.sign(V3.dot(m, a) || 1), a[1] * 0.84 + m[1] * 0.16 * Math.sign(V3.dot(m, a) || 1), a[2] * 0.84 + m[2] * 0.16 * Math.sign(V3.dot(m, a) || 1)]; },
             rnd(), 1, 0.8);
         }
@@ -1292,7 +1301,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     const n = Q.n;
     return { n, wood, P: Q.P.subarray(0, n * 12), N: Q.N.subarray(0, n * 12), U: Q.U.subarray(0, n * 8), C: Q.C.subarray(0, n * 16), W: Q.W.subarray(0, n * 16), radius: rad, top, H, crown: [C[0], C[1], C[2], RX, RY] };
   }
-  VEG.SPECIES = ['pine', 'oak', 'maple', 'zelkova', 'conifer'];
+  VEG.SPECIES = ['pine', 'oak', 'maple', 'zelkova', 'conifer', 'birch'];   // birch: for grove() callers; the valley's placement has none
   VEG.VARIANTS = 4;
   /** every template: tpl[species][variant] = [level 0, level 1]. Seeded: the same trees on every device. */
   function buildTemplates() {
@@ -1576,7 +1585,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       this.used = 0; this.trees = 0;
       this.owner = new Int32Array(this.maxChunks).fill(-1); this.next = new Int32Array(this.maxChunks).fill(-1); this.prev = new Int32Array(this.maxChunks).fill(-1);
       this._tmp = new Int32Array(this.maxChunks);
-      this._dirty = new Int32Array(64); this._nd = 0; this._lo = 1e9; this._hi = -1;
+      this._dirty = new Int32Array(64); this._nd = 0; this._lo = 1e9; this._hi = -1; this._chg = false;
     }
     _mark(c) { if (this._nd < 64) this._dirty[this._nd] = c; this._nd++; if (c < this._lo) this._lo = c; if (c > this._hi) this._hi = c; }
     room(quads) { return this.used + Math.ceil(quads / this.chunk) <= this.maxChunks; }
@@ -1605,7 +1614,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           W[o] = Math.min(255, tW[b] * s2); W[o + 1] = tW[b + 1]; W[o + 2] = tW[b + 2]; W[o + 3] = tW[b + 3];
         }
         const end = (ci + 1) * ch * 4;
-        if (vo < end) P.fill(0, vo * 3, end * 3);   // the rest of the chunk: quads of no size
+        if (vo < end) { P.fill(0, vo * 3, end * 3); W.fill(0, vo * 4, end * 4); }   // the rest of the chunk: quads of no size that the wind cannot pull open
         this._mark(ci);
       }
       this.trees++;
@@ -1634,11 +1643,16 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         this.used--;
       }
       this.heads[id] = -1;
-      this.trees--;
+      this.trees--; this._chg = true;
     }
     /** send what changed to the GPU: the touched chunks one by one, or one span when there are many */
     flush() {
-      if (!this._nd) return false;
+      if (!this._nd) {
+        // nothing to send, but trees may have left from the end of the pool: the draw range follows
+        if (!this._chg) return false;
+        this._chg = false; this.geo.setDrawRange(0, this.used * this.chunk * 6);
+        return true;
+      }
       const v4 = this.chunk * 4, attrs = [[this.aP, 3], [this.aN, 3], [this.aU, 2], [this.aC, 4], [this.aW, 4]];
       const hi = Math.min(this._hi, Math.max(0, this.used - 1));
       for (const [a, k] of attrs) {
@@ -1649,14 +1663,14 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         else for (let i = 0; i < this._nd; i++) { const c = this._dirty[i]; if (c < this.used) a.addUpdateRange(c * v4 * k, v4 * k); }
         if (a.updateRanges.length) a.needsUpdate = true;
       }
-      this._nd = 0; this._lo = 1e9; this._hi = -1;
+      this._nd = 0; this._lo = 1e9; this._hi = -1; this._chg = false;
       this.geo.setDrawRange(0, this.used * this.chunk * 6);
       return true;
     }
   }
 
   // ---------------------------------------------------------------- the forest
-  const LOD = { near: 40, mid: 110 };   // §16.2: full < 40 m, reduced < 110 m, impostor beyond
+  const LOD = { near: 40, mid: 110, budget: 2600 };   // §16.2: full < 40 m, reduced < 110 m, impostor beyond; quads written per update
   const _fe = new THREE.Euler(), _fm = new THREE.Matrix4(), _m34 = new Float64Array(12);
   /**
    * new Forest(list, opts)   list: [{ x, y, z, s, rot, tiltX?, tiltZ?, sp (species index), v (variant), tint: [r, g, b] }]
@@ -1700,20 +1714,20 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       this.group = new THREE.Group(); this.group.name = this.name;
       this.group.add(this.b0.mesh, this.b1.mesh);
       if (this.far) this.group.add(this.far);
-      this._t = 0; this._fx = 1e9; this._fz = 1e9; this._pending = true; this._cand = new Int32Array(Math.min(n, 4096)); this._cd = new Float32Array(this._cand.length);
-      this.writes = 0; this.maxTickMs = 0;
+      this._t = 0; this._fx = 1e9; this._fz = 1e9; this._pending = true; this._cand = new Int32Array(Math.min(n * 2, 4096)); this._cd = new Float32Array(this._cand.length);
+      this.writes = 0; this.maxTickMs = 0; this.maxTickQuads = 0; this.ticks = 0; this.tickMs = 0;
     }
     /** membership rings (squared metres, with hysteresis) and the shaders' fade bands for the current scale */
     _bands() {
-      const k = this.scale, N = LOD.near * k, M = LOD.mid * k;
-      this.r = { in0: (N + 6) * (N + 6), out0: (N + 12) * (N + 12), lo1in: (N - 10) * (N - 10), lo1out: (N - 14) * (N - 14), hi1in: (M + 10) * (M + 10), hi1out: (M + 18) * (M + 18) };
+      const k = this.scale, N = LOD.near * k, M = LOD.mid * k, sq = (v) => (v > 0 ? v * v : 0);
+      this.r = { in0: (N + 6) * (N + 6), out0: (N + 12) * (N + 12), lo1in: sq(N - 10), lo1out: sq(N - 14), hi1in: (M + 10) * (M + 10), hi1out: (M + 18) * (M + 18) };
       this.m0.userData.uFade.value.set(-2, -1, N - 4, N + 2);
       this.m1.userData.uFade.value.set(N - 4, N + 2, M - 6, M + 4);
       this.mF.userData.uFade.value.set(M - 6, M + 4, 1e8, 1e9);
     }
     /** shrink / restore the level distances (a quality step while playing); never beyond what the batches were sized for */
     setScale(k) {
-      k = Math.min(Math.max(0.3, Number(k) || 1), this.scale0);
+      k = Math.min(Math.max(0.15, Number(k) || 1), this.scale0);
       if (k === this.scale) return;
       this.scale = k; this._bands(); this._pending = true;
     }
@@ -1727,7 +1741,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       let q0 = 0, q1 = 0;
       const SVq0 = new Float32Array(VEG.SPECIES.length * VEG.VARIANTS), SVq1 = new Float32Array(SVq0.length);
       VEG.SPECIES.forEach((sp, si) => { for (let v = 0; v < VEG.VARIANTS; v++) { SVq0[si * VEG.VARIANTS + v] = Math.ceil(tpl[sp][v][0].n / 64) * 64; SVq1[si * VEG.VARIANTS + v] = Math.ceil(tpl[sp][v][1].n / 16) * 16; } });
-      const step = 24;
+      const step = Math.max(24, Math.sqrt(((b[3] - b[0] + 24) * (b[5] - b[2] + 24)) / 2500));   // at most ≈ 2,500 sample points
       for (let z = b[2]; z <= b[5] + step; z += step) for (let x = b[0]; x <= b[3] + step; x += step) {
         let a0 = 0, a1 = 0;
         for (let i = 0; i < n; i++) {
@@ -1738,7 +1752,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       }
       // the sample grid misses peaks between its points: a margin; and a ceiling on the memory (31 bytes per vertex).
       // Where even that is not enough the forest pulls its levels in for a while (tick) instead of dropping trees.
-      return [Math.min(Math.ceil(q0 * 1.3) + 2048, 48000), Math.min(Math.ceil(q1 * 1.15) + 1024, 64000)];
+      return [Math.min(Math.ceil(q0 * 1.3) + 2048, VEG.high ? 48000 : 36000), Math.min(Math.ceil(q1 * 1.15) + 1024, VEG.high ? 64000 : 48000)];
     }
     _buildFar() {
       const n = this.n, imp = VEG.imp;
@@ -1797,32 +1811,39 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       const t0 = performance.now();
       this._t = 0.2; this._fx = fx; this._fz = fz;
       const X = this.X, Z = this.Z, h0 = this.h0, h1 = this.h1, r = this.r, b0 = this.b0, b1 = this.b1, cand = this._cand, cd = this._cd;
-      let nc = 0;
-      for (let i = 0, n = this.n; i < n; i++) {
+      let nc = 0, more = false;
+      for (let i = 0, n = this.n, cap = cand.length; i < n; i++) {
         const dx = X[i] - fx, dz = Z[i] - fz, d2 = dx * dx + dz * dz;
         if (h0[i] >= 0) { if (d2 > r.out0) b0.remove(i); }
-        else if (d2 < r.in0 && nc < cand.length) { cand[nc] = i; cd[nc++] = d2; }
+        else if (d2 < r.in0) { if (nc < cap) { cand[nc] = i; cd[nc++] = d2; } else more = true; }
         if (h1[i] >= 0) { if (d2 > r.hi1out || d2 < r.lo1out) b1.remove(i); }
-        else if (d2 < r.hi1in && d2 > r.lo1in && nc < cand.length) { cand[nc] = -1 - i; cd[nc++] = d2; }
+        else if (d2 < r.hi1in && d2 >= r.lo1in) { if (nc < cap) { cand[nc] = -1 - i; cd[nc++] = d2; } else more = true; }
       }
-      // writes: nearest first, inside the budget (quads per call) unless forced
-      let budget = force ? 1e9 : 2600, left = nc, crowded = false;
-      while (left > 0 && budget > 0) {
-        let best = -1, bd = 1e30;
-        if (force) best = left - 1;
-        else for (let k = 0; k < nc; k++) if (cd[k] < bd) { bd = cd[k]; best = k; }
-        if (best < 0) break;
-        const c = cand[best];
-        cd[best] = 1e30; left--;
-        const lvl = c < 0 ? 1 : 0, i = c < 0 ? -1 - c : c, batch = lvl ? b1 : b0;
+      // writes: nearest first (the two lists sorted in place), inside the budget (quads per call) unless forced.
+      // A level without room closes for this call: what is left of its list is further away than what it holds.
+      for (let gap = nc >> 1; gap > 0; gap >>= 1) {
+        for (let a = gap; a < nc; a++) {
+          const d = cd[a], c = cand[a];
+          let b = a;
+          for (; b >= gap && cd[b - gap] > d; b -= gap) { cd[b] = cd[b - gap]; cand[b] = cand[b - gap]; }
+          cd[b] = d; cand[b] = c;
+        }
+      }
+      let budget = force ? 1e9 : LOD.budget, k = 0, shut0 = false, shut1 = false, wq = 0;
+      for (; k < nc && budget > 0; k++) {
+        const c = cand[k], lvl = c < 0 ? 1 : 0;
+        if (lvl ? shut1 : shut0) { this.full = (this.full || 0) + 1; continue; }
+        const i = c < 0 ? -1 - c : c, batch = lvl ? b1 : b0;
         const tq = VEG.templates[VEG.SPECIES[Math.floor(this.SV[i] / VEG.VARIANTS)]][this.SV[i] % VEG.VARIANTS][lvl].n;
-        if (!batch.room(tq)) { this.full = (this.full || 0) + 1; crowded = true; continue; }
+        if (!batch.room(tq)) { if (lvl) shut1 = true; else shut0 = true; this.full = (this.full || 0) + 1; continue; }
         this._write(batch, lvl, i);
-        budget -= tq; this.writes++;
+        budget -= tq; wq += tq; this.writes++;
       }
-      this._pending = left > 0 && budget <= 0;
+      if (!force && wq > this.maxTickQuads) this.maxTickQuads = wq;
+      this._pending = k < nc || more;
+      const crowded = shut0 || shut1;
       // a crowded spot: pull the levels in (trees beyond them become impostors); widen again when there is room
-      if (crowded) { this._wide = 0; this.setScale(Math.max(0.5, this.scale * 0.9)); }
+      if (crowded) { this._wide = 0; this.setScale(Math.max(0.15, this.scale * 0.9)); }
       else if (this.scale < this.want) {
         this._wide = (this._wide || 0) + 1;
         if (this._wide > 40 && b0.used < b0.maxChunks * 0.6 && b1.used < b1.maxChunks * 0.6) { this._wide = 0; this.setScale(Math.min(this.want, this.scale * 1.06)); }
@@ -1832,6 +1853,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       if (ch1) this._sphere(b1, h1, 1);
       const ms = performance.now() - t0;
       if (ms > this.maxTickMs) this.maxTickMs = ms;
+      this.ticks++; this.tickMs += ms;
     }
     /** the batch's bounding sphere from the trees it holds */
     _sphere(batch, heads, lvl) {
@@ -1850,7 +1872,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       sph.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
       sph.radius = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + 2;   // + the reach of the wind
     }
-    stats() { return { trees: this.n, scale: +this.scale.toFixed(3), near: this.b0.trees, mid: this.b1.trees, chunks: [this.b0.used, this.b1.used], cap: [this.b0.maxChunks, this.b1.maxChunks], quads: [this.b0.used * 64, this.b1.used * 16], writes: this.writes, full: this.full || 0, maxTickMs: +this.maxTickMs.toFixed(2) }; }
+    stats() { return { trees: this.n, scale: +this.scale.toFixed(3), near: this.b0.trees, mid: this.b1.trees, chunks: [this.b0.used, this.b1.used], cap: [this.b0.maxChunks, this.b1.maxChunks], quads: [this.b0.used * 64, this.b1.used * 16], writes: this.writes, full: this.full || 0, maxTickMs: +this.maxTickMs.toFixed(2), meanTickMs: +(this.tickMs / Math.max(1, this.ticks)).toFixed(3), ticks: this.ticks, maxTickQuads: this.maxTickQuads }; }
     dispose() {
       this.group.parent?.remove(this.group);
       for (const m of [this.b0.mesh, this.b1.mesh, this.far]) if (m) m.geometry.dispose();
@@ -1898,12 +1920,15 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     if (VEG.ready) return true;
     VEG.high = preset.name === 'high';
     VEG.aniso = preset.aniso ?? (VEG.high ? 8 : 4);
-    const t0 = performance.now();
+    const t0 = performance.now(), parts = (VEG.setupParts = {});
     const a = drain(genAtlas(512, {}, 0.55));
     if (!a) return false;
     VEG.atlasMips = a.mips; VEG.atlasTex = mipTexture(a.mips, { aniso: VEG.aniso });
+    parts.atlas = Math.round(performance.now() - t0);
     VEG.templates = buildTemplates();
+    parts.templates = Math.round(performance.now() - t0) - parts.atlas;
     const im = drain(bakeImpostors(VEG.templates, a.mips, 64));
+    parts.impostors = Math.round(performance.now() - t0) - parts.atlas - parts.templates;
     VEG.imp = im; VEG.impColor = mipTexture(im.color, { aniso: 2 });
     VEG.U.tImpN = { value: mipTexture(im.normal, { srgb: false, aniso: 2 }) };
     VEG.U.uImpUV = { value: new THREE.Vector2(1 / im.cols, 1 / im.rows) };
@@ -1998,7 +2023,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       for (let i = 0; i < 4; i++) {
         const lean = (rnd() - 0.5) * 0.5, len = S * (0.8 + rnd() * 0.16), tx = bx + lean * len, ty = by - len * 0.97;
         x.strokeStyle = css(120, 132, 66); x.lineWidth = Math.max(1, S * 0.008); x.beginPath(); x.moveTo(bx + (rnd() - 0.5) * S * 0.1, by); x.quadraticCurveTo(bx + lean * len * 0.3, by - len * 0.6, tx, ty); x.stroke();
-        x.fillStyle = css(176, 160, 96);
+        x.fillStyle = css(158, 150, 88);
         for (let k = 0; k < 9; k++) { x.beginPath(); x.ellipse(tx + (rnd() - 0.5) * S * 0.03 - lean * k * S * 0.006, ty + k * S * 0.016, S * 0.012, S * 0.02, lean, 0, TAU); x.fill(); }
       }
     }
@@ -2546,7 +2571,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       if (this.real) {
         this._scheduleFoliage();
         G.bus.on('engine:quality', () => this._vegQuality());
-        this.counts.vegSetupMs = VEG.setupMs;
+        this.counts.vegSetupMs = VEG.setupMs; this.counts.vegSetupParts = VEG.setupParts;
       }
       G.log.info('WORLD', 'nature', JSON.stringify(this.counts));
     },
@@ -2579,7 +2604,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     },
     /** a tree of the placement lists → a Forest record (species index, variant, tint of the photographed leaves) */
     _treeRecord(it) {
-      const SP = { pine: 0, oak: 1, maple: 2, zelkova: 3, conifer: 4 };
+      const SP = { pine: 0, oak: 1, maple: 2, zelkova: 3, conifer: 4, birch: 5 };
       const M = this._palMean || (this._palMean = (() => {
         // the mean palette colour of every species (red / orange maple accents left out)
         const out = {};
@@ -2628,24 +2653,34 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       if (!parent || !Array.isArray(list) || !list.length) return none;
       parent.updateWorldMatrix?.(true, false);
       const pm = parent.matrixWorld.elements, ox = pm[12], oy = pm[13], oz = pm[14];
-      const KIND = { pine: 'pine', gardenPine: 'pine', oak: 'oak', maple: 'maple', redMaple: 'maple', zelkova: 'zelkova', conifer: 'conifer', fir: 'conifer' };
-      const TR_R = { pine: 0.3, oak: 0.28, maple: 0.22, zelkova: 0.6, conifer: 0.26 };
+      // species names of the callers (the landscape of the complex says pine_sculpted, birch, round) → the five kinds
+      const KIND = { pine: 'pine', gardenPine: 'pine', pine_sculpted: 'pine', sculptedPine: 'pine', oak: 'oak', round: 'oak', broadleaf: 'oak', birch: 'birch', maple: 'maple', redMaple: 'maple', zelkova: 'zelkova', conifer: 'conifer', fir: 'conifer', spruce: 'conifer' };
+      const GARDEN = { gardenPine: 1, pine_sculpted: 1, sculptedPine: 1 };
+      const TR_R = { pine: 0.3, oak: 0.28, maple: 0.22, zelkova: 0.6, conifer: 0.26, birch: 0.18 };
       const hAt = typeof opts.heightAt === 'function' ? opts.heightAt : (x, z) => H(x + ox, z + oz) - oy;
+      // which coordinates the list uses (see the header): said by opts.space, else read from the data
+      let world = opts.space === 'world';
+      if (opts.space !== 'world' && opts.space !== 'parent' && (ox || oz)) {
+        let cx = 0, cz = 0, cn = 0;
+        for (const t of list) { const x = Number(t && t.x), z = Number(t && t.z); if (Number.isFinite(x) && Number.isFinite(z)) { cx += x; cz += z; cn++; } }
+        if (cn) world = Math.hypot(cx / cn - ox, cz / cn - oz) < Math.hypot(cx / cn, cz / cn);
+      }
+      const sx = world ? ox : 0, sy = world ? oy : 0, sz = world ? oz : 0;
       const rnd = G.util.rng((opts.seed ?? 20260) + list.length);
       const items = [];
       for (const t of list) {
-        const x = Number(t && t.x), z = Number(t && t.z);
+        const x = Number(t && t.x) - sx, z = Number(t && t.z) - sz;
         if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
         const kind = KIND[t.species] || 'oak', s = clamp(Number(t.scale) || 1, 0.2, 4);
-        const y = Number.isFinite(t.y) ? Number(t.y) : Number(hAt(x, z));
+        const y = Number.isFinite(t.y) ? Number(t.y) - sy : Number(hAt(x, z));
         if (!Number.isFinite(y)) continue;
-        items.push({ x, y: y - 0.15 * s, z, s, rot: Number.isFinite(t.rot) ? Number(t.rot) : rnd() * TAU, tiltX: (rnd() - 0.5) * 0.05, tiltZ: (rnd() - 0.5) * 0.05, color: PALETTE[kind](rnd), kind, species: t.species, variant: t.variant, tint: t.tint, campus: true });
+        items.push({ x, y: y - 0.15 * s, z, s, rot: Number.isFinite(t.rot) ? Number(t.rot) : rnd() * TAU, tiltX: (rnd() - 0.5) * 0.05, tiltZ: (rnd() - 0.5) * 0.05, color: PALETTE[kind](rnd), kind, species: GARDEN[t.species] ? 'gardenPine' : t.species, variant: t.variant, tint: t.tint, campus: true });
       }
       if (!items.length) return none;
       let group, forest = null;
       const shadows = opts.shadows ?? !!this.preset?.shadows;
       if (this.real) {
-        forest = new Forest(items.map((it) => this._treeRecord(it)), { name: String(opts.name || 'grove'), shadows, scale: this.forest ? this.forest.scale : (eng?.quality === 'high' ? 1 : 0.85) });
+        forest = new Forest(items.map((it) => this._treeRecord(it)), { name: String(opts.name || 'grove'), shadows, scale: eng?.quality === 'high' ? 1 : eng?.quality === 'medium' ? 0.85 : (this.forest ? this.forest.want : 0.85) });
         group = forest.group;
         parent.add(group);
         VEG.forests.push(forest);
@@ -2655,7 +2690,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         const mat = vegMaterial('tree', { sway: 0.0011, flutter: 0.025 });
         group = new THREE.Group(); group.name = String(opts.name || 'grove');
         for (const k of ['pine', 'oak', 'maple', 'zelkova', 'conifer']) {
-          const m = makeInstanced(geo[k], mat, items.filter((it) => it.kind === k), { shadow: shadows, receive: true, name: `grove-${k}` });
+          const m = makeInstanced(geo[k], mat, items.filter((it) => (it.kind === 'birch' ? 'maple' : it.kind) === k), { shadow: shadows, receive: true, name: `grove-${k}` });   // `low` has no birch shape
           if (m) group.add(m);
         }
         parent.add(group);
@@ -2663,7 +2698,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       const ids = [];
       if (opts.colliders) for (const it of items) ids.push(G.world.addCollider({ shape: 'circle', x: it.x + ox, z: it.z + oz, r: (TR_R[it.kind] || 0.3) * it.s + 0.12, tag: 'tree' }));
       return {
-        group, count: items.length, forest,
+        group, count: items.length, forest, space: world ? 'world' : 'parent',
         stats: () => (forest ? forest.stats() : { trees: items.length, plain: true }),
         dispose: () => {
           for (const id of ids) { try { G.world.removeCollider(id); } catch (e) { /* gone */ } }
@@ -3188,7 +3223,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       if (dens <= 0 || !terr?.uniforms) { this.counts.grass = 0; return; }
       if (this.real && VEG.groundTex) {
         // [render-nature] blade cards: a dense lawn layer around the player and a wide meadow layer ahead of the camera
-        const gr = buildGrassMesh(terr, [{ tile: 30, count: Math.round(30 * 30 * 16 * dens), size: 1 }, { tile: 84, count: Math.round(84 * 84 * 3.4 * dens), size: 1.22 }], !!preset.shadows);
+        const gr = buildGrassMesh(terr, [{ tile: 30, count: Math.round(30 * 30 * 13 * dens), size: 1.06 }, { tile: 84, count: Math.round(84 * 84 * 3.4 * dens), size: 1.22 }], !!preset.shadows);
         root.add(gr.mesh);
         this.meshes.grass = gr.mesh;
         this._grassReal = gr.uniforms; this._grassTotal = gr.count; this._grassDens = dens;

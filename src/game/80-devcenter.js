@@ -3492,6 +3492,106 @@
   function rendererStats() {
     const r = G.sys.engine?.renderer;
     if (!r) return null;
+  // [render-nature] ---- 나무·풀·바위 (CONTRACT §16.2): 진짜 같은 식생은 중간·높음에서만, 낮음은 예전 그대로
+  T('🌲 나무와 풀', '낮음은 예전 나무 그대로, 중간·높음은 가지 뼈대에 잎 카드를 단 나무예요', () => {
+    const N = G.sys.nature, q = G.sys.engine?.quality;
+    if (!N?.meshes?.trees) return SKIP('숲이 없는 화면이에요');
+    if (q === 'low' || G.unsupported) return { ok: N.real === false && !N.forest && N.meshes.trees.children.some((c) => /^trees-far-/.test(c.name)), detail: `낮음: 예전 나무 ${N.counts.trees}그루 · 풀 ${N.counts.grass || 0}포기` };
+    if (G.params?.get?.('veg') === 'old') return SKIP('주소에 veg=old 가 있어요');
+    const V = N.veg, tp = V?.templates;
+    if (!N.real || !tp) return { ok: false, detail: '중간·높음인데 새 나무가 꺼져 있어요' };
+    const bad = [];
+    for (const sp of V.SPECIES) for (let v = 0; v < V.VARIANTS; v++) { const t = tp[sp]?.[v]; if (!t || !(t[0].n > 0) || !(t[1].n > 0) || !(t[1].n < t[0].n) || !(t[0].wood > 0)) bad.push(`${sp}#${v}`); }
+    return { ok: !bad.length && V.SPECIES.length >= 5 && V.VARIANTS >= 4 && N.forest?.n === N.counts.trees, detail: bad.length ? `빠진 나무 모양: ${bad.join(', ')}` : `나무 ${N.counts.trees}그루 · 종류 ${V.SPECIES.length} × 모양 ${V.VARIANTS} × 거리 단계 3 · 소나무 사각 조각 ${tp.pine[0][0].n}개(가까이) / ${tp.pine[0][1].n}개(중간)` };
+  });
+  T('🌲 나무와 풀', '거리 단계: 다가온 나무를 묶음에 써 넣고 떠난 나무는 지워요 (조각이 새지 않아요)', () => {
+    const N = G.sys.nature, V = N?.veg;
+    if (!N?.real || !V?.Forest) return SKIP('낮음 품질이거나 새 나무가 꺼져 있어요');
+    const list = [];
+    for (let i = 0; i < 24; i++) list.push({ x: i * 9, y: 0, z: (i % 3) * 7, s: 1 + (i % 4) * 0.2, rot: i, sp: i % 5, v: i % 4, tint: [1, 1, 1] });
+    const f = new V.Forest(list, { name: 'selftest-forest', shadows: false });
+    try {
+      f.tick(0, 0, 0, true);
+      const a = f.stats();
+      f.tick(100, 0, 0.3, false);
+      for (let k = 0; k < 40 && f._pending; k++) f.tick(100, 0, 0.3, false);
+      const b = f.stats();
+      f.tick(5000, 5000, 0, true);
+      const c = f.stats();
+      const fin = (s) => [s.center.x, s.center.y, s.center.z, s.radius].every(Number.isFinite);
+      const spheres = fin(f.b0.geo.boundingSphere) && fin(f.b1.geo.boundingSphere) && fin(f.far.geometry.boundingSphere);
+      const leak = f.h0.some((h) => h >= 0) || f.h1.some((h) => h >= 0) || f.b0.owner.some((o) => o >= 0) || f.b1.owner.some((o) => o >= 0);
+      const emptied = f.b0.geo.drawRange.count === 0 && f.b1.geo.drawRange.count === 0;   // nothing is drawn any more either
+      return { ok: a.near > 0 && a.mid > 0 && a.near <= 24 && a.mid <= 24 && b.near > 0 && b.mid > 0 && c.near === 0 && c.mid === 0 && c.chunks[0] === 0 && c.chunks[1] === 0 && !leak && emptied && spheres && !a.full && !b.full,
+        detail: `처음: 가까이 ${a.near} · 중간 ${a.mid} → 100 m 옮긴 뒤 ${b.near} · ${b.mid} → 멀리 떠난 뒤 ${c.near} · ${c.mid} (남은 조각 ${c.chunks.join(' · ')})` };
+    } finally { f.dispose(); }
+  });
+  T('🌲 나무와 풀', '숲 묶음의 경계 구가 모두 정상 값이고, 그리는 범위가 묶음 크기 안이에요', () => {
+    const N = G.sys.nature, V = N?.veg;
+    if (!N?.real || !V?.forests?.length) return SKIP('낮음 품질이거나 새 나무가 꺼져 있어요');
+    const bad = [];
+    for (const f of V.forests) for (const m of [f.b0.mesh, f.b1.mesh, f.far]) {
+      if (!m) continue;
+      const s = m.geometry.boundingSphere;
+      if (!s || ![s.center.x, s.center.y, s.center.z, s.radius].every(Number.isFinite)) bad.push(m.name);
+    }
+    const f = V.forests[0], st = f.stats();
+    const range = f.b0.geo.drawRange.count === f.b0.used * 64 * 6 && f.b1.geo.drawRange.count === f.b1.used * 16 * 6 && f.b0.used <= f.b0.maxChunks && f.b1.used <= f.b1.maxChunks;
+    return { ok: !bad.length && range, detail: bad.length ? `경계 구가 깨진 묶음: ${bad.join(', ')}` : `가까이 ${st.near}그루 · 중간 ${st.mid}그루 · 조각 ${st.chunks.join(' / ')} (자리 ${st.cap.join(' / ')}) · 자리 넘침 ${st.full}번` };
+  });
+  T('🌲 나무와 풀', '잎 그림: 투명한 곳에도 잎 색을 채웠고(검은 테두리 없음), 작게 보여도 잎이 덮는 넓이가 그대로예요', () => {
+    const V = G.sys.nature?.veg, mips = V?.atlasMips;
+    if (!G.sys.nature?.real || !mips) return SKIP('낮음 품질이거나 새 나무가 꺼져 있어요');
+    const cov = (m) => { let n = 0; for (let i = 3; i < m.data.length; i += 4) if (m.data[i] >= 128) n++; return n / (m.data.length / 4); };
+    const m0 = mips[0], c0 = cov(m0), c3 = cov(mips[Math.min(3, mips.length - 1)]);
+    let black = 0, clear = 0;
+    for (let i = 0; i < m0.data.length; i += 4 * 97) if (m0.data[i + 3] === 0) { clear++; if (m0.data[i] + m0.data[i + 1] + m0.data[i + 2] < 24) black++; }
+    return { ok: c0 > 0.12 && c0 < 0.75 && Math.abs(c3 - c0) < c0 * 0.3 && clear > 0 && black === 0 && mips[mips.length - 1].width === 1,
+      detail: `${m0.width}×${m0.height} · 단계 ${mips.length}개 · 덮는 넓이 ${(c0 * 100).toFixed(1)} % → 3단계 ${(c3 * 100).toFixed(1)} % · 투명 표본 ${clear}개 중 검은 것 ${black}개` };
+  });
+  T('🌲 나무와 풀', '심기 도구 grove(): 다른 곳에도 같은 나무를 심고, 치우면 흔적이 남지 않아요', () => {
+    const N = G.sys.nature;
+    if (!N?.grove || !N.veg || !G.sys.engine?.scene) return SKIP('숲이 없는 화면이에요');
+    const parent = new THREE.Group();
+    parent.position.set(0, 0, 2600);
+    G.sys.engine.scene.add(parent);
+    const n0 = N.veg.forests.length;
+    let g = null;
+    try {
+      g = N.grove([{ x: 0, z: 0, y: 0, species: 'pine', scale: 1.2 }, { x: 8, z: 3, y: 0, species: 'zelkova' }, { x: -7, z: 5, y: 0, species: 'redMaple' }, { x: 3, z: -9, y: 0, species: 'gardenPine' }, { x: NaN, z: 1, species: 'oak' }], { parent, name: 'selftest-grove' });
+      const st = g.stats();
+      const planted = g.count === 4 && !!g.group && g.group.parent === parent && (N.real ? (N.veg.forests.length === n0 + 1 && st.trees === 4) : st.plain === true);
+      g.dispose(); g = null;
+      return { ok: planted && N.veg.forests.length === n0 && parent.children.length === 0, detail: `${N.real ? '새 나무' : '예전 나무'} 4그루를 z = 2600 쪽에 심었다가 치웠어요 (잘못된 좌표 1개는 건너뛰었어요)` };
+    } finally { if (g) g.dispose(); G.sys.engine.scene.remove(parent); }
+  });
+  T('🌲 나무와 풀', '풀밭 조각 meadow(): 장소 안에 풀과 들꽃을 깔고, 치우면 흔적이 남지 않아요', () => {
+    const N = G.sys.nature;
+    if (!N?.meadow || !G.sys.engine?.scene) return SKIP('숲이 없는 화면이에요');
+    const parent = new THREE.Group();
+    parent.position.set(0, 0, 2600);
+    G.sys.engine.scene.add(parent);
+    let m = null;
+    try {
+      m = N.meadow({ parent, x: 0, z: 0, w: 8, d: 6, density: 6, flowers: 0.2, heightAt: () => 0, mask: (x) => (x > 3 ? 0 : 1) });
+      if (!N.real) return { ok: m.count === 0 && m.mesh === null, detail: '낮음: 풀밭 조각을 만들지 않아요' };
+      const n = m.count, ok = n > 100 && n < 8 * 6 * 6 && !!m.mesh && m.mesh.parent === parent;
+      m.dispose(); m = null;
+      return { ok: ok && parent.children.length === 0, detail: `풀·들꽃 ${n}포기(가린 곳에는 없어요)를 깔았다가 치웠어요` };
+    } finally { if (m) m.dispose(); G.sys.engine.scene.remove(parent); }
+  });
+  T('🌲 나무와 풀', '풀밭: 중간·높음은 잎 카드 풀이 걷는 사람을 따라와요 · 낮음에는 풀이 없어요', () => {
+    const N = G.sys.nature, q = G.sys.engine?.quality;
+    if (!N?.root) return SKIP('숲이 없는 화면이에요');
+    if (q === 'low' || !N.real) return { ok: !N.real && (q !== 'low' || (N.counts.grass || 0) === 0), detail: `${q}: 풀 ${N.counts.grass || 0}포기 (예전 그대로)` };
+    const g = N.meshes.grass, gu = N._grassReal;
+    if (!g || !gu) return { ok: false, detail: '풀밭이 없어요' };
+    const pl = G.sys.player?.position;
+    const follows = !pl || (near(gu.uGrassNear.value.x, pl.x, 0.6) && near(gu.uGrassNear.value.y, pl.z, 0.6));
+    return { ok: g.geometry.instanceCount > 0 && g.geometry.instanceCount <= N._grassTotal && follows && g.material.alphaToCoverage === true && g.material.alphaTest > 0,
+      detail: `풀 ${g.geometry.instanceCount.toLocaleString()}포기 (포기마다 잎 카드 3장) · 한 번에 그려요 · 가장자리는 겹침 표본으로 부드럽게, 없으면 잘라내기` };
+  });
+
     const i = r.info || {};
     return { calls: i.render?.calls || 0, triangles: i.render?.triangles || 0, points: i.render?.points || 0, lines: i.render?.lines || 0, geometries: i.memory?.geometries || 0, textures: i.memory?.textures || 0, programs: (i.programs || []).length, frame: i.render?.frame || 0 };
   }
