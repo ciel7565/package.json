@@ -321,9 +321,10 @@
   const GATE_NO_CACHE = new Set(['logout', 'devcenter', 'admin', 'delete-account']);
   const GATE_DANGER = new Set(['kid-chat', 'parent-gate', 'easy-off', 'reset', 'import', 'forget']);
   // gated actions that open a grown-up screen right after the pass (the others only serve their own action)
-  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register', 'subscription', 'devcenter']);
+  // (rtfarm-approve: the local-mode "어른 확인" of a completion request, 42-realfarm — its memo / ✅ / ↩️ dialog)
+  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register', 'subscription', 'devcenter', 'rtfarm-approve']);
   // the grown-up screens a session may live on (04-ui passes the modal's className with ui:modal-open)
-  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal|app-sub-modal)(\s|$)/;
+  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal|app-sub-modal|rt-adult-modal)(\s|$)/;
   // session ends that mean the grown-up left: the screens the pass opened close with it (lockGate)
   const GATE_LEFT = new Set(['hidden', 'expired']);
   // wrong / wt / until: the in-memory copy of the persisted round (used when site storage is blocked)
@@ -1304,8 +1305,14 @@
       return { id: z.id, emoji: ZONE_EMOJI[z.id] || z.emoji || '📍', label: name, color: KID_COLORS[i % KID_COLORS.length], badge: here === z.id ? '📍' : goal ? '⭐' : null, selected: here === z.id, say: here === z.id ? `${name}. 지금 여기 있어요.` : goal ? `${name}. 금빛 별이 있는 곳이에요.` : name };
     });
     if (!items.length) return null;
+    // phase 7 (CONTRACT §15.1 / §15.2): the real-time garden and the 곳간 are places of their own (not zones)
+    const L = G.data.layout || {};
+    const places = {};
+    if (L.rtGarden?.approach) { places['@rtfarm'] = { x: L.rtGarden.approach.x, z: L.rtGarden.approach.z, label: '실시간 텃밭' }; items.push({ id: '@rtfarm', emoji: '⏰', label: '실시간 텃밭', color: '#33d1c1', say: '진짜 시간으로 자라는 텃밭이에요.' }); }
+    if (L.gotganDoor) { places['@gotgan'] = { x: L.gotganDoor.x, z: L.gotganDoor.z, label: '곳간' }; items.push({ id: '@gotgan', emoji: '🏚️', label: '곳간', color: '#d8b672', say: '거둔 작물을 넣어 두는 곳간이에요.' }); }
     const id = await pick({ id: 'easy-where', title: '어디 갈까?', emoji: '🗺️', say: '어디로 갈까요? 그림을 눌러요.', items, columns: 3 });
     if (!id) return null;
+    if (places[id]) { await goTo(places[id], { label: places[id].label, stopDistance: 1 }); return id; }
     if (id === here) { say('지금 여기에 있어요!', { force: true }); return id; }
     await goTo(id);
     return id;

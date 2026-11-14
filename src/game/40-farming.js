@@ -19,6 +19,10 @@
 //     ready → harvest (+ G.easy.celebrate), thirsty (< 80 %) → water, otherwise a big picture card
 //     (stage 🌱→🌿→🌾→crop, 💧 drops 0–5, 😊/😐/😟, one sentence, big 💧/🧺/🌱 buttons). Plot labels become
 //     pictures too, every action is spoken (G.easy.say). The grown-up modal is unchanged in normal mode.
+//   📮 (CONTRACT §15.3): a plot at 100 % offers "완료 확인 보내기" in both panels — G.sys.realfarm._reportFlow(id),
+//     kind 'plot', pid = String(plantedAt), one request per planting; once sent the button opens the 📬 기록장.
+//   G.cropKit {models, geo, sprout, mound, foliageMat, fruitMat, moundMat} — the crop models by growth stage,
+//     shared with the real-time garden (42-realfarm.js).
 //
 //   G.ffx — small shared particle system (also used by 41-fermentation.js):
 //     G.ffx.spawn(preset, x, y, z, vx, vy, vz, color?, floorY?)   G.ffx.burst(preset, x, y, z, n, speed, up, color?)
@@ -1842,16 +1846,44 @@
       const crop = cropOf(s.cropId);
       const near = this._near(P);
       const ready = !!crop && s.growth >= 100;
+      const sent = ready ? this._reportState(md.id, s) : '';
       if (md.kid) {
-        const key = `k|${s.cropId}|${ready}|${near}`;
+        const key = `k|${s.cropId}|${ready}|${near}|${sent}`;
         if (force || key !== md.key) { md.key = key; this._renderKid(md, P, s, crop, near); }
         this._updateKid(md, P, s, crop);
         return;
       }
       const seedSig = !crop ? this._seedList(P).map((x) => x.id + x.count).join(',') : '';
-      const key = `${s.cropId}|${ready}|${near}|${seedSig}`;
+      const key = `${s.cropId}|${ready}|${near}|${seedSig}|${sent}`;
       if (force || key !== md.key) { md.key = key; this._renderModal(md, P, s, crop, near); }
       this._updateModalValues(md, P, s, crop);
+    },
+
+    /** 📮 completion request for this planting (§15.3, kind 'plot', pid = String(plantedAt)):
+     *  '' none yet · 'pending' · 'approved' · 'rejected' · 'off' (the real-time farm module is not there) */
+    _reportState(id, s) {
+      const R = G.sys.realfarm;
+      if (!R?.reportFor || !(Number(s?.plantedAt) > 0)) return 'off';
+      const rep = R.reportFor('plot', id, String(Math.round(Number(s.plantedAt))));
+      return rep ? rep.status : '';
+    },
+    _reportBtn(id, sent, kid) {
+      const R = G.sys.realfarm;
+      if (sent === 'off' || !R) return null;
+      const srv = G.net?.mode === 'server';
+      if (!sent) {
+        return {
+          emoji: '📮', label: kid ? '확인 보내기' : '📮 완료 확인 보내기', cls: 'fm-report',
+          say: `${srv ? '선생님' : '어른'}께 다 키웠다고 알려요.`,
+          fn: () => { R._reportFlow?.(id); },
+        };
+      }
+      const lbl = sent === 'approved' ? (kid ? '확인 받았어요' : '✅ 확인 받았어요') : sent === 'rejected' ? (kid ? '메모 보기' : '↩️ 메모 보기') : (kid ? '보냈어요' : '📮 보냈어요 · 기록장');
+      return {
+        emoji: sent === 'approved' ? '✅' : sent === 'rejected' ? '↩️' : '📬', label: lbl, cls: 'fm-report sent',
+        say: sent === 'approved' ? '확인을 받았어요! 기록장을 열어요.' : sent === 'rejected' ? '메모가 왔어요. 기록장을 열어요.' : '보냈어요. 확인을 기다려요. 기록장을 열어요.',
+        fn: () => { R.openBook?.(); },
+      };
     },
 
     // ------------------------------------------------------------ 쉬운 모드: picture card + seed picker
@@ -1893,6 +1925,9 @@
           if (s.growth >= 100) big('easy-btn-yes fk-harvest', cropPic(crop), '거두기', () => { if (this.harvest(P.id)) m.close(); });
           else els.water = big('easy-btn-yes fk-water', '💧', '물 주기', () => { if (this.water(P.id)) m.close(); });
         } else big('easy-btn-yes', '👉', '밭으로 가기', () => this._goTo(P, s.growth >= 100));
+        // 📮 다 키웠어요 → a grown-up / the teacher confirms it (before 거두기: the planting is what gets confirmed)
+        const rb = s.growth >= 100 ? this._reportBtn(P.id, this._reportState(P.id, s), true) : null;
+        if (rb) { const b = big(`easy-btn-no ${rb.cls}`, rb.emoji, rb.label, rb.fn); b.setAttribute('data-say', rb.say); }
       }
       // the buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
       // sideways) the card's one action stays in view instead of sliding below the screen edge
@@ -2041,6 +2076,8 @@
       // actions
       const acts = [{ label: '밭 비우기', class: 'btn-ghost fm-clear', icon: 'trash', onClick: () => { this.clear(P.id); return false; } }];
       // successful actions close the modal so the player sees the 3D feedback (animation, droplets, harvest burst)
+      const rb = ready ? this._reportBtn(P.id, this._reportState(P.id, s), false) : null;
+      if (rb) acts.push({ label: rb.label, class: `btn-soft ${rb.cls}`, onClick: () => { rb.fn(); return false; } });
       if (near) {
         acts.push({ label: '물 주기', class: ready ? 'btn-soft fm-water' : 'btn-primary fm-water', icon: 'droplet', onClick: () => this.water(P.id) });
         acts.push({ label: '수확하기', class: 'btn-gold', icon: 'basket', disabled: !ready, onClick: () => !!this.harvest(P.id) });
@@ -2120,4 +2157,7 @@
   };
 
   G.register(farming);
+  // the plant kit, shared (read-only) with the real-time beds of 42-realfarm.js: the same models, materials and
+  // growth stages (sprout 20 %, body 50 %, fruit 80 %, ripe 100 %) — CONTRACT §15.1 "crop models reused from 40-farming"
+  G.cropKit = { models: MODELS, geo: modelGeo, sprout: getSprout, mound: getMound, foliageMat, fruitMat, moundMat };
 })();

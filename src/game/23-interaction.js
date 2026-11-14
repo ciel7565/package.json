@@ -26,9 +26,11 @@
   const KIND_ICON = {
     npc: '💬', jar: '🏺', plot: '🌱', sign: '🪧', kiosk: '🖥️', exhibit: '🍲', tool: '🧺', jardisp: '🏺', craft: '🛠️',
     shop: '🛒', door: '🚪', board: '📋', photo: '📷', bench: '🪑', companion: '🏺', decor: '🏡',
+    // phase 7 (CONTRACT §15.1 / §15.2, 42-realfarm.js): a real-time bed (씨앗 심기 / 살펴보기 / 수확하기), the 곳간 door
+    rtbed: '⏰', storage: '🏚️',
   };
   // kinds where the player does a small "reach / look" gesture on interaction
-  const GESTURE_KINDS = new Set(['sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'board', 'door', 'craft', 'shop', 'jar']);
+  const GESTURE_KINDS = new Set(['sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'board', 'door', 'craft', 'shop', 'jar', 'storage']);
   // 쉬운 모드
   const EASY_RADIUS = 1.3;          // interaction radius multiplier (CONTRACT §12: +30 %)
   const HINT_R2 = 11 * 11;          // the "look here" hand appears over the nearest thing within 11 m

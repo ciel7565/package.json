@@ -1957,6 +1957,190 @@
     site.blocker(0, 0, 0, w, h + 0.2, d);
   }
 
+  // ---------------------------------------------------------------- 실시간 텃밭 (phase 7, CONTRACT §15.1)
+  // The fenced garden: gravel floor, stepping stones along the aisle from the gate, a post-and-rail fence with the gate
+  // opening on the front (local +Z = west with rot −π/2), the raised beds of layout.rtBeds (world coordinates; soil top
+  // at bed.h — 42-realfarm.js grows the crops, labels and interactables on the same height) and the wooden clock sign.
+  const toLocal = (site, wx, wz) => { const dx = wx - site.x, dz = wz - site.z; return [dx * site.c - dz * site.s, dx * site.s + dz * site.c]; };
+  /** "⏰ 진짜 시간으로 자라요" board: a painted clock face + two lines of text, fitted to the slot */
+  function drawClockSign(ctx, w, h, title) {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#8f6139'); g.addColorStop(1, '#5c3a1f');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = 'rgba(40, 22, 10, .32)'; ctx.lineWidth = 2;
+    for (let y = 20; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.bezierCurveTo(w * 0.3, y - 5, w * 0.65, y + 6, w, y - 1); ctx.stroke(); }
+    ctx.strokeStyle = '#3a2414'; ctx.lineWidth = 12; ctx.strokeRect(6, 6, w - 12, h - 12);
+    const cx = h * 0.45, cy = h / 2, r = h * 0.31;
+    ctx.fillStyle = '#fff8e8'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill();
+    ctx.lineWidth = 7; ctx.strokeStyle = '#2a1a0e'; ctx.stroke();
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * TAU, r0 = r * (i % 3 ? 0.8 : 0.68);
+      ctx.lineWidth = i % 3 ? 3 : 6;
+      ctx.beginPath(); ctx.moveTo(cx + Math.sin(a) * r0, cy - Math.cos(a) * r0); ctx.lineTo(cx + Math.sin(a) * r * 0.9, cy - Math.cos(a) * r * 0.9); ctx.stroke();
+    }
+    const hand = (a, len, lw, c) => { ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.sin(a) * len, cy - Math.cos(a) * len); ctx.stroke(); };
+    hand((10 / 12) * TAU, r * 0.5, 8, '#2a1a0e');
+    hand((2 / 12) * TAU, r * 0.74, 5, '#2a1a0e');
+    ctx.fillStyle = '#e0533f'; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, TAU); ctx.fill();
+    const words = String(title || '').replace(/⏰/g, '').trim();
+    const cut = words.lastIndexOf(' ');
+    const lines = cut > 0 ? [words.slice(0, cut), words.slice(cut + 1)] : [words];
+    const x0 = cx + r + h * 0.1, room = w - x0 - 22;
+    ctx.fillStyle = '#fff6e0'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0, 0, 0, .45)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 2;
+    lines.forEach((ln, i) => {
+      let size = Math.round(h * (i ? 0.27 : 0.19));
+      ctx.font = `${i ? 900 : 800} ${size}px ${FONT}`;
+      const tw = ctx.measureText(ln).width;
+      if (tw > room) { size = Math.floor(size * room / tw); ctx.font = `${i ? 900 : 800} ${size}px ${FONT}`; }
+      ctx.fillText(ln, x0, lines.length > 1 ? h * (i ? 0.66 : 0.34) : h / 2);
+    });
+    ctx.shadowColor = 'transparent';
+  }
+  function buildRtGarden(site, b) {
+    const B = site.B;
+    const hw = b.w / 2, hd = b.d / 2;
+    const RG = L.rtGarden || {};
+    const gateHalf = ((RG.gate && RG.gate.w) || 2.4) / 2;
+    const FH = 0.95, postC = '#7a5236', railC = '#a77b52';
+    // floor: a soft gravel yard and stepping stones along the aisle from the gate
+    B.add('gravel', geo.box(b.w - 0.3, 0.04, b.d - 0.3, 'world'), M(0, 0.02, 0), '#efe4cf');
+    for (let i = 0; i < 6; i++) B.add('stone', geo.cyl(0.36, 0.4, 0.06, 10), M((i % 2 - 0.5) * 0.3, 0.05, hd - 0.75 - i * ((b.d - 1.5) / 5), i * 0.7), '#d6cfc1');
+    // post-and-rail fence (local axis-aligned sides; the front has the gate opening)
+    const side = (x0, z0, x1, z1) => {
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      if (len < 0.05) return;
+      const ry = Math.atan2(-(z1 - z0), x1 - x0);
+      const n = Math.max(1, Math.round(len / 1.25));
+      for (let i = 0; i <= n; i++) { const t = i / n; B.add('wood', geo.box(0.13, FH + 0.12, 0.13, 'grain'), M(lerp(x0, x1, t), (FH + 0.12) / 2, lerp(z0, z1, t)), postC); }
+      for (const y of [0.4, 0.8]) B.add('wood', geo.box(len, 0.08, 0.06, 'grain'), M((x0 + x1) / 2, y, (z0 + z1) / 2, ry), railC);
+      // collider along the side (thin, axis-aligned in the site frame)
+      if (Math.abs(z1 - z0) < 1e-3) site.box((x0 + x1) / 2, z0, len / 2, 0.09); else site.box(x0, (z0 + z1) / 2, 0.09, len / 2);
+    };
+    side(-hw, -hd, hw, -hd);
+    side(-hw, -hd, -hw, hd);
+    side(hw, -hd, hw, hd);
+    side(-hw, hd, -gateHalf, hd);
+    side(gateHalf, hd, hw, hd);
+    // the gate: two tall posts and a cross beam (open way in, no door)
+    for (const sx of [-1, 1]) B.add('wood', geo.box(0.2, 2.25, 0.2, 'grain'), M(sx * (gateHalf + 0.02), 1.125, hd), '#6a4a30');
+    B.add('wood', geo.box(gateHalf * 2 + 0.7, 0.18, 0.22, 'grain'), M(0, 2.2, hd), '#6a4a30');
+    B.add('thatch', geo.box(gateHalf * 2 + 1.0, 0.12, 0.6, 'world'), M(0, 2.36, hd, 0, 1, 1, 1, 0.08), '#c9b07c');
+    for (const sx of [-1, 1]) site.circle(sx * (gateHalf + 0.02), hd, 0.14);
+    // raised beds (board frames on corner posts, soil inside)
+    for (const bd of L.rtBeds || []) {
+      const [lx, lz] = toLocal(site, bd.x, bd.z);
+      const yaw = (bd.rot || 0) - (b.rot || 0);
+      const soil = Number(bd.h) || 0.38, top = soil + 0.07, t = 0.12, W = bd.w, D = bd.d;
+      const Mb = M(lx, 0, lz, yaw);
+      for (const [bx, bz, bw, bdd] of [[0, -D / 2 + t / 2, W, t], [0, D / 2 - t / 2, W, t], [-W / 2 + t / 2, 0, t, D - 2 * t], [W / 2 - t / 2, 0, t, D - 2 * t]]) {
+        B.add('plank', geo.box(bw, top, bdd, 'world'), mul(Mb, M(bx, top / 2, bz)), '#b48a60');
+      }
+      for (const [cxs, czs] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) B.add('wood', geo.box(0.16, top + 0.08, 0.16, 'grain'), mul(Mb, M(cxs * (W / 2 - 0.05), (top + 0.08) / 2, czs * (D / 2 - 0.05))), postC);
+      B.add('soil', geo.box(W - 2 * t, 0.1, D - 2 * t, 'world'), mul(Mb, M(0, soil - 0.05, 0)), '#ffffff');
+      site.box(lx, lz, W / 2, D / 2, { rot: yaw });
+    }
+    // the wooden clock sign "⏰ 진짜 시간으로 자라요" (outside, beside the gate), on two posts under a little plank roof
+    if (RG.sign) {
+      const [sx, sz] = toLocal(site, RG.sign.x, RG.sign.z);
+      const yaw = (RG.sign.rot || 0) - (b.rot || 0);
+      const Ms = M(sx, 0, sz, yaw);
+      const rect = SIGN_ATLAS.slot(512, 256, (ctx, w, h) => drawClockSign(ctx, w, h, RG.sign.title || '⏰ 진짜 시간으로 자라요'));
+      const BW = 2.3, BH = 1.15, by = 1.5;
+      addSignBoard(B, rect, BW, BH, mul(Ms, M(0, by, 0.06)), '#3a2414');
+      for (const px of [-BW / 2 + 0.18, BW / 2 - 0.18]) {
+        B.add('wood', geo.box(0.13, by + BH / 2 + 0.2, 0.13, 'grain'), mul(Ms, M(px, (by + BH / 2 + 0.2) / 2, -0.04)), postC);
+        site.circle(sx + px * Math.cos(yaw), sz - px * Math.sin(yaw), 0.16);
+      }
+      B.add('plank', geo.box(BW + 0.45, 0.06, 0.5, 'world'), mul(Ms, M(0, by + BH / 2 + 0.22, 0.05, 0, 1, 1, 1, -0.22)), '#7a5236');
+    }
+  }
+
+  // ---------------------------------------------------------------- 곳간 (phase 7, CONTRACT §15.2): thatched store house
+  // A raised field-stone base (dry air under the grain), board walls between rough posts, a closed double plank door with
+  // iron rings and a 빗장 bar, the 현판 "곳간" above it, a rounded straw roof like the 초가집, straw bags (가마니) and two
+  // jars by the door. 42-realfarm.js registers the 'storage' interactable at layout.gotganDoor.
+  function buildGotgan(site, b) {
+    const B = site.B;
+    const w = b.w, d = b.d, hw = w / 2, hd = d / 2;
+    const baseH = 0.42, skirtH = 0.5, wallTop = baseH + 2.25, th = 0.32;
+    const doorW = 1.7, doorH = 1.9;
+    B.add('field', geo.box(w + 0.7, baseH + 0.5, d + 0.7, 'world'), M(0, (baseH - 0.5) / 2, 0), '#ffffff');
+    B.add('stone', geo.box(w + 0.74, 0.06, d + 0.74, 'world'), M(0, baseH - 0.03, 0), '#cfc8ba');
+    B.add('stone', geo.box(2.0, baseH * 0.55, 0.6, 'world'), M(0, baseH * 0.275, hd + 0.62), '#bdb5a6');
+    // walls: stone skirt + vertical boards (판벽) between posts; the front is split around the door
+    const wall = (x0, z0, x1, z1, nx, nz, y0, y1) => {
+      const len = Math.hypot(x1 - x0, z1 - z0); if (len < 0.05) return;
+      const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, ry = Math.atan2(nx, nz);
+      const g = geo.box(len, y1 - y0, th, 'world');
+      const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getY(i), uv.getX(i));
+      B.add('plank', g, M(cx, (y0 + y1) / 2, cz, ry), '#a07a55');
+    };
+    const sy0 = baseH, sy1 = baseH + skirtH;
+    const skirt = (x0, z0, x1, z1, nx, nz) => { const len = Math.hypot(x1 - x0, z1 - z0); if (len < 0.05) return; B.add('field', geo.box(len, skirtH, th + 0.06, 'world'), M((x0 + x1) / 2, (sy0 + sy1) / 2, (z0 + z1) / 2, Math.atan2(nx, nz)), '#ede6d8'); };
+    const dl = -doorW / 2 - 0.12, dr = doorW / 2 + 0.12;
+    for (const [x0, z0, x1, z1, nx, nz] of [[-hw, -hd, hw, -hd, 0, -1], [-hw, -hd, -hw, hd, -1, 0], [hw, -hd, hw, hd, 1, 0], [-hw, hd, dl, hd, 0, 1], [dr, hd, hw, hd, 0, 1]]) {
+      skirt(x0, z0, x1, z1, nx, nz);
+      wall(x0, z0, x1, z1, nx, nz, sy1, wallTop);
+    }
+    wall(dl, hd, dr, hd, 0, 1, baseH + doorH + 0.12, wallTop);
+    // posts and beams
+    for (const [x, z] of [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd], [-hw, 0], [hw, 0], [0, -hd], [dl, hd], [dr, hd]]) B.add('wood', geo.box(0.24, wallTop - baseH + 0.1, 0.24, 'grain'), M(x, (baseH + wallTop) / 2 + 0.05, z), '#6e4e33');
+    for (const z of [hd, -hd]) B.add('wood', geo.tube(-hw - 0.12, wallTop + 0.05, z, hw + 0.12, wallTop + 0.05, z, 0.12, 7), I4, '#6e4e33');
+    for (const x of [hw, -hw]) B.add('wood', geo.tube(x, wallTop + 0.05, -hd - 0.1, x, wallTop + 0.05, hd + 0.1, 0.11, 7), I4, '#6e4e33');
+    // the closed double door: frame, two plank leaves, iron rings, the 빗장 bar
+    B.add('wood', geo.box(doorW + 0.5, 0.2, th + 0.12, 'grain'), M(0, baseH + doorH + 0.08, hd), '#5a3d26');
+    for (const sx of [-1, 1]) {
+      const g = geo.box(doorW / 2 - 0.02, doorH, 0.09, 'world'); const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getY(i), uv.getX(i));
+      B.add('plank', g, M(sx * (doorW / 4), baseH + doorH / 2, hd + 0.05), '#8a6243');
+      for (const yy of [0.35, doorH - 0.35]) B.add('metal', geo.box(doorW / 2 - 0.14, 0.06, 0.03), M(sx * (doorW / 4), baseH + yy, hd + 0.11), '#2b2b2b');
+      B.add('metal', geo.cyl(0.07, 0.07, 0.03, 10, true), M(sx * 0.16, baseH + doorH * 0.52, hd + 0.13, 0, 1, 1, 1, PI / 2), '#3a3a3a');
+    }
+    B.add('wood', geo.box(doorW + 0.3, 0.11, 0.09, 'grain'), M(0, baseH + doorH * 0.6, hd + 0.15), '#6a4a30');
+    // 현판 "곳간"
+    const rect = SIGN_ATLAS.sign(b.sign || b.name || '곳간', null, HYEONPAN);
+    addSignBoard(B, rect, 1.3, 0.65, M(0, Math.min(wallTop - 0.4, baseH + doorH + 0.58), hd + 0.2, 0, 1, 1, 1, -0.05));
+    // little vent slits (살창) high on the side walls: air for the grain
+    for (const sx of [-1, 1]) for (const zz of [-0.9, 0.9]) B.add('wood', geo.box(0.06, 0.32, 0.5), M(sx * (hw + 0.17), wallTop - 0.5, zz), '#3b2a1e');
+    // rounded straw roof (superellipse rings with a braided ridge, as on the 초가집)
+    const A = hw + 0.85, Cc = hd + 0.85, H = 1.9, r0 = Math.max(0.3, A - Cc);
+    const NR = 9, NA = 36;
+    const P = (i, j, oo, dy = 0, shrink = 0) => {
+      const phi = (j / NR) * (PI / 2) * 0.96;
+      const s = Math.cos(phi), hgt = Math.sin(phi) * H;
+      const ra = r0 + (A - r0) * s, rb = Cc * s;
+      const ang = (i / NA) * TAU, ca = Math.cos(ang), sa = Math.sin(ang);
+      oo[0] = Math.sign(ca) * Math.pow(Math.abs(ca), 0.55) * (ra - shrink); oo[2] = Math.sign(sa) * Math.pow(Math.abs(sa), 0.55) * Math.max(0.02, rb - shrink);
+      oo[1] = wallTop - 0.2 + hgt + dy;
+      oo[3] = (i / NA) * 2 * (A + Cc) * 1.4; oo[4] = phi * H * 1.6;
+    };
+    B.add('thatch', geo.grid(NA, NR, (i, j, oo) => P(i, j, oo), true), I4, '#bda67d');
+    B.add('thatch', geo.grid(NA, 1, (i, j, oo) => { P(i, 0, oo); if (!j) { oo[1] -= 0.42; oo[0] *= 0.985; oo[2] *= 0.985; } oo[4] = j * 0.5; }, true), I4, '#d9cbb0');
+    B.add('thatch', geo.grid(NA, 1, (i, j, oo) => { P(i, 0, oo, -0.42, 0); oo[0] *= j ? 0.62 : 0.985; oo[2] *= j ? 0.62 : 0.985; oo[1] = wallTop - 0.62 + (j ? 0.4 : 0); }), I4, '#8f7a58');
+    const pts = [];
+    for (let i = 0; i <= 8; i++) pts.push(new THREE.Vector3((i / 8 * 2 - 1) * (r0 + 0.2), wallTop - 0.2 + H * 0.99, 0));
+    B.add('thatch', geo.sweep(pts, [[-0.28, -0.05], [0.28, -0.05], [0.18, 0.2], [-0.18, 0.2]], ['#b79a62']), I4);
+    // straw bags (가마니) and two jars by the door (kept clear in front of it)
+    const jr = rngOf('gotgan');
+    // bags lie with their length away from the wall (along local z), side by side, one more on top of the left pair
+    const bags = [[-hw + 0.5, hd + 0.75, 0], [-hw + 1.15, hd + 0.75, 0], [-hw + 0.82, hd + 0.75, 1], [hw - 0.55, hd + 0.75, 0]];
+    for (const [x, z, lvl] of bags) {
+      const y = 0.3 + lvl * 0.5;
+      B.add('thatch', geo.cyl(0.3, 0.3, 0.72, 10), M(x, y, z, (jr() - 0.5) * 0.2, 1, 1, 1, PI / 2), '#cdb37d');
+      for (const k of [-0.22, 0.22]) B.add('wood', geo.cyl(0.31, 0.31, 0.04, 10, true), M(x, y, z + k, 0, 1, 1, 1, PI / 2), '#8d6f43');
+      if (!lvl) site.circle(x, z, 0.4);
+    }
+    for (const [x, z, kind, s] of [[hw - 1.25, hd + 0.6, 'hangari', 0.62], [hw + 0.6, hd - 0.4, 'danji', 0.95]]) {
+      B.add('glaze', jarGeometry(kind, 12), M(x, 0, z, jr() * TAU, s), '#ffffff');
+      if (kind === 'hangari') B.add('glaze', lidGeometry(12), M(x, jarTop(kind) * s - 0.01, z, 0, s), '#ffffff');
+      site.circle(x, z, 0.36 * s + 0.05);
+    }
+    // colliders / walkables / blockers
+    site.walk(0, hd + 0.62, 1.0, 0.3, baseH * 0.55, 'stone');
+    site.box(0, 0, hw + 0.36, hd + 0.36);
+    site.blocker(0, 0, 0, w, wallTop, d);
+  }
+
   // =============================================================================================
   const BUILDERS = {
     hall: buildHall,
@@ -1973,6 +2157,8 @@
     pavilion: buildPavilion,
     gate: buildGate,
     stall: buildStall,
+    rtgarden: buildRtGarden,   // phase 7: 실시간 텃밭 (fence, raised beds, clock sign)
+    gotgan: buildGotgan,       // phase 7: 곳간
   };
 
   const buildings = {
@@ -2004,7 +2190,7 @@
           // that slips under the tiles must not leave the camera above the roof (only buckets that exist are added).
           // The gate's big 현판 hangs at head height right where the follow camera sits when a child walks through to the
           // plaza: it blocks the camera as well, so the camera pulls in instead of showing only the board's letters
-          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' ? ['thatch'] : b.type === 'gate' ? ['roof', 'soffit', 'fascia', 'sign'] : ['roof', 'soffit', 'fascia'] });
+          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' || b.type === 'gotgan' ? ['thatch'] : b.type === 'gate' ? ['roof', 'soffit', 'fascia', 'sign'] : ['roof', 'soffit', 'fascia'] });
           site.group.userData.building = b;
           site.group.userData.colliders = site.colliders;
           this.groups[b.id] = site.group;

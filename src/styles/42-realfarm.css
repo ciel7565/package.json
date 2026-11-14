@@ -1,0 +1,240 @@
+/* =============================================================================
+   42-realfarm.css — 실시간 텃밭 labels + bed panel (crop picker cards, progress ring, countdown, wall clock),
+   곳간 (가방 ↔ 곳간 columns, capacity bar), 📬 확인 기록장 (status chips, stamp, memo), report / grown-up forms.
+   Easy mode (body.easy / .rt-kid): the same panels with big picture buttons (≥ var(--tap)), no typing, no prices.
+   Phones 390×844 and 844×390: nothing cut off, the footer buttons stay in view.
+   ============================================================================= */
+
+/* ------------------------------------------------------------------ world label over each bed */
+.wl.rf-label {
+  display: inline-flex; align-items: center; gap: .35rem; padding: .18rem .7rem .18rem .2rem; border-radius: 999px;
+  background: rgba(10, 18, 13, .78); border: 1px solid rgba(255, 255, 255, .2); color: #fff;
+  font-size: .86rem; font-weight: 800; white-space: nowrap; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .28));
+  font-variant-numeric: tabular-nums;
+}
+.rf-label .rf-num {
+  display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; flex: none;
+  background: var(--teal); color: #05231f; font-size: .95rem; font-weight: 900; box-shadow: 0 2px 6px rgba(0, 0, 0, .3);
+}
+.rf-label .rf-l-ico { font-size: 1.15rem; line-height: 1; }
+.rf-label.is-empty { border-style: dashed; color: var(--text-dim); }
+.rf-label.is-empty .rf-num { background: #6c7a6e; color: #fff; }
+.rf-label.is-ready {
+  background: linear-gradient(180deg, #fff2b5, #ffcf4a); color: #2b1d02; border-color: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 207, 74, .3), 0 0 18px rgba(255, 207, 74, .5);
+}
+.rf-label.is-ready .rf-num { background: #fff; color: #7a5200; }
+/* far away: only the number + picture (the four labels would overlap); an empty bed says nothing from afar */
+.wl.rf-label.is-far { padding-right: .35rem; }
+.wl.rf-label.is-far .rf-l-txt { display: none; }
+.wl.rf-label.is-far.is-empty { visibility: hidden; }
+body.easy .wl.rf-label { font-size: 1rem; padding: .25rem .85rem .25rem .25rem; }
+body.easy .wl.rf-label.is-far { padding-right: .4rem; }
+body.easy .rf-label .rf-num { width: 1.9rem; height: 1.9rem; font-size: 1.05rem; }
+
+/* ------------------------------------------------------------------ shared panel bits */
+.rt-modal .modal-body { display: flex; flex-direction: column; gap: .8rem; }
+.rt-modal .rf-lead { margin: 0; line-height: 1.5; color: var(--text-dim); word-break: keep-all; }
+.rt-modal .rf-note { margin: 0; line-height: 1.5; word-break: keep-all; }
+.rt-modal .rf-far { margin: 0; }
+.rf-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; width: 100%; }
+.rf-btns .btn { min-height: 44px; }
+.rt-modal .rf-clear { color: #ffb3ab; }
+.rf-btns .rf-clear { margin-right: auto; }
+.rt-modal .btn .emoji { font-size: 1.15em; line-height: 1; }
+.rf-stars { color: var(--gold); letter-spacing: .06em; font-weight: 900; white-space: nowrap; }
+
+/* ---- crop picker cards: picture, name, ⏰ how long, reward */
+.rf-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.6rem, 1fr)); gap: .55rem; }
+.rf-crop {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: .16rem; min-height: 44px;
+  padding: .7rem .4rem .6rem; border-radius: 14px; background: var(--bg-elev); border: 1px solid var(--line);
+  color: var(--text); text-align: center; transition: transform .12s var(--ease-pop), background .15s, border-color .15s, box-shadow .15s;
+}
+.rf-crop:hover:not(:disabled) { transform: translateY(-2px); background: rgba(51, 209, 193, .14); border-color: rgba(51, 209, 193, .65); box-shadow: var(--shadow-sm); }
+.rf-crop:disabled { opacity: .55; cursor: not-allowed; }
+.rf-crop-ico { font-size: 1.9rem; line-height: 1.1; }
+.rf-crop-name { font-size: .95rem; }
+.rf-crop-time { font-size: .74rem; font-weight: 800; color: var(--teal); }
+.rf-crop-rw { font-size: .7rem; color: var(--text-mute); }
+
+/* ---- growing / ready: ring + countdown + wall clock + care */
+.rf-hero { display: flex; align-items: center; gap: 1rem; }
+.rf-hero-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .3rem; }
+.rf-ring {
+  --p: 0;
+  position: relative; flex: none; width: 6.2rem; height: 6.2rem; border-radius: 50%; padding: .42rem;
+  background: conic-gradient(var(--teal) calc(var(--p) * 1%), rgba(255, 255, 255, .1) 0);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .32);
+}
+.rf-ring.ready { background: conic-gradient(var(--gold) 100%, transparent 0); box-shadow: 0 0 0 4px rgba(244, 197, 74, .25), 0 8px 20px rgba(0, 0, 0, .32); }
+.rf-ring-pic {
+  display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; font-size: 2.6rem; line-height: 1;
+  background: radial-gradient(circle at 40% 30%, #fff8e4, #f3d9a6 55%, #c99a5a); box-shadow: inset 0 -5px 0 rgba(0, 0, 0, .12);
+}
+.rf-left { font-size: 1.35rem; font-weight: 900; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.rf-clock { margin: 0; color: var(--text-dim); font-weight: 700; }
+.rf-care { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; font-size: .86rem; color: var(--text-dim); }
+.rf-care-bar { position: relative; flex: 1 1 5rem; min-width: 4rem; height: .55rem; border-radius: 999px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+/* the fill is as wide as the track and slides in from the left (--v = 0…100, set by 42-realfarm.js): a transform never
+   re-runs layout, and the rounded right end keeps its shape (a scaled or width-animated bar would not) */
+.rf-care-bar > i { position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(90deg, #2f9bff, #9fdcff); transform: translateX(calc(var(--v, 0) * 1% - 100%)); transition: transform .35s var(--ease); }
+.rf-say { margin: 0; color: var(--text-dim); font-size: .9rem; word-break: keep-all; display: inline-flex; align-items: center; gap: .4rem; }
+.rt-modal:not(.rt-kid) .rf-say { display: none; }
+
+/* ------------------------------------------------------------------ 곳간 */
+.rf-sto-body { gap: .7rem; }
+.rf-cap { display: flex; align-items: center; gap: .55rem; padding: .55rem .8rem; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--line); }
+.rf-cap-ico { font-size: 1.4rem; }
+.rf-cap-bar { position: relative; flex: 1 1 auto; height: .7rem; border-radius: 999px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.rf-cap-bar > i { position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(90deg, var(--green), var(--green-l)); transform: translateX(calc(var(--v, 0) * 1% - 100%)); transition: transform .35s var(--ease); }
+.rf-cap.near .rf-cap-bar > i { background: linear-gradient(90deg, var(--orange), var(--gold)); }
+.rf-cap.full .rf-cap-bar > i { background: linear-gradient(90deg, #d4443a, var(--orange)); }
+.rf-cap-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rf-sto-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; min-height: 0; }
+.rf-sto-col { display: flex; flex-direction: column; min-width: 0; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--line); }
+.rf-sto-col.sto { background: rgba(184, 161, 122, .1); border-color: rgba(216, 182, 114, .3); }
+.rf-sto-title { display: flex; align-items: center; gap: .4rem; margin: 0; padding: .55rem .75rem; font-size: 1rem; border-bottom: 1px solid var(--line); }
+.rf-sto-count { margin-left: auto; font-size: .8rem; color: var(--text-mute); font-weight: 700; }
+.rf-sto-list { display: flex; flex-direction: column; gap: .35rem; padding: .5rem; max-height: min(46vh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
+.rf-sto-row { display: flex; align-items: center; gap: .5rem; min-height: 48px; padding: .25rem .4rem; border-radius: 10px; background: rgba(0, 0, 0, .14); }
+.rf-sto-ico { font-size: 1.45rem; flex: none; }
+.rf-sto-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.rf-sto-qty { font-variant-numeric: tabular-nums; color: var(--green-l); flex: none; }
+.rf-sto-row .btn { flex: none; min-height: 44px; min-width: 44px; }
+.rt-kid .rf-sto-row .btn.easy-big-btn { min-height: max(48px, var(--tap, 48px)); }
+.rf-sto-empty { margin: .6rem .3rem; color: var(--text-mute); font-size: .86rem; text-align: center; word-break: keep-all; }
+.rt-storage-modal .modal-foot { gap: .5rem; }
+
+/* ------------------------------------------------------------------ 📬 확인 기록장 */
+.rf-book-lead { margin: 0; color: var(--text-dim); word-break: keep-all; }
+.rf-book-list { display: flex; flex-direction: column; gap: .6rem; }
+.rf-book-card { display: flex; flex-direction: column; gap: .45rem; padding: .75rem .85rem; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--line); }
+.rf-book-card.approved { border-color: rgba(52, 195, 107, .45); background: rgba(52, 195, 107, .08); }
+.rf-book-card.rejected { border-color: rgba(74, 168, 255, .45); background: rgba(74, 168, 255, .08); }
+.rf-bc-head { display: flex; align-items: center; gap: .6rem; }
+.rf-bc-ico { font-size: 1.8rem; flex: none; }
+.rf-bc-title { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.rf-bc-title b { font-size: 1.02rem; }
+.rf-bc-where { font-size: .78rem; color: var(--text-mute); }
+.rf-chip { flex: none; padding: .18rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 800; white-space: nowrap; border: 1px solid transparent; }
+.rf-chip.wait { background: rgba(244, 197, 74, .16); color: #ffe7a6; border-color: rgba(244, 197, 74, .45); }
+.rf-chip.ok { background: rgba(52, 195, 107, .2); color: var(--green-l); border-color: rgba(52, 195, 107, .5); }
+.rf-chip.back { background: rgba(74, 168, 255, .18); color: #cfe7ff; border-color: rgba(74, 168, 255, .5); }
+.rf-bc-meta { display: flex; flex-wrap: wrap; gap: .3rem .8rem; font-size: .8rem; }
+.rf-bc-note { margin: 0; display: flex; gap: .35rem; font-size: .88rem; word-break: break-word; }
+.rf-bc-photo { max-width: 100%; max-height: 12rem; border-radius: 10px; object-fit: cover; align-self: flex-start; border: 1px solid var(--line); }
+.rf-bc-decided { display: flex; align-items: center; gap: .8rem; }
+.rf-bc-memo { flex: 1 1 auto; min-width: 0; }
+.rf-bc-memo small { color: var(--text-mute); font-weight: 700; }
+.rf-bc-memo p { margin: .15rem 0 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.rf-bc-actions { display: flex; justify-content: flex-end; }
+/* the 참 잘했어요 stamp (a still graphic; the moving one is G.fx.stamp) */
+.rf-stamp {
+  display: grid; place-items: center; align-content: center; flex: none; width: 4.2rem; height: 4.2rem; border-radius: 50%;
+  border: 3px solid #d8402f; color: #e0533f; font-weight: 900; font-size: .9rem; line-height: 1.1; text-align: center;
+  transform: rotate(-12deg); background: rgba(255, 255, 255, .06); box-shadow: inset 0 0 0 2px rgba(216, 64, 47, .35);
+}
+.rf-stamp.back { border-color: #4aa8ff; color: #8fcbff; box-shadow: inset 0 0 0 2px rgba(74, 168, 255, .3); transform: rotate(8deg); }
+.rf-book-empty { display: flex; flex-direction: column; align-items: center; gap: .35rem; padding: 1.2rem .5rem; text-align: center; color: var(--text-dim); }
+.rf-book-empty .emoji { font-size: 2.6rem; }
+.rf-book-empty p { margin: 0; word-break: keep-all; }
+
+/* ------------------------------------------------------------------ report form / grown-up review */
+.rf-note-wrap, .rf-memo-wrap { display: flex; flex-direction: column; gap: .3rem; font-weight: 700; }
+.rf-note-in, .rf-memo { width: 100%; min-height: 44px; padding: .55rem .7rem; border-radius: 10px; border: 1px solid var(--line-strong); background: rgba(0, 0, 0, .25); color: var(--text); font: inherit; }
+.rf-memo { resize: vertical; min-height: 6rem; }
+.rf-memo-count { align-self: flex-end; font-weight: 600; }
+.rf-note-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.rf-note-chip { min-height: 44px; cursor: pointer; }
+.rf-photo-wrap { display: flex; align-items: center; gap: .5rem; min-height: 44px; }
+.rf-photo-wrap input { width: 1.3rem; height: 1.3rem; }
+.rf-adult-sum { display: flex; align-items: flex-start; gap: .7rem; }
+.rf-adult-ico { font-size: 2.2rem; }
+.rf-adult-sum p { margin: .15rem 0 0; }
+
+/* =============================================================================
+   쉬운 모드: big pictures, big buttons, no small print
+   ============================================================================= */
+.rt-kid .modal-body { align-items: stretch; }
+.rt-kid .rf-lead { font-size: 1.12rem; font-weight: 800; color: var(--text); text-align: center; }
+.rt-kid .rf-picker { grid-template-columns: repeat(auto-fill, minmax(8.4rem, 1fr)); gap: .7rem; }
+.rt-kid .rf-crop { min-height: calc(var(--tap) * 2); padding: .8rem .4rem; border-radius: 18px; border-width: 2px; }
+.rt-kid .rf-crop-ico { font-size: 2.6rem; }
+.rt-kid .rf-crop-name { font-size: 1.12rem; }
+.rt-kid .rf-crop-time { font-size: .95rem; }
+.rt-kid .rf-crop-rw { font-size: .95rem; color: var(--text-dim); }
+.rt-kid .rf-hero { flex-direction: column; text-align: center; }
+.rt-kid .rf-hero-text { align-items: center; }
+.rt-kid .rf-ring { width: 8.6rem; height: 8.6rem; padding: .55rem; }
+.rt-kid .rf-ring-pic { font-size: 4rem; }
+.rt-kid .rf-left { font-size: 1.5rem; }
+.rt-kid .rf-clock { font-size: 1.05rem; }
+.rt-kid .rf-care { justify-content: center; font-size: 1.1rem; width: 100%; max-width: 20rem; }
+.rt-kid .rf-stars { font-size: 1.45rem; }
+.rt-kid .rf-say { font-size: 1.2rem; font-weight: 800; color: var(--text); justify-content: center; text-align: center; }
+.rt-kid .rf-say .easy-speak { width: var(--tap, 56px); height: var(--tap, 56px); flex: none; }
+.rt-kid .rf-btns { justify-content: center; gap: .6rem; }
+.rt-kid .rf-btns .rf-clear { margin-right: 0; }
+.rt-kid .rf-btns .easy-big-btn { min-width: 11rem; min-height: calc(var(--tap) + .3rem); font-size: 1.15rem; }
+.rt-kid .rf-btns .easy-big-btn .emoji { font-size: 1.6rem; }
+.rt-kid .rf-btns .easy-big-btn:disabled { opacity: .6; filter: grayscale(.4); cursor: default; }
+.rt-kid .rf-harvest { background: linear-gradient(180deg, #ffe07a, var(--kid-gold-d, #e3a412)); color: #2b1d02; }
+.rt-kid .rf-cap { font-size: 1.1rem; }
+.rt-kid .rf-sto-row { min-height: calc(var(--tap) + .4rem); }
+.rt-kid .rf-sto-ico { font-size: 2rem; }
+.rt-kid .rf-sto-name { font-size: 1.05rem; }
+.rt-kid .rf-sto-row .easy-big-btn { min-width: 0; padding: .4rem .8rem; font-size: 1rem; }
+.rt-kid .rf-book-card { padding: .9rem; }
+.rt-kid .rf-bc-title b { font-size: 1.15rem; }
+.rt-kid .rf-chip { font-size: .95rem; padding: .3rem .75rem; }
+.rt-kid .rf-bc-memo p { font-size: 1.08rem; }
+.rt-kid .rf-book-lead { font-size: 1.1rem; font-weight: 800; color: var(--text); text-align: center; }
+.rt-kid .modal-foot { justify-content: center; gap: .6rem; flex-wrap: wrap; }
+.rt-kid .modal-foot .easy-big-btn { min-width: 9rem; }
+.rt-note-pick .easy-tile .et-label { font-size: .98rem; white-space: normal; }
+
+/* every button of these panels is a full touch target (≥ 44 px) also in grown-up mode; the quick-plot panel of
+   40-farming that now carries 📮 gets the same on touch screens */
+.rt-modal .btn, .rt-modal .modal-foot .btn { min-height: 44px; }
+@media (pointer: coarse) { .farm-modal .modal-foot .btn { min-height: 44px; } }
+
+/* ------------------------------------------------------------------ phones */
+@media (max-width: 560px) {
+  /* the kid bed card's 2–3 big buttons: two per row (a third one takes the whole row), labels never cut */
+  .rt-kid .rf-btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rt-kid .rf-btns .easy-big-btn { flex: none; padding-left: .6rem; padding-right: .6rem; }
+  .rt-kid .rf-btns .easy-big-btn:only-child, .rt-kid .rf-btns .easy-big-btn:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .rf-sto-cols { grid-template-columns: 1fr; }
+  .rf-sto-list { max-height: 30vh; }
+  .rf-hero { gap: .7rem; }
+  .rf-ring { width: 5rem; height: 5rem; }
+  .rf-ring-pic { font-size: 2.1rem; }
+  .rt-kid .rf-ring { width: 6.8rem; height: 6.8rem; }
+  .rt-kid .rf-ring-pic { font-size: 3.1rem; }
+  .rt-kid .rf-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rt-kid .rf-btns .easy-big-btn { width: 100%; min-width: 0; }
+  .rf-btns .btn:not(.easy-big-btn) { flex: 1 1 auto; }
+  .rt-kid .modal-foot .easy-big-btn { flex: 1 1 8rem; min-width: 0; }
+}
+/* phones held sideways (≤ 520 px high): the panels go sideways too — the body scrolls, the buttons sit in a column
+   on the right, nothing is cut off */
+@media (orientation: landscape) and (max-height: 520px) {
+  .modal.rt-bed-modal.rt-kid { width: min(46rem, 100%); }
+  .rt-bed-modal.rt-kid:is(.modal, .modal-closing) { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); }
+  .rt-bed-modal.rt-kid .modal-head { grid-column: 1 / -1; }
+  .rt-bed-modal.rt-kid .modal-body { overflow-y: auto; min-height: 0; }
+  .rt-bed-modal.rt-kid .modal-foot { flex-direction: column; justify-content: center; border-top: 0; overflow-y: auto; min-height: 0; }
+  .rt-bed-modal.rt-kid .rf-btns { flex-direction: column; flex-wrap: nowrap; width: auto; }
+  .rt-bed-modal.rt-kid .rf-btns .easy-big-btn { min-width: 10rem; }
+  .rt-kid .rf-hero { flex-direction: row; text-align: left; }
+  .rt-kid .rf-hero-text { align-items: flex-start; }
+  .rt-kid .rf-ring { width: 6rem; height: 6rem; padding: .42rem; }
+  .rt-kid .rf-ring-pic { font-size: 2.8rem; }
+  .rt-kid .rf-picker { grid-template-columns: repeat(auto-fill, minmax(7.4rem, 1fr)); }
+  .rt-kid .rf-crop { min-height: calc(var(--tap) * 1.6); padding: .5rem .3rem; }
+  .rt-kid .rf-crop-ico { font-size: 2rem; }
+  .rf-sto-list { max-height: 34vh; }
+  .rt-kid .rf-sto-list { max-height: 30vh; }
+}
+body.reduce-motion .rf-crop, body.reduce-motion .rf-care-bar > i, body.reduce-motion .rf-cap-bar > i { transition: none; }

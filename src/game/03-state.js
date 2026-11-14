@@ -401,6 +401,8 @@
       if (!(at > 0)) continue;
       out.push({ pid: x.pid, bedId: x.bedId, cropId: x.cropId, amount: intIn(x.amount, 0, 99, 0), stars: intIn(x.stars, 1, 3, 1), at: Math.round(at) });
     }
+    // oldest → newest by time (a copy may come newest-first), then the newest 8
+    out.sort((a, b) => a.at - b.at);
     return out.slice(-RT_LAST_MAX);
   }
   /** a completion request kept on this device (local mode, §15.3): the same object the server's book returns */

@@ -242,6 +242,7 @@
       F('32-progression.js', 'progression', '레벨·코인·통계·업적·도감·칭호·HUD 갱신 + 📖 스티커북(할 일·도감·업적·나)'),
       F('40-farming.js', 'farm', '밭 성장 시뮬레이션·물주기·심기·수확·작물 표현·한 번 누르기(쉬운 모드)'),
       F('41-fermentation.js', 'farm', '장독 발효 시뮬레이션·품질 공식·재료 만들기·장독 얼굴 카드(쉬운 모드)'),
+      F('42-realfarm.js', 'farm', '실시간 텃밭(진짜 시간으로 자라는 밭 4개)·곳간(300개 보관)·📮 완료 확인·📬 확인 기록장'),
       F('45-education-data.js', 'edu', '교육 콘텐츠 9종·퀴즈 25개 + 아이용 그림 이야기·그림 퀴즈 (순수 데이터)'),
       F('46-education.js', 'edu', '교육 뷰어·3D 모형·퀴즈·안내판·키오스크·전시'),
       F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소) + 그림 일기(기분·스티커)'),
@@ -270,6 +271,7 @@
       F('32-progression.css', 'progression', '레벨업·도감·업적·프로필'),
       F('40-farming.css', 'farm', '밭 정보 창·밭 라벨'),
       F('41-fermentation.css', 'farm', '장독 창·작업대'),
+      F('42-realfarm.css', 'farm', '실시간 텃밭 이름표·밭 카드·곳간·확인 기록장·어른 확인'),
       F('46-education.css', 'edu', '교육 뷰어·퀴즈·도서관'),
       F('47-journal.css', 'edu', '작업일지'),
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
@@ -424,7 +426,7 @@
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
-  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
+  const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -1413,6 +1415,11 @@
     { id: 'lesson', emoji: '📗', label: '배움 이야기', fn: () => { const f = fnOf(G.sys.education, 'open'); const id = (G.data.educationIds || [])[0] || firstKey(G.data.education); return f && id ? () => f(id) : null; } },
     { id: 'quiz', emoji: '❓', label: '퀴즈', fn: () => { const f = fnOf(G.sys.education, 'openQuiz'); const id = firstKey(G.data.quizzes); return f && id ? () => f(id) : null; } },
     { id: 'map', emoji: '🗺️', label: '어디 갈까 (지도)', fn: () => fnOf(G.sys.minimap, 'openFastTravel', 'openWorldMap') },
+    // 실시간 텃밭 (§15.1): the bed card (crop picture cards when empty · ring + countdown when growing), 곳간 (§15.2),
+    // 📬 확인 기록장 (§15.3)
+    { id: 'rtbed', emoji: '⏰', label: '실시간 텃밭 (밭 카드)', fn: () => { const f = fnOf(G.sys.realfarm, 'open'); const id = (G.data.rtfarm?.beds || [])[0]; return f && id ? () => f(id) : null; } },
+    { id: 'gotgan', emoji: '🏚️', label: '곳간', fn: () => fnOf(G.sys.storage, 'open') },
+    { id: 'rtbook', emoji: '📬', label: '확인 기록장', fn: () => fnOf(G.sys.realfarm, 'openBook') },
     { id: 'emote', emoji: '😊', label: '표현하기', fn: () => { const f = fnOf(G.sys.social, 'openExpress', 'openEmotes'); return f && (() => f(document.querySelector('[data-action="emote"]') || undefined)); } },
     { id: 'chat', emoji: '💬', label: '말하기 (채팅)', fn: () => { const f = fnOf(G.sys.social, 'openKidChat', 'openPhrases'); if (f) return f; return typeof G.ui?.triggerAction === 'function' ? () => G.ui.triggerAction('chat') : null; } },
     { id: 'avatar', emoji: '👕', label: '꾸미기 (아바타)', fn: () => fnOf(G.app, 'openAvatar') },
@@ -1967,6 +1974,95 @@
     return e.now === Infinity && e.full > 0;
   });
   T('🌱 농사 계산', '농사 설정값 범위 (건조 기준·오프라인 보정)', () => { const f = G.data.farming || {}; return f.dryThreshold > 0 && f.dryThreshold < 100 && f.offlineCatchUpMax > 0 && f.waterPerAction > 0; });
+
+  // ---- ⏰ 실시간 텃밭 · 곳간 (CONTRACT §15.1/§15.2): the pure rules (G.sys.realfarm.core) on a scratch state — the
+  // real save, the real time scale and the real 곳간 are never touched
+  const RTC = () => G.sys.realfarm?.core || null;
+  const rtScratch = () => ({ stats: {}, rtfarm: { beds: {}, last: [], reports: [] }, storage: { items: {}, cap: 300 } });
+  const rtT0 = 1767225600000; // a fixed clock (2026-01-01 00:00 UTC): the tests never read Date.now()
+  T('⏰ 실시간 텃밭', '심기 → 시간 배율 ×60 → 다 자람 → 수확 → 곳간', () => {
+    const C = RTC();
+    if (!C) return SKIP('실시간 텃밭 모듈이 없어요');
+    const s = rtScratch();
+    const p = C.plant(s, 'RB1', 'CROP_MINT', { t: rtT0, tier: 1, scale: 1 });
+    const minutes = Number(G.data.rtfarm?.crops?.CROP_MINT?.minutes) || 10;
+    const durOk = p.ok && p.bed.readyAt - rtT0 === minutes * 60000 && C.PID.test(p.bed.pid);
+    // one minute later the scale goes ×60: what is left (minutes − 1) now takes (minutes − 1) seconds
+    const t1 = rtT0 + 60000;
+    C.retime(s, 1 / 60, t1);
+    const left = s.rtfarm.beds.RB1.readyAt - t1;
+    const early = C.harvest(s, 'RB1', { t: t1 + left - 1 });
+    const growing = C.status(s.rtfarm.beds.RB1, t1 + left - 1) === 'growing' && C.status(s.rtfarm.beds.RB1, t1 + left) === 'ready';
+    const h = C.harvest(s, 'RB1', { t: t1 + left, rnd: () => 0 });
+    const lo = (G.data.crops?.CROP_MINT?.harvestAmount || [1])[0];
+    const put = h.ok ? C.put(s, h.itemId, h.amount) : 0;
+    const ok = durOk && Math.abs(left - (minutes - 1) * 1000) <= 1 && early.err === 'early' && growing && h.ok && h.amount === lo && h.stars === 1
+      && put === h.amount && C.count(s, h.itemId) === h.amount && !s.rtfarm.beds.RB1 && s.rtfarm.last.length === 1 && s.stats.rtHarvests === 1;
+    return { ok, detail: `${minutes}분 → 1분 뒤 ×60 → 남은 ${Math.round(left / 1000)}초 · 수확 ${h.amount || 0}개 → 곳간 ${put}개` };
+  });
+  T('⏰ 실시간 텃밭', '물 주기: +25 · 쿨다운 (5분 ÷ 배율) · 별 ★ 기준', () => {
+    const C = RTC();
+    if (!C) return SKIP('실시간 텃밭 모듈이 없어요');
+    const s = rtScratch();
+    C.plant(s, 'RB2', 'CROP_CORN', { t: rtT0, tier: 1, scale: 1 });
+    const a = C.care(s, 'RB2', { t: rtT0 + 1000, scale: 1 });
+    const b = C.care(s, 'RB2', { t: rtT0 + 2000, scale: 1 });
+    const cool = C.coolMs(1, 1);
+    const c = C.care(s, 'RB2', { t: rtT0 + 1000 + cool, scale: 1 });
+    const st = [C.stars(0), C.stars(39), C.stars(40), C.stars(74), C.stars(75), C.stars(100)];
+    const ok = a.ok && a.care === 25 && !b.ok && b.err === 'cooldown' && b.leftMs > 0 && c.ok && c.care === 50 && eq(st, [1, 1, 2, 2, 3, 3]) && C.coolMs(1, 60) === Math.round(cool / 60);
+    return { ok, detail: `쿨다운 ${Math.round(cool / 1000)}초 · 별 ${st.join('')}` };
+  });
+  T('⏰ 실시간 텃밭', '곳간: 300개까지 · 넣을 수 있는 물건만 · 꺼내기', () => {
+    const C = RTC();
+    if (!C) return SKIP('실시간 텃밭 모듈이 없어요');
+    const ids = G.data.storage?.itemIds || [];
+    const other = Object.keys(G.data.items || {}).find((id) => !ids.includes(id));
+    if (ids.length < 2 || !other) return SKIP('곳간 물건 목록이 없어요');
+    const s = rtScratch();
+    const a = C.put(s, ids[0], 250), b = C.put(s, ids[1], 100), no = C.put(s, other, 1);
+    const full = C.free(s) === 0 && C.total(s) === 300;
+    const tk = C.take(s, ids[0], 999);
+    const ok = a === 250 && b === 50 && no === 0 && full && tk === 250 && C.total(s) === 50 && !(ids[0] in s.storage.items);
+    return { ok, detail: `250 + 50 (넘친 50개는 가방에) · ${other} 거절 · 꺼내기 ${tk}` };
+  });
+  T('⏰ 실시간 텃밭', '저장 정리: 잘못된 씨앗 번호·없는 밭·기기 배율 키를 지우고 서버 모드에선 확인 요청을 저장하지 않아요', () => {
+    const San = G.save?.sanitizeRealFarm;
+    if (typeof San !== 'function') return SKIP('저장 정리 함수가 없어요');
+    const mk = () => ({
+      stats: { rtHarvests: -5 },
+      rtfarm: { beds: { RB1: { cropId: 'CROP_MINT', pid: 'NOT-A-PID', plantedAt: 1, readyAt: 2 }, RB9: { cropId: 'CROP_MINT', pid: 'a'.repeat(16), plantedAt: 1, readyAt: 2 } }, last: [], scale: 99,
+        reports: [{ id: 1, kind: 'rt', bedId: 'RB1', pid: 'b'.repeat(16), cropId: 'CROP_MINT', status: 'pending', requestedAt: 5, source: 'local' }] },
+      storage: { items: { ITEM_SALT: 3 } },
+    });
+    const a = mk(), b = mk();
+    San(a, 'local'); San(b, 'server');
+    const ok = Object.keys(a.rtfarm.beds).length === 0 && !('scale' in a.rtfarm) && !('ITEM_SALT' in a.storage.items) && a.stats.rtHarvests === 0
+      && a.rtfarm.reports.length === 1 && b.rtfarm.reports.length === 0;
+    return { ok, detail: `로컬 확인 요청 ${a.rtfarm.reports.length}개 · 서버 모드 ${b.rtfarm.reports.length}개` };
+  });
+  T('⏰ 실시간 텃밭', '옛 저장 올리기: 텃밭·곳간 기본값이 생기고 다른 값은 그대로', () => {
+    const N = G.save?.normalize;
+    if (typeof N !== 'function') return SKIP('저장 모듈이 없어요');
+    const old = N({ version: 1, stats: { level: 3, coin: 321 }, inventory: { ITEM_BEAN: 2 }, flags: { x: true } }, { id: 'dc-selftest' });
+    const ok = !!old && eq(old.rtfarm?.beds, {}) && Array.isArray(old.rtfarm?.last) && old.storage?.cap === 300 && eq(old.storage?.items, {})
+      && old.stats.rtHarvests === 0 && old.stats.coin === 321 && old.inventory.ITEM_BEAN === 2 && old.flags.x === true;
+    return ok;
+  });
+  T('⏰ 실시간 텃밭', '서버 시간 받기: 같은 씨앗 번호만 · 1초 이내 차이는 그대로', () => {
+    const C = RTC();
+    if (!C) return SKIP('실시간 텃밭 모듈이 없어요');
+    const s = rtScratch();
+    const p1 = C.plant(s, 'RB1', 'CROP_MINT', { t: rtT0, tier: 1, scale: 1 }), p2 = C.plant(s, 'RB2', 'CROP_MINT', { t: rtT0, tier: 1, scale: 1 });
+    const rt = { scale: 1, tier: 1, beds: {
+      RB1: { pid: p1.bed.pid, cropId: 'CROP_MINT', firstSeenAt: rtT0 + 4000, readyAt: rtT0 + 604000, status: 'growing' },
+      RB2: { pid: 'c'.repeat(16), cropId: 'CROP_MINT', firstSeenAt: rtT0 + 9000, readyAt: rtT0 + 609000, status: 'growing' } } };
+    const m1 = C.applyServer(s, rt);
+    rt.beds.RB1.readyAt += 400; // a server answer 0.4 s off: no change (no save loop)
+    const m2 = C.applyServer(s, rt);
+    const ok = m1 === 1 && m2 === 0 && s.rtfarm.beds.RB1.readyAt === rtT0 + 604000 && s.rtfarm.beds.RB2.readyAt === p2.bed.readyAt;
+    return { ok, detail: `옮긴 밭 ${m1} · 다시 받기 ${m2}` };
+  });
 
   // ---- 발효
   const sampleJar = (hyg) => ({ progress: 100, hygiene: hyg, acc: { t: 100, temp: 80, hum: 75, hyg: hyg * 100 } });
@@ -3198,6 +3294,7 @@
     weather: '🌤️ 날씨', hour: '🕐 시간', autoWeather: '🔁 자동 날씨', lockTime: '⏸️ 시간 멈춤', tp: '📍 순간이동',
     colliders: '🧱 충돌체 보기', fps: '⚡ FPS 표시', quality: '🖥️ 그래픽 품질', easy: '👶 쉬운 모드 켜기/끄기',
     fxConfetti: '🎉 축하 파티클', fxCoins: '🪙 코인 연출', fxStamp: '✅ 완료 도장', fxLevel: '⭐ 레벨업 연출', mascot: '🏺 옹이 한마디',
+    rtScale: '⏰ 실시간 텃밭 시간 배율',
   };
   const NEEDS_STATE = new Set(['coin', 'exp', 'edu', 'seeds', 'ingredients', 'decor', 'save', 'objective', 'claimall', 'tutorial', 'grow', 'water', 'ffwd', 'ferment', 'ferment1', 'tp', 'fxCoins', 'fxLevel', 'fxConfetti']);
   const Cheats = {
@@ -4575,6 +4672,7 @@
         <section class="dc-card dc-in dc-span2" style="--i:6"><h4>📍 순간이동 <span class="muted small">(누르면 센터가 닫히고 이동해요)</span></h4><div class="dc-cheats">${zones}</div></section>
         <section class="dc-card dc-in" style="--i:7"><h4>🖥️ 표시 · 품질</h4><div class="dc-cheats">${btn('colliders', null, CHEAT_LABEL.colliders, Cheats.colliders)}${btn('fps', null, CHEAT_LABEL.fps, G.settings.showFps)}${btn('easy', null, CHEAT_LABEL.easy, easyOn())}</div>
           <div class="dc-cheats">${[['low', '낮음'], ['medium', '중간'], ['high', '높음'], ['auto', '자동']].map(([v, l]) => btn('quality', v, `🖥️ ${l}`, q === v)).join('')}</div></section>
+        <section class="dc-card dc-in" style="--i:8"><h4>⏰ 실시간 텃밭 시간 배율 <span class="muted small">(이 기기만 · 어른 확인)</span></h4>${rtScaleRow()}</section>
         <section class="dc-card dc-in" style="--i:8"><h4>🎬 연출 미리보기 <span class="muted small">(보상 지급 없음)</span></h4><div class="dc-cheats">${btn('fxConfetti', null, CHEAT_LABEL.fxConfetti)}${btn('fxCoins', null, CHEAT_LABEL.fxCoins)}${btn('fxStamp', null, CHEAT_LABEL.fxStamp)}${btn('fxLevel', null, CHEAT_LABEL.fxLevel)}${btn('mascot', null, CHEAT_LABEL.mascot)}</div></section>
       </div>
       <section class="dc-card dc-in" style="--i:9"><div class="dc-card-head"><h4>🧾 명령 기록 <span class="muted small">(이 브라우저 · 최근 50개)</span></h4>${log.length ? '<button type="button" class="btn btn-ghost btn-sm" data-dc="cheat-log-clear">기록 지우기</button>' : ''}</div>
@@ -4582,6 +4680,16 @@
       </section>`;
     LIVE.debug(b);
   };
+  /** the real-time garden's local time scale (G.sys.realfarm.setScale): this device only, never saved in a profile;
+   *  server mode reads farm.rt_scale from the server (관리자 페이지) */
+  function rtScaleRow() {
+    const R = G.sys.realfarm;
+    if (!R?.setScale) return '<p class="dc-note">실시간 텃밭 모듈(42-realfarm)이 없어요.</p>';
+    if (G.net?.mode === 'server') return `<p class="dc-note">서버 모드예요: 시간 배율은 서버가 정해요 (지금 ×${esc(String(R.scale()))}). 관리자 페이지에서 바꿔요.</p>`;
+    const cur = R.scale();
+    return `<div class="dc-cheats">${[1, 60, 600, 3600].map((n) => `<button type="button" class="dc-cheat${cur === n ? ' on' : ''}" data-dc="rt-scale" data-scale="${n}">×${n}</button>`).join('')}</div>
+      <p class="dc-note">×60 이면 10분짜리 박하가 10초에 자라요. 자라는 중인 밭은 지금까지 자란 만큼을 지켜요. 시험이 끝나면 ×1 로 돌려 주세요.</p>`;
+  }
   async function runCheat(cmd, arg) {
     if (G.net?.mode === 'server' && !Cheats.serverConfirmed && ['coin', 'exp', 'edu', 'seeds', 'ingredients', 'decor', 'objective', 'claimall', 'grow', 'ffwd', 'ferment', 'ferment1'].includes(cmd)) {
       const ok = await confirmBox({ title: '서버 모드에서 치트를 쓸까요?', message: '서버가 저장을 검증해서 치트로 바뀐 진행은 거부되고 서버 저장본으로 되돌아갈 수 있어요. 테스트 계정에서만 사용하세요.', okText: '이해했어요, 실행', emoji: '🛡️' });
@@ -4872,6 +4980,22 @@
         if (easyOn()) { toast('쉬운 모드에서는 단계를 바꿀 수 없어요.', 'info', '🔒'); return; }
         sp.devTier(Number(el.dataset.tier) || 1);
         if (ui.opened && ui.tab === 'sub') RENDER.sub(ui.body);
+        return;
+      }
+      case 'rt-scale': {
+        const R = G.sys.realfarm;
+        if (!R?.setScale) { toast('실시간 텃밭 모듈(42-realfarm)이 없어요.', 'warn'); return; }
+        if (G.net?.mode === 'server') { toast('서버 모드에서는 관리자 페이지에서 시간 배율을 바꿔요.', 'info', '⏱️'); return; }
+        const n = Number(el.dataset.scale) || 1;
+        let pass = true;
+        if (typeof G.easy?.gate === 'function') {
+          try { pass = (await G.easy.gate({ reason: 'rt-scale', title: '어른 확인', text: '실시간 텃밭의 시간 배율을 바꿔요. 문제를 풀어 주세요.' })) === true; } catch (err) { pass = false; }
+        }
+        if (!pass) return;
+        const v = R.setScale(n);
+        CheatLog.push({ t: now(), cmd: 'rtScale', arg: `×${v}`, ok: v === n, mode: G.net?.mode || 'local' });
+        toast(`실시간 텃밭 시간 배율 ×${v} (이 기기만)`, v === n ? 'success' : 'warn', '⏰');
+        if (ui.opened && ui.tab === 'debug') render();
         return;
       }
       case 'sub-tier-off': { const sp = G.sys.speed; if (sp && typeof sp.devTier === 'function' && !easyOn()) sp.devTier(0); if (ui.opened && ui.tab === 'sub') RENDER.sub(ui.body); return; }

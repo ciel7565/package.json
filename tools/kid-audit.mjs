@@ -11,7 +11,8 @@
 //     --both               desktop AND mobile in one run
 //     --normal             audit normal (grown-up) mode instead of easy mode
 //     --screens a,b,c      only these screens (ids: hud bag shop sticker today quest journal edu lesson quiz map
-//                          emote chat avatar menu settings help photo)
+//                          rtbed gotgan rtbook emote chat avatar menu settings-kid settings help photo — rtbed/gotgan/
+//                          rtbook: the 실시간 텃밭 bed card, the 곳간 and the 📬 확인 기록장, CONTRACT §15)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report

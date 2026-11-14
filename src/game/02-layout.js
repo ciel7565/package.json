@@ -84,6 +84,35 @@
     { id: 'B_SHOP', type: 'stall', name: '체험관 매점', x: 11, z: 69, w: 5, d: 3, rot: -0.35, sign: '매점' },
   ];
 
+  // ---------------------------------------------------------------- 실시간 텃밭 + 곳간 (phase 7, CONTRACT §15.1 / §15.2)
+  // East of the crop field, on the free ground between its east fence (x 16.4 — the z −32 field path ends at its gap)
+  // and the stone path to the 발효주 저장고: x 20 … 32, z −37 … −18 has no path, collider, quest marker or NPC
+  // (tests/realfarm-client.mjs checks the colliders). Both sit outside every zone circle (the 만장대 telescope keeps
+  // aiming at the field) and are buildings, so the terrain flattens them and keeps trees / shrubs off them.
+  //   garden: a fence 10 m (x) × 9.5 m (z), the gate in the middle of its west side facing the field (local front:
+  //           rot −π/2), four raised beds RB1–RB4 (3.4 × 2.4 m, soil 0.38 m up) along a 2.4 m aisle from the gate,
+  //           the wooden clock sign "⏰ 진짜 시간으로 자라요" outside, north of the gate
+  //   곳간 B_GOTGAN ("B_STORAGE" is the 발효주 저장고): a thatched store house just south, its door facing west
+  const RTG = { x: 26, z: -30.75, sx: 10, sz: 9.5 };
+  L.rtGarden = {
+    id: 'B_RTGARDEN', x: RTG.x, z: RTG.z, sx: RTG.sx, sz: RTG.sz,
+    gate: { x: RTG.x - RTG.sx / 2, z: RTG.z, w: 2.4 },                  // opening in the west fence (world coords)
+    sign: { x: RTG.x - RTG.sx / 2 - 0.6, z: RTG.z - 2.9, rot: -PI / 2, title: '⏰ 진짜 시간으로 자라요' },
+    approach: { x: RTG.x - RTG.sx / 2 - 1.6, z: RTG.z },               // where the "가기" helper stops (outside the gate)
+  };
+  L.rtBeds = [
+    { id: 'RB1', label: '1', x: RTG.x - 2.4, z: RTG.z - 2.4, w: 3.4, d: 2.4, h: 0.38, rot: 0 },
+    { id: 'RB2', label: '2', x: RTG.x + 2.4, z: RTG.z - 2.4, w: 3.4, d: 2.4, h: 0.38, rot: 0 },
+    { id: 'RB3', label: '3', x: RTG.x - 2.4, z: RTG.z + 2.4, w: 3.4, d: 2.4, h: 0.38, rot: 0 },
+    { id: 'RB4', label: '4', x: RTG.x + 2.4, z: RTG.z + 2.4, w: 3.4, d: 2.4, h: 0.38, rot: 0 },
+  ];
+  // w = the front (gate / door) side, d = the depth: with rot −π/2 the front faces west, w runs along z, d along x
+  L.buildings.push(
+    { id: 'B_RTGARDEN', type: 'rtgarden', name: '실시간 텃밭', x: RTG.x, z: RTG.z, w: RTG.sz, d: RTG.sx, rot: -PI / 2, sign: '진짜 시간으로 자라요' },
+    { id: 'B_GOTGAN', type: 'gotgan', name: '곳간', x: 26, z: -21.6, w: 6.4, d: 4.4, rot: -PI / 2, sign: '곳간' },
+  );
+  L.gotganDoor = { x: 26 - 4.4 / 2 - 1.0, z: -21.6, rot: PI / 2 };       // the spot in front of the door (facing east)
+
   // ---------------------------------------------------------------- jangdokdae (terraces + spiral ring field)
   L.jangdokdae = {
     platforms: [
@@ -250,7 +279,7 @@
   // ---------------------------------------------------------------- anchor lookup
   L.anchors = {};
   const add = (o) => { if (o && o.id) L.anchors[o.id] = o; };
-  [L.buildings, L.jars, L.jarDisplays, L.farmPlots, L.signs, L.kiosks, L.exhibits, L.tools, L.photoZones, L.ponds].forEach((arr) => arr.forEach(add));
+  [L.buildings, L.jars, L.jarDisplays, L.farmPlots, L.signs, L.kiosks, L.exhibits, L.tools, L.photoZones, L.ponds, L.rtBeds].forEach((arr) => arr.forEach(add));
   [L.craftTable, L.shopStall, L.hallDoor, L.eduBoard, L.riverDeck].forEach(add);
   const M = L.manjangdae;
   [M.pavilion, M.marker, M.telescope, M.board].forEach(add);

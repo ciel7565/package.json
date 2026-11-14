@@ -205,8 +205,9 @@
   }
 
   // ---------------------------------------------------------------- notifications
-  const NTYPES = { achievement: '🏆', quest: '📜', level: '⭐', collection: '📖', reward: '🎁', mention: '💬', ferment: '🏺', mission: '🎯', checkin: '📅', cert: '🎓', decor: '🏡', system: '🔔' };
-  const NACTS = new Set(['quests', 'achievements', 'collection', 'profile', 'jar', 'chat', 'inventory', 'checkin', 'missions', 'inbox', 'cert', 'rank', 'decor']);
+  // farm / rtbook (phase 7, CONTRACT §15.3): a completion request was decided -> the 📬 확인 기록장 of 42-realfarm
+  const NTYPES = { achievement: '🏆', quest: '📜', level: '⭐', collection: '📖', reward: '🎁', mention: '💬', ferment: '🏺', mission: '🎯', checkin: '📅', cert: '🎓', decor: '🏡', farm: '📬', system: '🔔' };
+  const NACTS = new Set(['quests', 'achievements', 'collection', 'profile', 'jar', 'chat', 'inventory', 'checkin', 'missions', 'inbox', 'cert', 'rank', 'decor', 'rtbook']);
   // a mention keeps no chat words in the saved inbox (it goes to the server save too): fixed title and line; who
   // said what lives only in memory for this session (_mentionLive) and leaves with a moderation retraction
   const MENTION_TITLE = '친구가 나를 불렀어요';
@@ -1437,6 +1438,7 @@
         jar: () => { const id = ref && (G.sys.fermentation?.myJarIds?.() || []).includes(ref) ? ref : 'J1'; G.sys.fermentation?.openJar?.(id); },
         chat: () => { G.sys.social?.toggleChat?.(true); G.sys.social?.focusChat?.(); },
         inventory: () => G.sys.inventory?.open?.(),
+        rtbook: () => G.sys.realfarm?.openBook?.(),
         ...kidFns,
       };
       const fn = fns[act];

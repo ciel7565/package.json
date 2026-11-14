@@ -46,6 +46,9 @@
     POI_WATERFALL: [-18, -58, -2.415],
     POI_PAVILION: [45.5, 44.5, 2.21],   // inside the place (r 7 around (50, 41)): the visit counts on arrival
     POI_RIVERSIDE: [74, 46, 1.89],
+    // phase 7 (CONTRACT §15.1 / §15.2): outside the real-time garden's gate / in front of the 곳간 door, facing them
+    B_RTGARDEN: [19.4, -30.75, PI / 2],
+    B_GOTGAN: [22.8, -21.6, PI / 2],
   };
   const KIND_R = { pine: 2.1, oak: 2.6, maple: 2.5, zelkova: 3.6, conifer: 1.55 };
   const EASY_ZOOM = 3;                                        // 180 m across: more zones to tap
@@ -558,8 +561,8 @@
     ctx.translate(shadowOff, shadowOff);
     ctx.rotate(-(b.rot || 0));
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    if (type === 'thatched') { roundRectPath(ctx, -w / 2 - 0.6, -d / 2 - 0.6, w + 1.2, d + 1.2, 2.2); ctx.fill(); }
-    else ctx.fillRect(-w / 2 - 0.8, -d / 2 - 0.9, w + 1.6, d + 1.8);
+    if (type === 'thatched' || type === 'gotgan') { roundRectPath(ctx, -w / 2 - 0.6, -d / 2 - 0.6, w + 1.2, d + 1.2, 2.2); ctx.fill(); }
+    else if (type !== 'rtgarden') ctx.fillRect(-w / 2 - 0.8, -d / 2 - 0.9, w + 1.6, d + 1.8); // a fenced garden casts none
     ctx.restore();
     ctx.rotate(-(b.rot || 0));
     const tiles = (x0, y0, ww, hh, base, line, ridge, ridgeHi) => {
@@ -610,6 +613,24 @@
       ctx.strokeStyle = 'rgba(60,20,15,0.6)'; ctx.lineWidth = 0.12; ctx.strokeRect(-w / 2 - 0.4, -d / 2 - 0.5, w + 0.8, d + 1);
     } else if (type === 'storage') {
       tiles(-w / 2 - 0.9, -d / 2 - 1.1, w + 1.8, d + 2.2, '#5d554d', 'rgba(30,24,20,0.5)', '#3c352f', '#cfc8b8');
+    } else if (type === 'gotgan') {
+      // 곳간 (phase 7): a small rounded straw roof like the 초가집
+      roundRectPath(ctx, -w / 2 - 0.85, -d / 2 - 0.85, w + 1.7, d + 1.7, 2);
+      const g = ctx.createLinearGradient(0, -d / 2, 0, d / 2);
+      g.addColorStop(0, '#b8955a'); g.addColorStop(0.5, '#dcbc7c'); g.addColorStop(1, '#a3804a');
+      ctx.fillStyle = g; ctx.fill();
+      ctx.fillStyle = '#8a6a36'; ctx.fillRect(-w / 2 + 0.5, -0.28, w - 1, 0.56);
+    } else if (type === 'rtgarden') {
+      // 실시간 텃밭 (phase 7): gravel yard inside the fence line, then the four raised soil beds (world coordinates)
+      ctx.fillStyle = '#d9cdb4'; ctx.fillRect(-w / 2, -d / 2, w, d);
+      ctx.strokeStyle = '#7a5236'; ctx.lineWidth = 0.22; ctx.strokeRect(-w / 2, -d / 2, w, d);
+      ctx.restore(); ctx.save(); // back to world space (the final restore below pops this one)
+      for (const bd of L().rtBeds || []) {
+        ctx.save(); ctx.translate(bd.x, bd.z); ctx.rotate(-(bd.rot || 0));
+        ctx.fillStyle = '#6b4a30'; ctx.fillRect(-bd.w / 2, -bd.d / 2, bd.w, bd.d);
+        ctx.fillStyle = '#4e3524'; ctx.fillRect(-bd.w / 2 + 0.14, -bd.d / 2 + 0.14, bd.w - 0.28, bd.d - 0.28);
+        ctx.restore();
+      }
     } else {
       // hanok / classroom
       tiles(-w / 2 - 1.1, -d / 2 - 1.3, w + 2.2, d + 2.6, '#4a5058', 'rgba(25,28,33,0.5)', '#2e3238', '#ddd7c9');
@@ -746,6 +767,26 @@
     ctx.quadraticCurveTo(x - 5 * s, y - 1 * s, x - 2 * s, y - 4 * s); ctx.closePath();
     ctx.fillStyle = '#7a4a2c'; ctx.fill();
     ctx.lineWidth = 1.1 * s; ctx.strokeStyle = '#ffd766'; ctx.stroke();
+  }
+
+  /** 실시간 텃밭 marker (phase 7): a little clock face; a soft gold glow while a bed is ready (slow pulse, < 1 Hz) */
+  function drawRtGarden(ctx, x, y, s, t, ready) {
+    if (ready) {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 10 * s);
+      g.addColorStop(0, `rgba(255,214,90,${0.5 + Math.sin(t * 2.4) * 0.15})`); g.addColorStop(1, 'rgba(255,214,90,0)');
+      ctx.beginPath(); ctx.arc(x, y, 10 * s, 0, TAU); ctx.fillStyle = g; ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(x, y, 4.6 * s, 0, TAU); ctx.fillStyle = '#fff8e8'; ctx.fill();
+    ctx.lineWidth = 1.3 * s; ctx.strokeStyle = '#3a2414'; ctx.stroke();
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 2.2 * s, y - 1.2 * s); ctx.moveTo(x, y); ctx.lineTo(x + 1.4 * s, y - 3 * s); ctx.stroke();
+  }
+  /** 곳간 marker (phase 7): a straw-roofed little house with its door */
+  function drawGotgan(ctx, x, y, s) {
+    ctx.fillStyle = '#8a6243'; ctx.fillRect(x - 3.4 * s, y - 0.5 * s, 6.8 * s, 4.2 * s);
+    ctx.fillStyle = '#3b2a1e'; ctx.fillRect(x - 1.1 * s, y + 0.6 * s, 2.2 * s, 3.1 * s);
+    ctx.beginPath(); ctx.moveTo(x - 4.6 * s, y - 0.3 * s); ctx.quadraticCurveTo(x, y - 6.4 * s, x + 4.6 * s, y - 0.3 * s); ctx.closePath();
+    ctx.fillStyle = '#d8b672'; ctx.fill(); ctx.lineWidth = 1 * s; ctx.strokeStyle = '#5a3d26'; ctx.stroke();
   }
 
   /** iterate other players (G.sys.social.others is a Map or object of records) */
@@ -1076,6 +1117,10 @@
         if (!easy) for (const pz of L().photoZones || []) { const px = X(pz.x), py = Y(pz.z); if (inView(px, py, 10)) drawCamera(ctx, px, py, s * 0.95); }
         const j1 = L().get?.('J1');
         if (j1) { const px = X(j1.x), py = Y(j1.z); if (inView(px, py, 10)) drawMyJar(ctx, px, py, s * big, t); }
+        // phase 7: the real-time garden (glows while a bed is ready) and the 곳간
+        const rg = L().rtGarden, gk = L().get?.('B_GOTGAN');
+        if (rg) { const px = X(rg.x), py = Y(rg.z); if (inView(px, py, 12)) drawRtGarden(ctx, px, py, s * big, t, !!G.sys.realfarm?.anyReady?.()); }
+        if (gk) { const px = X(gk.x), py = Y(gk.z); if (inView(px, py, 12)) drawGotgan(ctx, px, py, s * big); }
       }
       // other players
       eachOther((x, z) => { const px = X(x), py = Y(z); if (inView(px, py, 6)) drawOther(ctx, px, py, s * (easy ? 1.15 : 1)); });
@@ -1638,6 +1683,10 @@
       // 🏺 my jar
       const j1 = L().get?.('J1');
       if (j1 && Number.isFinite(j1.x)) items.push({ id: '@jar', emoji: '🏺', label: '내 장독', color: '#c98a5a', say: '내 장독이 있는 곳으로 가요.' });
+      // ⏰ the real-time garden (🎉 while a bed is ready) and 🏚️ the 곳간 (phase 7, CONTRACT §15.1 / §15.2)
+      const rg = L().rtGarden, gd = L().gotganDoor;
+      if (rg && Number.isFinite(rg.x)) items.push({ id: '@rtfarm', emoji: '⏰', label: '실시간 텃밭', color: '#33d1c1', badge: G.sys.realfarm?.anyReady?.() ? '🎉' : '', say: G.sys.realfarm?.anyReady?.() ? '실시간 텃밭에 다 자란 작물이 있어요!' : '진짜 시간으로 자라는 텃밭이에요.' });
+      if (gd && Number.isFinite(gd.x)) items.push({ id: '@gotgan', emoji: '🏚️', label: '곳간', color: '#d8b672', say: '거둔 작물을 넣어 두는 곳간이에요.' });
       zones().forEach((z) => {
         if (!z || !(z.r > 0) || !Array.isArray(z.center)) return;
         const isHere = here === z.id;
@@ -1675,6 +1724,15 @@
       }
       if (id === '@jar' && j1) {
         G.easy.goTo?.({ x: j1.x - 1.6, z: j1.z }, { label: '내 장독', stopDistance: 0.9 });
+        return id;
+      }
+      if (id === '@rtfarm' && rg) {
+        const a = rg.approach || { x: rg.x - 6.6, z: rg.z };
+        G.easy.goTo?.({ x: a.x, z: a.z }, { label: '실시간 텃밭', stopDistance: 1 });
+        return id;
+      }
+      if (id === '@gotgan' && gd) {
+        G.easy.goTo?.({ x: gd.x, z: gd.z }, { label: '곳간', stopDistance: 0.9 });
         return id;
       }
       if (id === here) { say('지금 여기에 있어요!', { force: true }); return id; }
