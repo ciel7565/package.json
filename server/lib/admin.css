@@ -151,3 +151,53 @@ tr.log.lvl-warn td{color:#ffe6a3}
 .aianswer{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:12px;padding:12px 14px;border-radius:12px;border:1px solid rgba(74,168,255,.35);background:rgba(74,168,255,.08);line-height:1.6}
 @media (max-width:640px){.reportgrid{grid-template-columns:1fr}.top{position:static}.barrow{grid-template-columns:84px 1fr 40px}th,td{padding:8px}.tiles{grid-template-columns:repeat(2,1fr)}code.secret{font-size:1rem;letter-spacing:.06em}}
 @media print{body{background:#fff;color:#000}body::before,.tabs,.top .who,footer,.btn{display:none}.card{box-shadow:none;border-color:#999;background:#fff;backdrop-filter:none}code,code.bk,code.secret{color:#000;background:#eee}}
+/* [allot-admin] 🏺 분양 관리 (CONTRACT §16.7). Bars are built from width classes (.w0 … .w100): the page may carry no inline style (CSP style-src self). */
+.occgroup{margin:14px 0 4px}
+.occgroup h4{margin:0 0 8px;font-size:.95rem;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.occ{margin:10px 0}
+.occhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:5px}
+.occhead a,.todolist a{text-decoration:none}
+.occbar{display:flex;height:14px;border-radius:99px;overflow:hidden;background:rgba(52,195,107,.3);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.occbar i{display:block;flex:none;height:100%}
+.occbar .l,.sw.l,.zmap i.l{background:var(--gold)}
+.occbar .h,.sw.h,.zmap i.h{background:var(--orange)}
+.occbar .c,.sw.c,.zmap i.c{background:#5d6a62}
+.sw.o,.zmap i.o{background:rgba(52,195,107,.45)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 8px;color:var(--dim)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px}
+.barcell{min-width:180px}
+.barcell .occbar{margin-bottom:5px}
+.allotline{font-size:1.15rem;margin:0 0 10px}
+.todolist{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.todolist li{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid var(--line)}
+.todolist .ico{font-size:20px;line-height:1.3}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.zoneedit{min-width:min(520px,80vw)}
+.bulk{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);border:1px dashed var(--line)}
+.bulk select,.bulk input[type=text]{width:auto;flex:1 1 200px}
+form.lbl{margin-top:4px;padding-top:8px;border-top:1px solid var(--line)}
+td input[type=checkbox]{width:18px;height:18px}
+.zmapbox{margin-top:10px}
+.zmapbox summary{cursor:pointer;color:var(--dim)}
+.zmapwrap{overflow-x:auto;margin:10px 0;padding-bottom:4px}
+.zmap{display:inline-grid;gap:2px}
+.zrow{display:flex;gap:2px}
+.zmap i{display:block;width:9px;height:9px;border-radius:2px;flex:none}
+.pii{border-color:rgba(244,197,74,.6);background:rgba(36,30,12,.8)}
+.pii dl.facts dd{font-size:1.05rem;user-select:all}
+.timeline{list-style:none;margin:0;padding:0 0 0 14px;border-left:2px solid var(--line);display:grid;gap:10px}
+.timeline li{position:relative;padding-left:10px}
+.timeline li::before{content:"";position:absolute;left:-20px;top:.45em;width:10px;height:10px;border-radius:50%;background:var(--green)}
+.timeline li.warn::before{background:var(--orange)}
+.timeline li.end::before{background:#5d6a62}
+.rules{display:grid;gap:14px}
+.rule{display:grid;grid-template-columns:minmax(0,1fr) minmax(140px,220px);gap:6px 16px;align-items:start;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,.07)}
+.rule p{margin:2px 0 0}
+.sample{border:1px dashed rgba(255,159,67,.6);background:rgba(255,159,67,.1);color:#ffe0bf;padding:10px 12px;border-radius:12px}
+pre.csv{margin:8px 0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.4);border:1px solid var(--line);overflow-x:auto;font:.85rem/1.5 var(--mono)}
+tr.bad td{background:rgba(255,107,94,.08)}
+.w0{width:0}.w1{width:1%}.w2{width:2%}.w3{width:3%}.w4{width:4%}.w5{width:5%}.w6{width:6%}.w7{width:7%}.w8{width:8%}.w9{width:9%}.w10{width:10%}.w11{width:11%}.w12{width:12%}.w13{width:13%}.w14{width:14%}.w15{width:15%}.w16{width:16%}.w17{width:17%}.w18{width:18%}.w19{width:19%}.w20{width:20%}.w21{width:21%}.w22{width:22%}.w23{width:23%}.w24{width:24%}.w25{width:25%}.w26{width:26%}.w27{width:27%}.w28{width:28%}.w29{width:29%}.w30{width:30%}.w31{width:31%}.w32{width:32%}.w33{width:33%}.w34{width:34%}.w35{width:35%}.w36{width:36%}.w37{width:37%}.w38{width:38%}.w39{width:39%}.w40{width:40%}.w41{width:41%}.w42{width:42%}.w43{width:43%}.w44{width:44%}.w45{width:45%}.w46{width:46%}.w47{width:47%}.w48{width:48%}.w49{width:49%}.w50{width:50%}.w51{width:51%}.w52{width:52%}.w53{width:53%}.w54{width:54%}.w55{width:55%}.w56{width:56%}.w57{width:57%}.w58{width:58%}.w59{width:59%}.w60{width:60%}.w61{width:61%}.w62{width:62%}.w63{width:63%}.w64{width:64%}.w65{width:65%}.w66{width:66%}.w67{width:67%}.w68{width:68%}.w69{width:69%}.w70{width:70%}.w71{width:71%}.w72{width:72%}.w73{width:73%}.w74{width:74%}.w75{width:75%}.w76{width:76%}.w77{width:77%}.w78{width:78%}.w79{width:79%}.w80{width:80%}.w81{width:81%}.w82{width:82%}.w83{width:83%}.w84{width:84%}.w85{width:85%}.w86{width:86%}.w87{width:87%}.w88{width:88%}.w89{width:89%}.w90{width:90%}.w91{width:91%}.w92{width:92%}.w93{width:93%}.w94{width:94%}.w95{width:95%}.w96{width:96%}.w97{width:97%}.w98{width:98%}.w99{width:99%}.w100{width:100%}
+@media (max-width:640px){.zmap i{width:6px;height:6px}.zmap,.zrow{gap:1px}.zoneedit{min-width:0}.rule{grid-template-columns:1fr}.subtabs a{padding:7px 10px}
+.rt thead{display:none}.rt tr{display:block;padding:10px 12px;border-bottom:1px solid var(--line)}.rt td{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;padding:3px 0;border:0;text-align:right;min-width:0;max-width:none}
+.rt td::before{content:attr(data-th);color:var(--dim);font-size:.82rem;flex:none;text-align:left}.rt td:empty{display:none}.rt td.acts{display:block;text-align:left}.rt td.acts::before{content:none}.barcell{min-width:0}}

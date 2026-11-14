@@ -28,10 +28,12 @@ declare(strict_types=1);
 
 require __DIR__ . '/../lib/bootstrap.php';
 
+use Tfm\AdminAllot;
 use Tfm\AdminGate;
 use Tfm\AdminOps;
 use Tfm\AdminPath;
 use Tfm\AdminTotp;
+use Tfm\Allot;
 use Tfm\ApiException;
 use Tfm\Audit;
 use Tfm\Auth;
@@ -76,6 +78,7 @@ const TABS = [
     'beds' => ['🌱', '재배 현황'],
     'storage' => ['🏚️', '곳간'],
     'reports' => ['✅', '완료 확인'],
+    'allot' => ['🏺', '분양 관리'],
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
     'moderation' => ['🚨', '신고·채팅'],
@@ -366,6 +369,14 @@ function handlePost(Ctx $c)
             case 'ip_block': $msg = doIpBlock($c); break;
             case 'ip_unblock': $msg = doIpUnblock($c); break;
             case 'twofa_disable': $msg = doDisable($c); break;
+            // 🏺 분양 관리 (CONTRACT §16.7): the work is lib/AdminAllot.php; the labels stay here because tests/admin-lock.mjs
+            // reads the list of actions from this file (every one of them must be refused without a token)
+            case 'allot_seed': case 'allot_zone_save': case 'allot_zone_open': case 'allot_unit': case 'allot_units_bulk':
+            case 'allot_find': case 'allot_decide': case 'allot_contracts_bulk': case 'allot_pay': case 'allot_refund': case 'allot_renew': case 'allot_autorenew':
+            case 'allot_move': case 'allot_end': case 'allot_memo': case 'allot_contract_new':
+            case 'allot_customer_save': case 'allot_customer_link': case 'allot_reveal': case 'allot_pii_lock':
+            case 'allot_tick':
+                $msg = doAllot($c, $action); break;
             default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
         }
         flash('ok', $msg);
@@ -381,6 +392,45 @@ function backExtra(?array $add = null): array
     static $extra = [];
     if ($add !== null) foreach ($add as $k => $v) if (is_int($v) || (is_string($v) && preg_match('/^[a-z0-9_]{1,24}$/', $v))) $extra[(string) $k] = $v;
     return $extra;
+}
+
+/**
+ * 🏺 분양 관리 (CONTRACT §16.7): is the tab's part here? lib/AdminAllot.php (the view and the actions — in lib/, never in
+ * the admin folder) is loaded on first use together with lib/Allot.php (the library; bootstrap loads it on demand).
+ */
+function allotReady(): bool
+{
+    static $ok = null;
+    if ($ok === null) {
+        $file = __DIR__ . '/../lib/AdminAllot.php';
+        $ok = is_file($file) && class_exists('Tfm\Allot');
+        if ($ok) require_once $file;
+    }
+    return $ok;
+}
+
+/**
+ * One `allot_*` action (AdminAllot::action does the work). The 303 goes back to the place the form came from — also when
+ * the action fails; what the action itself names (the new contract, the list a search belongs to) wins, null removes.
+ */
+function doAllot(Ctx $c, string $action): string
+{
+    if (!allotReady()) throw new ApiException(503, 'NOT_READY', '분양 관리 기능이 아직 준비 중이에요.');
+    $place = AdminAllot::back($_POST);
+    try {
+        $r = AdminAllot::action($action, $c, $_POST);
+    } catch (ApiException $e) {
+        backExtra($place);
+        throw $e;
+    }
+    backExtra(array_filter($r['back'] + $place, function ($v) { return $v !== null; }));
+    return (string) $r['msg'];
+}
+
+/** 📊 the allotment line of the first tab: "분양: 임대 n / 10,000 · 승인 대기 n" */
+function allotCard(): string
+{
+    return allotReady() ? AdminAllot::card() : '';
 }
 
 /** ✅ / ⬜ one handover item (Inspect::setItem: admins only, the note cleaned and a pasted key hidden, audit handover_item_changed) */
@@ -849,7 +899,7 @@ function viewOverview(): string
     }
     $live = getStr('live') === '1';
     if ($live) pageRefresh(href(['tab' => 'overview', 'live' => 1, 'auto' => 1]));
-    $h = '<div class="row">' . liveSwitch(['tab' => 'overview'], $live) . '</div>' . tiles($tiles) . '<div class="grid2">' . farmCard() . alertsCard() . '</div><div class="grid2">';
+    $h = '<div class="row">' . liveSwitch(['tab' => 'overview'], $live) . '</div>' . tiles($tiles) . '<div class="grid2">' . farmCard() . alertsCard() . '</div>' . allotCard() . '<div class="grid2">';
     $max = max(1, max(array_values($s['levels'])));
     $h .= '<section class="card"><h3>⭐ 레벨 분포</h3>';
     foreach ($s['levels'] as $k => $n) $h .= '<div class="barrow"><span>' . e($k) . '</span><meter min="0" max="' . e($max) . '" value="' . e($n) . '"></meter><b>' . e(num($n)) . '</b></div>';
@@ -1704,7 +1754,11 @@ function render(Ctx $c): string
     $codes = $parts[1];
     // auto=1: the 20-second refresh of a live tab — checked like any page, but it does not keep the elevation alive
     if (AdminGate::check($c->user, true, getStr('auto') !== '1')) {
+        // 🏺 the allotment automation keeps running on a server without the scheduler line: an admin page view starts one
+        // bounded run when none started for allot.lazy_tick_minutes (one request wins a compare-and-set; it never throws)
+        if (allotReady()) Allot::lazyTick();
         switch ($tab) {
+            case 'allot': $body = allotReady() ? AdminAllot::view($c, $_GET, Session::csrf()) : notReady('🏺 분양 관리', '분양 관리(lib/Allot.php · lib/AdminAllot.php)'); break;
             case 'beds': $body = viewBeds(); break;
             case 'storage': $body = viewStorage(); break;
             case 'reports': $body = viewReports(); break;

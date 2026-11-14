@@ -3840,4 +3840,75 @@ final class Allot
         } while (count($rows) === 500);
         return $n;
     }
+
+    // [allot-admin] ---------------------------------------------------- read-only extras for the admin tab (lib/AdminAllot.php)
+    /**
+     * Contracts with money to collect soon: active / overdue ones with a price whose paid-until date lies within $days
+     * days or is already past, the most urgent first. Keyset on (paid_until, id): pass `next` ("<paidUntil>_<id>") back
+     * as $after. @return array ['rows' => [contract …] (as listContracts), 'next' => cursor or '']
+     */
+    public static function listDue(int $days = 7, int $limit = 50, string $after = '', ?int $now = null): array
+    {
+        $now = self::now($now);
+        $limit = max(1, min(500, $limit));
+        $ap = 0;
+        $ai = 0;
+        if (preg_match('/^(\d{1,15})_(\d{1,15})$/', $after, $m)) { $ap = (int) $m[1]; $ai = (int) $m[2]; }
+        $rows = Db::all(self::CON_SELECT . " WHERE c.status IN ('active', 'overdue') AND c.price > 0 AND c.paid_until > 0 AND c.paid_until < ?
+              AND (c.paid_until > ? OR (c.paid_until = ? AND c.id > ?))
+            ORDER BY c.paid_until ASC, c.id ASC LIMIT ?", [$now + max(0, min(366, $days)) * self::DAY, $ap, $ap, $ai, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        $out = array_map(function ($r) { return self::contractOut($r); }, $rows);
+        $last = $out ? $out[count($out) - 1] : null;
+        return ['rows' => $out, 'next' => $more && $last ? $last['paidUntil'] . '_' . $last['id'] : ''];
+    }
+
+    /**
+     * The admin's care-log list: every line (hidden ones too) with the place it belongs to and who wrote it, newest
+     * first. $filter: zone (id or code), unit (code). $beforeId pages back.
+     * → {logs: [{id, kind, text, at, scope 'unit'|'zone'|'all', visible, zoneCode, unitCode, by}], more}
+     */
+    public static function careAdmin(array $filter = [], int $limit = 50, int $beforeId = 0): array
+    {
+        $limit = max(1, min(200, $limit));
+        $b = max(0, $beforeId);
+        $zid = 0;
+        $uid = 0;
+        if (isset($filter['unit']) && $filter['unit'] !== '') {
+            $u = Db::one('SELECT id FROM allot_units WHERE code = ?', [self::unitCode($filter['unit'])]);
+            if (!$u) return ['logs' => [], 'more' => false];
+            $uid = (int) $u['id'];
+        } elseif (isset($filter['zone']) && $filter['zone'] !== '' && $filter['zone'] !== 0) {
+            $z = self::zoneRow($filter['zone']);
+            if (!$z) return ['logs' => [], 'more' => false];
+            $zid = (int) $z['id'];
+        }
+        $rows = Db::all('SELECT l.id, l.zone_id, l.unit_id, l.kind, l.text, l.visible, l.created_at, z.code AS zone_code, u.code AS unit_code, a.nickname
+            FROM allot_care_logs l LEFT JOIN allot_zones z ON z.id = l.zone_id LEFT JOIN allot_units u ON u.id = l.unit_id LEFT JOIN users a ON a.id = l.created_by
+            WHERE (? = 0 OR l.id < ?) AND (? = 0 OR l.zone_id = ?) AND (? = 0 OR l.unit_id = ?) ORDER BY l.id DESC LIMIT ?', [$b, $b, $zid, $zid, $uid, $uid, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        return ['logs' => array_map(function ($r) {
+            return ['id' => (int) $r['id'], 'kind' => (string) $r['kind'], 'text' => (string) $r['text'], 'at' => (int) $r['created_at'],
+                'scope' => (int) $r['unit_id'] > 0 ? 'unit' : ((int) $r['zone_id'] > 0 ? 'zone' : 'all'), 'visible' => (int) $r['visible'] === 1,
+                'zoneCode' => $r['zone_code'] === null ? '' : (string) $r['zone_code'], 'unitCode' => $r['unit_code'] === null ? '' : (string) $r['unit_code'],
+                'by' => $r['nickname'] === null ? '' : (string) $r['nickname']];
+        }, $rows), 'more' => $more];
+    }
+
+    /** the consent versions customers agreed to so far, newest first: [{ver, at, customers}] */
+    public static function termsVersions(int $limit = 20): array
+    {
+        return array_map(function ($r) { return ['ver' => (string) $r['ver'], 'at' => (int) $r['created_at'], 'customers' => (int) $r['n']]; },
+            Db::all('SELECT t.ver, t.created_at, (SELECT COUNT(*) FROM allot_customers cu WHERE cu.consent_ver = t.ver) AS n FROM allot_terms t ORDER BY t.id DESC LIMIT ?', [max(1, min(100, $limit))]));
+    }
+
+    /** the texts of one consent version (what those customers read when they agreed), or null: {ver, at, privacy, terms, refund} */
+    public static function termsOf(string $ver): ?array
+    {
+        if ($ver === '' || strlen($ver) > 40) return null;
+        $r = Db::one('SELECT ver, privacy_text, terms_text, refund_text, created_at FROM allot_terms WHERE ver = ?', [$ver]);
+        return $r ? ['ver' => (string) $r['ver'], 'at' => (int) $r['created_at'], 'privacy' => (string) $r['privacy_text'], 'terms' => (string) $r['terms_text'], 'refund' => (string) $r['refund_text']] : null;
+    }
 }
