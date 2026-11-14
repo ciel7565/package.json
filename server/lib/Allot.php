@@ -632,6 +632,15 @@ final class Allot
         return Db::exec('UPDATE allot_units SET status = ?, contract_id = ?, hold_until = ?, updated_at = ? WHERE id = ? AND status = ?', [$to, $contractId, $holdUntil, $now, $unitId, $from]) === 1;
     }
 
+    /**
+     * A held unit without a contract (an operator hold, a waiting-list offer) gets its contract. The status stays 'held',
+     * so the value that changes is contract_id (NULL → id): still exactly one row on both drivers.
+     */
+    private static function heldAttach(int $unitId, int $contractId, int $holdUntil, int $now): bool
+    {
+        return Db::exec("UPDATE allot_units SET contract_id = ?, hold_until = ?, updated_at = ? WHERE id = ? AND status = 'held' AND contract_id IS NULL", [$contractId, $holdUntil, $now, $unitId]) === 1;
+    }
+
     /** a status of a unit of this zone changed: the map version moves on */
     private static function bumpZone(int $zoneId, int $now): void
     {
@@ -757,6 +766,2313 @@ final class Allot
         $out['v'] = $v;
         self::cacheSet('sum:' . $v, $out, 10);
         return self::$memo['sum'] = $out;
+    }
+
+    // ------------------------------------------------------------------ customers (sealed personal data, blind indexes)
+    /** digits of a Korean phone number ("010-1234-5678", "+82 10 1234 5678" → "01012345678"), or '' when it is not one */
+    public static function normPhone($v): string
+    {
+        if (!is_string($v)) return '';
+        $s = (string) preg_replace('/[\s\-.()]+/u', '', trim($v));
+        if (strncmp($s, '+82', 3) === 0) $s = '0' . ltrim(substr($s, 3), '0');
+        if (!preg_match('/^0\d{8,10}$/', $s)) return '';
+        return $s;
+    }
+
+    /** "010-1234-5678" from the digits */
+    private static function fmtPhone(string $d): string
+    {
+        $n = strlen($d);
+        if (strncmp($d, '02', 2) === 0 && ($n === 9 || $n === 10)) return '02-' . substr($d, 2, $n - 6) . '-' . substr($d, -4);
+        if ($n === 10 || $n === 11) return substr($d, 0, 3) . '-' . substr($d, 3, $n - 7) . '-' . substr($d, -4);
+        return $d;
+    }
+
+    /** the keyed blind indexes (the same construction as Sec::hashId, with their own label) */
+    private static function phoneHash(string $digits): string { return $digits === '' ? '' : Sec::hashId('allot-phone:' . $digits); }
+    private static function nameKey(string $name): string { return mb_strtolower((string) preg_replace('/\s+/u', '', $name)); }
+    private static function nameHash(string $name): string { $k = self::nameKey($name); return $k === '' ? '' : Sec::hashId('allot-name:' . $k); }
+
+    /** "김**" — the first character and stars */
+    private static function maskName(string $name): string
+    {
+        $n = mb_strlen($name);
+        return $n === 0 ? '' : mb_substr($name, 0, 1) . str_repeat('*', max(1, min(4, $n - 1)));
+    }
+
+    private static function maskPhone(string $tail): string { return $tail === '' ? '' : '***-****-' . $tail; }
+
+    /** seal one value; '' stays '' */
+    private static function seal(string $plain): string { return $plain === '' ? '' : Crypto::seal($plain); }
+
+    /** the plaintext of a sealed column ('' when empty or unreadable — a lost data key never throws here) */
+    private static function unseal($stored): string
+    {
+        if (!is_string($stored) || $stored === '') return '';
+        $p = Crypto::open($stored);
+        return $p === null ? '' : $p;
+    }
+
+    /** a person's name as typed: 1–40 characters with at least one letter → the cleaned name */
+    private static function cleanName($v): string
+    {
+        if (!is_string($v)) V::fail('name', '값은 글자로 보내 주세요.');
+        V::str($v, 'name', 40);
+        $name = Users::cleanText($v, 40);
+        if ($name === '' || !preg_match('/\p{L}/u', $name)) V::fail('name', '이름을 적어 주세요.');
+        return $name;
+    }
+
+    /**
+     * The applicant's part of an application / waiting-list form: consent === true, adult === true and the current consent
+     * version (400 CONSENT_REQUIRED, data.field + data.version), then name, phone (400 INVALID_INPUT) and — only when
+     * collect_address is on — the address. → ['name', 'phone' (digits), 'addr', 'guardian']
+     */
+    private static function applicantForm(array $form): array
+    {
+        $ver = self::consentVersion();
+        foreach (['consent' => '개인정보 수집 · 이용에 동의해 주세요.', 'adult' => '만 14세 이상 본인이거나 보호자인지 확인해 주세요.'] as $k => $msg) {
+            if (!isset($form[$k]) || $form[$k] !== true) throw new ApiException(400, 'CONSENT_REQUIRED', $msg, ['field' => $k, 'version' => $ver]);
+        }
+        if (!isset($form['consentVersion']) || !is_string($form['consentVersion']) || !hash_equals($ver, $form['consentVersion'])) {
+            throw new ApiException(400, 'CONSENT_REQUIRED', '안내문이 바뀌었어요. 새 안내문을 읽고 다시 동의해 주세요.', ['field' => 'consentVersion', 'version' => $ver]);
+        }
+        $name = self::cleanName(isset($form['name']) ? $form['name'] : null);
+        $phone = self::normPhone(isset($form['phone']) ? $form['phone'] : null);
+        if ($phone === '') V::fail('phone', '전화번호를 다시 확인해 주세요. (예: 010-1234-5678)');
+        $addr = '';
+        if (self::conf('collect_address') && isset($form['addr']) && $form['addr'] !== null) {
+            if (!is_string($form['addr'])) V::fail('addr', '값은 글자로 보내 주세요.');
+            V::str($form['addr'], 'addr', 200);
+            $addr = Users::cleanText($form['addr'], 200);
+        }
+        return ['name' => $name, 'phone' => $phone, 'addr' => $addr, 'guardian' => isset($form['guardian']) && $form['guardian'] === true];
+    }
+
+    /** the customer row of an app account: created or refreshed from the form (inside the caller's transaction) → id */
+    private static function upsertOwnCustomer(int $uid, array $f, int $now): int
+    {
+        $ver = self::rememberTerms($now);
+        if (!Crypto::fits($f['name'], 255)) V::fail('name', '이름이 너무 길어요.');
+        $row = [
+            'name_enc' => self::seal($f['name']), 'phone_enc' => self::seal($f['phone']), 'phone_hash' => self::phoneHash($f['phone']), 'phone_tail' => substr($f['phone'], -4),
+            'name_hash' => self::nameHash($f['name']), 'consent_at' => $now, 'consent_ver' => $ver, 'guardian' => $f['guardian'] ? 1 : 0, 'purged_at' => 0, 'updated_at' => $now,
+        ];
+        $cur = Db::one('SELECT id, addr_enc FROM allot_customers WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+        if ($cur) {
+            $addr = $f['addr'] !== '' ? self::seal($f['addr']) : $cur['addr_enc'];
+            Db::exec('UPDATE allot_customers SET name_enc = ?, phone_enc = ?, phone_hash = ?, phone_tail = ?, name_hash = ?, addr_enc = ?, consent_at = ?, consent_ver = ?, guardian = ?, purged_at = 0, updated_at = ? WHERE id = ?',
+                [$row['name_enc'], $row['phone_enc'], $row['phone_hash'], $row['phone_tail'], $row['name_hash'], $addr, $now, $ver, $row['guardian'], $now, (int) $cur['id']]);
+            return (int) $cur['id'];
+        }
+        return Db::insert('allot_customers', $row + ['user_id' => $uid, 'addr_enc' => $f['addr'] !== '' ? self::seal($f['addr']) : null, 'memo' => null, 'created_at' => $now]);
+    }
+
+    private static function customerOut(array $r, bool $reveal): array
+    {
+        $name = self::unseal($r['name_enc']);
+        $out = [
+            'id' => (int) $r['id'], 'userId' => $r['user_id'] === null ? 0 : (int) $r['user_id'], 'name' => self::maskName($name), 'phone' => self::maskPhone((string) $r['phone_tail']),
+            'phoneTail' => (string) $r['phone_tail'], 'hasAddr' => is_string($r['addr_enc']) && $r['addr_enc'] !== '', 'hasMemo' => is_string($r['memo']) && $r['memo'] !== '',
+            'consentAt' => (int) $r['consent_at'], 'consentVer' => (string) $r['consent_ver'], 'guardian' => (int) $r['guardian'] === 1, 'purged' => (int) $r['purged_at'] > 0,
+            'createdAt' => (int) $r['created_at'], 'updatedAt' => (int) $r['updated_at'],
+        ];
+        if (isset($r['contracts'])) $out['contracts'] = (int) $r['contracts'];
+        if ($reveal) {
+            $phone = self::unseal($r['phone_enc']);
+            $out += ['nameFull' => $name, 'phoneFull' => self::fmtPhone($phone), 'addr' => self::unseal($r['addr_enc']), 'memo' => self::unseal($r['memo'])];
+        }
+        return $out;
+    }
+
+    /**
+     * One customer. Masked by default: {id, userId, name "김**", phone "***-****-1234", phoneTail, hasAddr, hasMemo,
+     * consentAt, consentVer, guardian, purged, createdAt, updatedAt, contracts}. $reveal adds nameFull, phoneFull, addr,
+     * memo — only for an admin actor (403 FORBIDDEN otherwise; the admin site asks for the password again before it
+     * calls this) and every reveal writes the audit row allot_customer_revealed (customer id + $why, never the data).
+     */
+    public static function customer(int $id, bool $reveal = false, ?array $a = null, string $why = ''): array
+    {
+        $actor = 0;
+        if ($reveal) {
+            if ($a === null) throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
+            $actor = self::admin($a);
+        }
+        $r = Db::one('SELECT cu.*, (SELECT COUNT(*) FROM allot_contracts c WHERE c.customer_id = cu.id) AS contracts FROM allot_customers cu WHERE cu.id = ?', [$id]);
+        if (!$r) throw new ApiException(404, 'NOT_FOUND', '고객을 찾을 수 없어요.');
+        if ($reveal) {
+            Audit::log('allot_customer_revealed', $r['user_id'] === null ? null : (int) $r['user_id'], ['customer' => (int) $r['id'], 'why' => self::cleanPublic($why, 80)], 'warn', self::idOrNull($actor));
+        }
+        return self::customerOut($r, $reveal);
+    }
+
+    /**
+     * The operator enters or corrects a customer. $in: id? (change that one), name, phone ('' allowed for a customer
+     * without one), addr, memo (sealed; the operator's note about the person), guardian, consent (true = the operator
+     * holds the person's consent on paper → consent_at = now). A second customer with the same phone AND name is
+     * 409 CUSTOMER_EXISTS (data.id). Audit allot_customer_saved (id only). @return array the masked view
+     */
+    public static function saveCustomer(array $a, array $in, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        V::keys($in, ['id', 'name', 'phone', 'addr', 'memo', 'guardian', 'consent'], 'customer');
+        $now = self::now($now);
+        $id = self::inInt($in, 'id', 1, V::INT_MAX);
+        $cur = $id === null ? null : Db::one('SELECT * FROM allot_customers WHERE id = ?', [$id]);
+        if ($id !== null && !$cur) throw new ApiException(404, 'NOT_FOUND', '고객을 찾을 수 없어요.');
+        $name = array_key_exists('name', $in) || !$cur ? self::cleanName(isset($in['name']) ? $in['name'] : null) : null;
+        $phone = null;
+        if (array_key_exists('phone', $in) || !$cur) {
+            $raw = isset($in['phone']) ? $in['phone'] : '';
+            $phone = $raw === '' ? '' : self::normPhone($raw);
+            if ($raw !== '' && $phone === '') V::fail('phone', '전화번호를 다시 확인해 주세요. (예: 010-1234-5678)');
+        }
+        $addr = self::inStr($in, 'addr', 200);
+        $memo = self::inStr($in, 'memo', 500);
+        $guardian = self::inBool($in, 'guardian');
+        $consent = self::inBool($in, 'consent');
+        $saved = Db::tx(function () use ($cur, $name, $phone, $addr, $memo, $guardian, $consent, $now) {
+            $n = $name !== null ? $name : self::unseal($cur['name_enc']);
+            $p = $phone !== null ? $phone : self::unseal($cur['phone_enc']);
+            if ($p !== '') {
+                $dup = Db::value('SELECT id FROM allot_customers WHERE phone_hash = ? AND name_hash = ? AND purged_at = 0 AND id <> ?', [self::phoneHash($p), self::nameHash($n), $cur ? (int) $cur['id'] : 0]);
+                if ($dup !== null) throw new ApiException(409, 'CUSTOMER_EXISTS', '같은 이름과 전화번호의 고객이 이미 있어요.', ['id' => (int) $dup]);
+            }
+            $row = ['updated_at' => $now];
+            if ($name !== null || !$cur) { $row['name_enc'] = self::seal($n); $row['name_hash'] = self::nameHash($n); }
+            if ($phone !== null || !$cur) { $row['phone_enc'] = self::seal($p); $row['phone_hash'] = self::phoneHash($p); $row['phone_tail'] = $p === '' ? '' : substr($p, -4); }
+            if ($addr !== null) $row['addr_enc'] = $addr === '' ? null : self::seal(Users::cleanText($addr, 200));
+            if ($memo !== null) $row['memo'] = $memo === '' ? null : self::seal(self::cleanPrivate($memo, 500));
+            if ($guardian !== null) $row['guardian'] = $guardian ? 1 : 0;
+            if ($consent === true) { $row['consent_at'] = $now; $row['consent_ver'] = 'paper:' . self::conf('consent_version'); }
+            if (!$cur) return Db::insert('allot_customers', $row + ['user_id' => null, 'consent_at' => 0, 'consent_ver' => '', 'guardian' => 0, 'purged_at' => 0, 'created_at' => $now]);
+            // one UPDATE per changed column keeps every statement constant (no SQL is ever assembled from names)
+            $cid = (int) $cur['id'];
+            if (isset($row['name_enc'])) Db::exec('UPDATE allot_customers SET name_enc = ?, name_hash = ?, purged_at = 0 WHERE id = ?', [$row['name_enc'], $row['name_hash'], $cid]);
+            if (isset($row['phone_enc'])) Db::exec('UPDATE allot_customers SET phone_enc = ?, phone_hash = ?, phone_tail = ? WHERE id = ?', [$row['phone_enc'], $row['phone_hash'], $row['phone_tail'], $cid]);
+            if (array_key_exists('addr_enc', $row)) Db::exec('UPDATE allot_customers SET addr_enc = ? WHERE id = ?', [$row['addr_enc'], $cid]);
+            if (array_key_exists('memo', $row)) Db::exec('UPDATE allot_customers SET memo = ? WHERE id = ?', [$row['memo'], $cid]);
+            if (isset($row['guardian'])) Db::exec('UPDATE allot_customers SET guardian = ? WHERE id = ?', [$row['guardian'], $cid]);
+            if (isset($row['consent_at'])) Db::exec('UPDATE allot_customers SET consent_at = ?, consent_ver = ? WHERE id = ?', [$row['consent_at'], $row['consent_ver'], $cid]);
+            Db::exec('UPDATE allot_customers SET updated_at = ? WHERE id = ?', [$now, $cid]);
+            return $cid;
+        });
+        Audit::log('allot_customer_saved', null, ['customer' => (int) $saved, 'new' => !$cur], 'info', self::idOrNull($actor));
+        return self::customer((int) $saved);
+    }
+
+    /**
+     * Customers, newest first (keyset: pass `next` as $afterId). $filter['q']: a whole phone number or a whole name (blind
+     * indexes — a part of a name cannot be searched: the names are sealed), the last 4 digits of a phone, or #id.
+     * Rows are masked. @return ['rows' => [...], 'next' => cursor or 0]
+     */
+    public static function listCustomers(array $filter = [], int $limit = 50, int $afterId = 0): array
+    {
+        $q = isset($filter['q']) && is_string($filter['q']) ? trim(mb_substr($filter['q'], 0, 60)) : '';
+        $id = 0; $ph = ''; $tail = ''; $nh = '';
+        if ($q !== '') {
+            $digits = (string) preg_replace('/[\s\-.()]+/u', '', $q);
+            if (preg_match('/^#(\d{1,15})$/', $q, $m)) $id = (int) $m[1];
+            elseif (preg_match('/^\d{4}$/', $digits)) $tail = $digits;
+            elseif (self::normPhone($q) !== '') $ph = self::phoneHash(self::normPhone($q));
+            else $nh = self::nameHash(Users::cleanText($q, 40));
+            if ($id === 0 && $ph === '' && $tail === '' && $nh === '') return ['rows' => [], 'next' => 0];
+        }
+        $limit = max(1, min(500, $limit));
+        $rows = Db::all("SELECT cu.*, (SELECT COUNT(*) FROM allot_contracts c WHERE c.customer_id = cu.id) AS contracts FROM allot_customers cu
+            WHERE (? = 0 OR cu.id < ?) AND (? = 0 OR cu.id = ?) AND (? = '' OR cu.phone_hash = ?) AND (? = '' OR cu.phone_tail = ?) AND (? = '' OR cu.name_hash = ?)
+            ORDER BY cu.id DESC LIMIT ?", [$afterId, $afterId, $id, $id, $ph, $ph, $tail, $tail, $nh, $nh, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        $out = array_map(function ($r) { return self::customerOut($r, false); }, $rows);
+        return ['rows' => $out, 'next' => $more && $out ? $out[count($out) - 1]['id'] : 0];
+    }
+
+    /**
+     * Tie a customer the operator entered (or imported) to an app account, so its contracts show up in that account's
+     * "내 분양". Never done by matching phone numbers automatically — whoever knows a phone number must not be able to
+     * claim a contract. 409 ALREADY_LINKED when the account or the customer already has a partner. Audit allot_customer_linked.
+     */
+    public static function linkCustomer(array $a, int $customerId, int $userId, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        $now = self::now($now);
+        if (!Users::byId($userId)) throw new ApiException(404, 'NOT_FOUND', '계정을 찾을 수 없어요.');
+        Db::tx(function () use ($customerId, $userId, $now) {
+            $cu = Db::one('SELECT id, user_id FROM allot_customers WHERE id = ?' . Db::forUpdate(), [$customerId]);
+            if (!$cu) throw new ApiException(404, 'NOT_FOUND', '고객을 찾을 수 없어요.');
+            if ($cu['user_id'] !== null || Db::value('SELECT id FROM allot_customers WHERE user_id = ?', [$userId]) !== null) throw new ApiException(409, 'ALREADY_LINKED', '이미 다른 쪽과 이어져 있어요.');
+            Db::exec('UPDATE allot_customers SET user_id = ?, updated_at = ? WHERE id = ? AND user_id IS NULL', [$userId, $now, $customerId]);
+            Db::exec('UPDATE allot_contracts SET user_id = ?, updated_at = ? WHERE customer_id = ? AND user_id IS NULL', [$userId, $now, $customerId]);
+            Db::exec("UPDATE allot_notices SET user_id = ? WHERE customer_id = ? AND user_id IS NULL AND status = 'queued'", [$userId, $customerId]);
+            Db::exec('UPDATE allot_waitlist SET user_id = ?, updated_at = ? WHERE customer_id = ? AND user_id IS NULL', [$userId, $now, $customerId]);
+        });
+        Audit::log('allot_customer_linked', $userId, ['customer' => $customerId], 'warn', self::idOrNull($actor));
+        return self::customer($customerId);
+    }
+
+    // ------------------------------------------------------------------ notices (the in-app inbox)
+    /**
+     * One notice row. $title / $body are final text: callers pass their own fixed sentences and run anything a person
+     * typed through cleanPublic() first. A notice for an account that is due now is 'sent' at once; one without an
+     * account (the operator calls that customer) or with a later send_at waits as 'queued'. A used $dedupe key → false.
+     */
+    private static function note(int $now, ?int $contractId, ?int $customerId, ?int $userId, string $kind, string $title, string $body, ?string $dedupe = null, ?int $actor = null, ?int $sendAt = null): bool
+    {
+        $sendAt = $sendAt === null ? $now : $sendAt;
+        $direct = $userId !== null && $sendAt <= $now;
+        try {
+            Db::insert('allot_notices', [
+                'contract_id' => $contractId, 'customer_id' => $customerId, 'user_id' => $userId, 'kind' => substr($kind, 0, 24), 'dedupe_key' => $dedupe === null ? null : substr($dedupe, 0, 80),
+                'title' => mb_substr($title, 0, 80), 'body' => mb_substr($body, 0, 400), 'status' => $direct ? 'sent' : 'queued', 'send_at' => $sendAt, 'sent_at' => $direct ? $now : 0, 'seen_at' => 0,
+                'created_by' => $actor, 'created_at' => $now,
+            ]);
+            return true;
+        } catch (\PDOException $e) {
+            if ((string) $e->getCode() === '23000') return false; // this notice was already made (dedupe key)
+            throw $e;
+        }
+    }
+
+    /** a notice about a contract row (customer and account come from the row) */
+    private static function noteContract(array $c, int $now, string $kind, string $title, string $body, ?string $dedupe = null, ?int $actor = null): bool
+    {
+        return self::note($now, (int) $c['id'], (int) $c['customer_id'], $c['user_id'] === null ? null : (int) $c['user_id'], $kind, $title, $body, $dedupe, $actor);
+    }
+
+    private static function noticeOut(array $r): array
+    {
+        return ['id' => (int) $r['id'], 'kind' => (string) $r['kind'], 'title' => (string) $r['title'], 'body' => (string) $r['body'], 'at' => (int) ((int) $r['sent_at'] > 0 ? $r['sent_at'] : $r['send_at']),
+            'seen' => (string) $r['status'] === 'seen', 'contractNo' => isset($r['contract_no']) && $r['contract_no'] !== null ? (string) $r['contract_no'] : ''];
+    }
+
+    public static function unread(int $uid): int
+    {
+        return (int) Db::value("SELECT COUNT(*) FROM allot_notices WHERE user_id = ? AND status = 'sent'", [$uid]);
+    }
+
+    /** the caller's notices, newest first (≤ 50): {notices: [{id, kind, title, body, at, seen, contractNo}], unread, last}; $afterId = only newer ones */
+    public static function inbox(int $uid, int $afterId = 0, int $limit = 50): array
+    {
+        $rows = Db::all("SELECT n.id, n.kind, n.title, n.body, n.status, n.send_at, n.sent_at, c.contract_no FROM allot_notices n LEFT JOIN allot_contracts c ON c.id = n.contract_id
+            WHERE n.user_id = ? AND n.status IN ('sent', 'seen') AND n.id > ? ORDER BY n.id DESC LIMIT ?", [$uid, max(0, $afterId), max(1, min(50, $limit))]);
+        $out = array_map(function ($r) { return self::noticeOut($r); }, $rows);
+        return ['notices' => $out, 'unread' => self::unread($uid), 'last' => $out ? $out[0]['id'] : max(0, $afterId)];
+    }
+
+    /** mark the caller's own notices seen (ids of other accounts change nothing) → rows changed */
+    public static function markSeen(int $uid, array $ids, ?int $now = null): int
+    {
+        $now = self::now($now);
+        $n = 0;
+        foreach (array_unique(array_map('intval', array_slice(array_values($ids), 0, 50))) as $id) {
+            if ($id < 1) continue;
+            $n += Db::exec("UPDATE allot_notices SET status = 'seen', seen_at = ? WHERE id = ? AND user_id = ? AND status = 'sent'", [$now, $id, $uid]);
+        }
+        return $n;
+    }
+
+    // ------------------------------------------------------------------ contracts
+    /** a new contract number: "A" + two-digit year + two groups of five from an alphabet without 0 1 I L O U (30^10 values) */
+    public static function newContractNo(?int $now = null): string
+    {
+        $alphabet = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+        $s = 'A' . date('y', intdiv(self::now($now), 1000));
+        for ($g = 0; $g < 2; $g++) {
+            $s .= '-';
+            for ($i = 0; $i < 5; $i++) $s .= $alphabet[random_int(0, 29)];
+        }
+        return $s;
+    }
+
+    /** a well-formed contract number in upper case, or '' */
+    private static function contractNo($v): string
+    {
+        if (!is_string($v)) return '';
+        $s = strtoupper(trim($v));
+        return preg_match('/^A\d\d-[2-9A-Z]{5}-[2-9A-Z]{5}$/', $s) ? $s : '';
+    }
+
+    /**
+     * How far a contract is paid when its term starts: a free one to the end of the term (or forever); otherwise $periods
+     * paid periods from the start (once = the whole term, year = 12 months, month = 1 month); nothing paid = the start
+     * itself, i.e. due at once.
+     */
+    private static function paidUntilFor(string $period, int $price, int $term, int $starts, int $ends, int $periods): int
+    {
+        if ($price <= 0) return $ends > 0 ? $ends : self::FOREVER;
+        if ($periods <= 0) return $starts;
+        if ($period === 'once') return $ends > 0 ? $ends : self::addMonths($starts, max(1, $term));
+        return self::addMonths($starts, $period === 'year' ? 12 * $periods : $periods);
+    }
+
+    /** the periods the recorded payments of a contract cover */
+    private static function paidPeriods(int $contractId): int
+    {
+        return (int) Db::value("SELECT COALESCE(SUM(periods), 0) FROM allot_payments WHERE contract_id = ? AND kind <> 'refund' AND status = 'paid'", [$contractId]);
+    }
+
+    /** insert a contract row under a new number (a number collision is tried again; a second live contract on the unit is 409 UNIT_TAKEN) → [id, number] */
+    private static function insertContract(array $row): array
+    {
+        for ($i = 0; $i < 4; $i++) {
+            $row['contract_no'] = self::newContractNo((int) $row['created_at']);
+            try {
+                return [Db::insert('allot_contracts', $row), $row['contract_no']];
+            } catch (\PDOException $e) {
+                if ((string) $e->getCode() !== '23000') throw $e;
+                if ($row['live_unit_id'] !== null && Db::value('SELECT id FROM allot_contracts WHERE live_unit_id = ?', [$row['live_unit_id']]) !== null) {
+                    Log::error('ALLOT', 'a live contract exists on a unit that looked free (the unique key refused the second one)', ['unit' => (int) $row['unit_id']]);
+                    throw new ApiException(409, 'UNIT_TAKEN', '방금 다른 분이 먼저 신청한 자리예요. 다른 자리를 골라 주세요.');
+                }
+            }
+        }
+        throw new \RuntimeException('could not make a contract number');
+    }
+
+    /** live contracts + live waiting-list rows of an account against apply_per_user (429 APPLY_LIMIT) */
+    private static function checkLimit(int $uid): void
+    {
+        $max = (int) self::conf('apply_per_user');
+        $used = (int) Db::value("SELECT COUNT(*) FROM allot_contracts WHERE user_id = ? AND status IN ('pending', 'active', 'overdue')", [$uid])
+            + (int) Db::value("SELECT COUNT(*) FROM allot_waitlist WHERE user_id = ? AND status IN ('waiting', 'offered')", [$uid]);
+        if ($used >= $max) throw new ApiException(429, 'APPLY_LIMIT', "한 계정은 {$max}자리까지 신청할 수 있어요.", ['max' => $max, 'used' => $used]);
+    }
+
+    /** the plan a new contract copies from its zone */
+    private static function zonePlan(int $zoneId): array
+    {
+        $z = Db::one('SELECT id, code, name, kind, is_open, price, period, term_months FROM allot_zones WHERE id = ?', [$zoneId]);
+        if (!$z) throw new ApiException(404, 'NOT_FOUND', '구역을 찾을 수 없어요.');
+        return $z;
+    }
+
+    /** what apply() was asked for: ['code' => unit code] or ['kind' => …, 'zone' => zone code or ''] (400 INVALID_INPUT) */
+    private static function applyTarget($target): array
+    {
+        if (is_string($target)) {
+            $code = self::unitCode($target);
+            if ($code === '') V::fail('unit', '자리 번호가 올바르지 않아요.');
+            return ['code' => $code];
+        }
+        if (!is_array($target)) V::fail('unit', '자리를 골라 주세요.');
+        if (!isset($target['kind']) || !is_string($target['kind']) || !in_array($target['kind'], self::KINDS, true)) V::fail('kind', '값은 jar · plot · store 가운데 하나여야 해요.');
+        if (!isset($target['auto']) || $target['auto'] !== true) V::fail('auto', '자리를 고르거나 auto 를 true 로 보내 주세요.');
+        $zone = '';
+        if (isset($target['zone']) && $target['zone'] !== null && $target['zone'] !== '') {
+            $zone = is_string($target['zone']) ? strtoupper(trim($target['zone'])) : '';
+            if (!preg_match('/^[A-Z0-9]{1,12}$/', $zone)) V::fail('zone', '구역 번호가 올바르지 않아요.');
+        }
+        return ['kind' => $target['kind'], 'zone' => $zone];
+    }
+
+    /** lock the named unit for an application: [unit row, zone plan] (404 NOT_FOUND, 409 NOT_OPEN, 409 UNIT_TAKEN) */
+    private static function lockNamedUnit(string $code): array
+    {
+        $u = Db::one('SELECT id, zone_id, kind, code, status, contract_id FROM allot_units WHERE code = ?' . Db::forUpdate(), [$code]);
+        if (!$u) throw new ApiException(404, 'NOT_FOUND', '그런 자리가 없어요.');
+        $z = self::zonePlan((int) $u['zone_id']);
+        if ((int) $z['is_open'] !== 1 || (string) $u['status'] === 'closed') throw new ApiException(409, 'NOT_OPEN', '지금은 신청을 받지 않는 자리예요.');
+        if ((string) $u['status'] !== 'open') throw new ApiException(409, 'UNIT_TAKEN', '방금 다른 분이 먼저 신청한 자리예요. 다른 자리를 골라 주세요.');
+        return [$u, $z];
+    }
+
+    /**
+     * Auto-assign: lock the lowest free seq of the zone (or of the first open zone of the kind that has a free unit).
+     * The candidate is read with a locking read, so a unit another transaction took a moment ago is never seen as free.
+     * 404 NOT_FOUND (unknown zone), 409 NOT_OPEN (the zone is closed), 409 SOLD_OUT (nothing free).
+     */
+    private static function lockFreeUnit(string $kind, string $zoneCode): array
+    {
+        if ($zoneCode !== '') {
+            $z = Db::one('SELECT id, code, name, kind, is_open, price, period, term_months FROM allot_zones WHERE code = ?', [$zoneCode]);
+            if (!$z) throw new ApiException(404, 'NOT_FOUND', '그런 구역이 없어요.');
+            if ((string) $z['kind'] !== $kind) V::fail('zone', '고른 종류의 구역이 아니에요.');
+            if ((int) $z['is_open'] !== 1) throw new ApiException(409, 'NOT_OPEN', '지금은 신청을 받지 않는 구역이에요.');
+            $zones = [$z];
+        } else {
+            $zones = Db::all('SELECT id, code, name, kind, is_open, price, period, term_months FROM allot_zones WHERE kind = ? AND is_open = 1 ORDER BY sort ASC, id ASC', [$kind]);
+            if (!$zones) throw new ApiException(409, 'NOT_OPEN', '지금은 신청을 받는 구역이 없어요.');
+        }
+        foreach ($zones as $z) {
+            $u = Db::one("SELECT id, zone_id, kind, code, status, contract_id FROM allot_units WHERE zone_id = ? AND status = 'open' ORDER BY seq ASC LIMIT 1" . Db::forUpdate(), [(int) $z['id']]);
+            if ($u) return [$u, $z];
+        }
+        throw new ApiException(409, 'SOLD_OUT', '빈 자리가 없어요. 대기 신청을 할 수 있어요.');
+    }
+
+    /** nameplate of an application: ['text' (cleaned, masked, ≤ 12), 'show'] */
+    private static function formLabel(array $form): array
+    {
+        $text = '';
+        if (isset($form['nameplate']) && $form['nameplate'] !== null) {
+            if (!is_string($form['nameplate'])) V::fail('nameplate', '값은 글자로 보내 주세요.');
+            V::str($form['nameplate'], 'nameplate', 40);
+            $text = self::cleanPublic($form['nameplate'], self::LABEL_MAX);
+        }
+        $show = (bool) self::conf('nameplate_default_show');
+        if (array_key_exists('nameplateShow', $form) && $form['nameplateShow'] !== null) {
+            if (!is_bool($form['nameplateShow'])) V::fail('nameplateShow', '값은 참(true) 또는 거짓(false)으로 보내 주세요.');
+            $show = $form['nameplateShow'];
+        }
+        return ['text' => $text, 'show' => $text !== '' && $show];
+    }
+
+    /** what the applicant is told about paying (never an amount: plans() and payPrepare() tell prices) */
+    private static function payInfo(int $holdUntil): array
+    {
+        return ['toss' => self::tossOn(), 'guide' => self::texts()['payGuide'], 'until' => $holdUntil];
+    }
+
+    /** is the 토스 one-time payment switched on and usable? */
+    public static function tossOn(): bool
+    {
+        return self::conf('toss_enabled') === true && Toss::available();
+    }
+
+    /**
+     * An application from the app (api/allot/apply.php). $target: a unit code, or ['kind' => jar|plot|store, 'zone' =>
+     * code (optional), 'auto' => true] for "any free unit" (the lowest free seq; a lost race is simply tried again).
+     * $form: name, phone, addr (kept only with collect_address), consent === true, consentVersion (= consentVersion()),
+     * adult === true, nameplate (optional text), nameplateShow (optional bool), guardian (optional bool).
+     * The contract is 'pending' (the unit is held for hold_hours) until an admin approves — or 'active' at once with
+     * auto_approve = always. → {contractNo, status, unit, holdUntil, pay: {toss, guide, until}}.
+     * 403 ALLOT_DISABLED · 400 CONSENT_REQUIRED · 400 INVALID_INPUT · 404 NOT_FOUND · 409 UNIT_TAKEN · 409 NOT_OPEN ·
+     * 409 SOLD_OUT · 429 APPLY_LIMIT.
+     */
+    public static function apply(array $user, $target, array $form, ?int $now = null): array
+    {
+        self::guard();
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        if ($uid < 1) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.');
+        $now = self::now($now);
+        $f = self::applicantForm($form);
+        $label = self::formLabel($form);
+        $pick = self::applyTarget($target);
+        $always = self::conf('auto_approve') === 'always';
+        $hold = (int) self::conf('hold_hours');
+        $holdUntil = $hold > 0 ? $now + $hold * 3600000 : 0;
+        for ($try = 1; ; $try++) {
+            try {
+                return Db::txRetry(function () use ($uid, $now, $f, $label, $pick, $always, $holdUntil) {
+                    Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]); // one account's applications one after another
+                    self::checkLimit($uid);
+                    list($u, $z) = isset($pick['code']) ? self::lockNamedUnit($pick['code']) : self::lockFreeUnit($pick['kind'], $pick['zone']);
+                    $unitId = (int) $u['id'];
+                    $cid = self::upsertOwnCustomer($uid, $f, $now);
+                    list($conId, $no) = self::insertContract([
+                        'unit_id' => $unitId, 'live_unit_id' => $unitId, 'customer_id' => $cid, 'user_id' => $uid, 'status' => 'pending', 'period' => (string) $z['period'], 'price' => (int) $z['price'],
+                        'term_months' => (int) $z['term_months'], 'starts_at' => 0, 'ends_at' => 0, 'paid_until' => 0, 'paid_total' => 0, 'auto_renew' => 0, 'source' => 'app', 'memo' => null,
+                        'created_by' => $uid, 'decided_by' => null, 'decided_at' => 0, 'cancel_req_at' => 0, 'due_stage' => 999, 'end_stage' => 999, 'ended_at' => 0, 'end_reason' => '',
+                        'created_at' => $now, 'updated_at' => $now,
+                    ]);
+                    if (!self::unitCas($unitId, 'open', 'held', $conId, $holdUntil, $now, 'free')) {
+                        if (isset($pick['code'])) throw new ApiException(409, 'UNIT_TAKEN', '방금 다른 분이 먼저 신청한 자리예요. 다른 자리를 골라 주세요.');
+                        throw new AllotRetry('the free unit was taken');
+                    }
+                    Db::exec('UPDATE allot_units SET label = ?, label_show = ? WHERE id = ?', [$label['text'], $label['show'] ? 1 : 0, $unitId]);
+                    self::bumpZone((int) $u['zone_id'], $now);
+                    $c = (array) Db::one('SELECT * FROM allot_contracts WHERE id = ?', [$conId]);
+                    Audit::log('allot_applied', $uid, ['contract' => $no, 'unit' => (string) $u['code'], 'auto' => !isset($pick['code'])]);
+                    if ($always) {
+                        self::approveLocked($c, null, $now, '');
+                        return ['contractNo' => $no, 'status' => 'active', 'unit' => (string) $u['code'], 'holdUntil' => 0, 'pay' => self::payInfo(0)];
+                    }
+                    $tail = $holdUntil > 0 ? ' ' . self::fmtDate($holdUntil) . '까지 확정되지 않으면 신청이 자동으로 취소돼요.' : '';
+                    self::noteContract($c, $now, 'applied', '분양 신청을 받았어요', $u['code'] . ' 자리 신청을 받았어요. 운영자가 확인하면 알려 드릴게요.' . $tail, 'applied:' . $conId);
+                    return ['contractNo' => $no, 'status' => 'pending', 'unit' => (string) $u['code'], 'holdUntil' => $holdUntil, 'pay' => self::payInfo($holdUntil)];
+                });
+            } catch (AllotRetry $e) {
+                if ($try >= 8) throw new ApiException(409, 'SOLD_OUT', '지금 신청이 몰리고 있어요. 잠시 뒤 다시 해 주세요.');
+                usleep(random_int(2000, 12000));
+            }
+        }
+    }
+
+    /** pending → active inside the caller's transaction (the contract row is the caller's; the unit moves held → leased) */
+    private static function approveLocked(array $c, ?int $actor, int $now, string $memo): void
+    {
+        $cid = (int) $c['id'];
+        $starts = (int) $c['starts_at'] > 0 ? (int) $c['starts_at'] : $now;
+        $term = (int) $c['term_months'];
+        $ends = (int) $c['ends_at'] > 0 ? (int) $c['ends_at'] : ($term > 0 ? self::addMonths($starts, $term) : 0);
+        $paid = self::paidUntilFor((string) $c['period'], (int) $c['price'], $term, $starts, $ends, self::paidPeriods($cid));
+        $u = Db::one('SELECT id, zone_id, code FROM allot_units WHERE id = ?' . Db::forUpdate(), [(int) $c['unit_id']]);
+        if (!$u || !self::unitCas((int) $c['unit_id'], 'held', 'leased', $cid, 0, $now, 'contract', $cid)) {
+            throw new ApiException(409, 'CONFLICT', '이 자리의 상태가 계약과 맞지 않아요. 분양 관리 → 자동화에서 점검을 돌려 주세요.');
+        }
+        if (Db::exec("UPDATE allot_contracts SET status = 'active', starts_at = ?, ends_at = ?, paid_until = ?, due_stage = 999, end_stage = 999, decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            [$starts, $ends, $paid, $actor, $now, $now, $cid]) !== 1) {
+            throw new ApiException(409, 'NOT_PENDING', '이미 처리한 신청이에요.');
+        }
+        self::bumpZone((int) $u['zone_id'], $now);
+        self::noteContract($c, $now, 'approved', '분양이 확정되었어요', $u['code'] . ' 자리 분양이 확정되었어요. ‘내 분양’에서 볼 수 있어요.' . ($memo !== '' ? ' ' . $memo : ''), 'approved:' . $cid, $actor);
+        Audit::log('allot_decided', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'unit' => (string) $u['code'], 'status' => 'active'], 'info', $actor);
+    }
+
+    /**
+     * A live contract stops inside the caller's transaction: 'canceled' (it was pending) or 'ended' (it was active /
+     * overdue). The unit is free again (nameplate removed), live_unit_id is cleared. → the unit id (for offerNext).
+     */
+    private static function closeLocked(array $c, string $to, string $reason, ?int $actor, int $now, string $noticeKind, string $title, string $body): int
+    {
+        $cid = (int) $c['id'];
+        $was = (string) $c['status'];
+        $u = Db::one('SELECT id, zone_id, code, status FROM allot_units WHERE id = ?' . Db::forUpdate(), [(int) $c['unit_id']]);
+        if (Db::exec('UPDATE allot_contracts SET status = ?, live_unit_id = NULL, ended_at = ?, end_reason = ?, updated_at = ? WHERE id = ? AND status = ?', [$to, $now, mb_substr($reason, 0, 40), $now, $cid, $was]) !== 1) {
+            throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약이에요.');
+        }
+        if ($u) {
+            if (self::unitCas((int) $u['id'], $was === 'pending' ? 'held' : 'leased', 'open', null, 0, $now, 'contract', $cid)) {
+                Db::exec("UPDATE allot_units SET label = '', label_show = 0 WHERE id = ?", [(int) $u['id']]);
+                self::bumpZone((int) $u['zone_id'], $now);
+            } else {
+                Log::error('ALLOT', 'a contract ended but its unit was not in the expected state (the integrity scan will look at it)', ['contract' => $cid, 'unit' => (int) $u['id']]);
+            }
+        }
+        if ($title !== '') self::noteContract($c, $now, $noticeKind, $title, str_replace('{unit}', $u ? (string) $u['code'] : '', $body), $noticeKind . ':' . $cid, $actor);
+        Audit::log($to === 'canceled' ? 'allot_canceled' : 'allot_ended', $c['user_id'] === null ? null : (int) $c['user_id'],
+            ['contract' => (string) $c['contract_no'], 'unit' => $u ? (string) $u['code'] : '', 'was' => $was, 'reason' => self::reasonCode($reason)], 'info', $actor);
+        return $u ? (int) $u['id'] : 0;
+    }
+
+    /** the fixed reason codes; an operator's own wording is reported as 'admin' (it may say anything) */
+    private static function reasonCode(string $reason): string
+    {
+        return in_array($reason, ['rejected', 'user', 'hold_expired', 'overdue_auto', 'offer_declined', 'moved'], true) ? $reason : 'admin';
+    }
+
+    /** lock one contract row (404 NOT_FOUND) */
+    private static function lockContract(int $id): array
+    {
+        $c = Db::one('SELECT * FROM allot_contracts WHERE id = ?' . Db::forUpdate(), [$id]);
+        if (!$c) throw new ApiException(404, 'NOT_FOUND', '계약을 찾을 수 없어요.');
+        return $c;
+    }
+
+    /** run offerNext() after a unit became free; automation must never fail the action that freed it */
+    private static function offerQuietly(int $unitId, int $now): void
+    {
+        if ($unitId < 1) return;
+        try { self::offerNext($unitId, $now); } catch (\Throwable $e) { Log::error('ALLOT', 'waiting-list offer failed: ' . get_class($e), ['unit' => $unitId]); }
+    }
+
+    /**
+     * The operator decides a pending application: 'active' (approve — the term starts now) or 'canceled' (reject — the unit
+     * is free again). $memo is a short message FOR THE CUSTOMER (≤ 300 characters; cleaned, personal information and bad
+     * words masked) that is added to the notice. 400 INVALID_INPUT · 404 NOT_FOUND · 409 NOT_PENDING. @return array the contract
+     */
+    public static function decide(array $a, int $contractId, string $status, string $memo = '', ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        if (!in_array($status, ['active', 'canceled'], true)) V::fail('status', '값은 active(승인) 또는 canceled(반려)여야 해요.');
+        V::str($memo, 'memo', 300);
+        $memo = self::cleanPublic($memo, 300);
+        $now = self::now($now);
+        $freed = Db::txRetry(function () use ($contractId, $status, $memo, $actor, $now) {
+            $c = self::lockContract($contractId);
+            if ((string) $c['status'] !== 'pending') throw new ApiException(409, 'NOT_PENDING', '이미 처리한 신청이에요.');
+            if ($status === 'active') { self::approveLocked($c, self::idOrNull($actor), $now, $memo); return 0; }
+            return self::closeLocked($c, 'canceled', 'rejected', self::idOrNull($actor), $now, 'rejected', '신청을 진행하지 못했어요', '{unit} 자리 신청을 진행하지 못했어요.' . ($memo !== '' ? ' ' . $memo : ''));
+        });
+        self::offerQuietly((int) $freed, $now);
+        return (array) self::contract($contractId);
+    }
+
+    /**
+     * The operator makes a contract for a customer (walk-in, phone, the old ledger). $unit: id or code (free, or held by
+     * the operator); $customer: customer id. $opt: status 'active' (default) | 'pending', startsAt, endsAt, paidUntil,
+     * price, period, termMonths (default: the zone's plan), autoRenew, memo (the operator's note), source 'admin' |
+     * 'import', notify (default true). 404 NOT_FOUND · 409 UNIT_TAKEN · 409 NOT_OPEN (a closed unit) · 400 INVALID_INPUT.
+     */
+    public static function createContract(array $a, $unit, $customer, array $opt = [], ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        V::keys($opt, ['status', 'startsAt', 'endsAt', 'paidUntil', 'price', 'period', 'termMonths', 'autoRenew', 'memo', 'source', 'notify'], 'contract');
+        $now = self::now($now);
+        $status = isset($opt['status']) ? (string) $opt['status'] : 'active';
+        if (!in_array($status, ['active', 'pending'], true)) V::fail('status', '값은 active 또는 pending 이어야 해요.');
+        $source = isset($opt['source']) ? (string) $opt['source'] : 'admin';
+        if (!in_array($source, ['admin', 'import'], true)) V::fail('source', '값은 admin 또는 import 여야 해요.');
+        $period = self::inStr($opt, 'period', 10);
+        if ($period !== null && !in_array($period, ['once', 'month', 'year'], true)) V::fail('period', '값은 once · month · year 가운데 하나여야 해요.');
+        $price = self::inInt($opt, 'price', 0, self::MAX_AMOUNT);
+        $term = self::inInt($opt, 'termMonths', 0, 120);
+        $startsAt = self::inInt($opt, 'startsAt', 1, self::FOREVER);
+        $endsAt = self::inInt($opt, 'endsAt', 0, self::FOREVER);
+        $paidUntil = self::inInt($opt, 'paidUntil', 0, self::FOREVER);
+        $auto = self::inBool($opt, 'autoRenew', false);
+        $memo = self::inStr($opt, 'memo', 500);
+        $notify = self::inBool($opt, 'notify', true);
+        $customerId = (int) $customer;
+        $id = Db::txRetry(function () use ($unit, $customerId, $status, $source, $period, $price, $term, $startsAt, $endsAt, $paidUntil, $auto, $memo, $notify, $actor, $now) {
+            $cu = Db::one('SELECT id, user_id, purged_at FROM allot_customers WHERE id = ?', [$customerId]);
+            if (!$cu || (int) $cu['purged_at'] > 0) throw new ApiException(404, 'NOT_FOUND', '고객을 찾을 수 없어요.');
+            $u = is_int($unit) ? Db::one('SELECT id, zone_id, kind, code, status, contract_id FROM allot_units WHERE id = ?' . Db::forUpdate(), [$unit])
+                : Db::one('SELECT id, zone_id, kind, code, status, contract_id FROM allot_units WHERE code = ?' . Db::forUpdate(), [self::unitCode($unit)]);
+            if (!$u) throw new ApiException(404, 'NOT_FOUND', '그런 자리가 없어요.');
+            $from = (string) $u['status'];
+            if ($from === 'closed') throw new ApiException(409, 'NOT_OPEN', '닫아 둔 자리예요. 먼저 자리를 열어 주세요.');
+            $offered = $from === 'held' && (int) Db::value("SELECT COUNT(*) FROM allot_waitlist WHERE unit_id = ? AND status = 'offered'", [(int) $u['id']]) > 0;
+            if (($from !== 'open' && $from !== 'held') || $u['contract_id'] !== null || $offered) throw new ApiException(409, 'UNIT_TAKEN', '이미 쓰고 있는 자리예요.');
+            $z = self::zonePlan((int) $u['zone_id']);
+            $p = $period === null ? (string) $z['period'] : $period;
+            $pr = $price === null ? (int) $z['price'] : $price;
+            $t = $term === null ? (int) $z['term_months'] : $term;
+            if ($p === 'once' && $t < 1) V::fail('termMonths', '한 번 내는(once) 계약은 기간이 1개월 이상이어야 해요.');
+            $active = $status === 'active';
+            $starts = $startsAt === null ? ($active ? $now : 0) : $startsAt;
+            $ends = $endsAt === null ? ($starts > 0 && $t > 0 ? self::addMonths($starts, $t) : 0) : $endsAt;
+            if ($ends > 0 && $ends <= $starts) V::fail('endsAt', '끝나는 날은 시작하는 날보다 뒤여야 해요.');
+            $paid = $paidUntil === null ? ($active ? self::paidUntilFor($p, $pr, $t, $starts, $ends, 0) : 0) : $paidUntil;
+            $unitId = (int) $u['id'];
+            $uid = $cu['user_id'] === null ? null : (int) $cu['user_id'];
+            list($conId, $no) = self::insertContract([
+                'unit_id' => $unitId, 'live_unit_id' => $unitId, 'customer_id' => $customerId, 'user_id' => $uid, 'status' => $status, 'period' => $p, 'price' => $pr, 'term_months' => $t,
+                'starts_at' => $starts, 'ends_at' => $ends, 'paid_until' => $paid, 'paid_total' => 0, 'auto_renew' => $auto ? 1 : 0, 'source' => $source,
+                'memo' => $memo === null || $memo === '' ? null : self::cleanPrivate($memo, 500), 'created_by' => self::idOrNull($actor), 'decided_by' => $active ? self::idOrNull($actor) : null,
+                'decided_at' => $active ? $now : 0, 'cancel_req_at' => 0, 'due_stage' => 999, 'end_stage' => 999, 'ended_at' => 0, 'end_reason' => '', 'created_at' => $now, 'updated_at' => $now,
+            ]);
+            $hold = (int) self::conf('hold_hours');
+            $holdUntil = !$active && $hold > 0 ? $now + $hold * 3600000 : 0;
+            // an operator hold that becomes the hold of a pending contract keeps its status: attach the contract instead
+            $moved = !$active && $from === 'held' ? self::heldAttach($unitId, $conId, $holdUntil, $now) : self::unitCas($unitId, $from, $active ? 'leased' : 'held', $conId, $holdUntil, $now, 'free');
+            if (!$moved) throw new ApiException(409, 'UNIT_TAKEN', '방금 다른 곳에서 이 자리를 바꿨어요. 다시 확인해 주세요.');
+            self::bumpZone((int) $u['zone_id'], $now);
+            if ($notify && $source !== 'import') {
+                $c = (array) Db::one('SELECT * FROM allot_contracts WHERE id = ?', [$conId]);
+                if ($active) self::noteContract($c, $now, 'approved', '분양이 확정되었어요', $u['code'] . ' 자리 분양이 확정되었어요. ‘내 분양’에서 볼 수 있어요.', 'approved:' . $conId, self::idOrNull($actor));
+                else self::noteContract($c, $now, 'applied', '분양 신청을 받았어요', $u['code'] . ' 자리 신청을 받았어요. 운영자가 확인하면 알려 드릴게요.', 'applied:' . $conId, self::idOrNull($actor));
+            }
+            Audit::log('allot_contract_created', $uid, ['contract' => $no, 'unit' => (string) $u['code'], 'status' => $status, 'source' => $source], 'info', self::idOrNull($actor));
+            return $conId;
+        });
+        return (array) self::contract((int) $id);
+    }
+
+    /**
+     * One more term (× $terms) for an active / overdue contract with a fixed term: ends_at moves on from where it was,
+     * so no gap opens. A free contract is paid for the new term at once. 409 NOT_LIVE · 409 NOT_RENEWABLE (open-ended).
+     */
+    public static function renew(array $a, int $contractId, int $terms = 1, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        if ($terms < 1 || $terms > 20) V::fail('terms', '값은 1~20 사이의 정수여야 해요.');
+        $now = self::now($now);
+        Db::txRetry(function () use ($contractId, $terms, $actor, $now) {
+            $c = self::lockContract($contractId);
+            self::renewLocked($c, $terms, self::idOrNull($actor), $now, 'manual');
+        });
+        return (array) self::contract($contractId);
+    }
+
+    /** the extension itself (also used by tick for auto_renew contracts); the compare-and-set is on the old ends_at */
+    private static function renewLocked(array $c, int $terms, ?int $actor, int $now, string $how): void
+    {
+        if (!in_array((string) $c['status'], ['active', 'overdue'], true)) throw new ApiException(409, 'NOT_LIVE', '진행 중인 계약만 연장할 수 있어요.');
+        $term = (int) $c['term_months'];
+        $old = (int) $c['ends_at'];
+        if ($term < 1 || $old < 1) throw new ApiException(409, 'NOT_RENEWABLE', '기간이 정해지지 않은 계약이라 연장할 것이 없어요.');
+        $new = self::addMonths($old, $term * $terms);
+        $paid = (int) $c['price'] <= 0 ? $new : (int) $c['paid_until'];
+        if (Db::exec('UPDATE allot_contracts SET ends_at = ?, paid_until = ?, end_stage = 999, updated_at = ? WHERE id = ? AND ends_at = ?', [$new, $paid, $now, (int) $c['id'], $old]) !== 1) {
+            throw new ApiException(409, 'CONFLICT', '방금 다른 곳에서 이 계약을 바꿨어요. 다시 확인해 주세요.');
+        }
+        $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+        self::noteContract($c, $now, 'renewed', '분양 기간이 늘어났어요', $code . ' 자리 분양 기간이 ' . self::fmtDate($new) . ' 까지로 늘어났어요.', 'renewed:' . $c['id'] . ':' . $new, $actor);
+        Audit::log('allot_renewed', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'endsAt' => $new, 'how' => $how], 'info', $actor);
+    }
+
+    /**
+     * Move a live contract to another free unit (the jar was moved, a plot was swapped). The nameplate goes along, the old
+     * unit is free (and offered to the waiting list). The contract keeps its own price and dates.
+     * 404 NOT_FOUND · 409 NOT_LIVE · 409 UNIT_TAKEN · 409 NOT_OPEN (the target is closed).
+     */
+    public static function transfer(array $a, int $contractId, $toUnit, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        $now = self::now($now);
+        $to = is_int($toUnit) ? Db::one('SELECT id, code FROM allot_units WHERE id = ?', [$toUnit]) : Db::one('SELECT id, code FROM allot_units WHERE code = ?', [self::unitCode($toUnit)]);
+        if (!$to) throw new ApiException(404, 'NOT_FOUND', '옮겨 갈 자리를 찾을 수 없어요.');
+        $toId = (int) $to['id'];
+        $old = Db::txRetry(function () use ($contractId, $toId, $actor, $now) {
+            $c = self::lockContract($contractId);
+            if (!in_array((string) $c['status'], self::LIVE, true)) throw new ApiException(409, 'NOT_LIVE', '진행 중인 계약만 옮길 수 있어요.');
+            $fromId = (int) $c['unit_id'];
+            if ($fromId === $toId) throw new ApiException(409, 'UNIT_TAKEN', '지금 쓰고 있는 자리예요.');
+            $rows = [];
+            foreach ([min($fromId, $toId), max($fromId, $toId)] as $uid) { // ascending id: the same order everywhere
+                $rows[$uid] = Db::one('SELECT id, zone_id, code, status, contract_id, hold_until, label, label_show FROM allot_units WHERE id = ?' . Db::forUpdate(), [$uid]);
+            }
+            $from = $rows[$fromId];
+            $dst = $rows[$toId];
+            if (!$from || !$dst) throw new ApiException(404, 'NOT_FOUND', '자리를 찾을 수 없어요.');
+            if ((string) $dst['status'] === 'closed') throw new ApiException(409, 'NOT_OPEN', '닫아 둔 자리로는 옮길 수 없어요.');
+            if ((string) $dst['status'] !== 'open' || $dst['contract_id'] !== null) throw new ApiException(409, 'UNIT_TAKEN', '이미 쓰고 있는 자리예요.');
+            $state = (string) $c['status'] === 'pending' ? 'held' : 'leased';
+            $cid = (int) $c['id'];
+            // free the old unit first: live_unit_id is unique, the contract row then points at the new one
+            if (!self::unitCas($fromId, $state, 'open', null, 0, $now, 'contract', $cid)) throw new ApiException(409, 'CONFLICT', '이 자리의 상태가 계약과 맞지 않아요. 분양 관리 → 자동화에서 점검을 돌려 주세요.');
+            if (!self::unitCas($toId, 'open', $state, $cid, $state === 'held' ? (int) $from['hold_until'] : 0, $now, 'free')) throw new ApiException(409, 'UNIT_TAKEN', '방금 다른 분이 먼저 잡은 자리예요.');
+            Db::exec('UPDATE allot_units SET label = ?, label_show = ? WHERE id = ?', [(string) $from['label'], (int) $from['label_show'], $toId]);
+            Db::exec("UPDATE allot_units SET label = '', label_show = 0 WHERE id = ?", [$fromId]);
+            Db::exec('UPDATE allot_contracts SET unit_id = ?, live_unit_id = ?, updated_at = ? WHERE id = ? AND unit_id = ?', [$toId, $toId, $now, $cid, $fromId]);
+            foreach (array_unique([(int) $from['zone_id'], (int) $dst['zone_id']]) as $zid) self::bumpZone($zid, $now);
+            self::noteContract($c, $now, 'moved', '자리가 바뀌었어요', $from['code'] . ' → ' . $dst['code'] . ' 자리로 옮겼어요.', 'moved:' . $cid . ':' . $toId, self::idOrNull($actor));
+            Audit::log('allot_transferred', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'from' => (string) $from['code'], 'to' => (string) $dst['code']], 'info', self::idOrNull($actor));
+            return $fromId;
+        });
+        self::offerQuietly((int) $old, $now);
+        return (array) self::contract($contractId);
+    }
+
+    /**
+     * The operator ends a contract: a pending one is canceled, an active / overdue one is ended; the unit is free again
+     * and offered to the waiting list. $why is the operator's own note (≤ 40 characters, kept in end_reason, never shown
+     * to the customer). Money already paid is NOT given back by this call: see refund(). 409 NOT_LIVE.
+     */
+    public static function endContract(array $a, int $contractId, string $why = '', ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        V::str($why, 'why', 40);
+        $why = self::cleanPrivate($why, 40);
+        $now = self::now($now);
+        $freed = Db::txRetry(function () use ($contractId, $why, $actor, $now) {
+            $c = self::lockContract($contractId);
+            $st = (string) $c['status'];
+            if (!in_array($st, self::LIVE, true)) throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약이에요.');
+            if ($st === 'pending') return self::closeLocked($c, 'canceled', $why === '' ? 'admin' : $why, self::idOrNull($actor), $now, 'rejected', '신청을 진행하지 못했어요', '{unit} 자리 신청을 진행하지 못했어요.');
+            return self::closeLocked($c, 'ended', $why === '' ? 'admin' : $why, self::idOrNull($actor), $now, 'ended', '분양이 끝났어요', '{unit} 자리 분양이 끝났어요. 그동안 고마웠어요.');
+        });
+        self::offerQuietly((int) $freed, $now);
+        return (array) self::contract($contractId);
+    }
+
+    /**
+     * api/allot/cancel.php: the owner cancels a PENDING application at once (the unit is free again; a 토스 payment made
+     * for it is given back automatically). For an active / overdue contract the wish is recorded (cancel_req_at) and the
+     * operator settles it — a jar is never emptied by a click. Another account's number, an unknown one and a malformed
+     * one are the same 404 NOT_FOUND. → {contractNo, status, requested}
+     */
+    public static function cancelByUser(array $user, string $contractNo, ?int $now = null): array
+    {
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        $now = self::now($now);
+        $no = self::contractNo($contractNo);
+        $own = $no === '' ? null : Db::one('SELECT id, user_id FROM allot_contracts WHERE contract_no = ?', [$no]);
+        if (!$own || (int) $own['user_id'] !== $uid || $uid < 1) {
+            if ($own && class_exists('Tfm\SecEvent')) SecEvent::log('allot_foreign', 'info', ['what' => 'cancel'], $uid > 0 ? $uid : null);
+            throw new ApiException(404, 'NOT_FOUND', '계약을 찾을 수 없어요.');
+        }
+        $conId = (int) $own['id'];
+        $res = Db::txRetry(function () use ($conId, $uid, $now) {
+            $c = self::lockContract($conId);
+            $st = (string) $c['status'];
+            if ($st === 'pending') {
+                $unit = self::closeLocked($c, 'canceled', 'user', null, $now, 'canceled', '신청을 취소했어요', '{unit} 자리 신청을 취소했어요.');
+                return ['status' => 'canceled', 'requested' => false, 'unit' => $unit];
+            }
+            if ($st !== 'active' && $st !== 'overdue') throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약이에요.');
+            if (Db::exec('UPDATE allot_contracts SET cancel_req_at = ?, auto_renew = 0, updated_at = ? WHERE id = ? AND cancel_req_at = 0', [$now, $now, $conId]) === 1) {
+                self::noteContract($c, $now, 'cancel_requested', '해지 요청을 받았어요', '운영자가 확인하고 연락드릴게요.', 'cancelreq:' . $conId);
+                Audit::log('allot_cancel_requested', $uid, ['contract' => (string) $c['contract_no']]);
+            }
+            return ['status' => $st, 'requested' => true, 'unit' => 0];
+        });
+        if ($res['status'] === 'canceled') {
+            self::refundTossQuietly($conId, $now);
+            self::offerQuietly((int) $res['unit'], $now);
+        }
+        return ['contractNo' => $no, 'status' => $res['status'], 'requested' => $res['requested']];
+    }
+
+    /** the operator's working note on a contract (≤ 500 characters, never shown to the customer; '' clears it) */
+    public static function setMemo(array $a, int $contractId, string $memo): array
+    {
+        self::admin($a);
+        V::str($memo, 'memo', 500);
+        $memo = self::cleanPrivate($memo, 500);
+        if (Db::value('SELECT id FROM allot_contracts WHERE id = ?', [$contractId]) === null) throw new ApiException(404, 'NOT_FOUND', '계약을 찾을 수 없어요.');
+        Db::exec('UPDATE allot_contracts SET memo = ?, updated_at = ? WHERE id = ?', [$memo === '' ? null : $memo, Clock::ms(), $contractId]);
+        return (array) self::contract($contractId);
+    }
+
+    /** switch "extend by itself at the end of the term" on or off for a live contract */
+    public static function setAutoRenew(array $a, int $contractId, bool $on): array
+    {
+        $actor = self::admin($a);
+        $c = Db::one('SELECT id, status, contract_no, user_id FROM allot_contracts WHERE id = ?', [$contractId]);
+        if (!$c) throw new ApiException(404, 'NOT_FOUND', '계약을 찾을 수 없어요.');
+        if (!in_array((string) $c['status'], self::LIVE, true)) throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약이에요.');
+        Db::exec('UPDATE allot_contracts SET auto_renew = ?, end_stage = 999, updated_at = ? WHERE id = ?', [$on ? 1 : 0, Clock::ms(), $contractId]);
+        Audit::log('allot_auto_renew', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'on' => $on], 'info', self::idOrNull($actor));
+        return (array) self::contract($contractId);
+    }
+
+    private const CON_SELECT = 'SELECT c.*, u.code AS unit_code, u.kind AS unit_kind, u.seq AS unit_seq, u.hold_until, u.label, u.label_show, z.code AS zone_code, z.name AS zone_name,
+            cu.name_enc, cu.phone_tail, cu.purged_at
+        FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id JOIN allot_zones z ON z.id = u.zone_id LEFT JOIN allot_customers cu ON cu.id = c.customer_id';
+
+    /** the admin view of a contract row (the customer masked) */
+    private static function contractOut(array $r): array
+    {
+        $live = in_array((string) $r['status'], self::LIVE, true);
+        return [
+            'id' => (int) $r['id'], 'contractNo' => (string) $r['contract_no'], 'status' => (string) $r['status'], 'unitId' => (int) $r['unit_id'], 'unitCode' => (string) $r['unit_code'],
+            'kind' => (string) $r['unit_kind'], 'zoneCode' => (string) $r['zone_code'], 'zoneName' => (string) $r['zone_name'], 'customerId' => (int) $r['customer_id'],
+            'userId' => $r['user_id'] === null ? 0 : (int) $r['user_id'], 'customer' => self::maskName(self::unseal($r['name_enc'])), 'phoneTail' => (string) $r['phone_tail'],
+            'period' => (string) $r['period'], 'price' => (int) $r['price'], 'termMonths' => (int) $r['term_months'], 'startsAt' => (int) $r['starts_at'], 'endsAt' => (int) $r['ends_at'],
+            'paidUntil' => (int) $r['paid_until'], 'paidTotal' => (int) $r['paid_total'], 'autoRenew' => (int) $r['auto_renew'] === 1, 'source' => (string) $r['source'],
+            'memo' => $r['memo'] === null ? '' : (string) $r['memo'], 'createdBy' => $r['created_by'] === null ? 0 : (int) $r['created_by'], 'decidedBy' => $r['decided_by'] === null ? 0 : (int) $r['decided_by'],
+            'decidedAt' => (int) $r['decided_at'], 'cancelReqAt' => (int) $r['cancel_req_at'], 'endedAt' => (int) $r['ended_at'], 'endReason' => (string) $r['end_reason'],
+            'holdUntil' => $live && (string) $r['status'] === 'pending' ? (int) $r['hold_until'] : 0, 'label' => $live ? (string) $r['label'] : '', 'labelShow' => $live && (int) $r['label_show'] === 1,
+            'createdAt' => (int) $r['created_at'], 'updatedAt' => (int) $r['updated_at'],
+        ];
+    }
+
+    /**
+     * One contract for the admin site: {id, contractNo, status, unitId, unitCode, kind, zoneCode, zoneName, customerId,
+     * userId, customer (masked), phoneTail, period, price, termMonths, startsAt, endsAt, paidUntil, paidTotal, autoRenew,
+     * source, memo, createdBy, decidedBy, decidedAt, cancelReqAt, endedAt, endReason, holdUntil, label, labelShow,
+     * createdAt, updatedAt} or null.
+     */
+    public static function contract(int $id): ?array
+    {
+        $r = Db::one(self::CON_SELECT . ' WHERE c.id = ?', [$id]);
+        return $r ? self::contractOut($r) : null;
+    }
+
+    /**
+     * Contracts, newest first (keyset: pass `next` as $afterId). $filter: status (pending | active | overdue | ended |
+     * canceled | 'live'), kind, zone (id or code), customerId, userId, flag ('cancelreq' | 'expiring' — ends within 30
+     * days), q (a contract number, a unit code, a whole phone number, the last 4 digits of one, or a whole name).
+     * @return ['rows' => [contract …], 'next' => cursor or 0]
+     */
+    public static function listContracts(array $filter = [], int $limit = 50, int $afterId = 0, ?int $now = null): array
+    {
+        $now = self::now($now);
+        $status = isset($filter['status']) && in_array($filter['status'], ['pending', 'active', 'overdue', 'ended', 'canceled'], true) ? (string) $filter['status'] : '';
+        $live = isset($filter['status']) && $filter['status'] === 'live' ? 1 : 0;
+        $kind = isset($filter['kind']) && in_array($filter['kind'], self::KINDS, true) ? (string) $filter['kind'] : '';
+        $zid = 0;
+        if (isset($filter['zone']) && $filter['zone'] !== '' && $filter['zone'] !== 0) {
+            $z = self::zoneRow($filter['zone']);
+            if (!$z) return ['rows' => [], 'next' => 0];
+            $zid = (int) $z['id'];
+        }
+        $cust = isset($filter['customerId']) ? max(0, (int) $filter['customerId']) : 0;
+        $user = isset($filter['userId']) ? max(0, (int) $filter['userId']) : 0;
+        $flag = isset($filter['flag']) ? (string) $filter['flag'] : '';
+        $no = ''; $code = ''; $ph = ''; $tail = ''; $nh = '';
+        $q = isset($filter['q']) && is_string($filter['q']) ? trim(mb_substr($filter['q'], 0, 60)) : '';
+        if ($q !== '') {
+            $digits = (string) preg_replace('/[\s\-.()]+/u', '', $q);
+            if (self::contractNo($q) !== '') $no = self::contractNo($q);
+            elseif (self::unitCode($q) !== '') $code = self::unitCode($q);
+            elseif (preg_match('/^\d{4}$/', $digits)) $tail = $digits;
+            elseif (self::normPhone($q) !== '') $ph = self::phoneHash(self::normPhone($q));
+            else $nh = self::nameHash(Users::cleanText($q, 40));
+            if ($no === '' && $code === '' && $ph === '' && $tail === '' && $nh === '') return ['rows' => [], 'next' => 0];
+        }
+        $limit = max(1, min(500, $limit));
+        $rows = Db::all(self::CON_SELECT . " WHERE (? = 0 OR c.id < ?) AND (? = '' OR c.status = ?) AND (? = 0 OR c.status IN ('pending', 'active', 'overdue'))
+              AND (? = '' OR u.kind = ?) AND (? = 0 OR u.zone_id = ?) AND (? = 0 OR c.customer_id = ?) AND (? = 0 OR c.user_id = ?)
+              AND (? = '' OR c.contract_no = ?) AND (? = '' OR u.code = ?) AND (? = '' OR cu.phone_hash = ?) AND (? = '' OR cu.phone_tail = ?) AND (? = '' OR cu.name_hash = ?)
+              AND (? <> 'cancelreq' OR (c.cancel_req_at > 0 AND c.status IN ('active', 'overdue')))
+              AND (? <> 'expiring' OR (c.status IN ('active', 'overdue') AND c.ends_at > 0 AND c.ends_at < ?))
+            ORDER BY c.id DESC LIMIT ?", [$afterId, $afterId, $status, $status, $live, $kind, $kind, $zid, $zid, $cust, $cust, $user, $user, $no, $no, $code, $code, $ph, $ph, $tail, $tail, $nh, $nh,
+                $flag, $flag, $now + 30 * self::DAY, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        $out = array_map(function ($r) { return self::contractOut($r); }, $rows);
+        return ['rows' => $out, 'next' => $more && $out ? $out[count($out) - 1]['id'] : 0];
+    }
+
+    /**
+     * api/allot/mine.php — the caller's own contracts (the 20 newest; no price anywhere), live waiting-list rows, the
+     * unread notice count and the per-account limit: {contracts: [{contractNo, status, unit: {code, kind, zone, zoneName,
+     * seq}, period, termMonths, startsAt, endsAt, paidUntil, autoRenew, holdUntil, payDue, cancelRequested, nameplate:
+     * {text, show}, createdAt, decidedAt, endedAt, endReason, timeline: [{k, at, done}]}], waitlist: [{id, kind, zone,
+     * status, position, unit, offerUntil, createdAt}], unread, limit: {max, used}}
+     */
+    public static function mine(int $uid, ?int $now = null): array
+    {
+        $now = self::now($now);
+        $contracts = [];
+        $used = 0;
+        foreach (Db::all(self::CON_SELECT . ' WHERE c.user_id = ? ORDER BY c.id DESC LIMIT 20', [$uid]) as $r) {
+            $st = (string) $r['status'];
+            $live = in_array($st, self::LIVE, true);
+            if ($live) $used++;
+            $price = (int) $r['price'];
+            $paidUntil = (int) $r['paid_until'];
+            $tl = [['k' => 'applied', 'at' => (int) $r['created_at']]];
+            if ((int) $r['decided_at'] > 0 && $st !== 'pending' && $st !== 'canceled') $tl[] = ['k' => 'approved', 'at' => (int) $r['decided_at']];
+            foreach (array_reverse(Db::all("SELECT paid_at FROM allot_payments WHERE contract_id = ? AND status = 'paid' AND kind <> 'refund' ORDER BY id DESC LIMIT 6", [(int) $r['id']])) as $p) $tl[] = ['k' => 'paid', 'at' => (int) $p['paid_at']];
+            if ($live && $st !== 'pending' && $price > 0 && $paidUntil > 0 && $paidUntil < self::FOREVER) $tl[] = ['k' => 'due', 'at' => $paidUntil];
+            if ($live && (int) $r['ends_at'] > 0) $tl[] = ['k' => 'ends', 'at' => (int) $r['ends_at']];
+            if (!$live) $tl[] = ['k' => $st, 'at' => (int) $r['ended_at']];
+            foreach ($tl as $i => $e) $tl[$i]['done'] = $e['at'] > 0 && $e['at'] <= $now;
+            $contracts[] = [
+                'contractNo' => (string) $r['contract_no'], 'status' => $st,
+                'unit' => ['code' => (string) $r['unit_code'], 'kind' => (string) $r['unit_kind'], 'zone' => (string) $r['zone_code'], 'zoneName' => (string) $r['zone_name'], 'seq' => (int) $r['unit_seq']],
+                'period' => (string) $r['period'], 'termMonths' => (int) $r['term_months'], 'startsAt' => (int) $r['starts_at'], 'endsAt' => (int) $r['ends_at'],
+                'paidUntil' => $paidUntil >= self::FOREVER ? 0 : $paidUntil, 'autoRenew' => (int) $r['auto_renew'] === 1, 'holdUntil' => $st === 'pending' ? (int) $r['hold_until'] : 0,
+                'payDue' => $price > 0 && (($st === 'pending' && (int) $r['paid_total'] < $price) || (($st === 'active' || $st === 'overdue') && $paidUntil <= $now)),
+                'cancelRequested' => (int) $r['cancel_req_at'] > 0, 'nameplate' => ['text' => $live ? (string) $r['label'] : '', 'show' => $live && (int) $r['label_show'] === 1],
+                'createdAt' => (int) $r['created_at'], 'decidedAt' => (int) $r['decided_at'], 'endedAt' => (int) $r['ended_at'],
+                'endReason' => $live ? '' : self::reasonCode((string) $r['end_reason']), 'timeline' => $tl,
+            ];
+        }
+        $wait = self::waitOf($uid);
+        $max = (int) self::conf('apply_per_user');
+        // the limit counts every live contract of the account, also beyond the 20 shown
+        $used = (int) Db::value("SELECT COUNT(*) FROM allot_contracts WHERE user_id = ? AND status IN ('pending', 'active', 'overdue')", [$uid]) + count($wait);
+        return ['contracts' => $contracts, 'waitlist' => $wait, 'unread' => self::unread($uid), 'limit' => ['max' => $max, 'used' => $used]];
+    }
+
+    /**
+     * api/allot/plans.php — the one place that tells prices (login; easy mode never calls it): {enabled, consentVersion,
+     * collectAddress, nameplateDefaultShow, applyPerUser, holdHours, graceDays, autoApprove, toss, zones: [{code, kind,
+     * name, price, period, termMonths, open, free, cap}], texts: {terms, privacy, refund, payGuide}, sample}
+     */
+    public static function plans(): array
+    {
+        $free = [];
+        foreach (Db::all("SELECT zone_id, COUNT(*) AS n FROM allot_units WHERE status = 'open' GROUP BY zone_id") as $r) $free[(int) $r['zone_id']] = (int) $r['n'];
+        $zones = [];
+        foreach (Db::all('SELECT ' . self::ZONE_COLS . ' FROM allot_zones ORDER BY sort ASC, id ASC') as $z) {
+            $zones[] = ['code' => (string) $z['code'], 'kind' => (string) $z['kind'], 'name' => (string) $z['name'], 'price' => (int) $z['price'], 'period' => (string) $z['period'],
+                'termMonths' => (int) $z['term_months'], 'open' => (int) $z['is_open'] === 1, 'free' => isset($free[(int) $z['id']]) ? $free[(int) $z['id']] : 0, 'cap' => (int) $z['capacity']];
+        }
+        $t = self::texts();
+        return [
+            'enabled' => self::enabled(), 'consentVersion' => self::consentVersion(), 'collectAddress' => (bool) self::conf('collect_address'),
+            'nameplateDefaultShow' => (bool) self::conf('nameplate_default_show'), 'applyPerUser' => (int) self::conf('apply_per_user'), 'holdHours' => (int) self::conf('hold_hours'),
+            'graceDays' => (int) self::conf('grace_days'), 'autoApprove' => (string) self::conf('auto_approve'), 'toss' => self::tossOn(), 'zones' => $zones,
+            'texts' => ['terms' => $t['terms'], 'privacy' => $t['privacy'], 'refund' => $t['refund'], 'payGuide' => $t['payGuide']], 'sample' => $t['sample'],
+        ];
+    }
+
+    // ------------------------------------------------------------------ payments
+    private const PAY_SELECT = 'SELECT p.*, c.contract_no, c.status AS contract_status, u.code AS unit_code
+        FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id JOIN allot_units u ON u.id = c.unit_id';
+
+    private static function paymentOut(array $r): array
+    {
+        return [
+            'id' => (int) $r['id'], 'contractId' => (int) $r['contract_id'], 'contractNo' => (string) $r['contract_no'], 'unitCode' => (string) $r['unit_code'], 'kind' => (string) $r['kind'],
+            'method' => (string) $r['method'], 'amount' => (int) $r['amount'], 'periods' => (int) $r['periods'], 'status' => (string) $r['status'], 'orderId' => $r['order_id'] === null ? '' : (string) $r['order_id'],
+            'paidAt' => (int) $r['paid_at'], 'periodFrom' => (int) $r['period_from'], 'periodTo' => (int) $r['period_to'], 'memo' => (string) $r['memo'],
+            'createdBy' => $r['created_by'] === null ? 0 : (int) $r['created_by'], 'createdAt' => (int) $r['created_at'],
+        ];
+    }
+
+    /**
+     * A paid amount moves the contract on (inside the caller's transaction; $c is the locked contract row).
+     * $periods null = worked out from the totals (once: the payment that completes the price; month / year: every full
+     * price the running total passes — part payments add up); a number = what the operator decided (a discount).
+     * A pending contract only collects the money: its paid_until is set when it is approved. An overdue contract that is
+     * inside the grace time again becomes active. → [periods, from, to]
+     */
+    private static function applyPayment(array $c, int $payId, int $amount, ?int $periods, int $now): array
+    {
+        $cid = (int) $c['id'];
+        $price = (int) $c['price'];
+        $before = (int) $c['paid_total'];
+        $after = $before + $amount;
+        $period = (string) $c['period'];
+        if ($periods === null) {
+            if ($price <= 0) $periods = 0;
+            elseif ($period === 'once') $periods = $before < $price && $after >= $price ? 1 : 0;
+            else $periods = intdiv($after, $price) - intdiv($before, $price);
+        }
+        $from = 0;
+        $to = 0;
+        if ((string) $c['status'] === 'pending') {
+            Db::exec('UPDATE allot_contracts SET paid_total = ?, updated_at = ? WHERE id = ?', [$after, $now, $cid]);
+        } else {
+            $from = (int) $c['paid_until'] > 0 ? (int) $c['paid_until'] : (int) $c['starts_at'];
+            $to = $from;
+            if ($periods > 0 && $from < self::FOREVER) {
+                if ($period === 'once') $to = max($from, (int) $c['ends_at'] > 0 ? (int) $c['ends_at'] : self::addMonths((int) $c['starts_at'], max(1, (int) $c['term_months'])));
+                else $to = self::addMonths($from, ($period === 'year' ? 12 : 1) * $periods);
+            }
+            $status = (string) $c['status'] === 'overdue' && $to + (int) self::conf('grace_days') * self::DAY >= $now ? 'active' : (string) $c['status'];
+            Db::exec('UPDATE allot_contracts SET paid_total = ?, paid_until = ?, status = ?, due_stage = ?, updated_at = ? WHERE id = ?', [$after, $to, $status, $to !== $from ? 999 : (int) $c['due_stage'], $now, $cid]);
+        }
+        Db::exec('UPDATE allot_payments SET periods = ?, period_from = ?, period_to = ? WHERE id = ?', [$periods, $from, $to, $payId]);
+        return [$periods, $from, $to];
+    }
+
+    /** after a payment on a pending contract: auto_approve = on_payment approves it once a period is covered (or it is free) */
+    private static function approveIfPaid(int $contractId, ?int $actor, int $now): bool
+    {
+        if (self::conf('auto_approve') !== 'on_payment') return false;
+        $c = Db::one("SELECT * FROM allot_contracts WHERE id = ? AND status = 'pending'", [$contractId]);
+        if (!$c || ((int) $c['price'] > 0 && self::paidPeriods($contractId) < 1)) return false;
+        self::approveLocked($c, $actor, $now, '');
+        return true;
+    }
+
+    /** the "paid" notice (no amount) */
+    private static function notePaid(array $c, int $payId, int $to, int $now, ?int $actor): void
+    {
+        $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+        $tail = $to > 0 && $to < self::FOREVER ? ' ' . self::fmtDate($to) . ' 까지 납부가 확인되었어요.' : '';
+        self::noteContract($c, $now, 'paid', '납부를 확인했어요', $code . ' 자리 납부를 확인했어요.' . $tail, 'paid:' . $payId, $actor);
+    }
+
+    /**
+     * The operator records money that arrived outside the app (bank transfer, cash, CMS auto-transfer …).
+     * $method: bank | cash | cms | etc. $idem: the idempotency key of this form / file row (8–64 of A–Z a–z 0–9 _ - : .):
+     * the same key again changes nothing and returns the first payment with duplicate = true; the same key for another
+     * contract is 409 IDEM_CONFLICT. $opt: periods (0–120; default: worked out from the totals), memo (≤ 200), paidAt (ms).
+     * With auto_approve = on_payment a covered pending contract is approved in the same transaction.
+     * → {payment, contract, duplicate}. 400 INVALID_INPUT · 404 NOT_FOUND · 409 NOT_LIVE.
+     */
+    public static function recordPayment(array $a, int $contractId, int $amount, string $method, string $idem, array $opt = [], ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        V::keys($opt, ['periods', 'memo', 'paidAt'], 'payment');
+        if (!in_array($method, ['bank', 'cash', 'cms', 'etc'], true)) V::fail('method', '값은 bank · cash · cms · etc 가운데 하나여야 해요.');
+        if ($amount < 1 || $amount > self::MAX_AMOUNT) V::fail('amount', '금액은 1~' . self::MAX_AMOUNT . ' 사이의 정수여야 해요.');
+        if (!preg_match('/^[A-Za-z0-9_\-:.]{8,64}$/', $idem)) V::fail('idem', '중복 방지 키가 올바르지 않아요.');
+        $now = self::now($now);
+        $periods = self::inInt($opt, 'periods', 0, 120);
+        $memo = self::cleanPrivate((string) self::inStr($opt, 'memo', 200, ''), 200);
+        $paidAt = self::inInt($opt, 'paidAt', 1, $now + self::DAY, $now);
+        $res = Db::txRetry(function () use ($contractId, $amount, $method, $idem, $periods, $memo, $paidAt, $actor, $now) {
+            $c = self::lockContract($contractId);
+            $old = Db::one('SELECT id, contract_id FROM allot_payments WHERE idem = ?', [$idem]);
+            if ($old) {
+                if ((int) $old['contract_id'] !== $contractId) throw new ApiException(409, 'IDEM_CONFLICT', '이 키는 다른 계약의 입금에 이미 쓰였어요. 화면을 새로 고친 뒤 다시 해 주세요.');
+                return [(int) $old['id'], true];
+            }
+            if (!in_array((string) $c['status'], self::LIVE, true)) throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약에는 입금을 기록할 수 없어요.');
+            $first = (int) Db::value("SELECT COUNT(*) FROM allot_payments WHERE contract_id = ? AND kind <> 'refund' AND status IN ('paid', 'refunded')", [$contractId]) === 0;
+            $payId = Db::insert('allot_payments', [
+                'contract_id' => $contractId, 'customer_id' => (int) $c['customer_id'], 'kind' => $periods === 0 ? 'manual' : ($first ? 'first' : 'renewal'), 'method' => $method, 'amount' => $amount,
+                'periods' => 0, 'order_id' => null, 'payment_key_enc' => '', 'claim' => '', 'claimed_at' => 0, 'idem' => $idem, 'status' => 'paid', 'toss_status' => '', 'paid_at' => $paidAt,
+                'period_from' => 0, 'period_to' => 0, 'memo' => $memo, 'created_by' => self::idOrNull($actor), 'created_at' => $now, 'updated_at' => $now,
+            ]);
+            list($n, , $to) = self::applyPayment($c, $payId, $amount, $periods, $now);
+            if ($n === 0 && $periods === null) Db::exec("UPDATE allot_payments SET kind = 'manual' WHERE id = ?", [$payId]);
+            self::notePaid($c, $payId, $to, $now, self::idOrNull($actor));
+            Audit::log('allot_payment', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'payment' => $payId, 'method' => $method, 'amount' => $amount, 'periods' => $n], 'info', self::idOrNull($actor));
+            self::approveIfPaid($contractId, self::idOrNull($actor), $now);
+            return [$payId, false];
+        });
+        return ['payment' => self::paymentOut((array) Db::one(self::PAY_SELECT . ' WHERE p.id = ?', [$res[0]])), 'contract' => (array) self::contract($contractId), 'duplicate' => $res[1]];
+    }
+
+    /** payments, newest first (keyset). $filter: contractId, status, method. @return ['rows', 'next'] */
+    public static function listPayments(array $filter = [], int $limit = 50, int $afterId = 0): array
+    {
+        $cid = isset($filter['contractId']) ? max(0, (int) $filter['contractId']) : 0;
+        $status = isset($filter['status']) && in_array($filter['status'], ['created', 'paid', 'failed', 'canceled', 'refunded'], true) ? (string) $filter['status'] : '';
+        $method = isset($filter['method']) && in_array($filter['method'], ['toss', 'bank', 'cash', 'cms', 'etc'], true) ? (string) $filter['method'] : '';
+        $limit = max(1, min(500, $limit));
+        $rows = Db::all(self::PAY_SELECT . " WHERE (? = 0 OR p.id < ?) AND (? = 0 OR p.contract_id = ?) AND (? = '' OR p.status = ?) AND (? = '' OR p.method = ?) ORDER BY p.id DESC LIMIT ?",
+            [$afterId, $afterId, $cid, $cid, $status, $status, $method, $method, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        $out = array_map(function ($r) { return self::paymentOut($r); }, $rows);
+        return ['rows' => $out, 'next' => $more && $out ? $out[count($out) - 1]['id'] : 0];
+    }
+
+    /** mark a paid payment refunded and write the refund row (inside the caller's transaction) → the refund row id, 0 when it was not 'paid' any more */
+    private static function refundLocked(array $p, string $reason, ?int $actor, int $now): int
+    {
+        if (Db::exec("UPDATE allot_payments SET status = 'refunded', updated_at = ? WHERE id = ? AND status = 'paid'", [$now, (int) $p['id']]) !== 1) return 0;
+        $rid = Db::insert('allot_payments', [
+            'contract_id' => (int) $p['contract_id'], 'customer_id' => (int) $p['customer_id'], 'kind' => 'refund', 'method' => (string) $p['method'], 'amount' => (int) $p['amount'], 'periods' => 0,
+            'order_id' => null, 'payment_key_enc' => '', 'claim' => '', 'claimed_at' => 0, 'idem' => null, 'status' => 'paid', 'toss_status' => '', 'paid_at' => $now, 'period_from' => 0, 'period_to' => 0,
+            'memo' => self::cleanPrivate($reason, 200), 'created_by' => $actor, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+        Db::exec('UPDATE allot_contracts SET paid_total = CASE WHEN paid_total > ? THEN paid_total - ? ELSE 0 END, updated_at = ? WHERE id = ?', [(int) $p['amount'], (int) $p['amount'], $now, (int) $p['contract_id']]);
+        return $rid;
+    }
+
+    /**
+     * Give a payment back. A 토스 payment is canceled at the gateway first (502 REFUND_FAILED when that does not work —
+     * nothing is recorded then); bank / cash / CMS money is returned by the operator by hand and this call records it.
+     * The payment becomes 'refunded', a row of kind 'refund' is added, paid_total goes down. The contract's dates do not
+     * move: end or change the contract separately. Audit allot_refund. 404 NOT_FOUND · 409 NOT_REFUNDABLE.
+     */
+    public static function refund(array $a, int $paymentId, string $reason = '', ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        V::str($reason, 'reason', 200);
+        $now = self::now($now);
+        $p = Db::one('SELECT * FROM allot_payments WHERE id = ?', [$paymentId]);
+        if (!$p) throw new ApiException(404, 'NOT_FOUND', '입금 기록을 찾을 수 없어요.');
+        if ((string) $p['status'] !== 'paid' || (string) $p['kind'] === 'refund') throw new ApiException(409, 'NOT_REFUNDABLE', '돌려줄 수 있는 입금이 아니에요.');
+        if ((string) $p['method'] === 'toss') {
+            $key = self::unseal($p['payment_key_enc']);
+            if ($key === '') throw new ApiException(409, 'NOT_REFUNDABLE', '결제 키를 읽을 수 없어 자동으로 취소하지 못해요. 토스 상점관리자에서 취소한 뒤 다시 눌러 주세요.');
+            try {
+                Toss::cancel($key, '분양 환불');
+            } catch (TossException $e) {
+                Log::error('ALLOT', 'refund at the gateway failed', ['payment' => $paymentId, 'code' => $e->tossCode]);
+                throw new ApiException(502, 'REFUND_FAILED', '결제 취소가 되지 않았어요: ' . $e->getMessage(), ['tossCode' => $e->tossCode]);
+            }
+        }
+        $rid = Db::tx(function () use ($p, $reason, $actor, $now) { return self::refundLocked($p, $reason, self::idOrNull($actor), $now); });
+        if ($rid === 0) throw new ApiException(409, 'NOT_REFUNDABLE', '방금 다른 곳에서 이미 처리했어요.');
+        Audit::log('allot_refund', null, ['payment' => $paymentId, 'contract' => (int) $p['contract_id'], 'method' => (string) $p['method'], 'amount' => (int) $p['amount']], 'warn', self::idOrNull($actor));
+        return self::paymentOut((array) Db::one(self::PAY_SELECT . ' WHERE p.id = ?', [$paymentId]));
+    }
+
+    /** a canceled application gives its 토스 payments back by itself (best effort: what fails stays 'paid' and shows up in the integrity report) */
+    private static function refundTossQuietly(int $contractId, int $now): void
+    {
+        try {
+            foreach (Db::all("SELECT * FROM allot_payments WHERE contract_id = ? AND method = 'toss' AND status = 'paid' AND kind <> 'refund'", [$contractId]) as $p) {
+                $key = self::unseal($p['payment_key_enc']);
+                if ($key === '') continue;
+                try { Toss::cancel($key, '분양 신청 취소'); } catch (\Throwable $e) { Log::error('ALLOT', 'automatic refund failed: ' . get_class($e), ['payment' => (int) $p['id']]); continue; }
+                Db::tx(function () use ($p, $now) { return self::refundLocked($p, '신청 취소 — 자동 환불', null, $now); });
+                Audit::log('allot_refund', null, ['payment' => (int) $p['id'], 'contract' => $contractId, 'method' => 'toss', 'amount' => (int) $p['amount'], 'auto' => true], 'warn');
+            }
+        } catch (\Throwable $e) {
+            Log::error('ALLOT', 'automatic refund pass failed: ' . get_class($e), ['contract' => $contractId]);
+        }
+    }
+
+    // ---- 토스페이먼츠 one-time payment (only with allot.toss_enabled; the same rules as Subscription::confirm, its own table)
+    /** the keyed hash of a paymentKey: what claims a confirmation (the key itself is stored sealed) */
+    private static function claimOf(string $paymentKey): string { return hash_hmac('sha256', 'allot-pay:' . $paymentKey, Config::secret('app_key')); }
+
+    private static function tamper(int $uid, string $why, array $detail, string $severity = 'alert'): void
+    {
+        $detail = ['why' => $why] + $detail;
+        if (class_exists('Tfm\SecEvent')) SecEvent::log('payment_tamper', $severity, $detail, $uid > 0 ? $uid : null);
+        Audit::log('allot_payment_tamper', $uid > 0 ? $uid : null, $detail, $severity === 'info' ? 'info' : 'alert');
+    }
+
+    /** the caller's own live contract by number (another account's / unknown / malformed → 404 NOT_FOUND) */
+    private static function ownContract(int $uid, string $contractNo, string $what): array
+    {
+        $no = self::contractNo($contractNo);
+        $c = $no === '' ? null : Db::one('SELECT * FROM allot_contracts WHERE contract_no = ?', [$no]);
+        if (!$c || $uid < 1 || (int) $c['user_id'] !== $uid) {
+            if ($c && class_exists('Tfm\SecEvent')) SecEvent::log('allot_foreign', 'info', ['what' => $what], $uid > 0 ? $uid : null);
+            throw new ApiException(404, 'NOT_FOUND', '계약을 찾을 수 없어요.');
+        }
+        return $c;
+    }
+
+    /** is one period of this contract payable now? (pending: not covered yet; running: inside the notice lead time) */
+    private static function payable(array $c, int $now): bool
+    {
+        if ((int) $c['price'] <= 0 || !in_array((string) $c['status'], self::LIVE, true)) return false;
+        if ((string) $c['status'] === 'pending') return self::paidPeriods((int) $c['id']) < 1;
+        $paid = (int) $c['paid_until'];
+        if ((string) $c['period'] === 'once' && (int) $c['ends_at'] > 0 && $paid >= (int) $c['ends_at']) return false;
+        $days = (array) self::conf('notice_days');
+        $lead = max(1, $days ? (int) max($days) : 0) * self::DAY;
+        return $paid <= $now + $lead;
+    }
+
+    /**
+     * api/allot/pay-prepare.php {contractNo} → {orderId, amount, orderName, contractNo, customerKey, clientKey, successUrl,
+     * failUrl, mock}: a 'created' payment row for one period of the caller's own contract, to be paid through the 토스 SDK.
+     * The amount is always the contract's own price. 403 PAY_DISABLED (toss_enabled off) · 503 PAYMENT_NOT_CONFIGURED ·
+     * 404 NOT_FOUND · 409 NOTHING_DUE.
+     */
+    public static function payPrepare(array $user, string $contractNo, ?int $now = null): array
+    {
+        self::guard();
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        if (self::conf('toss_enabled') !== true) throw new ApiException(403, 'PAY_DISABLED', '여기에서는 온라인 결제를 받지 않아요. 입금 안내를 확인해 주세요.');
+        $c = self::ownContract($uid, $contractNo, 'pay');
+        Toss::requireAvailable();
+        $now = self::now($now);
+        if (!self::payable($c, $now)) throw new ApiException(409, 'NOTHING_DUE', '지금 낼 것이 없어요.');
+        $amount = (int) $c['price'];
+        $cid = (int) $c['id'];
+        // a payment window opened a moment ago and never used is handed out again instead of piling up rows
+        $open = Db::one("SELECT order_id FROM allot_payments WHERE contract_id = ? AND method = 'toss' AND status = 'created' AND claim = '' AND amount = ? AND created_at > ? ORDER BY id DESC LIMIT 1", [$cid, $amount, $now - 1800000]);
+        if ($open) {
+            $orderId = (string) $open['order_id'];
+        } else {
+            $orderId = 'AL' . substr(Subscription::orderId(), 0, 30);
+            $first = (int) Db::value("SELECT COUNT(*) FROM allot_payments WHERE contract_id = ? AND kind <> 'refund' AND status IN ('paid', 'refunded')", [$cid]) === 0;
+            Db::insert('allot_payments', [
+                'contract_id' => $cid, 'customer_id' => (int) $c['customer_id'], 'kind' => $first ? 'first' : 'renewal', 'method' => 'toss', 'amount' => $amount, 'periods' => 0, 'order_id' => $orderId,
+                'payment_key_enc' => '', 'claim' => '', 'claimed_at' => 0, 'idem' => null, 'status' => 'created', 'toss_status' => '', 'paid_at' => 0, 'period_from' => 0, 'period_to' => 0, 'memo' => '',
+                'created_by' => $uid, 'created_at' => $now, 'updated_at' => $now,
+            ]);
+            Audit::log('allot_pay_prepare', $uid, ['contract' => (string) $c['contract_no'], 'order' => $orderId, 'amount' => $amount]);
+        }
+        $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+        $base = Http::baseUrl();
+        return ['orderId' => $orderId, 'amount' => $amount, 'orderName' => '전통발효체험관 분양 ' . $code, 'contractNo' => (string) $c['contract_no'], 'customerKey' => Subscription::customerKey($uid),
+            'clientKey' => Toss::clientKey(), 'successUrl' => $base . '?allot=pay', 'failUrl' => $base . '?allot=payfail', 'mock' => Toss::mock()];
+    }
+
+    /** a payment row with its contract's account by order id (well-formed ids only) */
+    private static function payOrder(string $orderId): ?array
+    {
+        if (!preg_match('/^[A-Za-z0-9_\-]{8,64}$/', $orderId)) return null;
+        return Db::one('SELECT p.*, c.user_id, c.contract_no FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id WHERE p.order_id = ?', [$orderId]);
+    }
+
+    /** claim a 'created' payment for one confirmation → 'claimed' | 'resume' (the same key, no answer for a while) | 'busy' | 'closed' */
+    private static function claimPayment(string $orderId, string $claim, int $now): string
+    {
+        return Db::tx(function () use ($orderId, $claim, $now) {
+            $r = Db::one('SELECT status, claim, claimed_at, toss_status FROM allot_payments WHERE order_id = ?' . Db::forUpdate(), [$orderId]);
+            if (!$r || (string) $r['status'] !== 'created') return 'closed';
+            if ((string) $r['claim'] === '') {
+                return Db::exec("UPDATE allot_payments SET claim = ?, claimed_at = ?, toss_status = 'CONFIRMING', updated_at = ? WHERE order_id = ? AND status = 'created' AND claim = ''", [$claim, $now, $now, $orderId]) === 1 ? 'claimed' : 'busy';
+            }
+            if (hash_equals((string) $r['claim'], $claim) && (string) $r['toss_status'] === 'CONFIRMING' && $now - (int) $r['claimed_at'] >= (int) Config::get('toss.confirm_retry_after', 30) * 1000) return 'resume';
+            return 'busy';
+        });
+    }
+
+    /** close a claimed payment row: only the confirmation that claimed it moves it, and only out of 'created' */
+    private static function finishPayment(string $orderId, string $status, string $claim, string $paymentKey, string $tossStatus, int $now): bool
+    {
+        $sealed = '';
+        if ($status === 'paid') {
+            if (!Crypto::fits($paymentKey, 500)) throw new ApiException(500, 'PAYMENT_KEY_TOO_LONG', '결제 정보가 너무 길어 저장하지 못했어요. 운영자에게 알려 주세요.');
+            $sealed = Crypto::seal($paymentKey);
+        }
+        return Db::exec("UPDATE allot_payments SET status = ?, payment_key_enc = ?, toss_status = ?, paid_at = ?, updated_at = ? WHERE order_id = ? AND status = 'created' AND claim = ?",
+            [$status, $sealed, mb_substr($tossStatus, 0, 40), $status === 'paid' ? $now : 0, $now, $orderId, $claim]) === 1;
+    }
+
+    /** what the gateway answered must be exactly this order: '' or the reason (status | amount_missing | amount | order | currency | payment_key) */
+    private static function paymentMismatch(array $p, string $orderId, int $amount, string $paymentKey): string
+    {
+        if ((string) (isset($p['status']) ? $p['status'] : '') !== 'DONE') return 'status';
+        if (!array_key_exists('totalAmount', $p)) return 'amount_missing';
+        if (!is_int($p['totalAmount']) || $p['totalAmount'] !== $amount) return 'amount';
+        if (!isset($p['orderId']) || !is_string($p['orderId']) || !hash_equals($orderId, $p['orderId'])) return 'order';
+        if (!isset($p['currency']) || $p['currency'] !== 'KRW') return 'currency';
+        if (isset($p['paymentKey']) && (!is_string($p['paymentKey']) || !hash_equals($paymentKey, $p['paymentKey']))) return 'payment_key';
+        return '';
+    }
+
+    /**
+     * api/allot/pay-confirm.php {paymentKey, orderId, amount}: the order must belong to the caller's contract, be
+     * 'created' and carry exactly this amount; it is claimed for this confirmation (a double click / a second tab finds it
+     * taken), confirmed at 토스 (mock: paymentKey "mock_…"), the answer must be DONE with the same integer amount, order,
+     * currency and key — anything else is recorded as failed, reported as payment_tamper and money that moved is canceled.
+     * Then the payment is 'paid' and the contract moves on (approved with auto_approve = on_payment).
+     * → {contractNo, status, paidUntil}. 404 ORDER_NOT_FOUND · 400 AMOUNT_MISMATCH · 409 ORDER_NOT_OPEN ·
+     * 503 PAYMENT_PENDING (no answer: try again later) · 402 PAYMENT_FAILED · 409 CONTRACT_CLOSED (paid for a contract
+     * that ended meanwhile: the payment is canceled automatically).
+     */
+    public static function payConfirm(array $user, string $paymentKey, string $orderId, int $amount, ?int $now = null): array
+    {
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        if (!preg_match('/^[A-Za-z0-9_\-]{1,200}$/', $paymentKey)) throw new ApiException(400, 'INVALID_PAYMENT_KEY', '결제 키가 올바르지 않아요.');
+        $o = self::payOrder($orderId);
+        if (!$o || $uid < 1 || (int) $o['user_id'] !== $uid) {
+            self::tamper($uid, 'foreign_order', ['order' => mb_substr($orderId, 0, 64)], 'warn');
+            throw new ApiException(404, 'ORDER_NOT_FOUND', '주문을 찾을 수 없어요.');
+        }
+        if ($amount !== (int) $o['amount']) {
+            self::tamper($uid, 'amount', ['order' => $orderId, 'sent' => $amount, 'stored' => (int) $o['amount']]);
+            throw new ApiException(400, 'AMOUNT_MISMATCH', '결제 금액이 주문과 달라요.');
+        }
+        if ((string) $o['status'] !== 'created') {
+            self::tamper($uid, 'replay', ['order' => $orderId, 'status' => (string) $o['status']], 'info');
+            throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
+        }
+        $now = self::now($now);
+        $claim = self::claimOf($paymentKey);
+        $state = self::claimPayment($orderId, $claim, $now);
+        if ($state === 'closed' || $state === 'busy') {
+            throw new ApiException(409, 'ORDER_NOT_OPEN', $state === 'busy' ? '이 주문은 지금 확인하고 있어요. 잠시 뒤 ‘내 분양’에서 확인해 주세요.' : '이미 처리된 주문이에요.');
+        }
+        try {
+            $payment = $state === 'resume' ? Toss::lookup($paymentKey, $orderId, (int) $o['amount']) : Toss::confirm($paymentKey, $orderId, (int) $o['amount']);
+        } catch (TossException $e) {
+            if (in_array($e->tossCode, ['NETWORK_ERROR', 'BAD_RESPONSE'], true)) {
+                // no answer: the money may have moved — the row stays claimed and is looked up on the next try
+                Audit::log('allot_pay_pending', $uid, ['order' => $orderId, 'code' => $e->tossCode], 'warn');
+                throw new ApiException(503, 'PAYMENT_PENDING', '결제 서버의 답이 늦어지고 있어요. 결제가 되었다면 잠시 뒤 다시 확인할 때 반영돼요.', null, ['Retry-After: 30']);
+            }
+            self::finishPayment($orderId, 'failed', $claim, '', $e->tossCode, $now);
+            Audit::log('allot_pay_failed', $uid, ['order' => $orderId, 'code' => $e->tossCode], 'warn');
+            throw new ApiException(402, 'PAYMENT_FAILED', '결제가 완료되지 않았어요: ' . $e->getMessage(), ['tossCode' => $e->tossCode]);
+        }
+        $why = self::paymentMismatch($payment, $orderId, (int) $o['amount'], $paymentKey);
+        if ($why !== '') {
+            self::finishPayment($orderId, 'failed', $claim, '', 'MISMATCH_' . $why, $now);
+            self::tamper($uid, 'gateway_' . $why, ['order' => $orderId, 'stored' => (int) $o['amount'], 'answered' => isset($payment['totalAmount']) && is_int($payment['totalAmount']) ? $payment['totalAmount'] : null]);
+            if ((string) (isset($payment['status']) ? $payment['status'] : '') === 'DONE') {
+                try { Toss::cancel($paymentKey, '주문 정보와 결제 정보가 달라 자동으로 취소했어요 (' . $why . ')'); }
+                catch (\Throwable $e) { Log::error('ALLOT', 'automatic cancel failed', ['why' => $why, 'error' => get_class($e)]); }
+            }
+            throw new ApiException(402, 'PAYMENT_FAILED', '결제 정보가 주문과 달라서 처리하지 않았어요. 결제가 되었다면 자동으로 취소를 요청했어요.');
+        }
+        $cid = (int) $o['contract_id'];
+        $payId = (int) $o['id'];
+        $done = Db::txRetry(function () use ($orderId, $claim, $paymentKey, $payment, $cid, $payId, $o, $uid, $now) {
+            $c = self::lockContract($cid);
+            if (!self::finishPayment($orderId, 'paid', $claim, $paymentKey, (string) (isset($payment['status']) ? $payment['status'] : ''), $now)) throw new ApiException(409, 'ORDER_NOT_OPEN', '이미 처리된 주문이에요.');
+            if (!in_array((string) $c['status'], self::LIVE, true)) return false; // the contract ended while the payment window was open
+            list($n, , $to) = self::applyPayment($c, $payId, (int) $o['amount'], null, $now);
+            self::notePaid($c, $payId, $to, $now, null);
+            Audit::log('allot_payment', $uid, ['contract' => (string) $c['contract_no'], 'payment' => $payId, 'method' => 'toss', 'amount' => (int) $o['amount'], 'periods' => $n]);
+            self::approveIfPaid($cid, null, $now);
+            return true;
+        });
+        if (!$done) {
+            self::refundTossQuietly($cid, $now);
+            throw new ApiException(409, 'CONTRACT_CLOSED', '이 계약은 이미 끝났어요. 결제는 자동으로 취소를 요청했어요.');
+        }
+        $c = (array) Db::one('SELECT contract_no, status, paid_until FROM allot_contracts WHERE id = ?', [$cid]);
+        return ['contractNo' => (string) $c['contract_no'], 'status' => (string) $c['status'], 'paidUntil' => (int) $c['paid_until'] >= self::FOREVER ? 0 : (int) $c['paid_until']];
+    }
+
+    /**
+     * 토스 webhook for an allot order (api/sub/webhook.php hands over what Subscription does not know). The body is never
+     * trusted: the payment is fetched again by the stored key (mock: the key must match). A canceled / refunded payment
+     * is recorded as a refund; nothing here can mark anything paid. Idempotent per (order, event, status).
+     */
+    public static function webhook(array $payload): array
+    {
+        $event = isset($payload['eventType']) && is_string($payload['eventType']) ? mb_substr($payload['eventType'], 0, 60) : 'UNKNOWN';
+        $data = isset($payload['data']) && is_array($payload['data']) ? $payload['data'] : $payload;
+        $orderId = isset($data['orderId']) && is_string($data['orderId']) ? $data['orderId'] : '';
+        $paymentKey = isset($data['paymentKey']) && is_string($data['paymentKey']) ? $data['paymentKey'] : '';
+        $o = $orderId !== '' ? self::payOrder($orderId) : null;
+        if (!$o || $paymentKey === '') return ['ignored' => true, 'why' => 'unknown order'];
+        $stored = self::unseal($o['payment_key_enc']);
+        if ($stored === '' || !hash_equals($stored, $paymentKey)) return ['ignored' => true, 'why' => 'payment key mismatch'];
+        if (Toss::mock()) {
+            $status = isset($data['status']) && is_string($data['status']) ? mb_substr($data['status'], 0, 40) : '';
+        } else {
+            try { $p = Toss::payment($stored); } catch (TossException $e) { return ['ignored' => true, 'why' => 'unverifiable']; }
+            if ((string) (isset($p['orderId']) ? $p['orderId'] : '') !== $orderId) return ['ignored' => true, 'why' => 'order mismatch'];
+            $status = (string) (isset($p['status']) ? $p['status'] : '');
+        }
+        if ($status === '') return ['ignored' => true, 'why' => 'no status'];
+        if (Db::one('SELECT id FROM payment_events WHERE order_id = ? AND event = ? AND status = ?', [$orderId, $event, $status])) return ['ignored' => true, 'why' => 'duplicate'];
+        $now = Clock::ms();
+        Db::insert('payment_events', ['order_id' => $orderId, 'event' => $event, 'status' => $status, 'payload' => '', 'created_at' => $now]);
+        $refunded = false;
+        if (in_array($status, ['CANCELED', 'PARTIAL_CANCELED'], true)) {
+            $refunded = Db::tx(function () use ($o, $now) { return self::refundLocked($o, '결제 취소 (토스 알림)', null, $now) > 0; });
+            if ($refunded) Audit::log('allot_refund', $o['user_id'] === null ? null : (int) $o['user_id'], ['payment' => (int) $o['id'], 'contract' => (int) $o['contract_id'], 'method' => 'toss', 'amount' => (int) $o['amount'], 'webhook' => true], 'warn');
+        }
+        Db::exec('UPDATE allot_payments SET toss_status = ?, updated_at = ? WHERE id = ?', [$status, $now, (int) $o['id']]);
+        return ['ignored' => false, 'status' => $status, 'refunded' => $refunded, 'allot' => true];
+    }
+
+    // ------------------------------------------------------------------ waiting list
+    /** are there free units for this target right now? */
+    private static function hasFree(string $kind, int $zoneId): bool
+    {
+        if ($zoneId > 0) return Db::value("SELECT id FROM allot_units WHERE zone_id = ? AND status = 'open' LIMIT 1", [$zoneId]) !== null;
+        foreach (Db::all('SELECT id FROM allot_zones WHERE kind = ? AND is_open = 1', [$kind]) as $z) {
+            if (Db::value("SELECT id FROM allot_units WHERE zone_id = ? AND status = 'open' LIMIT 1", [(int) $z['id']]) !== null) return true;
+        }
+        return false;
+    }
+
+    /** how many wait in front of (and including) this row for the same kind of place */
+    private static function waitPosition(array $w): int
+    {
+        return (int) Db::value("SELECT COUNT(*) FROM allot_waitlist WHERE kind = ? AND status = 'waiting' AND id <= ? AND (? = 0 OR zone_id IN (0, ?))", [(string) $w['kind'], (int) $w['id'], (int) $w['zone_id'], (int) $w['zone_id']]);
+    }
+
+    /** the live waiting-list rows of an account (mine()) */
+    private static function waitOf(int $uid): array
+    {
+        $out = [];
+        foreach (Db::all("SELECT w.id, w.kind, w.zone_id, w.status, w.unit_id, w.offer_until, w.created_at, z.code AS zone_code, u.code AS unit_code
+            FROM allot_waitlist w LEFT JOIN allot_zones z ON z.id = w.zone_id LEFT JOIN allot_units u ON u.id = w.unit_id
+            WHERE w.user_id = ? AND w.status IN ('waiting', 'offered') ORDER BY w.id ASC", [$uid]) as $w) {
+            $out[] = ['id' => (int) $w['id'], 'kind' => (string) $w['kind'], 'zone' => $w['zone_code'] === null ? null : (string) $w['zone_code'], 'status' => (string) $w['status'],
+                'position' => (string) $w['status'] === 'waiting' ? self::waitPosition($w) : 0, 'unit' => $w['unit_code'] === null ? null : (string) $w['unit_code'],
+                'offerUntil' => (int) $w['offer_until'], 'createdAt' => (int) $w['created_at']];
+        }
+        return $out;
+    }
+
+    /**
+     * api/allot/waitlist.php (join): wait for a free unit of a kind (any zone) or of one zone. $form as in apply() (name,
+     * phone, consent, consentVersion, adult). One live row per customer and target; it counts toward apply_per_user.
+     * → {id, status: 'waiting', position}. 409 HAS_FREE (there is a free unit: apply instead) · 409 ALREADY_WAITING ·
+     * 404 NOT_FOUND · 409 NOT_OPEN · 429 APPLY_LIMIT · 400 CONSENT_REQUIRED / INVALID_INPUT · 403 ALLOT_DISABLED.
+     */
+    public static function waitJoin(array $user, string $kind, $zone, array $form, ?int $now = null): array
+    {
+        self::guard();
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        if ($uid < 1) throw new ApiException(401, 'AUTH_REQUIRED', '로그인이 필요해요. 다시 로그인해 주세요.');
+        if (!in_array($kind, self::KINDS, true)) V::fail('kind', '값은 jar · plot · store 가운데 하나여야 해요.');
+        $now = self::now($now);
+        $f = self::applicantForm($form);
+        $zid = 0;
+        if ($zone !== null && $zone !== '') {
+            $code = is_string($zone) ? strtoupper(trim($zone)) : '';
+            if (!preg_match('/^[A-Z0-9]{1,12}$/', $code)) V::fail('zone', '구역 번호가 올바르지 않아요.');
+            $z = Db::one('SELECT id, kind, is_open FROM allot_zones WHERE code = ?', [$code]);
+            if (!$z) throw new ApiException(404, 'NOT_FOUND', '그런 구역이 없어요.');
+            if ((string) $z['kind'] !== $kind) V::fail('zone', '고른 종류의 구역이 아니에요.');
+            if ((int) $z['is_open'] !== 1) throw new ApiException(409, 'NOT_OPEN', '지금은 신청을 받지 않는 구역이에요.');
+            $zid = (int) $z['id'];
+        }
+        $id = Db::txRetry(function () use ($uid, $kind, $zid, $f, $now) {
+            Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]);
+            self::checkLimit($uid);
+            if (self::hasFree($kind, $zid)) throw new ApiException(409, 'HAS_FREE', '빈 자리가 있어요. 바로 신청할 수 있어요.');
+            $cid = self::upsertOwnCustomer($uid, $f, $now);
+            try {
+                $id = Db::insert('allot_waitlist', ['kind' => $kind, 'zone_id' => $zid, 'customer_id' => $cid, 'user_id' => $uid, 'live_key' => $cid . ':' . $kind . ':' . $zid, 'status' => 'waiting',
+                    'unit_id' => null, 'offer_until' => 0, 'created_at' => $now, 'updated_at' => $now]);
+            } catch (\PDOException $e) {
+                if ((string) $e->getCode() === '23000') throw new ApiException(409, 'ALREADY_WAITING', '벌써 기다리고 있어요.');
+                throw $e;
+            }
+            Audit::log('allot_wait_joined', $uid, ['wait' => $id, 'kind' => $kind, 'zone' => $zid]);
+            return $id;
+        });
+        $w = (array) Db::one('SELECT id, kind, zone_id FROM allot_waitlist WHERE id = ?', [$id]);
+        return ['id' => (int) $id, 'status' => 'waiting', 'position' => self::waitPosition($w)];
+    }
+
+    /** a live waiting-list row stops ('canceled' | 'expired'); an offered unit is free again → the unit id to offer on, or 0 */
+    private static function waitClose(array $w, string $to, int $now): int
+    {
+        $was = (string) $w['status'];
+        if (Db::exec('UPDATE allot_waitlist SET status = ?, live_key = NULL, updated_at = ? WHERE id = ? AND status = ?', [$to, $now, (int) $w['id'], $was]) !== 1) return 0;
+        if ($was !== 'offered' || $w['unit_id'] === null) return 0;
+        $u = Db::one('SELECT id, zone_id FROM allot_units WHERE id = ?' . Db::forUpdate(), [(int) $w['unit_id']]);
+        if (!$u || !self::unitCas((int) $u['id'], 'held', 'open', null, 0, $now, 'free')) return 0;
+        self::bumpZone((int) $u['zone_id'], $now);
+        return (int) $u['id'];
+    }
+
+    /** the caller's own live waiting-list row, locked (another account's / unknown → 404 NOT_FOUND) */
+    private static function ownWait(int $uid, int $id): array
+    {
+        $w = Db::one("SELECT * FROM allot_waitlist WHERE id = ? AND status IN ('waiting', 'offered')" . Db::forUpdate(), [$id]);
+        if (!$w || $uid < 1 || (int) $w['user_id'] !== $uid) throw new ApiException(404, 'NOT_FOUND', '대기 신청을 찾을 수 없어요.');
+        return $w;
+    }
+
+    /** api/allot/waitlist.php (leave): stop waiting, or decline an offer (the unit goes to the next in line) → {id, status: 'canceled'} */
+    public static function waitLeave(array $user, int $id, ?int $now = null): array
+    {
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        $now = self::now($now);
+        $unit = Db::txRetry(function () use ($uid, $id, $now) {
+            $w = self::ownWait($uid, $id);
+            $unit = self::waitClose($w, 'canceled', $now);
+            Audit::log('allot_wait_left', $uid, ['wait' => $id, 'was' => (string) $w['status']]);
+            return $unit;
+        });
+        self::offerQuietly((int) $unit, $now);
+        return ['id' => $id, 'status' => 'canceled'];
+    }
+
+    /** the operator removes a waiting-list row (the same effect as the customer leaving). Audit allot_wait_left. */
+    public static function waitCancel(array $a, int $id, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        $now = self::now($now);
+        $unit = Db::txRetry(function () use ($id, $actor, $now) {
+            $w = Db::one("SELECT * FROM allot_waitlist WHERE id = ? AND status IN ('waiting', 'offered')" . Db::forUpdate(), [$id]);
+            if (!$w) throw new ApiException(404, 'NOT_FOUND', '대기 신청을 찾을 수 없어요.');
+            $unit = self::waitClose($w, 'canceled', $now);
+            Audit::log('allot_wait_left', $w['user_id'] === null ? null : (int) $w['user_id'], ['wait' => $id, 'was' => (string) $w['status'], 'byAdmin' => true], 'info', self::idOrNull($actor));
+            return $unit;
+        });
+        self::offerQuietly((int) $unit, $now);
+        return ['id' => $id, 'status' => 'canceled'];
+    }
+
+    /**
+     * api/allot/waitlist.php (accept): the offered unit becomes the caller's application — pending (the hold starts
+     * again) or active at once with auto_approve = always. → as apply(). 404 NOT_FOUND · 409 OFFER_GONE (no offer, or its
+     * time is over).
+     */
+    public static function waitAccept(array $user, int $id, ?int $now = null): array
+    {
+        self::guard();
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        $now = self::now($now);
+        $always = self::conf('auto_approve') === 'always';
+        $hold = (int) self::conf('hold_hours');
+        $holdUntil = $hold > 0 ? $now + $hold * 3600000 : 0;
+        return Db::txRetry(function () use ($uid, $id, $now, $always, $holdUntil) {
+            Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]);
+            $w = self::ownWait($uid, $id);
+            if ((string) $w['status'] !== 'offered' || $w['unit_id'] === null || ((int) $w['offer_until'] > 0 && (int) $w['offer_until'] < $now)) throw new ApiException(409, 'OFFER_GONE', '확정할 수 있는 자리가 없어요. 기한이 지났을 수 있어요.');
+            $u = Db::one('SELECT id, zone_id, code, status, contract_id FROM allot_units WHERE id = ?' . Db::forUpdate(), [(int) $w['unit_id']]);
+            if (!$u || (string) $u['status'] !== 'held' || $u['contract_id'] !== null) throw new ApiException(409, 'OFFER_GONE', '확정할 수 있는 자리가 없어요.');
+            $z = self::zonePlan((int) $u['zone_id']);
+            $unitId = (int) $u['id'];
+            list($conId, $no) = self::insertContract([
+                'unit_id' => $unitId, 'live_unit_id' => $unitId, 'customer_id' => (int) $w['customer_id'], 'user_id' => $uid, 'status' => 'pending', 'period' => (string) $z['period'], 'price' => (int) $z['price'],
+                'term_months' => (int) $z['term_months'], 'starts_at' => 0, 'ends_at' => 0, 'paid_until' => 0, 'paid_total' => 0, 'auto_renew' => 0, 'source' => 'app', 'memo' => null,
+                'created_by' => $uid, 'decided_by' => null, 'decided_at' => 0, 'cancel_req_at' => 0, 'due_stage' => 999, 'end_stage' => 999, 'ended_at' => 0, 'end_reason' => '',
+                'created_at' => $now, 'updated_at' => $now,
+            ]);
+            if (!self::heldAttach($unitId, $conId, $holdUntil, $now)) throw new ApiException(409, 'OFFER_GONE', '확정할 수 있는 자리가 없어요.');
+            if (Db::exec("UPDATE allot_waitlist SET status = 'converted', live_key = NULL, updated_at = ? WHERE id = ? AND status = 'offered'", [$now, $id]) !== 1) throw new ApiException(409, 'OFFER_GONE', '확정할 수 있는 자리가 없어요.');
+            $c = (array) Db::one('SELECT * FROM allot_contracts WHERE id = ?', [$conId]);
+            Audit::log('allot_applied', $uid, ['contract' => $no, 'unit' => (string) $u['code'], 'wait' => $id]);
+            if ($always) {
+                self::approveLocked($c, null, $now, '');
+                return ['contractNo' => $no, 'status' => 'active', 'unit' => (string) $u['code'], 'holdUntil' => 0, 'pay' => self::payInfo(0)];
+            }
+            self::noteContract($c, $now, 'applied', '분양 신청을 받았어요', $u['code'] . ' 자리 신청을 받았어요. 운영자가 확인하면 알려 드릴게요.', 'applied:' . $conId);
+            return ['contractNo' => $no, 'status' => 'pending', 'unit' => (string) $u['code'], 'holdUntil' => $holdUntil, 'pay' => self::payInfo($holdUntil)];
+        });
+    }
+
+    /**
+     * A unit is free: offer it to the first in line (lowest id) that waits for its kind in any zone or in its zone. The
+     * unit is held until now + waitlist_offer_hours, the row becomes 'offered' and the customer gets a notice.
+     * → {id, unit, offerUntil} or null (nobody waits, the unit is not free, its zone is closed). $unit: id or code.
+     */
+    public static function offerNext($unit, ?int $now = null): ?array
+    {
+        $now = self::now($now);
+        $until = $now + (int) self::conf('waitlist_offer_hours') * 3600000;
+        return Db::txRetry(function () use ($unit, $now, $until) {
+            $u = is_int($unit) ? Db::one('SELECT id, zone_id, kind, code, status, contract_id FROM allot_units WHERE id = ?' . Db::forUpdate(), [$unit])
+                : Db::one('SELECT id, zone_id, kind, code, status, contract_id FROM allot_units WHERE code = ?' . Db::forUpdate(), [self::unitCode($unit)]);
+            if (!$u || (string) $u['status'] !== 'open') return null;
+            if ((int) Db::value('SELECT is_open FROM allot_zones WHERE id = ?', [(int) $u['zone_id']]) !== 1) return null;
+            $w = Db::one("SELECT id, customer_id, user_id FROM allot_waitlist WHERE kind = ? AND status = 'waiting' AND zone_id IN (0, ?) ORDER BY id ASC LIMIT 1" . Db::forUpdate(), [(string) $u['kind'], (int) $u['zone_id']]);
+            if (!$w) return null;
+            if (!self::unitCas((int) $u['id'], 'open', 'held', null, $until, $now, 'free')) return null;
+            if (Db::exec("UPDATE allot_waitlist SET status = 'offered', unit_id = ?, offer_until = ?, updated_at = ? WHERE id = ? AND status = 'waiting'", [(int) $u['id'], $until, $now, (int) $w['id']]) !== 1) {
+                throw new \RuntimeException('a locked waiting-list row changed');
+            }
+            self::bumpZone((int) $u['zone_id'], $now);
+            self::note($now, null, (int) $w['customer_id'], $w['user_id'] === null ? null : (int) $w['user_id'], 'offer', '기다리던 자리가 났어요!',
+                $u['code'] . ' 자리가 났어요. ' . self::fmtDate($until) . ' 까지 ‘내 분양’에서 확정해 주세요.', 'offer:' . $w['id'] . ':' . $u['id']);
+            Audit::log('allot_wait_offer', $w['user_id'] === null ? null : (int) $w['user_id'], ['wait' => (int) $w['id'], 'unit' => (string) $u['code']]);
+            return ['id' => (int) $w['id'], 'unit' => (string) $u['code'], 'offerUntil' => $until];
+        });
+    }
+
+    /**
+     * The waiting list in order (first in line first; keyset ascending). $filter: kind, zone (id or code), status.
+     * Rows: {id, kind, zoneCode, status, customerId, customer (masked), phoneTail, userId, unitCode, offerUntil, createdAt}.
+     */
+    public static function listWait(array $filter = [], int $limit = 50, int $afterId = 0): array
+    {
+        $kind = isset($filter['kind']) && in_array($filter['kind'], self::KINDS, true) ? (string) $filter['kind'] : '';
+        $status = isset($filter['status']) && in_array($filter['status'], ['waiting', 'offered', 'converted', 'expired', 'canceled'], true) ? (string) $filter['status'] : '';
+        $zid = -1;
+        if (isset($filter['zone']) && $filter['zone'] !== '' && $filter['zone'] !== 0) {
+            $z = self::zoneRow($filter['zone']);
+            if (!$z) return ['rows' => [], 'next' => 0];
+            $zid = (int) $z['id'];
+        }
+        $limit = max(1, min(500, $limit));
+        $rows = Db::all("SELECT w.*, z.code AS zone_code, u.code AS unit_code, cu.name_enc, cu.phone_tail
+            FROM allot_waitlist w LEFT JOIN allot_zones z ON z.id = w.zone_id LEFT JOIN allot_units u ON u.id = w.unit_id LEFT JOIN allot_customers cu ON cu.id = w.customer_id
+            WHERE w.id > ? AND (? = '' OR w.kind = ?) AND (? = '' OR w.status = ?) AND (? < 0 OR w.zone_id = ?) ORDER BY w.id ASC LIMIT ?", [max(0, $afterId), $kind, $kind, $status, $status, $zid, $zid, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        $out = array_map(function ($w) {
+            return ['id' => (int) $w['id'], 'kind' => (string) $w['kind'], 'zoneCode' => $w['zone_code'] === null ? '' : (string) $w['zone_code'], 'status' => (string) $w['status'],
+                'customerId' => (int) $w['customer_id'], 'customer' => self::maskName(self::unseal($w['name_enc'])), 'phoneTail' => (string) $w['phone_tail'], 'userId' => $w['user_id'] === null ? 0 : (int) $w['user_id'],
+                'unitCode' => $w['unit_code'] === null ? '' : (string) $w['unit_code'], 'offerUntil' => (int) $w['offer_until'], 'createdAt' => (int) $w['created_at']];
+        }, $rows);
+        return ['rows' => $out, 'next' => $more && $out ? $out[count($out) - 1]['id'] : 0];
+    }
+
+    // ------------------------------------------------------------------ nameplates, the public unit view, care logs
+    /** the operator sets (or clears) the nameplate of a unit: cleaned, personal information and bad words masked, ≤ 12 characters */
+    public static function setLabel(array $a, int $unitId, string $text, bool $show): array
+    {
+        $actor = self::admin($a);
+        V::str($text, 'text', 40);
+        $u = Db::one('SELECT id, code FROM allot_units WHERE id = ?', [$unitId]);
+        if (!$u) throw new ApiException(404, 'NOT_FOUND', '자리를 찾을 수 없어요.');
+        $label = self::cleanPublic($text, self::LABEL_MAX);
+        Db::exec('UPDATE allot_units SET label = ?, label_show = ?, updated_at = ? WHERE id = ?', [$label, $label !== '' && $show ? 1 : 0, Clock::ms(), $unitId]);
+        Audit::log('allot_label_set', null, ['unit' => (string) $u['code'], 'chars' => mb_strlen($label), 'show' => $label !== '' && $show], 'info', self::idOrNull($actor));
+        return ['unit' => (string) $u['code'], 'text' => $label, 'show' => $label !== '' && $show];
+    }
+
+    /** api/allot/nameplate.php: the owner of a live contract names the unit (same cleaning) → {contractNo, nameplate: {text, show}}; another account's number is 404 */
+    public static function setLabelByUser(array $user, string $contractNo, string $text, bool $show): array
+    {
+        $uid = (int) (isset($user['id']) ? $user['id'] : 0);
+        V::str($text, 'text', 40);
+        $c = self::ownContract($uid, $contractNo, 'nameplate');
+        if (!in_array((string) $c['status'], self::LIVE, true)) throw new ApiException(409, 'NOT_LIVE', '이미 끝난 계약이에요.');
+        $label = self::cleanPublic($text, self::LABEL_MAX);
+        Db::exec('UPDATE allot_units SET label = ?, label_show = ?, updated_at = ? WHERE id = ? AND contract_id = ?', [$label, $label !== '' && $show ? 1 : 0, Clock::ms(), (int) $c['unit_id'], (int) $c['id']]);
+        Audit::log('allot_label_set', $uid, ['contract' => (string) $c['contract_no'], 'chars' => mb_strlen($label), 'show' => $label !== '' && $show]);
+        return ['contractNo' => (string) $c['contract_no'], 'nameplate' => ['text' => $label, 'show' => $label !== '' && $show]];
+    }
+
+    /**
+     * api/allot/unit.php — what anyone may know about a unit: {code, kind, zone: {code, name}, seq, status, canApply,
+     * nameplate (only when its owner chose to show it, else null), logs (the 5 newest visible care logs), mine (the
+     * caller holds it)}. No contract, no customer, no dates. 404 NOT_FOUND.
+     */
+    public static function unitView(string $code, int $uid = 0): array
+    {
+        $c = self::unitCode($code);
+        $u = $c === '' ? null : Db::one('SELECT u.id, u.zone_id, u.kind, u.code, u.seq, u.status, u.contract_id, u.label, u.label_show, z.code AS zone_code, z.name AS zone_name, z.is_open
+            FROM allot_units u JOIN allot_zones z ON z.id = u.zone_id WHERE u.code = ?', [$c]);
+        if (!$u) throw new ApiException(404, 'NOT_FOUND', '그런 자리가 없어요.');
+        $taken = in_array((string) $u['status'], ['held', 'leased'], true);
+        $mine = $uid > 0 && $u['contract_id'] !== null && (int) Db::value('SELECT user_id FROM allot_contracts WHERE id = ?', [(int) $u['contract_id']]) === $uid;
+        $logs = self::careLogs(['unit' => (int) $u['id']], 5);
+        return [
+            'code' => (string) $u['code'], 'kind' => (string) $u['kind'], 'zone' => ['code' => (string) $u['zone_code'], 'name' => (string) $u['zone_name']], 'seq' => (int) $u['seq'],
+            'status' => (string) $u['status'], 'canApply' => (string) $u['status'] === 'open' && (int) $u['is_open'] === 1 && self::enabled(),
+            'nameplate' => $taken && (int) $u['label_show'] === 1 && (string) $u['label'] !== '' ? (string) $u['label'] : null, 'logs' => $logs['logs'], 'mine' => $mine,
+        ];
+    }
+
+    public const CARE_KINDS = ['care', 'water', 'clean', 'check', 'weather', 'event', 'photo', 'notice'];
+
+    /** $target → [zone id, unit id]: ['unit' => id | code] · ['zone' => id | code] · ['all' => true] */
+    private static function careTarget(array $target): array
+    {
+        if (isset($target['unit'])) {
+            $u = is_int($target['unit']) ? Db::one('SELECT id, zone_id FROM allot_units WHERE id = ?', [$target['unit']]) : Db::one('SELECT id, zone_id FROM allot_units WHERE code = ?', [self::unitCode($target['unit'])]);
+            if (!$u) throw new ApiException(404, 'NOT_FOUND', '그런 자리가 없어요.');
+            return [(int) $u['zone_id'], (int) $u['id']];
+        }
+        if (isset($target['zone'])) {
+            $z = self::zoneRow($target['zone']);
+            if (!$z) throw new ApiException(404, 'NOT_FOUND', '그런 구역이 없어요.');
+            return [(int) $z['id'], 0];
+        }
+        if (isset($target['all']) && $target['all'] === true) return [0, 0];
+        V::fail('target', '자리 · 구역 · 전체 가운데 하나를 골라 주세요.');
+        return [0, 0];
+    }
+
+    /**
+     * A care-log line ("3구역 장독을 닦았어요") for one unit, a whole zone or every zone. $kind: one of CARE_KINDS.
+     * $text ≤ 300 characters; it is public when $visible, so it is cleaned and masked like every customer-visible text.
+     * Audit allot_care_added. → {id, kind, text, at, scope, visible}
+     */
+    public static function addCare(array $a, array $target, string $kind, string $text, bool $visible = true, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        if (!in_array($kind, self::CARE_KINDS, true)) V::fail('kind', '값이 올바르지 않아요.');
+        V::str($text, 'text', 300);
+        $clean = self::cleanPublic($text, 300);
+        if ($clean === '') V::fail('text', '내용을 적어 주세요.');
+        list($zid, $uid) = self::careTarget($target);
+        $now = self::now($now);
+        $id = Db::insert('allot_care_logs', ['zone_id' => $zid, 'unit_id' => $uid, 'kind' => $kind, 'text' => $clean, 'visible' => $visible ? 1 : 0, 'created_by' => self::idOrNull($actor), 'created_at' => $now]);
+        Audit::log('allot_care_added', null, ['log' => $id, 'zone' => $zid, 'unit' => $uid, 'kind' => $kind, 'chars' => mb_strlen($clean)], 'info', self::idOrNull($actor));
+        return ['id' => $id, 'kind' => $kind, 'text' => $clean, 'at' => $now, 'scope' => $uid > 0 ? 'unit' : ($zid > 0 ? 'zone' : 'all'), 'visible' => $visible];
+    }
+
+    /** show or hide a care-log line */
+    public static function setCareVisible(array $a, int $id, bool $visible): void
+    {
+        $actor = self::admin($a);
+        if (Db::value('SELECT id FROM allot_care_logs WHERE id = ?', [$id]) === null) throw new ApiException(404, 'NOT_FOUND', '관리 일지를 찾을 수 없어요.');
+        Db::exec('UPDATE allot_care_logs SET visible = ? WHERE id = ?', [$visible ? 1 : 0, $id]);
+        Audit::log('allot_care_visible', null, ['log' => $id, 'visible' => $visible], 'info', self::idOrNull($actor));
+    }
+
+    /**
+     * Care logs, newest first: for a unit its own lines + its zone's + the ones for every zone; for a zone the zone's +
+     * every zone's; ['all' => true] = every line (the admin list). Hidden lines only with $all. $beforeId pages back.
+     * → {logs: [{id, kind, text, at, scope, visible}], more}
+     */
+    public static function careLogs(array $target, int $limit = 20, int $beforeId = 0, bool $all = false): array
+    {
+        $limit = max(1, min(100, $limit));
+        $h = $all ? 1 : 0;
+        $b = max(0, $beforeId);
+        if (isset($target['all']) && $target['all'] === true) {
+            $rows = Db::all('SELECT id, zone_id, unit_id, kind, text, visible, created_at FROM allot_care_logs WHERE (? = 1 OR visible = 1) AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?', [$h, $b, $b, $limit + 1]);
+        } else {
+            list($zid, $uid) = self::careTarget($target);
+            if ($uid > 0) {
+                $rows = Db::all('SELECT id, zone_id, unit_id, kind, text, visible, created_at FROM allot_care_logs WHERE (unit_id = ? OR (unit_id = 0 AND zone_id IN (0, ?))) AND (? = 1 OR visible = 1) AND (? = 0 OR id < ?)
+                    ORDER BY id DESC LIMIT ?', [$uid, $zid, $h, $b, $b, $limit + 1]);
+            } else {
+                $rows = Db::all('SELECT id, zone_id, unit_id, kind, text, visible, created_at FROM allot_care_logs WHERE unit_id = 0 AND zone_id IN (0, ?) AND (? = 1 OR visible = 1) AND (? = 0 OR id < ?)
+                    ORDER BY id DESC LIMIT ?', [$zid, $h, $b, $b, $limit + 1]);
+            }
+        }
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        return ['logs' => array_map(function ($r) {
+            return ['id' => (int) $r['id'], 'kind' => (string) $r['kind'], 'text' => (string) $r['text'], 'at' => (int) $r['created_at'],
+                'scope' => (int) $r['unit_id'] > 0 ? 'unit' : ((int) $r['zone_id'] > 0 ? 'zone' : 'all'), 'visible' => (int) $r['visible'] === 1];
+        }, $rows), 'more' => $more];
+    }
+
+    // ------------------------------------------------------------------ operator notices (compose, outbox)
+    /** example messages for the compose form (예시): [{key, title, body}] */
+    public static function noticeTemplates(): array
+    {
+        return [
+            ['key' => 'make', 'title' => '장 담그는 날 안내', 'body' => '[예시] 장 담그는 날이 다가와요. 날짜와 준비물은 체험관 안내소에서 알려 드려요.'],
+            ['key' => 'split', 'title' => '장 가르는 날 안내', 'body' => '[예시] 메주를 건져 된장과 간장으로 가르는 날이에요. 함께 오시면 직접 해 볼 수 있어요.'],
+            ['key' => 'pickup', 'title' => '받는 날 안내', 'body' => '[예시] 잘 익은 장을 받아 가는 날이에요. 담아 갈 그릇을 준비해 주세요.'],
+            ['key' => 'pay', 'title' => '납부 안내', 'body' => '[예시] 납부 기한이 다가와요. 금액과 방법은 ‘안내’에서 어른과 함께 확인해 주세요.'],
+            ['key' => 'closed', 'title' => '쉬는 날 안내', 'body' => '[예시] 이번 주는 체험관이 쉬어요. 장독은 평소처럼 돌보고 있어요.'],
+        ];
+    }
+
+    /**
+     * The operator writes to customers. $target: ['contract' => id] · ['customer' => id] · ['zone' => id | code] (everyone
+     * with a live contract there) · ['kind' => jar | plot | store] · ['all' => true]. $title ≤ 80, $body ≤ 300 characters,
+     * cleaned and masked. One notice per customer; $sendAt (ms) schedules it. Customers without an app account get a
+     * 'queued' notice the operator handles by phone (listNotices(['offline' => true])). Audit allot_notice_sent (count
+     * only). → {batch, count}
+     */
+    public static function notify(array $a, array $target, string $title, string $body, ?int $sendAt = null, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        V::str($title, 'title', 80);
+        V::str($body, 'body', 300);
+        $t = self::cleanPublic($title, 80);
+        $b = self::cleanPublic($body, 300);
+        if ($t === '') V::fail('title', '제목을 적어 주세요.');
+        $now = self::now($now);
+        if ($sendAt !== null && ($sendAt < $now - self::DAY || $sendAt > $now + 366 * self::DAY)) V::fail('sendAt', '보내는 때는 지금부터 1년 안이어야 해요.');
+        $cid = 0; $cu = 0; $zid = 0; $kind = ''; $all = 0;
+        if (isset($target['contract'])) $cid = (int) $target['contract'];
+        elseif (isset($target['customer'])) $cu = (int) $target['customer'];
+        elseif (isset($target['zone'])) { $z = self::zoneRow($target['zone']); if (!$z) throw new ApiException(404, 'NOT_FOUND', '그런 구역이 없어요.'); $zid = (int) $z['id']; }
+        elseif (isset($target['kind']) && in_array($target['kind'], self::KINDS, true)) $kind = (string) $target['kind'];
+        elseif (isset($target['all']) && $target['all'] === true) $all = 1;
+        else V::fail('target', '받는 사람을 골라 주세요.');
+        $batch = bin2hex(random_bytes(4));
+        $count = Db::tx(function () use ($cid, $cu, $zid, $kind, $all, $t, $b, $sendAt, $batch, $actor, $now) {
+            if ($cu > 0) {
+                $rows = Db::all('SELECT 0 AS contract_id, id AS customer_id, user_id FROM allot_customers WHERE id = ? AND purged_at = 0', [$cu]);
+            } else {
+                $rows = Db::all("SELECT MIN(c.id) AS contract_id, c.customer_id, MAX(c.user_id) AS user_id FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id
+                    WHERE c.status IN ('pending', 'active', 'overdue') AND (? = 0 OR c.id = ?) AND (? = 0 OR u.zone_id = ?) AND (? = '' OR u.kind = ?) AND (? = 1 OR ? > 0 OR ? > 0 OR ? <> '')
+                    GROUP BY c.customer_id", [$cid, $cid, $zid, $zid, $kind, $kind, $all, $cid, $zid, $kind]);
+            }
+            $n = 0;
+            foreach ($rows as $r) {
+                if (self::note($now, (int) $r['contract_id'] > 0 ? (int) $r['contract_id'] : null, (int) $r['customer_id'], $r['user_id'] === null ? null : (int) $r['user_id'], 'info', $t, $b,
+                    'bc:' . $batch . ':' . $r['customer_id'], self::idOrNull($actor), $sendAt)) $n++;
+            }
+            return $n;
+        });
+        Audit::log('allot_notice_sent', null, ['batch' => $batch, 'count' => $count, 'scheduled' => $sendAt !== null && $sendAt > $now], 'info', self::idOrNull($actor));
+        return ['batch' => $batch, 'count' => (int) $count];
+    }
+
+    /** queued notices that are due become 'sent' (accounts only; the rest waits for the operator) → rows sent */
+    private static function flushNotices(int $now, int $limit): int
+    {
+        $n = 0;
+        foreach (Db::all("SELECT id FROM allot_notices WHERE status = 'queued' AND send_at <= ? AND user_id IS NOT NULL ORDER BY send_at ASC, id ASC LIMIT ?", [$now, $limit]) as $r) {
+            $n += Db::exec("UPDATE allot_notices SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'queued'", [$now, (int) $r['id']]);
+        }
+        return $n;
+    }
+
+    /**
+     * The outbox, newest first (keyset). $filter: status, kind, contractId, customerId, offline (true = customers without
+     * an app account: the operator calls them). Rows: {id, kind, title, body, status, sendAt, sentAt, seenAt, contractNo,
+     * customerId, customer (masked), phoneTail, hasAccount}.
+     */
+    public static function listNotices(array $filter = [], int $limit = 50, int $afterId = 0): array
+    {
+        $status = isset($filter['status']) && in_array($filter['status'], ['queued', 'sent', 'seen', 'canceled'], true) ? (string) $filter['status'] : '';
+        $kind = isset($filter['kind']) && is_string($filter['kind']) && preg_match('/^[a-z_]{1,24}$/', $filter['kind']) ? $filter['kind'] : '';
+        $cid = isset($filter['contractId']) ? max(0, (int) $filter['contractId']) : 0;
+        $cu = isset($filter['customerId']) ? max(0, (int) $filter['customerId']) : 0;
+        $off = !empty($filter['offline']) ? 1 : 0;
+        $limit = max(1, min(500, $limit));
+        $rows = Db::all("SELECT n.*, c.contract_no, cu.name_enc, cu.phone_tail FROM allot_notices n LEFT JOIN allot_contracts c ON c.id = n.contract_id LEFT JOIN allot_customers cu ON cu.id = n.customer_id
+            WHERE (? = 0 OR n.id < ?) AND (? = '' OR n.status = ?) AND (? = '' OR n.kind = ?) AND (? = 0 OR n.contract_id = ?) AND (? = 0 OR n.customer_id = ?) AND (? = 0 OR n.user_id IS NULL)
+            ORDER BY n.id DESC LIMIT ?", [$afterId, $afterId, $status, $status, $kind, $kind, $cid, $cid, $cu, $cu, $off, $limit + 1]);
+        $more = count($rows) > $limit;
+        if ($more) array_pop($rows);
+        $out = array_map(function ($r) {
+            return ['id' => (int) $r['id'], 'kind' => (string) $r['kind'], 'title' => (string) $r['title'], 'body' => (string) $r['body'], 'status' => (string) $r['status'], 'sendAt' => (int) $r['send_at'],
+                'sentAt' => (int) $r['sent_at'], 'seenAt' => (int) $r['seen_at'], 'contractNo' => $r['contract_no'] === null ? '' : (string) $r['contract_no'],
+                'customerId' => $r['customer_id'] === null ? 0 : (int) $r['customer_id'], 'customer' => self::maskName(self::unseal($r['name_enc'])), 'phoneTail' => (string) $r['phone_tail'],
+                'hasAccount' => $r['user_id'] !== null];
+        }, $rows);
+        return ['rows' => $out, 'next' => $more && $out ? $out[count($out) - 1]['id'] : 0];
+    }
+
+    /** the operator closes a queued notice: 'sent' (told the customer by phone) or 'canceled' (no longer needed). 409 NOT_QUEUED */
+    public static function noticeDone(array $a, int $id, string $status = 'sent', ?int $now = null): void
+    {
+        $actor = self::admin($a);
+        if (!in_array($status, ['sent', 'canceled'], true)) V::fail('status', '값은 sent 또는 canceled 여야 해요.');
+        $now = self::now($now);
+        if (Db::exec("UPDATE allot_notices SET status = ?, sent_at = ? WHERE id = ? AND status = 'queued'", [$status, $status === 'sent' ? $now : 0, $id]) !== 1) {
+            throw new ApiException(409, 'NOT_QUEUED', '기다리는 알림이 아니에요.');
+        }
+        Audit::log('allot_notice_done', null, ['notice' => $id, 'status' => $status], 'info', self::idOrNull($actor));
+    }
+
+    // ------------------------------------------------------------------ CSV (RFC 4180; PHP 7.2's fputcsv / fgetcsv are not used)
+    /** the UTF-8 byte order mark Excel needs to read Korean text */
+    public static function csvBom(): string { return "\xEF\xBB\xBF"; }
+
+    /**
+     * One cell. Formula guard: a value that starts with = + - @ TAB or CR gets an apostrophe in front, so a spreadsheet
+     * shows it as text instead of running it. Cells with a quote, a comma, a line break or outer spaces are quoted.
+     */
+    public static function csvCell($v): string
+    {
+        if ($v === null) return '';
+        $s = is_bool($v) ? ($v ? '1' : '0') : (string) $v;
+        if ($s === '') return '';
+        if (strpos("=+-@\t\r", $s[0]) !== false) $s = "'" . $s;
+        if (strpbrk($s, "\",\r\n") !== false || $s[0] === ' ' || substr($s, -1) === ' ') return '"' . str_replace('"', '""', $s) . '"';
+        return $s;
+    }
+
+    /** one line ending in CRLF */
+    public static function csvLine(array $cells): string
+    {
+        $out = [];
+        foreach ($cells as $c) $out[] = self::csvCell($c);
+        return implode(',', $out) . "\r\n";
+    }
+
+    /**
+     * Rows of a CSV text: BOM removed, UTF-8 (a file that is not valid UTF-8 is read as CP949, what Korean Excel writes),
+     * delimiter comma / tab / semicolon (taken from the first line), CRLF / LF / CR line ends, quoted cells with "" and
+     * line breaks inside. Empty lines are skipped. @return array[] at most $maxRows rows
+     */
+    public static function csvParse(string $csv, int $maxRows = 50000): array
+    {
+        if (strncmp($csv, "\xEF\xBB\xBF", 3) === 0) $csv = (string) substr($csv, 3);
+        if (!mb_check_encoding($csv, 'UTF-8')) $csv = (string) mb_convert_encoding($csv, 'UTF-8', 'CP949');
+        $n = strlen($csv);
+        // the delimiter: whichever of , TAB ; is most frequent outside quotes on the first line
+        $counts = [',' => 0, "\t" => 0, ';' => 0];
+        $q = false;
+        for ($i = 0; $i < $n; $i++) {
+            $ch = $csv[$i];
+            if ($ch === '"') $q = !$q;
+            elseif (!$q && ($ch === "\n" || $ch === "\r")) break;
+            elseif (!$q && isset($counts[$ch])) $counts[$ch]++;
+        }
+        $d = ',';
+        foreach ($counts as $k => $c) if ($c > $counts[$d]) $d = $k;
+        $rows = [];
+        $row = [];
+        $cell = '';
+        $i = 0;
+        $quoted = false;   // inside a quoted cell
+        $wasQuoted = false; // the current cell had quotes (an empty quoted cell still makes the line non-empty)
+        $special = '"' . $d . "\r\n";
+        while ($i < $n) {
+            if ($quoted) {
+                $j = strpos($csv, '"', $i);
+                if ($j === false) { $cell .= substr($csv, $i); $i = $n; break; }
+                $cell .= substr($csv, $i, $j - $i);
+                if ($j + 1 < $n && $csv[$j + 1] === '"') { $cell .= '"'; $i = $j + 2; continue; }
+                $quoted = false;
+                $i = $j + 1;
+                continue;
+            }
+            $len = strcspn($csv, $special, $i);
+            if ($len > 0) { $cell .= substr($csv, $i, $len); $i += $len; if ($i >= $n) break; }
+            $ch = $csv[$i];
+            if ($ch === '"') {
+                if (trim($cell) === '') { $cell = ''; $quoted = true; $wasQuoted = true; } else { $cell .= '"'; } // a quote in the middle of a bare cell is kept
+                $i++;
+            } elseif ($ch === $d) {
+                $row[] = $cell;
+                $cell = '';
+                $i++;
+            } else {
+                $row[] = $cell;
+                $cell = '';
+                if ($ch === "\r" && $i + 1 < $n && $csv[$i + 1] === "\n") $i++;
+                $i++;
+                if (count($row) > 1 || $row[0] !== '' || $wasQuoted) { $rows[] = $row; if (count($rows) >= $maxRows) return $rows; }
+                $row = [];
+                $wasQuoted = false;
+            }
+        }
+        if ($cell !== '' || $row) {
+            $row[] = $cell;
+            if (count($row) > 1 || $row[0] !== '' || $wasQuoted) $rows[] = $row;
+        }
+        return $rows;
+    }
+
+    public const EXPORTS = ['units', 'contracts', 'customers', 'payments', 'waitlist', 'ledger'];
+    private const KO_UNIT = ['open' => '빈자리', 'held' => '보류', 'leased' => '분양', 'closed' => '닫힘'];
+    private const KO_CONTRACT = ['pending' => '신청', 'active' => '진행', 'overdue' => '연체', 'ended' => '종료', 'canceled' => '취소'];
+    private const KO_PERIOD = ['once' => '한번', 'month' => '매달', 'year' => '매년'];
+    private const KO_METHOD = ['toss' => '토스', 'bank' => '계좌이체', 'cash' => '현금', 'cms' => '자동이체', 'etc' => '기타'];
+    private const KO_PAY = ['created' => '대기', 'paid' => '입금', 'failed' => '실패', 'canceled' => '취소', 'refunded' => '환불함'];
+    private const KO_PAYKIND = ['first' => '첫 납부', 'renewal' => '이어서 납부', 'manual' => '기타 입금', 'refund' => '환불'];
+    private const KO_WAIT = ['waiting' => '대기', 'offered' => '제안함', 'converted' => '신청함', 'expired' => '기한 지남', 'canceled' => '취소'];
+
+    private static function day(int $ms): string { return $ms > 0 && $ms < self::FOREVER ? date('Y-m-d', intdiv($ms, 1000)) : ''; }
+    private static function stamp(int $ms): string { return $ms > 0 ? date('Y-m-d H:i', intdiv($ms, 1000)) : ''; }
+
+    /** the header line of an export (Korean column names; 'ledger' is the operator's own book: 일자 · 성명 · 연락처 · 주소 · 비고 + 단위) */
+    public static function exportHeader(string $what, bool $reveal = false): array
+    {
+        switch ($what) {
+            case 'units': return ['단위', '종류', '구역', '순번', '상태', '계약번호', '이름표', '이름표 공개', '보류 기한'];
+            case 'contracts': return ['계약번호', '단위', '상태', '납부 주기', '금액', '기간(개월)', '시작일', '종료일', '납부 기한', '낸 금액', '자동 연장', '경로', '성명', '연락처', '신청 일시', '확정 일시', '끝난 일시', '끝난 까닭'];
+            case 'customers': return ['고객번호', '성명', '연락처', '주소', '동의 일시', '동의 판', '보호자', '계정 번호', '계약 수'];
+            case 'payments': return ['입금번호', '계약번호', '단위', '구분', '방법', '금액', '상태', '입금 일시', '기간 시작', '기간 끝', '비고'];
+            case 'waitlist': return ['대기번호', '종류', '구역', '상태', '성명', '연락처', '제안 단위', '제안 기한', '신청 일시'];
+            case 'ledger': return ['일자', '성명', '연락처', '주소', '비고', '단위', '계약번호', '상태'];
+        }
+        throw new ApiException(400, 'INVALID_INPUT', '내보낼 수 없는 종류예요.', ['field' => 'what']);
+    }
+
+    /**
+     * Rows of an export as plain cells, ascending by id (keyset: pass `next` as $afterId until it is 0). $what: one of
+     * EXPORTS. Names and phone numbers are masked ("김**", "***-****-1234") and addresses / customer memos left out unless
+     * $reveal — which needs an admin actor and writes the audit row allot_export (what, how many rows, $why; never the
+     * data) for every chunk. → ['rows' => [[cell, …], …], 'next' => cursor or 0]
+     */
+    public static function exportRows(string $what, int $afterId = 0, int $limit = 500, bool $reveal = false, ?array $a = null, string $why = ''): array
+    {
+        if (!in_array($what, self::EXPORTS, true)) throw new ApiException(400, 'INVALID_INPUT', '내보낼 수 없는 종류예요.', ['field' => 'what']);
+        $actor = 0;
+        if ($reveal) {
+            if ($a === null) throw new ApiException(403, 'FORBIDDEN', '관리자 권한이 필요해요.');
+            $actor = self::admin($a);
+        }
+        $limit = max(1, min(2000, $limit));
+        $after = max(0, $afterId);
+        $name = function ($enc) use ($reveal) { $n = self::unseal($enc); return $reveal ? $n : self::maskName($n); };
+        $phone = function ($enc, $tail) use ($reveal) { return $reveal ? self::fmtPhone(self::unseal($enc)) : self::maskPhone((string) $tail); };
+        $out = [];
+        $last = 0;
+        if ($what === 'units') {
+            $rows = Db::all('SELECT u.id, u.code, u.kind, z.code AS zone_code, u.seq, u.status, u.hold_until, u.label, u.label_show, c.contract_no
+                FROM allot_units u JOIN allot_zones z ON z.id = u.zone_id LEFT JOIN allot_contracts c ON c.id = u.contract_id WHERE u.id > ? ORDER BY u.id ASC LIMIT ?', [$after, $limit + 1]);
+            foreach ($rows as $r) $out[(int) $r['id']] = [$r['code'], self::KIND_NAMES[$r['kind']], $r['zone_code'], (int) $r['seq'], self::KO_UNIT[$r['status']], (string) $r['contract_no'], $r['label'],
+                (int) $r['label_show'] === 1 ? '예' : '', self::stamp((int) $r['hold_until'])];
+        } elseif ($what === 'contracts' || $what === 'ledger') {
+            $rows = Db::all("SELECT c.*, u.code AS unit_code, cu.name_enc, cu.phone_enc, cu.phone_tail, cu.addr_enc, cu.memo AS cu_memo
+                FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id LEFT JOIN allot_customers cu ON cu.id = c.customer_id
+                WHERE c.id > ? AND (? = 0 OR c.status IN ('pending', 'active', 'overdue')) ORDER BY c.id ASC LIMIT ?", [$after, $what === 'ledger' ? 1 : 0, $limit + 1]);
+            foreach ($rows as $r) {
+                if ($what === 'ledger') {
+                    $out[(int) $r['id']] = [self::day((int) ((int) $r['starts_at'] > 0 ? $r['starts_at'] : $r['created_at'])), $name($r['name_enc']), $phone($r['phone_enc'], $r['phone_tail']),
+                        $reveal ? self::unseal($r['addr_enc']) : '', $reveal ? self::unseal($r['cu_memo']) : '', $r['unit_code'], $r['contract_no'], self::KO_CONTRACT[$r['status']]];
+                } else {
+                    $out[(int) $r['id']] = [$r['contract_no'], $r['unit_code'], self::KO_CONTRACT[$r['status']], self::KO_PERIOD[$r['period']], (int) $r['price'], (int) $r['term_months'], self::day((int) $r['starts_at']),
+                        self::day((int) $r['ends_at']), self::day((int) $r['paid_until']), (int) $r['paid_total'], (int) $r['auto_renew'] === 1 ? '예' : '', $r['source'], $name($r['name_enc']),
+                        $phone($r['phone_enc'], $r['phone_tail']), self::stamp((int) $r['created_at']), self::stamp((int) $r['decided_at']), self::stamp((int) $r['ended_at']), self::reasonCode((string) $r['end_reason'])];
+                }
+            }
+        } elseif ($what === 'customers') {
+            $rows = Db::all('SELECT cu.*, (SELECT COUNT(*) FROM allot_contracts c WHERE c.customer_id = cu.id) AS contracts FROM allot_customers cu WHERE cu.id > ? AND cu.purged_at = 0 ORDER BY cu.id ASC LIMIT ?', [$after, $limit + 1]);
+            foreach ($rows as $r) $out[(int) $r['id']] = [(int) $r['id'], $name($r['name_enc']), $phone($r['phone_enc'], $r['phone_tail']), $reveal ? self::unseal($r['addr_enc']) : '', self::stamp((int) $r['consent_at']),
+                $r['consent_ver'], (int) $r['guardian'] === 1 ? '예' : '', $r['user_id'] === null ? '' : (int) $r['user_id'], (int) $r['contracts']];
+        } elseif ($what === 'payments') {
+            $rows = Db::all(self::PAY_SELECT . ' WHERE p.id > ? ORDER BY p.id ASC LIMIT ?', [$after, $limit + 1]);
+            foreach ($rows as $r) $out[(int) $r['id']] = [(int) $r['id'], $r['contract_no'], $r['unit_code'], self::KO_PAYKIND[$r['kind']], self::KO_METHOD[$r['method']], (int) $r['amount'], self::KO_PAY[$r['status']],
+                self::stamp((int) $r['paid_at']), self::day((int) $r['period_from']), self::day((int) $r['period_to']), $r['memo']];
+        } else {
+            $rows = Db::all('SELECT w.*, z.code AS zone_code, u.code AS unit_code, cu.name_enc, cu.phone_enc, cu.phone_tail
+                FROM allot_waitlist w LEFT JOIN allot_zones z ON z.id = w.zone_id LEFT JOIN allot_units u ON u.id = w.unit_id LEFT JOIN allot_customers cu ON cu.id = w.customer_id
+                WHERE w.id > ? ORDER BY w.id ASC LIMIT ?', [$after, $limit + 1]);
+            foreach ($rows as $r) $out[(int) $r['id']] = [(int) $r['id'], self::KIND_NAMES[$r['kind']], (string) $r['zone_code'], self::KO_WAIT[$r['status']], $name($r['name_enc']), $phone($r['phone_enc'], $r['phone_tail']),
+                (string) $r['unit_code'], self::stamp((int) $r['offer_until']), self::stamp((int) $r['created_at'])];
+        }
+        $more = count($out) > $limit;
+        if ($more) array_pop($out);
+        foreach ($out as $id => $unused) $last = $id;
+        if ($reveal) Audit::log('allot_export', null, ['what' => $what, 'reveal' => true, 'from' => $after, 'rows' => count($out), 'why' => self::cleanPublic($why, 80)], 'warn', self::idOrNull($actor));
+        return ['rows' => array_values($out), 'next' => $more ? $last : 0];
+    }
+
+    /** "2024-03-15", "2024.3.15", "2024/03/15", "20240315", "24.3.15", "2024년 3월 15일" → 00:00 of that day in ms; 0 when it is not a date */
+    public static function parseDate(string $s): int
+    {
+        $s = trim($s);
+        if (preg_match('/^(\d{4})(\d{2})(\d{2})$/', $s, $m) || preg_match('/^(\d{2}|\d{4})\s*[.\-\/년]\s*(\d{1,2})\s*[.\-\/월]\s*(\d{1,2})\s*[.일]?(?:\s.*)?$/u', $s, $m)) {
+            $y = (int) $m[1];
+            if ($y < 100) $y += 2000;
+            if ($y >= 1990 && $y <= 2200 && checkdate((int) $m[2], (int) $m[3], $y)) return (int) mktime(0, 0, 0, (int) $m[2], (int) $m[3], $y) * 1000;
+        }
+        return 0;
+    }
+
+    /** column names of an import file → field (compared without spaces, case and brackets) */
+    private const IMPORT_COLS = [
+        'date' => ['일자', '날짜', '신청일', '계약일', '시작일', '입금일', '입금일시', 'date'],
+        'name' => ['성명', '이름', '고객명', 'name'],
+        'phone' => ['연락처', '전화', '전화번호', '휴대폰', '핸드폰', 'phone', 'tel'],
+        'addr' => ['주소', 'address', 'addr'],
+        'memo' => ['비고', '메모', 'memo', 'note'],
+        'unit' => ['단위', '단위번호', '번호', '구좌', '구좌번호', '자리', '자리번호', '항아리', '항아리번호', '코드', 'unit', 'code'],
+        'paid' => ['납부기한', '납부일', 'paiduntil'],
+        'contract' => ['계약번호', 'contract', 'contractno'],
+        'amount' => ['금액', '입금액', 'amount'],
+        'method' => ['방법', '입금방법', '결제방법', 'method'],
+    ];
+
+    /** header cells → [field => column index] */
+    private static function importColumns(array $header): array
+    {
+        $map = [];
+        foreach ($header as $i => $h) {
+            $k = mb_strtolower((string) preg_replace('/[\s()\[\]·_\-]+/u', '', (string) $h));
+            foreach (self::IMPORT_COLS as $field => $names) {
+                if (!isset($map[$field]) && in_array($k, $names, true)) { $map[$field] = $i; break; }
+            }
+        }
+        return $map;
+    }
+
+    /** a cell of an import row (an apostrophe our own export put in front of = + - @ is taken off again) */
+    private static function importCell(array $row, array $cols, string $field): string
+    {
+        if (!isset($cols[$field]) || !isset($row[$cols[$field]])) return '';
+        $v = trim((string) $row[$cols[$field]]);
+        if (strlen($v) > 1 && $v[0] === "'" && strpos('=+-@', $v[1]) !== false) $v = substr($v, 1);
+        return $v;
+    }
+
+    /**
+     * Import a CSV text. $what = 'ledger': the operator's existing book — columns 일자 · 성명 · 연락처 · 주소 · 비고 and a unit
+     * column (단위 / 번호 / 구좌 …: a unit code such as J01-0012, or a zone code such as J01 = "the next free unit of that
+     * zone"); each row becomes a customer (found again by phone + name) and an ACTIVE contract (source import) that starts
+     * on 일자. $what = 'payments': 계약번호 (or 단위) · 금액 · 일자 · 방법 · 비고 — each row is recorded like recordPayment() with
+     * an idempotency key made from the row, so the same file can be imported twice without paying twice.
+     * $dryRun (the default) changes nothing and reports every row; a real run imports only when NO row has a problem
+     * (all or nothing). The report never contains a whole name or phone number.
+     * → {ok, dryRun, what, total, valid, invalid, skipped, created: {customers, contracts, payments}, columns, rows:
+     *    [{line, ok, action: new | existing | duplicate | payment | problem, unit, who, problems: […]}] (≤ 1000 rows; rows
+     *    with problems first)}. 400 INVALID_INPUT for a file without the needed columns / more than 20,000 rows.
+     */
+    public static function importCsv(array $a, string $what, string $csv, bool $dryRun = true, ?int $now = null): array
+    {
+        $actor = self::admin($a);
+        if (!in_array($what, ['ledger', 'payments'], true)) V::fail('what', '값은 ledger 또는 payments 여야 해요.');
+        if (strlen($csv) > 8 * 1024 * 1024) V::fail('csv', '파일이 너무 커요. (최대 8 MB)');
+        $now = self::now($now);
+        $rows = self::csvParse($csv, 20002);
+        if (count($rows) > 20001) V::fail('csv', '한 번에 20,000줄까지 가져올 수 있어요. 파일을 나눠 주세요.');
+        if (count($rows) < 1) V::fail('csv', '빈 파일이에요.');
+        $cols = self::importColumns($rows[0]);
+        $need = $what === 'ledger' ? ['name', 'phone', 'unit'] : ['amount'];
+        foreach ($need as $f) if (!isset($cols[$f])) V::fail('csv', '첫 줄에 ‘' . self::IMPORT_COLS[$f][0] . '’ 열이 없어요.');
+        if ($what === 'payments' && !isset($cols['contract']) && !isset($cols['unit'])) V::fail('csv', '첫 줄에 ‘계약번호’ 또는 ‘단위’ 열이 없어요.');
+        $plan = $what === 'ledger' ? self::planLedger($rows, $cols, $now) : self::planPayments($rows, $cols, $now);
+        $report = $plan['report'];
+        $invalid = 0; $valid = 0; $skipped = 0;
+        foreach ($report as $r) { if (!$r['ok']) $invalid++; elseif ($r['action'] === 'duplicate') $skipped++; else $valid++; }
+        $created = ['customers' => 0, 'contracts' => 0, 'payments' => 0];
+        $done = false;
+        if (!$dryRun && $invalid === 0) {
+            $created = $what === 'ledger' ? self::commitLedger($plan['todo'], $actor, $now) : self::commitPayments($plan['todo'], $a, $now);
+            $done = true;
+            Audit::log('allot_import', null, ['what' => $what, 'rows' => count($report), 'created' => $created, 'skipped' => $skipped], 'warn', self::idOrNull($actor));
+        }
+        usort($report, function ($x, $y) { return $x['ok'] === $y['ok'] ? $x['line'] - $y['line'] : ($x['ok'] ? 1 : -1); });
+        return ['ok' => $invalid === 0, 'dryRun' => !$done, 'what' => $what, 'total' => count($report), 'valid' => $valid, 'invalid' => $invalid, 'skipped' => $skipped, 'created' => $created,
+            'columns' => array_keys($cols), 'rows' => array_slice($report, 0, 1000)];
+    }
+
+    /** look at every ledger row: what would be made, what is wrong (nothing is written) */
+    private static function planLedger(array $rows, array $cols, int $now): array
+    {
+        $report = [];
+        $todo = [];
+        $usedUnits = [];
+        $matched = [];   // contracts already recognised as an earlier import of a row of this file
+        $free = [];      // zone id → free units [id, code] in seq order (taken from the front as rows claim them)
+        $zoneByCode = [];
+        foreach (Db::all('SELECT id, code, price, period, term_months FROM allot_zones') as $z) $zoneByCode[(string) $z['code']] = $z;
+        for ($i = 1, $n = count($rows); $i < $n; $i++) {
+            $row = $rows[$i];
+            $line = $i + 1;
+            $p = [];
+            $name = Users::cleanText(self::importCell($row, $cols, 'name'), 60);
+            if ($name === '' || !preg_match('/\p{L}/u', $name)) $p[] = '이름이 비어 있어요';
+            elseif (mb_strlen($name) > 40) $p[] = '이름이 너무 길어요 (40자까지)';
+            $rawPhone = self::importCell($row, $cols, 'phone');
+            $phone = self::normPhone($rawPhone);
+            if ($phone === '') $p[] = $rawPhone === '' ? '전화번호가 비어 있어요' : (strpbrk($rawPhone, '*xX○●＊') !== false ? '전화번호가 가려져 있어요 (전체 번호가 필요해요)' : '전화번호가 올바르지 않아요');
+            $rawDate = self::importCell($row, $cols, 'date');
+            $starts = $rawDate === '' ? $now : self::parseDate($rawDate);
+            if ($starts === 0) $p[] = '일자를 읽을 수 없어요 (예: 2024-03-15)';
+            elseif ($starts > $now + self::DAY) $p[] = '일자가 오늘보다 뒤예요';
+            $addr = Users::cleanText(self::importCell($row, $cols, 'addr'), 250);
+            if (mb_strlen($addr) > 200) $p[] = '주소가 너무 길어요 (200자까지)';
+            $memo = Users::cleanText(self::importCell($row, $cols, 'memo'), 600);
+            if (mb_strlen($memo) > 500) $p[] = '비고가 너무 길어요 (500자까지)';
+            $rawPaid = self::importCell($row, $cols, 'paid');
+            $paid = $rawPaid === '' ? 0 : self::parseDate($rawPaid);
+            if ($rawPaid !== '' && $paid === 0) $p[] = '납부 기한을 읽을 수 없어요';
+            $ref = strtoupper(self::importCell($row, $cols, 'unit'));
+            $unit = null;
+            $action = 'new';
+            $existing = 0;
+            if ($phone !== '' && $name !== '') {
+                $e = Db::value('SELECT id FROM allot_customers WHERE phone_hash = ? AND name_hash = ? AND purged_at = 0 ORDER BY id ASC LIMIT 1', [self::phoneHash($phone), self::nameHash($name)]);
+                if ($e !== null) { $existing = (int) $e; $action = 'existing'; }
+            }
+            if ($ref === '') {
+                $p[] = '단위 번호가 비어 있어요';
+            } elseif (self::unitCode($ref) !== '') {
+                $u = Db::one('SELECT id, zone_id, code, status, contract_id FROM allot_units WHERE code = ?', [$ref]);
+                if (!$u) $p[] = '없는 단위 번호예요';
+                elseif (isset($usedUnits[(int) $u['id']])) $p[] = '이 파일의 ' . $usedUnits[(int) $u['id']] . '번째 줄과 같은 단위예요';
+                elseif ((string) $u['status'] !== 'open') {
+                    $same = $existing > 0 && $u['contract_id'] !== null && (int) Db::value('SELECT customer_id FROM allot_contracts WHERE id = ?', [(int) $u['contract_id']]) === $existing;
+                    if ($same) $action = 'duplicate'; else $p[] = '이미 쓰고 있거나 닫아 둔 단위예요';
+                    $unit = $u;
+                } else $unit = $u;
+            } elseif (isset($zoneByCode[$ref])) {
+                $zid = (int) $zoneByCode[$ref]['id'];
+                // "the next free unit of the zone" cannot be recognised by its unit the second time the same file comes in:
+                // the same person with a live contract in this zone that started on the same day is that row, already imported
+                $twin = null;
+                if ($existing > 0 && $starts > 0) {
+                    foreach (Db::all("SELECT c.id, u.code FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.customer_id = ? AND u.zone_id = ? AND c.starts_at = ? AND c.status IN ('pending', 'active', 'overdue')
+                        ORDER BY c.id ASC", [$existing, $zid, $starts]) as $t) {
+                        if (!isset($matched[(int) $t['id']])) { $twin = $t; break; }
+                    }
+                }
+                if ($twin) {
+                    $matched[(int) $twin['id']] = true;
+                    $action = 'duplicate';
+                    $unit = ['id' => 0, 'zone_id' => $zid, 'code' => (string) $twin['code']];
+                } else {
+                    if (!isset($free[$zid])) $free[$zid] = Db::all("SELECT id, zone_id, code, status, contract_id FROM allot_units WHERE zone_id = ? AND status = 'open' ORDER BY seq ASC", [$zid]);
+                    while ($free[$zid] && isset($usedUnits[(int) $free[$zid][0]['id']])) array_shift($free[$zid]);
+                    if (!$free[$zid]) $p[] = '이 구역에 빈 자리가 없어요';
+                    elseif (!$p) $unit = array_shift($free[$zid]); // a row with a problem does not use up a free unit
+                }
+            } else {
+                $p[] = '단위 번호를 알아볼 수 없어요 (예: J01-0012 또는 구역 번호 J01)';
+            }
+            if ($unit && !$p && $action !== 'duplicate') $usedUnits[(int) $unit['id']] = $line;
+            $ok = !$p;
+            $report[] = ['line' => $line, 'ok' => $ok, 'action' => $ok ? $action : 'problem', 'unit' => $unit ? (string) $unit['code'] : $ref,
+                'who' => self::maskName($name) . ($phone !== '' ? ' · ' . substr($phone, -4) : ''), 'problems' => $p];
+            if ($ok && $action !== 'duplicate') $todo[] = ['line' => $line, 'name' => $name, 'phone' => $phone, 'addr' => $addr, 'memo' => $memo, 'starts' => $starts, 'paid' => $paid, 'unit' => $unit, 'customer' => $existing];
+        }
+        return ['report' => $report, 'todo' => $todo];
+    }
+
+    /** write the planned ledger rows in one transaction (a unit that was taken meanwhile undoes the whole import) */
+    private static function commitLedger(array $todo, int $actor, int $now): array
+    {
+        return Db::txRetry(function () use ($todo, $actor, $now) {
+            $made = ['customers' => 0, 'contracts' => 0, 'payments' => 0];
+            $byKey = [];
+            $zones = [];
+            $plans = [];
+            foreach ($todo as $t) {
+                $key = self::phoneHash($t['phone']) . ':' . self::nameHash($t['name']);
+                $cid = $t['customer'] > 0 ? $t['customer'] : (isset($byKey[$key]) ? $byKey[$key] : 0);
+                if ($cid === 0) {
+                    $cid = Db::insert('allot_customers', [
+                        'user_id' => null, 'name_enc' => self::seal($t['name']), 'phone_enc' => self::seal($t['phone']), 'phone_hash' => self::phoneHash($t['phone']), 'phone_tail' => substr($t['phone'], -4),
+                        'name_hash' => self::nameHash($t['name']), 'addr_enc' => $t['addr'] === '' ? null : self::seal($t['addr']), 'memo' => $t['memo'] === '' ? null : self::seal($t['memo']),
+                        'consent_at' => 0, 'consent_ver' => 'import', 'guardian' => 0, 'purged_at' => 0, 'created_at' => $now, 'updated_at' => $now,
+                    ]);
+                    $made['customers']++;
+                }
+                $byKey[$key] = $cid;
+                $zid = (int) $t['unit']['zone_id'];
+                if (!isset($plans[$zid])) $plans[$zid] = self::zonePlan($zid);
+                $z = $plans[$zid];
+                $term = (int) $z['term_months'];
+                $starts = (int) $t['starts'];
+                $ends = $term > 0 ? self::addMonths($starts, $term) : 0;
+                $paid = (int) $t['paid'];
+                if ($paid === 0) {
+                    // nothing is known about old payments: the book counts as paid up to the period that is running now
+                    $paid = self::paidUntilFor((string) $z['period'], (int) $z['price'], $term, $starts, $ends, 1);
+                    $step = (string) $z['period'] === 'year' ? 12 : 1;
+                    for ($k = 0; (string) $z['period'] !== 'once' && (int) $z['price'] > 0 && $paid <= $now && $k < 600; $k++) $paid = self::addMonths($paid, $step);
+                }
+                $unitId = (int) $t['unit']['id'];
+                list($conId, ) = self::insertContract([
+                    'unit_id' => $unitId, 'live_unit_id' => $unitId, 'customer_id' => $cid, 'user_id' => null, 'status' => 'active', 'period' => (string) $z['period'], 'price' => (int) $z['price'],
+                    'term_months' => $term, 'starts_at' => $starts, 'ends_at' => $ends, 'paid_until' => $paid, 'paid_total' => 0, 'auto_renew' => 0, 'source' => 'import', 'memo' => null,
+                    'created_by' => self::idOrNull($actor), 'decided_by' => self::idOrNull($actor), 'decided_at' => $now, 'cancel_req_at' => 0, 'due_stage' => 999, 'end_stage' => 999, 'ended_at' => 0,
+                    'end_reason' => '', 'created_at' => $now, 'updated_at' => $now,
+                ]);
+                if (!self::unitCas($unitId, 'open', 'leased', $conId, 0, $now, 'free')) {
+                    throw new ApiException(409, 'UNIT_TAKEN', $t['line'] . '번째 줄의 자리(' . $t['unit']['code'] . ')를 방금 다른 곳에서 썼어요. 아무것도 가져오지 않았어요. 다시 미리 보기를 해 주세요.');
+                }
+                $zones[$zid] = true;
+                $made['contracts']++;
+            }
+            foreach (array_keys($zones) as $zid) self::bumpZone((int) $zid, $now);
+            return $made;
+        });
+    }
+
+    /** look at every payment row (nothing is written) */
+    private static function planPayments(array $rows, array $cols, int $now): array
+    {
+        $report = [];
+        $todo = [];
+        $seen = [];
+        $methods = ['계좌이체' => 'bank', '무통장' => 'bank', '무통장입금' => 'bank', '이체' => 'bank', 'bank' => 'bank', '현금' => 'cash', 'cash' => 'cash', '자동이체' => 'cms', 'cms' => 'cms', '기타' => 'etc', 'etc' => 'etc', '' => 'bank'];
+        for ($i = 1, $n = count($rows); $i < $n; $i++) {
+            $row = $rows[$i];
+            $line = $i + 1;
+            $p = [];
+            $c = null;
+            $no = self::contractNo(self::importCell($row, $cols, 'contract'));
+            $code = self::unitCode(self::importCell($row, $cols, 'unit'));
+            if ($no !== '') $c = Db::one('SELECT c.id, c.contract_no, c.status, u.code AS unit_code FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.contract_no = ?', [$no]);
+            elseif ($code !== '') $c = Db::one('SELECT c.id, c.contract_no, c.status, u.code AS unit_code FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.live_unit_id = u.id AND u.code = ?', [$code]);
+            if (!$c) $p[] = '계약을 찾을 수 없어요 (계약번호 또는 쓰고 있는 단위 번호)';
+            elseif (!in_array((string) $c['status'], self::LIVE, true)) $p[] = '이미 끝난 계약이에요';
+            $rawAmount = (string) preg_replace('/[\s,원₩]/u', '', self::importCell($row, $cols, 'amount'));
+            $amount = preg_match('/^[1-9]\d{0,7}$/', $rawAmount) ? (int) $rawAmount : 0;
+            if ($amount < 1 || $amount > self::MAX_AMOUNT) $p[] = '금액을 읽을 수 없어요';
+            $rawDate = self::importCell($row, $cols, 'date');
+            $at = $rawDate === '' ? $now : self::parseDate($rawDate);
+            if ($at === 0) $p[] = '일자를 읽을 수 없어요 (예: 2026-03-25)';
+            elseif ($at > $now + self::DAY) $p[] = '일자가 오늘보다 뒤예요';
+            $mk = mb_strtolower((string) preg_replace('/\s+/u', '', self::importCell($row, $cols, 'method')));
+            if (!isset($methods[$mk])) $p[] = '입금 방법을 알아볼 수 없어요 (계좌이체 · 현금 · 자동이체 · 기타)';
+            $memo = Users::cleanText(self::importCell($row, $cols, 'memo'), 200);
+            $action = 'payment';
+            $idem = '';
+            if (!$p) {
+                $base = $c['id'] . '|' . date('Y-m-d', intdiv($at, 1000)) . '|' . $amount;
+                $seen[$base] = isset($seen[$base]) ? $seen[$base] + 1 : 1; // the same amount twice on one day: the 2nd row is its own payment
+                $idem = 'imp:' . substr(hash('sha256', $base . '|' . $seen[$base]), 0, 40);
+                if (Db::value('SELECT id FROM allot_payments WHERE idem = ?', [$idem]) !== null) $action = 'duplicate';
+            }
+            $ok = !$p;
+            $report[] = ['line' => $line, 'ok' => $ok, 'action' => $ok ? $action : 'problem', 'unit' => $c ? (string) $c['unit_code'] : $code, 'who' => $c ? (string) $c['contract_no'] : '', 'problems' => $p];
+            if ($ok && $action !== 'duplicate') $todo[] = ['contract' => (int) $c['id'], 'amount' => $amount, 'method' => $methods[$mk], 'idem' => $idem, 'at' => min($at + 12 * 3600000, $now), 'memo' => $memo];
+        }
+        return ['report' => $report, 'todo' => $todo];
+    }
+
+    /** record the planned payments one by one (each with its own idempotency key, so a run that stops half-way can simply be repeated) */
+    private static function commitPayments(array $todo, array $a, int $now): array
+    {
+        $made = ['customers' => 0, 'contracts' => 0, 'payments' => 0];
+        foreach ($todo as $t) {
+            $r = self::recordPayment($a, $t['contract'], $t['amount'], $t['method'], $t['idem'], ['paidAt' => $t['at'], 'memo' => $t['memo']], $now);
+            if (!$r['duplicate']) $made['payments']++;
+        }
+        return $made;
     }
 
     // @@NEXT@@

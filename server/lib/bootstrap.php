@@ -61,8 +61,15 @@ foreach (['Settings', 'Crypto', 'Validator', 'SecurityEvents', 'ConfigAudit', 'T
     if (is_file($tfmLibFile)) require $tfmLibFile;
 }
 unset($tfmLib, $tfmLibFile);
-// phase 8 (CONTRACT §16.7) [allot-server]: the allotment library (the admin views of it are loaded by admin/index.php itself)
-if (is_file(__DIR__ . '/Allot.php')) require __DIR__ . '/Allot.php';
+// phase 8 (CONTRACT §16.7) [allot-server]: the allotment library is large and only the allot endpoints, the admin tab and
+// the command line use it — it is loaded on first use (class_exists('Tfm\\Allot') included), so every other request
+// (presence, chat, save …) does not pay for compiling it on a server without an opcode cache.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Allot' || $class === 'Tfm\\AllotRetry') {
+        $file = __DIR__ . '/Allot.php';
+        if (is_file($file)) require_once $file;
+    }
+});
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');
