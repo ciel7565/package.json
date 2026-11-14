@@ -61,6 +61,8 @@ foreach (['Settings', 'Crypto', 'Validator', 'SecurityEvents', 'ConfigAudit', 'T
     if (is_file($tfmLibFile)) require $tfmLibFile;
 }
 unset($tfmLib, $tfmLibFile);
+// phase 8 (CONTRACT §16.7) [allot-server]: the allotment library (the admin views of it are loaded by admin/index.php itself)
+if (is_file(__DIR__ . '/Allot.php')) require __DIR__ . '/Allot.php';
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');

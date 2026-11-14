@@ -434,6 +434,7 @@ CREATE TABLE IF NOT EXISTS allot_customers (
   phone_enc   TEXT NOT NULL DEFAULT '',                 -- sealed (digits only)
   phone_hash  TEXT NOT NULL DEFAULT '',                 -- keyed blind index of the digits
   phone_tail  TEXT NOT NULL DEFAULT '',                 -- last 4 digits (masked lists)
+  name_hash   TEXT NOT NULL DEFAULT '',                 -- keyed blind index of the name (exact look-up)
   addr_enc    TEXT,                                     -- sealed
   memo        TEXT,                                     -- sealed (the operator's note about the customer)
   consent_at  INTEGER NOT NULL DEFAULT 0,
@@ -445,6 +446,7 @@ CREATE TABLE IF NOT EXISTS allot_customers (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_acust_user ON allot_customers (user_id);
 CREATE INDEX IF NOT EXISTS ix_acust_phone ON allot_customers (phone_hash);
+CREATE INDEX IF NOT EXISTS ix_acust_name ON allot_customers (name_hash);
 CREATE INDEX IF NOT EXISTS ix_acust_purged ON allot_customers (purged_at, id);
 
 CREATE TABLE IF NOT EXISTS allot_contracts (
@@ -460,7 +462,7 @@ CREATE TABLE IF NOT EXISTS allot_contracts (
   term_months   INTEGER NOT NULL DEFAULT 12,
   starts_at     INTEGER NOT NULL DEFAULT 0,
   ends_at       INTEGER NOT NULL DEFAULT 0,             -- 0 = open-ended
-  paid_until    INTEGER NOT NULL DEFAULT 0,             -- 0 = nothing paid yet (due since starts_at)
+  paid_until    INTEGER NOT NULL DEFAULT 0,             -- paid up to this moment (= starts_at while nothing is paid; 0 while pending)
   paid_total    INTEGER NOT NULL DEFAULT 0,
   auto_renew    INTEGER NOT NULL DEFAULT 0,
   source        TEXT NOT NULL DEFAULT 'app' CHECK (source IN ('app', 'admin', 'import')),
@@ -469,6 +471,8 @@ CREATE TABLE IF NOT EXISTS allot_contracts (
   decided_by    INTEGER,
   decided_at    INTEGER NOT NULL DEFAULT 0,
   cancel_req_at INTEGER NOT NULL DEFAULT 0,             -- the customer asked to end an active contract
+  due_stage     INTEGER NOT NULL DEFAULT 999,           -- smallest notice_days stage already sent for the current paid_until
+  end_stage     INTEGER NOT NULL DEFAULT 999,           -- the same for the current ends_at
   ended_at      INTEGER NOT NULL DEFAULT 0,
   end_reason    TEXT NOT NULL DEFAULT '',
   created_at    INTEGER NOT NULL,

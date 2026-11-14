@@ -413,7 +413,8 @@ INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (6, UNIX_TI
 -- * allot_contracts.live_unit_id = unit_id while a contract is pending / active / overdue and NULL afterwards: the
 --   nullable UNIQUE key is the last line against two live contracts on one unit (SQLSTATE 23000 → 409 UNIT_TAKEN).
 -- * Personal data (allot_customers.name_enc / phone_enc / addr_enc / memo, allot_payments.payment_key_enc) is sealed by
---   lib/Crypto.php ("enc:v1:"); phone_hash is a keyed blind index for look-ups, phone_tail the last 4 digits for lists.
+--   lib/Crypto.php ("enc:v1:"); phone_hash / name_hash are keyed blind indexes for exact look-ups, phone_tail the last
+--   4 digits for masked lists.
 -- * The units themselves are rows made by `php cli/tfm.php allot:seed`, never by this file.
 -- * Zone / unit codes and contract numbers are stored in upper case (this collation ignores case, SQLite does not).
 CREATE TABLE IF NOT EXISTS allot_zones (
@@ -466,6 +467,7 @@ CREATE TABLE IF NOT EXISTS allot_customers (
   phone_enc   VARCHAR(255) NOT NULL DEFAULT '',
   phone_hash  VARCHAR(32) NOT NULL DEFAULT '',
   phone_tail  VARCHAR(4) NOT NULL DEFAULT '',
+  name_hash   VARCHAR(32) NOT NULL DEFAULT '',
   addr_enc    TEXT NULL,
   memo        TEXT NULL,
   consent_at  BIGINT NOT NULL DEFAULT 0,
@@ -476,6 +478,7 @@ CREATE TABLE IF NOT EXISTS allot_customers (
   updated_at  BIGINT NOT NULL,
   UNIQUE KEY ux_acust_user (user_id),
   KEY ix_acust_phone (phone_hash),
+  KEY ix_acust_name (name_hash),
   KEY ix_acust_purged (purged_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 
@@ -501,6 +504,8 @@ CREATE TABLE IF NOT EXISTS allot_contracts (
   decided_by    BIGINT UNSIGNED NULL,
   decided_at    BIGINT NOT NULL DEFAULT 0,
   cancel_req_at BIGINT NOT NULL DEFAULT 0,
+  due_stage     INT NOT NULL DEFAULT 999,
+  end_stage     INT NOT NULL DEFAULT 999,
   ended_at      BIGINT NOT NULL DEFAULT 0,
   end_reason    VARCHAR(40) NOT NULL DEFAULT '',
   created_at    BIGINT NOT NULL,

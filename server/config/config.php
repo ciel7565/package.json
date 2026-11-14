@@ -181,6 +181,12 @@ return [
         'ai_ask'       => [10, 60],
         'ai_status'    => [60, 60],
         'ai_admin'     => [20, 60],
+        // ↓ 8단계 분양 관리 (CONTRACT §16.7) — [allot-server]
+        'allot_map'    => [60, 60],      // summary · map · unit · logs (누구나, 읽기)
+        'allot_mine'   => [60, 60],      // mine · plans (로그인)
+        'allot_inbox'  => [60, 60],      // inbox · seen (로그인)
+        'allot_apply'  => [10, 3600],    // 분양 신청 (계정별, 한 시간에 10번)
+        'allot_write'  => [20, 600],     // cancel · waitlist · nameplate · pay-prepare · pay-confirm
     ],
 
     // ------------------------------------------------------------------ chat
@@ -295,6 +301,28 @@ return [
         'daily_total' => 2000,                               // 서버 전체 하루 질문 수 (비용 상한)
         'question_max' => 200,                               // 질문 길이(글자)
         'answer_max'   => 600,                               // 아이에게 보여 줄 답 길이(글자)
+    ],
+
+    // ------------------------------------------------------------------ 분양 관리 (항아리 · 밭 · 창고, CONTRACT §16.7) — owner: allot-server
+    // 여기 값은 "기본값"이에요. 관리자 화면 🏺 분양 관리 → 자동화에서 바꾸면 settings 표의 값이 우선해요.
+    // 가격 · 기간은 구역마다 따로 정해요(관리자 화면 → 구역). 안내 문구(약관 · 개인정보 · 환불 · 입금 안내)도 관리자 화면에서 고쳐요.
+    'allot' => [
+        'enabled'                => true,     // false: 분양 화면과 신청을 모두 닫아요 (403 ALLOT_DISABLED)
+        'hold_hours'             => 48,       // 신청한 자리를 잡아 두는 시간. 이 안에 승인(입금 확인)이 없고 입금 기록도 없으면 신청이 자동 취소돼요. 0 = 자동 취소 안 함
+        'apply_per_user'         => 3,        // 한 계정이 동시에 가질 수 있는 신청 · 분양 · 대기 수
+        'auto_approve'           => 'off',    // off: 관리자가 직접 승인 · on_payment: 입금(결제)이 기록되면 자동 승인 · always: 신청 즉시 승인
+        'grace_days'             => 14,       // 납부 기한이 지나고 이만큼(일) 더 기다린 뒤 '연체'로 표시
+        'notice_days'            => [30, 7, 0], // 납부 기한 · 만료일 며칠 전에 알림을 보낼지 (0 = 당일)
+        'overdue_end_days'       => 0,        // 연체가 이만큼(일) 이어지면 계약을 자동으로 끝내고 자리를 비워요. 0 = 자동으로 끝내지 않음 (실물 항아리는 운영자가 직접 정리)
+        'waitlist_offer_hours'   => 48,       // 대기자에게 자리가 났을 때 확정을 기다리는 시간
+        'retention_days'         => 1825,     // 계약이 끝난 뒤 개인정보를 지우기까지의 기간(일). 1825 = 5년
+        'collect_address'        => false,    // true: 신청할 때 주소도 받아요 (받지 않는 것이 기본 — 최소 수집)
+        'nameplate_default_show' => false,    // 이름표를 처음부터 보이게 할지 (false: 신청자가 '공개'를 고른 경우에만)
+        'toss_enabled'           => false,    // true: 토스페이먼츠 일회 결제 버튼을 켜요 (toss 키가 있어야 해요). false: 입금 안내 문구만 보여 줘요
+        'lazy_tick_minutes'      => 15,       // 작업 스케줄러가 없을 때, 분양 화면을 여는 요청이 이 간격으로 자동화(allot:tick)를 한 번씩 돌려요
+        'tick_batch'             => 500,      // 자동화 한 번에 단계마다 처리하는 최대 건수
+        'consent_version'        => '2026-11', // 개인정보 동의 문구의 판(版) 이름. 바꾸면 모든 신청자가 새로 동의해요 (문구를 고쳐도 자동으로 새 판이 돼요)
+        'daily_report_mail'      => false,    // true: 하루 한 번 분양 현황 요약을 security.alert_email 주소로 보내요 (숫자만, 개인정보 없음)
     ],
 
     // ------------------------------------------------------------------ logs & maintenance
