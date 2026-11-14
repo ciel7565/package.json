@@ -288,6 +288,7 @@
     }
     // near: shapes. Footprints from the plan constants (jar r 0.45 m; beds 1 × 1.5; bays 1.2 × 3), turned by the unit's rot.
     const paths = [new Path2D(), new Path2D(), new Path2D(), new Path2D(), null, new Path2D()];
+    const lids = s >= 9 ? [new Path2D(), null, new Path2D()] : null;   // close up: the lid of a jar (open · leased)
     const mine = [];
     const foot = (i, k) => {
       const kind = A.kind[i];
@@ -307,7 +308,10 @@
       if (k === 3) {           // closed: a cross
         const r = (f.r || Math.min(f.hw, f.hd)) * 0.8;
         p.moveTo(sx - r, sz - r); p.lineTo(sx + r, sz + r); p.moveTo(sx + r, sz - r); p.lineTo(sx - r, sz + r);
-      } else if (f.r) { p.moveTo(sx + f.r, sz); p.arc(sx, sz, f.r, 0, Math.PI * 2); } else p.rect(sx - f.hw, sz - f.hd, f.hw * 2, f.hd * 2);
+      } else if (f.r) {
+        p.moveTo(sx + f.r, sz); p.arc(sx, sz, f.r, 0, Math.PI * 2);
+        if (lids && (k === 0 || k === 2)) { const lr = f.r * 0.56; lids[k].moveTo(sx + lr - f.r * 0.08, sz - f.r * 0.08); lids[k].arc(sx - f.r * 0.08, sz - f.r * 0.08, lr, 0, Math.PI * 2); }
+      } else p.rect(sx - f.hw, sz - f.hd, f.hw * 2, f.hd * 2);
       n++;
     }
     const lw = Math.max(1.1, 0.14 * s);
@@ -315,6 +319,7 @@
     ctx.fillStyle = statusColor(2); ctx.fill(paths[2]);
     ctx.fillStyle = statusColor(0); ctx.fill(paths[0]);
     if (s > 6) { ctx.strokeStyle = 'rgba(0,60,40,0.55)'; ctx.lineWidth = Math.max(0.6, 0.05 * s); ctx.stroke(paths[0]); }
+    if (lids) { ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fill(lids[0]); ctx.fillStyle = 'rgba(255,244,228,0.2)'; ctx.fill(lids[2]); }
     ctx.fillStyle = 'rgba(230,159,0,0.28)'; ctx.fill(paths[1]);
     ctx.strokeStyle = statusColor(1); ctx.lineWidth = lw; ctx.stroke(paths[1]);
     ctx.strokeStyle = statusColor(3); ctx.lineWidth = Math.max(1, 0.1 * s); ctx.stroke(paths[3]);
@@ -441,8 +446,12 @@
     function overlay(v) {
       const L = Live.L;
       if (!L) return;
-      // zone names (text from the server: canvas text, never HTML) with the free count
+      // zone names (text from the server: canvas text, never HTML) with the free count. Crowded (the four quadrants of
+      // the circle at the full view): the short name ("2구역"), and the count only where it has room.
       const fs = clamp(Math.round(11 + v.scale * 1.4), 11, 19);
+      const placed = [];
+      const free2 = (r) => !placed.some((q) => r.x0 < q.x1 && r.x1 > q.x0 && r.y0 < q.y1 && r.y1 > q.y0);
+      const rectOf = (txt, x, y, size) => { ctx.font = `800 ${size}px "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`; const w = ctx.measureText(txt).width / 2 + 3; return { x0: x - w, x1: x + w, y0: y - size / 2 - 2, y1: y + size / 2 + 2 }; };
       for (const z of L.zones) {
         const c = Live.labels?.[z.code] || (z.frame && z.frame.label);
         if (!c) continue;
@@ -450,16 +459,22 @@
         const free = lz ? zoneStats(lz).open : 0;
         const x = TX(c.x), y = TZ(c.z);
         if (x < -80 || x > M.w + 80 || y < -30 || y > M.h + 30) continue;
-        label(z.name, x, y, fs, true);
-        if (v.scale > M.fit * 1.6) label(easyOn() ? `빈 자리 ${free}` : `빈 자리 ${free.toLocaleString('ko-KR')}`, x, y + fs + 2, fs - 3, false);
+        let txt = z.name, r = rectOf(txt, x, y, fs);
+        if (!free2(r)) { const short = z.name.replace(/^(장독대|텃밭|창고)\s*/, ''); if (short && short !== z.name) { txt = short; r = rectOf(txt, x, y, fs); } }
+        placed.push(r);
+        label(txt, x, y, fs, true);
+        if (v.scale > M.fit * 1.6) {
+          const ct = easyOn() ? `빈 자리 ${free}` : `빈 자리 ${free.toLocaleString('ko-KR')}`, r2 = rectOf(ct, x, y + fs + 2, fs - 3);
+          if (free2(r2)) { placed.push(r2); label(ct, x, y + fs + 2, fs - 3, false); }
+        }
       }
-      // 내 자리 pins
+      // 내 자리 pins (the words only once zoomed in: the legend explains the star at the full view)
       for (const code of Live.mine) {
         const p = D().parseCode?.(code), u = p && L.unit(p.zone, p.seq);
         if (!u) continue;
         const x = TX(u.x), y = TZ(u.z);
         if (x < -40 || x > M.w + 40 || y < -60 || y > M.h + 20) continue;
-        pin(x, y, '내 자리');
+        pin(x, y, v.scale > M.fit * 1.8 ? '내 자리' : '');
       }
       // the selection
       if (M.sel) {
@@ -496,7 +511,7 @@
       ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x - 7, y - 16); ctx.arc(x, y - 20, 8, Math.PI * 0.8, Math.PI * 2.2); ctx.closePath();
       ctx.fillStyle = MAP_COL.star; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
       ctx.beginPath(); ctx.arc(x, y - 20, 3, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
-      label(txt, x, y - 36, 12, true);
+      if (txt) label(txt, x, y - 36, 12, true);
       ctx.restore();
     }
     function schedule() { if (!M.raf && !M.destroyed) M.raf = requestAnimationFrame(frame); }
@@ -642,7 +657,7 @@
       if (this._ret && !this._ret.ok) setTimeout(() => toast('결제창이 닫혔거나 결제가 승인되지 않았어요. 내 분양에서 다시 낼 수 있어요.', { type: 'info', duration: 6000 }), 1500);
       G.bus.on('game:login', () => this._onLogin());
       G.bus.on('game:logout', () => this._reset());
-      G.bus.on('easy:changed', () => { if (this.isOpen()) this._render(); });
+      G.bus.on('easy:changed', () => { if (this.isOpen()) { this._destroyMap(); this._render(); } });
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) return;
         if (this.isOpen() && Date.now() - Live.at > MAP_POLL) this.refreshMap().catch(() => {});
@@ -786,7 +801,7 @@
       const easy = easyOn();
       const root = h('div', { class: `al-panel${easy ? ' al-easy' : ''}` });
       if (!isServer()) root.appendChild(h('div', { class: 'al-demo', role: 'note' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🧪'),
-        h('b', null, '체험용 화면'), h('span', null, ' 서버 모드에서 실제 분양을 볼 수 있어요. 여기 자리와 상태는 연습용이에요.')));
+        h('b', null, '체험용 화면'), h('span', null, ' 서버 모드에서 실제 분양을 볼 수 있어요.'), h('span', { class: 'al-demo-long' }, ' 여기 자리와 상태는 연습용이에요.')));
       else if (!serverAccount()) root.appendChild(h('div', { class: 'al-demo', role: 'note' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔑'),
         h('b', null, '계정으로 로그인하면'), h('span', null, ' 내 분양을 보고 신청할 수 있어요. 지도는 누구나 볼 수 있어요.')));
       root.appendChild(easy ? this._kidTiles() : this._tabs());
@@ -888,7 +903,7 @@
           h('span', { class: 'al-card-emoji emoji', 'aria-hidden': 'true' }, kd.emoji),
           h('div', { class: 'al-card-id' }, h('b', null, unitName), h('span', { class: 'al-code' }, c.unit.code)),
           h('span', { class: `al-status st-${cs.tone}` }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, cs.emoji), ` ${easy ? cs.kid : cs.label}`)));
-      G.easy?.speakable?.(card.firstChild, `${unitName}. ${easy ? cs.kid : cs.label}`);
+      if (easy) card.firstChild.dataset.say = `${unitName}. ${cs.kid}`;
       // period + D-day
       const per = h('div', { class: 'al-period' });
       if (c.startsAt || c.endsAt) per.append(h('span', null, '📅 ', `${dateText(c.startsAt)} ~ ${dateText(c.endsAt)}`));
@@ -1045,6 +1060,9 @@
         if (this._pendingFocus) { const c = this._pendingFocus; this._pendingFocus = null; this.focus(c, { open: false }); }
         else if (this._sel) this._map.select(this._sel);
         this._updateUnitCard();
+        // small screens: the tiles and tools fill the first screen — bring the map itself into view
+        const r = box.getBoundingClientRect();
+        if (r.bottom > innerHeight + 4) { try { box.scrollIntoView({ block: 'end', behavior: reduced() ? 'auto' : 'smooth' }); } catch (e) { /* old browsers */ } }
       };
       this._renderMapTools();
       if (Live.L) requestAnimationFrame(start);
@@ -1095,7 +1113,7 @@
       for (const k of ['o', 'h', 'l', 'c', 'm']) {
         const s = st[k] || {};
         // the svg strings above are fixed markup written here (no server data)
-        ul.appendChild(h('li', { 'data-say': `${s.label}. ${s.kid || ''}` }, h('span', { class: 'al-lg-ico', html: svg(k) }), h('span', null, easyOn() ? s.kid || s.label : s.label)));
+        ul.appendChild(h('li', { 'data-say': `${s.label}. ${s.kid || ''}`, title: s.kid || '' }, h('span', { class: 'al-lg-ico', html: svg(k) }), h('span', null, s.label)));
       }
       return ul;
     },

@@ -278,6 +278,7 @@ const FAKE = String.raw`
         if (s) throw err(s.status, s.code, s.data); return { contractNo: 'AL-2026-900', status: 'pending', unit: opts.body.unit || 'J01-0002', holdUntil: t + 48 * 3600000, pay: { toss: false, guide: '계좌 이체 안내 (예시)', until: t + 48 * 3600000 } }; }
       case 'allot/cancel.php': return { contractNo: opts.body.contractNo, status: 'canceled', requested: false };
       case 'allot/nameplate.php': return { contractNo: opts.body.contractNo, nameplate: { text: opts.body.text, show: opts.body.show } };
+      case 'allot/pay-confirm.php': return { contractNo: 'AL-2026-101', status: 'active', paidUntil: t + 365 * 86400000 };
       case 'allot/waitlist.php': return opts.body.action === 'leave' ? { id: opts.body.id, status: 'canceled' } : { id: 4, status: 'waiting', position: 1 };
       default: throw err(404, 'NOT_FOUND');
     }
@@ -453,6 +454,27 @@ async function serverSection() {
   check('알림함 act "allot" opens the 알림 tab; server text stays text', ib.tab === 'inbox' && ib.tags === 0 && !ib.xss);
   check('알림: shown unseen notices are marked seen (POST seen.php {ids})', ib.seen.length >= 1 && JSON.stringify(ib.seen.slice(-1)[0]) === '{"ids":[41]}', JSON.stringify(ib.seen));
   await shot(page, 'server-inbox');
+  // ---- the 토스 return address (?allot=pay&paymentKey&orderId&amount): read once, cleaned, the amount sent as an integer
+  const ret = await page.evaluate(async () => {
+    const I = G.sys.allot._internal;
+    const keep = location.pathname + location.search + location.hash;
+    history.replaceState(history.state, '', `${location.pathname}?autostart=1&allot=pay&paymentKey=tgen_ABC123&orderId=AL1234567890abcdef&amount=220000${location.hash}`);
+    G.params = new URLSearchParams(location.search);
+    const r = I.readPayReturn();
+    const cleaned = !/allot=|paymentKey|orderId|amount=/.test(location.search) && !G.params.get('allot');
+    await G.sys.allot._confirmPay(r);
+    const body = window.__F.calls.filter((c) => /pay-confirm\.php/.test(c.p)).slice(-1)[0]?.body;
+    history.replaceState(history.state, '', `${location.pathname}?autostart=1&allot=pay&paymentKey=x&orderId=<script>&amount=12abc`);
+    G.params = new URLSearchParams(location.search);
+    const bad = I.readPayReturn();
+    history.replaceState(history.state, '', keep);
+    G.params = new URLSearchParams(location.search);
+    G.ui.modal.closeAll();
+    return { r, cleaned, body, bad };
+  });
+  check('토스 return: ?allot=pay is read once and the address is cleaned', ret.r && ret.r.ok && ret.cleaned, JSON.stringify(ret.r));
+  check('토스 return: pay-confirm gets {paymentKey, orderId, amount: JSON integer}', ret.body && ret.body.amount === 220000 && Number.isInteger(ret.body.amount) && ret.body.orderId === 'AL1234567890abcdef' && ret.body.paymentKey === 'tgen_ABC123', JSON.stringify(ret.body));
+  check('토스 return: a malformed return is refused (no confirm)', ret.bad && ret.bad.ok === false, JSON.stringify(ret.bad));
   // ---- closing stops polling
   const closed = await page.evaluate(() => { G.sys.allot.close(); return { t: G.sys.allot._pollT, poll: G.sys.allot._pollTick() }; });
   check('closing the panel stops the map poll', !closed.t && closed.poll === false);
