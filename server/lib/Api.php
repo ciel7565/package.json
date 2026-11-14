@@ -15,8 +15,10 @@
  *   · 'session' => 'create' | 'resume' | 'read' | 'none' — GET / HEAD endpoints read the session without keeping its
  *     file locked ('read', the default for them); 'none' is for the sync endpoint's signed-token path;
  *   · the account row comes from the shared cache (cache.user_ttl seconds; dropped the moment the account changes);
- *   · answers of 1 KB and more are gzip-compressed when the browser accepts it (then without the CSRF token: a secret
- *     is never compressed together with text other people typed);
+ *   · 'gzip' => true — an endpoint with large answers (sync, player/get, chat/list, ranking) may send an answer of
+ *     1 KB and more gzip-compressed when the browser accepts it. Such an answer carries no `csrf` field (a secret is
+ *     never compressed together with text other people typed), so only endpoints whose callers do not depend on
+ *     getting the token from that very answer ask for it; every other endpoint answers as it always did;
  *   · Api::after() runs work once the answer is out (write-behind, hourly housekeeping).
  * PHP 7.2 syntax only.
  */
@@ -61,6 +63,8 @@ final class Api
 {
     /** @var callable[] work for after the answer was sent (Api::after) */
     private static $after = [];
+    /** @var bool the running endpoint asked for compressed answers ('gzip' => true) */
+    private static $gzipOk = false;
 
     /**
      * Run $fn after the answer of this request has gone out (the write-behind presence flush, hourly housekeeping).
@@ -92,6 +96,7 @@ final class Api
             // only ping (and pages that must hand out a CSRF token) create sessions; everything else resumes one.
             // §16.9: a GET / HEAD endpoint reads the session without holding its file ('read'); a changing call inside it
             // reopens the session by itself (Session::writable). 'none': the request is carried by a signed sync token.
+            self::$gzipOk = !empty($opt['gzip']);
             $sessMode = (string) (isset($opt['session']) ? $opt['session'] : ($write ? 'resume' : 'read'));
             if ($sessMode !== 'none') Session::start($sessMode === 'create', $sessMode === 'read');
             if ($write) {
@@ -272,20 +277,22 @@ final class Api
         unset($payload['csrf'], $payload['serverTime']);
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
         if (!is_string($json) || $json === '' || $json[0] !== '{') { $status = 500; $json = '{"success":false,"error":{"code":"SERVER_ERROR","message":"응답을 만들지 못했어요."}}'; }
-        // §16.9: an answer of 1 KB or more goes out gzip-compressed when the browser reads gzip. The CSRF token is then
-        // left out of the body (the app keeps the token it has; a new token only ever comes with the small login /
-        // logout answers): a secret is never compressed together with text that other people typed (BREACH).
+        // §16.9: an endpoint that asked for it ('gzip' => true) sends an answer of 1 KB or more gzip-compressed when the
+        // browser reads gzip. The CSRF token is then left out of the body (the page keeps the token it has and gets a
+        // new one with any other answer): a secret is never compressed together with text other people typed (BREACH).
         $gzip = false;
         try {
-            $gzip = strlen($json) >= 1024 && !headers_sent() && function_exists('gzencode') && self::acceptsGzip()
+            $gzip = self::$gzipOk && strlen($json) >= 1024 && !headers_sent() && function_exists('gzencode') && self::acceptsGzip()
                 && !ini_get('zlib.output_compression') && Config::get('capacity.gzip_json', true);
         } catch (\Throwable $e) { $gzip = false; }
         // the envelope ends with csrf (when a session exists) and serverTime, as before
-        $json = substr($json, 0, -1) . ($csrf !== null && !$gzip && ctype_xdigit($csrf) ? ',"csrf":"' . $csrf . '"' : '') . ',"serverTime":' . Clock::ms() . '}';
+        $tail = ',"serverTime":' . Clock::ms() . '}';
+        $plain = substr($json, 0, -1) . ($csrf !== null && ctype_xdigit($csrf) ? ',"csrf":"' . $csrf . '"' : '') . $tail;
         if ($gzip) {
-            $packed = @gzencode($json, 5);
-            if (is_string($packed) && strlen($packed) < strlen($json)) $json = $packed; else $gzip = false;
+            $packed = @gzencode(substr($json, 0, -1) . $tail, 5);
+            if (!is_string($packed) || strlen($packed) >= strlen($plain)) $gzip = false;
         }
+        $json = $gzip ? $packed : $plain;
         if (!headers_sent()) {
             http_response_code($status);
             Http::securityHeaders('api');

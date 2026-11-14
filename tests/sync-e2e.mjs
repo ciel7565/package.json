@@ -381,9 +381,18 @@ await step('moderation', 'a banned account is taken back with the next call: its
   return `rt ${JSON.stringify(after.data.rt)}`;
 });
 
-await step('gzip', 'answers of 1 KB and more are gzip-compressed when the browser asks, then without the CSRF token; small answers and other browsers get plain JSON', async () => {
+await step('gzip', 'the endpoints with large answers (sync, player/get, chat/list, ranking) compress 1 KB and more when the browser asks, then without the CSRF token; small answers, other browsers and every other endpoint get plain JSON with the token', async () => {
   const u = await newUser(main, 'Tz');
   const plain = await u.req('api/player/get.php');
+  // an endpoint that did not ask for it keeps its envelope, however large: a refused save comes back with the stored copy
+  const st = freshState(u.user);
+  const w = await u.req('api/player/save.php', { json: saveBody(st) });
+  assert(w.status === 200 && w.data.revision === 1, `save → ${w.status}`);
+  await sleep(1100);
+  const big = await u.req('api/player/save.php', { json: saveBody({ ...st, savedAt: Date.now() }, 0), headers: { 'Accept-Encoding': 'gzip, deflate, br' } });
+  assert(big.status === 409 && big.text.length >= 1024 && big.headers['content-encoding'] === undefined && typeof big.json.csrf === 'string', `a large answer of another endpoint: ${big.status}, ${big.text.length} bytes, encoding ${big.headers['content-encoding']}, csrf ${typeof big.json.csrf}`);
+  const mine = await u.req('api/player/get.php', { headers: { 'Accept-Encoding': 'gzip' } });
+  assert(mine.status === 200 && mine.headers['content-encoding'] === 'gzip' && mine.json.csrf === undefined && mine.data.save.revision === 1, `player/get with gzip: ${mine.headers['content-encoding']}`);
   const state = await u.req('api/chat/list.php?after=0', { headers: { 'Accept-Encoding': 'gzip, deflate, br' } });
   const small = await u.req('api/time.php', { headers: { 'Accept-Encoding': 'gzip' } });
   const noGz = await u.req('api/chat/list.php?after=0', { headers: { 'Accept-Encoding': 'br;q=1, gzip;q=0' } });
@@ -393,7 +402,7 @@ await step('gzip', 'answers of 1 KB and more are gzip-compressed when the browse
   if (state.text.length < 1024) return `chat history is only ${state.text.length} bytes here: nothing to compress`;
   assert(state.headers['content-encoding'] === 'gzip' && /accept-encoding/i.test(String(state.headers.vary)), `headers: ${state.headers['content-encoding']} / ${state.headers.vary}`);
   assert(state.json && state.json.success === true && state.json.csrf === undefined && state.json.serverTime > 0, 'the compressed body is not the envelope without csrf');
-  return `${state.text.length} → ${state.wire} bytes on the wire`;
+  return `chat history ${state.text.length} → ${state.wire} bytes on the wire · a stored state ${mine.text.length} → ${mine.wire}`;
 });
 
 await step('session', 'read endpoints do not rewrite the session file; a "로그인 유지" cookie keeps its expiry when a read call has to refresh "last seen"', async () => {

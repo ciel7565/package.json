@@ -29,7 +29,7 @@ use Tfm\Session;
 use Tfm\Sync;
 use Tfm\V;
 
-Api::run(['method' => 'GET', 'rate' => 'chat_list'], function (Ctx $c): array {
+Api::run(['method' => 'GET', 'rate' => 'chat_list', 'gzip' => true], function (Ctx $c): array {
     Session::close();
     // CONTRACT §15.7 #3: the numeric cursors go through V::int — a non-numeric, negative, zero (limit), huge or array
     // value (?after[]=1) is a clean 400, never a silent default or a 500. `after` may be 0 (the first poll).

@@ -31,6 +31,7 @@
  *     --reconnect-at 30 --reconnect-share 0.5   at second 30 of the run half of the visitors lose their page and come back at once
  *     --keepalive 5           Apache's KeepAliveTimeout in seconds (XAMPP's httpd-default.conf: 5); 0 = KeepAlive Off
  *     --no-save --no-chat     visitors only walk and sync (the cost of the hot path alone)
+ *     --stay 20,40            a seated visitor logs out after 20–40 s and comes back as a new page (frees seats: the waiting room moves)
  *     --port 18860            the instance's port · --keep keeps the temp folder · --json out.json writes the report
  *     --probe                 no load: one visitor, every endpoint 30 times in a row → cost per request (SQL, ms, bytes)
  *
@@ -60,12 +61,12 @@ const O = {
   duration: Number(optv('--duration', 60)), mode: optv('--mode', 'sync'), maxOnline: optv('--max-online'), targetRps: optv('--target-rps'), shedRps: optv('--shed-rps'),
   loginPerSec: optv('--login-per-sec'), hidden: Number(optv('--hidden', 0.2)), saveKb: (optv('--save-kb', '20,400')).split(',').map(Number), reconnectAt: optv('--reconnect-at') ? Number(optv('--reconnect-at')) : null,
   reconnectShare: Number(optv('--reconnect-share', 0.5)), port: Number(optv('--port', 18860)), keep: flag('--keep'), json: optv('--json'), probe: flag('--probe'), label: optv('--label', ''),
-  keepalive: Number(optv('--keepalive', 5)), noSave: flag('--no-save'), noChat: flag('--no-chat'),
+  keepalive: Number(optv('--keepalive', 5)), noSave: flag('--no-save'), noChat: flag('--no-chat'), stay: optv('--stay') ? optv('--stay').split(',').map(Number) : null,
 };
 if (!fs.existsSync(path.join(DOCROOT, 'api/ping.php'))) { console.error(`✖ ${DOCROOT} is not a server copy (no api/ping.php)`); process.exit(2); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RUN = crypto.randomBytes(3).toString('hex');
-const PASSWORD = 'Ferment2026ok';
+const PASSWORD = 'Lt' + crypto.randomBytes(12).toString('base64url') + '7a';   // of this run's throwaway accounts only
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-load-'));
 fs.chmodSync(TMP, 0o755);
 const DATA = path.join(TMP, 'data');
@@ -336,8 +337,13 @@ class Visitor {
   }
   async runSync(gen) {
     let t0 = Date.now(), nextSave = Date.now() + 20000 + Math.random() * 40000, nextChat = Date.now() + Math.random() * 60000, saveEvery = 60000, ticket = null, waitFrom = 0, seated = false, first = true;
+    let leaveAt = 0;
     while (this.alive(gen)) {
       const now = Date.now();
+      if (seated && O.stay) {                                       // --stay: this visit ends, the seat is given back at once
+        if (!leaveAt) leaveAt = now + (O.stay[0] + Math.random() * Math.max(0, (O.stay[1] || O.stay[0]) - O.stay[0])) * 1000;
+        else if (now >= leaveAt) { await this.post('logout', 'api/auth/logout.php', {}); break; }
+      }
       this.walk(Math.min(5, (now - t0) / 1000));
       t0 = now;
       if (now > this.hiddenUntil && Math.random() < O.hidden / 20) this.hiddenUntil = now + 20000 + Math.random() * 60000;
@@ -489,6 +495,8 @@ const report = { label: O.label, docroot: DOCROOT, server: srv.kind, opcache: O.
 const first = await call('ping', 'api/ping.php', { headers: { 'X-Forwarded-For': '10.250.0.1' } });
 if (first.status !== 200) { console.error(`✖ the instance does not answer: ping → ${first.status} ${first.error ? first.error.code : ''}`); process.exit(2); }
 report.features = first.data.features || null;
+report.webCache = first.data.stats && first.data.stats.gate ? first.data.stats.gate.cache : null;   // the cache driver the web server itself uses
+const WEB = report.webCache ? ` · web cache: ${report.webCache}` : '';
 M.clear();
 
 if (O.probe) {
@@ -517,7 +525,7 @@ if (O.probe) {
     }
   }
   const t = table(1);
-  console.log(`\nper-request cost — ${srv.kind} · opcache ${O.opcache ? 'on' : 'off'} · ${seeded}${O.label ? ' · ' + O.label : ''}\n`);
+  console.log(`\nper-request cost — ${srv.kind} · opcache ${O.opcache ? 'on' : 'off'} · ${seeded}${WEB}${O.label ? ' · ' + O.label : ''}\n`);
   print(t.rows.map((r) => ({ ...r, rps: '-' })));
   report.probe = t.rows;
 } else {
@@ -564,7 +572,7 @@ if (O.probe) {
     saves: { ...SAVES, refused: Object.keys(SAVE_REFUSED) },
     endpoints: t.rows,
   });
-  console.log(`\nload test — ${O.users} visitors (${O.mode}) · ${srv.kind} · opcache ${O.opcache ? 'on' : 'off'} · ${seeded}${O.label ? ' · ' + O.label : ''}`);
+  console.log(`\nload test — ${O.users} visitors (${O.mode}) · ${srv.kind} · opcache ${O.opcache ? 'on' : 'off'} · ${seeded}${WEB}${O.label ? ' · ' + O.label : ''}`);
   console.log(`  ${report.requests} requests in ${report.seconds} s = ${report.rps} req/s (${report.perVisitorMinute} per visitor-minute) · SQL per request ${report.sqlPerRequest} (${t.sqlAll} in answers + ${afterSql === null ? '?' : afterSql} after answers)`);
   console.log(`  CPU: server ${report.serverCpuCores} of ${report.cpus} cores (ramp ${report.rampCpuCores}) = ${report.serverCpuMsPerRequest} ms of CPU per request${report.dbCpuCores !== null ? ` · database ${report.dbCpuCores}` : ''} · this load generator ${report.generatorCpuCores} · other processes on this machine ${report.otherCpuCores} (load average ${report.loadAverage.join(' / ')})`);
   console.log(`  bytes per visitor-minute: ${report.bytesPerVisitorMinute.down} down, ${report.bytesPerVisitorMinute.up} up · 429: ${report.http429} · 503: ${report.http503} · 5xx / network errors: ${report.errors} / ${netErrors} · seated at peak (as the visitors saw it): ${peakSeated}`);

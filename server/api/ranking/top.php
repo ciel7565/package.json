@@ -17,7 +17,7 @@ use Tfm\Ctx;
 use Tfm\Ranking;
 use Tfm\Session;
 
-Api::run(['method' => 'GET', 'rate' => 'ranking', 'public' => true], function (Ctx $c): array {
+Api::run(['method' => 'GET', 'rate' => 'ranking', 'public' => true, 'gzip' => true], function (Ctx $c): array {
     Session::close();
     $top = Ranking::top($c->now);
     $me = $c->uid();

@@ -200,7 +200,7 @@ final class Sync
         $claims = null;
         try { if (self::enabled()) $claims = self::requestClaims(Clock::ms()); } catch (\Throwable $e) { $claims = null; }
         if ($claims === null) {
-            Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'sync_issue'], function (Ctx $c): array {
+            Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'sync_issue', 'gzip' => true], function (Ctx $c): array {
                 $r = Sync::issue($c, $c->json(4096));
                 Api::releaseConnection(isset($r['n']) ? (int) $r['n'] : 0);
                 return $r;
@@ -208,7 +208,7 @@ final class Sync
             return;
         }
         // a good token: no session, no CSRF look-up (the token is bound to both), never shed — the seat is this player's
-        Api::run(['method' => 'POST', 'session' => 'none', 'csrf' => false, 'shed' => 0], function (Ctx $c) use ($claims): array {
+        Api::run(['method' => 'POST', 'session' => 'none', 'csrf' => false, 'shed' => 0, 'gzip' => true], function (Ctx $c) use ($claims): array {
             $b = $c->json(4096);
             $r = Sync::hot($claims, $b, $c->now);
             // the page calls again in n ms: when that is seconds away the web server need not hold the connection for it

@@ -354,7 +354,7 @@ return [
         'seat_ttl'      => $env('TFM_SEAT_TTL', 180),     // 마지막 호출 뒤 자리를 지켜 주는 시간(초). 탭을 닫으면 이 시간 뒤에 자리가 비어요
         'ticket_ttl'    => 1800,    // 대기표가 유효한 시간(초)
         'sample'        => 4,       // 요청 4개 중 1개만 세서 초당 요청 수를 어림해요 (세는 비용 줄이기)
-        'gzip_json'     => true,    // 1 KB 이상인 응답을 gzip 으로 줄여 보내요 (브라우저가 받을 수 있을 때)
+        'gzip_json'     => true,    // 큰 응답을 내는 주소(sync · player/get · chat/list · ranking)는 1 KB 이상이면 gzip 으로 줄여 보내요 (브라우저가 받을 수 있을 때)
         'close_after_ms' => $env('TFM_CLOSE_AFTER_MS', 1000),   // 다음 호출이 이 시간(ms) 이상 뒤이면 응답 뒤에 연결을 닫아 달라고 해요. Apache(XAMPP)는 열린 연결 하나마다 일꾼(스레드) 하나를 붙잡아 두기 때문이에요. 0 = 끄기
         'stats_header'  => $env('TFM_STATS_HEADER', false),   // true: 응답에 X-Tfm-Stats(SQL 횟수 · 걸린 시간)를 붙여요 — 부하 시험용
     ],

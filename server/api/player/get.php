@@ -24,7 +24,8 @@ use Tfm\SaveValidator;
 use Tfm\Session;
 use Tfm\Subscription;
 
-Api::run(['method' => 'GET', 'auth' => true, 'rate' => 'player_get'], function (Ctx $c): array {
+// 'gzip' [scale-server, CONTRACT §16.9]: the stored state is 20–400 KB of JSON — sent compressed when the browser accepts it
+Api::run(['method' => 'GET', 'auth' => true, 'rate' => 'player_get', 'gzip' => true], function (Ctx $c): array {
     $sub = Subscription::state($c->uid());
     Session::close(); // read-only: release the session lock
     $row = Db::one('SELECT version, revision, data, saved_at, meta FROM player_saves WHERE user_id = ?', [$c->uid()]);
