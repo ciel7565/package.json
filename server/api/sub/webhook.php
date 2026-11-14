@@ -20,6 +20,15 @@ Api::run(['method' => 'POST', 'csrf' => false, 'rate' => 'sub_webhook', 'rateBy'
     $raw = Http::body(65536);
     $payload = \Tfm\Json::tryDecode($raw, true);
     if (!is_array($payload)) { Log::warn('SUB', 'webhook with a non-JSON body'); return ['received' => true, 'ignored' => true, 'why' => 'not json']; }
+    // [allot-server] CONTRACT §16.7: the one-time payments of the allotment (분양) use the same 토스 account and this same
+    // webhook address. Their order ids start with "AL": such an order is offered to Allot first (same rules: the body is
+    // never trusted, nothing here can mark anything paid), and whatever Allot does not know — also a subscription order
+    // that happens to start with those two letters — goes on to Subscription below, unchanged.
+    $tfmData = isset($payload['data']) && is_array($payload['data']) ? $payload['data'] : $payload;
+    if (isset($tfmData['orderId']) && is_string($tfmData['orderId']) && strncmp($tfmData['orderId'], 'AL', 2) === 0 && class_exists('Tfm\\Allot')) {
+        $a = \Tfm\Allot::webhook($payload);
+        if (empty($a['ignored']) || (isset($a['why']) ? $a['why'] : '') !== 'unknown order') return ['received' => true] + $a;
+    }
     $r = Subscription::webhook($payload);
     return ['received' => true] + $r;
 });

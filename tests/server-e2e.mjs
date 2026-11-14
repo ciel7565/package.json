@@ -1513,6 +1513,343 @@ async function main() {
     assert(v === 1, `scale ${v}`);
   });
 
+  // ------------------------------------------------------------- allotment (분양: 항아리 · 밭 · 창고) — CONTRACT §16.7
+  // seed → summary / map / unit → plans → apply → mine / inbox → approval (Allot::decide) → payment → nameplate → cancel →
+  // waiting list → 토스 (mock) → automation (cli) → switched off. Needs the spawned server (the seed and the operator's
+  // side go through its command line / library); on MariaDB use an empty database (the waiting-list step counts places).
+  const P = new Client('P'), Q = new Client('Q'), R = new Client('R');   // P and Q apply; R only knocks on what is not theirs
+  const OP = '["id" => 0, "role" => "admin"]';                           // the operator, as the admin site and the cli act
+  const PNAME = '김장독', PPHONE = '010-5555-0101';
+  const al = { ver: '', unit: '', no: '', id: 0, noticeId: 0, v: 0, qNo: '', waitId: 0, order: null };
+  const aform = (over = {}) => ({ name: PNAME, phone: PPHONE, consent: true, consentVersion: al.ver, adult: true, ...over });
+  const unitOf = (zone, i) => `${zone}-${String(i + 1).padStart(4, '0')}`;
+  const firstFree = async (zone, skip = 0) => {
+    const m = await anon.req(`api/allot/map.php?zone=${zone}`);
+    let i = -1;
+    for (let k = 0; k <= skip; k++) i = m.data.zones[0].s.indexOf('o', i + 1);
+    assert(i >= 0, `no free unit in ${zone}`);
+    return unitOf(zone, i);
+  };
+  await step('allot seed (cli): allot:seed --preset small --open makes 4 zones / 180 units once; summary · map · unit are public and carry no price and no personal data', async () => {
+    if (!phpProc) return 'skipped (external server: the seed runs on the server machine)';
+    for (const [c, tagOf] of [[P, 'p'], [Q, 'q'], [R, 'r']]) {
+      await c.req('api/ping.php');
+      const r = await c.req('api/auth/register.php', { json: { email: `e2e_al${tagOf}${id}@example.com`, nickname: `분양${tagOf}${tag.slice(-4)}`, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+      assert(r.status === 200 && r.data?.user?.id, `register ${tagOf} → ${r.status} ${r.error?.code}`);
+    }
+    let r = cli('allot:seed', '--preset', 'small', '--open');
+    assert(r.status === 0 && /구역 4곳 · 자리 180개/.test(r.out), `allot:seed → ${r.status} ${r.out.slice(0, 200)}`);
+    r = cli('allot:seed', '--preset', 'small', '--open');
+    assert(r.status === 0 && /이번에 만든 구역 0곳 · 자리 0개/.test(r.out), `second allot:seed → ${r.out.slice(0, 200)}`);
+    const sum = await anon.req('api/allot/summary.php');
+    assert(sum.status === 200 && sum.data.enabled === true && sum.data.total === 180 && sum.data.byKind.jar.total === 120 && sum.data.byKind.plot.total === 40 && sum.data.byKind.store.total === 20 && sum.data.v > 0, `summary ${sum.status} ${sum.text.slice(0, 200)}`);
+    const map = await anon.req('api/allot/map.php');
+    assert(map.status === 200 && map.data.zones.length === 4 && map.data.zones.every((z) => z.s.length === z.cap && /^[ohlc]+$/.test(z.s) && z.open === true && z.cols > 0), `map ${map.text.slice(0, 200)}`);
+    al.v = map.data.v;
+    const same = await anon.req(`api/allot/map.php?v=${al.v}`);
+    assert(same.status === 200 && same.data.same === true && same.data.v === al.v && !same.data.zones, `unchanged map ${same.text.slice(0, 120)}`);
+    const jars = await anon.req('api/allot/map.php?kind=jar');
+    const one = await anon.req('api/allot/map.php?zone=P01');
+    assert(jars.data.zones.length === 2 && one.data.zones.length === 1 && one.data.zones[0].code === 'P01', 'map filters');
+    for (const q of ['v=abc', 'v=-1', 'kind=tree', 'zone=J01%27', 'x=1', 'v[]=1']) { const b = await anon.req(`api/allot/map.php?${q}`); assert(b.status === 400, `map.php?${q} → ${b.status}`); }
+    al.unit = await firstFree('J01', 6);
+    const u = await anon.req(`api/allot/unit.php?code=${al.unit}`);
+    assert(u.status === 200 && u.data.status === 'open' && u.data.canApply === true && u.data.nameplate === null && u.data.mine === false && u.data.zone.code === 'J01' && Array.isArray(u.data.logs), `unit ${u.text.slice(0, 200)}`);
+    assert((await anon.req('api/allot/unit.php?code=ZZ99-0001')).status === 404 && (await anon.req('api/allot/unit.php')).status === 400, 'unknown unit → 404, no code → 400');
+    const logs = await anon.req('api/allot/logs.php?zone=J01');
+    assert(logs.status === 200 && Array.isArray(logs.data.logs) && (await anon.req('api/allot/logs.php')).status === 400 && (await anon.req(`api/allot/logs.php?zone=J01&code=${al.unit}`)).status === 400, `logs ${logs.status}`);
+    for (const x of [sum, map, u]) assert(!/price|amount|가격|phone|name_enc/i.test(x.text), `a public answer mentions a price or personal field: ${x.text.slice(0, 160)}`);
+    // guests: reading one's allotments, the prices and every write need a login
+    for (const p of ['api/allot/mine.php', 'api/allot/plans.php', 'api/allot/inbox.php']) { const g = await anon.req(p); assert(g.status === 401, `guest ${p} → ${g.status}`); }
+    for (const p of ['apply', 'cancel', 'waitlist', 'nameplate', 'seen', 'pay-prepare', 'pay-confirm']) {
+      const g = await anon.req(`api/allot/${p}.php`, { json: {} });
+      assert(g.status === 401, `guest POST ${p} → ${g.status}`);
+      const n = await new Client('nocookie').req(`api/allot/${p}.php`, { json: {} });
+      assert(n.status === 401 || n.status === 403, `cookie-less POST ${p} → ${n.status}`);
+    }
+    return `180 units, map v${al.v}, ${map.text.length} bytes`;
+  });
+  await step('allot plans (login): prices, periods, the operator texts (still the built-in examples) and the consent version — the only place with prices', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const r = await P.req('api/allot/plans.php');
+    assert(r.status === 200 && r.data.enabled === true && r.data.zones.length === 4 && r.data.applyPerUser === 3 && r.data.toss === false && r.data.sample === true && r.data.autoApprove === 'off', `plans ${r.status} ${r.text.slice(0, 200)}`);
+    const j = r.data.zones.find((z) => z.code === 'J01');
+    assert(j.price === 120000 && j.period === 'year' && j.termMonths === 12 && j.open === true && j.free === 60 && j.cap === 60 && j.kind === 'jar', `J01 plan ${JSON.stringify(j)}`);
+    for (const k of ['terms', 'privacy', 'refund', 'payGuide']) assert(typeof r.data.texts[k] === 'string' && r.data.texts[k].length > 10, `texts.${k}`);
+    al.ver = r.data.consentVersion;
+    assert(typeof al.ver === 'string' && al.ver.length >= 8, `consentVersion ${al.ver}`);
+    assert((await P.req('api/allot/plans.php?x=1')).status === 400, 'an unknown query parameter is refused');
+    return `consent version ${al.ver}`;
+  });
+  await step('allot apply: consent === true, adult === true and the current consent version are required exactly; a named unit → 201 pending (held); the same unit again → 409 UNIT_TAKEN; the map shows it held, nothing personal anywhere', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const bad = [];
+    for (const [label, body, code, field] of [
+      ['no consent', aform({ unit: al.unit, consent: undefined }), 'CONSENT_REQUIRED', 'consent'], ['consent "true"', aform({ unit: al.unit, consent: 'true' }), 'CONSENT_REQUIRED', 'consent'],
+      ['adult false', aform({ unit: al.unit, adult: false }), 'CONSENT_REQUIRED', 'adult'], ['an old consent version', aform({ unit: al.unit, consentVersion: '2020-01.00000000' }), 'CONSENT_REQUIRED', 'consentVersion'],
+      ['a phone that is not one', aform({ unit: al.unit, phone: '12345' }), 'INVALID_INPUT', 'phone'], ['an unknown field', aform({ unit: al.unit, price: 1 }), 'INVALID_INPUT', 'price'],
+      ['no unit', aform(), 'INVALID_INPUT', 'unit'], ['auto without true', aform({ kind: 'jar', auto: 'yes' }), 'INVALID_INPUT', 'auto'],
+    ]) {
+      const r = await R.req('api/allot/apply.php', { json: body });
+      if (r.status !== 400 || r.error?.code !== code || r.json?.data?.field !== field) bad.push(`${label} → ${r.status} ${r.error?.code} ${r.json?.data?.field}`);
+      if (code === 'CONSENT_REQUIRED' && r.json?.data?.version !== al.ver) bad.push(`${label}: no current version in the answer`);
+    }
+    assert(!bad.length, bad.join(' | '));
+    const r = await P.req('api/allot/apply.php', { json: aform({ unit: al.unit, nameplate: `우리집 ${PPHONE}`, nameplateShow: true }) });
+    assert(r.status === 201 && /^A\d\d-[2-9A-Z]{5}-[2-9A-Z]{5}$/.test(r.data.contractNo) && r.data.status === 'pending' && r.data.unit === al.unit && r.data.holdUntil > Date.now() + 47 * 3600000, `apply → ${r.status} ${r.text.slice(0, 240)}`);
+    assert(r.data.pay && r.data.pay.toss === false && typeof r.data.pay.guide === 'string' && r.data.pay.until === r.data.holdUntil && !/price|amount|120000/i.test(r.text), `pay info ${JSON.stringify(r.data.pay).slice(0, 160)}`);
+    al.no = r.data.contractNo;
+    const taken = await Q.req('api/allot/apply.php', { json: aform({ unit: al.unit, name: '이웃집', phone: '010-5555-0202' }) });
+    assert(taken.status === 409 && taken.error?.code === 'UNIT_TAKEN', `the same unit → ${taken.status} ${taken.error?.code}`);
+    const u = await anon.req(`api/allot/unit.php?code=${al.unit}`);
+    assert(u.data.status === 'held' && u.data.canApply === false && u.data.mine === false && typeof u.data.nameplate === 'string' && u.data.nameplate.length <= 12 && !/5555|0101/.test(u.data.nameplate), `held unit ${JSON.stringify(u.data).slice(0, 200)}`);
+    assert((await P.req(`api/allot/unit.php?code=${al.unit}`)).data.mine === true, 'the applicant sees mine = true');
+    const map = await anon.req(`api/allot/map.php?zone=J01&v=${al.v}`);
+    const idx = Number(al.unit.slice(-4)) - 1;
+    assert(map.data.v > al.v && map.data.zones[0].s[idx] === 'h' && (await anon.req('api/allot/summary.php')).data.held >= 1, `map after the application ${map.text.slice(0, 120)}`);
+    al.v = map.data.v;
+    const rows = dbAll('SELECT cu.name_enc, cu.phone_enc, cu.phone_tail, c.id FROM allot_contracts c JOIN allot_customers cu ON cu.id = c.customer_id WHERE c.contract_no = ?', [al.no]);
+    assert(rows.length === 1 && /^enc:v1:/.test(rows[0].name_enc) && /^enc:v1:/.test(rows[0].phone_enc) && rows[0].phone_tail === '0101', `stored customer ${JSON.stringify(rows).slice(0, 160)}`);
+    al.id = Number(rows[0].id);
+    return `${al.no} · ${al.unit} held until ${new Date(r.data.holdUntil).toISOString().slice(0, 16)}`;
+  });
+  await step('allot mine / inbox / seen: the applicant sees the pending contract (no price) and the "applied" notice; another account sees nothing and can change nothing of it (IDOR)', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const m = await P.req('api/allot/mine.php');
+    const c = m.data?.contracts?.[0];
+    assert(m.status === 200 && m.data.contracts.length === 1 && c.contractNo === al.no && c.status === 'pending' && c.unit.code === al.unit && c.unit.kind === 'jar' && c.holdUntil > Date.now() && c.nameplate.show === true && Array.isArray(c.timeline), `mine ${m.text.slice(0, 300)}`);
+    assert(m.data.limit.max === 3 && m.data.limit.used === 1 && m.data.unread === 1 && !/price|amount|120000/i.test(m.text), `limit / unread / no price: ${JSON.stringify(m.data.limit)} ${m.data.unread}`);
+    const box = await P.req('api/allot/inbox.php');
+    const n = box.data?.notices?.[0];
+    assert(box.status === 200 && n && n.kind === 'applied' && n.contractNo === al.no && n.seen === false && box.data.unread === 1 && box.data.last === n.id && !/\d{2,3},?000원?/.test(n.body), `inbox ${box.text.slice(0, 240)}`);
+    al.noticeId = n.id;
+    const later = await P.req(`api/allot/inbox.php?after=${n.id}`);
+    assert(later.data.notices.length === 0 && later.data.last === n.id && (await P.req('api/allot/inbox.php?after=abc')).status === 400, 'inbox?after=');
+    // another account
+    const rm = await R.req('api/allot/mine.php');
+    const rb = await R.req('api/allot/inbox.php');
+    assert(rm.data.contracts.length === 0 && rm.data.limit.used === 0 && rb.data.notices.length === 0 && rb.data.unread === 0, `R sees ${rm.text.slice(0, 120)}`);
+    const rs = await R.req('api/allot/seen.php', { json: { ids: [n.id] } });
+    assert(rs.status === 200 && rs.data.updated === 0, `R marking P's notice → ${rs.status} ${JSON.stringify(rs.data)}`);
+    for (const [p, body] of [['cancel', { contractNo: al.no }], ['nameplate', { contractNo: al.no, text: '내 것', show: true }], ['pay-prepare', { contractNo: al.no }]]) {
+      const x = await R.req(`api/allot/${p}.php`, { json: body });
+      assert(x.status === 404 || (p === 'pay-prepare' && x.status === 403), `R ${p} on P's contract → ${x.status} ${x.error?.code}`);
+    }
+    assert((await P.req('api/allot/mine.php')).data.contracts[0].status === 'pending' && (await anon.req(`api/allot/unit.php?code=${al.unit}`)).data.nameplate !== '내 것', 'P\'s contract is untouched');
+    const seen = await P.req('api/allot/seen.php', { json: { ids: [n.id, 999999999] } });
+    assert(seen.status === 200 && seen.data.updated === 1 && seen.data.unread === 0, `seen ${seen.status} ${JSON.stringify(seen.data)}`);
+    const badSeen = [];
+    for (const body of [{ ids: 'x' }, { ids: ['1'] }, { ids: [1.5] }, { ids: [0] }, { ids: Array.from({ length: 51 }, (_, i) => i + 1) }, {}, { ids: [1], all: true }]) { const x = await P.req('api/allot/seen.php', { json: body }); if (x.status !== 400) badSeen.push(`${JSON.stringify(body).slice(0, 30)} → ${x.status}`); }
+    assert(!badSeen.length, badSeen.join(' | '));
+    return `pending, 1 notice read; another account: 0 contracts, 0 notices, 3 × refused`;
+  });
+  await step('allot approval (Allot::decide) + the operator records the money: pending → active, the unit is leased, notices "approved" and "paid" without an amount, the message to the customer is masked', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const d = srvPhp(`Tfm\\Allot::decide(${OP}, (int) $in["id"], "active", $in["memo"])`, { id: al.id, memo: '환영해요! 문의는 010-9999-8888 로 주세요' });
+    assert(d.status === 'active' && d.contractNo === al.no && d.startsAt > 0 && d.customer && !d.customer.includes(PNAME), `decide ${JSON.stringify(d).slice(0, 240)}`);
+    const again = srvPhp(`(function () use ($in) { try { Tfm\\Allot::decide(${OP}, (int) $in["id"], "active", ""); return "ok"; } catch (Tfm\\ApiException $e) { return $e->errorCode; } })()`, { id: al.id });
+    assert(again === 'NOT_PENDING', `a second decision → ${again}`);
+    const pay = srvPhp(`Tfm\\Allot::recordPayment(${OP}, (int) $in["id"], 120000, "bank", $in["idem"])`, { id: al.id, idem: `e2e-${id}-1` });
+    const dup = srvPhp(`Tfm\\Allot::recordPayment(${OP}, (int) $in["id"], 120000, "bank", $in["idem"])`, { id: al.id, idem: `e2e-${id}-1` });
+    assert(pay.duplicate === false && dup.duplicate === true && pay.contract.paidTotal === 120000 && dup.contract.paidTotal === 120000 && pay.contract.paidUntil > Date.now() + 360 * 86400000, `payment ${JSON.stringify(pay.contract).slice(0, 200)}`);
+    const m = await P.req('api/allot/mine.php');
+    const c = m.data.contracts[0];
+    assert(c.status === 'active' && c.paidUntil === pay.contract.paidUntil && c.payDue === false && c.holdUntil === 0 && c.timeline.some((t) => t.k === 'approved') && c.timeline.some((t) => t.k === 'paid') && !/120000/.test(m.text), `mine after approval ${JSON.stringify(c).slice(0, 300)}`);
+    const box = await P.req(`api/allot/inbox.php?after=${al.noticeId}`);
+    const kinds = box.data.notices.map((x) => x.kind);
+    const approved = box.data.notices.find((x) => x.kind === 'approved');
+    assert(kinds.includes('approved') && kinds.includes('paid') && box.data.unread === 2 && !/9999|8888/.test(approved.body) && /환영해요/.test(approved.body) && !/120,?000/.test(box.text), `notices ${box.text.slice(0, 300)}`);
+    const u = await anon.req(`api/allot/unit.php?code=${al.unit}`);
+    const map = await anon.req('api/allot/map.php?zone=J01');
+    assert(u.data.status === 'leased' && map.data.zones[0].s[Number(al.unit.slice(-4)) - 1] === 'l' && map.data.v > al.v, `leased: ${u.data.status} ${map.data.v}`);
+    al.v = map.data.v;
+    return `active, paid until ${new Date(c.paidUntil).toISOString().slice(0, 10)}, notices ${kinds.join(' + ')}`;
+  });
+  await step('allot nameplate: the holder names the unit — cleaned, at most 12 characters, public only with show; wrong shapes are refused', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const r = await P.req('api/allot/nameplate.php', { json: { contractNo: al.no, text: '할머니의 된장 항아리 이름표가 아주 길어요', show: true } });
+    assert(r.status === 200 && r.data.contractNo === al.no && r.data.nameplate.show === true && [...r.data.nameplate.text].length <= 12 && r.data.nameplate.text.startsWith('할머니'), `nameplate ${r.status} ${r.text.slice(0, 160)}`);
+    assert((await anon.req(`api/allot/unit.php?code=${al.unit}`)).data.nameplate === r.data.nameplate.text, 'everyone reads the shown nameplate');
+    const hid = await P.req('api/allot/nameplate.php', { json: { contractNo: al.no, text: r.data.nameplate.text, show: false } });
+    assert(hid.data.nameplate.show === false && (await anon.req(`api/allot/unit.php?code=${al.unit}`)).data.nameplate === null, 'hidden nameplate is not public');
+    assert((await P.req('api/allot/mine.php')).data.contracts[0].nameplate.text === r.data.nameplate.text, 'the holder still sees it in mine');
+    const bad = [];
+    // (the full wrong-type matrix of every allot endpoint is in tests/security-e2e.mjs S03; here a few, inside the write budget of 20 per 10 minutes)
+    for (const body of [{ contractNo: al.no, text: 5, show: true }, { contractNo: al.no, text: 'x', show: 'yes' }, { contractNo: al.no, text: 'x', show: true, unit: 'J01-0001' }]) {
+      const x = await P.req('api/allot/nameplate.php', { json: body });
+      if (x.status !== 400) bad.push(`${JSON.stringify(body).slice(0, 50)} → ${x.status}`);
+    }
+    assert(!bad.length, bad.join(' | '));
+    return `"${r.data.nameplate.text}"`;
+  });
+  await step('allot cancel: a running contract only records a request (the jar stays); "any free unit" gives the lowest free one; a pending application is canceled at once and its unit is free again', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const r = await P.req('api/allot/cancel.php', { json: { contractNo: al.no } });
+    assert(r.status === 200 && r.data.status === 'active' && r.data.requested === true && r.data.contractNo === al.no, `cancel (active) → ${r.status} ${r.text.slice(0, 160)}`);
+    const m = await P.req('api/allot/mine.php');
+    assert(m.data.contracts[0].status === 'active' && m.data.contracts[0].cancelRequested === true && (await anon.req(`api/allot/unit.php?code=${al.unit}`)).data.status === 'leased', 'the contract runs on; the unit stays leased');
+    const want = await firstFree('P01');
+    const a = await P.req('api/allot/apply.php', { json: aform({ kind: 'plot', auto: true }) });
+    assert(a.status === 201 && a.data.unit === want && a.data.status === 'pending', `auto-assign → ${a.status} ${a.data?.unit} (lowest free ${want})`);
+    const c = await P.req('api/allot/cancel.php', { json: { contractNo: a.data.contractNo.toLowerCase() } });
+    assert(c.status === 200 && c.data.status === 'canceled' && c.data.requested === false, `cancel (pending) → ${c.status} ${c.text.slice(0, 160)}`);
+    assert((await anon.req(`api/allot/unit.php?code=${want}`)).data.status === 'open', 'the unit is free again');
+    const twice = await P.req('api/allot/cancel.php', { json: { contractNo: a.data.contractNo } });
+    assert(twice.status === 409 && twice.error?.code === 'NOT_LIVE', `cancel twice → ${twice.status} ${twice.error?.code}`);
+    for (const body of [{}, { contractNo: 5 }, { contractNo: al.no, why: 'x' }]) assert((await P.req('api/allot/cancel.php', { json: body })).status === 400, `cancel ${JSON.stringify(body)} is refused`);
+    assert((await P.req('api/allot/cancel.php', { json: { contractNo: 'A26-22222-22222' } })).status === 404, 'an unknown number → 404');
+    const kinds = (await P.req('api/allot/inbox.php')).data.notices.map((x) => x.kind);
+    assert(kinds.includes('cancel_requested') && kinds.includes('canceled'), `notices ${kinds.join(', ')}`);
+    return `request recorded for ${al.no}; ${want} applied and canceled`;
+  });
+  await step('allot waiting list: join only when nothing is free; a freed unit is offered to the first in line (held for them); accept → an application; leave; another account cannot touch the row', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    assert((await Q.req('api/allot/waitlist.php', { json: aform({ action: 'join', kind: 'jar', name: '이웃집', phone: '010-5555-0202' }) })).error?.code === 'HAS_FREE', 'join while units are free → HAS_FREE');
+    // the operator fills the store zone (20 walk-in customers) and clears older waiting rows of earlier runs
+    const filled = srvPhp(`(function () use ($in) { $a = ${OP}; $n = 0;
+      foreach (Tfm\\Allot::listWait(["status" => "waiting"], 200)["rows"] as $w) Tfm\\Allot::waitCancel($a, (int) $w["id"]);
+      foreach (Tfm\\Allot::listUnits(["zone" => "S01", "status" => "open"], 50)["rows"] as $i => $u) {
+        $c = Tfm\\Allot::saveCustomer($a, ["name" => "창고손님", "phone" => "010-7" . $in["tag"] . "-" . str_pad((string) $i, 4, "0", STR_PAD_LEFT)]);
+        Tfm\\Allot::createContract($a, (string) $u["code"], (int) $c["id"], ["notify" => false]); $n++;
+      } return $n; })()`, { tag: tag.slice(-3) });
+    assert(filled >= 1 && (await P.req('api/allot/plans.php')).data.zones.find((z) => z.code === 'S01').free === 0, `S01 filled (${filled})`);
+    const sold = await Q.req('api/allot/apply.php', { json: aform({ kind: 'store', zone: 'S01', auto: true, name: '이웃집', phone: '010-5555-0202' }) });
+    assert(sold.status === 409 && sold.error?.code === 'SOLD_OUT', `apply on a full zone → ${sold.status} ${sold.error?.code}`);
+    const j = await Q.req('api/allot/waitlist.php', { json: aform({ action: 'join', kind: 'store', zone: 'S01', name: '이웃집', phone: '010-5555-0202' }) });
+    assert(j.status === 200 && j.data.status === 'waiting' && j.data.position === 1 && j.data.id > 0, `join → ${j.status} ${j.text.slice(0, 160)}`);
+    al.waitId = j.data.id;
+    assert((await Q.req('api/allot/waitlist.php', { json: aform({ action: 'join', kind: 'store', zone: 'S01', name: '이웃집', phone: '010-5555-0202' }) })).error?.code === 'ALREADY_WAITING', 'join twice → ALREADY_WAITING');
+    const pj = await P.req('api/allot/waitlist.php', { json: aform({ action: 'join', kind: 'store', zone: 'S01' }) });
+    assert(pj.status === 200 && pj.data.position === 2, `second in line → ${pj.status} ${JSON.stringify(pj.data)}`);
+    let qm = await Q.req('api/allot/mine.php');
+    assert(qm.data.waitlist.length === 1 && qm.data.waitlist[0].id === al.waitId && qm.data.waitlist[0].status === 'waiting' && qm.data.waitlist[0].zone === 'S01' && qm.data.limit.used === 1, `Q mine ${JSON.stringify(qm.data.waitlist)}`);
+    // other accounts cannot leave / accept for Q
+    for (const action of ['leave', 'accept']) { const x = await R.req('api/allot/waitlist.php', { json: { action, id: al.waitId } }); assert(x.status === 404, `R ${action} Q's row → ${x.status}`); }
+    assert((await Q.req('api/allot/waitlist.php', { json: { action: 'accept', id: al.waitId } })).error?.code === 'OFFER_GONE', 'accept without an offer → OFFER_GONE');
+    // the operator ends one contract: its unit goes to the first in line
+    const freed = unitOf('S01', 2);
+    const ended = srvPhp(`(function () use ($in) { $c = Tfm\\Db::one("SELECT c.id FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE u.code = ? AND c.status = 'active'", [$in["code"]]); return Tfm\\Allot::endContract(${OP}, (int) $c["id"], "이사")["status"]; })()`, { code: freed });
+    qm = await Q.req('api/allot/mine.php');
+    const w = qm.data.waitlist[0];
+    assert(ended === 'ended' && w.status === 'offered' && w.unit === freed && w.offerUntil > Date.now(), `offer ${ended} ${JSON.stringify(w)}`);
+    assert((await Q.req('api/allot/inbox.php')).data.notices.some((x) => x.kind === 'offer'), 'Q is told about the offer');
+    const fu = await anon.req(`api/allot/unit.php?code=${freed}`);
+    const pTry = await P.req('api/allot/apply.php', { json: aform({ unit: freed }) });
+    assert(fu.data.status === 'held' && fu.data.canApply === false && pTry.status === 409 && pTry.error?.code === 'UNIT_TAKEN', `the offered unit is kept for Q: ${fu.data.status} / P → ${pTry.status} ${pTry.error?.code}`);
+    const acc = await Q.req('api/allot/waitlist.php', { json: { action: 'accept', id: al.waitId } });
+    assert(acc.status === 200 && acc.data.unit === freed && acc.data.status === 'pending' && /^A\d\d-/.test(acc.data.contractNo), `accept → ${acc.status} ${acc.text.slice(0, 160)}`);
+    al.qNo = acc.data.contractNo;
+    qm = await Q.req('api/allot/mine.php');
+    assert(qm.data.waitlist.length === 0 && qm.data.contracts[0].contractNo === al.qNo && qm.data.contracts[0].unit.code === freed, 'the offer became Q\'s application');
+    const leave = await P.req('api/allot/waitlist.php', { json: { action: 'leave', id: pj.data.id } });
+    assert(leave.status === 200 && leave.data.status === 'canceled' && (await P.req('api/allot/waitlist.php', { json: { action: 'leave', id: pj.data.id } })).status === 404, `leave → ${leave.status} ${JSON.stringify(leave.data)}`);
+    const bad = [];
+    for (const body of [{ action: 'jump' }, { action: 'leave', id: '5' }, { action: 'leave', id: 5, name: 'x' }, { action: 'join', kind: 'tree' }, { action: 'accept', id: 1.5 }]) {
+      const x = await R.req('api/allot/waitlist.php', { json: body });
+      if (x.status !== 400) bad.push(`${JSON.stringify(body)} → ${x.status}`);
+    }
+    assert(!bad.length, bad.join(' | '));
+    return `S01 full → Q waits (1st), P (2nd) → ${freed} offered → accepted as ${al.qNo}`;
+  });
+  await step('allot 토스 one-time payment (mock): refused while the operator has it off; on → prepare (the server\'s amount) → a changed amount / foreign order / replay are refused → paid; the webhook cancel is recorded as a refund', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const off = await Q.req('api/allot/pay-prepare.php', { json: { contractNo: al.qNo } });
+    assert(off.status === 403 && off.error?.code === 'PAY_DISABLED', `pay-prepare while off → ${off.status} ${off.error?.code}`);
+    srvPhp(`Tfm\\Allot::saveSettings(${OP}, ["toss_enabled" => true])`);
+    assert((await Q.req('api/allot/plans.php')).data.toss === true, 'plans.toss after the switch');
+    const p = await Q.req('api/allot/pay-prepare.php', { json: { contractNo: al.qNo } });
+    assert(p.status === 200 && /^AL[A-Za-z0-9]{30}$/.test(p.data.orderId) && p.data.amount === 30000 && p.data.mock === true && p.data.contractNo === al.qNo && typeof p.data.clientKey === 'string' && /allot=pay$/.test(p.data.successUrl), `prepare → ${p.status} ${p.text.slice(0, 240)}`);
+    const o = p.data;
+    const key = 'mock_' + o.orderId;
+    const cheap = await Q.req('api/allot/pay-confirm.php', { json: { paymentKey: key, orderId: o.orderId, amount: o.amount - 1000 } });
+    assert(cheap.status === 400 && cheap.error?.code === 'AMOUNT_MISMATCH', `a lower amount → ${cheap.status} ${cheap.error?.code}`);
+    for (const amount of [String(o.amount), o.amount + 0.5, [o.amount], true, 0, 10000001]) { const x = await Q.req('api/allot/pay-confirm.php', { json: { paymentKey: key, orderId: o.orderId, amount } }); assert(x.status === 400 && x.error?.code === 'INVALID_AMOUNT', `amount ${JSON.stringify(amount)} → ${x.status} ${x.error?.code}`); }
+    const foreign = await P.req('api/allot/pay-confirm.php', { json: { paymentKey: key, orderId: o.orderId, amount: o.amount } });
+    assert(foreign.status === 404 && foreign.error?.code === 'ORDER_NOT_FOUND', `another account's order → ${foreign.status} ${foreign.error?.code}`);
+    const p2 = await Q.req('api/allot/pay-prepare.php', { json: { contractNo: al.qNo } });
+    assert(p2.status === 200 && p2.data.amount === 30000, `a fresh order after the refused one → ${p2.status} ${p2.error?.code}`);
+    const o2 = p2.data;
+    const ok = await Q.req('api/allot/pay-confirm.php', { json: { paymentKey: 'mock_' + o2.orderId, orderId: o2.orderId, amount: o2.amount } });
+    assert(ok.status === 200 && ok.data.contractNo === al.qNo && ok.data.status === 'pending' && ok.data.paidUntil >= 0, `confirm → ${ok.status} ${ok.text.slice(0, 200)}`);
+    const replay = await Q.req('api/allot/pay-confirm.php', { json: { paymentKey: 'mock_' + o2.orderId, orderId: o2.orderId, amount: o2.amount } });
+    assert(replay.status === 409 && replay.error?.code === 'ORDER_NOT_OPEN', `replay → ${replay.status} ${replay.error?.code}`);
+    let rows = dbAll('SELECT status, amount, payment_key_enc FROM allot_payments WHERE order_id = ?', [o2.orderId]);
+    assert(rows.length === 1 && rows[0].status === 'paid' && Number(rows[0].amount) === 30000 && /^enc:v1:/.test(rows[0].payment_key_enc), `payment row ${JSON.stringify(rows)}`);
+    assert((await Q.req('api/allot/inbox.php')).data.notices.some((x) => x.kind === 'paid'), 'Q is told the payment arrived');
+    // 토스 tells the server the payment was canceled: recorded as a refund (and only for the stored key)
+    const hook = (body) => new Client('toss').req('api/sub/webhook.php', { json: body, csrf: false });
+    const wrong = await hook({ eventType: 'PAYMENT_STATUS_CHANGED', data: { orderId: o2.orderId, paymentKey: 'mock_other', status: 'CANCELED' } });
+    assert(wrong.status === 200 && wrong.data.ignored === true, `webhook with another key → ${wrong.text.slice(0, 120)}`);
+    const wh = await hook({ eventType: 'PAYMENT_STATUS_CHANGED', data: { orderId: o2.orderId, paymentKey: 'mock_' + o2.orderId, status: 'CANCELED' } });
+    assert(wh.status === 200 && wh.data.received === true && wh.data.ignored === false && wh.data.refunded === true && wh.data.allot === true, `webhook → ${wh.text.slice(0, 160)}`);
+    const whAgain = await hook({ eventType: 'PAYMENT_STATUS_CHANGED', data: { orderId: o2.orderId, paymentKey: 'mock_' + o2.orderId, status: 'CANCELED' } });
+    assert(whAgain.data.ignored === true && whAgain.data.why === 'duplicate', `webhook twice → ${whAgain.text.slice(0, 120)}`);
+    const unknown = await hook({ eventType: 'PAYMENT_STATUS_CHANGED', data: { orderId: 'AL' + 'x'.repeat(30), paymentKey: 'mock_x', status: 'DONE' } });
+    assert(unknown.status === 200 && unknown.data.ignored === true && unknown.data.why === 'unknown order', `webhook for an unknown AL order → ${unknown.text.slice(0, 120)}`);
+    rows = dbAll('SELECT kind, status, amount FROM allot_payments WHERE contract_id = (SELECT id FROM allot_contracts WHERE contract_no = ?) ORDER BY id', [al.qNo]);
+    assert(rows.some((x) => x.status === 'refunded') && rows.some((x) => x.kind === 'refund'), `payments after the webhook ${JSON.stringify(rows)}`);
+    srvPhp(`Tfm\\Allot::saveSettings(${OP}, ["toss_enabled" => false])`);
+    assert((await Q.req('api/allot/pay-prepare.php', { json: { contractNo: al.qNo } })).error?.code === 'PAY_DISABLED', 'off again');
+    return `order ${o2.orderId.slice(0, 8)}… paid 30,000 → webhook CANCELED → refund row`;
+  });
+  await step('allot automation (cli): allot:tick lets an unpaid application lapse when its hold is over (the unit is free, the applicant is told); allot:status and a masked export work; no name or phone in the database, the audit trail or a log file', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    const unit = await firstFree('J02');
+    const a = await P.req('api/allot/apply.php', { json: aform({ unit }) });
+    assert(a.status === 201, `apply ${unit} → ${a.status} ${a.error?.code}`);
+    srvPhp('Tfm\\Db::exec("UPDATE allot_units SET hold_until = ? WHERE code = ?", [$in["t"], $in["code"]])', { t: Date.now() - 3600000, code: unit });
+    let r = cli('allot:tick');
+    assert(r.status === 0 && /기한이 지난 신청 정리 1(?!\d)/.test(r.out), `allot:tick → ${r.status} ${r.out.slice(0, 300)}`);
+    const c = (await P.req('api/allot/mine.php')).data.contracts.find((x) => x.contractNo === a.data.contractNo);
+    assert(c.status === 'canceled' && (await anon.req(`api/allot/unit.php?code=${unit}`)).data.status === 'open' && (await P.req('api/allot/inbox.php')).data.notices.some((x) => x.kind === 'hold_expired'), `after the tick: ${c.status}`);
+    // the running, paid jar of P and the paid-then-refunded application of Q were not touched by the timer
+    assert((await anon.req(`api/allot/unit.php?code=${al.unit}`)).data.status === 'leased', 'a paid running contract is never released by the timer');
+    r = cli('allot:tick', '--quiet');
+    assert(r.status === 0, `second tick → ${r.status} ${r.out.slice(0, 200)}`);
+    r = cli('allot:status');
+    assert(r.status === 0 && /분양 현황/.test(r.out) && /문제 없음/.test(r.out) && /마지막 실행/.test(r.out), `allot:status → ${r.status} ${r.out.slice(0, 400)}`);
+    r = cli('allot:export', 'customers');
+    const file = (r.out.match(/저장했어요: (.+\.csv)/) || [])[1];
+    assert(r.status === 0 && file && fs.existsSync(file), `allot:export → ${r.status} ${r.out.slice(0, 200)}`);
+    const csv = fs.readFileSync(file, 'utf8');
+    assert(csv.charCodeAt(0) === 0xfeff && csv.includes('***-****-0101') && !csv.includes(PNAME) && !csv.includes('5555-0101'), 'the export is masked');
+    const plain = [PNAME, '5555-0101', '01055550101', '이웃집', '5555-0202', '01055550202'];
+    const leaks = [];
+    for (const [t, sql] of [['allot_customers', 'SELECT * FROM allot_customers'], ['allot_contracts', 'SELECT * FROM allot_contracts'], ['allot_notices', 'SELECT * FROM allot_notices'], ['allot_payments', 'SELECT * FROM allot_payments'],
+      ['audit_log', "SELECT * FROM audit_log WHERE event LIKE 'allot%'"], ['security_events', 'SELECT * FROM security_events'], ['job_runs', 'SELECT * FROM job_runs']]) {
+      const text = JSON.stringify(dbAll(sql));
+      for (const p of plain) if (text.includes(p)) leaks.push(`${t}: ${p}`);
+    }
+    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    let files = 0;
+    for (const f of walk(tmpData)) {
+      if (/sess_|sessions/.test(f)) continue;
+      const buf = fs.readFileSync(f);
+      files++;
+      for (const p of plain) if (buf.includes(Buffer.from(p, 'utf8'))) leaks.push(`${path.relative(tmpData, f)}: ${p}`);
+    }
+    assert(!leaks.length, `plaintext personal data: ${leaks.join(' | ')}`);
+    return `lapsed ${unit}; ${files} files of the data folder and 7 tables hold no name or phone`;
+  });
+  await step('allot switched off by the operator: summary answers {enabled: false}, every other allot endpoint 403 ALLOT_DISABLED; switched on again everything is as before', async () => {
+    if (!phpProc) return 'skipped (external server)';
+    srvPhp(`Tfm\\Allot::saveSettings(${OP}, ["enabled" => false])`);
+    const sum = await anon.req('api/allot/summary.php');
+    assert(sum.status === 200 && sum.data.enabled === false && sum.data.total === undefined, `summary while off ${sum.text.slice(0, 120)}`);
+    const bad = [];
+    for (const [c, p, body] of [[anon, 'map.php'], [anon, `unit.php?code=${al.unit}`], [anon, 'logs.php?zone=J01'], [P, 'mine.php'], [P, 'plans.php'], [P, 'inbox.php'], [P, 'seen.php', { ids: [1] }], [P, 'apply.php', aform({ unit: al.unit })],
+      [R, 'cancel.php', { contractNo: al.no }], [R, 'nameplate.php', { contractNo: al.no, text: 'x', show: true }], [R, 'waitlist.php', { action: 'leave', id: 1 }], [R, 'pay-prepare.php', { contractNo: al.no }],
+      [R, 'pay-confirm.php', { paymentKey: 'mock_x', orderId: 'AL' + 'x'.repeat(30), amount: 1000 }]]) {
+      const r = await c.req(`api/allot/${p}`, body ? { json: body } : {});
+      if (r.status !== 403 || r.error?.code !== 'ALLOT_DISABLED') bad.push(`${p} → ${r.status} ${r.error?.code}`);
+    }
+    srvPhp(`Tfm\\Allot::saveSettings(${OP}, ["enabled" => true])`);
+    assert(!bad.length, bad.join(' | '));
+    const m = await P.req('api/allot/mine.php');
+    assert(m.status === 200 && m.data.contracts.some((x) => x.contractNo === al.no && x.status === 'active'), 'on again: P still has the running contract');
+    return '13 endpoints refused while off';
+  });
+
   // ------------------------------------------------------------- summary
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${failed.length ? C.r('✖') : C.g('✔')} ${results.length - failed.length}/${results.length} passed${failed.length ? ` — failed: ${failed.map((f) => f.name).join(' | ')}` : ''}`);
