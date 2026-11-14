@@ -474,6 +474,7 @@ const DEFS = {
   main:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // default configuration
   val:        { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // validation matrix, uploads, payments (own rate budgets)
   rate:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // gets hammered
+  allot:      { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.7: the allotment matrix + its IDOR check (own account budget)
   // attackers arrive through a trusted proxy (one address each). force_https is off: these instances exercise the
   // attack-logging / install / admin-IP behaviour over plain http — HTTPS forcing is tested on its own instances
   // ('https', 'httpsproxy', 'main', 'prod'). With a trusted proxy configured, force_https=auto would (correctly) treat
@@ -1099,6 +1100,7 @@ async function S03() {
   const adm = await admin(s);
   const victim = await actor(s, 'victim');
   const eps = await postEndpoints(s);
+  const sa = await srv('allot');        // CONTRACT §16.7: the allotment checks (own account budget, own rate budgets)
 
   // ---- layer 1: malformed bodies on every POST endpoint the build has
   const malformed = (big) => [
@@ -1108,7 +1110,9 @@ async function S03() {
   for (const ep of eps) {
     // CONTRACT §15.7 #3 — JSON depth ≤ 32, body size caps per endpoint, unknown shapes rejected; never a 500
     await check('S03', `${ep} · malformed bodies (array / scalar root, cut-off, depth 40 and 300, NaN, bad UTF-8, oversize) → 4xx JSON error, never 5xx`, { sev: 'medium', fix: 'Route every body through Http::json() / Tfm\\V with the depth-32 and size caps; answer 400 / 413.' }, async () => {
-      let u = await newUser(s, 'Mal');
+      // the allotment endpoints are exercised on their own instance (see below): one address may register 60 accounts
+      // an hour on an instance, and "val" needs its budget for the upload and payment checks that follow
+      let u = await newUser(ep.startsWith('api/allot/') ? sa : s, 'Mal');
       const probe = await u.json(ep, {});
       if (probe.status === 403 && probe.error && probe.error.code === 'FORBIDDEN') u = adm;
       const bad = [];
@@ -1267,9 +1271,172 @@ async function S03() {
       ['ids = nested', { ids: [[1]] }], ['ids = huge', { ids: [1e30] }], ['ids = 51 entries', { ids: Array.from({ length: 51 }, (_, i) => i + 1) }], ['ids missing', {}], ['an unknown key', { ids: [1], all: true }]];
     return strict('api/farm/seen.php', cases);
   });
+  // ---- CONTRACT §16.7 — the allotment (분양) endpoints: api/allot/*.php. The instance gets the small preset (4 open zones,
+  // 180 units) through the operator's command line; the store zone is filled through the ledger import, so a waiting
+  // list exists. Budgets: allot_apply 10 an hour, allot_write 20 in 10 minutes per account — hence the fresh accounts, and
+  // hence an instance of its own ("allot", started above): one address may register 60 accounts an hour on an instance.
+  const ALLOT = { ready: false, ver: '', next: 0 };
+  const saUser = () => newUser(sa, 'Str');
+  const allotReady = async () => {
+    if (ALLOT.ready) return;
+    const seed = cli(sa, 'allot:seed', '--preset', 'small', '--open');
+    assert(seed.status === 0, `cli allot:seed failed: ${oneLine(seed.out, 200)}`);
+    const file = path.join(sa.dataDir, 'allot-fill.csv');
+    fs.writeFileSync(file, '\ufeff성명,연락처,단위\r\n' + Array.from({ length: 20 }, (_, i) => `창고손님,010-7000-${String(i).padStart(4, '0')},S01`).join('\r\n') + '\r\n');
+    const fill = cli(sa, 'allot:import', 'ledger', file, '--commit');
+    fs.rmSync(file, { force: true });
+    assert(fill.status === 0, `cli allot:import failed: ${oneLine(fill.out, 200)}`);
+    const plans = await (await newUser(sa, 'Alr')).req('api/allot/plans.php');
+    assert(plans.status === 200 && typeof plans.data.consentVersion === 'string' && plans.data.zones.find((z) => z.code === 'S01').free === 0, `api/allot/plans.php → ${plans.status} ${oneLine(plans.text, 160)}`);
+    ALLOT.ver = plans.data.consentVersion;
+    ALLOT.ready = true;
+  };
+  const applicant = (over = {}) => ({ name: '김장독', phone: '010-5555-0101', consent: true, consentVersion: ALLOT.ver, adult: true, ...over });
+  /** the next unit of zone J01 nobody in this run asked for yet */
+  const freeUnit = () => `J01-${String(++ALLOT.next).padStart(4, '0')}`;
+  /** a new account (or the given one) with a pending application of its own: {c, no, unit} */
+  const holder = async (prefix = 'Alo', c = null) => {
+    await allotReady();
+    c = c || await newUser(sa, prefix);
+    const unit = freeUnit();
+    const r = await c.json('api/allot/apply.php', applicant({ unit }));
+    if (r.status !== 201 || !r.data || !r.data.contractNo) throw new Fail(`could not apply for ${unit} on "${sa.name}": ${r.status} ${(r.error && r.error.code) || ''}`);
+    return { c, no: r.data.contractNo, unit };
+  };
+  const BOOL = [['a word', 'yes'], ['the string "true"', 'true'], ['the number 1', 1], ['an array', [true]], ['an object', { v: true }]];
+  // CONTRACT §16.7 / §15.7 #3 — apply: every field typed; consent and adult are a JSON true and nothing else
+  await check('S03', 'api/allot/apply.php · wrong types, consent / adult that are not exactly true, an old consent version, both kinds of target at once, unknown words and unknown keys are refused (no application is made)', { sev: 'medium', fix: STRICT_FIX }, async () => {
+    await allotReady();
+    const base = applicant({ unit: 'J02-0060', nameplate: '우리집', nameplateShow: false });
+    const auto = applicant({ kind: 'jar', zone: 'J02', auto: true });
+    const without = (k) => { const b = { ...base }; delete b[k]; return b; };
+    const cases = [...mut('unit', [['a number', 12345], ['true', true], ['a list', ['J02-0060']], ['an object with an unknown key', { code: 'J02-0060' }]], base), ['unit = an unknown code', { ...base, unit: 'ZZ99-0001' }], ['unit = markup', { ...base, unit: '<b>J02</b>' }],
+      ['unit and kind + auto together', { ...base, kind: 'jar', auto: true }], ['no target at all', without('unit')],
+      ...mut('name', STR, base), ['name = 41 characters', { ...base, name: '가'.repeat(41) }], ['name = digits only', { ...base, name: '12345' }], ['name missing', without('name')],
+      ...mut('phone', STR, base), ['phone = a word', { ...base, phone: 'abc' }], ['phone = too short', { ...base, phone: '010-12' }], ['phone missing', without('phone')],
+      ...mut('consent', BOOL, base), ['consent = false', { ...base, consent: false }], ['consent missing', without('consent')],
+      ...mut('adult', BOOL, base), ['adult = false', { ...base, adult: false }], ['adult missing', without('adult')],
+      ...mut('consentVersion', STR, base), ['consentVersion = an old one', { ...base, consentVersion: '2020-01.00000000' }], ['consentVersion missing', without('consentVersion')],
+      ...mut('addr', STR, base), ['addr = 201 characters', { ...base, addr: '가'.repeat(201) }],
+      ...mut('nameplate', STR, base), ['nameplate = 41 characters', { ...base, nameplate: '가'.repeat(41) }], ...mut('nameplateShow', BOOL, base), ...mut('guardian', BOOL, base),
+      ['kind = an unknown word', { ...auto, kind: 'tree' }], ...mut('kind', STR, auto), ...mut('auto', BOOL, auto), ['auto = false', { ...auto, auto: false }], ['auto missing', { ...auto, auto: undefined }],
+      ...mut('zone', STR, auto), ['zone = markup', { ...auto, zone: '<b>' }], ['zone of another kind', { ...auto, zone: 'P01' }], ['zone = unknown', { ...auto, zone: 'J99' }],
+      ['an unknown key (userId)', { ...base, userId: victim.user.id }], ['an unknown key (price)', { ...base, price: 1 }], ['an unknown key (status)', { ...base, status: 'active' }], ['an unknown key inside unit', { ...auto, kind: undefined, zone: undefined, auto: undefined, unit: { kind: 'jar', auto: true, price: 1 } }]];
+    const res = await strict('api/allot/apply.php', cases, { perUser: 9, user: saUser });
+    const made = dbQuery(sa, "SELECT COUNT(*) AS n FROM allot_contracts WHERE source = 'app' AND unit_id IN (SELECT id FROM allot_units WHERE code LIKE 'J02-%')");
+    assert(Number(made[0].n) === 0, `${made[0].n} applications were stored by invalid requests`);
+    return res;
+  });
+  // CONTRACT §16.7 — cancel / nameplate: the caller's own contract number, typed fields
+  await check('S03', 'api/allot/cancel.php · api/allot/nameplate.php · contractNo / text / show of the wrong type, a malformed, unknown or foreign number, missing fields and unknown keys are refused (the contract and its nameplate stay as they were)', { sev: 'medium', fix: STRICT_FIX }, async () => {
+    const mine = await holder('Alc'), other = await holder('Alv');
+    const c1 = [...mut('contractNo', STR, { contractNo: mine.no }), ['contractNo = malformed', { contractNo: 'A26' }], ['contractNo = unknown', { contractNo: 'A26-22222-22222' }], ['contractNo = another account\'s', { contractNo: other.no }],
+      ['contractNo = SQL', { contractNo: "' OR 1=1 --" }], ['contractNo missing', {}], ['an unknown key (userId)', { contractNo: mine.no, userId: other.c.user.id }], ['an unknown key (status)', { contractNo: mine.no, status: 'active' }]];
+    const r1 = await strict('api/allot/cancel.php', c1, { user: async () => mine.c });
+    const mine2 = await holder('Aln');
+    const base = { contractNo: mine2.no, text: '우리집', show: true };
+    const c2 = [...mut('contractNo', STR, base), ['contractNo = another account\'s', { ...base, contractNo: other.no }], ['contractNo = unknown', { ...base, contractNo: 'A26-22222-22222' }],
+      ...mut('text', STR, base), ['text = 41 characters', { ...base, text: '가'.repeat(41) }], ['text missing', { contractNo: mine2.no, show: true }], ...mut('show', BOOL, base), ['show missing', { contractNo: mine2.no, text: '우리집' }],
+      ['an unknown key (unit)', { ...base, unit: other.unit }]];
+    const r2 = await strict('api/allot/nameplate.php', c2, { user: async () => mine2.c });
+    const m = await mine.c.req('api/allot/mine.php'), o = await other.c.req('api/allot/mine.php'), m2 = await mine2.c.req('api/allot/mine.php');
+    assert(m.data.contracts[0].status === 'pending' && o.data.contracts[0].status === 'pending' && o.data.contracts[0].nameplate.text === '' && m2.data.contracts[0].nameplate.text === '', 'a refused request changed a contract or a nameplate');
+    return `cancel: ${r1} · nameplate: ${r2}`;
+  });
+  // CONTRACT §16.7 — seen: a list of ≤ 50 positive JSON integers
+  await check('S03', 'api/allot/seen.php · ids must be a list of at most 50 positive JSON integers (no strings, floats, nesting, objects, unknown keys)', { sev: 'low', fix: STRICT_FIX }, async () => {
+    await allotReady();
+    const cases = [['ids = a word', { ids: 'x' }], ['ids = a number', { ids: 5 }], ['ids = an object', { ids: { a: 1 } }], ['ids = digit strings', { ids: ['1'] }], ['ids = a float', { ids: [1.5] }], ['ids = negative', { ids: [-1] }], ['ids = zero', { ids: [0] }],
+      ['ids = nested', { ids: [[1]] }], ['ids = huge', { ids: [1e30] }], ['ids = 51 entries', { ids: Array.from({ length: 51 }, (_, i) => i + 1) }], ['ids missing', {}], ['an unknown key', { ids: [1], all: true }]];
+    return strict('api/allot/seen.php', cases, { user: saUser });
+  });
+  // CONTRACT §16.7 — waitlist: action enum; join = the applicant fields; leave / accept = the caller's own row id as a JSON integer
+  await check('S03', 'api/allot/waitlist.php · an unknown action, wrong types, consent that is not exactly true, a row id that is not a JSON integer, another account\'s row and fields of the other action are refused', { sev: 'medium', fix: STRICT_FIX }, async () => {
+    await allotReady();
+    const base = applicant({ action: 'join', kind: 'store', zone: 'S01' });
+    const waiter = await newUser(sa, 'Alw');
+    const w = await waiter.json('api/allot/waitlist.php', applicant({ action: 'join', kind: 'store', zone: 'S01', name: '기다림', phone: '010-5555-0303' }));
+    assert(w.status === 200 && w.data.id > 0 && w.data.status === 'waiting', `a valid waiting-list request was refused: ${w.status} ${(w.error && w.error.code) || ''}`);
+    const cases = [...mut('action', STR, base), ['action = an unknown word', { ...base, action: 'jump' }], ['action missing', { ...base, action: undefined }],
+      ...mut('kind', STR, base), ['kind = an unknown word', { ...base, kind: 'tree' }], ['kind missing', { ...base, kind: undefined }], ...mut('zone', STR, base), ['zone = markup', { ...base, zone: '<b>' }], ['zone = unknown', { ...base, zone: 'S99' }],
+      ...mut('name', STR, base), ...mut('phone', STR, base), ['phone = a word', { ...base, phone: 'abc' }], ...mut('consent', BOOL, base), ['consent missing', { ...base, consent: undefined }], ...mut('adult', BOOL, base),
+      ['consentVersion = an old one', { ...base, consentVersion: '2020-01.00000000' }], ...mut('guardian', BOOL, base), ['join with an id', { ...base, id: w.data.id }], ['join with an unknown key (userId)', { ...base, userId: victim.user.id }],
+      ['leave: id = a digit string', { action: 'leave', id: String(w.data.id) }], ['leave: id = a float', { action: 'leave', id: w.data.id + 0.5 }], ['leave: id = 0', { action: 'leave', id: 0 }], ['leave: id = negative', { action: 'leave', id: -1 }],
+      ['leave: id = a list', { action: 'leave', id: [w.data.id] }], ['leave: id missing', { action: 'leave' }], ['leave: another account\'s row', { action: 'leave', id: w.data.id }], ['leave: an unknown row', { action: 'leave', id: 987654321 }],
+      ['leave with a field of join', { action: 'leave', id: w.data.id, kind: 'store' }], ['accept: id = a word', { action: 'accept', id: 'x' }], ['accept: another account\'s row', { action: 'accept', id: w.data.id }], ['accept: an unknown row', { action: 'accept', id: 987654321 }]];
+    const res = await strict('api/allot/waitlist.php', cases, { perUser: 18, user: saUser });
+    const still = await waiter.req('api/allot/mine.php');
+    assert(still.data.waitlist.length === 1 && still.data.waitlist[0].id === w.data.id && still.data.waitlist[0].status === 'waiting', 'the waiting row of another account was changed');
+    return res;
+  });
+  // CONTRACT §16.7 / §15.7 #15 — pay-prepare / pay-confirm: strings and a JSON-integer amount (the payment flow itself: tests/server-e2e.mjs)
+  await check('S03', 'api/allot/pay-prepare.php · api/allot/pay-confirm.php · contractNo / paymentKey / orderId must be strings and the amount a JSON integer of 1 … 10,000,000; unknown keys are refused', { sev: 'medium', fix: STRICT_FIX }, async () => {
+    const mine = await holder('Alp');
+    const c1 = [...mut('contractNo', STR, { contractNo: mine.no }), ['contractNo missing', {}], ['an unknown key (amount)', { contractNo: mine.no, amount: 1 }], ['an unknown key (userId)', { contractNo: mine.no, userId: victim.user.id }]];
+    const r1 = await strict('api/allot/pay-prepare.php', c1, { user: async () => mine.c });
+    const base = { paymentKey: 'mock_' + 'x'.repeat(20), orderId: 'AL' + 'x'.repeat(30), amount: 30000 };
+    const c2 = [...mut('paymentKey', STR, base), ['paymentKey = empty', { ...base, paymentKey: '' }], ['paymentKey = 201 characters', { ...base, paymentKey: 'k'.repeat(201) }], ...mut('orderId', STR, base), ['orderId = too short', { ...base, orderId: 'abc' }],
+      ['orderId = 65 characters', { ...base, orderId: 'A'.repeat(65) }], ...mut('amount', INT, base), ['amount = 0', { ...base, amount: 0 }], ['amount = negative', { ...base, amount: -30000 }], ['amount = above the cap', { ...base, amount: 10000001 }],
+      ['amount = exponent text', '{"paymentKey":"mock_xxxxxxxxxxxxxxxxxxxx","orderId":"ALxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","amount":3e4}'], ['amount missing', { paymentKey: base.paymentKey, orderId: base.orderId }], ['an unknown key (contractNo)', { ...base, contractNo: mine.no }]];
+    const r2 = await strict('api/allot/pay-confirm.php', c2, { perUser: 18, user: saUser });
+    const paid = dbQuery(sa, "SELECT COUNT(*) AS n FROM allot_payments WHERE status = 'paid' AND method = 'toss'");
+    assert(Number(paid[0].n) === 0, 'an invalid request produced a paid payment');
+    return `pay-prepare: ${r1} · pay-confirm: ${r2}`;
+  });
+  // CONTRACT §16.7 / §15.7 #3 (lens: IDOR) — nothing of another account's allotment can be read or changed, and no
+  // public answer carries a person
+  await check('S03', 'api/allot/* · IDOR: another account cannot read or change a contract, a nameplate, a waiting row or a notice that is not its own; the public unit / map / summary answers carry no person and no price; no endpoint takes a user or customer id', { sev: 'high', fix: 'Every allot endpoint resolves contracts, waiting rows and notices by the session\'s own user id (Allot::ownContract / ownWait / markSeen); never by an id from the request.' }, async () => {
+    const v = await holder('Alx'), a = await holder('Aly');
+    const vw = await v.c.json('api/allot/waitlist.php', applicant({ action: 'join', kind: 'store', zone: 'S01' }));
+    const vBox = await v.c.req('api/allot/inbox.php');
+    assert(vw.status === 200 && vBox.status === 200 && vBox.data.notices.length >= 1 && vBox.data.unread >= 1, `the owner's own waiting row / notices: ${vw.status} ${vBox.status}`);
+    const noteId = vBox.data.notices[0].id;
+    const bad = [];
+    // reading
+    const am = await a.c.req('api/allot/mine.php'), ab = await a.c.req('api/allot/inbox.php?after=0');
+    if (am.text.includes(v.no) || am.data.contracts.length !== 1 || am.data.contracts[0].contractNo !== a.no || am.data.waitlist.length !== 0) bad.push(`mine shows foreign rows: ${oneLine(am.text, 160)}`);
+    if (ab.text.includes(v.no) || ab.data.notices.some((n) => n.id === noteId)) bad.push('inbox shows a foreign notice');
+    for (const q of [`api/allot/mine.php?userId=${v.c.user.id}`, `api/allot/mine.php?contractNo=${v.no}`, `api/allot/inbox.php?userId=${v.c.user.id}`, `api/allot/plans.php?customerId=1`, `api/allot/unit.php?code=${v.unit}&contract=1`]) {
+      const r = await a.c.req(q);
+      if (r.status !== 400) bad.push(`${q.replace(/^api\/allot\//, '')} → ${r.status} (an id parameter must be refused)`);
+    }
+    // the public view of the unit the victim holds
+    const pub = await request(sa, `api/allot/unit.php?code=${v.unit}`), asA = await a.c.req(`api/allot/unit.php?code=${v.unit}`), asV = await v.c.req(`api/allot/unit.php?code=${v.unit}`);
+    const keys = Object.keys(pub.data || {}).sort().join(',');
+    if (keys !== 'canApply,code,kind,logs,mine,nameplate,seq,status,zone') bad.push(`unit.php fields: ${keys}`);
+    if (pub.data.mine !== false || asA.data.mine !== false || asV.data.mine !== true || pub.data.nameplate !== null) bad.push(`unit.php mine / nameplate: ${pub.data.mine} ${asA.data.mine} ${asV.data.mine} ${pub.data.nameplate}`);
+    const map = await request(sa, 'api/allot/map.php'), mapA = await a.c.req('api/allot/map.php'), sum = await request(sa, 'api/allot/summary.php');
+    if (JSON.stringify(map.data) !== JSON.stringify(mapA.data)) bad.push('map.php differs between a visitor and an account');
+    for (const [name, r] of [['unit', pub], ['map', map], ['summary', sum], ['logs', await request(sa, `api/allot/logs.php?code=${v.unit}`)]]) {
+      if (/김장독|5555|0101|price|amount|contract|customer|phone|userId|user_id/i.test(JSON.stringify(r.data))) bad.push(`${name}.php carries a person, a contract or a price: ${oneLine(JSON.stringify(r.data), 160)}`);
+    }
+    // changing
+    const seen = await a.c.json('api/allot/seen.php', { ids: [noteId] });
+    if (seen.status !== 200 || seen.data.updated !== 0) bad.push(`seen on a foreign notice → ${seen.status} ${JSON.stringify(seen.data)}`);
+    for (const [p, body] of [['cancel', { contractNo: v.no }], ['nameplate', { contractNo: v.no, text: '가져감', show: true }], ['waitlist', { action: 'leave', id: vw.data.id }], ['waitlist', { action: 'accept', id: vw.data.id }]]) {
+      const r = await a.c.json(`api/allot/${p}.php`, body);
+      if (r.status !== 404 || r.text.includes('김장독')) bad.push(`${p} ${JSON.stringify(body)} → ${r.status} ${(r.error && r.error.code) || ''}`);
+    }
+    const pp = await a.c.json('api/allot/pay-prepare.php', { contractNo: v.no });
+    if (pp.status < 400 || (pp.data && pp.data.orderId)) bad.push(`pay-prepare on a foreign contract → ${pp.status}`);
+    const take = await a.c.json('api/allot/apply.php', applicant({ unit: v.unit, name: '가로챔', phone: '010-5555-0404' }));
+    if (take.status !== 409 || take.error.code !== 'UNIT_TAKEN') bad.push(`applying for a held unit → ${take.status} ${(take.error && take.error.code) || ''}`);
+    // nothing changed for the owner
+    const after = await v.c.req('api/allot/mine.php'), box = await v.c.req('api/allot/inbox.php');
+    const c = after.data.contracts[0];
+    if (c.contractNo !== v.no || c.status !== 'pending' || c.cancelRequested !== false || c.nameplate.text !== '' || after.data.waitlist.length !== 1 || after.data.waitlist[0].status !== 'waiting') bad.push(`the owner's rows changed: ${oneLine(JSON.stringify(after.data), 200)}`);
+    if (box.data.notices.find((n) => n.id === noteId).seen !== false) bad.push('the owner\'s notice was marked read by another account');
+    const evAll = events(sa);
+    const ev = Array.isArray(evAll) ? evAll.filter((e) => e.kind === 'allot_foreign') : [];
+    if (!ev.length) bad.push('no allot_foreign security event was recorded for the foreign contract numbers');
+    assert(!bad.length, bad.join(' | '));
+    return `2 accounts: 5 id parameters refused, 5 foreign writes → 404 / 4xx, the owner's contract, nameplate, waiting row and notice untouched; ${ev.length} allot_foreign events`;
+  });
+  await stopServer('allot');
   // CONTRACT §15.7 #3 — every POST endpoint has a field-level spec in this suite
   await check('S03', 'every POST endpoint of the build has a field-level validation matrix in this suite', { sev: 'low', fix: 'New endpoint: add its valid body and wrong-type variants to S03() in tests/security-e2e.mjs.' }, async () => {
     const covered = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/chat/send.php', 'api/chat/report.php', 'api/presence/update.php', 'api/player/save.php', 'api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/grant.php', 'api/sub/renew.php',
+      'api/allot/apply.php', 'api/allot/cancel.php', 'api/allot/nameplate.php', 'api/allot/seen.php', 'api/allot/waitlist.php', 'api/allot/pay-prepare.php', 'api/allot/pay-confirm.php',   // CONTRACT §16.7
       'api/farm/report.php', 'api/farm/seen.php', 'api/farm/report-photo.php',   // report-photo: its reportId / file matrix is in S14
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
@@ -2172,9 +2339,15 @@ async function S09() {
       // CONTRACT §15.3 — farm_state [60, 60] · farm_report [10, 600] · farm_photo [10, 3600] · farm_reports [60, 60] (seen.php shares it)
       'api/farm/state.php': [61, () => u.req('api/farm/state.php')], 'api/farm/reports.php': [61, () => u.req('api/farm/reports.php')],
       'api/farm/report.php': [11, () => u.json('api/farm/report.php', { kind: 'rt', bedId: 'RB1', pid: '0'.repeat(16) })], 'api/farm/report-photo.php': [11, () => u.req('api/farm/report-photo.php', reportPhotoOf(1, 'a.png', Buffer.from('not an image')))],
+      // CONTRACT §16.7 — allot_map · allot_mine · allot_inbox [60, 60] · allot_apply [10, 3600] · allot_write [20, 600]. The public
+      // map endpoints are hammered by the logged-in account too: the endpoints that share a budget are asked by that account.
+      'api/allot/map.php': [61, () => u.req('api/allot/map.php')], 'api/allot/mine.php': [61, () => u.req('api/allot/mine.php')], 'api/allot/inbox.php': [61, () => u.req('api/allot/inbox.php')],
+      'api/allot/apply.php': [11, () => u.json('api/allot/apply.php', {})], 'api/allot/cancel.php': [21, () => u.json('api/allot/cancel.php', {})],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
-      'api/farm/seen.php': 'api/farm/reports.php' };
+      'api/farm/seen.php': 'api/farm/reports.php',
+      'api/allot/summary.php': 'api/allot/map.php', 'api/allot/unit.php': 'api/allot/map.php', 'api/allot/logs.php': 'api/allot/map.php', 'api/allot/plans.php': 'api/allot/mine.php', 'api/allot/seen.php': 'api/allot/inbox.php',
+      'api/allot/nameplate.php': 'api/allot/cancel.php', 'api/allot/waitlist.php': 'api/allot/cancel.php', 'api/allot/pay-prepare.php': 'api/allot/cancel.php', 'api/allot/pay-confirm.php': 'api/allot/cancel.php' };
     // api/trap.php is the honeypot: it answers a bare 404 even over its logging limit (a 429 would tell a scanner it
     // found a real, rate-limited endpoint). Its rate limit throttles the log, not the response — so it is not expected
     // to 429 here (its limit is still exercised: S05 relies on the honeypot event being written under the limit).
