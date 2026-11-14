@@ -172,7 +172,7 @@ tr.log.lvl-warn td{color:#ffe6a3}
 .todolist{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .todolist li{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid var(--line)}
 .todolist .ico{font-size:20px;line-height:1.3}
-.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.fgrid,.fgrid>*,.fgrid input,.fgrid select{min-width:0}
 .zoneedit{min-width:min(520px,80vw)}
 .bulk{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);border:1px dashed var(--line)}
 .bulk select,.bulk input[type=text]{width:auto;flex:1 1 200px}
@@ -201,4 +201,5 @@ tr.bad td{background:rgba(255,107,94,.08)}
 @media (max-width:640px){.zmap i{width:6px;height:6px}.zmap,.zrow{gap:1px}.zoneedit{min-width:0}.rule{grid-template-columns:1fr}.subtabs a{padding:7px 10px}
 .rt thead{display:none}.rt tr{display:block;padding:10px 12px;border-bottom:1px solid var(--line)}.rt td{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;padding:3px 0;border:0;text-align:right;min-width:0;max-width:none}
 .rt td::before{content:attr(data-th);color:var(--dim);font-size:.82rem;flex:none;text-align:left}.rt td:empty{display:none}.rt td.acts{display:block;text-align:left}.rt td.acts::before{content:none}.barcell{min-width:0}}
-.prewrap{white-space:pre-wrap}.rules .btn{justify-self:start}.card h4{margin:14px 0 6px;font-size:.95rem}
+.subtabs a.on .badge{background:rgba(29,21,3,.85);color:#ffe08a}.prewrap{white-space:pre-wrap}.rules .btn{justify-self:start}.card h4{margin:14px 0 6px;font-size:.95rem}
+@media (max-width:640px){.fgrid{grid-template-columns:minmax(0,1fr)}.stack>label.check{white-space:normal;align-items:flex-start}.stack>label.check input{margin-top:3px}}
