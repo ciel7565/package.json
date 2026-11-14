@@ -322,9 +322,9 @@
   const GATE_DANGER = new Set(['kid-chat', 'parent-gate', 'easy-off', 'reset', 'import', 'forget']);
   // gated actions that open a grown-up screen right after the pass (the others only serve their own action)
   // (rtfarm-approve: the local-mode "어른 확인" of a completion request, 42-realfarm — its memo / ✅ / ↩️ dialog)
-  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register', 'subscription', 'devcenter', 'rtfarm-approve']);
+  const GATE_SCREEN = new Set(['parents', 'settings', 'admin', 'delete-account', 'login', 'register', 'subscription', 'devcenter', 'rtfarm-approve', 'allot-apply']); // allot-apply: the 분양 신청 screen (43-allot) [allot-client]
   // the grown-up screens a session may live on (04-ui passes the modal's className with ui:modal-open)
-  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal|app-sub-modal|rt-adult-modal)(\s|$)/;
+  const GATE_ROOT_CLASS = /(^|\s)(app-menu-modal|app-settings-modal|app-delete-modal|admin-modal|app-sub-modal|rt-adult-modal|allot-adult-modal)(\s|$)/; // allot-adult-modal [allot-client]
   // session ends that mean the grown-up left: the screens the pass opened close with it (lockGate)
   const GATE_LEFT = new Set(['hidden', 'expired']);
   // wrong / wt / until: the in-memory copy of the persisted round (used when site storage is blocked)

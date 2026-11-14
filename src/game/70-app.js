@@ -3230,6 +3230,7 @@
       !NoThree.active && { id: 'where', emoji: '🗺️', label: '어디 갈까', color: '#4fb3ff', say: '어디 갈까? 가고 싶은 곳을 골라요.' },
       NoThree.active && G.sys.education?.openLibrary && { id: 'learn', emoji: '📚', label: '배움터', color: '#4fb3ff', say: '배움터. 전통 발효를 배워요.' },
       G.sys.exhibits && !G.sys.exhibits._failed && typeof G.sys.exhibits.openBook === 'function' && { id: 'housebook', emoji: '🏠', label: '집 구경 도감', color: '#e0a35a', say: '집 구경 도감. 한옥에서 모은 도장을 봐요.' }, // [exhibits]
+      G.sys.allot && !G.sys.allot._failed && typeof G.sys.allot.open === 'function' && { id: 'allot', emoji: '🏺', label: '내 항아리', color: '#d9a066', say: '내 항아리. 만장대 분양 지도와 내 자리를 봐요.' }, // [allot-client]
       comp && !NoThree.active && { id: 'ongi', emoji: '🏺', label: '옹이랑', color: '#36cfc0', say: '옹이랑 놀아요.' },
       { id: 'sound', emoji: '🔊', label: '소리', color: '#b48bff', say: '소리. 소리 크기를 바꿔요.' },
       { id: 'help', emoji: '❓', label: '도와줘요', color: '#6c8cff', say: '도와줘요. 노는 방법을 봐요.' },
@@ -3282,6 +3283,7 @@
       case 'where': return G.ui.triggerAction('where');
       case 'learn': return G.sys.education?.openLibrary?.();
       case 'housebook': return G.sys.exhibits?.openBook?.(); // [exhibits]
+      case 'allot': return G.sys.allot?.open?.('mine'); // [allot-client]
       case 'ongi': return G.sys.companion?.openMenu?.();
       case 'sound': return openSettings();
       case 'help': return openHelp();
@@ -3311,6 +3313,7 @@
       { act: 'profile', emoji: '🙋', label: '내 정보', desc: '레벨·칭호·체험 기록', tint: '#9b8cff' },
       { act: 'collection', emoji: '📚', label: '도감·업적', desc: '모은 작물·발효식품·업적', key: 'C', tint: '#6fe0d2' },
       G.sys.exhibits && !G.sys.exhibits._failed && typeof G.sys.exhibits.openBook === 'function' && { act: 'housebook', emoji: '🏠', label: '집 구경 도감', desc: '한옥 방의 전시·움직이는 그림', tint: '#e0a35a' }, // [exhibits]
+      G.sys.allot && !G.sys.allot._failed && typeof G.sys.allot.open === 'function' && { act: 'allot', emoji: '🏺', label: '만장대 분양', desc: '내 분양·단지 지도·신청·분양 알림', tint: '#d9a066' }, // [allot-client]
       { act: 'avatar', emoji: '👕', label: '아바타 꾸미기', desc: '옷차림·헤어·닉네임', tint: '#ff9fc7' },
       G.sys.minimap?.openWorldMap && !NoThree.active && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
       NoThree.active && G.sys.education?.openLibrary && { act: 'learn', emoji: '📖', label: '배움터', desc: '전통 발효 배우기·퀴즈 (3D 없이)', tint: '#7fc4ff' },
@@ -3399,6 +3402,7 @@
       case 'profile': if (P?.openProfile) P.openProfile(); else missing('내 정보'); return;
       case 'collection': if (P?.openCollection) P.openCollection(); else missing('도감'); return;
       case 'housebook': if (G.sys.exhibits?.openBook) G.sys.exhibits.openBook(); else missing('집 구경 도감'); return; // [exhibits]
+      case 'allot': if (G.sys.allot?.open) G.sys.allot.open('mine'); else missing('만장대 분양'); return; // [allot-client]
       case 'avatar': openAvatar(); return;
       case 'map': G.sys.minimap?.openWorldMap?.(); return;
       case 'learn': G.sys.education?.openLibrary?.(); return;
