@@ -131,10 +131,20 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         // the subscription is the server's: the client's `sub` is ignored (stored as the server state, like a stale role)
         $tier = (int) $sub['tier'];
 
-        $result = Db::tx(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base, $sub, $tier) {
+        // [verify-scale] Two FIRST saves at the same moment used to end as a server error on MariaDB: "SELECT … FOR UPDATE"
+        // on a row that does not exist yet locks the gap at the end of the table, both transactions then try to insert
+        // into it, and InnoDB ends one of them (deadlock, 1213) — of twelve new accounts saving together eleven got a 500
+        // (tests/scale-attack.mjs, group "saves"). Now the account row — it always exists — is locked first: the saves of
+        // one account still run one after the other, also the very first; the stored copy is locked only when there is
+        // one (against a restore by the operator); and a transaction the database gives up on is run again.
+        $result = Db::txRetry(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base, $sub, $tier) {
+            Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]);
             // [scale-server] CONTRACT §16.9: explicit columns — the backup copy (as large as the save itself, up to 1.5 MB)
             // is never read: the row's own data becomes the new backup
-            $row = Db::one('SELECT user_id, version, revision, data, checksum, size_bytes, meta, saved_at, created_at, rejects, last_reject_at FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+            $row = null;
+            if (Db::one('SELECT revision FROM player_saves WHERE user_id = ?', [$uid])) {
+                $row = Db::one('SELECT user_id, version, revision, data, checksum, size_bytes, meta, saved_at, created_at, rejects, last_reject_at FROM player_saves WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+            }
             $prev = null;
             if ($row) {
                 $prev = Json::tryDecode((string) $row['data'], false, 512);

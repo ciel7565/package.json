@@ -3,15 +3,18 @@
  * capacity [--json]         수용 인원 · 부하 · 대기실 · 캐시의 지금 숫자 (CONTRACT §16.9, docs/SCALING-KO.md)
  * cache:purge               시간이 지난 캐시 항목 지우기 (cleanup 이 함께 해요)
  * cache:info                캐시가 어디에 있고 얼마나 큰지
+ * cache:forget <계정>       그 계정에 대해 기억해 둔 것(계정 정보 · 동기화 통행증)을 지금 지워요 — 데이터베이스를 직접 고친 뒤에
  */
 declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') { if (function_exists('header_remove')) header_remove('X-Powered-By'); http_response_code(404); exit; }
 
+use Tfm\Auth;
 use Tfm\Cache;
 use Tfm\Config;
 use Tfm\Gate;
 use Tfm\Sync;
+use Tfm\Users;
 
 return [
     'capacity' => static function (array $args): int {
@@ -45,6 +48,21 @@ return [
     'cache:purge' => static function (array $args): int {
         $r = Cache::purge();
         fwrite(STDOUT, "✔ 캐시 정리: {$r['removed']}개 지움, {$r['kept']}개 남김 ({$r['driver']})" . PHP_EOL);
+        return 0;
+    },
+    // [verify-scale] A ban, a role or a password written straight into the database (phpMyAdmin) is not seen by the web
+    // server until what it remembers runs out: 15 s for ordinary requests (cache.user_ttl), up to sync.token_ttl (5 min)
+    // for the sync token. This makes it see the change now — the same thing ban / promote / reset-password do by themselves.
+    'cache:forget' => static function (array $args): int {
+        $who = '';
+        foreach ($args as $a) {
+            if (is_string($a) && $a !== '' && $a[0] !== '-') { $who = $a; break; }
+        }
+        if ($who === '') { fwrite(STDERR, '✖ 사용법: php cli/tfm.php cache:forget <이메일 또는 닉네임>' . PHP_EOL); return 1; }
+        $u = Users::byLogin($who);
+        if (!$u) { fwrite(STDERR, '✖ 사용자를 찾을 수 없어요: ' . $who . PHP_EOL); return 1; }
+        Auth::forgetUser((int) $u['id'], true);
+        fwrite(STDOUT, "✔ {$u['nickname']} 님에 대해 기억해 둔 것을 지웠어요. 다음 요청부터 데이터베이스의 값(정지 · 권한 · 비밀번호)을 다시 읽어요." . PHP_EOL);
         return 0;
     },
     'cache:info' => static function (array $args): int {

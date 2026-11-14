@@ -2,7 +2,7 @@
 // =============================================================================
 // 전통발효체험관 메타버스 — attacks on the scale work of CONTRACT §16.9, over HTTP (the independent verification)
 //
-//   node tests/scale-attack.mjs [--docroot <dir>] [--only token,queue] [--apache] [--apcu-so <file>] [--long] [--json <file>] [--verbose]
+//   node tests/scale-attack.mjs [--docroot <dir>] [--only token,queue] [--apache] [--apcu-so <file>] [--json <file>] [--keep] [--verbose]
 //   env  TFM_SCALE_PORT_BASE=21120 (base … base+14) · TFM_SCALE_APACHE_PORT=21145 · TFM_DB_DRIVER=mysql TFM_DB_HOST/PORT/USER/PASS/NAME
 //
 //   Black box: private `php -S` instances over a built server copy (default dist/metaverse), each with a throw-away
@@ -16,6 +16,7 @@
 //     limits   the budgets of the old endpoints are what they were; the automatic block closes the token path too
 //     flood    junk at the login address, refused requests and a class behind one address do not hurt anybody else
 //     queue    one place per account, forged and foreign tickets, spent tickets, a dead browser frees its seat
+//     saves    a class saving for the first time at the same moment (MariaDB: the deadlock of two first saves)
 //     gzip     nothing secret next to other people's text in a compressed answer
 //     sql      the token path over HTTP: statements per call, counted over 35 seconds
 //     static   (--apache) the precompressed page copies carry the headers of the plain page; cache files are closed;
@@ -36,7 +37,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const optv = (n) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : null; };
 const VERBOSE = argv.includes('--verbose');
-const LONG = argv.includes('--long');
 const APACHE = argv.includes('--apache');
 const APCU_SO = optv('--apcu-so');
 const ONLY = optv('--only') ? new Set(optv('--only').split(',').map((s) => s.trim())) : null;
@@ -170,6 +170,35 @@ async function loginAs(srv, email, o = {}) {
   return c;
 }
 const at = (x, z, more = {}) => [x, 0, z, 0, more.speed || 0, more.anim || 'idle', more.zone || 'ZONE_MAIN', null, 0];
+/** the page's save checksum (cyrb53 over JSON.stringify(state)) */
+function cyrb53(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0, ch; i < str.length; i++) { ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+}
+/** a state the save validator accepts for a new account (the same fixture as tests/sync-e2e.mjs) */
+function freshState(user, t = Date.now()) {
+  const crops = { CROP_BEAN: 120, CROP_PEPPER: 150, CROP_CABBAGE: 140, CROP_PERILLA: 130, CROP_CORN: 160, CROP_RADISH: 110, CROP_MINT: 90, CROP_LAVENDER: 150, CROP_LEMONBALM: 100 };
+  const pre = [['P1', 'CROP_BEAN', 65], ['P2', 'CROP_PEPPER', 70], ['P3', 'CROP_CABBAGE', 60], ['P4', 'CROP_PERILLA', 79], ['P5', 'CROP_CORN', 50], ['P6', 'CROP_RADISH', 96], ['H1', 'CROP_MINT', 75], ['H2', 'CROP_LAVENDER', 40], ['H3', null, 0], ['H4', 'CROP_LEMONBALM', 90]];
+  const plots = {};
+  for (const [id, crop, g] of pre) plots[id] = crop ? { cropId: crop, growth: g, water: 60, health: 80, plantedAt: t - Math.round((g / 100) * crops[crop] * 1000), lastUpdate: t, lastWaterAt: 0, harvests: 0 } : { cropId: null, growth: 0, water: 40, health: 100, plantedAt: 0, lastUpdate: t, lastWaterAt: 0, harvests: 0 };
+  const jar = (owned, extra = {}) => ({ owned, recipeId: null, status: 'EMPTY', progress: 0, quality: 0, hygiene: 100, temp: 22, humidity: 60, tempOff: 0, humOff: 0, startedAt: 0, lastUpdate: t, care: {}, completedAt: 0, claimedAt: 0, acc: { t: 0, temp: 0, hum: 0, hyg: 0 }, ...extra });
+  return {
+    version: 1, createdAt: t, savedAt: t,
+    profile: { id: String(user.id), nickname: user.nickname, email: user.email, role: user.role, avatar: null, title: '', titles: [] },
+    stats: { level: 1, exp: 0, coin: 0, edu: 0, logins: 1, playTime: 0, distance: 0, waters: 0, plants: 0, harvests: 0, harvestedItems: 0, fermentsStarted: 0, fermentsClaimed: 0, fermentChecks: 0, quizCorrect: 0, quizAnswered: 0, eduCompleted: 0, journals: 0, photos: 0, emotes: 0, gestures: 0, chats: 0, talks: 0, crafts: 0, interacts: 0, expTotal: 0 },
+    player: { x: 0, y: 0, z: 9, rotY: Math.PI, zoneId: 'ZONE_MAIN' },
+    inventory: { ITEM_SEED_BEAN: 3, ITEM_SEED_PEPPER: 2, ITEM_SEED_CABBAGE: 2, ITEM_SEED_MINT: 2, ITEM_WATERING_CAN: 1, ITEM_HOMI: 1, ITEM_MEJU: 1, ITEM_SALT: 2, ITEM_GUIDEBOOK: 1 },
+    quests: {}, farm: { plots },
+    jars: { J1: jar(true, { recipeId: 'FER001', status: 'FERMENTING', progress: 35, hygiene: 82, startedAt: t - 63000 }), J2: jar(false), J3: jar(false) },
+    education: { viewed: {}, completed: {}, quiz: {} },
+    journal: [], photos: [], achievements: {}, collection: {}, visited: { ZONE_MAIN: t }, poisVisited: {}, npcsTalked: {}, cropKinds: {},
+    flags: {}, tutorial: { step: 0, done: false }, activity: [{ t, type: 'login', text: 'scale-attack' }], settings: {}, blocked: [],
+  };
+}
+const saveBody = (state, base = null) => ({ version: 1, checksum: cyrb53(JSON.stringify(state)), ...(base !== null ? { base } : {}), data: state });
 const ids = (r) => (r.data && Array.isArray(r.data.pl) ? r.data.pl.map((row) => row[0]) : []);
 const allIds = (r) => [...ids(r), ...((r.data && r.data.st) || [])];
 const rowOf = (r, id) => (r.data && Array.isArray(r.data.pl) ? r.data.pl.find((row) => row[0] === String(id)) : null);
@@ -191,8 +220,10 @@ function rmTree(d) {
   if (!d || !d.includes('tfm-scale-attack-')) return;
   try { for (const f of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, f.name); if (f.isDirectory() && !f.isSymbolicLink()) rmTree(p); else { try { fs.unlinkSync(p); } catch { /* ignore */ } } } fs.rmdirSync(d); } catch { /* ignore */ }
 }
+const KEEP = argv.includes('--keep');      // leave the throw-away data folders (their logs) in the temp folder
 function cleanup() {
   for (const c of CHILDREN) { try { process.kill(c.pid, 'SIGTERM'); } catch { /* gone */ } }
+  if (KEEP) { if (TMP.size) console.log('kept: ' + [...TMP].join(' ')); TMP.clear(); }
   for (const d of TMP) rmTree(d);
   if (DROP.size) { try { mysqlRoot([...DROP].map((d) => `DROP DATABASE IF EXISTS \`${d}\``)); } catch { /* ignore */ } }
 }
@@ -216,7 +247,7 @@ async function server(name, env = {}, o = {}) {
     Object.assign(dbEnv, { TFM_DB_DRIVER: 'mysql', TFM_DB_HOST: MY.host, TFM_DB_PORT: String(MY.port), TFM_DB_NAME: dbName, TFM_DB_USER: MY.user, TFM_DB_PASS: MY.pass });
   }
   const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(?:TFM_|ANTHROPIC_)/.test(k)));
-  const fullEnv = { ...clean, TFM_DATA_DIR: dataDir, TFM_TOSS_MOCK: '1', TFM_STATS_HEADER: '1', PHP_CLI_SERVER_WORKERS: '6', ...PROXY, ...dbEnv, ...env };
+  const fullEnv = { ...clean, TFM_DATA_DIR: dataDir, TFM_TOSS_MOCK: '1', TFM_STATS_HEADER: '1', PHP_CLI_SERVER_WORKERS: String(o.workers || 6), ...PROXY, ...dbEnv, ...env };
   const docroot = o.docroot || DOCROOT;
   const ini = (o.ini || []).flatMap((kv) => ['-d', kv]);
   let port = 0, proc = null;
@@ -331,6 +362,21 @@ await step('token', 'a copied cookie + CSRF token + sync token is dead after log
   return `while signed in 200 · after logout ${dead.status} · after the new login ${back.status}`;
 });
 
+await step('token', 'a copied cookie + CSRF token + sync token presented by another browser (another User-Agent) is not served — the token path is bound to the browser like the session', async () => {
+  const V = await newUser(main, 'Tu');
+  assert((await V.sync({ p: at(70, 70), f: 1 })).status === 200 && V.tok, 'seat');
+  const O = await newUser(main, 'To');
+  assert((await O.sync({ p: at(71, 70), f: 1 })).status === 200, 'seat');
+  await sleep(400);
+  const r = await replay(main, V.triple(), { p: at(75, 75) }, { ua: 'Mozilla/5.0 (somebody with a copy)', xff: nextIp() });
+  assert(!(r.status === 200), `the copy was served to another User-Agent: ${r.status} ${JSON.stringify(r.data || r.error).slice(0, 100)}`);
+  await sleep(400);
+  const seen = await O.sync({ p: at(71, 70), f: 1 });
+  const row = rowOf(seen, V.user.id);
+  assert(!row || (row[1] === 70 && row[3] === 70), `the copy moved the player: ${JSON.stringify(row)}`);
+  return `another User-Agent → ${r.status}; the player was not moved`;
+});
+
 await step('token', "a ban, a demotion and a new password from the operator's command line end the token at once (measured)", async () => {
   const out = {};
   // the last admin cannot be demoted: there is another one
@@ -394,6 +440,56 @@ await step('token', 'a ban written straight into the database (phpMyAdmin): ordi
   assert(checkedMs !== null && checkedMs <= 17000, `an ordinary call still served the banned account after ${checkedMs === null ? '60 s' : Math.round(checkedMs / 1000) + ' s'}`);
   assert(hotMs !== null && hotMs <= 33000, `the token path still served the banned account after ${hotMs === null ? '60 s' : Math.round(hotMs / 1000) + ' s'}`);
   return `ordinary calls refused after ${(checkedMs / 1000).toFixed(1)} s (limit 15), the token path after ${(hotMs / 1000).toFixed(1)} s (limit 30; ${hotServed} calls served meanwhile)`;
+});
+
+await step('token', 'after a ban written straight into the database the operator can make it bite at once: php cli/tfm.php cache:forget <account>', async () => {
+  const u = await newUser(main, 'Tf');
+  assert((await u.sync({ p: at(80, 80), f: 1 })).status === 200, 'seat');
+  main.sql(`UPDATE users SET status = 'banned' WHERE id = ${Number(u.user.id)}`);
+  await sleep(400);
+  const still = await u.sync({ p: at(80, 81) });
+  assert(still.status === 200, `right after the edit the token call → ${still.status} (the web server cannot know yet)`);
+  const cli = main.cli(['cache:forget', u.email]);
+  assert(cli.status === 0, `cache:forget → ${cli.status} ${cli.out.slice(0, 160)}`);
+  await sleep(400);
+  const after = await replay(main, u.triple(), { p: at(80, 82) }, { xff: u.xff });
+  const me = await u.req('api/auth/me.php');
+  assert(after.status === 401 && me.data.user === null, `after cache:forget: token call ${after.status}, me ${JSON.stringify(me.data.user)}`);
+  const none = main.cli(['cache:forget', 'nobody-here@example.com']);
+  assert(none.status === 1, `an unknown account → exit ${none.status}`);
+  return 'served until the command ran, refused right after it';
+});
+
+// The answer to a leaked key signs everybody out with ONE statement over all accounts — it does not pass the
+// per-account revocation. Nothing remembered may survive it: not the account rows, not a seat, not a token.
+await step('token', 'a new app key from the command line (secret:rotate --app-key) ends every sync token and every remembered account at once — and the house works again after a new login', async () => {
+  const s = await server('rotate');
+  const u = await newUser(s, 'Tr'), w = await newUser(s, 'Tw');
+  for (const x of [u, w]) assert((await x.sync({ p: at(5, 5), f: 1 })).status === 200, 'seat');
+  await sleep(400);
+  const hot = await u.sync({ p: at(5, 6) });
+  assert(hot.status === 200 && hot.data.t === undefined, `token call → ${hot.status}`);
+  const stolen = u.triple();
+  const t0 = Date.now();
+  const cli = s.cli(['secret:rotate', '--app-key']);
+  assert(cli.status === 0, `secret:rotate → ${cli.status} ${cli.out.slice(0, 160)}`);
+  const cliMs = Date.now() - t0;
+  await sleep(400);
+  const after = await replay(s, stolen, { p: at(5, 7) }, { xff: u.xff });
+  const ms = Date.now() - t0;
+  const other = await w.sync({ p: at(5, 8) });
+  const me = await u.req('api/auth/me.php');
+  assert(after.status === 401, `after the new key the copied token call → ${after.status} ${JSON.stringify(after.data || after.error).slice(0, 100)}`);
+  assert(other.status === 401, `after the new key the other player's token call → ${other.status}`);
+  assert(me.status === 200 && me.data.user === null, 'a session survived the new key');
+  const again = await loginAs(s, u.email, { xff: u.xff });
+  const seat = await again.sync({ p: at(5, 9), f: 1 });
+  assert(seat.status === 200 && seat.data.t, `a new login after the new key → sync ${seat.status}`);
+  await sleep(400);
+  const next = await again.sync({ p: at(5, 10) });
+  assert(next.status === 200 && next.data.t === undefined, `the new token → ${next.status}`);
+  measured.keyRotation = { cliMs, firstCallAfterMs: ms };
+  return `the command took ${cliMs} ms; the next calls of both players were refused (401); a new login is seated and served`;
 });
 
 await step('token', 'expiry: a token is served until its "te" and not a second longer (token_ttl 30 s)', async () => {
@@ -648,7 +744,33 @@ await step('flood', 'junk posted to the login address (no session) does not keep
   return `${junk} junk posts (${junkBusy} of them answered 503); 3 real logins: ${tries.join(', ')}`;
 });
 
-await step('flood', 'requests that are refused are not load: 600 calls of one account and one address answered 429 / 401 shed nobody and slow nobody down; a real crowd is still shed', async () => {
+// A burst of logins — a class that presses "입장" together, or a list of stolen passwords tried at once — must be
+// answered "wrong", "wait" or "a moment please". A server error tells the page nothing and looks like a broken site.
+// The meter is opened wide here, so that the password checks (and what they write) really run side by side.
+await step('flood', 'sixteen logins at the same moment (unknown accounts, wrong passwords, right passwords), three rounds: every answer is 200 / 401 / 429 / 503 — never a server error', async () => {
+  const s = await server('logins', { TFM_LOGIN_PER_SEC: '200', TFM_LOGIN_CONCURRENT: '16' }, { workers: 16 });
+  const known = [];
+  for (let i = 0; i < 4; i++) { const k = await newUser(s, 'Lg'); await k.req('api/auth/logout.php', { json: {} }); known.push(k); }
+  const codes = {};
+  for (let round = 0; round < 3; round++) {
+    const clients = [];
+    for (let i = 0; i < 16; i++) { const c = new Client(s, { xff: nextIp() }); const p = await c.req('api/ping.php'); assert(p.status === 200 && c.csrf, `ping → ${p.status}`); clients.push(c); }
+    const rs = await Promise.all(clients.map((c, i) => {
+      const k = known[i % 4];
+      const body = i < 8 ? { login: `nobody${round}x${i}_${RUN}@example.com`, password: 'Wrong2026pw' } : i < 12 ? { login: k.email, password: 'Wrong2026pw' } : { login: k.email, password: PASSWORD };
+      return c.req('api/auth/login.php', { json: body });
+    }));
+    for (const r of rs) { const k = `${r.status}${r.error && r.error.code ? ' ' + r.error.code : ''}`; codes[k] = (codes[k] || 0) + 1; }
+    await sleep(1100);
+  }
+  measured.loginBurst = codes;
+  const bad = Object.keys(codes).filter((k) => !/^(?:200$|401 |429 |503 LOGIN_BUSY)/.test(k));
+  assert(bad.length === 0, `48 logins in three bursts: ${JSON.stringify(codes)}`);
+  assert((codes['200'] || 0) >= 1, `no right password got in: ${JSON.stringify(codes)}`);
+  return `48 logins in three bursts: ${JSON.stringify(codes)}`;
+});
+
+await step('flood', 'requests that are refused are not load: 600 calls of one account and one address answered 429 / 401 shed nobody and slow nobody down; a real crowd is still shed', async () =>{
   const s = await server('busy', { TFM_SHED_RPS: '30', TFM_TARGET_RPS: '20' });
   const u = await newUser(s, 'Fb'), other = await newUser(s, 'Fo');
   assert((await u.sync({ p: at(0, 0), f: 1 })).status === 200 && (await other.sync({ p: at(1, 0), f: 1 })).status === 200, 'seats');
@@ -780,6 +902,59 @@ await step('queue', 'never evicted, but a dead browser does not keep its seat fo
   const enter = await wait.sync({ p: at(2, 2), qt: q.data.queue.t, f: 1 });
   assert(enter.status === 200, `the waiting visitor could not enter: ${enter.status}`);
   return `freed after ${(goAt / 1000).toFixed(0)} s; the player who stayed was served every time`;
+});
+
+// ---------------------------------------------------------------------------- saves
+await step('saves', 'a class saves for the first time at the same moment: twelve new accounts, four rounds of simultaneous saves — every save is stored, none ends as a server error', async () => {
+  const s = await server('saves', {}, { workers: 12 });
+  const us = [];
+  for (let i = 0; i < 12; i++) us.push(await newUser(s, 'Sv'));
+  const codes = {};
+  const revs = us.map(() => 0);
+  for (let round = 0; round < 4; round++) {
+    const rs = await Promise.all(us.map((u, i) => { const st = freshState(u.user); st.stats.playTime = round; return u.req('api/player/save.php', { json: saveBody(st, round === 0 ? null : revs[i]) }); }));
+    for (const [i, r] of rs.entries()) { const k = r.status === 200 ? '200' : `${r.status} ${(r.error && r.error.code) || ''}`; codes[k] = (codes[k] || 0) + 1; if (r.status === 200) revs[i] = r.data.revision; }
+    if (round === 0) {
+      // more first saves in the next rounds: new accounts again
+      for (let i = 0; i < 12; i++) { us[i] = await newUser(s, 'Sv'); revs[i] = 0; }
+      const again = await Promise.all(us.map((u) => u.req('api/player/save.php', { json: saveBody(freshState(u.user)) })));
+      for (const [i, r] of again.entries()) { const k = r.status === 200 ? '200' : `${r.status} ${(r.error && r.error.code) || ''}`; codes[k] = (codes[k] || 0) + 1; if (r.status === 200) revs[i] = r.data.revision; }
+    }
+    await sleep(300);
+  }
+  measured.simultaneousSaves = codes;
+  assert(Object.keys(codes).every((k) => k === '200'), `simultaneous saves: ${JSON.stringify(codes)}`);
+  return `${Object.values(codes).reduce((a, b) => a + b, 0)} saves, all stored`;
+});
+
+// The save endpoint lets go of the session lock before it works (§16.9), so two saves of ONE session — two tabs, a
+// page-hide beacon next to the minute save — run side by side for the first time. They must still be judged one after
+// the other: built on the same revision, one is stored and the others are told they are stale.
+await step('saves', 'one account saves eight times at the same moment on the same revision: one copy is stored, seven are told they are stale — no server error, no skipped or doubled revision', async () => {
+  const s = await server('saves', {}, { workers: 12 });
+  const u = await newUser(s, 'Sw');
+  const first = await u.req('api/player/save.php', { json: saveBody(freshState(u.user)) });
+  assert(first.status === 200 && first.data.revision === 1, `first save → ${first.status} ${JSON.stringify(first.data || first.error).slice(0, 120)}`);
+  const seen = {};
+  let rev = 1;
+  for (let round = 0; round < 3; round++) {
+    // the eight copies differ in where the player stands, so the stored copy shows which round it belongs to
+    const rs = await Promise.all(Array.from({ length: 8 }, (_, i) => { const st = freshState(u.user); st.player.x = round * 10 + i; return u.req('api/player/save.php', { json: saveBody(st, rev) }); }));
+    const ok = rs.filter((r) => r.status === 200);
+    for (const r of rs) { const k = r.status === 200 ? '200' : `${r.status} ${(r.error && r.error.code) || ''}`; seen[k] = (seen[k] || 0) + 1; }
+    assert(ok.length === 1, `round ${round}: ${ok.length} of 8 saves on revision ${rev} were stored (${JSON.stringify(seen)})`);
+    assert(rs.every((r) => r.status === 200 || (r.status === 409 && r.error && r.error.code === 'STALE_SAVE')), `round ${round}: ${JSON.stringify(seen)}`);
+    assert(ok[0].data.revision === rev + 1, `round ${round}: revision ${rev} → ${ok[0].data.revision}`);
+    rev = ok[0].data.revision;
+    const got = await u.req('api/player/get.php');
+    const kept = got.status === 200 && got.data ? got.data.save : null;
+    assert(kept && kept.revision === rev, `stored revision ${kept && kept.revision}, expected ${rev}`);
+    const x = kept.data && kept.data.player ? Number(kept.data.player.x) : NaN;
+    assert(x >= round * 10 && x <= round * 10 + 7, `round ${round}: the stored copy is not one of this round's eight (player.x ${x})`);
+    await sleep(200);
+  }
+  measured.sameAccountSaves = seen;
+  return `3 rounds × 8 saves: ${JSON.stringify(seen)}; revision 1 → ${rev}`;
 });
 
 // ---------------------------------------------------------------------------- gzip

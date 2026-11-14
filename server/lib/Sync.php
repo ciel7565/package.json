@@ -18,6 +18,8 @@
  *     "c":  1234             chat cursor: the highest message id I have (0 = send me the recent lines)
  *     "r":  17               moderation cursor (the "r" of the last answer); leave out on the first call
  *     "ap": { … }            my avatar look (the appearance object) — on the first call and whenever it changes
+ *                            (an account may introduce 40 new looks in 10 minutes; beyond that the others keep
+ *                            seeing the look they have until a later call sends "ap" again)
  *     "q":  ["12", "40"]     player ids I have no name / look for (≤ 24): the answer describes them in "who"
  *     "w":  ["ab12cd34"]     look hashes I do not know (≤ 24): the answer brings them in "ap"
  *     "f":  1                send every player row in full (first call, after an error, when "st" named an unknown id)
@@ -59,7 +61,11 @@
  *     429 RATE_LIMITED        + Retry-After (seconds) — called sooner than "n" allowed, or too often
  *     503 QUEUE               the village is full: data.queue = {t, pos, eta, next} → show the waiting room and call
  *                             GET api/queue.php?t=<t> every data.queue.next ms; when it answers go:true call
- *                             api/sync.php again with "qt": <t>
+ *                             api/sync.php again with "qt": <t>. The server keeps ONE place per account: calling
+ *                             api/sync.php again — with or without "qt", after a reload, from a second tab — answers
+ *                             with the same place and ticket. When api/queue.php answers 400 QUEUE_TICKET the ticket
+ *                             is over (used, its turn kept twice and not taken, an older line): call api/sync.php
+ *                             again and use the ticket of that answer.
  *     503 BUSY                + Retry-After — the server is overloaded; wait and call again
  * A lost or refused X-Sync-Token is never an error of its own: the call is then checked against the session and the
  * answer simply carries a new "t".
@@ -68,8 +74,9 @@
  * How it works
  *   token      "s1." + base64url(JSON [uid, channel, issued ms, expires s, session mark, csrf mark, boot id]) + "." +
  *              base64url(first 16 bytes of HMAC-SHA256 with a key derived from the app key). The marks are keyed
- *              hashes of the session cookie and of the CSRF token, so a token is only good together with the very
- *              session and CSRF token it was issued for. It lives sync.token_ttl seconds (300, at most 600). The call
+ *              hashes of the session cookie (with the browser's User-Agent while session.bind_user_agent is on) and
+ *              of the CSRF token, so a token is only good together with the very session, browser and CSRF token it
+ *              was issued for. It lives sync.token_ttl seconds (300, at most 600). The call
  *              that carries a good token touches no session file and no database: the hot path.
  *   revocation a token is good only while its account sits in its channel, in the seat the token was issued for.
  *              Logout, a ban, a role / password / name change and a chat pause remove the account from the channel at
@@ -144,13 +151,25 @@ final class Sync
             'hidden_ms'   => max(1000, $n($s, 'hidden_ms', 20000)),
             'max_ms'      => max(2000, $n($s, 'max_ms', 30000)),
             'min_gap_ms'  => max(0, $n($s, 'min_gap_ms', 350)),
-            'token_ttl'   => max(30, min(600, $n($s, 'token_ttl', 300))),
+            'token_ttl'   => self::tokenTtl($n($s, 'token_ttl', 300)),
             'aoi_radius'  => max(5, $n($s, 'aoi_radius', 90)),
             'max_near'    => max(1, min(200, $n($s, 'max_near', 40))),
             'flush_every' => max(5, $n($s, 'flush_every', 30)),
             'chat_ring'   => max(10, min(200, $n($s, 'chat_ring', 50))),
             'save_every'  => max(10, $n($s, 'save_every', 60)),
         ];
+    }
+
+    /**
+     * The life of a token: sync.token_ttl, 30 … 600 s — and never more than half of session.idle_timeout. A token is
+     * renewed through the session, and the calls in between do not touch the session: with a short idle timeout a
+     * player who only stands and watches would be signed out by the renewal itself.
+     */
+    private static function tokenTtl(int $want): int
+    {
+        $ttl = max(30, min(600, $want));
+        $idle = (int) Config::get('session.idle_timeout', 7200);
+        return $idle > 0 ? max(30, min($ttl, intdiv($idle, 2))) : $ttl;
     }
 
     /** tests: forget what was derived for this process */
@@ -177,11 +196,22 @@ final class Sync
     private static function b64(string $bin): string { return rtrim(strtr(base64_encode($bin), '+/', '-_'), '='); }
     private static function mark(string $what, string $value): string { return substr(hash_hmac('sha256', $what . '|' . $value, self::key()), 0, 16); }
 
+    /**
+     * What ties a token to its browser besides the cookie: the User-Agent, when the session is bound to it too
+     * (session.bind_user_agent, on by default). The session path ends a session whose cookie comes from another
+     * browser; a copied token must not be served to that browser either.
+     */
+    private static function browser(): string
+    {
+        if (!Config::get('session.bind_user_agent', true)) return '';
+        return "\n" . (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
+    }
+
     /** [token, expires (unix s)] for an account that sits in channel $ch, bound to this session and CSRF token */
     public static function token(int $uid, int $ch, int $now, string $sid, string $csrf, string $boot): array
     {
         $exp = intdiv($now, 1000) + self::conf()['token_ttl'];
-        $body = self::b64((string) json_encode([$uid, $ch, $now, $exp, self::mark('sid', $sid), self::mark('csrf', $csrf), $boot]));
+        $body = self::b64((string) json_encode([$uid, $ch, $now, $exp, self::mark('sid', $sid . self::browser()), self::mark('csrf', $csrf), $boot]));
         return ['s1.' . $body . '.' . self::b64(substr(hash_hmac('sha256', 's1.' . $body, self::key(), true), 0, 16)), $exp];
     }
 
@@ -196,7 +226,7 @@ final class Sync
         $p = json_decode((string) base64_decode(strtr($m[1], '-_', '+/')), true);
         if (!is_array($p) || count($p) !== 7 || !is_int($p[0]) || !is_int($p[1]) || !is_int($p[2]) || !is_int($p[3]) || !is_string($p[4]) || !is_string($p[5]) || !is_string($p[6])) return null;
         if ($p[0] < 1 || $p[1] < 1 || $p[3] * 1000 < $now || $p[2] > $now + 5000) return null;
-        if (!is_string($sid) || $sid === '' || !hash_equals($p[4], self::mark('sid', $sid))) return null;
+        if (!is_string($sid) || $sid === '' || !hash_equals($p[4], self::mark('sid', $sid . self::browser()))) return null;
         if (!is_string($csrf) || $csrf === '' || !hash_equals($p[5], self::mark('csrf', $csrf))) return null;
         return ['uid' => $p[0], 'ch' => $p[1], 'iat' => $p[2], 'exp' => $p[3], 'boot' => $p[6]];
     }

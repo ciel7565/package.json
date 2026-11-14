@@ -22,7 +22,8 @@
  *     --workers 32            MaxRequestWorkers / PHP_CLI_SERVER_WORKERS
  *     --opcache on|off        (default on)
  *     --cache auto|file|apcu|db|off   cache.driver of the instance (default auto) · --apcu-so <file> loads APCu from that file
- *     --driver sqlite|mysql   mysql: TFM_DB_HOST / PORT / USER / PASS from the environment, database tfm_load_<run> (dropped afterwards)
+ *     --driver sqlite|mysql   mysql: TFM_DB_HOST / PORT / USER / PASS from the environment, database tfm_load_<run> (dropped afterwards;
+ *                             TFM_LOAD_DB_PREFIX=<name> replaces the "tfm_load" part)
  *     --users 200 --ramp 20 --duration 60     visitors, seconds to bring them in, seconds to run after the ramp
  *     --mode sync|legacy
  *     --max-online N --target-rps N --shed-rps N --login-per-sec N    capacity block of the instance
@@ -71,7 +72,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-load-'));
 fs.chmodSync(TMP, 0o755);
 const DATA = path.join(TMP, 'data');
 fs.mkdirSync(DATA);
-const MY = { host: process.env.TFM_DB_HOST || '127.0.0.1', port: Number(process.env.TFM_DB_PORT || 33106), user: process.env.TFM_DB_USER || 'root', pass: process.env.TFM_DB_PASS || '', db: `tfm_load_${RUN}` };
+const MY = { host: process.env.TFM_DB_HOST || '127.0.0.1', port: Number(process.env.TFM_DB_PORT || 33106), user: process.env.TFM_DB_USER || 'root', pass: process.env.TFM_DB_PASS || '', db: `${/^[a-z0-9_]{1,24}$/.test(process.env.TFM_LOAD_DB_PREFIX || '') ? process.env.TFM_LOAD_DB_PREFIX : 'tfm_load'}_${RUN}` };
 
 // ------------------------------------------------------------------ the instance
 const ENV = {

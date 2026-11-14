@@ -310,6 +310,32 @@ check('token — a second browser of the same account keeps its token when the f
     $rb = Tfm\Sync::hot($b['claims'], body(1, 1), $T + 3000);
     return is_array($ra) && is_array($rb) ? true : 'tab a: ' . (is_array($ra) ? 'ok' : 'refused') . ' · tab b: ' . (is_array($rb) ? 'ok' : 'refused');
 });
+check('token — a token is tied to the browser as the session is (session.bind_user_agent): presented by another User-Agent it is not served', function () use ($T) {
+    world();
+    $_SERVER['HTTP_USER_AGENT'] = 'Browser/1.0 (the owner)';
+    $t = Tfm\Sync::token(41, 3, $T, 'sid', 'csrf', 'b1');
+    $same = Tfm\Sync::claims($t[0], 'sid', 'csrf', $T + 1);
+    $_SERVER['HTTP_USER_AGENT'] = 'Other/2.0 (somebody with a copy)';
+    $other = Tfm\Sync::claims($t[0], 'sid', 'csrf', $T + 1);
+    Tfm\Config::override('session.bind_user_agent', false);      // an operator who switched the binding off gets none here either
+    $_SERVER['HTTP_USER_AGENT'] = 'Browser/1.0 (the owner)';
+    $t2 = Tfm\Sync::token(41, 3, $T, 'sid', 'csrf', 'b1');
+    $_SERVER['HTTP_USER_AGENT'] = 'Other/2.0';
+    $unbound = Tfm\Sync::claims($t2[0], 'sid', 'csrf', $T + 1);
+    Tfm\Config::override('session.bind_user_agent', null);
+    unset($_SERVER['HTTP_USER_AGENT']);
+    return $same !== null && $other === null && $unbound !== null ? true : 'the same browser: ' . ($same !== null ? 'served' : 'refused') . ' · another User-Agent: ' . ($other === null ? 'refused' : 'SERVED') . ' · with the binding switched off: ' . ($unbound !== null ? 'served' : 'refused');
+});
+check('token — a token never outlives half of the session idle timeout: with idle_timeout 120 s a player who only syncs is not signed out by the renewal', function () use ($T) {
+    world();
+    $long = Tfm\Sync::token(41, 1, $T, 's', 'c', 'b')[1] - intdiv($T, 1000);
+    Tfm\Config::override('session.idle_timeout', 120);
+    Tfm\Sync::reset();
+    $short = Tfm\Sync::token(41, 1, $T, 's', 'c', 'b')[1] - intdiv($T, 1000);
+    Tfm\Config::override('session.idle_timeout', null);
+    Tfm\Sync::reset();
+    return $long === 300 && $short === 60 ? true : "token life $long s by default (300), $short s with idle_timeout 120 (60: the renewal must come before the session runs out)";
+});
 check('seat — after 25 hours of play the seat record is still there: a renewal at a full house is not sent to the waiting room and a ban still ends the token', function () use ($T) {
     global $CLOCK;
     world(['capacity.max_online' => 1]);

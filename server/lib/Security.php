@@ -105,11 +105,17 @@ final class RateLimit
         // transaction for being counted. Long windows (register, reports, uploads: an hour) stay in the rate_limits
         // table: they guard rare actions and must survive a cache restart. No cache (or a failing one) → the table.
         $res = self::countCached($name, $ident, $curWin, max(1, $window));
-        if ($res === null) $res = Db::tx(function () use ($curBucket, $prevBucket, $expires) {
-            if (Db::exec('UPDATE rate_limits SET hits = hits + 1 WHERE bucket = ?', [$curBucket]) === 0) {
-                Db::exec(Db::driver() === 'mysql'
-                    ? 'INSERT IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)'
-                    : 'INSERT OR IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)', [$curBucket, $expires]);
+        // [verify-scale] The table path used to end as a server error when several NEW buckets were counted at the same
+        // moment on MariaDB (sixteen logins at once from sixteen addresses: ten of 48 answered 500 — tests/scale-attack.mjs,
+        // group "flood"): an UPDATE that finds no row locks the gap, every transaction then wants to insert into that gap,
+        // and InnoDB ends all but one of them (deadlock, 1213). Now MariaDB gets one statement that inserts or counts up —
+        // nothing is locked before the insert — and a transaction the database still gives up on (the clean-up of old rows
+        // runs next to it) is simply run again. SQLite holds the write lock for the whole transaction and keeps its two steps.
+        if ($res === null) $res = Db::txRetry(function () use ($curBucket, $prevBucket, $expires) {
+            if (Db::driver() === 'mysql') {
+                Db::exec('INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?) ON DUPLICATE KEY UPDATE hits = hits + 1', [$curBucket, $expires]);
+            } elseif (Db::exec('UPDATE rate_limits SET hits = hits + 1 WHERE bucket = ?', [$curBucket]) === 0) {
+                Db::exec('INSERT OR IGNORE INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)', [$curBucket, $expires]);
             }
             return [
                 (int) Db::value('SELECT hits FROM rate_limits WHERE bucket = ?', [$curBucket]),
