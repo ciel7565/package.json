@@ -257,19 +257,17 @@
       });
       const A = (key, spot) => ctx.anchor(key, spot), mul = BK.mul;
 
-      // ---- the open 세살문: in each open bay two leaves swung back against the posts
+      // ---- the open 세살문: in each open bay two leaves swung outwards (they stand on the 기단 outside, framing the yard)
       for (const bi of [1, 2]) {
         const b = R.bay('S', bi);
         for (const side of [-1, 1]) {
           const hu = side < 0 ? b.u0 + 0.16 : b.u1 - 0.16, lw = 0.68, lh = 2.0, kp = 0.48;
-          const hm = mul(R.wm('S', hu, 0.12, 0.06), M(0, 0, 0, side < 0 ? -1.75 : 1.75));
+          const hm = mul(R.wm('S', hu, 0.12, -0.05), M(0, 0, 0, side < 0 ? 1.42 : -1.42));   // swung OUT onto the 기단, framing the yard
           const lm = mul(hm, M(-side * lw / 2, 0, 0));
           K.changho(R, mul(lm, M(0, kp + (lh - kp) / 2, 0)), { w: lw, h: lh - kp, pattern: 'ttisal', tint: '#c2a482' });
           R.add('hanji', K.geo.quad(lw - 0.12, lh - kp - 0.12).applyMatrix4(new THREE.Matrix4().makeRotationY(PI)), mul(lm, M(0, kp + (lh - kp) / 2, -0.002)), '#e6dcc4', { cast: false });   // the paper seen from the other side
           R.add('wood', K.geo.timber(lw, kp - 0.01, 0.045, 0.008), mul(lm, M(0, kp / 2, 0.02)), '#b89a78');
           R.add('iron', new THREE.TorusGeometry(0.035, 0.006, 5, 12), mul(lm, M(side * (lw / 2 - 0.08), kp + 0.25, 0.05)), null, { cast: false });
-          const c = new THREE.Vector3(0, 0, 0).applyMatrix4(lm);
-          R.block(c.x, c.z, 0.38, 0.38);
         }
       }
 
