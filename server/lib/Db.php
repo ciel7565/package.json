@@ -14,7 +14,7 @@ if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove(
 
 final class Db
 {
-    public const SCHEMA_VERSION = 6;
+    public const SCHEMA_VERSION = 7;
     /** @var PDO|null */
     private static $pdo = null;
     /** @var string */
@@ -422,6 +422,38 @@ final class Db
 
     /** row-lock suffix for SELECTs inside tx() (SQLite already holds the database write lock) */
     public static function forUpdate(): string { return self::driver() === 'mysql' ? ' FOR UPDATE' : ''; }
+
+    /**
+     * Did the database give up on this transaction for a reason that goes away on a new try? InnoDB deadlock
+     * (SQLSTATE 40001 / error 1213), lock wait timeout (1205), SQLite busy / locked (5 / 6).
+     */
+    public static function isRetryable(\Throwable $e): bool
+    {
+        if (!($e instanceof \PDOException)) return false;
+        if ((string) $e->getCode() === '40001') return true;
+        $no = isset($e->errorInfo[1]) ? (int) $e->errorInfo[1] : 0;
+        return self::$driver === 'mysql' ? ($no === 1213 || $no === 1205) : ($no === 5 || $no === 6);
+    }
+
+    /**
+     * tx() that runs $fn again (a new transaction, so a new snapshot) when the database reports a deadlock / lock timeout —
+     * at most $tries times, with a short random pause. $fn must be safe to run again (everything it did was rolled back).
+     * Inside an outer transaction it simply joins it: a deadlock has already undone the outer work, so only the
+     * outermost caller may try again.
+     */
+    public static function txRetry(callable $fn, int $tries = 4)
+    {
+        self::pdo();
+        if (self::$txDepth > 0) return self::tx($fn);
+        for ($i = 1; ; $i++) {
+            try {
+                return self::tx($fn);
+            } catch (\Throwable $e) {
+                if ($i >= $tries || !self::isRetryable($e)) throw $e;
+                usleep(random_int(4000, 20000) * $i);
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ schema
     public static function schemaVersion(): int

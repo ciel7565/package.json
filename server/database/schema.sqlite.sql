@@ -2,7 +2,7 @@
 -- 전통발효체험관 메타버스 — SQLite schema (default, zero-config)
 -- Created automatically by lib/Db.php on first request (data/db-<random>.sqlite, WAL mode).
 -- All timestamps are server time in milliseconds (INTEGER).
--- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 6).
+-- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 7).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -376,3 +376,233 @@ CREATE TABLE IF NOT EXISTS inspection_runs (
 );
 CREATE INDEX IF NOT EXISTS ix_inspect_created ON inspection_runs (created_at);
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (6, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 7: real-time farm, storage, completion reports, settings, security events, ip blocks, admin totp, ai usage, handover, inspections');
+
+-- v7 (phase 8, CONTRACT §16.7): allotment (분양) of 10,000 jars / plots / stores — zones, units, customers, contracts,
+-- payments, waiting list, notices (the in-app inbox), care logs, daily statistics, the consent texts a customer agreed
+-- to, automation job history (job_runs) and the key-value table of the optional database cache driver (cache_kv, §16.9).
+-- No foreign key to users (a deleted account must never erase a contract). live_unit_id = unit_id while a contract is
+-- pending / active / overdue, NULL afterwards (the nullable UNIQUE index refuses a second live contract on a unit).
+-- Personal data is sealed by lib/Crypto.php; phone_hash is a keyed blind index. The units are rows made by
+-- `php cli/tfm.php allot:seed`. Zone / unit codes and contract numbers are stored in upper case.
+CREATE TABLE IF NOT EXISTS allot_zones (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  code        TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'jar' CHECK (kind IN ('jar', 'plot', 'store')),
+  name        TEXT NOT NULL DEFAULT '',
+  capacity    INTEGER NOT NULL DEFAULT 0,
+  cols        INTEGER NOT NULL DEFAULT 40,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  price       INTEGER NOT NULL DEFAULT 0,               -- KRW per period (operator setting; seeded values are examples)
+  period      TEXT NOT NULL DEFAULT 'year' CHECK (period IN ('once', 'month', 'year')),
+  term_months INTEGER NOT NULL DEFAULT 12,              -- length of one contract term (0 = open-ended, month / year only)
+  is_open     INTEGER NOT NULL DEFAULT 0,               -- applications accepted
+  note        TEXT NOT NULL DEFAULT '',
+  ver         INTEGER NOT NULL DEFAULT 1,               -- + 1 on every status change of one of its units (the map version)
+  map_ver     INTEGER NOT NULL DEFAULT 0,               -- the ver map_s was built for
+  map_s       TEXT,                                     -- cached status string: one character per unit, by seq
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_azones_code ON allot_zones (code);
+CREATE INDEX IF NOT EXISTS ix_azones_sort ON allot_zones (sort, id);
+
+CREATE TABLE IF NOT EXISTS allot_units (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  zone_id     INTEGER NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'jar' CHECK (kind IN ('jar', 'plot', 'store')),
+  code        TEXT NOT NULL,
+  seq         INTEGER NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'held', 'leased', 'closed')),
+  contract_id INTEGER,                                  -- the live contract (pending / active / overdue), else NULL
+  hold_until  INTEGER NOT NULL DEFAULT 0,               -- 0 = a hold without an expiry
+  label       TEXT NOT NULL DEFAULT '',                 -- nameplate (cleaned, masked, ≤ 12 characters)
+  label_show  INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_aunits_code ON allot_units (code);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_aunits_seq ON allot_units (zone_id, seq);
+CREATE INDEX IF NOT EXISTS ix_aunits_kind ON allot_units (kind, status, id);
+CREATE INDEX IF NOT EXISTS ix_aunits_zone ON allot_units (zone_id, status, id);
+CREATE INDEX IF NOT EXISTS ix_aunits_free ON allot_units (zone_id, status, seq);
+CREATE INDEX IF NOT EXISTS ix_aunits_hold ON allot_units (status, hold_until);
+
+CREATE TABLE IF NOT EXISTS allot_customers (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER,                                  -- the app account; NULL for customers the operator entered / imported
+  name_enc    TEXT NOT NULL DEFAULT '',                 -- sealed
+  phone_enc   TEXT NOT NULL DEFAULT '',                 -- sealed (digits only)
+  phone_hash  TEXT NOT NULL DEFAULT '',                 -- keyed blind index of the digits
+  phone_tail  TEXT NOT NULL DEFAULT '',                 -- last 4 digits (masked lists)
+  addr_enc    TEXT,                                     -- sealed
+  memo        TEXT,                                     -- sealed (the operator's note about the customer)
+  consent_at  INTEGER NOT NULL DEFAULT 0,
+  consent_ver TEXT NOT NULL DEFAULT '',
+  guardian    INTEGER NOT NULL DEFAULT 0,
+  purged_at   INTEGER NOT NULL DEFAULT 0,               -- personal data erased by the retention job
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_acust_user ON allot_customers (user_id);
+CREATE INDEX IF NOT EXISTS ix_acust_phone ON allot_customers (phone_hash);
+CREATE INDEX IF NOT EXISTS ix_acust_purged ON allot_customers (purged_at, id);
+
+CREATE TABLE IF NOT EXISTS allot_contracts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  contract_no   TEXT NOT NULL,
+  unit_id       INTEGER NOT NULL,
+  live_unit_id  INTEGER,
+  customer_id   INTEGER NOT NULL,
+  user_id       INTEGER,
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'overdue', 'ended', 'canceled')),
+  period        TEXT NOT NULL DEFAULT 'year' CHECK (period IN ('once', 'month', 'year')),
+  price         INTEGER NOT NULL DEFAULT 0,
+  term_months   INTEGER NOT NULL DEFAULT 12,
+  starts_at     INTEGER NOT NULL DEFAULT 0,
+  ends_at       INTEGER NOT NULL DEFAULT 0,             -- 0 = open-ended
+  paid_until    INTEGER NOT NULL DEFAULT 0,             -- 0 = nothing paid yet (due since starts_at)
+  paid_total    INTEGER NOT NULL DEFAULT 0,
+  auto_renew    INTEGER NOT NULL DEFAULT 0,
+  source        TEXT NOT NULL DEFAULT 'app' CHECK (source IN ('app', 'admin', 'import')),
+  memo          TEXT,                                   -- the operator's working note (never shown to the customer)
+  created_by    INTEGER,
+  decided_by    INTEGER,
+  decided_at    INTEGER NOT NULL DEFAULT 0,
+  cancel_req_at INTEGER NOT NULL DEFAULT 0,             -- the customer asked to end an active contract
+  ended_at      INTEGER NOT NULL DEFAULT 0,
+  end_reason    TEXT NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_acon_no ON allot_contracts (contract_no);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_acon_live ON allot_contracts (live_unit_id);
+CREATE INDEX IF NOT EXISTS ix_acon_unit ON allot_contracts (unit_id, id);
+CREATE INDEX IF NOT EXISTS ix_acon_customer ON allot_contracts (customer_id, id);
+CREATE INDEX IF NOT EXISTS ix_acon_user ON allot_contracts (user_id, status);
+CREATE INDEX IF NOT EXISTS ix_acon_due ON allot_contracts (status, paid_until);
+CREATE INDEX IF NOT EXISTS ix_acon_ends ON allot_contracts (status, ends_at);
+
+CREATE TABLE IF NOT EXISTS allot_payments (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  contract_id     INTEGER NOT NULL,
+  customer_id     INTEGER NOT NULL,
+  kind            TEXT NOT NULL DEFAULT 'manual' CHECK (kind IN ('first', 'renewal', 'manual', 'refund')),
+  method          TEXT NOT NULL DEFAULT 'bank' CHECK (method IN ('toss', 'bank', 'cash', 'cms', 'etc')),
+  amount          INTEGER NOT NULL DEFAULT 0,           -- KRW, always positive (a refund is kind = 'refund')
+  periods         INTEGER NOT NULL DEFAULT 0,           -- how many periods this payment covers
+  order_id        TEXT,                                 -- 토스 order id (random); NULL for manual payments
+  payment_key_enc TEXT NOT NULL DEFAULT '',             -- sealed 토스 paymentKey
+  claim           TEXT NOT NULL DEFAULT '',             -- keyed hash of the paymentKey that claimed the confirmation
+  claimed_at      INTEGER NOT NULL DEFAULT 0,
+  idem            TEXT,                                 -- idempotency key of a manual payment
+  status          TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'paid', 'failed', 'canceled', 'refunded')),
+  toss_status     TEXT NOT NULL DEFAULT '',
+  paid_at         INTEGER NOT NULL DEFAULT 0,
+  period_from     INTEGER NOT NULL DEFAULT 0,
+  period_to       INTEGER NOT NULL DEFAULT 0,
+  memo            TEXT NOT NULL DEFAULT '',
+  created_by      INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_apay_order ON allot_payments (order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_apay_idem ON allot_payments (idem);
+CREATE INDEX IF NOT EXISTS ix_apay_contract ON allot_payments (contract_id, id);
+CREATE INDEX IF NOT EXISTS ix_apay_status ON allot_payments (status, created_at);
+
+CREATE TABLE IF NOT EXISTS allot_waitlist (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind        TEXT NOT NULL DEFAULT 'jar' CHECK (kind IN ('jar', 'plot', 'store')),
+  zone_id     INTEGER NOT NULL DEFAULT 0,               -- 0 = any zone of the kind
+  customer_id INTEGER NOT NULL,
+  user_id     INTEGER,
+  live_key    TEXT,                                     -- "<customer>:<kind>:<zone>" while waiting / offered, else NULL
+  status      TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'offered', 'converted', 'expired', 'canceled')),
+  unit_id     INTEGER,
+  offer_until INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_await_live ON allot_waitlist (live_key);
+CREATE INDEX IF NOT EXISTS ix_await_queue ON allot_waitlist (kind, zone_id, status, id);
+CREATE INDEX IF NOT EXISTS ix_await_user ON allot_waitlist (user_id, id);
+CREATE INDEX IF NOT EXISTS ix_await_offer ON allot_waitlist (status, offer_until);
+
+CREATE TABLE IF NOT EXISTS allot_notices (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  contract_id INTEGER,
+  customer_id INTEGER,
+  user_id     INTEGER,                                  -- NULL: a customer without an app account (the operator calls)
+  kind        TEXT NOT NULL DEFAULT 'info',
+  dedupe_key  TEXT,
+  title       TEXT NOT NULL DEFAULT '',
+  body        TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'sent', 'seen', 'canceled')),
+  send_at     INTEGER NOT NULL DEFAULT 0,
+  sent_at     INTEGER NOT NULL DEFAULT 0,
+  seen_at     INTEGER NOT NULL DEFAULT 0,
+  created_by  INTEGER,
+  created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_anot_dedupe ON allot_notices (dedupe_key);
+CREATE INDEX IF NOT EXISTS ix_anot_user ON allot_notices (user_id, id);
+CREATE INDEX IF NOT EXISTS ix_anot_queue ON allot_notices (status, send_at);
+CREATE INDEX IF NOT EXISTS ix_anot_contract ON allot_notices (contract_id, id);
+
+CREATE TABLE IF NOT EXISTS allot_care_logs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  zone_id    INTEGER NOT NULL DEFAULT 0,                -- 0 with unit_id 0 = every zone
+  unit_id    INTEGER NOT NULL DEFAULT 0,                -- 0 = the whole zone
+  kind       TEXT NOT NULL DEFAULT 'care',
+  text       TEXT NOT NULL DEFAULT '',
+  visible    INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_acare_unit ON allot_care_logs (unit_id, id);
+CREATE INDEX IF NOT EXISTS ix_acare_zone ON allot_care_logs (zone_id, unit_id, id);
+
+CREATE TABLE IF NOT EXISTS allot_stats_daily (
+  day        TEXT NOT NULL,                             -- YYYY-MM-DD (server time zone)
+  zone_id    INTEGER NOT NULL DEFAULT 0,                -- 0 = all zones
+  n_open     INTEGER NOT NULL DEFAULT 0,
+  n_held     INTEGER NOT NULL DEFAULT 0,
+  n_leased   INTEGER NOT NULL DEFAULT 0,
+  n_closed   INTEGER NOT NULL DEFAULT 0,
+  n_pending  INTEGER NOT NULL DEFAULT 0,
+  n_active   INTEGER NOT NULL DEFAULT 0,
+  n_overdue  INTEGER NOT NULL DEFAULT 0,
+  n_ended    INTEGER NOT NULL DEFAULT 0,
+  revenue    INTEGER NOT NULL DEFAULT 0,                -- payments of that day minus refunds (KRW)
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (day, zone_id)
+);
+
+CREATE TABLE IF NOT EXISTS allot_terms (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ver          TEXT NOT NULL,                           -- the consent version customers agreed to (allot_customers.consent_ver)
+  privacy_text TEXT,
+  terms_text   TEXT,
+  refund_text  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_aterms_ver ON allot_terms (ver);
+
+CREATE TABLE IF NOT EXISTS job_runs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  job         TEXT NOT NULL,
+  source      TEXT NOT NULL DEFAULT 'cli' CHECK (source IN ('cli', 'lazy', 'admin')),
+  started_at  INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER NOT NULL DEFAULT 0,
+  summary     TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_jobs_job ON job_runs (job, id);
+
+CREATE TABLE IF NOT EXISTS cache_kv (
+  k          TEXT NOT NULL PRIMARY KEY,
+  v          TEXT,
+  expires_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_cache_expires ON cache_kv (expires_at);
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (7, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 8: allotment (zones, units, customers, contracts, payments, waiting list, notices, care logs, daily statistics, consent texts), job runs, cache table');

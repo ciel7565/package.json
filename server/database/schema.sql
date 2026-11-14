@@ -9,7 +9,7 @@
 -- With db.auto_migrate = true the tables are also created / upgraded automatically once the database exists
 -- (CREATE DATABASE / USE lines are skipped by the auto-installer). Re-running this file is safe (IF NOT EXISTS).
 -- All timestamps are server time in milliseconds (BIGINT).
--- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 6).
+-- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 7).
 -- =============================================================================
 
 -- 데이터베이스를 아직 만들지 않았다면 아래 두 줄의 주석(--)을 풀고 서버 전체(데이터베이스 선택 없이)에서 가져오세요:
@@ -405,3 +405,236 @@ CREATE TABLE IF NOT EXISTS inspection_runs (
   KEY ix_inspect_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (6, UNIX_TIMESTAMP() * 1000, 'phase 7: real-time farm, storage, completion reports, settings, security events, ip blocks, admin totp, ai usage, handover, inspections');
+
+-- v7 (phase 8, CONTRACT §16.7): allotment (분양) of 10,000 jars / plots / stores — zones, units, customers, contracts,
+-- payments, waiting list, notices (the in-app inbox), care logs, daily statistics, the consent texts a customer agreed
+-- to, automation job history (job_runs) and the key-value table of the optional database cache driver (cache_kv, §16.9).
+-- * No foreign key to users: a deleted account must never erase a contract or a payment record.
+-- * allot_contracts.live_unit_id = unit_id while a contract is pending / active / overdue and NULL afterwards: the
+--   nullable UNIQUE key is the last line against two live contracts on one unit (SQLSTATE 23000 → 409 UNIT_TAKEN).
+-- * Personal data (allot_customers.name_enc / phone_enc / addr_enc / memo, allot_payments.payment_key_enc) is sealed by
+--   lib/Crypto.php ("enc:v1:"); phone_hash is a keyed blind index for look-ups, phone_tail the last 4 digits for lists.
+-- * The units themselves are rows made by `php cli/tfm.php allot:seed`, never by this file.
+-- * Zone / unit codes and contract numbers are stored in upper case (this collation ignores case, SQLite does not).
+CREATE TABLE IF NOT EXISTS allot_zones (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  code        VARCHAR(16) NOT NULL,
+  kind        ENUM('jar', 'plot', 'store') NOT NULL DEFAULT 'jar',
+  name        VARCHAR(60) NOT NULL DEFAULT '',
+  capacity    INT NOT NULL DEFAULT 0,
+  cols        INT NOT NULL DEFAULT 40,
+  sort        INT NOT NULL DEFAULT 0,
+  price       INT NOT NULL DEFAULT 0,
+  period      ENUM('once', 'month', 'year') NOT NULL DEFAULT 'year',
+  term_months INT NOT NULL DEFAULT 12,
+  is_open     TINYINT NOT NULL DEFAULT 0,
+  note        VARCHAR(200) NOT NULL DEFAULT '',
+  ver         INT NOT NULL DEFAULT 1,
+  map_ver     INT NOT NULL DEFAULT 0,
+  map_s       MEDIUMTEXT NULL,
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL,
+  UNIQUE KEY ux_azones_code (code),
+  KEY ix_azones_sort (sort, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_units (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  zone_id     BIGINT UNSIGNED NOT NULL,
+  kind        ENUM('jar', 'plot', 'store') NOT NULL DEFAULT 'jar',
+  code        VARCHAR(24) NOT NULL,
+  seq         INT NOT NULL,
+  status      ENUM('open', 'held', 'leased', 'closed') NOT NULL DEFAULT 'open',
+  contract_id BIGINT UNSIGNED NULL,
+  hold_until  BIGINT NOT NULL DEFAULT 0,
+  label       VARCHAR(40) NOT NULL DEFAULT '',
+  label_show  TINYINT NOT NULL DEFAULT 0,
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL,
+  UNIQUE KEY ux_aunits_code (code),
+  UNIQUE KEY ux_aunits_seq (zone_id, seq),
+  KEY ix_aunits_kind (kind, status, id),
+  KEY ix_aunits_zone (zone_id, status, id),
+  KEY ix_aunits_free (zone_id, status, seq),
+  KEY ix_aunits_hold (status, hold_until)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_customers (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id     BIGINT UNSIGNED NULL,
+  name_enc    VARCHAR(255) NOT NULL DEFAULT '',
+  phone_enc   VARCHAR(255) NOT NULL DEFAULT '',
+  phone_hash  VARCHAR(32) NOT NULL DEFAULT '',
+  phone_tail  VARCHAR(4) NOT NULL DEFAULT '',
+  addr_enc    TEXT NULL,
+  memo        TEXT NULL,
+  consent_at  BIGINT NOT NULL DEFAULT 0,
+  consent_ver VARCHAR(40) NOT NULL DEFAULT '',
+  guardian    TINYINT NOT NULL DEFAULT 0,
+  purged_at   BIGINT NOT NULL DEFAULT 0,
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL,
+  UNIQUE KEY ux_acust_user (user_id),
+  KEY ix_acust_phone (phone_hash),
+  KEY ix_acust_purged (purged_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_contracts (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  contract_no   VARCHAR(24) NOT NULL,
+  unit_id       BIGINT UNSIGNED NOT NULL,
+  live_unit_id  BIGINT UNSIGNED NULL,
+  customer_id   BIGINT UNSIGNED NOT NULL,
+  user_id       BIGINT UNSIGNED NULL,
+  status        ENUM('pending', 'active', 'overdue', 'ended', 'canceled') NOT NULL DEFAULT 'pending',
+  period        ENUM('once', 'month', 'year') NOT NULL DEFAULT 'year',
+  price         INT NOT NULL DEFAULT 0,
+  term_months   INT NOT NULL DEFAULT 12,
+  starts_at     BIGINT NOT NULL DEFAULT 0,
+  ends_at       BIGINT NOT NULL DEFAULT 0,
+  paid_until    BIGINT NOT NULL DEFAULT 0,
+  paid_total    BIGINT NOT NULL DEFAULT 0,
+  auto_renew    TINYINT NOT NULL DEFAULT 0,
+  source        ENUM('app', 'admin', 'import') NOT NULL DEFAULT 'app',
+  memo          TEXT NULL,
+  created_by    BIGINT UNSIGNED NULL,
+  decided_by    BIGINT UNSIGNED NULL,
+  decided_at    BIGINT NOT NULL DEFAULT 0,
+  cancel_req_at BIGINT NOT NULL DEFAULT 0,
+  ended_at      BIGINT NOT NULL DEFAULT 0,
+  end_reason    VARCHAR(40) NOT NULL DEFAULT '',
+  created_at    BIGINT NOT NULL,
+  updated_at    BIGINT NOT NULL,
+  UNIQUE KEY ux_acon_no (contract_no),
+  UNIQUE KEY ux_acon_live (live_unit_id),
+  KEY ix_acon_unit (unit_id, id),
+  KEY ix_acon_customer (customer_id, id),
+  KEY ix_acon_user (user_id, status),
+  KEY ix_acon_due (status, paid_until),
+  KEY ix_acon_ends (status, ends_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_payments (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  contract_id     BIGINT UNSIGNED NOT NULL,
+  customer_id     BIGINT UNSIGNED NOT NULL,
+  kind            ENUM('first', 'renewal', 'manual', 'refund') NOT NULL DEFAULT 'manual',
+  method          ENUM('toss', 'bank', 'cash', 'cms', 'etc') NOT NULL DEFAULT 'bank',
+  amount          INT NOT NULL DEFAULT 0,
+  periods         INT NOT NULL DEFAULT 0,
+  order_id        VARCHAR(64) NULL,
+  payment_key_enc VARCHAR(500) NOT NULL DEFAULT '',
+  claim           VARCHAR(64) NOT NULL DEFAULT '',
+  claimed_at      BIGINT NOT NULL DEFAULT 0,
+  idem            VARCHAR(64) NULL,
+  status          ENUM('created', 'paid', 'failed', 'canceled', 'refunded') NOT NULL DEFAULT 'created',
+  toss_status     VARCHAR(40) NOT NULL DEFAULT '',
+  paid_at         BIGINT NOT NULL DEFAULT 0,
+  period_from     BIGINT NOT NULL DEFAULT 0,
+  period_to       BIGINT NOT NULL DEFAULT 0,
+  memo            VARCHAR(200) NOT NULL DEFAULT '',
+  created_by      BIGINT UNSIGNED NULL,
+  created_at      BIGINT NOT NULL,
+  updated_at      BIGINT NOT NULL,
+  UNIQUE KEY ux_apay_order (order_id),
+  UNIQUE KEY ux_apay_idem (idem),
+  KEY ix_apay_contract (contract_id, id),
+  KEY ix_apay_status (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_waitlist (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  kind        ENUM('jar', 'plot', 'store') NOT NULL DEFAULT 'jar',
+  zone_id     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  customer_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NULL,
+  live_key    VARCHAR(64) NULL,
+  status      ENUM('waiting', 'offered', 'converted', 'expired', 'canceled') NOT NULL DEFAULT 'waiting',
+  unit_id     BIGINT UNSIGNED NULL,
+  offer_until BIGINT NOT NULL DEFAULT 0,
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL,
+  UNIQUE KEY ux_await_live (live_key),
+  KEY ix_await_queue (kind, zone_id, status, id),
+  KEY ix_await_user (user_id, id),
+  KEY ix_await_offer (status, offer_until)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_notices (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  contract_id BIGINT UNSIGNED NULL,
+  customer_id BIGINT UNSIGNED NULL,
+  user_id     BIGINT UNSIGNED NULL,
+  kind        VARCHAR(24) NOT NULL DEFAULT 'info',
+  dedupe_key  VARCHAR(80) NULL,
+  title       VARCHAR(80) NOT NULL DEFAULT '',
+  body        VARCHAR(400) NOT NULL DEFAULT '',
+  status      ENUM('queued', 'sent', 'seen', 'canceled') NOT NULL DEFAULT 'queued',
+  send_at     BIGINT NOT NULL DEFAULT 0,
+  sent_at     BIGINT NOT NULL DEFAULT 0,
+  seen_at     BIGINT NOT NULL DEFAULT 0,
+  created_by  BIGINT UNSIGNED NULL,
+  created_at  BIGINT NOT NULL,
+  UNIQUE KEY ux_anot_dedupe (dedupe_key),
+  KEY ix_anot_user (user_id, id),
+  KEY ix_anot_queue (status, send_at),
+  KEY ix_anot_contract (contract_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_care_logs (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  zone_id    BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  unit_id    BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  kind       VARCHAR(24) NOT NULL DEFAULT 'care',
+  text       VARCHAR(400) NOT NULL DEFAULT '',
+  visible    TINYINT NOT NULL DEFAULT 1,
+  created_by BIGINT UNSIGNED NULL,
+  created_at BIGINT NOT NULL,
+  KEY ix_acare_unit (unit_id, id),
+  KEY ix_acare_zone (zone_id, unit_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_stats_daily (
+  day        CHAR(10) NOT NULL,
+  zone_id    BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  n_open     INT NOT NULL DEFAULT 0,
+  n_held     INT NOT NULL DEFAULT 0,
+  n_leased   INT NOT NULL DEFAULT 0,
+  n_closed   INT NOT NULL DEFAULT 0,
+  n_pending  INT NOT NULL DEFAULT 0,
+  n_active   INT NOT NULL DEFAULT 0,
+  n_overdue  INT NOT NULL DEFAULT 0,
+  n_ended    INT NOT NULL DEFAULT 0,
+  revenue    BIGINT NOT NULL DEFAULT 0,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (day, zone_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS allot_terms (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ver          VARCHAR(40) NOT NULL,
+  privacy_text MEDIUMTEXT NULL,
+  terms_text   MEDIUMTEXT NULL,
+  refund_text  MEDIUMTEXT NULL,
+  created_at   BIGINT NOT NULL,
+  UNIQUE KEY ux_aterms_ver (ver)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS job_runs (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  job         VARCHAR(40) NOT NULL,
+  source      ENUM('cli', 'lazy', 'admin') NOT NULL DEFAULT 'cli',
+  started_at  BIGINT NOT NULL,
+  finished_at BIGINT NOT NULL DEFAULT 0,
+  ok          TINYINT NOT NULL DEFAULT 0,
+  summary     TEXT NULL,
+  KEY ix_jobs_job (job, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS cache_kv (
+  k          VARCHAR(191) NOT NULL PRIMARY KEY,
+  v          MEDIUMTEXT NULL,
+  expires_at BIGINT NOT NULL DEFAULT 0,
+  KEY ix_cache_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (7, UNIX_TIMESTAMP() * 1000, 'phase 8: allotment (zones, units, customers, contracts, payments, waiting list, notices, care logs, daily statistics, consent texts), job runs, cache table');
