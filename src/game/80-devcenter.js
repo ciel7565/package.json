@@ -251,6 +251,7 @@
       F('40-farming.js', 'farm', '밭 성장 시뮬레이션·물주기·심기·수확·작물 표현·한 번 누르기(쉬운 모드)'),
       F('41-fermentation.js', 'farm', '장독 발효 시뮬레이션·품질 공식·재료 만들기·장독 얼굴 카드(쉬운 모드)'),
       F('42-realfarm.js', 'farm', '실시간 텃밭(진짜 시간으로 자라는 밭 4개)·곳간(300개 보관)·📮 완료 확인·📬 확인 기록장'),
+      F('43-allot.js', 'farm', '만장대 분양(G.sys.allot): 내 분양 카드·단지 지도(1만 자리, 겹 캐시)·빈 자리 찾기·어른 확인 뒤 신청·대기·이름표·분양 알림·체험용 지도 (§16.8)'), // [allot-client]
       F('45-education-data.js', 'edu', '교육 콘텐츠 9종·퀴즈 25개 + 아이용 그림 이야기·그림 퀴즈 (순수 데이터)'),
       F('46-education.js', 'edu', '교육 뷰어·3D 모형·퀴즈·안내판·키오스크·전시'),
       F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소) + 그림 일기(기분·스티커)'),
@@ -285,6 +286,7 @@
       F('40-farming.css', 'farm', '밭 정보 창·밭 라벨'),
       F('41-fermentation.css', 'farm', '장독 창·작업대'),
       F('42-realfarm.css', 'farm', '실시간 텃밭 이름표·밭 카드·곳간·확인 기록장·어른 확인'),
+      F('43-allot.css', 'farm', '분양 창·아이 그림 타일·내 분양 카드·지도 상자·범례·신청서'), // [allot-client]
       F('46-education.css', 'edu', '교육 뷰어·퀴즈·도서관'),
       F('47-journal.css', 'edu', '작업일지'),
       F('49-exhibits.css', 'edu', '전시 카드·집 구경 도감·움직이는 그림 재생기'), // [exhibits]
@@ -443,6 +445,7 @@
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
   DERIVED_STATS.push('placesSeen', 'exhibitsSeen', 'exhibitRooms', 'motionsSeen');   // [rooms-b] 집 구경 counters (03-state.js / 49-exhibits.js)
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
+  EXPECTED_SYSTEMS.push('allot');   // [allot-client] 43-allot.js
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
@@ -1438,6 +1441,10 @@
     { id: 'rtbed', emoji: '⏰', label: '실시간 텃밭 (밭 카드)', fn: () => { const f = fnOf(G.sys.realfarm, 'open'); const id = (G.data.rtfarm?.beds || [])[0]; return f && id ? () => f(id) : null; } },
     { id: 'gotgan', emoji: '🏚️', label: '곳간', fn: () => fnOf(G.sys.storage, 'open') },
     { id: 'rtbook', emoji: '📬', label: '확인 기록장', fn: () => fnOf(G.sys.realfarm, 'openBook') },
+    // [allot-client] 만장대 분양 (§16.8): the panel (local mode = the 체험용 demo), the map tab, the 알림 tab
+    { id: 'allot', emoji: '🏺', label: '만장대 분양 (내 항아리)', fn: () => { const f = fnOf(G.sys.allot, 'open'); return f && (() => f('mine')); } },
+    { id: 'allotmap', emoji: '🗺️', label: '분양 지도', fn: () => { const f = fnOf(G.sys.allot, 'open'); return f && (() => f('map')); } },
+    { id: 'allotinbox', emoji: '🔔', label: '분양 알림', fn: () => { const f = fnOf(G.sys.allot, 'open'); return f && (() => f('inbox')); } },
     // [exhibits] 한옥 전시 (§16.6): the 집 구경 도감, one exhibit card (preview: no stamp is recorded) and the motion player
     { id: 'xbook', emoji: '🏠', label: '집 구경 도감', fn: () => fnOf(G.sys.exhibits, 'openBook') },
     { id: 'xcard', emoji: '🪧', label: '전시 카드', fn: () => { const f = fnOf(G.sys.exhibits, 'open'); const id = firstKey(G.data.exhibits); return f && id ? () => f(id, { preview: true }) : null; } },
@@ -2291,6 +2298,24 @@
     return { ok, detail: `깨끗한 화면 이상 ${clean?.anomaly} → 검은 사각형 2회 감지 ${p1?.anomaly}/${p2?.anomaly} (검정 ${p1 ? (p1.black * 100).toFixed(0) : '?'} %) → 격리 단계 ${step} (${state}) → 다시 켜기 후 단계 ${W.step}, 이상 ${after?.anomaly}` };
   });
   // ---- 🏠 한옥 전시 (CONTRACT §16.6) [exhibits]: the data, the save rule and the drawings — on scratch objects only
+  // ---- 🏺 만장대 분양 (CONTRACT §16.8) [allot-client]: the 체험용 map — every demo unit placed, its tap finds it again
+  T('🏺 분양', '체험용 지도: 1만 자리 상태가 놓이고, 지도 위를 누르면 그 자리를 찾아요', () => {
+    const A = G.sys.allot, D = G.data.allot, C = G.data.complex;
+    if (!A || !D || !C || !A._internal) return SKIP('분양(43-allot.js) 또는 단지 계획이 없어요');
+    const I = A._internal, keep = { L: I.Live.L, st: I.Live.st, zones: I.Live.zones, v: I.Live.v, demo: I.Live.demo, byZone: I.Live.byZone, mine: I.Live.mine };
+    try {
+      I.setZones(D.demoMap().zones, 1, true);
+      const L = I.Live.L, st = I.Live.st;
+      let bad = 0, open = 0;
+      for (let i = 0; i < L.count; i += 13) {
+        const z = L.zones[L.arrays.zone[i]].code, u = L.unit(z, L.arrays.seq[i]), r = u && L.unitAt(u.x, u.z, 0.3);
+        if (!r || r.zone !== z || r.seq !== L.arrays.seq[i]) bad++;
+        if (st[i] === 0) open++;
+      }
+      const free = A.findFree({ kind: 'jar' });
+      return { ok: L.count === 10000 && !bad && open > 50 && !!free && A.statusOf(free) === 'open', detail: `${L.count}자리 · 표본 빈 자리 ${open} · 되찾기 틀림 ${bad} · 빈 자리 찾기 ${free}` };
+    } finally { Object.assign(I.Live, keep); try { if (keep.L) C.use(keep.L); } catch (e) { /* ignore */ } }
+  });
   // ---- 🗺️ 만장대 단지 기본 계획 (CONTRACT §16.8) [complex-plan]: a small version of tests/complex-plan.mjs, in the page
   T('🗺️ 단지 계획', '기본 분양 1만 자리: 모두 놓이고, 자리 찾기가 제자리를 돌려주고, 겹치지 않아요', () => {
     const C = G.data.complex;
