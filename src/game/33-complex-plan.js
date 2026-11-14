@@ -150,14 +150,17 @@
   // river centre line with the water surface y per vertex (it falls towards the south)
   const RIVER = { w: 18, pts: [[-214, -210, 6.0], [-206, -150, 4.6], [-198, -90, 3.2], [-188, -30, 1.8], [-178, 30, 0.4], [-172, 80, -0.4], [-174, 130, -0.9], [-182, 180, -1.3], [-194, 240, -1.8]] };
   const RIVER_XZ = RIVER.pts.map((p) => [p[0], p[1]]);
+  // the roads that leave the site (north along the river, east along the south edge, south-west to the bridge)
+  const ROAD_LINES = [[[-158, -170], [-154, -110], [-151, -60]], [[60, 134], [140, 134], [200, 134]], [[-151, 96], [-155, 130], [-160, 175]]];
 
-  const GC = { id: 'GC', cx: 30, cz: 50, sectors: [0, 1, 2, 3, 4, 5, 6, 7] };   // the great circle
-  const AM = { id: 'AM', cx: 126, cz: -64, sectors: [4, 5, 6, 7] };              // the amphitheatre (north half: a ∈ [π, 2π])
+  const GC = { id: 'GC', cx: 14, cz: 52, sectors: [0, 1, 2, 3, 4, 5, 6, 7] };   // the great circle
+  const AM = { id: 'AM', cx: 114, cz: -62, sectors: [4, 5, 6, 7] };              // the amphitheatre (north half: a ∈ [π, 2π])
   const RING_SYS = [GC, AM];
   const ROUND = { cx: -104, cz: 46, r0: 19, r1: 30, lane: 24.5 };
+  const GATE = { x: GC.cx + 64.5 * Math.cos(PI * 0.75), z: GC.cz + 64.5 * Math.sin(PI * 0.75), rot: -PI / 4 };   // the main gate house faces south-west (image 3)
   const MAIN = { x: -66, z: -18, w: 66, d: 42 };
-  const VILLAGE = { x0: -34, z0: -112, x1: 54, z1: -46, cols: [-22, 0, 22, 44], rows: [-56, -76, -96], hw: 6.5, hd: 3.75, raise: 2.0 };
-  const KNOLL = { cx: 100, cz: -4, r: 7, rise: 3.0 };
+  const VILLAGE = { x0: -38, z0: -112, x1: 50, z1: -46, cols: [-26, -4, 18, 40], rows: [-56, -76, -96], hw: 6.5, hd: 3.75, raise: 2.0 };
+  const KNOLL = { cx: 90, cz: 4, r: 7, rise: 3.0 };
   const DECK = { x: -58, z: 160, w: 14, d: 10, y: 22 };
   const YARD = { x0: -144, len: K.BAYS_PER_SIDE * K.BAY_W + 1.2, zc0: -62.6, houses: 8 };
   const OVER = { x0: 100, z0: 14, x1: 146, z1: 66 };
@@ -180,12 +183,15 @@
     if (dN <= -30 && dS <= -30 && dE <= -30 && dW <= -30) return 0;
     const n = fbm(x * 0.018, z * 0.018), n2 = vnoise(x * 0.05 + 40, z * 0.05 - 17);
     const rn = riverNear(x, z).d, valley = 1 - 0.78 * Math.exp(-Math.pow(rn / 48, 2));       // the valley opens along the river
+    let rd = Infinity;
+    for (const pts of ROAD_LINES) rd = Math.min(rd, polyNear(x, z, pts).d);
+    const road = 1 - Math.exp(-Math.pow(rd / 16, 2));                                          // the roads leave through cuts
     const hN = 92 * ease(dN, 55) * (0.75 + 0.5 * n) * valley;
     const hS = 58 * ease(dS, 34) * (0.8 + 0.4 * n);
     const hE = 76 * ease(dE, 46) * (0.75 + 0.5 * n);
     const hW = 70 * ease(dW, 26) * (0.7 + 0.6 * n2) * (0.55 + 0.45 * valley);              // rocky cliffs beyond the far bank
     const m = Math.max(hN, hS, hE, hW), sum = hN + hS + hE + hW;
-    return m + 0.3 * (sum - m);
+    return (m + 0.3 * (sum - m)) * road;
   }
   function baseSlope(z) {
     let h = 0.6;
@@ -266,8 +272,8 @@
   for (const B of FIELDS) PADS.push({ id: 'P_' + B.id, blend: 4, h: (x, z) => fieldLevel(B, x, z), sd: (x, z) => fieldSD(B, x, z) });
   for (const H of HOUSES) padRect('P_SH' + H.k, H.x0 - 1, H.z0 - 0.4, H.x1 + 1, H.z1 + 0.4, H.y, 2.2);
   padRect('P_WORKSHOP', -57, -133, -43, -123, baseSlope(-128), 4);
-  padRect('P_CAFE', -61, 96, -39, 118, 0.6, 3);
-  padRect('P_GATE', 22, 108, 38, 117, GC_RIM, 3);
+  padRect('P_CAFE', -71, 71, -49, 91, baseSlope(81), 3);
+  PADS.push({ id: 'P_GATE', blend: 1.5, h: () => GC_RIM, sd: (x, z) => { const lx = (x - GATE.x) * Math.cos(GATE.rot) - (z - GATE.z) * Math.sin(GATE.rot), lz = (x - GATE.x) * Math.sin(GATE.rot) + (z - GATE.z) * Math.cos(GATE.rot); return rectSD(lx, lz, -7.5, -3.4, 7.5, 3.4); } });
   padRect('P_OVER', OVER.x0, OVER.z0, OVER.x1, OVER.z1, (x, z) => baseSlope(z), 3);
   padCircle('P_DECK', DECK.x, DECK.z, 8, DECK.y - 0.4, 14);
 
@@ -529,27 +535,36 @@
       const r0 = Math.max(0, Math.floor((z0 - m - unitBounds.minZ) / SG)), r1 = Math.min(gnz - 1, Math.floor((z1 + m - unitBounds.minZ) / SG));
       for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) { const id = r * gnx + c; (gridSlots[id] || (gridSlots[id] = [])).push(si); }
     });
+    // flat arc tables per ring slot (row × sector): k, a0, step, start — no object lookups in the hot path
+    const RT = SLOTS.map((sl, si) => {
+      if (sl.type !== 'ring') return null;
+      const n = ROWS.length * 8, k = new Int32Array(n), a0 = new Float64Array(n), st = new Float64Array(n), start = new Int32Array(n), R = Float64Array.from(ROWS);
+      for (const row of ringTab[si]) for (const arc of row.arcs) { const j = row.ri * 8 + arc.sec; k[j] = arc.k; a0[j] = arc.a0; st[j] = arc.step; start[j] = arc.start; }
+      const sys = sl.sys === 'GC' ? GC : AM;
+      return { k, a0, st, start, R, cx: sys.cx, cz: sys.cz, owner: Int8Array.from(SECTOR_SLOT[sl.sys]), pos: slotPos[si], rows: ringTab[si].length };
+    });
+    const RMIN = K.RING_R0 - 1, RMAX = ROWS[ROWS.length - 1] + 1, RP = K.RING_PERIOD, RS = K.RING_SPACING, R0 = K.RING_R0;
     function ringHit(si, x, z, pad) {
-      const sl = SLOTS[si], sys = sl.sys === 'GC' ? GC : AM, dx = x - sys.cx, dz = z - sys.cz, r = Math.sqrt(dx * dx + dz * dz);
-      if (r < K.RING_R0 - 1 - pad || r > ROWS[ROWS.length - 1] + 1 + pad) return -1;
+      const T = RT[si], dx = x - T.cx, dz = z - T.cz, r = Math.sqrt(dx * dx + dz * dz);
+      if (r < RMIN - pad || r > RMAX + pad) return -1;
       let a = Math.atan2(dz, dx); if (a < 0) a += TAU;
-      const sec = a >= TAU ? 7 : Math.min(7, Math.floor(a / SEC));
-      if (SECTOR_SLOT[sl.sys][sec] !== si) return -1;
-      const rows = ringTab[si];
-      let r0 = ringRowOf(r);
-      if (r0 < 0) r0 = ringRowOf(r - 0.8) >= 0 ? ringRowOf(r - 0.8) : ringRowOf(r + 0.8);
-      if (r0 < 0) return -1;
-      const lim = K.JAR_HIT + pad, span = pad > 0.5 ? 1 : 0;
-      for (let ri = r0 - span; ri <= r0 + span; ri++) {
-        if (ri < 0 || ri >= rows.length) continue;
-        const arc = rows[ri].bySec[sec];
-        if (!arc || arc.k <= 0) continue;
-        const q = arc.k === 1 ? 0 : Math.round((a - arc.a0) / arc.step);
-        if (q < 0 || q >= arc.k) continue;
-        const R = ROWGEO[rows[ri].ri].r, dr = r - R;
+      let sec = Math.floor(a / SEC); if (sec > 7) sec = 7;
+      if (T.owner[sec] !== si) return -1;
+      // the row by arithmetic (groups of three rows 1.6 m apart, 5.6 m per group)
+      const kg = Math.floor((r - R0 + 1.2) / RP), j = Math.round((r - (R0 + RP * kg)) / RS);
+      let r0 = kg * 3 + (j < 0 ? 0 : j > 2 ? 2 : j);
+      if (r0 < 0) r0 = 0;
+      const lim = K.JAR_HIT + pad, lim2 = lim * lim, span = pad > 0.5 ? 1 : 0;
+      for (let ri = r0 - 1 - span; ri <= r0 + 1 + span; ri++) {
+        if (ri < 0 || ri >= T.rows) continue;
+        const R = T.R[ri], dr = r - R;
         if (dr > lim || dr < -lim) continue;
-        const d2 = r * r + R * R - 2 * r * R * Math.cos(a - arc.a0 - arc.step * q);      // law of cosines: one cos, no sin
-        if (d2 <= lim * lim) { const i = slotPos[si][arc.start + q]; if (i >= 0) return i; }
+        const jj = ri * 8 + sec, kk = T.k[jj];
+        if (kk <= 0) continue;
+        const q = kk === 1 ? 0 : Math.round((a - T.a0[jj]) / T.st[jj]);
+        if (q < 0 || q >= kk) continue;
+        const da = (a - T.a0[jj] - T.st[jj] * q) * R;                 // arc offset (≥ the chord: a conservative, trig-free test)
+        if (dr * dr + da * da <= lim2) { const i = T.pos[T.start[jj] + q]; if (i >= 0) return i; }
       }
       return -1;
     }
@@ -685,8 +700,8 @@
   }
   const BUS_STOP = Object.freeze({ x: -69.5, z: 41, rot: PI, bay: { x0: -74, z0: 30, x1: -68, z1: 52 }, shelter: { x: -64.5, z: 41, w: 3, d: 7, rot: -PI / 2 }, sign: { x: -65, z: 34.5 } });
   add({ id: 'BUSBAY', type: 'busbay', name: '셔틀버스 정류장', x0: -74, z0: 30, x1: -68, z1: 52, stop: { x: BUS_STOP.x, z: BUS_STOP.z, rot: BUS_STOP.rot }, shelter: BUS_STOP.shelter });
-  add({ id: 'PLAZA_ENTRY', type: 'plaza', name: '들머리 마당', shape: 'rect', x0: -72, z0: 14, x1: -36, z1: 88, surface: 'stone' });
-  add({ id: 'PLAZA_GATE', type: 'plaza', name: '정문 앞마당', shape: 'rect', x0: 14, z0: 115, x1: 46, z1: 130, surface: 'stone' });
+  add({ id: 'PLAZA_ENTRY', type: 'plaza', name: '들머리 마당', shape: 'rect', x0: -72, z0: 14, x1: -48, z1: 70, surface: 'stone' });
+  add({ id: 'PLAZA_GATE', type: 'plaza', name: '정문 앞마당', shape: 'rect', x0: -48, z0: 99, x1: -26, z1: 128, surface: 'stone' });
 
   // buildings
   const B = (o) => add(Object.assign({ type: 'building' }, o));
@@ -699,9 +714,9 @@
     ],
     door: { x: -66, z: 3.2, rot: 0 }, doors: [{ x: -66, z: 3.2, rot: 0, main: true }, { x: -33, z: -16, rot: PI / 2 }],
     stairs: [{ x0: -76, z0: 13, x1: -56, z1: 16, y0: r3(MAIN_Y), y1: r3(MAIN_Y + 1.2) }], place: 'PL_OFFICE' });
-  B({ id: 'B_CAFE', kind: 'cafe', name: '농촌 카페', x: -50, z: 104, w: 20, d: 14, rot: 0, y: 0.6, h: 4.2, floors: 1, roof: { type: 'matbae', h: 2.6, overhang: 1.2 },
-    door: { x: -50, z: 111, rot: 0 }, terrace: { x0: -60, z0: 111, x1: -40, z1: 117 } });
-  B({ id: 'B_GATE', kind: 'gatehouse', name: '장독대 정문', x: 30, z: 112, w: 12, d: 6, rot: 0, y: r3(GC_RIM), h: 4.6, floors: 1, roof: { type: 'sosul', h: 2.8, overhang: 1.4 }, passage: { w: 4.2 }, door: { x: 30, z: 115, rot: 0 } });
+  B({ id: 'B_CAFE', kind: 'cafe', name: '농촌 카페', x: -60, z: 78, w: 20, d: 12, rot: 0, y: r3(baseSlope(81)), h: 4.2, floors: 1, roof: { type: 'matbae', h: 2.6, overhang: 1.2 },
+    door: { x: -60, z: 84, rot: 0 }, terrace: { x0: -70, z0: 84, x1: -50, z1: 90 } });
+  B({ id: 'B_GATE', kind: 'gatehouse', name: '장독대 정문', x: r3(GATE.x), z: r3(GATE.z), w: 12, d: 6, rot: r3(GATE.rot), y: r3(GC_RIM), h: 4.6, floors: 1, roof: { type: 'sosul', h: 2.8, overhang: 1.4 }, passage: { w: 4.2 }, door: { x: r3(GATE.x + 3 * Math.sin(GATE.rot)), z: r3(GATE.z + 3 * Math.cos(GATE.rot)), rot: r3(GATE.rot) } });
   B({ id: 'B_PAVILION', kind: 'pavilion', name: '정자', x: KNOLL.cx, z: KNOLL.cz, w: 9, d: 9, rot: 0, y: r3(KNOLL_Y), h: 7.5, floors: 2, roof: { type: 'paljak2', h: 4.5, overhang: 1.8 }, open: true });
   B({ id: 'B_WORKSHOP', kind: 'workshop', name: '옹기 공방', x: -50, z: -128, w: 12, d: 9, rot: 0, y: r3(baseSlope(-128)), h: 4.0, floors: 1, roof: { type: 'matbae', h: 2.4, overhang: 1.0 }, door: { x: -50, z: -123.5, rot: 0 } });
   add({ id: 'KILN', type: 'kiln', name: '오름가마', x: -50, z0: -134, z1: -149, w: 3.6, chambers: 6, y0: r3(height(-50, -134)), y1: r3(height(-50, -149)) });
@@ -722,12 +737,12 @@
   add({ id: 'STOREYARD', type: 'storeyard', name: '창고 마당', x0: YARD.x0 - 3, z0: HOUSES[7].z0 - 4.4, x1: YARD.x0 + YARD.len + 3, z1: HOUSES[0].z1 + 4.4 });
 
   // corridor and the pavilion knoll
-  const CORRIDOR_PTS = [[-33, -16], [40, -16], [88, -16], [95.5, -8.5]];
+  const CORRIDOR_PTS = [[-33, -16], [40, -16], [78, -16], [85.5, -1.5]];
   add({ id: 'CORRIDOR', type: 'corridor', name: '회랑', pts: CORRIDOR_PTS, w: 4.4, h: 3.4, roof: { type: 'matbae', h: 1.6, overhang: 0.9 }, postEvery: 3.0 });
   add({ id: 'KNOLL', type: 'knoll', name: '정자 언덕', cx: KNOLL.cx, cz: KNOLL.cz, r: KNOLL.r, top: r3(KNOLL_Y) });
 
   // the great circle and the amphitheatre (frames; the jars come from layout)
-  const GC_GATES = [{ a: PI / 2, w: 5, name: '남문', main: true }, { a: PI, w: 5, name: '서문' }, { a: PI * 1.5, w: 5, name: '북문' }, { a: 0, w: 5, name: '동문' }];
+  const GC_GATES = [{ a: PI * 0.75, w: 5, name: '정문 (남서)', main: true }, { a: PI / 2, w: 4.4, name: '남문' }, { a: PI, w: 4.4, name: '서문' }, { a: PI * 1.5, w: 4.4, name: '북문' }, { a: 0, w: 4.4, name: '동문' }];
   add({ id: 'JARCIRCLE', type: 'jarcircle', name: '큰 장독대 (동심원)', cx: GC.cx, cz: GC.cz, plazaR: K.PLAZA_R, r0: K.RING_R0, r1: ROWS[ROWS.length - 1], wallR: K.WALL_R, rows: ROWS.slice(),
     walks: Array.from({ length: 10 }, (_, k) => r3(K.RING_R0 - 1.2 + K.RING_PERIOD * k)), aisles: [0, 1, 2, 3, 4, 5, 6, 7].map((s) => r3(s * SEC)), aisleW: K.AISLE_W, rim: r3(GC_RIM),
     centre: { kind: 'stone-table', r: 3 } });
@@ -791,18 +806,18 @@
   const SIGNS = [
     { id: 'SG_ENTRY', x: -62, z: 36, rot: PI / 2, emoji: '🏺', text: '만장대 단지 — 어서 오세요' },
     { id: 'SG_BUS', x: -65, z: 34.5, rot: -PI / 2, emoji: '🚌', text: '셔틀버스 (마을로 가요)' },
-    { id: 'SG_GATE', x: 22, z: 120, rot: 0, emoji: '🚪', text: '큰 장독대 정문' },
-    { id: 'SG_GCW', x: -36, z: 50, rot: PI / 2, emoji: '🏺', text: '큰 장독대 (서문)' },
+    { id: 'SG_GATE', x: -42, z: 112, rot: r3(GATE.rot), emoji: '🚪', text: '큰 장독대 정문' },
+    { id: 'SG_GCW', x: -51, z: 46, rot: PI / 2, emoji: '🏺', text: '큰 장독대 (서문)' },
     { id: 'SG_MAIN', x: -80, z: 18, rot: 0, emoji: '🏛️', text: '본관 — 분양 안내소' },
     { id: 'SG_VILLAGE', x: 14, z: -20, rot: 0, emoji: '🏘️', text: '한옥 마을' },
-    { id: 'SG_PAVILION', x: 90, z: -12, rot: 0, emoji: '⛩️', text: '정자' },
-    { id: 'SG_AM', x: 126, z: -50, rot: 0, emoji: '🏺', text: '반원 계단 장독대' },
+    { id: 'SG_PAVILION', x: 80, z: -10, rot: 0, emoji: '⛩️', text: '정자' },
+    { id: 'SG_AM', x: 114, z: -49, rot: 0, emoji: '🏺', text: '반원 계단 장독대' },
     { id: 'SG_FN', x: -26, z: -128, rot: 0, emoji: '🌿', text: '계단밭 (북쪽)' },
     { id: 'SG_FE', x: 146, z: 62, rot: -PI / 2, emoji: '🌿', text: '계단밭 (동쪽)' },
     { id: 'SG_FSE', x: 106, z: 124, rot: 0, emoji: '🌿', text: '계단밭 (남동쪽)' },
     { id: 'SG_YARD', x: -148, z: -56, rot: PI / 2, emoji: '📦', text: '창고 마당' },
     { id: 'SG_WORKSHOP', x: -50, z: -121, rot: 0, emoji: '⚱️', text: '옹기 공방' },
-    { id: 'SG_CAFE', x: -38, z: 119, rot: 0, emoji: '☕', text: '농촌 카페' },
+    { id: 'SG_CAFE', x: -48, z: 86, rot: PI / 2, emoji: '☕', text: '농촌 카페' },
     { id: 'SG_DECK', x: -114, z: 139, rot: 0, emoji: '🔭', text: '전망 데크 (계단)' },
     { id: 'SG_PARK', x: -110, z: 2, rot: PI / 2, emoji: '🅿️', text: '주차장' },
     { id: 'SG_BRIDGE', x: -152, z: 92, rot: -PI / 2, emoji: '🌉', text: '돌다리' },
@@ -821,7 +836,7 @@
     F('FO_VILLAGE', '마을 뒤 숲', [[-34, -116], [54, -116], [54, -126], [-34, -126]], 0.9, { pine: 0.7, maple: 0.3 });
     F('FO_MAIN', '본관 뒤 소나무', [[-100, -48], [-36, -48], [-36, -42], [-100, -42]], 0.8, { pine: 1.0 });
     F('FO_RIVERSIDE', '강가 나무', [[-168, -150], [-160, -150], [-158, 152], [-166, 152]], 0.5, { zelkova: 0.4, maple: 0.3, pine: 0.3 });
-    F('FO_GCW', '큰 장독대 서쪽 솔숲', [[-32, 96], [-14, 96], [-8, 124], [-32, 124]], 1.1, { pine: 0.8, pine_sculpted: 0.2 });
+    F('FO_GCW', '정문 옆 솔숲', [[-22, 113], [-4, 112], [-4, 128], [-22, 128]], 1.1, { pine: 0.8, pine_sculpted: 0.2 });
   }
 
   // ================================================================== paths (walk lines with widths) — colliders, minimap, walking
@@ -831,9 +846,10 @@
   P({ id: 'RING_ROAD', kind: 'road', w: ROUND.r1 - ROUND.r0 + 1, arc: { cx: ROUND.cx, cz: ROUND.cz, r: ROUND.lane, a0: 0, a1: TAU }, pts: arcPts(ROUND.cx, ROUND.cz, ROUND.lane, 0, TAU, 48) });
   P({ id: 'ENTRY', kind: 'plaza', w: 36, pts: [[-54, 14], [-54, 88]] });
   P({ id: 'PORTICO', kind: 'avenue', w: 18, pts: [[-66, 13], [-66, 16]] });
-  P({ id: 'GC_WEST', kind: 'avenue', w: 6, pts: [[-36, 50], [-32.2, 50]] });
-  P({ id: 'GATE_ROAD', kind: 'avenue', w: 6, pts: [[30, 108], [30, 131]] });
-  P({ id: 'CAFE', kind: 'avenue', w: 4, pts: [[-50, 88], [-50, 97], [-50, 117], [-50, 130]] });
+  P({ id: 'GC_WEST', kind: 'avenue', w: 6, pts: [[-50, GC.cz], [GC.cx - K.WALL_R - 1.5, GC.cz]] });
+  P({ id: 'GATE_ROAD', kind: 'avenue', w: 6, pts: [[r3(GC.cx + (K.WALL_R - 2) * Math.cos(PI * 0.75)), r3(GC.cz + (K.WALL_R - 2) * Math.sin(PI * 0.75))], [-36, 104], [-38, 131]] });
+  P({ id: 'GATE_PLAZA', kind: 'plaza', w: 20, pts: [[-37, 101], [-37, 126]] });
+  P({ id: 'CAFE', kind: 'avenue', w: 4, pts: [[-60, 70], [-60, 72], [-44, 92], [-40, 104]] });
   P({ id: 'CORRIDOR', kind: 'corridor', w: 4.0, pts: CORRIDOR_PTS });
   P({ id: 'KNOLL_TOP', kind: 'plaza', w: 12, pts: [[KNOLL.cx - 1, KNOLL.cz], [KNOLL.cx + 1, KNOLL.cz]] });
   // the great circle: radial aisles, ring walks, plaza
@@ -845,7 +861,7 @@
   for (let k = 0; k < 10; k++) { const r = K.RING_R0 - 1.2 + K.RING_PERIOD * k; P({ id: 'AM_W' + k, kind: 'ringwalk', w: K.WALK_W, arc: { cx: AM.cx, cz: AM.cz, r, a0: PI, a1: TAU }, pts: arcPts(AM.cx, AM.cz, r, PI, TAU, 40) }); }
   P({ id: 'AM_PLAZA', kind: 'plaza', w: K.PLAZA_R * 2, pts: [[AM.cx - 0.01, AM.cz], [AM.cx + 0.01, AM.cz]] });
   P({ id: 'AM_FRONT', kind: 'avenue', w: 5, pts: [[AM.cx - K.WALL_R, AM.cz + 3], [AM.cx + K.WALL_R, AM.cz + 3]] });
-  P({ id: 'AM_LINK', kind: 'avenue', w: 4, pts: [[96, -10], [110, -40], [AM.cx - 6, AM.cz + 6]] });
+  P({ id: 'AM_LINK', kind: 'avenue', w: 4, pts: [[94, -2], [104, -30], [AM.cx - 4, AM.cz + 6]] });
   // fields: a walk at the start of every terrace, cross aisles, an edge walk round the block
   for (const F of FIELDS) {
     for (let t = 0; t < F.terr; t++) { const v = t * F.period + K.FIELD_WALK / 2; P({ id: `${F.id}_W${t}`, kind: 'walk', w: K.FIELD_WALK, pts: [fxz(F, -1.2, v), fxz(F, F.lenU + 1.2, v)].map((p) => [r3(p[0]), r3(p[1])]) }); }
@@ -863,11 +879,11 @@
   P({ id: 'OV_X', kind: 'walk', w: 2.0, pts: [[OVER.x0 + 23, OVER.z0], [OVER.x0 + 23, OVER.z1]] });
   P({ id: 'OV_LINK', kind: 'avenue', w: 4, pts: [[92, 40], [OVER.x0, 40]] });
   // the village: lanes between the houses, the main stair from the corridor, a path round the back
-  for (const x of [-33, -11, 11, 33, 53]) P({ id: 'VL_X' + x, kind: 'lane', w: 3.0, pts: [[x, VILLAGE.z0 + 2], [x, VILLAGE.z1 - 1]] });
-  for (const z of [-48, -66, -86, -106]) P({ id: 'VL_Z' + z, kind: 'lane', w: 3.0, pts: [[VILLAGE.x0 + 1, z], [VILLAGE.x1 - 1, z]] });
+  for (const x of [VILLAGE.x0 + 2, VILLAGE.cols[0] + 11, VILLAGE.cols[1] + 11, VILLAGE.cols[2] + 11, VILLAGE.x1 - 2]) P({ id: 'VL_X' + x, kind: 'lane', w: 4.0, pts: [[x, VILLAGE.z0 + 2], [x, VILLAGE.z1 - 1]] });
+  for (const z of [-48.5, -66, -86, -105.5]) P({ id: 'VL_Z' + z, kind: 'lane', w: 4.0, pts: [[VILLAGE.x0 + 1, z], [VILLAGE.x1 - 1, z]] });
   P({ id: 'ST_VILLAGE', kind: 'stair', w: 3.0, pts: [[11, -18.5], [11, -46]] });
   P({ id: 'WORKSHOP', kind: 'avenue', w: 4, pts: [[-60, -56.7], [-50, -80], [-50, -123]] });
-  P({ id: 'NFIELD_LINK', kind: 'avenue', w: 3, pts: [[53, -106], [60, -118], [60, -128.6]] });
+  P({ id: 'NFIELD_LINK', kind: 'avenue', w: 4, pts: [[53, -106], [60, -118], [60, -128.6]] });
   // the deck stairs and the deck
   for (const s of STAIRS) if (!s.natural) P({ id: s.id, kind: 'stair', w: s.w, pts: s.pts.map((p) => [p[0], p[1]]), ys: s.pts.map((p) => p[2]) });
   P({ id: 'DECK', kind: 'deck', w: DECK.d, pts: [[DECK.x - DECK.w / 2 + DECK.d / 2, DECK.z], [DECK.x + DECK.w / 2 - DECK.d / 2, DECK.z]], ys: [DECK.y, DECK.y] });
@@ -895,6 +911,11 @@
   const OBST = [];       // { x0, z0, x1, z1, test(x, z) → bool }
   for (const e of E) {
     if (e.type === 'building' && !e.open) {
+      if (e.rot) {                                       // a rotated building (the gate house): test in its own frame, the passage stays open
+        const c = Math.cos(e.rot), sn = Math.sin(e.rot), R = Math.hypot(e.w, e.d) / 2, pw = e.passage ? e.passage.w / 2 : -1;
+        OBST.push({ id: e.id, x0: e.x - R, z0: e.z - R, x1: e.x + R, z1: e.z + R, test: (x, z) => { const lx = (x - e.x) * c - (z - e.z) * sn, lz = (x - e.x) * sn + (z - e.z) * c; return Math.abs(lx) <= e.w / 2 && Math.abs(lz) <= e.d / 2 && Math.abs(lx) > pw; } });
+        continue;
+      }
       const parts = e.parts || [{ x0: e.x - e.w / 2, z0: e.z - e.d / 2, x1: e.x + e.w / 2, z1: e.z + e.d / 2 }];
       for (const p of parts) if (p.id !== 'portico') OBST.push({ id: e.id, x0: p.x0, z0: p.z0, x1: p.x1, z1: p.z1, test: () => true });
     }
@@ -927,9 +948,9 @@
   const VP = (id, name, x, y, z, lx, ly, lz, fov, extra) => Object.freeze(Object.assign({ id, name, x, y, z, look: Object.freeze({ x: lx, y: ly, z: lz }), fov }, extra || {}));
   const VIEWPOINTS = Object.freeze([
     VP('deck', '전망 데크', DECK.x, DECK.y + 1.6, DECK.z - 3, 22, 2, 8, 62, { stand: { x: DECK.x, z: DECK.z - 2.5 } }),
-    VP('aerial', '하늘에서 본 단지 (그림 3과 같은 자리)', -78, 132, 236, 18, 0, 6, 55, { camera: true }),
-    VP('gate', '큰 장독대 정문', 30, GC_RIM + 1.6, 122, 30, 0, 40, 60, { stand: { x: 30, z: 121 } }),
-    VP('pavilion', '정자 위', KNOLL.cx, KNOLL_Y + 4.2, KNOLL.cz, 20, 0, 40, 60, { stand: { x: KNOLL.cx, z: KNOLL.cz } }),
+    VP('aerial', '하늘에서 본 단지 (그림 3과 같은 자리)', -23, 110, 189, -25, 0, -2, 48, { camera: true }),
+    VP('gate', '큰 장독대 정문', -38, GC_RIM + 1.6, 108, GC.cx + 6, 0, GC.cz - 6, 60, { stand: { x: -38, z: 108 } }),
+    VP('pavilion', '정자 위', KNOLL.cx, KNOLL_Y + 4.2, KNOLL.cz, GC.cx, 0, GC.cz, 60, { stand: { x: KNOLL.cx, z: KNOLL.cz } }),
     VP('amph', '반원 장독대 꼭대기', AM.cx, AM_L0 + 5.8, AM.cz - 58, 60, 2, 20, 62, { stand: { x: AM.cx, z: AM.cz - 63.5 } }),
     VP('garden', '소나무 정원 분수', ROUND.cx + 22, 2.4, ROUND.cz + 18, ROUND.cx, 1.2, ROUND.cz, 58, { stand: { x: ROUND.cx + 22, z: ROUND.cz + 18 } }),
   ]);
@@ -1026,7 +1047,7 @@
     circ(AM.cx, AM.cz, K.PLAZA_R, COL.plaza, COL.wall, 1);
     // fields, overflow, terraces
     for (const e of E) if (e.type === 'terrace') rect(e.x0, e.z0, e.x1, e.z1, COL.lawnDark, COL.wall, Math.max(1, 0.4 * s));
-    for (const e of E) if (e.type === 'field') { poly(e.poly, e.overflow ? COL.walk : COL.soil, COL.soilDark, 1); }
+    for (const e of E) if (e.type === 'field') { poly(e.poly, e.overflow ? COL.lawnDark : COL.soil, e.overflow ? COL.wall : COL.soilDark, 1); }
     // corridor, stairs, deck, storeyard ground
     for (const e of E) if (e.type === 'storeyard') rect(e.x0, e.z0, e.x1, e.z1, COL.walk);
     line(CORRIDOR_PTS, COL.corridor, 4.4);
@@ -1036,6 +1057,11 @@
     for (const e of E) if (e.type === 'building') {
       const col = e.kind === 'hanok' || e.kind === 'pavilion' || e.kind === 'gatehouse' ? COL.roofHanok : e.kind === 'storehouse' ? COL.roofStore : e.kind === 'cafe' || e.kind === 'workshop' ? COL.roofCafe : COL.roof;
       if (e.wall && s > 1) rect(e.wall.x0, e.wall.z0, e.wall.x1, e.wall.z1, null, COL.wall, Math.max(0.6, 0.35 * s));
+      if (e.rot) {
+        const c = Math.cos(e.rot), sn = Math.sin(e.rot), ov = (e.roof || {}).overhang || 0.8, hw = e.w / 2 + ov * 0.6, hd = e.d / 2 + ov * 0.6;
+        poly([[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([lx, lz]) => [e.x + lx * c + lz * sn, e.z - lx * sn + lz * c]), col, 'rgba(0,0,0,0.35)', 1);
+        continue;
+      }
       const parts = e.parts || [{ x0: e.x - e.w / 2, z0: e.z - e.d / 2, x1: e.x + e.w / 2, z1: e.z + e.d / 2 }];
       for (const p of parts) {
         const ov = (p.roof || e.roof || {}).overhang || 0.8;
@@ -1087,7 +1113,7 @@
         ctx.fillStyle = COL.label; ctx.fillText(txt, TX(x), TZ(z));
       };
       const names = [['만장대 본관', -66, -18, 1], ['한옥 마을', 10, -79, 0], ['정자', KNOLL.cx, KNOLL.cz + 9, 0], ['회랑', 20, -20.5, 0], ['소나무 정원', ROUND.cx, ROUND.cz + 12, 0],
-        ['주차장', -127, -22, 0], ['창고 마당', -105.6, -101, 0], ['옹기 공방', -50, -119, 0], ['농촌 카페', -50, 104, 0], ['전망 데크', DECK.x, DECK.z + 8, 0], ['강', riverX(-60) - 1, -60, 0], ['임시 자리', 123, 40, 0],
+        ['주차장', -127, -22, 0], ['창고 마당', -105.6, -101, 0], ['옹기 공방', -50, -119, 0], ['농촌 카페', -60, 78, 0], ['전망 데크', DECK.x, DECK.z + 8, 0], ['강', riverX(-60) - 1, -60, 0], ['임시 자리', 123, 40, 0],
         ['🚌 정류장', -66, 26, 0]];
       if (!L || !L.zones.length || opts.zoneLabels === false) names.push(['큰 장독대', GC.cx, GC.cz, 1], ['반원 장독대', AM.cx, AM.cz - 30, 1]);
       for (const [t, x, z, b] of names) label(t, x, z, b ? fs + 1 : fs - 1, b);
