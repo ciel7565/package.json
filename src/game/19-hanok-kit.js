@@ -1606,4 +1606,689 @@
   // post / beam under their documented names (post_ is the method: `post` is the post-top height)
   Room.prototype.postAt = Room.prototype.post_;
   G.hanok = K;
+  // ==============================================================================================================
+  // [rooms-c] generators for the 부엌, the 발효실 and the 곳간 (29-interiors-c.js) — an add-only block of the rooms-c
+  // track. Same conventions as section 3: (T, opts) with opts.x / y / z / rotY (or opts.m), local +Z = the front, a
+  // footprint back, no collider (R.block yourself); tints multiply the kit's materials, so `low` keeps the colours.
+  //   K.sway(R, {x, y, z, amp = 0.04, speed = 0.55, axis: 'x'|'z', phase, wall}) -> S   a group that swings slowly
+  //        about its pivot (x, y, z) — 메주 on straw rope, strings under the rafters. S.add(key, geometry, roomMatrix |
+  //        null, tint) like R.add; S.done() before R.finish() (one draw call per material; still under reduce motion)
+  //   wall bay { baraji: true, w = 1.0, h = 0.7, sill = 1.5, open = 0.85, offset = 0, gap = 0.1, wallMat, label }
+  //        바라지창 / 살창: an opening with diamond wooden bars and two board shutters swung in — the window sun comes
+  //        through as a hard shaft with the bars' shadows (no paper glow)
+  //   K.buttumak(R, {x, z, rotY, w = 4.4, d = 1.0, h = 0.78, mouths: [u…], pots: [{u, s, siru}], fireS})
+  //        -> {w, d, top, mouths: [{x, y, z}], pots: [{x, y, z, s, top}]}   부뚜막: plinth stones, a clay body with a
+  //        real 아궁이 recess per mouth (sooty firebox, stone jambs + 이맛돌, half-burnt logs, flames, embers, a pooled
+  //        light), 가마솥 sunk to the flange with the lid on, a 시루 sealed with 시룻번 under a cloth, steam, 조왕 bowl
+  //   K.salgang(R, side, bay, {w, d = 0.34, levels = 2, y = 1.15, gap = 0.5, offset}) -> {spots, x, y, z}   살강:
+  //        slatted wall shelves on bearers and braces with stacks of 사발 / 대접 and leaning 접시
+  //   K.chanjang(R, {x, z, rotY, w = 1.15, d = 0.46}) -> {w, d, top, niche}   찬장: drawers and doors below, an open
+  //        niche with bottles, lattice doors above
+  //   K.mulDumeong(R, {x, z, s}) -> {r, top}   물두멍: a wide water jar on a flat stone, water, a floating gourd dipper,
+  //        a board lid half over the mouth          K.dongi(R, {x, z, s, ring = true}) -> {r, top}   물동이 + 똬리
+  //   K.mejuRack(R, {x, z, rotY, w = 2.4, h = 2.3, rows: [y…], per = 5}) -> {spots}   메주 걸이: blocks tied in a cross
+  //        of straw, hung on straw rope from round bars; every row swings slowly (two groups per row)
+  //   K.mejuBed(R, {x, z, rotY, w = 2.4, d = 0.8, h = 0.5, n = 6}) -> {top, spots}   a low platform lined with straw
+  //        where 메주 ripen (메주 띄우기)
+  //   K.nurukRack(R, {x, z, rotY, w = 1.3, d = 0.5, h = 1.6, levels = 4}) -> {spots}   shelves of 채반 with 누룩 cakes
+  //   K.nurukTray(T, {x, y, z, r = 0.3, n = 6})       K.geumjul(R, {x, y, z, s = 1, kind = 'dok', rotY})   금줄 round a
+  //        jar's neck with 숯 and 고추 tucked in, a 한지 버선본 upside down on the belly
+  //   K.kimchiPit(R, {x, z, rotY, w = 1.9, d = 1.5}) -> {jars: [{x, y, z}], top}   a straw-covered mound in a corner
+  //        with 김칫독 sunk to their shoulders, 짚방석 lids, stones round the foot
+  //   K.dwiju(R, {x, z, rotY, w = 0.95, d = 0.62, h = 0.95}) -> {w, d, top}   뒤주: a rice chest on tall feet, top lid
+  //   K.gamaniStack(R, {x, z, rotY, rows: [3, 2, 1]}) -> {w, d, top}       K.seom(R, {x, z, rotY, s}) -> {top}   섬
+  //   K.meongseok(R, {x, z, rotY, len = 1.5, r = 0.2, upright}) -> {top}   멍석, rolled (upright: on its end)
+  //   K.farmTool(R, kind, m, {wall}) -> {x, y, z}   'homi' 호미 · 'nat' 낫 · 'soeseurang' 쇠스랑 · 'dorikkae' 도리깨,
+  //        hung from a peg at m (a wall spot from R.wm), handle down
+  //   K.jeoul(R, m, {wall}) -> {x, y, z}   대저울 from a peg at m: a marked beam on a cord, a pan of beans, the weight
+  //   K.doe(T, {x, y, z, rotY, kind: 'doe'|'mal', fill}) -> {top}   되 / 말: wooden measures heaped with grain
+  //   K.jangjak(R, {x, z, rotY, w = 1.3, h = 0.75, d = 0.45}) -> {w, d, top}   a pile of split firewood
+  //   K.gongi(R, {x, y, z, rotY, lean = 0.22, len = 1.15})   절구공이 leaning   K.jori(T, m, {pair, wall})  조리 / 복조리
+  //   strings (T = a sway group or the room): K.siraegi(T, {x, y, z, len}) 시래기 · K.gochu(T, {x, y, z, n}) 고추 ·
+  //        K.maneul(T, {x, y, z}) 마늘 접 · K.corn(T, {x, y, z}) seed corn in pairs · K.herbs(T, {x, y, z, tint}) a bunch
+  //   K.soot(R, [{m, w, h} | {roof: true, x0, x1}], {color, alpha}) -> mesh   smoke-darkened patches (one draw call)
+  //   K.pillow(w, h, d, e = 0.4, ey = 0.62) -> BufferGeometry   a puffed block (가마니, 메주) with metre UVs
+  // ==============================================================================================================
+  (function roomsC() {
+    const v3 = (m, x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(m);
+    const rZ = (g, a) => g.applyMatrix4(new THREE.Matrix4().makeRotationZ(a));
+    const rX = (g, a) => g.applyMatrix4(new THREE.Matrix4().makeRotationX(a));
+    const rY = (g, a) => g.applyMatrix4(new THREE.Matrix4().makeRotationY(a));
+    const vpost = (len, w, b = 0.006) => rZ(KG.timber(len, w, w, b), PI / 2);          // a square timber standing up
+    const shade = (hex, k) => { const c = col(hex).clone(); c.multiplyScalar(k); return c; };
+    /** a puffed block: a superellipsoid w × h × d (flat-ish faces, round edges) with metre UVs */
+    function pillow(w, h, d, e = 0.4, ey = 0.62, seg = 16) {
+      const g = new THREE.SphereGeometry(1, seg, Math.max(6, Math.round(seg * 0.62)));
+      const p = g.attributes.position, uv = g.attributes.uv, f = (v, k) => Math.sign(v) * Math.pow(Math.abs(v), k);
+      for (let i = 0; i < p.count; i++) {
+        p.setXYZ(i, f(p.getX(i), e) * w / 2, f(p.getY(i), ey) * h / 2, f(p.getZ(i), e) * d / 2);
+        uv.setXY(i, uv.getX(i) * (w + d) * 1.1, uv.getY(i) * (h + Math.min(w, d)));
+      }
+      g.computeVertexNormals();
+      return g;
+    }
+    /** a group that swings about its pivot; pieces are given in room coordinates */
+    function sway(R, o = {}) {
+      const px = num(o.x, 0), py = num(o.y, 2), pz = num(o.z, 0), inv = M(-px, -py, -pz), Bk = new BK.Bucket();
+      const S = { ctx: R.ctx, low: R.low, rnd: R.rnd, room: R, isSway: true };
+      S.add = (key, g, m, tintHex) => { if (g) Bk.add(key, g, m ? mul(inv, m) : inv, tint(key, tintHex)); };
+      S.planItem = () => {};
+      S.done = () => {
+        if (S.group) return S.group;
+        const grp = new THREE.Group();
+        grp.name = 'room-sway'; grp.position.set(px, py, pz);
+        const mats = {};
+        for (const k of Bk.parts.keys()) mats[k] = mat(k);
+        const out = Bk.build(grp, { name: R.ctx.id + ':sway', materials: mats, shadows: false, ao: false });
+        for (const k in out) { out[k].castShadow = !!R.shadows; out[k].receiveShadow = true; }
+        R.addMesh(grp, o.wall || null);
+        const amp = num(o.amp, 0.04), sp = num(o.speed, 0.55), ph = num(o.phase, R.rnd() * 6.28), ax = o.axis === 'z' ? 'z' : 'x';
+        R.onUpdate((dt, t) => {
+          const k = G.settings?.reduceMotion ? 0 : 1;
+          grp.rotation[ax] = k * (Math.sin(t * sp + ph) * amp + Math.sin(t * sp * 2.3 + ph * 1.7) * amp * 0.22);
+        });
+        S.group = grp;
+        return grp;
+      };
+      return S;
+    }
+
+    // ---------------------------------------------------------------- 바라지창 / 살창 (a wall bay kind)
+    function barajiBay(R, side, i, spec) {
+      const P = R.post, b = R.bay(side, i), wallTop = P - 0.24, o = { wall: side }, pr = R.postR;
+      const key = spec.wallMat === 'plaster' ? 'plaster' : spec.wallMat === 'board' ? 'wood' : 'clay';
+      const ow = Math.min(num(spec.w, 1.0), b.len - pr * 2 - 0.3), sill = num(spec.sill, 1.5), oh = Math.max(0.2, Math.min(num(spec.h, 0.7), wallTop - sill - 0.12));
+      const cu = b.uc + num(spec.offset, 0), ou0 = cu - ow / 2, ou1 = cu + ow / 2, ov0 = sill, ov1 = sill + oh, jt = 0.08;
+      const a0 = b.u0 + pr, a1 = b.u1 - pr;
+      const panel = (pu0, pu1, pv0, pv1) => {
+        if (pu1 - pu0 < 0.02 || pv1 - pv0 < 0.02) return;
+        R.add(key, KG.quad(pu1 - pu0, pv1 - pv0, pu0 + i * 0.7, pv0), R.wm(side, (pu0 + pu1) / 2, (pv0 + pv1) / 2, 0.012), null, { wall: side, cast: false });
+        R.solid[side].push([pu0 - 0.06, pu1 + 0.06, pv0 - 0.1, pv1 + 0.1]);
+      };
+      panel(a0, ou0 - jt, 0.16, wallTop); panel(ou1 + jt, a1, 0.16, wallTop);
+      panel(ou0 - jt, ou1 + jt, ov1 + jt, wallTop); panel(ou0 - jt, ou1 + jt, 0.16, ov0 - jt);
+      // 중방 across the bay under the opening, the frame (문선 · 상방 · 하방)
+      R.add('wood', KG.timber(b.len - pr * 2 + 0.02, 0.1, 0.1, 0.01), R.wm(side, b.uc, ov0 - jt - 0.05, 0), R.woodT, o);
+      for (const su of [ou0 - jt / 2, ou1 + jt / 2]) R.add('wood', vpost(oh + jt * 2, jt, 0.01), R.wm(side, su, (ov0 + ov1) / 2, 0), R.woodT, o);
+      R.add('wood', KG.timber(ow + jt * 2 + 0.12, jt, 0.13, 0.01), R.wm(side, cu, ov1 + jt / 2, 0), R.woodT, o);
+      // the bars: square 살 turned 45° (they throw sharp stripes)
+      const n = Math.max(3, Math.round(ow / num(spec.gap, 0.1))), segs = [];
+      for (let k = 1; k < n; k++) {
+        const u = ou0 + (ow * k) / n, g = vpost(oh + 0.02, 0.032, 0.004);
+        rY(g, PI / 4);
+        R.add('wood', g, R.wm(side, u, (ov0 + ov1) / 2, 0), '#b39270', o);
+        segs.push([u - cu, -oh / 2, u - cu, oh / 2]);
+      }
+      // two board shutters swung in under the eaves of the opening
+      panelDoor(R, R.wm(side, cu, (ov0 + ov1) / 2, 0.05), { w: ow - 0.01, h: oh - 0.01, leaves: 2, open: num(spec.open, 0.85), wall: side, tint: '#a3876a' });
+      R.ports.push({ side, u0: ou0, u1: ou1, v0: ov0, v1: ov1, segs, bar: 0.036 });
+      if (spec.label) R.label(String(spec.label), { side, u: cu, v: ov0 - jt - 0.24, w: 0.6, h: spec.sub ? 0.24 : 0.17, sub: spec.sub, style: 'wood' });
+    }
+    const _bay0 = Room.prototype._bay;
+    Room.prototype._bay = function (side, i, spec) {
+      if (spec && typeof spec === 'object' && spec.baraji) return barajiBay(this, side, i, spec);
+      return _bay0.call(this, side, i, spec);
+    };
+
+    // ---------------------------------------------------------------- 부뚜막 · 아궁이 · 가마솥 · 시루
+    function buttumak(R, o = {}) {
+      const w = num(o.w, 4.4), d = num(o.d, 1.0), h = num(o.h, 0.78), m = base(R, o), tn = o.tint || '#c4a37a';
+      const mw = num(o.mouthW, 0.48), mh = num(o.mouthH, 0.4), md = Math.min(d - 0.24, 0.6), my0 = 0.03, my1 = my0 + mh, jw = 0.11;
+      const fz = d / 2, plinth = 0.13, topY = h - 0.07, L = (x, y, z, ry = 0) => mul(m, M(x, y, z, ry));
+      const op = { wall: o.wall };
+      const mouths = (Array.isArray(o.mouths) ? o.mouths : [-w / 4, w / 4]).map(Number).sort((a, b) => a - b);
+      const solid = (a, c) => {
+        if (c - a < 0.01) return;
+        R.add('stone', KG.slab(c - a, plinth, d + 0.03, 0.025), L((a + c) / 2, plinth / 2, 0), '#a39a8a', op);
+        R.add('clay', KG.slab(c - a, topY - plinth, d, 0.02), L((a + c) / 2, (plinth + topY) / 2, 0), tn, op);
+      };
+      let x0 = -w / 2;
+      const out = { w, d, top: num(o.y, 0) + h, mouths: [], pots: [] };
+      for (const mx of mouths) {
+        const a = mx - mw / 2 - jw, c = mx + mw / 2 + jw;
+        solid(x0, a); x0 = c;
+        // stone jambs and the 이맛돌 (a long flat stone over the mouth), the clay above it
+        for (const sx of [-1, 1]) {
+          R.add('stone', KG.slab(jw, my1 + 0.02, 0.18, 0.02), L(mx + sx * (mw / 2 + jw / 2), (my1 + 0.02) / 2, fz - 0.08), '#9d9586', op);
+          R.add('clay', KG.slab(jw, topY - 0.01, d - 0.17, 0.01), L(mx + sx * (mw / 2 + jw / 2), (topY - 0.01) / 2, -0.085), tn, op);
+        }
+        R.add('stone', KG.slab(mw + jw * 2 + 0.14, 0.12, 0.2, 0.025), L(mx, my1 + 0.06, fz - 0.085), '#a7a090', op);
+        if (topY - my1 - 0.12 > 0.02) R.add('clay', KG.slab(mw + jw * 2, topY - my1 - 0.12, d, 0.015), L(mx, (my1 + 0.12 + topY) / 2, 0), tn, op);
+        // the firebox: sooty walls, a bed of ash; solid clay behind it
+        const soot = '#1d140e';
+        R.add('paint', KG.quad(mw, mh), L(mx, my0 + mh / 2, fz - md), soot, { ...op, cast: false });
+        R.add('paint', KG.quad(md, mh), L(mx - mw / 2, my0 + mh / 2, fz - md / 2, PI / 2), soot, { ...op, cast: false });
+        R.add('paint', KG.quad(md, mh), L(mx + mw / 2, my0 + mh / 2, fz - md / 2, -PI / 2), soot, { ...op, cast: false });
+        R.add('paint', KG.floor(mw, md, true), L(mx, my1, fz - md / 2), '#120c08', { ...op, cast: false });
+        R.add('paint', KG.floor(mw, md), L(mx, my0, fz - md / 2), '#3b342f', { ...op, cast: false });
+        R.add('clay', KG.slab(mw, my1, d - md, 0.01), L(mx, my1 / 2, (-d / 2 + fz - md) / 2), tn, op);
+        // ash spilled before the mouth, two half-burnt logs, flames and embers, a pooled light in front
+        R.add('paint', KG.floor(mw + 0.16, 0.3), L(mx, 0.005, fz + 0.15), '#575049', { ...op, cast: false });
+        for (const [lx, lr] of [[-0.09, 0.42], [0.1, -0.35]]) {
+          const pa = v3(m, mx + lx, my0 + 0.05, fz - md + 0.14), pb = v3(m, mx + lx * 1.6, 0.05, fz + 0.24 + lr * 0.1);
+          R.add('wood', geo.tube(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, 0.038, 7), null, '#6b5442', op);
+          const pc = v3(m, mx + lx * 1.15, my0 + 0.045, fz - md + 0.38);
+          R.add('paint', geo.tube(pa.x, pa.y, pa.z, pc.x, pc.y, pc.z, 0.041, 7), null, '#1a1512', { ...op, cast: false });
+        }
+        const pf = v3(m, mx, my0 + 0.02, fz - md * 0.42);
+        fire(R, { x: pf.x, y: pf.y, z: pf.z, s: num(o.fireS, 0.82), light: false });
+        const pl = v3(m, mx, 0.32, fz + 0.4);
+        R.ctx.light({ x: pl.x, y: pl.y, z: pl.z, color: '#ff8c3c', intensity: num(o.fireI, 6.2), distance: 6.5, decay: 1.8, flicker: 0.12, day: 0.7 });
+        out.mouths.push(v3(m, mx, my1 + 0.08, fz + 0.15));
+      }
+      solid(x0, w / 2);
+      // the plastered top with a rounded front edge
+      R.add('clay', KG.slab(w + 0.06, 0.07, d + 0.05, 0.03), L(0, h - 0.035, 0.01), o.topTint || '#d6c09c', op);
+      // 가마솥 sunk to the flange, a 시루 on one of them
+      for (const p of o.pots || []) {
+        const s = num(p.s, 1), u = num(p.u, 0), pz = num(p.z, -0.03), y0 = h - 0.3 * s, pm = mul(L(u, y0, pz, num(p.ry, 0)), M(0, 0, 0, 0, s));
+        R.add('iron', KG.lathe(PROFILES.sot, 24), pm, '#2c2a28', op);
+        let top = y0 + 0.41 * s;
+        if (p.siru) {
+          const ss = s * 1.06, sy = y0 + 0.395 * s, sm = mul(L(u, sy, pz), M(0, 0, 0, 0, ss));
+          R.add('onggi', KG.lathe(PROFILES.siru, 22), sm, '#9a7863', op);
+          R.add('cloth', new THREE.TorusGeometry(0.255 * ss, 0.024, 6, 22).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), L(u, sy + 0.012, pz), '#ecdfc4', { ...op, cast: false });
+          cloth(R, { m: L(u, sy + 0.3 * ss, pz), w: 0.6 * ss, d: 0.6 * ss, drop: 0.09, tint: '#e8dcc2' });
+          top = sy + 0.31 * ss;
+        } else if (p.lid !== false) {
+          R.add('iron', KG.lathe(PROFILES.sotLid, 24), mul(pm, M(0, 0.405, 0)), '#36322f', op);
+          top = y0 + 0.51 * s;
+        }
+        const pt = v3(m, u, top, pz);
+        out.pots.push({ x: pt.x, y: pt.y, z: pt.z, s, top });
+        steam(R, { x: pt.x, y: pt.y + 0.02, z: pt.z, s: p.siru ? 0.85 : 0.7, count: p.siru ? 16 : 10, life: 3.6 });
+      }
+      // 조왕중발: a small bowl of clean water set on the 부뚜막 for the kitchen spirit (a calm old custom)
+      if (o.jowang !== false) {
+        const bu = num(o.jowangU, w / 2 - 0.28);
+        R.add('paint', KG.lathe(PROFILES.bowl, 14), mul(L(bu, h, -d / 2 + 0.22), M(0, 0, 0, 0, 0.62)), '#efebe1', op);
+        R.add('lacquer', geo.disc(0.054, 12), L(bu, h + 0.034, -d / 2 + 0.22), '#a9b8bc', { ...op, cast: false });
+      }
+      R.planItem?.(num(o.x, 0), num(o.z, 0), Math.abs(Math.cos(num(o.rotY, 0))) > 0.5 ? w : d, Math.abs(Math.cos(num(o.rotY, 0))) > 0.5 ? d : w, 'rgba(150,110,70,.85)');
+      return out;
+    }
+
+    // ---------------------------------------------------------------- 살강 · 찬장 · 물두멍 · 물동이
+    const BOWL = [[0, 0], [0.04, 0], [0.045, 0.012], [0.09, 0.04], [0.1, 0.07], [0.092, 0.07], [0.08, 0.04], [0, 0.018]];
+    const PLATE = [[0, 0], [0.05, 0], [0.085, 0.014], [0.1, 0.022], [0.094, 0.024], [0.08, 0.017], [0, 0.009]];
+    function bowlAt(T, m, kind, tn, o) {
+      const k = kind === 'daejeop' ? [1.05, 0.85] : kind === 'sabal' ? [0.68, 1.0] : [0.8, 0.9];
+      T.add(tn === 'onggi' ? 'onggi' : 'paint', KG.lathe(BOWL, 14), mul(m, M(0, 0, 0, 0, k[0], k[1], k[0])), tn === 'onggi' ? '#6a4630' : tn, o);
+      return 0.07 * k[1];
+    }
+    function salgang(R, side, bayIndex, o = {}) {
+      const b = R.bay(side, bayIndex), wid = Math.min(num(o.w, b.len - 0.7), b.len - 0.5), dep = num(o.d, 0.34), levels = Math.max(1, Math.round(num(o.levels, 2)));
+      const y0 = num(o.y, 1.15), gap = num(o.gap, 0.5), cu = b.uc + num(o.offset, 0), W = { wall: side }, spots = [], rnd = R.rnd;
+      const WHITE = ['#efece3', '#e9e5d8', '#f2efe7'], GREY = '#b8b6a0';
+      for (let l = 0; l < levels; l++) {
+        const y = y0 + l * gap, n = 6;
+        for (let k = 0; k < n; k++) R.add('wood', KG.timber(wid, 0.022, 0.04, 0.005), R.wm(side, cu, y, 0.04 + (k + 0.5) * (dep - 0.05) / n), k % 2 ? '#8b6646' : '#7a573a', W);
+        for (const su of [-1, 1]) {
+          const g = KG.timber(dep + 0.05, 0.05, 0.05, 0.006); rY(g, PI / 2);
+          R.add('wood', g, R.wm(side, cu + su * (wid / 2 - 0.16), y - 0.036, (dep + 0.05) / 2), '#6c4a30', W);
+          R.add('wood', KG.span(0, -0.06, dep * 0.8, 0, -0.36, 0.02, 0.04, 0.04, 0.005), R.wm(side, cu + su * (wid / 2 - 0.16), y, 0), '#6c4a30', W);
+        }
+        // dishes: stacks of 사발 turned down to drain, 대접 stacked up, a few 접시 leaning on the wall
+        let u = cu - wid / 2 + 0.16;
+        while (u < cu + wid / 2 - 0.16) {
+          const kind = rnd() < 0.5 ? 'sabal' : 'daejeop', nStack = 2 + Math.floor(rnd() * 3), down = kind === 'sabal';
+          const tn = rnd() < 0.18 ? 'onggi' : rnd() < 0.25 ? GREY : WHITE[Math.floor(rnd() * 3)];
+          const nn = 0.06 + dep * 0.45;
+          let yy = y + 0.012;
+          for (let s = 0; s < nStack; s++) {
+            const bm = mul(R.wm(side, u, yy + (down ? 0.068 : 0), nn), down ? M(0, 0, 0, 0, 1, 1, 1, PI) : M());
+            yy += bowlAt(R, bm, kind, tn, W) * 0.42;
+          }
+          spots.push(R.wp(side, u, yy + 0.04, nn));
+          u += kind === 'daejeop' ? 0.26 : 0.2;
+          if (rnd() < 0.3 && u < cu + wid / 2 - 0.2) {   // a plate on edge against the wall
+            R.add('paint', KG.lathe(PLATE, 14), mul(R.wm(side, u, y + 0.11, 0.05), M(0, 0, 0, 0, 1, 1, 1, PI / 2 - 0.18)), WHITE[0], W);
+            u += 0.12;
+          }
+        }
+      }
+      const c = R.wp(side, cu, y0 + gap * (levels - 1) + 0.18, dep * 0.5);
+      return { spots, x: c.x, y: c.y, z: c.z };
+    }
+    function chanjang(R, o = {}) {
+      const w = num(o.w, 1.15), d = num(o.d, 0.46), m = base(R, o), tone = o.tone || '#6e4529', frameTone = '#4a2c19', x = num(o.x, 0), z = num(o.z, 0);
+      chest(R, { m, x, z, w, d, h: 0.8, doors: 2, drawers: 2, legs: 0.1, fittings: 'iron', tone, frameTone, panelTone: '#7c5133' });
+      // the open niche: two posts, a back board, bottles and a 단지 standing in it
+      const ny0 = 0.83, ny1 = 1.12;
+      for (const sx of [-1, 1]) R.add('furn', vpost(ny1 - ny0, 0.05), mul(m, M(sx * (w / 2 - 0.025), (ny0 + ny1) / 2, -d / 2 + 0.06)), frameTone, o);
+      R.add('furn', KG.quad(w - 0.06, ny1 - ny0), mul(m, M(0, (ny0 + ny1) / 2, -d / 2 + 0.035)), '#4f311f', { ...o, cast: false });
+      pot(R, { m: mul(m, M(-w * 0.28, ny0, -0.02)), kind: 'bottle', s: 0.7, tint: '#ebe6d7' });
+      pot(R, { m: mul(m, M(-w * 0.12, ny0, 0.02)), kind: 'bottle', s: 0.62, tint: '#c9c6ae' });
+      pot(R, { m: mul(m, M(w * 0.2, ny0, 0)), kind: 'danji', s: 0.38, lid: true, tint: '#6c4631' });
+      // the upper cupboard with 정자살 relief on its doors
+      const um = mul(m, M(0, ny1, 0.02));
+      chest(R, { m: um, x, z, w: w - 0.03, d: d - 0.05, h: 0.6, doors: 2, drawers: 0, legs: 0, fittings: 'iron', tone, frameTone, panelTone: '#7c5133' });
+      const iw = w - 0.03 - 0.1, dw = iw / 2;
+      for (let k = 0; k < 2; k++) changho(R, mul(um, M(-iw / 2 + dw * (k + 0.5), 0.3, (d - 0.05) / 2 + 0.012)), { w: dw - 0.08, h: 0.42, pattern: 'jeongja', paper: false, bar: 0.016, depth: 0.012, frame: 0.025, tint: '#5a3822', wall: o.wall });
+      R.add('furn', KG.slab(w + 0.06, 0.035, d + 0.03, 0.01), mul(m, M(0, ny1 + 0.63, 0)), frameTone, o);
+      const nc = v3(m, 0, (ny0 + ny1) / 2, d / 2);
+      return { w, d, top: num(o.y, 0) + ny1 + 0.65, niche: { x: nc.x, y: nc.y, z: nc.z } };
+    }
+    function mulDumeong(R, o = {}) {
+      const s = num(o.s, 1), m0 = base(R, o), m = mul(m0, M(0, 0.06, 0, 0, s));
+      R.add('stone', KG.slab(1.0 * s, 0.06, 0.95 * s, 0.025), mul(m0, M(0, 0.03, 0)), '#a8a192', o);
+      const prof = [[0, 0], [0.24, 0], [0.3, 0.04], [0.42, 0.2], [0.48, 0.38], [0.5, 0.52], [0.49, 0.6], [0.47, 0.64], [0.5, 0.67], [0.49, 0.69], [0.44, 0.69], [0.42, 0.62], [0.41, 0.5]];
+      R.add('onggi', KG.lathe(prof, 24), m, o.tint || '#5a3a27', o);
+      R.add('lacquer', geo.disc(0.418, 24), mul(m, M(0, 0.6, 0)), '#1f2c30', { ...o, cast: false });
+      // a gourd dipper (바가지) afloat, two lid boards over the back of the mouth
+      const gourd = [[0, 0], [0.06, 0.004], [0.1, 0.03], [0.12, 0.07], [0.114, 0.072], [0.094, 0.035], [0.055, 0.013], [0, 0.009]];
+      R.add('paint', KG.lathe(gourd, 14), mul(m, M(0.08, 0.585, 0.12, 0.6, 1, 1, 1.28)), '#cdb47c', o);
+      for (const k of [0, 1]) R.add('furn', KG.slab(0.98, 0.026, 0.2, 0.006), mul(m, M(0, 0.705 + k * 0.004, -0.27 + k * 0.205, k * 0.06)), '#7d5a3d', o);
+      R.planItem?.(num(o.x, 0), num(o.z, 0), 1.0 * s, 1.0 * s, 'rgba(70,60,50,.8)');
+      return { r: 0.5 * s, top: num(o.y, 0) + 0.06 + 0.72 * s };
+    }
+    function dongi(R, o = {}) {
+      const s = num(o.s, 1), m = mul(base(R, o), M(0, 0, 0, 0, s));
+      const prof = [[0, 0], [0.13, 0], [0.16, 0.03], [0.22, 0.14], [0.245, 0.24], [0.235, 0.3], [0.19, 0.35], [0.135, 0.38], [0.13, 0.4], [0.145, 0.415], [0.14, 0.43], [0.12, 0.43], [0.11, 0.39]];
+      R.add('onggi', KG.lathe(prof, 18), m, o.tint || '#6b4530', o);
+      for (const sx of [-1, 1]) R.add('onggi', new THREE.TorusGeometry(0.036, 0.011, 5, 10, PI).applyMatrix4(new THREE.Matrix4().makeRotationZ(sx > 0 ? -PI / 2 : PI / 2)), mul(m, M(sx * 0.222, 0.29, 0)), '#5d3c29', o);
+      if (o.ring !== false) R.add('straw', new THREE.TorusGeometry(0.085, 0.026, 6, 14).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(base(R, o), M(0.36, 0.026, 0.12)), '#c9aa66', o);
+      return { r: 0.25 * s, top: num(o.y, 0) + 0.43 * s };
+    }
+
+    // ---------------------------------------------------------------- 메주 · 누룩 · 금줄 · 김칫독
+    const MEJU = ['#c49c62', '#b98f55', '#caa66e', '#ad8650', '#bf9a63'];
+    function mejuBlock(T, m, rnd, o) {
+      const bw = 0.2 + rnd() * 0.03, bh = 0.15 + rnd() * 0.02, bd = 0.13 + rnd() * 0.015;
+      T.add('clay', pillow(bw, bh, bd, 0.32, 0.4, 14), m, MEJU[Math.floor(rnd() * MEJU.length)], o);
+      // straw ties round it in a cross
+      const tie = (rx, ry, sx, sy) => { const g = new THREE.TorusGeometry(1, 0.06, 4, 16); g.scale(sx, sy, 0.12); if (rx) rX(g, rx); if (ry) rY(g, ry); return g; };
+      T.add('straw', tie(PI / 2, 0, bw / 2 + 0.004, bd / 2 + 0.004), m, '#b9984f', o);
+      T.add('straw', tie(0, PI / 2, bd / 2 + 0.004, bh / 2 + 0.004), m, '#b9984f', o);
+      return { bw, bh, bd };
+    }
+    function mejuRack(R, o = {}) {
+      const w = num(o.w, 2.4), h = num(o.h, 2.3), m = base(R, o), rows = o.rows || [2.12, 1.52], per = Math.max(1, Math.round(num(o.per, 5)));
+      const ry = num(o.rotY, 0), axis = Math.abs(Math.cos(ry)) > 0.7 ? 'x' : 'z', tn = o.tone || '#86684a', spots = [];
+      for (const sx of [-1, 1]) {
+        R.add('wood', vpost(h, 0.085, 0.01), mul(m, M(sx * w / 2, h / 2, 0)), tn, o);
+        R.add('stone', KG.slab(0.22, 0.08, 0.22, 0.015), mul(m, M(sx * w / 2, 0.04, 0)), '#aaa395', o);
+        // a foot across, so the frame stands by itself
+        R.add('wood', rY(KG.timber(0.6, 0.07, 0.07, 0.008), PI / 2), mul(m, M(sx * w / 2, 0.12, 0)), tn, o);
+      }
+      R.add('wood', KG.timber(w + 0.2, 0.09, 0.09, 0.01), mul(m, M(0, h - 0.045, 0)), tn, o);
+      rows.forEach((y, ri) => {
+        const p0 = v3(m, -w / 2 - 0.1, y, 0), p1 = v3(m, w / 2 + 0.1, y, 0);
+        R.add('wood', geo.tube(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, 0.028, 8), null, '#9b7a55', o);
+        const pv = v3(m, 0, y, 0);
+        const Sa = sway(R, { x: pv.x, y: pv.y, z: pv.z, amp: 0.05, speed: 0.48 + ri * 0.11, axis }), Sb = sway(R, { x: pv.x, y: pv.y, z: pv.z, amp: 0.042, speed: 0.57 + ri * 0.09, axis });
+        for (let k = 0; k < per; k++) {
+          const S = k % 2 ? Sb : Sa, u = -w / 2 + 0.24 + ((w - 0.48) * k) / Math.max(1, per - 1) + (R.rnd() - 0.5) * 0.04;
+          const len = 0.2 + R.rnd() * 0.1, top = y - 0.025, cy = top - len - 0.08;
+          const pa = v3(m, u, top, 0), pb = v3(m, u, cy + 0.07, 0);
+          S.add('straw', geo.tube(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, 0.0065, 4), null, '#c4a35d');
+          S.add('straw', new THREE.SphereGeometry(0.016, 5, 4), mul(m, M(u, cy + 0.085, 0)), '#b9984f');
+          mejuBlock(S, mul(m, M(u, cy, 0, (R.rnd() - 0.5) * 0.5)), R.rnd);
+          spots.push(v3(m, u, cy, 0.12));
+        }
+        Sa.done(); Sb.done();
+      });
+      R.planItem?.(num(o.x, 0), num(o.z, 0), Math.abs(Math.cos(ry)) > 0.5 ? w : 0.6, Math.abs(Math.cos(ry)) > 0.5 ? 0.6 : w);
+      return { spots };
+    }
+    function strawBed(R, m, w, d, y, n, o) {
+      // a bed of straw: a mat, then loose straws crossing it
+      R.add('straw', KG.slab(w, 0.035, d, 0.012), mul(m, M(0, y + 0.017, 0)), '#d8bd78', o);
+      for (let i = 0; i < n; i++) {
+        const a = (R.rnd() - 0.5) * 0.9, len = 0.35 + R.rnd() * 0.4, x = (R.rnd() - 0.5) * (w - 0.2), z = (R.rnd() - 0.5) * (d - 0.1);
+        const g = KG.timber(len, 0.006, 0.012, 0.001); rY(g, a);
+        R.add('straw', g, mul(m, M(x, y + 0.038 + R.rnd() * 0.01, z)), R.rnd() < 0.5 ? '#e2c886' : '#c9aa63', { ...o, cast: false });
+      }
+    }
+    function mejuBed(R, o = {}) {
+      const w = num(o.w, 2.4), d = num(o.d, 0.8), h = num(o.h, 0.5), m = base(R, o), n = Math.max(1, Math.round(num(o.n, 6))), spots = [];
+      table(R, { m, x: num(o.x, 0), z: num(o.z, 0), w, d, h, tone: o.tone || '#7d5b3c', apron: true });
+      strawBed(R, m, w - 0.06, d - 0.06, h, 46, o);
+      for (let k = 0; k < n; k++) {
+        const u = -w / 2 + 0.28 + ((w - 0.56) * k) / Math.max(1, n - 1), zz = (k % 2 ? 0.12 : -0.12) * (d / 0.8);
+        const bm = mul(m, M(u, h + 0.035 + 0.075, zz, (R.rnd() - 0.5) * 0.5));
+        mejuBlock(R, bm, R.rnd, o);
+        // a few straws laid over the block
+        for (let s = 0; s < 3; s++) { const g = KG.timber(0.32, 0.006, 0.012, 0.001); rY(g, (R.rnd() - 0.5) * 1.2); R.add('straw', g, mul(bm, M((R.rnd() - 0.5) * 0.06, 0.082, (R.rnd() - 0.5) * 0.06)), '#e0c47f', { ...o, cast: false }); }
+        spots.push(v3(m, u, h + 0.2, zz));
+      }
+      return { top: num(o.y, 0) + h + 0.2, spots };
+    }
+    function nurukTray(T, o = {}) {
+      const r = num(o.r, 0.3), m = base(T, o), n = Math.max(1, Math.round(num(o.n, 6))), rnd = T.rnd || Math.random;
+      T.add('basket', KG.lathe([[0, 0], [r * 0.86, 0], [r, 0.05], [r * 0.97, 0.056], [r * 0.84, 0.01], [0, 0.01]], 18), m, '#c49a58', o);
+      const cake = [[0, 0], [0.07, 0], [0.078, 0.01], [0.078, 0.034], [0.07, 0.044], [0, 0.047]];
+      for (let k = 0; k < n; k++) {
+        const a = (k / Math.max(1, n - 1)) * TAU + 0.3, rr = k === n - 1 ? 0 : r * 0.55;
+        T.add('clay', KG.lathe(cake, 12), mul(m, M(Math.cos(a) * rr, 0.011, Math.sin(a) * rr, rnd() * 3, 1 + (rnd() - 0.5) * 0.1, 0.9 + rnd() * 0.2)), rnd() < 0.5 ? '#d2b37f' : '#c7a46c', o);
+      }
+      return { top: num(o.y, 0) + 0.06 };
+    }
+    function nurukRack(R, o = {}) {
+      const w = num(o.w, 1.3), d = num(o.d, 0.5), h = num(o.h, 1.6), levels = Math.max(1, Math.round(num(o.levels, 4))), m = base(R, o), spots = [];
+      const lv = shelf(R, { m, x: num(o.x, 0), z: num(o.z, 0), w, d, h, levels, back: true, tone: o.tone || '#6e4a2f' });
+      lv.forEach((sp, i) => {
+        const n = Math.max(1, Math.floor(w / 0.62));
+        for (let k = 0; k < n; k++) {
+          const lu = -w / 2 + (w * (k + 0.5)) / n, p = v3(m, lu, 0, 0), pm = mul(M(p.x, sp.y, p.z, num(o.rotY, 0)), M(0, 0, 0, 0, 1));
+          nurukTray(R, { m: pm, r: Math.min(0.3, w / n / 2 - 0.02), n: 5 + (i % 2) });
+        }
+        spots.push({ x: sp.x, y: sp.y + 0.12, z: sp.z });
+      });
+      return { spots };
+    }
+    /** 버선 silhouette (toe to the right, curling up), w × h, facing +Z */
+    function beoseon(w, h) {
+      const s = new THREE.Shape();
+      s.moveTo(-0.5 * w, 0.5 * h); s.lineTo(-0.12 * w, 0.5 * h); s.lineTo(-0.1 * w, 0.02 * h);
+      s.quadraticCurveTo(0.2 * w, -0.06 * h, 0.42 * w, 0.06 * h); s.quadraticCurveTo(0.52 * w, 0.12 * h, 0.5 * w, 0.2 * h);
+      s.quadraticCurveTo(0.42 * w, -0.4 * h, 0.05 * w, -0.5 * h); s.quadraticCurveTo(-0.42 * w, -0.52 * h, -0.5 * w, -0.2 * h); s.lineTo(-0.5 * w, 0.5 * h);
+      const g = new THREE.ShapeGeometry(s, 6), p = g.attributes.position, uv = g.attributes.uv;
+      for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), p.getY(i));
+      return g;
+    }
+    function geumjul(R, o = {}) {
+      const s = num(o.s, 1), kind = o.kind || 'dok', pr = BK.JAR_PROFILES[kind] || BK.JAR_PROFILES.dok, m = mul(base(R, o), M(0, 0, 0, 0, s));
+      // the neck: the narrowest point of the upper third; the belly: the widest
+      let neck = pr[0], belly = pr[0];
+      const top = BK.jarTop(kind);
+      for (const p of pr) { if (p[1] > top * 0.7 && p[1] < top * 0.97 && (neck === pr[0] || p[0] < neck[0])) neck = p; if (p[0] > belly[0]) belly = p; }
+      const ny = num(o.ny, neck[1] - 0.01), nr = num(o.nr, neck[0] + 0.012);
+      R.add('straw', new THREE.TorusGeometry(nr, 0.013, 5, 30).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, ny, 0)), '#c4a258', o);
+      R.add('straw', new THREE.TorusGeometry(nr + 0.006, 0.008, 4, 30).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, ny - 0.014, 0, 0.3)), '#d6b770', { ...o, cast: false });
+      // tucked into the rope: 숯 and 고추 in turn, round the front half
+      const n = num(o.n, 8);
+      for (let k = 0; k < n; k++) {
+        const a = -PI * 0.15 + (k / (n - 1)) * PI * 1.3, cx = Math.sin(a) * (nr + 0.012), cz = Math.cos(a) * (nr + 0.012);
+        const pm = mul(m, M(cx, ny - 0.02, cz, a));
+        if (k % 2) {   // a dried red pepper hanging down
+          const g = KG.lathe([[0, 0], [0.012, 0.02], [0.016, 0.07], [0.013, 0.1], [0.006, 0.11], [0, 0.11]], 8); rX(g, PI);
+          R.add('paint', g, mul(pm, M(0, 0.03, 0.014, 0, 1, 1, 1, 0.12)), '#9d1d17', o);
+          R.add('paint', geo.cyl(0.004, 0.004, 0.025, 4), mul(pm, M(0, 0.04, 0.014)), '#4f5a2a', { ...o, cast: false });
+        } else R.add('paint', new THREE.DodecahedronGeometry(0.03, 0).scale(1.2, 0.8, 0.7), mul(pm, M(0, 0.0, 0.02, 0.4)), '#1c1a19', o);
+      }
+      // the 버선본: a paper sock cut from 한지, stuck upside down on the belly
+      const by = num(o.by, belly[1] - 0.06), br = belly[0] + 0.004, ba = num(o.beoseonA, 0);
+      R.add('hanji', beoseon(0.2, 0.17), mul(m, M(Math.sin(ba) * br, by, Math.cos(ba) * br, ba, 1, 1, 1, 0, PI)), '#f6efdd', { ...o, cast: false });
+      const pf = v3(m, 0, ny, nr + 0.05);
+      return { x: pf.x, y: pf.y, z: pf.z };
+    }
+    function kimchiPit(R, o = {}) {
+      const w = num(o.w, 1.9), d = num(o.d, 1.5), m = base(R, o), jars = [];
+      // the mound of earth heaped round the buried jars, straw over it, stones round its foot
+      const dome = KG.lathe([[1.0, 0], [0.96, 0.04], [0.8, 0.15], [0.55, 0.27], [0.25, 0.33], [0, 0.34]], 18);
+      R.add('earth', dome, mul(m, M(0, 0, 0, 0, w / 2, 1, d / 2)), '#8f7052', o);
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * TAU, rr = 1.0 + R.rnd() * 0.05;
+        R.add('stone', new THREE.IcosahedronGeometry(0.075 + R.rnd() * 0.04, 0).scale(1.2, 0.6, 1), mul(m, M(Math.cos(a) * w / 2 * rr, 0.03, Math.sin(a) * d / 2 * rr, R.rnd() * 3)), '#aaa294', o);
+      }
+      for (let i = 0; i < 70; i++) {
+        const a = R.rnd() * TAU, rr = Math.sqrt(R.rnd()) * 0.95, x = Math.cos(a) * rr * w / 2, z = Math.sin(a) * rr * d / 2;
+        const y = 0.34 * (1 - Math.pow(rr, 2.2)) + 0.012;
+        const g = KG.timber(0.3 + R.rnd() * 0.3, 0.006, 0.013, 0.001); rY(g, R.rnd() * PI); rZ(g, (R.rnd() - 0.5) * 0.3);
+        R.add('straw', g, mul(m, M(x, y, z)), R.rnd() < 0.5 ? '#d9bf7c' : '#c3a35f', { ...o, cast: false });
+      }
+      const list = o.jars || [{ kind: 'dok', x: -w * 0.18, z: -d * 0.08, s: 0.9 }, { kind: 'jungduri', x: w * 0.25, z: d * 0.14, s: 0.78 }];
+      for (const j of list) {
+        const kind = j.kind || 'dok', s = num(j.s, 0.9), top = BK.jarTop(kind) * s, sink = top * 0.58;
+        const jm = mul(m, M(j.x, 0.3 - sink, j.z, R.rnd() * 3, s));
+        R.add('onggi', KG.lathe(BK.JAR_PROFILES[kind], 20), jm, '#5c3a27', o);
+        // 짚방석: a straw lid, then a stone to hold it down
+        const rim = BK.JAR_PROFILES[kind][BK.JAR_PROFILES[kind].length - 3][0] * s;
+        R.add('straw', KG.lathe([[0, 0], [rim + 0.06, 0], [rim + 0.09, 0.03], [rim + 0.05, 0.065], [0, 0.075]], 18), mul(m, M(j.x, 0.3 - sink + top - 0.015, j.z)), '#cfb06a', o);
+        R.add('stone', new THREE.IcosahedronGeometry(0.08, 0).scale(1.2, 0.6, 1), mul(m, M(j.x + 0.03, 0.3 - sink + top + 0.07, j.z - 0.02, 0.7)), '#9f988a', o);
+        const p = v3(m, j.x, 0.3 - sink + top + 0.1, j.z);
+        jars.push({ x: p.x, y: p.y, z: p.z });
+      }
+      R.planItem?.(num(o.x, 0), num(o.z, 0), w, d, 'rgba(120,90,60,.8)');
+      return { jars, top: num(o.y, 0) + 0.5 };
+    }
+
+    // ---------------------------------------------------------------- 뒤주 · 가마니 · 섬 · 멍석
+    function dwiju(R, o = {}) {
+      const w = num(o.w, 0.95), d = num(o.d, 0.62), h = num(o.h, 0.95), m = base(R, o), tone = o.tone || '#7d4f30';
+      chest(R, { m, x: num(o.x, 0), z: num(o.z, 0), w, d, h, doors: 0, drawers: 0, legs: 0.24, fittings: 'iron', tone, frameTone: '#4e2f1c' });
+      // the top lid (윗닫이): its front half lifts — a raised board, two hinges and a hasp with a lock
+      R.add('furn', KG.slab(w - 0.12, 0.025, d / 2 - 0.04, 0.006), mul(m, M(0, h + 0.042, d / 4 - 0.01)), '#8a5a38', o);
+      for (const sx of [-0.28, 0.28]) R.add('iron', KG.slab(0.07, 0.006, 0.09, 0.002), mul(m, M(sx * w, h + 0.057, 0.0)), '#2f2f31', o);
+      R.add('iron', KG.slab(0.07, 0.11, 0.008, 0.002), mul(m, M(0, h - 0.02, d / 2 + 0.012)), '#2f2f31', o);
+      R.add('brass', KG.slab(0.09, 0.04, 0.025, 0.006), mul(m, M(0, h - 0.07, d / 2 + 0.03)), '#b48d3c', o);
+      return { w, d, top: num(o.y, 0) + h + 0.06 };
+    }
+    function gamani(T, m, o) {
+      T.add('straw', pillow(0.92, 0.34, 0.56, 0.36, 0.55, 18), m, o?.tint || (T.rnd() < 0.5 ? '#d3b878' : '#c8ab68'), o);
+      for (const sx of [-0.3, 0.3]) T.add('straw', new THREE.TorusGeometry(1, 0.05, 4, 16).scale(0.18, 0.29, 0.25).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(sx, 0, 0)), '#b18f4a', { ...o, cast: false });
+    }
+    function gamaniStack(R, o = {}) {
+      const rows = o.rows || [3, 2, 1], m = base(R, o);
+      let maxN = 0;
+      rows.forEach((n, l) => {
+        maxN = Math.max(maxN, n);
+        for (let k = 0; k < n; k++) gamani(R, mul(m, M((k - (n - 1) / 2) * 0.6, 0.16 + l * 0.29, (l % 2 ? 0.03 : -0.02) + (R.rnd() - 0.5) * 0.04, PI / 2 + (R.rnd() - 0.5) * 0.12)), o);
+      });
+      const w = maxN * 0.6, d = 0.95;
+      R.planItem?.(num(o.x, 0), num(o.z, 0), Math.abs(Math.cos(num(o.rotY, 0))) > 0.5 ? w : d, Math.abs(Math.cos(num(o.rotY, 0))) > 0.5 ? d : w, 'rgba(200,170,100,.85)');
+      return { w, d, top: num(o.y, 0) + 0.32 + rows.length * 0.29 };
+    }
+    function seom(R, o = {}) {
+      const s = num(o.s, 1), m = mul(base(R, o), M(0, 0, 0, 0, s));
+      R.add('straw', pillow(0.56, 0.86, 0.5, 0.5, 0.3, 18), mul(m, M(0, 0.43, 0)), o.tint || '#cfb26f', o);
+      for (const y of [0.18, 0.43, 0.68]) R.add('straw', new THREE.TorusGeometry(1, 0.045, 4, 18).scale(0.29, 0.26, 1).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, y, 0)), '#a98846', { ...o, cast: false });
+      R.add('straw', KG.lathe([[0, 0], [0.2, 0], [0.12, 0.08], [0.04, 0.16], [0, 0.17]], 10), mul(m, M(0, 0.84, 0)), '#c0a15c', o);   // the tied top
+      return { top: num(o.y, 0) + 1.0 * s };
+    }
+    function meongseok(R, o = {}) {
+      const len = num(o.len, 1.5), r = num(o.r, 0.2), m = base(R, o), up = !!o.upright;
+      const g = geo.cyl(r, r, len, 18); if (!up) rZ(g, PI / 2);
+      R.add('straw', g, mul(m, M(0, up ? len / 2 : r, 0)), o.tint || '#c9ad6c', o);
+      // the rolled end: rings of the mat, darker in the gaps
+      for (let k = 1; k <= 4; k++) {
+        const ring = geo.ring(r * (k / 4.6), r * (k / 4.6) + 0.012, 18);
+        if (up) R.add('straw', ring, mul(m, M(0, len + 0.002, 0)), '#8a6e3c', { ...o, cast: false });
+        else for (const sx of [-1, 1]) R.add('straw', rZ(ring.clone(), sx * PI / 2), mul(m, M(sx * (len / 2 + 0.002), r, 0)), '#8a6e3c', { ...o, cast: false });
+      }
+      for (const t of [-0.3, 0.3]) {
+        const tg = new THREE.TorusGeometry(r + 0.008, 0.012, 4, 18);
+        if (!up) rY(tg, PI / 2); else rX(tg, PI / 2);
+        R.add('straw', tg, mul(m, up ? M(0, len / 2 + t * len, 0) : M(t * len, r, 0)), '#a2843f', { ...o, cast: false });
+      }
+      return { top: num(o.y, 0) + (up ? len : r * 2) };
+    }
+
+    // ---------------------------------------------------------------- tools on the wall, 저울, 되 · 말
+    function blade(shape, depth) { const g = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 8 }); g.translate(0, 0, -depth / 2); const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i), uv.getY(i)); return g; }
+    function farmTool(R, kind, m, o = {}) {
+      const W = { wall: o.wall }, wood = '#8a6644', iron = '#3b3a3a';
+      R.add('furn', geo.cyl(0.014, 0.014, 0.1, 6).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, 0, 0.05)), '#5c3f28', W);   // the peg
+      const at = (x, y, z, ry = 0, rx = 0, rz = 0) => mul(m, M(x, y, z, ry, 1, 1, 1, rx, rz));
+      let low = -0.3;
+      if (kind === 'homi') {
+        R.add('furn', geo.cyl(0.017, 0.015, 0.14, 8), at(0, -0.1, 0.06), wood, W);
+        R.add('iron', geo.tube(0, -0.03, 0.06, 0.0, 0.03, 0.045, 0.006, 5), m, iron, W);
+        const s = new THREE.Shape(); s.moveTo(0, 0); s.lineTo(0.075, 0.035); s.quadraticCurveTo(0.06, 0.13, 0.0, 0.2); s.quadraticCurveTo(-0.05, 0.1, -0.035, 0.04); s.lineTo(0, 0);
+        R.add('iron', blade(s, 0.005), at(0, 0.03, 0.04), iron, W);
+        low = -0.19;
+      } else if (kind === 'nat') {
+        R.add('furn', geo.cyl(0.017, 0.016, 0.36, 8), at(0, -0.15, 0.06), wood, W);
+        const s = new THREE.Shape(); s.absarc(0, 0, 0.17, 0.05, PI * 0.75, false); s.absarc(0.012, -0.02, 0.145, PI * 0.73, 0.06, true);
+        R.add('iron', blade(s, 0.004), at(-0.01, -0.11, 0.06, 0, 0, 0.35), iron, W);
+        low = -0.34;
+      } else if (kind === 'soeseurang') {
+        R.add('furn', geo.cyl(0.02, 0.02, 1.3, 8), at(0, -0.62, 0.07), wood, W);
+        R.add('iron', KG.timber(0.26, 0.03, 0.02, 0.004), at(0, 0.06, 0.07), iron, W);
+        for (let k = 0; k < 4; k++) {
+          const x = -0.105 + k * 0.07;
+          R.add('iron', geo.tube(x, 0.06, 0.07, x, 0.2, 0.09, 0.006, 4), m, iron, W);
+          R.add('iron', geo.tube(x, 0.2, 0.09, x, 0.25, 0.14, 0.005, 4), m, iron, W);
+        }
+        low = -1.28;
+      } else if (kind === 'dorikkae') {
+        R.add('furn', geo.cyl(0.02, 0.022, 1.45, 8), at(0, -0.68, 0.06), wood, W);
+        R.add('furn', geo.cyl(0.03, 0.03, 0.06, 8).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), at(0, 0.03, 0.075), '#5c3f28', W);   // 꼭지 (the swivel)
+        for (let k = 0; k < 3; k++) R.add('furn', geo.tube(-0.03 + k * 0.03, 0.02, 0.11, -0.05 + k * 0.05, -0.92, 0.115 + k * 0.01, 0.009, 5), m, '#a2805a', W);   // 아들 (the beating rods)
+        R.add('straw', new THREE.TorusGeometry(0.06, 0.008, 4, 10).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), at(0, -0.5, 0.11), '#a98846', W);
+        low = -1.4;
+      }
+      const p = v3(m, 0, low / 2, 0.12);
+      return { x: p.x, y: p.y, z: p.z, low };
+    }
+    function jeoul(R, m, o = {}) {
+      const W = { wall: o.wall }, len = 0.78, fx = -0.22;   // the cord holds the beam 0.22 m from its centre (the pan side)
+      R.add('furn', geo.cyl(0.014, 0.014, 0.1, 6).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, 0, 0.05)), '#5c3f28', W);
+      const by = -0.26, bz = 0.1;
+      R.add('cloth', geo.tube(0, 0, 0.09, fx, by, bz, 0.004, 4), m, '#8a7656', W);
+      R.add('furn', rZ(geo.cyl(0.011, 0.014, len, 8), PI / 2), mul(m, M(0, by, bz)), '#4e3320', W);
+      for (let k = 0; k < 12; k++) R.add('brass', geo.cyl(0.0125, 0.0125, 0.004, 6).applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 2)), mul(m, M(-0.1 + k * 0.042, by, bz)), '#c9a24a', { ...W, cast: false });
+      // the pan on three cords from the short end
+      const px = -len / 2 + 0.02, py = by - 0.34;
+      for (let k = 0; k < 3; k++) { const a = (k / 3) * TAU; R.add('cloth', geo.tube(px, by, bz, px + Math.cos(a) * 0.12, py + 0.03, bz + Math.sin(a) * 0.12, 0.003, 3), m, '#8a7656', W); }
+      R.add('brass', KG.lathe([[0, 0], [0.1, 0.005], [0.14, 0.03], [0.135, 0.033], [0.095, 0.012], [0, 0.008]], 16), mul(m, M(px, py, bz)), '#a8843a', W);
+      R.add('paint', KG.lathe([[0.11, 0], [0.1, 0.012], [0.05, 0.04], [0, 0.05]], 12), mul(m, M(px, py + 0.01, bz)), '#d9c68f', W);   // beans in the pan
+      // the weight (추) on a loop further out
+      const wx = 0.28;
+      R.add('cloth', geo.tube(wx, by, bz, wx, by - 0.12, bz, 0.003, 3), m, '#8a7656', W);
+      R.add('iron', KG.lathe([[0, 0], [0.03, 0.005], [0.045, 0.04], [0.035, 0.07], [0.012, 0.08], [0, 0.08]], 10), mul(m, M(wx, by - 0.2, bz)), '#2e2d2c', W);
+      const p = v3(m, 0, by - 0.1, bz + 0.15);
+      return { x: p.x, y: p.y, z: p.z };
+    }
+    const GRAIN = { rice: '#efe7d0', bean: '#d8c48d', barley: '#cdb27a', millet: '#d9b44a', red: '#8a2f22' };
+    function doe(T, o = {}) {
+      const m = base(T, o), mal = o.kind === 'mal', fill = GRAIN[o.fill] || o.fill || GRAIN.rice, op = { wall: o.wall };
+      if (mal) {
+        const r = 0.19, h = 0.26;
+        T.add('furn', KG.lathe([[0, 0], [r, 0], [r, h], [r - 0.015, h], [r - 0.015, 0.02], [0, 0.02]], 18), m, '#8d6745', op);
+        for (const y of [0.05, h - 0.05]) T.add('iron', new THREE.TorusGeometry(r + 0.004, 0.006, 4, 18).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, y, 0)), '#3a3a3c', { ...op, cast: false });
+        T.add('paint', KG.lathe([[r - 0.02, 0.0], [0.1, 0.05], [0, 0.07]], 14), mul(m, M(0, h - 0.04, 0)), fill, { ...op, cast: false });
+        return { top: num(o.y, 0) + h + 0.03 };
+      }
+      const a = 0.21, h = 0.12, t = 0.014;
+      T.add('furn', KG.slab(a, t, a, 0.003), mul(m, M(0, t / 2, 0)), '#8d6745', op);
+      for (const [x, z, ry] of [[0, a / 2 - t / 2, 0], [0, -a / 2 + t / 2, 0], [a / 2 - t / 2, 0, PI / 2], [-a / 2 + t / 2, 0, PI / 2]]) T.add('furn', KG.slab(a, h, t, 0.003), mul(m, M(x, h / 2, z, ry)), '#966f4b', op);
+      T.add('paint', KG.lathe([[0.1, 0.0], [0.06, 0.04], [0, 0.05]], 12), mul(m, M(0, h - 0.035, 0, 0, 1, 1, 1)), fill, { ...op, cast: false });
+      return { top: num(o.y, 0) + h + 0.02 };
+    }
+    function jangjak(R, o = {}) {
+      const w = num(o.w, 1.3), hh = num(o.h, 0.75), d = num(o.d, 0.45), m = base(R, o);
+      const rows = Math.max(2, Math.round(hh / 0.13));
+      for (let l = 0; l < rows; l++) {
+        const span = w * (1 - l * 0.05), n = Math.max(2, Math.round(span / 0.13));
+        for (let k = 0; k < n; k++) {
+          const x = -span / 2 + (span * (k + 0.5)) / n + (R.rnd() - 0.5) * 0.03, y = 0.065 + l * 0.118, r = 0.05 + R.rnd() * 0.02, len = d * (0.85 + R.rnd() * 0.25);
+          const g = geo.cyl(r, r * (0.9 + R.rnd() * 0.15), len, 6); rX(g, PI / 2); rZ(g, R.rnd() * 3);
+          R.add('wood', g, mul(m, M(x, y, (R.rnd() - 0.5) * 0.06)), R.rnd() < 0.5 ? '#9a7a58' : '#86674a', o);
+          // the split face: paler wood on a log end
+          R.add('furn', geo.disc(r * 0.92, 6), mul(m, M(x, y, len / 2 + 0.002, 0, 1, 1, 1, PI / 2)), '#c9a57a', { ...o, cast: false });
+        }
+      }
+      R.planItem?.(num(o.x, 0), num(o.z, 0), Math.abs(Math.cos(num(o.rotY, 0))) > 0.5 ? w : d, Math.abs(Math.cos(num(o.rotY, 0))) > 0.5 ? d : w, 'rgba(130,95,60,.85)');
+      return { w, d, top: num(o.y, 0) + 0.065 + rows * 0.118 };
+    }
+    function gongi(R, o = {}) {
+      const len = num(o.len, 1.15), m = mul(base(R, o), M(0, 0, 0, 0, 1, 1, 1, 0, num(o.lean, 0.22)));
+      R.add('furn', KG.lathe([[0, 0], [0.055, 0], [0.062, 0.04], [0.058, len * 0.3], [0.033, len * 0.42], [0.028, len * 0.55], [0.033, len * 0.68], [0.058, len * 0.8], [0.062, len * 0.96], [0.05, len], [0, len]], 12), m, o.tint || '#a07c55', o);
+    }
+    function jori(T, m, o = {}) {
+      const W = { wall: o.wall }, one = (mm) => {
+        const g = geo.grid(8, 6, (i, j, out) => { const u = i / 8 - 0.5, v = j / 6; const r = Math.sin(v * PI * 0.92 + 0.12); out[0] = u * 0.17 * r; out[1] = -v * 0.2; out[2] = (0.25 - u * u) * 0.17 * r + 0.004; out[3] = u * 0.3; out[4] = v * 0.3; });
+        T.add('basket', g, mm, '#c8a660', W);
+        T.add('basket', geo.cyl(0.012, 0.016, 0.22, 6), mul(mm, M(0, 0.1, 0.012)), '#b58f4c', W);
+      };
+      if (o.pair) {
+        one(mul(m, M(-0.06, -0.02, 0, 0, 1, 1, 1, 0, 0.18)));
+        one(mul(m, M(0.06, -0.02, 0.01, 0, 1, 1, 1, 0, -0.18)));
+        T.add('paint', new THREE.TorusGeometry(0.03, 0.006, 4, 10), mul(m, M(0, 0.17, 0.02)), '#b2241c', W);
+        T.add('paint', geo.tube(0, 0.2, 0.02, 0, 0.02, 0.01, 0.003, 3), m, '#b2241c', W);
+      } else one(m);
+    }
+
+    // ---------------------------------------------------------------- strings under the rafters
+    function hangCord(T, x, y0, y1, z, tn = '#bfa060') { T.add('straw', geo.tube(x, y0, z, x, y1, z, 0.006, 4), null, tn); }
+    function siraegi(T, o = {}) {
+      const x = num(o.x, 0), y = num(o.y, 2.3), z = num(o.z, 0), len = num(o.len, 0.55), rnd = T.rnd || Math.random;
+      hangCord(T, x, y, y - 0.08, z);
+      for (let k = 0; k < 14; k++) {
+        const a = rnd() * TAU, l = len * (0.7 + rnd() * 0.4), g = KG.timber(l, 0.035 + rnd() * 0.02, 0.006, 0.001);
+        rZ(g, PI / 2 + (rnd() - 0.5) * 0.35); rY(g, a);
+        T.add('paint', g, M(x + Math.cos(a) * 0.03, y - 0.08 - l / 2, z + Math.sin(a) * 0.03), rnd() < 0.5 ? '#7b7646' : '#6a6a3d');
+      }
+      T.add('straw', new THREE.TorusGeometry(0.035, 0.012, 4, 10).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), M(x, y - 0.08, z), '#b49450');
+    }
+    function gochu(T, o = {}) {
+      const x = num(o.x, 0), y = num(o.y, 2.3), z = num(o.z, 0), n = Math.round(num(o.n, 14)), rnd = T.rnd || Math.random;
+      const len = n * 0.045 + 0.1;
+      hangCord(T, x, y, y - len, z, '#a88a50');
+      const g0 = KG.lathe([[0, 0], [0.013, 0.02], [0.017, 0.06], [0.014, 0.095], [0.007, 0.11], [0, 0.112]], 7); rX(g0, PI);
+      for (let k = 0; k < n; k++) {
+        const a = k * 2.2 + rnd(), yy = y - 0.08 - k * 0.045;
+        T.add('paint', g0.clone(), mul(M(x, yy, z, a), M(0.012, 0, 0, 0, 1, 1, 1, 0, 0.5 + rnd() * 0.3)), rnd() < 0.3 ? '#8a1712' : rnd() < 0.5 ? '#a3221a' : '#951c15');
+      }
+      g0.dispose();
+    }
+    function maneul(T, o = {}) {
+      const x = num(o.x, 0), y = num(o.y, 2.3), z = num(o.z, 0), rnd = T.rnd || Math.random;
+      hangCord(T, x, y, y - 0.12, z);
+      for (let k = 0; k < 12; k++) {
+        const a = k * 1.9, yy = y - 0.18 - Math.floor(k / 3) * 0.075, rr = 0.045;
+        const b = new THREE.SphereGeometry(0.036, 8, 6); b.scale(1, 0.82, 1);
+        T.add('paint', b, M(x + Math.cos(a) * rr, yy, z + Math.sin(a) * rr), rnd() < 0.5 ? '#e8dfca' : '#ddd0b4');
+        T.add('straw', geo.tube(x + Math.cos(a) * rr, yy + 0.03, z + Math.sin(a) * rr, x, y - 0.12, z, 0.006, 3), null, '#c2ab74');
+      }
+    }
+    function corn(T, o = {}) {
+      const x = num(o.x, 0), y = num(o.y, 2.3), z = num(o.z, 0), rnd = T.rnd || Math.random;
+      hangCord(T, x, y, y - 0.1, z);
+      const cob = [[0, 0], [0.026, 0.02], [0.03, 0.1], [0.027, 0.17], [0.016, 0.21], [0, 0.215]];
+      for (const sx of [-1, 1]) {
+        const m = mul(M(x + sx * 0.03, y - 0.1, z), M(0, 0, 0, 0, 1, 1, 1, 0, PI + sx * 0.12));
+        T.add('paint', KG.lathe(cob, 9), mul(m, M(0, 0.04, 0)), rnd() < 0.5 ? '#d9a62c' : '#cf9a26');
+        for (let k = 0; k < 4; k++) { const g = KG.timber(0.14, 0.03, 0.004, 0.001); rZ(g, PI / 2); rY(g, k * PI / 2 + 0.3); T.add('straw', g, mul(m, M(Math.cos(k * PI / 2) * 0.02, -0.04, Math.sin(k * PI / 2) * 0.02, 0, 1, 1, 1, 0, (k % 2 ? 0.3 : -0.3))), '#e6d9a6'); }
+      }
+    }
+    function herbs(T, o = {}) {
+      const x = num(o.x, 0), y = num(o.y, 2.3), z = num(o.z, 0), rnd = T.rnd || Math.random, tn = o.tint || '#6f7346', len = num(o.len, 0.36);
+      hangCord(T, x, y, y - 0.06, z);
+      T.add('straw', new THREE.TorusGeometry(0.03, 0.01, 4, 10).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), M(x, y - 0.07, z), '#a98846');
+      for (let k = 0; k < 11; k++) {
+        const a = rnd() * TAU, l = len * (0.75 + rnd() * 0.4), g = KG.timber(l, 0.022 + rnd() * 0.02, 0.005, 0.001);
+        rZ(g, PI / 2 + (rnd() - 0.5) * 0.5); rY(g, a);
+        T.add('paint', g, M(x + Math.cos(a) * 0.025, y - 0.07 - l / 2, z + Math.sin(a) * 0.025), shade(tn, 0.8 + rnd() * 0.35));
+      }
+    }
+
+    // ---------------------------------------------------------------- 그을음: smoke-darkened patches, one mesh
+    function soot(R, list, o = {}) {
+      const tex = G.gfx.canvasTexture(128, 128, (c, w, h) => {
+        const g = c.createRadialGradient(w / 2, h / 2, 2, w / 2, h / 2, w / 2);
+        g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.45, 'rgba(0,0,0,0.72)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = g; c.fillRect(0, 0, w, h);
+      });
+      R.ctx.own(tex);
+      const parts = [];
+      for (const q of list || []) {
+        if (q.roof) {
+          // a strip under the rafters from x0 to x1, following both slopes (R.roofY), a little below their undersides
+          const n = 16, x0 = num(q.x0, -1), x1 = num(q.x1, 1), z0 = num(q.z0, -R.d / 2), z1 = num(q.z1, R.d / 2);
+          const g = geo.grid(1, n, (i, j, out) => { const z = lerp(z0, z1, j / n); out[0] = lerp(x0, x1, i); out[1] = R.roofY(z) - 0.035; out[2] = z; out[3] = i; out[4] = j / n; });
+          parts.push(g);
+        } else if (q.m) {
+          const g = new THREE.PlaneGeometry(num(q.w, 1), num(q.h, 1)); g.applyMatrix4(q.m); parts.push(g);
+        }
+      }
+      if (!parts.length) return null;
+      for (const g of parts) { if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]); for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'uv') g.deleteAttribute(k); }
+      const BGU = ADDONS.BufferGeometryUtils, geom = parts.length === 1 ? parts[0] : BGU.mergeGeometries(parts, false);
+      const mt = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(o.color || '#160f0a'), transparent: true, opacity: num(o.alpha, 0.78), depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: false });
+      R.ctx.own(mt);
+      const mesh = new THREE.Mesh(geom, mt);
+      mesh.name = 'room-soot'; mesh.renderOrder = 1; mesh.raycast = () => {}; mesh.userData.guardSkip = true;
+      R.addMesh(mesh, null);
+      return mesh;
+    }
+
+    Object.assign(K, {
+      sway, pillow, buttumak, salgang, chanjang, mulDumeong, dongi, mejuBlock, mejuRack, mejuBed, nurukTray, nurukRack, geumjul,
+      kimchiPit, dwiju, gamani, gamaniStack, seom, meongseok, farmTool, jeoul, doe, jangjak, gongi, jori, siraegi, gochu, maneul,
+      corn, herbs, soot, strawBed, bowl: bowlAt,
+    });
+  })();
 })();
