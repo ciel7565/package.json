@@ -6,7 +6,7 @@
 //                                                  throw-away data dir, run every check, clean up
 //   options: --docroot <dir>   take the server tree from that folder (e.g. dist/metaverse) instead of server/
 //            --only <regex>    run only the sections whose name matches (path|signin|csrf|xss|twofa|required|idle|
-//                              allowlist|ratelimit|screens|rename|apache)
+//                              allowlist|ratelimit|screens|allot|rename|apache)
 //            --no-apache       skip the Apache (.htaccess) section      --verbose   print every request
 //            --keep            keep the temp folders (their paths are printed)
 //
@@ -692,6 +692,8 @@ async function main() {
       subs: Number(dbVal(main1, 'SELECT COUNT(*) FROM subscriptions')), totp: Number(dbVal(main1, 'SELECT COUNT(*) FROM admin_totp')), blocks: Number(dbVal(main1, 'SELECT COUNT(*) FROM ip_blocks')),
       settings: dbAll(main1, 'SELECT k, v FROM settings ORDER BY k'), reports: dbAll(main1, 'SELECT id, status, memo, decided_at FROM crop_reports ORDER BY id'),
       handover: dbAll(main1, 'SELECT k, done, note FROM handover_items ORDER BY k'), runs: Number(dbVal(main1, 'SELECT COUNT(*) FROM inspection_runs')), ai: Number(dbVal(main1, 'SELECT COUNT(*) FROM ai_usage')),
+      // [allot-admin] the 분양 ledger (the allot_* actions are in the scan too)
+      allot: dbAll(main1, "SELECT 'z' AS t, COUNT(*) AS n FROM allot_zones UNION ALL SELECT 'u', COUNT(*) FROM allot_units UNION ALL SELECT 'c', COUNT(*) FROM allot_contracts UNION ALL SELECT 'cu', COUNT(*) FROM allot_customers UNION ALL SELECT 'j', COUNT(*) FROM job_runs"),
     });
     await step('S06', 'every admin POST without a CSRF token is refused (403) and changes nothing', async () => {
       const page = await signInFull(b, ADM, admins.a);
@@ -1808,6 +1810,290 @@ async function main() {
   }
 
   // ================================================================= renaming the folder (CLI) + adminUrl
+  // ================================================================= [allot-admin] 🏺 분양 관리 without JavaScript (CONTRACT §16.7)
+  if (section('allot')) {
+    const s = makeSite('allot');
+    const sv = await startPhp(s);
+    try {
+      const A = mkUser(s, 'admin');
+      const U = mkUser(s, 'user');
+      const b = new Browser(sv.base, 'allot');
+      const T = `${ADM}?tab=allot`;
+      const SAME = { Origin: sv.base.replace(/\/$/, ''), 'Sec-Fetch-Site': 'same-origin' };
+      // the personal data of the test customer: it may appear only in a revealed view / export, never anywhere else
+      const PII = { name: '홍길동', phone: '010-2468-1357', mid: '2468', addr: '비밀길 7' };
+      const XSS = ['<img src=x onerror=alert(11)>', '<script>alert(12)</script>', '"><svg onload=alert(13)>'];
+      const trail = { locations: [], flashes: [] };
+      const rawXss = (t) => /<img src=x onerror|<script>alert|<svg onload/i.test(t);
+      const leaks = (t) => [PII.name, PII.phone, PII.mid + '-1357', PII.addr].filter((x) => String(t).includes(x));
+      /** the forms of a page as a browser without scripts sees them (a row button may sit outside its form: form="id") */
+      const formsOf = (html) => {
+        const attr = (a, k) => { const m = a.match(new RegExp(`\\s${k}="([^"]*)"`)); return m ? decode(m[1]) : null; };
+        const fieldsIn = (chunk, outside) => {
+          const out = [];
+          const els = (rx, fn) => { for (const m of chunk.matchAll(rx)) fn(m); };
+          els(/<input\b([^>]*)>/g, (m) => {
+            const n = attr(m[1], 'name'); const t = (attr(m[1], 'type') || 'text').toLowerCase();
+            if (!n || (outside && attr(m[1], 'form') === null)) return;
+            if ((t === 'checkbox' || t === 'radio') && !/\schecked\b/.test(m[1])) return;
+            if (t === 'submit') return;
+            out.push([n, attr(m[1], 'value') ?? (t === 'checkbox' ? 'on' : '')]);
+          });
+          els(/<select\b([^>]*)>([\s\S]*?)<\/select>/g, (m) => {
+            const n = attr(m[1], 'name'); if (!n || (outside && attr(m[1], 'form') === null)) return;
+            const opts = [...m[2].matchAll(/<option\b([^>]*)>/g)];
+            const sel = opts.find((o) => /\sselected\b/.test(o[1])) || opts[0];
+            out.push([n, sel ? attr(sel[1], 'value') ?? '' : '']);
+          });
+          els(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/g, (m) => { const n = attr(m[1], 'name'); if (n && !(outside && attr(m[1], 'form') === null)) out.push([n, decode(m[2])]); });
+          return out;
+        };
+        const forms = [];
+        for (const m of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/g)) {
+          const id = attr(m[1], 'id');
+          let fields = fieldsIn(m[2], false);
+          if (id) {
+            // elements elsewhere on the page that belong to this form
+            const rx = new RegExp(`<(?:input|select|textarea)\\b[^>]*\\sform="${id}"[^>]*>(?:[\\s\\S]*?<\\/(?:select|textarea)>)?`, 'g');
+            for (const e of html.matchAll(rx)) fields = fields.concat(fieldsIn(e[0], true));
+          }
+          const buttons = [...(m[2] + (id ? [...html.matchAll(new RegExp(`<button\\b[^>]*\\sform="${id}"[^>]*>`, 'g'))].map((x) => x[0]).join('') : '')).matchAll(/<button\b([^>]*)>/g)]
+            .map((x) => [attr(x[1], 'name'), attr(x[1], 'value')]).filter((x) => x[0]);
+          const get = (k) => { const f = fields.find((x) => x[0] === k); return f ? f[1] : null; };
+          forms.push({ id, fields, buttons, get, action: get('action') });
+        }
+        return forms;
+      };
+      /** GET a page of the tab: 200, inside, the locked headers, zero scripts / inline styles / handlers, no raw payload */
+      const page = async (q = '') => {
+        const r = await b.req(T + q);
+        assert(r.status === 200 && isInside(r.text), `GET ${q || '(tab)'} → ${r.status}`);
+        assertLocked(r, `🏺 ${q || '(tab)'}`, { payload: true }); // payloads sit escaped inside value="…": the raw check is rawXss
+        assert(!rawXss(r.text), `a payload is raw markup on ${q}`);
+        return r;
+      };
+      /** fill the form of `action` on page r like a person would (over: name → value | [values] | null) and press it */
+      const cookieFor = () => b.jar.filter((c) => Browser.match('/' + ADM, c.path)).map((c) => `${c.name}=${c.value}`).join('; ');
+      const submit = async (r, action, over = {}, { match = null, button = null, follow = true, raw = false, bytes = false } = {}) => {
+        const f = formsOf(r.text).find((x) => x.action === action && (!match || match(x)));
+        assert(f, `no form for ${action} on ${r.url}`);
+        const pairs = f.fields.filter(([k]) => !(k in over));
+        for (const [k, v] of Object.entries(over)) { if (v === null) continue; for (const one of Array.isArray(v) ? v : [v]) pairs.push([k, String(one)]); }
+        if (button) pairs.push(button);
+        if (bytes) { // a file answer: the exact bytes (fetch's text() would drop the BOM)
+          const url = new URL(ADM, sv.base).href;
+          const res = await fetch(url, { method: 'POST', headers: { ...SAME, Cookie: cookieFor(), 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(pairs).toString(), redirect: 'manual' });
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (res.headers.get('location')) trail.locations.push(res.headers.get('location'));
+          return { status: res.status, headers: res.headers, buf, text: buf.toString('utf8'), location: res.headers.get('location'), url };
+        }
+        const post = await b.req(ADM, { form: pairs, headers: SAME });
+        if (post.location) trail.locations.push(post.location);
+        if (raw || !follow) return post;
+        assert(post.status === 303, `${action} → ${post.status} ${post.text.slice(0, 200)}`);
+        const next = await b.follow(post);
+        assertLocked(next, `after ${action}`, { payload: true });
+        assert(!rawXss(next.text), `a payload is raw markup after ${action}`);
+        const fl = flashOf(next.text);
+        if (fl) trail.flashes.push(fl.msg);
+        return { post, page: next, flash: fl };
+      };
+      const counts = () => JSON.stringify(dbAll(s, `SELECT 'z' AS t, COUNT(*) AS n FROM allot_zones UNION ALL SELECT 'cu', COUNT(*) FROM allot_customers UNION ALL SELECT 'co', COUNT(*) FROM allot_contracts
+        UNION ALL SELECT 'p', COUNT(*) FROM allot_payments UNION ALL SELECT 'n', COUNT(*) FROM allot_notices UNION ALL SELECT 'k', COUNT(*) FROM allot_care_logs UNION ALL SELECT 'w', COUNT(*) FROM allot_waitlist
+        UNION ALL SELECT 'u', COUNT(*) FROM allot_units WHERE status <> 'open'`));
+      const unitId = (code) => Number(dbVal(s, 'SELECT id FROM allot_units WHERE code = ?', [code]));
+      const ids = {};
+
+      await step('16.7', '🏺 분양 관리 without JavaScript: the first visit explains and offers the seed; one POST builds the zones; all ten sections render locked (no script, no inline style, no handler)', async () => {
+        assert(isInside((await signInFull(b, ADM, A)).text), 'signed in');
+        let r = await page();
+        assert(/분양 관리를 시작해요/.test(r.text) && formsOf(r.text).some((f) => f.action === 'allot_seed'), 'first steps with the seed buttons');
+        const res = await submit(r, 'allot_seed', {}, { match: (f) => f.get('preset') === 'small' });
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, 'SELECT COUNT(*) FROM allot_units')) === 180, `seeded small preset: ${res.flash?.msg}`);
+        const secs = ['status', 'zones', 'units', 'contracts', 'customers', 'wait', 'notices', 'care', 'csv', 'auto'];
+        for (const sec of secs) await page(`&sec=${sec}`);
+        const ov = await b.req(`${ADM}?tab=overview`);
+        assert(/분양: 임대 <b>0<\/b> \/ 180/.test(ov.text) && /승인 대기/.test(ov.text), 'the first tab carries the line "분양: 임대 n / total · 승인 대기 n"');
+        const src = fs.readFileSync(path.join(s.site, STUB_DIR, 'index.php'), 'utf8');
+        const labels = [...new Set([...src.matchAll(/case '(allot_[a-z_]+)':/g)].map((m) => m[1]))];
+        assert(labels.length >= 34, `the allot actions are case labels of admin/index.php (the csrf scan reads them): ${labels.length}`);
+        return `seed 180 units · ${secs.length} sections + the overview card · ${labels.length} allot actions visible to the CSRF scan`;
+      });
+
+      await step('16.7', 'every allot action is refused without a token / with a wrong token / cross-site, and for an app-only admin and a player; nothing changes', async () => {
+        const src = fs.readFileSync(path.join(s.site, STUB_DIR, 'index.php'), 'utf8');
+        const labels = [...new Set([...src.matchAll(/case '(allot_[a-z_]+)':/g)].map((m) => m[1]))];
+        const before = counts();
+        const tok = tokenOf((await b.req(T)).text);
+        const f = (a) => ({ action: a, tab: 'allot', preset: 'small', op: 'closed', 'ids[]': String(unitId('J01-0001')), what: 'customers', csv: '일자,성명\n', title: 'x', to: 'all', text: 'x', kind: 'care' });
+        for (const a of labels) {
+          for (const [form, h] of [[f(a), SAME], [{ ...f(a), _csrf: '0'.repeat(64) }, SAME], [{ ...f(a), _csrf: tok }, { Origin: 'https://evil.example' }], [{ ...f(a), _csrf: tok }, { 'Sec-Fetch-Site': 'cross-site' }]]) {
+            const r = await b.req(ADM, { form, headers: h });
+            assert(r.status === 403 && !r.location, `${a} → ${r.status}`);
+          }
+        }
+        const app = new Browser(sv.base); await apiLogin(app, A);
+        const pl = new Browser(sv.base); await apiLogin(pl, U);
+        for (const who of [app, pl]) for (const a of ['allot_tick', 'allot_seed', 'allot_export', 'allot_reveal', 'allot_units_bulk']) {
+          const r = await adm(who, ADM, f(a), { headers: SAME });
+          assert(r.status === 403 && !r.location, `${who === app ? 'app-only admin' : 'player'} ${a} → ${r.status}`);
+          assert(!/text\/csv/.test(r.headers.get('content-type') || ''), 'no file');
+        }
+        assert(counts() === before, 'something changed');
+        return `${labels.length} actions × 4 refusals · app-only admin and player refused`;
+      });
+
+      await step('16.7', 'end to end on the forms: zone → customer → contract → payment (idempotent) → renew → care log → notice → nameplate → end; markup in every customer-controlled field stays text', async () => {
+        let r = await page('&sec=zones');
+        let res = await submit(r, 'allot_zone_save', { code: 'T01', kind: 'jar', name: `시험 구역 ${XSS[0]}`, capacity: '12', cols: '6', price: '120000', period: 'year', termMonths: '12', isOpen: '1', note: XSS[1] },
+          { match: (x) => !x.get('id') });
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, "SELECT COUNT(*) FROM allot_units u JOIN allot_zones z ON z.id = u.zone_id WHERE z.code = 'T01'")) === 12, `zone T01 with 12 units: ${res.flash?.msg}`);
+        await page('&sec=zones');
+        r = await page('&sec=customers');
+        res = await submit(r, 'allot_customer_save', { name: PII.name, phone: PII.phone, addr: '강원 정선군 ' + PII.addr, memo: `=HYPERLINK("http://evil.example","x") ${XSS[0]}`, consent: '1' });
+        ids.cust = Number((res.post.location.match(/cust=(\d+)/) || [])[1]);
+        assert(res.flash?.type === 'ok' && ids.cust > 0, `customer saved: ${res.flash?.msg}`);
+        assert(!leaks(res.page.text).length, `the customer page shows the data masked: ${leaks(res.page.text)}`);
+        res = await submit(res.page, 'allot_contract_new', { unit: 'T01-0001', status: 'active', memo: XSS[2] });
+        ids.con = Number((res.post.location.match(/con=(\d+)/) || [])[1]);
+        assert(res.flash?.type === 'ok' && ids.con > 0, `contract made: ${res.flash?.msg}`);
+        const c0 = dbAll(s, 'SELECT contract_no, status, ends_at, paid_until FROM allot_contracts WHERE id = ?', [ids.con])[0];
+        ids.no = c0.contract_no;
+        assert(c0.status === 'active', 'active');
+        r = await page(`&sec=contracts&con=${ids.con}`);
+        const payForm = formsOf(r.text).find((x) => x.action === 'allot_pay');
+        assert(payForm && /^[a-z0-9]{8,64}$/i.test(payForm.get('idem') || ''), 'the payment form carries a one-time key');
+        res = await submit(r, 'allot_pay', { amount: '120000', method: 'bank', memo: '=HYPERLINK("http://evil.example","x")' });
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, 'SELECT COUNT(*) FROM allot_payments WHERE contract_id = ?', [ids.con])) === 1, `payment: ${res.flash?.msg}`);
+        res = await submit(r, 'allot_pay', { amount: '120000', method: 'bank' }); // the same form pressed twice
+        assert(/이미 기록한/.test(res.flash?.msg || '') && Number(dbVal(s, 'SELECT COUNT(*) FROM allot_payments WHERE contract_id = ?', [ids.con])) === 1, 'a double press records once');
+        res = await submit(await page(`&sec=contracts&con=${ids.con}`), 'allot_renew', { terms: '1' });
+        const c1 = dbAll(s, 'SELECT ends_at FROM allot_contracts WHERE id = ?', [ids.con])[0];
+        assert(res.flash?.type === 'ok' && Number(c1.ends_at) > Number(c0.ends_at), `renewed: ${res.flash?.msg}`);
+        res = await submit(await page('&sec=care'), 'allot_care_add', { to: 'unit', ref: 'T01-0001', kind: 'water', text: `물 줬어요 ${XSS[1]}`, visible: '1' });
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, 'SELECT COUNT(*) FROM allot_care_logs')) >= 1, `care log: ${res.flash?.msg}`);
+        await page('&sec=care');
+        res = await submit(await page('&sec=notices'), 'allot_notify', { to: 'contract', ref: ids.no, title: `안내 ${XSS[2]}`, body: `본문 ${XSS[0]}` });
+        assert(res.flash?.type === 'ok' && /1명/.test(res.flash.msg), `notice: ${res.flash?.msg}`);
+        await page('&sec=notices');
+        r = await page('&sec=units&zone=t01');
+        const uid = unitId('T01-0001');
+        res = await submit(r, 'allot_unit', { [`text_${uid}`]: `우리집${XSS[0]}`, [`show_${uid}`]: '1' }, { match: (x) => x.buttons.some((bt) => bt[0] === 'pick'), button: ['pick', `${uid}:label`] });
+        assert(res.flash?.type === 'ok', `nameplate: ${res.flash?.msg}`);
+        const label = String(dbVal(s, 'SELECT label FROM allot_units WHERE id = ?', [uid]));
+        assert([...label].length <= 12 && label.startsWith('우리집'), `the nameplate is cut to 12 characters: "${label}"`);
+        const up = await page('&sec=units&zone=t01');
+        const esc = label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        assert(!/[<>"]/.test(label) || up.text.includes(esc), 'a nameplate with markup characters is shown as text');
+        await page(`&sec=contracts&con=${ids.con}`);
+        res = await submit(await page(`&sec=contracts&con=${ids.con}`), 'allot_end', { sure: '1' });
+        const c2 = dbAll(s, "SELECT c.status, u.status AS us FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.id = ?", [ids.con])[0];
+        assert(res.flash?.type === 'ok' && c2.status === 'ended' && c2.us === 'open', `ended, the unit is free: ${JSON.stringify(c2)}`);
+        res = await submit(await page('&sec=status'), 'allot_tick');
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, "SELECT COUNT(*) FROM job_runs WHERE source = 'admin'")) >= 1, `지금 실행: ${res.flash?.msg}`);
+        return `contract ${ids.no}: paid once (double press ignored), renewed, care log, notice, nameplate "${label}", ended · tick recorded`;
+      });
+
+      await step('16.7', 'search by phone number goes through the blind index (the address carries a random token, never the number); a reveal needs the password + a reason, is audited without the value and shows once', async () => {
+        let res = await submit(await page('&sec=contracts'), 'allot_find', { find: PII.phone });
+        assert(/[?&]s=[0-9a-f]{8}\b/.test(res.post.location) && !leaks(res.post.location).length, `the address carries a token: ${res.post.location}`);
+        assert(res.page.text.includes(ids.no), `the contract is found by the phone number: ${res.flash?.type} ${res.flash?.msg} · ${(res.page.text.match(/class="empty">[^<]*/) || [''])[0]} · ${(res.page.text.match(/A\d\d-[2-9A-Z]{5}-[2-9A-Z]{5}/g) || []).join(',')}`);
+        assert(!leaks(res.page.text).length, 'the result page is masked');
+        let r = await page(`&sec=customers&cust=${ids.cust}`);
+        res = await submit(r, 'allot_reveal', { why: 'call', password: 'wrong-' + PASSWORD });
+        assert(res.flash?.type !== 'ok' && !leaks(res.page.text).length, 'a wrong password reveals nothing');
+        res = await submit(await page(`&sec=customers&cust=${ids.cust}`), 'allot_reveal', { why: 'call', password: PASSWORD });
+        assert(res.flash?.type === 'ok' && res.page.text.includes(PII.phone) && res.page.text.includes(PII.addr) && res.page.text.includes(PII.name), 'the revealed view shows name, phone and address');
+        assert(!leaks(res.post.location).length && !leaks(res.flash.msg).length, 'not in the address, not in the flash');
+        r = await page(`&sec=customers&cust=${ids.cust}`);
+        assert(!r.text.includes(PII.phone) && !r.text.includes(PII.addr), 'the next view is masked again (shown once)');
+        const aud = dbAll(s, "SELECT event, detail FROM audit_log WHERE event LIKE 'allot_%' ORDER BY id");
+        assert(aud.some((x) => /reveal|pii_unlocked/.test(x.event)), `the reveal is audited: ${[...new Set(aud.map((x) => x.event))].join(', ')}`);
+        res = await submit(await page(`&sec=customers&cust=${ids.cust}`), 'allot_pii_lock');
+        assert(res.flash?.type === 'ok', 'lock again');
+        return `phone search via token · wrong password refused · revealed once · ${aud.length} allot audit rows`;
+      });
+
+      await step('16.7', 'export: a POST answers the CSV itself (BOM, CRLF, attachment named without a person); masked by default; formulas defused; the full export needs the password and a reason', async () => {
+        const r = await page('&sec=csv');
+        let post = await submit(r, 'allot_export', { what: 'customers' }, { match: (x) => !x.get('reveal'), bytes: true });
+        const cd = post.headers.get('content-disposition') || '';
+        assert(post.status === 200 && /text\/csv/.test(post.headers.get('content-type') || '') && /attachment; filename="tfm-allot-customers-masked-\d{8}-\d{6}\.csv"/.test(cd), `masked export: ${post.status} ${cd}`);
+        assert(post.text.charCodeAt(0) === 0xfeff && /\r\n/.test(post.text), 'BOM + CRLF');
+        assert(!leaks(post.text).length, `the masked file leaks: ${leaks(post.text)}`);
+        const pays = await submit(await page('&sec=csv'), 'allot_export', { what: 'payments' }, { match: (x) => !x.get('reveal'), bytes: true });
+        assert(pays.status === 200 && !/(^|,)"?=HYPERLINK/m.test(pays.text) && /'=HYPERLINK/.test(pays.text), 'the formula in a payment memo is defused');
+        post = await submit(await page('&sec=csv'), 'allot_export', { what: 'customers', reveal: '1', why: 'request', password: null }, { match: (x) => x.fields.some(([k]) => k === 'why'), bytes: true });
+        assert(!/text\/csv/.test(post.headers.get('content-type') || ''), 'without the password: no file');
+        await b.follow(post);
+        post = await submit(await page('&sec=csv'), 'allot_export', { what: 'customers', reveal: '1', why: 'request', password: PASSWORD }, { match: (x) => x.fields.some(([k]) => k === 'why'), bytes: true });
+        assert(post.status === 200 && /-full-/.test(post.headers.get('content-disposition') || '') && post.text.includes(PII.phone), 'the full export has the data');
+        const aud = dbAll(s, "SELECT event, detail FROM audit_log WHERE event LIKE 'allot_export%' ORDER BY id");
+        assert(aud.length >= 2 && aud.every((x) => !leaks(x.detail).length), 'export audit rows without data');
+        return `masked ${post.text.length} bytes · full only after the password · ${aud.length} audit rows`;
+      });
+
+      await step('16.7', 'import: paste → a dry-run table with the problem of each row changes nothing (also with markup / formulas in cells) → cancel → a clean paste → confirm imports it', async () => {
+        const before = counts();
+        const csv = ['일자,성명,연락처,주소,비고,단위', `2025-04-02,박철수,010-4444-5555,,${XSS[1]},T01-0005`, "2025-05-05,=cmd|' /C calc'!A0,010-****-7777,,,T01-0006", `2025-06-01,이민수,010-6666-7777,,,${XSS[0]}`].join('\n');
+        let res = await submit(await page('&sec=csv'), 'allot_import_preview', { what: 'ledger', csv });
+        assert(res.flash?.type === 'ok' && /문제 있는 줄/.test(res.flash.msg), `preview: ${res.flash?.msg}`);
+        assert(counts() === before, 'the dry run changed something');
+        assert(res.page.text.includes('&lt;img src=x onerror') || res.page.text.includes('알아볼 수 없는'), 'the problem rows are listed as text');
+        res = await submit(res.page, 'allot_import_cancel');
+        assert(res.flash?.type === 'ok' && counts() === before, 'cancel changes nothing');
+        const clean = ['일자,성명,연락처,주소,비고,단위', '2025-04-02,박철수,010-4444-5555,,3년차,T01-0005', '2025-05-05,최영희,010-1111-2222,,=1+2,T01-0006'].join('\n');
+        res = await submit(await page('&sec=csv'), 'allot_import_preview', { what: 'ledger', csv: clean });
+        assert(counts() === before, 'the second dry run changed nothing');
+        assert(formsOf(res.page.text).some((f) => f.action === 'allot_import_commit'), 'a confirm button after a clean preview');
+        res = await submit(res.page, 'allot_import_commit');
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, "SELECT COUNT(*) FROM allot_contracts WHERE source = 'import'")) === 2, `imported: ${res.flash?.msg}`);
+        return 'dry run with 2 problem rows · cancel · clean dry run · confirm → 2 contracts';
+      });
+
+      await step('16.7', 'bulk actions by ids[] checkboxes: close / reopen units, approve pending applications, a notice to the chosen contracts', async () => {
+        let r = await page('&sec=units&zone=t01');
+        const pickIds = [unitId('T01-0010'), unitId('T01-0011')].map(String);
+        let res = await submit(r, 'allot_units_bulk', { op: 'closed', 'ids[]': pickIds });
+        assert(res.flash?.type === 'ok' && dbAll(s, "SELECT status FROM allot_units WHERE id IN (?, ?)", pickIds).every((x) => x.status === 'closed'), `closed: ${res.flash?.msg}`);
+        res = await submit(await page('&sec=units&zone=t01'), 'allot_units_bulk', { op: 'open', 'ids[]': pickIds });
+        assert(dbAll(s, "SELECT status FROM allot_units WHERE id IN (?, ?)", pickIds).every((x) => x.status === 'open'), 'reopened');
+        for (const unit of ['T01-0002', 'T01-0003']) await submit(await page(`&sec=customers&cust=${ids.cust}`), 'allot_contract_new', { unit, status: 'pending' });
+        const pend = dbAll(s, "SELECT id FROM allot_contracts WHERE status = 'pending' ORDER BY id").map((x) => String(x.id));
+        assert(pend.length === 2, `two pending: ${pend}`);
+        res = await submit(await page('&sec=contracts&st=pending'), 'allot_contracts_bulk', { op: 'approve', 'ids[]': pend });
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, "SELECT COUNT(*) FROM allot_contracts WHERE status = 'active' AND id IN (?, ?)", pend)) === 2, `approved: ${res.flash?.msg}`);
+        const n0 = Number(dbVal(s, 'SELECT COUNT(*) FROM allot_notices'));
+        res = await submit(await page('&sec=contracts&st=active'), 'allot_contracts_bulk', { op: 'notice', 'ids[]': pend, title: `점검 안내 ${XSS[1]}`, body: '' });
+        assert(res.flash?.type === 'ok' && Number(dbVal(s, 'SELECT COUNT(*) FROM allot_notices')) >= n0 + 2, `notices: ${res.flash?.msg}`);
+        await page('&sec=notices');
+        return 'units closed / reopened · 2 approved · notices to the chosen contracts';
+      });
+
+      await step('16.7', 'the rules and the operator texts (with the 예시 warning): a text with markup is stored and shown as text; personal data is in no address, flash, audit detail, security event or log line', async () => {
+        let r = await page('&sec=auto');
+        assert(/예시/.test(r.text) && /법률 검토/.test(r.text), 'the 예시 warning and the legal-review note');
+        let res = await submit(r, 'allot_settings');
+        assert(res.flash?.type === 'ok', `rules form: ${res.flash?.msg}`);
+        res = await submit(await page('&sec=auto'), 'allot_texts', { terms_text: `이용 약관 시험 ${XSS[2]}` });
+        assert(res.flash?.type === 'ok', `texts: ${res.flash?.msg}`);
+        await page('&sec=auto');
+        await page('&sec=status');
+        const where = [];
+        for (const l of trail.locations) if (leaks(l).length) where.push('address ' + l);
+        for (const f of trail.flashes) if (leaks(f).length) where.push('flash ' + f);
+        for (const x of dbAll(s, 'SELECT event, detail FROM audit_log')) if (leaks(x.detail).length) where.push('audit ' + x.event);
+        try { for (const x of dbAll(s, 'SELECT kind, detail FROM security_events')) if (leaks(x.detail).length) where.push('security event ' + x.kind); } catch { /* no table */ }
+        const logDir = path.join(s.data, 'logs');
+        if (fs.existsSync(logDir)) for (const f of fs.readdirSync(logDir)) { const t = fs.readFileSync(path.join(logDir, f), 'utf8'); if (leaks(t).length) where.push('log ' + f); }
+        const dump = fs.readdirSync(s.data).filter((f) => /\.sqlite$/.test(f)).map((f) => fs.readFileSync(path.join(s.data, f)).toString('utf8')).join('');
+        if (dump.includes(PII.phone) || dump.includes(PII.addr) || dump.includes(PII.name)) where.push('the database file (not sealed)');
+        assert(where.length === 0, where.join(' · '));
+        return `${trail.locations.length} addresses · ${trail.flashes.length} flashes · audit / events / logs / database file: no personal data`;
+      });
+    } finally { await sv.stop(); }
+  }
+
   if (section('rename')) {
     const s = makeSite('rename');
     const sv = await startPhp(s);

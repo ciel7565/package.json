@@ -474,5 +474,98 @@ check('Health::collect — the old address check fails when a real page is still
     return $stub === 'stub' && $old === 'page' && $none === 'missing' ? true : json_encode([$stub, $old, $none]);
 });
 
+// ------------------------------------------------------------------ [allot-admin] Tfm\AdminAllot: the 🏺 분양 관리 tab's helpers (CONTRACT §16.7)
+if (!class_exists('Tfm\\AdminAllot') && is_file(__DIR__ . '/../server/lib/AdminAllot.php')) require_once __DIR__ . '/../server/lib/AdminAllot.php'; // admin/index.php loads it the same way
+if (class_exists('Tfm\\AdminAllot') && class_exists('Tfm\\Allot')) {
+    $aaAdmin = Tfm\Db::tx(function () { return Tfm\Users::create('aa_admin_' . bin2hex(random_bytes(3)) . '@example.com', '분양지킴' . random_int(100, 999), 'Ferment2026ok', 'admin'); });
+    $aaA = ['id' => (int) $aaAdmin['id'], 'role' => 'admin', 'email' => (string) $aaAdmin['email'], 'nickname' => (string) $aaAdmin['nickname']];
+    check('AdminAllot::percents — a bar never hides a single taken unit (≥ 1 %), never passes 100 %, an empty zone is 0', function () {
+        $a = Tfm\AdminAllot::percents(['l' => 1, 'h' => 0, 'c' => 0], 1000);
+        $b = Tfm\AdminAllot::percents(['l' => 997, 'h' => 2, 'c' => 1], 1000);
+        $c = Tfm\AdminAllot::percents(['l' => 3, 'h' => 3, 'c' => 3], 0);
+        $d = Tfm\AdminAllot::percents(['l' => 333, 'h' => 333, 'c' => 334], 1000);
+        return $a === ['l' => 1, 'h' => 0, 'c' => 0] && array_sum($b) <= 100 && $b['h'] >= 1 && $b['c'] >= 1 && $c === ['l' => 0, 'h' => 0, 'c' => 0] && array_sum($d) >= 99 && array_sum($d) <= 100
+            ? true : json_encode([$a, $b, $c, $d]);
+    });
+    check('AdminAllot::span — calm Korean durations (분 · 시간 · 일), never "0분"', function () {
+        $got = array_map(function ($ms) { return Tfm\AdminAllot::span($ms); }, [0, 59000, 60000, 3600000, 5400000, 86400000, 90000000, -5]);
+        return $got === ['1분', '1분', '1분', '1시간', '1시간 30분', '1일', '1일 1시간', '1분'] ? true : json_encode($got, JSON_UNESCAPED_UNICODE);
+    });
+    check('AdminAllot::place / back — only known query fields with safe values survive (no markup, no quotes, no unknown keys); back() drops tpl / edit', function () {
+        $p = Tfm\AdminAllot::place(['sec' => 'units', 'zone' => 'J01"><script>', 'st' => 'leased', 'kind' => 'jar', 'after' => '120', 'con' => '-3', 's' => 'deadbeef', 'u' => 'j01_0007',
+            'evil' => '<b>', 'flag' => 'x', 'tpl' => 'due', 'edit' => '1', 'cust' => '7abc']);
+        $q = Tfm\AdminAllot::place(['sec' => '"><img src=x>', 'zone' => 'j02', 's' => 'DEADBEEF', 'dc' => '1_2']);
+        $b = Tfm\AdminAllot::back(['sec' => 'auto', 'tpl' => 'due', 'edit' => '1', 'zone' => 'J01']);
+        ksort($p);
+        $want = ['sec' => 'units', 'st' => 'leased', 'kind' => 'jar', 'edit' => '1', 'tpl' => 'due', 's' => 'deadbeef', 'u' => 'j01_0007', 'after' => 120];
+        ksort($want);
+        return $p === $want && $q === ['sec' => 'status', 'zone' => 'j02', 'dc' => '1_2']
+            && $b === ['sec' => 'auto', 'zone' => 'j01'] ? true : json_encode([$p, $q, $b]);
+    });
+    check('AdminAllot::ids — the ids[] of a bulk action: digits only, no duplicates, at most ROWS (50); "this whole page" uses page_ids; none → INVALID_INPUT', function () {
+        $many = array_map('strval', range(1, 80));
+        $a = Tfm\AdminAllot::ids(['ids' => ['3', '3', '7', '-1', '0', '1e3', 'x', ['9'], '42']]);
+        $b = Tfm\AdminAllot::ids(['ids' => $many]);
+        $c = Tfm\AdminAllot::ids(['all_page' => '1', 'page_ids' => '5,6,abc,6,99999999999999999']);
+        return $a === [3, 7, 42] && count($b) === Tfm\AdminAllot::ROWS && $c === [5, 6]
+            && throwsApi(function () { Tfm\AdminAllot::ids(['ids' => ['x']]); }, 'INVALID_INPUT') && throwsApi(function () { Tfm\AdminAllot::ids([]); }, 'INVALID_INPUT')
+            ? true : json_encode([$a, count($b), $c]);
+    });
+    check('AdminAllot::findInfo — what a search is found by, and a label without the personal part (a phone shows only its last 4, a name only its first letter)', function () {
+        $r = [];
+        foreach (['A26-ABCDE-FGHJK', 'j01-0012', '#12', '5678', '010-1234-5678', '홍길동'] as $t) $r[] = Tfm\AdminAllot::findInfo($t);
+        $by = array_column($r, 'by');
+        $labels = implode(' | ', array_column($r, 'label'));
+        return $by === ['contract', 'unit', 'id', 'tail', 'phone', 'name'] && strpos($labels, '1234') === false && strpos($labels, '길동') === false && strpos($labels, '***-****-5678') !== false
+            ? true : json_encode($r, JSON_UNESCAPED_UNICODE);
+    });
+    check('AdminAllot::exportName — a file name never carries a person: "tfm-allot-<what>-masked|full-<date>.csv"; an unknown kind becomes "export"', function () {
+        $n1 = Tfm\AdminAllot::exportName('customers', false, 1763100000000);
+        $n2 = Tfm\AdminAllot::exportName('ledger', true, 1763100000000);
+        $n3 = Tfm\AdminAllot::exportName('../../etc/passwd', false, 1763100000000);
+        return preg_match('/^tfm-allot-customers-masked-\d{8}-\d{6}\.csv$/', $n1) && preg_match('/^tfm-allot-ledger-full-\d{8}-\d{6}\.csv$/', $n2) && preg_match('/^tfm-allot-export-masked-\d{8}-\d{6}\.csv$/', $n3)
+            ? true : json_encode([$n1, $n2, $n3]);
+    });
+    check('AdminAllot::exportCsv — masked by default (no name, no full phone, no address); BOM + CRLF; a formula in a memo is defused; revealed only with an admin + a reason, audited without the data', function () use ($aaA) {
+        Tfm\Allot::seedPreset($aaA, 'small', true);
+        $cu = Tfm\Allot::saveCustomer($aaA, ['name' => '홍길동', 'phone' => '010-2468-1357', 'addr' => '강원 정선군 비밀길 7', 'memo' => '=HYPERLINK("http://evil.example","x")', 'consent' => true]);
+        $unit = Tfm\Allot::listUnits(['status' => 'open'], 1)['rows'][0]['code'];
+        Tfm\Allot::createContract($aaA, $unit, (int) $cu['id'], ['status' => 'active']);
+        $buf = '';
+        $n = Tfm\AdminAllot::exportCsv('customers', false, null, '', function ($s) use (&$buf) { $buf .= $s; });
+        if ($n < 1) return 'no rows';
+        if (strpos($buf, "\xEF\xBB\xBF") !== 0 || strpos($buf, "\r\n") === false) return 'no BOM / CRLF';
+        foreach (['홍길동', '2468', '비밀길', '010-2468-1357'] as $leak) if (strpos($buf, $leak) !== false) return "masked export leaks $leak";
+        if (preg_match('/(^|,)"?=HYPERLINK/m', $buf)) return 'formula not defused';
+        $auditBefore = (int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event LIKE 'allot_export%'");
+        $full = '';
+        Tfm\AdminAllot::exportCsv('customers', true, $aaA, 'request', function ($s) use (&$full) { $full .= $s; });
+        if (strpos($full, '홍길동') === false || strpos($full, '010-2468-1357') === false) return 'the revealed export lacks the data';
+        $audits = Tfm\Db::all("SELECT detail FROM audit_log WHERE event LIKE 'allot_export%' ORDER BY id DESC LIMIT 5");
+        if ((int) Tfm\Db::value("SELECT COUNT(*) FROM audit_log WHERE event LIKE 'allot_export%'") <= $auditBefore) return 'the revealed export was not audited';
+        foreach ($audits as $r) foreach (['홍길동', '2468', '비밀길'] as $leak) if (strpos((string) $r['detail'], $leak) !== false) return "audit detail leaks $leak";
+        return throwsApi(function () { Tfm\AdminAllot::exportCsv('customers', true, null, 'request', function () {}); }, 'FORBIDDEN') ? true : 'a revealed export without an admin was not refused';
+    });
+    check('AdminAllot::card — the first tab line "분양: 임대 n / total · 승인 대기 n" with an occupancy bar (classes, no inline style), no personal data', function () {
+        $h = Tfm\AdminAllot::card();
+        return strpos($h, '분양: 임대') !== false && strpos($h, '승인 대기') !== false && strpos($h, 'class="occbar"') !== false && !preg_match('/\sstyle=|<script/i', $h) && strpos($h, '홍길동') === false
+            ? true : substr($h, 0, 400);
+    });
+    check('Inspect allot rows — schema v7, the seeded units, the tick age (warn / fail while it never ran), the integrity scan; the handover list has the allot item', function () use ($aaA) {
+        $run = Tfm\Inspect::run('cli', null);
+        $by = [];
+        foreach ($run['checks'] as $c) $by[$c['id']] = $c;
+        foreach (['allot_schema', 'allot_units', 'allot_tick', 'allot_integrity'] as $id) if (!isset($by[$id])) return "missing row $id";
+        $tickBefore = $by['allot_tick']['status'];
+        Tfm\Allot::tick(null, 'cli');
+        $by2 = [];
+        foreach (Tfm\Inspect::run('cli', null)['checks'] as $c) $by2[$c['id']] = $c;
+        return $by['allot_schema']['status'] === 'ok' && $by['allot_units']['status'] === 'ok' && strpos($by['allot_units']['value'], '180') !== false
+            && in_array($tickBefore, ['warn', 'fail'], true) && $by2['allot_tick']['status'] === 'ok' && $by2['allot_integrity']['status'] === 'ok'
+            && isset(Tfm\Inspect::checklist()['allot_schedule'])
+            ? true : json_encode([$by['allot_schema'], $by['allot_units'], $tickBefore, $by2['allot_tick'], $by2['allot_integrity']], JSON_UNESCAPED_UNICODE);
+    });
+}
+
 echo PHP_EOL . ($failed === 0 ? "✔ all admin-lock unit checks passed" : "✖ $failed check(s) failed") . PHP_EOL;
 exit($failed === 0 ? 0 : 1);
