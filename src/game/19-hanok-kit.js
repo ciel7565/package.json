@@ -1606,6 +1606,526 @@
   // post / beam under their documented names (post_ is the method: `post` is the post-top height)
   Room.prototype.postAt = Room.prototype.post_;
   G.hanok = K;
+
+  // ---------------------------------------------------------------- [rooms-b] furniture and things of the 안방 and the 사랑방
+  // Same rules as section 3 of the header: (T, opts) with opts.x / y / z / rotY (or opts.m), the front faces +Z, materials
+  // through the room buckets (one merge per material), no colliders (the room adds R.block), a footprint for the plan.
+  //   jangnong(T, {w = 1.15, d = 0.5, h = 1.62, tiers = 2, fittings = 'brass', tone})   이층장: tiers of a panelled chest on a plinth
+  //   bandaji(T, {w = 0.95, d = 0.46, h = 0.78, fittings, tone})       반닫이: the upper half of the front is the lid
+  //   ibuljang(T, {w = 1.3, d = 0.56, h = 0.82, colors})               이불장 with folded bedding (요 · 이불) and two pillows on top
+  //   gyeongdae(T, {w = 0.4, d = 0.3, h = 0.17})                        경대: a drawer box with a mirror leaning back on it
+  //   seoan(T, {w = 1.0, d = 0.36, h = 0.34})                            서안: the top's ends curl up like a scroll, a drawer
+  //   mungap(T, {w = 1.4, d = 0.34, h = 0.5, layout = 'dDDd'})          문갑: d = two drawers, D = a door, column by column
+  //   sabangtakja(T, {w = 0.44, d = 0.44, h = 1.45, levels = 4}) -> [{x, y, z}]   사방탁자: open levels over a drawer
+  //   chaekjang(T, {w = 1.0, d = 0.38, h = 1.7, levels = 4, seed})      책장 full of thread-bound books lying flat + book cases
+  //   books(T, {w = 0.2, d = 0.28, n = 6, seed})                        a stack of thread-bound books (선장본)
+  //   hwaro(T, {s = 1, light = true}) -> {top, glow}                     놋화로: ash, charcoal, embers that glow, fire tongs
+  //   dadeumitdol(T, {w = 0.62, d = 0.27, h = 0.19}) -> {top}           다듬잇돌 (청석) on wooden rests, a folded cloth, two 방망이
+  //   geomungo(T, {len = 1.6, w = 0.2, stand = 0.22})                   거문고 on two trestles: arched body, 6 strings, 16 괘, 3 안족
+  //   baduk(T, {w = 0.45, d = 0.42})                                    바둑판 on four legs: 19 × 19 lines, a game, two 바둑통
+  //   gobi(T, {m: R.wm(side, u, v, 0), w = 0.34, h = 0.95, wall})       고비: a letter rack hung on the wall, letters tucked in
+  //   boryo(T, {w = 1.9, d = 0.9, tint, trim, accent})                  보료 + 장침 + 안석 + two 사방침
+  //   banjitgori(T, {w = 0.34, d = 0.26})                               반짇고리: an open sewing box, 실패, 골무, rolls of cloth
+  //   munbang(T, {x, y = the desk top, z, rotY})                        문방사우 on a desk: 벼루 · 먹 · 필통 with brushes · 연적 · paper
+  //   teaSet(T, {tint}) -> {top, spout}                                 a small round tray with a 다관 and three cups
+  //   foldScreen(T, {art, panels = 10, artH = 1.3, fold = 0.3}) -> {w, h, center}   병풍 whose artwork is ONE mesh (one draw
+  //                    call) across its framed panels; the panel width follows the artwork's aspect
+  (function roomsB() {
+    const ZR = (a) => new THREE.Matrix4().makeRotationZ(a);
+    const XR = (a) => new THREE.Matrix4().makeRotationX(a);
+    const upright = (len, a, b, bev) => KG.timber(len, a, b, bev).applyMatrix4(ZR(PI / 2));    // a timber standing up
+    const sub = (T) => ({ add: (...a) => T.add(...a), ctx: T.ctx, rnd: T.rnd, low: T.low });  // a kit generator without its own plan footprint
+    const footp = (T, o, w, d, color) => { const q = Math.abs(Math.sin(num(o.rotY, 0))) > 0.7; T.planItem?.(num(o.x, 0), num(o.z, 0), q ? d : w, q ? w : d, color); };
+    const noCast = (o) => ({ ...o, cast: false });
+    const P3 = (m, x, y, z) => { const v = new THREE.Vector3(x, y, z).applyMatrix4(m); return { x: v.x, y: v.y, z: v.z }; };
+    /** 들쇠: a drop handle hanging on each side of a box */
+    function sideHandles(T, m, w, y, fit, F) {
+      for (const sx of [-1, 1]) {
+        const g = new THREE.TorusGeometry(0.042, 0.005, 5, 12, PI).applyMatrix4(ZR(PI)).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2));
+        T.add(fit, g, mul(m, M(sx * (w / 2 + 0.01), y, 0)), null, F);
+        for (const sz of [-1, 1]) T.add(fit, KG.slab(0.006, 0.03, 0.02, 0.002), mul(m, M(sx * (w / 2 + 0.003), y + 0.004, sz * 0.042)), null, F);
+      }
+    }
+
+    function jangnong(T, o = {}) {
+      const w = num(o.w, 1.15), d = num(o.d, 0.5), h = num(o.h, 1.62), tiers = Math.max(1, Math.round(num(o.tiers, 2))), m = base(T, o);
+      const tone = o.tone || '#9a6a40', frame = o.frameTone || '#58331f', fit = o.fittings === false ? null : (o.fittings || 'brass'), F = noCast(o);
+      const plinth = 0.13, th = (h - plinth) / tiers;
+      // 족대: a plinth with a cut-out apron on four square feet
+      T.add('furn', KG.slab(w + 0.02, 0.035, d + 0.02, 0.006), mul(m, M(0, plinth - 0.0175, 0)), frame, o);
+      T.add('furn', KG.timber(w - 0.1, 0.05, 0.02, 0.004), mul(m, M(0, plinth - 0.06, d / 2 - 0.005)), frame, F);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) T.add('furn', KG.slab(0.06, plinth - 0.035, 0.06, 0.005), mul(m, M(sx * (w / 2 - 0.035), (plinth - 0.035) / 2, sz * (d / 2 - 0.035))), frame, o);
+      for (let i = 0; i < tiers; i++) {
+        const tm = mul(m, M(0, plinth + th * i, 0)), td = d - 0.012 * i;
+        chest(sub(T), { m: tm, w, d: td, h: th - 0.008, legs: 0, doors: 2, drawers: i === tiers - 1 ? 2 : 0, fittings: fit || false, tone, frameTone: frame, panelTone: o.panelTone || '#a87448', wall: o.wall, cast: o.cast });
+        if (!fit) continue;
+        // 나비경첩: a butterfly of brass at the outer edge of each door, a round 앞바탕 between the doors
+        const ph = th - 0.1 - (i === tiers - 1 ? 0.12 : 0);
+        for (const sx of [-1, 1]) for (const fy of [0.25, 0.75]) for (const k of [-1, 1]) T.add(fit, KG.slab(0.05, 0.03, 0.004, 0.0015).applyMatrix4(ZR(k * 0.55)), mul(tm, M(sx * (w / 2 - 0.085) + k * 0.016 * sx, 0.05 + ph * fy, td / 2 + 0.016)), null, F);
+        sideHandles(T, tm, w, th - 0.14, fit, F);
+      }
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + h + 0.03 };
+    }
+
+    function bandaji(T, o = {}) {
+      const w = num(o.w, 0.95), d = num(o.d, 0.46), h = num(o.h, 0.78), feet = 0.06, m = base(T, o), F = noCast(o);
+      const tone = o.tone || '#7e4a2c', frame = o.frameTone || '#4b2a18', pnl = o.panelTone || '#93583a', fit = o.fittings === false ? null : (o.fittings || 'brass');
+      const bh = h - feet, fz = d / 2, st = 0.045, midY = feet + bh * 0.5;
+      T.add('furn', KG.slab(w, bh, d, 0.008), mul(m, M(0, feet + bh / 2, 0)), tone, o);
+      T.add('furn', KG.slab(w + 0.04, 0.03, d + 0.03, 0.008), mul(m, M(0, h + 0.015, 0)), frame, o);            // 천판
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) T.add('furn', KG.slab(0.075, feet, 0.075, 0.006), mul(m, M(sx * (w / 2 - 0.05), feet / 2, sz * (d / 2 - 0.05))), frame, o);
+      // the front: stiles and three rails; the lid is the upper half, two sunk panels below
+      for (const sx of [-1, 1]) T.add('furn', upright(bh, st, 0.012, 0.003), mul(m, M(sx * (w / 2 - st / 2), feet + bh / 2, fz + 0.006)), frame, F);
+      for (const y of [feet + st / 2, midY, h - st / 2]) T.add('furn', KG.timber(w - st * 2, st, 0.012, 0.003), mul(m, M(0, y, fz + 0.006)), frame, F);
+      const iw = w - st * 2, lh = h - st - midY - st / 2, lo = midY - st / 2 - (feet + st);
+      T.add('furn', KG.slab(iw - 0.03, lh - 0.03, 0.01, 0.003), mul(m, M(0, midY + st / 2 + lh / 2, fz + 0.01)), pnl, F);
+      for (const sx of [-1, 1]) T.add('furn', KG.slab(iw / 2 - 0.05, lo - 0.05, 0.008, 0.003), mul(m, M(sx * iw / 4, feet + st + lo / 2, fz + 0.008)), pnl, F);
+      T.add('furn', upright(lo, 0.03, 0.012, 0.003), mul(m, M(0, feet + st + lo / 2, fz + 0.008)), frame, F);
+      if (fit) {
+        for (const sx of [-0.27, 0.27]) {        // 경첩: the lid's hinges cross the middle rail
+          T.add(fit, KG.slab(0.05, 0.13, 0.005, 0.002), mul(m, M(sx * w, midY + 0.025, fz + 0.016)), null, F);
+          T.add(fit, geo.cyl(0.008, 0.008, 0.056, 6).applyMatrix4(ZR(PI / 2)), mul(m, M(sx * w, midY - 0.02, fz + 0.02)), null, F);
+        }
+        // 앞바탕: the big round plate of the lock, its hasp and the lock bar
+        T.add(fit, geo.cyl(0.1, 0.1, 0.005, 24).applyMatrix4(XR(PI / 2)), mul(m, M(0, midY + st / 2 + lh * 0.45, fz + 0.017)), null, F);
+        T.add(fit, geo.cyl(0.07, 0.07, 0.006, 6).applyMatrix4(XR(PI / 2)), mul(m, M(0, midY + st / 2 + lh * 0.45, fz + 0.02)), '#d8b45a', F);
+        T.add(fit, KG.slab(0.03, 0.1, 0.01, 0.003), mul(m, M(0, midY + 0.03, fz + 0.022)), null, F);
+        T.add(fit, KG.slab(0.12, 0.026, 0.024, 0.005), mul(m, M(0, midY - 0.012, fz + 0.034)), '#a8842e', F);
+        // 감잡이 on the corners, a row of 광두정 (round nail heads) along the top rail
+        for (const sx of [-1, 1]) for (const y of [feet + 0.045, h - 0.045]) T.add(fit, KG.slab(0.1, 0.065, 0.005, 0.002), mul(m, M(sx * (w / 2 - 0.05), y, fz + 0.014)), null, F);
+        for (let i = 0; i < 7; i++) T.add(fit, geo.cyl(0.009, 0.009, 0.006, 6).applyMatrix4(XR(PI / 2)), mul(m, M(-iw / 2 + (iw * (i + 0.5)) / 7, h - st / 2, fz + 0.015)), null, F);
+        sideHandles(T, m, w, h - 0.17, fit, F);
+      }
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + h + 0.03 };
+    }
+
+    function ibuljang(T, o = {}) {
+      const w = num(o.w, 1.3), d = num(o.d, 0.56), h = num(o.h, 0.82), m = base(T, o);
+      chest(sub(T), { m, w, d, h, legs: 0.1, doors: 2, drawers: 0, fittings: o.fittings || 'brass', tone: o.tone || '#a06c42', frameTone: o.frameTone || '#5d3a22', panelTone: o.panelTone || '#b07c4c', wall: o.wall, cast: o.cast });
+      let y = h + 0.03;
+      // folded 요 and 이불: soft, rounded layers of silk in quiet colours, each with its white cotton 홑청 showing at the fold
+      const cols = o.colors || ['#ece6d6', '#2f4767', '#86302c', '#5d7a58', '#b48a40'];
+      for (let i = 0; i < cols.length; i++) {
+        const lh = 0.1 + ((i * 7) % 3) * 0.016, lw = w * (0.93 - ((i * 5) % 3) * 0.015), ld = d * 0.9, dx = (((i * 3) % 5) - 2) * 0.01;
+        const g = geo.grid(10, 4, (gi, gj, out) => {   // a pillowy slab: the front edge bulges and rounds over
+          const u = gi / 10 - 0.5, v = gj / 4;
+          const bulge = Math.sin(v * PI) * lh * 0.42, sag = (1 - Math.cos(u * PI * 2)) * 0.004;
+          out[0] = u * lw; out[1] = v * lh - sag; out[2] = ld / 2 + bulge * 0.5; out[3] = u * lw; out[4] = v * lh;
+        });
+        T.add('cloth', KG.slab(lw, lh * 0.9, ld - lh * 0.4, Math.min(0.045, lh * 0.45)), mul(m, M(dx, y + lh * 0.45, -lh * 0.1)), cols[i], o);
+        T.add('cloth', g, mul(m, M(dx, y, -lh * 0.35)), cols[i], noCast(o));
+        T.add('cloth', KG.slab(lw * 0.97, lh * 0.18, 0.012, 0.004), mul(m, M(dx, y + lh * 0.5, ld / 2 - lh * 0.12)), '#f4f0e6', noCast(o));
+        y += lh * 0.92;
+      }
+      // 베개: two pillows with embroidered round ends (베갯모)
+      for (const sx of [-1, 1]) {
+        const r = 0.085, len = 0.5, px = sx * w * 0.2;
+        T.add('cloth', KG.lathe([[0, 0], [r * 0.9, 0], [r, 0.03], [r, len - 0.03], [r * 0.9, len], [0, len]], 16).applyMatrix4(ZR(-PI / 2)), mul(m, M(px - len / 2, y + r * 0.92, 0.03, 0, 1, 0.9, 1)), sx < 0 ? '#ece5d4' : '#d9c39c', o);
+        for (const e of [-1, 1]) {
+          T.add('cloth', geo.cyl(r * 0.93, r * 0.93, 0.012, 16).applyMatrix4(ZR(PI / 2)), mul(m, M(px + e * (len / 2 + 0.004), y + r * 0.92, 0.03, 0, 1, 0.9, 1)), '#9e2a28', noCast(o));
+          T.add('paint', geo.ring(r * 0.2, r * 0.62, 16).applyMatrix4(ZR(-e * PI / 2)), mul(m, M(px + e * (len / 2 + 0.011), y + r * 0.92, 0.03, 0, 1, 0.9, 1)), e < 0 ? '#d9a62c' : '#3d7a5a', noCast(o));
+        }
+      }
+      y += 0.1;
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + y + 0.15, chestTop: num(o.y, 0) + h + 0.03 };
+    }
+
+    function gyeongdae(T, o = {}) {
+      const w = num(o.w, 0.4), d = num(o.d, 0.3), bh = num(o.h, 0.17), m = base(T, o), tone = o.tone || '#6e2e1c', fit = o.fittings || 'brass', F = noCast(o);
+      T.add('lacquer', KG.slab(w, bh, d, 0.006), mul(m, M(0, bh / 2, 0)), tone, o);
+      T.add('lacquer', KG.slab(w + 0.02, 0.016, d + 0.02, 0.004), mul(m, M(0, bh + 0.008, 0)), '#4a1e12', o);
+      for (const sx of [-1, 1]) {
+        T.add('lacquer', KG.slab(w / 2 - 0.03, bh - 0.05, 0.008, 0.002), mul(m, M(sx * w / 4, bh / 2, d / 2 + 0.003)), '#83402a', F);
+        T.add(fit, geo.cyl(0.012, 0.012, 0.008, 10).applyMatrix4(XR(PI / 2)), mul(m, M(sx * w / 4, bh / 2, d / 2 + 0.01)), null, F);
+      }
+      for (const sx of [-1, 1]) for (const y of [0.02, bh - 0.02]) T.add(fit, KG.slab(0.04, 0.024, 0.004, 0.0015), mul(m, M(sx * (w / 2 - 0.02), y, d / 2 + 0.003)), null, F);
+      // the mirror: a lacquered frame leaning back on its stays, the polished glass, brass corners
+      const fw = w - 0.03, fh = fw * 1.05, tilt = -0.3, mm = mul(m, mul(M(0, bh + 0.016, -d / 2 + 0.06, 0, 1, 1, 1, tilt), M(0, fh / 2, 0)));
+      for (const sy of [-1, 1]) T.add('lacquer', KG.timber(fw, 0.028, 0.022, 0.004), mul(mm, M(0, sy * (fh / 2 - 0.014), 0)), '#5a2416', o);
+      for (const sx of [-1, 1]) T.add('lacquer', upright(fh - 0.05, 0.028, 0.022, 0.004), mul(mm, M(sx * (fw / 2 - 0.014), 0, 0)), '#5a2416', o);
+      T.add('lacquer', KG.quad(fw - 0.04, fh - 0.04).applyMatrix4(new THREE.Matrix4().makeRotationY(PI)), mul(mm, M(0, 0, -0.008)), '#4a1e12', F);
+      T.add('iron', KG.quad(fw - 0.05, fh - 0.05), mul(mm, M(0, 0, 0.004)), o.glass || '#e4e8ea', F);
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) T.add(fit, KG.slab(0.03, 0.03, 0.004, 0.001), mul(mm, M(sx * (fw / 2 - 0.016), sy * (fh / 2 - 0.016), 0.012)), null, F);
+      for (const sx of [-1, 1]) T.add('lacquer', KG.span(sx * (fw / 2 - 0.02), bh + 0.02, 0.02, sx * (fw / 2 - 0.02), bh + 0.16, -d / 2 + 0.03, 0.014, 0.012, 0.003), m, '#5a2416', F);
+      footp(T, o, w, d);
+      const c = P3(mm, 0, 0, 0.05);
+      return { w, d, top: num(o.y, 0) + bh + fh * Math.cos(tilt) + 0.02, mirror: c };
+    }
+
+    function seoan(T, o = {}) {
+      const w = num(o.w, 1.0), d = num(o.d, 0.36), h = num(o.h, 0.34), m = base(T, o), F = noCast(o);
+      const tone = o.tone || '#7b4a2a', dark = o.frameTone || '#4a2a18', fit = o.fittings || 'brass', tt = 0.026;
+      T.add('furn', KG.slab(w, tt, d, 0.006), mul(m, M(0, h - tt / 2, 0)), tone, o);
+      // 두루마리: the two ends of the top roll up like a scroll
+      for (const sx of [-1, 1]) {
+        T.add('furn', geo.cyl(0.024, 0.024, d - 0.004, 12).applyMatrix4(XR(PI / 2)), mul(m, M(sx * (w / 2 - 0.006), h + 0.006, 0)), tone, o);
+        T.add('furn', KG.slab(0.03, 0.03, d - 0.006, 0.006), mul(m, M(sx * (w / 2 - 0.03), h - 0.005, 0)), tone, F);
+      }
+      // the drawer under the top, its brass pull
+      T.add('furn', KG.slab(w - 0.2, 0.065, d - 0.06, 0.004), mul(m, M(0, h - tt - 0.0325, -0.01)), tone, o);
+      T.add('furn', KG.slab(w * 0.42, 0.045, 0.008, 0.002), mul(m, M(0, h - tt - 0.0325, d / 2 - 0.035)), o.panelTone || '#93603a', F);
+      T.add(fit, new THREE.TorusGeometry(0.015, 0.0035, 5, 10), mul(m, M(0, h - tt - 0.038, d / 2 - 0.028)), null, F);
+      T.add(fit, geo.cyl(0.02, 0.02, 0.003, 10).applyMatrix4(XR(PI / 2)), mul(m, M(0, h - tt - 0.028, d / 2 - 0.03)), null, F);
+      // 판각: two side boards with a cloud cut-out (운각), on foot rails
+      for (const sx of [-1, 1]) {
+        const x = sx * (w / 2 - 0.07);
+        T.add('furn', KG.slab(0.024, h - tt - 0.03, d - 0.05, 0.004), mul(m, M(x, (h - tt + 0.03) / 2, 0)), tone, o);
+        T.add('furn', KG.quad(d * 0.5, (h - tt) * 0.4).applyMatrix4(new THREE.Matrix4().makeRotationY(sx * PI / 2)), mul(m, M(x + sx * 0.0125, (h - tt) * 0.42, 0)), '#2a170c', F);
+        T.add('furn', KG.slab(0.05, 0.03, d - 0.01, 0.006), mul(m, M(x, 0.015, 0)), dark, o);
+      }
+      T.add('furn', KG.timber(w - 0.16, 0.025, 0.02, 0.003), mul(m, M(0, 0.07, -d / 2 + 0.04)), dark, o);
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + h };
+    }
+
+    function mungap(T, o = {}) {
+      const w = num(o.w, 1.4), d = num(o.d, 0.34), h = num(o.h, 0.5), legs = num(o.legs, 0.07), m = base(T, o), F = noCast(o);
+      const tone = o.tone || '#8c5a36', dark = o.frameTone || '#4f2f1c', pnl = o.panelTone || '#a87244', fit = o.fittings === false ? null : (o.fittings || 'brass');
+      const st = 0.035, bh = h - legs, fz = d / 2 + 0.002;
+      T.add('furn', KG.slab(w - 0.01, bh - 0.01, d - 0.01, 0.005), mul(m, M(0, legs + bh / 2, 0)), tone, o);
+      T.add('furn', KG.slab(w + 0.02, 0.022, d + 0.02, 0.005), mul(m, M(0, h + 0.011, 0)), dark, o);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) T.add('furn', upright(h, st, st, 0.004), mul(m, M(sx * (w - st) / 2, h / 2, sz * (d - st) / 2)), dark, o);
+      for (const y of [legs + st / 2, h - st / 2]) T.add('furn', KG.timber(w - st * 2, st, 0.014, 0.003), mul(m, M(0, y, fz)), dark, F);
+      T.add('furn', KG.timber(w - st * 2, legs * 0.55, 0.014, 0.003), mul(m, M(0, legs * 0.6, d / 2 - 0.01)), dark, F);   // apron between the feet
+      const lay = String(o.layout || 'dDDd'), n = lay.length, iw = w - st * 2, cw = iw / n, y0 = legs + st, ih = h - st * 2 - legs;
+      for (let i = 0; i < n; i++) {
+        const cx = -iw / 2 + cw * (i + 0.5);
+        if (i) T.add('furn', upright(ih, 0.022, 0.014, 0.003), mul(m, M(-iw / 2 + cw * i, y0 + ih / 2, fz)), dark, F);
+        if (lay[i] === 'd') {
+          for (let j = 0; j < 2; j++) {
+            const yc = y0 + (ih * (j + 0.5)) / 2;
+            T.add('furn', KG.slab(cw - 0.03, ih / 2 - 0.03, 0.012, 0.003), mul(m, M(cx, yc, fz + 0.002)), pnl, F);
+            if (fit) { T.add(fit, geo.cyl(0.018, 0.018, 0.003, 10).applyMatrix4(XR(PI / 2)), mul(m, M(cx, yc + 0.004, fz + 0.01)), null, F); T.add(fit, new THREE.TorusGeometry(0.013, 0.0033, 5, 10), mul(m, M(cx, yc - 0.01, fz + 0.013)), null, F); }
+          }
+          T.add('furn', KG.timber(cw - 0.02, 0.016, 0.012, 0.003), mul(m, M(cx, y0 + ih / 2, fz + 0.001)), dark, F);
+        } else {
+          T.add('furn', KG.slab(cw - 0.03, ih - 0.03, 0.012, 0.003), mul(m, M(cx, y0 + ih / 2, fz + 0.002)), pnl, F);
+          T.add('furn', KG.slab(cw - 0.1, ih - 0.1, 0.006, 0.002), mul(m, M(cx, y0 + ih / 2, fz + 0.01)), tone, F);
+          if (fit) {
+            const hx = cx + (i < n / 2 ? -1 : 1) * (cw / 2 - 0.028), px = cx + (i < n / 2 ? 1 : -1) * (cw / 2 - 0.05);
+            for (const fy of [0.22, 0.78]) T.add(fit, KG.slab(0.026, 0.05, 0.004, 0.0015), mul(m, M(hx, y0 + ih * fy, fz + 0.012)), null, F);
+            T.add(fit, geo.cyl(0.028, 0.028, 0.003, 14).applyMatrix4(XR(PI / 2)), mul(m, M(px, y0 + ih / 2 + 0.008, fz + 0.012)), null, F);
+            T.add(fit, new THREE.TorusGeometry(0.015, 0.0035, 5, 10), mul(m, M(px, y0 + ih / 2 - 0.012, fz + 0.016)), null, F);
+          }
+        }
+      }
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + h + 0.022 };
+    }
+
+    function sabangtakja(T, o = {}) {
+      const w = num(o.w, 0.44), d = num(o.d, 0.44), h = num(o.h, 1.45), levels = Math.max(2, Math.round(num(o.levels, 4))), m = base(T, o), tone = o.tone || '#7a4a2c';
+      const spots = shelf(sub(T), { m, w, d, h, levels, tone, wall: o.wall, cast: o.cast, topSpot: true });
+      // the lowest level is a drawer box; a thin cap rail on the top board
+      const y1 = 0.1 + (h - 0.12) / levels, yc = 0.1 + (y1 - 0.1) / 2;
+      T.add('furn', KG.slab(w - 0.05, y1 - 0.13, d - 0.05, 0.004), mul(m, M(0, yc, 0)), tone, o);
+      T.add('furn', KG.slab(w - 0.09, y1 - 0.17, 0.008, 0.003), mul(m, M(0, yc, d / 2 - 0.022)), o.panelTone || '#9a6440', noCast(o));
+      T.add(o.fittings || 'brass', new THREE.TorusGeometry(0.014, 0.0035, 5, 10), mul(m, M(0, yc - 0.006, d / 2 - 0.012)), null, noCast(o));
+      for (const sz of [-1, 1]) T.add('furn', KG.timber(w, 0.02, 0.016, 0.003), mul(m, M(0, h - 0.01, sz * (d / 2 - 0.008))), '#5a3420', o);
+      footp(T, o, w, d);
+      return spots.slice(1);   // the drawer level is not a shelf
+    }
+
+    function books(T, o = {}) {
+      const w = num(o.w, 0.2), d = num(o.d, 0.28), n = Math.max(1, Math.round(num(o.n, 6))), m = base(T, o), r = G.util.rng('hk:bk:' + (o.seed || 0)), F = noCast(o);
+      let y = 0;
+      for (let i = 0; i < n; i++) {
+        const t = 0.011 + r() * 0.01, sh = 0.86 + r() * 0.2, rot = (r() - 0.5) * 0.08, dx = (r() - 0.5) * 0.012;
+        const cover = new THREE.Color(0.86 * sh, 0.7 * sh, 0.38 * sh);   // 치자 yellow covers, faded unevenly
+        const bm = mul(m, M(dx, y + t / 2, (r() - 0.5) * 0.01, rot));
+        T.add('paint', geo.box(w, t, d), bm, cover, i === n - 1 ? o : F);
+        T.add('paint', geo.box(w - 0.012, t - 0.004, d + 0.002), bm, '#efe7d2', F);            // the page block shows between the covers
+        if (i === n - 1 || r() < 0.3) T.add('paint', geo.box(0.022, 0.0012, d * 0.5), mul(bm, M(-w / 2 + 0.03, t / 2 + 0.0006, 0)), '#f4efe2', F);   // 제첨: the paper title slip
+        y += t;
+      }
+      return { top: num(o.y, 0) + y };
+    }
+
+    function chaekjang(T, o = {}) {
+      const w = num(o.w, 1.0), d = num(o.d, 0.38), h = num(o.h, 1.7), levels = Math.max(2, Math.round(num(o.levels, 4))), m = base(T, o);
+      const tone = o.tone || '#6e4128', dark = o.frameTone || '#45281a', r = G.util.rng('hk:shelves:' + (o.seed || 0)), legs = 0.08, st = 0.035;
+      for (const sx of [-1, 1]) T.add('furn', KG.slab(0.022, h - legs, d - 0.01, 0.004), mul(m, M(sx * (w / 2 - 0.016), legs + (h - legs) / 2, 0)), tone, o);
+      T.add('furn', KG.quad(w - 0.04, h - legs - 0.02), mul(m, M(0, legs + (h - legs) / 2, -d / 2 + 0.012)), '#4a2c1a', noCast(o));
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) T.add('furn', upright(h, st, st, 0.004), mul(m, M(sx * (w - st) / 2, h / 2, sz * (d - st) / 2)), dark, o);
+      T.add('furn', KG.slab(w + 0.03, 0.025, d + 0.03, 0.005), mul(m, M(0, h + 0.0125, 0)), dark, o);
+      T.add('furn', KG.timber(w - st * 2, legs * 0.6, 0.014, 0.003), mul(m, M(0, legs * 0.55, d / 2 - 0.008)), dark, noCast(o));
+      const iw = w - 0.07, gap = (h - legs - 0.04) / levels;
+      for (let l = 0; l <= levels; l++) {
+        const y = legs + 0.02 + gap * l;
+        T.add('furn', KG.slab(w - 0.04, 0.02, d - 0.02, 0.004), mul(m, M(0, y, 0)), tone, o);
+        if (l === levels) break;
+        T.add('furn', KG.timber(w - st * 2, 0.026, 0.014, 0.003), mul(m, M(0, y - 0.004, d / 2 - 0.008)), dark, noCast(o));
+        const room = gap - 0.05;
+        let x = -iw / 2;
+        while (x < iw / 2 - 0.13) {
+          const bw = 0.16 + r() * 0.06, bd = Math.min(d - 0.07, 0.24 + r() * 0.05);
+          if (x + bw > iw / 2) break;
+          const z = d / 2 - bd / 2 - 0.035;
+          if (r() < 0.2) {   // 책갑: a cloth-covered book case with its bone clasps
+            const hh = Math.min(room - 0.02, 0.1 + r() * 0.1), c = r() < 0.5 ? '#2c3b5e' : '#5b3a2a';
+            T.add('paint', KG.slab(bw, hh, bd, 0.004), mul(m, M(x + bw / 2, y + 0.01 + hh / 2, z)), c, o);
+            for (const fy of [0.3, 0.7]) T.add('paint', geo.box(0.012, 0.022, 0.006), mul(m, M(x + bw - 0.004, y + 0.01 + hh * fy, z + bd / 2 - 0.02)), '#e6dcc4', noCast(o));
+            T.add('paint', geo.box(0.035, hh * 0.6, 0.002), mul(m, M(x + bw * 0.3, y + 0.01 + hh / 2, z + bd / 2 + 0.001)), '#ece3cc', noCast(o));
+          } else if (r() < 0.12) {   // a gap: one leaning book
+            T.add('paint', geo.box(0.018, Math.min(room - 0.02, 0.24), bd * 0.9), mul(m, M(x + 0.06, y + 0.01 + Math.min(room - 0.02, 0.24) / 2, z, 0, 1, 1, 1, 0, -0.22)), '#c4a058', o);
+          } else books(T, { m: mul(m, M(x + bw / 2, y + 0.01, z, (r() - 0.5) * 0.05)), w: bw, d: bd, n: Math.max(2, Math.floor((room * (0.3 + r() * 0.65)) / 0.016)), seed: r() * 1e6 | 0, wall: o.wall });
+          x += bw + 0.012 + r() * 0.025;
+        }
+      }
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + h + 0.025 };
+    }
+
+    function hwaro(T, o = {}) {
+      const s = num(o.s, 1), m = mul(base(T, o), M(0, 0, 0, 0, s)), F = noCast(o), r = T.rnd || G.util.rng('hk:hwaro');
+      const key = o.mat || 'brass', tn = o.tint || '#a8844a';
+      // 놋화로: a wide brass bowl with a flat rim (전) on three feet, two ring handles
+      T.add(key, KG.lathe([[0, 0.06], [0.1, 0.06], [0.13, 0.05], [0.13, 0.09], [0.21, 0.2], [0.25, 0.232], [0.275, 0.242], [0.272, 0.256], [0.23, 0.254], [0.2, 0.232], [0.11, 0.13], [0, 0.12]], 24), m, tn, o);
+      for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + 0.5; T.add(key, KG.lathe([[0, 0], [0.026, 0], [0.032, 0.03], [0.02, 0.066], [0, 0.066]], 8), mul(m, M(Math.cos(a) * 0.105, 0, Math.sin(a) * 0.105)), '#8f6c34', o); }
+      for (const sx of [-1, 1]) T.add(key, new THREE.TorusGeometry(0.028, 0.005, 5, 12).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(sx * 0.215, 0.19, 0)), '#8f6c34', F);
+      // ash, charcoal, embers
+      T.add('paint', geo.disc(0.205, 20), mul(m, M(0, 0.216, 0)), '#a39c92', F);
+      for (let i = 0; i < 10; i++) { const a = r() * TAU, rr = Math.sqrt(r()) * 0.12; T.add('paint', new THREE.IcosahedronGeometry(0.02 + r() * 0.012, 0), mul(m, M(Math.cos(a) * rr, 0.222, Math.sin(a) * rr, r() * 3, 1, 0.65, 1)), '#2b2522', F); }
+      for (let i = 0; i < 6; i++) { const a = r() * TAU, rr = Math.sqrt(r()) * 0.08; T.add('glow', new THREE.IcosahedronGeometry(0.016 + r() * 0.01, 0), mul(m, M(Math.cos(a) * rr, 0.226, Math.sin(a) * rr, r() * 3, 1, 0.6, 1)), i % 2 ? '#ff6a24' : '#ff9a3c', F); }
+      // 부젓가락 (fire tongs) and an 인두 resting in the ash
+      T.add('iron', geo.tube(0.05, 0.215, 0.06, 0.22, 0.43, 0.13, 0.0042, 5), m, null, F);
+      T.add('iron', geo.tube(0.066, 0.215, 0.044, 0.236, 0.42, 0.112, 0.0042, 5), m, null, F);
+      T.add('iron', geo.tube(-0.08, 0.22, -0.04, -0.2, 0.3, -0.16, 0.006, 5), m, null, F);
+      T.add('furn', geo.tube(-0.2, 0.3, -0.16, -0.27, 0.35, -0.23, 0.012, 6), m, '#5a3420', F);
+      const p = P3(m, 0, 0.235, 0);
+      if (T instanceof Room && !T.low) {
+        const Fx = fxOf(T);
+        Fx.push('add', p.x, p.y - 0.004, p.z, 3, 0.2 * s, 1, 0, '#ff6c2c', 3, 0.1 * s);        // the glow of the coals: breathes
+        Fx.push('add', p.x, p.y, p.z, 0, 0.07 * s, 1.3, 0.06 * s, '#ffa84a', 7, 0.13 * s);     // little tongues over them
+      }
+      if (T.ctx && o.light !== false) T.ctx.light({ x: p.x, y: p.y + 0.3, z: p.z, color: '#ff8a40', intensity: num(o.intensity, 2.8), distance: num(o.distance, 4.6), decay: 1.8, flicker: 0.06, day: num(o.day, 0.5) });
+      footp(T, o, 0.55 * s, 0.55 * s);
+      return { r: 0.275 * s, top: num(o.y, 0) + 0.26 * s, glow: p };
+    }
+
+    function dadeumitdol(T, o = {}) {
+      const w = num(o.w, 0.62), d = num(o.d, 0.27), h = num(o.h, 0.19), m = base(T, o), F = noCast(o), lift = 0.03;
+      // two wooden rests, then the stone: dark blue-grey 청석, wider at the foot, the top rubbed smooth and rounded
+      for (const sx of [-1, 1]) T.add('furn', KG.slab(0.07, lift, d + 0.05, 0.006), mul(m, M(sx * w * 0.3, lift / 2, 0)), '#6a4428', o);
+      const hy = h / 2, hz = d / 2;
+      T.add('stone', prism([[-hy, -hz], [hy - 0.025, -hz + 0.022], [hy - 0.004, -hz + 0.05], [hy, -hz + 0.08], [hy, hz - 0.08], [hy - 0.004, hz - 0.05], [hy - 0.025, hz - 0.022], [-hy, hz]], w), mul(m, M(0, lift + hy, 0)), o.tint || '#6c757b', o);
+      // a starched cloth folded on it, one 방망이 on the cloth and one on the floor
+      const top = lift + h;
+      T.add('cloth', KG.slab(w * 0.62, 0.022, d * 0.86, 0.007), mul(m, M(-0.03, top + 0.011, 0, 0.04)), '#f4f1e7', o);
+      T.add('cloth', KG.slab(w * 0.6, 0.014, d * 0.82, 0.005), mul(m, M(-0.025, top + 0.029, 0.004, 0.06)), '#eae6d8', o);
+      const club = () => KG.lathe([[0, 0], [0.017, 0], [0.021, 0.035], [0.029, 0.14], [0.031, 0.24], [0.026, 0.29], [0.014, 0.302], [0.012, 0.38], [0.016, 0.392], [0, 0.395]], 12).applyMatrix4(ZR(-PI / 2));
+      T.add('furn', club(), mul(m, M(-0.2, top + 0.065, -0.05, 0.25)), '#c9a27a', o);
+      T.add('furn', club(), mul(m, M(-0.12, 0.031, d / 2 + 0.12, -0.35)), '#c09670', o);
+      footp(T, o, w + 0.1, d + 0.3);
+      return { w, d, top: num(o.y, 0) + top + 0.04 };
+    }
+
+    function geomungo(T, o = {}) {
+      const L = num(o.len, 1.6), W = num(o.w, 0.2), st = num(o.stand, 0.22), m = base(T, o), F = noCast(o), wood = o.tone || '#5e3c24';
+      // two trestles
+      for (const sx of [-1, 1]) {
+        const tx = sx * L * 0.32;
+        T.add('furn', KG.slab(0.06, 0.03, W + 0.1, 0.006), mul(m, M(tx, st - 0.015, 0)), '#3e2516', o);
+        for (const sz of [-1, 1]) T.add('furn', upright(st - 0.05, 0.035, 0.035, 0.004), mul(m, M(tx, 0.02 + (st - 0.05) / 2, sz * (W / 2 + 0.02))), '#3e2516', o);
+        T.add('furn', KG.slab(0.07, 0.02, W + 0.12, 0.004), mul(m, M(tx, 0.01, 0)), '#3e2516', o);
+      }
+      // the body: a flat back, an arched sounding board of paulownia, narrower towards the tail
+      const y0 = st, bt = 0.022, arch = 0.035, nu = 24, nv = 8, wAt = (t) => W * (1 - 0.14 * t);
+      T.add('furn', KG.slab(L, bt, W, 0.004), mul(m, M(0, y0 + bt / 2, 0)), '#3a2416', o);
+      const top = geo.grid(nu, nv, (i, j, out) => {
+        const t = i / nu, u = j / nv - 0.5, ww = wAt(t);
+        out[0] = (t - 0.5) * L; out[2] = u * ww; out[1] = y0 + bt + arch * (1 - 4 * u * u) * (0.85 + 0.15 * Math.sin(t * PI));
+        out[3] = t * L; out[4] = (u + 0.5) * ww;
+      }, true);
+      T.add('furn', top, m, wood, o);
+      for (const sz of [-1, 1]) T.add('furn', KG.timber(L, 0.012, 0.008, 0.002), mul(m, M(0, y0 + bt + 0.004, sz * W * 0.465)), '#3a2416', F);
+      const yAt = (t, u) => y0 + bt + arch * (1 - 4 * u * u) * (0.85 + 0.15 * Math.sin(t * PI));
+      // 대모: the dark guard where the 술대 (plectrum) strikes; 현침 (head bridge) and 봉미 (tail)
+      T.add('lacquer', KG.slab(0.2, 0.004, W * 0.62, 0.002), mul(m, M(-L * 0.36, yAt(0.14, 0) + 0.001, 0, 0, 1, 1, 1, 0, 0.02)), '#24150c', F);
+      T.add('furn', KG.slab(0.022, 0.022, W * 0.9, 0.004), mul(m, M(-L / 2 + 0.06, yAt(0.04, 0) + 0.006, 0)), '#2a170c', o);
+      T.add('furn', KG.slab(0.05, 0.03, wAt(1) * 0.95, 0.006), mul(m, M(L / 2 - 0.03, yAt(0.98, 0) + 0.004, 0)), '#2a170c', o);
+      // 16 괘 under the 2nd, 3rd and 4th strings, three 안족 under the others, six silk strings
+      const zs = [-0.38, -0.23, -0.08, 0.06, 0.2, 0.35].map((f) => f * W);
+      for (let k = 0; k < 16; k++) {
+        const t = 0.1 + k * 0.036, hh = 0.034 - k * 0.0017, zc = (zs[1] + zs[3]) / 2;
+        T.add('furn', KG.slab(0.008, hh, (zs[3] - zs[1]) + 0.03, 0.002), mul(m, M((t - 0.5) * L, yAt(t, zc / W) + hh / 2 - 0.002, zc)), '#d8c8a8', F);
+      }
+      for (const [si, t] of [[0, 0.74], [4, 0.7], [5, 0.78]]) T.add('paint', KG.lathe([[0, 0], [0.012, 0], [0.004, 0.03], [0, 0.03]], 4), mul(m, M((t - 0.5) * L, yAt(t, zs[si] / W) - 0.001, zs[si])), '#e6dcc4', F);
+      for (let s = 0; s < 6; s++) {
+        const zh = zs[s], zt = zs[s] * 0.86, ya = yAt(0.04, 0) + 0.018, yb = yAt(0.98, 0) + 0.02;
+        T.add('paint', geo.tube(-L / 2 + 0.06, ya, zh, L / 2 - 0.03, yb, zt, 0.0011 + s * 0.00012, 4), m, '#efe6cc', F);
+        T.add('cloth', geo.tube(L / 2 - 0.01, yb - 0.01, zt, L / 2 + 0.03 + (s % 2) * 0.01, y0 - 0.06 - (s % 3) * 0.02, zt * 1.3, 0.004, 4), m, ['#a3302a', '#2c4a7a', '#d0a43a', '#3d7356', '#a3302a', '#6a2f5a'][s], F);   // 부들 cords
+      }
+      footp(T, o, L, W + 0.12);
+      return { top: num(o.y, 0) + y0 + bt + arch + 0.04 };
+    }
+
+    function baduk(T, o = {}) {
+      const w = num(o.w, 0.45), d = num(o.d, 0.42), th = num(o.th, 0.13), lh = num(o.legH, 0.1), m = base(T, o), F = noCast(o), top = lh + th;
+      T.add('furn', KG.slab(w, th, d, 0.006), mul(m, M(0, lh + th / 2, 0)), o.tone || '#e2b77a', o);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) T.add('furn', KG.lathe([[0, 0], [0.03, 0], [0.042, 0.026], [0.036, 0.056], [0.022, 0.078], [0.032, lh], [0, lh]], 10), mul(m, M(sx * (w / 2 - 0.08), 0, sz * (d / 2 - 0.08))), '#a87a48', o);
+      const gw = w - 0.05, gd = d - 0.05, n = 19, lc = '#2a1d12';
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        T.add('paint', geo.box(gw, 0.0014, 0.0018), mul(m, M(0, top + 0.0007, -gd / 2 + gd * t)), lc, F);
+        T.add('paint', geo.box(0.0018, 0.0014, gd), mul(m, M(-gw / 2 + gw * t, top + 0.0007, 0)), lc, F);
+      }
+      for (const i of [3, 9, 15]) for (const j of [3, 9, 15]) T.add('paint', geo.cyl(0.0038, 0.0038, 0.0016, 8), mul(m, M(-gw / 2 + (gw * i) / 18, top + 0.0008, -gd / 2 + (gd * j) / 18)), lc, F);
+      // a game half played (black and white stones on the points)
+      const game = [[3, 3, 1], [15, 15, 0], [15, 3, 1], [3, 15, 0], [16, 5, 1], [13, 2, 0], [14, 3, 1], [9, 3, 0], [2, 9, 1], [5, 16, 0], [3, 13, 1], [4, 14, 0], [15, 9, 1], [9, 15, 0], [10, 10, 1], [11, 9, 0], [9, 9, 1], [10, 8, 0], [12, 15, 1], [16, 14, 0], [2, 5, 1], [5, 2, 0]];
+      for (const [i, j, b] of game) T.add('lacquer', new THREE.SphereGeometry(0.0108, 10, 5).scale(1, 0.42, 1), mul(m, M(-gw / 2 + (gw * i) / 18, top + 0.0046, -gd / 2 + (gd * j) / 18)), b ? '#17171a' : '#efeee8', F);
+      // 바둑통: two round lidded bowls of wood, their lids beside them
+      for (const sx of [-1, 1]) {
+        const bm = mul(m, M(sx * (w / 2 + 0.17), 0, 0.04));
+        T.add('lacquer', KG.lathe([[0, 0], [0.05, 0], [0.075, 0.02], [0.085, 0.06], [0.075, 0.1], [0.068, 0.1], [0.062, 0.03], [0, 0.03]], 16), bm, '#6a3c22', o);
+        T.add('lacquer', KG.lathe([[0, 0.012], [0.065, 0.012], [0.072, 0.02], [0.07, 0.03], [0, 0.04]], 16), mul(m, M(sx * (w / 2 + 0.17), 0, -0.13)), '#6a3c22', o);
+        for (let k = 0; k < 9; k++) T.add('lacquer', new THREE.SphereGeometry(0.0108, 8, 4).scale(1, 0.42, 1), mul(bm, M((k % 3 - 1) * 0.022, 0.035 + Math.floor(k / 3) * 0.006, (Math.floor(k / 3) - 1) * 0.022)), sx < 0 ? '#17171a' : '#efeee8', F);
+      }
+      footp(T, o, w + 0.5, d);
+      return { w, d, top: num(o.y, 0) + top };
+    }
+
+    function gobi(T, o = {}) {
+      const w = num(o.w, 0.34), h = num(o.h, 0.95), m = base(T, o), wall = o.wall, F = { wall, cast: false }, tone = o.tone || '#7a4a2a';
+      T.add('furn', KG.slab(w, h, 0.012, 0.003), mul(m, M(0, -h / 2, 0.008)), tone, { wall });
+      for (const sx of [-1, 1]) T.add('furn', upright(h, 0.024, 0.034, 0.003), mul(m, M(sx * (w / 2 - 0.012), -h / 2, 0.026)), '#4e2e1b', { wall });
+      T.add('furn', KG.timber(w + 0.06, 0.03, 0.04, 0.004), mul(m, M(0, -0.015, 0.026)), '#4e2e1b', { wall });
+      const r = G.util.rng('hk:gobi');
+      for (const fy of [0.45, 0.8]) {
+        T.add('furn', KG.timber(w - 0.02, 0.055, 0.014, 0.003), mul(m, M(0, -h * fy, 0.05)), '#5a361f', { wall });
+        // letters (folded 한지 and envelopes) tucked behind the slat
+        for (let k = 0; k < 3; k++) T.add('hanji', KG.quad(0.075 + r() * 0.03, 0.2 + r() * 0.06), mul(m, M(-w * 0.3 + k * w * 0.3 + (r() - 0.5) * 0.02, -h * fy + 0.06, 0.034 + k * 0.003, 0, 1, 1, 1, 0, (k - 1) * 0.1 + (r() - 0.5) * 0.08)), k === 1 ? '#e9dcbc' : '#f1e8d2', F);
+      }
+      T.add('cloth', geo.tube(-0.06, 0.005, 0.012, 0, 0.07, 0.008, 0.003, 4), m, '#7a2e22', F);
+      T.add('cloth', geo.tube(0.06, 0.005, 0.012, 0, 0.07, 0.008, 0.003, 4), m, '#7a2e22', F);
+      return P3(m, 0, -h * 0.55, 0.08);
+    }
+
+    function boryo(T, o = {}) {
+      const w = num(o.w, 1.9), d = num(o.d, 0.9), m = base(T, o), main = o.tint || '#8e2a26', trim = o.trim || '#22386a', acc = o.accent || '#d6a636';
+      cushion(sub(T), { m, w, d, h: 0.11, tint: main, trim, wall: o.wall });
+      // 장침: a long bolster along the back, with embroidered round ends
+      const r = 0.1, len = w * 0.9;
+      T.add('cloth', geo.cyl(r, r, len, 16).applyMatrix4(ZR(PI / 2)), mul(m, M(0, 0.11 + r, -d / 2 + r + 0.02)), trim, o);
+      for (const e of [-1, 1]) {
+        T.add('cloth', geo.cyl(r + 0.005, r + 0.005, 0.03, 16).applyMatrix4(ZR(PI / 2)), mul(m, M(e * len / 2, 0.11 + r, -d / 2 + r + 0.02)), acc, o);
+        T.add('paint', geo.cyl(r * 0.58, r * 0.58, 0.004, 14).applyMatrix4(ZR(PI / 2)), mul(m, M(e * (len / 2 + 0.017), 0.11 + r, -d / 2 + r + 0.02)), main, noCast(o));
+      }
+      // 안석: a tall back cushion leaning on the bolster
+      const am = mul(m, M(0, 0.11, -d / 2 + 0.3, 0, 1, 1, 1, -0.3));
+      T.add('cloth', KG.slab(0.64, 0.66, 0.15, 0.05), mul(am, M(0, 0.33, 0)), main, o);
+      T.add('cloth', KG.slab(0.6, 0.06, 0.155, 0.02), mul(am, M(0, 0.58, 0)), trim, noCast(o));
+      T.add('cloth', KG.quad(0.2, 0.2).applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 4)), mul(am, M(0, 0.34, 0.077)), acc, noCast(o));
+      // 사방침: two square armrests at the sides
+      for (const sx of [-1, 1]) {
+        const pm = mul(m, M(sx * (w / 2 - 0.22), 0.11, -d / 2 + 0.42));
+        T.add('cloth', KG.slab(0.3, 0.3, 0.3, 0.07), mul(pm, M(0, 0.15, 0)), trim, o);
+        for (const k of [0, 1, 2, 3]) T.add('cloth', KG.quad(0.12, 0.12).applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 4)), mul(pm, M(0, 0.15, 0, (k * PI) / 2)).multiply(M(0, 0, 0.151)), acc, noCast(o));
+      }
+      footp(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + 0.11 };
+    }
+
+    function banjitgori(T, o = {}) {
+      const w = num(o.w, 0.34), d = num(o.d, 0.26), h = num(o.h, 0.1), m = base(T, o), F = noCast(o);
+      // a box woven of rush, lined with red silk; the lid leans against its back
+      T.add('basket', KG.slab(w, h, d, 0.014), mul(m, M(0, h / 2, 0)), '#c8a465', o);
+      T.add('cloth', KG.floor(w - 0.05, d - 0.05), mul(m, M(0, h + 0.002, 0)), '#9c2f2a', F);
+      T.add('basket', KG.slab(w + 0.01, 0.028, d + 0.01, 0.012), mul(m, M(0, d / 2 + 0.02, -d / 2 - 0.04, 0, 1, 1, 1, -(PI / 2 - 0.3))), '#bf9a5a', o);
+      // 실패 (thread winders) with coloured thread, 골무 (thimbles), a pair of scissors
+      const thread = ['#b8312c', '#2a4c86', '#e3b83a', '#ecebe4'];
+      thread.forEach((c, i) => {
+        const tm = mul(m, M(-w * 0.32 + i * 0.075, h + 0.012, -0.05, (i - 1.5) * 0.15));
+        T.add('furn', KG.slab(0.064, 0.012, 0.03, 0.003), tm, '#d8b888', F);
+        T.add('cloth', KG.slab(0.03, 0.02, 0.032, 0.006), mul(tm, M(0, 0.004, 0)), c, F);
+      });
+      ['#c2342e', '#2e5a9c', '#3d8a5a'].forEach((c, i) => T.add('cloth', KG.lathe([[0, 0], [0.011, 0], [0.012, 0.016], [0.009, 0.022], [0, 0.022]], 10), mul(m, M(-0.07 + i * 0.04, h + 0.003, 0.06)), c, F));
+      for (const a of [-0.25, 0.25]) T.add('iron', KG.slab(0.11, 0.004, 0.012, 0.002), mul(m, M(0.09, h + 0.006, 0.05, a)), '#55575a', F);
+      // rolls of cloth beside it
+      const rolls = [['#e9e4d8', -0.02], ['#c3b28c', 0.08], ['#5a7a9c', 0.03]];
+      rolls.forEach(([c, dz], i) => roll(sub(T), { m: mul(m, M(w / 2 + 0.24, i === 2 ? 0.088 : 0, -0.04 + dz * (i === 2 ? 0 : 1) + (i === 2 ? 0.03 : 0), PI / 2)), len: 0.38, r: 0.045, tint: c, band: '#7a5a3a', wall: o.wall }));
+      footp(T, o, w + 0.4, d + 0.1);
+      return { top: num(o.y, 0) + h + 0.03 };
+    }
+
+    function munbang(T, o = {}) {
+      const m = base(T, o), F = noCast(o);
+      // paper on the desk with a 서진 (paperweight), an open book
+      T.add('hanji', KG.slab(0.3, 0.006, 0.22, 0.001), mul(m, M(-0.06, 0.003, 0.02, 0.05)), '#f2ead6', F);
+      T.add('stone', KG.slab(0.2, 0.014, 0.024, 0.003), mul(m, M(-0.06, 0.013, -0.07, 0.05)), '#3d3a37', F);
+      for (const sx of [-1, 1]) T.add('paint', geo.box(0.12, 0.008, 0.17), mul(m, M(-0.32 + sx * 0.062, 0.006 + 0.004, 0.0, 0, 1, 1, 1, 0, -sx * 0.06)), '#efe6cf', F);
+      T.add('paint', geo.box(0.25, 0.003, 0.18), mul(m, M(-0.32, 0.0015, 0)), '#c9a35a', F);
+      // 벼루 with its pool, a stick of 먹
+      T.add('stone', KG.slab(0.2, 0.03, 0.13, 0.008), mul(m, M(0.22, 0.015, 0.02)), '#3c3c3f', o);
+      T.add('lacquer', KG.floor(0.05, 0.09), mul(m, M(0.29, 0.0305, 0.02)), '#0c0c0e', F);
+      T.add('lacquer', KG.slab(0.075, 0.016, 0.022, 0.003), mul(m, M(0.18, 0.038, -0.01, 0.35)), '#141414', F);
+      // 필통 of bamboo with brushes, a 연적 (water dropper) of celadon
+      const bx = 0.4, bz = -0.09;
+      T.add('furn', geo.cyl(0.036, 0.036, 0.12, 14), mul(m, M(bx, 0.06, bz)), '#b89a5a', o);
+      for (let k = 0; k < 5; k++) {
+        const a = k * 1.3, tx = Math.cos(a) * 0.035, tz = Math.sin(a) * 0.035, y1 = 0.24 + (k % 2) * 0.03;
+        T.add('furn', geo.tube(bx + tx * 0.3, 0.05, bz + tz * 0.3, bx + tx, y1, bz + tz, 0.0045, 5), m, '#7a5232', F);
+        T.add('cloth', geo.tube(bx + tx, y1, bz + tz, bx + tx * 1.04, y1 + 0.03, bz + tz * 1.04, 0.0055, 5), m, k % 2 ? '#2a2a2a' : '#e9e3d4', F);
+      }
+      T.add('paint', KG.lathe([[0, 0], [0.03, 0], [0.042, 0.02], [0.038, 0.04], [0.012, 0.05], [0.006, 0.062], [0, 0.062]], 12), mul(m, M(0.1, 0, -0.11)), '#a9c3b2', F);
+      // two rolls of paper at the back
+      for (let k = 0; k < 2; k++) T.add('hanji', geo.cyl(0.022, 0.022, 0.3, 10).applyMatrix4(ZR(PI / 2)), mul(m, M(-0.2 + k * 0.03, 0.022 + k * 0.04, -0.12 - k * 0.012, 0.05)), k ? '#ece2c8' : '#f3ebd6', F);
+    }
+
+    function teaSet(T, o = {}) {
+      const m = base(T, o), F = noCast(o), cel = o.tint || '#b7cbb8';
+      const tr = table(sub(T), { m, w: 0.44, round: true, h: 0.17, tone: o.tone || '#5a3020', wall: o.wall }).top;
+      const pm = mul(m, M(0.04, tr, -0.03));
+      T.add('paint', KG.lathe([[0, 0], [0.045, 0], [0.062, 0.02], [0.068, 0.05], [0.058, 0.08], [0.032, 0.096], [0.034, 0.102], [0, 0.104]], 16), pm, cel, o);
+      T.add('paint', new THREE.SphereGeometry(0.012, 8, 5), mul(pm, M(0, 0.11, 0)), cel, F);
+      T.add('paint', geo.tube(0.055, 0.035, 0, 0.115, 0.09, 0, 0.008, 6), pm, cel, F);
+      T.add('paint', new THREE.TorusGeometry(0.032, 0.006, 5, 10, PI).applyMatrix4(ZR(PI / 2)), mul(pm, M(-0.065, 0.05, 0)), cel, F);
+      for (let k = 0; k < 3; k++) { const a = 2.2 + k * 0.85; T.add('paint', KG.lathe([[0, 0], [0.02, 0], [0.023, 0.006], [0.032, 0.04], [0.029, 0.04], [0, 0.008]], 14), mul(m, M(Math.cos(a) * 0.14, tr, Math.sin(a) * 0.14)), '#eeeadc', F); }
+      footp(T, o, 0.44, 0.44);
+      return { top: num(o.y, 0) + tr, spout: P3(pm, 0.115, 0.095, 0), lid: P3(pm, 0, 0.12, 0) };
+    }
+
+    function foldScreen(T, o = {}) {
+      const n = Math.max(2, Math.round(num(o.panels, 10))), fold = clamp(num(o.fold, 0.3), 0, 1.2), m = base(T, o), F = noCast(o);
+      const rec = art(o.art), artH = num(o.artH, 1.3), aspect = rec.ok ? rec.aspect : num(o.aspect, 2);
+      const aw = num(o.aw, (artH * aspect) / n), pw = aw + 0.078, topM = num(o.top, 0.2), botM = num(o.bottom, 0.24), h = artH + topM + botM, ft = 0.03;
+      const cx = Math.cos(fold) * pw, total = cx * n, frame = o.frame || '#3a2618', silk = o.silk || '#d2c4a0', brocade = o.brocade || '#4f5f6e';
+      const pos = [], uv = [], nor = [], idx = [], v = new THREE.Vector3(), nm = new THREE.Matrix3();
+      for (let i = 0; i < n; i++) {
+        const a = i % 2 ? -fold : fold, pm = mul(m, M(-total / 2 + cx * (i + 0.5), ft, 0, a));
+        T.add('furn', KG.slab(pw - 0.004, h, 0.016, 0.003), mul(pm, M(0, h / 2, 0)), frame, o);
+        for (const sx of [-1, 1]) T.add('furn', upright(h, 0.02, 0.024, 0.003), mul(pm, M(sx * (pw / 2 - 0.01), h / 2, 0.004)), frame, F);
+        for (const y of [0.01, h - 0.01]) T.add('furn', KG.timber(pw, 0.02, 0.024, 0.003), mul(pm, M(0, y, 0.004)), frame, F);
+        T.add('cloth', KG.quad(pw - 0.04, h - 0.04), mul(pm, M(0, h / 2, 0.0085)), brocade, F);
+        T.add('cloth', KG.quad(aw + 0.018, artH + 0.06), mul(pm, M(0, botM + artH / 2, 0.009)), silk, F);
+        T.add('hanji', KG.quad(pw - 0.012, h - 0.02).applyMatrix4(new THREE.Matrix4().makeRotationY(PI)), mul(pm, M(0, h / 2, -0.0085)), '#e6dcc2', F);
+        for (const sx of [-1, 1]) T.add('furn', KG.slab(0.045, ft, 0.05, 0.004), mul(pm, M(sx * (pw / 2 - 0.05), -ft / 2, 0)), '#26170d', o);
+        if (rec.ok) {
+          const am = mul(pm, M(0, botM + artH / 2, 0.0098)), b0 = pos.length / 3;
+          for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { v.set((sx * aw) / 2, (sy * artH) / 2, 0).applyMatrix4(am); pos.push(v.x, v.y, v.z); uv.push((i + (sx + 1) / 2) / n, (sy + 1) / 2); }
+          nm.getNormalMatrix(am); v.set(0, 0, 1).applyMatrix3(nm).normalize();
+          for (let k = 0; k < 4; k++) nor.push(v.x, v.y, v.z);
+          idx.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
+        } else T.add('hanji', KG.quad(aw, artH), mul(pm, M(0, botM + artH / 2, 0.0098)), '#eee4cc', F);
+      }
+      if (rec.ok && pos.length) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
+        g.computeBoundingSphere();
+        const mesh = new THREE.Mesh(g, artMaterial(T, rec));
+        mesh.name = 'room-art'; mesh.userData.guardSkip = true; mesh.receiveShadow = true;
+        T.ctx?.own?.(g);
+        (T.addMesh ? T.addMesh(mesh, o.wall) : T.ctx?.group?.add(mesh));
+      }
+      footp(T, o, total, 0.32);
+      return { w: total, h: h + ft, ok: rec.ok, center: P3(m, 0, ft + botM + artH / 2, 0.08) };
+    }
+
+    Object.assign(K, { jangnong, bandaji, ibuljang, gyeongdae, seoan, mungap, sabangtakja, chaekjang, books, hwaro, dadeumitdol, geomungo, baduk, gobi, boryo, banjitgori, munbang, teaSet, foldScreen });
+  })();
   // ==============================================================================================================
   // [rooms-c] generators for the 부엌, the 발효실 and the 곳간 (29-interiors-c.js) — an add-only block of the rooms-c
   // track. Same conventions as section 3: (T, opts) with opts.x / y / z / rotY (or opts.m), local +Z = the front, a
