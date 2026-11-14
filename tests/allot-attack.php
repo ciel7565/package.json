@@ -1882,6 +1882,44 @@ check('defect D12 — a 토스 cancel webhook that fails half-way (the refund ca
         : json_encode(['first' => $first, 'retry' => $retry, 'again' => $again, 'payment' => $st, 'refund rows' => $refunds, 'inv' => inv()]);
 });
 
+check('defect D13 — a backlog larger than the tick batch (every contract of an opening day falls due on one day): each contract gets ONE reminder of the right stage, sequential or with two ticks at once, and "more" stays true until all are done', function () use ($ADM, $fresh, $par, $DAY) {
+    Tfm\Allot::saveZone($ADM, ['code' => 'B6', 'kind' => 'jar', 'name' => '같은 날 항아리', 'capacity' => 60, 'cols' => 10, 'price' => 30000, 'period' => 'year', 'termMonths' => 12, 'isOpen' => true]);
+    Tfm\Allot::saveSettings($ADM, ['tick_batch' => 10]);
+    $now = Tfm\Clock::ms();
+    $mk = function (int $from, int $n, int $paidUntil) use ($ADM, $now): array {
+        $ids = [];
+        for ($i = $from; $i < $from + $n; $i++) {
+            $cu = Tfm\Allot::saveCustomer($ADM, ['name' => '같은날' . $i, 'phone' => sprintf('010-4613-%04d', $i)]);
+            Tfm\Allot::createContract($ADM, sprintf('B6-%04d', $i), $cu['id'], ['startsAt' => $now - 360 * 86400000, 'paidUntil' => $paidUntil, 'notify' => false], $now);
+            $ids[] = (int) conOn(sprintf('B6-%04d', $i))['id'];
+        }
+        return $ids;
+    };
+    $notes = function (array $ids): array {
+        $out = [];
+        foreach ($ids as $id) $out[] = (int) Tfm\Db::value("SELECT COUNT(*) FROM allot_notices WHERE contract_id = ? AND kind = 'due'", [$id]) . '@' . conById($id)['due_stage'];
+        return array_count_values($out);
+    };
+    $res = [];
+    try {
+        // sequential: 25 contracts due yesterday (stage 0) + 5 due in 3 days (stage 7)
+        $past = $mk(1, 25, $now - $DAY);
+        $soon = $mk(26, 5, $now + 3 * $DAY);
+        for ($i = 0; $i < 200; $i++) { $r = Tfm\Allot::tick($now + $i, 'admin'); if (!$r['more']) break; }
+        $res['sequential past'] = $notes($past);
+        $res['sequential soon'] = $notes($soon);
+        // two ticks at the same time, each looping until it reports nothing more
+        $past2 = $mk(31, 25, $now - $DAY);
+        $loop = 'for ($i = 0; $i < 200; $i++) { $r = Tfm\\Allot::tick(' . ($now + 1000) . ' + $i, "admin"); if (!$r["more"]) break; } echo "done";';
+        $res['parallel answers'] = $par([child($loop), child($loop)]);
+        $res['parallel past'] = $notes($past2);
+    } finally {
+        Tfm\Allot::saveSettings($ADM, ['tick_batch' => 500]);
+    }
+    return $res['sequential past'] === ['1@0' => 25] && $res['sequential soon'] === ['1@7' => 5] && $res['parallel answers'] === ['done', 'done'] && $res['parallel past'] === ['1@0' => 25] && inv() === '' ? true
+        : json_encode($res + ['inv' => inv()]);
+});
+
 // SECTION-MARK (the next sections are appended above this line)
 
 echo PHP_EOL . "allot-attack: $passed passed, $failed failed" . ($skipped ? ", $skipped skipped" : '') . ' (' . Tfm\Db::driverSafe() . ')' . PHP_EOL;

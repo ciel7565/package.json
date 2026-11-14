@@ -3453,12 +3453,21 @@ final class Allot
         $days = (array) self::conf('notice_days');
         sort($days);
         $n = 0;
+        $prev = null;
         foreach ($days as $d) {
             $d = (int) $d;
             if ($n >= $batch) break;
+            // [verify-allot] each stage has its own window: a date inside the window of a MORE urgent stage belongs to that
+            // stage only (it may still be waiting there because its page was full, or another tick is on it right now) —
+            // otherwise a past-due contract got "7 days" and then "today" again: two reminders for one due date
+            $low = $prev === null ? 0 : $now + $prev * self::DAY;
+            $prev = $d;
             // time to pay — not for a contract that is paid to the end of its term (that one gets "the term ends")
-            foreach (Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND price > 0 AND paid_until > 0 AND paid_until <= ? AND paid_until < ? AND due_stage > ?
-                AND (period <> 'month' OR ? < 28) AND (ends_at = 0 OR paid_until < ends_at OR auto_renew = 1) ORDER BY paid_until ASC, id ASC LIMIT ?", [$now + $d * self::DAY, self::FOREVER, $d, $d, $batch - $n]) as $c) {
+            $lim = $batch - $n;
+            $rows = Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND price > 0 AND paid_until > ? AND paid_until <= ? AND paid_until < ? AND due_stage > ?
+                AND (period <> 'month' OR ? < 28) AND (ends_at = 0 OR paid_until < ends_at OR auto_renew = 1) ORDER BY paid_until ASC, id ASC LIMIT ?", [$low, $now + $d * self::DAY, self::FOREVER, $d, $d, $lim]);
+            if (count($rows) >= $lim) $out['more'] = true; // a full page: more is waiting even when other runs took some of these rows
+            foreach ($rows as $c) {
                 // [verify-allot] the stage and its notice in one transaction: a crash between them never loses the notice
                 if (Db::tx(function () use ($c, $d, $now) {
                     if (Db::exec('UPDATE allot_contracts SET due_stage = ? WHERE id = ? AND due_stage > ?', [$d, (int) $c['id'], $d]) !== 1) return false;
@@ -3472,8 +3481,11 @@ final class Allot
             }
             if ($n >= $batch) break;
             // the term ends (contracts that do not renew by themselves)
-            foreach (Db::all("SELECT * FROM allot_contracts WHERE status IN ('active', 'overdue') AND ends_at > 0 AND ends_at <= ? AND end_stage > ? AND auto_renew = 0 ORDER BY ends_at ASC, id ASC LIMIT ?",
-                [$now + $d * self::DAY, $d, $batch - $n]) as $c) {
+            $lim = $batch - $n;
+            $rows = Db::all("SELECT * FROM allot_contracts WHERE status IN ('active', 'overdue') AND ends_at > ? AND ends_at <= ? AND end_stage > ? AND auto_renew = 0 ORDER BY ends_at ASC, id ASC LIMIT ?",
+                [$low, $now + $d * self::DAY, $d, $lim]);
+            if (count($rows) >= $lim) $out['more'] = true;
+            foreach ($rows as $c) {
                 if (Db::tx(function () use ($c, $d, $now) {
                     if (Db::exec('UPDATE allot_contracts SET end_stage = ? WHERE id = ? AND end_stage > ?', [$d, (int) $c['id'], $d]) !== 1) return false;
                     $end = (int) $c['ends_at'];
@@ -3493,7 +3505,9 @@ final class Allot
     {
         $limit = $now - (int) self::conf('grace_days') * self::DAY;
         $n = 0;
-        foreach (Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND paid_until > 0 AND paid_until < ? ORDER BY paid_until ASC, id ASC LIMIT ?", [$limit, $batch]) as $c) {
+        $rows = Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND paid_until > 0 AND paid_until < ? ORDER BY paid_until ASC, id ASC LIMIT ?", [$limit, $batch]);
+        if (count($rows) >= $batch) $out['more'] = true; // [verify-allot] a full page means more, even when another run took some rows
+        foreach ($rows as $c) {
             // [verify-allot] the status and its notice in one transaction (a crash between them never loses the notice)
             $code = Db::tx(function () use ($c, $now) {
                 if (Db::exec("UPDATE allot_contracts SET status = 'overdue', updated_at = ? WHERE id = ? AND status = 'active' AND paid_until = ?", [$now, (int) $c['id'], (int) $c['paid_until']]) !== 1) return null;
