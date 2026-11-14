@@ -29,7 +29,7 @@
 // | parking                       | x −142 … −112, z −50 … 6             | 84 bays 2.5 × 5 m in 4 columns                              |
 // | bus bay + stop (arrival)      | bay x −74 … −68, z 30 … 52; stop (−69.5, 41) | spawn (−60, 41) facing east on the entrance plaza   |
 // | entrance plaza                | x −72 … −48, z 14 … 70               | stone paving, signposts, lamps                              |
-// | main building 본관            | centre (−66, −18), 66 × 42           | core 40 × 42, 3 floors on a 1.2 m podium, two-tier hip-and-gable roof; wings 13 × 30, 2 floors; portico 20 × 10 to the south; door (−66, 3.2) |
+// | main building 본관            | centre (−66, −18), 66 × 42           | core 40 × 42, 3 floors on a 1.2 m podium (3F set back 2.8 m above the skirt, walls 15.8 m), two-tier hip-and-gable roof; wings 13 × 30, 2 floors; portico 20 × 10 to the south; door (−66, 3.2) |
 // | café 카페                     | centre (−60, 78), 20 × 12            | on the plaza, terrace deck 20 × 6 to the south              |
 // | hanok village (12 houses)     | terrace x −38 … 50, z −112 … −46, +2 m | 4 columns x −26/−4/18/40 × 3 rows z −56/−76/−96, houses 11–13 × 7.5, 4 m lanes |
 // | corridor 회랑                 | (−33,−16) → (78,−16) → (85.5,−1.5)   | 4.4 m wide, roofed, along the circle's north edge           |
@@ -708,10 +708,10 @@
   const B = (o) => add(Object.assign({ type: 'building' }, o));
   B({ id: 'B_MAIN', kind: 'main', name: '만장대 본관', x: MAIN.x, z: MAIN.z, w: MAIN.w, d: MAIN.d, rot: 0, y: r3(MAIN_Y), podium: 1.2, h: 14.5, floors: 3,
     parts: [
-      { id: 'core', x0: -86, z0: -39, x1: -46, z1: 3, floors: 3, h: 14.5, roof: { type: 'paljak2', h: 9.5, overhang: 3.2 }, facade: 'glass-timber' },
+      { id: 'core', x0: -86, z0: -39, x1: -46, z1: 3, floors: 3, h: 15.8, roof: { type: 'paljak2', h: 9.5, overhang: 3.2 }, facade: 'glass-timber' },   // [complex-main] h 15.8: the 3F is set back above the skirt roof
       { id: 'wingW', x0: -99, z0: -33, x1: -86, z1: -3, floors: 2, h: 9.0, roof: { type: 'paljak', h: 5.0, overhang: 2.4 }, facade: 'glass-timber' },
       { id: 'wingE', x0: -46, z0: -33, x1: -33, z1: -3, floors: 2, h: 9.0, roof: { type: 'paljak', h: 5.0, overhang: 2.4 }, facade: 'glass-timber' },
-      { id: 'portico', x0: -76, z0: 3, x1: -56, z1: 13, floors: 1, h: 6.0, roof: { type: 'paljak', h: 3.6, overhang: 1.8 }, facade: 'columns' },
+      { id: 'portico', x0: -76, z0: 3, x1: -56, z1: 13, floors: 1, h: 6.0, roof: { type: 'paljak', h: 4.6, overhang: 1.8 }, facade: 'columns' },   // [complex-main] roof h 4.6: a steeper gable towards the stairs
     ],
     door: { x: -66, z: 3.2, rot: 0 }, doors: [{ x: -66, z: 3.2, rot: 0, main: true }, { x: -33, z: -16, rot: PI / 2 }],
     stairs: [{ x0: -76, z0: 13, x1: -56, z1: 16, y0: r3(MAIN_Y), y1: r3(MAIN_Y + 1.2) }], place: 'PL_OFFICE' });
