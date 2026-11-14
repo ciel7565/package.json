@@ -1079,6 +1079,336 @@ check('importCsv (payments) — by contract number or by unit; the same file twi
         && $bad['created']['payments'] === 0 ? true : json_encode([$dry, $r['created'], $again, $c2, $bad['invalid']], JSON_UNESCAPED_UNICODE);
 });
 
+// =============================================================================================== 9 · automation: every step of tick() with an injected clock
+/** empty ledger: no customers / contracts / payments / waiting list / notices / care logs / statistics / job history; every unit free */
+function resetAllot(): void
+{
+    foreach (['allot_contracts', 'allot_payments', 'allot_waitlist', 'allot_notices', 'allot_care_logs', 'allot_customers', 'allot_stats_daily', 'job_runs'] as $t) Tfm\Db::exec('DELETE FROM ' . $t);
+    Tfm\Db::exec("DELETE FROM settings WHERE k IN ('allot.tick_at', 'allot.mail_day')");
+    Tfm\Db::exec("UPDATE allot_units SET status = 'open', contract_id = NULL, hold_until = 0, label = '', label_show = 0");
+    Tfm\Db::exec('UPDATE allot_zones SET ver = ver + 1');
+    Tfm\Allot::forget();
+}
+/** the rows of the ledger tables as one text (job history and "updated" stamps of the statistics left out): two equal snapshots = nothing changed */
+function snapshot(): string
+{
+    $out = '';
+    foreach (['allot_units' => 'id, status, contract_id, hold_until, label, label_show', 'allot_contracts' => '*', 'allot_payments' => '*', 'allot_waitlist' => '*', 'allot_notices' => '*', 'allot_customers' => '*',
+        'allot_stats_daily' => 'day, zone_id, n_open, n_held, n_leased, n_closed, n_pending, n_active, n_overdue, n_ended, revenue', 'allot_zones' => 'id, ver, capacity, is_open'] as $t => $cols) {
+        foreach (Tfm\Db::all('SELECT ' . $cols . ' FROM ' . $t . ' ORDER BY 1' . ($t === 'allot_stats_daily' ? ', 2' : '')) as $r) $out .= $t . ':' . implode("\x1f", array_map('strval', array_values($r))) . "\n";
+    }
+    return $out;
+}
+$H = 3600000;
+$TK = strtotime('2027-03-10 09:00:00') * 1000;   // "now" of the automation checks (every row below is made with an explicit clock)
+/** an applicant with a pending application on $unit at $at */
+$applyAt = function (string $unit, int $at, array $over = []): array {
+    $u = newUser();
+    $a = Tfm\Allot::apply($u, $unit, form($over), $at);
+    return [$u, $a, conRow($a['contractNo'])];
+};
+/** kinds of the notices of a contract, oldest first */
+$kindsOf = function (int $contractId): array { return array_map(function ($r) { return $r['kind']; }, Tfm\Db::all('SELECT kind FROM allot_notices WHERE contract_id = ? ORDER BY id', [$contractId])); };
+
+resetAllot();
+check('tick (1 · holds) — an unpaid application nobody approved lapses after hold_hours: canceled, unit free, the applicant is told; not before; a second tick changes nothing', function () use ($applyAt, $TK, $H, $kindsOf) {
+    list($u, $a, $c) = $applyAt('T1-0001', $TK);
+    $early = Tfm\Allot::tick($TK + 47 * $H);
+    $mid = unitRow('T1-0001')['status'];
+    $late = Tfm\Allot::tick($TK + 49 * $H);
+    $c2 = conRow($a['contractNo']);
+    $again = Tfm\Allot::tick($TK + 49 * $H);
+    $body = (string) Tfm\Db::value("SELECT body FROM allot_notices WHERE contract_id = ? AND kind = 'hold_expired'", [(int) $c['id']]);
+    return $early['steps']['holds'] === 0 && $mid === 'held' && $late['steps']['holds'] === 1 && $late['ok'] === true && $c2['status'] === 'canceled' && $c2['end_reason'] === 'hold_expired' && $c2['live_unit_id'] === null
+        && unitRow('T1-0001')['status'] === 'open' && $kindsOf((int) $c['id']) === ['applied', 'hold_expired'] && strpos($body, '입금하셨다면') !== false && $again['steps']['holds'] === 0
+        ? true : json_encode([$early['steps'], $mid, $late, $c2['status'], $again['steps']], JSON_UNESCAPED_UNICODE);
+});
+check('tick (1 · holds) — an application with a recorded payment is never canceled by the timer (it is counted as paidPending); hold_hours = 0 means no timer at all', function () use ($applyAt, $ADM, $TK, $H, $idem) {
+    list($u, $a, $c) = $applyAt('T1-0002', $TK);
+    Tfm\Allot::recordPayment($ADM, (int) $c['id'], 50000, 'bank', $idem(), [], $TK + $H);
+    Tfm\Allot::saveSettings($ADM, ['hold_hours' => 0]);
+    try { list($u2, $a2, $c2) = $applyAt('T1-0003', $TK); } finally { Tfm\Allot::saveSettings($ADM, ['hold_hours' => 48]); }
+    $r = Tfm\Allot::tick($TK + 500 * $H);
+    return $r['steps']['holds'] === 0 && $r['paidPending'] === 1 && conRow($a['contractNo'])['status'] === 'pending' && unitRow('T1-0002')['status'] === 'held' && $a2['holdUntil'] === 0
+        && (int) unitRow('T1-0003')['hold_until'] === 0 && conRow($a2['contractNo'])['status'] === 'pending' ? true : json_encode([$r, $a2]);
+});
+check('tick (1 · holds) — an operator hold with an end time is released when it is over; one without an end time stays', function () use ($ADM, $TK, $H) {
+    Tfm\Allot::setUnitState($ADM, (int) unitRow('T1-0004')['id'], 'held', 24, $TK);
+    Tfm\Allot::setUnitState($ADM, (int) unitRow('T1-0005')['id'], 'held', 0, $TK);
+    $a = Tfm\Allot::tick($TK + 23 * $H);
+    $mid = unitRow('T1-0004')['status'];
+    $v0 = Tfm\Allot::mapVersion();
+    $b = Tfm\Allot::tick($TK + 25 * $H);
+    return $a['steps']['holds'] === 0 && $mid === 'held' && $b['steps']['holds'] === 1 && unitRow('T1-0004')['status'] === 'open' && unitRow('T1-0005')['status'] === 'held' && Tfm\Allot::mapVersion() > $v0
+        ? true : json_encode([$a['steps'], $mid, $b['steps']]);
+});
+resetAllot();
+check('tick (7 · waiting list) — a free unit is offered to the first in line; an offer that runs out goes to the next; everyone is told', function () use ($ADM, $applyAt, $TK, $H) {
+    // T2 has 2 units: fill both, two people wait, one unit is freed by the operator while nobody runs offerNext (direct row change)
+    list($ua, $aa, $ca) = $applyAt('T2-0001', $TK);
+    list($ub, $ab, $cb) = $applyAt('T2-0002', $TK);
+    Tfm\Allot::decide($ADM, (int) $ca['id'], 'active', '', $TK);
+    Tfm\Allot::decide($ADM, (int) $cb['id'], 'active', '', $TK);
+    $w1u = newUser(); $w2u = newUser();
+    $w1 = Tfm\Allot::waitJoin($w1u, 'store', 'T2', form(), $TK);
+    $w2 = Tfm\Allot::waitJoin($w2u, 'store', null, form(), $TK + 1000);
+    Tfm\Db::exec("UPDATE allot_contracts SET status = 'ended', live_unit_id = NULL, ended_at = ? WHERE id = ?", [$TK + $H, (int) $cb['id']]);
+    Tfm\Db::exec("UPDATE allot_units SET status = 'open', contract_id = NULL WHERE code = 'T2-0002'");
+    $t1 = Tfm\Allot::tick($TK + 2 * $H);
+    $o1 = (array) Tfm\Db::one('SELECT status, unit_id, offer_until FROM allot_waitlist WHERE id = ?', [$w1['id']]);
+    $t2 = Tfm\Allot::tick($TK + 2 * $H + 47 * $H);
+    $still = (string) Tfm\Db::value('SELECT status FROM allot_waitlist WHERE id = ?', [$w1['id']]);
+    $t3 = Tfm\Allot::tick($TK + 2 * $H + 49 * $H);
+    $e1 = (array) Tfm\Db::one('SELECT status, live_key FROM allot_waitlist WHERE id = ?', [$w1['id']]);
+    $o2 = (array) Tfm\Db::one('SELECT status, unit_id, offer_until FROM allot_waitlist WHERE id = ?', [$w2['id']]);
+    $n1 = array_map(function ($n) { return $n['kind']; }, Tfm\Allot::inbox((int) $w1u['id'])['notices']);
+    $n2 = array_map(function ($n) { return $n['kind']; }, Tfm\Allot::inbox((int) $w2u['id'])['notices']);
+    return $t1['steps']['offers'] === 1 && $o1['status'] === 'offered' && (int) $o1['offer_until'] === $TK + 2 * $H + 48 * $H && unitRow('T2-0002')['status'] === 'held' && $t2['steps']['holds'] === 0 && $still === 'offered'
+        && $t3['steps']['holds'] === 1 && $e1['status'] === 'expired' && $e1['live_key'] === null && $o2['status'] === 'offered' && (int) $o2['offer_until'] === $TK + 51 * $H + 48 * $H
+        && unitRow('T2-0002')['status'] === 'held' && $n1 === ['offer_expired', 'offer'] && $n2 === ['offer'] ? true : json_encode([$t1['steps'], $o1, $t3['steps'], $e1, $o2, $n1, $n2]);
+});
+resetAllot();
+check('tick (2 · approval rule) — auto_approve = always approves what is pending; on_payment only what is paid for (or free); off approves nothing', function () use ($ADM, $applyAt, $TK, $H, $idem) {
+    list($u1, $a1, $c1) = $applyAt('T4-0001', $TK);                 // 220,000 once: not paid
+    list($u2, $a2, $c2) = $applyAt('T4-0002', $TK);                 // paid in full while the rule was off
+    list($u3, $a3, $c3) = $applyAt('T2-0001', $TK);                 // a free unit
+    Tfm\Allot::recordPayment($ADM, (int) $c2['id'], 220000, 'bank', $idem(), [], $TK + $H);
+    $off = Tfm\Allot::tick($TK + 2 * $H);
+    Tfm\Allot::saveSettings($ADM, ['auto_approve' => 'on_payment']);
+    $pay = Tfm\Allot::tick($TK + 3 * $H);
+    $s = [conRow($a1['contractNo'])['status'], conRow($a2['contractNo'])['status'], conRow($a3['contractNo'])['status']];
+    Tfm\Allot::saveSettings($ADM, ['auto_approve' => 'always']);
+    $all = Tfm\Allot::tick($TK + 4 * $H);
+    Tfm\Allot::saveSettings($ADM, ['auto_approve' => 'off']);
+    $c2b = conRow($a2['contractNo']);
+    return $off['steps']['approved'] === 0 && $pay['steps']['approved'] === 2 && $s === ['pending', 'active', 'active'] && $all['steps']['approved'] === 1 && conRow($a1['contractNo'])['status'] === 'active'
+        && (int) $c2b['paid_until'] === (int) $c2b['ends_at'] && (int) $c2b['starts_at'] === $TK + 3 * $H && unitRow('T4-0001')['status'] === 'leased' ? true : json_encode([$off['steps'], $pay['steps'], $s, $all['steps']]);
+});
+resetAllot();
+check('tick (4 · notices) — payment reminders at notice_days (30 / 7 / 0): one per stage, never twice, never a burst; no amount in the text', function () use ($ADM, $offline, $TK, $DAY, $kindsOf) {
+    $c = $offline('T1-0001', $TK);                                                   // yearly, 130,000
+    Tfm\Db::exec('UPDATE allot_contracts SET paid_until = ?, paid_total = 130000 WHERE id = ?', [$TK + 40 * $DAY, $c['id']]);
+    $late = $offline('T1-0002', $TK);                                                // found only 5 days before its due date
+    Tfm\Db::exec('UPDATE allot_contracts SET paid_until = ?, paid_total = 130000 WHERE id = ?', [$TK + 5 * $DAY, $late['id']]);
+    $n = [];
+    $n[] = Tfm\Allot::tick($TK)['steps']['notices'];                                  // 40 days left: nothing for $c; $late is at stage 7 → 1
+    $n[] = Tfm\Allot::tick($TK)['steps']['notices'];                                  // again: 0
+    $n[] = Tfm\Allot::tick($TK + 10 * $DAY)['steps']['notices'];                      // 30 days left → stage 30 for $c; $late is past due → stage 0
+    $n[] = Tfm\Allot::tick($TK + 11 * $DAY)['steps']['notices'];                      // 0
+    $n[] = Tfm\Allot::tick($TK + 33 * $DAY)['steps']['notices'];                      // 7 days left → stage 7
+    $n[] = Tfm\Allot::tick($TK + 40 * $DAY)['steps']['notices'];                      // the day → stage 0
+    $n[] = Tfm\Allot::tick($TK + 41 * $DAY)['steps']['notices'];                      // 0
+    $rows = Tfm\Db::all("SELECT kind, title, body, dedupe_key FROM allot_notices WHERE contract_id = ? AND kind = 'due' ORDER BY id", [$c['id']]);
+    $text = implode(' ', array_map(function ($r) { return $r['title'] . ' ' . $r['body']; }, $rows));
+    $lateKinds = $kindsOf($late['id']);
+    return $n === [1, 0, 2, 0, 1, 1, 0] && count($rows) === 3 && strpos($rows[0]['body'], '30일') !== false && strpos($rows[1]['body'], '7일') !== false && !preg_match('/130|[0-9]원|만 원/u', $text)
+        && array_count_values($lateKinds)['due'] === 2 ? true : json_encode([$n, $rows, $lateKinds], JSON_UNESCAPED_UNICODE);
+});
+resetAllot();
+check('tick (4 · notices) — a fixed term that runs out is announced at the same stages (kind ending); a contract paid to its end gets no "pay" reminder; monthly dues skip the 30-day stage', function () use ($ADM, $offline, $idem, $TK, $DAY, $kindsOf) {
+    $once = $offline('T4-0001', $TK);                                                // once, 12 months
+    Tfm\Allot::recordPayment($ADM, $once['id'], 220000, 'bank', $idem(), [], $TK);
+    $month = $offline('T3-0001', $TK);                                               // monthly, open-ended
+    Tfm\Allot::recordPayment($ADM, $month['id'], 10000, 'bank', $idem(), [], $TK);   // paid for one month
+    $end = Tfm\Allot::addMonths($TK, 12);
+    $a = Tfm\Allot::tick($TK + $DAY);                                                // month: 30 days left but monthly → nothing
+    $b = Tfm\Allot::tick(Tfm\Allot::addMonths($TK, 1) - 6 * $DAY);                    // month: stage 7
+    $c = Tfm\Allot::tick($end - 29 * $DAY);                                          // once: ending stage 30 (+ the monthly one is long overdue by now)
+    $d = Tfm\Allot::tick($end - 3 * $DAY);                                           // once: ending stage 7
+    $e = Tfm\Allot::tick($end + $DAY);                                               // once: ending stage 0
+    $k1 = $kindsOf($once['id']);
+    $k2 = $kindsOf($month['id']);
+    return $a['steps']['notices'] === 0 && $b['steps']['notices'] === 1 && array_values(array_filter($k1, function ($k) { return $k === 'ending'; })) === ['ending', 'ending', 'ending'] && !in_array('due', $k1, true)
+        && in_array('due', $k2, true) && array_count_values($k2)['due'] === 2 ? true : json_encode([$a['steps'], $b['steps'], $k1, $k2]);
+});
+resetAllot();
+check('tick (5 · overdue) — unpaid after grace_days: overdue + one notice; (6) a real unit is NEVER released by the timer while overdue_end_days is 0; with a number it ends', function () use ($ADM, $offline, $TK, $DAY, $kindsOf) {
+    $c = $offline('T1-0001', $TK);                                                   // due at once (nothing paid)
+    $a = Tfm\Allot::tick($TK + 13 * $DAY);
+    $s1 = (string) Tfm\Db::value('SELECT status FROM allot_contracts WHERE id = ?', [$c['id']]);
+    $b = Tfm\Allot::tick($TK + 15 * $DAY);
+    $s2 = (string) Tfm\Db::value('SELECT status FROM allot_contracts WHERE id = ?', [$c['id']]);
+    $again = Tfm\Allot::tick($TK + 15 * $DAY);
+    $far = Tfm\Allot::tick($TK + 800 * $DAY);                                        // more than two years later, default rules
+    $s3 = (string) Tfm\Db::value('SELECT status FROM allot_contracts WHERE id = ?', [$c['id']]);
+    $u3 = unitRow('T1-0001')['status'];
+    Tfm\Allot::saveSettings($ADM, ['overdue_end_days' => 30]);
+    try {
+        $soon = Tfm\Allot::tick($TK + 40 * $DAY);                                    // 14 + 30 days are not over at day 40
+        $s4 = (string) Tfm\Db::value('SELECT status FROM allot_contracts WHERE id = ?', [$c['id']]);
+        $end = Tfm\Allot::tick($TK + 45 * $DAY);
+    } finally { Tfm\Allot::saveSettings($ADM, ['overdue_end_days' => 0]); }
+    $row = (array) Tfm\Db::one('SELECT status, end_reason, live_unit_id FROM allot_contracts WHERE id = ?', [$c['id']]);
+    return $a['steps']['overdue'] === 0 && $s1 === 'active' && $b['steps']['overdue'] === 1 && $s2 === 'overdue' && $again['steps']['overdue'] === 0 && $far['steps']['ended'] === 0 && $s3 === 'overdue' && $u3 === 'leased'
+        && $soon['steps']['ended'] === 0 && $s4 === 'overdue' && $end['steps']['ended'] === 1 && $row['status'] === 'ended' && $row['end_reason'] === 'overdue_auto' && $row['live_unit_id'] === null
+        && unitRow('T1-0001')['status'] === 'open' && array_count_values($kindsOf($c['id']))['overdue'] === 1 && in_array('ended', $kindsOf($c['id']), true)
+        ? true : json_encode([$a['steps'], $s1, $b['steps'], $s2, $far['steps'], $s3, $soon['steps'], $end['steps'], $row, $kindsOf($c['id'])]);
+});
+resetAllot();
+check('tick (3 · renewal) — a contract with auto-renew is extended by one term when its term is over (once per term); without it nothing moves', function () use ($ADM, $offline, $idem, $TK, $DAY) {
+    $c = $offline('T4-0001', $TK);
+    $d = $offline('T4-0002', $TK);
+    Tfm\Allot::recordPayment($ADM, $c['id'], 220000, 'bank', $idem(), [], $TK);
+    Tfm\Allot::recordPayment($ADM, $d['id'], 220000, 'bank', $idem(), [], $TK);
+    Tfm\Allot::setAutoRenew($ADM, $c['id'], true);
+    $end = Tfm\Allot::addMonths($TK, 12);
+    $before = Tfm\Allot::tick($end - $DAY);
+    $at = Tfm\Allot::tick($end + 1000);
+    $again = Tfm\Allot::tick($end + 1000);
+    $cr = (array) Tfm\Db::one('SELECT ends_at, paid_until, status FROM allot_contracts WHERE id = ?', [$c['id']]);
+    $dr = (array) Tfm\Db::one('SELECT ends_at, status FROM allot_contracts WHERE id = ?', [$d['id']]);
+    return $before['steps']['renewed'] === 0 && $at['steps']['renewed'] === 1 && $again['steps']['renewed'] === 0 && (int) $cr['ends_at'] === Tfm\Allot::addMonths($end, 12) && (int) $cr['paid_until'] === $end
+        && (int) $dr['ends_at'] === $end ? true : json_encode([$before['steps'], $at['steps'], $again['steps'], $cr, $dr]);
+});
+resetAllot();
+check('tick (8 · queue) — a notice scheduled for later is delivered when its time comes; one for a customer without an account stays queued for the operator', function () use ($ADM, $applyAt, $offline, $TK, $H) {
+    list($u, $a, $c) = $applyAt('T1-0001', $TK);
+    Tfm\Allot::decide($ADM, (int) $c['id'], 'active', '', $TK);
+    $off = $offline('T1-0002', $TK);
+    Tfm\Allot::notify($ADM, ['zone' => 'T1'], '가르는 날', '다음 주 토요일이에요', $TK + 5 * $H, $TK);
+    $t1 = Tfm\Allot::tick($TK + 4 * $H);
+    $before = count(Tfm\Allot::inbox((int) $u['id'])['notices']);   // (the first run also sent the "time to pay" reminder)
+    $t2 = Tfm\Allot::tick($TK + 6 * $H);
+    $in = Tfm\Allot::inbox((int) $u['id'])['notices'];
+    $offRow = (array) Tfm\Db::one("SELECT status FROM allot_notices WHERE contract_id = ? AND kind = 'info'", [$off['id']]);
+    return $t1['steps']['sent'] === 0 && $t2['steps']['sent'] === 1 && count($in) === $before + 1 && $in[0]['title'] === '가르는 날' && $in[0]['at'] === $TK + 6 * $H && $offRow['status'] === 'queued'
+        ? true : json_encode([$t1['steps'], $t2['steps'], $in, $offRow], JSON_UNESCAPED_UNICODE);
+});
+check('tick (9 · statistics) — the day row per zone and for all zones: unit states, contract states, the money of that day (payments minus refunds)', function () use ($ADM, $idem, $TK, $H) {
+    $cid = (int) Tfm\Db::value("SELECT id FROM allot_contracts WHERE status = 'active' ORDER BY id LIMIT 1");
+    $p = Tfm\Allot::recordPayment($ADM, $cid, 130000, 'bank', $idem(), [], $TK + 7 * $H);
+    Tfm\Allot::recordPayment($ADM, $cid, 30000, 'cash', $idem(), ['periods' => 0], $TK + 7 * $H);
+    Tfm\Allot::refund($ADM, $p['payment']['id'], '시험', $TK + 8 * $H);
+    $r = Tfm\Allot::tick($TK + 9 * $H);
+    $day = date('Y-m-d', intdiv($TK, 1000));
+    $all = (array) Tfm\Db::one('SELECT * FROM allot_stats_daily WHERE day = ? AND zone_id = 0', [$day]);
+    $t1 = (array) Tfm\Db::one('SELECT s.* FROM allot_stats_daily s JOIN allot_zones z ON z.id = s.zone_id WHERE s.day = ? AND z.code = ?', [$day, 'T1']);
+    $st = Tfm\Allot::stats(7);
+    return $r['steps']['stats'] > 0 && (int) $all['n_leased'] === 2 && (int) $all['n_active'] === 2 && (int) $all['n_open'] === 10000 + 35 + 2 + 20 + 60 - 2 && (int) $all['revenue'] === 30000
+        && (int) $t1['n_leased'] === 2 && (int) $t1['n_open'] === 33 && (int) $t1['revenue'] === 30000 && $st['days'][count($st['days']) - 1]['day'] === $day && $st['days'][count($st['days']) - 1]['revenue'] === 30000
+        ? true : json_encode([$r['steps'], $all, $t1]);
+});
+resetAllot();
+check('tick (10 · integrity) — safe cases are repaired (a unit left on an ended contract, a live contract whose unit says free, a dead contract that still claims its unit, a stale offer); the rest is reported, never guessed', function () use ($ADM, $applyAt, $offline, $idem, $TK, $H) {
+    $a = $offline('T1-0001', $TK);          // (i) contract ended behind the unit's back
+    $b = $offline('T1-0002', $TK);          // (ii) the unit says free although the contract is live
+    $c = $offline('T1-0003', $TK);          // (iii) an ended contract that still holds live_unit_id
+    list($u, $ap, $cp) = $applyAt('T1-0004', $TK);   // (v) canceled with money on it
+    Tfm\Allot::recordPayment($ADM, (int) $cp['id'], 50000, 'bank', $idem(), [], $TK);
+    Tfm\Allot::decide($ADM, (int) $cp['id'], 'canceled', '', $TK);
+    Tfm\Db::exec("UPDATE allot_contracts SET status = 'ended', live_unit_id = NULL WHERE id = ?", [$a['id']]);
+    Tfm\Db::exec("UPDATE allot_units SET status = 'open', contract_id = NULL WHERE code = 'T1-0002'");
+    Tfm\Allot::endContract($ADM, $c['id'], 'x', $TK);
+    Tfm\Db::exec('UPDATE allot_contracts SET live_unit_id = unit_id WHERE id = ?', [$c['id']]);
+    Tfm\Db::exec("UPDATE allot_units SET status = 'leased' WHERE code = 'T1-0005'");   // (iv) leased without any contract: not ours to decide
+    $r = Tfm\Allot::tick($TK + $H);
+    $kinds = array_map(function ($i) { return $i['kind']; }, $r['issues']);
+    $again = Tfm\Allot::tick($TK + $H);
+    return $r['steps']['healed'] === 3 && unitRow('T1-0001')['status'] === 'open' && unitRow('T1-0001')['contract_id'] === null && unitRow('T1-0002')['status'] === 'leased' && (int) unitRow('T1-0002')['contract_id'] === $b['id']
+        && Tfm\Db::value('SELECT live_unit_id FROM allot_contracts WHERE id = ?', [$c['id']]) === null && unitRow('T1-0005')['status'] === 'leased' && in_array('leased_without_contract', $kinds, true)
+        && in_array('refund_due', $kinds, true) && $again['steps']['healed'] === 0 && count($again['issues']) === count($r['issues']) ? true : json_encode([$r['steps'], $r['issues'], $again['steps']], JSON_UNESCAPED_UNICODE);
+});
+resetAllot();
+check('tick (11 · retention) — personal data of a customer whose last contract ended more than retention_days ago is erased (the contract and payment rows stay, without a person); others are untouched', function () use ($ADM, $offline, $idem, $TK, $DAY) {
+    $old = $offline('T1-0001', $TK);
+    $keep = $offline('T1-0002', $TK);
+    Tfm\Allot::recordPayment($ADM, $old['id'], 130000, 'bank', $idem(), ['memo' => '김아무개 입금'], $TK);
+    Tfm\Allot::endContract($ADM, $old['id'], '끝', $TK + $DAY);
+    $live = $offline('T1-0003', $TK);
+    Tfm\Allot::endContract($ADM, $keep['id'], '끝', $TK + 1000 * $DAY);
+    $r1 = Tfm\Allot::tick($TK + 1800 * $DAY);                       // 1,799 days after the end: not yet (1,825)
+    $r2 = Tfm\Allot::tick($TK + 1830 * $DAY);
+    $cu = (array) Tfm\Db::one('SELECT * FROM allot_customers WHERE id = ?', [$old['customerId']]);
+    $k = (array) Tfm\Db::one('SELECT name_enc, purged_at FROM allot_customers WHERE id = ?', [$keep['customerId']]);
+    $l = (array) Tfm\Db::one('SELECT name_enc, purged_at FROM allot_customers WHERE id = ?', [$live['customerId']]);
+    $view = Tfm\Allot::customer($old['customerId']);
+    $pay = (array) Tfm\Db::one('SELECT memo, amount FROM allot_payments WHERE contract_id = ?', [$old['id']]);
+    $again = Tfm\Allot::tick($TK + 1830 * $DAY);
+    return $r1['steps']['purged'] === 0 && $r2['steps']['purged'] === 1 && $cu['name_enc'] === '' && $cu['phone_enc'] === '' && $cu['phone_hash'] === '' && $cu['phone_tail'] === '' && $cu['name_hash'] === ''
+        && $cu['addr_enc'] === null && $cu['memo'] === null && (int) $cu['purged_at'] === $TK + 1830 * $DAY && $view['purged'] === true && $view['name'] === '' && $k['name_enc'] !== '' && (int) $k['purged_at'] === 0
+        && $l['name_enc'] !== '' && $pay['memo'] === '' && (int) $pay['amount'] === 130000 && (int) Tfm\Db::value('SELECT COUNT(*) FROM allot_contracts WHERE id = ?', [$old['id']]) === 1
+        && (int) Tfm\Db::value('SELECT COUNT(*) FROM allot_notices WHERE customer_id = ?', [$old['customerId']]) === 0 && $again['steps']['purged'] === 0 ? true : json_encode([$r1['steps'], $r2['steps'], $cu, $pay]);
+});
+resetAllot();
+check('tick — idempotent: after a busy day a second run at the same moment changes no row of the ledger; each run leaves one job_runs row with its numbers', function () use ($ADM, $applyAt, $offline, $idem, $TK, $H, $DAY) {
+    list($u1, $a1, $c1) = $applyAt('T1-0001', $TK);                                   // will lapse
+    list($u2, $a2, $c2) = $applyAt('T4-0001', $TK);                                   // paid → stays
+    Tfm\Allot::recordPayment($ADM, (int) $c2['id'], 220000, 'bank', $idem(), [], $TK);
+    $o = $offline('T1-0002', $TK - 40 * $DAY);                                        // overdue
+    $p = $offline('T3-0001', $TK);                                                    // due notice
+    Tfm\Allot::setUnitState($ADM, (int) unitRow('T1-0009')['id'], 'held', 1, $TK);
+    Tfm\Allot::notify($ADM, ['all' => true], '안내', '내용', $TK + $H, $TK);
+    $at = $TK + 3 * $DAY;
+    $r1 = Tfm\Allot::tick($at, 'cli');
+    $s1 = snapshot();
+    $r2 = Tfm\Allot::tick($at, 'admin');
+    $s2 = snapshot();
+    $runs = Tfm\Allot::jobRuns(5);
+    $busy = array_sum($r1['steps']) - $r1['steps']['stats'];
+    $quiet = array_sum($r2['steps']) - $r2['steps']['stats'];
+    return $busy >= 5 && $quiet === 0 && $s1 === $s2 && $r1['ok'] && $r2['ok'] && count($runs) === 2 && $runs[0]['source'] === 'admin' && $runs[1]['source'] === 'cli' && $runs[1]['ok'] === true
+        && $runs[1]['summary']['steps']['holds'] === $r1['steps']['holds'] && $runs[0]['finishedAt'] >= $runs[0]['startedAt'] && $runs[0]['job'] === 'allot:tick' ? true : json_encode([$r1, $r2, $s1 === $s2, $runs]);
+});
+resetAllot();
+check('tick — at most tick_batch rows per step: 25 lapsed applications with batch 10 are handled in three runs (more = true until the last)', function () use ($ADM, $TK, $H) {
+    Tfm\Allot::saveSettings($ADM, ['apply_per_user' => 30, 'tick_batch' => 10]);
+    try {
+        $u = newUser();
+        for ($i = 1; $i <= 25; $i++) Tfm\Allot::apply($u, sprintf('T1-%04d', $i), form(), $TK);
+        $a = Tfm\Allot::tick($TK + 49 * $H);
+        $b = Tfm\Allot::tick($TK + 49 * $H);
+        $c = Tfm\Allot::tick($TK + 49 * $H);
+    } finally { Tfm\Allot::saveSettings($ADM, ['apply_per_user' => 3, 'tick_batch' => 500]); }
+    return [$a['steps']['holds'], $b['steps']['holds'], $c['steps']['holds']] === [10, 10, 5] && $a['more'] === true && $b['more'] === true && $c['more'] === false
+        && (int) Tfm\Db::value("SELECT COUNT(*) FROM allot_units WHERE status = 'held'") === 0 ? true : json_encode([$a['steps'], $b['steps'], $c['steps'], $a['more'], $c['more']]);
+});
+resetAllot();
+check('lazyTick — runs when no automation ran for lazy_tick_minutes, never twice inside the interval; a scheduled (cli) run also resets the timer', function () use ($ADM, $TK) {
+    $first = Tfm\Allot::lazyTick($TK);
+    $second = Tfm\Allot::lazyTick($TK + 14 * 60000);
+    $third = Tfm\Allot::lazyTick($TK + 16 * 60000);
+    Tfm\Allot::tick($TK + 20 * 60000, 'cli');
+    $afterCli = Tfm\Allot::lazyTick($TK + 30 * 60000);
+    Tfm\Allot::saveSettings($ADM, ['enabled' => false]);
+    try { $disabled = Tfm\Allot::lazyTick($TK + 600 * 60000); } finally { Tfm\Allot::saveSettings($ADM, ['enabled' => true]); }
+    $sources = array_map(function ($r) { return $r['source']; }, Tfm\Allot::jobRuns(10));
+    return $first === true && $second === false && $third === true && $afterCli === false && $disabled === false && $sources === ['cli', 'lazy', 'lazy'] ? true : json_encode([$first, $second, $third, $afterCli, $disabled, $sources]);
+});
+resetAllot();
+check('lazyTick — 8 requests at the same moment: the compare-and-set lets exactly one of them run the automation', function () use ($parallel, $TK) {
+    $out = $parallel('echo Tfm\\Allot::lazyTick(' . ($TK + 86400000) . ') ? "ran" : "skipped";', 8);
+    $ran = count(array_filter($out, function ($x) { return $x === 'ran'; }));
+    return $ran === 1 && count($out) === 8 && (int) Tfm\Db::value("SELECT COUNT(*) FROM job_runs WHERE source = 'lazy'") === 1 ? true : json_encode($out);
+});
+check('daily report mail — off by default; when on, one mail a day to security.alert_email with numbers only (no name, phone or contract number)', function () use ($ADM, $offline, $TK, $DAY) {
+    $c = $offline('T1-0001', $TK);
+    $sent = [];
+    Tfm\Allot::setMailer(function (string $to, string $subject, string $body) use (&$sent) { $sent[] = [$to, $subject, $body]; return true; });
+    try {
+        $off = Tfm\Allot::tick($TK + 2 * $DAY);
+        Tfm\Allot::saveSettings($ADM, ['daily_report_mail' => true]);
+        $noAddr = Tfm\Allot::tick($TK + 2 * $DAY + 1000);
+        Tfm\Config::override('security.alert_email', 'ops@example.org');
+        $one = Tfm\Allot::tick($TK + 2 * $DAY + 2000);
+        $same = Tfm\Allot::tick($TK + 2 * $DAY + 3000);
+        $next = Tfm\Allot::tick($TK + 3 * $DAY + 3000);
+    } finally {
+        Tfm\Allot::setMailer(null);
+        Tfm\Config::override('security.alert_email', null);
+        Tfm\Allot::saveSettings($ADM, ['daily_report_mail' => false]);
+    }
+    $body = $sent ? $sent[0][2] : '';
+    return $off['mail'] === 'off' && $noAddr['mail'] === 'no address' && $one['mail'] === 'sent' && $same['mail'] === 'already' && $next['mail'] === 'sent' && count($sent) === 2 && $sent[0][0] === 'ops@example.org'
+        && strpos($body, '분양') !== false && strpos($body, $c['contractNo']) === false && strpos($body, '시험고객') === false && !preg_match('/010-?\d{4}/', $body) ? true : json_encode([$off['mail'], $noAddr['mail'], $one['mail'], $same['mail'], $next['mail'], $sent], JSON_UNESCAPED_UNICODE);
+});
+check('adminSummary — the numbers of the 현황 page: units, pending, overdue, expiring, waiting, offline notices, the last automation run', function () use ($ADM, $applyAt, $TK, $H) {
+    list($u, $a, $c) = $applyAt('T1-0002', $TK + 4 * 86400000);
+    $s = Tfm\Allot::adminSummary($TK + 4 * 86400000 + $H);
+    return $s['units']['total'] === 10117 && $s['pending'] === 1 && $s['pendingOldest'] === $TK + 4 * 86400000 && $s['active'] === 1 && $s['overdue'] === 0 && $s['waiting'] === 0 && is_array($s['lastRun'])
+        && $s['lastRun']['job'] === 'allot:tick' && $s['tickAgeMs'] >= 0 && count($s['zones']) === 15 && isset($s['zones'][0]['open'], $s['rules']['hold_hours']) && $s['holdsExpiring'] === 0 && $s['refundDue'] === 0
+        ? true : json_encode($s, JSON_UNESCAPED_UNICODE);
+});
+
 // SECTION-MARK (the following sections are appended as the library grows)
 
 echo PHP_EOL . ($failed === 0 ? "✔ all $passed allot unit checks passed" : "✖ $failed of " . ($failed + $passed) . " allot check(s) failed") . ' (driver ' . Tfm\Db::driverSafe() . ')' . PHP_EOL;

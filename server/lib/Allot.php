@@ -2571,12 +2571,24 @@ final class Allot
         return ['batch' => $batch, 'count' => (int) $count];
     }
 
-    /** queued notices that are due become 'sent' (accounts only; the rest waits for the operator) → rows sent */
+    /**
+     * Queued notices that are due are delivered (accounts only; the rest waits for the operator) → rows sent.
+     * A delivered notice is written as a NEW row and the queued one removed: the inbox is read "newer than id N"
+     * (api/allot/inbox.php?after=), so a notice that was scheduled long ago must not arrive with an old id.
+     */
     private static function flushNotices(int $now, int $limit): int
     {
         $n = 0;
-        foreach (Db::all("SELECT id FROM allot_notices WHERE status = 'queued' AND send_at <= ? AND user_id IS NOT NULL ORDER BY send_at ASC, id ASC LIMIT ?", [$now, $limit]) as $r) {
-            $n += Db::exec("UPDATE allot_notices SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'queued'", [$now, (int) $r['id']]);
+        foreach (Db::all("SELECT * FROM allot_notices WHERE status = 'queued' AND send_at <= ? AND user_id IS NOT NULL ORDER BY send_at ASC, id ASC LIMIT ?", [$now, $limit]) as $r) {
+            $n += (int) Db::tx(function () use ($r, $now) {
+                if (Db::exec("DELETE FROM allot_notices WHERE id = ? AND status = 'queued'", [(int) $r['id']]) !== 1) return 0; // another run delivered it
+                Db::insert('allot_notices', [
+                    'contract_id' => $r['contract_id'] === null ? null : (int) $r['contract_id'], 'customer_id' => $r['customer_id'] === null ? null : (int) $r['customer_id'], 'user_id' => (int) $r['user_id'],
+                    'kind' => (string) $r['kind'], 'dedupe_key' => $r['dedupe_key'] === null ? null : (string) $r['dedupe_key'], 'title' => (string) $r['title'], 'body' => (string) $r['body'], 'status' => 'sent',
+                    'send_at' => (int) $r['send_at'], 'sent_at' => $now, 'seen_at' => 0, 'created_by' => $r['created_by'] === null ? null : (int) $r['created_by'], 'created_at' => (int) $r['created_at'],
+                ]);
+                return 1;
+            });
         }
         return $n;
     }
@@ -3075,5 +3087,613 @@ final class Allot
         return $made;
     }
 
-    // @@NEXT@@
+    // ------------------------------------------------------------------ automation
+    /** @var callable|null replaces mail() for the daily report (tests): fn(string $to, string $subject, string $body): bool */
+    private static $mailer = null;
+
+    public static function setMailer(?callable $fn): void { self::$mailer = $fn; }
+
+    /** remember when the automation last started (the lazy tick looks at this) */
+    private static function tickMark(int $now): void
+    {
+        Db::upsert('settings', ['k' => 'allot.tick_at', 'v' => (string) $now, 'updated_at' => $now, 'updated_by' => null], ['k']);
+        self::cacheSet('tick', $now, 3600);
+    }
+
+    /** the moment the automation last started (0 = never) */
+    public static function lastTickAt(): int
+    {
+        $v = Db::value("SELECT v FROM settings WHERE k = 'allot.tick_at'");
+        return $v === null ? 0 : (int) $v;
+    }
+
+    /**
+     * The lazy tick (for a server without the scheduler line): call it from an allot endpoint or an admin page view. It
+     * runs one bounded tick('lazy') when no automation started within lazy_tick_minutes — and only in the ONE request
+     * that wins the compare-and-set on the stored start time (the row changes from the old time to the new one, so
+     * exactly one UPDATE counts on both drivers; the very first run is an INSERT that only one request can make).
+     * Never throws; false = nothing to do / another request took it / allotment is switched off.
+     */
+    public static function lazyTick(?int $now = null): bool
+    {
+        try {
+            if (!self::enabled()) return false;
+            $now = self::now($now);
+            $every = (int) self::conf('lazy_tick_minutes') * 60000;
+            $seen = self::cacheGet('tick');
+            if (is_int($seen) && $now - $seen < $every) return false;
+            $old = Db::value("SELECT v FROM settings WHERE k = 'allot.tick_at'");
+            if ($old === null) {
+                try {
+                    Db::insert('settings', ['k' => 'allot.tick_at', 'v' => (string) $now, 'updated_at' => $now, 'updated_by' => null]);
+                } catch (\PDOException $e) {
+                    if ((string) $e->getCode() === '23000') return false;
+                    throw $e;
+                }
+            } else {
+                if ($now - (int) $old < $every) { self::cacheSet('tick', (int) $old, 60); return false; }
+                if (Db::exec("UPDATE settings SET v = ?, updated_at = ? WHERE k = 'allot.tick_at' AND v = ?", [(string) $now, $now, (string) $old]) !== 1) return false;
+            }
+            self::cacheSet('tick', $now, 3600);
+            self::tick($now, 'lazy');
+            return true;
+        } catch (\Throwable $e) {
+            Log::error('ALLOT', 'lazy tick failed: ' . get_class($e));
+            return false;
+        }
+    }
+
+    /**
+     * The automation (`php cli/tfm.php allot:tick`, the admin button, the lazy tick). Idempotent: a second run at the same
+     * moment changes nothing. Every step handles at most tick_batch rows (a lazy run at most 200), oldest first; `more`
+     * says a step filled its batch, so run again. Steps, in this order:
+     *   holds    waiting-list offers whose time is over go to the next in line · an unpaid application nobody approved
+     *            within hold_hours is canceled and its unit freed (never one with a recorded payment: paidPending counts
+     *            those) · an operator hold with an end time is released
+     *   approved pending applications approved by rule (auto_approve = always, or on_payment when a period is covered / free)
+     *   renewed  contracts with auto-renew whose term is over get one more term
+     *   notices  "time to pay" (kind due) and "the term ends" (kind ending) at notice_days before the date — one per stage,
+     *            only the most urgent stage, never an amount in the text (monthly dues skip stages of 28 days or more)
+     *   overdue  active contracts unpaid for grace_days after the paid-until date become 'overdue' (+ one notice)
+     *   ended    ONLY when overdue_end_days > 0: a contract overdue that long is ended and its unit freed. With the
+     *            default 0 a real jar is never released by a timer — the operator ends contracts by hand
+     *   offers   free units are offered to those who wait, first come first
+     *   sent     queued notices that are due are delivered to the in-app inbox
+     *   stats    today's row of allot_stats_daily per zone and for all zones
+     *   healed   the integrity scan: safe mismatches between units and contracts are repaired, the rest is listed in issues
+     *   purged   personal data of customers whose last contract ended more than retention_days ago is erased
+     * Then one job_runs row is written and, with daily_report_mail, one mail a day with the numbers goes to
+     * security.alert_email. → {ok, at, source, more, ms, steps: {…}, paidPending, issues: [{kind, ref, note}], errors, mail}
+     */
+    public static function tick(?int $now = null, string $source = 'cli'): array
+    {
+        if (!in_array($source, ['cli', 'lazy', 'admin'], true)) $source = 'cli';
+        $now = self::now($now);
+        $t0 = microtime(true);
+        $batch = (int) self::conf('tick_batch');
+        if ($source === 'lazy') $batch = min($batch, 200);
+        $out = ['ok' => true, 'at' => $now, 'source' => $source, 'more' => false, 'ms' => 0,
+            'steps' => ['holds' => 0, 'approved' => 0, 'renewed' => 0, 'notices' => 0, 'overdue' => 0, 'ended' => 0, 'offers' => 0, 'sent' => 0, 'stats' => 0, 'healed' => 0, 'purged' => 0],
+            'paidPending' => 0, 'issues' => [], 'errors' => [], 'mail' => 'off'];
+        if ($source !== 'lazy') self::tickMark($now);
+        $started = Clock::ms();
+        $runId = Db::insert('job_runs', ['job' => 'allot:tick', 'source' => $source, 'started_at' => $started, 'finished_at' => 0, 'ok' => 0, 'summary' => null]);
+        $steps = ['holds' => 'tickHolds', 'approved' => 'tickApprove', 'renewed' => 'tickRenew', 'notices' => 'tickNotices', 'overdue' => 'tickOverdue', 'ended' => 'tickAutoEnd', 'offers' => 'tickOffers',
+            'sent' => 'tickSend', 'stats' => 'tickStats', 'healed' => 'tickIntegrity', 'purged' => 'tickPurge'];
+        foreach ($steps as $key => $fn) {
+            try {
+                $n = (int) self::$fn($now, $batch, $out);
+                $out['steps'][$key] = $n;
+                if ($n >= $batch && $key !== 'stats') $out['more'] = true;
+            } catch (\Throwable $e) {
+                $out['ok'] = false;
+                $out['errors'][] = $key . ': ' . get_class($e);
+                Log::error('ALLOT', 'tick step failed', ['step' => $key, 'error' => get_class($e), 'at' => basename($e->getFile()) . ':' . $e->getLine()]);
+            }
+        }
+        try { $out['mail'] = self::dailyMail($now, $out); } catch (\Throwable $e) { $out['mail'] = 'failed'; }
+        $out['ms'] = (int) round((microtime(true) - $t0) * 1000);
+        $sum = $out;
+        $sum['issues'] = array_slice($out['issues'], 0, 20);
+        Db::exec('UPDATE job_runs SET finished_at = ?, ok = ?, summary = ? WHERE id = ?', [max($started, Clock::ms()), $out['ok'] ? 1 : 0,
+            (string) json_encode($sum, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR), $runId]);
+        self::$memo = [];
+        return $out;
+    }
+
+    /** the automation history, newest first: [{id, job, source, startedAt, finishedAt, ok, summary}] */
+    public static function jobRuns(int $limit = 20, string $job = 'allot:tick'): array
+    {
+        return array_map(function ($r) {
+            $s = is_string($r['summary']) ? Json::tryDecode($r['summary'], true) : null;
+            return ['id' => (int) $r['id'], 'job' => (string) $r['job'], 'source' => (string) $r['source'], 'startedAt' => (int) $r['started_at'], 'finishedAt' => (int) $r['finished_at'], 'ok' => (int) $r['ok'] === 1,
+                'summary' => is_array($s) ? $s : []];
+        }, Db::all('SELECT id, job, source, started_at, finished_at, ok, summary FROM job_runs WHERE job = ? ORDER BY id DESC LIMIT ?', [$job, max(1, min(200, $limit))]));
+    }
+
+    /** step 1 — holds that ran out */
+    private static function tickHolds(int $now, int $batch, array &$out): int
+    {
+        $n = 0;
+        // (a) waiting-list offers nobody confirmed in time
+        foreach (Db::all("SELECT id FROM allot_waitlist WHERE status = 'offered' AND offer_until > 0 AND offer_until < ? ORDER BY offer_until ASC, id ASC LIMIT ?", [$now, $batch]) as $r) {
+            $res = Db::txRetry(function () use ($r, $now) {
+                $w = Db::one("SELECT * FROM allot_waitlist WHERE id = ? AND status = 'offered'" . Db::forUpdate(), [(int) $r['id']]);
+                if (!$w || (int) $w['offer_until'] >= $now) return null;
+                $unit = self::waitClose($w, 'expired', $now);
+                self::note($now, null, (int) $w['customer_id'], $w['user_id'] === null ? null : (int) $w['user_id'], 'offer_expired', '자리 확정 기한이 지났어요',
+                    '기한 안에 확정하지 않아 다음 분께 차례가 넘어갔어요. 다시 기다리려면 대기 신청을 해 주세요.', 'offerexp:' . $w['id']);
+                return $unit;
+            });
+            if ($res === null) continue;
+            $n++;
+            self::offerQuietly((int) $res, $now);
+        }
+        // (b) applications without any payment that nobody approved within hold_hours
+        if ($n < $batch) {
+            foreach (Db::all("SELECT c.id FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id
+                WHERE c.status = 'pending' AND c.paid_total = 0 AND u.contract_id = c.id AND u.hold_until > 0 AND u.hold_until < ? ORDER BY u.hold_until ASC, c.id ASC LIMIT ?", [$now, $batch - $n]) as $r) {
+                $unit = Db::txRetry(function () use ($r, $now) {
+                    $c = self::lockContract((int) $r['id']);
+                    if ((string) $c['status'] !== 'pending' || (int) $c['paid_total'] > 0) return null;
+                    $hold = (int) Db::value('SELECT hold_until FROM allot_units WHERE id = ? AND contract_id = ?', [(int) $c['unit_id'], (int) $c['id']]);
+                    if ($hold <= 0 || $hold >= $now) return null;
+                    return self::closeLocked($c, 'canceled', 'hold_expired', null, $now, 'hold_expired', '신청이 자동으로 취소되었어요',
+                        '{unit} 자리 신청이 기한 안에 확정되지 않아 취소되었어요. 이미 입금하셨다면 운영자에게 알려 주세요.');
+                });
+                if ($unit === null) continue;
+                $n++;
+                self::offerQuietly((int) $unit, $now);
+            }
+        }
+        $out['paidPending'] = (int) Db::value("SELECT COUNT(*) FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.status = 'pending' AND c.paid_total > 0 AND u.hold_until > 0 AND u.hold_until < ?", [$now]);
+        // (c) operator holds with an end time (an offered unit belongs to (a))
+        if ($n < $batch) {
+            foreach (Db::all("SELECT id, zone_id FROM allot_units WHERE status = 'held' AND contract_id IS NULL AND hold_until > 0 AND hold_until < ?
+                AND NOT EXISTS (SELECT 1 FROM allot_waitlist w WHERE w.unit_id = allot_units.id AND w.status = 'offered') ORDER BY hold_until ASC, id ASC LIMIT ?", [$now, $batch - $n]) as $u) {
+                $freed = Db::txRetry(function () use ($u, $now) {
+                    Db::one('SELECT id FROM allot_units WHERE id = ?' . Db::forUpdate(), [(int) $u['id']]);
+                    if (!self::unitCas((int) $u['id'], 'held', 'open', null, 0, $now, 'free')) return false;
+                    self::bumpZone((int) $u['zone_id'], $now);
+                    return true;
+                });
+                if (!$freed) continue;
+                $n++;
+                self::offerQuietly((int) $u['id'], $now);
+            }
+        }
+        return $n;
+    }
+
+    /** step 2 — approval by rule */
+    private static function tickApprove(int $now, int $batch, array &$out): int
+    {
+        $mode = (string) self::conf('auto_approve');
+        if ($mode === 'off') return 0;
+        $rows = $mode === 'always'
+            ? Db::all("SELECT id FROM allot_contracts WHERE status = 'pending' ORDER BY id ASC LIMIT ?", [$batch])
+            : Db::all("SELECT id FROM allot_contracts WHERE status = 'pending' AND (paid_total > 0 OR price = 0) ORDER BY id ASC LIMIT ?", [$batch]);
+        $n = 0;
+        foreach ($rows as $r) {
+            $done = Db::txRetry(function () use ($r, $mode, $now) {
+                $c = self::lockContract((int) $r['id']);
+                if ((string) $c['status'] !== 'pending') return false;
+                if ($mode === 'always') { self::approveLocked($c, null, $now, ''); return true; }
+                return self::approveIfPaid((int) $c['id'], null, $now);
+            });
+            if ($done) $n++;
+        }
+        return $n;
+    }
+
+    /** step 3 — contracts with auto-renew whose term is over */
+    private static function tickRenew(int $now, int $batch, array &$out): int
+    {
+        $n = 0;
+        foreach (Db::all("SELECT id FROM allot_contracts WHERE status IN ('active', 'overdue') AND auto_renew = 1 AND ends_at > 0 AND ends_at <= ? ORDER BY ends_at ASC, id ASC LIMIT ?", [$now, $batch]) as $r) {
+            $done = Db::txRetry(function () use ($r, $now) {
+                $c = self::lockContract((int) $r['id']);
+                if (!in_array((string) $c['status'], ['active', 'overdue'], true) || (int) $c['auto_renew'] !== 1 || (int) $c['ends_at'] <= 0 || (int) $c['ends_at'] > $now || (int) $c['term_months'] < 1) return false;
+                self::renewLocked($c, 1, null, $now, 'auto');
+                return true;
+            });
+            if ($done) $n++;
+        }
+        return $n;
+    }
+
+    /** step 4 — reminders. A contract is at one stage at a time (the smallest notice day that covers what is left), so there is never a burst. */
+    private static function tickNotices(int $now, int $batch, array &$out): int
+    {
+        $days = (array) self::conf('notice_days');
+        sort($days);
+        $n = 0;
+        foreach ($days as $d) {
+            $d = (int) $d;
+            if ($n >= $batch) break;
+            // time to pay — not for a contract that is paid to the end of its term (that one gets "the term ends")
+            foreach (Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND price > 0 AND paid_until > 0 AND paid_until <= ? AND paid_until < ? AND due_stage > ?
+                AND (period <> 'month' OR ? < 28) AND (ends_at = 0 OR paid_until < ends_at OR auto_renew = 1) ORDER BY paid_until ASC, id ASC LIMIT ?", [$now + $d * self::DAY, self::FOREVER, $d, $d, $batch - $n]) as $c) {
+                if (Db::exec('UPDATE allot_contracts SET due_stage = ? WHERE id = ? AND due_stage > ?', [$d, (int) $c['id'], $d]) !== 1) continue;
+                $due = (int) $c['paid_until'];
+                $left = (int) ceil(($due - $now) / self::DAY);
+                $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+                $body = $left > 0 ? $code . ' 자리 납부 기한이 ' . $left . '일 남았어요 (' . self::fmtDate($due) . ').' : $code . ' 자리 납부할 때가 되었어요 (' . self::fmtDate($due) . ').';
+                if (self::noteContract($c, $now, 'due', $left > 0 ? '납부 기한이 다가와요' : '납부할 때가 되었어요', $body . ' 금액과 방법은 ‘안내’에서 어른과 함께 확인해 주세요.',
+                    'due:' . $c['id'] . ':' . date('Ymd', intdiv($due, 1000)) . ':' . $d)) $n++;
+            }
+            if ($n >= $batch) break;
+            // the term ends (contracts that do not renew by themselves)
+            foreach (Db::all("SELECT * FROM allot_contracts WHERE status IN ('active', 'overdue') AND ends_at > 0 AND ends_at <= ? AND end_stage > ? AND auto_renew = 0 ORDER BY ends_at ASC, id ASC LIMIT ?",
+                [$now + $d * self::DAY, $d, $batch - $n]) as $c) {
+                if (Db::exec('UPDATE allot_contracts SET end_stage = ? WHERE id = ? AND end_stage > ?', [$d, (int) $c['id'], $d]) !== 1) continue;
+                $end = (int) $c['ends_at'];
+                $left = (int) ceil(($end - $now) / self::DAY);
+                $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+                $body = $left > 0 ? $code . ' 자리 분양 기간이 ' . $left . '일 뒤(' . self::fmtDate($end) . ') 끝나요. 이어서 하시려면 운영자에게 알려 주세요.'
+                    : $code . ' 자리 분양 기간이 ' . self::fmtDate($end) . ' 로 끝났어요. 이어서 할지 운영자에게 알려 주세요.';
+                if (self::noteContract($c, $now, 'ending', $left > 0 ? '분양 기간이 곧 끝나요' : '분양 기간이 끝났어요', $body, 'end:' . $c['id'] . ':' . date('Ymd', intdiv($end, 1000)) . ':' . $d)) $n++;
+            }
+        }
+        return $n;
+    }
+
+    /** step 5 — unpaid (or past its term) for grace_days */
+    private static function tickOverdue(int $now, int $batch, array &$out): int
+    {
+        $limit = $now - (int) self::conf('grace_days') * self::DAY;
+        $n = 0;
+        foreach (Db::all("SELECT * FROM allot_contracts WHERE status = 'active' AND paid_until > 0 AND paid_until < ? ORDER BY paid_until ASC, id ASC LIMIT ?", [$limit, $batch]) as $c) {
+            if (Db::exec("UPDATE allot_contracts SET status = 'overdue', updated_at = ? WHERE id = ? AND status = 'active' AND paid_until = ?", [$now, (int) $c['id'], (int) $c['paid_until']]) !== 1) continue;
+            $n++;
+            $code = (string) Db::value('SELECT code FROM allot_units WHERE id = ?', [(int) $c['unit_id']]);
+            $termOver = (int) $c['ends_at'] > 0 && (int) $c['paid_until'] >= (int) $c['ends_at'];
+            self::noteContract($c, $now, 'overdue', $termOver ? '분양 기간이 지났어요' : '납부 기한이 지났어요',
+                $code . ($termOver ? ' 자리 분양 기간이 지났어요. 이어서 할지 운영자에게 알려 주세요.' : ' 자리 납부 기한이 지났어요. 운영자에게 연락해 주세요.'), 'overdue:' . $c['id'] . ':' . date('Ymd', intdiv((int) $c['paid_until'], 1000)));
+            Audit::log('allot_overdue', $c['user_id'] === null ? null : (int) $c['user_id'], ['contract' => (string) $c['contract_no'], 'unit' => $code]);
+        }
+        return $n;
+    }
+
+    /** step 6 — only when the operator set overdue_end_days above 0 */
+    private static function tickAutoEnd(int $now, int $batch, array &$out): int
+    {
+        $end = (int) self::conf('overdue_end_days');
+        if ($end <= 0) return 0;
+        $limit = $now - ((int) self::conf('grace_days') + $end) * self::DAY;
+        $n = 0;
+        foreach (Db::all("SELECT id FROM allot_contracts WHERE status = 'overdue' AND paid_until > 0 AND paid_until < ? ORDER BY paid_until ASC, id ASC LIMIT ?", [$limit, $batch]) as $r) {
+            $unit = Db::txRetry(function () use ($r, $limit, $now) {
+                $c = self::lockContract((int) $r['id']);
+                if ((string) $c['status'] !== 'overdue' || (int) $c['paid_until'] >= $limit) return null;
+                return self::closeLocked($c, 'ended', 'overdue_auto', null, $now, 'ended', '분양이 끝났어요', '{unit} 자리 분양이 끝났어요. 납부 기한이 오래 지나 자리를 정리했어요.');
+            });
+            if ($unit === null) continue;
+            $n++;
+            self::offerQuietly((int) $unit, $now);
+        }
+        return $n;
+    }
+
+    /** step 7 — free units for those who wait (first come first) */
+    private static function tickOffers(int $now, int $batch, array &$out): int
+    {
+        $n = 0;
+        $none = [];   // "kind:zone" targets without a free unit in this run
+        $zonesOf = [];
+        foreach (Db::all("SELECT id, kind, zone_id FROM allot_waitlist WHERE status = 'waiting' ORDER BY id ASC LIMIT ?", [$batch]) as $w) {
+            $key = $w['kind'] . ':' . $w['zone_id'];
+            if (isset($none[$key])) continue;
+            $unitId = 0;
+            if ((int) $w['zone_id'] > 0) {
+                $zids = (int) Db::value('SELECT is_open FROM allot_zones WHERE id = ?', [(int) $w['zone_id']]) === 1 ? [(int) $w['zone_id']] : [];
+            } else {
+                if (!isset($zonesOf[$w['kind']])) $zonesOf[$w['kind']] = array_map(function ($z) { return (int) $z['id']; }, Db::all('SELECT id FROM allot_zones WHERE kind = ? AND is_open = 1 ORDER BY sort ASC, id ASC', [(string) $w['kind']]));
+                $zids = $zonesOf[$w['kind']];
+            }
+            foreach ($zids as $zid) {
+                $u = Db::value("SELECT id FROM allot_units WHERE zone_id = ? AND status = 'open' ORDER BY seq ASC LIMIT 1", [$zid]);
+                if ($u !== null) { $unitId = (int) $u; break; }
+            }
+            if ($unitId === 0) { $none[$key] = true; continue; }
+            if (self::offerNext($unitId, $now) !== null) $n++;
+        }
+        return $n;
+    }
+
+    /** step 8 — the queue */
+    private static function tickSend(int $now, int $batch, array &$out): int { return self::flushNotices($now, $batch); }
+
+    /** step 9 — today's statistics rows → how many rows were written */
+    private static function tickStats(int $now, int $batch, array &$out): int
+    {
+        $day = Clock::day($now);
+        $from = (int) strtotime($day . ' 00:00:00') * 1000;
+        $to = $from + self::DAY;
+        $zero = ['n_open' => 0, 'n_held' => 0, 'n_leased' => 0, 'n_closed' => 0, 'n_pending' => 0, 'n_active' => 0, 'n_overdue' => 0, 'n_ended' => 0, 'revenue' => 0];
+        $z = [0 => $zero];
+        foreach (Db::all('SELECT id FROM allot_zones') as $r) $z[(int) $r['id']] = $zero;
+        foreach (Db::all('SELECT zone_id, status, COUNT(*) AS n FROM allot_units GROUP BY zone_id, status') as $r) {
+            if (isset($z[(int) $r['zone_id']]['n_' . $r['status']])) $z[(int) $r['zone_id']]['n_' . $r['status']] = (int) $r['n'];
+        }
+        foreach (Db::all("SELECT u.zone_id, c.status, COUNT(*) AS n FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.status IN ('pending', 'active', 'overdue') GROUP BY u.zone_id, c.status") as $r) {
+            if (isset($z[(int) $r['zone_id']])) $z[(int) $r['zone_id']]['n_' . $r['status']] = (int) $r['n'];
+        }
+        foreach (Db::all("SELECT u.zone_id, COUNT(*) AS n FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.status IN ('ended', 'canceled') AND c.ended_at >= ? AND c.ended_at < ? GROUP BY u.zone_id", [$from, $to]) as $r) {
+            if (isset($z[(int) $r['zone_id']])) $z[(int) $r['zone_id']]['n_ended'] = (int) $r['n'];
+        }
+        // money of the day: what came in (also payments that were given back later) minus what was given back today
+        foreach (Db::all("SELECT u.zone_id, SUM(CASE WHEN p.kind = 'refund' THEN -p.amount ELSE p.amount END) AS amount FROM allot_payments p JOIN allot_contracts c ON c.id = p.contract_id JOIN allot_units u ON u.id = c.unit_id
+            WHERE p.paid_at >= ? AND p.paid_at < ? AND p.status IN ('paid', 'refunded') GROUP BY u.zone_id", [$from, $to]) as $r) {
+            if (isset($z[(int) $r['zone_id']])) $z[(int) $r['zone_id']]['revenue'] = (int) $r['amount'];
+        }
+        foreach ($z as $zid => $row) {
+            if ($zid === 0) continue;
+            foreach ($row as $k => $v) $z[0][$k] += $v;
+        }
+        Db::tx(function () use ($z, $day, $now) {
+            foreach ($z as $zid => $row) Db::upsert('allot_stats_daily', ['day' => $day, 'zone_id' => $zid] + $row + ['updated_at' => $now], ['day', 'zone_id']);
+        });
+        return count($z);
+    }
+
+    /** step 10 — the integrity scan with repairs */
+    private static function tickIntegrity(int $now, int $batch, array &$out): int
+    {
+        $r = self::integrity($batch, true, $now);
+        $out['issues'] = $r['issues'];
+        return $r['healed'];
+    }
+
+    /**
+     * Compare units and contracts. $heal repairs what has only one right answer and writes the audit row
+     * allot_integrity_healed for each repair:
+     *   a unit that still points at a contract that ended (or no longer exists) → free
+     *   a unit whose state does not match its own live contract (pending ↔ held, active / overdue ↔ leased) → the contract wins
+     *   a live contract whose unit is free and points nowhere → the unit is attached again
+     *   an ended contract that still claims its unit (live_unit_id) → the claim is dropped
+     *   a waiting-list offer for a unit that is not held for it → the row waits again
+     * Everything else is only reported (issues: [{kind, ref, note}], at most $limit): leased_without_contract ·
+     * unit_conflict · refund_due (a canceled contract with money on it) · capacity_mismatch. → {healed, issues}
+     */
+    public static function integrity(int $limit = 500, bool $heal = false, ?int $now = null): array
+    {
+        $now = self::now($now);
+        $limit = max(1, min(5000, $limit));
+        $healed = 0;
+        $issues = [];
+        $fix = function (string $kind, string $ref) use (&$healed) {
+            $healed++;
+            Audit::log('allot_integrity_healed', null, ['kind' => $kind, 'ref' => $ref], 'warn');
+        };
+        // units that point at a dead or missing contract
+        foreach (Db::all("SELECT u.id, u.zone_id, u.code, u.contract_id FROM allot_units u LEFT JOIN allot_contracts c ON c.id = u.contract_id
+            WHERE u.contract_id IS NOT NULL AND (c.id IS NULL OR c.status NOT IN ('pending', 'active', 'overdue')) ORDER BY u.id ASC LIMIT ?", [$limit]) as $u) {
+            if (!$heal) { $issues[] = ['kind' => 'unit_on_dead_contract', 'ref' => (string) $u['code'], 'note' => '끝난 계약이 자리에 남아 있어요']; continue; }
+            Db::tx(function () use ($u, $now) {
+                Db::exec("UPDATE allot_units SET status = 'open', contract_id = NULL, hold_until = 0, label = '', label_show = 0, updated_at = ? WHERE id = ? AND contract_id = ?", [$now, (int) $u['id'], (int) $u['contract_id']]);
+                self::bumpZone((int) $u['zone_id'], $now);
+            });
+            $fix('unit_on_dead_contract', (string) $u['code']);
+        }
+        // ended contracts that still claim a unit
+        foreach (Db::all("SELECT id, contract_no FROM allot_contracts WHERE status IN ('ended', 'canceled') AND live_unit_id IS NOT NULL ORDER BY id ASC LIMIT ?", [$limit]) as $c) {
+            if (!$heal) { $issues[] = ['kind' => 'dead_contract_claims_unit', 'ref' => (string) $c['contract_no'], 'note' => '끝난 계약이 자리를 잡고 있어요']; continue; }
+            Db::exec("UPDATE allot_contracts SET live_unit_id = NULL WHERE id = ? AND status IN ('ended', 'canceled')", [(int) $c['id']]);
+            $fix('dead_contract_claims_unit', (string) $c['contract_no']);
+        }
+        // live contracts and their units
+        foreach (Db::all("SELECT c.id, c.contract_no, c.status, c.unit_id, c.live_unit_id, u.id AS uid, u.zone_id, u.code, u.status AS ustatus, u.contract_id
+            FROM allot_contracts c LEFT JOIN allot_units u ON u.id = c.unit_id
+            WHERE c.status IN ('pending', 'active', 'overdue') AND (u.id IS NULL OR u.contract_id IS NULL OR u.contract_id <> c.id OR c.live_unit_id IS NULL OR c.live_unit_id <> c.unit_id
+                OR (c.status = 'pending' AND u.status <> 'held') OR (c.status <> 'pending' AND u.status <> 'leased')) ORDER BY c.id ASC LIMIT ?", [$limit]) as $c) {
+            $want = (string) $c['status'] === 'pending' ? 'held' : 'leased';
+            $mine = $c['contract_id'] !== null && (int) $c['contract_id'] === (int) $c['id'];
+            $free = $c['uid'] !== null && $c['contract_id'] === null && (string) $c['ustatus'] === 'open';
+            if ($c['uid'] === null || (!$mine && !$free)) {
+                $issues[] = ['kind' => 'unit_conflict', 'ref' => (string) $c['contract_no'], 'note' => '계약의 자리(' . (string) $c['code'] . ')가 다른 상태예요. 직접 확인해 주세요'];
+                continue;
+            }
+            if (!$heal) { $issues[] = ['kind' => 'unit_state_mismatch', 'ref' => (string) $c['contract_no'], 'note' => '자리 상태가 계약과 달라요']; continue; }
+            try {
+                Db::tx(function () use ($c, $want, $now) {
+                    Db::exec('UPDATE allot_units SET status = ?, contract_id = ?, updated_at = ? WHERE id = ?', [$want, (int) $c['id'], $now, (int) $c['uid']]);
+                    Db::exec('UPDATE allot_contracts SET live_unit_id = unit_id WHERE id = ?', [(int) $c['id']]);
+                    self::bumpZone((int) $c['zone_id'], $now);
+                });
+                $fix('unit_state_mismatch', (string) $c['contract_no']);
+            } catch (\PDOException $e) {
+                if ((string) $e->getCode() !== '23000') throw $e;
+                $issues[] = ['kind' => 'unit_conflict', 'ref' => (string) $c['contract_no'], 'note' => '같은 자리에 진행 중인 계약이 둘이에요. 직접 확인해 주세요'];
+            }
+        }
+        // offers for units that are not held for them
+        foreach (Db::all("SELECT w.id FROM allot_waitlist w LEFT JOIN allot_units u ON u.id = w.unit_id WHERE w.status = 'offered' AND (u.id IS NULL OR u.status <> 'held' OR u.contract_id IS NOT NULL) ORDER BY w.id ASC LIMIT ?", [$limit]) as $w) {
+            if (!$heal) { $issues[] = ['kind' => 'stale_offer', 'ref' => '#' . $w['id'], 'note' => '제안한 자리가 잡혀 있지 않아요']; continue; }
+            Db::exec("UPDATE allot_waitlist SET status = 'waiting', unit_id = NULL, offer_until = 0, updated_at = ? WHERE id = ? AND status = 'offered'", [$now, (int) $w['id']]);
+            $fix('stale_offer', '#' . $w['id']);
+        }
+        // only reported
+        foreach (Db::all("SELECT code FROM allot_units WHERE status = 'leased' AND contract_id IS NULL ORDER BY id ASC LIMIT ?", [$limit]) as $u) {
+            $issues[] = ['kind' => 'leased_without_contract', 'ref' => (string) $u['code'], 'note' => '분양 중으로 표시됐지만 계약이 없어요'];
+        }
+        foreach (Db::all("SELECT contract_no FROM allot_contracts WHERE status = 'canceled' AND paid_total > 0 ORDER BY id ASC LIMIT ?", [$limit]) as $c) {
+            $issues[] = ['kind' => 'refund_due', 'ref' => (string) $c['contract_no'], 'note' => '취소된 신청에 받은 돈이 남아 있어요. 환불을 확인해 주세요'];
+        }
+        foreach (Db::all('SELECT z.code, z.capacity, (SELECT COUNT(*) FROM allot_units u WHERE u.zone_id = z.id) AS n FROM allot_zones z ORDER BY z.id ASC') as $z) {
+            if ((int) $z['capacity'] !== (int) $z['n']) $issues[] = ['kind' => 'capacity_mismatch', 'ref' => (string) $z['code'], 'note' => '구역 정원(' . (int) $z['capacity'] . ')과 자리 수(' . (int) $z['n'] . ')가 달라요'];
+        }
+        return ['healed' => $healed, 'issues' => array_slice($issues, 0, $limit)];
+    }
+
+    /** step 11 — retention: erase the person, keep the anonymous ledger rows; plus old job history and long-read notices */
+    private static function tickPurge(int $now, int $batch, array &$out): int
+    {
+        $cut = $now - (int) self::conf('retention_days') * self::DAY;
+        $n = 0;
+        foreach (Db::all("SELECT cu.id FROM allot_customers cu WHERE cu.purged_at = 0 AND cu.updated_at < ?
+            AND NOT EXISTS (SELECT 1 FROM allot_contracts c WHERE c.customer_id = cu.id AND (c.status IN ('pending', 'active', 'overdue') OR c.ended_at >= ? OR c.updated_at >= ?))
+            AND NOT EXISTS (SELECT 1 FROM allot_waitlist w WHERE w.customer_id = cu.id AND (w.status IN ('waiting', 'offered') OR w.updated_at >= ?))
+            ORDER BY cu.id ASC LIMIT ?", [$cut, $cut, $cut, $cut, $batch]) as $r) {
+            $id = (int) $r['id'];
+            $done = Db::tx(function () use ($id, $now) {
+                if (Db::exec("UPDATE allot_customers SET name_enc = '', phone_enc = '', phone_hash = '', phone_tail = '', name_hash = '', addr_enc = NULL, memo = NULL, user_id = NULL, purged_at = ?, updated_at = ?
+                    WHERE id = ? AND purged_at = 0", [$now, $now, $id]) !== 1) return false;
+                Db::exec("UPDATE allot_payments SET payment_key_enc = '', memo = '' WHERE customer_id = ?", [$id]);
+                Db::exec('UPDATE allot_contracts SET memo = NULL, user_id = NULL WHERE customer_id = ?', [$id]);
+                Db::exec('DELETE FROM allot_notices WHERE customer_id = ?', [$id]);
+                Db::exec('UPDATE allot_waitlist SET user_id = NULL WHERE customer_id = ?', [$id]);
+                return true;
+            });
+            if ($done) $n++;
+        }
+        if ($n > 0) Audit::log('allot_purged', null, ['customers' => $n, 'retentionDays' => (int) self::conf('retention_days')], 'warn');
+        // housekeeping that holds no ledger data: job history after 180 days, read / canceled notices after 400 days
+        Db::exec('DELETE FROM job_runs WHERE started_at < ?', [Clock::ms() - 180 * self::DAY]);
+        Db::exec("DELETE FROM allot_notices WHERE status IN ('seen', 'canceled') AND created_at < ?", [$now - 400 * self::DAY]);
+        return $n;
+    }
+
+    /** the optional daily summary for the operator: numbers only → 'off' | 'no address' | 'already' | 'sent' | 'failed' */
+    private static function dailyMail(int $now, array $run): string
+    {
+        if (self::conf('daily_report_mail') !== true) return 'off';
+        $to = class_exists('Tfm\SecEvent') ? SecEvent::alertTargets()['email'] : '';
+        if ($to === '') return 'no address';
+        $day = Clock::day($now);
+        $old = Db::value("SELECT v FROM settings WHERE k = 'allot.mail_day'");
+        if ($old !== null && (string) $old === $day) return 'already';
+        // one mail a day even with several servers / runs: the stored day changes from the old value to today exactly once
+        if ($old === null) {
+            try { Db::insert('settings', ['k' => 'allot.mail_day', 'v' => $day, 'updated_at' => $now, 'updated_by' => null]); }
+            catch (\PDOException $e) { if ((string) $e->getCode() === '23000') return 'already'; throw $e; }
+        } elseif (Db::exec("UPDATE settings SET v = ?, updated_at = ? WHERE k = 'allot.mail_day' AND v = ?", [$day, $now, (string) $old]) !== 1) {
+            return 'already';
+        }
+        $s = self::adminSummary($now);
+        $u = $s['units'];
+        $app = (string) Config::get('app.name', TFM_APP);
+        $subject = '[' . $app . '] 분양 현황 ' . $day;
+        $body = "분양 현황 요약이에요 ({$day}).\n\n"
+            . "자리: 모두 {$u['total']} · 빈자리 {$u['open']} · 보류 {$u['held']} · 분양 {$u['leased']} · 닫힘 {$u['closed']}\n"
+            . "승인 기다리는 신청: {$s['pending']} (입금 기록 있음 {$s['pendingPaid']})\n"
+            . "진행 중 계약: {$s['active']} · 연체: {$s['overdue']} · 30일 안에 끝나는 계약: {$s['expiring30']}\n"
+            . "해지 요청: {$s['cancelRequests']} · 대기자: {$s['waiting']} · 직접 연락할 알림: {$s['noticesOffline']} · 환불 확인: {$s['refundDue']}\n"
+            . '이번 자동화: ' . json_encode($run['steps']) . "\n"
+            . (count($run['issues']) > 0 ? '점검에서 확인이 필요한 항목: ' . count($run['issues']) . "건\n" : '')
+            . "\n자세한 내용은 관리자 화면의 🏺 분양 관리에서 볼 수 있어요.\n";
+        if (self::$mailer !== null) return call_user_func(self::$mailer, $to, $subject, $body) ? 'sent' : 'failed';
+        if (!function_exists('mail')) return 'failed';
+        $subj = function_exists('mb_encode_mimeheader') ? mb_encode_mimeheader($subject, 'UTF-8', 'B') : $subject;
+        return @mail($to, $subj, $body, "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit") ? 'sent' : 'failed';
+    }
+
+    /**
+     * The numbers of the admin 현황 page: {units (as summary()), zones (as zones()), pending, pendingOldest, pendingPaid,
+     * holdsExpiring (unpaid applications that lapse within 24 h), active, overdue, expiring30, dueSoon (to pay within 7
+     * days), cancelRequests, waiting, offered, noticesOffline, refundDue, lastRun, tickAgeMs (null = never ran),
+     * mapVersion, toss, rules}
+     */
+    public static function adminSummary(?int $now = null): array
+    {
+        $now = self::now($now);
+        $v = function (string $sql, array $p = []): int { return (int) Db::value($sql, $p); };
+        $runs = self::jobRuns(1);
+        $last = self::lastTickAt();
+        self::$memo = [];
+        return [
+            'units' => self::summary(), 'zones' => self::zones(),
+            'pending' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status = 'pending'"),
+            'pendingOldest' => $v("SELECT COALESCE(MIN(created_at), 0) FROM allot_contracts WHERE status = 'pending'"),
+            'pendingPaid' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status = 'pending' AND paid_total > 0"),
+            'holdsExpiring' => $v("SELECT COUNT(*) FROM allot_contracts c JOIN allot_units u ON u.id = c.unit_id WHERE c.status = 'pending' AND c.paid_total = 0 AND u.hold_until > 0 AND u.hold_until < ?", [$now + self::DAY]),
+            'active' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status = 'active'"),
+            'overdue' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status = 'overdue'"),
+            'expiring30' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status IN ('active', 'overdue') AND auto_renew = 0 AND ends_at > 0 AND ends_at < ?", [$now + 30 * self::DAY]),
+            'dueSoon' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status = 'active' AND price > 0 AND paid_until > 0 AND paid_until < ?", [$now + 7 * self::DAY]),
+            'cancelRequests' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status IN ('active', 'overdue') AND cancel_req_at > 0"),
+            'waiting' => $v("SELECT COUNT(*) FROM allot_waitlist WHERE status = 'waiting'"),
+            'offered' => $v("SELECT COUNT(*) FROM allot_waitlist WHERE status = 'offered'"),
+            'noticesOffline' => $v("SELECT COUNT(*) FROM allot_notices WHERE status = 'queued' AND user_id IS NULL"),
+            'refundDue' => $v("SELECT COUNT(*) FROM allot_contracts WHERE status = 'canceled' AND paid_total > 0"),
+            'lastRun' => $runs ? $runs[0] : null, 'tickAgeMs' => $last > 0 ? $now - $last : null, 'mapVersion' => self::mapVersion(), 'toss' => self::tossOn(), 'rules' => self::rules(),
+        ];
+    }
+
+    /**
+     * Statistics for the admin site: {days: [{day, open, held, leased, closed, pending, active, overdue, ended, revenue}]
+     * (all zones, the last $days days that have a row, oldest first), zones (as zones()), revenueTotal (of those days)}
+     */
+    public static function stats(int $days = 30): array
+    {
+        $days = max(1, min(400, $days));
+        $rows = array_reverse(Db::all('SELECT day, n_open, n_held, n_leased, n_closed, n_pending, n_active, n_overdue, n_ended, revenue FROM allot_stats_daily WHERE zone_id = 0 ORDER BY day DESC LIMIT ?', [$days]));
+        $total = 0;
+        $out = [];
+        foreach ($rows as $r) {
+            $total += (int) $r['revenue'];
+            $out[] = ['day' => (string) $r['day'], 'open' => (int) $r['n_open'], 'held' => (int) $r['n_held'], 'leased' => (int) $r['n_leased'], 'closed' => (int) $r['n_closed'], 'pending' => (int) $r['n_pending'],
+                'active' => (int) $r['n_active'], 'overdue' => (int) $r['n_overdue'], 'ended' => (int) $r['n_ended'], 'revenue' => (int) $r['revenue']];
+        }
+        return ['days' => $out, 'zones' => self::zones(), 'revenueTotal' => $total];
+    }
+
+    // ------------------------------------------------------------------ keys (php cli/tfm.php secret:rotate)
+    /**
+     * --data-key: seal every sealed allot column again with the current data key (values still in plain text or sealed
+     * with the previous key). Runs inside the caller's transaction (Installer::resealColumns). → [resealed, unreadable]
+     */
+    public static function resealAll(): array
+    {
+        $done = 0;
+        $bad = 0;
+        $one = function ($v, callable $store) use (&$done, &$bad) {
+            if (!is_string($v) || $v === '') return;
+            if (Crypto::open($v) === null) { $bad++; return; }
+            if (!Crypto::needsReseal($v)) return;
+            $done += (int) $store(Crypto::seal((string) Crypto::open($v)));
+        };
+        $after = 0;
+        do {
+            $rows = Db::all('SELECT id, name_enc, phone_enc, addr_enc, memo FROM allot_customers WHERE id > ? AND purged_at = 0 ORDER BY id ASC LIMIT 500', [$after]);
+            foreach ($rows as $r) {
+                $id = (int) $r['id'];
+                $after = $id;
+                $one($r['name_enc'], function ($s) use ($id) { return Db::exec('UPDATE allot_customers SET name_enc = ? WHERE id = ?', [$s, $id]); });
+                $one($r['phone_enc'], function ($s) use ($id) { return Db::exec('UPDATE allot_customers SET phone_enc = ? WHERE id = ?', [$s, $id]); });
+                $one($r['addr_enc'], function ($s) use ($id) { return Db::exec('UPDATE allot_customers SET addr_enc = ? WHERE id = ?', [$s, $id]); });
+                $one($r['memo'], function ($s) use ($id) { return Db::exec('UPDATE allot_customers SET memo = ? WHERE id = ?', [$s, $id]); });
+            }
+        } while (count($rows) === 500);
+        $after = 0;
+        do {
+            $rows = Db::all("SELECT id, payment_key_enc FROM allot_payments WHERE id > ? AND payment_key_enc <> '' ORDER BY id ASC LIMIT 500", [$after]);
+            foreach ($rows as $r) {
+                $id = (int) $r['id'];
+                $after = $id;
+                $one($r['payment_key_enc'], function ($s) use ($id) { return Db::exec('UPDATE allot_payments SET payment_key_enc = ? WHERE id = ?', [$s, $id]); });
+            }
+        } while (count($rows) === 500);
+        return ['resealed' => $done, 'unreadable' => $bad];
+    }
+
+    /**
+     * --app-key: the blind indexes are keyed with the app key, so they are computed again from the sealed values with
+     * the new key. $hash = the keyed hash with the NEW key (this process still holds the old one). → rows changed
+     */
+    public static function rehashBlind(callable $hash): int
+    {
+        $n = 0;
+        $after = 0;
+        do {
+            $rows = Db::all('SELECT id, name_enc, phone_enc FROM allot_customers WHERE id > ? AND purged_at = 0 ORDER BY id ASC LIMIT 500', [$after]);
+            foreach ($rows as $r) {
+                $after = (int) $r['id'];
+                $phone = self::unseal($r['phone_enc']);
+                $name = self::nameKey(self::unseal($r['name_enc']));
+                $n += Db::exec('UPDATE allot_customers SET phone_hash = ?, name_hash = ? WHERE id = ?', [$phone === '' ? '' : (string) $hash('allot-phone:' . $phone), $name === '' ? '' : (string) $hash('allot-name:' . $name), (int) $r['id']]);
+            }
+        } while (count($rows) === 500);
+        return $n;
+    }
 }
