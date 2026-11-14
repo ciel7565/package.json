@@ -1259,6 +1259,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     stats() { return { parts: RUN.built.slice(), failed: RUN.failed.slice(), ground: { calls: RUN.groundCalls, tris: RUN.groundTris }, buildMs: RUN.buildMs }; },
     surfaceAt,
     _runParts: runParts,
+    /** the first-visit welcome card (kid audit: opens it anywhere) */
+    welcomeCard() { this._welcome(true); },
     /** enter the complex; opts.focusUnit ('J01-17' or { zone, seq }) ends beside that unit */
     enter(opts = {}) { return P.enter(ID, opts); },
     init() {
@@ -1274,8 +1276,57 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     },
     postInit() {
       try { buildShuttle(); } catch (e) { G.log.warn('WORLD', 'complex: valley shuttle stop failed', e?.message || e); }
+      // the first visit (P1): a brand-new account that came in through the title starts on the viewpoint deck
+      if (firstVisitEligible()) G.flags.nointro = true;            // the valley's lookout cinematic gives way to the deck
+      G.bus.on('game:login', (e) => {
+        if (!firstVisitEligible() || (!(e && e.isNew) && START !== 'complex')) return;
+        clearTimeout(this._fvT);
+        this._fvT = setTimeout(() => { this.firstVisit().catch((err) => G.log.warn('WORLD', 'complex: first visit failed', err?.message || err)); }, 700);
+      });
+    },
+    /** the first visit: the deck of the complex, the picture's view, one calm line and a big "🚌 마을로 가요" step */
+    async firstVisit() {
+      if (!G.state || !G.ready || P.current || P.busy) return false;
+      const v = (C.viewpoints || []).find((p) => p.id === 'deck');
+      const st = (v && v.stand) || { x: deckEl.x0 + 7, z: deckEl.z0 + 2.5 };
+      const rotY = v ? Math.atan2(v.look.x - st.x, v.look.z - st.z) : PI;
+      const ok = await P.enter(ID, { spawn: { x: st.x, z: st.z, rotY } });
+      if (!ok || !P.is(ID)) return false;
+      try { G.sys.camera?.snap?.(); } catch (e) { /* camera optional */ }
+      this.firstVisitShown = true;
+      setTimeout(() => this._welcome(), 900);
+      return true;
+    },
+    _welcome(force) {
+      if ((!force && !P.is(ID)) || !G.ui?.modal) return;
+      const easy = easyOn(), h = G.ui.h;
+      const line = '여기는 만 개의 장독대예요. 항아리들이 둥글게 모여 있어요.';
+      const go = () => {
+        try { G.ui.modal.close?.('cx-welcome'); } catch (e) { /* closed */ }
+        (P.current ? P.exit() : Promise.resolve(true)).then(() => { try { if (easy) G.easy?.say?.('마을에 왔어요! 이제 첫 공부를 해 봐요.', { priority: 1 }); } catch (e) { /* voice optional */ } });
+      };
+      G.ui.modal.open({
+        id: 'cx-welcome', title: easy ? '만 개의 장독대' : '만장대 단지에 오신 것을 환영해요', icon: 'home', size: 'sm', className: 'cx-welcome', say: line,
+        body: (el) => {
+          el.appendChild(h('div', { class: 'cxw-emoji emoji', 'aria-hidden': 'true' }, '🏺'));
+          el.appendChild(h('p', { class: 'cxw-line', 'data-say': line }, line));
+          if (!easy) el.appendChild(h('p', { class: 'cxw-sub' }, '전망 데크에서 단지 전체가 보여요. 셔틀버스를 타면 체험관 마을로 가요.'));
+        },
+        actions: [
+          { label: '🚌 마을로 가요', class: 'btn-primary cxw-go', onClick: go },
+          { label: easy ? '👀 더 볼래요' : '조금 더 둘러보기', class: 'btn-ghost cxw-stay' },
+        ],
+      });
     },
   };
+  const START = String((G.params && G.params.get && G.params.get('start')) || '').toLowerCase();
+  /** ?start=complex forces the deck start; ?start=village, autostart and browser automation keep today's valley start */
+  function firstVisitEligible() {
+    if (START === 'complex') return true;
+    if (START === 'village' || G.flags?.autostart || G.flags?.noTutorial) return false;
+    try { if (navigator.webdriver) return false; } catch (e) { /* no navigator */ }
+    return true;
+  }
 
   // ---------------------------------------------------------------- valley: the stop, a waiting bus, the signpost at 장독대
   let shuttleRoot = null;

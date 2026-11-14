@@ -156,6 +156,8 @@ try {
   // [rooms-b] --only <id,id,…>: walk in only these places (the definition / door checks still see every place)
   const ONLY = String(opt('--only', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
   const walk = ONLY.length ? places.filter((p) => ONLY.includes(p.id)) : places;
+  // [complex-ground] the district PL_ALLOT has its own suite (tests/complex-client.mjs): walked here only when asked by --only
+  for (let i = walk.length - 1; i >= 0; i--) if (walk[i].id === 'PL_ALLOT' && !ONLY.includes('PL_ALLOT')) walk.splice(i, 1);
   if (ONLY.length) check(`--only: every place asked for is defined (${ONLY.join(' ')})`, walk.length === ONLY.length && walk.length > 0, walk.map((p) => p.id).join(' '));
   const valley = await where(page);
   check('outside to begin with: no chip, the valley is shown', valley.cur === null && !valley.chip.visible && valley.roots.buildings === true && valley.engineIndoor === 0, JSON.stringify({ cur: valley.cur, chip: valley.chip.visible, roots: valley.roots }));

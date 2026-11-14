@@ -1,0 +1,10 @@
+/* 53-complex-site.css — 만장대 단지 (PL_ALLOT): the first-visit welcome card on the viewpoint deck [complex-ground] */
+.cx-welcome .cxw-emoji { font-size: 56px; line-height: 1; text-align: center; margin: 4px 0 10px; }
+.cx-welcome .cxw-line { font-size: 1.15rem; line-height: 1.55; text-align: center; margin: 0 0 8px; }
+.cx-welcome .cxw-sub { font-size: 0.95rem; line-height: 1.5; text-align: center; opacity: 0.85; margin: 0; }
+.cx-welcome .cxw-go,
+.cx-welcome .cxw-stay { min-height: 56px; min-width: 56px; font-size: 1.1rem; padding: 10px 22px; }
+.cx-welcome .cxw-go { font-weight: 800; }
+@media (prefers-reduced-motion: reduce) {
+  .cx-welcome, .cx-welcome * { transition: none !important; animation: none !important; }
+}

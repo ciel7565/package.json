@@ -289,6 +289,7 @@
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
+      F('53-complex-site.css', 'map', '만장대 단지 첫 방문 환영 카드(큰 버튼)'), // [complex-ground]
       F('60-social.css', 'social', '채팅·말풍선·이모지 선택·아이 말하기(skc-*)'),
       F('62-engagement.css', 'engagement', '참여 허브(출석·미션·알림·수료증·랭킹·꾸미기)'),
       F('65-companion.css', 'companion', '옹이 말풍선·놀이 메뉴'),
@@ -1419,6 +1420,7 @@
   const fnOf = (obj, ...names) => { for (const n of names) if (typeof obj?.[n] === 'function') return obj[n].bind(obj); return null; };
   const KID_SCREENS = [
     { id: 'hud', emoji: '🏠', label: '체험 화면 (HUD)', hud: true, fn: () => (G.state ? () => true : null) },
+    { id: 'cxwelcome', emoji: '🏺', label: '만장대 단지 첫 방문 (전망 데크 환영)', fn: () => fnOf(G.sys.complexSite, 'welcomeCard') },   // [complex-ground]
     { id: 'bag', emoji: '🎒', label: '가방', fn: () => fnOf(G.sys.inventory, 'open') },
     { id: 'shop', emoji: '🛒', label: '가게', fn: () => { const f = fnOf(G.sys.inventory, 'openShop'); return f && (() => f(firstKey(G.data.shops))); } },
     { id: 'sticker', emoji: '📖', label: '스티커북 (도감·업적)', fn: () => fnOf(G.sys.progression, 'openStickerbook', 'openHub', 'openCollection') },

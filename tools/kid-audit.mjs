@@ -16,6 +16,7 @@
 //                          [exhibits] xbook xcard xmotion: the 집 구경 도감, an exhibit card and the motion player (§16.6)
 //                          [places-kit] place-pick place-inside: the 집 구경 picture menu and the HUD inside a room
 //                          (the 📍 · 🚪 밖으로 chip, §16.4)
+//                          [complex-ground] cxwelcome: the first-visit card on the deck of 만장대 단지 (🚌 마을로 가요, §16.8)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report
