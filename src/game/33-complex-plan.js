@@ -28,20 +28,21 @@
 // | roundabout                    | centre (−104, 46)                    | island r 19 (pine garden, fountain r 4), outer r 30, lane r 24.5 |
 // | parking                       | x −142 … −112, z −50 … 6             | 84 bays 2.5 × 5 m in 4 columns                              |
 // | bus bay + stop (arrival)      | bay x −74 … −68, z 30 … 52; stop (−69.5, 41) | spawn (−60, 41) facing east on the entrance plaza   |
-// | entrance plaza                | x −72 … −36, z 14 … 88               | stone paving, signposts, lamps                              |
+// | entrance plaza                | x −72 … −48, z 14 … 70               | stone paving, signposts, lamps                              |
 // | main building 본관            | centre (−66, −18), 66 × 42           | core 40 × 42, 3 floors on a 1.2 m podium, two-tier hip-and-gable roof; wings 13 × 30, 2 floors; portico 20 × 10 to the south; door (−66, 3.2) |
-// | café 카페                     | centre (−50, 104), 20 × 14           | terrace deck 20 × 6 to the south                            |
-// | hanok village (12 houses)     | terrace x −34 … 54, z −112 … −46, +2 m | 4 columns x −22/0/22/44 × 3 rows z −56/−76/−96, houses 13 × 7.5 |
-// | corridor 회랑                 | (−33,−16) → (88,−16) → (96,−10)      | 4.4 m wide, roofed                                          |
-// | pavilion 정자                 | (100, −4) on a 3 m knoll (r 7)       | 9 × 9, two tiers                                            |
-// | GREAT JAR CIRCLE              | centre (30, 50)                      | plaza r 9.6; 27 rings r 11 … 59 (3 rings of 1.6 m + a 2.4 m ring walk = 5.6 m); 8 radial aisles 4 m wide; wall r 61.6 with gates S/W/N/E; bowl 0.075 m per m (0.12 per ring) |
-// | gate house 정문               | (30, 112) in the south wall          | 12 × 6, passage to the road                                 |
-// | JAR AMPHITHEATRE              | centre (126, −64), north half        | same 27 half rings r 11 … 59, aisles at 180/225/270/315/360°, 9 terraces of +0.45 m |
+// | café 카페                     | centre (−60, 78), 20 × 12            | on the plaza, terrace deck 20 × 6 to the south              |
+// | hanok village (12 houses)     | terrace x −38 … 50, z −112 … −46, +2 m | 4 columns x −26/−4/18/40 × 3 rows z −56/−76/−96, houses 11–13 × 7.5, 4 m lanes |
+// | corridor 회랑                 | (−33,−16) → (78,−16) → (85.5,−1.5)   | 4.4 m wide, roofed, along the circle's north edge           |
+// | pavilion 정자                 | (90, 4) on a 3 m knoll (r 7)         | 9 × 9, two tiers                                            |
+// | GREAT JAR CIRCLE              | centre (14, 52)                      | plaza r 9.6; 27 rings r 11 … 59 (3 rings of 1.6 m + a 2.4 m ring walk = 5.6 m); 8 radial aisles 4 m wide; wall r 61.6 with gates S/W/N/E; bowl 0.075 m per m (0.12 per ring) |
+// | gate house 정문               | (−31.6, 97.6) in the SW wall, rot −π/4 | 12 × 6, 4.2 m passage on the 135° aisle; forecourt to the road |
+// | JAR AMPHITHEATRE              | centre (114, −62), north half        | same 27 half rings r 11 … 59, aisles at 180/225/270/315/360°, 9 terraces of +0.45 m |
 // | fields (3 terraced blocks)    | N x −24 … 165, z −149 … −131; E x 149 … 186, z −28 … 64; SE x 108 … 183, z 74 … 120 | beds 1.0 × 1.5 m, 0.4 m paths, 1.2 m walk per 2 rows (4.6 m terraces), 1.6 m cross aisle every 10 beds |
 // | storehouse yard (2 rows)      | 8 long houses x −144 … −67.2, centres z −62.6 − 11 k | each 76.8 × 6.6 m, 63 bays of 1.2 × 3 m per side, 4.4 m lanes |
 // | 옹기 workshop + climbing kiln | (−50, −128), kiln (−50, −134 … −149) | 12 × 9                                                      |
 // | overflow field                | x 100 … 146, z 14 … 66               | any kind on a 2 m grid, 360 places                          |
-// | viewpoint deck 전망 데크      | (−58, 160), top y 22                 | 14 × 10, three stair legs from the road at (−112, 141)       |
+// | viewpoint deck 전망 데크      | (−58, 160), top y 22                 | 14 × 10, three stair legs from the road at (−112, 141); the forest is cleared in its view |
+// | aerial camera (= image 3)     | (−23, 110, 189) → (−25, 0, −2), vfov 48 | fitted to 7 landmarks of the picture (rms error 0.05 of the half frame) |
 // | slots, default preset         | J01 GC-SW · J02 GC-NW · J03 GC-NE · J04 GC-SE · J05 AM-W · J06 AM-E · P01 N · P02 E · P03 SE · S01 houses 1–4 · S02 houses 5–8 |
 // | capacity                      | jar slot 1,008 (natural) · plot slot 1,000 · store slot 500 · overflow 360 | default 10,000 = exactly placed      |
 //
@@ -831,7 +832,7 @@
     const F = (id, name, poly, density, species, extra) => add(Object.assign({ id, type: 'forest', name, poly, density, species }, extra || {}));
     F('FO_N', '북쪽 산', [[-200, -152], [230, -152], [230, -420], [-180, -420]], 1.6, { pine: 0.35, oak: 0.3, maple: 0.15, zelkova: 0.05, birch: 0.15 });
     F('FO_E', '동쪽 산', [[193, -152], [330, -152], [330, 260], [193, 260]], 1.6, { pine: 0.4, oak: 0.35, maple: 0.15, birch: 0.1 });
-    F('FO_S', '남쪽 산', [[-150, 142], [193, 142], [193, 320], [-150, 320]], 1.4, { pine: 0.45, oak: 0.3, maple: 0.15, birch: 0.1 }, { clear: [{ x: DECK.x, z: DECK.z, r: 11 }] });
+    F('FO_S', '남쪽 산', [[-150, 142], [193, 142], [193, 320], [-150, 320]], 1.4, { pine: 0.45, oak: 0.3, maple: 0.15, birch: 0.1 }, { clear: [{ x: DECK.x, z: DECK.z, r: 11 }, { x: DECK.x + 6, z: DECK.z - 11, r: 10 }, { x: DECK.x + 18, z: DECK.z - 14, r: 9 }, { x: DECK.x - 6, z: DECK.z - 12, r: 9 }, { x: DECK.x + 30, z: DECK.z - 16, r: 7 }] });
     F('FO_W', '강 건너 숲', farBank.concat([[-420, 300], [-420, -330]]), 1.3, { pine: 0.5, oak: 0.25, maple: 0.15, birch: 0.1 }, { cliffs: true });
     F('FO_VILLAGE', '마을 뒤 숲', [[-34, -116], [54, -116], [54, -126], [-34, -126]], 0.9, { pine: 0.7, maple: 0.3 });
     F('FO_MAIN', '본관 뒤 소나무', [[-100, -48], [-36, -48], [-36, -42], [-100, -42]], 0.8, { pine: 1.0 });

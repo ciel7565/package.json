@@ -245,6 +245,7 @@
       F('30-inventory.js', 'progression', '가방·상점(구매/판매)·아이템 안내 + 그림 가방/가게, 공용 아이 도구 G.kidKit'),
       F('31-quest.js', 'progression', '퀘스트 상태 머신·퀘스트 패널·금빛 표식·목표 안내·current()/renderList(스티커 카드)'),
       F('32-progression.js', 'progression', '레벨·코인·통계·업적·도감·칭호·HUD 갱신 + 📖 스티커북(할 일·도감·업적·나)'),
+      F('33-complex-plan.js', 'map', '만장대 단지 기본 계획(G.data.complex): 강·길·회전 교차로·본관·한옥 마을·회랑·정자·큰 장독대·반원 장독대·계단밭·창고 — 1만 자리 배치·자리 찾기·지형 높이·평면도 그리기 (순수 데이터, §16.8)'), // [complex-plan]
       F('40-farming.js', 'farm', '밭 성장 시뮬레이션·물주기·심기·수확·작물 표현·한 번 누르기(쉬운 모드)'),
       F('41-fermentation.js', 'farm', '장독 발효 시뮬레이션·품질 공식·재료 만들기·장독 얼굴 카드(쉬운 모드)'),
       F('42-realfarm.js', 'farm', '실시간 텃밭(진짜 시간으로 자라는 밭 4개)·곳간(300개 보관)·📮 완료 확인·📬 확인 기록장'),
@@ -2282,6 +2283,37 @@
     return { ok, detail: `깨끗한 화면 이상 ${clean?.anomaly} → 검은 사각형 2회 감지 ${p1?.anomaly}/${p2?.anomaly} (검정 ${p1 ? (p1.black * 100).toFixed(0) : '?'} %) → 격리 단계 ${step} (${state}) → 다시 켜기 후 단계 ${W.step}, 이상 ${after?.anomaly}` };
   });
   // ---- 🏠 한옥 전시 (CONTRACT §16.6) [exhibits]: the data, the save rule and the drawings — on scratch objects only
+  // ---- 🗺️ 만장대 단지 기본 계획 (CONTRACT §16.8) [complex-plan]: a small version of tests/complex-plan.mjs, in the page
+  T('🗺️ 단지 계획', '기본 분양 1만 자리: 모두 놓이고, 자리 찾기가 제자리를 돌려주고, 겹치지 않아요', () => {
+    const C = G.data.complex;
+    if (!C || typeof C.layout !== 'function') return SKIP('단지 계획(33-complex-plan.js)이 없어요');
+    const t0 = performance.now(), L = C.layout(C.defaultZones()), ms = performance.now() - t0, A = L.arrays;
+    let bad = 0, close = 0;
+    for (let i = 0; i < L.count; i += 7) {
+      const z = L.zones[A.zone[i]].code, u = L.unit(z, A.seq[i]), r = u && L.unitAt(u.x, u.z);
+      if (!r || r.zone !== z || r.seq !== A.seq[i]) bad++;
+      if (i + 1 < L.count && A.zone[i + 1] === A.zone[i] && Math.hypot(A.x[i + 1] - A.x[i], A.z[i + 1] - A.z[i]) < 1.19) close++;
+    }
+    const miss = [C.byId('B_MAIN'), C.byId('B_PAVILION')].filter(Boolean).filter((e) => L.unitAt(e.x, e.z)).length + (L.unitAt(C.rings.GC.cx + 30, C.rings.GC.cz) ? 1 : 0);
+    return { ok: L.count === 10000 && !L.unplaced && !bad && !close && !miss, detail: `${L.count}자리 · 배치 ${ms.toFixed(1)} ms · 되찾기 틀림 ${bad} · 너무 가까움 ${close} · 길·건물 위 ${miss}` };
+  });
+  T('🗺️ 단지 계획', '지형·길·평면도: 높이는 유한하고 길은 0.5 m보다 크게 끊기지 않고 평면도가 그려져요', () => {
+    const C = G.data.complex;
+    if (!C || typeof C.draw !== 'function') return SKIP('단지 계획이 없어요');
+    let worst = 0, nan = 0;
+    for (const p of C.paths) {
+      if (p.ys || p.kind === 'stair' || !p.pts || p.pts.length < 2) continue;
+      for (let i = 0; i < p.pts.length - 1; i++) {
+        const [ax, az] = p.pts[i], [bx, bz] = p.pts[i + 1], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5));
+        let prev = C.height(ax, az);
+        for (let k = 1; k <= n; k++) { const y = C.height(ax + (bx - ax) * k / n, az + (bz - az) * k / n); if (!Number.isFinite(y)) nan++; worst = Math.max(worst, Math.abs(y - prev)); prev = y; }
+      }
+    }
+    const cv = document.createElement('canvas'); cv.width = 160; cv.height = 140;
+    const ctx = cv.getContext('2d'); C.draw(ctx, C.fitView(160, 140, 2), { labels: false });
+    const px = ctx.getImageData(80, 70, 1, 1).data;
+    return { ok: !nan && worst <= 0.5 && px[3] === 255, detail: `길 ${C.paths.length}개 · 가장 큰 턱 ${worst.toFixed(2)} m · 높이 오류 ${nan} · 평면도 가운데 rgb(${px[0]},${px[1]},${px[2]})` };
+  });
   T('🏠 한옥 전시', '전시 자료: 방마다 8점 이상 · 아이 문장 40자 이하 · 출처 · 그림 없는 전시 2점', () => {
     const X = G.data.exhibits, M = G.data.motions, R = G.data.exhibitRooms;
     if (!X || !M || !R) return SKIP('전시 자료(48-interior-data.js)가 없어요');

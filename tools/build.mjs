@@ -59,6 +59,9 @@ const ORDER_RULES = [
   ['72-subscription.js', '80-devcenter.js'], // the dev center's 구독·속도 panel reads G.sys.subscription
   ['09-pack.js', '14-materials.js'],       // [render-assets] G.pack before G.mat …
   ['14-materials.js', '15-buildings.js'],  // … and G.mat before the building kit that maps its material keys onto it
+  ['33-complex-plan.js', '43-allot.js'],   // [complex-plan] G.data.complex (the master plan) before the 분양 panel …
+  ['33-complex-plan.js', '44-allot-district.js'], // … the 10,000 instanced units …
+  ['33-complex-plan.js', '53-complex-site.js'],   // … and the 3D complex that build on it
 ];
 
 const log = (...a) => { if (!QUIET) console.log(...a); };
