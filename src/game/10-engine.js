@@ -1670,7 +1670,8 @@
     //         intensity}, hemi {sky, ground, intensity}, hemiNight {…}, fill, background, backgroundNight,
     //         fog {color, density}, exposure, exposureNight, warmth, envIntensity, env: THREE.Scene (baked into the
     //         persistent environment target — scene.environment stays the same texture object), onBake(night 0..1),
-    //         shadow {bias, normalBias, radius, near, far} }
+    //         radiusY (half height of the shadow frustum; default = radius),
+    //         shadow {bias, normalBias, radius, near, far, mapSize (≥ the preset's; lattice bars are 3 cm)} }
     //   engine.indoorShadows                   may the window sun cast shadows now? (preset knob indoorShadows, else
     //                                          the preset's shadows; the 그림자 setting; a renderer)
     //   engine.skyFollow(on)                   the sky dome follows the camera (an outdoor place far from the origin)
@@ -1734,6 +1735,7 @@
         const bg = (v, d) => { const o = c(v, d); const m = 10.5 / 255; if (o.r < m) o.r = m; if (o.g < m) o.g = m; if (o.b < m) o.b = m; return o; };
         this._indoor = {
           center, dir, dist: clamp(fin(Number(profile.dist), 60), 20, 150), radius: clamp(fin(Number(profile.radius), 12), 3, 80),
+          radiusY: Number.isFinite(Number(profile.radiusY)) && profile.radiusY != null ? clamp(Number(profile.radiusY), 3, 80) : null,
           sun: lit(profile.sun, 0xffe6c2, 2.6), moon: lit(profile.moon, 0x8fa6d8, 0.35),
           hemi, hemiNight: profile.hemiNight ? hem(profile.hemiNight, 0x3a4664, 0x2a2018, 0.3) : { sky: hemi.sky.clone().multiplyScalar(0.45), ground: hemi.ground.clone().multiplyScalar(0.5), intensity: hemi.intensity * 0.5 },
           fill: clamp(fin(Number(profile.fill), 0.08), 0, 2),
@@ -1742,7 +1744,7 @@
           exposure: clamp(fin(Number(profile.exposure), 1.05), 0.4, 2), exposureNight: clamp(fin(Number(profile.exposureNight), 1.1), 0.4, 2.5),
           warmth: clamp(fin(Number(profile.warmth), 0.08), -0.5, 0.5), envIntensity: clamp(fin(Number(profile.envIntensity), 0.6), 0, 3),
           env: profile.env && profile.env.isScene ? profile.env : null, onBake: typeof profile.onBake === 'function' ? profile.onBake : null,
-          shadow: { bias: fin(Number(profile.shadow?.bias), -0.0005), normalBias: fin(Number(profile.shadow?.normalBias), 0.012), radius: fin(Number(profile.shadow?.radius), 1.6), near: fin(Number(profile.shadow?.near), 1), far: fin(Number(profile.shadow?.far), NaN) },
+          shadow: { bias: fin(Number(profile.shadow?.bias), -0.0005), normalBias: fin(Number(profile.shadow?.normalBias), 0.012), radius: fin(Number(profile.shadow?.radius), 1.6), near: fin(Number(profile.shadow?.near), 1), far: fin(Number(profile.shadow?.far), NaN), mapSize: fin(Number(profile.shadow?.mapSize), 0) },
         };
         this._indoorGoal = 1;
         if (opts.instant) this.indoor = 1;
@@ -1762,16 +1764,20 @@
       if (!s || !s.camera) return;
       if (on && P) {
         const cam = s.camera;
-        if (!this._indoorSaved) this._indoorSaved = { left: cam.left, right: cam.right, top: cam.top, bottom: cam.bottom, near: cam.near, far: cam.far, bias: s.bias, normalBias: s.normalBias, radius: s.radius };
-        const R = P.radius;
-        Object.assign(cam, { left: -R, right: R, top: R, bottom: -R, near: P.shadow.near, far: Number.isFinite(P.shadow.far) ? P.shadow.far : P.dist + R * 2.5 });
+        if (!this._indoorSaved) this._indoorSaved = { left: cam.left, right: cam.right, top: cam.top, bottom: cam.bottom, near: cam.near, far: cam.far, bias: s.bias, normalBias: s.normalBias, radius: s.radius, size: s.mapSize.x };
+        const R = P.radius, RY = P.radiusY ?? R;
+        Object.assign(cam, { left: -R, right: R, top: RY, bottom: -RY, near: P.shadow.near, far: Number.isFinite(P.shadow.far) ? P.shadow.far : P.dist + Math.max(R, RY) * 2.5 });
         cam.updateProjectionMatrix();
         s.bias = P.shadow.bias; s.normalBias = P.shadow.normalBias; s.radius = P.shadow.radius;
+        // a finer map for the lattice (never smaller than the preset's); the old target is replaced
+        const size = Math.min(4096, Math.max(this._indoorSaved.size || 0, P.shadow.mapSize || 0));
+        if (size && this.sun.castShadow && size !== s.mapSize.x) { s.mapSize.set(size, size); if (s.map) { s.map.dispose(); s.map = null; } }
       } else if (!on && this._indoorSaved) {
         const v = this._indoorSaved, cam = s.camera;
         Object.assign(cam, { left: v.left, right: v.right, top: v.top, bottom: v.bottom, near: v.near, far: v.far });
         cam.updateProjectionMatrix();
         s.bias = v.bias; s.normalBias = v.normalBias; s.radius = v.radius;
+        if (v.size && v.size !== s.mapSize.x) { s.mapSize.set(v.size, v.size); if (s.map) { s.map.dispose(); s.map = null; } }
         this._indoorSaved = null;
       }
     },
@@ -1826,7 +1832,14 @@
       }
       if (this.fill) this.fill.intensity = mix(fin(this.fill.intensity, 0.2), P.fill, k);
       if (scene) {
-        if (scene.background && scene.background.isColor) scene.background.lerp(_sunCol.copy(P.background).lerp(P.backgroundNight, nf), k);
+        if (scene.background && scene.background.isColor) {
+          // The profile's colour is a scene value (it goes through the tone mapping of the composer). Without the
+          // composer (`low`) the clear colour is shown as it is, so it is brought down the toe of the curve by hand;
+          // either way it ends up dark, warm and at least ~12/255 on the screen.
+          _sunCol.copy(P.background).lerp(P.backgroundNight, nf);
+          if (!this.composer) { _sunCol.multiplyScalar(0.172); const m = 0.0042; if (_sunCol.r < m) _sunCol.r = m; if (_sunCol.g < m) _sunCol.g = m; if (_sunCol.b < m) _sunCol.b = m; }
+          scene.background.lerp(_sunCol, k);
+        }
         const fog = scene.fog;
         if (fog) { fog.color.lerp(P.fogColor, k); if (fog.isFogExp2) fog.density = mix(fin(fog.density, 0.0028), P.fogDensity, k); }
         scene.environmentIntensity = mix(this.envIntensity ?? 0.5, P.envIntensity, k);

@@ -643,7 +643,10 @@
     _profile(L) {
       const def = L.def;
       let p = null;
-      try { p = typeof def.light === 'function' ? def.light(L.ctx) : def.light; } catch (e) { G.log.warn('WORLD', `place ${def.id}: light profile failed`, e?.message || e); p = null; }
+      try {
+        p = typeof def.light === 'function' ? def.light(L.ctx) : def.light;
+        if (p == null && L.ctx.room && typeof L.ctx.room.light === 'function') p = L.ctx.room.light();   // a room built with G.hanok brings its own
+      } catch (e) { G.log.warn('WORLD', `place ${def.id}: light profile failed`, e?.message || e); p = null; }
       p = p && typeof p === 'object' ? { ...p } : {};
       const c = p.center || { x: 0, y: 1.2, z: 0 };
       p.center = new THREE.Vector3(def.origin.x + num(c.x, 0), def.floorY + num(c.y, 1.2), def.origin.z + num(c.z, 0));
