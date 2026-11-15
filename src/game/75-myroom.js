@@ -1228,6 +1228,12 @@
       if (a.height > 0) top = a.bottom + 10;
       if (b.height > 0) bot = hh - b.top + 10;
     } catch (e) { /* not laid out yet */ }
+    // the bar of the thing in the hand comes and goes above the tray: its room is kept free all the time, so a thing
+    // near the door is never hidden under it and the view does not jump when something is taken
+    let actH = 0;
+    try { const r = ui.act.getBoundingClientRect(); actH = r.height > 0 ? r.height : 0; } catch (e) { actH = 0; }
+    if (actH) ED.actH = actH; else actH = ED.actH || (easyOn() ? 74 : 62);
+    bot += actH + 6;
     const portrait = hh > w * 1.05, pitch = 1.0, free = clamp((hh - top - bot) / hh, 0.3, 1);
     c.fov = portrait ? 58 : 50;
     const tf = Math.tan((c.fov * PI) / 360), asp = w / hh, q = ((Math.round(c.tYaw / (PI / 2)) % 4) + 4) % 4;

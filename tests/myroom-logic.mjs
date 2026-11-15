@@ -79,6 +79,7 @@ export async function makeRoomWorld(ROOT) {
     for (const c of kids.flat(3)) { if (c == null || c === false) continue; if (typeof c === 'object') el.appendChild(c); else el._t += String(c); }
     if (el.cls.has('mr-top')) el.rect = { left: 8, top: 8, right: 1272, bottom: 72, width: 1264, height: 64 };
     if (el.cls.has('mr-tray')) el.rect = { left: 8, top: 520, right: 1272, bottom: 712, width: 1264, height: 192 };
+    if (el.cls.has('mr-act')) el.rect = { left: 300, top: 452, right: 980, bottom: 514, width: 680, height: 62 };
     return el;
   };
   const body = new El('body'), hudTop = new El('div');
@@ -321,7 +322,7 @@ export async function roomLogic({ check, log, ROOT }) {
   await part('pointer and keys', async () => {
     tick(2);
     const corners = [[-7, 0, -5.5], [7, 0, -5.5], [-7, 0, 5.5], [7, 0, 5.5]].map((p) => E.screenOf(...p));
-    check('the view from above: the whole floor lies between the top bar (72 px) and the tray (520 px) of a 1280 × 720 screen', corners.every((p) => p.front && p.x >= 0 && p.x <= 1280 && p.y >= 72 && p.y <= 520), JSON.stringify(corners.map((p) => [Math.round(p.x), Math.round(p.y)])));
+    check('the view from above: the whole floor lies between the top bar (72 px) and the bar of the thing in the hand above the tray (452 px) of a 1280 × 720 screen', corners.every((p) => p.front && p.x >= 0 && p.x <= 1280 && p.y >= 72 && p.y <= 452), JSON.stringify(corners.map((p) => [Math.round(p.x), Math.round(p.y)])));
     E.place();
     const n0 = items().length;
     // with a mouse the picture follows the pointer until the click that puts it down
