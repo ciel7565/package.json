@@ -115,6 +115,8 @@ const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/i
   // [allot-admin] CONTRACT §16.7: the 분양 ledger — the library, the admin tab's part (under lib/, never under admin/), the CLI and the endpoints
   'metaverse/lib/Allot.php', 'metaverse/lib/AdminAllot.php', 'metaverse/cli/allot.php',
   ...['summary', 'map', 'unit', 'logs', 'mine', 'plans', 'inbox', 'seen', 'apply', 'cancel', 'waitlist', 'nameplate', 'pay-prepare', 'pay-confirm'].map((n) => `metaverse/api/allot/${n}.php`),
+  // [lecture] CONTRACT §17.3: the 강의실 — the library, the admin tab's part (under lib/), the two endpoints
+  'metaverse/lib/Lecture.php', 'metaverse/lib/AdminLecture.php', 'metaverse/api/lecture/list.php', 'metaverse/api/lecture/file.php',
   // every file of the built admin folder ships (it is index.php + .htaccess — CONTRACT §15.11 #6; any part added there must ship too)
   ...(fs.existsSync(path.join(DIST, 'admin')) ? walk(path.join(DIST, 'admin')).filter((p) => !skipReason(`admin/${p}`)).map((p) => `metaverse/admin/${p}`) : [])]
   .filter((p, i, all) => all.indexOf(p) === i);
@@ -125,7 +127,8 @@ const FORBIDDEN = (p) => /^tests\//.test(p)
   || /\.sqlite(-wal|-shm|-journal)?$|install\.lock$|config\.local\.php$|(^|\/)secret\.php$/.test(p)
   || /(^|\/)(sessions|logs|backups|node_modules)\//.test(p)
   || (/(^|\/)vendor\//.test(p) && p !== 'vendor/three-entry.js')
-  || /(^|\/)uploads\/journal\//.test(p);
+  || /(^|\/)uploads\/journal\//.test(p)
+  || /(^|\/)data\/lectures\//.test(p);   // [lecture] the lecture files an operator uploaded stay on the server
 function verify(list) {
   const files = list.filter((p) => !p.endsWith('/'));
   const missing = MUST.filter((m) => !files.includes(m));
