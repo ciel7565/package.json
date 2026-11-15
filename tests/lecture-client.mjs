@@ -132,7 +132,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, {
       'Content-Type': f[0], 'X-Content-Type-Options': 'nosniff', 'Content-Length': f[1].length, 'Cache-Control': 'private, max-age=60', 'Accept-Ranges': 'bytes',
       'Content-Disposition': `${f[0] === PPTX_TYPE ? 'attachment' : 'inline'}; filename="lecture-${u.searchParams.get('id')}"`,
-      'Content-Security-Policy': pdf ? "default-src 'none'; object-src 'self'; frame-ancestors 'self'; sandbox" : "default-src 'none'; frame-ancestors 'none'; sandbox",
+      'Content-Security-Policy': pdf ? "default-src 'none'; object-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'" : "default-src 'none'; frame-ancestors 'none'; sandbox",
       'X-Frame-Options': pdf ? 'SAMEORIGIN' : 'DENY', 'Cross-Origin-Resource-Policy': 'same-origin',
     });
     res.end(f[1]);

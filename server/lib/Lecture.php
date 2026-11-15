@@ -18,7 +18,8 @@
  *   publicList($user) → {v, lectures: [{id, title, kind, yt?, url?, files?: [{n, type, w, h, bytes}], place, autoplay,
  *             sort, office?}], opt: {autoOpen}}                                                    api/lecture/list.php
  *   fileFor($id, $n, $user) → the lecture_files row (404 for anything the caller may not see)     api/lecture/file.php
- *   stream($file, $lectureId)   the file with fixed headers: the stored type (never sniffed), nosniff, a sandbox CSP,
+ *   stream($file, $lectureId)   the file with fixed headers: the stored type (never sniffed), nosniff, a closed CSP
+ *             (sandbox for pictures and pptx; a pdf: PDF_CSP — the browser's pdf viewer is a plug-in),
  *             inline for pdf / images and attachment for pptx, Cache-Control: private, ETag, one byte range
  *
  * Files live under data/lectures/<YYYY>/<MM>/<32 hex>.bin — private (data/ is never web-readable), random names, a
@@ -726,8 +727,9 @@ final class Lecture
     // ------------------------------------------------------------------ sending a file
     /**
      * Send one stored file and end the request. The type is the stored one (a fixed list), never taken from the bytes
-     * or a name; X-Content-Type-Options: nosniff; the CSP makes whatever a browser renders from it a sandboxed, inert
-     * document (no script, no form, no plug-in); a pdf may be framed by this site only; a pptx is always a download.
+     * or a name; X-Content-Type-Options: nosniff; the CSP makes a picture or a pptx a sandboxed, inert document (no
+     * script, no form, no plug-in) and gives a pdf PDF_CSP; a pdf may be framed by this site only; a pptx is always a
+     * download.
      * One byte range (bytes=a-b | a- | -n) is served with 206; several ranges or another unit get the whole file.
      */
     public static function stream(array $f, int $lectureId, bool $noStore = false): void
@@ -805,8 +807,13 @@ final class Lecture
     }
 
     /**
-     * The policy a pdf answer carries. `sandbox` makes the answer an inert document in every browser that would render
-     * it as a page; the browser's pdf viewer is told by object-src / frame-ancestors that only this site may show it.
+     * The policy a pdf answer carries. NOT `sandbox`: the pdf viewer of Chrome and Safari is a plug-in, and a sandboxed
+     * document may not load one — the lecture would stay blank. What keeps the answer inert instead: its fixed type
+     * application/pdf with nosniff (a browser never reads it as a page), default-src 'none' (the viewer's document may
+     * load nothing and may not send its frame anywhere — a link inside the pdf cannot replace the lecture with another
+     * site), object-src 'self' (only this very file as plug-in data), style-src for the viewer's own inline layout,
+     * frame-ancestors 'self' + X-Frame-Options (only this site may frame it). The upload check refuses a pdf that
+     * carries a script or a launch action (Upload::inspectPdf).
      */
-    public const PDF_CSP = "default-src 'none'; object-src 'self'; frame-ancestors 'self'; sandbox";
+    public const PDF_CSP = "default-src 'none'; object-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'";
 }

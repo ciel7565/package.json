@@ -2259,7 +2259,7 @@ async function main() {
         assert(!lectures().some((x) => /큰 파일|중간 파일/.test(x.title)) || flashOf(r2.text)?.type === 'ok', 'a refused upload left a lecture');
         return `9 MB → 413 in words · upload_max_filesize ${lim}`;
       });
-      await step('17.3', 'the preview: pictures, the pdf and the pptx come through the admin entry (the stored type, nosniff, no-store, a sandbox policy); a video is shown as its number and links, never framed', async () => {
+      await step('17.3', 'the preview: pictures, the pdf and the pptx come through the admin entry (the stored type, nosniff, no-store, a closed policy — sandbox for pictures and pptx); a video is shown as its number and links, never framed', async () => {
         const e = await b.req(`${T}&edit=${ids.deck}`);
         assert(e.status === 200 && new RegExp(`<img class="photo" src="\\./\\?lecfile=${ids.deck}\\.0"`).test(e.text), 'no thumbnails in the edit card');
         assertLocked(e, 'edit card');
@@ -2267,7 +2267,7 @@ async function main() {
         assert(img.status === 200 && img.headers.get('content-type') === 'image/png' && img.buf.subarray(1, 4).toString() === 'PNG', `picture → ${img.status} ${img.headers.get('content-type')}`);
         for (const [h, rx] of [['x-content-type-options', /^nosniff$/], ['cache-control', /no-store/], ['content-security-policy', /default-src 'none'.*sandbox/], ['content-disposition', /^inline; filename="lecture-\d+-1\.png"$/]]) assert(rx.test(img.headers.get(h) || ''), `picture ${h}: ${img.headers.get(h)}`);
         const pdf = await b.bytes(`${ADM}?lecfile=${ids.pdf}.0`);
-        assert(pdf.status === 200 && pdf.headers.get('content-type') === 'application/pdf' && pdf.buf.equals(PDF) && /sandbox/.test(pdf.headers.get('content-security-policy') || ''), `pdf → ${pdf.status}`);
+        assert(pdf.status === 200 && pdf.headers.get('content-type') === 'application/pdf' && pdf.buf.equals(PDF) && /default-src 'none'.*frame-ancestors 'self'/.test(pdf.headers.get('content-security-policy') || '') && pdf.headers.get('x-content-type-options') === 'nosniff', `pdf → ${pdf.status} ${pdf.headers.get('content-security-policy')}`);
         const px = await b.bytes(`${ADM}?lecfile=${ids.pptx}.0`);
         assert(px.status === 200 && /^attachment; filename="lecture-\d+\.pptx"$/.test(px.headers.get('content-disposition') || '') && px.buf.equals(PPTX), `pptx → ${px.status} ${px.headers.get('content-disposition')}`);
         for (const q of ['0.0', `${ids.pdf}.7`, '99999.0', `${ids.pdf}`, `${ids.pdf}.0/../../config`, '../../config/config.php', `${ids.pdf}.0%00`, 'abc']) { const g = await b.bytes(`${ADM}?lecfile=${q}`); assert(g.status === 404, `?lecfile=${q} → ${g.status}`); }

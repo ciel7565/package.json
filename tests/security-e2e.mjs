@@ -1575,7 +1575,7 @@ async function S03() {
     const bad = [];
     const expect = async (who, c, key, status) => { const r = await get(c, id[key]); if (r.status !== status) bad.push(`${who} · ${key} → ${r.status} (want ${status})`); return r; };
     const ok = await expect('visitor', visitor, 'all', 200);
-    if (ok.status === 200 && (!ok.buf.equals(pdf) || ok.headers['content-type'] !== 'application/pdf' || ok.headers['x-content-type-options'] !== 'nosniff' || !/sandbox/.test(ok.headers['content-security-policy'] || ''))) bad.push('the public pdf: wrong bytes or headers');
+    if (ok.status === 200 && (!ok.buf.equals(pdf) || ok.headers['content-type'] !== 'application/pdf' || ok.headers['x-content-type-options'] !== 'nosniff' || !/default-src 'none'.*frame-ancestors 'self'/.test(ok.headers['content-security-policy'] || ''))) bad.push('the public pdf: wrong bytes or headers');
     const nf = [];
     for (const key of ['member', 'paid', 'allot', 'off']) nf.push(await expect('visitor', visitor, key, 404));
     await expect('member', member, 'member', 200);

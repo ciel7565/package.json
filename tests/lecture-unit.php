@@ -604,7 +604,7 @@ check('HTTP list.php: a visitor gets the public lectures as JSON; ?v= of the sam
     foreach (['x=1', 'v=abc', 'v[]=1', 'v=-1'] as $q) if (http("api/lecture/list.php?$q")['status'] !== 400) return "accepted ?$q";
     return http('api/lecture/list.php', [], 'POST')['status'] === 405;
 });
-check('HTTP file.php (pdf): the stored type, nosniff, inline, private cache, ETag, a sandbox policy that lets only this site frame it, the exact bytes', function () use (&$IDS, $ADMIN) {
+check('HTTP file.php (pdf): the stored type, nosniff, inline, private cache, ETag, a closed policy that lets only this site frame it (no sandbox: the pdf viewer is a plug-in), the exact bytes', function () use (&$IDS, $ADMIN) {
     $f = Lecture::get($IDS['pdf'])['files'][0];
     $bytes = (string) file_get_contents((string) Lecture::absPath($f['path']));
     $r = http('api/lecture/file.php?id=' . $IDS['pdf'] . '&n=0');
@@ -615,7 +615,7 @@ check('HTTP file.php (pdf): the stored type, nosniff, inline, private cache, ETa
     if (($h['content-disposition'] ?? '') !== 'inline; filename="lecture-' . $IDS['pdf'] . '.pdf"') return 'disposition ' . ($h['content-disposition'] ?? '');
     if (!preg_match('/^private\b/', $h['cache-control'] ?? '')) return 'cache ' . ($h['cache-control'] ?? '');
     $csp = $h['content-security-policy'] ?? '';
-    if (strpos($csp, "default-src 'none'") === false || strpos($csp, 'sandbox') === false || strpos($csp, "frame-ancestors 'self'") === false) return "csp $csp";
+    if (strpos($csp, "default-src 'none'") === false || strpos($csp, "object-src 'self'") === false || strpos($csp, "frame-ancestors 'self'") === false || strpos($csp, 'sandbox') !== false || preg_match('/script-src|\*|https?:/', $csp)) return "csp $csp";
     if (($h['x-frame-options'] ?? '') !== 'SAMEORIGIN' || ($h['accept-ranges'] ?? '') !== 'bytes' || (int) ($h['content-length'] ?? 0) !== strlen($bytes) || empty($h['etag'])) return 'frame / ranges / length / etag';
     if (isset($h['x-powered-by']) || isset($h['set-cookie'])) return 'x-powered-by / a cookie';
     $n = http('api/lecture/file.php?id=' . $IDS['pdf'], ['If-None-Match: ' . $h['etag']]);
