@@ -1241,7 +1241,7 @@
     // what must fit: the room across the screen, and its depth (foreshortened) plus the far wall up the screen
     const dh = (across / 2 + 0.5) / (tf * asp), dv = ((deep * Math.sin(pitch) + R0.post * Math.cos(pitch)) / 2 + 0.35) / (tf * free);
     c.tPitch = pitch; c.tYaw = Math.round(c.tYaw / (PI / 2)) * (PI / 2);
-    c.tDist = clamp(portrait ? Math.min(Math.max(dh, dv), 18) : Math.max(dh, dv), ZMIN + 3, ZMAX);
+    c.tDist = clamp(portrait ? Math.min(Math.max(dh, dv), 25) : Math.max(dh, dv), ZMIN + 3, ZMAX);
     c.tLook.set(0, 0.8, 0);
     // the middle of the free part lies above the middle of the screen by this share of its height
     const tanT = ((bot - top) / hh) * tf;
@@ -1764,7 +1764,8 @@
       applyLight();
       showCat(ED.cat === 'room' && S.room.items.length ? 'furn' : ED.cat);
       uiHeld(); uiUndo(); uiCount(); uiSave();
-      ED.cam.first = true; ED.cam.tYaw = ED.cam.yaw = 0;
+      // a tall screen (a phone held upright) looks along the room's long side, so the whole room fits its width
+      ED.cam.first = true; ED.cam.tYaw = ED.cam.yaw = (window.innerHeight || 720) > (window.innerWidth || 1280) * 1.05 ? PI / 2 : 0;
       fitCamera();
       ED.cam.pitch = ED.cam.tPitch; ED.cam.dist = ED.cam.tDist; ED.cam.look.copy(ED.cam.tLook);
       ED.offs.push(G.ui.onEscape(onEscape, 40));

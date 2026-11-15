@@ -140,7 +140,7 @@ export async function makeRoomWorld(ROOT) {
     world: { addCollider: (c) => { colliders.set(++cid, c); return cid; }, removeCollider: (id) => { colliders.delete(id); }, nightFactor: () => 0 },
   };
   const G = new Proxy(Gb, { get: (t, k) => (k in t ? t[k] : typeof k === 'symbol' ? undefined : (t[k] = any())) });
-  Gb.sys.engine = { camera: cam, renderer: { domElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) }, info: { render: { calls: 0, frame: 0 } } }, setIndoor: (p) => { indoor.push(p); }, frameInfo: { calls: 0, triangles: 0 }, scene: { environment: null }, quality: 'medium', indoor: 1 };
+  Gb.sys.engine = { camera: cam, renderer: { domElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }) }, info: { render: { calls: 0, frame: 0 } } }, setIndoor: (p) => { indoor.push(p); }, frameInfo: { calls: 0, triangles: 0 }, scene: { environment: null }, quality: 'medium', indoor: 1 };
   Gb.sys.camera = { mode: 'follow', shot(pos, look, o) { this.mode = 'shot'; cam.position.copy(pos); if (o && o.fov) cam.fov = o.fov; cam.updateProjectionMatrix(); cam.lookAt(look); cam.updateMatrixWorld(true); }, setMode(m) { this.mode = m; } };
   Gb.sys.player = { position: new THREE.Vector3(), _ready: true, teleport(x, z) { this.position.set(x, 0, z); return Promise.resolve(); }, cancelWalk() {} };
   // the places system: definitions, one built place at a time, the hooks canEnter / exitTo of 18-places.js
@@ -201,7 +201,7 @@ export async function makeRoomWorld(ROOT) {
   load('19-hanok-kit.js', kitDocument, setTimeout, clearTimeout);
   load('76-myroom-data.js', kitDocument, setTimeout, clearTimeout);
   load('75-myroom.js', document, fakeSetTimeout, fakeClearTimeout);
-  return { THREE, Gb, P, cam, srv, els, body, win, store, timers, warns, toasts, modals, picks, confirms, dirty, indoor, interacts, exitDoors, answers, blockers, colliders, tick, flush, mulberry };
+  return { THREE, Gb, P, cam, srv, els, body, win, wnd: window, store, timers, warns, toasts, modals, picks, confirms, dirty, indoor, interacts, exitDoors, answers, blockers, colliders, tick, flush, mulberry };
 }
 
 export async function roomLogic({ check, log, ROOT }) {
@@ -412,6 +412,21 @@ export async function roomLogic({ check, log, ROOT }) {
   });
 
   // ---------------------------------------------------------------- a full room
+  await part('a phone held upright', async () => {
+    // 390 × 844: the bars as the phone shot of the browser suite has them (top bar to 76 px, tray from 642 px)
+    const W2 = W.wnd, setR = (cls, r) => { for (const el of W.els) if (el.cls.has(cls)) el.rect = r; };
+    const keepR = ['mr-top', 'mr-tray', 'mr-act'].map((c) => [c, (W.els.find((el) => el.cls.has(c)) || {}).rect]);
+    if (E.active) E.stop({ silent: true });
+    W2.innerWidth = 390; W2.innerHeight = 844; W.cam.aspect = 390 / 844; W.cam.updateProjectionMatrix();
+    setR('mr-top', { left: 8, top: 8, right: 382, bottom: 76, width: 374, height: 68 }); setR('mr-tray', { left: 6, top: 642, right: 384, bottom: 838, width: 378, height: 196 }); setR('mr-act', { left: 40, top: 570, right: 350, bottom: 636, width: 310, height: 66 });
+    E.start(); tick(3);
+    const pc = [[-7, 0, -5.5], [7, 0, -5.5], [-7, 0, 5.5], [7, 0, 5.5]].map((p2) => E.screenOf(...p2)), v = E.view();
+    check('a phone held upright: the overview looks along the long side and the WHOLE floor fits between the top bar and the bar above the tray', Math.abs(v.yaw - Math.PI / 2) < 1e-6 && pc.every((p2) => p2.front && p2.x >= 0 && p2.x <= 390 && p2.y >= 76 && p2.y <= 570), JSON.stringify({ yaw: v.yaw, dist: Math.round(v.dist * 10) / 10, c: pc.map((p2) => [Math.round(p2.x), Math.round(p2.y)]) }));
+    E.stop({ silent: true });
+    W2.innerWidth = 1280; W2.innerHeight = 720; W.cam.aspect = 1280 / 720; W.cam.updateProjectionMatrix();
+    for (const [c, r] of keepR) setR(c, r);
+  });
+
   await part('a full room', async () => {
     await P.exit();
     const room = D.empty(), rnd = mulberry(20240917);
