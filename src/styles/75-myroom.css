@@ -8,7 +8,7 @@
    ============================================================================= */
 .myroom-fab {
   display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
-  min-height: var(--tap, 44px); padding: 0 1.1rem 0 .85rem; border-radius: 999px;
+  min-height: max(44px, var(--tap, 44px)); padding: 0 1.1rem 0 .85rem; border-radius: 999px;
   border: 2px solid rgba(255, 255, 255, .7); background: linear-gradient(180deg, #ffe7a8, #f0b44a); color: #2b1d02;
   font: inherit; font-weight: 900; font-size: max(15px, .98rem); white-space: nowrap; cursor: pointer; touch-action: manipulation;
   box-shadow: 0 3px 0 rgba(140, 95, 0, .55), 0 8px 16px rgba(0, 0, 0, .3);

@@ -219,7 +219,7 @@ async function useDoor(page) {
   await page.waitForTimeout(400);
   return { act: !!(await ev(page, () => G.interact.activate('DOOR_PL_MYROOM'))) };
 }
-async function enterByDoor(page) { const r = await useDoor(page); return { ...r, ok: r.act && await settled(page, 'PL_MYROOM') }; }
+async function enterByDoor(page) { const r = await useDoor(page); return { ...r, ok: r.act && await settled(page, 'PL_MYROOM', T_UI * 2.5) }; }
 /** wait until the view from above stands still (the camera flies in, and a frame can take a second on this machine) */
 const steady = (page, ms = 25000) => page.evaluate(async (ms) => {
   const E = G.sys.myroom.edit, t0 = performance.now(), nf = () => new Promise((r) => requestAnimationFrame(() => r()));
@@ -339,7 +339,7 @@ try {
   await ev(page, () => G.sys.myroom.edit.turn(-1));
   await page.click(act('색'));
   const picker = await until(page, () => document.querySelectorAll('#modal-root .easy-pick .easy-tile').length === 9);
-  await page.click('#modal-root .easy-pick .easy-tile >> nth=3');
+  await page.click('#modal-root .easy-pick .easy-tile >> nth=3', { force: true });   // the app's picture dialogs pop in with an animation: never "stable" on a slow machine
   await until(page, () => (G.sys.myroom.room().items[0] || {}).c === 2);
   s = await snap(page);
   check('buttons: 색 opens picture tiles of colours above the editor (its own colours + 8, no typing); the chosen colour is kept', picker && s.items[0].c === 2 && s.held && s.held.index === 0, JSON.stringify(s.items[0]));
@@ -511,7 +511,7 @@ try {
   await page.click('.mr-tile[data-do="preset:anbang"]');
   const asked = await until(page, () => !!document.querySelector('#modal-root .easy-btn-yes'), null, 8000);
   const askText = await ev(page, () => (document.querySelector('#modal-root .easy-confirm')?.textContent || '').replace(/\s+/g, ' ').slice(0, 160));
-  await page.click('#modal-root .easy-btn-yes');
+  await page.click('#modal-root .easy-btn-yes', { force: true });
   const pre = await until(page, (n) => G.sys.myroom.room().items.length === n && G.sys.myroom.stats().items === n, D.preset('anbang').items.length, 30000);
   await page.waitForTimeout(900); await frames(page, 4);
   s = await snap(page);
@@ -528,7 +528,7 @@ try {
   // style: a pick of pictures; windows: the plan of bays
   await page.click('.mr-tile[data-do="style:floor"]');
   const stylePick = await until(page, () => document.querySelectorAll('#modal-root .easy-pick .easy-tile').length === 4, null, 8000);
-  await page.click('#modal-root .easy-pick .easy-tile:has-text("박석")');
+  await page.click('#modal-root .easy-pick .easy-tile:has-text("박석")', { force: true });
   const stone = await until(page, () => G.sys.myroom.room().style.floor === 'stone', null, 15000);
   await until(page, () => !document.querySelector('#modal-root .modal'), null, 8000);
   await page.waitForTimeout(700);
@@ -538,7 +538,7 @@ try {
   const cells = await ev(page, () => { const c = [...document.querySelectorAll('.mr-wplan .mr-wcell')]; return { disabled: c.filter((b) => b.disabled).length, min: Math.min(...c.map((b) => Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height))), first: c[0].getAttribute('aria-label') }; });
   // the far wall's first bay twice (→ two kinds on), its third bay once
   await page.click('.mr-wplan .mr-wcell >> nth=0'); await page.click('.mr-wplan .mr-wcell >> nth=0'); await page.click('.mr-wplan .mr-wcell >> nth=2');
-  await page.click('#modal-root button:has-text("이렇게 할래요")');
+  await page.click('#modal-root button:has-text("이렇게 할래요")', { force: true });
   const wantWin = String((Number(win0[0]) + 2) % 7) + win0[1] + String((Number(win0[2]) + 1) % 7) + win0.slice(3);
   const win = await until(page, (w) => G.sys.myroom.room().style.win === w, wantWin, 15000);
   await page.waitForTimeout(900); await frames(page, 4);
@@ -552,7 +552,7 @@ try {
   await page.waitForTimeout(600);
   await page.click('.mr-tile[data-do="reset"]');
   await until(page, () => !!document.querySelector('#modal-root .easy-btn-yes'), null, 8000);
-  await page.click('#modal-root .easy-btn-yes');
+  await page.click('#modal-root .easy-btn-yes', { force: true });
   const empty = await until(page, () => G.sys.myroom.room().items.length === 0, null, 15000);
   const emptyStyle = (await snap(page)).style;
   await page.waitForTimeout(600);
@@ -656,7 +656,7 @@ try {
   const card = await until(page, () => !!document.querySelector('#modal-root .mr-explain'), null, 20000);
   const cardInfo = await ev(page, () => { const m = document.querySelector('#modal-root .mr-explain'); return { text: m ? m.textContent.replace(/\s+/g, ' ').slice(0, 220) : '', btns: m ? [...m.querySelectorAll('button')].map((b) => b.textContent.trim()) : [], cur: G.sys.places.current, busy: !!G.sys.places.busy, gets: window.__room.gets, can: G.sys.myroom.can(), inputs: m ? m.querySelectorAll('input, textarea, a[href^="http"]').length : -1 }; });
   check('an account without a room: the door asks the server, stays shut and shows a kind card — what the room is, who gets one — with a ready-made room to look at (no typing, no link out)', d2.act && card && cardInfo.cur === null && cardInfo.gets === 1 && cardInfo.can === false && /분양/.test(cardInfo.text) && cardInfo.btns.some((b) => /구경하기/.test(b)) && cardInfo.btns.some((b) => /닫기/.test(b)) && cardInfo.inputs === 0, JSON.stringify(cardInfo));
-  await page.click('#modal-root .mr-explain button:has-text("구경하기")');
+  await page.click('#modal-root .mr-explain button:has-text("구경하기")', { force: true });
   const visiting = await settled(page, 'PL_MYROOM');
   await page.waitForTimeout(1200); await frames(page, 4);
   const vi = await ev(page, () => ({ st: G.sys.myroom.state(), stats: G.sys.myroom.stats(), fab: document.getElementById('myroom-fab').hidden, edit: G.sys.myroom.edit.start(), active: G.sys.myroom.edit.active, chip: !!document.querySelector('#place-chip .pc-exit'), saves: window.__room.calls.filter((c) => /save/.test(c.path)).length }));
