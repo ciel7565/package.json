@@ -261,7 +261,7 @@ final class AdminLecture
                 . '<div class="row"><button type="submit" class="btn"' . ($left > 0 ? '' : ' disabled') . '>⬆️ 그림 추가</button></div></form>';
         }
         $h .= self::open('lecture_delete', ['id' => $id], 'stack lbl')
-            . '<label class="check"><input type="checkbox" name="sure" value="1" required> 이 강의' . ($isFile ? '와 올린 파일' : '') . '을 지워요 (되돌릴 수 없어요)</label>'
+            . '<label class="check"><input type="checkbox" name="sure" value="1" required> ' . ($isFile ? '이 강의와 올린 파일을' : '이 강의를') . ' 지워요 (되돌릴 수 없어요)</label>'
             . '<div class="row"><button type="submit" class="btn danger">🗑️ 강의 지우기</button></div></form>';
         return $h . '</section>';
     }
