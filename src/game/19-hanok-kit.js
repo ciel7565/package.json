@@ -3599,4 +3599,187 @@
       chorong, candle, paperLamp, dish, pumpkin, strings, pyeongsang, bedding, jukbuin, shoes, gat, sotdae, porcelain, inlayBox,
     });
   })();
+
+  // ==============================================================================================================
+  // [rooms2] things of the 대강의실, the 체험 교실, the 숙성 저장고 and the 가게 (58-interiors-d.js, CONTRACT §17.9) — an
+  // add-only block of the rooms2 lane. Same conventions as section 3: (T, opts) with opts.x / y / z / rotY (or opts.m),
+  // local +Z = the front, y = the floor it stands on, a footprint for the plan where useful, no collider (R.block).
+  //   K.bench(T, {w = 2.4, d = 0.36, h = 0.44, tone}) -> {w, d, top}        장의자: a plank seat on splayed trestles
+  //   K.lectern(T, {w = 0.72, d = 0.5, h = 1.1, tone}) -> {w, d, top, desk}  강탁: a panelled standing desk, sloped top
+  //   K.jupan(T, {w = 0.34, rods = 13}) -> {w, d, top}                       주판: frame, beam, 1 + 4 beads on each rod
+  //   K.yeopjeon(T, {n = 26, r = 0.16}) -> {top}                             엽전 꾸러미: square-holed coins on a cord
+  //   K.hamjibak(T, {r = 0.36, h = 0.15, fill: 'kong'|'salt'|'water'|'flour'|null}) -> {r, top}   함지박 + what is in it
+  //   K.bagaji(T, {r = 0.11, tint}) -> {top}                                 바가지: half a dried gourd, open side up
+  //   K.bojagi(T, {w = 0.3, h = 0.2, d = w, tint, knot = true}) -> {top}     보자기 bundle: a cloth-wrapped box, tied
+  //   K.yeotpan(T, {w = 0.5, d = 0.32}) -> {top}                             엿판: a tray of 가락엿 dusted with flour
+  //   K.brineBasin(T, {r = 0.3}) -> {top, egg}                               자배기 of brine with an egg afloat
+  //   K.kongPile(T, {r = 0.16, n = 40, tint}) -> {top}                       a little heap of soybeans (on a 키 / tray)
+  //   K.lightShafts(R, {color = '#ffe2b0', alpha = 0.16, len}) -> Mesh | null   soft visible beams from the room's open
+  //        and barred openings (paper windows diffuse: none from them) along the room's sun; additive, one draw call,
+  //        none on `low`. Call after the walls exist (any time before R.finish()).
+  // ==============================================================================================================
+  (function rooms2() {
+    const ZR = (a) => new THREE.Matrix4().makeRotationZ(a);
+    const XR = (a) => new THREE.Matrix4().makeRotationX(a);
+    const F = (o) => ({ ...o, cast: false });
+    const foot = (T, o, w, d, color) => { const q = Math.abs(Math.sin(num(o.rotY, 0))) > 0.7; T.planItem?.(num(o.x, 0), num(o.z, 0), q ? d : w, q ? w : d, color); };
+
+    function bench(T, o = {}) {
+      const w = num(o.w, 2.4), d = num(o.d, 0.36), h = num(o.h, 0.44), m = base(T, o), tn = o.tone || '#8a5a38', dk = o.frameTone || '#5e3b24';
+      T.add('furn', KG.slab(w, 0.055, d, 0.012), mul(m, M(0, h - 0.0275, 0)), tn, o);                       // the seat plank
+      for (const sx of [-1, 1]) {
+        const x = sx * (w / 2 - 0.22);
+        for (const sz of [-1, 1]) T.add('furn', geo.tube(x, h - 0.06, sz * 0.09, x + sx * 0.04, 0, sz * (d / 2 - 0.01), 0.026, 6), m, dk, o);   // splayed legs
+        T.add('furn', KG.timber(d - 0.04, 0.05, 0.05, 0.006).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(x, h - 0.085, 0)), dk, o);   // the cross bearer
+      }
+      T.add('furn', KG.timber(w - 0.5, 0.04, 0.035, 0.005), mul(m, M(0, h * 0.4, 0)), dk, F(o));                 // stretcher
+      foot(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + h };
+    }
+
+    function lectern(T, o = {}) {
+      const w = num(o.w, 0.72), d = num(o.d, 0.5), h = num(o.h, 1.1), m = base(T, o), tn = o.tone || '#6e4128', dk = o.frameTone || '#4a2a18';
+      const bh = h - 0.12;
+      // a panelled body (the audience sees the front, +Z) on a plinth
+      T.add('furn', KG.slab(w + 0.08, 0.07, d + 0.08, 0.012), mul(m, M(0, 0.035, 0)), dk, o);
+      chest({ add: (...a) => T.add(...a), planItem: null }, { m: mul(m, M(0, 0.07, 0)), w, d: d * 0.86, h: bh - 0.07, legs: 0, doors: 2, drawers: 0, fittings: false, tone: tn, frameTone: dk, panelTone: o.panelTone || '#7f4c2e', cast: o.cast });
+      // the sloped desk top with a lip for the papers (it slopes down towards the speaker at −Z)
+      const tilt = 0.24, top = mul(m, M(0, bh + 0.06, -0.02, 0, 1, 1, 1, -tilt));
+      T.add('furn', KG.slab(w + 0.12, 0.04, d + 0.06, 0.01), top, tn, o);
+      T.add('furn', KG.timber(w + 0.1, 0.035, 0.03, 0.005), mul(top, M(0, 0.03, -(d + 0.06) / 2 + 0.02)), dk, F(o));
+      T.add('furn', KG.slab(w * 0.55, 0.012, d * 0.5, 0.003), mul(top, M(-0.04, 0.026, 0.02)), '#f1e7cf', F(o));      // papers
+      foot(T, o, w + 0.1, d + 0.1);
+      return { w: w + 0.12, d: d + 0.1, top: num(o.y, 0) + bh + 0.1, desk: P0({ x: num(o.x, 0), y: num(o.y, 0) + bh + 0.1, z: num(o.z, 0) }) };
+    }
+
+    function jupan(T, o = {}) {
+      const w = num(o.w, 0.34), rods = Math.max(5, Math.round(num(o.rods, 13))), d = 0.12, m = mul(base(T, o), M(0, 0.012, 0)), tn = o.tone || '#4b2c1a';
+      // frame lying flat: two long sides, two ends, the beam; rods along Z
+      for (const sz of [-1, 1]) T.add('furn', KG.timber(w, 0.022, 0.014, 0.003), mul(m, M(0, 0, sz * (d / 2 - 0.007))), tn, o);
+      for (const sx of [-1, 1]) T.add('furn', KG.timber(d, 0.022, 0.014, 0.003).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(sx * (w / 2 - 0.007), 0, 0)), tn, o);
+      T.add('furn', KG.timber(w - 0.02, 0.016, 0.008, 0.002), mul(m, M(0, 0.002, -d * 0.16)), '#2f1b10', F(o));
+      const bead = new THREE.CylinderGeometry(0.0001, 0.0085, 0.006, 7).translate(0, 0.003, 0), bead2 = bead.clone().applyMatrix4(XR(PI)).translate(0, 0.006, 0);
+      for (let i = 0; i < rods; i++) {
+        const x = -w / 2 + 0.022 + ((w - 0.044) * (i + 0.5)) / rods;
+        T.add('iron', geo.tube(x, 0, -d / 2 + 0.012, x, 0, d / 2 - 0.012, 0.0016, 4), m, '#6d6557', F(o));
+        const ups = [-d * 0.32], downs = [d * 0.02, d * 0.12, d * 0.22, d * 0.32].map((z, k) => (i % 4 === k ? z - 0.012 : z));
+        for (const bz of ups.concat(downs)) for (const g of [bead, bead2]) T.add('furn', g.clone().applyMatrix4(ZR(PI / 2)).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(x, 0, bz)), '#3b2214', F(o));
+      }
+      foot(T, o, w, d);
+      return { w, d, top: num(o.y, 0) + 0.04 };
+    }
+
+    function yeopjeon(T, o = {}) {
+      const n = Math.max(4, Math.round(num(o.n, 26))), r = num(o.r, 0.16), m = base(T, o), y = 0.004;
+      const coin = new THREE.TorusGeometry(0.0105, 0.0055, 4, 4).applyMatrix4(XR(PI / 2)).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 4));   // square hole, round-ish rim
+      for (let i = 0; i < n; i++) {
+        const a = -1.2 + (2.4 * i) / (n - 1), px = Math.cos(a) * r, pz = Math.sin(a) * r * 0.6;
+        T.add('brass', coin, mul(m, M(px, y + (i % 2) * 0.003, pz, a + PI / 2, 1, 1, 1, 0.4 * Math.sin(i * 1.7), 1.45)), i % 5 ? '#8f7a45' : '#a98a4c', F(o));
+      }
+      const a0 = -1.3, a1 = 1.3;
+      T.add('cloth', geo.tube(Math.cos(a0) * r, y, Math.sin(a0) * r * 0.6, Math.cos(a1) * r, y, Math.sin(a1) * r * 0.6, 0.002, 4).applyMatrix4(mul(m, M())), null, '#7a2e22', F(o));
+      return { top: num(o.y, 0) + 0.02 };
+    }
+
+    const HAM = [[0, 0], [0.62, 0], [0.7, 0.04], [0.86, 0.42], [1, 0.95], [1.02, 1], [0.94, 1], [0.8, 0.5], [0.62, 0.12], [0, 0.1]];
+    function hamjibak(T, o = {}) {
+      const r = num(o.r, 0.36), h = num(o.h, 0.15), m = base(T, o), tn = o.tint || '#9b6a3e';
+      T.add('furn', KG.lathe(HAM.map(([a, b]) => [a * r, b * h]), 22), m, tn, o);
+      const fill = o.fill, fy = h * 0.72, fr = r * 0.9;
+      if (fill === 'water') T.add('lacquer', new THREE.CircleGeometry(fr, 22).applyMatrix4(XR(-PI / 2)), mul(m, M(0, fy, 0)), '#4f5a52', F(o));
+      else if (fill) {
+        const tint2 = { kong: '#d9bf86', salt: '#eeeae2', flour: '#e9dcc2', meju: '#b89a70' }[fill] || '#d9bf86';
+        const g = new THREE.SphereGeometry(fr, 20, 6, 0, TAU, 0, PI / 2); g.scale(1, 0.22, 1);
+        T.add(fill === 'salt' || fill === 'flour' ? 'cloth' : 'paint', g, mul(m, M(0, fy - 0.01, 0)), tint2, F(o));
+        if (fill === 'kong') kongPile(T, { m: mul(m, M(0, fy + 0.02, 0)), r: fr * 0.7, n: 46, tint: '#dcc38c' });
+      }
+      foot(T, o, r * 2, r * 2);
+      return { r, top: num(o.y, 0) + h };
+    }
+
+    function kongPile(T, o = {}) {
+      const r = num(o.r, 0.16), n = Math.max(6, Math.round(num(o.n, 40))), m = base(T, o), rnd = T.rnd || Math.random, tn = o.tint || '#d8bd84';
+      const bean = new THREE.SphereGeometry(0.0062, 6, 4).scale(1, 0.85, 1.12);
+      for (let i = 0; i < n; i++) {
+        const a = rnd() * TAU, q = Math.sqrt(rnd()) * r, y = (1 - q / r) * r * 0.32;
+        T.add('paint', bean, mul(m, M(Math.cos(a) * q, y + 0.004, Math.sin(a) * q, rnd() * 3)), (i % 3 ? tn : '#cfae72'), F(o));
+      }
+      return { top: num(o.y, 0) + r * 0.32 };
+    }
+
+    function bagaji(T, o = {}) {
+      const r = num(o.r, 0.11), m = base(T, o), g = new THREE.SphereGeometry(r, 16, 7, 0, TAU, PI / 2, PI / 2);   // the lower half: a bowl
+      g.scale(1, 0.62, 1).translate(0, r * 0.62, 0);
+      T.add('straw', g, m, o.tint || '#d8c38c', o);
+      T.add('straw', new THREE.TorusGeometry(r * 0.99, 0.004, 4, 18).applyMatrix4(XR(PI / 2)), mul(m, M(0, r * 0.62, 0)), '#b49a5c', F(o));
+      return { top: num(o.y, 0) + r * 0.62 };
+    }
+
+    function bojagi(T, o = {}) {
+      const w = num(o.w, 0.3), h = num(o.h, 0.2), d = num(o.d, w), m = base(T, o), tn = o.tint || '#a8322c';
+      T.add('cloth', K.pillow(w, h, d, 0.22, 0.3, 10), mul(m, M(0, h / 2, 0)), tn, o);
+      if (o.knot !== false) {
+        for (const sx of [-1, 1]) { const e = new THREE.SphereGeometry(0.035, 8, 6).scale(1.5, 0.7, 0.8); T.add('cloth', e, mul(m, M(sx * 0.045, h + 0.02, 0, sx * 0.5)), tn, F(o)); }
+        T.add('cloth', new THREE.SphereGeometry(0.03, 8, 6), mul(m, M(0, h + 0.012, 0)), o.trim || tn, F(o));
+        T.add('cloth', geo.tube(-w * 0.45, h * 0.97, 0, w * 0.45, h * 0.97, 0, 0.012, 5), m, o.trim || tn, F(o));   // the knotted corners run across
+      }
+      return { top: num(o.y, 0) + h + 0.05 };
+    }
+
+    function yeotpan(T, o = {}) {
+      const w = num(o.w, 0.5), d = num(o.d, 0.32), m = base(T, o), rnd = T.rnd || Math.random;
+      T.add('furn', KG.slab(w, 0.025, d, 0.005), mul(m, M(0, 0.0125, 0)), '#a87a4e', o);
+      for (const sz of [-1, 1]) T.add('furn', KG.timber(w, 0.03, 0.018, 0.004), mul(m, M(0, 0.035, sz * (d / 2 - 0.009))), '#7d5634', F(o));
+      for (const sx of [-1, 1]) T.add('furn', KG.timber(d, 0.03, 0.018, 0.004).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(sx * (w / 2 - 0.009), 0.035, 0)), '#7d5634', F(o));
+      const n = Math.floor((w - 0.06) / 0.034);
+      for (let i = 0; i < n; i++) {
+        const x = -w / 2 + 0.04 + i * 0.034, len = d * (0.7 + rnd() * 0.18);
+        T.add('paint', geo.cyl(0.011, 0.011, len, 7).applyMatrix4(XR(PI / 2)), mul(m, M(x, 0.037, (rnd() - 0.5) * 0.03, (rnd() - 0.5) * 0.08)), i % 3 ? '#e7d8b6' : '#dccb9f', F(o));
+      }
+      return { top: num(o.y, 0) + 0.05 };
+    }
+
+    function brineBasin(T, o = {}) {
+      const r = num(o.r, 0.3), s = r / 0.36, m = base(T, o);
+      T.add('onggi', KG.lathe(PROFILES.basin, 20), mul(m, M(0, 0, 0, 0, s)), '#7a4a2c', o);
+      const wy = 0.17 * s;
+      T.add('lacquer', new THREE.CircleGeometry(0.32 * s, 22).applyMatrix4(XR(-PI / 2)), mul(m, M(0, wy, 0)), '#6d7468', F(o));
+      // the egg floats: a coin-sized cap shows above the brine (about 18–20 degrees of salt)
+      const egg = new THREE.SphereGeometry(0.03, 12, 9).scale(1, 1.3, 1);
+      T.add('paint', egg, mul(m, M(0.05 * s, wy + 0.012, -0.04 * s, 0, 1, 1, 1, 1.2)), '#efe2cc', F(o));
+      return { top: num(o.y, 0) + 0.2 * s, egg: P0({ x: num(o.x, 0), y: num(o.y, 0) + wy, z: num(o.z, 0) }) };
+    }
+
+    /** soft visible beams of the window sun (additive vertex colours fading along the beam) */
+    function lightShafts(R, o = {}) {
+      if (!R || R.low || !R.sun || !Array.isArray(R.ports)) return null;
+      const sd = R.sun, len = num(o.len, 9), a0 = clamp(num(o.alpha, 0.16), 0, 0.5), c = col(o.color || '#ffe2b0');
+      const pos = [], cols = [], idx = [];
+      for (const p of R.ports) {
+        if (p.pattern) continue;                                    // paper windows: the light is diffused, no beam
+        const inw = R.wp(p.side, 0, 0, 1).sub(R.wp(p.side, 0, 0, 0));
+        if (-(sd.x * inw.x + sd.z * inw.z) < 0.05) continue;         // the sun is not on this side
+        const corners = [[p.u0, p.v0], [p.u1, p.v0], [p.u1, p.v1], [p.u0, p.v1]].map(([u, v]) => R.wp(p.side, u, v, 0.06));
+        const lo = Math.min(...corners.map((q) => q.y)), reach = Math.min(len, Math.max(0.5, lo / Math.max(0.05, sd.y)) * 1.08);
+        const base0 = pos.length / 3;
+        for (const q of corners) { pos.push(q.x, q.y, q.z); cols.push(c.r * a0, c.g * a0, c.b * a0); }
+        for (const q of corners) { pos.push(q.x - sd.x * reach, q.y - sd.y * reach, q.z - sd.z * reach); cols.push(0, 0, 0); }
+        for (let k = 0; k < 4; k++) { const a = base0 + k, b = base0 + ((k + 1) % 4); idx.push(a, b, b + 4, a, b + 4, a + 4); }
+      }
+      if (!idx.length) return null;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+      g.setIndex(idx);
+      const mt = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false });
+      R.ctx.own?.(mt); R.ctx.own?.(g);
+      const mesh = new THREE.Mesh(g, mt);
+      mesh.name = 'room-light-shafts'; mesh.renderOrder = 5; mesh.userData.guardSkip = true;
+      mesh.castShadow = false; mesh.receiveShadow = false;
+      R.addMesh(mesh, null);
+      return mesh;
+    }
+
+    Object.assign(K, { bench, lectern, jupan, yeopjeon, hamjibak, kongPile, bagaji, bojagi, yeotpan, brineBasin, lightShafts });
+  })();
 })();

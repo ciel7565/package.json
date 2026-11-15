@@ -66,6 +66,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
 // [world] phase 9 (CONTRACT §17.9): the six hanok rooms of the valley — a lecture screen in each, no guide stakes, and
 // no motion board about how a house is built (the boards that stay tell of fermentation, jars and the farming year).
 const WORLD_ROOMS = { PL_DAECHEONG: { boards: 0 }, PL_ANBANG: { boards: 0 }, PL_SARANG: { boards: 0 }, PL_BUEOK: { boards: 0 }, PL_BALHYO: { boards: 2 }, PL_GOTGAN: { boards: 3 } };
+Object.assign(WORLD_ROOMS, { PL_HALL: { boards: 0 }, PL_EDU: { boards: 2 }, PL_STORAGE: { boards: 0 }, PL_SHOP: { boards: 0 } });   // [rooms2] 58-interiors-d.js
 {
   const code = ['27-interiors-a.js', '28-interiors-b.js', '29-interiors-c.js'].map((f) => fs.readFileSync(path.join(ROOT, 'src/game', f), 'utf8')).join('\n')
     .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');

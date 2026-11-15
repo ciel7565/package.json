@@ -115,7 +115,7 @@ if (DATA) {
   check('까치호랑이 and 일월오봉도 are text only (never a stand-in picture)', ['HX_KKACHI', 'HX_IRWOROBONG'].every((i) => X[i] && X[i].textOnly === true && !X[i].art));
   const thin = Object.entries(byPlace).filter(([, l]) => l.length < 8).map(([p, l]) => `${p} ${l.length}`);
   const dup = Object.entries(byPlace).filter(([, l]) => new Set(l.map((e) => e.anchor)).size !== l.length).map(([p]) => p);
-  check('every room has 8 or more exhibits, each on its own anchor', R.length === 7 && R.every((r) => (byPlace[r.id] || []).length >= 8) && !thin.length && !dup.length, `${R.map((r) => `${r.name} ${(byPlace[r.id] || []).length}`).join(' · ')}${dup.length ? ' · duplicate anchors: ' + dup.join(',') : ''}`);
+  check('every room has 8 or more exhibits, each on its own anchor', R.length >= 7 /* [rooms2] 11 with 58-interiors-d.js */ && R.every((r) => (byPlace[r.id] || []).length >= 8) && !thin.length && !dup.length, `${R.map((r) => `${r.name} ${(byPlace[r.id] || []).length}`).join(' · ')}${dup.length ? ' · duplicate anchors: ' + dup.join(',') : ''}`);
   // the artworks are the pack's (names and accession numbers agree with assets/pack/MANIFEST.json)
   try {
     const man = JSON.parse(fs.readFileSync(path.join(ROOT, 'assets/pack/MANIFEST.json'), 'utf8'));
