@@ -172,15 +172,19 @@ async function open(tag, ctxOpts, o = {}) {
   const context = await browser.newContext({ locale: 'ko-KR', timezoneId: 'Asia/Seoul', ...ctxOpts });
   if (o.easy === false) await context.addInitScript(() => { try { const s = JSON.parse(localStorage.getItem('tfm.v1.settings') || '{}'); s.easyMode = false; s._v = 2; localStorage.setItem('tfm.v1.settings', JSON.stringify(s)); } catch (e) { /* storage blocked */ } });
   const page = await context.newPage();
+  page.setDefaultTimeout(90000);   // a click can take 20 s and more while the two browser slots are busy
   await page.route('**/*', (route) => (/^(file|data|blob):/.test(route.request().url()) ? route.continue() : route.abort()));
   page.on('pageerror', (e) => pageErrors.push(`[${tag}] ${String(e?.message || e).slice(0, 300)}`));
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(`[${tag}] ${m.text().slice(0, 300)}`); });
   return { page, context };
 }
 const tidy = (page) => page.evaluate(() => { try { G.ui.modal.closeAll(); } catch (e) { /* nothing open */ } });
-async function boot(page, quality) {
+async function boot(page, quality, o = {}) {
   await page.goto(`${pathToFileURL(file).href}?autostart=1&notutorial=1&quality=${quality}`, { waitUntil: 'load', timeout: TIMEOUT });
   await page.waitForFunction(() => window.G && window.G.ready === true && !!window.G.state && !!window.G.sys?.places && !!window.G.sys?.player?._ready && !!window.G.sys?.myroom, null, { timeout: TIMEOUT, polling: 250 });
+  // an autostart guest is a new profile in easy mode (03-state: easyMode is a profile key, the device setting does not
+  // reach it): the normal-mode parts switch the profile over as a grown-up would
+  if (o.easy === false) await page.evaluate(() => Promise.race([Promise.resolve(G.easy?.set?.(false)), new Promise((r) => setTimeout(r, 1500))]));
   // messages that slide in must not swallow the test's clicks (they are not what is tested here)
   await page.evaluate(() => {
     const root = document.getElementById('toast-root');
@@ -248,7 +252,7 @@ try {
   log('— the room and its edit mode (desktop 1280 × 720, medium, mouse, normal mode)');
   const A = await open('desktop', { viewport: { width: 1280, height: 720 } }, { easy: false });
   const page = A.page;
-  await boot(page, 'medium');
+  await boot(page, 'medium', { easy: false });
   let info = null, s = null, p = null;
   await part('the room and its door', async () => {
   info = await ev(page, () => {
@@ -583,7 +587,7 @@ try {
   const outside = await ev(page, () => { const pl = G.sys.player, d = G.sys.places.def('PL_MYROOM'); return { cur: G.sys.places.current, near: +Math.hypot(pl.position.x - d.exit.x, pl.position.z - d.exit.z).toFixed(1) }; });
   check('🚪 밖으로 leads back to the door outside', outside.cur === null && outside.near <= 4, JSON.stringify(outside));
   await ev(page, () => G.save.save({ reason: 'test' }));
-  await boot(page, 'medium');
+  await boot(page, 'medium', { easy: false });
   const re = await ev(page, () => ({ room: G.sys.myroom.room(), st: G.sys.myroom.state() }));
   check('save → reload: the same room is there, thing for thing, with its look', norm(re.room.items) === norm(want.items) && JSON.stringify(re.room.style) === JSON.stringify(want.style) && re.st.count === D.preset('janchi').items.length, `${re.st.count} things, v ${re.st.v}`);
   const again = await ev(page, () => G.sys.myroom.enter());
@@ -821,7 +825,7 @@ try {
     const Hi = await open('high', { viewport: { width: 1280, height: 720 } }, { easy: false });
     const hp = Hi.page;
     await part('160 things on high', async () => {
-    await boot(hp, 'high');
+    await boot(hp, 'high', { easy: false });
     const fill = await ev(hp, () => {
       // a full room made with the room's own rules: random things on random free spots until there are 160
       const D = G.data.myroom, room = D.empty();

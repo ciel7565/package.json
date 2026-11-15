@@ -51,7 +51,8 @@ body.easy .myroom-fab .emoji { font-size: 1.6rem; }
 .mr-info { display: inline-flex; flex-direction: column; align-items: flex-end; gap: .05rem; padding: 0 .75rem 0 .35rem; color: #fff3df; font-weight: 800; line-height: 1.15; white-space: nowrap; }
 .mr-count { font-size: .9rem; }
 .mr-count.full { color: var(--gold); }
-.mr-save { font-size: .72rem; font-weight: 700; color: #d9c7a8; }
+.mr-save { font-size: .8rem; font-weight: 700; color: #d9c7a8; }
+body.easy .mr-save { font-size: 1rem; }
 .mr-save[data-state="wait"] { color: #ffd0a0; }
 
 .mr-hint {
