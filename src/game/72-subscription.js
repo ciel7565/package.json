@@ -333,7 +333,8 @@
       for (const t of sold) {
         const isCur = !admin && tier === t.tier && tier > 1;
         const card = h('article', { class: `sub-tier${isCur ? ' is-current' : ''}`, role: 'listitem', 'data-tier': String(t.tier) });
-        card.append(
+        // Element.append writes null as the text "null": keep only real nodes
+        card.append(...[
           h('div', { class: 'st-head' }, h('b', { class: 'st-name' }, t.name), isCur ? h('span', { class: 'chip chip-gold st-cur' }, '이용 중') : null),
           h('div', { class: 'st-price' }, won(t.price), h('small', null, `/${this.periodDays()}일`)),
           h('ul', { class: 'st-perks' },
@@ -346,7 +347,7 @@
           admin ? null : h('div', { class: 'st-btns' },
             h('button', { type: 'button', class: 'btn btn-gold btn-block', 'data-sub': 'buy', 'data-tier': String(t.tier), 'data-kind': 'billing', disabled: canBuy ? null : true }, '자동 갱신 구독 (토스)'),
             h('button', { type: 'button', class: 'btn btn-soft btn-block', 'data-sub': 'buy', 'data-tier': String(t.tier), 'data-kind': 'card', disabled: canBuy ? null : true }, '한 달 이용권 (1회 결제)')),
-        );
+        ].filter(Boolean));
         grid.appendChild(card);
       }
       if (sold.length) body.appendChild(grid);

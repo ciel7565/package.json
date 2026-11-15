@@ -168,8 +168,10 @@ const solveGate = async (page) => {
     if (!m) return false;
     const ans = String(Number(m[1]) * Number(m[2]));
     await page.waitForFunction((v) => { const b = document.querySelector(`.easy-gate-choice[data-v="${v}"]`); return !!b && !b.disabled; }, ans, { timeout: T_UI, polling: 100 });
-    await page.locator(`.easy-gate-choice[data-v="${ans}"]`).first().click();
-    await page.waitForTimeout(450);
+    const label = (await q.getAttribute('aria-label')) || '';
+    await page.locator(`.easy-gate-choice[data-v="${ans}"]`).first().click({ timeout: 45000 });
+    // on a starved page the gate can take seconds to close: wait until it is gone or shows the next question
+    await page.waitForFunction((l) => { if (!G.ui.modal.get('easy-gate')) return true; const n = document.querySelector('.easy-gate-q[aria-label]'); return !!n && n.getAttribute('aria-label') !== l; }, label, { timeout: T_UI, polling: 100 }).catch(() => null);
     if (!(await page.evaluate(() => !!G.ui.modal.get('easy-gate')))) return true;
   }
   return false;
@@ -432,8 +434,8 @@ try {
       r.prepare = window.__srv.calls.filter((c) => c.path === 'sub/prepare.php').length;
       return r;
     });
-    check('the plan screen of an administrator says 관리자는 모든 기능을 무료로 써요, shows the visitors\' cards as a preview and has NO payment button',
-      /관리자는 모든 기능을 무료로 써요/.test(plan.text) && plan.buy === 0 && plan.cards === 2 && plan.adminBtn && /관리자/.test(plan.status) && /장독 12개/.test(plan.text) && !plan.cancel, short(plan));
+    check('the plan screen of an administrator says 관리자는 모든 기능을 무료로 써요, shows the visitors\' cards as a preview (no stray "null" text) and has NO payment button',
+      /관리자는 모든 기능을 무료로 써요/.test(plan.text) && !/null|undefined/.test(plan.text) && plan.buy === 0 && plan.cards === 2 && plan.adminBtn && /관리자/.test(plan.status) && /장독 12개/.test(plan.text) && !plan.cancel, short(plan));
     check('… buy() refuses an administrator before any request (no sub/prepare.php call)', plan.buyResult === false && plan.prepare === 0, short([plan.buyResult, plan.prepare]));
     await shot(page, 'plan-admin.png');
     await tap(page, '.app-sub-modal [data-sub="admin"]');
