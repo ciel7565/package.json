@@ -1146,12 +1146,13 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         Bk.add('stone', geo.box(w, h, st.len + 0.05, 'world'), M(st.x, st.top - h / 2, st.z, st.rot), k % 2 ? STONEC : STONE2);
       } else {
         Bk.add('plank', geo.box(w, 0.07, st.len + 0.04, 'world'), M(st.x, st.top - 0.035, st.z, st.rot), WOODC);
-        Bk.add('wood', geo.box(w - 0.1, 0.19, 0.05, 'grain'), M(st.x - st.dx * st.len / 2, st.top - 0.16, st.z - st.dz * st.len / 2, st.rot), DARK);
+        if (!low) Bk.add('wood', geo.box(w - 0.1, 0.19, 0.05, 'grain'), M(st.x - st.dx * st.len / 2, st.top - 0.16, st.z - st.dz * st.len / 2, st.rot), DARK);
         // stringers under both edges, posts down to the rock every third step where the flight has left the ground
+        // (low: treads only, a post every sixth step)
         for (const o of [-w / 2 + 0.08, w / 2 - 0.08]) {
           const nx = Math.cos(st.rot), nz = -Math.sin(st.rot), x = st.x + nx * o, z = st.z + nz * o;
-          Bk.add('wood', geo.box(0.1, 0.24, st.len + 0.06, 'grain'), M(x, st.top - 0.19, z, st.rot), DARK);
-          if (k % 3 === 0 || low) { const gy = H(x, z); if (st.top - gy > 0.45) Bk.add('wood', geo.box(0.14, st.top - gy + 0.25, 0.14, 'grain'), M(x, (st.top + gy - 0.25) / 2 - 0.12, z), '#5e3f28'); }
+          if (!low) Bk.add('wood', geo.box(0.1, 0.24, st.len + 0.06, 'grain'), M(x, st.top - 0.19, z, st.rot), DARK);
+          if (k % (low ? 6 : 3) === 0) { const gy = H(x, z); if (st.top - gy > 0.45) Bk.add('wood', geo.box(0.14, st.top - gy + 0.25, 0.14, 'grain'), M(x, (st.top + gy - 0.25) / 2 - 0.12, z), '#5e3f28'); }
         }
       }
       ctx.addWalkable({ shape: 'box', x: st.x, z: st.z, hw: w / 2, hd: st.len / 2 + 0.03, rot: st.rot, top: st.top, surface: stone ? 'stone' : 'wood' });

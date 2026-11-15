@@ -106,7 +106,15 @@ async function view(page, v) {
     const G = window.G, C = G.data.complex, d = G.sys.places.def(G.sys.places.current), cam = G.sys.camera;
     const ox = d.origin.x, oz = d.origin.z;
     if (v.id) { const p = C.viewpoints.find((x) => x.id === v.id); cam.shot({ x: ox + p.x, y: p.y, z: oz + p.z }, { x: ox + p.look.x, y: p.look.y, z: oz + p.look.z }, { fov: p.fov || 48, duration: 0 }); }
-    else cam.shot({ x: ox + v.pos[0], y: C.height(v.pos[0], v.pos[2]) + v.pos[1], z: oz + v.pos[2] }, { x: ox + v.look[0], y: C.height(v.look[0], v.look[2]) + v.look[1], z: oz + v.look[2] }, { fov: 55, duration: 0 });
+    else {
+      // ground spots are read from the master plan (plan v2 moved the rings): a ring walk of the great circle, the first
+      // terrace of the south-east field, the lane between the first two storehouses
+      let pos = v.pos, look = v.look;
+      if (v.spot === 'ring') { const gc = C.rings.GC, w = (C.rings.walks || [])[4] || 28.2; pos = [gc.cx + w * Math.cos(1.75), 1.7, gc.cz + w * Math.sin(1.75)]; look = [gc.cx + w * Math.cos(2.15), 0.6, gc.cz + w * Math.sin(2.15)]; }
+      else if (v.spot === 'field') { const f = C.byId('F_SE'); pos = [f.origin[0] + 1, 1.7, f.origin[1] + 1.5]; look = [f.origin[0] + 20, 0.2, f.origin[1] + 18]; }
+      else if (v.spot === 'store') { const a = C.byId('B_SH1'), b = C.byId('B_SH2'), lz = (a.z + b.z) / 2; pos = [a.x - 35.4, 1.7, lz]; look = [a.x - 6.4, 1.2, lz + 1.6]; }
+      cam.shot({ x: ox + pos[0], y: C.height(pos[0], pos[2]) + pos[1], z: oz + pos[2] }, { x: ox + look[0], y: C.height(look[0], look[2]) + look[1], z: oz + look[2] }, { fov: 55, duration: 0 });
+    }
     cam.snap && cam.snap();
   }, v);
   await frames(page, 6);
@@ -114,11 +122,7 @@ async function view(page, v) {
   await frames(page, 3);
   return page.evaluate(() => ({ cu: G.sys.allotDistrict.stats(), frame: { ...G.sys.engine.frameInfo } }));
 }
-const SPOTS = {
-  ring: { pos: [14 + 32.2 * Math.cos(1.75), 1.7, 52 + 32.2 * Math.sin(1.75)], look: [14 + 32.2 * Math.cos(2.15), 0.6, 52 + 32.2 * Math.sin(2.15)] },
-  field: { pos: [109, 1.7, 75.5], look: [128, 0.2, 92] },
-  store: { pos: [-141, 1.7, -68.1], look: [-112, 1.2, -66.5] },
-};
+const SPOTS = { ring: { spot: 'ring' }, field: { spot: 'field' }, store: { spot: 'store' } };
 
 // ============================================================================ per preset: levels + budgets
 async function presetSection(q, first) {
@@ -211,7 +215,7 @@ async function functionalChecks(page) {
   }
   if (ONLY.includes('labels')) {
     const r = await page.evaluate(async () => {
-      const G = window.G, d = G.sys.places.def(G.sys.places.current), R = G.data.complex.rings.GC, rr = 9.8 + 5.6 * 3;
+      const G = window.G, d = G.sys.places.def(G.sys.places.current), R = G.data.complex.rings.GC, rr = (G.data.complex.rings.walks || [])[3] || 23.5;   // a ring walk of plan v2
       let max = 0;
       const churn0 = G.sys.allotDistrict.stats().labelChurn, t0 = performance.now();
       for (let k = 0; k <= 96; k++) {
