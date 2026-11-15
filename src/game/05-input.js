@@ -368,8 +368,12 @@
     const el = ml.el();
     if (ml.isLocked()) { ml.feed(Number(e.movementX) || 0, Number(e.movementY) || 0); return; }
     const over = !!el && e.target instanceof Node && el.contains(e.target);
+    // hover look: movementX / Y where the browser gives them, else the change of the pointer position
+    const mx = Number(e.movementX) || 0, my = Number(e.movementY) || 0, px = ml._px, py = ml._py;
+    const dx = mx || my ? mx : (Number.isFinite(px) ? e.clientX - px : 0), dy = mx || my ? my : (Number.isFinite(py) ? e.clientY - py : 0);
+    const was = ml._over;
     ml._over = over; ml._px = e.clientX; ml._py = e.clientY;
-    if (over && e.buttons === 0 && ml.hover()) ml.feed(Number(e.movementX) || 0, Number(e.movementY) || 0);
+    if (over && was && e.buttons === 0 && ml.hover()) ml.feed(dx, dy);
   }, { passive: true });
   // any typing field that takes the focus (chat, forms) releases the pointer at once
   document.addEventListener('focusin', (e) => { if (ml.isLocked() && G.util?.isTyping?.()) ml.release('typing'); }, true);
@@ -458,7 +462,7 @@
     if (input.bindings.jump.includes(e.code) && !kbdFocus) jumpQueued = true;
     if (input.bindings.interact.includes(e.code)) G.bus.emit('input:interact', { source: 'key' });
   });
-  window.addEventListener('keyup', (e) => { keys.delete(e.code); });
+  window.addEventListener('keyup', (e) => { keys.delete(e.code); if (ml.isMoveKey(e.code) && ml.mode() === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS; });   // [controls] walk: + 1.2 s after the last key
   window.addEventListener('blur', () => { keys.clear(); });
 
   // ---------------------------------------------------------------- mouse / pointer on the 3D canvas

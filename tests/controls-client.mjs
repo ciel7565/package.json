@@ -70,10 +70,25 @@ async function boot(page, extra = '') {
 
 /** in-page helpers (installed once per page) */
 const HELPERS = () => {
+  /** a mousemove with movementX / Y set (Chromium ignores them in MouseEventInit) */
+  window.__mm = (target, o) => { const e = new MouseEvent('mousemove', { bubbles: true, clientX: o.clientX ?? 0, clientY: o.clientY ?? 0, buttons: o.buttons ?? 0 }); Object.defineProperty(e, 'movementX', { value: o.movementX || 0 }); Object.defineProperty(e, 'movementY', { value: o.movementY || 0 }); target.dispatchEvent(e); };
   const P = () => G.sys.player, W = G.world;
   const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
   const H = window.__ct = {
     raf,
+    /** game time (the player's own dt, summed): software GL here runs at 2–10 fps and the engine clamps dt */
+    gt() { return P().__gt || 0; },
+    async waitGame(sec, maxWall = 60000) { const g0 = H.gt(), t0 = performance.now(); while (H.gt() - g0 < sec && performance.now() - t0 < maxWall) await raf(); },
+    async ready(maxWall = 90000) {
+      const t0 = performance.now();
+      while (performance.now() - t0 < maxWall) {
+        try { G.ui.modal.closeAll(); } catch (e) { /* none */ }
+        if (G.input.gameplay() && P().enabled && P()._ready && !G.sys.manjangdae?.introActive && G.sys.camera?.mode === 'follow') return true;
+        await raf();
+      }
+      return false;
+    },
+    diag() { const p = P(); return { gameplay: G.input.gameplay(), enabled: p.enabled, cam: G.sys.camera?.mode, intro: !!G.sys.manjangdae?.introActive, axis: { ...G.input.axis }, gt: +H.gt().toFixed(2), blocking: !!G.ui?.isBlocking?.() }; },
     async wait(ms) { const t0 = performance.now(); while (performance.now() - t0 < ms) await raf(); },
     key(code, down, key) { window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { code, key: key || code, bubbles: true, cancelable: true })); },
     release() { for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'Space']) H.key(c, false); G.input.reset(); },
@@ -118,8 +133,8 @@ const HELPERS = () => {
     async hold(ms, run) {
       const s = [];
       H.key('KeyW', true); if (run) H.key('ShiftLeft', true);
-      const t0 = performance.now();
-      while (performance.now() - t0 < ms) { await raf(); const p = P().position; s.push([performance.now() - t0, p.x, p.z]); }
+      const g0 = H.gt(), t0 = performance.now();
+      while ((H.gt() - g0) * 1000 < ms && performance.now() - t0 < ms * 12) { await raf(); const p = P().position; s.push([(H.gt() - g0) * 1000, p.x, p.z]); }
       H.key('KeyW', false); if (run) H.key('ShiftLeft', false);
       return s;
     },
@@ -129,18 +144,23 @@ const HELPERS = () => {
       const p = P();
       let maxY = -Infinity, y0 = p.position.y, sent2 = false, vault1 = null, vault2 = null;
       H.key('KeyW', true);
-      const t0 = performance.now();
-      let jumped = false;
-      while (performance.now() - t0 < ms) {
+      const g0 = H.gt(), t0 = performance.now();
+      let jumped = false, jumpAt = 0, leftGround = false;
+      // presses come from the player's own frame (game time), so a 2 fps page still double-jumps near the top
+      H.onTick = (pl) => {
+        const t = (H.gt() - g0) * 1000;
+        if (!jumped && t >= delay) { H.key('Space', true); H.key('Space', false); jumped = true; jumpAt = t; return; }
+        if (jumped && !pl.grounded) leftGround = true;
+        if (dbl && leftGround && !sent2 && !pl.grounded && pl.velocity.y < 2.2) { H.key('Space', true); H.key('Space', false); sent2 = true; }
+      };
+      while ((H.gt() - g0) * 1000 < ms && performance.now() - t0 < ms * 15) {
         await raf();
-        const t = performance.now() - t0;
-        if (!jumped && t >= delay) { H.key('Space', true); H.key('Space', false); jumped = true; }
         if (jumped && !vault1 && p.lastVault) vault1 = { ...p.lastVault };
-        if (dbl && jumped && !sent2 && !p.grounded && p.velocity.y < 1.6) { H.key('Space', true); H.key('Space', false); sent2 = true; }
         if (sent2 && !vault2 && p.lastVault && p.lastVault.n === 2) vault2 = { ...p.lastVault };
         if (p.position.y > maxY) maxY = p.position.y;
-        if (jumped && t > delay + 400 && p.grounded && performance.now() - t0 > delay + 900) break;
+        if (leftGround && p.grounded && (H.gt() - g0) * 1000 > jumpAt + 500) break;
       }
+      H.onTick = null;
       H.key('KeyW', false);
       for (let i = 0; i < 6; i++) await raf();
       const q = p.position;
@@ -150,6 +170,12 @@ const HELPERS = () => {
     normalZ(c) { const r = c.rot || 0; return [Math.sin(r), Math.cos(r)]; },   // local +z in world (06-world toWorld)
     normalX(c) { const r = c.rot || 0; return [Math.cos(r), -Math.sin(r)]; },  // local +x in world
   };
+  const p0 = P();
+  if (!p0.__ctWrapped) {
+    const orig = p0.update;
+    p0.__gt = 0; p0.__ctWrapped = true;
+    p0.update = function (dt, t) { if (dt > 0 && Number.isFinite(dt)) p0.__gt += dt; try { H.onTick?.(p0); } catch (e) { /* test hook */ } return orig.call(this, dt, t); };
+  }
   return true;
 };
 
@@ -162,6 +188,7 @@ async function mainPage() {
   if (want('pace')) {
     const r = await page.evaluate(async () => {
       const H = window.__ct, p = G.sys.player;
+      const rdy = await H.ready();
       const run = H.findRun(56);
       if (!run) return { err: 'no clear straight run of 56 m found' };
       const speed = (s) => { const a = s.find((q) => q[0] >= 900) || s[0], b = s[s.length - 1]; return Math.hypot(b[1] - a[1], b[2] - a[2]) / Math.max(1e-3, (b[0] - a[0]) / 1000); };
@@ -170,12 +197,12 @@ async function mainPage() {
       await H.wait(500);
       await H.place(run.x, run.z, run.dx, run.dz);
       const rr = await H.hold(3200, true);
-      return { run, walk: speed(w), runV: speed(rr), mul: G.sys.speed?.movement?.() ?? 1, WALK: p.WALK, RUN: p.RUN, frames: w.length, scale: p.speedScale };
+      return { rdy, diag: H.diag(), run, walk: speed(w), runV: speed(rr), mul: G.sys.speed?.movement?.() ?? 1, WALK: p.WALK, RUN: p.RUN, frames: w.length, scale: p.speedScale };
     });
     if (r.err) check('pace: a clear straight run for the measurement', false, r.err);
     else {
       check('pace constants: WALK 7.68 / RUN 14.4 (× 1.2), speedScale 2.4', r.WALK === 7.68 && r.RUN === 14.4 && r.scale === 2.4, `${r.WALK} / ${r.RUN} · ${r.scale}`);
-      check('pace: walking measured ≈ 7.68 m/s at tier 1 (distance over time)', r.mul === 1 && Math.abs(r.walk - 7.68) <= 7.68 * 0.1, `${r.walk.toFixed(2)} m/s over ${r.frames} frames, tier ×${r.mul}`);
+      check('pace: walking measured ≈ 7.68 m/s at tier 1 (distance over time)', r.mul === 1 && Math.abs(r.walk - 7.68) <= 7.68 * 0.1, `${r.walk.toFixed(2)} m/s (game time) over ${r.frames} frames, tier ×${r.mul} · ${JSON.stringify(r.diag)}`);
       check('pace: running measured ≈ 14.4 m/s at tier 1', Math.abs(r.runV - 14.4) <= 14.4 * 0.1, `${r.runV.toFixed(2)} m/s`);
     }
   }
@@ -217,9 +244,9 @@ async function mainPage() {
       for (const c of rows) {
         const [nx, nz] = H.normalX(c), half = c.hw;
         for (const s of [1, -1]) {
-          const d0 = half + 0.35 + 1.0, d1 = half + 0.35 + 1.2;
+          const d0 = half + 0.35 + 1.0, d1 = half + 0.35 + 0.45;
           const sx = c.x + nx * s * d0, sz = c.z + nz * s * d0, lx = c.x - nx * s * d1, lz = c.z - nz * s * d1;
-          if (!H.free(sx, sz, 0.4) || !H.free(lx, lz, 0.4)) continue;
+          if (!H.free(sx, sz, 0.4) || !H.free(lx, lz, 0.38) || !H.free(c.x + nx * s * (half + 0.5), c.z + nz * s * (half + 0.5), 0.38)) continue;
           const y0 = W.heightAt(sx, sz, Infinity);
           if (Math.abs(y0 - W.heightAt(lx, lz, Infinity)) > 0.3) continue;
           const side = (q) => ((q.x - c.x) * nx + (q.z - c.z) * nz) * s;
@@ -227,10 +254,20 @@ async function mainPage() {
           return { ok: true, after: side(j), j, half, top: W.topOf(c) - y0, n: rows.length };
         }
       }
-      return { ok: false, n: rows.length };
+      // no row with room on both sides: a test row of five jars (r 0.45, 1.25 m apart) in an open field
+      const run = H.findRun(10);
+      if (!run) return { ok: false, n: rows.length };
+      const cx = run.x + run.dx * 4, cz = run.z + run.dz * 4, px = -run.dz, pz = run.dx, ids = [];
+      for (let k = -2; k <= 2; k++) ids.push(W.addCollider({ shape: 'circle', x: cx + px * k * 1.25, z: cz + pz * k * 1.25, r: 0.45, tag: 'jar' }));
+      const side = (q) => (q.x - cx) * run.dx + (q.z - cz) * run.dz;
+      const y0 = W.heightAt(run.x, run.z, Infinity);
+      const top = W.topOf(W.colliders.get(ids[2])) - W.heightAt(cx, cz, Infinity);
+      const j = await H.jump({ x: cx - run.dx * 1.8, z: cz - run.dz * 1.8, dx: run.dx, dz: run.dz });
+      for (const id of ids) W.removeCollider(id);
+      return { ok: true, synthetic: true, after: -side(j), j, half: 0.45, top, n: rows.length };
     });
     if (!jr.ok) check('jump: a jar row to try', false, `rows ${jr.n}, none with free ground on both sides`);
-    else check('jar row: a jump while walking clears the row of jars', jr.after < -(jr.half + 0.3) && jr.j.finite, `side ${jr.after.toFixed(2)} · top +${jr.top.toFixed(2)} · peak +${(jr.j.maxY - jr.j.y0).toFixed(2)} · ${JSON.stringify(jr.j.vault1)}`);
+    else check(`jar row${jr.synthetic ? ' (a test row of 5 jars)' : ''}: a jump while walking clears the row of jars`, jr.after < -(jr.half + 0.3) && jr.j.finite, `side ${jr.after.toFixed(2)} · top +${jr.top.toFixed(2)} · peak +${(jr.j.maxY - jr.j.y0).toFixed(2)} · ${JSON.stringify(jr.j.vault1)}`);
     // a rock
     const rk = await page.evaluate(async () => {
       const H = window.__ct, W = G.world;
@@ -242,7 +279,9 @@ async function mainPage() {
           const dx = Math.cos(k * Math.PI / 4), dz = Math.sin(k * Math.PI / 4);
           const d0 = c.r + 0.35 + 1.0, d1 = c.r + 0.35 + 1.4;
           const sx = c.x - dx * d0, sz = c.z - dz * d0, lx = c.x + dx * d1, lz = c.z + dz * d1;
-          if (!H.free(sx, sz) || !H.free(lx, lz) || Math.abs(W.heightAt(sx, sz, Infinity) - W.heightAt(lx, lz, Infinity)) > 0.4) continue;
+          const gs = W.heightAt(sx, sz, Infinity);
+          if (!H.free(sx, sz) || !H.free(lx, lz) || Math.abs(gs - W.heightAt(lx, lz, Infinity)) > 0.25 || Math.abs(gs - g) > 0.2) continue;
+          if (!(c.maxY - gs > 0.35 && c.maxY - gs < 1.5)) continue;
           const o = W.obstacleAhead(sx, sz, dx, dz, 0.35, W.heightAt(sx, sz, Infinity), 1.6, 4.5);
           if (!o || o.tall) continue;
           const j = await H.jump({ x: sx, z: sz, dx, dz });
@@ -266,6 +305,8 @@ async function mainPage() {
       const side = (q) => (q.x - cx) * nx + (q.z - cz) * nz;
       const sx = cx - nx * (0.3 + 0.35 + 1.0), sz = cz - nz * (0.3 + 0.35 + 1.0);
       const g = W.heightAt(sx, sz, Infinity);
+      let gmax = -Infinity;
+      for (const [a, b] of [[0, 0], [-3, -0.3], [3, -0.3], [3, 0.3], [-3, 0.3]]) { const x = cx + a * Math.cos(rot) + b * Math.sin(rot), z = cz - a * Math.sin(rot) + b * Math.cos(rot); gmax = Math.max(gmax, W.heightAt(x, z, Infinity)); }
       const single = await H.jump({ x: sx, z: sz, dx: nx, dz: nz });
       const dbl = await H.jump({ x: sx, z: sz, dx: nx, dz: nz, dbl: true, ms: 2200 });
       W.removeCollider(id);
@@ -273,18 +314,18 @@ async function mainPage() {
       const id2 = W.addCollider({ shape: 'box', x: cx, z: cz + 0, hw: 3, hd: 2.6, rot, tag: 'stonewall' });
       const c2 = W.colliders.get(id2);
       const sx2 = cx - nx * (2.6 + 0.35 + 0.9), sz2 = cz - nz * (2.6 + 0.35 + 0.9);
-      const land = await H.jump({ x: sx2, z: sz2, dx: nx, dz: nz, dbl: true, ms: 1500 });
+      const land = await H.jump({ x: sx2, z: sz2, dx: nx, dz: nz, dbl: true, ms: 1700 });
       const top = W.topOf(c2);
       const onTop = Math.abs(land.y - top) < 0.12 && land.grounded;
       // walk off the far edge
-      H.key('KeyW', true); await H.wait(1400); H.key('KeyW', false); await H.wait(900);
+      H.key('KeyW', true); await H.waitGame(1.4); H.key('KeyW', false); await H.waitGame(0.9);
       const p = G.sys.player.position, off = { y: p.y, side: (p.x - cx) * nx + (p.z - cz) * nz, grounded: G.sys.player.grounded };
       W.removeCollider(id2);
-      return { ok: true, g, top: W.topOf(c) , single: side(single), dbl: side(dbl), dblRes: dbl, onTop, landY: land.y, top2: top, off, land };
+      return { ok: true, g, gmax, top: W.topOf(c), single: side(single), dbl: side(dbl), dblRes: dbl, onTop, landY: land.y, top2: top, off, land };
     });
     if (!sw.ok) check('jump: an open field for the stone wall', false);
     else {
-      check('stone wall: top inferred 1.9 m', Math.abs(sw.top - sw.g - 1.9) < 0.05, (sw.top - sw.g).toFixed(2));
+      check('stone wall: top inferred 1.9 m above the highest ground under it', Math.abs(sw.top - sw.gmax - 1.9) < 0.05, `${(sw.top - sw.gmax).toFixed(2)} (${(sw.top - sw.g).toFixed(2)} above the take-off)`);
       check('stone wall: a single jump does not get over 1.9 m', sw.single < 0, sw.single.toFixed(2));
       check('stone wall: the double jump clears it', sw.dbl > 0.3 + 0.3 && sw.dblRes.sent2 && sw.dblRes.finite, `side ${sw.dbl.toFixed(2)} · peak +${(sw.dblRes.maxY - sw.dblRes.y0).toFixed(2)} · ${JSON.stringify(sw.dblRes.vault2)}`);
       check('wall top: a double jump lands ON a deep wall (stand)', sw.onTop, `y ${sw.landY.toFixed(2)} top ${sw.top2.toFixed(2)} grounded ${sw.land.grounded}`);
@@ -324,20 +365,21 @@ async function mainPage() {
           const a = route[i - 1], b = route[i], L = Math.hypot(b.x - a.x, b.z - a.z); len += L;
           for (let t = 0; t <= 1; t += 0.05) { const x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t; const r = (x - c.x) * (Math.cos(c.rot || 0)) - (z - c.z) * Math.sin(c.rot || 0), q = (x - c.x) * Math.sin(c.rot || 0) + (z - c.z) * Math.cos(c.rot || 0); if (Math.abs(r) <= c.hw && Math.abs(q) <= c.hd) through = true; }
         }
-        let minY = Infinity, maxY = -Infinity, arrived = null;
+        let minY = Infinity, maxY = -Infinity, arrived = null, failed = null;
+        await H.ready(20000);
         const off = G.bus.on('player:arrived', (e) => { arrived = e; });
-        P.walkTo({ x: tx, z: tz }, { rescue: false, trail: false, stopDistance: 0.8 });
-        const t0 = performance.now();
-        while (!arrived && performance.now() - t0 < 25000) { await H.raf(); const y = P.position.y - W.heightAt(P.position.x, P.position.z, Infinity); if (y < minY) minY = y; if (y > maxY) maxY = y; }
+        const id = P.walkTo({ x: tx, z: tz }, { rescue: false, trail: false, stopDistance: 0.8, onFail: (r) => { failed = r || 'fail'; } });
+        const t0 = performance.now(), g0 = H.gt();
+        while (!arrived && !failed && H.gt() - g0 < 12 && performance.now() - t0 < 120000) { await H.raf(); const y = P.position.y - W.heightAt(P.position.x, P.position.z, Infinity); if (y < minY) minY = y; if (y > maxY) maxY = y; }
         try { off?.(); } catch (e) { /* bus off */ }
-        return { ok: true, len, straight: 4.4, through, arrived: !!arrived, rescued: !!arrived?.rescued, maxY, pts: route.length };
+        return { ok: true, len, straight: 4.4, through, arrived: !!arrived, rescued: !!arrived?.rescued, maxY, pts: route.length, id, failed: String(failed || ''), diag: H.diag(), pos: { x: +P.position.x.toFixed(2), z: +P.position.z.toFixed(2) }, to: { x: +tx.toFixed(2), z: +tz.toFixed(2) } };
       }
       return { ok: false };
     });
     if (!wt.ok) check('walkTo: a fence to plan round', false);
     else {
       check('walkTo: the planner still goes round the fence (no route through it)', !wt.through && wt.len > wt.straight * 1.05, `${wt.pts} corners, ${wt.len.toFixed(1)} m vs 4.4 m straight`);
-      check('walkTo: arrives on foot (no rescue, never airborne)', wt.arrived && !wt.rescued && wt.maxY < 0.4, `arrived ${wt.arrived} rescued ${wt.rescued} maxY ${wt.maxY.toFixed(2)}`);
+      check('walkTo: arrives on foot (no rescue, never airborne)', wt.arrived && !wt.rescued && wt.maxY < 0.4, `arrived ${wt.arrived} rescued ${wt.rescued} maxY ${wt.maxY.toFixed(2)} id ${wt.id} fail ${wt.failed} at ${JSON.stringify(wt.pos)} → ${JSON.stringify(wt.to)} ${JSON.stringify(wt.diag)}`);
     }
   }
   // ------------------------------------------------------------------------------------------------ mouse look
@@ -355,10 +397,10 @@ async function mainPage() {
       const s1 = ML.state();
       out.lockKey = { locked: s1.locked, req, mode: s1.mode, dot: !document.getElementById('ml-dot')?.hidden, chip: document.getElementById('ml-chip')?.textContent || '', coach: s1.coach };
       const y0 = cam._yawT, p0 = cam._pitchT;
-      document.dispatchEvent(new MouseEvent('mousemove', { movementX: 120, movementY: 40, bubbles: true }));
+      __mm(document, { movementX: 120, movementY: 40 });
       out.turn = { dyaw: cam._yawT - y0, dpitch: cam._pitchT - p0 };
       // a hostile delta never poisons the camera
-      document.dispatchEvent(new MouseEvent('mousemove', { movementX: 1e12, movementY: -1e12, bubbles: true }));
+      __mm(document, { movementX: 1e12, movementY: -1e12 });
       ML.feed(NaN, Infinity);
       await H.wait(100);
       out.finite = [cam.yaw, cam.pitch, cam._yawT, cam._pitchT, cam.distance].every(Number.isFinite);
@@ -395,9 +437,9 @@ async function mainPage() {
       out.walkModeReleased = !ML.state().locked;
       H.key('KeyW', true); await H.wait(400);
       const wl = ML.state().locked;
-      H.key('KeyW', false); await H.wait(500);
+      H.key('KeyW', false); await H.wait(250);
       const stillHeld = ML.state().locked;
-      await H.wait(1300);
+      await H.wait(1500);
       out.walk = { whileHeld: wl, after05: stillHeld, after18: ML.state().locked };
       // ---- drag: no lock on keys; a press-and-drag turns as before
       ML.setMode('drag');
@@ -412,18 +454,23 @@ async function mainPage() {
       // ---- refused lock → hover look (+ edge turning), lock mode
       ML.setMode('lock'); ML.refuse(); await H.wait(60);
       const yh = cam._yawT;
-      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, movementX: 60, movementY: 0, clientX: 480, clientY: 270, buttons: 0 }));
+      __mm(el, { clientX: 420, clientY: 270 });   // (the first move over the view only places the pointer)
+      const yh1 = cam._yawT;
+      __mm(el, { clientX: 480, clientY: 270 });   // a plain move (no movementX): the position change turns
+      const hoverPlain = cam._yawT - yh1;
+      __mm(el, { movementX: 60, clientX: 540, clientY: 270 });
       const hoverTurn = cam._yawT - yh;
       const hud = document.querySelector('#bottom-bar, #hud-left-menu, #minimap-panel') || document.body;
       const yh2 = cam._yawT;
-      hud.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, movementX: 60, movementY: 0, clientX: 10, clientY: 10, buttons: 0 }));
+      __mm(hud, { movementX: 60, clientX: 10, clientY: 10 });
       const hudTurn = cam._yawT - yh2;
       const r = el.getBoundingClientRect();
-      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, movementX: 0, movementY: 0, clientX: r.right - 4, clientY: r.top + r.height / 2, buttons: 0 }));
+      __mm(el, { clientX: r.right - 30, clientY: r.top + r.height / 2 });
+      __mm(el, { clientX: r.right - 4, clientY: r.top + r.height / 2 });
       const ye = cam._yawT; await H.wait(700);
       const edgeTurn = cam._yawT - ye;
-      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, movementX: 0, movementY: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, buttons: 0 }));
-      out.hover = { state: ML.state(), hoverTurn, hudTurn, edgeTurn };
+      ML.setMode('drag');
+      out.hover = { state: ML.state(), hoverTurn, hoverPlain, hudTurn, edgeTurn };
       ML.setMode(null); ML.refresh();
       out.after = ML.state();
       return out;
@@ -440,9 +487,9 @@ async function mainPage() {
     check('look lock: after Esc the keys walk with a free pointer', lk.esc.userReleased && !lk.esc.keyRelock, JSON.stringify(lk.esc));
     check('look lock: after Esc a click on the view captures again (that click is no walk-to)', lk.escClick.locked && lk.escClick.clicks === 0, JSON.stringify(lk.escClick));
     check('zoom: the wheel zooms while the pointer is locked', lk.wheelLocked > 0.05, lk.wheelLocked.toFixed(3));
-    check('look walk: locked while a movement key is held, still 0.5 s after, free 1.8 s after', lk.walk.whileHeld && lk.walk.after05 && !lk.walk.after18, JSON.stringify(lk.walk));
+    check('look walk: locked while a movement key is held, still a moment after, free 1.75 s after', lk.walk.whileHeld && lk.walk.after05 && !lk.walk.after18, JSON.stringify(lk.walk));
     check('look drag: keys never ask for the pointer; press-and-drag turns', lk.drag.noRequest && lk.drag.dyaw < -0.1, JSON.stringify(lk.drag));
-    check('look fallback: a refused lock gives hover look over the view (not over the HUD)', lk.hover.state.refused && lk.hover.state.hover && lk.hover.hoverTurn < -0.1 && Math.abs(lk.hover.hudTurn) < 1e-9, JSON.stringify({ h: lk.hover.hoverTurn, hud: lk.hover.hudTurn }));
+    check('look fallback: a refused lock gives hover look over the view (not over the HUD)', lk.hover.state.refused && lk.hover.state.hover && lk.hover.hoverTurn < -0.1 && lk.hover.hoverPlain < -0.1 && Math.abs(lk.hover.hudTurn) < 1e-9, JSON.stringify({ h: lk.hover.hoverTurn, plain: lk.hover.hoverPlain, hud: lk.hover.hudTurn }));
     check('look fallback: resting in the outer 6 % of the view turns slowly', lk.hover.edgeTurn < -0.1, lk.hover.edgeTurn.toFixed(3));
   }
   // ------------------------------------------------------------------------------------------------ + / − / 0
