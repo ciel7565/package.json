@@ -2,7 +2,7 @@
 -- 전통발효체험관 메타버스 — SQLite schema (default, zero-config)
 -- Created automatically by lib/Db.php on first request (data/db-<random>.sqlite, WAL mode).
 -- All timestamps are server time in milliseconds (INTEGER).
--- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 7).
+-- Keep in sync with schema.sql (MySQL/MariaDB) and Db::SCHEMA_VERSION (currently 8).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at          INTEGER NOT NULL,
   last_login_at       INTEGER NOT NULL DEFAULT 0,
   last_login_ip       TEXT NOT NULL DEFAULT '',
-  password_changed_at INTEGER NOT NULL DEFAULT 0
+  password_changed_at INTEGER NOT NULL DEFAULT 0,
+  login_id            TEXT,                                -- v8: lower-case login id (NULL for ordinary accounts)
+  pw_default          INTEGER NOT NULL DEFAULT 0           -- v8: 1 while the installer's default password is in use
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_email ON users (email);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_nickname ON users (nickname_key);
@@ -612,3 +614,15 @@ CREATE TABLE IF NOT EXISTS cache_kv (
 );
 CREATE INDEX IF NOT EXISTS ix_cache_expires ON cache_kv (expires_at);
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (7, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 8: allotment (zones, units, customers, contracts, payments, waiting list, notices, care logs, daily statistics, consent texts), job runs, cache table');
+
+-- v8 (phase 9, CONTRACT §17.0): ONE shared block. Every lane adds only its own tables / columns here, marked [lane];
+-- every statement must be safe to run again (CREATE TABLE / INDEX IF NOT EXISTS). Columns added to an EXISTING table go
+-- into Db::ADDED_COLUMNS (lib/Db.php adds them before this file runs). The INSERT of version 8 stays the LAST line.
+--
+-- [entitle] §17.2: users.login_id (the default administrator signs in as "admin"; NULL for ordinary accounts) and
+-- users.pw_default (1 while the installer's default password is still in use). New databases get both columns from
+-- CREATE TABLE users above, an existing table through Db::ADDED_COLUMNS; the unique index is created here.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_login ON users (login_id);
+-- [/entitle]
+
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (8, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');

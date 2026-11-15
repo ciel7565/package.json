@@ -85,9 +85,9 @@ function hasTable(string $t): bool
 const ALLOT_TABLES = ['allot_zones', 'allot_units', 'allot_customers', 'allot_contracts', 'allot_payments', 'allot_waitlist', 'allot_notices',
     'allot_care_logs', 'allot_stats_daily', 'allot_terms', 'job_runs', 'cache_kv'];
 
-check('schema — Db::SCHEMA_VERSION is 7 and a fresh database is created at version 7', function () {
+check('schema — Db::SCHEMA_VERSION is 7 or newer (8 since phase 9) and a fresh database is created at that version', function () {
     Tfm\Db::pdo();
-    return Tfm\Db::SCHEMA_VERSION === 7 && Tfm\Db::schemaVersion() === 7 ? true : 'code ' . Tfm\Db::SCHEMA_VERSION . ', database ' . Tfm\Db::schemaVersion();
+    return Tfm\Db::SCHEMA_VERSION >= 7 && Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION ? true : 'code ' . Tfm\Db::SCHEMA_VERSION . ', database ' . Tfm\Db::schemaVersion();
 });
 echo 'driver: ' . Tfm\Db::driverSafe() . PHP_EOL;
 check('schema — every v7 table exists (allot_*, job_runs, cache_kv)', function () {
@@ -129,11 +129,11 @@ check('schema — the nullable unique keys accept many NULLs and refuse a second
         return $a > 0 && $b > $a && $c > $b && $dup === '23000' ? true : "second live row → SQLSTATE '$dup'";
     });
 });
-check('schema — re-running the schema file on a v7 database changes nothing (idempotent)', function () {
+check('schema — re-running the schema file on an up-to-date database changes nothing (idempotent)', function () {
     $file = TFM_ROOT . '/database/' . (Tfm\Db::driver() === 'mysql' ? 'schema.sql' : 'schema.sqlite.sql');
     $before = (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version');
     foreach (Tfm\Db::splitSql((string) file_get_contents($file)) as $s) Tfm\Db::pdo()->exec($s);
-    return (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version') === $before && Tfm\Db::schemaVersion() === 7;
+    return (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version') === $before && Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION;
 });
 
 /**
@@ -171,7 +171,7 @@ $v6Site = function () use ($IS_MYSQL, $tmp): array {
     $back = function () use ($path) { Tfm\Config::override('db.sqlite_path', null); Tfm\Config::override('db.auto_migrate', null); Tfm\Db::reset(); foreach (['', '-wal', '-shm'] as $x) @unlink($path . $x); };
     return [$use, $back];
 };
-check('migration — a v6 site (auto_migrate on) is upgraded to v7 on the first request; its rows stay', function () use ($v6Site) {
+check('migration — a v6 site (auto_migrate on) is upgraded to the current version on the first request; its rows stay', function () use ($v6Site) {
     list($use, $back) = $v6Site();
     try {
         $use();
@@ -181,7 +181,7 @@ check('migration — a v6 site (auto_migrate on) is upgraded to v7 on the first 
         $old = (string) Tfm\Db::value("SELECT nickname FROM users WHERE email = 'old@example.com'");
         $set = (string) Tfm\Db::value("SELECT v FROM settings WHERE k = 'farm.rt_scale'");
         $rows6 = (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version WHERE version = 6');
-        return $v === 7 && $missing === [] && $old === 'OldSite' && $set === '2' && $rows6 === 1 ? true : json_encode([$v, $missing, $old, $set, $rows6]);
+        return $v === Tfm\Db::SCHEMA_VERSION && $missing === [] && $old === 'OldSite' && $set === '2' && $rows6 === 1 ? true : json_encode([$v, $missing, $old, $set, $rows6]);
     } finally { $back(); }
 });
 check('migration — a v6 site with db.auto_migrate off answers 503 SCHEMA_OUTDATED until the upgrade (cli migrate) runs', function () use ($v6Site) {
@@ -192,12 +192,12 @@ check('migration — a v6 site with db.auto_migrate off answers 503 SCHEMA_OUTDA
         $code = apiCode(function () { Tfm\Db::pdo(); });
         $again = apiCode(function () { Tfm\Db::one('SELECT 1'); });
         $after = Tfm\Db::upgrade(); // what `php cli/tfm.php migrate` does with the configured account
-        $ok = hasTable('allot_units') && Tfm\Db::schemaVersion() === 7;
-        return $code === '503 SCHEMA_OUTDATED' && $again === '503 SCHEMA_OUTDATED' && $after === 7 && $ok ? true : json_encode([$code, $again, $after, $ok]);
+        $ok = hasTable('allot_units') && Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION;
+        return $code === '503 SCHEMA_OUTDATED' && $again === '503 SCHEMA_OUTDATED' && $after === Tfm\Db::SCHEMA_VERSION && $ok ? true : json_encode([$code, $again, $after, $ok]);
     } finally { $back(); }
 });
-check('migration — back on the test database (version 7)', function () {
-    return Tfm\Db::schemaVersion() === 7 && hasTable('allot_units');
+check('migration — back on the test database (the current version)', function () {
+    return Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION && hasTable('allot_units');
 });
 
 // =============================================================================================== 2 · settings, zones, the 10,000-unit seed, units, the map

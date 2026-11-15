@@ -9,7 +9,7 @@
 -- With db.auto_migrate = true the tables are also created / upgraded automatically once the database exists
 -- (CREATE DATABASE / USE lines are skipped by the auto-installer). Re-running this file is safe (IF NOT EXISTS).
 -- All timestamps are server time in milliseconds (BIGINT).
--- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 7).
+-- Keep in sync with schema.sqlite.sql and Db::SCHEMA_VERSION (currently 8).
 -- =============================================================================
 
 -- 데이터베이스를 아직 만들지 않았다면 아래 두 줄의 주석(--)을 풀고 서버 전체(데이터베이스 선택 없이)에서 가져오세요:
@@ -37,8 +37,11 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at       BIGINT NOT NULL DEFAULT 0,
   last_login_ip       VARCHAR(64) NOT NULL DEFAULT '',
   password_changed_at BIGINT NOT NULL DEFAULT 0,
+  login_id            VARCHAR(20) NULL,
+  pw_default          TINYINT NOT NULL DEFAULT 0,
   UNIQUE KEY ux_users_email (email),
   UNIQUE KEY ux_users_nickname (nickname_key),
+  UNIQUE KEY ux_users_login (login_id),
   KEY ix_users_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 
@@ -645,3 +648,30 @@ CREATE TABLE IF NOT EXISTS cache_kv (
   KEY ix_cache_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (7, UNIX_TIMESTAMP() * 1000, 'phase 8: allotment (zones, units, customers, contracts, payments, waiting list, notices, care logs, daily statistics, consent texts), job runs, cache table');
+
+-- v8 (phase 9, CONTRACT §17.0): ONE shared block. Every lane adds only its own tables / columns here, marked [lane];
+-- every statement must be safe to run again (CREATE TABLE IF NOT EXISTS, information_schema guards as below).
+-- The INSERT of version 8 stays the LAST line of this file.
+--
+-- [entitle] §17.2: users.login_id — the login id of an account (the default administrator signs in as "admin"; NULL for
+-- ordinary accounts, unique among the others) — and users.pw_default — 1 while the installer's default password is
+-- still in use (the admin site shows a red banner until it is changed). New installs get both from CREATE TABLE users
+-- above; an existing table gets them here (one guarded ALTER per column / key).
+SET @tfm_has_login = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'login_id');
+SET @tfm_sql = IF(@tfm_has_login = 0, 'ALTER TABLE users ADD COLUMN login_id VARCHAR(20) NULL', 'DO 0');
+PREPARE tfm_stmt FROM @tfm_sql;
+EXECUTE tfm_stmt;
+DEALLOCATE PREPARE tfm_stmt;
+SET @tfm_has_pwdef = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'pw_default');
+SET @tfm_sql = IF(@tfm_has_pwdef = 0, 'ALTER TABLE users ADD COLUMN pw_default TINYINT NOT NULL DEFAULT 0', 'DO 0');
+PREPARE tfm_stmt FROM @tfm_sql;
+EXECUTE tfm_stmt;
+DEALLOCATE PREPARE tfm_stmt;
+SET @tfm_has_loginkey = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND INDEX_NAME = 'ux_users_login');
+SET @tfm_sql = IF(@tfm_has_loginkey = 0, 'ALTER TABLE users ADD UNIQUE KEY ux_users_login (login_id)', 'DO 0');
+PREPARE tfm_stmt FROM @tfm_sql;
+EXECUTE tfm_stmt;
+DEALLOCATE PREPARE tfm_stmt;
+-- [/entitle]
+
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (8, UNIX_TIMESTAMP() * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');

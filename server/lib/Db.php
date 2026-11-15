@@ -14,7 +14,7 @@ if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove(
 
 final class Db
 {
-    public const SCHEMA_VERSION = 7;
+    public const SCHEMA_VERSION = 8;
     /** @var PDO|null */
     private static $pdo = null;
     /** @var string */
@@ -567,6 +567,10 @@ final class Db
                 $pdo->exec('BEGIN IMMEDIATE');
                 try {
                     if (self::schemaVersion() < self::SCHEMA_VERSION) {
+                        // [entitle] v8: an existing table gets its new columns BEFORE the file runs — the file creates
+                        // an index on users.login_id, which an older users table does not have yet (new databases get
+                        // every column from CREATE TABLE, so missing tables are skipped here)
+                        self::ensureColumns(true);
                         foreach ($stmts as $s) $pdo->exec($s);
                         self::ensureColumns(); // same transaction: the version rows commit only with the columns
                     }
@@ -585,23 +589,40 @@ final class Db
     /**
      * Columns added to an existing table by a later schema version. CREATE TABLE IF NOT EXISTS gives a new database
      * every column; an older table gets the missing ones here (SQLite has no "ADD COLUMN IF NOT EXISTS"; on MySQL /
-     * MariaDB schema.sql adds them itself and this only repairs a partial import). Nullable columns only.
+     * MariaDB schema.sql adds them itself and this only repairs a partial import). Nullable columns, or NOT NULL with a
+     * constant DEFAULT (both databases can add those to a table that already has rows).
      */
     private const ADDED_COLUMNS = [
         // v5: the ban watermark of a user retraction (highest chat_messages.id at ban time)
         ['chat_retractions', 'upto_id', 'INTEGER', 'BIGINT UNSIGNED NULL'],
+        // v8 [entitle] CONTRACT §17.2: the login id of an account (the default administrator signs in as "admin";
+        // NULL for everyone else, unique through ux_users_login) and the "default password still in use" flag
+        ['users', 'login_id', 'TEXT', 'VARCHAR(20) NULL'],
+        ['users', 'pw_default', 'INTEGER NOT NULL DEFAULT 0', 'TINYINT NOT NULL DEFAULT 0'],
     ];
 
-    private static function ensureColumns(): void
+    /** @param bool $existingOnly skip tables that do not exist yet (the schema file creates them with every column) */
+    private static function ensureColumns(bool $existingOnly = false): void
     {
         foreach (self::ADDED_COLUMNS as $c) {
             list($table, $col, $sqliteType, $mysqlType) = $c;
             self::ident($table);
             self::ident($col);
+            if ($existingOnly && !self::hasTable($table)) continue;
             if (self::hasColumn($table, $col)) continue;
             self::$pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $col . ' ' . (self::$driver === 'mysql' ? $mysqlType : $sqliteType));
             Log::info('DB', 'column added', ['table' => $table, 'column' => $col]);
         }
+    }
+
+    /** [entitle] does $table exist in this database (sqlite_master / information_schema) */
+    public static function hasTable(string $table): bool
+    {
+        self::ident($table);
+        if (self::driver() === 'mysql') {
+            return (int) self::value('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [$table]) > 0;
+        }
+        return (int) self::value("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", [$table]) > 0;
     }
 
     /** does $table have $column (PRAGMA table_info / information_schema) */
