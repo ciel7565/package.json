@@ -1419,6 +1419,26 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     ctx.complex = { knobs: S, origin: ORIGIN };
     const disposers = [];
     RUN.built = []; RUN.failed = []; RUN.groundTris = 0; RUN.groundCalls = 1;
+    // [complex-look] route hints for the walker's planner (G.data.layout.navLinks, world metres): plan v2's 3.2 m aisles
+    // between the jar bands are too narrow for its coarse grid on long trips — every aisle with a wall gate is a route
+    // from outside the gate (its foot) to the centre plaza (its top). Removed again when the place is disposed.
+    try {
+      const NL = G.data.layout && Array.isArray(G.data.layout.navLinks) ? G.data.layout.navLinks : null, mine = [];
+      if (NL) {
+        for (const id of ['JARCIRCLE', 'AMPHI']) {
+          const R = C.byId(id), W = C.byId(id === 'JARCIRCLE' ? 'WALL_GC' : 'WALL_AM');
+          if (!R || !W || !Array.isArray(R.aisles)) continue;
+          for (const a of R.aisles) {
+            if (!(W.gates || []).some((g) => Math.abs(Math.atan2(Math.sin(g.a - a), Math.cos(g.a - a))) < 0.02)) continue;
+            const pt = (r) => [ORIGIN.x + R.cx + Math.cos(a) * r, ORIGIN.z + R.cz + Math.sin(a) * r];
+            const route = [pt(Math.max(3.9, (R.plazaR || 8) - 4.4)), pt((R.plazaR || 8) + 0.5), pt(R.wallR - 1), pt(R.wallR + 3)];
+            const link = { id: `CX_${id}_${Math.round(a * 1000)}`, route, width: 1.3 };
+            NL.push(link); mine.push(link);
+          }
+        }
+        disposers.push(() => { for (const l of mine) { const k = NL.indexOf(l); if (k >= 0) NL.splice(k, 1); } });
+      }
+    } catch (e) { G.log.warn('WORLD', 'complex: route hints skipped', e?.message || e); }
     // 1. the terrain
     try {
       const T = buildTerrain(ctx, S);

@@ -214,9 +214,11 @@ try {
     await boot(pf, 'low', '&start=complex');
     const inDeck = await settled(pf, 'PL_ALLOT', TIMEOUT);
     const card = await pf.waitForSelector('.cx-welcome .cxw-go', { timeout: T_UI }).then(() => true, () => false);
+    // (the card scales in: measure its layout size once its open animation has finished — a frame can take a second here)
+    await pf.waitForFunction(() => { const b = document.querySelector('.cx-welcome .cxw-go'); return !b || !b.getAnimations || b.closest('.cx-welcome') && document.getAnimations().filter((a) => a.playState === 'running').length === 0; }, null, { timeout: 15000 }).catch(() => {});
     const fv = await pf.evaluate(() => {
       const pl = G.sys.player, d = G.sys.places.def('PL_ALLOT'), C = G.data.complex, v = C.viewpoints.find((p) => p.id === 'deck');
-      const b = document.querySelector('.cx-welcome .cxw-go'), r = b ? b.getBoundingClientRect() : null;
+      const b = document.querySelector('.cx-welcome .cxw-go'), r = b ? { width: b.offsetWidth, height: b.offsetHeight } : null;
       return { cur: G.sys.places.current, d: +Math.hypot(pl.position.x - d.origin.x - v.stand.x, pl.position.z - d.origin.z - v.stand.z).toFixed(2), y: +pl.position.y.toFixed(2), btn: r ? { w: Math.round(r.width), h: Math.round(r.height) } : null, say: document.querySelector('.cx-welcome [data-say]')?.getAttribute('data-say') || '' };
     });
     check('first visit (start=complex): starts on the viewpoint deck with one calm welcome line', inDeck && card && fv.d < 2.5 && fv.y > 20 && !!fv.say, JSON.stringify(fv));
