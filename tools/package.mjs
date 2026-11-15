@@ -119,6 +119,8 @@ const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/i
   'metaverse/lib/Lecture.php', 'metaverse/lib/AdminLecture.php', 'metaverse/api/lecture/list.php', 'metaverse/api/lecture/file.php',
   // [entitle] CONTRACT §17.2: the entitlement, the admin site's ⚙️ 설정 / 🔐 내 계정 part (under lib/), the password endpoint
   'metaverse/lib/Entitle.php', 'metaverse/lib/AdminSettings.php', 'metaverse/lib/Settings.php', 'metaverse/api/auth/password.php',
+  // [myroom] CONTRACT §17.4: the room an allotment holder decorates — the library and its two endpoints
+  'metaverse/lib/Room.php', 'metaverse/api/room/get.php', 'metaverse/api/room/save.php',
   // every file of the built admin folder ships (it is index.php + .htaccess — CONTRACT §15.11 #6; any part added there must ship too)
   ...(fs.existsSync(path.join(DIST, 'admin')) ? walk(path.join(DIST, 'admin')).filter((p) => !skipReason(`admin/${p}`)).map((p) => `metaverse/admin/${p}`) : [])]
   .filter((p, i, all) => all.indexOf(p) === i);

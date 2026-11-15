@@ -112,6 +112,14 @@ spl_autoload_register(static function (string $class): void {
         if (is_file($file)) require_once $file;
     }
 });
+// phase 9 (CONTRACT §17.4) [myroom]: Tfm\Room (내 방 — one decorated room per account in user_rooms) is used by
+// api/room/*, by the save validator (a room inside a save) and by the admin tabs; loaded on first use.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Room') {
+        $file = __DIR__ . '/Room.php';
+        if (is_file($file)) require_once $file;
+    }
+});
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');

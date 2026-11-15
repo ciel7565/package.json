@@ -476,6 +476,7 @@ const DEFS = {
   rate:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // gets hammered
   allot:      { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.7: the allotment matrix + its IDOR check (own account budget)
   sync:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.9 [scale-server]: the sync matrix and token checks (own account budget)
+  room:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §17.4 [myroom]: the room matrix, its IDOR check and the operator's grant (own account budget)
   // attackers arrive through a trusted proxy (one address each). force_https is off: these instances exercise the
   // attack-logging / install / admin-IP behaviour over plain http — HTTPS forcing is tested on its own instances
   // ('https', 'httpsproxy', 'main', 'prod'). With a trusted proxy configured, force_https=auto would (correctly) treat
@@ -1119,7 +1120,7 @@ async function S03() {
     await check('S03', `${ep} · malformed bodies (array / scalar root, cut-off, depth 40 and 300, NaN, bad UTF-8, oversize) → 4xx JSON error, never 5xx`, { sev: 'medium', fix: 'Route every body through Http::json() / Tfm\\V with the depth-32 and size caps; answer 400 / 413.' }, async () => {
       // the allotment endpoints are exercised on their own instance (see below): one address may register 60 accounts
       // an hour on an instance, and "val" needs its budget for the upload and payment checks that follow
-      let u = await newUser(ep.startsWith('api/allot/') ? sa : ep === 'api/sync.php' ? await srv('sync') : s, 'Mal');   // [scale-server] sync: its own instance
+      let u = await newUser(ep.startsWith('api/allot/') ? sa : ep === 'api/sync.php' ? await srv('sync') : ep.startsWith('api/room/') ? await srv('room') : s, 'Mal');   // [scale-server] sync: its own instance · [myroom] room: its own
       const probe = await u.json(ep, {});
       if (probe.status === 403 && probe.error && probe.error.code === 'FORBIDDEN') u = adm;
       const bad = [];
@@ -1515,12 +1516,137 @@ async function S03() {
     assert(isFree(me.data.ent) && me.data.adminUrl === undefined, `after everything: ${JSON.stringify(me.data.ent)}`);
     return 'save data · body · address · headers · cookie: ent stays free; 4 jars → JAR_LIMIT; + 600 m → DISTANCE_TOO_FAST; tier 4 order 400; grant 403';
   });
+  // [myroom] CONTRACT §17.4 — api/room/save.php: a room is catalogue ids and numbers; every thing is checked, a refused save changes nothing
+  // (its own instance: "val" needs its registration budget for the upload and payment checks)
+  const sr = await srv('room');
+  const admR = await admin(sr), victimR = await actor(sr, 'victim');
+  const ROOM_STYLE = { floor: 'jangpan', wall: 'plaster', wood: 'warm', mood: 'day', win: '000000660100010000' };
+  const ROOM_THING = { i: 'F_SOBAN', x: 2, y: 0, z: -1, r: 0 };
+  /** the "내 방 열어 주기 / 닫기" form of an account's row on the 👥 사용자 tab */
+  const roomForm = async (ab, u, action) => {
+    const page = await ab.c.req(`${ab.entry}?tab=users&q=${encodeURIComponent(u.user.nickname)}`, { headers: HTML });
+    const form = parseForms(page.text).find((f) => f.method === 'post' && f.fields.some((x) => x.name === 'action' && x.value === action) && f.fields.some((x) => x.name === 'uid' && x.value === String(u.user.id)));
+    return { page, form };
+  };
+  /** a fresh account the operator gave a room (the save budget is per account: a long matrix needs several holders) */
+  let roomAdmin = null;
+  const roomHolder = async () => {
+    if (!roomAdmin) roomAdmin = await adminBrowser(sr);
+    const u = await newUser(sr, 'Rmk');
+    const { page, form } = await roomForm(roomAdmin, u, 'room_grant');
+    assert(form, 'the 👥 사용자 tab has no "내 방 열어 주기" form for a new account');
+    await follow(roomAdmin.c, await submitForm(roomAdmin.c, page.url, form, {}));
+    return u;
+  };
+  await check('S03', 'api/room/save.php · wrong types, unknown and hostile ids, numbers off the grid or outside the room, a thing in the way of the door, a wall thing off its wall, too many things, a wrong style and unknown keys are refused; without the token nothing is taken (the stored room stays as it was)', { sev: 'medium', fix: 'Tfm\\Room::validate: check every thing against the catalogue of game-data.json (id, grid, range, placing kind, limit); V::keys for the body.' }, async () => {
+    const h1 = await roomHolder(), holders = [h1];
+    const first = await h1.json('api/room/save.php', { v: 0, style: ROOM_STYLE, items: [ROOM_THING], public: false });
+    assert(first.status === 200 && first.data && first.data.v === 1, `a holder's first save → ${first.status} ${(first.error && first.error.code) || ''}`);
+    const base = { v: 1, style: ROOM_STYLE, items: [ROOM_THING], public: false };
+    const it = (label, o, drop = []) => { const t = { ...ROOM_THING, ...o }; for (const k of drop) delete t[k]; return [label, { ...base, items: [t] }]; };
+    const st = (label, o, drop = []) => { const t = { ...ROOM_STYLE, ...o }; for (const k of drop) delete t[k]; return [label, { ...base, style: t }]; };
+    const cases = [
+      ...mut('v', INT, base), ['v = -1', { ...base, v: -1 }], ['v missing', { style: ROOM_STYLE, items: [ROOM_THING], public: false }],
+      ...mut('public', BOOL, base), ['public missing', { v: 1, style: ROOM_STYLE, items: [ROOM_THING] }],
+      ['style = a word', { ...base, style: 'jangpan' }], ['style = a list', { ...base, style: Object.values(ROOM_STYLE) }], ['style missing', { v: 1, items: [ROOM_THING], public: false }],
+      st('style.floor missing', {}, ['floor']), st('style.floor unknown', { floor: 'lava' }), st('style.wall = markup', { wall: '"><script>alert(1)</script>' }), st('style.mood = a number', { mood: 1 }), st('style: an unknown key', { roof: 'gold' }),
+      st('style.win 17 digits', { win: '00000066010001000' }), st('style.win in letters', { win: 'aaaaaaaaaaaaaaaaaa' }), st('style.win kind 7', { win: '700000660100010000' }), st('style.win: a window where the door is', { win: '000000660103010000' }),
+      ['items = a word', { ...base, items: 'F_SOBAN' }], ['items = an object', { ...base, items: { a: ROOM_THING } }], ['items missing', { v: 1, style: ROOM_STYLE, public: false }],
+      ['a thing = a word', { ...base, items: ['F_SOBAN'] }], ['a thing = a list', { ...base, items: [['F_SOBAN', 2, 0, -1, 0]] }], ['a thing = {}', { ...base, items: [{}] }],
+      it('a thing with a name field', { name: '<img src=x onerror=alert(1)>' }), it('a thing with an owner field', { user: 1 }),
+      it('id missing', {}, ['i']), it('id = a number', { i: 12 }), it('id unknown', { i: 'F_SPACESHIP' }), it('id in small letters', { i: 'f_soban' }), it('id = a path', { i: '../../etc/passwd' }),
+      it('id = markup', { i: '<svg onload=alert(1)>' }), it('id = SQL', { i: "F_SOBAN' OR '1'='1" }), it('id 300 letters', { i: 'A'.repeat(300) }),
+      it('x = a digit string', { x: '2' }), it('x = true', { x: true }), it('x = null', { x: null }), it('x off the grid', { x: 2.1 }), it('x outside the room', { x: 7.5 }), it('x = 1e308', { x: 1e308 }), it('z missing', {}, ['z']), it('z outside the room', { z: -6 }),
+      it('y below the floor', { y: -0.5 }), it('a floor thing in the air', { y: 0.5 }), it('y = a word', { y: 'high' }),
+      it('r = 24', { r: 24 }), it('r = -1', { r: -1 }), it('r = 1.5', { r: 1.5 }), it('r = a digit string', { r: '6' }), it('r missing', {}, ['r']),
+      it('a size on a thing without sizes', { s: 2 }), it('a colour past the palette', { c: 99 }), it('a colour as css', { c: 'red;background:url(//evil.example)' }),
+      it('in the way of the door', { x: 0, z: 4 }), it('through the wall', { x: 6.875 }),
+      ['a wall thing in the middle of the room', { ...base, items: [{ i: 'W_FAN', x: 0, y: 1.6, z: 0, r: 0 }] }], ['a wall thing with the turn of another wall', { ...base, items: [{ i: 'W_FAN', x: 0, y: 1.6, z: -5.5, r: 18 }] }],
+      ['a wall thing above the wall', { ...base, items: [{ i: 'W_FAN', x: 0, y: 2.45, z: -5.5, r: 0 }] }],
+      ['81 things (the free limit is 80)', { ...base, items: Array.from({ length: 81 }, (_, k) => ({ i: 'G_GONGGI', x: -6.5 + (k % 50) * 0.25, y: 0, z: -5 + Math.floor(k / 50) * 0.25, r: 0 })) }],
+      ['5000 things', { ...base, items: Array.from({ length: 5000 }, () => ROOM_THING) }],
+      ['an unknown key (user)', { ...base, user: victimR.user.id }], ['an unknown key (userId)', { ...base, userId: victimR.user.id }], ['an unknown key (granted)', { ...base, granted: 1 }], ['an unknown key (limit)', { ...base, limit: 999 }],
+    ];
+    // the save budget is per account (40 a minute): the matrix goes through several holders, 28 cases each
+    let turn = 0;
+    const r = await strict('api/room/save.php', cases, { perUser: 28, user: async () => { if (turn++ === 0) return h1; const h = await roomHolder(); holders.push(h); return h; } });
+    const noTok = await h1.req('api/room/save.php', { json: base, csrf: false });
+    const badTok = await h1.req('api/room/save.php', { json: base, csrf: 'x'.repeat(64) });
+    assert(noTok.status === 403 && badTok.status === 403, `a save without / with a wrong token → ${noTok.status} / ${badTok.status}`);
+    const now = await h1.req('api/room/get.php');
+    assert(now.status === 200 && now.data.mine === true && now.data.can === true && now.data.room.v === 1 && now.data.room.items.length === 1 && now.data.room.items[0].i === 'F_SOBAN' && now.data.room.public === false, 'a refused save changed the stored room');
+    for (const h of holders.slice(1)) { const g = await h.req('api/room/get.php'); assert(g.status === 200 && g.data.room.v === 0 && g.data.room.items.length === 0, 'a refused save created a room'); }
+    return `${r} (${holders.length} holders) · no token / wrong token → 403 · the first holder's room is still v 1 with its one thing, the others have none`;
+  });
+  await check('S03', 'api/room/* · IDOR: a room is read and written by its holder only — an account without a room cannot save (403) and gets the same 404 for a private room, an account without a room and an account that does not exist; nothing in a request can name another account; a public room is read as things only (no name, no address) and still cannot be changed by its visitor', { sev: 'high', fix: 'api/room/save.php: the room of the session\'s account only (no account field). api/room/get.php?user=: public rooms of accounts that still have a room; one 404 for everything else.' }, async () => {
+    const guest = await newUser(sr, 'Rmg');
+    const own = await guest.req('api/room/get.php');
+    assert(own.status === 200 && own.data.mine === true && own.data.can === false && own.data.room.items.length === 0 && own.data.room.v === 0, `an account without a room reads ${own.status} ${JSON.stringify(own.data).slice(0, 120)}`);
+    const refused = await guest.json('api/room/save.php', { v: 0, style: ROOM_STYLE, items: [ROOM_THING], public: true });
+    assert(refused.status === 403 && refused.error.code === 'ROOM_FORBIDDEN', `a save without a room → ${refused.status} ${refused.error && refused.error.code}`);
+    const aid = admR.user.id;
+    const mine = await admR.json('api/room/save.php', { v: 0, style: ROOM_STYLE, items: [ROOM_THING], public: false });
+    assert(mine.status === 200 && mine.data.v === 1, `an administrator's first save → ${mine.status} ${(mine.error && mine.error.code) || ''}`);
+    const priv = await guest.req(`api/room/get.php?user=${aid}`), noRoom = await guest.req(`api/room/get.php?user=${victimR.user.id}`), ghost = await guest.req('api/room/get.php?user=987654321');
+    for (const [label, r] of [['a private room', priv], ['an account without a room', noRoom], ['an unknown account', ghost]]) assert(r.status === 404 && r.error.code === 'NOT_FOUND', `${label} → ${r.status} ${r.error && r.error.code}`);
+    assert(priv.error.message === noRoom.error.message && priv.error.message === ghost.error.message, 'the three 404 answers differ: an account can be told from a missing one');
+    const bad = [];
+    for (const q of ['user=abc', 'user=-1', 'user=0', 'user=1.5', 'user[]=1', 'user=1&uid=2', 'id=1', `user=${aid}%27%20OR%201=1`]) { const r = await guest.req(`api/room/get.php?${q}`); if (r.status !== 400) bad.push(`${q} → ${r.status}`); }
+    assert(!bad.length, `malformed parameters were not refused: ${bad.join(', ')}`);
+    // the holder opens the room: a visitor reads the things, and only the things
+    const open = await admR.json('api/room/save.php', { v: 1, style: ROOM_STYLE, items: [ROOM_THING], public: true });
+    assert(open.status === 200 && open.data.v === 2, `the holder's save → ${open.status}`);
+    const seen = await guest.req(`api/room/get.php?user=${aid}`);
+    assert(seen.status === 200 && seen.data.mine === false && seen.data.can === false && seen.data.limit === 0 && seen.data.room.items.length === 1, `a public room reads ${seen.status} ${JSON.stringify(seen.data).slice(0, 160)}`);
+    assert(JSON.stringify(Object.keys(seen.data).sort()) === '["can","limit","mine","room"]' && JSON.stringify(Object.keys(seen.data.room).sort()) === '["items","public","style","v"]', `the answer carries more than the room: ${Object.keys(seen.data)} / ${Object.keys(seen.data.room)}`);
+    assert(!seen.text.includes(admR.email) && !seen.text.includes(String(admR.user.nickname)), 'the public room names its holder');
+    // the visitor still cannot write it: no field and no parameter names an account
+    const w1 = await guest.json(`api/room/save.php?user=${aid}`, { v: 2, style: ROOM_STYLE, items: [], public: false });
+    const w2 = await guest.json('api/room/save.php', { v: 2, style: ROOM_STYLE, items: [], public: false, user: aid });
+    assert(w1.status === 403 && (w2.status === 400 || w2.status === 403), `a visitor's save → ${w1.status} / ${w2.status}`);
+    const after = await admR.req('api/room/get.php');
+    assert(after.data.room.v === 2 && after.data.room.items.length === 1 && after.data.room.public === true, 'a visitor changed the room');
+    // an older version is refused and says which one is stored
+    const stale = await admR.json('api/room/save.php', { v: 1, style: ROOM_STYLE, items: [], public: false });
+    assert(stale.status === 409 && stale.error.code === 'ROOM_STALE' && stale.json.data && stale.json.data.v === 2, `a save made from an older version → ${stale.status} ${stale.error && stale.error.code}`);
+    return 'no room: 403 on save · private / no room / unknown account: one 404 · 8 malformed parameters → 400 · public room: things only, still read-only · stale save → 409 with v 2';
+  });
+  await check('S03', 'the operator\'s grant: "🏠 내 방 열어 주기" on the 👥 사용자 tab gives a plain account a room (it may save then), "닫기" takes it back (403 again, the stored room is kept); the form is refused without the admin session and without its token, and both steps are in the audit log', { sev: 'high', fix: 'admin/index.php: room_grant / room_revoke behind handlePost (same origin + CSRF + elevated admin session) → Tfm\\Room::grant with Audit::log.' }, async () => {
+    const u = await newUser(sr, 'Rmh');
+    const before = await u.json('api/room/save.php', { v: 0, style: ROOM_STYLE, items: [ROOM_THING], public: false });
+    assert(before.status === 403, `before the grant a save → ${before.status}`);
+    if (!roomAdmin) roomAdmin = await adminBrowser(sr);
+    const { c, entry } = roomAdmin;
+    let { page, form: grant } = await roomForm(roomAdmin, u, 'room_grant');
+    assert(page.status === 200 && grant, 'the 👥 사용자 tab has no "내 방 열어 주기" form for the account');
+    // the same form sent by a browser that is not the administrator, and without the token
+    const plain = await submitForm(u, page.url, grant, {});
+    const noTok = await submitForm(c, page.url, grant, {}, { drop: ['_csrf'] });
+    const stillNo = await u.req('api/room/get.php');
+    assert(![200, 302, 303].includes(plain.status) || !stillNo.data.can, `a plain account posted the grant form (${plain.status})`);
+    assert(noTok.status === 403 && stillNo.data.can === false, `the grant form without its token → ${noTok.status}, can ${stillNo.data.can}`);
+    const done = await follow(c, await submitForm(c, page.url, grant, {}));
+    assert(done.status === 200 && /내 방을 열어/.test(done.text), `the grant → ${done.status}`);
+    const can = await u.req('api/room/get.php');
+    const saved = await u.json('api/room/save.php', { v: 0, style: ROOM_STYLE, items: [ROOM_THING], public: false });
+    assert(can.data.can === true && can.data.limit === 80 && saved.status === 200 && saved.data.v === 1, `after the grant: can ${can.data.can}, limit ${can.data.limit}, save ${saved.status}`);
+    const row = await roomForm(roomAdmin, u, 'room_revoke');
+    assert(row.form && !(await roomForm(roomAdmin, u, 'room_grant')).form, 'after the grant the row does not offer "닫기"');
+    await follow(c, await submitForm(c, row.page.url, row.form, {}));
+    const closed = await u.req('api/room/get.php');
+    const refused = await u.json('api/room/save.php', { v: 1, style: ROOM_STYLE, items: [], public: false });
+    assert(closed.data.can === false && closed.data.room.v === 1 && closed.data.room.items.length === 1 && refused.status === 403, `after closing: can ${closed.data.can}, v ${closed.data.room.v}, save ${refused.status}`);
+    const audit = await c.req(`${entry}?tab=audit`, { headers: HTML });
+    assert(/room_grant/.test(audit.text) && /room_revoke/.test(audit.text), 'the audit log does not show room_grant / room_revoke');
+    return 'no room → grant (refused for a plain account and without the token) → can true, limit 80, a save is taken → closed: 403, the room is kept (v 1) · audit: room_grant, room_revoke';
+  });
   await check('S03', 'every POST endpoint of the build has a field-level validation matrix in this suite', { sev: 'low', fix: 'New endpoint: add its valid body and wrong-type variants to S03() in tests/security-e2e.mjs.' }, async () => {
     const covered = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/chat/send.php', 'api/chat/report.php', 'api/presence/update.php', 'api/player/save.php', 'api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/grant.php', 'api/sub/renew.php',
       'api/allot/apply.php', 'api/allot/cancel.php', 'api/allot/nameplate.php', 'api/allot/seen.php', 'api/allot/waitlist.php', 'api/allot/pay-prepare.php', 'api/allot/pay-confirm.php',   // CONTRACT §16.7
       'api/farm/report.php', 'api/farm/seen.php', 'api/farm/report-photo.php',   // report-photo: its reportId / file matrix is in S14
       'api/sync.php',   // CONTRACT §16.9 [scale-server]
       'api/auth/password.php',   // CONTRACT §17.2 [entitle]
+      'api/room/save.php',   // CONTRACT §17.4 [myroom]
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
@@ -2542,6 +2668,8 @@ async function S09() {
       'api/auth/password.php': [11, () => u.json('api/auth/password.php', {})],
       // [lecture] CONTRACT §17.3 — lecture_list [60, 60] · lecture_file [600, 60] (one picture / one pdf piece = one request)
       'api/lecture/list.php': [61, () => request(s, 'api/lecture/list.php')], 'api/lecture/file.php': [601, () => request(s, 'api/lecture/file.php?id=987654321')],
+      // [myroom] CONTRACT §17.4 — room_get [60, 60] · room_save [40, 60] per account (a refused save counts too)
+      'api/room/get.php': [61, () => u.req('api/room/get.php')], 'api/room/save.php': [41, () => u.json('api/room/save.php', {})],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
       'api/farm/seen.php': 'api/farm/reports.php',

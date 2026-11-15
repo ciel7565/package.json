@@ -1042,6 +1042,27 @@ final class AdminAllot
                 . self::open('allot_customer_link', $place) . '<label>체험관 계정 (닉네임 · 이메일 · 계정 번호)<input name="who" required maxlength="120" autocomplete="off"></label><button class="btn" type="submit">🔗 잇기</button></form>';
         }
         $h .= '<p class="row"><a class="btn ghost" href="' . self::e(self::href(['sec' => 'notices', 'cust' => $id])) . '">🔔 이 고객에게 알림 쓰기</a></p></section></div>';
+        $h .= self::roomCard((int) $cu['userId'], $place); // [myroom] 🏠 내 방 (CONTRACT §17.4)
+        return $h;
+    }
+
+    /**
+     * [myroom] the card "🏠 내 방" of a customer's page: whether the linked account has a room to decorate (a live
+     * contract gives one), and the operator's own grant — its button posts the admin site's room_grant / room_revoke
+     * (admin/index.php doRoom → Tfm\Room::grant, audited) and comes back to this page.
+     */
+    private static function roomCard(int $uid, array $place): string
+    {
+        if (!class_exists('Tfm\\Room')) return '';
+        $h = '<section class="card"><h3>🏠 내 방 (방 꾸미기)</h3>';
+        if ($uid <= 0) return $h . '<p class="dim">이 고객은 체험관 계정과 이어져 있지 않아요. 위 "🔗 체험관 계정과 잇기"로 계정을 이으면, 계약이 살아 있는 동안 그 계정에 꾸밀 수 있는 방이 생겨요.</p></section>';
+        $st = Room::status($uid);
+        $h .= '<dl class="facts"><dt>지금</dt><dd>' . ($st['has'] ? self::badge('방이 있어요', 'ok') : self::badge('방이 없어요', 'warn')) . ' <span class="dim small">'
+            . ($st['contract'] ? '살아 있는 분양 계약으로 방이 열려 있어요.' : ($st['granted'] ? '운영자가 직접 열어 준 방이에요.' : '분양 계약이 확정되면 저절로 열려요.')) . '</span></dd>'
+            . '<dt>꾸민 것</dt><dd>' . (int) $st['things'] . '개' . ($st['v'] > 0 && $st['updatedAt'] > 0 ? ' · 마지막으로 꾸민 때 ' . self::e(self::at($st['updatedAt'])) : '') . '</dd></dl>'
+            . '<p class="dim small">계약과 상관없이 방을 먼저 열어 주거나(행사 · 체험단), 직접 열어 준 방을 다시 닫을 수 있어요. 닫아도 꾸며 둔 방은 지워지지 않아요. 누가 언제 열고 닫았는지는 📜 감사 로그에 남아요.</p><div class="row">'
+            . ($st['granted'] ? self::button('room_revoke', '🏠 직접 열어 준 방 닫기', $place + ['uid' => $uid], 'btn ghost') : self::button('room_grant', '🏠 이 계정에 방 열어 주기', $place + ['uid' => $uid], 'btn gold'))
+            . '</div></section>';
         return $h;
     }
 

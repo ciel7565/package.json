@@ -609,6 +609,14 @@ final class SaveValidator
         foreach (['exhibitsSeen' => 'seen', 'exhibitRooms' => 'seen', 'motionsSeen' => 'motions', 'placesSeen' => 'visits'] as $stat => $k) {
             if (self::n(self::p($placeStats, $stat)) > $placeSizes[$k]) { $this->violate('PLACES_BAD_SHAPE', ['field' => $stat]); break; }
         }
+        // [myroom] 내 방 (CONTRACT §17.4): a save that began on a device without a server may carry a decorated room. The
+        // server keeps rooms in user_rooms and never uses this block; it only has to be harmless — catalogue-shaped ids
+        // and small numbers, at most 200 things, style values that are plain words. A wrong shape is malformed (400).
+        $myroom = self::p($n, 'myroom');
+        if ($myroom !== null && class_exists('Tfm\\Room')) {
+            $roomWhy = Room::checkEmbedded($myroom);
+            if ($roomWhy !== null) self::bad('myroom: ' . $roomWhy);
+        }
         foreach (['journal', 'photos', 'activity'] as $k) {
             $v = self::p($n, $k);
             if ($v !== null && !is_array($v)) self::bad($k);

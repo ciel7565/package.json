@@ -461,6 +461,9 @@ function handlePost(Ctx $c)
             // ⚙️ 설정 · 🔐 내 계정 (CONTRACT §17.2) [entitle]: the work is lib/AdminSettings.php; the labels stay here
             case 'settings_save': case 'settings_reset': case 'account_password': case 'account_login':
                 $msg = doEntitle($c, $action); break;
+            // 🏠 내 방 (CONTRACT §17.4) [myroom]: the operator gives an account a room of its own, or takes that back
+            case 'room_grant': case 'room_revoke':
+                $msg = doRoom($admin, $uid, $action === 'room_grant'); break;
             default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
         }
         flash('ok', $msg);
@@ -509,6 +512,33 @@ function doAllot(Ctx $c, string $action): string
     }
     backExtra(array_filter($r['back'] + $place, function ($v) { return $v !== null; }));
     return (string) $r['msg'];
+}
+
+/**
+ * [myroom] 🏠 내 방 (CONTRACT §17.4): give the account `uid` a room of its own — independent of an allotment contract —
+ * or take that back (Tfm\Room::grant: audit room_grant / room_revoke with the administrator as actor; the room's
+ * contents stay). Posted from the 👥 사용자 tab and from a customer's page of 🏺 분양 관리 (the 303 goes back there).
+ */
+function doRoom(array $admin, int $uid, bool $on): string
+{
+    if (postStr('tab') === 'allot' && allotReady()) backExtra(AdminAllot::back($_POST));
+    if ($uid <= 0 || !class_exists('Tfm\\Room') || !\Tfm\Room::grant($uid, $on, (int) $admin['id'])) throw new ApiException(404, 'NOT_FOUND', '그런 사용자를 찾을 수 없어요.');
+    return $on ? '🏠 내 방을 열어 주었어요. 이 계정은 이제 방을 꾸밀 수 있어요.' : '🏠 직접 열어 준 방을 닫았어요. 꾸며 둔 방은 지워지지 않아요 — 다시 열어 주면 그대로 돌아와요.';
+}
+/** [myroom] the room button of one row of 👥 사용자: who on this page has a room by the operator's grant (a primary-key read each) */
+function roomGrants(array $ids): array
+{
+    $out = [];
+    if (!$ids || !class_exists('Tfm\\Room')) return $out;
+    try {
+        foreach ($ids as $id) { if ((int) Db::value('SELECT granted FROM user_rooms WHERE user_id = ?', [(int) $id]) === 1) $out[(int) $id] = true; }
+    } catch (Throwable $e) { /* a database older than v8: nobody has a granted room */ }
+    return $out;
+}
+function roomAction(int $uid, array $granted, string $q): string
+{
+    if (!class_exists('Tfm\\Room')) return '';
+    return isset($granted[$uid]) ? actionForm('room_revoke', '🏠 내 방 닫기', ['uid' => $uid, 'q' => $q], 'btn ghost', 'users') : actionForm('room_grant', '🏠 내 방 열어 주기', ['uid' => $uid, 'q' => $q], 'btn gold', 'users');
 }
 
 /** 📊 the allotment line of the first tab: "분양: 임대 n / 10,000 · 승인 대기 n" */
@@ -1377,6 +1407,7 @@ function viewUsers(): string
     $h = '<section class="card"><form method="get" action="./" class="search"><input type="hidden" name="tab" value="users"><input name="q" value="' . e($q) . '" placeholder="닉네임 또는 이메일 검색" maxlength="60"><button class="btn" type="submit">🔎 검색</button></form>';
     if (!$rows) return $h . '<p class="empty">🍃 사용자가 없어요.</p></section>';
     $h .= '<div class="tablewrap"><table><thead><tr><th>#</th><th>닉네임</th><th>이메일</th><th>권한</th><th>상태</th><th>레벨</th><th>코인</th><th>속도</th><th>저장 거부</th><th>가입</th><th>마지막 접속</th><th>관리</th></tr></thead><tbody>';
+    $roomOf = roomGrants(array_map(function ($r) { return (int) $r['id']; }, $rows)); // [myroom] who has a room by the operator's grant
     foreach ($rows as $r) {
         $uid = (int) $r['id'];
         $muted = (int) $r['muted_until'] > $now;
@@ -1386,6 +1417,7 @@ function viewUsers(): string
             . ($muted ? actionForm('mute', '채팅 제한 해제', ['uid' => $uid, 'minutes' => 0, 'q' => $q], 'btn', 'users') : actionForm('mute', '🔇 채팅 1시간 제한', ['uid' => $uid, 'minutes' => 60, 'q' => $q], 'btn ghost', 'users') . actionForm('mute', '🔇 채팅 하루 제한', ['uid' => $uid, 'minutes' => 1440, 'q' => $q], 'btn ghost', 'users'))
             . ((int) $r['backup_at'] > 0 ? actionForm('restore', '↩️ 직전 저장으로 되돌리기', ['uid' => $uid, 'q' => $q], 'btn ghost', 'users') : '')
             . '<a class="btn ghost" href="' . e(href(['tab' => 'sub', 'uid' => $uid])) . '">⚡ 구독 관리</a>'
+            . roomAction($uid, $roomOf, $q) // [myroom] 🏠 내 방 열어 주기 / 닫기 (CONTRACT §17.4)
             . '</div></details>';
         $h .= '<tr><td>' . $uid . '</td><td><b>' . e($r['nickname']) . '</b></td><td>' . e($r['email']) . '</td><td>' . ($r['role'] === 'admin' ? '<span class="badge gold">관리자</span>' : '사용자') . '</td><td>'
             . ($r['status'] === 'banned' ? '<span class="badge fail">정지</span>' : ($muted ? '<span class="badge warn">채팅 제한</span>' : '<span class="badge ok">정상</span>'))

@@ -203,6 +203,9 @@ return [
         'lecture_list'   => [60, 60],    // api/lecture/list.php — 강의 목록 (누구나, 읽기)
         'lecture_file'   => [600, 60],   // api/lecture/file.php — 그림 한 장 · PDF 조각 하나가 요청 하나라서 넉넉해요
         'lecture_upload' => [40, 600],   // 관리자 화면에서 강의 파일 올리기 (계정별, 10분에 40번)
+        // ↓ 9단계 내 방 (CONTRACT §17.4) — [myroom]
+        'room_get'     => [60, 60],      // api/room/get.php — 내 방 읽기 (계정별; 앱은 방에 들어갈 때 한 번 물어요)
+        'room_save'    => [40, 60],      // api/room/save.php — 방 저장 (계정별; 꾸미는 동안 4초에 한 번을 넘지 않아요)
     ],
 
     // ------------------------------------------------------------------ chat
