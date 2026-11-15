@@ -176,7 +176,7 @@ CX.add('buildings', (ctx, C) => {
     const xr = gable ? A : Math.max(0.3, o.mode === 'hip' ? A - Cc : A - Cc * 0.55);
     const lift = gable ? 0.05 : 0.42, k = 1.45, nu = gable ? 4 : 6, nv = 3;
     const yAt = (x, v) => yb + H * Math.pow(v, k) + lift * Math.pow(Math.min(1, Math.abs(x) / A), 2.4) * (1 - v) * (1 - v);
-    const tint = o.tint || T.roofFar;
+    const tint = o.tint || (low ? T.roofFar : '#b9bdc3');   // with maps the tile photograph carries the colour: a light tint, not a dark one
     for (const mz of [1, -1]) {
       const fn = (i, j, oo, under) => {
         const v = j / nv, half = lerp(A, xr, v), x = (i / nu * 2 - 1) * half;
