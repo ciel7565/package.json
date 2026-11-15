@@ -258,6 +258,8 @@ function exportGameData() {
     cropCalendar: pick(d.cropCalendar || {}, (c) => ({ sow: c.sow, harvest: c.harvest, days: c.days })),
     // [myroom] ids → [placing kind, w, d, h, colours, sizes], the room's measures, style ids, limits (no names, no options)
     myroom: d.myroom && typeof d.myroom.serverTable === 'function' ? d.myroom.serverTable() : {},
+    // [avatar] the avatar's option ids (CONTRACT §17.7): Tfm\Presence whitelists saved / shared looks against them
+    avatar: d.avatar ? { v: d.avatar.v, options: d.avatar.options, legacy: d.avatar.legacy, colorKeys: d.avatar.colorKeys } : {},
   };
 }
 

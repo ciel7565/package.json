@@ -31,6 +31,45 @@ final class Presence
         'face' => ['smile', 'calm', 'cheer'],
     ];
     private const COLORS = ['skin', 'hairColor', 'topColor', 'bottomColor', 'shoes', 'bagColor', 'accessoryColor'];
+    // [avatar] CONTRACT §17.7 — the phase-9 avatar table (style `real`, 14 hair styles, headwear, hanbok pieces, footwear,
+    // patterns, trinkets). The lists come from game-data.json (`avatar`: options + legacy, exported by tools/build.mjs
+    // from src/game/02-avatar-data.js); these constants are the same table for a copy whose export predates it.
+    private const ENUMS9 = [
+        'style' => ['real', 'cute'],
+        'face' => ['smile', 'calm', 'cheer', 'gentle', 'bright'],
+        'hair' => ['short', 'long', 'bun', 'ponytail', 'buzz', 'curly', 'daenggi', 'jjok', 'sangtu', 'pigtails', 'side', 'wave', 'bangs', 'twinbraid'],
+        'hat' => ['none', 'gat', 'jokduri', 'ayam', 'jobawi', 'hogeon', 'bokgeon', 'strawhat', 'cap', 'headband'],
+        'top' => ['hanbok', 'saekdong', 'dangui', 'baeja', 'kwaeja', 'durumagi', 'tshirt', 'hoodie', 'shirt', 'jacket', 'apron'],
+        'pattern' => ['none', 'geumbak', 'cloud', 'flower'],
+        'bottom' => ['skirt', 'pants', 'shorts'],
+        'footwear' => ['gomusin', 'kkotsin', 'jipsin', 'sneakers'],
+        'accessory' => ['none', 'norigae', 'bokjumeoni', 'fan', 'daenggi', 'glasses', 'beard', 'strawhat', 'headband', 'cap', 'gat'],
+    ];
+    private const COLORS9 = ['hatColor', 'outerColor'];
+
+    /** [avatar] allowed ids per key: the built-in lists, widened by the exported table (never narrowed by it) */
+    private static function enums(): array
+    {
+        static $m = null;
+        if ($m !== null) return $m;
+        $m = self::ENUMS;
+        foreach (self::ENUMS9 as $k => $l) $m[$k] = array_values(array_unique(array_merge(isset($m[$k]) ? $m[$k] : [], $l)));
+        $av = class_exists('Tfm\\GameData') ? GameData::all() : [];
+        $av = isset($av['avatar']) && is_array($av['avatar']) ? $av['avatar'] : [];
+        foreach (['options', 'legacy'] as $part) {
+            if (!isset($av[$part]) || !is_array($av[$part])) continue;
+            foreach ($av[$part] as $k => $l) {
+                if (!is_string($k) || !preg_match('/^[a-zA-Z]{1,20}$/', $k) || !is_array($l) || in_array($k, self::colorKeys(), true)) continue;
+                $ids = [];
+                foreach ($l as $v) if (is_string($v) && preg_match('/^[a-z][a-z0-9_]{0,23}$/', $v)) $ids[] = $v;
+                if ($ids) $m[$k] = array_values(array_unique(array_merge(isset($m[$k]) ? $m[$k] : [], $ids)));
+            }
+        }
+        return $m;
+    }
+
+    /** [avatar] the colour keys (hex values) */
+    private static function colorKeys(): array { return array_merge(self::COLORS, self::COLORS9); }
 
     /** whitelist-sanitized appearance as a JSON string, or null */
     public static function appearance($a): ?string
@@ -38,10 +77,10 @@ final class Presence
         if ($a instanceof \stdClass) $a = get_object_vars($a);
         if (!is_array($a)) return null;
         $out = [];
-        foreach (self::ENUMS as $k => $allowed) {
+        foreach (self::enums() as $k => $allowed) {
             if (isset($a[$k]) && is_string($a[$k]) && in_array($a[$k], $allowed, true)) $out[$k] = $a[$k];
         }
-        foreach (self::COLORS as $k) {
+        foreach (self::colorKeys() as $k) {
             if (isset($a[$k]) && is_string($a[$k]) && preg_match('/^#[0-9a-fA-F]{6}$/', $a[$k])) $out[$k] = strtolower($a[$k]);
         }
         if (isset($a['height']) && (is_int($a['height']) || is_float($a['height'])) && is_finite((float) $a['height'])) {
