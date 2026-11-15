@@ -791,3 +791,8 @@ G.data.allot = (function () {
   D.fermentation.jarMismatch = 4;          // quality points lost when the jar kind is not the one the recipe likes
   D.fermentation.actionCooldown = 20;      // seconds between two of the same new jar actions
 })();
+    FER034: { name: '메주 띄우기', cat: 'jang', jar: 'jungduri', resultItem: 'ITEM_MEJU', resultQty: 2, ingredients: { ITEM_BEAN: 4, ITEM_STRAW: 1 }, baseDuration: 240, idealTemp: [20, 30], idealHumidity: [60, 85], baseQuality: 60, exp: 180, coin: 220, edu: 'EDU_JANG_MEJU_TIME', color: '#b08a4a', icon: '🧱',
+      desc: '삶아 찧은 콩을 네모나게 빚어 볏짚과 함께 따뜻한 방에서 띄워요. 잘 뜬 메주는 장 담그기의 재료가 돼요.', heat: { temp: 25, label: '따뜻한 방 (실제로는 장독이 아니라 방에 매달아요)' },
+      real: '빚은 뒤 한두 달 띄우고 겨울 동안 말리기', season: '입동 무렵', care: ['vent', 'taste'], flavor: { nutty: 3, umami: 2 },
+      steps: [['🫘', '불리고 삶기', '콩을 하룻밤 불려 가마솥에 푹 삶아요.'], ['🥣', '찧기', '절구로 콩을 찧어 으깨요.'], ['🧱', '빚기', '메주틀에 넣어 네모나게 빚고 겉을 말려요.'], ['🌾', '띄우기', '볏짚으로 묶어 매달거나 볏짚 위에 두어 따뜻하게 띄워요.']],
+      microbes: '볏짚의 고초균과 공기 속 곰팡이가 메주에 자리를 잡고, 콩의 단백질을 나누는 효소를 만들어요. 그래서 메주에서 구수한 냄새가 나요.', kid: '볏짚 속 고초균이 콩 덩어리를 메주로 띄워요!', src: ['F:메주쑤기', 'F:detail/4784', 'N:vod 554'] },

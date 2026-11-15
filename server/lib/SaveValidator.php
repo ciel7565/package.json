@@ -200,6 +200,7 @@ final class SaveValidator
         $farm = $this->farming($n, $p, $first, $dt);
         $ferm = $this->fermentation($n, $p, $first, $dt);
         $this->jarLimits($n, $p); // [entitle] CONTRACT §17.2
+        $this->planMarks($n, $p); // [content] CONTRACT §17.8
         $max = GameData::maxima();
         $rt = $rtClean && $rtHook !== null ? $this->rtJudge($rtHook, $n, $p) : ['explain' => ['value' => 0, 'exp' => 0], 'harvests' => 0];
 
@@ -848,6 +849,24 @@ final class SaveValidator
             if ($recId === '' || $status === '' || $status === 'EMPTY') continue; // nothing (new) inside
             $same = $ps && $recId === self::s(self::p($ps, 'recipeId')) && abs(self::n(self::p($s, 'startedAt')) - self::n(self::p($ps, 'startedAt'))) < 2000;
             if (!$same) { $this->violate('JAR_LOCKED', ['jar' => mb_substr($id, 0, 40), 'limit' => $limit]); return; }
+        }
+    }
+
+    // [content] ------------------------------------------------------------ the 'plan' mark of a jar (CONTRACT §17.8)
+    /**
+     * JAR_PLAN_MARK: a jar the previous save already owned without the mark (bought with coins, or J1) cannot gain the
+     * mark `via: 'plan'` later — the client only marks jars a plan opens from nothing. Without this a coin-bought jar
+     * could be re-labelled so that its 1,500-coin value would leave the net worth unnoticed.
+     */
+    private function planMarks(object $n, ?object $p): void
+    {
+        if (!$p) return;
+        $jarsP = self::kv(self::p($p, 'jars'));
+        foreach (self::kv(self::p($n, 'jars')) as $id => $s) {
+            $s = self::o($s);
+            if (!$s || self::p($s, 'via') !== 'plan') continue;
+            $ps = self::o(isset($jarsP[$id]) ? $jarsP[$id] : null);
+            if ($ps && self::p($ps, 'owned') === true && self::p($ps, 'via') !== 'plan') { $this->violate('JAR_PLAN_MARK', ['jar' => mb_substr((string) $id, 0, 40)]); return; }
         }
     }
 
