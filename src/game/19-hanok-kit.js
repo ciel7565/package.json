@@ -350,12 +350,12 @@
         }
         break;
       }
-      case 'yongja': {    // 용자살: few bars — two uprights, three rails (用)
+      case 'yongja': {    // 용자살: few bars — two uprights, three rails (the shape of the letter it is named after)
         V(-w / 6); V(w / 6);
         H(h * 0.24); H(0); H(-h * 0.24);
         break;
       }
-      case 'aja': {       // 아자살: nested frames tied to each other (亞)
+      case 'aja': {       // 아자살: nested frames tied to each other (the shape of the letter it is named after)
         const a = Math.min(w, h) * 0.17, x1 = hw - a, y1 = hh - a, x2 = hw - a * 2.2, y2 = hh - a * 2.2;
         H(y1, -x1, x1); H(-y1, -x1, x1); V(-x1, -y1, y1); V(x1, -y1, y1);          // outer frame
         H(y2, -x2, x2); H(-y2, -x2, x2); V(-x2, -y2, y2); V(x2, -y2, y2);          // inner frame

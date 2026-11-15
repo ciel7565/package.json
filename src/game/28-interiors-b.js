@@ -375,8 +375,8 @@
       hwamunseok(R, 1.7, 0.55, 2.6, 1.8);
       dagwasang(R, 1.7, 0.55);
       for (const [cx, cz] of [[1.7, -0.25], [0.85, 0.55], [2.55, 0.55]]) K.cushion(R, { x: cx, z: cz, w: 0.5, d: 0.5, h: 0.08, tint: cx === 1.7 ? '#2c4a6e' : '#7e3a2c', trim: '#c49a40' });
-      // 현판: a name board over the screen — 讀書堂 (독서당, the hall where one reads)
-      R.label('讀書堂', { side: 'N', u: 6, v: 2.16, w: 1.2, h: 0.36, sub: '독서당 · 글 읽는 집', style: 'wood' });
+      // 현판: a name board over the screen — 독서당 (the hall where one reads), in Hangul (CONTRACT §17.0: no Hanja)
+      R.label('독서당', { side: 'N', u: 6, v: 2.16, w: 1.2, h: 0.36, sub: '글 읽는 집', style: 'wood' });
       // rolled bamboo blinds (발) under the lintel of the open bays
       for (const bi of [1, 2]) { const b = R.bay('S', bi), a0 = R.wp('S', b.u0 + 0.25, 2.2, 0.12), a1 = R.wp('S', b.u1 - 0.25, 2.2, 0.12); R.add('basket', geo.tube(a0.x, a0.y, a0.z, a1.x, a1.y, a1.z, 0.05, 10), null, '#c9ab6a', { wall: 'S' }); for (const f of [0.2, 0.8]) { const q = R.wp('S', b.u0 + 0.25 + (b.len - 0.5) * f, 2.2, 0.12); R.add('cloth', geo.tube(q.x, 2.12, q.z, q.x, 2.34, q.z + 0.0, 0.006, 4), null, '#7a2e22', { wall: 'S', cast: false }); } }
       K.dust(R, { count: 120 });

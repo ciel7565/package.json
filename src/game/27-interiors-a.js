@@ -148,7 +148,7 @@
       // a few quiet pots under it
       K.pot(R, { kind: 'hangari', x: 7.25, z: -4.25, s: 0.9, lid: true });
       K.pot(R, { kind: 'danji', x: 6.55, z: -4.45, s: 1.1, lid: true, tint: '#7a5236' });
-      R.block(7.0, -4.3, 0.75, 0.45);
+      R.block(7.0, -4.3, 0.75, 0.45, { maxY: 0.75 });   // [controls] low pots: a jump clears them
 
       // ---- the frame model in the middle, the roof samples by the north wall
       frameModel(R, 0.4, -0.3);
@@ -162,7 +162,7 @@
       stake('daedeulbo', 2.4, 1.9, PI / 2, '대들보 ⬆', '머리 위 가장 큰 나무');
       stake('seokkarae', -2.67, 2.2, PI / 2, '도리·서까래 ⬆', '지붕의 갈비뼈');
       stake('cheoma', -7.25, -3.4, PI / 2, '처마', '지붕의 긴 끝');
-      stake('umulmaru', -4.6, -1.2, PI / 2, '우물마루 ⬇', '井자 마루');
+      stake('umulmaru', -4.6, -1.2, PI / 2, '우물마루 ⬇', '가로세로로 짠 마루');
       stake('deureoyeolgae', -6.2, 3.3, PI / 2, '들어열개 ⬆', '접어 올린 문');
       stake('changsal', -0.2, 4.15, PI, '창살 도감', '여섯 가지 무늬');
       stake('bangs', 7.1, 1.85, -PI / 2, '안방 · 사랑방', '문 너머의 방들');
@@ -178,7 +178,7 @@
       R.planItem(-4.4, 1.3, 2.6, 1.9, 'rgba(225,200,140,.75)');
       // a rice chest (뒤주) against the south-east corner post, a basket and a straw sheaf by the yard side
       K.chest(R, { x: 7.2, z: 3.9, rotY: -PI / 2, w: 0.95, d: 0.62, h: 0.86, doors: 1, drawers: 0, legs: 0.14, fittings: 'iron', tone: '#8a5a36', frameTone: '#5d3a24' });
-      R.block(7.2, 3.9, 0.36, 0.52);
+      R.block(7.2, 3.9, 0.36, 0.52, { maxY: 1.0, stand: true });   // [controls] the 뒤주 (0.86 + legs): one may land on it
       K.basket(R, { x: -7.1, z: -1.1, r: 0.3, h: 0.24 });
       K.basket(R, { x: -6.75, z: -0.45, kind: 'ki', r: 0.26, rotY: 0.7 });
       K.straw(R, { x: -7.3, z: -0.3, kind: 'bundle', s: 0.9, rotY: 0.4 });

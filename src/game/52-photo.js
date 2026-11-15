@@ -69,7 +69,7 @@
     ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
-  /** 回-shaped key-fret (번개문) cell of size c at (x, y) */
+  /** a key-fret (번개문: a square spiral) cell of size c at (x, y) */
   function fretCell(ctx, x, y, c) {
     ctx.moveTo(x, y + c); ctx.lineTo(x, y); ctx.lineTo(x + c, y); ctx.lineTo(x + c, y + c * 0.78);
     ctx.lineTo(x + c * 0.24, y + c * 0.78); ctx.lineTo(x + c * 0.24, y + c * 0.26); ctx.lineTo(x + c * 0.74, y + c * 0.26);

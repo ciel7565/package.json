@@ -16,7 +16,7 @@
 // The hill, plateau and switchback bench are terrain (11-terrain, layout.manjangdae). This module builds what
 // stands on it: paved deck + stone retaining ring + stone balustrade (gap where the path leaves), an octagonal
 // pavilion (팔각정) with dancheong beams / brackets / rafters with painted ends, a concave tiled roof with
-// upturned corners and a finial, a carved marker stone "旌善 萬丈臺 · 정선 만장대", stone lanterns glowing at
+// upturned corners and a finial, a carved marker stone "정선 · 만장대" (Hangul only — CONTRACT §17.0: no Hanja anywhere), stone lanterns glowing at
 // night (G.world.addNightMaterial), four Korean red pines, a coin-telescope, an info board, rope fences and
 // stone stair nosings along the path, rock outcrops on the valley face. Geometry is merged per material (~13 draw calls), every normal is
 // repaired by G.gfx.fixNormals (computeVertexNormals / applyMatrix4 are patched by the engine), nothing is
@@ -295,12 +295,13 @@
         ctx.fillStyle = 'rgba(255,250,236,0.55)'; ctx.fillText(text, w / 2 + 3, y + 4);   // lit lower lip of the groove
         ctx.fillStyle = 'rgba(22,20,18,0.92)'; ctx.fillText(text, w / 2, y);              // groove
       };
-      carve('旌善', 112, 96, 600, 40);
-      carve('萬丈臺', 300, 230, 800, 30);
+      carve('정선', 104, 92, 700, 46);
+      carve('만장대', 296, 236, 900, 34);
+      // a chiselled rule and a quiet line below (what the place is, in plain Hangul)
+      ctx.fillStyle = 'rgba(255,250,236,0.5)'; ctx.fillRect(w / 2 - 214, 449, 432, 4);
+      ctx.fillStyle = 'rgba(22,20,18,0.85)'; ctx.fillRect(w / 2 - 216, 446, 432, 4);
+      carve('높은 곳에서 멀리 보는 전망대', 532, 58, 700, 6);
       if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-      ctx.font = `700 74px ${SANS}`;
-      ctx.fillStyle = 'rgba(255,250,236,0.5)'; ctx.fillText('정선 만장대', w / 2 + 2, 520 + 3);
-      ctx.fillStyle = 'rgba(28,26,22,0.9)'; ctx.fillText('정선 만장대', w / 2, 520);
     }, { srgb: true });
   }
   function boardTexture() {
@@ -348,7 +349,7 @@
       ctx.restore();
       ctx.font = `600 70px ${SERIF}`;
       if ('letterSpacing' in ctx) ctx.letterSpacing = '26px';
-      ctx.fillStyle = 'rgba(244,214,140,0.95)'; ctx.fillText('旌善 萬丈臺', w / 2, 170);
+      ctx.fillStyle = 'rgba(244,214,140,0.95)'; ctx.fillText('어서 오세요', w / 2, 170);
       if ('letterSpacing' in ctx) ctx.letterSpacing = '14px';
       ctx.font = `900 250px ${SANS}`;
       ctx.lineJoin = 'round';
@@ -773,9 +774,9 @@
         ctx.fillStyle = '#231d1a'; ctx.fillRect(0, 0, w, h);
         ctx.strokeStyle = '#c99a3f'; ctx.lineWidth = 10; ctx.strokeRect(8, 8, w - 16, h - 16);
         ctx.fillStyle = '#e7bf6a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.font = `700 118px ${SERIF}`;
-        if ('letterSpacing' in ctx) ctx.letterSpacing = '22px';
-        ctx.fillText('萬丈臺', w / 2 + 11, h / 2 + 6);
+        ctx.font = `800 112px ${SERIF}`;
+        if ('letterSpacing' in ctx) ctx.letterSpacing = '26px';
+        ctx.fillText('만장대', w / 2 + 13, h / 2 + 6);
       });
       const m = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 0.46), G.gfx.material('md-hyeonpan', () => new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })));
       m.position.set(x, y, z - 0.045);
@@ -1475,9 +1476,9 @@
       const targets = this._tourTargets();
       const body = h('div', { class: 'md-guide' + (easy ? ' easy' : '') },
         h('div', { class: 'md-guide-hero' },
-          h('div', { class: 'md-guide-name' }, h('span', { class: 'hanja', lang: 'zh-Hant' }, '旌善 萬丈臺'), h('b', null, '정선 만장대')),
+          h('div', { class: 'md-guide-name' }, h('span', { class: 'md-guide-kicker' }, '높은 전망대'), h('b', null, '정선 만장대')),
           h('p', null, easy ? '높은 산 위 전망대예요. 체험관이 다 보여요!' : '체험관과 계곡이 한눈에 내려다보이는 전망대예요. 팔각정에서 쉬어 가고, 망원경으로 구역을 하나씩 살펴보세요.'),
-          section === 'name' || !easy ? h('p', { class: 'md-guide-word' }, '‘만장(萬丈)’은 아주 높다는 뜻이고, ‘대(臺)’는 멀리 바라보도록 높게 만든 곳을 말해요.') : null),
+          section === 'name' || !easy ? h('p', { class: 'md-guide-word' }, '‘만장’은 아주 높다는 뜻이고, ‘대’는 멀리 바라보도록 높게 만든 곳을 말해요.') : null),
         h('div', { class: 'md-guide-grid' }, targets.map((tg) => h('button', {
           type: 'button', class: 'md-guide-tile', 'data-say': `${tg.short}. ${tg.kid || ''}`,
           onclick: () => { G.ui.modal.get('md-guide')?.close(); setTimeout(() => this.tour(tg.id), 60); },
@@ -1499,7 +1500,7 @@
       const skip = h('button', { type: 'button', class: 'md-skip', 'aria-label': '건너뛰기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⏭️'), h('span', { class: 'md-skip-lbl' }, '건너뛰기'));
       skip.addEventListener('click', (e) => { e.stopPropagation(); this._skipIntro(); });
       const sub = h('div', { class: 'md-sub' }, '산과 계곡이 품은 전통발효체험관');
-      const title = h('div', { class: 'md-title2d' }, h('small', null, '旌善 萬丈臺'), h('b', null, '정선 만장대'), h('span', null, '전통발효체험관이 한눈에 내려다보여요'));
+      const title = h('div', { class: 'md-title2d' }, h('small', null, '어서 오세요'), h('b', null, '정선 만장대'), h('span', null, '전통발효체험관이 한눈에 내려다보여요'));
       const root = h('div', { class: 'md-cine', hidden: true, 'aria-hidden': 'true' }, h('div', { class: 'md-bar top', 'aria-hidden': 'true' }), h('div', { class: 'md-bar bottom', 'aria-hidden': 'true' }), sub, title, skip);
       const zEmoji = h('span', { class: 'md-z-emoji', 'aria-hidden': 'true' }), zName = h('b', { class: 'md-z-name' }), zDesc = h('p', { class: 'md-z-desc' }), zMeta = h('small', { class: 'md-z-meta' });
       const dots = h('div', { class: 'md-dots', 'aria-hidden': 'true' });

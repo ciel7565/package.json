@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// tools/text-audit.mjs — CONTRACT §14.3: no user-visible "G-word" (the Korean word for "game", U+AC8C U+C784) anywhere.
+// tools/text-audit.mjs — two text rules:
+//   rule 1 (CONTRACT §14.3): no user-visible "G-word" (the Korean word for "game", U+AC8C U+C784) anywhere;
+//   rule 2 (CONTRACT §17.0): no Hanja — no Chinese character (U+3400–U+9FFF, U+F900–U+FAFF, the supplementary
+//          ideographs) in anything a visitor can see: signs, canvas textures, labels, education texts, admin pages.
 //
 //   node tools/text-audit.mjs                 # audit the sources, build to .cache/text-audit.html and audit the page too
 //   node tools/text-audit.mjs --html <file>   # audit the sources + this already-built page (no build)
@@ -17,7 +20,19 @@
 //   tests/pii-vectors.json (generated detection data, not UI), docs/CONTRACT.md §13.9–13.10 (history: quoted bug
 //   titles), §14.3 (the spec of this purge), `code spans` anywhere in CONTRACT.md and "quoted" words inside §14.
 // Identifiers, ids, class names, file names and the English word "game" are not checked (they stay, by contract).
-// Exit codes: 0 clean · 1 violations · 2 usage / build error.
+//
+// Rule 2 — Hanja. Scope: src/**, server/**, tools/**, assets/pack/*.json (the credits shown in 설정), README.md,
+//   package.json and the built page. Comments count (a source file holds none at all). Written-out characters AND
+//   escapes are found: \uXXXX (surrogate pairs too), \u{…}, &#x…; / &#…;, CSS \XXXX in style sheets, and a literal
+//   code point handed to String.fromCharCode / fromCodePoint.
+//   Not checked: docs/** and the documents embedded in the page (a document may name a character when it explains
+//   it), window.__BUILD__ (manifest + PII test vectors = data), tests/** (attack vectors on purpose).
+//   Allowed forms — detection code that must know the characters, never text a visitor reads:
+//     · a digit table of the personal-data mask: one character as the key of a quoted digit ('X': '0' / 'X' => '0')
+//       in src/game/60-social.js and server/lib/ChatFilter.php (children writing a phone number in Chinese numerals);
+//     · the two ends of a character-class range (X-Y) in src/game/80-devcenter.js (its "is there Hanja?" check).
+//     The built page carries the same two snippets, so the same two forms are allowed there — nothing else.
+// Exit codes: 0 clean · 1 violations (of either rule) · 2 usage / build error.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +71,12 @@ const files = [
   ...walk(path.join(ROOT, 'tools'), new Set(['mjs', 'js', 'sh'])),
   path.join(ROOT, 'README.md'), path.join(ROOT, 'package.json'),
 ].filter((p) => fs.existsSync(p) && fs.statSync(p).isFile()).map(rel).filter((r) => r !== SELF && !DATA_FILES.has(r));
+// rule 2 reads the same files without docs/**, plus the credits of the asset pack and the PII rule data
+const hanjaFiles = [
+  ...files.filter((r) => !r.startsWith('docs/')),
+  ...walk(path.join(ROOT, 'assets', 'pack'), new Set(['json'])).map(rel),
+  ...[...DATA_FILES].filter((r) => r.startsWith('server/') && fs.existsSync(path.join(ROOT, r))),
+];
 
 // ---------------------------------------------------------------- per-file allow rules
 const stripSpans = (line, re) => line.replace(re, (m) => ' '.repeat(m.length));
@@ -90,6 +111,98 @@ function auditText(relPath, text) {
 function snippet(line, idx, span = 60) {
   const s = Math.max(0, idx - span), e = Math.min(line.length, idx + WORD.length + span);
   return (s > 0 ? '…' : '') + line.slice(s, e).trim() + (e < line.length ? '…' : '');
+}
+
+// ---------------------------------------------------------------- rule 2: no Hanja (CONTRACT §17.0)
+const HAN_RANGES = [[0x3400, 0x9fff], [0xf900, 0xfaff], [0x20000, 0x323af]];
+const isHan = (cp) => HAN_RANGES.some(([a, b]) => cp >= a && cp <= b);
+const HAN = '[\\u3400-\\u9fff\\uf900-\\ufaff]';   // (a class for the allow forms below; this file is not audited)
+const RX_DIGIT_PAIR = new RegExp(`(['"]?)${HAN}\\1\\s*(?::|=>)\\s*(['"])[0-9]\\2`, 'g');   // 'X': '0' · X:"0" · 'X' => '0'
+const RX_CLASS_RANGE = new RegExp(`${HAN}-${HAN}`, 'g');                                    // [X-Y] of a detector
+const HANJA_ALLOW = {
+  'src/game/60-social.js': [RX_DIGIT_PAIR],
+  'server/lib/ChatFilter.php': [RX_DIGIT_PAIR],
+  'src/game/80-devcenter.js': [RX_CLASS_RANGE],
+};
+const HTML_ALLOW = [RX_DIGIT_PAIR, RX_CLASS_RANGE];
+const RX_ESC = /\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|&#[xX]([0-9a-fA-F]{2,6});|&#([0-9]{2,7});|from(?:CharCode|CodePoint)\(\s*(0[xX][0-9a-fA-F]+|[0-9]+)/g;
+const RX_CSS_ESC = /\\([0-9a-fA-F]{4,6})(?![0-9a-fA-F])/g;
+/** the Hanja of one line: [{ idx, len, ch, how }] (how: 'char' | 'escape') */
+function hanjaIn(line, css) {
+  const hits = [];
+  for (let i = 0; i < line.length;) {
+    const cp = line.codePointAt(i), n = cp > 0xffff ? 2 : 1;
+    if (isHan(cp)) hits.push({ idx: i, len: n, ch: String.fromCodePoint(cp), how: 'char' });
+    i += n;
+  }
+  if (line.includes('\\') || line.includes('&#') || line.includes('from')) {
+    let m, hi = null;
+    RX_ESC.lastIndex = 0;
+    while ((m = RX_ESC.exec(line))) {
+      let cp = m[1] ? parseInt(m[1], 16) : m[2] ? parseInt(m[2], 16) : m[3] ? parseInt(m[3], 16) : m[4] ? parseInt(m[4], 10) : Number(m[5]);
+      let idx = m.index, len = m[0].length;
+      if (m[2] && cp >= 0xd800 && cp <= 0xdbff) { hi = { cp, idx, end: idx + len }; continue; }
+      if (m[2] && cp >= 0xdc00 && cp <= 0xdfff && hi && hi.end === idx) { cp = 0x10000 + ((hi.cp - 0xd800) << 10) + (cp - 0xdc00); idx = hi.idx; len += hi.end - hi.idx; }
+      hi = null;
+      if (isHan(cp)) hits.push({ idx, len, ch: String.fromCodePoint(cp), how: 'escape' });
+    }
+    if (css) {
+      RX_CSS_ESC.lastIndex = 0;
+      while ((m = RX_CSS_ESC.exec(line))) { const cp = parseInt(m[1], 16); if (isHan(cp)) hits.push({ idx: m.index, len: m[0].length, ch: String.fromCodePoint(cp), how: 'escape' }); }
+    }
+  }
+  return hits;
+}
+const hanjaStats = { allowed: 0 };
+/** audit a text for Hanja; allow = the regexes of the allowed forms for this text (their matches are blanked first) */
+function auditHanja(relPath, text, allow, css = /\.css$/i.test(relPath)) {
+  const out = [];
+  const lines = text.split('\n');
+  let inStyle = false;
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    const styleHere = css || inStyle || /<style[\s>]/i.test(line);
+    if (/<style[\s>]/i.test(line)) inStyle = true;
+    if (/<\/style>/i.test(line)) inStyle = false;
+    if (line.length < 3 && !/[^\x00-\x7f]/.test(line)) continue;
+    if (allow && allow.length && /[^\x00-\x7f]/.test(line)) {
+      for (const rx of allow) line = line.replace(rx, (m) => { hanjaStats.allowed++; return ' '.repeat(m.length); });
+    }
+    const hits = hanjaIn(line, styleHere);
+    if (!hits.length) continue;
+    const first = hits[0];
+    const s = Math.max(0, first.idx - 50), e = Math.min(line.length, first.idx + first.len + 50);
+    out.push({
+      file: relPath, line: i + 1, chars: [...new Set(hits.map((h) => h.ch))].join(''), escaped: hits.some((h) => h.how === 'escape'),
+      text: (s > 0 ? '…' : '') + lines[i].slice(s, e).trim() + (e < line.length ? '…' : ''),
+    });
+  }
+  return out;
+}
+/** the built page: the embedded documents and window.__BUILD__ are cut out (see the header), the rest is audited */
+function auditHtmlHanja(htmlPath) {
+  let html = fs.readFileSync(htmlPath, 'utf8');
+  const label = path.basename(htmlPath);
+  const m = /<script[^>]*\bid="build-docs"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  if (m) html = html.slice(0, m.index) + html.slice(m.index + m[0].length);
+  const cut = cutBuildObject(html);
+  if (cut != null) html = cut;
+  return auditHanja(label, html, HTML_ALLOW, false);
+}
+/** the page without the window.__BUILD__ = {…} object (string-aware bracket matching); null when it has none */
+function cutBuildObject(html) {
+  const bm = /window\.__BUILD__\s*=\s*\{/.exec(html);
+  if (!bm) return null;
+  const start = bm.index + bm[0].length - 1;
+  let depth = 0, q = null, end = -1;
+  for (let i = start; i < html.length; i++) {
+    const c = html[i];
+    if (q) { if (c === '\\') i++; else if (c === q) q = null; continue; }
+    if (c === '"' || c === "'" || c === '`') q = c;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) { end = i; break; }
+  }
+  return end > 0 ? html.slice(0, start) + html.slice(end + 1) : null;
 }
 
 // ---------------------------------------------------------------- built page
@@ -142,6 +255,8 @@ function auditHtml(htmlPath) {
 // ---------------------------------------------------------------- run
 const violations = [];
 for (const r of files) violations.push(...auditText(r, fs.readFileSync(path.join(ROOT, r), 'utf8')));
+const hanja = [];
+for (const r of hanjaFiles) hanja.push(...auditHanja(r, fs.readFileSync(path.join(ROOT, r), 'utf8'), HANJA_ALLOW[r] || null));
 
 let htmlPath = htmlArg ? path.resolve(htmlArg) : null, built = false;
 if (!NO_HTML && !htmlPath) {
@@ -155,16 +270,25 @@ if (!NO_HTML && !htmlPath) {
 if (htmlPath) {
   if (!fs.existsSync(htmlPath)) { console.error(`✖ no such file: ${htmlPath}`); process.exit(2); }
   violations.push(...auditHtml(htmlPath));
+  hanja.push(...auditHtmlHanja(htmlPath));
 }
 
 const byFile = new Map();
 for (const v of violations) byFile.set(v.file, (byFile.get(v.file) || 0) + 1);
+const hanjaByFile = new Map();
+for (const v of hanja) hanjaByFile.set(v.file, (hanjaByFile.get(v.file) || 0) + 1);
 if (JSON_OUT) {
-  console.log(JSON.stringify({ ok: violations.length === 0, word: WORD, scanned: files.length, html: htmlPath ? rel(htmlPath) : null, built, violations }, null, 2));
+  console.log(JSON.stringify({
+    ok: violations.length === 0 && hanja.length === 0, word: WORD, scanned: files.length, html: htmlPath ? rel(htmlPath) : null, built, violations,
+    hanja: { ok: hanja.length === 0, scanned: hanjaFiles.length, allowed: hanjaStats.allowed, violations: hanja },
+  }, null, 2));
 } else {
   if (!QUIET || violations.length) for (const v of violations) console.log(`✖ ${v.file}:${v.line}  ${v.text}`);
   const where = htmlPath ? ` + ${rel(htmlPath)}${built ? ' (built)' : ''}` : '';
   if (violations.length) console.log(`\n✖ ${violations.length} occurrence(s) of the forbidden word in ${byFile.size} file(s) · scanned ${files.length} source files${where}`);
   else if (!QUIET) console.log(`✔ text audit clean — 0 occurrences of the forbidden word · scanned ${files.length} source files${where}`);
+  if (!QUIET || hanja.length) for (const v of hanja) console.log(`✖ 한자 ${v.file}:${v.line}  [${v.chars}${v.escaped ? ' · escape' : ''}]  ${v.text}`);
+  if (hanja.length) console.log(`\n✖ ${hanja.length} line(s) with Hanja in ${hanjaByFile.size} file(s) · scanned ${hanjaFiles.length} source files${where} — write Hangul instead (CONTRACT §17.0)`);
+  else if (!QUIET) console.log(`✔ no Hanja — 0 Chinese characters · scanned ${hanjaFiles.length} source files${where} · ${hanjaStats.allowed} allowed detector entries (digit tables, ranges)`);
 }
-process.exit(violations.length ? 1 : 0);
+process.exit(violations.length || hanja.length ? 1 : 0);
