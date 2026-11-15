@@ -15,6 +15,7 @@ use Tfm\ApiException;
 use Tfm\Audit;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Entitle;
 use Tfm\Http;
 use Tfm\Log;
 use Tfm\RateLimit;
@@ -55,6 +56,8 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], functio
     }
     if (Users::byEmail($email)) throw new ApiException(409, 'EMAIL_TAKEN', '이미 가입된 이메일이에요. 로그인해 주세요.');
     if (Users::byNickname($nick)) throw new ApiException(409, 'NICKNAME_TAKEN', '이미 사용 중인 닉네임이에요.');
+    // [entitle] CONTRACT §17.2: the login form tries a login id before a nickname, so a nickname may not be somebody's id
+    if (Users::byLoginId($nick)) throw new ApiException(409, 'NICKNAME_TAKEN', '이미 사용 중인 닉네임이에요.');
     try {
         $u = Db::tx(function () use ($email, $nick, $pw) { return Users::create($email, $nick, $pw); });
     } catch (\PDOException $e) {
@@ -69,5 +72,5 @@ Api::run(['method' => 'POST', 'rate' => 'register', 'rateBy' => 'auto'], functio
     Session::login($u, $remember);
     Audit::log('register', (int) $u['id'], ['role' => $u['role']], $u['role'] === 'admin' ? 'warn' : 'info');
     Log::info('AUTH', 'account created', ['uid' => (int) $u['id']]);
-    return ['user' => Users::publicUser($u), 'isNew' => true, 'sub' => Subscription::none()];
+    return ['user' => Users::publicUser($u), 'isNew' => true, 'sub' => Subscription::none(), 'ent' => Entitle::forUser($u, Subscription::none())];
 });

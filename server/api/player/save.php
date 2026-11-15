@@ -2,7 +2,11 @@
 /**
  * POST api/player/save.php  {version, checksum, base?, data:{…state…}}     (fetch, header X-CSRF-Token)
  *                           {version, checksum, base?, data:{…}, csrf:"…"} (navigator.sendBeacon on page hide)
- * → {savedAt, revision, size, sub, subChanged, saveEvery[, unchanged]}
+ * → {savedAt, revision, size, sub, subChanged, ent, siteV, saveEvery[, unchanged]}
+ *   ent (CONTRACT §17.2) = what the account may do (Tfm\Entitle::forUser — role and plan decide, nothing the page sends):
+ *   EVERY answer carries it next to sub (also the 4xx ones, under data.ent). The validator judges movement, growth and
+ *   the jars with it (JAR_LIMIT: owned jars grew beyond limits.jars; JAR_LOCKED: a new batch in a locked jar).
+ *   siteV = a stamp of the public operator settings: when it changes the page asks auth/me.php for `site` again.
  *   saveEvery (CONTRACT §16.9) = the pause the server asks for before the next save, in ms (sync.save_every, longer while
  *   the server is busy — the same number api/sync.php sends as `sv`). The page saves only when something changed, plus a
  *   heartbeat every 5 minutes.
@@ -46,6 +50,7 @@ use Tfm\Clock;
 use Tfm\Config;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Entitle;
 use Tfm\Farm;
 use Tfm\GameData;
 use Tfm\Http;
@@ -53,6 +58,7 @@ use Tfm\Json;
 use Tfm\Log;
 use Tfm\SaveValidator;
 use Tfm\Session;
+use Tfm\Settings;
 use Tfm\Subscription;
 use Tfm\Sync;
 
@@ -66,6 +72,12 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
     if (!$c->csrfPending) Session::close();
     Api::releaseConnection(60000); // the next save is a minute away: the web server need not keep this connection for it
     $sub = $c->csrfPending ? null : Subscription::state($c->uid());
+    // [entitle] CONTRACT §17.2: the entitlement belongs to the same genuine request as the subscription it is made of
+    $ent = $sub === null ? null : Entitle::forUser($c->user, $sub);
+    $entOut = function () use (&$ent): array {
+        if ($ent === null) return [];
+        try { return ['ent' => $ent, 'siteV' => Settings::publicStamp()]; } catch (\Throwable $e) { return ['ent' => $ent]; }
+    };
     $clientTier = null;
     $saveEvery = function (): array {
         try { return class_exists('Tfm\Sync') ? ['saveEvery' => Sync::saveEvery()] : []; } catch (\Throwable $e) { return []; }
@@ -87,6 +99,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         $c->checkBodyCsrf(isset($env->csrf) ? $env->csrf : null); // only enforced when the X-CSRF-Token header was absent (beacon)
         Session::close(); // [scale-server] a beacon is genuine from here on: release the session lock (see above)
         if ($sub === null) $sub = Subscription::state($c->uid()); // a beacon: genuine only from here on
+        if ($ent === null) $ent = Entitle::forUser($c->user, $sub); // [entitle]
         if (isset($env->version) && (!is_int($env->version) || $env->version < 1 || $env->version > 1000)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
         if (isset($env->checksum) && !is_string($env->checksum)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
         if (isset($env->base) && (!is_int($env->base) || $env->base < 0)) throw new ApiException(400, 'INVALID_SAVE', '저장 데이터 형식이 올바르지 않아요.');
@@ -112,7 +125,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
             $small = Db::one('SELECT revision, checksum, size_bytes, saved_at FROM player_saves WHERE user_id = ?', [$c->uid()]);
             if ($small && $base === (int) $small['revision'] && (string) $small['checksum'] !== '' && hash_equals((string) $small['checksum'], $checksum)) {
                 return ['savedAt' => (int) $small['saved_at'], 'revision' => (int) $small['revision'], 'size' => (int) $small['size_bytes'], 'sub' => $sub,
-                    'subChanged' => $clientTier !== (int) $sub['tier'], 'unchanged' => true] + $saveEvery();
+                    'subChanged' => $clientTier !== (int) $sub['tier'], 'unchanged' => true] + $entOut() + $saveEvery();
             }
         }
 
@@ -129,7 +142,9 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         $now = Clock::ms();
         $validate = (bool) Config::get('save.validate', true) && !($c->isAdmin() && Config::get('save.admin_bypass', false));
         // the subscription is the server's: the client's `sub` is ignored (stored as the server state, like a stale role)
-        $tier = (int) $sub['tier'];
+        // [entitle] CONTRACT §17.2: growth, fermentation and the real-time beds are judged with the entitlement's growth
+        // multiplier (an administrator has the top tier without a plan), movement and the jars with the rest of it
+        $tier = (int) $ent['speed']['grow'];
 
         // [verify-scale] Two FIRST saves at the same moment used to end as a server error on MariaDB: "SELECT … FOR UPDATE"
         // on a row that does not exist yet locks the gap at the end of the table, both transactions then try to insert
@@ -137,7 +152,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         // (tests/scale-attack.mjs, group "saves"). Now the account row — it always exists — is locked first: the saves of
         // one account still run one after the other, also the very first; the stored copy is locked only when there is
         // one (against a restore by the operator); and a transaction the database gives up on is run again.
-        $result = Db::txRetry(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base, $sub, $tier) {
+        $result = Db::txRetry(function () use ($data, $user, $uid, $now, $validate, $checksum, $raw, $base, $sub, $tier, $ent) {
             Db::one('SELECT id FROM users WHERE id = ?' . Db::forUpdate(), [$uid]);
             // [scale-server] CONTRACT §16.9: explicit columns — the backup copy (as large as the save itself, up to 1.5 MB)
             // is never read: the row's own data becomes the new backup
@@ -161,7 +176,7 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
                 $farmPlan = Farm::plan($uid, $n, $p, $now, $tier);
                 return $farmPlan;
             } : null;
-            if ($validate) $res = SaveValidator::validate($data, $prev, $meta, $user, $prevAt, $now, $tier, $farmHook);
+            if ($validate) $res = SaveValidator::validate($data, $prev, $meta, $user, $prevAt, $now, $tier, $farmHook, $ent);
             else $res['meta']['tier'] = $tier;
             if (!$res['ok']) {
                 if ($row) Db::exec('UPDATE player_saves SET rejects = rejects + 1, last_reject_at = ? WHERE user_id = ?', [$now, $uid]);
@@ -242,10 +257,10 @@ Api::run(['method' => 'POST', 'auth' => true, 'csrfBody' => true, 'rate' => 'pla
         if ((isset($un['value']) ? $un['value'] : 0) > 0 || (isset($un['exp']) ? $un['exp'] : 0) > 0) {
             Log::debug('SAVE', 'accepted with tolerance', ['uid' => $uid] + $result['summary']);
         }
-        return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub, 'subChanged' => $clientTier !== $tier] + $saveEvery() + $rt();
+        return ['savedAt' => $now, 'revision' => $result['rev'], 'size' => $result['size'], 'sub' => $sub, 'subChanged' => $clientTier !== (int) $sub['tier']] + $entOut() + $saveEvery() + $rt();
     } catch (ApiException $e) {
         if ($sub !== null && ($e->data === null || is_array($e->data))) {
-            $e->data = (is_array($e->data) ? $e->data : []) + ['sub' => $sub, 'subChanged' => $clientTier !== (int) $sub['tier']];
+            $e->data = (is_array($e->data) ? $e->data : []) + ['sub' => $sub, 'subChanged' => $clientTier !== (int) $sub['tier']] + $entOut();
         }
         throw $e;
     }

@@ -12,6 +12,7 @@ require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\Api;
 use Tfm\Ctx;
+use Tfm\Entitle;
 use Tfm\Farm;
 use Tfm\Session;
 use Tfm\Subscription;
@@ -19,7 +20,7 @@ use Tfm\V;
 
 Api::run(['method' => 'GET', 'auth' => true, 'rate' => 'farm_state'], function (Ctx $c): array {
     V::keys($_GET, [], 'query');
-    $tier = (int) Subscription::state($c->uid())['tier'];
+    $tier = (int) Entitle::forUser($c->user, Subscription::state($c->uid()))['speed']['grow']; // [entitle] §17.2: the growth multiplier of the account (administrators: the top tier)
     Session::close(); // read-only: release the session lock
     return Farm::state($c->uid(), $tier);
 });

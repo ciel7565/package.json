@@ -623,6 +623,10 @@ INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (7, CAST
 -- users.pw_default (1 while the installer's default password is still in use). New databases get both columns from
 -- CREATE TABLE users above, an existing table through Db::ADDED_COLUMNS; the unique index is created here.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_login ON users (login_id);
+-- The first-run seed of the default administrator (Tfm\Users::ensureDefaultAdmin): a database that has NO account when
+-- v8 is first applied is marked "pending" — the first sign-in as "admin" then creates admin / admin1234 (pw_default = 1).
+-- A site that already has accounts is never marked. (Runs before the version row below, once.)
+INSERT OR IGNORE INTO settings (k, v, updated_at) SELECT 'site.default_admin', '"pending"', CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE NOT EXISTS (SELECT 1 FROM users) AND NOT EXISTS (SELECT 1 FROM schema_version WHERE version = 8);
 -- [/entitle]
 
 -- [lecture] §17.3: lectures the operator registers in the admin tab 🎓 강의 자료 (a YouTube id, an embeddable slide address

@@ -796,12 +796,17 @@ async function main() {
 
   // ------------------------------------------------------------- subscription tiers (CONTRACT §14.6, mock 토스)
   let subMock = false, orderA = null, tiers = [];
-  await step('sub/status: tiers 2·3·4 with prices, mode, clientKey; a fresh account is tier 1', async () => {
+  await step('sub/status: the tiers on sale (2·3 by default, §17.2) with prices and multipliers, mode, clientKey; a fresh account is tier 1 with the free entitlement', async () => {
     const r = await A.req('api/sub/status.php');
     assert(r.status === 200 && Array.isArray(r.data?.tiers), `status ${r.status}`);
     tiers = r.data.tiers;
-    assert(tiers.map((t) => t.tier).join(',') === '2,3,4' && tiers.every((t) => Number.isInteger(t.price) && t.price > 0 && typeof t.name === 'string'), `tiers ${JSON.stringify(tiers)}`);
+    // [entitle] CONTRACT §17.2: tier 4 stays in the code but is sold only when the operator lists it in sub.tiers_on
+    assert(tiers.map((t) => t.tier).join(',') === '2,3' && tiers.every((t) => Number.isInteger(t.price) && t.price > 0 && typeof t.name === 'string'), `tiers ${JSON.stringify(tiers)}`);
+    assert(tiers.every((t) => t.move === Math.min(t.tier, 3) && t.grow === t.tier), `multipliers ${JSON.stringify(tiers)}`);
     assert(r.data.sub?.tier === 1 && r.data.sub.status === 'none' && r.data.sub.autoRenew === false, `sub ${JSON.stringify(r.data.sub)}`);
+    const e0 = r.data.ent;
+    assert(e0 && e0.v === 1 && e0.tier === 1 && e0.paid === false && e0.admin === false && e0.until === 0 && e0.speed?.move === 1 && e0.speed?.grow === 1 && e0.limits?.jars === 3 && e0.limits?.roomItems === 80
+      && e0.features?.myroom === false && !('adminUrl' in e0) && !('pwDefault' in e0), `ent ${JSON.stringify(e0)}`);
     // phase 7 (§15.7 #8): no default 토스 key exists any more — a key is only sent in live mode (the operator's own keys);
     // mock and unconfigured servers send ''. A documentation sample key is never sent.
     assert(['live', 'mock', 'unconfigured'].includes(r.data.mode), `mode ${r.data.mode}`);

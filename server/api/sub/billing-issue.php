@@ -9,6 +9,7 @@ require __DIR__ . '/../../lib/bootstrap.php';
 
 use Tfm\Api;
 use Tfm\Ctx;
+use Tfm\Entitle;
 use Tfm\Subscription;
 use Tfm\V;
 
@@ -18,5 +19,6 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'sub_write'], function (
     $authKey = V::str(isset($b['authKey']) ? $b['authKey'] : null, 'authKey', 300, 1);
     $customerKey = V::str(isset($b['customerKey']) ? $b['customerKey'] : null, 'customerKey', 64, 1);
     $orderId = V::str(isset($b['orderId']) ? $b['orderId'] : null, 'orderId', 64, 8);
-    return ['sub' => Subscription::billingIssue($c->user, $authKey, $customerKey, $orderId)];
+    $sub = Subscription::billingIssue($c->user, $authKey, $customerKey, $orderId);
+    return ['sub' => $sub, 'ent' => Entitle::forUser($c->user, $sub)]; // [entitle] CONTRACT §17.2
 });

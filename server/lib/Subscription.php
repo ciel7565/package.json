@@ -97,10 +97,19 @@ final class Subscription
         return $row;
     }
 
+    /**
+     * The tiers a visitor can buy: [{tier, name, price, move, grow}]. [entitle] CONTRACT §17.2: only the tiers the
+     * operator sells (setting sub.tiers_on, default 2 and 3), each with its multipliers (sub.move_N / sub.grow_N).
+     */
     public static function publicTiers(): array
     {
         $out = [];
-        foreach (Toss::tiers() as $t => $v) $out[] = ['tier' => $t, 'name' => $v['name'], 'price' => $v['price']];
+        $on = class_exists('Tfm\\Entitle') ? Entitle::tiersOnSale() : [2, 3, 4];
+        foreach (Toss::tiers() as $t => $v) {
+            if (!in_array((int) $t, $on, true)) continue;
+            $sp = class_exists('Tfm\\Entitle') ? Entitle::speedFor((int) $t) : ['move' => min((int) $t, 3), 'grow' => (int) $t];
+            $out[] = ['tier' => $t, 'name' => $v['name'], 'price' => $v['price'], 'move' => $sp['move'], 'grow' => $sp['grow']];
+        }
         return $out;
     }
 
@@ -347,6 +356,12 @@ final class Subscription
     {
         $tier = self::validTier($tier);
         if (!in_array($kind, ['card', 'billing'], true)) throw new ApiException(400, 'INVALID_KIND', '결제 방식이 올바르지 않아요.');
+        // [entitle] CONTRACT §17.2: only a tier the operator sells can be ordered (a manual grant may still give any tier),
+        // and an administrator has everything for free — no order, no charge by mistake
+        if (class_exists('Tfm\\Entitle')) {
+            if (!Entitle::isOnSale($tier)) throw new ApiException(400, 'INVALID_TIER', '지금은 팔지 않는 단계예요.');
+            if ((isset($user['role']) ? $user['role'] : '') === 'admin') throw new ApiException(409, 'ADMIN_FREE', '관리자는 모든 기능을 무료로 써요. 결제할 필요가 없어요.');
+        }
         Toss::requireAvailable(); // no keys and no (allowed) mock mode: 503 PAYMENT_NOT_CONFIGURED, no order is made
         $uid = (int) $user['id'];
         $now = Clock::ms();

@@ -107,8 +107,16 @@ final class Toss
     public static function clientKey(): string { return self::keysConfigured() ? self::key('client_key') : ''; }
     private static function secretKey(): string { return self::key('secret_key'); }
     private static function apiBase(): string { $c = self::cfg(); return rtrim((string) (isset($c['api_base']) && $c['api_base'] !== '' ? $c['api_base'] : 'https://api.tosspayments.com'), '/'); }
-    public static function periodDays(): int { $c = self::cfg(); return max(1, (int) (isset($c['period_days']) ? $c['period_days'] : 30)); }
-    public static function graceDays(): int { $c = self::cfg(); return max(0, (int) (isset($c['grace_days']) ? $c['grace_days'] : 3)); }
+    /**
+     * [entitle] CONTRACT §17.2: a value the operator stored in the admin tab ⚙️ 설정 (table settings) wins over the
+     * config file; null = nothing stored (the config file's value applies, as before).
+     */
+    private static function stored(string $key)
+    {
+        try { return class_exists('Tfm\\Settings') && Settings::has($key) ? Settings::get($key) : null; } catch (\Throwable $e) { return null; }
+    }
+    public static function periodDays(): int { $c = self::cfg(); $s = self::stored('sub.period_days'); return max(1, (int) ($s !== null ? $s : (isset($c['period_days']) ? $c['period_days'] : 30))); }
+    public static function graceDays(): int { $c = self::cfg(); $s = self::stored('sub.grace_days'); return max(0, (int) ($s !== null ? $s : (isset($c['grace_days']) ? $c['grace_days'] : 3))); }
 
     /** the operator's own client + secret key of the same kind (both test_… or both live_…), never a documentation key */
     public static function keysConfigured(): bool
@@ -144,6 +152,8 @@ final class Toss
         foreach ([2, 3, 4] as $t) {
             $row = isset($raw[$t]) && is_array($raw[$t]) ? $raw[$t] : [];
             $price = isset($row['price']) ? (int) $row['price'] : [2 => 2900, 3 => 4900, 4 => 6900][$t];
+            $set = self::stored('sub.price_' . $t); // [entitle] the operator's price (⚙️ 설정) wins over the config file
+            if ($set !== null) $price = (int) $set;
             $name = isset($row['name']) && is_string($row['name']) && $row['name'] !== '' ? $row['name'] : str_repeat('⚡', $t - 1) . ' ' . $t . '배';
             $out[$t] = ['price' => max(100, $price), 'name' => mb_substr($name, 0, 40)];
         }

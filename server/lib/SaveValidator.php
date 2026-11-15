@@ -63,6 +63,10 @@ final class SaveValidator
     private $tol;
     /** @var int effective speed tier for this save (1..4) */
     private $tier = 1;
+    /** @var int [entitle] the movement multiplier of the account's entitlement (0 = derived from the tier) */
+    private $move = 0;
+    /** @var int [entitle] limits.jars of the account's entitlement (0 = not judged) */
+    private $jarLimit = 0;
 
     private function __construct() { $this->tol = (array) Config::get('save.tolerance', []); }
 
@@ -82,7 +86,7 @@ final class SaveValidator
     }
     private function t(string $k, float $d): float { return isset($this->tol[$k]) && is_numeric($this->tol[$k]) ? (float) $this->tol[$k] : $d; }
     /** movement multiplier of the speed tier: tier 4 still moves 3× (CONTRACT §14.1) */
-    private function moveMul(): int { return min($this->tier, 3); }
+    private function moveMul(): int { return $this->move > 0 ? min($this->move, 3) : min($this->tier, 3); }
 
     private function violate(string $code, array $detail = []): void
     {
@@ -119,20 +123,33 @@ final class SaveValidator
      * @param callable|null $rt   the real-time farm judge (player/save.php: Tfm\Farm::plan): function (object $n, ?object $p): array
      *                            ['violations' => [['code' => …] …], 'explain' => ['value' => int, 'exp' => int], 'harvests' => int];
      *                            called after the shape checks, only when data.rtfarm / data.storage have a clean shape
+     * @param array|null  $ent    [entitle] CONTRACT §17.2: the account's entitlement (Tfm\Entitle::forUser). With it, $tier is
+     *                            its growth multiplier, movement is judged with ent.speed.move and the jars with
+     *                            ent.limits.jars (JAR_LIMIT / JAR_LOCKED). null (older callers): everything from $tier.
      * @return array{ok:bool, violations:array, notes:array, meta:array, summary:array}
      */
-    public static function validate(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier = 1, ?callable $rt = null): array
+    public static function validate(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier = 1, ?callable $rt = null, ?array $ent = null): array
     {
         $v = new self();
-        return $v->run($n, $p, $meta, $user, $prevAt, $now, $tier, $rt);
+        return $v->run($n, $p, $meta, $user, $prevAt, $now, $tier, $rt, $ent);
     }
 
-    private function run(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier, ?callable $rtHook): array
+    private function run(object $n, ?object $p, array $meta, array $user, int $prevAt, int $now, int $tier, ?callable $rtHook, ?array $ent = null): array
     {
         // the tier of the previous accepted save is tried too (a change mid-session): the larger wins once
         $tier = max(1, min(4, $tier));
         $prevTier = max(1, min(4, (int) (isset($meta['tier']) ? $meta['tier'] : 1)));
         $this->tier = max($tier, $prevTier);
+        // [entitle] CONTRACT §17.2: the movement multiplier and the jar limit of the entitlement; like the tier, the
+        // values of the previous accepted save are tried too (a plan that ended a moment ago): the larger wins once
+        $entMove = 0;
+        $entJars = 0;
+        if ($ent !== null) {
+            $entMove = max(1, min(3, (int) (isset($ent['speed']['move']) ? $ent['speed']['move'] : min($tier, 3))));
+            $entJars = max(1, min(16, (int) (isset($ent['limits']['jars']) ? $ent['limits']['jars'] : 3)));
+            $this->move = max($entMove, max(1, min(3, (int) (isset($meta['move']) ? $meta['move'] : min($prevTier, 3)))));
+            $this->jarLimit = max($entJars, max(0, min(16, (int) (isset($meta['jars']) ? $meta['jars'] : 0))));
+        }
         $this->shape($n);
         $rtClean = $this->rtShape($n);
         // ---------------------------------------------------------- identity (immutable fields)
@@ -158,6 +175,7 @@ final class SaveValidator
         $first = $p === null;
         $meta['v'] = 1;
         $meta['tier'] = $tier;
+        if ($ent !== null) { $meta['move'] = $entMove; $meta['jars'] = $entJars; } // [entitle] for the next save's "larger wins once"
         $paid = isset($meta['paid']) && is_array($meta['paid']) ? $meta['paid'] : [];
         foreach (['q', 'a', 'z', 'e', 'g'] as $k) if (!isset($paid[$k]) || !is_array($paid[$k])) $paid[$k] = [];
         // ids an older copy took back (see "regressed" below) and the losses that copy gave back: claiming such an
@@ -181,6 +199,7 @@ final class SaveValidator
         if (!$first) $this->movement($statsNOf($n), $statsNOf($p), $dt);
         $farm = $this->farming($n, $p, $first, $dt);
         $ferm = $this->fermentation($n, $p, $first, $dt);
+        $this->jarLimits($n, $p); // [entitle] CONTRACT §17.2
         $max = GameData::maxima();
         $rt = $rtClean && $rtHook !== null ? $this->rtJudge($rtHook, $n, $p) : ['explain' => ['value' => 0, 'exp' => 0], 'harvests' => 0];
 
@@ -791,6 +810,45 @@ final class SaveValidator
             }
         }
         return ['slots' => $slots, 'values' => $values, 'exps' => $exps];
+    }
+
+    // [entitle] ------------------------------------------------------------- the jar limit (CONTRACT §17.2)
+    /**
+     * limits.jars of the account (free 3, a paid plan or an administrator 12 — operator settings):
+     *   JAR_LIMIT   the number of OWNED jars grew beyond the limit in this save. A save that merely still owns more than
+     *               the limit — a plan that ended, a refund — is accepted: a plan change never takes a jar or its
+     *               contents away.
+     *   JAR_LOCKED  owned jars beyond the first `limit` in place order (J1, J2 … J12) are locked: what is inside stays
+     *               and may go on ripening, but a NEW batch may not be started in one until the plan returns.
+     * Nothing here reads a value the client could raise: the limit comes from Tfm\Entitle (the account's role and plan).
+     */
+    private function jarLimits(object $n, ?object $p): void
+    {
+        $limit = $this->jarLimit;
+        if ($limit <= 0) return;
+        $jarsN = self::kv(self::p($n, 'jars'));
+        $owned = [];
+        foreach ($jarsN as $id => $s) if (self::p(self::o($s), 'owned') === true) $owned[] = (string) $id;
+        if (count($owned) <= $limit) return;
+        $jarsP = $p ? self::kv(self::p($p, 'jars')) : [];
+        $ownedP = 0;
+        foreach ($jarsP as $s) if (self::p(self::o($s), 'owned') === true) $ownedP++;
+        if (count($owned) > max($ownedP, $limit)) {
+            $this->violate('JAR_LIMIT', ['owned' => count($owned), 'limit' => $limit]);
+            return;
+        }
+        // place order: J1 … J12 by their number, any other id after them by name
+        $rank = function (string $id): int { return preg_match('/^J(\d{1,3})$/', $id, $m) ? (int) $m[1] : 100000; };
+        usort($owned, function (string $a, string $b) use ($rank): int { $d = $rank($a) - $rank($b); return $d !== 0 ? $d : strcmp($a, $b); });
+        foreach (array_slice($owned, $limit) as $id) {
+            $s = self::o($jarsN[$id]);
+            $ps = self::o(isset($jarsP[$id]) ? $jarsP[$id] : null);
+            $recId = self::s(self::p($s, 'recipeId'));
+            $status = self::s(self::p($s, 'status'));
+            if ($recId === '' || $status === '' || $status === 'EMPTY') continue; // nothing (new) inside
+            $same = $ps && $recId === self::s(self::p($ps, 'recipeId')) && abs(self::n(self::p($s, 'startedAt')) - self::n(self::p($ps, 'startedAt'))) < 2000;
+            if (!$same) { $this->violate('JAR_LOCKED', ['jar' => mb_substr($id, 0, 40), 'limit' => $limit]); return; }
+        }
     }
 
     // ------------------------------------------------------------------ reward valuation

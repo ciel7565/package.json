@@ -9,6 +9,8 @@
  * (R3-c2-r2-seams-lost-1).
  * rt (CONTRACT §15.1): {scale, tier, beds: {RB1: {pid, cropId, firstSeenAt, readyAt, status}, …}} — the server's own times
  * of the real-time beds (lib/Farm.php), adopted by the client with G.sys.realfarm.applyServer(rt).
+ * ent (CONTRACT §17.2): what the account may do (Tfm\Entitle::forUser) — the real-time beds are timed with its growth
+ * multiplier (an administrator has the top tier without a plan).
  */
 declare(strict_types=1);
 
@@ -17,6 +19,7 @@ require __DIR__ . '/../../lib/bootstrap.php';
 use Tfm\Api;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Entitle;
 use Tfm\Farm;
 use Tfm\Json;
 use Tfm\Log;
@@ -27,10 +30,11 @@ use Tfm\Subscription;
 // 'gzip' [scale-server, CONTRACT §16.9]: the stored state is 20–400 KB of JSON — sent compressed when the browser accepts it
 Api::run(['method' => 'GET', 'auth' => true, 'rate' => 'player_get', 'gzip' => true], function (Ctx $c): array {
     $sub = Subscription::state($c->uid());
+    $ent = Entitle::forUser($c->user, $sub); // [entitle]
     Session::close(); // read-only: release the session lock
     $row = Db::one('SELECT version, revision, data, saved_at, meta FROM player_saves WHERE user_id = ?', [$c->uid()]);
     $stamp = SaveValidator::restoreStamp($row);
-    $rt = class_exists('Tfm\Farm') ? ['rt' => Farm::view($c->uid(), (int) $sub['tier'])] : [];
+    $rt = (class_exists('Tfm\Farm') ? ['rt' => Farm::view($c->uid(), (int) $ent['speed']['grow'])] : []) + ['ent' => $ent];
     if (!$row) return ['save' => null, 'sub' => $sub] + $stamp + $rt;
     $data = Json::tryDecode((string) $row['data'], false, 512);
     if (!$data instanceof \stdClass) {

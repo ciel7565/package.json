@@ -1,6 +1,6 @@
 <?php
 /**
- * POST api/sub/confirm.php {paymentKey, orderId, amount} → {sub}
+ * POST api/sub/confirm.php {paymentKey, orderId, amount} → {sub, ent}   (ent: CONTRACT §17.2 — the new tier, 12 jars … at once)
  * The order must be `created`, belong to the logged-in user and the amount must match exactly; then 토스 confirm
  * (mock: paymentKey "mock_…") → order confirmed, subscription active (expires = max(now, expires) + period).
  * Replays (confirmed orders) and foreign orders are refused and audit-logged.
@@ -12,6 +12,7 @@ require __DIR__ . '/../../lib/bootstrap.php';
 use Tfm\Api;
 use Tfm\ApiException;
 use Tfm\Ctx;
+use Tfm\Entitle;
 use Tfm\SecEvent;
 use Tfm\Subscription;
 use Tfm\V;
@@ -28,5 +29,6 @@ Api::run(['method' => 'POST', 'auth' => true, 'rate' => 'sub_write'], function (
         if (class_exists('Tfm\\SecEvent')) SecEvent::log('payment_tamper', 'warn', ['why' => 'amount_type', 'type' => gettype($amount)], $c->uid());
         throw new ApiException(400, 'INVALID_AMOUNT', '결제 금액이 올바르지 않아요.', ['field' => 'amount']);
     }
-    return ['sub' => Subscription::confirm($c->user, $paymentKey, $orderId, $amount)];
+    $sub = Subscription::confirm($c->user, $paymentKey, $orderId, $amount);
+    return ['sub' => $sub, 'ent' => Entitle::forUser($c->user, $sub)]; // [entitle]
 });

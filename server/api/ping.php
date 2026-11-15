@@ -5,6 +5,8 @@
  * that carries the CSRF token used by login/register. rtScale = the real-time farm time scale (CONTRACT §15.1, farm.rt_scale).
  * features (CONTRACT §16.9): {sync: 1} when api/sync.php can be used (the wire format version; 0 = keep the old
  * presence / chat polling), {queue: 1} the waiting room exists, {saveEvery: ms} the suggested pause between saves.
+ * site (CONTRACT §17.2): the public operator settings {key: value} → G.site.get(key, fallback) in the page (limits,
+ * defaults of the controls / clock / night brightness, the notice line …; never a price, never a secret).
  */
 declare(strict_types=1);
 
@@ -17,6 +19,7 @@ use Tfm\Clock;
 use Tfm\Config;
 use Tfm\Ctx;
 use Tfm\Db;
+use Tfm\Entitle;
 use Tfm\Farm;
 use Tfm\Gate;
 use Tfm\Log;
@@ -40,6 +43,7 @@ Api::run(['method' => ['GET', 'HEAD'], 'rate' => 'ping', 'rateBy' => 'ip', 'sess
     ];
     if (class_exists('Tfm\Farm')) $out['rtScale'] = Farm::scale();
     $out['features'] = class_exists('Tfm\Sync') ? Sync::features() : ['sync' => 0, 'queue' => 0];
+    try { $out['site'] = Entitle::site(); } catch (\Throwable $e) { $out['site'] = new \stdClass(); } // [entitle] the page falls back to its own defaults
     // capacity.stats_header (off by default — tools/loadtest.mjs turns it on for its own instance): the live capacity
     // numbers and what the after-response work cost, readable with every cache driver (numbers only, nothing personal)
     if (Config::get('capacity.stats_header', false) && class_exists('Tfm\Gate') && class_exists('Tfm\Sync')) {
