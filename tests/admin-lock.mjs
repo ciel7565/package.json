@@ -2460,7 +2460,7 @@ async function main() {
         const counts = php(s, '(function () { $n = []; foreach (Tfm\\Settings::GROUPS as $g => $t) $n[$g] = count(Tfm\\Settings::rows($g)); return $n; })()');
         const groups = Object.keys(counts), filled = groups.filter((g) => counts[g] > 0);
         for (const g of groups) assert(p.text.includes(`id="set-${g}"`), `no group ${g}`);
-        assert((p.text.match(/name="action" value="settings_save"/g) || []).length === filled.length && (p.text.match(/name="action" value="settings_reset"/g) || []).length === filled.length, 'one save form and one reset form per group that has values');
+        assert((p.text.match(/name="action" value="settings_save"/g) || []).length === filled.length && (p.text.match(/name="action" value="settings_reset"/g) || []).length === 1 && /<form method="post" action="\.\/" id="rs-settings"/.test(p.text), 'one save form per group that has values and one reset form for the tab');
         for (const [n, v] of Object.entries(SECRETS)) assert(!p.text.includes(v) && !p.text.includes(v.slice(8, 24)), `the page prints a secret (${n})`);
         assert(/토스페이먼츠 키<\/span> <span class="badge ok">테스트 키가 들어 있어요/.test(p.text) && /기상청 날씨 키<\/span> <span class="badge ok">들어 있어요/.test(p.text) && /AI 도우미 키<\/span> <span class="badge ok">들어 있어요/.test(p.text), 'the key states are not shown');
         assert(!/name="v\[(toss|anthropic|env\.kma|db|app)[.\]]/.test(p.text), 'a secret has an input');

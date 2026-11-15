@@ -138,7 +138,9 @@ final class AdminSettings
         $h = '<section class="card"><h3>⚙️ 설정</h3><p class="dim">체험관의 숫자와 기본값을 여기서 바꿔요. <b>저장</b>을 누르면 바로 적용돼요 (파일을 고치거나 다시 설치할 필요가 없어요). '
             . '방문자의 화면에는 1분 안에 반영돼요. 값마다 있는 <b>기본값</b> 버튼은 처음 값으로 되돌려요. 모든 변경은 📜 감사 로그에 남아요.</p><p class="row setjump">';
         foreach (Settings::GROUPS as $g => $t) $h .= '<a class="btn ghost sm" href="#set-' . self::e($g) . '"><span aria-hidden="true">' . $t[0] . '</span> ' . self::e($t[1]) . '</a>';
-        $h .= '<a class="btn ghost sm" href="./?tab=allot&amp;sec=auto"><span aria-hidden="true">🏺</span> 분양 설정 →</a></p></section>';
+        // every "기본값으로" button of the tab belongs to this ONE small form (a form cannot sit inside another form)
+        $h .= '<a class="btn ghost sm" href="./?tab=allot&amp;sec=auto"><span aria-hidden="true">🏺</span> 분양 설정 →</a></p>'
+            . '<form method="post" action="./" id="rs-settings" class="inline">' . self::hidden($token, 'settings_reset', 'settings') . '</form></section>';
         foreach (Settings::GROUPS as $g => $t) {
             $rows = Settings::rows($g);
             $notes = self::notes($g);
@@ -147,9 +149,7 @@ final class AdminSettings
                 $h .= ($notes !== '' ? $notes : '') . '<p class="dim small">이 묶음에는 아직 바꿀 값이 없어요.</p></section>';
                 continue;
             }
-            // the reset buttons of the rows belong to this small form (a form cannot sit inside another form)
-            $h .= '<form method="post" action="./" id="rs-' . self::e($g) . '" class="inline">' . self::hidden($token, 'settings_reset', 'settings', ['group' => $g]) . '</form>'
-                . '<form method="post" action="./" class="setform">' . self::hidden($token, 'settings_save', 'settings', ['group' => $g]);
+            $h .= '<form method="post" action="./" class="setform">' . self::hidden($token, 'settings_save', 'settings', ['group' => $g]);
             foreach ($rows as $key => $def) {
                 $value = Settings::get($key);
                 $stored = Settings::has($key);
@@ -161,7 +161,7 @@ final class AdminSettings
                     . ($def['hint'] !== '' ? '<p class="dim small">' . self::e($def['hint']) . '</p>' : '') . '</div>'
                     . '<div class="setval">' . self::input($key, $def, $value)
                     . '<p class="dim small">' . ($range !== '' ? self::e($range) . ' · ' : '') . '기본값 ' . self::e(self::show($def, $default)) . '</p>'
-                    . ($stored ? '<button type="submit" form="rs-' . self::e($g) . '" name="key" value="' . self::e($key) . '" class="btn ghost sm">기본값으로</button>' : '')
+                    . ($stored ? '<button type="submit" form="rs-settings" name="key" value="' . self::e($key) . '" class="btn ghost sm">기본값으로</button>' : '')
                     . '</div></div>';
             }
             $h .= '<div class="row"><button class="btn primary" type="submit">💾 ' . self::e($t[1]) . ' 저장</button></div></form>' . $notes . '</section>';

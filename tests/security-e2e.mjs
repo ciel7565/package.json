@@ -1456,11 +1456,71 @@ async function S03() {
   });
   await stopServer('allot');
   // CONTRACT §15.7 #3 — every POST endpoint has a field-level spec in this suite
+  // [entitle] CONTRACT §17.2 — auth/password: three strings and nothing else; a refused request changes nothing
+  await check('S03', 'api/auth/password.php · current / password / password_confirm must be strings, unknown keys and over-long values are refused, and the account still signs in with its old password afterwards', { sev: 'medium', fix: STRICT_FIX }, async () => {
+    const NEW = 'Onggi2026jangdok';
+    const base = { current: PASSWORD, password: NEW, password_confirm: NEW };
+    const cases = [...mut('current', STR, base), ...mut('password', STR, base), ...mut('password_confirm', STR, base),
+      ['an unknown key (role)', { ...base, role: 'admin' }], ['an unknown key (ent)', { ...base, ent: { tier: 4 } }], ['an unknown key (userId)', { ...base, userId: 1 }],
+      ['current missing', { password: NEW, password_confirm: NEW }], ['password missing', { current: PASSWORD }], ['an empty new password', { ...base, password: '', password_confirm: '' }],
+      ['a 600-character password', { ...base, password: 'a1'.repeat(300), password_confirm: 'a1'.repeat(300) }], ['current = null', { ...base, current: null }], ['two different new passwords', { ...base, password_confirm: NEW + 'x' }]];
+    const made = [];
+    const res = await strict('api/auth/password.php', cases, { user: async () => { const u = await newUser(s, 'Pwd'); made.push(u); return u; }, perUser: 8 });
+    for (const u of made) {
+      const again = await login(await anon(s), u.email);
+      assert(again.status === 200, `after the refused requests ${u.email} signs in with the old password → ${again.status}`);
+      const row = dbQuery(s, 'SELECT session_epoch, pw_default FROM users WHERE id = ?', [u.user.id])[0];
+      assert(row && Number(row.session_epoch) === 0 && Number(row.pw_default) === 0, `a refused request touched the account: ${JSON.stringify(row)}`);
+    }
+    return `${res}; ${made.length} accounts unchanged`;
+  });
+  // [entitle] CONTRACT §17.2 — `ent` is the server's answer: nothing in a request can raise it
+  await check('S03', 'ent cannot be forged: an entitlement written into the save, next to it, into the address, a header or a cookie changes neither the answer nor what the server accepts (a 4th jar, a × 3 walk); admin fields never reach a player', { sev: 'high', fix: 'Tfm\\Entitle::forUser() reads the account row, the plan and the operator settings only; SaveValidator gets that array, never a value of the request.' }, async () => {
+    const u = await newUser(s, 'Ent');
+    const isFree = (e) => !!e && e.v === 1 && e.tier === 1 && e.admin === false && e.paid === false && e.speed && e.speed.move === 1 && e.speed.grow === 1 && e.limits && e.limits.jars === 3 && !('adminUrl' in e) && !('pwDefault' in e);
+    const forged = { v: 1, role: 'admin', admin: true, tier: 4, paid: true, until: Date.now() + 9e9, speed: { move: 3, grow: 4 }, limits: { jars: 12, roomItems: 300 }, features: { myroom: true }, adminUrl: 'admin/', pwDefault: false };
+    let st = freshState(u.user);
+    const base = await u.json('api/player/save.php', saveBody(st));
+    assert(base.status === 200 && isFree(base.data.ent), `baseline save → ${base.status} ${JSON.stringify(base.data && base.data.ent)}`);
+    const bad = [];
+    const refusedOrFree = (label, r) => { if (!((r.status === 200 && isFree(r.data.ent)) || (r.status >= 400 && r.status < 500 && r.status !== 429))) bad.push(`${label} → ${r.status} ${JSON.stringify(r.data && r.data.ent)}`); return r; };
+    // inside the saved data
+    const a = structuredClone(st); a.ent = forged; a.limits = { jars: 12 }; a.sub = { tier: 4, status: 'active', expiresAt: Date.now() + 9e9, autoRenew: true }; a.profile.role = 'admin'; a.savedAt = Date.now();
+    if (refusedOrFree('ent inside the save', await u.json('api/player/save.php', saveBody(a))).status === 200) st = a;
+    // next to it, in the address, in headers, in a cookie
+    const b = structuredClone(st); b.savedAt = Date.now(); b.stats.playTime += 1;
+    if (refusedOrFree('ent next to the save / in the address / in headers', await u.json('api/player/save.php?ent[tier]=4&tier=4&admin=1&role=admin&jars=12', { ...saveBody(b), ent: forged, tier: 4, role: 'admin' }, { headers: { 'X-Ent': JSON.stringify(forged), 'X-Tier': '4', 'X-Role': 'admin', 'X-Admin': '1' } })).status === 200) st = b;
+    const cookie = `${u.cookieHeader()}; ent=${encodeURIComponent(JSON.stringify(forged))}; tier=4; role=admin; admin=1`;
+    for (const ep of ['api/auth/me.php', 'api/sub/status.php', 'api/player/get.php']) {
+      refusedOrFree(`${ep} with forged query / headers`, await u.req(`${ep}?ent[tier]=4&tier=4&role=admin`, { headers: { 'X-Ent': JSON.stringify(forged) } }));
+      refusedOrFree(`${ep} with a forged cookie`, await u.req(ep, { headers: { Cookie: cookie } }));
+    }
+    assert(!bad.length, bad.join(' | '));
+    const stored = (await u.req('api/player/get.php')).data.save.data;
+    assert(stored.sub && stored.sub.tier === 1 && stored.profile.role === 'user', `the stored save took the forged plan / role: sub ${JSON.stringify(stored.sub)} role ${stored.profile.role}`);
+    // what the forged entitlement would allow is still refused: a 4th jar, a × 3 walk
+    const jars = structuredClone(st); jars.ent = forged; jars.savedAt = Date.now();
+    for (const k of [2, 3, 4]) jars.jars[`J${k}`] = { ...structuredClone(jars.jars.J2), owned: true, via: 'plan' };
+    const rj = await u.json('api/player/save.php', saveBody(jars));
+    assert(rj.status === 409 && rj.json.data && (rj.json.data.violations || []).includes('JAR_LIMIT') && isFree(rj.json.data.ent), `4 jars with a forged ent → ${rj.status} ${JSON.stringify(rj.json && rj.json.data && rj.json.data.violations)}`);
+    const walk = structuredClone(st); walk.ent = forged; walk.stats.distance += 600; walk.savedAt = Date.now();
+    const rw = await u.json('api/player/save.php', saveBody(walk));
+    assert(rw.status === 409 && (rw.json.data.violations || []).includes('DISTANCE_TOO_FAST'), `+600 m at once with a forged ent → ${rw.status} ${JSON.stringify(rw.json && rw.json.data && rw.json.data.violations)}`);
+    // an order for a tier that is not sold, and the grant endpoint, stay closed
+    const t4 = await u.json('api/sub/prepare.php', { tier: 4, kind: 'card' });
+    assert(t4.status === 400, `an order for tier 4 (not on sale) → ${t4.status}`);
+    const gr = await u.json('api/sub/grant.php', { userId: u.user.id, tier: 3, days: 30 });
+    assert(gr.status === 403, `a player's grant → ${gr.status}`);
+    const me = await u.req('api/auth/me.php');
+    assert(isFree(me.data.ent) && me.data.adminUrl === undefined, `after everything: ${JSON.stringify(me.data.ent)}`);
+    return 'save data · body · address · headers · cookie: ent stays free; 4 jars → JAR_LIMIT; + 600 m → DISTANCE_TOO_FAST; tier 4 order 400; grant 403';
+  });
   await check('S03', 'every POST endpoint of the build has a field-level validation matrix in this suite', { sev: 'low', fix: 'New endpoint: add its valid body and wrong-type variants to S03() in tests/security-e2e.mjs.' }, async () => {
     const covered = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/chat/send.php', 'api/chat/report.php', 'api/presence/update.php', 'api/player/save.php', 'api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/grant.php', 'api/sub/renew.php',
       'api/allot/apply.php', 'api/allot/cancel.php', 'api/allot/nameplate.php', 'api/allot/seen.php', 'api/allot/waitlist.php', 'api/allot/pay-prepare.php', 'api/allot/pay-confirm.php',   // CONTRACT §16.7
       'api/farm/report.php', 'api/farm/seen.php', 'api/farm/report-photo.php',   // report-photo: its reportId / file matrix is in S14
       'api/sync.php',   // CONTRACT §16.9 [scale-server]
+      'api/auth/password.php',   // CONTRACT §17.2 [entitle]
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
@@ -1674,7 +1734,7 @@ async function S04() {
   });
   // CONTRACT §15.7 #4 — nothing reflected raw by install.php
   await check('S04', 'install.php: payloads in query parameters and in the posted form fields are never reflected raw', { sev: 'medium', fix: 'Keep ie() on every value install.php prints.' }, async () => {
-    const names = ['driver', 'host', 'port', 'database', 'username', 'admin_email', 'admin_nickname', 'toss_client', 'step', 'lang', 'error', 'msg'];
+    const names = ['driver', 'host', 'port', 'database', 'username', 'admin_login', 'admin_email', 'admin_nickname', 'toss_client', 'step', 'lang', 'error', 'msg'];   // admin_login: [entitle] §17.2
     const make = (n) => `"><svg/onload=tfmi_${n}()>`;
     const g = await request(s, `install.php?${names.map((n) => `${n}=${encodeURIComponent(make(n))}`).join('&')}`, { headers: HTML });
     assert(g.status < 500, `GET → ${g.status}`);
@@ -2354,6 +2414,34 @@ async function S09() {
     const c = await anon(s);
     return judge(await hammer(64, (i) => login(c, `nobody${i}_${RUN}@example.com`, `Wrong${i}pass9`)), 'login (many accounts)', 64);
   });
+  // [entitle] CONTRACT §17.2 — a login id is a second name for the SAME throttled login; it never tells whether it exists
+  await check('S09', 'login by id: an unknown id, a known id with a wrong password and the well-known id "admin" with its default password answer alike (401, one code, one sentence) and create no account; wrong passwords for one id are locked at the 6th try (429 + Retry-After)', { sev: 'high', fix: 'Users::byLogin() only inside Auth::attemptLogin; LoginThrottle keyed on the typed name; one INVALID_CREDENTIALS answer; Users::ensureDefaultAdmin() only on a database born without accounts.' }, async () => {
+    // on the proxied instance: every browser below has its own address, so the per-address budgets the other checks
+    // exhaust on "rate" do not blur this one
+    const s = await srv('fw');
+    const { c, entry } = await adminBrowser(s);   // the instance has an administrator (so the first-run seed is over)
+    const lid = `sec_${RUN}`.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20);
+    const page = await c.req(`${entry}?tab=account`, { headers: HTML });
+    const form = parseForms(page.text).find((f) => f.method === 'post' && f.fields.some((x) => x.name === 'login_id'));
+    assert(form, 'the admin site has no login id form (🔐 내 계정)');
+    await follow(c, await submitForm(c, page.url, form, { login_id: lid, current: PASSWORD }));
+    const row = dbQuery(s, 'SELECT id FROM users WHERE login_id = ?', [lid])[0];
+    assert(row, `the login id ${lid} was not stored`);
+    const users = Number(dbQuery(s, 'SELECT COUNT(*) AS n FROM users')[0].n);
+    const a = await anon(s, { xff: '198.51.100.241' });
+    const ok = await login(a, lid);
+    assert(ok.status === 200 && ok.data.user && Number(ok.data.user.id) === Number(row.id), `the id signs in with the right password → ${ok.status}`);
+    const b = await anon(s, { xff: '198.51.100.242' });
+    const unknown = await login(b, `nobody_${RUN}`.toLowerCase().slice(0, 20), 'Wrong1pass9');
+    const known = await login(b, lid, 'Wrong1pass9');
+    const dflt = await login(b, 'admin', ['admin', '1234'].join(''));
+    const mail = await login(b, `nobody_${RUN}@example.com`, 'Wrong1pass9');
+    const shape = (r) => `${r.status} ${r.error && r.error.code} ${r.error && r.error.message}`;
+    assert(unknown.status === 401 && new Set([unknown, known, dflt, mail].map(shape)).size === 1, `the answers differ: ${[unknown, known, dflt, mail].map(shape).join(' | ')}`);
+    assert(Number(dbQuery(s, 'SELECT COUNT(*) AS n FROM users')[0].n) === users && Number(dbQuery(s, "SELECT COUNT(*) AS n FROM users WHERE login_id = 'admin'")[0].n) === 0, 'a sign-in attempt created an account');
+    const h = await anon(s, { xff: '198.51.100.243' });
+    return `one answer for 4 kinds of wrong sign-in; ${judge(await hammer(8, (i) => login(h, lid, `Wrong${i}pass9`)), 'login (one id)', 8)}`;
+  });
   // CONTRACT §15.7 #9 — the account-wide lock (one account attacked from many addresses) must not let anyone deny a
   // named account (or the admin) sign-in: the real owner, with the correct password from an address that never failed,
   // must still get in; wrong guesses are still slowed once the account is under a genuine distributed attack.
@@ -2450,6 +2538,8 @@ async function S09() {
       'api/sync.php': [31, () => syncCall(u)], 'api/queue.php': [121, () => request(s, 'api/queue.php?t=not-a-ticket')],
       // [env] CONTRACT §17.5 — env_now [60, 60] per visitor (the app asks every 10 minutes)
       'api/env/now.php': [61, () => request(s, 'api/env/now.php')],
+      // [entitle] CONTRACT §17.2 — auth_password [10, 600] per account (each try also runs the login throttle)
+      'api/auth/password.php': [11, () => u.json('api/auth/password.php', {})],
       // [lecture] CONTRACT §17.3 — lecture_list [60, 60] · lecture_file [600, 60] (one picture / one pdf piece = one request)
       'api/lecture/list.php': [61, () => request(s, 'api/lecture/list.php')], 'api/lecture/file.php': [601, () => request(s, 'api/lecture/file.php?id=987654321')],
     };
@@ -3048,10 +3138,13 @@ async function S13() {
     assert(unique.every((x) => tokenField(x.f)), `a form has no CSRF field: ${unique.filter((x) => !tokenField(x.f)).map((x) => x.key.slice(0, 60)).join(' | ')}`);
     const before = snap();
     let n = 0;
+    // [entitle] the matrix grew with ⚙️ 설정 / 🔐 내 계정 (and grows with every new tab): a patient attacker waits out the
+    // admin budget (429 + Retry-After) and goes on — every answer is still judged exactly as before
+    const paced = async (...a) => { let r = await submitForm(...a); for (let i = 0; i < 3 && r.status === 429; i++) { await sleep((Math.min(60, Number(r.headers['retry-after']) || 20) + 1) * 1000); r = await submitForm(...a); } return r; };
     for (const { url, f } of unique) {
       const tf = tokenField(f);
       for (const [label, values, o] of [['no token', {}, { drop: [tf] }], ['wrong token', { [tf]: 'f'.repeat(64) }, {}], ['cross-site Origin', {}, { headers: { Origin: 'https://evil.example' } }], ['Sec-Fetch-Site', {}, { headers: { 'Sec-Fetch-Site': 'cross-site' } }]]) {
-        const r = await submitForm(c, url, f, values, o);
+        const r = await paced(c, url, f, values, o);
         n++;
         assert([301, 302, 303, 400, 401, 403].includes(r.status), `${label}: ${f.fields.map((x) => x.name).join(',')} → ${r.status}`);
         assert(snap() === before, `${label}: the form "${(f.fields.find((x) => x.name === 'action') || {}).value || f.action}" changed the database`);
@@ -3064,7 +3157,7 @@ async function S13() {
     const harmless = unique.find((x) => /mute/.test(x.key)) || unique.find((x) => /cleanup|report|hide/.test(x.key));
     assert(harmless, 'no harmless form (mute / cleanup / report / hide) to prove that valid posts work');
     const fresh = parseForms((await c.req(harmless.url, { headers: HTML })).text).find((f) => f.method === 'post' && f.fields.map((x) => x.name).join() === harmless.f.fields.map((x) => x.name).join() && (f.fields.find((x) => x.name === 'action') || {}).value === (harmless.f.fields.find((x) => x.name === 'action') || {}).value);
-    const ok = await submitForm(c, harmless.url, fresh || harmless.f);
+    const ok = await paced(c, harmless.url, fresh || harmless.f);
     assert([200, 302, 303].includes(ok.status), `the valid form post → ${ok.status}`);
     return `${unique.length} forms × 4 forged variants (${n} posts): database unchanged, admin still signed in; a valid post → ${ok.status}`;
   });
