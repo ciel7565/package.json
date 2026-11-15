@@ -537,7 +537,8 @@ try {
   const plan = await until(page, () => document.querySelectorAll('#modal-root .mr-wplan .mr-wcell').length === 18, null, 8000);
   const cells = await ev(page, () => { const c = [...document.querySelectorAll('.mr-wplan .mr-wcell')]; return { disabled: c.filter((b) => b.disabled).length, min: Math.min(...c.map((b) => Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height))), first: c[0].getAttribute('aria-label') }; });
   // the far wall's first bay twice (→ two kinds on), its third bay once
-  await page.click('.mr-wplan .mr-wcell >> nth=0'); await page.click('.mr-wplan .mr-wcell >> nth=0'); await page.click('.mr-wplan .mr-wcell >> nth=2');
+  const cell = (n) => page.locator(`.mr-wplan .mr-wcell >> nth=${n}`).first().dispatchEvent('click');   // the plan pops in (see the dialogs above)
+  await cell(0); await cell(0); await cell(2);
   await page.locator('#modal-root button:has-text("이렇게 할래요")').first().dispatchEvent('click');
   const wantWin = String((Number(win0[0]) + 2) % 7) + win0[1] + String((Number(win0[2]) + 1) % 7) + win0.slice(3);
   const win = await until(page, (w) => G.sys.myroom.room().style.win === w, wantWin, 15000);
@@ -657,10 +658,10 @@ try {
   const cardInfo = await ev(page, () => { const m = document.querySelector('#modal-root .mr-explain'); return { text: m ? m.textContent.replace(/\s+/g, ' ').slice(0, 220) : '', btns: m ? [...m.querySelectorAll('button')].map((b) => b.textContent.trim()) : [], cur: G.sys.places.current, busy: !!G.sys.places.busy, gets: window.__room.gets, can: G.sys.myroom.can(), inputs: m ? m.querySelectorAll('input, textarea, a[href^="http"]').length : -1 }; });
   check('an account without a room: the door asks the server, stays shut and shows a kind card — what the room is, who gets one — with a ready-made room to look at (no typing, no link out)', d2.act && card && cardInfo.cur === null && cardInfo.gets === 1 && cardInfo.can === false && /분양/.test(cardInfo.text) && cardInfo.btns.some((b) => /구경하기/.test(b)) && cardInfo.btns.some((b) => /닫기/.test(b)) && cardInfo.inputs === 0, JSON.stringify(cardInfo));
   await page.locator('#modal-root .mr-explain button:has-text("구경하기")').first().dispatchEvent('click');
-  const visiting = await settled(page, 'PL_MYROOM');
+  const visiting = await settled(page, 'PL_MYROOM', T_UI * 2.5);
   await page.waitForTimeout(1200); await frames(page, 4);
   const vi = await ev(page, () => ({ st: G.sys.myroom.state(), stats: G.sys.myroom.stats(), fab: document.getElementById('myroom-fab').hidden, edit: G.sys.myroom.edit.start(), active: G.sys.myroom.edit.active, chip: !!document.querySelector('#place-chip .pc-exit'), saves: window.__room.calls.filter((c) => /save/.test(c.path)).length }));
-  check('구경하기: a ready-made room to walk through — nothing can be changed there (no button, the edit mode stays shut, nothing is saved) and the way out is on the chip', visiting && vi.st.visiting && vi.stats.items === D.preset('anbang').items.length && vi.fab === true && vi.edit === false && vi.active === false && vi.chip && vi.saves === 0, JSON.stringify({ st: vi.st, items: vi.stats.items, edit: vi.edit }));
+  check('구경하기: a ready-made room to walk through — nothing can be changed there (no button, the edit mode stays shut, nothing is saved) and the way out is on the chip', visiting && vi.st.visiting && vi.stats.items === D.preset('anbang').items.length && vi.fab === true && vi.edit === false && vi.active === false && vi.chip && vi.saves === 0, JSON.stringify({ visiting, st: vi.st, items: vi.stats.items, fab: vi.fab, edit: vi.edit, active: vi.active, chip: vi.chip, saves: vi.saves }));
   await shot(page, '07-visit-sample.png');
   await ev(page, () => { try { G.ui.modal.closeAll(); } catch (e) { /* none */ } return G.sys.places.exit(); });
   await settled(page, null);
