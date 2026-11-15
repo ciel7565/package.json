@@ -1,9 +1,28 @@
 <?php
 /**
  * Operator settings kept in the database (table `settings`, schema v6) — values an admin changes from the admin site
- * without editing files: the real-time farm time scale (`farm.rt_scale`), the kid AI helper switch (`ai.kid_helper`) …
- * A missing row falls back to the config file value, so config.php stays the documented default.
- * Values are JSON-encoded scalars. Never store secrets here (keys live in config.local.php / the environment).
+ * without editing files: the real-time farm time scale (`farm.rt_scale`), the kid AI helper switch (`ai.kid_helper`),
+ * and since phase 9 (CONTRACT §17.2) every number of the site: prices, tiers on sale, limits, defaults of the app.
+ * A missing row falls back to the config file value at the same dotted path, then to the registry's default, so
+ * config.php stays the documented default. Values are JSON-encoded. Never store secrets here (keys live in
+ * config.local.php / the environment): the admin tab only shows whether a secret is set.
+ *
+ * THE REGISTRY (CONTRACT §17.2 "Operator settings") — one row per setting an administrator may change in ⚙️ 설정:
+ *
+ *   Settings::define(key, type, default, range, group, label, public = false, hint = '')
+ *     key     dotted, lower case ('limits.jars_free')
+ *     type    'bool' | 'int' | 'float' | 'enum' | 'list' | 'str'
+ *     range   int / float: [min, max] · enum / list: ['value' => 'label', …] · str: the maximum length · bool: null
+ *     group   one of Settings::GROUPS (the sections of the tab)
+ *     public  true: the value goes to every visitor's page as `site` (api/ping.php, api/auth/me.php → G.site.get(key));
+ *             false: only the server and the admin tab see it. NEVER public: anything a child must not see (prices).
+ *
+ *   ADD-ONLY for every lane: put your rows into Settings::builtin() inside your own `// [lane]` block — one line per row.
+ *   Reading: Settings::get('your.key') on the server (stored value → config value → the registry default),
+ *   G.site.get('your.key', fallback) in the page (public rows only; event site:changed).
+ *
+ * Rows that are not in the registry (allot.*, internal markers) are still read by get() exactly as stored; set()
+ * refuses every key that is not registered.
  * PHP 7.2 syntax only.
  */
 declare(strict_types=1);
@@ -16,13 +35,22 @@ final class Settings
 {
     /** @var array|null request-local cache of every row */
     private static $cache = null;
+    /** @var array|null the registry: key => ['type', 'default', 'range', 'group', 'label', 'public', 'hint'] */
+    private static $defs = null;
 
-    /** keys an admin may change, with their validators (anything else is refused) */
-    private const KEYS = [
-        'farm.rt_scale'   => 'float:0.1:3600',
-        'ai.kid_helper'   => 'bool',
-        'security.notice' => 'str:200',
+    /** the sections of ⚙️ 설정, in order: id => [icon, title] */
+    public const GROUPS = [
+        'sub'      => ['⚡', '구독·혜택'],
+        'controls' => ['🎮', '조작'],
+        'env'      => ['🌤️', '환경'],
+        'sound'    => ['🎵', '소리'],
+        'lecture'  => ['🎓', '강의'],
+        'room'     => ['🏠', '방 꾸미기'],
+        'notice'   => ['📢', '공지'],
+        'admin'    => ['🔐', '관리자 보안'],
+        'etc'      => ['🧩', '기타'],
     ];
+    private const TYPES = ['bool', 'int', 'float', 'enum', 'list', 'str'];
 
     public static function reset(): void { self::$cache = null; self::forgetShared(); }
 
@@ -32,6 +60,119 @@ final class Settings
         try { if (class_exists('Tfm\\Cache', false)) Cache::del('cfg:settings'); } catch (\Throwable $e) { /* expires in seconds */ }
     }
 
+    // ------------------------------------------------------------------ the registry
+    /**
+     * Register one setting (see the file header). Called from builtin(); a second definition of the same key is
+     * ignored (the first one wins), a malformed one is a programming error.
+     */
+    public static function define(string $key, string $type, $default, $range, string $group, string $label, bool $public = false, string $hint = ''): void
+    {
+        if (self::$defs === null) self::$defs = [];
+        if (isset(self::$defs[$key])) return;
+        if (!preg_match('/^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,3}$/', $key) || !in_array($type, self::TYPES, true) || !isset(self::GROUPS[$group])) {
+            throw new \InvalidArgumentException('bad setting definition: ' . $key);
+        }
+        if (($type === 'int' || $type === 'float') && (!is_array($range) || count($range) !== 2)) throw new \InvalidArgumentException('a number needs [min, max]: ' . $key);
+        if (($type === 'enum' || $type === 'list') && (!is_array($range) || !$range)) throw new \InvalidArgumentException('enum / list needs its values: ' . $key);
+        if ($type === 'enum' || $type === 'list') {
+            // a plain list of words is accepted too: the value is its own label
+            $words = true;
+            foreach ($range as $k => $v) if (!is_int($k) || !is_string($v)) $words = false;
+            if ($words && array_keys($range) === range(0, count($range) - 1)) { $m = []; foreach ($range as $v) $m[(string) $v] = (string) $v; $range = $m; }
+        }
+        self::$defs[$key] = ['type' => $type, 'default' => $default, 'range' => $range, 'group' => $group, 'label' => $label, 'public' => $public, 'hint' => $hint];
+    }
+
+    /** every registered setting: key => definition */
+    public static function defs(): array
+    {
+        if (self::$defs === null) { self::$defs = []; self::builtin(); }
+        return self::$defs;
+    }
+
+    public static function isDefined(string $key): bool { $d = self::defs(); return isset($d[$key]); }
+
+    /**
+     * The rows of the registry. ADD-ONLY: every lane keeps its own block, one line per row, never reorders another
+     * lane's lines. Defaults that also live in config.php (the 토스 prices) are read from there.
+     */
+    private static function builtin(): void
+    {
+        // ---------------------------------------------------------------- [entitle] 구독·혜택 (CONTRACT §17.2)
+        $tiers = (array) Config::get('toss.tiers', []);
+        $price = function (int $t, int $d) use ($tiers): int { return isset($tiers[$t]['price']) ? max(100, (int) $tiers[$t]['price']) : $d; };
+        self::define('sub.tiers_on', 'list', [2, 3], [2 => '⚡ 2배', 3 => '⚡⚡ 3배', 4 => '⚡⚡⚡ 4배'], 'sub', '판매하는 단계', true, '체크한 단계만 구독 화면에 보이고 살 수 있어요. 이미 산 사람은 기간이 끝날 때까지 그대로 써요. 관리자는 체크한 단계 중 가장 높은 단계를 무료로 써요.');
+        self::define('sub.price_2', 'int', $price(2, 2900), [100, 1000000], 'sub', '2배 단계 가격 (원)', false, '한 번 결제(이용 기간)의 금액이에요. 바꾸면 그다음 주문부터 적용돼요.');
+        self::define('sub.price_3', 'int', $price(3, 4900), [100, 1000000], 'sub', '3배 단계 가격 (원)');
+        self::define('sub.price_4', 'int', $price(4, 6900), [100, 1000000], 'sub', '4배 단계 가격 (원)');
+        self::define('sub.period_days', 'int', max(1, (int) Config::get('toss.period_days', 30)), [1, 366], 'sub', '한 번 결제의 이용 기간 (일)');
+        self::define('sub.grace_days', 'int', max(0, (int) Config::get('toss.grace_days', 3)), [0, 30], 'sub', '자동 갱신 실패 뒤 기다려 주는 기간 (일)');
+        self::define('sub.move_2', 'int', 2, [1, 3], 'sub', '2배 단계 — 이동 속도 배수', false, '이동은 3배까지만 안전하게 맞춰져 있어요.');
+        self::define('sub.grow_2', 'int', 2, [1, 4], 'sub', '2배 단계 — 작물·발효 속도 배수');
+        self::define('sub.move_3', 'int', 3, [1, 3], 'sub', '3배 단계 — 이동 속도 배수');
+        self::define('sub.grow_3', 'int', 3, [1, 4], 'sub', '3배 단계 — 작물·발효 속도 배수');
+        self::define('sub.move_4', 'int', 3, [1, 3], 'sub', '4배 단계 — 이동 속도 배수');
+        self::define('sub.grow_4', 'int', 4, [1, 4], 'sub', '4배 단계 — 작물·발효 속도 배수');
+        self::define('limits.jars_free', 'int', 3, [1, 12], 'sub', '무료 계정의 항아리 수', true, '구독하지 않은 계정이 쓸 수 있는 내 항아리 수예요.');
+        self::define('limits.jars_paid', 'int', 12, [1, 12], 'sub', '구독 계정·관리자의 항아리 수', true, '구독이 끝나면 이 수를 넘는 항아리는 잠기기만 하고 내용물은 그대로 남아요.');
+        self::define('limits.room_items_free', 'int', 80, [0, 300], 'room', '무료 계정이 방에 놓을 수 있는 물건 수', true);
+        self::define('limits.room_items_paid', 'int', 160, [0, 300], 'room', '구독 계정·관리자가 방에 놓을 수 있는 물건 수', true);
+        // ---------------------------------------------------------------- [entitle] 공지 · 관리자 보안 · 기타 (older keys keep their meaning)
+        self::define('security.notice', 'str', '', 200, 'notice', '체험관 공지 한 줄', true, '모든 방문자의 화면에 한 번 보여 주는 짧은 알림이에요 (200자까지). 비워 두면 보이지 않아요. 전화번호·주소 같은 개인정보는 자동으로 가려져요.');
+        self::define('admin.twofa_required', 'bool', strtolower(trim((string) Config::get('security.admin_2fa', 'optional'))) === 'required', null, 'admin', '관리자 2단계 인증을 꼭 쓰게 하기', false, '켜면 모든 관리자가 다음 로그인 때 휴대폰 인증 앱을 등록해야 해요. 기본 비밀번호를 바꾼 뒤에 켜는 것을 권해요.');
+        self::define('farm.rt_scale', 'float', 1.0, [0.1, 3600], 'env', '실시간 텃밭 시간 배율', false, '1 = 진짜 시간, 60 = 60배 빠르게(시연). 이제부터 심는 작물에 적용돼요.');
+        self::define('ai.kid_helper', 'bool', false, null, 'etc', '어린이 AI 질문 도우미', false, '🤖 AI 도우미 탭에서도 켜고 끌 수 있어요.');
+        // ---------------------------------------------------------------- [entitle → controls] the keys CONTRACT §17.1 names (the controls lane reads them)
+        $look = ['lock' => '마우스를 움직이면 돌기 (잠금)', 'walk' => '걸을 때만 돌기', 'drag' => '누르고 끌어서 돌기 (예전 방식)'];
+        self::define('controls.mouse_look_normal', 'enum', 'lock', $look, 'controls', '보통 모드의 마우스 회전 기본값', true);
+        self::define('controls.mouse_look_easy', 'enum', 'walk', $look, 'controls', '쉬운 모드의 마우스 회전 기본값', true);
+        // ---------------------------------------------------------------- [env] CONTRACT §17.5 — read through Tfm\Env, which accepts only the listed words
+        self::define('env.clock_default', 'enum', 'kst', ['kst' => '실시간 (한국 시각)', 'fast' => '빠른 체험 시간', 'fixed' => '고정'], 'env', '시계 기본값', true, '방문자가 직접 고르지 않았을 때의 시계예요.');
+        self::define('env.weather_source', 'enum', 'auto', ['auto' => '자동 (기상청 키가 있으면 기상청 실황)', 'model' => '언제나 정선 기후 모델'], 'env', '날씨 자료');
+        self::define('env.night_brightness', 'float', 1.25, [0.6, 1.6], 'env', '밤 밝기', true, '1 = 예전 밝기. 숫자가 클수록 밤의 밭과 길이 밝아요.');
+        self::define('farm.rt_basis', 'enum', 'calendar', ['calendar' => '작물 달력의 진짜 날짜', 'short' => '짧은 분 단위 (예전 방식)'], 'env', '실시간 텃밭의 기준', true);
+        // ---------------------------------------------------------------- other lanes add their rows below, each in its own block
+    }
+
+    /** the definitions of one group, in registry order */
+    public static function rows(string $group): array
+    {
+        $out = [];
+        foreach (self::defs() as $k => $d) if ($d['group'] === $group) $out[$k] = $d;
+        return $out;
+    }
+
+    /** the registry default of a key (config value at the same path first) — what "기본값으로" restores */
+    public static function defaultOf(string $key)
+    {
+        $d = self::defs();
+        if (!isset($d[$key])) return Config::get($key);
+        $c = Config::get($key);
+        if ($c !== null) { try { return self::cleanDef($d[$key], $c); } catch (\Throwable $e) { /* a broken config value: the registry default */ } }
+        return $d[$key]['default'];
+    }
+
+    /** key => value of every public setting (the `site` object of api/ping.php and api/auth/me.php) */
+    public static function publicValues(): array
+    {
+        $out = [];
+        foreach (self::defs() as $k => $d) {
+            if (!$d['public']) continue;
+            $v = self::get($k);
+            // text an operator typed reaches children's screens: personal data is masked like chat (CONTRACT §15.7)
+            if ($d['type'] === 'str' && is_string($v) && $v !== '' && class_exists('Tfm\\ChatFilter')) $v = ChatFilter::maskPII($v);
+            $out[$k] = $v;
+        }
+        return $out;
+    }
+
+    /** a short stamp of the public values: the page asks for `site` again when it changes (player/save.php sends it) */
+    public static function publicStamp(): string
+    {
+        return substr(sha1((string) json_encode(self::publicValues())), 0, 12);
+    }
+
+    // ------------------------------------------------------------------ reading
     private static function load(): array
     {
         if (self::$cache !== null) return self::$cache;
@@ -55,12 +196,27 @@ final class Settings
         return self::$cache = $out;
     }
 
-    /** the stored value, else the config value at the same dotted path, else $default */
+    /**
+     * The stored value, else the config value at the same dotted path, else the registry default, else $default.
+     * A stored value of a registered key is cleaned again on the way out (a row edited by hand can never hand the
+     * application a value outside its range): a broken one counts as missing.
+     */
     public static function get(string $key, $default = null)
     {
         $all = self::load();
-        if (array_key_exists($key, $all) && $all[$key] !== null) return $all[$key];
-        return Config::get($key, $default);
+        $defs = self::defs();
+        $def = isset($defs[$key]) ? $defs[$key] : null;
+        if (array_key_exists($key, $all) && $all[$key] !== null) {
+            if ($def === null) return $all[$key];
+            try { return self::cleanDef($def, $all[$key]); } catch (\Throwable $e) { /* fall through to the defaults */ }
+        }
+        $c = Config::get($key);
+        if ($c !== null) {
+            if ($def === null) return $c;
+            try { return self::cleanDef($def, $c); } catch (\Throwable $e) { /* the registry default */ }
+        }
+        if ($def !== null) return $def['default'];
+        return $default;
     }
 
     public static function has(string $key): bool
@@ -68,11 +224,13 @@ final class Settings
         return array_key_exists($key, self::load());
     }
 
+    // ------------------------------------------------------------------ writing
     /** validate + store one setting; throws ApiException 400 INVALID_SETTING for an unknown key or a bad value */
     public static function set(string $key, $value, ?int $actorId = null): void
     {
-        if (!isset(self::KEYS[$key])) throw new ApiException(400, 'INVALID_SETTING', '바꿀 수 없는 설정이에요.');
-        $value = self::clean(self::KEYS[$key], $value);
+        $defs = self::defs();
+        if (!isset($defs[$key])) throw new ApiException(400, 'INVALID_SETTING', '바꿀 수 없는 설정이에요.');
+        $value = self::cleanDef($defs[$key], $value);
         $json = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (!is_string($json)) throw new ApiException(400, 'INVALID_SETTING', '설정 값을 저장하지 못했어요.');
         Db::upsert('settings', ['k' => $key, 'v' => $json, 'updated_at' => Clock::ms(), 'updated_by' => $actorId ?: null], ['k']);
@@ -81,23 +239,79 @@ final class Settings
         Audit::log('setting_changed', $actorId, ['key' => $key, 'value' => $value], 'warn', $actorId);
     }
 
-    /** @return mixed the cleaned value */
-    private static function clean(string $rule, $value)
+    /** [entitle] back to the default: the stored row of a registered key is removed (audited); false when there was none */
+    public static function unset(string $key, ?int $actorId = null): bool
     {
-        $p = explode(':', $rule);
-        if ($p[0] === 'bool') {
+        if (!self::isDefined($key)) throw new ApiException(400, 'INVALID_SETTING', '바꿀 수 없는 설정이에요.');
+        $n = Db::exec('DELETE FROM settings WHERE k = ?', [$key]);
+        self::$cache = null;
+        self::forgetShared();
+        if ($n > 0) Audit::log('setting_reset', $actorId, ['key' => $key], 'warn', $actorId);
+        return $n > 0;
+    }
+
+    /** [entitle] clean a raw value (a form field, a JSON value) for a registered key without storing it */
+    public static function cleanValue(string $key, $value)
+    {
+        $defs = self::defs();
+        if (!isset($defs[$key])) throw new ApiException(400, 'INVALID_SETTING', '바꿀 수 없는 설정이에요.');
+        return self::cleanDef($defs[$key], $value);
+    }
+
+    /** @return mixed the cleaned value; throws ApiException 400 INVALID_SETTING */
+    private static function cleanDef(array $d, $value)
+    {
+        $type = (string) $d['type'];
+        $range = $d['range'];
+        if ($type === 'bool') {
             if (is_bool($value)) return $value;
-            if (is_string($value) || is_int($value)) return in_array(strtolower(trim((string) $value)), ['1', 'true', 'on', 'yes'], true);
-        } elseif ($p[0] === 'float') {
-            if (is_string($value)) $value = trim($value);
-            if (is_numeric($value)) {
-                $f = (float) $value;
-                $min = isset($p[1]) ? (float) $p[1] : -INF;
-                $max = isset($p[2]) ? (float) $p[2] : INF;
-                if (is_finite($f) && $f >= $min && $f <= $max) return round($f, 4);
+            if (is_int($value) && ($value === 0 || $value === 1)) return $value === 1;
+            if (is_string($value)) {
+                $s = strtolower(trim($value));
+                if (in_array($s, ['1', 'true', 'on', 'yes'], true)) return true;
+                if (in_array($s, ['0', 'false', 'off', 'no', ''], true)) return false;
             }
-        } elseif ($p[0] === 'str') {
-            if (is_string($value)) return Users::cleanText($value, isset($p[1]) ? (int) $p[1] : 200);
+        } elseif ($type === 'int') {
+            if (is_string($value)) $value = trim($value);
+            if (is_int($value) || (is_string($value) && preg_match('/^-?\d{1,12}$/', $value)) || (is_float($value) && is_finite($value) && floor($value) === $value && abs($value) < 1e12)) {
+                $n = (int) $value;
+                if ($n >= (int) $range[0] && $n <= (int) $range[1]) return $n;
+            }
+        } elseif ($type === 'float') {
+            if (is_string($value)) $value = trim($value);
+            if (is_int($value) || is_float($value) || (is_string($value) && strlen($value) <= 24 && is_numeric($value))) {
+                $f = (float) $value;
+                if (is_finite($f) && $f >= (float) $range[0] && $f <= (float) $range[1]) return round($f, 4);
+            }
+        } elseif ($type === 'enum') {
+            if (is_string($value) || is_int($value)) {
+                foreach ($range as $k => $label) if ((string) $k === trim((string) $value)) return is_int($d['default']) ? (int) $k : (string) $k;
+            }
+        } elseif ($type === 'list') {
+            if (is_string($value)) $value = trim($value) === '' ? [] : explode(',', $value);
+            if (is_array($value) && count($value) <= 64) {
+                $ints = true;
+                foreach ($range as $k => $label) if (!is_int($k)) $ints = false;
+                $picked = [];
+                foreach ($value as $v) {
+                    if (!is_string($v) && !is_int($v)) throw new ApiException(400, 'INVALID_SETTING', '설정 값이 올바르지 않아요.');
+                    $hit = false;
+                    foreach ($range as $k => $label) if ((string) $k === trim((string) $v)) { $picked[(string) $k] = true; $hit = true; }
+                    if (!$hit) throw new ApiException(400, 'INVALID_SETTING', '설정 값이 올바르지 않아요.');
+                }
+                // the order of the registry, each value once
+                $sorted = [];
+                foreach ($range as $k => $label) if (isset($picked[(string) $k])) $sorted[] = $ints ? (int) $k : (string) $k;
+                return $sorted;
+            }
+        } elseif ($type === 'str') {
+            if (is_string($value)) {
+                $max = is_int($range) && $range > 0 ? $range : 200;
+                if (strlen($value) > $max * 4 + 16) throw new ApiException(400, 'INVALID_SETTING', '글이 너무 길어요.');
+                $s = Users::cleanText($value, $max);
+                if ($s !== '' && class_exists('Tfm\\ChatFilter') && ChatFilter::containsBadWord($s)) throw new ApiException(400, 'INVALID_SETTING', '바르고 고운 말로 적어 주세요.');
+                return $s;
+            }
         }
         throw new ApiException(400, 'INVALID_SETTING', '설정 값이 올바르지 않아요.');
     }

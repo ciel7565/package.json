@@ -308,6 +308,7 @@ function harvested(stdClass $s, string $bedId, int $amount, int $stars, int $t):
 function row(int $uid, string $pid): ?array { return Tfm\Db::one('SELECT * FROM farm_beds WHERE user_id = ? AND pid = ? ORDER BY id DESC', [$uid, $pid]); }
 function vcodes(array $plan): array { return array_values(array_unique(array_map(function ($v) { return $v['code']; }, $plan['violations']))); }
 Tfm\Config::override('farm.rt_scale', 1.0);
+Tfm\Config::override('farm.rt_basis', 'short'); // [env] these checks are about the phase-7 minutes; the calendar basis is in tests/env-unit.php
 if (class_exists('Tfm\Settings')) Tfm\Settings::reset();
 
 check('Farm::durationMs — minutes × 60000 ÷ (tier × scale): mint 10 min, tier 2 halves it, scale 60 makes it 10 s', function () {

@@ -39,6 +39,9 @@ spl_autoload_register(static function (string $class): void {
         'Totp' => 'Totp', 'AdminTotp' => 'Totp', 'Farm' => 'Farm', 'Claude' => 'Claude', 'Markdown' => 'Markdown', 'Inspect' => 'Inspect',
         'Allot' => 'Allot', 'AllotRetry' => 'Allot', 'AdminAllot' => 'AdminAllot',
         'Cache' => 'Cache', 'Gate' => 'Gate', 'Sync' => 'Sync', 'Ranking' => 'Ranking',
+        'Entitle' => 'Entitle', 'AdminSettings' => 'AdminSettings', // [entitle] CONTRACT §17.2
+        'Lecture' => 'Lecture', 'AdminLecture' => 'AdminLecture', // [lecture] CONTRACT §17.3
+        'Env' => 'Env', // [env] CONTRACT §17.5
     ];
     /** what the normal bootstrap loads up front (the fall-back for a class the map does not know) */
     static $full = ['Db', 'Session', 'Security', 'ChatFilter', 'Users', 'Api', 'Presence', 'GameData', 'SaveValidator', 'Upload', 'Toss',

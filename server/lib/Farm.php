@@ -92,14 +92,28 @@ final class Farm
         else Config::override('farm.rt_scale', $scale);
     }
 
-    /** ms a real-time crop needs: minutes × 60000 ÷ (tier × scale), at least 1 ms (0 for a crop that is not a real-time crop) */
-    public static function durationMs(string $cropId, int $tier, ?float $scale = null): int
+    /**
+     * ms a real-time crop needs, at least 1 ms (0 for a crop that is not a real-time crop).
+     * [env] CONTRACT §17.5 — basis 'short': minutes × 60000 ÷ (tier × scale) (phase 7). Basis 'calendar' (the default,
+     * setting farm.rt_basis) with the moment of planting $at: the crop calendar's real days × 86 400 000 ÷ (tier × scale ×
+     * factor), factor = the gentle season × weather factor of that moment (Env::cropFactor, 0.5 … 1.05; the weather is the
+     * real one — the cached 기상청 value or the model, never a network call). The app computes the same number (77-env.js
+     * core.bedMs) for its countdown; the server's ready_at stays the only judge (data.rt of every save answer).
+     */
+    public static function durationMs(string $cropId, int $tier, ?float $scale = null, ?int $at = null, ?string $basis = null): int
     {
         $c = GameData::rtCrop($cropId);
         if ($c === null) return 0;
         $s = $scale === null ? self::scale() : max(self::SCALE_MIN, min(self::SCALE_MAX, $scale));
+        if ($at !== null && class_exists('Tfm\Env')) {
+            $basis = $basis === null ? Env::basis() : $basis;
+            $cal = $basis === 'calendar' ? Env::cal($cropId) : null;
+            if ($cal !== null) return Env::bedMs(['basis' => 'calendar', 'cal' => $cal, 'tier' => $tier, 'scale' => $s, 't' => $at, 'weather' => Env::weatherFor($at)]);
+        }
         return max(1, (int) round($c['minutes'] * 60000 / (max(1, min(4, $tier)) * $s)));
     }
+    /** [env] the basis the beds are measured with ('calendar' | 'short'), sent with every view so the app counts alike */
+    public static function basis(): string { return class_exists('Tfm\Env') ? Env::basis() : 'short'; }
 
     /** the most items one harvest of this crop can give: max(harvestAmount) + 1 (the ★★★ bonus) */
     public static function maxAmount(string $cropId): int
@@ -198,7 +212,7 @@ final class Farm
                     if (isset($last[$pid])) { $bad('RT_PID_REUSE', ['bed' => $bedId, 'why' => 'harvest list']); continue; }
                     $ops[] = ['insert', [
                         'user_id' => $uid, 'bed_id' => $bedId, 'kind' => 'rt', 'pid' => $pid, 'crop_id' => $b['crop'], 'tier' => $tier,
-                        'first_seen_at' => $now, 'ready_at' => $now + self::durationMs($b['crop'], $tier, $scale), 'growth' => 0, 'care' => $b['care'],
+                        'first_seen_at' => $now, 'ready_at' => $now + self::durationMs($b['crop'], $tier, $scale, $now), 'growth' => 0, 'care' => $b['care'],
                         'status' => 'growing', 'harvested_at' => 0, 'amount' => 0, 'stars' => 0, 'updated_at' => $now,
                     ]];
                     continue;
@@ -376,7 +390,7 @@ final class Farm
         foreach (Db::all("SELECT bed_id, kind, pid, crop_id, first_seen_at, ready_at, status FROM farm_beds WHERE user_id = ? AND kind = 'rt' AND status IN ('growing', 'ready') ORDER BY id ASC", [$uid]) as $r) {
             $beds[(string) $r['bed_id']] = ['pid' => (string) $r['pid'], 'cropId' => (string) $r['crop_id'], 'firstSeenAt' => (int) $r['first_seen_at'], 'readyAt' => (int) $r['ready_at'], 'status' => self::liveStatus($r, $now)];
         }
-        return ['scale' => self::scale(), 'tier' => max(1, min(4, $tier)), 'beds' => $beds ? $beds : new \stdClass()];
+        return ['scale' => self::scale(), 'tier' => max(1, min(4, $tier)), 'basis' => self::basis(), 'beds' => $beds ? $beds : new \stdClass()];
     }
 
     /**
@@ -399,7 +413,7 @@ final class Farm
             $total += (int) $r['qty'];
         }
         return [
-            'scale' => self::scale(), 'tier' => max(1, min(4, $tier)), 'beds' => $beds,
+            'scale' => self::scale(), 'tier' => max(1, min(4, $tier)), 'basis' => self::basis(), 'beds' => $beds,
             'storage' => ['items' => $items ? $items : new \stdClass(), 'total' => $total, 'cap' => GameData::storageCap()],
             'reports' => ['pending' => (int) Db::value("SELECT COUNT(*) FROM crop_reports WHERE user_id = ? AND status = 'pending'", [$uid]), 'unseen' => self::unseen($uid)],
         ];

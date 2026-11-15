@@ -87,6 +87,10 @@ return [
         // 관리자가 한 명도 없을 때 관리자 페이지에서 첫 관리자를 지정할 수 있게 해요. 서버 PC 에서만 읽을 수 있는 한 번용
         //   설치 코드(php cli/tfm.php setup-code)가 꼭 필요해요 (접속 주소가 localhost 인지는 믿지 않아요). false = 이 기능 끄기.
         'allow_localhost_bootstrap' => $env('TFM_LOCAL_BOOTSTRAP', true),
+        // [entitle] 기본 관리자 (CONTRACT §17.2): 새로 만든(계정이 하나도 없는) 서버에서 아이디 admin 으로 처음 로그인하면
+        //   관리자 계정 admin / admin1234 가 만들어져요. 누구나 아는 비밀번호라서 관리자 페이지에 빨간 경고가 뜨고,
+        //   🔐 내 계정 에서 바꾸면 사라져요. false = 이 기능 끄기 (설치 마법사나 php cli/tfm.php install 로만 관리자를 만들어요).
+        'default_admin'             => $env('TFM_DEFAULT_ADMIN', true),
         // 출처 검사: 브라우저가 보내는 Origin/Sec-Fetch-Site 가 다른 사이트이면 상태 변경 요청 거부
         'check_origin'              => $env('TFM_CHECK_ORIGIN', true),
         // ---- 요청 잠금 (CONTRACT §15.7 #2 #5 #10) ----
@@ -193,6 +197,12 @@ return [
         'sync'         => [150, 60],     // api/sync.php — 토큰이 있는 보통 호출 (계정별; DB 없이 채널 기록에서 셈)
         'sync_issue'   => [30, 60],      // api/sync.php — 토큰을 새로 받는 호출 (세션 확인을 거침)
         'queue'        => [120, 60],     // api/queue.php 대기실 (IP 별)
+        'env_now'      => [60, 60],      // [env] api/env/now.php — 한국 날씨 (방문자별; 앱은 10분마다 한 번 물어요)
+        'auth_password'=> [10, 600],     // [entitle] api/auth/password.php — 내 비밀번호 바꾸기 (계정별, 10분에 10번)
+        // ↓ 9단계 강의실 (CONTRACT §17.3) — [lecture]
+        'lecture_list'   => [60, 60],    // api/lecture/list.php — 강의 목록 (누구나, 읽기)
+        'lecture_file'   => [600, 60],   // api/lecture/file.php — 그림 한 장 · PDF 조각 하나가 요청 하나라서 넉넉해요
+        'lecture_upload' => [40, 600],   // 관리자 화면에서 강의 파일 올리기 (계정별, 10분에 40번)
     ],
 
     // ------------------------------------------------------------------ chat
@@ -289,6 +299,20 @@ return [
         'photo_max_bytes' => 1024 * 1024,                  // 완료 확인 사진 최대 크기 (1 MB)
         'photo_max_dimension' => 1280,
         'harvest_keep_days'   => 7,                        // 수확 뒤 이 기간 안에는 완료 확인을 보낼 수 있어요
+        // [env] 실시간 텃밭의 기준 (CONTRACT §17.5): 'calendar' = 작물 달력의 진짜 날짜(배추 85일 …) ÷ 배율 ÷ 단계 ÷ 계절·날씨,
+        // 'short' = 7단계의 짧은 분 단위(박하 10분 …). 관리자 화면 값(settings 표)이 우선이에요.
+        'rt_basis'        => $env('TFM_RT_BASIS', 'calendar'),
+    ],
+
+    // ------------------------------------------------------------------ [env] 한국 실시간 시간·날씨 (CONTRACT §17.5)
+    // 기상청 키는 공공데이터포털(data.go.kr)에서 「기상청_단기예보 조회서비스」 활용 신청 후 받은 '일반 인증키'를
+    // config.local.php 의 env.kma_key (또는 환경 변수 TFM_KMA_KEY)에만 넣으세요. 키가 없으면 정선의 평년 기후 모델을 써요.
+    'env' => [
+        'kma_key'          => $env('TFM_KMA_KEY', ''),
+        'kma_base'         => $env('TFM_KMA_BASE', 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0'),
+        'weather_source'   => 'auto',     // auto (키가 있으면 기상청) · model (언제나 기후 모델)
+        'clock_default'    => 'kst',      // kst = 실시간(한국) · fast = 빠른 체험 시간 · fixed = 고정
+        'night_brightness' => 1.25,       // 밤의 밝기 0.6 … 1.6 (밭과 길이 밤에도 보이게)
     ],
 
     // ------------------------------------------------------------------ Claude API (CONTRACT §15.6) — owner: claude
@@ -377,6 +401,24 @@ return [
         'flush_every' => 30,      // 접속 위치를 데이터베이스(presence 표)에 옮겨 적는 간격(초)
         'chat_ring'   => 50,      // 채널마다 기억하는 최근 채팅 줄 수
         'save_every'  => 60,      // 저장 권장 간격(초). 서버가 바쁘면 그만큼 늘려서 알려 줘요
+    ],
+
+    // ------------------------------------------------------------------ 강의실 (유튜브 · 슬라이드 · PDF · PPTX, CONTRACT §17.3) — [lecture]
+    // 여기 값은 "기본값"이에요. 관리자 화면 🎓 강의 자료 → 설정에서 바꾸면 settings 표의 값(lecture.*)이 우선해요.
+    // 올린 파일은 data/lectures/ 에 무작위 이름으로 저장되고, 웹 서버가 직접 보여 주지 않아요 (api/lecture/file.php 만 보내요).
+    'lecture' => [
+        'auto_open'           => true,                 // false: "입장할 때 자동으로 열기"를 켠 강의도 스스로 열리지 않아요 (▶ 강의 보기 카드만 보여요)
+        'office_viewer'       => false,                // true: PPTX 를 마이크로소프트 온라인 보기 창으로 보여 줘요 (공개 https 사이트 + "누구나" 강의만; 파일이 그 회사 서버로 전달돼요)
+        'pdf_max_bytes'       => 30 * 1024 * 1024,     // PDF 한 개 최대 크기
+        'pptx_max_bytes'      => 50 * 1024 * 1024,     // PPTX 한 개 최대 크기
+        'image_max_bytes'     => 5 * 1024 * 1024,      // 그림 한 장 최대 크기
+        'images_max'          => 80,                   // 그림 슬라이드 한 강의의 최대 장수
+        'image_max_dimension' => 1920,                 // 그림의 긴 쪽이 이보다 크면 줄여서 저장
+        'max_lectures'        => 300,                  // 강의 최대 개수
+        'storage_max_bytes'   => 2147483647,           // 강의 파일을 모두 합친 최대 크기 (약 2GB)
+        'slide_hosts'         => ['docs.google.com', 'view.officeapps.live.com'],   // 온라인 슬라이드로 넣을 수 있는 곳 (줄일 수만 있어요)
+        'zip_max_entries'     => 3000,                 // PPTX(zip) 안의 파일 수 한도 — 압축 폭탄 방지
+        'zip_max_unpacked'    => 300 * 1024 * 1024,    // PPTX 를 풀었을 때의 전체 크기 한도 (적힌 값 기준; 서버는 실제로 풀지 않아요)
     ],
 
     // ------------------------------------------------------------------ logs & maintenance

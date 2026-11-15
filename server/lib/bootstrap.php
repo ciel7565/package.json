@@ -88,6 +88,30 @@ spl_autoload_register(static function (string $class): void {
         if (is_file($file)) require_once $file;
     }
 });
+// phase 9 (CONTRACT §17.2) [entitle]: Tfm\Entitle (what an account may do: tier, multipliers, limits) and the admin
+// site's ⚙️ 설정 / 🔐 내 계정 library are loaded on first use.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Entitle' || $class === 'Tfm\\AdminSettings') {
+        $file = __DIR__ . '/' . substr($class, 4) . '.php';
+        if (is_file($file)) require_once $file;
+    }
+});
+// phase 9 (CONTRACT §17.3) [lecture]: Tfm\Lecture (the 강의실 library) and the admin site's 🎓 강의 자료 tab are used
+// by two endpoints and one admin tab only — loaded on first use.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Lecture' || $class === 'Tfm\\AdminLecture') {
+        $file = __DIR__ . '/' . substr($class, 4) . '.php';
+        if (is_file($file)) require_once $file;
+    }
+});
+// phase 9 (CONTRACT §17.5) [env]: Tfm\Env (Korea in real time: the clock, the sun and the moon, the weather of 정선,
+// the crop calendar) — used by api/env/now.php and the real-time beds; loaded on first use.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Env') {
+        $file = __DIR__ . '/Env.php';
+        if (is_file($file)) require_once $file;
+    }
+});
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');

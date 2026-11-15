@@ -1278,7 +1278,8 @@ async function main() {
   });
   await step('farm: the operator time scale (Settings farm.rt_scale = 300 → 10 min ≈ 2 s) is what ping reports', async () => {
     if (!phpProc) return 'skipped (external server: the scale is set through the spawned server)';
-    const v = srvPhp('(function () { Tfm\\Settings::set("farm.rt_scale", 300.0, null); return Tfm\\Farm::scale(); })()');
+    // [env] the phase-7 minutes (farm.rt_basis 'short'); the calendar basis of §17.5 has its own checks in tests/env-unit.php
+    const v = srvPhp('(function () { Tfm\\Settings::set("farm.rt_basis", "short", null); Tfm\\Settings::set("farm.rt_scale", 300.0, null); return Tfm\\Farm::scale(); })()');
     assert(v === 300, `scale ${v}`);
     const p = await F.req('api/ping.php');
     assert(p.data?.rtScale === 300, `ping rtScale ${p.data?.rtScale}`);
