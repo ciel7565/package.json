@@ -6,7 +6,7 @@
 //                                                  throw-away data dir, run every check, clean up
 //   options: --docroot <dir>   take the server tree from that folder (e.g. dist/metaverse) instead of server/
 //            --only <regex>    run only the sections whose name matches (path|signin|csrf|xss|twofa|required|idle|
-//                              allowlist|ratelimit|screens|allot|rename|apache)
+//                              allowlist|ratelimit|screens|allot|lecture|rename|apache)
 //            --no-apache       skip the Apache (.htaccess) section      --verbose   print every request
 //            --keep            keep the temp folders (their paths are printed)
 //
@@ -2090,6 +2090,267 @@ async function main() {
         if (dump.includes(PII.phone) || dump.includes(PII.addr) || dump.includes(PII.name)) where.push('the database file (not sealed)');
         assert(where.length === 0, where.join(' · '));
         return `${trail.locations.length} addresses · ${trail.flashes.length} flashes · audit / events / logs / database file: no personal data`;
+      });
+    } finally { await sv.stop(); }
+  }
+
+  // ================================================================= [lecture] 🎓 강의 자료 (CONTRACT §17.3): no JavaScript,
+  // add by address or by upload, edit, replace, reorder, on / off, room, auto-open, delete, preview — and the one upload
+  // path of the admin site (who may use it, what it refuses)
+  if (section('lecture')) {
+    const FX = await import('./lecture-fixtures.mjs');
+    const s = makeSite('lecture', { rate_limits: { lecture_upload: [100000, 60], lecture_list: [100000, 60], lecture_file: [100000, 60] } });
+    const sv = await startPhp(s);
+    try {
+      const A = mkUser(s, 'admin');
+      const U = mkUser(s, 'user');
+      const b = new Browser(sv.base, 'lecture');
+      const T = `${ADM}?tab=lecture`;
+      const XSS = '<img src=x onerror=alert(31)>';
+      const rawXss = (t) => /<img src=x onerror|<script>alert|<svg onload/i.test(t);
+      const lectures = () => dbAll(s, 'SELECT id, title, kind, src, place, autoplay, audience, sort, enabled FROM lectures ORDER BY sort, id');
+      const filesOf = (id) => dbAll(s, 'SELECT n, mime, bytes, w, h, path, sha256 FROM lecture_files WHERE lecture_id = ? ORDER BY n', [id]);
+      const stored = () => { const d = path.join(s.data, 'lectures'); const out = []; (function walk(x) { if (!fs.existsSync(x)) return; for (const e of fs.readdirSync(x, { withFileTypes: true })) { if (e.isDirectory()) walk(path.join(x, e.name)); else if (/\.bin$/.test(e.name)) out.push(e.name); } })(d); return out; };
+      /** a multipart POST like a browser form with <input type="file" name="files[]" multiple> (not followed) */
+      const upload = async (br, fields, files, o = {}) => {
+        const pg = await br.req(o.page || T);
+        const tok = o.token !== undefined ? o.token : tokenOf(pg.text);
+        const fd = new FormData();
+        if (tok !== null) fd.append('_csrf', tok);
+        for (const [k, v] of Object.entries(fields)) fd.append(k, v);
+        for (const f of files) fd.append(o.field || 'files[]', new Blob([f.data], { type: f.type || 'application/octet-stream' }), f.name);
+        const url = new URL(ADM, br.base);
+        const send = br.jar.filter((c) => Browser.match(url.pathname, c.path));
+        const res = await fetch(url, { method: 'POST', body: fd, redirect: 'manual', headers: { ...(o.headers || {}), ...(send.length ? { Cookie: send.map((c) => `${c.name}=${c.value}`).join('; ') } : {}) } });
+        for (const line of (typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [])) br.store(line, url.pathname);
+        const text = await res.text();
+        return { status: res.status, text, headers: res.headers, location: res.headers.get('location'), url: url.href };
+      };
+      const uploadF = async (br, fields, files, o) => { const r = await upload(br, fields, files, o); return br.follow(r); };
+      const PDF = FX.pdfBytes('Lecture one'), PPTX = FX.pptxBytes(3);
+      let ids = {};
+
+      await step('17.3', '🎓 강의 자료: the tab opens for the elevated administrator — forms for an address and for files (multipart), settings, no script, no inline style, no event handler; the lock headers', async () => {
+        const page = await signInFull(b, ADM, A);
+        assert(isInside(page.text) && /href="\.\/\?tab=lecture"[^>]*><span[^>]*>🎓<\/span> 강의 자료/.test(page.text), 'the tab is not in the menu');
+        const p = await b.req(T);
+        assert(p.status === 200 && /🎓 강의 자료/.test(p.text), `tab → ${p.status}`);
+        assertLocked(p, 'lecture tab');
+        assert(!/<script|<style|\sstyle="|\son[a-z]+="|javascript:/i.test(p.text), 'the tab carries script / inline style / an event handler');
+        for (const a of ['lecture_add_link', 'lecture_add_file', 'lecture_settings']) assert(new RegExp(`name="action" value="${a}"`).test(p.text), `no ${a} form`);
+        assert(/<form method="post" action="\.\/" class="stack" enctype="multipart\/form-data">[\s\S]{0,400}name="action" value="lecture_add_file"/.test(p.text), 'the file form is not multipart');
+        assert(/type="file" name="files\[\]" multiple/.test(p.text), 'no multiple file input');
+        assert(!/<iframe|youtube-nocookie\.com\/embed\/[^<"]*"/.test(p.text.replace(/<code>[^<]*<\/code>/g, '')), 'the admin page frames something');
+        return 'forms: address · files (multipart) · settings';
+      });
+      await step('17.3', 'add by address: a YouTube address becomes a video (its 11-character id), a published slide address becomes slides, another https address a link; a hostile address is refused; a title with markup is shown as text', async () => {
+        let r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: `된장 이야기 ${XSS}`, address: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s', place: 'PL_DAECHEONG', audience: 'all', autoplay: '1', enabled: '1' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'ok' && /유튜브 영상/.test(flashOf(r.text).msg), `flash ${JSON.stringify(flashOf(r.text))}`);
+        assert(!rawXss(r.text), 'the title reached the page as markup');
+        assert(/&lt;img src=x onerror/.test(r.text), 'the escaped title is not on the page');
+        r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '구글 슬라이드', address: 'https://docs.google.com/presentation/d/e/2PACX-1vQabcdefghijklmnopqrstuvwxyz0123456789/pub?start=true', place: '', audience: 'member', enabled: '1' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'ok', `slides: ${JSON.stringify(flashOf(r.text))}`);
+        r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '기상청', address: 'https://www.kma.go.kr/', place: '', audience: 'all', enabled: '1' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'ok', `link: ${JSON.stringify(flashOf(r.text))}`);
+        const L = lectures();
+        assert(L.length === 3 && L[0].kind === 'youtube' && L[0].src === 'dQw4w9WgXcQ' && Number(L[0].autoplay) === 1 && L[0].place === 'PL_DAECHEONG', `rows ${JSON.stringify(L)}`);
+        assert(L[1].kind === 'slides' && /^https:\/\/docs\.google\.com\/presentation\/d\/e\/[A-Za-z0-9_-]+\/embed\?start=false/.test(L[1].src) && L[2].kind === 'link', 'kinds');
+        const n = L.length;
+        for (const bad of ['javascript:alert(1)', 'https://youtube.com@evil.example/watch?v=dQw4w9WgXcQ', 'https://evil.example/watch?v=dQw4w9WgXcQ"onload="x', 'http://example.org/', 'https://www.youtube.com/@channel', 'data:text/html,<script>alert(1)</script>', '']) {
+          r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '나쁜 주소', address: bad, enabled: '1' }, { page: '?tab=lecture' });
+          assert(flashOf(r.text)?.type === 'error' && !rawXss(r.text), `"${bad}" → ${JSON.stringify(flashOf(r.text))}`);
+        }
+        for (const badField of [{ place: 'PL_<script>' }, { place: '../../etc' }, { audience: 'root' }, { title: '' }, { title: 'x'.repeat(200) }]) {
+          r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '필드', address: 'https://youtu.be/dQw4w9WgXcQ', enabled: '1', ...badField }, { page: '?tab=lecture' });
+          assert(flashOf(r.text)?.type === 'error', `${JSON.stringify(badField)} → ${JSON.stringify(flashOf(r.text))}`);
+        }
+        assert(lectures().length === n, 'a refused form left a row');
+        ids.yt = Number(L[0].id); ids.slides = Number(L[1].id); ids.link = Number(L[2].id);
+        return '3 kinds from 3 addresses · 7 hostile addresses + 5 bad fields refused · the title is text';
+      });
+      await step('17.3', 'add by file: a pdf, a presentation (.pptx) and a deck of pictures are stored under data/lectures with random .bin names; the type comes from the content, never from the name', async () => {
+        let r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: 'PDF 강의', kind: 'pdf', place: 'PL_SARANG', audience: 'all', enabled: '1' }, [{ name: 'evil<script>.php', type: 'text/html', data: PDF }]);
+        assert(flashOf(r.text)?.type === 'ok', `pdf: ${JSON.stringify(flashOf(r.text))}`);
+        r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: 'PPT 강의', kind: 'pptx', place: '*', audience: 'all', enabled: '1' }, [{ name: 'deck.pptx', data: PPTX }]);
+        assert(flashOf(r.text)?.type === 'ok', `pptx: ${JSON.stringify(flashOf(r.text))}`);
+        r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: '그림 강의', kind: 'images', place: '', audience: 'all', enabled: '1' },
+          [{ name: '1.png', data: FX.pngBytes(320, 180, [200, 60, 60]) }, { name: '2.png', data: FX.pngBytes(320, 180, [60, 200, 60], '<script>alert(1)</script>') }, { name: '3.png', data: FX.pngBytes(320, 180, [60, 60, 200]) }]);
+        const fl = flashOf(r.text);
+        assert(fl?.type === 'ok' && /그림 2장/.test(fl.msg) && /받지 못한 파일 1개/.test(fl.msg), `deck: ${JSON.stringify(fl)}`);
+        const L = lectures();
+        ids.pdf = Number(L.find((x) => x.kind === 'pdf').id); ids.pptx = Number(L.find((x) => x.kind === 'pptx').id); ids.deck = Number(L.find((x) => x.kind === 'images').id);
+        const fp = filesOf(ids.pdf), fx = filesOf(ids.pptx), fd = filesOf(ids.deck);
+        assert(fp.length === 1 && fp[0].mime === 'application/pdf' && Number(fp[0].bytes) === PDF.length && /^\d{4}\/\d{2}\/[a-f0-9]{32}\.bin$/.test(fp[0].path), `pdf file row ${JSON.stringify(fp)}`);
+        assert(fx.length === 1 && /presentationml\.presentation$/.test(fx[0].mime) && Number(fx[0].w) === 3, `pptx file row ${JSON.stringify(fx)}`);
+        assert(fd.length === 2 && fd.every((f) => f.mime === 'image/png' && Number(f.w) === 320 && Number(f.h) === 180), `deck rows ${JSON.stringify(fd)}`);
+        assert(stored().length === 4, `stored files: ${stored().length}`);
+        const everywhere = JSON.stringify([L, fp, fx, fd]) + stored().join(' ');
+        assert(!/evil|\.php|deck\.pptx|1\.png/.test(everywhere), 'a client file name was kept');
+        assert(fs.existsSync(path.join(s.data, 'lectures/.htaccess')) && !fs.existsSync(path.join(s.site, 'uploads/lectures')), 'the files are not in the private folder');
+        return `pdf ${PDF.length} B · pptx 3 slides · 2 of 3 pictures (the one with a script was refused) · 4 files, names are 32 random hex + .bin`;
+      });
+      await step('17.3', 'hostile uploads are refused with a reason, leave no lecture, no row and no file behind, and are recorded (audit + security event)', async () => {
+        const before = { rows: lectures().length, files: stored().length };
+        const out = [];
+        for (const [label, kind, data] of FX.hostileFiles()) {
+          const r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: `나쁜 파일 ${label}`, kind, enabled: '1' }, [{ name: kind === 'images' ? 'a.png' : `a.${kind}`, data }]);
+          const fl = flashOf(r.text);
+          if (fl?.type !== 'error') out.push(`${label} → ${JSON.stringify(fl)}`);
+          if (rawXss(r.text)) out.push(`${label}: markup on the page`);
+        }
+        assert(!out.length, out.join(' | '));
+        assert(lectures().length === before.rows && stored().length === before.files, `left behind: ${lectures().length - before.rows} rows, ${stored().length - before.files} files`);
+        const ev = eventsOf(s, 'upload_rejected');
+        assert(ev.audit.length >= 20 && ev.sec.length >= 20, `events: audit ${ev.audit.length}, security ${ev.sec.length}`);
+        assert(ev.sec.some((e) => e.severity === 'warn') && !/a\.png|a\.pdf|a\.pptx/.test(JSON.stringify(ev)), 'no warn event / a file name in the events');
+        // the wrong number of files, the wrong kind word, no file at all
+        let r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: '둘', kind: 'pdf', enabled: '1' }, [{ name: 'a.pdf', data: PDF }, { name: 'b.pdf', data: PDF }]);
+        assert(flashOf(r.text)?.type === 'error', 'two pdf files were taken');
+        r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: '종류', kind: 'exe', enabled: '1' }, [{ name: 'a.pdf', data: PDF }]);
+        assert(flashOf(r.text)?.type === 'error', 'an unknown kind was taken');
+        r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: '없음', kind: 'pdf', enabled: '1' }, []);
+        assert(flashOf(r.text)?.type === 'error', 'an upload without a file was taken');
+        assert(lectures().length === before.rows && stored().length === before.files, 'something stayed');
+        return `${FX.hostileFiles().length} hostile files refused · ${ev.sec.length} security events · nothing left behind`;
+      });
+      await step('17.3', 'the upload path is for the elevated administrator only: no token 403, a wrong token 403, another site 403, an app-only admin 403, a player 403, a visitor refused — and a file sent to any other action is refused at the door', async () => {
+        const before = { rows: lectures().length, files: stored().length };
+        const good = { action: 'lecture_add_file', tab: 'lecture', title: '몰래', kind: 'pdf', enabled: '1' };
+        let r = await upload(b, good, [{ name: 'a.pdf', data: PDF }], { token: null });
+        assert(r.status === 403 && !r.location, `no token → ${r.status}`);
+        r = await upload(b, good, [{ name: 'a.pdf', data: PDF }], { token: 'a'.repeat(64) });
+        assert(r.status === 403, `wrong token → ${r.status}`);
+        r = await upload(b, good, [{ name: 'a.pdf', data: PDF }], { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } });
+        assert(r.status === 403, `cross-site → ${r.status}`);
+        const app = new Browser(sv.base, 'app-admin');
+        await apiLogin(app, A);
+        r = await upload(app, good, [{ name: 'a.pdf', data: PDF }]);
+        assert(r.status === 403, `app-only admin → ${r.status}`);
+        const player = new Browser(sv.base, 'player');
+        await apiLogin(player, U);
+        r = await upload(player, good, [{ name: 'a.pdf', data: PDF }]);
+        assert(r.status === 403, `player → ${r.status}`);
+        const anon = new Browser(sv.base, 'anon');
+        r = await upload(anon, good, [{ name: 'a.pdf', data: PDF }]);
+        assert(r.status === 401 || r.status === 403, `visitor → ${r.status}`);
+        for (const br of [app, player, anon]) for (const q of [`?lecfile=${ids.pdf}.0`, `?lecfile=${ids.deck}.0`]) { const g = await br.bytes(ADM + q); assert(g.status === 404 && !g.text.includes('%PDF'), `${br.label} read ${q}: ${g.status}`); }
+        // a file to an action that is not an upload action: refused before the session (400), also for the administrator
+        for (const action of ['cleanup', 'lecture_save', 'lecture_add_link', 'role', 'login']) {
+          r = await upload(b, { action, tab: 'lecture', title: 'x', address: 'https://youtu.be/dQw4w9WgXcQ' }, [{ name: 'a.pdf', data: PDF }]);
+          assert(r.status === 400 && !r.location, `a file to ${action} → ${r.status}`);
+        }
+        // the field name is fixed: a file under another name is not read
+        r = await uploadF(b, good, [{ name: 'a.pdf', data: PDF }], { field: 'photo' });
+        assert(flashOf(r.text)?.type === 'error', 'a file under another field name was taken');
+        assert(lectures().length === before.rows && stored().length === before.files, 'something was stored');
+        const still = await b.req(T);
+        assert(isInside(still.text), 'the administrator was signed out by the refusals');
+        return 'no token · wrong token · cross-site · app-only admin · player · visitor: refused; 5 other actions refuse a file; nothing stored';
+      });
+      await step('17.3', 'a body larger than the server accepts gets a plain answer (413 with the limit in words), not a token error', async () => {
+        const big = Buffer.alloc(9 * 1048576, 0x41);
+        const r = await upload(b, { action: 'lecture_add_file', tab: 'lecture', title: '큰 파일', kind: 'pdf', enabled: '1' }, [{ name: 'big.pdf', data: big }]);
+        assert(r.status === 413 && /받을 수 있는 크기/.test(r.text) && !/보안 토큰/.test(r.text), `→ ${r.status} ${r.text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 160)}`);
+        // php -S here takes 2 MB per file: a 2.5 MB pdf comes back as "too large" in words
+        const mid = Buffer.concat([PDF.subarray(0, PDF.length - 6), Buffer.alloc(2.5 * 1048576, 0x20), Buffer.from('\n%%EOF\n')]);
+        const r2 = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: '중간 파일', kind: 'pdf', enabled: '1' }, [{ name: 'mid.pdf', data: mid }]);
+        const lim = php(s, 'ini_get("upload_max_filesize")');
+        if (Buffer.byteLength(mid) > (parseInt(lim, 10) || 2) * 1048576) assert(flashOf(r2.text)?.type === 'error' && /너무 커요/.test(flashOf(r2.text).msg), `2.5 MB with upload_max_filesize ${lim}: ${JSON.stringify(flashOf(r2.text))}`);
+        assert(!lectures().some((x) => /큰 파일|중간 파일/.test(x.title)) || flashOf(r2.text)?.type === 'ok', 'a refused upload left a lecture');
+        return `9 MB → 413 in words · upload_max_filesize ${lim}`;
+      });
+      await step('17.3', 'the preview: pictures, the pdf and the pptx come through the admin entry (the stored type, nosniff, no-store, a sandbox policy); a video is shown as its number and links, never framed', async () => {
+        const e = await b.req(`${T}&edit=${ids.deck}`);
+        assert(e.status === 200 && new RegExp(`<img class="photo" src="\\./\\?lecfile=${ids.deck}\\.0"`).test(e.text), 'no thumbnails in the edit card');
+        assertLocked(e, 'edit card');
+        const img = await b.bytes(`${ADM}?lecfile=${ids.deck}.0`);
+        assert(img.status === 200 && img.headers.get('content-type') === 'image/png' && img.buf.subarray(1, 4).toString() === 'PNG', `picture → ${img.status} ${img.headers.get('content-type')}`);
+        for (const [h, rx] of [['x-content-type-options', /^nosniff$/], ['cache-control', /no-store/], ['content-security-policy', /default-src 'none'.*sandbox/], ['content-disposition', /^inline; filename="lecture-\d+-1\.png"$/]]) assert(rx.test(img.headers.get(h) || ''), `picture ${h}: ${img.headers.get(h)}`);
+        const pdf = await b.bytes(`${ADM}?lecfile=${ids.pdf}.0`);
+        assert(pdf.status === 200 && pdf.headers.get('content-type') === 'application/pdf' && pdf.buf.equals(PDF) && /sandbox/.test(pdf.headers.get('content-security-policy') || ''), `pdf → ${pdf.status}`);
+        const px = await b.bytes(`${ADM}?lecfile=${ids.pptx}.0`);
+        assert(px.status === 200 && /^attachment; filename="lecture-\d+\.pptx"$/.test(px.headers.get('content-disposition') || '') && px.buf.equals(PPTX), `pptx → ${px.status} ${px.headers.get('content-disposition')}`);
+        for (const q of ['0.0', `${ids.pdf}.7`, '99999.0', `${ids.pdf}`, `${ids.pdf}.0/../../config`, '../../config/config.php', `${ids.pdf}.0%00`, 'abc']) { const g = await b.bytes(`${ADM}?lecfile=${q}`); assert(g.status === 404, `?lecfile=${q} → ${g.status}`); }
+        const y = await b.req(`${T}&edit=${ids.yt}`);
+        assert(/<code>dQw4w9WgXcQ<\/code>/.test(y.text) && /href="\.\.\/\?lecture=\d+"/.test(y.text) && !/<iframe/i.test(y.text), 'the video preview');
+        assert(!rawXss(y.text), 'the title is markup in the edit card');
+        return 'picture · pdf · pptx streamed with fixed headers · 8 bad addresses 404 · the video is not framed';
+      });
+      await step('17.3', 'edit, replace the file, reorder, switch off / on, pictures move and go — every change through a POST form', async () => {
+        let r = await admF(b, ADM, { action: 'lecture_save', tab: 'lecture', id: String(ids.yt), edit: String(ids.yt), title: '된장 이야기 (고침)', address: 'https://youtu.be/aaaaaaaaaaa', place: '*', audience: 'paid', enabled: '1' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'ok' && /name="action" value="lecture_save"/.test(r.text), `save: ${JSON.stringify(flashOf(r.text))} (back in the edit card: ${/lecture_save/.test(r.text)})`);
+        let row = lectures().find((x) => Number(x.id) === ids.yt);
+        assert(row.title === '된장 이야기 (고침)' && row.src === 'aaaaaaaaaaa' && row.place === '*' && row.audience === 'paid' && Number(row.autoplay) === 0, `row ${JSON.stringify(row)}`);
+        const oldPath = filesOf(ids.pdf)[0].path;
+        const PDF2 = FX.pdfBytes('Lecture two');
+        r = await uploadF(b, { action: 'lecture_replace', tab: 'lecture', id: String(ids.pdf), edit: String(ids.pdf) }, [{ name: 'new.pdf', data: PDF2 }]);
+        assert(flashOf(r.text)?.type === 'ok', `replace: ${JSON.stringify(flashOf(r.text))}`);
+        const nf = filesOf(ids.pdf);
+        assert(nf.length === 1 && nf[0].path !== oldPath && !fs.existsSync(path.join(s.data, 'lectures', oldPath)) && fs.readFileSync(path.join(s.data, 'lectures', nf[0].path)).equals(PDF2), 'the old file stayed / the new one is wrong');
+        r = await uploadF(b, { action: 'lecture_replace', tab: 'lecture', id: String(ids.pdf), edit: String(ids.pdf) }, [{ name: 'deck.pptx', data: PPTX }]);
+        assert(flashOf(r.text)?.type === 'error' && filesOf(ids.pdf)[0].path === nf[0].path, 'a pptx replaced a pdf');
+        r = await uploadF(b, { action: 'lecture_images', tab: 'lecture', id: String(ids.deck), edit: String(ids.deck) }, [{ name: '4.png', data: FX.pngBytes(320, 180, [9, 9, 9]) }]);
+        assert(flashOf(r.text)?.type === 'ok' && filesOf(ids.deck).length === 3, `add a picture: ${JSON.stringify(flashOf(r.text))}`);
+        const seq = () => filesOf(ids.deck).map((f) => f.sha256.slice(0, 6));
+        const s0 = seq();
+        r = await admF(b, ADM, { action: 'lecture_file', tab: 'lecture', id: String(ids.deck), edit: String(ids.deck), pick: '2:up' }, { page: '?tab=lecture' });
+        assert(JSON.stringify(seq()) === JSON.stringify([s0[0], s0[2], s0[1]]), `move: ${seq()}`);
+        r = await admF(b, ADM, { action: 'lecture_file', tab: 'lecture', id: String(ids.deck), edit: String(ids.deck), pick: '0:del' }, { page: '?tab=lecture' });
+        assert(JSON.stringify(seq()) === JSON.stringify([s0[2], s0[1]]) && filesOf(ids.deck).map((f) => Number(f.n)).join() === '0,1', `remove: ${seq()}`);
+        const order = () => lectures().map((x) => Number(x.id));
+        const o0 = order();
+        r = await admF(b, ADM, { action: 'lecture_row', tab: 'lecture', pick: `${o0[2]}:up` }, { page: '?tab=lecture' });
+        assert(JSON.stringify(order()) === JSON.stringify([o0[0], o0[2], o0[1], ...o0.slice(3)]), `reorder: ${order()}`);
+        r = await admF(b, ADM, { action: 'lecture_row', tab: 'lecture', pick: `${ids.link}:off` }, { page: '?tab=lecture' });
+        assert(Number(lectures().find((x) => Number(x.id) === ids.link).enabled) === 0 && /꺼짐/.test(r.text), 'switch off');
+        for (const pick of ['abc', `${ids.link}:drop`, '0:on', `${ids.link}:on;DROP TABLE lectures`, '']) { r = await admF(b, ADM, { action: 'lecture_row', tab: 'lecture', pick }, { page: '?tab=lecture' }); assert(flashOf(r.text)?.type === 'error', `pick "${pick}" → ${JSON.stringify(flashOf(r.text))}`); }
+        return 'saved · file replaced (old file gone) · picture added, moved, removed · rows reordered · switched off';
+      });
+      await step('17.3', 'the app sees what the tab did: api/lecture/list.php lists the switched-on lectures in order for the caller\'s audience, api/lecture/file.php serves their files — and nothing else', async () => {
+        const anon = new Browser(sv.base, 'visitor');
+        const l = await anon.req('api/lecture/list.php');
+        assert(l.status === 200, `list → ${l.status}`);
+        const seen = l.data.lectures.map((x) => x.id);
+        const want = lectures().filter((x) => Number(x.enabled) === 1 && x.audience === 'all').map((x) => Number(x.id));
+        assert(JSON.stringify(seen) === JSON.stringify(want), `a visitor sees ${seen} (want ${want})`);
+        assert(!seen.includes(ids.yt) && !seen.includes(ids.slides) && !seen.includes(ids.link), 'a paid / member / switched-off lecture is listed for a visitor');
+        const deck = l.data.lectures.find((x) => x.id === ids.deck);
+        assert(deck.files.length === 2 && deck.files[0].type === 'image/png' && !JSON.stringify(l.data).includes('.bin') && !/sha256|"path"|audience/.test(JSON.stringify(l.data)), 'the list shape');
+        const f = await anon.bytes(`api/lecture/file.php?id=${ids.deck}&n=1`);
+        assert(f.status === 200 && f.headers.get('content-type') === 'image/png' && /^private/.test(f.headers.get('cache-control') || ''), `file → ${f.status}`);
+        const member = new Browser(sv.base, 'member');
+        await apiLogin(member, U);
+        const lm = await member.req('api/lecture/list.php');
+        assert(lm.data.lectures.some((x) => x.id === ids.slides) && !lm.data.lectures.some((x) => x.id === ids.yt), 'a member must see the member lecture and not the paid one');
+        const adminApp = new Browser(sv.base, 'admin-app');
+        await apiLogin(adminApp, A);
+        const la = await adminApp.req('api/lecture/list.php');
+        assert(la.data.lectures.some((x) => x.id === ids.yt) && !la.data.lectures.some((x) => x.id === ids.link), 'an administrator sees every switched-on lecture (and no switched-off one)');
+        return `visitor ${seen.length} · member ${lm.data.lectures.length} · administrator ${la.data.lectures.length} lectures`;
+      });
+      await step('17.3', 'settings and delete: a lower pdf limit refuses the next upload; deleting needs the confirmation and removes the rows and the files; every change is an audit row', async () => {
+        let r = await admF(b, ADM, { action: 'lecture_settings', tab: 'lecture', auto_open: '1', pdf_max_bytes: '1', pptx_max_bytes: '50', image_max_bytes: '5', images_max: '80', 'slide_hosts[]': 'docs.google.com' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'ok', `settings: ${JSON.stringify(flashOf(r.text))}`);
+        const over = Buffer.concat([PDF.subarray(0, PDF.length - 6), Buffer.alloc(1.2 * 1048576, 0x20), Buffer.from('\n%%EOF\n')]);
+        r = await uploadF(b, { action: 'lecture_add_file', tab: 'lecture', title: '1MB 넘는 PDF', kind: 'pdf', enabled: '1' }, [{ name: 'a.pdf', data: over }]);
+        assert(flashOf(r.text)?.type === 'error' && /너무 커요/.test(flashOf(r.text).msg), `over the new limit: ${JSON.stringify(flashOf(r.text))}`);
+        r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '오피스', address: 'https://view.officeapps.live.com/op/embed.aspx?src=https://example.org/a.pptx', enabled: '1' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'error', 'a slide host that was switched off was accepted');
+        for (const bad of [{ pdf_max_bytes: '0' }, { pdf_max_bytes: '99999' }, { images_max: 'many' }]) {
+          r = await admF(b, ADM, { action: 'lecture_settings', tab: 'lecture', auto_open: '1', pdf_max_bytes: '30', pptx_max_bytes: '50', image_max_bytes: '5', images_max: '80', ...bad }, { page: '?tab=lecture' });
+          assert(flashOf(r.text)?.type === 'error', `settings ${JSON.stringify(bad)} accepted`);
+        }
+        const files = filesOf(ids.deck).map((f) => f.path);
+        r = await admF(b, ADM, { action: 'lecture_delete', tab: 'lecture', id: String(ids.deck) }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'error' && lectures().some((x) => Number(x.id) === ids.deck), 'deleted without the confirmation');
+        r = await admF(b, ADM, { action: 'lecture_delete', tab: 'lecture', id: String(ids.deck), sure: '1' }, { page: '?tab=lecture' });
+        assert(flashOf(r.text)?.type === 'ok' && !lectures().some((x) => Number(x.id) === ids.deck) && filesOf(ids.deck).length === 0, 'delete');
+        assert(files.every((p) => !fs.existsSync(path.join(s.data, 'lectures', p))), 'the files of a deleted lecture stayed');
+        const events = new Set(dbAll(s, "SELECT event FROM audit_log WHERE event LIKE 'lecture_%' OR event = 'setting_changed'").map((x) => x.event));
+        for (const ev of ['lecture_created', 'lecture_updated', 'lecture_switched', 'lecture_moved', 'lecture_file', 'lecture_file_moved', 'lecture_file_removed', 'lecture_deleted', 'setting_changed']) assert(events.has(ev), `no audit row ${ev}`);
+        const g = await b.req(`${ADM}?tab=lecture&action=lecture_delete&id=${ids.pdf}&sure=1`);
+        assert(g.status === 200 && lectures().some((x) => Number(x.id) === ids.pdf), 'a GET deleted a lecture');
+        return 'limit applied at once · delete needs the tick · rows and files gone · 9 kinds of audit rows · GET changes nothing';
       });
     } finally { await sv.stop(); }
   }
