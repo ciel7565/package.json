@@ -404,6 +404,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
    *  sight) only clears what would rise above that line less `m` metres: `top` is the highest the tree could reach. */
   function clearHit(c, x, z, pad, top) {
     if (Math.hypot(x - c.x, z - c.z) >= c.r + pad) return false;
+    if (c.behind && (x - c.x) * c.behind[0] + (z - c.z) * c.behind[1] > 0) return true;   // (in front of the lookout: all clear)
     const L = c.below; if (!L || !(top === top)) return true;
     const dx = L[3] - L[0], dz = L[5] - L[2], q = dx * dx + dz * dz || 1;
     const t = clamp(((x - L[0]) * dx + (z - L[2]) * dz) / q, 0, 1);

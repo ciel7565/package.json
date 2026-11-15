@@ -360,8 +360,14 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     // 4. wild ground — the mountain slopes inside the rectangle, every grove of the plan, anything steep: forest floor, rock
     const slope = 1 - ny, lawnKeep = w(CH.lawn);
     const wild = Math.max(w(CH.wild), w(CH.forest), smooth(0.12, 0.3, slope + (n2 - 0.5) * 0.1)) * (1 - lawnKeep);
-    if (wild > 0) { _c2.copy(col.forest).lerp(col.forestB, n2).lerp(col.lawnDeep, smooth(0.62, 0.9, n1) * 0.3); out.lerp(_c2, wild); over(wild, 0, 0.75, 0, 0); }
-    const rk = Math.max(smooth(0.5, 0.74, slope + (n2 - 0.5) * 0.15) * (1 - 0.55 * w(CH.forest)), w(CH.rock) * (0.75 + 0.25 * n2));   // (forest holds the steep slopes; rock only on faces)
+    if (wild > 0) {
+      _c2.copy(col.forest).lerp(col.forestB, n2).lerp(col.lawnDeep, smooth(0.62, 0.9, n1) * 0.3);
+      // steep forested slopes (the faces of 만장대): a dark mottled shrub-and-pine skin instead of bare earth
+      const sk = w(CH.forest) * smooth(0.25, 0.55, slope);
+      if (sk > 0) _c2.multiplyScalar(1 - sk * (0.35 + 0.3 * smooth(0.4, 0.7, n3)));
+      out.lerp(_c2, wild); over(wild, 0, 0.75 - 0.3 * sk, 0, 0);
+    }
+    const rk = Math.max(smooth(0.5, 0.74, slope + (n2 - 0.5) * 0.15) * (1 - 0.85 * w(CH.forest)), w(CH.rock) * (0.75 + 0.25 * n2));   // (forest holds the steep slopes; rock only on faces)
     if (rk > 0) { _c2.copy(col.rock).lerp(col.rockB, n3).lerp(col.siteB, smooth(0.5, 0.9, n1) * 0.25); out.lerp(_c2, rk); over(rk, 0, 0, 0, 1); }
     // the river: pebbles on the banks, a dark bed under the water
     const wy = C.waterY(x, z);

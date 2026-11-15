@@ -210,7 +210,7 @@
   const SIGHT = [r3(HERO.cam[0]), r3(HERO.cam[1]), r3(HERO.cam[2]), r3(HERO.look[0]), r3(HERO.look[1] - 2), r3(HERO.look[2])];
   // (the two clearings on the camera's side keep only what would rise to 3 m under the line from the hero camera to the
   // visitor: the back slope of the crag below that line carries forest, so the lower third of the hero view is canopy)
-  const CRAG_CLEAR = [{ x: DECK.x, z: DECK.z, r: 16 }, { x: REST.x, z: REST.z, r: 7 }, { x: r3((DECK.x + HERO.cam[0]) / 2), z: r3((DECK.z + HERO.cam[2]) / 2), r: 10, below: SIGHT, m: 3 }, { x: r3(HERO.cam[0]), z: r3(HERO.cam[2]), r: 12, below: SIGHT, m: 3 }]
+  const CRAG_CLEAR = [{ x: DECK.x, z: DECK.z, r: 16, behind: [r3(Math.sin(HERO.az)), r3(-Math.cos(HERO.az))], below: SIGHT, m: 3 }, { x: REST.x, z: REST.z, r: 7 }, { x: r3((DECK.x + HERO.cam[0]) / 2), z: r3((DECK.z + HERO.cam[2]) / 2), r: 10, below: SIGHT, m: 3 }, { x: r3(HERO.cam[0]), z: r3(HERO.cam[2]), r: 12, below: SIGHT, m: 3 }]
     .concat([[8, 8], [16, 10], [25, 11], [34, 11], [43, 9]].map(([t, r]) => ({ x: cragXZ(t, 1.5)[0], z: cragXZ(t, 1.5)[1], r })));
   // stair legs (x, z[, y]) from the roundabout up the north face of the crag to the rest terrace (y from the ground + 0.25)
   // … in crag coordinates [t, l]: a zigzag on trestles from the gate road to the rest terrace, on to the crest, and the
