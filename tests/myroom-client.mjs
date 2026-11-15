@@ -184,7 +184,8 @@ async function boot(page, quality, o = {}) {
   await page.waitForFunction(() => window.G && window.G.ready === true && !!window.G.state && !!window.G.sys?.places && !!window.G.sys?.player?._ready && !!window.G.sys?.myroom, null, { timeout: TIMEOUT, polling: 250 });
   // an autostart guest is a new profile in easy mode (03-state: easyMode is a profile key, the device setting does not
   // reach it): the normal-mode parts switch the profile over as a grown-up would
-  if (o.easy === false) await page.evaluate(() => Promise.race([Promise.resolve(G.easy?.set?.(false)), new Promise((r) => setTimeout(r, 1500))]));
+  // (G.easy.set(false) asks the grown-up's gate first: the test sets the profile's setting directly, as the gate would)
+  if (o.easy === false) await page.evaluate(() => { G.setSetting('easyMode', false); return G.easy.on; });
   // messages that slide in must not swallow the test's clicks (they are not what is tested here)
   await page.evaluate(() => {
     const root = document.getElementById('toast-root');
