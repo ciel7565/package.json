@@ -1324,7 +1324,7 @@
         label: () => {
           const s = self._state(J.id);
           if (!s) return '장독 확인';
-          if (!s.owned) return '잠긴 장독 살펴보기';
+          if (!s.owned || lockOf(J.id, s)) return '잠긴 장독 살펴보기';
           if (s.status === 'COMPLETE') return '장독 확인 · 수령하기';
           return '장독 확인';
         },
@@ -1889,7 +1889,7 @@
     _kidAction(id) {
       const s = this._state(id);
       if (!s) return { label: '장독 보기', emoji: '🏺' };
-      if (!s.owned) return { label: '잠긴 장독', emoji: '🔒' };
+      if (!s.owned || lockOf(id, s)) return { label: '잠긴 장독', emoji: '🔒' };
       const rec = recipeOf(s.recipeId);
       if (s.status === 'COMPLETE' && rec) return { label: '꺼내기!', emoji: '🎁' };
       if (ACTIVE.has(s.status) && rec) return { label: '장독 돌보기', emoji: rec.icon || '🏺' };
@@ -1900,7 +1900,7 @@
       const J = this._jars.get(id);
       const s = this._simulate(id);
       if (!J || !s) return;
-      if (s.owned && this._near(J)) {
+      if (s.owned && !lockOf(id, s) && this._near(J)) {
         // the one tap IS the look at my jar: "내 장독을 살펴봐요" counts like opening the card (openJar emits it too)
         const fast = (s.status === 'COMPLETE' && recipeOf(s.recipeId)) || OPEN_FOR_START.has(s.status) || !s.recipeId;
         if (fast) {
