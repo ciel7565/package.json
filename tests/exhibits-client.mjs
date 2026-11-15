@@ -778,7 +778,7 @@ try {
       await shot(pm, `phone-${name}-player.png`);
       await pm.evaluate(() => { G.ui.modal.closeAll(); });
       check(`phone ${w}×${h}: the card fits, no sideways scrolling, kid line and picture on the screen, buttons 56 px or more`, c.easy && c.fits && c.noHScroll && c.kid && c.pic && c.small.length === 0, JSON.stringify(c));
-      check(`phone ${w}×${h}: the 도감 fits with its seven rooms and stamps, buttons 56 px or more`, b.fits && b.noHScroll && b.tabs === 7 && b.firstStamp && b.small.length === 0, JSON.stringify(b));
+      check(`phone ${w}×${h}: the 도감 fits with its seven rooms and stamps, buttons 56 px or more`, b.fits && b.noHScroll && b.tabs === (DATA ? DATA.exhibitRooms.length : 7) /* [rooms2] one tab per room */ && b.firstStamp && b.small.length === 0, JSON.stringify(b));
       check(`phone ${w}×${h}: the player shows the picture, the words and ⏮ ▶ ⏭ at once (picture ${m.cw} px wide)`, m.fits && m.noHScroll && m.canvas && m.cap && m.ctl && m.small.length === 0 && m.cw >= 240, JSON.stringify(m));
     }
     check('phone part: no page error', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));

@@ -321,7 +321,7 @@ G.data.achievements = {
   ACH_EXHIBIT10: { name: '눈 밝은 구경꾼', icon: '🔎', desc: '방 안의 전시를 10가지 살펴보았습니다.', condition: { stat: 'exhibitsSeen', gte: 10 }, reward: { coin: 300 } },
   ACH_EXHIBIT40: { name: '옛 살림 박사', icon: '🧑‍🏫', desc: '방 안의 전시를 40가지 살펴보았습니다.', condition: { stat: 'exhibitsSeen', gte: 40 }, reward: { coin: 800, edu: 20 } },
   ACH_ROOMBOOK1: { name: '첫 도감 완성', icon: '🏅', desc: '방 한 곳의 집 구경 도감을 완성했습니다.', condition: { stat: 'exhibitRooms', gte: 1 }, reward: { coin: 400 } },
-  ACH_ROOMBOOK_ALL: { name: '집 구경 도감 완성', icon: '🏆', desc: '일곱 곳 모두의 집 구경 도감을 완성했습니다.', condition: { stat: 'exhibitRooms', gte: 7 }, reward: { coin: 1500, title: '한옥 도감 지킴이' } },
+  ACH_ROOMBOOK_ALL: { name: '집 구경 도감 완성', icon: '🏆', desc: '열한 곳 모두의 집 구경 도감을 완성했습니다.', condition: { stat: 'exhibitRooms', gte: 11 }, reward: { coin: 1500, title: '한옥 도감 지킴이' } },   // [rooms2] 7 → 11 rooms (58-interiors-d.js)
   ACH_MOTION5: { name: '그림으로 배우기', icon: '🎞️', desc: '움직이는 그림 5편을 끝까지 보았습니다.', condition: { stat: 'motionsSeen', gte: 5 }, reward: { coin: 400, edu: 15 } },
 };
 for (const [id, a] of Object.entries(G.data.achievements)) a.id = id;

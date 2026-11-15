@@ -232,7 +232,8 @@
       else R.add('glow', geo.cyl(0.12, 0.12, 0.3, 10), M(x, 3.5, z), '#ffd9a8', { cast: false });
     }
     A('chorong', { x: -1.86, y: 2.25, z: 2.15 });
-    for (const x of [-3.7, 3.7]) for (const z of lz) ctx.light({ x, y: 3.3, z, color: '#ffc07a', intensity: 5.5, distance: 11, decay: 1.6, flicker: 0.04, day: 0.2 });
+    // (the engine lends at most seven pooled lamps to a room: two wide ones light the seats)
+    for (const x of [-3.7, 3.7]) ctx.light({ x, y: 3.4, z: 0.2, color: '#ffc07a', intensity: 7, distance: 13, decay: 1.5, flicker: 0.04, day: 0.2 });
     ctx.light({ x: 0, y: 3.4, z: -5.0, color: '#ffd29a', intensity: 7, distance: 13, decay: 1.6, day: 0.25 });
     ctx.light({ x: 0, y: 2.8, z: 7.0, color: '#ffb66a', intensity: 3.5, distance: 8, decay: 1.8, flicker: 0.05, day: 0.2 });
     K.dust(R, { count: 220 });
@@ -480,7 +481,7 @@
       light: { hemi: { sky: '#d4dbe2', ground: '#6b6358', intensity: shadowed ? 0.32 : 0.7 }, exposure: 0.95 },
     });
     const A = (key, spot) => ctx.anchor(key, spot);
-    if (has('lightShafts')) K.lightShafts(R, { alpha: 0.05, color: '#ffe6c0', len: 6 });
+    if (has('lightShafts')) K.lightShafts(R, { alpha: 0.025, color: '#ffe6c0', len: 5 });
     const stone = (x, z, w, d, h) => {
       K.block(R, { x, z, w, h, d, mat: 'stone', tint: '#9a9384', bevel: 0.035 });
       // a row of field stones along the front edge of the 단
@@ -552,9 +553,11 @@
     fillShelf(ws, PI / 2, 1.4, 3, (p, k, l) => K.pot(R, { kind: l === 2 ? 'bottle' : 'danji', x: p.x, y: p.y, z: p.z, s: l === 2 ? 0.8 : 0.62 + (k % 2) * 0.1, lid: l !== 2, tint: l === 2 ? '#4a3424' : (k + l) % 2 ? '#6e3f24' : '#7a4a2c' }));
     R.block(-7.55, -0.4, 0.23, 0.82, { maxY: 1.85 });
     A('jangajji', { x: -7.0, y: 1.1, z: -0.4 });
-    const jb = myJarsBoard(ctx, R, 'E', 5.0, 1.62);
+    const jb = myJarsBoard(ctx, R, 'E', 5.4, 1.55);
     A('ttukkeong', { x: jb.x - 0.5, y: 1.0, z: jb.z + 0.9 });
-    R.shelfWall('E', 3, { levels: 2, slots: 3, w: 1.9, y: 0.95, gap: 0.5 }).forEach((sp, i) => A('shelf:' + i, sp));
+    // the lecture screen on the east wall by the door (reached from the gap between the island and the south row)
+    lectureScreen(R, ctx, { side: 'E', u: 7.6, v: 1.95, w: 1.6, n: 0.08, top: 2.85 });
+    R.shelfWall('E', 3, { levels: 2, slots: 3, w: 1.9, y: 0.6, gap: 0.4 }).forEach((sp, i) => A('shelf:' + i, sp));
 
     // ---- light: two lanterns inside the door (warm), a cool fill over the jars; dust in the shafts
     for (const x of [-1.5, 1.5]) {
@@ -667,8 +670,10 @@
     if (has('bojagi')) { K.bojagi(R, { x: 5.15, y: dt, z: 2.05, w: 0.32, h: 0.2, tint: '#2f6a58', trim: '#c9a24a' }); K.bojagi(R, { x: 4.7, y: dt, z: 2.3, w: 0.24, h: 0.15, tint: '#a8322c', trim: '#2f4a80' }); }
     R.block(4.6, 2.0, 0.97, 0.45, { maxY: 0.8 });
     R.planItem(4.6, 2.0, 1.9, 0.85, 'rgba(170,120,75,.85)');
-    if (has('jeoul')) { K.jeoul(R, R.wm('E', 1.4, 2.05, 0.06), { wall: 'E' }); }
-    A('jeoul', { x: 5.4, y: 1.35, z: -3.1 });
+    if (has('jeoul')) { K.jeoul(R, R.wm('W', 7.5, 2.05, 0.06), { wall: 'W' }); }
+    A('jeoul', { x: -5.4, y: 1.35, z: -3.0 });
+    // the lecture screen on the east wall, north bay
+    lectureScreen(R, ctx, { side: 'E', u: 1.6, v: 1.65, w: 1.6, n: 0.08, top: 2.55 });
 
     // ---- by the door: a 지게 with a bundle (the pedlar's), a broom and straw shoes; 곶감 strings that sway
     if (has('jige')) K.jige(R, { x: -5.4, z: 3.95, rotY: PI });
