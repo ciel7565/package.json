@@ -894,8 +894,16 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         const pad = JR / rmid, a0 = g.amin - pad, a1 = g.amax + pad, len = (a1 - a0) * rmid;
         const piece = clamp(Math.sqrt(8 * rin * 0.12), 2.4, 7), pieces = Math.max(1, Math.ceil(len / piece)), da = (a1 - a0) / pieces;
         for (let k = 0; k < pieces; k++) {
-          const am = a0 + (k + 0.5) * da, half = da / 2, rOut = rout * Math.cos(half), rc = (rin + rOut) / 2;
-          add({ x: g.R.cx + Math.cos(am) * rc, z: g.R.cz + Math.sin(am) * rc, hw: rout * Math.sin(half) + 0.02, hd: (rOut - rin) / 2, rot: Math.atan2(Math.cos(am), Math.sin(am)) });
+          const half = da / 2, rOut = rout * Math.cos(half), rc = (rin + rOut) / 2;
+          let am = a0 + (k + 0.5) * da, hw = rout * Math.sin(half) + 0.02;
+          // [complex-look] a straight box reaches past its arc at the inner corners: the end pieces of a band are turned
+          // in so their aisle-side corner stays on the band's edge (plan v2's 3.2 m aisles stay 2.9 m wide for the walker)
+          if (pieces === 1) hw = Math.min(hw, rin * Math.tan(half));
+          else {
+            if (k === 0) am = Math.max(am, a0 + Math.atan(hw / rin));
+            if (k === pieces - 1) am = Math.min(am, a1 - Math.atan(hw / rin));
+          }
+          add({ x: g.R.cx + Math.cos(am) * rc, z: g.R.cz + Math.sin(am) * rc, hw, hd: (rOut - rin) / 2, rot: Math.atan2(Math.cos(am), Math.sin(am)) });
         }
       }
       // grid strips: (slot, row pair) → runs along the row split at the cross aisles
