@@ -46,7 +46,7 @@
 // | overflow field                | x 100 … 146, z −70 … −18             | any kind on a 2 m grid                                      |
 // | 만장대 전망대 (the lookout)    | crag summit (−126, 160), pulpit floor y 62.6 (≈ 62 m over the plaza) | round stone pulpit r 2.6 with a low rail; four timber flights and two stone flights (≈ 33°) from the gate road at (−99.4, 100.2) over the rest terrace (−113.2, 118.6, y 26.9); 🚡 lift from the plaza (−74, 49) |
 // | hero view (= image 3)         | a visitor on the pulpit, follow camera 34 m behind at pitch 0.55, aimed 38° east of north | viewpoint `hero`   |
-// | aerial camera (= image 3)     | (−105.5, 132.7, 234.9) → (−22.6, 0, 30.8), vfov 44 | fitted to 11 landmarks of the picture with clear lines of sight over the south ridge |
+// | aerial camera (= image 3)     | (−182, 94, 120) → (−18, 5, 34), vfov 48 | from the west-south-west: the building in three-quarter view, the circle in front right |
 // | slots, default preset         | J01 GC-SW · J02 GC-NW · J03 GC-NE · J04 GC-SE · J05 AM-W · J06 AM-E · P01 N · P02 E · P03 SE · S01 houses 1–4 · S02 houses 5–8 |
 // | capacity                      | jar slot 1,000 · plot slot 1,000 · store slot 500 · overflow on demand | default 10,000 = exactly placed          |
 //
@@ -199,8 +199,11 @@
     const sx = DECK.x - CRAG_V[0] * 0.5, sz = DECK.z - CRAG_V[1] * 0.5, ly = DECK.y + 1.131 + 1.2325;
     return { bearing: PI - a, az: a, stand: [sx, sz], dist, pitch, fov, look: [sx, ly, sz], cam: [sx - vx * Math.cos(pitch) * dist, ly + Math.sin(pitch) * dist, sz - vz * Math.cos(pitch) * dist] };
   })();
-  // the free camera of image 3 (x, y, z, look x, y, z, vertical fov at the picture's aspect) — fitted to its landmarks
-  const AERIAL = [-105.5, 132.7, 234.9, -22.6, 0, 30.8, 44];
+  // the free camera of image 3 (x, y, z, look x, y, z, vertical fov): from the west-south-west over the river road, where
+  // the main building stands large in three-quarter view with its portico front, the circle right in front of it, the
+  // corridor to the pavilion, the roundabout lower left (chosen with a software preview against the picture; a least-
+  // squares fit to 11 landmarks ends further south, where the building shows only its end)
+  const AERIAL = [-182, 94, 120, -18, 5, 34, 48];
   // where no tree may stand on the crag: the bare rock head round the pulpit (r 16: a tree there hides the gate, the
   // roundabout and the near half of the circle), the rest terrace, round the hero camera and between it and the pulpit,
   // and the stair face straight ahead of the pulpit (a 12 m tree there would rise into the camera's line to the circle)
