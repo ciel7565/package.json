@@ -1,0 +1,146 @@
+{
+ "click": {
+  "peak": 0.035,
+  "rms": 0.0074
+ },
+ "open": {
+  "peak": 0.047,
+  "rms": 0.0091
+ },
+ "close": {
+  "peak": 0.035,
+  "rms": 0.0115
+ },
+ "notify": {
+  "peak": 0.095,
+  "rms": 0.0153
+ },
+ "error": {
+  "peak": 0.135,
+  "rms": 0.0237
+ },
+ "coin": {
+  "peak": 0.135,
+  "rms": 0.0209
+ },
+ "reward": {
+  "peak": 0.16,
+  "rms": 0.0212
+ },
+ "quest": {
+  "peak": 0.262,
+  "rms": 0.0253
+ },
+ "levelup": {
+  "peak": 0.251,
+  "rms": 0.0374
+ },
+ "achievement": {
+  "peak": 0.175,
+  "rms": 0.0349
+ },
+ "water": {
+  "peak": 0.082,
+  "rms": 0.0131
+ },
+ "harvest": {
+  "peak": 0.12,
+  "rms": 0.0178
+ },
+ "plant": {
+  "peak": 0.049,
+  "rms": 0.0118
+ },
+ "jar": {
+  "peak": 0.065,
+  "rms": 0.0145
+ },
+ "craft": {
+  "peak": 0.134,
+  "rms": 0.0141
+ },
+ "shutter": {
+  "peak": 0.112,
+  "rms": 0.0088
+ },
+ "step": {
+  "peak": 0.01,
+  "rms": 0.0019
+ },
+ "land": {
+  "peak": 0.062,
+  "rms": 0.0188
+ },
+ "jump": {
+  "peak": 0.033,
+  "rms": 0.006
+ },
+ "jump2": {
+  "peak": 0.041,
+  "rms": 0.0074
+ },
+ "splash": {
+  "peak": 0.067,
+  "rms": 0.0128
+ },
+ "chat": {
+  "peak": 0.025,
+  "rms": 0.0076
+ },
+ "emote": {
+  "peak": 0.057,
+  "rms": 0.0096
+ },
+ "teleport": {
+  "peak": 0.119,
+  "rms": 0.0154
+ },
+ "page": {
+  "peak": 0.035,
+  "rms": 0.0068
+ },
+ "correct": {
+  "peak": 0.125,
+  "rms": 0.0175
+ },
+ "wrong": {
+  "peak": 0.125,
+  "rms": 0.0212
+ },
+ "tap": {
+  "peak": 0.026,
+  "rms": 0.0088
+ },
+ "oops": {
+  "peak": 0.094,
+  "rms": 0.0193
+ },
+ "sparkle": {
+  "peak": 0.056,
+  "rms": 0.0088
+ },
+ "stamp": {
+  "peak": 0.061,
+  "rms": 0.0117
+ },
+ "bubble": {
+  "peak": 0.01,
+  "rms": 0.0031
+ },
+ "drip": {
+  "peak": 0.007,
+  "rms": 0.0021
+ },
+ "pop": {
+  "peak": 0.015,
+  "rms": 0.0045
+ },
+ "whoosh": {
+  "peak": 0.014,
+  "rms": 0.0026
+ },
+ "levelUp": {
+  "peak": 0.256,
+  "rms": 0.0404
+ }
+}
