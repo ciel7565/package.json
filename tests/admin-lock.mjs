@@ -6,7 +6,7 @@
 //                                                  throw-away data dir, run every check, clean up
 //   options: --docroot <dir>   take the server tree from that folder (e.g. dist/metaverse) instead of server/
 //            --only <regex>    run only the sections whose name matches (path|signin|csrf|xss|twofa|required|idle|
-//                              allowlist|ratelimit|screens|allot|lecture|rename|apache)
+//                              allowlist|ratelimit|screens|allot|lecture|entitle|rename|apache)
 //            --no-apache       skip the Apache (.htaccess) section      --verbose   print every request
 //            --keep            keep the temp folders (their paths are printed)
 //
@@ -2351,6 +2351,271 @@ async function main() {
         const g = await b.req(`${ADM}?tab=lecture&action=lecture_delete&id=${ids.pdf}&sure=1`);
         assert(g.status === 200 && lectures().some((x) => Number(x.id) === ids.pdf), 'a GET deleted a lecture');
         return 'limit applied at once · delete needs the tick · rows and files gone · 9 kinds of audit rows · GET changes nothing';
+      });
+    } finally { await sv.stop(); }
+  }
+
+  // ================================================================= entitle: the default administrator, 🔐 내 계정, ⚙️ 설정 (CONTRACT §17.2) [entitle]
+  // A brand-new server (its own site and database): the first sign-in with the default id, the red banner with the change
+  // form on every page, the failing health row, the settings registry as typed inputs (CSRF, same origin, audit, 303 —
+  // no script anywhere), the password change that ends the other sessions, the login id, and the 2-step setting.
+  if (section('entitle')) {
+    const SECRETS = { toss_sk: 'test_sk_LOCKSUITEsecret0123456789', toss_ck: 'test_ck_LOCKSUITEclient0123456789', kma: 'KMA-LOCKSUITE-KEY-0123456789', ai: 'sk-ant-LOCKSUITE-0123456789' };
+    const s = makeSite('entitle', { toss: { client_key: SECRETS.toss_ck, secret_key: SECRETS.toss_sk }, env: { kma_key: SECRETS.kma }, anthropic: { api_key: SECRETS.ai }, rate_limits: { auth_password: [100000, 60], sub_status: [100000, 60] } });
+    const sv = await startPhp(s);
+    try {
+      const b = new Browser(sv.base, 'entitle');
+      const DEFAULT_PW = ['admin', '1234'].join('');
+      const NEW_PW = 'Jangdok2026onggi', NEW_PW2 = 'Meju2026ganjang';
+      const src = fs.readFileSync(path.join(s.site, STUB_DIR, 'index.php'), 'utf8');
+      const tabNames = [...((src.match(/const TABS = \[([\s\S]*?)\];/) || ['', ''])[1]).matchAll(/'([a-z0-9_]+)' =>/g)].map((m) => m[1]);
+      const noScript = (t) => !/<script|<style|\sstyle="|\son[a-z]+="|javascript:/i.test(t);
+      const hasBanner = (t) => /<section class="banner danger" role="alert">/.test(t) && /name="action" value="account_password"/.test(t) && /name="from" value="banner"/.test(t);
+      /** a form POST with repeated fields (pairs), the token taken from `page`; not followed */
+      const post = async (br, pairs, o = {}) => {
+        const pg = await br.req(ADM + (o.page || ''));
+        const tok = o.token !== undefined ? o.token : tokenOf(pg.text);
+        const all = pairs.slice();
+        if (tok !== null) all.push(['_csrf', tok]);
+        return br.req(ADM, { form: all, headers: o.headers });
+      };
+      const postF = async (br, pairs, o) => br.follow(await post(br, pairs, o));
+      // the rows this tab may write (the registry) + anything that would be a secret or a foreign key; housekeeping rows of
+      // other features (the 분양 tick stamp, the first-run marker) are not settings of this tab
+      const REGISTRY = Object.keys(php(s, 'Tfm\\Settings::defs()'));
+      const settingRows = () => dbAll(s, 'SELECT k, v, updated_by FROM settings ORDER BY k').filter((r) => REGISTRY.includes(r.k) || /^(toss|anthropic|db|app|security|env\.kma)[._]/.test(r.k));
+      const stored = (k) => { const r = dbAll(s, 'SELECT v FROM settings WHERE k = ?', [k])[0]; return r ? JSON.parse(r.v) : undefined; };
+      const admin = { email: 'admin', password: DEFAULT_PW };
+      let adminId = 0;
+
+      await step('17.2', 'first run: a brand-new server names the default id on its sign-in page for the server computer only; signing in with it creates the default administrator once (login id admin, pw_default = 1, an alert in the audit log)', async () => {
+        assert(Number(dbVal(s, 'SELECT COUNT(*) FROM users')) === 0 && php(s, 'Tfm\\Users::defaultAdminState()') === 'pending', 'the new database has no account and is marked for the default administrator');
+        const pg = await b.req(ADM);
+        assert(pg.status === 200 && isSignIn(pg.text), `sign-in page ${pg.status}`);
+        assertLocked(pg, 'sign-in page');
+        assert(/새로 설치한 서버/.test(pg.text) && pg.text.includes('<code>admin</code>'), 'no first-run hint on the server computer');
+        const far = await new Browser(sv.base, 'far').req(ADM, { headers: { 'X-Forwarded-For': '203.0.113.50' } });
+        assert(far.status !== 200 || !/새로 설치한 서버/.test(far.text), 'the hint is shown to a visitor who comes through a proxy');
+        // another name creates nothing
+        const other = await signIn(new Browser(sv.base, 'other'), ADM, { email: 'someone', password: DEFAULT_PW });
+        assert(!isInside(other.page.text) && Number(dbVal(s, 'SELECT COUNT(*) FROM users')) === 0, 'a sign-in with another name created an account');
+        const r = await signIn(b, ADM, admin);
+        assert(r.post.status === 303 && isInside(r.page.text), `default sign-in: ${r.post.status} ${flashOf(r.page.text)?.msg || ''}`);
+        const rows = dbAll(s, 'SELECT id, login_id, email, nickname, role, pw_default FROM users');
+        assert(rows.length === 1 && rows[0].login_id === 'admin' && rows[0].role === 'admin' && Number(rows[0].pw_default) === 1 && rows[0].nickname === '관리자' && rows[0].email === 'admin@local.invalid', `account ${JSON.stringify(rows)}`);
+        adminId = Number(rows[0].id);
+        const au = dbAll(s, "SELECT severity FROM audit_log WHERE event = 'default_admin_created'");
+        assert(au.length === 1 && au[0].severity === 'alert', `audit ${JSON.stringify(au)}`);
+        assert(php(s, 'Tfm\\Users::defaultAdminState()') === 'done', 'the marker is closed');
+        // the hint is gone once an administrator exists
+        const again = await new Browser(sv.base, 'again').req(ADM);
+        assert(!/새로 설치한 서버/.test(again.text), 'the hint stays after the account exists');
+        return 'hint (server computer only) → admin created once → inside';
+      });
+      await step('17.2', 'the default password is loud: a red banner with the change form on EVERY tab, a failing row in 🩺 시스템 점검 and in ⚙️ 설정; every page keeps the lock headers and carries no script', async () => {
+        const missing = [], unlocked = [];
+        for (const t of tabNames) {
+          const p = await b.follow(await b.req(`${ADM}?tab=${t}`));
+          if (p.status !== 200 || !hasBanner(p.text)) missing.push(`${t} (${p.status})`);
+          if (lockProblems(p).length || !noScript(p.text)) unlocked.push(t);
+        }
+        assert(!missing.length, `no banner on: ${missing.join(', ')}`);
+        assert(!unlocked.length, `lock headers / script on: ${unlocked.join(', ')}`);
+        const h = await b.req(`${ADM}?tab=health`);
+        assert(/관리자 기본 비밀번호/.test(h.text), 'the health tab has no row for the default password');
+        const row = (h.text.match(/<tr[^>]*>(?:(?!<\/tr>)[\s\S])*관리자 기본 비밀번호(?:(?!<\/tr>)[\s\S])*<\/tr>/) || [''])[0];
+        assert(/⛔|fail|bad/.test(row), `the row does not fail: ${row.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200)}`);
+        const st = await b.req(`${ADM}?tab=settings`);
+        assert(/기본 비밀번호를 쓰는 관리자<\/span> <span class="badge fail">1명/.test(st.text), 'the settings tab does not count the default password');
+        const health = php(s, '(function () { foreach (Tfm\\Health::collect(false, null, false)["checks"] as $c) if ($c["id"] === "admin_default_password") return $c["status"]; return null; })()');
+        assert(health === 'fail', `health check ${health}`);
+        return `${tabNames.length} tabs with the banner`;
+      });
+      await step('17.2', 'the app tells the same administrator: login by id works in the app, `ent` carries admin · the admin address · pwDefault — and a player never gets those fields', async () => {
+        const app = new Browser(sv.base, 'app');
+        await app.req('api/ping.php');
+        const r = await app.req('api/auth/login.php', { json: { login: 'admin', password: DEFAULT_PW, remember: false } });
+        assert(r.status === 200 && r.data.ent?.admin === true && r.data.ent.pwDefault === true && /^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}\/$/.test(r.data.ent.adminUrl || '') && r.data.ent.limits.jars === 12, `app login ${r.status} ${JSON.stringify(r.data?.ent)}`);
+        assert(!JSON.stringify(r.data).includes(DEFAULT_PW), 'the answer prints the default password');
+        const U = mkUser(s, 'user');
+        const pl = new Browser(sv.base, 'player');
+        const lr = await apiLogin(pl, U);
+        assert(lr.data.ent.admin === false && !('adminUrl' in lr.data.ent) && !('pwDefault' in lr.data.ent), `player ent ${JSON.stringify(lr.data.ent)}`);
+        admin.app = app; admin.player = pl; admin.U = U;
+        return 'ent.pwDefault for the administrator only';
+      });
+      await step('17.2', '⚙️ 설정: every registry row is a typed input with its range (number min / max, lists as check boxes, choices as select), one form per group with a reset per value; secrets are shown only as "there / not there"', async () => {
+        const p = await b.req(`${ADM}?tab=settings`);
+        assert(p.status === 200 && noScript(p.text), `settings tab ${p.status}`);
+        assertLocked(p, 'settings tab');
+        const defs = php(s, 'Tfm\\Settings::defs()');
+        const keys = Object.keys(defs);
+        const missing = keys.filter((k) => !p.text.includes(`name="v[${k}]"`) && !p.text.includes(`name="v[${k}][]"`));
+        assert(keys.length >= 24 && !missing.length, `rows without an input: ${missing.join(', ')}`);
+        assert(/<input id="[^"]+" type="number" name="v\[sub\.price_2\]" value="2900" min="100" max="1000000" step="1"/.test(p.text), 'sub.price_2 is not a number input with its range');
+        assert(/<input id="[^"]+" type="number" name="v\[limits\.jars_paid\]" value="12" min="1" max="12"/.test(p.text), 'limits.jars_paid range');
+        assert(/name="has\[sub\.tiers_on\]" value="1"/.test(p.text) && (p.text.match(/type="checkbox" name="v\[sub\.tiers_on\]\[\]"/g) || []).length === 3 && /name="v\[sub\.tiers_on\]\[\]" value="2" checked/.test(p.text)
+          && !/name="v\[sub\.tiers_on\]\[\]" value="4" checked/.test(p.text), 'the tiers on sale are not three check boxes (2 and 3 ticked)');
+        assert(/<select id="[^"]+" name="v\[controls\.mouse_look_normal\]">/.test(p.text) && /<select id="[^"]+" name="v\[admin\.twofa_required\]">/.test(p.text), 'choices / switches are not selects');
+        const counts = php(s, '(function () { $n = []; foreach (Tfm\\Settings::GROUPS as $g => $t) $n[$g] = count(Tfm\\Settings::rows($g)); return $n; })()');
+        const groups = Object.keys(counts), filled = groups.filter((g) => counts[g] > 0);
+        for (const g of groups) assert(p.text.includes(`id="set-${g}"`), `no group ${g}`);
+        assert((p.text.match(/name="action" value="settings_save"/g) || []).length === filled.length && (p.text.match(/name="action" value="settings_reset"/g) || []).length === filled.length, 'one save form and one reset form per group that has values');
+        for (const [n, v] of Object.entries(SECRETS)) assert(!p.text.includes(v) && !p.text.includes(v.slice(8, 24)), `the page prints a secret (${n})`);
+        assert(/토스페이먼츠 키<\/span> <span class="badge ok">테스트 키가 들어 있어요/.test(p.text) && /기상청 날씨 키<\/span> <span class="badge ok">들어 있어요/.test(p.text) && /AI 도우미 키<\/span> <span class="badge ok">들어 있어요/.test(p.text), 'the key states are not shown');
+        assert(!/name="v\[(toss|anthropic|env\.kma|db|app)[.\]]/.test(p.text), 'a secret has an input');
+        return `${keys.length} settings in ${groups.length} groups · 3 key states, no key`;
+      });
+      await step('17.2', 'settings_save: one wrong value refuses the whole form (nothing stored); a good form answers 303 back to the tab, stores only what changed with the administrator\'s id, is audited, and the public API follows at once', async () => {
+        const before = JSON.stringify(settingRows());
+        let r = await postF(b, [['action', 'settings_save'], ['tab', 'settings'], ['group', 'sub'], ['v[sub.price_2]', '3900'], ['v[sub.price_3]', '5']], { page: '?tab=settings' });
+        assert(flashOf(r.text)?.type === 'error' && /아무것도 저장하지 않았어요/.test(flashOf(r.text).msg) && JSON.stringify(settingRows()) === before, `wrong value: ${JSON.stringify(flashOf(r.text))}`);
+        for (const bad of [[['v[limits.jars_paid]', '13']], [['v[limits.jars_free]', '10'], ['v[limits.jars_paid]', '6']], [['v[sub.move_2]', '4']], [['v[sub.price_2]', '2900.5']], [['v[sub.price_2]', "2900' OR '1'='1"]], [['has[sub.tiers_on]', '1'], ['v[sub.tiers_on][]', '5']], [['v[sub.price_2][]', '2900']]]) {
+          r = await postF(b, [['action', 'settings_save'], ['tab', 'settings'], ['group', 'sub'], ...bad], { page: '?tab=settings' });
+          assert(flashOf(r.text)?.type === 'error' && JSON.stringify(settingRows()) === before, `accepted: ${JSON.stringify(bad)} → ${JSON.stringify(flashOf(r.text))}`);
+        }
+        r = await postF(b, [['action', 'settings_save'], ['tab', 'settings'], ['group', 'nope'], ['v[sub.price_2]', '3900']], { page: '?tab=settings' });
+        assert(flashOf(r.text)?.type === 'error' && JSON.stringify(settingRows()) === before, 'an unknown group was saved');
+        // keys outside the registry (a secret, another group's key) are not settings of this form
+        r = await postF(b, [['action', 'settings_save'], ['tab', 'settings'], ['group', 'sub'], ['v[toss.secret_key]', 'x'], ['v[anthropic.api_key]', 'x'], ['v[security.admin_2fa]', 'off'], ['v[farm.rt_scale]', '3600']], { page: '?tab=settings' });
+        assert(JSON.stringify(settingRows()) === before, `a key outside the form was stored: ${JSON.stringify(settingRows())}`);
+        const good = await post(b, [['action', 'settings_save'], ['tab', 'settings'], ['group', 'sub'], ['v[sub.price_2]', '3900'], ['v[sub.price_3]', '4900'], ['has[sub.tiers_on]', '1'], ['v[sub.tiers_on][]', '2'], ['v[sub.tiers_on][]', '3'], ['v[sub.tiers_on][]', '4']], { page: '?tab=settings' });
+        assert(good.status === 303 && /tab=settings/.test(good.location || ''), `the save answers ${good.status} → ${good.location}`);
+        const after = await b.follow(good);
+        assert(flashOf(after.text)?.type === 'ok' && /2개를 바꿨어요/.test(flashOf(after.text).msg), `flash ${JSON.stringify(flashOf(after.text))}`);
+        const rows = settingRows();
+        assert(rows.length === 2 && stored('sub.price_2') === 3900 && JSON.stringify(stored('sub.tiers_on')) === '[2,3,4]' && rows.every((x) => Number(x.updated_by) === adminId), `stored ${JSON.stringify(rows)}`);
+        const au = dbAll(s, "SELECT actor_id, detail FROM audit_log WHERE event = 'setting_changed' ORDER BY id");
+        assert(au.length === 2 && au.every((x) => Number(x.actor_id) === adminId) && au.some((x) => /sub\.price_2/.test(x.detail)), `audit ${JSON.stringify(au)}`);
+        const anon = new Browser(sv.base, 'anon');
+        const st = await anon.req('api/sub/status.php');
+        assert(st.data.tiers.map((t) => t.tier).join(',') === '2,3,4' && st.data.tiers[0].price === 3900, `status.php ${JSON.stringify(st.data.tiers)}`);
+        const pg = await anon.req('api/ping.php');
+        assert(JSON.stringify(pg.data.site['sub.tiers_on']) === '[2,3,4]' && !JSON.stringify(pg.data.site).includes('3900'), `ping.site ${JSON.stringify(pg.data.site)}`);
+        assert(/name="v\[sub\.price_2\]" value="3900"/.test((await b.req(`${ADM}?tab=settings`)).text), 'the form does not show the stored value');
+        return 'atomic refusal × 9 · 303 · 2 values stored + audited · status.php and ping follow';
+      });
+      await step('17.2', 'settings_reset puts one value back to its default (audited); a second reset says so and changes nothing', async () => {
+        let r = await postF(b, [['action', 'settings_reset'], ['tab', 'settings'], ['key', 'sub.price_2']], { page: '?tab=settings' });
+        assert(flashOf(r.text)?.type === 'ok' && /기본값\(2,900/.test(flashOf(r.text).msg) && stored('sub.price_2') === undefined, `reset ${JSON.stringify(flashOf(r.text))}`);
+        r = await postF(b, [['action', 'settings_reset'], ['tab', 'settings'], ['key', 'sub.price_2']], { page: '?tab=settings' });
+        assert(/이미 기본값/.test(flashOf(r.text)?.msg || ''), `second reset ${JSON.stringify(flashOf(r.text))}`);
+        r = await postF(b, [['action', 'settings_reset'], ['tab', 'settings'], ['key', 'toss.secret_key']], { page: '?tab=settings' });
+        assert(flashOf(r.text)?.type === 'error', 'a key outside the registry was reset');
+        r = await postF(b, [['action', 'settings_reset'], ['tab', 'settings'], ['key', 'sub.tiers_on']], { page: '?tab=settings' });
+        assert(stored('sub.tiers_on') === undefined && (await new Browser(sv.base, 'anon2').req('api/sub/status.php')).data.tiers.map((t) => t.tier).join(',') === '2,3', 'the tiers on sale are not back to 2 · 3');
+        assert(Number(dbVal(s, "SELECT COUNT(*) FROM audit_log WHERE event = 'setting_reset'")) === 2, 'two resets in the audit log');
+        return 'price and tiers back to the defaults';
+      });
+      await step('17.2', 'the settings and account forms are refused without the CSRF token, with a wrong one, from another origin, without the admin sign-in and for a player — and nothing changes', async () => {
+        const snap = () => JSON.stringify([settingRows(), dbAll(s, 'SELECT id, login_id, session_epoch, pw_default, password_hash FROM users ORDER BY id')]);
+        const before = snap();
+        const forms = [
+          [['action', 'settings_save'], ['tab', 'settings'], ['group', 'sub'], ['v[sub.price_2]', '100']],
+          [['action', 'settings_reset'], ['tab', 'settings'], ['key', 'limits.jars_free']],
+          [['action', 'account_password'], ['tab', 'account'], ['from', 'banner'], ['password', NEW_PW], ['password_confirm', NEW_PW]],
+          [['action', 'account_login'], ['tab', 'account'], ['login_id', 'intruder'], ['current', DEFAULT_PW]],
+        ];
+        const bad = [];
+        for (const f of forms) {
+          const name = f[0][1];
+          const none = await post(b, f, { page: '?tab=settings', token: null });
+          if (none.status !== 403) bad.push(`${name} without a token → ${none.status}`);
+          const wrong = await post(b, f, { page: '?tab=settings', token: 'f'.repeat(64) });
+          if (wrong.status !== 403) bad.push(`${name} with a wrong token → ${wrong.status}`);
+          // a present Origin must be this host and port; Sec-Fetch-Site: cross-site is refused outright (an absent Origin is left to the token)
+          for (const h of [{ Origin: 'https://evil.example' }, { Origin: 'http://127.0.0.1:9' }, { Origin: 'http://localhost' }, { 'Sec-Fetch-Site': 'cross-site' }]) {
+            const x = await post(b, f, { page: '?tab=settings', headers: h });
+            if (x.status !== 403) bad.push(`${name} with ${Object.keys(h)[0]}: ${Object.values(h)[0]} → ${x.status}`);
+          }
+          // a player with an app session and the page's own token: the admin site does not know them
+          const pl = await post(admin.player, f, { page: '' });
+          if (pl.status === 303 || pl.status === 200) { const pg = await admin.player.follow(pl); if (isInside(pg.text)) bad.push(`${name} as a player → inside`); }
+          // nobody signed in
+          const nob = await post(new Browser(sv.base, 'nobody'), f, { page: '' });
+          const nobPage = nob.status === 303 ? await new Browser(sv.base, 'nobody2').req(ADM) : nob;
+          if (isInside(nobPage.text)) bad.push(`${name} without a sign-in → inside`);
+        }
+        assert(!bad.length, bad.join(' | '));
+        assert(snap() === before, 'something changed');
+        const lo = await new Browser(sv.base, 'lo').req(`${ADM}?tab=settings`);
+        assert(isSignIn(lo.text) && !/name="v\[/.test(lo.text) && !/sub\.price_2/.test(lo.text), 'the settings are readable without the sign-in');
+        const plGet = await admin.player.follow(await admin.player.req(`${ADM}?tab=settings`));
+        assert(!isInside(plGet.text) && !/name="v\[/.test(plGet.text), 'a player reads the settings tab');
+        return '4 forms × (no token · wrong token · 3 foreign origins · Sec-Fetch-Site cross-site · player · nobody) refused';
+      });
+      await step('17.2', 'the banner form changes the password: the default one and a weak one are refused, a good one is accepted — the banner and the failing rows go away, the app session of the account ends, this admin session continues', async () => {
+        assert((await admin.app.req('api/auth/me.php')).data.user?.id === adminId, 'the app session is alive before the change');
+        let r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['from', 'banner'], ['password', DEFAULT_PW], ['password_confirm', DEFAULT_PW]], { page: '?tab=overview' });
+        assert(flashOf(r.text)?.type === 'error' && hasBanner(r.text), `the default password again: ${JSON.stringify(flashOf(r.text))}`);
+        for (const pw of ['short1', 'onlyletters', '12345678', 'xxadminxx99']) {
+          r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['from', 'banner'], ['password', pw], ['password_confirm', pw]], { page: '?tab=overview' });
+          assert(flashOf(r.text)?.type === 'error' && Number(dbVal(s, 'SELECT pw_default FROM users WHERE id = ?', [adminId])) === 1, `weak password "${pw}" accepted`);
+        }
+        r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['from', 'banner'], ['password', NEW_PW], ['password_confirm', NEW_PW + 'x']], { page: '?tab=overview' });
+        assert(flashOf(r.text)?.type === 'error', 'two different passwords accepted');
+        const epoch = Number(dbVal(s, 'SELECT session_epoch FROM users WHERE id = ?', [adminId]));
+        const ok = await post(b, [['action', 'account_password'], ['tab', 'account'], ['from', 'banner'], ['password', NEW_PW], ['password_confirm', NEW_PW]], { page: '?tab=overview' });
+        assert(ok.status === 303, `the change answers ${ok.status}`);
+        const page = await b.follow(ok);
+        assert(flashOf(page.text)?.type === 'ok' && isInside(page.text) && !hasBanner(page.text), `after the change: ${JSON.stringify(flashOf(page.text))}`);
+        const row = dbAll(s, 'SELECT pw_default, session_epoch FROM users WHERE id = ?', [adminId])[0];
+        assert(Number(row.pw_default) === 0 && Number(row.session_epoch) === epoch + 1, `row ${JSON.stringify(row)}`);
+        for (const t of ['overview', 'users', 'settings', 'account', 'health']) assert(!hasBanner((await b.req(`${ADM}?tab=${t}`)).text), `the banner is still on ${t}`);
+        const h = await b.req(`${ADM}?tab=health`);
+        const hrow = (h.text.match(/<tr[^>]*>(?:(?!<\/tr>)[\s\S])*관리자 기본 비밀번호(?:(?!<\/tr>)[\s\S])*<\/tr>/) || [''])[0];
+        assert(hrow && !/⛔/.test(hrow), 'the health row still fails');
+        assert((await admin.app.req('api/auth/me.php')).data.user === null, 'the app session of the account is still logged in');
+        const au = dbAll(s, "SELECT detail, severity FROM audit_log WHERE event = 'password_changed' AND user_id = ?", [adminId]);
+        assert(au.length === 1 && !au[0].detail.includes(NEW_PW) && !au[0].detail.includes(DEFAULT_PW) && /"wasDefault":true/.test(au[0].detail), `audit ${JSON.stringify(au)}`);
+        const old = await signIn(new Browser(sv.base, 'old'), ADM, { email: 'admin', password: DEFAULT_PW });
+        assert(!isInside(old.page.text), 'the default password still signs in');
+        admin.password = NEW_PW;
+        return 'default / weak refused → changed → banner gone, health ok, other session ended, audited';
+      });
+      await step('17.2', '🔐 내 계정: the account, a password form that now asks the present password (a wrong one is refused), and the login id form (malformed / wrong password refused; the new id signs in, the old one does not)', async () => {
+        const p = await b.req(`${ADM}?tab=account`);
+        assert(p.status === 200 && noScript(p.text) && /name="action" value="account_password"/.test(p.text) && /name="current"/.test(p.text) && /name="action" value="account_login"/.test(p.text) && /name="login_id"/.test(p.text), 'the account tab lacks a form');
+        assertLocked(p, 'account tab');
+        assert(/type="password" name="password"[^>]*autocomplete="new-password"/.test(p.text) && !p.text.includes(NEW_PW), 'password inputs');
+        let r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['current', 'Wrong2026pass'], ['password', NEW_PW2], ['password_confirm', NEW_PW2]], { page: '?tab=account' });
+        assert(flashOf(r.text)?.type === 'error', 'a wrong present password was accepted');
+        r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['password', NEW_PW2], ['password_confirm', NEW_PW2]], { page: '?tab=account' });
+        assert(flashOf(r.text)?.type === 'error', 'the form works without the present password');
+        r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['current', NEW_PW], ['password', NEW_PW], ['password_confirm', NEW_PW]], { page: '?tab=account' });
+        assert(flashOf(r.text)?.type === 'error', 'the same password was accepted');
+        r = await postF(b, [['action', 'account_password'], ['tab', 'account'], ['current', NEW_PW], ['password', NEW_PW2], ['password_confirm', NEW_PW2]], { page: '?tab=account' });
+        assert(flashOf(r.text)?.type === 'ok' && isInside(r.text), `second change: ${JSON.stringify(flashOf(r.text))}`);
+        admin.password = NEW_PW2;
+        for (const [id, pw] of [['Boss!', NEW_PW2], ['ab', NEW_PW2], ['boss_1', 'Wrong2026pass'], ["boss'--", NEW_PW2]]) {
+          r = await postF(b, [['action', 'account_login'], ['tab', 'account'], ['login_id', id], ['current', pw]], { page: '?tab=account' });
+          assert(flashOf(r.text)?.type === 'error' && dbVal(s, 'SELECT login_id FROM users WHERE id = ?', [adminId]) === 'admin', `login id "${id}" accepted`);
+        }
+        r = await postF(b, [['action', 'account_login'], ['tab', 'account'], ['login_id', 'boss_1'], ['current', NEW_PW2]], { page: '?tab=account' });
+        assert(flashOf(r.text)?.type === 'ok' && dbVal(s, 'SELECT login_id FROM users WHERE id = ?', [adminId]) === 'boss_1', `login id change: ${JSON.stringify(flashOf(r.text))}`);
+        assert(Number(dbVal(s, "SELECT COUNT(*) FROM audit_log WHERE event = 'login_id_changed'")) === 1, 'the change is not audited');
+        const viaNew = await signIn(new Browser(sv.base, 'new-id'), ADM, { email: 'boss_1', password: NEW_PW2 });
+        assert(isInside(viaNew.page.text), 'the new id does not sign in');
+        const users = Number(dbVal(s, 'SELECT COUNT(*) FROM users'));
+        const viaOld = await signIn(new Browser(sv.base, 'old-id'), ADM, { email: 'admin', password: DEFAULT_PW });
+        assert(!isInside(viaOld.page.text) && Number(dbVal(s, 'SELECT COUNT(*) FROM users')) === users && Number(dbVal(s, "SELECT COUNT(*) FROM users WHERE login_id = 'admin'")) === 0, 'the freed id admin signs in or was created again');
+        return 'present password asked · login id admin → boss_1 · the default account is not made twice';
+      });
+      await step('17.2', 'admin.twofa_required is an operator setting: off by default (the default login works without a code); switched on in ⚙️ 설정, the next sign-in of an administrator without a code app reaches only the enrolment screen; switched off again everything opens', async () => {
+        assert(php(s, 'Tfm\\AdminTotp::mode()') === 'optional', 'the default mode is not optional');
+        let r = await postF(b, [['action', 'settings_save'], ['tab', 'settings'], ['group', 'admin'], ['v[admin.twofa_required]', '1']], { page: '?tab=settings' });
+        assert(flashOf(r.text)?.type === 'ok' && php(s, 'Tfm\\AdminTotp::mode()') === 'required', `switch on: ${JSON.stringify(flashOf(r.text))}`);
+        const nb = new Browser(sv.base, 'twofa');
+        const si = await signIn(nb, ADM, { email: 'boss_1', password: NEW_PW2 });
+        assert(/name="action" value="twofa_begin"/.test(si.page.text) && !isInside(si.page.text), 'the enrolment screen does not follow the password');
+        const tab = await nb.follow(await nb.req(`${ADM}?tab=settings`));
+        assert(!/name="v\[/.test(tab.text), 'the settings open without the enrolment');
+        // the operator's way back without a second factor: the command line (documented), here through the library
+        php(s, 'Tfm\\Settings::clear("admin.twofa_required", null)');
+        assert(php(s, 'Tfm\\AdminTotp::mode()') === 'optional', 'the mode is not optional again');
+        const back = await signIn(new Browser(sv.base, 'twofa-off'), ADM, { email: 'boss_1', password: NEW_PW2 });
+        assert(isInside(back.page.text), 'the sign-in without a code does not work again');
+        return 'optional → required (enrolment only) → optional';
       });
     } finally { await sv.stop(); }
   }
