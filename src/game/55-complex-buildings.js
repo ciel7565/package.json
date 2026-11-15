@@ -383,7 +383,10 @@ CX.add('buildings', (ctx, C) => {
     addBoard(N, f, plate, -bay * 0.5 - 0.1, postTop - 0.55, fwz + 0.12, 0, 0.62, 0.16);
 
     // ---- the yard and its wall (plan `wall`)
-    const W = e.wall;
+    // the plan's yard wall, fitted to the lanes: 0.5 m in from the sides (4 m lanes between neighbours) and, where the
+    // front lane runs along the terrace edge, its south side 2 m further in (the lane stays outside the yards)
+    const W0 = e.wall, TVz1 = VILLAGE ? VILLAGE.z1 : Infinity;
+    const W = W0 ? { x0: W0.x0 + 0.5, x1: W0.x1 - 0.5, z0: W0.z0, z1: TVz1 - W0.z1 < 2.6 ? W0.z1 - 2.0 : W0.z1, h: W0.h, gate: W0.gate } : null;
     if (W) {
       const wy = y, wh = W.h || 1.4, gateX = e.door ? e.door.x : e.x;
       const fw = frame(0, wy, 0, 0);
@@ -430,8 +433,8 @@ CX.add('buildings', (ctx, C) => {
         void n;
       }
       F.add('paint', geo.box(3.0, 0.9, 1.7), M(jx, wy + 0.45, jz), '#6a4a34');
-      const yx = e.x - sx * (w / 2 - 1.2), yz = W.z1 - 2.6;
-      if (v === 1) {   // 평상
+      const yx = e.x - sx * (w / 2 - 1.2), yz = W.z1 - 2.6, yard = W.z1 - (e.z + d / 2 + 1.7) >= 2.4;
+      if (!yard) { /* no front yard on the first row: the 평상 / woodpile / well stay away */ } else if (v === 1) {   // 평상
         const fp = frame(yx, wy, yz, 0.05);
         box(N, 'plank', fp, 1.9, 0.08, 1.3, 0, 0.42, 0, '#c59a6a');
         for (const a of [-1, 1]) for (const b of [-1, 1]) box(N, 'wood', fp, 0.08, 0.4, 0.08, a * 0.85, 0.2, b * 0.55, T.dark);
@@ -450,7 +453,7 @@ CX.add('buildings', (ctx, C) => {
       }
       // a flower bed by the house front and a tree in the yard
       if (fine) for (let k = 0; k < 7; k++) N.add('paint', new THREE.SphereGeometry(0.16 + rnd() * 0.08, 6, 4), M(e.x + sx * 1.6 + k * 0.42 * sx, wy + 0.18, e.z + d / 2 + 1.95 + (rnd() - 0.5) * 0.2), ['#d9467a', '#f2c94c', '#e8eadf', '#9b5ccf', '#4f7d3a'][k % 5]);
-      grovePlan.push({ x: e.x + sx * (w / 2 + 2.2), z: W.z1 - 1.6, y: wy, species: idx % 3 === 1 ? 'oak' : 'gardenPine', scale: idx % 3 === 1 ? 0.5 : 0.62 + rnd() * 0.12, rot: rnd() * TAU });
+      if (yard) grovePlan.push({ x: e.x + sx * (w / 2 + 2.2), z: W.z1 - 1.6, y: wy, species: idx % 3 === 1 ? 'oak' : 'gardenPine', scale: idx % 3 === 1 ? 0.5 : 0.62 + rnd() * 0.12, rot: rnd() * TAU });
     }
     // ---- far: body, base, hanji strip, roof
     box(F, 'paint', f, w + 1.8, baseH + 0.5, d + 1.6, 0, (baseH - 0.5) / 2, 0, '#bdb6aa');
@@ -463,7 +466,7 @@ CX.add('buildings', (ctx, C) => {
     walkBox(f, 0, 0, w / 2 + 0.9, d / 2 + 0.8, y + baseH, 'stone');
     if (vd > 0) walkBox(f, 0, d / 2 - vd / 2 + 0.06, w / 2 + 0.15, vd / 2 + 0.12, y + baseH + 0.36, 'wood');
     addBlocker(f, 0, baseH, vd > 0 ? -vd / 2 : 0, w + 0.3, postTop - baseH + 0.4, d - vd + 0.3);
-    const dx = e.door ? e.door.x : e.x, dzW = e.z + fwz + 0.9;
+    const dx = e.door ? e.door.x : e.x, dzW = e.z + fwz + (vd > 0 ? 0.9 : 0.45);
     const spec = { ctx, x: dx, z: dzW, y: y + baseH + 1.2, rotY: 0, id: `CX_${e.id}_ROOM`, label: `🏠 ${e.name || '한옥'} — 내 방 들어가기`, kidLabel: '내 방 가기', radius: 3.2 };
     let handle = null;
     try { handle = G.sys.myroom?.doorAt?.(spec) || null; } catch (err) { handle = null; G.log.warn('WORLD', 'complex-buildings: 내 방 door failed', err?.message || err); }
@@ -665,7 +668,9 @@ CX.add('buildings', (ctx, C) => {
         onInteract: () => { try { G.ui?.toast?.('정자 위에서는 큰 장독대와 본관, 산이 한눈에 보여요. 옛날에는 이런 곳에서 쉬며 바람을 쐬었대요.', { emoji: '🌄', type: 'info' }); G.easy?.say?.('정자 위에서 큰 장독대가 한눈에 보여요.'); } catch (err) { /* cosmetic */ } },
       });
       if (!low) ctx.light?.({ x: PAV.x, y: py + upTop - 0.7, z: PAV.z, color: 0xffc07a, intensity: 4, distance: 10, decay: 2, flicker: 0.05, day: 0 });
-      pavApi = { x: PAV.x, z: PAV.z, y: py, floor: py + base, upper: py + upFloor, stair: Object.assign({}, stair, { bottom: fp.p(stair.x1 + 0.4, scz), top: fp.p(stair.x0 - 0.4, scz) }), inset };
+      pavApi = { x: PAV.x, z: PAV.z, y: py, floor: py + base, upper: py + upFloor, stair: Object.assign({}, stair, { bottom: fp.p(stair.x1 + 0.4, scz), top: fp.p(stair.x0 - 0.4, scz) }), inset,
+        // the way up for a walker: the stair's foot, its head, the landing west of the stairwell, the floor's middle
+        route: [fp.p(stair.x1 + 0.4, scz), fp.p(stair.x0 - 0.4, scz), fp.p(-inset + 0.4, scz), fp.p(-inset + 0.4, 0), fp.p(0, -1.5)] };
       grovePlan.push({ x: PAV.x + hwP + 3.5, z: PAV.z + 2.5, species: 'maple', scale: 0.7 }, { x: PAV.x - hwP - 2.8, z: PAV.z + 3.6, species: 'gardenPine', scale: 0.75 });
     }
   }
@@ -1060,7 +1065,7 @@ CX.add('buildings', (ctx, C) => {
     update,
     dispose() {
       for (const fn of disposers) { try { fn(); } catch (e) { /* gone */ } }
-      try { grove?.dispose?.(); } catch (e) { /* gone */ }
+      try { if (grove && grove.group) grove.group.parent?.remove(grove.group); grove?.dispose?.(); } catch (e) { /* gone */ }
       for (const b of blockers) { const i = G.world.cameraBlockers.indexOf(b); if (i >= 0) G.world.cameraBlockers.splice(i, 1); }
       root.traverse((o) => { if (o.isMesh && o.geometry && o.geometry !== unitBox) o.geometry.dispose(); });
       for (const x of owned) { try { if (x.map && x.map.dispose) x.map.dispose(); x.dispose?.(); } catch (e) { /* gone */ } }
