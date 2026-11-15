@@ -182,7 +182,7 @@ async function runPreset(q) {
       const st = pv.stair;
       const rt = pv.route;
       const up = deck.ok ? X.walk([[deck.at[0], deck.at[1]]].concat(rt), deck.at[2]) : { ok: false, reason: 'deck failed' };
-      const down = up.ok ? X.walk([[up.at[0], up.at[1]]].concat(rt.slice(0, -1).reverse(), [[pv.x, pv.z - 4.6]]), up.at[2]) : { ok: false };
+      const down = up.ok ? X.walk([[up.at[0], up.at[1]]].concat(rt.slice(0, -1).reverse(), [pv.foot, [pv.x, pv.z - 4.6]]), up.at[2]) : { ok: false };
       const under = X.walk([[p[1][0], p[1][1]], [p[2][0], p[2][1]], [p[3][0], p[3][1]]], C.height(p[1][0], p[1][1]));
       out.corridor = { deck, up, down, under, y0: D.y0, y1: D.y1, upper: pv.upper, floor: pv.floor };
     }

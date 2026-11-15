@@ -306,6 +306,11 @@ CX.add('buildings', (ctx, C) => {
 
   // ================================================================= 1. 한옥 마을
   const VILLAGE = C.byId('TERRACE_VILLAGE');
+  // the plan's straight lanes through the village (VL_*): the yard walls keep out of them
+  const LANES = (C.paths || []).filter((q) => /^VL_/.test(q.id) && q.pts && q.pts.length === 2).map((q) => {
+    const [a, b] = q.pts, vertical = Math.abs(a[0] - b[0]) < 0.01;
+    return vertical ? { vertical, c: a[0], a: Math.min(a[1], b[1]), b: Math.max(a[1], b[1]) } : { vertical, c: a[1], a: Math.min(a[0], b[0]), b: Math.max(a[0], b[0]) };
+  });
   const houses = C.elements.filter((e) => e.type === 'building' && e.kind === 'hanok' && /^B_VH\d+$/.test(e.id));
   const doors = [];
   const houseInfo = [];
@@ -387,6 +392,10 @@ CX.add('buildings', (ctx, C) => {
     // front lane runs along the terrace edge, its south side 2 m further in (the lane stays outside the yards)
     const W0 = e.wall, TVz1 = VILLAGE ? VILLAGE.z1 : Infinity;
     const W = W0 ? { x0: W0.x0 + 0.5, x1: W0.x1 - 0.5, z0: W0.z0, z1: TVz1 - W0.z1 < 2.6 ? W0.z1 - 2.0 : W0.z1, h: W0.h, gate: W0.gate } : null;
+    if (W) for (const ln of LANES) {     // and clear of every straight village lane of the plan (a 1 m margin round its centre line)
+      if (ln.vertical && ln.a <= W.z1 && ln.b >= W.z0) { if (ln.c > e.x && ln.c < W.x1 + 1.0) W.x1 = Math.min(W.x1, ln.c - 1.0); if (ln.c < e.x && ln.c > W.x0 - 1.0) W.x0 = Math.max(W.x0, ln.c + 1.0); }
+      if (!ln.vertical && ln.a <= W.x1 && ln.b >= W.x0) { if (ln.c > e.z && ln.c < W.z1 + 1.0) W.z1 = Math.min(W.z1, ln.c - 1.0); if (ln.c < e.z && ln.c > W.z0 - 1.0) W.z0 = Math.max(W.z0, ln.c + 1.0); }
+    }
     if (W) {
       const wy = y, wh = W.h || 1.4, gateX = e.door ? e.door.x : e.x;
       const fw = frame(0, wy, 0, 0);
@@ -466,7 +475,7 @@ CX.add('buildings', (ctx, C) => {
     walkBox(f, 0, 0, w / 2 + 0.9, d / 2 + 0.8, y + baseH, 'stone');
     if (vd > 0) walkBox(f, 0, d / 2 - vd / 2 + 0.06, w / 2 + 0.15, vd / 2 + 0.12, y + baseH + 0.36, 'wood');
     addBlocker(f, 0, baseH, vd > 0 ? -vd / 2 : 0, w + 0.3, postTop - baseH + 0.4, d - vd + 0.3);
-    const dx = e.door ? e.door.x : e.x, dzW = e.z + fwz + (vd > 0 ? 0.9 : 0.45);
+    const dx = e.door ? e.door.x : e.x, dzW = e.z + fwz + (vd > 0 ? 0.9 : 0.65);
     const spec = { ctx, x: dx, z: dzW, y: y + baseH + 1.2, rotY: 0, id: `CX_${e.id}_ROOM`, label: `🏠 ${e.name || '한옥'} — 내 방 들어가기`, kidLabel: '내 방 가기', radius: 3.2 };
     let handle = null;
     try { handle = G.sys.myroom?.doorAt?.(spec) || null; } catch (err) { handle = null; G.log.warn('WORLD', 'complex-buildings: 내 방 door failed', err?.message || err); }
@@ -670,7 +679,8 @@ CX.add('buildings', (ctx, C) => {
       if (!low) ctx.light?.({ x: PAV.x, y: py + upTop - 0.7, z: PAV.z, color: 0xffc07a, intensity: 4, distance: 10, decay: 2, flicker: 0.05, day: 0 });
       pavApi = { x: PAV.x, z: PAV.z, y: py, floor: py + base, upper: py + upFloor, stair: Object.assign({}, stair, { bottom: fp.p(stair.x1 + 0.4, scz), top: fp.p(stair.x0 - 0.4, scz) }), inset,
         // the way up for a walker: the stair's foot, its head, the landing west of the stairwell, the floor's middle
-        route: [fp.p(stair.x1 + 0.4, scz), fp.p(stair.x0 - 0.4, scz), fp.p(-inset + 0.4, scz), fp.p(-inset + 0.4, 0), fp.p(0, -1.5)] };
+        route: [fp.p(stair.x1 + 0.4, scz), fp.p(stair.x0 - 0.4, scz), fp.p(-inset + 0.4, scz), fp.p(-inset + 0.4, 0), fp.p(0, -1.5)],
+        foot: fp.p(stair.x1 + 1.0, scz - 2.6) };
       grovePlan.push({ x: PAV.x + hwP + 3.5, z: PAV.z + 2.5, species: 'maple', scale: 0.7 }, { x: PAV.x - hwP - 2.8, z: PAV.z + 3.6, species: 'gardenPine', scale: 0.75 });
     }
   }
