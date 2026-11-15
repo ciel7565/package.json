@@ -145,11 +145,11 @@ body.easy .lec-kind { font-size: 1rem; }
 body.easy .lec-place, body.easy .lec-note, body.easy .lec-hostname, body.easy .lec-offer-t small { font-size: .97rem; }
 body.easy .lec-local, body.easy .lec-notecard p { font-size: 1rem; }
 body.easy .lec-now { font-size: 1.12rem; }
-body.easy .lec-back { min-height: 56px; font-size: 1.02rem; padding-inline: 1.1rem; }
+body.easy .lecture-modal .lec-back { min-height: 56px; font-size: 1.02rem; padding-inline: 1.1rem; }
 body.easy .lec-nav, body.easy .lec-tool { min-width: 64px; min-height: 64px; font-size: 1.35rem; border-radius: 18px; }
 body.easy .lec-nav { padding: 0 1.1rem; }
 body.easy .lec-nav-l { font-size: 1.2rem; }
-body.easy .lec-out { min-height: 56px; font-size: 1.02rem; }
+body.easy .lecture-modal .lec-out { min-height: 56px; font-size: 1.02rem; }
 body.easy .lec-lead { font-size: 1.05rem; }
 
 /* ---- small screens */

@@ -208,8 +208,9 @@ const solveGate = async (page) => {
   let lastQ = '';
   for (let round = 0; round < 6; round++) {
     // the next question has its own id on its choices: never read the old one while the gate is still between two
-    const fresh = await page.waitForFunction((prev) => { const b = document.querySelector('.easy-gate-choice'); return !!b && b.dataset.q !== prev; }, lastQ, { timeout: T_UI, polling: 100 }).then(() => true, () => false);
+    const fresh = await page.waitForFunction((prev) => { const b = document.querySelector('.easy-gate-choice'); return !G.ui.modal.get('easy-gate') || (!!b && b.dataset.q !== prev); }, lastQ, { timeout: T_UI, polling: 100 }).then(() => true, () => false);
     if (!fresh) return false;
+    if (!(await page.evaluate(() => !!G.ui.modal.get('easy-gate')))) return true;
     lastQ = await page.evaluate(() => document.querySelector('.easy-gate-choice').dataset.q);
     const q = await page.waitForSelector('.easy-gate-q[aria-label]', { timeout: T_UI }).catch(() => null);
     if (!q) return false;
@@ -537,10 +538,20 @@ try {
     // auto-open: PL_ANBANG has lecture 28 with autoplay
     const hasAnbang = await page.evaluate(() => !!G.sys.places.def('PL_ANBANG'));
     if (hasAnbang) {
-      await page.evaluate(async () => { await G.sys.places.enter('PL_ANBANG', { fade: false }); });
+      await page.evaluate(async () => {
+        // a trace of who opens and closes dialogs meanwhile (shown when the check fails)
+        window.__mtrace = [];
+        const M = G.ui.modal, L = G.sys.lecture, t0 = performance.now();
+        const tr = (what) => window.__mtrace.push(`${Math.round(performance.now() - t0)} ${what} ${(new Error().stack || '').split('\n').slice(2, 4).map((x) => x.trim().replace(/^at /, '').slice(0, 60)).join(' < ')}`);
+        for (const k of ['open', 'close', 'closeAll']) { const f = M[k]; if (typeof f === 'function') M[k] = function (...a) { tr(`modal.${k} ${a[0]?.id || (typeof a[0] === 'string' ? a[0] : '')}`); return f.apply(this, a); }; }
+        const lo = L.open, lc = L.close; L.open = function (...a) { tr(`lecture.open ${a[0]} ${JSON.stringify(a[1] || {})}`); return lo.apply(this, a); }; L.close = function (...a) { tr('lecture.close'); return lc.apply(this, a); };
+        G.bus.on('place:enter', (p) => tr(`place:enter ${p?.id}`));
+        await G.sys.places.enter('PL_ANBANG', { fade: false });
+        tr(`entered cur=${G.sys.places.current}`);
+      });
       const auto = await page.waitForSelector('.lecture-modal iframe.lec-frame', { timeout: T_UI }).then(() => true, () => false);
-      const a1 = await page.evaluate(() => ({ lec: G.sys.lecture._view?.lec?.id, src: document.querySelector('.lecture-modal iframe.lec-frame')?.src || '', note: document.querySelector('.lecture-modal .lec-note')?.textContent || '' }));
-      check('autoplay: entering the room opens its lecture by itself, the video starts muted and says so', auto && a1.lec === 28 && /autoplay=1/.test(a1.src) && /mute=1/.test(a1.src) && /소리가 꺼진 채/.test(a1.note), JSON.stringify(a1));
+      const a1 = await page.evaluate(() => ({ lec: G.sys.lecture._view?.lec?.id, src: document.querySelector('.lecture-modal iframe.lec-frame')?.src || '', note: document.querySelector('.lecture-modal .lec-note')?.textContent || '', trace: window.__mtrace.slice(0, 14) }));
+      check('autoplay: entering the room opens its lecture by itself, the video starts muted and says so', auto && a1.lec === 28 && /autoplay=1/.test(a1.src) && /mute=1/.test(a1.src) && /소리가 꺼진 채/.test(a1.note), JSON.stringify(a1).slice(0, 1500));
       await shot(page, '15-auto-open');
       await page.evaluate(async () => { G.sys.lecture.close(); await G.sys.places.exit({ fade: false }); await G.sys.places.enter('PL_ANBANG', { fade: false }); });
       await page.waitForSelector('#lecture-offer', { timeout: T_UI }).catch(() => {});
@@ -559,7 +570,7 @@ try {
   await page.waitForSelector('.lecture-modal .lec-card', { timeout: T_UI });
   const easy = await page.evaluate(async () => {
     const small = [];
-    const scan = (where) => { for (const b of document.querySelectorAll('.lecture-modal button')) { const r = b.getBoundingClientRect(); if (r.width === 0 || b.classList.contains('easy-hide')) continue; if (getComputedStyle(b).display === 'none') continue; if (r.height < 55.5 || r.width < 55.5) small.push(`${where}: ${b.className.split(' ')[0] || b.textContent.trim().slice(0, 8)} ${Math.round(r.width)}×${Math.round(r.height)}`); } };
+    const scan = (where) => { for (const b of document.querySelectorAll('.lecture-modal button')) { const r = b.getBoundingClientRect(); if (r.width === 0 || b.classList.contains('easy-hide')) continue; if (b.matches('.easy-back, .easy-speak')) continue; /* the dialog's own chrome (04-ui / 08-easy: ≥ 44 px, the kid-audit rule) */ if (getComputedStyle(b).display === 'none') continue; if (b.offsetHeight < 55.5 || b.offsetWidth < 55.5) small.push(`${where}: ${b.className.split(' ').pop() || b.textContent.trim().slice(0, 8)} ${b.offsetWidth}×${b.offsetHeight}`);   /* layout size: an entering view may still be scaled */ } };
     scan('list');
     const inputs = document.querySelectorAll('.lecture-modal input, .lecture-modal textarea, .lecture-modal select').length;
     G.sys.lecture.open(G.sys.lecture.list().find((l) => l.kind === 'deck').id);
