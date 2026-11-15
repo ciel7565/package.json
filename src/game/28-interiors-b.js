@@ -7,7 +7,7 @@
 //   안석 and 사방침 lies before a ten-panel 병풍 of flowers and birds (The Met, CC0). Along the north wall the 이불장 with
 //   the folded bedding, the 이층장 (장롱), the 반닫이 under a 족자; the 경대 by the east window in the morning sun; a
 //   다듬잇돌 with its two 방망이 and a 반짇고리 by the south windows; a brass 화로 with glowing coals, a 등잔, a 소반 with
-//   persimmons, clothes on the 횃대, and a cut-away model of the 구들 under the motion board.
+//   persimmons, clothes on the 횃대, and a cut-away model of the 구들 under the room's lecture screen.
 // 사랑방 (door: the front of 한옥 ② B_HANOK2) — the quiet study. Two bays of the south wall stand open to the yard (the real
 //   valley behind them), their 세살문 swung back; the 서안 with the 문방사우 before the 책거리 병풍, a 책장 of thread-bound
 //   books, a 사방탁자 of ceramics, a pair of 문갑 under a 족자, a 거문고 on its stand, the 고비 with letters, a 바둑판 with a
@@ -15,9 +15,12 @@
 //
 // Exhibit anchors (48-interior-data.js):
 //   PL_ANBANG  ondol · boryo · byeongpung · jangnong · bandaji · gyeongdae · dadeumi · hwaro · hwajodo · art_hwajo ·
-//              art_deer · art_rooster                                             board MG_GUDEUL (south wall, west bay)
+//              art_deer · art_rooster                                   lecture screen: south wall, west bay
 //   PL_SARANG  seoan · sabangtakja · deungjan · chaekgeori · kkachi · irworobong · art_chaekgeori · art_still_life ·
-//              art_plum · art_bamboo · art_portrait · art_tiger                    board MG_CHANGSAL (west wall, south bay)
+//              art_plum · art_bamboo · art_portrait · art_tiger          lecture screen: west wall, south bay
+// Phase 9 (CONTRACT §17.9): no guide stakes and no structure boards in the rooms — the owner asked for them to go. The
+// exhibits are touched at the things themselves; where a card has no thing of its own (a picture met in words) a tag
+// no bigger than a hand marks the spot. Each room has a lecture screen (G.hanok.lectureScreen, 27-interiors-a.js).
 // Living details: 안방 — the 아랫목 shimmer, the coals of the 화로 (glow + a pooled lamp with a slow flicker), the 등잔
 //   flame, motes in the morning sun; 사랑방 — the 등잔 flame, steam from the teapot, a sheet of paper on the desk that lifts in
 //   the breeze, motes in the sun. All of it stays still under reduce-motion and slower than 3 Hz.
@@ -213,18 +216,14 @@
       K.cushion(R, { x: -1.5, z: 2.75, w: 0.5, d: 0.5, h: 0.08, tint: '#2f5c50', trim: '#d0a040' });
       R.block(-1.35, 3.35, 0.42, 0.2);
 
-      // ---- the south-west: a cut-away model of the 구들 under the motion board, the 화조도 · 십장생 sign
+      // ---- the south-west: a cut-away model of the 구들; over it the room's lecture screen hangs like a 족자
       const gm = gudeulModel(R, -4.45, 3.74);
       R.block(-4.45, 3.74, 0.72, 0.32);
       A('ondol', { x: -4.6, y: gm, z: 3.5 });
-      {
-        const b = R.bay('S', 3), w = 1.5, h = 0.84, v = 1.62;
-        R.add('wood', K.geo.slab(w + 0.12, h + 0.12, 0.05, 0.012), R.wm('S', b.uc, v, 0.03), '#4a3020', { wall: 'S' });
-        const p = R.wp('S', b.uc, v, 0.062);
-        ctx.board('MG_GUDEUL', { x: p.x, y: p.y, z: p.z, rotY: PI, w, h, title: '구들에 불이 지나가는 길' });
-      }
-      A('hwajodo', R.signPost({ x: -3.1, z: 1.8, rotY: PI / 2 + 0.3, title: '화조도 · 십장생', sub: '그림에 담은 좋은 뜻' }));
-      R.block(-3.1, 1.8, 0.15, 0.15);
+      if (K.lectureScreen) K.lectureScreen(R, ctx, { side: 'S', u: R.bay('S', 3).uc, v: 1.68, w: 1.5 });
+      // 화조도 · 십장생: a tag no bigger than a hand at the foot of the 병풍 (no guide stake)
+      R.label('화조도 · 십장생', { x: -5.28, y: 0.15, z: scr.w / 2 - 0.42, rotY: PI / 2, tilt: -0.55, w: 0.36, h: 0.1, style: 'paper' });
+      A('hwajodo', { x: -5.05, y: 0.8, z: scr.w / 2 - 0.42 });
 
       // ---- light: the coals, the 등잔 and a 좌등 are pooled lights (night); motes in the morning sun
       K.jwadeung(R, { x: 3.75, z: -3.95, h: 0.86 });
@@ -304,9 +303,12 @@
       K.deungjan(R, { x: 0.82, z: -3.05, h: 0.5 });
       R.block(0.82, -3.05, 0.12, 0.12);
       A('deungjan', { x: 0.82, y: 0.85, z: -2.9 });
-      A('chaekgeori', R.signPost({ x: 2.45, z: -3.05, rotY: -0.25, title: '책거리', sub: '책과 붓을 그린 그림' }));
-      A('irworobong', R.signPost({ x: -2.45, z: -3.05, rotY: 0.25, title: '일월오봉도', sub: '글로 만나는 그림' }));
-      for (const x of [2.45, -2.45]) R.block(x, -3.05, 0.15, 0.15);
+      // 책거리 · 일월오봉도: tags no bigger than a hand at the two feet of the 병풍 (no guide stakes)
+      for (const [key, text, sx] of [['chaekgeori', '책거리', 1], ['irworobong', '일월오봉도', -1]]) {
+        const tx = sx * (scr.w / 2 - 0.42);
+        R.label(text, { x: tx, y: 0.15, z: -3.4, rotY: 0, tilt: -0.55, w: 0.32, h: 0.1, style: 'paper' });
+        A(key, { x: tx, y: 0.8, z: -3.15 });
+      }
       const ch = K.chaekjang(R, { x: -4.6, z: -3.78, w: 1.15, d: 0.4, h: 1.82, levels: 4, seed: 3 });
       R.block(-4.6, -3.78, 0.6, 0.22);
       void ch;
@@ -331,16 +333,14 @@
       void gb;
       const sTiger = K.scroll(R, { m: R.wm('E', R.bay('E', 2).uc + 0.45, 2.48, 0.03), art: 'tiger_scroll', h: 1.38, wall: 'E', maxW: 0.68 });
       A('art_tiger', { x: sTiger.x - 0.3, y: Math.max(1.35, sTiger.y), z: sTiger.z });
-      A('kkachi', R.signPost({ x: 5.15, z: 2.45, rotY: -PI / 2 + 0.2, title: '까치호랑이', sub: '글로 만나는 그림' }));
-      R.block(5.15, 2.45, 0.15, 0.15);
-
-      // ---- the west wall: the motion board (south bay), the 문갑 pair under the plum 족자, the bamboo 족자 and a moon jar
-      {
-        const b = R.bay('W', 0), w = 1.5, h = 0.84, v = 1.62;
-        R.add('wood', K.geo.slab(w + 0.12, h + 0.12, 0.05, 0.012), R.wm('W', b.uc, v, 0.03), '#4a3020', { wall: 'W' });
-        const p = R.wp('W', b.uc, v, 0.062);
-        ctx.board('MG_CHANGSAL', { x: p.x, y: p.y, z: p.z, rotY: PI / 2, w, h, title: '창살 도감' });
+      {   // 까치호랑이: a tag on the wall beside the tiger (no guide stake)
+        const ku = R.bay('E', 2).u1 - 0.3, kp = R.wp('E', ku, 1.15, 0.45);
+        R.label('까치호랑이', { side: 'E', u: ku, v: 1.15, w: 0.32, h: 0.1, style: 'paper' });
+        A('kkachi', { x: kp.x, y: kp.y, z: kp.z });
       }
+
+      // ---- the west wall: the lecture screen (south bay), the 문갑 pair under the plum 족자, the bamboo 족자 and a moon jar
+      if (K.lectureScreen) K.lectureScreen(R, ctx, { side: 'W', u: R.bay('W', 0).uc, v: 1.68, w: 1.5 });
       for (const [z, lay] of [[-0.62, 'dDDd'], [0.62, 'dDDd']]) K.mungap(R, { x: -5.76, z, rotY: PI / 2, w: 1.2, d: 0.34, h: 0.5, layout: lay });
       R.block(-5.76, 0, 0.2, 1.24);
       K.pot(R, { kind: 'bottle', x: -5.74, y: 0.52, z: -0.95, s: 0.9, tint: '#f1efe7' });     // a white porcelain bottle

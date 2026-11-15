@@ -1,16 +1,29 @@
 // =============================================================================
-// 27-interiors-a.js — rooms ①: PL_DAECHEONG 대청마루, the reference room of the hanok kit (CONTRACT §16.4 / §16.5).
+// 27-interiors-a.js — rooms ①: PL_DAECHEONG 대청마루, the 강의실 (lecture hall) of the valley (CONTRACT §16.4 / §16.5,
+// reworked in phase 9 — §17.3 "In the rooms", §17.9).
 //
-// The hall that shows how a hanok stands: every member of the frame is in view — 주춧돌 → 기둥 → 창방 → 대들보 → 동자주 →
-// 종보 → 대공 → 도리 → 서까래 — over an 우물마루 floor. The south wall is the 창살 도감 (the six lattice patterns as real
-// windows, their shadows on the floor), the west side is open (들어열개: the 분합문 hang folded under the eaves) to a
-// yard, the door back out is in the east wall. Door: the front of 발효문화관 (B_CULTURE).
+// A wide hanok hall used as a classroom: a lecture screen hangs like a great 족자 in the middle of the north wall, three
+// rows of 방석 with small 서안 face it across a centre aisle, the teacher's 서안 with the 문방사우 and books stands beside
+// it, a 책장 fills the north-east corner. The frame of the hall is still all in view (주춧돌 → 기둥 → 창방 → 대들보 → 동자주
+// → 종보 → 대공 → 도리 → 서까래 over an 우물마루), the south wall is six lattice windows whose shadows lie on the floor, the
+// west side stands open to a yard (들어열개), the door back out is in the east wall. Door: the front of 발효문화관 (B_CULTURE).
 //
-// Exhibit anchors (48-interior-data.js): gidan · juchu · gidung · daedeulbo · seokkarae · cheoma · jibung · umulmaru ·
-// deureoyeolgae · changsal · bangs · art_geese · art_officials · art_dragon_carp, shelf:0…5 (the fallback shelf by the
-// door). Motion boards: MG_FRAME · MG_CHEOMA · MG_MARU (north wall) · MG_CHANGSAL (east wall).
-// Living details: dust in the window sun, the glow of four 좌등 and a 초롱 (slow flicker), a bamboo blind that sways at
-// the open side.
+// NO guide stakes and NO structure boards any more (the owner: "건물 내부에 한옥 구조 안내판은 없애주고"): the exhibit cards of
+// 48-interior-data.js are touched at the real things — a post, the floor, the folded doors, the windows, the 1 : 8 frame
+// model by the open side — each with a name tag no bigger than a hand (R.label 0.3 × 0.1 m).
+// Exhibit anchors: gidan · daedeulbo · seokkarae (the frame model) · juchu · gidung (two posts of the south wall) ·
+// cheoma · deureoyeolgae (the open west side) · umulmaru (the floor) · changsal (the windows) · jibung (the roof samples)
+// · art_geese · art_officials · art_dragon_carp; shelf:0…5 (the fallback shelf by the door: 안방과 사랑방 goes there).
+//
+// PUBLIC (used by 28 / 29-interiors and by any other room builder):
+//   G.hanok.lectureScreen(R, ctx, { side, u, v = 1.6, w = 1.6, h = w · 9 / 16, n = 0.07, top })
+//       -> { x, y, z, rotY, w, h, object }   a lecture screen hung like a 족자 on wall `side`, its centre `u` metres from
+//       the wall's left end (seen from inside) and `v` up, `n` in front of the wall; `top` = where the cords are tied.
+//       The picture is G.sys.lecture.screen(ctx, { x, y, z, rotY, w, h }) (74-lecture.js: the title card of the room's
+//       lecture and the interactable 🎬 강의 보기; x / y / z = the CENTRE of the picture in the place's local metres). Until
+//       that system is in the build a quiet card "강의 화면" hangs there and opens the lecture panel when there is one.
+// Living details: dust in the window sun, the glow of the 좌등 and a 초롱 (slow flicker), a bamboo blind that sways at the
+// open side.
 //
 // Room origins (z = 2000): PL_DAECHEONG −600 · PL_ANBANG −400 · PL_SARANG −200 · PL_BUEOK 0 · PL_BALHYO 200 ·
 // PL_GOTGAN 400 · PL_OFFICE 600 (the district PL_ALLOT at (0, 2600)).
@@ -20,6 +33,80 @@
   if (!P || !K) { G.log.warn('WORLD', 'interiors-a: places / hanok kit missing — no rooms'); return; }
   const PI = Math.PI;
   const BK = G.bkit, M = BK.M, mul = BK.mul, geo = BK.geo;
+  const YAW = { N: 0, E: -PI / 2, S: PI, W: PI / 2 };
+  const FONT = BK.FONT || '"PretendardEmbed","Pretendard","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
+  const num = (v, d) => (Number.isFinite(Number(v)) && v != null ? Number(v) : d);
+
+  // ================================================================ the lecture screen of a room (shared)
+  /** the card that hangs while the lecture system is not in the build: calm, dark, a play mark and two lines */
+  function standInCard() {
+    return G.gfx.canvasTexture(512, 288, (c, w, h) => {
+      const g = c.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, '#263640'); g.addColorStop(1, '#16222a');
+      c.fillStyle = g; c.fillRect(0, 0, w, h);
+      c.strokeStyle = 'rgba(214,180,110,.75)'; c.lineWidth = 3; c.strokeRect(12, 12, w - 24, h - 24);
+      // a play mark
+      c.fillStyle = 'rgba(232,196,120,.95)'; c.beginPath(); c.arc(w / 2, 104, 44, 0, PI * 2); c.fill();
+      c.fillStyle = '#1b2830'; c.beginPath(); c.moveTo(w / 2 - 13, 82); c.lineTo(w / 2 + 24, 104); c.lineTo(w / 2 - 13, 126); c.closePath(); c.fill();
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = '#f4e9cf'; c.font = `800 50px ${FONT}`; c.fillText('강의 화면', w / 2, 192);
+      c.fillStyle = '#c9b98f'; c.font = `600 22px ${FONT}`; c.fillText('가까이 가서 눌러 보세요', w / 2, 242);
+    });
+  }
+  function lectureScreen(R, ctx, o = {}) {
+    const side = YAW[o.side] != null ? o.side : 'N';
+    const w = Math.min(6, Math.max(0.8, num(o.w, 1.6))), h = Math.min(4, Math.max(0.45, num(o.h, w * 9 / 16)));
+    const u = num(o.u, R.len ? R.len[side] / 2 : 2), v = num(o.v, 1.6), n = Math.max(0.05, num(o.n, 0.07));
+    const top = Math.min(num(o.top, v + h / 2 + 0.5), (R.post || 2.6) - 0.02);
+    const opt = { wall: side, cast: false };
+    const at = (du, dv, dn = 0) => R.wp(side, u + du, v + dv, n + dn);
+    // ---- the 족자 mount: silk behind the picture, a paler band above and below, two rollers, the cords
+    R.add('cloth', K.geo.slab(w + 0.16, h + 0.06, 0.012, 0.003), R.wm(side, u, v, n - 0.016), '#2e3b50', { wall: side });
+    for (const [dv, hh, tint] of [[h / 2 + 0.085, 0.11, '#d9cba6'], [-h / 2 - 0.1, 0.14, '#d9cba6']]) R.add('cloth', K.geo.slab(w + 0.16, hh, 0.012, 0.003), R.wm(side, u, v + dv, n - 0.016), tint, opt);
+    const rod = (dv, r, ext, tone) => { const a = at(-w / 2 - ext, dv), b = at(w / 2 + ext, dv); R.add('furn', geo.tube(a.x, a.y, a.z, b.x, b.y, b.z, r, 10), null, tone, opt); return [a, b]; };
+    rod(h / 2 + 0.155, 0.017, 0.1, '#4a2f1c');
+    const [ba, bb] = rod(-h / 2 - 0.19, 0.03, 0.12, '#3a2416');
+    for (const p of [ba, bb]) R.add('brass', new THREE.SphereGeometry(0.036, 10, 8), M(p.x, p.y, p.z), null, opt);
+    if (o.cords !== false && top > v + h / 2 + 0.22) {
+      const k = at(0, 0, 0); k.y = top;
+      for (const s of [-1, 1]) { const a = at(s * w * 0.36, h / 2 + 0.165); R.add('cloth', geo.tube(a.x, a.y, a.z, k.x, k.y, k.z, 0.006, 5), null, '#7a2e22', opt); }
+      R.add('iron', new THREE.SphereGeometry(0.02, 8, 6), M(k.x, k.y, k.z), null, opt);
+    }
+    // ---- the picture: the lecture system's screen, or the stand-in card
+    const p = at(0, 0, 0), rotY = YAW[side];
+    const spec = { x: p.x, y: p.y, z: p.z, rotY, w, h };
+    let object = null;
+    const LS = G.sys.lecture;
+    if (LS && typeof LS.screen === 'function') {
+      try { object = LS.screen(ctx, { ...spec }) || null; if (object && object.isObject3D && !object.parent) ctx.group.add(object); }
+      catch (e) { object = null; G.log.warn('WORLD', `place ${ctx.id}: the lecture screen failed — the stand-in card hangs instead`, e?.message || e); }
+    }
+    if (!object) {
+      const tex = standInCard();
+      ctx.own(tex);
+      const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xe9e4da, fog: false });
+      ctx.own(mat);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      mesh.name = 'room-lecture-screen';
+      mesh.position.set(p.x, p.y, p.z); mesh.rotation.y = rotY;
+      mesh.userData.guardSkip = true;   // an opaque picture on a wall: world geometry for the render guard
+      R.addMesh(mesh, side);
+      object = mesh;
+      ctx.interact({
+        id: `${ctx.id}:lecture`, kind: 'board', label: '🎬 강의 보기', kidLabel: '강의 보기', emoji: '🎬', radius: 3,
+        position: { x: p.x + Math.sin(rotY) * 1.0, y: Math.min(p.y, 1.4), z: p.z + Math.cos(rotY) * 1.0 },
+        onInteract: () => {
+          const L2 = G.sys.lecture;
+          try {
+            if (L2 && typeof L2.open === 'function') { const lec = typeof L2.forPlace === 'function' ? L2.forPlace(ctx.id) : null; L2.open(lec && lec.id != null ? lec.id : undefined); }
+            else G.ui?.toast?.('강의실을 준비하고 있어요. 조금만 기다려 주세요.', { type: 'info', emoji: '🎓' });
+          } catch (e) { G.log.warn('UI', 'lecture panel failed', e?.message || e); }
+        },
+      });
+    }
+    return { ...spec, object };
+  }
+  K.lectureScreen = lectureScreen;
 
   // shown only while 49-exhibits.js is not in the build (its data and cards take over when it is)
   const TOPICS = [
@@ -74,7 +161,7 @@
       R.add('paint', g, M(x - W * 0.26, top + (y0b + y1) / 2 + 0.034, z + (z0 + z1) / 2), '#4b4f55');
     };
     tile(-D / 2 - 0.1, eave, -D / 4, mid); tile(-D / 4, mid, 0, ridge);
-    R.block(x, z, 1.2, 0.75);
+    R.block(x, z, 1.2, 0.75, { maxY: 1.2 });
     R.planItem(x, z, 2.3, 1.35, 'rgba(120,80,45,.8)');
     return top;
   }
@@ -95,16 +182,16 @@
     R.add('straw', th, mul(m, M(0.32, 0.0, 0)), '#d8bd76');
     R.add('straw', geo.cyl(0.03, 0.03, 0.4, 8).applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 2)), mul(m, M(0.32, 0.162, 0)), '#c2a25a');
     R.planItem(x, z, 1.3, 0.6);
-    R.block(x, z, Math.abs(Math.cos(ry)) * 0.65 + Math.abs(Math.sin(ry)) * 0.3 + 0.02, Math.abs(Math.sin(ry)) * 0.65 + Math.abs(Math.cos(ry)) * 0.3 + 0.02);
+    R.block(x, z, Math.abs(Math.cos(ry)) * 0.65 + Math.abs(Math.sin(ry)) * 0.3 + 0.02, Math.abs(Math.sin(ry)) * 0.65 + Math.abs(Math.cos(ry)) * 0.3 + 0.02, { maxY: 1.0 });
     return top;
   }
 
   P.define({
     id: 'PL_DAECHEONG', name: '대청마루', kidName: '대청마루', emoji: '🏛️', zoneId: 'ZONE_PL_DAECHEONG', color: '#e8c58a',
-    desc: '한옥이 어떻게 서 있는지 보여 주는 넓은 마루예요.',
+    desc: '강의를 듣는 한옥 마루 교실이에요. 집의 뼈대도 가까이에서 볼 수 있어요.',
     origin: { x: -600, z: 2000 }, size: { w: 16, d: 10, h: 4.6 }, floorY: 0, surface: 'wood',
     spawn: { x: 6.1, z: 0, rotY: -PI / 2 },
-    door: { buildingId: 'B_CULTURE', x: door.x, z: door.z, label: '🚪 대청마루 들어가기', kidLabel: '대청마루 구경' },
+    door: { buildingId: 'B_CULTURE', x: door.x, z: door.z, label: '🚪 대청마루 강의실 들어가기', kidLabel: '마루 강의실 가기' },
     exit: door.exit,
     indoor: true, camera: { dist: 5.6, min: 2.6, max: 7.5, pitch: 0.13, pmin: -0.1, pmax: 0.8, ceil: 2.52 }, far: 150,
     exhibits: TOPICS,
@@ -121,79 +208,107 @@
         sun: { az: 206, el: 33 },
       });
       const A = (key, spot) => ctx.anchor(key, spot);
-
-      // ---- north wall: three motion boards, two scrolls and a picture between the posts (bays 0…5 from west to east)
-      const board = (side, bay, id, title) => {
-        const b = R.bay(side, bay), w = 1.62, h = 0.91, v = 1.62;
-        R.add('wood', K.geo.slab(w + 0.12, h + 0.12, 0.05, 0.012), R.wm(side, b.uc, v, 0.03), '#4a3020', { wall: side });
-        const p = R.wp(side, b.uc, v, 0.062);
-        ctx.board(id, { x: p.x, y: p.y, z: p.z, rotY: { N: 0, E: -PI / 2, S: PI, W: PI / 2 }[side], w, h, title });
+      const spot = (p, dx = 0, dy = 0, dz = 0) => ({ x: p.x + dx, y: p.y + dy, z: p.z + dz });
+      /** a name tag no bigger than a hand on a wall post (side, u, v) — the exhibit is touched at the thing itself */
+      const postTag = (key, side, u, v, text, into = 0.4) => {
+        R.label(text, { side, u, v, n: 0.168, w: 0.3, h: 0.1, style: 'paper' });
+        const p = R.wp(side, u, Math.max(v, 0.5), into);
+        return A(key, { x: p.x, y: p.y, z: p.z });
       };
-      board('N', 0, 'MG_CHEOMA', '처마와 해');
-      board('N', 2, 'MG_FRAME', '한옥 뼈대 쌓기');
-      board('N', 4, 'MG_MARU', '우물마루와 들어열개');
-      board('E', 2, 'MG_CHANGSAL', '창살 도감');
-      const hang = (bay, name, key, h) => {
-        const b = R.bay('N', bay), s = K.scroll(R, { m: R.wm('N', b.uc, 2.42, 0.03), art: name, h, wall: 'N', maxW: 1.7 });
-        const p = R.wp('N', b.uc, 1.15, 0.45);
-        A(key, { x: p.x, y: p.y, z: p.z });
+
+      // ---- the screen wall (north): the lecture screen hangs like a great 족자 before the middle post
+      K.lectureScreen(R, ctx, { side: 'N', u: 8, v: 1.63, w: 3.4, n: 0.31, top: 2.68 });
+      // the teacher's place east of it: a 서안 with the 문방사우 and books, a thick cushion behind it, a 좌등
+      const sa = K.seoan ? K.seoan(R, { x: 3.05, z: -3.5, rotY: PI, w: 1.1, d: 0.4, h: 0.36 }) : K.table(R, { x: 3.05, z: -3.5, w: 1.1, d: 0.4, h: 0.36, tone: '#6b3a22' });
+      if (K.munbang) K.munbang(R, { x: 3.05, y: sa.top, z: -3.5, rotY: PI });
+      if (K.books) {
+        K.books(R, { x: 3.48, y: sa.top, z: -3.52, w: 0.18, d: 0.26, n: 3, seed: 7, rotY: 0.12 });
+        K.books(R, { x: 2.2, z: -3.62, w: 0.2, d: 0.28, n: 6, seed: 21, rotY: -0.2 });
+        K.books(R, { x: 2.24, z: -3.28, w: 0.2, d: 0.28, n: 3, seed: 4, rotY: 0.35 });
+      }
+      R.block(3.05, -3.5, 0.6, 0.24, { maxY: 0.5 });
+      K.cushion(R, { x: 3.05, z: -4.1, w: 0.7, d: 0.62, h: 0.12, tint: '#8a2f2a', trim: '#c9a24a' });
+      // a 책장 in the north-east corner
+      if (K.chaekjang) { K.chaekjang(R, { x: 6.35, z: -4.74, w: 1.2, d: 0.4, h: 1.82, levels: 4, seed: 9 }); R.block(6.35, -4.74, 0.62, 0.22); }
+
+      // ---- the seats: three rows of 방석 with a small 서안 each, a centre aisle towards the screen
+      const tints = [['#2c4a6e', '#c9a24a'], ['#7e3a2c', '#c49a40'], ['#2f6a58', '#c9a24a'], ['#8a6a2c', '#2f4a80'], ['#5a3a5e', '#c9a24a'], ['#a8322c', '#2f4a80']];
+      let seat = 0;
+      for (const rz of [-0.7, 0.8, 2.3]) for (const cx of [-4.05, -2.75, -1.45, 1.45, 2.75, 4.05]) {
+        const [tint, trim] = tints[(seat * 5 + (rz > 0 ? 2 : 0)) % tints.length];
+        K.cushion(R, { x: cx, z: rz, w: 0.54, d: 0.54, h: 0.08, tint, trim });
+        const dz = rz - 0.56, t = K.table(R, { x: cx, z: dz, w: 0.62, d: 0.32, h: 0.27, legs: 'straight', tone: seat % 2 ? '#7a4a2c' : '#6b3a22' }).top;
+        if (K.books && seat % 3 !== 1) K.books(R, { x: cx + (seat % 2 ? 0.12 : -0.1), y: t, z: dz, w: 0.17, d: 0.24, n: 1 + (seat % 2), seed: 30 + seat, rotY: (seat % 5) * 0.09 - 0.15 });
+        R.block(cx, dz, 0.31, 0.16, { maxY: 0.3 });
+        seat++;
+      }
+      R.planItem(-2.75, 0.5, 3.3, 3.9, 'rgba(225,200,140,.55)');
+      R.planItem(2.75, 0.5, 3.3, 3.9, 'rgba(225,200,140,.55)');
+
+      // ---- pictures: two 족자 on the north wall, one beside the door (the screen took the middle)
+      const hang = (side, bay, name, key, h) => {
+        const b = R.bay(side, bay), s = K.scroll(R, { m: R.wm(side, b.uc, 2.42, 0.03), art: name, h, wall: side, maxW: 1.7 });
+        A(key, spot(R.wp(side, b.uc, 1.15, 0.45)));
         return s;
       };
-      hang(1, 'wild_geese_landscape', 'art_geese', 1.62);
-      hang(3, 'officials_gathering', 'art_officials', 1.62);
-      hang(5, 'dragon_carp_minhwa', 'art_dragon_carp', 1.5);
+      hang('N', 1, 'wild_geese_landscape', 'art_geese', 1.62);
+      hang('N', 4, 'officials_gathering', 'art_officials', 1.62);
+      hang('E', 2, 'dragon_carp_minhwa', 'art_dragon_carp', 1.5);
 
       // ---- the fallback shelf by the door (east wall, north bay)
       R.shelfWall('E', 0, { levels: 2, slots: 3, w: 2.1, y: 0.92, gap: 0.52 }).forEach((sp, i) => A('shelf:' + i, sp));
-      // a few quiet pots under it
-      K.pot(R, { kind: 'hangari', x: 7.25, z: -4.25, s: 0.9, lid: true });
-      K.pot(R, { kind: 'danji', x: 6.55, z: -4.45, s: 1.1, lid: true, tint: '#7a5236' });
-      R.block(7.0, -4.3, 0.75, 0.45, { maxY: 0.75 });   // [controls] low pots: a jump clears them
 
-      // ---- the frame model in the middle, the roof samples by the north wall
-      frameModel(R, 0.4, -0.3);
-      A('jibung', { x: 4.9, y: roofSamples(R, 4.9, -3.75, 0) + 0.2, z: -3.75 });
+      // ---- how the hall stands — touched at the real things, each with a tag no bigger than a hand
+      // the 1 : 8 frame model by the open side: 기단 at its foot, 대들보 and 서까래 over it
+      const mx = -6.2, mz = -1.9, mt = frameModel(R, mx, mz);
+      R.label('한옥 뼈대 모형', { x: mx, y: mt - 0.08, z: mz + 0.68, rotY: 0, w: 0.5, h: 0.12, style: 'paper' });
+      A('gidan', { x: mx - 0.55, y: mt + 0.12, z: mz + 0.7 });
+      A('daedeulbo', { x: mx + 0.75, y: mt + 0.5, z: mz + 0.55 });
+      A('seokkarae', { x: mx - 0.2, y: mt + 0.62, z: mz - 0.72 });
+      // the roof samples by the north wall, west bay
+      const rt = roofSamples(R, -6.55, -4.5, 0);
+      R.label('기와 · 초가', { x: -6.55, y: rt - 0.09, z: -4.5 + 0.305, rotY: 0, w: 0.4, h: 0.1, style: 'paper' });
+      A('jibung', { x: -6.55, y: rt + 0.2, z: -4.2 });
+      // two posts of the south wall (S: u runs from east to west): a post and the stone under it
+      postTag('gidung', 'S', 16 - 10.667, 1.28, '기둥');
+      postTag('juchu', 'S', 16 - 5.333, 0.3, '주춧돌');
+      postTag('changsal', 'S', 8, 1.28, '창살 · 한지');
+      postTag('umulmaru', 'S', 16 - 13.333, 0.3, '우물마루');
+      // the open west side (W: u runs from south to north): the folded doors overhead, the eaves outside
+      postTag('deureoyeolgae', 'W', 3.333, 1.5, '들어열개', 0.55);
+      postTag('cheoma', 'W', 6.667, 1.5, '처마', 0.55);
 
-      // ---- name stakes: each stands by the member it names
-      const stake = (key, x, z, ry, title, sub) => A(key, R.signPost({ x, z, rotY: ry, title, sub }));
-      stake('gidan', -7.25, 1.6, PI / 2, '기단', '돌로 쌓은 단');
-      stake('juchu', -2.2, -4.45, 0, '주춧돌', '기둥 발밑의 돌');
-      stake('gidung', 0.45, -4.45, 0, '기둥', '배흘림기둥');
-      stake('daedeulbo', 2.4, 1.9, PI / 2, '대들보 ⬆', '머리 위 가장 큰 나무');
-      stake('seokkarae', -2.67, 2.2, PI / 2, '도리·서까래 ⬆', '지붕의 갈비뼈');
-      stake('cheoma', -7.25, -3.4, PI / 2, '처마', '지붕의 긴 끝');
-      stake('umulmaru', -4.6, -1.2, PI / 2, '우물마루 ⬇', '가로세로로 짠 마루');
-      stake('deureoyeolgae', -6.2, 3.3, PI / 2, '들어열개 ⬆', '접어 올린 문');
-      stake('changsal', -0.2, 4.15, PI, '창살 도감', '여섯 가지 무늬');
-      stake('bangs', 7.1, 1.85, -PI / 2, '안방 · 사랑방', '문 너머의 방들');
-
-      // ---- a place to sit: a mat, a small table with a tea set, two cushions (near the open side)
-      K.floorMat(R, { x: -4.4, z: 1.3, w: 2.6, d: 1.9, rotY: 0 });
-      const tb = K.table(R, { x: -4.4, z: 1.3, w: 0.52, round: true, h: 0.3, legs: 'curved', tone: '#6b3a22' }).top;
-      K.pot(R, { kind: 'bottle', x: -4.48, y: tb, z: 1.26, s: 0.62, tint: '#e9e6da' });
-      K.pot(R, { kind: 'bowl', x: -4.28, y: tb, z: 1.4, s: 0.55, tint: '#eeeadc' });
-      K.pot(R, { kind: 'bowl', x: -4.3, y: tb, z: 1.16, s: 0.55, tint: '#eeeadc' });
-      K.cushion(R, { x: -5.15, z: 1.3, w: 0.56, d: 0.56, tint: '#a8322c', trim: '#2f4a80' });
-      K.cushion(R, { x: -3.65, z: 1.3, w: 0.56, d: 0.56, tint: '#2f6a58', trim: '#c9a24a' });
-      R.planItem(-4.4, 1.3, 2.6, 1.9, 'rgba(225,200,140,.75)');
-      // a rice chest (뒤주) against the south-east corner post, a basket and a straw sheaf by the yard side
+      // ---- a place to rest by the open side: a mat, a small table with a tea set, two cushions
+      const tx = -6.25, tz = 2.55;
+      K.floorMat(R, { x: tx, z: tz, w: 2.5, d: 1.9, rotY: 0 });
+      const tb = K.table(R, { x: tx, z: tz, w: 0.52, round: true, h: 0.3, legs: 'curved', tone: '#6b3a22' }).top;
+      K.pot(R, { kind: 'bottle', x: tx - 0.08, y: tb, z: tz - 0.04, s: 0.62, tint: '#e9e6da' });
+      K.pot(R, { kind: 'bowl', x: tx + 0.12, y: tb, z: tz + 0.1, s: 0.55, tint: '#eeeadc' });
+      K.pot(R, { kind: 'bowl', x: tx + 0.1, y: tb, z: tz - 0.14, s: 0.55, tint: '#eeeadc' });
+      K.cushion(R, { x: tx - 0.75, z: tz, w: 0.56, d: 0.56, tint: '#a8322c', trim: '#2f4a80' });
+      K.cushion(R, { x: tx + 0.75, z: tz, w: 0.56, d: 0.56, tint: '#2f6a58', trim: '#c9a24a' });
+      R.block(tx, tz, 0.27, 0.27, { maxY: 0.34 });
+      R.planItem(tx, tz, 2.5, 1.9, 'rgba(225,200,140,.75)');
+      // a rice chest (뒤주) against the south-east corner post, two quiet pots beside it, a basket and straw by the yard side
       K.chest(R, { x: 7.2, z: 3.9, rotY: -PI / 2, w: 0.95, d: 0.62, h: 0.86, doors: 1, drawers: 0, legs: 0.14, fittings: 'iron', tone: '#8a5a36', frameTone: '#5d3a24' });
       R.block(7.2, 3.9, 0.36, 0.52, { maxY: 1.0, stand: true });   // [controls] the 뒤주 (0.86 + legs): one may land on it
-      K.basket(R, { x: -7.1, z: -1.1, r: 0.3, h: 0.24 });
-      K.basket(R, { x: -6.75, z: -0.45, kind: 'ki', r: 0.26, rotY: 0.7 });
-      K.straw(R, { x: -7.3, z: -0.3, kind: 'bundle', s: 0.9, rotY: 0.4 });
+      K.pot(R, { kind: 'hangari', x: 6.2, z: 4.3, s: 0.9, lid: true });
+      K.pot(R, { kind: 'danji', x: 5.55, z: 4.45, s: 1.1, lid: true, tint: '#7a5236' });
+      R.block(5.95, 4.35, 0.72, 0.42, { maxY: 0.75 });             // [controls] low pots: a jump clears them
+      K.basket(R, { x: -7.2, z: 0.2, r: 0.3, h: 0.24 });
+      K.basket(R, { x: -6.9, z: 0.85, kind: 'ki', r: 0.26, rotY: 0.7 });
+      K.straw(R, { x: -7.35, z: 1.0, kind: 'bundle', s: 0.9, rotY: 0.4 });
 
-      // ---- light: two standing lamps by the north wall, a lantern over the door; dust in the window sun
-      K.jwadeung(R, { x: -1.35, z: -4.2 });
-      K.jwadeung(R, { x: 3.95, z: -4.2 });
-      K.jwadeung(R, { x: -6.3, z: 4.25 });
-      K.jwadeung(R, { x: 2.67, z: 4.3, h: 0.8 });
-      for (const [lx, lz] of [[-1.35, -4.2], [3.95, -4.2], [-6.3, 4.25], [2.67, 4.3]]) R.block(lx, lz, 0.2, 0.2);
+      // ---- light: 좌등 beside the screen and by the windows, a lantern over the door; dust in the window sun
+      const lamps = [[-2.3, -4.3, 0.9], [4.2, -4.3, 0.9], [-7.2, 4.3, 0.9], [2.67, 4.3, 0.8]];
+      for (const [lx, lz, lh] of lamps) { K.jwadeung(R, { x: lx, z: lz, h: lh }); R.block(lx, lz, 0.2, 0.2); }
       // 초롱 over the door: a paper lantern on a cord
       R.add('glow', geo.cyl(0.11, 0.11, 0.3, 10), M(6.9, 2.18, 0), '#ffd9a8', { cast: false, wall: 'E' });
       for (const y of [2.02, 2.34]) R.add('furn', geo.cyl(0.115, 0.115, 0.03, 10), M(6.9, y, 0), '#3a2416', { cast: false, wall: 'E' });
       R.add('iron', geo.tube(6.9, 2.35, 0, 6.9, 2.62, 0, 0.005, 4), null, null, { cast: false, wall: 'E' });
       ctx.light({ x: 6.6, y: 2.1, z: 0, color: '#ffb66a', intensity: 6, distance: 10, decay: 1.7, flicker: 0.05, day: 0.3 });
+      // a soft lamp over the seats so the hall reads at night (a pooled light; nothing on `low`)
+      ctx.light({ x: 0, y: 2.5, z: 0.4, color: '#ffc98a', intensity: 7, distance: 13, decay: 1.6, day: 0.15 });
       K.dust(R, { count: 140 });
 
       // ---- 발: a bamboo blind half let down in the north bay of the open side; it sways a little

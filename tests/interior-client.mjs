@@ -63,6 +63,17 @@ if (shotDir) fs.mkdirSync(shotDir, { recursive: true });
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail: String(detail ?? '').slice(0, 400) }); log(`${ok ? '  ✔' : '  ✖'} ${name}${detail !== '' && detail != null ? ` — ${String(detail).slice(0, 300)}` : ''}`); };
 
+// [world] phase 9 (CONTRACT §17.9): the six hanok rooms of the valley — a lecture screen in each, no guide stakes, and
+// no motion board about how a house is built (the boards that stay tell of fermentation, jars and the farming year).
+const WORLD_ROOMS = { PL_DAECHEONG: { boards: 0 }, PL_ANBANG: { boards: 0 }, PL_SARANG: { boards: 0 }, PL_BUEOK: { boards: 0 }, PL_BALHYO: { boards: 2 }, PL_GOTGAN: { boards: 3 } };
+{
+  const code = ['27-interiors-a.js', '28-interiors-b.js', '29-interiors-c.js'].map((f) => fs.readFileSync(path.join(ROOT, 'src/game', f), 'utf8')).join('\n')
+    .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  const stakes = (code.match(/\.signPost\(/g) || []).length, structure = code.match(/MG_(FRAME|CHEOMA|MARU|CHANGSAL|GUDEUL)/g) || [];
+  check('room builders: no guide stake and no hanok-structure motion board is built any more', stakes === 0 && structure.length === 0, `${stakes} signPost calls · ${structure.join(' ') || 'no structure board'}`);
+  check('room builders: every valley room hangs a lecture screen', (code.match(/lectureScreen\(R, ctx/g) || []).length >= 7, `${(code.match(/lectureScreen\(R, ctx/g) || []).length - 1} calls`);
+}
+
 const browser = await chromium.launch({ headless: !flag('--headed'), args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'] });
 const pageErrors = [], consoleErrors = [];
 /** a fresh page: local files only; page errors and console errors are collected with a tag */
@@ -279,6 +290,12 @@ try {
       r.companion = cm ? P.contains(cm.matrixWorld.elements[12], cm.matrixWorld.elements[14]) : null;
       r.built = P.built().find((b) => b.id === id) || null;
       r.inputs = document.querySelectorAll('#place-chip input, #place-chip textarea, #place-chip a[href]').length;
+      // [world] the room's lecture screen, its motion boards and its exhibit cards
+      const txt = (v) => { try { return String(typeof v === 'function' ? v() : v ?? ''); } catch (e) { return ''; } };
+      const here = G.interact.list().filter((e) => { try { return typeof e.enabled !== 'function' || !!e.enabled(); } catch (e2) { return false; } });
+      r.lecture = here.filter((e) => /강의/.test(txt(e.label) + ' ' + txt(e.kidLabel))).map((e) => ({ id: String(e.id), kid: txt(e.kidLabel), radius: Number(e.radius) || 0 }));
+      r.motionBoards = here.filter((e) => String(e.id).startsWith(id + ':board:')).length;
+      r.cards = (G.sys.exhibits?.forPlace?.(id) || []).length;
       return r;
     }, p.id);
     check(`${p.id}: a floor plan for the minimap, drawn without an error`, inner.plan && inner.planDraw === true, JSON.stringify({ plan: inner.plan, draw: inner.planDraw }));
@@ -289,6 +306,13 @@ try {
     check(`${p.id}: a save from inside holds the spot outside the door`, !!inner.save && (!exitAt || near(inner.save, exitAt, 0.6)), JSON.stringify(inner.save));
     check(`${p.id}: the chip has no text field and no link`, inner.inputs === 0, `${inner.inputs}`);
     if (inner.companion !== null) check(`${p.id}: the companion came along`, inner.companion === true, '');
+    // [world] phase 9: a lecture screen in every room; rooms of other lanes are reported here, judged in their own suites
+    if (p.indoor && WORLD_ROOMS[p.id]) {
+      const W9 = WORLD_ROOMS[p.id];
+      check(`${p.id}: a lecture screen with a kid label opens the 강의실 (reach ≥ 2.5 m)`, inner.lecture.length >= 1 && inner.lecture[0].kid.length >= 2 && inner.lecture[0].radius >= 2.5, JSON.stringify(inner.lecture));
+      check(`${p.id}: ${W9.boards} motion board(s) on the walls — none about how a house is built`, inner.motionBoards === W9.boards, `${inner.motionBoards} boards`);
+      check(`${p.id}: every exhibit card of the room is still touchable at a thing or on the shelf`, inner.cards >= 8 && !!inner.built && inner.built.exhibits === inner.cards, `${inner.built && inner.built.exhibits} of ${inner.cards} cards`);
+    } else if (p.indoor) log(`  · ${p.id}: lecture screen ${inner.lecture.length ? 'found (' + inner.lecture[0].id + ')' : 'not found'}`);
     if (p.indoor) {
       await page.evaluate(() => { try { G.ui.modal.closeAll(); document.activeElement?.blur?.(); } catch (e) { /* */ } });
       await frames(page, 6);

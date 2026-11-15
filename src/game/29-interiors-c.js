@@ -11,20 +11,24 @@
 //    the small one; a 바라지창 above it lets a sun shaft through the steam; 살강 with 사발 / 대접, 찬장, 물두멍 + 물동이,
 //    소반 (a stack and a laid one), 맷돌 on its mat, 절구 + 공이, 키 · 체 · 복조리 on the wall, 장작, 광주리, strings of
 //    시래기 · 고추 · 마늘 from the rafters (they sway), a smoke-darkened ceiling over the hearth.
-//    Anchors: agungi · gamasot · siru · salgang · soban · jori · ki · maetdol. Board: MG_GUDEUL.
+//    Anchors: agungi · gamasot · siru · salgang · soban · jori · ki · maetdol. Lecture screen: south wall.
 //  발효실 (B_HANOK4, origin (200, 2000), 12 × 9 × 3.4): the fermentation year — 메주 hung on straw rope (they sway),
 //    a straw bed where 메주 ripen, 누룩 trays, a row of 장독 on a stone 단 (간장 open with 숯 and 고추 afloat, 된장 with a
 //    금줄, 고추장, 씨간장), 장 가르기, a 김칫독 pit with 김장, 식초 by the warm wall, a salt 가마니 over a 간수 tub, tools
 //    (됫박 · 깔때기 · 용수 · 체); cool dim light, two high 살창 throw shafts on the jars. A small board shows the player's
 //    own jars (G.sys.fermentation, read-only).
 //    Anchors: balhyo · meju · byeotjip · jangdok · jangareugi · ssiganjang · yusan · gochujang · kimchidok · kimjang ·
-//    sikcho · nuruk · geumjul. Boards: MG_JANG_YEAR (the wall calendar), MG_MICROBE.
+//    sikcho · nuruk · geumjul. Boards: MG_JANG_YEAR (the wall calendar), MG_MICROBE. Lecture screen: east wall.
 //  곳간 (B_GOTGAN, origin (400, 2000), 10 × 8 × 3.6): 뒤주, 가마니, 섬, 멍석 (one spread with peppers drying in the sun
 //    shaft), a 시렁 with baskets, farm tools on the wall (호미 · 낫 · 쇠스랑 · 도리깨), a 대저울 with 되 and 말, seed corn and
 //    dried herbs, a 장독대 model, an 옹기 shard, regional jar shapes — and "내 선반": what the player's own 곳간 holds
 //    (G.sys.storage, updated on storage:changed) with an interactable that opens the 곳간 panel.
 //    Anchors: dwiju · gamani · jangdokdae · onggi · onggi_region · jeolgi · gamja · gondeure.
-//    Boards: MG_ONGGI_BREATH · MG_ONGGI_REGION · MG_JEOLGI.
+//    Boards: MG_ONGGI_BREATH · MG_ONGGI_REGION · MG_JEOLGI. Lecture screen: west wall, north bay.
+// Phase 9 (CONTRACT §17.9): the structure board of the 부엌 (구들) and the two guide stakes of the 발효실 are gone — the
+// exhibits are touched at the things, with the small paper plates these rooms already use. The boards that stay are
+// about fermentation, jars and the farming year (not about how a house is built). Each room has a lecture screen
+// (G.hanok.lectureScreen, 27-interiors-a.js).
 // The door of B_GOTGAN outside stands 1.8 m to the side of the building's middle: the old "곳간 열기" spot (42-realfarm
 // GOTGAN_DOOR) keeps opening the panel, the new door leads in.
 // =============================================================================
@@ -187,8 +191,8 @@
     R.block(-3.55, 3.55, 0.88, 0.26);
     K.straw(R, { x: -2.45, z: 3.6, kind: 'bundle', s: 0.85, rotY: 0.3 });
 
-    // ---- the motion board (S bay 2) and the 띠살창 (S bay 1) glow
-    wallBoard(ctx, R, 'S', 2, 'MG_GUDEUL', '구들에 불이 지나가는 길');
+    // ---- the room's lecture screen hangs like a 족자 on the south wall (bay 2); the 띠살창 (bay 1) glows beside it
+    if (K.lectureScreen) K.lectureScreen(R, ctx, { side: 'S', u: R.bay('S', 2).uc, v: 1.68, w: 1.5 });
 
     // ---- strings of 시래기, 고추 and 마늘 from a pole under the rafters on the east side (they sway a little)
     const px = 4.3, py = 2.32, z0 = -3.1, z1 = 0.9;
@@ -400,9 +404,13 @@
     R.add('cloth', geo.tube(0, 0, 0, 0, 0.1, -0.09, 0.004, 3), R.wm('S', 4.95, 1.38, 0.14), '#8a7656', { wall: 'S' });
     plate(R, 'S', 4.5, 0.55, '체 · 용수', '거르고, 맑은 장을 떠내요', 0.64);
 
-    // ---- signs: 발효 at the door, 장 담그기 by the jars
-    A('balhyo', R.signPost({ x: 3.95, z: -1.55, rotY: PI / 2, title: '발효', sub: '미생물이 맛을 바꿔요' }));
-    A('yusan', R.signPost({ x: 2.6, z: 2.6, rotY: PI / 2 - 0.3, title: '장 담그기', sub: '유네스코 인류무형문화유산' }));
+    // ---- 발효 beside the door, 장 담그기 under its calendar: small paper plates on the wall (no guide stakes)
+    plate(R, 'E', 2.62, 1.42, '발효', '미생물이 맛을 바꿔요', 0.5);
+    { const p = R.wp('E', 2.62, 1.2, 0.5); A('balhyo', { x: p.x, y: p.y, z: p.z }); }
+    plate(R, 'S', 1.5, 0.93, '장 담그기', '세계가 아끼는 유산', 0.6);
+    { const p = R.wp('S', 1.5, 1.0, 0.55); A('yusan', { x: p.x, y: p.y, z: p.z }); }
+    // ---- the room's lecture screen hangs like a 족자 on the east wall, south of the door
+    if (K.lectureScreen) K.lectureScreen(R, ctx, { side: 'E', u: R.bay('E', 2).uc, v: 1.68, w: 1.5 });
 
     // ---- boards: the 장 year as a wall calendar (S bay 0), 작은 일꾼 미생물 (W bay 1), and the player's own jars (E bay 0)
     wallBoard(ctx, R, 'S', 0, 'MG_JANG_YEAR', '장 담그기 열두 달');
@@ -712,7 +720,9 @@
     // ---- lived-in: a 지게 leaning by the door, a 싸리비, 짚신, a little straw on the floor
     K.jige(R, { x: -4.5, z: 2.9, rotY: PI / 2, lean: 0.22 });
     R.block(-4.6, 2.9, 0.4, 0.35);
-    K.broom(R, { x: -4.75, z: -1.75, rotY: PI / 2 });
+    K.broom(R, { x: -4.75, z: -1.2, rotY: PI / 2 });
+    // ---- the room's lecture screen hangs like a 족자 on the west wall, north of the door
+    if (K.lectureScreen) K.lectureScreen(R, ctx, { side: 'W', u: R.bay('W', 2).uc, v: 1.7, w: 1.4 });
     K.jipsin(R, { x: -3.95, z: 1.45, rotY: 1.2 });
     K.straw(R, { x: 2.1, z: -3.55, kind: 'bundle', s: 0.8, rotY: 0.6 });
     K.straw(R, { x: 2.35, z: -3.4, kind: 'bundle', s: 0.75, rotY: -0.2 });
