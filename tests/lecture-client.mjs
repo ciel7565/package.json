@@ -205,7 +205,12 @@ const openLecture = async (page, id) => { await page.evaluate((i) => { G.sys.lec
 /** a real (trusted) tap; the page swallows taps on controls for 360 ms after a dialog opens or closes */
 const tap = async (page, sel) => { await page.waitForTimeout(480); await page.locator(sel).first().click({ timeout: T_UI }); };
 const solveGate = async (page) => {
+  let lastQ = '';
   for (let round = 0; round < 6; round++) {
+    // the next question has its own id on its choices: never read the old one while the gate is still between two
+    const fresh = await page.waitForFunction((prev) => { const b = document.querySelector('.easy-gate-choice'); return !!b && b.dataset.q !== prev; }, lastQ, { timeout: T_UI, polling: 100 }).then(() => true, () => false);
+    if (!fresh) return false;
+    lastQ = await page.evaluate(() => document.querySelector('.easy-gate-choice').dataset.q);
     const q = await page.waitForSelector('.easy-gate-q[aria-label]', { timeout: T_UI }).catch(() => null);
     if (!q) return false;
     const m = /(\d+)\s*곱하기\s*(\d+)/.exec((await q.getAttribute('aria-label')) || '');
@@ -278,7 +283,8 @@ try {
     const cover = document.querySelector('.lec-deck').getBoundingClientRect(), pg = innerWidth + 'x' + innerHeight;
     b.click();
     // leaving the browser's own full screen (where the test browser grants it) takes a moment
-    for (let i = 0; i < 30 && document.fullscreenElement; i++) await new Promise((r2) => setTimeout(r2, 100));
+    const small = () => !document.querySelector('.lec-deck').classList.contains('lec-max') && !document.fullscreenElement && !document.querySelector('.modal.lec-has-max');
+    for (let i = 0; i < 80 && !small(); i++) await new Promise((r2) => setTimeout(r2, 100));
     await new Promise((r2) => setTimeout(r2, 250));
     return { on, w: Math.round(r.width), cover: [Math.round(cover.left), Math.round(cover.top), Math.round(cover.width), Math.round(cover.height)].join(), page: pg,
       off: !document.querySelector('.lec-deck').classList.contains('lec-max') && !document.fullscreenElement && !document.querySelector('.modal.lec-has-max') };
@@ -340,7 +346,7 @@ try {
   // ================================================================ the CSP: other hosts are blocked
   const csp = await page.evaluate(async () => {
     const before = window.__csp.length;
-    const add = (tag, src) => { const e = document.createElement(tag); e.src = src; e.style.cssText = 'position:fixed;left:-99px;top:-99px;width:10px;height:10px'; document.body.appendChild(e); return e; };
+    const add = (tag, src) => { const e = document.createElement(tag); e.src = src; e.style.cssText = 'position:fixed;left:0;top:0;width:10px;height:10px;opacity:0;pointer-events:none'; document.body.appendChild(e); return e; };   // inside the viewport: a frame out of view may wait to load
     const els = [add('iframe', 'https://evil.example/frame'), add('iframe', 'https://www.youtube-nocookie.com.evil.example/embed/x'), add('iframe', 'https://youtube.com/embed/x'), add('img', 'https://evil.example/a.png'), add('img', 'https://img.youtube.com/vi/x/0.jpg')];
     const ok = add('img', 'https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg');
     await new Promise((r) => { ok.onload = ok.onerror = r; setTimeout(r, 4000); });
@@ -412,13 +418,13 @@ try {
       injected: c.querySelectorAll('img[onerror], script').length, count: document.querySelector('.lec-count').textContent, note: document.querySelector('.lecture-modal .lec-note')?.textContent || '', num: c.querySelector('.lec-s-num')?.textContent,
       fits: c.scrollHeight <= c.clientHeight + 2, fetched: window.__lecCalls.length };
   });
-  check('pptx: a presentation built in this test opens in the simple view — slide 1 with its title, three paragraphs on three levels', p1.title === '전통 발효 이야기' && p1.ps.length === 3 && /lv0 dot/.test(p1.ps[0][0]) && /lv1 dot/.test(p1.ps[1][0]) && /lv2 dot/.test(p1.ps[2][0]) && p1.count === '1 / 5' && p1.num === '1 / 5', JSON.stringify(p1).slice(0, 400));
+  check('pptx: a presentation built in this test opens in the simple view — slide 1 with its title, three paragraphs on three levels', p1.title === '전통 발효 이야기' && p1.ps.length === 3 && /lv0 lec-b-dot/.test(p1.ps[0][0]) && /lv1 lec-b-dot/.test(p1.ps[1][0]) && /lv2 lec-b-dot/.test(p1.ps[2][0]) && p1.count === '1 / 5' && p1.num === '1 / 5', JSON.stringify(p1).slice(0, 400));
   check('pptx: the pictures of the slide are shown in order from blob: addresses; markup in a paragraph stays text', p1.imgs.length === 2 && p1.imgs.every((i) => i[0] === 'blob:' && i[1] === 160) && p1.imgs[0][2] === '그림 1' && p1.injected === 0 && p1.ps[2][1].includes('<img src=x onerror=alert(41)>'), JSON.stringify(p1.imgs));
   check('pptx: the note "간단 보기 — 원본과 모양이 다를 수 있어요" is shown and the slide fits its card', /간단 보기 — 원본과 모양이 다를 수 있어요/.test(p1.note) && p1.fits, p1.note);
   await shot(page, '09-pptx-slide1');
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => document.querySelector('.lec-count')?.textContent === '2 / 5', null, { timeout: T_UI });
-  const p2 = await page.evaluate(() => { const c = document.querySelector('.lecture-modal .lec-slide'); return { title: c.querySelector('.lec-s-title')?.textContent, nums: [...c.querySelectorAll('.lec-p.num')].map((p) => [p.dataset.n, p.textContent]), bold: c.querySelector('.lec-p .b')?.textContent, rows: [...c.querySelectorAll('.lec-table tr')].map((r) => [...r.children].map((x) => `${x.tagName}:${x.textContent}`).join(',')) }; });
+  const p2 = await page.evaluate(() => { const c = document.querySelector('.lecture-modal .lec-slide'); return { title: c.querySelector('.lec-s-title')?.textContent, nums: [...c.querySelectorAll('.lec-p.lec-b-num')].map((p) => [p.dataset.n, p.textContent]), bold: c.querySelector('.lec-p .lec-em-b')?.textContent, rows: [...c.querySelectorAll('.lec-table tr')].map((r) => [...r.children].map((x) => `${x.tagName}:${x.textContent}`).join(',')) }; });
   check('pptx: a numbered text box (1. 2. 3., bold kept) and a table with its header row', p2.title === '장 담그는 차례' && p2.nums.map((x) => x[0]).join() === '1.,2.,3.' && p2.bold === '메주를 씻어요' && p2.rows.length === 3 && p2.rows[0] === 'TH:재료,TH:양' && p2.rows[2] === 'TD:소금,TD:200 g', JSON.stringify(p2));
   await shot(page, '10-pptx-slide2-table');
   await page.keyboard.press('ArrowRight');
@@ -658,6 +664,8 @@ try {
   check('the page asked the outside only for the video player, its thumbnails and the slide host (and the blocked test addresses)', outside.every((u) => /^https:\/\/(www\.youtube-nocookie\.com\/embed\/|i\.ytimg\.com\/vi\/|docs\.google\.com\/presentation\/|evil\.example\/|www\.youtube-nocookie\.com\.evil\.example\/|youtube\.com\/embed\/|img\.youtube\.com\/)/.test(u)), [...new Set(outside.map((u) => new URL(u).host))].join(' '));
 } catch (e) {
   check('the suite ran to its end', false, String(e?.stack || e).slice(0, 600));
+  // what the page showed when it stopped (for the report)
+  try { const pg = browser.contexts()[0]?.pages()[0]; if (pg && SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'zz-stopped.png') }); } catch (e2) { /* no page */ }
   exit = 2;
 } finally {
   await browser.close().catch(() => {});

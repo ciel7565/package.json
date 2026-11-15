@@ -425,10 +425,10 @@
           body.appendChild(h('div', { class: 'lec-tablewrap' }, h('table', { class: 'lec-table' }, tb)));
           continue;
         }
-        const p = h('p', { class: `lec-p lv${Math.min(b.lvl, 4)}${b.bullet ? ' ' + b.bullet : ''}`, 'data-n': b.bullet === 'num' ? `${b.num}.` : null });
+        const p = h('p', { class: `lec-p lv${Math.min(b.lvl, 4)}${b.bullet ? ' lec-b-' + b.bullet : ''}`, 'data-n': b.bullet === 'num' ? `${b.num}.` : null });
         for (const r of b.runs) {
           if (r.text === '\n') p.appendChild(h('br'));
-          else p.appendChild(r.b || r.i ? h('span', { class: (r.b ? 'b' : '') + (r.i ? ' i' : '') }, r.text) : document.createTextNode(r.text));
+          else p.appendChild(r.b || r.i ? h('span', { class: ((r.b ? 'lec-em-b' : '') + (r.i ? ' lec-em-i' : '')).trim() }, r.text) : document.createTextNode(r.text));
         }
         body.appendChild(p);
       }
@@ -546,7 +546,11 @@
     fs.addEventListener('click', () => {
       if (!full) {
         setFull(true);
-        try { const p = el.requestFullscreen?.(); if (p && p.catch) p.catch(() => { /* the class alone enlarges it */ }); } catch (e) { /* no element full screen here */ }
+        try {
+          const p = el.requestFullscreen?.();
+          // a grant that arrives after the deck was made small again is handed straight back
+          if (p && p.then) p.then(() => { if (!full && document.fullscreenElement === el) document.exitFullscreen().catch(() => {}); }, () => { /* the class alone enlarges it */ });
+        } catch (e) { /* no element full screen here */ }
       } else {
         try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* ignore */ }
         setFull(false);

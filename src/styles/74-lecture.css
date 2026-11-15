@@ -44,7 +44,7 @@
 .lec-host { display: flex; flex-direction: column; gap: .55rem; min-height: 0; }
 /* the stage is a 16:9 box as wide as the height it may take allows (--stage-h), so a card, a picture and a player keep
    their shape on every screen; it is the size container of the slide card (text scales with the card, like a real slide) */
-.lec-stage { --stage-h: min(64vh, 620px); position: relative; width: min(100%, calc(var(--stage-h) * 16 / 9)); aspect-ratio: 16 / 9; max-height: var(--stage-h); margin: 0 auto;
+.lec-stage { --stage-h: min(64vh, 620px, calc(100vh - 360px)); flex: none; position: relative; width: min(100%, calc(var(--stage-h) * 16 / 9)); aspect-ratio: 16 / 9; max-height: var(--stage-h); margin: 0 auto;
   border-radius: 14px; overflow: hidden; container-type: inline-size;
   background: #101724; border: 1px solid var(--line-strong); display: flex; align-items: center; justify-content: center; touch-action: pan-y; }
 .lec-stage.lec-doc { width: 100%; aspect-ratio: auto; height: min(68vh, 720px); max-height: none; }
@@ -89,9 +89,8 @@
 .lec-s-title::after { content: ''; display: block; width: 3.2em; height: 4px; margin-top: .35em; border-radius: 2px; background: #c9893a; }
 .lec-s-sub { margin: 0; font-size: 1.08em; color: #6a4d30; }
 .lec-s-main { display: flex; flex-direction: column; gap: .7em; min-height: 0; flex: 1 1 auto; }
-.lec-s-main.has-pics { flex-direction: row; align-items: flex-start; }
-.lec-s-main.has-pics > .lec-s-body { flex: 1 1 54%; min-width: 0; }
-.lec-s-main.has-pics > .lec-s-pics { flex: 1 1 46%; min-width: 0; }
+.lec-s-main.has-pics { display: grid; grid-template-columns: minmax(0, 54fr) minmax(0, 46fr); align-items: start; }   /* a grid: the words keep their column whatever the picture's own size */
+.lec-s-main.has-pics > .lec-s-body, .lec-s-main.has-pics > .lec-s-pics { min-width: 0; }
 .lec-s-main.only-pics > .lec-s-pics { flex: 1 1 auto; justify-content: center; }
 .lec-s-body { display: flex; flex-direction: column; gap: .32em; }
 .lec-p { margin: 0; position: relative; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -100,12 +99,12 @@
 .lec-p.lv2 { margin-left: 3em; font-size: .94em; }
 .lec-p.lv3 { margin-left: 4.5em; font-size: .9em; }
 .lec-p.lv4 { margin-left: 6em; font-size: .88em; }
-.lec-p.dot, .lec-p.num { padding-left: 1.25em; }
-.lec-p.dot::before { content: ''; position: absolute; left: .25em; top: .62em; width: .42em; height: .42em; border-radius: 50%; background: #c9893a; }
-.lec-p.lv1.dot::before, .lec-p.lv3.dot::before { background: transparent; border: 2px solid #c9893a; width: .34em; height: .34em; }
-.lec-p.num::before { content: attr(data-n); position: absolute; left: 0; top: 0; font-weight: 800; color: #a3661f; }
-.lec-p .b { font-weight: 800; }
-.lec-p .i { font-style: italic; }
+.lec-p.lec-b-dot, .lec-p.lec-b-num { padding-left: 1.25em; }
+.lec-p.lec-b-dot::before { content: ''; position: absolute; left: .25em; top: .62em; width: .42em; height: .42em; border-radius: 50%; background: #c9893a; }
+.lec-p.lv1.lec-b-dot::before, .lec-p.lv3.lec-b-dot::before { background: transparent; border: 2px solid #c9893a; width: .34em; height: .34em; }
+.lec-p.lec-b-num::before { content: attr(data-n); position: absolute; left: 0; top: 0; font-weight: 800; color: #a3661f; }
+.lec-p .lec-em-b { font-weight: 800; }
+.lec-p .lec-em-i { font-style: italic; }
 .lec-s-pics { display: flex; flex-wrap: wrap; gap: .5em; align-items: flex-start; justify-content: center; }
 .lec-s-pics img { max-width: 100%; max-height: 16em; width: auto; height: auto; object-fit: contain; border-radius: 6px; background: #fff; box-shadow: 0 2px 8px rgba(60,40,20,.22); }
 .lec-s-pics.n2 img, .lec-s-pics.n3 img, .lec-s-pics.n4 img { max-width: calc(50% - .3em); max-height: 9em; }
@@ -114,8 +113,8 @@
 .lec-table { border-collapse: collapse; font-size: .9em; width: 100%; }
 .lec-table th, .lec-table td { border: 1px solid rgba(138,90,59,.45); padding: .25em .5em; text-align: left; vertical-align: top; white-space: pre-wrap; }
 .lec-table th { background: rgba(201,137,58,.2); }
-.lec-s-skip { margin: 0; font-size: .85em; color: #8a6a48; }
-.lec-s-num { position: absolute; right: 22px; bottom: 16px; font-size: .85em; font-weight: 700; color: #8a6a48; font-variant-numeric: tabular-nums; }
+.lec-s-skip { margin: 0; font-size: .85em; color: #6b4e31; }
+.lec-s-num { position: absolute; right: 22px; bottom: 16px; font-size: .85em; font-weight: 700; color: #6b4e31; font-variant-numeric: tabular-nums; }
 .lec-slide.lec-s-empty { align-items: center; justify-content: center; text-align: center; }
 .lec-slide.lec-s-empty .lec-s-sub { max-width: 26em; }
 
@@ -164,7 +163,7 @@ body.easy .lec-lead { font-size: 1.05rem; }
   .lec-slide { font-size: calc(clamp(.6rem, 2.9vw, .92rem) * var(--k)); padding: 4% 5% 8%; }
   .lec-slide::before { inset: 6px; }
   .lec-s-num { right: 14px; bottom: 9px; }
-  .lec-s-main.has-pics { flex-direction: column; }
+  .lec-s-main.has-pics { grid-template-columns: minmax(0, 1fr); }
   .lec-s-pics img { max-height: 9em; }
   .lec-now { font-size: .96rem; }
   .lec-offer { bottom: calc(var(--easy-bottom, 84px) + 10px); }
