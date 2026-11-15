@@ -1226,7 +1226,8 @@
   // G.data.lectureDecks: { id, title, emoji, audience, summary, edu (related content), slides: [{ title, lines, picture?, note? }] }
   // picture = an emoji (the lecture panel draws it big); note = a calm line for the teacher / parent. Text only — no links.
   (function () {
-    const S = (title, picture, lines, note) => (note ? { title, picture, lines, note } : { title, picture, lines });
+    // `picture` (CONTRACT §17.8) and `emoji` (what 74-lecture.js draws) carry the same picture
+    const S = (title, picture, lines, note) => (note ? { title, picture, emoji: picture, lines, note } : { title, picture, emoji: picture, lines });
     G.data.lectureDecks = [
       { id: 'DECK_JANG', title: '메주에서 장까지 — 장 담그기의 한 해', emoji: '🫘', audience: 'all', edu: 'EDU_JANG_SPLIT', summary: '콩을 거두어 메주를 쑤고, 장을 담그고, 장 가르기로 간장과 된장을 얻기까지의 한 해를 따라가요.', slides: [
         S('장 담그기의 한 해', '🫘', ['콩 한 알이 장이 되기까지 거의 한 해가 걸려요.', '오늘은 그 길을 차례대로 따라가 봐요.'], '장독대에서 직접 해 볼 수 있는 단계마다 🏺 표시를 해 두었어요.'),
@@ -1323,5 +1324,7 @@
         S('정리해요', '📝', ['엿기름 · 당화 · 조청 · 효모 · 증편', '장독에서 식혜와 조청을 만들어 봐요 🏺']),
       ] },
     ];
+    // one spoken line per deck for 쉬운 모드 (the first sentence of the summary)
+    for (const d of G.data.lectureDecks) d.kid = d.kid || String(d.summary || d.title).split(/(?<=요\.)\s/)[0];
   })();
 })();

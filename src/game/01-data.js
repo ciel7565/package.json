@@ -799,20 +799,42 @@ G.data.allot = (function () {
       real: '말리기 뒤 몇 달~몇 해', season: '봄에 찻잎을 따요', region: '전라남도 장흥', care: ['vent', 'taste'], flavor: { nutty: 2, sweet: 1 },
       steps: [['🍃', '찻잎 따기', '봄에 어린 찻잎을 따요.'], ['♨️', '찌고 찧기', '찻잎을 쪄서 절구에 찧어요.'], ['🪙', '엽전 모양', '동그랗게 빚어 가운데에 구멍을 뚫어요.'], ['🧵', '꿰어 묵히기', '줄에 꿰어 말린 뒤 바람 잘 드는 곳에서 묵혀요.']],
       microbes: '묵히는 동안 미생물과 공기가 찻잎의 맛을 천천히 바꿔 부드럽고 구수한 맛이 나요. 이런 차를 ‘후발효차’라고 해요.', kid: '엽전처럼 생긴 차를 줄에 꿰어 묵혀요!', src: ['F:detail/8988', 'E:E0076955', 'N:rdaInter 209162'] },
+    FER034: { name: '메주 띄우기', cat: 'jang', jar: 'jungduri', resultItem: 'ITEM_MEJU', resultQty: 2, ingredients: { ITEM_BEAN: 4, ITEM_STRAW: 1 }, baseDuration: 240, idealTemp: [20, 30], idealHumidity: [60, 85], baseQuality: 60, exp: 180, coin: 220, edu: 'EDU_JANG_MEJU_TIME', color: '#b08a4a', icon: '🧱',
+      desc: '삶아 찧은 콩을 네모나게 빚어 볏짚과 함께 따뜻한 방에서 띄워요. 잘 뜬 메주는 장 담그기의 재료가 돼요.', heat: { temp: 25, label: '따뜻한 방 (실제로는 장독이 아니라 방에 매달아요)' },
+      real: '빚은 뒤 한두 달 띄우고 겨울 동안 말리기', season: '입동 무렵', care: ['vent', 'taste'], flavor: { nutty: 3, umami: 2 },
+      steps: [['🫘', '불리고 삶기', '콩을 하룻밤 불려 가마솥에 푹 삶아요.'], ['🥣', '찧기', '절구로 콩을 찧어 으깨요.'], ['🧱', '빚기', '메주틀에 넣어 네모나게 빚고 겉을 말려요.'], ['🌾', '띄우기', '볏짚으로 묶어 매달거나 볏짚 위에 두어 따뜻하게 띄워요.']],
+      microbes: '볏짚의 고초균과 공기 속 곰팡이가 메주에 자리를 잡고, 콩의 단백질을 나누는 효소를 만들어요. 그래서 메주에서 구수한 냄새가 나요.', kid: '볏짚 속 고초균이 콩 덩어리를 메주로 띄워요!', src: ['F:메주쑤기', 'F:detail/4784', 'N:vod 554'] },
   };
   for (const [id, x] of Object.entries(X)) {
     const r = D.recipes[id] || (D.recipes[id] = {});
     for (const [k, v] of Object.entries(x)) if (!(k in r)) r[k] = v;
     r.id = id;
   }
+  // quests and achievements for the new things (the existing objective types: ferment_start / ferment_claim / edu / quiz)
+  const NEW_QUESTS = {
+    Q_JANG_SPLIT: { title: '장 가르기', icon: '✂️', category: 'ferment', giver: 'NPC004', requires: ['Q_DOENJANG'], desc: '메주를 소금물에 담그고, 때가 되면 장 가르기를 해서 간장과 된장을 두 장독에 나눠 익혀 보세요.', easyDesc: '장을 담그고 간장이랑 된장으로 나눠요!',
+      objectives: [{ type: 'ferment_start', recipe: 'FER006', count: 1, text: '장 담그기 (간장·된장) 시작하기', easyText: '장을 담가요' }, { type: 'ferment_claim', recipe: 'FER007', count: 1, text: '장 가르기로 얻은 된장 꺼내기', easyText: '나눈 된장을 꺼내요' }],
+      reward: { coin: 2500, exp: 350, edu: 20, title: '장 가르는 손' } },
+    Q_GIMJANG: { title: '우리 집 김장', icon: '🥬', category: 'ferment', giver: 'NPC004', requires: ['QUEST001'], desc: '김장 때 함께 담그는 배추김치·깍두기·동치미를 장독에 담가 보세요.', easyDesc: '김치 세 가지를 담가요!',
+      objectives: [{ type: 'ferment_start', recipe: 'FER004', count: 1, text: '배추김치 담그기', easyText: '배추김치를 담가요' }, { type: 'ferment_start', recipe: 'FER011', count: 1, text: '깍두기 담그기', easyText: '깍두기를 담가요' }, { type: 'ferment_start', recipe: 'FER012', count: 1, text: '동치미 담그기', easyText: '동치미를 담가요' }],
+      reward: { coin: 2000, exp: 300, edu: 15 } },
+    Q_FERMENT_FIVE: { title: '발효 장인의 길', icon: '🏺', category: 'ferment', giver: 'NPC004', requires: ['Q_NEW_FERMENT'], desc: '장독에서 발효 음식을 다섯 번 완성해 꺼내 보세요. 여러 가지를 담글수록 장독대가 풍성해져요.', easyDesc: '맛있는 걸 다섯 번 꺼내요!',
+      objectives: [{ type: 'ferment_claim', count: 5, text: '발효 음식 5번 완성해 꺼내기', easyText: '다 익은 걸 꺼내요' }],
+      reward: { coin: 3000, exp: 400, edu: 30, title: '발효 장인' } },
+    Q_LEARN_MORE: { title: '배움터 탐험가', icon: '📚', category: 'edu', giver: 'NPC003', requires: ['QUEST001'], desc: '배움터에서 이야기 10개를 끝까지 보고 퀴즈 10문제를 맞혀 보세요. 발효 과학, 절기, 옹기, 정선 이야기가 기다려요.', easyDesc: '이야기 열 개를 보고 퀴즈 열 개를 맞혀요!',
+      objectives: [{ type: 'edu', count: 10, text: '교육 콘텐츠 10개 끝까지 보기', easyText: '그림 이야기를 봐요' }, { type: 'quiz', count: 10, text: '퀴즈 10문제 맞히기', easyText: '퀴즈를 맞혀요' }],
+      reward: { coin: 2000, exp: 300, edu: 40 } },
+  };
+  for (const [id, q] of Object.entries(NEW_QUESTS)) if (!D.quests[id]) { q.id = id; q.objectives.forEach((o, i) => { o.index = i; o.count = o.count || 1; }); D.quests[id] = q; }
+  const NEW_ACH = {
+    ACH_FERMENT_10: { name: '장독대 지킴이', icon: '🏺', desc: '발효 음식을 10번 완성해 꺼냈습니다.', condition: { stat: 'fermentsClaimed', gte: 10 }, reward: { coin: 1000, title: '장독대 지킴이' } },
+    ACH_EDU_30: { name: '배움터 단골', icon: '📚', desc: '교육 콘텐츠 30개를 끝까지 학습했습니다.', condition: { stat: 'eduCompleted', gte: 30 }, reward: { coin: 1500, edu: 50 } },
+    ACH_QUIZ_50: { name: '퀴즈 달인', icon: '🎓', desc: '퀴즈를 50번 맞혔습니다.', condition: { stat: 'quizCorrect', gte: 50 }, reward: { coin: 1500, edu: 50, title: '퀴즈 달인' } },
+  };
+  for (const [id, a] of Object.entries(NEW_ACH)) if (D.achievements && !D.achievements[id]) { a.id = id; D.achievements[id] = a; }
   // jar kinds of the 12 own jars (J1 … J12, left → right along the front row of the 장독대 terrace)
   D.fermentation.jarSlots = ['hangari', 'hangari', 'hangari', 'dok', 'jungduri', 'hangari', 'danji', 'dok', 'jungduri', 'hangari', 'danji', 'danji'];
   D.fermentation.maxJarsAll = 12;          // the most a plan or an administrator can open (G.sys.entitle.limit('jars'))
   D.fermentation.jarMismatch = 4;          // quality points lost when the jar kind is not the one the recipe likes
   D.fermentation.actionCooldown = 20;      // seconds between two of the same new jar actions
 })();
-    FER034: { name: '메주 띄우기', cat: 'jang', jar: 'jungduri', resultItem: 'ITEM_MEJU', resultQty: 2, ingredients: { ITEM_BEAN: 4, ITEM_STRAW: 1 }, baseDuration: 240, idealTemp: [20, 30], idealHumidity: [60, 85], baseQuality: 60, exp: 180, coin: 220, edu: 'EDU_JANG_MEJU_TIME', color: '#b08a4a', icon: '🧱',
-      desc: '삶아 찧은 콩을 네모나게 빚어 볏짚과 함께 따뜻한 방에서 띄워요. 잘 뜬 메주는 장 담그기의 재료가 돼요.', heat: { temp: 25, label: '따뜻한 방 (실제로는 장독이 아니라 방에 매달아요)' },
-      real: '빚은 뒤 한두 달 띄우고 겨울 동안 말리기', season: '입동 무렵', care: ['vent', 'taste'], flavor: { nutty: 3, umami: 2 },
-      steps: [['🫘', '불리고 삶기', '콩을 하룻밤 불려 가마솥에 푹 삶아요.'], ['🥣', '찧기', '절구로 콩을 찧어 으깨요.'], ['🧱', '빚기', '메주틀에 넣어 네모나게 빚고 겉을 말려요.'], ['🌾', '띄우기', '볏짚으로 묶어 매달거나 볏짚 위에 두어 따뜻하게 띄워요.']],
-      microbes: '볏짚의 고초균과 공기 속 곰팡이가 메주에 자리를 잡고, 콩의 단백질을 나누는 효소를 만들어요. 그래서 메주에서 구수한 냄새가 나요.', kid: '볏짚 속 고초균이 콩 덩어리를 메주로 띄워요!', src: ['F:메주쑤기', 'F:detail/4784', 'N:vod 554'] },

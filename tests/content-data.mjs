@@ -200,6 +200,12 @@ check('alcohol only as knowledge (no drinking shown as fun)', drinkOk && !string
 const adult = Object.values(E).filter((e) => e.adult);
 check('exactly one grown-up knowledge card (hidden in 쉬운 모드)', adult.length === 1 && /어른만|어린이는/.test(JSON.stringify(adult[0])));
 
+// ------------------------------------------------------------------ quests and achievements for the new things
+const NQ = ['Q_JANG_SPLIT', 'Q_GIMJANG', 'Q_FERMENT_FIVE', 'Q_LEARN_MORE'].map((id) => D.quests?.[id]);
+const qOk = NQ.every((q) => q && q.id && D.npcs?.[q.giver] && (q.requires || []).every((r) => D.quests[r]) && q.objectives.every((o, i) => o.index === i && o.count >= 1 && (!o.recipe || R[o.recipe]) && ['ferment_start', 'ferment_claim', 'edu', 'quiz'].includes(o.type)));
+const NA = ['ACH_FERMENT_10', 'ACH_EDU_30', 'ACH_QUIZ_50'].map((id) => D.achievements?.[id]);
+check('new quests and achievements are complete (giver, requires, recipes, objective types, conditions)', qOk && NA.every((a) => a && a.id && a.condition && a.condition.gte > 0 && a.reward));
+
 // ------------------------------------------------------------------ ids unique across the tables this lane adds to
 const ids = [...Object.keys(R), ...Object.keys(E), ...Object.keys(Q), ...decks.map((d) => d.id), ...Object.keys(D.crafts || {})];
 check('ids unique across recipes, contents, quizzes, decks, crafts', new Set(ids).size === ids.length, `${ids.length}`);

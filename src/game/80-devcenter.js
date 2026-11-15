@@ -1460,6 +1460,13 @@
     { id: 'lecture', emoji: '🎓', label: '강의실 (강의 고르기)', fn: () => { const f = fnOf(G.sys.lecture, 'open'); return f && (() => f()); } },
     { id: 'lecdeck', emoji: '📚', label: '강의 슬라이드', fn: () => { const f = fnOf(G.sys.lecture, 'open'); const d = (G.sys.lecture?.list?.() || []).find((l) => l.kind === 'deck'); return f && d ? () => f(d.id) : null; } },
     { id: 'lecvideo', emoji: '▶️', label: '강의 영상 (재생 화면)', fn: () => { const L = G.sys.lecture; if (!L?._internal?.cleanLecture || typeof L.open !== 'function') return null; return () => { const v = L._internal.cleanLecture({ id: 999001, kind: 'youtube', title: '영상 강의 미리 보기', yt: 'aaaaaaaaaaa', place: '' }); L._srv = [v, ...L._srv.filter((x) => x.id !== 999001)]; L.open(999001); }; }, close: () => { try { const L = G.sys.lecture; L.close(); L._srv = L._srv.filter((x) => x.id !== 999001); } catch (e) { /* ignore */ } } },
+    // [content] 장독대 (§17.8): my jar's card (with the new picture actions), the two-step "무엇을 담글까?" picker, a jar
+    // locked by the plan limit, the name-tag picker and the work table
+    { id: 'jar', emoji: '🏺', label: '내 장독 (장독 일 그림 단추)', fn: () => (G.sys.fermentation?.openJar ? () => G.sys.fermentation.openJar('J1') : null) },
+    { id: 'jarpick', emoji: '🥣', label: '무엇을 담글까 (종류 고르기)', fn: () => (G.sys.fermentation?._kidStart ? () => { G.sys.fermentation._kidStart('J1'); } : null) },
+    { id: 'jarlock', emoji: '🔒', label: '잠긴 장독 (요금제로 여는 장독)', fn: () => { const J = G.sys.fermentation; const id = J?.allJarIds?.().find((j) => J.lockOf(j) === 'plan'); return J && id ? () => J.openJar(id) : null; } },
+    { id: 'jartag', emoji: '🏷️', label: '장독 이름표 고르기', fn: () => (G.sys.fermentation?._pickNameTag ? () => { G.sys.fermentation._pickNameTag('J1'); } : null) },
+    { id: 'craft', emoji: '🔨', label: '재료 만들기 (작업대)', fn: () => (G.sys.fermentation?.openCraft ? () => { G.sys.fermentation.openCraft(); } : null) },
     { id: 'emote', emoji: '😊', label: '표현하기', fn: () => { const f = fnOf(G.sys.social, 'openExpress', 'openEmotes'); return f && (() => f(document.querySelector('[data-action="emote"]') || undefined)); } },
     { id: 'chat', emoji: '💬', label: '말하기 (채팅)', fn: () => { const f = fnOf(G.sys.social, 'openKidChat', 'openPhrases'); if (f) return f; return typeof G.ui?.triggerAction === 'function' ? () => G.ui.triggerAction('chat') : null; } },
     { id: 'avatar', emoji: '👕', label: '꾸미기 (아바타)', fn: () => fnOf(G.app, 'openAvatar') },
