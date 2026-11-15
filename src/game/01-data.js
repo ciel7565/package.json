@@ -659,12 +659,12 @@ G.data.allot = (function () {
     FER005: { cat: 'vinegar', jar: 'hangari', real: '밑술 뒤 한두 달', season: '따뜻한 철', care: ['vent', 'taste'], flavor: { sour: 3, sweet: 1 },
       steps: [['🍚', '밑술 빚기', '쌀과 누룩으로 밑술을 먼저 빚어요.'], ['🏺', '항아리에 옮기기', '밑술을 넓은 항아리에 옮기고 천으로 덮어 바람이 통하게 해요.'], ['🦠', '초산 발효', '초산균이 술 속 알코올을 초산으로 바꿔요.'], ['🫙', '거르고 숙성', '새콤해지면 걸러서 다시 항아리에서 익혀요.']],
       microbes: '초산균은 공기를 좋아해요. 밑술의 알코올을 초산으로 바꾸어 새콤한 식초를 만들어요.', kid: '초산균이 공기를 마시며 새콤한 식초를 만들어요!', src: ['F:detail/7823', 'N:rdaInter 34315'] },
-    FER006: { name: '장 담그기 (간장·된장)', cat: 'jang', jar: 'dok', resultItem: 'ITEM_GANJANG', resultQty: 2, ingredients: { ITEM_MEJU: 2, ITEM_SALT: 2 }, baseDuration: 480, idealTemp: [12, 26], idealHumidity: [50, 75], baseQuality: 62, exp: 300, coin: 420, edu: 'EDU_GANJANG', color: '#3a2414', icon: '🏺',
+    FER006: { name: '간장·된장 담그기', cat: 'jang', jar: 'dok', resultItem: 'ITEM_GANJANG', resultQty: 2, ingredients: { ITEM_MEJU: 2, ITEM_SALT: 2 }, baseDuration: 480, idealTemp: [12, 26], idealHumidity: [50, 75], baseQuality: 62, exp: 300, coin: 420, edu: 'EDU_GANJANG', color: '#3a2414', icon: '🏺',
       desc: '메주를 소금물에 담그고, 때가 되면 장 가르기로 간장과 된장을 나누는 진짜 순서의 체험이에요.',
       real: '담근 뒤 40~60일에 장 가르기, 그 뒤 몇 달', season: '음력 정월~삼월', split: { at: 45, into: 'FER007' }, care: ['salt', 'charcoal', 'geumjul', 'split', 'deot'], deot: 'ITEM_GANJANG', flavor: { salty: 3, umami: 3 },
       steps: [['🫘', '메주 고르기', '잘 띄운 메주를 솔로 깨끗이 털어요.'], ['🧂', '소금물 붓기', '독에 메주를 넣고 알맞게 짠 소금물을 부어요.'], ['⚫', '숯·고추 띄우기', '숯과 마른 붉은 고추를 띄우고 금줄을 둘러요.'], ['✂️', '장 가르기', '40~60일 뒤 건더기는 된장독으로, 국물은 간장독에 남겨요.'], ['🏺', '따로 익히기', '간장과 된장을 각각 햇볕 아래에서 익혀요.']],
       microbes: '처음 40~60일 동안 메주의 성분이 소금물에 우러나요. 그 뒤 간장과 된장이 각자 따로 깊은 맛을 내요.', kid: '메주 하나로 간장과 된장 두 가지를 만들어요!', src: ['E:E0076963', 'F:detail/4784', 'UNESCO:19.COM 7.B.3'] },
-    FER007: { name: '된장 숙성 (장 가르기 뒤)', cat: 'jang', jar: 'jungduri', resultItem: 'ITEM_DOENJANG', resultQty: 2, ingredients: {}, baseDuration: 240, idealTemp: [15, 28], idealHumidity: [50, 75], baseQuality: 60, exp: 180, coin: 250, edu: 'EDU_DOENJANG', color: '#6b4a2b', icon: '🟤',
+    FER007: { name: '가른 된장 익히기', cat: 'jang', jar: 'jungduri', resultItem: 'ITEM_DOENJANG', resultQty: 2, ingredients: {}, baseDuration: 240, idealTemp: [15, 28], idealHumidity: [50, 75], baseQuality: 60, exp: 180, coin: 250, edu: 'EDU_DOENJANG', color: '#6b4a2b', icon: '🟤',
       desc: '장 가르기로 건진 메주 건더기를 치대어 된장으로 익혀요.', startable: false, splitOf: 'FER006',
       real: '두세 달', season: '장 가르기 뒤', care: ['salt', 'geumjul', 'deot'], deot: 'ITEM_DOENJANG', flavor: { salty: 3, umami: 3, nutty: 3 },
       steps: [['✂️', '건더기 건지기', '장 가르기 때 메주 건더기를 건져요.'], ['🖐️', '치대기', '건더기를 고루 으깨어 치대요.'], ['🏺', '눌러 담기', '중두리에 꾹꾹 눌러 담고 웃소금을 뿌려요.'], ['☀️', '익히기', '햇볕과 바람 속에서 두세 달 익혀요.']],
@@ -813,7 +813,7 @@ G.data.allot = (function () {
   // quests and achievements for the new things (the existing objective types: ferment_start / ferment_claim / edu / quiz)
   const NEW_QUESTS = {
     Q_JANG_SPLIT: { title: '장 가르기', icon: '✂️', category: 'ferment', giver: 'NPC004', requires: ['Q_DOENJANG'], desc: '메주를 소금물에 담그고, 때가 되면 장 가르기를 해서 간장과 된장을 두 장독에 나눠 익혀 보세요.', easyDesc: '장을 담그고 간장이랑 된장으로 나눠요!',
-      objectives: [{ type: 'ferment_start', recipe: 'FER006', count: 1, text: '장 담그기 (간장·된장) 시작하기', easyText: '장을 담가요' }, { type: 'ferment_claim', recipe: 'FER007', count: 1, text: '장 가르기로 얻은 된장 꺼내기', easyText: '나눈 된장을 꺼내요' }],
+      objectives: [{ type: 'ferment_start', recipe: 'FER006', count: 1, text: '간장·된장 담그기 시작하기', easyText: '장을 담가요' }, { type: 'ferment_claim', recipe: 'FER007', count: 1, text: '장 가르기로 얻은 된장 꺼내기', easyText: '나눈 된장을 꺼내요' }],
       reward: { coin: 2500, exp: 350, edu: 20, title: '장 가르는 손' } },
     Q_GIMJANG: { title: '우리 집 김장', icon: '🥬', category: 'ferment', giver: 'NPC004', requires: ['QUEST001'], desc: '김장 때 함께 담그는 배추김치·깍두기·동치미를 장독에 담가 보세요.', easyDesc: '김치 세 가지를 담가요!',
       objectives: [{ type: 'ferment_start', recipe: 'FER004', count: 1, text: '배추김치 담그기', easyText: '배추김치를 담가요' }, { type: 'ferment_start', recipe: 'FER011', count: 1, text: '깍두기 담그기', easyText: '깍두기를 담가요' }, { type: 'ferment_start', recipe: 'FER012', count: 1, text: '동치미 담그기', easyText: '동치미를 담가요' }],

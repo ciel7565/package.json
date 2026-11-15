@@ -83,6 +83,8 @@ for (const [id, r] of Object.entries(R)) {
   if (!/^#[0-9a-f]{6}$/i.test(r.color || '')) bad('colour');
 }
 check('every recipe complete and consistent', !recipeProblems.length, recipeProblems.slice(0, 6).join(' · ') || `${Object.keys(R).length} recipes`);
+const badEnd = Object.values(R).filter((r) => !/[\uAC00-\uD7A3]$/.test(String(r.name).replace(/\s*체험$/, '')));
+check('every recipe name ends in a Hangul syllable (이/가 · 을/를 attach correctly)', !badEnd.length, badEnd.map((r) => r.id).join(','));
 const cats = new Set(startable.map((r) => r.cat));
 check('recipes cover 장 · 김치 · 젓갈 · 식초 · 식혜·조청 · 떡·누룩 · 장아찌 · 발효차', ['jang', 'kimchi', 'jeot', 'vinegar', 'sweet', 'tteok', 'jangajji', 'tea'].every((c) => cats.has(c)), [...cats].join(','));
 const named = ['메주', '간장', '된장', '고추장', '청국장', '막장', '김치', '백김치', '깍두기', '동치미', '총각김치', '오이소박이', '갓김치', '파김치', '열무김치', '나박김치', '젓', '식해', '감식초', '현미식초', '누룩', '증편', '식혜', '조청', '장아찌', '차'];
