@@ -27,6 +27,14 @@
 //   twilight bands (warm horizon, pink anti-twilight arch), a shooting star now and then on clear nights
 //   (weather:shootingstar). this.lightning (0..1), this.rainbow (0..1).
 //   Per-device persistence: manual weather (auto off) and the locked hour.
+//   [env] Phase 9 (CONTRACT §17.5) — Korea in real time: the clock has three modes (G.env.clockMode()): 'kst' = the hour
+//   is the wall clock of Asia/Seoul and the sun and the moon stand where astronomy puts them over 정선 (real sunrise,
+//   sunset, day length, moon phase); 'fast' = the old game clock (1 day = dayLengthMinutes); 'fixed' = lockTime. In 'kst'
+//   with auto weather on, the weather, temperature and humidity are today's (G.env.now(): 기상청 through the site's
+//   server, or the climatology model of 정선); a picked weather is the device's 체험 날씨. Under automation the clock stays
+//   the fixed test clock ('fast' from startHour) unless ?clock=kst. Night readability: the night floor of ambient and
+//   moonlight and a night exposure lift scale with the operator's env.night_brightness (0.6 … 1.6, default 1.25; 1 =
+//   the phase-8 night). this.clockMode, this.realInfo().
 // =============================================================================
 (function () {
   const U = G.util;
@@ -96,6 +104,7 @@
     zenithNight: C('#0a1430'), zenithTwilight: C('#2b4176'), glowSunset: C('#ff9a5c'), glowDusk: C('#e8707a'), fillDay: C('#bfd6ff'), fillNight: C('#6d82b6'),
     rainDay: C('#cfdae6'), rainNight: C('#59677c'), snowDay: C('#ffffff'), snowNight: C('#9aa8c4'),
     goldTint: C('#ffd9b6'), nightTint: C('#4a5470'), white: C('#ffffff'),
+    hemiNightLift: C('#8197c4'), groundNightLift: C('#3d4a40'),   // [env] the night readability lift
   };
   const LOOK_COL = {};
   for (const id of IDS) LOOK_COL[id] = { tint: C(LOOK[id].tint), grey: C(LOOK[id].greyCol) };
@@ -120,6 +129,10 @@
   function loadPrefs() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch (e) { return {}; } }
   function savePrefs(p) { try { localStorage.setItem(LS_KEY, JSON.stringify(p)); } catch (e) { /* storage blocked */ } }
   const wrap24 = (h) => ((h % 24) + 24) % 24;
+  // [env] the clock mode and the night brightness come from G.env (77-env.js); without it the old clock stays
+  const clockModeNow = () => { try { return G.env?.clockMode?.() || (G.settings?.lockTime ? 'fixed' : 'fast'); } catch (e) { return 'fast'; } };
+  const nightGain = () => { try { const v = Number(G.env?.nightBrightness?.()); return v >= 0.6 && v <= 1.6 ? v : 1.25; } catch (e) { return 1.25; } };
+  const CLOCK_TILES = [['kst', '🇰🇷', '실시간(한국)', '한국의 지금 시각과 진짜 해·달을 따라가요'], ['fast', '⏩', '빠른 체험 시간', '하루가 짧게 흘러요'], ['fixed', '⏸️', '고정', '지금 시간에 멈춰 있어요']];
 
   /** sun elevation / azimuth (deg) for a clock hour */
   function sunAngles(h, out) {
@@ -746,11 +759,14 @@
     _fx: null, _overlay: null, _envOverlay: null, _stars: null, _moon: null, _rain: null, _splash: null, _snow: null,
     _splashCenter: new THREE.Vector3(), _splashI: 0,
     _lampK: -1, _lampCount: -1,
+    _kst: false, _realAt: 0, _realSun: null, _realMoon: null, _nightG: 1.25, _nightGT: 0,
 
     // ------------------------------------------------------------ getters
     get hour() { return this._hour; },
-    get phase() { return this._phase || phaseOf(this._hour).id; },
-    get phaseName() { return phaseOf(this._hour).name; },
+    get phase() { return this._phase || this._phaseObj().id; },
+    get phaseName() { return this._phaseObj().name; },
+    /** [env] 'kst' | 'fast' | 'fixed' */
+    get clockMode() { return clockModeNow(); },
     get auto() { return G.settings.autoWeather !== false; },
     get lockTime() { return !!G.settings.lockTime; },
     get isNight() { return this.nightFactor > 0.5; },
@@ -766,9 +782,16 @@
       this._hour = wrap24(Number(T.startHour ?? 10.5));
       if (this.lockTime && Number.isFinite(this._prefs.hour)) this._hour = wrap24(this._prefs.hour);
       if (!this.auto && IDS.includes(this._prefs.weather)) this.current = this._prefs.weather;
+      // [env] the real Korean clock and today's weather
+      this._kst = clockModeNow() === 'kst' && !!G.env;
+      if (this._kst) {
+        this._hour = wrap24(G.env.kst().hour);
+        if (this.auto) { const w = G.env.now()?.weather; if (IDS.includes(w)) this.current = w; }
+      }
+      this._nightG = nightGain();
       for (const id of IDS) this.mix[id] = id === this.current ? 1 : 0;
       this._autoT = U.rand(AUTO_MIN, AUTO_MAX);
-      this._phase = phaseOf(this._hour).id;
+      this._phase = this._phaseObj().id;
 
       if (E && E.scene) {
         const preset = E.preset || { name: 'medium' };
@@ -811,13 +834,16 @@
         }
       });
       G.bus.on('engine:quality', () => { this._onResize(); this._ensurePuddles(); this._skySync(); });
+      // [env] today's weather changed (server answer / the model's next hour) or the clock mode was switched
+      G.bus.on('env:changed', () => { if (this._kst && this.auto) this._followEnv(); this._updateTemp(); this._updateHud(true); this._refreshPopover(false); });
+      G.bus.on('env:clock', () => this._syncClockMode(true));
       this._skySync();
       this._ready = true;
       // compute everything once so the first rendered frame is already graded
       this._apply(0, 0, true);
       this._updateTemp();
       this._updateHud(true);
-      G.log.info('WEATHER', `clock ${this.timeString()} (${this.phaseName}), weather ${this.current}, ${this._rate * 3600}h per real hour`);
+      G.log.info('WEATHER', `clock ${this.timeString()} (${this.phaseName}, ${this._kst ? 'KST' : clockModeNow()}), weather ${this.current}, ${this._rate * 3600}h per real hour`);
     },
 
     onStateLoaded() {
@@ -856,6 +882,13 @@
     setHour(h) {
       h = Number(h);
       if (!Number.isFinite(h)) return;
+      // [env] choosing an hour leaves the real clock: the 빠른 체험 시간 runs on from there (고정 stays 고정)
+      this._kst = clockModeNow() === 'kst' && !!G.env;
+      if (this._kst && G.env?.setClockMode) {
+        G.env.setClockMode('fast');
+        this._kst = false;
+        G.ui?.toast?.('⏩ 빠른 체험 시간으로 바꿨어요. 날씨 창에서 ‘실시간(한국)’을 누르면 돌아와요.', { type: 'info', sound: false, duration: 2600 });
+      }
       this._hour = wrap24(h);
       this._checkPhase();
       this._apply(0, G.time.elapsed, true);
@@ -881,13 +914,20 @@
     // ------------------------------------------------------------ per frame
     update(dt, t) {
       if (!this._ready) return;
-      // clock
-      if (!this.lockTime) {
+      // clock — [env] 'kst': the wall clock of Asia/Seoul; 'fast': the game clock; 'fixed': stands still
+      this._syncClockMode(false);
+      if (this._kst) {
+        this._hour = wrap24(G.env.kst().hour);
+        this._checkPhase();
+      } else if (!this.lockTime) {
         this._hour = wrap24(this._hour + dt * this._rate);
         this._checkPhase();
       }
-      // automatic weather
-      if (this.auto && G.ready !== false) {
+      // automatic weather ([env] in 'kst' it follows today's real weather instead of the random picks)
+      if (this._kst && this.auto) {
+        this._autoT -= dt;
+        if (this._autoT <= 0) { this._autoT = 5; this._followEnv(); }
+      } else if (this.auto && G.ready !== false) {
         this._autoT -= dt;
         if (this._autoT <= 0) {
           this._autoT = U.rand(AUTO_MIN, AUTO_MAX);
@@ -918,6 +958,56 @@
     },
 
     // ------------------------------------------------------------ internals
+    /** [env] follow a change of the clock mode (device choice, grown-up settings, lockTime) */
+    _syncClockMode(force) {
+      const kst = clockModeNow() === 'kst' && !!G.env;
+      if (kst === this._kst && !force) return;
+      this._kst = kst;
+      if (kst) {
+        this._hour = wrap24(G.env.kst().hour);
+        if (this.auto) this._followEnv(true);
+      }
+      this._checkPhase();
+      this._apply(0, G.time.elapsed, true);
+      this._updateTemp();
+      this._updateHud(true);
+      this._refreshPopover(true);
+    },
+    /** [env] today's real weather (G.env.now()) becomes the weather on screen (a 6 s cross-fade; instant on a jump) */
+    _followEnv(instant) {
+      const w = G.env?.now?.()?.weather;
+      if (IDS.includes(w) && w !== this.current) this.set(w, { source: 'env', instant: !!instant });
+    },
+    /** [env] the sun (and the moon) for this frame: astronomy for 정선 in 'kst', else the designed curve of the game clock */
+    _sunFor(out) {
+      if (this._kst && G.env) {
+        const now = G.time.now();
+        if (!this._realSun || Math.abs(now - this._realAt) >= 1000) { this._realAt = now; this._realSun = G.env.sun(now); this._realMoon = G.env.moon(now); }
+        out.elev = this._realSun.elev; out.az = this._realSun.az;
+        out.night = out.elev < 0 ? clamp(-out.elev / 45, 0, 1) : 0;
+        return out;
+      }
+      return sunAngles(this._hour, out);
+    },
+    /** [env] the day phase: by the sun's height in 'kst' (a winter 17:30 is evening, a June 19:00 is still day) */
+    _phaseObj() {
+      if (this._kst) {
+        const e = this.sunElevation, list = G.data.dayPhases || [];
+        const id = e < -6 ? 'NIGHT' : this._hour < 12.5 ? (e < 12 ? 'MORNING' : 'DAY') : (e < 10 ? 'EVENING' : 'DAY');
+        return list.find((p) => p.id === id) || phaseOf(this._hour);
+      }
+      return phaseOf(this._hour);
+    },
+    /** [env] one line about the real Korea now: date, hour, 절기, sunrise / sunset, moon, the weather's source */
+    realInfo() {
+      const E = G.env;
+      if (!E) return '';
+      const now = G.time.now(), k = E.kst(now), se = E.season(now), st = E.sunTimes(now), mo = E.moon(now), snap = E.now();
+      const hm = (ms) => (Number.isFinite(ms) && ms > 0 ? E.timeText(ms) : '--:--');
+      const src = snap.source === 'kma' ? '기상청' : '정선 평년 기후';
+      return `${k.mo}월 ${k.d}일 ${E.timeText(now)} · ${se.name} (${se.term}) · 해 뜸 ${hm(st.rise)} · 해 짐 ${hm(st.set)} · ${mo.name} · 날씨: ${src}`;
+    },
+
     /** the photographed cloud layer follows the quality preset: compiled into the sky overlay on medium / high (once),
      *  its texture built from the pack's two sky HDRIs when they are decoded (after the first frame) */
     _skySync() {
@@ -954,7 +1044,7 @@
     },
 
     _checkPhase() {
-      const ph = phaseOf(this._hour);
+      const ph = this._phaseObj();
       if (ph.id !== this._phase) {
         const prev = this._phase;
         this._phase = ph.id;
@@ -965,7 +1055,7 @@
     },
 
     _pickNext() {
-      const month = new Date(G.time.now()).getMonth();
+      const month = G.env ? G.env.kst().mo - 1 : new Date(G.time.now()).getMonth();   // [env] the KST month
       const winter = month === 11 || month <= 1;
       const h = this._hour;
       const morning = h >= 4.5 && h < 9.5;
@@ -1007,7 +1097,7 @@
       // medium / high: the phase-8 light balance (CONTRACT §16.3) — less flat fill, more of the ambient light from the
       // baked environment (sky + ridges + lit ground); `low` keeps the values it always had
       const hq = !!(E.preset && E.preset.maps);
-      sunAngles(this._hour, _sun);
+      this._sunFor(_sun);                                            // [env] astronomy in 'kst'
       const e = _sun.elev;
       this.sunElevation = e; this.sunAzimuth = _sun.az;
 
@@ -1023,6 +1113,14 @@
       G.world.nightFactor = nf;
       const grey = clamp(m.grey, 0, 1);
       const light = lerp(0.1, 1, dayK);                           // overcast brightness by time of day
+      // [env] night readability (CONTRACT §17.5): ng = env.night_brightness − 1 (0 = the phase-8 night, +0.25 by default);
+      // nl = how much of it applies now (0 by day, 1 in deep night, 0 inside a room — a room has its own light). It lifts
+      // the ambient (hemisphere + environment) and the moonlight and adds a little night exposure; emissive lamps and
+      // lit windows are not lifted, so they keep their glow above the brighter fields.
+      if (force || (this._nightGT -= dt || 0) <= 0) { this._nightGT = 2; this._nightG = nightGain(); }
+      const ng = this._nightG - 1;
+      const nl = (1 - dayK) * (1 - clamp(Number(E.indoor) || 0, 0, 1));
+      const nlift = ng * nl;
 
       // ---- sun / moon direction (engine.setSun only when it moved noticeably -> env re-bake throttled)
       const dE = Math.abs(e - this._lastSunE), dA = Math.abs(_sun.az - this._lastSunA);
@@ -1035,10 +1133,20 @@
         // that only creeps along its arc re-bakes every few degrees (engine.setSun)
         E.setSun(e, _sun.az, { env: !!(force || trans), now: !!force });
       }
-      // moon: opposite side of the sky, high at midnight
-      const moonElev = (22 + 40 * Math.sin(PI * clamp(_sun.night, 0, 1))) * DEG;
-      const moonAz = ((_sun.az + 180) % 360) * DEG;
-      _moonDir.set(Math.cos(moonElev) * Math.sin(moonAz), Math.sin(moonElev), -Math.cos(moonElev) * Math.cos(moonAz)).normalize();
+      // moon: opposite side of the sky, high at midnight — [env] in 'kst' where astronomy puts it (when it is up); its
+      // light follows the phase (a new-moon night is darker, the ambient floor above keeps the fields readable)
+      const rm = this._kst ? this._realMoon : null;
+      let moonUp = 1, moonPhaseK = 1;
+      if (rm && rm.elev > 4) {
+        const me = rm.elev * DEG, ma = rm.az * DEG;
+        _moonDir.set(Math.cos(me) * Math.sin(ma), Math.sin(me), -Math.cos(me) * Math.cos(ma)).normalize();
+        moonPhaseK = 0.5 + 0.5 * clamp(rm.illum, 0, 1);
+      } else {
+        const moonElev = (22 + 40 * Math.sin(PI * clamp(_sun.night, 0, 1))) * DEG;
+        const moonAz = ((_sun.az + 180) % 360) * DEG;
+        _moonDir.set(Math.cos(moonElev) * Math.sin(moonAz), Math.sin(moonElev), -Math.cos(moonElev) * Math.cos(moonAz)).normalize();
+        if (rm) { moonUp = smooth(-2, 1, rm.elev); moonPhaseK = 0.45; }   // below the horizon: only the night sky's light
+      }
 
       // ---- key light (sun by day, moon by night) — engine.update already placed the light along sunDir
       const sun = E.sun;
@@ -1055,7 +1163,7 @@
           if (E.keyDir) E.keyDir.copy(E.sunDir);
         } else {
           sun.color.copy(COL.moon);
-          sun.intensity = 0.78 * moonK * (1 - 0.72 * grey);
+          sun.intensity = 0.78 * moonK * (1 - 0.72 * grey) * moonPhaseK * (1 + 1.5 * nlift);
           // the engine places the key light (with the shadow frustum snapped to its texel grid): it only needs the direction
           if (E.keyDir) E.keyDir.copy(_moonDir);
           else { const f = E.focus; sun.position.set(f.x + _moonDir.x * 160, f.y + _moonDir.y * 160, f.z + _moonDir.z * 160); }
@@ -1068,18 +1176,20 @@
       const hemi = E.hemi;
       if (hemi) {
         _c1.copy(COL.hemiDay).lerp(COL.hemiGold, gold * 0.55).lerp(COL.hemiNight, 1 - dayK);
+        if (nlift > 0) _c1.lerp(COL.hemiNightLift, clamp(nlift * 1.6, 0, 0.6));   // [env] a lighter blue night sky light
         if (grey > 0) { _c2.copy(_greyCol).multiplyScalar(light); _c1.lerp(_c2, grey * 0.55); }
         hemi.color.copy(_c1);
         _c2.copy(COL.groundDay).lerp(COL.groundNight, 1 - dayK);
+        if (nlift > 0) _c2.lerp(COL.groundNightLift, clamp(nlift * 1.6, 0, 0.6));   // [env] moonlit ground bounce
         const snowW = this.mix.SNOW || 0;
         if (snowW > 0) { _c3.copy(COL.groundSnow).multiplyScalar(light); _c2.lerp(_c3, snowW * 0.6); }
         hemi.groundColor.copy(_c2);
         // (the flat hemisphere light used to do all the ambient work: 0.86 by day next to a sun of 2.75 — shadows had
         // no depth. Vegetation is lit by it alone, buildings / ground / jars also by the environment.)
-        hemi.intensity = (hq ? lerp(LK(E, 'hemiN', 0.5), LK(E, 'hemiD', 0.52), dayK) * (1 + 0.3 * grey) : lerp(0.52, 0.86, dayK)) * m.hemi;
+        hemi.intensity = (hq ? lerp(LK(E, 'hemiN', 0.5), LK(E, 'hemiD', 0.52), dayK) * (1 + 0.3 * grey) : lerp(0.52, 0.86, dayK)) * m.hemi * (1 + 1.8 * nlift);
       }
       if (E.fill) {
-        E.fill.intensity = (hq ? lerp(0.03, LK(E, 'fill', 0.1), dayK) : lerp(0.06, 0.35, dayK)) * (1 - 0.4 * grey);
+        E.fill.intensity = (hq ? lerp(0.03, LK(E, 'fill', 0.1), dayK) : lerp(0.06, 0.35, dayK)) * (1 - 0.4 * grey) * (1 + nlift);
         E.fill.color.copy(COL.fillDay).lerp(COL.fillNight, 1 - dayK);
       }
       // ---- fog (also the horizon colour of the sky overlay -> seamless haze)
@@ -1103,9 +1213,9 @@
         u.mieDirectionalG.value = 0.85 - grey * 0.04;
       }
       // ---- colour grade (one engine pass on medium / high; exposure on every preset) + sun glow / god rays
-      const exposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold) * (hq ? lerp(LK(E, 'expN', 1.0), LK(E, 'expD', 1.0), dayK) : 1);
+      const exposure = lerp(0.95, 0.9, dayK) * m.exp * (1 + 0.06 * gold) * (hq ? lerp(LK(E, 'expN', 1.0), LK(E, 'expD', 1.0), dayK) : 1) * (1 + 0.6 * nlift);
       // environment strength: the sky is dim at night (its reflections may count for more), bright by day
-      E.envIntensity = hq ? lerp(LK(E, 'envN', 0.55), LK(E, 'envD', 0.34), dayK) * (1 + 0.2 * grey) : 0.5;
+      E.envIntensity = (hq ? lerp(LK(E, 'envN', 0.55), LK(E, 'envD', 0.34), dayK) * (1 + 0.2 * grey) : 0.5) * (1 + nlift);
       const wFog = this.mix.FOG || 0, lowLight = 1 - dayK;
       _gradeArg.exposure = exposure;
       // (medium / high: the engine's tone trim adds the contrast the flat AgX curve needs by day; at night most of
@@ -1116,7 +1226,7 @@
       _gradeArg.vignette = m.vig + lowLight * 0.12 + gold * 0.05;
       // daytime shadow lift: dense far forest floor lit by the sky only sits in the ACES toe and crushed to ~(2,6,3)
       // (S-6); 0.007 keeps it dark green (≥ ~(5,10,7)) for +1 % mean brightness. Night keeps its own cool lift.
-      _lift.setRGB(0.007 + gold * 0.004, 0.007 + gold * 0.002, 0.009).lerp(_c1.setRGB(0.002, 0.004, 0.011), lowLight);
+      _lift.setRGB(0.007 + gold * 0.004, 0.007 + gold * 0.002, 0.009).lerp(_c1.setRGB(0.002 + 0.004 * nlift, 0.004 + 0.006 * nlift, 0.011 + 0.008 * nlift), lowLight);
       _gain.setRGB(1, 1, 1).lerp(_c1.setRGB(1.05, 1.0, 0.92), gold * (1 - grey)).lerp(_c2.setRGB(0.94, 0.98, 1.07), lowLight * 0.8);
       _gradeArg.instant = !!force;
       if (typeof E.grade === 'function') E.grade(_gradeArg);
@@ -1186,7 +1296,7 @@
       }
       this._updateMeteor(dt, smooth(0.5, 0.95, nightK) * clearNight);
       if (this._moon) {
-        const a = smooth(0.15, 0.7, nightK) * (1 - grey * 0.92);
+        const a = smooth(0.15, 0.7, nightK) * (1 - grey * 0.92) * moonUp;
         this._moon.visible = a > 0.01;
         this._moon.material.opacity = a;
         this._moon.position.copy(_moonDir).multiplyScalar(1900);
@@ -1405,8 +1515,22 @@
 
     // ------------------------------------------------------------ temperature / humidity
     _updateTemp() {
+      // [env] 'kst': today's temperature and humidity (G.env.now(): 기상청 or the model of 정선); a picked 체험 날씨 shifts
+      // them by the difference of the two weathers' moods (snow never above freezing)
+      if (this._kst && G.env) {
+        const sn = G.env.now(), wd = G.data.weather || {};
+        let temp = Number(sn.temp), hum = Number(sn.humidity);
+        if (this.current !== sn.weather) {
+          temp += (wd[this.current]?.tempMod ?? 0) - (wd[sn.weather]?.tempMod ?? 0);
+          if (this.current === 'SNOW') temp = Math.min(temp, -0.5);
+          hum += ((wd[this.current]?.humidity ?? 60) - (wd[sn.weather]?.humidity ?? 60)) * 0.5;
+        }
+        if (Number.isFinite(temp)) this.temperature = Math.round(temp * 10) / 10;
+        if (Number.isFinite(hum)) this.humidity = Math.round(clamp(hum, 18, 100));
+        return;
+      }
       const d = new Date(G.time.now());
-      const mo = d.getMonth();
+      const mo = G.env ? G.env.kst().mo - 1 : d.getMonth();   // [env] the KST month
       const tMax = CLIMATE.max[mo], tMin = CLIMATE.min[mo];
       const m = this._mixLook();
       const grey = clamp(m.grey, 0, 1);
@@ -1497,6 +1621,9 @@
       });
       const times = KID_TIMES.map((tm) => h('button', { type: 'button', class: 'wxk-time', dataset: { kidHour: String(tm.h) }, 'aria-pressed': 'false', 'data-say': tm.label },
         h('span', { class: 'wxk-emo emoji', 'aria-hidden': 'true' }, tm.emoji), h('span', { class: 'wxk-lbl' }, tm.label)));
+      // [env] one more tile: back to the real Korean time (진짜 해님 · 달님)
+      if (G.env?.setClockMode) times.push(h('button', { type: 'button', class: 'wxk-time wxk-real', dataset: { kidClock: 'kst' }, 'aria-pressed': 'false', 'data-say': '진짜 지금' },
+        h('span', { class: 'wxk-emo emoji', 'aria-hidden': 'true' }, '⏰'), h('span', { class: 'wxk-lbl' }, '진짜 지금')));
       const auto = h('button', { type: 'button', class: 'wxk-auto', dataset: { kidAuto: '1' }, 'aria-pressed': 'false' },
         h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔄'), h('span', { dataset: { wx: 'autoLbl' } }, '저절로 바뀌어요'));
       const close = h('button', { type: 'button', class: 'wxk-x', 'aria-label': '닫기', title: '닫기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '✖'));
@@ -1518,6 +1645,14 @@
           this.set(id, { source: 'user' });
           this._bump();
           kidSay(KID_WX[id]?.pick || '', { priority: 1 });
+          return;
+        }
+        if (ev.target.closest('[data-kid-clock]')) {
+          G.env?.setClockMode?.('kst');
+          this._syncClockMode(true);
+          this._bump();
+          kidSay('지금 진짜 시간이에요. 해님과 달님이 진짜 하늘처럼 움직여요.', { priority: 1 });
+          this._refreshPopover(true);
           return;
         }
         const tm = ev.target.closest('[data-kid-hour]');
@@ -1569,13 +1704,16 @@
       }
       const ph = this.phase;
       const cur = ph === 'MORNING' ? 6.5 : ph === 'DAY' ? 12 : ph === 'EVENING' ? 18.6 : 22;
+      const realOn = this._kst;
       for (const b of el.querySelectorAll('[data-kid-hour]')) {
-        const on = Number(b.dataset.kidHour) === cur;
+        const on = !realOn && Number(b.dataset.kidHour) === cur;
         b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
       }
+      const rb = el.querySelector('[data-kid-clock]');
+      if (rb) { rb.classList.toggle('active', realOn); rb.setAttribute('aria-pressed', realOn ? 'true' : 'false'); }
       const au = el.querySelector('[data-kid-auto]');
       if (au) { au.setAttribute('aria-pressed', this.auto ? 'true' : 'false'); au.classList.toggle('on', this.auto); }
-      setT(q('autoLbl'), this.auto ? '날씨가 저절로 바뀌어요' : '저절로 바뀌게 하기');
+      setT(q('autoLbl'), this._kst ? (this.auto ? '진짜 날씨를 따라가요' : '진짜 날씨 따라가기') : (this.auto ? '날씨가 저절로 바뀌어요' : '저절로 바뀌게 하기'));
       if (force) el.closest('.popover') && this._pop?.reposition?.();
     },
 
@@ -1618,7 +1756,12 @@
           h('div', { class: 'wx-now-clock' }, h('b', { dataset: { wx: 'clock' } }, '10:30'), h('span', { dataset: { wx: 'phase' } }, '낮'))),
         h('div', { class: 'wx-title' }, '날씨 바꾸기', h('small', { dataset: { wx: 'mode' } }, '')),
         h('div', { class: 'wx-picks' }, picks),
-        h('div', { class: 'wx-title' }, '시간', h('small', null, `체험관 속 하루 = 실제 ${G.data.time?.dayLengthMinutes || 24}분`)),
+        h('div', { class: 'wx-title' }, '시간', h('small', { dataset: { wx: 'timeNote' } }, `체험관 속 하루 = 실제 ${G.data.time?.dayLengthMinutes || 24}분`)),
+        // [env] the three clocks: 실시간(한국) · 빠른 체험 시간 · 고정, and a line about the real Korea now
+        h('div', { class: 'wx-clock', role: 'group', 'aria-label': '시계 고르기' }, CLOCK_TILES.map(([id, emo, label, tip]) =>
+          h('button', { type: 'button', class: 'chip wx-clock-pick', dataset: { wxClock: id }, title: tip, 'aria-pressed': 'false' },
+            h('span', { class: 'emoji', 'aria-hidden': 'true' }, emo), h('b', null, label)))),
+        h('p', { class: 'wx-real', dataset: { wx: 'real' } }, ''),
         h('div', { class: 'wx-slider' },
           h('input', { type: 'range', min: '0', max: '24', step: '0.25', value: String(this._hour), dataset: { wx: 'hour' }, 'aria-label': '체험관 시간' }),
           h('div', { class: 'wx-ticks' }, phaseTicks)),
@@ -1640,7 +1783,9 @@
           return;
         }
         const q = ev.target.closest('[data-wx-hour]');
-        if (q) { this.setHour(Number(q.dataset.wxHour)); this._refreshPopover(true); }
+        if (q) { this.setHour(Number(q.dataset.wxHour)); this._refreshPopover(true); return; }
+        const ck = ev.target.closest('[data-wx-clock]');
+        if (ck && G.env?.setClockMode) { G.env.setClockMode(ck.dataset.wxClock); this._syncClockMode(true); }
       });
       const range = el.querySelector('[data-wx="hour"]');
       range.addEventListener('pointerdown', () => { this._dragging = true; });
@@ -1680,6 +1825,16 @@
       if (range && (force || !this._dragging)) range.value = String(Math.round(this._hour * 4) / 4);
       const au = q('auto'); if (au) au.checked = this.auto;
       const lk = q('lock'); if (lk) lk.checked = this.lockTime;
+      // [env] the clock chips, the real line and the words of the switches in 'kst'
+      const mode = clockModeNow();
+      for (const b of el.querySelectorAll('[data-wx-clock]')) {
+        const on = b.dataset.wxClock === mode;
+        b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      setT('real', this.realInfo());
+      setT('timeNote', mode === 'kst' ? '한국의 지금 시각 그대로 흘러요' : mode === 'fixed' ? '시계가 멈춰 있어요' : `체험관 속 하루 = 실제 ${G.data.time?.dayLengthMinutes || 24}분`);
+      const autoB = el.querySelector('[data-wx="auto"]')?.closest('.wx-switch')?.querySelector('.wx-sw-text b');
+      if (autoB) { const t = mode === 'kst' ? '진짜 날씨 따라가기' : '자동 날씨'; if (autoB.textContent !== t) autoB.textContent = t; }
     },
 
     _persist() {

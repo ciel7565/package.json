@@ -80,6 +80,7 @@
   function clock(ms) {
     const s = Math.max(0, Math.ceil(ms / 1000));
     const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+    if (hh >= 48) return `${Math.floor(hh / 24)}일 ${hh % 24}:${pad2(mm)}:${pad2(ss)}`;   // [env] calendar crops grow for days
     return hh ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${mm}:${pad2(ss)}`;
   }
   /** '10분' / '2시간' / '1시간 30분' / '45초' */
@@ -88,6 +89,7 @@
     if (s < 60) return `${s}초`;
     const m = Math.round(s / 60);
     const hh = Math.floor(m / 60), mm = m % 60;
+    if (hh >= 48) return `${Math.round(hh / 24)}일`;                                       // [env] '85일'
     if (hh) return `${hh}시간${mm ? ` ${mm}분` : ''}`;
     return `${mm}분`;
   }
@@ -95,6 +97,7 @@
   function kidLeft(ms) {
     const s = Math.max(0, Math.ceil(ms / 1000));
     const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+    if (hh >= 48) return `${Math.floor(hh / 24)}일${hh % 24 ? ` ${hh % 24}시간` : ''}`;       // [env] '84일 5시간'
     if (hh) return `${hh}시간${mm ? ` ${mm}분` : ''}`;
     if (mm) return `${mm}분${mm < 10 && ss ? ` ${ss}초` : ''}`;
     return `${ss}초`;
@@ -108,6 +111,11 @@
     const diff = Math.round((dayStart(at) - dayStart(now())) / DAY);
     const day = diff === 0 ? '' : diff === 1 ? '내일 ' : diff === 2 ? '모레 ' : `${d.getMonth() + 1}월 ${d.getDate()}일 `;
     return `${day}${h24 < 12 ? '오전' : '오후'} ${h12}시${m ? ` ${m}분` : ''}`;
+  }
+  /** [env] when a bed is ready: '11월 20일쯤 수확해요' for a harvest days away (Korea's calendar), else '오후 3시에 다 자라요' */
+  function readyText(at) {
+    if (at - now() >= 3 * DAY) return G.env?.dateText ? `${G.env.dateText(at)} 수확해요` : `${new Date(at).getMonth() + 1}월 ${new Date(at).getDate()}일쯤 수확해요`;
+    return `${wallClock(at)}에 다 자라요`;
   }
   const dateText = (t) => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일 ${d.getHours() < 12 ? '오전' : '오후'} ${d.getHours() % 12 || 12}:${pad2(d.getMinutes())}`; };
 
@@ -140,7 +148,15 @@
     },
     crops() { return Object.keys(RT().crops || {}).map((id) => core.crop(id)).filter(Boolean).sort((a, b) => a.minutes - b.minutes); },
     divisor(tier, scale) { return clamp(Math.round(Number(tier) || 1), 1, 4) * clamp(Number(scale) || 1, 0.1, 3600); },
-    durMs(cropId, tier, scale) { const c = core.crop(cropId); return c ? Math.max(1, Math.round((c.minutes * 60000) / core.divisor(tier, scale))) : 0; },
+    /** [env] with the moment of planting t and the basis 'calendar' (G.env.basis()): the crop calendar's real days ÷ (tier ×
+     *  scale × the gentle season × weather factor) — the same rule as the server (Tfm\Env::bedMs); else the minutes */
+    durMs(cropId, tier, scale, t) {
+      const c = core.crop(cropId);
+      if (!c) return 0;
+      const E = G.env, cal = E?.cal?.(cropId);
+      if (t != null && cal && E.basis?.() === 'calendar') return E.core.bedMs({ basis: 'calendar', cal, tier, scale, t, weather: E.weatherAt(t) });
+      return Math.max(1, Math.round((c.minutes * 60000) / core.divisor(tier, scale)));
+    },
     coolMs(tier, scale) { return Math.round(((Number(RT().careCooldownMin) || 5) * 60000) / core.divisor(tier, scale)); },
     /** care ≥ starAt[2] → ★★★, ≥ starAt[1] → ★★, else ★ */
     stars(care) { const a = RT().starAt || [0, 40, 75]; const c = Number(care) || 0; return c >= a[2] ? 3 : c >= a[1] ? 2 : 1; },
@@ -163,7 +179,7 @@
       const R = core.rt(s);
       if (R.beds[bedId]) return { ok: false, err: 'busy' };
       const t = Math.round(Number(o.t) || 0), tier = clamp(Math.round(Number(o.tier) || 1), 1, 4);
-      const dur = core.durMs(cropId, tier, o.scale);
+      const dur = core.durMs(cropId, tier, o.scale, t);
       // a pid is never used twice: not by another bed, not by a recent harvest (the server refuses RT_PID_REUSE)
       const used = new Set(Object.values(R.beds).map((b) => b && b.pid).concat(R.last.map((x) => x && x.pid)));
       let pid = typeof o.pid === 'string' && core.PID.test(o.pid) ? o.pid : core.newPid();
@@ -651,7 +667,7 @@
       const left = durText(b.readyAt - b.plantedAt);
       if (kid) {
         G.ui.toast(`${josa(c.name, '을/를')} 심었어요! ${left} 뒤에 다 자라요 🌱`, { type: 'success', emoji: c.icon, say: `${josa(c.name, '을/를')} 심었어요! ${left} 뒤에 다 자라요. 물을 주면 별을 받아요!` });
-      } else G.ui.toast(`${c.name}${josa(c.name, '을/를').slice(c.name.length)} 심었어요. ${wallClock(b.readyAt)}에 다 자라요. 물을 주면 별(★)이 늘어요.`, { type: 'success', emoji: c.icon });
+      } else G.ui.toast(`${c.name}${josa(c.name, '을/를').slice(c.name.length)} 심었어요. ${readyText(b.readyAt)}. 물을 주면 별(★)이 늘어요.`, { type: 'success', emoji: c.icon });
       G.activity('plant', `실시간 텃밭에 ${c.name} 심기`, { bedId, cropId });
       G.log.info(CAT, `rt plant ${bedId} <- ${cropId} (pid ${b.pid}, ready in ${Math.round((b.readyAt - b.plantedAt) / 1000)} s)`);
       G.bus.emit('rtfarm:planted', { bedId, cropId, pid: b.pid, readyAt: b.readyAt });
@@ -804,6 +820,7 @@
       if (!isMap(rt) || !G.state) return 0;
       const sc = Number(rt.scale);
       if (sc >= 0.1 && sc <= 3600) this._srvScale = sc;
+      if (rt.basis === 'calendar' || rt.basis === 'short') G.env?.setServerBasis?.(rt.basis);   // [env] the server's basis
       const moved = core.applyServer(G.state, rt);
       if (moved) {
         G.log.info(CAT, `server times adopted for ${moved} bed(s)`);
@@ -1316,13 +1333,26 @@
         // ---- empty: crop picker cards (picture, name, how long, reward — no prices in easy mode)
         body.appendChild(h('p', { class: 'rf-lead', 'data-say': '진짜 시간으로 자라요. 창을 닫아도 계속 자라요.' }, kid ? '⏰ 진짜 시간으로 자라요! 창을 닫아도 쑥쑥 자라요.' : '⏰ 진짜 시간으로 자라는 밭이에요. 브라우저를 닫아도 계속 자라고, 씨앗은 텃밭에서 그냥 받아요.'));
         const grid = h('div', { class: 'rf-picker', role: 'list' });
-        const tier = this.tier(), sc = this.scale();
-        for (const c of core.crops()) {
-          const ms = core.durMs(c.id, tier, sc);
-          const card = h('button', { type: 'button', class: 'rf-crop', role: 'listitem', disabled: near ? null : true, dataset: { crop: c.id }, 'data-say': `${c.name}. ${durText(ms)} 뒤에 다 자라요.` },
+        const tier = this.tier(), sc = this.scale(), t0 = now();
+        // [env] the Korean crop calendar: what is in season now comes first, each card says when it would be ready
+        const E = G.env, calOn = !!(E?.cal && E.basis?.() === 'calendar');
+        const list = core.crops();
+        if (calOn) list.sort((a, b) => (E.inSeason(b.id, t0) - E.inSeason(a.id, t0)) || 0);
+        if (calOn) {
+          const inS = list.filter((c) => E.inSeason(c.id, t0)).map((c) => c.name);
+          const k = E.kst(t0);
+          body.appendChild(h('p', { class: 'rf-season', 'data-say': inS.length ? `지금은 ${inS.join(', ')} 심기 좋은 때예요.` : '지금은 쉬어 가는 철이에요. 심어도 천천히 자라요.' },
+            `📅 ${k.mo}월 · ${E.season(t0).name} · ` + (inS.length ? `지금은 ${inS.join('·')} 심기 좋은 때예요` : '지금은 밭이 쉬어 가는 철이에요. 심어도 자라요, 조금 천천히요.')));
+        }
+        for (const c of list) {
+          const ms = core.durMs(c.id, tier, sc, t0);
+          const inSeason = calOn && E.inSeason(c.id, t0);
+          const when = calOn ? readyText(t0 + ms) : `${durText(ms)} 뒤에 다 자라요`;
+          const card = h('button', { type: 'button', class: 'rf-crop' + (calOn ? (inSeason ? ' in-season' : ' off-season') : ''), role: 'listitem', disabled: near ? null : true, dataset: { crop: c.id }, 'data-say': `${c.name}. ${when}.${calOn && !inSeason ? ' 지금은 제철이 아니라서 천천히 자라요.' : ''}` },
             h('span', { class: 'rf-crop-ico emoji', 'aria-hidden': 'true' }, c.icon),
             h('b', { class: 'rf-crop-name' }, c.name),
-            h('span', { class: 'rf-crop-time' }, `⏰ ${durText(ms)}`),
+            calOn ? h('span', { class: 'rf-crop-season' }, inSeason ? '🌱 제철' : '🍂 천천히') : null,
+            h('span', { class: 'rf-crop-time' }, calOn ? `📅 ${G.env.dateText(t0 + ms)}` : `⏰ ${durText(ms)}`),
             kid ? h('span', { class: 'rf-crop-rw', 'aria-hidden': 'true' }, `${c.icon} ${c.harvestAmount[0]}~${c.harvestAmount[1]}`) : h('span', { class: 'rf-crop-rw' }, `✨ ${c.exp} · 🪙 ${c.coin}`));
           card.addEventListener('click', () => { if (this.plant(P.id, c.id)) { if (kid) m.close(); } });
           grid.appendChild(card);
@@ -1344,6 +1374,9 @@
         const careRow = h('div', { class: 'rf-care' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '💧'), h('span', null, kid ? '물' : '돌봄'), h('span', { class: 'rf-care-bar' }, els.careBar), els.careNum, els.stars);
         els.say = h('p', { class: 'rf-say' });
         body.append(h('div', { class: 'rf-hero' }, els.ring, h('div', { class: 'rf-hero-text' }, els.left, els.clock, careRow, els.say)));
+        // [env] the crop's Korean calendar in one calm line (normal mode; easy mode hears it in the picker)
+        const cal = G.env?.cal?.(cur.bed.cropId);
+        if (cal && !kid && G.env.basis?.() === 'calendar') body.appendChild(h('p', { class: 'rf-cal small dim' }, `📅 ${cal.note || ''} (심는 때 ${cal.sow.map((x) => `${x}월`).join('·')} · 거두는 때 ${cal.harvest.map((x) => `${x}월`).join('·')})`));
         if (!near) body.appendChild(h('p', { class: 'notice-box info rf-far' }, kid ? '밭 가까이 가면 물을 주거나 거둘 수 있어요.' : '밭 가까이 가야 물을 주거나 수확할 수 있어요.'));
         if (cur.status === 'ready') {
           if (near) els.harvest = addBtn(btn(kid ? 'easy-big-btn easy-btn-yes rf-harvest' : 'btn-gold rf-harvest', '🧺', kid ? '거두기' : '수확하기', () => { if (this.harvest(P.id) && kid) m.close(); }, '다 자란 작물을 거둬요.'));
@@ -1372,7 +1405,7 @@
         txt(els.clock, kid ? '이제 거둬요!' : '지금 수확할 수 있어요.');
       } else {
         txt(els.left, kid ? `⏰ ${kidLeft(cur.leftMs)} 남았어요` : `${clock(cur.leftMs)} 남음`);
-        txt(els.clock, `${wallClock(cur.readyAt)}에 다 자라요`);
+        txt(els.clock, readyText(cur.readyAt));
       }
       const care = cur.bed.care || 0;
       if (els.careV !== care) { els.careV = care; els.careBar.style.setProperty('--v', String(clamp(care, 0, 100))); }

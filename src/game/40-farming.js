@@ -807,6 +807,10 @@
   const DEF_CFG = { waterPerAction: 45, waterCooldown: 2.5, dryThreshold: 25, healthDecayDry: 0.25, healthRegen: 0.08, basketBonus: 1, offlineCatchUpMax: 3600 };
   /** growth multiplier of the speed tier (1..4), read at every simulation step */
   const progression = () => { const p = Number(G.sys.speed?.progression?.()); return p >= 1 && p <= 4 ? p : 1; };
+  // [env] CONTRACT §17.5 — with the real Korean clock ('실시간(한국)') the quick plots follow the crop calendar too: a crop
+  // out of its season grows a little slower (0.85 … 1 — never faster than the speed tier allows, never a loss)
+  const kstOn = () => { try { return G.env?.clockMode?.() === 'kst'; } catch (e) { return false; } };
+  const seasonF = (cropId) => { if (!cropId || !kstOn()) return 1; const f = Number(G.env.cropFactor?.(cropId, G.time.now())); return f > 0 ? clamp(f, 0.85, 1) : 1; };
   let CFG = null;
   const cfg = () => CFG || (CFG = Object.assign({}, DEF_CFG, G.data.farming || {}));
   const crops = () => G.data.crops || {};
@@ -1012,7 +1016,7 @@
       const crop = cropOf(s.cropId);
       const steps = Math.ceil(el);
       const h = el / steps;
-      const rate = crop ? (100 / Math.max(1, crop.growthTime)) * progression() : 0; // × the speed tier (§14.1)
+      const rate = crop ? (100 / Math.max(1, crop.growthTime)) * progression() * seasonF(s.cropId) : 0; // × the speed tier (§14.1) × [env] season
       const use = crop ? crop.waterUse : 0.12; // bare soil still dries out slowly
       for (let k = 0; k < steps; k++) {
         if (s.water <= 0 && !crop) break;
@@ -1062,7 +1066,7 @@
       if (!crop || s.growth >= 100) return { full: 0, now: 0 };
       const C = cfg();
       const hf = 0.6 + 0.4 * s.health / 100;
-      const rate = (100 / Math.max(1, crop.growthTime)) * hf * progression();
+      const rate = (100 / Math.max(1, crop.growthTime)) * hf * progression() * seasonF(crop.id);   // [env] × season
       const need = 100 - s.growth;
       const full = need / rate;
       let g = 0, tt = 0, w = s.water;
@@ -2024,7 +2028,7 @@
           const b = h('button', { class: `fm-seed ${x.ok ? '' : 'wrong'} ${x.count > 0 ? '' : 'none'}`, type: 'button', disabled: dis || null, title: x.crop.desc || '' },
             h('span', { class: 'emoji fm-seed-ico' }, x.seed.icon || '🌱'),
             h('b', null, x.crop.name),
-            h('span', { class: 'fm-seed-meta' }, x.ok ? `${U.formatDuration(x.crop.growthTime)} · 물 ${waterNeedLabel(x.crop.waterUse)}` : (herb ? '작물밭 전용' : '허브밭 전용')),
+            h('span', { class: 'fm-seed-meta' }, x.ok ? `${U.formatDuration(x.crop.growthTime)} · 물 ${waterNeedLabel(x.crop.waterUse)}${kstOn() && G.env?.inSeason?.(x.id) ? ' · 🌱 제철' : ''}` : (herb ? '작물밭 전용' : '허브밭 전용')),
             h('span', { class: 'fm-seed-qty' }, `×${x.count}`));
           if (!dis) b.addEventListener('click', () => { if (this.plant(P.id, x.id)) m.close(); });
           grid.appendChild(b);

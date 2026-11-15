@@ -56,6 +56,14 @@ body.easy .rf-label .rf-num { width: 1.9rem; height: 1.9rem; font-size: 1.05rem;
 .rf-crop-ico { font-size: 1.9rem; line-height: 1.1; }
 .rf-crop-name { font-size: .95rem; }
 .rf-crop-time { font-size: .74rem; font-weight: 800; color: var(--teal); }
+/* [env] the Korean crop calendar: season line, 제철 / 천천히 badges, the calendar note of a growing bed */
+.rf-season { margin: 0 0 .5rem; padding: .4rem .6rem; border-radius: 10px; font-size: .8rem; font-weight: 700; line-height: 1.45; color: var(--text); background: var(--bg-elev-2, rgba(255, 255, 255, .06)); }
+.rf-crop-season { font-size: .7rem; font-weight: 800; color: var(--green, #6cc070); }
+.rf-crop.off-season .rf-crop-season { color: var(--text-mute); }
+.rf-crop.in-season { border-color: var(--green-d, #4c9a52); }
+.rf-cal { margin: .4rem 0 0; line-height: 1.45; }
+.rt-kid .rf-season { font-size: 1rem; }
+.rt-kid .rf-crop-season { font-size: .9rem; }
 .rf-crop-rw { font-size: .7rem; color: var(--text-mute); }
 
 /* ---- growing / ready: ring + countdown + wall clock + care */

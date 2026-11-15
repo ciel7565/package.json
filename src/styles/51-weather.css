@@ -69,6 +69,13 @@
 .wx-quick b { font-weight: 700; color: var(--text); }
 .wx-quick small { font-size: .66rem; color: var(--text-mute); }
 .wx-quick:hover { color: var(--text); border-color: var(--line-strong); background: var(--bg-elev-3); }
+/* [env] the three clocks (실시간(한국) · 빠른 체험 시간 · 고정) and the line about the real Korea now */
+.wx-clock { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .3rem; margin: .1rem 0 .4rem; }
+.wx-clock-pick { cursor: pointer; justify-content: center; gap: .25rem; padding: .26rem .3rem; min-height: 2.1rem; }
+.wx-clock-pick b { font-weight: 700; font-size: .74rem; color: var(--text); white-space: nowrap; }
+.wx-clock-pick.active { border-color: var(--gold); background: var(--bg-elev-3); box-shadow: inset 0 0 0 1px var(--gold); }
+.wx-real { margin: 0 .1rem .5rem; font-size: .7rem; line-height: 1.45; color: var(--text-mute); }
+.wx-real:empty { display: none; }
 
 .wx-switch { position: relative; display: flex; align-items: center; gap: .7rem; padding: .42rem .15rem; cursor: pointer; border-radius: 10px; }
 .wx-switch:hover { background: var(--bg-elev); }
@@ -170,6 +177,9 @@ body.easy #bottom-bar #easy-wx-btn { order: 4; } /* inserted before 🔊 (also o
 .wxk-title { display: flex; align-items: center; gap: .35rem; margin: .25rem 0 0 .1rem; font-size: max(1.05rem, 16.5px); font-weight: 800; color: #fff; }
 .wxk-picks { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .4rem; }
 .wxk-times { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .4rem; }
+/* [env] 5 tiles when the real-time tile is there (⏰ 진짜 지금) */
+.wxk-times:has(.wxk-real) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.wxk-real { --wx: #9ad0ff; }
 .wxk-tile, .wxk-time {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem; min-height: calc(var(--tap, 56px) + 1.3rem);
   padding: .35rem .1rem; border-radius: 18px; color: #1d2a20; font-weight: 800; touch-action: manipulation;

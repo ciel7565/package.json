@@ -126,6 +126,26 @@ G.data.crops = {
 };
 for (const [id, c] of Object.entries(G.data.crops)) c.id = id;
 
+// ------------------------------------------------------------------ [env] the Korean crop calendar (CONTRACT §17.5)
+// Central inland / Gangwon mountain valley (정선): sow = months to plant in a bed, harvest = the usual harvest months,
+// days = planting → harvest at tier 1 and time scale 1 (the real-time beds' 'calendar' basis). Sources: 농촌진흥청
+// 텃밭 재배 안내 (rda.go.kr), 농사로 작목 정보, 지역 텃밭 달력 (see the env lane's crop notes). The server reads the
+// same table from game-data.json (cropCalendar) and measures with it; G.env.cropFactor gives the gentle season ×
+// weather factor (0.5 … 1.05). Words for children stay calm and concrete ('11월 20일쯤 수확해요').
+G.data.cropCalendar = {
+  CROP_BEAN: { sow: [5, 6], harvest: [10], days: 120, note: '5월 말에서 6월에 심어서, 서리가 내리기 전 10월에 거둬요.' },
+  CROP_PEPPER: { sow: [5], harvest: [8, 9, 10], days: 90, note: '서리가 끝난 5월 중순에 모종을 심고, 8월부터 빨간 고추를 따요.' },
+  CROP_CABBAGE: { sow: [3, 4, 8], harvest: [5, 6, 10, 11], days: 85, note: '김장 배추는 8월 중순에 심어서 11월에 거둬요. 봄배추도 있어요.' },
+  CROP_PERILLA: { sow: [5, 6], harvest: [9, 10], days: 120, note: '6월에 모종을 옮겨 심어요. 깻잎은 여름에, 들깨는 가을에 거둬요.' },
+  CROP_CORN: { sow: [4, 5], harvest: [7, 8], days: 95, note: '강원도 찰옥수수는 봄에 심어서 한여름에 쪄 먹어요.' },
+  CROP_RADISH: { sow: [3, 4, 8], harvest: [5, 6, 10, 11], days: 75, note: '김장 무는 8월 말에 심어서 늦가을에 뽑아요.' },
+  CROP_MINT: { sow: [4, 5], harvest: [6, 7, 8, 9], days: 70, note: '봄에 포기를 나눠 심으면 여름 내내 잎을 따요.' },
+  CROP_LAVENDER: { sow: [3, 4, 5], harvest: [6, 7], days: 100, note: '봄에 모종을 심으면 초여름에 보라색 꽃이 피어요.' },
+  CROP_ROSEMARY: { sow: [4, 5], harvest: [6, 7, 8, 9, 10], days: 90, note: '봄에 심어요. 추운 겨울에는 집 안으로 들여요.' },
+  CROP_LEMONBALM: { sow: [4, 5], harvest: [6, 7, 8, 9], days: 70, note: '봄에 씨를 뿌리면 여름에 레몬 향 잎을 따요.' },
+};
+for (const [id, cal] of Object.entries(G.data.cropCalendar)) if (G.data.crops[id]) G.data.crops[id].cal = cal;
+
 // ------------------------------------------------------------------ real-time beds "실시간 텃밭" (CONTRACT §15.1)
 // Four beds that grow by the wall clock, also while the browser is closed. `minutes` = real minutes at speed tier 1 and
 // time scale 1; dur(ms) = minutes × 60000 ÷ (tier × scale). In server mode the server measures the time itself.
