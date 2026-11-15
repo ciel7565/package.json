@@ -2838,4 +2838,765 @@
       corn, herbs, soot, strawBed, bowl: bowlAt,
     });
   })();
+  // ==============================================================================================================
+  // [myroom] things for a room of one's own (75-myroom.js, CONTRACT §17.4) — an add-only block of the myroom lane.
+  // Same conventions as section 3: (T, opts) with opts.x / y / z / rotY (or opts.m), local +Z = the front, y = 0 = the
+  // floor the thing stands on, a footprint back where useful, no collider. T needs only add(key, geometry, matrix, tint,
+  // opts) (+ rnd): every generator here works on a room and on any other collector, and none makes a light or an effect.
+  // WALL things (kite, jogakbo, wallClock, mask, maedeup, frame, fan with wall: true) are made round their own centre:
+  // the wall is the plane z = 0 and the thing reaches into +Z — hang them with opts.m = R.wm(side, u, v, 0).
+  // HANGING things (strings, chorong with hang: true) are made below y = 0, the point they hang from.
+  //   K.plant(T, {kind: 'orchid'|'pine'|'bamboo'|'plum'|'mum'|'camellia'|'lotus'|'peony'|'lettuce'|'pepper', tint, pot, s})
+  //   K.spinTop(T, {tint}) 팽이와 팽이채 · K.eolle(T) 얼레 · K.yut(T) 윷과 윷판 · K.jegi(T, {tint}) 제기 · K.gonggi(T) 공깃돌
+  //   K.tuho(T) 투호 · K.doll(T, {kind: 'gaksi'|'doryeong', tint}) 한복 인형 · K.kite(T, {kind: 'bangpae'|'gaori', tint}) 연
+  //   K.gayageum(T, {len = 1.52}) · K.janggu(T, {tint}) · K.buk(T, {tint}) · K.jing(T) 징과 틀 · K.flutes(T) 대금 · 단소
+  //   K.rug(T, {w, d, kind: 'hwamun'|'jogak'|'saekdong'|'round'|'felt', tint, seed}) 깔개 (flat, 1 cm)
+  //   K.jogakbo(T, {w, h, seed}) 조각보 · K.wallClock(T, {hour, min}) 괘종시계 · K.fan(T, {tint, wall}) 부채
+  //   K.mask(T, {kind: 'yangban'|'gaksi'}) 탈 · K.maedeup(T, {tint}) 매듭 노리개 · K.frame(T, {art, w, h, tone}) 액자
+  //   K.chorong(T, {tint, hang}) 청사초롱 · K.candle(T) 촛대 · K.paperLamp(T, {tint, h}) 한지 등
+  //   K.dish(T, {kind: 'songpyeon'|'persimmon'|'chestnut'|'tteok'|'yakgwa'|'watermelon'|'sweetpotato'|'tangerine'}) 상차림
+  //   K.pumpkin(T, {s, tint}) 늙은 호박 · K.strings(T, {kind: 'gotgam'|'meju'|'gochu'|'corn'|'siraegi', w}) 처마 밑에 건 것
+  //   K.pyeongsang(T, {w, d, h}) 평상 · K.bedding(T, {tint, trim}) 이부자리 · K.jukbuin(T) 죽부인
+  //   K.shoes(T, {kind: 'kkotsin'|'gomusin', tint}) 신 · K.gat(T) 갓과 갓걸이 · K.sotdae(T) 솟대
+  //   K.porcelain(T, {kind: 'moon'|'maebyeong'|'bottle', tint, s}) 도자기 · K.inlayBox(T, {tint}) 나전 함
+  // Material key added for these: 'lantern' — a self-lit surface that shows its tint as it is (lantern silk, a flame).
+  // ==============================================================================================================
+  (function myroomKit() {
+    const rZ = (g, a) => g.applyMatrix4(new THREE.Matrix4().makeRotationZ(a));
+    const rX = (g, a) => g.applyMatrix4(new THREE.Matrix4().makeRotationX(a));
+    const rY = (g, a) => g.applyMatrix4(new THREE.Matrix4().makeRotationY(a));
+    const NC = (o) => ({ ...o, cast: false });
+    const shade = (hex, k) => col(hex).clone().multiplyScalar(k);
+    const rndOf = (T, key) => T.rnd || G.util.rng('hk:mr:' + key);
+    const upr = (len, a, b, bev) => rZ(KG.timber(len, a, b, bev), PI / 2);    // a timber standing up
+    MATS.lantern = { fb: () => own('lantern', () => new THREE.MeshBasicMaterial({ vertexColors: true })), tint: '#ffd9a0', own: true };
+    /** the same surface seen from behind (thin things: leaves, paper, ribbons) */
+    function flipped(g) {
+      const b = g.clone();
+      if (!b.index) { const n = b.attributes.position.count, idx = new Array(n); for (let i = 0; i < n; i++) idx[i] = i; b.setIndex(idx); }
+      const a = b.index.array;
+      for (let i = 0; i < a.length; i += 3) { const t = a[i + 1]; a[i + 1] = a[i + 2]; a[i + 2] = t; }
+      if (!b.attributes.normal) b.computeVertexNormals();
+      else { const nr = b.attributes.normal.array; for (let i = 0; i < nr.length; i++) nr[i] = -nr[i]; }
+      return b;
+    }
+    const both = (T, key, g, m, tn, o) => { T.add(key, flipped(g), m, tn, o); T.add(key, g, m, tn, o); };
+    /** a small round wooden plate (the things of a dish stand on y = its return value) */
+    function plate(T, m, r, tn, o) { T.add('furn', KG.lathe([[0, 0], [r * 0.55, 0], [r * 0.62, 0.012], [r, 0.03], [r, 0.038], [r * 0.6, 0.02], [0, 0.018]], 20), m, tn || '#7a4a2c', o); return 0.02; }
+
+    // ---------------------------------------------------------------- 화분 · 꽃
+    const LEAF = ['#4f7f3c', '#5d8f45', '#447236', '#6a9a4e'];
+    const POTS = {
+      white: [[0, 0], [0.075, 0], [0.082, 0.012], [0.112, 0.15], [0.128, 0.168], [0.12, 0.178], [0.104, 0.165], [0, 0.16]],
+      low: [[0, 0], [0.11, 0], [0.118, 0.012], [0.15, 0.085], [0.162, 0.098], [0.15, 0.105], [0.138, 0.092], [0, 0.088]],
+      vase: [[0, 0], [0.055, 0], [0.062, 0.012], [0.105, 0.12], [0.11, 0.2], [0.07, 0.3], [0.045, 0.36], [0.058, 0.4], [0.05, 0.404], [0.036, 0.365], [0, 0.36]],
+    };
+    /** a leaf blade from the origin: heading a (about +Y), length L, rising H, half width w0; arch 1 = it comes back down */
+    function blade(a, L, H, w0, arch = 0.62, n = 6, lift = 0) {
+      const sa = Math.sin(a), ca = Math.cos(a);
+      return geo.grid(1, n, (i, j, out) => {
+        const t = j / n, r = L * t, half = w0 * Math.sin(PI * (0.14 + 0.86 * t)) * (1 - 0.3 * t), s = i ? 1 : -1;
+        out[0] = sa * r + ca * half * s; out[1] = lift + H * Math.sin(t * PI * arch); out[2] = ca * r - sa * half * s;
+        out[3] = i * w0 * 2; out[4] = t * L;
+      });
+    }
+    function plantPot(T, m, kind, tn, o) {   // -> the height of the soil
+      const p = POTS[kind] || POTS.white;
+      T.add(kind === 'low' ? 'onggi' : 'lacquer', KG.lathe(p, 18), m, tn, o);
+      const top = p[p.length - 1][1], r = p[p.length - 2][0];
+      if (kind !== 'vase') T.add('earth', geo.disc(r * 0.98, 14), mul(m, M(0, top + 0.004, 0)), null, NC(o));
+      return top;
+    }
+    const blob = (rx, ry, rz2, seg = 8) => new THREE.SphereGeometry(1, seg, Math.max(5, seg - 2)).scale(rx, ry, rz2);
+    function plant(T, o = {}) {
+      const kind = o.kind || 'orchid', s = num(o.s, 1), m = mul(base(T, o), M(0, 0, 0, 0, s)), F = NC(o), r = rndOf(T, 'plant:' + kind);
+      let top = 0, w = 0.4, h = 0.5;
+      if (kind === 'orchid') {            // 난초: long arching leaves, a slim flower stalk
+        top = plantPot(T, m, 'white', o.pot || '#e9e6da', o);
+        for (let k = 0; k < 9; k++) both(T, 'paint', blade((k / 9) * TAU + r() * 0.5, 0.2 + r() * 0.14, 0.17 + r() * 0.1, 0.011, 0.85, 7, top), m, LEAF[k % 4], F);
+        T.add('paint', geo.tube(0, top, 0, 0.03, top + 0.34, -0.02, 0.0035, 5), m, '#7a9a52', F);
+        for (let k = 0; k < 4; k++) {
+          const t = 0.52 + k * 0.15, fm = mul(m, M(0.03 * t + (k % 2 ? 0.02 : -0.02), top + 0.34 * t, -0.02 * t, k * 1.7));
+          for (let q = 0; q < 3; q++) T.add('paint', blob(0.022, 0.006, 0.009, 6), mul(fm, M(0, 0, 0, (q / 3) * TAU, 1, 1, 1, 0, 0.45)), o.tint || '#ece4b4', F);
+          T.add('paint', blob(0.006, 0.006, 0.006, 5), fm, '#a8632e', F);
+        }
+        w = 0.56; h = top + 0.36;
+      } else if (kind === 'pine') {       // 소나무 분재: a bent trunk on a shallow tray, pads of needles, moss, a stone
+        T.add('onggi', KG.slab(0.4, 0.07, 0.26, 0.012), mul(m, M(0, 0.045, 0)), o.pot || '#5c6468', o);
+        for (const sx of [-1, 1]) T.add('onggi', KG.slab(0.06, 0.012, 0.2, 0.004), mul(m, M(sx * 0.13, 0.006, 0)), '#4c5458', F);
+        T.add('paint', KG.floor(0.37, 0.23), mul(m, M(0, 0.082, 0)), '#6f8648', F);
+        T.add('stone', new THREE.IcosahedronGeometry(0.035, 0).scale(1.3, 0.8, 1), mul(m, M(0.12, 0.095, 0.05, 0.6)), '#b9b2a4', o);
+        const P = [[-0.07, 0.08, 0], [-0.03, 0.2, 0.02], [0.05, 0.28, -0.01], [0.02, 0.4, 0.02], [0.1, 0.47, 0]];
+        for (let k = 0; k < P.length - 1; k++) T.add('wood', geo.tube(P[k][0], P[k][1], P[k][2], P[k + 1][0], P[k + 1][1], P[k + 1][2], 0.022 - k * 0.004, 7), m, '#6a513a', o);
+        T.add('wood', geo.tube(-0.03, 0.2, 0.02, -0.15, 0.27, 0.05, 0.01, 6), m, '#6a513a', o);
+        T.add('wood', geo.tube(0.05, 0.28, -0.01, 0.17, 0.3, -0.05, 0.009, 6), m, '#6a513a', o);
+        for (const [px, py, pz, pr] of [[0.1, 0.49, 0, 0.1], [-0.16, 0.29, 0.05, 0.085], [0.18, 0.32, -0.05, 0.08], [0.0, 0.42, 0.04, 0.075], [-0.02, 0.5, -0.03, 0.06]]) {
+          T.add('paint', blob(pr, pr * 0.38, pr * 0.85, 9), mul(m, M(px, py, pz, r() * 3)), shade('#3d6238', 0.9 + r() * 0.3), o);
+          T.add('paint', blob(pr * 0.7, pr * 0.3, pr * 0.6, 7), mul(m, M(px + 0.02, py + pr * 0.22, pz, r() * 3)), shade('#4c7a42', 0.9 + r() * 0.3), F);
+        }
+        w = 0.5; h = 0.6;
+      } else if (kind === 'bamboo') {     // 대나무: canes with nodes, leaves in threes
+        top = plantPot(T, m, 'white', o.pot || '#7f8f96', o);
+        for (let c = 0; c < 4; c++) {
+          const a = c * 1.7 + 0.4, bx = Math.cos(a) * 0.04, bz = Math.sin(a) * 0.04, hh = 0.62 + c * 0.11, lean = (c - 1.5) * 0.02, n = 4 + (c % 2);
+          for (let k = 0; k < n; k++) {
+            const y0 = top + (hh * k) / n, y1 = top + (hh * (k + 1)) / n, x0 = bx + lean * k, x1 = bx + lean * (k + 1);
+            T.add('paint', geo.tube(x0, y0, bz, x1, y1, bz, 0.009 - k * 0.0008, 7), m, shade('#7c9a4a', 0.92 + (k % 2) * 0.12), o);
+            T.add('paint', geo.cyl(0.011 - k * 0.0008, 0.011 - k * 0.0008, 0.005, 7), mul(m, M(x1, y1, bz)), '#5c7636', F);
+            if (k >= 1) for (let q = 0; q < 3; q++) both(T, 'paint', blade(a + q * 2.1 + k, 0.11 + r() * 0.05, -0.03, 0.012, 0.5, 3, 0), mul(m, M(x1, y1, bz)), LEAF[(k + q) % 4], F);
+          }
+        }
+        w = 0.44; h = top + 0.95;
+      } else if (kind === 'plum') {       // 매화: bare dark branches with blossoms in a tall vase
+        plantPot(T, m, 'vase', o.pot || '#a9c3b2', o);
+        const br = [[[0, 0.38, 0], [0.04, 0.56, 0.01], [0.13, 0.7, -0.02], [0.1, 0.86, 0.03]], [[0.04, 0.56, 0.01], [-0.06, 0.68, 0.03], [-0.14, 0.76, 0]], [[0.13, 0.7, -0.02], [0.23, 0.74, -0.05]]];
+        for (const b of br) for (let k = 0; k < b.length - 1; k++) {
+          T.add('wood', geo.tube(b[k][0], b[k][1], b[k][2], b[k + 1][0], b[k + 1][1], b[k + 1][2], 0.008 - k * 0.002, 6), m, '#3e2f25', o);
+          for (let q = 0; q < 3; q++) {
+            const t = (q + 0.6) / 3.2, fx = lerp(b[k][0], b[k + 1][0], t), fy = lerp(b[k][1], b[k + 1][1], t), fz = lerp(b[k][2], b[k + 1][2], t), fm = mul(m, M(fx + (r() - 0.5) * 0.02, fy + 0.008, fz + (q % 2 ? 0.012 : -0.012), r() * 6));
+            if (r() < 0.3) { T.add('paint', blob(0.013, 0.014, 0.013, 6), fm, '#cf6f88', F); continue; }
+            for (let p5 = 0; p5 < 5; p5++) T.add('paint', blob(0.016, 0.009, 0.013, 6), mul(fm, M(Math.cos(p5 * 1.257) * 0.017, 0, Math.sin(p5 * 1.257) * 0.017, -p5 * 1.257)), o.tint || '#f2b4c4', F);
+            T.add('paint', blob(0.008, 0.009, 0.008, 5), mul(fm, M(0, 0.004, 0)), '#e2b33a', F);
+          }
+        }
+        w = 0.46; h = 0.92;
+      } else if (kind === 'mum' || kind === 'camellia' || kind === 'peony') {
+        const vase = kind === 'peony';
+        top = plantPot(T, m, vase ? 'vase' : 'white', o.pot || (vase ? '#e9e6da' : kind === 'mum' ? '#8b5a3a' : '#dfe4e2'), o);
+        const y0 = vase ? 0.4 : top, R = vase ? 0.12 : 0.15, leafM = kind === 'camellia' ? 'lacquer' : 'paint', leafC = kind === 'camellia' ? '#2f5a35' : '#4f7f3c';
+        for (let k = 0; k < (vase ? 6 : 11); k++) {      // the leaves: a low dome
+          const a = k * 2.4, rr = R * (0.35 + 0.65 * ((k * 0.618) % 1)), hy = y0 + 0.05 + (1 - rr / R) * 0.12 + (vase ? 0.06 : 0);
+          T.add(leafM, blob(0.055, 0.02, 0.04, 7), mul(m, M(Math.cos(a) * rr, hy, Math.sin(a) * rr, -a, 1, 1, 1, 0, 0.3)), shade(leafC, 0.85 + ((k * 0.37) % 1) * 0.35), o);
+        }
+        if (vase) for (let k = 0; k < 3; k++) T.add('paint', geo.tube(0, 0.36, 0, Math.cos(k * 2.1) * 0.07, 0.52 + k * 0.03, Math.sin(k * 2.1) * 0.07, 0.004, 5), m, '#5a7a3a', F);
+        const n = kind === 'mum' ? 12 : kind === 'camellia' ? 6 : 3, fc = o.tint || (kind === 'mum' ? '#e8b62a' : kind === 'camellia' ? '#c3262e' : '#e58aa8');
+        for (let k = 0; k < n; k++) {
+          const a = k * 2.4 + 0.7, rr = (vase ? 0.08 : R * 0.8) * Math.sqrt((k + 0.5) / n), hy = y0 + (vase ? 0.2 + k * 0.035 : 0.15 + (1 - rr / R) * 0.08), fr = kind === 'mum' ? 0.034 : kind === 'camellia' ? 0.03 : 0.062;
+          const fm = mul(m, M(Math.cos(a) * rr, hy, Math.sin(a) * rr, a));
+          T.add('paint', new THREE.IcosahedronGeometry(fr, 1).scale(1, kind === 'mum' ? 0.62 : 0.7, 1), fm, shade(fc, 0.9 + ((k * 0.53) % 1) * 0.2), o);
+          if (kind !== 'mum') T.add('paint', blob(fr * 0.32, fr * 0.2, fr * 0.32, 6), mul(fm, M(0, fr * 0.62, 0)), '#e9c13a', F);
+        }
+        w = vase ? 0.34 : 0.4; h = vase ? 0.72 : top + 0.3;
+      } else if (kind === 'lotus') {      // 연꽃 수반: a wide bowl of water, pads, one flower and a bud
+        T.add('onggi', KG.lathe(PROFILES.basin, 22), mul(m, M(0, 0, 0, 0, 0.78)), o.pot || '#5d4a3c', o);
+        const wy = 0.132;
+        T.add('lacquer', geo.disc(0.255, 22), mul(m, M(0, wy, 0)), '#1f3138', F);
+        for (const [px, pz, pr] of [[-0.1, 0.05, 0.085], [0.09, 0.1, 0.07], [0.06, -0.11, 0.09], [-0.08, -0.1, 0.055]]) T.add('paint', new THREE.CircleGeometry(pr, 12, 0.3, TAU - 0.6).rotateX(-PI / 2), mul(m, M(px, wy + 0.004, pz, px * 9)), shade('#5c8a4c', 0.9 + pr), F);
+        T.add('paint', geo.tube(0.0, wy, 0.0, 0.01, wy + 0.13, 0.0, 0.005, 5), m, '#6a8a4a', F);
+        for (let ring = 0; ring < 2; ring++) for (let k = 0; k < 7; k++) {
+          const a = (k / 7) * TAU + ring * 0.45, tilt = ring ? 0.95 : 0.5;
+          T.add('paint', blob(0.042, 0.007, 0.02, 7), mul(m, mul(M(0.01, wy + 0.135, 0, a), M(0.022 + ring * 0.004, 0.018 + ring * 0.014, 0, 0, 1, 1, 1, 0, tilt))), ring ? (o.tint || '#f3b6cb') : shade(o.tint || '#f3b6cb', 1.08), F);
+        }
+        T.add('paint', blob(0.014, 0.012, 0.014, 6), mul(m, M(0.01, wy + 0.145, 0)), '#d9c26a', F);
+        T.add('paint', geo.tube(-0.13, wy, -0.02, -0.15, wy + 0.1, -0.03, 0.004, 5), m, '#6a8a4a', F);
+        T.add('paint', blob(0.017, 0.03, 0.017, 6), mul(m, M(-0.15, wy + 0.12, -0.03)), '#e88fae', F);
+        w = 0.58; h = 0.3;
+      } else if (kind === 'lettuce') {    // 상추 상자: a plank box of soil with leafy heads
+        const bw = 0.56, bd = 0.3, bh = 0.16;
+        for (const sz of [-1, 1]) T.add('wood', KG.slab(bw, bh, 0.02, 0.004), mul(m, M(0, bh / 2, sz * (bd / 2 - 0.01))), '#a98862', o);
+        for (const sx of [-1, 1]) T.add('wood', KG.slab(0.02, bh, bd - 0.04, 0.004), mul(m, M(sx * (bw / 2 - 0.01), bh / 2, 0)), '#9c7c58', o);
+        T.add('earth', KG.floor(bw - 0.04, bd - 0.04), mul(m, M(0, bh - 0.02, 0)), null, F);
+        for (let k = 0; k < 6; k++) {
+          const hm = mul(m, M(-bw / 2 + 0.1 + (k % 3) * 0.18, bh - 0.02, (k < 3 ? -1 : 1) * 0.065));
+          for (let q = 0; q < 6; q++) both(T, 'paint', blade(q * 1.05 + k, 0.075 + r() * 0.02, 0.07, 0.03, 0.75, 4, 0), hm, shade(q % 2 ? '#8fc45a' : '#a5d46c', 0.9 + r() * 0.2), F);
+        }
+        w = 0.6; h = 0.26;
+      } else {                            // 'pepper' 고추 화분: a stake, leaves, red and green peppers
+        top = plantPot(T, m, 'white', o.pot || '#8b5a3a', o);
+        T.add('furn', geo.cyl(0.006, 0.006, 0.62, 5), mul(m, M(0.03, top + 0.31, 0)), '#c9b27c', F);
+        T.add('paint', geo.tube(0, top, 0, -0.01, top + 0.48, 0.01, 0.006, 5), m, '#5a7a3a', o);
+        for (let k = 0; k < 10; k++) { const a = k * 2.4, y = top + 0.12 + k * 0.036; both(T, 'paint', blade(a, 0.11, 0.02, 0.024, 0.6, 3, 0), mul(m, M(-0.01 * (y - top) / 0.48, y, 0.0)), LEAF[k % 4], F); }
+        const pep = () => rX(KG.lathe([[0, 0], [0.011, 0.018], [0.014, 0.06], [0.011, 0.09], [0.005, 0.1], [0, 0.102]], 7), PI);
+        for (let k = 0; k < 6; k++) { const a = k * 1.9 + 0.3, y = top + 0.2 + (k % 3) * 0.08; T.add('paint', pep(), mul(m, M(Math.cos(a) * 0.06, y, Math.sin(a) * 0.06, a, 1, 1, 1, 0, 0.15)), k % 3 === 2 ? '#5f8a3a' : '#b3241c', F); }
+        w = 0.36; h = top + 0.62;
+      }
+      return { w: w * s, d: w * s, top: num(o.y, 0) + h * s };
+    }
+
+    // ---------------------------------------------------------------- 놀잇감
+    function spinTop(T, o = {}) {
+      const m = base(T, o), F = NC(o), rings = [o.tint || '#c2342e', '#2e5a9c', '#e3b83a'];
+      const one = (tm, k) => {
+        T.add('furn', KG.lathe([[0, 0], [0.008, 0.008], [0.036, 0.055], [0.044, 0.07], [0.044, 0.085], [0.014, 0.092], [0.011, 0.118], [0, 0.12]], 14), tm, k ? '#c9a06a' : '#d9b27a', o);
+        T.add('iron', new THREE.SphereGeometry(0.006, 6, 4), tm, '#8a8a8c', F);
+        rings.forEach((c, i) => T.add('paint', geo.ring(0.016 + i * 0.009, 0.023 + i * 0.009, 16), mul(tm, M(0, 0.0858 + (2 - i) * 0.0022, 0)), c, F));
+      };
+      one(mul(m, M(-0.07, 0, 0.02)), 0);
+      one(mul(m, M(0.09, 0.044, -0.03, 0.7, 1, 1, 1, 0, PI / 2 - 0.12)), 1);       // one lies on its side
+      // 팽이채: a stick with a strip of cloth
+      T.add('furn', geo.tube(-0.16, 0.012, 0.13, 0.14, 0.012, 0.16, 0.007, 6), m, '#a07848', o);
+      for (let k = 0; k < 4; k++) T.add('cloth', geo.tube(0.14 + k * 0.035, 0.012 - (k ? 0.004 : 0), 0.16 - k * 0.02, 0.175 + k * 0.035, 0.008, 0.14 - k * 0.02, 0.004, 4), m, '#e9e4d6', F);
+      return { w: 0.44, d: 0.3, top: num(o.y, 0) + 0.12 };
+    }
+    function eolle(T, o = {}) {
+      const m = base(T, o), F = NC(o), L = 0.2, r = 0.06;
+      for (const sx of [-1, 1]) for (let k = 0; k < 2; k++) T.add('furn', rX(KG.slab(0.012, r * 2.3, 0.022, 0.003), k * PI / 2), mul(m, M(sx * L / 2, r + 0.006, 0)), '#8a6238', o);
+      for (let k = 0; k < 4; k++) { const a = k * PI / 2 + PI / 4; T.add('furn', geo.tube(-L / 2, r + 0.006 + Math.sin(a) * r, Math.cos(a) * r, L / 2, r + 0.006 + Math.sin(a) * r, Math.cos(a) * r, 0.006, 5), m, '#a07848', o); }
+      T.add('cloth', rZ(geo.cyl(r * 0.8, r * 0.8, L * 0.6, 12), PI / 2), mul(m, M(0, r + 0.006, 0)), '#efe9da', F);       // the wound string
+      T.add('furn', geo.tube(L / 2, r + 0.006, 0, L / 2 + 0.2, r + 0.006, 0, 0.008, 6), m, '#8a6238', o);
+      return { w: 0.44, d: 0.16, top: num(o.y, 0) + 0.14 };
+    }
+    function yut(T, o = {}) {
+      const m = base(T, o), F = NC(o), s = 0.46;
+      T.add('cloth', KG.floor(s, s), mul(m, M(0, 0.004, 0)), o.tint || '#e6d8b8', F);
+      for (const sz of [-1, 1]) T.add('cloth', KG.floor(s, 0.02), mul(m, M(0, 0.005, sz * (s / 2 - 0.01))), '#8a3a2a', F);
+      for (const sx of [-1, 1]) T.add('cloth', KG.floor(0.02, s), mul(m, M(sx * (s / 2 - 0.01), 0.005, 0)), '#8a3a2a', F);
+      const q = s / 2 - 0.05, dot = (x, z, big) => T.add('paint', geo.disc(big ? 0.017 : 0.01, 10), mul(m, M(x, 0.0062, z)), big ? '#7a2a22' : '#3a2a20', F);
+      for (let k = 0; k <= 5; k++) { const t = -q + (2 * q * k) / 5, big = k === 0 || k === 5; dot(t, -q, big); dot(t, q, big); if (k > 0 && k < 5) { dot(-q, t, false); dot(q, t, false); } }
+      for (const t of [-0.66, -0.33, 0.33, 0.66]) { dot(t * q, t * q, false); dot(t * q, -t * q, false); }
+      dot(0, 0, true);
+      // 윷가락: two show the flat belly, two the round back; 말 on the board
+      for (let k = 0; k < 4; k++) {
+        const tm = mul(m, M(-0.1 + k * 0.07, 0.014, 0.33, 0.25 * (k - 1.5), 1, 1, 1, 0, k % 2 ? PI : 0));
+        T.add('furn', rZ(new THREE.CylinderGeometry(0.014, 0.014, 0.17, 10, 1, false, 0, PI), PI / 2), tm, '#5a3a24', o);
+        T.add('furn', KG.floor(0.17, 0.028).applyMatrix4(new THREE.Matrix4().makeRotationX(PI)), mul(tm, M(0, -0.0002, 0)), '#e2c79a', F);
+      }
+      for (const [x, z, c] of [[q, -q, '#b3241c'], [-q * 0.33, -q * 0.33, '#2e5a9c'], [q, q * 0.2, '#2e5a9c']]) T.add('paint', geo.cyl(0.018, 0.02, 0.012, 10), mul(m, M(x, 0.012, z)), c, F);
+      return { w: 0.5, d: 0.76, top: num(o.y, 0) + 0.03 };
+    }
+    function jegi(T, o = {}) {
+      const m = base(T, o), F = NC(o), r = rndOf(T, 'jegi');
+      for (const [x, z, c] of [[-0.06, 0, o.tint || '#f1ece0'], [0.07, 0.03, '#c2342e']]) {
+        const jm = mul(m, M(x, 0, z));
+        T.add('brass', geo.cyl(0.02, 0.02, 0.006, 12), mul(jm, M(0, 0.003, 0)), '#b08d3c', F);
+        for (let k = 0; k < 12; k++) both(T, 'hanji', blade(k * 0.55 + r(), 0.02 + r() * 0.012, 0.1 + r() * 0.04, 0.006, 0.5, 3, 0.006), jm, c, F);
+      }
+      return { w: 0.26, d: 0.16, top: num(o.y, 0) + 0.15 };
+    }
+    function gonggi(T, o = {}) {
+      const m = base(T, o), F = NC(o), cs = ['#c2342e', '#2e5a9c', '#e3b83a', '#3d8a5a', '#8a4a9c'];
+      cs.forEach((c, k) => T.add('paint', new THREE.IcosahedronGeometry(0.014, 0).scale(1, 0.8, 1), mul(m, M(Math.cos(k * 1.4) * 0.05, 0.011, Math.sin(k * 1.4) * 0.05, k)), c, F));
+      T.add('cloth', KG.lathe([[0, 0], [0.04, 0], [0.05, 0.02], [0.044, 0.05], [0.016, 0.066], [0.022, 0.08], [0, 0.076]], 10), mul(m, M(0.12, 0, -0.02)), '#3a4f7a', o);
+      T.add('cloth', new THREE.TorusGeometry(0.018, 0.004, 4, 10).rotateX(PI / 2), mul(m, M(0.12, 0.064, -0.02)), '#d9a62c', F);
+      return { w: 0.3, d: 0.16, top: num(o.y, 0) + 0.08 };
+    }
+    function tuho(T, o = {}) {
+      const m = base(T, o), F = NC(o);
+      T.add('brass', KG.lathe([[0, 0], [0.09, 0], [0.1, 0.015], [0.14, 0.1], [0.15, 0.2], [0.11, 0.3], [0.06, 0.36], [0.055, 0.5], [0.075, 0.53], [0.065, 0.535], [0.045, 0.5], [0, 0.49]], 18), m, o.tint || '#8f7436', o);
+      for (const sx of [-1, 1]) T.add('brass', KG.lathe([[0.022, 0], [0.03, 0.004], [0.03, 0.09], [0.022, 0.094]], 10), mul(m, M(sx * 0.095, 0.42, 0)), '#8f7436', o);
+      const arrow = (ax, ay, az, bx, by, bz, c) => {
+        T.add('furn', geo.tube(ax, ay, az, bx, by, bz, 0.0045, 5), m, '#c9b27c', F);
+        T.add('cloth', geo.tube(lerp(ax, bx, 0.86), lerp(ay, by, 0.86), lerp(az, bz, 0.86), bx, by, bz, 0.009, 5), m, c, F);
+        T.add('iron', geo.tube(ax, ay, az, lerp(ax, bx, 0.06), lerp(ay, by, 0.06), lerp(az, bz, 0.06), 0.006, 5), m, '#55575a', F);
+      };
+      arrow(0.01, 0.2, 0, 0.06, 0.82, 0.03, '#b3241c'); arrow(-0.01, 0.2, 0.01, -0.08, 0.8, -0.02, '#2e5a9c');
+      arrow(-0.3, 0.006, 0.26, 0.32, 0.006, 0.2, '#b3241c'); arrow(-0.26, 0.006, 0.33, 0.34, 0.006, 0.31, '#2e5a9c');
+      return { w: 0.7, d: 0.5, top: num(o.y, 0) + 0.82 };
+    }
+    function doll(T, o = {}) {
+      const m = base(T, o), F = NC(o), boy = o.kind === 'doryeong';
+      const skirt = o.tint || (boy ? '#3a5f9c' : '#c2342e'), top2 = boy ? '#e9e2c8' : '#e6c53a', skin = '#f1d9c4';
+      T.add('furn', geo.cyl(0.07, 0.075, 0.014, 14), mul(m, M(0, 0.007, 0)), '#5a3420', o);
+      T.add('cloth', KG.lathe(boy ? [[0, 0], [0.045, 0], [0.042, 0.1], [0.034, 0.15], [0, 0.15]] : [[0, 0], [0.062, 0], [0.066, 0.012], [0.05, 0.09], [0.03, 0.15], [0, 0.15]], 14), mul(m, M(0, 0.014, 0)), skirt, o);
+      if (boy) T.add('cloth', KG.lathe([[0.044, 0], [0.05, 0.004], [0.046, 0.09], [0.036, 0.14]], 14), mul(m, M(0, 0.03, 0)), '#27406e', F);   // 쾌자
+      T.add('cloth', KG.lathe([[0, 0], [0.036, 0], [0.04, 0.02], [0.034, 0.06], [0.014, 0.072], [0, 0.072]], 12), mul(m, M(0, 0.16, 0)), top2, o);
+      for (const sx of [-1, 1]) T.add('cloth', geo.tube(sx * 0.03, 0.222, 0, sx * 0.05, 0.165, 0.022, 0.012, 6), m, boy ? top2 : '#3d8a5a', F);
+      T.add('cloth', geo.tube(0.004, 0.215, 0.036, 0.016, 0.15, 0.044, 0.005, 4), m, boy ? '#27406e' : '#b3241c', F);                          // 고름
+      T.add('paint', new THREE.SphereGeometry(0.03, 12, 9), mul(m, M(0, 0.262, 0)), skin, o);
+      T.add('lacquer', new THREE.SphereGeometry(0.0315, 12, 8, 0, TAU, 0, PI * 0.56), mul(m, M(0, 0.264, -0.004, 0, 1, 1, 1, -0.5)), '#17130f', F);
+      for (const sx of [-1, 1]) T.add('lacquer', blob(0.0035, 0.0025, 0.002, 5), mul(m, M(sx * 0.011, 0.264, 0.0285)), '#17130f', F);
+      T.add('paint', blob(0.004, 0.002, 0.002, 5), mul(m, M(0, 0.251, 0.029)), '#c2342e', F);
+      if (boy) T.add('cloth', KG.lathe([[0.03, 0], [0.032, 0.012], [0.022, 0.04], [0, 0.05]], 10), mul(m, M(0, 0.276, -0.004)), '#17130f', F);    // 복건
+      else {
+        T.add('lacquer', blob(0.012, 0.012, 0.016, 6), mul(m, M(0, 0.258, -0.034)), '#17130f', F);                                              // 쪽
+        T.add('paint', KG.slab(0.03, 0.016, 0.02, 0.004), mul(m, M(0, 0.298, 0.004)), '#17130f', F); T.add('paint', blob(0.005, 0.005, 0.005, 5), mul(m, M(0, 0.31, 0.004)), '#c2342e', F);   // 족두리
+        for (const sx of [-1, 1]) T.add('paint', blob(0.004, 0.004, 0.0015, 5), mul(m, M(sx * 0.017, 0.256, 0.0255)), '#d9534a', F);           // 연지
+      }
+      return { w: 0.16, d: 0.16, top: num(o.y, 0) + 0.32 };
+    }
+    /** 연 (a wall thing, centred): 방패연 with its round hole, or 가오리연 with a long tail */
+    function kite(T, o = {}) {
+      const m = mul(base(T, o), M(0, 0, 0.012, 0, 1, 1, 1, 0, num(o.tilt, 0.1))), W = { wall: o.wall, cast: false }, c = o.tint || '#c2342e';
+      if (o.kind === 'gaori') {
+        const s = new THREE.Shape(); s.moveTo(0, 0.3); s.lineTo(0.24, 0.02); s.lineTo(0, -0.26); s.lineTo(-0.24, 0.02); s.lineTo(0, 0.3);
+        const g = new THREE.ShapeGeometry(s), p = g.attributes.position, uv = g.attributes.uv;
+        for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), p.getY(i));
+        T.add('hanji', g, m, c, W);
+        T.add('furn', KG.timber(0.46, 0.008, 0.004, 0.001), mul(m, M(0, 0.02, 0.003)), '#c9b27c', W);
+        T.add('furn', upr(0.54, 0.008, 0.004, 0.001), mul(m, M(0, 0.02, 0.003)), '#c9b27c', W);
+        T.add('hanji', KG.quad(0.12, 0.12).applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 4)), mul(m, M(0, 0.04, 0.002)), '#f4ecd8', W);
+        for (const sx of [-1, 0, 1]) for (let k = 0; k < 6; k++) {   // paper tails, waving
+          const y0 = -0.24 - k * 0.11 + (sx ? 0.2 : 0), x0 = sx * 0.2 + Math.sin(k * 1.1 + sx) * 0.03, x1 = sx * 0.2 + Math.sin((k + 1) * 1.1 + sx) * 0.03;
+          if (sx && k > 2) break;
+          T.add('hanji', KG.quad(0.04, 0.115), mul(m, M((x0 + x1) / 2, y0 - 0.055, 0.002, 0, 1, 1, 1, 0, Math.atan2(x0 - x1, 0.11))), k % 2 ? '#f4ecd8' : c, W);
+        }
+        return { w: 0.56, h: 1.2 };
+      }
+      const w = 0.5, h = 0.64, s = new THREE.Shape();
+      s.moveTo(-w / 2, -h / 2); s.lineTo(w / 2, -h / 2); s.lineTo(w / 2, h / 2); s.lineTo(-w / 2, h / 2); s.lineTo(-w / 2, -h / 2);
+      const hole = new THREE.Path(); hole.absarc(0, 0.02, 0.085, 0, TAU, true); s.holes.push(hole);
+      const g = new THREE.ShapeGeometry(s, 18), p = g.attributes.position, uv = g.attributes.uv;
+      for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), p.getY(i));
+      T.add('hanji', g, m, '#f6efdc', W);
+      T.add('hanji', KG.quad(w, 0.12), mul(m, M(0, h / 2 - 0.06, 0.001)), c, W);                                    // 이마
+      T.add('hanji', new THREE.CircleGeometry(0.05, 14), mul(m, M(0, 0.185, 0.0015)), '#22386a', W);                // 꼭지
+      for (const sx of [-1, 1]) T.add('hanji', KG.quad(0.1, 0.16), mul(m, M(sx * (w / 2 - 0.05), -h / 2 + 0.08, 0.001)), sx < 0 ? '#22386a' : '#e3b83a', W);
+      for (const [ax, ay, bx, by] of [[-w / 2, h / 2, w / 2, -h / 2], [w / 2, h / 2, -w / 2, -h / 2], [0, h / 2, 0, -h / 2], [-w / 2, h / 2 - 0.01, w / 2, h / 2 - 0.01], [-w / 2, 0.02, w / 2, 0.02]]) {
+        if (ay === by || ax === bx) { T.add('furn', geo.tube(ax, ay, 0.003, bx, by, 0.003, 0.003, 4), m, '#c9b27c', W); continue; }
+        // the diagonal ribs stop at the hole's edge
+        const len = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / len, uy = (by - ay) / len, t0 = (0 - ax) * ux + (0.02 - ay) * uy;
+        T.add('furn', geo.tube(ax, ay, 0.003, ax + ux * (t0 - 0.085), ay + uy * (t0 - 0.085), 0.003, 0.003, 4), m, '#c9b27c', W);
+        T.add('furn', geo.tube(ax + ux * (t0 + 0.085), ay + uy * (t0 + 0.085), 0.003, bx, by, 0.003, 0.003, 4), m, '#c9b27c', W);
+      }
+      for (let k = 0; k < 3; k++) T.add('cloth', geo.tube(0, -h / 2 - k * 0.09, 0.004, (k % 2 ? 0.03 : -0.03), -h / 2 - (k + 1) * 0.09, 0.004, 0.0025, 3), m, '#efe9da', W);
+      return { w, h: h + 0.27 };
+    }
+
+    // ---------------------------------------------------------------- 악기
+    function gayageum(T, o = {}) {
+      const L = num(o.len, 1.52), W0 = num(o.w, 0.22), m = base(T, o), F = NC(o), wood = o.tone || '#b98a52', y0 = 0.085, bt = 0.03, arch = 0.03;
+      for (const sx of [-0.36, 0.3]) { T.add('furn', KG.slab(0.07, y0, W0 + 0.06, 0.008), mul(m, M(sx * L, y0 / 2, 0)), '#4a2c1b', o); }
+      T.add('furn', KG.slab(L, bt, W0, 0.005), mul(m, M(0, y0 + bt / 2, 0)), '#6a4428', o);
+      const yAt = (t, u) => y0 + bt + arch * (1 - 4 * u * u) * (0.8 + 0.2 * Math.sin(t * PI));
+      T.add('furn', geo.grid(24, 8, (i, j, out) => { const t = i / 24, u = j / 8 - 0.5; out[0] = (t - 0.5) * L; out[2] = u * W0; out[1] = yAt(t, u); out[3] = t * L; out[4] = (u + 0.5) * W0; }, true), m, wood, o);
+      T.add('furn', KG.slab(0.03, 0.018, W0 * 0.94, 0.004), mul(m, M(-L / 2 + 0.07, yAt(0.05, 0) + 0.004, 0)), '#3a2416', o);                   // 현침
+      // 양이두: the tail piece, curled like a ram's horns
+      T.add('furn', KG.slab(0.07, 0.05, W0 + 0.05, 0.012), mul(m, M(L / 2 - 0.02, y0 + bt + 0.01, 0)), '#3a2416', o);
+      for (const sz of [-1, 1]) T.add('furn', rX(geo.cyl(0.03, 0.03, 0.03, 12), PI / 2), mul(m, M(L / 2 - 0.005, y0 + bt + 0.035, sz * (W0 / 2 + 0.03))), '#3a2416', o);
+      for (let s = 0; s < 12; s++) {
+        const z = (s / 11 - 0.5) * W0 * 0.82, tb = 0.3 + ((s * 5) % 12) * 0.035, ya = yAt(0.05, 0) + 0.014, yb = yAt(tb, z / W0) + 0.038, yc = yAt(0.97, z / W0) + 0.012;
+        const xa = -L / 2 + 0.07, xb = (tb - 0.5) * L, xc = L / 2 - 0.04;
+        T.add('paint', geo.tube(xa, ya, z, xb, yb, z, 0.0011, 4), m, '#efe6cc', F);
+        T.add('paint', geo.tube(xb, yb, z, xc, yc, z, 0.0011, 4), m, '#efe6cc', F);
+        T.add('furn', prism([[0, -0.012], [0.038, 0], [0, 0.012]], 0.007), mul(m, M(xb, yAt(tb, z / W0) - 0.001, z)), '#e9dcc0', F);              // 안족
+        T.add('cloth', geo.tube(xc, yc, z, xc + 0.07, y0 + 0.02 - (s % 3) * 0.01, z * 1.12, 0.0035, 4), m, s % 2 ? '#3a5f9c' : '#efe9da', F);    // 부들
+      }
+      return { w: L, d: W0 + 0.1, top: num(o.y, 0) + y0 + bt + arch + 0.05 };
+    }
+    function janggu(T, o = {}) {
+      const m = base(T, o), F = NC(o), L = 0.56, R = 0.21, c = o.tint || '#9a2f26', cy = R + 0.012;
+      const body = rZ(KG.lathe([[0.14, -L / 2], [0.17, -L / 2 + 0.02], [0.165, -0.1], [0.085, -0.04], [0.07, 0], [0.085, 0.04], [0.165, 0.1], [0.17, L / 2 - 0.02], [0.14, L / 2]], 22), PI / 2);
+      T.add('lacquer', body, mul(m, M(0, cy, 0)), c, o);
+      for (const sx of [-1, 1]) {
+        T.add('paint', rZ(geo.cyl(R, R, 0.008, 24), PI / 2), mul(m, M(sx * (L / 2 + 0.004), cy, 0)), sx < 0 ? '#eadcbc' : '#f1e6cc', o);            // 북편 / 채편
+        T.add('iron', rY(new THREE.TorusGeometry(R, 0.007, 5, 24), PI / 2), mul(m, M(sx * (L / 2 + 0.004), cy, 0)), '#4a4a4c', F);
+      }
+      for (let k = 0; k < 8; k++) {   // 숙바: the red cords in a zig-zag, each pair pulled together by a 부전
+        const a0 = (k / 8) * TAU, a1 = ((k + 0.5) / 8) * TAU, a2 = ((k + 1) / 8) * TAU, p = (a, sx) => [sx * (L / 2), cy + Math.sin(a) * R, Math.cos(a) * R];
+        const A = p(a0, -1), B = p(a1, 1), C = p(a2, -1);
+        T.add('cloth', geo.tube(A[0], A[1], A[2], B[0], B[1], B[2], 0.004, 4), m, '#c2342e', F);
+        T.add('cloth', geo.tube(B[0], B[1], B[2], C[0], C[1], C[2], 0.004, 4), m, '#c2342e', F);
+        T.add('cloth', new THREE.SphereGeometry(0.012, 6, 4), mul(m, M(-0.08, cy + Math.sin((a0 + a1) / 2) * R * 0.86, Math.cos((a0 + a1) / 2) * R * 0.86)), '#e9e2c8', F);
+      }
+      for (const sz of [-1, 1]) T.add('furn', prism([[0, -0.03], [0.03, 0], [0, 0.03]], 0.2), mul(m, M(0, 0, sz * 0.12, PI / 2)), '#5a3420', o);    // chocks
+      // 궁채 (a round-headed mallet) and 열채 (a thin stick) laid before it
+      T.add('furn', geo.tube(-0.22, 0.012, 0.3, 0.1, 0.012, 0.34, 0.006, 5), m, '#c9b27c', F); T.add('furn', new THREE.SphereGeometry(0.02, 8, 6), mul(m, M(0.1, 0.02, 0.34)), '#8a5a36', F);
+      T.add('furn', geo.tube(-0.2, 0.008, 0.38, 0.2, 0.008, 0.4, 0.004, 4), m, '#d9c79a', F);
+      return { w: L + 0.04, d: 0.86, top: num(o.y, 0) + R * 2 + 0.02 };
+    }
+    function buk(T, o = {}) {
+      const m = base(T, o), F = NC(o), R = 0.2, L = 0.24, c = o.tint || '#7a3b26', cy = 0.16 + R;
+      // a wooden stand: two crossed feet and a cradle
+      for (const sz of [-1, 1]) {
+        T.add('furn', KG.slab(0.5, 0.035, 0.05, 0.008), mul(m, M(0, 0.0175, sz * 0.11)), '#4a2c1b', o);
+        for (const sx of [-1, 1]) T.add('furn', KG.span(sx * 0.2, 0.03, sz * 0.11, sx * 0.11, 0.2, sz * 0.11, 0.035, 0.04, 0.006), m, '#5a3420', o);
+      }
+      T.add('furn', KG.slab(0.3, 0.03, 0.27, 0.008), mul(m, M(0, 0.175, 0)), '#4a2c1b', o);
+      T.add('lacquer', rX(KG.lathe([[R * 0.93, -L / 2], [R * 1.02, -L / 6], [R * 1.02, L / 6], [R * 0.93, L / 2]], 24), PI / 2), mul(m, M(0, cy, 0)), c, o);
+      for (const sz of [-1, 1]) {
+        T.add('paint', rX(geo.cyl(R * 0.95, R * 0.95, 0.008, 24), PI / 2), mul(m, M(0, cy, sz * (L / 2 + 0.002))), '#ead9b6', o);
+        for (let k = 0; k < 18; k++) { const a = (k / 18) * TAU; T.add('brass', new THREE.SphereGeometry(0.008, 6, 4), mul(m, M(Math.cos(a) * R * 0.97, cy + Math.sin(a) * R * 0.97, sz * (L / 2 - 0.02))), '#c9a24a', F); }
+      }
+      for (const sx of [-1, 1]) T.add('iron', rY(new THREE.TorusGeometry(0.025, 0.005, 5, 10), PI / 2), mul(m, M(sx * R * 1.02, cy + 0.02, 0)), '#3a3a3c', F);
+      T.add('furn', geo.tube(-0.12, cy + R + 0.012, 0.02, 0.16, cy + R + 0.012, -0.03, 0.011, 6), m, '#c9b27c', F);                                  // 북채
+      return { w: 0.52, d: 0.3, top: num(o.y, 0) + cy + R + 0.03 };
+    }
+    function jing(T, o = {}) {
+      const m = base(T, o), F = NC(o), H = 0.92, W1 = 0.62;
+      for (const sx of [-1, 1]) {
+        T.add('furn', upr(H, 0.04, 0.04, 0.006), mul(m, M(sx * W1 / 2, H / 2, 0)), '#5a3420', o);
+        T.add('furn', KG.slab(0.06, 0.04, 0.34, 0.01), mul(m, M(sx * W1 / 2, 0.02, 0)), '#4a2c1b', o);
+      }
+      T.add('furn', KG.timber(W1 + 0.14, 0.045, 0.045, 0.008), mul(m, M(0, H - 0.02, 0)), '#5a3420', o);
+      T.add('furn', KG.timber(W1, 0.03, 0.03, 0.006), mul(m, M(0, 0.12, 0)), '#5a3420', o);
+      const gy = 0.5;
+      T.add('brass', rX(KG.lathe([[0, 0], [0.175, 0], [0.19, 0.012], [0.19, 0.055], [0.178, 0.055], [0.174, 0.014], [0, 0.012]], 26), PI / 2), mul(m, M(0, gy, -0.02)), o.tint || '#b3923e', o);
+      T.add('brass', rX(geo.ring(0.05, 0.12, 20), PI / 2), mul(m, M(0, gy, -0.0195)), '#9c7c30', F);
+      for (const sx of [-1, 1]) T.add('cloth', geo.tube(sx * 0.07, gy + 0.18, 0.005, sx * 0.03, H - 0.04, 0, 0.004, 4), m, '#c2342e', F);
+      T.add('furn', geo.tube(W1 / 2 - 0.05, 0.62, 0.05, W1 / 2 - 0.05, 0.3, 0.05, 0.008, 5), m, '#c9b27c', F);                                       // 징채
+      T.add('cloth', blob(0.035, 0.045, 0.035, 8), mul(m, M(W1 / 2 - 0.05, 0.27, 0.05)), '#e9e2c8', F);
+      T.add('cloth', geo.tube(W1 / 2 - 0.05, 0.62, 0.05, W1 / 2 - 0.02, 0.7, 0.02, 0.003, 3), m, '#c2342e', F);
+      return { w: W1 + 0.14, d: 0.34, top: num(o.y, 0) + H };
+    }
+    function flutes(T, o = {}) {
+      const m = base(T, o), F = NC(o);
+      for (const sx of [-1, 1]) {
+        T.add('furn', KG.slab(0.03, 0.2, 0.14, 0.006), mul(m, M(sx * 0.24, 0.1, 0)), '#5a3420', o);
+        T.add('furn', KG.slab(0.07, 0.02, 0.2, 0.006), mul(m, M(sx * 0.24, 0.01, 0)), '#4a2c1b', o);
+      }
+      T.add('furn', KG.timber(0.48, 0.02, 0.02, 0.004), mul(m, M(0, 0.06, 0)), '#5a3420', o);
+      const flute = (z, y, len, rad, tn) => {
+        T.add('furn', rZ(geo.cyl(rad, rad * 0.94, len, 10), PI / 2), mul(m, M(0, y, z)), tn, o);
+        for (let k = 0; k < 5; k++) T.add('lacquer', rZ(geo.cyl(rad + 0.0012, rad + 0.0012, 0.012, 10), PI / 2), mul(m, M(-len / 2 + 0.05 + k * (len - 0.1) / 4, y, z)), '#2a1a10', F);
+        for (let k = 0; k < 6; k++) T.add('lacquer', geo.disc(rad * 0.3, 6), mul(m, M(-len * 0.1 + k * len * 0.085, y + rad + 0.0004, z)), '#17130f', F);
+      };
+      flute(-0.03, 0.212, 0.8, 0.013, '#c9b27c'); flute(0.035, 0.207, 0.46, 0.009, '#bfa56a');
+      return { w: 0.82, d: 0.2, top: num(o.y, 0) + 0.23 };
+    }
+
+    // ---------------------------------------------------------------- 깔개 (flat)
+    const OBANG = ['#b3342c', '#2c4a7a', '#d9a62c', '#3d7356', '#efe9da', '#1f1d1c', '#c98a9c', '#6a8fb3', '#8a5a9c', '#d98a3a'];
+    function rug(T, o = {}) {
+      const w = num(o.w, 2.0), d = num(o.d, 1.4), m = base(T, o), F = NC(o), kind = o.kind || 'hwamun', y = 0.008, r = G.util.rng('hk:rug:' + kind + ':' + (o.seed || 0));
+      const put = (key, g, x, z, tn, lift = 0, ry = 0) => T.add(key, g, mul(m, M(x, y + lift, z, ry)), tn, F);
+      if (kind === 'round') {
+        const R = w / 2, rings = 7, c = o.tint || '#b3342c';
+        put('straw', geo.disc(R, 40), 0, 0, '#e2cd96');
+        for (let k = 1; k < rings; k++) put(k % 3 === 0 ? 'cloth' : 'straw', geo.ring(R * (k / rings) - 0.012, R * (k / rings) + (k % 3 === 0 ? 0.03 : 0.004), 40), 0, 0, k % 3 === 0 ? c : '#b89a58', 0.002);
+        put('cloth', geo.ring(R - 0.05, R, 40), 0, 0, '#2c4a7a', 0.003);
+        return { w, d: w };
+      }
+      if (kind === 'jogak') {           // 조각보: a patchwork of cloth
+        put('cloth', KG.floor(w, d), 0, 0, '#3a3550');
+        const cut = (x0, z0, x1, z1, depth) => {
+          const cw = x1 - x0, cd = z1 - z0;
+          if (depth > 0 && (cw > 0.5 || cd > 0.5) && r() < 0.9) {
+            const t = 0.35 + r() * 0.3;
+            if (cw > cd) { cut(x0, z0, x0 + cw * t, z1, depth - 1); cut(x0 + cw * t, z0, x1, z1, depth - 1); } else { cut(x0, z0, x1, z0 + cd * t, depth - 1); cut(x0, z0 + cd * t, x1, z1, depth - 1); }
+            return;
+          }
+          put('cloth', KG.floor(cw - 0.014, cd - 0.014), (x0 + x1) / 2, (z0 + z1) / 2, shade(OBANG[Math.floor(r() * OBANG.length)], 0.86 + r() * 0.22), 0.002);
+        };
+        cut(-w / 2 + 0.03, -d / 2 + 0.03, w / 2 - 0.03, d / 2 - 0.03, 5);
+        return { w, d };
+      }
+      if (kind === 'saekdong') {        // 색동: bands of the five colours between ivory fields
+        put('cloth', KG.floor(w, d), 0, 0, o.tint || '#efe9da');
+        const cs = ['#b3342c', '#d9a62c', '#3d7356', '#2c4a7a', '#c98a9c', '#efe9da', '#8a5a9c'];
+        for (const sx of [-1, 1]) cs.forEach((c, k) => put('cloth', KG.floor(0.07, d), sx * (w / 2 - 0.06 - k * 0.075), 0, c, 0.002));
+        for (const sz of [-1, 1]) put('cloth', KG.floor(w, 0.035), 0, sz * (d / 2 - 0.0175), '#1f1d1c', 0.003);
+        return { w, d };
+      }
+      if (kind === 'felt') {            // a plain thick rug with a darker border and corner knots
+        put('cloth', KG.slab(w, 0.012, d, 0.005), 0, 0, o.tint || '#8e2a26');
+        for (const sz of [-1, 1]) put('cloth', KG.floor(w - 0.1, 0.05), 0, sz * (d / 2 - 0.09), '#d9b24c', 0.0075);
+        for (const sx of [-1, 1]) put('cloth', KG.floor(0.05, d - 0.1), sx * (w / 2 - 0.09), 0, '#d9b24c', 0.0075);
+        return { w, d };
+      }
+      // 'hwamun' 화문석: a pale rush mat, a dark border, flower medallions woven in colour
+      put('straw', KG.floor(w, d), 0, 0, o.tint || '#ecd9a4');
+      for (const sz of [-1, 1]) { put('cloth', KG.floor(w, 0.06), 0, sz * (d / 2 - 0.03), '#2f2a3c', 0.002); put('straw', KG.floor(w - 0.2, 0.012), 0, sz * (d / 2 - 0.13), '#8a3a2a', 0.002); }
+      for (const sx of [-1, 1]) { put('cloth', KG.floor(0.06, d), sx * (w / 2 - 0.03), 0, '#2f2a3c', 0.002); put('straw', KG.floor(0.012, d - 0.2), sx * (w / 2 - 0.13), 0, '#8a3a2a', 0.002); }
+      const flower = (x, z, s, c) => {
+        for (let k = 0; k < 6; k++) put('straw', new THREE.CircleGeometry(0.05 * s, 8).rotateX(-PI / 2).scale(1, 1, 0.55), x + Math.cos(k * PI / 3) * 0.07 * s, z + Math.sin(k * PI / 3) * 0.07 * s, c, 0.003, -k * PI / 3);
+        put('straw', geo.disc(0.03 * s, 8), x, z, '#d9a62c', 0.004);
+        for (const a of [0.6, 2.6, 4.4]) put('straw', new THREE.CircleGeometry(0.045 * s, 6).rotateX(-PI / 2).scale(1, 1, 0.4), x + Math.cos(a) * 0.16 * s, z + Math.sin(a) * 0.16 * s, '#3d7356', 0.003, -a);
+      };
+      const nx = Math.max(1, Math.round(w / 0.9)), nz = Math.max(1, Math.round(d / 0.8));
+      for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) flower(-w / 2 + (w * (i + 0.5)) / nx, -d / 2 + (d * (j + 0.5)) / nz, Math.min(1.3, Math.min(w / nx, d / nz) * 1.5), (i + j) % 2 ? '#b3342c' : '#2c4a7a');
+      return { w, d };
+    }
+
+    // ---------------------------------------------------------------- 벽에 거는 것
+    function jogakbo(T, o = {}) {
+      const w = num(o.w, 0.9), h = num(o.h, 0.9), m = base(T, o), W = { wall: o.wall, cast: false }, r = G.util.rng('hk:jogakbo:' + (o.seed || 0));
+      T.add('furn', rZ(geo.cyl(0.011, 0.011, w + 0.12, 8), PI / 2), mul(m, M(0, h / 2 + 0.012, 0.022)), '#5a3420', { wall: o.wall });
+      for (const sx of [-1, 1]) T.add('cloth', geo.tube(sx * w * 0.42, h / 2 + 0.012, 0.02, 0, h / 2 + 0.14, 0.008, 0.003, 3), m, '#7a2e22', W);
+      T.add('cloth', KG.quad(w, h), mul(m, M(0, 0, 0.012)), '#efe9da', W);
+      const pal = ['#c7d3d8', '#e8d9a8', '#d9b3bd', '#a9c0a6', '#efe9da', '#8fa9c4', '#d9a05a', '#b9a4c9', '#f1e6c9', '#c66a5a', '#55708f'];
+      const cut = (x0, y0, x1, y1, depth) => {
+        const cw = x1 - x0, ch = y1 - y0;
+        if (depth > 0 && (cw > 0.2 || ch > 0.2) && (depth > 3 || r() < 0.9)) {
+          const t = 0.3 + r() * 0.4;
+          if (cw > ch) { cut(x0, y0, x0 + cw * t, y1, depth - 1); cut(x0 + cw * t, y0, x1, y1, depth - 1); } else { cut(x0, y0, x1, y0 + ch * t, depth - 1); cut(x0, y0 + ch * t, x1, y1, depth - 1); }
+          return;
+        }
+        T.add('cloth', KG.quad(cw - 0.008, ch - 0.008), mul(m, M((x0 + x1) / 2, (y0 + y1) / 2, 0.0135)), pal[Math.floor(r() * pal.length)], W);
+      };
+      cut(-w / 2 + 0.012, -h / 2 + 0.012, w / 2 - 0.012, h / 2 - 0.012, 6);
+      return { w: w + 0.12, h: h + 0.16 };
+    }
+    function wallClock(T, o = {}) {
+      const m = base(T, o), W = { wall: o.wall }, F = { wall: o.wall, cast: false }, cw = 0.32, ch = 0.66, cd = 0.11;
+      // the hour it shows: Korea's wall clock when it was made (the room is rebuilt at every visit)
+      let hour = num(o.hour, NaN), min = num(o.min, NaN);
+      if (!Number.isFinite(hour) || !Number.isFinite(min)) { const now = (G.env && typeof G.env.now === 'function' && Number(G.env.now())) || (G.time?.now ? G.time.now() : Date.now()), k = new Date(now + 9 * 3600000); hour = k.getUTCHours(); min = k.getUTCMinutes(); }
+      T.add('furn', KG.slab(cw, ch, cd, 0.01), mul(m, M(0, 0, cd / 2)), o.tone || '#5a3420', W);
+      T.add('furn', prism([[0, -cd / 2 - 0.02], [0.09, 0], [0, cd / 2 + 0.02]], cw + 0.06), mul(m, M(0, ch / 2, cd / 2)), '#4a2c1b', W);
+      T.add('furn', KG.slab(cw + 0.05, 0.03, cd + 0.03, 0.008), mul(m, M(0, -ch / 2 - 0.015, cd / 2)), '#4a2c1b', W);
+      const fy = ch / 2 - 0.2, fz = cd + 0.002, R = 0.115;
+      T.add('paint', new THREE.CircleGeometry(R, 28), mul(m, M(0, fy, fz)), '#f4eedc', F);
+      T.add('brass', rX(geo.ring(R, R + 0.012, 28), PI / 2), mul(m, M(0, fy, fz + 0.001)), '#c9a24a', F);
+      for (let k = 0; k < 12; k++) { const a = (k / 12) * TAU; T.add('lacquer', KG.quad(k % 3 ? 0.006 : 0.011, k % 3 ? 0.014 : 0.024), mul(m, M(Math.sin(a) * R * 0.84, fy + Math.cos(a) * R * 0.84, fz + 0.0015, 0, 1, 1, 1, 0, -a)), '#17130f', F); }
+      const hand = (a, len, wd) => T.add('lacquer', KG.quad(wd, len).translate(0, len / 2 - 0.012, 0), mul(m, M(0, fy, fz + 0.003, 0, 1, 1, 1, 0, -a)), '#17130f', F);
+      hand(((hour % 12) + min / 60) / 12 * TAU, R * 0.5, 0.012); hand((min / 60) * TAU, R * 0.76, 0.007);
+      T.add('brass', new THREE.CircleGeometry(0.01, 10), mul(m, M(0, fy, fz + 0.004)), '#c9a24a', F);
+      // the pendulum behind its dark window
+      T.add('lacquer', KG.quad(cw - 0.1, 0.24), mul(m, M(0, -ch / 2 + 0.17, fz)), '#1c130d', F);
+      T.add('brass', KG.quad(0.008, 0.17), mul(m, M(0.02, -ch / 2 + 0.2, fz + 0.002, 0, 1, 1, 1, 0, 0.1)), '#c9a24a', F);
+      T.add('brass', new THREE.CircleGeometry(0.036, 16), mul(m, M(0.03, -ch / 2 + 0.11, fz + 0.003)), '#d8b45a', F);
+      return { w: cw + 0.06, h: ch + 0.12, hour, min };
+    }
+    function fan(T, o = {}) {
+      const R = num(o.r, 0.34), r0 = 0.07, spread = 2.5, m0 = base(T, o), wall = !!o.wall, W = { wall: o.wall === true ? undefined : o.wall, cast: false }, n = 15;
+      // wall: flat on the wall, the pivot below the centre; standing: leaning back on a small wooden rest
+      const m = wall ? mul(m0, M(0, -R * 0.45, 0.012)) : mul(m0, M(0, 0.04, 0, 0, 1, 1, 1, -0.22));
+      if (!wall) { T.add('furn', KG.slab(0.2, 0.03, 0.09, 0.008), mul(m0, M(0, 0.015, 0)), '#4a2c1b', o); T.add('furn', KG.slab(0.03, 0.14, 0.02, 0.004), mul(m0, M(0, 0.1, -0.05, 0, 1, 1, 1, -0.22)), '#4a2c1b', o); }
+      const a0 = PI / 2 - spread / 2, sec = new THREE.RingGeometry(R * 0.42, R, 30, 1, a0, spread), tn = o.tint || '#f1e9d2';
+      if (wall) T.add('hanji', sec, m, tn, W); else both(T, 'hanji', sec, m, tn, W);
+      T.add('hanji', new THREE.RingGeometry(R - 0.022, R, 30, 1, a0, spread), mul(m, M(0, 0, 0.001)), '#2c4a7a', W);
+      for (let k = 0; k < n; k++) { const a = a0 + (spread * k) / (n - 1); T.add('furn', geo.tube(Math.cos(a) * r0 * 0.2, Math.sin(a) * r0 * 0.2, 0.002, Math.cos(a) * R * 0.99, Math.sin(a) * R * 0.99, 0.002, k === 0 || k === n - 1 ? 0.004 : 0.0022, 4), m, k === 0 || k === n - 1 ? '#4a2c1b' : '#c9b27c', W); }
+      for (let k = 0; k < 5; k++) { const a = a0 + spread * (0.2 + k * 0.15), rr = R * (0.62 + (k % 2) * 0.14); T.add('hanji', new THREE.CircleGeometry(0.018, 8), mul(m, M(Math.cos(a) * rr, Math.sin(a) * rr, 0.0015)), k % 2 ? '#c2342e' : '#d98a9c', W); }
+      T.add('brass', new THREE.SphereGeometry(0.008, 6, 4), mul(m, M(0, 0, 0.004)), '#c9a24a', W);
+      T.add('cloth', geo.tube(0, 0, 0.004, 0.03, -0.1, 0.006, 0.003, 3), m, '#c2342e', W); T.add('cloth', geo.cyl(0.004, 0.012, 0.07, 6), mul(m, M(0.03, -0.135, 0.006)), '#c2342e', W);
+      return wall ? { w: R * 1.9, h: R * 1.25 } : { w: R * 1.9, d: 0.2, top: num(o.y, 0) + R + 0.06 };
+    }
+    function mask(T, o = {}) {
+      const m = mul(base(T, o), M(0, 0, 0.01)), W = { wall: o.wall }, F = { wall: o.wall, cast: false }, girl = o.kind === 'gaksi';
+      const face = girl ? '#ead9bf' : '#8a5a36', dark = '#1c130d';
+      const shell = (rx, ry, rz2) => new THREE.SphereGeometry(1, 20, 14, 0, PI).scale(rx, ry, rz2);          // the half towards +Z
+      T.add(girl ? 'paint' : 'furn', shell(0.105, girl ? 0.13 : 0.115, 0.055), mul(m, M(0, girl ? 0 : 0.03, 0)), face, W);
+      for (const sx of [-1, 1]) {
+        T.add('lacquer', KG.quad(0.045, girl ? 0.006 : 0.012), mul(m, M(sx * 0.042, girl ? 0.02 : 0.05, 0.049, 0, 1, 1, 1, 0, sx * (girl ? -0.08 : 0.32))), dark, F);     // eyes
+        T.add(girl ? 'lacquer' : 'furn', rX(new THREE.TorusGeometry(0.03, girl ? 0.0025 : 0.006, 4, 10, PI * 0.8), 0), mul(m, M(sx * 0.042, girl ? 0.036 : 0.06, 0.047, 0, 1, 1, 1, 0, 0.3)), girl ? dark : '#6a4428', F);   // brows
+      }
+      T.add(girl ? 'paint' : 'furn', prism([[-0.03, 0], [0.035, 0.012], [-0.03, 0.03]], 0.026), mul(m, M(0, girl ? -0.012 : 0.02, 0.05, -PI / 2)), girl ? '#e2cfb2' : '#7a4c2c', W);  // nose
+      if (girl) {
+        T.add('paint', new THREE.CircleGeometry(0.011, 8).scale(1.3, 0.6, 1), mul(m, M(0, -0.06, 0.047)), '#b3241c', F);
+        for (const [x, y] of [[-0.062, -0.03], [0.062, -0.03], [0, 0.07]]) T.add('paint', new THREE.CircleGeometry(0.012, 10), mul(m, M(x, y, 0.045 - Math.abs(x) * 0.25)), '#c2342e', F);   // 연지 곤지
+        T.add('lacquer', shell(0.112, 0.07, 0.06), mul(m, M(0, 0.085, -0.002)), dark, W);
+        for (const sx of [-1, 1]) T.add('lacquer', blob(0.03, 0.045, 0.025, 8), mul(m, M(sx * 0.105, 0.05, 0.012)), dark, W);
+      } else {
+        // 양반탈: the chin hangs on cords and swings — a wide laughing mouth between the two pieces
+        T.add('furn', shell(0.085, 0.045, 0.04), mul(m, M(0, -0.105, 0.004)), face, W);
+        T.add('lacquer', KG.quad(0.12, 0.02), mul(m, M(0, -0.068, 0.03)), dark, F);
+        for (const sx of [-1, 1]) T.add('furn', blob(0.03, 0.022, 0.012, 7), mul(m, M(sx * 0.06, 0.0, 0.04)), '#96643e', F);             // cheeks
+        for (const sx of [-1, 1]) T.add('cloth', geo.tube(sx * 0.085, -0.03, 0.01, sx * 0.07, -0.1, 0.01, 0.003, 3), m, '#3a2a20', F);
+      }
+      T.add('cloth', geo.tube(-0.08, 0.1, 0.004, 0, 0.2, 0.002, 0.0025, 3), m, '#3a2a20', F); T.add('cloth', geo.tube(0.08, 0.1, 0.004, 0, 0.2, 0.002, 0.0025, 3), m, '#3a2a20', F);
+      return { w: 0.26, h: 0.4 };
+    }
+    function maedeup(T, o = {}) {
+      const m = mul(base(T, o), M(0, 0, 0.014)), W = { wall: o.wall, cast: false }, c = o.tint || '#b3241c';
+      T.add('cloth', geo.tube(0, 0.28, 0, 0, 0.19, 0, 0.003, 4), m, c, W);
+      T.add('cloth', new THREE.TorusGeometry(0.018, 0.004, 5, 12), mul(m, M(0, 0.26, 0)), c, W);
+      for (let k = 0; k < 4; k++) T.add('cloth', new THREE.TorusGeometry(0.02, 0.006, 5, 12), mul(m, M(Math.cos(k * PI / 2) * 0.026, 0.15 + Math.sin(k * PI / 2) * 0.026, 0)), c, W);    // 국화매듭
+      T.add('cloth', new THREE.SphereGeometry(0.014, 8, 6), mul(m, M(0, 0.15, 0.004)), '#d9a62c', W);
+      T.add('lacquer', new THREE.TorusGeometry(0.026, 0.008, 6, 16), mul(m, M(0, 0.08, 0)), '#9fc3a8', W);                                  // an 옥 ring
+      T.add('cloth', new THREE.SphereGeometry(0.012, 8, 6), mul(m, M(0, 0.04, 0)), c, W);
+      T.add('cloth', geo.cyl(0.008, 0.026, 0.22, 10), mul(m, M(0, -0.08, 0)), c, W);                                                        // 술
+      T.add('cloth', geo.cyl(0.011, 0.011, 0.016, 10), mul(m, M(0, 0.025, 0)), '#d9a62c', W);
+      return { w: 0.1, h: 0.5 };
+    }
+    function frame(T, o = {}) {
+      const m = base(T, o), W = { wall: o.wall }, rec = art(o.art), maxW = num(o.w, 0.7), maxH = num(o.h, 0.9), fr = 0.035;
+      let pw = maxW, ph = maxH;
+      if (rec.ok) { if (maxW / maxH > rec.aspect) pw = maxH * rec.aspect; else ph = maxW / rec.aspect; }
+      const fw = pw + 0.11, fh = ph + 0.11;
+      T.add('hanji', KG.quad(fw - 0.01, fh - 0.01), mul(m, M(0, 0, 0.008)), '#efe6cf', { wall: o.wall, cast: false });
+      for (const sy of [-1, 1]) T.add('furn', KG.timber(fw + fr, fr, 0.03, 0.006), mul(m, M(0, sy * fh / 2, 0.015)), o.tone || '#4a2c1b', W);
+      for (const sx of [-1, 1]) T.add('furn', upr(fh - fr, fr, 0.03, 0.006), mul(m, M(sx * fw / 2, 0, 0.015)), o.tone || '#4a2c1b', W);
+      picture(T, mul(m, M(0, 0, 0.008)), rec, pw, ph, { wall: o.wall });
+      return { w: fw + fr, h: fh + fr, ok: rec.ok };
+    }
+
+    // ---------------------------------------------------------------- 등 · 불빛 (no light of their own: the room gives one)
+    function chorong(T, o = {}) {
+      const hang = !!o.hang, m0 = base(T, o), F = NC(o), R = 0.1, H = 0.26;
+      // hanging: the cord starts at y = 0; standing: a slim wooden stand with a hooked top
+      let cy;
+      if (hang) { const drop = num(o.drop, 0.5); T.add('cloth', geo.tube(0, 0, 0, 0, -drop + H / 2 + 0.03, 0, 0.003, 4), m0, '#3a2a20', F); cy = -drop; }
+      else {
+        T.add('furn', geo.cyl(0.11, 0.12, 0.03, 14), mul(m0, M(0, 0.015, 0)), '#3a2416', o);
+        T.add('furn', geo.tube(0, 0.03, 0, 0, 1.12, 0, 0.012, 7), m0, '#4a2c1b', o);
+        T.add('furn', geo.tube(0, 1.12, 0, 0.16, 1.2, 0, 0.009, 6), m0, '#4a2c1b', o);
+        T.add('cloth', geo.tube(0.16, 1.2, 0, 0.16, 1.08, 0, 0.003, 4), m0, '#3a2a20', F);
+        cy = 0.92;
+      }
+      const m = mul(m0, M(hang ? 0 : 0.16, cy, 0));
+      const half = (y0, y1, c) => T.add('lantern', new THREE.CylinderGeometry(R, R, y1 - y0, 16, 1, true).translate(0, (y0 + y1) / 2, 0), m, c, F);
+      half(0, H / 2, o.tint || '#d8483c'); half(-H / 2, 0, '#3a5fb8');
+      for (const y of [-H / 2, H / 2]) { T.add('furn', geo.cyl(R + 0.008, R + 0.008, 0.022, 16), mul(m, M(0, y, 0)), '#2a1a10', o); }
+      for (let k = 0; k < 8; k++) { const a = (k / 8) * TAU; T.add('furn', geo.tube(Math.cos(a) * (R + 0.002), -H / 2, Math.sin(a) * (R + 0.002), Math.cos(a) * (R + 0.002), H / 2, Math.sin(a) * (R + 0.002), 0.0028, 3), m, '#2a1a10', F); }
+      T.add('cloth', geo.cyl(0.006, 0.02, 0.12, 8), mul(m, M(0, -H / 2 - 0.07, 0)), '#c2342e', F);
+      return hang ? { w: 0.24, d: 0.24, glow: { x: 0, y: cy, z: 0 } } : { w: 0.42, d: 0.26, top: num(o.y, 0) + 1.22, glow: { x: 0.16, y: cy, z: 0 } };
+    }
+    function candle(T, o = {}) {
+      const m = base(T, o), F = NC(o);
+      T.add('brass', KG.lathe([[0, 0], [0.085, 0], [0.09, 0.012], [0.03, 0.035], [0.016, 0.06], [0.014, 0.3], [0.028, 0.33], [0.016, 0.345], [0.012, 0.42], [0.06, 0.44], [0.065, 0.452], [0, 0.45]], 16), m, o.tint || '#b8964a', o);
+      T.add('paint', geo.cyl(0.016, 0.018, 0.2, 10), mul(m, M(0, 0.552, 0)), '#f1ead8', o);
+      T.add('lantern', KG.lathe([[0, 0], [0.008, 0.008], [0.011, 0.022], [0.006, 0.042], [0, 0.058]], 8), mul(m, M(0, 0.656, 0)), '#ffd98a', F);
+      return { w: 0.2, d: 0.2, top: num(o.y, 0) + 0.72, glow: { x: 0, y: 0.68, z: 0 } };
+    }
+    function paperLamp(T, o = {}) {
+      const m = base(T, o), F = NC(o), h = num(o.h, 0.5), R = 0.14;
+      T.add('furn', geo.cyl(R + 0.01, R + 0.02, 0.03, 16), mul(m, M(0, 0.015, 0)), '#3a2416', o);
+      T.add('glow', new THREE.CylinderGeometry(R, R, h - 0.08, 20, 1, true), mul(m, M(0, h / 2 + 0.005, 0)), o.tint || '#ffe4b8', F);
+      for (let k = 0; k < 6; k++) { const a = (k / 6) * TAU; T.add('furn', geo.tube(Math.cos(a) * (R + 0.004), 0.03, Math.sin(a) * (R + 0.004), Math.cos(a) * (R + 0.004), h - 0.02, Math.sin(a) * (R + 0.004), 0.005, 4), m, '#4a2c1b', F); }
+      for (const y of [h * 0.36, h * 0.68]) T.add('furn', rX(new THREE.TorusGeometry(R + 0.004, 0.004, 4, 20), PI / 2), mul(m, M(0, y, 0)), '#4a2c1b', F);
+      T.add('furn', geo.cyl(R + 0.012, R + 0.012, 0.02, 16), mul(m, M(0, h - 0.02, 0)), '#3a2416', o);
+      return { w: 0.34, d: 0.34, top: num(o.y, 0) + h, glow: { x: 0, y: h * 0.55, z: 0 } };
+    }
+
+    // ---------------------------------------------------------------- 상차림 · 철 따라
+    function dish(T, o = {}) {
+      const m = base(T, o), F = NC(o), kind = o.kind || 'songpyeon', r = rndOf(T, 'dish:' + kind);
+      let top = 0.1, w = 0.34;
+      if (kind === 'watermelon') {
+        const y = plate(T, m, 0.2, '#6a4428', o);
+        T.add('paint', new THREE.SphereGeometry(0.15, 20, 10, 0, TAU, PI / 2, PI / 2), mul(m, M(0, y + 0.15, 0)), '#2f6a36', o);
+        for (let k = 0; k < 8; k++) T.add('paint', new THREE.SphereGeometry(0.1515, 4, 10, (k / 8) * TAU, 0.22, PI / 2, PI / 2), mul(m, M(0, y + 0.15, 0)), '#1c3d22', F);
+        T.add('paint', geo.disc(0.15, 24), mul(m, M(0, y + 0.151, 0)), '#f1efe2', F); T.add('paint', geo.disc(0.135, 24), mul(m, M(0, y + 0.152, 0)), '#d9383a', F);
+        for (let k = 0; k < 12; k++) { const a = k * 2.4, rr = 0.03 + (k % 4) * 0.025; T.add('lacquer', blob(0.005, 0.002, 0.008, 5), mul(m, M(Math.cos(a) * rr, y + 0.1535, Math.sin(a) * rr, a)), '#17130f', F); }
+        top = y + 0.16; w = 0.42;
+      } else if (kind === 'tteok') {   // 무지개떡: layers on a plate
+        const y = plate(T, m, 0.17, '#7a4a2c', o), cs = ['#f1ece0', '#e8a9b9', '#f0d98a', '#a9cf9a', '#f1ece0'];
+        cs.forEach((c, k) => T.add('paint', KG.slab(0.2, 0.024, 0.13, 0.006), mul(m, M(0, y + 0.014 + k * 0.024, 0)), c, k === cs.length - 1 ? o : F));
+        for (let k = 0; k < 5; k++) T.add('paint', blob(0.008, 0.004, 0.006, 5), mul(m, M(-0.07 + k * 0.035, y + 0.014 + cs.length * 0.024 - 0.01, (k % 2 ? 0.02 : -0.02))), k % 2 ? '#7a2a22' : '#3d7356', F);
+        top = y + 0.15;
+      } else if (kind === 'sweetpotato') {
+        T.add('hanji', KG.floor(0.34, 0.26), mul(m, M(0, 0.003, 0, 0.2)), '#d9c79a', F);
+        for (const [x, z, ry, c] of [[-0.05, 0.02, 0.4, '#6a3a4a'], [0.07, -0.03, -0.5, '#74414f'], [0.02, 0.07, 1.5, '#5c3442']]) T.add('paint', blob(0.085, 0.034, 0.036, 9), mul(m, M(x, 0.036, z, ry)), c, o);
+        T.add('paint', new THREE.SphereGeometry(0.034, 9, 7, 0, TAU, 0, PI / 2).scale(1, 0.9, 1).rotateZ(PI / 2), mul(m, M(0.13, 0.036, -0.06, -0.5)), '#e8b84a', F);
+        top = 0.08; w = 0.38;
+      } else {
+        const basket0 = kind === 'chestnut' || kind === 'tangerine';
+        let y;
+        if (basket0) { T.add('basket', KG.lathe([[0, 0], [0.1, 0], [0.15, 0.05], [0.16, 0.09], [0.15, 0.09], [0.1, 0.012], [0, 0.012]], 18), m, '#c8a45f', o); y = 0.04; }
+        else y = plate(T, m, 0.17, '#7a4a2c', o);
+        const n = kind === 'persimmon' ? 5 : kind === 'yakgwa' ? 7 : kind === 'chestnut' ? 16 : kind === 'tangerine' ? 6 : 10;
+        for (let k = 0; k < n; k++) {
+          const lay = kind === 'chestnut' ? (k < 10 ? 0 : 1) : k < n - (n > 5 ? Math.floor(n / 3) : 1) ? 0 : 1, cnt = lay ? (kind === 'chestnut' ? 6 : n > 5 ? Math.floor(n / 3) : 1) : n - (kind === 'chestnut' ? 6 : n > 5 ? Math.floor(n / 3) : 1);
+          const i2 = lay ? k - (n - cnt) : k, a = (i2 / Math.max(1, cnt)) * TAU + lay * 0.5, rr = lay ? (cnt > 1 ? 0.045 : 0) : (kind === 'chestnut' ? 0.09 : 0.085);
+          const pm = (h) => mul(m, M(Math.cos(a) * rr, y + h, Math.sin(a) * rr, r() * 6));
+          if (kind === 'persimmon') { T.add('paint', blob(0.04, 0.032, 0.04, 10), pm(0.03 + lay * 0.055), shade('#e8762a', 0.92 + r() * 0.16), o); T.add('paint', geo.disc(0.016, 6), pm(0.0625 + lay * 0.055), '#5a6a36', F); }
+          else if (kind === 'tangerine') { T.add('paint', blob(0.036, 0.03, 0.036, 9), pm(0.03 + lay * 0.05), shade('#f09a1e', 0.92 + r() * 0.16), o); }
+          else if (kind === 'chestnut') T.add('lacquer', blob(0.022, 0.018, 0.02, 7), pm(0.022 + lay * 0.03), shade('#6a3a22', 0.85 + r() * 0.3), F);
+          else if (kind === 'yakgwa') T.add('paint', geo.cyl(0.036, 0.04, 0.02, 8), pm(0.012 + lay * 0.02), shade('#a8642a', 0.9 + r() * 0.2), F);
+          else T.add('paint', blob(0.034, 0.018, 0.022, 8), pm(0.016 + lay * 0.03), ['#f1ece0', '#b9d3a0', '#eab6c4', '#f0dc9a'][k % 4], F);     // 송편
+        }
+        if (kind === 'songpyeon') for (let k = 0; k < 7; k++) T.add('paint', geo.tube(-0.1 + k * 0.03, y + 0.004, -0.11, -0.07 + k * 0.03, y + 0.008, 0.11, 0.0018, 3), m, '#3d6238', F);   // pine needles
+        top = y + 0.1;
+      }
+      return { w, d: w, top: num(o.y, 0) + top };
+    }
+    function pumpkin(T, o = {}) {
+      const s = num(o.s, 1), m = mul(base(T, o), M(0, 0, 0, 0, s)), F = NC(o);
+      const g = new THREE.SphereGeometry(0.22, 30, 14), p = g.attributes.position;
+      for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.atan2(z, x), k = 1 + 0.07 * Math.cos(a * 10) * (1 - Math.abs(y) / 0.22 * 0.5); p.setXYZ(i, x * k, y * 0.68 + (1 - Math.hypot(x, z) / 0.22) * -0.02, z * k); }
+      g.computeVertexNormals();
+      T.add('paint', g, mul(m, M(0, 0.15, 0)), o.tint || '#cf8a3a', o);
+      T.add('wood', geo.tube(0, 0.28, 0, 0.03, 0.36, 0.01, 0.014, 6), m, '#7a6a48', F);
+      return { w: 0.48 * s, d: 0.48 * s, top: num(o.y, 0) + 0.36 * s };
+    }
+    /** things on cords under the ceiling: a bamboo pole on two cords (y = 0 is where they are tied), the strings below it */
+    function strings(T, o = {}) {
+      const kind = o.kind || 'gotgam', w = num(o.w, 0.9), m = base(T, o), F = NC(o), drop = num(o.drop, 0.3), r = rndOf(T, 'str:' + kind);
+      for (const sx of [-1, 1]) T.add('straw', geo.tube(sx * (w / 2 - 0.06), 0, 0, sx * (w / 2 - 0.06), -drop, 0, 0.005, 4), m, '#bfa060', F);
+      T.add('furn', rZ(geo.cyl(0.014, 0.014, w, 8), PI / 2), mul(m, M(0, -drop, 0)), '#c9b27c', o);
+      const S = { add: (key, g, mm, tn, oo) => T.add(key, g, mm ? mul(m, mm) : m, tn, oo || F), rnd: r, low: T.low, ctx: T.ctx };
+      const n = kind === 'meju' ? 3 : 5;
+      let low = drop + 0.5;
+      for (let k = 0; k < n; k++) {
+        const x = -w / 2 + 0.14 + ((w - 0.28) * k) / Math.max(1, n - 1);
+        if (kind === 'gotgam') {
+          T.add('straw', geo.tube(x, -drop, 0, x, -drop - 0.5, 0, 0.004, 4), m, '#bfa060', F);
+          for (let q = 0; q < 5; q++) { T.add('paint', blob(0.028, 0.036, 0.024, 8), mul(m, M(x, -drop - 0.08 - q * 0.09, 0, r() * 3)), shade('#b8562a', 0.85 + r() * 0.3), o); T.add('paint', geo.disc(0.011, 5), mul(m, M(x, -drop - 0.044 - q * 0.09, 0)), '#5a4a30', F); }
+          low = drop + 0.56;
+        } else if (kind === 'meju') {
+          T.add('straw', geo.tube(x, -drop, 0, x, -drop - 0.16, 0, 0.0065, 4), m, '#c4a35d', F);
+          K.mejuBlock(S, M(x, -drop - 0.26, 0, (r() - 0.5) * 0.5), r, F);
+          low = drop + 0.38;
+        } else if (kind === 'gochu') { K.gochu(S, { x, y: -drop, z: 0, n: 11 }); low = drop + 0.62; }
+        else if (kind === 'corn') { K.corn(S, { x, y: -drop, z: 0 }); low = drop + 0.36; }
+        else { K.siraegi(S, { x, y: -drop, z: 0, len: 0.5 }); low = drop + 0.72; }
+      }
+      return { w, d: 0.24, low };
+    }
+
+    // ---------------------------------------------------------------- 가구 · 살림
+    function pyeongsang(T, o = {}) {
+      const w = num(o.w, 1.8), d = num(o.d, 1.2), h = num(o.h, 0.36), m = base(T, o), tone = o.tone || '#a98862', dark = '#7a5a3c';
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) T.add('wood', upr(h - 0.04, 0.08, 0.08, 0.008), mul(m, M(sx * (w / 2 - 0.07), (h - 0.04) / 2, sz * (d / 2 - 0.07))), dark, o);
+      for (const sz of [-1, 1]) T.add('wood', KG.timber(w, 0.07, 0.05, 0.008), mul(m, M(0, h - 0.075, sz * (d / 2 - 0.045))), dark, o);
+      for (const sx of [-1, 0, 1]) T.add('wood', rY(KG.timber(d - 0.1, 0.06, 0.05, 0.008), PI / 2), mul(m, M(sx * (w / 2 - 0.045), h - 0.075, 0)), dark, o);
+      const n = Math.max(4, Math.round(d / 0.14)), sw = d / n;
+      for (let k = 0; k < n; k++) T.add('wood', KG.timber(w, 0.03, sw - 0.012, 0.006, k * 0.7), mul(m, M(0, h - 0.015, -d / 2 + sw * (k + 0.5))), k % 2 ? tone : '#b4946c', o);
+      T.planItem?.(num(o.x, 0), num(o.z, 0), w, d);
+      return { w, d, top: num(o.y, 0) + h };
+    }
+    function bedding(T, o = {}) {
+      const m = base(T, o), F = NC(o), w = 1.0, L = 1.9, c = o.tint || '#2f4767', trim = o.trim || '#ece6d6';
+      T.add('cloth', K.pillow(w, 0.11, L, 0.22, 0.5, 18), mul(m, M(0, 0.055, 0)), trim, o);                                         // 요
+      T.add('cloth', K.pillow(w + 0.08, 0.1, L * 0.66, 0.24, 0.5, 18), mul(m, M(0, 0.125, L * 0.15)), c, o);                          // 이불
+      T.add('cloth', K.pillow(w + 0.085, 0.05, 0.2, 0.3, 0.5, 12), mul(m, M(0, 0.165, L * 0.15 - L * 0.33 + 0.08)), '#f4f0e6', F);    // the turned-back 홑청
+      const pr = 0.075, pl = 0.46, px = mul(m, M(0, 0.11 + pr * 0.85, -L / 2 + 0.2));
+      T.add('cloth', rZ(KG.lathe([[0, 0], [pr * 0.9, 0], [pr, 0.03], [pr, pl - 0.03], [pr * 0.9, pl], [0, pl]], 14), -PI / 2), mul(px, M(-pl / 2, 0, 0, 0, 1, 0.85, 1)), '#ece5d4', o);
+      for (const e of [-1, 1]) { T.add('cloth', rZ(geo.cyl(pr * 0.93, pr * 0.93, 0.012, 14), PI / 2), mul(px, M(e * (pl / 2 + 0.004), 0, 0, 0, 1, 0.85, 1)), '#9e2a28', F); T.add('paint', rZ(geo.ring(pr * 0.2, pr * 0.6, 14), -e * PI / 2), mul(px, M(e * (pl / 2 + 0.011), 0, 0, 0, 1, 0.85, 1)), '#d9a62c', F); }
+      return { w: w + 0.08, d: L, top: num(o.y, 0) + 0.2 };
+    }
+    function jukbuin(T, o = {}) {
+      const m = base(T, o), F = NC(o), R = 0.11, L = 1.0;
+      T.add('basket', rZ(new THREE.CylinderGeometry(R, R, L, 18, 1, true), PI / 2), mul(m, M(0, R, 0)), '#d2b878', o);
+      for (const e of [-1, 1]) T.add('basket', rZ(new THREE.SphereGeometry(R, 14, 6, 0, TAU, 0, PI / 2), -e * PI / 2), mul(m, M(e * L / 2, R, 0, 0, 0.5, 1, 1)), '#c9ad6c', o);
+      for (let k = 0; k < 9; k++) T.add('basket', rY(new THREE.TorusGeometry(R + 0.002, 0.004, 4, 18), PI / 2), mul(m, M(-L / 2 + 0.06 + k * (L - 0.12) / 8, R, 0)), '#a88848', F);
+      for (let k = 0; k < 6; k++) { const a = (k / 6) * TAU; T.add('basket', geo.tube(-L / 2, R + Math.sin(a) * (R + 0.002), Math.cos(a) * (R + 0.002), L / 2, R + Math.sin(a + 0.9) * (R + 0.002), Math.cos(a + 0.9) * (R + 0.002), 0.0035, 3), m, '#b89858', F); }
+      return { w: L + 0.1, d: R * 2, top: num(o.y, 0) + R * 2 };
+    }
+    function shoes(T, o = {}) {
+      const m = base(T, o), F = NC(o), white = o.kind === 'gomusin', c = o.tint || (white ? '#f1efe8' : '#c2342e');
+      for (const sx of [-1, 1]) {
+        const sm = mul(m, M(sx * 0.055, 0, sx * 0.012, sx * 0.07));
+        T.add(white ? 'lacquer' : 'cloth', K.pillow(0.078, 0.05, 0.21, 0.5, 0.6, 12), mul(sm, M(0, 0.025, 0)), c, o);
+        T.add('paint', geo.disc(0.027, 12).scale(1, 1, 2.2), mul(sm, M(0, 0.0505, -0.03)), white ? '#d9d5c8' : '#3a2a20', F);                       // the opening
+        T.add(white ? 'lacquer' : 'cloth', new THREE.ConeGeometry(0.014, 0.03, 8).rotateX(-0.9), mul(sm, M(0, 0.04, 0.105)), white ? c : '#e3b83a', F);   // 코: the turned-up toe
+        if (!white) for (let k = 0; k < 3; k++) T.add('paint', new THREE.SphereGeometry(0.007, 6, 4), mul(sm, M((k - 1) * 0.016, 0.047, 0.06 + (k % 2) * 0.014)), k % 2 ? '#3d8a5a' : '#f1d94a', F);
+      }
+      return { w: 0.22, d: 0.24, top: num(o.y, 0) + 0.06 };
+    }
+    function gat(T, o = {}) {
+      const m = base(T, o), F = NC(o);
+      T.add('furn', geo.cyl(0.09, 0.1, 0.02, 14), mul(m, M(0, 0.01, 0)), '#4a2c1b', o);
+      T.add('furn', geo.cyl(0.012, 0.014, 0.26, 8), mul(m, M(0, 0.15, 0)), '#5a3420', o);
+      T.add('furn', new THREE.SphereGeometry(0.06, 12, 8), mul(m, M(0, 0.3, 0, 0, 1, 0.8, 1)), '#5a3420', o);
+      const y = 0.33;
+      T.add('lacquer', geo.cyl(0.215, 0.215, 0.004, 32), mul(m, M(0, y, 0, 0, 1, 1, 1, 0, 0.04)), '#141211', o);                          // 양태 (brim)
+      T.add('lacquer', new THREE.CylinderGeometry(0.066, 0.078, 0.12, 20, 1, false), mul(m, M(0, y + 0.062, 0, 0, 1, 1, 1, 0, 0.04)), '#141211', o);   // 대우 (crown)
+      T.add('cloth', rX(new THREE.TorusGeometry(0.079, 0.004, 4, 20), PI / 2), mul(m, M(0, y + 0.008, 0)), '#3a2a20', F);
+      for (const sx of [-1, 1]) for (let k = 0; k < 9; k++) T.add('lacquer', new THREE.SphereGeometry(0.006, 6, 4), mul(m, M(sx * (0.078 + k * 0.004), y - 0.012 - k * 0.022, 0.02)), k % 3 ? '#b8762a' : '#e0b04a', F);   // 갓끈
+      return { w: 0.44, d: 0.44, top: num(o.y, 0) + 0.46 };
+    }
+    function sotdae(T, o = {}) {
+      const m = base(T, o), F = NC(o);
+      T.add('stone', new THREE.IcosahedronGeometry(0.11, 1).scale(1.2, 0.5, 1), mul(m, M(0, 0.05, 0, 0.4)), '#aaa294', o);
+      for (const [x, z, h, ry] of [[0, 0, 0.95, 0.3], [0.09, 0.04, 0.72, -1.2], [-0.08, 0.05, 0.56, 2.2]]) {
+        T.add('wood', geo.tube(x, 0.06, z, x * 1.1, h, z * 1.1, 0.012, 6), m, '#8a6a4a', o);
+        const bm = mul(m, M(x * 1.1, h + 0.02, z * 1.1, ry));
+        T.add('wood', blob(0.06, 0.022, 0.024, 8), bm, '#9a7a56', o);
+        T.add('wood', blob(0.018, 0.018, 0.016, 6), mul(bm, M(0.062, 0.022, 0)), '#9a7a56', F);
+        T.add('wood', rZ(new THREE.ConeGeometry(0.008, 0.035, 6), -PI / 2), mul(bm, M(0.094, 0.02, 0)), '#6a4a30', F);
+        T.add('wood', KG.slab(0.05, 0.006, 0.03, 0.002), mul(bm, M(-0.075, 0.012, 0, 0, 1, 1, 1, 0, 0.3)), '#8a6a4a', F);
+      }
+      return { w: 0.3, d: 0.26, top: num(o.y, 0) + 1.0 };
+    }
+    function porcelain(T, o = {}) {
+      const kind = o.kind || 'moon', s = num(o.s, 1), m = mul(base(T, o), M(0, 0, 0, 0, s));
+      const P = {
+        moon: [[0, 0], [0.085, 0], [0.095, 0.012], [0.16, 0.09], [0.2, 0.19], [0.205, 0.24], [0.19, 0.31], [0.14, 0.385], [0.092, 0.415], [0.096, 0.432], [0.086, 0.436], [0.08, 0.41], [0, 0.4]],
+        maebyeong: [[0, 0], [0.06, 0], [0.066, 0.012], [0.07, 0.1], [0.1, 0.24], [0.115, 0.3], [0.1, 0.345], [0.04, 0.372], [0.03, 0.384], [0.04, 0.396], [0.03, 0.398], [0.022, 0.38], [0, 0.378]],
+        bottle: [[0, 0], [0.055, 0], [0.062, 0.012], [0.095, 0.08], [0.1, 0.13], [0.07, 0.2], [0.03, 0.26], [0.024, 0.34], [0.036, 0.362], [0.028, 0.364], [0.016, 0.34], [0, 0.338]],
+      }[kind] || [];
+      T.add('lacquer', KG.lathe(P, 24), m, o.tint || (kind === 'moon' ? '#efece2' : kind === 'maebyeong' ? '#9fbfae' : '#e9e6da'), o);
+      const top = P.reduce((a, p) => Math.max(a, p[1]), 0), rad = P.reduce((a, p) => Math.max(a, p[0]), 0);
+      return { w: rad * 2 * s, d: rad * 2 * s, top: num(o.y, 0) + top * s };
+    }
+    function inlayBox(T, o = {}) {
+      const w = num(o.w, 0.36), d = num(o.d, 0.22), h = num(o.h, 0.17), m = base(T, o), F = NC(o), c = o.tint || '#1c1513';
+      T.add('lacquer', KG.slab(w, h * 0.68, d, 0.006), mul(m, M(0, h * 0.34, 0)), c, o);
+      T.add('lacquer', KG.slab(w + 0.012, h * 0.3, d + 0.012, 0.008), mul(m, M(0, h * 0.85, 0)), c, o);
+      T.add('brass', KG.slab(0.04, 0.05, 0.006, 0.002), mul(m, M(0, h * 0.62, d / 2 + 0.008)), '#c9a24a', F);
+      for (const sx of [-1, 1]) T.add('brass', KG.slab(0.03, 0.02, 0.005, 0.002), mul(m, M(sx * (w / 2 - 0.02), h * 0.68, d / 2 + 0.007)), '#c9a24a', F);
+      // 자개: mother-of-pearl flowers on the lid and the front
+      const pearl = ['#e9f1ec', '#f3dfe8', '#d9eef2', '#f1ecd2'];
+      const flower = (fm, s) => { for (let k = 0; k < 5; k++) T.add('lacquer', new THREE.CircleGeometry(0.011 * s, 6).scale(1, 0.6, 1), mul(fm, M(Math.cos(k * 1.257) * 0.013 * s, Math.sin(k * 1.257) * 0.013 * s, 0, 0, 1, 1, 1, 0, k * 1.257)), pearl[k % 4], F); T.add('lacquer', new THREE.CircleGeometry(0.005 * s, 6), fm, pearl[3], F); };
+      for (const [x, z, s] of [[-0.09, 0.02, 1.2], [0.04, -0.03, 1], [0.11, 0.04, 0.8]]) flower(mul(m, M(x, h + 0.0012, z, 0, 1, 1, 1, -PI / 2)), s);
+      for (const [x, y, s] of [[-0.11, h * 0.36, 1], [0.1, h * 0.3, 1.1]]) flower(mul(m, M(x, y, d / 2 + 0.0012)), s);
+      return { w: w + 0.012, d: d + 0.012, top: num(o.y, 0) + h };
+    }
+
+    Object.assign(K, {
+      plant, spinTop, eolle, yut, jegi, gonggi, tuho, doll, kite, gayageum, janggu, buk, jing, flutes, rug, jogakbo, wallClock, fan, mask, maedeup, frame,
+      chorong, candle, paperLamp, dish, pumpkin, strings, pyeongsang, bedding, jukbuin, shoes, gat, sotdae, porcelain, inlayBox,
+    });
+  })();
 })();

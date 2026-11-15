@@ -326,6 +326,8 @@
       // 집 구경 (CONTRACT §16.4 / §16.6): visits = placeId -> how often entered, seen = exhibitId -> 1 (the 도감 stamps),
       // motions = motionId -> 1 (움직이는 그림 watched to the end)
       places: { visits: {}, seen: {}, motions: {} },
+      // [myroom] 내 방 (CONTRACT §17.4): the room this device keeps in local mode — { v, style, items: [{ i, x, y, z, r, s?, c? }], public }
+      myroom: G.data.myroom?.empty ? G.data.myroom.empty() : { v: 0, style: {}, items: [], public: false },
       poisVisited: {},     // poiId -> ts
       npcsTalked: {},      // npcId -> ts
       cropKinds: {},       // cropId -> first harvest ts
@@ -542,6 +544,8 @@
     // 실시간 텃밭 / 곳간 (phase 7): upgrade older saves, drop what does not fit the shape
     sanitizeRealFarm(data, G.net?.mode === 'server' ? 'server' : 'local');
     sanitizePlaces(data); // 집 구경 (phase 8): { visits, seen, motions } with known ids only
+    // [myroom] 내 방: catalogue ids and numbers in range only; what cannot be drawn safely is dropped (76-myroom-data.js)
+    data.myroom = G.data.myroom?.sanitize ? G.data.myroom.sanitize(data.myroom, G.data.myroom.LIMITS.hard) : { v: 0, style: {}, items: [], public: false };
     if (profile) { data.profile.id = profile.id; if (profile.nickname) data.profile.nickname = profile.nickname; if (profile.role) data.profile.role = profile.role; if (profile.email) data.profile.email = profile.email; }
     return data;
   }

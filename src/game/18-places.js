@@ -389,6 +389,10 @@
       if (d.bounds && ['minX', 'maxX', 'minZ', 'maxZ'].every((k) => fin(Number(d.bounds[k]))) && d.bounds.maxX > d.bounds.minX && d.bounds.maxZ > d.bounds.minZ) def.bounds = { minX: origin.x + Number(d.bounds.minX) - def.margin, maxX: origin.x + Number(d.bounds.maxX) + def.margin, minZ: origin.z + Number(d.bounds.minZ) - def.margin, maxZ: origin.z + Number(d.bounds.maxZ) + def.margin };
       // [complex-ground] a door may go without the automatic guide sign (its owner builds a better one)
       (Array.isArray(d.door) ? d.door : d.door ? [d.door] : []).filter((o) => o && fin(Number(o.x)) && fin(Number(o.z))).forEach((o, i) => { if (o.sign === false && doors[i]) doors[i].noSign = true; });
+      // [myroom] optional hooks of a place: canEnter(opts) -> false refuses an entrance for now (the place then explains
+      // itself or asks its server and enters later) · exitTo(opts) -> { place, spawn } | { to } where its way out leads
+      if (typeof d.canEnter === 'function') def.canEnter = d.canEnter;
+      if (typeof d.exitTo === 'function') def.exitTo = d.exitTo;
       const old = defs.get(id);
       if (old) { zoneToPlace.delete(old.zoneId); if (cur && cur.def === old) this._leaveSync('redefine'); const L = live.get(id); if (L) { disposeBuilt(L); live.delete(id); } }
       defs.set(id, def);
@@ -576,6 +580,8 @@
       const def = defs.get(id);
       if (!def) { G.log.warn('WORLD', `places.enter: unknown place ${id}`); return Promise.resolve(false); }
       if (cur && cur.def === def) return Promise.resolve(true);
+      // [myroom] a place may refuse an entrance (def.canEnter): it has told the visitor why, or it comes in by itself later
+      if (typeof def.canEnter === 'function') { let may = true; try { may = def.canEnter(opts) !== false; } catch (e) { may = true; } if (!may) return Promise.resolve(false); }
       if (this._busy) return this._busy.then(() => this.is(id));
       const pl = G.sys.player;
       if (!G.state || !pl || pl._ready === false) return Promise.resolve(false);
@@ -712,6 +718,14 @@
     exit(opts = {}) {
       if (!cur) return Promise.resolve(true);
       if (this._busy) return this._busy.then(() => !cur);
+      // [myroom] a place may lead its way out somewhere else (def.exitTo): back into the place the visitor came from,
+      // or to another spot of the valley
+      if (typeof cur.def.exitTo === 'function') {
+        let t = null;
+        try { t = cur.def.exitTo(opts); } catch (e) { t = null; }
+        if (t && t.place && t.place !== cur.def.id && defs.has(t.place)) return this.enter(t.place, { spawn: t.spawn, fade: opts.fade });
+        if (t && t.to && opts.to == null) opts = { ...opts, to: t.to };
+      }
       const pl = G.sys.player, def = cur.def;
       if (!G.state || !pl || pl._ready === false) { this._leaveSync('exit'); return Promise.resolve(true); }
       const to = spot(opts.to, def.exit);

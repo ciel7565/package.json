@@ -146,7 +146,7 @@
     add('A_SCROLL_' + k, 'art', emoji, name, 'W', [w, 0.05, +(h + 0.14).toFixed(2)], 'scrollW', { art, h, w: +pw.toFixed(3) }, { yw: [1.02, 1.6, 1.68] });
   }
   add('A_FRAME_CARP', 'art', '🖼️', '액자 — 용과 잉어', 'W', [0.68, 0.03, 0.97], 'frame', { art: 'dragon_carp_minhwa', w: 0.52, h: 0.82 });
-  add('A_FRAME_PLUM', 'art', '🖼️', '액자 — 매화', 'W', [0.68, 0.03, 0.97], 'frame', { art: 'plum_branch', w: 0.52, h: 0.82 });
+  add('A_FRAME_PLUM', 'art', '🖼️', '액자 — 매화', 'W', [0.67, 0.03, 0.95], 'frame', { art: 'plum_branch', w: 0.52, h: 0.82 });
   add('A_FRAME_ROOSTER', 'art', '🖼️', '액자 — 닭 그림', 'W', [0.5, 0.03, 0.99], 'frame', { art: 'rooster_hen_minhwa', w: 0.34, h: 0.84 });
 
   // ---- 벽 장식
@@ -162,7 +162,7 @@
   add('W_GOBI', 'wall', '✉️', '고비', 'W', [0.41, 0.06, 1.03], 'gobiW', {});
   add('W_JORI', 'wall', '🥄', '복조리', 'W', [0.27, 0.07, 0.43], 'joriW', {});
   add('W_HOMI', 'wall', '⛏️', '호미', 'W', [0.13, 0.1, 0.4], 'toolW', { kind: 'homi' });
-  add('W_JEOUL', 'wall', '⚖️', '대저울', 'W', [0.91, 0.24, 0.62], 'jeoulW', {});
+  add('W_JEOUL', 'wall', '⚖️', '대저울', 'W', [0.9, 0.28, 0.61], 'jeoulW', {});
 
   // ---- 항아리 · 그릇
   add('J_HANGARI', 'jar', '🏺', '항아리', 'F', [0.84, 0.85, 1.08], 'pot', { kind: 'hangari', lid: true }, { col: GLAZE, sz: true });
@@ -172,7 +172,7 @@
   add('J_GEUMJUL', 'jar', '🪢', '금줄 두른 독', 'F', [0.8, 0.82, 1.4], 'geumjulDok', {});
   add('J_MULDUMEONG', 'jar', '💧', '물두멍', 'F', [1.02, 1.02, 0.8], 'mulDumeong', {});
   add('J_DONGI', 'jar', '💧', '물동이', 'T', [0.55, 0.5, 0.43], 'dongi', { ring: false }, { col: GLAZE });
-  add('J_SIRU', 'jar', '♨️', '시루', 'T', [0.64, 0.64, 0.3], 'pot', { kind: 'siru' });
+  add('J_SIRU', 'jar', '♨️', '시루', 'T', [0.61, 0.62, 0.3], 'pot', { kind: 'siru' });
   add('J_SOT', 'jar', '🍲', '가마솥', 'T', [0.92, 0.93, 0.48], 'pot', { kind: 'sot', lid: true });
   add('J_BASIN', 'jar', '🥣', '자배기', 'T', [0.72, 0.73, 0.2], 'pot', { kind: 'basin' }, { col: GLAZE });
   add('J_BOWLS', 'jar', '🥣', '사발과 대접', 'T', [0.39, 0.22, 0.12], 'bowls', {});
@@ -180,7 +180,7 @@
   add('J_MAEBYEONG', 'jar', '🍶', '청자 매병', 'T', [0.24, 0.24, 0.4], 'porcelain', { kind: 'maebyeong' }, { sz: true });
   add('J_BOTTLE', 'jar', '🍶', '백자 병', 'T', [0.2, 0.2, 0.37], 'porcelain', { kind: 'bottle' }, { sz: true });
   add('J_HWARO', 'jar', '🔥', '화로', 'T', [0.57, 0.56, 0.44], 'hwaro', { light: false });
-  add('J_MAETDOL', 'jar', '⚙️', '맷돌', 'T', [0.56, 0.56, 0.23], 'pot', { kind: 'millstone' });
+  add('J_MAETDOL', 'jar', '⚙️', '맷돌', 'T', [0.53, 0.54, 0.22], 'pot', { kind: 'millstone' });
   add('J_JEOLGU', 'jar', '🥢', '절구와 공이', 'F', [0.51, 0.51, 1.31], 'jeolgu', {});
   add('J_TEASET', 'jar', '🍵', '다기 세트', 'T', [0.46, 0.46, 0.3], 'teaSet', {});
 
@@ -200,7 +200,7 @@
   add('P_PLUM', 'plant', '🌸', '매화 꽃병', 'T', [0.39, 0.23, 0.87], 'plant', { kind: 'plum' });
   add('P_MUM', 'plant', '🌼', '국화', 'T', [0.35, 0.31, 0.4], 'plant', { kind: 'mum' }, { col: CLOTH, sz: true });
   add('P_CAMELLIA', 'plant', '🌺', '동백', 'T', [0.35, 0.31, 0.4], 'plant', { kind: 'camellia' }, { sz: true });
-  add('P_LOTUS', 'plant', '🪷', '연꽃 수반', 'T', [0.58, 0.58, 0.32], 'plant', { kind: 'lotus' }, { col: CLOTH });
+  add('P_LOTUS', 'plant', '🪷', '연꽃 수반', 'T', [0.56, 0.56, 0.33], 'plant', { kind: 'lotus' }, { col: CLOTH });
   add('P_PEONY', 'plant', '💐', '모란 꽃병', 'T', [0.25, 0.26, 0.73], 'plant', { kind: 'peony' }, { col: CLOTH });
   add('P_LETTUCE', 'plant', '🥬', '상추 상자', 'T', [0.57, 0.32, 0.21], 'plant', { kind: 'lettuce' });
   add('P_PEPPER', 'plant', '🌶️', '고추 화분', 'T', [0.27, 0.27, 0.78], 'plant', { kind: 'pepper' });
@@ -231,8 +231,8 @@
   add('K_TTEOK', 'food', '🍰', '무지개떡', 'T', [0.35, 0.35, 0.15], 'dish', { kind: 'tteok' });
   add('K_YAKGWA', 'food', '🍪', '약과', 'T', [0.35, 0.35, 0.07], 'dish', { kind: 'yakgwa' });
   add('K_PERSIMMON', 'food', '🍊', '감', 'T', [0.35, 0.35, 0.14], 'dish', { kind: 'persimmon' });
-  add('K_TANGERINE', 'food', '🍊', '귤 바구니', 'T', [0.34, 0.34, 0.14], 'dish', { kind: 'tangerine' });
-  add('K_CHESTNUT', 'food', '🌰', '밤 바구니', 'T', [0.34, 0.34, 0.1], 'dish', { kind: 'chestnut' });
+  add('K_TANGERINE', 'food', '🍊', '귤 바구니', 'T', [0.32, 0.32, 0.15], 'dish', { kind: 'tangerine' });
+  add('K_CHESTNUT', 'food', '🌰', '밤 바구니', 'T', [0.32, 0.32, 0.11], 'dish', { kind: 'chestnut' });
   add('K_WATERMELON', 'food', '🍉', '수박', 'T', [0.42, 0.42, 0.19], 'dish', { kind: 'watermelon' });
   add('K_SWEETPOTATO', 'food', '🍠', '군고구마', 'T', [0.4, 0.34, 0.08], 'dish', { kind: 'sweetpotato' });
   add('K_PUMPKIN', 'food', '🎃', '늙은 호박', 'T', [0.49, 0.46, 0.39], 'pumpkin', {}, { sz: true });
@@ -246,7 +246,7 @@
   add('H_BASKET', 'house', '🧺', '바구니', 'T', [0.52, 0.52, 0.21], 'basket', {}, { sz: true });
   add('H_KI', 'house', '🧺', '키', 'T', [0.56, 0.61, 0.14], 'basket', { kind: 'ki' });
   add('H_SIEVE', 'house', '🧺', '체', 'T', [0.52, 0.52, 0.21], 'basket', { kind: 'sieve' });
-  add('H_NURUK', 'house', '🫓', '누룩 채반', 'T', [0.62, 0.62, 0.07], 'nurukTray', {});
+  add('H_NURUK', 'house', '🫓', '누룩 채반', 'T', [0.59, 0.6, 0.06], 'nurukTray', {});
   add('H_STRAW', 'house', '🌾', '짚단', 'T', [0.38, 0.39, 0.85], 'straw', { kind: 'bundle' });
   add('H_GAMANI', 'house', '🌾', '가마니', 'F', [1.24, 1, 0.67], 'gamaniStack', { rows: [2, 1] });
   add('H_SEOM', 'house', '🌾', '쌀섬', 'T', [0.62, 0.55, 1.01], 'seom', {});
