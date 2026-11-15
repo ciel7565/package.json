@@ -900,8 +900,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
           // in so their aisle-side corner stays on the band's edge (plan v2's 3.2 m aisles stay 2.9 m wide for the walker)
           if (pieces === 1) hw = Math.min(hw, rin * Math.tan(half));
           else {
-            if (k === 0) am = Math.max(am, a0 + Math.atan(hw / rin));
-            if (k === pieces - 1) am = Math.min(am, a1 - Math.atan(hw / rin));
+            // (and 0.3 m further in: the outermost jar of a band may be brushed, but no walker wedges on a corner)
+            if (k === 0) am = Math.max(am, a0 + Math.atan(hw / rin) + 0.3 / rin);
+            if (k === pieces - 1) am = Math.min(am, a1 - Math.atan(hw / rin) - 0.3 / rin);
           }
           add({ x: g.R.cx + Math.cos(am) * rc, z: g.R.cz + Math.sin(am) * rc, hw, hd: (rOut - rin) / 2, rot: Math.atan2(Math.cos(am), Math.sin(am)) });
         }

@@ -128,12 +128,13 @@ try {
   // ---- the main routes on foot (never below the ground, never stuck)
   // [name, x, z, via]: via = stair waypoints walked in a straight line after the planner reaches the first one
   // every target is read from the master plan (plan v2 moved all of them); the lookout is climbed over its six flights
+  // (the centre plaza target stands 5 m south of the centre: the stone table (r 2.6) and the counter board north of it are solid)
   const ROUTE = await page.evaluate(() => {
     const C = G.data.complex, gc = C.rings.GC, am = C.rings.AM, kn = C.byId('KNOLL'), gp = C.byId('PLAZA_GATE'), L = C.lookout, sy = C.byId('B_SH1'), sy2 = C.byId('B_SH2');
     const via = [];
     for (const e of C.elements) if (e.type === 'stair' && !e.natural) for (const p of e.pts) { const q = via[via.length - 1]; if (!q || Math.hypot(q[0] - p[0], q[1] - p[1]) > 0.3) via.push([p[0], p[1]]); }
     const h1 = C.byId('B_VH01'), h6 = C.byId('B_VH06');
-    return [['gate', (gp.x0 + gp.x1) / 2, (gp.z0 + gp.z1) / 2], ['centre plaza', gc.cx, gc.cz - 2], ['amphitheatre top', am.cx, am.cz - (C.K.WALL_R - 4)], ['pavilion knoll', kn.cx, kn.cz + 3],
+    return [['gate', (gp.x0 + gp.x1) / 2, (gp.z0 + gp.z1) / 2], ['centre plaza', gc.cx, gc.cz + 5], ['amphitheatre top', am.cx, am.cz - (C.K.WALL_R - 4)], ['pavilion knoll', kn.cx, kn.cz + 3],
       ['village terrace', (h1.x + h6.x) / 2, (h1.z + h6.z) / 2], ['storehouse yard', sy.x + 5.6, (sy.z + sy2.z) / 2 + 0.4], ['the lookout', L.stand.x, L.stand.z, via]];
   });
   for (const [name, x, z, via] of ROUTE) {
