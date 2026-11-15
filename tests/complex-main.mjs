@@ -182,10 +182,11 @@ async function runPreset(q) {
     const doorY = W.heightAt(door.x + ox, door.z + oz, P + 0.1);
     const viaStairs = walkPath([[door.x, 30], [door.x, ST.z1 + 1], [door.x, door.z]]);
     const viaWest = walkPath([[-110, 14], [-97, 9.4], [-79.5, 9.4], [-76, 9.6], [door.x - 3, door.z]]);
-    const viaEast = walkPath([[-24, 14], [-35, 9.4], [-52.5, 9.4], [-56, 9.6], [door.x + 3, door.z]]);
+    // the east ramp's foot faces the jar circle's wall: it is reached along the front, from the plaza
+    const viaEast = walkPath([[-50, 18], [-38.6, 11.6], [-36.4, 9.2], [-52.5, 9.4], [-56, 9.6], [door.x + 3, door.z]]);
     const onTop = walkPath([[door.x, door.z], [-62, 6.5], [T.x1 - 1.0, 6.5], [T.x1 - 1.0, T.z0 + 1.0], [T.x0 + 1.0, T.z0 + 1.0], [T.x0 + 1.0, 6.5], [door.x - 4, 6.5], [door.x, door.z]], P);
-    // west, north and east of the building on the ground (the corridor and the jar circle close the south-east corner)
-    const ground = walkPath([[door.x - 12, 24], [-108, 24], [-108, -46], [-27, -46], [-27, -21]]);
+    // west and north of the building on the ground (the corridor, the village terrace and the jar circle close the east)
+    const ground = walkPath([[door.x - 12, 24], [-108, 24], [-108, -45], [-48, -45]]);   // the village terrace wall closes the north-east
     const sideDoor = M.sideDoor;
     v.set(sideDoor.x + ox, P, sideDoor.z + oz);
     const sidePushed = W.resolve(v, 0.35, P);

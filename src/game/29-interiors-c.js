@@ -93,7 +93,7 @@
         S: [{ door: 'panel', exit: true, w: 1.6, h: 2.0 }, { window: 'ttisal', w: 1.2, h: 0.95, sill: 1.0 }, 'clay', 'clay'],
         W: ['clay', { baraji: true, w: 1.0, h: 0.7, sill: 1.5, offset: 0.5, open: 0.92, label: '바라지창', sub: '연기와 김이 빠지는 창' }, 'clay'],
       },
-      sun: { az: 255, el: 24 },
+      sun: { az: 255, el: 32 },
     });
     const A = (key, spot) => ctx.anchor(key, spot);
 
@@ -133,13 +133,13 @@
     // ---- N bay 1: the 살강, a basin below it; N bay 2: the 찬장; N bay 3: the rice jar and an oil lamp
     const sg = K.salgang(R, 'N', 1, { levels: 2, y: 1.2, gap: 0.5 });
     A('salgang', { x: sg.x, y: sg.y - 0.25, z: sg.z + 0.15 });
-    K.pot(R, { kind: 'basin', x: -1.45, z: -3.5, s: 0.95, tint: '#6a4630' });
+    K.pot(R, { kind: 'basin', x: -1.45, z: -3.5, s: 0.95, tint: '#965f3e' });
     K.pot(R, { kind: 'bowl', x: -1.4, y: 0.05, z: -3.45, s: 1.4, tint: '#cdb47c' });   // a gourd dipper in it
     R.block(-1.45, -3.5, 0.36, 0.36);
     K.chanjang(R, { x: 1.4, z: -3.72, w: 1.2, d: 0.46 });
     R.block(1.4, -3.72, 0.62, 0.26);
-    K.pot(R, { kind: 'dok', x: 4.3, z: -3.45, s: 0.82, lid: true, tint: '#6b4430' });
-    K.pot(R, { kind: 'danji', x: 3.65, z: -3.6, s: 0.8, lid: true, tint: '#5f3d2a' });
+    K.pot(R, { kind: 'dok', x: 4.3, z: -3.45, s: 0.82, lid: true, tint: '#975c3e' });
+    K.pot(R, { kind: 'danji', x: 3.65, z: -3.6, s: 0.8, lid: true, tint: '#865236' });
     R.block(4.1, -3.5, 0.75, 0.4);
     K.deungjan(R, { x: 2.85, z: -3.55, h: 0.55, intensity: 3.6 });
     R.block(2.85, -3.55, 0.14, 0.14);
@@ -202,6 +202,9 @@
     Sa.done(); Sb.done();
     R.label('시래기 · 고추 · 마늘', { x: 4.95, y: 2.05, z: -1.3, rotY: -PI / 2, w: 0.82, h: 0.24, sub: '말려 두고 겨우내 먹어요', style: 'paper' });
 
+    // lived-in: a 싸리비 by the door, 짚신 below the step
+    K.broom(R, { x: 5.12, z: 3.3, rotY: -PI / 2 });
+    K.jipsin(R, { x: 3.35, z: 3.15, rotY: 0.3 });
     K.dust(R, { count: 110 });
     R.finish();
     return {};
@@ -254,7 +257,7 @@
       rows.forEach((r, i) => {
         const y = 92 + i * 64;
         // a small jar
-        c.fillStyle = '#5c3a27'; c.beginPath(); c.ellipse(52, y + 10, 18, 20, 0, 0, TAU); c.fill();
+        c.fillStyle = '#824e32'; c.beginPath(); c.ellipse(52, y + 10, 18, 20, 0, 0, TAU); c.fill();
         c.fillRect(42, y - 14, 20, 8); c.fillStyle = '#7a5038'; c.fillRect(38, y - 18, 28, 6);
         c.fillStyle = '#3e2b1a'; c.font = `800 24px ${FONT}`; c.textAlign = 'left';
         c.fillText(r.name || '빈 독', 84, y);
@@ -311,7 +314,7 @@
     A('kimchidok', pit.jars[0]);
     plate(R, 'W', 7.8, 1.6, '김칫독', '땅에 묻어 차게 익혀요', 0.58);
     // 김장: salted cabbage halves in a big basin
-    K.pot(R, { kind: 'basin', x: -4.35, z: -1.65, s: 1.35, tint: '#6a4630' });
+    K.pot(R, { kind: 'basin', x: -4.35, z: -1.65, s: 1.35, tint: '#965f3e' });
     for (let i = 0; i < 5; i++) {
       const a = i * 1.26 + 0.3, rr = i === 4 ? 0 : 0.2, cx = -4.35 + Math.cos(a) * rr, cz = -1.65 + Math.sin(a) * rr, ry = a + 0.6;
       const half = new THREE.SphereGeometry(0.11, 12, 6, 0, TAU, PI / 2, PI / 2); half.scale(1, 0.62, 1.55);
@@ -329,24 +332,24 @@
     const Y0 = 0.23;
     // 간장 독: open to the air — dark 간장 with 숯 and 고추 afloat; its lid rests on the 단 beside it
     const gx = -1.65, gz = 0.78;
-    K.pot(R, { kind: 'dok', x: gx, y: Y0, z: gz, s: 1.0, tint: '#5e3b27' });
+    K.pot(R, { kind: 'dok', x: gx, y: Y0, z: gz, s: 1.0, tint: '#855032' });
     R.add('lacquer', geo.disc(0.255, 20), M(gx, Y0 + 1.19, gz), '#1b0f08', { cast: false });
     R.add('paint', new THREE.DodecahedronGeometry(0.045, 0).scale(1.3, 0.6, 0.9), M(gx + 0.06, Y0 + 1.2, gz - 0.05, 0.4), '#1c1a19');
     for (const [dx, dz, a] of [[-0.1, 0.06, 0.3], [0.03, 0.12, 2.0], [-0.05, -0.1, 4.1]]) R.add('paint', K.geo.lathe([[0, 0], [0.013, 0.02], [0.017, 0.06], [0.013, 0.095], [0, 0.11]], 7).applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 2)), M(gx + dx, Y0 + 1.205, gz + dz, a), '#9d1d17');
-    R.add('onggi', BK.lidGeometry(16, 0.3), M(gx - 0.66, Y0, gz - 0.18, 0, 1, 1, 1, PI), '#5a3925');
+    R.add('onggi', BK.lidGeometry(16, 0.3), M(gx - 0.66, Y0, gz - 0.18, 0, 1, 1, 1, PI), '#7f4d30');
     A('jangdok', { x: gx + 0.1, y: 1.0, z: gz + 0.45 });
     // 된장 독 with the 금줄 (숯, 고추, 한지 버선본)
     const dx0 = 0.1, dz0 = 0.8;
-    K.pot(R, { kind: 'jungduri', x: dx0, y: Y0, z: dz0, s: 1.0, lid: true, tint: '#634029' });
+    K.pot(R, { kind: 'jungduri', x: dx0, y: Y0, z: dz0, s: 1.0, lid: true, tint: '#8c5735' });
     const gj = K.geumjul(R, { x: dx0, y: Y0, z: dz0, kind: 'jungduri', s: 1.0 });
     A('geumjul', gj);
-    K.pot(R, { kind: 'hangari', x: 1.55, y: Y0, z: 0.85, s: 0.95, lid: true, tint: '#6a4530' });
+    K.pot(R, { kind: 'hangari', x: 1.55, y: Y0, z: 0.85, s: 0.95, lid: true, tint: '#965d3e' });
     // front row: 씨간장, 고추장, a small 단지
-    K.pot(R, { kind: 'danji', x: -0.85, y: Y0, z: 1.78, s: 0.95, lid: true, tint: '#4f3121' });
+    K.pot(R, { kind: 'danji', x: -0.85, y: Y0, z: 1.78, s: 0.95, lid: true, tint: '#70422a' });
     A('ssiganjang', { x: -0.85, y: 0.75, z: 2.05 });
-    K.pot(R, { kind: 'hangari', x: 0.75, y: Y0, z: 1.8, s: 0.7, lid: true, tint: '#6d4632' });
+    K.pot(R, { kind: 'hangari', x: 0.75, y: Y0, z: 1.8, s: 0.7, lid: true, tint: '#9a5f41' });
     A('gochujang', { x: 0.75, y: 0.8, z: 2.1 });
-    K.pot(R, { kind: 'danji', x: -2.15, y: Y0, z: 1.75, s: 0.78, lid: true, tint: '#664230' });
+    K.pot(R, { kind: 'danji', x: -2.15, y: Y0, z: 1.75, s: 0.78, lid: true, tint: '#90593e' });
     // tags in front of the jars, turned a little to the door
     const tag = (title, sub, x, z, y = 0.5) => R.label(title, { x, y, z, rotY: 0.55, w: 0.5, h: 0.22, sub, style: 'paper' });
     tag('간장 독', '메주를 소금물에 담가요', gx + 0.25, gz + 0.43, 0.62);
@@ -355,23 +358,23 @@
     tag('고추장', '메줏가루·찹쌀·고춧가루', 0.75 + 0.22, 1.8 + 0.26, 0.42);
     // 장 가르기 beside the 단: a basin of 된장, a 단지 of 간장, a dipper, on a straw mat
     K.floorMat(R, { x: -3.75, z: 1.6, w: 1.4, d: 1.0, tint: '#d6bc7c', border: '#5a4a3a' });
-    K.pot(R, { kind: 'basin', x: -3.95, y: 0.012, z: 1.55, s: 0.9, tint: '#6a4630' });
+    K.pot(R, { kind: 'basin', x: -3.95, y: 0.012, z: 1.55, s: 0.9, tint: '#965f3e' });
     R.add('clay', K.pillow(0.46, 0.14, 0.4, 0.55, 0.5, 14), M(-3.95, 0.16, 1.55, 0.4), '#7b5434');
     R.add('clay', K.pillow(0.22, 0.09, 0.2, 0.6, 0.5, 10), M(-3.8, 0.23, 1.47, 1.2), '#86603d');
-    K.pot(R, { kind: 'danji', x: -3.3, y: 0.012, z: 1.75, s: 0.62, tint: '#5a3a28' });
+    K.pot(R, { kind: 'danji', x: -3.3, y: 0.012, z: 1.75, s: 0.62, tint: '#7f4e34' });
     R.add('lacquer', geo.disc(0.09, 14), M(-3.3, 0.27, 1.75), '#1b0f08', { cast: false });
     K.pot(R, { kind: 'bowl', x: -3.45, y: 0.012, z: 1.3, s: 1.3, tint: '#cdb47c' });
     R.block(-3.75, 1.6, 0.7, 0.5);
     A('jangareugi', { x: -3.75, y: 0.5, z: 1.6 });
 
     // ---- west: 식초 by the warm wall (it shares the 부엌's 아궁이), the cloth-covered 독, the salt 가마니 over its 간수 tub
-    K.pot(R, { kind: 'hangari', x: -5.35, z: 2.55, s: 0.85, tint: '#6a4430' });
+    K.pot(R, { kind: 'hangari', x: -5.35, z: 2.55, s: 0.85, tint: '#965c3e' });
     K.cloth(R, { x: -5.35, y: 0.84 * 0.93, z: 2.55, w: 0.42, d: 0.42, drop: 0.12, tint: '#ded2b6' });
     R.add('straw', new THREE.TorusGeometry(0.235, 0.01, 4, 20).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), M(-5.35, 0.7, 2.55), '#9a7a44');
     R.block(-5.35, 2.55, 0.36, 0.36);
     A('sikcho', { x: -4.95, y: 0.7, z: 2.55 });
     plate(R, 'W', 2.0, 1.42, '식초 항아리', '따뜻한 벽 옆에서 익어요', 0.62);
-    K.pot(R, { kind: 'dok', x: -5.42, z: -0.05, s: 0.78, tint: '#5f3c28' });
+    K.pot(R, { kind: 'dok', x: -5.42, z: -0.05, s: 0.78, tint: '#865134' });
     K.cloth(R, { x: -5.42, y: 1.25 * 0.78, z: -0.05, w: 0.52, d: 0.52, drop: 0.2, tint: '#e3d8c2' });
     R.add('straw', new THREE.TorusGeometry(0.27, 0.01, 4, 20).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), M(-5.42, 0.86, -0.05), '#9a7a44');
     R.block(-5.42, -0.05, 0.36, 0.36);
@@ -389,7 +392,7 @@
     const sh = R.shelfWall('S', 3, { levels: 1, slots: 3, y: 1.38, w: 1.9, d: 0.3 });
     K.doe(R, { x: sh[0].x, y: sh[0].y, z: sh[0].z, rotY: 0.3, fill: 'bean' });
     R.add('furn', K.geo.lathe([[0.012, 0], [0.016, 0.1], [0.09, 0.2], [0.086, 0.205], [0.01, 0.105], [0.008, 0]], 14), M(sh[1].x, sh[1].y + 0.205, sh[1].z, 0, 1, 1, 1, PI), '#8d6745', { wall: 'S' });
-    K.pot(R, { kind: 'danji', x: sh[2].x, y: sh[2].y, z: sh[2].z, s: 0.42, lid: true, tint: '#5f3d2a', wall: 'S' });
+    K.pot(R, { kind: 'danji', x: sh[2].x, y: sh[2].y, z: sh[2].z, s: 0.42, lid: true, tint: '#865236', wall: 'S' });
     plate(R, 'S', 10.5, 1.92, '됫박 · 깔때기', '곡식을 되고, 장을 병에 부어요', 0.7);
     for (const u of [4.05, 4.95]) R.add('furn', geo.cyl(0.013, 0.013, 0.09, 6).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), R.wm('S', u, 1.48, 0.045), '#5c3f28', { wall: 'S' });
     K.basket(R, { m: mul(R.wm('S', 4.05, 1.27, 0.045), M(0, 0, 0, 0, 1, 1, 1, PI / 2)), kind: 'sieve', r: 0.17, h: 0.07, wall: 'S' });
@@ -445,7 +448,7 @@
   /** "내 선반": a shelf that shows what the player's own 곳간 holds (G.sys.storage), rebuilt when it changes */
   function liveShelf(ctx, R, o) {
     const x = o.x, z = o.z, ry = o.rotY, w = 2.3, d = 0.5, h = 1.75, levels = 3;
-    const lv = K.shelf(R, { x, z, rotY: ry, w, d, h, levels, back: true, tone: '#6a4630' });
+    const lv = K.shelf(R, { x, z, rotY: ry, w, d, h, levels, back: true, tone: '#965f3e' });
     const bm = M(x, 0, z, ry), slots = [];
     for (let l = levels - 1; l >= 0; l--) for (let k = 0; k < 3; k++) { const p = new THREE.Vector3(-w / 2 + (w * (k + 0.5)) / 3, 0, 0.0).applyMatrix4(bm); slots.push({ x: p.x, y: lv[l].y, z: p.z, l, k }); }
     // the board over the shelf + one atlas texture for the title and the nine tags (redrawn when the 곳간 changes)
@@ -499,7 +502,7 @@
         const s = slots[i], q = Math.max(1, Math.min(1.25, 0.55 + Math.log10(1 + it.qty) * 0.4)), m = M(s.x, s.y, s.z, ry + (rnd() - 0.5) * 0.3);
         const kind = it.kind, colr = it.color, piece = it.piece;
         if (kind === 'jar') {
-          K.pot(T, { m, kind: it.id === 'ITEM_KIMCHI' ? 'jungduri' : 'danji', s: 0.42 * q + 0.1, lid: true, tint: '#5e3b28' });
+          K.pot(T, { m, kind: it.id === 'ITEM_KIMCHI' ? 'jungduri' : 'danji', s: 0.42 * q + 0.1, lid: true, tint: '#855034' });
           T.add('paint', K.geo.slab(0.12, 0.08, 0.004, 0.001), mul(m, M(0, 0.16 * q, 0.13 * q + 0.03)), colr);   // a colour tag
         } else if (kind === 'sack') {
           T.add('cloth', K.pillow(0.34, 0.3 * q, 0.28, 0.5, 0.35, 14), mul(m, M(0, 0.15 * q, 0)), '#d6c9a8');
@@ -609,7 +612,7 @@
     K.basket(R, { x: -3.05, y: sy + 0.03, z: -3.73, r: 0.2, h: 0.24 });
     K.seom(R, { x: -4.45, z: -3.5, s: 0.95, rotY: 0.3 });
     K.seom(R, { x: -3.8, z: -3.55, s: 0.9, rotY: -0.4 });
-    K.pot(R, { kind: 'dok', x: -3.05, z: -3.45, s: 0.82, tint: '#5f3d29' });
+    K.pot(R, { kind: 'dok', x: -3.05, z: -3.45, s: 0.82, tint: '#865235' });
     R.add('paint', geo.disc(0.245, 18), M(-3.05, 0.97, -3.45), '#efe7d0', { cast: false });
     K.doe(R, { x: -3.0, y: 0.975, z: -3.42, rotY: 0.4, fill: 'rice' });
     R.block(-3.75, -3.5, 1.1, 0.42);
@@ -692,7 +695,7 @@
     const mt2 = K.table(R, { x: -1.25, z: 3.55, w: 1.2, d: 0.6, h: 0.5, tone: '#6e4a30' });
     R.add('stone', K.geo.slab(1.05, 0.06, 0.48, 0.012), M(-1.25, mt2.top + 0.03, 3.55), '#b5ae9f');
     const ty = mt2.top + 0.06;
-    [['dok', -1.6, 3.42, 0.24], ['dok', -1.25, 3.42, 0.25], ['jungduri', -0.9, 3.42, 0.23], ['hangari', -1.68, 3.66, 0.18], ['danji', -1.42, 3.68, 0.22], ['hangari', -1.12, 3.67, 0.17], ['danji', -0.84, 3.68, 0.2]].forEach(([kind, x, z, s]) => K.pot(R, { kind, x, y: ty, z, s, lid: true, tint: '#5c3a27', seg: 12 }));
+    [['dok', -1.6, 3.42, 0.24], ['dok', -1.25, 3.42, 0.25], ['jungduri', -0.9, 3.42, 0.23], ['hangari', -1.68, 3.66, 0.18], ['danji', -1.42, 3.68, 0.22], ['hangari', -1.12, 3.67, 0.17], ['danji', -0.84, 3.68, 0.2]].forEach(([kind, x, z, s]) => K.pot(R, { kind, x, y: ty, z, s, lid: true, tint: '#824e32', seg: 12 }));
     R.block(-1.25, 3.55, 0.62, 0.32);
     A('jangdokdae', { x: -1.25, y: ty + 0.35, z: 3.2 });
     plate(R, 'S', 6.25, 1.05, '장독대 모형', '큰 독은 뒤, 작은 독은 앞', 0.6);
@@ -700,12 +703,19 @@
     wallBoard(ctx, R, 'S', 3, 'MG_ONGGI_REGION', '고장마다 다른 옹기', { v: 1.62 });
     const rb = K.table(R, { x: -3.75, z: 3.6, w: 1.5, d: 0.42, h: 0.4, tone: '#6e4a30' });
     [['jungbu', -4.25, '중부'], ['nambu', -3.75, '남부'], ['gyeongsang', -3.25, '경상도']].forEach(([k, x, name]) => {
-      R.add('onggi', K.geo.lathe(REGION[k], 16), M(x, rb.top, 3.6, 0, 0.42), '#5e3c28');
+      R.add('onggi', K.geo.lathe(REGION[k], 16), M(x, rb.top, 3.6, 0, 0.42), '#855134');
       R.label(name, { x, y: rb.top - 0.12, z: 3.6 - 0.215, rotY: PI, w: 0.3, h: 0.11, style: 'paper' });
     });
     R.block(-3.75, 3.6, 0.77, 0.23);
     A('onggi_region', { x: -3.75, y: rb.top + 0.35, z: 3.2 });
 
+    // ---- lived-in: a 지게 leaning by the door, a 싸리비, 짚신, a little straw on the floor
+    K.jige(R, { x: -4.5, z: 2.9, rotY: PI / 2, lean: 0.22 });
+    R.block(-4.6, 2.9, 0.4, 0.35);
+    K.broom(R, { x: -4.75, z: -1.75, rotY: PI / 2 });
+    K.jipsin(R, { x: -3.95, z: 1.45, rotY: 1.2 });
+    K.straw(R, { x: 2.1, z: -3.55, kind: 'bundle', s: 0.8, rotY: 0.6 });
+    K.straw(R, { x: 2.35, z: -3.4, kind: 'bundle', s: 0.75, rotY: -0.2 });
     // ---- light: a 초롱 by the door; dust in the two shafts
     lantern(ctx, R, -4.35, 2.1, 1.3, { top: R.roofY(1.3) + 0.1 });
     K.dust(R, { count: 120 });

@@ -43,7 +43,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
 //       trees(C, quality)      { list: [{ x, y, z, sp, s, rot, src }], counts } every tree of the part
 //       blocked(C, x, z, r, o) true where nothing may grow (roads, paths, pads, rings, fields, buildings, water …)
 //       cars(C)                [{ x, y, z, rot, paint }] + coaches + shuttle spots
-//   G.complexLandscape.stats  after a build: { calls, tris, trees, crowns, … } per family (tests / the developer centre)
+//   G.complexLandscape.stats  after a build: { quality, ms (build time per piece), counts } ; .measure() → { calls, tris,
+//                     families } of what the part draws (an upper bound: everything, frustum ignored)
+//   G.complexLandscape.waterDistance(x, z)  metres from a PL_ALLOT-local point to the river's open water (the ambience)
 // =============================================================================
 (function () {
   'use strict';
@@ -394,7 +396,16 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   }
 
   const plan = { land, trees, blocked, cars, ridgeH, carve, axes: axesOf, outside, polyNear, footprints, SP, SP_NAMES, PAINTS };
-  G.complexLandscape = Object.assign(G.complexLandscape || {}, { plan, version: 1 });
+  /** metres from (x, z) (PL_ALLOT local) to the open water of the river (0 on the water) — for the river's sound */
+  function waterDistance(x, z) {
+    const C = G.data && G.data.complex, river = C && C.byId && C.byId('RIVER');
+    if (!river) return Infinity;
+    const n = polyNear(x, z, river.pts);
+    let d = Math.max(0, n.d - river.w / 2);
+    for (const A of axesOf(C)) if (A.id !== 'E') { const m = polyNear(x, z, A.pts); if (m.s > A.s0) d = Math.min(d, Math.max(0, m.d - river.w / 2)); }
+    return d;
+  }
+  G.complexLandscape = Object.assign(G.complexLandscape || {}, { plan, waterDistance, version: 1 });
 
   // =============================================================================================== 3D (THREE from here on)
   // ------------------------------------------------------------------ GLSL shared by the materials of this part
@@ -1415,7 +1426,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
     // valley; this part's own instanced trees are the fallback when it is not there (or plants nothing)
     let grove = null;
     const nature = G.sys && G.sys.nature;
-    if (nature && typeof nature.grove === 'function') {
+    if (!low && nature && typeof nature.grove === 'function') {      // `low`: this part's own cones / blobs (a few hundred)
       try {
         grove = nature.grove(T.list.map((t) => ({ x: t.x, y: t.y, z: t.z, species: t.kind, scale: t.s, rot: t.rot })), { parent: root, space: 'parent', name: 'cxl-grove', heightAt: hSite, colliders: false });
         if (!grove || typeof grove.dispose !== 'function' || !grove.count) { if (grove && grove.dispose) grove.dispose(); grove = null; }

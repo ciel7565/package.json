@@ -236,8 +236,8 @@
       F('18-places.js', 'buildings', '장소(places): 집 안·단지에 들어가고 나오기 — 문 상호작용·경계/바닥/구역 교체·조명·나가기 칩·저장은 문 앞 자리 (§16.4)'),
       F('19-hanok-kit.js', 'buildings', '한옥 부품 상자(G.hanok): 기단·기둥·보·서까래 뼈대·벽·마루·장판·창살 창호·문·가구·소품·불/김/등잔 효과·실내 조명 (§16.5)'),
       F('27-interiors-a.js', 'buildings', '집 안 ①: 대청마루(PL_DAECHEONG) — 한옥 뼈대·우물마루·들어열개·창살 도감'),
-      F('29-interiors-c.js', 'buildings', '집 안 ③: 부엌(PL_BUEOK) — 부뚜막·아궁이 불·가마솥 김·시루·살강·물두멍·소반·맷돌·절구 · 발효실(PL_BALHYO) — 메주 걸이·누룩·장독 금줄·김칫독·식초·내 장독 판 · 곳간(PL_GOTGAN) — 뒤주·가마니·멍석·농기구·저울·내 선반(진짜 곳간 내용)'), // [rooms-c]
       F('28-interiors-b.js', 'buildings', '집 안 ②: 안방(PL_ANBANG) — 온돌 장판·보료·병풍·장롱·반닫이·경대·다듬잇돌·화로 · 사랑방(PL_SARANG) — 서안·문갑·사방탁자·책장·책거리 병풍·족자·거문고·바둑판'), // [rooms-b]
+      F('29-interiors-c.js', 'buildings', '집 안 ③: 부엌(PL_BUEOK) — 부뚜막·아궁이 불·가마솥 김·시루·살강·물두멍·소반·맷돌·절구 · 발효실(PL_BALHYO) — 메주 걸이·누룩·장독 금줄·김칫독·식초·내 장독 판 · 곳간(PL_GOTGAN) — 뒤주·가마니·멍석·농기구·저울·내 선반(진짜 곳간 내용)'), // [rooms-c]
       F('20-avatar.js', 'player', '3등신 아바타 리그·애니메이션·꾸미기 옵션·아이 모습 6종(presets)'),
       F('21-player.js', 'player', '플레이어 이동·점프·충돌·순간이동·앉기·길 찾기 걷기(walkTo·금빛 발자국)·위치 저장'),
       F('22-camera.js', 'player', '3인칭 카메라(쉬운 모드: 부드러운 카메라)·시네마틱·대화/사진 모드'),
@@ -252,6 +252,7 @@
       F('41-fermentation.js', 'farm', '장독 발효 시뮬레이션·품질 공식·재료 만들기·장독 얼굴 카드(쉬운 모드)'),
       F('42-realfarm.js', 'farm', '실시간 텃밭(진짜 시간으로 자라는 밭 4개)·곳간(300개 보관)·📮 완료 확인·📬 확인 기록장'),
       F('43-allot.js', 'farm', '만장대 분양(G.sys.allot): 내 분양 카드·단지 지도(1만 자리, 겹 캐시)·빈 자리 찾기·어른 확인 뒤 신청·대기·이름표·분양 알림·체험용 지도 (§16.8)'), // [allot-client]
+      F('44-allot-district.js', 'farm', '만장대 단지의 1만 자리 3D(G.sys.allotDistrict): 항아리·밭·창고 칸 인스턴싱(세 단계 상세도)·상태 표시(끈·이름 말뚝·별 깃발)·가까운 자리 고르기·이름표 12개·통로 충돌·현황판 2개·찾아가기 (§16.8)'), // [complex-units]
       F('45-education-data.js', 'edu', '교육 콘텐츠 9종·퀴즈 25개 + 아이용 그림 이야기·그림 퀴즈 (순수 데이터)'),
       F('46-education.js', 'edu', '교육 뷰어·3D 모형·퀴즈·안내판·키오스크·전시'),
       F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소) + 그림 일기(기분·스티커)'),
@@ -287,6 +288,7 @@
       F('41-fermentation.css', 'farm', '장독 창·작업대'),
       F('42-realfarm.css', 'farm', '실시간 텃밭 이름표·밭 카드·곳간·확인 기록장·어른 확인'),
       F('43-allot.css', 'farm', '분양 창·아이 그림 타일·내 분양 카드·지도 상자·범례·신청서'), // [allot-client]
+      F('44-allot-district.css', 'farm', '단지 자리 이름표(코드·이름표·상태)·자리 카드'), // [complex-units]
       F('46-education.css', 'edu', '교육 뷰어·퀴즈·도서관'),
       F('47-journal.css', 'edu', '작업일지'),
       F('49-exhibits.css', 'edu', '전시 카드·집 구경 도감·움직이는 그림 재생기'), // [exhibits]
@@ -1445,6 +1447,8 @@
     { id: 'allot', emoji: '🏺', label: '만장대 분양 (내 항아리)', fn: () => { const f = fnOf(G.sys.allot, 'open'); return f && (() => f('mine')); } },
     { id: 'allotmap', emoji: '🗺️', label: '분양 지도', fn: () => { const f = fnOf(G.sys.allot, 'open'); return f && (() => f('map')); } },
     { id: 'allotinbox', emoji: '🔔', label: '분양 알림', fn: () => { const f = fnOf(G.sys.allot, 'open'); return f && (() => f('inbox')); } },
+    // [complex-units] the small unit card of 만장대 단지 (shown by a tap on a unit when the 분양 panel is missing)
+    { id: 'unitcard', emoji: '🏺', label: '단지 자리 카드', fn: () => { const f = fnOf(G.sys.allotDistrict, 'card'); return f && (() => f('J01-0012')); } },
     // [exhibits] 한옥 전시 (§16.6): the 집 구경 도감, one exhibit card (preview: no stamp is recorded) and the motion player
     { id: 'xbook', emoji: '🏠', label: '집 구경 도감', fn: () => fnOf(G.sys.exhibits, 'openBook') },
     { id: 'xcard', emoji: '🪧', label: '전시 카드', fn: () => { const f = fnOf(G.sys.exhibits, 'open'); const id = firstKey(G.data.exhibits); return f && id ? () => f(id, { preview: true }) : null; } },
@@ -3492,83 +3496,6 @@
       detail: `${type} · 사진 ${tex.length}장(색 5 · 굴곡 3) · 꼭짓점마다 섞는 비율 4개` };
   });
 
-  const Tests = {
-    result: null, running: false, live: null,
-    count: () => TESTS.length,
-    async runAll(opts = {}) {
-      if (this.running) return this._promise;
-      this.running = true;
-      const t0 = perf();
-      const results = [];
-      this.live = { results, done: 0, total: TESTS.length };
-      this._promise = (async () => {
-        let lastGroup = '';
-        // [render-light] opts.only (RegExp | string | fn(test)): run a subset — browser time is scarce on software GL
-        const only = opts.only == null ? null : typeof opts.only === 'function' ? opts.only : ((re) => (t) => re.test(`${t.group} / ${t.name}`))(new RegExp(opts.only));
-        for (const t of TESTS) {
-          if (only && !only(t)) continue;
-          if (t.group !== lastGroup) { lastGroup = t.group; opts.onProgress?.(this.live); await U.nextFrame(); }
-          const s = perf();
-          let status = 'fail', detail = '';
-          try {
-            const r = await t.fn();
-            if (r && typeof r === 'object' && r.skip) { status = 'skip'; detail = r.detail || ''; }
-            else if (r && typeof r === 'object' && 'ok' in r) { status = r.ok ? 'pass' : 'fail'; detail = r.detail || ''; }
-            else status = r ? 'pass' : 'fail';
-          } catch (e) { status = 'fail'; detail = `예외: ${String(e?.message || e).slice(0, 160)}`; }
-          results.push({ group: t.group, name: t.name, status, detail: String(detail).slice(0, 240), ms: perf() - s });
-          this.live.done++;
-        }
-        const r = {
-          at: now(), ms: perf() - t0, total: results.length,
-          passed: results.filter((x) => x.status === 'pass').length,
-          failed: results.filter((x) => x.status === 'fail').length,
-          skipped: results.filter((x) => x.status === 'skip').length,
-          results,
-        };
-        if (!only) this.result = r;   // [render-light] a subset run never replaces the last full result
-        this.running = false;
-        this.live = null;
-        G.log.info('DEV', `self test: ${r.passed}/${r.total} passed, ${r.failed} failed, ${r.skipped} skipped (${r.ms.toFixed(0)} ms)`);
-        G.bus.emit('dev:tests', { passed: r.passed, failed: r.failed, total: r.total });
-        return r;
-      })();
-      try { return await this._promise; } catch (e) { this.running = false; this.live = null; throw e; }
-    },
-  };
-
-  // =========================================================================== diagnostics collectors
-  function glInfo() {
-    const r = G.sys.engine?.renderer;
-    if (!r) return null;
-    if (glInfo._c) return glInfo._c;
-    const gl = r.getContext();
-    const caps = r.capabilities || {};
-    const P = (k) => { try { const v = gl.getParameter(gl[k]); return v && typeof v === 'object' && 'length' in v ? Array.from(v).join(' × ') : v; } catch (e) { return null; } };
-    let vendor = null, renderer = null;
-    try {
-      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-      if (dbg) { vendor = gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL); renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL); }
-    } catch (e) { /* masked */ }
-    const isGL2 = caps.isWebGL2 !== false && typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
-    const attrs = (() => { try { return gl.getContextAttributes() || {}; } catch (e) { return {}; } })();
-    const info = {
-      version: isGL2 ? 'WebGL 2' : 'WebGL 1', webgl1: typeof WebGLRenderingContext !== 'undefined', webgl2: typeof WebGL2RenderingContext !== 'undefined',
-      glVersion: P('VERSION'), shading: P('SHADING_LANGUAGE_VERSION'), vendor: vendor || P('VENDOR'), renderer: renderer || P('RENDERER'), unmasked: !!renderer,
-      maxTexture: P('MAX_TEXTURE_SIZE'), maxCube: P('MAX_CUBE_MAP_TEXTURE_SIZE'), maxRenderbuffer: P('MAX_RENDERBUFFER_SIZE'), maxViewport: P('MAX_VIEWPORT_DIMS'),
-      maxAttribs: P('MAX_VERTEX_ATTRIBS'), maxVUniforms: P('MAX_VERTEX_UNIFORM_VECTORS'), maxFUniforms: P('MAX_FRAGMENT_UNIFORM_VECTORS'),
-      maxTexUnits: P('MAX_TEXTURE_IMAGE_UNITS'), maxCombinedUnits: P('MAX_COMBINED_TEXTURE_IMAGE_UNITS'),
-      maxSamples: isGL2 ? P('MAX_SAMPLES') : null, max3D: isGL2 ? P('MAX_3D_TEXTURE_SIZE') : null, maxDrawBuffers: isGL2 ? P('MAX_DRAW_BUFFERS') : null,
-      anisotropy: caps.getMaxAnisotropy ? caps.getMaxAnisotropy() : caps.maxAnisotropy, precision: caps.precision, logDepth: !!caps.logarithmicDepthBuffer,
-      antialias: !!attrs.antialias, powerPreference: attrs.powerPreference || '-', alpha: !!attrs.alpha,
-      extensions: (gl.getSupportedExtensions?.() || []).slice().sort(),
-    };
-    glInfo._c = info;
-    return info;
-  }
-  function rendererStats() {
-    const r = G.sys.engine?.renderer;
-    if (!r) return null;
   // [render-nature] ---- 나무·풀·바위 (CONTRACT §16.2): 진짜 같은 식생은 중간·높음에서만, 낮음은 예전 그대로
   T('🌲 나무와 풀', '낮음은 예전 나무 그대로, 중간·높음은 가지 뼈대에 잎 카드를 단 나무예요', () => {
     const N = G.sys.nature, q = G.sys.engine?.quality;
@@ -3669,6 +3596,83 @@
       detail: `풀 ${g.geometry.instanceCount.toLocaleString()}포기 (포기마다 잎 카드 3장) · 한 번에 그려요 · 가장자리는 겹침 표본으로 부드럽게, 없으면 잘라내기` };
   });
 
+  const Tests = {
+    result: null, running: false, live: null,
+    count: () => TESTS.length,
+    async runAll(opts = {}) {
+      if (this.running) return this._promise;
+      this.running = true;
+      const t0 = perf();
+      const results = [];
+      this.live = { results, done: 0, total: TESTS.length };
+      this._promise = (async () => {
+        let lastGroup = '';
+        // [render-light] opts.only (RegExp | string | fn(test)): run a subset — browser time is scarce on software GL
+        const only = opts.only == null ? null : typeof opts.only === 'function' ? opts.only : ((re) => (t) => re.test(`${t.group} / ${t.name}`))(new RegExp(opts.only));
+        for (const t of TESTS) {
+          if (only && !only(t)) continue;
+          if (t.group !== lastGroup) { lastGroup = t.group; opts.onProgress?.(this.live); await U.nextFrame(); }
+          const s = perf();
+          let status = 'fail', detail = '';
+          try {
+            const r = await t.fn();
+            if (r && typeof r === 'object' && r.skip) { status = 'skip'; detail = r.detail || ''; }
+            else if (r && typeof r === 'object' && 'ok' in r) { status = r.ok ? 'pass' : 'fail'; detail = r.detail || ''; }
+            else status = r ? 'pass' : 'fail';
+          } catch (e) { status = 'fail'; detail = `예외: ${String(e?.message || e).slice(0, 160)}`; }
+          results.push({ group: t.group, name: t.name, status, detail: String(detail).slice(0, 240), ms: perf() - s });
+          this.live.done++;
+        }
+        const r = {
+          at: now(), ms: perf() - t0, total: results.length,
+          passed: results.filter((x) => x.status === 'pass').length,
+          failed: results.filter((x) => x.status === 'fail').length,
+          skipped: results.filter((x) => x.status === 'skip').length,
+          results,
+        };
+        if (!only) this.result = r;   // [render-light] a subset run never replaces the last full result
+        this.running = false;
+        this.live = null;
+        G.log.info('DEV', `self test: ${r.passed}/${r.total} passed, ${r.failed} failed, ${r.skipped} skipped (${r.ms.toFixed(0)} ms)`);
+        G.bus.emit('dev:tests', { passed: r.passed, failed: r.failed, total: r.total });
+        return r;
+      })();
+      try { return await this._promise; } catch (e) { this.running = false; this.live = null; throw e; }
+    },
+  };
+
+  // =========================================================================== diagnostics collectors
+  function glInfo() {
+    const r = G.sys.engine?.renderer;
+    if (!r) return null;
+    if (glInfo._c) return glInfo._c;
+    const gl = r.getContext();
+    const caps = r.capabilities || {};
+    const P = (k) => { try { const v = gl.getParameter(gl[k]); return v && typeof v === 'object' && 'length' in v ? Array.from(v).join(' × ') : v; } catch (e) { return null; } };
+    let vendor = null, renderer = null;
+    try {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) { vendor = gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL); renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL); }
+    } catch (e) { /* masked */ }
+    const isGL2 = caps.isWebGL2 !== false && typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+    const attrs = (() => { try { return gl.getContextAttributes() || {}; } catch (e) { return {}; } })();
+    const info = {
+      version: isGL2 ? 'WebGL 2' : 'WebGL 1', webgl1: typeof WebGLRenderingContext !== 'undefined', webgl2: typeof WebGL2RenderingContext !== 'undefined',
+      glVersion: P('VERSION'), shading: P('SHADING_LANGUAGE_VERSION'), vendor: vendor || P('VENDOR'), renderer: renderer || P('RENDERER'), unmasked: !!renderer,
+      maxTexture: P('MAX_TEXTURE_SIZE'), maxCube: P('MAX_CUBE_MAP_TEXTURE_SIZE'), maxRenderbuffer: P('MAX_RENDERBUFFER_SIZE'), maxViewport: P('MAX_VIEWPORT_DIMS'),
+      maxAttribs: P('MAX_VERTEX_ATTRIBS'), maxVUniforms: P('MAX_VERTEX_UNIFORM_VECTORS'), maxFUniforms: P('MAX_FRAGMENT_UNIFORM_VECTORS'),
+      maxTexUnits: P('MAX_TEXTURE_IMAGE_UNITS'), maxCombinedUnits: P('MAX_COMBINED_TEXTURE_IMAGE_UNITS'),
+      maxSamples: isGL2 ? P('MAX_SAMPLES') : null, max3D: isGL2 ? P('MAX_3D_TEXTURE_SIZE') : null, maxDrawBuffers: isGL2 ? P('MAX_DRAW_BUFFERS') : null,
+      anisotropy: caps.getMaxAnisotropy ? caps.getMaxAnisotropy() : caps.maxAnisotropy, precision: caps.precision, logDepth: !!caps.logarithmicDepthBuffer,
+      antialias: !!attrs.antialias, powerPreference: attrs.powerPreference || '-', alpha: !!attrs.alpha,
+      extensions: (gl.getSupportedExtensions?.() || []).slice().sort(),
+    };
+    glInfo._c = info;
+    return info;
+  }
+  function rendererStats() {
+    const r = G.sys.engine?.renderer;
+    if (!r) return null;
     const i = r.info || {};
     return { calls: i.render?.calls || 0, triangles: i.render?.triangles || 0, points: i.render?.points || 0, lines: i.render?.lines || 0, geometries: i.memory?.geometries || 0, textures: i.memory?.textures || 0, programs: (i.programs || []).length, frame: i.render?.frame || 0 };
   }

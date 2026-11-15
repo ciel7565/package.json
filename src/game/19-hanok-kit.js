@@ -2316,7 +2316,7 @@
         }
         const pt = v3(m, u, top, pz);
         out.pots.push({ x: pt.x, y: pt.y, z: pt.z, s, top });
-        steam(R, { x: pt.x, y: pt.y + 0.02, z: pt.z, s: p.siru ? 0.85 : 0.7, count: p.siru ? 16 : 10, life: 3.6 });
+        steam(R, { x: pt.x, y: pt.y + 0.02, z: pt.z, s: p.siru ? 0.5 : 0.42, count: p.siru ? 20 : 14, life: 3.4 });
       }
       // 조왕중발: a small bowl of clean water set on the 부뚜막 for the kitchen spirit (a calm old custom)
       if (o.jowang !== false) {
@@ -2412,14 +2412,14 @@
     }
 
     // ---------------------------------------------------------------- 메주 · 누룩 · 금줄 · 김칫독
-    const MEJU = ['#c49c62', '#b98f55', '#caa66e', '#ad8650', '#bf9a63'];
+    const MEJU = ['#c2a57c', '#b59a72', '#c9ad86', '#a98f68', '#bca07a'];
     function mejuBlock(T, m, rnd, o) {
-      const bw = 0.2 + rnd() * 0.03, bh = 0.15 + rnd() * 0.02, bd = 0.13 + rnd() * 0.015;
+      const bw = 0.24 + rnd() * 0.03, bh = 0.18 + rnd() * 0.02, bd = 0.15 + rnd() * 0.015;
       T.add('clay', pillow(bw, bh, bd, 0.32, 0.4, 14), m, MEJU[Math.floor(rnd() * MEJU.length)], o);
       // straw ties round it in a cross
       const tie = (rx, ry, sx, sy) => { const g = new THREE.TorusGeometry(1, 0.06, 4, 16); g.scale(sx, sy, 0.12); if (rx) rX(g, rx); if (ry) rY(g, ry); return g; };
-      T.add('straw', tie(PI / 2, 0, bw / 2 + 0.004, bd / 2 + 0.004), m, '#b9984f', o);
-      T.add('straw', tie(0, PI / 2, bd / 2 + 0.004, bh / 2 + 0.004), m, '#b9984f', o);
+      T.add('straw', tie(PI / 2, 0, bw / 2 + 0.004, bd / 2 + 0.004), m, '#e6cf92', o);
+      T.add('straw', tie(0, PI / 2, bd / 2 + 0.004, bh / 2 + 0.004), m, '#e6cf92', o);
       return { bw, bh, bd };
     }
     function mejuRack(R, o = {}) {
@@ -2439,10 +2439,10 @@
         const Sa = sway(R, { x: pv.x, y: pv.y, z: pv.z, amp: 0.05, speed: 0.48 + ri * 0.11, axis }), Sb = sway(R, { x: pv.x, y: pv.y, z: pv.z, amp: 0.042, speed: 0.57 + ri * 0.09, axis });
         for (let k = 0; k < per; k++) {
           const S = k % 2 ? Sb : Sa, u = -w / 2 + 0.24 + ((w - 0.48) * k) / Math.max(1, per - 1) + (R.rnd() - 0.5) * 0.04;
-          const len = 0.2 + R.rnd() * 0.1, top = y - 0.025, cy = top - len - 0.08;
-          const pa = v3(m, u, top, 0), pb = v3(m, u, cy + 0.07, 0);
+          const len = 0.16 + R.rnd() * 0.1, top = y - 0.025, cy = top - len - 0.1;
+          const pa = v3(m, u, top, 0), pb = v3(m, u, cy + 0.09, 0);
           S.add('straw', geo.tube(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, 0.0065, 4), null, '#c4a35d');
-          S.add('straw', new THREE.SphereGeometry(0.016, 5, 4), mul(m, M(u, cy + 0.085, 0)), '#b9984f');
+          S.add('straw', new THREE.SphereGeometry(0.018, 5, 4), mul(m, M(u, cy + 0.1, 0)), '#d6bc7c');
           mejuBlock(S, mul(m, M(u, cy, 0, (R.rnd() - 0.5) * 0.5)), R.rnd);
           spots.push(v3(m, u, cy, 0.12));
         }
@@ -2514,7 +2514,7 @@
       const top = BK.jarTop(kind);
       for (const p of pr) { if (p[1] > top * 0.7 && p[1] < top * 0.97 && (neck === pr[0] || p[0] < neck[0])) neck = p; if (p[0] > belly[0]) belly = p; }
       const ny = num(o.ny, neck[1] - 0.01), nr = num(o.nr, neck[0] + 0.012);
-      R.add('straw', new THREE.TorusGeometry(nr, 0.013, 5, 30).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, ny, 0)), '#c4a258', o);
+      R.add('straw', new THREE.TorusGeometry(nr, 0.02, 6, 30).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, ny, 0)), '#c4a258', o);
       R.add('straw', new THREE.TorusGeometry(nr + 0.006, 0.008, 4, 30).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, ny - 0.014, 0, 0.3)), '#d6b770', { ...o, cast: false });
       // tucked into the rope: 숯 and 고추 in turn, round the front half
       const n = num(o.n, 8);
@@ -2525,7 +2525,7 @@
           const g = KG.lathe([[0, 0], [0.012, 0.02], [0.016, 0.07], [0.013, 0.1], [0.006, 0.11], [0, 0.11]], 8); rX(g, PI);
           R.add('paint', g, mul(pm, M(0, 0.03, 0.014, 0, 1, 1, 1, 0.12)), '#9d1d17', o);
           R.add('paint', geo.cyl(0.004, 0.004, 0.025, 4), mul(pm, M(0, 0.04, 0.014)), '#4f5a2a', { ...o, cast: false });
-        } else R.add('paint', new THREE.DodecahedronGeometry(0.03, 0).scale(1.2, 0.8, 0.7), mul(pm, M(0, 0.0, 0.02, 0.4)), '#1c1a19', o);
+        } else R.add('paint', new THREE.DodecahedronGeometry(0.04, 0).scale(1.2, 0.8, 0.7), mul(pm, M(0, -0.01, 0.025, 0.4)), '#1c1a19', o);
       }
       // the 버선본: a paper sock cut from 한지, stuck upside down on the belly
       const by = num(o.by, belly[1] - 0.06), br = belly[0] + 0.004, ba = num(o.beoseonA, 0);
@@ -2577,7 +2577,7 @@
     }
     function gamani(T, m, o) {
       T.add('straw', pillow(0.92, 0.34, 0.56, 0.36, 0.55, 18), m, o?.tint || (T.rnd() < 0.5 ? '#d3b878' : '#c8ab68'), o);
-      for (const sx of [-0.3, 0.3]) T.add('straw', new THREE.TorusGeometry(1, 0.05, 4, 16).scale(0.18, 0.29, 0.25).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(sx, 0, 0)), '#b18f4a', { ...o, cast: false });
+      for (const sx of [-0.3, 0.3]) T.add('straw', new THREE.TorusGeometry(1, 0.05, 4, 16).scale(0.29, 0.178, 1).applyMatrix4(new THREE.Matrix4().makeRotationY(PI / 2)), mul(m, M(sx, 0, 0)), '#b18f4a', { ...o, cast: false });
     }
     function gamaniStack(R, o = {}) {
       const rows = o.rows || [3, 2, 1], m = base(R, o);
@@ -2805,7 +2805,34 @@
       return mesh;
     }
 
+    /** 지게: an A-frame carrier leaning on a wall (two legs, rungs, the 등태 pad, straps); m = its foot, leaning towards -Z */
+    function jige(R, o = {}) {
+      const m = mul(base(R, o), M(0, 0, 0, 0, 1, 1, 1, -num(o.lean, 0.2))), tn = o.tint || '#8b6a48';
+      for (const sx of [-1, 1]) {
+        R.add('furn', geo.tube(sx * 0.2, 0, 0, sx * 0.13, 1.45, 0.02, 0.026, 7), m, tn, o);
+        R.add('furn', geo.tube(sx * 0.2, 0.55, 0, sx * 0.21, 0.72, 0.36, 0.022, 6), m, tn, o);   // the 가지 (prongs)
+      }
+      for (const y of [0.3, 0.62, 0.95, 1.25]) { const w = 0.4 - y * 0.05; R.add('furn', geo.tube(-w / 2, y, 0.005, w / 2, y, 0.005, 0.015, 6), m, '#6f5034', o); }
+      R.add('straw', K.pillow(0.3, 0.32, 0.06, 0.4, 0.4, 10), mul(m, M(0, 0.85, -0.04)), '#cdb070', o);
+      for (const sx of [-0.1, 0.1]) R.add('straw', geo.tube(sx, 1.2, -0.03, sx * 1.4, 0.45, -0.1, 0.012, 4), m, '#b39550', { ...o, cast: false });
+      R.add('furn', geo.tube(0.32, 0, 0.25, 0.25, 1.05, 0.05, 0.02, 6), mul(base(R, o), M()), '#6a4a30', o);   // the 작대기 (prop stick)
+    }
+    /** 싸리비 (a broom of bush clover twigs) leaning, and a pair of 짚신 on the floor */
+    function broom(R, o = {}) {
+      const m = mul(base(R, o), M(0, 0, 0, 0, 1, 1, 1, -num(o.lean, 0.22)));
+      R.add('furn', geo.cyl(0.018, 0.02, 0.75, 6), mul(m, M(0, 0.62, 0)), '#8a6a44', o);
+      R.add('straw', KG.lathe([[0, 0], [0.15, 0], [0.08, 0.28], [0.035, 0.32], [0, 0.33]], 10), mul(m, M(0, 0, 0, 0, 1, 1, 0.35)), '#a88b55', o);
+      R.add('straw', new THREE.TorusGeometry(0.04, 0.008, 4, 10).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(0, 0.27, 0)), '#7a5e34', { ...o, cast: false });
+    }
+    function jipsin(R, o = {}) {
+      const m = base(R, o);
+      for (const sx of [-0.07, 0.07]) {
+        R.add('straw', K.pillow(0.1, 0.035, 0.26, 0.5, 0.7, 10), mul(m, M(sx, 0.018, (sx > 0 ? 0.03 : 0), sx * 0.6)), '#d4b874', o);
+        R.add('straw', new THREE.TorusGeometry(0.035, 0.007, 4, 10).applyMatrix4(new THREE.Matrix4().makeRotationX(PI / 2)), mul(m, M(sx, 0.04, (sx > 0 ? 0.03 : 0) - 0.03, sx * 0.6)), '#b89a58', { ...o, cast: false });
+      }
+    }
     Object.assign(K, {
+      jige, broom, jipsin,
       sway, pillow, buttumak, salgang, chanjang, mulDumeong, dongi, mejuBlock, mejuRack, mejuBed, nurukTray, nurukRack, geumjul,
       kimchiPit, dwiju, gamani, gamaniStack, seom, meongseok, farmTool, jeoul, doe, jangjak, gongi, jori, siraegi, gochu, maneul,
       corn, herbs, soot, strawBed, bowl: bowlAt,

@@ -195,6 +195,13 @@ body.easy .al-zbtn, body.easy .al-zarrow { width: 56px; height: 56px; font-size:
 body.easy .al-kinds button, body.easy .al-freeonly, body.easy .al-acts .btn, body.easy .al-more, body.easy .al-care summary { min-height: 56px; }
 body.easy .al-legend { font-size: .86rem; }
 body.easy .al-mapbox { height: clamp(240px, calc(100vh - 360px), 560px); }
+/* easy mode: every button of the panel ≥ 56 px and no text under 16 px (kid audit) */
+body.easy .al-panel .btn, body.easy .al-panel .btn-sm { min-height: 56px; font-size: max(16px, 1.02rem); border-radius: 16px; padding-inline: 1rem; }
+body.easy .al-panel, body.easy .al-panel p, body.easy .al-dim, body.easy .al-code, body.easy .al-panel .chip, body.easy .al-period, body.easy .al-status,
+body.easy .al-step-label, body.easy .al-tl li, body.easy .al-care-list li, body.easy .al-care-list li small, body.easy .al-noti p, body.easy .al-noti small,
+body.easy .al-zname, body.easy .al-uc-info p, body.easy .al-uc-log small, body.easy .al-step small, body.easy .al-demo, body.easy .al-guide-steps p,
+body.easy .al-note, body.easy .al-kinds button, body.easy .al-legend.al-legend-map, body.easy .al-np-tag, body.easy .al-care summary { font-size: max(16px, 1rem); }
+body.easy .al-step { min-width: 4.4rem; }
 
 /* ---- phones */
 @media (max-width: 560px) {

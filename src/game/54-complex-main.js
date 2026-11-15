@@ -48,14 +48,14 @@ CX.add('main', (ctx, C) => {
 
   // ---------------------------------------------------------------- section
   const y0 = E.y, P = y0 + (E.podium || 1.2);
-  const H1 = 5.0, H2 = 4.6, T1 = P + H1, T2 = T1 + H2;
+  const H0 = 4.4, H1 = 4.8, H2 = 4.4, T0 = P + H0, T1 = T0 + H1, T2 = T1 + H2;   // stone base storey, two glass storeys
   const SET = 2.8;                                                   // 3F set back behind the 2F wall line
   const cx = (core.x0 + core.x1) / 2, cz = (core.z0 + core.z1) / 2, chw = (core.x1 - core.x0) / 2, chd = (core.z1 - core.z0) / 2;
   const hw3 = chw - SET, hd3 = chd - SET;
   const coreTop = P + (core.h || 15.8);
   const wingTop = P + (wingW.h || 9.0);
-  const porTop = P + (por.h || 6.0);
-  const COL = { timber: '#b4794a', beam: '#8c5a36', band: '#6f4a30', dark: '#4e3322', stone: '#d3cdc1', coping: '#e2ddd3', plinth: '#b9b2a6', deck: '#c9986a', glassFrame: '#3b3a37', rail: '#7a4f30' };
+  const porTop = P + (por.h || 4.8);
+  const COL = { timber: '#d3a578', beam: '#b0815a', band: '#8a6243', dark: '#5e4330', stone: '#d6d1c6', coping: '#e6e2d9', plinth: '#bdb6aa', deck: '#d0a57a', glassFrame: '#3b3a37', rail: '#9a6c48' };
 
   // ---------------------------------------------------------------- groups and bookkeeping
   const root = new THREE_.Group(); root.name = 'complex-main';
@@ -184,7 +184,7 @@ CX.add('main', (ctx, C) => {
       vec2 id = vec2(ci, vRoom2.y);
       float r1 = cmH(id), r2 = cmH(id + 17.13), r3 = cmH(id + 31.71), r4 = cmH(id + 5.37);
       // mullions (three panes per bay) and a transom
-      float pw = W / 3.0;
+      float pw = W / 4.0;
       float mu = abs(fract(fu / pw + 0.5) - 0.5) * pw;
       float tr = abs(fv - min(2.75, FH * 0.66));
       float aw = max(fwidth(vRP.x) + fwidth(vRP.z), 1e-4), ah = max(fwidth(vRP.y), 1e-4);
@@ -206,7 +206,7 @@ CX.add('main', (ctx, C) => {
         float boards = 0.92 + 0.08 * step(0.5, fract(h.x / 0.3));
         col = vec3(0.78, 0.62, 0.45) * boards * 0.55 + lamp * vec3(4.2, 3.3, 2.2);
       } else if (t == ty) {                              // floor: stone in the lobby, wood upstairs, pools of light
-        vec3 fa = vRoom2.x > 8.0 ? vec3(0.66, 0.62, 0.55) : vec3(0.46, 0.31, 0.19);
+        vec3 fa = vRoom2.x > 8.0 ? vec3(0.66, 0.63, 0.58) : vec3(0.52, 0.40, 0.29);
         float joint = vRoom2.x > 8.0 ? step(0.04, fract(h.x / 1.2)) * step(0.04, fract(h.z / 1.2)) : (0.9 + 0.1 * step(0.5, fract(h.z / 0.18)));
         col = fa * (0.75 + 0.25 * joint) * (0.8 + 0.7 * pool);
       } else if (t == tz) {                              // back wall: plaster, a display wall, shelves of jars
@@ -261,15 +261,15 @@ CX.add('main', (ctx, C) => {
       G.world.addNightMaterial(m, 0.55, 0.05); nightMats.push(m);
       return m;
     }
-    const m = own(new THREE_.MeshStandardMaterial({ color: 0x0c1215, roughness: 0.05, metalness: 0.08, emissive: new THREE_.Color(1, 1, 1), envMapIntensity: 1.35 }));
-    m.userData.cmUniforms = { uCmDay: { value: 0.32 }, uCmNight: { value: 1.25 } };
+    const m = own(new THREE_.MeshStandardMaterial({ color: 0x1d2c34, roughness: 0.045, metalness: 0.22, emissive: new THREE_.Color(1, 1, 1), envMapIntensity: 1.9 }));
+    m.userData.cmUniforms = { uCmDay: { value: 0.2 }, uCmNight: { value: 1.25 } };
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, m.userData.cmUniforms);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + GLASS_VS_HEAD).replace('#include <begin_vertex>', '#include <begin_vertex>\n' + GLASS_VS_BODY);
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', '#include <common>\n' + GLASS_FS_HEAD)
-        .replace('#include <map_fragment>', '#include <map_fragment>\n vec3 cmInt = cmInterior();\n diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.042, 0.04), cmMull);')
-        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.42, cmMull);')
+        .replace('#include <map_fragment>', '#include <map_fragment>\n vec3 cmInt = cmInterior();\n diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.43, 0.43), cmMull);')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.38, cmMull);')
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
           {
             float cmNoV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
@@ -304,11 +304,11 @@ CX.add('main', (ctx, C) => {
     }
   }
   /** horizontal band (창방 / slab edge) along a face */
-  function band(F, y, h, d, off, tint, s0 = 0, s1 = F.L, Bk = Bb) {
+  function band(F, y, h, d, off, tint, s0 = 0, s1 = F.L, Bk = Bb, key = 'wood') {
     const len = s1 - s0;
     if (len < 0.2) return;
     const [x, z] = at(F, s0 + len / 2, off);
-    Bk.add('wood', geo.box(len, h, d, 'grain'), M(x, y, z, F.ry), tint);
+    Bk.add(key, geo.box(len, h, d, key === 'wood' ? 'grain' : 'world'), M(x, y, z, F.ry), tint);
   }
   /** 익공 bracket at a column head: cap block, a cantilevered arm out of the wall and two 소로 blocks */
   function bracket(x, z, nx, nz, yTop, scale = 1) {
@@ -491,18 +491,37 @@ CX.add('main', (ctx, C) => {
     columns(F, Math.round(F.L / cw), yb, yt, colSize, colTint, inCut);
     return cw;
   }
-  // core 1F / 2F
+  /** the stone-clad base storey: a recessed glass band behind granite piers, a sill course and a lintel course (punched
+   *  windows as in the picture); cuts = openings without piers (the entrance, the side door) */
+  function baseStorey(F, cuts) {
+    const cw = bayOf(F.L, 4.1), seed = seedN++, nb = Math.round(F.L / cw);
+    for (const [s0, s1] of runsOf(F, cuts)) {
+      const [x0, z0] = at(F, s0), [x1, z1] = at(F, s1);
+      glassRun(x0, z0, x1, z1, F.nx, F.nz, P, T0, cw, ROOM_D[1], seed, 0.42);
+      band(F, P + 0.45, 0.9, 0.62, 0.0, COL.stone, s0, s1, Bb, 'stone');                // sill wall
+      band(F, T0 - 0.62, 1.24, 0.7, 0.02, COL.stone, s0, s1, Bb, 'stone');              // lintel wall
+      band(F, T0 + 0.06, 0.16, 0.86, 0.1, COL.coping, s0, s1, Bb, 'stone');            // cornice
+    }
+    const inCut = (sv) => cuts.some(([a, b]) => sv > a - 0.6 && sv < b + 0.6);
+    for (let i = 0; i <= nb; i++) {
+      const sv = (F.L * i) / nb;
+      if (inCut(sv)) continue;
+      const w = i === 0 || i === nb ? 1.4 : 1.15;
+      const [x, z] = at(F, Math.min(F.L - w / 2, Math.max(w / 2, sv)), 0.02);
+      Bb.add('stone', geo.box(w, T0 - P - 0.02, 0.72, 'world', x + z), M(x, (P + T0) / 2, z, F.ry), COL.stone);
+    }
+  }
+  // core: base storey + two glass storeys
   for (const key of ['S', 'E', 'N', 'W']) {
     const F = coreFaces[key];
     const cov = wingCover(F);
-    storey(F, P, T1, ROOM_D[1], key === 'S' ? cov.concat([[doorS0, doorS1]]) : cov, 0.5, COL.timber);
-    storey(F, T1, T2, ROOM_D[2], cov, 0.46, COL.timber);
-    for (const [s0, s1] of runsOf(F, cov)) {
-      band(F, T1, 0.62, 0.62, 0.12, COL.band, s0, s1);                       // the 2F slab edge
-      band(F, T2 - 0.18, 0.5, 0.5, 0.1, COL.beam, s0, s1);                   // 창방
-      band(F, T2 + 0.16, 0.24, 0.66, 0.16, COL.band, s0, s1);                // 평방
-      band(F, P + 0.12, 0.24, 0.42, 0.06, COL.dark, s0, s1);                 // sill
-    }
+    baseStorey(F, key === 'S' ? cov.concat([[doorS0, doorS1]]) : cov);
+    storey(F, T0, T1, ROOM_D[1], cov, 0.52, COL.timber);
+    storey(F, T1, T2, ROOM_D[2], [], 0.48, COL.timber);
+    for (const [s0, s1] of runsOf(F, cov)) band(F, T0 + 0.3, 0.42, 0.5, 0.14, COL.band, s0, s1);   // 창방 over the stone
+    band(F, T1, 0.62, 0.62, 0.12, COL.band);                                  // the slab edge between the glass storeys
+    band(F, T2 - 0.18, 0.5, 0.5, 0.1, COL.beam);                              // 창방
+    band(F, T2 + 0.16, 0.24, 0.66, 0.16, COL.band);                           // 평방
   }
   // the entrance: a timber portal, glass leaves, a lit header (the door into the lobby)
   {
@@ -514,7 +533,7 @@ CX.add('main', (ctx, C) => {
     for (let i = 1; i < 4; i++) beamBox(Bb, 0.1, DOOR.h, 0.16, DOOR.x - DOOR.w / 2 + (DOOR.w * i) / 4, P + DOOR.h / 2, zf - 0.06, 0, COL.dark);
     if (!low) box(Bn, 'glow', DOOR.w - 0.2, 0.08, 0.3, DOOR.x, P + DOOR.h + 0.02, zf + 0.35, 0, '#ffffff');
     // the glass above the door (the 1F's upper part)
-    glassRun(DOOR.x - DOOR.w / 2, zf, DOOR.x + DOOR.w / 2, zf, 0, 1, P + DOOR.h + 0.55, T1, DOOR.w, ROOM_D[1], 99);
+    glassRun(DOOR.x - DOOR.w / 2, zf, DOOR.x + DOOR.w / 2, zf, 0, 1, P + DOOR.h + 0.55, T0, DOOR.w, ROOM_D[1], 99);
     void F;
     if (!low) for (const sx of [-0.3, 0.3]) box(Bn, 'metal', 0.05, 1.3, 0.08, DOOR.x + sx, P + 1.1, zf + 0.06, 0, '#c9a45a');
   }
@@ -529,12 +548,11 @@ CX.add('main', (ctx, C) => {
     for (const F of Object.values(faces)) {
       const sideDoor = !west && F === faces.E;
       const dS = sideDoor ? W.z1 - (E.doors?.[1]?.z ?? -16) : 0;
-      storey(F, P, T1, ROOM_D[1], sideDoor ? [[dS - 1.8, dS + 1.8]] : [], 0.46, COL.timber);
-      storey(F, T1, wingTop, ROOM_D[2], [], 0.42, COL.timber);
-      band(F, T1, 0.6, 0.6, 0.12, COL.band);
+      baseStorey(F, sideDoor ? [[dS - 1.8, dS + 1.8]] : []);
+      storey(F, T0, wingTop, ROOM_D[1], [], 0.46, COL.timber);
+      band(F, T0 + 0.3, 0.42, 0.5, 0.14, COL.band);
       band(F, wingTop - 0.16, 0.46, 0.46, 0.1, COL.beam);
       band(F, wingTop + 0.14, 0.22, 0.6, 0.14, COL.band);
-      band(F, P + 0.12, 0.24, 0.42, 0.06, COL.dark);
     }
   }
   // the side door to the corridor (east wing, east face)
@@ -545,15 +563,14 @@ CX.add('main', (ctx, C) => {
     for (const sz of [-1, 1]) beamBox(Bb, 0.7, 3.2, 0.5, xf + 0.15, P + 1.6, zc + sz * 1.85, 0, COL.timber);
     glassRun(xf, zc + 1.6, xf, zc - 1.6, 1, 0, P, P + 3.1, 1.6, ROOM_D[1], 96, 0.18);
     beamBox(Bb, 0.16, 3.1, 0.1, xf - 0.05, P + 1.55, zc, 0, COL.dark);
-    glassRun(xf, zc + 1.8, xf, zc - 1.8, 1, 0, P + 3.65, T1, 3.6, ROOM_D[1], 98);
+    glassRun(xf, zc + 1.8, xf, zc - 1.8, 1, 0, P + 3.65, T0, 3.6, ROOM_D[1], 98);
   }
   // core 3F (set back) — floor deck over the skirt with its balustrade, round columns, glass
   const sk = { mode: 'skirt', hw: chw, hd: chd, ov: 2.5, out: 0.75, lift: 0.62, t: 0.4, rise: 14, vres: 1.4, seg: 0.8, tint: '#f2f3f4' };
   sk.vs = 1 - hd3 / (chd + sk.ov);
   sk.y = K.roofBaseFor(sk, T2 + 0.45);
   const skR = roofMath(sk);
-  const F3 = skR.fy(0, sk.vs) + 0.32;                                       // the 3F floor just above the skirt's top edge
-  const f3 = {
+  const F3 = skR.fy(0, sk.vs) + 0.32;                                     const f3 = {
     S: faceOf(cx - hw3, cz + hd3, cx + hw3, cz + hd3), E: faceOf(cx + hw3, cz + hd3, cx + hw3, cz - hd3),
     N: faceOf(cx + hw3, cz - hd3, cx - hw3, cz - hd3), W: faceOf(cx - hw3, cz - hd3, cx - hw3, cz + hd3),
   };
@@ -593,33 +610,32 @@ CX.add('main', (ctx, C) => {
       band(F, F3 + 0.1, 0.2, 0.36, 0.05, COL.dark);
     }
   }
-  // core / wing 2F balconies along the front (not where the portico stands)
+  // balconies along the front: the core's upper glass storey (not where the portico roof stands), the wings over their stone base
   {
-    const DK = 1.45, y = T1 + 0.31;
-    const runs = [[wingW.x0, por.x0 - 2.5], [por.x1 + 2.5, wingE.x1]];
-    for (const [xa, xb] of runs) {
-      for (const [x0, x1, zf] of [[xa, Math.min(xb, core.x0), wingW.z1], [Math.max(xa, core.x0), Math.min(xb, core.x1), core.z1], [Math.max(xa, core.x1), xb, wingE.z1]]) {
-        if (x1 - x0 < 0.5) continue;
-        box(Bb, 'plank', x1 - x0, 0.22, DK, (x0 + x1) / 2, y - 0.11, zf + DK / 2, 0, COL.deck);
-        beamBox(Bb, x1 - x0 + 0.05, 0.3, 0.18, (x0 + x1) / 2, y - 0.16, zf + DK, 0, COL.band);
-        railing(x0 + 0.05, zf + DK - 0.08, x1 - 0.05, zf + DK - 0.08, y);
-        for (const xe of [x0, x1]) {
-          if ((xe === wingW.x0 && x0 === wingW.x0) || (xe === wingE.x1 && x1 === wingE.x1) || Math.abs(xe - por.x0 + 2.5) < 0.01 || Math.abs(xe - por.x1 - 2.5) < 0.01) railing(xe, zf + 0.05, xe, zf + DK - 0.08, y);
-        }
-        if (!low) {
-          const n = Math.max(1, Math.round((x1 - x0) / 4.1));
-          for (let i = 0; i <= n; i++) Bn.add('wood', geo.beam(x0 + ((x1 - x0) * i) / n, y - 1.25, zf + 0.06, x0 + ((x1 - x0) * i) / n, y - 0.2, zf + DK * 0.7, 0.14, 0.16), I4, COL.beam);
-        }
+    const DK = 1.45;
+    const segs = [
+      [core.x0, por.x0 - 2.5, core.z1, T1 + 0.31], [por.x1 + 2.5, core.x1, core.z1, T1 + 0.31],
+      [wingW.x0, wingW.x1, wingW.z1, T0 + 0.36], [wingE.x0, wingE.x1, wingE.z1, T0 + 0.36],
+    ];
+    for (const [x0, x1, zf, y] of segs) {
+      if (x1 - x0 < 0.5) continue;
+      box(Bb, 'plank', x1 - x0, 0.22, DK, (x0 + x1) / 2, y - 0.11, zf + DK / 2, 0, COL.deck);
+      beamBox(Bb, x1 - x0 + 0.05, 0.3, 0.18, (x0 + x1) / 2, y - 0.16, zf + DK, 0, COL.band);
+      railing(x0 + 0.05, zf + DK - 0.08, x1 - 0.05, zf + DK - 0.08, y);
+      railing(x0 + 0.05, zf + 0.05, x0 + 0.05, zf + DK - 0.08, y);
+      railing(x1 - 0.05, zf + 0.05, x1 - 0.05, zf + DK - 0.08, y);
+      if (!low) {
+        const n = Math.max(1, Math.round((x1 - x0) / 4.1));
+        for (let i = 0; i <= n; i++) Bn.add('wood', geo.beam(x0 + ((x1 - x0) * i) / n, y - 1.25, zf + 0.06, x0 + ((x1 - x0) * i) / n, y - 0.2, zf + DK * 0.7, 0.14, 0.16), I4, COL.beam);
       }
     }
   }
   // brackets under the skirt (core 2F columns) and the wing eaves
   if (!low) {
     for (const key of ['S', 'E', 'N', 'W']) {
-      const F = coreFaces[key], cw = bayOf(F.L, 4.1), nb = Math.round(F.L / cw), cov = wingCover(F);
+      const F = coreFaces[key], cw = bayOf(F.L, 4.1), nb = Math.round(F.L / cw);
       for (let i = 0; i <= nb; i++) {
         const s = (F.L * i) / nb;
-        if (cov.some(([a, b]) => s > a - 0.3 && s < b + 0.3)) continue;
         const [x, z] = at(F, s, 0.05);
         bracket(x, z, F.nx, F.nz, T2 + 0.3, 1.0);
       }
@@ -632,7 +648,7 @@ CX.add('main', (ctx, C) => {
 
   // ================================================================= 3. roofs (two tiers on the core, the wings, the portico)
   const roofs = {};
-  roofs.skirt = hanokRoof(sk, I4, { rr: 0.09, sp: 0.55 });
+  roofs.skirt = hanokRoof(sk, M(cx, 0, cz), { rr: 0.09, sp: 0.55 });
   {
     const rc = core.roof || { h: 9.5, overhang: 3.2 };
     const mr = { mode: 'paljak', hw: hw3, hd: hd3, ov: rc.overhang ?? 3.2, out: 1.25, lift: 1.35, t: 0.6, rise: rc.h ?? 9.5, vres: low ? 1 : 1.8, seg: low ? 0.6 : 0.9, bo: 0.9, ridge: { w: 0.95, h: 1.05 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
@@ -666,19 +682,19 @@ CX.add('main', (ctx, C) => {
     box(Bb, 'plank', POR.x1 - POR.x0 + 0.4, 0.12, POR.z1 - POR.z0 + 0.3, (POR.x0 + POR.x1) / 2, porTop + 0.42, (POR.z0 + POR.z1) / 2, 0, COL.deck);
     const rp = por.roof || { h: 4.6, overhang: 1.8 };
     const o = { mode: 'paljak', hw: (POR.z1 - POR.z0) / 2 + 0.2, hd: (POR.x1 - POR.x0) / 2, ov: rp.overhang ?? 1.8, out: 0.55, lift: 0.6, t: 0.4, rise: rp.h ?? 4.6, vg: 0.28, vres: low ? 1 : 1.3, seg: 1, bo: 0.55, ridge: { w: 0.6, h: 0.62 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
-    o.y = K.roofBaseFor(o, porTop + 0.6);
+    o.y = K.roofBaseFor(o, porTop + 1.1);                                   // a frieze zone over the beam: brackets and the 현판
     roofs.portico = hanokRoof(o, M((POR.x0 + POR.x1) / 2, 0, (POR.z0 + POR.z1) / 2, PI / 2), { rr: 0.085, sp: 0.5 });
     // 현판 "만장대" on the front beam under the gable
     let tex = null;
     try { tex = own(G.gfx.signTexture('만장대', null, { ...K.HYEONPAN, w: 1024, h: 400, size: 230 })); } catch (e) { tex = null; }
     const sm = own(new THREE_.MeshStandardMaterial({ map: tex || null, color: tex ? 0xffffff : 0x3b2a1d, roughness: 0.55, metalness: 0.05 }));
-    const sg = new THREE_.PlaneGeometry(4.6, 1.8);
+    const sg = new THREE_.PlaneGeometry(3.3, 1.29);
     const sign = new THREE_.Mesh(sg, sm);
     sign.name = 'complex-main:hyeonpan';
-    sign.position.set(DOOR.x, porTop + 1.55, POR.z1 + 0.42); sign.rotation.x = -0.1;
+    sign.position.set(DOOR.x, porTop + 0.58, POR.z1 + 0.5); sign.rotation.x = -0.12;
     sign.castShadow = true;
     gBase.add(sign);
-    box(Bb, 'wood', 4.85, 2.05, 0.1, DOOR.x, porTop + 1.55, POR.z1 + 0.36, 0, COL.dark);
+    Bb.add('wood', geo.box(3.5, 1.46, 0.1), M(DOOR.x, porTop + 0.58, POR.z1 + 0.43, 0, 1, 1, 1, -0.12), COL.dark);
   }
 
   // ================================================================= 4. near details: lanterns, banners, pines, jars, rain chains, gutters
@@ -818,9 +834,9 @@ CX.add('main', (ctx, C) => {
     gBase.add(m); m.updateMatrix(); m.updateMatrixWorld(true);
     G.world.cameraBlockers.push(m); blockers.push(m);
   };
-  addBlocker(core.x0 - 0.3, P, core.z0 - 0.3, core.x1 + 0.3, T2 + 0.6, core.z1 + 0.3);
+  addBlocker(core.x0 - 0.5, P, core.z0 - 0.5, core.x1 + 0.5, T2 + 0.6, core.z1 + 0.5);
   addBlocker(cx - hw3 - 0.3, T2, cz - hd3 - 0.3, cx + hw3 + 0.3, coreTop + 1.0, cz + hd3 + 0.3);
-  for (const W of [wingW, wingE]) addBlocker(W.x0 - 0.3, P, W.z0 - 0.3, W.x1 + 0.3, wingTop + 0.5, W.z1 + 0.3);
+  for (const W of [wingW, wingE]) addBlocker(W.x0 - 0.5, P, W.z0 - 0.5, W.x1 + 0.5, wingTop + 0.5, W.z1 + 0.5);
   if (baseMeshes.roof) { G.world.cameraBlockers.push(baseMeshes.roof); blockers.push(baseMeshes.roof); }
 
   // colliders: the halls themselves
@@ -874,7 +890,7 @@ CX.add('main', (ctx, C) => {
   const countTris = (g) => { let n = 0, calls = 0; g.traverse((o) => { if (o.isMesh && o.visible !== false && o.material && o.material.visible !== false && o.geometry) { calls++; const gi = o.geometry; n += (gi.index ? gi.index.count : gi.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1); } }); return { tris: Math.round(n), calls }; };
   const api = {
     built: true, get lod() { return forced || lod; }, door: DOOR_SPOT, sideDoor: { x: SIDE.x + 1.2, y: P, z: SIDE.z }, terrace: { ...TER, y: P }, pad: { ...PAD }, stairs: { ...ST },
-    office, podiumY: P, floors: { P, T1, T2, F3, coreTop, wingTop, porTop },
+    office, podiumY: P, floors: { P, T0, T1, T2, F3, coreTop, wingTop, porTop },
     root, groups: { base: gBase, near: gNear, far: gFar },
     setLod(name) { forced = name || null; if (name) setLod(name); },
     stats() { return { base: countTris(gBase), near: countTris(gNear), far: countTris(gFar), lod: forced || lod, low }; },
