@@ -14,6 +14,8 @@
 //     edit.start() / edit.stop() / edit.active · edit.pick(id) · edit.place() · edit.cancel() · edit.select(index)
 //     edit.turn(±1) · edit.raise(±1) · edit.colour(c) · edit.size(±1) · edit.copy() · edit.remove()
 //     edit.undo() / edit.redo() · edit.preset(id) · edit.reset() · edit.style(patch)
+//     edit.setPublic(on) (server accounts: may friends look at the room?) · visit(presetId) · visitUser(accountId)
+//                                         (a friend's PUBLIC room, read-only; the room number is the account id)
 //     save() -> Promise<bool> · refresh() -> Promise<bool> · explain() (the card "방은 이렇게 생겨요")
 //     room() -> the room being shown (a copy) · stats() -> { calls, tris, protos, batches, items } of the 3D layer
 //   Events: myroom:changed { count, v } · myroom:edit { on } · myroom:saved { v, mode }
@@ -1455,6 +1457,13 @@
       for (const p of D.presets) ui.tiles.appendChild(tile({ do: 'preset:' + p.id }, p.emoji, p.name, `${p.name}. ${p.say}`, 'mr-tile-room mr-tile-preset'));
       for (const [k, emoji, name, line] of [['floor', '🟨', '바닥', '바닥을 골라요.'], ['wall', '🧱', '벽', '벽을 골라요.'], ['wood', '🪵', '기둥', '기둥 빛깔을 골라요.'], ['mood', '☀️', '빛', '방의 빛을 골라요.'], ['win', '🪟', '창문', '창문을 내거나 막아요.']]) ui.tiles.appendChild(tile({ do: 'style:' + k }, emoji, name, `${name}. ${line}`, 'mr-tile-room'));
       ui.tiles.appendChild(tile({ do: 'reset' }, '🧹', '처음으로', '처음으로. 방을 비우고 처음 모습으로 돌아가요.', 'mr-tile-room'));
+      if (serverMode() && !sys._visit) {
+        const pub = !!(S && S.room.public);
+        const t = tile({ do: 'public' }, pub ? '🌐' : '🔒', pub ? '구경 허락' : '나만 보기', pub ? `구경 허락. 친구가 내 방을 구경할 수 있어요. 내 방 번호는 ${acct()}번이에요. 누르면 나만 봐요.` : '나만 보기. 누르면 친구도 내 방을 구경할 수 있어요.', 'mr-tile-room mr-tile-public');
+        t.setAttribute('aria-pressed', pub ? 'true' : 'false');
+        ui.tiles.appendChild(t);
+        ui.tiles.appendChild(tile({ do: 'friend' }, '👫', '친구 방', '친구 방. 방 번호를 눌러 친구 방을 구경해요.', 'mr-tile-room'));
+      }
       return;
     }
     for (const tid of D.order) {
@@ -1525,8 +1534,34 @@
     const [kind, arg] = String(what).split(':');
     if (kind === 'preset') return EDIT.preset(arg);
     if (kind === 'reset') return EDIT.reset();
+    if (kind === 'public') return EDIT.setPublic(!(S && S.room.public));
+    if (kind === 'friend') return friendPad();
     if (kind === 'style') return arg === 'win' ? windowEditor() : stylePick(arg);
     return false;
+  }
+  /** a friend's room: the room number is put together on big number buttons (no typing) → sys.visitUser(number) */
+  function friendPad() {
+    if (!serverMode() || !G.ui?.modal?.open) return false;
+    let digits = '';
+    const shown = h('div', { class: 'mr-pad-num', role: 'status', 'aria-live': 'polite' });
+    const paint = () => { shown.textContent = digits || '방 번호'; shown.classList.toggle('empty', !digits); };
+    const key = (label, line, fn, cls) => h('button', { type: 'button', class: 'mr-pad-key ' + (cls || ''), 'aria-label': line, dataset: { say: line }, onclick: (ev) => { ev.preventDefault(); fn(); paint(); sfx('tap'); } }, label);
+    const pad = h('div', { class: 'mr-pad' });
+    for (const d of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) pad.appendChild(key(d, d, () => { if (digits.length < 9) digits = (digits + d).replace(/^0+/, ''); }));
+    pad.appendChild(key('⌫', '하나 지우기', () => { digits = digits.slice(0, -1); }, 'mr-pad-fn'));
+    pad.appendChild(key('0', '0', () => { if (digits && digits.length < 9) digits += '0'; }));
+    pad.appendChild(key('🧹', '모두 지우기', () => { digits = ''; }, 'mr-pad-fn'));
+    paint();
+    G.ui.modal.open({
+      id: 'myroom-friend', title: '친구 방 구경', icon: '👫', className: 'mr-padmodal',
+      body: (el) => { el.appendChild(h('p', { class: 'mr-wtext' }, '친구가 알려 준 방 번호를 눌러요.')); el.appendChild(shown); el.appendChild(pad); },
+      actions: [
+        { label: '👀 구경 가기', class: 'btn-primary', close: true, onClick: () => { if (digits) sys.visitUser(Number(digits)); else toast('방 번호를 먼저 눌러요.', { emoji: '👫', type: 'info' }); } },
+        { label: '닫기', close: true },
+      ],
+    });
+    say('친구 방 구경. 친구가 알려 준 방 번호를 눌러요.', { force: true, priority: 1 });
+    return true;
   }
   async function ask(emoji, title, text, yes, no) {
     if (!G.easy?.confirm) return true;
@@ -1913,6 +1948,19 @@
       sfx('whoosh'); hint('처음 모습이 되었어요.'); say('방이 처음 모습이 되었어요.');
       return true;
     },
+    /** may others look at this room? (server accounts only: a friend then visits it with the room number) */
+    setPublic(on) {
+      if (!S || !ED.active || sys._visit || !serverMode()) return false;
+      const room = S.room, v = !!on;
+      if (!!room.public === v) return true;
+      room.public = v;
+      changed();
+      if (ED.cat === 'room') showCat('room');
+      sfx(v ? 'sparkle' : 'page');
+      const line = v ? `이제 친구가 내 방을 구경할 수 있어요. 내 방 번호는 ${acct()}번이에요.` : '이제 나만 내 방을 볼 수 있어요.';
+      hint(line); say(line, { force: true, priority: 1 });
+      return true;
+    },
     /** another floor / wall / wood / mood / windows: style({ floor: 'maru' }) */
     async style(patch) {
       if (!S || !ED.active || !patch || typeof patch !== 'object') return false;
@@ -2067,6 +2115,30 @@
       syncFab();
       return ok;
     },
+    /** look at another account's room (server mode): only a room its holder made public — the server answers the
+     *  same 404 for every other number. Read-only, nothing is saved; one's own number is one's own room. */
+    async visitUser(userId) {
+      const n = Number(userId), D = MD();
+      if (!serverMode() || !Number.isSafeInteger(n) || n < 1 || !G.state || !P.def(ID)) return false;
+      if (String(n) === acct()) return this.enter({});
+      let r = null;
+      try { r = await G.net.request('api/room/get.php?user=' + n, { timeout: 10000, quiet: true }); }
+      catch (e) {
+        const gone = e && (e.code === 'NOT_FOUND' || e.status === 404);
+        toast(gone ? '그 방은 지금 구경할 수 없어요. 방 번호를 다시 봐 주세요.' : '지금은 그 방을 볼 수 없어요. 조금 뒤에 다시 해 봐요!', { emoji: '👫', type: 'info' });
+        say(gone ? '그 방은 지금 구경할 수 없어요. 방 번호를 다시 봐요.' : '지금은 그 방을 볼 수 없어요.', { force: true, priority: 1 });
+        return false;
+      }
+      if (r && r.mine === true) return this.enter({});
+      const room = D.sanitize(r && r.room, D.LIMITS.hard);
+      if (ED.active) EDIT.stop({ silent: true });
+      this._visit = { room, user: n };
+      syncShown();
+      const ok = P.is(ID) ? true : await P.enter(ID, { _ok: true });
+      if (!ok) { this._visit = null; syncShown(); }
+      syncFab();
+      return ok;
+    },
     /**
      * a door to "내 방" somewhere else (the houses of the complex): doorAt({ ctx?, x, z, y = 1.3, rotY = 0, label?,
      * kidLabel?, radius = 3.2, id? }) → the interactable's handle | null. With ctx (a places build context) x / z are
@@ -2105,6 +2177,7 @@
         },
         actions: [
           { label: '👀 꾸며 둔 방 구경하기', class: 'btn-primary', close: true, onClick: () => { sys.visit('anbang'); } },
+          serverMode() ? { label: '👫 친구 방 구경하기', close: true, onClick: () => { setTimeout(friendPad, 0); } } : null,
           !easy && no && G.sys.allot?.open ? { label: '🏺 분양 알아보기', close: true, onClick: () => { try { G.sys.allot.open('guide'); } catch (e) { /* the allotment screen is optional */ } } } : null,
           { label: '닫기', close: true },
         ].filter(Boolean),

@@ -175,3 +175,12 @@ body.reduce-motion .mr-btn, body.reduce-motion .mr-tile, body.reduce-motion .myr
 .mr-ex-pic { font-size: 3.4rem; line-height: 1; }
 .mr-ex-lead { margin: 0; font-size: 1.1rem; font-weight: 800; }
 .mr-ex-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .45rem; text-align: left; font-weight: 600; line-height: 1.45; }
+
+/* ---------------------------------------------------------------- a friend's room: the number buttons */
+.mr-pad-num { margin: 0 auto .6rem; min-width: 10rem; max-width: 100%; padding: .45rem .9rem; border-radius: 12px; background: #f6efdd; color: #3a2a18; font-size: 1.8rem; font-weight: 800; letter-spacing: .12em; text-align: center; font-variant-numeric: tabular-nums; }
+.mr-pad-num.empty { color: #9a8a70; font-size: 1.1rem; letter-spacing: 0; }
+.mr-pad { width: fit-content; margin: 0 auto; display: grid; grid-template-columns: repeat(3, 4rem); gap: .4rem; }
+.mr-pad-key { min-width: 56px; min-height: 56px; border-radius: 12px; border: 2px solid rgba(120, 86, 48, .6); background: #e9dcc0; color: #3a2a18; font: inherit; font-size: 1.5rem; font-weight: 800; cursor: pointer; touch-action: manipulation; }
+.mr-pad-key.mr-pad-fn { background: #f1e3c4; font-size: 1.3rem; }
+.mr-pad-key:focus-visible { outline: 3px solid #2f6fb0; outline-offset: 2px; }
+.mr-tile-public[aria-pressed="true"] .mr-pic { background: #cfe6f3; }

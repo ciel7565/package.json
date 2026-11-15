@@ -105,7 +105,7 @@ export async function makeRoomWorld(ROOT) {
   try { for (const f of JSON.parse(fs.readFileSync(path.join(ROOT, 'assets/pack/MANIFEST.json'), 'utf8')).files || []) if (f && String(f.name).indexOf('art/') === 0) artMeta.set(f.name, f); } catch (e) { /* a checkout without the pack: scrolls and screens are made blank */ }
 
   const cam = new THREE.PerspectiveCamera(50, 1280 / 720, 0.1, 500);
-  const srv = { can: false, limit: 80, room: { v: 0, style: {}, items: [], public: false }, calls: [], offline: 0, gets: 0, loseAnswer: false };
+  const srv = { can: false, limit: 80, room: { v: 0, style: {}, items: [], public: false }, calls: [], offline: 0, gets: 0, loseAnswer: false, others: {} };
   const err = (code, status) => Object.assign(new Error(code), { code, status });
   const Gb = {
     data: { layout: {} }, sys: {}, settings: { reduceMotion: true, easyMode: false }, params: new URLSearchParams(''), state: null,
@@ -117,6 +117,8 @@ export async function makeRoomWorld(ROOT) {
     easy: { on: false, say() {}, pick: async (o) => { picks.push(o); return answers.pick; }, confirm: async (o) => { confirms.push(o); return answers.confirm; } },
     net: { mode: 'local', request: async (p, o = {}) => {
       srv.calls.push({ path: p.replace(/^.*api\/room\//, ''), body: o.body ? JSON.parse(JSON.stringify(o.body)) : null });
+      const um = /get\.php\?user=(\d+)$/.exec(p);
+      if (um) { const o2 = srv.others[um[1]]; if (!o2 || !o2.public) throw err('NOT_FOUND', 404); return { room: JSON.parse(JSON.stringify(o2)), mine: false, can: false, limit: 0 }; }
       if (/get\.php/.test(p)) { srv.gets++; return { room: JSON.parse(JSON.stringify(srv.room)), mine: true, can: srv.can, limit: srv.can ? srv.limit : 0 }; }
       if (srv.offline > 0) { srv.offline--; throw err('NETWORK_ERROR'); }
       if (!srv.can) throw err('ROOM_FORBIDDEN', 403);
@@ -483,6 +485,17 @@ export async function roomLogic({ check, log, ROOT }) {
     E.pick('G_TOP'); E.place();
     const t0 = toasts.length, c = await M.save(); tick(1);
     check('the room was changed somewhere else: the save is refused, the newer room is read and shown, the undo list starts afresh, a line says what happened and the state is "ok"', c === false && M.state().v === srv.room.v && items().map((it) => it.i).join() === 'F_SANG' && M.stats().items === 1 && M.room().style.floor === 'maru' && E.undoCount === 0 && E.held === null && toasts.slice(t0).some((t) => /새로 불러왔어요/.test(t)) && M.state().save === 'ok' && !audit().length, JSON.stringify({ c, v: M.state().v, items: items().length, save: M.state().save, audit: audit() }));
+    // P1: friends may look — the switch in 방 모양, then a friend's public room by its number (read-only)
+    const pubOn = E.setPublic(true), pubSave = await M.save(), pubBody = srv.calls.filter((c2) => /save/.test(c2.path)).pop().body;
+    check('구경 허락: the switch makes the room public (saved with the next save, the room number is said); 나만 보기 turns it back', pubOn === true && pubSave === true && pubBody.public === true && M.state().public === true && srv.room.public === true && E.setPublic(false) === true && M.state().public === false && (await M.save()) === true && srv.room.public === false, JSON.stringify({ pubOn, pubSave, pub: pubBody.public }));
+    srv.others = { 42: D.sanitize({ ...D.preset('seonbi'), public: true }, 200), 43: D.sanitize({ ...D.preset('janchi'), public: false }, 200) };
+    const tv0 = toasts.length, savesBefore = srv.calls.filter((c2) => /save/.test(c2.path)).length;
+    const vNo = await M.visitUser(43), vBad = await M.visitUser('1; drop'), vYes = await M.visitUser(42); tick(1);
+    const vis2 = { no: vNo, bad: vBad, yes: vYes, st: M.state(), n: M.stats().items, edit: E.active, cur: P.current, save: await M.save(), saves: srv.calls.filter((c2) => /save/.test(c2.path)).length - savesBefore, said: toasts.slice(tv0).some((t) => /구경할 수 없어요/.test(t)) };
+    check('친구 방: a room that is not public is the same "cannot look" as a wrong number; a public one is shown read-only (edit mode closed, nothing saved)', vis2.no === false && vis2.bad === false && vis2.said && vis2.yes === true && vis2.st.visiting === true && vis2.n === D.preset('seonbi').items.length && vis2.edit === false && vis2.cur === 'PL_MYROOM' && vis2.save === false && vis2.saves === 0 && E.start() === false && !audit().length, JSON.stringify(vis2));
+    const own = await M.visitUser(7); tick(1);
+    check('one\'s own room number leads back to one\'s own room (not a visit)', own === true && M.state().visiting === false && M.stats().items === srv.room.items.length, JSON.stringify(M.state()));
+    E.start(); tick(1);
     srv.can = false;
     E.pick('G_TOP'); E.place();
     const f = await M.save();
