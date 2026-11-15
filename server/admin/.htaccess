@@ -42,6 +42,25 @@ DirectoryIndex index.php
   </Files>
 </IfModule>
 
+# ---------------------------------------------------------------- [lecture] 🎓 강의 자료: 강의 파일 올리기 (CONTRACT §17.3)
+# 관리자만 쓰는 이 폴더로는 강의 파일(PDF 30MB · 파워포인트 50MB · 그림 여러 장)이 올라와요. 설치 폴더의 .htaccess 는
+# 사진 한 장 크기(8MB)까지만 받으므로, 이 폴더에서만 한도를 올려요. 체험객이 쓰는 주소(api/…)의 한도는 그대로예요.
+# 파일은 관리자 로그인과 보안 토큰을 확인한 뒤에만 읽고, 내용으로 종류를 다시 확인해요 (lib/Upload.php).
+# mod_php 가 아닌 서버(PHP-FPM 등)에서는 php.ini 의 upload_max_filesize · post_max_size · max_file_uploads 를 같은 값으로 맞춰 주세요.
+LimitRequestBody 62914560
+<IfModule mod_php7.c>
+  php_value upload_max_filesize 52M
+  php_value post_max_size 58M
+  php_value max_file_uploads 26
+  php_value max_input_time 300
+</IfModule>
+<IfModule mod_php.c>
+  php_value upload_max_filesize 52M
+  php_value post_max_size 58M
+  php_value max_file_uploads 26
+  php_value max_input_time 300
+</IfModule>
+
 # ---------------------------------------------------------------- 추가 잠금 ① 정해진 곳에서만 열기 (주소 허용 목록)
 # 관리자가 일하는 곳의 인터넷 주소에서만 이 폴더가 열려요. 아래 한 줄의 맨 앞 # 을 지우고 주소를 바꾸세요.
 # 주소 여러 개는 띄어서 적고, 범위는 192.168.0.0/24 처럼 적어요. 다른 곳에서는 "접근 금지(403)"가 보여요.

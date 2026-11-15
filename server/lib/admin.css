@@ -203,3 +203,5 @@ tr.bad td{background:rgba(255,107,94,.08)}
 .rt td::before{content:attr(data-th);color:var(--dim);font-size:.82rem;flex:none;text-align:left}.rt td:empty{display:none}.rt td.acts{display:block;text-align:left}.rt td.acts::before{content:none}.barcell{min-width:0}}
 .subtabs a.on .badge{background:rgba(29,21,3,.85);color:#ffe08a}.prewrap{white-space:pre-wrap}.rules .btn{justify-self:start}.card h4{margin:14px 0 6px;font-size:.95rem}
 @media (max-width:640px){.fgrid{grid-template-columns:minmax(0,1fr)}.stack>label.check{white-space:normal;align-items:flex-start}.stack>label.check input{margin-top:3px}}
+/* [lecture] 🎓 강의 자료: the slides of an image deck in the edit card (CONTRACT §17.3) */
+.lecgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;margin:8px 0}.lecthumb{margin:0;display:grid;gap:6px;align-content:start;min-width:0}.lecthumb img.photo{width:100%;aspect-ratio:16/9;object-fit:contain}.lecthumb figcaption{display:flex;gap:4px;align-items:center;flex-wrap:wrap}.card dl.facts code{overflow-wrap:anywhere;word-break:break-all}

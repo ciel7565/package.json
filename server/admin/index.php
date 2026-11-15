@@ -29,6 +29,7 @@ declare(strict_types=1);
 require __DIR__ . '/../lib/bootstrap.php';
 
 use Tfm\AdminAllot;
+use Tfm\AdminLecture; // [lecture]
 use Tfm\AdminGate;
 use Tfm\AdminOps;
 use Tfm\AdminPath;
@@ -79,6 +80,7 @@ const TABS = [
     'storage' => ['🏚️', '곳간'],
     'reports' => ['✅', '완료 확인'],
     'allot' => ['🏺', '분양 관리'],
+    'lecture' => ['🎓', '강의 자료'], // [lecture] CONTRACT §17.3
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
     'moderation' => ['🚨', '신고·채팅'],
@@ -270,8 +272,66 @@ function gateRequest(): void
     // 3. a blocked address, plain http where https is required, a file: refused before the session starts
     if (class_exists('Tfm\Firewall')) Firewall::check();
     Http::enforceHttps();
-    Http::refuseUpload(false);
+    // [lecture] the ONE exception of the whole admin site: an upload action of the 🎓 강의 자료 tab may carry files. They are
+    // read only after handlePost checked the origin, the token, the admin role and the elevation; every other request
+    // with a file is refused here as before. A body PHP dropped because it was over post_max_size gets a plain answer.
+    lectureBodyCheck();
+    Http::refuseUpload(lectureUpload());
     if (class_exists('Tfm\V')) V::watch($_GET, 'query');
+}
+
+/** [lecture] is this POST one of the three upload actions of the 🎓 강의 자료 tab (lib/AdminLecture.php UPLOAD_ACTIONS) */
+function lectureUpload(): bool
+{
+    return Http::method() === 'POST' && in_array(postStr('action'), ['lecture_add_file', 'lecture_replace', 'lecture_images'], true) && is_file(__DIR__ . '/../lib/AdminLecture.php');
+}
+
+/** [lecture] a POST whose body PHP threw away (larger than post_max_size: no fields, no files) → 413 with the limit in words */
+function lectureBodyCheck(): void
+{
+    if (Http::method() !== 'POST' || $_POST || $_FILES) return;
+    $len = isset($_SERVER['CONTENT_LENGTH']) && ctype_digit((string) $_SERVER['CONTENT_LENGTH']) ? (int) $_SERVER['CONTENT_LENGTH'] : 0;
+    if ($len <= 0 || !lectureReady()) return;
+    $max = AdminLecture::phpLimits()['post'];
+    if ($max > 0 && $len > $max) throw new ApiException(413, 'UPLOAD_TOO_LARGE', '올린 파일이 이 서버가 한 번에 받을 수 있는 크기(' . AdminLecture::size($max) . ')보다 커요. 파일을 줄이거나 나누어서 올려 주세요.');
+}
+
+/** [lecture] 🎓 강의 자료 (CONTRACT §17.3): lib/AdminLecture.php (the view and the actions) is loaded on first use */
+function lectureReady(): bool
+{
+    static $ok = null;
+    if ($ok === null) $ok = is_file(__DIR__ . '/../lib/AdminLecture.php') && class_exists('Tfm\Lecture') && class_exists('Tfm\AdminLecture');
+    return $ok;
+}
+
+/** [lecture] one `lecture_*` action (AdminLecture::action does the work); the 303 goes back to the card the form came from */
+function doLecture(Ctx $c, string $action): string
+{
+    if (!lectureReady()) throw new ApiException(503, 'NOT_READY', '강의 자료 기능이 아직 준비 중이에요.');
+    $place = AdminLecture::back($_POST);
+    try {
+        $r = AdminLecture::action($action, $c, $_POST);
+    } catch (ApiException $e) {
+        backExtra($place);
+        throw $e;
+    }
+    backExtra(array_filter($r['back'] + $place, function ($v) { return $v !== null; }));
+    return (string) $r['msg'];
+}
+
+/**
+ * [lecture] GET ./?lecfile=<lecture id>.<n>: a stored lecture file for the tab's preview, streamed by this entry after
+ * ITS OWN check (the elevated administrator only; it does not extend the idle time). Everybody else and every bad id
+ * get the plain 404 of a missing page. The answer carries the stored type, nosniff, no-store and a sandbox CSP.
+ */
+function serveLecture(Ctx $c): void
+{
+    if (AdminGate::expired() || !AdminGate::check($c->user, true, false) || !lectureReady()) AdminGate::notFound();
+    try {
+        AdminLecture::serve((array) $c->user, getStr('lecfile'));
+    } catch (ApiException $e) {
+        AdminGate::notFound();
+    }
 }
 
 /** the sign-in forms are limited by address: rate_limits.admin_login when configured, else rate_limits.login */
@@ -380,6 +440,10 @@ function handlePost(Ctx $c)
             case 'allot_settings': case 'allot_texts': case 'allot_demo':
             case 'allot_tick':
                 $msg = doAllot($c, $action); break;
+            // 🎓 강의 자료 (CONTRACT §17.3) [lecture]: the work is lib/AdminLecture.php; the labels stay here for tests/admin-lock.mjs
+            case 'lecture_add_link': case 'lecture_add_file': case 'lecture_save': case 'lecture_row': case 'lecture_delete':
+            case 'lecture_replace': case 'lecture_images': case 'lecture_file': case 'lecture_settings':
+                $msg = doLecture($c, $action); break;
             default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
         }
         flash('ok', $msg);
@@ -1762,6 +1826,7 @@ function render(Ctx $c): string
         if (allotReady()) Allot::lazyTick();
         switch ($tab) {
             case 'allot': $body = allotReady() ? AdminAllot::view($c, $_GET, Session::csrf()) : notReady('🏺 분양 관리', '분양 관리(lib/Allot.php · lib/AdminAllot.php)'); break;
+            case 'lecture': $body = lectureReady() ? AdminLecture::view($c, $_GET, Session::csrf()) : notReady('🎓 강의 자료', '강의 자료(lib/Lecture.php · lib/AdminLecture.php)'); break; // [lecture]
             case 'beds': $body = viewBeds(); break;
             case 'storage': $body = viewStorage(); break;
             case 'reports': $body = viewReports(); break;
@@ -1859,6 +1924,7 @@ try {
     RateLimit::forRequest('admin_page', $ctx);
     if ($method !== 'POST' && isset($_GET['photo'])) servePhoto($ctx);
     if ($method !== 'POST' && isset($_GET['download'])) serveDownload($ctx);
+    if ($method !== 'POST' && isset($_GET['lecfile'])) serveLecture($ctx); // [lecture]
     if ($method === 'POST') handlePost($ctx);
     $html = render($ctx);
 } catch (ApiException $e) {
