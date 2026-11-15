@@ -282,7 +282,7 @@ try {
       gat.click(); await raf();
       out.hatTilesDrawn = await wait(() => document.querySelectorAll('.avatar-modal .av-tile[data-k="hat"].drawn').length >= 3, 90000);
       // save
-      const saveBtn = [...document.querySelectorAll('button')].find((b) => /저장하기/.test(b.textContent) && b.getClientRects().length > 0);
+      const saveBtn = [...document.querySelectorAll('button')].find((b) => /저장하기|좋아요/.test(b.textContent) && b.getClientRects().length > 0);
       out.saveBtn = !!saveBtn;
       if (!saveBtn) return out;
       saveBtn.click();
@@ -309,8 +309,9 @@ try {
       const body = document.querySelector('.avatar-modal');
       body.querySelector('[data-tab="clothes"]').click(); await raf(); await raf();
       const tiles = [...body.querySelectorAll('.av-tile')];
-      const sizes = tiles.map((t) => { const b = t.getBoundingClientRect(); return Math.min(b.width, b.height); });
-      const tabs = [...body.querySelectorAll('[data-tab]')].map((t) => { const b = t.getBoundingClientRect(); return Math.min(b.width, b.height); });
+      // layout size (offsetWidth / offsetHeight): the dialog's entrance animation scales its box for a moment
+      const sizes = tiles.map((t) => Math.min(t.offsetWidth, t.offsetHeight));
+      const tabs = [...body.querySelectorAll('[data-tab]')].map((t) => Math.min(t.offsetWidth, t.offsetHeight));
       return {
         kid: body.classList.contains('kid'),
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,

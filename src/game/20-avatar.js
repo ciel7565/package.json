@@ -1208,7 +1208,7 @@
   };
   function hairCovReal(h, yaw, elev) {
     const ay = Math.abs(yaw);
-    const fringe = h.flat ? h.fringe : h.fringe + 0.035 * Math.cos(yaw * 9);
+    const fringe = h.flat ? h.fringe : h.fringe + 0.015 * Math.cos(yaw * 9);
     const faceCut = smooth(-0.12, 0.12, h.faceW - ay) * smooth(-0.1, 0.1, fringe - elev);
     const bottom = lerp(h.side, h.nape, smooth(h.faceW, Math.PI, ay));
     return (1 - faceCut) * smooth(bottom - 0.09, bottom + 0.09, elev);

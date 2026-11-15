@@ -1242,6 +1242,6 @@ body.easy .no3d-tile { min-height: max(var(--tap, 56px), 5.8rem); font-size: max
 @media (prefers-reduced-motion: reduce) { .av-tile, .av-options.enter { transition: none; animation: none; } }
 .avatar-modal.kid .av-view button { min-width: var(--tap); min-height: var(--tap); font-size: 1.5rem; } /* [avatar] easy mode: big view switches */
 .av-kid-tabs.av-tabs { display: flex; flex-wrap: wrap; gap: .35rem; } /* [avatar] every tab ≥ 56 px, also on a phone */
-.av-kid-tabs.av-tabs .av-kid-tab { flex: 1 0 var(--tap); min-width: var(--tap); }
+.av-kid-tabs.av-tabs .av-kid-tab { flex: 1 0 max(var(--tap), 56px); min-width: max(var(--tap), 56px); min-height: max(var(--tap), 56px); }
 .av-tile-kid .av-tile-lbl { display: none; } /* [avatar] easy mode: the picture and its voice (data-say) carry the meaning */
 .av-kid .av-hint { font-size: max(16px, 1rem); }
