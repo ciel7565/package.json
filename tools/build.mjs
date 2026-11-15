@@ -63,6 +63,8 @@ const ORDER_RULES = [
   ['07-speed.js', '21-player.js'],
   ['70-app.js', '72-subscription.js'],     // the app shell (menus, settings) before the subscription screen
   ['72-subscription.js', '80-devcenter.js'], // the dev center's 구독·속도 panel reads G.sys.subscription
+  ['03-state.js', '71-entitle.js'],        // [entitle] G.net before the tap that reads `ent` / `site` from its answers
+  ['71-entitle.js', '72-subscription.js'], // [entitle] G.sys.entitle before the plan screen built on it
   ['09-pack.js', '14-materials.js'],       // [render-assets] G.pack before G.mat …
   ['14-materials.js', '15-buildings.js'],  // … and G.mat before the building kit that maps its material keys onto it
   ['33-complex-plan.js', '43-allot.js'],   // [complex-plan] G.data.complex (the master plan) before the 분양 panel …
@@ -215,6 +217,11 @@ function exportGameData() {
     try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
     catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
   }
+  // [myroom] 내 방 (CONTRACT §17.4): the catalogue is pure data + math too — Tfm\Room checks a saved room against it
+  for (const f of fragments.filter((x) => /myroom-data/.test(x.name))) {
+    try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
+    catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
+  }
   const d = G.data || {};
   // Only what the server needs to validate rewards / timings.
   const pick = (obj, fn) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, fn(v)]));
@@ -249,6 +256,8 @@ function exportGameData() {
     storage: d.storage ? { cap: d.storage.cap, itemIds: d.storage.itemIds } : {},
     // [env] the Korean crop calendar (CONTRACT §17.5): Tfm\Env measures the real-time beds with the same days / months
     cropCalendar: pick(d.cropCalendar || {}, (c) => ({ sow: c.sow, harvest: c.harvest, days: c.days })),
+    // [myroom] ids → [placing kind, w, d, h, colours, sizes], the room's measures, style ids, limits (no names, no options)
+    myroom: d.myroom && typeof d.myroom.serverTable === 'function' ? d.myroom.serverTable() : {},
   };
 }
 

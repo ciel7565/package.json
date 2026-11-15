@@ -15,7 +15,12 @@
 //   refresh()             GET sub/status.php → fromServer(sub)
 //   fromServer(sub, src)  the server's word on the player's plan: emits 'sub:changed' (07-speed's G.sys.speed mirrors it
 //                         into G.state.sub and emits 'speed:changed'); keeps the HUD chip #hud-speed in sync.
-//   current() / tier()    the effective plan / tier (1..4); local mode is always 1.
+//   current() / tier()    the plan the account PAID for / the effective tier (1..4); local mode is always 1.
+//   Entitlement (CONTRACT §17.2, G.sys.entitle): the effective tier, the two multipliers and the limits come from the
+//   server's `ent`. An ADMINISTRATOR has everything without paying: the screen says 관리자는 모든 기능을 무료로 써요, shows
+//   the cards the visitors see (no payment buttons) and a way to the admin site's ⚙️ 설정, where the tiers on sale, the
+//   prices, the multipliers and the jar / room limits are set. Cards list what a tier really gives (move × / grow ×
+//   from status.php, 장독 N개, 방 꾸미기 물건 N개).
 //   HUD: #hud-speed (hidden at tier 1): normal ⚡2×, easy ⚡ 2배 빨라요; pulses on speed:changed; 옹이 cheers once.
 //   ?sub=ok&tier=N → after login: status refresh, then the celebration + toast '⚡ N배 빠르게 시작!' for the tier the
 //   SERVER confirms (never N from the address); ?sub=fail&code=…|why=… → a calm error with the app's own sentence for
@@ -155,6 +160,8 @@
       G.bus.on('state:loaded', () => this._chip());
       G.bus.on('speed:changed', (p) => { this._chip(p); this._rerender(); });
       G.bus.on('sub:changed', () => { this._chip(); this._rerender(); });
+      G.bus.on('entitle:changed', () => { this._chip(); this._rerender(); });
+      G.bus.on('site:changed', () => this._rerender());
       G.bus.on('easy:changed', () => this._chip());
       document.addEventListener('visibilitychange', () => {
         if (document.hidden || !serverAccount() || !G.app?.loggedIn) return;
@@ -177,11 +184,27 @@
       return clamp(t, 1, 4);
     },
     tiers() {
-      const list = Array.isArray(this.status?.tiers) ? this.status.tiers : TIER_FALLBACK;
+      let list = Array.isArray(this.status?.tiers) ? this.status.tiers : null;
+      if (!list) {
+        // until status.php answers: the tiers the operator sells (site setting sub.tiers_on, default 2 · 3)
+        const on = G.site?.get?.('sub.tiers_on', null);
+        const sold = Array.isArray(on) ? on : [2, 3];
+        list = TIER_FALLBACK.filter((t) => sold.includes(t.tier));
+      }
+      const mul = (v, lo, hi, d) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n >= lo && n <= hi ? n : d; };
       return list.filter((t) => Number.isInteger(Number(t?.tier)) && Number(t.tier) >= 2 && Number(t.tier) <= 4)
-        .map((t) => ({ tier: Number(t.tier), name: String(t.name || `${t.tier}배`).slice(0, 24), price: Math.max(0, Math.round(Number(t.price) || 0)) }))
+        .map((t) => ({
+          tier: Number(t.tier), name: String(t.name || `${t.tier}배`).slice(0, 24), price: Math.max(0, Math.round(Number(t.price) || 0)),
+          move: mul(t.move, 1, MOVE_MAX, Math.min(Number(t.tier), MOVE_MAX)), grow: mul(t.grow, 1, 4, Number(t.tier)),
+        }))
         .sort((a, b) => a.tier - b.tier);
     },
+    /** the account's entitlement (CONTRACT §17.2) or null while that module is absent */
+    ent() {
+      const E = G.sys.entitle;
+      try { return E && !E._failed && typeof E.get === 'function' ? E.get() : null; } catch (e) { return null; }
+    },
+    isAdmin() { const e = this.ent(); return !!e && e.admin === true; },
     periodDays() { const d = Number(this.status?.periodDays); return Number.isFinite(d) && d > 0 ? d : PERIOD_DAYS; },
     mock() { return this.status ? this.status.mode === 'mock' : false; },
     /**
@@ -252,29 +275,48 @@
       const live = server && !!this.status && this.status.mode === 'live';
       const mockMode = server && this.mock();
       const unconfigured = server && !!this.status && this.status.mode === 'unconfigured';
+      const ent = this.ent();
+      const admin = this.isAdmin();
+      const sp = G.sys.speed;
+      const grow = clamp(Number(sp?.progression?.()) || tier, 1, 4), move = clamp(Number(sp?.movement?.()) || Math.min(tier, MOVE_MAX), 1, MOVE_MAX);
+      const sold = this.tiers();
+      const soldText = sold.length ? `${sold.map((t) => t.tier).join('·')}배` : '빠른';
+      const num = (v, d) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n >= 0 ? n : d; };
+      const jarsPaid = clamp(num(G.site?.get?.('limits.jars_paid', 12), 12), 1, 12), roomPaid = clamp(num(G.site?.get?.('limits.room_items_paid', 160), 160), 0, 300);
       // ---- current plan
-      const nowCard = h('section', { class: `sub-now${tier > 1 ? ' is-fast' : ''}`, 'data-say': tier > 1 ? `지금 ${tier}배 빨라요` : '지금은 기본 속도예요' });
-      const bigLabel = tier > 1 ? `⚡ ${tier}배 빨라요` : '기본 속도 (1배)';
+      const nowCard = h('section', { class: `sub-now${tier > 1 ? ' is-fast' : ''}${admin ? ' is-admin' : ''}`, 'data-say': admin ? '관리자는 모든 기능을 무료로 써요' : (tier > 1 ? `지금 ${tier}배 빨라요` : '지금은 기본 속도예요') });
+      const bigLabel = tier > 1 ? `⚡ ${grow}배 빨라요` : '기본 속도 (1배)';
       const lines = [];
-      if (tier > 1) {
+      if (admin) {
+        lines.push('관리자는 모든 기능을 무료로 써요');
+        lines.push(`결제 없이 이동 ${move}배 · 작물·발효 ${grow}배 · 장독 ${num(ent?.limits?.jars, jarsPaid)}개 · 방 꾸미기 물건 ${num(ent?.limits?.roomItems, roomPaid)}개까지 쓸 수 있어요.`);
+        if (cur.tier > 1 && cur.expiresAt) lines.push(`이 계정으로 결제한 이용권도 있어요: ${dateKo(cur.expiresAt)}까지.`);
+      } else if (tier > 1) {
         if (cur.expiresAt) lines.push(`${dateKo(cur.expiresAt)}까지 (${daysLeft(cur.expiresAt)}일 남음)`);
         lines.push(cur.autoRenew ? '자동 갱신 켜짐 · 기간이 끝나면 같은 단계로 다시 결제돼요' : (cur.status === 'canceled' ? '자동 갱신 해지됨 · 남은 기간까지 그대로 빨라요' : '한 달 이용권 · 기간이 끝나면 기본 속도로 돌아가요'));
         if (cur.status === 'past_due') lines.push('결제가 아직 확인되지 않았어요. 며칠 안에 확인되지 않으면 기본 속도로 돌아가요.');
+        if (ent) lines.push(`장독 ${num(ent.limits?.jars, jarsPaid)}개 · 방 꾸미기 물건 ${num(ent.limits?.roomItems, roomPaid)}개까지 쓸 수 있어요. 기간이 끝나도 장독에 담근 것은 그대로 남아요 (잠겼다가, 다시 구독하면 이어져요).`);
       } else lines.push('이동·작물 자라기·발효가 기본 속도로 진행돼요. 아래에서 더 빠른 단계를 고를 수 있어요.');
       nowCard.append(
-        h('span', { class: 'sub-now-emo emoji', 'aria-hidden': 'true' }, tier > 1 ? '⚡' : '🚶'),
+        h('span', { class: 'sub-now-emo emoji', 'aria-hidden': 'true' }, admin ? '🛠️' : (tier > 1 ? '⚡' : '🚶')),
         h('div', { class: 'sub-now-main' },
-          h('div', { class: 'sub-now-row' }, h('b', { class: 'sub-now-tier' }, bigLabel), h('span', { class: `chip sub-status sub-status-${cur.status}` }, STATUS_KO[cur.status] || STATUS_KO.none),
+          h('div', { class: 'sub-now-row' }, h('b', { class: 'sub-now-tier' }, bigLabel),
+            admin ? h('span', { class: 'chip sub-status sub-status-active sub-status-admin' }, '관리자 · 무료') : h('span', { class: `chip sub-status sub-status-${cur.status}` }, STATUS_KO[cur.status] || STATUS_KO.none),
             mockMode ? h('span', { class: 'chip chip-gold sub-mock-chip', title: '서버가 모의 결제 모드예요 (TFM_TOSS_MOCK=1): 실제 결제가 일어나지 않아요' }, '🧪 테스트 결제') : null),
           ...lines.map((t) => h('p', { class: 'sub-now-line' }, t))),
       );
       G.easy?.speakable?.(nowCard);
       body.appendChild(nowCard);
       // ---- what the player can do here
-      if (!isServer()) {
+      if (admin) {
+        body.appendChild(h('div', { class: 'sub-note sub-admin-note', role: 'note' },
+          h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🛠️'),
+          h('div', null, h('b', null, '관리자는 결제하지 않아요'), h('p', null, '아래 카드는 방문자에게 보이는 단계와 가격이에요. 판매할 단계·가격·배수·장독 수는 관리자 페이지의 ⚙️ 설정에서 바꿔요.'),
+            h('button', { type: 'button', class: 'btn btn-soft btn-sm', 'data-sub': 'admin' }, '🛠️ 관리자 페이지 열기'))));
+      } else if (!isServer()) {
         body.appendChild(h('div', { class: 'sub-note', role: 'note' },
           h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🖥️'),
-          h('div', null, h('b', null, '서버에 설치하면 구독할 수 있어요'), h('p', null, '이 파일 하나로 여는 로컬 모드에서는 결제·구독이 없어요. 체험관을 서버(XAMPP·Apache·PHP)에 올리면 토스페이먼츠 결제로 2·3·4배 단계를 구독할 수 있어요.'),
+          h('div', null, h('b', null, '서버에 설치하면 구독할 수 있어요'), h('p', null, `이 파일 하나로 여는 로컬 모드에서는 결제·구독이 없어요. 체험관을 서버(XAMPP·Apache·PHP)에 올리면 토스페이먼츠 결제로 ${soldText} 단계를 구독할 수 있어요.`),
             h('button', { type: 'button', class: 'btn btn-soft btn-sm', 'data-sub': 'guide' }, '📘 설치 안내 보기'))));
       } else if (guest) {
         body.appendChild(h('div', { class: 'sub-note', role: 'note' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🙋'),
@@ -286,26 +328,29 @@
           h('div', null, h('b', null, '결제 설정이 필요해요'), h('p', null, UNCONFIGURED_KO))));
       }
       // ---- tier cards
-      const canBuy = server && !!this.status && !unconfigured && !this._busy;
-      const grid = h('div', { class: `sub-tiers${canBuy ? '' : ' is-off'}`, role: 'list' });
-      for (const t of this.tiers()) {
-        const isCur = tier === t.tier && tier > 1;
-        const move = Math.min(t.tier, MOVE_MAX);
+      const canBuy = server && !!this.status && !unconfigured && !this._busy && !admin;
+      const grid = h('div', { class: `sub-tiers${canBuy || admin ? '' : ' is-off'}${admin ? ' is-view' : ''}`, role: 'list' });
+      for (const t of sold) {
+        const isCur = !admin && tier === t.tier && tier > 1;
         const card = h('article', { class: `sub-tier${isCur ? ' is-current' : ''}`, role: 'listitem', 'data-tier': String(t.tier) });
         card.append(
           h('div', { class: 'st-head' }, h('b', { class: 'st-name' }, t.name), isCur ? h('span', { class: 'chip chip-gold st-cur' }, '이용 중') : null),
           h('div', { class: 'st-price' }, won(t.price), h('small', null, `/${this.periodDays()}일`)),
           h('ul', { class: 'st-perks' },
-            h('li', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🚶'), `이동 ${move}배${t.tier > MOVE_MAX ? ' (최대)' : ''}`),
-            h('li', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🌱'), `작물 자라기 ${t.tier}배`),
-            h('li', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏺'), `발효 ${t.tier}배`)),
-          h('div', { class: 'st-btns' },
+            h('li', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🚶'), `이동 ${t.move}배${t.tier > MOVE_MAX && t.move >= MOVE_MAX ? ' (최대)' : ''}`),
+            h('li', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🌱'), `작물 자라기 ${t.grow}배`),
+            h('li', null, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏺'), `발효 ${t.grow}배`),
+            h('li', { class: 'st-perk-jars' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔓'), `장독 ${jarsPaid}개까지 열려요`),
+            h('li', { class: 'st-perk-room' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🏠'), `방 꾸미기 물건 ${roomPaid}개`)),
+          // an administrator never pays: the cards are a preview of what visitors see
+          admin ? null : h('div', { class: 'st-btns' },
             h('button', { type: 'button', class: 'btn btn-gold btn-block', 'data-sub': 'buy', 'data-tier': String(t.tier), 'data-kind': 'billing', disabled: canBuy ? null : true }, '자동 갱신 구독 (토스)'),
             h('button', { type: 'button', class: 'btn btn-soft btn-block', 'data-sub': 'buy', 'data-tier': String(t.tier), 'data-kind': 'card', disabled: canBuy ? null : true }, '한 달 이용권 (1회 결제)')),
         );
         grid.appendChild(card);
       }
-      body.appendChild(grid);
+      if (sold.length) body.appendChild(grid);
+      else body.appendChild(h('p', { class: 'sub-loading dim small sub-none-on-sale' }, '지금은 판매하는 구독 단계가 없어요.'));
       if (server && cur.autoRenew) {
         body.appendChild(h('div', { class: 'sub-cancel-row' },
           h('button', { type: 'button', class: 'btn btn-ghost', 'data-sub': 'cancel', disabled: this._busy ? true : null }, '해지하기 (자동 갱신 끄기)'),
@@ -313,7 +358,7 @@
       }
       // ---- legal
       body.appendChild(h('footer', { class: 'sub-legal' },
-        h('p', null, h('b', null, '상품 '), `진행 속도 2·3·4배 이용권 (${this.periodDays()}일). 이동·작물 자라기·발효가 빨라져요. 아이 보호 기능(쉬는 시간, 보호자 확인, 채팅 제한)은 빨라지지 않아요.`),
+        h('p', null, h('b', null, '상품 '), `진행 속도 ${soldText} 이용권 (${this.periodDays()}일). 이동·작물 자라기·발효가 빨라지고 장독을 ${jarsPaid}개까지 쓸 수 있어요. 아이 보호 기능(쉬는 시간, 보호자 확인, 채팅 제한)은 빨라지지 않아요.`),
         h('p', null, h('b', null, '요금·결제 '), `표시된 금액은 ${this.periodDays()}일 기준이에요(부가세 포함). 결제대행: 토스페이먼츠. 카드 정보는 토스페이먼츠에만 전달되고 체험관 서버에는 저장되지 않아요.`),
         h('p', null, h('b', null, '자동 갱신·환불 '), '자동 갱신은 이 화면에서 언제든 해지할 수 있어요(남은 기간 이용). 환불·결제 문의는 체험관을 설치한 운영자에게 해 주세요.'),
         live ? h('p', { class: 'dim' }, '실제 결제 모드예요.') : null));
@@ -326,6 +371,7 @@
           if (act === 'buy') this.buy(Number(b.dataset.tier), b.dataset.kind === 'billing' ? 'billing' : 'card');
           else if (act === 'cancel') this.cancel();
           else if (act === 'guide') this.openGuide();
+          else if (act === 'admin') G.sys.entitle?.openAdmin?.();
         });
       }
       if (hadFocus && !G.input?.touchUI) body.querySelector(`[data-sub="${hadFocus}"]:not([disabled])`)?.focus({ preventScroll: true });
@@ -340,6 +386,7 @@
       if (kind !== 'billing') kind = 'card';
       if (this._busy) return false;
       if (!serverAccount()) { toast(isServer() ? '계정으로 로그인한 뒤에 구독할 수 있어요.' : '서버에 설치하면 구독할 수 있어요.', { type: 'info' }); return false; }
+      if (this.isAdmin()) { toast('관리자는 모든 기능을 무료로 써요. 결제할 필요가 없어요.', { type: 'info', emoji: '🛠️' }); return false; }
       if (this.status && this.status.mode === 'unconfigured') { toast(UNCONFIGURED_KO, { type: 'info', easy: '아직 구독할 수 없어요. 어른에게 알려 줘요!' }); return false; }
       if (easyOn() && typeof G.easy?.gateStatus === 'function' && G.settings?.parentGate !== false && !G.easy.gateStatus('subscription')?.unlocked) {
         // the grown-up session ended while the screen was up (it closes with it, but a tap may race the close)
@@ -552,6 +599,7 @@
         mode: isServer() ? (this.status ? this.status.mode : 'server') : 'local', account: G.auth?.current?.kind || null,
         tier: this.tier(), plan: cur, speed: !!G.sys.speed, movement: G.sys.speed?.movement?.() ?? Math.min(this.tier(), MOVE_MAX), progression: G.sys.speed?.progression?.() ?? this.tier(),
         tiers: this.tiers(), fetchedAt: this.fetchedAt, sdk: typeof window.TossPayments === 'function', busy: this._busy, chip: !$('#hud-speed')?.hidden,
+        admin: this.isAdmin(), jars: this.ent()?.limits?.jars ?? null,
       };
     },
     sanitize: sanitizeSub,

@@ -270,6 +270,7 @@
       F('65-companion.js', 'companion', '마스코트 옹이(2D SVG·3D 동반자)·상황별 도움말·읽어주기·멈춰 있을 때 안내·쉬는 시간 연기'),
       F('66-fx.js', 'fx', '파티클·3D 이모지·레벨업·코인 비행·도장 연출·아이 축하(kidParty)·광과민 안전'),
       F('70-app.js', 'app', '부팅·인증(PBKDF2)·아이 타이틀(타자 없음)·그림 메뉴/설정/도움말·보호자 확인 연결·아바타 꾸미기·쉬운 튜토리얼'),
+      F('71-entitle.js', 'app', '이용 권한 G.sys.entitle(서버의 ent: 단계·배수·장독·방 물건 한도·관리자)·운영 설정 G.site·관리자 페이지 버튼·기본 비밀번호 알림·서버 계정 비밀번호 바꾸기 (§17.2)'), // [entitle]
       F('72-subscription.js', 'app', '진행 속도 구독 화면 G.sys.subscription: 단계 카드·토스 결제(서버 모드)·테스트 결제·HUD 속도 칩·설치 안내'),
       F('80-devcenter.js', 'devcenter', '개발자 점검·인수인계 센터 (이 화면)'),
     ] },
@@ -303,6 +304,7 @@
       F('65-companion.css', 'companion', '옹이 말풍선·놀이 메뉴'),
       F('66-fx.css', 'fx', '2D 연출(레벨업·도장·코인)'),
       F('70-app.css', 'app', '타이틀·로그인·메뉴·설정·도움말·아바타·튜토리얼'),
+      F('71-entitle.css', 'app', '관리자 HUD 칩·기본 비밀번호 알림 창'), // [entitle]
       F('72-subscription.css', 'app', '구독 화면·단계 카드·테스트 결제 대화상자·HUD 속도 칩'),
       F('80-devcenter.css', 'devcenter', '개발자 센터 화면'),
     ] },
@@ -452,6 +454,7 @@
   EXPECTED_SYSTEMS.push('allot');   // [allot-client] 43-allot.js
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
   EXPECTED_SYSTEMS.push('lecture');   // [lecture] 74-lecture.js
+  EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 

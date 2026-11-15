@@ -989,6 +989,8 @@
 
     /** local accounts: verify the current password, then store a fresh PBKDF2 hash -> '' or error */
     async changePassword(current, next, again) {
+      // [entitle] CONTRACT §17.2: a server account changes its password on the server (auth/password.php)
+      if (this.current?.kind === 'server' && typeof G.sys.entitle?.changePassword === 'function') return G.sys.entitle.changePassword(current, next, again);
       const cur = this.current;
       if (!cur || cur.kind !== 'local') return { field: null, msg: cur?.kind === 'server' ? '서버 계정의 비밀번호는 체험관 관리자에게 문의해 주세요.' : '로컬 계정에서만 바꿀 수 있어요.' };
       const acc = Accounts.byId(cur.id);
@@ -3299,6 +3301,7 @@
 
   /** the 진행 속도 구독 tile / settings row caption (no prices: those live on the gated subscription screen only) */
   function subTileDesc() {
+    try { const d = G.sys.entitle && !G.sys.entitle._failed ? G.sys.entitle.tileDesc?.() : ''; if (d) return d; } catch (e) { /* the app's own sentence below */ } // [entitle] CONTRACT §17.2
     const S = G.sys.subscription;
     const t = Number(S?.tier?.()) || 1;
     if (t > 1) return `지금 ${t}배 빨라요 · 구독 관리`;
@@ -3324,6 +3327,8 @@
       { act: 'settings', emoji: '⚙️', label: '설정', desc: '소리·그래픽·조작·계정', tint: '#c9d3c6' },
       // CONTRACT §14.6: the subscription screen is reachable only from grown-up screens (this menu, the settings 체험 tab)
       G.sys.subscription && !G.sys.subscription._failed && typeof G.sys.subscription.open === 'function' && { act: 'subscription', emoji: '⚡', label: '진행 속도 구독', desc: subTileDesc(), tint: '#ffd766' },
+      // [entitle] CONTRACT §17.2: the administrator's way in — only when the server says this account is an administrator
+      G.sys.entitle && !G.sys.entitle._failed && G.sys.entitle.isAdmin?.() && { act: 'adminsite', emoji: '🛠️', label: '관리자 페이지', desc: G.sys.entitle.adminTileDesc?.() || '설정·회원·결제 관리 (새 창)', tint: '#ff8f8f' },
       { act: 'help', emoji: '❓', label: '도움말', desc: '조작법·체험 방법·구역', key: 'H', tint: '#7fc4ff' },
       { act: 'save', emoji: '💾', label: '저장하기', desc: lastSavedText(), tint: '#86e3a8' },
       (devCenter() ? canDevCenter() : (canDashboard() || canDebug())) && { act: 'devcenter', emoji: '🛠️', label: '개발자·관리자 센터', desc: devCenter() ? '점검·통계·인수인계·디버그' : (isAdmin() ? '체험 통계·디버그 도구' : '내 체험 통계 (로컬)'), key: 'F9', tint: '#ff8f8f' },
@@ -3413,6 +3418,7 @@
       case 'learn': G.sys.education?.openLibrary?.(); return;
       case 'settings': openSettings({ adult: true }); return;
       case 'subscription': if (G.sys.subscription?.open) G.sys.subscription.open(); else missing('구독'); return;
+      case 'adminsite': if (G.sys.entitle?.openAdmin) G.sys.entitle.openAdmin(); else missing('관리자 페이지'); return; // [entitle]
       case 'help': openHelp(null, { full: true }); return;
       case 'devcenter': openDevCenter(); return;
       case 'upgrade': upgradeGuest(); return;
@@ -3949,7 +3955,10 @@
         del.addEventListener('click', async () => { if (await parentGate('delete-account', '계정 삭제')) this._deleteDialog(); });
         f.append(settingRow('🗑️ 계정 삭제', '이 브라우저에서 계정과 모든 진행 상황을 영구히 지워요', del, 'danger-row'));
       }
-      if (cur.kind === 'server') f.append(note(`${ico('shield', 'ico-sm')}서버 계정의 비밀번호 변경·탈퇴는 체험관 관리자에게 문의해 주세요.`));
+      // [entitle] CONTRACT §17.2: a server account changes its own password here (every other session of it ends)
+      const srvPw = cur.kind === 'server' && isServer() && typeof G.sys.entitle?.changePassword === 'function';
+      if (srvPw) f.append(this._pwForm(acc), note(`${ico('shield', 'ico-sm')}비밀번호를 바꾸면 이 계정으로 로그인한 다른 기기는 모두 로그아웃돼요. 탈퇴는 체험관 관리자에게 문의해 주세요.`));
+      if (cur.kind === 'server' && !srvPw) f.append(note(`${ico('shield', 'ico-sm')}서버 계정의 비밀번호 변경·탈퇴는 체험관 관리자에게 문의해 주세요.`));
       const out = h('button', { type: 'button', class: 'btn btn-soft btn-sm' }, h('span', { class: 'ico ico-sm', 'data-icon': 'logout' }), '로그아웃');
       out.addEventListener('click', () => { G.ui.modal.get('app-settings')?.close(); app.logout({ confirm: true }); });
       f.append(settingRow('👋 로그아웃', '저장하고 처음 화면으로 돌아가요', out));

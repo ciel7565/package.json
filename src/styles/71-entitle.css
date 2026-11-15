@@ -1,0 +1,23 @@
+/* =============================================================================
+   71-entitle.css — the administrator's way in (G.sys.entitle, CONTRACT §17.2): the HUD chip #hud-admin (normal mode,
+   administrators only) and the "change the default password" reminder. No motion beyond a colour change.
+   ============================================================================= */
+.admin-chip {
+  display: inline-flex; align-items: center; gap: .25rem; padding: .12rem .5rem; border-radius: 7px; cursor: pointer;
+  font: inherit; font-size: .7rem; font-weight: 800; line-height: 1.3; color: #ffe1dc;
+  background: rgba(255, 143, 143, .14); border: 1px solid rgba(255, 143, 143, .55);
+  transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+}
+.admin-chip[hidden] { display: none !important; }
+.admin-chip:hover, .admin-chip:focus-visible { background: rgba(255, 143, 143, .28); border-color: rgba(255, 143, 143, .9); }
+.admin-chip .emoji { font-size: .82rem; line-height: 1; }
+.admin-chip .ac-warn[hidden] { display: none; }
+.admin-chip.is-warn { color: #fff; background: rgba(214, 55, 55, .55); border-color: #ff8f8f; }
+/* 쉬운 모드: the way in is 어른 메뉴 (behind the parent gate) — never a chip on the kid HUD */
+body.easy .admin-chip { display: none !important; }
+/* the mode chip keeps the right edge; the admin chip (inserted just before it) takes the free space instead */
+.hud-currency .admin-chip { margin-left: auto; }
+.hud-currency .admin-chip:not([hidden]) + .mode-chip { margin-left: 0; }
+
+.entitle-modal .modal-body p { margin: 0 0 .6rem; line-height: 1.55; }
+@media (forced-colors: active) { .admin-chip { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: HighlightText; } }
