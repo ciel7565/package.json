@@ -33,6 +33,9 @@ mkdir($tmp, 0700, true);
 copyTree(__DIR__ . '/../server', $srv);
 putenv("TFM_DATA_DIR=$tmp");
 putenv('TFM_TOSS_MOCK=1');
+// [entitle] CONTRACT §17.2: tier 4 is sold only when the operator lists it (sub.tiers_on, default 2 and 3) — the payment
+// checks below order tier 4, so this site sells it (the child processes inherit the variable)
+putenv('TFM_SUB_TIERS=2,3,4');
 require $srv . '/lib/bootstrap.php';
 
 $failed = 0;

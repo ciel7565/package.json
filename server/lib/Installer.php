@@ -88,7 +88,12 @@ final class Installer
      * Run the installation. $in keys: driver (mysql|sqlite), host, port, database, username, password, socket,
      * create_db (bool), app_account (bool, default true: make a dedicated least-privilege account), app_host (the host
      * the web server connects from; empty = automatic), ssl_ca, ssl_verify (bool), allow_insecure_remote (bool),
-     * admin_email, admin_nickname, admin_password, toss_client, toss_secret, toss_mock (bool).
+     * admin_email, admin_nickname, admin_password, admin_login, toss_client, toss_secret, toss_mock (bool).
+     *
+     * [entitle] CONTRACT §17.2 — the first administrator: every admin_* value is optional. Nothing typed gives the default
+     * administrator the owner asked for: login id "admin", the default password (users.pw_default = 1 — the admin site
+     * shows a red banner with the change form until it is changed), the nickname 관리자 and a placeholder address
+     * (<id>@local.invalid). A typed value replaces its default; a typed password must pass the normal policy.
      *
      * MySQL / MariaDB (CONTRACT §15.7 #1): username / password are the database ADMINISTRATOR the operator typed (root
      * on XAMPP). With that connection the database is created, database/schema.sql applied and a dedicated account
@@ -107,12 +112,23 @@ final class Installer
         if ($fails) throw new ApiException(400, 'REQUIREMENTS', '서버 환경을 먼저 맞춰 주세요: ' . implode(' / ', $fails));
 
         $str = function (string $k, string $d = '') use ($in): string { return isset($in[$k]) && is_string($in[$k]) ? trim($in[$k]) : $d; };
+        // [entitle] the first administrator: what is not typed takes the default (see above)
+        $loginId = mb_strtolower($str('admin_login'));
+        $loginGiven = $loginId !== '';
+        if (!$loginGiven) $loginId = Users::DEFAULT_ADMIN_ID;
+        if ($e = Users::validLoginId($loginId)) throw new ApiException(400, 'ADMIN_LOGIN', '관리자 아이디: ' . $e);
         $email = mb_strtolower($str('admin_email'));
+        $emailGiven = $email !== '';
+        if (!$emailGiven) $email = $loginId . '@' . Users::LOCAL_MAIL_HOST;
         $nick = Users::cleanText($str('admin_nickname'), 40);
+        $nickGiven = $nick !== '';
+        if (!$nickGiven) $nick = Users::DEFAULT_ADMIN_NICKNAME;
         $pw = isset($in['admin_password']) && is_string($in['admin_password']) ? $in['admin_password'] : '';
-        if ($e = Users::validEmail($email)) throw new ApiException(400, 'ADMIN_EMAIL', '관리자 이메일: ' . $e);
+        $pwDefault = $pw === '';
+        if ($pwDefault) $pw = Users::DEFAULT_ADMIN_PASSWORD;
+        if ($e = Users::validEmail($email, !$emailGiven)) throw new ApiException(400, 'ADMIN_EMAIL', '관리자 이메일: ' . $e);
         if ($e = Users::validNickname($nick, true)) throw new ApiException(400, 'ADMIN_NICK', '관리자 닉네임: ' . $e);
-        if ($e = Users::validPassword($pw, $email, $nick)) throw new ApiException(400, 'ADMIN_PASSWORD', '관리자 비밀번호: ' . $e);
+        if (!$pwDefault && ($e = Users::validPassword($pw, $email, $nick))) throw new ApiException(400, 'ADMIN_PASSWORD', '관리자 비밀번호: ' . $e);
 
         $local = self::readLocalConfig(); // a damaged config.local.php is an error, never silently replaced
         $local['db'] = isset($local['db']) && is_array($local['db']) ? $local['db'] : [];
@@ -212,23 +228,49 @@ final class Installer
 
         // first admin (or promote the matching account)
         $created = false;
-        $existing = Users::byEmail($email);
+        $existing = $emailGiven ? Users::byEmail($email) : null;
+        $byLogin = Users::byLoginId($loginId); // [entitle]
         if ($existing) {
             if ($existing['role'] !== 'admin') Users::update((int) $existing['id'], ['role' => 'admin'], true);
+            // [entitle] the account gets the login id when it has none and the id is free (its password is never touched)
+            if (!$byLogin && (string) (isset($existing['login_id']) ? $existing['login_id'] : '') === '') Users::update((int) $existing['id'], ['login_id' => $loginId]);
             $admin = Users::byId((int) $existing['id']);
+        } elseif ($byLogin && $byLogin['role'] === 'admin' && (!$emailGiven || !empty($byLogin['pw_default']))) {
+            // [entitle] the administrator with this login id exists already (the first-run seed, an earlier install). An
+            // account whose password was changed stays as it is; the untouched default administrator takes what was typed.
+            $fields = [];
+            if (!empty($byLogin['pw_default'])) {
+                if ($emailGiven) $fields['email'] = $email;
+                if ($nickGiven && mb_strtolower($nick) !== (string) $byLogin['nickname_key']) {
+                    if (Users::byNickname($nick)) throw new ApiException(409, 'NICKNAME_TAKEN', '그 닉네임은 이미 다른 계정이 쓰고 있어요.');
+                    $fields['nickname'] = $nick;
+                    $fields['nickname_key'] = mb_strtolower($nick);
+                }
+                if (!$pwDefault) { $fields['password_hash'] = Users::hashPassword($pw); $fields['password_changed_at'] = Clock::ms(); $fields['pw_default'] = 0; }
+            }
+            if ($fields) Users::update((int) $byLogin['id'], $fields, isset($fields['password_hash']));
+            $admin = Users::byId((int) $byLogin['id']);
         } else {
+            if ($byLogin && $loginGiven) throw new ApiException(409, 'LOGIN_ID_TAKEN', '그 로그인 아이디는 이미 다른 계정이 쓰고 있어요.');
             $byNick = Users::byNickname($nick);
-            if ($byNick) throw new ApiException(409, 'NICKNAME_TAKEN', '그 닉네임은 이미 다른 계정이 쓰고 있어요.');
-            $admin = Db::tx(function () use ($email, $nick, $pw) { return Users::create($email, $nick, $pw, 'admin'); });
+            if ($byNick && $nickGiven) throw new ApiException(409, 'NICKNAME_TAKEN', '그 닉네임은 이미 다른 계정이 쓰고 있어요.');
+            for ($i = 0; $i < 20 && $byNick; $i++) { $nick = Users::DEFAULT_ADMIN_NICKNAME . random_int(10, 9999); $byNick = Users::byNickname($nick); }
+            $useId = $byLogin ? null : $loginId; // the default id is taken by another account: the new administrator signs in by e-mail
+            $admin = Db::tx(function () use ($email, $nick, $pw, $useId, $pwDefault) { return Users::create($email, $nick, $pw, 'admin', $useId, $pwDefault); });
             $created = true;
         }
+        if (!$admin) throw new \RuntimeException('admin account vanished');
+        try { Users::markDefaultAdmin('done'); } catch (\Throwable $e) { /* [entitle] the marker of the first-run seed: an administrator exists now */ }
+        $adminDefaultPw = !empty($admin['pw_default']);
         Audit::log('install', (int) $admin['id'], ['driver' => $driver, 'created' => $created, 'schema' => $version, 'mock' => !empty($in['toss_mock']),
-            'dbAccount' => $account['dedicated'] ? 'dedicated' : $account['reason']], 'alert', (int) $admin['id']);
+            'dbAccount' => $account['dedicated'] ? 'dedicated' : $account['reason'], 'defaultPassword' => $adminDefaultPw], 'alert', (int) $admin['id']);
         if (@file_put_contents(self::lockPath(), 'installed ' . gmdate('c') . ' by ' . (PHP_SAPI === 'cli' ? 'cli' : 'web') . "\n", LOCK_EX) === false) {
             throw new ApiException(500, 'LOCK', 'data/install.lock 파일을 만들지 못했어요 (data 폴더 쓰기 권한).');
         }
         PrivateFile::tighten(self::lockPath());
         return ['driver' => $driver, 'server' => $ver, 'schema' => $version, 'adminId' => (int) $admin['id'], 'adminNickname' => (string) $admin['nickname'], 'adminCreated' => $created,
+            // [entitle] what the done page / the command line tell the operator: the login id and whether the default password is in use
+            'adminLogin' => (string) (isset($admin['login_id']) ? $admin['login_id'] : ''), 'adminEmail' => (string) $admin['email'], 'adminDefaultPassword' => $adminDefaultPw,
             'mock' => !empty($in['toss_mock']), 'tossKeys' => $tc !== '', 'dbAccount' => $account];
     }
 

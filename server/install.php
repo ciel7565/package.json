@@ -103,7 +103,7 @@ main{padding:16px max(16px,4vw) 32px;display:grid;gap:16px;max-width:980px;margi
 .card h2{margin:0 0 10px;font-size:1.1rem}.card h3{margin:0 0 12px;font-size:1rem;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .step{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#86e3a8,var(--green));color:#08140d;font-weight:800;font-size:.9rem}
 .tablewrap{overflow-x:auto;border-radius:12px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{padding:9px 10px;text-align:left;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;word-break:keep-all}th{background:rgba(0,0,0,.25);color:var(--dim);font-weight:600;white-space:nowrap}
-.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;white-space:nowrap;background:rgba(255,255,255,.1)}.badge.ok{background:rgba(52,195,107,.18);color:#86e3a8}.badge.warn{background:rgba(255,159,67,.18);color:#ffc58f}.badge.fail{background:rgba(255,107,94,.2);color:#ffaaa2}
+.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;white-space:nowrap;background:rgba(255,255,255,.1)}.bad{color:#ffaaa2}.badge.ok{background:rgba(52,195,107,.18);color:#86e3a8}.badge.warn{background:rgba(255,159,67,.18);color:#ffc58f}.badge.fail{background:rgba(255,107,94,.2);color:#ffaaa2}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:12px}label{display:grid;gap:6px;color:var(--dim);font-size:.9rem}input,select{width:100%;min-height:44px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font:inherit}
 input.code{font-family:ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase;font-size:1.1rem}
 label.check{grid-template-columns:auto 1fr;align-items:center;gap:10px}label.check input{width:22px;height:22px;min-height:0}
@@ -145,10 +145,11 @@ function viewForm(array $checks, ?string $error): string
         . '</div><label class="check"><input type="checkbox" name="create_db" value="1"' . (ichecked('create_db', true) ? ' checked' : '') . '> 데이터베이스가 없으면 새로 만들기 (utf8mb4_unicode_ci)</label>'
         . '<label class="check"><input type="checkbox" name="app_account" value="1"' . (ichecked('app_account', true) ? ' checked' : '') . '> 전용 DB 계정 만들기 (권장) — 체험관이 쓸 계정을 새로 만들어요. 이 계정은 이 데이터베이스의 자료를 읽고 쓰기만 할 수 있고, 표를 지우거나 다른 데이터베이스를 볼 수 없어요. 비밀번호는 32자 무작위로 만들어 설정 파일에만 적어요.</label>'
         . '<div class="grid"><label>웹 서버가 데이터베이스에 접속하는 곳 (보통 비워 두세요 — 자동)<input name="app_host" value="' . ie(ival('app_host')) . '" maxlength="120" placeholder="자동 (localhost · 127.0.0.1)"></label></div></section>'
-        . '<section class="card"><h3><span class="step">3</span> 첫 관리자 계정</h3><p class="dim small">관리자 센터에 들어갈 계정이에요. 체험관 안에서도 같은 계정으로 로그인해요. 비밀번호는 8자 이상, 영문+숫자.</p><div class="grid">'
-        . '<label>이메일<input type="email" name="admin_email" value="' . ie(ival('admin_email')) . '" required maxlength="120"></label>'
-        . '<label>닉네임 (2~12자)<input name="admin_nickname" value="' . ie(ival('admin_nickname')) . '" required maxlength="12"></label>'
-        . '<label>비밀번호<input type="password" name="admin_password" value="" required autocomplete="new-password" maxlength="64"></label>'
+        . '<section class="card"><h3><span class="step">3</span> 첫 관리자 계정</h3><p class="dim small">관리자 센터에 들어갈 계정이에요. 체험관 안에서도 같은 계정으로 로그인해요. <b>아무것도 바꾸지 않으면 아이디 <code>admin</code>, 비밀번호 <code>admin1234</code></b> 로 만들어져요 — 누구나 아는 비밀번호라서, 설치 뒤 관리자 센터 맨 위의 빨간 칸에서 꼭 바꿔야 해요. 여기서 비밀번호를 직접 정하면(8자 이상, 영문+숫자) 그 경고가 나오지 않아요.</p><div class="grid">'
+        . '<label>로그인 아이디 (영어 소문자·숫자 3~20자)<input name="admin_login" value="' . ie(ival('admin_login', 'admin')) . '" maxlength="20" pattern="[a-z0-9_]{3,20}" autocomplete="off" spellcheck="false"></label>'
+        . '<label>비밀번호 (비워 두면 admin1234)<input type="password" name="admin_password" value="" autocomplete="new-password" maxlength="64"></label>'
+        . '<label>이메일 (선택)<input type="email" name="admin_email" value="' . ie(ival('admin_email')) . '" maxlength="120"></label>'
+        . '<label>닉네임 (선택 · 2~12자 · 비워 두면 관리자)<input name="admin_nickname" value="' . ie(ival('admin_nickname')) . '" maxlength="12"></label>'
         . '</div><label class="check"><input type="checkbox" name="admin_random" value="1"' . (ichecked('admin_random', true) ? ' checked' : '') . '> 관리자 센터 주소를 아무도 모르는 이름으로 바꾸기 (권장) — 기본 주소 <code>…/admin/</code> 는 누구나 짐작할 수 있어요. 새 주소는 설치가 끝난 화면에 한 번만 보여 드려요 (서버 컴퓨터에서 <code>php cli/tfm.php admin:path</code> 로 다시 확인할 수 있어요).</label></section>'
         . '<section class="card"><h3><span class="step">4</span> 토스페이먼츠 (선택 · 진행 속도 구독 결제)</h3><p class="dim small">토스페이먼츠 개발자센터에서 발급받은 <b>내 API 키</b>를 넣으면 2배·3배·4배 구독을 팔 수 있어요. 비워 두면 결제가 "설정 필요" 상태로 꺼져 있어요 (나중에 config/config.local.php 에 넣을 수 있어요). "모의 결제" 를 켜면 결제 서버에 연결하지 않고 이 서버 컴퓨터에서 흐름을 시험할 수 있어요 — 운영 서버에서는 켜지 마세요.</p><div class="grid">'
         . '<label>클라이언트 키 (test_ck_… / live_ck_…)<input name="toss_client" value="' . ie(ival('toss_client')) . '" maxlength="120"></label>'
@@ -249,7 +250,9 @@ function viewDone(array $r, array $adminDir, array $audit): string
     }
     $h = '<div class="flash ok" role="status">🎉 설치가 끝났어요!</div><section class="card"><h2>이제 이렇게 하세요</h2><ol class="todo">'
         . '<li>' . $dbLine . '</li>'
-        . '<li>관리자 <b>' . ie($r['adminNickname']) . '</b> ' . ($r['adminCreated'] ? '계정을 만들었어요.' : '계정에 관리자 권한을 주었어요.') . ' 관리자 센터에서 같은 이메일·비밀번호로 로그인하세요.</li>'
+        . '<li>관리자 <b>' . ie($r['adminNickname']) . '</b> ' . ($r['adminCreated'] ? '계정을 만들었어요.' : '계정에 관리자 권한을 주었어요.')
+            . (!empty($r['adminLogin']) ? ' 관리자 센터에서 아이디 <code>' . ie($r['adminLogin']) . '</code> 와 비밀번호로 로그인하세요.' : ' 관리자 센터에서 같은 이메일·비밀번호로 로그인하세요.')
+            . (!empty($r['adminDefaultPassword']) ? ' <b class="bad">⚠ 지금 비밀번호는 기본값 <code>' . ie(Tfm\Users::DEFAULT_ADMIN_PASSWORD) . '</code> 이에요. 누구나 아는 비밀번호예요 — 로그인하면 맨 위 빨간 칸이 나와요. 거기서 바로 새 비밀번호로 바꾸세요.</b>' : '') . '</li>'
         . viewAdminSteps($adminDir)
         . '<li>구독 결제: ' . ($r['mock'] ? '<b>모의 결제 모드</b> (이 서버 컴퓨터에서만 시험용)' : ($r['tossKeys'] ? '<b>입력한 토스 키</b> 사용' : '<b>설정 필요</b> — 결제를 열려면 토스페이먼츠 개발자센터에서 발급받은 내 키를 config/config.local.php 에 넣어 주세요')) . ' — 토스 개발자센터의 웹훅 주소는 <code>' . ie(Http::baseUrl()) . 'api/sub/webhook.php</code></li>'
         . '<li>자동 갱신: Windows 작업 스케줄러에 <code>php.exe cli\\tfm.php sub:renew</code> 를 하루 한 번 등록하세요 (docs/SERVER-INSTALL-KO.md).</li>'
@@ -297,6 +300,7 @@ try {
                     'username' => ival('username'), 'password' => ival('password'), 'create_db' => isset($_POST['create_db']),
                     'app_account' => isset($_POST['app_account']), 'app_host' => ival('app_host'),
                     'admin_email' => ival('admin_email'), 'admin_nickname' => ival('admin_nickname'), 'admin_password' => ival('admin_password'),
+                    'admin_login' => ival('admin_login'), // [entitle] CONTRACT §17.2
                     'toss_client' => ival('toss_client'), 'toss_secret' => ival('toss_secret'), 'toss_mock' => isset($_POST['toss_mock']),
                 ]);
                 SetupCode::consume();

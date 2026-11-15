@@ -4,10 +4,12 @@
  *
  *   php cli/tfm.php help
  *   php cli/tfm.php status                         environment & security self-check
- *   php cli/tfm.php install [--driver=mysql|sqlite --host= --port= --db= --user=<DB 관리자> --admin-email= --admin-nick=
+ *   php cli/tfm.php install [--driver=mysql|sqlite --host= --port= --db= --user=<DB 관리자> --admin-id= --admin-email= --admin-nick=
  *                           --toss-client= --mock --no-app-account --app-host= --ssl-ca= --allow-insecure-remote]
  *                                                  headless install.php (config.local.php, tables, first admin, data/install.lock);
  *                                                  MySQL: a dedicated DB account (SELECT/INSERT/UPDATE/DELETE only) is created
+ *                                                  first admin (CONTRACT §17.2): nothing given = login id admin with the default
+ *                                                  password admin1234 (an empty answer to the password question) — change it at once
  *   php cli/tfm.php users [검색어]                  list accounts
  *   php cli/tfm.php promote <이메일|닉네임>         grant admin            (demote: remove admin)
  *   php cli/tfm.php ban <이메일|닉네임>             ban + sign out          (unban)
@@ -67,7 +69,7 @@ $rest = array_slice($argv, 2);
  * --key=value options (a value option may also be written --key value), --flag options (true) and the remaining
  * positional arguments
  */
-$valueOpts = ['driver', 'host', 'port', 'db', 'user', 'socket', 'admin-email', 'admin-nick', 'toss-client', 'admin-user', 'app-host', 'ssl-ca'];
+$valueOpts = ['driver', 'host', 'port', 'db', 'user', 'socket', 'admin-email', 'admin-nick', 'toss-client', 'admin-user', 'app-host', 'ssl-ca', 'admin-id'];
 $opts = [];
 $pos = [];
 for ($i = 0, $n = count($rest); $i < $n; $i++) {
@@ -241,7 +243,8 @@ try {
             $dbUser = opt($opts, 'user', 'root');
             // the database administrator's password: an explicit empty --pass= (XAMPP root), else TFM_DB_ADMIN_PASS / the prompt
             $dbPass = $driver !== 'mysql' ? '' : (isset($opts['pass']) && $opts['pass'] === '' ? '' : secretInput("데이터베이스 관리자({$dbUser}) 비밀번호 (없으면 그냥 Enter)", 'TFM_DB_ADMIN_PASS'));
-            $adminPass = secretInput('첫 관리자 계정의 비밀번호 (8자 이상, 영문+숫자)', 'TFM_ADMIN_PASS', true);
+            // [entitle] CONTRACT §17.2: an empty answer = the default administrator password (admin1234, to be changed at once)
+            $adminPass = secretInput('첫 관리자 계정의 비밀번호 (8자 이상, 영문+숫자 — 그냥 Enter 를 누르면 기본 비밀번호 admin1234)', 'TFM_ADMIN_PASS', true);
             $tossClient = opt($opts, 'toss-client');
             $tossSecret = $tossClient !== '' ? secretInput('토스 시크릿 키 (test_sk_… / live_sk_…)', 'TFM_TOSS_SECRET_KEY') : '';
             $r = Installer::run([
@@ -251,11 +254,18 @@ try {
                 'app_account' => empty($opts['no-app-account']), 'app_host' => opt($opts, 'app-host'),
                 'ssl_ca' => opt($opts, 'ssl-ca'), 'allow_insecure_remote' => !empty($opts['allow-insecure-remote']),
                 'admin_email' => opt($opts, 'admin-email'), 'admin_nickname' => opt($opts, 'admin-nick'), 'admin_password' => $adminPass,
+                'admin_login' => opt($opts, 'admin-id'), // [entitle] default: admin
                 'toss_client' => $tossClient, 'toss_secret' => $tossSecret, 'toss_mock' => !empty($opts['mock']),
             ]);
             SetupCode::consume(); // a setup code waiting for the web installer is not needed any more
             $acct = $r['dbAccount'];
             out('✔ 설치 완료: ' . strtoupper($r['driver']) . ' · 스키마 v' . $r['schema'] . ' · 관리자 ' . $r['adminNickname'] . ($r['adminCreated'] ? ' 생성' : ' 권한 부여') . ($r['mock'] ? ' · 모의 결제' : ''));
+            // [entitle] the login id, and — loudly — the default password while it is in use
+            if (!empty($r['adminLogin'])) out('  관리자 로그인 아이디: ' . $r['adminLogin'] . ' (이메일 ' . $r['adminEmail'] . ' 로도 로그인돼요)');
+            if (!empty($r['adminDefaultPassword'])) {
+                out('  ⚠⚠ 관리자 비밀번호가 기본값(' . Users::DEFAULT_ADMIN_PASSWORD . ')이에요. 누구나 아는 비밀번호예요 — 관리자 센터에 로그인해 맨 위 빨간 칸(또는 🔐 내 계정)에서 지금 바로 바꾸세요.');
+                out('     서버 컴퓨터에서 바꾸려면: php cli/tfm.php reset-password ' . ($r['adminLogin'] !== '' ? $r['adminLogin'] : $r['adminEmail']) . ' --ask');
+            }
             if ($r['driver'] === 'mysql') {
                 if (!empty($acct['dedicated'])) {
                     out("  전용 DB 계정 {$acct['user']} (" . implode(', ', $acct['hosts']) . ") — SELECT·INSERT·UPDATE·DELETE 만 가능, 비밀번호 32자 무작위. 관리자 계정({$dbUser})은 저장하지 않았어요.");
