@@ -416,3 +416,15 @@ body.reduce-motion .ek-text.ek-in, body.reduce-motion .ek-text.ek-back, body.red
   .kq-choice .et-label { font-size: max(1rem, 16px); }
   .hk-badge { width: 3.4rem; height: 3.4rem; }
 }
+
+/* [content] kid library: picture tabs by kind of story (tap targets ≥ 56 px) */
+.kl-cats { display: flex; flex-wrap: wrap; justify-content: center; gap: .45rem; margin: 0 0 .9rem; }
+.kl-cat {
+  display: inline-flex; align-items: center; gap: .35rem; min-height: 56px; min-width: 56px; padding: .35rem .85rem;
+  border-radius: 999px; border: 2px solid color-mix(in srgb, var(--tile, #ffc93c) 70%, transparent);
+  background: color-mix(in srgb, var(--tile, #ffc93c) 18%, var(--bg-elev, #2a2118)); color: var(--text, #fff);
+  font-size: 1rem; font-weight: 800; cursor: pointer;
+}
+.kl-cat .emoji { font-size: 1.35rem; }
+.kl-cat.on { background: color-mix(in srgb, var(--tile, #ffc93c) 55%, var(--bg-elev, #2a2118)); border-color: #fff; }
+.kl-cat:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }

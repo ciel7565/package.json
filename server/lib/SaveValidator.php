@@ -893,7 +893,17 @@ final class SaveValidator
             }
         }
         $owned = 0;
-        foreach (self::kv(self::p($s, 'jars')) as $j) if (self::p(self::o($j), 'owned') === true) $owned++;
+        // [content] a jar a plan / an administrator opened (via 'plan', CONTRACT §17.8) was not bought with coins: it is no
+        // part of the net worth (counting it would read as 1,500 coins appearing per jar when a plan starts). Clearing the
+        // mark later (buying such a jar with coins) raises the worth by one jar while the coins go down — balanced.
+        // The mark is believed only where coins can never open a jar (J4 … J12) or while the account has a plan (limit > 3):
+        // a free account cannot turn a coin-bought J2 / J3 into coins by marking it.
+        foreach (self::kv(self::p($s, 'jars')) as $jid => $j) {
+            $jo = self::o($j);
+            if (self::p($jo, 'owned') !== true) continue;
+            $planJar = self::p($jo, 'via') === 'plan' && ((preg_match('/^J(\d{1,3})$/', (string) $jid, $jm) && (int) $jm[1] > 3) || $this->jarLimit > 3);
+            if (!$planJar) $owned++;
+        }
         $w += max(0, $owned - 1) * (int) $this->t('jar_value', 1500);
         return $w;
     }

@@ -326,3 +326,22 @@ body.reduce-motion .jk-ring.done, body.reduce-motion .jk-care-btn.rec, body.redu
   .jk-btns .jk-care-btn { flex-direction: row; justify-content: flex-start; gap: .55rem; min-height: var(--tap, 56px); padding: .3rem .9rem; border-radius: 18px; }
   .jk-btns .jk-care-ico { font-size: 1.9rem; }
 }
+
+/* [content] phase 9: recipe tabs, recipe steps, the new jar actions, marks; kid action pictures */
+.jm-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: .1rem 0 .6rem; }
+.jm-tabs .tab { min-height: 2.2rem; }
+.jm-r-chips { gap: .3rem; margin: .1rem 0 .35rem; }
+.jm-r-chips .chip { font-size: .68rem; }
+.jm-r-steps { margin: .2rem 0 .45rem; font-size: .78rem; color: var(--text-dim); }
+.jm-r-steps summary { cursor: pointer; font-weight: 700; color: var(--text); min-height: 2rem; display: flex; align-items: center; }
+.jm-r-steps ol { margin: .3rem 0 .3rem 1.1rem; padding: 0; display: grid; gap: .25rem; }
+.jm-r-steps li b { color: var(--text); }
+.jm-acts .jm-care-btn b { font-size: .85rem; }
+.jm-marks { gap: .3rem; margin: .4rem 0 .2rem; }
+.jm-taste { margin: .35rem 0 0; color: var(--gold); font-weight: 700; }
+.jk-acts { margin-top: .4rem; }
+.jk-act.rec { box-shadow: 0 0 0 3px rgba(255, 214, 102, .85), 0 0 18px rgba(255, 214, 102, .55); }
+@media (prefers-reduced-motion: no-preference) {
+  .jk-act.rec { animation: jk-act-glow 2.4s ease-in-out infinite; }
+}
+@keyframes jk-act-glow { 0%, 100% { opacity: 1; } 50% { opacity: .78; } }

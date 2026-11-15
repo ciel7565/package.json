@@ -2128,7 +2128,7 @@ ${fl}
 
     // ------------------------------------------------------------ kid library: picture tiles + quiz tile
     _openKidLibrary() {
-      const ctx = { kid: true };
+      const ctx = { kid: true, kcat: 'all' };
       const m = G.ui.modal.open({
         id: 'edu-library', size: 'lg', className: 'edu-lib edu-lib-kid', title: '배움터', icon: '📚', say: '무엇을 배워 볼까요? 그림을 골라요.',
         onClose: () => { if (this._lib === ctx) this._lib = null; },
@@ -2140,6 +2140,7 @@ ${fl}
         const b = ev.target.closest('[data-kl]');
         if (!b || !m.body.contains(b)) return;
         const id = b.dataset.kl;
+        if (id.startsWith('cat:')) { ctx.kcat = id.slice(4); this._renderLibrary(ctx); kidSay(id === 'cat:all' ? '모두 보여 줄게요.' : `${CATS()[ctx.kcat]?.name || ''} 이야기예요.`, { priority: 1 }); return; } // [content]
         if (id === '__quiz') {
           const q = this.pickQuiz(null) || Object.keys(QZ())[0];
           if (!this.pickQuiz(null)) kidSay('퀴즈를 모두 맞혔어요! 다시 풀어 볼까요?', { priority: 1 });
@@ -2156,9 +2157,22 @@ ${fl}
       body.appendChild(h('div', { class: 'kl-stats' },
         h('span', { class: 'kl-stat' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📖'), h('b', null, `${st.completed} / ${st.contents}`), h('span', null, '다 배웠어요')),
         h('span', { class: 'kl-stat' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⭐'), h('b', null, `${st.solved} / ${st.quizzes}`), h('span', null, '퀴즈 정답'))));
+      // [content] 80 contents: big picture tabs by kind (전체 first); grown-up knowledge cards are not shown to children
+      const kidIds = eduIds().filter((id) => !EDU()[id].adult);
+      const kcats = [];
+      for (const id of kidIds) { const c = EDU()[id].cat; if (c && !kcats.includes(c)) kcats.push(c); }
+      if (ctx.kcat !== 'all' && !kcats.includes(ctx.kcat)) ctx.kcat = 'all';
+      const tabs = h('div', { class: 'kl-cats', role: 'tablist', 'aria-label': '이야기 종류' },
+        [['all', '📚', '전체'], ...kcats.map((c) => [c, CATS()[c]?.icon || '📖', CATS()[c]?.name || c])].map(([c, ic, nm]) => {
+          const b = h('button', { type: 'button', class: `kl-cat${ctx.kcat === c ? ' on' : ''}`, role: 'tab', 'aria-selected': ctx.kcat === c ? 'true' : 'false', dataset: { kl: `cat:${c}` } },
+            h('span', { class: 'emoji', 'aria-hidden': 'true' }, ic), h('span', null, nm));
+          if (c !== 'all') b.style.setProperty('--tile', CATS()[c]?.color || '#ffc93c');
+          return b;
+        }));
+      body.appendChild(tabs);
       const grid = h('div', { class: 'easy-pick kl-grid', role: 'list' });
       grid.style.setProperty('--cols', '4'); grid.style.setProperty('--cols-s', '3'); grid.style.setProperty('--cols-xs', '2');
-      eduIds().forEach((id, i) => {
+      kidIds.filter((id) => ctx.kcat === 'all' || EDU()[id].cat === ctx.kcat).forEach((id, i) => {
         const e = EDU()[id];
         const K = kidOf(e);
         const done = this.isCompleted(id);

@@ -2132,6 +2132,143 @@
   T('📦 데이터 불변식', '퀴즈 정답 번호가 보기 안에 있어요', () => Object.values(G.data.quizzes || {}).every((q) => Number.isInteger(q.answer) && q.answer >= 0 && q.answer < (q.choices || []).length));
   T('📦 데이터 불변식', '모든 씨앗 ↔ 작물이 서로 가리켜요', () => Object.values(G.data.crops || {}).every((c) => G.data.items?.[c.seedItem]?.crop === c.id && !!G.data.items?.[c.harvestItem]));
 
+  // [content] 12 jars, the entitlement lock, 장 가르기 and the new jar actions (CONTRACT §17.8). Every test runs on a deep
+  // copy of the save that replaces G.state for the (synchronous) test only — the real save is never touched — with the
+  // jar limit stubbed (G.sys.entitle.limit('jars')); afterwards the jars are redrawn from the real save.
+  const ferScratch = (limit, fn) => {
+    const J = G.sys.fermentation;
+    if (!J?.act || !J?.allJarIds) return SKIP('발효 시스템(12개 장독)이 없어요');
+    if (!G.state) return SKIP('체험관에 들어온 뒤에 실행해요');
+    const real = G.state, E = G.sys.entitle, hadE = !!E, prevLimit = E?.limit;
+    const stub = E || {};
+    const clone = JSON.parse(JSON.stringify(real));
+    clone.jars = clone.jars || {};
+    clone.inventory = clone.inventory || {};
+    for (const id of J.allJarIds()) if (!clone.jars[id]) clone.jars[id] = J._initialJar({ id }, G.time.now());
+    try {
+      G.state = clone;
+      if (!hadE) G.sys.entitle = stub;
+      stub.limit = (k) => (k === 'jars' ? limit.n : prevLimit ? prevLimit.call(E, k) : undefined);
+      return fn(J, clone, limit);
+    } finally {
+      G.state = real;
+      if (hadE) E.limit = prevLimit; else delete G.sys.entitle;
+      for (const jj of J._jars.values()) J._syncVisual(jj, true);
+      J._refreshLabels();
+    }
+  };
+  const ferFill = (J, id, recipeId, progress, extra = {}) => {
+    const s = G.state.jars[id], t = G.time.now();
+    Object.assign(s, { owned: true, recipeId, status: progress >= 100 ? 'COMPLETE' : 'FERMENTING', progress, hygiene: 95, tempOff: 0, humOff: 0, startedAt: t - 60000, lastUpdate: t, care: {}, acc: { t: 60, temp: 50, hum: 50, hyg: 5700 }, quality: 70 }, extra);
+    s.status = progress >= 100 ? 'COMPLETE' : progress >= (G.data.fermentation?.stages?.AGING ?? 60) ? 'AGING' : progress >= 10 ? 'FERMENTING' : 'PREPARING';
+    return s;
+  };
+  T('🏺 장독 12개', '장독 자리 12개 · 옹기 종류 · 장독대 앞줄 안 · 통로는 비어 있어요', () => {
+    const J = G.sys.fermentation;
+    if (!J?.allJarIds) return SKIP('발효 시스템(12개 장독)이 없어요');
+    const ids = J.allJarIds(), slots = G.data.fermentation?.jarSlots || [];
+    const P = G.data.layout?.jangdokdae?.platforms?.[0];
+    const js = ids.map((id) => J._jars.get(id));
+    let minGap = Infinity;
+    for (let i = 0; i < js.length; i++) for (let k = i + 1; k < js.length; k++) minGap = Math.min(minGap, Math.hypot(js[i].x - js[k].x, js[i].z - js[k].z));
+    const inside = !P || js.every((j) => Math.abs(j.x - P.x) <= P.hw - 0.6 && Math.abs(j.z - P.z) <= P.hd - 0.6);
+    const aisle = G.data.layout?.jangdokdae?.rows?.aisleZ || [1.9, 6.1];
+    const clearAisle = js.every((j) => j.z + 0.62 <= aisle[0] + 0.45 || j.z - 0.62 >= aisle[1]);
+    const kinds = js.every((j, i) => j.kind === (slots[i] || 'hangari'));
+    return { ok: ids.length === 12 && kinds && inside && clearAisle && minGap >= 2.2, detail: `${ids.length}개 · ${js.map((j) => j.kind[0]).join('')} · 최소 간격 ${minGap.toFixed(2)} m · 안쪽 ${inside} · 통로 ${clearAisle}` };
+  });
+  T('🏺 장독 12개', '무료 3개 → 요금제 12개 한꺼번에 → 끝나면 잠김(내용물 그대로, 쉬었다가 이어서 익어요)', () => {
+    const limit = { n: 3 };
+    return ferScratch(limit, (J) => {
+      const t0 = J.lockOf('J4'), t1 = J.lockOf('J2');
+      limit.n = 12;
+      const opened = J._grantPlanJars();
+      const all = J.allJarIds().every((id) => J.usable(id));
+      ferFill(J, 'J7', 'FER010', 40);
+      J._simulate('J7', G.time.now());
+      const p0 = G.state.jars.J7.progress;
+      limit.n = 3;
+      const lockedNow = J.lockOf('J7') === 'plan' && J.lockOf('J2') === 'coin' && !J.myJarIds().includes('J7');
+      G.state.jars.J7.lastUpdate -= 30000;
+      J._simulate('J7', G.time.now());
+      const paused = near(G.state.jars.J7.progress, p0, 1e-9) && G.state.jars.J7.recipeId === 'FER010';
+      limit.n = 12;
+      G.state.jars.J7.lastUpdate -= 30000;
+      J._simulate('J7', G.time.now());
+      const goesOn = G.state.jars.J7.progress > p0;
+      const ok = t0 === 'plan' && t1 === 'coin' && opened >= 9 && all && lockedNow && paused && goesOn;
+      return { ok, detail: `무료 J4 ${t0} · J2 ${t1} · 요금제로 연 장독 ${opened} · 끝난 뒤 J7 ${lockedNow ? '잠김' : '안 잠김'} · 쉼 ${paused} · 다시 익음 ${goesOn}` };
+    });
+  });
+  T('🏺 장독 12개', '코인은 요금제 장독(J4 이상)을 열지 못해요', () => {
+    const limit = { n: 3 };
+    return ferScratch(limit, (J) => {
+      G.state.stats = Object.assign({}, G.state.stats, { coin: 99999 });
+      const lk = J.lockOf('J9');
+      const before = !!G.state.jars.J9.owned;
+      J.unlock('J9'); // a plan jar: refused before any coin is spent (synchronously, before the first await)
+      const after = !!G.state.jars.J9.owned, coin = G.state.stats.coin;
+      return { ok: lk === 'plan' && !before && !after && coin === 99999, detail: `J9 ${lk} · 열림 ${after} · 코인 ${coin}` };
+    });
+  });
+  T('🏺 장독 12개', '장 가르기: 45%에서 기다렸다가 국물은 간장, 건더기는 빈 장독의 된장으로', () => {
+    const limit = { n: 12 };
+    return ferScratch(limit, (J) => {
+      J._grantPlanJars();
+      for (const id of J.allJarIds()) if (id !== 'J1') Object.assign(G.state.jars[id], { recipeId: null, status: 'EMPTY', progress: 0 });
+      ferFill(J, 'J1', 'FER006', 44);
+      G.state.jars.J1.lastUpdate -= 600000;
+      J._simulate('J1', G.time.now());
+      const capped = near(G.state.jars.J1.progress, 45, 1e-6) && G.state.jars.J1.status === 'FERMENTING';
+      const r = J.act('J1', 'split');
+      const T2 = r && r.to ? G.state.jars[r.to] : null;
+      G.state.jars.J1.lastUpdate -= 60000;
+      J._simulate('J1', G.time.now());
+      const goes = G.state.jars.J1.progress > 45;
+      const ok = capped && !!T2 && T2.recipeId === 'FER007' && T2.status === 'PREPARING' && G.state.jars.J1.split === true && T2.fromJar === 'J1' && goes;
+      return { ok, detail: `기다림 ${capped} · 된장 장독 ${r?.to || '-'} (${T2?.recipeId || '-'} ${T2?.status || '-'}) · 간장 다시 익음 ${goes}` };
+    });
+  });
+  T('🏺 장독 12개', '새 장독 일: 웃소금·숯·고추·금줄·버선·맛보기·이름표·덧장·나누기의 효과', () => {
+    const limit = { n: 12 };
+    return ferScratch(limit, (J) => {
+      J._grantPlanJars();
+      const inv = G.state.inventory;
+      Object.assign(inv, { ITEM_SALT: 5, ITEM_CHARCOAL: 2, ITEM_PEPPER: 2, ITEM_STRAW: 2, ITEM_HANJI: 2, ITEM_GANJANG: 2 });
+      const s = ferFill(J, 'J4', 'FER002', 30, { hygiene: 70 });
+      const h0 = s.hygiene;
+      const salt = J.act('J4', 'salt') && s.saltTop === true && s.hygiene >= h0 + 11.9 && inv.ITEM_SALT === 4;
+      const coal = J.act('J4', 'charcoal') && s.charcoal === true && inv.ITEM_CHARCOAL === 1 && inv.ITEM_PEPPER === 1;
+      const q0 = J._quality(s, G.data.recipes.FER002, 'J4').total;
+      const gj = J.act('J4', 'geumjul') && s.geumjul === true && J._quality(s, G.data.recipes.FER002, 'J4').total === q0;
+      const taste = J.act('J4', 'taste');
+      const tasteOk = !!taste && taste.stars >= 1 && taste.stars <= 5 && !!s.lastTaste && !J.act('J4', 'taste');
+      const tag = J.act('J4', 'nametag', { name: '할머니 손맛' }) && s.nameTag === '할머니 손맛' && !J.act('J4', 'nametag', { name: '<b>x</b>' });
+      const deotEarly = !J.act('J4', 'deot');
+      s.progress = 70; s.status = 'AGING';
+      const deot = J.act('J4', 'deot') && s.deot === true && s.extraQty === 1 && s.bonusQ === 4 && inv.ITEM_GANJANG === 1;
+      // slower hygiene loss with 웃소금 + 숯
+      const a = ferFill(J, 'J5', 'FER002', 30, { hygiene: 90 }), b = ferFill(J, 'J6', 'FER002', 30, { hygiene: 90, saltTop: true, charcoal: true });
+      a.lastUpdate -= 20000; b.lastUpdate -= 20000;
+      J._simulate('J5', G.time.now()); J._simulate('J6', G.time.now());
+      const slower = 90 - b.hygiene < (90 - a.hygiene) * 0.6;
+      const c = ferFill(J, 'J8', 'FER004', 100);
+      const share = J.act('J8', 'share') && c.share === true;
+      const ok = salt && coal && gj && tasteOk && tag && deotEarly && deot && slower && share;
+      return { ok, detail: `웃소금 ${salt} · 숯 ${coal} · 금줄(맛 그대로) ${gj} · 맛보기 ${tasteOk ? taste.stars + '★' : false} · 이름표 ${tag} · 덧장(이르면 안 됨 ${deotEarly}, 숙성 ${deot}) · 위생 천천히 ${slower} · 나누기 ${share}` };
+    });
+  });
+  T('🏺 장독 12개', '옹기 맞춤(−4) · 따뜻한 곳에서 익히는 음식은 날씨 대신 그 온도', () => {
+    const J = G.sys.fermentation;
+    if (typeof J?._quality !== 'function' || typeof J?._speed !== 'function') return SKIP('발효 시스템이 없어요');
+    const R = G.data.recipes || {};
+    const rec = R.FER002, chk = R.FER008;
+    if (!rec || !chk?.heat) return SKIP('레시피 데이터가 없어요');
+    const sample = { progress: 80, hygiene: 95, acc: { t: 100, temp: 80, hum: 75, hyg: 9500 } };
+    const good = J._quality(sample, rec, 'J4').total, other = J._quality(sample, rec, 'J7').total; // J4 독 (likes 독) · J7 단지
+    const cold = J._speed({ tempOff: 0, humOff: 0 }, chk, { temp: -5, humidity: 80 });
+    return { ok: good - other === (G.data.fermentation?.jarMismatch ?? 4) && cold.ts > 0.9, detail: `독 ${good} · 단지 ${other} · 청국장 바깥 −5°C → 장독 ${cold.temp.toFixed(1)}°C` };
+  });
   // ---- 시스템
   T('🧩 시스템', '이벤트 버스 on / emit / off / once', () => {
     const name = 'dc:selftest';

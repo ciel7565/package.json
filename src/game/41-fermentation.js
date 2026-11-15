@@ -17,7 +17,26 @@
 //   State machine EMPTY -> PREPARING -> FERMENTING -> AGING -> COMPLETE -> CLAIMED (-> new start).
 //   Progress advances from timestamps (offline time counts) at a small environment-dependent speed, × the speed
 //   tier (G.sys.speed.progression(), CONTRACT §14.1) — hygiene decay and care cool-downs stay wall-clock.
-//   Quality = base + 온도(0–15) + 습도(0–10) + 숙성(0–15) − 위생 감점(0–20) — an educational game simulation.
+//   Quality = base + 온도(0–15) + 습도(0–10) + 숙성(0–15) − 위생 감점(0–20) ± 옹기(−4…0) + 정성(0…+8) — an educational
+//   simulation.
+//
+// [content] phase 9 (CONTRACT §17.8)
+//   12 own jars J1 … J12 along the front row of the 장독대 terrace, each of a jar kind (data fermentation.jarSlots: 독 /
+//   중두리 / 항아리 / 단지 — a recipe likes one kind; another kind costs `jarMismatch` quality points). How many can be
+//   used comes from the entitlement: limit = G.sys.entitle?.limit?.('jars') ?? 3 (local mode 3).
+//     · limit ≤ 3 (free): J1 is every player's; J2 / J3 are opened with coins as before (only up to the limit).
+//     · limit > 3 (a 토스 plan or an administrator): every jar up to the limit opens at once (`via: 'plan'`).
+//     · a jar beyond the limit is locked 🔒: its contents stay, readable, and pause; they continue when the plan returns.
+//   Coins never open a jar beyond the free limit. usable(id) / lockOf(id) -> null | 'coin' | 'plan'.
+//   act(jarId, action, opts) — the jar actions besides care(sun|vent|clean):
+//     salt 웃소금 (ITEM_SALT: hygiene +12, slower hygiene loss) · charcoal 숯·고추 (ITEM_CHARCOAL + ITEM_PEPPER, 간장
+//     jars: hygiene +8, slower loss; float in the jar) · geumjul 금줄·버선 (ITEM_STRAW + ITEM_HANJI: a custom — no change
+//     of taste, said honestly) · taste 맛보기 (a grade + taste words; −2 hygiene for the spoon) · nametag 이름표 (a
+//     preset name, no typing) · split 장 가르기 (FER006 at `split.at`%: the liquid stays as 간장, the solids go to an
+//     empty usable jar as FER007 된장) · deot 덧장 (adds one jar of the same 장 from the bag: +1 result, +4 quality,
+//     once) · share 나누기 (a finished jar: one portion goes to the neighbours at claim).
+//   볕 쬐기 (care 'sun') now takes the lid off for `sunOpen` seconds (closed at once when rain starts).
+//   recipe.heat {temp,label}: foods made in a warm place (청국장 아랫목, 식혜 솥) use that temperature, not the weather.
 // =============================================================================
 (function () {
   const U = G.util;
@@ -37,7 +56,8 @@
     return w + (fin ? withB : withoutB);
   }
 
-  const FDEF = { stages: { PREPARING: 0, FERMENTING: 10, AGING: 60 }, careCooldown: 20, maxJars: 3, extraJarPrice: 1500, starterRecipe: 'FER001', starterProgress: 35, gradeNames: [[90, '최상'], [75, '상'], [55, '중'], [0, '하']] };
+  const FDEF = { stages: { PREPARING: 0, FERMENTING: 10, AGING: 60 }, careCooldown: 20, maxJars: 3, extraJarPrice: 1500, starterRecipe: 'FER001', starterProgress: 35, gradeNames: [[90, '최상'], [75, '상'], [55, '중'], [0, '하']],
+    maxJarsAll: 12, jarMismatch: 4, actionCooldown: 20, sunOpen: 45, jarSlots: ['hangari', 'hangari', 'hangari', 'dok', 'jungduri', 'hangari', 'danji', 'dok', 'jungduri', 'hangari', 'danji', 'danji'] };
   let FC = null;
   const FD = () => FC || (FC = Object.assign({}, FDEF, G.data.fermentation || {}));
   const recipes = () => G.data.recipes || {};
@@ -49,6 +69,55 @@
   const ACTION_RANGE = 15; // m: jar actions need the player on the jangdokdae (NPC 장독지기 stands within it)
   const TICK = 0.25;
   const DEF_ENV = { temp: 22, humidity: 60 };
+
+  // ---------------------------------------------------------------- [content] 12 jars: slots, kinds, the entitlement
+  const ONGGI_KINDS = new Set(['dok', 'jungduri', 'hangari', 'danji']);
+  const KIND_NAMES = { dok: '독', jungduri: '중두리', hangari: '항아리', danji: '단지' };
+  /** z of every slot along the front row of the tier-1 terrace (x of J1): J1–J3 as before, J4–J8 south of the aisle to the
+   *  ring field (z 1.9 … 6.1 stays free), J9–J12 north of J1 — 2.5 m apart, inside the terrace (z −14 … 18) */
+  const SLOT_Z = [-3.4, -0.9, 1.6, 7.0, 9.5, 12.0, 14.5, 17.0, -5.9, -8.4, -10.9, -13.2];
+  const slotOf = (id) => Number(String(id || '').replace(/\D/g, '')) || 1;
+  const kindOf = (id) => { const k = (FD().jarSlots || [])[slotOf(id) - 1]; return ONGGI_KINDS.has(k) ? k : 'hangari'; };
+  const freeLimit = () => clamp(Math.floor(Number(FD().maxJars) || 3), 1, 12);
+  /** jars this account may use now (CONTRACT §17.2): the entitlement's limit, or the free number without one */
+  function jarLimit() {
+    let n = NaN;
+    try { n = Number(G.sys.entitle?.limit?.('jars')); } catch (e) { n = NaN; }
+    if (!Number.isFinite(n) || n <= 0) n = freeLimit();
+    return clamp(Math.floor(n), 1, clamp(Math.floor(Number(FD().maxJarsAll) || 12), 1, 12));
+  }
+  const planOn = () => jarLimit() > freeLimit();
+  /** why a jar cannot be used: null (usable) · 'coin' (free tier, open it with coins) · 'plan' (beyond the limit) */
+  function lockOf(id, s) {
+    const k = slotOf(id), lim = jarLimit();
+    if (k === 1) return null;
+    if (k > lim) return 'plan';
+    if (lim > freeLimit()) return null;
+    return s && s.owned && s.via !== 'plan' ? null : 'coin';
+  }
+  const NAMETAGS = [
+    { t: '우리 집 장', e: '🏠' }, { t: '할머니 손맛', e: '👵' }, { t: '첫 장', e: '🌱' }, { t: '정성 가득', e: '💛' }, { t: '가족 장독', e: '👨‍👩‍👧' },
+    { t: '나눔 장독', e: '💞' }, { t: '정선 장', e: '⛰️' }, { t: '보물 장독', e: '💎' }, { t: '햇살 장', e: '☀️' }, { t: '김장 독', e: '🥬' },
+  ];
+  /** the new jar actions (CONTRACT §17.8). once: one time per batch. need: items used. Effects are applied in act(). */
+  const ACTIONS = {
+    salt: { name: '웃소금', icon: '🧂', need: { ITEM_SALT: 1 }, once: true, effect: '위생 +12 · 위생이 천천히 줄어요', desc: '장이나 김치 맨 위에 소금을 한 켜 고루 뿌려요. 겉에 곰팡이가 피지 않게 지켜 줘요.', kid: { label: '웃소금', done: '소금을 솔솔! 곰팡이가 못 와요.' } },
+    charcoal: { name: '숯·고추', icon: '⚫', need: { ITEM_CHARCOAL: 1, ITEM_PEPPER: 1 }, once: true, effect: '위생 +8 · 위생이 천천히 줄어요', desc: '간장독에 숯과 마른 붉은 고추를 띄워요. 숯은 잡냄새를 빨아들이고, 붉은 고추는 나쁜 기운을 막아 준다고 믿었어요.', kid: { label: '숯·고추', done: '숯이랑 고추가 둥둥! 간장을 지켜요.' } },
+    geumjul: { name: '금줄·버선', icon: '🪢', need: { ITEM_STRAW: 1, ITEM_HANJI: 1 }, once: true, effect: '맛은 그대로 · 정성 표시', desc: '새끼줄에 고추·숯·한지를 끼워 독에 두르고, 한지로 오린 버선본을 거꾸로 붙여요. 장맛을 지키려는 마음을 담은 옛 풍습이라 맛이 바뀌지는 않아요.', kid: { label: '금줄', done: '금줄을 둘렀어요! 정성이 가득해요.' } },
+    taste: { name: '맛보기', icon: '🥄', effect: '맛 등급 보기 · 위생 −2', desc: '깨끗한 숟가락으로 조금 떠서 맛을 봐요. 얼마나 익었는지, 맛이 어떤지 알 수 있어요.', kid: { label: '맛보기', done: '냠! 맛을 봤어요.' } },
+    nametag: { name: '이름표', icon: '🏷️', effect: '내 장독에 이름 달기', desc: '장독에 이름표를 달아 무엇을 언제 담갔는지 알아보기 쉽게 해요.', kid: { label: '이름표', done: '이름표를 달았어요!' } },
+    split: { name: '장 가르기', icon: '✂️', effect: '국물은 간장, 건더기는 된장으로', desc: '장을 담근 지 40~60일이 지나면 메주 건더기를 건져 다른 독에 담아요. 남은 국물은 간장, 건더기는 된장이 돼요.', kid: { label: '장 가르기', done: '간장이랑 된장으로 나눴어요!' } },
+    deot: { name: '덧장', icon: '➕', once: true, effect: '완성품 +1 · 품질 +4', desc: '익어 가는 장에 같은 장을 한 그릇 더해 맛을 이어 가요. 묵은 장의 깊은 맛이 새 장에 배어요.', kid: { label: '덧장', done: '장을 더 넣었어요! 맛이 깊어져요.' } },
+    share: { name: '나누기', icon: '💞', once: true, effect: '꺼낼 때 한 몫은 이웃에게', desc: '다 익은 장과 김치를 이웃과 나누는 것도 우리 발효 문화예요. 꺼낼 때 한 몫이 이웃에게 가요.', kid: { label: '나누기', done: '이웃이랑 나눠 먹어요! 💞' } },
+  };
+  const ACTION_ORDER = ['split', 'taste', 'salt', 'charcoal', 'geumjul', 'deot', 'nametag', 'share'];
+  const TASTE_WORDS = { salty: '짭짤해요', sweet: '달큰해요', sour: '새콤해요', umami: '감칠맛이 돌아요', spicy: '매콤해요', nutty: '구수해요' };
+  /** jar micro-climate: the weather + care offsets; a recipe made in a warm place (heat) uses that temperature */
+  function microOf(s, env, rec) {
+    const heat = rec && rec.heat && Number.isFinite(Number(rec.heat.temp)) ? Number(rec.heat.temp) : null;
+    const temp = heat != null ? heat + (env.temp - 20) * 0.1 + (s.tempOff || 0) : env.temp + (s.tempOff || 0);
+    return { temp, hum: clamp(env.humidity + (s.humOff || 0), 5, 100) };
+  }
 
   function stageOf(p) {
     const s = FD().stages;
@@ -124,8 +193,9 @@
   /** what the jar wants most right now -> {care?, text} (null = all good). env is the shared env object. */
   function kidNeed(s, rec, env) {
     if (!s || !rec || !env) return null;
-    const temp = env.temp + (s.tempOff || 0);
-    const hum = clamp(env.humidity + (s.humOff || 0), 5, 100);
+    const mc = microOf(s, env, rec);
+    const temp = mc.temp, hum = mc.hum;
+    if (rec.split && !s.split && s.progress >= rec.split.at - 0.01) return { care: 'split', text: '장 가르기를 할 때예요! 간장이랑 된장으로 나눠요 ✂️' };
     if (s.hygiene < 60) return { care: 'clean', text: '장독이 더러워졌어요. 깨끗이 닦아 줘요 🧼' };
     if (temp < rec.idealTemp[0] - 0.5) {
       if (env.raining) return { care: null, text: '비가 와요. 뚜껑을 덮고 기다려요 🌧️' };
@@ -185,8 +255,8 @@
       + `<g class="jk-face-g">${FACE_EYES[f[0]]}${FACE_MOUTH[f[1]]}${f[2]}</g></svg>`;
   }
   /** face for a jar state */
-  function kidMood(s, rec) {
-    if (!s || !s.owned) return 'sleep';
+  function kidMood(s, rec, locked) {
+    if (!s || !s.owned || locked) return 'sleep';
     if (!rec || OPEN_FOR_START.has(s.status)) return 'hungry';
     if (s.status === 'COMPLETE') return 'cheer';
     if (s.hygiene < 60) return 'dirty';
@@ -199,28 +269,115 @@
   const LID_PROFILE = [[0, 0.17], [0.04, 0.17], [0.055, 0.15], [0.06, 0.12], [0.13, 0.112], [0.22, 0.088], [0.29, 0.048], [0.315, 0.012], [0.3, 0], [0.26, 0.02], [0.15, 0.06], [0, 0.07]];
   const JS = 1.3; // my jars are a bit larger than the decorative ones
   const JAR_TOP = JAR_PROFILE.reduce((m, p) => Math.max(m, p[1]), 0) * JS;
-  let GEO = null;
-  function geos() {
-    if (GEO) return GEO;
+  // [content] per-kind scale (a 독 is tall, a 단지 small) and the profiles of 15-buildings.js (fallbacks if missing)
+  const KIND_SCALE = { hangari: JS, dok: 1.18, jungduri: 1.22, danji: 1.55 };
+  const KIND_FALLBACK = {
+    dok: [[0, 0], [0.22, 0], [0.25, 0.05], [0.31, 0.25], [0.37, 0.5], [0.4, 0.72], [0.4, 0.86], [0.37, 1.0], [0.32, 1.1], [0.29, 1.16], [0.3, 1.2], [0.315, 1.225], [0.3, 1.245], [0.27, 1.25], [0.25, 1.22]],
+    jungduri: [[0, 0], [0.22, 0], [0.26, 0.05], [0.36, 0.2], [0.45, 0.38], [0.48, 0.5], [0.46, 0.62], [0.4, 0.72], [0.33, 0.79], [0.3, 0.83], [0.31, 0.86], [0.325, 0.88], [0.31, 0.9], [0.28, 0.9], [0.26, 0.87]],
+    danji: [[0, 0], [0.13, 0], [0.155, 0.025], [0.21, 0.1], [0.245, 0.2], [0.25, 0.26], [0.23, 0.33], [0.19, 0.38], [0.165, 0.405], [0.17, 0.43], [0.18, 0.445], [0.17, 0.46], [0.15, 0.46], [0.14, 0.44]],
+  };
+  const profileOf = (kind) => (kind === 'hangari' ? JAR_PROFILE : G.bkit?.JAR_PROFILES?.[kind] || KIND_FALLBACK[kind] || JAR_PROFILE);
+  /** outer radius of a profile at height y (the rising part of the silhouette, linear between points) */
+  function radiusAt(pts, y) {
+    let prev = pts[0];
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i];
+      if (p[1] < prev[1] - 1e-4) break;
+      if (y <= p[1]) { const t = p[1] > prev[1] ? (y - prev[1]) / (p[1] - prev[1]) : 1; return prev[0] + (p[0] - prev[0]) * clamp(t, 0, 1); }
+      prev = p;
+    }
+    return prev[0];
+  }
+  let SHARED = null;
+  const GEOK = {};
+  function geos(kind = 'hangari') {
+    if (!ONGGI_KINDS.has(kind)) kind = 'hangari';
+    if (GEOK[kind]) return GEOK[kind];
     const lathe = (pts, seg, s) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(Math.max(0.0001, r * s), y * s)), seg);
-    const lidS = 0.292 / 0.3 * JS;
-    const plinth = new THREE.CylinderGeometry(0.62, 0.7, 0.16, 28);
-    plinth.translate(0, 0.08, 0);
-    const padBody = new THREE.BoxGeometry(0.15, 0.13, 0.06);
-    const shackle = new THREE.TorusGeometry(0.05, 0.012, 8, 16, PI);
-    shackle.translate(0, 0.065, 0);
-    const tag = new THREE.PlaneGeometry(0.3, 0.19);
-    GEO = {
-      jar: lathe(JAR_PROFILE, 40, JS),
-      lid: lathe(LID_PROFILE, 32, lidS),
-      knob: new THREE.SphereGeometry(0.045, 12, 8),
-      contents: new THREE.CircleGeometry(0.262 * JS, 32).rotateX(-PI / 2),
-      band: new THREE.TorusGeometry(0.315 * JS, 0.018, 8, 48).rotateX(PI / 2),
-      plinth,
-      padBody, shackle, tag,
-      ring: new THREE.PlaneGeometry(1, 1).rotateX(-PI / 2),
-    };
-    return GEO;
+    if (!SHARED) {
+      const plinth = new THREE.CylinderGeometry(0.62, 0.7, 0.16, 28);
+      plinth.translate(0, 0.08, 0);
+      const padBody = new THREE.BoxGeometry(0.15, 0.13, 0.06);
+      const shackle = new THREE.TorusGeometry(0.05, 0.012, 8, 16, PI);
+      shackle.translate(0, 0.065, 0);
+      SHARED = { plinth, padBody, shackle, tag: new THREE.PlaneGeometry(0.3, 0.19), knob: new THREE.SphereGeometry(0.045, 12, 8), ring: new THREE.PlaneGeometry(1, 1).rotateX(-PI / 2), beoseon: new THREE.PlaneGeometry(0.2, 0.26) };
+    }
+    const pts = profileOf(kind), S = KIND_SCALE[kind] || JS;
+    const H = pts.reduce((m, p) => Math.max(m, p[1]), 0);
+    const tail = pts.slice(-4);
+    const rimR = tail.reduce((m, p) => Math.max(m, p[0]), 0);
+    const innerR = Math.max(0.05, pts[pts.length - 1][0] + 0.03);
+    const bandY = H * 0.85;
+    const lidS = (rimR / 0.3) * S;
+    const g = Object.assign({}, SHARED, {
+      kind, S, H: H * S, top: H * S, rimR: rimR * S,
+      jar: lathe(pts, 40, S),
+      lid: lathe(LID_PROFILE, 32, lidS), lidS,
+      contents: new THREE.CircleGeometry(innerR * S, 32).rotateX(-PI / 2), contentsY: H * S * 0.925, innerR: innerR * S,
+      band: new THREE.TorusGeometry((radiusAt(pts, bandY) + 0.012) * S, 0.018, 8, 48).rotateX(PI / 2), bandY: bandY * S,
+      shoulderY: H * S * 0.74, shoulderR: (radiusAt(pts, H * 0.74) + 0.02) * S,
+      bellyY: H * S * 0.45, bellyR: radiusAt(pts, H * 0.45) * S,
+      frontR: radiusAt(pts, H * 0.62) * S,
+    });
+    GEOK[kind] = g;
+    return g;
+  }
+  /** one geometry with vertex colours from [geometry, colour, matrix] parts (decorations: one draw call each) */
+  function mergeColored(parts) {
+    const list = parts.map(([geo, col, mat]) => { const x = geo.index ? geo.toNonIndexed() : geo.clone(); if (mat) x.applyMatrix4(mat); return [x, new THREE.Color(col)]; });
+    let n = 0;
+    for (const [x] of list) n += x.attributes.position.count;
+    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), colA = new Float32Array(n * 3);
+    let o = 0;
+    for (const [x, c] of list) {
+      const cnt = x.attributes.position.count;
+      pos.set(x.attributes.position.array, o * 3);
+      if (x.attributes.normal) nor.set(x.attributes.normal.array, o * 3);
+      for (let i = 0; i < cnt; i++) { colA[(o + i) * 3] = c.r; colA[(o + i) * 3 + 1] = c.g; colA[(o + i) * 3 + 2] = c.b; }
+      o += cnt;
+      x.dispose();
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    out.setAttribute('color', new THREE.BufferAttribute(colA, 3));
+    out.computeBoundingSphere();
+    return out;
+  }
+  const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1);
+  const mat4 = (x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) => new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz)), _s.set(sx, sy, sz));
+  const DECO = {};
+  /** 금줄 (straw rope round the shoulder with red chillies, charcoal and hanji strips hanging in front) for a jar kind */
+  function geumjulGeo(kind) {
+    const key = 'gj:' + kind;
+    if (DECO[key]) return DECO[key];
+    const g = geos(kind);
+    const parts = [[new THREE.TorusGeometry(g.shoulderR, 0.026, 6, 40).rotateX(PI / 2), '#c9a85a', mat4(0, g.shoulderY, 0)]];
+    // a twist: a second thin strand slightly lower reads as twisted straw
+    parts.push([new THREE.TorusGeometry(g.shoulderR + 0.004, 0.014, 5, 40).rotateX(PI / 2), '#a8863e', mat4(0, g.shoulderY - 0.02, 0)]);
+    const chilli = new THREE.CapsuleGeometry(0.022, 0.09, 3, 6), coal = new THREE.BoxGeometry(0.06, 0.05, 0.04), strip = new THREE.BoxGeometry(0.035, 0.11, 0.004);
+    const items = [['c', -0.62], ['h', -0.38], ['k', -0.16], ['c', 0.06], ['h', 0.28], ['k', 0.5], ['c', 0.7]];
+    for (const [t, a] of items) {
+      const x = Math.sin(a) * (g.shoulderR + 0.02), z = Math.cos(a) * (g.shoulderR + 0.02);
+      const y = g.shoulderY - (t === 'h' ? 0.075 : 0.06);
+      if (t === 'c') parts.push([chilli, '#b8261c', mat4(x, y, z, 0.1, a, 0.2)]);
+      else if (t === 'k') parts.push([coal, '#1e1a18', mat4(x, y, z, 0.3, a, 0.1)]);
+      else parts.push([strip, '#f4efe2', mat4(x, y, z, 0.05, a, 0)]);
+    }
+    DECO[key] = mergeColored(parts);
+    return DECO[key];
+  }
+  /** charcoal lumps and dried chillies floating on the 간장 (seen when the lid is off) */
+  function floatGeo(kind) {
+    const key = 'fl:' + kind;
+    if (DECO[key]) return DECO[key];
+    const g = geos(kind), r = g.innerR * 0.55;
+    const coal = new THREE.BoxGeometry(0.11, 0.06, 0.08), chilli = new THREE.CapsuleGeometry(0.025, 0.12, 3, 6);
+    DECO[key] = mergeColored([
+      [coal, '#191614', mat4(r * 0.5, 0, -r * 0.2, 0.1, 0.4, 0)], [coal, '#24201c', mat4(-r * 0.45, 0, r * 0.35, 0, 1.3, 0.1)],
+      [chilli, '#a8201a', mat4(-r * 0.1, 0.01, -r * 0.6, 0, 0.6, PI / 2)], [chilli, '#b82a1e', mat4(r * 0.3, 0.01, r * 0.55, 0, -0.5, PI / 2)],
+    ]);
+    return DECO[key];
   }
   let TEX = null;
   function textures() {
@@ -246,7 +403,24 @@
       ctx.fillStyle = g; ctx.fillRect(0, 0, w, w);
       for (let i = 0; i < 260; i++) { ctx.fillStyle = r() < 0.5 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.35)'; const s = 1 + r() * 3; ctx.beginPath(); ctx.arc(r() * w, r() * w, s, 0, TAU); ctx.fill(); }
     });
-    TEX = { ring, halo, paste, tags: {} };
+    // [content] 버선본: a hanji sock cut-out, pasted upside down on the jar (drawn the right way up, the mesh is turned over)
+    const beoseon = G.gfx.canvasTexture(128, 160, (ctx, w, h) => {
+      ctx.clearRect(0, 0, w, h);
+      ctx.beginPath();
+      ctx.moveTo(40, 8); ctx.lineTo(84, 8); ctx.lineTo(86, 92);
+      ctx.quadraticCurveTo(88, 118, 108, 126); ctx.quadraticCurveTo(124, 132, 120, 118);
+      ctx.quadraticCurveTo(126, 150, 92, 152); ctx.lineTo(36, 152);
+      ctx.quadraticCurveTo(14, 150, 16, 124); ctx.quadraticCurveTo(20, 104, 38, 96); ctx.closePath();
+      const g2 = ctx.createLinearGradient(0, 0, w, h);
+      g2.addColorStop(0, '#fbf7ec'); g2.addColorStop(1, '#e9e1cc');
+      ctx.fillStyle = g2; ctx.fill();
+      ctx.strokeStyle = 'rgba(120,96,60,0.55)'; ctx.lineWidth = 2.5; ctx.stroke();
+      const r2 = U.rng('hanji');
+      ctx.strokeStyle = 'rgba(150,130,100,0.18)'; ctx.lineWidth = 1;
+      for (let i = 0; i < 40; i++) { const x = r2() * w, y = r2() * h; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (r2() - 0.5) * 14, y + (r2() - 0.5) * 14); ctx.stroke(); }
+      ctx.strokeStyle = 'rgba(120,96,60,0.4)'; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(40, 30); ctx.lineTo(84, 30); ctx.stroke();
+    });
+    TEX = { ring, halo, paste, beoseon, tags: {} };
     return TEX;
   }
   function tagTexture(text, color) {
@@ -300,6 +474,11 @@
     init() {
       G.ffx?.ensure?.();
       const L = G.data.layout || {};
+      this._ensureSlots(L);
+      // [content] a plan / an administrator / its end changes which jars can be used (contents always stay)
+      const onEnt = () => { if (!G.state || !this._ready) return; this._grantPlanJars(); for (const J of this._jars.values()) this._syncVisual(J, true); this._refreshLabels(); this._refreshModal(true); };
+      G.bus.on('entitle:changed', onEnt);
+      G.bus.on('site:changed', onEnt);
       for (const def of L.jars || []) {
         try { this._buildJar(def); } catch (e) { G.log.error('FERMENTATION', `jar ${def.id} build failed`, e); }
       }
@@ -328,14 +507,49 @@
         let s = state.jars[J.id];
         if (!s || typeof s !== 'object') s = state.jars[J.id] = this._initialJar(J.def, t);
         this._repair(J.id, s, t);
+      }
+      this._grantPlanJars();
+      for (const J of this._jars.values()) {
+        const s = state.jars[J.id];
         // offline catch-up (environment unknown while away -> neutral defaults)
         this._simulate(J.id, t, true);
         J.lastStatus = s.status;
-        J.lidT = 0; J.lidPulse = 0;
+        J.lidT = 0; J.lidPulse = 0; J.sunT = 0;
         this._syncVisual(J, true);
       }
       this._ready = true;
       this._refreshLabels();
+    },
+
+    // ------------------------------------------------------------ [content] slots + entitlement
+    /** add the jar slots J1 … J12 to the layout (J1–J3 keep their places; kinds from fermentation.jarSlots) */
+    _ensureSlots(L) {
+      if (!Array.isArray(L.jars)) L.jars = [];
+      const base = L.jars.find((j) => j.id === 'J1') || { x: 24.6, z: SLOT_Z[0] };
+      const n = clamp(Math.floor(Number(FD().maxJarsAll) || 12), 1, 12);
+      for (let k = 1; k <= n; k++) {
+        const id = `J${k}`;
+        if (!L.jars.some((j) => j.id === id)) L.jars.push({ id, x: base.x, z: SLOT_Z[k - 1], owner: 'me', slot: k });
+      }
+      for (const j of L.jars) { j.slot = j.slot || slotOf(j.id); j.kind = ONGGI_KINDS.has(j.kind) ? j.kind : kindOf(j.id); }
+    },
+    jarLimit() { return jarLimit(); },
+    lockOf(id) { return lockOf(id, this._state(id)); },
+    usable(id) { const s = this._state(id); return !!s && (s.owned || id === 'J1') && !lockOf(id, s); },
+    /** with a plan (limit > the free number) every jar up to the limit opens at once; contents are never touched */
+    _grantPlanJars() {
+      if (!G.state?.jars || !planOn()) return 0;
+      const lim = jarLimit();
+      let n = 0;
+      const t = now();
+      for (const id of this._jars.keys()) {
+        const s = G.state.jars[id];
+        if (!s || s.owned || slotOf(id) > lim) continue;
+        Object.assign(s, { owned: true, via: 'plan', status: s.recipeId ? s.status : 'EMPTY', lastUpdate: t });
+        n++;
+      }
+      if (n) { G.dirty('ferment'); G.log.info('FERMENTATION', `plan opened ${n} jars (limit ${lim})`); }
+      return n;
     },
 
     onLogout() {
@@ -378,7 +592,7 @@
         recipeId: rec.id, status: stageOf(p), progress: p, hygiene: 82, startedAt: t - Math.round(el * 1000), lastUpdate: t,
         acc: { t: el, temp: el * 0.86, hum: el * 0.8, hyg: el * 92 },
       });
-      base.quality = this._quality(base, rec).total;
+      base.quality = this._quality(base, rec, def.id).total;
       return base;
     },
     _repair(id, s, t) {
@@ -398,6 +612,16 @@
       if (!Number.isFinite(s.lastUpdate) || s.lastUpdate <= 0 || s.lastUpdate > t + 60000) s.lastUpdate = t;
       if (ACTIVE.has(s.status) && s.progress >= 100) s.status = 'COMPLETE';
       if (ACTIVE.has(s.status)) s.status = stageOf(s.progress);
+      // [content] fields of the new jar actions (unknown / bad values are dropped, never trusted)
+      if (s.via !== 'plan') delete s.via;
+      if (s.nameTag != null && !NAMETAGS.some((n) => n.t === s.nameTag)) delete s.nameTag;
+      for (const k of ['saltTop', 'charcoal', 'geumjul', 'deot', 'share', 'split']) if (s[k] !== true) delete s[k];
+      s.bonusQ = clamp(Math.round(Number(s.bonusQ) || 0), 0, 8);
+      s.extraQty = s.deot ? 1 : 0;
+      const su = Number(s.sunUntil) || 0;
+      s.sunUntil = su > t && su <= t + FD().sunOpen * 1000 + 1000 ? su : 0;
+      const rec2 = recipeOf(s.recipeId);
+      if (rec2?.split && !s.split && ACTIVE.has(s.status)) s.progress = Math.min(s.progress, rec2.split.at);
     },
     _state(id) { return G.state?.jars?.[id] || null; },
 
@@ -421,12 +645,10 @@
       return _env;
     },
     env() { return Object.assign({}, this._readEnv()); },
-    /** jar micro-climate from the environment + care offsets */
-    _micro(s, env) {
-      return { temp: env.temp + (s.tempOff || 0), hum: clamp(env.humidity + (s.humOff || 0), 5, 100) };
-    },
+    /** jar micro-climate from the environment + care offsets (recipes made in a warm place use that heat) */
+    _micro(s, env, rec) { return microOf(s, env, rec); },
     _speed(s, rec, env) {
-      const m = this._micro(s, env);
+      const m = this._micro(s, env, rec);
       const ts = rangeScore(m.temp, rec.idealTemp[0], rec.idealTemp[1], 10);
       const hs = rangeScore(m.hum, rec.idealHumidity[0], rec.idealHumidity[1], 20);
       return { speed: 0.8 + 0.25 * ts + 0.1 * hs, ts, hs, temp: m.temp, hum: m.hum };
@@ -441,24 +663,30 @@
       if (!(el > 0)) return s;
       const rec = recipeOf(s.recipeId);
       if (!rec || !ACTIVE.has(s.status)) return s;
+      // [content] a jar beyond the account's limit rests (contents kept, no progress, no loss) until the plan returns
+      if (lockOf(id, s)) return s;
       let env = this._readEnv();
       if (offline || el > 30) env = Object.assign({}, env, DEF_ENV, { raining: false });
+      // [content] 볕 쬐기: rain on an open jar -> the lid goes back on at once and a little rain got in
+      if (s.sunUntil && s.sunUntil > t && env.raining && !offline) { s.sunUntil = 0; s.hygiene = clamp(s.hygiene - 8, 0, 100); this._rainNotice(id); }
       const steps = Math.min(4000, Math.max(1, Math.ceil(el)));
       const h = el / steps;
       const prev = s.status;
       const prog = progression(); // the speed tier multiplies the progress only (not hygiene, not the care cool-downs)
+      const cap = rec.split && !s.split ? clamp(Number(rec.split.at) || 45, 1, 99) : 100; // 장 가르기 waits for the player
+      const keep = (s.saltTop ? 0.6 : 1) * (s.charcoal ? 0.85 : 1);                       // 웃소금 / 숯: slower hygiene loss
       for (let k = 0; k < steps; k++) {
         const sp = this._speed(s, rec, env);
-        s.progress = Math.min(100, s.progress + (h / rec.baseDuration) * 100 * sp.speed * prog);
+        s.progress = Math.min(cap, s.progress + (h / rec.baseDuration) * 100 * sp.speed * prog);
         const hum = sp.hum;
-        s.hygiene = clamp(s.hygiene - h * (0.12 + (hum > 80 ? 0.06 : 0) + (env.raining ? 0.03 : 0)), 0, 100);
+        s.hygiene = clamp(s.hygiene - h * keep * (0.12 + (hum > 80 ? 0.06 : 0) + (env.raining ? 0.03 : 0)), 0, 100);
         const decay = Math.pow(0.5, h / 60);
         s.tempOff *= decay; s.humOff *= decay;
         s.acc.t += h; s.acc.temp += sp.ts * h; s.acc.hum += sp.hs * h; s.acc.hyg += s.hygiene * h;
         s.temp = sp.temp; s.humidity = sp.hum;
         if (s.progress >= 100) { s.completedAt = Math.round(t - (steps - k - 1) * h * 1000); break; }
       }
-      const q = this._quality(s, rec);
+      const q = this._quality(s, rec, id);
       s.quality = q.total;
       const st = stageOf(s.progress);
       if (st !== prev) {
@@ -469,7 +697,7 @@
     },
     _simulateAll() { const t = now(); for (const id of this._jars.keys()) this._simulate(id, t, false); },
 
-    _quality(s, rec) {
+    _quality(s, rec, jarId) {
       const a = s.acc || { t: 0 };
       const T = a.t > 0 ? a.t : 0;
       const tsAvg = T ? a.temp / T : 0.75, hsAvg = T ? a.hum / T : 0.75, hyAvg = T ? a.hyg / T : s.hygiene;
@@ -478,8 +706,11 @@
       const base = rec.baseQuality || 55;
       const temp = Math.round(15 * tsAvg), hum = Math.round(10 * hsAvg), aging = Math.round(15 * agingFrac);
       const hyg = Math.round(20 * clamp((90 - hyAvg) / 60, 0, 1));
-      const total = clamp(base + temp + hum + aging - hyg, 0, 100);
-      return { base, temp, hum, aging, hyg, total, grade: gradeOf(total), hyAvg };
+      // [content] the jar kind the recipe likes (− points in another kind) + care from the new actions (덧장 · 장 가르기)
+      const jar = jarId && rec.jar && ONGGI_KINDS.has(rec.jar) && kindOf(jarId) !== rec.jar ? -Math.abs(Number(FD().jarMismatch) || 0) : 0;
+      const bonus = clamp(Math.round(Number(s.bonusQ) || 0), 0, 8);
+      const total = clamp(base + temp + hum + aging - hyg + jar + bonus, 0, 100);
+      return { base, temp, hum, aging, hyg, jar, bonus, total, grade: gradeOf(total), hyAvg };
     },
 
     _onStatusChange(id, prev, st, offline) {
@@ -489,9 +720,9 @@
       G.log.info('FERMENTATION', `${id} ${prev} -> ${st}`);
       if (st === 'COMPLETE') {
         if (rec) {
-          const q = this._quality(s, rec);
+          const q = this._quality(s, rec, id);
           s.quality = q.total;
-          s.qualityParts = { base: q.base, temp: q.temp, hum: q.hum, aging: q.aging, hyg: q.hyg };
+          s.qualityParts = { base: q.base, temp: q.temp, hum: q.hum, aging: q.aging, hyg: q.hyg, jar: q.jar, bonus: q.bonus };
         }
         G.dirty('ferment');
         G.bus.emit('ferment:completed', { jarId: id, recipeId: s.recipeId });
@@ -512,9 +743,11 @@
     // ------------------------------------------------------------ public API
     myJarIds() {
       const out = [];
-      for (const id of this._jars.keys()) { const s = this._state(id); if (s ? s.owned : id === 'J1') out.push(id); }
+      for (const id of this._jars.keys()) { const s = this._state(id); if (s ? s.owned && !lockOf(id, s) : id === 'J1') out.push(id); }
       return out;
     },
+    /** every jar slot id J1 … J12 (in slot order) */
+    allJarIds() { return [...this._jars.keys()].sort((a, b) => slotOf(a) - slotOf(b)); },
     getJar(id) {
       const J = this._jars.get(id);
       if (!J) return null;
@@ -523,8 +756,10 @@
       const rec = recipeOf(s.recipeId);
       const env = this._readEnv();
       const sp = rec ? this._speed(s, rec, env) : null;
-      const q = rec ? (s.status === 'COMPLETE' || s.status === 'CLAIMED') && s.qualityParts ? Object.assign({ total: s.quality, grade: gradeOf(s.quality) }, s.qualityParts) : this._quality(s, rec) : null;
+      const q = rec ? (s.status === 'COMPLETE' || s.status === 'CLAIMED') && s.qualityParts ? Object.assign({ total: s.quality, grade: gradeOf(s.quality), jar: 0, bonus: 0 }, s.qualityParts) : this._quality(s, rec, id) : null;
       return {
+        kind: J.kind, kindName: KIND_NAMES[J.kind], lock: lockOf(id, s), usable: !!s.owned && !lockOf(id, s), nameTag: s.nameTag || '',
+        actions: this.actionsFor(id),
         id, def: J.def, state: s, owned: !!s.owned, status: s.status, statusName: STATE_NAMES()[s.status] || s.status,
         recipeId: s.recipeId, recipe: rec, progress: s.progress,
         remaining: rec && ACTIVE.has(s.status) ? ((100 - s.progress) / 100) * rec.baseDuration / ((sp?.speed || 1) * progression()) : 0,
@@ -541,7 +776,8 @@
       if (!s || !rec || !J) return false;
       const kid = kidOn();
       const warn = (normal, kidText, emoji) => G.ui.toast(kid ? kidText : normal, { type: 'warn', emoji, say: kid ? kidText : undefined });
-      if (!s.owned) { warn('먼저 장독을 열어야 해요.', '잠긴 장독이에요. 먼저 열어야 해요.', '🔒'); return false; }
+      if (!s.owned || lockOf(jarId, s)) { warn('먼저 장독을 열어야 해요.', '잠긴 장독이에요. 먼저 열어야 해요.', '🔒'); return false; }
+      if (rec.startable === false) return false; // 장 가르기 makes this one (FER007), it is never started from ingredients
       if (ACTIVE.has(s.status)) { warn('이미 발효가 진행 중인 장독이에요.', '이 장독은 벌써 익고 있어요!', '⏳'); return false; }
       if (s.status === 'COMPLETE') { warn('완성된 발효식품을 먼저 수령해 주세요.', '다 익은 걸 먼저 꺼내요!', '🎁'); return false; }
       const missing = this._missing(rec);
@@ -558,8 +794,10 @@
       Object.assign(s, {
         recipeId: rec.id, status: 'PREPARING', progress: 0, hygiene: 100, tempOff: 0, humOff: 0, startedAt: t, lastUpdate: t,
         care: {}, completedAt: 0, claimedAt: 0, acc: { t: 0, temp: 0, hum: 0, hyg: 0 }, qualityParts: null,
+        bonusQ: 0, extraQty: 0, sunUntil: 0, // [content] a new batch: the per-batch marks start over (the name tag stays)
       });
-      s.quality = this._quality(s, rec).total;
+      for (const k of ['saltTop', 'charcoal', 'geumjul', 'deot', 'share', 'split', 'fromJar', 'lastTaste']) delete s[k];
+      s.quality = this._quality(s, rec, jarId).total;
       J.lastStatus = 'PREPARING';
       J.lidPulse = 1.6;
       const top = J.topY;
@@ -594,10 +832,13 @@
         G.ui.toast(kid ? `${kidText} ${MOONS[moonIdx(s.progress)]}` : `아직 발효가 끝나지 않았어요. (${Math.floor(s.progress)}%)`, { type: 'info', emoji: '⏳', say: kid ? kidText : undefined });
         return null;
       }
+      if (lockOf(jarId, s)) { G.ui.toast(kid ? '잠긴 장독이에요. 요금제가 다시 켜지면 꺼낼 수 있어요.' : '이용 기간이 끝난 장독이에요. 내용물은 그대로 있고, 요금제가 다시 켜지면 꺼낼 수 있어요.', { type: 'info', emoji: '🔒', say: kid ? '잠긴 장독이에요.' : undefined }); return null; }
       const q = clamp(Math.round(s.quality || 0), 0, 100);
       const grade = gradeOf(q);
       const bonus = q >= 90 ? 1 : 0;
-      let qty = (rec.resultQty || 1) + bonus;
+      // [content] 덧장 +1, 나누기 −1 (one portion went to the neighbours); never more than 3 (the server's claim bound)
+      let qty = clamp((rec.resultQty || 1) + bonus + (s.deot ? 1 : 0) - (s.share ? 1 : 0), 1, 3);
+      const shared = !!s.share;
       const itemId = rec.resultItem;
       // the bag cannot take any more of it: the jar keeps its result until there is room
       const room = G.sys.inventory?.room ? G.sys.inventory.room(itemId) : Infinity;
@@ -622,6 +863,13 @@
       else G.sfx('reward');
       G.log.info('FERMENTATION', `claim ${jarId} ${rec.id} q=${q} -> ${itemId} x${qty}`);
       G.activity('ferment', `${rec.name} 수령 (품질 ${q}점 · ${grade})`, { jarId, recipeId: rec.id, quality: q, itemId, qty });
+      if (shared) {
+        const line = kid ? '한 몫은 이웃에게 나눴어요 💞' : `${josa(shortName(rec), '을/를')} 한 몫 이웃과 나눴어요. 장과 김치를 나누는 것도 우리 발효 문화예요 💞`;
+        setTimeout(() => { if (G.state) G.ui.toast(line, { type: 'success', emoji: '💞', say: kid ? line : undefined }); }, 900);
+        G.activity('ferment', `${rec.name} 이웃과 나누기`, { jarId, recipeId: rec.id });
+        G.bus.emit('ferment:shared', { jarId, recipeId: rec.id });
+        G.ffx?.burst?.(G.ffx.P.PETAL, J.x, J.topY + 0.4, J.z, 16, 1.4, 2.2, null, J.baseY);
+      }
       G.dirty('ferment');
       G.bus.emit('ferment:claimed', { jarId, recipeId: rec.id, quality: q, itemId, qty });
       this._syncVisual(J, true);
@@ -638,7 +886,7 @@
       if (!s || !J || !def) return false;
       const kid = kidOn();
       const tell = (type, normal, kidText, emoji, sound) => G.ui.toast(kid ? kidText : normal, { type, emoji, sound, say: kid ? kidText : undefined });
-      if (!s.owned || !ACTIVE.has(s.status)) { tell('info', '발효가 진행 중인 장독만 돌볼 수 있어요.', '익고 있는 장독만 돌볼 수 있어요.', '🏺'); return false; }
+      if (!s.owned || lockOf(jarId, s) || !ACTIVE.has(s.status)) { tell('info', '발효가 진행 중인 장독만 돌볼 수 있어요.', '익고 있는 장독만 돌볼 수 있어요.', '🏺'); return false; }
       const left = this._careLeft(s, action);
       if (left > 0) { tell('info', `${josa(def.name, '은/는')} ${Math.ceil(left)}초 뒤에 다시 할 수 있어요.`, '방금 했어요! 조금 있다가 또 해요.', '⏳', false); return false; }
       const env = this._readEnv();
@@ -651,6 +899,8 @@
       s.tempOff = clamp(s.tempOff, -8, 8);
       s.humOff = clamp(s.humOff, -25, 15);
       s.care[action] = now();
+      // [content] 볕 쬐기: the lid comes off and rests beside the jar for a while (back on at once when rain starts)
+      if (action === 'sun') s.sunUntil = now() + FD().sunOpen * 1000;
       const top = J.topY;
       if (action === 'vent') { J.lidPulse = 1.6; for (let k = 0; k < 12; k++) G.ffx?.spawn?.(G.ffx.P.STEAM, J.x + (Math.random() - 0.5) * 0.4, top + 0.1, J.z + (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.6, 0.8 + Math.random() * 0.5, (Math.random() - 0.5) * 0.6); }
       else if (action === 'sun') { J.lidPulse = 1.8; G.ffx?.burst?.(G.ffx.P.SPARK, J.x, top + 0.4, J.z, 18, 0.7, 1.2); }
@@ -670,16 +920,182 @@
     },
     _careLeft(s, action) {
       const el = (now() - (Number(s.care?.[action]) || 0)) / 1000;
-      return el < 0 ? 0 : Math.max(0, FD().careCooldown - el); // a future stamp (clock moved back) is no cooldown
+      const cd = CARE[action] ? FD().careCooldown : FD().actionCooldown;
+      return el < 0 ? 0 : Math.max(0, cd - el); // a future stamp (clock moved back) is no cooldown
+    },
+
+    // ------------------------------------------------------------ [content] the new jar actions (CONTRACT §17.8)
+    /** the action ids that make sense for this jar now (shown as buttons; actionBlock says if one can be done) */
+    actionsFor(id) {
+      const s = this._state(id);
+      if (!s || !s.owned || lockOf(id, s)) return [];
+      const rec = recipeOf(s.recipeId);
+      const active = !!rec && ACTIVE.has(s.status), complete = !!rec && s.status === 'COMPLETE';
+      const allow = new Set(rec?.care || []);
+      const flag = { salt: 'saltTop', charcoal: 'charcoal', geumjul: 'geumjul', deot: 'deot' };
+      const out = [];
+      for (const k of ACTION_ORDER) {
+        if (k === 'nametag') out.push(k);
+        else if (k === 'taste') { if (active || complete) out.push(k); }
+        else if (k === 'split') { if (active && rec.split && !s.split) out.push(k); }
+        else if (k === 'share') { if (complete && !s.share) out.push(k); }
+        else if (active && allow.has(k) && !s[flag[k]]) out.push(k);
+      }
+      return out;
+    },
+    /** '' when the action can be done right now, otherwise why not ({ text, kid }) */
+    actionBlock(id, k) {
+      const s = this._state(id);
+      const rec = recipeOf(s?.recipeId);
+      const A = ACTIONS[k];
+      if (!s || !A) return { text: '할 수 없는 일이에요.', kid: '지금은 할 수 없어요.' };
+      if (!this.actionsFor(id).includes(k)) return { text: '지금 이 장독에는 할 수 없는 일이에요.', kid: '지금은 할 수 없어요.' };
+      const left = this._careLeft(s, k);
+      if (k === 'taste' && left > 0) return { text: `${Math.ceil(left)}초 뒤에 다시 맛볼 수 있어요.`, kid: '방금 맛봤어요! 조금 있다가 또 해요.' };
+      if (k === 'taste' && s.status !== 'COMPLETE' && s.progress < 10) return { text: '재료를 막 넣었어요. 조금 익은 뒤에 맛봐요.', kid: '아직 너무 일러요. 조금 기다려요!' };
+      if (k === 'split' && s.progress < rec.split.at - 0.01) return { text: `장 가르기는 ${rec.split.at}%쯤 익었을 때 해요. (실제로는 담근 지 40~60일)`, kid: '아직 일러요. 조금 더 익혀요!' };
+      if (k === 'split' && !this._splitTarget(id)) return { text: '건져 낸 된장을 담을 빈 장독이 있어야 해요. 빈 장독을 하나 마련해 주세요.', kid: '된장을 담을 빈 장독이 있어야 해요!' };
+      if (k === 'deot' && s.progress < FD().stages.AGING) return { text: '덧장은 숙성 단계에 들어선 장에 해요.', kid: '조금 더 익은 뒤에 해요!' };
+      const need = k === 'deot' ? (rec?.deot ? { [rec.deot]: 1 } : {}) : A.need || {};
+      const lack = Object.entries(need).filter(([iid, n]) => this._count(iid) < n);
+      if (lack.length) return { text: `재료가 필요해요: ${lack.map(([iid, n]) => `${items()[iid]?.name || iid} ${n - this._count(iid)}개`).join(', ')} (매점·작업대)`, kid: `${lack.map(([iid, n]) => `${kidItemName(iid)} ${n - this._count(iid)}개`).join(', ')}가 필요해요.` };
+      if (k === 'share' && clamp((rec.resultQty || 1) + (s.quality >= 90 ? 1 : 0) + (s.deot ? 1 : 0), 1, 3) < 2) return { text: '나눌 만큼 넉넉하지 않아요.', kid: '나눌 만큼 많지 않아요.' };
+      return '';
+    },
+    /** an empty usable jar for the 된장 of 장 가르기 (prefers one whose kind the 된장 likes) */
+    _splitTarget(id, want) {
+      const ok = (jid) => jid !== id && this.usable(jid) && OPEN_FOR_START.has(this._state(jid)?.status || 'EMPTY');
+      if (want && ok(want)) return want;
+      const ids = this.allJarIds().filter(ok);
+      const likes = recipeOf(recipeOf(this._state(id)?.recipeId)?.split?.into)?.jar;
+      return ids.find((jid) => kindOf(jid) === likes) || ids[0] || null;
+    },
+    /** do one of the new jar actions. opts: { name } for nametag, { target } for split. Returns a result or false. */
+    act(jarId, k, opts = {}) {
+      if (!G.state) return false;
+      const s = this._simulate(jarId);
+      const J = this._jars.get(jarId);
+      const rec = recipeOf(s?.recipeId);
+      const A = ACTIONS[k];
+      if (!s || !J || !A) return false;
+      const kid = kidOn();
+      const tell = (type, normal, kidText, emoji) => G.ui.toast(kid ? kidText : normal, { type, emoji, say: kid ? kidText : undefined });
+      if (k === 'nametag' && opts.name === undefined) { this._pickNameTag(jarId); return false; }
+      const why = this.actionBlock(jarId, k);
+      if (why) { tell('info', why.text, why.kid, A.icon); return false; }
+      const need = k === 'deot' ? { [rec.deot]: 1 } : A.need || {};
+      const taken = [];
+      for (const [iid, n] of Object.entries(need)) {
+        if (this._take(iid, n)) taken.push([iid, n]);
+        else { for (const [ri, rn] of taken) this._give(ri, rn, 'refund'); tell('error', '재료를 꺼내지 못했어요. 다시 해 보세요.', '재료를 꺼내지 못했어요.', '🧺'); return false; }
+      }
+      const top = J.topY;
+      let result = true;
+      if (k === 'salt') { s.saltTop = true; s.hygiene = clamp(s.hygiene + 12, 0, 100); J.lidPulse = 1.6; G.ffx?.burst?.(G.ffx.P.DUST, J.x, top + 0.1, J.z, 14, 0.4, 0.6, new THREE.Color('#ffffff')); }
+      else if (k === 'charcoal') { s.charcoal = true; s.hygiene = clamp(s.hygiene + 8, 0, 100); J.lidPulse = 2.4; }
+      else if (k === 'geumjul') { s.geumjul = true; G.ffx?.burst?.(G.ffx.P.SPARK, J.x, J.baseY + J.g.shoulderY, J.z, 14, 0.7, 1.2); }
+      else if (k === 'taste') {
+        s.care.taste = now();
+        s.hygiene = clamp(s.hygiene - 2, 0, 100);
+        result = this._tasteOf(s, rec, jarId);
+        s.lastTaste = { stars: result.stars, q: result.q, p: Math.floor(s.progress), at: now() };
+        J.lidPulse = 1.4;
+        const line = kid ? `${'⭐'.repeat(result.stars)} ${result.kid}` : `맛보기 ${'★'.repeat(result.stars)}${'☆'.repeat(5 - result.stars)} — ${result.text}`;
+        G.ui.toast(line, { type: 'info', emoji: '🥄', duration: 5200, say: kid ? result.kid : undefined });
+      } else if (k === 'nametag') {
+        const t = NAMETAGS.find((n) => n.t === opts.name);
+        if (opts.name === '' || opts.name === null) delete s.nameTag;
+        else if (t) s.nameTag = t.t;
+        else { for (const [ri, rn] of taken) this._give(ri, rn, 'refund'); return false; }
+      } else if (k === 'split') {
+        const tid = this._splitTarget(jarId, opts.target);
+        const ts = tid ? this._state(tid) : null;
+        const into = recipeOf(rec.split.into);
+        if (!ts || !into) return false;
+        const t = now();
+        s.split = true; s.splitAt = t;
+        Object.assign(ts, { recipeId: into.id, status: 'PREPARING', progress: 0, hygiene: clamp(Math.round(s.hygiene), 60, 100), tempOff: 0, humOff: 0, startedAt: t, lastUpdate: t,
+          care: {}, completedAt: 0, claimedAt: 0, acc: { t: 0, temp: 0, hum: 0, hyg: 0 }, qualityParts: null, extraQty: 0, sunUntil: 0, fromJar: jarId,
+          bonusQ: clamp(Math.round(((Number(s.quality) || 60) - 60) / 5), 0, 4) });
+        for (const f of ['saltTop', 'charcoal', 'geumjul', 'deot', 'share', 'split', 'lastTaste']) delete ts[f];
+        ts.quality = this._quality(ts, into, tid).total;
+        const TJ = this._jars.get(tid);
+        if (TJ) { TJ.lastStatus = 'PREPARING'; TJ.lidPulse = 1.8; G.ffx?.burst?.(G.ffx.P.POP, TJ.x, TJ.topY + 0.15, TJ.z, 12, 0.8, 1.6, new THREE.Color(into.color || '#6b4a2b')); this._syncVisual(TJ, true); }
+        J.lidPulse = 1.8;
+        result = { from: jarId, to: tid };
+        G.bus.emit('ferment:split', { jarId, target: tid, recipeId: rec.id, into: into.id });
+        tell('success', `장 가르기를 했어요! ${jarId === 'J1' ? '내 항아리' : `장독 #${slotOf(jarId)}`}의 국물은 간장으로, 건더기는 장독 #${slotOf(tid)}에서 된장으로 익어요.`, '간장이랑 된장으로 나눴어요! 두 장독에서 따로 익어요 ✂️', '✂️');
+      } else if (k === 'deot') { s.deot = true; s.extraQty = 1; s.bonusQ = clamp((s.bonusQ || 0) + 4, 0, 8); J.lidPulse = 1.6; G.ffx?.burst?.(G.ffx.P.POP, J.x, top + 0.15, J.z, 10, 0.7, 1.4, new THREE.Color(rec.color || '#6b4a2b')); }
+      else if (k === 'share') { s.share = true; G.ffx?.burst?.(G.ffx.P.PETAL, J.x, top + 0.3, J.z, 10, 0.9, 1.6, null, J.baseY); }
+      G.sys.player?.faceTowards?.(J.x, J.z);
+      G.sys.player?.playAction?.('interact');
+      G.sfx(k === 'taste' ? 'pop' : 'jar');
+      if (k !== 'taste' && k !== 'split') {
+        if (kid) { G.ffx?.floatText?.(`<b>${esc(A.icon)}</b> ${esc(A.kid.label)}`, { x: J.x, y: top + 0.9, z: J.z }, 'care kid'); kidSay(A.kid.done); }
+        else G.ffx?.floatText?.(`<b>${esc(A.icon)} ${esc(A.name)}</b> ${esc(A.effect)}`, { x: J.x, y: top + 0.9, z: J.z }, 'care');
+      }
+      G.activity('ferment', `장독 ${A.name}`, { jarId, action: k });
+      G.dirty('ferment');
+      G.bus.emit('ferment:action', { jarId, action: k, recipeId: rec?.id || null });
+      this._syncVisual(J, true);
+      this._refreshLabels();
+      this._refreshModal(true);
+      return result;
+    },
+    /** 맛보기: stars (1–5), the grade and taste words from the recipe's flavour and how ripe it is */
+    _tasteOf(s, rec, jarId) {
+      const q = Math.round(this._quality(s, rec, jarId).total);
+      const p = s.status === 'COMPLETE' ? 100 : s.progress;
+      const words = Object.entries(rec.flavor || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => TASTE_WORDS[k]).filter(Boolean);
+      const ripe = p >= 100 ? '잘 익었어요' : p >= FD().stages.AGING ? '거의 다 익었어요' : p >= 30 ? '익어 가고 있어요' : '아직 날맛이 나요';
+      let stars = q >= 90 ? 5 : q >= 80 ? 4 : q >= 65 ? 3 : q >= 50 ? 2 : 1;
+      if (p < 30) stars = Math.min(stars, 2); else if (p < FD().stages.AGING) stars = Math.min(stars, 3);
+      const kidW = p < 30 ? '아직 덜 익었어요. 조금 더 기다려요!' : `${words[0] || '맛있어요'}! ${p >= 100 ? '다 익었어요.' : '점점 맛있어져요.'}`;
+      return { stars, q, grade: gradeOf(q), ripe, words, text: `${ripe}. ${words.length ? words.join(', ') + '.' : ''} (예상 품질 ${q}점 · ${gradeOf(q)})`, kid: kidW };
+    },
+    /** 이름표: a picker of preset names (no typing — CONTRACT §12) */
+    async _pickNameTag(jarId) {
+      if (!G.state || this._picking) return;
+      const s = this._state(jarId);
+      if (!s?.owned || lockOf(jarId, s)) return;
+      const list = NAMETAGS.map((n) => ({ id: n.t, emoji: n.e, label: n.t, say: n.t }));
+      list.push({ id: '__clear', emoji: '✖️', label: '이름 떼기', say: '이름표를 떼요.' });
+      let pick = null;
+      this._picking = true;
+      try {
+        if (G.easy?.pick) pick = await G.easy.pick({ id: 'ferment-nametag', title: '장독 이름표', emoji: '🏷️', items: list, columns: 3, say: '장독에 어떤 이름을 달까요?' });
+        else pick = list[0].id;
+      } finally { this._picking = false; }
+      if (!pick || !G.state || this._state(jarId) !== s) return;
+      this.act(jarId, 'nametag', { name: pick === '__clear' ? '' : pick });
+    },
+    _rainNotice(id) {
+      const t = now();
+      if (this._rainAt && t - this._rainAt < 15000) return;
+      this._rainAt = t;
+      const kid = kidOn();
+      const line = kid ? '비가 와요! 장독 뚜껑을 얼른 덮었어요 🌧️' : '비가 와서 열어 둔 장독 뚜껑을 다시 덮었어요. 빗물이 조금 들어갔어요 (위생 −8).';
+      setTimeout(() => { if (G.state) G.ui?.toast?.(line, { type: 'warn', emoji: '🌧️', say: kid ? line : undefined }); }, 0);
+      G.log.info('FERMENTATION', `rain closed ${id}`);
+    },
+    /** a jar beyond the limit: say how it opens (a plan or an administrator — prices stay behind the grown-up gate) */
+    _planInfo(jarId) {
+      const kid = kidOn();
+      if (kid) { kidSay('이 장독은 어른 메뉴의 요금제에서 열 수 있어요. 어른과 함께 살펴봐요 🔒'); return; }
+      G.ui.toast(`장독 #${slotOf(jarId)}은 토스 요금제를 쓰거나 관리자 계정이면 열려요. 무료로는 장독 ${freeLimit()}개까지 쓸 수 있어요.`, { type: 'info', emoji: '🔒', duration: 5200 });
     },
 
     async unlock(jarId) {
       if (!G.state) return false;
       const s = this._state(jarId);
       const J = this._jars.get(jarId);
-      if (!s || !J || s.owned) return false;
+      if (!s || !J) return false;
       const F = FD();
-      if (this.myJarIds().length >= F.maxJars) { G.ui.toast(`장독은 최대 ${F.maxJars}개까지 가질 수 있어요.`, { type: 'info' }); return false; }
+      // [content] coins open only the free jars (J2 / J3 while there is no plan); a jar beyond the limit needs a plan
+      const lk = lockOf(jarId, s);
+      if (lk === 'plan') { this._planInfo(jarId); return false; }
+      if (!lk) return false;
+      if (this.myJarIds().length >= Math.min(F.maxJars, jarLimit())) { G.ui.toast(`장독은 최대 ${Math.min(F.maxJars, jarLimit())}개까지 가질 수 있어요.`, { type: 'info' }); return false; }
       const price = F.extraJarPrice;
       const prog = G.sys.progression;
       if (!prog?.spendCoin) { G.ui.toast('지금은 장독을 열 수 없어요.', { type: 'error' }); return false; }
@@ -693,10 +1109,11 @@
       const ok = kid && G.easy?.confirm
         ? await G.easy.confirm({ emoji: '🏺', title: '장독을 하나 더 열까요?', text: `코인 ${fmt(price)}개를 써요. 장독이 많으면 여러 가지를 한꺼번에 담글 수 있어요.`, yes: '🔓 열래요', no: '안 열래요' })
         : await G.ui.confirm(`${fmt(price)} 코인으로 장독을 하나 더 열까요?<br><span class="dim small">장독이 많으면 여러 발효를 동시에 진행할 수 있어요.</span>`, { title: '장독 열기', okText: `${fmt(price)} 코인으로 열기`, icon: 'jar', html: true });
-      if (!ok || !G.state || G.state !== st0 || s.owned || G.state.jars?.[jarId] !== s) return false;
+      if (!ok || !G.state || G.state !== st0 || lockOf(jarId, s) !== 'coin' || G.state.jars?.[jarId] !== s) return false;
       if (this.myJarIds().length >= F.maxJars) return false;
       if (!prog.spendCoin(price)) { G.ui.toast(kid ? '코인이 조금 모자라요.' : '코인이 부족해요.', { type: 'warn' }); return false; }
-      Object.assign(s, { owned: true, status: 'EMPTY', recipeId: null, progress: 0, hygiene: 100, lastUpdate: now() });
+      if (s.owned && s.via === 'plan') { delete s.via; s.lastUpdate = now(); } // a former plan jar: its contents stay and go on
+      else Object.assign(s, { owned: true, status: 'EMPTY', recipeId: null, progress: 0, hygiene: 100, lastUpdate: now() });
       J.burst = 1;
       G.ffx?.burst?.(G.ffx.P.SPARK, J.x, J.topY + 0.2, J.z, 24, 1.2, 1.8);
       G.sfx('coin');
@@ -717,6 +1134,7 @@
       if (!s || !J) return null;
       this._simulate(id);
       if ('owned' in patch) s.owned = !!patch.owned;
+      if ('via' in patch) { if (patch.via === 'plan') s.via = 'plan'; else delete s.via; } // [content]
       if ('recipeId' in patch) { s.recipeId = recipeOf(patch.recipeId) ? patch.recipeId : null; if (s.recipeId && !s.startedAt) s.startedAt = now(); }
       for (const k of ['progress', 'hygiene', 'tempOff', 'humOff']) if (patch[k] != null) s[k] = Number(patch[k]) || 0;
       s.progress = clamp(s.progress, 0, 100);
@@ -725,8 +1143,8 @@
       if (!s.recipeId) s.status = 'EMPTY';
       if (s.recipeId && s.progress > 0 && s.acc.t <= 0) { const el = (s.progress / 100) * recipeOf(s.recipeId).baseDuration; s.acc = { t: el, temp: el * 0.85, hum: el * 0.8, hyg: el * Math.max(s.hygiene, 60) }; }
       if (s.status === 'COMPLETE') {
-        const q = this._quality(s, recipeOf(s.recipeId));
-        s.quality = q.total; s.qualityParts = { base: q.base, temp: q.temp, hum: q.hum, aging: q.aging, hyg: q.hyg };
+        const q = this._quality(s, recipeOf(s.recipeId), id);
+        s.quality = q.total; s.qualityParts = { base: q.base, temp: q.temp, hum: q.hum, aging: q.aging, hyg: q.hyg, jar: q.jar, bonus: q.bonus };
         s.completedAt = s.completedAt || now();
       }
       s.lastUpdate = now();
@@ -780,7 +1198,8 @@
     // ------------------------------------------------------------ jar meshes
     _buildJar(def) {
       const scene = G.sys.engine.scene;
-      const g = geos(), T = textures();
+      const kind = ONGGI_KINDS.has(def.kind) ? def.kind : kindOf(def.id); // [content] 독 / 중두리 / 항아리 / 단지
+      const g = geos(kind), T = textures();
       const baseY = G.world.surfaceHeight ? G.world.surfaceHeight(def.x, def.z) : G.world.heightAt(def.x, def.z);
       const gy = Number.isFinite(baseY) ? baseY : 0;
       const group = new THREE.Group();
@@ -802,25 +1221,23 @@
       group.add(body);
       const contentsMat = new THREE.MeshStandardMaterial({ map: T.paste, color: 0x6b4a2b, roughness: 0.38, metalness: 0 });
       const contents = new THREE.Mesh(g.contents, contentsMat);
-      contents.position.y = PL + 0.86 * JS; contents.visible = false;
+      contents.position.y = PL + g.contentsY; contents.visible = false;
       group.add(contents);
       const lidMat = G.gfx.material('ferment:lid', () => new THREE.MeshStandardMaterial({ map: bodyMat.map, color: bodyMat.map ? 0xffffff : 0x4a2a16, roughness: 0.3, metalness: 0.05 }));
       const lid = new THREE.Group();
-      const lidBaseY = PL + JAR_TOP - 0.012;
+      const lidBaseY = PL + g.top - 0.012;
       lid.position.y = lidBaseY;
       const lidMesh = new THREE.Mesh(g.lid, lidMat); lidMesh.castShadow = true;
-      const knob = new THREE.Mesh(g.knob, lidMat); knob.position.y = 0.17 * 0.292 / 0.3 * JS + 0.01; knob.scale.set(1, 0.7, 1);
-      lid.add(lidMesh, knob);
+      lid.add(lidMesh);
       group.add(lid);
-      // straw band around the neck + recipe tag (front = local +Z after the group's rotation)
+      // straw band around the neck + recipe / name tag (front = local +Z after the group's rotation)
       const bandMat = G.gfx.material('ferment:band', () => new THREE.MeshStandardMaterial({ color: 0xd9c084, roughness: 0.95 }));
       const band = new THREE.Mesh(g.band, bandMat);
-      band.position.y = PL + 0.79 * JS;
+      band.position.y = PL + g.bandY;
       group.add(band);
       const tagMat = new THREE.MeshStandardMaterial({ map: T.paste, color: 0xffffff, roughness: 0.85, side: THREE.DoubleSide, transparent: true, alphaTest: 0.4 });
       const tag = new THREE.Mesh(g.tag, tagMat);
-      const neckR = 0.33 * JS;
-      tag.position.set(0, PL + 0.62 * JS, neckR + 0.105);
+      tag.position.set(0, PL + g.H * 0.6, g.frontR + 0.1);
       tag.rotation.x = -0.12;
       tag.visible = false;
       group.add(tag);
@@ -829,39 +1246,74 @@
       const lock = new THREE.Group();
       const lb = new THREE.Mesh(g.padBody, brass), ls = new THREE.Mesh(g.shackle, brass);
       lock.add(lb, ls);
-      lock.position.set(0, PL + 0.66 * JS, 0.42 * JS + 0.05);
+      lock.position.set(0, PL + g.H * 0.64, g.frontR + 0.06);
       lock.rotation.x = 0.18;
       group.add(lock);
       // glow: additive halo sprite + rotating ground ring (owned jars)
       const haloMat = new THREE.SpriteMaterial({ map: T.halo, color: 0xffc95a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
       const halo = new THREE.Sprite(haloMat);
-      halo.position.y = PL + 0.55 * JS; halo.scale.set(2.5, 2.6, 1);
+      halo.position.y = PL + g.H * 0.45; halo.scale.set(2.5, 2.6, 1);
       halo.raycast = () => {};
+      halo.visible = false;
       group.add(halo);
       const ringMat = new THREE.MeshBasicMaterial({ map: T.ring, color: 0xffd36e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
       const ring = new THREE.Mesh(g.ring, ringMat);
       ring.position.y = 0.025; ring.scale.setScalar(2.1);
       ring.raycast = () => {};
       ring.renderOrder = 4;
+      ring.visible = false;
       group.add(ring);
       // invisible pick proxy (easier clicking)
-      const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, JAR_TOP + 0.4, 10), new THREE.MeshBasicMaterial({ visible: false }));
-      proxy.position.y = (JAR_TOP + 0.4) / 2;
+      const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, g.top + 0.4, 10), new THREE.MeshBasicMaterial({ visible: false }));
+      proxy.position.y = (g.top + 0.4) / 2;
       group.add(proxy);
       scene.add(group);
       group.updateMatrixWorld(true);
       // collider so players walk around the jar
       try { G.world.addCollider({ shape: 'circle', x: def.x, z: def.z, r: 0.62, tag: 'jar:' + def.id }); } catch (e) { /* optional */ }
       const J = {
-        id: def.id, def, group, body, bodyMat, contents, contentsMat, lid, lidBaseY, band, tag, tagMat, lock, halo, haloMat, ring, ringMat,
-        x: def.x, z: def.z, baseY: gy, topY: gy + PL + JAR_TOP, lidT: 0, lidPulse: 0, burst: 0, stagePop: 0,
-        steamAcc: 0, bubbleAcc: 0, sparkAcc: 0, lastStatus: null, visKey: '', label: null, labelEls: null,
-        labelPos: new THREE.Vector3(def.x, gy + PL + JAR_TOP + 0.7, def.z),
+        id: def.id, def, kind, g, PL, group, body, bodyMat, contents, contentsMat, lid, lidBaseY, band, tag, tagMat, lock, halo, haloMat, ring, ringMat,
+        x: def.x, z: def.z, baseY: gy, topY: gy + PL + g.top, lidT: 0, lidPulse: 0, sunT: 0, burst: 0, stagePop: 0,
+        steamAcc: 0, bubbleAcc: 0, sparkAcc: 0, lastStatus: null, visKey: '', label: null, labelEls: null, deco: {},
+        labelPos: new THREE.Vector3(def.x, gy + PL + g.top + 0.7, def.z),
       };
       this._jars.set(def.id, J);
       try { G.world.registerObject?.(def.id, group); } catch (e) { /* ignore */ }
       this._buildLabel(J);
       this._registerJar(J);
+    },
+    /** [content] decorations of the new jar actions, built on first use (one draw call each) */
+    _deco(J, key) {
+      if (J.deco[key]) return J.deco[key];
+      const g = J.g, PL = J.PL;
+      let m = null;
+      if (key === 'geumjul') {
+        const mat = G.gfx.material('ferment:deco', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.86, metalness: 0 }));
+        m = new THREE.Mesh(geumjulGeo(J.kind), mat);
+        m.position.y = PL; m.castShadow = true;
+      } else if (key === 'beoseon') {
+        const mat = G.gfx.material('ferment:beoseon', () => new THREE.MeshStandardMaterial({ map: textures().beoseon, transparent: true, alphaTest: 0.35, roughness: 0.9, side: THREE.DoubleSide }));
+        m = new THREE.Mesh(g.beoseon, mat);
+        // on the jar's belly, a little to the left of the tag, turned upside down (the custom pastes the sock pattern reversed)
+        const a = -0.55, r = g.bellyR + 0.012;
+        m.position.set(Math.sin(a) * r, PL + g.bellyY, Math.cos(a) * r);
+        m.rotation.set(0, a, PI);
+      } else if (key === 'salt') {
+        const mat = G.gfx.material('ferment:salt', () => new THREE.MeshStandardMaterial({ map: textures().paste, color: 0xffffff, roughness: 0.95 }));
+        m = new THREE.Mesh(g.contents, mat);
+        m.scale.setScalar(0.82);
+        m.position.y = PL + g.contentsY + 0.006;
+      } else if (key === 'float') {
+        const mat = G.gfx.material('ferment:deco', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.86, metalness: 0 }));
+        m = new THREE.Mesh(floatGeo(J.kind), mat);
+        m.position.y = PL + g.contentsY + 0.012;
+      }
+      if (!m) return null;
+      m.raycast = () => {};
+      m.visible = false;
+      J.group.add(m);
+      J.deco[key] = m;
+      return m;
     },
 
     _registerJar(J) {
@@ -894,21 +1346,29 @@
       if (!s) return;
       const rec = recipeOf(s.recipeId);
       const hasContents = !!rec && s.status !== 'CLAIMED' && s.status !== 'EMPTY';
-      const key = `${s.owned}|${s.status}|${s.recipeId}|${hasContents}`;
+      const lk = lockOf(J.id, s);
+      const key = `${s.owned}|${lk}|${s.status}|${s.recipeId}|${hasContents}|${s.nameTag || ''}|${!!s.geumjul}|${!!s.saltTop}|${!!s.charcoal}`;
       if (!force && key === J.visKey) return;
       J.visKey = key;
-      J.lock.visible = !s.owned;
+      J.lock.visible = !s.owned || !!lk;
       J.contents.visible = hasContents;
       if (rec) J.contentsMat.color.set(rec.color || '#6b4a2b');
-      J.tag.visible = hasContents;
-      if (hasContents) {
-        const name = (rec.name || '').replace(/\s*체험$/, '');
-        J.tagMat.map = tagTexture(name, rec.color || '#6b4a2b');
+      // [content] the tag shows the name tag when there is one, else the recipe; a named empty jar keeps its tag
+      const tagText = s.nameTag || (hasContents ? (rec.name || '').replace(/\s*체험$/, '').replace(/\s*\(.*\)$/, '') : '');
+      J.tag.visible = !!tagText && !lk;
+      if (J.tag.visible) {
+        J.tagMat.map = tagTexture(tagText, s.nameTag ? '#b8862a' : rec?.color || '#6b4a2b');
         J.tagMat.needsUpdate = true;
       }
+      // decorations of the jar actions (built on first use)
+      const show = (k, on) => { const m = on ? this._deco(J, k) : J.deco[k]; if (m) m.visible = !!on; };
+      show('geumjul', hasContents && s.geumjul);
+      show('beoseon', hasContents && s.geumjul);
+      show('salt', hasContents && s.saltTop);
+      show('float', hasContents && s.charcoal);
       // glaze: locked jars look dusty/desaturated, owned ones get a faint recipe tint
       const c = J.bodyMat.color;
-      if (!s.owned) c.setRGB(0.62, 0.6, 0.58);
+      if (!s.owned || lk) c.setRGB(0.62, 0.6, 0.58);
       else if (rec && hasContents) c.setRGB(1, 1, 1).lerp(new THREE.Color(rec.color), 0.08);
       else c.setRGB(1, 1, 1);
       if (J.lastStatus !== s.status) J.lastStatus = s.status;
@@ -917,29 +1377,40 @@
     _animateJar(J, dt, t, reduce) {
       const s = this._state(J.id);
       if (!s) return;
-      const owned = !!s.owned;
+      const g = J.g;
+      const owned = !!s.owned && !lockOf(J.id, s);
       const complete = s.status === 'COMPLETE';
       const active = ACTIVE.has(s.status);
-      // lid: open while the jar modal is open, short pulse for care / start / claim
+      // lid: open while the jar modal is open, short pulse for care / start / claim; 볕 쬐기 rests it beside the jar
       const wantOpen = (this._modal && this._modal.jarId === J.id && !this._modal.m.closed) || J.lidPulse > 0;
       if (J.lidPulse > 0) J.lidPulse -= dt;
+      const sunning = owned && s.sunUntil > now();
+      J.sunT += ((sunning ? 1 : 0) - J.sunT) * Math.min(1, dt * (reduce ? 20 : 3));
       const target = wantOpen && owned ? 1 : 0;
       J.lidT += (target - J.lidT) * Math.min(1, dt * 6);
       const e = J.lidT * J.lidT * (3 - 2 * J.lidT);
-      J.lid.position.y = J.lidBaseY + e * 0.32;
-      J.lid.position.z = -e * 0.12;
-      J.lid.rotation.x = -e * 0.42;
+      const u = J.sunT * J.sunT * (3 - 2 * J.sunT);
+      const sideX = g.rimR + 0.42, sideY = 0.16 + 0.05;
+      J.lid.position.set(u * sideX, (J.lidBaseY + e * 0.32) * (1 - u) + sideY * u, -e * 0.12 * (1 - u) + u * 0.05);
+      J.lid.rotation.set(-e * 0.42 * (1 - u), 0, u * 1.25);
+      const open = Math.max(J.lidT, u);
+      // what floats inside is only worth drawing while the lid is off
+      if (J.deco.float && J.deco.float.visible !== (open > 0.2 && !!s.charcoal && active)) J.deco.float.visible = open > 0.2 && !!s.charcoal && active;
+      if (J.deco.salt && s.saltTop) J.deco.salt.visible = open > 0.2;
+      if (J.deco.float?.visible && !reduce) J.deco.float.rotation.y = Math.sin(t * 0.5 + J.x) * 0.25;
       // glow strength by status
       const base = !owned ? 0 : complete ? 1 : active ? 0.65 : 0.5;
       const pulse = reduce ? 0.85 : 0.75 + 0.25 * Math.sin(t * (complete ? 4.2 : 2.2) + J.x);
       const glow = base * pulse;
       J.haloMat.opacity = glow * (complete ? 0.85 : 0.5);
-      if (glow > 0) {
+      const lit = glow > 0.002;
+      if (J.halo.visible !== lit) { J.halo.visible = lit; J.ring.visible = lit; }
+      if (lit) {
         // pull the halo sprite toward the camera so the glow washes over the jar's front, not only its rim
         _v.set(_cam.x - J.x, 0, _cam.z - J.z);
         const len = _v.length() || 1;
         _v.multiplyScalar(0.55 / len);
-        _v.x += J.x; _v.z += J.z; _v.y = J.baseY + 0.16 + 0.55 * JS;
+        _v.x += J.x; _v.z += J.z; _v.y = J.baseY + 0.16 + g.H * 0.45;
         J.group.worldToLocal(_v);
         J.halo.position.copy(_v);
       }
@@ -955,20 +1426,21 @@
       if (!fx || d > 45 || reduce) { J.burst = 0; J.stagePop = 0; return; }
       if (J.burst > 0) { J.burst = 0; fx.burst(fx.P.SPARK, J.x, J.topY + 0.3, J.z, 34, 1.5, 2.4); fx.burst(fx.P.PETAL, J.x, J.topY + 0.2, J.z, 12, 1.0, 2.0, null, J.baseY); }
       if (J.stagePop > 0) { J.stagePop = 0; fx.burst(fx.P.SPARK, J.x, J.topY + 0.15, J.z, 10, 0.7, 1.2); }
-      if (active || complete) {
-        const open = J.lidT > 0.4;
-        J.steamAcc += dt * (open ? 3.2 : active ? 1.1 : 0.4);
+      if ((active || complete) && owned) {
+        const opened = open > 0.4;
+        J.steamAcc += dt * (opened ? 3.2 : active ? 1.1 : 0.4);
+        const surf = J.baseY + J.PL + g.contentsY;
         while (J.steamAcc >= 1) {
           J.steamAcc -= 1;
-          const a = Math.random() * TAU, r = open ? Math.random() * 0.22 : 0.3 * JS * 0.95;
-          fx.spawn(fx.P.STEAM, J.x + Math.cos(a) * r, (open ? J.baseY + 0.16 + 0.88 * JS : J.topY - 0.03), J.z + Math.sin(a) * r, Math.cos(a) * 0.12, 0.3 + Math.random() * 0.25, Math.sin(a) * 0.12);
+          const a = Math.random() * TAU, r = opened ? Math.random() * g.innerR * 0.8 : g.rimR * 0.95;
+          fx.spawn(fx.P.STEAM, J.x + Math.cos(a) * r, (opened ? surf : J.topY - 0.03), J.z + Math.sin(a) * r, Math.cos(a) * 0.12, 0.3 + Math.random() * 0.25, Math.sin(a) * 0.12);
         }
-        if (open && active) {
+        if (opened && active) {
           J.bubbleAcc += dt * 7;
           while (J.bubbleAcc >= 1) {
             J.bubbleAcc -= 1;
-            const a = Math.random() * TAU, r = Math.sqrt(Math.random()) * 0.24 * JS;
-            fx.spawn(fx.P.BUBBLE, J.x + Math.cos(a) * r, J.baseY + 0.17 + 0.86 * JS, J.z + Math.sin(a) * r, 0, 0.12 + Math.random() * 0.1, 0);
+            const a = Math.random() * TAU, r = Math.sqrt(Math.random()) * g.innerR * 0.9;
+            fx.spawn(fx.P.BUBBLE, J.x + Math.cos(a) * r, surf + 0.01, J.z + Math.sin(a) * r, 0, 0.12 + Math.random() * 0.1, 0);
           }
         }
       }
@@ -977,7 +1449,7 @@
         while (J.sparkAcc >= 1) {
           J.sparkAcc -= 1;
           const a = Math.random() * TAU, r = 0.45 + Math.random() * 0.35;
-          fx.spawn(fx.P.GLINT, J.x + Math.cos(a) * r, J.baseY + 0.3 + Math.random() * (JAR_TOP + 0.4), J.z + Math.sin(a) * r, 0, 0.18, 0);
+          fx.spawn(fx.P.GLINT, J.x + Math.cos(a) * r, J.baseY + 0.3 + Math.random() * (g.top + 0.4), J.z + Math.sin(a) * r, 0, 0.18, 0);
         }
       }
     },
@@ -1005,10 +1477,13 @@
         const set = (k, el, v) => { if (L[k] !== v) { L[k] = v; el.textContent = v; } };
         let cls, title, sub, note = '', ico = '🏺', pct = 0;
         const n = J.def.slot || Number(J.id.replace(/\D/g, '')) || 1;
-        if (!s.owned) {
-          cls = 'locked'; ico = '🔒'; title = '잠긴 장독'; sub = `${fmt(FD().extraJarPrice)} 코인`;
+        const lk = lockOf(J.id, s);
+        if (!s.owned || lk) {
+          // [content] two kinds of lock: coins (free jars J2 / J3) or a plan / an administrator (J4 … J12, or after a plan)
+          cls = 'locked'; ico = '🔒'; title = '잠긴 장독';
+          sub = lk === 'plan' ? (s.owned && s.recipeId && s.status !== 'CLAIMED' ? `${shortName(rec)} 쉬는 중 · 요금제` : '요금제·관리자') : `${fmt(FD().extraJarPrice)} 코인`;
         } else {
-          title = J.id === 'J1' ? '내 항아리' : `내 장독 #${n}`;
+          title = s.nameTag ? `🏷️ ${s.nameTag}` : J.id === 'J1' ? '내 항아리' : `내 장독 #${n}`;
           if (s.status === 'COMPLETE') { cls = 'complete'; ico = rec?.icon || '🏺'; sub = `✨ ${rec ? rec.name.replace(/\s*체험$/, '') : '발효'} 완성! 수령하세요`; pct = 100; }
           else if (ACTIVE.has(s.status) && rec) { cls = 'active'; ico = rec.icon || '🏺'; pct = Math.floor(s.progress); sub = `${rec.name.replace(/\s*체험$/, '')} · ${STATE_NAMES()[s.status]} ${pct}%`; }
           else { cls = 'empty'; sub = s.status === 'CLAIMED' ? '수령 완료 · 새 발효를 시작해 보세요' : '비어 있음 · 발효를 시작해 보세요'; }
@@ -1025,8 +1500,9 @@
         if (L.cls !== cls) {
           if (L.cls) E.el.classList.remove(L.cls);
           E.el.classList.add(cls); L.cls = cls;
-          // stagger: my jars float higher than the compact locked tags so neighbouring labels do not overlap
-          J.labelPos.y = J.topY + (cls === 'locked' ? 0.3 : J.id === 'J1' ? 1.05 : 0.75);
+          // stagger: my jars float higher than the compact locked tags, and every second jar a little higher again,
+          // so the labels of twelve neighbouring jars do not overlap
+          J.labelPos.y = J.topY + (cls === 'locked' ? 0.3 + (n % 2) * 0.35 : J.id === 'J1' ? 1.05 : 0.7 + (n % 2) * 0.4);
         }
         set('title', E.title, title);
         set('sub', E.sub, sub);
@@ -1069,14 +1545,14 @@
       const near = this._near(J);
       if (md.kid) {
         const coinOk = !s.owned ? String((G.state.stats?.coin || 0) >= FD().extraJarPrice) : '';
-        const kkey = `k|${s.owned}|${s.status}|${s.recipeId}|${near}|${coinOk}`;
+        const kkey = `k|${s.owned}|${lockOf(md.jarId, s)}|${s.status}|${s.recipeId}|${near}|${coinOk}|${this.actionsFor(md.jarId).join(',')}`; // [content]
         if (force || kkey !== md.key) { md.key = kkey; this._renderKid(md, J, s, near); }
         this._updateKid(md, J, s);
         return;
       }
       const invSig = OPEN_FOR_START.has(s.status) ? Object.keys(recipes()).map((rid) => Object.keys(recipes()[rid].ingredients || {}).map((i) => this._count(i)).join('.')).join('|') : '';
       const coinSig = !s.owned ? String((G.state.stats?.coin || 0) >= FD().extraJarPrice) : '';
-      const key = `${s.owned}|${s.status}|${s.recipeId}|${near}|${invSig}|${coinSig}`;
+      const key = `${s.owned}|${lockOf(md.jarId, s)}|${s.status}|${s.recipeId}|${near}|${invSig}|${coinSig}|${this.actionsFor(md.jarId).join(',')}|${s.nameTag || ''}|${md.tab || ''}`; // [content]
       if (force || key !== md.key) { md.key = key; this._renderJar(md, J, s, near); }
       this._updateJarValues(md, J, s);
     },
@@ -1092,8 +1568,27 @@
       const disclaimer = () => h('p', { class: 'tiny muted jm-disclaimer' }, G.data.meta?.disclaimer || '');
       const farNote = () => (near ? null : h('div', { class: 'notice-box mt-1' }, '장독대 가까이 가야 장독을 돌보거나 발효를 시작할 수 있어요.'));
       const goBtn = { label: '장독으로 가기', class: 'btn-primary', icon: 'pin', onClick: () => { this._goTo(J); } };
+      // ---------------- [content] locked by the plan limit: how it opens, and what rests inside
+      const lk = lockOf(J.id, s);
+      if (lk === 'plan') {
+        m.setTitle(`잠긴 장독 #${n}`, '🔒');
+        const inside = s.owned && rec && !OPEN_FOR_START.has(s.status);
+        body.append(
+          h('div', { class: 'jm-hero locked' },
+            h('div', { class: 'jm-jar-ico' }, h('span', { class: 'emoji' }, '🔒')),
+            h('div', { class: 'grow' },
+              h('div', { class: 'row wrap' }, h('b', { class: 'jm-name' }, '요금제로 여는 장독'), h('span', { class: 'chip' }, `${KIND_NAMES[J.kind]} · 장독 #${n}`)),
+              h('p', { class: 'dim small' }, `무료로는 장독 ${freeLimit()}개까지 쓸 수 있어요. 토스 요금제를 쓰는 동안에는 장독 ${clamp(Math.floor(Number(FD().maxJarsAll) || 12), 1, 12)}개를 한꺼번에 쓸 수 있고, 관리자 계정은 모든 장독을 무료로 써요.`))),
+          inside ? h('div', { class: 'notice-box info' }, `${rec.icon || '🏺'} 안에 ${josa(shortName(rec), '이/가')} ${Math.floor(s.progress)}% 익은 채로 쉬고 있어요. 요금제가 다시 켜지면 그대로 이어서 익어요. 내용물은 없어지지 않아요.`) : null,
+          h('p', { class: 'tiny muted' }, '요금과 결제는 어른이 ⚙️ 설정의 요금제 화면에서 확인해요.'));
+        G.ui.hydrateIcons(body);
+        const acts = [{ label: '닫기', class: 'btn-ghost' }];
+        if (G.sys.subscription?.open) acts.push({ label: '요금제 보기', class: 'btn-soft', icon: 'star', onClick: () => { G.sys.subscription.open({ gate: true }); } });
+        m.setActions(acts);
+        return;
+      }
       // ---------------- locked
-      if (!s.owned) {
+      if (!s.owned || lk === 'coin') {
         m.setTitle(`잠긴 장독 #${n}`, '🔒');
         const price = FD().extraJarPrice, coin = G.state.stats?.coin || 0;
         body.append(
@@ -1106,6 +1601,7 @@
             h('span', { class: 'ico ico-lg', 'data-icon': 'coin' }),
             h('div', null, h('b', null, `${fmt(price)} 코인`), h('div', { class: 'small muted' }, `보유 ${fmt(coin)} 코인${coin < price ? ` · ${fmt(price - coin)} 코인 부족` : ''}`))),
           h('div', { class: 'notice-box info' }, '💡 수확한 작물이나 완성한 발효식품을 매점에 팔면 코인을 모을 수 있어요.'));
+        if (s.owned && rec && !OPEN_FOR_START.has(s.status)) body.appendChild(h('div', { class: 'notice-box info' }, `${rec.icon || '🏺'} 요금제를 쓸 때 담근 ${josa(shortName(rec), '이/가')} 안에서 쉬고 있어요. 코인으로 열거나 요금제가 다시 켜지면 이어서 익어요.`)); // [content]
         const ffL = farNote(); if (ffL) body.appendChild(ffL);
         G.ui.hydrateIcons(body);
         const acts = [{ label: '닫기', class: 'btn-ghost' }];
@@ -1125,8 +1621,20 @@
             h('div', { class: 'row wrap' }, h('b', { class: 'jm-name' }, '빈 장독'), h('span', { class: 'chip' }, statusName), J.id === 'J1' ? h('span', { class: 'chip chip-gold' }, '계정당 1개 배정') : null),
             h('p', { class: 'dim small' }, last ? `지난 발효: ${last.name} · 품질 ${s.lastQuality ?? s.quality}점 (${gradeOf(s.lastQuality ?? s.quality)}). 새 재료를 넣어 다시 발효를 시작해 보세요.` : '재료를 넣고 발효를 시작해 보세요. 날씨(온도·습도)와 장독 관리에 따라 품질이 달라져요.'))));
         body.appendChild(h('div', { class: 'jm-section-title' }, h('span', { class: 'emoji' }, '📜'), '발효 레시피 고르기'));
+        // [content] 32 recipes: tabs by kind of food + "만들 수 있는 것"; a split-only recipe is never offered
+        const all = Object.values(recipes()).filter((r) => r.startable !== false);
+        const cats = G.data.recipeCats || {};
+        const tabIds = ['all', 'ready', ...Object.keys(cats).filter((c) => all.some((r) => r.cat === c))];
+        if (!tabIds.includes(md.tab)) md.tab = 'all';
+        const tabs = h('div', { class: 'tabs jm-tabs', role: 'tablist' }, tabIds.map((t) => {
+          const label = t === 'all' ? `📜 전체 ${all.length}` : t === 'ready' ? `✅ 만들 수 있는 것 ${all.filter((r) => !this._missing(r).length).length}` : `${cats[t].icon} ${cats[t].name}`;
+          return h('button', { type: 'button', class: `tab ${md.tab === t ? 'active' : ''}`, role: 'tab', 'aria-selected': md.tab === t ? 'true' : 'false', onclick: () => { md.tab = t; this._refreshModal(true); } }, label);
+        }));
+        body.appendChild(tabs);
         const grid = h('div', { class: 'jm-recipes' });
-        for (const r of Object.values(recipes())) {
+        const shown = all.filter((r) => md.tab === 'all' || (md.tab === 'ready' ? !this._missing(r).length : r.cat === md.tab));
+        if (!shown.length) grid.appendChild(h('div', { class: 'empty' }, '지금 가진 재료로 만들 수 있는 것이 없어요. 매점이나 작업대에서 재료를 마련해 봐요.'));
+        for (const r of shown) {
           const miss = this._missing(r);
           const ok = !miss.length;
           const ings = Object.entries(r.ingredients || {}).map(([iid, need]) => {
@@ -1137,6 +1645,14 @@
           const card = h('div', { class: `jm-recipe ${ok ? 'ok' : 'lack'}` },
             h('div', { class: 'jm-r-head' }, h('span', { class: 'emoji jm-r-ico' }, r.icon || '🏺'), h('div', { class: 'grow' }, h('b', null, r.name), h('div', { class: 'tiny muted' }, `약 ${U.formatDuration(r.baseDuration)} · 알맞은 온도 ${r.idealTemp[0]}~${r.idealTemp[1]}°C · 습도 ${r.idealHumidity[0]}~${r.idealHumidity[1]}%`))),
             h('p', { class: 'small dim jm-r-desc' }, r.desc || ''),
+            h('div', { class: 'row wrap jm-r-chips' },
+              r.jar ? h('span', { class: `chip ${r.jar === J.kind ? 'chip-green' : 'chip-gold'}`, title: r.jar === J.kind ? '이 장독과 잘 맞아요' : `이 장독은 ${KIND_NAMES[J.kind]}이에요 — 품질 −${FD().jarMismatch}` }, `🏺 ${KIND_NAMES[r.jar]}${r.jar === J.kind ? ' ✓' : ` (이 장독: ${KIND_NAMES[J.kind]})`}`) : null,
+              r.real ? h('span', { class: 'chip' }, `실제로는 ${r.real}`) : null,
+              r.heat ? h('span', { class: 'chip' }, `🔥 ${r.heat.label}`) : null,
+              r.region ? h('span', { class: 'chip' }, `📍 ${r.region}`) : null),
+            Array.isArray(r.steps) && r.steps.length ? h('details', { class: 'jm-r-steps' }, h('summary', null, '만드는 순서 · 미생물이 하는 일'),
+              h('ol', null, r.steps.map(([ic, nm, tx]) => h('li', null, h('span', { class: 'emoji' }, ic), h('b', null, ` ${nm} `), tx))),
+              r.microbes ? h('p', { class: 'small' }, `${r.agent === 'enzyme' ? '🧪' : '🦠'} ${r.microbes}`) : null) : null,
             h('div', { class: 'jm-ings' }, ings),
             h('div', { class: 'jm-r-foot' },
               h('span', { class: 'tiny muted' }, `완성품 ${items()[r.resultItem]?.icon || ''} ${items()[r.resultItem]?.name || ''} ×${r.resultQty} · EXP ${r.exp} · 코인 ${fmt(r.coin)}`),
@@ -1152,6 +1668,7 @@
         G.ui.hydrateIcons(body);
         const acts = [{ label: '닫기', class: 'btn-ghost' }];
         if (G.sys.education?.open) acts.unshift({ label: '장독대 알아보기', class: 'btn-soft', icon: 'book', onClick: () => { G.sys.education.open('EDU_JANGDOK'); } });
+        if (near) acts.unshift({ label: s.nameTag ? `🏷️ ${s.nameTag}` : '🏷️ 이름표', class: 'btn-soft', onClick: () => { this.act(J.id, 'nametag'); return false; } }); // [content]
         if (!near) acts.push(goBtn);
         else if (G.sys.fermentation?.openCraft) acts.push({ label: '작업대 레시피', class: 'btn-soft', icon: 'hammer', onClick: () => { this.openCraft(); return false; } });
         m.setActions(acts);
@@ -1220,6 +1737,36 @@
             h('span', { class: 'chip chip-green' }, `EXP +${fmt(rec.exp || 0)}`),
             h('span', { class: 'chip chip-gold' }, h('span', { class: 'ico ico-xs', 'data-icon': 'coin' }), ` ${fmt(rec.coin || 0)}`))));
       }
+      // [content] the new jar actions (웃소금 · 숯·고추 · 금줄·버선 · 맛보기 · 이름표 · 장 가르기 · 덧장 · 나누기)
+      const acts0 = this.actionsFor(J.id);
+      if (acts0.length) {
+        els.acts = {};
+        const ag = h('div', { class: 'jm-care jm-acts' });
+        for (const k of acts0) {
+          const A = ACTIONS[k];
+          const sub = k === 'deot' && rec.deot ? `${A.effect} · ${items()[rec.deot]?.name || ''} 1개` : A.need ? `${A.effect} · ${Object.entries(A.need).map(([iid, q]) => `${items()[iid]?.name || iid} ${q}`).join(', ')}` : A.effect;
+          const btn = h('button', { class: `jm-care-btn jm-act-${k}`, type: 'button', disabled: !near || null, title: A.desc, onclick: () => this.act(J.id, k) },
+            h('span', { class: 'emoji jm-care-ico' }, A.icon),
+            h('b', null, A.name),
+            h('span', { class: 'tiny muted' }, sub),
+            h('span', { class: 'jm-care-cd tiny' }, ''));
+          els.acts[k] = btn;
+          ag.appendChild(btn);
+        }
+        body.appendChild(h('div', { class: 'jm-section-title' }, h('span', { class: 'emoji' }, '🏺'), '장독 일', h('span', { class: 'tiny muted' }, ' · 전통 장독 관리와 풍습')));
+        body.appendChild(ag);
+      }
+      if (s.lastTaste) els.taste = h('p', { class: 'small jm-taste' }, '');
+      if (els.taste) body.appendChild(els.taste);
+      if (s.nameTag || s.split || s.fromJar) body.appendChild(h('div', { class: 'row wrap jm-marks' },
+        s.nameTag ? h('span', { class: 'chip chip-gold' }, `🏷️ ${s.nameTag}`) : null,
+        s.split ? h('span', { class: 'chip' }, '✂️ 장 가르기 끝 · 국물이 간장으로 익어요') : null,
+        s.fromJar ? h('span', { class: 'chip' }, `✂️ 장독 #${slotOf(s.fromJar)}에서 가른 된장`) : null,
+        s.geumjul ? h('span', { class: 'chip' }, '🪢 금줄') : null,
+        s.saltTop ? h('span', { class: 'chip' }, '🧂 웃소금') : null,
+        s.charcoal ? h('span', { class: 'chip' }, '⚫ 숯·고추') : null,
+        s.deot ? h('span', { class: 'chip' }, '➕ 덧장') : null,
+        s.share ? h('span', { class: 'chip' }, '💞 나눌 몫') : null));
       // quality
       els.qScore = h('b', { class: 'jm-q-score' }, '0');
       els.qGrade = h('span', { class: 'jm-q-grade' }, '');
@@ -1229,11 +1776,13 @@
       els.fHum = row('+ 습도 보너스', 'plus', '0~10');
       els.fAge = row('+ 숙성 보너스', 'plus', '0~15');
       els.fHyg = row('− 위생 감점', 'minus', '0~20');
+      els.fJar = row('± 옹기 맞춤', 'minus', `${KIND_NAMES[J.kind]} · ${rec.jar ? `알맞은 옹기 ${KIND_NAMES[rec.jar]}` : '-'}`); // [content]
+      els.fBonus = row('+ 정성 (덧장·장 가르기)', 'plus', '0~8');
       els.fTot = row(complete ? '= 최종 품질' : '= 예상 품질', 'total', '');
       body.appendChild(h('div', { class: 'jm-quality' },
         h('div', { class: 'jm-q-main' }, h('div', { class: 'tiny muted' }, complete ? '최종 품질' : '예상 품질'), h('div', { class: 'row' }, els.qScore, h('span', { class: 'muted' }, '점')), els.qGrade,
           h('div', { class: 'tiny muted jm-grades' }, '등급 ' + (FD().gradeNames || []).filter(([min]) => min > 0).map(([min, name]) => `${name} ${min}+`).join(' · '))),
-        h('div', { class: 'jm-formula' }, els.fBase, els.fTemp, els.fHum, els.fAge, els.fHyg, els.fTot)));
+        h('div', { class: 'jm-formula' }, els.fBase, els.fTemp, els.fHum, els.fAge, els.fHyg, els.fJar, els.fBonus, els.fTot)));
       body.appendChild(h('p', { class: 'tiny muted' }, complete ? '품질은 발효가 끝난 순간의 기록으로 확정됐어요.' : '지금까지의 온도·습도·위생 기록으로 계산한 예상 품질이에요. 발효가 끝나는 순간 확정돼요.'));
       const ff = farNote(); if (ff) body.appendChild(ff);
       body.appendChild(disclaimer());
@@ -1293,7 +1842,7 @@
       const env = info.env;
       txt(els.envNote, `바깥 날씨 ${env.weatherName} · ${env.temp.toFixed(1)}°C · 습도 ${Math.round(env.humidity)}%${env.source === 'default' ? ' (기본값)' : ''} · ${env.day ? '낮' : '밤'}${(s.tempOff || s.humOff) && !complete ? ` · 장독 관리 효과 온도 ${s.tempOff >= 0 ? '+' : ''}${s.tempOff.toFixed(1)}°C, 습도 ${s.humOff >= 0 ? '+' : ''}${Math.round(s.humOff)}%` : ''}`);
       // quality
-      const q = info.qualityParts || this._quality(s, rec);
+      const q = info.qualityParts || this._quality(s, rec, J.id);
       const total = complete ? clamp(Math.round(s.quality), 0, 100) : q.total;
       txt(els.qScore, String(total));
       const grade = gradeOf(total);
@@ -1304,6 +1853,19 @@
       txt(els.fHum._v, `+${q.hum}`);
       txt(els.fAge._v, `+${q.aging}`);
       txt(els.fHyg._v, q.hyg ? `−${q.hyg}` : '0');
+      if (els.fJar) txt(els.fJar._v, q.jar ? `${q.jar}` : '0');
+      if (els.fBonus) txt(els.fBonus._v, `+${q.bonus || 0}`);
+      if (els.taste && s.lastTaste) txt(els.taste, `🥄 지난 맛보기: ${'★'.repeat(s.lastTaste.stars)}${'☆'.repeat(5 - s.lastTaste.stars)} · ${s.lastTaste.p}% 익었을 때 · 예상 ${s.lastTaste.q}점`);
+      if (els.acts) {
+        for (const [k, btn] of Object.entries(els.acts)) {
+          const why = this.actionBlock(J.id, k);
+          const cd = btn.querySelector('.jm-care-cd');
+          txt(cd, why ? why.text.slice(0, 40) : '지금 가능');
+          cd.classList.toggle('ready', !why);
+          const dis = !!why || !this._near(J);
+          if (btn.disabled !== dis) btn.disabled = dis;
+        }
+      }
       txt(els.fTot._v, `${total} · ${grade}`);
       // care cooldowns
       if (els.care) {
@@ -1358,7 +1920,9 @@
       const rec = recipeOf(s.recipeId);
       const filled = !!rec && !OPEN_FOR_START.has(s.status);
       let text;
-      if (!s.owned) text = '잠긴 장독이에요. 코인으로 열 수 있어요 🔒';
+      const lk = lockOf(J.id, s);
+      if (lk === 'plan') text = s.owned && rec && !OPEN_FOR_START.has(s.status) ? `${josa(shortName(rec), '이/가')} 안에서 쉬고 있어요. 어른 메뉴의 요금제로 다시 열어요 🔒` : '이 장독은 어른 메뉴의 요금제로 열 수 있어요 🔒';
+      else if (!s.owned || lk) text = '잠긴 장독이에요. 코인으로 열 수 있어요 🔒';
       else if (!filled) {
         const last = s.status === 'CLAIMED' ? recipeOf(s.lastRecipe) : null;
         text = last ? `${josa(shortName(last), '을/를')} 다 꺼냈어요! 또 담가 볼까요? 🥣` : '장독이 비었어요. 맛있는 걸 담가 볼까요? 🥣';
@@ -1367,8 +1931,10 @@
         if (need === undefined) need = kidNeed(s, rec, this._readEnv());
         text = need ? need.text : s.status === 'PREPARING' ? '재료가 쏙 들어갔어요! 이제 기다려요 ⏳' : s.status === 'AGING' ? '푹 익어 가요. 거의 다 됐어요 ✨' : '보글보글 맛있게 익고 있어요 😊';
       }
-      const title = !s.owned ? '잠긴 장독' : filled ? `${name} · ${shortName(rec)}` : name;
-      return { title, text, say: `${!s.owned ? '잠긴 장독' : filled ? `${name}, ${shortName(rec)}` : name}. ${text}` };
+      const locked = !s.owned || !!lk;
+      const nm = s.nameTag && !locked ? s.nameTag : name;
+      const title = locked ? '잠긴 장독' : filled ? `${nm} · ${shortName(rec)}` : nm;
+      return { title, text, say: `${locked ? '잠긴 장독' : filled ? `${nm}, ${shortName(rec)}` : nm}. ${text}` };
     },
     /** why a care picture can't be used right now (spoken), '' when it can */
     _kidCareBlock(s, k) {
@@ -1402,13 +1968,15 @@
       const m = md.m, h = G.ui.h, body = m.body;
       const rec = recipeOf(s.recipeId);
       const T = this._kidText(J, s);
-      const complete = s.status === 'COMPLETE' && !!rec;
-      const active = ACTIVE.has(s.status) && !!rec;
-      m.setTitle(T.title, !s.owned ? '🔒' : (active || complete) ? (rec.icon || '🏺') : '🏺');
+      const lk = lockOf(J.id, s);
+      const locked = !s.owned || !!lk;
+      const complete = s.status === 'COMPLETE' && !!rec && !locked;
+      const active = ACTIVE.has(s.status) && !!rec && !locked;
+      m.setTitle(T.title, locked ? '🔒' : (active || complete) ? (rec.icon || '🏺') : '🏺');
       body.innerHTML = '';
-      const els = { mood: kidMood(s, rec), tint: rec?.color };
+      const els = { mood: kidMood(s, rec, locked), tint: rec?.color, locked };
       els.face = h('span', { class: 'jk-face', 'aria-hidden': 'true', html: jarFaceSvg(els.mood, els.tint) });
-      els.ring = h('div', { class: `jk-ring${!s.owned ? ' locked' : complete ? ' done' : active ? ' active' : ' empty'}` }, els.face);
+      els.ring = h('div', { class: `jk-ring${locked ? ' locked' : complete ? ' done' : active ? ' active' : ' empty'}` }, els.face);
       if (active || complete) els.ring.style.setProperty('--p', String(Math.floor(s.progress)));
       // the sentence lives in its own span so the 🔊 button easy.speakable appends survives text updates
       els.sayT = h('span', { class: 'jk-say-t' }, T.text);
@@ -1424,7 +1992,10 @@
       // picture on top (on the left when a phone is held sideways), the words and gauges in one column beside it
       const info = h('div', { class: 'jk-info' });
       body.append(h('div', { class: 'jk-hero' }, els.ring), info);
-      if (!s.owned) {
+      if (lk === 'plan') {
+        info.appendChild(els.say);
+        big('jk-soft', '👍', '알겠어요', () => m.close());
+      } else if (locked) {
         const price = FD().extraJarPrice, coin = G.state.stats?.coin || 0;
         info.append(els.say, h('div', { class: 'jk-price' }, h('span', { class: 'ico ico-lg', 'data-icon': 'coin', 'aria-hidden': 'true' }), h('b', null, fmt(price)), h('span', { class: 'jk-have' }, `내 코인 ${fmt(coin)}`)));
         if (near) {
@@ -1440,8 +2011,10 @@
         info.append(this._kidMoons(els, s), els.say,
           h('div', { class: 'jk-reward' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, it?.icon || rec.icon || '🎁'), h('b', null, `${it?.name || shortName(rec)} ×${qty}`)),
           this._kidStarsEl(els));
-        if (near) big('easy-btn-yes jk-claim', '🎁', '꺼내기', () => { this.claim(J.id); });
-        else goBtn();
+        if (near) {
+          big('easy-btn-yes jk-claim', '🎁', '꺼내기', () => { this.claim(J.id); });
+          btns.appendChild(this._kidActs(J, s, ['share', 'taste'], els)); // [content]
+        } else goBtn();
       } else if (active) {
         info.append(this._kidMoons(els, s), this._kidStarsEl(els), els.say);
         els.care = {};
@@ -1457,13 +2030,14 @@
           grid.appendChild(b);
         }
         // near: the care pictures ARE the card's actions (docked with the buttons); far: a preview in the card
-        if (near) btns.appendChild(grid);
+        if (near) { btns.appendChild(grid); btns.appendChild(this._kidActs(J, s, null, els)); }
         else { info.appendChild(grid); goBtn(); }
       } else {
         info.appendChild(els.say);
         if (near) {
           big('easy-btn-yes', '🥣', '담그기', () => { m.close(); this._kidStart(J.id); });
           big('jk-soft', '🔨', '재료 만들기', () => { m.close(); this.openCraft(); });
+          btns.appendChild(this._kidActs(J, s, ['nametag'], els)); // [content]
         } else goBtn();
       }
       // the buttons live in the dialog's footer, outside the scrolling body: on a short screen (a phone held
@@ -1480,8 +2054,17 @@
       if (!els) return;
       const rec = recipeOf(s.recipeId);
       const txt = (el, v) => { if (el && el.textContent !== v) el.textContent = v; };
-      const mood = kidMood(s, rec);
+      const mood = kidMood(s, rec, els.locked);
       if (mood !== els.mood) { els.mood = mood; els.face.innerHTML = jarFaceSvg(mood, els.tint); }
+      if (els.kacts) { // [content] extra picture actions: ⏳ while blocked, a glow on the one the jar wants
+        const need0 = rec && ACTIVE.has(s.status) ? kidNeed(s, rec, this._readEnv()) : null;
+        for (const [k, b] of Object.entries(els.kacts)) {
+          const blocked = !!this.actionBlock(J.id, k);
+          if (b.classList.contains('wait') !== blocked) { b.classList.toggle('wait', blocked); b.setAttribute('aria-disabled', blocked ? 'true' : 'false'); }
+          const rc = !!need0 && need0.care === k && !blocked;
+          if (b.classList.contains('rec') !== rc) b.classList.toggle('rec', rc);
+        }
+      }
       const need = rec && ACTIVE.has(s.status) ? kidNeed(s, rec, this._readEnv()) : null;
       txt(els.sayT, this._kidText(J, s, need).text);
       if (!rec) return;
@@ -1508,13 +2091,66 @@
         }
       }
     },
+    /** [content] 쉬운 모드: up to four picture buttons for the new jar actions (장 가르기 first when it is time) */
+    _kidActs(J, s, only, els) {
+      const h = G.ui.h;
+      const avail = this.actionsFor(J.id);
+      const pref = only || ['split', 'taste', 'salt', 'charcoal', 'geumjul', 'deot', 'nametag', 'share'];
+      const list = pref.filter((k) => avail.includes(k)).slice(0, 4);
+      const wrap = h('div', { class: 'jk-care jk-acts', role: 'group', 'aria-label': '장독 일' });
+      els.kacts = els.kacts || {};
+      for (const k of list) {
+        const A = ACTIONS[k];
+        const b = h('button', { type: 'button', class: 'jk-care-btn jk-act', dataset: { k }, 'aria-label': A.kid.label },
+          h('span', { class: 'jk-care-ico emoji', 'aria-hidden': 'true' }, A.icon),
+          h('b', { class: 'jk-care-lbl' }, A.kid.label),
+          h('span', { class: 'jk-care-wait', 'aria-hidden': 'true' }, h('span', { class: 'emoji' }, '⏳')));
+        b.addEventListener('click', () => this._kidAct(J.id, k, b));
+        els.kacts[k] = b;
+        wrap.appendChild(b);
+      }
+      return wrap;
+    },
+    _kidAct(jarId, k, btn) {
+      const J = this._jars.get(jarId);
+      if (!J || !this._simulate(jarId)) return;
+      if (!this._near(J)) { kidSay('장독 가까이 가야 해요!'); kidShake(btn); return; }
+      const why = this.actionBlock(jarId, k);
+      if (why) { kidSay(why.kid); kidShake(btn); return; }
+      this.act(jarId, k);
+    },
     /** 쉬운 모드 "무엇을 담글까?" — food pictures; missing ingredients are said aloud; 🔨 재료 만들기 / 🛒 가게 tiles */
     async _kidStart(jarId) {
       const J = this._jars.get(jarId);
       if (!J || !G.state || this._picking) return;
       if (!G.easy?.pick) { this.openJar(jarId); return; }
       const st0 = G.state;
-      const list = Object.values(recipes()).map((r) => {
+      // [content] many recipes: first the kind of food (장 · 김치 · 젓갈 …), then the food
+      const all = Object.values(recipes()).filter((r) => r.startable !== false);
+      const cats = G.data.recipeCats || {};
+      let pool = all;
+      if (all.length > 9 && Object.keys(cats).length > 1) {
+        const ready = all.filter((r) => !this._missing(r).length);
+        const catList = [];
+        if (ready.length) catList.push({ id: 'cat:__ready', emoji: '✅', label: '바로 담글 수 있어요', color: '#5cc96a', sub: `${ready.length}가지`, say: `지금 바로 담글 수 있는 것이 ${ready.length}가지 있어요.` });
+        for (const [c, v] of Object.entries(cats)) {
+          const rs = all.filter((r) => r.cat === c);
+          if (!rs.length) continue;
+          const n = rs.filter((r) => !this._missing(r).length).length;
+          catList.push({ id: `cat:${c}`, emoji: v.icon, label: v.name, color: v.color, sub: n ? `✅ ${n}` : `${rs.length}가지`, say: `${v.name}. ${rs.length}가지가 있어요.` });
+        }
+        catList.push({ id: '__craft', emoji: '🔨', label: '재료 만들기', color: '#b48bff', say: '작업대에서 메주랑 고춧가루를 만들어요.' });
+        if (G.sys.inventory?.openShop) catList.push({ id: '__shop', emoji: '🛒', label: '가게', color: '#4fb3ff', say: '가게에서 재료를 사요.' });
+        this._picking = true;
+        let cp = null;
+        try { cp = await G.easy.pick({ id: 'ferment-cat', title: '무엇을 담글까?', emoji: '🥣', items: catList, columns: 3, say: '무엇을 담글까요? 먼저 종류를 골라요.' }); } finally { this._picking = false; }
+        if (!cp || !G.state || G.state !== st0) return;
+        if (cp === '__craft') { this.openCraft(); return; }
+        if (cp === '__shop') { G.sys.inventory?.openShop?.('SHOP_GENERAL'); return; }
+        const c = cp.slice(4);
+        pool = c === '__ready' ? ready : all.filter((r) => r.cat === c);
+      }
+      const list = pool.map((r) => {
         const miss = this._missing(r);
         const ings = Object.entries(r.ingredients || {});
         const names = ings.map(([iid]) => kidItemName(iid));
