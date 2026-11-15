@@ -165,7 +165,7 @@ async function runPreset(q) {
     // 내 방 doors: from the lane in front of the yard through the gate onto the veranda
     out.rooms = B.houses.map((h) => {
       const e = C.byId(h.id), W = e.wall, d = h.door;
-      const res = X.walk([[d.x, W.z1 + 1.2], [d.x, W.z1 - 0.4], [d.x, d.z + 1.4], [d.x, d.z]]);
+      const res = X.walk([[d.x, W.z1 + 1.2], [d.x, W.z1 - 0.4], [d.x, d.z + 1.4], [d.x, d.z - 0.3]]);
       return { id: h.id, free: X.free(d.x, d.y, d.z), ok: res.ok, feet: res.at[2], y: d.y, at: res.at };
     });
     const doorOf = (id) => B.doors.find((x) => x.id === id);
