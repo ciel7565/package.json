@@ -1509,9 +1509,20 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         try { if (code) G.sys.allotDistrict?.goto?.(code); } catch (err) { G.log.warn('WORLD', 'complex: focus unit failed', err?.message || err); }
       });
       G.bus.on('allot:map', () => { MM.ver = -1; });
+      // [complex-look] the forest of image 3 stays dark and green a few hundred metres away: inside the district the flat
+      // fog of medium / high is thinner (the weather's own knob fogK, 0.86 → 0.5; the aerial-perspective pass keeps the haze
+      // on the far ridges). A value the visitor set with ?lk=fogK:… is left alone; restored on leaving.
+      let fogMine = false;
+      const fogKnob = (on) => {
+        try {
+          const E = G.sys.engine; if (!E || typeof E.lk !== 'function') return;
+          E.lk('fogK', 0.86); const K = E._lk; if (!K) return;
+          if (on && !('fogK' in K)) { K.fogK = 0.5; fogMine = true; } else if (!on && fogMine) { delete K.fogK; fogMine = false; }
+        } catch (err) { /* engine without knobs */ }
+      };
       // [complex-look] the look of image 3: a slightly warmer, softer grade while inside (a layer over the weather's own)
-      G.bus.on('place:enter', (e) => { if (e && e.id === ID) { try { G.sys.engine?.grade?.({ warmth: 0.05, saturation: 0.97, contrast: 1.03 }, 'complex'); } catch (err) { /* no grade pass */ } } });
-      G.bus.on('place:exit', (e) => { if (e && e.id === ID) { try { G.sys.engine?.grade?.(null, 'complex'); G.sys.engine?.shadowFocus?.(null); } catch (err) { /* no grade pass */ } } });
+      G.bus.on('place:enter', (e) => { if (e && e.id === ID) { try { G.sys.engine?.grade?.({ warmth: 0.05, saturation: 0.97, contrast: 1.03 }, 'complex'); } catch (err) { /* no grade pass */ } fogKnob(true); } });
+      G.bus.on('place:exit', (e) => { if (e && e.id === ID) { try { G.sys.engine?.grade?.(null, 'complex'); G.sys.engine?.shadowFocus?.(null); } catch (err) { /* no grade pass */ } fogKnob(false); } });
     },
     postInit() {
       try { buildShuttle(); } catch (e) { G.log.warn('WORLD', 'complex: valley shuttle stop failed', e?.message || e); }
