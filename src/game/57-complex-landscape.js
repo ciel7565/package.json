@@ -317,7 +317,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
           const y = H(x, z);
           // too steep for a tree (cliffs carry rocks instead): slope from four probes
           const sl = Math.max(Math.abs(H(x + 2, z) - H(x - 2, z)), Math.abs(H(x, z + 2) - H(x, z - 2))) / 4;
-          if (sl > 1.9) { counts.rejected++; continue; }
+          if (sl > (e.crag ? 4.5 : 1.9)) { counts.rejected++; continue; }       // (pines cling to the granite of 만장대)
           push({ x, y, z, sp: SP[kind] ?? 0, kind, s, rot: hash2(i, j, seed + 4) * TAU, src: e.id === 'FO_RIVERSIDE' ? 'riverside' : 'forest', v: hash2(i, j, seed + 5) });
         }
       }
@@ -445,7 +445,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         if (!(y === y)) continue;
         const hl = H(x - 5, z), hr = H(x + 5, z), hu = H(x, z - 5), hd = H(x, z + 5);
         if (!(hl === hl && hr === hr && hu === hu && hd === hd)) continue;
-        if (Math.max(Math.abs(hr - hl), Math.abs(hd - hu)) / 10 > (inCrag(x, z) ? 2.4 : 1.35)) continue;   // a rock face carries no tree (but pines cling to 만장대's granite)
+        if (Math.max(Math.abs(hr - hl), Math.abs(hd - hu)) / 10 > (inCrag(x, z) ? 5 : 1.35)) continue;   // a rock face carries no tree (but pines cling to 만장대's granite)
         const cvx = Math.max(2 * y - hl - hr, 2 * y - hu - hd);                           // > 0 on a ridge, < 0 in a gully
         let conif = 0.42;
         for (const F of forests) { const b = F.box; if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue; if (pointInPoly(x, z, F.e.poly)) { const sp = F.e.species || {}; conif = (sp.pine || 0) + (sp.fir || 0) + 0.08; break; } }
