@@ -164,7 +164,7 @@ const SLIDES = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><titl
 const launch = () => chromium.launch({ headless: !flag('--headed'), args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'] });
 const browser = await launch();
 const outside = [];
-async function newPage(ctxOpt = {}, query = 'autostart=1&notutorial=1&quality=low&lecture=on') {
+async function newPage(ctxOpt = {}, query = 'autostart=1&notutorial=1&quality=low&lecture=on', o = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul', ...ctxOpt });
   await context.route('**/*', (route) => {
     const url = route.request().url();
@@ -187,7 +187,7 @@ async function newPage(ctxOpt = {}, query = 'autostart=1&notutorial=1&quality=lo
   page.on('console', (m) => { if (m.type() === 'error' && !/Content Security Policy|Refused to (frame|load)|net::ERR|Failed to load resource/.test(m.text())) page.__errors.push('console: ' + m.text().slice(0, 300)); });
   await page.goto(`${BASE}index.html?${query}`, { waitUntil: 'load', timeout: TIMEOUT });
   await page.waitForFunction(() => window.G && window.G.ready === true && !!window.G.sys?.lecture, null, { timeout: TIMEOUT, polling: 250 });
-  await page.evaluate(() => { G.ui.modal.closeAll(); });
+  if (!o.keep) await page.evaluate(() => { G.ui.modal.closeAll(); });   // keep: a page whose address opens a dialog by itself
   return { context, page };
 }
 const shot = async (page, name) => { if (SHOTS) { try { await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); } catch (e) { log(`  (no picture ${name}: ${e.message})`); } } };
@@ -275,11 +275,15 @@ try {
     await new Promise((r) => setTimeout(r, 250));
     const on = document.querySelector('.lec-deck').classList.contains('lec-max') && b.getAttribute('aria-pressed') === 'true';
     const r = document.querySelector('.lec-stage').getBoundingClientRect();
+    const cover = document.querySelector('.lec-deck').getBoundingClientRect(), pg = innerWidth + 'x' + innerHeight;
     b.click();
+    // leaving the browser's own full screen (where the test browser grants it) takes a moment
+    for (let i = 0; i < 30 && document.fullscreenElement; i++) await new Promise((r2) => setTimeout(r2, 100));
     await new Promise((r2) => setTimeout(r2, 250));
-    return { on, w: Math.round(r.width), off: !document.querySelector('.lec-deck').classList.contains('lec-max') && !document.fullscreenElement };
+    return { on, w: Math.round(r.width), cover: [Math.round(cover.left), Math.round(cover.top), Math.round(cover.width), Math.round(cover.height)].join(), page: pg,
+      off: !document.querySelector('.lec-deck').classList.contains('lec-max') && !document.fullscreenElement && !document.querySelector('.modal.lec-has-max') };
   });
-  check('full screen: the deck grows over the page and comes back', fs1.on && fs1.w >= 1100 && fs1.off, JSON.stringify(fs1));
+  check('full screen: the deck grows over the whole page (not only over its dialog) and comes back', fs1.on && fs1.w >= 1100 && fs1.cover === `0,0,${fs1.page.replace('x', ',')}` && fs1.off, JSON.stringify(fs1));
   await tap(page, '.lecture-modal .lec-back');
   await page.waitForSelector('.lecture-modal .lec-card', { timeout: T_UI });
   await page.evaluate(() => G.sys.lecture.close());
@@ -431,7 +435,8 @@ try {
   const blobs = await page.evaluate(() => window.__blobs.slice());
   await page.evaluate(() => G.sys.lecture.close());
   await page.waitForTimeout(200);
-  const revoked = await page.evaluate(async (list) => { let alive = 0; for (const u of list) { try { const r = await fetch(u); if (r.ok) alive++; } catch (e) { /* revoked */ } } return alive; }, blobs);
+  // (a picture element tells: the page's policy lets img-src use blob: addresses, fetch() of one is not allowed anyway)
+  const revoked = await page.evaluate(async (list) => { let alive = 0; for (const u of list) { await new Promise((r) => { const i = new Image(); i.onload = () => { alive++; r(); }; i.onerror = r; i.src = u; setTimeout(r, 3000); }); } return alive; }, blobs);
   check(`pptx: the ${blobs.length} picture addresses are revoked when the player closes`, blobs.length >= 2 && revoked === 0, `${revoked} still alive`);
   await openLecture(page, 24);
   await page.waitForSelector('.lecture-modal .lec-notecard', { timeout: T_UI });
@@ -610,9 +615,9 @@ try {
     await openLecture(p3, 23);
     await p3.waitForSelector('.lecture-modal .lec-deck .lec-slide', { timeout: T_UI });
     await p3.waitForTimeout(300);
-    const pd3 = await p3.evaluate(() => { const c = document.querySelector('.lecture-modal .lec-slide'), st = document.querySelector('.lec-stage').getBoundingClientRect(), nav = [...document.querySelectorAll('.lec-nav, .lec-tool')].filter((b) => b.getBoundingClientRect().width > 0).map((b) => Math.round(Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height)));
-      return { stage: Math.round(st.width) + 'x' + Math.round(st.height), inView: st.right <= innerWidth + 1 && st.left >= -1, fits: c.scrollHeight <= c.clientHeight + 2, nav, font: parseFloat(getComputedStyle(c.querySelector('.lec-p')).fontSize) }; });
-    check('phone: the slide card stays 16:9 inside the screen, readable text (≥ 10 px), 64 px buttons', pd3.inView && pd3.fits && pd3.nav.every((x) => x >= 56) && pd3.font >= 10, JSON.stringify(pd3));
+    const pd3 = await p3.evaluate(() => { const c = document.querySelector('.lecture-modal .lec-slide'), cr = c.getBoundingClientRect(), st = document.querySelector('.lec-stage').getBoundingClientRect(), nav = [...document.querySelectorAll('.lec-nav, .lec-tool')].filter((b) => b.getBoundingClientRect().width > 0).map((b) => Math.round(Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height)));
+      return { card: Math.round(cr.width) + 'x' + Math.round(cr.height), inView: st.right <= innerWidth + 1 && st.left >= -1 && cr.right <= innerWidth + 1, fits: c.scrollHeight <= c.clientHeight + 2, tall: cr.width / cr.height <= 16 / 9 + 0.05, nav, font: parseFloat(getComputedStyle(c.querySelector('.lec-p')).fontSize) }; });
+    check('phone: the slide card stays inside the screen and is at least 16:9 tall (it grows with its words before it scrolls), readable text (≥ 11 px), 64 px buttons', pd3.inView && pd3.fits && pd3.tall && pd3.nav.every((x) => x >= 56) && pd3.font >= 11, JSON.stringify(pd3));
     await shot(p3, '19-phone-pptx');
     await openLecture(p3, 22);
     await p3.waitForSelector('.lecture-modal .lec-host', { timeout: T_UI });
@@ -626,15 +631,14 @@ try {
 
   // ================================================================ a deep link, and automation without ?lecture=on
   {
-    const { context: c4, page: p4 } = await newPage({}, 'autostart=1&notutorial=1&quality=low&lecture=deck:onggi');
-    const hasDeck = await p4.evaluate(() => G.sys.lecture.list().some((l) => l.id === 'deck:onggi'));
-    if (hasDeck) {
-      await p4.waitForSelector('.lecture-modal .lec-deck .lec-slide', { timeout: T_UI }).catch(() => {});
-      check('?lecture=<id> opens that lecture once the visitor is in (the admin tab\'s preview link)', await p4.evaluate(() => G.sys.lecture.isOpen() && G.sys.lecture._view?.lec?.id === 'deck:onggi'));
-    } else {
-      await p4.waitForSelector('.lecture-modal', { timeout: T_UI }).catch(() => {});
-      check('?lecture=<id> of a lecture that is not there opens the list with a calm word', await p4.evaluate(() => G.sys.lecture.isOpen() && !G.sys.lecture._view));
-    }
+    const DEEP = api.list[0].id;   // a built-in deck of this build ('deck:…')
+    const { context: c4, page: p4 } = await newPage({}, `autostart=1&notutorial=1&quality=low&lecture=${encodeURIComponent(DEEP)}`, { keep: true });
+    await p4.waitForSelector('.lecture-modal .lec-deck .lec-slide', { timeout: T_UI }).catch(() => {});
+    const dl = await p4.evaluate(() => ({ open: G.sys.lecture.isOpen(), id: G.sys.lecture._view?.lec?.id ?? null }));
+    check('?lecture=<id> opens that lecture once the visitor is in (the admin tab\'s preview link)', dl.open && dl.id === DEEP, JSON.stringify(dl));
+    await p4.evaluate(() => { G.ui.modal.closeAll(); const L = G.sys.lecture; L._pending = 987654; L._deepLink(); });
+    await p4.waitForSelector('.lecture-modal .lec-card', { timeout: T_UI }).catch(() => {});
+    check('?lecture=<id> of a lecture that is not there opens the list with a calm word', await p4.evaluate(() => G.sys.lecture.isOpen() && !G.sys.lecture._view));
     await p4.evaluate(() => G.ui.modal.closeAll());
     const quiet = await p4.evaluate(async () => {
       const L = G.sys.lecture;

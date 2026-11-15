@@ -57,7 +57,6 @@
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   const easyOn = () => (typeof G.easy?.on === 'boolean' ? G.easy.on : G.settings?.easyMode !== false);
   const isServer = () => G.net?.mode === 'server';
-  const reduced = () => (typeof G.motionReduced === 'function' ? G.motionReduced() : !!G.settings?.reduceMotion);
   const say = (t, o) => { try { G.easy?.say?.(t, o || { priority: 1 }); } catch (e) { /* voice optional */ } };
   const toast = (m, o) => { try { G.ui.toast(m, o); } catch (e) { /* ui not ready */ } };
   const FONT = '"PretendardEmbed","Pretendard","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
@@ -358,6 +357,12 @@
           for (const el of tree.children) {
             const tag = el.localName;
             if (tag === 'grpSp') { await walk(el); continue; }
+            if (tag === 'AlternateContent') {
+              // a newer feature (an equation, an ink drawing …) with an older stand-in beside it: read the stand-in
+              const alt = kid(el, 'Fallback') || kid(el, 'Choice');
+              if (alt) await walk(alt); else s.skipped = true;
+              continue;
+            }
             if (tag === 'sp') {
               const ph = deep(el, 'nvSpPr', 'nvPr', 'ph');
               const type = ph ? (ph.getAttribute('type') || 'body') : '';
@@ -438,8 +443,9 @@
         try { src = G.pack?.url?.(s.image) || ''; } catch (e) { src = ''; }
         if (src) box.appendChild(h('img', { src, alt: s.title || '슬라이드의 그림', draggable: 'false' }));
       }
-      if (!box.children.length) { box.remove(); main.classList.remove('has-pics'); }
-      main.appendChild(box);
+      // a picture the pack does not have leaves no empty column behind
+      if (box.children.length) main.appendChild(box);
+      else main.classList.remove('has-pics');
     }
     card.appendChild(main);
     if (s.skipped) card.appendChild(h('p', { class: 'lec-s-skip' }, '도형 · 도표 일부는 간단 보기에 나오지 않아요.'));
@@ -466,7 +472,7 @@
     const prev = h('button', { type: 'button', class: 'lec-nav prev', 'aria-label': '이전 슬라이드', 'data-say': '앞으로' }, h('span', { 'aria-hidden': 'true' }, '◀'), easy ? h('span', { class: 'lec-nav-l' }, '앞') : null);
     const next = h('button', { type: 'button', class: 'lec-nav next', 'aria-label': '다음 슬라이드', 'data-say': '다음' }, easy ? h('span', { class: 'lec-nav-l' }, '다음') : null, h('span', { 'aria-hidden': 'true' }, '▶'));
     const speak = o.speak ? h('button', { type: 'button', class: 'lec-tool easy-only', 'aria-label': '소리로 듣기', 'data-say': '소리로 듣기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔊')) : null;
-    const fs = h('button', { type: 'button', class: 'lec-tool', 'aria-label': '크게 보기', 'aria-pressed': 'false', 'data-say': '크게 보기' }, h('span', { 'aria-hidden': 'true' }, '⛶'));
+    const fs = h('button', { type: 'button', class: 'lec-tool', 'aria-label': '크게 보기', 'aria-pressed': 'false', 'data-say': '크게 보기' }, h('span', { class: 'ico', 'data-icon': 'expand' }));
     const el = h('div', { class: 'lec-deck', tabindex: '0', role: 'group', 'aria-label': '슬라이드' },
       stage,
       h('div', { class: 'lec-bar' }, prev, h('div', { class: 'lec-mid' }, count, h('div', { class: 'lec-prog', 'aria-hidden': 'true' }, prog)), speak, fs, next),
@@ -479,18 +485,27 @@
       let node = null;
       try { node = o.render(i); } catch (e) { G.log.warn(CAT, 'slide could not be drawn', e?.message || e); }
       stage.appendChild(node || h('p', { class: 'lec-s-sub' }, '이 슬라이드를 보여 주지 못했어요.'));
+      stage.classList.toggle('lec-paper', !!(node && node.classList?.contains('lec-slide')));   // a paper card (not a picture): the stage may grow with it on a phone
       if (node && node.classList?.contains('lec-slide')) requestAnimationFrame(() => fitSlide(node));
       count.textContent = `${i + 1} / ${o.count}`;
       prog.style.transform = `scaleX(${(i + 1) / o.count})`;
+      const act = document.activeElement;
       prev.disabled = i === 0;
       next.disabled = i === o.count - 1;
+      // a button that switched itself off must not take the focus (and with it the arrow keys) away from the deck
+      if ((act === prev && prev.disabled) || (act === next && next.disabled)) { try { el.focus({ preventScroll: true }); } catch (e) { /* not focusable */ } }
       if (o.onShow) { try { o.onShow(i); } catch (e) { /* optional */ } }
     };
     prev.addEventListener('click', () => go(cur - 1));
     next.addEventListener('click', () => go(cur + 1));
     if (speak) speak.addEventListener('click', () => { const t = o.speak(cur); if (t) say(t, { force: true, priority: 1 }); });
     const onKey = (e) => {
-      if (G.util.isTyping?.() || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.defaultPrevented || !el.isConnected || G.util.isTyping?.() || e.altKey || e.ctrlKey || e.metaKey) return;
+      // only while this dialog is the front one, and only a key pressed inside it or nowhere (the page body)
+      const top = G.ui.modal.top?.();
+      if (top && top.el && top.el !== keyRoot && !top.el.contains(el)) return;
+      const t = e.target;
+      if (t && t !== document.body && t !== document.documentElement && t !== document && !keyRoot.contains(t)) return;
       const k = e.key;
       // Space / Enter on a button is that button's own press
       if ((k === ' ' || k === 'Spacebar' || k === 'Enter') && e.target?.closest?.('button, a, input, select, textarea')) return;
@@ -501,9 +516,10 @@
       else return;
       e.preventDefault(); e.stopPropagation();
     };
-    // the arrows work wherever the focus is inside the dialog
+    // the arrows work wherever the focus is inside the dialog — and when it is nowhere (a tap on the dialog's edge
+    // leaves it on the page body), so the listener sits on the document for as long as the deck lives
     const keyRoot = host.closest('.modal') || el;
-    keyRoot.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey);
     // swipe (touch and pen; a mouse uses the buttons)
     let sx = 0, sy = 0, sid = null;
     stage.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') return; sid = e.pointerId; sx = e.clientX; sy = e.clientY; });
@@ -518,6 +534,8 @@
     const setFull = (on) => {
       full = on;
       el.classList.toggle('lec-max', on);
+      // the enlarged deck is a fixed layer over the page: its dialog must not hold it inside its own box meanwhile
+      if (keyRoot !== el) keyRoot.classList.toggle('lec-has-max', on);
       fs.setAttribute('aria-pressed', on ? 'true' : 'false');
       fs.setAttribute('aria-label', on ? '작게 보기' : '크게 보기');
       const card = stage.firstElementChild;
@@ -542,8 +560,9 @@
     return {
       el, go, get index() { return cur; },
       dispose() {
-        keyRoot.removeEventListener('keydown', onKey);
+        document.removeEventListener('keydown', onKey);
         document.removeEventListener('fullscreenchange', onFsChange);
+        if (keyRoot !== el) keyRoot.classList.remove('lec-has-max');
         window.removeEventListener('resize', onResize);
         try { if (document.fullscreenElement === el) document.exitFullscreen(); } catch (e) { /* ignore */ }
       },
@@ -552,7 +571,7 @@
 
   // ---------------------------------------------------------------- notes shown instead of a player
   const NOTES = {
-    local: ['📡', '영상 강의는 누리집(서버)에서 볼 수 있어요', '지금은 파일로 연 체험관이라 영상을 틀 수 없어요. 아래 슬라이드 강의는 여기서도 볼 수 있어요.'],
+    local: ['📡', '영상 강의는 누리집(서버)에서 볼 수 있어요', '지금은 서버 없이 연 체험관이라 영상을 틀 수 없어요. 아래 슬라이드 강의는 여기서도 볼 수 있어요.'],
     offline: ['🌙', '지금은 인터넷에 이어져 있지 않아요', '인터넷이 다시 이어지면 영상을 볼 수 있어요. 그동안 슬라이드 강의를 봐요.'],
     video: ['🎬', '이 영상은 지금 여기에서 볼 수 없어요', '영상이 지워졌거나, 다른 누리집에서 재생하지 못하게 되어 있어요. 다른 강의를 골라 봐요.'],
     slow: ['⏳', '영상을 불러오지 못했어요', '인터넷이 느리거나 끊겼을 수 있어요. 잠시 뒤에 다시 해 봐요.'],
@@ -698,10 +717,12 @@
         const grid = h('div', { class: 'lec-grid', role: 'list' });
         for (const l of all) {
           const k = KIND[l.kind] || KIND.deck, place = this._placeName(l.place);
-          const card = h('button', { type: 'button', class: 'lec-card', role: 'listitem', 'data-say': `${k[1]}. ${l.title}`, 'data-kind': l.kind },
+          // how many pages: a built-in deck and a picture deck know it; a pptx carries its slide count in files[0].w
+          const pages = l.kind === 'deck' ? l.slides.length : l.kind === 'images' ? (l.files || []).length : l.kind === 'pptx' ? ((l.files || [])[0]?.w | 0) : 0;
+          const card = h('button', { type: 'button', class: 'lec-card', role: 'listitem', 'data-say': l.kid ? `${l.title}. ${l.kid}` : `${k[1]}. ${l.title}`, 'data-kind': l.kind },
             this._thumb(l),
             h('span', { class: 'lec-meta' },
-              h('span', { class: 'lec-kind' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, k[0]), ' ', k[1], l.kind === 'link' ? ' · 어른과 함께' : ''),
+              h('span', { class: 'lec-kind' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, k[0]), ' ', k[1], pages > 1 ? ` · ${pages}장` : '', l.kind === 'link' ? ' · 어른과 함께' : ''),
               h('b', { class: 'lec-title' }, l.title),
               place ? h('small', { class: 'lec-place' }, '📍 ', place) : null));
           card.addEventListener('click', () => this.open(l.id));
@@ -714,7 +735,7 @@
     },
     _renderPlayer(el, l, auto) {
       const k = KIND[l.kind] || KIND.deck;
-      const back = h('button', { type: 'button', class: 'btn btn-soft lec-back', 'data-say': '강의 목록으로 가요' }, h('span', { 'aria-hidden': 'true' }, '←'), ' 강의 목록');
+      const back = h('button', { type: 'button', class: 'btn btn-soft lec-back', 'data-say': '강의 목록으로 가요' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⬅️'), ' 강의 목록');
       back.addEventListener('click', () => { this._view = null; this._render(); });
       const host = h('div', { class: 'lec-host', 'data-kind': l.kind });
       el.appendChild(h('div', { class: 'lec-player' },
