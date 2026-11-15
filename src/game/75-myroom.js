@@ -309,6 +309,7 @@
     syncLamps();
   }
   /** the lamps of the room: the first LAMPS light-giving things get a pooled light, in the order they were placed */
+  const FILL = [[-4.2, -2.4], [4.2, -2.4], [0, 0.2], [-4.2, 2.6], [4.2, 2.6], [0, -3.6]];
   function syncLamps() {
     if (!S) return;
     const D = MD(), def = S.ctx.def, always = S.room.style.mood === 'lamp';
@@ -325,7 +326,14 @@
       const l = hnd.light;
       if (l) { l.position.set(def.origin.x + x, def.floorY + y, def.origin.z + z); l.color.copy(c.color); l.distance = c.distance; l.decay = c.decay; }
     }
-    for (; n < S.lamps.length; n++) S.lamps[n].cfg.intensity = 0;
+    // the pooled lamps no thing uses glow softly from under the ceiling: a room is never black at night (the warm
+    // light a lit room next door, the lamps in the yard and the moon would give), and the light count stays the same
+    for (; n < S.lamps.length; n++) {
+      const hnd = S.lamps[n], c = hnd.cfg, f = FILL[n % FILL.length], y = D.ROOM.ceil - 0.45;
+      c.x = f[0]; c.y = y; c.z = f[1]; c.intensity = always ? 1.0 : 1.6; c.distance = 8.5; c.decay = 1.6; c.flicker = 0; c.day = 0.12;
+      const l = hnd.light;
+      if (l) { l.position.set(def.origin.x + f[0], def.floorY + y, def.origin.z + f[1]); l.distance = c.distance; l.decay = c.decay; }
+    }
     if (S.lit !== lit) { const was = S.lit; S.lit = lit; if ((was > 0) !== (lit > 0)) applyLight(); }
   }
 
