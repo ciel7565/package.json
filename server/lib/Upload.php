@@ -367,7 +367,11 @@ final class Upload
                 if ($piece === false || $piece === '') break;
                 $buf = $keep . $piece;
                 if (preg_match('/<\?php|__halt_compiler/i', $buf, $hit)) self::refuse('UPLOAD_REJECTED', '안전하지 않은 내용이 들어 있는 파일이라 올릴 수 없어요.', ['kind' => 'pdf', 'why' => 'script marker', 'marker' => strtolower(substr($hit[0], 0, 16))], true);
-                if (!$auto && preg_match('#/(?:JavaScript|Launch)\b#', $buf)) $auto = true;   // 10 / 7 characters: never a chance match in packed data
+                if (!$auto) {
+                    // a PDF name may spell any character as #xx (/J#61vaScript): compare the decoded spelling
+                    $plain = strpos($buf, '#') === false ? $buf : (string) preg_replace_callback('/#([0-9A-Fa-f]{2})/', function (array $m): string { return chr((int) hexdec($m[1])); }, $buf);
+                    if (preg_match('#/(?:JavaScript|Launch)\b#', $plain)) $auto = true;   // 10 / 7 characters: never a chance match in packed data
+                }
                 $keep = substr($buf, -32);
             }
             if ($auto) self::refuse('UPLOAD_REJECTED', 'PDF 안에 스스로 실행되는 스크립트가 들어 있어 올릴 수 없어요. 인쇄용 PDF로 다시 저장해서 올려 주세요.', ['kind' => 'pdf', 'why' => 'active content'], true);
@@ -392,9 +396,10 @@ final class Upload
             if (preg_match('#(?:^|/)vbaProject\.bin$#i', $name)) self::refuse('UPLOAD_REJECTED', '매크로가 들어 있는 파일은 올릴 수 없어요. 파워포인트에서 "PowerPoint 프레젠테이션(.pptx)"으로 다시 저장해 주세요.', ['kind' => 'pptx', 'why' => 'macro project'], true);
             if (preg_match(self::ZIP_BAD_NAME, $name)) self::refuse('UPLOAD_REJECTED', '안전하지 않은 내용이 들어 있는 파일이라 올릴 수 없어요.', ['kind' => 'pptx', 'why' => 'executable inside'], true);
         }
-        if (!isset($names['[Content_Types].xml'], $names['ppt/presentation.xml']) || $slides < 1) {
+        if (!isset($names['[Content_Types].xml'], $names['ppt/presentation.xml'])) {
             self::refuse('UPLOAD_TYPE', '파워포인트(.pptx) 파일이 아니에요. 옛 형식(.ppt)은 파워포인트에서 .pptx 로 다시 저장해 주세요.', ['kind' => 'pptx', 'why' => 'not a presentation']);
         }
+        if ($slides < 1) self::refuse('UPLOAD_INVALID', '슬라이드가 한 장도 없는 파일이에요. 슬라이드를 넣고 다시 저장해서 올려 주세요.', ['kind' => 'pptx', 'why' => 'no slides']);
         if ($slides > self::ZIP_MAX_SLIDES) self::refuse('UPLOAD_INVALID', '슬라이드가 너무 많아요. (최대 ' . self::ZIP_MAX_SLIDES . '장)', ['kind' => 'pptx', 'slides' => $slides]);
         $types = self::zipRead($path, $names['[Content_Types].xml'], 1048576);
         if ($types === null) self::refuse('UPLOAD_INVALID', '파워포인트 파일을 읽지 못했어요. 다시 저장해서 올려 주세요.', ['kind' => 'pptx', 'why' => 'content types unreadable']);

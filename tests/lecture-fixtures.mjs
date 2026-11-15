@@ -141,6 +141,7 @@ export function hostileFiles() {
     ['php named pdf', 'pdf', Buffer.from('<?php system($_GET["c"]); ?>')],
     ['pdf with a markup head', 'pdf', Buffer.concat([Buffer.from('%PDF-1.4\n<script>alert(1)</script>\n'), pdf.subarray(9)])],
     ['pdf with an auto-run script', 'pdf', pdfBytes('x', '<< /Type /Action /S /JavaScript /JS (app.alert(1)) >>')],
+    ['pdf with an auto-run script (name spelled with #xx)', 'pdf', pdfBytes('x', '<< /Type /Action /S /J#61v#61Script /JS (app.alert(1)) >>')],
     ['pdf with php inside', 'pdf', Buffer.from(pdf.toString('latin1').replace('endstream', 'A'.repeat(9000) + '<?php system("id"); ?>\nendstream'), 'latin1')],
     ['zip named pptx', 'pptx', zipBytes([{ name: 'readme.txt', data: 'hi' }])],
     ['pptx with ../ names', 'pptx', pptxBytes(1, [{ name: '../../evil.php', data: '<?php echo 1;' }])],

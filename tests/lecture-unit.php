@@ -316,7 +316,7 @@ check('upload image: png / jpeg / webp are decoded and encoded again (a large on
 });
 
 // ---------------------------------------------------------------------------------------------- uploads: refusals
-check('refused pdf: wrong header, markup head, cut-off file, PHP inside, an auto-run script, empty, too large', function () use ($PDF) {
+check('refused pdf: wrong header, markup head, cut-off file, PHP inside, an auto-run script (also spelled with #xx), empty, too large', function () use ($PDF) {
     $cases = [
         'html named pdf' => ['<html><body>hello</body></html>', 'UPLOAD_TYPE'],
         'png named pdf' => [pngBytes(), 'UPLOAD_TYPE'],
@@ -327,6 +327,8 @@ check('refused pdf: wrong header, markup head, cut-off file, PHP inside, an auto
         'php deep inside' => [str_replace('endstream', str_repeat('A', 9000) . "<?php system('id'); ?>\nendstream", $PDF), 'UPLOAD_REJECTED'],
         'auto-run javascript' => [pdfBytes('x', '<< /Type /Action /S /JavaScript /JS (app.alert(1)) >>'), 'UPLOAD_REJECTED'],
         'launch action' => [pdfBytes('x', '<< /Type /Action /S /Launch /F (cmd.exe) >>'), 'UPLOAD_REJECTED'],
+        'auto-run javascript, the name spelled with #xx' => [pdfBytes('x', '<< /Type /Action /S /J#61v#61Script /JS (app.alert(1)) >>'), 'UPLOAD_REJECTED'],
+        'launch action, the name spelled with #xx' => [pdfBytes('x', '<< /Type /Action /S /#4Caunch /F (cmd.exe) >>'), 'UPLOAD_REJECTED'],
         'empty' => ['', 'UPLOAD_EMPTY'],
     ];
     foreach ($cases as $name => $c) { $got = inspectCode($c[0], 'pdf'); if ($got !== $c[1]) return "$name → " . ($got === '' ? 'ACCEPTED' : $got) . " (want {$c[1]})"; }
@@ -347,7 +349,7 @@ check('refused pptx: not a zip, an old .ppt, a plain zip, a word document, macro
         'macro content type' => [zipBytes(pptxEntries(1, [], 'application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml')), 'UPLOAD_REJECTED'],
         'executable inside' => [zipBytes(pptxEntries(1, [['name' => 'ppt/media/setup.exe', 'data' => 'MZ']])), 'UPLOAD_REJECTED'],
         'php inside' => [zipBytes(pptxEntries(1, [['name' => 'ppt/media/shell.php', 'data' => '<?php echo 1;']])), 'UPLOAD_REJECTED'],
-        'no slides' => [zipBytes(array_values(array_filter(pptxEntries(1), function ($e) { return strpos($e['name'], 'ppt/slides/slide') !== 0; }))), 'UPLOAD_TYPE'],
+        'no slides' => [zipBytes(array_values(array_filter(pptxEntries(1), function ($e) { return strpos($e['name'], 'ppt/slides/slide') !== 0; }))), 'UPLOAD_INVALID'],
     ];
     $dtd = pptxEntries(1);
     $dtd[0]['data'] = '<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">]>' . substr($dtd[0]['data'], 55);
