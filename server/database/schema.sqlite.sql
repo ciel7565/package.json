@@ -625,4 +625,37 @@ INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (7, CAST
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_login ON users (login_id);
 -- [/entitle]
 
+-- [lecture] §17.3: lectures the operator registers in the admin tab 🎓 강의 자료 (a YouTube id, an embeddable slide address
+-- on an allow-listed host, an uploaded pdf / pptx / image deck, or a plain link for grown-ups) and their uploaded files.
+-- lecture_files.path is relative to data/lectures/ (random names, never served directly — only api/lecture/file.php
+-- and the admin entry stream them); n = the order of the file inside its lecture (0 for the one pdf / pptx).
+CREATE TABLE IF NOT EXISTS lectures (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('youtube', 'slides', 'pdf', 'images', 'pptx', 'link')),
+  src        TEXT NOT NULL DEFAULT '',
+  place      TEXT NOT NULL DEFAULT '',
+  autoplay   INTEGER NOT NULL DEFAULT 0,
+  audience   TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('all', 'member', 'paid', 'allot')),
+  sort       INTEGER NOT NULL DEFAULT 0,
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_lectures_sort ON lectures (enabled, sort, id);
+
+CREATE TABLE IF NOT EXISTS lecture_files (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  lecture_id INTEGER NOT NULL,
+  n          INTEGER NOT NULL,
+  mime       TEXT NOT NULL,
+  bytes      INTEGER NOT NULL DEFAULT 0,
+  w          INTEGER NOT NULL DEFAULT 0,
+  h          INTEGER NOT NULL DEFAULT 0,
+  path       TEXT NOT NULL,
+  sha256     TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_lecfiles_n ON lecture_files (lecture_id, n);
+-- [/lecture]
+
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (8, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');

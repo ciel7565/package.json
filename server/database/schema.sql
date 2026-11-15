@@ -674,4 +674,37 @@ EXECUTE tfm_stmt;
 DEALLOCATE PREPARE tfm_stmt;
 -- [/entitle]
 
+-- [lecture] §17.3: lectures the operator registers in the admin tab 🎓 강의 자료 (a YouTube id, an embeddable slide address
+-- on an allow-listed host, an uploaded pdf / pptx / image deck, or a plain link for grown-ups) and their uploaded files.
+-- lecture_files.path is relative to data/lectures/ (random names, never served directly — only api/lecture/file.php
+-- and the admin entry stream them); n = the order of the file inside its lecture (0 for the one pdf / pptx).
+CREATE TABLE IF NOT EXISTS lectures (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  title      VARCHAR(120) NOT NULL,
+  kind       ENUM('youtube', 'slides', 'pdf', 'images', 'pptx', 'link') NOT NULL,
+  src        VARCHAR(600) NOT NULL DEFAULT '',
+  place      VARCHAR(40) NOT NULL DEFAULT '',
+  autoplay   TINYINT NOT NULL DEFAULT 0,
+  audience   ENUM('all', 'member', 'paid', 'allot') NOT NULL DEFAULT 'all',
+  sort       INT NOT NULL DEFAULT 0,
+  enabled    TINYINT NOT NULL DEFAULT 1,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  KEY ix_lectures_sort (enabled, sort, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS lecture_files (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  lecture_id BIGINT UNSIGNED NOT NULL,
+  n          INT NOT NULL,
+  mime       VARCHAR(100) NOT NULL,
+  bytes      BIGINT NOT NULL DEFAULT 0,
+  w          INT NOT NULL DEFAULT 0,
+  h          INT NOT NULL DEFAULT 0,
+  path       VARCHAR(191) NOT NULL,
+  sha256     CHAR(64) NOT NULL DEFAULT '',
+  UNIQUE KEY ux_lecfiles_n (lecture_id, n)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+-- [/lecture]
+
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (8, UNIX_TIMESTAMP() * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');
