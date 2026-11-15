@@ -141,8 +141,8 @@
     if (photo) { try { G.mat.apply(m, 'onggi_glaze', { detail: true, tile: [1 / 2, 1], strength: 0.75, normalScale: 0.5, roughness: 0.25, env: 1.25, priority: 1 }); } catch (e) { G.log.warn('WORLD', 'onggi glaze failed', e); } }
     return m;
   });
-  registerMaterial('silkBlue', () => { const m = STD({ vertexColors: true, color: 0x2f56b0, emissive: new THREE.Color('#5a6cff'), roughness: 0.75 }); G.world.addNightMaterial(m, 0.9, 0.0); return m; }, { cast: false });
-  registerMaterial('silkRed', () => { const m = STD({ vertexColors: true, color: 0xc63a2c, emissive: new THREE.Color('#ff6a33'), roughness: 0.75 }); G.world.addNightMaterial(m, 1.6, 0.05); return m; }, { cast: false });
+  registerMaterial('silkBlue', () => { const m = STD({ vertexColors: true, color: 0x2f56b0, emissive: new THREE.Color('#5a6cff'), roughness: 0.75 }); G.world.addNightMaterial(m, 1.25, 0.0); return m; }, { cast: false });
+  registerMaterial('silkRed', () => { const m = STD({ vertexColors: true, color: 0xc63a2c, emissive: new THREE.Color('#ff6a33'), roughness: 0.75 }); G.world.addNightMaterial(m, 2.2, 0.05); return m; }, { cast: false });
   const PSIGN = new SignAtlas('props', 1024, 2560);
   const SCREEN = new SignAtlas('kiosk', 1024, 1024);
   registerMaterial('psign', () => STD({ map: PSIGN.getTexture(), roughness: 0.75 }));
@@ -1040,7 +1040,7 @@
       }
     };
     m.customProgramCacheKey = () => 'pr-sway-' + kind;
-    if (silk) G.world.addNightMaterial(m, 1.35, 0.03);
+    if (silk) G.world.addNightMaterial(m, 1.9, 0.03);   // [world] was 1.35
     return m;
   }
   function buildSwayMeshes(root) {
@@ -1063,11 +1063,57 @@
   }
 
   // ---------------------------------------------------------------- lanterns (+ night glow)
+  // [world] phase 9: three kinds — 'stone' (석등), 'post' (청사초롱 on an arm) and 'field' (a tall timber post with a
+  // hanging 한지 lantern for fields and paths). Every head is a lamp spot of the engine's pool (the real light that
+  // follows the player, 10-engine.js) and gets a ground glow (buildLampPools) that is seen from afar and on `low`.
   const glowPts = [];
+  const lampHeads = [];   // { x, y (head), z, gy, r (glow radius), power, reach, lift, k (glow strength) }
+  const LAMP_AIM = { crop: [0, -32.6], herb: [-44, -30], rtgarden: [26, -30.75], jangdok: [60, 4], parking: [-32, 89] };
+  // the same lamp is not the same light everywhere: where the heads stand close (the crop beds: nine in 22 m) their pools
+  // add up to a floodlight, where they are few and far (the jar yard) the ground between them stays dim — so a zone
+  // scales the strength of its heads (measured on night shots: the lit ground of every zone lands near the same level)
+  const LAMP_ZONE = { crop: 0.7, herb: 0.85, jangdok: 1.5 };
+  /** which way a lamp's arm points: into its field, or over the nearest path (local +X = (cos r, −sin r) in the world) */
+  function lampRot(lt, i) {
+    if (Number.isFinite(lt.rot)) return lt.rot;
+    let t = LAMP_AIM[lt.tag] || null;
+    if (!t && lt.tag === 'path') {
+      let best = Infinity;
+      for (const p of L.paths || []) for (let k = 0; k < p.points.length - 1; k++) {
+        const [ax, az] = p.points[k], [bx, bz] = p.points[k + 1], dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+        const u = clamp(l2 ? ((lt.x - ax) * dx + (lt.z - az) * dz) / l2 : 0, 0, 1), qx = ax + dx * u, qz = az + dz * u, d = Math.hypot(lt.x - qx, lt.z - qz);
+        if (d < best) { best = d; t = [qx, qz]; }
+      }
+    }
+    return t ? Math.atan2(-(t[1] - lt.z), t[0] - lt.x) : (i * 0.7) % TAU;
+  }
   function buildLanterns() {
     (L.lanterns || []).forEach((lt, i) => {
-      const gy = ground(lt.x, lt.z);
-      const P = placer(lt.x, gy, lt.z, (i * 0.7) % TAU);
+      const gy = ground(lt.x, lt.z) + (Number.isFinite(lt.y) ? lt.y : 0);
+      const P = placer(lt.x, gy, lt.z, lampRot(lt, i));
+      const zk = LAMP_ZONE[lt.tag] || 1, gk = Math.min(1, zk);
+      if (lt.type === 'field') {
+        // 밭등: stone foot, a chamfered timber post with a little roof, an arm with a brace, the 한지 lantern under it
+        const T = '#5e3d24', D = '#3b2a1c', hx = 0.56, hy = 2.3;
+        P.add('stone', geo.box(0.38, 0.22, 0.38), M(0, 0.11, 0), '#cfc9bd');
+        P.add('stone', geo.box(0.26, 0.08, 0.26), M(0, 0.26, 0), '#c5bfb2');
+        P.add('wood', geo.box(0.13, 2.72, 0.13, 'grain'), M(0, 0.3 + 1.36, 0), T);
+        P.add('wood', geo.cyl(0.0, 0.17, 0.14, 4), M(0, 3.09, 0, PI / 4), D);
+        P.add('wood', geo.box(0.8, 0.09, 0.09, 'grain'), M(0.3, 2.74, 0), T);
+        P.add('wood', geo.beam(0.05, 2.3, 0, 0.44, 2.7, 0, 0.06, 0.06), I4, T);
+        P.add('metal', geo.cyl(0.008, 0.008, 0.12, 4), M(hx, 2.64, 0), '#2a2a2a');
+        P.add('wood', geo.cyl(0.03, 0.27, 0.13, 4), M(hx, 2.535, 0, PI / 4), D);                  // the lantern's roof
+        P.add('glow', geo.box(0.27, 0.36, 0.27), M(hx, hy, 0), '#fff4de');                        // 한지 body
+        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) P.add('wood', geo.box(0.028, 0.4, 0.028), M(hx + sx * 0.14, hy, sz * 0.14), D);
+        for (const y of [hy - 0.19, hy, hy + 0.19]) for (const [w, d, ox, oz] of [[0.31, 0.022, 0, -0.14], [0.31, 0.022, 0, 0.14], [0.022, 0.31, -0.14, 0], [0.022, 0.31, 0.14, 0]]) P.add('wood', geo.box(w, 0.024, d), M(hx + ox, y, oz), D);
+        P.add('wood', geo.box(0.2, 0.03, 0.2), M(hx, hy - 0.215, 0), D);
+        P.add('paint', geo.cyl(0.012, 0.03, 0.15, 6), M(hx, hy - 0.3, 0), '#b2302a');             // tassel
+        const wx = P.wx(hx, 0), wz = P.wz(hx, 0);
+        glowPts.push([wx, gy + hy, wz, 1.35]);
+        lampHeads.push({ x: wx, y: gy + hy, z: wz, gy, r: 6.4, power: 1.15 * zk, reach: 1.1, lift: 0.5, k: gk });
+        circleCol(lt.x, lt.z, 0.22, { tag: 'lamp' });
+        return;
+      }
       if (lt.type === 'stone') {
         P.add('stone', geo.cyl(0.36, 0.42, 0.22, 8), M(0, 0.11, 0), '#c9c3b7');
         P.add('stone', geo.cyl(0.13, 0.16, 0.72, 8), M(0, 0.58, 0), '#bfb9ad');
@@ -1079,6 +1125,7 @@
         P.add('stone', geo.box(0.5, 0.05, 0.5), M(0, 1.5, 0), '#c9c3b7');
         P.add('stone', sphere(0.07, 8, 6), M(0, 1.8, 0), '#bdb7ab');
         glowPts.push([lt.x, gy + 1.3, lt.z, 1.0]);
+        lampHeads.push({ x: lt.x, y: gy + 1.3, z: lt.z, gy, r: 4.4, power: 0.85 * zk, reach: 0.9, lift: 0.9, k: 0.8 * gk });
         circleCol(lt.x, lt.z, 0.34);
       } else {
         P.add('stone', geo.box(0.34, 0.18, 0.34), M(0, 0.09, 0), '#cfc9bd');
@@ -1095,9 +1142,49 @@
         swayAdd('cap', geo.cyl(0.18, 0.1, 0.05, 12), at(1.83), '#3b2a1c', pivot, ph);
         swayAdd('cap', geo.cyl(0.012, 0.035, 0.16, 6), at(1.72), '#c0392b', pivot, ph);
         glowPts.push([P.wx(0.48, 0), gy + 2.06, P.wz(0.48, 0), 0.8, pivot, ph]);
+        lampHeads.push({ x: P.wx(0.48, 0), y: gy + 2.06, z: P.wz(0.48, 0), gy, r: 4.8, power: 0.9 * zk, reach: 0.95, lift: 0.6, k: 0.75 * gk, color: 0xffa860 });
         circleCol(lt.x, lt.z, 0.2);
       }
     });
+  }
+  /** [world] the pools of light under the lamps: ONE additive mesh of soft discs that follow the ground (terraces and
+   *  beds included). It shows every lamp's light from afar — the pooled point lights only shine near the player — and is
+   *  the whole light of a lamp on `low`. Its strength follows the weather's lamp factor (props.update). */
+  function buildLampPools(root) {
+    if (!lampHeads.length) return null;
+    const SEG = 14, RING = [0.2, 0.42, 0.68, 1], FALL = [1, 0.74, 0.4, 0.14, 0];
+    const pos = [], col = [], idx = [];
+    const W = G.world, top = (x, z) => { const y = W.surfaceHeight ? W.surfaceHeight(x, z) : ground(x, z); return Number.isFinite(y) ? y : 0; };
+    const c = new THREE.Color();
+    for (const h of lampHeads) {
+      const base = pos.length / 3, y0 = top(h.x, h.z);
+      c.set(h.color ?? 0xffb25e);
+      const put = (x, z, f) => {
+        // a point far above or below the lamp's own ground (a roof, a river bank) stays on the lamp's level
+        let y = top(x, z); if (Math.abs(y - y0) > 1.3) y = y0;
+        pos.push(x, y + 0.07, z); col.push(c.r * f * h.k, c.g * f * h.k, c.b * f * h.k);
+      };
+      put(h.x, h.z, FALL[0]);
+      for (let k = 0; k < RING.length; k++) for (let j = 0; j < SEG; j++) { const a = (j / SEG) * TAU; put(h.x + Math.cos(a) * h.r * RING[k], h.z + Math.sin(a) * h.r * RING[k], FALL[k + 1]); }
+      for (let j = 0; j < SEG; j++) idx.push(base, base + 1 + ((j + 1) % SEG), base + 1 + j);
+      for (let k = 0; k < RING.length - 1; k++) for (let j = 0; j < SEG; j++) {
+        const a = base + 1 + k * SEG + j, b = base + 1 + k * SEG + ((j + 1) % SEG), c2 = a + SEG, d = b + SEG;
+        idx.push(a, b, d, a, d, c2);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    g.computeBoundingSphere();
+    const m = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 });
+    m.color.setScalar(0);
+    const mesh = new THREE.Mesh(g, m);
+    mesh.name = 'lamp-pools'; mesh.renderOrder = 2; mesh.visible = false; mesh.castShadow = false; mesh.receiveShadow = false;
+    mesh.raycast = () => {};
+    mesh.matrixAutoUpdate = false;
+    root.add(mesh);
+    return mesh;
   }
   /** lantern-halo point scale: half the viewport height in drawing-buffer pixels */
   function glowScale(h = window.innerHeight, pr = G.sys.engine?.renderer?.getPixelRatio?.()) { return h * 0.5 * (pr > 0 ? pr : 1); }
@@ -1129,23 +1216,23 @@
     root.add(pts);
     return pts;
   }
-  function buildNightLights(root) {
-    if (G.sys.engine?.preset?.name === 'low') return; // low preset: emissive glow + halos only (cheaper shading)
-    const spots = [
-      [0, 4.2, 1, 26],                     // plaza
-      [0, 4.6, -73.6, 20],                 // hall portico
-      [23.5, 3.2, -0.5, 18],               // my jars (J1-J3)
-      [50, 3.3, 41, 16],                   // pavilion
-      [-31, 3.2, 3, 18],                   // fermentation yard
-      [0, 4.2, 61.5, 18],                  // gate
+  /** [world] the lamps hand their heads to the engine's pool (10-engine.js: a fixed set of point lights that follows
+   *  the player); the six wide lights of the old set (plaza, portico, my jars …) are spots of the same pool now. On
+   *  `low` the pool has no lights: the heads and the ground glow carry the night there. */
+  function buildNightLights() {
+    const E = G.sys.engine;
+    if (!E?.addLampSpot) return;
+    const wide = [
+      [0, 4.2, 1, 1.2, 1.15],              // plaza
+      [0, 4.6, -73.6, 1.1, 1.0],           // hall portico
+      [23.5, 3.2, -0.5, 1.0, 0.9],         // my jars (J1-J3)
+      [50, 3.3, 41, 1.0, 0.85],            // pavilion
+      [-31, 3.2, 3, 1.0, 0.9],             // fermentation yard
+      [0, 4.2, 61.5, 1.0, 0.9],            // gate
+      [60, 4.6, 4, 1.4, 1.25],             // the jar yard's ring field (its lamps stand at the rim, 20 m apart)
     ];
-    for (const [x, y, z, dist] of spots) {
-      const l = new THREE.PointLight(0xffb866, 0, dist, 1.6);
-      l.position.set(x, ground(x, z) + y, z);
-      l.castShadow = false;
-      root.add(l);
-      G.world.addNightLight(l, 14);
-    }
+    for (const [x, y, z, power, reach] of wide) E.addLampSpot({ x, y: ground(x, z) + y, z, power, reach, lift: 0 });
+    for (const h of lampHeads) E.addLampSpot({ x: h.x, y: h.y, z: h.z, power: h.power, reach: h.reach, lift: h.lift, color: h.color });
   }
 
   // ---------------------------------------------------------------- benches
@@ -1190,6 +1277,7 @@
     add('paint', geo.box(0.6, 0.12, 0.03), M(0, 0.5, len / 2 + 0.01), '#e9e9e9');
     return len;
   }
+  const parked = [];   // [world] the valley's parked vehicles (world coordinates) — one G.vehicles fleet, made in init()
   function buildParking() {
     const pk = L.parking; if (!pk) return;
     const gy = ground(pk.x, pk.z), rot = pk.rot || 0;
@@ -1208,9 +1296,23 @@
     const used = bays.slice(0, Math.min(pk.cars || 7, bays.length));
     const palette = ['#f2f2ef', '#1f2124', '#a3242a', '#b9bdc2', '#2e5aa8', '#d8cdb5', '#2f5d43', '#5e6a72'];
     let ci = 0;
+    // [world] phase 9: the cars come from G.vehicles (59-vehicles.js — true proportions, one instanced mesh per kind and
+    // a soft ground shadow); the plain block car below stays only for a build without that fragment.
+    const V = G.vehicles && typeof G.vehicles.fleet === 'function' ? G.vehicles : null;
+    const kinds = ['sedan', 'suv', 'hatch', 'van', 'truck', 'sedan', 'suv', 'hatch'], paints = ['white', 'black', 'red', 'silver', 'blue', 'graphite', 'beige', 'navy'];
     for (const i of used) {
-      const x = x0 + (i + 0.5) * bayW, z = zBack + 2.7;
+      const x = x0 + (i + 0.5) * bayW;
       P.add('stone', geo.box(1.6, 0.12, 0.2, 'world'), M(x, 0.06, zBack + 0.55), '#cbc6bc');
+      if (V) {
+        // nose in: the front wheels rest against the stone stop, so the nose hangs a little over the kerb line
+        const kind = kinds[ci % kinds.length], sp = V.spec(kind), SP = V._SPEC[kind];
+        const cx = x + (r() - 0.5) * 0.16, cz = zBack + 0.55 + 0.1 + SP.r - SP.fo + sp.L / 2 + (r() - 0.5) * 0.12, ry = PI + (r() - 0.5) * 0.05;
+        parked.push({ kind, x: P.wx(cx, cz), y: gy + 0.045, z: P.wz(cx, cz), rot: rot + ry, paint: paints[ci % paints.length] });
+        boxCol(P.wx(cx, cz), P.wz(cx, cz), sp.hw, sp.hd, rot, { tag: kind === 'truck' ? 'truck' : 'car', maxY: gy + sp.top });
+        ci++;
+        continue;
+      }
+      const z = zBack + 2.7;
       const len = car(P, x + (r() - 0.5) * 0.15, z, PI + (r() - 0.5) * 0.06, palette[ci++ % palette.length], r);
       boxCol(P.wx(x, z), P.wz(x, z), 0.95, len / 2 + 0.05, rot);
     }
@@ -1425,7 +1527,12 @@
       try { this.jarCount = buildJarInstances(root); } catch (e) { G.log.error('WORLD', 'jar instancing failed', e); }
       try { this.swayMeshes = buildSwayMeshes(root); } catch (e) { G.log.error('WORLD', 'lantern sway meshes failed', e); }
       this.glow = buildGlow(root);
-      try { buildNightLights(root); } catch (e) { G.log.warn('WORLD', 'night lights failed', e); }
+      try { buildNightLights(); } catch (e) { G.log.warn('WORLD', 'night lights failed', e); }
+      try { this.lampPools = buildLampPools(root); } catch (e) { this.lampPools = null; G.log.warn('WORLD', 'lamp pools failed', e); }   // [world]
+      // [world] the car park's vehicles: one fleet (an instanced mesh per kind + one shadow mesh)
+      try { if (parked.length && G.vehicles?.fleet) { this.vehicles = G.vehicles.fleet(parked, { name: 'props-vehicles', farDistance: 80 }); root.add(this.vehicles.group); } }
+      catch (e) { this.vehicles = null; G.log.warn('WORLD', 'parked vehicles failed', e); }
+      this.lampHeads = lampHeads.length;
       PSIGN.getTexture().needsUpdate = true; SCREEN.getTexture().needsUpdate = true;
       root.updateMatrixWorld(true);
       E.onResize?.((w, h, pr) => { if (this.glow) this.glow.material.uniforms.uScale.value = glowScale(h, pr); });
@@ -1442,8 +1549,19 @@
       const g = this.glow;
       if (g && nf !== this._nf) {
         this._nf = nf;
-        g.material.uniforms.uOpacity.value = clamp((nf - 0.15) / 0.6, 0, 1) * 0.85;
+        g.material.uniforms.uOpacity.value = clamp((nf - 0.15) / 0.6, 0, 1) * 0.95;   // [world] brighter halos (was 0.85)
         g.visible = nf > 0.16;
+      }
+      // [world] the parked vehicles take their far form when the camera is far from the car park (checked twice a second)
+      if (this.vehicles && (this._vehT = (this._vehT || 0) + dt) > 0.5) { this._vehT = 0; const cam = G.sys.engine?.camera; if (cam) this.vehicles.update(cam.position); }
+      // [world] the ground glow under the lamps: the weather's lamp factor (dusk, night, dark rain); stronger on `low`,
+      // where no point light shines. Its colour scale is the only thing that changes (no recompiles).
+      const lp = this.lampPools;
+      if (lp) {
+        const E = G.sys.engine, lk = clamp(Number(G.sys.weather?._lampK ?? nf) || 0, 0, 1);
+        const low = E?.preset?.name === 'low' || !(E?.lampInfo?.().lights > 0);
+        const v = lk * (low ? (E?.lk?.('lampGlowLow', 0.62) ?? 0.62) : (E?.lk?.('lampGlow', 0.24) ?? 0.24));
+        if (v !== this._lpV) { this._lpV = v; lp.material.color.setScalar(v); lp.visible = v > 0.004; }
       }
     },
 

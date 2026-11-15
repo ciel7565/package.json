@@ -213,6 +213,39 @@
     { x: 41.2, z: 45.2, type: 'stone' }, { x: 61, z: 47, type: 'stone' }, { x: 44, z: 63, type: 'stone' }, { x: 61, z: 63, type: 'stone' },
     { x: -40, z: -52, type: 'post' }, { x: -48, z: -52, type: 'post' },
   ];
+  // [world] phase 9 (CONTRACT §17.9): lamps along the fields and the paths between them — the owner found the fields
+  // too dark at night. type 'field' = a tall timber post with a hanging 한지 lantern (16-props.js), 'stone' = 석등.
+  // Appended (the indexes of the lamps above stay); tag = where it stands; y = metres above the ground (on a terrace).
+  // Fence lamps stand ON the fence line (they replace a fence post), path lamps 0.6 m beside the path's edge.
+  L.lanterns.push(
+    // the crop field: its south and north fences and the verge of the middle path (one lamp per plot side)
+    { x: -11, z: -21.8, type: 'field', tag: 'crop' }, { x: 0, z: -21.85, type: 'field', tag: 'crop' }, { x: 11, z: -21.8, type: 'field', tag: 'crop' },
+    { x: -11, z: -30.0, type: 'field', tag: 'crop' }, { x: 0, z: -30.0, type: 'field', tag: 'crop' }, { x: 11, z: -30.0, type: 'field', tag: 'crop' },
+    { x: -11, z: -43.4, type: 'field', tag: 'crop' }, { x: 0, z: -43.4, type: 'field', tag: 'crop' }, { x: 11, z: -43.4, type: 'field', tag: 'crop' },
+    // the herb garden: one lamp at each gate post, a 석등 where the aisles cross
+    { x: -42.2, z: -20.4, type: 'field', tag: 'herb' }, { x: -45.8, z: -39.6, type: 'field', tag: 'herb' },
+    { x: -34.4, z: -28.2, type: 'field', tag: 'herb' }, { x: -53.6, z: -29.5, type: 'field', tag: 'herb' },
+    { x: -45.7, z: -32.3, type: 'stone', tag: 'herb' },
+    // the real-time garden: its gate post and the far end of its aisle
+    { x: 21, z: -29.25, type: 'field', tag: 'rtgarden' }, { x: 30.6, z: -30.75, type: 'field', tag: 'rtgarden' },
+    // paths between the zones
+    { x: -23.7, z: -29.0, type: 'field', tag: 'path' },                      // crop field → herb garden
+    { x: -39.6, z: -13.3, type: 'field', tag: 'path' },                      // fermentation yard → herb garden
+    { x: -57.2, z: -33.4, type: 'field', tag: 'path' },                      // herb garden → tool display
+    { x: -41.9, z: -45.8, type: 'field', tag: 'path' },                      // herb garden → education hall
+    { x: -26.6, z: -56.7, type: 'stone', tag: 'path' },                      // hall → waterfall garden
+    { x: 17.6, z: -52.7, type: 'field', tag: 'path' }, { x: 31.5, z: -36.6, type: 'field', tag: 'path' },   // hall → storage
+    { x: 35.4, z: -16.2, type: 'stone', tag: 'path' },                       // jar yard → storage
+    { x: 12.9, z: 17.5, type: 'field', tag: 'path' }, { x: 26.5, z: 25.5, type: 'field', tag: 'path' }, { x: 34.7, z: 38.2, type: 'field', tag: 'path' },   // plaza → rest garden
+    { x: 2.5, z: 22, type: 'field', tag: 'path' }, { x: -2.5, z: 33.5, type: 'field', tag: 'path' }, { x: 2.5, z: 45, type: 'field', tag: 'path' },       // plaza → gate
+    { x: -2.9, z: 66.2, type: 'field', tag: 'path' }, { x: 2.9, z: 76.5, type: 'field', tag: 'path' },                                                  // gate → road
+    { x: -19.6, z: 5.3, type: 'stone', tag: 'path' },                        // plaza → fermentation yard
+    // the jar yard: beside the connecting step and at the two ends of the ring field's aisle
+    { x: 39, z: -0.5, type: 'stone', tag: 'jangdok' }, { x: 39, z: 8.5, type: 'stone', tag: 'jangdok' },
+    { x: 60, z: -16.0, type: 'field', tag: 'jangdok' }, { x: 60, z: 24.0, type: 'field', tag: 'jangdok' },
+    // the car park: its two back corners
+    { x: -19.7, z: 81.7, type: 'field', tag: 'parking' }, { x: -45.0, z: 83.2, type: 'field', tag: 'parking' },
+  );
   L.benches = [
     { x: -9.5, z: 7.5, rot: PI * 0.75 + PI }, { x: 9.5, z: 7.5, rot: -PI * 0.75 + PI },
     { x: 42, z: 58, rot: PI / 2 }, { x: 60, z: 62, rot: -PI * 0.8 }, { x: 62, z: 48, rot: -PI / 2 },

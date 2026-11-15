@@ -457,7 +457,7 @@
         metal: mat('metal', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.55 })),
         glow: mat('glow', () => {
           const m = new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffb050, emissiveIntensity: 0.06, roughness: 0.5 });
-          G.world.addNightMaterial(m, 2.4, 0.06);
+          G.world.addNightMaterial(m, G.sys.engine?.preset?.name === 'low' ? 4.2 : 3.3, 0.06);   // [world] brighter heads (was 2.4); `low` has no lamp lights
           return m;
         }),
         text: mat('marker-text', () => new THREE.MeshStandardMaterial({ map: markerTexture(), transparent: true, depthWrite: false, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })),
@@ -759,14 +759,9 @@
         B.paint.add(new THREE.CylinderGeometry(0.2, 0.2, 0.06, 10), M(lx, ly - 0.22, lz), '#b2302a', 0);
         B.glow.add(new THREE.CylinderGeometry(0.18, 0.18, 0.4, 12), M(lx, ly, lz), '#ffffff', 0);
       }
-      // one warm light inside the pavilion at night (medium / high)
-      if (!this._low) {
-        const pl = new THREE.PointLight(0xffc27a, 0, 13, 1.6);
-        pl.position.set(cx, yTop - 0.4, cz);
-        pl.castShadow = false;
-        this.root.add(pl);
-        G.world.addNightLight(pl, 5.5);
-      }
+      // one warm light inside the pavilion at night: a spot of the engine's lamp pool (10-engine.js [world] — the pool's
+      // lights follow the player, so the deck is lit while someone is up here and costs nothing otherwise)
+      G.sys.engine?.addLampSpot?.({ x: cx, y: yTop - 0.4, z: cz, color: 0xffc27a, power: 0.7, reach: 0.7, lift: 0 });
       this.pavilionTop = yA + 1.3;
     },
     _hyeonpan(x, y, z) {
@@ -893,6 +888,7 @@
         // light chamber (화사석): four posts around a glowing core
         for (let k = 0; k < 4; k++) { const a = PI / 4 + k * (PI / 2); B.stone.add(new THREE.BoxGeometry(0.09 * s, 0.4 * s, 0.09 * s), M(x + Math.sin(a) * 0.17 * s, y + 1.32 * s, z + Math.cos(a) * 0.17 * s), '#cbc4b6', 0.03, rnd); }
         B.glow.add(new THREE.BoxGeometry(0.24 * s, 0.32 * s, 0.24 * s), M(x, y + 1.32 * s, z), '#ffffff', 0);
+        G.sys.engine?.addLampSpot?.({ x, y: y + 1.32 * s, z, power: l.big ? 0.85 : 0.6, reach: l.big ? 0.9 : 0.7, lift: 0.9 });   // [world] a lamp of the pool
         B.stone.add(new THREE.CylinderGeometry(0.06 * s, 0.46 * s, 0.24 * s, 8), M(x, y + 1.64 * s, z), '#b7b0a2', 0.04, rnd);
         B.stone.add(new THREE.SphereGeometry(0.09 * s, 8, 6), M(x, y + 1.82 * s, z), '#bdb6a8', 0.03, rnd);
         this._col({ shape: 'circle', x, z, r: 0.38 * s });

@@ -513,7 +513,8 @@
     glow: {
       make: () => {
         const m = STD({ vertexColors: true, color: 0xfff1d8, emissive: new THREE.Color('#ffb04d'), roughness: 0.7 });
-        G.world.addNightMaterial(m, 2.4, 0.12);
+        // [world] brighter lamp heads at night (was 2.4); `low` has no lamp lights, so its heads carry more
+        G.world.addNightMaterial(m, G.sys.engine?.preset?.name === 'low' ? 4.2 : 3.3, 0.12);
         return m;
       },
       cast: false,

@@ -2608,6 +2608,7 @@
       const info = this.renderer.info;
       info.reset();
       this._placeFrame();   // [places-kit] sky follow + the room's light over the weather's values (after every update)
+      this._lampFrame();    // [world] the pooled night lamps follow the player (after the weather wrote its lamp factor)
       if (this.atmosPass) { this.camera.updateMatrixWorld(); this._updateSunScreen(); } // this frame's camera: no glow lag
       guard.tick();   // §14.4.1: a non-finite opacity / scale / uniform never reaches the GPU
       try {
@@ -2857,6 +2858,119 @@
       }
     },
     // ============================================================ [places-kit] end
+
+    // ============================================================ [world] night lamp pool (CONTRACT §17.9)
+    // The valley has some sixty lamp heads, and a forward renderer pays for every point light in every lit fragment.
+    // So a small FIXED set of point lights (lamps.count — made once; none while the preset is `low`) FOLLOWS THE
+    // PLAYER: four times a second the lights are handed to the nearest registered lamp heads. A light is dark when it
+    // changes its lamp: its strength falls with its rank among the nearest (the last of the set is at 0), so nothing
+    // pops, and a lamp that walks out of the set fades out first.
+    //   engine.addLampSpot({ x, y, z, color = 0xffb866, power = 1, reach = 1, lift = 0.7 }) -> { spot, remove() }
+    //       a lamp head in world coordinates. power scales the intensity, reach the distance; the light sits `lift`
+    //       metres above the head, so it spreads over the ground instead of burning the post.
+    //   engine.lamps      { count, intensity (cd), distance (m), decay, band (m) } — the knobs; a developer overrides
+    //                     them with ?lk=lampN:…,lampI:…,lampD:…,lampDecay:…,lampBand:…
+    //   engine.lampInfo() -> { lights, spots, lit, edge, near: [{ x, y, z, k, intensity }] }   (tests, developer centre)
+    // The lights are ordinary night lamps of the world (G.world.addNightLight): 51-weather multiplies them with its
+    // lamp factor (dusk, night, dark rain), and engine.lightPool() lends them to rooms and to the district exactly as
+    // before — while they are lent this block leaves them alone. `low` has no lights: its lamp heads and the ground
+    // glow of 16-props.js are brighter instead.
+    lamps: { count: 8, intensity: 18, distance: 22, decay: 1.6, band: 5 },   // (the six fixed lamps of phase 8 had 14 cd)
+    _lamp: null,
+    addLampSpot(spec = {}) {
+      const S = this._lamp || (this._lamp = { spots: [], lights: [], order: [], t: 0, acc: 1, edge: Infinity, on: false, bound: false });
+      const x = Number(spec.x), y = Number(spec.y), z = Number(spec.z);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return { spot: null, remove() {} };
+      const spot = {
+        x, y: y + clamp(fin(Number(spec.lift), 0.7), 0, 4), z, color: new THREE.Color(spec.color ?? 0xffb866),
+        power: clamp(fin(Number(spec.power), 1), 0, 4), reach: clamp(fin(Number(spec.reach), 1), 0.2, 3), light: null, d: 0, rank: 0,
+      };
+      S.spots.push(spot);
+      if (!S.bound) {
+        S.bound = true;
+        // a step up from `low` brings the lights; a step down to `low` hides them (a slow device pays for no point light)
+        G.bus.on('engine:quality', () => { this._lampMake(); const low = this.preset?.name === 'low'; for (const L of S.lights) L.light.visible = !low; S.acc = 1; });
+      }
+      this._lampMake();
+      S.acc = 1;
+      return { spot, remove: () => { const i = S.spots.indexOf(spot); if (i >= 0) S.spots.splice(i, 1); if (spot.light) { spot.light.spot = null; spot.light.k = 0; spot.light = null; } S.acc = 1; } };
+    },
+    /** the pool's lights: made once on medium / high — the number of lights never changes afterwards (no relinking) */
+    _lampMake() {
+      const S = this._lamp;
+      if (!S || S.lights.length || !S.spots.length || !this.scene || this.preset?.name === 'low' || !G.world?.addNightLight) return;
+      const n = clamp(Math.round(this.lk('lampN', this.lamps.count)), 0, 12);
+      for (let i = 0; i < n; i++) {
+        const l = new THREE.PointLight(0xffb866, 0, this.lamps.distance, this.lamps.decay);
+        l.name = 'lamp-pool-' + i; l.castShadow = false; l.position.set(0, -60, 0);
+        this.scene.add(l);
+        G.world.addNightLight(l, 0);
+        S.lights.push({ light: l, nl: G.world.nightLights[G.world.nightLights.length - 1], spot: null, k: 0, off: false });
+      }
+    },
+    /** once per rendered frame: hand the lights to the nearest lamp heads and ease their strength */
+    _lampFrame() {
+      const S = this._lamp;
+      if (!S || !S.lights.length || this.preset?.name === 'low') return;
+      const now = performance.now(), dt = clamp((now - (S.t || now)) / 1000, 0, 0.1);
+      S.t = now;
+      if (this._pool && this._pool.out) { S.acc = 1; return; }                 // lent to a room / the district
+      const lampK = clamp(fin(Number(G.sys.weather?._lampK), fin(G.world?.nightFactor, 0)), 0, 1);
+      const p = G.sys.player?.position || this.camera?.position;
+      if (lampK < 0.004 || !S.spots.length || !p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) {
+        if (S.on) { S.on = false; for (const L of S.lights) { L.k = 0; L.nl.intensity = 0; L.light.intensity = 0; } }
+        return;
+      }
+      S.on = true;
+      const n = S.lights.length;
+      const I = this.lk('lampI', this.lamps.intensity), D = this.lk('lampD', this.lamps.distance), decay = this.lk('lampDecay', this.lamps.decay);
+      const band = Math.max(0.5, this.lk('lampBand', this.lamps.band));
+      // ---- four times a second: which lamp heads are the nearest
+      S.acc += dt;
+      if (S.acc >= 0.25) {
+        S.acc = 0;
+        const order = S.order;
+        order.length = 0;
+        for (const s of S.spots) { s.d = Math.hypot(s.x - p.x, s.z - p.z); order.push(s); }
+        order.sort((a, b) => a.d - b.d);
+        for (let i = 0; i < order.length; i++) order[i].rank = i;
+        S.edge = order.length > n ? order[n].d : Infinity;
+        for (const L of S.lights) L.off = !L.spot || L.spot.rank >= n;         // its lamp left the set: fade out
+        for (let i = 0; i < n && i < order.length; i++) {
+          const s = order[i];
+          if (s.light) continue;
+          let free = null;
+          for (const L of S.lights) if (!L.spot || (L.off && L.k < 0.03)) { free = L; break; }
+          if (!free) continue;                                                // every light is still fading: next time
+          if (free.spot) free.spot.light = null;
+          free.spot = s; s.light = free; free.off = false; free.k = 0;
+          free.light.position.set(s.x, s.y, s.z); free.light.color.copy(s.color);
+        }
+      }
+      // ---- every frame: ease each light towards its strength (1 near the player, 0 at the edge of the set)
+      const ease = 1 - Math.exp(-dt / 0.3), edge = S.edge;
+      for (const L of S.lights) {
+        const s = L.spot;
+        let w = 0;
+        if (s && !L.off) {
+          if (edge === Infinity) w = 1;
+          else { const d = Math.hypot(s.x - p.x, s.z - p.z), t = clamp((edge - d) / band, 0, 1); w = t * t * (3 - 2 * t); }
+        }
+        L.k += (w - L.k) * ease;
+        if (L.k < 0.001) L.k = 0;
+        const v = s ? I * s.power * L.k : 0;
+        L.nl.intensity = v;                                                   // (what the weather multiplies when its factor moves)
+        L.light.intensity = v * lampK;
+        if (s) { L.light.distance = D * s.reach; L.light.decay = decay; }
+      }
+    },
+    lampInfo() {
+      const S = this._lamp;
+      if (!S) return { lights: 0, spots: 0, lit: 0, edge: null, near: [] };
+      const near = S.lights.filter((L) => L.spot).map((L) => ({ x: +L.spot.x.toFixed(2), y: +L.spot.y.toFixed(2), z: +L.spot.z.toFixed(2), k: +L.k.toFixed(3), intensity: +L.light.intensity.toFixed(2), distance: L.light.distance }));
+      return { lights: S.lights.length, spots: S.spots.length, lit: S.lights.filter((L) => L.light.intensity > 0.01).length, edge: Number.isFinite(S.edge) ? +S.edge.toFixed(2) : null, near };
+    },
+    // ============================================================ [world] end
 
     // ============================================================ [complex-look] district shadow focus (CONTRACT §17.9)
     // A place that is looked at from far or high (만장대 단지 from its lookout, the aerial camera, photo mode) wants the
