@@ -2360,7 +2360,8 @@ async function main() {
   // form on every page, the failing health row, the settings registry as typed inputs (CSRF, same origin, audit, 303 —
   // no script anywhere), the password change that ends the other sessions, the login id, and the 2-step setting.
   if (section('entitle')) {
-    const SECRETS = { toss_sk: 'test_sk_LOCKSUITEsecret0123456789', toss_ck: 'test_ck_LOCKSUITEclient0123456789', kma: 'KMA-LOCKSUITE-KEY-0123456789', ai: 'sk-ant-LOCKSUITE-0123456789' };
+    // made-up values in the shape of real keys (put together here, so no key-shaped text sits in the repository)
+    const SECRETS = { toss_sk: ['test', 'sk', 'LOCKSUITEsecret0123456789'].join('_'), toss_ck: ['test', 'ck', 'LOCKSUITEclient0123456789'].join('_'), kma: ['KMA', 'LOCKSUITE', 'KEY', '0123456789'].join('-'), ai: ['sk', 'ant', 'LOCKSUITE', '0123456789'].join('-') };
     const s = makeSite('entitle', { toss: { client_key: SECRETS.toss_ck, secret_key: SECRETS.toss_sk }, env: { kma_key: SECRETS.kma }, anthropic: { api_key: SECRETS.ai }, rate_limits: { auth_password: [100000, 60], sub_status: [100000, 60] } });
     const sv = await startPhp(s);
     try {
