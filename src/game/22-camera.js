@@ -10,14 +10,15 @@
 //   shake(amount 0..1), snap(), yaw / pitch / distance, gentle (easy-mode camera active)
 //   shot(pos, look, {fov, duration}) / setMode('shot')   scripted cinematography (intro, telescope tour):
 //                                               the caller moves pos/look every frame; setMode('follow') ends it
-// Follow at speed (phase 6: 6.4 / 12 m/s at tier 1, up to 19.2 / 36 m/s at tier 3+ — RUN × G.sys.speed.movement()):
+// Follow at speed (phase 9: 7.68 / 14.4 m/s at tier 1, up to 23.04 / 43.2 m/s at tier 3+ — RUN × G.sys.speed.movement()):
 // the target is fed forward with the player's own motion (zero lag, zero jitter), the view leads a little in the
 // direction of travel, pulls back and widens the FOV a touch at a sprint (normal mode only; easy mode keeps a fixed
 // FOV at every tier), and auto-swings behind the runner with a capped turn rate.
 // Occlusion (phase 6): rays from the look point AND from the head and chest to the camera spot at the WANTED distance
 // (never the pulled-in one), the nearest hit wins; a pull-in is released only after the view has been clear for
 // CLEAR_HOLD seconds — no parking over roofs with the child hidden, no pumping in and out at a door.
-// Drag (G.input.consumeLook) rotates, wheel / pinch (G.input.consumeZoom) zooms 2.5–16 m.
+// Drag / mouse look (G.input.consumeLook, already × G.settings.lookSpeed) rotates, wheel / pinch (G.input.consumeZoom)
+// zooms 2–22 m (easy mode 4.5–12.5 m) in every mouse-look mode, smoothed.
 // The camera never goes below the terrain and pulls in when G.world.cameraBlockers occlude the player.
 // 쉬운 모드 (CONTRACT §12): a gentle camera for small children — softer drag (x0.62), a comfortable
 // zoom range (4.5–12.5 m, default 9 m a little higher up), it swings behind the walking player by itself
@@ -30,7 +31,7 @@
   const ease = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
   const PMIN = -0.32, PMAX = 1.22;     // follow pitch range (rad)
-  const DMIN = 2.5, DMAX = 16;          // follow zoom range (m)
+  const DMIN = 2, DMAX = 22;            // follow zoom range (m) — [controls] §17.1: the wheel zooms 2 … 22 m
   const DEF = { yaw: 0, pitch: 0.36, distance: 8 };
   const EASY = { dmin: 4.5, dmax: 12.5, pitch: 0.42, distance: 9, look: 0.62, pmin: -0.05, pmax: 1.05 };
   const gentle = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
@@ -38,9 +39,9 @@
   const SAMPLES = [0.35, 0.7, 1];
   const MODES = ['follow', 'cinematic', 'dialogue', 'photo', 'focus', 'shot'];
   // speed-aware follow (phase 4): numbers relative to the player's WALK / RUN constants
-  const WALK = () => G.sys.player?.WALK || 6.4;
-  const RUN = () => G.sys.player?.RUN || 12;
-  /** the run pace at the current speed tier (12 / 24 / 36 m/s) — what "full sprint" means for lead, dolly and FOV */
+  const WALK = () => G.sys.player?.WALK || 7.68;
+  const RUN = () => G.sys.player?.RUN || 14.4;
+  /** the run pace at the current speed tier (14.4 / 28.8 / 43.2 m/s) — what "full sprint" means for lead, dolly and FOV */
   const RUNX = () => RUN() * (Number(G.sys.player?.speedMul) || Number(G.sys.speed?.movement?.()) || 1);
   const OCC_STEP = 0.08;                // s between occlusion casts
   const CLEAR_HOLD = 0.5;               // s a clear sight line must hold before a pull-in is released (hysteresis)

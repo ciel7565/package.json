@@ -2,13 +2,17 @@
 // 21-player.js — local player controller (G.sys.player)
 //
 //   object, position, rotY, velocity, grounded, rig, radius, enabled, speed, sitting, isWalking, walkInfo
-//   WALK (6.4) / RUN (12) m/s, speedScale (2 = phase-6 base pace vs. phase 1), maxSubstep (0.25 m), speedMul (tier)
+//   WALK (7.68) / RUN (14.4) m/s, speedScale (2.4 = phase-9 base pace vs. phase 1), maxSubstep (0.25 m), speedMul (tier)
 //   G.sys.speed.movement() (1..3, CONTRACT §14.1) multiplies every target speed EVERY frame (nothing is cached across
-//   tier changes): tier 1 walks 6.4 / runs 12, tier 2 12.8 / 24, tier 3 and 4 19.2 / 36 m/s.
+//   tier changes): tier 1 walks 7.68 / runs 14.4, tier 2 15.36 / 28.8, tier 3 and 4 23.04 / 43.2 m/s (§17.1: 1.2 × phase 6).
 //   Double jump (§14.2): a second Space / jump-button press while airborne after a jump (before landing) sets
-//   v.y = max(v.y, 0) × 0.25 + JUMP2_V (5.2), once per airtime (_doubleUsed, reset on landing), never from a plain fall,
+//   v.y = max(v.y, 0) × 0.25 + JUMP2_V (7.1), once per airtime (_doubleUsed, reset on landing), never from a plain fall,
 //   while sitting / sliding or in a cinematic. Emits player:jump {n: 1|2, pos: {x, y, z} (feet)}; rig.flip(), 'jump2' sfx,
 //   G.fx.doubleJump(pos) (66-fx also plays it from the event, deduped within 150 ms).
+//   [controls] §17.1 jumps clear obstacles: JUMP_V 7.42 (peak ≈ 1.25 m), JUMP2_V 7.1 (both ≈ 2.4 m); VAULT ASSIST: a jump
+//   begun within 1.6 m of an obstacle ahead (G.world.obstacleAhead) whose top is ≤ 1.7 m (single) / ≤ 2.6 m (double)
+//   gets the take-off speed that clears it by 0.25 m (G.world.vaultVy) and keeps its momentum at the face until over;
+//   tall tops (buildings, walls, trees) never. lastVault = {n, hit, tall, top, a, b, vy, ok} of the last probe.
 //   teleport(x, z, rotY?, {fade=true}) -> Promise
 //   walkTo({x,z}, {stopDistance=1.2, onArrive, onFail, run, path=true, rescue, trail, label}) -> walk id | false
 //        path: plan around colliders (grid A* + string pulling, re-planned when blocked)
@@ -17,12 +21,12 @@
 //        trail  (default: easy mode): golden footprints along the planned route + a bouncing star at the goal
 //   cancelWalk(reason), planPath(from, to) -> [{x,z}...] | null, playAction(anim, {duration, loop}),
 //   stopAction(), faceTowards(x, z), sit(benchAnchor?), standUp(), setAppearance(app)
-// Camera-relative WASD (walk WALK = 6.4 m/s, Shift run RUN = 12 m/s — phase 6: 2x the phase-1 pace, × the speed tier,
+// Camera-relative WASD (walk WALK = 7.68 m/s, Shift run RUN = 14.4 m/s — phase 9: 1.2 × phase 6, × the speed tier,
 // G.sys.player.WALK / RUN / speedScale), Space jump, smooth turning, step-up via G.world.heightAt,
 // colliders via G.world.resolve, water/bounds/steep-slope blocking, footsteps on animation contacts
 // (distance based: one step per half stride).
 // Movement is SUB-STEPPED: every frame is split into slices of at most MAX_SUBSTEP (0.25 m) of travel;
-// steering, acceleration, collision and ground following run per slice, so 18 m/s at 10 fps never
+// steering, acceleration, collision and ground following run per slice, so 43 m/s at 10 fps never
 // tunnels through a 0.1 m fence, never leaves the ground on a slope and never overshoots a waypoint.
 // Navigation: grid A* + string pulling, plus layout route hints (G.data.layout.navLinks: hand-made
 // routes such as the 정선 만장대 switchback stairs) that the planner stitches in front of / behind A*.
@@ -40,9 +44,13 @@
   const fin = Number.isFinite;
 
   // ---- locomotion tuning (everything below derives from WALK / RUN)
-  const SPEED_SCALE = 2;               // phase 6: twice the phase-1 pace (CONTRACT §14.1)
-  const WALK = 6.4, RUN = 12;          // m/s (normal / Shift) at tier 1 — × G.sys.speed.movement() per frame
-  const GRAVITY = 22, JUMP_V = 5.7, JUMP2_V = 5.2;
+  const SPEED_SCALE = 2.4;             // phase 9: 1.2 × the phase-6 pace = 2.4 × phase 1 (CONTRACT §17.1)
+  const WALK = 7.68, RUN = 14.4;       // m/s (normal / Shift) at tier 1 — × G.sys.speed.movement() per frame
+  // [controls] §17.1: a single jump peaks at ≈ 1.25 m (v² / 2g), the double jump (pressed near the top) at ≈ 2.4 m
+  const GRAVITY = 22, JUMP_V = 7.42, JUMP2_V = 7.1;
+  // vault assist: a jump begun within VAULT_REACH m of an obstacle ahead whose top is ≤ 1.7 m (single) / ≤ 2.6 m
+  // (double, above the take-off ground) gets at least the take-off speed that clears the top by VAULT_CLEAR
+  const VAULT_REACH = 1.6, VAULT_MAX1 = 1.7, VAULT_MAX2 = 2.6, VAULT_CLEAR = 0.25;
   /** movement multiplier of the speed tier (1..3), read every frame — never cached across tier changes */
   const moveMul = () => { const m = Number(G.sys.speed?.movement?.()); return m >= 1 && m <= 3 ? m : 1; };
   const ACCEL = WALK * 5.6;            // ~54 m/s²: walk speed in 0.18 s, run speed in 0.33 s
@@ -52,7 +60,7 @@
   const CORNER_SPEED = WALK * 0.42;    // auto-walk speed through a hairpin (switchbacks, doors)
   const RUN_STEP = (WALK + RUN) / 2;   // above this ground speed footsteps sound like running
   const MAX_SUBSTEP = 0.25;            // m of travel per collision sub-step (fences are >= 0.1 m)
-  const MAX_SUBSTEPS = 16;
+  const MAX_SUBSTEPS = 20;             // [controls] 43.2 m/s (tier 3 sprint, §17.1) at 10 fps = 4.3 m per frame
   const MAX_SLOPE = Math.tan(40 * Math.PI / 180);
   const RADIUS = 0.35;
   const DEFAULT_SEAT = 0.42;
@@ -1122,10 +1130,48 @@
 
     _steerOut: { dx: 0, dz: 0, want: 0 },
 
+    /**
+     * [controls] vault assist (CONTRACT §17.1). Looks VAULT_REACH m ahead along (dx, dz) for an obstacle the jump
+     * could clear (n = 1: top ≤ 1.7 m above the feet; n = 2: ≤ 2.6 m above the take-off ground) and returns the
+     * take-off speed that clears its top by VAULT_CLEAR at horizontal speed s (0 = no assist). Buildings, tall walls,
+     * trees (tall tops) and water never get one. Sets this.lastVault for tests and the developer centre.
+     */
+    _vaultSpeed(n, dx, dz, s) {
+      const W = G.world, p = this.position;
+      if (!W?.obstacleAhead || !(Math.hypot(dx, dz) > 1e-6) || !fin(s)) return 0;
+      const o = W.obstacleAhead(p.x, p.z, dx, dz, RADIUS, p.y, VAULT_REACH, 4.5);
+      this.lastVault = { n, t: performance.now(), hit: !!o, tall: !!o?.tall, top: o ? o.top : null, a: o ? o.a : null, b: o ? o.b : null, vy: 0 };
+      if (!o || o.tall || !fin(o.top) || o.top <= p.y + 0.05) return 0;
+      const base = n === 1 ? p.y : (fin(this._jumpY) ? this._jumpY : p.y);
+      if (o.top - base > (n === 1 ? VAULT_MAX1 : VAULT_MAX2) + 1e-6) return 0;
+      const H = o.top + VAULT_CLEAR - p.y;
+      const cap = Math.sqrt(2 * GRAVITY * (H + 0.8));
+      const r = W.vaultVy(H, o.a, o.b, Math.max(0.5, s), GRAVITY, cap);
+      this.lastVault.vy = r.vy; this.lastVault.ok = r.ok;
+      return fin(r.vy) ? r.vy : 0;
+    },
+    /** direction + horizontal speed of a jump for the vault probe: the held input, else the current motion */
+    _vaultDir(mdx, mdz, mwant, WALKX) {
+      const v = this.velocity, hs = Math.hypot(v.x, v.z);
+      if (mwant > 0 && Math.hypot(mdx, mdz) > 1e-6) {
+        const along = v.x * mdx + v.z * mdz;
+        return { dx: mdx, dz: mdz, s: Math.max(along, Math.min(mwant, WALKX * 0.75)) };
+      }
+      if (hs > 1) return { dx: v.x / hs, dz: v.z / hs, s: hs };
+      return null;
+    },
+    /** give the jump at least speed s along (dx, dz) (a vault from a standing start still crosses) */
+    _vaultPush(dx, dz, s, t) {
+      const v = this.velocity, along = v.x * dx + v.z * dz;
+      if (along < s) { v.x += dx * (s - along); v.z += dz * (s - along); }
+      this._vaultUntil = t + 1.6;
+    },
+
     /** the double jump: a kick from whatever upward speed is left, a forward tuck-flip, a chime, a ring at the feet */
-    _doubleJump() {
+    _doubleJump(vd, t) {
       const v = this.velocity;
       v.y = Math.max(v.y, 0) * 0.25 + JUMP2_V;
+      if (vd) { const vv = this._vaultSpeed(2, vd.dx, vd.dz, vd.s); if (vv > v.y) { v.y = vv; this._vaultPush(vd.dx, vd.dz, vd.s, t); } }   // [controls]
       this.grounded = false; this._doubleUsed = true; this._jumpBuf = 0; this._coyote = 0;
       if (this.rig.actionFullBody) this.rig.stopAction();
       try { this.rig.flip?.(0.5); } catch (e) { /* visual only */ }
@@ -1147,7 +1193,7 @@
       if (!(dt > 0) || !fin(dt)) dt = 0;
       const W = G.world, p = this.position, v = this.velocity;
       const ctl = this.enabled && (input ? input.gameplay() : true);
-      // the speed tier's movement multiplier, read every frame (tier 1 → 6.4 / 12, tier 3+ → 19.2 / 36 m/s)
+      // the speed tier's movement multiplier, read every frame (tier 1 → 7.68 / 14.4, tier 3+ → 23.04 / 43.2 m/s)
       const mv = moveMul(), RUNX = RUN * mv, WALKX = WALK * mv;
 
       // ---- smooth reposition (sit / stand up)
@@ -1185,13 +1231,15 @@
       const jumped = input ? input.consumeJump() : false;
       if (jumped && ctl) {
         if (this.sitting) this.standUp();
-        else if (!this.grounded && this._airJump && !this._doubleUsed && this._coyote <= 0 && !this._slide && !this._cinematic() && !G.sys.places?.noDoubleJump?.()) this._doubleJump();   // [places-kit] none under a ceiling
+        else if (!this.grounded && this._airJump && !this._doubleUsed && this._coyote <= 0 && !this._slide && !this._cinematic() && !G.sys.places?.noDoubleJump?.()) this._doubleJump(this._vaultDir(mdx, mdz, mwant, WALKX), t);   // [places-kit] none under a ceiling
         else this._jumpBuf = 0.15;
       }
       this._jumpBuf -= dt;
       this._coyote = this.grounded ? 0.1 : this._coyote - dt;
       if (this._jumpBuf > 0 && this._coyote > 0 && !this.sitting && !this._slide) {
-        v.y = JUMP_V; this.grounded = false; this._coyote = 0; this._jumpBuf = 0;
+        v.y = JUMP_V; this._jumpY = p.y;
+        { const vd = this._vaultDir(mdx, mdz, mwant, WALKX); const vv = vd ? this._vaultSpeed(1, vd.dx, vd.dz, vd.s) : 0; if (vv > v.y) { v.y = vv; this._vaultPush(vd.dx, vd.dz, vd.s, t); } }   // [controls] vault assist
+        this.grounded = false; this._coyote = 0; this._jumpBuf = 0;
         this._airJump = true; this._doubleUsed = false;
         if (this.rig.actionFullBody) this.rig.stopAction();
         G.sfx('jump');
@@ -1241,12 +1289,15 @@
           let sx = v.x * sdt, sz = v.z * sdt;
           const sl = Math.hypot(sx, sz);
           if (sl > MAX_SUBSTEP) { sx *= MAX_SUBSTEP / sl; sz *= MAX_SUBSTEP / sl; } // (velocity spike guard)
-          if (!this._move(p.x + sx, p.z + sz)) { v.x = 0; v.z = 0; pushed = pushed || want > 0; }
+          // [controls] while vaulting (airborne, ≤ 1.6 s after an assisted take-off) the body keeps its momentum at
+          // the obstacle's face and goes over as soon as the feet are above its top
+          const vaulting = !this.grounded && this._vaultUntil > t;
+          if (!this._move(p.x + sx, p.z + sz)) { if (!vaulting) { v.x = 0; v.z = 0; } pushed = pushed || want > 0; }
           else if (sdt > 0) {
             moved = true;
             // keep velocity consistent with what actually happened (sliding along walls)
             const mvx = (p.x - ox) / sdt, mvz = (p.z - oz) / sdt;
-            if (Math.hypot(mvx, mvz) < Math.hypot(v.x, v.z) * 0.6) { v.x = mvx; v.z = mvz; }
+            if (!vaulting && Math.hypot(mvx, mvz) < Math.hypot(v.x, v.z) * 0.6) { v.x = mvx; v.z = mvz; }
           }
         }
         // vertical: follow the ground slice by slice (slopes & stairs at speed never launch the player)
@@ -1272,6 +1323,7 @@
               const impact = -v.y;
               p.y = g2; v.y = 0; this.grounded = true;
               this._airJump = false; this._doubleUsed = false; // the next airtime may double-jump again
+              this._vaultUntil = 0;   // [controls]
               // landed on something that is no platform (a bush, small decor) or against a trunk: slide off it
               _t1.set(p.x, p.y, p.z);
               if (W.resolve(_t1, RADIUS, p.y) && !W.isWater(_t1.x, _t1.z) && !W.blocked(_t1.x, _t1.z, RADIUS - 0.03, p.y)) {

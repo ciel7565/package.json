@@ -9,6 +9,12 @@
 //   G.world.addCollider({shape:'circle',x,z,r,minY?,maxY?,stand?,tag?} | {shape:'box',x,z,hw,hd,rot,...}) -> id
 //                                           stand:false = the top (maxY) never carries a walker (foliage, small
 //                                           decor): it only decides blocking; a walker that lands on it slides off
+//                                           [controls] no maxY: the top is INFERRED from tag / shape / size (G.world.TOPS:
+//                                           fence 1.1 · low wall 1.0 · stone wall 1.9 · jar 0.7–1.3 by radius · rock = its
+//                                           size · bench 0.5 · bed / crop 0.45 · car 1.6 · NPC 1.5 …) above the highest
+//                                           ground under it (lazy); a tag not in the table stays TALL (never yields)
+//   G.world.topOf(c) -> world top | Infinity · G.world.inferTop(c) -> [h, stand] | null
+//   G.world.obstacleAhead(x, z, dx, dz, r, feetY, reach, depth) -> {a, b, top, tall, n} | null   (jump vault assist)
 //   G.world.removeCollider(id) / removeWalkable(id)
 //   G.world.resolve(pos:Vector3, radius, feetY?) pushes pos (XZ) out of colliders; returns true if hit
 //   G.world.setWaterFn(fn) / isWater(x,z)    river/pond test (not walkable)
@@ -91,6 +97,78 @@
   /** is collider c in the way of a walker whose feet are at fy? (low tops are stepped over, high ones walked under) */
   const active = (c, fy) => !c.disabled && !(c.maxY != null && fy >= c.maxY - 0.05) && !(c.minY != null && fy + 1.6 <= c.minY);
 
+  // ---------------------------------------------------------------- [controls] collider tops (CONTRACT §17.1)
+  // Every collider has a top. A creator that knows it passes the true world `maxY` (+ `stand: true` where one may land);
+  // without one the top is INFERRED from the tag (first word before ':'), the shape and the size: [height above the
+  // highest ground under the footprint, standable]. A tag that is not in the table (buildings, room walls, place bounds,
+  // trees, signs, lamp posts, the terrain, water features, unknown things) stays TALL: it never yields to a jump.
+  // The ground under an inferred top is looked up lazily (terrain + walkables at the centre and the footprint's corners,
+  // the highest wins) and again whenever the terrain function, the walkables or the collider's position change — so a
+  // room's floor added after its furniture, an outdoor place's terrain and a walking NPC all get the right top.
+  const jarH = (s) => G.util.clamp(0.5 + (s.shape === 'circle' ? s.r : Math.min(s.hw, s.hd)) * 0.8, 0.7, 1.3);
+  const rockH = (s) => G.util.clamp(s.shape === 'circle' ? s.r : Math.min(s.hw, s.hd) * 1.2, 0.3, 2.4);
+  const TOPS = {
+    fence: [1.1, false], rail: [1.1, false], railing: [1.1, false], hedge: [1.1, false], gate: [1.1, false],
+    lowwall: [1.0, true], 'low-wall': [1.0, true], curb: [0.35, true], kerb: [0.35, true], planter: [0.6, true], step: [0.4, true],
+    stonewall: [1.9, true], 'stone-wall': [1.9, true], doldam: [1.9, true],
+    jar: [jarH, false], pot: [jarH, false], onggi: [jarH, false], jars: [1.0, false], 'allot-units': [1.0, false],
+    rock: [rockH, true], crag: [rockH, true], boulder: [rockH, true],
+    bench: [0.5, true], stool: [0.45, true], table: [0.75, true], chest: [0.7, true], crate: [0.8, true], furniture: [0.8, true], low: [0.6, true],
+    bed: [0.45, false], crop: [0.45, false], field: [0.45, false], plot: [0.45, false], pile: [0.7, false],
+    car: [1.6, false], vehicle: [1.6, false], cart: [1.2, false], truck: [2.8, false], bus: [3.2, false],
+    npc: [1.5, false], animal: [1.0, false],
+  };
+  /** [height, standable] for a collider without a finite maxY, or null (tall: never yields) */
+  function inferTop(s) {
+    const t = String(s.tag || '').toLowerCase();
+    if (!t) return null;
+    const e = TOPS[t] || TOPS[t.split(':')[0]];
+    if (!e) return null;
+    const h = typeof e[0] === 'function' ? e[0](s) : e[0];
+    return Number.isFinite(h) && h > 0 ? [h, e[1]] : null;
+  }
+  // a separate query buffer / stamp for the ground under inferred tops: it runs INSIDE resolve() / heightAt() loops
+  // (through the maxY getter), so it must never touch _near / qstamp
+  const _nearB = [];
+  let qbstamp = 0, wgen = 1;
+  function groundAt(x, z) {
+    let h = world._terrain(x, z);
+    if (!Number.isFinite(h)) h = 0;
+    const q = ++qbstamp, arr = wgrid.get(key(Math.floor(x / CELL), Math.floor(z / CELL)));
+    if (!arr) return h;
+    let n = 0;
+    for (let i = 0; i < arr.length; i++) { const w = arr[i]; if (w._qb !== q) { w._qb = q; _nearB[n++] = w; } }
+    for (let i = 0; i < n; i++) { const w = _nearB[i]; if (!w._top && w.top > h && contains(w, x, z)) h = w.top; }
+    return h;
+  }
+  /** the highest ground under a footprint (centre + four rim points) */
+  function baseOf(s) {
+    let h = groundAt(s.x, s.z);
+    const ex = s.shape === 'circle' ? s.r * 0.7 : s.hw, ez = s.shape === 'circle' ? s.r * 0.7 : s.hd;
+    for (const [lx, lz] of [[-ex, -ez], [ex, -ez], [ex, ez], [-ex, ez]]) {
+      const [wx, wz] = s.shape === 'circle' ? [s.x + lx, s.z + lz] : toWorld(s, lx, lz);
+      const g = groundAt(wx, wz);
+      if (g > h) h = g;
+    }
+    return h;
+  }
+  /** install the lazy top of an inferred collider (a getter: every reader — resolve, heightAt, tests — sees it) */
+  function lazyTop(s, h) {
+    s._ih = h; s._g = -1;
+    Object.defineProperty(s, 'maxY', {
+      configurable: true, enumerable: true,
+      get() {
+        if (s._g !== wgen || s._tf !== world._terrain || s._bx !== s.x || s._bz !== s.z) {
+          s._g = wgen; s._tf = world._terrain; s._bx = s.x; s._bz = s.z;
+          const b = baseOf(s);
+          s._base = Number.isFinite(b) ? b : 0;
+        }
+        return s._base + s._ih;
+      },
+      set(v) { Object.defineProperty(s, 'maxY', { value: v, writable: true, configurable: true, enumerable: true }); },
+    });
+  }
+
   const world = {
     STEP,
     bounds: { minX: -135, maxX: 135, minZ: -135, maxZ: 135 },
@@ -126,9 +204,10 @@
       const id = nextId++;
       const s = { shape: 'box', rot: 0, ...w, id };
       walkables.set(id, s); insert(wgrid, s, s._cells = []);
+      wgen++;   // [controls] inferred tops re-read their ground
       return id;
     },
-    removeWalkable(id) { const s = walkables.get(id); if (s) { removeFrom(wgrid, s, s._cells); walkables.delete(id); } },
+    removeWalkable(id) { const s = walkables.get(id); if (s) { removeFrom(wgrid, s, s._cells); walkables.delete(id); wgen++; } },
 
     /**
      * ground height for a walker whose feet are at fromY (platforms above fromY+STEP are ignored).
@@ -157,6 +236,12 @@
       const id = nextId++;
       const s = { shape: 'circle', rot: 0, ...c, id };
       if (s.shape === 'box') { s.hw = s.hw ?? (s.w || 1) / 2; s.hd = s.hd ?? (s.d || 1) / 2; }
+      // [controls] no true top given: infer one from tag / shape / size (TOPS); unknown tags stay tall
+      if (!Number.isFinite(s.maxY)) {
+        const inf = inferTop(s);
+        if (inf) { if (s.stand == null) s.stand = inf[1]; s._inferred = true; lazyTop(s, inf[0]); }
+        else if (s.maxY != null) delete s.maxY;   // (maxY: undefined / NaN from a spread = tall)
+      }
       colliders.set(id, s); insert(grid, s, s._cells = []);
       // a standable top carries walkers (heightAt); stand:false (shrubs, small decor) keeps maxY for blocking only
       if (Number.isFinite(s.maxY) && s.stand !== false) { s._top = true; insert(wgrid, s, s._tcells = []); }
@@ -234,6 +319,65 @@
         if (active(c, feetY) && contains(c, x, z, r)) return true;
       }
       return world.isWater(x, z);
+    },
+
+    // ---------------------------------------------------------------- [controls] jump helpers (CONTRACT §17.1)
+    TOPS, inferTop,
+    /** the top of a collider: its world maxY, or Infinity (tall — never yields) */
+    topOf(c) { const y = c ? c.maxY : NaN; return Number.isFinite(y) ? y : Infinity; },
+    /**
+     * what lies ahead of a walker (radius r, feet at feetY) going from (x, z) along the unit direction (dx, dz)?
+     * Scans 0.1 m steps up to `reach` + `depth`: the first contact must come within `reach`; contacts closer than
+     * `gap` apart count as one obstacle (a jar row, a fence and its posts). Water ends the scan.
+     * Returns null (nothing within reach) or { a, b, top, tall, n }: a / b = travel distance of the walker's centre at
+     * the first / last contact, top = the highest top met (world y), tall = something in it never yields.
+     */
+    obstacleAhead(x, z, dx, dz, r = 0.35, feetY = 0, reach = 1.6, depth = 4, gap = 0.45) {
+      const len = Math.hypot(dx, dz);
+      if (!(len > 1e-6) || !Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(feetY)) return null;
+      dx /= len; dz /= len;
+      let a = -1, b = -1, top = -Infinity, tall = false, n = 0;
+      const STEPD = 0.1, end = reach + depth;
+      for (let d = 0.05; d <= end; d += STEPD) {
+        if (a < 0 && d > reach + STEPD) break;
+        if (a >= 0 && d - b > gap) break;
+        const px = x + dx * d, pz = z + dz * d;
+        if (world.isWater(px, pz)) { if (a < 0) return null; break; }
+        const m = near(grid, px, pz, r + 0.5);
+        let hit = false;
+        for (let i = 0; i < m; i++) {
+          const c = _near[i];
+          if (!active(c, feetY) || !contains(c, px, pz, r)) continue;
+          hit = true; n++;
+          const y = c.maxY;
+          if (Number.isFinite(y)) { if (y > top) top = y; } else tall = true;
+        }
+        if (hit) { if (a < 0) a = Math.max(0, d - STEPD / 2); b = d + STEPD / 2; if (tall) break; }
+      }
+      return a < 0 || a > reach + 0.01 ? null : { a, b, top: tall ? Infinity : top, tall, n };
+    },
+    /**
+     * vault maths: the smallest take-off speed v (≤ vcap) for a jump that must be H m up while the centre crosses an
+     * obstacle met after `a` m of travel and left after `b` m, at horizontal speed s, gravity g. The walker is held at
+     * the near face until it is high enough (the player keeps its momentum while vaulting), so the crossing starts at
+     * max(a / s, time to reach H) and must end (+ 0.15 m) before it sinks below H again.
+     * Returns { vy, ok } (ok = false: even vcap does not clear it; vy = vcap then).
+     */
+    vaultVy(H, a, b, s, g = 22, vcap = 12) {
+      if (!(H > 0) || !Number.isFinite(H) || !(g > 0)) return { vy: 0, ok: true };
+      const span = Math.max(0, (Number(b) || 0) - (Number(a) || 0)) + 0.15;
+      const okAt = (v) => {
+        const disc = v * v - 2 * g * H;
+        if (disc < 0) return false;
+        const sq = Math.sqrt(disc), tUp = (v - sq) / g, tDn = (v + sq) / g;
+        if (!(s > 0.05)) return span <= 0.2;
+        return Math.max(Math.max(0, a) / s, tUp) + span / s <= tDn;
+      };
+      let lo = Math.sqrt(2 * g * H), hi = Math.max(lo, vcap);
+      if (!okAt(hi)) return { vy: hi, ok: false };
+      if (okAt(lo)) return { vy: lo, ok: true };
+      for (let i = 0; i < 32; i++) { const m = (lo + hi) / 2; if (okAt(m)) hi = m; else lo = m; }
+      return { vy: hi, ok: true };
     },
 
     clampToBounds(pos) {

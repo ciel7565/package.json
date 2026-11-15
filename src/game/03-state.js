@@ -30,6 +30,8 @@
     chatVisible: true,
     clickToMove: true,
     cameraShake: true,
+    mouseLook: 'auto',          // [controls] §17.1 auto (site default per mode) | lock | walk | drag
+    lookSpeed: 1.0,             // [controls] §17.1 turn speed (+ / − keys) 0.25 .. 4, × 1.15 steps
     autoWeather: true,
     lockTime: false,
     // ---- Phase 3: 쉬운 모드 (CONTRACT §12.1) — easy mode is the DEFAULT
@@ -43,8 +45,8 @@
   /** settings that belong to the PLAYER (profile save) rather than the device: a parent who switches
    *  easy mode off in their own profile must not leak that into a child's profile on the same device. */
   const PROFILE_KEYS = ['easyMode', 'kidChat', 'parentGate'];
-  const ENUMS = { quality: ['auto', 'low', 'medium', 'high'] };
-  const RANGES = { volumeMaster: [0, 1], volumeMusic: [0, 1], volumeSfx: [0, 1], volumeAmbient: [0, 1], sensitivity: [0.2, 3], uiScale: [0.75, 1.4], voiceRate: [0.6, 1.4], playReminderMin: [0, 240] };
+  const ENUMS = { quality: ['auto', 'low', 'medium', 'high'], mouseLook: ['auto', 'lock', 'walk', 'drag'] };   // [controls] mouseLook
+  const RANGES = { volumeMaster: [0, 1], volumeMusic: [0, 1], volumeSfx: [0, 1], volumeAmbient: [0, 1], sensitivity: [0.2, 3], uiScale: [0.75, 1.4], voiceRate: [0.6, 1.4], playReminderMin: [0, 240], lookSpeed: [0.25, 4] };   // [controls] lookSpeed
   /** coerce a stored/imported value to the default's type (corrupt or hostile saves must not break the UI) */
   function sanitize(key, value) {
     const def = DEFAULTS[key];

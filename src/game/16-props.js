@@ -296,7 +296,7 @@
         for (const [z0, z1] of [[R.z0, aisle[0] - 0.55], [aisle[1] + 0.55, R.z1]]) {
           if (z1 - z0 < 0.8) continue;
           BK(x, (z0 + z1) / 2).add('stone', geo.box(1.0, 0.12, z1 - z0 + 0.9, 'world'), M(x, top + 0.04, (z0 + z1) / 2), '#c2bcb1');
-          boxCol(x, (z0 + z1) / 2, 0.55, (z1 - z0) / 2 + 0.45);
+          boxCol(x, (z0 + z1) / 2, 0.55, (z1 - z0) / 2 + 0.45, 0, { tag: 'jars' });   // [controls] a row of jars: top ≈ 1 m
           const n = Math.max(1, Math.round((z1 - z0) / 1.06));
           for (let k = 0; k <= n; k++) {
             const z = lerp(z0, z1, k / n);
@@ -428,7 +428,7 @@
           const s = sBase * (0.9 + r() * 0.2);
           const kind = rr > 13 && r() < 0.3 ? 'dok' : 'hangari';
           addJar(kind, cx + px, y + 0.1, cz + pzz, s * (kind === 'dok' ? 0.85 : 1), r() * TAU, jarTone(r));
-          circleCol(cx + px, cz + pzz, 0.4 * s);
+          circleCol(cx + px, cz + pzz, 0.4 * s, { tag: 'jar' });   // [controls] top by radius
         }
       }
     }
@@ -550,7 +550,7 @@
       const ay = yAt(ax, az), by = yAt(bx, bz);
       for (const h of [0.32, 0.64]) B.add('wood', geo.beam(ax, ay + h, az, bx, by + h, bz, 0.05, 0.08), I4, tint);
     }
-    boxCol(cx, cz, len / 2, 0.1, -ry);
+    boxCol(cx, cz, len / 2, 0.1, -ry, { tag: 'fence' });   // [controls] top 1.1 (posts 0.9 m)
   }
   function buildFences() {
     // crop grid (3 x 2 plots) with openings at every path
@@ -581,7 +581,7 @@
         B.add('plaster', geo.box(l, 0.08, 0.7), M(cx, y + 0.98, cz, ry), '#d9d3c6');
         for (const s of [-1, 1]) B.add('roof', geo.box(l + 0.02, 0.05, 0.56, 'world'), mul(M(cx, y + 1.1, cz, ry), M(0, 0, s * 0.24, 0, 1, 1, 1, s * 0.38)), '#ffffff');
         B.add('plaster', geo.box(l + 0.02, 0.1, 0.14), M(cx, y + 1.24, cz, ry), '#4d5054');
-        boxCol(cx, cz, l / 2, 0.36, ry);
+        boxCol(cx, cz, l / 2, 0.36, ry, { tag: 'lowwall', maxY: y + 1.3, stand: true });   // [controls] coping at 1.3 m: one may land on it
       }
       for (const [x, z] of [[x0, z0], [x1, z1]]) BK(x, z).add('field', geo.box(0.7, 1.35, 0.7, 'world'), M(x, ground(x, z) + 0.37, z, ry), '#f2efe8');
     }
@@ -942,7 +942,7 @@
       P.add('wood', geo.box(0.42, 0.24, 0.03), mul(M(0, 0.47, 0.84), M(0, 0, 0, 0, 1, 1, 1, -0.45)), '#4a2f1c');
       P.add('psign', geo.quad(0.38, 0.19, rect), mul(M(0, 0.47, 0.84), M(0, 0, 0.017, 0, 1, 1, 1, -0.45)));
       anchorGroup(jd.id, jd.x, gy, jd.z, rot, 1.25, 0.3 + 1.3 * s, 1.25, root);
-      circleCol(jd.x, jd.z, 0.62);
+      circleCol(jd.x, jd.z, 0.62, { tag: 'jar' });   // [controls]
     }
   }
 
@@ -1164,7 +1164,7 @@
       const g = anchorGroup('BENCH_' + i, bn.x, gy, bn.z, rot, w, 0.95, 0.6, root);
       g.userData.seatY = seatY;
       g.userData.bench = bn;
-      boxCol(bn.x, bn.z, w / 2, 0.24, rot);
+      boxCol(bn.x, bn.z, w / 2, 0.24, rot, { tag: 'bench' });   // [controls] seat 0.5 m
     });
   }
 

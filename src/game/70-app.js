@@ -3610,7 +3610,7 @@
   const SETTINGS_KEYS = {
     sound: ['volumeMaster', 'volumeMusic', 'volumeSfx', 'volumeAmbient', 'muted'],
     graphics: ['quality', 'shadows', 'bloom', 'fxLevel', 'showFps'],
-    controls: ['sensitivity', 'invertY', 'clickToMove', 'cameraShake'],
+    controls: ['sensitivity', 'invertY', 'clickToMove', 'cameraShake', 'mouseLook', 'lookSpeed'],   // [controls] mouseLook, lookSpeed
     game: ['autoWeather', 'lockTime', 'minimapVisible', 'companion', 'chatVisible'],
     access: ['uiScale', 'highContrast', 'largeText', 'reduceMotion', 'voiceOver'],
     kids: ['easyMode', 'voiceGuide', 'voiceRate', 'playReminderMin', 'kidChat', 'parentGate'],
@@ -3660,6 +3660,10 @@
       f.append(
         settingRow('🖱️ 시점 감도', '마우스·화면을 끌 때 시점이 도는 빠르기', sliderCtl('sensitivity', { min: 0.3, max: 2.5, step: 0.1, fmt: (v) => `${v.toFixed(1)}배`, label: '시점 감도' })),
         settingRow('↕️ Y축 반전', '위아래 시점 방향을 뒤집어요', switchCtl('invertY', { label: 'Y축 반전' })),
+        // [controls] §17.1 mouse look without a button (05-input G.input.mouseLook) + turn speed (+ / − keys)
+        settingRow('🖱️ 마우스로 둘러보기', G.input?.touchUI ? '터치 화면에서는 손가락으로 끌어서 돌려요' : '마우스만 움직여도 화면이 돌아가요 · Esc: 마우스 풀기', segCtl('mouseLook', [
+          { v: 'auto', e: '✨', l: '기본' }, { v: 'lock', e: '🎯', l: '늘 돌리기' }, { v: 'walk', e: '🚶', l: '걸을 때만' }, { v: 'drag', e: '✋', l: '끌어서' }], { label: '마우스로 둘러보기' })),
+        settingRow('🔄 회전 속도', '마우스·끌기로 도는 빠르기 (키보드 + / − 로도 바꿔요, 0 은 처음대로)', sliderCtl('lookSpeed', { min: 0.25, max: 4, step: 0.05, fmt: (v) => `${(Math.round(v * 100) / 100)}배`, label: '회전 속도' })),
         settingRow('📍 클릭해서 이동', '땅을 클릭하면 그곳까지 걸어가요', switchCtl('clickToMove', { label: '클릭해서 이동' })),
         settingRow('📳 카메라 흔들림', '수확·효과 때 화면이 살짝 흔들려요', switchCtl('cameraShake', { label: '카메라 흔들림' })),
         settingRow('⌨️ 단축키', 'E 상호작용 · M 지도 · Q 퀘스트 · I 가방 · J 작업일지 · H 도움말', keysBtn),
