@@ -45,8 +45,8 @@
 // | 옹기 workshop + climbing kiln | (−50, −128), kiln (−50, −134 … −149) | 12 × 9                                                      |
 // | overflow field                | x 100 … 146, z −70 … −18             | any kind on a 2 m grid                                      |
 // | 만장대 전망대 (the lookout)    | crag summit (−126, 160), pulpit floor y 62.6 (≈ 62 m over the plaza) | round stone pulpit r 2.6 with a low rail; four timber flights and two stone flights (≈ 33°) from the gate road at (−99.4, 100.2) over the rest terrace (−113.2, 118.6, y 26.9); 🚡 lift from the plaza (−74, 49) |
-// | hero view (= image 3)         | a visitor on the pulpit, follow camera 24 m behind at pitch 0.38, aimed 38° east of north | viewpoint `hero`   |
-// | aerial camera (= image 3)     | (−134, 104, 288) → (−17, 0, 18), vfov 31.6 | fitted to 11 landmarks of the picture (tools: scratch p10/complex-look/tools/fit2.mjs) |
+// | hero view (= image 3)         | a visitor on the pulpit, follow camera 24 m behind at pitch 0.5, aimed 38° east of north | viewpoint `hero`    |
+// | aerial camera (= image 3)     | (−105.5, 132.7, 234.9) → (−22.6, 0, 30.8), vfov 44 | fitted to 11 landmarks of the picture with clear lines of sight over the south ridge |
 // | slots, default preset         | J01 GC-SW · J02 GC-NW · J03 GC-NE · J04 GC-SE · J05 AM-W · J06 AM-E · P01 N · P02 E · P03 SE · S01 houses 1–4 · S02 houses 5–8 |
 // | capacity                      | jar slot 1,000 · plot slot 1,000 · store slot 500 · overflow on demand | default 10,000 = exactly placed          |
 //
@@ -195,14 +195,17 @@
   // the hero view (= image 3): a visitor stands on the pulpit; the follow camera 24 m behind, aimed 38° east of north (7°
   // right of the crag's own axis: the main building left of centre, the circle right of it — measured against the picture)
   const HERO = (() => {
-    const a = 38 * PI / 180, vx = Math.sin(a), vz = -Math.cos(a), dist = 24, pitch = 0.38, fov = 55;
+    const a = 38 * PI / 180, vx = Math.sin(a), vz = -Math.cos(a), dist = 24, pitch = 0.5, fov = 55;
     const sx = DECK.x - CRAG_V[0] * 0.5, sz = DECK.z - CRAG_V[1] * 0.5, ly = DECK.y + 1.131 + 1.2325;
     return { bearing: PI - a, az: a, stand: [sx, sz], dist, pitch, fov, look: [sx, ly, sz], cam: [sx - vx * Math.cos(pitch) * dist, ly + Math.sin(pitch) * dist, sz - vz * Math.cos(pitch) * dist] };
   })();
   // the free camera of image 3 (x, y, z, look x, y, z, vertical fov at the picture's aspect) — fitted to its landmarks
-  const AERIAL = [-134.2, 103.6, 287.7, -17.3, 0, 18.5, 31.6];
-  // where no tree may stand on the crag: the pulpit, the rest terrace, the line of sight of the hero camera
-  const CRAG_CLEAR = [{ x: DECK.x, z: DECK.z, r: 5 }, { x: REST.x, z: REST.z, r: 7 }, { x: r3((DECK.x + HERO.cam[0]) / 2), z: r3((DECK.z + HERO.cam[2]) / 2), r: 8 }, { x: r3(HERO.cam[0]), z: r3(HERO.cam[2]), r: 8 }];
+  const AERIAL = [-105.5, 132.7, 234.9, -22.6, 0, 30.8, 44];
+  // where no tree may stand on the crag: the bare rock head round the pulpit (r 16: a tree there hides the gate, the
+  // roundabout and the near half of the circle), the rest terrace, round the hero camera and between it and the pulpit,
+  // and the stair face straight ahead of the pulpit (a 12 m tree there would rise into the camera's line to the circle)
+  const CRAG_CLEAR = [{ x: DECK.x, z: DECK.z, r: 16 }, { x: REST.x, z: REST.z, r: 7 }, { x: r3((DECK.x + HERO.cam[0]) / 2), z: r3((DECK.z + HERO.cam[2]) / 2), r: 10 }, { x: r3(HERO.cam[0]), z: r3(HERO.cam[2]), r: 12 }]
+    .concat([[8, 8], [16, 10], [25, 11], [34, 11], [43, 9]].map(([t, r]) => ({ x: cragXZ(t, 1.5)[0], z: cragXZ(t, 1.5)[1], r })));
   // stair legs (x, z[, y]) from the roundabout up the north face of the crag to the rest terrace (y from the ground + 0.25)
   // … in crag coordinates [t, l]: a zigzag on trestles from the gate road to the rest terrace, on to the crest, and the
   // crest stair to the pulpit. Every flight climbs at about 35°.

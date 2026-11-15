@@ -129,6 +129,30 @@ function nodePart() {
     const a = JSON.stringify(P.trees(C, 'medium').list.slice(0, 300)), b = JSON.stringify(P.trees(C, 'medium').list.slice(0, 300));
     check('trees are deterministic (same input → same list)', a === b, `${a.length} chars`);
   }
+  // ---- [complex-look] the closed canopy: one crown per tree on the near slopes — counts, clear ground, determinism
+  {
+    const cn = { high: P.canopy(C, 'high'), medium: P.canopy(C, 'medium'), low: P.canopy(C, 'low') };
+    numbers.canopy = { high: cn.high.list.length, medium: cn.medium.list.length, kinds: cn.high.counts };
+    check('canopy: crowns on every near slope (high ≥ 2 × medium, medium ≥ 2,500, none on low, ≤ 26,000)',
+      cn.low.list.length === 0 && cn.medium.list.length >= 2500 && cn.high.list.length >= cn.medium.list.length * 2 && cn.high.list.length <= 26000,
+      `high ${cn.high.list.length} [${cn.high.counts}] · medium ${cn.medium.list.length} · low ${cn.low.list.length}`);
+    const roads = C.elements.filter((e) => e.type === 'road'), clear = [];
+    for (const e of C.elements) if (e.type === 'forest') for (const c of e.clear || []) clear.push(c);
+    let bad = 0, seen = 0, firs = 0;
+    for (let i = 0; i < cn.high.list.length; i += 5) {
+      const c = cn.high.list[i]; seen++;
+      if (c.kind === 2) firs++;
+      const inB = P.outside(c.x, c.z, B) < 1e-9;
+      if (!(c.s > 1 && c.s < 9) || !Number.isFinite(c.y)) { bad++; continue; }
+      if (C.waterY(c.x, c.z) > -1e6 && C.inWater(c.x, c.z)) { bad++; continue; }
+      if (roads.some((r) => P.polyNear(c.x, c.z, r.pts).d < r.w / 2 + 1)) { bad++; continue; }
+      if (inB && C.pathDistance(c.x, c.z).d < 2) { bad++; continue; }
+      if (clear.some((o) => Math.hypot(c.x - o.x, c.z - o.z) < o.r)) { bad++; continue; }
+    }
+    check(`canopy: ${seen} sampled crowns stand on no water, road or path and keep the lookout's lines of sight free; firs among them`, bad === 0 && firs > seen * 0.08, `bad ${bad} · firs ${firs}`);
+    check('canopy is deterministic', JSON.stringify(P.canopy(C, 'medium').list.slice(0, 80)) === JSON.stringify(cn.medium.list.slice(0, 80)), '');
+  }
+
   // ---- vehicles
   {
     const V = P.cars(C), park = C.byId('PARKING'), bus = C.busStop;

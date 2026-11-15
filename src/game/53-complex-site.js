@@ -163,12 +163,13 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       }
     }
     for (const p of C.paths) {
-      if (p.kind === 'road' || p.kind === 'deck') continue;
+      if (p.kind === 'road' || p.kind === 'deck' || (p.kind === 'stair' && p.ys)) continue;      // (the lookout's flights stand over natural rock)
       const ch = p.kind === 'walk' ? CH.earth : p.kind === 'lane' || p.kind === 'ringwalk' || p.kind === 'aisle' ? CH.gravel : CH.paved;
       if (p.arc) F.ring(ch, p.arc.cx, p.arc.cz, p.arc.r - p.w / 2, p.arc.r + p.w / 2, p.arc.a0, p.arc.a1, 0.5, p.kind === 'ringwalk' ? 0.8 : 1);
       else if (p.pts && p.pts.length >= 2) F.line(ch, p.pts, p.w / 2, 0.6, p.kind === 'walk' ? 0.7 : 1);
       else if (p.pts && p.pts.length === 1) F.circle(ch, p.pts[0][0], p.pts[0][1], p.w / 2, 0.5);
     }
+    if (C.lookout) F.circle(CH.rock, C.lookout.x, C.lookout.z, C.lookout.r + 9, 9);          // the bare rock head of 만장대
     siteMasks(F);
     return F;
   }
@@ -354,8 +355,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const slope = 1 - ny, lawnKeep = w(CH.lawn);
     const wild = Math.max(w(CH.wild), w(CH.forest), smooth(0.12, 0.3, slope + (n2 - 0.5) * 0.1)) * (1 - lawnKeep);
     if (wild > 0) { _c2.copy(col.forest).lerp(col.forestB, n2).lerp(col.lawnDeep, smooth(0.62, 0.9, n1) * 0.3); out.lerp(_c2, wild); over(wild, 0, 0.75, 0, 0); }
-    const rk = smooth(0.42, 0.62, slope + (n2 - 0.5) * 0.15);
-    if (rk > 0) { _c2.copy(col.rock).lerp(col.rockB, n3); out.lerp(_c2, rk); over(rk, 0, 0, 0, 1); }
+    const rk = Math.max(smooth(0.42, 0.62, slope + (n2 - 0.5) * 0.15), w(CH.rock) * (0.75 + 0.25 * n2));
+    if (rk > 0) { _c2.copy(col.rock).lerp(col.rockB, n3).lerp(col.siteB, smooth(0.5, 0.9, n1) * 0.25); out.lerp(_c2, rk); over(rk, 0, 0, 0, 1); }
     // the river: pebbles on the banks, a dark bed under the water
     const wy = C.waterY(x, z);
     if (wy > -1e6) {
@@ -1418,6 +1419,27 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const R = runParts(CX.list, ctx);
     RUN.built = R.built; RUN.failed = R.failed;
     disposers.push(R.dispose);
+    // [complex-look] light: the sun's shadows cover the whole site while it is looked at from far or high (the lookout, the
+    // aerial camera, the telescope, photo mode); near the ground the engine's following shadow continues
+    {
+      const E = G.sys.engine, UB = C.unitBounds || B;
+      const FOCUS = { x: ORIGIN.x + (B.minX + B.maxX) / 2 - 10, y: 0, z: ORIGIN.z + (UB.minZ + UB.maxZ) / 2 + 15, radius: 205 };
+      let on = false;
+      if (E && typeof E.shadowFocus === 'function') {
+        ctx.onUpdate(() => {
+          const cam = E.camera;
+          let want = false;
+          if (cam && P.is(ID)) {
+            const lx = clamp(cam.position.x - ORIGIN.x, B.minX, B.maxX), lz = clamp(cam.position.z - ORIGIN.z, B.minZ, B.maxZ);
+            const up = cam.position.y - H(lx, lz), mode = G.sys.camera && G.sys.camera.mode;
+            want = up > (on ? 15 : 24) || (!!mode && mode !== 'follow' && mode !== 'dialogue' && mode !== 'focus') || cam.fov < 40;
+          }
+          if (want || on) E.shadowFocus(want ? FOCUS : null);
+          on = want;
+        });
+        disposers.push(() => { try { E.shadowFocus(null); } catch (e) { /* engine gone */ } });
+      }
+    }
     // the way back: the bus stop of the complex
     const bs = C.busStop;
     ctx.exitDoor(bs.x, bs.z, { y: H(bs.x, bs.z) + 1.2 });
@@ -1480,6 +1502,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         try { if (code) G.sys.allotDistrict?.goto?.(code); } catch (err) { G.log.warn('WORLD', 'complex: focus unit failed', err?.message || err); }
       });
       G.bus.on('allot:map', () => { MM.ver = -1; });
+      // [complex-look] the look of image 3: a slightly warmer, softer grade while inside (a layer over the weather's own)
+      G.bus.on('place:enter', (e) => { if (e && e.id === ID) { try { G.sys.engine?.grade?.({ warmth: 0.05, saturation: 0.97, contrast: 1.03 }, 'complex'); } catch (err) { /* no grade pass */ } } });
+      G.bus.on('place:exit', (e) => { if (e && e.id === ID) { try { G.sys.engine?.grade?.(null, 'complex'); G.sys.engine?.shadowFocus?.(null); } catch (err) { /* no grade pass */ } } });
     },
     postInit() {
       try { buildShuttle(); } catch (e) { G.log.warn('WORLD', 'complex: valley shuttle stop failed', e?.message || e); }
@@ -1495,9 +1520,23 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     async firstVisit() {
       if (!G.state || !G.ready || P.current || P.busy) return false;
       const st = (C.lookout && C.lookout.stand) || { x: deckEl.cx, z: deckEl.cz, rotY: PI };
+      try {            // a low warm sun from the left, long shadows — unless Korea's real clock runs (then real time rules)
+        const w = G.sys.weather, mode = (G.env && typeof G.env.clockMode === 'function' && G.env.clockMode()) || (w && w.clockMode) || 'fast';
+        if (w && typeof w.setHour === 'function' && mode !== 'kst') w.setHour(16.5);
+      } catch (e) { /* the clock stays */ }
       const ok = await P.enter(ID, { spawn: { x: st.x, z: st.z, rotY: st.rotY } });
       if (!ok || !P.is(ID)) return false;
       heroView(true);
+      // the very first picture is image 3 itself: the aerial camera for a few seconds, then it glides down to the visitor
+      // on the pulpit (no glide when motion is reduced: the follow camera at once)
+      try {
+        const cam = G.sys.camera, v = (C.viewpoints || []).find((p) => p.id === 'aerial'), d = P.def(ID);
+        if (cam && v && d && typeof cam.shot === 'function' && !(G.settings && G.settings.reduceMotion)) {
+          cam.shot({ x: d.origin.x + v.x, y: v.y, z: d.origin.z + v.z }, { x: d.origin.x + v.look.x, y: v.look.y, z: d.origin.z + v.look.z }, { fov: v.fov, duration: 0 });
+          clearTimeout(this._fvCam);
+          this._fvCam = setTimeout(() => { try { if (P.is(ID) && cam.mode === 'shot') { cam.setMode('follow', { duration: 2.4 }); heroView(false); } } catch (e) { /* camera gone */ } }, 5200);
+        }
+      } catch (e) { G.log.warn('WORLD', 'complex: opening shot skipped', e?.message || e); }
       this.firstVisitShown = true;
       setTimeout(() => this._welcome(), 900);
       return true;
@@ -1508,6 +1547,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       const line = '여기는 만 개의 장독대예요. 항아리들이 둥글게 모여 있어요.';
       const go = () => {
         try { G.ui.modal.close?.('cx-welcome'); } catch (e) { /* closed */ }
+        try { clearTimeout(this._fvCam); if (G.sys.camera?.mode === 'shot') G.sys.camera.setMode('follow', { duration: 0 }); } catch (e) { /* camera optional */ }
         (P.current ? P.exit() : Promise.resolve(true)).then(() => { try { if (easy) G.easy?.say?.('마을에 왔어요! 이제 첫 공부를 해 봐요.', { priority: 1 }); } catch (e) { /* voice optional */ } });
       };
       G.ui.modal.open({
