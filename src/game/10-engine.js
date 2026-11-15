@@ -2858,6 +2858,73 @@
     },
     // ============================================================ [places-kit] end
 
+    // ============================================================ [complex-look] district shadow focus (CONTRACT §17.9)
+    // A place that is looked at from far or high (만장대 단지 from its lookout, the aerial camera, photo mode) wants the
+    // sun's shadows over ALL of it, not round the camera. engine.shadowFocus({ x, y, z, radius, size? }) (world metres;
+    // radius = half the side of the square that is covered) pins the sun's shadow camera on that centre until
+    // shadowFocus(null). The map is larger (4096 on a capable `high`, else 2048) and is rendered ONLY when the light has
+    // moved, the walker has moved or 2.5 s have passed — not every frame. Everything is applied right before the scene
+    // render, over what _shadowLevel() / placeKeyLight() set, so the following shadow continues the moment the focus ends.
+    shadowFocus(spec) {
+      if (!this._sf) { this._sf = { spec: null, on: false, dir: new THREE.Vector3(), at: 0, px: NaN, pz: NaN, renders: 0 }; this.onPreRender(() => this._sfFrame()); }
+      const F = this._sf;
+      if (!spec || !Number.isFinite(spec.x) || !Number.isFinite(spec.z) || !(spec.radius > 10)) { F.spec = null; return false; }
+      const o = F.spec, y = Number.isFinite(spec.y) ? spec.y : 0, size = Number(spec.size) || 0;
+      if (!o || o.x !== spec.x || o.z !== spec.z || o.y !== y || o.radius !== spec.radius || o.size !== size) { F.spec = { x: spec.x, y, z: spec.z, radius: spec.radius, size }; F.at = 0; }
+      return true;
+    },
+    /** { on, renders (shadow maps drawn while focused), size, radius } — tests and the dev center */
+    shadowFocusInfo() { const F = this._sf; return { on: !!(F && F.on), renders: F ? F.renders : 0, size: this.sun?.shadow?.mapSize?.x || 0, radius: F && F.spec ? F.spec.radius : 0 }; },
+    _sfFrame() {
+      const F = this._sf, sun = this.sun, r = this.renderer;
+      if (!F || !sun || !sun.shadow || !r) return;
+      const s = sun.shadow, S = this._sh;
+      const want = !!F.spec && sun.castShadow && r.shadowMap.enabled && !(this._indoor && this._indoorGoal);
+      if (!want) {
+        if (F.on) {            // hand the shadow back: the preset's map size, the near / wide frustum, a render every frame
+          F.on = false; s.autoUpdate = true; s.needsUpdate = true;
+          if (S.size && s.mapSize.x !== S.size) { s.mapSize.set(S.size, S.size); if (s.map) { s.map.dispose(); s.map = null; } }
+          this._shadowFrustum(S.wide);
+        }
+        return;
+      }
+      const P = F.spec, R = P.radius, max = r.capabilities.maxTextureSize || 2048;
+      const size = Math.min(max, P.size || (this.quality === 'high' && this._shadowSize() >= 4096 ? 4096 : 2048));
+      let dirty = !F.on;
+      if (s.mapSize.x !== size) { s.mapSize.set(size, size); if (s.map) { s.map.dispose(); s.map = null; } dirty = true; }
+      const sc = s.camera, texel = (2 * R) / size, D = SHADOW_DIST + R * 0.5, far = D + R + 60;
+      if (sc.right !== R || sc.far !== far) {
+        Object.assign(sc, { left: -R, right: R, top: R, bottom: -R, near: 1, far });
+        sc.updateProjectionMatrix();
+        dirty = true;
+      }
+      s.bias = -(0.02 + texel * 0.3) / (far - 1);
+      s.normalBias = clamp(texel * 1.4, 0.02, 0.3);
+      // the light: along the key direction from the centre, the centre snapped to whole texels in light space
+      const d = _kd.copy(this.keyDir);
+      if (!(d.lengthSq() > 1e-6) || !Number.isFinite(d.x + d.y + d.z)) d.copy(this.sunDir);
+      if (d.y < 0.08) d.y = 0.08;
+      d.normalize();
+      const c = _kc.set(P.x, P.y, P.z), xl = Math.hypot(d.z, d.x);
+      if (xl > 1e-4) {
+        _kx.set(d.z / xl, 0, -d.x / xl); _ky.crossVectors(d, _kx);
+        const px = c.dot(_kx), py = c.dot(_ky);
+        c.addScaledVector(_kx, Math.round(px / texel) * texel - px).addScaledVector(_ky, Math.round(py / texel) * texel - py);
+      }
+      sun.target.position.copy(c);
+      sun.position.copy(c).addScaledVector(d, D);
+      sun.target.updateMatrixWorld(); sun.updateMatrixWorld();
+      // draw the map only when something that shows has changed
+      const now = performance.now(), f = this.focus;
+      if (F.dir.dot(d) < 0.999995) dirty = true;                                                                    // the sun moved (> 0.18°)
+      if (Number.isFinite(f.x) && !(Math.hypot(f.x - F.px, f.z - F.pz) < 0.25) && now - F.at > 140) dirty = true;   // the walker moved
+      if (now - F.at > 2500) dirty = true;                                                                          // doors, vehicles, visitors
+      s.autoUpdate = false;
+      if (dirty) { s.needsUpdate = true; F.dir.copy(d); F.at = now; F.px = f.x; F.pz = f.z; F.renders++; }
+      F.on = true;
+    },
+    // ============================================================ [complex-look] end
+
     add(o) { this.scene.add(o); return o; },
     remove(o) { this.scene.remove(o); },
     PRESETS,
