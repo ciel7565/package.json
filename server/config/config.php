@@ -327,7 +327,7 @@ return [
         'toss_enabled'           => false,    // true: 토스페이먼츠 일회 결제 버튼을 켜요 (toss 키가 있어야 해요). false: 입금 안내 문구만 보여 줘요
         'lazy_tick_minutes'      => 15,       // 작업 스케줄러가 없을 때, 분양 화면을 여는 요청이 이 간격으로 자동화(allot:tick)를 한 번씩 돌려요
         'tick_batch'             => 500,      // 자동화 한 번에 단계마다 처리하는 최대 건수
-        'consent_version'        => '2026-11', // 개인정보 동의 문구의 판(版) 이름. 바꾸면 모든 신청자가 새로 동의해요 (문구를 고쳐도 자동으로 새 판이 돼요)
+        'consent_version'        => '2026-11', // 개인정보 동의 문구의 판 이름. 바꾸면 모든 신청자가 새로 동의해요 (문구를 고쳐도 자동으로 새 판이 돼요)
         'daily_report_mail'      => false,    // true: 하루 한 번 분양 현황 요약을 security.alert_email 주소로 보내요 (숫자만, 개인정보 없음)
     ],
 
