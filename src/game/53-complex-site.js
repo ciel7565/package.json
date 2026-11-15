@@ -78,12 +78,15 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   // ================================================================ masks: what the ground is, on a grid over C.bounds
   // channels (0..1): 0 rock · 1 worn earth · 2 soil · 3 gravel (= the terrain shader's aSplat x y z w) · 4 paved (under a
   // paving mesh) · 5 jar ground (pale gravel inside the walls) · 6 lawn (kept green) · 7 road (asphalt above it)
-  const CH = { rock: 0, earth: 1, soil: 2, gravel: 3, paved: 4, jar: 5, lawn: 6, road: 7 };
+  // [complex-look] 8 forest (under the plan's groves) · 9 wild (mountain slope inside the rectangle) · 10 site (within a few
+  // metres of anything built: pale warm earth instead of grass) · 11 verge (grass strips along roads and walls) · 12 jar rows
+  const CH = { rock: 0, earth: 1, soil: 2, gravel: 3, paved: 4, jar: 5, lawn: 6, road: 7, forest: 8, wild: 9, site: 10, verge: 11, row: 12 };
+  const NCH = 13;
   class Field {
     constructor(step) {
       this.step = step;
       this.nx = Math.round((B.maxX - B.minX) / step) + 1; this.nz = Math.round((B.maxZ - B.minZ) / step) + 1;
-      this.ch = Array.from({ length: 8 }, () => new Float32Array(this.nx * this.nz));
+      this.ch = Array.from({ length: NCH }, () => new Float32Array(this.nx * this.nz));
     }
     x(i) { return i === this.nx - 1 ? B.maxX : B.minX + i * this.step; }
     z(j) { return j === this.nz - 1 ? B.maxZ : B.minZ + j * this.step; }
@@ -137,12 +140,14 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const F = new Field(step);
     for (const e of C.elements) {
       switch (e.type) {
-        case 'road': F.line(CH.road, e.pts, e.w / 2 + 0.6, 0.8); break;
-        case 'roundabout': F.ring(CH.road, e.cx, e.cz, e.r0 - 0.4, e.r1 + 0.6, 0, TAU, 0.8); F.circle(CH.lawn, e.cx, e.cz, e.r0 - 0.6, 0.5); break;
-        case 'parking': case 'busbay': F.rect(CH.road, e.x0, e.z0, e.x1, e.z1, 0.8); break;
+        case 'road': F.line(CH.road, e.pts, e.w / 2 + 0.6, 0.8); F.line(CH.verge, e.pts, e.w / 2 + 3.2, 1.8, 0.9); break;
+        case 'roundabout': F.ring(CH.road, e.cx, e.cz, e.r0 - 0.4, e.r1 + 0.6, 0, TAU, 0.8); F.circle(CH.lawn, e.cx, e.cz, e.r0 - 0.6, 0.5); F.ring(CH.verge, e.cx, e.cz, e.r1, e.r1 + 3, 0, TAU, 1.6, 0.9); break;
+        case 'parking': F.rect(CH.road, e.x0, e.z0, e.x1, e.z1, 0.8); F.rect(CH.verge, e.x0 - 2.6, e.z0 - 2.6, e.x1 + 2.6, e.z1 + 2.6, 1.6, 0.85); break;
+        case 'busbay': F.rect(CH.road, e.x0, e.z0, e.x1, e.z1, 0.8); break;
         case 'plaza': F.rect(CH.paved, e.x0, e.z0, e.x1, e.z1, 0.8); break;
-        case 'jarcircle': F.circle(CH.jar, e.cx, e.cz, e.wallR + 0.3, 0.8); F.circle(CH.paved, e.cx, e.cz, e.plazaR, 0.4); break;
-        case 'amphitheatre': F.ring(CH.jar, e.cx, e.cz, -1, e.wallR + 0.3, e.a0, e.a1, 0.8); F.ring(CH.paved, e.cx, e.cz, -1, e.plazaR, e.a0, e.a1, 0.4); break;
+        case 'jarcircle': F.circle(CH.jar, e.cx, e.cz, e.wallR + 0.3, 0.8); F.circle(CH.paved, e.cx, e.cz, e.plazaR, 0.4); F.ring(CH.verge, e.cx, e.cz, e.wallR + 0.5, e.wallR + 2.6, 0, TAU, 1.2, 0.8); rowsOf(F, e, 0, TAU); break;
+        case 'amphitheatre': F.ring(CH.jar, e.cx, e.cz, -1, e.wallR + 0.3, e.a0, e.a1, 0.8); F.ring(CH.paved, e.cx, e.cz, -1, e.plazaR, e.a0, e.a1, 0.4); F.ring(CH.verge, e.cx, e.cz, e.wallR + 0.5, e.wallR + 2.6, e.a0, e.a1, 1.2, 0.8); rowsOf(F, e, e.a0, e.a1); break;
+        case 'forest': if (e.poly) F.poly(CH.forest, e.poly, 4); break;
         case 'field': if (e.overflow) F.poly(CH.gravel, e.poly, 1.0); else F.poly(CH.soil, e.poly, 0.8); break;
         case 'storeyard': F.rect(CH.gravel, e.x0, e.z0, e.x1, e.z1, 1.2); break;
         case 'terrace': F.rect(CH.earth, e.x0, e.z0, e.x1, e.z1, 1.0, 0.35); break;
@@ -164,7 +169,41 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       else if (p.pts && p.pts.length >= 2) F.line(ch, p.pts, p.w / 2, 0.6, p.kind === 'walk' ? 0.7 : 1);
       else if (p.pts && p.pts.length === 1) F.circle(ch, p.pts[0][0], p.pts[0][1], p.w / 2, 0.5);
     }
+    siteMasks(F);
     return F;
+  }
+  /** the three-row beds of a ring system (darker earth under the jars; only on the 1 m grid — coarser grids would alias) */
+  function rowsOf(F, e, a0, a1) {
+    if (F.step > 1.01) return;
+    const R = e.rows || [], g = (K && K.RING_GROUP) || 3;
+    for (let i = 0; i < R.length; i += g) F.ring(CH.row, e.cx, e.cz, R[i] - 0.5, R[Math.min(R.length - 1, i + g - 1)] + 0.5, a0, a1, 0.3);
+  }
+  /** [complex-look] wild = the mountain slopes inside the rectangle (the plan's natural height over the valley floor);
+   *  site = within ≈ 9 m of anything built (a dilated, softened union of the built masks) */
+  function siteMasks(F) {
+    const nx = F.nx, nz = F.nz, N = nx * nz, c = F.ch, wild = c[CH.wild], site = c[CH.site];
+    const nat = typeof C.natural === 'function' && typeof C.ground === 'function';
+    const dev = new Float32Array(N);
+    for (let j = 0; j < nz; j++) {
+      const z = F.z(j);
+      for (let i = 0; i < nx; i++) {
+        const k = j * nx + i;
+        const d = Math.max(c[CH.earth][k], c[CH.soil][k], c[CH.gravel][k], c[CH.paved][k], c[CH.jar][k], c[CH.road][k]);
+        dev[k] = d > 0.3 ? 1 : 0;
+        if (nat) { const x = F.x(i); wild[k] = smooth(1.0, 4.5, C.natural(x, z) - C.ground(x, z)) * (1 - Math.min(1, d * 1.4)); }
+      }
+    }
+    // dilate by R metres (separable max), then soften by a box blur
+    const r = Math.max(1, Math.round(8 / F.step)), b = Math.max(1, Math.round(3 / F.step));
+    const tmp = new Float32Array(N);
+    const pass = (src, dst, rad, fn) => {
+      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { let v = fn === 'max' ? 0 : 0, n = 0; for (let q = Math.max(0, i - rad); q <= Math.min(nx - 1, i + rad); q++) { const t = src[j * nx + q]; if (fn === 'max') { if (t > v) v = t; } else { v += t; n++; } } dst[j * nx + i] = fn === 'max' ? v : v / n; }
+    };
+    const passV = (src, dst, rad, fn) => {
+      for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) { let v = 0, n = 0; for (let q = Math.max(0, j - rad); q <= Math.min(nz - 1, j + rad); q++) { const t = src[q * nx + i]; if (fn === 'max') { if (t > v) v = t; } else { v += t; n++; } } dst[j * nx + i] = fn === 'max' ? v : v / n; }
+    };
+    pass(dev, tmp, r, 'max'); passV(tmp, site, r, 'max');
+    pass(site, tmp, b, 'avg'); passV(tmp, site, b, 'avg');
   }
 
   // ================================================================ surface for footsteps (a 2 m table, built once)
@@ -176,14 +215,14 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const n = F.nx * F.nz, t = new Uint8Array(n);
     for (let k = 0; k < n; k++) {
       const c = F.ch;
-      t[k] = c[CH.road][k] > 0.5 ? 1 : c[CH.paved][k] > 0.5 ? 2 : (c[CH.jar][k] > 0.5 || c[CH.gravel][k] > 0.5 || c[CH.earth][k] > 0.5 || c[CH.soil][k] > 0.5) ? 3 : 0;
+      t[k] = c[CH.road][k] > 0.5 ? 1 : c[CH.paved][k] > 0.5 ? 2 : (c[CH.jar][k] > 0.5 || c[CH.gravel][k] > 0.5 || c[CH.earth][k] > 0.5 || c[CH.soil][k] > 0.5 || (c[CH.site][k] > 0.6 && c[CH.verge][k] < 0.4 && c[CH.wild][k] < 0.4)) ? 3 : 0;
     }
     SURF = { F, t };
     return SURF;
   }
-  const deckEl = C.byId('DECK'), bridgeEl = C.byId('BRIDGE');
+  const deckEl = C.byId('DECK'), bridgeEl = C.byId('BRIDGE'), DECKS = el('deck');
   function surfaceAt(x, z) {
-    if (deckEl && x >= deckEl.x0 && x <= deckEl.x1 && z >= deckEl.z0 && z <= deckEl.z1) return 'wood';
+    for (const d of DECKS) if (d.round ? Math.hypot(x - d.cx, z - d.cz) <= d.r : (x >= d.x0 && x <= d.x1 && z >= d.z0 && z <= d.z1)) return 'wood';
     if (bridgeEl && Math.abs(z - bridgeEl.z0) <= bridgeEl.w / 2 && x >= Math.min(bridgeEl.x0, bridgeEl.x1) && x <= Math.max(bridgeEl.x0, bridgeEl.x1)) return 'stone';
     const S = surfaceTable(), F = S.F;
     const i = clamp(Math.round((x - B.minX) / F.step), 0, F.nx - 1), j = clamp(Math.round((z - B.minZ) / F.step), 0, F.nz - 1);
@@ -205,10 +244,14 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     if (GC.lawn) return GC;
     const c = (hex) => new THREE.Color(hex);
     Object.assign(GC, {
-      lawn: c('#7d9c45'), lawnB: c('#6b8c3c'), lawnDry: c('#9aa45a'), lawnDeep: c('#5a7c34'),
-      forest: c('#33432a'), forestB: c('#2a3922'), rock: c('#7c776d'), rockB: c('#5f5b53'),
-      earth: c('#9c8566'), soil: c('#6a4e38'), soilB: c('#7d5c40'), gravel: c('#958d7f'), jar: c('#9e9483'), jarB: c('#ada392'),
-      paved: c('#a1977f'), road: c('#5e5f60'), bank: c('#8c877a'), bed: c('#5f5b4c'),
+      // [complex-look] image 3: warm pale earth and fine gravel wherever people built; grass only as dark, dull, varied
+      // meadow and verges; a dark forest floor on every slope
+      lawn: c('#5f7440'), lawnB: c('#54683a'), lawnDry: c('#7b8050'), lawnDeep: c('#44582f'), moss: c('#586a3b'),
+      forest: c('#343e29'), forestB: c('#293321'), rock: c('#7c776d'), rockB: c('#5f5b53'),
+      site: c('#c2ac88'), siteB: c('#b19a76'), siteC: c('#cfbd9c'), siteG: c('#b8ad9a'),
+      earth: c('#b59d79'), soil: c('#6a4e38'), soilB: c('#7d5c40'), gravel: c('#b8ad99'),
+      jar: c('#cbbb99'), jarB: c('#c1af8b'), jarRow: c('#a58b66'),
+      paved: c('#b0a58c'), road: c('#5a5b5e'), bank: c('#8c877a'), bed: c('#5f5b4c'),
     });
     return GC;
   }
@@ -290,35 +333,53 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   }
   /** colour + splat of one terrain vertex from the plan masks */
   function groundAt(F, k, x, z, y, ny, col, out, spl, si) {
-    const ch = F.ch;
-    const n1 = fbm(x / 38, z / 38), n2 = vnoise(x / 9 + 11, z / 9 - 3), n3 = vnoise(x / 2.6, z / 2.6);
-    // lawn: bright, slightly yellow, mottled (image 3: mown lawns between everything)
-    out.copy(col.lawn).lerp(col.lawnB, smooth(0.3, 0.7, n1)).lerp(col.lawnDry, smooth(0.55, 0.85, n2) * 0.45).lerp(col.lawnDeep, smooth(0.6, 0.9, 1 - n1) * 0.3);
+    const ch = F.ch, w = (c) => ch[c][k];
+    const n1 = fbm(x / 38, z / 38), n2 = vnoise(x / 9 + 11, z / 9 - 3), n3 = vnoise(x / 2.6, z / 2.6), n4 = fbm(x / 117 + 7.3, z / 117 - 4.1);
     let rock = 0, earth = 0, soil = 0, grav = 0;
-    // steep ground (the slopes inside the rectangle, the river banks): forest floor and rock
-    const slope = 1 - ny, lawnKeep = ch[CH.lawn][k];
-    const forest = smooth(0.12, 0.3, slope + (n2 - 0.5) * 0.1) * (1 - lawnKeep);
-    if (forest > 0) { _c2.copy(col.forest).lerp(col.forestB, n2); out.lerp(_c2, forest); soil = Math.max(soil, forest * 0.75); }
+    const over = (m, e2, s2, g2, r2) => { const q = 1 - m; rock = rock * q + r2 * m; earth = earth * q + e2 * m; soil = soil * q + s2 * m; grav = grav * q + g2 * m; };
+    // 1. open flat ground far from anything built: a dark, dull, mottled meadow (not a mown lawn)
+    out.copy(col.lawn).lerp(col.lawnB, smooth(0.3, 0.7, n1)).lerp(col.lawnDry, smooth(0.55, 0.85, n2) * 0.5).lerp(col.lawnDeep, smooth(0.45, 0.8, n4) * 0.55);
+    out.multiplyScalar(0.9 + 0.2 * n3);
+    // 2. the developed ground: pale warm earth with gravelly and damp patches (image 3 has no lawn between the yards)
+    const site = w(CH.site);
+    if (site > 0) {
+      _c2.copy(col.site).lerp(col.siteB, smooth(0.35, 0.75, n1)).lerp(col.siteC, smooth(0.5, 0.9, n2) * 0.55).lerp(col.siteG, smooth(0.5, 0.78, n4) * 0.6).multiplyScalar(0.93 + 0.14 * n3);
+      const gp = smooth(0.5, 0.78, n4 + (n2 - 0.5) * 0.3) * 0.85;
+      out.lerp(_c2, site); over(site, 1 - gp, 0, gp, 0);
+    }
+    // 3. grass strips along the roads, round the parking and outside the yard walls
+    const vg = w(CH.verge);
+    if (vg > 0) { _c2.copy(col.lawn).lerp(col.lawnDeep, n2 * 0.6).lerp(col.lawnDry, smooth(0.6, 0.9, n1) * 0.4).multiplyScalar(0.92 + 0.16 * n3); out.lerp(_c2, vg); over(vg, 0.08, 0.06, 0, 0); }
+    // 4. wild ground — the mountain slopes inside the rectangle, every grove of the plan, anything steep: forest floor, rock
+    const slope = 1 - ny, lawnKeep = w(CH.lawn);
+    const wild = Math.max(w(CH.wild), w(CH.forest), smooth(0.12, 0.3, slope + (n2 - 0.5) * 0.1)) * (1 - lawnKeep);
+    if (wild > 0) { _c2.copy(col.forest).lerp(col.forestB, n2).lerp(col.lawnDeep, smooth(0.62, 0.9, n1) * 0.3); out.lerp(_c2, wild); over(wild, 0, 0.75, 0, 0); }
     const rk = smooth(0.42, 0.62, slope + (n2 - 0.5) * 0.15);
-    if (rk > 0) { _c2.copy(col.rock).lerp(col.rockB, n3); out.lerp(_c2, rk); rock = Math.max(rock, rk); }
+    if (rk > 0) { _c2.copy(col.rock).lerp(col.rockB, n3); out.lerp(_c2, rk); over(rk, 0, 0, 0, 1); }
     // the river: pebbles on the banks, a dark bed under the water
     const wy = C.waterY(x, z);
     if (wy > -1e6) {
       const wet = smooth(wy + 1.2, wy - 0.2, y);
       _c2.copy(col.bank).lerp(col.bed, smooth(wy, wy - 1.2, y)); out.lerp(_c2, Math.max(wet, 0.6 * smooth(wy + 2.5, wy + 0.8, y)));
-      grav = Math.max(grav, wet); rock = rock * (1 - wet);
+      over(wet, 0, 0, 1, 0);
     }
-    const w = (c) => ch[c][k];
-    const e = w(CH.earth); if (e > 0) { _c2.copy(col.earth).lerp(col.gravel, n3 * 0.4); out.lerp(_c2, e); earth = Math.max(earth, e); }
-    const s = w(CH.soil); if (s > 0) { _c2.copy(col.soil).lerp(col.soilB, n3); out.lerp(_c2, s); soil = Math.max(soil, s); }
-    const g = w(CH.gravel); if (g > 0) { _c2.copy(col.gravel).lerp(col.jarB, n3 * 0.4); out.lerp(_c2, g); grav = Math.max(grav, g); }
-    const j = w(CH.jar); if (j > 0) { _c2.copy(col.jar).lerp(col.jarB, n3); out.lerp(_c2, j); grav = Math.max(grav, j); }
-    const p = w(CH.paved); if (p > 0) { out.lerp(col.paved, p); grav = Math.max(grav, p * 0.6); }
-    const r = w(CH.road); if (r > 0) { out.lerp(col.road, r * 0.85); grav = Math.max(grav, r); }
-    if (lawnKeep > 0) { _c2.copy(col.lawn).lerp(col.lawnB, n2); out.lerp(_c2, lawnKeep); }
-    const keep = 1 - lawnKeep;
-    spl[si] = Math.round(clamp(rock * keep, 0, 1) * 255); spl[si + 1] = Math.round(clamp(earth * keep, 0, 1) * 255);
-    spl[si + 2] = Math.round(clamp(soil * keep, 0, 1) * 255); spl[si + 3] = Math.round(clamp(grav * keep, 0, 1) * 255);
+    // 5. what the plan built
+    const e = w(CH.earth); if (e > 0) { _c2.copy(col.earth).lerp(col.siteC, n3 * 0.35).lerp(col.siteB, smooth(0.5, 0.85, n1) * 0.4); out.lerp(_c2, e); over(e, 0.9, 0, 0.1, 0); }
+    const so = w(CH.soil); if (so > 0) { _c2.copy(col.soil).lerp(col.soilB, n3).multiplyScalar(0.9 + 0.2 * n2); out.lerp(_c2, so); over(so, 0, 1, 0, 0); }
+    const j = w(CH.jar);
+    if (j > 0) {
+      const row = w(CH.row);
+      _c2.copy(col.jar).lerp(col.jarB, n3).lerp(col.siteB, smooth(0.45, 0.8, n1) * 0.25);
+      if (row > 0) _c2.lerp(col.jarRow, row * (0.75 + 0.25 * n2));
+      out.lerp(_c2, j); over(j, 0.45 + 0.4 * row, 0.15 * row, 0.55 * (1 - row), 0);
+    }
+    const g = w(CH.gravel); if (g > 0) { _c2.copy(col.gravel).lerp(col.jar, Math.max(j, n3 * 0.4)); out.lerp(_c2, g); over(g, 0.15, 0, 0.85, 0); }
+    const p = w(CH.paved); if (p > 0) { out.lerp(col.paved, p); over(p, 0.3, 0, 0.6, 0); }
+    const r = w(CH.road); if (r > 0) { out.lerp(col.road, r * 0.85); over(r, 0, 0, 1, 0); }
+    // the roundabout island: moss and low green between raked gravel (the garden part plants it)
+    if (lawnKeep > 0) { _c2.copy(col.moss).lerp(col.lawnDeep, n2 * 0.7).lerp(col.siteG, smooth(0.55, 0.8, n3) * 0.5); out.lerp(_c2, lawnKeep); over(lawnKeep, 0.1, 0.12, 0.12 + 0.3 * smooth(0.55, 0.8, n3), 0); }
+    spl[si] = Math.round(clamp(rock, 0, 1) * 255); spl[si + 1] = Math.round(clamp(earth, 0, 1) * 255);
+    spl[si + 2] = Math.round(clamp(soil, 0, 1) * 255); spl[si + 3] = Math.round(clamp(grav, 0, 1) * 255);
     return out;
   }
 
@@ -546,8 +607,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       asphalt: { color: '#56585a', set: 'gravel', look: [86, 87, 88], rough: 0.9, units: -2 },
       marks: { color: '#ffffff', set: null, rough: 0.7, units: -5 },
       granite: { color: '#a9a08d', set: 'flagstone', look: [166, 158, 141], rough: 0.85, units: -3 },
-      walk: { color: '#bab2a1', set: 'gravel', look: [178, 170, 154], rough: 0.95, units: -3 },
-      earth: { color: '#a48a68', set: 'yard_dirt_path', look: [164, 140, 108], rough: 1, units: -2 },
+      walk: { color: '#c9bb9c', set: 'gravel', look: [198, 185, 154], rough: 0.95, units: -3 },
+      earth: { color: '#b39a76', set: 'yard_dirt_path', look: [178, 154, 118], rough: 1, units: -2 },
     }[kind];
     const base = { vertexColors: true, color: low ? new THREE.Color(def.color) : 0xffffff, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: def.units };
     let m;
@@ -662,10 +723,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       for (const sgn of [-1, 1]) { const o = sgn * (Math.floor(len / 2) * 0.9 + 1.2), cx = best.x + best.tx * o, cz = best.z + best.tz * o; DM.strip([[cx - best.nx * (hw - 0.3), cz - best.nz * (hw - 0.3)], [cx + best.nx * (hw - 0.3), cz + best.nz * (hw - 0.3)]], 0.2, { ds: 1, across: 1, lift: LM, color: WHITE }); }
       return best;
     };
-    const RS = smoothRoads.find((r) => r.e.id === 'ROAD_S'), RP = smoothRoads.find((r) => r.e.id === 'ROAD_PARK');
+    const RS = smoothRoads.find((r) => r.e.id === 'ROAD_S'), RF = smoothRoads.find((r) => r.e.id === 'ROAD_FRONT');
     const crossings = [];
-    if (RS) crossings.push(zebra(RS, -38, 131, 5));
-    if (RP) crossings.push(zebra(RP, -110, 10, 4));
+    if (RS) { const q = RS.e.pts[RS.e.pts.length - 1], q0 = RS.e.pts[RS.e.pts.length - 2], l = Math.hypot(q[0] - q0[0], q[1] - q0[1]) || 1; crossings.push(zebra(RS, q[0] - (q[0] - q0[0]) / l * 4, q[1] - (q[1] - q0[1]) / l * 4, 5)); }
+    if (RF && C.door) crossings.push(zebra(RF, RF.e.pts.reduce((b, q) => (Math.abs(q[1] - C.door.z) < Math.abs(b[1] - C.door.z) ? q : b))[0], C.door.z, 6));
     // parking bays (white lines), bus bay (yellow box)
     for (const e of el('parking')) for (const b of e.bays) {
       const c = Math.cos(b.rot), s = Math.sin(b.rot);   // bay depth along (sin rot, cos rot) — the car's front
@@ -702,7 +763,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       for (const run of lineRuns(ring, 1.2, (x, z) => !smoothRoads.some((r) => polyD(x, z, r.pts) < r.e.w / 2 + 0.8))) kerbOf(run.map((p) => ({ x: p.x, z: p.z, yb: yK(p.x, p.z) - 0.25, yt: yK(p.x, p.z) + 0.15 })));
       // kerb islands with lawn at the ends of the double rows and in the middle row
       for (const ax of e.aisles || []) void ax;
-      for (const [ix, iz] of [[-128, e.z0 + 0.55], [-128, e.z1 - 0.6]]) {
+      for (const [ix, iz] of e.islands || [[(e.x0 + e.x1) / 2, e.z0 + 0.55], [(e.x0 + e.x1) / 2, e.z1 - 0.6]]) {
         const w = 9.6, d = 0.9;
         kerbOf([{ x: ix - w / 2, z: iz, yb: yK(ix, iz) - 0.2, yt: yK(ix, iz) + 0.16 }, { x: ix + w / 2, z: iz, yb: yK(ix, iz) - 0.2, yt: yK(ix, iz) + 0.16 }], d);
       }
@@ -736,15 +797,14 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const DW = new Drape(Y);
     const aisleGaps = (n, a0, w) => Array.from({ length: n }, (_, s) => ({ a: a0 + s * PI / 4, w: w + 0.4 }));
     if (JC) for (const r of JC.walks) DW.ring(JC.cx, JC.cz, r - K.WALK_W / 2, r + K.WALK_W / 2, 0, TAU, { ds: 1.3, dr: 1.6, lift: 0.04, clip: (x, z) => Math.hypot(x - JC.cx, z - JC.cz) < JC.wallR - 0.3 });
-    if (AMP) for (let k = 0; k < 10; k++) { const r = K.RING_R0 - 1.2 + K.RING_PERIOD * k; DW.ring(AMP.cx, AMP.cz, r - K.WALK_W / 2, r + K.WALK_W / 2, PI, TAU, { ds: 1.3, dr: 1.6, lift: 0.04, clip: (x, z) => Math.hypot(x - AMP.cx, z - AMP.cz) < AMP.wallR - 0.3 }); }
+    if (AMP) for (const r of AMP.walks || C.rings.walks) { DW.ring(AMP.cx, AMP.cz, r - K.WALK_W / 2, r + K.WALK_W / 2, PI, TAU, { ds: 1.3, dr: 1.6, lift: 0.04, clip: (x, z) => Math.hypot(x - AMP.cx, z - AMP.cz) < AMP.wallR - 0.3 }); }
     for (const p of C.paths) if ((p.kind === 'lane' || p.kind === 'walk') && p.pts && p.pts.length >= 2) DW.strip(p.pts, p.w / 2, { ds: 1.5, dw: 2, lift: 0.035, clip: (x, z) => !onRoad(x, z, 0.1) });
     addDrape(ctx, DW, 'walk', 'walks');
     void aisleGaps;
 
     // ================= ring kerbs (low granite edges along the walks — image 3: pale rings with kerbs)
     const ringKerbs = (cx, cz, a0, a1, wallR, aisles) => {
-      for (let k = 0; k < 10; k++) {
-        const rc = K.RING_R0 - 1.2 + K.RING_PERIOD * k;
+      for (const rc of C.rings.walks) {
         for (const rr of [rc - K.WALK_W / 2 - 0.06, rc + K.WALK_W / 2 + 0.06]) {
           if (rr > wallR - 0.6 || rr < K.PLAZA_R + 0.2) continue;
           for (const run of arcRuns(cx, cz, rr, a0, a1, aisles.map((a) => ({ a, w: K.AISLE_W + 0.2 })), low ? 2.4 : 1.4)) kerbOf(run.map((p) => ({ x: p.x, z: p.z, yb: Y(p.x, p.z) - 0.12, yt: Y(p.x, p.z) + 0.09 })), 0.12);
@@ -823,7 +883,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const TV = C.byId('TERRACE_VILLAGE');
     if (TV) {
       const edge = [[TV.x0, TV.z1], [TV.x0, TV.z0], [TV.x1, TV.z0], [TV.x1, TV.z1], [TV.x0, TV.z1]];
-      const gate = (x, z) => !(Math.abs(z - TV.z1) < 0.5 && Math.abs(x - 11) < 2.2) && !C.paths.some((p) => p.kind === 'lane' && p.pts && polyD(x, z, p.pts) < p.w / 2 && (Math.abs(z - TV.z0) < 0.5 || Math.abs(x - TV.x0) < 0.5 || Math.abs(x - TV.x1) < 0.5));
+      const tvs = TV.stair || { x: (TV.x0 + TV.x1) / 2, w: 3 };
+      const gate = (x, z) => !(Math.abs(z - TV.z1) < 0.5 && Math.abs(x - tvs.x) < tvs.w / 2 + 0.7) && !C.paths.some((p) => p.kind === 'lane' && p.pts && polyD(x, z, p.pts) < p.w / 2 && (Math.abs(z - TV.z0) < 0.5 || Math.abs(x - TV.x0) < 0.5 || Math.abs(x - TV.x1) < 0.5));
       for (const run of lineRuns(edge, low ? 3 : 1.2, gate)) Bk.add('field', sweep(run.map((p) => ({ x: p.x, z: p.z, yb: Math.min(H(p.x, p.z), TV.y) - 0.6, yt: TV.y + 0.55 })), 0.5), null, '#988c78');
       for (const run of lineRuns(edge, low ? 3 : 1.2, gate)) {
         const pts = run.map((p) => ({ x: p.x, z: p.z, yb: TV.y + 0.55, yt: TV.y + 0.66 }));
@@ -832,7 +893,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       }
     }
     if (KN) {
-      for (const run of arcRuns(KN.cx, KN.cz, KN.r, 0, TAU, [{ a: Math.atan2(-1.5 - KN.cz, 85.5 - KN.cx), w: 4.6 }, { a: Math.atan2(-30 - KN.cz, 104 - KN.cx), w: 4.2 }], 1.0)) {
+      for (const run of arcRuns(KN.cx, KN.cz, KN.r, 0, TAU, KN.gaps || [], 1.0)) {
         Bk.add('field', sweep(run.map((p) => ({ x: p.x, z: p.z, yb: H(p.x, p.z) - 0.5, yt: KN.top + 0.12 })), 0.45), null, '#9a8e7a');
       }
     }
@@ -865,10 +926,13 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     // ================= the stone arch bridge (3 arches), humped deck, parapets
     if (bridgeEl) buildBridge(ctx, Bk, bridgeEl, col);
     // ================= stairs (the deck legs; the village stair) and the viewpoint deck
+    _joints = null;
     for (const s of el('stair')) if (!s.natural) buildStair(ctx, Bk, s, col);
+    buildLandings(ctx, Bk, col);
     const vs = C.byId('ST_VILLAGE');
     if (vs) naturalSteps(Bk, vs, Y);
-    if (deckEl) buildDeck(ctx, Bk, deckEl, col);
+    for (const d of DECKS) buildDeck(ctx, Bk, d, col);
+    buildLift(ctx, Bk, col);
 
     // ================= the bus shelter of the complex, benches along the plaza
     const bs = C.busStop;
@@ -983,7 +1047,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const xa = Math.max(Math.min(e.x0, e.x1), B.minX + 0.2), xb = Math.max(e.x0, e.x1) + 4, z = e.z0, hw = e.w / 2;
     // the deck profile: the plan's deck height over the water, easing down to the banks (a humped arch bridge)
     const ground = (x) => H(x, z);
-    const yTop = e.deckY, xc = -172, half = Math.max(xc - xa, xb - xc);
+    const RV = C.byId('RIVER');
+    const xc = (() => { const P2 = RV ? RV.pts : []; for (let i = 0; i < P2.length - 1; i++) if (z >= P2[i][1] && z <= P2[i + 1][1]) return lerp(P2[i][0], P2[i + 1][0], (z - P2[i][1]) / (P2[i + 1][1] - P2[i][1])); return (e.x0 + e.x1) / 2; })();
+    const yTop = e.deckY, half = Math.max(xc - xa, xb - xc);
     const prof = (x) => Math.max(ground(x) + 0.05, yTop - (yTop - Math.max(0.6, ground(xb))) * Math.pow(Math.abs(x - xc) / half, 2.2));
     const pts = [];
     for (let x = xa; x <= xb + 1e-6; x += 0.6) pts.push({ x, z, y: prof(x) });
@@ -996,7 +1062,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       for (let i = 0; i < pts.length - 1; i += 2) { const a = pts[i], b = pts[Math.min(pts.length - 1, i + 2)]; col({ shape: 'box', x: (a.x + b.x) / 2, z: zz, hw: Math.abs(b.x - a.x) / 2 + 0.05, hd: 0.2 }); }
     }
     // the arches: three spans over the water; each spandrel is a ring of voussoirs and a filled wall above it
-    const spans = [[-183.5, -175.5], [-176, -168], [-168.5, -160.5]];
+    const spans = [[xc - 11.5, xc - 3.5], [xc - 4, xc + 4], [xc + 3.5, xc + 11.5]];
     const seg = 18;
     for (const [s0, s1] of spans) {
       const cx = (s0 + s1) / 2, r = (s1 - s0) / 2, springY = -1.2;
@@ -1010,7 +1076,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       }
     }
     // piers between the arches and abutments
-    for (const px of [-175.75, -168.25]) { const top = prof(px) - 0.45; Bk.add('field', geo.box(1.2, top + 3.2, e.w - 0.2, 'world'), M(px, (top - 3.2) / 2, z), '#968b78'); col({ shape: 'box', x: px, z, hw: 0.6, hd: hw - 0.1, maxY: top }); }
+    for (const px of [xc - 3.75, xc + 3.75]) { const top = prof(px) - 0.45; Bk.add('field', geo.box(1.2, top + 3.2, e.w - 0.2, 'world'), M(px, (top - 3.2) / 2, z), '#968b78'); col({ shape: 'box', x: px, z, hw: 0.6, hd: hw - 0.1, maxY: top }); }
     // walkable: the deck in short level pieces (rise per piece ≤ 0.2 m)
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1];
@@ -1018,74 +1084,122 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     }
   }
 
-  // ---------------------------------------------------------------- stairs of the viewpoint deck (timber, on the slope)
+  // ---------------------------------------------------------------- the stairs of 만장대 전망대 (plan v2)
+  // [complex-look] The plan gives joined flights (x, z, y per vertex). A flight is built as steps of ≈ 0.19 m rise along
+  // max(plan y, ground + 0.15): timber treads on stringers and posts where the rock falls away (a 잔도 on the stair face),
+  // or granite blocks (`stone`) on the crest under the summit. Where two flights meet a landing carries the turn; rails and
+  // their colliders run on both sides and round the open sides of the landings.
+  const stairLegs = () => el('stair').filter((s) => !s.natural);
   let _joints = null;
-  const STAIR_JOINTS = () => _joints || (_joints = el('stair').filter((s) => !s.natural).flatMap((s) => s.pts.map((p) => [p[0], p[1]])));
-  /** steps along the plan's legs at max(plan y, ground + 0.15); rise per step ≤ 0.22 m, treads 0.3 … 1.6 m */
+  /** the points where flights meet: [{ x, z, y, dirs: [[dx, dz], …] (unit vectors leaving the joint along each flight) }] */
+  function stairJoints() {
+    if (_joints) return _joints;
+    const J = [];
+    const put = (p, q) => {
+      const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, d = [(q[0] - p[0]) / l, (q[1] - p[1]) / l];
+      let j = J.find((o) => Math.hypot(o.x - p[0], o.z - p[1]) < 0.3);
+      if (!j) { j = { x: p[0], z: p[1], y: p[2], dirs: [] }; J.push(j); }
+      j.y = Math.max(j.y, p[2]); j.dirs.push(d);
+    };
+    for (const s of stairLegs()) { const P = s.pts; put(P[0], P[1]); put(P[P.length - 1], P[P.length - 2]); }
+    _joints = J.filter((j) => j.dirs.length >= 2);
+    return _joints;
+  }
+  const LAND = 1.25;                       // half size of a landing (beyond half the stair width)
   function buildStair(ctx, Bk, s, col) {
-    const BK = G.bkit, M = BK.M, geo = BK.geo, w = s.w || 2.4;
-    const P = s.pts;
-    // a fine profile along the whole leg
+    const BK = G.bkit, M = BK.M, geo = BK.geo, w = s.w || 2.2, stone = !!s.stone, low = ctx.low;
+    const P = s.pts, J = stairJoints();
+    const atJoint = (x, z) => J.find((j) => Math.hypot(j.x - x, j.z - z) < (w / 2 + LAND) * 0.9);
+    // a fine profile along the whole flight
     const prof = [];
     let acc = 0;
     for (let i = 0; i < P.length - 1; i++) {
-      const a = P[i], b = P[i + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(L / 0.25));
-      for (let k = 0; k < n; k++) {
+      const a = P[i], b = P[i + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(L / 0.1));
+      const dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L, nx = -dz, nz = dx;
+      for (let k = 0; k <= (i === P.length - 2 ? n : n - 1); k++) {
         const t = k / n, x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t, py = a[2] + (b[2] - a[2]) * t;
-        const dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L, nx = -dz, nz = dx;
-        let g = -Infinity;
-        for (const o of [-w / 2, 0, w / 2]) g = Math.max(g, H(x + nx * o, z + nz * o));
-        prof.push({ x, z, s: acc + L * t, y: Math.max(py, g + 0.15), g: H(x, z), dx, dz });
+        let g = -Infinity, gmin = Infinity;
+        for (const o of [-w / 2, 0, w / 2]) { const h = H(x + nx * o, z + nz * o); if (h > g) g = h; if (h < gmin) gmin = h; }
+        prof.push({ x, z, s: acc + L * t, y: Math.max(py, g + 0.15), gmin, dx, dz });
       }
       acc += L;
     }
-    const last = P[P.length - 1];
-    { const g = H(last[0], last[1]); prof.push({ x: last[0], z: last[1], s: acc, y: Math.max(last[2], g + 0.15), g, dx: prof[prof.length - 1].dx, dz: prof[prof.length - 1].dz }); }
-    // smooth small dips (≤ 0.6 m) so the stair does not bob
-    for (let i = 1; i < prof.length - 1; i++) prof[i].y = Math.max(prof[i].y, Math.min(prof[i - 1].y, prof[i + 1].y) - 0.0);
-    // steps
+    // steps: a new tread whenever the profile has climbed (or fallen) 0.19 m, or after 1.4 m of level run
     const steps = [];
     let i0 = 0;
     while (i0 < prof.length - 1) {
       let i1 = i0 + 1;
-      while (i1 < prof.length - 1 && Math.abs(prof[i1].y - prof[i0].y) < 0.2 && prof[i1].s - prof[i0].s < 1.6 && prof[i1].dx === prof[i0].dx) i1++;
+      while (i1 < prof.length - 1 && Math.abs(prof[i1].y - prof[i0].y) < 0.19 && prof[i1].s - prof[i0].s < 1.4 && prof[i1].dx === prof[i0].dx) i1++;
       const a = prof[i0], b = prof[i1];
       let top = -Infinity, gmin = Infinity;
-      for (let k = i0; k <= i1; k++) { top = Math.max(top, prof[k].y); gmin = Math.min(gmin, prof[k].g); }
-      steps.push({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, len: Math.hypot(b.x - a.x, b.z - a.z), top, gmin, rot: Math.atan2(a.dx, a.dz) });
+      for (let k = i0; k <= i1; k++) { if (prof[k].y > top) top = prof[k].y; if (prof[k].gmin < gmin) gmin = prof[k].gmin; }
+      steps.push({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, len: Math.hypot(b.x - a.x, b.z - a.z), top, gmin, rot: Math.atan2(a.dx, a.dz), dx: a.dx, dz: a.dz });
       i0 = i1;
     }
+    const WOODC = '#b08658', DARK = '#6a4930', STONEC = '#b7ad9a', STONE2 = '#a59b88';
+    let k = 0;
     for (const st of steps) {
-      Bk.add('plank', geo.box(w, 0.08, st.len + 0.04, 'world'), M(st.x, st.top - 0.04, st.z, st.rot), '#b98e60');
-      Bk.add('wood', geo.box(w, 0.2, 0.06, 'grain'), M(st.x - Math.sin(st.rot) * st.len / 2, st.top - 0.14, st.z - Math.cos(st.rot) * st.len / 2, st.rot), '#7a5236');
-      ctx.addWalkable({ shape: 'box', x: st.x, z: st.z, hw: w / 2, hd: st.len / 2 + 0.03, rot: st.rot, top: st.top, surface: 'wood' });
-      const lift = st.top - st.gmin;
-      if (lift > 0.35) for (const o of [-w / 2 + 0.1, w / 2 - 0.1]) {
-        const nx = Math.cos(st.rot), nz = -Math.sin(st.rot), x = st.x + nx * o, z = st.z + nz * o, gy = H(x, z);
-        if (st.top - gy > 0.3) Bk.add('wood', geo.box(0.14, st.top - gy + 0.3, 0.14, 'grain'), M(x, (st.top + gy - 0.3) / 2, z), '#6e4a2c');
+      k++;
+      if (stone) {
+        const h = Math.max(0.3, st.top - st.gmin + 0.35);
+        Bk.add('stone', geo.box(w, h, st.len + 0.05, 'world'), M(st.x, st.top - h / 2, st.z, st.rot), k % 2 ? STONEC : STONE2);
+      } else {
+        Bk.add('plank', geo.box(w, 0.07, st.len + 0.04, 'world'), M(st.x, st.top - 0.035, st.z, st.rot), WOODC);
+        Bk.add('wood', geo.box(w - 0.1, 0.19, 0.05, 'grain'), M(st.x - st.dx * st.len / 2, st.top - 0.16, st.z - st.dz * st.len / 2, st.rot), DARK);
+        // stringers under both edges, posts down to the rock every third step where the flight has left the ground
+        for (const o of [-w / 2 + 0.08, w / 2 - 0.08]) {
+          const nx = Math.cos(st.rot), nz = -Math.sin(st.rot), x = st.x + nx * o, z = st.z + nz * o;
+          Bk.add('wood', geo.box(0.1, 0.24, st.len + 0.06, 'grain'), M(x, st.top - 0.19, z, st.rot), DARK);
+          if (k % 3 === 0 || low) { const gy = H(x, z); if (st.top - gy > 0.45) Bk.add('wood', geo.box(0.14, st.top - gy + 0.25, 0.14, 'grain'), M(x, (st.top + gy - 0.25) / 2 - 0.12, z), '#5e3f28'); }
+        }
       }
+      ctx.addWalkable({ shape: 'box', x: st.x, z: st.z, hw: w / 2, hd: st.len / 2 + 0.03, rot: st.rot, top: st.top, surface: stone ? 'stone' : 'wood' });
     }
-    // hand rails both sides (posts every ~2 m, a rail on top) + colliders
+    // rails on both sides (posts every ≈ 1.8 m, a hand rail and a knee rail; a rope on low stone posts for the crest steps)
+    const RH = stone ? 0.85 : 1.02;
     for (const side of [-1, 1]) {
       const rail = [];
-      for (const st of steps) { const nx = Math.cos(st.rot), nz = -Math.sin(st.rot); rail.push({ x: st.x + nx * side * (w / 2 + 0.06), z: st.z + nz * side * (w / 2 + 0.06), y: st.top }); }
-      for (let i = 0; i < rail.length; i++) {
-        const p = rail[i];
-        if (i % 2 === 0 && !STAIR_JOINTS().some((j) => Math.hypot(j[0] - p.x, j[1] - p.z) < 2.1)) Bk.add('wood', geo.box(0.09, 1.05, 0.09, 'grain'), M(p.x, p.y + 0.52, p.z), '#6e4a2c');
-        if (i < rail.length - 1) {
-          const q = rail[i + 1], L = Math.hypot(q.x - p.x, q.z - p.z);
-          if (L < 0.05) continue;
-          // where the legs meet (every vertex of every deck stair) the rails open: one leg's rail must not cross the next leg
-          const mx = (p.x + q.x) / 2, mz = (p.z + q.z) / 2;
-          if (STAIR_JOINTS().some((j) => Math.hypot(j[0] - mx, j[1] - mz) < 2.1)) continue;
-          const ry = Math.atan2(q.x - p.x, q.z - p.z), pitch = -Math.atan2(q.y - p.y, L);
-          Bk.add('wood', geo.box(0.07, 0.07, L + 0.05, 'grain'), M((p.x + q.x) / 2, (p.y + q.y) / 2 + 1.02, (p.z + q.z) / 2, ry, 1, 1, 1, pitch), '#8a6040');
-          Bk.add('wood', geo.box(0.04, 0.05, L + 0.05, 'grain'), M((p.x + q.x) / 2, (p.y + q.y) / 2 + 0.55, (p.z + q.z) / 2, ry, 1, 1, 1, pitch), '#7a5236');
-          col({ shape: 'box', x: (p.x + q.x) / 2, z: (p.z + q.z) / 2, hw: 0.06, hd: L / 2 + 0.04, rot: ry });
-        }
+      for (const st of steps) { const nx = Math.cos(st.rot), nz = -Math.sin(st.rot); rail.push({ x: st.x + nx * side * (w / 2 + 0.05), z: st.z + nz * side * (w / 2 + 0.05), y: st.top, cx: st.x, cz: st.z }); }
+      let since = 9;
+      for (let i = 0; i < rail.length - 1; i++) {
+        const p = rail[i], q = rail[i + 1], L = Math.hypot(q.x - p.x, q.z - p.z);
+        since += L;
+        if (atJoint(p.cx, p.cz) || atJoint(q.cx, q.cz)) { since = 9; continue; }             // the landing carries the rail there
+        if (L < 0.02) continue;
+        if (since >= 1.8) { since = 0; Bk.add(stone ? 'stone' : 'wood', geo.box(stone ? 0.16 : 0.09, RH + 0.04, stone ? 0.16 : 0.09, stone ? 'world' : 'grain'), M(p.x, p.y + RH / 2, p.z), stone ? STONE2 : DARK); }
+        const ry = Math.atan2(q.x - p.x, q.z - p.z), pitch = -Math.atan2(q.y - p.y, L);
+        Bk.add('wood', geo.box(stone ? 0.045 : 0.07, stone ? 0.045 : 0.06, L + 0.03, 'grain'), M((p.x + q.x) / 2, (p.y + q.y) / 2 + RH, (p.z + q.z) / 2, ry, 1, 1, 1, pitch), stone ? '#b79a62' : '#8a6040');
+        if (!stone && !low) Bk.add('wood', geo.box(0.04, 0.045, L + 0.03, 'grain'), M((p.x + q.x) / 2, (p.y + q.y) / 2 + 0.52, (p.z + q.z) / 2, ry, 1, 1, 1, pitch), '#7a5236');
+        col({ shape: 'box', x: (p.x + q.x) / 2, z: (p.z + q.z) / 2, hw: 0.06, hd: L / 2 + 0.04, rot: ry });
       }
     }
     return steps;
+  }
+  /** the landings where two flights meet: a square timber platform with rails on its open sides */
+  function buildLandings(ctx, Bk, col) {
+    const BK = G.bkit, M = BK.M, geo = BK.geo;
+    const rests = DECKS.filter((d) => d.rest);
+    for (const j of stairJoints()) {
+      if (rests.some((d) => j.x > d.x0 - 1 && j.x < d.x1 + 1 && j.z > d.z0 - 1 && j.z < d.z1 + 1)) continue;   // a rest terrace is the landing
+      if (DECKS.some((d) => d.round && Math.hypot(j.x - d.cx, j.z - d.cz) < d.r + 1.2)) continue;             // the pulpit
+      const w = 2.2, half = w / 2 + LAND * 0.55, y = j.y, d0 = j.dirs[0], rot = Math.atan2(d0[0], d0[1]);
+      const c = Math.cos(rot), sn = Math.sin(rot);
+      const at = (lx, lz) => [j.x + lx * c + lz * sn, j.z - lx * sn + lz * c];
+      Bk.add('plank', geo.box(half * 2, 0.08, half * 2, 'world'), M(j.x, y - 0.04, j.z, rot), '#b08658');
+      Bk.add('wood', geo.box(half * 2 + 0.06, 0.22, half * 2 + 0.06, 'grain'), M(j.x, y - 0.19, j.z, rot), '#6a4930');
+      for (const [lx, lz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const [x, z] = at(lx * (half - 0.1), lz * (half - 0.1)), gy = H(x, z); if (y - gy > 0.3) Bk.add('wood', geo.box(0.16, y - gy + 0.3, 0.16, 'grain'), M(x, (y + gy - 0.3) / 2 - 0.15, z), '#5e3f28'); }
+      ctx.addWalkable({ shape: 'box', x: j.x, z: j.z, hw: half, hd: half, rot, top: y, surface: 'wood' });
+      // sides: (normal, tangent) in the landing's frame; open where a flight leaves
+      for (const [nx, nz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+        const wn = [nx * c + nz * sn, -nx * sn + nz * c];
+        if (j.dirs.some((d) => d[0] * wn[0] + d[1] * wn[1] > 0.55)) continue;
+        const [mx, mz] = at(nx * half, nz * half), ry = Math.atan2(wn[0], wn[1]) + PI / 2;
+        Bk.add('wood', geo.box(0.07, 0.06, half * 2, 'grain'), M(mx, y + 1.02, mz, ry), '#8a6040');
+        Bk.add('wood', geo.box(0.04, 0.045, half * 2, 'grain'), M(mx, y + 0.52, mz, ry), '#7a5236');
+        for (const t of [-1, 1]) { const [px, pz] = at(nx * half + (nx ? 0 : t * half), nz * half + (nz ? 0 : t * half)); Bk.add('wood', geo.box(0.1, 1.06, 0.1, 'grain'), M(px, y + 0.53, pz), '#6a4930'); }
+        col({ shape: 'box', x: mx, z: mz, hw: 0.07, hd: half + 0.05, rot: ry });
+      }
+    }
   }
   /** granite steps that follow natural ground (the village stair): visual only, the terrain carries the walker */
   function naturalSteps(Bk, s, Y) {
@@ -1097,52 +1211,83 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     }
   }
 
-  // ---------------------------------------------------------------- the viewpoint deck (전망 데크)
+  // ---------------------------------------------------------------- 만장대 전망대: the pulpit on the summit, the rest terrace
+  /** a ring of n box segments (a low rail or a kerb) round (cx, cz) with gaps [{ a, w }] (radians, metres) */
+  function ringSegs(cx, cz, r, n, gaps, fn) {
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * TAU, a1 = ((i + 1) / n) * TAU, am = (a0 + a1) / 2;
+      if ((gaps || []).some((g) => Math.abs(normA(am - g.a + PI) - PI) * r < g.w / 2)) continue;
+      const x0 = cx + r * Math.cos(a0), z0 = cz + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), z1 = cz + r * Math.sin(a1);
+      fn((x0 + x1) / 2, (z0 + z1) / 2, Math.hypot(x1 - x0, z1 - z0), Math.atan2(x1 - x0, z1 - z0), x0, z0, am);
+    }
+  }
   function buildDeck(ctx, Bk, e, col) {
-    const BK = G.bkit, M = BK.M, geo = BK.geo, y = e.y;
+    const BK = G.bkit, M = BK.M, geo = BK.geo, y = e.y, low = ctx.low;
+    if (e.round) {
+      // the pulpit: a drum of rough granite grown out of the summit rock, a timber floor, a LOW slim rail (the view!)
+      const cx = e.cx, cz = e.cz, r = e.r, gy = Math.min(H(cx + r, cz), H(cx - r, cz), H(cx, cz + r), H(cx, cz - r)) - 0.8;
+      Bk.add('field', geo.cyl(r + 0.22, r + 0.5, y - 0.1 - gy, low ? 12 : 20), M(cx, (y - 0.1 + gy) / 2, cz), '#9a907e');
+      Bk.add('stone', geo.cyl(r + 0.3, r + 0.3, 0.12, low ? 12 : 24), M(cx, y - 0.1, cz), '#c2b9a6');
+      Bk.add('plank', geo.cyl(r - 0.02, r - 0.02, 0.07, low ? 12 : 24), M(cx, y - 0.005, cz), '#c49a6c');
+      ctx.addWalkable({ shape: 'circle', x: cx, z: cz, r: r + 0.15, top: y, surface: 'wood' });
+      // where the last flight arrives the rail opens
+      const legs = stairLegs(), last = legs.length ? legs[legs.length - 1].pts : null, lp = last ? last[last.length - 1] : [cx, cz + r];
+      const gap = [{ a: Math.atan2(lp[1] - cz, lp[0] - cx), w: 2.3 }];
+      const rail = e.rail || 0.95, nseg = low ? 10 : 16;
+      ringSegs(cx, cz, r - 0.06, nseg, gap, (mx, mz, L, ry, x0, z0) => {
+        Bk.add('wood', geo.box(0.07, 0.055, L + 0.04, 'grain'), M(mx, y + rail, mz, ry), '#8a6040');
+        if (!low) Bk.add('metal', geo.box(0.022, 0.022, L + 0.02, 'grain'), M(mx, y + rail * 0.52, mz, ry), '#6b6f74');
+        Bk.add('wood', geo.box(0.07, rail, 0.07, 'grain'), M(x0, y + rail / 2, z0), '#6e4a2c');
+        col({ shape: 'box', x: mx, z: mz, hw: 0.07, hd: L / 2 + 0.05, rot: ry });
+      });
+      // the telescope on the view side, a small name stone by the entrance
+      const t = e.telescope;
+      if (t) {
+        Bk.add('metal', geo.cyl(0.05, 0.07, 1.0, 8), M(t.x, y + 0.5, t.z), '#4a4e53');
+        Bk.add('metal', geo.cyl(0.2, 0.26, 0.07, 10), M(t.x, y + 0.035, t.z), '#3d4044');
+        Bk.add('glossy', geo.cyl(0.08, 0.12, 0.56, 12), M(t.x, y + 1.12, t.z, e.view || 0, 1, 1, 1, PI / 2 - 0.3), '#2f5d8a');
+        col({ shape: 'circle', x: t.x, z: t.z, r: 0.24 });
+        ctx.interact({ id: 'CX_TELESCOPE', kind: 'look', label: '🔭 망원경으로 단지 보기', kidLabel: '🔭 멀리 보기', emoji: '🔭', radius: 2.2,
+          position: { x: t.x, y: y + 1.1, z: t.z }, onInteract: () => lookFromDeck() });
+      }
+      return;
+    }
+    // the rest terrace on the stair face: a timber platform on posts, rails on the open sides, two benches, the name board
     const w = e.x1 - e.x0, d = e.z1 - e.z0, cx = (e.x0 + e.x1) / 2, cz = (e.z0 + e.z1) / 2;
     Bk.add('plank', geo.box(w, 0.1, d, 'world'), M(cx, y - 0.05, cz), '#c49a6c');
     for (const zz of [e.z0, e.z1]) Bk.add('wood', geo.box(w + 0.1, 0.24, 0.16, 'grain'), M(cx, y - 0.2, zz), '#6e4a2c');
     for (const xx of [e.x0, e.x1]) Bk.add('wood', geo.box(0.16, 0.24, d, 'grain'), M(xx, y - 0.2, cz), '#6e4a2c');
-    for (let x = e.x0 + 0.3; x <= e.x1 - 0.2; x += 2.3) for (let z = e.z0 + 0.3; z <= e.z1 - 0.2; z += 2.4) {
-      const g = H(x, z); if (y - g > 0.25) Bk.add('wood', geo.box(0.2, y - g + 0.4, 0.2, 'grain'), M(x, (y + g - 0.4) / 2, z), '#5e3d24');
+    for (let x = e.x0 + 0.3; x <= e.x1 - 0.2; x += (w - 0.6) / 3) for (let z = e.z0 + 0.3; z <= e.z1 - 0.2; z += (d - 0.6) / 2) {
+      const g = H(x, z); if (y - g > 0.25) Bk.add('wood', geo.box(0.2, y - g + 0.4, 0.2, 'grain'), M(x, (y + g - 0.4) / 2 - 0.1, z), '#5e3d24');
     }
     ctx.addWalkable({ shape: 'box', x: cx, z: cz, hw: w / 2, hd: d / 2, top: y, surface: 'wood' });
-    // the rail: north (the view), east and south; on the west side an opening where the stair arrives
-    const stairEnd = C.byId('ST_DECK3'), sx = stairEnd ? stairEnd.pts[stairEnd.pts.length - 1] : [e.x0, cz];
-    const railSeg = (ax, az, bx, bz) => {
-      const L = Math.hypot(bx - ax, bz - az); if (L < 0.2) return;
-      const ry = Math.atan2(bx - ax, bz - az), mx = (ax + bx) / 2, mz = (az + bz) / 2;
-      // a slim open rail (the deck is where the picture's view is seen from: nothing heavy in front of it)
-      Bk.add('wood', geo.box(0.07, 0.06, L, 'grain'), M(mx, y + e.rail, mz, ry), '#8a6040');
-      for (const hy of [0.42, 0.74]) Bk.add('metal', geo.box(0.025, 0.025, L, 'grain'), M(mx, y + hy, mz, ry), '#6b6f74');
-      for (let t = 0; t <= 1.0001; t += 1 / Math.max(1, Math.round(L / 2.4))) Bk.add('wood', geo.box(0.07, e.rail, 0.07, 'grain'), M(ax + (bx - ax) * t, y + e.rail / 2, az + (bz - az) * t), '#6e4a2c');
-      col({ shape: 'box', x: mx, z: mz, hw: 0.08, hd: L / 2 + 0.05, rot: ry });
+    // rails: every side, opened 2.6 m wide where a flight meets the terrace
+    const ends = stairLegs().flatMap((s) => [s.pts[0], s.pts[s.pts.length - 1]]).filter((p) => p[0] > e.x0 - 1.2 && p[0] < e.x1 + 1.2 && p[1] > e.z0 - 1.2 && p[1] < e.z1 + 1.2);
+    const railRun = (ax, az, bx, bz) => {
+      const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 1.2));
+      for (let i = 0; i < n; i++) {
+        const x0 = ax + (bx - ax) * i / n, z0 = az + (bz - az) * i / n, x1 = ax + (bx - ax) * (i + 1) / n, z1 = az + (bz - az) * (i + 1) / n, mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
+        if (ends.some((p) => Math.hypot(p[0] - mx, p[1] - mz) < 1.7)) continue;
+        const l = L / n, ry = Math.atan2(x1 - x0, z1 - z0);
+        Bk.add('wood', geo.box(0.07, 0.06, l + 0.03, 'grain'), M(mx, y + e.rail, mz, ry), '#8a6040');
+        Bk.add('wood', geo.box(0.04, 0.045, l + 0.03, 'grain'), M(mx, y + e.rail * 0.5, mz, ry), '#7a5236');
+        Bk.add('wood', geo.box(0.08, e.rail, 0.08, 'grain'), M(x0, y + e.rail / 2, z0), '#6e4a2c');
+        col({ shape: 'box', x: mx, z: mz, hw: 0.07, hd: l / 2 + 0.05, rot: ry });
+      }
     };
-    railSeg(e.x0, e.z0, e.x1, e.z0); railSeg(e.x1, e.z0, e.x1, e.z1); railSeg(e.x1, e.z1, e.x0, e.z1);
-    railSeg(e.x0, e.z1, e.x0, Math.min(e.z1, sx[1] + 1.4)); railSeg(e.x0, Math.max(e.z0, sx[1] - 1.4), e.x0, e.z0);
-    // two benches facing the view, the telescope stand, the sign
-    for (const bx of [cx - 3.2, cx + 3.2]) bench(Bk, bx, cz + 2.4, PI, () => y, col);
-    const t = e.telescope;
-    if (t) {
-      Bk.add('metal', geo.cyl(0.05, 0.07, 1.1, 8), M(t.x, y + 0.55, t.z + 0.3), '#4a4e53');
-      Bk.add('metal', geo.cyl(0.25, 0.32, 0.08, 10), M(t.x, y + 0.04, t.z + 0.3), '#3d4044');
-      Bk.add('glossy', geo.cyl(0.09, 0.13, 0.62, 12), M(t.x, y + 1.2, t.z + 0.1, 0, 1, 1, 1, PI / 2 - 0.25), '#2f5d8a');
-      col({ shape: 'circle', x: t.x, z: t.z + 0.3, r: 0.3 });
-      ctx.interact({ id: 'CX_TELESCOPE', kind: 'look', label: '🔭 망원경으로 단지 보기', kidLabel: '🔭 멀리 보기', emoji: '🔭', radius: 2.6,
-        position: { x: t.x, y: y + 1.2, z: t.z + 0.3 }, onInteract: () => lookFromDeck() });
-    }
-    const face = ctx.own(new THREE.MeshStandardMaterial({ map: ctx.own(G.gfx.signTexture('🔭 만장대 전망대', '만 개의 장독대가 한눈에 보여요', { w: 512, h: 256 })), roughness: 0.8, metalness: 0 }));
+    railRun(e.x0, e.z0, e.x1, e.z0); railRun(e.x1, e.z0, e.x1, e.z1); railRun(e.x1, e.z1, e.x0, e.z1); railRun(e.x0, e.z1, e.x0, e.z0);
+    bench(Bk, cx - 1.6, cz, 0, () => y, col); bench(Bk, cx + 1.6, cz, 0, () => y, col);
+    const face = ctx.own(new THREE.MeshStandardMaterial({ map: ctx.own(G.gfx.signTexture('🔭 만장대 전망대', '조금만 더 올라가요', { w: 512, h: 256 })), roughness: 0.8, metalness: 0 }));
     const wood = BK.mat('wood');
     const sg = new THREE.Group(); sg.name = 'cx-deck-sign';
-    sg.position.set(e.x1 - 1.0, y, e.z1 - 0.9); sg.rotation.y = PI;
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.1, 0.12), wood); post.position.y = 1.05;
-    const board = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.75, 0.06), [wood, wood, wood, wood, face, wood]); board.position.set(0, 1.75, 0.07);
+    sg.position.set(e.x1 - 0.5, y, e.z1 - 0.5); sg.rotation.y = PI;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.12), wood); post.position.y = 1.0;
+    const board = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.65, 0.06), [wood, wood, wood, wood, face, wood]); board.position.set(0, 1.7, 0.07);
     for (const m of [post, board]) { m.castShadow = true; m.receiveShadow = true; sg.add(m); }
     ctx.group.add(sg);
     col({ shape: 'circle', x: sg.position.x, z: sg.position.z, r: 0.12 });
   }
-  /** the telescope: the camera of the picture for a while (the deck viewpoint), then back */
+  /** the telescope: the camera of the picture for a while (the `aerial` viewpoint), then back */
   function lookFromDeck() {
     const cam = G.sys.camera, v = (C.viewpoints || []).find((p) => p.id === 'aerial'), d = P.def(ID);
     if (!cam || !v || !d || typeof cam.shot !== 'function') return;
@@ -1151,6 +1296,55 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       if (easyOn()) G.easy?.say?.('하늘에서 본 만장대 단지예요. 둥근 장독대가 보여요!', { priority: 1 });
       setTimeout(() => { try { cam.setMode('follow', { duration: 1.2 }); } catch (e) { /* camera gone */ } }, 6500);
     } catch (e) { G.log.warn('WORLD', 'complex: telescope view failed', e?.message || e); }
+  }
+  /** stand on the pulpit in THE HERO VIEW (image 3): the visitor looks north-north-east, the follow camera far behind */
+  function heroView(instant) {
+    const cam = G.sys.camera, L = C.lookout;
+    if (!cam || !L) return;
+    try {
+      cam.behind?.(L.stand.rotY, true);
+      const pr = cam._prof;
+      cam._distT = pr ? clamp(L.camera.dist, pr.min, pr.max) : L.camera.dist;
+      cam._pitchT = pr ? clamp(L.camera.pitch, pr.pmin, pr.pmax) : L.camera.pitch;
+      if (instant !== false) cam.snap?.();
+    } catch (e) { G.log.warn('WORLD', 'complex: hero view failed', e?.message || e); }
+  }
+  /** 🚡 the lift: the plaza ⇄ the pulpit (a fade; small visitors need not climb 300 steps) */
+  async function ride(up) {
+    const pl = G.sys.player, L = C.byId('LIFT'), d = P.def(ID);
+    if (!pl || !L || !d || !P.is(ID)) return false;
+    const to = up ? L.top : L.bottom;
+    try {
+      await pl.teleport(d.origin.x + to.x, d.origin.z + to.z, to.rot, { fade: !(G.settings && G.settings.reduceMotion) });
+      if (up) heroView(true); else { try { G.sys.camera?.behind?.(to.rot, true); G.sys.camera?.snap?.(); } catch (e) { /* camera optional */ } }
+      if (easyOn()) G.easy?.say?.(up ? '만장대 전망대예요. 만 개의 장독대가 한눈에 보여요!' : '마당으로 내려왔어요.', { priority: 1 });
+      return true;
+    } catch (e) { G.log.warn('WORLD', 'complex: lift failed', e?.message || e); return false; }
+  }
+  function buildLift(ctx, Bk, col) {
+    const BK = G.bkit, M = BK.M, geo = BK.geo, L = C.byId('LIFT');
+    if (!L) return;
+    // the bottom station: a small timber gate with a hanging board on the plaza
+    const b = L.bottom, y = H(b.x, b.z);
+    for (const o of [-1.1, 1.1]) { Bk.add('wood', geo.box(0.18, 2.9, 0.18, 'grain'), M(b.x + o, y + 1.45, b.z), '#6e4a2c'); col({ shape: 'circle', x: b.x + o, z: b.z, r: 0.14 }); }
+    Bk.add('wood', geo.box(2.9, 0.16, 0.22, 'grain'), M(b.x, y + 2.86, b.z), '#5b3a22');
+    Bk.add('roof', geo.box(3.3, 0.1, 0.9, 'world'), M(b.x, y + 3.02, b.z), '#5d6066');
+    const face = ctx.own(new THREE.MeshStandardMaterial({ map: ctx.own(G.gfx.signTexture('🚡 전망대', '만장대에 올라가요', { w: 512, h: 256 })), roughness: 0.8, metalness: 0 }));
+    const wood = BK.mat('wood');
+    const board = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.72, 0.06), [wood, wood, wood, wood, face, face]);
+    board.position.set(b.x, y + 2.35, b.z); board.name = 'cx-lift-board'; board.castShadow = true;
+    ctx.group.add(board);
+    ctx.interact({ id: 'CX_LIFT_UP', kind: 'travel', label: '🚡 전망대로 올라가기', kidLabel: '🚡 전망대', emoji: '🚡', radius: 3.0, priority: 0.7,
+      position: { x: b.x, y: y + 1.3, z: b.z }, onInteract: () => { ride(true); } });
+    // the top station: a low stone bollard at the back of the pulpit (nothing tall may stand in the hero view)
+    const t = L.top, D = C.lookout;
+    const vl = Math.hypot(D.x - t.x, D.z - t.z) || 1, vx = (D.x - t.x) / vl, vz = (D.z - t.z) / vl;      // the crag's view axis
+    const bx = D.x - vx * 1.85 + vz * 1.0, bz = D.z - vz * 1.85 - vx * 1.0;
+    Bk.add('stone', geo.cyl(0.16, 0.2, 0.82, 8), M(bx, D.y + 0.41, bz), '#b9b0a0');
+    Bk.add('wood', geo.box(0.34, 0.24, 0.05, 'grain'), M(bx, D.y + 0.96, bz, Math.atan2(vx, vz)), '#8a6040');
+    col({ shape: 'circle', x: bx, z: bz, r: 0.2 });
+    ctx.interact({ id: 'CX_LIFT_DOWN', kind: 'travel', label: '🚡 마당으로 내려가기', kidLabel: '🚡 내려가기', emoji: '🚡', radius: 1.7, priority: 0.5,
+      position: { x: bx, y: D.y + 1.0, z: bz }, onInteract: () => { ride(false); } });
   }
   /** a granite bench (seat on two legs) */
   function bench(Bk, x, z, rot, Y, col) {
@@ -1247,7 +1441,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       id: ID, name: '만장대 단지', kidName: '만 개의 장독대', emoji: '🏺', zoneId: 'ZONE_PL_ALLOT', color: '#c98d4f',
       desc: '항아리 1만 개가 둥글게 놓인 장독대 단지예요. 셔틀버스를 타고 가요.',
       origin: { x: ORIGIN.x, z: ORIGIN.z },
-      size: { w: B.maxX - B.minX, d: B.maxZ - B.minZ, h: 80 },
+      size: { w: B.maxX - B.minX, d: B.maxZ - B.minZ, h: 120 },
       bounds: { minX: B.minX, maxX: B.maxX, minZ: B.minZ, maxZ: B.maxZ },         // [complex-ground] local, not centred
       margin: 0,
       indoor: false, keepAlive: true,
@@ -1272,6 +1466,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     _runParts: runParts,
     /** the first-visit welcome card (kid audit: opens it anywhere) */
     welcomeCard() { this._welcome(true); },
+    /** [complex-look] the hero view of image 3 (the follow camera of a visitor on the pulpit) and the lift */
+    heroView, ride,
     /** enter the complex; opts.focusUnit ('J01-17' or { zone, seq }) ends beside that unit */
     enter(opts = {}) { return P.enter(ID, opts); },
     init() {
@@ -1298,12 +1494,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     /** the first visit: the deck of the complex, the picture's view, one calm line and a big "🚌 마을로 가요" step */
     async firstVisit() {
       if (!G.state || !G.ready || P.current || P.busy) return false;
-      const v = (C.viewpoints || []).find((p) => p.id === 'deck');
-      const st = (v && v.stand) || { x: deckEl.x0 + 7, z: deckEl.z0 + 2.5 };
-      const rotY = v ? Math.atan2(v.look.x - st.x, v.look.z - st.z) : PI;
-      const ok = await P.enter(ID, { spawn: { x: st.x, z: st.z, rotY } });
+      const st = (C.lookout && C.lookout.stand) || { x: deckEl.cx, z: deckEl.cz, rotY: PI };
+      const ok = await P.enter(ID, { spawn: { x: st.x, z: st.z, rotY: st.rotY } });
       if (!ok || !P.is(ID)) return false;
-      try { G.sys.camera?.snap?.(); } catch (e) { /* camera optional */ }
+      heroView(true);
       this.firstVisitShown = true;
       setTimeout(() => this._welcome(), 900);
       return true;
@@ -1321,7 +1515,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         body: (el) => {
           el.appendChild(h('div', { class: 'cxw-emoji emoji', 'aria-hidden': 'true' }, '🏺'));
           el.appendChild(h('p', { class: 'cxw-line', 'data-say': line }, line));
-          if (!easy) el.appendChild(h('p', { class: 'cxw-sub' }, '전망 데크에서 단지 전체가 보여요. 셔틀버스를 타면 체험관 마을로 가요.'));
+          if (!easy) el.appendChild(h('p', { class: 'cxw-sub' }, '만장대 전망대에서 단지 전체가 보여요. 셔틀버스를 타면 체험관 마을로 가요.'));
         },
         actions: [
           { label: '🚌 마을로 가요', class: 'btn-primary cxw-go', onClick: go },

@@ -138,17 +138,18 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const north = [[n1[0], n1[1], n1[2]]].concat(ext(n0, n1, [[240, -0.12, 9], [320, -0.1, 12], [360, -0.06, 14], [320, 0, 10]]));
     // south (downstream): the floor falls
     const south = [[s1[0], s1[1], s1[2]]].concat(ext(s0, s1, [[220, 0.05, -2.2], [300, 0.08, -3], [340, 0.04, -3], [300, 0, -2]]));
-    // east: the road along the south edge leaves through a saddle
+    // east: a road that leaves the site eastwards (if the plan has one) goes through a saddle
     const road = (C.elements || []).find((e) => e.type === 'road' && e.pts && e.pts[e.pts.length - 1][0] > (C.bounds.maxX - 10));
-    const rpE = road ? road.pts : [[60, 134], [200, 134]];
-    const e1 = rpE[rpE.length - 1], e0 = rpE[rpE.length - 2];
-    const east = [[e0[0], e0[1], 1.5]].concat(ext([e1[0], e1[1], 2], [e0[0], e0[1], 2], [[150, -0.12, 6], [260, -0.08, 12], [340, -0.05, 14], [340, 0, 12]]));
     const seg0 = (pts) => Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
     A = [
       { id: 'N', pts: north, w0: 42, w1: 115, ramp: 70, depth: 1, s0: seg0(north) },
       { id: 'S', pts: south, w0: 38, w1: 105, ramp: 70, depth: 1, s0: seg0(south) },
-      { id: 'E', pts: east, w0: 20, w1: 80, ramp: 40, depth: 0.85, s0: seg0(east) },
     ];
+    if (road) {                                  // [complex-look] plan v2 has no east road: the east ridge stays closed forest
+      const rpE = road.pts, e1 = rpE[rpE.length - 1], e0 = rpE[rpE.length - 2];
+      const east = [[e0[0], e0[1], 1.5]].concat(ext([e1[0], e1[1], 2], [e0[0], e0[1], 2], [[150, -0.12, 6], [260, -0.08, 12], [340, -0.05, 14], [340, 0, 12]]));
+      A.push({ id: 'E', pts: east, w0: 20, w1: 80, ramp: 40, depth: 0.85, s0: seg0(east) });
+    }
     AXES_CACHE.set(C, A);
     return A;
   }
@@ -220,7 +221,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
           break;
         }
         case 'parking': case 'busbay': case 'deck': case 'storeyard': case 'plaza':
-          if (fin(e.x0)) F.rects.push({ x0: Math.min(e.x0, e.x1) - 1, z0: Math.min(e.z0, e.z1) - 1, x1: Math.max(e.x0, e.x1) + 1, z1: Math.max(e.z0, e.z1) + 1, id: e.id, plaza: e.type === 'plaza' });
+          if (e.round && fin(e.cx)) F.circles.push({ x: e.cx, z: e.cz, r: (e.r || 3) + 1.5, id: e.id });
+          else if (fin(e.x0)) F.rects.push({ x0: Math.min(e.x0, e.x1) - 1, z0: Math.min(e.z0, e.z1) - 1, x1: Math.max(e.x0, e.x1) + 1, z1: Math.max(e.z0, e.z1) + 1, id: e.id, plaza: e.type === 'plaza' });
           break;
         case 'kiln': if (fin(e.x)) F.rects.push({ x0: e.x - (e.w || 4) / 2 - 1, z0: Math.min(e.z0, e.z1) - 1, x1: e.x + (e.w || 4) / 2 + 1, z1: Math.max(e.z0, e.z1) + 1, id: e.id }); break;
         case 'field': if (e.poly) F.polys.push({ poly: e.poly, box: polyBox(e.poly), id: e.id }); break;
@@ -233,7 +235,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         case 'stair': if (e.pts) F.lines.push({ pts: e.pts.map((p) => [p[0], p[1]]), w: (e.w || 2.4) / 2 + 1.2 }); break;
         case 'bridge': F.lines.push({ pts: [[e.x0, e.z0], [e.x1, e.z1]], w: (e.w || 4) / 2 + 3 }); break;
         case 'wall': break;
-        case 'knoll': F.circles.push({ x: e.cx, z: e.cz, r: 5.5, id: e.id }); break;
+        case 'knoll': F.circles.push({ x: e.cx, z: e.cz, r: (e.r || 6.5) - 1, id: e.id }); break;
+        case 'lift': if (e.bottom) F.points.push({ x: e.bottom.x, z: e.bottom.z, r: 2.6 }); break;
         case 'lamp': for (const l of e.list || []) F.points.push({ x: l[0], z: l[1], r: 1.6 }); break;
         case 'sign': F.points.push({ x: e.x, z: e.z, r: 1.8 }); break;
         default: break;
@@ -1084,6 +1087,14 @@ vec4 cxCell(vec2 p, out vec2 toF){
   function bus(opts = {}) {
     const kind = opts.kind === 'coach' ? 'coach' : 'shuttle';
     const low = opts.low != null ? !!opts.low : (G.sys && G.sys.engine && G.sys.engine.preset && G.sys.engine.preset.name === 'low');
+    // [world] phase 9: the realistic bus of G.vehicles (59-vehicles.js) when that fragment is in the build — the same
+    // shape of answer (a Group, front +z, wheels on y 0, userData.dispose / kind); the block bus below is the fallback
+    if (G.vehicles && typeof G.vehicles.one === 'function') {
+      try {
+        const g = G.vehicles.one(kind, { label: opts.label, quality: low ? 'low' : undefined, shadow: opts.shadow !== false });
+        if (g && g.isObject3D) { g.name = 'cxl-bus-' + kind; return g; }
+      } catch (e) { if (G.log) G.log.warn('WORLD', 'landscape: G.vehicles.one failed — the plain bus stands in', e && e.message || e); }
+    }
     const grp = new THREE.Group(); grp.name = 'cxl-bus-' + kind;
     const geo = busGeometry(kind, low), mat = busMaterial(low);
     const body = new THREE.Mesh(geo, mat); body.name = 'cxl-bus-body'; body.castShadow = !low; body.receiveShadow = !low;
@@ -1591,8 +1602,10 @@ vec4 cxCell(vec2 p, out vec2 toF){
     if (gd) {
       const lawnMat = own(low ? new THREE.MeshLambertMaterial({ color: new THREE.Color('#5c7a35') }) : new THREE.MeshStandardMaterial({ color: new THREE.Color('#6b8a3c'), roughness: 0.95, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
       if (!low && G.mat && G.mat.apply) { try { G.mat.apply(lawnMat, 'grass', { tile: [2.2, 2.2], look: [96, 124, 52] }); } catch (e) { /* plain */ } }
-      const lawn = new THREE.Mesh(own(discGeometry(gd.cx, gd.cz, F ? F.r + 1.2 : 0.5, gd.r - 0.4, C.height, 0.07, 0.18, low ? 24 : 64, low ? 3 : 8)), lawnMat);
-      lawn.name = 'cxl-lawn'; lawn.receiveShadow = !low; root.add(lawn); gardenMeshes.push(lawn);
+      if (gd.lawn !== false) {
+        const lawn = new THREE.Mesh(own(discGeometry(gd.cx, gd.cz, F ? F.r + 1.2 : 0.5, gd.r - 0.4, C.height, 0.07, 0.18, low ? 24 : 64, low ? 3 : 8)), lawnMat);
+        lawn.name = 'cxl-lawn'; lawn.receiveShadow = !low; root.add(lawn); gardenMeshes.push(lawn);
+      }
       if (F) {
         const pave = new THREE.Mesh(own(discGeometry(F.x, F.z, F.r + 0.1, F.r + 1.25, C.height, 0.06, 0, low ? 20 : 56, 1)), own(fountainStoneMaterial(low, U)));
         pave.name = 'cxl-fountain-paving'; pave.receiveShadow = !low; root.add(pave); gardenMeshes.push(pave);
@@ -1652,6 +1665,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
           const x = cx + (hash2(k, i + 3, 402) - 0.5) * 3.2, z = cz + (hash2(k, i + 3, 403) - 0.5) * 3.2;
           if ((gd.pines || []).some((p) => Math.hypot(p.x - x, p.z - z) < 1.6) || (gd.rocks || []).some((p) => Math.hypot(p.x - x, p.z - z) < p.r + 0.5)) continue;
           if (Math.hypot(x - gd.cx, z - gd.cz) > gd.r - 1.6) continue;
+          if (F && Math.hypot(x - F.x, z - F.z) < F.r + 1.6) continue;
           fl.push({ x, z, s: 0.38 + hash2(k, i, 404) * 0.32, col });
         }
       }
@@ -1745,8 +1759,19 @@ vec4 cxCell(vec2 p, out vec2 toF){
     tt = now();
     const V = cars(C);
     const carMeshes = [], buses = [];
-    const carMat = own(carMaterial(low));
-    for (const kind of [0, 1]) {
+    // [world] phase 9: the cars and the coaches are ONE fleet of G.vehicles (an instanced mesh per kind, a far form for
+    // the aerial view; the contact shadows below stay this part's own). The block cars are the fallback.
+    let fleet = null;
+    if (G.vehicles && typeof G.vehicles.fleet === 'function') {
+      try {
+        const list = V.cars.map((c, i) => ({ kind: c.kind === 1 ? (i % 3 === 0 ? 'van' : 'suv') : (i % 4 === 1 ? 'hatch' : i % 9 === 4 ? 'truck' : 'sedan'), x: c.x, y: c.y, z: c.z, rot: c.rot, paint: PAINTS[c.paint] }));
+        for (const c of V.coaches) list.push({ kind: 'coach', x: c.x, y: c.y, z: c.z, rot: c.rot });
+        fleet = G.vehicles.fleet(list, { quality: low ? 'low' : q, shadow: false, name: 'cxl-vehicles', farDistance: 90 });
+        root.add(fleet.group);
+      } catch (e) { fleet = null; if (G.log) G.log.warn('WORLD', 'landscape: G.vehicles.fleet failed — the plain cars stand in', e && e.message || e); }
+    }
+    const carMat = fleet ? null : own(carMaterial(low));
+    for (const kind of fleet ? [] : [0, 1]) {
       const list = V.cars.filter((c) => c.kind === kind);
       if (!list.length) continue;
       const geo = own(carGeometry(kind === 1, low));
@@ -1759,11 +1784,11 @@ vec4 cxCell(vec2 p, out vec2 toF){
     }
     const placeBus = (spot, kind) => {
       if (!spot) return;
-      const b = bus({ kind, low });
+      const b = bus({ kind, low, shadow: false });   // [world] (this part lays its own contact shadows)
       b.position.set(spot.x, spot.y, spot.z); b.rotation.y = spot.rot;
       root.add(b); buses.push(b);
     };
-    for (const c of V.coaches) placeBus(c, 'coach');
+    if (!fleet) for (const c of V.coaches) placeBus(c, 'coach');
     placeBus(V.shuttle, 'shuttle');
     stats.counts.cars = V.cars.length; stats.counts.coaches = V.coaches.length; stats.counts.shuttle = V.shuttle ? 1 : 0;
     lap('vehicles', tt);
@@ -1930,12 +1955,14 @@ vec4 cxCell(vec2 p, out vec2 toF){
           const E = G.sys && G.sys.engine;
           if (E && E.camera) { cam.copy(E.camera.position); root.worldToLocal(cam); treeSet.assign(cam.x, cam.z, false); }
         }
+        if (fleet) { const E = G.sys && G.sys.engine; if (E && E.camera) fleet.update(E.camera.position); }   // [world] full models near, the far form from the air
       },
       dispose() {
         if (offHaze) offHaze();
         if (grove) { try { grove.dispose(); } catch (e) { /* ignore */ } }
         if (treeSet) treeSet.dispose();
         for (const b of buses) { if (b.userData.dispose) b.userData.dispose(); }
+        if (fleet) { fleet.dispose(); fleet = null; }   // [world]
         root.traverse((o) => { if (o.isInstancedMesh && o.dispose) o.dispose(); });
         for (const x of owned) { try { if (x.isTexture && x.userData && (x.userData.packed || x.userData.blank)) continue; x.dispose(); } catch (e) { /* ignore */ } }
         owned.length = 0;

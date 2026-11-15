@@ -11,7 +11,7 @@
 // Checks: the place and its door at the valley's shuttle stop · in through the stop · standing on the ground · the part
 // registry (every registered part built; a part that throws is skipped with a warning, the rest still builds) · the main
 // routes walked on foot (spawn → gate → centre plaza → amphitheatre top → pavilion knoll → village terrace → storehouse
-// yard → the viewpoint deck): never below the ground, never stuck · the minimap draws the plan · out by the bus (the exit
+// yard → the lookout 만장대 over its stair flights): never below the ground, never stuck · the minimap draws the plan · out by the bus (the exit
 // door) and by the chip · in by travel() (the 가기 path) · a save made inside resumes at the valley stop · a quality change
 // inside · draw calls and triangles per preset at the `aerial` view (colour pass of the district ≤ 250 on high) · the phone
 // 390 × 844.
@@ -127,8 +127,15 @@ try {
 
   // ---- the main routes on foot (never below the ground, never stuck)
   // [name, x, z, via]: via = stair waypoints walked in a straight line after the planner reaches the first one
-  const deckVia = await page.evaluate(() => ['ST_DECK1', 'ST_DECK2', 'ST_DECK3'].flatMap((id) => (G.data.complex.byId(id)?.pts || []).map((p) => [p[0], p[1]])));
-  const ROUTE = [['gate', -38, 108], ['centre plaza', 14, 50], ['amphitheatre top', 114, -119], ['pavilion knoll', 90, 7], ['village terrace', 11, -60], ['storehouse yard', -100, -67.7], ['the deck', -58, 159, deckVia]];
+  // every target is read from the master plan (plan v2 moved all of them); the lookout is climbed over its six flights
+  const ROUTE = await page.evaluate(() => {
+    const C = G.data.complex, gc = C.rings.GC, am = C.rings.AM, kn = C.byId('KNOLL'), gp = C.byId('PLAZA_GATE'), L = C.lookout, sy = C.byId('B_SH1'), sy2 = C.byId('B_SH2');
+    const via = [];
+    for (const e of C.elements) if (e.type === 'stair' && !e.natural) for (const p of e.pts) { const q = via[via.length - 1]; if (!q || Math.hypot(q[0] - p[0], q[1] - p[1]) > 0.3) via.push([p[0], p[1]]); }
+    const h1 = C.byId('B_VH01'), h6 = C.byId('B_VH06');
+    return [['gate', (gp.x0 + gp.x1) / 2, (gp.z0 + gp.z1) / 2], ['centre plaza', gc.cx, gc.cz - 2], ['amphitheatre top', am.cx, am.cz - (C.K.WALL_R - 4)], ['pavilion knoll', kn.cx, kn.cz + 3],
+      ['village terrace', (h1.x + h6.x) / 2, (h1.z + h6.z) / 2], ['storehouse yard', sy.x + 5.6, (sy.z + sy2.z) / 2 + 0.4], ['the lookout', L.stand.x, L.stand.z, via]];
+  });
   for (const [name, x, z, via] of ROUTE) {
     // the player's own movement code driven with a fixed step (the page draws ~1 frame/s on a loaded software-GL machine)
     const r = await page.evaluate(async ([x, z, via]) => {

@@ -7,11 +7,15 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
 // interior light), balconies with timber 난간, a lower skirt roof round the core and a great 팔작 roof over the recessed top floor,
 // lower wings stepping down at the sides, a projecting gabled entrance portico on columns.
 //
-// Data: G.data.complex.byId('B_MAIN') (src/game/33-complex-plan.js) — centre (−66, −18), parts core / wingW / wingE / portico, podium,
-// floors, h, roofs, door (C.door, the way into PL_OFFICE), the side door to the corridor (doors[1]), the front stairs.
+// Data: G.data.complex.byId('B_MAIN') (src/game/33-complex-plan.js) — parts core / wingW / wingE / portico, podium, floors, h,
+// roofs, door (C.door, the way into PL_OFFICE), the side door to the corridor (doors[1]), the front stairs.
+// [complex-look] PLAN v2: the building is 1.35 × phase 8 and turned to face WEST. It is built in ITS OWN FRAME (B_MAIN.frame:
+// origin = centre of the core, front = local +z, x across the front) from the `local` footprints of the parts; the root group
+// carries the frame, and every collider / walkable / interactable / light goes through the same transform (ctxL below). Every
+// length of the section scales with B_MAIN.scale (S); things a person touches (rails, steps, door leaves) keep human size.
 //
 // SECTION (P = B_MAIN.y + podium)       1F  P … P+5.0      2F  … P+9.6 (T2)       skirt roof over the 2F wall line
-//                                       3F  inset 2.8 m, floor = top of the skirt + 0.3 (≈ P+11.8) … P + core.h (15.8)
+//   (× S)                               3F  inset 2.8 m, floor = top of the skirt + 0.3 (≈ P+11.8) … P + core.h (15.8)
 //                                       great roof: paljak, rise = core.roof.h, overhang = core.roof.overhang
 //   wings: 1F P … P+5.0, 2F … P + wing.h; paljak ridge north–south (gables face south / north)
 //   portico: round columns P … P + portico.h, paljak ridge north–south (its gable faces the stairs), 현판 "만장대"
@@ -42,14 +46,29 @@ CX.add('main', (ctx, C) => {
   const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
   const quality = ctx.quality || G.sys.engine?.quality || 'low';
   const low = !!ctx.low || quality === 'low';
-  const part = (id) => (E.parts || []).find((p) => p.id === id);
+  // [complex-look] the building's frame: local (lx, lz) → plan (x, z); parts in local coordinates (`local` of plan v2, else
+  // the plan rectangle itself with an identity frame)
+  const FR = E.frame && Number.isFinite(E.frame.rot) ? E.frame : { x: 0, z: 0, rot: 0 };
+  const fc = Math.cos(FR.rot), fs = Math.sin(FR.rot);
+  const toPlan = (lx, lz) => [FR.x + lx * fc + lz * fs, FR.z - lx * fs + lz * fc];
+  const toLocal = (x, z) => { const dx = x - FR.x, dz = z - FR.z; return [dx * fc - dz * fs, dx * fs + dz * fc]; };
+  const S = Number.isFinite(E.scale) && E.scale > 0.5 ? E.scale : 1;                  // every structural length × S
+  const S2 = Math.sqrt(S);                                                         // secondary members grow less
+  const part = (id) => { const p = (E.parts || []).find((q) => q.id === id); return p ? Object.assign({}, p, p.local || {}) : null; };
   const core = part('core'), wingW = part('wingW'), wingE = part('wingE'), por = part('portico');
   if (!core || !wingW || !wingE || !por) throw new Error('complex-main: B_MAIN parts missing');
+  // the places ctx in the building's frame: positions and box rotations go through the frame
+  const ctxL = {
+    addCollider: (c) => { const [x, z] = toPlan(c.x, c.z); return ctx.addCollider(Object.assign({}, c, { x, z }, c.shape === 'box' ? { rot: (c.rot || 0) + FR.rot } : {})); },
+    addWalkable: (w) => { const [x, z] = toPlan(w.x, w.z); return ctx.addWalkable(Object.assign({}, w, { x, z }, w.shape === 'box' ? { rot: (w.rot || 0) + FR.rot } : {})); },
+    interact: (o) => { const [x, z] = toPlan(o.position.x, o.position.z); return ctx.interact(Object.assign({}, o, { position: { x, y: o.position.y, z } })); },
+    light: (o) => { const [x, z] = toPlan(o.x, o.z); return ctx.light(Object.assign({}, o, { x, z })); },
+  };
 
   // ---------------------------------------------------------------- section
   const y0 = E.y, P = y0 + (E.podium || 1.2);
-  const H0 = 4.4, H1 = 4.8, H2 = 4.4, T0 = P + H0, T1 = T0 + H1, T2 = T1 + H2;   // stone base storey, two glass storeys
-  const SET = 2.8;                                                   // 3F set back behind the 2F wall line
+  const H0 = 4.4 * S, H1 = 4.8 * S, H2 = 4.4 * S, T0 = P + H0, T1 = T0 + H1, T2 = T1 + H2;   // stone base storey, two glass storeys
+  const SET = 2.8 * S;                                               // 3F set back behind the 2F wall line
   const cx = (core.x0 + core.x1) / 2, cz = (core.z0 + core.z1) / 2, chw = (core.x1 - core.x0) / 2, chd = (core.z1 - core.z0) / 2;
   const hw3 = chw - SET, hd3 = chd - SET;
   const coreTop = P + (core.h || 15.8);
@@ -63,6 +82,7 @@ CX.add('main', (ctx, C) => {
   const gNear = new THREE_.Group(); gNear.name = 'complex-main:near';
   const gFar = new THREE_.Group(); gFar.name = 'complex-main:far';
   root.add(gBase, gNear, gFar);
+  root.position.set(FR.x, 0, FR.z); root.rotation.y = FR.rot; root.updateMatrixWorld(true);       // [complex-look] the frame
   ctx.group.add(root);
   const owned = [];                                // materials / textures made here (disposed by us; ctx.own as well)
   const own = (x) => { if (x) { owned.push(x); try { ctx.own?.(x); } catch (e) { /* older ctx */ } } return x; };
@@ -71,7 +91,7 @@ CX.add('main', (ctx, C) => {
   const disposers = [];
   const Bb = new K.Bucket(), Bn = new K.Bucket(), Bf = new K.Bucket();
   const glassQ = { pos: [], nor: [], room: [], room2: [], idx: [] };
-  const groundAt = (x, z) => C.height(x, z);
+  const groundAt = (x, z) => { const q = toPlan(x, z); return C.height(q[0], q[1]); };        // local (x, z) → the plan's ground
 
   // ---------------------------------------------------------------- roof maths (mirror of G.bkit.roof's parametrisation; read-only use:
   // rafters under the soffit, rain-chain corners, 합각 battens)
@@ -147,7 +167,7 @@ CX.add('main', (ctx, C) => {
   }
 
   // ---------------------------------------------------------------- glass (interior-mapped)
-  const ROOM_D = { 1: 8.5, 2: 7.0, 3: 6.0 };
+  const ROOM_D = { 1: 9.6, 2: 7.6, 3: 6.6 };                        // > 8 = a stone-floored lobby in the glass shader
   /** a glass run along (x0, z0) → (x1, z1) whose outward normal is (nx, nz); cells of width cw start at the run start */
   function glassRun(x0, z0, x1, z1, nx, nz, yb, yt, cw, depth, seed, inset = 0.12) {
     if (Math.hypot(x1 - x0, z1 - z0) < 0.3 || yt - yb < 0.3) return;
@@ -165,7 +185,7 @@ CX.add('main', (ctx, C) => {
     {
       vec3 cmN = normalize(objectNormal);
       vec3 cmT = normalize(vec3(cmN.z, 0.0, -cmN.x));
-      vec3 cmCam = cameraPosition - vec3(modelMatrix[3]);
+      vec3 cmCam = transpose(mat3(modelMatrix)) * (cameraPosition - vec3(modelMatrix[3]));     // the camera in the building's frame
       vec3 cmD = transformed - cmCam;
       vRD = vec3(dot(cmD, cmT), cmD.y, -dot(cmD, cmN));
       vRP = vec3(dot(transformed, cmT), transformed.y, 0.0);
@@ -187,6 +207,7 @@ CX.add('main', (ctx, C) => {
       float pw = W / 4.0;
       float mu = abs(fract(fu / pw + 0.5) - 0.5) * pw;
       float tr = abs(fv - min(2.75, FH * 0.66));
+      if (FH > 5.3) tr = min(tr, abs(fv - (2.75 + FH) * 0.5));           // tall storeys (plan v2) get a second transom
       float aw = max(fwidth(vRP.x) + fwidth(vRP.z), 1e-4), ah = max(fwidth(vRP.y), 1e-4);
       cmMull = max(1.0 - smoothstep(0.03, 0.03 + aw, mu), 1.0 - smoothstep(0.025, 0.025 + ah, tr));
       cmMull = max(cmMull, 1.0 - smoothstep(0.0, ah, fv - 0.06));
@@ -278,7 +299,7 @@ CX.add('main', (ctx, C) => {
             totalEmissiveRadiance = cmInt * (uCmDay + cmLamp * uCmNight) * (1.0 - cmF) * (1.0 - cmMull) * 0.85;
           }`);
     };
-    m.customProgramCacheKey = () => 'complex-main-glass-1';
+    m.customProgramCacheKey = () => 'complex-main-glass-2';
     G.world.addNightMaterial(m, 1, 0); nightMats.push(m);
     return m;
   }
@@ -357,13 +378,17 @@ CX.add('main', (ctx, C) => {
   }
 
   // ================================================================= 1. podium, terrace, stairs, ramps
-  const TER = { x0: -101.5, x1: -30.5, z0: -41.5, z1: 8 };                  // the podium terrace
+  const TL = E.terrace && E.terrace.local;
+  const TER = TL ? { x0: TL.x0, x1: TL.x1, z0: TL.z0, z1: TL.z1 } : { x0: wingW.x0 - 2.5 * S, x1: wingE.x1 + 2.5 * S, z0: core.z0 - 2.5 * S, z1: core.z1 + 5 * S };   // the podium terrace
   const PAD = { x0: por.x0 - 1, x1: por.x1 + 1, z0: TER.z1, z1: por.z1 };    // the portico pad (in front of the terrace)
-  const ST = (E.stairs && E.stairs[0]) || { x0: por.x0, z0: por.z1, x1: por.x1, z1: por.z1 + 3, y0, y1: P };
-  const CORR = { z0: -18.4, z1: -13.6 };                                    // the corridor joins the east edge here
+  const ST0 = E.stairs && E.stairs[0];
+  const ST = ST0 ? Object.assign({ y0: ST0.y0, y1: ST0.y1 }, ST0.local || { x0: ST0.x0, z0: ST0.z0, x1: ST0.x1, z1: ST0.z1 }) : { x0: por.x0, z0: por.z1, x1: por.x1, z1: por.z1 + 3 * S, y0, y1: P };
+  // the side door to the corridor (east wing, east face): its place along the face, in the frame
+  const SIDE_L = (() => { const d = E.doors && E.doors[1]; if (!d) return { x: wingE.x1, z: (wingE.z0 + wingE.z1) / 2 }; if (d.local) return { x: d.local.x, z: d.local.z }; const q = toLocal(d.x, d.z); return { x: wingE.x1, z: q[1] }; })();
+  const CORR = { z0: SIDE_L.z - 2.4, z1: SIDE_L.z + 2.4 };                    // the corridor joins the east edge here
   const RAMPS = [
-    { x0: TER.x0 + 6.5, x1: PAD.x0 - 2.0, z0: TER.z1, z1: TER.z1 + 2.4, highAtX1: true },
-    { x0: PAD.x1 + 2.0, x1: TER.x1 - 6.5, z0: TER.z1, z1: TER.z1 + 2.4, highAtX1: false },
+    { x0: TER.x0 + 6.5 * S, x1: PAD.x0 - 2.0, z0: TER.z1, z1: TER.z1 + 2.4, highAtX1: true },
+    { x0: PAD.x1 + 2.0, x1: TER.x1 - 6.5 * S, z0: TER.z1, z1: TER.z1 + 2.4, highAtX1: false },
   ];
   const wallsSD = (x, z) => {        // distance to the building's walls (≤ 0 inside), for the under-eave shade of the terrace
     let d = Infinity;
@@ -398,20 +423,20 @@ CX.add('main', (ctx, C) => {
     solid(PAD.x0, PAD.z0, PAD.x1, PAD.z1, P);
     pavedTop(TER.x0 + 0.1, TER.z0 + 0.1, TER.x1 - 0.1, TER.z1 - 0.1, P + 0.005);
     pavedTop(PAD.x0 + 0.1, PAD.z0 - 0.1, PAD.x1 - 0.1, PAD.z1 - 0.1, P + 0.006, 1.25);
-    ctx.addWalkable({ shape: 'box', x: (TER.x0 + TER.x1) / 2, z: (TER.z0 + TER.z1) / 2, hw: (TER.x1 - TER.x0) / 2, hd: (TER.z1 - TER.z0) / 2, top: P, surface: 'stone' });
-    ctx.addWalkable({ shape: 'box', x: (PAD.x0 + PAD.x1) / 2, z: (PAD.z0 + PAD.z1) / 2, hw: (PAD.x1 - PAD.x0) / 2, hd: (PAD.z1 - PAD.z0) / 2, top: P, surface: 'stone' });
+    ctxL.addWalkable({ shape: 'box', x: (TER.x0 + TER.x1) / 2, z: (TER.z0 + TER.z1) / 2, hw: (TER.x1 - TER.x0) / 2, hd: (TER.z1 - TER.z0) / 2, top: P, surface: 'stone' });
+    ctxL.addWalkable({ shape: 'box', x: (PAD.x0 + PAD.x1) / 2, z: (PAD.z0 + PAD.z1) / 2, hw: (PAD.x1 - PAD.x0) / 2, hd: (PAD.z1 - PAD.z0) / 2, top: P, surface: 'stone' });
     // the wide entrance steps (from the plan's stair) with cheek walls
-    const nSt = Math.max(3, Math.round((ST.y1 - ST.y0) / 0.15)), dz = (ST.z1 - ST.z0) / nSt;
+    const nSt = Math.max(3, Math.round((ST.y1 - ST.y0) / 0.16)), dz = (ST.z1 - ST.z0) / nSt;
     for (let i = 0; i < nSt; i++) {
       const top = ST.y1 - ((ST.y1 - ST.y0) * (i + 1)) / (nSt + 1);
       const za = ST.z0 + dz * i, zb = za + dz;
       box(Bb, 'stone', ST.x1 - ST.x0, top - yb, dz + 0.02, (ST.x0 + ST.x1) / 2, (top + yb) / 2, (za + zb) / 2, 0, i % 2 ? COL.stone : COL.coping);
-      ctx.addWalkable({ shape: 'box', x: (ST.x0 + ST.x1) / 2, z: (za + zb) / 2, hw: (ST.x1 - ST.x0) / 2, hd: dz / 2 + 0.01, top, surface: 'stone' });
+      ctxL.addWalkable({ shape: 'box', x: (ST.x0 + ST.x1) / 2, z: (za + zb) / 2, hw: (ST.x1 - ST.x0) / 2, hd: dz / 2 + 0.01, top, surface: 'stone' });
     }
     for (const sx of [ST.x0 - 0.45, ST.x1 + 0.45]) {
       box(Bb, 'stone', 0.9, P + 0.45 - yb, ST.z1 - ST.z0 + 0.4, sx, (P + 0.45 + yb) / 2, (ST.z0 + ST.z1) / 2 + 0.2, 0, COL.stone);
       box(Bb, 'stone', 1.0, 0.12, ST.z1 - ST.z0 + 0.5, sx, P + 0.51, (ST.z0 + ST.z1) / 2 + 0.2, 0, COL.coping);
-      ctx.addCollider({ shape: 'box', x: sx, z: (ST.z0 + ST.z1) / 2 + 0.2, hw: 0.45, hd: (ST.z1 - ST.z0) / 2 + 0.2, maxY: P + 0.5 });
+      ctxL.addCollider({ shape: 'box', x: sx, z: (ST.z0 + ST.z1) / 2 + 0.2, hw: 0.45, hd: (ST.z1 - ST.z0) / 2 + 0.2, maxY: P + 0.5 });
     }
     // the side ramps along the front (1 : 12)
     for (const R of RAMPS) {
@@ -420,8 +445,8 @@ CX.add('main', (ctx, C) => {
       for (let i = 0; i < n; i++) {
         const xa = R.x0 + (L * i) / n, xb = xa + L / n, f = R.highAtX1 ? (i + 1) / n : (n - i) / n;
         const top = y0 + (P - y0) * f;
-        ctx.addWalkable({ shape: 'box', x: (xa + xb) / 2, z: (R.z0 + R.z1) / 2, hw: L / n / 2 + 0.01, hd: (R.z1 - R.z0) / 2, top, surface: 'stone' });
-        if (top - y0 > 0.55) ctx.addCollider({ shape: 'box', x: (xa + xb) / 2, z: R.z1 + 0.12, hw: L / n / 2 + 0.01, hd: 0.12, maxY: top });
+        ctxL.addWalkable({ shape: 'box', x: (xa + xb) / 2, z: (R.z0 + R.z1) / 2, hw: L / n / 2 + 0.01, hd: (R.z1 - R.z0) / 2, top, surface: 'stone' });
+        if (top - y0 > 0.55) ctxL.addCollider({ shape: 'box', x: (xa + xb) / 2, z: R.z1 + 0.12, hw: L / n / 2 + 0.01, hd: 0.12, maxY: top });
       }
       // a low parapet with a hand rail on the open side
       const mx = (R.x0 + R.x1) / 2;
@@ -434,7 +459,7 @@ CX.add('main', (ctx, C) => {
     const edge = (x0, z0, x1, z1) => {
       const L = Math.hypot(x1 - x0, z1 - z0);
       if (L < 0.2) return;
-      ctx.addCollider({ shape: 'box', x: (x0 + x1) / 2, z: (z0 + z1) / 2, hw: Math.abs(x1 - x0) / 2 + 0.15, hd: Math.abs(z1 - z0) / 2 + 0.15, maxY: P });
+      ctxL.addCollider({ shape: 'box', x: (x0 + x1) / 2, z: (z0 + z1) / 2, hw: Math.abs(x1 - x0) / 2 + 0.15, hd: Math.abs(z1 - z0) / 2 + 0.15, maxY: P });
     };
     edge(TER.x0, TER.z0, TER.x1, TER.z0);
     edge(TER.x0, TER.z0, TER.x0, TER.z1);
@@ -447,7 +472,7 @@ CX.add('main', (ctx, C) => {
       const lx0 = R.highAtX1 ? R.x1 : PAD.x1, lx1 = R.highAtX1 ? PAD.x0 : R.x0;
       box(Bb, 'stone', lx1 - lx0, P - yb, R.z1 - R.z0, (lx0 + lx1) / 2, (P + yb) / 2, (R.z0 + R.z1) / 2, 0, COL.stone);
       pavedTop(lx0, R.z0, lx1, R.z1, P + 0.004, 1);
-      ctx.addWalkable({ shape: 'box', x: (lx0 + lx1) / 2, z: (R.z0 + R.z1) / 2, hw: (lx1 - lx0) / 2 + 0.02, hd: (R.z1 - R.z0) / 2, top: P, surface: 'stone' });
+      ctxL.addWalkable({ shape: 'box', x: (lx0 + lx1) / 2, z: (R.z0 + R.z1) / 2, hw: (lx1 - lx0) / 2 + 0.02, hd: (R.z1 - R.z0) / 2, top: P, surface: 'stone' });
     }
     // the corridor landing: a gap in the east edge at podium height (complex-buildings meets it at x = TER.x1)
   }
@@ -457,7 +482,7 @@ CX.add('main', (ctx, C) => {
     S: faceOf(core.x0, core.z1, core.x1, core.z1), E: faceOf(core.x1, core.z1, core.x1, core.z0),
     N: faceOf(core.x1, core.z0, core.x0, core.z0), W: faceOf(core.x0, core.z0, core.x0, core.z1),
   };
-  const DOOR = { x: (C.door && C.door.x) ?? -66, z: (C.door && C.door.z) ?? core.z1, w: 6.4, h: 3.6 };
+  const DOOR = { x: (() => { const d = E.door || C.door; return d ? toLocal(d.x, d.z)[0] : (core.x0 + core.x1) / 2; })(), z: core.z1, w: 6.4 * S2, h: 3.6 * S2 };
   const doorS0 = DOOR.x - DOOR.w / 2 - core.x0, doorS1 = DOOR.x + DOOR.w / 2 - core.x0;
   // where the wings cover the core's side walls (1F / 2F)
   const wingCover = (F) => {
@@ -498,15 +523,15 @@ CX.add('main', (ctx, C) => {
     for (const [s0, s1] of runsOf(F, cuts)) {
       const [x0, z0] = at(F, s0), [x1, z1] = at(F, s1);
       glassRun(x0, z0, x1, z1, F.nx, F.nz, P, T0, cw, ROOM_D[1], seed, 0.42);
-      band(F, P + 0.45, 0.9, 0.62, 0.0, COL.stone, s0, s1, Bb, 'stone');                // sill wall
-      band(F, T0 - 0.62, 1.24, 0.7, 0.02, COL.stone, s0, s1, Bb, 'stone');              // lintel wall
-      band(F, T0 + 0.06, 0.16, 0.86, 0.1, COL.coping, s0, s1, Bb, 'stone');            // cornice
+      band(F, P + 0.5, 1.0, 0.62, 0.0, COL.stone, s0, s1, Bb, 'stone');                 // sill wall
+      band(F, T0 - 0.62 * S, 1.24 * S, 0.7, 0.02, COL.stone, s0, s1, Bb, 'stone');      // lintel wall
+      band(F, T0 + 0.06, 0.16 * S2, 0.86, 0.1, COL.coping, s0, s1, Bb, 'stone');       // cornice
     }
     const inCut = (sv) => cuts.some(([a, b]) => sv > a - 0.6 && sv < b + 0.6);
     for (let i = 0; i <= nb; i++) {
       const sv = (F.L * i) / nb;
       if (inCut(sv)) continue;
-      const w = i === 0 || i === nb ? 1.4 : 1.15;
+      const w = (i === 0 || i === nb ? 1.4 : 1.15) * S2;
       const [x, z] = at(F, Math.min(F.L - w / 2, Math.max(w / 2, sv)), 0.02);
       Bb.add('stone', geo.box(w, T0 - P - 0.02, 0.72, 'world', x + z), M(x, (P + T0) / 2, z, F.ry), COL.stone);
     }
@@ -516,12 +541,12 @@ CX.add('main', (ctx, C) => {
     const F = coreFaces[key];
     const cov = wingCover(F);
     baseStorey(F, key === 'S' ? cov.concat([[doorS0, doorS1]]) : cov);
-    storey(F, T0, T1, ROOM_D[1], cov, 0.52, COL.timber);
-    storey(F, T1, T2, ROOM_D[2], [], 0.48, COL.timber);
-    for (const [s0, s1] of runsOf(F, cov)) band(F, T0 + 0.3, 0.42, 0.5, 0.14, COL.band, s0, s1);   // 창방 over the stone
-    band(F, T1, 0.62, 0.62, 0.12, COL.band);                                  // the slab edge between the glass storeys
-    band(F, T2 - 0.18, 0.5, 0.5, 0.1, COL.beam);                              // 창방
-    band(F, T2 + 0.16, 0.24, 0.66, 0.16, COL.band);                           // 평방
+    storey(F, T0, T1, ROOM_D[1], cov, 0.52 * S2, COL.timber);
+    storey(F, T1, T2, ROOM_D[2], [], 0.48 * S2, COL.timber);
+    for (const [s0, s1] of runsOf(F, cov)) band(F, T0 + 0.3 * S2, 0.42 * S2, 0.5, 0.14, COL.band, s0, s1);   // 창방 over the stone
+    band(F, T1, 0.62 * S2, 0.62, 0.12, COL.band);                             // the slab edge between the glass storeys
+    band(F, T2 - 0.18 * S2, 0.5 * S2, 0.5, 0.1, COL.beam);                    // 창방
+    band(F, T2 + 0.16 * S2, 0.24 * S2, 0.66, 0.16, COL.band);                 // 평방
   }
   // the entrance: a timber portal, glass leaves, a lit header (the door into the lobby)
   {
@@ -547,16 +572,16 @@ CX.add('main', (ctx, C) => {
     wingFaces.push(faces);
     for (const F of Object.values(faces)) {
       const sideDoor = !west && F === faces.E;
-      const dS = sideDoor ? W.z1 - (E.doors?.[1]?.z ?? -16) : 0;
+      const dS = sideDoor ? W.z1 - SIDE_L.z : 0;
       baseStorey(F, sideDoor ? [[dS - 1.8, dS + 1.8]] : []);
-      storey(F, T0, wingTop, ROOM_D[1], [], 0.46, COL.timber);
-      band(F, T0 + 0.3, 0.42, 0.5, 0.14, COL.band);
-      band(F, wingTop - 0.16, 0.46, 0.46, 0.1, COL.beam);
-      band(F, wingTop + 0.14, 0.22, 0.6, 0.14, COL.band);
+      storey(F, T0, wingTop, ROOM_D[1], [], 0.46 * S2, COL.timber);
+      band(F, T0 + 0.3 * S2, 0.42 * S2, 0.5, 0.14, COL.band);
+      band(F, wingTop - 0.16 * S2, 0.46 * S2, 0.46, 0.1, COL.beam);
+      band(F, wingTop + 0.14 * S2, 0.22 * S2, 0.6, 0.14, COL.band);
     }
   }
   // the side door to the corridor (east wing, east face)
-  const SIDE = { x: wingE.x1, z: E.doors?.[1]?.z ?? -16 };
+  const SIDE = { x: wingE.x1, z: SIDE_L.z };
   {
     const zc = SIDE.z, xf = SIDE.x;
     beamBox(Bb, 0.7, 0.45, 4.2, xf + 0.15, P + 3.2 + 0.22, zc, 0, COL.beam);
@@ -566,16 +591,16 @@ CX.add('main', (ctx, C) => {
     glassRun(xf, zc + 1.8, xf, zc - 1.8, 1, 0, P + 3.65, T0, 3.6, ROOM_D[1], 98);
   }
   // core 3F (set back) — floor deck over the skirt with its balustrade, round columns, glass
-  const sk = { mode: 'skirt', hw: chw, hd: chd, ov: 2.5, out: 0.75, lift: 0.62, t: 0.4, rise: 14, vres: 1.4, seg: 0.8, tint: '#f2f3f4' };
+  const sk = { mode: 'skirt', hw: chw, hd: chd, ov: 2.5 * S, out: 0.75 * S, lift: 0.62 * S, t: 0.4 * S2, rise: 14 * S, vres: 1.4, seg: 0.8 * S, tint: '#f2f3f4' };
   sk.vs = 1 - hd3 / (chd + sk.ov);
-  sk.y = K.roofBaseFor(sk, T2 + 0.45);
+  sk.y = K.roofBaseFor(sk, T2 + 0.45 * S2);
   const skR = roofMath(sk);
   const F3 = skR.fy(0, sk.vs) + 0.32;                                     const f3 = {
     S: faceOf(cx - hw3, cz + hd3, cx + hw3, cz + hd3), E: faceOf(cx + hw3, cz + hd3, cx + hw3, cz - hd3),
     N: faceOf(cx + hw3, cz - hd3, cx - hw3, cz - hd3), W: faceOf(cx - hw3, cz - hd3, cx - hw3, cz + hd3),
   };
   {
-    const DK = 1.25;                                                          // the balcony reaches 1.25 m beyond the 3F wall
+    const DK = 1.25 * S2;                                                     // the balcony reaches beyond the 3F wall
     box(Bb, 'plank', 2 * (hw3 + DK), 0.24, 2 * (hd3 + DK), cx, F3 - 0.12, cz, 0, COL.deck);
     beamBox(Bb, 2 * (hw3 + DK) + 0.1, 0.3, 0.2, cx, F3 - 0.15, cz + hd3 + DK, 0, COL.band);
     beamBox(Bb, 2 * (hw3 + DK) + 0.1, 0.3, 0.2, cx, F3 - 0.15, cz - hd3 - DK, 0, COL.band);
@@ -602,20 +627,20 @@ CX.add('main', (ctx, C) => {
         const k = `r${x.toFixed(1)},${z.toFixed(1)}`;
         if (colSeen.has(k)) continue;
         colSeen.add(k);
-        Bb.add('wood', geo.cyl(0.25, 0.29, coreTop - F3, low ? 8 : 12), M(x, (F3 + coreTop) / 2, z), COL.timber);
-        if (!low) bracket(x, z, F.nx, F.nz, coreTop + 0.38, 1.15);
+        Bb.add('wood', geo.cyl(0.25 * S2, 0.29 * S2, coreTop - F3, low ? 8 : 12), M(x, (F3 + coreTop) / 2, z), COL.timber);
+        if (!low) bracket(x, z, F.nx, F.nz, coreTop + 0.38 * S2, 1.15 * S2);
       }
-      band(F, coreTop - 0.2, 0.55, 0.5, 0.06, COL.beam);
-      band(F, coreTop + 0.2, 0.26, 0.72, 0.12, COL.band);
+      band(F, coreTop - 0.2 * S2, 0.55 * S2, 0.5, 0.06, COL.beam);
+      band(F, coreTop + 0.2 * S2, 0.26 * S2, 0.72, 0.12, COL.band);
       band(F, F3 + 0.1, 0.2, 0.36, 0.05, COL.dark);
     }
   }
   // balconies along the front: the core's upper glass storey (not where the portico roof stands), the wings over their stone base
   {
-    const DK = 1.45;
+    const DK = 1.45 * S2;
     const segs = [
-      [core.x0, por.x0 - 2.5, core.z1, T1 + 0.31], [por.x1 + 2.5, core.x1, core.z1, T1 + 0.31],
-      [wingW.x0, wingW.x1, wingW.z1, T0 + 0.36], [wingE.x0, wingE.x1, wingE.z1, T0 + 0.36],
+      [core.x0, por.x0 - 2.5 * S, core.z1, T1 + 0.31 * S2], [por.x1 + 2.5 * S, core.x1, core.z1, T1 + 0.31 * S2],
+      [wingW.x0, wingW.x1, wingW.z1, T0 + 0.36 * S2], [wingE.x0, wingE.x1, wingE.z1, T0 + 0.36 * S2],
     ];
     for (const [x0, x1, zf, y] of segs) {
       if (x1 - x0 < 0.5) continue;
@@ -637,71 +662,71 @@ CX.add('main', (ctx, C) => {
       for (let i = 0; i <= nb; i++) {
         const s = (F.L * i) / nb;
         const [x, z] = at(F, s, 0.05);
-        bracket(x, z, F.nx, F.nz, T2 + 0.3, 1.0);
+        bracket(x, z, F.nx, F.nz, T2 + 0.3 * S2, S2);
       }
     }
     for (const faces of wingFaces) for (const F of Object.values(faces)) {
       const cw = bayOf(F.L, 4.1), nb = Math.round(F.L / cw);
-      for (let i = 0; i <= nb; i++) { const [x, z] = at(F, (F.L * i) / nb, 0.05); bracket(x, z, F.nx, F.nz, wingTop + 0.26, 0.9); }
+      for (let i = 0; i <= nb; i++) { const [x, z] = at(F, (F.L * i) / nb, 0.05); bracket(x, z, F.nx, F.nz, wingTop + 0.26 * S2, 0.9 * S2); }
     }
   }
 
   // ================================================================= 3. roofs (two tiers on the core, the wings, the portico)
   const roofs = {};
-  roofs.skirt = hanokRoof(sk, M(cx, 0, cz), { rr: 0.09, sp: 0.55 });
+  roofs.skirt = hanokRoof(sk, M(cx, 0, cz), { rr: 0.09 * S2, sp: 0.55 * S });
   {
     const rc = core.roof || { h: 9.5, overhang: 3.2 };
-    const mr = { mode: 'paljak', hw: hw3, hd: hd3, ov: rc.overhang ?? 3.2, out: 1.25, lift: 1.35, t: 0.6, rise: rc.h ?? 9.5, vres: low ? 1 : 1.8, seg: low ? 0.6 : 0.9, bo: 0.9, ridge: { w: 0.95, h: 1.05 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
-    mr.y = K.roofBaseFor(mr, coreTop + 0.98);
-    roofs.main = hanokRoof(mr, M(cx, 0, cz), { rr: 0.11, sp: 0.5 });
+    const mr = { mode: 'paljak', hw: hw3, hd: hd3, ov: rc.overhang ?? 3.2 * S, out: 1.25 * S, lift: 1.35 * S, t: 0.6 * S2, rise: rc.h ?? 9.5 * S, vres: low ? 1 : 1.8, seg: (low ? 0.6 : 0.9) * S, bo: 0.9 * S, ridge: { w: 0.95 * S2, h: 1.05 * S2 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
+    mr.y = K.roofBaseFor(mr, coreTop + 0.98 * S2);
+    roofs.main = hanokRoof(mr, M(cx, 0, cz), { rr: 0.11 * S2, sp: 0.5 * S });
   }
   for (const W of [wingW, wingE]) {
     const rw = W.roof || { h: 5, overhang: 2.4 };
-    const o = { mode: 'paljak', hw: (W.z1 - W.z0) / 2, hd: (W.x1 - W.x0) / 2, ov: rw.overhang ?? 2.4, out: 0.6, lift: 0.7, t: 0.42, rise: rw.h ?? 5, vres: low ? 1 : 1.4, seg: 0.9, bo: 0.6, ridge: { w: 0.62, h: 0.66 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
-    o.y = K.roofBaseFor(o, wingTop + 0.62);
-    roofs[W.id] = hanokRoof(o, M((W.x0 + W.x1) / 2, 0, (W.z0 + W.z1) / 2, PI / 2), { rr: 0.085, sp: 0.5 });
+    const o = { mode: 'paljak', hw: (W.z1 - W.z0) / 2, hd: (W.x1 - W.x0) / 2, ov: rw.overhang ?? 2.4 * S, out: 0.6 * S, lift: 0.7 * S, t: 0.42 * S2, rise: rw.h ?? 5 * S, vres: low ? 1 : 1.4, seg: 0.9 * S, bo: 0.6 * S, ridge: { w: 0.62 * S2, h: 0.66 * S2 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
+    o.y = K.roofBaseFor(o, wingTop + 0.62 * S2);
+    roofs[W.id] = hanokRoof(o, M((W.x0 + W.x1) / 2, 0, (W.z0 + W.z1) / 2, PI / 2), { rr: 0.085 * S2, sp: 0.5 * S });
   }
   // portico: round columns, beams, brackets, a paljak roof whose gable faces the stairs, the 현판
   const POR = { x0: por.x0 + 0.6, x1: por.x1 - 0.6, z0: por.z0, z1: por.z1 - 0.4 };
   {
-    const xs = [POR.x0, DOOR.x - 3.5, DOOR.x + 3.5, POR.x1];
+    const xs = [POR.x0, DOOR.x - 3.5 * S, DOOR.x + 3.5 * S, POR.x1];
     const cols = xs.map((x) => [x, POR.z1]).concat([[POR.x0, (POR.z0 + POR.z1) / 2 + 0.6], [POR.x1, (POR.z0 + POR.z1) / 2 + 0.6]]);
     for (const [x, z] of cols) {
-      box(Bb, 'stone', 1.05, 0.3, 1.05, x, P + 0.15, z, 0, COL.coping);
-      Bb.add('wood', geo.cyl(0.3, 0.35, porTop - P - 0.3, low ? 8 : 14), M(x, P + 0.3 + (porTop - P - 0.3) / 2, z), COL.timber);
-      ctx.addCollider({ shape: 'circle', x, z, r: 0.45 });
-      if (!low) bracket(x, z, x < DOOR.x - 5 ? -0.6 : x > DOOR.x + 5 ? 0.6 : 0, 0.8, porTop + 0.1, 1.05);
+      box(Bb, 'stone', 1.05 * S2, 0.3, 1.05 * S2, x, P + 0.15, z, 0, COL.coping);
+      Bb.add('wood', geo.cyl(0.3 * S2, 0.35 * S2, porTop - P - 0.3, low ? 8 : 14), M(x, P + 0.3 + (porTop - P - 0.3) / 2, z), COL.timber);
+      ctxL.addCollider({ shape: 'circle', x, z, r: 0.45 * S2 });
+      if (!low) bracket(x, z, x < DOOR.x - 5 * S ? -0.6 : x > DOOR.x + 5 * S ? 0.6 : 0, 0.8, porTop + 0.1 * S2, 1.05 * S2);
     }
-    beamBox(Bb, POR.x1 - POR.x0 + 0.7, 0.62, 0.48, (POR.x0 + POR.x1) / 2, porTop - 0.2, POR.z1, 0, COL.beam);
-    beamBox(Bb, POR.x1 - POR.x0 + 0.9, 0.26, 0.66, (POR.x0 + POR.x1) / 2, porTop + 0.22, POR.z1, 0, COL.band);
+    beamBox(Bb, POR.x1 - POR.x0 + 0.7, 0.62 * S2, 0.48 * S2, (POR.x0 + POR.x1) / 2, porTop - 0.2 * S2, POR.z1, 0, COL.beam);
+    beamBox(Bb, POR.x1 - POR.x0 + 0.9, 0.26 * S2, 0.66 * S2, (POR.x0 + POR.x1) / 2, porTop + 0.22 * S2, POR.z1, 0, COL.band);
     for (const x of [POR.x0, POR.x1]) {
-      beamBox(Bb, 0.48, 0.62, POR.z1 - POR.z0 + 0.4, x, porTop - 0.2, (POR.z0 + POR.z1) / 2, 0, COL.beam);
-      beamBox(Bb, 0.66, 0.26, POR.z1 - POR.z0 + 0.5, x, porTop + 0.22, (POR.z0 + POR.z1) / 2, 0, COL.band);
+      beamBox(Bb, 0.48 * S2, 0.62 * S2, POR.z1 - POR.z0 + 0.4, x, porTop - 0.2 * S2, (POR.z0 + POR.z1) / 2, 0, COL.beam);
+      beamBox(Bb, 0.66 * S2, 0.26 * S2, POR.z1 - POR.z0 + 0.5, x, porTop + 0.22 * S2, (POR.z0 + POR.z1) / 2, 0, COL.band);
     }
     // the coffered ceiling of the portico (warm boards) so the underside never shows the sky
-    box(Bb, 'plank', POR.x1 - POR.x0 + 0.4, 0.12, POR.z1 - POR.z0 + 0.3, (POR.x0 + POR.x1) / 2, porTop + 0.42, (POR.z0 + POR.z1) / 2, 0, COL.deck);
+    box(Bb, 'plank', POR.x1 - POR.x0 + 0.4, 0.12, POR.z1 - POR.z0 + 0.3, (POR.x0 + POR.x1) / 2, porTop + 0.42 * S2, (POR.z0 + POR.z1) / 2, 0, COL.deck);
     const rp = por.roof || { h: 4.6, overhang: 1.8 };
-    const o = { mode: 'paljak', hw: (POR.z1 - POR.z0) / 2 + 0.2, hd: (POR.x1 - POR.x0) / 2, ov: rp.overhang ?? 1.8, out: 0.55, lift: 0.6, t: 0.4, rise: rp.h ?? 4.6, vg: 0.28, vres: low ? 1 : 1.3, seg: 1, bo: 0.55, ridge: { w: 0.6, h: 0.62 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
-    o.y = K.roofBaseFor(o, porTop + 1.1);                                   // a frieze zone over the beam: brackets and the 현판
-    roofs.portico = hanokRoof(o, M((POR.x0 + POR.x1) / 2, 0, (POR.z0 + POR.z1) / 2, PI / 2), { rr: 0.085, sp: 0.5 });
+    const o = { mode: 'paljak', hw: (POR.z1 - POR.z0) / 2 + 0.2, hd: (POR.x1 - POR.x0) / 2, ov: rp.overhang ?? 1.8 * S, out: 0.55 * S, lift: 0.6 * S, t: 0.4 * S2, rise: rp.h ?? 4.6 * S, vg: 0.28, vres: low ? 1 : 1.3, seg: S, bo: 0.55 * S, ridge: { w: 0.6 * S2, h: 0.62 * S2 }, tint: '#f2f3f4', gableColor: '#6b4b31' };
+    o.y = K.roofBaseFor(o, porTop + 1.1 * S2);                              // a frieze zone over the beam: brackets and the 현판
+    roofs.portico = hanokRoof(o, M((POR.x0 + POR.x1) / 2, 0, (POR.z0 + POR.z1) / 2, PI / 2), { rr: 0.085 * S2, sp: 0.5 * S });
     // 현판 "만장대" on the front beam under the gable
     let tex = null;
     try { tex = own(G.gfx.signTexture('만장대', null, { ...K.HYEONPAN, w: 1024, h: 400, size: 230 })); } catch (e) { tex = null; }
     const sm = own(new THREE_.MeshStandardMaterial({ map: tex || null, color: tex ? 0xffffff : 0x3b2a1d, roughness: 0.55, metalness: 0.05 }));
-    const sg = new THREE_.PlaneGeometry(3.3, 1.29);
+    const sg = new THREE_.PlaneGeometry(3.3 * S, 1.29 * S);
     const sign = new THREE_.Mesh(sg, sm);
     sign.name = 'complex-main:hyeonpan';
-    sign.position.set(DOOR.x, porTop + 0.58, POR.z1 + 0.5); sign.rotation.x = -0.12;
+    sign.position.set(DOOR.x, porTop + 0.58 * S, POR.z1 + 0.5 * S2); sign.rotation.x = -0.12;
     sign.castShadow = true;
     gBase.add(sign);
-    Bb.add('wood', geo.box(3.5, 1.46, 0.1), M(DOOR.x, porTop + 0.58, POR.z1 + 0.43, 0, 1, 1, 1, -0.12), COL.dark);
+    Bb.add('wood', geo.box(3.5 * S, 1.46 * S, 0.1), M(DOOR.x, porTop + 0.58 * S, POR.z1 + 0.5 * S2 - 0.07, 0, 1, 1, 1, -0.12), COL.dark);
   }
 
   // ================================================================= 4. near details: lanterns, banners, pines, jars, rain chains, gutters
   const banners = [];
   if (!low) {
     // lanterns (청사초롱-like, warm paper) hanging from the portico beam
-    for (const x of [DOOR.x - 6.6, DOOR.x - 1.8, DOOR.x + 1.8, DOOR.x + 6.6]) {
+    for (const x of [DOOR.x - 6.6 * S, DOOR.x - 1.8 * S, DOOR.x + 1.8 * S, DOOR.x + 6.6 * S]) {
       const z = POR.z1 - 0.9, yt = porTop - 0.5;
       Bn.add('metal', geo.box(0.03, 0.9, 0.03), M(x, yt - 0.45, z), '#2b2622');
       Bn.add('wood', geo.cyl(0.2, 0.2, 0.08, 10), M(x, yt - 0.94, z), COL.dark);
@@ -730,13 +755,14 @@ CX.add('main', (ctx, C) => {
       void xs;
     }
     // 장독 groups and planters on the terrace in front of the wings
-    const jars = [[-95.5, 3.5, 'dok', 1.0], [-94.2, 4.6, 'hangari', 0.9], [-96.6, 4.9, 'jungduri', 0.8], [-95.1, 6.0, 'danji', 1.2], [-37.5, 3.5, 'dok', 1.0], [-38.8, 4.7, 'hangari', 0.95], [-36.4, 4.9, 'jungduri', 0.8], [-37.9, 6.1, 'danji', 1.2]];
+    const jx0 = TER.x0 + 6 * S2, jx1 = TER.x1 - 6 * S2, jz = TER.z1 - 4.5;      // 장독 groups on the terrace corners in front of the wings
+    const jars = [[jx0, jz, 'dok', 1.0], [jx0 + 1.3, jz + 1.1, 'hangari', 0.9], [jx0 - 1.1, jz + 1.4, 'jungduri', 0.8], [jx0 + 0.4, jz + 2.5, 'danji', 1.2], [jx1, jz, 'dok', 1.0], [jx1 - 1.3, jz + 1.2, 'hangari', 0.95], [jx1 + 1.1, jz + 1.4, 'jungduri', 0.8], [jx1 - 0.4, jz + 2.6, 'danji', 1.2]];
     for (const [x, z, kind, s] of jars) {
       Bn.add('stone', geo.cyl(0.62 * s, 0.66 * s, 0.12, 14), M(x, P + 0.06, z), '#cfc8bb');
       Bn.add('glaze', K.jarGeometry(kind, 18), M(x, P + 0.12, z, 0, s), '#7a4a2c');
       Bn.add('glaze', K.lidGeometry(14, (K.JAR_PROFILES[kind] || K.JAR_PROFILES.hangari).reduce((m, p) => (p[1] > m[1] ? p : m), [0, 0])[0] * 1.05), M(x, P + 0.12 + K.jarTop(kind) * s - 0.02, z, 0, s), '#6a3e25');
     }
-    const pinesAt = [[-90.5, 4.4], [-81.5, 5.6], [-50.5, 5.6], [-41.5, 4.4]];
+    const pinesAt = [[TER.x0 + 11 * S, TER.z1 - 3.6], [TER.x0 + 20 * S, TER.z1 - 2.4], [TER.x1 - 20 * S, TER.z1 - 2.4], [TER.x1 - 11 * S, TER.z1 - 3.6]];
     for (const [x, z] of pinesAt) {
       box(Bn, 'stone', 1.7, 0.75, 1.7, x, P + 0.375, z, 0, '#c4bcae');
       box(Bn, 'stone', 1.8, 0.08, 1.8, x, P + 0.76, z, 0, COL.coping);
@@ -840,28 +866,28 @@ CX.add('main', (ctx, C) => {
   if (baseMeshes.roof) { G.world.cameraBlockers.push(baseMeshes.roof); blockers.push(baseMeshes.roof); }
 
   // colliders: the halls themselves
-  for (const p of [core, wingW, wingE]) ctx.addCollider({ shape: 'box', x: (p.x0 + p.x1) / 2, z: (p.z0 + p.z1) / 2, hw: (p.x1 - p.x0) / 2 + 0.2, hd: (p.z1 - p.z0) / 2 + 0.2 });
+  for (const p of [core, wingW, wingE]) ctxL.addCollider({ shape: 'box', x: (p.x0 + p.x1) / 2, z: (p.z0 + p.z1) / 2, hw: (p.x1 - p.x0) / 2 + 0.2, hd: (p.z1 - p.z0) / 2 + 0.2 });
 
   // ================================================================= 6. doors, lights
   const DOOR_SPOT = { x: DOOR.x, y: P, z: core.z1 + 1.6 };
   let doorHandle = null;
   const office = !!G.sys.places?.def?.('PL_OFFICE');
   if (office) {
-    doorHandle = ctx.interact({
+    doorHandle = ctxL.interact({
       id: 'CX_MAIN_DOOR', kind: 'door', label: '🏛️ 본관 로비로 들어가기', kidLabel: '본관 안으로', emoji: '🏛️', radius: 3.4, priority: 0.8,
       position: { x: DOOR.x, y: P + 1.2, z: core.z1 + 1.0 },
       onInteract: () => { try { G.sys.places.enter('PL_OFFICE'); } catch (e) { G.log.warn('WORLD', 'complex-main: lobby enter failed', e?.message || e); } },
     });
-    ctx.interact({
+    ctxL.interact({
       id: 'CX_MAIN_SIDE_DOOR', kind: 'door', label: '🏛️ 본관으로 들어가기 (옆문)', kidLabel: '본관 안으로', emoji: '🏛️', radius: 3.0, priority: 0.6,
       position: { x: SIDE.x + 1.0, y: P + 1.2, z: SIDE.z },
       onInteract: () => { try { G.sys.places.enter('PL_OFFICE'); } catch (e) { G.log.warn('WORLD', 'complex-main: lobby enter failed', e?.message || e); } },
     });
   }
   if (!low && typeof ctx.light === 'function') {
-    ctx.light({ x: DOOR.x - 4, y: porTop - 0.6, z: POR.z1 - 2.5, color: 0xffb46a, intensity: 9, distance: 14, decay: 2, day: 0.0 });
-    ctx.light({ x: DOOR.x + 4, y: porTop - 0.6, z: POR.z1 - 2.5, color: 0xffb46a, intensity: 9, distance: 14, decay: 2, day: 0.0 });
-    ctx.light({ x: SIDE.x + 1.2, y: P + 3.4, z: SIDE.z, color: 0xffc27a, intensity: 5, distance: 9, decay: 2, day: 0.0 });
+    ctxL.light({ x: DOOR.x - 4, y: porTop - 0.6, z: POR.z1 - 2.5, color: 0xffb46a, intensity: 9, distance: 14, decay: 2, day: 0.0 });
+    ctxL.light({ x: DOOR.x + 4, y: porTop - 0.6, z: POR.z1 - 2.5, color: 0xffb46a, intensity: 9, distance: 14, decay: 2, day: 0.0 });
+    ctxL.light({ x: SIDE.x + 1.2, y: P + 3.4, z: SIDE.z, color: 0xffc27a, intensity: 5, distance: 9, decay: 2, day: 0.0 });
   }
 
   // ================================================================= 7. levels of detail, update, stats, dispose
@@ -887,10 +913,15 @@ CX.add('main', (ctx, C) => {
     }
     void t;
   }
+  const planRect = (r) => { const a = toPlan(r.x0, r.z0), b = toPlan(r.x1, r.z1); return { x0: Math.min(a[0], b[0]), z0: Math.min(a[1], b[1]), x1: Math.max(a[0], b[0]), z1: Math.max(a[1], b[1]) }; };
   const countTris = (g) => { let n = 0, calls = 0; g.traverse((o) => { if (o.isMesh && o.visible !== false && o.material && o.material.visible !== false && o.geometry) { calls++; const gi = o.geometry; n += (gi.index ? gi.index.count : gi.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1); } }); return { tris: Math.round(n), calls }; };
   const api = {
-    built: true, get lod() { return forced || lod; }, door: DOOR_SPOT, sideDoor: { x: SIDE.x + 1.2, y: P, z: SIDE.z }, terrace: { ...TER, y: P }, pad: { ...PAD }, stairs: { ...ST },
-    office, podiumY: P, floors: { P, T0, T1, T2, F3, coreTop, wingTop, porTop },
+    built: true, get lod() { return forced || lod; },
+    // [complex-look] plan coordinates (PL_ALLOT local metres): the frame is applied; `local` keeps the building's own frame
+    door: { x: toPlan(DOOR_SPOT.x, DOOR_SPOT.z)[0], y: DOOR_SPOT.y, z: toPlan(DOOR_SPOT.x, DOOR_SPOT.z)[1] }, sideDoor: { x: toPlan(SIDE.x + 1.2, SIDE.z)[0], y: P, z: toPlan(SIDE.x + 1.2, SIDE.z)[1] },
+    terrace: { ...planRect(TER), y: P }, pad: planRect(PAD), stairs: { ...planRect(ST), y0: ST.y0, y1: ST.y1 },
+    frame: { x: FR.x, z: FR.z, rot: FR.rot }, scale: S, toPlan, toLocal, local: { door: DOOR_SPOT, side: SIDE, terrace: { ...TER }, pad: { ...PAD }, stairs: { ...ST }, core: { x0: core.x0, z0: core.z0, x1: core.x1, z1: core.z1 } },
+    office, podiumY: P, floors: { P, T0, T1, T2, F3, coreTop, wingTop, porTop }, roofTop: roofs.main && roofs.main.R ? roofs.main.R.y + roofs.main.R.H : coreTop,
     root, groups: { base: gBase, near: gNear, far: gFar },
     setLod(name) { forced = name || null; if (name) setLod(name); },
     stats() { return { base: countTris(gBase), near: countTris(gNear), far: countTris(gFar), lod: forced || lod, low }; },

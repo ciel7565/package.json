@@ -180,13 +180,18 @@ async function runPreset(q) {
     const pushed = W.resolve(v, 0.35, P);
     const doorFree = !pushed && Math.hypot(v.x - door.x - ox, v.z - door.z - oz) < 0.01;
     const doorY = W.heightAt(door.x + ox, door.z + oz, P + 0.1);
-    const viaStairs = walkPath([[door.x, 30], [door.x, ST.z1 + 1], [door.x, door.z]]);
-    const viaWest = walkPath([[-110, 14], [-97, 9.4], [-79.5, 9.4], [-76, 9.6], [door.x - 3, door.z]]);
-    // the east ramp's foot faces the jar circle's wall: it is reached along the front, from the plaza
-    const viaEast = walkPath([[-50, 18], [-38.6, 11.6], [-36.4, 9.2], [-52.5, 9.4], [-56, 9.6], [door.x + 3, door.z]]);
-    const onTop = walkPath([[door.x, door.z], [-62, 6.5], [T.x1 - 1.0, 6.5], [T.x1 - 1.0, T.z0 + 1.0], [T.x0 + 1.0, T.z0 + 1.0], [T.x0 + 1.0, 6.5], [door.x - 4, 6.5], [door.x, door.z]], P);
-    // west and north of the building on the ground (the corridor, the village terrace and the jar circle close the east)
-    const ground = walkPath([[door.x - 12, 24], [-108, 24], [-108, -45], [-48, -45]]);   // the village terrace wall closes the north-east
+    // [complex-look] plan v2: the building has its own frame (front = local +z); the routes are given in that frame and go
+    // through M.toPlan, so they hold for any position and facing of the building
+    const L = M.local, LT = L.terrace, LP = L.pad, LS = L.stairs, LD = L.door;
+    const lp = (pts) => pts.map(([lx, lz]) => M.toPlan(lx, lz));
+    const zr = LT.z1 + 1.3;                                                   // the walking line of the two ramps
+    const viaStairs = walkPath(lp([[LD.x, LS.z1 + 10], [LD.x, LS.z1 + 1], [LD.x, LD.z]]));
+    const viaWest = walkPath(lp([[LT.x0 - 2, LS.z1 + 8], [LT.x0 + 6.5 * M.scale - 1.5, zr], [LP.x0 - 2.4, zr], [LP.x0 + 1.2, zr + 0.2], [LD.x - 3, LD.z]]));
+    const viaEast = walkPath(lp([[LT.x1 + 2, LS.z1 + 8], [LT.x1 - 6.5 * M.scale + 1.5, zr], [LP.x1 + 2.4, zr], [LP.x1 - 1.2, zr + 0.2], [LD.x + 3, LD.z]]));
+    const zt = LT.z1 - 1.5;
+    const onTop = walkPath(lp([[LD.x, LD.z], [LD.x + 4, zt], [LT.x1 - 1.0, zt], [LT.x1 - 1.0, LT.z0 + 1.0], [LT.x0 + 1.0, LT.z0 + 1.0], [LT.x0 + 1.0, zt], [LD.x - 4, zt], [LD.x, LD.z]]), P);
+    // along the whole front on the ground (the yard, the village terrace and the jar circle close the other sides)
+    const ground = walkPath(lp([[LT.x1 - 6, LS.z1 + 4.5], [LT.x0 + 6, LS.z1 + 4.5]]));
     const sideDoor = M.sideDoor;
     v.set(sideDoor.x + ox, P, sideDoor.z + oz);
     const sidePushed = W.resolve(v, 0.35, P);
@@ -251,14 +256,15 @@ async function runPreset(q) {
         const G = window.G, C = G.data.complex, d = G.sys.places.def(G.sys.places.current), cam = G.sys.camera, M = G.complexMain, w = G.sys.weather;
         const night = view.startsWith('night');
         try { w.setLockTime(true); w.setAuto(false); w.setHour(night ? 20.8 : hour); const ids = Object.keys(G.data.weather || {}); const clear = ids.find((i) => /CLEAR|SUNNY|FINE/i.test(i)) || ids[0]; if (clear) w.set(clear, { instant: true }); } catch (e) { /* weather optional */ }
-        const ox = d.origin.x, oz = d.origin.z, Dr = M.door, P = M.podiumY;
+        const ox = d.origin.x, oz = d.origin.z, Dr = M.door, P = M.podiumY, LL = M.local, LT = LL.terrace, LS = LL.stairs, LD = LL.door;
+        const L3 = (lx, y, lz) => { const q = M.toPlan(lx, lz); return [q[0], y, q[1]]; };
         const V = {
           aerial: () => { const v = C.viewpoints.find((x) => x.id === 'aerial'); return [[v.x, v.y, v.z], [v.look.x, v.look.y, v.look.z], v.fov]; },
-          deck: () => { const v = C.viewpoints.find((x) => x.id === 'deck'); return [[v.x, v.y, v.z], [-62, 12, -14], 40]; },
-          entrance: () => [[Dr.x + 2.5, P + 1.65, Dr.z + 10], [Dr.x, P + 4.5, Dr.z - 2], 62],
-          corner: () => [[-112, 4.0, 22], [-86, 12, -10], 58],
-          eaves: () => [[Dr.x - 11, P + 1.6, Dr.z + 2.2], [Dr.x - 13, P + 9.5, Dr.z - 3.5], 70],
-          side: () => [[-12, 6, -2], [-40, 9, -18], 55],
+          deck: () => { const v = C.viewpoints.find((x) => x.id === 'deck'); return [[v.x, v.y, v.z], [M.frame.x, 14, M.frame.z], 30]; },
+          entrance: () => [L3(LD.x + 2.5, P + 1.65, LD.z + 12 * M.scale), L3(LD.x, P + 5.5, LD.z - 2), 62],
+          corner: () => [L3(LT.x1 + 16, 4.0, LS.z1 + 14), L3(LT.x1 - 14, 14, LD.z - 16), 58],
+          eaves: () => [L3(LD.x - 11 * M.scale, P + 1.6, LD.z + 2.2), L3(LD.x - 13 * M.scale, P + 12, LD.z - 3.5), 70],
+          side: () => [L3(LT.x1 + 26, 6, LT.z0 + 30), L3(LT.x1 - 12, 11, LT.z0 + 22), 55],
           'night-aerial': () => V.aerial(), 'night-entrance': () => V.entrance(),
         };
         const [p, l, fov] = V[view]();

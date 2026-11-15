@@ -94,7 +94,7 @@ function spacingCheck(LL) {
 {
   const r = spacingCheck(L);
   numbers.minSpacing = +r.worst.toFixed(3);
-  check('no two units closer than the minimum spacing of their kind (jar 1.24 · plot 1.39 · store 1.19 m)', r.bad === 0, r.bad ? `${r.bad} pairs, e.g. ${r.sample}` : `closest pair ${r.worst.toFixed(3)} m`);
+  check(`no two units closer than the minimum spacing of their kind (jar ${C.K.MIN_SPACING.jar} · plot ${C.K.MIN_SPACING.plot} · store ${C.K.MIN_SPACING.store} m)`, r.bad === 0, r.bad ? `${r.bad} pairs, e.g. ${r.sample}` : `closest pair ${r.worst.toFixed(3)} m`);
   const per = {};
   for (let i = 0; i < N; i++) { const k = kindOf(i); per[k] = per[k] || { n: 0 }; per[k].n++; }
   numbers.perKind = Object.fromEntries(Object.entries(per).map(([k, v]) => [k, v.n]));
@@ -136,8 +136,12 @@ function spacingCheck(LL) {
   }
   numbers.maxPathDistance = +worst.toFixed(3);
   check('every unit within 3 m of an aisle or path', far === 0, far ? `${far} too far, e.g. ${sample}` : `farthest ${worst.toFixed(2)} m (${(performance.now() - t0).toFixed(0)} ms)`);
-  const narrow = C.paths.filter((p) => ['aisle', 'avenue', 'road', 'lane'].includes(p.kind) && p.w < C.K.AVENUE_MIN - 1e-9);
-  check('aisles, avenues, roads and lanes are at least 4 m wide', !narrow.length, narrow.map((p) => `${p.id} ${p.w}`).join(', ') || `${C.paths.length} paths`);
+  const narrow = C.paths.filter((p) => (['avenue', 'road', 'lane'].includes(p.kind) && p.w < C.K.AVENUE_MIN - 1e-9) || (p.kind === 'aisle' && p.w < C.K.AISLE_MIN - 1e-9));
+  check(`avenues, roads and lanes are at least ${C.K.AVENUE_MIN} m wide, the radial aisles of the jar yards ${C.K.AISLE_MIN} m`, !narrow.length, narrow.map((p) => `${p.id} ${p.w}`).join(', ') || `${C.paths.length} paths`);
+  // a jar never touches its neighbours and a walker (radius 0.35 m) passes between the groups of rows and along the wall
+  const KK = C.K, clearWalk = KK.RING_WALK - 2 * KK.JAR_R, clearRows = KK.RING_SPACING - 2 * KK.JAR_R, clearPitch = KK.JAR_PITCH - 2 * KK.JAR_R, wallWalk = KK.WALL_R - 0.25 - (C.rings.rows[C.rings.rows.length - 1] + KK.JAR_R);
+  check('jar yards: jars clear of each other, ring walks and the walk along the wall wide enough to walk', clearPitch >= 0.15 && clearRows >= 0.4 && clearWalk >= 1.0 && wallWalk >= 1.0 && KK.WALL_R <= 53,
+    `gap along a row ${clearPitch.toFixed(2)} m · between rows ${clearRows.toFixed(2)} m · ring walk ${clearWalk.toFixed(2)} m · wall walk ${wallWalk.toFixed(2)} m · wall r ${KK.WALL_R}`);
 }
 
 // ------------------------------------------------------------------ unitAt round trip + misses
@@ -156,9 +160,10 @@ function spacingCheck(LL) {
   // misses: aisle centre lines, ring walks, roads, building centres, water
   const miss = [];
   const ring = C.rings.GC, am = C.rings.AM;
-  for (let s = 0; s < 8; s++) for (let r = 12; r < 60; r += 1.3) { const a = s * Math.PI / 4; miss.push(['GC aisle', ring.cx + r * Math.cos(a), ring.cz + r * Math.sin(a)]); }
-  for (let s = 4; s <= 8; s++) for (let r = 12; r < 60; r += 1.3) { const a = s * Math.PI / 4; miss.push(['AM aisle', am.cx + r * Math.cos(a), am.cz + r * Math.sin(a)]); }
-  for (let k = 0; k < 10; k++) for (let a = 0.05; a < 6.28; a += 0.11) { const r = 11 - 1.2 + 5.6 * k; miss.push(['ring walk', ring.cx + r * Math.cos(a), ring.cz + r * Math.sin(a)]); }
+  const rA0 = C.K.RING_R0 + 1, rA1 = C.K.WALL_R;
+  for (let s = 0; s < 8; s++) for (let r = rA0; r < rA1; r += 1.3) { const a = s * Math.PI / 4; miss.push(['GC aisle', ring.cx + r * Math.cos(a), ring.cz + r * Math.sin(a)]); }
+  for (let s = 4; s <= 8; s++) for (let r = rA0; r < rA1; r += 1.3) { const a = s * Math.PI / 4; miss.push(['AM aisle', am.cx + r * Math.cos(a), am.cz + r * Math.sin(a)]); }
+  for (const r of C.rings.walks) for (let a = 0.05; a < 6.28; a += 0.11) miss.push(['ring walk', ring.cx + r * Math.cos(a), ring.cz + r * Math.sin(a)]);
   for (const e of C.elements) {
     if (e.type === 'road') for (let t = 0; t < e.pts.length - 1; t++) for (let q = 0; q <= 4; q++) miss.push(['road', e.pts[t][0] + (e.pts[t + 1][0] - e.pts[t][0]) * q / 4, e.pts[t][1] + (e.pts[t + 1][1] - e.pts[t][1]) * q / 4]);
     if (e.type === 'building' && e.kind !== 'storehouse') miss.push(['building ' + e.id, e.x, e.z]);
@@ -294,16 +299,106 @@ function spacingCheck(LL) {
   const w = {
     spawn: onWalk, jar: !C.walkable(A.x[jarI], A.z[jarI]), river: !C.walkable(-188, -30), main: !C.walkable(C.byId('B_MAIN').x, C.byId('B_MAIN').z),
     gatePassage: C.walkable(C.byId('B_GATE').x, C.byId('B_GATE').z), gateWing: !C.walkable(C.byId('B_GATE').x + 5 * Math.cos(C.byId('B_GATE').rot), C.byId('B_GATE').z - 5 * Math.sin(C.byId('B_GATE').rot)),
-    aisle: C.walkable(C.rings.GC.cx + 30, C.rings.GC.cz), outside: !C.walkable(400, 0), wall: !C.walkable(C.rings.GC.cx + 61.6 * Math.cos(0.4), C.rings.GC.cz + 61.6 * Math.sin(0.4)),
+    aisle: C.walkable(C.rings.GC.cx + 30, C.rings.GC.cz), outside: !C.walkable(400, 0), wall: !C.walkable(C.rings.GC.cx + C.K.WALL_R * Math.cos(0.4), C.rings.GC.cz + C.K.WALL_R * Math.sin(0.4)),
   };
   check('walkable(): spawn, aisles and the gate passage yes; jars, river, buildings, walls, outside no', Object.values(w).every(Boolean), Object.entries(w).map(([k, v]) => `${k} ${v ? '✓' : '✗'}`).join(' '));
-  const vp = C.viewpoints, vpOk = vp.length >= 4 && vp.every((p) => [p.x, p.y, p.z, p.look.x, p.look.y, p.look.z, p.fov].every(Number.isFinite)) && vp.some((p) => p.id === 'deck') && vp.some((p) => p.id === 'aerial');
-  check('spawn by the roundabout, the deck + aerial + photo viewpoints, the bus stop', vpOk && Math.hypot(S.x - C.busStop.x, S.z - C.busStop.z) < 15 && Number.isFinite(S.y),
+  const vp = C.viewpoints, vpOk = vp.length >= 4 && vp.every((p) => [p.x, p.y, p.z, p.look.x, p.look.y, p.look.z, p.fov].every(Number.isFinite)) && vp.some((p) => p.id === 'deck') && vp.some((p) => p.id === 'aerial') && vp.some((p) => p.id === 'hero');
+  check('spawn by the roundabout, the deck + hero + aerial + photo viewpoints, the bus stop', vpOk && Math.hypot(S.x - C.busStop.x, S.z - C.busStop.z) < 15 && Number.isFinite(S.y),
     `${vp.map((p) => p.id).join(', ')} · spawn (${S.x}, ${S.z})`);
   const deckStairs = C.paths.filter((p) => p.kind === 'stair' && p.ys);
-  const deckY = C.byId('DECK').y, top = Math.max(...deckStairs.flatMap((p) => p.ys)), bottom = Math.min(...deckStairs.flatMap((p) => p.ys));
-  check('the deck is reached by stair legs from the road (profile from the ground to the deck)', deckStairs.length >= 3 && Math.abs(top - deckY) < 1e-6 && Math.abs(bottom - C.height(-112, 141)) < 0.5,
-    `${deckStairs.length} legs ${bottom.toFixed(1)} → ${top.toFixed(1)} m`);
+  const DK = C.byId('DECK'), deckY = DK.y, top = Math.max(...deckStairs.flatMap((p) => p.ys)), bottom = Math.min(...deckStairs.flatMap((p) => p.ys));
+  const foot = C.byId('ST_DECK1').pts[0];
+  // the legs join end to end, none steeper than 40° on average, the first starts on the ground, the last ends on the pulpit
+  const legs = C.elements.filter((e) => e.type === 'stair' && /^ST_(DECK|SUMMIT)/.test(e.id));
+  let joined = true, steep = 0;
+  for (let i = 0; i < legs.length; i++) {
+    const a = legs[i].pts[0], b = legs[i].pts[legs[i].pts.length - 1], run = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    steep = Math.max(steep, (b[2] - a[2]) / run);
+    if (i && Math.hypot(a[0] - legs[i - 1].pts[legs[i - 1].pts.length - 1][0], a[1] - legs[i - 1].pts[legs[i - 1].pts.length - 1][1]) > 0.05) joined = false;
+  }
+  const last = legs[legs.length - 1].pts[legs[legs.length - 1].pts.length - 1];
+  check('만장대 전망대 is reached by stair legs from the ground (joined flights, none steeper than 40°, the last ends on the pulpit)', deckStairs.length >= 3 && Math.abs(top - deckY) < 1e-6 && Math.abs(bottom - C.height(foot[0], foot[1])) < 0.5 && joined && steep <= 0.84 && Math.hypot(last[0] - DK.cx, last[1] - DK.cz) <= DK.r + 0.6,
+    `${deckStairs.length} legs ${bottom.toFixed(1)} → ${top.toFixed(1)} m · steepest ${(Math.atan(steep) * 180 / Math.PI).toFixed(0)}°`);
+  // the lookout of image 3: 55–75 m above the plaza, the hero viewpoint = the follow camera behind a visitor on the pulpit
+  const LO = C.lookout, hero = vp.find((p) => p.id === 'hero'), up = LO.y - C.height(S.x, S.z);
+  const hOk = hero && hero.follow && Math.abs(Math.hypot(hero.x - hero.look.x, hero.y - hero.look.y, hero.z - hero.look.z) - hero.dist) < 0.01 && Math.hypot(hero.stand.x - DK.cx, hero.stand.z - DK.cz) < DK.r - 0.8;
+  const lift = C.byId('LIFT');
+  check('the lookout: a pulpit 55–75 m above the plaza, hero = the follow camera of a visitor on it, the lift for small visitors', up >= 55 && up <= 75 && hOk && lift && C.walkable(lift.bottom.x, lift.bottom.z) && Math.hypot(lift.top.x - DK.cx, lift.top.z - DK.cz) < DK.r,
+    `${up.toFixed(1)} m above the plaza · camera ${hero ? hero.dist : '?'} m behind, pitch ${hero ? hero.pitch : '?'} · lift ${lift ? lift.emoji : '-'}`);
+}
+
+// ------------------------------------------------------------------ plan v2: nothing overlaps, the main building's frame, the corridor
+{
+  const PI = Math.PI;
+  const segD = (px, pz, ax, az, bx, bz) => { const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz, t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / l2)) : 0; return Math.hypot(ax + dx * t - px, az + dz * t - pz); };
+  const polyD = (x, z, pts) => { let d = Infinity; for (let i = 0; i < pts.length - 1; i++) d = Math.min(d, segD(x, z, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])); return d; };
+  const inPoly = (x, z, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const xi = poly[i][0], zi = poly[i][1], xj = poly[j][0], zj = poly[j][1]; if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
+  const rect = (r) => (x, z) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
+  // exclusive footprints: [group, id, test]; two different GROUPS may never share a point (same group: e.g. the houses of the village)
+  const F = [];
+  const JC = C.byId('JARCIRCLE'), AMP = C.byId('AMPHI'), RB = C.byId('ROUNDABOUT'), TV = C.byId('TERRACE_VILLAGE'), SY = C.byId('STOREYARD'), KN = C.byId('KNOLL');
+  F.push(['circle', 'JARCIRCLE', (x, z) => Math.hypot(x - JC.cx, z - JC.cz) <= JC.wallR + 0.3]);
+  F.push(['amph', 'AMPHI', (x, z) => Math.hypot(x - AMP.cx, z - AMP.cz) <= AMP.wallR + 0.3 && z <= AMP.cz + 0.3]);
+  F.push(['round', 'ROUNDABOUT', (x, z) => Math.hypot(x - RB.cx, z - RB.cz) <= RB.r1]);
+  F.push(['knoll', 'KNOLL', (x, z) => Math.hypot(x - KN.cx, z - KN.cz) <= KN.r]);
+  F.push(['village', 'TERRACE_VILLAGE', rect(TV)]);
+  F.push(['yard', 'STOREYARD', rect(SY)]);
+  for (const e of C.elements) {
+    if (e.type === 'building' && e.kind !== 'hanok' && e.kind !== 'storehouse' && e.kind !== 'pavilion') {
+      if (e.rot) { const c = Math.cos(e.rot), sn = Math.sin(e.rot); F.push(['b:' + e.id, e.id, (x, z) => { const lx = (x - e.x) * c - (z - e.z) * sn, lz = (x - e.x) * sn + (z - e.z) * c; return Math.abs(lx) <= e.w / 2 && Math.abs(lz) <= e.d / 2; }]); }
+      else for (const p of e.parts || [{ x0: e.x - e.w / 2, z0: e.z - e.d / 2, x1: e.x + e.w / 2, z1: e.z + e.d / 2 }]) F.push(['b:' + e.id, e.id, rect(p)]);
+      if (e.terrace && e.kind === 'main') F.push(['b:' + e.id, e.id + ' podium', rect(e.terrace)]);
+    }
+    if (e.type === 'field') F.push(['f:' + e.id, e.id, (x, z) => inPoly(x, z, e.poly)]);
+    if (e.type === 'parking') F.push(['parking', e.id, rect(e)]);
+    if (e.type === 'kiln') F.push(['b:B_WORKSHOP', e.id, (x, z) => Math.abs(x - e.x) <= e.w / 2 && z >= Math.min(e.z0, e.z1) && z <= Math.max(e.z0, e.z1)]);
+    if (e.type === 'deck') F.push(['lookout', e.id, e.round ? (x, z) => Math.hypot(x - e.cx, z - e.cz) <= e.r : rect(e)]);
+    if (e.type === 'corridor') F.push(['corridor', e.id, (x, z) => polyD(x, z, e.pts) <= e.w / 2]);
+  }
+  const roads = C.elements.filter((e) => e.type === 'road');
+  const onRoad = (x, z) => roads.some((r) => polyD(x, z, r.pts) <= r.w / 2);
+  const B = C.bounds, clash = new Map();
+  let roadHits = 0, roadSample = '', unitsOnRoad = 0;
+  for (let z = B.minZ; z <= B.maxZ; z += 1.5) for (let x = B.minX; x <= B.maxX; x += 1.5) {
+    let g0 = null, id0 = null;
+    for (const [g, id, test] of F) {
+      if (!test(x, z)) continue;
+      if (g0 !== null && g !== g0) { const k = [id0, id].sort().join(' ∩ '); clash.set(k, (clash.get(k) || 0) + 1); }
+      if (g0 === null) { g0 = g; id0 = id; }
+    }
+    if (onRoad(x, z) && g0 !== null && g0 !== 'round' && g0 !== 'parking') { roadHits++; if (!roadSample) roadSample = `${id0} (${x}, ${z})`; }
+  }
+  for (let i = 0; i < N; i++) if (onRoad(A.x[i], A.z[i]) || Math.hypot(A.x[i] - RB.cx, A.z[i] - RB.cz) < RB.r1) unitsOnRoad++;
+  // the corridor may pass the knoll (it ends on it); everything else must be disjoint
+  const bad = [...clash.entries()].filter(([k]) => !(k.includes('CORRIDOR') && k.includes('KNOLL')) && !(k.includes('CORRIDOR') && k.includes('B_MAIN podium')));
+  check('plan v2: no two footprints overlap (circle, amphitheatre, buildings and the podium, fields, parking, yard, village, knoll, corridor, lookout)', !bad.length, bad.length ? bad.slice(0, 6).map(([k, n]) => `${k} ×${n}`).join(', ') : `${F.length} footprints on a 1.5 m grid`);
+  check('plan v2: no road runs over a building, a field, a jar yard or a unit', roadHits === 0 && unitsOnRoad === 0, roadHits ? `${roadHits} points, e.g. ${roadSample}` : `${roads.length} roads · ${unitsOnRoad} units on asphalt`);
+  // the main building: 1.35 × phase 8, turned to face west; parts = its local footprints through the frame
+  const M = C.byId('B_MAIN'), fr = M.frame, c = Math.cos(fr.rot), sn = Math.sin(fr.rot);
+  const toPlan = (lx, lz) => [fr.x + lx * c + lz * sn, fr.z - lx * sn + lz * c];
+  let frameBad = '';
+  for (const p of M.parts) {
+    const a = toPlan(p.local.x0, p.local.z0), b = toPlan(p.local.x1, p.local.z1);
+    const r = { x0: Math.min(a[0], b[0]), z0: Math.min(a[1], b[1]), x1: Math.max(a[0], b[0]), z1: Math.max(a[1], b[1]) };
+    if (['x0', 'z0', 'x1', 'z1'].some((k) => Math.abs(r[k] - p[k]) > 1e-6)) frameBad += ` ${p.id}`;
+  }
+  const core = M.parts.find((p) => p.id === 'core'), por = M.parts.find((p) => p.id === 'portico');
+  const front = toPlan(0, 1)[0] - fr.x < -0.99;                          // local +z (the front) points west
+  const doorOnFront = Math.abs(M.door.x - core.x0) < 0.5 && M.door.z > core.z0 && M.door.z < core.z1 && por.x1 <= core.x0 + 1e-6;
+  const jcGap = Math.min(...M.parts.map((p) => Math.hypot(Math.max(p.x0 - JC.cx, 0, JC.cx - p.x1), Math.max(p.z0 - JC.cz, 0, JC.cz - p.z1)))) - JC.wallR;
+  check('본관 v2: 1.35 × as large, faces west (portico towards the roundabout), frame ↔ parts agree, the door on the front, the circle beside its south wing',
+    !frameBad && front && doorOnFront && Math.abs(M.scale - 1.35) < 1e-9 && M.h > 27 && core.x1 - core.x0 >= 55 && core.z1 - core.z0 >= 53 && jcGap > 3 && jcGap < 12 && C.door.x === M.door.x && C.door.place === 'PL_OFFICE',
+    frameBad ? `parts off the frame:${frameBad}` : `core ${(core.x1 - core.x0).toFixed(0)} × ${(core.z1 - core.z0).toFixed(0)} m, h ${M.h} m · door (${M.door.x}, ${M.door.z}) · ${jcGap.toFixed(1)} m to the circle's wall`);
+  // the corridor: starts at the side door, stays outside the circle's wall, ends on the knoll; the pavilion clear of the wall
+  const CO = C.byId('CORRIDOR'), side = M.doors[1];
+  let minR = Infinity;
+  for (let i = 0; i < CO.pts.length - 1; i++) for (let k = 0; k <= 20; k++) { const x = CO.pts[i][0] + (CO.pts[i + 1][0] - CO.pts[i][0]) * k / 20, z = CO.pts[i][1] + (CO.pts[i + 1][1] - CO.pts[i][1]) * k / 20; minR = Math.min(minR, Math.hypot(x - JC.cx, z - JC.cz)); }
+  const endK = Math.hypot(CO.pts[CO.pts.length - 1][0] - KN.cx, CO.pts[CO.pts.length - 1][1] - KN.cz);
+  check('the corridor: from the side door round the circle (outside its wall) to the pavilion on its knoll', Math.hypot(CO.pts[0][0] - side.x, CO.pts[0][1] - side.z) < 4.5 && minR - CO.w / 2 > JC.wallR + 0.25 && endK < KN.r && Math.hypot(KN.cx - JC.cx, KN.cz - JC.cz) - KN.r > JC.wallR + 5,
+    `starts ${Math.hypot(CO.pts[0][0] - side.x, CO.pts[0][1] - side.z).toFixed(1)} m from the side door · nearest edge ${(minR - CO.w / 2 - JC.wallR).toFixed(1)} m outside the wall · knoll ${(Math.hypot(KN.cx - JC.cx, KN.cz - JC.cz) - KN.r - JC.wallR).toFixed(1)} m outside`);
+  // every gate of a jar-yard wall opens onto a radial aisle
+  const gatesOff = C.elements.filter((e) => e.type === 'wall').flatMap((w) => (w.gates || []).filter((g) => Math.abs(g.a / (PI / 4) - Math.round(g.a / (PI / 4))) > 2e-3).map((g) => `${w.id}@${g.a}`));
+  check('every gate of the jar-yard walls stands at the end of a radial aisle', !gatesOff.length, gatesOff.join(', ') || `${C.byId('WALL_GC').gates.length} + ${C.byId('WALL_AM').gates.length} gates`);
 }
 
 // ------------------------------------------------------------------ draw() on a recording context
