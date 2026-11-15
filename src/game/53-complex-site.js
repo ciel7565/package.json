@@ -169,7 +169,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       else if (p.pts && p.pts.length >= 2) F.line(ch, p.pts, p.w / 2, 0.6, p.kind === 'walk' ? 0.7 : 1);
       else if (p.pts && p.pts.length === 1) F.circle(ch, p.pts[0][0], p.pts[0][1], p.w / 2, 0.5);
     }
-    if (C.lookout) F.circle(CH.rock, C.lookout.x, C.lookout.z, C.lookout.r + 9, 9);          // the bare rock head of 만장대
+    if (C.lookout) F.circle(CH.rock, C.lookout.x, C.lookout.z, C.lookout.r + 5, 7);          // the bare rock head of 만장대 (pines cling below it)
     siteMasks(F);
     return F;
   }
@@ -361,7 +361,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const slope = 1 - ny, lawnKeep = w(CH.lawn);
     const wild = Math.max(w(CH.wild), w(CH.forest), smooth(0.12, 0.3, slope + (n2 - 0.5) * 0.1)) * (1 - lawnKeep);
     if (wild > 0) { _c2.copy(col.forest).lerp(col.forestB, n2).lerp(col.lawnDeep, smooth(0.62, 0.9, n1) * 0.3); out.lerp(_c2, wild); over(wild, 0, 0.75, 0, 0); }
-    const rk = Math.max(smooth(0.42, 0.62, slope + (n2 - 0.5) * 0.15), w(CH.rock) * (0.75 + 0.25 * n2));
+    const rk = Math.max(smooth(0.5, 0.74, slope + (n2 - 0.5) * 0.15) * (1 - 0.55 * w(CH.forest)), w(CH.rock) * (0.75 + 0.25 * n2));   // (forest holds the steep slopes; rock only on faces)
     if (rk > 0) { _c2.copy(col.rock).lerp(col.rockB, n3).lerp(col.siteB, smooth(0.5, 0.9, n1) * 0.25); out.lerp(_c2, rk); over(rk, 0, 0, 0, 1); }
     // the river: pebbles on the banks, a dark bed under the water
     const wy = C.waterY(x, z);
@@ -1253,7 +1253,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       if (t) {
         Bk.add('metal', geo.cyl(0.05, 0.07, 1.0, 8), M(t.x, y + 0.5, t.z), '#4a4e53');
         Bk.add('metal', geo.cyl(0.2, 0.26, 0.07, 10), M(t.x, y + 0.035, t.z), '#3d4044');
-        Bk.add('glossy', geo.cyl(0.08, 0.12, 0.56, 12), M(t.x, y + 1.12, t.z, e.view || 0, 1, 1, 1, PI / 2 - 0.3), '#2f5d8a');
+        Bk.add('glossy', geo.cyl(0.08, 0.12, 0.56, 12), M(t.x, y + 1.12, t.z, e.view || 0, 1, 1, 1, PI / 2 + 0.3), '#2f5d8a');   // aimed down at the site
         col({ shape: 'circle', x: t.x, z: t.z, r: 0.24 });
         ctx.interact({ id: 'CX_TELESCOPE', kind: 'look', label: '🔭 망원경으로 단지 보기', kidLabel: '🔭 멀리 보기', emoji: '🔭', radius: 2.2,
           position: { x: t.x, y: y + 1.1, z: t.z }, onInteract: () => lookFromDeck() });

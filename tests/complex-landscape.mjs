@@ -120,7 +120,7 @@ function nodePart() {
       if (rings.some((r) => Math.hypot(x - r.cx, z - r.cz) < r.wallR + 1 && (r.type === 'jarcircle' || z < r.cz + 1))) { bad.push(`${t.src} inside a jar ring wall`); continue; }
       if (fields.some((f) => inPoly(x, z, f.poly))) { bad.push(`${t.src} on a field`); continue; }
       if (rects.some((r) => x > Math.min(r.x0, r.x1) && x < Math.max(r.x0, r.x1) && z > Math.min(r.z0, r.z1) && z < Math.max(r.z0, r.z1))) { bad.push(`${t.src} on a pad`); continue; }
-      if (t.src === 'forest' && deckClear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r)) { bad.push('forest tree in the deck view corridor'); continue; }
+      if (t.src === 'forest' && deckClear.some((c) => P.clearHit(c, x, z, -0.01, t.y + 17 * 1.2 * (t.s || 1)))) { bad.push('forest tree in the deck view corridor'); continue; }
       if (!Number.isFinite(t.y)) bad.push('y not finite');
     }
     check(`${q}: ${N} sampled trees stand on no road / path / pad / ring / field / building / water / view corridor`, bad.length === 0, bad.slice(0, 6).join(' · ') || `${N} checked`);
@@ -147,7 +147,7 @@ function nodePart() {
       if (C.waterY(c.x, c.z) > -1e6 && C.inWater(c.x, c.z)) { bad++; continue; }
       if (roads.some((r) => P.polyNear(c.x, c.z, r.pts).d < r.w / 2 + 1)) { bad++; continue; }
       if (inB && C.pathDistance(c.x, c.z).d < 2) { bad++; continue; }
-      if (clear.some((o) => Math.hypot(c.x - o.x, c.z - o.z) < o.r)) { bad++; continue; }
+      if (clear.some((o) => P.clearHit(o, c.x, c.z, -0.01, c.y + 3.6 * c.s))) { bad++; continue; }
     }
     check(`canopy: ${seen} sampled crowns stand on no water, road or path and keep the lookout's lines of sight free; firs among them`, bad === 0 && firs > seen * 0.08, `bad ${bad} · firs ${firs}`);
     check('canopy is deterministic', JSON.stringify(P.canopy(C, 'medium').list.slice(0, 80)) === JSON.stringify(cn.medium.list.slice(0, 80)), '');

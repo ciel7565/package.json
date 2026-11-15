@@ -310,7 +310,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
           if (!pointInPoly(x, z, e.poly)) continue;
           const od = outside(x, z, B);
           if (od > Q.belt || (Q.belt > BELT * 0.75 && od > BELT * 0.75 && hash2(i, j, seed + 6) < 0.3 * smooth(BELT * 0.75, Q.belt, od))) continue;
-          if (e.clear && e.clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r)) continue;
+          if (e.clear && e.clear.some((c) => clearHit(c, x, z, 0, H(x, z) + 17 * 1.2))) continue;
           const kind = pickSpecies(e.species || { pine: 1 }, hash2(i, j, seed + 2));
           const s = (0.82 + hash2(i, j, seed + 3) * 0.4) * (kind === 'pine_sculpted' ? 0.6 : 1);
           if (blocked(C, x, z, 2.2 * s, {})) { counts.rejected++; continue; }
@@ -400,6 +400,15 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     return out;
   }
 
+  /** [complex-look] is (x, z) inside the clearing c (+ pad)? A clearing with `below` [ax, ay, az, bx, by, bz] (a line of
+   *  sight) only clears what would rise above that line less `m` metres: `top` is the highest the tree could reach. */
+  function clearHit(c, x, z, pad, top) {
+    if (Math.hypot(x - c.x, z - c.z) >= c.r + pad) return false;
+    const L = c.below; if (!L || !(top === top)) return true;
+    const dx = L[3] - L[0], dz = L[5] - L[2], q = dx * dx + dz * dz || 1;
+    const t = clamp(((x - L[0]) * dx + (z - L[2]) * dz) / q, 0, 1);
+    return top > L[1] + (L[4] - L[1]) * t - (c.m || 0);
+  }
   // ---------------------------------------------------------------- the closed canopy (one crown per tree, no trunks)
   // [complex-look] image 3: a dark, closed forest down to the site's edge. Every forested slope within `near` metres of
   // the site carries small individual crowns on a jittered grid (they sink into each other and into the slope); beyond
@@ -415,6 +424,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     const clear = [];
     for (const F of forests) for (const c of F.e.clear || []) if (!clear.some((o) => o.x === c.x && o.z === c.z)) clear.push(c);
     const mount = typeof C.natural === 'function' && typeof C.ground === 'function';
+    const crag = forests.find((F) => F.e.crag), inCrag = (x, z) => !!crag && x > crag.box.x0 && x < crag.box.x1 && z > crag.box.z0 && z < crag.box.z1 && pointInPoly(x, z, crag.e.poly);
     const st = Q.step, big = st > 7 ? 1.32 : 1;
     for (let gz = B.minZ - Q.near, j = 0; gz < B.maxZ + Q.near; gz += st, j++) {
       for (let gx = B.minX - Q.near + (j & 1 ? st / 2 : 0), i = 0; gx < B.maxX + Q.near; gx += st, i++) {
@@ -424,7 +434,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         if (od > 150 && hash2(i, j, 813) < 0.5 * smooth(150, Q.near, od)) continue;        // thinner far away (bigger crowns there)
         const inside = od < 1e-9;
         if (inside && !(mount && C.natural(x, z) - C.ground(x, z) > 2.5)) continue;       // in the site: only on the mountain slopes
-        if (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r + 2)) continue;          // the lookout and its line of sight
+        if (clear.some((c) => clearHit(c, x, z, 2, H(x, z) + 3.6 * 3.5 * 1.32))) continue;   // the lookout and its line of sight
         if (river && polyNear(x, z, river.pts).d < river.w / 2 + 6) continue;
         let open = 0;                                                                     // the valley floors beyond the plan's river stay open
         for (const A of axes) { if (A.id === 'E') continue; const r = polyNear(x, z, A.pts); if (r.s < A.s0) continue; open = Math.max(open, 1 - smooth(14, 40, r.d)); }
@@ -435,7 +445,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         if (!(y === y)) continue;
         const hl = H(x - 5, z), hr = H(x + 5, z), hu = H(x, z - 5), hd = H(x, z + 5);
         if (!(hl === hl && hr === hr && hu === hu && hd === hd)) continue;
-        if (Math.max(Math.abs(hr - hl), Math.abs(hd - hu)) / 10 > 1.35) continue;         // a rock face carries no tree
+        if (Math.max(Math.abs(hr - hl), Math.abs(hd - hu)) / 10 > (inCrag(x, z) ? 2.4 : 1.35)) continue;   // a rock face carries no tree (but pines cling to 만장대's granite)
         const cvx = Math.max(2 * y - hl - hr, 2 * y - hu - hd);                           // > 0 on a ridge, < 0 in a gully
         let conif = 0.42;
         for (const F of forests) { const b = F.box; if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue; if (pointInPoly(x, z, F.e.poly)) { const sp = F.e.species || {}; conif = (sp.pine || 0) + (sp.fir || 0) + 0.08; break; } }
@@ -450,7 +460,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     return out;
   }
 
-  const plan = { land, trees, canopy, blocked, cars, ridgeH, carve, axes: axesOf, outside, polyNear, footprints, SP, SP_NAMES, PAINTS };
+  const plan = { land, trees, canopy, clearHit, blocked, cars, ridgeH, carve, axes: axesOf, outside, polyNear, footprints, SP, SP_NAMES, PAINTS };
   /** metres from (x, z) (PL_ALLOT local) to the open water of the river (0 on the water) — for the river's sound */
   function waterDistance(x, z) {
     const C = G.data && G.data.complex, river = C && C.byId && C.byId('RIVER');
