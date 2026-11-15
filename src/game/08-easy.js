@@ -176,7 +176,7 @@
           if (v) u.voice = v;
           u.rate = clamp(Number(item.rate || S().voiceRate) || 0.95, 0.6, 1.4);
           u.pitch = 1.1;
-          u.volume = clamp((Number(S().volumeMaster) || 0.8) * 1.15, 0.25, 1);
+          u.volume = clamp((Number(S().volumeMaster) || 0.8) * 1.15, 0.25, 1) * clamp(Number(G.sys.audio?.voiceGain?.() ?? 1) || 0, 0, 1); // [audio] 목소리
           u.onend = () => this.done(item, true);
           u.onerror = () => this.done(item, false);
           item.u = u; // keep a reference: some engines drop onend for garbage-collected utterances
