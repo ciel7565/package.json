@@ -213,6 +213,11 @@ final class Health
             $db['users'] = (int) Db::value('SELECT COUNT(*) FROM users');
             $admins = (int) Db::value("SELECT COUNT(*) FROM users WHERE role = 'admin'");
             $this->add('security', 'admin_exists', '관리자 계정', $admins > 0 ? 'ok' : 'warn', $admins . '명', $admins > 0 ? '' : 'install.php 로 설치하거나, 관리자 센터 로그인 화면의 "첫 관리자 지정"(설치 코드 필요) 또는 서버 컴퓨터에서 php cli/tfm.php promote 이메일 로 관리자를 지정하세요.');
+            // [entitle] CONTRACT §17.2: the default administrator password is a known-weak state the owner asked for — a
+            // failing row for as long as any administrator still uses it (users.pw_default = 1)
+            $defPw = Users::defaultPasswordCount();
+            $this->add('security', 'admin_default_password', '관리자 기본 비밀번호', $defPw > 0 ? 'fail' : 'ok', $defPw > 0 ? $defPw . '명이 기본 비밀번호를 쓰는 중' : '쓰는 계정 없음',
+                $defPw > 0 ? '설치할 때의 기본 비밀번호는 누구나 알아요. 관리자 센터 맨 위 빨간 칸이나 🔐 내 계정 탭에서 지금 바꾸세요 (서버 컴퓨터에서는 php cli/tfm.php reset-password admin --ask).' : '');
         } catch (\Throwable $e) {
             Log::error('HEALTH', 'db check failed: ' . $e->getMessage());
             $this->add('db', 'db_connect', 'DB 연결', 'fail', '실패', $driver === 'mysql' ? 'config.local.php 의 MySQL 접속 정보와 데이터베이스(fermentation_metaverse) 생성 여부를 확인하세요.' : 'data/ 폴더 쓰기 권한과 pdo_sqlite 확장을 확인하세요.');

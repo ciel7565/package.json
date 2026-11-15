@@ -156,7 +156,18 @@ final class AdminTotp
     public static function mode(): string
     {
         $m = strtolower(trim((string) Config::get('security.admin_2fa', 'optional')));
-        return in_array($m, ['off', 'optional', 'required'], true) ? $m : 'optional';
+        $m = in_array($m, ['off', 'optional', 'required'], true) ? $m : 'optional';
+        // [entitle] CONTRACT §17.2: the operator setting admin.twofa_required (admin tab ⚙️ 설정 → 관리자 보안). Stored on:
+        // every administrator must enrol ('required'). Stored off: a config file that says 'required' is relaxed to
+        // 'optional' (enrolled administrators still need their code; nobody's own 2-step sign-in is switched off here).
+        // Nothing stored: the config file decides, as before.
+        try {
+            if (class_exists('Tfm\\Settings') && Settings::has('admin.twofa_required')) {
+                if (Settings::get('admin.twofa_required')) $m = 'required';
+                elseif ($m === 'required') $m = 'optional';
+            }
+        } catch (\Throwable $e) { /* the config file's mode */ }
+        return $m;
     }
 
     private static function row(int $uid): ?array

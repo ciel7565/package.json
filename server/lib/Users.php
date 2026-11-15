@@ -70,7 +70,7 @@ final class Users
     public static function validLoginId(string $id): ?string
     {
         if ($id === '') return '로그인 아이디를 입력해 주세요.';
-        if (!preg_match('/^[a-z0-9_]{3,20}$/', $id)) return '로그인 아이디는 영어 소문자·숫자·밑줄(_)로 3~20자예요.';
+        if (!preg_match('/^[a-z0-9_]{3,20}\z/', $id)) return '로그인 아이디는 영어 소문자·숫자·밑줄(_)로 3~20자예요.';
         return null;
     }
 
@@ -166,7 +166,7 @@ final class Users
     public static function byLoginId(string $id): ?array
     {
         $id = mb_strtolower(trim($id));
-        return preg_match('/^[a-z0-9_]{3,20}$/', $id) ? Db::one('SELECT * FROM users WHERE login_id = ?', [$id]) : null;
+        return preg_match('/^[a-z0-9_]{3,20}\z/', $id) ? Db::one('SELECT * FROM users WHERE login_id = ?', [$id]) : null;
     }
     /**
      * What the login form accepts: an e-mail address, a login id (CONTRACT §17.2) or a nickname. The id is tried before

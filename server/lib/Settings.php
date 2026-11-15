@@ -69,7 +69,7 @@ final class Settings
     {
         if (self::$defs === null) self::$defs = [];
         if (isset(self::$defs[$key])) return;
-        if (!preg_match('/^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,3}$/', $key) || !in_array($type, self::TYPES, true) || !isset(self::GROUPS[$group])) {
+        if (!preg_match('/^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,3}\z/', $key) || !in_array($type, self::TYPES, true) || !isset(self::GROUPS[$group])) {
             throw new \InvalidArgumentException('bad setting definition: ' . $key);
         }
         if (($type === 'int' || $type === 'float') && (!is_array($range) || count($range) !== 2)) throw new \InvalidArgumentException('a number needs [min, max]: ' . $key);
@@ -240,7 +240,7 @@ final class Settings
     }
 
     /** [entitle] back to the default: the stored row of a registered key is removed (audited); false when there was none */
-    public static function unset(string $key, ?int $actorId = null): bool
+    public static function clear(string $key, ?int $actorId = null): bool
     {
         if (!self::isDefined($key)) throw new ApiException(400, 'INVALID_SETTING', '바꿀 수 없는 설정이에요.');
         $n = Db::exec('DELETE FROM settings WHERE k = ?', [$key]);
@@ -273,7 +273,7 @@ final class Settings
             }
         } elseif ($type === 'int') {
             if (is_string($value)) $value = trim($value);
-            if (is_int($value) || (is_string($value) && preg_match('/^-?\d{1,12}$/', $value)) || (is_float($value) && is_finite($value) && floor($value) === $value && abs($value) < 1e12)) {
+            if (is_int($value) || (is_string($value) && preg_match('/^-?\d{1,12}\z/', $value)) || (is_float($value) && is_finite($value) && floor($value) === $value && abs($value) < 1e12)) {
                 $n = (int) $value;
                 if ($n >= (int) $range[0] && $n <= (int) $range[1]) return $n;
             }

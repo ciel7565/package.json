@@ -30,6 +30,7 @@ require __DIR__ . '/../lib/bootstrap.php';
 
 use Tfm\AdminAllot;
 use Tfm\AdminLecture; // [lecture]
+use Tfm\AdminSettings; // [entitle]
 use Tfm\AdminGate;
 use Tfm\AdminOps;
 use Tfm\AdminPath;
@@ -83,9 +84,11 @@ const TABS = [
     'lecture' => ['🎓', '강의 자료'], // [lecture] CONTRACT §17.3
     'users' => ['👥', '사용자'],
     'sub' => ['⚡', '구독·결제'],
+    'settings' => ['⚙️', '설정'], // [entitle] CONTRACT §17.2
     'moderation' => ['🚨', '신고·채팅'],
     'security' => ['🛡️', '보안'],
     'twofa' => ['🔐', '2단계 인증'],
+    'account' => ['🔐', '내 계정'], // [entitle] CONTRACT §17.2
     'health' => ['🩺', '시스템 점검'],
     'dev' => ['🧑‍💻', '개발자'],
     'ai' => ['🤖', 'AI 도우미'],
@@ -304,6 +307,17 @@ function lectureReady(): bool
     return $ok;
 }
 
+/**
+ * [entitle] one action of ⚙️ 설정 / 🔐 내 계정 (CONTRACT §17.2 — AdminSettings::action does the work: the registry validates
+ * and audits every value, the password change ends every other session of the account). The 303 goes back to the tab.
+ */
+function doEntitle(Ctx $c, string $action): string
+{
+    $r = AdminSettings::action($action, $c, $_POST);
+    backExtra($r['back']);
+    return (string) $r['msg'];
+}
+
 /** [lecture] one `lecture_*` action (AdminLecture::action does the work); the 303 goes back to the card the form came from */
 function doLecture(Ctx $c, string $action): string
 {
@@ -444,6 +458,9 @@ function handlePost(Ctx $c)
             case 'lecture_add_link': case 'lecture_add_file': case 'lecture_save': case 'lecture_row': case 'lecture_delete':
             case 'lecture_replace': case 'lecture_images': case 'lecture_file': case 'lecture_settings':
                 $msg = doLecture($c, $action); break;
+            // ⚙️ 설정 · 🔐 내 계정 (CONTRACT §17.2) [entitle]: the work is lib/AdminSettings.php; the labels stay here
+            case 'settings_save': case 'settings_reset': case 'account_password': case 'account_login':
+                $msg = doEntitle($c, $action); break;
             default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
         }
         flash('ok', $msg);
@@ -530,6 +547,9 @@ function doSignIn(Ctx $c)
     Session::set('adm', null);
     Session::set('adm_pending', null);
     $login = postStr('login');
+    // [entitle] CONTRACT §17.2: a database born with v8 that has no administrator yet gets its default administrator when
+    // somebody signs in with the default id (the same throttled login follows; an unknown id is never revealed)
+    Users::ensureDefaultAdmin($login);
     try {
         $u = Auth::attemptLogin($login, postStr('password'), false);
     } catch (ApiException $e) {
@@ -821,6 +841,13 @@ function viewSignIn(Ctx $c): string
     $h = '<section class="card narrow hero"><div class="mascot" aria-hidden="true">🏺</div><h2>관리자 로그인</h2>'
         . '<p class="dim">체험관과 같은 계정으로 로그인해요. 비밀번호를 5번 틀리면 잠시 잠겨요.</p>';
     if ($c->user) $h .= '<p class="notice">체험관에는 이미 로그인되어 있어요. 관리자 센터는 안전을 위해 비밀번호를 한 번 더 확인해요.</p>';
+    // [entitle] CONTRACT §17.2: a brand-new server that has no administrator yet — shown on the server computer only
+    // (a tunnel or a proxy adds forwarding headers, so a visitor from outside never sees this line)
+    try {
+        if (Config::get('security.default_admin', true) && Http::isLocalhost() && Users::defaultAdminState() === 'pending' && !Users::adminAny()) {
+            $h .= '<p class="notice">🌱 새로 설치한 서버예요. 아이디 <code>' . e(Users::DEFAULT_ADMIN_ID) . '</code>, 비밀번호 <code>' . e(Users::DEFAULT_ADMIN_PASSWORD) . '</code> 로 로그인하면 관리자 계정이 만들어져요. 누구나 아는 비밀번호라서, 들어온 다음 맨 위 빨간 칸에서 <b>바로 새 비밀번호로 바꿔 주세요.</b></p>';
+        }
+    } catch (\Throwable $e) { /* the form works without the hint */ }
     $h .= '<form method="post" action="./" class="stack">' . tokenField($token) . '<input type="hidden" name="action" value="login">'
         . '<label>아이디(닉네임) 또는 이메일<input name="login" autocomplete="username" required maxlength="120"></label>'
         . '<label>비밀번호<input type="password" name="password" autocomplete="current-password" required maxlength="128"></label>'
@@ -1800,6 +1827,8 @@ function page(Ctx $c, string $tab, string $body, ?array $flash, bool $inside): s
         if (AdminTotp::mode() === 'optional' && !AdminTotp::enabled($c->uid())) {
             $banner = '<p class="banner">⚠️ <b>2단계 인증을 켜 주세요.</b> 비밀번호가 새어 나가도 휴대폰 인증 앱이 없으면 아무도 들어올 수 없게 돼요. <a href="./?tab=twofa">지금 켜기 →</a></p>';
         }
+        // [entitle] CONTRACT §17.2: the default password is still in use → a red banner with the change form on EVERY page
+        if (!empty($c->user['pw_default'])) $banner = AdminSettings::banner($c, Session::csrf()) . $banner;
     }
     $fl = $flash ? '<div class="flash ' . e(isset($flash['type']) ? $flash['type'] : 'ok') . '" role="status">' . e(isset($flash['msg']) ? $flash['msg'] : '') . '</div>' : '';
     // F15: nothing about versions or the database for a visitor — only inside
@@ -1827,6 +1856,8 @@ function render(Ctx $c): string
         switch ($tab) {
             case 'allot': $body = allotReady() ? AdminAllot::view($c, $_GET, Session::csrf()) : notReady('🏺 분양 관리', '분양 관리(lib/Allot.php · lib/AdminAllot.php)'); break;
             case 'lecture': $body = lectureReady() ? AdminLecture::view($c, $_GET, Session::csrf()) : notReady('🎓 강의 자료', '강의 자료(lib/Lecture.php · lib/AdminLecture.php)'); break; // [lecture]
+            case 'settings': $body = AdminSettings::view($c, $_GET, Session::csrf()); break; // [entitle]
+            case 'account': $body = AdminSettings::accountView($c, Session::csrf()); break; // [entitle]
             case 'beds': $body = viewBeds(); break;
             case 'storage': $body = viewStorage(); break;
             case 'reports': $body = viewReports(); break;

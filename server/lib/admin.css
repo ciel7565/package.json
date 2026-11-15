@@ -205,3 +205,10 @@ tr.bad td{background:rgba(255,107,94,.08)}
 @media (max-width:640px){.fgrid{grid-template-columns:minmax(0,1fr)}.stack>label.check{white-space:normal;align-items:flex-start}.stack>label.check input{margin-top:3px}}
 /* [lecture] 🎓 강의 자료: the slides of an image deck in the edit card (CONTRACT §17.3) */
 .lecgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;margin:8px 0}.lecthumb{margin:0;display:grid;gap:6px;align-content:start;min-width:0}.lecthumb img.photo{width:100%;aspect-ratio:16/9;object-fit:contain}.lecthumb figcaption{display:flex;gap:4px;align-items:center;flex-wrap:wrap}.card dl.facts code{overflow-wrap:anywhere;word-break:break-all}
+/* [entitle] ⚙️ 설정 · 🔐 내 계정 · the default-password banner (CONTRACT §17.2) */
+.banner.danger{background:rgba(255,107,94,.16);border:2px solid var(--red);color:#ffe3df;display:grid;gap:10px}.banner.danger h3{margin:0;font-size:1.05rem;color:#ffd1cc}.banner.danger p{margin:0}
+.bannerform{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:10px;align-items:end}.bannerform label{color:#ffe3df}
+.setform{display:grid;gap:0}.setrow{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:12px 18px;padding:12px 0;border-bottom:1px solid var(--line);align-items:start}.setrow:last-of-type{border-bottom:0}
+.setname label{color:var(--text);font-weight:600;font-size:.95rem;display:inline}.setname p,.setval p{margin:4px 0 0}.setval{display:grid;gap:6px;justify-items:start;min-width:0}
+.setval input[type=number],.setval input[type=text]{width:100%;max-width:260px}.setval select{width:auto;max-width:100%;flex:none}.setchecks{display:flex;gap:6px 14px;flex-wrap:wrap}.setnote{margin:8px 0 0}.setjump{justify-content:flex-start}
+@media (max-width:640px){.setrow{grid-template-columns:minmax(0,1fr)}.setval input[type=number],.setval input[type=text]{max-width:none}.bannerform{grid-template-columns:minmax(0,1fr)}}
