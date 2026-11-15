@@ -3049,6 +3049,7 @@
         v.camDist = cd;
         const hide = cd > HIDE_DIST;
         if (hide !== v.hidden) { v.hidden = hide; v.group.visible = !hide; v.label.setVisible(!hide); }
+        this._farDt = dt; const farFig = this._farPush(v, cd, hide); // [avatar]
         // simulate at a reduced rate far away
         v.simAcc += dt;
         const simStep = hide ? SLEEP_STEP : cd > FAR_DIST ? 0.066 : 0; // asleep when hidden, coarse when far
@@ -3059,7 +3060,7 @@
         }
         if (v.talk) talks.add(v.talk);
         // animation (skip off-screen / far)
-        if (!hide) {
+        if (!hide && !farFig) {
           let adt = dt;
           if (cd > 45) { v.animAcc += dt; if (v.animAcc < (cd > 85 ? 0.2 : 0.08)) adt = 0; else { adt = v.animAcc; v.animAcc = 0; } }
           if (adt > 0) {
@@ -3554,7 +3555,8 @@
         const cd = Math.hypot(p.x - cam.x, p.z - cam.z);
         const hide = cd > HIDE_DIST || G.sys.places?.remoteHidden?.(o.zoneId) === true;   // [places-kit] someone in another place (or the valley while I am inside)
         o.group.visible = !hide;
-        if (!hide) o.rig.update(dt, o.params);
+        this._farDt = dt; const farFig = this._farPush(o, cd, hide); // [avatar]
+        if (!hide && !farFig) o.rig.update(dt, o.params);
         this._tickBubble(o.bub, dt);
       }
       this._remotesMoving = moving;
@@ -3703,10 +3705,32 @@
     update(dt) {
       this._tickBubble(this._me, dt);
       if (!G.state) return;
+      this._farBegin(); // [avatar]
       if (this._mode === 'local') {
         this._updateVisitors(dt);
         this._updateVisitorScheduler(dt);
       } else this._updateServer(dt);
+      this._farEnd(); // [avatar]
+    },
+
+    // [avatar] CONTRACT §17.7 — far figures for crowds: past FAR_FIG metres a visitor / player is one instance of a shared
+    // instanced figure (G.avatar.far: ONE draw call for the whole crowd, ~230 triangles each, a walking swing) instead of
+    // its skinned rig (2 draw calls, ~20 000 triangles). The rig, its label and its animation sleep meanwhile. Lane
+    // scale-client may tune the distances.
+    _farDist() { const q = G.sys.engine?.preset?.name || G.settings?.quality || 'medium'; return q === 'high' ? 42 : q === 'low' ? 24 : 32; },
+    _farBegin() {
+      if (!this._far && G.avatar?.far?.create && G.sys.engine?.scene) { try { this._far = G.avatar.far.create(96); G.sys.engine.scene.add(this._far.mesh); } catch (e) { G.log.warn('SOCIAL', 'far figures unavailable', e?.message || e); this._far = false; } }
+      this._farD = this._farDist();
+      if (this._far) this._far.begin();
+    },
+    _farEnd() { if (this._far) this._far.end(); },
+    /** → true when this avatar is drawn as a far figure this frame (the caller hides its rig) */
+    _farPush(o, cd, hide) {
+      const far = !!this._far && !hide && cd > this._farD && !(o.rig?.isFallback);
+      if (far) { const r = o.rig; o._farPh = ((o._farPh || 0) + (o.params?.speed || 0) * (this._farDt || 0.016) / 1.6) % 1; this._far.push(o.position.x, o.position.y, o.position.z, o.rotY || 0, r?.appearance, o._farPh, Math.min(1, (o.params?.speed || 0) / 3)); }
+      if (far !== !!o._farOn) { o._farOn = far; if (o.group) o.group.visible = !far && !hide; o.label?.setVisible?.(!far && !hide); }
+      else if (far && o.group) o.group.visible = false;
+      return far;
     },
   };
 

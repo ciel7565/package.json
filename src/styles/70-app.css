@@ -1204,3 +1204,44 @@ body.easy .no3d-tile { min-height: max(var(--tap, 56px), 5.8rem); font-size: max
   .no3d-tile .emoji { font-size: 1.5rem; }
 }
 @media (forced-colors: active) { .no3d-tile { border: 1px solid CanvasText; } .no3d-tile:focus-visible { outline-color: Highlight; } }
+
+/* [avatar] CONTRACT §17.7 — the customiser: tabs and picture tiles (each tile is the look wearing that option) */
+.av-right { display: flex; flex-direction: column; gap: .6rem; min-height: 0; }
+.av-tabs:not(.av-kid-tabs) { display: flex; flex-wrap: wrap; gap: .3rem; }
+.av-tab:not(.av-kid-tab) { display: inline-flex; align-items: center; gap: .3rem; padding: .4rem .75rem; border-radius: 999px; background: rgba(255, 255, 255, .07);
+  border: 1px solid var(--line); font-size: .84rem; font-weight: 700; color: var(--text-mute); min-height: 2.5rem; }
+.av-tab:not(.av-kid-tab):hover { background: rgba(255, 255, 255, .13); color: var(--text); }
+.av-tab.active:not(.av-kid-tab) { background: rgba(255, 207, 74, .18); border-color: rgba(255, 207, 74, .7); color: #ffe7a6; }
+.av-tab:focus-visible, .av-tile:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.av-options.enter { animation: ts-fade-up .22s var(--ease) both; }
+.av-hint { margin: 0 0 .5rem; font-size: .82rem; color: var(--text-mute); }
+.av-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.4rem, 1fr)); gap: .45rem; }
+.av-tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: .15rem; padding: .3rem .25rem .35rem; border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 248, 230, .16), rgba(255, 248, 230, .05)); border: 1px solid var(--line); color: var(--text-mute);
+  font-size: .74rem; font-weight: 700; line-height: 1.15; min-height: 6.6rem; transition: transform .12s var(--ease), background-color .12s; }
+.av-tile:hover:not(:disabled) { background-color: rgba(255, 255, 255, .1); color: var(--text); transform: translateY(-1px); }
+.av-tile:active { transform: scale(.97); }
+.av-tile.active { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold) inset; color: #ffe7a6; background-color: rgba(255, 207, 74, .14); }
+.av-thumb { width: 4.6rem; height: 4.6rem; border-radius: 10px; background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, .22), rgba(255, 255, 255, .04)); }
+.av-tile-emoji { position: absolute; top: 1.6rem; font-size: 1.7rem; opacity: .85; transition: opacity .2s; pointer-events: none; }
+.av-tile.drawn .av-tile-emoji { opacity: 0; }
+.av-tile-lbl { text-align: center; word-break: keep-all; }
+.av-looks { grid-template-columns: repeat(auto-fill, minmax(6.2rem, 1fr)); }
+.av-looks .av-thumb { height: 6rem; }
+.av-row:has(.av-tiles) { grid-template-columns: 5.5rem minmax(0, 1fr); align-items: start; }
+/* easy mode: big tiles that speak, no labels needed */
+.av-tile-kid { min-height: calc(var(--tap) * 1.9); font-size: .86rem; border-radius: 18px; }
+.av-tile-kid .av-thumb { width: calc(var(--tap) * 1.45); height: calc(var(--tap) * 1.45); }
+.av-kid .av-tiles { grid-template-columns: repeat(auto-fill, minmax(calc(var(--tap) * 1.6), 1fr)); gap: .55rem; }
+.av-kid-tab.av-say-again { background: rgba(255, 255, 255, .12); }
+@media (max-width: 720px) {
+  .av-tiles { grid-template-columns: repeat(auto-fill, minmax(4.8rem, 1fr)); }
+  .av-row:has(.av-tiles) { grid-template-columns: minmax(0, 1fr); }
+  .av-thumb { width: 4rem; height: 4rem; }
+}
+@media (prefers-reduced-motion: reduce) { .av-tile, .av-options.enter { transition: none; animation: none; } }
+.avatar-modal.kid .av-view button { min-width: var(--tap); min-height: var(--tap); font-size: 1.5rem; } /* [avatar] easy mode: big view switches */
+.av-kid-tabs.av-tabs { display: flex; flex-wrap: wrap; gap: .35rem; } /* [avatar] every tab ≥ 56 px, also on a phone */
+.av-kid-tabs.av-tabs .av-kid-tab { flex: 1 0 var(--tap); min-width: var(--tap); }
+.av-tile-kid .av-tile-lbl { display: none; } /* [avatar] easy mode: the picture and its voice (data-say) carry the meaning */
+.av-kid .av-hint { font-size: max(16px, 1rem); }

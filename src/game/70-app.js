@@ -1154,8 +1154,10 @@
         for (let i = 0; i < 4; i++) rig.update(1 / 30, IDLE);
         scene.updateMatrixWorld(true);
         rig.headAnchor.getWorldPosition(_pv);
-        const cy = _pv.y - (Number.isFinite(o.drop) ? o.drop : 0.36);
-        const dist = Number.isFinite(o.dist) ? o.dist : 1.5;
+        // [avatar] the realistic head is smaller and sits higher above its anchor's drop: frame it closer
+        const realK = rig.style === 'real' ? 0.62 : 1;
+        const cy = _pv.y - (Number.isFinite(o.drop) ? o.drop : 0.36) * (realK < 1 ? 0.62 : 1);
+        const dist = (Number.isFinite(o.dist) ? o.dist : 1.5) * realK;
         cam.position.set(0.3 * (dist / 1.5), cy + 0.08, dist);
         cam.lookAt(0, cy, 0);
         const prevRT = r.getRenderTarget();
@@ -4246,39 +4248,41 @@
     });
   }
 
-  // ================================================================ avatar customizer
-  const AV_SECTIONS = [
-    { title: '얼굴', emoji: '😊', rows: [['skin', 'swatch'], ['face', 'chip']] },
-    { title: '헤어', emoji: '💇', rows: [['hair', 'chip'], ['hairColor', 'swatch']] },
-    { title: '상의', emoji: '👕', rows: [['top', 'chip'], ['topColor', 'swatch']] },
-    { title: '하의 · 신발', emoji: '👖', rows: [['bottom', 'chip'], ['bottomColor', 'swatch'], ['shoes', 'swatch']] },
-    { title: '가방', emoji: '🎒', rows: [['bag', 'chip'], ['bagColor', 'swatch', 'bag']] },
-    { title: '액세서리', emoji: '👓', rows: [['accessory', 'chip'], ['accessoryColor', 'swatch', 'accessory']] },
-    { title: '키', emoji: '📏', rows: [['height', 'height']] },
+  // ================================================================ avatar customizer  [avatar] CONTRACT §17.7
+  // Tabs 추천 / 얼굴 / 머리 / 옷 / 장신구 / 색 with PICTURE TILES: every tile shows the current look wearing that option,
+  // rendered by the preview's own renderer (one small tile per frame, cached), a turntable preview, 🎲, ≥ 12 ready-made
+  // looks. Easy mode: the same tabs as big emoji tabs, big tiles, every tile speaks (data-say), a 🔊 repeat button and
+  // no typing (the name comes from the dice). Keyboard: ← → between tabs, arrow keys between tiles, Enter / Space.
+  // row: [key, type, frame | dependency]; type tile = rendered picture, swatch = colour, height = size chips
+  const AV_TABS = [
+    { id: 'looks', emoji: '✨', title: '추천 모습', say: '추천 모습. 마음에 드는 모습을 골라요.', looks: true },
+    { id: 'face', emoji: '😊', title: '얼굴', say: '얼굴과 모습', rows: [['style', 'tile', 'full'], ['face', 'tile', 'face'], ['skin', 'swatch'], ['height', 'height']] },
+    { id: 'hair', emoji: '💇', title: '머리', say: '머리 모양과 쓰개', rows: [['hair', 'tile', 'hair'], ['hat', 'tile', 'head'], ['hairColor', 'swatch'], ['hatColor', 'swatch', 'hat']] },
+    { id: 'clothes', emoji: '👘', title: '옷', say: '한복과 옷', rows: [['top', 'tile', 'body'], ['bottom', 'tile', 'full'], ['pattern', 'tile', 'body'], ['footwear', 'tile', 'feet']] },
+    { id: 'acc', emoji: '🎀', title: '장신구', say: '노리개, 복주머니, 부채, 가방', rows: [['accessory', 'tile', 'body'], ['bag', 'tile', 'back']] },
+    { id: 'color', emoji: '🎨', title: '색', say: '옷 색깔', rows: [['topColor', 'swatch'], ['outerColor', 'swatch'], ['bottomColor', 'swatch'], ['shoes', 'swatch'], ['accessoryColor', 'swatch', 'accessory'], ['bagColor', 'swatch', 'bag']] },
   ];
   const AV_ANIMS = [['wave', '👋', '인사'], ['celebrate', '🙌', '만세'], ['dance', '💃', '춤'], ['photo', '✌️', '브이'], ['heart', '💖', '하트'], ['bow', '🙇', '절']];
-  /** 쉬운 모드: picture categories and an emoji for every style option (no reading needed) */
-  const AV_KID_CATS = [
-    { id: 'face', emoji: '😊', say: '얼굴', rows: [['face', 'chip'], ['skin', 'swatch']] },
-    { id: 'hair', emoji: '💇', say: '머리', rows: [['hair', 'chip'], ['hairColor', 'swatch']] },
-    { id: 'top', emoji: '👕', say: '윗옷', rows: [['top', 'chip'], ['topColor', 'swatch']] },
-    { id: 'bottom', emoji: '👖', say: '바지와 신발', rows: [['bottom', 'chip'], ['bottomColor', 'swatch'], ['shoes', 'swatch']] },
-    { id: 'bag', emoji: '🎒', say: '가방', rows: [['bag', 'chip'], ['bagColor', 'swatch', 'bag']] },
-    { id: 'acc', emoji: '🎩', say: '모자와 안경', rows: [['accessory', 'chip'], ['accessoryColor', 'swatch', 'accessory']] },
-    { id: 'height', emoji: '📏', say: '키', rows: [['height', 'height']] },
-  ];
-  const AV_KID_OPT = {
-    face: { smile: '🙂', calm: '😌', cheer: '😄' },
-    hair: { short: '👦', long: '👧', bun: '🍡', ponytail: '🎀', buzz: '🧑‍🦲', curly: '🌀' },
-    top: { tshirt: '👕', hoodie: '🧥', shirt: '👔', hanbok: '👘', apron: '🧑‍🍳', jacket: '🥼' },
-    bottom: { pants: '👖', shorts: '🩳', skirt: '👗' },
+  /** an emoji per option: shown until the tile's picture is drawn (and in the 3D-less fallback) */
+  const AV_OPT_EMOJI = {
+    style: { real: '🧍', cute: '🧸' },
+    face: { smile: '🙂', calm: '😌', cheer: '😄', gentle: '😊', bright: '😃' },
+    hair: { short: '💇', long: '👩', bun: '🍡', ponytail: '🎀', buzz: '👦', curly: '🌀', daenggi: '🪢', jjok: '📍', sangtu: '🧑', pigtails: '👧', side: '🧑‍🦱', wave: '🌊', bangs: '🙍', twinbraid: '👯' },
+    hat: { none: '🚫', gat: '🎩', jokduri: '👑', ayam: '🧣', jobawi: '🧢', hogeon: '🐯', bokgeon: '📜', strawhat: '👒', cap: '🧢', headband: '🎗️' },
+    top: { hanbok: '👘', saekdong: '🌈', dangui: '👑', baeja: '🦺', kwaeja: '🥋', durumagi: '🧥', tshirt: '👕', hoodie: '🧥', shirt: '👔', jacket: '🥼', apron: '🧑‍🍳' },
+    pattern: { none: '⬜', geumbak: '✨', cloud: '☁️', flower: '🌸' },
+    bottom: { skirt: '👗', pants: '👖', shorts: '🩳' },
+    footwear: { gomusin: '🥿', kkotsin: '🌺', jipsin: '🌾', sneakers: '👟' },
+    accessory: { none: '🚫', norigae: '🧧', bokjumeoni: '👛', fan: '🎐', daenggi: '🎀', glasses: '👓', beard: '🧔' },
     bag: { none: '🚫', backpack: '🎒', basket: '🧺', pouch: '👝' },
-    accessory: { none: '🚫', glasses: '👓', strawhat: '👒', headband: '🎀', cap: '🧢', beard: '🧔', gat: '🎩' },
   };
-  const AV_KID_ROW = { face: '😊', skin: '🖐️', hair: '💇', hairColor: '🎨', top: '👕', topColor: '🎨', bottom: '👖', bottomColor: '🎨', shoes: '👟', bag: '🎒', bagColor: '🎨', accessory: '🎩', accessoryColor: '🎨', height: '📏' };
+  const AV_ROW_EMOJI = { style: '🧍', face: '😊', skin: '🖐️', height: '📏', hair: '💇', hat: '🎩', hairColor: '🎨', hatColor: '🎨', top: '👘', bottom: '👗', pattern: '✨', footwear: '🥿', accessory: '🎀', bag: '🎒', topColor: '👕', outerColor: '🧥', bottomColor: '👗', shoes: '🥿', accessoryColor: '🧧', bagColor: '🎒' };
   const AV_KID_HEIGHT = [[0.9, '🐭', '아주 작게'], [0.95, '🐰', '작게'], [1, '🐻', '보통'], [1.05, '🦌', '크게'], [1.1, '🦒', '아주 크게']];
+  // a typical colour per headwear (picked together with the hat; the colour row can change it afterwards)
+  const AV_HAT_COLOR = { gat: '#1f1f22', jokduri: '#1f1f22', ayam: '#1f1f22', jobawi: '#6e2f4e', hogeon: '#1f1f22', bokgeon: '#1f1f22', strawhat: '#e2c27a', headband: '#ffffff' };
   const RX_HEX = /^#[0-9a-f]{6}$/i;
   const _avV = new THREE.Vector3();
+  const AV_THUMB = 112; // px of a rendered tile picture
 
   /** small separate WebGLRenderer turntable (disposed with the modal) */
   /**
@@ -4412,11 +4416,12 @@
       if (this.view === 'face' && this.rig) {
         this.rig.group.updateMatrixWorld(true);
         this.rig.headAnchor.getWorldPosition(_avV);
-        const hy = _avV.y - 0.34;
+        const real = this.rig.style === 'real';
+        const hy = real ? (this.rig.K?.HC || 1.55) * hs - 0.02 : _avV.y - 0.34;
         // head-and-shoulders: back off on tall (portrait) stages so the head never gets cropped sideways
         const fit = Math.max(1, 0.9 / Math.max(0.35, this.camera.aspect || 1));
-        px = 0; py = hy + 0.06; pz = 1.8 * fit; lx = 0; ly = hy - 0.04;
-      } else { px = 0; py = 0.95 * hs; pz = 4.1; lx = 0; ly = 0.68 * hs; }
+        px = 0; py = hy + 0.06; pz = (real ? 1.05 : 1.8) * fit; lx = 0; ly = hy - 0.04;
+      } else { const real = this.rig?.style === 'real'; px = 0; py = (real ? 1.05 : 0.95) * hs; pz = real ? 4.6 : 4.1; lx = 0; ly = (real ? 0.82 : 0.68) * hs; }
       this._tPos.set(px, py, pz); this._tLook.set(lx, ly, 0);
       if (snap) { this._camPos.copy(this._tPos); this._camLook.copy(this._tLook); }
     }
@@ -4448,7 +4453,47 @@
       this._camLook.lerp(this._tLook, k);
       this.camera.position.copy(this._camPos);
       this.camera.lookAt(this._camLook);
-      try { this.renderer.render(this.scene, this.camera); } catch (e) { G.log.warn('UI', 'avatar preview render failed', e?.message || e); this.dispose(); }
+      try { this.renderer.render(this.scene, this.camera); } catch (e) { G.log.warn('UI', 'avatar preview render failed', e?.message || e); this.dispose(); return; }
+      try { this.onFrame?.(); } catch (e) { G.log.warn('UI', 'avatar tile pictures failed', e?.message || e); this.onFrame = null; }
+    }
+    /** [avatar] a tile picture: the look `app` rendered small (frame: face | hair | head | body | full | feet | back) → ImageData */
+    thumb(app, frame) {
+      if (!this.renderer || this.disposed || this.gl?.lost) return null;
+      let T = this._ts;
+      if (!T) {
+        const scene = new THREE.Scene();
+        const hemi = new THREE.HemisphereLight(0xfff4e2, 0x6a604e, 1.7);
+        const key = new THREE.DirectionalLight(0xfff0d8, 2.5); key.position.set(1.6, 2.6, 3);
+        const rim = new THREE.DirectionalLight(0xffe2b0, 1.3); rim.position.set(-1.5, 2.4, -2.6);
+        scene.add(hemi, key, rim);
+        const rig = G.avatar.create(app, { shadow: false });
+        scene.add(rig.group);
+        T = this._ts = { scene, rig, cam: new THREE.PerspectiveCamera(24, 1, 0.03, 20), rt: new THREE.WebGLRenderTarget(AV_THUMB, AV_THUMB, { samples: 4, colorSpace: THREE.SRGBColorSpace }), px: new Uint8Array(AV_THUMB * AV_THUMB * 4), lights: [hemi, key, rim] };
+      }
+      const rig = T.rig;
+      rig.setAppearance(app);
+      for (let i = 0; i < 3; i++) rig.update(1 / 30, IDLE);
+      const hs = rig.heightMul || 1, real = rig.style === 'real', H = (real ? 1.62 : 1.45) * hs, hc = (rig.K?.HC || (real ? 1.55 : 1.11)) * hs;
+      const c = T.cam, F = {
+        face: [0.22, hc - 0.01, real ? 0.62 : 1.25, hc - 0.01],
+        hair: [0.85, hc + 0.02, real ? 0.85 : 1.55, hc - 0.01],
+        head: [0.4, hc + 0.05, real ? 0.95 : 1.6, hc + 0.02],
+        body: [0.3, H * 0.66, real ? 2.3 : 2.2, H * 0.62],
+        full: [0.3, H * 0.55, real ? 4.6 : 4.0, H * 0.5],
+        feet: [0.5, 0.32, 1.15, 0.1],
+        back: [Math.PI - 0.5, H * 0.66, 2.6, H * 0.6],
+      }[frame] || [0.3, H * 0.55, 4.4, H * 0.5];
+      rig.group.rotation.y = F[0];
+      c.position.set(0, F[1], F[2]); c.lookAt(0, F[3], 0); c.updateProjectionMatrix();
+      const r = this.renderer;
+      try {
+        r.setRenderTarget(T.rt); r.setClearColor(0x000000, 0); r.clear();
+        r.render(T.scene, c);
+        r.readRenderTargetPixels(T.rt, 0, 0, AV_THUMB, AV_THUMB, T.px);
+      } finally { r.setRenderTarget(null); }
+      const img = new ImageData(AV_THUMB, AV_THUMB), row = AV_THUMB * 4;
+      for (let y = 0; y < AV_THUMB; y++) img.data.set(T.px.subarray((AV_THUMB - 1 - y) * row, (AV_THUMB - y) * row), y * row);
+      return img;
     }
     dispose() {
       if (this.disposed) return;
@@ -4456,6 +4501,8 @@
       cancelAnimationFrame(this._raf);
       this._ro?.disconnect();
       try { this.rig?.dispose(); } catch (e) { /* ignore */ }
+      if (this._ts) { try { this._ts.rig.dispose(); this._ts.rt.dispose(); for (const l of this._ts.lights) l.dispose?.(); } catch (e) { /* ignore */ } this._ts = null; }
+      this.onFrame = null;
       for (const m of this._meshes || []) { m.geometry.dispose(); m.material.dispose(); }
       for (const t of this._own || []) t.dispose();
       for (const l of this._lights || []) l.dispose?.();
@@ -4471,7 +4518,8 @@
   }
 
   const AvatarEditor = {
-    m: null, preview: null, work: null, orig: null, kid: false, kidNick: null, kidCat: 'face',
+    m: null, preview: null, work: null, orig: null, kid: false, kidNick: null, tab: 'looks',
+    _thumbQ: [], _thumbCache: new Map(), _lastSay: '',
 
     open() {
       if (!G.state || !app.loggedIn) return null;
@@ -4485,10 +4533,10 @@
       this.kidNick = null;
       const m = G.ui.modal.open({
         id: 'app-avatar', title: kid ? '꾸미기' : '아바타 꾸미기', icon: kid ? '👕' : 'smile', size: 'xl', className: `avatar-modal${kid ? ' kid' : ''}`, backdropClose: false, autofocus: false,
-        say: kid ? '마음에 드는 옷을 골라요!' : undefined,
-        body: (body, mm) => { this.m = mm; mm._kind = kid ? 'kid' : 'full'; if (kid) this._buildKid(body); else this._build(body); },
+        say: kid ? '마음에 드는 모습을 골라요!' : undefined,
+        body: (body, mm) => { this.m = mm; mm._kind = kid ? 'kid' : 'full'; this._buildUI(body, kid); },
         actions: A ? (kid ? [
-          { label: '🎲 바꾸기', class: 'btn-soft av-random av-kid-btn', onClick: () => { this.randomize(); say('짜잔! 새 옷이에요!', { force: true }); return false; } },
+          { label: '🎲 바꾸기', class: 'btn-soft av-random av-kid-btn', onClick: () => { this.randomize(); say('짜잔! 새 모습이에요!', { force: true }); return false; } },
           { label: '↩️ 처음대로', class: 'btn-ghost av-kid-btn', onClick: () => { this.set({ ...this.orig }); this.kidNick = null; this._syncKidNick(); return false; } },
           { label: '✅ 좋아요', class: 'btn-primary av-kid-btn av-kid-ok', onClick: () => this.save() },
         ] : [
@@ -4497,142 +4545,75 @@
           { label: '취소', class: 'btn-ghost' },
           { label: '저장하기', icon: 'check', class: 'btn-primary', onClick: () => this.save() },
         ]) : [{ label: '닫기', class: 'btn-primary' }],
-        onClose: () => { this.preview?.dispose(); this.preview = null; this.m = null; this.work = null; this.kidNick = null; this._kidOpts = null; this._kidTabs = null; G.ui.setActive('avatar', false); },
+        onClose: () => { this.preview?.dispose(); this.preview = null; this.m = null; this.work = null; this.kidNick = null; this._panel = null; this._tabsEl = null; this._thumbQ = []; G.ui.setActive('avatar', false); },
       });
       this.m = m;
       G.ui.setActive('avatar', true);
       return m;
     },
 
-    _build(body) {
+    _buildUI(body, kid) {
       const A = G.avatar;
       if (!A) {
         body.appendChild(h('div', { class: 'notice-box' }, '아바타 꾸미기 기능을 불러오지 못했어요. 페이지를 새로고침한 뒤 다시 시도해 주세요.'));
-        body.appendChild(this._nickSection());
+        if (!kid) body.appendChild(this._nickSection());
         return;
       }
-      const L = A.labels || {};
-      const layout = h('div', { class: 'av-layout' });
+      const layout = h('div', { class: `av-layout${kid ? ' av-kid' : ''}` });
       const stageCol = h('div', { class: 'av-stage-col' });
       const stage = h('div', { class: 'av-stage' });
       const viewSeg = h('div', { class: 'seg av-view', role: 'radiogroup', 'aria-label': '보기' },
-        h('button', { type: 'button', 'data-view': 'full', class: 'active', role: 'radio', 'aria-checked': 'true' }, '🧍 전신'),
-        h('button', { type: 'button', 'data-view': 'face', role: 'radio', 'aria-checked': 'false' }, '🙂 얼굴'));
+        h('button', { type: 'button', 'data-view': 'full', class: 'active', role: 'radio', 'aria-checked': 'true', 'aria-label': '전신', 'data-say': '온몸 보기' }, kid ? '🧍' : '🧍 전신'),
+        h('button', { type: 'button', 'data-view': 'face', role: 'radio', 'aria-checked': 'false', 'aria-label': '얼굴', 'data-say': '얼굴 보기' }, kid ? '🙂' : '🙂 얼굴'));
       stage.appendChild(h('div', { class: 'av-stage-tools' }, viewSeg));
       const anims = h('div', { class: 'av-anims', role: 'group', 'aria-label': '동작 미리보기' },
-        AV_ANIMS.map(([a, e, l]) => h('button', { type: 'button', class: 'av-anim', 'data-anim': a }, h('span', { class: 'emoji' }, e), l)));
-      stageCol.append(stage, anims, h('p', { class: 'tiny muted av-tip' }, '미리보기를 끌어서 돌려 보세요. 휠을 올리면 얼굴을 크게 볼 수 있어요.'));
-      const opts = h('div', { class: 'av-options' });
-      for (const sec of AV_SECTIONS) {
-        const s = h('section', { class: 'av-sec' }, h('h4', null, h('span', { class: 'emoji' }, sec.emoji), sec.title));
-        for (const [k, type, dep] of sec.rows) {
-          const row = h('div', { class: 'av-row', 'data-row': k, 'data-dep': dep || null }, h('span', { class: 'av-row-label' }, L.keys?.[k] || k));
-          const box = h('div', { class: `av-opts ${type === 'swatch' ? 'swatches' : 'chips'}`, role: 'group', 'aria-label': L.keys?.[k] || k });
-          if (type === 'swatch') {
-            for (const c of A.options[k] || []) {
-              if (!RX_HEX.test(c)) continue;
-              const name = L.colors?.[c] || c;
-              const b = h('button', { type: 'button', class: 'av-swatch', 'data-k': k, 'data-v': c, title: name, 'aria-label': name });
-              b.style.setProperty('--c', c);
-              box.appendChild(b);
-            }
-          } else if (type === 'chip') {
-            for (const v of A.options[k] || []) box.appendChild(h('button', { type: 'button', class: 'av-chip', 'data-k': k, 'data-v': String(v) }, L[k]?.[v] || v));
-          } else if (type === 'height') {
-            const hr = A.heightRange || { min: 0.9, max: 1.1, step: 0.05 };
-            for (let v = hr.min; v <= hr.max + 1e-6; v += hr.step) {
-              const val = Math.round(v * 100) / 100;
-              box.appendChild(h('button', { type: 'button', class: 'av-chip', 'data-k': 'height', 'data-v': String(val) }, L.height?.[val] || `${Math.round(val * 100)}%`));
-            }
-          }
-          row.appendChild(box);
-          s.appendChild(row);
-        }
-        opts.appendChild(s);
-      }
-      opts.appendChild(this._nickSection());
-      layout.append(stageCol, opts);
-      body.appendChild(layout);
-      this.preview = new AvatarPreview(stage, this.work);
-      this.preview.onView = (v) => { for (const b of viewSeg.querySelectorAll('[data-view]')) { const on = b.dataset.view === v; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); } };
-      viewSeg.addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) this.preview?.setView(b.dataset.view); });
-      anims.addEventListener('click', (e) => { const b = e.target.closest('[data-anim]'); if (b) { this.preview?.play(b.dataset.anim); G.sfx('emote'); } });
-      opts.addEventListener('click', (e) => {
-        const b = e.target.closest('[data-k]');
-        if (!b || b.disabled || !this.work) return;
-        const k = b.dataset.k;
-        const v = k === 'height' ? Number(b.dataset.v) : b.dataset.v;
-        if (this.work[k] === v) return;
-        this.work[k] = v;
-        G.sfx('click');
-        this._sync();
-        this.preview?.setAppearance(this.work);
-        if (k === 'face' || k === 'hair' || k === 'accessory' || k === 'hairColor' || k === 'skin') this.preview?.setView('face');
-        else if (k === 'top' || k === 'bottom' || k === 'height' || k === 'bag' || k === 'shoes') this.preview?.setView('full');
-      });
-      this._bindNick(body);
-      this._sync();
-    },
-
-    // ------------------------------------------------------------ 쉬운 모드 layout: big emoji chips & swatches, no reading
-    _buildKid(body) {
-      const layout = h('div', { class: 'av-layout av-kid' });
-      const stageCol = h('div', { class: 'av-stage-col' });
-      const stage = h('div', { class: 'av-stage' });
-      const anims = h('div', { class: 'av-anims', role: 'group', 'aria-label': '동작 보기' },
-        AV_ANIMS.filter(([a]) => a !== 'bow').map(([a, e, l]) => h('button', { type: 'button', class: 'av-anim av-anim-kid', 'data-anim': a, 'aria-label': l, 'data-say': l }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e))));
+        AV_ANIMS.filter(([a]) => !kid || a !== 'bow').map(([a, e, l]) => (kid ? h('button', { type: 'button', class: 'av-anim av-anim-kid', 'data-anim': a, 'aria-label': l, 'data-say': l }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e))
+          : h('button', { type: 'button', class: 'av-anim', 'data-anim': a }, h('span', { class: 'emoji' }, e), l))));
       stageCol.append(stage, anims);
-      const right = h('div', { class: 'av-kid-right' });
-      // 🏷️ name from kid-safe ideas (no typing); server accounts keep their name
-      if (auth.current?.kind !== 'server') {
+      if (!kid) stageCol.appendChild(h('p', { class: 'tiny muted av-tip' }, '미리보기를 끌거나 ← → 키로 돌려 보세요. 휠을 올리면 얼굴을 크게 볼 수 있어요.'));
+      const right = h('div', { class: kid ? 'av-kid-right' : 'av-right' });
+      if (kid && auth.current?.kind !== 'server') {
         right.appendChild(h('div', { class: 'av-kid-name' },
           h('span', { class: 'kid-label', 'aria-hidden': 'true' }, '🏷️'),
           h('span', { class: 'akn-text', 'data-say': '' }, G.state?.profile?.nickname || ''),
           h('button', { type: 'button', class: 'kn-dice', 'data-kidnick': '', 'aria-label': '다른 이름', 'data-say': '다른 이름' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🎲'), h('span', { class: 'kn-dice-lbl' }, '다른 이름'))));
       }
-      const tabs = h('div', { class: 'av-kid-tabs', role: 'tablist', 'aria-label': '꾸밀 곳' });
-      for (const c of AV_KID_CATS) {
-        tabs.appendChild(h('button', { type: 'button', role: 'tab', class: 'av-kid-tab', 'data-cat': c.id, 'aria-label': c.say, 'data-say': c.say, 'aria-selected': 'false' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, c.emoji)));
+      const tabs = h('div', { class: kid ? 'av-kid-tabs av-tabs' : 'av-tabs', role: 'tablist', 'aria-label': '꾸밀 곳' });
+      for (const t of AV_TABS) {
+        tabs.appendChild(h('button', { type: 'button', role: 'tab', class: kid ? 'av-kid-tab av-tab' : 'av-tab', 'data-tab': t.id, 'aria-label': t.title, 'data-say': t.say, 'aria-selected': 'false', title: t.title },
+          h('span', { class: 'emoji', 'aria-hidden': 'true' }, t.emoji), kid ? null : h('span', { class: 'av-tab-lbl' }, t.title)));
       }
-      const opts = h('div', { class: 'av-options av-kid-opts', role: 'tabpanel' });
-      right.append(tabs, opts);
+      if (kid) tabs.appendChild(h('button', { type: 'button', class: 'av-kid-tab av-say-again', 'aria-label': '다시 듣기', 'data-say-again': '' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔊')));
+      const panel = h('div', { class: `av-options${kid ? ' av-kid-opts' : ''}`, role: 'tabpanel' });
+      right.append(tabs, panel);
+      if (!kid) right.appendChild(this._nickSection());
       layout.append(stageCol, right);
       body.appendChild(layout);
+      this._panel = panel; this._tabsEl = tabs;
       this.preview = new AvatarPreview(stage, this.work);
-      this._kidOpts = opts;
-      this._kidTabs = tabs;
-      this._renderKidCat(this.kidCat || 'face');
+      this.preview.onFrame = () => this._thumbStep();
+      this.preview.onView = (v) => { for (const b of viewSeg.querySelectorAll('[data-view]')) { const on = b.dataset.view === v; b.classList.toggle('active', on); b.setAttribute('aria-checked', String(on)); } };
+      viewSeg.addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) { this.preview?.setView(b.dataset.view); if (kid) this._say(b.dataset.say); } });
+      anims.addEventListener('click', (e) => { const b = e.target.closest('[data-anim]'); if (b) { this.preview?.play(b.dataset.anim); G.sfx('emote'); if (kid) this._say(b.dataset.say); } });
       tabs.addEventListener('click', (e) => {
-        const b = e.target.closest('[data-cat]');
+        if (e.target.closest('[data-say-again]')) { this._say(this._lastSay || '마음에 드는 모습을 골라요.'); return; }
+        const b = e.target.closest('[data-tab]');
         if (!b) return;
         G.sfx('click');
-        this._renderKidCat(b.dataset.cat);
-        say(b.dataset.say, { force: true });
+        this._renderTab(b.dataset.tab);
+        if (kid) this._say(b.dataset.say);
       });
       tabs.addEventListener('keydown', (e) => {
         const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
         if (!d) return;
-        const ids = AV_KID_CATS.map((c) => c.id);
-        const i = (ids.indexOf(this.kidCat) + d + ids.length) % ids.length;
+        const ids = AV_TABS.map((t) => t.id);
+        const i = (ids.indexOf(this.tab) + d + ids.length) % ids.length;
         e.preventDefault();
-        this._renderKidCat(ids[i]);
-        tabs.querySelector(`[data-cat="${ids[i]}"]`)?.focus();
+        this._renderTab(ids[i]);
+        tabs.querySelector(`[data-tab="${ids[i]}"]`)?.focus();
       });
-      anims.addEventListener('click', (e) => { const b = e.target.closest('[data-anim]'); if (b) { this.preview?.play(b.dataset.anim); G.sfx('emote'); } });
-      opts.addEventListener('click', (e) => {
-        const b = e.target.closest('[data-k]');
-        if (!b || b.disabled || !this.work) return;
-        const k = b.dataset.k;
-        const v = k === 'height' ? Number(b.dataset.v) : b.dataset.v;
-        say(b.dataset.say || '', { force: true });
-        if (this.work[k] === v) return;
-        this.work[k] = v;
-        G.sfx('pop');
-        this._sync();
-        this.preview?.setAppearance(this.work);
-        if (k === 'face' || k === 'hair' || k === 'accessory' || k === 'hairColor' || k === 'skin' || k === 'accessoryColor') this.preview?.setView('face');
-        else this.preview?.setView('full');
-      });
+      panel.addEventListener('click', (e) => this._onPick(e));
+      panel.addEventListener('keydown', (e) => this._onGridKey(e));
       right.querySelector('[data-kidnick]')?.addEventListener('click', () => {
         const cur = this.kidNick || G.state?.profile?.nickname || '';
         const next = freeNameIdeas(6).find((n) => n !== cur);
@@ -4642,43 +4623,74 @@
         this._syncKidNick(true);
         say(next, { force: true, priority: 1 });
       });
+      if (!kid) this._bindNick(body);
       this._syncKidNick();
+      this._renderTab(this.tab || 'looks');
     },
-    _renderKidCat(id) {
+
+    _say(text) { if (!text) return; this._lastSay = text; say(text, { force: true }); },
+
+    /** the variant a tile shows: the look being edited with one option changed */
+    _variant(k, v) {
+      const w = { ...this.work, [k]: v };
+      if (k === 'hat' && AV_HAT_COLOR[v]) w.hatColor = AV_HAT_COLOR[v];
+      if (k === 'top' && (v === 'baeja' || v === 'kwaeja' || v === 'durumagi') && w.outerColor === w.topColor) w.outerColor = '#2e3f6e';
+      return w;
+    },
+
+    _tile(k, v, label, emoji, frame, app) {
+      const kid = this.kid;
+      const cv = h('canvas', { class: 'av-thumb', width: AV_THUMB, height: AV_THUMB, 'aria-hidden': 'true' });
+      const b = h('button', { type: 'button', class: `av-tile${kid ? ' av-tile-kid' : ''}`, 'data-k': k, 'data-v': String(v), 'aria-label': label, 'data-say': label, title: label },
+        cv, h('span', { class: 'av-tile-emoji emoji', 'aria-hidden': 'true' }, emoji || '✨'), h('span', { class: 'av-tile-lbl' }, label));
+      this._queueThumb(cv, app, frame);
+      return b;
+    },
+
+    _renderTab(id) {
       const A = G.avatar, L = A?.labels || {};
-      const cat = AV_KID_CATS.find((c) => c.id === id) || AV_KID_CATS[0];
-      this.kidCat = cat.id;
-      for (const b of this._kidTabs?.querySelectorAll('[data-cat]') || []) {
-        const on = b.dataset.cat === cat.id;
+      const tab = AV_TABS.find((t) => t.id === id) || AV_TABS[0];
+      this.tab = tab.id;
+      for (const b of this._tabsEl?.querySelectorAll('[data-tab]') || []) {
+        const on = b.dataset.tab === tab.id;
         b.classList.toggle('active', on);
         b.setAttribute('aria-selected', on ? 'true' : 'false');
         b.tabIndex = on ? 0 : -1;
       }
-      const box = this._kidOpts;
+      const box = this._panel;
       if (!box || !A) return;
       box.textContent = '';
-      for (const [k, type, dep] of cat.rows) {
-        const row = h('div', { class: 'av-row av-kid-row', 'data-row': k, 'data-dep': dep || null },
-          h('span', { class: 'av-row-label emoji', 'aria-hidden': 'true' }, AV_KID_ROW[k] || '✨'));
-        const list = h('div', { class: `av-opts ${type === 'swatch' ? 'swatches' : 'chips'}`, role: 'group', 'aria-label': L.keys?.[k] || k });
+      this._thumbQ = [];
+      const kid = this.kid;
+      if (tab.looks) {
+        const grid = h('div', { class: 'av-tiles av-looks', role: 'group', 'aria-label': '추천 모습' });
+        A.presets.forEach((p, i) => grid.appendChild(this._tile('preset', i, p.label, p.emoji, 'full', p.appearance)));
+        box.appendChild(h('p', { class: 'av-hint' }, kid ? '✨ 마음에 드는 모습을 눌러요' : '눌러서 그대로 입어 보고, 다른 칸에서 바꿔 보세요.'));
+        box.appendChild(grid);
+      } else for (const [k, type, extra] of tab.rows) {
+        const lbl = L.keys?.[k] || k;
+        if (k === 'outerColor' && !['baeja', 'kwaeja', 'durumagi'].includes(this.work?.top)) continue;
+        const row = h('div', { class: `av-row${kid ? ' av-kid-row' : ''}`, 'data-row': k, 'data-dep': type === 'swatch' && extra ? extra : null },
+          h('span', { class: `av-row-label${kid ? ' emoji' : ''}`, 'aria-hidden': kid ? 'true' : null }, kid ? AV_ROW_EMOJI[k] || '✨' : lbl));
+        let list;
         if (type === 'swatch') {
+          list = h('div', { class: 'av-opts swatches', role: 'group', 'aria-label': lbl });
           for (const c of A.options[k] || []) {
             if (!RX_HEX.test(c)) continue;
             const name = L.colors?.[c] || '색';
-            const b = h('button', { type: 'button', class: 'av-swatch', 'data-k': k, 'data-v': c, 'aria-label': name, 'data-say': name });
+            const b = h('button', { type: 'button', class: 'av-swatch', 'data-k': k, 'data-v': c, title: name, 'aria-label': `${lbl} ${name}`, 'data-say': name });
             b.style.setProperty('--c', c);
             list.appendChild(b);
           }
-        } else if (type === 'chip') {
-          for (const v of A.options[k] || []) {
-            const name = L[k]?.[v] || String(v);
-            list.appendChild(h('button', { type: 'button', class: 'av-chip av-chip-kid', 'data-k': k, 'data-v': String(v), 'aria-label': name, 'data-say': name },
-              h('span', { class: 'emoji', 'aria-hidden': 'true' }, AV_KID_OPT[k]?.[v] || '✨')));
-          }
         } else if (type === 'height') {
+          list = h('div', { class: 'av-opts chips', role: 'group', 'aria-label': lbl });
           for (const [v, e, name] of AV_KID_HEIGHT) {
-            list.appendChild(h('button', { type: 'button', class: 'av-chip av-chip-kid', 'data-k': 'height', 'data-v': String(v), 'aria-label': name, 'data-say': name }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e)));
+            list.appendChild(kid ? h('button', { type: 'button', class: 'av-chip av-chip-kid', 'data-k': 'height', 'data-v': String(v), 'aria-label': name, 'data-say': name }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e))
+              : h('button', { type: 'button', class: 'av-chip', 'data-k': 'height', 'data-v': String(v), 'data-say': name }, L.height?.[v] || name));
           }
+        } else {
+          list = h('div', { class: 'av-tiles', role: 'group', 'aria-label': lbl });
+          for (const v of A.options[k] || []) list.appendChild(this._tile(k, v, L[k]?.[v] || String(v), AV_OPT_EMOJI[k]?.[v], extra, this._variant(k, v)));
         }
         row.appendChild(list);
         box.appendChild(row);
@@ -4686,6 +4698,81 @@
       box.classList.remove('enter'); void box.offsetWidth; box.classList.add('enter');
       this._sync();
     },
+
+    _onPick(e) {
+      const b = e.target.closest('[data-k]');
+      if (!b || b.disabled || !this.work) return;
+      const k = b.dataset.k;
+      if (this.kid) this._say(b.dataset.say || '');
+      if (k === 'preset') {
+        const p = G.avatar.presets[Number(b.dataset.v)];
+        if (!p) return;
+        this.set(p.appearance);
+        this.preview?.play('wave');
+        G.sfx(this.kid ? 'pop' : 'click');
+        return;
+      }
+      const v = k === 'height' ? Number(b.dataset.v) : b.dataset.v;
+      if (this.work[k] === v) return;
+      this.work[k] = v;
+      if (k === 'hat' && AV_HAT_COLOR[v]) this.work.hatColor = AV_HAT_COLOR[v];
+      if (k === 'top' && ['baeja', 'kwaeja', 'durumagi'].includes(v) && this.work.outerColor === this.work.topColor) this.work.outerColor = '#2e3f6e';
+      G.sfx(this.kid ? 'pop' : 'click');
+      this.preview?.setAppearance(this.work);
+      if (['face', 'hair', 'hat', 'hairColor', 'hatColor', 'skin'].includes(k)) this.preview?.setView('face');
+      else this.preview?.setView('full');
+      // the other tiles show the new look: draw them again (rows that depend on the top show / hide)
+      if (k === 'top' || k === 'style' || this.tab !== 'color') this._renderTab(this.tab);
+      else this._sync();
+    },
+
+    /** arrow keys move between the tiles / swatches of the panel (a grid of buttons) */
+    _onGridKey(e) {
+      const d = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 'down', ArrowUp: 'up' }[e.key];
+      if (!d || !e.target.closest?.('[data-k]')) return;
+      const all = [...this._panel.querySelectorAll('[data-k]:not(:disabled)')];
+      const i = all.indexOf(e.target);
+      if (i < 0) return;
+      let j = i;
+      if (typeof d === 'number') j = Math.max(0, Math.min(all.length - 1, i + d));
+      else {
+        const r = e.target.getBoundingClientRect(), cx = r.left + r.width / 2;
+        const cand = all.map((b, n) => ({ b, n, r: b.getBoundingClientRect() })).filter((o) => (d === 'down' ? o.r.top > r.bottom - 2 : o.r.bottom < r.top + 2));
+        cand.sort((a, b2) => (Math.abs(a.r.top - r.top) - Math.abs(b2.r.top - r.top)) || (Math.abs(a.r.left + a.r.width / 2 - cx) - Math.abs(b2.r.left + b2.r.width / 2 - cx)));
+        if (cand.length) j = cand[0].n;
+      }
+      if (j !== i) { e.preventDefault(); all[j].focus(); }
+    },
+
+    // ------------------------------------------------------------ tile pictures (rendered by the preview's renderer)
+    _queueThumb(canvas, appearance, frame) {
+      const key = JSON.stringify(appearance) + '|' + frame;
+      const hit = this._thumbCache.get(key);
+      if (hit) { this._paintThumb(canvas, hit); return; }
+      this._thumbQ.push({ canvas, app: appearance, frame, key });
+    },
+    _paintThumb(canvas, img) {
+      try { canvas.getContext('2d').putImageData(img, 0, 0); canvas.closest('.av-tile')?.classList.add('drawn'); } catch (e) { /* detached */ }
+    },
+    _thumbStep() {
+      const q = this._thumbQ;
+      if (!q.length || !this.preview?.thumb) return;
+      const t0 = performance.now();
+      for (let n = 0; n < 3 && q.length; n++) {
+        const job = q.shift();
+        if (!job.canvas.isConnected) continue;
+        let img = this._thumbCache.get(job.key);
+        if (!img) {
+          img = this.preview.thumb(job.app, job.frame);
+          if (!img) { q.length = 0; return; }
+          this._thumbCache.set(job.key, img);
+          if (this._thumbCache.size > 260) this._thumbCache.delete(this._thumbCache.keys().next().value);
+        }
+        this._paintThumb(job.canvas, img);
+        if (performance.now() - t0 > 12) break;
+      }
+    },
+
     _syncKidNick(roll) {
       const el = this.m?.body?.querySelector('.akn-text');
       if (!el) return;
@@ -4728,9 +4815,11 @@
     _sync() {
       const body = this.m?.body;
       if (!body || !this.work) return;
+      const cur = JSON.stringify(G.avatar.normalize(this.work));
       for (const b of body.querySelectorAll('.av-options [data-k]')) {
         const k = b.dataset.k;
-        const on = k === 'height' ? Math.abs(Number(b.dataset.v) - Number(this.work.height)) < 0.001 : String(this.work[k]) === b.dataset.v;
+        const on = k === 'height' ? Math.abs(Number(b.dataset.v) - Number(this.work.height)) < 0.001
+          : k === 'preset' ? JSON.stringify(G.avatar.presets[Number(b.dataset.v)]?.appearance) === cur : String(this.work[k]) === b.dataset.v;
         b.classList.toggle('active', on);
         b.setAttribute('aria-pressed', on ? 'true' : 'false');
       }
@@ -4744,8 +4833,8 @@
     set(appearance) {
       if (!G.avatar) return;
       this.work = G.avatar.normalize(appearance);
-      this._sync();
       this.preview?.setAppearance(this.work);
+      if (this._panel) this._renderTab(this.tab); else this._sync();
     },
     randomize() {
       if (!G.avatar) return;

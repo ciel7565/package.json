@@ -235,6 +235,14 @@ G.data.npcs = {
   NPC005: { name: '안내원', role: '입구 안내·매점 담당', zone: 'ZONE_ENTRANCE', pos: [6, 66], rotY: 3.4, wander: 0, dialogue: 'npc_guide', greeting: '전통발효체험관에 오신 것을 환영합니다!', shop: 'SHOP_GENERAL', appearance: { skin: '#f1c9a8', hair: 'ponytail', hairColor: '#3a2a20', top: 'jacket', topColor: '#2f7d4a', bottom: 'pants', bottomColor: '#2c3540', shoes: '#1f1f22', bag: 'none', accessory: 'cap', accessoryColor: '#2f7d4a', face: 'smile', height: 0.99 } },
 };
 for (const [id, n] of Object.entries(G.data.npcs)) n.id = id;
+// [avatar] CONTRACT §17.7 — the guides wear the realistic style: hats move to the `hat` key, hanbok goes with 고무신
+for (const n of Object.values(G.data.npcs)) {
+  const a = n.appearance;
+  if (!a || a.style) continue;
+  a.style = 'real';
+  if (['strawhat', 'headband', 'cap', 'gat'].includes(a.accessory)) { a.hat = a.accessory; a.hatColor = a.accessoryColor || '#1f1f22'; a.accessory = 'none'; }
+  a.footwear = a.top === 'hanbok' ? 'gomusin' : 'sneakers';
+}
 
 // ------------------------------------------------------------------ quests
 // objective types: talk{npc} visit{zone|poi} water plant harvest{crop?} ferment_check ferment_start ferment_claim{recipe?}
