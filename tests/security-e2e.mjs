@@ -1466,6 +1466,27 @@ async function S03() {
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
     return `${eps.length} POST endpoints`;
   });
+  // [env] CONTRACT §17.5 — api/env/now.php: no query parameters, GET only, a typed answer without secrets
+  await check('S03', 'api/env/now.php · any query parameter → 400, POST → 405; the answer is typed (five weathers, numbers in range) and names no key or address', { sev: 'low', fix: 'api/env/now.php: V::keys($_GET, []) and Env::now() only; never put env.kma_key / env.kma_base into an answer.' }, async () => {
+    const bad = [];
+    for (const q of ['x=1', 'weather=SNOW', 'serviceKey=abc', 'base[]=1', 'nx=89&ny=123']) {
+      const r = await request(s, `api/env/now.php?${q}`);
+      if (r.status !== 400 || !isCleanError(r)) bad.push(`?${q} → ${r.status}`);
+    }
+    const p = await request(s, 'api/env/now.php', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (p.status !== 405 && p.status !== 403) bad.push(`POST → ${p.status}`);
+    const r = await request(s, 'api/env/now.php');
+    const d = r.data || {};
+    if (r.status !== 200) bad.push(`GET → ${r.status}`);
+    else {
+      if (!['CLEAR', 'CLOUDY', 'RAIN', 'FOG', 'SNOW'].includes(d.weather)) bad.push(`weather ${d.weather}`);
+      if (!(typeof d.temp === 'number' && d.temp > -40 && d.temp < 45) || !(Number.isInteger(d.humidity) && d.humidity >= 0 && d.humidity <= 100)) bad.push(`numbers ${d.temp} ${d.humidity}`);
+      if (!['kma', 'model'].includes(d.source) || d.tz !== 'Asia/Seoul' || !(d.sunrise < d.sunset)) bad.push(`source ${d.source} tz ${d.tz}`);
+      if (/serviceKey|kma_key|apis\.data\.go\.kr|VilageFcst/i.test(r.text)) bad.push('the answer names the key or the agency address');
+    }
+    assert(!bad.length, bad.join('; '));
+    return `${d.weather} ${d.temp} °C (${d.source}); 5 query shapes → 400`;
+  });
   // CONTRACT §15.7 #3 — $_GET numbers through V::int
   await check('S03', 'GET parameters are validated: non-numeric, negative, zero, huge or array values for after · limit · rafter → 400', { sev: 'low', fix: 'chat/list.php: V::int for after / limit (1..page_size) / rafter; an invalid value is a 400, not a silent default.' }, async () => {
     const u = await newUser(s, 'Get');
@@ -1476,6 +1497,50 @@ async function S03() {
     }
     assert(!bad.length, `not refused: ${bad.join(', ')}`);
     return '15 invalid query strings → 400';
+  });
+  // [lecture] CONTRACT §17.3 — api/lecture/file.php: the audience rule is applied to every file (no IDOR by counting ids)
+  await check('S03', 'api/lecture/file.php · an id never gives a file the caller may not see: member / paid / allot / switched-off lectures answer the same 404 as an unknown id; malformed id / n → 400; the list never shows them', { sev: 'high', fix: 'api/lecture/file.php: Lecture::fileFor($id, $n, $c->user) (the list rule) before Lecture::stream; V::id / V::int for the parameters.' }, async () => {
+    const L = await lectureAdmin(s);
+    const pdf = L.FX.pdfBytes('idor');
+    const mk = async (aud) => {
+      const r = await L.post({ action: 'lecture_add_file', title: `대상 ${aud}`, kind: 'pdf', audience: aud, enabled: '1' }, [{ name: 'a.pdf', data: pdf }]);
+      assert(r.flash && r.flash.type === 'ok', `could not add the ${aud} lecture: ${JSON.stringify(r.flash)}`);
+      return Number(L.rows().filter((x) => x.title === `대상 ${aud}`).pop().id);
+    };
+    const id = { all: await mk('all'), member: await mk('member'), paid: await mk('paid'), allot: await mk('allot'), off: await mk('all') };
+    const sw = await L.post({ action: 'lecture_row', pick: `${id.off}:off` });
+    assert(sw.flash && sw.flash.type === 'ok', `switch off: ${JSON.stringify(sw.flash)}`);
+    const visitor = new Client(s), member = await newUser(s, 'Lec'), adm = await admin(s);
+    const get = (c, i, n = 0) => c.req(`api/lecture/file.php?id=${i}&n=${n}`);
+    const bad = [];
+    const expect = async (who, c, key, status) => { const r = await get(c, id[key]); if (r.status !== status) bad.push(`${who} · ${key} → ${r.status} (want ${status})`); return r; };
+    const ok = await expect('visitor', visitor, 'all', 200);
+    if (ok.status === 200 && (!ok.buf.equals(pdf) || ok.headers['content-type'] !== 'application/pdf' || ok.headers['x-content-type-options'] !== 'nosniff' || !/sandbox/.test(ok.headers['content-security-policy'] || ''))) bad.push('the public pdf: wrong bytes or headers');
+    const nf = [];
+    for (const key of ['member', 'paid', 'allot', 'off']) nf.push(await expect('visitor', visitor, key, 404));
+    await expect('member', member, 'member', 200);
+    for (const key of ['paid', 'allot', 'off']) nf.push(await expect('member', member, key, 404));
+    for (const key of ['member', 'paid', 'allot']) await expect('administrator', adm, key, 200);
+    nf.push(await expect('administrator', adm, 'off', 404));
+    nf.push(await visitor.req('api/lecture/file.php?id=987654321'));
+    nf.push(await get(visitor, id.all, 3));
+    const texts = new Set(nf.map((r) => `${r.status} ${r.error && r.error.code} ${r.error && r.error.message}`));
+    if (texts.size !== 1) bad.push(`the refusals differ (an id tells whether a lecture exists): ${[...texts].join(' / ')}`);
+    // counting ids as a visitor: every file that comes back belongs to a lecture of the visitor's own list
+    const mine = new Set(((await visitor.req('api/lecture/list.php')).data.lectures || []).map((x) => x.id));
+    if (mine.has(id.member) || mine.has(id.paid) || mine.has(id.allot) || mine.has(id.off) || !mine.has(id.all)) bad.push(`a visitor's list: ${[...mine].join(',')}`);
+    const top = Math.max(...Object.values(id)) + 3;
+    for (let i = 1; i <= top; i++) { const r = await get(visitor, i); if (r.status === 200 && !mine.has(i)) bad.push(`id ${i} is readable but not in the visitor's list`); }
+    for (const q of ['id=abc', 'id=0', 'id=-1', 'id[]=1', `id=${id.all}&n=-1`, `id=${id.all}&n=1000`, `id=${id.all}&n=../../config`, `id=${id.all}%27%20OR%20%271%27=%271`, `id=${id.all}&path=../../config/config.php`, 'id=../../../etc/passwd', '']) {
+      const r = await visitor.req(`api/lecture/file.php?${q}`);
+      if (r.status !== 400) bad.push(`?${q} → ${r.status}`);
+    }
+    const p = await member.json('api/lecture/file.php?id=' + id.all, {});
+    if (p.status !== 405) bad.push(`POST → ${p.status}`);
+    const lm = (await member.req('api/lecture/list.php')).data.lectures.map((x) => x.id);
+    if (!lm.includes(id.member) || lm.includes(id.paid) || lm.includes(id.allot)) bad.push(`a member's list: ${lm.join(',')}`);
+    assert(!bad.length, bad.join(' | '));
+    return `5 lectures (all · member · paid · allot · off): visitor 1, member 2, administrator 4 readable; ${nf.length} refusals are one and the same 404; ${top} ids counted; 11 malformed queries → 400`;
   });
 }
 
@@ -2383,6 +2448,10 @@ async function S09() {
       'api/allot/apply.php': [11, () => u.json('api/allot/apply.php', {})], 'api/allot/cancel.php': [21, () => u.json('api/allot/cancel.php', {})],
       // CONTRACT §16.9 [scale-server] — sync_issue [30, 60]: calls without a token (each is checked against the session) · queue [120, 60] per address
       'api/sync.php': [31, () => syncCall(u)], 'api/queue.php': [121, () => request(s, 'api/queue.php?t=not-a-ticket')],
+      // [env] CONTRACT §17.5 — env_now [60, 60] per visitor (the app asks every 10 minutes)
+      'api/env/now.php': [61, () => request(s, 'api/env/now.php')],
+      // [lecture] CONTRACT §17.3 — lecture_list [60, 60] · lecture_file [600, 60] (one picture / one pdf piece = one request)
+      'api/lecture/list.php': [61, () => request(s, 'api/lecture/list.php')], 'api/lecture/file.php': [601, () => request(s, 'api/lecture/file.php?id=987654321')],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
       'api/farm/seen.php': 'api/farm/reports.php',
@@ -3072,6 +3141,30 @@ async function pendingReport(s, prefix = 'Rph', o = {}) {
 /** multipart for api/farm/report-photo.php: field reportId (+ more fields) and one file */
 const reportPhotoOf = (id, name, data, type = 'image/png', field = 'photo', fields = {}) => ({ multipart: { fields: { reportId: String(id), ...fields }, files: [{ field, name, type, data }] } });
 const isStoredReportPhoto = (r) => r.status === 200 && r.data && /^uploads\/reports\/\d{4}\/\d{2}\/[a-f0-9]{32}\.(png|jpg)$/.test(r.data.url || '');
+// [lecture] CONTRACT §17.3 — the admin site's 🎓 강의 자료 tab, driven like a browser without scripts: its forms (also the
+// multipart ones with files[]), the flash of the page that follows, the rows and the stored files of the instance
+async function lectureAdmin(s) {
+  const FX = await import('./lecture-fixtures.mjs');
+  const { c, entry } = await adminBrowser(s);
+  const tab = entry + '?tab=lecture';
+  const token = async (cl = c) => ((await cl.req(tab, { headers: HTML })).text.match(/name="_csrf" value="([0-9a-f]{16,})"/) || [])[1] || '';
+  const flash = (html) => { const m = String(html).match(/<div class="flash (\w+)"[^>]*>([\s\S]*?)<\/div>/); return m ? { type: m[1], msg: decodeHtml(m[2].replace(/<[^>]+>/g, '')) } : null; };
+  /** POST one form of the tab (fields, optionally files[]) and follow its 303 → { res, page, flash } */
+  const post = async (fields, files = null, o = {}) => {
+    const cl = o.client || c;
+    const tok = o.token !== undefined ? o.token : await token(cl);
+    const all = { ...(tok ? { _csrf: tok } : {}), tab: 'lecture', ...fields };
+    const res = await cl.req(entry, files
+      ? { multipart: { fields: all, files: files.map((f) => ({ field: 'files[]', type: 'application/octet-stream', ...f })) }, headers: { ...HTML, ...(o.headers || {}) }, csrf: false }
+      : { form: all, headers: { ...HTML, ...(o.headers || {}) }, csrf: false });
+    const page = [301, 302, 303].includes(res.status) ? await follow(cl, res) : res;
+    return { res, page, flash: flash(page.text) };
+  };
+  const rows = () => dbQuery(s, 'SELECT id, title, kind, audience, enabled FROM lectures ORDER BY id');
+  const stored = () => { const out = []; (function walk(d) { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) walk(path.join(d, e.name)); else if (/\.bin$/.test(e.name)) out.push(e.name); } })(path.join(s.dataDir, 'lectures')); return out; };
+  return { FX, c, entry, post, rows, stored };
+}
+
 async function S14() {
   if (!want('S14')) return;
   const s = await srv('val');
@@ -3229,6 +3322,55 @@ async function S14() {
     const huge = await u.req('api/journal/upload.php', uploadOf('huge.png', Buffer.concat([makePng(4, 4), Buffer.alloc(9 * 1024 * 1024, 0x41)])));
     assert(huge.status >= 400 && huge.status < 500, `9 MB → ${huge.status}`);
     return `5 MB+ → ${big.status}, 9 MB → ${huge.status}`;
+  });
+  // ---- [lecture] CONTRACT §17.3 — the ONE upload path of the admin site (🎓 강의 자료): pdf · pptx · pictures by content
+  const LFIX = 'Keep Tfm\\Upload::lectureFile / inspect: the %PDF header and trailer, the bounded zip directory (entries, sizes, ratio, names, duplicates, ZIP64, bytes before / after), pictures re-encoded, files under data/lectures with random .bin names; the admin entry lets a multipart body through for the three lecture upload actions only.';
+  await check('S14', 'lecture upload · hostile files (html / php as pdf, markup head, auto-run script, zip bombs, names that leave the archive, macros, an executable inside, script in a picture, svg) are refused; nothing is stored; a real pdf is taken', { sev: 'high', fix: LFIX }, async () => {
+    const L = await lectureAdmin(s);
+    const before = { rows: L.rows().length, files: L.stored().length };
+    const bad = [];
+    const list = L.FX.hostileFiles();
+    for (const [label, kind, data] of list) {
+      const r = await L.post({ action: 'lecture_add_file', title: `공격 ${label}`.slice(0, 60), kind, enabled: '1' }, [{ name: kind === 'images' ? 'a.png' : `a.${kind}`, data }]);
+      if (!r.flash || r.flash.type !== 'error') bad.push(`${label} → ${r.res.status} ${JSON.stringify(r.flash)}`);
+      if (/<script>alert|onerror=alert/.test(r.page.text)) bad.push(`${label}: markup on the page`);
+    }
+    if (L.rows().length !== before.rows || L.stored().length !== before.files) bad.push(`left behind: ${L.rows().length - before.rows} rows, ${L.stored().length - before.files} files`);
+    const ok = await L.post({ action: 'lecture_add_file', title: '진짜 PDF', kind: 'pdf', audience: 'all', enabled: '1' }, [{ name: '../../evil.php', type: 'text/html', data: L.FX.pdfBytes('real') }]);
+    if (!ok.flash || ok.flash.type !== 'ok') bad.push(`a real pdf → ${JSON.stringify(ok.flash)}`);
+    const names = L.stored();
+    if (names.length !== before.files + 1 || !names.every((n) => /^[a-f0-9]{32}\.bin$/.test(n))) bad.push(`stored names: ${names.join(', ')}`);
+    if (fs.existsSync(path.join(s.docroot, 'evil.php')) || fs.existsSync(path.join(s.dataDir, 'evil.php')) || fs.existsSync(path.join(path.dirname(s.dataDir), 'evil.php'))) bad.push('the client file name was used on disk');
+    const ev = events(s);
+    if (!Array.isArray(ev) || ev.filter((e) => e.kind === 'upload_rejected').length < list.length) bad.push(`upload_rejected events: ${Array.isArray(ev) ? ev.filter((e) => e.kind === 'upload_rejected').length : ev.error}`);
+    assert(!bad.length, bad.join(' | '));
+    return `${list.length} hostile files refused · 1 real pdf stored as <32 hex>.bin · every refusal is a security event`;
+  });
+  await check('S14', 'lecture upload · only the elevated administrator: a visitor, a player, a request without the token, with a wrong token or from another site stores nothing; a file to any other admin action is refused at the door (400)', { sev: 'high', fix: 'admin/index.php: Http::refuseUpload(lectureUpload()) in the gate; handlePost checks origin, token, role and elevation before AdminLecture::action reads $_FILES.' }, async () => {
+    const L = await lectureAdmin(s);
+    const before = { rows: L.rows().length, files: L.stored().length };
+    const pdf = [{ name: 'a.pdf', data: L.FX.pdfBytes('x') }];
+    const good = { action: 'lecture_add_file', title: '몰래 올리기', kind: 'pdf', enabled: '1' };
+    const out = [];
+    const tok = ((await L.c.req(L.entry + '?tab=lecture', { headers: HTML })).text.match(/name="_csrf" value="([0-9a-f]{16,})"/) || [])[1];
+    const visitor = new Client(s), player = await newUser(s, 'Lec');
+    const tries = [
+      ['visitor', await L.post(good, pdf, { client: visitor, token: tok })],
+      ['player with the admin\'s token', await L.post(good, pdf, { client: player, token: tok })],
+      ['no token', await L.post(good, pdf, { token: null })],
+      ['wrong token', await L.post(good, pdf, { token: 'b'.repeat(64) })],
+      ['another site', await L.post(good, pdf, { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } })],
+    ];
+    for (const [who, r] of tries) { if (![401, 403].includes(r.res.status)) out.push(`${who} → ${r.res.status}`); }
+    for (const action of ['cleanup', 'lecture_save', 'lecture_add_link', 'lecture_settings', 'role', 'login']) {
+      const r = await L.post({ action, title: 'x', address: 'https://youtu.be/dQw4w9WgXcQ' }, pdf);
+      if (r.res.status !== 400) out.push(`a file to ${action} → ${r.res.status}`);
+    }
+    const api = await player.req('api/lecture/list.php', { multipart: { fields: {}, files: [{ field: 'files[]', name: 'a.pdf', data: pdf[0].data }] } });
+    if (![400, 405].includes(api.status)) out.push(`a file to api/lecture/list.php → ${api.status}`);
+    if (L.rows().length !== before.rows || L.stored().length !== before.files) out.push('something was stored');
+    assert(!out.length, out.join(' | '));
+    return '5 callers without the right → 401 / 403 · 6 other actions refuse a file (400) · nothing stored';
   });
 }
 

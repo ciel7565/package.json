@@ -216,7 +216,7 @@ check('youtube: hostile and wrong forms are refused (look-alike hosts, userinfo,
     return true;
 });
 check('slides: allow-listed hosts only, https only, built again from checked pieces', function () {
-    $pub = '2PACX-1vQabcdefghijklmnopqrstuvwxyz0123456789';
+    $pub = '2PACX-testtesttesttesttesttesttest';
     $a = Lecture::slidesUrl("https://docs.google.com/presentation/d/e/$pub/pub?start=true&loop=true&delayms=1&x=y");
     if ($a !== "https://docs.google.com/presentation/d/e/$pub/embed?start=false&loop=false&delayms=60000") return "published: $a";
     $b = Lecture::slidesUrl('https://docs.google.com/presentation/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd/edit#slide=id.p');
@@ -264,7 +264,7 @@ check('create: only an administrator; the kind is what the address is; the title
 check('update / switch / reorder / delete: values change, the order moves by one step, every change is an audit row', function () use ($ADMIN, &$made) {
     $a = Lecture::create($ADMIN, ['title' => '가', 'address' => 'https://youtu.be/aaaaaaaaaaa']);
     $b = Lecture::create($ADMIN, ['title' => '나', 'address' => 'https://example.org/b']);
-    $c = Lecture::create($ADMIN, ['title' => '다', 'address' => 'https://docs.google.com/presentation/d/e/2PACX-1vQabcdefghijklmnopqrstuvwxyz0123456789/pub']);
+    $c = Lecture::create($ADMIN, ['title' => '다', 'address' => 'https://docs.google.com/presentation/d/e/2PACX-testtesttesttesttesttesttest/pub']);
     $made[] = $a['id']; $made[] = $b['id']; $made[] = $c['id'];
     if ($b['kind'] !== 'link' || $c['kind'] !== 'slides') return 'kinds';
     $u = Lecture::update($ADMIN, $b['id'], ['title' => '나 (고침)', 'address' => 'https://youtu.be/bbbbbbbbbbb', 'place' => '*', 'audience' => 'member', 'autoplay' => '0', 'enabled' => '0']);

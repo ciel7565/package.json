@@ -258,6 +258,7 @@
       F('47-journal.js', 'edu', '작업일지 작성·목록·사진 첨부(검증·축소) + 그림 일기(기분·스티커)'),
       F('48-interior-data.js', 'edu', '한옥 방 전시 75점(조사한 사실 57·박물관 그림 12·분양 안내 6)과 움직이는 그림 10편의 대본 (순수 데이터)'), // [exhibits]
       F('49-exhibits.js', 'edu', '한옥 전시(G.sys.exhibits): 아이 카드·집 구경 도감(도장)·움직이는 그림 10편(2D 캔버스)·방 안 그림판·전시 붙이기'), // [exhibits]
+      F('74-lecture.js', 'edu', '강의실(G.sys.lecture): 강의 카드·유튜브 재생(바깥으로 못 나가는 틀)·그림 슬라이드·PDF·PPTX 간단 보기·기본 슬라이드·방 안 강의 화면·입장 때 강의 보기 (§17.3)'), // [lecture]
       F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
       F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
       F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
@@ -292,6 +293,7 @@
       F('46-education.css', 'edu', '교육 뷰어·퀴즈·도서관'),
       F('47-journal.css', 'edu', '작업일지'),
       F('49-exhibits.css', 'edu', '전시 카드·집 구경 도감·움직이는 그림 재생기'), // [exhibits]
+      F('74-lecture.css', 'edu', '강의실 창·강의 카드·슬라이드 종이 카드·넘김 단추·방 안 강의 보기 카드'), // [lecture]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
@@ -449,6 +451,7 @@
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   EXPECTED_SYSTEMS.push('allot');   // [allot-client] 43-allot.js
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
+  EXPECTED_SYSTEMS.push('lecture');   // [lecture] 74-lecture.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
 
@@ -1453,6 +1456,10 @@
     { id: 'xbook', emoji: '🏠', label: '집 구경 도감', fn: () => fnOf(G.sys.exhibits, 'openBook') },
     { id: 'xcard', emoji: '🪧', label: '전시 카드', fn: () => { const f = fnOf(G.sys.exhibits, 'open'); const id = firstKey(G.data.exhibits); return f && id ? () => f(id, { preview: true }) : null; } },
     { id: 'xmotion', emoji: '🎞️', label: '움직이는 그림', fn: () => { const f = fnOf(G.sys.exhibits, 'motion'); const id = (G.sys.exhibits?.motions?.() || [])[0]; return f && id ? () => f(id, { from: { preview: true } }) : null; } },
+    // [lecture] 강의실 (§17.3): the lecture cards, a built-in slide deck in the viewer, and a video lecture's player card (file mode: the calm note)
+    { id: 'lecture', emoji: '🎓', label: '강의실 (강의 고르기)', fn: () => { const f = fnOf(G.sys.lecture, 'open'); return f && (() => f()); } },
+    { id: 'lecdeck', emoji: '📚', label: '강의 슬라이드', fn: () => { const f = fnOf(G.sys.lecture, 'open'); const d = (G.sys.lecture?.list?.() || []).find((l) => l.kind === 'deck'); return f && d ? () => f(d.id) : null; } },
+    { id: 'lecvideo', emoji: '▶️', label: '강의 영상 (재생 화면)', fn: () => { const L = G.sys.lecture; if (!L?._internal?.cleanLecture || typeof L.open !== 'function') return null; return () => { const v = L._internal.cleanLecture({ id: 999001, kind: 'youtube', title: '영상 강의 미리 보기', yt: 'aaaaaaaaaaa', place: '' }); L._srv = [v, ...L._srv.filter((x) => x.id !== 999001)]; L.open(999001); }; }, close: () => { try { const L = G.sys.lecture; L.close(); L._srv = L._srv.filter((x) => x.id !== 999001); } catch (e) { /* ignore */ } } },
     { id: 'emote', emoji: '😊', label: '표현하기', fn: () => { const f = fnOf(G.sys.social, 'openExpress', 'openEmotes'); return f && (() => f(document.querySelector('[data-action="emote"]') || undefined)); } },
     { id: 'chat', emoji: '💬', label: '말하기 (채팅)', fn: () => { const f = fnOf(G.sys.social, 'openKidChat', 'openPhrases'); if (f) return f; return typeof G.ui?.triggerAction === 'function' ? () => G.ui.triggerAction('chat') : null; } },
     { id: 'avatar', emoji: '👕', label: '꾸미기 (아바타)', fn: () => fnOf(G.app, 'openAvatar') },
@@ -2125,13 +2132,6 @@
     const bad = J._speed(s, rec, { temp: 45, humidity: 5 });
     return { ok: ideal.speed > bad.speed && near(ideal.ts, 1, 1e-6), detail: `${ideal.speed.toFixed(2)}× vs ${bad.speed.toFixed(2)}×` };
   });
-
-  // ---- 데이터
-  T('📦 데이터 불변식', '데이터 검사 오류 0건', () => { const r = Lint.run(); const first = r.issues.find((i) => i.sev === 'error'); return { ok: r.counts.error === 0, detail: first ? `${first.ref}: ${first.msg}` : `경고 ${r.counts.warn} · 참고 ${r.counts.info}` }; });
-  T('📦 데이터 불변식', '레벨 경험치 표가 계속 증가해요', () => { const lv = G.data.levels; let p = 0; for (let i = 1; i < (lv?.max || 50); i++) { const e = lv.expFor(i); if (!(e > p)) return false; p = e; } return true; });
-  T('📦 데이터 불변식', '퀴즈 정답 번호가 보기 안에 있어요', () => Object.values(G.data.quizzes || {}).every((q) => Number.isInteger(q.answer) && q.answer >= 0 && q.answer < (q.choices || []).length));
-  T('📦 데이터 불변식', '모든 씨앗 ↔ 작물이 서로 가리켜요', () => Object.values(G.data.crops || {}).every((c) => G.data.items?.[c.seedItem]?.crop === c.id && !!G.data.items?.[c.harvestItem]));
-
   // [content] 12 jars, the entitlement lock, 장 가르기 and the new jar actions (CONTRACT §17.8). Every test runs on a deep
   // copy of the save that replaces G.state for the (synchronous) test only — the real save is never touched — with the
   // jar limit stubbed (G.sys.entitle.limit('jars')); afterwards the jars are redrawn from the real save.
@@ -2269,6 +2269,13 @@
     const cold = J._speed({ tempOff: 0, humOff: 0 }, chk, { temp: -5, humidity: 80 });
     return { ok: good - other === (G.data.fermentation?.jarMismatch ?? 4) && cold.ts > 0.9, detail: `독 ${good} · 단지 ${other} · 청국장 바깥 −5°C → 장독 ${cold.temp.toFixed(1)}°C` };
   });
+
+  // ---- 데이터
+  T('📦 데이터 불변식', '데이터 검사 오류 0건', () => { const r = Lint.run(); const first = r.issues.find((i) => i.sev === 'error'); return { ok: r.counts.error === 0, detail: first ? `${first.ref}: ${first.msg}` : `경고 ${r.counts.warn} · 참고 ${r.counts.info}` }; });
+  T('📦 데이터 불변식', '레벨 경험치 표가 계속 증가해요', () => { const lv = G.data.levels; let p = 0; for (let i = 1; i < (lv?.max || 50); i++) { const e = lv.expFor(i); if (!(e > p)) return false; p = e; } return true; });
+  T('📦 데이터 불변식', '퀴즈 정답 번호가 보기 안에 있어요', () => Object.values(G.data.quizzes || {}).every((q) => Number.isInteger(q.answer) && q.answer >= 0 && q.answer < (q.choices || []).length));
+  T('📦 데이터 불변식', '모든 씨앗 ↔ 작물이 서로 가리켜요', () => Object.values(G.data.crops || {}).every((c) => G.data.items?.[c.seedItem]?.crop === c.id && !!G.data.items?.[c.harvestItem]));
+
   // ---- 시스템
   T('🧩 시스템', '이벤트 버스 on / emit / off / once', () => {
     const name = 'dc:selftest';

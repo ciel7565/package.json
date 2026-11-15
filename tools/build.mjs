@@ -247,6 +247,8 @@ function exportGameData() {
       crops: pick(d.rtfarm.crops, (c) => ({ minutes: c.minutes, exp: c.exp || 0, coin: c.coin || 0 })),
     } : {},
     storage: d.storage ? { cap: d.storage.cap, itemIds: d.storage.itemIds } : {},
+    // [env] the Korean crop calendar (CONTRACT §17.5): Tfm\Env measures the real-time beds with the same days / months
+    cropCalendar: pick(d.cropCalendar || {}, (c) => ({ sow: c.sow, harvest: c.harvest, days: c.days })),
   };
 }
 
@@ -415,14 +417,20 @@ html.replace(/<script>([\s\S]*?)<\/script>/g, (m, body) => { scriptHashes.push(`
 const TOSS_SCRIPT = 'https://js.tosspayments.com';
 const TOSS_API = 'https://api.tosspayments.com';
 const TOSS_HOSTS = 'https://*.tosspayments.com';
+// [lecture] 강의실 (CONTRACT §17.0 / §17.3): the ONLY places the page may frame besides 토스 — this site itself (the pdf
+// viewer shows api/lecture/file.php in a same-origin frame), the YouTube player (youtube-nocookie; youtube.com is what
+// that player may hand over to) and the two allow-listed slide hosts — and the one outside image host, the video
+// thumbnails. 74-lecture.js frames nothing else and checks ids / hosts again; connect-src stays 'self' (+ 토스).
+const LECTURE_FRAMES = "'self' https://www.youtube-nocookie.com https://www.youtube.com https://docs.google.com https://view.officeapps.live.com";
+const LECTURE_IMG = 'https://i.ytimg.com';
 const csp = [
   "default-src 'none'",
   `script-src ${scriptHashes.join(' ')} ${TOSS_SCRIPT}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  `img-src 'self' data: blob: ${LECTURE_IMG}`,
   "font-src 'self' data:",
   `connect-src 'self' ${TOSS_API} ${TOSS_HOSTS}`,
-  `frame-src ${TOSS_HOSTS}`,
+  `frame-src ${TOSS_HOSTS} ${LECTURE_FRAMES}`,
   "media-src 'self' data: blob:",
   "worker-src 'self' blob:",
   "manifest-src 'self'",

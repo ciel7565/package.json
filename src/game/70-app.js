@@ -86,6 +86,7 @@
   };
   const BOOL_SETTINGS = ['muted', 'shadows', 'bloom', 'invertY', 'highContrast', 'largeText', 'reduceMotion', 'subtitles', 'voiceOver',
     'showFps', 'minimapVisible', 'chatVisible', 'clickToMove', 'cameraShake', 'autoWeather', 'lockTime', 'companion'];
+  BOOL_SETTINGS.push('musicGugak', 'natureSounds'); SETTING_RULES.volumeVoice = [0, 1]; // [audio] the new sound settings
   function sanitizeSettings() {
     const S = G.settings, D = G.settingsDefaults || {};
     if (!S) return;
@@ -3231,6 +3232,7 @@
       NoThree.active && G.sys.education?.openLibrary && { id: 'learn', emoji: '📚', label: '배움터', color: '#4fb3ff', say: '배움터. 전통 발효를 배워요.' },
       G.sys.exhibits && !G.sys.exhibits._failed && typeof G.sys.exhibits.openBook === 'function' && { id: 'housebook', emoji: '🏠', label: '집 구경 도감', color: '#e0a35a', say: '집 구경 도감. 한옥에서 모은 도장을 봐요.' }, // [exhibits]
       G.sys.allot && !G.sys.allot._failed && typeof G.sys.allot.open === 'function' && { id: 'allot', emoji: '🏺', label: '내 항아리', color: '#d9a066', say: '내 항아리. 만장대 분양 지도와 내 자리를 봐요.' }, // [allot-client]
+      G.sys.lecture && !G.sys.lecture._failed && typeof G.sys.lecture.open === 'function' && { id: 'lecture', emoji: '🎓', label: '강의실', color: '#8fb4ff', say: '강의실. 영상과 슬라이드로 배워요.' }, // [lecture]
       comp && !NoThree.active && { id: 'ongi', emoji: '🏺', label: '옹이랑', color: '#36cfc0', say: '옹이랑 놀아요.' },
       { id: 'sound', emoji: '🔊', label: '소리', color: '#b48bff', say: '소리. 소리 크기를 바꿔요.' },
       { id: 'help', emoji: '❓', label: '도와줘요', color: '#6c8cff', say: '도와줘요. 노는 방법을 봐요.' },
@@ -3284,6 +3286,7 @@
       case 'learn': return G.sys.education?.openLibrary?.();
       case 'housebook': return G.sys.exhibits?.openBook?.(); // [exhibits]
       case 'allot': return G.sys.allot?.open?.('mine'); // [allot-client]
+      case 'lecture': return G.sys.lecture?.open?.(); // [lecture]
       case 'ongi': return G.sys.companion?.openMenu?.();
       case 'sound': return openSettings();
       case 'help': return openHelp();
@@ -3314,6 +3317,7 @@
       { act: 'collection', emoji: '📚', label: '도감·업적', desc: '모은 작물·발효식품·업적', key: 'C', tint: '#6fe0d2' },
       G.sys.exhibits && !G.sys.exhibits._failed && typeof G.sys.exhibits.openBook === 'function' && { act: 'housebook', emoji: '🏠', label: '집 구경 도감', desc: '한옥 방의 전시·움직이는 그림', tint: '#e0a35a' }, // [exhibits]
       G.sys.allot && !G.sys.allot._failed && typeof G.sys.allot.open === 'function' && { act: 'allot', emoji: '🏺', label: '만장대 분양', desc: '내 분양·단지 지도·신청·분양 알림', tint: '#d9a066' }, // [allot-client]
+      G.sys.lecture && !G.sys.lecture._failed && typeof G.sys.lecture.open === 'function' && { act: 'lecture', emoji: '🎓', label: '강의실', desc: '영상·슬라이드·문서 강의 보기', tint: '#8fb4ff' }, // [lecture]
       { act: 'avatar', emoji: '👕', label: '아바타 꾸미기', desc: '옷차림·헤어·닉네임', tint: '#ff9fc7' },
       G.sys.minimap?.openWorldMap && !NoThree.active && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
       NoThree.active && G.sys.education?.openLibrary && { act: 'learn', emoji: '📖', label: '배움터', desc: '전통 발효 배우기·퀴즈 (3D 없이)', tint: '#7fc4ff' },
@@ -3403,6 +3407,7 @@
       case 'collection': if (P?.openCollection) P.openCollection(); else missing('도감'); return;
       case 'housebook': if (G.sys.exhibits?.openBook) G.sys.exhibits.openBook(); else missing('집 구경 도감'); return; // [exhibits]
       case 'allot': if (G.sys.allot?.open) G.sys.allot.open('mine'); else missing('만장대 분양'); return; // [allot-client]
+      case 'lecture': if (G.sys.lecture?.open) G.sys.lecture.open(); else missing('강의실'); return; // [lecture]
       case 'avatar': openAvatar(); return;
       case 'map': G.sys.minimap?.openWorldMap?.(); return;
       case 'learn': G.sys.education?.openLibrary?.(); return;
@@ -3855,6 +3860,26 @@
       return f;
     },
   };
+  // [audio] 소리 → 목소리 · 전통 음악 · 자연의 소리 rows and what plays now (CONTRACT §17.6), before the 음소거 row
+  {
+    const baseSound = SETTINGS_PANES.sound;
+    SETTINGS_PANES.sound = function () {
+      const f = baseSound.call(this);
+      try {
+        const mute = [...f.children].find((el) => /음소거/.test(el.textContent || ''));
+        const rows = [
+          settingRow('🗣️ 목소리', '안내 음성과 대화를 읽어 주는 목소리', sliderCtl('volumeVoice', { label: '목소리' })),
+          settingRow('🎶 전통 음악', '가야금·거문고·대금·해금·장구가 그때그때 새로 지어 연주하는 국악', switchCtl('musicGugak', { label: '전통 음악' })),
+          settingRow('🌿 자연의 소리', '새·풀벌레·개울물·솔바람·빗소리 — 계절과 시간에 맞춰 들려요', switchCtl('natureSounds', { label: '자연의 소리' })),
+        ];
+        const info = G.sys.audio?.moodInfo;
+        if (info) rows.push(h('p', { class: 'set-note' }, `🎼 지금 음악: ${info.label} · ${info.mode} · ${info.jangdan}${info.quote ? ` · ${info.quote} 가락` : ''}`));
+        for (const r of rows) f.insertBefore(r, mute || null);
+      } catch (e) { G.log.warn('APP', 'sound rows', e); }
+      return f;
+    };
+    SETTINGS_KEYS.sound.push('volumeVoice', 'musicGugak', 'natureSounds');
+  }
 
   // [render-assets] ---- 설정 → 🖼️ 사용한 자료 (CONTRACT §16.0 / §16.1): what the embedded asset pack holds, read from its
   // manifest (G.pack.credits()). Text only — titles, makers, licences, the source address as plain text; nothing is

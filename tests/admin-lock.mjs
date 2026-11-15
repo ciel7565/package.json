@@ -2148,7 +2148,7 @@ async function main() {
         assert(flashOf(r.text)?.type === 'ok' && /유튜브 영상/.test(flashOf(r.text).msg), `flash ${JSON.stringify(flashOf(r.text))}`);
         assert(!rawXss(r.text), 'the title reached the page as markup');
         assert(/&lt;img src=x onerror/.test(r.text), 'the escaped title is not on the page');
-        r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '구글 슬라이드', address: 'https://docs.google.com/presentation/d/e/2PACX-1vQabcdefghijklmnopqrstuvwxyz0123456789/pub?start=true', place: '', audience: 'member', enabled: '1' }, { page: '?tab=lecture' });
+        r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '구글 슬라이드', address: 'https://docs.google.com/presentation/d/e/2PACX-testtesttesttesttesttesttest/pub?start=true', place: '', audience: 'member', enabled: '1' }, { page: '?tab=lecture' });
         assert(flashOf(r.text)?.type === 'ok', `slides: ${JSON.stringify(flashOf(r.text))}`);
         r = await admF(b, ADM, { action: 'lecture_add_link', tab: 'lecture', title: '기상청', address: 'https://www.kma.go.kr/', place: '', audience: 'all', enabled: '1' }, { page: '?tab=lecture' });
         assert(flashOf(r.text)?.type === 'ok', `link: ${JSON.stringify(flashOf(r.text))}`);

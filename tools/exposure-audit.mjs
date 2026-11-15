@@ -76,6 +76,11 @@ const PLANT = [
   ['data/sessions/sess_tfmexpo', `_tfm|a:1:{s:3:"uid";s:${MARK('session').length}:"${MARK('session')}";}`], ['data/install.lock', `installed ${MARK('lock')}\n`],
   ['data/notes.txt', `${MARK('datatxt')}\n`], ['uploads/shell.php', `<?php echo '${MARK('upload')}-' . 'RAN';\n`], ['uploads/note.html', `<p>${MARK('uploadhtml')}</p>`],
   ['uploads/journal/2026/11/aaaaaaaabbbbbbbbccccccccdddddddd.png', `\x89PNG\r\n\x1a\n${MARK('png')}`],
+  // [lecture] CONTRACT §17.3: lecture files as lib/Upload.php stores them (data/lectures/<YYYY>/<MM>/<32 hex>.bin) — a pdf,
+  // a presentation, and one whose bytes are a PHP script: none may be read over the web, and the script must never run
+  ['data/lectures/2026/11/0123456789abcdef0123456789abcdef.bin', `%PDF-1.4\n% ${MARK('lecpdf')}\n%%EOF\n`],
+  ['data/lectures/2026/11/fedcba9876543210fedcba9876543210.bin', `PK\x03\x04${MARK('lecpptx')}`],
+  ['data/lectures/2026/11/00112233445566778899aabbccddeeff.bin', `<?php echo '${MARK('lecphp')}-' . 'RAN';\n`],
 ];
 for (const [p, c] of PLANT) { fs.mkdirSync(path.dirname(path.join(WEB, p)), { recursive: true }); fs.writeFileSync(path.join(WEB, p), c); }
 const MARKERS = new Map(PLANT.map(([p, c]) => [p, (c.match(/TFMEXPO-[0-9a-f]+-[a-z0-9]+/) || [''])[0]]));
@@ -205,6 +210,8 @@ try {
       if (r.poweredBy) report.php.versionHeader.push(p);
       continue;
     }
+    // [lecture] a stored lecture file is data: whatever its bytes are, no server may run it
+    if (/^data\/lectures\//.test(p) && r.body.includes(MARK('lecphp') + '-RAN')) report.php.phpOutput.push({ path: p, status: r.status, bytes: r.len, sample: 'a stored lecture file was EXECUTED' });
     if (c.private && r.status === 200 && leaks(r, p)) report.php.open.push({ path: p, why: c.why, bytes: r.len });
   }
   // every secret the server keeps must be a PHP file with the exit guard (served raw it would run and print nothing)
@@ -231,7 +238,7 @@ try {
         const c = classify(p, false);
         if (!c.private) continue;
         const r = await get(a.base, p);
-        const ran = p === 'uploads/shell.php' && r.body.includes(MARK('upload') + '-RAN');
+        const ran = (p === 'uploads/shell.php' && r.body.includes(MARK('upload') + '-RAN')) || (/^data\/lectures\//.test(p) && r.body.includes(MARK('lecphp') + '-RAN')); // [lecture]
         if (![403, 404].includes(r.status) || leaks(r, p) || ran) report.apache.open.push({ path: p, why: c.why, status: r.status, bytes: r.len, executed: ran || undefined, rule: ruleFor(p, false) });
       }
       for (const d of ['', ...dirs]) {
