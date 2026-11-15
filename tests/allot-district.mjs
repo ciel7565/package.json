@@ -172,8 +172,11 @@ async function functionalChecks(page) {
         if (!sp) { out.push({ code, ok: false, why: 'no spot' }); continue; }
         await G.sys.player.teleport(sp.x + d.origin.x, sp.z + d.origin.z, sp.rotY, { fade: false });
         Lv.sticky = null;
-        await new Promise((res) => setTimeout(res, 420));
-        const st = D.stats(), u = L.unitAt(A.x[i], A.z[i]), expect = u ? `${u.zone}-${String(u.seq).padStart(4, '0')}` : null;
+        const u = L.unitAt(A.x[i], A.z[i]), expect = u ? `${u.zone}-${String(u.seq).padStart(4, '0')}` : null;
+        // (the pick runs in the frame loop: on a loaded software-GL machine a frame can take a second — wait for it)
+        const t0 = performance.now();
+        do { await new Promise((res) => setTimeout(res, 250)); } while (D.stats().focus !== expect && performance.now() - t0 < 8000);
+        const st = D.stats();
         out.push({ code, focus: st.focus, expect, ok: st.focus === expect && expect === code });
       }
       return out;
