@@ -398,6 +398,7 @@ async function mainPage() {
       out.lockKey = { locked: s1.locked, req, mode: s1.mode, dot: !document.getElementById('ml-dot')?.hidden, chip: document.getElementById('ml-chip')?.textContent || '', coach: s1.coach };
       const y0 = cam._yawT, p0 = cam._pitchT;
       __mm(document, { movementX: 120, movementY: 40 });
+      await H.raf(); await H.raf();
       out.turn = { dyaw: cam._yawT - y0, dpitch: cam._pitchT - p0 };
       // a hostile delta never poisons the camera
       __mm(document, { movementX: 1e12, movementY: -1e12 });
@@ -437,10 +438,10 @@ async function mainPage() {
       out.walkModeReleased = !ML.state().locked;
       H.key('KeyW', true); await H.wait(400);
       const wl = ML.state().locked;
-      H.key('KeyW', false); await H.wait(250);
-      const stillHeld = ML.state().locked;
+      H.key('KeyW', false); const tUp = performance.now(); await H.raf();
+      const stillHeld = ML.state().locked, why05 = ML.state().lastReason, dtUp = Math.round(performance.now() - tUp);
       await H.wait(1500);
-      out.walk = { whileHeld: wl, after05: stillHeld, after18: ML.state().locked };
+      out.walk = { whileHeld: wl, after05: stillHeld, after18: ML.state().locked, why05, dtUp, why: ML.state().lastReason };
       // ---- drag: no lock on keys; a press-and-drag turns as before
       ML.setMode('drag');
       const r0 = req;
@@ -457,20 +458,25 @@ async function mainPage() {
       __mm(el, { clientX: 420, clientY: 270 });   // (the first move over the view only places the pointer)
       const yh1 = cam._yawT;
       __mm(el, { clientX: 480, clientY: 270 });   // a plain move (no movementX): the position change turns
+      await H.raf(); await H.raf();
       const hoverPlain = cam._yawT - yh1;
+      const yh3 = cam._yawT;
       __mm(el, { movementX: 60, clientX: 540, clientY: 270 });
-      const hoverTurn = cam._yawT - yh;
+      await H.raf(); await H.raf();
+      const hoverTurn = cam._yawT - yh3;
       const hud = document.querySelector('#bottom-bar, #hud-left-menu, #minimap-panel') || document.body;
       const yh2 = cam._yawT;
       __mm(hud, { movementX: 60, clientX: 10, clientY: 10 });
+      await H.raf(); await H.raf();
       const hudTurn = cam._yawT - yh2;
       const r = el.getBoundingClientRect();
       __mm(el, { clientX: r.right - 30, clientY: r.top + r.height / 2 });
       __mm(el, { clientX: r.right - 4, clientY: r.top + r.height / 2 });
       const ye = cam._yawT; await H.wait(700);
       const edgeTurn = cam._yawT - ye;
+      const hs = ML.state();
       ML.setMode('drag');
-      out.hover = { state: ML.state(), hoverTurn, hoverPlain, hudTurn, edgeTurn };
+      out.hover = { state: hs, hoverTurn, hoverPlain, hudTurn, edgeTurn };
       ML.setMode(null); ML.refresh();
       out.after = ML.state();
       return out;
