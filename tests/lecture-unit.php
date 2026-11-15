@@ -489,6 +489,37 @@ check('settings: validated, stored in the settings table, audited; the allow-lis
     Lecture::setOption($ADMIN, 'slide_hosts', Lecture::SLIDE_HOSTS);
     return (int) Db::value("SELECT COUNT(*) FROM audit_log WHERE event = 'setting_changed' AND detail LIKE '%lecture.%'") >= 4;
 });
+check('registry: the ⚙️ 설정 tab lists the lecture rows; a value saved there is the value the library reads, and the other way round', function () use ($ADMIN, &$made) {
+    $rows = Tfm\Settings::rows('lecture');
+    foreach (['lecture.auto_open' => 'bool', 'lecture.office_viewer' => 'bool', 'lecture.slide_hosts' => 'list', 'lecture.images_max' => 'int'] as $k => $t) {
+        if (!isset($rows[$k]) || $rows[$k]['type'] !== $t || $rows[$k]['public'] !== false) return "row $k";
+    }
+    $aid = (int) $ADMIN['id'];
+    $s = Lecture::create($ADMIN, ['title' => '구글 슬라이드', 'address' => 'https://docs.google.com/presentation/d/e/2PACX-testtesttesttesttesttesttest/pub', 'audience' => 'all']);
+    $made[] = $s['id'];
+    $offered = function () use ($s) { return in_array($s['id'], array_column(Lecture::publicList(null)['lectures'], 'id'), true); };
+    $v0 = Lecture::publicList(null);
+    if (!$offered() || $v0['opt']['autoOpen'] !== true) return 'before: ' . json_encode($v0['opt']);
+    // ⚙️ 설정 → the library (and the version of the list moves, so a page that holds the list asks again)
+    Tfm\Settings::set('lecture.auto_open', '0', $aid);
+    $v1 = Lecture::publicList(null);
+    if ($v1['opt']['autoOpen'] !== false || $v1['v'] === $v0['v']) return 'auto-open did not follow the registry, or the version stayed';
+    // 🎓 강의 자료 → the registry
+    Lecture::setOption($ADMIN, 'auto_open', '1');
+    if (Tfm\Settings::get('lecture.auto_open') !== true || Lecture::publicList(null)['v'] !== $v0['v']) return 'the registry did not follow the lecture tab';
+    Tfm\Settings::set('lecture.images_max', '7', $aid);
+    if (Lecture::limits()['images'] !== 7) return 'images_max: ' . Lecture::limits()['images'];
+    if (!Tfm\Settings::clear('lecture.images_max', $aid) || Lecture::limits()['images'] !== 80) return 'the default did not come back';
+    // a host switched off in ⚙️ 설정: its lectures leave the list, new ones are refused, the Office viewer is never offered
+    Tfm\Settings::set('lecture.slide_hosts', ['view.officeapps.live.com'], $aid);
+    if ($offered()) return 'a slides lecture of a switched-off host is still offered';
+    if (code(function () use ($ADMIN) { Lecture::create($ADMIN, ['title' => '또 하나', 'address' => 'https://docs.google.com/presentation/d/e/2PACX-testtesttesttesttesttesttest/pub']); }) === '') return 'a switched-off host was accepted';
+    foreach ([['lecture.slide_hosts', ['evil.example']], ['lecture.images_max', '0'], ['lecture.images_max', '201'], ['lecture.auto_open', 'maybe'], ['lecture.pdf_max_bytes', '1']] as $b) {
+        if (code(function () use ($b, $aid) { Tfm\Settings::set($b[0], $b[1], $aid); }) !== 'INVALID_SETTING') return 'the registry accepted ' . json_encode($b);
+    }
+    Tfm\Settings::set('lecture.slide_hosts', Lecture::SLIDE_HOSTS, $aid);
+    return $offered() ? true : 'the lecture did not come back with its host';
+});
 
 // ---------------------------------------------------------------------------------------------- audience
 check('audience: the list is filtered for a visitor, a member, a paid account, an allotment holder and an administrator', function () use ($ADMIN, $MEMBER, $PAID, $ALLOT, &$made, &$IDS) {

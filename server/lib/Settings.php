@@ -132,6 +132,12 @@ final class Settings
         self::define('env.night_brightness', 'float', 1.25, [0.6, 1.6], 'env', '밤 밝기', true, '1 = 예전 밝기. 숫자가 클수록 밤의 밭과 길이 밝아요.');
         self::define('farm.rt_basis', 'enum', 'calendar', ['calendar' => '작물 달력의 진짜 날짜', 'short' => '짧은 분 단위 (예전 방식)'], 'env', '실시간 텃밭의 기준', true);
         // ---------------------------------------------------------------- other lanes add their rows below, each in its own block
+        // ---------------------------------------------------------------- [lecture] 강의 (CONTRACT §17.3) — read through Tfm\Lecture::opt(); the size limits are megabytes in the 🎓 강의 자료 tab
+        self::define('lecture.auto_open', 'bool', Config::get('lecture.auto_open', true) !== false, null, 'lecture', '방에 들어가면 강의를 저절로 열기', false, '강의마다 켜 둔 "자동으로 열기"가 동작할지 정해요. 끄면 방에 들어가도 ▶ 강의 보기 카드만 보여요.');
+        self::define('lecture.office_viewer', 'bool', Config::get('lecture.office_viewer', false) === true, null, 'lecture', 'PPT를 오피스 온라인 뷰어로 보여 주기', false, '켜면 누구나 볼 수 있는 PPT 강의를 마이크로소프트의 뷰어 창으로 보여 줘요. 그 회사 서버가 우리 파일을 가져가 읽으므로 https 주소로 공개된 사이트에서만 동작해요. 끄면 체험관의 간단 보기로 보여 줘요.');
+        self::define('lecture.slide_hosts', 'list', ['docs.google.com', 'view.officeapps.live.com'], ['docs.google.com' => '구글 슬라이드 (docs.google.com)', 'view.officeapps.live.com' => '오피스 온라인 뷰어 (view.officeapps.live.com)'], 'lecture', '화면 안에 띄워도 되는 슬라이드 사이트', false, '체크를 빼면 그 사이트의 슬라이드 강의는 목록에서 빠지고 새로 추가할 수도 없어요. 다른 사이트는 언제나 새 창 링크로만 열려요.');
+        self::define('lecture.images_max', 'int', 80, [1, 200], 'lecture', '강의 하나에 올릴 수 있는 그림 수');
+        // ---------------------------------------------------------------- [/lecture]
     }
 
     /** the definitions of one group, in registry order */

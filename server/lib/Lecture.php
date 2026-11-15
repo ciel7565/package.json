@@ -676,14 +676,20 @@ final class Lecture
     public static function publicList(?array $user): array
     {
         $fl = self::flags($user);
-        $office = self::opt('office_viewer', false) === true && Http::isHttps() && !Http::isLocalhost();
+        $hosts = self::slideHosts();
+        // only an allow-listed host that is switched on is ever framed — the Office viewer is one of them
+        $office = self::opt('office_viewer', false) === true && in_array('view.officeapps.live.com', $hosts, true) && Http::isHttps() && !Http::isLocalhost();
         $out = [];
         foreach (self::enabledList() as $l) {
             if (!self::allowed($l['audience'], $fl)) continue;
             $o = ['id' => $l['id'], 'title' => $l['title'], 'kind' => $l['kind'], 'place' => $l['place'], 'autoplay' => $l['autoplay'], 'sort' => $l['sort']];
             if ($l['kind'] === 'youtube') {
                 $o['yt'] = $l['src'];
-            } elseif ($l['kind'] === 'slides' || $l['kind'] === 'link') {
+            } elseif ($l['kind'] === 'slides') {
+                // a host the operator switched off after this lecture was added: not offered (it comes back with the host)
+                if (!in_array(strtolower((string) parse_url($l['src'], PHP_URL_HOST)), $hosts, true)) continue;
+                $o['url'] = $l['src'];
+            } elseif ($l['kind'] === 'link') {
                 $o['url'] = $l['src'];
             } else {
                 $files = [];
@@ -695,8 +701,10 @@ final class Lecture
             }
             $out[] = $o;
         }
+        $auto = self::opt('auto_open', true) !== false;
         $json = json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return ['v' => (int) sprintf('%u', crc32(is_string($json) ? $json : '')), 'lectures' => $out, 'opt' => ['autoOpen' => self::opt('auto_open', true) !== false]];
+        // the option is part of the version: a caller that holds this list still learns that auto-open was switched
+        return ['v' => (int) sprintf('%u', crc32((is_string($json) ? $json : '') . ($auto ? '|a1' : '|a0'))), 'lectures' => $out, 'opt' => ['autoOpen' => $auto]];
     }
 
     /**
