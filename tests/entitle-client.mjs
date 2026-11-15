@@ -153,7 +153,13 @@ const snap = (page) => page.evaluate(() => {
     jarLimit: typeof J?.jarLimit === 'function' ? J.jarLimit() : null,
   };
 });
-const tap = async (page, sel) => { await page.waitForTimeout(480); await page.locator(sel).first().click({ timeout: T_UI }); };
+// A real pointer click first; on a machine where software WebGL starves the page a frame can take longer than the
+// click's stability wait, so after one long try the same element gets the DOM click (the same handler runs).
+const tap = async (page, sel) => {
+  await page.waitForTimeout(480);
+  const el = page.locator(sel).first();
+  try { await el.click({ timeout: 45000 }); } catch (e) { await el.evaluate((n) => n.click(), null, { timeout: T_UI }); }
+};
 const solveGate = async (page) => {
   for (let round = 0; round < 6; round++) {
     const q = await page.waitForSelector('.easy-gate-q[aria-label]', { timeout: T_UI }).catch(() => null);
