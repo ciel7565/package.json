@@ -80,8 +80,8 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
   // paving mesh) · 5 jar ground (pale gravel inside the walls) · 6 lawn (kept green) · 7 road (asphalt above it)
   // [complex-look] 8 forest (under the plan's groves) · 9 wild (mountain slope inside the rectangle) · 10 site (within a few
   // metres of anything built: pale warm earth instead of grass) · 11 verge (grass strips along roads and walls) · 12 jar rows
-  const CH = { rock: 0, earth: 1, soil: 2, gravel: 3, paved: 4, jar: 5, lawn: 6, road: 7, forest: 8, wild: 9, site: 10, verge: 11, row: 12 };
-  const NCH = 13;
+  const CH = { rock: 0, earth: 1, soil: 2, gravel: 3, paved: 4, jar: 5, lawn: 6, road: 7, forest: 8, wild: 9, site: 10, verge: 11, row: 12, near: 13 };
+  const NCH = 14;      // 13 near: within ≈ 3 m of anything built (trodden bare; further out grass creeps into the earth)
   class Field {
     constructor(step) {
       this.step = step;
@@ -205,6 +205,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     };
     pass(dev, tmp, r, 'max'); passV(tmp, site, r, 'max');
     pass(site, tmp, b, 'avg'); passV(tmp, site, b, 'avg');
+    const near = c[CH.near], r3 = Math.max(1, Math.round(3 / F.step)), b1 = Math.max(1, Math.round(1.5 / F.step));
+    pass(dev, tmp, r3, 'max'); passV(tmp, near, r3, 'max');
+    pass(near, tmp, b1, 'avg'); passV(tmp, near, b1, 'avg');
   }
 
   // ================================================================ surface for footsteps (a 2 m table, built once)
@@ -347,6 +350,9 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       _c2.copy(col.site).lerp(col.siteB, smooth(0.35, 0.75, n1)).lerp(col.siteC, smooth(0.5, 0.9, n2) * 0.55).lerp(col.siteG, smooth(0.5, 0.78, n4) * 0.6).multiplyScalar(0.93 + 0.14 * n3);
       const gp = smooth(0.5, 0.78, n4 + (n2 - 0.5) * 0.3) * 0.85;
       out.lerp(_c2, site); over(site, 1 - gp, 0, gp, 0);
+      // a few metres from anything trodden grass creeps into the earth in patches (no large bare single-colour field)
+      const weed = site * (1 - w(CH.near)) * smooth(0.38, 0.66, fbm(x / 17 + 3.3, z / 17 - 8.1)) * 0.75;
+      if (weed > 0.01) { _c2.copy(col.lawnDry).lerp(col.lawn, n2 * 0.6).lerp(col.siteB, 0.25).multiplyScalar(0.92 + 0.16 * n3); out.lerp(_c2, weed); over(weed, 0.3, 0.05, 0.05, 0); }
     }
     // 3. grass strips along the roads, round the parking and outside the yard walls
     const vg = w(CH.verge);

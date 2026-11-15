@@ -443,7 +443,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         const kind = cvx > 1.1 && hash2(i, j, 816) < 0.7 ? 2 : hash2(i, j, 815) < conif ? (hash2(i, j, 817) < 0.22 ? 2 : 0) : 1;
         const far = smooth(120, Q.near, od);
         const s = (kind === 1 ? 3.5 : kind === 2 ? 2.7 : 3.0) * (0.82 + 0.4 * hash2(i, j, 818)) * (1 + 0.45 * far) * big * (kind === 2 && cvx > 1.1 ? 1.2 : 1);
-        out.list.push({ x, y, z, s, kind, rot: hash2(i, j, 819) * TAU, v: hash2(i, j, 820), shade: clamp(1 + cvx * 0.035, 0.72, 1.18) });
+        out.list.push({ x, y, z, s, kind, rot: hash2(i, j, 819) * TAU, v: hash2(i, j, 820), shade: clamp(1 + cvx * 0.035, 0.8, 1.18) });
         out.counts[kind]++;
       }
     }
@@ -673,7 +673,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
    *  the crowns stand in each other. Vertex shades: dark below, light on top (the instance colour multiplies them). */
   function crownGeometry(kind) {
     const K = new Kit(['leaf']);
-    const shade = (y0, y1) => (px, py) => { const t = smooth(y0, y1, py), v = 0.5 + 0.68 * t; return [v, v, v]; };
+    const shade = (y0, y1) => (px, py) => { const t = smooth(y0, y1, py), v = 0.6 + 0.58 * t; return [v, v, v]; };   // (never near black: the night watchdog)
     const cone = (r, h, y, seg, tilt) => K.add(coneFan(r, h, seg), { matrix: at(tilt, y + h / 2, -tilt * 0.6, tilt * 0.12, y * 1.7, 0), color: shade(0, kind === 2 ? 5.2 : 3.0), leaf: 1 });
     if (kind === 0) { cone(1.0, 1.9, 0.0, 6, 0.0); cone(0.66, 1.65, 1.35, 6, 0.06); }                        // 12 triangles
     else if (kind === 2) { cone(0.8, 2.3, 0.0, 6, 0.0); cone(0.56, 2.1, 1.7, 5, 0.03); cone(0.33, 1.9, 3.3, 5, 0.05); }   // 16
@@ -839,7 +839,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
         isCon = 1.0 - isCon;
         float hue = cxN(p / 5.3 - 4.4);
         vec3 broad = mix(vec3(0.026, 0.052, 0.018), vec3(0.05, 0.086, 0.027), hue) * mix(0.74, 1.1, n3);
-        vec3 con = mix(vec3(0.014, 0.031, 0.017), vec3(0.026, 0.05, 0.025), hue) * mix(0.82, 1.08, n3);
+        vec3 con = mix(vec3(0.017, 0.035, 0.019), vec3(0.028, 0.052, 0.026), hue) * mix(0.84, 1.08, n3);
         vec3 crown = mix(broad, con, isCon);
         crown *= mix(0.62, 1.12, cxDome * cxDet + 0.55 * (1.0 - cxDet));
         crown += isCon * vec3(0.016, 0.022, 0.006) * smoothstep(0.7, 0.95, cxDome) * cxDet;
@@ -1601,7 +1601,7 @@ vec4 cxCell(vec2 p, out vec2 toF){
       }
     });
     if (CN.list.length) {
-      const CB = [[0.03, 0.056, 0.027], [0.05, 0.09, 0.027], [0.021, 0.043, 0.026]];           // pine · broadleaf · fir (linear)
+      const CB = [[0.032, 0.058, 0.028], [0.05, 0.09, 0.028], [0.025, 0.048, 0.029]];          // pine · broadleaf · fir (linear)
       for (let kind = 0; kind < 3; kind++) {
         const sub = CN.list.filter((c) => c.kind === kind);
         if (!sub.length) continue;
