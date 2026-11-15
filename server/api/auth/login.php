@@ -35,5 +35,5 @@ Api::run(['method' => 'POST', 'rate' => 'login', 'rateBy' => 'ip'], function (Ct
     Users::ensureDefaultAdmin($login);
     $u = Auth::attemptLogin($login, $pw, $remember);
     $sub = Subscription::state((int) $u['id']);
-    return ['user' => Users::publicUser($u), 'sub' => $sub, 'ent' => Entitle::forUser($u, $sub), 'site' => Entitle::site()] + SaveValidator::restoreStampFor((int) $u['id']);
+    return ['user' => Users::publicUser($u), 'sub' => $sub, 'ent' => Entitle::forUser($u, $sub)] + Entitle::siteOut() + SaveValidator::restoreStampFor((int) $u['id']);
 });

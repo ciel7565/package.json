@@ -25,7 +25,7 @@ use Tfm\Users;
 
 Api::run(['method' => 'GET', 'rate' => 'me'], function (Ctx $c): array {
     $features = ['features' => class_exists('Tfm\Sync') ? Sync::features() : ['sync' => 0, 'queue' => 0]];
-    $site = ['site' => Entitle::site()]; // [entitle]
+    $site = Entitle::siteOut(); // [entitle] site + siteV
     if (!$c->user) return ['user' => null, 'sub' => Subscription::none(), 'ent' => Entitle::guest()] + $site + SaveValidator::restoreStamp(null) + $features;
     $sub = Subscription::state($c->uid());
     $out = ['user' => Users::publicUser($c->user), 'mutedUntil' => (int) $c->user['muted_until'], 'sub' => $sub, 'ent' => Entitle::forUser($c->user, $sub)] + $site + SaveValidator::restoreStampFor($c->uid()) + $features;

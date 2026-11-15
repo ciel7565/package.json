@@ -1856,6 +1856,227 @@ async function main() {
     return '13 endpoints refused while off';
   });
 
+  // ------------------------------------------------------------- entitlements (CONTRACT §17.2) [entitle]
+  // `ent` is the server's one answer to "what may this account do" (role + plan + operator settings). A mock 토스
+  // purchase raises it at once, its end lowers it without losing a jar, an administrator needs no purchase, and nothing
+  // a client sends counts. Fresh accounts, so the block can be repeated against the same server.
+  const EB = new Client('ent-buyer'), EF = new Client('ent-free'), EA = new Client('ent-admin'), EP = new Client('ent-pw'), EP2 = new Client('ent-pw-2');
+  const userEB = { email: `e2e_eb${id}@example.com`, nickname: `Plan_${tag.slice(-5)}` };
+  const userEF = { email: `e2e_ef${id}@example.com`, nickname: `Free_${tag.slice(-5)}` };
+  const userEA = { email: `e2e_ea${id}@example.com`, nickname: `Boss_${tag.slice(-5)}` };
+  const userEP = { email: `e2e_ep${id}@example.com`, nickname: `Pass_${tag.slice(-5)}` };
+  const join = async (c, u) => {
+    await c.req('api/ping.php');
+    const r = await c.req('api/auth/register.php', { json: { email: u.email, nickname: u.nickname, password: PASSWORD, password_confirm: PASSWORD, agree: true } });
+    assert(r.status === 200 || r.status === 201, `register ${u.email}: ${r.status} ${r.error?.code}`);
+    Object.assign(u, r.data.user);
+    return r;
+  };
+  const violations = (r) => (r.json?.data?.violations || []);
+  const isFree = (e) => !!e && e.v === 1 && e.tier === 1 && e.paid === false && e.admin === false && e.speed?.move === 1 && e.speed?.grow === 1 && e.limits?.jars === 3 && e.limits?.roomItems === 80 && !('adminUrl' in e) && !('pwDefault' in e);
+  /** jars J<from> … J<to> owned the way a plan opens them (no coins: `via: 'plan'`) */
+  const planJars = (st, from, to) => { for (let k = from; k <= to; k++) st.jars[`J${k}`] = { ...structuredClone(st.jars.J2 || st.jars.J1), owned: true, via: 'plan', recipeId: null, status: 'EMPTY', progress: 0, startedAt: 0, lastUpdate: Date.now() }; };
+  let ebState = null;
+  await step('ent: ping · me · login carry the public operator settings (`site` + its stamp `siteV`): limits and the tiers on sale — never a price, a multiplier or a secret; a guest has the free entitlement', async () => {
+    const pg = await anon.req('api/ping.php');
+    const site = pg.data?.site;
+    assert(site && typeof site === 'object' && !Array.isArray(site), `ping.site ${JSON.stringify(site).slice(0, 120)}`);
+    assert(JSON.stringify(site['sub.tiers_on']) === '[2,3]' && site['limits.jars_free'] === 3 && site['limits.jars_paid'] === 12 && site['limits.room_items_free'] === 80 && site['limits.room_items_paid'] === 160, `site ${JSON.stringify(site).slice(0, 300)}`);
+    const leak = Object.keys(site).filter((k) => /price|secret|key|password|move_|grow_|twofa|period|grace/.test(k));
+    assert(!leak.length, `not public: ${leak.join(', ')}`);
+    assert(/^[0-9a-f]{12}$/.test(pg.data.siteV), `siteV ${pg.data.siteV}`);
+    const m = await anon.req('api/auth/me.php');
+    assert(m.data?.user === null && isFree(m.data.ent) && m.data.ent.features?.myroom === false && m.data.siteV === pg.data.siteV && JSON.stringify(m.data.site) === JSON.stringify(site), `guest me ${JSON.stringify(m.data?.ent)}`);
+    return `${Object.keys(site).length} public settings · stamp ${pg.data.siteV}`;
+  });
+  await step('ent: buying tier 2 (mock 토스: prepare → confirm) raises `ent` at once — tier 2, moves and grows × 2, 12 jars, 160 room items, paid until the plan ends; me · get · status · save agree', async () => {
+    if (skipSub()) return skipSub();
+    const reg = await join(EB, userEB);
+    assert(isFree(reg.data.ent), `register ent ${JSON.stringify(reg.data.ent)}`);
+    ebState = freshState(userEB);
+    const s0 = await EB.req('api/player/save.php', { json: saveBody(ebState) });
+    assert(s0.status === 200 && isFree(s0.data.ent) && /^[0-9a-f]{12}$/.test(s0.data.siteV), `baseline save ${s0.status} ${s0.error?.code} ${JSON.stringify(s0.data?.ent)}`);
+    const pr = await EB.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } });
+    assert(pr.status === 200 && pr.data?.orderId && pr.data.mock === true, `prepare ${pr.status} ${pr.error?.code}`);
+    const cf = await EB.req('api/sub/confirm.php', { json: { paymentKey: 'mock_' + pr.data.orderId, orderId: pr.data.orderId, amount: pr.data.amount } });
+    const e = cf.data?.ent;
+    assert(cf.status === 200 && e && e.tier === 2 && e.paid === true && e.admin === false && e.until === cf.data.sub.expiresAt && e.until > Date.now() + 29 * 86400000
+      && e.speed.move === 2 && e.speed.grow === 2 && e.limits.jars === 12 && e.limits.roomItems === 160 && !('adminUrl' in e), `confirm ${cf.status} ${cf.error?.code} ${JSON.stringify(e)}`);
+    const same = (x) => JSON.stringify(x) === JSON.stringify(e);
+    const m = await EB.req('api/auth/me.php'), g = await EB.req('api/player/get.php'), st = await EB.req('api/sub/status.php');
+    assert(same(m.data.ent) && same(g.data.ent) && same(st.data.ent), `me ${JSON.stringify(m.data.ent)} get ${JSON.stringify(g.data.ent)} status ${JSON.stringify(st.data.ent)}`);
+    return `tier 2 until ${new Date(e.until).toISOString().slice(0, 10)} · jars ${e.limits.jars}`;
+  });
+  await step('ent: with the plan the account opens all 12 jars (plan jars cost no coins) and starts a batch in jar 7; a thirteenth jar is refused (JAR_LIMIT)', async () => {
+    if (skipSub()) return skipSub();
+    const s = structuredClone(ebState);
+    planJars(s, 2, 12);
+    Object.assign(s.jars.J7, { recipeId: 'FER001', status: 'PREPARING', progress: 0, startedAt: Date.now() - 4000 });
+    s.savedAt = Date.now();
+    const r = await EB.req('api/player/save.php', { json: saveBody(s) });
+    assert(r.status === 200 && r.data.ent?.limits?.jars === 12, `12 jars: ${r.status} ${r.error?.code} ${violations(r)}`);
+    ebState = s;
+    const t = structuredClone(s);
+    t.jars.J13 = { ...structuredClone(t.jars.J12) };
+    t.savedAt = Date.now();
+    const no = await EB.req('api/player/save.php', { json: saveBody(t) });
+    assert(no.status === 409 && no.error?.code === 'VALIDATION_FAILED' && violations(no).includes('JAR_LIMIT'), `13th jar: ${no.status} ${no.error?.code} ${violations(no)}`);
+    assert(no.json?.data?.ent?.limits?.jars === 12, 'the refusal carries the entitlement too');
+    const g = await EB.req('api/player/get.php');
+    const owned = Object.values(g.data.save.data.jars).filter((j) => j.owned).length;
+    assert(owned === 12 && g.data.save.data.jars.J7.recipeId === 'FER001' && !g.data.save.data.jars.J13, `stored: ${owned} jars`);
+    return '12 jars stored, jar 7 holds a batch; a 13th → JAR_LIMIT';
+  });
+  await step('ent: the plan ends → `ent` is tier 1 with 3 jars at once, but nothing is lost: the save with 12 own jars is still accepted, jar 7 keeps its batch, only a NEW batch in a locked jar (8) is refused (JAR_LOCKED); jar 2 works', async () => {
+    if (skipSub()) return skipSub();
+    if (!phpProc) return 'skipped (external server: the end of the period is set through the spawned server)';
+    // the period is over (no auto-renew): the next request settles the plan, exactly as on the day after it ends
+    srvPhp('Tfm\\Db::exec("UPDATE subscriptions SET expires_at = ? WHERE user_id = ?", [$in["t"], $in["u"]])', { t: Date.now() - 3 * 86400000, u: Number(userEB.id) });
+    const m = await EB.req('api/auth/me.php');
+    assert(m.data.sub.tier === 1 && isFree(m.data.ent), `after the end: sub ${JSON.stringify(m.data.sub)} ent ${JSON.stringify(m.data.ent)}`);
+    // (1) the same 12 jars: accepted, twice (the second save is judged with the new limit alone)
+    for (const n of [1, 2]) {
+      const s = structuredClone(ebState); s.savedAt = Date.now(); s.stats.playTime += 2;
+      const r = await EB.req('api/player/save.php', { json: saveBody(s) });
+      assert(r.status === 200 && r.data.ent.limits.jars === 3 && r.data.ent.tier === 1, `save ${n} after the end: ${r.status} ${r.error?.code} ${violations(r)}`);
+      ebState = s;
+    }
+    // (2) a NEW batch in jar 8 (locked: beyond the first three)
+    const locked = structuredClone(ebState);
+    Object.assign(locked.jars.J8, { recipeId: 'FER001', status: 'PREPARING', progress: 0, startedAt: Date.now() - 3000 });
+    locked.savedAt = Date.now();
+    const no = await EB.req('api/player/save.php', { json: saveBody(locked) });
+    assert(no.status === 409 && violations(no).includes('JAR_LOCKED'), `new batch in jar 8: ${no.status} ${no.error?.code} ${violations(no)}`);
+    // (3) a new batch in jar 2 (one of the first three) is fine
+    const open = structuredClone(ebState);
+    Object.assign(open.jars.J2, { recipeId: 'FER001', status: 'PREPARING', progress: 0, startedAt: Date.now() - 3000 });
+    open.savedAt = Date.now();
+    const ok = await EB.req('api/player/save.php', { json: saveBody(open) });
+    assert(ok.status === 200, `new batch in jar 2: ${ok.status} ${ok.error?.code} ${violations(ok)}`);
+    ebState = open;
+    const g = await EB.req('api/player/get.php');
+    const jars = g.data.save.data.jars;
+    const owned = Object.values(jars).filter((j) => j.owned).length;
+    assert(owned === 12 && jars.J7.recipeId === 'FER001' && jars.J7.status === 'PREPARING' && jars.J8.recipeId === null && jars.J2.recipeId === 'FER001', `stored jars: ${owned} owned, J7 ${jars.J7.recipeId}`);
+    return 'ent tier 1 / 3 jars · 12 jars and jar 7\'s batch still stored · jar 8 → JAR_LOCKED · jar 2 ok';
+  });
+  await step('ent: nothing a client sends can raise it — `ent` / `sub` / limits inside the save, as extra body fields, in the address or in a header change nothing; a fourth jar stays refused for a free account', async () => {
+    const reg = await join(EF, userEF);
+    assert(isFree(reg.data.ent), 'a fresh account is free');
+    const forgedEnt = { v: 1, role: 'admin', admin: true, tier: 4, paid: true, until: Date.now() + 9e9, speed: { move: 3, grow: 4 }, limits: { jars: 12, roomItems: 300 }, features: { myroom: true }, adminUrl: 'admin/' };
+    let st = freshState(userEF);
+    const base = await EF.req('api/player/save.php', { json: saveBody(st) });
+    assert(base.status === 200, `baseline ${base.status} ${base.error?.code}`);
+    // inside the saved data
+    const a = structuredClone(st); a.ent = forgedEnt; a.limits = { jars: 12 }; a.sub = { tier: 4, status: 'active', expiresAt: Date.now() + 9e9, autoRenew: true }; a.profile.role = 'admin'; a.savedAt = Date.now();
+    const ra = await EF.req('api/player/save.php', { json: saveBody(a) });
+    assert((ra.status === 200 && isFree(ra.data.ent)) || (ra.status >= 400 && ra.status < 500), `forged data: ${ra.status} ${JSON.stringify(ra.data?.ent)}`);
+    if (ra.status === 200) st = a;
+    // next to the saved data, in the address and in headers
+    const b = structuredClone(st); b.savedAt = Date.now(); b.stats.playTime += 1;
+    const rb = await EF.req('api/player/save.php?ent[tier]=4&tier=4&admin=1&role=admin&jars=12', { json: { ...saveBody(b), ent: forgedEnt, tier: 4, role: 'admin' }, headers: { 'X-Ent': JSON.stringify(forgedEnt), 'X-Tier': '4', 'X-Role': 'admin' } });
+    assert((rb.status === 200 && isFree(rb.data.ent)) || (rb.status >= 400 && rb.status < 500), `forged request: ${rb.status} ${JSON.stringify(rb.data?.ent)}`);
+    if (rb.status === 200) st = b;
+    for (const p of ['api/auth/me.php?ent[tier]=4&admin=1', 'api/sub/status.php?tier=4', 'api/player/get.php?ent=admin']) {
+      const r = await EF.req(p, { headers: { 'X-Ent': JSON.stringify(forgedEnt) } });
+      assert(r.status === 200 && isFree(r.data.ent), `${p}: ${r.status} ${JSON.stringify(r.data?.ent)}`);
+    }
+    const g = await EF.req('api/player/get.php');
+    assert(g.data.save.data.sub?.tier === 1 && g.data.save.data.profile.role === 'user', `stored: sub ${JSON.stringify(g.data.save.data.sub)} role ${g.data.save.data.profile.role}`);
+    // four own jars with a forged entitlement in the same save
+    const c = structuredClone(st); planJars(c, 2, 4); c.ent = forgedEnt; c.savedAt = Date.now();
+    const rc = await EF.req('api/player/save.php', { json: saveBody(c) });
+    assert(rc.status === 409 && violations(rc).includes('JAR_LIMIT') && isFree(rc.json.data.ent), `4 jars: ${rc.status} ${rc.error?.code} ${violations(rc)}`);
+    // an order for a tier that is not on sale
+    const t4 = await EF.req('api/sub/prepare.php', { json: { tier: 4, kind: 'card' } });
+    assert(t4.status === 400 && t4.error?.code === 'INVALID_TIER', `tier 4 order: ${t4.status} ${t4.error?.code}`);
+    return 'forged ent in data / body / address / headers ignored · 4 jars → JAR_LIMIT · tier 4 not on sale → INVALID_TIER';
+  });
+  await step('ent: an administrator needs no purchase — ent.admin, the top tier on sale (3) with × 3 / × 3, 12 jars, a room and the admin address; an order is refused (409 ADMIN_FREE, no order row); a × 3 walk and 12 jars are accepted without a plan', async () => {
+    if (!phpProc) return 'skipped (external server: no cli to promote an administrator)';
+    await join(EA, userEA);
+    const pr = cli('promote', userEA.email);
+    assert(pr.status === 0, `promote: ${pr.out.slice(0, 200)}`);
+    const lg = await EA.req('api/auth/login.php', { json: { login: userEA.email, password: PASSWORD, remember: false } });
+    const e = lg.data?.ent;
+    assert(lg.status === 200 && e && e.role === 'admin' && e.admin === true && e.tier === 3 && e.paid === false && e.until === 0 && e.speed.move === 3 && e.speed.grow === 3 && e.limits.jars === 12 && e.limits.roomItems === 160
+      && e.features.myroom === true && /^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}\/$/.test(e.adminUrl || '') && !('pwDefault' in e), `admin ent ${lg.status} ${JSON.stringify(e)}`);
+    assert(lg.data.sub.tier === 1 && lg.data.sub.status === 'none', `the administrator has no plan: ${JSON.stringify(lg.data.sub)}`);
+    const o = await EA.req('api/sub/prepare.php', { json: { tier: 2, kind: 'card' } });
+    assert(o.status === 409 && o.error?.code === 'ADMIN_FREE', `order: ${o.status} ${o.error?.code}`);
+    assert(dbAll('SELECT id FROM orders WHERE user_id = ?', [Number(userEA.id)]).length === 0, 'no order row for the administrator');
+    const s0 = freshState({ ...userEA, role: 'admin' });
+    const b = await EA.req('api/player/save.php', { json: saveBody(s0) });
+    assert(b.status === 200 && b.data.ent.admin === true, `baseline ${b.status} ${b.error?.code} ${violations(b)}`);
+    await sleep(1200);
+    // + 600 m about a second later: 18 m/s × 3 × (1 s + 5 s) + 300 m allows it at × 3 (a free account: 408 m — refused above)
+    const s1 = structuredClone(s0); s1.stats.distance += 600; planJars(s1, 2, 12); s1.savedAt = Date.now();
+    const r = await EA.req('api/player/save.php', { json: saveBody(s1) });
+    assert(r.status === 200 && r.data.ent.tier === 3 && r.data.ent.limits.jars === 12, `× 3 walk + 12 jars: ${r.status} ${r.error?.code} ${violations(r)}`);
+    // the admin fields never reach a player
+    const pl = await EF.req('api/auth/me.php');
+    assert(!('adminUrl' in pl.data.ent) && !('pwDefault' in pl.data.ent) && pl.data.adminUrl === undefined, `a player's me: ${JSON.stringify(pl.data.ent)}`);
+    return `tier ${e.tier} free · adminUrl ${e.adminUrl} · ADMIN_FREE`;
+  });
+  await step('login by id: an account with a login id signs in with it; the id `admin` with the well-known default password answers exactly like an unknown id (401, same code and sentence) and creates no account on a server that has accounts', async () => {
+    if (!phpProc) return 'skipped (external server: the login id is set through the spawned server)';
+    const lid = `boss_${id}`.slice(0, 20);
+    srvPhp('Tfm\\Users::update((int) $in["u"], ["login_id" => $in["l"]])', { u: Number(userEA.id), l: lid });
+    const c = new Client('by-id'); await c.req('api/ping.php');
+    const ok = await c.req('api/auth/login.php', { json: { login: lid, password: PASSWORD, remember: false } });
+    assert(ok.status === 200 && ok.data.user.id === userEA.id && ok.data.ent.admin === true, `login by id: ${ok.status} ${ok.error?.code}`);
+    const c2 = new Client('by-id-2'); await c2.req('api/ping.php');
+    const before = dbAll('SELECT COUNT(*) AS n FROM users', [])[0].n;
+    const def = await c2.req('api/auth/login.php', { json: { login: 'admin', password: 'admin' + '1234', remember: false } });
+    const ghost = await c2.req('api/auth/login.php', { json: { login: `ghost_${id}`, password: 'admin' + '1234', remember: false } });
+    const wrong = await c2.req('api/auth/login.php', { json: { login: lid, password: 'not-the-password1', remember: false } });
+    assert(def.status === 401 && ghost.status === 401 && wrong.status === 401, `statuses ${def.status} ${ghost.status} ${wrong.status}`);
+    assert(def.error.code === ghost.error.code && ghost.error.code === wrong.error.code && def.error.message === ghost.error.message && ghost.error.message === wrong.error.message, `answers differ: ${JSON.stringify([def.error, ghost.error, wrong.error])}`);
+    const after = dbAll('SELECT COUNT(*) AS n FROM users', [])[0].n;
+    const admins = dbAll("SELECT id FROM users WHERE login_id = 'admin'", []);
+    assert(Number(after) === Number(before) && admins.length === 0, `accounts ${before} → ${after}, id admin: ${admins.length}`);
+    return `id ${lid} signs in · admin / unknown id / wrong password → the same 401 ${def.error.code}`;
+  });
+  await step('auth/password: needs the session and the CSRF token; a wrong present password → 401, a weak or unchanged new one → 400; a good change ends every OTHER session of the account, keeps this one (new CSRF token) and the old password stops working', async () => {
+    await join(EP, userEP);
+    await EP2.req('api/ping.php');
+    const second = await EP2.req('api/auth/login.php', { json: { login: userEP.email, password: PASSWORD, remember: false } });
+    assert(second.status === 200, `second device login ${second.status}`);
+    const NEW = 'Onggi2026jangdok';
+    const guest = await anon.req('api/auth/password.php', { json: { current: PASSWORD, password: NEW, password_confirm: NEW } });
+    assert(guest.status === 401 || guest.status === 403, `without a session: ${guest.status}`);
+    const nocsrf = await EP.req('api/auth/password.php', { json: { current: PASSWORD, password: NEW, password_confirm: NEW }, csrf: false });
+    assert(nocsrf.status === 403 && nocsrf.error?.code === 'CSRF_INVALID', `without the token: ${nocsrf.status} ${nocsrf.error?.code}`);
+    const get = await EP.req('api/auth/password.php');
+    assert(get.status === 405, `GET: ${get.status}`);
+    const wrong = await EP.req('api/auth/password.php', { json: { current: 'Wrong2026pass', password: NEW, password_confirm: NEW } });
+    assert(wrong.status === 401 && wrong.error?.code === 'INVALID_CREDENTIALS', `wrong present password: ${wrong.status} ${wrong.error?.code}`);
+    for (const [pw, code] of [['admin' + '1234', 'WEAK_PASSWORD'], ['short1', 'WEAK_PASSWORD'], ['onlyletters', 'WEAK_PASSWORD'], [PASSWORD, 'SAME_PASSWORD']]) {
+      const r = await EP.req('api/auth/password.php', { json: { current: PASSWORD, password: pw, password_confirm: pw } });
+      assert(r.status === 400 && r.error?.code === code, `new password "${pw.slice(0, 4)}…": ${r.status} ${r.error?.code} (expected ${code})`);
+    }
+    const mism = await EP.req('api/auth/password.php', { json: { current: PASSWORD, password: NEW, password_confirm: NEW + 'x' } });
+    assert(mism.status === 400 && mism.error?.code === 'PASSWORD_MISMATCH', `mismatch: ${mism.status} ${mism.error?.code}`);
+    const extra = await EP.req('api/auth/password.php', { json: { current: PASSWORD, password: NEW, password_confirm: NEW, role: 'admin' } });
+    assert(extra.status === 400, `an unknown field: ${extra.status}`);
+    assert((await EP2.req('api/auth/me.php')).data.user?.id === userEP.id, 'the second device is still logged in before the change');
+    const tokBefore = EP.csrf, cookieBefore = EP.sessionCookie();
+    const ok = await EP.req('api/auth/password.php', { json: { current: PASSWORD, password: NEW, password_confirm: NEW } });
+    assert(ok.status === 200 && ok.data.changed === true && isFree(ok.data.ent), `change: ${ok.status} ${ok.error?.code}`);
+    assert(EP.csrf && EP.csrf !== tokBefore && EP.sessionCookie() !== cookieBefore, 'this session continues with a new id and a new CSRF token');
+    const mine = await EP.req('api/auth/me.php'), other = await EP2.req('api/auth/me.php');
+    assert(mine.data.user?.id === userEP.id && other.data.user === null, `after the change: this session ${mine.data.user?.id}, the other ${JSON.stringify(other.data.user)}`);
+    const c = new Client('pw-old'); await c.req('api/ping.php');
+    const oldPw = await c.req('api/auth/login.php', { json: { login: userEP.email, password: PASSWORD, remember: false } });
+    const newPw = await c.req('api/auth/login.php', { json: { login: userEP.email, password: NEW, remember: false } });
+    assert(oldPw.status === 401 && newPw.status === 200, `old password ${oldPw.status}, new password ${newPw.status}`);
+    if (phpProc) {
+      const au = dbAll("SELECT detail FROM audit_log WHERE event = 'password_changed' AND user_id = ? ORDER BY id DESC LIMIT 1", [Number(userEP.id)])[0];
+      assert(au && !au.detail.includes(NEW) && !au.detail.includes(PASSWORD) && /"via":"app"/.test(au.detail), `audit ${JSON.stringify(au)}`);
+    }
+    return 'wrong / weak / same / mismatch refused · the other session ended · audited without a password';
+  });
+
   // ------------------------------------------------------------- summary
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${failed.length ? C.r('✖') : C.g('✔')} ${results.length - failed.length}/${results.length} passed${failed.length ? ` — failed: ${failed.map((f) => f.name).join(' | ')}` : ''}`);

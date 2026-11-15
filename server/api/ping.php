@@ -43,7 +43,7 @@ Api::run(['method' => ['GET', 'HEAD'], 'rate' => 'ping', 'rateBy' => 'ip', 'sess
     ];
     if (class_exists('Tfm\Farm')) $out['rtScale'] = Farm::scale();
     $out['features'] = class_exists('Tfm\Sync') ? Sync::features() : ['sync' => 0, 'queue' => 0];
-    try { $out['site'] = Entitle::site(); } catch (\Throwable $e) { $out['site'] = new \stdClass(); } // [entitle] the page falls back to its own defaults
+    try { $out += Entitle::siteOut(); } catch (\Throwable $e) { $out['site'] = new \stdClass(); } // [entitle] site + siteV; the page falls back to its own defaults
     // capacity.stats_header (off by default — tools/loadtest.mjs turns it on for its own instance): the live capacity
     // numbers and what the after-response work cost, readable with every cache driver (numbers only, nothing personal)
     if (Config::get('capacity.stats_header', false) && class_exists('Tfm\Gate') && class_exists('Tfm\Sync')) {

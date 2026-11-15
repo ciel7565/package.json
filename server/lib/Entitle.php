@@ -153,4 +153,13 @@ final class Entitle
     {
         return Settings::publicValues();
     }
+
+    /**
+     * `site` together with its stamp, as ping.php, auth/me.php and auth/login.php send it: the page compares the stamp
+     * with the `siteV` of every save answer and asks for `site` again when an operator changed a public setting.
+     */
+    public static function siteOut(): array
+    {
+        return ['site' => self::site(), 'siteV' => Settings::publicStamp()];
+    }
 }
