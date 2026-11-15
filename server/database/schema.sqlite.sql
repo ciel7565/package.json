@@ -658,4 +658,23 @@ CREATE TABLE IF NOT EXISTS lecture_files (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_lecfiles_n ON lecture_files (lecture_id, n);
 -- [/lecture]
 
+-- [myroom] §17.4: one decorated room per account (내 방). data = the JSON Tfm\Room checked ({style, items}; at most 24 KB,
+-- catalogue ids and numbers only — nothing a visitor typed); v counts the accepted saves (the last write wins);
+-- public = 1 lets other accounts look at the room (read only); granted = 1 means the operator gave this account a room
+-- directly (🏺 분양 관리 → 고객, 👥 사용자), granted_at / granted_by say when and who. A row without a room yet has data ''.
+-- No foreign key to users (the same rule as the v7 tables); api/room/get.php reads exactly one row by its primary key.
+CREATE TABLE IF NOT EXISTS user_rooms (
+  user_id    INTEGER NOT NULL PRIMARY KEY,
+  v          INTEGER NOT NULL DEFAULT 0,
+  data       TEXT NOT NULL DEFAULT '',
+  public     INTEGER NOT NULL DEFAULT 0,
+  granted    INTEGER NOT NULL DEFAULT 0,
+  granted_at INTEGER NOT NULL DEFAULT 0,
+  granted_by INTEGER,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_rooms_granted ON user_rooms (granted, user_id);
+CREATE INDEX IF NOT EXISTS ix_rooms_public ON user_rooms (public, updated_at);
+-- [/myroom]
+
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (8, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');

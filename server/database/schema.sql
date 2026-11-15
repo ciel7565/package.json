@@ -707,4 +707,23 @@ CREATE TABLE IF NOT EXISTS lecture_files (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 -- [/lecture]
 
+-- [myroom] §17.4: one decorated room per account (내 방). data = the JSON Tfm\Room checked ({style, items}; at most 24 KB,
+-- catalogue ids and numbers only — nothing a visitor typed); v counts the accepted saves (the last write wins);
+-- public = 1 lets other accounts look at the room (read only); granted = 1 means the operator gave this account a room
+-- directly (🏺 분양 관리 → 고객, 👥 사용자), granted_at / granted_by say when and who. A row without a room yet has data ''.
+-- No foreign key to users (the same rule as the v7 tables); api/room/get.php reads exactly one row by its primary key.
+CREATE TABLE IF NOT EXISTS user_rooms (
+  user_id    BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  v          INT UNSIGNED NOT NULL DEFAULT 0,
+  data       TEXT NOT NULL,
+  public     TINYINT NOT NULL DEFAULT 0,
+  granted    TINYINT NOT NULL DEFAULT 0,
+  granted_at BIGINT NOT NULL DEFAULT 0,
+  granted_by BIGINT UNSIGNED NULL,
+  updated_at BIGINT NOT NULL,
+  KEY ix_rooms_granted (granted, user_id),
+  KEY ix_rooms_public (public, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+-- [/myroom]
+
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (8, UNIX_TIMESTAMP() * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');
