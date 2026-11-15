@@ -480,7 +480,7 @@
       light: { hemi: { sky: '#d4dbe2', ground: '#6b6358', intensity: shadowed ? 0.32 : 0.7 }, exposure: 0.95 },
     });
     const A = (key, spot) => ctx.anchor(key, spot);
-    if (has('lightShafts')) K.lightShafts(R, { alpha: 0.12, color: '#ffe6c0' });
+    if (has('lightShafts')) K.lightShafts(R, { alpha: 0.05, color: '#ffe6c0', len: 6 });
     const stone = (x, z, w, d, h) => {
       K.block(R, { x, z, w, h, d, mat: 'stone', tint: '#9a9384', bevel: 0.035 });
       // a row of field stones along the front edge of the 단
