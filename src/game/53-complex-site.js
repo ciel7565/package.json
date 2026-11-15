@@ -1471,7 +1471,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       spawn: { x: C.spawn.x, z: C.spawn.z, rotY: C.spawn.rot },
       door: { x: STOP.door.x, z: STOP.door.z, label: '🚌 만장대 단지 가기', kidLabel: '🚌 만 개의 장독대 가기', radius: 3.4, sign: false },
       exit: STOP.exit,
-      camera: { dist: 10, min: 4.5, max: 24, pitch: 0.42, pmin: -0.1, pmax: 1.15 },
+      camera: { dist: 10, min: 4.5, max: 36, pitch: 0.42, pmin: -0.1, pmax: 1.15 },       // (max 36: the hero view of the lookout)
       far: 2600,
       minimap: drawMinimap,
       build: buildPlace,

@@ -45,7 +45,7 @@
 // | 옹기 workshop + climbing kiln | (−50, −128), kiln (−50, −134 … −149) | 12 × 9                                                      |
 // | overflow field                | x 100 … 146, z −70 … −18             | any kind on a 2 m grid                                      |
 // | 만장대 전망대 (the lookout)    | crag summit (−126, 160), pulpit floor y 62.6 (≈ 62 m over the plaza) | round stone pulpit r 2.6 with a low rail; four timber flights and two stone flights (≈ 33°) from the gate road at (−99.4, 100.2) over the rest terrace (−113.2, 118.6, y 26.9); 🚡 lift from the plaza (−74, 49) |
-// | hero view (= image 3)         | a visitor on the pulpit, follow camera 24 m behind at pitch 0.5, aimed 38° east of north | viewpoint `hero`    |
+// | hero view (= image 3)         | a visitor on the pulpit, follow camera 34 m behind at pitch 0.55, aimed 38° east of north | viewpoint `hero`   |
 // | aerial camera (= image 3)     | (−105.5, 132.7, 234.9) → (−22.6, 0, 30.8), vfov 44 | fitted to 11 landmarks of the picture with clear lines of sight over the south ridge |
 // | slots, default preset         | J01 GC-SW · J02 GC-NW · J03 GC-NE · J04 GC-SE · J05 AM-W · J06 AM-E · P01 N · P02 E · P03 SE · S01 houses 1–4 · S02 houses 5–8 |
 // | capacity                      | jar slot 1,000 · plot slot 1,000 · store slot 500 · overflow on demand | default 10,000 = exactly placed          |
@@ -192,10 +192,10 @@
   // the rest terrace: half-way up the stair face, 36 m in front of the summit — hidden from the hero camera by the summit
   const REST = { t: 42.1, l: -10.4, w: 7, d: 5.4, y: 0 };      // y: set below from the rock under it
   [REST.x, REST.z] = cragXZ(REST.t, REST.l);
-  // the hero view (= image 3): a visitor stands on the pulpit; the follow camera 24 m behind, aimed 38° east of north (7°
+  // the hero view (= image 3): a visitor stands on the pulpit; the follow camera 34 m behind, aimed 38° east of north (7°
   // right of the crag's own axis: the main building left of centre, the circle right of it — measured against the picture)
   const HERO = (() => {
-    const a = 38 * PI / 180, vx = Math.sin(a), vz = -Math.cos(a), dist = 24, pitch = 0.5, fov = 55;
+    const a = 38 * PI / 180, vx = Math.sin(a), vz = -Math.cos(a), dist = 34, pitch = 0.55, fov = 55;
     const sx = DECK.x - CRAG_V[0] * 0.5, sz = DECK.z - CRAG_V[1] * 0.5, ly = DECK.y + 1.131 + 1.2325;
     return { bearing: PI - a, az: a, stand: [sx, sz], dist, pitch, fov, look: [sx, ly, sz], cam: [sx - vx * Math.cos(pitch) * dist, ly + Math.sin(pitch) * dist, sz - vz * Math.cos(pitch) * dist] };
   })();
