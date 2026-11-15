@@ -953,7 +953,7 @@
       x.addEventListener('click', () => this._hideOffer());
       hud.appendChild(el);
       this._offer = el;
-      this._offerT = setTimeout(() => this._hideOffer(), 18000);
+      this._offerT = setTimeout(() => this._hideOffer(), 30000);   // long enough for a slow device and a slow reader
     },
     _hideOffer() {
       clearTimeout(this._offerT);
