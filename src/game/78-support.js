@@ -63,6 +63,9 @@
     { id: 'k7', kind: 'bug', cat: 'other', emoji: '💬', label: '다른 거예요', color: '#c9d3c6', say: '다른 거예요.' },
   ];
   const STATUS = { new: ['🆕', '보냈어요', 'chip-gold'], open: ['💬', '확인 중', 'chip-blue'], answered: ['✅', '답이 왔어요', 'chip-green'], closed: ['📁', '끝났어요', ''] };
+  // G.ui.modal.open sets the footer from opts.actions AFTER the body callback ran: a body that sets its own buttons does so
+  // in a microtask (later clicks re-render synchronously before it, which is fine)
+  const later = (m, actions) => queueMicrotask(() => { if (!m.closed) m.setActions(actions); });
   const catOf = (kind, id) => (CATEGORIES[kind] || []).find((c) => c.id === id) || { id, emoji: '💬', label: id };
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   const fmtTime = (ms) => { const d = new Date(num(ms)); const p = (n) => String(n).padStart(2, '0'); return ms ? `${d.getMonth() + 1}월 ${d.getDate()}일 ${p(d.getHours())}:${p(d.getMinutes())}` : ''; };
@@ -318,7 +321,7 @@
               kinds.append(b);
             }
             body.append(h('h3', { class: 'sup-h' }, '1. 무엇을 보낼까요?'), kinds);
-            if (!state.kind) { mm.setActions([{ label: '닫기', class: 'btn-ghost' }, { label: '📋 내 문의 보기', class: 'btn-soft', onClick: () => { this.openMine(); } }]); return; }
+            if (!state.kind) { later(mm, [{ label: '닫기', class: 'btn-ghost' }, { label: '📋 내 문의 보기', class: 'btn-soft', onClick: () => { this.openMine(); } }]); return; }
             // 2 · category
             const cats = h('div', { class: 'sup-cats', role: 'radiogroup', 'aria-label': '어떤 일인가요?' });
             for (const c of CATEGORIES[state.kind]) {
@@ -337,7 +340,7 @@
             ta.addEventListener('input', () => { state.body = ta.value; cnt.textContent = `${ta.value.length} / ${BODY_MAX}`; });
             body.append(h('h3', { class: 'sup-h' }, '4. 하고 싶은 말 (꼭 쓰지 않아도 돼요)'), h('div', { class: 'field' }, ta, cnt),
               h('p', { class: 'sup-note' }, '🔒 전화번호·주소·이메일은 쓰지 마세요. 써도 운영자에게는 가려져서 보여요.'));
-            mm.setActions([
+            later(mm, [
               { label: '취소', class: 'btn-ghost' },
               { label: serverUser() ? '📨 보내기' : '📮 보낼 함에 넣기', class: 'btn-primary', disabled: !state.cat, onClick: async (mx, btn) => {
                 if (!state.cat) { toast('어떤 일인지 골라 주세요.', { type: 'warn' }); return false; }
@@ -378,7 +381,7 @@
               grid.append(b);
             });
             body.append(h('p', { class: 'easy-pick-text' }, '그림 하나를 누르면 어른에게 알릴 수 있어요.'), grid);
-            mm.setActions([]);
+            later(mm, []);
           };
           const step2 = () => {
             body.textContent = '';
@@ -420,7 +423,7 @@
             body.append(h('p', { class: 'easy-pick-text' }, shot ? '이 화면도 같이 보낼까요?' : '보낼까요?'), pic, words, h('div', { class: 'sup-kid-row' }, back, send), write,
               h('p', { class: 'sup-note' }, serverUser() ? '운영자 선생님에게 가요. 답이 오면 🔔에서 알려 줄게요.' : '이 기기의 보낼 함에 넣어 둬요. 어른이 선생님에게 전해 줘요.'));
             say(shot ? '이 화면도 같이 보낼까요? 보내요를 누르면 어른에게 알려요.' : '보내요를 누르면 어른에게 알려요.', { priority: 0 });
-            mm.setActions([]);
+            later(mm, []);
           };
           if (state.cat) step2(); else step1();
         },
