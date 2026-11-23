@@ -819,7 +819,7 @@
           current = id; mm._tab = id;
           try { drawTab(pane, id); } catch (e) { G.log.warn('SETTINGS', 'tab failed', id, e); pane.textContent = '설정을 표시하지 못했어요.'; }
           pane.classList.remove('enter'); void pane.offsetWidth; pane.classList.add('enter');
-          pane.scrollTop = 0;
+          pane.scrollTop = 0; if (!focusLabel) bodyEl.scrollTop = 0; // phones: the body scrolls, the tab row stays
           for (const b of tabsEl.querySelectorAll('.tab')) b.setAttribute('aria-selected', String(b.dataset.tab === id));
           if (focusLabel) {
             const r = [...pane.querySelectorAll('.set-row')].find((x) => (x.querySelector('.set-label b')?.textContent || '') === focusLabel);

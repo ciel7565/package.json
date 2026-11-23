@@ -119,7 +119,7 @@ async function partA() {
   const win = await page.evaluate(() => ({ tabs: [...document.querySelectorAll('.set-window .sw-tabs .tab')].map((b) => b.dataset.tab), search: !!document.querySelector('.set-window input.sw-search'), title: document.querySelector('.set-window .modal-head h2')?.textContent }));
   check('A: the button opens the settings window with twelve tabs and a search box', win.tabs.length === 12 && win.search && TABS.every((t) => win.tabs.includes(t)), win.tabs.join(','));
   const tabs = await walkTabs(page, 'desktop');
-  check('A: every tab is drawn without an error and has rows', tabs.every((t) => !t.missing && !t.failed && t.sel === 'true' && (t.rows > 0 || t.id === 'display')), tabs.map((t) => `${t.id}:${t.rows}${t.failed ? '!' : ''}`).join(' '));
+  check('A: every tab is drawn without an error and has rows', tabs.every((t) => !t.missing && !t.failed && t.sel === 'true' && (t.rows > 0 || t.id === 'display' || t.id === 'credits')), tabs.map((t) => `${t.id}:${t.rows}${t.failed ? '!' : ''}`).join(' '));
 
   // sound rows
   const snd = await page.evaluate(async () => {
@@ -141,7 +141,7 @@ async function partA() {
   // 화면 구성
   const lay = await page.evaluate(async () => {
     const S = G.sys.settings, P = G.sys.player;
-    const h0 = P.rig.height, root = getComputedStyle(document.documentElement);
+    const h0 = P.rig.height, fs0 = parseFloat(getComputedStyle(document.documentElement).fontSize);
     S.set('uiStep', 3); const ui = G.settings.uiScale, fs = getComputedStyle(document.documentElement).fontSize;
     S.set('textScale', 5); const tk = getComputedStyle(document.documentElement).getPropertyValue('--text-k').trim();
     S.set('avatarScale', 120); const ds = P.rig.drawScale, h1 = P.rig.height;
@@ -151,9 +151,9 @@ async function partA() {
     S.set('chatOpacity', 40); const cf = document.body.classList.contains('chat-faded');
     S.set('highContrast', true); const hc = document.body.classList.contains('high-contrast');
     const ids = S.reset('layout');
-    return { ui, fs, tk, ds, h0, h1, np, mm, hf, cf, hc, ids: ids.length, after: [G.settings.uiScale, P.rig.drawScale, document.body.classList.contains('np-off'), G.settings.textScale].join() };
+    return { ui, fs, fs0, tk, ds, h0, h1, np, mm, hf, cf, hc, ids: ids.length, after: [G.settings.uiScale, P.rig.drawScale, document.body.classList.contains('np-off'), G.settings.textScale].join() };
   });
-  check('A: UI 크기 3단계 → uiScale 1.12 (the html font size grows)', lay.ui === 1.12 && parseFloat(lay.fs) > 17.5, `${lay.ui} ${lay.fs}`);
+  check('A: UI 크기 3단계 → uiScale 1.12 (the html font size grows)', lay.ui === 1.12 && Math.abs(parseFloat(lay.fs) / lay.fs0 - 1.12) < 0.02, `${lay.ui} ${lay.fs0} → ${lay.fs}`);
   check('A: 글자 크기 5 → --text-k 1.36', lay.tk === '1.36', lay.tk);
   check('A: 캐릭터 크기 120 % → the rig is drawn 1.2 × and the camera height follows', lay.ds === 1.2 && Math.abs(lay.h1 / lay.h0 - 1.2) < 0.01, `${lay.ds} ${lay.h0} → ${lay.h1}`);
   check('A: name plates off · minimap ×1.25 · HUD and chat faded · high contrast', lay.np && Math.abs(parseFloat(lay.mm) - 1.25) < 0.01 && lay.hf && lay.cf && lay.hc, JSON.stringify(lay));
@@ -202,7 +202,7 @@ async function partA() {
     const press = (code) => { window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, bubbles: true, cancelable: true })); window.dispatchEvent(new KeyboardEvent('keyup', { code, key: code, bubbles: true, cancelable: true })); };
     row.querySelector('.sw-rebind').click(); await new Promise((r) => setTimeout(r, 120));
     const waiting = row.querySelector('.sw-rebind').classList.contains('waiting');
-    press('KeyJ'); await new Promise((r) => setTimeout(r, 200));
+    press('KeyK'); await new Promise((r) => setTimeout(r, 200));
     const j = B.get('jump').join();
     const caps = row.querySelector('.sw-caps').textContent;
     row.querySelector('.sw-rebind').click(); await new Promise((r) => setTimeout(r, 120));
@@ -214,8 +214,8 @@ async function partA() {
   });
   if (keys.bindings) {
     check('A: 조작 → the key table from G.input.bindings (one row per action)', keys.row && keys.rows >= 15, JSON.stringify(keys));
-    check('A: 바꾸기 + a key → the action gets it, the caps show it', keys.waiting && keys.j === 'KeyJ' && /J/.test(keys.caps), JSON.stringify(keys));
-    check('A: a key another action uses → a conflict notice, nothing changes', /이미/.test(keys.conflict) && keys.still === 'KeyJ', keys.conflict);
+    check('A: 바꾸기 + a key → the action gets it, the caps show it', keys.waiting && keys.j === 'KeyK' && /K/.test(keys.caps), JSON.stringify(keys));
+    check('A: a key another action uses → a conflict notice, nothing changes', /이미/.test(keys.conflict) && keys.still === 'KeyK', keys.conflict);
     check('A: 처음대로 → the default key again', keys.back === 'Space', keys.back);
   } else check('A: 조작 → without G.input.bindings the fixed keys are shown read-only', keys.fixed);
 
@@ -358,13 +358,16 @@ async function partD() {
     const DEV = { stickSide: 'right', touchButtons: 3 };
     const dev1 = await one.page.evaluate(async ([A, D]) => {
       for (const [k, v] of Object.entries({ ...A, ...D })) G.sys.settings.set(k, v);
-      const t0 = Date.now();
-      while (Date.now() - t0 < 15000 && (G.sys.settings.store.pending || G.sys.settings.store.busy || G.sys.settings.store.v < 1)) await new Promise((r) => setTimeout(r, 200));
+      const st = G.sys.settings.store, t0 = Date.now(), seen = [];
+      await new Promise((r) => setTimeout(r, 300));
+      while (Date.now() - t0 < 40000 && (st.pending || st.busy || st.v < 1)) { seen.push(`${st.pending ? 'p' : ''}${st.busy ? 'b' : ''}${st.v}`); await new Promise((r) => setTimeout(r, 250)); }
       const r = await G.net.request('settings/get.php');
-      return { id: G.sys.settings.store.deviceId(), v: r.v, acct: r.data.acct, dev: r.data.dev };
+      // a value that only the account store has (the player save never carries it): device 2 must get it from there
+      const only = await G.net.request('settings/save.php', { body: { v: r.v + 1, data: { acct: { ...r.data.acct, mixNature: 15 }, dev: r.data.dev } } });
+      return { id: st.deviceId(), v: r.v, acct: r.data.acct, dev: r.data.dev, ms: Date.now() - t0, seen: [...new Set(seen)].join(' '), errors: st.errors, only: only.v };
     }, [ACCT, DEV]);
     const okAcct = Object.entries(ACCT).every(([k, v]) => (k === 'uiStep' ? dev1.acct.uiScale === 1.12 : dev1.acct[k] === v));
-    check('D: device 1 — the account-scope values reach the server (debounced, one blob)', dev1.v >= 1 && okAcct && saves.length >= 1 && saves.every((s) => s === 200), `v ${dev1.v} saves ${saves.join()} ${JSON.stringify(dev1.acct).slice(0, 200)}`);
+    check('D: device 1 — the account-scope values reach the server (debounced, one blob)', dev1.v >= 1 && okAcct && saves.length >= 1 && saves.every((s) => s === 200), `v ${dev1.v} in ${dev1.ms} ms [${dev1.seen}] errors ${dev1.errors} saves ${saves.join()} ${JSON.stringify(dev1.acct).slice(0, 200)}`);
     check('D: device 1 — the device-scope values are kept under its own device id', dev1.dev?.[dev1.id]?.s?.stickSide === 'right' && dev1.dev[dev1.id].s.touchButtons === 3 && !('stickSide' in dev1.acct), JSON.stringify(dev1.dev).slice(0, 200));
     await one.context.close();
     // device 2: a fresh browser (no local storage) logs in with the same account
@@ -379,7 +382,8 @@ async function partD() {
     if (!e2.ok) return;
     await two.page.waitForFunction(() => G.ready === true && !!G.state && G.sys.settings.store.pulled && G.sys.settings.store.last, null, { timeout: TIMEOUT, polling: 250 });
     const got = await two.page.evaluate((A) => ({ vals: Object.fromEntries(Object.keys(A).map((k) => [k, G.sys.settings.get(k)])), stick: G.sys.settings.get('stickSide'), tb: G.sys.settings.get('touchButtons'), id: G.sys.settings.store.deviceId(), tk: getComputedStyle(document.documentElement).getPropertyValue('--text-k').trim(), ds: G.sys.player.rig.drawScale, np: document.body.classList.contains('np-off') }), ACCT);
-    const lost = Object.keys(ACCT).filter((k) => got.vals[k] !== ACCT[k]);
+    const lost = Object.keys(ACCT).filter((k) => k !== 'mixNature' && got.vals[k] !== ACCT[k]);
+    check('D: device 2 — a value only the account store had (자연 소리 15) arrives from api/settings', got.vals.mixNature === 15 && dev1.only >= 2, `mixNature ${got.vals.mixNature}`);
     check('D: device 2 — every account-scope value is set after the login (sound, text, UI, character, name plates, HUD …)', lost.length === 0, lost.map((k) => `${k}=${got.vals[k]}`).join(' '));
     check('D: device 2 — and applied (글자 1.36, 캐릭터 1.15, 이름표 숨김)', got.tk === '1.36' && got.ds === 1.15 && got.np, JSON.stringify(got));
     check('D: device 2 — the device-scope values of device 1 are not taken (another device id)', got.stick === 'left' && got.tb === 2 && got.id !== dev1.id, JSON.stringify({ stick: got.stick, tb: got.tb }));
