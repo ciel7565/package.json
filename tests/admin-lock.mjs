@@ -2355,6 +2355,111 @@ async function main() {
     } finally { await sv.stop(); }
   }
 
+  // ================================================================= support: 📮 신고·문의 (CONTRACT §18.1) [support]
+  // A player's reports with pictures reach the tab; the operator reads one with its picture (streamed by the entry after
+  // its own check), answers (the player sees it as unread), changes the status, deletes one (row, messages and the file)
+  // and several, saves the settings, exports the masked CSV — all POST + token + 303 + audit; no script anywhere.
+  if (section('support')) {
+    const s = makeSite('support', { rate_limits: { support_create: [100000, 60], support_read: [100000, 60], support_write: [100000, 60], support_shot: [100000, 60] } });
+    const sv = await startPhp(s);
+    try {
+      const A = mkUser(s, 'admin');
+      const U = mkUser(s, 'user');
+      const b = new Browser(sv.base, 'support');
+      const T = `${ADM}?tab=support`;
+      const XSS = '<img src=x onerror=alert(51)>';
+      const rawXss = (t) => /<img src=x onerror|<script>alert|<svg onload/i.test(t);
+      /** a ticket of U made inside the site (a real PNG picture through Upload::supportShot) → its id */
+      const ticket = (body, kind = 'question', category = 'howto', withShot = true) => php(s, `(function ($in) {
+        $_FILES = [];
+        if ($in['shot']) { $im = imagecreatetruecolor(480, 270); imagefilledrectangle($im, 0, 0, 480, 270, imagecolorallocate($im, 60, 130, 80)); $f = tempnam(sys_get_temp_dir(), 'sup'); imagepng($im, $f);
+          $_FILES = ['shot' => ['name' => 'a.png', 'type' => 'image/png', 'tmp_name' => $f, 'error' => 0, 'size' => filesize($f)]]; }
+        $t = Tfm\\Support::create(Tfm\\Users::byId((int) $in['uid']), ['kind' => $in['kind'], 'category' => $in['cat'], 'body' => $in['body'], 'meta' => json_encode(['browser' => $in['body'], 'place' => 'PL_BUEOK', 'fps' => 30])], (bool) $in['shot'], ['trusted' => true]);
+        return (int) $t['id']; })($in)`, { uid: U.id, body, kind, cat: category, shot: withShot });
+      const row = (id) => dbAll(s, 'SELECT * FROM support_tickets WHERE id = ?', [id])[0] || null;
+      const shotFile = (id) => { const r = row(id); return r && r.shot_path ? path.join(s.data, 'support', r.shot_path) : null; };
+      const post = async (fields) => { const pg = await b.req(T); const tok = tokenOf(pg.text); const pairs = [['_csrf', tok], ['tab', 'support'], ...fields]; return b.req(ADM, { form: pairs }); };
+      let t1 = 0, t2 = 0, t3 = 0;
+
+      await step('18.1', '📮 신고·문의: the tab is in the menu with the number of new reports; the list shows the words escaped, no script / inline style / event handler; the lock headers', async () => {
+        t1 = ticket(`장독대 문이 안 열려요 ${XSS}`);
+        t2 = ticket('소리가 이상해요', 'bug', 'sound', false);
+        t3 = ticket('누가 나쁜 말을 해요', 'report', 'badword');
+        const page = await signInFull(b, ADM, A);
+        assert(isInside(page.text) && /href="\.\/\?tab=support"[^>]*><span[^>]*>📮<\/span> 신고·문의 <span class="badge warn">3<\/span>/.test(page.text), 'the tab with its badge is not in the menu');
+        const p = await b.req(T);
+        assert(p.status === 200 && /📮 신고·문의/.test(p.text), `tab → ${p.status}`);
+        assertLocked(p, 'support tab');
+        assert(!/<script|<style|\sstyle="|\son[a-z]+="|javascript:/i.test(p.text), 'the tab carries script / inline style / an event handler');
+        assert(!rawXss(p.text) && /&lt;img src=x onerror/.test(p.text), 'the words reached the page as markup');
+        for (const a of ['support_delete_many', 'support_settings', 'support_cleanup', 'support_export']) assert(new RegExp(`name="action" value="${a}"`).test(p.text), `no ${a} form`);
+        const rows = (p.text.match(/name="pick\[\]" value="\d+" form="supsel"/g) || []).length;
+        assert(rows === 3, `list rows ${rows}`);
+        return 'menu badge 3 · 3 rows · forms: delete selected · settings · clean-up · export';
+      });
+      await step('18.1', 'a ticket: its picture through ./?supshot=<id> (image/jpeg, nosniff, no-store, a sandbox policy) — a player, a visitor and a bad id get the plain 404; device facts and the thread escaped', async () => {
+        const p = await b.req(`${T}&t=${t1}`);
+        assert(p.status === 200 && p.text.includes(`./?supshot=${t1}`) && /PL_BUEOK/.test(p.text) && !rawXss(p.text), 'the ticket card');
+        for (const a of ['support_answer', 'support_status', 'support_delete']) assert(new RegExp(`name="action" value="${a}"`).test(p.text), `no ${a} form`);
+        const img = await b.bytes(`${ADM}?supshot=${t1}`);
+        assert(img.status === 200 && /^image\/jpeg/.test(img.headers.get('content-type') || '') && img.buf[0] === 0xff && img.buf[1] === 0xd8, `picture → ${img.status} ${img.headers.get('content-type')}`);
+        assert(img.headers.get('x-content-type-options') === 'nosniff' && /no-store/.test(img.headers.get('cache-control') || '') && /sandbox/.test(img.headers.get('content-security-policy') || ''), 'picture headers');
+        const pl = new Browser(sv.base, 'support-player');
+        await apiLogin(pl, U);
+        for (const [who, br, q] of [['the player (owner, not an administrator)', pl, t1], ['a visitor', new Browser(sv.base, 'support-anon'), t1], ['a bad id', b, 'abc'], ['a missing id', b, 999999]]) {
+          const r = await br.bytes(`${ADM}?supshot=${q}`);
+          assert(r.status === 404 && !/^image\//.test(r.headers.get('content-type') || ''), `${who} → ${r.status} ${r.headers.get('content-type')}`);
+        }
+        const own = await pl.bytes(`api/support/shot.php?id=${t1}`);
+        assert(own.status === 200 && /^image\/jpeg/.test(own.headers.get('content-type') || ''), `the owner through the API → ${own.status}`);
+        return 'picture 200 for the administrator · 404 for the player, a visitor, a bad and a missing id · the owner gets it through api/support/shot.php';
+      });
+      await step('18.1', 'answer → 303, the player sees it as unread (api/support/mine.php), the status is answered; a status change; a delete needs the tick; delete removes row, messages and the picture file; delete-selected; GET changes nothing', async () => {
+        let r = await b.follow(await post([['action', 'support_answer'], ['id', String(t1)], ['body', `고쳤어요! ${XSS}`], ['status', 'answered']]));
+        assert(flashOf(r.text)?.type === 'ok' && !rawXss(r.text), `answer flash ${JSON.stringify(flashOf(r.text))}`);
+        assert(row(t1).status === 'answered' && Number(row(t1).answered_at) > 0, 'status after the answer');
+        const pl = new Browser(sv.base, 'support-player2');
+        await apiLogin(pl, U);
+        const mine = await pl.req('api/support/mine.php');
+        const mt = mine.data.tickets.find((x) => x.id === t1);
+        assert(mine.status === 200 && mine.data.unread === 1 && mt && mt.unread === true && mt.thread.some((m) => m.side === 'admin' && m.body.includes('<img src=x')), `the player's list ${JSON.stringify(mine.data).slice(0, 200)}`);
+        r = await b.follow(await post([['action', 'support_status'], ['id', String(t2)], ['status', 'closed']]));
+        assert(flashOf(r.text)?.type === 'ok' && row(t2).status === 'closed', 'status change');
+        const file = shotFile(t1);
+        assert(file && fs.existsSync(file), 'the picture file of t1 is missing before the delete');
+        r = await b.follow(await post([['action', 'support_delete'], ['id', String(t1)]]));
+        assert(flashOf(r.text)?.type === 'error' && row(t1), 'deleted without the tick');
+        const g = await b.req(`${T}&action=support_delete&id=${t1}&sure=1`);
+        assert(g.status === 200 && row(t1), 'a GET deleted a ticket');
+        r = await b.follow(await post([['action', 'support_delete'], ['id', String(t1)], ['sure', '1']]));
+        assert(flashOf(r.text)?.type === 'ok' && !row(t1) && Number(dbVal(s, 'SELECT COUNT(*) FROM support_messages WHERE ticket_id = ?', [t1])) === 0 && !fs.existsSync(file), 'delete left something');
+        const f3 = shotFile(t3);
+        r = await b.follow(await post([['action', 'support_delete_many'], ['pick[]', String(t2)], ['pick[]', String(t3)], ['sure', '1']]));
+        assert(flashOf(r.text)?.type === 'ok' && !row(t2) && !row(t3) && !fs.existsSync(f3), `delete selected: ${JSON.stringify(flashOf(r.text))}`);
+        const after = await b.bytes(`${ADM}?supshot=${t3}`);
+        assert(after.status === 404, `a deleted ticket's picture → ${after.status}`);
+        return 'answer → unread 1 for the player · closed · no tick = refused · GET does nothing · one and two deleted with their files and messages';
+      });
+      await step('18.1', 'settings (typed, audited), the clean-up, the masked CSV export (no nickname in clear, no device facts); every action is in the audit log', async () => {
+        let r = await b.follow(await post([['action', 'support_settings'], ['enabled', '1'], ['shots', '1'], ['per_hour', '7'], ['per_day', '30'], ['max_open', '9'], ['keep_days', '90'], ['shot_kb', '1024']]));
+        assert(flashOf(r.text)?.type === 'ok', `settings ${JSON.stringify(flashOf(r.text))}`);
+        const v = php(s, 'Tfm\\Support::limits()');
+        assert(v.hour === 7 && v.day === 30 && v.open === 9 && v.keep_days === 90 && v.shot_bytes === 1048576, `limits ${JSON.stringify(v)}`);
+        r = await b.follow(await post([['action', 'support_settings'], ['per_hour', 'many'], ['per_day', '30'], ['max_open', '9'], ['keep_days', '90'], ['shot_kb', '1024']]));
+        assert(flashOf(r.text)?.type === 'error', 'a word as a number was accepted');
+        r = await b.follow(await post([['action', 'support_cleanup']]));
+        assert(flashOf(r.text)?.type === 'ok', 'clean-up');
+        ticket('내보내기 시험 글');
+        const csv = await post([['action', 'support_export'], ['status', ''], ['kind', ''], ['q', '']]);
+        assert(csv.status === 200 && /^text\/csv/.test(csv.headers.get('content-type') || '') && /attachment; filename="support-\d{8}-\d{6}\.csv"/.test(csv.headers.get('content-disposition') || ''), `export → ${csv.status} ${csv.headers.get('content-type')}`);
+        assert(csv.text.includes('내보내기 시험 글') && !csv.text.includes(U.nickname) && csv.text.includes(U.nickname.slice(0, 1) + '**') && !/PL_BUEOK|support\//.test(csv.text), 'the CSV is not masked');
+        const events = new Set(dbAll(s, "SELECT event FROM audit_log WHERE event LIKE 'support_%'").map((x) => x.event));
+        for (const ev of ['support_create', 'support_answer', 'support_status', 'support_delete', 'support_settings', 'support_export']) assert(events.has(ev), `no audit row ${ev}`);
+        return 'limits saved and checked · a word refused · clean-up · CSV masked · 6 kinds of audit rows';
+      });
+    } finally { await sv.stop(); }
+  }
+
   // ================================================================= entitle: the default administrator, 🔐 내 계정, ⚙️ 설정 (CONTRACT §17.2) [entitle]
   // A brand-new server (its own site and database): the first sign-in with the default id, the red banner with the change
   // form on every page, the failing health row, the settings registry as typed inputs (CSRF, same origin, audit, 303 —
