@@ -566,11 +566,16 @@
       g.rotation.y = Math.atan2(ox, oz);
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.09), wood);
       post.position.y = 0.5;
-      const board = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.05), [wood, wood, wood, wood, face, wood]);
+      // [finisher] the board is one wood box and the picture a plane just in front of it: a box with six materials drew six
+      // times (× 2 with its shadow) — nine door signs were ~140 draw calls of the 만장대 view on high
+      const board = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.05), wood);
       board.position.set(0, 1.12, 0.03);
+      const pic = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.4), face);
+      pic.position.set(0, 1.12, 0.03 + 0.026);
       const cap = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.13), wood);
       cap.position.set(0, 1.345, 0.03);
       for (const m of [post, board, cap]) { m.castShadow = true; m.receiveShadow = true; g.add(m); }
+      pic.receiveShadow = true; g.add(pic);
       root.add(g);
       return g;
     },
