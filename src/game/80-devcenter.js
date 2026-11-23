@@ -273,6 +273,7 @@
       F('62-engagement.js', 'engagement', '출석·오늘의 미션·알림함·수료증·랭킹·마당 꾸미기 (쉬운 모드: 🔔 오늘 스티커북)'),
       F('65-companion.js', 'companion', '마스코트 옹이(2D SVG·3D 동반자)·상황별 도움말·읽어주기·멈춰 있을 때 안내·쉬는 시간 연기'),
       F('66-fx.js', 'fx', '파티클·3D 이모지·레벨업·코인 비행·도장 연출·아이 축하(kidParty)·광과민 안전'),
+      F('67-display.js', 'core', '그래픽·화면 설정(G.sys.display): 그리는 해상도·전체 화면·모니터·밝기·이펙트/텍스쳐/가시거리 퀄리티·프레임 제한·시야 확장·DOF·스크린샷 포맷 (§18.2)'), // [gfx]
       F('70-app.js', 'app', '부팅·인증(PBKDF2)·아이 타이틀(타자 없음)·그림 메뉴/설정/도움말·보호자 확인 연결·아바타 꾸미기·쉬운 튜토리얼'),
       F('71-entitle.js', 'app', '이용 권한 G.sys.entitle(서버의 ent: 단계·배수·장독·방 물건 한도·관리자)·운영 설정 G.site·관리자 페이지 버튼·기본 비밀번호 알림·서버 계정 비밀번호 바꾸기 (§17.2)'), // [entitle]
       F('72-subscription.js', 'app', '진행 속도 구독 화면 G.sys.subscription: 단계 카드·토스 결제(서버 모드)·테스트 결제·HUD 속도 칩·설치 안내'),
@@ -461,6 +462,7 @@
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
   EXPECTED_SYSTEMS.push('lecture');   // [lecture] 74-lecture.js
   EXPECTED_SYSTEMS.push('support');   // [support] 78-support.js
+  EXPECTED_SYSTEMS.push('display');   // [gfx] 67-display.js
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
