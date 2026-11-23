@@ -243,7 +243,7 @@ const LAW_II = ['YEOLMOGEO', 'YEONJUNMOCHI', 'BEODEULGAJI', 'SAEMI', 'EOREUMCHI'
   const STATS = ['fishCaught', 'fishSpecies', 'fishReleased', 'fishGuarded', 'fishKept'];
   check('fishing achievements read plain counters', AS.length >= 4 && AS.every(([id, a]) => a.id === id && a.name && a.desc && STATS.includes(a.condition.stat) && a.condition.gte >= 1 && a.reward), AS.map(([id]) => id).join(', '));
   check('the "all species" achievement asks for exactly the species count', D.achievements.ACH_FISH_SPECIES_ALL?.condition.gte === S.length);
-  check('the sticker book has a page for every fish', (D.collectionCategories || []).some((c) => c.id === 'fish') && S.every((s) => { const c = D.collection[`COL_FISH_${s.id}`]; return c && c.category === 'fish' && c.name === s.name && c.unlock[0].on === 'interact' && c.unlock[0].fish === s.id && !c.unlock[0].id; }));
+  check('the sticker book has a page for every fish', (D.collectionCategories || []).some((c) => c.id === 'fish') && S.every((s) => { const c = D.collection[`COL_FISH_${s.id}`]; return c && c.category === 'fish' && c.name === s.name && c.unlock.length === 1 && c.unlock[0].on === 'fish' && c.unlock[0].id === s.id; }));
   check('every fish that can be taken along names the kind of dish it suits; a protected one names none', S.every((s) => (s.protected ? s.cook === null : ['small', 'trout', 'bottom'].includes(s.cook))) && ['small', 'trout', 'bottom'].every((c) => S.some((s) => s.cook === c)));
   check('titles are plain words', [...QS.map(([, q]) => q.reward.title), ...AS.map(([, a]) => a.reward.title)].filter(Boolean).every((t) => /^[가-힣 0-9]{2,16}$/.test(t)));
 }

@@ -148,6 +148,11 @@ final class Settings
         self::define('support.keep_days', 'int', 180, [7, 3650], 'support', '보관 기간 (일)', false, '이 기간 동안 아무 변화가 없는 문의는 사진과 함께 저절로 지워져요. 닫은 문의부터 지워요.');
         self::define('support.shot_kb', 'int', 1536, [100, 1536], 'support', '화면 사진 최대 크기 (KB)');
         // ---------------------------------------------------------------- [/support]
+        // ---------------------------------------------------------------- [fishing] 낚시 (CONTRACT §18.3) — public: 35-fishing.js reads them through G.site.get(); SaveValidator keeps its own hard ceiling
+        self::define('fishing.enabled', 'bool', true, null, 'etc', '강가 낚시 열기', true, '끄면 강가의 🎣 낚시터가 쉬어요. 어류 도감과 이미 가방에 든 물고기는 그대로 있어요.');
+        self::define('fishing.keep_per_day', 'int', 6, [0, 20], 'etc', '하루에 데려갈 수 있는 물고기 수', true, '한 사람이 하루(한국 날짜)에 가방에 담을 수 있는 수예요. 0이면 모두 놓아주기만 해요. 법으로 지키는 물고기는 이 숫자와 상관없이 언제나 놓아줘요.');
+        self::define('fishing.trap_minutes', 'int', 10, [1, 240], 'etc', '어항에 물고기가 드는 데 걸리는 시간 (분)', true, '어항을 놓고 이만큼 진짜 시간이 지나야 살펴볼 수 있어요.');
+        // ---------------------------------------------------------------- [/fishing]
     }
 
     /** the definitions of one group, in registry order */

@@ -23,6 +23,8 @@
 //                          step with 📤 보내요, and 📋 내 문의 (§18.1)
 //                          [cooking] cookpick cookbook cookpantry: 무엇을 만들까, the 요리 도감 and the 찬장 (§18.4) — the
 //                          cooking card itself needs the 부엌 (tests/cooking-client.mjs audits it there)
+//                          [fishing] fishpick fishbook fishcard: the picture chooser of a 낚시터, the 어류 도감 and a
+//                          catch card (§18.3) — the session's own controls need the river (tests/fishing-client.mjs)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report

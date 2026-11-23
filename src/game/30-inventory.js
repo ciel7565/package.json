@@ -30,6 +30,9 @@
     { id: 'tool', label: '도구', types: ['tool', 'quest'] },
     { id: 'decoration', label: '장식', types: ['decoration'] },
   ];
+  // [fishing] the catch (items FISH_<ID>, type 'fish' — 34-fish-data.js): its own name and shelf; the grown-up bag files it under 재료
+  TYPE_LABEL.fish = '물고기'; TYPE_CHIP.fish = 'chip-blue'; TYPE_ORDER.splice(TYPE_ORDER.indexOf('ingredient') + 1, 0, 'fish');
+  TABS.find((t) => t.id === 'ingredient').types.push('fish');
   const SHOP_FILTERS = [
     { id: 'all', label: '전체', types: null },
     { id: 'seed', label: '씨앗·모종', types: ['seed'] },
@@ -155,6 +158,7 @@
     decoration: { label: '꾸미기', emoji: '✨', color: '#b48bff' },
     quest: { label: '특별한 것', emoji: '📘', color: '#ff8a5c' },
   };
+  KID_TYPE.fish = { label: '물고기', emoji: '🐟', color: '#5fc0e6' }; // [fishing]
   /** one short, warm sentence about an item (no numbers, no jargon) */
   function kidDesc(it) {
     const n = String(it?.name || '');
@@ -162,6 +166,7 @@
       case 'seed': { const c = G.data.crops?.[it.crop]; return c ? `밭에 심으면 ${kjosa(c.name, '이/가')} 자라요.` : '밭에 심는 씨앗이에요.'; }
       case 'crop': return `밭에서 거둔 ${KK.iyeyo(n)}.`;
       case 'ingredient': return `${KK.iyeyo(n)}. 맛있는 장을 만들 때 써요.`;
+      case 'fish': return `맑은 강에서 만난 ${KK.iyeyo(n)}. 부엌에서 익혀 먹어요.`; // [fishing]
       case 'fermented': return `장독에서 익힌 ${KK.iyeyo(n)}.`;
       case 'tool': return `${KK.iyeyo(n)}. 가방에 있으면 저절로 써요.`;
       case 'decoration': return `${KK.iyeyo(n)}. 마당을 예쁘게 꾸며요.`;

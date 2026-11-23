@@ -149,6 +149,58 @@ check('no two species have the same body and fin measures', new Set(measures.val
   check('the curve sampler passes through its points and never overshoots far', Math.abs(s(0)) < 1e-9 && Math.abs(s(0.5) - 1) < 1e-9 && Math.abs(s(1) - 0.2) < 1e-9 && s(0.25) > 0.2 && s(0.25) < 1.1 && s(-1) === 0 && s(2) === 0.2);
 }
 
+// ---------------------------------------------------------------- the painter against a strict 2D canvas
+// A browser's canvas throws on a gradient stop outside 0..1, a negative radius or a non-finite gradient, and silently
+// drops a colour it cannot read. Here every call of the painter is checked for exactly that, for every species, in
+// spring, summer and autumn, and the three presets build with the painted canvas in place.
+{
+  const COLOR = /^(#[0-9a-f]{3}|#[0-9a-f]{6}|#[0-9a-f]{8}|rgba?\(\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*(,\s*-?[\d.]+\s*)?\))$/i;
+  const problems = [];
+  let calls = 0, cur = '';
+  const bad = (m) => { if (problems.length < 40) problems.push(cur + ': ' + m); };
+  const num = (name, args) => { for (const a of args) if (typeof a !== 'number' || !Number.isFinite(a)) { bad(name + '(' + [...args].map(String).join(', ') + ')'); return false; } return true; };
+  const grad = () => ({ __grad: true, addColorStop(o, c) { calls++; if (!(o >= 0 && o <= 1)) bad('addColorStop offset ' + o); if (typeof c !== 'string' || !COLOR.test(c)) bad('addColorStop colour ' + c); } });
+  const makeCtx = (cv) => {
+    const state = { fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, globalAlpha: 1, font: '10px sans-serif', textBaseline: 'alphabetic', textAlign: 'start', lineCap: 'butt', lineJoin: 'miter', globalCompositeOperation: 'source-over', imageSmoothingEnabled: true, imageSmoothingQuality: 'low', shadowBlur: 0, shadowColor: '#000', filter: 'none', miterLimit: 10, lineDashOffset: 0 };
+    const methods = {
+      beginPath() {}, closePath() {}, fill() {}, stroke() {}, save() {}, restore() {}, clip() {}, drawImage() {},
+      moveTo(...a) { num('moveTo', a); }, lineTo(...a) { num('lineTo', a); }, quadraticCurveTo(...a) { num('quadraticCurveTo', a); }, bezierCurveTo(...a) { num('bezierCurveTo', a); },
+      rect(...a) { num('rect', a); }, fillRect(...a) { num('fillRect', a); }, clearRect(...a) { num('clearRect', a); }, strokeRect(...a) { num('strokeRect', a); },
+      arc(x, y, r, a0, a1) { if (num('arc', [x, y, r, a0, a1]) && r < 0) bad('arc radius ' + r); },
+      ellipse(x, y, rx, ry, rot, a0, a1) { if (num('ellipse', [x, y, rx, ry, rot, a0, a1]) && (rx < 0 || ry < 0)) bad('ellipse radii ' + rx + ', ' + ry); },
+      translate(...a) { num('translate', a); }, scale(...a) { num('scale', a); }, rotate(...a) { num('rotate', a); }, transform(...a) { num('transform', a); }, setTransform(...a) { num('setTransform', a); },
+      setLineDash(a) { if (!Array.isArray(a) || a.some((v) => !(v >= 0))) bad('setLineDash ' + a); },
+      createLinearGradient(...a) { num('createLinearGradient', a); return grad(); },
+      createRadialGradient(x0, y0, r0, x1, y1, r1) { if (num('createRadialGradient', [x0, y0, r0, x1, y1, r1]) && (r0 < 0 || r1 < 0)) bad('radial gradient radius ' + r0 + ', ' + r1); return grad(); },
+      fillText(t, x, y) { num('fillText', [x, y]); }, measureText: (t) => ({ width: String(t).length * 6 }),
+      getImageData(x, y, w, h) { num('getImageData', [x, y, w, h]); const d = new Uint8ClampedArray(w * h * 4); d.fill(128); return { data: d, width: w, height: h }; },
+    };
+    return new Proxy({}, {
+      get(_, k) { if (k in methods) return (...a) => { calls++; return methods[k](...a); }; if (k in state) return state[k]; if (k === 'canvas') return cv; if (typeof k === 'symbol' || k === 'then') return undefined; bad('unknown member ctx.' + String(k)); return undefined; },
+      set(_, k, v) {
+        calls++;
+        if (!(k in state)) { bad('unknown property ctx.' + String(k)); return true; }
+        if (k === 'fillStyle' || k === 'strokeStyle' || k === 'shadowColor') { if (!((v && v.__grad) || (typeof v === 'string' && COLOR.test(v)))) bad(k + ' = ' + String(v)); }
+        else if (['lineWidth', 'globalAlpha', 'shadowBlur', 'miterLimit', 'lineDashOffset'].includes(k) && !(typeof v === 'number' && Number.isFinite(v))) bad(k + ' = ' + v);
+        state[k] = v; return true;
+      },
+    });
+  };
+  const G2 = { data: {}, sys: {}, util: { rng }, log: { warn() {}, info() {}, error() {} }, time: { delta: 0.016 } };
+  const doc2 = { createElement: () => { const cv = { width: 300, height: 150, style: {}, getContext: () => makeCtx(cv) }; return cv; } };
+  const ctx2 = vm.createContext({ G: G2, THREE, ADDONS: { BufferGeometryUtils }, window: {}, document: doc2, console, Math, JSON, Object, Array, Number, String, Date, Promise, Map, Set, Float32Array, Uint8ClampedArray, setTimeout, clearTimeout });
+  let threw = '';
+  try {
+    for (const f of ['01-data.js', '34-fish-data.js', '35-fishing-kit.js']) vm.runInContext('(function(){\n' + fs.readFileSync(path.join(ROOT, 'src/game', f), 'utf8') + '\n})()', ctx2, { timeout: 8000, filename: f });
+    const K2 = G2.fishkit;
+    for (const sp of G2.data.fish.species) {
+      for (const month of [4, 7, 10]) { cur = sp.id + ' (month ' + month + ')'; const cv = K2.skin(sp.id, { w: 256, h: 128, month }); if (!cv) bad('no canvas'); }
+      for (const q of ['high', 'medium', 'low']) { cur = sp.id + ' (' + q + ')'; const o = K2.build(sp.id, { quality: q, month: 6 }); if (!o || !o.userData.fish) bad('no object'); else o.userData.fish.dispose(); }
+    }
+  } catch (e) { threw = cur + ': ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e)); }
+  check('the painter draws every species (three seasons, three presets) on a strict canvas: known calls, finite numbers, readable colours, gradient stops inside 0..1', !threw && !problems.length && calls > 20000, threw || list(problems, 6) || (calls + ' canvas calls'));
+}
+
 const failed = results.filter((r) => !r.ok);
 if (JSON_OUT) console.log(JSON.stringify({ ok: !failed.length, pass: results.length - failed.length, fail: failed.length, results }, null, 2));
 else console.log(`\n${failed.length ? '✘' : '✔'} ${results.length - failed.length}/${results.length} checks passed${failed.length ? ` — ${failed.length} failed` : ''}`);

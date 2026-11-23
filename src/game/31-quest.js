@@ -31,6 +31,7 @@
   const CAT_LABEL = { main: '메인', farm: '농사', journal: '작업일지', explore: '탐험', ferment: '발효', edu: '교육', social: '소통', npc: 'NPC', event: '이벤트' };
   // objective types whose count means "distinct targets" (payload key used for dedupe)
   const DEDUPE = { talk: true, edu: true, quiz: true, interact: true };
+  DEDUPE.fish = true; // [fishing] objective { type: 'fish', what: 'catch' | 'method' | 'guard' | 'release', species?, count } — count = distinct fish / methods (35-fishing.js)
   const STATE_BASED = new Set(['collect', 'visit_all', 'level']);
   const MAX_PANEL = 4;
   const MAX_MARKERS = 4;
@@ -208,6 +209,7 @@
       case 'quiz': return '교육 콘텐츠의 마지막 장에서 ‘퀴즈 풀기’를 눌러 정답을 맞혀 보세요.';
       case 'journal': return 'J 키 또는 하단의 ‘작업일지’ 버튼으로 오늘의 체험을 기록하세요.';
       case 'photo': return '포토존(금빛 액자)에 들어가 P 키로 사진 모드를 켜고 촬영하세요.';
+      case 'fish': return o.what === 'guard' ? '보호받는 물고기를 만나면 사진처럼 눈에 담고 ‘놓아주기’를 누르세요.' : o.what === 'method' ? '강가의 낚시터(물고기 팻말)에서 대낚시 · 견지낚시 · 족대 · 어항을 골고루 해 보세요.' : '강가의 낚시터(물고기 팻말)에 다가가 E 키로 낚시를 시작하세요.'; // [fishing]
       case 'emote': return 'T 키 또는 하단의 ‘이모지’ 버튼에서 이모지를 골라 보세요.';
       case 'gesture': return 'G 키 또는 하단의 ‘제스처’ 버튼에서 동작을 골라 보세요.';
       case 'interact': return o.kind === 'tool' ? '전통도구 전시장의 옛 농기구에 다가가 E 키로 살펴보세요.' : '금빛 표식이 있는 물건에 다가가 E 키로 살펴보세요.';
@@ -236,6 +238,7 @@
     ferment_start: '🫙', ferment_claim: '🎉', edu: '📖', quiz: '❓', journal: '📝', photo: '📸', emote: '👋', gesture: '🙌',
     interact: '👆', craft: '🔨', chat: '💬', level: '⭐', claim: '🎁', giver: '🙋',
   };
+  OBJ_EMOJI.fish = '🎣'; // [fishing]
   const KID_CRAFT = { CRAFT_MEJU: '작업대에서 메주를 빚어요', CRAFT_GOCHUGARU: '작업대에서 고춧가루를 빻아요', CRAFT_HERB_TEA: '작업대에서 허브 다발을 묶어요' };
   const shortRecipe = (r) => String(r?.name || '장').replace(/\s*체험$/, '');
   /** one short kid sentence (≤ 12 words, 해요체, no keys / numbers jargon) per objective kind */
@@ -267,6 +270,7 @@
       case 'quiz': return '퀴즈를 맞혀요';
       case 'journal': return '그림일기를 써요';
       case 'photo': return '사진을 찍어요';
+      case 'fish': return o.what === 'guard' ? '지켜 줄 물고기를 놓아줘요' : o.what === 'method' ? '여러 가지로 낚시해요' : '강에서 물고기를 만나요'; // [fishing]
       case 'emote': return o.emote === 'EMO_HELLO' ? '손 흔들어 인사해요' : '내 마음을 보여 줘요';
       case 'gesture': return '몸으로 표현해요';
       case 'interact': return o.kind === 'tool' ? '옛날 도구를 살펴봐요' : '반짝이는 것을 눌러 봐요';
@@ -910,6 +914,9 @@
       on('emote:played', (p) => this._event('emote', (o) => !o.emote || o.emote === p.emoteId, null));
       on('gesture:played', (p) => this._event('gesture', (o) => !o.gesture || o.gesture === p.gestureId, null));
       on('chat:sent', () => this._event('chat', () => true, null));
+      // [fishing] a fish was landed / let go (35-fishing.js): distinct species, distinct methods, protected fish released
+      on('fish:landed', (p) => { if (!p || !p.id) return; this._event('fish', (o) => (o.what || 'catch') === 'catch' && (!o.species || o.species === p.id), p.id); if (p.method) this._event('fish', (o) => o.what === 'method', 'm:' + p.method); });
+      on('fish:released', (p) => { if (!p || !p.id) return; if (p.protected) this._event('fish', (o) => o.what === 'guard', 'g:' + p.id); this._event('fish', (o) => o.what === 'release', 'r:' + p.id); });
       on('interact', (p) => {
         if (p.kind === 'npc') talk(p.id); // robust even when the dialogue system is absent (deduped per NPC)
         this._event('interact', (o) => (!o.kind || o.kind === p.kind) && (!o.id || o.id === p.id), p.id || p.kind);
@@ -1102,6 +1109,7 @@
           const best = nearestOf(o.type === 'quiz' && !eduId ? pool.filter((p) => p.kind === 'kiosk') : pool);
           return best ? loc(best.x, best.z, best.h, best.kind, best.name) : null;
         }
+        case 'fish': { const s = G.sys.fishing && G.sys.fishing.nearestSpot ? G.sys.fishing.nearestSpot() : null; return s ? loc(s.x, s.z, 2.4, 'fishspot', '낚시터 · ' + s.name) : null; } // [fishing]
         case 'photo': {
           const pz = nearestOf(L().photoZones || [], (z) => !o.photoZone || o.photoZone === '*' || z.id === o.photoZone);
           return pz ? loc(pz.x, pz.z, 2.4, 'photo', `포토존 · ${pz.name}`) : null;

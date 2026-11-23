@@ -1303,7 +1303,7 @@
       const id = `COL_FISH_${s.id}`;
       // unlocked by 35-fishing.js itself (progression.unlockCollection) when the fish is first landed: the rule below has
       // no interactable id on purpose — a fish is not a thing that stands in the world
-      D.collection[id] = { id, category: 'fish', name: s.name, icon: s.protected ? '🛟' : '🐟', location: '강과 계곡의 🎣 낚시터', desc: s.kid, unlock: [{ on: 'interact', kind: 'fish', fish: s.id }] };
+      D.collection[id] = { id, category: 'fish', name: s.name, icon: s.protected ? '🛟' : '🐟', location: '강과 계곡의 🎣 낚시터', desc: s.kid, unlock: [{ on: 'fish', id: s.id }] };
     }
   }
 

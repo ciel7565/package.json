@@ -65,6 +65,7 @@
       case 'interact': { const a = G.data.layout?.get?.(r.id); return a ? `${a.name || a.title || '전시물'}에 다가가 E 키로 살펴보면 등록돼요.` : null; }
       case 'visit': { const z = (G.data.zones || []).find((x) => x.id === r.zone); return z ? `${josa(z.name, '을/를')} 방문하면 등록돼요.` : null; }
       case 'claim': { const rc = G.data.recipes?.[r.recipe]; return rc ? `장독에서 「${rc.name}」${ptc(rc.name, '을/를')} 완성해 수령하면 등록돼요.` : '장독 발효를 완성해 수령하면 등록돼요.'; }
+      case 'fish': { const f = G.data.fish && G.data.fish.byId ? G.data.fish.byId[r.id] : null; return f ? `강가의 낚시터(물고기 팻말)에서 ${josa(f.name, '을/를')} 만나면 등록돼요.` : null; } // [fishing] 35-fishing.js
       default: return null;
     }
   }
@@ -111,6 +112,7 @@
       case 'item': { const it = G.data.items?.[r.item]; return it ? `${kjo(it.name, '을/를')} 가지면 생겨요` : null; }
       case 'talk': { const n = G.data.npcs?.[r.npc]; return n ? `${kjo(n.name, '이랑/랑')} 이야기하면 생겨요` : null; }
       case 'edu': return '그림 이야기를 끝까지 보면 생겨요';
+      case 'fish': return '강에서 낚시로 만나면 생겨요'; // [fishing]
       case 'interact': { const a = G.data.layout?.get?.(r.id); const n = a?.name || a?.title; return n ? `${kjo(n, '을/를')} 살펴보면 생겨요` : '반짝이는 것을 살펴보면 생겨요'; }
       case 'visit': { const z = (G.data.zones || []).find((x) => x.id === r.zone); return z ? `${z.short || z.name}에 가면 생겨요` : null; }
       case 'claim': { const rc = G.data.recipes?.[r.recipe]; return rc ? `장독에서 ${kjo(rc.name.replace(/\s*체험$/, ''), '을/를')} 꺼내면 생겨요` : '장독에서 장을 꺼내면 생겨요'; }
@@ -152,6 +154,7 @@
         const a = near([].concat((L.kiosks || []).filter((k) => k.edu === r.edu), (L.signs || []).filter((s) => s.edu === r.edu), (L.exhibits || []).filter((x) => x.edu === r.edu)));
         return a ? { x: a.x, z: a.z, label: '', stop: 2.2 } : null;
       }
+      case 'fish': { const s = G.sys.fishing && G.sys.fishing.nearestSpot ? G.sys.fishing.nearestSpot() : null; return s ? { x: s.x, z: s.z, label: '', stop: 2.4 } : null; } // [fishing]
       case 'interact': { const a = L.get?.(r.id); return a ? { x: a.x, z: a.z, label: '', stop: 2.2 } : null; }
       case 'visit': return zoneC(r.zone);
       case 'claim': { const j = (L.jars || []).find((x) => x.id === 'J1'); return j ? { x: j.x, z: j.z, label: '내 장독', stop: 2 } : null; }
