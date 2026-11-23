@@ -2903,7 +2903,7 @@
           if (!g || g.hidden || g.classList.contains('is-locked')) return null;
           const b = g.querySelector('.easy-gate-choice:not([disabled])');
           return b && b.dataset.q !== lastQ ? b : null;
-        }, 12000);
+        }, 30000); // [finisher] 12 s: on a software-GL machine at one frame in 2–4 s the gate's 380 + 450 ms timers ran late (SKIP / ❌ there)
         if (!armed) return null;
         lastQ = armed.dataset.q;
         const m = armed.closest('.easy-gate-modal');
