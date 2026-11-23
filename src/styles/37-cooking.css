@@ -59,19 +59,19 @@
 .cook-easy .cook-kid { font-size: 18px; }
 
 /* the picker, the 도감, the pantry */
-.cook-modal .cook-lead { margin: 0 0 8px; opacity: .85; }
+.cook-modal .cook-lead { margin: 0 0 8px; font-size: 15px; }
 .cook-kind { margin: 12px 0 6px; font-size: 15px; }
 .cook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
 .cook-tile {
   position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 104px;
-  border-radius: 14px; border: 2px solid var(--line, rgba(120, 90, 50, .25)); background: var(--panel-2, rgba(255, 250, 238, .7)); color: inherit; font: inherit; cursor: pointer; padding: 8px 6px; text-align: center;
+  border-radius: 14px; border: 2px solid rgba(120, 90, 50, .35); background: #f6eddb; color: #2a1a0c; font: inherit; cursor: pointer; padding: 8px 6px; text-align: center;
   transition: transform var(--dur-1, 120ms) ease;
 }
 .cook-tile:active { transform: scale(.97); }
-.cook-tile b { font-size: 14px; }
-.cook-tile small { font-size: 12px; opacity: .8; }
+.cook-tile b { font-size: 15px; }
+.cook-tile small { font-size: 13px; color: #5a4230; }
 .cook-tile.ok { border-color: #8fbf6a; }
-.cook-tile.miss { opacity: .78; }
+.cook-tile.miss { background: #ebe3d2; }
 .cook-tile.locked .cook-tile-e { filter: grayscale(1); opacity: .55; }
 .cook-tile-e { font-size: 34px; line-height: 1; }
 .cook-tile-e img { width: 96px; height: 72px; object-fit: cover; border-radius: 10px; display: block; }
@@ -83,15 +83,15 @@
 .cook-pic img { border-radius: 14px; max-width: 100%; height: auto; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
 .cook-pic.big img { width: 240px; }
 .cook-ings, .cook-steps, .cook-why { margin: 4px 0 8px; padding-left: 20px; }
-.cook-ings li.need { color: #b4492c; }
-.cook-ings li.base, .cook-ings li.opt { opacity: .78; }
+.cook-ings li.need { color: #ff9a7a; }
 .cook-missing { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
 .cook-go { min-height: 48px; text-align: left; }
-.cook-origin, .cook-src { font-size: 13px; opacity: .8; }
+.cook-origin, .cook-src { font-size: 14px; }
 .cook-stars { display: flex; justify-content: center; gap: 6px; font-size: 34px; margin: 4px 0; }
 .cook-stars .emoji { filter: grayscale(1); opacity: .35; }
 .cook-stars .emoji.on { filter: none; opacity: 1; }
 body.easy .cook-tile { min-height: 112px; }
+body.easy .cook-tile small { font-size: 14px; }
 body.easy .cook-go, body.easy .cook-link { min-height: 56px; }
 
 @media (max-width: 480px) {
