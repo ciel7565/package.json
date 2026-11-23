@@ -300,6 +300,43 @@
     const merged = BGU && BGU.mergeGeometries ? BGU.mergeGeometries(parts, false) : parts[0];
     return merged;
   }
+  /** a single fish from lane fishing's kit (G.fishkit: the species' own lofted body and painted skin), dressed for
+   *  the kitchen: cooked = its material turns paler and golden, a grill crust = dark 석쇠 stripes over the side that
+   *  faces up, salt = white grains on it. null when the kit or the species is not in this build. */
+  function fishFromKit(itemId, len, own, place) {
+    const FK = G.fishkit, id = String(itemId || '').replace(/^FISH_/, '');
+    if (!FK || typeof FK.build !== 'function' || !G.data.fish?.byId?.[id]) return null;
+    let fish = null;
+    try { fish = FK.build(id, { length: len, swim: false }); } catch (e) { fish = null; }
+    if (!fish) return null;
+    own({ dispose: () => fish.userData.fish?.dispose?.() });
+    const inner = new THREE.Group(); inner.add(fish);
+    // centre it on its own box so it lies where the kitchen puts it
+    const bb = new THREE.Box3().setFromObject(fish), c = bb.getCenter(new THREE.Vector3());
+    fish.position.sub(c);
+    const size = bb.getSize(new THREE.Vector3());
+    const mats = [];
+    fish.traverse((o) => { if (o.isMesh && o.material && o.material.color) mats.push({ m: o.material, base: o.material.color.clone(), r: o.material.roughness }); });
+    // 석쇠 marks over the side that faces up when the fish lies on a plate (local −Z of the group → world up)
+    const marks = [];
+    for (let i = -3; i <= 3; i++) marks.push(placed(new THREE.BoxGeometry(0.012, size.y * 0.8, 0.002), { x: i * size.x * 0.11, z: -size.z / 2 - 0.0015, rz: 0.5 }));
+    const crustMat = own(new THREE.MeshStandardMaterial({ color: 0x3a1e0c, roughness: 0.8, transparent: true, opacity: 0, depthWrite: false }));
+    const crust = new THREE.Mesh(own(mergeAll(marks)), crustMat);
+    const grains = [];
+    for (let i = 0; i < 60; i++) grains.push(placed(new THREE.BoxGeometry(0.003, 0.003, 0.002), { x: (noise(i + 300) - 0.5) * size.x * 0.8, y: (noise(i + 301) - 0.5) * size.y * 0.6, z: -size.z / 2 - 0.002 }));
+    const saltMat = own(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, transparent: true, opacity: 0, depthWrite: false }));
+    const salt = new THREE.Mesh(own(mergeAll(grains)), saltMat);
+    const g = new THREE.Group(); g.add(inner, new THREE.Object3D(), crust, salt);
+    if (place) { g.position.set(place.x || 0, place.y || 0, place.z || 0); g.rotation.set(place.rx || 0, place.ry || 0, place.rz || 0); }
+    const DONE = col('#e9caa0'), GLAZE = col('#b3402a'), tmp = new THREE.Color();
+    // the same child order as the merged fish: [body, fins, crust, salt, eyes] — the tests read children[2] for the crust
+    const handle = { group: g, kit: true, set(cook, crustK, saltK, glazeK) {
+      for (const x of mats) { tmp.copy(x.base).lerp(DONE, clamp(cook, 0, 1) * 0.7); if (glazeK) tmp.lerp(GLAZE, clamp(glazeK, 0, 1) * 0.55); x.m.color.copy(tmp); if (x.r != null) x.m.roughness = lerp(x.r, 0.7, clamp(cook, 0, 1)); }
+      crustMat.opacity = clamp(crustK, 0, 1) * 0.85;
+      saltMat.opacity = clamp(saltK, 0, 1) * (1 - clamp(crustK, 0, 1) * 0.6);
+    } };
+    return handle;
+  }
   /** merge geometries (each already placed) into one; one draw call */
   function mergeAll(list) {
     const BGU = ADDONS.BufferGeometryUtils;
@@ -315,6 +352,9 @@
   /** one or many fish of one species, merged (body · fins · crust · salt · eyes = 5 draw calls for any count):
    *  {group, set(cook, crust, salt, glaze)} — the body texture is the species' skin; cooked = paler and golden */
   function makeFish(itemId, cls, len, own, places) {
+    let kitFish = null;
+    if (!places || places.length <= 1) { try { kitFish = fishFromKit(itemId, len, own, places && places[0]); } catch (e) { G.log.warn('COOK', 'fish kit body failed — the kitchen draws its own', e?.message || e); kitFish = null; } }
+    if (kitFish) return kitFish;
     const look = lookOfFish(itemId, cls);
     const P2 = places && places.length ? places : [{}];
     const g = new THREE.Group();
@@ -948,6 +988,7 @@
     }
     if (room) for (const m of room.servedModels) m.update(dt, t);
     if (!s || !s.step) return;
+    s.clock = (s.clock || 0) + dt;
     const step = s.step, m = s.model;
     // the cook level of the model rises over the cooking steps (wait / fire / stir / grill / fry / boil / steam)
     const cookSteps = s.dish.steps.filter((x) => ['boil', 'grill', 'steam', 'fry', 'stir', 'rest'].includes(x.action));
@@ -1013,8 +1054,8 @@
     const s = session; if (!s) return;
     if (s.mode === 'hold' || s.mode === 'fire') { s.hold = true; return; }
     if (s.mode === 'taps') {
-      const t = performance.now() / 1000;
-      if (t - s.lastTap < 0.6) { G.ui.toast?.('천천히 해요 🙂', { type: 'info', duration: 1400 }); return; }
+      const t = s.clock || 0;   // the session's own clock (real seconds, advanced every frame)
+      if (s.taps > 0 && t - s.lastTap < 0.6) { G.ui.toast?.('천천히 해요 🙂', { type: 'info', duration: 1400 }); return; }
       s.lastTap = t; s.taps++; sfx(s.step.action === 'pound' ? 'pound' : 'tap', { volume: 0.6 });
       const n = s.step.count || 3; s.p = s.taps / n;
       if (s.model && s.step.action === 'salt') s.model.salt(s.p);
@@ -1508,7 +1549,13 @@
     update(dt, t) {
       // the place group went away (LRU dispose): drop our stations with it
       if (room && !room.placeGroup.parent) { disposeRoomStations(); }
-      tick(dt, t ?? performance.now() / 1000);
+      // a failing frame must never freeze a child's cooking (the core would switch this system off after 60): the
+      // error is kept for the developer centre / tests and logged once per message
+      try { tick(dt, t ?? performance.now() / 1000); } catch (e) {
+        const msg = String(e && e.stack || e).slice(0, 400);
+        if (api._lastError !== msg) { api._lastError = msg; G.log.warn('COOK', 'frame failed', msg); }
+        api.errors = (api.errors || 0) + 1;
+      }
     },
   };
   G.register(api);

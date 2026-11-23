@@ -82,7 +82,7 @@ async function enterKitchen() {
 async function shot(name) {
   if (!SHOTS) return;
   await wait(1200);
-  await page.screenshot({ path: path.join(SHOTS, name + '.png') });
+  await page.screenshot({ path: path.join(SHOTS, name + '.png'), timeout: 240000 });
   log(`    📸 ${name}.png`);
 }
 /** drive the current dish with the real controls until it is served (or the time runs out) */
@@ -299,6 +299,8 @@ try {
     check('the 요리 도감 is kept after a reload', ONLY.length && !ONLY.includes('fish') ? true : k.includes('DISH_SOGEUMGUI'), k);
   }
 
+  const se = await ev(() => ({ sys: (window.G.__systemErrors || []).filter((x) => x.system === 'cooking').map((x) => x.message.slice(0, 300)), frame: window.G.sys.cooking._lastError || null, n: window.G.sys.cooking.errors || 0 }));
+  check('no errors in the kitchen system (init, frames)', !se.sys.length && !se.n, se);
   check('no page errors', pageErrors.length === 0, pageErrors);
   check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 5));
 } catch (e) {
