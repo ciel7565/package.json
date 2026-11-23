@@ -115,6 +115,10 @@
   G.settingsDefaults = DEFAULTS;
   G.settingsProfileKeys = PROFILE_KEYS;
   G.sanitizeSetting = sanitize;
+  // [settings] §18.2: the options registry (68-settings.js) adds the ranges / choices of the keys it declares, and names
+  // the device-scope keys (resolution, window mode, monitor, quality …) that a profile save from another device must not
+  // overwrite (applyProfileSettings skips them)
+  G.settingsRanges = RANGES; G.settingsEnums = ENUMS; G.settingsDeviceKeys = G.settingsDeviceKeys || new Set();
   /** after logout: profile-scoped keys fall back to this device's stored values (title screen) */
   G.restoreDeviceSettings = function () {
     const dev = readDevice();
@@ -931,7 +935,8 @@
       const defs = G.settingsDefaults, profileKeys = G.settingsProfileKeys || [];
       const changed = [];
       const set = (k, v) => { v = G.sanitizeSetting(k, v); if (G.settings[k] !== v) { G.settings[k] = v; changed.push([k, v]); } };
-      for (const [k, v] of Object.entries(src)) if (k in defs && !profileKeys.includes(k)) set(k, v);
+      const devKeys = G.settingsDeviceKeys; // [settings] device-scope options stay as this device has them
+      for (const [k, v] of Object.entries(src)) if (k in defs && !profileKeys.includes(k) && !(devKeys && devKeys.has(k))) set(k, v);
       for (const k of profileKeys) set(k, Object.prototype.hasOwnProperty.call(src, k) ? src[k] : defs[k]);
       // the OS asks for less motion and the player never chose otherwise: the profile's stored value does not override it
       if (G.osReducedMotion?.() && !G.reduceMotionChosen?.()) set('reduceMotion', true);
