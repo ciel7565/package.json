@@ -1534,6 +1534,29 @@
       clearSheet() { const S2 = api.test._sheet; if (!S2) return; for (const m of S2.models) m.dispose(); S2.grp.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); S2.grp.parent?.remove(S2.grp); api.test._sheet = null; },
       look(pos, at, fov = 40) { try { G.sys.camera.shot(new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Vector3(at.x, at.y, at.z), { fov, duration: 0 }); return true; } catch (e) { return false; } },
       tick(sec) { const s0 = session; if (!s0) return; for (let k = 0; k < sec * 30; k++) tick(1 / 30, performance.now() / 1000 + k / 30); },
+      /** a child at the controls, on the kitchen's own clock (tests; the same press / release / pick a finger makes):
+       *  hold steps are held, the fire is fed into its band and let go above it, taps come 0.8 s apart, the fish is
+       *  turned when the edge is ready, my own 장 is picked when the bag has it. -> [{step, action, mode, sec}] */
+      autoplay(maxSec = 900, o = {}) {
+        const log = [];
+        let tt = 0, lastTap = -9, lastStep = -1, t0 = 0;
+        const ts0 = api.timeScale; api.timeScale = o.timeScale || 1;
+        while (session && tt < maxSec) {
+          const s0 = session;
+          if (o.stopAt != null && s0.i >= o.stopAt) break;
+          if (s0.i !== lastStep) { if (log.length) log[log.length - 1].sec = Math.round((tt - t0) * 10) / 10; log.push({ step: s0.i, action: s0.step?.action, mode: s0.mode }); lastStep = s0.i; t0 = tt; }
+          if (s0.mode === 'hold') pressDown();
+          else if (s0.mode === 'fire') { const b = BANDS[s0.step.heat] || BANDS.mid; if (s0.heat < (b[0] + b[1]) / 2) pressDown(); else pressUp(); }
+          else if ((s0.mode === 'taps' || s0.mode === 'tap') && tt - lastTap >= 0.8) { lastTap = tt; pressDown(); }
+          else if (s0.mode === 'window' && s0.turnAt !== null) pressDown();
+          else if (s0.mode === 'pick') { const g = s0.dish.ingredients.find((x) => x.season); pick(o.season === null ? null : (g && g.season.find((id) => countOf(id) > 0)) || null); }
+          if (!session) break;
+          tick(1 / 30, tt); tt += 1 / 30;
+        }
+        if (log.length) log[log.length - 1].sec = Math.round((tt - t0) * 10) / 10;
+        api.timeScale = ts0;
+        return log;
+      },
       down: () => pressDown(), up: () => pressUp(), pick: (id) => pick(id), get room() { return room; }, get river() { return river; }, buildRiver: () => buildRiver(), refresh: () => { refreshShelf(room); refreshTable(room); } },
     init() {
       G.bus.on('place:built', (p) => {
