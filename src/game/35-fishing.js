@@ -1253,7 +1253,7 @@
             try { g.fish = G.fishkit.build(st.fish, { length: clamp(st.mm / 1000 * 2.2, 0.22, 0.75), month: kst().mo }); if (g.fish) this._gearRoot.add(g.fish); } catch (e) { g.fish = null; }
             if (sp) this._splash(st.fx != null ? st.fx : r.wx, st.fz != null ? st.fz : r.wz, r.wy, true);
           }
-          if (st.t >= 1.05) {
+          if (st.t >= (st.landKind === 'fish' && st.method !== 'net' ? 1.6 : 1.05)) {   // a held-up fish is seen for a moment
             if (g.fish) { try { g.fish.userData.fish.dispose(); } catch (e) { /* gone */ } g.fish = null; }
             const kind = st.landKind;
             (kind === 'neighbour' ? this._neighbour(st.neighbour) : this._landed(st.fish, st.mm, st.method)).then(() => {
@@ -1342,7 +1342,11 @@
           if (st.method === 'gyeonji') { const d = Math.min(3, st.t * 0.5); fxp = st.fx + r.tx * d; fzp = st.fz + r.tz * d; }
         } else if (st.phase === 'bite') { fyp = wy - 0.2 * smooth(0, 0.25, st.t) + Math.sin(st.t * 7) * 0.02; if (st.method === 'gyeonji') { fxp = st.fx + r.tx * 3; fzp = st.fz + r.tz * 3; } }
         else if (st.phase === 'reel') { const q = st.prog; fxp = lerp(st.fx, r.x + ux * 1.6, q) + Math.sin(t * 2.1) * 0.35 * (1 - q); fzp = lerp(st.fz, r.z + uz * 1.6, q) + Math.cos(t * 1.7) * 0.35 * (1 - q); fyp = wy - 0.12; if (Math.floor(st.t / 0.8) !== Math.floor((st.t - dt) / 0.8)) this._ring(fxp, fzp, wy, { max: 0.9, a: 0.35, dur: 1.0 }); }
-        else if (st.phase === 'land') { const q = smooth(0, 1, st.t / 1.0); fxp = lerp(r.x + ux * 1.6, px + ux * 0.6, q); fzp = lerp(r.z + uz * 1.6, pz + uz * 0.6, q); fyp = lerp(wy, py + 1.25, q) + Math.sin(q * PI) * 0.7; }
+        else if (st.phase === 'land') {
+          // the fish comes out of the water and is held up beside the angler, on the camera's side (not behind the body)
+          const q = smooth(0, 0.75, st.t);
+          fxp = lerp(r.x + ux * 1.6, px + ux * 0.95 + uz * 0.75, q); fzp = lerp(r.z + uz * 1.6, pz + uz * 0.95 - ux * 0.75, q); fyp = lerp(wy, py + 1.5, q) + Math.sin(q * PI) * 0.7;
+        }
         else { fl.visible = false; }
         if (st.phase !== 'ready' && st.phase !== 'missed' && st.phase !== 'card' && st.phase !== 'card-done') { fl.visible = st.phase !== 'cast' || fl.visible; fl.position.set(fxp, fyp, fzp); fl.rotation.z = st.phase === 'bite' ? 0.5 : Math.sin(t * 1.1) * 0.06; } else fl.visible = false;
         if (st.method === 'gyeonji') fl.visible = false;
@@ -1357,7 +1361,7 @@
           A.needsUpdate = true;
         }
         // the landing fish hangs where the float is
-        if (g.fish) { g.fish.position.set(fxp, fyp - 0.1, fzp); g.fish.rotation.set(0, yaw + PI / 2, -0.9 + Math.sin(st.t * 14) * 0.25); g.fish.userData.fish.uniforms.uSwim.value.x = t * 14; g.fish.userData.fish.uniforms.uSwim.value.z = 0.07; }
+        if (g.fish) { const calm = st.phase === 'land' ? 1 - 0.7 * smooth(0.7, 1.1, st.t) : 1; g.fish.position.set(fxp, fyp - 0.1, fzp); g.fish.rotation.set(0, yaw + PI / 2, -0.9 * calm + Math.sin(st.t * 14) * 0.25 * calm); g.fish.userData.fish.uniforms.uSwim.value.x = t * 14; g.fish.userData.fish.uniforms.uSwim.value.z = 0.07; }
       }
       // the net stands in the shallows in front of the angler
       if (g.net) {
