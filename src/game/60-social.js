@@ -52,7 +52,8 @@
    *  At 18 m/s one or two report gaps are 18–36 m, so the limit grows with the reported speed. */
   const snapDist = (speed) => Math.max(20, (Number(speed) || 0) * 2.5);
   const DR_CAP = 1.2;        // s of dead reckoning along a remote player's last velocity (CONTRACT §13.8)
-  const DR_BACK = 6.4;       // m/s: a copy that overshot a late-reported stop / turn walks back at a walk, facing its way
+  // m/s: a copy that overshot a late-reported stop / turn walks back at a walk, facing its way
+  const drBack = () => (Number(G.sys.player?.WALK) > 0 ? G.sys.player.WALK : 7.68); // [finisher] follows the pace (§17.1), was 6.4
   const DR_BACK_SNAP = 12;   // m: further behind than this it is put right in one quiet correction
   const QUICK = ['EMO_HELLO', 'EMO_SMILE', 'EMO_THUMBS', 'EMO_CLAP', 'EMO_LIKE', 'EMO_LAUGH', 'EMO_WOW'];
   const DEFLECT = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]; // heading offsets tried when the way ahead is blocked
@@ -3533,14 +3534,14 @@
         if (back) {
           if (gap > DR_BACK_SNAP) { p.x = ex; p.z = ez; cx = 0; cz = 0; }
           else {
-            const bmax = DR_BACK * dt, bl = Math.hypot(cx, cz);
+            const bmax = drBack() * dt, bl = Math.hypot(cx, cz);
             if (bl > bmax) { cx *= bmax / bl; cz *= bmax / bl; }
             if (Math.hypot(cx, cz) > 1e-4) face = Math.atan2(cx, cz);
           }
         } else if (gap > 0.5) {
           // off the path sideways (a turn told late): cut across at a jog, facing the actual motion — no crab-slide
           let lx = cx - hx * along, lz = cz - hz * along;
-          const ll = Math.hypot(lx, lz), lmax = Math.max(DR_BACK, o.tsp * 0.5) * dt;
+          const ll = Math.hypot(lx, lz), lmax = Math.max(drBack(), o.tsp * 0.5) * dt;
           if (ll > lmax) { lx *= lmax / ll; lz *= lmax / ll; cx = hx * along + lx; cz = hz * along + lz; }
           const mx = vx * dt + cx, mz = vz * dt + cz;
           if (Math.hypot(mx, mz) > 1e-3) face = Math.atan2(mx, mz);

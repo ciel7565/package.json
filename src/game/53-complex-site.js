@@ -957,6 +957,26 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
     // ================= lamps (merged: posts in metal / stone, heads in glow) + pooled real lights near the player
     const lamps = (C.byId('LAMPS') || { list: [] }).list;
     const corridor = C.byId('CORRIDOR');
+    // [finisher] the corridor deck of 55 rises evenly from the terrace (B_MAIN y + podium) to the pavilion floor: its
+    // lanterns hang from that roof (deck + h − 0.75), not 2.75 m over the ground under the raised deck
+    const corDeckY = (() => {
+      if (!corridor || !Array.isArray(corridor.pts) || corridor.pts.length < 2) return null;
+      const pts = corridor.pts, cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const len = cum[cum.length - 1] || 1, MN = C.byId('B_MAIN'), PV = C.byId('B_PAVILION'), fin = Number.isFinite;
+      const y0 = MN && fin(MN.y) ? MN.y + (MN.podium || 1.62) : Y(pts[0][0], pts[0][1]) + 1.8;
+      const y1 = PV ? (fin(PV.y) ? PV.y : Y(PV.x, PV.z)) + 0.3 : y0;
+      return (x, z) => {
+        let best = Infinity, sb = 0;
+        for (let i = 0; i < pts.length - 1; i++) {
+          const ax = pts[i][0], az = pts[i][1], dx = pts[i + 1][0] - ax, dz = pts[i + 1][1] - az, l2 = dx * dx + dz * dz;
+          const t = l2 > 1e-9 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / l2)) : 0;
+          const d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+          if (d < best) { best = d; sb = cum[i] + t * (cum[i + 1] - cum[i]); }
+        }
+        return y0 + (y1 - y0) * Math.max(0, Math.min(1, sb / len)) + (corridor.h || 3.4) - 0.75;
+      };
+    })();
     const lampAt = [];
     for (const [x, z, kind] of lamps) {
       if (!inB(x, z, 0)) continue;
@@ -980,9 +1000,10 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
         col({ shape: 'circle', x, z, r: 0.2 });
         lampAt.push({ x, y: y + 0.8, z, kind });
       } else if (onCorr) {                     // a hanging lantern under the corridor roof (complex-buildings builds the roof)
-        Bk.add('glow', geo.cyl(0.2, 0.2, 0.42, 8), M(x, y + 2.75, z), '#ffd9a0');
-        Bk.add('wood', geo.cyl(0.24, 0.24, 0.05, 8), M(x, y + 2.98, z), '#6e4a2c');
-        lampAt.push({ x, y: y + 2.7, z, kind: 'hang' });
+        const hy = corDeckY ? Math.max(y + 2.75, corDeckY(x, z)) : y + 2.75; // [finisher] under the raised deck's roof
+        Bk.add('glow', geo.cyl(0.2, 0.2, 0.42, 8), M(x, hy, z), '#ffd9a0');
+        Bk.add('wood', geo.cyl(0.24, 0.24, 0.05, 8), M(x, hy + 0.23, z), '#6e4a2c');
+        lampAt.push({ x, y: hy - 0.05, z, kind: 'hang' });
       } else {                                 // 석등: a stone lantern
         Bk.add('stone', geo.box(0.6, 0.18, 0.6, 'world'), M(x, y + 0.09, z), '#b9b09d');
         Bk.add('stone', geo.cyl(0.11, 0.13, 0.75, 8), M(x, y + 0.55, z), '#b9b09d');
