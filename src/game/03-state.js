@@ -939,7 +939,10 @@
       const defs = G.settingsDefaults, profileKeys = G.settingsProfileKeys || [];
       const changed = [];
       const set = (k, v) => { v = G.sanitizeSetting(k, v); if (G.settings[k] !== v) { G.settings[k] = v; changed.push([k, v]); } };
-      const devKeys = G.settingsDeviceKeys; // [settings] device-scope options stay as this device has them
+      // [settings] device-scope options stay as this device has them; while the account store is live (a server account
+      // is logged in) the account-scope options come from it, never from an older copy of the save (another device's
+      // save restored after a conflict carried that device's settings)
+      const devKeys = G.sys?.settings?.store?.online?.() && G.settingsAccountKeys ? new Set([...(G.settingsDeviceKeys || []), ...G.settingsAccountKeys]) : G.settingsDeviceKeys;
       for (const [k, v] of Object.entries(src)) if (k in defs && !profileKeys.includes(k) && !(devKeys && devKeys.has(k))) set(k, v);
       for (const k of profileKeys) set(k, Object.prototype.hasOwnProperty.call(src, k) ? src[k] : defs[k]);
       // the OS asks for less motion and the player never chose otherwise: the profile's stored value does not override it

@@ -474,6 +474,8 @@ async function partD() {
     await synced(one.page);
     const ACCT = { mixMaster: 65, mixMusic: 25, mixSfx: 85, mixUi: 45, mixVoice: 75, mixNature: 35, textScale: 5, uiStep: 3, avatarScale: 115, nameplates: 'off', hudOpacity: 70, muteHidden: false };
     const DEV = { stickSide: 'right', touchButtons: 3 };
+    // the first login sends the account's first copy by itself: wait until that is done, so the change's own save is timed
+    await one.page.waitForFunction(() => { const st = G.sys.settings.store; return st.v >= 1 && !st.pending && !st.busy; }, null, { timeout: TIMEOUT, polling: 250 });
     const t0 = Date.now(), s0 = saves.length;
     const id1 = await one.page.evaluate(([A, D]) => { for (const [k, v] of Object.entries({ ...A, ...D })) G.sys.settings.set(k, v); return G.sys.settings.store.deviceId(); }, [ACCT, DEV]);
     const st1 = await settled(one.page);
@@ -485,13 +487,15 @@ async function partD() {
     log(`    database after the pause: ${note(r1)} acct ${JSON.stringify(r1?.blob?.acct || {}).slice(0, 400)}`);
 
     // ---- a change 0.5 s before the tab closes
-    await one.page.evaluate(() => { G.sys.settings.set('mixMusic', 30); G.sys.settings.set('hudOpacity', 65); });
-    await sleep(500);
+    const pre = await one.page.evaluate(async () => { G.sys.settings.set('mixMusic', 30); G.sys.settings.set('hudOpacity', 65); await new Promise((r) => setTimeout(r, 500)); const st = G.sys.settings.store; return { pending: st.pending, busy: st.busy, online: st.online(), pulled: st.pulled }; });
     const s1 = saves.length;
     one.page.on('dialog', (d) => d.accept().catch(() => {}));
-    await one.page.close({ runBeforeUnload: true }); // the way a person closes the tab: pagehide runs
+    // the page goes away 0.5 s after the change (a real unload: pagehide runs; Playwright's page.close() removes a page
+    // without it, so the page is left for another address the way a closing tab leaves)
+    await one.page.goto(`${BASE}api/ping.php`, { waitUntil: 'load', timeout: 60000 });
     const r2 = await dbWait((r) => r.blob.acct.mixMusic === 30 && r.blob.acct.hudOpacity === 65, 10000);
-    check('D: a change 0.5 s before the tab closes still reaches the database (pagehide → keepalive)', r2?.blob?.acct?.mixMusic === 30 && r2.blob.acct.hudOpacity === 65 && saves.length > s1, `${note(r2)} · music ${r2?.blob?.acct?.mixMusic} hud ${r2?.blob?.acct?.hudOpacity} · saves on close ${saves.length - s1}`);
+    check('D: a change 0.5 s before the page goes away still reaches the database (pagehide → keepalive)', r2?.blob?.acct?.mixMusic === 30 && r2.blob.acct.hudOpacity === 65 && saves.length > s1, `${note(r2)} · music ${r2?.blob?.acct?.mixMusic} hud ${r2?.blob?.acct?.hudOpacity} · saves on leaving ${saves.length - s1} · before ${JSON.stringify(pre)}`);
+    await one.page.close();
 
     // ---- a value that only the account store has (the player save never carries it)
     {
@@ -544,6 +548,8 @@ async function partD() {
     check('D: a change made just before the logout reaches the database', lo === true && r5?.blob?.acct?.chatOpacity === 55, `${note(r5)} chat ${r5?.blob?.acct?.chatOpacity}`);
     log(`    database at the end: ${note(r5)} acct ${JSON.stringify(r5?.blob?.acct || {}).slice(0, 400)} devices ${Object.keys(r5?.blob?.dev || {}).join(',')}`);
     if (SHOTS) fs.writeFileSync(path.join(SHOTS, 'partD-database.json'), JSON.stringify({ afterPause: r1, afterClose: r2, afterMerge: r4, afterLogout: r5 }, null, 1));
+    // device 2 leaves the way a person does (its autosave is not cut off by the closing browser)
+    await two.page.evaluate(() => G.app.logout({ confirm: false, quiet: true })).catch(() => {});
     await two.context.close();
     await one.context.close();
   } finally { try { proc.kill(); } catch (e) { /* gone */ } }

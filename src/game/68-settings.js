@@ -143,6 +143,8 @@
   /** register the key with 03-state's validator (type of the default, range, choices) */
   function teachState(d) {
     const D = G.settingsDefaults;
+    // the keys the account store owns while a server account is logged in (03-state's applyProfileSettings leaves them)
+    if (d.scope === 'account' && d.type !== 'action' && d.type !== 'info' && d.key !== 'easyMode' && d.key !== 'kidChat' && d.key !== 'parentGate') (G.settingsAccountKeys = G.settingsAccountKeys || new Set()).add(d.key);
     if (!D || d.type === 'action' || d.type === 'info' || d.map) return;
     if (!(d.key in D) && d.default !== undefined && typeof d.default !== 'object') D[d.key] = d.default;
     if (d.type === 'slider' && G.settingsRanges && !G.settingsRanges[d.key]) G.settingsRanges[d.key] = [d.min, d.max];
