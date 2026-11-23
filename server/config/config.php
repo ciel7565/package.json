@@ -211,6 +211,9 @@ return [
         'support_read'   => [60, 60],    // api/support/mine.php — 내 문의·답 읽기 (계정별; 앱은 몇 분에 한 번 물어요)
         'support_write'  => [40, 600],   // reply · seen · delete (계정별, 10분에 40번)
         'support_shot'   => [120, 60],   // api/support/shot.php — 내 문의의 화면 사진 보기
+        // ↓ 10단계 설정 창 (CONTRACT §18.2) — [settings]
+        'settings_get'   => [30, 60],    // api/settings/get.php — 내 설정 읽기 (계정별; 앱은 로그인할 때 한 번 물어요)
+        'settings_save'  => [30, 60],    // api/settings/save.php — 설정 저장 (계정별; 바꾼 뒤 2초 기다렸다가 한 번에 보내요)
     ],
 
     // ------------------------------------------------------------------ chat

@@ -128,6 +128,14 @@ spl_autoload_register(static function (string $class): void {
         if (is_file($file)) require_once $file;
     }
 });
+// phase 10 (CONTRACT §18.2) [settings]: Tfm\UserSettings (what a player chose in the settings window, kept per account and
+// per device in user_settings) — used by api/settings/* only; loaded on first use.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\UserSettings') {
+        $file = __DIR__ . '/UserSettings.php';
+        if (is_file($file)) require_once $file;
+    }
+});
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');

@@ -781,4 +781,16 @@ CREATE TABLE IF NOT EXISTS support_messages (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
 -- [/support]
 
+-- [settings] §18.2: what a player chose in the settings window, kept for the next login and the next device. data = the
+-- JSON blob { acct: { <option id>: value }, dev: { <device id>: { t, s: { <option id>: value } } } } (≤ 8 KB, ≤ 5 devices),
+-- checked by Tfm\UserSettings against the option table of this build (game-data.json → settings); v = a version counter
+-- (a save is taken only when its v is higher than the stored one: the last write wins). No personal data.
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id    BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  v          INT NOT NULL DEFAULT 0,
+  data       TEXT NOT NULL,
+  updated_at BIGINT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+-- [/settings]
+
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (9, UNIX_TIMESTAMP() * 1000, 'phase 10: reports and questions with a picture of the screen, account settings');

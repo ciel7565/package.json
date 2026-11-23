@@ -1641,6 +1641,122 @@ async function S03() {
     assert(/room_grant/.test(audit.text) && /room_revoke/.test(audit.text), 'the audit log does not show room_grant / room_revoke');
     return 'no room → grant (refused for a plain account and without the token) → can true, limit 80, a save is taken → closed: 403, the room is kept (v 1) · audit: room_grant, room_revoke';
   });
+  // [settings] CONTRACT §18.2 — api/settings/save.php: the shape is refused when wrong (4xx); a value of the wrong type or range
+  // inside a well-shaped blob is dropped (never stored, counted in `dropped`); the caller's own row only; no token → nothing taken
+  await check('S03', 'api/settings/* · wrong shapes (v as a string / 0 / missing, data as a list or a word, unknown keys, an account field) are refused; hostile values inside the blob are dropped, never stored; without the token nothing is taken; nothing names another account', { sev: 'medium', fix: 'Tfm\\UserSettings::clean: check every value against game-data.json → settings; V::keys for the body; the session\'s account only.' }, async () => {
+    const u1 = await newUser(s, 'Set'), u2 = await newUser(s, 'Sev');
+    const good = await u1.json('api/settings/save.php', { v: 1, data: { acct: { mixMusic: 40, textScale: 4 }, dev: { a1b2c3d4e5f6: { t: 1763900000, s: { quality: 'high' } } } } });
+    assert(good.status === 200 && good.data && good.data.v === 1, `a valid save → ${good.status} ${(good.error && good.error.code) || ''}`);
+    const base = { v: 2, data: { acct: { mixMusic: 50 } } };
+    const cases = [
+      ...mut('v', INT, base), ['v = 0', { ...base, v: 0 }], ['v = -5', { ...base, v: -5 }], ['v missing', { data: base.data }], ['data missing', { v: 2 }],
+      ['data = a word', { v: 2, data: 'acct' }], ['data = a list', { v: 2, data: [1, 2] }], ['data: an unknown part', { v: 2, data: { acct: {}, admin: { role: 'admin' } } }],
+      ['acct = a list', { v: 2, data: { acct: [1, 2, 3] } }], ['acct = a word', { v: 2, data: { acct: 'x' } }], ['dev = a list', { v: 2, data: { dev: [1] } }],
+      ['dev entry: an unknown key', { v: 2, data: { dev: { a1b2c3d4e5f6: { t: 1, s: {}, user: 1 } } } }],
+      ['201 options', { v: 2, data: { acct: Object.fromEntries(Array.from({ length: 201 }, (_, k) => [`o${k}`, true])) } }],
+      ['an unknown key (user)', { ...base, user: u2.user.id }], ['an unknown key (userId)', { ...base, userId: u2.user.id }],
+      ['more than 8 KB', { v: 2, data: { dev: Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`d${String(i).padStart(11, '0')}`, { t: i, s: Object.fromEntries(Array.from({ length: 120 }, (_, k) => [`later${k}`, 'a'.repeat(30)])) }])) } }],
+    ];
+    const r = await strict('api/settings/save.php', cases, { perUser: 25, user: async () => u1 });
+    const hostile = await u1.json('api/settings/save.php', { v: 3, data: { acct: { mixMusic: 999, muted: 'yes', nameplates: '<img src=x onerror=alert(1)>', quality: 'ultra', key_jump: ['Space', '<b>'], later: 'a b', constructor: 1, textScale: 4 } } });
+    assert(hostile.status === 200 && hostile.data.dropped === 7, `hostile values → ${hostile.status} dropped ${hostile.data && hostile.data.dropped}`);
+    const noTok = await u1.req('api/settings/save.php', { json: { v: 9, data: { acct: { textScale: 1 } } }, csrf: false });
+    const badTok = await u1.req('api/settings/save.php', { json: { v: 9, data: { acct: { textScale: 1 } } }, csrf: 'x'.repeat(64) });
+    assert(noTok.status === 403 && badTok.status === 403, `a save without / with a wrong token → ${noTok.status} / ${badTok.status}`);
+    const mine = await u1.req('api/settings/get.php');
+    assert(mine.status === 200 && mine.data.v === 3 && JSON.stringify(mine.data.data.acct) === '{"textScale":4}', `stored after the refused / hostile saves: ${JSON.stringify(mine.data)}`);
+    const other = await u2.req('api/settings/get.php');
+    assert(other.status === 200 && other.data.v === 0 && JSON.stringify(other.data.data) === '{"acct":{},"dev":{}}', 'another account sees something');
+    const q = await u2.req(`api/settings/get.php?user=${u1.user.id}`);
+    assert(q.status === 400, `get.php with a user parameter → ${q.status}`);
+    const guest = await request(s, 'api/settings/get.php');
+    assert(guest.status === 401, `get.php without a login → ${guest.status}`);
+    return `${r} · 7 hostile values dropped, the stored blob keeps only the valid one · no token / wrong token → 403 · own row only, ?user= → 400, no login → 401`;
+  });
+  // [support] CONTRACT §18.1 — api/support/*: a report or a question with a picture of the screen; every field typed, ids
+  // of another account answer like a missing one, the picture is judged by its bytes (the account budget is 12 an hour:
+  // the matrices go through several accounts)
+  const SUP_BASE = { kind: 'bug', category: 'stuck' };
+  await check('S03', 'api/support/create · reply · seen · delete · wrong types, unknown fields, a category of another kind, words over 1,000 characters, device facts that are not on the list, a target on a bug, malformed ids → 4xx (nothing stored)', { sev: 'medium', fix: 'Tfm\\Support::create / reply / seen / deleteOwn: V::enum for kind and category, V::str with the 1,000 limit, Support::cleanMeta (V::keys of the fixed list, typed values), V::id for every id; V::keys for the body.' }, async () => {
+    const own = await newUser(s, 'Sup');
+    const made = await own.json('api/support/create.php', { ...SUP_BASE, body: '처음 글' });
+    assert(made.status === 200 && made.data && made.data.ticket && made.data.ticket.id > 0, `a valid create → ${made.status} ${(made.error && made.error.code) || ''}`);
+    const id = made.data.ticket.id;
+    const create = [
+      ['kind missing', { category: 'stuck' }], ['kind unknown', { ...SUP_BASE, kind: 'praise' }], ['kind a number', { ...SUP_BASE, kind: 3 }], ['kind an array', { ...SUP_BASE, kind: ['bug'] }],
+      ['category of another kind', { ...SUP_BASE, category: 'bully' }], ['category unknown', { ...SUP_BASE, category: 'x' }], ['category an object', { ...SUP_BASE, category: { a: 1 } }],
+      ['body a number', { ...SUP_BASE, body: 5 }], ['body an object', { ...SUP_BASE, body: { a: 1 } }], ['body 1,001 characters', { ...SUP_BASE, body: '가'.repeat(1001) }], ['body 5,000 characters', { ...SUP_BASE, body: 'x'.repeat(5000) }],
+      ['meta not JSON', { ...SUP_BASE, meta: '{"fps":' }], ['meta a list', { ...SUP_BASE, meta: '[1,2]' }], ['meta with the save', { ...SUP_BASE, meta: JSON.stringify({ save: '{}' }) }],
+      ['meta with a nickname', { ...SUP_BASE, meta: JSON.stringify({ nickname: 'x' }) }], ['meta fps a word', { ...SUP_BASE, meta: JSON.stringify({ fps: 'fast' }) }], ['meta x out of range', { ...SUP_BASE, meta: JSON.stringify({ x: 1e9 }) }],
+      ['meta 5 KB', { ...SUP_BASE, meta: JSON.stringify({ browser: 'x'.repeat(5000) }) }],
+      ['targetId on a bug', { ...SUP_BASE, targetId: '5' }], ['messageId a word', { kind: 'report', category: 'bully', messageId: 'abc' }], ['targetId negative', { kind: 'report', category: 'bully', targetId: '-4' }],
+      ['unknown key userId', { ...SUP_BASE, userId: 1 }], ['unknown key status', { ...SUP_BASE, status: 'answered' }], ['unknown key no', { ...SUP_BASE, no: '1' }], ['unknown key shot_path', { ...SUP_BASE, shot_path: '../x' }],
+    ];
+    const r1 = await strict('api/support/create.php', create, { perUser: 10 });
+    const reply = [['id missing', { body: 'x' }], ['id a word', { id: 'abc', body: 'x' }], ['id 0', { id: 0, body: 'x' }], ['id negative', { id: -1, body: 'x' }], ['id an array', { id: [id], body: 'x' }],
+      ['body missing', { id }], ['body empty', { id, body: '' }], ['body a number', { id, body: 1 }], ['body 1,001 characters', { id, body: '가'.repeat(1001) }], ['unknown key side', { id, body: 'x', side: 'admin' }]];
+    const r2 = await strict('api/support/reply.php', reply, { user: async () => own });
+    const seenDel = [['id a word', { id: 'x' }], ['id negative', { id: -3 }], ['unknown key all', { all: true }], ['id an object', { id: { a: 1 } }]];
+    const r3 = await strict('api/support/seen.php', seenDel, { user: async () => own });
+    const r4 = await strict('api/support/delete.php', [['id missing', {}], ...seenDel], { user: async () => own });
+    const mine = await own.req('api/support/mine.php');
+    assert(mine.status === 200 && mine.data.tickets.length === 1 && mine.data.tickets[0].id === id && mine.data.tickets[0].thread.length === 0, `stored after the refused requests: ${JSON.stringify(mine.data).slice(0, 200)}`);
+    for (const q of ['x=1', 'before=abc', 'before=-1', 'before[]=1', 'unread=2']) { const g = await own.req(`api/support/mine.php?${q}`); assert(g.status === 400, `mine.php?${q} → ${g.status}`); }
+    return `create ${r1} · reply ${r2} · seen ${r3} · delete ${r4} · mine.php: 5 bad query strings → 400; the one valid ticket is unchanged`;
+  });
+  await check('S03', 'api/support/* · IDOR: another account\'s ticket and picture answer the same 404 as a missing id (reply · seen · delete · shot), nothing changes; a guest cannot send (401); no token / a wrong token → 403', { sev: 'high', fix: 'Tfm\\Support::own($uid, $id) before every change; Support::shotFor($viewer, $id) — the owner or an administrator only; one NOT_FOUND for everything else.' }, async () => {
+    const a = await newUser(s, 'SupA'), b = await newUser(s, 'SupB');
+    const made = await a.req('api/support/create.php', { multipart: { fields: { kind: 'question', category: 'howto', body: '장독대는 어디에 있어요?' }, files: [{ field: 'shot', name: 'shot.png', type: 'image/png', data: makePng(64, 48) }] } });
+    assert(made.status === 200 && made.data.ticket.shot === true, `a's report with a picture → ${made.status} ${(made.error && made.error.code) || ''}`);
+    const id = made.data.ticket.id;
+    const own = await a.req(`api/support/shot.php?id=${id}`);
+    assert(own.status === 200 && /^image\/jpeg/.test(own.headers['content-type'] || '') && own.headers['x-content-type-options'] === 'nosniff' && /sandbox/.test(own.headers['content-security-policy'] || ''), `the owner's picture → ${own.status} ${own.headers['content-type']}`);
+    const missing = await b.req('api/support/shot.php?id=987654321');
+    const other = await b.req(`api/support/shot.php?id=${id}`);
+    assert(other.status === 404 && missing.status === 404 && JSON.stringify(other.json && other.json.error) === JSON.stringify(missing.json && missing.json.error), `b → a's picture ${other.status}, a missing id ${missing.status}`);
+    for (const [ep, body] of [['api/support/reply.php', { id, body: '남의 문의에 쓰기' }], ['api/support/seen.php', { id }], ['api/support/delete.php', { id }]]) {
+      const r = await b.json(ep, body);
+      const m = await b.json(ep, { ...body, id: 987654321 });
+      assert(r.status === 404 && m.status === 404 && JSON.stringify(r.json && r.json.error) === JSON.stringify(m.json && m.json.error), `${ep} with a's id → ${r.status}, a missing id → ${m.status}`);
+    }
+    const guestR = await request(s, 'api/support/create.php', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(SUP_BASE) });
+    assert(guestR.status === 401 || guestR.status === 403, `a guest's create → ${guestR.status}`);
+    const guestShot = await request(s, `api/support/shot.php?id=${id}`);
+    assert(guestShot.status === 401, `a guest's shot.php → ${guestShot.status}`);
+    const noTok = await a.req('api/support/delete.php', { json: { id }, csrf: false });
+    const badTok = await a.req('api/support/delete.php', { json: { id }, csrf: 'x'.repeat(64) });
+    assert(noTok.status === 403 && badTok.status === 403, `delete without / with a wrong token → ${noTok.status} / ${badTok.status}`);
+    const still = await a.req('api/support/mine.php');
+    assert(still.status === 200 && still.data.tickets.length === 1 && still.data.tickets[0].thread.length === 0, 'something changed a\'s ticket');
+    const gone = await a.json('api/support/delete.php', { id });
+    const after = await a.req(`api/support/shot.php?id=${id}`);
+    assert(gone.status === 200 && after.status === 404, `the owner deletes → ${gone.status}; the picture afterwards → ${after.status}`);
+    return 'b: 404 like a missing id for shot / reply / seen / delete · guest 401 · no / wrong token 403 · a deletes → the picture is gone (404)';
+  });
+  await check('S03', 'api/support/create.php · upload abuse: a script inside a picture, not a picture, a GIF, an oversize file, two files, an array field, a tiny picture → 400 (nothing stored); only the field "shot" is taken', { sev: 'high', fix: 'Tfm\\Upload::supportShot: type by the bytes (finfo + getimagesize), polyglot markers, size / pixel caps, re-encode as JPEG into the private data/support/; the endpoint refuses any other file field.' }, async () => {
+    const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    const cases = [
+      ['a PHP polyglot PNG', [{ field: 'shot', name: 's.png', type: 'image/png', data: makePng(32, 32, [pngText('Comment', '<?php system($_GET["c"]); ?>')]) }], 'UPLOAD_REJECTED'],
+      ['not a picture', [{ field: 'shot', name: 's.jpg', type: 'image/jpeg', data: Buffer.from('this is not an image at all') }], 'UPLOAD_TYPE'],
+      ['a GIF', [{ field: 'shot', name: 's.gif', type: 'image/gif', data: gif }], 'UPLOAD_TYPE'],
+      ['1.6 MB', [{ field: 'shot', name: 's.png', type: 'image/png', data: Buffer.concat([makePng(64, 64), Buffer.alloc(1700000, 1)]) }], 'UPLOAD_TOO_LARGE'],
+      ['a tiny picture (8 × 8)', [{ field: 'shot', name: 's.png', type: 'image/png', data: makePng(8, 8) }], 'UPLOAD_DIMENSIONS'],
+      ['two files', [{ field: 'shot', name: 'a.png', type: 'image/png', data: makePng(64, 64) }, { field: 'other', name: 'b.png', type: 'image/png', data: makePng(64, 64) }], 'INVALID_INPUT'],
+      ['an array field', [{ field: 'shot[]', name: 'a.png', type: 'image/png', data: makePng(64, 64) }], null],
+    ];
+    const bad = [];
+    let u = await newUser(s, 'SupUp'), n = 0;
+    for (const [label, files, want] of cases) {
+      if (n++ >= 6) { u = await newUser(s, 'SupUp'); n = 1; }
+      const r = await u.req('api/support/create.php', { multipart: { fields: SUP_BASE, files } });
+      const code = r.json && r.json.error && r.json.error.code;
+      if (!(r.status === 400 || r.status === 413) || (want && code !== want)) bad.push(`${label} → ${r.status} ${code || ''}`);
+    }
+    const left = await u.req('api/support/mine.php');
+    if (!(left.status === 200 && left.data.tickets.length === 0)) bad.push('a refused upload left a ticket');
+    assert(!bad.length, bad.join('; '));
+    return `${cases.length} hostile uploads → 400 with the right code; no ticket stored`;
+  });
   await check('S03', 'every POST endpoint of the build has a field-level validation matrix in this suite', { sev: 'low', fix: 'New endpoint: add its valid body and wrong-type variants to S03() in tests/security-e2e.mjs.' }, async () => {
     const covered = new Set(['api/auth/login.php', 'api/auth/register.php', 'api/chat/send.php', 'api/chat/report.php', 'api/presence/update.php', 'api/player/save.php', 'api/sub/prepare.php', 'api/sub/confirm.php', 'api/sub/billing-issue.php', 'api/sub/grant.php', 'api/sub/renew.php',
       'api/allot/apply.php', 'api/allot/cancel.php', 'api/allot/nameplate.php', 'api/allot/seen.php', 'api/allot/waitlist.php', 'api/allot/pay-prepare.php', 'api/allot/pay-confirm.php',   // CONTRACT §16.7
@@ -1648,6 +1764,8 @@ async function S03() {
       'api/sync.php',   // CONTRACT §16.9 [scale-server]
       'api/auth/password.php',   // CONTRACT §17.2 [entitle]
       'api/room/save.php',   // CONTRACT §17.4 [myroom]
+      'api/settings/save.php',   // CONTRACT §18.2 [settings]
+      'api/support/create.php', 'api/support/reply.php', 'api/support/seen.php', 'api/support/delete.php',   // CONTRACT §18.1 [support]
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
@@ -2671,11 +2789,17 @@ async function S09() {
       'api/lecture/list.php': [61, () => request(s, 'api/lecture/list.php')], 'api/lecture/file.php': [601, () => request(s, 'api/lecture/file.php?id=987654321')],
       // [myroom] CONTRACT §17.4 — room_get [60, 60] · room_save [40, 60] per account (a refused save counts too)
       'api/room/get.php': [61, () => u.req('api/room/get.php')], 'api/room/save.php': [41, () => u.json('api/room/save.php', {})],
+      // [settings] CONTRACT §18.2 — settings_get [30, 60] · settings_save [30, 60] per account (a refused save counts too)
+      'api/settings/get.php': [31, () => u.req('api/settings/get.php')], 'api/settings/save.php': [31, () => u.json('api/settings/save.php', {})],
+      // [support] CONTRACT §18.1 — support_create [12, 3600] · support_read [60, 60] · support_write [40, 600] (seen / delete share it) · support_shot [120, 60]
+      'api/support/create.php': [13, () => u.json('api/support/create.php', {})], 'api/support/mine.php': [61, () => u.req('api/support/mine.php')],
+      'api/support/reply.php': [41, () => u.json('api/support/reply.php', {})], 'api/support/shot.php': [121, () => u.req('api/support/shot.php?id=987654321')],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
       'api/farm/seen.php': 'api/farm/reports.php',
       'api/allot/summary.php': 'api/allot/map.php', 'api/allot/unit.php': 'api/allot/map.php', 'api/allot/logs.php': 'api/allot/map.php', 'api/allot/plans.php': 'api/allot/mine.php', 'api/allot/seen.php': 'api/allot/inbox.php',
-      'api/allot/nameplate.php': 'api/allot/cancel.php', 'api/allot/waitlist.php': 'api/allot/cancel.php', 'api/allot/pay-prepare.php': 'api/allot/cancel.php', 'api/allot/pay-confirm.php': 'api/allot/cancel.php' };
+      'api/allot/nameplate.php': 'api/allot/cancel.php', 'api/allot/waitlist.php': 'api/allot/cancel.php', 'api/allot/pay-prepare.php': 'api/allot/cancel.php', 'api/allot/pay-confirm.php': 'api/allot/cancel.php',
+      'api/support/seen.php': 'api/support/reply.php', 'api/support/delete.php': 'api/support/reply.php' };   // [support]
     // api/trap.php is the honeypot: it answers a bare 404 even over its logging limit (a 429 would tell a scanner it
     // found a real, rate-limited endpoint). Its rate limit throttles the log, not the response — so it is not expected
     // to 429 here (its limit is still exercised: S05 relies on the honeypot event being written under the limit).

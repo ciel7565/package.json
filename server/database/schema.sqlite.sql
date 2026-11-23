@@ -725,4 +725,13 @@ CREATE TABLE IF NOT EXISTS support_messages (
 CREATE INDEX IF NOT EXISTS ix_supmsg_ticket ON support_messages (ticket_id, id);
 -- [/support]
 
+-- [settings] §18.2: what a player chose in the settings window (see database/schema.sql): one JSON blob per account.
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id    INTEGER PRIMARY KEY,
+  v          INTEGER NOT NULL DEFAULT 0,
+  data       TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+-- [/settings]
+
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (9, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 10: reports and questions with a picture of the screen, account settings');

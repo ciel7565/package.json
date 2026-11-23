@@ -211,6 +211,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 // ---------------------------------------------------------------- data export for PHP server
 function exportGameData() {
   const dataFrags = fragments.filter((f) => /^0[12]-/.test(f.name) || /education-data/.test(f.name));
+  // [fishing] the fish table (CONTRACT §18.3) is pure data too. It is evaluated in file-name order: its items, quests and
+  // achievements join the tables below, and 45-education-data.js merges its learning cards and quiz items
+  for (const f of fragments.filter((x) => /^34-fish-data/.test(x.name))) { const at = dataFrags.findIndex((x) => x.name > f.name); dataFrags.splice(at < 0 ? dataFrags.length : at, 0, f); }
   const G = { data: {} };
   const ctx = vm.createContext({ G, window: {}, console, Math, JSON, Object, Array, Number, String, Date });
   for (const f of dataFrags) {
@@ -219,6 +222,11 @@ function exportGameData() {
   }
   // [myroom] 내 방 (CONTRACT §17.4): the catalogue is pure data + math too — Tfm\Room checks a saved room against it
   for (const f of fragments.filter((x) => /myroom-data/.test(x.name))) {
+    try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
+    catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
+  }
+  // [settings] the option table of the settings window (CONTRACT §18.2): Tfm\UserSettings checks a saved blob against it
+  for (const f of fragments.filter((x) => /^68-settings/.test(x.name))) {
     try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
     catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
   }
@@ -260,6 +268,11 @@ function exportGameData() {
     myroom: d.myroom && typeof d.myroom.serverTable === 'function' ? d.myroom.serverTable() : {},
     // [avatar] the avatar's option ids (CONTRACT §17.7): Tfm\Presence whitelists saved / shared looks against them
     avatar: d.avatar ? { v: d.avatar.v, options: d.avatar.options, legacy: d.avatar.legacy, colorKeys: d.avatar.colorKeys } : {},
+    // [settings] ids → { t: b | n | e, min, max, step, values, d, s: a | d } (CONTRACT §18.2), tabs, limits
+    settings: d.settingsTable ? { v: d.settingsTable.v, bytes: d.settingsTable.bytes, devices: d.settingsTable.devices, maxOptions: d.settingsTable.maxOptions, tabs: d.settingsTable.tabs, options: d.settingsTable.options } : {},
+    // [fishing] species ids → { p: protected 0 | 1, max: mm, d: difficulty }, neighbours, spots, baits, the daily keep limit,
+    // exp per catch (CONTRACT §18.3): Tfm\SaveValidator checks the `fishing` block of a save and keeps protected fish out of the bag
+    fish: d.fish && typeof d.fish.serverTable === 'function' ? d.fish.serverTable() : {},
   };
 }
 
