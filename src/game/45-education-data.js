@@ -1327,4 +1327,16 @@
     // one spoken line per deck for 쉬운 모드 (the first sentence of the summary)
     for (const d of G.data.lectureDecks) d.kid = d.kid || String(d.summary || d.title).split(/(?<=요\.)\s/)[0];
   })();
+
+  // [fishing] ---------------------------------------------------------------- 맑은 물 물고기 (CONTRACT §18.3)
+  // 34-fish-data.js wrote its learning cards, quiz items and the deck `강원도 1급수 물고기` in the shapes above; here they
+  // join the tables, after the decks exist. Nothing happens when that fragment is not in the build.
+  (function () {
+    const E = G.data.fish && G.data.fish.edu;
+    if (!E) return;
+    if (G.data.educationCategories && !G.data.educationCategories[E.category.id]) G.data.educationCategories[E.category.id] = { name: E.category.name, color: E.category.color, icon: E.category.icon };
+    for (const [id, c] of Object.entries(E.cards)) { if (G.data.education[id]) continue; c.quiz = c.quizzes[0] || undefined; G.data.education[id] = c; }
+    for (const [id, q] of Object.entries(E.quizzes)) if (!G.data.quizzes[id]) G.data.quizzes[id] = q;
+    if (Array.isArray(G.data.lectureDecks) && !G.data.lectureDecks.some((d) => d.id === E.deck.id)) G.data.lectureDecks.push(E.deck);
+  })();
 })();

@@ -93,6 +93,38 @@ final class GameData
     /** can this item be kept in the 곳간 (crop / herb harvests and finished fermentation goods) */
     public static function storable(string $id): bool { return $id !== '' && in_array($id, self::storage()['itemIds'], true); }
 
+    // ------------------------------------------------------------------ [fishing] 낚시 (CONTRACT §18.3)
+    /**
+     * The exported fish table with safe defaults: species (id → ['p' => 0|1 protected, 'max' => mm, 'd' => difficulty]),
+     * neighbours / spots / baits (ids), keepPerDayMax, exp (catchMax, first, release, firstEdu). An export that predates
+     * phase 10 gives no species: the validator then leaves the `fishing` block of a save alone.
+     */
+    public static function fish(): array
+    {
+        static $m = null;
+        if ($m !== null) return $m;
+        $a = self::all();
+        $f = isset($a['fish']) && is_array($a['fish']) ? $a['fish'] : [];
+        $species = [];
+        foreach ((array) (isset($f['species']) ? $f['species'] : []) as $id => $s) {
+            if (!is_string($id) || !preg_match('/^[A-Z]{3,24}$/', $id) || !is_array($s)) continue;
+            $species[$id] = ['p' => !empty($s['p']) ? 1 : 0, 'max' => max(1, (int) (isset($s['max']) ? $s['max'] : 1000)), 'd' => max(1, min(5, (int) (isset($s['d']) ? $s['d'] : 1)))];
+        }
+        $ids = function ($key) use ($f) {
+            $out = [];
+            foreach ((array) (isset($f[$key]) ? $f[$key] : []) as $v) if (is_string($v) && preg_match('/^[A-Za-z0-9_]{1,32}$/', $v)) $out[] = $v;
+            return $out;
+        };
+        $x = isset($f['exp']) && is_array($f['exp']) ? $f['exp'] : [];
+        $num = function ($k, $d) use ($x) { return isset($x[$k]) && is_numeric($x[$k]) ? max(0, (int) $x[$k]) : $d; };
+        return $m = [
+            'species' => $species,
+            'neighbours' => $ids('neighbours'), 'spots' => $ids('spots'), 'baits' => $ids('baits'),
+            'keepPerDayMax' => isset($f['keepPerDayMax']) && is_numeric($f['keepPerDayMax']) ? max(1, min(99, (int) $f['keepPerDayMax'])) : 20,
+            'exp' => ['catchMax' => $num('catchMax', 18), 'first' => $num('first', 30), 'release' => $num('release', 4), 'firstEdu' => $num('firstEdu', 2)],
+        ];
+    }
+
     public static function loaded(): bool { return !empty(self::all()['items']); }
     public static function exportedAt(): string { $a = self::all(); return (string) (isset($a['exportedAt']) ? $a['exportedAt'] : ''); }
 

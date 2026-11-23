@@ -201,6 +201,10 @@ final class SaveValidator
         $ferm = $this->fermentation($n, $p, $first, $dt);
         $this->jarLimits($n, $p); // [entitle] CONTRACT §17.2
         $this->planMarks($n, $p); // [content] CONTRACT §17.8
+        // [fishing] CONTRACT §18.3: the catches since the last save, bounded by time, explain their exp / edu
+        $fishX = $this->fishing($n, $p, $dt);
+        $explain['exp'] += $fishX['exp'];
+        $explain['edu'] += $fishX['edu'];
         $max = GameData::maxima();
         $rt = $rtClean && $rtHook !== null ? $this->rtJudge($rtHook, $n, $p) : ['explain' => ['value' => 0, 'exp' => 0], 'harvests' => 0];
 
@@ -617,6 +621,8 @@ final class SaveValidator
             $roomWhy = Room::checkEmbedded($myroom);
             if ($roomWhy !== null) self::bad('myroom: ' . $roomWhy);
         }
+        $this->fishShape($n); // [fishing] CONTRACT §18.3
+        $this->cookShape($n); // [cooking] CONTRACT §18.4
         foreach (['journal', 'photos', 'activity'] as $k) {
             $v = self::p($n, $k);
             if ($v !== null && !is_array($v)) self::bad($k);
@@ -876,6 +882,172 @@ final class SaveValidator
             $ps = self::o(isset($jarsP[$id]) ? $jarsP[$id] : null);
             if ($ps && self::p($ps, 'owned') === true && self::p($ps, 'via') !== 'plan') { $this->violate('JAR_PLAN_MARK', ['jar' => mb_substr((string) $id, 0, 40)]); return; }
         }
+    }
+
+    // ------------------------------------------------------------------ [cooking] 부엌 (CONTRACT §18.4)
+    /**
+     * The `cooking` block of a save: {v, book: {DISH_…: {n, best, first, last}}, pantry: {day, got: {ITEM_…: n}},
+     * catches: {FISH_…: [ms…]}, table: [{d, s, t}], shared}. A missing block is fine (an older client); a wrong container
+     * is malformed (400). A violation (the client restores the server's copy): an unknown dish or staple, a count, a star
+     * or a list out of range, the dish counters (dishKinds, dishStars3) running ahead of the book. Cooking pays nothing by
+     * itself (quests and achievements do, through their ledgers); the staples of the 찬장 have no value. Nothing is judged
+     * while the export has no cooking table.
+     */
+    private function cookShape(object $n): void
+    {
+        $c = self::p($n, 'cooking');
+        if ($c === null) return;
+        if (!self::o($c)) self::bad('cooking');
+        $tab = GameData::all();
+        $t = isset($tab['cooking']) && is_array($tab['cooking']) ? $tab['cooking'] : [];
+        if (empty($t['dishes']) || !is_array($t['dishes'])) return;
+        $dishes = array_flip(array_map('strval', $t['dishes']));
+        $pantry = array_flip(isset($t['pantry']) && is_array($t['pantry']) ? array_map('strval', $t['pantry']) : []);
+        $lim = isset($t['limits']) && is_array($t['limits']) ? $t['limits'] : [];
+        $bookMax = isset($lim['bookMax']) ? (int) $lim['bookMax'] : 64;
+        $tableMax = isset($lim['tableMax']) ? (int) $lim['tableMax'] : 6;
+        $perDay = isset($lim['pantryPerDay']) ? (int) $lim['pantryPerDay'] : 3;
+        $int = function ($v, float $lo, float $hi): bool { return (is_int($v) || is_float($v)) && is_finite((float) $v) && floor((float) $v) == $v && $v >= $lo && $v <= $hi; };
+        foreach (['book', 'pantry', 'catches'] as $k) { $v = self::p($c, $k); if ($v !== null && !self::o($v) && $v !== []) self::bad('cooking ' . $k); }
+        $table = self::p($c, 'table');
+        if ($table !== null && !is_array($table)) self::bad('cooking table');
+        $book = self::kv(self::p($c, 'book'));
+        if (count($book) > $bookMax) { $this->violate('COOK_BAD_SHAPE', ['field' => 'book']); return; }
+        $stars3 = 0;
+        foreach ($book as $id => $b) {
+            $b = self::o($b);
+            if (!isset($dishes[(string) $id]) || $b === null || !$int(self::p($b, 'n'), 0, 1000000) || !$int(self::p($b, 'best'), 0, 3)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'book', 'id' => self::safeId((string) $id)]); return; }
+            if (self::p($b, 'best') === 3) $stars3 += max(1, (int) self::p($b, 'n'));
+        }
+        if (is_array($table)) {
+            if (count($table) > $tableMax) { $this->violate('COOK_BAD_SHAPE', ['field' => 'table']); return; }
+            foreach ($table as $e) {
+                $e = self::o($e);
+                if ($e === null || !isset($dishes[self::s(self::p($e, 'd'))]) || !$int(self::p($e, 's'), 1, 3)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'table']); return; }
+            }
+        }
+        $pan = self::o(self::p($c, 'pantry'));
+        if ($pan !== null) {
+            $day = self::p($pan, 'day');
+            if ($day !== null && (!is_string($day) || strlen($day) > 10)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'pantry']); return; }
+            foreach (self::kv(self::p($pan, 'got')) as $id => $q) {
+                if (!isset($pantry[(string) $id]) || !$int($q, 0, $perDay)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'pantry']); return; }
+            }
+        }
+        $catches = self::kv(self::p($c, 'catches'));
+        if (count($catches) > 30) { $this->violate('COOK_BAD_SHAPE', ['field' => 'catches']); return; }
+        foreach ($catches as $id => $arr) {
+            if (!preg_match('/^FISH_[A-Z0-9_]{1,30}$/', (string) $id) || !is_array($arr) || count($arr) > 10) { $this->violate('COOK_BAD_SHAPE', ['field' => 'catches']); return; }
+            foreach ($arr as $ts) if (!$int($ts, 0, 1e14)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'catches']); return; }
+        }
+        $sh = self::p($c, 'shared');
+        if ($sh !== null && !$int($sh, 0, 100000)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'shared']); return; }
+        // the counters the achievements read cannot run ahead of the book
+        $stats = self::o(self::p($n, 'stats'));
+        if (self::n(self::p($stats, 'dishKinds')) > count($book)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'dishKinds']); return; }
+        $cooked = 0;
+        foreach ($book as $b) $cooked += (int) self::p(self::o($b), 'n');
+        if (self::n(self::p($stats, 'dishesCooked')) > $cooked + 1) $this->violate('COOK_BAD_SHAPE', ['field' => 'dishesCooked']);
+        if (self::n(self::p($stats, 'dishStars3')) > $cooked) $this->violate('COOK_BAD_SHAPE', ['field' => 'dishStars3']);
+        unset($stars3);
+    }
+
+    // ------------------------------------------------------------------ [fishing] 낚시 (CONTRACT §18.3)
+    /** FISH_<ID> → <ID>, or null for any other item id */
+    private static function fishOfItem(string $itemId): ?string
+    {
+        return strncmp($itemId, 'FISH_', 5) === 0 ? substr($itemId, 5) : null;
+    }
+
+    /**
+     * The `fishing` block of a save: {v, book: {<species>: {n, kept, rel, max (mm), first}}, seen: {<neighbour>: 1},
+     * day: {key, kept}, traps: {<spot>: {at, bait}}, tut}. A missing block is fine (an older client); a wrong container
+     * is malformed (400). A violation (the client restores the server's copy): an unknown species or spot, a count or a
+     * length out of range, a protected fish marked as taken along or lying in the bag / the 곳간 (protected animals are
+     * met, recorded and released — §18.0), a counter that runs ahead of the book, more fish in the bag than two days of
+     * the largest daily limit. Nothing is judged while the export has no fish table.
+     */
+    private function fishShape(object $n): void
+    {
+        $T = GameData::fish();
+        $species = $T['species'];
+        if (!$species) return;
+        $capDay = (int) $T['keepPerDayMax'];
+        // the bag and the 곳간: only fish that may be taken along, and not a hoard
+        $held = 0;
+        foreach ([self::p($n, 'inventory'), self::p(self::o(self::p($n, 'storage')), 'items')] as $box) {
+            foreach (self::kv($box) as $iid => $q) {
+                $fid = self::fishOfItem((string) $iid);
+                if ($fid === null) continue;
+                if (!isset($species[$fid]) || $species[$fid]['p']) { $this->violate('FISH_PROTECTED', ['item' => self::safeId((string) $iid)]); return; }
+                $held += max(0, min(999, self::i($q)));
+            }
+        }
+        if ($held > 2 * $capDay) $this->violate('FISH_KEEP_LIMIT', ['held' => $held, 'limit' => 2 * $capDay]);
+        $f = self::p($n, 'fishing');
+        if ($f === null) return;
+        if (!self::o($f)) self::bad('fishing');
+        $count = function ($v, int $max): bool { return (is_int($v) || is_float($v)) && is_finite((float) $v) && $v >= 0 && $v <= $max && floor((float) $v) == $v; };
+        $maps = [];
+        foreach (['book', 'seen', 'traps', 'day'] as $k) {
+            $v = self::p($f, $k);
+            if ($v !== null && !self::o($v) && $v !== []) self::bad('fishing ' . $k);
+            $maps[$k] = self::kv($v);
+        }
+        if (count($maps['book']) > count($species)) { $this->violate('FISH_BAD_SHAPE', ['field' => 'book']); return; }
+        $sumN = 0; $sumRel = 0; $guarded = 0;
+        foreach ($maps['book'] as $id => $b) {
+            $id = (string) $id;
+            $b = self::o($b);
+            if (!isset($species[$id]) || !$b) { $this->violate('FISH_BAD_SHAPE', ['field' => 'book', 'fish' => self::safeId($id)]); return; }
+            $cn = self::p($b, 'n'); $ck = self::p($b, 'kept'); $cr = self::p($b, 'rel'); $cm = self::p($b, 'max');
+            if (!$count($cn, 1000000) || $cn < 1 || !$count($ck === null ? 0 : $ck, 1000000) || !$count($cr === null ? 0 : $cr, 1000000) || !$count($cm === null ? 0 : $cm, (int) $species[$id]['max'])
+                || self::i($ck) + self::i($cr) > self::i($cn)) { $this->violate('FISH_BAD_SHAPE', ['field' => 'book', 'fish' => self::safeId($id)]); return; }
+            if ($species[$id]['p'] && self::i($ck) > 0) { $this->violate('FISH_PROTECTED', ['fish' => self::safeId($id)]); return; }
+            $sumN += self::i($cn); $sumRel += self::i($cr);
+            if ($species[$id]['p']) $guarded++;
+        }
+        foreach ($maps['seen'] as $id => $v) if (!in_array((string) $id, $T['neighbours'], true)) { $this->violate('FISH_BAD_SHAPE', ['field' => 'seen']); return; }
+        if (count($maps['traps']) > 8) { $this->violate('FISH_BAD_SHAPE', ['field' => 'traps']); return; }
+        foreach ($maps['traps'] as $id => $t) {
+            $t = self::o($t);
+            if (!in_array((string) $id, $T['spots'], true) || !$t || !self::numIn(self::p($t, 'at'), 1, 4102444800000)) { $this->violate('FISH_BAD_SHAPE', ['field' => 'traps']); return; }
+        }
+        $day = self::o(self::p($f, 'day'));
+        if ($day) {
+            if (!$count(self::p($day, 'key') === null ? 0 : self::p($day, 'key'), 99991231)) { $this->violate('FISH_BAD_SHAPE', ['field' => 'day']); return; }
+            if (self::n(self::p($day, 'kept')) > $capDay) { $this->violate('FISH_KEEP_LIMIT', ['kept' => self::i(self::p($day, 'kept')), 'limit' => $capDay]); return; }
+        }
+        // the counters the achievements read never run ahead of the book
+        $st = self::o(self::p($n, 'stats'));
+        $caps = ['fishSpecies' => count($maps['book']), 'fishGuarded' => $guarded, 'fishCaught' => $sumN, 'fishReleased' => $sumRel];
+        foreach ($caps as $stat => $cap) if (self::n(self::p($st, $stat)) > $cap) { $this->violate('FISH_BAD_SHAPE', ['field' => $stat]); return; }
+    }
+
+    /**
+     * What the catches since the previous save explain: exp per landed fish (at most the hardest fish's), the bonus of
+     * a first meeting (exp + edu) and the small thank-you of a release. A catch takes time — more landed fish than
+     * 3 + one per 6 seconds is a violation. @return array{exp: int, edu: int}
+     */
+    private function fishing(object $n, ?object $p, float $dt): array
+    {
+        $T = GameData::fish();
+        if (!$T['species']) return ['exp' => 0, 'edu' => 0];
+        $sN = self::o(self::p($n, 'stats'));
+        $sP = $p ? self::o(self::p($p, 'stats')) : null;
+        $d = function (string $k) use ($sN, $sP): int { return max(0, self::i(self::p($sN, $k)) - self::i(self::p($sP, $k))); };
+        $caught = $d('fishCaught');
+        $cap = 3 + (int) floor(min($dt, 86400.0) / 6);
+        if ($caught > $cap) $this->violate('FISH_COUNT', ['stat' => $caught, 'possible' => $cap]);
+        $caught = min($caught, $cap);
+        $bookN = count(self::kv(self::p(self::o(self::p($n, 'fishing')), 'book')));
+        $bookP = $p ? count(self::kv(self::p(self::o(self::p($p, 'fishing')), 'book'))) : 0;
+        $new = max(0, min(count($T['species']), $bookN) - $bookP);
+        $released = min($d('fishReleased'), $caught + 3);
+        return [
+            'exp' => $caught * $T['exp']['catchMax'] + $new * $T['exp']['first'] + $released * $T['exp']['release'],
+            'edu' => $new * $T['exp']['firstEdu'],
+        ];
     }
 
     // ------------------------------------------------------------------ reward valuation
