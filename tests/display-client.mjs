@@ -363,11 +363,13 @@ async function lowPage() {
     await page.evaluate(() => window.__dt.ready());
     const before = await page.evaluate(() => ({ fs: !!document.fullscreenElement, mode: window.__dt.get('windowMode'), mon: G.sys.display.screens(), monWhy: G.sys.display.options().find((d) => d.id === 'monitor').available(), monOpts: G.sys.display.options().find((d) => d.id === 'monitor').options.map((o) => o.l) }));
     // the key of the 'fullscreen' action (F): a real key press is the gesture the browser asks for
+    // (the answer can come a whole software-GL frame later: wait for it, up to 6 s, instead of a fixed time)
+    const settle = (wantOn) => page.waitForFunction((w) => !!document.fullscreenElement === w && G.sys.display.fullscreen === w, wantOn, { timeout: 6000, polling: 100 }).catch(() => {});
     await page.keyboard.press('f');
-    await page.waitForTimeout(1500);
+    await settle(true);
     const on = await page.evaluate(() => ({ fs: document.fullscreenElement === document.documentElement, mode: window.__dt.get('windowMode'), flag: G.sys.display.fullscreen }));
     await page.keyboard.press('f');
-    await page.waitForTimeout(1500);
+    await settle(false);
     const off = await page.evaluate(() => ({ fs: !!document.fullscreenElement, mode: window.__dt.get('windowMode') }));
     numbers.window = { before, on, off };
     if (on.fs) {
