@@ -92,15 +92,18 @@ async function cook(opts = {}) {
   while (Date.now() - t0 < (opts.ms || 150000)) {
     const s = await ev(() => window.G.sys.cooking.state);
     if (!s) break;
-    if (s.step !== lastStep) { seen.push({ step: s.step, action: s.action, mode: s.mode, station: s.station }); lastStep = s.step; if (shotSteps.has(s.action) && opts.shot) { shotSteps.delete(s.action); await ev(() => { window.G.sys.cooking.timeScale = 1; }); await wait(2500); await shot(`${opts.shot}-${String(s.step).padStart(2, '0')}-${s.action}`); await ev((ts) => { window.G.sys.cooking.timeScale = ts; }, opts.ts || 10); } }
+    if (Date.now() - t0 > (opts.ms || 150000) - 1500 && seen.length) { const fr = await ev(() => ({ f: window.G.time.frame, w: performance.now(), err: window.G.sys.cooking._lastError || null, sys: (window.G.__systemErrors || []).slice(-2) })); const p = seen[seen.length - 1]; p.fpsEnd = Math.round((fr.f - p.fr.f) / Math.max(0.001, (fr.w - p.fr.w) / 1000) * 10) / 10; p.err = fr.err; p.sys = fr.sys; }
+    if (s.step !== lastStep) { const fr = await ev(() => ({ f: window.G.time.frame, e: window.G.time.elapsed, w: performance.now() })); if (seen.length) { const p = seen[seen.length - 1]; p.fps = Math.round((fr.f - p.fr.f) / Math.max(0.001, (fr.w - p.fr.w) / 1000) * 10) / 10; } seen.push({ step: s.step, action: s.action, mode: s.mode, station: s.station, fr }); lastStep = s.step; if (shotSteps.has(s.action) && opts.shot) { shotSteps.delete(s.action); await ev(() => { window.G.sys.cooking.timeScale = 1; }); await wait(2500); await shot(`${opts.shot}-${String(s.step).padStart(2, '0')}-${s.action}`); await ev((ts) => { window.G.sys.cooking.timeScale = ts; }, opts.ts || 10); } }
     await ev(([s, o]) => {
       const C = window.G.sys.cooking;
-      C.timeScale = s.mode === 'fire' ? 1.5 : (o.ts || 10);   // a child feeds the fire at its own pace; the driver polls slowly
+      C.timeScale = s.mode === 'fire' ? 1 : (o.ts || 10);   // a child feeds the fire at its own pace
       if (s.mode === 'hold') C.test.down();
       else if (s.mode === 'fire') { const band = { low: [0.18, 0.45], mid: [0.4, 0.7], high: [0.62, 0.92] }[window.G.data.cooking.dishes[s.dish].steps[s.step].heat || 'mid']; const mid = (band[0] + band[1]) / 2; if (s.heat < mid - 0.05) C.test.down(); else C.test.up(); }
       else if (s.mode === 'taps' || s.mode === 'tap') C.test.down();
       else if (s.mode === 'window') { if (s.turnReady) C.test.down(); }
       else if (s.mode === 'pick') C.test.pick(o.season === undefined ? (document.querySelector('.cook-pick.mine') ? window.G.data.cooking.dishes[s.dish].ingredients.find((g) => g.season).season.find((id) => window.G.sys.inventory.count(id) > 0) || null : null) : o.season);
+      // the kitchen's own clock runs a fixed slice per poll (software WebGL on a busy machine draws < 1 frame a second)
+      C.test.tick(s.mode === 'fire' ? 0.5 : 0.8);
     }, [s, opts]);
     await wait(opts.tick || 380);
   }
@@ -151,6 +154,7 @@ try {
     check('the fish stays in the bag while cooking (taken only when served)', midFish === 2, midFish);
     const seen = await cook({ ts: 10, shot: SHOTS ? 'fish' : null, shotSteps: ['wash', 'scale', 'salt', 'fire', 'grill', 'turn', 'serve'] });
     const after = await ev(() => { const G = window.G; const id = G.data.cooking.fishFor('trout')[0].itemId; return { state: G.sys.cooking.state, book: G.state.cooking.book.DISH_SOGEUMGUI, table: G.state.cooking.table.slice(-1)[0], fish: G.sys.inventory.count(id), result: !!document.querySelector('.cook-result'), stats: { c: G.sys.progression.getStat('dishesCooked'), k: G.sys.progression.getStat('dishKinds') }, served: G.sys.cooking.test.room?.servedModels?.length || 0 }; });
+    log('    steps: ' + seen.map((x) => `${x.action}:${x.mode}${x.fps != null ? '@' + x.fps + 'fps' : ''}${x.fpsEnd != null ? ' end@' + x.fpsEnd + 'fps' : ''}${x.err ? ' ERR ' + x.err : ''}${x.sys && x.sys.length ? ' SYS ' + JSON.stringify(x.sys).slice(0, 300) : ''}`).join(' '));
     check('every step was driven with the real controls (hold · taps · fire · window)', seen.length === 11 && ['hold', 'taps', 'fire', 'wait', 'window', 'tap'].every((m) => seen.some((x) => x.mode === m)), seen.map((x) => x.action + ':' + x.mode).join(' '));
     check('the dish is served: no session, the book has it with stars', !after.state && after.book && after.book.n === 1 && after.book.best >= 1, after);
     check('one fish was used up when it was served', after.fish === 1, after.fish);

@@ -371,18 +371,19 @@
     const salt = new THREE.Mesh(bodyG, saltMat);
     for (const m of [body, fins, eyes]) m.castShadow = true;
     g.add(body, fins, crust, salt, eyes);
-    const RAW = new THREE.Color(0xffffff), DONE = col('#e9caa0'), GLAZE = col('#b3402a');
-    return {
-      group: g,
+    const RAW = new THREE.Color(0xffffff), DONE = col('#e9caa0');
+    const h2 = {
+      group: g, glazeColor: col('#b3402a'),
       set(cook, crustK, saltK, glazeK) {
         bodyMat.color.copy(RAW).lerp(DONE, clamp(cook, 0, 1) * 0.85);
-        if (glazeK) bodyMat.color.lerp(GLAZE, clamp(glazeK, 0, 1) * 0.6);
+        if (glazeK) bodyMat.color.lerp(h2.glazeColor, clamp(glazeK, 0, 1) * 0.75);
         bodyMat.roughness = lerp(0.22, 0.62, clamp(cook, 0, 1));
         eyeMat.color.setRGB(lerp(0.07, 0.85, cook), lerp(0.07, 0.83, cook), lerp(0.07, 0.78, cook));   // the eye turns white when cooked
         crustMat.opacity = clamp(crustK, 0, 1) * 0.95;
         saltMat.opacity = clamp(saltK, 0, 1) * (1 - clamp(crustK, 0, 1) * 0.6);
       },
     };
+    return h2;
   }
 
   // ---------------------------------------------------------------- vessels (lathe profiles, metres)
@@ -487,6 +488,7 @@
       const places = [];
       for (let i = 0; i < count; i++) places.push(layout ? layout(i, count) : { x: 0, y: y0 + len * 0.06, z: 0 });
       const f = makeFish(fishItem, cls, len, own, places);
+      if (L.type === 'fried' && f.glazeColor) f.glazeColor = col(L.batter || '#e0b060');
       root.add(f.group); parts.fish.push(f);
     };
     const t = L.type;
@@ -496,10 +498,11 @@
       if (t === 'steamed_fish') { const s = new THREE.Mesh(own(new THREE.PlaneGeometry(0.22, 0.05).rotateX(-PI / 2)), discMat(L.sauce || '#7a4a22', own, { transparent: true, opacity: 0.7 })); add(s, 0, y0 + 0.004, 0.0); }
       steamSprites(6, 0.18, y0 + 0.05);
     } else if (t === 'round') {
-      fishOn(L.fish || 'small', L.count || 9, 0.13, (i, n) => { const a = (i / n) * TAU; return { x: Math.cos(a) * 0.1, y: y0 + 0.012, z: Math.sin(a) * 0.1, ry: -a + PI, rx: PI / 2 }; });
+      fishOn(L.fish || 'small', L.count || 9, 0.17, (i, n) => { const a = (i / n) * TAU; return { x: Math.cos(a) * 0.115, y: y0 + 0.016, z: Math.sin(a) * 0.115, ry: -a + PI, rx: PI / 2 }; });
       steamSprites(5, 0.25, y0 + 0.04);
     } else if (t === 'fried') {
-      fishOn(L.fish || 'small', L.count || 6, 0.12, (i, n) => ({ x: (i % 3 - 1) * 0.07, y: y0 + 0.012 + (i > 2 ? 0.012 : 0), z: (i > 2 ? 0.035 : -0.035), ry: (i % 2) * 0.4 - 0.2, rx: PI / 2 }));
+      fishOn(L.fish || 'small', L.count || 6, 0.15, (i, n) => ({ x: (i % 3 - 1) * 0.085, y: y0 + 0.016 + (i > 2 ? 0.014 : 0), z: (i > 2 ? 0.04 : -0.04), ry: (i % 2) * 0.4 - 0.2 + PI / 2, rx: PI / 2 }));
+      parts.batter = L.batter || '#e6c27a';
       steamSprites(4, 0.2, y0 + 0.04);
     } else if (t === 'braise') {
       for (let i = 0; i < 4; i++) { const r = new THREE.Mesh(own(new THREE.CylinderGeometry(0.035, 0.035, 0.012, 14)), discMat('#f0eadb', own, { roughness: 0.5 })); tintPart(r, '#f2eee2', '#9c5a2c'); add(r, (i - 1.5) * 0.06, y0 + 0.006, 0.01); }
@@ -564,7 +567,7 @@
       bits('kimchi', 4, 0.03, y0 + 0.012, 5);
     } else if (t === 'corn') {
       const tex = own(canvasTex(64, 128, (c, w, hh) => { c.fillStyle = '#d6a92c'; c.fillRect(0, 0, w, hh); for (let y = 2; y < hh; y += 7) for (let x = (y / 7) % 2 ? 3 : 0; x < w; x += 7) { c.fillStyle = '#f2d264'; c.beginPath(); c.ellipse(x + 3, y + 3, 3, 3.2, 0, 0, TAU); c.fill(); c.fillStyle = 'rgba(255,255,255,.35)'; c.fillRect(x + 2, y + 1, 2, 2); } }));
-      for (let i = 0; i < (L.count || 3); i++) { const m = new THREE.Mesh(own(new THREE.CylinderGeometry(0.024, 0.02, 0.17, 16)), discMat('#ffffff', own, { map: tex, roughness: 0.35 })); m.rotation.z = PI / 2; m.rotation.y = (i - 1) * 0.35; add(m, 0, y0 + 0.026, (i - 1) * 0.05); tintPart(m, '#e8dca0', '#ffffff'); const husk = new THREE.Mesh(own(new THREE.ConeGeometry(0.022, 0.06, 7)), discMat('#c9c27a', own, { roughness: 0.7 })); husk.rotation.z = -PI / 2; husk.position.y = 0.11; m.add(husk); }
+      for (let i = 0; i < (L.count || 3); i++) { const m = new THREE.Mesh(own(new THREE.CylinderGeometry(0.032, 0.026, 0.2, 18)), discMat('#ffffff', own, { map: tex, roughness: 0.35 })); m.rotation.z = PI / 2; m.rotation.y = (i - 1) * 0.3; add(m, 0, y0 + 0.033, (i - 1) * 0.07); tintPart(m, '#e8dca0', '#ffffff'); const husk = new THREE.Mesh(own(new THREE.ConeGeometry(0.022, 0.06, 7)), discMat('#c9c27a', own, { roughness: 0.7 })); husk.rotation.z = -PI / 2; husk.position.y = 0.11; m.add(husk); }
       steamSprites(6, 0.14, y0 + 0.06);
     } else if (t === 'potato') {
       const tex = own(canvasTex(64, 64, (c, w) => { c.fillStyle = '#b8935a'; c.fillRect(0, 0, w, w); for (let i = 0; i < 40; i++) { c.fillStyle = `rgba(90,60,30,${0.2 + noise(i) * 0.3})`; c.beginPath(); c.arc(noise(i + 1) * w, noise(i + 2) * w, 1 + noise(i + 3) * 2.5, 0, TAU); c.fill(); } }));
@@ -582,7 +585,7 @@
     const api = {
       group: root, def: d, parts,
       setCook(k) { parts.cook = clamp(k, 0, 1); for (const tp of parts.tint) tp.m.color.copy(tp.raw).lerp(tp.done, parts.cook); for (const f of parts.fish) f.set(parts.cook, parts.crust, parts.salt, parts.glaze); if (parts.dome) parts.dome.scale.y = lerp(0.85, 1.05, parts.cook); if (parts.sauce) parts.sauce.opacity = parts.cook * 0.8; },
-      crust(k) { parts.crust = clamp(k, 0, 1); for (const f of parts.fish) f.set(parts.cook, parts.crust, parts.salt, parts.glaze); if (parts.flat) parts.flat.material.color.copy(col((d.look.color || ['#eee', '#d98a4a'])[0])).lerp(col((d.look.color || ['#eee', '#d98a4a'])[1]), parts.crust); },
+      crust(k) { if (t === 'fried') { api.glaze(k); return; } parts.crust = clamp(k, 0, 1); for (const f of parts.fish) f.set(parts.cook, parts.crust, parts.salt, parts.glaze); if (parts.flat) parts.flat.material.color.copy(col((d.look.color || ['#eee', '#d98a4a'])[0])).lerp(col((d.look.color || ['#eee', '#d98a4a'])[1]), parts.crust); },
       salt(k) { parts.salt = clamp(k, 0, 1); for (const f of parts.fish) f.set(parts.cook, parts.crust, parts.salt, parts.glaze); },
       glaze(k) { parts.glaze = clamp(k, 0, 1); for (const f of parts.fish) f.set(parts.cook, parts.crust, parts.salt, parts.glaze); },
       boil(k) { parts.boil = clamp(k, 0, 1); },

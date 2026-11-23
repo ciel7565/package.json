@@ -218,6 +218,7 @@
       F('00-core.js', 'core', '로거·이벤트 버스·유틸·아이콘·시스템 등록·메인 루프·부팅 폴백'),
       F('01-data.js', 'core', '콘텐츠 데이터: 구역·아이템·작물·레시피·NPC·퀘스트·업적·도감·팁·서버 검증 한도'),
       F('02-layout.js', 'core', '월드 배치 좌표(건물·밭·장독·안내판·포토존)와 앵커 조회 layout.get(id)'),
+      F('02-avatar-data.js', 'player', '아바타 고르기 표(얼굴·머리 모양 14가지·한복·모자·신발·장신구)와 미리 꾸민 모습 — 순수 데이터 (§17.7)'), // [finisher]
       F('03-state.js', 'core', '설정(기기 ↔ 프로필 키 분리·검증)·네트워크(G.net)·저장(G.save: 체크섬·백업·마이그레이션·가져오기)'),
       F('04-ui.js', 'core', 'UI 도구: 모달·토스트·보상 팝업·팝오버·월드 라벨·로딩·이스케이프'),
       F('05-input.js', 'core', '키보드·마우스·터치 조이스틱·D-패드 입력과 단축키 등록'),
@@ -263,6 +264,7 @@
       F('78-support.js', 'devcenter', '신고·문의(G.sys.support): 화면 사진(채팅 창은 가림)·버그 신고/문의/신고·쉬운 모드 그림 신고·기기 정보·내 문의와 운영자 답·답 알림·로컬 보낼 함 (§18.1)'), // [support]
       F('75-myroom.js', 'buildings', '내 방(G.sys.myroom, PL_MYROOM): 분양받은 사람이 꾸미는 한옥 방 — 방 꾸미기(그림 판·끌어 놓기·돌리기·색·되돌리기)·꾸며 둔 방 3개·이 기기/서버 저장·안내 카드 (§17.4)'), // [myroom]
       F('76-myroom-data.js', 'buildings', '내 방 물건 148가지·색·방 모양·놓는 규칙(문 앞 비우기·벽·창문·상 위)·꾸며 둔 방 3개 — 서버 검사표의 원본 (순수 데이터)'), // [myroom]
+      F('77-env.js', 'map', '한국 실시간(G.env): 서울 시각·해와 달·계절·날씨(기상청 또는 모델)·수확 달력 (§17.5)'), // [finisher]
       F('34-fish-data.js', 'farm', '강원도 1급수 물고기 31종(법으로 지키는 종은 놓아주기만)·맑은 물 이웃 7종·낚시 방법 4가지·미끼·낚시터 7곳·규칙·카드·퀴즈·강의·할 일 (순수 데이터)'), // [fishing]
       F('35-fishing-kit.js', 'farm', '물고기 만들기(G.fishkit): 종마다 몸 윤곽으로 몸을 빚고 캔버스에 무늬를 그림·지느러미·헤엄 물결(셰이더)·도감용 스튜디오(사진·모둠표)·물고기 떼 실루엣'), // [fishing]
       F('35-fishing.js', 'farm', '낚시(G.sys.fishing): 강가 낚시터 7곳·대낚시/견지낚시/족대/어항(실제 시간)·찌와 줄·물속 물고기 떼·만남 카드(놓아주기/데려가기)·어류 도감 (§18.3)'), // [fishing]
@@ -272,9 +274,14 @@
       F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
       F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
       F('53-complex-site.js', 'map', '만장대 단지(PL_ALLOT) 장소·땅(지형·길·주차장·포장·동심원 길·계단밭·돌담·돌다리·계단·전망 데크·가로등·안내판·충돌)·단지 부품 등록부·미니맵 평면도·골짜기 셔틀버스 정류장 (§16.8)'), // [complex-ground]
+      F('54-complex-main.js', 'map', '만장대 본관(단지의 큰 건물) 바깥: 기단·기둥·지붕·계단·현판 (§16.8)'), // [finisher]
+      F('55-complex-buildings.js', 'map', '만장대 단지의 건물: 한옥 마을·회랑·정자·문간채·카페·곳간·공방·가마 (§16.8)'), // [finisher]
+      F('56-complex-office.js', 'map', '만장대 단지 안쪽 방: 본관 로비·옹기 공방·카페 (§16.4·§16.8)'), // [finisher]
+      F('59-vehicles.js', 'map', '차(G.vehicles): 골짜기 주차장과 단지의 차·버스를 하나의 만들기로 (§17.9)'), // [finisher]
       F('57-complex-landscape.js', 'map', '만장대 단지 풍경: 둘레 산(능선·골짜기)·숲(나무 세 단계 상세도·바람)·산 숲 표면·강물(흐름·거품)·바위와 절벽·갈대·소나무 정원과 분수·주차된 차·관광버스·만장대 셔틀·접지 그림자·새·새벽 안개 (§16.8)'), // [complex-landscape]
       F('60-social.js', 'social', '채팅·필터·개인정보 가림(maskPII)·말풍선·아이 말하기(문장 고르기)·표현하기·체험객·서버 접속자'),
       F('61-audio.js', 'social', '절차적 효과음·환경음·국악풍 BGM·음성 합성'),
+      F('63-gugak.js', 'social', '국악 소리 만들기(G.gugak): 악기·선법·장단·민요 가락·상황별 음악 (§17.6)'), // [finisher]
       F('62-engagement.js', 'engagement', '출석·오늘의 미션·알림함·수료증·랭킹·마당 꾸미기 (쉬운 모드: 🔔 오늘 스티커북)'),
       F('65-companion.js', 'companion', '마스코트 옹이(2D SVG·3D 동반자)·상황별 도움말·읽어주기·멈춰 있을 때 안내·쉬는 시간 연기'),
       F('66-fx.js', 'fx', '파티클·3D 이모지·레벨업·코인 비행·도장 연출·아이 축하(kidParty)·광과민 안전'),
@@ -458,6 +465,9 @@
   const ITEM_TYPES = new Set(['seed', 'crop', 'ingredient', 'fermented', 'quest', 'tool', 'decoration']);
   const OBJECTIVE_TYPES = new Set(['talk', 'visit', 'water', 'plant', 'harvest', 'ferment_check', 'ferment_start', 'ferment_claim', 'edu', 'quiz', 'journal', 'photo', 'emote', 'gesture', 'interact', 'collect', 'craft', 'chat', 'visit_all', 'level']);
   const INTERACT_KINDS = new Set(['npc', 'jar', 'plot', 'sign', 'kiosk', 'exhibit', 'tool', 'jardisp', 'craft', 'shop', 'door', 'board', 'photo', 'bench', 'companion', 'heritage', 'place', 'motion', 'roombook']); // [exhibits] the last four
+  // [finisher] kinds 49-exhibits emits itself (entering a room, watching a motion board, a 도감 stamp): no interactable is
+  // registered for them, so counting registered ones would call every such objective impossible
+  const EMITTED_KINDS = new Set(['place', 'motion', 'roombook', 'heritage']);
   const UNLOCK_ON = new Set(['harvest', 'item', 'talk', 'edu', 'interact', 'claim', 'visit', 'quiz', 'craft', 'ferment', 'photo']);
   OBJECTIVE_TYPES.add('fish'); INTERACT_KINDS.add('fishspot'); UNLOCK_ON.add('fish');   // [fishing] objective { type: 'fish', what } · the 🎣 spots · sticker rule { on: 'fish', id }
   const DIALOGUE_ACTIONS = new Set(['openEdu', 'openQuiz', 'openLibrary', 'openShop', 'openCraft', 'openJar', 'openMap', 'openFastTravel', 'openJournal', 'openQuestLog', 'openInventory', 'openCollection', 'teleport', 'acceptQuest', 'claimQuest', 'giveItem', 'takeItem', 'setFlag', 'clearFlag', 'emote', 'npcAnim', 'event', 'toast', 'sfx', 'activity']);
@@ -470,6 +480,7 @@
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   EXPECTED_SYSTEMS.push('allot');   // [allot-client] 43-allot.js
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
+  EXPECTED_SYSTEMS.push('complexOffice', 'env');   // [finisher] 56-complex-office.js · 77-env.js
   EXPECTED_SYSTEMS.push('lecture');   // [lecture] 74-lecture.js
   EXPECTED_SYSTEMS.push('support');   // [support] 78-support.js
   EXPECTED_SYSTEMS.push('display');   // [gfx] 67-display.js
@@ -581,7 +592,8 @@
         if (!Object.keys(ing).length) add('warn', 'recipes', '재료(ingredients)가 비어 있어요', id);
         for (const [iid, n] of Object.entries(ing)) { if (!itemOk(iid)) add('error', 'recipes', `재료 ${iid} 이 items 에 없어요`, id); if (!(num(n) > 0)) add('error', 'recipes', `재료 ${iid} 수량이 0 이하예요`, id); }
         if (!(num(r.baseDuration) > 0)) add('error', 'recipes', 'baseDuration 이 0보다 커야 해요', id);
-        if (!range(r.idealTemp, -30, 60)) add('error', 'recipes', 'idealTemp 는 [최저, 최고] °C 여야 해요', id);
+        // [finisher] up to 80 °C: 식혜 / 조청 / 엿 are saccharified at 55–65 °C (the enzyme of 엿기름), which is right
+        if (!range(r.idealTemp, -30, 80)) add('error', 'recipes', 'idealTemp 는 [최저, 최고] °C 여야 해요', id);
         if (!range(r.idealHumidity, 0, 100)) add('error', 'recipes', 'idealHumidity 는 [최저, 최고] % 여야 해요', id);
         if (r.edu && !has(edu, r.edu)) add('warn', 'recipes', `연결된 교육 ${r.edu} 이 없어요`, id);
         if (r.baseQuality != null && !(num(r.baseQuality, -1) >= 0 && num(r.baseQuality) <= 100)) add('warn', 'recipes', 'baseQuality 는 0~100 이어야 해요', id);
@@ -746,7 +758,7 @@
           // ids, so a kind needs at least `count` of them); before that, the layout anchors
           if (o.type === 'interact' && IX) {
             if (o.id && !IX.get(o.id)) add('error', 'quests', `상호작용 대상 ${o.id} 가 등록되지 않았어요 — 이 목표는 끝낼 수 없어요`, at);
-            else if (!o.id && o.kind) { const n = IX.list(o.kind).length, need = Math.max(1, num(o.count, 1)); if (n < need) add('error', 'quests', `상호작용 종류 ${o.kind} 가 ${n}개만 등록돼 있어요 (목표 ${need}개) — 이 목표는 끝낼 수 없어요`, at); }
+            else if (!o.id && o.kind && !EMITTED_KINDS.has(o.kind)) { const n = IX.list(o.kind).length, need = Math.max(1, num(o.count, 1)); if (n < need) add('error', 'quests', `상호작용 종류 ${o.kind} 가 ${n}개만 등록돼 있어요 (목표 ${need}개) — 이 목표는 끝낼 수 없어요`, at); }
           } else if (o.type === 'interact' && o.id && !anchorIds.has(o.id)) add('warn', 'quests', `상호작용 대상 ${o.id} 가 배치(layout)에 없어요`, at);
           if (o.type === 'visit_all' && o.count > arr(d.visitZones).length) add('error', 'quests', `visit_all 목표 수(${o.count})가 방문 구역 수(${arr(d.visitZones).length})보다 커요`, at);
         });
@@ -2521,7 +2533,9 @@
     for (let i = 0; i < L.count; i += 7) {
       const z = L.zones[A.zone[i]].code, u = L.unit(z, A.seq[i]), r = u && L.unitAt(u.x, u.z);
       if (!r || r.zone !== z || r.seq !== A.seq[i]) bad++;
-      if (i + 1 < L.count && A.zone[i + 1] === A.zone[i] && Math.hypot(A.x[i + 1] - A.x[i], A.z[i + 1] - A.z[i]) < 1.19) close++;
+      // [finisher] the plan's own minimum spacing per kind (plan v2: jars 1.1 m apart; the old fixed 1.19 called 727 pairs too close)
+      const MS = (C.K && C.K.MIN_SPACING) || {}, minD = ([MS.jar, MS.plot, MS.store][A.kind[i]] || 1.19) - 0.005;
+      if (i + 1 < L.count && A.zone[i + 1] === A.zone[i] && A.kind[i + 1] === A.kind[i] && Math.hypot(A.x[i + 1] - A.x[i], A.z[i + 1] - A.z[i]) < minD) close++;
     }
     const miss = [C.byId('B_MAIN'), C.byId('B_PAVILION')].filter(Boolean).filter((e) => L.unitAt(e.x, e.z)).length + (L.unitAt(C.rings.GC.cx + 30, C.rings.GC.cz) ? 1 : 0);
     return { ok: L.count === 10000 && !L.unplaced && !bad && !close && !miss, detail: `${L.count}자리 · 배치 ${ms.toFixed(1)} ms · 되찾기 틀림 ${bad} · 너무 가까움 ${close} · 길·건물 위 ${miss}` };
