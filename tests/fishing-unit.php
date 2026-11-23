@@ -277,6 +277,33 @@ check('a row edited by hand to a value outside its range never reaches the page 
     $s = Tfm\Entitle::site();
     return $s['fishing.keep_per_day'] === 6 && $s['fishing.trap_minutes'] === 10 ? true : j([$s['fishing.keep_per_day'], $s['fishing.trap_minutes']]);
 });
+check('the admin tab ⚙️ 설정 shows the three rows in 기타 with their words, ranges and the mark "화면에 전달" (AdminSettings::view)', function () {
+    foreach (['fishing.keep_per_day', 'fishing.trap_minutes'] as $k) Tfm\Settings::clear($k, null);
+    Tfm\Settings::reset();
+    $h = Tfm\AdminSettings::view(new Tfm\Ctx(), [], 'tok');
+    $a = strpos($h, 'id="set-etc"');
+    if ($a === false) return 'no 기타 card';
+    $card = substr($h, $a, (strpos($h, '</section>', $a) ?: strlen($h)) - $a);
+    foreach (['v[fishing.enabled]', 'v[fishing.keep_per_day]', 'v[fishing.trap_minutes]', '강가 낚시 열기', '하루에 데려갈 수 있는 물고기 수', '어항에 물고기가 드는 데 걸리는 시간', '화면에 전달'] as $needle) {
+        if (strpos($card, $needle) === false) return 'missing in the card: ' . $needle;
+    }
+    return preg_match('/<script|\son[a-z]+=|style=/i', $card) ? 'script / inline style in the card' : true;
+});
+check('saving the 기타 form as the tab does (AdminSettings::action settings_save): the values are stored and reach `site`; one bad value stores nothing', function () {
+    $c = new Tfm\Ctx();
+    $r = Tfm\AdminSettings::action('settings_save', $c, ['group' => 'etc', 'v' => ['fishing.keep_per_day' => '2', 'fishing.trap_minutes' => '30', 'fishing.enabled' => '1']]);
+    Tfm\Settings::reset();
+    $s = Tfm\Entitle::site();
+    if (!($s['fishing.keep_per_day'] === 2 && $s['fishing.trap_minutes'] === 30 && $s['fishing.enabled'] === true)) return 'not stored: ' . j([$s['fishing.keep_per_day'], $s['fishing.trap_minutes']]);
+    if (strpos((string) $r['msg'], '하루에 데려갈 수 있는 물고기 수') === false) return 'the answer does not name the change: ' . $r['msg'];
+    $bad = apiCode(function () use ($c) { Tfm\AdminSettings::action('settings_save', $c, ['group' => 'etc', 'v' => ['fishing.keep_per_day' => '5', 'fishing.trap_minutes' => '9999']]); });
+    Tfm\Settings::reset();
+    $s = Tfm\Entitle::site();
+    if ($bad !== '400 INVALID_SETTING' || $s['fishing.keep_per_day'] !== 2 || $s['fishing.trap_minutes'] !== 30) return 'a bad value: ' . $bad . ' ' . j([$s['fishing.keep_per_day'], $s['fishing.trap_minutes']]);
+    $back = Tfm\AdminSettings::action('settings_reset', $c, ['key' => 'fishing.keep_per_day']);
+    Tfm\Settings::reset();
+    return Tfm\Entitle::site()['fishing.keep_per_day'] === 6 && strpos((string) $back['msg'], '기본값') !== false ? true : 'reset: ' . $back['msg'];
+});
 check('기본값으로: clearing the rows gives the defaults back', function () {
     foreach (['fishing.enabled', 'fishing.keep_per_day', 'fishing.trap_minutes'] as $k) Tfm\Settings::clear($k, null);
     Tfm\Settings::reset();
