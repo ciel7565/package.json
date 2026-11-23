@@ -202,7 +202,9 @@ try {
   // ------------------------------------------------------------------ dispose
   if (want('dispose')) {
     const r = await page.evaluate(async () => {
-      const A = G.avatar, E = G.sys.engine, rr = E.renderer, scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
+      // [finisher] a renderer of its own: the page's renderer also uploads whatever the running world streams in between
+      // the cycles (vegetation chunks, NPCs), which read as a leak of the rigs (geo 313→321 on a loaded machine)
+      const A = G.avatar, rr = new THREE.WebGLRenderer({ canvas: document.createElement('canvas'), antialias: false }), scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
       cam.position.set(0, 1.3, 5); cam.lookAt(0, 1, 0);
       const rt = new THREE.WebGLRenderTarget(64, 64);
       const cycle = () => { const rigs = []; for (let i = 0; i < 10; i++) { const rg = A.create(A.presets[i % A.presets.length].appearance, { shadow: false }); rg.update(1 / 30, { speed: 0 }); scene.add(rg.group); rigs.push(rg); } rr.setRenderTarget(rt); rr.render(scene, cam); rr.setRenderTarget(null); for (const rg of rigs) rg.dispose(); };
@@ -211,7 +213,7 @@ try {
       cycle(); cycle(); await new Promise((res) => requestAnimationFrame(res));
       const m1 = { ...rr.info.memory }, p1 = rr.info.programs.length;
       const c0 = A.cache.size; A.cache.clear(); const c1 = A.cache.size;
-      rt.dispose();
+      rt.dispose(); rr.dispose();
       return { m0, m1, p0, p1, c0, c1, children: scene.children.length };
     });
     check('30 rigs created and disposed leave no geometry, texture or program behind', r.m1.geometries <= r.m0.geometries && r.m1.textures <= r.m0.textures && r.p1 <= r.p0 && r.children === 0, `geo ${r.m0.geometries}→${r.m1.geometries}, tex ${r.m0.textures}→${r.m1.textures}, programs ${r.p0}→${r.p1}`);
