@@ -799,14 +799,19 @@
     else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
   }
+  // [gfx] bindings.capture(): the settings window waits for "the next key" — it goes there and nowhere else. In the
+  // capture phase, before every other listener of the page: a focused button would otherwise take Enter or Space as a
+  // press on itself first, and Esc would close the window instead of only ending the wait.
   window.addEventListener('keydown', (e) => {
-    // [gfx] bindings.capture(): the settings window waits for "the next key" — it goes there and nowhere else
-    if (keyCapture) {
-      const c = keyCapture; keyCapture = null;
-      e.preventDefault(); e.stopPropagation();
-      try { c.fn?.(e.code === 'Escape' ? null : e.code); } catch (err) { G.log.error('INPUT', err); }
-      return;
-    }
+    if (!keyCapture) return;
+    const c = keyCapture; keyCapture = null;
+    e.preventDefault(); e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    e._tfmCaptured = true;
+    try { c.fn?.(e.code === 'Escape' ? null : e.code); } catch (err) { G.log.error('INPUT', err); }
+  }, true);
+  window.addEventListener('keydown', (e) => {
+    if (e._tfmCaptured) return;   // (the key of a capture, see above)
     const typing = G.util.isTyping();
     if (e.code === 'Escape') {
       if (typing) { document.activeElement.blur(); e.preventDefault(); return; }

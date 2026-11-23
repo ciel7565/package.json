@@ -20,7 +20,7 @@ const J = (v) => JSON.stringify(v);
 /** a page: fake window / document / G around the fragment. opts: { touch, webdriver, search, settings, easy, site } */
 function page(opts = {}) {
   const T = { now: 1000, typing: false, blocking: false, timers: [], said: [], toasts: [] };
-  const listeners = (o) => { o._l = {}; o.addEventListener = (t, fn) => { (o._l[t] = o._l[t] || []).push(fn); }; o.removeEventListener = () => {}; o.dispatch = (t, e) => { for (const fn of (o._l[t] || []).slice()) fn(e); }; return o; };
+  const listeners = (o) => { o._l = {}; o.addEventListener = (t, fn, opt) => { (o._l[t] = o._l[t] || []).push(fn); if (opt === true || (opt && opt.capture)) (o._cap = o._cap || []).push(t); }; o.removeEventListener = () => {}; o.dispatch = (t, e) => { for (const fn of (o._l[t] || []).slice()) fn(e); }; return o; };
   const mkEl = (tag) => {
     const el = listeners({ tagName: String(tag).toUpperCase(), style: {}, dataset: {}, attrs: {}, children: [], hidden: false, textContent: '', isConnected: true,
       classList: { _s: new Set(), add(...c) { c.forEach((x) => this._s.add(x)); }, remove(...c) { c.forEach((x) => this._s.delete(x)); }, toggle(c, on) { const v = on === undefined ? !this._s.has(c) : !!on; if (v) this._s.add(c); else this._s.delete(c); return v; }, contains(c) { return this._s.has(c); } },
@@ -179,6 +179,12 @@ function page(opts = {}) {
   check('capture(): the next key goes to the callback and nowhere else', got === 'KeyU' && bag === 0 && eC.defaultPrevented, `${got} bag ${bag}`);
   p.B.capture((c) => { got = c; }); p.press('Escape');
   check('capture(): Esc cancels (null)', got === null);
+  // … before every other listener of the page (capture phase, the event stops there): a focused button never sees the Enter or Space that is being bound
+  let stopped = 0; p.B.capture((c) => { got = c; });
+  const eCap = { code: 'Space', key: ' ', repeat: false, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, defaultPrevented: false, target: p.body, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, stopImmediatePropagation() { stopped++; } };
+  p.window.dispatch('keydown', eCap);
+  check('capture(): taken in the capture phase and stopped there (Space is bound, nobody jumps or presses a button)', got === 'Space' && stopped === 1 && eCap.defaultPrevented && (p.window._cap || []).includes('keydown') && !p.I.isDown('Space'), `${got} stopped ${stopped} cap ${J(p.window._cap)}`);
+  p.window.dispatch('keyup', { ...eCap, type: 'keyup' });
   // reset everything
   const rAll = p.B.reset();
   check('reset(): every action has its default keys again and nothing is translated', rAll.ok && p.B.custom === false && p.B.list().every((a) => !a.custom) && J(p.G.settings.key_bag) === J(['KeyI']));
