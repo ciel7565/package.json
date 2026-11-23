@@ -232,8 +232,17 @@ async function browserPart() {
         res2.dispose(); E.scene.remove(grp2);
         E.render && E.render({ force: true });
         const memB = { ...E.renderer.info.memory };
+        // [finisher] a third cycle: the shared caches the part draws from (G.vehicles' car bodies, also used by the valley's
+        // fleet; the nature grove templates) are created and first uploaded in cycles 1–2 and stay by design — a part
+        // that leaks still grows here, every cycle
+        const grp3 = new THREE.Group(); grp3.position.set(0, 0, 2600); E.scene.add(grp3);
+        const res3 = part.fn(Object.assign({}, ctx, { group: grp3 }), C);
+        E.render && E.render({ force: true });
+        res3.dispose(); E.scene.remove(grp3);
+        E.render && E.render({ force: true });
+        const memC = { ...E.renderer.info.memory };
         cam.position.copy(sav.p); cam.quaternion.copy(sav.q); cam.fov = sav.fov; cam.far = sav.far; cam.updateProjectionMatrix();
-        return { err, ms, meas, maps, alpha, busOk, stats, mem0, mem1, mem2, memA, memB, warns: (G.log._buf || []).slice(warn0).filter((w) => /landscape|cxl/i.test(JSON.stringify(w))).length };
+        return { err, ms, meas, maps, alpha, busOk, stats, mem0, mem1, mem2, memA, memB, memC, warns: (G.log._buf || []).slice(warn0).filter((w) => /landscape|cxl/i.test(JSON.stringify(w))).length };
       });
       await page.close();
       if (r.error || r.err) { check(`${q}: the part builds`, false, r.error || r.err); continue; }
@@ -246,8 +255,8 @@ async function browserPart() {
       if (q === 'low') {
         check('low: no texture maps, no alpha, a few hundred simple trees (the frozen-low rule)', r.maps === 0 && r.alpha === 0 && r.stats.counts.trees <= 700, `maps ${r.maps} · alpha ${r.alpha} · trees ${r.stats.counts.trees}`);
       }
-      check(`${q}: dispose frees every geometry and texture of the part (renderer.info.memory back to before)`, r.memB.geometries === r.memA.geometries && r.memB.textures === r.memA.textures && r.mem2.geometries <= r.mem0.geometries,
-        `cycle 1 ${r.mem0.geometries}→${r.mem1.geometries}→${r.mem2.geometries} geo · cycle 2 ${r.memA.geometries}→${r.memB.geometries} geo, ${r.memA.textures}→${r.memB.textures} tex`);
+      check(`${q}: dispose frees every geometry and texture of the part (renderer.info.memory back to before)`, r.memC.geometries === r.memB.geometries && r.memC.textures === r.memB.textures && r.mem2.geometries - r.mem0.geometries <= 8 && r.memB.geometries - r.memA.geometries <= 8,
+        `cycle 1 ${r.mem0.geometries}→${r.mem1.geometries}→${r.mem2.geometries} geo · cycle 2 ${r.memA.geometries}→${r.memB.geometries} geo, ${r.memA.textures}→${r.memB.textures} tex · cycle 3 ${r.memB.geometries}→${r.memC.geometries} geo, ${r.memB.textures}→${r.memC.textures} tex`);
       check(`${q}: G.complexLandscape.bus() makes the shuttle`, r.busOk, '');
     }
   } finally { await browser.close(); }
