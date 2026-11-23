@@ -432,7 +432,7 @@ async function partD() {
   }
   const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
   const port = Number(opt('--port', '0')) || await freePort();
-  const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: dataDir, TFM_SQLITE_PATH: dbFile, TFM_UPLOAD_DIR: path.join(srvTmp, 'uploads'), TFM_TOSS_MOCK: '1' }, stdio: ['ignore', 'ignore', 'ignore'] });
+  const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: dataDir, TFM_SQLITE_PATH: dbFile, TFM_UPLOAD_DIR: path.join(srvTmp, 'uploads'), TFM_TOSS_MOCK: '1', PHP_CLI_SERVER_WORKERS: '4' }, stdio: ['ignore', 'ignore', 'ignore'] });
   const BASE = `http://127.0.0.1:${port}/`;
   /** the user_settings row(s) as the database has them: [{ user_id, v, data, updated_at }] */
   const dbRows = () => {
@@ -460,7 +460,8 @@ async function partD() {
     }, [acct, register]);
     const synced = (page) => page.waitForFunction(() => G.ready === true && !!G.state && G.sys.settings.store.pulled && !!G.sys.settings.store.last, null, { timeout: TIMEOUT, polling: 250 });
     const saves = [];
-    const watch = (page, tag) => page.on('request', (q) => { if (/\/api\/settings\/save\.php/.test(q.url())) saves.push({ tag, csrf: !!q.headers()['x-csrf-token'], at: Date.now() }); });
+    // (a context-wide watch: the request a closing page sends is seen too)
+    const watch = (page, tag) => (page.context ? page.context() : page).on('request', (q) => { if (/\/api\/settings\/save\.php/.test(q.url())) saves.push({ tag, csrf: !!q.headers()['x-csrf-token'], at: Date.now() }); });
     const settled = (page) => page.evaluate(async () => { const st = G.sys.settings.store, t0 = Date.now(); await new Promise((r) => setTimeout(r, 300)); while (Date.now() - t0 < 40000 && (st.pending || st.busy)) await new Promise((r) => setTimeout(r, 200)); return { v: st.v, sent: st.sent, unsent: Object.keys(st.unsent()).length, ms: Date.now() - t0 }; });
 
     // ---- device 1: register, change account and device options, the 2 s pause
@@ -487,7 +488,8 @@ async function partD() {
     await one.page.evaluate(() => { G.sys.settings.set('mixMusic', 30); G.sys.settings.set('hudOpacity', 65); });
     await sleep(500);
     const s1 = saves.length;
-    await one.page.close({ runBeforeUnload: false });
+    one.page.on('dialog', (d) => d.accept().catch(() => {}));
+    await one.page.close({ runBeforeUnload: true }); // the way a person closes the tab: pagehide runs
     const r2 = await dbWait((r) => r.blob.acct.mixMusic === 30 && r.blob.acct.hudOpacity === 65, 10000);
     check('D: a change 0.5 s before the tab closes still reaches the database (pagehide → keepalive)', r2?.blob?.acct?.mixMusic === 30 && r2.blob.acct.hudOpacity === 65 && saves.length > s1, `${note(r2)} · music ${r2?.blob?.acct?.mixMusic} hud ${r2?.blob?.acct?.hudOpacity} · saves on close ${saves.length - s1}`);
 

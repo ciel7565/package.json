@@ -1035,29 +1035,42 @@
       for (const [id, u] of Object.entries(un)) { const sv = (u && u.s === 'd' ? store.baseD : store.baseA)[id]; if (!u || (Number(u.t) <= sentAt && same(sv, u.v))) delete un[id]; }
       store.keepUnsent(un);
     },
-    async push(again) {
+    /** one push at a time: a change made while it runs is sent by the same run (or the next pause); 409 → merge → again */
+    async push() {
       clearTimeout(store.timer);
       if (!store.online()) return false;
-      if (store.busy) { store.timer = setTimeout(() => store.push(), 800); return false; }
-      store.busy = true; store.pending = false;
-      const blob = store.blob(), sentAt = Date.now();
+      if (store.busy) { store.pending = true; return false; } // the running push looks at `pending` when it ends
+      store.busy = true;
+      let ok = false;
       try {
-        const r = await G.net.request('settings/save.php', { body: { v: store.v + 1, data: blob }, quiet: true, timeout: 9000 });
-        store.took(blob, sentAt, Math.max(store.v + 1, Number(r?.v) || 0));
-        try { G.bus.emit('settings:synced', { v: store.v, from: 'device' }); } catch (e) { /* bus optional */ }
-        return true;
-      } catch (e) {
-        if (e && e.code === 'SETTINGS_STALE' && !again) {
-          // another device wrote in between: take its copy (keeping the changes made here), then send again
-          store.busy = false;
-          try { const r = await G.net.request('settings/get.php', { quiet: true, timeout: 9000 }); store.merge(r); }
-          catch (err) { store.v = Math.max(store.v, Number(e.data?.v) || 0); }
-          return store.push(true);
+        for (let round = 0; round < 3 && store.online(); round++) {
+          store.pending = false;
+          const blob = store.blob(), sentAt = Date.now();
+          try {
+            const r = await G.net.request('settings/save.php', { body: { v: store.v + 1, data: blob }, quiet: true, timeout: 9000 });
+            store.took(blob, sentAt, Math.max(store.v + 1, Number(r?.v) || 0));
+            try { G.bus.emit('settings:synced', { v: store.v, from: 'device' }); } catch (e) { /* bus optional */ }
+            ok = true;
+            break;
+          } catch (e) {
+            if (e && e.code === 'SETTINGS_STALE' && round < 2) {
+              // another device wrote in between: take its copy (keeping the changes made here), then send again
+              store.stale = (store.stale || 0) + 1;
+              try { store.merge(await G.net.request('settings/get.php', { quiet: true, timeout: 9000 })); }
+              catch (err) { store.v = Math.max(store.v, Number(e.data?.v) || 0); }
+              continue;
+            }
+            store.pending = true;
+            if (++store.errors < 4 && e?.code !== 'NOT_FOUND' && !/^HTTP_404$/.test(e?.code || '')) { clearTimeout(store.timer); store.timer = setTimeout(() => store.push(), 5000 * store.errors); }
+            G.log.info('SETTINGS', 'account settings not saved', e?.code || e?.message || e);
+            return false;
+          }
         }
-        if (++store.errors < 4 && e?.code !== 'NOT_FOUND' && !/^HTTP_404$/.test(e?.code || '')) { store.pending = true; store.timer = setTimeout(() => store.push(), 5000 * store.errors); }
-        G.log.info('SETTINGS', 'account settings not saved', e?.code || e?.message || e);
-        return false;
-      } finally { store.busy = false; }
+        return ok;
+      } finally {
+        store.busy = false;
+        if (ok && store.pending) store.schedule(); // changed while the answer was on its way
+      }
     },
     /** before the session ends (logout): what is waiting goes now; resolves when the server answered (or gave up) */
     async flush() {

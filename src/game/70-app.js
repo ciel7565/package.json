@@ -3803,7 +3803,8 @@
       const kv = h('dl', { class: 'kv set-kv' });
       const row = (k, v, cls) => { kv.append(h('dt', null, k), h('dd', cls ? { class: cls } : null, v)); };
       row('프로필', `${G.state.profile?.nickname || ''} · ${kindLabel(auth.current?.kind)}`);
-      row('저장 위치', server ? '계정 서버 (자동 저장)' : '이 브라우저 (localStorage · 자동 저장)');
+      // [settings] §18.2: plain words in the settings window (no 'localStorage')
+      row('저장 위치', server ? '계정 서버 (자동 저장)' : '이 브라우저 안의 저장 공간 (자동 저장)');
       row('마지막 저장', lastSavedText().replace('마지막 저장 ', ''), 'set-last');
       if (!server) row('저장 크기', bytesLabel(size));
       const saveBtn = h('button', { type: 'button', class: 'btn btn-primary' }, h('span', { class: 'ico ico-sm', 'data-icon': 'save' }), '지금 저장');

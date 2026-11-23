@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = fs.readFileSync(path.join(ROOT, 'src/game/68-settings.js'), 'utf8');
+const SRC = fs.readFileSync(process.env.SETTINGS_SRC || path.join(ROOT, 'src/game/68-settings.js'), 'utf8'); // SETTINGS_SRC: try another copy
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => { if (ok) pass++; else fail++; console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); };
 const tick = () => new Promise((r) => setImmediate(r));
@@ -25,7 +25,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ------------------------------------------------------------------ the fake server (Tfm\UserSettings semantics)
 const server = {
-  rows: new Map(), up: true, log: [], csrf: 'c0ffee',
+  rows: new Map(), up: true, log: [], csrf: 'c0ffee', latency: 0, inflight: 0, maxInflight: 0,
   handle(user, method, p, body, headers) {
     this.log.push({ user, method, p, v: body?.v, keepalive: !!headers?.keepalive, csrf: headers?.['X-CSRF-Token'] || null });
     if (!this.up) return { status: 0 };
@@ -77,6 +77,10 @@ function device(tag) {
         const method = o.method || (o.body ? 'POST' : 'GET');
         const headers = {}; if (method !== 'GET' && G.net.csrf) headers['X-CSRF-Token'] = G.net.csrf;
         await tick();
+        const save = p === 'settings/save.php';
+        if (save) { dev.inflight = (dev.inflight || 0) + 1; server.maxInflight = Math.max(server.maxInflight, dev.inflight); }
+        try { if (server.latency) await new Promise((res) => setT(res, server.latency)); } // a slow server: the answer comes later on this device's clock
+        finally { if (save) dev.inflight--; }
         const r = server.handle(dev.user, method, p, o.body ? JSON.parse(JSON.stringify(o.body)) : null, headers);
         if (!r.status) throw new ApiError('NETWORK_ERROR', 'down', 0);
         if (!r.json?.success) throw new ApiError(r.json?.error?.code || `HTTP_${r.status}`, 'no', r.status, r.json?.data);
@@ -194,6 +198,23 @@ check('two devices: device 2\'s change (효과음 20) and device 1\'s (글자 4)
 check('two devices: device 1 now shows device 2\'s value', d1.S.get('mixSfx') === 20 && d1.S.get('textScale') === 4);
 await d2.logout(); await d2.login('u1');
 check('two devices: device 2 picks up device 1\'s change at its next login', d2.S.get('textScale') === 4 && d2.S.get('mixSfx') === 20);
+
+// ---- a slow server: device 1's save meets 409, and the player changes more while the answers are on their way
+server.latency = 1500;
+d2.S.set('mixSfx', 30);
+await d2.advance(4000);
+const savesBefore = server.log.filter((x) => x.user === 'u1' && x.p === 'settings/save.php' && x.tag === 'd1').length;
+d1.S.set('textScale', 3);
+await d1.advance(2600);       // the save is on its way (1.5 s), then 409 and a fresh read (1.5 s) …
+d1.S.set('avatarScale', 90);  // … while the player changes another option
+await d1.advance(400);
+d1.S.set('mixUi', 25);
+await d1.advance(12000);
+const a4 = server.acct('u1');
+check('slow server + 409: device 2\'s 효과음 30 and device 1\'s 글자 3, 캐릭터 90 %, UI 효과음 25 all end in the store', a4.mixSfx === 30 && a4.textScale === 3 && a4.avatarScale === 90 && a4.mixUi === 25, JSON.stringify({ sfx: a4.mixSfx, text: a4.textScale, av: a4.avatarScale, ui: a4.mixUi }));
+check('slow server + 409: device 1 shows 효과음 30 and keeps its own three changes', d1.S.get('mixSfx') === 30 && d1.S.get('textScale') === 3 && d1.S.get('avatarScale') === 90 && d1.S.get('mixUi') === 25 && !d1.S.store.busy && Object.keys(d1.S.store.unsent()).length === 0);
+check('slow server + 409: one save of a device at a time (never two saves of one device in flight)', server.maxInflight <= 1 && d1.S.store.stale >= 1, `max in flight ${server.maxInflight} · 409 seen ${d1.S.store.stale}`);
+server.latency = 0;
 
 // ---- unsent over a logout: the server is down while device 1 changes things
 server.up = false;
