@@ -3237,6 +3237,7 @@
       G.sys.exhibits && !G.sys.exhibits._failed && typeof G.sys.exhibits.openBook === 'function' && { id: 'housebook', emoji: '🏠', label: '집 구경 도감', color: '#e0a35a', say: '집 구경 도감. 한옥에서 모은 도장을 봐요.' }, // [exhibits]
       G.sys.allot && !G.sys.allot._failed && typeof G.sys.allot.open === 'function' && { id: 'allot', emoji: '🏺', label: '내 항아리', color: '#d9a066', say: '내 항아리. 만장대 분양 지도와 내 자리를 봐요.' }, // [allot-client]
       G.sys.lecture && !G.sys.lecture._failed && typeof G.sys.lecture.open === 'function' && { id: 'lecture', emoji: '🎓', label: '강의실', color: '#8fb4ff', say: '강의실. 영상과 슬라이드로 배워요.' }, // [lecture]
+      G.sys.support && !G.sys.support._failed && typeof G.sys.support.open === 'function' && { id: 'support', emoji: '📮', label: '어른에게 알려요', color: '#ff9f43', badge: G.sys.support.unread || 0, say: '어른에게 알려요. 이상한 일이 있으면 그림으로 알려요.' }, // [support]
       comp && !NoThree.active && { id: 'ongi', emoji: '🏺', label: '옹이랑', color: '#36cfc0', say: '옹이랑 놀아요.' },
       { id: 'sound', emoji: '🔊', label: '소리', color: '#b48bff', say: '소리. 소리 크기를 바꿔요.' },
       { id: 'help', emoji: '❓', label: '도와줘요', color: '#6c8cff', say: '도와줘요. 노는 방법을 봐요.' },
@@ -3291,6 +3292,7 @@
       case 'housebook': return G.sys.exhibits?.openBook?.(); // [exhibits]
       case 'allot': return G.sys.allot?.open?.('mine'); // [allot-client]
       case 'lecture': return G.sys.lecture?.open?.(); // [lecture]
+      case 'support': return G.sys.support?.open?.(); // [support]
       case 'ongi': return G.sys.companion?.openMenu?.();
       case 'sound': return openSettings();
       case 'help': return openHelp();
@@ -3323,6 +3325,7 @@
       G.sys.exhibits && !G.sys.exhibits._failed && typeof G.sys.exhibits.openBook === 'function' && { act: 'housebook', emoji: '🏠', label: '집 구경 도감', desc: '한옥 방의 전시·움직이는 그림', tint: '#e0a35a' }, // [exhibits]
       G.sys.allot && !G.sys.allot._failed && typeof G.sys.allot.open === 'function' && { act: 'allot', emoji: '🏺', label: '만장대 분양', desc: '내 분양·단지 지도·신청·분양 알림', tint: '#d9a066' }, // [allot-client]
       G.sys.lecture && !G.sys.lecture._failed && typeof G.sys.lecture.open === 'function' && { act: 'lecture', emoji: '🎓', label: '강의실', desc: '영상·슬라이드·문서 강의 보기', tint: '#8fb4ff' }, // [lecture]
+      G.sys.support && !G.sys.support._failed && typeof G.sys.support.open === 'function' && { act: 'support', emoji: '📮', label: '문의·신고', desc: '버그 신고·문의·신고 (화면 사진과 함께) · 내 문의', badge: G.sys.support.unread || 0, tint: '#ff9f43' }, // [support]
       { act: 'avatar', emoji: '👕', label: '아바타 꾸미기', desc: '옷차림·헤어·닉네임', tint: '#ff9fc7' },
       G.sys.minimap?.openWorldMap && !NoThree.active && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
       NoThree.active && G.sys.education?.openLibrary && { act: 'learn', emoji: '📖', label: '배움터', desc: '전통 발효 배우기·퀴즈 (3D 없이)', tint: '#7fc4ff' },
@@ -3415,6 +3418,7 @@
       case 'housebook': if (G.sys.exhibits?.openBook) G.sys.exhibits.openBook(); else missing('집 구경 도감'); return; // [exhibits]
       case 'allot': if (G.sys.allot?.open) G.sys.allot.open('mine'); else missing('만장대 분양'); return; // [allot-client]
       case 'lecture': if (G.sys.lecture?.open) G.sys.lecture.open(); else missing('강의실'); return; // [lecture]
+      case 'support': if (G.sys.support?.open) G.sys.support.open(); else missing('문의·신고'); return; // [support]
       case 'avatar': openAvatar(); return;
       case 'map': G.sys.minimap?.openWorldMap?.(); return;
       case 'learn': G.sys.education?.openLibrary?.(); return;
@@ -4114,7 +4118,10 @@
         });
         const full = h('button', { type: 'button', class: 'easy-big-btn easy-btn-no kh-full', 'data-say': '어른용 도움말' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📚'), h('span', null, '어른용 도움말'));
         full.addEventListener('click', () => { mm.close(); openHelp(null, { full: true }); });
-        body.append(grid, h('div', { class: 'kh-foot' }, full));
+        // [support] 📮 어른에게 알려요: a picture report without typing
+        const tell = G.sys.support?.open ? h('button', { type: 'button', class: 'easy-big-btn easy-btn-no kh-full', 'data-say': '어른에게 알려요. 이상한 일이 있으면 그림으로 알려요.' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📮'), h('span', null, '어른에게 알려요')) : null;
+        tell?.addEventListener('click', () => { mm.close(); G.sys.support.open(); });
+        body.append(grid, h('div', { class: 'kh-foot' }, full, tell));
         setTimeout(() => { if (!touchUI() && !mm.closed) grid.querySelector('.kh-card')?.focus({ preventScroll: true }); }, 60);
       },
       actions: [],
@@ -4140,7 +4147,7 @@
           { id: 'zones', label: '구역 안내', icon: '🗺️' }, { id: 'tips', label: '꿀팁', icon: '💡' }, { id: 'faq', label: '자주 묻는 질문', icon: '💬' },
         ], (id) => { pane.textContent = ''; pane.appendChild(HELP_PANES[id]()); G.ui.hydrateIcons(pane); pane.scrollTop = 0; body.scrollTop = 0; }, HELP_PANES[tab] ? tab : 'controls');
       },
-      actions: [{ label: '닫기', class: 'btn-primary' }],
+      actions: [G.sys.support?.open && { label: '📮 문의·신고', class: 'btn-ghost', onClick: () => { setTimeout(() => G.sys.support.open(), 0); } }, { label: '닫기', class: 'btn-primary' }].filter(Boolean), // [support] the help window's way to the operator
     });
   }
   const keyRows = (rows) => rows.map(([keys, d]) => `<div class="kt-row"><span class="kt-keys">${keys.map((k) => `<kbd>${esc(k)}</kbd>`).join('')}</span><span class="kt-desc">${esc(d)}</span></div>`).join('');

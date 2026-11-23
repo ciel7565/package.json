@@ -117,6 +117,8 @@ const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/i
   ...['summary', 'map', 'unit', 'logs', 'mine', 'plans', 'inbox', 'seen', 'apply', 'cancel', 'waitlist', 'nameplate', 'pay-prepare', 'pay-confirm'].map((n) => `metaverse/api/allot/${n}.php`),
   // [lecture] CONTRACT §17.3: the 강의실 — the library, the admin tab's part (under lib/), the two endpoints
   'metaverse/lib/Lecture.php', 'metaverse/lib/AdminLecture.php', 'metaverse/api/lecture/list.php', 'metaverse/api/lecture/file.php',
+  // [support] CONTRACT §18.1: 신고·문의 — the library, the admin tab's part (under lib/), the six endpoints
+  'metaverse/lib/Support.php', 'metaverse/lib/AdminSupport.php', ...['create', 'mine', 'reply', 'seen', 'delete', 'shot'].map((n) => `metaverse/api/support/${n}.php`),
   // [entitle] CONTRACT §17.2: the entitlement, the admin site's ⚙️ 설정 / 🔐 내 계정 part (under lib/), the password endpoint
   'metaverse/lib/Entitle.php', 'metaverse/lib/AdminSettings.php', 'metaverse/lib/Settings.php', 'metaverse/api/auth/password.php',
   // [myroom] CONTRACT §17.4: the room an allotment holder decorates — the library and its two endpoints

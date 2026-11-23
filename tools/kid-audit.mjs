@@ -19,6 +19,8 @@
 //                          [complex-ground] cxwelcome: the first-visit card on the deck of 만장대 단지 (🚌 마을로 가요, §16.8)
 //                          [myroom] myroomcard myroomedit: the card "내 방" and the edit mode 방 꾸미기 (§17.4) — the edit
 //                          mode opens only while the player stands in the room (tests/myroom-client.mjs audits it there)
+//                          [support] support supportsend supportmine: the picture tiles of a child's report, the picture
+//                          step with 📤 보내요, and 📋 내 문의 (§18.1)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report

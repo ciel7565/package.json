@@ -1,0 +1,85 @@
+/* 78-support.css — 📮 문의·신고 (CONTRACT §18.1): the report window, 내 문의, the chat buttons, the HUD chip */
+
+.sup-modal .modal-body { display: grid; gap: .55rem; }
+.sup-h { margin: .55rem 0 .1rem; font-size: .98rem; font-weight: 800; color: var(--text); }
+.sup-local { margin: 0; padding: .6rem .75rem; border-radius: 12px; background: rgba(255, 207, 74, .14); border: 1px solid rgba(255, 207, 74, .35); font-size: .92rem; line-height: 1.5; }
+.sup-note { margin: .1rem 0 0; font-size: .84rem; line-height: 1.5; color: var(--text-dim); }
+.sup-target { margin: .1rem 0; font-weight: 700; }
+.sup-empty, .sup-loading { margin: .6rem 0; text-align: center; color: var(--text-dim); }
+
+/* kind cards */
+.sup-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.sup-kind { display: grid; justify-items: center; gap: .2rem; min-height: 96px; padding: .7rem .5rem; border-radius: 14px; border: 2px solid rgba(255, 255, 255, .16); background: rgba(255, 255, 255, .06); color: inherit; cursor: pointer; text-align: center; transition: transform .12s, background-color .12s, border-color .12s; }
+.sup-kind .emoji { font-size: 1.9rem; line-height: 1; }
+.sup-kind b { font-size: 1rem; }
+.sup-kind small { font-size: .76rem; color: var(--text-dim); line-height: 1.35; word-break: keep-all; }
+.sup-kind:hover { background: rgba(255, 255, 255, .1); }
+.sup-kind:active { transform: scale(.97); }
+.sup-kind.is-on { border-color: var(--gold, #e8c58a); background: rgba(232, 197, 138, .18); }
+.sup-kind:focus-visible { outline: 3px solid var(--gold, #e8c58a); outline-offset: 2px; }
+
+/* categories */
+.sup-cats { display: flex; flex-wrap: wrap; gap: 8px; }
+.sup-cat { min-height: 44px; padding: 0 .9rem; cursor: pointer; }
+.sup-cat .emoji { margin-right: .3rem; }
+
+/* the picture */
+.sup-pic { display: grid; gap: .45rem; }
+.sup-fig { margin: 0; display: grid; gap: .3rem; }
+.sup-fig img, .sup-kid-pic img { display: block; width: 100%; height: auto; max-height: 38vh; object-fit: contain; border-radius: 12px; background: #1b2318; border: 1px solid rgba(255, 255, 255, .14); }
+.sup-fig img.is-off, .sup-kid-pic img.is-off { opacity: .35; filter: grayscale(1); }
+.sup-fig figcaption { font-size: .82rem; color: var(--text-dim); }
+.sup-pic-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.sup-nopic { margin: 0; padding: .7rem; border-radius: 12px; background: rgba(255, 255, 255, .06); text-align: center; color: var(--text-dim); }
+.sup-modal textarea { width: 100%; min-height: 6rem; resize: vertical; }
+.sup-count { display: block; text-align: right; color: var(--text-dim); font-size: .78rem; }
+
+/* easy mode */
+.sup-kid .easy-pick { --cols-s: 3; }
+.sup-kid-pic { display: grid; gap: .6rem; }
+.sup-kid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sup-kid-row .easy-big-btn { width: 100%; min-width: 0; min-height: 64px; }
+.sup-kid-send { font-size: 1.15rem; }
+.sup-grown { justify-self: center; min-height: 48px; }
+.sup-kid-words textarea { width: 100%; }
+.sup-done-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: .6rem; }
+
+/* 내 문의 */
+.sup-card { display: grid; gap: .35rem; padding: .75rem .85rem; border-radius: 14px; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12); }
+.sup-card.is-unread { border-color: rgba(85, 209, 135, .7); box-shadow: 0 0 0 2px rgba(85, 209, 135, .25); }
+.sup-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .55rem; }
+.sup-card-head .emoji { font-size: 1.3rem; }
+.sup-card-head small { margin-left: auto; }
+.sup-card-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.sup-thumb { display: block; max-width: min(100%, 360px); height: auto; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .14); }
+.sup-thread { list-style: none; margin: .2rem 0 0; padding: 0; display: grid; gap: .4rem; }
+.sup-thread li { padding: .5rem .65rem; border-radius: 12px; background: rgba(255, 255, 255, .05); }
+.sup-thread li.from-admin { background: rgba(85, 209, 135, .14); border: 1px solid rgba(85, 209, 135, .35); }
+.sup-thread li p { margin: .25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.sup-card-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.sup-card-acts textarea { flex: 1 1 100%; min-height: 4.5rem; }
+body.easy .sup-card-acts .btn { min-height: 56px; }
+
+/* the chat window: 📮 문의 · 🚨 신고 */
+.chat-quick .sup-cq { width: auto; padding: 0 .55rem; gap: .25rem; display: inline-flex; align-items: center; }
+.chat-quick .sup-cq-t { font-size: .78rem; font-weight: 700; }
+.chat-kid-row .sup-ck { min-width: 64px; }
+
+/* the HUD chip: an answer arrived */
+.sup-chip {
+  position: fixed; z-index: 60; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 66px); transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; padding: 0 1rem; border-radius: 999px;
+  border: 2px solid rgba(85, 209, 135, .9); background: rgba(24, 40, 28, .88); color: #fdf8ec; font-weight: 800; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+}
+.sup-chip .emoji { font-size: 1.2rem; }
+body.easy .sup-chip { min-height: 56px; font-size: 1.05rem; }
+
+@media (max-width: 560px) {
+  .sup-kinds { grid-template-columns: minmax(0, 1fr); }
+  .sup-kind { grid-template-columns: auto 1fr; justify-items: start; text-align: left; min-height: 64px; column-gap: .7rem; }
+  .sup-kind .emoji { grid-row: span 2; align-self: center; }
+  .sup-kid-row { grid-template-columns: minmax(0, 1fr); }
+  .sup-chip { top: calc(env(safe-area-inset-top, 0px) + 58px); }
+}
+@media (prefers-reduced-motion: reduce) { .sup-kind { transition: none; } }

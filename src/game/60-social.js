@@ -2147,6 +2147,8 @@
         try {
           await G.net.request('chat/report.php', { body: payload, timeout: 8000 });
           if (!opts.quiet) G.ui.toast('신고가 접수되었어요. 운영자가 확인 후 조치할 예정이에요.', { type: 'success', emoji: '🚨' });
+          // [support] CONTRACT §18.1: the same report also becomes a 🚨 ticket with a picture of the chat (78-support.js)
+          G.bus.emit('chat:reported', { name: payload.target, targetId: payload.targetId, messageId: payload.messageId, reason, memo: payload.memo });
         } catch (e) {
           if (!opts.quiet) G.ui.toast(e?.message || '신고를 접수하지 못했어요. 잠시 후 다시 시도해 주세요.', { type: 'error' });
           return false;

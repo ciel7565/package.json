@@ -260,6 +260,7 @@
       F('48-interior-data.js', 'edu', '한옥 방 전시 75점(조사한 사실 57·박물관 그림 12·분양 안내 6)과 움직이는 그림 10편의 대본 (순수 데이터)'), // [exhibits]
       F('49-exhibits.js', 'edu', '한옥 전시(G.sys.exhibits): 아이 카드·집 구경 도감(도장)·움직이는 그림 10편(2D 캔버스)·방 안 그림판·전시 붙이기'), // [exhibits]
       F('74-lecture.js', 'edu', '강의실(G.sys.lecture): 강의 카드·유튜브 재생(바깥으로 못 나가는 틀)·그림 슬라이드·PDF·PPTX 간단 보기·기본 슬라이드·방 안 강의 화면·입장 때 강의 보기 (§17.3)'), // [lecture]
+      F('78-support.js', 'devcenter', '신고·문의(G.sys.support): 화면 사진(채팅 창은 가림)·버그 신고/문의/신고·쉬운 모드 그림 신고·기기 정보·내 문의와 운영자 답·답 알림·로컬 보낼 함 (§18.1)'), // [support]
       F('75-myroom.js', 'buildings', '내 방(G.sys.myroom, PL_MYROOM): 분양받은 사람이 꾸미는 한옥 방 — 방 꾸미기(그림 판·끌어 놓기·돌리기·색·되돌리기)·꾸며 둔 방 3개·이 기기/서버 저장·안내 카드 (§17.4)'), // [myroom]
       F('76-myroom-data.js', 'buildings', '내 방 물건 148가지·색·방 모양·놓는 규칙(문 앞 비우기·벽·창문·상 위)·꾸며 둔 방 3개 — 서버 검사표의 원본 (순수 데이터)'), // [myroom]
       F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
@@ -298,6 +299,7 @@
       F('47-journal.css', 'edu', '작업일지'),
       F('49-exhibits.css', 'edu', '전시 카드·집 구경 도감·움직이는 그림 재생기'), // [exhibits]
       F('74-lecture.css', 'edu', '강의실 창·강의 카드·슬라이드 종이 카드·넘김 단추·방 안 강의 보기 카드'), // [lecture]
+      F('78-support.css', 'devcenter', '문의·신고 창·종류 카드·분류·화면 사진 미리 보기·내 문의 카드와 답·채팅 창 문의/신고 단추·답 알림 칩'), // [support]
       F('75-myroom.css', 'buildings', '방 꾸미기 화면(위 막대·물건 판·고른 물건 단추)·방 꾸미기 단추·창문 고르기 판·안내 카드'), // [myroom]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
@@ -458,6 +460,7 @@
   EXPECTED_SYSTEMS.push('allot');   // [allot-client] 43-allot.js
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
   EXPECTED_SYSTEMS.push('lecture');   // [lecture] 74-lecture.js
+  EXPECTED_SYSTEMS.push('support');   // [support] 78-support.js
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
@@ -1468,6 +1471,10 @@
     { id: 'lecture', emoji: '🎓', label: '강의실 (강의 고르기)', fn: () => { const f = fnOf(G.sys.lecture, 'open'); return f && (() => f()); } },
     { id: 'lecdeck', emoji: '📚', label: '강의 슬라이드', fn: () => { const f = fnOf(G.sys.lecture, 'open'); const d = (G.sys.lecture?.list?.() || []).find((l) => l.kind === 'deck'); return f && d ? () => f(d.id) : null; } },
     { id: 'lecvideo', emoji: '▶️', label: '강의 영상 (재생 화면)', fn: () => { const L = G.sys.lecture; if (!L?._internal?.cleanLecture || typeof L.open !== 'function') return null; return () => { const v = L._internal.cleanLecture({ id: 999001, kind: 'youtube', title: '영상 강의 미리 보기', yt: 'aaaaaaaaaaa', place: '' }); L._srv = [v, ...L._srv.filter((x) => x.id !== 999001)]; L.open(999001); }; }, close: () => { try { const L = G.sys.lecture; L.close(); L._srv = L._srv.filter((x) => x.id !== 999001); } catch (e) { /* ignore */ } } },
+    // [support] 신고·문의 (§18.1): the picture tiles of a child's report, the grown-up window and 내 문의 (file mode: the outbox)
+    { id: 'support', emoji: '📮', label: '어른에게 알려요 (그림 신고)', fn: () => { const f = fnOf(G.sys.support, 'open'); return f && (() => f()); } },
+    { id: 'supportsend', emoji: '📤', label: '신고 보내기 (사진 고르기)', fn: () => { const f = fnOf(G.sys.support, 'open'); return f && (() => f('bug', { category: 'stuck' })); } },
+    { id: 'supportmine', emoji: '📋', label: '내 문의', fn: () => fnOf(G.sys.support, 'openMine') },
     // [myroom] 내 방 (§17.4): the card that says what the room is, and the edit mode itself (its bars and tray are not a
     // modal: the scope is its own root) — the edit mode can be opened only while the player stands in the room
     { id: 'myroomcard', emoji: '🏠', label: '내 방 안내 카드', fn: () => fnOf(G.sys.myroom, 'explain') },

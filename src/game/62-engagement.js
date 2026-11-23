@@ -207,7 +207,7 @@
   // ---------------------------------------------------------------- notifications
   // farm / rtbook (phase 7, CONTRACT §15.3): a completion request was decided -> the 📬 확인 기록장 of 42-realfarm
   const NTYPES = { achievement: '🏆', quest: '📜', level: '⭐', collection: '📖', reward: '🎁', mention: '💬', ferment: '🏺', mission: '🎯', checkin: '📅', cert: '🎓', decor: '🏡', farm: '📬', system: '🔔' };
-  const NACTS = new Set(['quests', 'achievements', 'collection', 'profile', 'jar', 'chat', 'inventory', 'checkin', 'missions', 'inbox', 'cert', 'rank', 'decor', 'rtbook', 'allot']); // allot: a 분양 notice → the 분양 panel's 알림 [allot-client]
+  const NACTS = new Set(['quests', 'achievements', 'collection', 'profile', 'jar', 'chat', 'inventory', 'checkin', 'missions', 'inbox', 'cert', 'rank', 'decor', 'rtbook', 'allot', 'support']); // allot: a 분양 notice → the 분양 panel's 알림 [allot-client] · support: an answer of the operator → 📋 내 문의 [support]
   // a mention keeps no chat words in the saved inbox (it goes to the server save too): fixed title and line; who
   // said what lives only in memory for this session (_mentionLive) and leaves with a moderation retraction
   const MENTION_TITLE = '친구가 나를 불렀어요';
@@ -1440,6 +1440,7 @@
         inventory: () => G.sys.inventory?.open?.(),
         rtbook: () => G.sys.realfarm?.openBook?.(),
         allot: () => G.sys.allot?.open?.('inbox'), // [allot-client]
+        support: () => G.sys.support?.openMine?.(), // [support]
         ...kidFns,
       };
       const fn = fns[act];
