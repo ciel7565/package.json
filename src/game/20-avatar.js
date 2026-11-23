@@ -2122,13 +2122,26 @@
       this.face.castShadow = false;
       this.face.receiveShadow = true;
       this.heightMul = app.height;
-      this.scaler.scale.setScalar(app.height);
-      this.height = this.K.height * app.height;
+      // [settings] §18.2 캐릭터 크기: the drawn size of the player's own rig (setDrawScale) stays across look changes
+      const ds = this.drawScale || 1;
+      this.scaler.scale.setScalar(app.height * ds);
+      this.height = this.K.height * app.height * ds;
       const top = app.style === 'real' ? (HEAD_TOP_REAL[app.hat] || 1.69) + (app.hair === 'bun' && app.hat === 'none' ? 0.02 : app.hair === 'sangtu' && app.hat === 'none' ? 0.04 : 0)
         : HEAD_TOP[app.hat] || (app.hair === 'bun' ? 1.47 : 1.43);
       this.headAnchor.position.set(0, top + 0.08 - this.K.bones[B.head][3], 0);
       this._faceFace = '';
       return app;
+    }
+
+    /** [settings] §18.2 캐릭터 크기: draw this rig k times its size (0.8 – 1.3; feet stay on the ground, rig.height follows
+     *  so the camera frames the head; collisions are the player's and do not change) */
+    setDrawScale(k) {
+      const s = Math.min(1.3, Math.max(0.8, Number(k) || 1));
+      this.drawScale = s;
+      const hm = this.heightMul || 1;
+      this.scaler.scale.setScalar(hm * s);
+      this.height = this.K.height * hm * s;
+      return s;
     }
 
     /** switch the skeleton (bone rest positions + inverse binds), the kinematics and the face decal to another style */

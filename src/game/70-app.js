@@ -3474,6 +3474,8 @@
     return openFullSettings(tab || 'sound');
   }
   function openFullSettings(tab = 'sound') {
+    // [settings] §18.2: the settings window of 68-settings.js shows these panes inside its twelve tabs
+    if (typeof G.sys.settings?.openWindow === 'function') { try { return G.sys.settings.openWindow(tab); } catch (e) { G.log.warn('UI', 'settings window failed — the old one opens', e); } }
     const ex = G.ui.modal.get('app-settings');
     if (ex) ex.close();
     const tabs = easyOn() ? [SETTINGS_TABS.find((t) => t.id === 'kids'), ...SETTINGS_TABS.filter((t) => t.id !== 'kids')] : SETTINGS_TABS;
@@ -3923,6 +3925,8 @@
     }
     return f;
   };
+  // [settings] §18.2: the panes above (with their builders, ids and labels) move into the settings window (68-settings.js)
+  try { G.sys.settings?.adoptPanes?.({ tabs: SETTINGS_TABS, panes: SETTINGS_PANES, keys: SETTINGS_KEYS }); } catch (e) { G.log.warn('UI', 'settings panes not handed over', e); }
 
   // ---------------------------------------------------------------- 계정 tab: info, password change, delete account
   const AccountPane = {
@@ -5919,6 +5923,14 @@
     saveNow,
   };
   G.app = app;
+  // [settings] 도움말 → 처음 안내 다시 보기 (the same as the developer centre's button); false when it cannot start
+  app.replayTutorial = () => {
+    if (!app.loggedIn || !G.state || G.flags.noTutorial) { G.ui.toast(G.flags.noTutorial ? '주소에 notutorial=1이 있어 처음 안내가 꺼져 있어요.' : '로그인한 뒤에 볼 수 있어요.', { type: 'info' }); return false; }
+    G.state.tutorial = { step: 0, done: false };
+    G.dirty('tutorial');
+    try { Onboarding.start(0); } catch (e) { G.log.warn('UI', 'tutorial replay failed', e); return false; }
+    return true;
+  };
 
   // ================================================================ system (actions, hotkeys, per-frame onboarding/debug)
   G.register({

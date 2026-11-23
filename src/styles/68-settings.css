@@ -1,0 +1,128 @@
+/* =============================================================================
+   68-settings.css — the settings window (CONTRACT §18.2, lane settings) and what its 화면 구성 options change:
+   text size (--text-k), name plates, minimap size, HUD / chat opacity, touch layout. Motion: opacity / transform only;
+   reduce-motion respected.
+   ============================================================================= */
+:root { --text-k: 1; --mm-k: 1; --hud-a: 1; --chat-a: 1; --tb-k: 1; }
+
+/* ---------------------------------------------------------------- the window */
+.modal.set-window { width: min(68rem, 100%); }
+.set-window .modal-body { padding: .7rem 1rem 1rem; display: flex; flex-direction: column; min-height: min(36rem, 70vh); }
+.sw-top { display: flex; gap: .6rem; align-items: center; margin-bottom: .6rem; }
+.sw-search {
+  flex: 1; min-width: 0; min-height: 2.6rem; padding: .45rem .9rem; border-radius: 12px; font: inherit; font-size: .95rem;
+  background: rgba(0, 0, 0, .28); border: 1px solid var(--line); color: var(--text);
+}
+.sw-search:focus-visible { outline: 2px solid var(--green-l); outline-offset: 2px; }
+.sw-main { display: grid; grid-template-columns: 11.5rem minmax(0, 1fr); gap: 1rem; flex: 1; min-height: 0; }
+.set-window .set-tabs.sw-tabs {
+  position: sticky; top: 0; align-self: start; display: flex; flex-direction: column; gap: .15rem; margin: 0; padding: .25rem;
+  background: rgba(0, 0, 0, .2); border-radius: 14px; border: 1px solid var(--line);
+}
+.set-window .sw-tabs .tab { justify-content: flex-start; text-align: left; width: 100%; padding: .55rem .7rem; border-radius: 10px; font-size: .9rem; }
+.set-window .sw-tabs .tab[aria-selected="true"] { background: var(--bg-elev-2); color: var(--text); }
+.set-window .sw-tabs .tab-ink { display: none; }
+.sw-pane { min-width: 0; }
+.sw-head { margin: 0 0 .5rem; }
+.sw-head h3 { margin: 0; font-size: 1.12rem; display: flex; align-items: center; gap: .35rem; }
+.sw-lead { margin: .2rem 0 0; font-size: .82rem; color: var(--text-mute); line-height: 1.45; }
+.sw-group { margin: .4rem 0 .9rem; padding: .2rem .7rem; border-radius: 14px; background: rgba(255, 255, 255, .03); border: 1px solid var(--line); }
+.sw-gtitle { margin: .55rem .1rem .1rem; font-size: .8rem; font-weight: 800; letter-spacing: .02em; color: var(--gold); }
+.sw-ktitle { margin: .7rem .1rem 0; font-size: .78rem; color: var(--text-dim); }
+.sw-row.sw-off { opacity: .62; }
+.sw-why { color: #ffc9a6 !important; }
+.sw-restart { color: #a6d8ff !important; }
+.sw-where { color: var(--green-l) !important; }
+.sw-row.sw-flash { animation: sw-flash 1.6s var(--ease-out) 1; }
+@keyframes sw-flash { 0%, 60% { background: rgba(244, 197, 74, .14); } 100% { background: transparent; } }
+.sw-seg { flex-wrap: wrap; justify-content: flex-end; }
+.sw-seg button { min-height: 2.3rem; }
+.sw-seg button .emoji { margin-right: .2rem; }
+.sw-select { min-height: 2.3rem; padding: .3rem .6rem; border-radius: 10px; background: rgba(0, 0, 0, .3); color: var(--text); border: 1px solid var(--line); font: inherit; max-width: 100%; }
+.sw-test { min-width: 2.3rem; padding: .2rem .45rem; }
+.sw-info { font-size: .82rem; color: var(--text-dim); text-align: right; max-width: 22rem; }
+.sw-legacy { margin: .3rem 0 .8rem; padding: 0 .7rem; border-radius: 14px; border: 1px dashed var(--line); }
+.sw-jump { margin: .25rem .3rem .25rem 0; }
+/* keys */
+.sw-key { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .4rem; }
+.sw-caps { display: inline-flex; gap: .25rem; flex-wrap: wrap; }
+.sw-caps kbd, .sw-hkeys kbd, .sw-fixed kbd { min-width: 1.9rem; text-align: center; }
+.sw-rebind.waiting { background: rgba(244, 197, 74, .22); color: #ffe7a6; }
+.sw-keynote { flex-basis: 100%; text-align: right; font-size: .78rem; color: #ffd79a; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .35rem; align-items: center; }
+.sw-keynote:empty { display: none; }
+.sw-keyfoot { display: flex; justify-content: flex-end; padding: .5rem 0; }
+.sw-keys .sw-row { padding: .45rem .2rem; }
+/* help */
+.sw-hgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: .6rem; margin: .4rem 0 .8rem; }
+.sw-hcard { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); gap: .6rem; padding: .7rem; border-radius: 14px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); }
+.sw-hpic { width: 3.2rem; height: 3.2rem; border-radius: 12px; display: grid; place-items: center; font-size: 1.8rem; background: radial-gradient(circle at 40% 30%, rgba(255, 236, 190, .22), rgba(0, 0, 0, .15)); }
+.sw-hbody { min-width: 0; display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; }
+.sw-hbody > b { font-size: .95rem; }
+.sw-hbody p { margin: 0; font-size: .84rem; line-height: 1.55; color: var(--text-dim); word-break: keep-all; overflow-wrap: anywhere; }
+.sw-hkeys { display: flex; flex-wrap: wrap; gap: .2rem; }
+.sw-hsay { padding: .15rem .45rem; }
+.sw-hfoot { display: flex; flex-wrap: wrap; gap: .5rem; margin: .4rem 0; }
+/* the Ctrl card shown again from 도움말 */
+.sw-coach {
+  position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 60; max-width: min(28rem, 90vw);
+  display: flex; flex-direction: column; align-items: center; gap: .6rem; padding: 1rem 1.2rem; border-radius: 18px; text-align: center;
+  background: rgba(253, 246, 228, .97); color: #2b2116; box-shadow: 0 12px 34px rgba(0, 0, 0, .35); animation: fadeUp var(--dur-3) var(--ease-out) both;
+}
+.sw-coach p { margin: 0; font-size: 1rem; line-height: 1.5; font-weight: 600; }
+.sw-kcap { display: inline-grid; place-items: center; min-width: 4.4rem; height: 3rem; padding: 0 .8rem; border-radius: 10px; font-weight: 800; font-size: 1.2rem; background: #fff; border: 2px solid #8a7a62; box-shadow: 0 4px 0 #8a7a62; color: #2b2116; }
+/* phones: one column */
+@media (max-width: 760px) {
+  .set-window .modal-body { padding: .5rem .6rem .8rem; }
+  .sw-main { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+  .set-window .set-tabs.sw-tabs { flex-direction: row; overflow-x: auto; scrollbar-width: none; top: -.6rem; z-index: 3; background: rgba(11, 18, 15, .96); }
+  .set-window .sw-tabs .tab { width: auto; flex: none; white-space: nowrap; padding: .5rem .65rem; font-size: .84rem; }
+  .sw-hgrid { grid-template-columns: minmax(0, 1fr); }
+  .sw-info { text-align: left; }
+  .sw-key, .sw-keynote { justify-content: flex-start; text-align: left; }
+  .sw-seg { justify-content: flex-start; }
+  .set-window .modal-foot { flex-wrap: wrap; }
+}
+@media (max-height: 460px) {
+  .set-window .modal-body { min-height: 0; }
+  .sw-main { grid-template-columns: 9.5rem minmax(0, 1fr); }
+  .set-window .set-tabs.sw-tabs { flex-direction: column; overflow-y: auto; max-height: calc(100vh - 9rem); }
+}
+body.easy .set-window .sw-tabs .tab, body.easy .sw-seg button, body.easy .sw-rebind, body.easy .sw-rekey, body.easy .sw-test, body.easy .sw-hsay { min-height: var(--tap, 56px); }
+body.easy .sw-search { min-height: var(--tap, 56px); }
+body.reduce-motion .sw-row.sw-flash, body.reduce-motion .sw-coach { animation: none; }
+@media (prefers-reduced-motion: reduce) { .sw-row.sw-flash, .sw-coach { animation: none; } }
+
+/* ---------------------------------------------------------------- 글자 크기 (textScale → --text-k) */
+body.text-scaled { font-size: calc(.9375rem * var(--text-k)); }
+body.text-scaled.large-text { font-size: calc(1.06rem * var(--text-k)); }
+body.text-scaled .set-label b { font-size: calc(.92rem * var(--text-k)); }
+body.text-scaled .set-label small { font-size: calc(.76rem * var(--text-k)); }
+body.text-scaled .modal-body p, body.text-scaled .modal-body li { font-size: calc(.9rem * var(--text-k)); }
+body.text-scaled .sw-hbody p { font-size: calc(.84rem * var(--text-k)); }
+body.text-scaled .chat-log { font-size: calc(.9rem * var(--text-k)); }
+body.text-scaled .toast { font-size: calc(.9rem * var(--text-k)); }
+body.text-scaled .dlg-text { font-size: calc(1.1rem * var(--text-k)); }
+body.text-scaled.large-text .dlg-text { font-size: calc(1.22rem * var(--text-k)); }
+body.text-scaled .dlg-choice { font-size: calc(.95rem * var(--text-k)); }
+body.text-scaled .quest-item { font-size: calc(.88rem * var(--text-k)); }
+body.text-scaled .kt-desc { font-size: calc(.86rem * var(--text-k)); }
+body.text-scaled .nametag { font-size: calc(.78rem * var(--text-k)); }
+
+/* ---------------------------------------------------------------- 이름표 */
+body.np-others .nametag.me,
+body.np-off .nametag.me, body.np-off .nametag.remote, body.np-off .nametag.visitor { opacity: 0 !important; pointer-events: none !important; }
+
+/* ---------------------------------------------------------------- 미니맵 크기 · 진하기 */
+body.mm-sized #minimap-panel { zoom: var(--mm-k); }
+body.hud-faded #hud .glass:not(:hover):not(:focus-within):not(.chat-panel) { opacity: var(--hud-a); transition: opacity var(--dur-3) var(--ease-out); }
+body.chat-faded #chat-panel:not(:hover):not(:focus-within) { opacity: var(--chat-a); transition: opacity var(--dur-3) var(--ease-out); }
+
+/* ---------------------------------------------------------------- the bottom bar's ⚙️ 설정 */
+.bottom-bar [data-action=settings] .ico { color: #e8d9b0; }
+body.easy .bottom-bar [data-action=settings] .bb-emo { font-size: 1.6rem; }
+
+/* ---------------------------------------------------------------- touch layout (device scope) */
+body.stick-right .joystick { left: auto !important; right: calc(var(--gap, 1rem) + .4rem); }
+body.stick-right .mobile-buttons { right: auto; left: 1rem; scale: -1 1; }
+body.stick-right .mobile-buttons button > * { scale: -1 1; }
+body.tb-sized .mobile-buttons button { scale: var(--tb-k); }

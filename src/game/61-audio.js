@@ -35,9 +35,16 @@
 //   musicGugak (전통 음악 on / off) · muted. Operator defaults: G.site.get('sound.music_on' | 'sound.volume_music' |
 //   'sound.volume_sfx' | 'sound.volume_nature' | 'sound.volume_voice' | 'sound.nature_on') — used while the device still
 //   has the built-in default.
+// [settings] §18.2 mixer: mixMaster · mixMusic · mixSfx · mixUi · mixVoice · mixNature (0 – 100, 100 = the balanced
+//   level above) multiply on top of those; the 'ui' channel carries the interface sounds (UI_SFX: click, open, close,
+//   notify, tap, page …), the 'voice' channel read-aloud and character voices; muteHidden (default on) suspends the
+//   sound while the window is hidden. channels() → the six factors; testChannel(ch) plays a short sample of one row.
 // =============================================================================
 (function () {
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  // [settings] the interface sounds (the 'ui' channel of the mixer)
+  const UI_SFX = new Set(['click', 'open', 'close', 'notify', 'error', 'wrong', 'oops', 'tap', 'page', 'slide', 'chat', 'correct', 'lock', 'unlock']);
+  const MIX_KEYS = ['mixMaster', 'mixMusic', 'mixSfx', 'mixUi', 'mixVoice', 'mixNature'];
   const lerp = (a, b, t) => a + (b - a) * t;
   const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -1132,14 +1139,14 @@
     init() {
       // [audio] device settings that are new in phase 9 (03-state keeps unknown keys as they are)
       const D = G.settingsDefaults || {};
-      for (const [k, v] of Object.entries({ volumeVoice: 0.9, musicGugak: true, natureSounds: true })) {
+      for (const [k, v] of Object.entries({ volumeVoice: 0.9, musicGugak: true, natureSounds: true, muteHidden: true, ...Object.fromEntries(MIX_KEYS.map((m) => [m, 100])) })) {   // [settings] mixer
         if (!(k in D)) D[k] = v;
         if (G.settings && G.settings[k] === undefined) G.settings[k] = v;
       }
       if (!AC) { G.log.info('AUDIO', 'Web Audio not supported - sound disabled'); }
       else this._armGesture();
       G.bus.on('settings:changed', ({ key } = {}) => {
-        if (/^volume|^muted$|^musicGugak$|^natureSounds$/.test(String(key))) { this._applyVolumes(); if (key === 'muted' && G.settings.muted) this.stopSpeaking(); }
+        if (/^volume|^mix|^muteHidden$|^muted$|^musicGugak$|^natureSounds$/.test(String(key))) { this._applyVolumes(); if (key === 'muted' && G.settings.muted) this.stopSpeaking(); }
         else if (key === 'easyMode') this._applyVolumes();
       });
       G.bus.on('easy:changed', () => this._applyVolumes());
@@ -1255,17 +1262,43 @@
       };
       if (!Number.isFinite(this.levels.voice)) this.levels.voice = 0.9;
       if (this._E) this._E.setLevels(this.levels, instant);
+      // [settings] the mixer rows (0 – 100, 100 = the level above); effects and interface sounds are split per play()
+      const mx = this.channels();
+      this.levels.master *= mx.master; this.levels.music *= mx.music; this.levels.ambient *= mx.nature; this.levels.voice *= mx.voice;
+      this._mixSfx = mx.sfx; this._mixUi = mx.ui;
       this._syncSuspend();
     },
     /** the 목소리 level for speech (08-easy's voice guide and speak()) */
     voiceGain() { return this.levels.voice ?? 0.9; },
 
+    /** [settings] the six mixer factors (perceptual curve; 1 = the balanced level) */
+    channels() {
+      const s = G.settings || {};
+      const k = (key) => { const v = Number(s[key]); const n = Number.isFinite(v) ? clamp(v, 0, 100) / 100 : 1; return Math.pow(n, 1.6); };
+      return { master: k('mixMaster'), music: k('mixMusic'), sfx: k('mixSfx'), ui: k('mixUi'), voice: k('mixVoice'), nature: k('mixNature') };
+    },
+    /** [settings] a short sample of one mixer row: master | music | sfx | ui | voice | nature → true when something played */
+    testChannel(ch) {
+      try {
+        if (!this.ctx) this.unlock();
+        const rel = (lvl) => (lvl || 0) / Math.max(0.05, this.levels.sfx || 0.05) / Math.max(0.05, this._mixSfx ?? 1);
+        switch (ch) {
+          case 'ui': return this.play('click', { force: true });
+          case 'sfx': return this.play('harvest', { force: true });
+          case 'voice': return this.speak('목소리가 이만큼 크게 들려요.', { force: true });
+          case 'nature': return this.play('water', { force: true, volume: rel(this.levels.ambient) });
+          case 'music': return this.play('bell', { force: true, volume: rel(this.levels.music) });
+          default: return this.play('bell', { force: true });
+        }
+      } catch (e) { return false; }
+    },
     /** suspend the context while the tab is hidden or everything is silent (saves CPU) */
     _syncSuspend() {
       const ac = this.ctx;
       if (!ac || !this.unlocked || ac.state === 'closed') return;
       const silent = this.levels.master <= 0.0001;
-      const want = document.hidden || silent ? 'suspended' : 'running';
+      const hiddenMute = G.settings?.muteHidden !== false;   // [settings] 창이 가려지면 소리 끄기
+      const want = (document.hidden && hiddenMute) || silent ? 'suspended' : 'running';
       if (want === 'suspended' && ac.state === 'running') { this._suspendedByUs = true; ac.suspend().catch(() => {}); }
       else if (want === 'running' && ac.state === 'suspended') {
         this._suspendedByUs = false;
@@ -1290,6 +1323,9 @@
         if (last != null && now - last < min && !o.force) return false;
         let vol = (o.volume ?? 1) * (kid ? (EASY_GAIN[name] ?? 1) : 1), pan = o.pan || 0;
         if (o.at && Number.isFinite(o.at.x)) { // distance attenuation + panning from the camera
+        const chan = UI_SFX.has(name) ? (this._mixUi ?? 1) : (this._mixSfx ?? 1);   // [settings] 효과음 · UI 효과음 rows
+        if (chan <= 0.0001) return false;
+        vol *= chan;
           const cam = G.sys.engine?.camera;
           if (cam) {
             const dx = o.at.x - cam.position.x, dz = o.at.z - cam.position.z;
