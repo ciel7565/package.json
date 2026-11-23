@@ -164,11 +164,13 @@
       if (typeof req !== 'function') return 'unsupported';
       if (this._fsOn()) return 'ok';
       const scr = this._pickedScreen();
+      // a request the browser neither grants nor refuses (seen without a press in some builds) counts as refused after 3 s
+      const ask = (o) => Promise.race([Promise.resolve(req.call(root, o)), new Promise((res, rej) => setTimeout(() => rej(new Error('fullscreen: no answer')), 3000))]);
       try {
-        try { await req.call(root, scr ? { navigationUI: 'hide', screen: scr } : { navigationUI: 'hide' }); }
-        catch (e) { if (!scr) throw e; await req.call(root, { navigationUI: 'hide' }); }   // the chosen screen was refused: this one
+        try { await ask(scr ? { navigationUI: 'hide', screen: scr } : { navigationUI: 'hide' }); }
+        catch (e) { if (!scr || this._fsOn()) throw e; await ask({ navigationUI: 'hide' }); }   // the chosen screen was refused: this one
         return 'ok';
-      } catch (e) { return 'refused'; }
+      } catch (e) { return this._fsOn() ? 'ok' : 'refused'; }
     },
     exitFullscreen() {
       if (!this._fsOn()) return;

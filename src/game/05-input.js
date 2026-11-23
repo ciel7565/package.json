@@ -613,6 +613,10 @@
         ml._chip = c;
       }
       if (c.hidden) c.hidden = false;
+      // sit 8 px above the bottom bar wherever it is (its height changes with easy mode and the UI size)
+      const bar = document.getElementById('bottom-bar'), br = bar && !bar.hidden ? bar.getBoundingClientRect() : null;
+      const bottom = br && br.height > 0 && br.top > innerHeight * 0.5 ? Math.round(innerHeight - br.top + 8) + 'px' : '86px';
+      if (c.style.bottom !== bottom) c.style.bottom = bottom;
       if (c._key === key) return;
       c._key = key;
       c.textContent = fixed ? '🖱️ 고정' : (k ? `🖱️ 자유 · ${k}` : '🖱️ 자유');

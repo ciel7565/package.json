@@ -68,6 +68,8 @@ const check = (name, okIn, detailIn = '') => {
   if (detail === '') { try { detail = typeof detailIn === 'function' ? detailIn() : detailIn; } catch (e) { detail = ''; } }
   results.push({ name, ok: !!ok, detail: String(detail ?? '').slice(0, 600) }); log(`${ok ? '  ✔' : '  ✖'} ${name}${detail !== '' && detail != null ? ` — ${String(detail).slice(0, 400)}` : ''}`); };
 const J = (v) => JSON.stringify(v);
+// a CSS filter as the browser gives it back ("brightness(0.62)" for "brightness(0.620)") → its number, rounded to 3 places
+const cssB = (f) => { const m = /brightness\(([\d.]+)\)/.exec(String(f || "")); return m ? Math.round(Number(m[1]) * 1000) / 1000 : null; };
 
 const browser = await chromium.launch({ headless: !flag('--headed'), args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'] });
 const pageErrors = [], consoleErrors = [];
@@ -191,7 +193,7 @@ async function lowPage() {
       return out;
     });
     numbers.brightnessLow = r;
-    check('밝기 on `low`: a CSS filter on the canvas (0 → brightness(0.620), 100 → brightness(1.400)), none at 50', () => (!r.composer && r.b0.filter === 'brightness(0.620)' && r.b100.filter === 'brightness(1.400)' && r.b50.filter === '' && r.back.filter === '' && r.b0.path === 'css' && r.b50.path === 'none'), () => (J([r.b0.filter, r.b50.filter, r.b100.filter])));
+    check('밝기 on `low`: a CSS filter on the canvas (0 → brightness(0.620), 100 → brightness(1.400)), none at 50', () => (!r.composer && cssB(r.b0.filter) === 0.62 && cssB(r.b100.filter) === 1.4 && r.b50.filter === '' && r.back.filter === '' && r.b0.path === 'css' && r.b50.path === 'none'), () => (J([r.b0.filter, r.b50.filter, r.b100.filter])));
     check('… the frame itself is the same frame (low stays frozen): mean brightness within 1.5 of 255', () => (Math.abs(r.b0.luma.mean - r.b50.luma.mean) < 1.5 && Math.abs(r.b100.luma.mean - r.b50.luma.mean) < 1.5), () => (J([r.b0.luma.mean, r.b50.luma.mean, r.b100.luma.mean])));
     check('… and the watchdog stays quiet at 0, 50 and 100', () => ([r.b0, r.b50, r.b100].every((x) => x.p1 && !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0)), () => (J([r.b0.p2, r.b100.p2])));
   } catch (e) { check('[low] the group "brightness" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
@@ -341,7 +343,7 @@ async function lowPage() {
       if (P.enter() !== false) {
         await H.frames(3);
         const ph = await P.capture();
-        await H.wait(600);
+        for (let i = 0; i < 40 && ph && !P._full.get(ph.id); i++) await H.wait(250);   // (toBlob of the full-size picture is slow on software GL)
         const full = ph ? P._full.get(ph.id) : null;
         out.album = { n: (G.state.photos || []).length - n0, fmt: ph && ph.fmt, name: full && full.name };
         P.exit({ silent: true });
@@ -378,7 +380,8 @@ async function lowPage() {
     await page.waitForTimeout(6000);   // (the key presses above count as a press for about five seconds)
     const chip = await page.evaluate(async () => {
       const H = window.__dt;
-      G.setSetting('windowMode', 'fullscreen'); await H.wait(1200);
+      G.setSetting('windowMode', 'fullscreen');
+      for (let i = 0; i < 24; i++) { await H.wait(250); const c0 = document.getElementById('display-fs-chip'); if (document.fullscreenElement || (c0 && !c0.hidden)) break; }   // (a refusal can take up to 3 s)
       const c = document.getElementById('display-fs-chip');
       const out = { fs: !!document.fullscreenElement, chip: !!c && !c.hidden, text: c ? c.querySelector('.dfs-go')?.textContent : '', say: c ? c.querySelector('.dfs-go')?.dataset.say : '', h: c ? c.querySelector('.dfs-go').getBoundingClientRect().height : 0 };
       if (c) c.querySelector('.dfs-no').click();
@@ -432,7 +435,7 @@ async function lowPage() {
     });
     numbers.persist = r;
     check('after a reload every chosen value is still chosen (and the rebound key)', () => (J(r.v) === J([70, 'medium', 4, '30', '960x540', 3, 'medium', 'webp']) && J(r.bag) === J(['KeyU'])), () => (J([r.v, r.bag])));
-    check('… and applied without anyone opening the settings: filter, far plane, effect range, frame limit, drawing size, own-effect share, particle share', () => (r.applied.css === 'brightness(1.160)' && r.applied.far === 1300 && r.applied.range === 22 && r.applied.limit === 30 && J(r.applied.canvas) === J([960, 540]) && r.applied.self === 0.42 && r.applied.share === 0.7), () => (J(r.applied)));
+    check('… and applied without anyone opening the settings: filter, far plane, effect range, frame limit, drawing size, own-effect share, particle share', () => (cssB(r.applied.css) === 1.16 && r.applied.far === 1300 && r.applied.range === 22 && r.applied.limit === 30 && J(r.applied.canvas) === J([960, 540]) && r.applied.self === 0.42 && r.applied.share === 0.7), () => (J(r.applied)));
     check('back to the defaults: no filter, 3000 m, no limit, I opens the bag again', () => (r.reset.css === '' && r.reset.far === 3000 && r.reset.limit === 0 && J(r.reset.bag) === J(['KeyI']) && r.reset.custom === false), () => (J(r.reset)));
   } catch (e) { check('[low] the group "persist" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   const end = await page.evaluate(() => { const W = G.gfx.guard.watchdog; return { step: W.step, state: W.state, quality: G.sys.engine.quality, composer: !!G.sys.engine.composer }; });
