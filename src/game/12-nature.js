@@ -2590,6 +2590,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       if (this.real) {
         this._scheduleFoliage();
         G.bus.on('engine:quality', () => this._vegQuality());
+        G.bus.on('engine:view', () => this._vegQuality());   // [gfx] view distance / grass density changed (engine.setView)
         this.counts.vegSetupMs = VEG.setupMs; this.counts.vegSetupParts = VEG.setupParts;
       }
       G.log.info('WORLD', 'nature', JSON.stringify(this.counts));
@@ -2613,10 +2614,13 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     _vegQuality() {
       if (!this.real) return;
       const q = G.sys.engine?.quality || 'high';
-      for (const f of VEG.forests) f.setWant(q === 'high' ? 1 : q === 'medium' ? 0.85 : 0.6);
+      // [gfx] the player's view distance and grass density (CONTRACT §18.2; engine.setView, 1 = as the preset has it)
+      const vk = Number(G.sys.engine?.viewVeg), gk = Number(G.sys.engine?.viewGrass);
+      const viewK = Number.isFinite(vk) ? Math.min(1, Math.max(0.3, vk)) : 1, grassK = Number.isFinite(gk) ? Math.min(1, Math.max(0, gk)) : 1;
+      for (const f of VEG.forests) f.setWant((q === 'high' ? 1 : q === 'medium' ? 0.85 : 0.6) * viewK);
       const g = this.meshes.grass;
       if (g && this._grassTotal) {
-        const want = q === 'high' ? 1 : q === 'medium' ? 0.5 : 0.22;
+        const want = (q === 'high' ? 1 : q === 'medium' ? 0.5 : 0.22) * grassK;
         g.geometry.instanceCount = Math.max(1, Math.round(this._grassTotal * Math.min(1, want / Math.max(0.05, this._grassDens || 1))));
       }
       this._a2cT = 0;

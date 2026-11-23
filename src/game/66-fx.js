@@ -26,6 +26,11 @@
 //   G.fx.doubleJump(pos?) -> spawned count                              double jump (CONTRACT §14.2): a small ring + 6–10
 //        pooled sparkles at the feet; off at fxLevel 'off'; also played on G.bus 'player:jump' {n: 2, pos?} — calls
 //        within 150 ms are one effect (21-player calls it AND emits the event)
+//   G.fx.setQuality(share) / setRange(metres) / setSelfAlpha(0..1)       [gfx] the player's options (CONTRACT §18.2,
+//        67-display.js): 이펙트 퀄리티 = the share of particles every burst makes (1 · 0.7 · 0.4) · 이펙트 가시거리 = bursts,
+//        ripples, floating emoji and G.ffx particles farther than this from the character and from the camera are not made · 이펙트 투명화(자신) =
+//        what is left of the player's OWN effects (foot dust, speed lines + sprint vignette, afterimages, ground ribbon,
+//        footprints, landing ring, double-jump sparkles, the teleport portal). G.fx.options() reads them back.
 //   G.fx.quarantine(on) / G.fx.quarantined()                            black-region guard (CONTRACT §14.4, watchdog
 //        ladder step 1): every 3D effect of this module off (pools emptied, motion layer + banner hidden, no new 3D
 //        effects) until quarantine(false); the 2D celebrations (stamp, level-up show, coins) stay
@@ -88,7 +93,20 @@
     if (l > 1 && ((G.settings && G.settings.reduceMotion) || osReduce())) l = 1;
     return l;
   }
-  const mult = () => { const l = lv(); return l === 2 ? 1 : l === 1 ? 0.45 : 0; };
+  // [gfx] the player's options (see the header): neutral until 67-display.js sets them
+  let QUAL = 1, RANGE = Infinity, SELF = 1;
+  const mult = () => { const l = lv(); return (l === 2 ? 1 : l === 1 ? 0.45 : 0) * QUAL; };
+  /** [gfx] is a spot within the effect distance? Measured from the character AND from the camera (the nearer one counts):
+   *  what happens round the character is always made, however far the camera has zoomed out, and so is what happens
+   *  right in front of a camera that left the character (a photo, a scripted shot). */
+  function inRange(x, y, z) {
+    if (RANGE === Infinity) return true;
+    const r2 = RANGE * RANGE, p = G.sys.player?.position, c = G.sys.engine?.camera?.position;
+    if (!p && !c) return true;
+    if (p) { const dx = x - p.x, dy = y - p.y, dz = z - p.z; if (dx * dx + dy * dy + dz * dz <= r2) return true; }
+    if (c) { const dx = x - c.x, dy = y - c.y, dz = z - c.z; if (dx * dx + dy * dy + dz * dz <= r2) return true; }
+    return false;
+  }
   const motion = () => !(G.settings && G.settings.reduceMotion) && !osReduce();
   const kidOn = () => !!(G.easy ? G.easy.on : G.settings?.easyMode !== false);
 
@@ -551,6 +569,13 @@
     // ------------------------------------------------------------ public API
     level() { return LEVEL_NAMES[lv()]; },
     enabled() { return lv() > 0; },
+    // [gfx] the player's options (67-display.js)
+    setQuality(share) { const v = Number(share); QUAL = Number.isFinite(v) ? clamp(v, 0.1, 1) : 1; return QUAL; },
+    setRange(m) { const v = Number(m); RANGE = Number.isFinite(v) && v > 0 ? Math.max(4, v) : Infinity; return RANGE; },
+    setSelfAlpha(a) { const v = Number(a); SELF = Number.isFinite(v) ? clamp(v, 0, 1) : 1; return SELF; },
+    options() { return { quality: QUAL, range: RANGE, selfAlpha: SELF, level: LEVEL_NAMES[lv()] }; },
+    /** [gfx] would an effect at this spot be made? (the distance gate, for tests and other modules) */
+    inRange(pos) { const p = resolvePos(pos, _pv); return !!p && inRange(p.x, p.y, p.z); },
 
     /** burst(pos, {type,...}) or burst(type, pos, opts) -> number of particles spawned */
     burst(a, b, c) {
@@ -564,6 +589,7 @@
       const T = TYPES[type];
       const p = pos == null ? playerPos(_pv) : resolvePos(pos, _pv);
       if (!p || !this._ensure3D()) return 0;
+      if (!inRange(p.x, p.y, p.z)) return 0;   // [gfx] 이펙트 가시거리
       const n0 = Number.isFinite(+o.count) ? clamp(Math.round(+o.count), 0, 160) : T.n;
       const n = n0 ? Math.max(1, Math.round(n0 * m)) : 0;
       if (!n) return 0;
@@ -587,6 +613,7 @@
       if (follow) { if (!headPos(follow, base, 0.3)) return false; }
       else if (target == null) { if (!headPos(null, base, 0.3)) return false; }
       else if (!resolvePos(target, base)) return false;
+      if (!inRange(base.x, base.y, base.z)) return false;   // [gfx] 이펙트 가시거리
       const cell = this._emojiCell(e);
       if (cell < 0) return false;
       const inst = this._emoInst;
@@ -615,7 +642,7 @@
       if (!lv() || !this._ensure3D()) return 0;
       if (opts == null || typeof opts !== 'object') opts = {};
       const p = pos == null ? playerPos(_pv) : resolvePos(pos, _pv);
-      if (!p) return 0;
+      if (!p || !inRange(p.x, p.y, p.z)) return 0;   // ([gfx] 이펙트 가시거리)
       const col = toColor(opts.color, _c1) || _c1.set('#ffe7a0');
       const radius = clamp(Number(opts.radius) || 1.6, 0.2, 20);
       const dur = clamp(Number(opts.duration) || 0.95, 0.2, 5);
@@ -858,14 +885,15 @@
       this._djAt = now;
       const l = lv(), mo = motion();
       let k = 0;
-      resetSP(); SP.kind = K.RING; SP.flags = F_FLAT | F_GROW; SP.life = 0.42; SP.s0 = 0.25; SP.s1 = 1.3; SP.a0 = 0.8; SP.drag = 0; SP.fout = 0.35; SP.bri = 1.2;
+      if (SELF <= 0.01) return 0;   // [gfx] 이펙트 투명화(자신): the player's own effect
+      resetSP(); SP.kind = K.RING; SP.flags = F_FLAT | F_GROW; SP.life = 0.42; SP.s0 = 0.25; SP.s1 = 1.3; SP.a0 = 0.8 * SELF; SP.drag = 0; SP.fout = 0.35; SP.bri = 1.2;
       SP.color = PAL.stars[1]; SP.rot = rnd() * TAU;
       if (spawn(this._add, p.x, p.y + 0.04, p.z, 0, 0, 0) >= 0) k++;
       const n = l > 1 ? 10 : 6, a0 = rnd() * TAU;
       for (let i = 0; i < n; i++) {
         const a = a0 + (i / n) * TAU + R(-0.2, 0.2), v = mo ? R(1.1, 1.9) : 0.35;
         resetSP(); SP.kind = rnd() < 0.55 ? K.SPARK : K.STAR; SP.life = R(0.35, 0.6); SP.s0 = R(0.1, 0.17); SP.s1 = 0.02; SP.grav = -2.2; SP.drag = 2.4;
-        SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.5; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0];
+        SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.5; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0]; SP.a0 = SELF;
         if (spawn(this._add, p.x + Math.cos(a) * 0.22, p.y + 0.05, p.z + Math.sin(a) * 0.22, Math.cos(a) * v, mo ? R(-0.6, -0.1) : 0, Math.sin(a) * v) >= 0) k++;
       }
       return k;
@@ -1223,7 +1251,10 @@
       const water = surf === 'water' || p.y < (G.data.layout?.waterY ?? -1.1) - 0.02;
       let fx = Math.sin(pl.rotY || 0), fz = Math.cos(pl.rotY || 0);
       if (dir > 0) { fx = -fx; fz = -fz; }   // skid: the spray goes ahead of the feet (the "behind" below flips)
-      const n = Math.max(1, Math.round((l > 1 ? 3 : 1) * power * (dir ? 1.6 : 1)));
+      // [gfx] 이펙트 투명화(자신): the shared point pool has no alpha per particle, so the dust thins out with the option
+      // (and is gone at the last step); the own pool below fades
+      if (SELF <= 0.12) return;
+      const n = Math.max(1, Math.round((l > 1 ? 3 : 1) * power * (dir ? 1.6 : 1) * (G.ffx?.P && ffxRaw ? SELF : 1)));
       const raw = ffxRaw;
       if (raw && G.ffx?.P) {
         const Pp = G.ffx.P;
@@ -1234,7 +1265,7 @@
       }
       // own fallback
       for (let k = 0; k < n; k++) {
-        resetSP(); SP.kind = water ? K.DROP : K.PUFF; SP.life = R(0.5, 0.8); SP.s0 = 0.12; SP.s1 = water ? 0.06 : 0.42; SP.a0 = water ? 0.9 : 0.5;
+        resetSP(); SP.kind = water ? K.DROP : K.PUFF; SP.life = R(0.5, 0.8); SP.s0 = 0.12; SP.s1 = water ? 0.06 : 0.42; SP.a0 = (water ? 0.9 : 0.5) * SELF;
         SP.grav = water ? -7 : 0.3; SP.drag = 2.4; SP.floor = p.y; SP.color = water ? PAL.splash[0] : (SURFACE_DUST[surf] || SURFACE_DUST.grass);
         spawn(this._normal, p.x - fx * 0.25, p.y + 0.06, p.z - fz * 0.25, -fx * R(0.3, 0.9) + R(-0.4, 0.4), R(0.3, 0.8) * power * (water ? 3 : 1), -fz * R(0.3, 0.9) + R(-0.4, 0.4));
       }
@@ -2421,7 +2452,7 @@
       u.uTime.value = t;
       u.uStrength.value = this.slS;
       u.uAspect.value = Math.max(0.2, innerWidth / Math.max(1, innerHeight));
-      u.uAlpha.value = (kid ? 0.32 : 0.42) * (l > 1 ? 1 : 0.8);
+      u.uAlpha.value = (kid ? 0.32 : 0.42) * (l > 1 ? 1 : 0.8) * SELF;   // ([gfx] × 이펙트 투명화(자신))
       // radiate from where the run is heading on screen (the camera trails behind: near the centre)
       const cam = G.sys.engine?.camera, v = pl.velocity;
       let cx = 0, cy = 0.12;
@@ -2437,7 +2468,7 @@
       u.uCenter.value.set(this.slCx, this.slCy);
       S.geo.instanceCount = l > 1 && !lowQ() ? SL_N : 26;
       if (!S.mesh.visible) S.mesh.visible = true;
-      this._vignette(this.slS);
+      this._vignette(this.slS * SELF);
     },
     _vignette(s) {
       const q = Math.round(clamp(s, 0, 1) * 8) / 8;
@@ -2496,7 +2527,7 @@
         Hist.at(t - lag, _cv);
         x.off.set(_cv.x - p.x, _cv.y - p.y, _cv.z - p.z);
         const d = Math.hypot(x.off.x, x.off.z);
-        x.mat.uniforms.uAlpha.value = this.ghS * (k ? 0.15 : 0.24) * (kid ? 0.85 : 1) * clamp((d - 0.12) / 0.4, 0, 1);
+        x.mat.uniforms.uAlpha.value = this.ghS * (k ? 0.15 : 0.24) * (kid ? 0.85 : 1) * clamp((d - 0.12) / 0.4, 0, 1) * SELF;   // ([gfx] × 이펙트 투명화(자신))
         x.g.visible = d > 0.12 && pl.object.visible !== false;
       }
     },
@@ -2515,7 +2546,7 @@
       _rx[0] = pl.position.x; _ry[0] = pl.position.y; _rz[0] = pl.position.z;
       let tx = Math.sin(pl.rotY || 0), tz = Math.cos(pl.rotY || 0);
       const P = R0.pos, A = R0.alpha;
-      const s = this.rbS * (l > 1 ? 0.5 : 0.36);
+      const s = this.rbS * (l > 1 ? 0.5 : 0.36) * SELF;   // ([gfx] × 이펙트 투명화(자신))
       for (let i = 0; i < RB_N; i++) {
         const a = Math.max(0, i - 1), b = Math.min(RB_N - 1, i + 1);
         const dx = _rx[a] - _rx[b], dz = _rz[a] - _rz[b], dl = Math.hypot(dx, dz);
@@ -2582,7 +2613,7 @@
         const i = this.fpI;
         this.fpI = (this.fpI + 1) % FP_CAP;
         fp.mesh.setMatrixAt(i, _cm4);
-        fp.data[i * 4] = this.t; fp.data[i * 4 + 1] = clamp(a, 0, 0.6); fp.data[i * 4 + 2] = sd < 0 ? -1 : 1; fp.data[i * 4 + 3] = 0;
+        fp.data[i * 4] = this.t; fp.data[i * 4 + 1] = clamp(a, 0, 0.6) * SELF; fp.data[i * 4 + 2] = sd < 0 ? -1 : 1; fp.data[i * 4 + 3] = 0;
         _c2.setHex(col);
         fp.col[i * 3] = _c2.r; fp.col[i * 3 + 1] = _c2.g; fp.col[i * 3 + 2] = _c2.b;
       }
@@ -2593,18 +2624,18 @@
 
     /** dust shock ring + a crown of puffs blown outwards on a landing (normal blending: dust, not light) */
     landRing(pl, power, l = 2) {
-      if (!fx._normal) return;
+      if (!fx._normal || SELF <= 0.01) return;   // ([gfx] 이펙트 투명화(자신): the player's own effect)
       const p = pl.position;
       let surf = 'grass';
       try { surf = G.world?.surfaceAt?.(p.x, p.z) || 'grass'; } catch (e) { surf = 'grass'; }
       if (surf === 'water') return;
       const col = SURFACE_DUST[surf] || SURFACE_DUST.grass;
-      resetSP(); SP.kind = K.SHOCK; SP.flags = F_FLAT | F_GROW; SP.life = 0.6; SP.s0 = 0.4; SP.s1 = 1.5 + power * 0.9; SP.a0 = 0.62; SP.drag = 0; SP.fout = 0.35; SP.color = col; SP.rot = rnd() * TAU;
+      resetSP(); SP.kind = K.SHOCK; SP.flags = F_FLAT | F_GROW; SP.life = 0.6; SP.s0 = 0.4; SP.s1 = 1.5 + power * 0.9; SP.a0 = 0.62 * SELF; SP.drag = 0; SP.fout = 0.35; SP.color = col; SP.rot = rnd() * TAU;
       spawn(fx._normal, p.x, p.y + 0.05, p.z, 0, 0, 0);
       const n = l > 1 ? 10 : 5, a0 = rnd() * TAU;
       for (let i = 0; i < n; i++) {
         const a = a0 + (i / n) * TAU + R(-0.15, 0.15), v = R(1.6, 2.6) * Math.min(1.6, power);
-        resetSP(); SP.kind = K.PUFF; SP.life = R(0.5, 0.75); SP.s0 = 0.16; SP.s1 = R(0.42, 0.6); SP.a0 = 0.6; SP.grav = 0.25; SP.drag = 3.2;
+        resetSP(); SP.kind = K.PUFF; SP.life = R(0.5, 0.75); SP.s0 = 0.16; SP.s1 = R(0.42, 0.6); SP.a0 = 0.6 * SELF; SP.grav = 0.25; SP.drag = 3.2;
         SP.floor = p.y; SP.color = col;
         spawn(fx._normal, p.x + Math.cos(a) * 0.25, p.y + 0.08, p.z + Math.sin(a) * 0.25, Math.cos(a) * v, R(0.25, 0.55), Math.sin(a) * v);
       }
@@ -2632,7 +2663,7 @@
       const fadeIn = clamp(P.t / 0.1, 0, 1), fadeOut = 1 - smooth(0.8, 1, k);
       const u = P.colMat.uniforms;
       u.uTime.value = mo ? t : 0;
-      u.uOp.value = fadeIn * fadeOut * (mo ? 1 : 0.6);
+      u.uOp.value = fadeIn * fadeOut * (mo ? 1 : 0.6) * SELF;   // ([gfx] × 이펙트 투명화(자신): the player's own teleport light)
       // 'in': solid light that burns away from the feet up (the character appears); 'out': forms, then burns top-down
       u.uProg.value = mo ? (P.mode === 'in' ? smooth(0.12, 0.92, k) : smooth(0.25, 0.95, k)) : 0;
       const rad = 0.62 + (mo ? 0.08 * Math.sin(P.t * 5) : 0);
@@ -2641,7 +2672,7 @@
       P.disc.scale.setScalar(Math.max(0.05, 3.2 * (0.35 + 0.65 * grow)));
       P.disc.position.y = 0.03;
       if (mo) P.disc.rotation.y += dt * 1.1;
-      P.discMat.opacity = 0.9 * fadeIn * fadeOut;
+      P.discMat.opacity = 0.9 * fadeIn * fadeOut * SELF;
       // spiral sparks rising with the scan line
       if (mo && l > 0 && k < 0.8) {
         P.acc += dt * (l > 1 ? 30 : 12);
@@ -2650,7 +2681,7 @@
           P.acc -= 1;
           const a = P.t * 9 + (rnd() < 0.5 ? 0 : Math.PI) + R(-0.25, 0.25), r = R(0.55, 0.85);
           resetSP(); SP.kind = rnd() < 0.6 ? K.SPARK : K.STAR; SP.life = R(0.6, 1.0); SP.s0 = R(0.12, 0.22); SP.s1 = 0.02; SP.grav = 0; SP.drag = 0.6;
-          SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.6; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0];
+          SP.flags = F_TWINKLE; SP.spin = R(-3, 3); SP.bri = 1.6; SP.color = PAL.stars[(rnd() * PAL.stars.length) | 0]; SP.a0 = SELF;
           spawn(fx._add, g.x + Math.cos(a) * r, g.y + R(0.05, 0.4) + k * 1.8, g.z + Math.sin(a) * r, -Math.sin(a) * 0.9, R(1.4, 2.6), Math.cos(a) * 0.9);
         }
       }
@@ -2808,15 +2839,15 @@
     ffxRaw = { burst: oBurst, spawn: oSpawn };
     const P = F.P || {};
     const keep = new Set([P.DROP, P.SPLASH, P.STEAM, P.BUBBLE].filter(Boolean)); // functional feedback / jar status
-    const scale = (pr) => { if (keep.has(pr)) return 1; const l = lv(); return l === 2 ? 1 : l === 1 ? 0.5 : 0; };
+    const scale = (pr) => { if (keep.has(pr)) return 1; const l = lv(); return (l === 2 ? 1 : l === 1 ? 0.5 : 0) * QUAL; };   // ([gfx] × 이펙트 퀄리티)
     F.burst = function (pr, x, y, z, n, speed, up, color, floorY) {
       const s = scale(pr);
-      if (s <= 0) return;
+      if (s <= 0 || !inRange(x, y, z)) return;   // ([gfx] 이펙트 가시거리: nothing is made that far from the character and the camera)
       return oBurst.call(F, pr, x, y, z, s >= 1 ? n : Math.max(1, Math.round((n || 0) * s)), speed, up, color, floorY);
     };
     F.spawn = function (pr, x, y, z, vx, vy, vz, color, floorY) {
       const s = scale(pr);
-      if (s <= 0 || (s < 1 && rnd() > s)) return -1;
+      if (s <= 0 || (s < 1 && rnd() > s) || !inRange(x, y, z)) return -1;
       return oSpawn.call(F, pr, x, y, z, vx, vy, vz, color, floorY);
     };
     F.__fxGated = true;
@@ -2845,6 +2876,12 @@
     enabled: () => fx.enabled(),
     clear: () => fx.clear(),
     stats: () => fx.stats(),
+    // [gfx] the player's options (67-display.js)
+    setQuality: (v) => fx.setQuality(v),
+    setRange: (m) => fx.setRange(m),
+    setSelfAlpha: (a) => fx.setSelfAlpha(a),
+    options: () => fx.options(),
+    inRange: (p) => fx.inRange(p),
   };
   Object.freeze(G.fx);
 

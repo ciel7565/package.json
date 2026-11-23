@@ -28,6 +28,7 @@
 //       canvasTexture returns a 1×1 transparent texture with texture.userData.blank = true when the browser gives no
 //       2D context (Chrome caps live canvases): callers that draw text boards skip the mesh when `blank`.
 //   G.gfx.nanScrubShader         the NaN/Inf scrub shader that runs before bloom (dev-center GPU checks)
+//   G.gfx.displayShader          [gfx] the screen-brightness block added to three's OutputPass { lo, hi, glsl, patch(pass) }
 //   G.gfx.guard                  black-region guard (CONTRACT §14.4): the user's GPU draws NaN as opaque black.
 //     .watch(obj, {uniforms,     sanitation — every frame material.opacity / scale / position / quaternion and the
 //        quarantine = true})     listed uniforms (true = all) of watched objects are checked; a non-finite value hides
@@ -77,6 +78,24 @@
 //       on `low` on a software rasteriser, and takes ONE step up after 20 s of headroom (see _autoStepUp)
 //   G.sys.engine.tone            'aces' | 'agx' | 'neutral' — the tone curve in use (?tone= overrides the preset's)
 //
+// [gfx] Phase 10 (CONTRACT §18.2) — what the player's graphics options change (67-display.js sets them; every neutral
+// value leaves the picture of phase 9 as it was, and `low` stays the frozen direct render):
+//   setResolution({ w, h } | null)   the size the 3D picture is drawn at, fitted to the window's shape, never above the
+//       screen's own pixels (`low`: never above the window's); null = the preset's pixel ratio. resolutionInfo (read)
+//   setBrightness(0 … 100)           50 = unchanged. Post chain: a gamma in the output pass, after the tone curve, that
+//       leaves everything under 10/255 and over 242/255 exactly alone — the watchdog's black / white stay what they
+//       were. `low` / composer off: a CSS brightness() on the canvas (the watchdog reads the frame, not the filter).
+//   setOption('aa' | 'ao' | 'drs', bool)   anti-aliasing (MSAA of the scene target), ambient shadow, dynamic resolution
+//   setFrameLimit(fps | 0, clock?)   draw at most fps frames a second (updates keep running); 0 = every display frame
+//   setView({ far, fog, cull, veg, grass })   view distance: far plane (m; places keep their own shorter one), fog
+//       factor (applied round the draw only; engine.viewFog for shaders with their own fog uniform), cull-distance
+//       factor of small scenery, level-distance factor of the forests (viewVeg), grass share (viewGrass); 'engine:view'
+//   setEffects(0 | 1 | 2)            cap of the weather / ambience effect features (2 = the preset decides)
+//   setTextureQuality({ aniso, cap }) anisotropy cap and a size cap (px, 0 = none) for the photographed maps: applied to
+//       what is loaded and to what arrives later; the full maps come back when the cap is lifted (no restart)
+//   cssFilter(key, css)              named CSS filters on the canvas (brightness on `low`, the photo mode's live filter)
+//   displayInfo                      (read) everything above as it is in force
+//
 // Post chain (medium / high): ScenePass (the scene into ONE multisampled half-float target with a depth texture) →
 // [NaNScrub → UnrealBloom] → AtmosPass (god rays on high, sun glow, grade, vignette, dither) → OutputPass (tone curve
 // + sRGB). The two ping-pong targets of the composer are plain (no MSAA, no depth). Low renders straight to the
@@ -122,6 +141,34 @@
   const TONE_TRIM = { aces: { exposure: 1, contrast: 1, saturation: 1 }, agx: { exposure: 1.02, contrast: 1.38, saturation: 1.2, indoor: { exposure: 1.08, contrast: 1.1, saturation: 1.14 } }, neutral: { exposure: 0.96, contrast: 1.04, saturation: 1 } };
   const POST_BUDGET_BYTES = 260 * 1024 * 1024;
   const postBytesPerPixel = (p, samples) => (samples > 0 ? samples * 12 + 12 : 12) + 16 + (p.bloom ? 7.4 : 0) + (p.godrays ? 0.5 : 0) + (p.ao ? 2 : 0);
+  // [gfx] screen brightness (CONTRACT §18.2) lives in the output pass, AFTER the tone curve and the sRGB step: a gamma
+  // between two protected ends. Under DISP_LO and over DISP_HI a channel is left exactly as it is, and everything
+  // between stays between — so a pixel the screen watchdog calls black (< 6/255) or white (> 250/255) is the same pixel
+  // at every brightness, and no brightness can make one (see watchdog). Three's OutputPass is used as it is; its
+  // fragment shader gets one uniform and one block before the closing brace (no patch → the CSS filter stands in).
+  const DISP_LO = 10 / 255, DISP_HI = 242 / 255;
+  const DISP_GLSL = `
+			// [gfx] screen brightness: gamma between the protected ends (x = gamma, 1 = off; y, z = the ends)
+			if (uTfmDisp.x != 1.0) {
+				vec3 tfV = clamp(gl_FragColor.rgb, 0.0, 1.0);
+				vec3 tfU = clamp((tfV - uTfmDisp.y) / max(uTfmDisp.z - uTfmDisp.y, 1e-4), 0.0, 1.0);
+				vec3 tfW = uTfmDisp.y + (uTfmDisp.z - uTfmDisp.y) * pow(max(tfU, vec3(1e-5)), vec3(uTfmDisp.x));
+				gl_FragColor.rgb = mix(gl_FragColor.rgb, tfW, step(vec3(uTfmDisp.y), tfV) * step(tfV, vec3(uTfmDisp.z)));
+			}
+`;
+  function patchOutputPass(pass) {
+    try {
+      const m = pass && pass.material, fs = m ? String(m.fragmentShader || '') : '';
+      const head = 'uniform sampler2D tDiffuse;', end = fs.lastIndexOf('}');
+      if (!m || !pass.uniforms || fs.indexOf(head) < 0 || end < 0 || fs.indexOf('uTfmDisp') >= 0) return false;
+      m.fragmentShader = fs.slice(0, end).replace(head, head + '\n\t\tuniform vec3 uTfmDisp;') + DISP_GLSL + fs.slice(end);
+      pass.uniforms.uTfmDisp = { value: new THREE.Vector3(1, DISP_LO, DISP_HI) };
+      m.needsUpdate = true;
+      return true;
+    } catch (e) { return false; }
+  }
+  // [gfx] material slots that can hold a photographed map (the texture-quality sweep)
+  const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap', 'bumpMap', 'lightMap', 'specularMap'];
   // small-scenery cull distance (m) per preset (see engine._updateCull), measured at the default 55° field of view
   const CULL_DIST = { low: 72, medium: 125, high: 210 };
   const CULL_TAN = Math.tan(THREE.MathUtils.degToRad(55) / 2);
@@ -130,10 +177,11 @@
   // re-bakes once it moved this far (deg) since the last bake
   const ENV_SUN_STEP = { low: 6, medium: 3, high: 3 };
   // world-ambience features: minimum preset level (0 low, 1 medium, 2 high) and whether reduceMotion turns them off
+  // ([gfx] q: an effect of the weather / the air — the player's 이펙트 퀄리티 caps its level, see engine.setEffects)
   const FEATURES = {
     grade: { min: 1 }, sunGlow: { min: 1 }, godrays: { min: 2 },
-    petals: { min: 1, motion: true, fx: true }, mist: { min: 2 }, smoke: { min: 1 },
-    caustics: { min: 1 }, rainRings: { min: 1 }, splashes: { min: 0 }, lightning: { min: 0, motion: true, fx: true },
+    petals: { min: 1, motion: true, fx: true, q: true }, mist: { min: 2, q: true }, smoke: { min: 1, q: true },
+    caustics: { min: 1, q: true }, rainRings: { min: 1, q: true }, splashes: { min: 0 }, lightning: { min: 0, motion: true, fx: true },
     sway: { min: 0 },
   };
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -757,6 +805,8 @@
     get normalsRepaired() { return fixNormals.repaired; },
     /** the NaN/Inf scrub that runs before bloom (read by the dev center's GPU checks) */
     nanScrubShader: NAN_SCRUB,
+    /** [gfx] the screen-brightness block of the output pass (tests, dev center): { lo, hi, glsl, patch(outputPass) → applied? } */
+    displayShader: { lo: DISP_LO, hi: DISP_HI, glsl: DISP_GLSL, patch: patchOutputPass },
     /** 1×1 transparent texture (texture.userData.blank = true): what canvasTexture hands out when the browser gives
      *  no 2D context. Callers that draw text boards skip the mesh when `blank`. The texel is transparent WHITE: on an
      *  opaque material (terrain, paving, walls) it leaves the material colour (a transparent-black texel would turn
@@ -1314,6 +1364,12 @@
     _preRenderFns: [], _scenePass: null, aoPass: null, dofPass: null, _dof: null, _fullKeys: new Set(),
     // dynamic resolution (see _drsTick): scale within [min, cap]; cap = min(preset max, the memory budget's limit)
     _drs: { on: false, scale: 1, min: 1, max: 1, cap: 1, level: 0, ema: 0, slow: 0, fast: 0, cool: 0, upWait: 3, rest: 0, restLen: 30, full: false, inject: null, trial: null, changes: 0, clock: 0, badScale: 0, badAt: 0, _lastUpAt: 0, shadowLow: false, log: [] },
+    // [gfx] the player's display options (the [gfx] block near the end of this object): every default is neutral
+    _res: null, _resLimit: null, _opt: { aa: true, ao: true, drs: true }, _fxCap: 2,
+    _fl: { fps: 0, last: -1e9, drawn: 0, drawn0: 0, skipped: 0, clock: null },
+    _view: { far: 3000, fog: 1, cull: 1, veg: 1, grass: 1, placeFar: null }, viewFog: 1, viewVeg: 1, viewGrass: 1,
+    _bright: { value: 50, gamma: 1, css: 1, path: 'none' }, _outPass: null, _cssF: {},
+    _tex: { aniso: 16, cap: 0, changed: 0, sweeps: 0, timer: 0 },
 
     init() {
       const container = document.getElementById('game-container');
@@ -1405,6 +1461,13 @@
       // — not on the first view of the farm (R3-render-3)
       G.bus.on('state:loaded', () => { try { this._loginWarm(); } catch (e) { G.log.warn('ENGINE', 'login warm-up failed', e?.message || e); } });
       G.bus.on('game:ready', () => watchdog.hold(4000));
+      // [gfx] view distance: a place brings its own (shorter) far plane and takes the old one back when it is left —
+      // remember the place's wish, keep the nearer of the two, and put the player's choice back afterwards
+      G.bus.on('place:enter', () => { this._view.placeFar = this.camera ? this.camera.far : null; this._applyViewFar(); });
+      G.bus.on('place:exit', () => { this._view.placeFar = null; this._applyViewFar(); });
+      // [gfx] texture quality: maps that arrive later (a room being built, the pack still decoding) get the caps too
+      G.bus.on('pack:texture', () => this._texLater());
+      G.bus.on('place:built', () => this._texLater());
       document.addEventListener('visibilitychange', () => { if (!document.hidden) watchdog.hold(2500); });
       watchdog.hold(4000);
       G.log.info('ENGINE', `three r${THREE.REVISION}, quality=${this.quality}, post=${this.composer ? this.composer.passes.length + ' passes' : 'direct'}`);
@@ -1484,7 +1547,8 @@
     feature(name) {
       const f = FEATURES[name];
       if (!f) return false;
-      const lvl = this.preset?.atmos ?? 0;
+      let lvl = this.preset?.atmos ?? 0;
+      if (f.q && this._fxCap < lvl) lvl = this._fxCap;   // [gfx] 이펙트 퀄리티 (setEffects)
       if (lvl < f.min) return false;
       if (f.motion && G.settings?.reduceMotion) return false;
       if (f.fx && G.settings?.fxLevel === 'off') return false;
@@ -1655,21 +1719,21 @@
         for (const p of c.passes || []) { try { p.dispose?.(); } catch (e) { /* already gone */ } }
         try { c.dispose?.(); } catch (e) { /* ignore */ }
       }
-      this.composer = null; this.bloomPass = null; this.atmosPass = null; this._scenePass = null; this.aoPass = null; this.dofPass = null;
+      this.composer = null; this.bloomPass = null; this.atmosPass = null; this._scenePass = null; this.aoPass = null; this.dofPass = null; this._outPass = null;
     },
 
     _setupComposer() {
       this._disposeComposer();
       const D = this._drs;
-      if (!this.renderer || !this._wantsComposer()) { D.on = false; D.scale = 1; G.bus.emit('engine:features', { quality: this.quality }); G.bus.emit('engine:post', { composer: false, depthTexture: null }); return; }
+      if (!this.renderer || !this._wantsComposer()) { D.on = false; D.scale = 1; this._applyBrightness(); G.bus.emit('engine:features', { quality: this.quality }); G.bus.emit('engine:post', { composer: false, depthTexture: null }); return; }
       try {
         const r = this.renderer;
         const w = window.innerWidth, h = Math.max(1, window.innerHeight), pr = r.getPixelRatio();
         const lay = this._postLayout(w, h, pr);
         // dynamic resolution: on for the preset's range unless the quality was pinned by the ?quality= test flag
         // (screenshots and budgets stay exact); ?drs=1 / ?drs=0 decide either way
-        const range = Array.isArray(this.preset.drs) ? this.preset.drs : null, flag = G.params?.get?.('drs');
-        D.on = !!range && (flag === '1' || flag === 'on' || (!G.flags.quality && flag !== '0' && flag !== 'off'));
+        const range = Array.isArray(this.preset.drs) ? this.preset.drs : null;
+        D.on = this._drsWanted();   // ([gfx] … and the player's switch, see setOption)
         D.max = range ? clamp(fin(Number(range[1]), 1), 0.3, 1) : 1;
         D.min = range ? clamp(fin(Number(range[0]), D.max), 0.3, D.max) : 1;
         D.cap = Math.min(D.max, lay.cap);
@@ -1714,15 +1778,18 @@
           composer.addPass(ap);
           this.atmosPass = ap;
         }
-        composer.addPass(new ADDONS.OutputPass());
+        const out = new ADDONS.OutputPass();
+        if (patchOutputPass(out)) this._outPass = out;   // [gfx] the screen-brightness block (see DISP_GLSL)
+        composer.addPass(out);
         this.composer = composer;
       } catch (e) {
         G.log.warn('ENGINE', 'post-processing unavailable, rendering directly', e);
         this._disposeComposer();
         // (a chain that failed half-way was never assigned to this.composer: forget its passes too)
-        this.bloomPass = null; this.atmosPass = null; this._scenePass = null; this.aoPass = null; this.dofPass = null;
+        this.bloomPass = null; this.atmosPass = null; this._scenePass = null; this.aoPass = null; this.dofPass = null; this._outPass = null;
         D.on = false; D.scale = 1;
       }
+      this._applyBrightness();   // [gfx] the shader path with the chain, the CSS filter without it
       this._applyShed();
       G.bus.emit('engine:features', { quality: this.quality });
       G.bus.emit('engine:post', { composer: !!this.composer, depthTexture: this.depthTexture });
@@ -1732,7 +1799,7 @@
     /** MSAA sample count and the largest render scale the memory budget allows at this size (see POST_BUDGET_BYTES) */
     _postLayout(w, h, pr) {
       const p = this.preset, full = Math.max(1, w * h * pr * pr);
-      let samples = p.antialias ? 4 : 0;
+      let samples = p.antialias && this._opt.aa ? 4 : 0;   // ([gfx] the player's anti-aliasing switch)
       if (samples === 4 && full * postBytesPerPixel(p, 4) > POST_BUDGET_BYTES) samples = 2;
       const bpp = postBytesPerPixel(p, samples), cap = Math.min(1, Math.sqrt(POST_BUDGET_BYTES / (full * bpp)));
       // bytes: what the chain holds at the cap · before: the two 4× MSAA half-float targets of the chain before phase 8
@@ -1895,7 +1962,9 @@
       D.ema = D.ema > 0 ? D.ema + (m - D.ema) * (1 - Math.exp(-dt / 0.6)) : m;
       D.cool = Math.max(0, D.cool - dt); D.rest = Math.max(0, D.rest - dt);
       D.clock = (D.clock || 0) + dt;   // the controller's own clock: seconds of judged frames
-      const SLOW = 29.5, FAST = 19.5;
+      // ([gfx] with a frame limit the bounds follow it: a 30 fps limit is not "slow", it is what the player asked for)
+      const flT = this._fl.fps ? 1000 / this._fl.fps : 0;
+      const SLOW = Math.max(29.5, flT * 1.18), FAST = Math.max(19.5, flT * 1.04);
       if (D.ema > SLOW) { D.slow += dt; D.fast = 0; }
       else {
         D.trial = null;   // fast enough again: the shedding (if any) worked
@@ -1946,7 +2015,7 @@
     /** which costly effects run now: the preset, the settings and what the dynamic resolution shed */
     _applyShed() {
       const lvl = this._drs.level;
-      if (this.aoPass) this.aoPass.enabled = lvl < 1 && G.params?.get?.('ao') !== '0';
+      if (this.aoPass) this.aoPass.enabled = lvl < 1 && this._opt.ao && G.params?.get?.('ao') !== '0';   // ([gfx] the player's ambient-shadow switch)
       // planar water reflection: preset knob reflect 2 (no preset has it by default; ?reflect=2 turns it on)
       const rf = Number(G.params?.get?.('reflect')), level = G.params?.has?.('reflect') && Number.isFinite(rf) ? rf : (this.preset.reflect | 0);
       this.reflectOn = level >= 2 && this.preset.name !== 'low' && lvl < 2;
@@ -2097,7 +2166,7 @@
         u.uCamRot.value.setFromMatrix4(cam.matrixWorld);
         u.uSunDirW.value.copy(this.sunDir);
         u.uHazeCol.value.copy(u.uSunCol.value).multiplyScalar(0.26 * clamp(fin(this.sun ? this.sun.intensity : 0, 0) / 3, 0, 1.2));
-        u.uHazeDensity.value = fog && fog.isFogExp2 ? clamp(fin(fog.density, 0.0026), 0, 0.05) : 0.0026;
+        u.uHazeDensity.value = fog && fog.isFogExp2 ? clamp(fin(fog.density * this.viewFog, 0.0026), 0, 0.05) : 0.0026;   // ([gfx] × the view-distance fog factor: this runs before the draw's own scaling)
       }
     },
 
@@ -2413,8 +2482,22 @@
 
     /** renderer pixel ratio: the device's (it follows browser zoom and moves between screens), capped by the preset */
     _pixelRatio() {
-      const dpr = Number(window.devicePixelRatio);
-      return Math.min(dpr > 0 && Number.isFinite(dpr) ? dpr : 1, this.preset.pixelRatio);
+      const dpr = Number(window.devicePixelRatio), native = dpr > 0 && Number.isFinite(dpr) ? dpr : 1;
+      // [gfx] the drawing size the player chose (setResolution), fitted inside it with the window's shape; never more
+      // than the screen's own pixels, and on `low` never more than the window's (the frozen preset stays cheap)
+      const R = this._res;
+      if (R) {
+        const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight), land = w >= h;
+        const rw = land ? Math.max(R.w, R.h) : Math.min(R.w, R.h), rh = land ? Math.min(R.w, R.h) : Math.max(R.w, R.h);
+        const top = this.preset.name === 'low' ? Math.min(native, 1) : native;
+        let pr = Math.min(rw / w, rh / h), limit = null;
+        if (pr > top + 1e-6) { pr = top; limit = top < native ? 'low' : 'screen'; }
+        if (pr < 0.25) { pr = 0.25; limit = 'min'; }
+        this._resLimit = limit;
+        return pr;
+      }
+      this._resLimit = null;
+      return Math.min(native, this.preset.pixelRatio);
     },
     /** a devicePixelRatio change alone (browser zoom, a window dragged to another screen) fires no 'resize' event */
     _watchPixelRatio() {
@@ -2459,7 +2542,7 @@
       const key = groups.map((g) => g.name + ':' + g.children.length).join('|');
       if (key !== C.key) { this._buildCull(groups); C.key = key; }
       const fov = THREE.MathUtils.degToRad(clamp(fin(this.camera.fov, 55), 1, 120));
-      const lim = (CULL_DIST[this.preset?.name] ?? Infinity) * Math.max(1, CULL_TAN / Math.tan(fov / 2));
+      const lim = (CULL_DIST[this.preset?.name] ?? Infinity) * this._view.cull * Math.max(1, CULL_TAN / Math.tan(fov / 2));   // ([gfx] × the view-distance factor)
       const cp = this.camera.position;
       let off = 0;
       for (const it of C.items) {
@@ -2510,7 +2593,7 @@
       }
       C.items = items;
     },
-    get cullStats() { return { items: this._cull?.items?.length || 0, culled: this._cull?.off || 0, dist: CULL_DIST[this.preset?.name] ?? null }; },
+    get cullStats() { const d = CULL_DIST[this.preset?.name]; return { items: this._cull?.items?.length || 0, culled: this._cull?.off || 0, dist: d == null ? null : d * this._view.cull }; },   // ([gfx] × the view-distance factor)
 
     update(dt) {
       // repair normals of geometries added since the last scan (crops regrowing, decorations, effects) ~every 1.5 s
@@ -2522,6 +2605,7 @@
       this._updateGrade(dt);
       this._updateOutline(dt);
       this._updateCull(dt);
+      this.viewFog = this._viewFogNow();   // [gfx] view distance: the fog factor of this frame (shaders with their own fog uniform read it)
       // dynamic resolution: judged on the wall clock (the loop clamps dt), see _drsTick
       const wallNow = performance.now(), wallDt = this._wallT ? (wallNow - this._wallT) / 1000 : 0;
       this._wallT = wallNow;
@@ -2543,7 +2627,10 @@
       this._fpsFrames++;
       this._fpsAcc = (wall - this._fpsT0) / 1000;
       if (this._fpsAcc >= 0.5) {
-        this.fps = this._fpsFrames / this._fpsAcc;
+        // ([gfx] with a frame limit the frames that were DRAWN count: the meter and the auto quality see what the eye sees)
+        const FL = this._fl, drawn = FL.drawn - (FL.drawn0 || 0);
+        FL.drawn0 = FL.drawn;
+        this.fps = (FL.fps ? drawn : this._fpsFrames) / this._fpsAcc;
         const judge = this._fpsAcc <= 3;
         this._fpsT0 = wall; this._fpsAcc = 0; this._fpsFrames = 0;
         if (G.settings.showFps) {
@@ -2605,12 +2692,19 @@
         this._skip = ((this._skip || 0) + 1) % cover;
         if (this._skip) return;
       }
+      if (!opts?.force && !this._frameGate()) return;   // [gfx] the player's frame limit: this display frame is not drawn
+      this._fl.drawn++;
       const info = this.renderer.info;
       info.reset();
       this._placeFrame();   // [places-kit] sky follow + the room's light over the weather's values (after every update)
       this._lampFrame();    // [world] the pooled night lamps follow the player (after the weather wrote its lamp factor)
       if (this.atmosPass) { this.camera.updateMatrixWorld(); this._updateSunScreen(); } // this frame's camera: no glow lag
       guard.tick();   // §14.4.1: a non-finite opacity / scale / uniform never reaches the GPU
+      // [gfx] view distance: the fog of THIS draw. The weather's own value is put back right after the draw, so whoever
+      // scales the fog as well (the district's haze compares with what it wrote last) never sees ours and nothing compounds
+      const vFog = this.scene.fog, vK = this.viewFog;
+      let fogKeep = null;
+      if (vK !== 1 && vFog && vFog.isFogExp2 && Number.isFinite(vFog.density)) { fogKeep = vFog.density; vFog.density = fogKeep * vK; }
       try {
         // reflection / probe renders of other modules (engine.onPreRender): after the guard, before the scene
         const pre = this._preRenderFns;
@@ -2625,7 +2719,7 @@
         this.frameInfo.pre = info.render.calls;
         if (this.composer) this.composer.render();
         else { this.renderer.render(this.scene, this.camera); this.frameInfo.scene = info.render.calls - this.frameInfo.pre; }
-      } finally { guard.restore(); }
+      } finally { guard.restore(); if (fogKeep != null) vFog.density = fogKeep; }
       this.frameInfo.calls = info.render.calls;
       this.frameInfo.triangles = info.render.triangles;
       this.frameInfo.post = info.render.calls - this.frameInfo.pre - this.frameInfo.scene;
@@ -3038,6 +3132,230 @@
       F.on = true;
     },
     // ============================================================ [complex-look] end
+
+    // ============================================================ [gfx] the player's display options (CONTRACT §18.2)
+    // (see the header for the list). Every setter is cheap to call again with the same value.
+    /** the size the 3D picture is drawn at: { w, h } in pixels (fitted to the window's shape) | null = the preset's ratio */
+    setResolution(spec) {
+      const w = spec ? Math.round(Number(spec.w)) : 0, h = spec ? Math.round(Number(spec.h)) : 0;
+      const next = Number.isFinite(w) && Number.isFinite(h) && w >= 160 && h >= 90 ? { w, h } : null;
+      const same = (!next && !this._res) || (!!next && !!this._res && next.w === this._res.w && next.h === this._res.h);
+      this._res = next;
+      if (!same && this.renderer) this.resize();
+      return this.resolutionInfo;
+    },
+    /** what is drawn right now: window (CSS px) · ratio · canvas (drawing buffer) · drawn (the scene's target: canvas ×
+     *  the dynamic-resolution scale) · wanted · limit: why it is less than wanted ('screen' | 'low' | 'memory' | null) */
+    get resolutionInfo() {
+      const w = window.innerWidth, h = Math.max(1, window.innerHeight), r = this.renderer, sp = this._scenePass;
+      const pr = r ? r.getPixelRatio() : 1;
+      const canvas = r ? [r.domElement.width, r.domElement.height] : [Math.floor(w * pr), Math.floor(h * pr)];
+      const drawn = sp && this.composer ? [sp.rt.width, sp.rt.height] : canvas;
+      const D = this._drs;
+      const limit = this._resLimit || (this.composer && D.cap < D.max - 1e-3 ? 'memory' : null);
+      return { window: [w, h], ratio: pr, canvas, drawn, scale: this.renderScale, wanted: this._res ? [this._res.w, this._res.h] : null, limit, dynamic: !!(this.composer && D.on) };
+    },
+    /** 0 … 100, 50 = unchanged (see DISP_GLSL): the middle grey goes from about 88 to about 163 of 255 */
+    setBrightness(v) {
+      const B = this._bright;
+      B.value = clamp(fin(Number(v), 50), 0, 100);
+      const k = (B.value - 50) / 50;
+      B.gamma = Math.abs(k) < 0.005 ? 1 : Math.pow(2, -0.7 * k);
+      B.css = 1 + (k >= 0 ? 0.4 : 0.38) * k;
+      this._applyBrightness();
+      return this.brightnessInfo;
+    },
+    get brightnessInfo() { const B = this._bright; return { value: B.value, gamma: B.gamma, css: B.css, path: B.path, lo: DISP_LO, hi: DISP_HI }; },
+    _applyBrightness() {
+      const B = this._bright, out = this._outPass;
+      const shader = !!(this.composer && out && out.uniforms && out.uniforms.uTfmDisp);
+      if (out && out.uniforms && out.uniforms.uTfmDisp) out.uniforms.uTfmDisp.value.set(shader ? B.gamma : 1, DISP_LO, DISP_HI);
+      const css = !shader && Math.abs(B.value - 50) > 0.25 ? `brightness(${B.css.toFixed(3)})` : '';
+      this.cssFilter('display', css);
+      B.path = shader ? (B.gamma !== 1 ? 'shader' : 'none') : (css ? 'css' : 'none');
+    },
+    /** named CSS filters on the canvas, joined in a fixed order (the player's brightness first, then the photo filter) */
+    cssFilter(key, css) {
+      const F = this._cssF, cv = this.renderer ? this.renderer.domElement : null;
+      F[String(key)] = typeof css === 'string' && css && css !== 'none' ? css : '';
+      const all = ['display', 'photo'].concat(Object.keys(F).filter((k) => k !== 'display' && k !== 'photo')).map((k) => F[k]).filter(Boolean).join(' ');
+      if (cv && cv.style.filter !== all) cv.style.filter = all;
+      return all;
+    },
+    /** the dynamic resolution may run: the preset has a range, the player's switch is on, and no test pinned the quality */
+    _drsWanted() {
+      const flag = G.params?.get?.('drs');
+      return Array.isArray(this.preset.drs) && this._opt.drs && (flag === '1' || flag === 'on' || (!G.flags.quality && flag !== '0' && flag !== 'off'));
+    },
+    /** 'aa' (anti-aliasing of the scene target) · 'ao' (ambient shadow, `high`) · 'drs' (dynamic resolution) */
+    setOption(name, value) {
+      const O = this._opt;
+      if (!Object.prototype.hasOwnProperty.call(O, name)) return false;
+      value = !!value;
+      if (O[name] === value) return true;
+      O[name] = value;
+      if (!this.renderer) return true;
+      if (name === 'aa') { this._applyPostSize(); watchdog.hold(1500); }
+      else if (name === 'ao') this._applyShed();
+      else if (name === 'drs') {
+        const D = this._drs;
+        D.on = !!this.composer && this._drsWanted();
+        D.slow = D.fast = 0; D.trial = null;
+        if (!D.on && this.composer) { this._drsLevel(0); this._setScale(D.cap, 'option'); }
+      }
+      return true;
+    },
+    /** draw at most fps frames a second (0 = every frame the display asks for). clock: a test's own clock (ms) */
+    setFrameLimit(fps, clock) {
+      const F = this._fl;
+      fps = Number(fps);
+      F.fps = Number.isFinite(fps) && fps >= 5 ? Math.min(240, fps) : 0;
+      if (clock !== undefined) F.clock = typeof clock === 'function' ? clock : null;
+      F.last = -1e9;
+      return F.fps;
+    },
+    /** may this display frame be drawn? The limit keeps its own cadence: a late frame does not push the next ones back
+     *  (60 on a 144 Hz screen draws 60, not 48), and 2.5 ms of slack lets "60 on a 60 Hz screen" draw every frame */
+    _frameGate() {
+      const F = this._fl;
+      if (!F.fps) return true;
+      const now = F.clock ? F.clock() : performance.now(), T = 1000 / F.fps, since = now - F.last;
+      if (since < T - 2.5) { F.skipped++; return false; }
+      F.last = since > 2 * T ? now : F.last + T;
+      return true;
+    },
+    get frameLimit() { const F = this._fl; return { fps: F.fps, drawn: F.drawn, skipped: F.skipped }; },
+    /** view distance (see the header). Values are clamped; what is not given stays. */
+    setView(v = {}) {
+      const V = this._view;
+      if (v.far != null) V.far = clamp(fin(Number(v.far), 3000), 200, 6000);
+      if (v.fog != null) V.fog = clamp(fin(Number(v.fog), 1), 0.5, 4);
+      if (v.cull != null) V.cull = clamp(fin(Number(v.cull), 1), 0.3, 2);
+      if (v.veg != null) V.veg = clamp(fin(Number(v.veg), 1), 0.3, 1);
+      if (v.grass != null) V.grass = clamp(fin(Number(v.grass), 1), 0, 1);
+      this.viewVeg = V.veg; this.viewGrass = V.grass;
+      this._applyViewFar();
+      this.viewFog = this._viewFogNow();
+      if (this._cull) this._cull.t = 0;
+      G.bus.emit('engine:view', { far: V.far, fog: V.fog, cull: V.cull, veg: V.veg, grass: V.grass });
+      return this.viewInfo;
+    },
+    get viewInfo() { const V = this._view, c = this.camera; return { far: V.far, cameraFar: c ? c.far : V.far, fog: V.fog, fogNow: this.viewFog, cull: V.cull, cullDist: (CULL_DIST[this.preset?.name] ?? 0) * V.cull, veg: V.veg, grass: V.grass, placeFar: V.placeFar }; },
+    /** the camera's far plane: the player's view distance, or the nearer far plane of the place one is in */
+    _applyViewFar() {
+      const cam = this.camera, V = this._view;
+      if (!cam) return;
+      let pf = V.placeFar;
+      try { const P = G.sys.places, id = P ? P.current : null; pf = id ? fin(Number(P.def(id)?.far), pf == null ? cam.far : pf) : null; } catch (e) { /* places optional */ }
+      V.placeFar = pf;
+      const want = pf != null ? Math.min(pf, V.far) : V.far;
+      if (cam.far !== want) { cam.far = want; cam.updateProjectionMatrix(); }
+    },
+    /** the fog factor of this frame: the player's, and never so thin that the far plane would cut what is still seen
+     *  (at the far plane less than about 1 % may be left: density ≥ 2.1 / far). Rooms and districts keep their own air. */
+    _viewFogNow() {
+      const V = this._view, fog = this.scene ? this.scene.fog : null;
+      if (!fog || !fog.isFogExp2 || (this._indoor && this._indoorGoal) || this.indoor > 0.01 || !(fog.density > 0)) return 1;
+      let k = V.fog;
+      if (V.placeFar == null && V.far < 2990) k = Math.max(k, 2.1 / V.far / fog.density);
+      return clamp(fin(k, 1), 0.5, 6);
+    },
+    /** 이펙트 퀄리티: the level the weather / ambience effects may reach — 0 none of them, 1 the lighter ones, 2 all */
+    setEffects(level) {
+      level = clamp(fin(Number(level), 2) | 0, 0, 2);
+      if (level === this._fxCap) return level;
+      this._fxCap = level;
+      G.bus.emit('engine:features', { quality: this.quality });
+      return level;
+    },
+    /** 텍스쳐 퀄리티: anisotropy cap (1 … 16) and a size cap in px (0 = none) for the photographed maps */
+    setTextureQuality(o = {}) {
+      const T = this._tex;
+      T.aniso = clamp(fin(Number(o.aniso), 16) | 0, 1, 16);
+      T.cap = Math.max(0, fin(Number(o.cap), 0) | 0);
+      return this._texSweep();
+    },
+    get textureInfo() { const T = this._tex; return { aniso: T.aniso, cap: T.cap, changed: T.changed, sweeps: T.sweeps, seen: T.seen || 0, capped: T.capped || 0 }; },
+    _texLater() {
+      const T = this._tex;
+      if ((T.aniso >= 16 && !T.cap) || T.timer) return;   // nothing capped: maps arrive as they are
+      T.timer = setTimeout(() => { T.timer = 0; try { this._texSweep(); } catch (e) { G.log.warn('ENGINE', 'texture sweep failed', e?.message || e); } }, 600);
+    },
+    /** apply the caps to every map the scene's materials hold now → { changed, seen, capped } */
+    _texSweep() {
+      const T = this._tex, seen = new Set();
+      let changed = 0, capped = 0;
+      if (!this.scene) return this.textureInfo;
+      const fit = (tex) => {
+        if (!tex || !tex.isTexture || seen.has(tex)) return;
+        seen.add(tex);
+        if (tex.isRenderTargetTexture || tex.isDepthTexture || tex.isFramebufferTexture) return;
+        const ud = tex.userData || (tex.userData = {});
+        if (ud._aniso0 == null) ud._aniso0 = tex.anisotropy || 1;
+        const an = Math.min(ud._aniso0, T.aniso);
+        let touch = false;
+        if (tex.anisotropy !== an) { tex.anisotropy = an; touch = true; }
+        // the size cap: only decoded maps of the pack (their full image is kept, so it comes back when the cap goes)
+        if (ud.pack && ud.pack.ready && !ud.pack.failed && !tex.isDataTexture && !tex.isCompressedTexture && !tex.isCubeTexture) {
+          const full = ud._full || tex.image, fw = full ? (full.width | 0) : 0, fh = full ? (full.height | 0) : 0;
+          if (fw > 0 && fh > 0) {
+            if (T.cap > 0 && Math.max(fw, fh) > T.cap) {
+              const small = this._texSmall(full, T.cap, !!tex.flipY);
+              if (small) { capped++; if (tex.image !== small) { ud._full = full; tex.image = small; touch = true; } }
+            } else if (ud._full && tex.image !== ud._full) { tex.image = ud._full; ud._full = null; touch = true; }
+          }
+        }
+        if (touch) { tex.needsUpdate = true; changed++; }
+      };
+      this.scene.traverse((o) => {
+        const m = o.material;
+        if (!m) return;
+        for (const x of Array.isArray(m) ? m : [m]) {
+          if (!x) continue;
+          for (let i = 0; i < TEX_SLOTS.length; i++) fit(x[TEX_SLOTS[i]]);
+          const u = x.uniforms;
+          if (u) for (const key in u) { const v = u[key] ? u[key].value : null; if (v && v.isTexture) fit(v); }
+        }
+      });
+      T.changed = changed; T.seen = seen.size; T.capped = capped; T.sweeps++;
+      return this.textureInfo;
+    },
+    /** a copy of a decoded map no larger than cap px (cached per image; an ImageBitmap where the browser can, so no
+     *  canvas stays alive). flip: the copy of an element / canvas source of a flipY texture is flipped, because the
+     *  browser ignores UNPACK_FLIP_Y for an ImageBitmap */
+    _texSmall(img, cap, flip) {
+      const C = this._texCache || (this._texCache = new WeakMap());
+      const hit = C.get(img);
+      if (hit && hit.cap === cap) return hit.img;
+      try {
+        const w = img.width | 0, h = img.height | 0, k = cap / Math.max(w, h);
+        const sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
+        const off = typeof OffscreenCanvas === 'function';
+        const cv = off ? new OffscreenCanvas(sw, sh) : Object.assign(document.createElement('canvas'), { width: sw, height: sh });
+        const c = cv.getContext('2d');
+        if (!c) return null;
+        c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+        let src = img;
+        if (typeof ImageData !== 'undefined' && img instanceof ImageData) {
+          const t = off ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
+          t.getContext('2d').putImageData(img, 0, 0);
+          src = t;
+        }
+        const bitmapSrc = typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap;
+        const toBitmap = off && typeof cv.transferToImageBitmap === 'function';
+        if (flip && !bitmapSrc && toBitmap) { c.translate(0, sh); c.scale(1, -1); }
+        c.drawImage(src, 0, 0, sw, sh);
+        const out = toBitmap ? cv.transferToImageBitmap() : cv;
+        C.set(img, { cap, img: out });
+        return out;
+      } catch (e) { return null; }
+    },
+    /** everything of this block as it is in force (the settings window's honest lines, the tests) */
+    get displayInfo() {
+      return { resolution: this.resolutionInfo, brightness: this.brightnessInfo, options: { ...this._opt }, frameLimit: this.frameLimit, view: this.viewInfo, effects: this._fxCap, textures: this.textureInfo,
+        post: this.composer ? { samples: this._scenePass ? this._scenePass.samples : 0, ao: !!(this.aoPass && this.aoPass.enabled), bloom: !!this.bloomPass, dof: !!(this.dofPass && this.dofPass.enabled), drs: this._drs.on } : null, preset: this.preset.name };
+    },
+    // ============================================================ [gfx] end
 
     add(o) { this.scene.add(o); return o; },
     remove(o) { this.scene.remove(o); },

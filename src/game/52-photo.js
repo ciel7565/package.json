@@ -4,6 +4,11 @@
 //   active, enter({photoZoneId}), exit(), toggle(), capture() -> Promise<photo|null>
 //   openGallery({photoId}), currentPhotoZone (layout.photoZones entry | null), photoZoneAt(x, z)
 //   setFilter(id), setFrame(bool), filters
+//   [gfx] snapshot({ format: 'jpg' | 'png' | 'webp', quality: 0.3 … 1, maxWidth, maxHeight }) -> Promise<Blob | null>
+//       a picture of the 3D view as it is right now — no album entry, no flash, no sound, also outside photo mode
+//       (lane support's report picture). capture(opts) with an options object is the same call. Defaults: the player's
+//       스크린샷 포맷 / 화질 (CONTRACT §18.2, 67-display.js G.sys.display.shot()); the full-size picture of the album
+//       shutter is saved in that format too (JPG by default; PNG when the display system is not in the page).
 // Photo mode: body.hud-hidden + #photo-ui overlay (top bar, pose picker from G.data.gestures, camera
 // distance / height sliders, grid, hide-player, 전통 액자 frame, filters 기본/따뜻한/흑백/빈티지/선명,
 // self-timer, big shutter). Camera G.sys.camera.setMode('photo') + photoControl; gameplay input is
@@ -458,7 +463,7 @@
           toggle('hidePlayer', 'eye-off', '캐릭터 숨기기', '풍경만 찍어요'),
           toggle('lookAtCam', 'smile', '카메라 보기', '캐릭터가 카메라를 바라봐요'),
           toggle('blurBack', 'target', '배경 흐림', '캐릭터는 또렷하게, 먼 배경은 부드럽게 찍어요 (그래픽 품질 중간·높음)'),
-          toggle('autoSave', 'download', 'PNG 자동 저장', '찍을 때마다 원본 PNG를 내려받아요'),
+          toggle('autoSave', 'download', '원본 자동 저장', '찍을 때마다 원본 사진을 내려받아요 (형식은 설정 → 화면 → 스크린샷 포맷)'),
           h('button', { type: 'button', class: 'ph-toggle ph-timer', dataset: { ph: 'timer' }, title: '셀프 타이머' }, h('span', { class: 'ico ico-sm', 'data-icon': 'clock' }), h('span', { class: 'ph-timer-label' }, '타이머 끔'))),
         h('footer', { class: 'ph-bottom' },
           h('div', { class: 'ph-filters glass', role: 'group', 'aria-label': '필터' }, filters),
@@ -550,10 +555,49 @@
     },
 
     _applyLiveFilter() {
-      const c = G.sys.engine?.renderer?.domElement;
+      const E = G.sys.engine, c = E?.renderer?.domElement;
       if (!c) return;
       const f = filterById(this.filter);
-      c.style.filter = this.active && !easyOn() && f.css !== 'none' ? f.css : '';
+      const css = this.active && !easyOn() && f.css !== 'none' ? f.css : '';
+      // [gfx] through the engine's named filters: the player's brightness (a CSS filter on `low`) keeps its place
+      if (typeof E.cssFilter === 'function') E.cssFilter('photo', css); else c.style.filter = css;
+    },
+    /** [gfx] what the screen adds to the frame outside the GPU (the brightness filter of `low`): '' | 'brightness(1.2)' */
+    _screenFilter() {
+      const B = G.sys.engine?.brightnessInfo;
+      return B && B.path === 'css' && Number.isFinite(B.css) ? `brightness(${B.css.toFixed(3)})` : '';
+    },
+    /** [gfx] the format a full-size picture is saved in: { format, mime, ext, quality, label } */
+    _shotFormat() {
+      const S = G.sys.display?.shot?.() || { format: 'png', mime: 'image/png', ext: 'png', quality: 1 };
+      return Object.assign({ label: S.format === 'webp' ? 'WebP' : String(S.format).toUpperCase() }, S);
+    },
+    /** [gfx] see the header → Promise<Blob | null> */
+    async snapshot(opts = {}) {
+      const E = G.sys.engine, r = E?.renderer;
+      if (!r) return null;
+      try { if (E._lost || r.getContext().isContextLost()) return null; } catch (e) { return null; }
+      if (opts == null || typeof opts !== 'object') opts = {};
+      const S = this._shotFormat(), MIME = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+      let fmt = String(opts.format || S.format).toLowerCase().replace('jpeg', 'jpg');
+      if (!MIME[fmt]) fmt = S.format;
+      const qn = Number(opts.quality);
+      const q = Number.isFinite(qn) && qn > 0 ? clamp(qn > 1 ? qn / 100 : qn, 0.3, 1) : S.quality;
+      try {
+        E.render({ force: true });   // a fresh frame, read in the same task (preserveDrawingBuffer is off)
+        const src = r.domElement;
+        const mw = Number(opts.maxWidth) > 0 ? Number(opts.maxWidth) : Infinity, mh = Number(opts.maxHeight) > 0 ? Number(opts.maxHeight) : Infinity;
+        const k = Math.min(1, mw / src.width, mh / src.height);
+        const out = document.createElement('canvas');
+        out.width = Math.max(1, Math.round(src.width * k)); out.height = Math.max(1, Math.round(src.height * k));
+        const ctx = out.getContext('2d');
+        if (!ctx) return null;
+        ctx.imageSmoothingQuality = 'high';
+        const css = this._screenFilter();
+        if (css && typeof ctx.filter === 'string') ctx.filter = css;
+        ctx.drawImage(src, 0, 0, out.width, out.height);
+        return await new Promise((resolve) => { try { out.toBlob((b) => resolve(b || null), MIME[fmt], fmt === 'png' ? undefined : q); } catch (e) { resolve(null); } });
+      } catch (e) { G.log.warn('UI', 'snapshot failed', e?.message || e); return null; }
     },
 
     _drawFramePreview() {
@@ -793,7 +837,8 @@
       this._ui?.classList.remove('counting');
     },
 
-    async capture() {
+    async capture(opts) {
+      if (opts && typeof opts === 'object') return this.snapshot(opts);   // [gfx] capture({ format, quality }) → Blob (see the header)
       if (!this.active || this._busy) return null;
       const E = G.sys.engine;
       const r = E?.renderer;
@@ -821,7 +866,8 @@
         // no 2D context (§14.4: Chrome caps live canvases): a calm "could not save" instead of a TypeError
         if (!ctx) { const err = new Error('no 2D context for the photo'); err.no2d = true; throw err; }
         const native = typeof ctx.filter === 'string';
-        if (native && f.css !== 'none') ctx.filter = f.css;
+        const scr = this._screenFilter();   // [gfx] the brightness the screen shows (`low`): the picture looks like the screen
+        if (native && (f.css !== 'none' || scr)) ctx.filter = [scr, f.css !== 'none' ? f.css : ''].filter(Boolean).join(' ');
         ctx.drawImage(src, 0, 0, w, h);
         if (native) ctx.filter = 'none';
         else if (f.css !== 'none') manualFilter(ctx, w, h, f.id);
@@ -859,15 +905,18 @@
         this._lastPhoto = photo;
         this._updateCount();
         if (easy) this._showKidCard(photo); else this._showCard(photo);
-        // full-size PNG: keep a few in memory for the album, download when enabled
-        const name = `jeontong-balhyo_${stamp(now)}.png`; // ASCII: some browsers drop non-ASCII download names
+        // full-size picture in the player's 스크린샷 포맷 ([gfx], JPG by default): a few are kept in memory for the album,
+        // downloaded when enabled
+        const SF = this._shotFormat();
+        photo.fmt = SF.format;
+        const name = `jeontong-balhyo_${stamp(now)}.${SF.ext}`; // ASCII: some browsers drop non-ASCII download names
         out.toBlob((blob) => {
           if (!blob) return;
           const url = URL.createObjectURL(blob);
           this._full.set(photo.id, { url, name });
           while (this._full.size > 6) { const [k, v] = this._full.entries().next().value; URL.revokeObjectURL(v.url); this._full.delete(k); }
           if (this.autoSave && !easy) download(url, name);
-        }, 'image/png');
+        }, SF.mime, SF.format === 'png' ? undefined : SF.quality);
         G.bus.emit('photo:taken', { photoId: photo.id, zoneId: photo.zoneId, photoZoneId: photo.photoZoneId });
         G.log.info('UI', `photo taken ${photo.id} ${w}x${h}${pz ? ` @${pz.id}` : ''}`);
         return photo;
@@ -886,7 +935,7 @@
       if (!card) return;
       card.querySelector('img').src = photo.thumb;
       const where = photo.photoZoneId ? `포토존 · ${photo.place}` : photo.place || '체험관';
-      card.querySelector('.ph-card-sub').textContent = `${where}${this.autoSave ? ' · PNG 내려받기' : ' · 앨범에 보관'}`;
+      card.querySelector('.ph-card-sub').textContent = `${where}${this.autoSave ? ` · ${this._shotFormat().label} 내려받기` : ' · 앨범에 보관'}`;
       card.hidden = false;
       card.classList.remove('in'); void card.offsetWidth; card.classList.add('in');
       clearTimeout(this._cardTimer);
@@ -1136,7 +1185,7 @@
         grid.addEventListener('click', (ev) => { const b = ev.target.closest('[data-photo]'); if (b) this._renderViewer(m, b.dataset.photo); });
         body.appendChild(grid);
       }
-      if (!easy) body.appendChild(h('p', { class: 'pg-note tiny muted' }, `앨범에는 최근 ${MAX_PHOTOS}장까지 작은 크기로 보관돼요. 원본 PNG는 촬영할 때 내려받을 수 있어요.`));
+      if (!easy) body.appendChild(h('p', { class: 'pg-note tiny muted' }, `앨범에는 최근 ${MAX_PHOTOS}장까지 작은 크기로 보관돼요. 원본 사진은 촬영할 때 내려받을 수 있어요.`));
       G.ui.hydrateIcons(body);
       const go = { label: easy ? '📸 사진 찍기' : '사진 찍으러 가기', icon: easy ? null : 'camera', class: 'btn-primary', onClick: () => { setTimeout(() => { if (!this.active) this.enter(); }, 0); } };
       m.setActions(easy ? [go] : [go, { label: '닫기', class: 'btn-ghost' }]);
@@ -1166,7 +1215,7 @@
             h('dt', null, '장소'), h('dd', null, zone?.name || p.place || '체험관'),
             pz ? h('dt', null, '포토존') : null, pz ? h('dd', null, pz.name) : null,
             h('dt', null, '필터'), h('dd', null, filterById(p.filter).name + (p.frame ? ' · 전통 액자' : '')),
-            h('dt', null, '크기'), h('dd', null, full ? `원본 ${p.w}×${p.h} PNG` : `앨범용 ${THUMB_W}px JPEG`)),
+            h('dt', null, '크기'), h('dd', null, full ? `원본 ${p.w}×${p.h} ${String(p.fmt || 'png').toUpperCase()}` : `앨범용 ${THUMB_W}px JPEG`)),
           h('div', { class: 'pg-pos tiny muted' }, `${i + 1} / ${list.length}`))));
       G.ui.hydrateIcons(body);
       this._viewerKeys?.();
@@ -1180,7 +1229,7 @@
       const toJournal = { label: easyOn() ? '📝 일기에 붙이기' : '작업일지에 첨부', icon: easyOn() ? null : 'journal', class: 'btn-gold', onClick: () => { this._viewerKeys?.(); this._attachToJournal(p); } };
       // easy mode: no file downloads for the child (a grown-up can download in normal mode)
       m.setActions(easyOn() ? [toList, del, toJournal] : [toList, del,
-        { label: full ? 'PNG 내려받기' : '내려받기', icon: 'download', class: 'btn-soft', onClick: () => { this._downloadPhoto(p); return false; } }, toJournal]);
+        { label: full ? '원본 내려받기' : '내려받기', icon: 'download', class: 'btn-soft', onClick: () => { this._downloadPhoto(p); return false; } }, toJournal]);
     },
 
     _downloadPhoto(p) {
@@ -1189,7 +1238,7 @@
       const src = safeThumb(p.thumb);
       if (!src) return;
       download(src, `jeontong-balhyo_${stamp(p.at || Date.now())}_album.jpg`);
-      G.ui.toast('앨범용 작은 사진을 내려받았어요. 원본 PNG는 촬영 직후에만 받을 수 있어요.', { type: 'info', icon: 'download', duration: 3400 });
+      G.ui.toast('앨범용 작은 사진을 내려받았어요. 원본 사진은 촬영 직후에만 받을 수 있어요.', { type: 'info', icon: 'download', duration: 3400 });
     },
 
     async _deletePhoto(m, id) {

@@ -1723,7 +1723,7 @@ float terrainH(vec2 p) {
       const u = mat.uniforms, fog = eng.scene.fog;
       if (fog) {
         u.uFogColor.value.copy(fog.color);
-        u.uFogDensity.value = fog.isFogExp2 ? fog.density : 2.2 / Math.max(50, fog.far || 1000);
+        u.uFogDensity.value = (fog.isFogExp2 ? fog.density : 2.2 / Math.max(50, fog.far || 1000)) * (Number.isFinite(eng.viewFog) ? eng.viewFog : 1);   // [gfx] × the view-distance fog factor (CONTRACT §18.2): the engine scales the scene's fog only round its draw
       }
       u.uSunDir.value.copy(eng.sunDir);
       const sunI = eng.sun ? eng.sun.intensity * Math.max(0, eng.sunDir.y) : 1;

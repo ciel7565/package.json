@@ -36,6 +36,11 @@
   const EASY = { dmin: 4.5, dmax: 12.5, pitch: 0.42, distance: 9, look: 0.62, pmin: -0.05, pmax: 1.05 };
   const gentle = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
   const FOV = 55;
+  // [gfx] 최대 시야 확장 (CONTRACT §18.2, 67-display.js): while the option is on the FOLLOW view opens to 70° and the wheel
+  // zooms out further (30 m, easy mode 16 m). Scripted shots, the title orbit, dialogues and the photo view keep 55°.
+  const wide = () => G.sys.display?.wide === true;
+  const followFov = () => (wide() ? (G.display?.WIDE_FOV || 70) : FOV);
+  const zoomMax = (easy) => (wide() ? (easy ? (G.display?.WIDE_ZOOM?.easy || 16) : (G.display?.WIDE_ZOOM?.normal || 30)) : (easy ? EASY.dmax : DMAX));
   const SAMPLES = [0.35, 0.7, 1];
   const MODES = ['follow', 'cinematic', 'dialogue', 'photo', 'focus', 'shot'];
   // speed-aware follow (phase 4): numbers relative to the player's WALK / RUN constants
@@ -177,7 +182,7 @@
       this._wasGentle = easy;
       if (this._prof) return;   // [places-kit] a place's range applies in both modes
       if (easy) {
-        this._distT = clamp(this._distT, EASY.dmin, EASY.dmax);
+        this._distT = clamp(this._distT, EASY.dmin, zoomMax(true));
         if (Math.abs(this._distT - EASY.distance) > 2.5) this._distT = EASY.distance;
         this._pitchT = clamp(this._pitchT, EASY.pmin, EASY.pmax);
         this._shake = 0;
@@ -544,7 +549,9 @@
           this._pitchT = clamp(this._pitchT + look.dy * 0.0042 * ls, PR ? PR.pmin : easy ? EASY.pmin : PMIN, PR ? PR.pmax : easy ? EASY.pmax : PMAX);
           this._lastUserLook = t;
         }
-        if (zm) this._distT = clamp(this._distT * (1 + zm * (easy ? 0.09 : 0.12)), PR ? PR.min : easy ? EASY.dmin : DMIN, PR ? PR.max : easy ? EASY.dmax : DMAX);
+        const zMax = PR ? PR.max : zoomMax(easy);   // [gfx] the wide view's longer zoom-out
+        if (zm) this._distT = clamp(this._distT * (1 + zm * (easy ? 0.09 : 0.12)), PR ? PR.min : easy ? EASY.dmin : DMIN, zMax);
+        else if (this._distT > zMax) this._distT = zMax;   // the option was switched off while far out
         if (easy) this._autoFollow(dt, t); else this._autoAlign(dt, t);
         const k = damp(15, dt);
         this.yaw += angleDiff(this.yaw, this._yawT) * k;
@@ -652,7 +659,10 @@
       const sp = p?.velocity ? Math.hypot(p.velocity.x, p.velocity.z) : 0;
       let target = FOV;
       if (this.mode === 'shot' && Number.isFinite(this._shot.fov)) target = this._shot.fov;
-      else if (this.mode === 'follow' && !this._wasGentle && !G.settings?.reduceMotion && Number.isFinite(sp)) { const w = WALK() * 1.05 * (RUNX() / RUN()); target = FOV + clamp((sp - w) / (RUNX() - w), 0, 1) * FOV_KICK; }
+      else if (this.mode === 'follow') {
+        target = followFov();   // [gfx] 55°, or the wide view's 70°
+        if (!this._wasGentle && !G.settings?.reduceMotion && Number.isFinite(sp)) { const w = WALK() * 1.05 * (RUNX() / RUN()); target += clamp((sp - w) / (RUNX() - w), 0, 1) * FOV_KICK; }
+      }
       this._fov += (target - this._fov) * damp(this.mode === 'shot' ? 6 : 3, dt || 1);
       if (!Number.isFinite(this._fov)) this._fov = FOV;
       if (Math.abs(c.fov - this._fov) > 0.01) { c.fov = this._fov; c.updateProjectionMatrix(); }
