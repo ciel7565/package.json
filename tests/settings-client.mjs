@@ -16,7 +16,7 @@
 //   Screenshots of every tab (desktop, easy, 390 × 844, 844 × 390) and the bottom bar with --shots <dir>.
 //
 //   node tests/settings-client.mjs [--file /abs/page.html] [--shots <dir>] [--json] [--headed] [--timeout <ms>]
-//        [--skip-phone] [--no-server] [--only a,b,c,d]
+//        [--skip-phone] [--no-server] [--only a,b,c,d] [--server-file page.html --server-data game-data.json]
 //   Run it through the shared browser lock (at most two browsers on the build machine).
 // Exit 0 = all passed, 1 = a check failed, 2 = could not run.
 // =============================================================================
@@ -99,6 +99,85 @@ async function walkTabs(page, tag) {
   return out;
 }
 
+// ------------------------------------------------------------------ the owner's list (Addendum 6 / CONTRACT §18.2)
+// Every item of the owner's sentence, under the owner's own Korean name, with its range and default. A row that goes
+// missing or is renamed turns this red. [name, option id, tab, { type, min, max, steps (the values), opts, def }]
+// def is the owner's default; '@display' = G.display.DEFAULTS (automation keeps some of them off: see 67-display.js).
+const OWNER_LIST = [
+  ['그래픽 해상도', 'resolution', 'display', { type: 'select', has: ['auto'] }],
+  ['화면 모드', 'windowMode', 'display', { type: 'select', opts: ['window', 'fullscreen'], def: 'window' }],
+  ['출력될 모니터', 'monitor', 'display', { type: 'select' }],
+  ['화면 밝기', 'brightness', 'display', { type: 'slider', min: 0, max: 100, def: 50 }],
+  ['그래픽 퀄리티', 'quality', 'graphics', { type: 'select', has: ['low', 'medium', 'high'] }],
+  ['이펙트 퀄리티', 'fxQuality', 'graphics', { type: 'select', opts: ['low', 'medium', 'high'], def: 'high' }],
+  ['텍스쳐 퀄리티', 'texQuality', 'graphics', { type: 'select', opts: ['low', 'medium', 'high'], def: 'high' }],
+  ['이펙트 가시거리', 'fxDistance', 'graphics', { type: 'steps', steps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], def: 9 }],
+  ['스크린샷 포맷', 'shotFormat', 'display', { type: 'select', has: ['jpg', 'png'], def: 'jpg' }],
+  ['UI 크기', 'uiStep', 'layout', { type: 'steps', steps: [1, 2, 3, 4], def: 2 }],
+  ['가시거리 퀄리티', 'viewQuality', 'graphics', { type: 'select', opts: ['low', 'medium', 'high'], def: 'high' }],
+  ['수직동기화', 'frameLimit', 'display', { type: 'select', has: ['display', '60', '30'], def: 'display' }],
+  ['최대 시야 확장', 'wideView', 'graphics', { type: 'toggle', def: '@display' }],
+  ['이펙트 투명화(자신)', 'selfFxFade', 'graphics', { type: 'steps', steps: [0, 1, 2, 3, 4, 5], def: 0 }],
+  ['DOF', 'dof', 'graphics', { type: 'toggle', def: false }],
+  ['전체 소리', 'mixMaster', 'sound', { type: 'slider', min: 0, max: 100, def: 100 }],
+  ['배경음악', 'mixMusic', 'sound', { type: 'slider', min: 0, max: 100, def: 100 }],
+  ['효과음', 'mixSfx', 'sound', { type: 'slider', min: 0, max: 100, def: 100 }],
+  ['UI 효과음', 'mixUi', 'sound', { type: 'slider', min: 0, max: 100, def: 100 }],
+  ['캐릭터 음성', 'mixVoice', 'sound', { type: 'slider', min: 0, max: 100, def: 100 }],
+  ['글자 크기', 'textScale', 'layout', { type: 'steps', steps: [1, 2, 3, 4, 5], def: 2 }],
+  ['캐릭터 크기', 'avatarScale', 'layout', { type: 'slider', min: 80, max: 130, def: 100 }],
+  ['키 설정', '@keys', 'controls', {}],
+  ['도움말', '@help', 'help', {}],
+];
+/** in the page: walk the window's tabs and read the owner's list, duplicates, empty tabs, greyed rows */
+async function readOwnerList(page) {
+  return page.evaluate(async ([LIST, TABS]) => {
+    const S = G.sys.settings;
+    const strip = (s) => String(s || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    const norm = (s) => strip(s).replace(/\s+/g, '');
+    const go = async (id) => { document.querySelector(`.set-window .sw-tabs .tab[data-tab="${id}"]`)?.click(); await new Promise((r) => setTimeout(r, 300)); return document.querySelector('.set-window .set-pane'); };
+    const panes = {};
+    for (const t of TABS) {
+      const p = await go(t);
+      const rows = [...p.querySelectorAll('.set-row')];
+      const labels = rows.map((r) => norm(r.querySelector('.set-label b')?.textContent));
+      const dup = labels.filter((l, i) => l && labels.indexOf(l) !== i);
+      const off = [...p.querySelectorAll('.set-row.sw-off')].map((r) => ({ id: r.dataset.opt || '', why: (r.querySelector('.sw-why')?.textContent || '').replace(/^⛔\s*/, ''), dis: !!r.querySelector('.set-ctl [disabled], .set-ctl input:disabled, .set-ctl select:disabled') }));
+      const sliders = [...p.querySelectorAll('.set-row input[type="range"]')].map((i) => ({ id: i.closest('.set-row')?.dataset.opt || i.getAttribute('aria-label'), out: (i.closest('.set-row')?.querySelector('output, .set-val, .slider-val, .val')?.textContent || '').trim() }));
+      const ids = rows.map((r) => r.dataset.opt).filter(Boolean);
+      const eng = rows.map((r) => r.querySelector('.set-label b')?.textContent || '').filter((l) => /^[\s\p{Emoji_Presentation}\p{Extended_Pictographic}️‍]*[A-Za-z][A-Za-z ]+$/u.test(l)).slice(0, 5);
+      const raw = (p.textContent || '').match(/\b(undefined|null|NaN|\[object Object\])\b|\b[a-z]+[A-Z][A-Za-z]+\b/g) || [];
+      panes[t] = { rows: rows.length + p.querySelectorAll('.sw-hcard, .kt-row').length, text: (p.textContent || '').replace(/\s+/g, ' ').length, dup, off, sliders, ids, eng, raw: [...new Set(raw)].slice(0, 6), keyRows: p.querySelectorAll('.sw-keys .set-row').length, help: p.querySelectorAll('.sw-hcard').length };
+    }
+    const items = LIST.map(([name, id, tab, w]) => {
+      const pane = panes[tab] || {};
+      if (id === '@keys') return { name, id, tab, ok: pane.keyRows >= 15 || !!pane.fixedKeys, detail: `${pane.keyRows} key rows` };
+      if (id === '@help') return { name, id, tab, ok: pane.help >= 20 && S.tabs().find((t) => t.id === 'help')?.label === '도움말', detail: `${pane.help} topics` };
+      const d = S.def(id);
+      if (!d) return { name, id, tab, ok: false, detail: 'not declared' };
+      const why = []; const label = norm(d.label);
+      if (!label.startsWith(norm(name))) why.push(`label ‘${d.label}’`);
+      if (d.tab !== tab) why.push(`tab ${d.tab}`);
+      if (w.type && d.type !== w.type) why.push(`type ${d.type}`);
+      if (w.min !== undefined && d.min !== w.min) why.push(`min ${d.min}`);
+      if (w.max !== undefined && d.max !== w.max) why.push(`max ${d.max}`);
+      const vals = (d.options || []).map((o) => o.v);
+      if (w.steps && JSON.stringify(vals) !== JSON.stringify(w.steps)) why.push(`steps ${vals.join(',')}`);
+      if (w.opts && JSON.stringify(vals) !== JSON.stringify(w.opts)) why.push(`choices ${vals.join(',')}`);
+      if (w.has && !w.has.every((x) => vals.includes(x))) why.push(`choices ${vals.join(',')}`);
+      const ownerDef = w.def === '@display' ? G.display?.DEFAULTS?.[id] : w.def;
+      if (w.def === '@display' && ownerDef !== true) why.push(`owner default ${ownerDef}`);
+      if (w.def !== undefined && w.def !== '@display' && d.default !== ownerDef && G.display?.DEFAULTS?.[id] !== ownerDef) why.push(`default ${d.default}`);
+      const shown = (pane.ids || []).includes(id);
+      if (!shown) why.push('no row in its tab');
+      const avail = S.available(id);
+      return { name, id, tab, ok: why.length === 0, detail: why.join(' · '), avail: avail === true ? true : avail, def: d.default };
+    });
+    const res = G.display ? { wide: G.display.defaultResolution([{ v: 'auto' }, { v: 'native' }, { v: '2560x1440' }, { v: '1920x1080' }], false), small: G.display.defaultResolution([{ v: 'auto' }, { v: 'native' }, { v: '1280x720' }], false), touch: G.display.defaultResolution([{ v: 'auto' }, { v: '1920x1080' }], true), label: (S.def('resolution')?.options || []).map((o) => o.l).join(' | ') } : null;
+    return { items, panes, res };
+  }, [OWNER_LIST, TABS]);
+}
+
 // ================================================================================================ part A
 async function partA() {
   const { page, context } = await open('desktop');
@@ -119,7 +198,21 @@ async function partA() {
   const win = await page.evaluate(() => ({ tabs: [...document.querySelectorAll('.set-window .sw-tabs .tab')].map((b) => b.dataset.tab), search: !!document.querySelector('.set-window input.sw-search'), title: document.querySelector('.set-window .modal-head h2')?.textContent }));
   check('A: the button opens the settings window with twelve tabs and a search box', win.tabs.length === 12 && win.search && TABS.every((t) => win.tabs.includes(t)), win.tabs.join(','));
   const tabs = await walkTabs(page, 'desktop');
-  check('A: every tab is drawn without an error and has rows', tabs.every((t) => !t.missing && !t.failed && t.sel === 'true' && (t.rows > 0 || t.id === 'display' || t.id === 'credits')), tabs.map((t) => `${t.id}:${t.rows}${t.failed ? '!' : ''}`).join(' '));
+  check('A: every tab is drawn without an error and has rows', tabs.every((t) => !t.missing && !t.failed && t.sel === 'true' && (t.rows > 0 || t.id === 'credits')), tabs.map((t) => `${t.id}:${t.rows}${t.failed ? '!' : ''}`).join(' '));
+  // the owner's list, item by item, in the window
+  const own = await readOwnerList(page);
+  for (const it of own.items) check(`A: owner's list — ${it.name}`, it.ok, `${it.id}${it.detail ? ' · ' + it.detail : ''}${it.avail && it.avail !== true ? ' · greyed: ' + it.avail : ''}`);
+  const P = Object.entries(own.panes);
+  check('A: no row twice in any tab (an old pane\'s row beside the registry\'s)', P.every(([, p]) => p.dup.length === 0), P.filter(([, p]) => p.dup.length).map(([t, p]) => `${t}: ${p.dup.join(',')}`).join(' · '));
+  check('A: no empty tab (사용한 자료 says something even without the pack)', P.every(([t, p]) => p.rows > 0 || (t === 'credits' && p.text > 60)), P.map(([t, p]) => `${t}:${p.rows}/${p.text}`).join(' '));
+  const offs = P.flatMap(([t, p]) => p.off.map((o) => ({ t, ...o })));
+  const badOff = offs.filter((o) => !o.why || o.why.length > 90 || (o.why.match(/[요다]\./g) || []).length !== 1 || !o.dis);
+  check('A: every greyed option is disabled and says why in one calm sentence', badOff.length === 0, `${offs.length} greyed · ${badOff.map((o) => `${o.t}/${o.id}: ${o.why || '-'}${o.dis ? '' : ' (not disabled)'}`).join(' | ')} · ${offs.slice(0, 4).map((o) => `${o.id}: ${o.why}`).join(' | ')}`);
+  const noNum = P.flatMap(([t, p]) => p.sliders.filter((x) => !x.out).map((x) => `${t}/${x.id}`));
+  check('A: every slider shows its number', noNum.length === 0, noNum.join(' '));
+  const raw = P.flatMap(([t, p]) => [...p.eng.map((x) => `${t}: ‘${x}’`), ...p.raw.map((x) => `${t}: ${x}`)]);
+  check('A: no English-only row names, raw ids or undefined in the window', raw.length === 0, raw.join(' · '));
+  check('A: 그래픽 해상도 — 1920×1080 (Wide) by default where the monitor allows, else the monitor itself; phones 자동', own.res && own.res.wide === '1920x1080' && own.res.small === 'native' && own.res.touch === 'auto', JSON.stringify(own.res));
 
   // sound rows
   const snd = await page.evaluate(async () => {
@@ -170,12 +263,12 @@ async function partA() {
     p = await go('kids');
     const easy = !!p.querySelector('input[aria-label="쉬운 모드"]'), gate = !!p.querySelector('input[aria-label="보호자 확인"]');
     p = await go('graphics');
-    const q = !!p.querySelector('[role="radiogroup"][aria-label="그래픽 품질"]');
+    const q = !!p.querySelector('.set-row[data-opt="quality"]') && !p.querySelector('[aria-label="그래픽 품질"]');
     p = await go('credits');
     const cred = (p.textContent || '').length > 20;
     return { tiles, speed, uiOld, hcOld, rm, easy, gate, q, cred };
   });
-  check('A: the old panes are inside with their controls (조작 tiles + 회전 속도, 아이 보호, 그래픽 품질, 사용한 자료)', old.tiles === 4 && old.speed && old.easy && old.gate && old.q && old.rm && old.cred, JSON.stringify(old));
+  check('A: the old panes are inside with their controls (조작 tiles + 회전 속도, 아이 보호, 사용한 자료) and 그래픽 품질 is the registry\'s 그래픽 퀄리티', old.tiles === 4 && old.speed && old.easy && old.gate && old.q && old.rm && old.cred, JSON.stringify(old));
   check('A: rows that moved to 화면 구성 are not shown twice (UI 크기, 고대비)', !old.uiOld && !old.hcOld);
 
   // search
@@ -317,21 +410,38 @@ async function partC() {
 }
 
 // ================================================================================================ part D
+// The owner: "한번 설정된 값은 다음 로그인시에도 … 저장". Every number below is read from the database row (user_settings)
+// with php, not from the page: changed on device 1 → sent after the pause → kept → a change 0.5 s before the tab closes
+// still arrives (keepalive) → device 2 gets the values FROM THE ACCOUNT STORE (a value written only there) and none of
+// device 1's device values → device 2 and device 1 change different options at once (409 SETTINGS_STALE → merge) → a
+// change just before the logout arrives.
 async function partD() {
   const php = spawnSync('php', ['-v'], { encoding: 'utf8' });
   if (php.status !== 0) { check('D: php is available for the private server copy', false, 'php not found — run with --no-server'); return; }
   const srvTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-settings-srv-'));
-  const docroot = path.join(srvTmp, 'docroot'), dataDir = path.join(srvTmp, 'data');
+  const docroot = path.join(srvTmp, 'docroot'), dataDir = path.join(srvTmp, 'data'), dbFile = path.join(srvTmp, 'data', 'settings-test.sqlite');
   fs.mkdirSync(dataDir, { recursive: true });
   const skip = (rel) => /(^|[\\/])config\.local\.php$/.test(rel) || /^(data|uploads)[\\/].+/.test(rel);
   fs.cpSync(path.join(ROOT, 'server'), docroot, { recursive: true, filter: (src) => !skip(path.relative(path.join(ROOT, 'server'), src)) });
   fs.mkdirSync(path.join(docroot, 'data'), { recursive: true });
-  const b = spawnSync(process.execPath, [path.join(ROOT, 'tools/build.mjs'), '--no-font', '--quiet', '--no-assets', '--out', path.join(docroot, 'index.html'), '--data-out', path.join(docroot, 'data/game-data.json')], { encoding: 'utf8' });
-  if (b.status !== 0) { check('D: server page build', false, (b.stderr || b.stdout).slice(0, 300)); return; }
+  const serverPage = opt('--server-file');
+  if (serverPage) { fs.copyFileSync(serverPage, path.join(docroot, 'index.html')); fs.copyFileSync(opt('--server-data'), path.join(docroot, 'data/game-data.json')); }
+  else {
+    const b = spawnSync(process.execPath, [path.join(ROOT, 'tools/build.mjs'), '--no-font', '--quiet', '--no-assets', '--out', path.join(docroot, 'index.html'), '--data-out', path.join(docroot, 'data/game-data.json')], { encoding: 'utf8' });
+    if (b.status !== 0) { check('D: server page build', false, (b.stderr || b.stdout).slice(0, 300)); return; }
+  }
   const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
   const port = Number(opt('--port', '0')) || await freePort();
-  const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: dataDir, TFM_UPLOAD_DIR: path.join(srvTmp, 'uploads'), TFM_TOSS_MOCK: '1' }, stdio: ['ignore', 'ignore', 'ignore'] });
+  const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: dataDir, TFM_SQLITE_PATH: dbFile, TFM_UPLOAD_DIR: path.join(srvTmp, 'uploads'), TFM_TOSS_MOCK: '1' }, stdio: ['ignore', 'ignore', 'ignore'] });
   const BASE = `http://127.0.0.1:${port}/`;
+  /** the user_settings row(s) as the database has them: [{ user_id, v, data, updated_at }] */
+  const dbRows = () => {
+    const r = spawnSync('php', ['-r', '$p=new PDO("sqlite:".$argv[1]);$s=$p->query("SELECT user_id, v, data, updated_at FROM user_settings");echo json_encode($s?$s->fetchAll(PDO::FETCH_ASSOC):[]);', dbFile], { encoding: 'utf8' });
+    try { return JSON.parse(r.stdout || '[]').map((x) => ({ ...x, v: Number(x.v), blob: JSON.parse(x.data) })); } catch (e) { return [{ err: (r.stderr || r.stdout).slice(0, 200) }]; }
+  };
+  const dbRow = () => dbRows()[0] || null;
+  const dbWait = async (fn, ms = 15000) => { const t0 = Date.now(); let r = dbRow(); while (Date.now() - t0 < ms && !(r && fn(r))) { await sleep(250); r = dbRow(); } return r; };
+  const note = (r) => (r ? `row v ${r.v}, updated_at ${r.updated_at}` : 'no row');
   try {
     let up = false;
     for (let i = 0; i < 100 && !up; i++) { try { const r = await fetch(BASE + 'api/ping.php'); up = r.ok; } catch { /* not yet */ } if (!up) await sleep(100); }
@@ -342,52 +452,98 @@ async function partD() {
       await page.goto(`${BASE}index.html?notutorial=1&quality=low`, { waitUntil: 'load', timeout: TIMEOUT });
       await page.waitForFunction(() => window.G && G.net && G.net.mode === 'server' && G.app && G.app._booted === true && G.app._booting === false, null, { timeout: TIMEOUT, polling: 250 });
     };
+    const enter = (page, register) => page.evaluate(async ([a, reg]) => {
+      try {
+        const prof = reg ? await G.auth.register({ email: a.email, nickname: a.nickname, password: a.password, confirm: a.password, agree: true, easy: false }) : await G.auth.login({ login: a.email, password: a.password });
+        return { ok: await G.app.enterGame(prof) };
+      } catch (e) { return { ok: false, err: `${e?.code || ''} ${e?.message || e}` }; }
+    }, [acct, register]);
+    const synced = (page) => page.waitForFunction(() => G.ready === true && !!G.state && G.sys.settings.store.pulled && !!G.sys.settings.store.last, null, { timeout: TIMEOUT, polling: 250 });
     const saves = [];
-    // device 1: register, change account and device options, wait for the debounced save
+    const watch = (page, tag) => page.on('request', (q) => { if (/\/api\/settings\/save\.php/.test(q.url())) saves.push({ tag, csrf: !!q.headers()['x-csrf-token'], at: Date.now() }); });
+    const settled = (page) => page.evaluate(async () => { const st = G.sys.settings.store, t0 = Date.now(); await new Promise((r) => setTimeout(r, 300)); while (Date.now() - t0 < 40000 && (st.pending || st.busy)) await new Promise((r) => setTimeout(r, 200)); return { v: st.v, sent: st.sent, unsent: Object.keys(st.unsent()).length, ms: Date.now() - t0 }; });
+
+    // ---- device 1: register, change account and device options, the 2 s pause
     const one = await open('device1', {}, BASE);
-    one.page.on('response', async (r) => { if (/\/api\/settings\/save\.php/.test(r.url())) saves.push(r.status()); });
+    watch(one.page, 'd1');
     await openTitle(one.page);
-    const e1 = await one.page.evaluate(async (a) => {
-      try { const prof = await G.auth.register({ email: a.email, nickname: a.nickname, password: a.password, confirm: a.password, agree: true, easy: false }); return { ok: await G.app.enterGame(prof) }; }
-      catch (e) { return { ok: false, err: `${e?.code || ''} ${e?.message || e}` }; }
-    }, acct);
+    const e1 = await enter(one.page, true);
     check('D: device 1 — a new account enters (server mode)', e1.ok === true, JSON.stringify(e1));
     if (!e1.ok) return;
-    await one.page.waitForFunction(() => G.ready === true && !!G.state && G.sys.settings.store.pulled, null, { timeout: TIMEOUT, polling: 250 });
+    await synced(one.page);
     const ACCT = { mixMaster: 65, mixMusic: 25, mixSfx: 85, mixUi: 45, mixVoice: 75, mixNature: 35, textScale: 5, uiStep: 3, avatarScale: 115, nameplates: 'off', hudOpacity: 70, muteHidden: false };
     const DEV = { stickSide: 'right', touchButtons: 3 };
-    const dev1 = await one.page.evaluate(async ([A, D]) => {
-      for (const [k, v] of Object.entries({ ...A, ...D })) G.sys.settings.set(k, v);
-      const st = G.sys.settings.store, t0 = Date.now(), seen = [];
-      await new Promise((r) => setTimeout(r, 300));
-      while (Date.now() - t0 < 40000 && (st.pending || st.busy || st.v < 1)) { seen.push(`${st.pending ? 'p' : ''}${st.busy ? 'b' : ''}${st.v}`); await new Promise((r) => setTimeout(r, 250)); }
-      const r = await G.net.request('settings/get.php');
-      // a value that only the account store has (the player save never carries it): device 2 must get it from there
-      const only = await G.net.request('settings/save.php', { body: { v: r.v + 1, data: { acct: { ...r.data.acct, mixNature: 15 }, dev: r.data.dev } } });
-      return { id: st.deviceId(), v: r.v, acct: r.data.acct, dev: r.data.dev, ms: Date.now() - t0, seen: [...new Set(seen)].join(' '), errors: st.errors, only: only.v };
-    }, [ACCT, DEV]);
-    const okAcct = Object.entries(ACCT).every(([k, v]) => (k === 'uiStep' ? dev1.acct.uiScale === 1.12 : dev1.acct[k] === v));
-    check('D: device 1 — the account-scope values reach the server (debounced, one blob)', dev1.v >= 1 && okAcct && saves.length >= 1 && saves.every((s) => s === 200), `v ${dev1.v} in ${dev1.ms} ms [${dev1.seen}] errors ${dev1.errors} saves ${saves.join()} ${JSON.stringify(dev1.acct).slice(0, 200)}`);
-    check('D: device 1 — the device-scope values are kept under its own device id', dev1.dev?.[dev1.id]?.s?.stickSide === 'right' && dev1.dev[dev1.id].s.touchButtons === 3 && !('stickSide' in dev1.acct), JSON.stringify(dev1.dev).slice(0, 200));
-    await one.context.close();
-    // device 2: a fresh browser (no local storage) logs in with the same account
+    const t0 = Date.now(), s0 = saves.length;
+    const id1 = await one.page.evaluate(([A, D]) => { for (const [k, v] of Object.entries({ ...A, ...D })) G.sys.settings.set(k, v); return G.sys.settings.store.deviceId(); }, [ACCT, DEV]);
+    const st1 = await settled(one.page);
+    const r1 = await dbWait((r) => r.blob.acct.mixMaster === 65);
+    const firstSave = saves.slice(s0)[0];
+    const missing = Object.entries(ACCT).filter(([k, v]) => r1?.blob?.acct?.[k] !== v).map(([k]) => `${k}=${r1?.blob?.acct?.[k]}`);
+    check('D: device 1 — after the 2 s pause the account values are in user_settings (read from the database)', !!r1 && missing.length === 0 && !!firstSave && firstSave.at - t0 >= 1500 && firstSave.csrf, `${note(r1)} · first save ${firstSave ? firstSave.at - t0 : '-'} ms after the change · missing ${missing.join(' ')} · ${JSON.stringify(st1)}`);
+    check('D: device 1 — the device values are kept under its own device id (database)', r1?.blob?.dev?.[id1]?.s?.stickSide === 'right' && r1.blob.dev[id1].s.touchButtons === 3 && !('stickSide' in (r1.blob.acct || {})), JSON.stringify(r1?.blob?.dev || {}).slice(0, 200));
+    log(`    database after the pause: ${note(r1)} acct ${JSON.stringify(r1?.blob?.acct || {}).slice(0, 400)}`);
+
+    // ---- a change 0.5 s before the tab closes
+    await one.page.evaluate(() => { G.sys.settings.set('mixMusic', 30); G.sys.settings.set('hudOpacity', 65); });
+    await sleep(500);
+    const s1 = saves.length;
+    await one.page.close({ runBeforeUnload: false });
+    const r2 = await dbWait((r) => r.blob.acct.mixMusic === 30 && r.blob.acct.hudOpacity === 65, 10000);
+    check('D: a change 0.5 s before the tab closes still reaches the database (pagehide → keepalive)', r2?.blob?.acct?.mixMusic === 30 && r2.blob.acct.hudOpacity === 65 && saves.length > s1, `${note(r2)} · music ${r2?.blob?.acct?.mixMusic} hud ${r2?.blob?.acct?.hudOpacity} · saves on close ${saves.length - s1}`);
+
+    // ---- a value that only the account store has (the player save never carries it)
+    {
+      const row = dbRow();
+      const blob = { ...row.blob, acct: { ...row.blob.acct, mixNature: 15 } };
+      const w = spawnSync('php', ['-r', '$p=new PDO("sqlite:".$argv[1]);$q=$p->prepare("UPDATE user_settings SET v = v + 1, data = ?, updated_at = ?");$q->execute([$argv[2], (int) round(microtime(true) * 1000)]);echo $q->rowCount();', dbFile, JSON.stringify(blob)], { encoding: 'utf8' });
+      check('D: (test step) 자연 소리 15 written into the account store only', String(w.stdout).trim() === '1', w.stderr);
+    }
+
+    // ---- device 2: a fresh browser logs in with the same account
     const two = await open('device2', {}, BASE);
+    watch(two.page, 'd2');
     await openTitle(two.page);
     const before = await two.page.evaluate(() => ({ mixMusic: G.settings.mixMusic, textScale: G.settings.textScale }));
-    const e2 = await two.page.evaluate(async (a) => {
-      try { const prof = await G.auth.login({ login: a.email, password: a.password }); return { ok: await G.app.enterGame(prof) }; }
-      catch (e) { return { ok: false, err: `${e?.code || ''} ${e?.message || e}` }; }
-    }, acct);
-    check('D: device 2 — a fresh browser logs in with the same account', e2.ok === true && before.mixMusic !== 25, JSON.stringify([e2, before]));
+    const e2 = await enter(two.page, false);
+    check('D: device 2 — a fresh browser logs in with the same account', e2.ok === true && before.mixMusic !== 30, JSON.stringify([e2, before]));
     if (!e2.ok) return;
-    await two.page.waitForFunction(() => G.ready === true && !!G.state && G.sys.settings.store.pulled && G.sys.settings.store.last, null, { timeout: TIMEOUT, polling: 250 });
-    const got = await two.page.evaluate((A) => ({ vals: Object.fromEntries(Object.keys(A).map((k) => [k, G.sys.settings.get(k)])), stick: G.sys.settings.get('stickSide'), tb: G.sys.settings.get('touchButtons'), id: G.sys.settings.store.deviceId(), tk: getComputedStyle(document.documentElement).getPropertyValue('--text-k').trim(), ds: G.sys.player.rig.drawScale, np: document.body.classList.contains('np-off') }), ACCT);
-    const lost = Object.keys(ACCT).filter((k) => k !== 'mixNature' && got.vals[k] !== ACCT[k]);
-    check('D: device 2 — a value only the account store had (자연 소리 15) arrives from api/settings', got.vals.mixNature === 15 && dev1.only >= 2, `mixNature ${got.vals.mixNature}`);
+    await synced(two.page);
+    const WANT = { ...ACCT, mixMusic: 30, hudOpacity: 65, mixNature: 15 };
+    const got = await two.page.evaluate((A) => ({ vals: Object.fromEntries(Object.keys(A).map((k) => [k, G.sys.settings.get(k)])), stick: G.sys.settings.get('stickSide'), tb: G.sys.settings.get('touchButtons'), id: G.sys.settings.store.deviceId(), last: G.sys.settings.store.last, tk: getComputedStyle(document.documentElement).getPropertyValue('--text-k').trim(), ds: G.sys.player.rig.drawScale, np: document.body.classList.contains('np-off') }), WANT);
+    const lost = Object.keys(WANT).filter((k) => got.vals[k] !== WANT[k]);
+    check('D: device 2 — 자연 소리 15 arrives: the values come from the account store, not from the player save', got.vals.mixNature === 15, `mixNature ${got.vals.mixNature} · ${JSON.stringify(got.last)}`);
     check('D: device 2 — every account-scope value is set after the login (sound, text, UI, character, name plates, HUD …)', lost.length === 0, lost.map((k) => `${k}=${got.vals[k]}`).join(' '));
-    check('D: device 2 — and applied (글자 1.36, 캐릭터 1.15, 이름표 숨김)', got.tk === '1.36' && got.ds === 1.15 && got.np, JSON.stringify(got));
-    check('D: device 2 — the device-scope values of device 1 are not taken (another device id)', got.stick === 'left' && got.tb === 2 && got.id !== dev1.id, JSON.stringify({ stick: got.stick, tb: got.tb }));
+    check('D: device 2 — and applied (글자 1.36, 캐릭터 1.15, 이름표 숨김)', got.tk === '1.36' && got.ds === 1.15 && got.np, JSON.stringify({ tk: got.tk, ds: got.ds, np: got.np }));
+    check('D: device 2 — none of device 1\'s device values (another device id)', got.stick === 'left' && got.tb === 2 && got.id !== id1, JSON.stringify({ stick: got.stick, tb: got.tb }));
+
+    // ---- both devices logged in: device 2 changes 효과음, then device 1 (an older v) changes 글자 → 409 → merge
+    const p1 = await one.context.newPage();
+    watch(p1, 'd1b');
+    await openTitle(p1);
+    const e1b = await enter(p1, false);
+    if (!e1b.ok) { check('D: device 1 logs in again', false, JSON.stringify(e1b)); return; }
+    await synced(p1);
+    await two.page.evaluate(() => G.sys.settings.set('mixSfx', 20));
+    const st2 = await settled(two.page);
+    const r3 = await dbWait((r) => r.blob.acct.mixSfx === 20);
+    const stale = [];
+    p1.on('response', (r) => { if (/\/api\/settings\/(save|get)\.php/.test(r.url())) stale.push(`${/save/.test(r.url()) ? 'save' : 'get'}:${r.status()}`); });
+    await p1.evaluate(() => G.sys.settings.set('textScale', 4));
+    const st3 = await settled(p1);
+    const r4 = await dbWait((r) => r.blob.acct.textScale === 4 && r.blob.acct.mixSfx === 20);
+    const on1 = await p1.evaluate(() => ({ sfx: G.sys.settings.get('mixSfx'), text: G.sys.settings.get('textScale') }));
+    check('D: two devices at once — device 1\'s save meets 409 SETTINGS_STALE, it reads again and saves again', stale.includes('save:409') && stale.filter((x) => x === 'save:200').length >= 1, `${stale.join(' ')} · ${JSON.stringify([st2, st3])} · ${note(r3)}`);
+    check('D: two devices at once — the database keeps both: device 2\'s 효과음 20 and device 1\'s 글자 4', r4?.blob?.acct?.mixSfx === 20 && r4.blob.acct.textScale === 4, `${note(r4)} sfx ${r4?.blob?.acct?.mixSfx} text ${r4?.blob?.acct?.textScale}`);
+    check('D: two devices at once — device 1 now shows device 2\'s 효과음 20', on1.sfx === 20 && on1.text === 4, JSON.stringify(on1));
+
+    // ---- a change just before the logout
+    const lo = await p1.evaluate(async () => { G.sys.settings.set('chatOpacity', 55); return G.app.logout({ confirm: false, quiet: true }); });
+    const r5 = await dbWait((r) => r.blob.acct.chatOpacity === 55, 8000);
+    check('D: a change made just before the logout reaches the database', lo === true && r5?.blob?.acct?.chatOpacity === 55, `${note(r5)} chat ${r5?.blob?.acct?.chatOpacity}`);
+    log(`    database at the end: ${note(r5)} acct ${JSON.stringify(r5?.blob?.acct || {}).slice(0, 400)} devices ${Object.keys(r5?.blob?.dev || {}).join(',')}`);
+    if (SHOTS) fs.writeFileSync(path.join(SHOTS, 'partD-database.json'), JSON.stringify({ afterPause: r1, afterClose: r2, afterMerge: r4, afterLogout: r5 }, null, 1));
     await two.context.close();
+    await one.context.close();
   } finally { try { proc.kill(); } catch (e) { /* gone */ } }
 }
 

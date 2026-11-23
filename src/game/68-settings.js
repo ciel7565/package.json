@@ -46,7 +46,7 @@
       muted: B(false), musicGugak: B(true), natureSounds: B(true),
       volumeMaster: N(0, 1, 0.05, 0.8), volumeMusic: N(0, 1, 0.05, 0.45), volumeSfx: N(0, 1, 0.05, 0.8), volumeAmbient: N(0, 1, 0.05, 0.6), volumeVoice: N(0, 1, 0.05, 0.9),
       // 화면 구성
-      uiScale: N(0.75, 1.4, 0.01, 1), textScale: N(1, 5, 1, 2), avatarScale: N(80, 130, 5, 100),
+      uiScale: N(0.75, 1.4, 0.01, 1), uiStep: N(1, 4, 1, 2), textScale: N(1, 5, 1, 2), avatarScale: N(80, 130, 5, 100),
       nameplates: E(['all', 'others', 'off'], 'all'), minimapSize: N(1, 3, 1, 2), minimapVisible: B(true),
       chatOpacity: N(30, 100, 5, 100), hudOpacity: N(40, 100, 5, 100), highContrast: B(false), largeText: B(false),
       // 조작
@@ -382,6 +382,16 @@
       apply: (v) => { root().style.setProperty('--hud-a', String(clamp(Number(v) || 100, 40, 100) / 100)); body()?.classList.toggle('hud-faded', Number(v) < 100); }, words: '투명 HUD 인터페이스' },
     { id: 'highContrast', tab: 'layout', group: '보기 쉽게', type: 'toggle', label: '🌓 고대비', hint: '창 배경을 더 어둡고 글자를 더 선명하게 해요.', order: 40, words: '대비 선명 색' },
   ]);
+  // ---- 그래픽 퀄리티 (the engine preset `quality`; the older pane's 그래픽 품질 row is drawn here under the owner's name)
+  S.define([
+    { id: 'quality', tab: 'graphics', group: '품질', type: 'select', label: '🖼️ 그래픽 퀄리티', hint: '3D 그림 전체의 곱기예요. 자동은 이 기기의 힘에 맞춰 높음·보통·낮음 가운데 골라요. 낮음은 가장 가볍고 빨라요.', default: 'auto', scope: 'device', order: 10,
+      options: [{ v: 'auto', l: '자동', e: '🪄', hint: '기기에 맞춰 골라요' }, { v: 'high', l: '높음', e: '🌟' }, { v: 'medium', l: '보통', e: '⭐' }, { v: 'low', l: '낮음', e: '▫️' }],
+      available: () => (G.flags?.quality ? '주소에 품질이 정해져 있어서(quality=…) 여기서는 바꿀 수 없어요.' : true), words: '그래픽 품질 퀄리티 화질 프리셋 quality 자동' },
+    { id: 'qualityNow', tab: 'graphics', group: '품질', type: 'info', label: '🔎 지금 쓰는 단계', order: 11, render: (el) => {
+      const E = G.sys.engine;
+      el.textContent = `${E?.preset?.label || E?.quality || '-'}${G.settings?.quality === 'auto' ? ' (자동으로 골랐어요)' : ''} · 나무·풀의 수는 새로고침한 뒤에 바뀌어요.`;
+    } },
+  ]);
   // ---- 조작: the touch layout (device) and, until lane gfx's key table exists, the fixed keys
   S.define([
     { id: 'stickSide', tab: 'controls', group: '터치 화면', type: 'select', label: '🕹️ 이동 동그라미 위치', hint: '휴대폰·태블릿에서 걷는 동그라미를 어느 손으로 쓸지 골라요. 점프 단추는 반대쪽에 있어요.', default: 'left', scope: 'device', order: 400,
@@ -495,6 +505,7 @@
   // rows of the old panes that the registry draws now (same keys, same behaviour)
   S.hideLegacy('access', ['UI 크기', '고대비']);
   S.hideLegacy('controls', ['__kbd_note__']);
+  S.hideLegacy('graphics', ['그래픽 품질']); // drawn by the registry as 그래픽 퀄리티 (the same key)
   const LEGACY_OFF = new Set(['sound']); // the old 소리 pane is drawn by the registry rows above (same keys)
 
   const fmtVal = (d, v) => {
@@ -882,9 +893,22 @@
   S.isOpen = () => !!G.ui.modal.get('app-settings');
 
   // ================================================================ kept for the next login: the account store
+  // A change goes to this device's store at once (03-state) and is also written down as "unsent" (localStorage
+  // tfm.v1.settingsUnsent, per account: { <id>: { v, b: the value last agreed with the server, t: ms, s: a | d } })
+  // until the server has taken it. At a login the server's values come down; an unsent change of this device stays
+  // when the server still holds the value it was made over (nobody else changed that option) or when it is newer than
+  // the server's row — so a later change on another device wins over an older one here, and a change made here is
+  // never lost because the tab closed or the network dropped before it was sent. 409 SETTINGS_STALE (another device
+  // wrote in between): the same merge with a fresh copy, then send again. Leaving: G.app.logout awaits flush() before
+  // the session ends; a closing or hidden tab sends what is waiting with fetch keepalive (the CSRF header as always).
+  // A guest and the file mode keep everything on this device only (no server account).
   const DEV_KEY = 'tfm.v1.deviceId';
+  const UNSENT_KEY = 'tfm.v1.settingsUnsent';
+  const same = (a, b) => (Array.isArray(a) || Array.isArray(b) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
+  const plainMap = (m) => (m && typeof m === 'object' && !Array.isArray(m) ? m : {});
   const store = {
-    v: 0, other: {}, timer: 0, pending: false, busy: false, pulled: false, last: null, errors: 0,
+    v: 0, other: {}, timer: 0, pending: false, busy: false, pulled: false, last: null, errors: 0, sent: 0,
+    baseA: {}, baseD: {}, updatedAt: 0, _mem: {},
     deviceId() {
       let id = '';
       try { id = localStorage.getItem(DEV_KEY) || ''; } catch (e) { id = ''; }
@@ -894,7 +918,41 @@
       }
       return id;
     },
-    online() { return G.net?.mode === 'server' && !!G.app?.loggedIn && !!G.state; },
+    /** the server account the values belong to ('' for a guest, a local account or nobody) */
+    uid() { const c = G.auth?.current; return c && c.kind === 'server' && c.id != null && c.id !== '' ? String(c.id).slice(0, 40) : ''; },
+    online() { return G.net?.mode === 'server' && !!G.app?.loggedIn && !!G.state && !!store.uid(); },
+    /** the unsent changes of this account on this device */
+    unsent() {
+      const u = store.uid();
+      if (!u) return {};
+      try { const all = plainMap(JSON.parse(localStorage.getItem(UNSENT_KEY) || '{}')); return Object.assign({}, plainMap(all[u])); }
+      catch (e) { return Object.assign({}, plainMap(store._mem[u])); }
+    },
+    keepUnsent(m) {
+      const u = store.uid();
+      if (!u) return;
+      const has = m && Object.keys(m).length > 0;
+      if (has) store._mem[u] = m; else delete store._mem[u];
+      try {
+        const all = plainMap(JSON.parse(localStorage.getItem(UNSENT_KEY) || '{}'));
+        if (has) { delete all[u]; all[u] = m; } else delete all[u];
+        const ks = Object.keys(all);
+        while (ks.length > 5) delete all[ks.shift()]; // at most five accounts on one device
+        if (Object.keys(all).length) localStorage.setItem(UNSENT_KEY, JSON.stringify(all)); else localStorage.removeItem(UNSENT_KEY);
+      } catch (e) { /* storage blocked: kept in memory for this tab */ }
+    },
+    /** a change of this device that the server has not taken yet */
+    note(d) {
+      if (!d || !store.online()) return;
+      const m = store.unsent();
+      const cur = S.get(d.id);
+      if (cur === undefined || (typeof cur === 'object' && !Array.isArray(cur))) return;
+      const prev = m[d.id];
+      const base = prev ? prev.b : (d.scope === 'device' ? store.baseD : store.baseA)[d.id];
+      if (store.pulled && base !== undefined && base !== null && same(base, cur)) delete m[d.id]; // back to what the server has
+      else m[d.id] = { v: cur, b: base === undefined ? null : base, t: Date.now(), s: d.scope === 'device' ? 'd' : 'a' };
+      store.keepUnsent(m);
+    },
     /** the blob for the server: { acct: {id: v}, dev: { <deviceId>: { t, s: {id: v} } } } (≤ 5 devices, ≤ 8 KB) */
     blob() {
       const me = store.deviceId();
@@ -918,22 +976,47 @@
       clearTimeout(store.timer);
       store.timer = setTimeout(() => store.push(), 2000);
     },
+    /** the server's copy merged with this device's unsent changes (see above); returns { acct, dev } counts */
+    merge(r) {
+      store.v = Math.max(0, Number(r?.v) || 0);
+      store.updatedAt = Math.max(0, Number(r?.updatedAt) || 0);
+      const data = plainMap(r?.data);
+      const me = store.deviceId();
+      store.other = {};
+      for (const [id, e] of Object.entries(plainMap(data.dev))) if (id !== me && /^[a-z][a-z0-9]{11}$/.test(id) && e && typeof e === 'object') store.other[id] = { t: Number(e.t) || 0, s: plainMap(e.s) };
+      const acct = Object.assign({}, plainMap(data.acct));
+      const mine = Object.assign({}, plainMap(plainMap(plainMap(data.dev)[me]).s));
+      const un = store.unsent();
+      // the server's row is newer than a change made here when it was written after it (server clock → this clock)
+      const rowAt = store.updatedAt ? store.updatedAt - (Number(G.time?.serverOffset) || 0) : 0;
+      const kept = [];
+      for (const [id, u] of Object.entries(un)) {
+        const d = S.def(id);
+        const map = u && u.s === 'd' ? mine : acct;
+        const srv = map[id];
+        if (!d || !u || typeof u !== 'object' || same(srv, u.v)) { delete un[id]; continue; } // (the server has it already)
+        const keep = srv === undefined || (u.b !== null && u.b !== undefined && same(srv, u.b)) || Number(u.t) > rowAt;
+        if (!keep) { delete un[id]; continue; } // another device changed it later: its value wins
+        delete map[id];
+        kept.push([id, u.v]);
+      }
+      const nA = S.absorb(acct, 'account');
+      const nD = S.absorb(mine, 'device');
+      for (const [id, v] of kept) S.set(id, v, { quiet: true, force: true }); // on top of what the player save brought
+      store.baseA = plainMap(data.acct); store.baseD = plainMap(plainMap(plainMap(data.dev)[me]).s);
+      store.keepUnsent(un);
+      return { acct: nA, dev: nD, kept: kept.length };
+    },
     async pull() {
       if (!store.online()) return false;
       try {
         const r = await G.net.request('settings/get.php', { quiet: true, timeout: 9000 });
-        store.v = Math.max(0, Number(r?.v) || 0);
-        const data = r?.data && typeof r.data === 'object' ? r.data : {};
-        const me = store.deviceId();
-        store.other = {};
-        if (data.dev && typeof data.dev === 'object') for (const [id, e] of Object.entries(data.dev)) if (id !== me && /^[a-z][a-z0-9]{11}$/.test(id) && e && typeof e === 'object') store.other[id] = { t: Number(e.t) || 0, s: e.s && typeof e.s === 'object' ? e.s : {} };
-        const nA = S.absorb(data.acct, 'account');
-        const mine = data.dev && data.dev[me] && data.dev[me].s;
-        const nD = mine ? S.absorb(mine, 'device') : 0;
+        if (!store.online()) return false;
+        const n = store.merge(r);
         store.pulled = true;
-        store.last = { at: Date.now(), v: store.v, acct: nA, dev: nD };
-        try { G.bus.emit('settings:synced', { v: store.v, from: 'server', acct: nA, dev: nD }); } catch (e) { /* bus optional */ }
-        if (store.pending || !store.v) store.schedule();
+        store.last = { at: Date.now(), v: store.v, acct: n.acct, dev: n.dev, kept: n.kept };
+        try { G.bus.emit('settings:synced', { v: store.v, from: 'server', acct: n.acct, dev: n.dev, kept: n.kept }); } catch (e) { /* bus optional */ }
+        if (store.pending || !store.v || n.kept > 0) store.schedule();
         return true;
       } catch (e) {
         store.pulled = true; // an older server without the endpoint: keep the device store only
@@ -941,32 +1024,70 @@
         return false;
       }
     },
+    /** after the server took a blob: it is the agreed copy now; the unsent changes it carried are done */
+    took(blob, sentAt, v) {
+      store.v = Math.max(store.v, Number(v) || 0);
+      store.errors = 0; store.sent++;
+      const me = store.deviceId();
+      store.baseA = plainMap(blob.acct); store.baseD = plainMap(plainMap(plainMap(blob.dev)[me]).s);
+      const un = store.unsent();
+      for (const [id, u] of Object.entries(un)) { const sv = (u && u.s === 'd' ? store.baseD : store.baseA)[id]; if (!u || (Number(u.t) <= sentAt && same(sv, u.v))) delete un[id]; }
+      store.keepUnsent(un);
+    },
     async push(again) {
       clearTimeout(store.timer);
       if (!store.online()) return false;
       if (store.busy) { store.timer = setTimeout(() => store.push(), 800); return false; }
       store.busy = true; store.pending = false;
+      const blob = store.blob(), sentAt = Date.now();
       try {
-        const r = await G.net.request('settings/save.php', { body: { v: store.v + 1, data: store.blob() }, quiet: true, timeout: 9000 });
-        store.v = Math.max(store.v + 1, Number(r?.v) || 0);
-        store.errors = 0;
+        const r = await G.net.request('settings/save.php', { body: { v: store.v + 1, data: blob }, quiet: true, timeout: 9000 });
+        store.took(blob, sentAt, Math.max(store.v + 1, Number(r?.v) || 0));
         try { G.bus.emit('settings:synced', { v: store.v, from: 'device' }); } catch (e) { /* bus optional */ }
         return true;
       } catch (e) {
-        if (e && e.code === 'SETTINGS_STALE' && !again) { store.v = Math.max(store.v, Number(e.data?.v) || 0); store.busy = false; return store.push(true); }
+        if (e && e.code === 'SETTINGS_STALE' && !again) {
+          // another device wrote in between: take its copy (keeping the changes made here), then send again
+          store.busy = false;
+          try { const r = await G.net.request('settings/get.php', { quiet: true, timeout: 9000 }); store.merge(r); }
+          catch (err) { store.v = Math.max(store.v, Number(e.data?.v) || 0); }
+          return store.push(true);
+        }
         if (++store.errors < 4 && e?.code !== 'NOT_FOUND' && !/^HTTP_404$/.test(e?.code || '')) { store.pending = true; store.timer = setTimeout(() => store.push(), 5000 * store.errors); }
         G.log.info('SETTINGS', 'account settings not saved', e?.code || e?.message || e);
         return false;
       } finally { store.busy = false; }
     },
-    async flush() { if (store.pending && store.online()) return store.push(); return false; },
-    reset() { clearTimeout(store.timer); store.v = 0; store.other = {}; store.pending = false; store.pulled = false; store.errors = 0; },
+    /** before the session ends (logout): what is waiting goes now; resolves when the server answered (or gave up) */
+    async flush() {
+      for (let i = 0; i < 40 && store.busy; i++) await new Promise((r) => setTimeout(r, 100));
+      if (store.pending && store.online() && store.pulled) return store.push();
+      return false;
+    },
+    /** the tab closes or hides: send what is waiting with keepalive (its answer may never be seen; the unsent list stays) */
+    beacon() {
+      if (!store.pending || !store.online() || !store.pulled || typeof fetch !== 'function') return false;
+      clearTimeout(store.timer);
+      const blob = store.blob(), sentAt = Date.now(), v = store.v + 1;
+      try {
+        const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+        if (G.net.csrf) headers['X-CSRF-Token'] = G.net.csrf;
+        store.pending = false;
+        fetch(G.net.base + 'settings/save.php', { method: 'POST', headers, body: JSON.stringify({ v, data: blob }), credentials: 'include', keepalive: true, cache: 'no-store' })
+          .then((res) => res.json()).then((j) => { if (j && j.success === true) store.took(blob, sentAt, Number(j.data?.v) || v); else store.schedule(); })
+          .catch(() => { store.pending = true; if (document.visibilityState === 'visible') store.schedule(); }); // gone or offline: the unsent list waits for the next chance
+        store.beaconAt = sentAt;
+        return true;
+      } catch (e) { store.pending = true; return false; }
+    },
+    reset() { clearTimeout(store.timer); store.v = 0; store.other = {}; store.pending = false; store.pulled = false; store.errors = 0; store.baseA = {}; store.baseD = {}; store.updatedAt = 0; store.last = null; },
   };
   S.store = store;
-  S._dirty = (d) => { if (d && d.type !== 'action' && d.type !== 'info') store.schedule(); };
+  S._dirty = (d) => { if (d && d.type !== 'action' && d.type !== 'info') { store.note(d); store.schedule(); } };
   G.bus.on('game:login', () => { store.reset(); setTimeout(() => { store.pull().then(() => S.applyAll()); }, 50); });
-  G.bus.on('game:logout', () => { store.flush(); store.reset(); });
-  window.addEventListener('pagehide', () => { if (store.pending && store.online()) { try { store.push(); } catch (e) { /* leaving */ } } });
+  G.bus.on('game:logout', () => { store.reset(); });
+  window.addEventListener('pagehide', () => { try { store.beacon(); } catch (e) { /* leaving */ } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { try { store.beacon(); } catch (e) { /* hidden */ } } });
 
   // dev centre / tests
   S._W = W;

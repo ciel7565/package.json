@@ -5842,6 +5842,8 @@
         const prof = auth.current;
         if (prof && G.state) Profiles.upsert({ id: indexId(prof), level: num(G.state.stats?.level) || 1, lastPlayed: now(), playTime: num(G.state.stats?.playTime) });
         if (!reduceMotion()) await G.ui.fade(true, 320);
+        // [settings] §18.2: a setting changed just now goes to the account before the session ends (at most 4 s)
+        try { await Promise.race([G.sys.settings?.store?.flush?.(), new Promise((r) => setTimeout(r, 4000))]); } catch (e) { /* it stays unsent on this device */ }
         this._teardown();
         const out = await auth.logout();
         G.bus.emit('game:logout', { profile: prof ? { id: prof.id, nickname: prof.nickname, kind: prof.kind } : null });
