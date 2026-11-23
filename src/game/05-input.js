@@ -15,6 +15,26 @@
 //   G.input.shieldClicks(ms?)   swallow the browser click that trails the current press (see "ghost clicks")
 // Gameplay input is ignored while G.ui.isBlocking() (modal, dialogue, typing...).
 //
+// [gfx] KEY BINDINGS (CONTRACT §18.2) — G.input.bindings. Every key the client acts on is an ACTION with default
+// physical keys (e.code: a Korean input source changes nothing). Fragments keep calling G.input.onKey('KeyI', …) with
+// the DEFAULT code; when the player gives an action another key (설정 → 조작), the dispatcher translates: the new key
+// fires the handlers of the default one and the old key fires nothing. Nothing is translated until a key was changed.
+//   list()                 [{ id, label, group, groupLabel, codes, def, names, fixed, tap, game, custom }] in table order
+//   get(id)                the action's current codes (a copy) | null
+//   set(id, codes, {steal})  → { ok: true, codes, stolen } | { ok: false, reason: 'conflict' | 'reserved' | 'fixed' |
+//                          'invalid' | 'unknown', message (Korean), conflicts: [{ code, id, label }] } — a key that
+//                          another action uses is REFUSED unless steal: true (then the other action loses it)
+//   reset(id?)             one action (or all) back to its default keys
+//   isDown(id)             is one of the action's keys held?
+//   on(id, fn, opts)       fn(event) when the action's key goes down (opts as onKey) -> off()
+//   name(code)             what to print on a key cap: 'KeyW' → 'W', 'ControlLeft' → 'Ctrl', 'ArrowUp' → '↑'
+//   capture(fn)            the next key press goes to fn(code | null) and nowhere else (Esc = null) -> cancel()
+//   bindings.forward / .jump / … (every action id) are the live code arrays (read only), as before
+// Kept for the next visit under G.settings['key_<id>'] (an array of codes) and declared to the options registry as
+// type 'key' (tab controls). Inside a window (G.ui.isBlocking) the keys of game actions (move, jump, interact, chat,
+// turn speed, zoom) are plain dialog keys again — Space / Enter / E / arrows always work there, whatever was rebound.
+// Keys with Ctrl / Alt / Meta held are never game keys. Emits 'input:bindings' { id, codes }.
+//
 // Ghost clicks (NEW-1): a touch / pen tap is pointerdown → pointerup → (later) a compatibility `click` that the
 // browser hit-tests at the tap point AFTER our handlers ran. When the press itself opened something there (the
 // phone 👆 opening a dialogue, a tap on the 3D view opening a picker), that click used to land on the new UI and
@@ -112,6 +132,188 @@
     return (Number.isFinite(s) && s > 0 ? Math.min(3, s) : 1) * (Number.isFinite(k) && k > 0 ? Math.min(4, Math.max(0.25, k)) : 1);
   };
 
+  // ---------------------------------------------------------------- [gfx] key bindings (see the header)
+  // [id, label, group, default codes, flags] — flags: g = game action (its keys are plain dialog keys inside a window),
+  // x = fixed (the browser owns the key), t = acts on a clean tap (down and up alone), a = advanced (end of the table)
+  const KEY_GROUPS = { move: '움직이기', view: '화면 보기', open: '창 열기', system: '그 밖에' };
+  const ACTION_TABLE = [
+    ['forward', '앞으로 가기', 'move', ['KeyW', 'ArrowUp'], 'g'],
+    ['back', '뒤로 가기', 'move', ['KeyS', 'ArrowDown'], 'g'],
+    ['left', '왼쪽으로 가기', 'move', ['KeyA', 'ArrowLeft'], 'g'],
+    ['right', '오른쪽으로 가기', 'move', ['KeyD', 'ArrowRight'], 'g'],
+    ['run', '달리기 (누른 채 움직이기)', 'move', ['ShiftLeft', 'ShiftRight'], 'g'],
+    ['jump', '점프', 'move', ['Space'], 'g'],
+    ['interact', '말 걸기 · 살펴보기', 'move', ['KeyE'], 'g'],
+    ['mouseToggle', '마우스 고정 ↔ 풀기 (한 번 톡)', 'view', ['ControlLeft', 'ControlRight'], 'gt'],
+    ['lookFaster', '화면 돌리기 빠르게', 'view', ['Equal', 'NumpadAdd'], 'g'],
+    ['lookSlower', '화면 돌리기 느리게', 'view', ['Minus', 'NumpadSubtract'], 'g'],
+    ['lookReset', '돌리는 빠르기 처음으로', 'view', ['Digit0', 'Numpad0'], 'g'],
+    ['zoomIn', '가까이 보기', 'view', ['KeyZ'], 'g'],
+    ['zoomOut', '멀리 보기', 'view', ['KeyX'], 'g'],
+    ['fullscreen', '전체 화면 켜고 끄기', 'view', ['KeyF'], ''],
+    ['menu', '메뉴 열기 · 창 닫기', 'open', ['Escape'], 'x'],
+    ['map', '지도', 'open', ['KeyM'], ''],
+    ['bag', '가방', 'open', ['KeyI'], ''],
+    ['quest', '할 일', 'open', ['KeyQ', 'KeyL'], ''],
+    ['collection', '도감 · 업적', 'open', ['KeyC'], ''],
+    ['journal', '작업일지', 'open', ['KeyJ'], ''],
+    ['today', '오늘의 체험', 'open', ['KeyN'], ''],
+    ['companion', '옹이와 놀기', 'open', ['KeyO'], ''],
+    ['chat', '채팅 쓰기', 'open', ['Enter', 'NumpadEnter'], 'g'],
+    ['emote', '이모지', 'open', ['KeyT'], ''],
+    ['gesture', '몸짓', 'open', ['KeyG'], ''],
+    ['photo', '사진 찍기', 'open', ['KeyP'], ''],
+    ['help', '도움말', 'open', ['KeyH'], ''],
+    ['settings', '설정', 'open', ['F10'], ''],
+    ['roomEdit', '방 꾸미기 (내 방에서)', 'system', ['KeyB'], 'a'],
+    ['devcenter', '개발자·관리자 센터 (권한이 있을 때)', 'system', ['F9', 'Backquote'], 'a'],
+  ];
+  const KEYSET = 'key_';        // G.settings key of an action's codes: key_<id> = ['KeyW', 'ArrowUp']
+  const MAX_CODES = 3;
+  // the physical keys an action may sit on (KeyboardEvent.code of an ordinary keyboard)
+  const CODE_RE = /^(Key[A-Z]|Digit\d|Numpad(\d|Add|Subtract|Multiply|Divide|Decimal|Enter)|F([1-9]|1\d|2[0-4])|Arrow(Up|Down|Left|Right)|Space|Enter|Escape|(Shift|Control|Alt|Meta)(Left|Right)|Minus|Equal|Backquote|Bracket(Left|Right)|Semicolon|Quote|Comma|Period|Slash|Backslash|IntlBackslash|Page(Up|Down)|Home|End|Insert|Delete|Backspace|Tab|CapsLock)$/;
+  // keys no action may take: the quick picks 1 – 9, the keys every window needs, and the ones the browser / system owns
+  const RESERVED_RE = /^(Digit[1-9]|Numpad[1-9]|Tab|Escape|Backspace|Delete|CapsLock|NumLock|ScrollLock|Pause|PrintScreen|ContextMenu|Meta(Left|Right)|OS(Left|Right)|Alt(Left|Right)|F5|F11|F12|Unidentified|Lang\d|Convert|NonConvert|KanaMode|HangulMode|Hanja)$/;
+  const MOD_RE = /^(Control|Meta|Alt|OS)(Left|Right)$/;
+  const KEY_NAMES = {
+    Space: 'Space', Enter: 'Enter', NumpadEnter: '숫자판 Enter', Escape: 'Esc', ShiftLeft: 'Shift', ShiftRight: 'Shift', ControlLeft: 'Ctrl', ControlRight: 'Ctrl',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Equal: '+', Minus: '−', NumpadAdd: '숫자판 +', NumpadSubtract: '숫자판 −', NumpadMultiply: '숫자판 ×', NumpadDivide: '숫자판 ÷', NumpadDecimal: '숫자판 .',
+    Backquote: '`', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: '\'', Comma: ',', Period: '.', Slash: '/', Backslash: '\\', PageUp: 'PgUp', PageDown: 'PgDn', Insert: 'Ins',
+  };
+  /** what to print on a key cap */
+  function keyName(code) {
+    code = String(code || '');
+    if (KEY_NAMES[code]) return KEY_NAMES[code];
+    let m = /^Key([A-Z])$/.exec(code); if (m) return m[1];
+    m = /^Digit(\d)$/.exec(code); if (m) return m[1];
+    m = /^Numpad(\d)$/.exec(code); if (m) return '숫자판 ' + m[1];
+    return code;
+  }
+  const acts = new Map();       // id → { id, label, group, def, codes, game, fixed, tap, adv }
+  const keyOwner = new Map();   // code → the action that has it now
+  const defOwner = new Map();   // code → the action it belongs to by default
+  let keysCustom = false;       // an action is away from its defaults: only then does the dispatcher translate
+  let keyWriting = null;        // the G.settings key being written by store() (its settings:changed is our own echo)
+  let keyCapture = null;        // bindings.capture(): the next key press goes there
+  for (const [id, label, group, def, flags] of ACTION_TABLE) {
+    acts.set(id, { id, label, group, def: def.slice(), codes: def.slice(), game: flags.includes('g'), fixed: flags.includes('x'), tap: flags.includes('t'), adv: flags.includes('a') });
+    for (const c of def) defOwner.set(c, id);
+  }
+  const sameCodes = (a, b) => a.length === b.length && a.every((c, i) => c === b[i]);
+  function reindexKeys() {
+    keyOwner.clear();
+    let custom = false;
+    for (const A of acts.values()) { for (const c of A.codes) keyOwner.set(c, A.id); if (!sameCodes(A.codes, A.def)) custom = true; }
+    keysCustom = custom;
+  }
+  reindexKeys();
+  /** a list of codes made safe: real key codes, no doubles, at most MAX_CODES. null when it is not a list — and, with
+   *  strict (a choice made by hand), when one entry is not a key; stored / synced lists just lose such entries */
+  function cleanCodes(codes, strict) {
+    if (typeof codes === 'string') codes = codes ? [codes] : [];
+    if (!Array.isArray(codes)) return null;
+    const out = [];
+    for (const c of codes) {
+      if (typeof c !== 'string' || !CODE_RE.test(c)) { if (strict) return null; continue; }
+      if (out.indexOf(c) < 0 && out.length < MAX_CODES) out.push(c);
+    }
+    return out;
+  }
+  /** keep an action's keys for the next visit (through the options registry when it knows the row) */
+  function storeKeys(id) {
+    const A = acts.get(id), key = KEYSET + id, v = A.codes.slice();
+    keyWriting = key;
+    try {
+      const S = G.sys && G.sys.settings;
+      if (S && typeof S.set === 'function' && typeof S.has === 'function' && S.has(key)) S.set(key, v, { force: true });
+      else if (typeof G.setSetting === 'function') G.setSetting(key, v);
+      else if (G.settings) G.settings[key] = v;
+    } catch (e) { G.log?.warn?.('INPUT', 'key binding not stored', id, e?.message || e); }
+    finally { keyWriting = null; }
+  }
+  /** give an action its keys. A key another action holds: refused (ok: false) unless steal. → result of bindings.set */
+  function assignKeys(id, codes, opts = {}) {
+    const A = acts.get(id);
+    if (!A) return { ok: false, reason: 'unknown', message: '모르는 동작이에요.' };
+    if (A.fixed) return { ok: false, reason: 'fixed', message: `${keyName(A.def[0])} 키는 브라우저가 정해 둔 키라서 바꿀 수 없어요.` };
+    const list = cleanCodes(codes, !opts.quiet);
+    if (!list) return { ok: false, reason: 'invalid', message: '쓸 수 없는 키예요.' };
+    for (const c of list) if (RESERVED_RE.test(c)) return { ok: false, reason: 'reserved', code: c, message: `${keyName(c)} 키는 다른 일에 쓰고 있어서 고를 수 없어요.` };
+    const hits = [];
+    for (const c of list) { const o = keyOwner.get(c); if (o && o !== id) hits.push({ code: c, id: o, label: acts.get(o).label }); }
+    if (hits.length && !opts.steal) return { ok: false, reason: 'conflict', code: hits[0].code, conflicts: hits, message: `${keyName(hits[0].code)} 키는 이미 ‘${hits[0].label}’에 쓰고 있어요.` };
+    for (const h of hits) if (acts.get(h.id).fixed) return { ok: false, reason: 'fixed', code: h.code, conflicts: hits, message: `${keyName(h.code)} 키는 바꿀 수 없는 키예요.` };
+    const changed = [];
+    for (const h of hits) { const B = acts.get(h.id); B.codes = B.codes.filter((c) => c !== h.code); if (changed.indexOf(h.id) < 0) changed.push(h.id); }
+    if (!sameCodes(A.codes, list)) { A.codes = list; changed.push(id); }
+    if (!changed.length) return { ok: true, codes: A.codes.slice(), stolen: [] };
+    reindexKeys();
+    for (const k of Array.from(keys)) if (!keyOwner.has(k) && defOwner.has(k)) keys.delete(k);   // a key that just lost its job is not "held"
+    if (!opts.quiet) for (const cid of changed) storeKeys(cid);
+    for (const cid of changed) { try { G.bus.emit('input:bindings', { id: cid, codes: acts.get(cid).codes.slice() }); } catch (e) { /* bus optional */ } }
+    return { ok: true, codes: A.codes.slice(), stolen: hits };
+  }
+  /** stored / synced keys arrive (start, another device, the registry's reset): the newcomer wins a shared key */
+  function adoptKeys(id, codes) {
+    const A = acts.get(id);
+    if (!A || A.fixed) return;
+    const list = cleanCodes(codes);
+    if (!list) return;
+    const ok = list.filter((c) => !RESERVED_RE.test(c) && !(keyOwner.get(c) && acts.get(keyOwner.get(c)).fixed));
+    if (sameCodes(A.codes, ok)) return;
+    const before = new Map([...acts.values()].map((x) => [x.id, x.codes.join()]));
+    assignKeys(id, ok, { steal: true, quiet: true });
+    // the others that lost a key to the newcomer are stored too (their old rows would bring the key back)
+    for (const B of acts.values()) if (B.id !== id && before.get(B.id) !== B.codes.join()) storeKeys(B.id);
+  }
+  /** the default codes a pressed key stands for right now (what onKey handlers are registered under) */
+  const _oneCode = [''];
+  function logicalCodes(code, e, blocking) {
+    if (!keysCustom || (e && (e.ctrlKey || e.metaKey || e.altKey) && !MOD_RE.test(code))) { _oneCode[0] = code; return _oneCode; }
+    const out = [];
+    const cur = keyOwner.get(code);
+    if (cur) { const A = acts.get(cur); if (!(blocking && A.game)) out.push(A.def[Math.min(A.codes.indexOf(code), A.def.length - 1)]); }
+    const d = defOwner.get(code);
+    if ((!d || (blocking && acts.get(d).game)) && out.indexOf(code) < 0) out.push(code);
+    return out;
+  }
+  const bindings = {
+    list() {
+      return [...acts.values()].map((A) => ({ id: A.id, label: A.label, group: A.group, groupLabel: KEY_GROUPS[A.group] || '', codes: A.codes.slice(), def: A.def.slice(),
+        names: A.codes.map(keyName).filter((n, i, a) => a.indexOf(n) === i), fixed: A.fixed, tap: A.tap, game: A.game, adv: A.adv, custom: !sameCodes(A.codes, A.def) }));
+    },
+    get(id) { const A = acts.get(id); return A ? A.codes.slice() : null; },
+    set(id, codes, opts) { return assignKeys(id, codes, opts || {}); },
+    reset(id) {
+      if (id != null) { const A = acts.get(id); return A ? assignKeys(id, A.def, { steal: true }) : { ok: false, reason: 'unknown', message: '모르는 동작이에요.' }; }
+      for (const A of acts.values()) if (!A.fixed) A.codes = A.def.slice();
+      reindexKeys();
+      for (const A of acts.values()) { if (A.fixed) continue; storeKeys(A.id); try { G.bus.emit('input:bindings', { id: A.id, codes: A.codes.slice() }); } catch (e) { /* bus optional */ } }
+      return { ok: true };
+    },
+    isDown(id) { const A = acts.get(id); return !!A && A.codes.some((c) => keys.has(c)); },
+    on(id, fn, opts) {
+      const A = acts.get(id);
+      if (!A || typeof fn !== 'function') return () => {};
+      const offs = A.def.map((c) => input.onKey(c, fn, opts));
+      return () => { for (const o of offs) o(); };
+    },
+    name: keyName,
+    /** the names of an action's keys for a hint: 'W · ↑' */
+    label(id) { const A = acts.get(id); return A ? A.codes.map(keyName).filter((n, i, a) => a.indexOf(n) === i).join(' · ') : ''; },
+    capture(fn) {
+      const c = { fn: typeof fn === 'function' ? fn : null };
+      keyCapture = c;
+      return () => { if (keyCapture === c) keyCapture = null; };
+    },
+    get custom() { return keysCustom; },
+    groups: KEY_GROUPS, reserved: (code) => RESERVED_RE.test(String(code || '')), MAX: MAX_CODES,
+    /** tests: the codes a pressed key stands for (see the header) */
+    _logical: (code, e, blocking) => logicalCodes(code, e || null, !!blocking).slice(),
+  };
+  // the old shape: bindings.forward, bindings.jump … are the live code arrays
+  for (const A of acts.values()) Object.defineProperty(bindings, A.id, { get: () => A.codes, enumerable: false });
+
   const input = {
     keys,
     hasTouch: isTouch,
@@ -120,10 +322,7 @@
     axis: { x: 0, y: 0 },
     running: false,
     pointerDown: false,
-    bindings: {
-      forward: ['KeyW', 'ArrowUp'], back: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
-      run: ['ShiftLeft', 'ShiftRight'], jump: ['Space'], interact: ['KeyE'],
-    },
+    bindings,
     isDown: (code) => keys.has(code),
     any(list) { return list.some((c) => keys.has(c)); },
     onKey(code, fn, opts = {}) {
@@ -178,6 +377,27 @@
     holdInfo() { return { held: !!hold.el, notes: hold.notes, sinceMs: hold.el ? performance.now() - hold.last : 0 }; },
   };
   G.input = input;
+  // [gfx] the keys kept on this device come back (03-state has read the device store), and every action is declared to
+  // the options registry as one row of type 'key' (68-settings drains the queue; without it the rows are simply unused)
+  {
+    for (const A of acts.values()) { const v = G.settings ? G.settings[KEYSET + A.id] : undefined; if (Array.isArray(v) && !A.fixed) adoptKeys(A.id, v); }
+    const Q = (G.settingsQueue = G.settingsQueue || []);
+    let n = 0;
+    for (const A of acts.values()) {
+      if (A.fixed) continue;
+      Q.push({
+        id: KEYSET + A.id, key: KEYSET + A.id, tab: 'controls', group: '키 설정', type: 'key', label: A.label, action: A.id, order: 300 + n++, scope: 'account',
+        hint: A.tap ? '이 키를 한 번 톡 누르면 바뀌어요. 다른 키와 함께 누르면 아무 일도 없어요.' : A.game ? '창이 열려 있을 때는 창의 키(Space · Enter · 화살표)가 그대로 일해요.' : '',
+        words: '키 단축키 key ' + A.def.map(keyName).join(' '), default: A.def.slice(),
+        apply: (v) => { if (keyWriting !== KEYSET + A.id) adoptKeys(A.id, v); },
+      });
+    }
+    G.bus.on('settings:changed', ({ key, value } = {}) => {
+      if (typeof key !== 'string' || key.indexOf(KEYSET) !== 0 || key === keyWriting) return;
+      const id = key.slice(KEYSET.length);
+      if (acts.has(id) && Array.isArray(value)) adoptKeys(id, value);
+    });
+  }
   // every profile starts with clean input: no held keys, no 달리기 toggle left on by the previous child
   for (const ev of ['game:logout', 'game:login']) G.bus.on(ev, () => input.reset());
   if (input.touchUI) document.body?.classList.add('is-touch');
@@ -193,20 +413,33 @@
   //   drag  the old behaviour (press and drag); touch devices always
   // Where pointer lock is refused (pointerlockerror / no API) the fallback is HOVER LOOK: mousemove deltas over the view
   // with no button down, plus slow turning while the pointer rests in the outer 6 % of the view.
-  // Defaults: fine pointer + keyboard → normal mode 'lock', easy mode 'walk' (operator settings
-  // controls.mouse_look_normal / _easy through G.site); touch → 'drag'; automation (navigator.webdriver) → 'drag'
-  // unless ?mouselook=lock|walk|drag asks otherwise.
-  // TEST SEAM G.input.mouseLook: state() → {mode, pref, locked, requests, exits, refused, hover, walking, userReleased,
-  //   lastReason}; feed(dx, dy) adds raw mouse deltas exactly as a locked mousemove does; setApi({request(el), exit(),
-  //   element()}) replaces requestPointerLock / exitPointerLock / document.pointerLockElement (call lockChanged() from
-  //   the fakes); refuse() simulates a refused lock; refresh() re-reads the mode.
+  // Defaults [gfx, §18.0]: fine pointer + keyboard → 'lock' in BOTH modes — the view is fixed to the character
+  // (operator settings controls.mouse_look_normal / _easy through G.site still decide where they are set); touch →
+  // 'drag'; automation (navigator.webdriver) → 'drag' unless ?mouselook=lock|walk|drag asks otherwise.
+  // THE CTRL TAP [gfx, §18.2]: Control pressed and let go ALONE within 600 ms (no other key, no click between) switches
+  //   locked ↔ free. Free by Ctrl stays free — the keys walk, a click on the view is an ordinary click, dragging turns —
+  //   until Ctrl is tapped again (or the chip is pressed). Free by Esc (the browser took the pointer): Ctrl or a press
+  //   on the view locks again. 'drag' mode: a tap locks for as long as the player wants, another frees. Where the lock is
+  //   refused the tap switches the hover look on / off. A chip shows the state — "🖱️ 고정" / "🖱️ 자유 · Ctrl" — and the
+  //   first start explains the key with a drawn key cap (read aloud in easy mode; mouseLook.coach(true) shows it again).
+  //   Touch devices: nothing of this exists. Automation without ?mouselook / setMode: no chip, no card.
+  // TEST SEAM G.input.mouseLook: state() → {mode, pref, locked, free, requests, exits, refused, hover, walking,
+  //   userReleased, lastReason, chip, taps}; feed(dx, dy) adds raw mouse deltas exactly as a locked mousemove does;
+  //   setApi({request(el), exit(), element()}) replaces requestPointerLock / exitPointerLock /
+  //   document.pointerLockElement (call lockChanged() from the fakes); refuse() simulates a refused lock; refresh()
+  //   re-reads the mode; toggle() is what a clean Ctrl tap does; coach(force) shows the card.
   const LOOK_MODES = ['lock', 'walk', 'drag'];
   const qLook = (() => { try { const v = new URLSearchParams(location.search).get('mouselook'); return LOOK_MODES.includes(v) ? v : null; } catch (e) { return null; } })();
   const finePointer = (() => { try { return !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches); } catch (e) { return false; } })();
-  const WALK_HOLD_MS = 1200, EDGE = 0.06, EDGE_PX_S = 260, LOCK_GAIN = 1;
+  const WALK_HOLD_MS = 1200, EDGE = 0.06, EDGE_PX_S = 260, LOCK_GAIN = 1, TAP_MS = 600;
+  const autoRun = (() => { try { return !!navigator.webdriver; } catch (e) { return false; } })();
+  const easyNow = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
   const ml = {
     _mode: null, locked: false, requests: 0, exits: 0, refused: false, userReleased: false, walkUntil: 0, lastReason: '',
-    _ours: false, _edgeT: 0, _px: NaN, _py: NaN, _over: false, _dot: null, _chip: null, _coach: null,
+    free: null,        // [gfx] null | 'ctrl' (the player freed the pointer with the key) | 'esc' (the browser took it back)
+    ctrlLock: false,   // [gfx] 'drag' mode: locked by a tap of the key (kept until the next tap)
+    taps: 0,
+    _ours: false, _edgeT: 0, _px: NaN, _py: NaN, _over: false, _dot: null, _chip: null, _coach: null, _coachT: 0, _tap: null, _playT: 0,
     api: {
       request(el) { const r = el?.requestPointerLock?.(); if (r && typeof r.catch === 'function') r.catch(() => ml._refused('promise')); return !!el?.requestPointerLock; },
       exit() { try { document.exitPointerLock?.(); } catch (e) { /* ignore */ } },
@@ -218,27 +451,31 @@
       if (qLook) return qLook;
       const s = G.settings?.mouseLook;
       if (LOOK_MODES.includes(s)) return s;
-      const easy = G.easy ? !!G.easy.on : G.settings?.easyMode !== false;
-      const site = easy ? G.site?.get?.('controls.mouse_look_easy', 'walk') : G.site?.get?.('controls.mouse_look_normal', 'lock');
-      return LOOK_MODES.includes(site) ? site : (easy ? 'walk' : 'lock');
+      const site = easyNow() ? G.site?.get?.('controls.mouse_look_easy', 'lock') : G.site?.get?.('controls.mouse_look_normal', 'lock');
+      return LOOK_MODES.includes(site) ? site : 'lock';   // [gfx] §18.0: fixed to the character in both modes
     },
     /** the effective mode on this device right now (useQuery false: what it would be without ?mouselook / a test) */
     mode(useQuery = true) {
       if (useQuery && ml._force) return ml._force;
       if (useQuery && qLook) return qLook;
       if (input.touchUI && !finePointer) return 'drag';
-      let auto = false;
-      try { auto = !!navigator.webdriver; } catch (e) { auto = false; }
-      if (auto) return 'drag';
+      if (autoRun) return 'drag';
       return ml.pref();
     },
+    /** [gfx] a mouse and a keyboard (not a touch screen): the key, the chip and the card exist here */
+    desktop() { return !(input.touchUI && !finePointer); },
+    /** … and under automation only when a test asked for a mode (existing suites see no new chip, no card) */
+    active() { return ml.desktop() && (!autoRun || !!ml._force || !!qLook); },
     isLocked() { const el = ml.el(); return !!el && ml.locked && ml.api.element() === el; },
+    /** [gfx] "fixed to the character", as the chip says it: the pointer is locked, or the hover look stands in for it */
+    fixed() { return ml.isLocked() || (ml.refused && !ml.free && ml.mode() === 'lock'); },
     isMoveKey(code) { const b = input.bindings; return b.forward.includes(code) || b.back.includes(code) || b.left.includes(code) || b.right.includes(code); },
     moving() { const b = input.bindings; return input.any(b.forward) || input.any(b.back) || input.any(b.left) || input.any(b.right); },
     /** ask for the pointer (true when a request went out) */
     request(reason) {
       const m = ml.mode();
-      if (m === 'drag' || ml.refused || ml.isLocked() || !input.gameplay()) return false;
+      if ((m === 'drag' && !ml.ctrlLock) || ml.refused || ml.isLocked() || !input.gameplay()) return false;
+      if (reason === 'click' && ml.free === 'ctrl') return false;   // freed on purpose: a click on the view is a click
       const el = ml.el();
       if (!el) return false;
       ml.requests++; ml.lastReason = 'request:' + reason;
@@ -256,19 +493,41 @@
     },
     onMoveKey() {
       if (ml.mode() === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS;
-      if (ml.userReleased && ml.mode() === 'lock') return;
+      if (ml.free === 'ctrl') return;                          // freed with the key: the keys walk, the pointer stays free
+      if (ml.userReleased && ml.mode() !== 'walk') return;     // Esc: only the key or a press on the view takes it again
       if (!ml.isLocked()) ml.request('key');
+    },
+    /** [gfx] what a clean tap of the key does: fixed ↔ free (see the header) → fixed now? */
+    toggle(why = 'ctrl') {
+      if (!ml.desktop()) return false;
+      ml.taps++;
+      const m = ml.mode();
+      if (ml.fixed()) {
+        ml.free = 'ctrl'; ml.userReleased = false; ml.ctrlLock = false;
+        if (ml.isLocked()) ml.release(why);
+        ml.lastReason = 'free:' + why;
+      } else {
+        ml.free = null; ml.userReleased = false;
+        if (m === 'drag') ml.ctrlLock = true;
+        if (m === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS;
+        if (ml.refused) ml.lastReason = 'hover:' + why; else ml.request(why);
+      }
+      if (ml._coach) { clearTimeout(ml._coachT); ml._coachT = setTimeout(() => ml._coachClose(), 1600); }   // learned: the card may go
+      ml._ui();
+      const fixed = ml.fixed();
+      G.bus.emit('input:mouse-toggle', { fixed, free: ml.free, why });
+      return fixed;
     },
     /** pointerlockchange (real or from a fake API) */
     lockChanged() {
       const el = ml.el(), now = !!el && ml.api.element() === el;
       if (now === ml.locked) { ml._ours = false; return; }
       ml.locked = now;
-      if (now) { ml.userReleased = false; ml.everLocked = true; ml._coachOnce(); }
-      else if (!ml._ours) ml.userReleased = true;   // Esc / the browser took it back: keys no longer re-take it
+      if (now) { ml.userReleased = false; ml.free = null; ml.everLocked = true; ml.coach(); }
+      else if (!ml._ours) { ml.userReleased = true; ml.ctrlLock = false; if (ml.free !== 'ctrl') ml.free = 'esc'; }   // Esc / the browser took it back: keys no longer re-take it
       ml._ours = false;
       ml._ui();
-      G.bus.emit('input:pointer-lock', { locked: now, mode: ml.mode() });
+      G.bus.emit('input:pointer-lock', { locked: now, mode: ml.mode(), free: ml.free });
     },
     _refused(why) {
       if (ml.refused) return;
@@ -279,10 +538,10 @@
       G.log?.warn?.('INPUT', 'pointer lock refused: hover look instead', { why });
       ml._ui();
     },
-    /** hover-look fallback active right now? (refused lock, lock / walk mode, walk: only while moving) */
+    /** hover-look fallback active right now? (refused lock, lock / walk mode, walk: only while moving; never while freed) */
     hover() {
       const m = ml.mode();
-      if (!ml.refused || m === 'drag' || !input.gameplay()) return false;
+      if (!ml.refused || m === 'drag' || ml.free === 'ctrl' || !input.gameplay()) return false;
       return m === 'lock' || performance.now() < ml.walkUntil || ml.moving();
     },
     /** add raw mouse deltas (px) to the view, as a locked mousemove does */
@@ -292,13 +551,13 @@
       look.dx += G.util.clamp(dx, -400, 400) * s;
       look.dy += G.util.clamp(dy, -400, 400) * s * (G.settings?.invertY ? -1 : 1);
     },
-    /** every frame (input.update): release on any blocking UI, walk-mode timeout, hover edge turning */
+    /** every frame (input.update): release on any blocking UI, walk-mode timeout, hover edge turning, chip and card */
     tick() {
       const now = performance.now();
       if (ml.isLocked()) {
         if (!input.gameplay() || G.ui?.isBlocking?.() || G.util?.isTyping?.()) ml.release('ui');
         else if (ml.mode() === 'walk') { if (ml.moving()) ml.walkUntil = now + WALK_HOLD_MS; else if (now > ml.walkUntil) ml.release('walk'); }
-        else if (ml.mode() === 'drag') ml.release('mode');
+        else if (ml.mode() === 'drag' && !ml.ctrlLock) ml.release('mode');
       } else if (ml.locked) ml.lockChanged();   // lost without an event (tab switch)
       const dt = Math.min(0.1, Math.max(0, (now - (ml._edgeT || now)) / 1000));
       ml._edgeT = now;
@@ -310,47 +569,121 @@
           if (ex || ey) ml.feed(ex * EDGE_PX_S * dt, ey * EDGE_PX_S * 0.5 * dt);
         }
       }
-      if (ml._chip && !ml._chip.hidden !== ml.isLocked()) ml._ui();
+      if (ml._dot && !ml._dot.hidden !== ml.isLocked()) ml._ui();
+      else if (now - (ml._chipAt || 0) > 150) { ml._chipAt = now; ml._chipSync(); }   // (the chip follows windows opening and closing; state changes sync it at once)
+      // the first calm moment of the first game on this device: the card that explains the key (1.5 s of play first)
+      if (!ml._coachTried && ml.active()) {
+        if (G.state && G.ready && input.gameplay() && !G.sys?.manjangdae?.introActive) { ml._playT += dt; if (ml._playT > 1.5) { ml._coachTried = true; ml.coach(); } }
+        else ml._playT = 0;
+      }
     },
-    // ---- the centre dot, the hint chip, the first-time coach card (inline styles: no stylesheet of our own)
+    // ---- the centre dot, the state chip, the first-time coach card (inline styles: no stylesheet of our own)
     _ui() {
+      if (!document.body) return;
       const on = ml.isLocked();
-      if (on && !ml._dot && document.body) {
+      if (on && !ml._dot) {
         const dot = document.createElement('div');
         dot.id = 'ml-dot'; dot.setAttribute('aria-hidden', 'true');
         Object.assign(dot.style, { position: 'fixed', left: '50%', top: '50%', width: '6px', height: '6px', margin: '-3px 0 0 -3px', borderRadius: '50%', background: 'rgba(255,250,235,0.92)', boxShadow: '0 0 0 1.5px rgba(40,28,14,0.55)', pointerEvents: 'none', zIndex: '40' });
-        const chip = document.createElement('div');
-        chip.id = 'ml-chip'; chip.setAttribute('role', 'status');
-        chip.textContent = 'Esc: 마우스 풀기 · + / −: 회전 속도';
-        Object.assign(chip.style, { position: 'fixed', left: '50%', bottom: '86px', transform: 'translateX(-50%)', padding: '6px 14px', borderRadius: '999px', background: 'rgba(32,24,16,0.72)', color: '#fff8e6', font: '600 13px/1.3 system-ui, sans-serif', pointerEvents: 'none', zIndex: '40', whiteSpace: 'nowrap' });
-        document.body.append(dot, chip);
-        ml._dot = dot; ml._chip = chip;
+        document.body.appendChild(dot);
+        ml._dot = dot;
       }
       if (ml._dot) ml._dot.hidden = !on;
-      if (ml._chip) ml._chip.hidden = !on;
+      ml._chipSync();
     },
-    _coachOnce() {
-      const KEY = 'tfm.v1.mlcoach';
-      try { if (localStorage.getItem(KEY)) return; localStorage.setItem(KEY, '1'); } catch (e) { if (ml._coach !== null) return; }
-      if (!document.body) return;
-      const easy = G.easy ? !!G.easy.on : G.settings?.easyMode !== false;
-      const walk = ml.mode() === 'walk';
-      const text = walk ? '걸으면서 마우스를 움직이면 화면이 돌아가요. 멈추면 마우스로 그림 단추를 누를 수 있어요.'
-        : '마우스를 움직이면 화면이 돌아가요. Esc를 누르면 마우스가 풀려요. + 와 − 로 도는 빠르기를 바꿔요.';
+    /** [gfx] the chip "🖱️ 고정" / "🖱️ 자유 · Ctrl": in a running game on a desktop, never over a window or the photo view */
+    _chipWanted() {
+      if (!ml.active() || !G.state || !input.enabled || !document.body) return false;
+      if (G.ui?.isBlocking?.() || document.body.classList.contains('hud-hidden')) return false;
+      return true;
+    },
+    _chipSync() {
+      const c0 = ml._chip;
+      if (!ml._chipWanted()) { if (c0 && !c0.hidden) c0.hidden = true; return; }
+      const fixed = ml.fixed(), easy = easyNow(), k = keyName(input.bindings.mouseToggle[0] || '');
+      const key = (fixed ? 'f' : 'r') + (easy ? 'e' : 'n') + k;
+      let c = c0;
+      if (!c) {
+        c = document.createElement('button');
+        c.id = 'ml-chip'; c.type = 'button';
+        Object.assign(c.style, { position: 'fixed', left: '50%', bottom: '86px', transform: 'translateX(-50%)', borderRadius: '999px', border: '0', background: 'rgba(32,24,16,0.72)', color: '#fff8e6', zIndex: '40', whiteSpace: 'nowrap', cursor: 'pointer' });
+        // a press on the chip fixes the view again (a pointer gesture: the browser allows the lock)
+        c.addEventListener('click', () => { try { c.blur(); } catch (e) { /* ignore */ } if (!ml.fixed()) ml.toggle('chip'); });
+        document.body.appendChild(c);
+        ml._chip = c;
+      }
+      if (c.hidden) c.hidden = false;
+      if (c._key === key) return;
+      c._key = key;
+      c.textContent = fixed ? '🖱️ 고정' : (k ? `🖱️ 자유 · ${k}` : '🖱️ 자유');
+      c.dataset.state = fixed ? 'fixed' : 'free';
+      const say = fixed ? `마우스가 캐릭터를 따라 돌아요.${k ? ` ${k} 키를 누르면 마우스가 풀려요.` : ''}` : `마우스가 풀려 있어요. ${k ? `${k} 키를 누르거나 ` : ''}여기를 누르면 다시 캐릭터를 따라 돌아요.`;
+      c.dataset.say = say; c.title = say; c.setAttribute('aria-label', say); c.setAttribute('aria-pressed', String(fixed));
+      Object.assign(c.style, { pointerEvents: fixed ? 'none' : 'auto', padding: easy ? '0 22px' : '6px 14px', minHeight: easy ? '56px' : '0', minWidth: easy ? '56px' : '0', font: `600 ${easy ? 18 : 13}px/1.3 system-ui, sans-serif`, opacity: fixed ? '0.82' : '1' });
+    },
+    /** the drawn key cap (with a little mouse) for the card */
+    _keyPicture(k) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const mk = (tag, attrs, text) => { const n = document.createElementNS(NS, tag); for (const a in attrs) n.setAttribute(a, attrs[a]); if (text != null) n.textContent = text; return n; };
+      const svg = mk('svg', { viewBox: '0 0 168 72', width: '168', height: '72', 'aria-hidden': 'true', focusable: 'false' });
+      svg.style.flex = '0 0 auto';
+      const cap = mk('g', {});
+      cap.append(mk('rect', { x: 6, y: 12, width: 84, height: 54, rx: 11, fill: '#6b4f2c' }),
+        mk('rect', { x: 10, y: 10, width: 76, height: 46, rx: 9, fill: '#fffaf0', stroke: '#c9a45c', 'stroke-width': 2 }),
+        mk('text', { x: 48, y: 41, 'text-anchor': 'middle', 'font-family': 'system-ui, sans-serif', 'font-weight': 800, 'font-size': k.length > 5 ? 15 : 21, fill: '#3b2a17' }, k));
+      if (!G.settings?.reduceMotion && !G.osReducedMotion?.()) {
+        // one calm press every 1.8 s (0.55 Hz): the cap goes down a little and comes back
+        cap.append(mk('animateTransform', { attributeName: 'transform', type: 'translate', values: '0 0; 0 0; 0 4; 0 0', keyTimes: '0; 0.55; 0.72; 1', dur: '1.8s', repeatCount: 'indefinite' }));
+      }
+      const arrow = mk('path', { d: 'M100 36 h18 m-7 -7 l7 7 l-7 7', fill: 'none', stroke: '#8a6a3a', 'stroke-width': 3.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+      const mouse = mk('g', {});
+      mouse.append(mk('rect', { x: 130, y: 10, width: 30, height: 50, rx: 15, fill: '#fffaf0', stroke: '#3b2a17', 'stroke-width': 2.5 }),
+        mk('line', { x1: 145, y1: 10, x2: 145, y2: 30, stroke: '#3b2a17', 'stroke-width': 2 }),
+        mk('rect', { x: 142.5, y: 16, width: 5, height: 9, rx: 2.5, fill: '#d98a2b' }));
+      svg.append(cap, arrow, mouse);
+      return svg;
+    },
+    _coachClose() {
+      clearTimeout(ml._coachT); ml._coachT = 0;
+      const c = ml._coach;
+      ml._coach = null;
+      if (c) { try { c.remove(); } catch (e) { /* gone */ } }
+    },
+    /** [gfx] the card "Ctrl 키를 누르면 마우스가 풀려요 …": once per device (force: again, from 도움말) → shown? */
+    coach(force) {
+      const KEY = 'tfm.v1.ctrlcoach';
+      if (!force) {
+        if (!ml.active() || ml._coachShown) return false;
+        try { if (localStorage.getItem(KEY)) { ml._coachShown = true; return false; } localStorage.setItem(KEY, '1'); } catch (e) { /* storage blocked: once per page */ }
+      }
+      if (!ml.desktop() || !document.body) return false;
+      ml._coachShown = true; ml._coachTried = true;
+      ml._coachClose();
+      const easy = easyNow(), k = keyName(input.bindings.mouseToggle[0] || 'ControlLeft');
+      const text = `${k} 키를 누르면 마우스가 풀려요. 한 번 더 누르면 다시 캐릭터를 따라 돌아요.`;
       const card = document.createElement('div');
       card.id = 'ml-coach'; card.setAttribute('role', 'status'); card.dataset.say = text;
-      Object.assign(card.style, { position: 'fixed', left: '50%', top: '18%', transform: 'translateX(-50%)', maxWidth: 'min(420px, 88vw)', padding: '14px 18px', borderRadius: '16px', background: 'rgba(253,246,228,0.96)', color: '#3b2a17', font: '600 15px/1.45 system-ui, sans-serif', boxShadow: '0 8px 28px rgba(0,0,0,0.28)', zIndex: '41', pointerEvents: 'none' });
-      card.textContent = '🖱️ ' + text;
+      Object.assign(card.style, { position: 'fixed', left: '50%', top: '16%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '16px', maxWidth: 'min(560px, 92vw)', padding: '16px 20px', borderRadius: '18px', background: 'rgba(253,246,228,0.97)', color: '#3b2a17', font: `700 ${easy ? 19 : 16}px/1.5 system-ui, sans-serif`, boxShadow: '0 10px 30px rgba(0,0,0,0.28)', zIndex: '41', pointerEvents: 'none' });
+      const words = document.createElement('div');
+      const head = document.createElement('div');
+      head.textContent = '🖱️ 마우스를 움직이면 화면이 돌아가요';
+      Object.assign(head.style, { fontSize: easy ? '15px' : '13px', fontWeight: '600', opacity: '0.72', marginBottom: '4px' });
+      const line = document.createElement('div');
+      line.className = 'ml-coach-text'; line.textContent = text;
+      words.append(head, line);
+      card.append(ml._keyPicture(k), words);
       document.body.appendChild(card);
       ml._coach = card;
       if (easy) { try { G.easy?.say?.(text, { force: true, priority: 1 }); } catch (e) { /* voice optional */ } }
-      setTimeout(() => { card.remove(); }, easy ? 9000 : 7000);
+      ml._coachT = setTimeout(() => ml._coachClose(), easy ? 14000 : 10000);
+      return true;
     },
   };
   input.mouseLook = {
     state() {
-      return { mode: ml.mode(), defaultMode: ml.mode(false), pref: ml.pref(), locked: ml.isLocked(), requests: ml.requests, exits: ml.exits, refused: ml.refused, hover: ml.hover(),
-        walking: performance.now() < ml.walkUntil, userReleased: ml.userReleased, lastReason: ml.lastReason, coach: !!ml._coach, query: qLook };
+      return { mode: ml.mode(), defaultMode: ml.mode(false), pref: ml.pref(), locked: ml.isLocked(), fixed: ml.fixed(), free: ml.free, ctrlLock: ml.ctrlLock, taps: ml.taps,
+        requests: ml.requests, exits: ml.exits, refused: ml.refused, hover: ml.hover(), walking: performance.now() < ml.walkUntil, userReleased: ml.userReleased, lastReason: ml.lastReason,
+        coach: !!ml._coach, chip: ml._chip && !ml._chip.hidden ? ml._chip.textContent : '', active: ml.active(), query: qLook };
     },
     feed: (dx, dy) => ml.feed(dx, dy),
     setApi(api) { if (api && typeof api === 'object') { for (const k of ['request', 'exit', 'element']) if (typeof api[k] === 'function') ml.api[k] = api[k]; } ml.lockChanged(); },
@@ -358,8 +691,14 @@
     refuse: () => ml._refused('test'),
     /** tests: force a mode ('lock' | 'walk' | 'drag'; null = back to the rules) */
     setMode(m) { ml._force = LOOK_MODES.includes(m) ? m : null; return input.mouseLook.refresh(); },
-    refresh() { ml.userReleased = false; ml.refused = false; if (ml.isLocked() && ml.mode() === 'drag') ml.release('mode'); return ml.mode(); },
+    refresh() { ml.userReleased = false; ml.refused = false; ml.free = null; ml.ctrlLock = false; if (ml.isLocked() && ml.mode() === 'drag') ml.release('mode'); ml._ui(); return ml.mode(); },
     release: (why) => ml.release(why || 'api'),
+    /** [gfx] what a clean tap of the Ctrl key does (also for a button of the settings window) → fixed now? */
+    toggle: (why) => ml.toggle(why || 'api'),
+    /** [gfx] fixed to the character right now? */
+    fixed: () => ml.fixed(),
+    /** [gfx] show the card that explains the key (force = true: again, from 도움말) */
+    coach: (force) => ml.coach(force !== false),
     modes: LOOK_MODES.slice(),
   };
   document.addEventListener('pointerlockchange', () => ml.lockChanged());
@@ -378,6 +717,35 @@
   // any typing field that takes the focus (chat, forms) releases the pointer at once
   document.addEventListener('focusin', (e) => { if (ml.isLocked() && G.util?.isTyping?.()) ml.release('typing'); }, true);
   G.bus.on('settings:changed', ({ key } = {}) => { if (key === 'mouseLook' || key === 'easyMode') input.mouseLook.refresh(); });
+  // [gfx] the tap of the key: down and up of it alone within TAP_MS (called from the keyboard listeners below)
+  let ctrlAt = -1e9;   // when a Control key was last seen down (see the beforeunload guard)
+  function tapDown(e) {
+    if (e.ctrlKey || /^Control/.test(e.code)) ctrlAt = performance.now();
+    if (input.bindings.mouseToggle.includes(e.code)) {
+      if (e.repeat) return;
+      const chord = e.altKey || e.metaKey || (e.shiftKey && !/^Shift/.test(e.code)) || (e.ctrlKey && !/^Control/.test(e.code));
+      ml._tap = chord ? null : { code: e.code, t: performance.now(), clean: true };
+      return;
+    }
+    if (ml._tap) ml._tap.clean = false;   // another key between: not a tap
+  }
+  function tapUp(e) {
+    if (/^Control/.test(e.code)) ctrlAt = performance.now();
+    const T = ml._tap;
+    if (!T || e.code !== T.code) return;
+    ml._tap = null;
+    if (!T.clean || performance.now() - T.t > TAP_MS) return;
+    if (!G.state || !input.enabled || G.util?.isTyping?.() || G.ui?.isBlocking?.()) return;
+    ml.toggle('ctrl');
+  }
+  window.addEventListener('pointerdown', () => { if (ml._tap) ml._tap.clean = false; }, { capture: true, passive: true });   // Ctrl + click is no tap
+  window.addEventListener('blur', () => { ml._tap = null; });
+  // Ctrl + W (W = forward) closes the tab in every browser and a page cannot stop it: while a game runs and the key was
+  // down a moment ago, the browser asks first. (The save is flushed on pagehide either way.)
+  window.addEventListener('beforeunload', (e) => {
+    if (!G.state || !ml.desktop() || performance.now() - ctrlAt > 1500) return;
+    e.preventDefault(); e.returnValue = '';
+  });
 
   // ---------------------------------------------------------------- [controls] turn speed keys (§17.1)
   // + / = / NumpadAdd faster, - / NumpadSubtract slower (× 1.15 steps, 0.25 … 4), 0 back to 1 — saved per device;
@@ -397,9 +765,21 @@
   }
   const curLS = () => { const k = Number(G.settings?.lookSpeed); return Number.isFinite(k) && k > 0 ? k : 1; };
   input.lookSpeed = { get: curLS, set: setLookSpeed, faster: () => setLookSpeed(curLS() * LS_STEP), slower: () => setLookSpeed(curLS() / LS_STEP), reset: () => setLookSpeed(1), MIN: LS_MIN, MAX: LS_MAX, STEP: LS_STEP };
-  for (const c of ['Equal', 'NumpadAdd']) input.onKey(c, () => { input.lookSpeed.faster(); return true; }, { repeat: true });
-  for (const c of ['Minus', 'NumpadSubtract']) input.onKey(c, () => { input.lookSpeed.slower(); return true; }, { repeat: true });
-  for (const c of ['Digit0', 'Numpad0']) input.onKey(c, () => { input.lookSpeed.reset(); return true; });
+  bindings.on('lookFaster', () => { input.lookSpeed.faster(); return true; }, { repeat: true });   // [gfx] through the bindings (defaults: = / + , − , 0)
+  bindings.on('lookSlower', () => { input.lookSpeed.slower(); return true; }, { repeat: true });
+  bindings.on('lookReset', () => { input.lookSpeed.reset(); return true; });
+  // [gfx] zoom keys (the wheel and the pinch stay): one press ≈ half a wheel notch
+  bindings.on('zoomIn', () => { zoom -= 0.8; return true; }, { repeat: true });
+  bindings.on('zoomOut', () => { zoom += 0.8; return true; }, { repeat: true });
+  // [gfx] full screen (67-display.js; a key press is the gesture a browser asks for) and the settings window
+  bindings.on('fullscreen', () => { const D = G.sys?.display; if (!D || typeof D.toggleFullscreen !== 'function') return false; D.toggleFullscreen('key'); return true; });
+  bindings.on('settings', () => {
+    const S = G.sys?.settings;
+    if (S && typeof S.isOpen === 'function' && S.isOpen()) { S.close?.(); return true; }
+    if (!G.state || G.ui?.isBlocking?.()) return false;
+    if (S && typeof S.open === 'function') S.open(); else G.ui?.triggerAction?.('settings');
+    return true;
+  }, { allowInModal: true });
 
   // ---------------------------------------------------------------- keyboard
   const ACTIVATE_SEL = 'button, [role="button"], [role="option"], [role="tab"], [role="switch"], [role="menuitem"], [role="radio"], [role="checkbox"], a[href], summary, input[type="checkbox"], input[type="radio"]';
@@ -420,6 +800,13 @@
     else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
   }
   window.addEventListener('keydown', (e) => {
+    // [gfx] bindings.capture(): the settings window waits for "the next key" — it goes there and nowhere else
+    if (keyCapture) {
+      const c = keyCapture; keyCapture = null;
+      e.preventDefault(); e.stopPropagation();
+      try { c.fn?.(e.code === 'Escape' ? null : e.code); } catch (err) { G.log.error('INPUT', err); }
+      return;
+    }
     const typing = G.util.isTyping();
     if (e.code === 'Escape') {
       if (typing) { document.activeElement.blur(); e.preventDefault(); return; }
@@ -445,15 +832,21 @@
     }
     // Tab moves the focus (title, forms, menus, windows); inside an open window it wraps instead of leaving it
     if (e.code === 'Tab' && !e.defaultPrevented) trapDialogTab(e);
-    const list = handlers.get(e.code);
-    if (list && list.length) {
+    tapDown(e);   // [gfx] the Ctrl tap (and what spoils it)
+    // [gfx] Ctrl held with a game key (Ctrl + S / D / A / E …) does nothing in the browser while playing
+    if (!typing && e.ctrlKey && !e.altKey && !e.metaKey && !MOD_RE.test(e.code) && input.gameplay()) { const o = keyOwner.get(e.code); if (o && acts.get(o).game) e.preventDefault(); }
+    // [gfx] handlers are registered under the DEFAULT code of an action: a rebound key stands for that code
+    const blockingNow = keysCustom ? !!G.ui?.isBlocking?.() : false;
+    dispatch: for (const lc of logicalCodes(e.code, e, blockingNow)) {
+      const list = handlers.get(lc);
+      if (!list || !list.length) continue;
       for (const { fn, opts } of list.slice()) {
         if (kbdFocus && ACTIVATION_KEYS.has(e.code) && !opts.onControl) continue; // the focused control acts
         if (e.repeat && !opts.repeat) continue;
         if (typing && !opts.allowTyping) continue;
         if (!typing && !opts.allowInModal && G.ui?.isBlocking?.()) continue;
         if (!input.enabled && !opts.allowInModal) continue;
-        try { if (fn(e) === true) { e.preventDefault(); break; } } catch (err) { G.log.error('INPUT', err); }
+        try { if (fn(e) === true) { e.preventDefault(); break dispatch; } } catch (err) { G.log.error('INPUT', err); }
       }
     }
     if (typing || e.repeat) return;
@@ -462,7 +855,7 @@
     if (input.bindings.jump.includes(e.code) && !kbdFocus) jumpQueued = true;
     if (input.bindings.interact.includes(e.code)) G.bus.emit('input:interact', { source: 'key' });
   });
-  window.addEventListener('keyup', (e) => { keys.delete(e.code); if (ml.isMoveKey(e.code) && ml.mode() === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS; });   // [controls] walk: + 1.2 s after the last key
+  window.addEventListener('keyup', (e) => { keys.delete(e.code); if (ml.isMoveKey(e.code) && ml.mode() === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS; tapUp(e); });   // [controls] walk: + 1.2 s after the last key · [gfx] the Ctrl tap
   window.addEventListener('blur', () => { keys.clear(); });
 
   // ---------------------------------------------------------------- mouse / pointer on the 3D canvas
@@ -486,7 +879,8 @@
       // [controls] pointer locked: a left click is the interact key on the focused thing (no drag, no click-to-move)
       if (ml.isLocked()) { if (e.button === 0 && input.gameplay()) G.bus.emit('input:interact', { source: 'lock-click' }); return; }
       // lock mode: a click on the 3D view captures the pointer (that click is the capture, never a walk-to)
-      const capture = e.pointerType === 'mouse' && e.button === 0 && ml.mode() === 'lock' && input.gameplay() && ml.request('click');
+      // ([gfx] not while the player freed the pointer with the Ctrl tap: then a click is a click — see ml.request)
+      const capture = e.pointerType === 'mouse' && e.button === 0 && (ml.mode() === 'lock' || ml.ctrlLock) && input.gameplay() && ml.request('click');
       drag = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: 0, button: e.button, touch: e.pointerType === 'touch', t: performance.now(), capture };
       input.pointerDown = true;
       try { el.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }

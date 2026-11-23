@@ -126,7 +126,7 @@ final class Settings
         // ---------------------------------------------------------------- [entitle → controls] the keys CONTRACT §17.1 names (the controls lane reads them)
         $look = ['lock' => '마우스를 움직이면 돌기 (잠금)', 'walk' => '걸을 때만 돌기', 'drag' => '누르고 끌어서 돌기 (예전 방식)'];
         self::define('controls.mouse_look_normal', 'enum', 'lock', $look, 'controls', '보통 모드의 마우스 회전 기본값', true);
-        self::define('controls.mouse_look_easy', 'enum', 'walk', $look, 'controls', '쉬운 모드의 마우스 회전 기본값', true);
+        self::define('controls.mouse_look_easy', 'enum', 'lock', $look, 'controls', '쉬운 모드의 마우스 회전 기본값', true);   // [gfx] CONTRACT §18.0: fixed to the character in both modes (was 'walk'); Ctrl frees the pointer
         // ---------------------------------------------------------------- [env] CONTRACT §17.5 — read through Tfm\Env, which accepts only the listed words
         self::define('env.clock_default', 'enum', 'kst', ['kst' => '실시간 (한국 시각)', 'fast' => '빠른 체험 시간', 'fixed' => '고정'], 'env', '시계 기본값', true, '방문자가 직접 고르지 않았을 때의 시계예요.');
         self::define('env.weather_source', 'enum', 'auto', ['auto' => '자동 (기상청 키가 있으면 기상청 실황)', 'model' => '언제나 정선 기후 모델'], 'env', '날씨 자료');

@@ -5,7 +5,8 @@
 //   row and a rock, the double jump over a 1.9 m stone wall (a single jump does not), landing on a wall top and stepping
 //   off, a building that never yields · walkTo still plans round a fence · the three mouse-look modes through the seam
 //   G.input.mouseLook (requestPointerLock / exitPointerLock replaced by fakes: headless Chromium cannot lock), hover-look
-//   fallback with edge turning, release on a blocking UI, Esc, a click in lock = interact · + / − and 0 (turn speed)
+//   fallback with edge turning, release on a blocking UI, Esc, a click in lock = interact · [phase 10, §18.2] the
+//   state chip, the Ctrl tap (fixed ↔ free) and the card that explains it · + / − and 0 (turn speed)
 //   · wheel zoom range 2 … 22 m (easy 4.5 … 12.5) also while locked · the settings tiles · finite numbers · the phone
 //   is unchanged (drag, no lock requests).
 //
@@ -396,6 +397,21 @@ async function mainPage() {
       H.key('KeyW', true); await H.wait(120); H.key('KeyW', false); await H.wait(150);
       const s1 = ML.state();
       out.lockKey = { locked: s1.locked, req, mode: s1.mode, dot: !document.getElementById('ml-dot')?.hidden, chip: document.getElementById('ml-chip')?.textContent || '', coach: s1.coach };
+      // ---- [phase 10] the card that explains the key (shown at the first calm moment; again on request)
+      ML.coach();
+      out.card = { text: document.querySelector('#ml-coach .ml-coach-text')?.textContent || '', key: !!document.querySelector('#ml-coach svg text'), say: document.getElementById('ml-coach')?.dataset.say || '' };
+      // ---- [phase 10] a clean tap of Ctrl frees the pointer; the keys then walk with a free pointer; another tap fixes it
+      const tap = async (code) => { H.key(code, true, 'Control'); await H.wait(60); H.key(code, false, 'Control'); await H.wait(120); };
+      await tap('ControlLeft');
+      const f1 = ML.state(), reqFree = req;
+      H.key('KeyW', true); await H.wait(100); H.key('KeyW', false); await H.wait(120);
+      const keyRelock = req > reqFree;
+      // not a tap: another key between down and up
+      H.key('ControlLeft', true, 'Control'); H.key('KeyV', true); H.key('KeyV', false); H.key('ControlLeft', false, 'Control'); await H.wait(120);   // (V: a key no window listens to)
+      const chord = ML.state();
+      await tap('ControlRight');
+      const f2 = ML.state();
+      out.ctrl = { freed: !f1.locked && f1.free === 'ctrl', chipFree: f1.chip, keyRelock, chordLocked: chord.locked, relocked: f2.locked && f2.free === null, chipFixed: f2.chip, taps: f2.taps };
       const y0 = cam._yawT, p0 = cam._pitchT;
       __mm(document, { movementX: 120, movementY: 40 });
       await H.raf(); await H.raf();
@@ -483,8 +499,10 @@ async function mainPage() {
     });
     check('look: ?mouselook=lock is honoured; the automation default is drag', lk.query.mode === 'lock' && lk.query.defaultMode === 'drag', JSON.stringify(lk.query));
     check('look lock: the first movement key requests the pointer and it is locked', lk.lockKey.locked && lk.lockKey.req >= 1, JSON.stringify(lk.lockKey));
-    check('look lock: the centre dot and the hint chip show', lk.lockKey.dot && /Esc: 마우스 풀기 · \+ \/ −: 회전 속도/.test(lk.lockKey.chip), lk.lockKey.chip);
-    check('look lock: the first-time coach card appears', lk.lockKey.coach);
+    check('look lock: the centre dot and the state chip "🖱️ 고정" show', lk.lockKey.dot && lk.lockKey.chip === '🖱️ 고정', lk.lockKey.chip);
+    check('Ctrl card: "Ctrl 키를 누르면 마우스가 풀려요. 한 번 더 누르면 다시 캐릭터를 따라 돌아요." with a drawn key', lk.card.text === 'Ctrl 키를 누르면 마우스가 풀려요. 한 번 더 누르면 다시 캐릭터를 따라 돌아요.' && lk.card.key && lk.card.say === lk.card.text, JSON.stringify(lk.card));
+    check('Ctrl tap: frees the pointer (chip "🖱️ 자유 · Ctrl"), movement keys do not take it back', lk.ctrl.freed && lk.ctrl.chipFree === '🖱️ 자유 · Ctrl' && !lk.ctrl.keyRelock, JSON.stringify(lk.ctrl));
+    check('Ctrl tap: Ctrl with another key is no tap; a second tap fixes the view again', !lk.ctrl.chordLocked && lk.ctrl.relocked && lk.ctrl.chipFixed === '🖱️ 고정' && lk.ctrl.taps === 2, JSON.stringify(lk.ctrl));
     check('look lock: moving the mouse turns yaw and pitch (no button)', lk.turn.dyaw < -0.2 && lk.turn.dpitch > 0.05, JSON.stringify(lk.turn));
     check('look: hostile / NaN deltas leave every camera number finite', lk.finite);
     check('look lock: a left click is the interact key, never a walk-to', lk.lockClick.interact >= 1 && lk.lockClick.clicks === 0, JSON.stringify(lk.lockClick));
