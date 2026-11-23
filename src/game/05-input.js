@@ -663,7 +663,7 @@
       const text = `${k} 키를 누르면 마우스가 풀려요. 한 번 더 누르면 다시 캐릭터를 따라 돌아요.`;
       const card = document.createElement('div');
       card.id = 'ml-coach'; card.setAttribute('role', 'status'); card.dataset.say = text;
-      Object.assign(card.style, { position: 'fixed', left: '50%', top: '16%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '16px', maxWidth: 'min(560px, 92vw)', padding: '16px 20px', borderRadius: '18px', background: 'rgba(253,246,228,0.97)', color: '#3b2a17', font: `700 ${easy ? 19 : 16}px/1.5 system-ui, sans-serif`, boxShadow: '0 10px 30px rgba(0,0,0,0.28)', zIndex: '41', pointerEvents: 'none' });
+      Object.assign(card.style, { position: 'fixed', left: '50%', top: '16%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '16px', maxWidth: 'min(560px, 92vw)', padding: '16px 20px', borderRadius: '18px', background: 'rgba(253,246,228,0.97)', color: '#3b2a17', font: `700 ${easy ? 19 : 16}px/1.5 system-ui, sans-serif`, boxShadow: '0 10px 30px rgba(0,0,0,0.28)', zIndex: force ? '60' : '41', pointerEvents: 'none' });
       const words = document.createElement('div');
       const head = document.createElement('div');
       head.textContent = '🖱️ 마우스를 움직이면 화면이 돌아가요';
@@ -698,7 +698,7 @@
     /** [gfx] fixed to the character right now? */
     fixed: () => ml.fixed(),
     /** [gfx] show the card that explains the key (force = true: again, from 도움말) */
-    coach: (force) => ml.coach(force !== false),
+    coach: (o) => ml.coach(o && typeof o === 'object' ? !!o.force : o !== false),   // coach() / coach(true) / coach({ force: true }) show it again (도움말); coach({ force: false }) = only the first time
     modes: LOOK_MODES.slice(),
   };
   document.addEventListener('pointerlockchange', () => ml.lockChanged());

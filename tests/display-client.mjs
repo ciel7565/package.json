@@ -60,7 +60,13 @@ const shotsFile = opt('--shots-file', file);
 if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 
 const results = [], numbers = {};
-const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail: String(detail ?? '').slice(0, 600) }); log(`${ok ? '  ✔' : '  ✖'} ${name}${detail !== '' && detail != null ? ` — ${String(detail).slice(0, 400)}` : ''}`); };
+// (lazy checks) a check may get functions: a condition that cannot be judged (a missing measurement) is a failed check with
+// the reason, and the run goes on to the next one
+const check = (name, okIn, detailIn = '') => {
+  let ok = false, detail = '';
+  try { ok = typeof okIn === 'function' ? okIn() : okIn; } catch (e) { ok = false; detail = `could not be judged: ${String(e && e.message || e).slice(0, 200)}`; }
+  if (detail === '') { try { detail = typeof detailIn === 'function' ? detailIn() : detailIn; } catch (e) { detail = ''; } }
+  results.push({ name, ok: !!ok, detail: String(detail ?? '').slice(0, 600) }); log(`${ok ? '  ✔' : '  ✖'} ${name}${detail !== '' && detail != null ? ` — ${String(detail).slice(0, 400)}` : ''}`); };
 const J = (v) => JSON.stringify(v);
 
 const browser = await chromium.launch({ headless: !flag('--headed'), args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'] });
@@ -131,7 +137,7 @@ async function lowPage() {
   await boot(page, 'low');
   await page.evaluate(() => window.__dt.ready());
   // ------------------------------------------------------------------------------------------------ the rows
-  if (want('rows')) {
+  if (want('rows')) try {
     const r = await page.evaluate(() => {
       const D = G.sys.display, rows = D.options(), S = G.sys.settings;
       const need = ['resolution', 'windowMode', 'monitor', 'brightness', 'fxQuality', 'texQuality', 'viewQuality', 'fxDistance', 'frameLimit', 'wideView', 'selfFxFade', 'dof', 'shotFormat', 'shotQuality', 'antialias', 'ao', 'dynRes', 'grassDensity', 'crowdSize'];
@@ -145,18 +151,18 @@ async function lowPage() {
       };
     });
     numbers.rows = r;
-    check('every option of the owner\'s list has a row (label in Korean, one line that says what it costs or saves)', r.missing.length === 0 && r.noHint.length === 0, `missing ${J(r.missing)} · weak ${J(r.noHint)}`);
+    check('every option of the owner\'s list has a row (label in Korean, one line that says what it costs or saves)', () => (r.missing.length === 0 && r.noHint.length === 0), () => (`missing ${J(r.missing)} · weak ${J(r.noHint)}`));
     const d = r.defaults;
     check('defaults as listed: 1920×1080 · 창 모드 · 밝기 50 · 퀄리티 높음 · 이펙트 가시거리 9 · JPG · 수직동기화 미선택 · 투명화 0 · DOF 미선택',
       d.resolution === '1920x1080' && d.windowMode === 'window' && d.brightness === 50 && d.fxQuality === 'high' && d.texQuality === 'high' && d.viewQuality === 'high' && d.fxDistance === 9 && d.shotFormat === 'jpg' && d.frameLimit === 'display' && d.selfFxFade === 0 && d.dof === false, J(d));
-    check('최대 시야 확장: on for people, off under automation unless ?wide=1 (the 55° budgets stay comparable)', r.wideDefault === false && d.wideView === false, `${r.wideDefault}`);
-    check('이펙트 가시거리 1 … 10 and 이펙트 투명화(자신) 0 … 5', J(r.fd) === J([1, 10]) && J(r.sf) === J([0, 5]));
-    check('the list of sizes comes from the monitor (1920×1080 here): nothing larger is offered', J(r.resList) === J(['auto', '1920x1080', '1600x900', '1366x768', '1280x720', '960x540']), J(r.resList));
+    check('최대 시야 확장: on for people, off under automation unless ?wide=1 (the 55° budgets stay comparable)', () => (r.wideDefault === false && d.wideView === false), () => (`${r.wideDefault}`));
+    check('이펙트 가시거리 1 … 10 and 이펙트 투명화(자신) 0 … 5', () => (J(r.fd) === J([1, 10]) && J(r.sf) === J([0, 5])));
+    check('the list of sizes comes from the monitor (1920×1080 here): nothing larger is offered', () => (J(r.resList) === J(['auto', '1920x1080', '1600x900', '1366x768', '1280x720', '960x540'])), () => (J(r.resList)));
     if (Array.isArray(r.registry)) check('the options registry knows every row (and the key rows of the bindings)', r.registry.length === 0 && r.keys.length === 0, `${J(r.registry)} ${J(r.keys)}`);
     else log(`  · ${r.registry}`);
-  }
+  } catch (e) { check('[low] the group "rows" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ resolution
-  if (want('resolution')) {
+  if (want('resolution')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, cv = E.renderer.domElement, out = {};
       const at = async (v) => { H.set('resolution', v); await H.frames(2); return { canvas: [cv.width, cv.height], info: E.resolutionInfo, line: G.sys.display.info() }; };
@@ -169,13 +175,13 @@ async function lowPage() {
       return out;
     });
     numbers.resolution = r;
-    check('그래픽 해상도 960×540 in a 1280×720 window: the drawing buffer IS 960×540 (stretched over the window)', J(r.small.canvas) === J([960, 540]) && J(r.css) === J([1280, 720]) && Math.abs(r.small.info.ratio - 0.75) < 1e-6, `${J(r.small.canvas)} css ${J(r.css)}`);
-    check('1280×720 and 자동 draw the window\'s own 1280×720', J(r.mid.canvas) === J([1280, 720]) && J(r.auto.canvas) === J([1280, 720]));
-    check('1920×1080 cannot exceed this window\'s pixels: 1280×720, and the line says so', J(r.def.canvas) === J([1280, 720]) && r.def.info.limit === 'screen' && /창 1280×720 · 그리는 크기 1280×720/.test(r.def.line), r.def.line);
-    check('the honest line: "창 1280×720 · 그리는 크기 960×540"', r.small.line === '창 1280×720 · 그리는 크기 960×540', r.small.line);
-  }
+    check('그래픽 해상도 960×540 in a 1280×720 window: the drawing buffer IS 960×540 (stretched over the window)', () => (J(r.small.canvas) === J([960, 540]) && J(r.css) === J([1280, 720]) && Math.abs(r.small.info.ratio - 0.75) < 1e-6), () => (`${J(r.small.canvas)} css ${J(r.css)}`));
+    check('1280×720 and 자동 draw the window\'s own 1280×720', () => (J(r.mid.canvas) === J([1280, 720]) && J(r.auto.canvas) === J([1280, 720])));
+    check('1920×1080 cannot exceed this window\'s pixels: 1280×720, and the line says so', () => (J(r.def.canvas) === J([1280, 720]) && r.def.info.limit === 'screen' && /창 1280×720 · 그리는 크기 1280×720/.test(r.def.line)), () => (r.def.line));
+    check('the honest line: "창 1280×720 · 그리는 크기 960×540"', () => (r.small.line === '창 1280×720 · 그리는 크기 960×540'), () => (r.small.line));
+  } catch (e) { check('[low] the group "resolution" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ brightness on low
-  if (want('brightness')) {
+  if (want('brightness')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, cv = E.renderer.domElement, out = {};
       await H.view(0, 14, Math.PI, 10); await H.wait(1500);
@@ -185,12 +191,12 @@ async function lowPage() {
       return out;
     });
     numbers.brightnessLow = r;
-    check('밝기 on `low`: a CSS filter on the canvas (0 → brightness(0.620), 100 → brightness(1.400)), none at 50', !r.composer && r.b0.filter === 'brightness(0.620)' && r.b100.filter === 'brightness(1.400)' && r.b50.filter === '' && r.back.filter === '' && r.b0.path === 'css' && r.b50.path === 'none', J([r.b0.filter, r.b50.filter, r.b100.filter]));
-    check('… the frame itself is the same frame (low stays frozen): mean brightness within 1.5 of 255', Math.abs(r.b0.luma.mean - r.b50.luma.mean) < 1.5 && Math.abs(r.b100.luma.mean - r.b50.luma.mean) < 1.5, J([r.b0.luma.mean, r.b50.luma.mean, r.b100.luma.mean]));
-    check('… and the watchdog stays quiet at 0, 50 and 100', [r.b0, r.b50, r.b100].every((x) => x.p1 && !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0), J([r.b0.p2, r.b100.p2]));
-  }
+    check('밝기 on `low`: a CSS filter on the canvas (0 → brightness(0.620), 100 → brightness(1.400)), none at 50', () => (!r.composer && r.b0.filter === 'brightness(0.620)' && r.b100.filter === 'brightness(1.400)' && r.b50.filter === '' && r.back.filter === '' && r.b0.path === 'css' && r.b50.path === 'none'), () => (J([r.b0.filter, r.b50.filter, r.b100.filter])));
+    check('… the frame itself is the same frame (low stays frozen): mean brightness within 1.5 of 255', () => (Math.abs(r.b0.luma.mean - r.b50.luma.mean) < 1.5 && Math.abs(r.b100.luma.mean - r.b50.luma.mean) < 1.5), () => (J([r.b0.luma.mean, r.b50.luma.mean, r.b100.luma.mean])));
+    check('… and the watchdog stays quiet at 0, 50 and 100', () => ([r.b0, r.b50, r.b100].every((x) => x.p1 && !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0)), () => (J([r.b0.p2, r.b100.p2])));
+  } catch (e) { check('[low] the group "brightness" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ frame limit
-  if (want('frame')) {
+  if (want('frame')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, out = {};
       // through the option: the engine takes the limit
@@ -205,13 +211,13 @@ async function lowPage() {
       return out;
     });
     numbers.frame = r;
-    check('수직동기화 · 프레임 제한: the choices reach the engine (30 · 60 · 화면에 맞춤 = no limit)', r.opt30 === 30 && r.opt60 === 60 && r.optOff === 0, J(r));
-    check('limit 30 with a fake 60 Hz clock: 30 of 60 display frames are drawn', Math.abs(r.l30 - 30) <= 1, r.l30);
-    check('limit 60 on 60 Hz draws all 30 of 30; on 144 Hz it draws 30 of 72; no limit draws all', Math.abs(r.l60 - 30) <= 1 && Math.abs(r.l60on144 - 30) <= 2 && r.off === 10, J([r.l60, r.l60on144, r.off]));
-    check('a forced frame (photo, watchdog probe) is never held back', r.forced === 2, r.forced);
-  }
+    check('수직동기화 · 프레임 제한: the choices reach the engine (30 · 60 · 화면에 맞춤 = no limit)', () => (r.opt30 === 30 && r.opt60 === 60 && r.optOff === 0), () => (J(r)));
+    check('limit 30 with a fake 60 Hz clock: 30 of 60 display frames are drawn', () => (Math.abs(r.l30 - 30) <= 1), () => (r.l30));
+    check('limit 60 on 60 Hz draws all 30 of 30; on 144 Hz it draws 30 of 72; no limit draws all', () => (Math.abs(r.l60 - 30) <= 1 && Math.abs(r.l60on144 - 30) <= 2 && r.off === 10), () => (J([r.l60, r.l60on144, r.off])));
+    check('a forced frame (photo, watchdog probe) is never held back', () => (r.forced === 2), () => (r.forced));
+  } catch (e) { check('[low] the group "frame" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ view distance
-  if (want('view')) {
+  if (want('view')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, out = {};
       await H.view(52, 109.4, Math.PI, 10); await H.wait(1500);
@@ -231,15 +237,15 @@ async function lowPage() {
       return out;
     });
     numbers.view = r;
-    check('가시거리 퀄리티: far plane 3000 / 1300 / 800 m', r.high.far === 3000 && r.medium.far === 1300 && r.low.far === 800, J([r.high.far, r.medium.far, r.low.far]));
-    check('… the fog thickens as the far plane comes in (factor 1 → ≥ 1.15 → ≥ 1.35), so nothing is cut in view', r.high.fog === 1 && r.medium.fog >= 1.15 && r.low.fog >= 1.35 && r.low.fog >= r.medium.fog, J([r.high.fog, r.medium.fog, r.low.fog]));
-    check('… small scenery is culled nearer (72 m → 54 m → 39.6 m on `low`) and the frame does not get heavier', Math.abs(r.high.cull - 72) < 0.01 && Math.abs(r.medium.cull - 54) < 0.01 && Math.abs(r.low.cull - 39.6) < 0.01 && r.low.calls <= r.high.calls && r.low.tris <= r.high.tris, `calls ${r.high.calls} → ${r.low.calls}, triangles ${r.high.tris} → ${r.low.tris}, culled ${r.high.culled} → ${r.low.culled}`);
+    check('가시거리 퀄리티: far plane 3000 / 1300 / 800 m', () => (r.high.far === 3000 && r.medium.far === 1300 && r.low.far === 800), () => (J([r.high.far, r.medium.far, r.low.far])));
+    check('… the fog thickens as the far plane comes in (factor 1 → ≥ 1.15 → ≥ 1.35), so nothing is cut in view', () => (r.high.fog === 1 && r.medium.fog >= 1.15 && r.low.fog >= 1.35 && r.low.fog >= r.medium.fog), () => (J([r.high.fog, r.medium.fog, r.low.fog])));
+    check('… small scenery is culled nearer (72 m → 54 m → 39.6 m on `low`) and the frame does not get heavier', () => (Math.abs(r.high.cull - 72) < 0.01 && Math.abs(r.medium.cull - 54) < 0.01 && Math.abs(r.low.cull - 39.6) < 0.01 && r.low.calls <= r.high.calls && r.low.tris <= r.high.tris), () => (`calls ${r.high.calls} → ${r.low.calls}, triangles ${r.high.tris} → ${r.low.tris}, culled ${r.high.culled} → ${r.low.culled}`));
     if (r.room && !r.roomErr) check(`a room (${r.room}) keeps its own far plane (${r.roomDef} m) and its own air; leaving puts 800 m back`, r.roomFar === Math.min(r.roomDef, 800) && r.roomFog === 1 && r.afterFar === 800, J([r.roomFar, r.roomFog, r.afterFar]));
     else check('a room to walk into for the far-plane check', false, r.roomErr || 'no place found');
-    check('높음 again: 3000 m, fog factor 1', r.end.far === 3000 && r.end.fog === 1);
-  }
+    check('높음 again: 3000 m, fog factor 1', () => (r.end.far === 3000 && r.end.fog === 1));
+  } catch (e) { check('[low] the group "view" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ wide view
-  if (want('wide')) {
+  if (want('wide')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, cam = G.sys.camera, el = document.getElementById('game-container'), out = {};
       await H.view(0, 14, Math.PI, 10);
@@ -262,12 +268,12 @@ async function lowPage() {
       return out;
     });
     numbers.wide = r;
-    check('최대 시야 확장: the follow view opens from 55° to 70°, and back', Math.abs(r.fov0 - 55) < 0.6 && Math.abs(r.fov1 - 70) < 0.8 && Math.abs(r.fov2 - 55) < 0.8 && r.wide === true, J([r.fov0, r.fov1, r.fov2]));
-    check('… the wheel zooms out further: easy mode 12.5 → 16 m, normal mode 22 → 30 m; off brings a far camera back in', Math.abs(r.max0 - 12.5) < 0.01 && Math.abs(r.max1 - 16) < 0.01 && Math.abs(r.maxN1 - 30) < 0.01 && Math.abs(r.maxN0 - 22) < 0.01 && r.maxE0 <= 12.51, J([r.max0, r.max1, r.maxN1, r.maxN0, r.maxE0]));
-    check('… scripted shots keep their own field of view (48° stays 48°)', Math.abs(r.shotFov - 48) < 0.6, r.shotFov);
-  }
+    check('최대 시야 확장: the follow view opens from 55° to 70°, and back', () => (Math.abs(r.fov0 - 55) < 0.6 && Math.abs(r.fov1 - 70) < 0.8 && Math.abs(r.fov2 - 55) < 0.8 && r.wide === true), () => (J([r.fov0, r.fov1, r.fov2])));
+    check('… the wheel zooms out further: easy mode 12.5 → 16 m, normal mode 22 → 30 m; off brings a far camera back in', () => (Math.abs(r.max0 - 12.5) < 0.01 && Math.abs(r.max1 - 16) < 0.01 && Math.abs(r.maxN1 - 30) < 0.01 && Math.abs(r.maxN0 - 22) < 0.01 && r.maxE0 <= 12.51), () => (J([r.max0, r.max1, r.maxN1, r.maxN0, r.maxE0])));
+    check('… scripted shots keep their own field of view (48° stays 48°)', () => (Math.abs(r.shotFov - 48) < 0.6), () => (r.shotFov));
+  } catch (e) { check('[low] the group "wide" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ effects
-  if (want('fx')) {
+  if (want('fx')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, out = {};
       await H.view(0, 14, Math.PI, 10); await H.wait(600);
@@ -304,19 +310,19 @@ async function lowPage() {
       return out;
     });
     numbers.fx = r;
-    check('이펙트 퀄리티: the particle share is 1 · 0.7 · 0.4, and a burst of 40 makes about 40 · 28 · 16 particles (높음 · 보통 · 낮음)', J(r.share) === J({ high: 1, medium: 0.7, low: 0.4 }) && r.qh >= 20 && Math.abs(r.qm / r.qh - 0.7) <= 0.1 && Math.abs(r.ql / r.qh - 0.4) <= 0.1, J([r.qh, r.qm, r.ql, r.level]));
+    check('이펙트 퀄리티: the particle share is 1 · 0.7 · 0.4, and a burst of 40 makes about 40 · 28 · 16 particles (높음 · 보통 · 낮음)', () => (J(r.share) === J({ high: 1, medium: 0.7, low: 0.4 }) && r.qh >= 20 && Math.abs(r.qm / r.qh - 0.7) <= 0.1 && Math.abs(r.ql / r.qh - 0.4) <= 0.1), () => (J([r.qh, r.qm, r.ql, r.level])));
     const R = r.ranges;
-    check('이펙트 가시거리: 1 = 8 m … 9 = 118 m … 10 = 165 m', R[1].range === 8 && R[3].range === 16 && R[6].range === 43 && R[9].range === 118 && R[10].range === 165, J(Object.values(R).map((x) => x.range)));
+    check('이펙트 가시거리: 1 = 8 m … 9 = 118 m … 10 = 165 m', () => (R[1].range === 8 && R[3].range === 16 && R[6].range === 43 && R[9].range === 118 && R[10].range === 165), () => (J(Object.values(R).map((x) => x.range))));
     const byRule = Object.values(R).every((x) => x.at.every(([near, made]) => (made === 1) === (near <= x.range)));
     check('… bursts 5 / 12 / 40 / 100 / 150 m along the view are made exactly where the nearer of character and camera is inside the range; more of them with every step', byRule && R[1].at.some((a) => a[1] === 0) && R[10].at.every((a) => a[1] === 1)
       && [1, 3, 6, 9, 10].map((n) => R[n].at.filter((a) => a[1]).length).every((v, i, l) => i === 0 || v >= l[i - 1]), J(Object.values(R).map((x) => `${x.range}m:${x.at.map((a) => `${a[0]}→${a[1]}`).join(' ')}`)));
-    check('… the character\'s own spot is made at every step — also at 1 (8 m) with the camera 27 m away, where a spot halfway between them is not', Object.values(R).every((x) => x.own === 1) && r.ownFar === 1 && r.midFar === 0, `camera ${r.camToPlayer} m from the character · far: own ${r.ownFar}, halfway ${r.midFar}`);
-    check('… floating emoji and ground rings obey the same rule (a spot 40 m along the view: not at 3, yes at 6)', (R[3].emoji === 1) === (R[3].near40 <= R[3].range) && R[3].ripple === R[3].emoji && R[3].emoji === 0 && R[6].emoji === 1 && R[6].ripple === 1, `near ${R[3].near40} m`);
-    check('이펙트 투명화(자신) 0 … 5: what is left of the own effects is 1 · 0.8 · 0.6 · 0.42 · 0.26 · 0.1', J(r.self) === J([1, 0.8, 0.6, 0.42, 0.26, 0.1]), J(r.self));
-    check('… the double-jump sparkles are the player\'s own: none when nothing is left, there again at full', r.djOff === 0 && r.djOn > 0, `${r.djOff} / ${r.djOn}`);
-  }
+    check('… the character\'s own spot is made at every step — also at 1 (8 m) with the camera 27 m away, where a spot halfway between them is not', () => (Object.values(R).every((x) => x.own === 1) && r.ownFar === 1 && r.midFar === 0), () => (`camera ${r.camToPlayer} m from the character · far: own ${r.ownFar}, halfway ${r.midFar}`));
+    check('… floating emoji and ground rings obey the same rule (a spot 40 m along the view: not at 3, yes at 6)', () => ((R[3].emoji === 1) === (R[3].near40 <= R[3].range) && R[3].ripple === R[3].emoji && R[3].emoji === 0 && R[6].emoji === 1 && R[6].ripple === 1), () => (`near ${R[3].near40} m`));
+    check('이펙트 투명화(자신) 0 … 5: what is left of the own effects is 1 · 0.8 · 0.6 · 0.42 · 0.26 · 0.1', () => (J(r.self) === J([1, 0.8, 0.6, 0.42, 0.26, 0.1])), () => (J(r.self)));
+    check('… the double-jump sparkles are the player\'s own: none when nothing is left, there again at full', () => (r.djOff === 0 && r.djOn > 0), () => (`${r.djOff} / ${r.djOn}`));
+  } catch (e) { check('[low] the group "fx" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ photo formats
-  if (want('photo')) {
+  if (want('photo')) try {
     const r = await page.evaluate(async () => {
       const H = window.__dt, P = G.sys.photo, out = {};
       const blob = async (o) => { const b = await P.snapshot(o); return b ? { type: b.type, size: b.size } : null; };
@@ -344,14 +350,14 @@ async function lowPage() {
       return out;
     });
     numbers.photo = r;
-    check('스크린샷 포맷: snapshot() gives a JPG by default, PNG and WebP on request', r.def && r.def.type === 'image/jpeg' && r.png.type === 'image/png' && (r.webp.type === 'image/webp' || r.webp.type === 'image/jpeg') && r.def.size > 2000, J([r.def, r.png, r.webp]));
-    check('… the quality counts (JPG 50 % is smaller than 100 %), and the option reaches it (60 % → 0.6)', r.q50.size < r.q100.size && r.q60 === 0.6, `${r.q50.size} < ${r.q100.size}`);
-    check('… capture({ format, quality, maxWidth }) is the same call and gives a Blob (lane support\'s picture)', r.cap && r.cap.isBlob && r.cap.type === 'image/jpeg' && r.capW === 320, J([r.cap, r.capW]));
-    check('… the option changes the default (PNG) and back', r.shotPng.format === 'png' && r.defPng.type === 'image/png' && r.shot.format === 'jpg' && r.shot.mime === 'image/jpeg');
-    check('… the album shutter saves its full-size picture in that format (.jpg)', r.album.n === 1 && r.album.fmt === 'jpg' && /\.jpg$/.test(r.album.name || ''), J(r.album));
-  }
+    check('스크린샷 포맷: snapshot() gives a JPG by default, PNG and WebP on request', () => (r.def && r.def.type === 'image/jpeg' && r.png.type === 'image/png' && (r.webp.type === 'image/webp' || r.webp.type === 'image/jpeg') && r.def.size > 2000), () => (J([r.def, r.png, r.webp])));
+    check('… the quality counts (JPG 50 % is smaller than 100 %), and the option reaches it (60 % → 0.6)', () => (r.q50.size < r.q100.size && r.q60 === 0.6), () => (`${r.q50.size} < ${r.q100.size}`));
+    check('… capture({ format, quality, maxWidth }) is the same call and gives a Blob (lane support\'s picture)', () => (r.cap && r.cap.isBlob && r.cap.type === 'image/jpeg' && r.capW === 320), () => (J([r.cap, r.capW])));
+    check('… the option changes the default (PNG) and back', () => (r.shotPng.format === 'png' && r.defPng.type === 'image/png' && r.shot.format === 'jpg' && r.shot.mime === 'image/jpeg'));
+    check('… the album shutter saves its full-size picture in that format (.jpg)', () => (r.album.n === 1 && r.album.fmt === 'jpg' && /\.jpg$/.test(r.album.name || '')), () => (J(r.album)));
+  } catch (e) { check('[low] the group "photo" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ window mode, monitor, DOF, zoom keys
-  if (want('window')) {
+  if (want('window')) try {
     await page.evaluate(() => window.__dt.ready());
     const before = await page.evaluate(() => ({ fs: !!document.fullscreenElement, mode: window.__dt.get('windowMode'), mon: G.sys.display.screens(), monWhy: G.sys.display.options().find((d) => d.id === 'monitor').available(), monOpts: G.sys.display.options().find((d) => d.id === 'monitor').options.map((o) => o.l) }));
     // the key of the 'fullscreen' action (F): a real key press is the gesture the browser asks for
@@ -363,10 +369,10 @@ async function lowPage() {
     const off = await page.evaluate(() => ({ fs: !!document.fullscreenElement, mode: window.__dt.get('windowMode') }));
     numbers.window = { before, on, off };
     if (on.fs) {
-      check('화면 모드: the F key goes full screen (the option says 전체 화면) and F again comes back to 창 모드', on.mode === 'fullscreen' && on.flag === true && !off.fs && off.mode === 'window', J([on, off]));
+      check('화면 모드: the F key goes full screen (the option says 전체 화면) and F again comes back to 창 모드', () => (on.mode === 'fullscreen' && on.flag === true && !off.fs && off.mode === 'window'), () => (J([on, off])));
     } else {
       // this browser refused the full-screen request: the wish is kept and the chip offers it
-      check('화면 모드: F asks for full screen; where the browser refuses, the wish is kept as 전체 화면', on.mode === 'fullscreen' && off.mode === 'window', J([on, off]));
+      check('화면 모드: F asks for full screen; where the browser refuses, the wish is kept as 전체 화면', () => (on.mode === 'fullscreen' && off.mode === 'window'), () => (J([on, off])));
     }
     // a saved wish without a press (as after a login): the browser refuses, a chip offers it, ✕ puts 창 모드 back
     await page.waitForTimeout(6000);   // (the key presses above count as a press for about five seconds)
@@ -383,7 +389,7 @@ async function lowPage() {
     numbers.window.chip = chip;
     if (chip.fs) { check('a saved 전체 화면 wish was granted at once here (no chip needed)', true); await page.evaluate(async () => { window.__dt.set('windowMode', 'window'); await window.__dt.wait(800); }); }
     else check('a saved 전체 화면 wish without a press: the chip "🖥️ 전체 화면으로 보기" (56 px in easy mode, with a voice line); ✕ = 창 모드', chip.chip && /전체 화면으로 보기/.test(chip.text) && chip.say.length > 5 && chip.h >= 56 && chip.after.mode === 'window' && !chip.after.chip, J(chip));
-    check('출력될 모니터: one monitor (or no browser support) → "1 모니터", disabled, with the reason in Korean', before.monOpts.length === 1 ? (before.monOpts[0] === '1 모니터' && typeof before.monWhy === 'string' && /[가-힣]/.test(before.monWhy)) : before.mon.state === 'ready', J([before.mon.state, before.monOpts, before.monWhy]));
+    check('출력될 모니터: one monitor (or no browser support) → "1 모니터", disabled, with the reason in Korean', () => (before.monOpts.length === 1 ? (before.monOpts[0] === '1 모니터' && typeof before.monWhy === 'string' && /[가-힣]/.test(before.monWhy)) : before.mon.state === 'ready'), () => (J([before.mon.state, before.monOpts, before.monWhy])));
     const misc = await page.evaluate(async () => {
       const H = window.__dt, E = G.sys.engine, cam = G.sys.camera, row = (id) => G.sys.display.options().find((d) => d.id === id), out = {};
       out.dofWhy = row('dof').available(); out.aaWhy = row('antialias').available(); out.drWhy = row('dynRes').available(); out.texWhy = row('texQuality').available(); out.aoWhy = row('ao').available();
@@ -398,11 +404,11 @@ async function lowPage() {
     await page.waitForTimeout(600);
     const zIn = await page.evaluate(() => G.sys.camera._distT);
     numbers.window.misc = { ...misc, zOut, zIn };
-    check('`low` says why DOF, anti-aliasing, dynamic resolution, textures and ambient shadow cannot be used there (and DOF stays off)', [misc.dofWhy, misc.aaWhy, misc.drWhy, misc.texWhy, misc.aoWhy].every((w) => typeof w === 'string' && /[가-힣]/.test(w)) && misc.dofOn === false, J([misc.dofWhy, misc.aoWhy]));
-    check('zoom keys: X steps back, Z comes closer', zOut > misc.d0 + 0.05 && zIn < zOut - 0.05, `${misc.d0.toFixed(2)} → ${zOut.toFixed(2)} → ${zIn.toFixed(2)}`);
-  }
+    check('`low` says why DOF, anti-aliasing, dynamic resolution, textures and ambient shadow cannot be used there (and DOF stays off)', () => ([misc.dofWhy, misc.aaWhy, misc.drWhy, misc.texWhy, misc.aoWhy].every((w) => typeof w === 'string' && /[가-힣]/.test(w)) && misc.dofOn === false), () => (J([misc.dofWhy, misc.aoWhy])));
+    check('zoom keys: X steps back, Z comes closer', () => (zOut > misc.d0 + 0.05 && zIn < zOut - 0.05), () => (`${misc.d0.toFixed(2)} → ${zOut.toFixed(2)} → ${zIn.toFixed(2)}`));
+  } catch (e) { check('[low] the group "window" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   // ------------------------------------------------------------------------------------------------ kept for the next visit
-  if (want('persist')) {
+  if (want('persist')) try {
     await page.evaluate(async () => {
       const H = window.__dt;
       H.set('brightness', 70); H.set('viewQuality', 'medium'); H.set('fxDistance', 4); H.set('frameLimit', '30'); H.set('resolution', '960x540'); H.set('selfFxFade', 3); H.set('fxQuality', 'medium'); H.set('shotFormat', 'webp');
@@ -425,12 +431,12 @@ async function lowPage() {
       return out;
     });
     numbers.persist = r;
-    check('after a reload every chosen value is still chosen (and the rebound key)', J(r.v) === J([70, 'medium', 4, '30', '960x540', 3, 'medium', 'webp']) && J(r.bag) === J(['KeyU']), J([r.v, r.bag]));
-    check('… and applied without anyone opening the settings: filter, far plane, effect range, frame limit, drawing size, own-effect share, particle share', r.applied.css === 'brightness(1.160)' && r.applied.far === 1300 && r.applied.range === 22 && r.applied.limit === 30 && J(r.applied.canvas) === J([960, 540]) && r.applied.self === 0.42 && r.applied.share === 0.7, J(r.applied));
-    check('back to the defaults: no filter, 3000 m, no limit, I opens the bag again', r.reset.css === '' && r.reset.far === 3000 && r.reset.limit === 0 && J(r.reset.bag) === J(['KeyI']) && r.reset.custom === false, J(r.reset));
-  }
+    check('after a reload every chosen value is still chosen (and the rebound key)', () => (J(r.v) === J([70, 'medium', 4, '30', '960x540', 3, 'medium', 'webp']) && J(r.bag) === J(['KeyU'])), () => (J([r.v, r.bag])));
+    check('… and applied without anyone opening the settings: filter, far plane, effect range, frame limit, drawing size, own-effect share, particle share', () => (r.applied.css === 'brightness(1.160)' && r.applied.far === 1300 && r.applied.range === 22 && r.applied.limit === 30 && J(r.applied.canvas) === J([960, 540]) && r.applied.self === 0.42 && r.applied.share === 0.7), () => (J(r.applied)));
+    check('back to the defaults: no filter, 3000 m, no limit, I opens the bag again', () => (r.reset.css === '' && r.reset.far === 3000 && r.reset.limit === 0 && J(r.reset.bag) === J(['KeyI']) && r.reset.custom === false), () => (J(r.reset)));
+  } catch (e) { check('[low] the group "persist" ran to its end', false, String(e && e.message || e).slice(0, 400)); }   // (group isolation)
   const end = await page.evaluate(() => { const W = G.gfx.guard.watchdog; return { step: W.step, state: W.state, quality: G.sys.engine.quality, composer: !!G.sys.engine.composer }; });
-  check('`low` is still the frozen direct render at the end (no post chain) and the watchdog never stepped', end.quality === 'low' && !end.composer && end.step === 0, J(end));
+  check('`low` is still the frozen direct render at the end (no post chain) and the watchdog never stepped', () => (end.quality === 'low' && !end.composer && end.step === 0), () => (J(end)));
   await context.close();
 }
 
@@ -486,26 +492,27 @@ async function mediumPage() {
     return out;
   });
   numbers.medium = r;
-  check('[medium] the post chain is up and the output pass carries the brightness block', r.start.composer && r.start.patched && r.start.quality === 'medium');
-  check('[medium] 1280×720 in a 640×360 window on a device ratio of 2: drawn at 1280×720; 960×540 → 960×540', J(r.res.r1280.canvas) === J([1280, 720]) && J(r.res.r960.canvas) === J([960, 540]) && /창 640×360 · 그리는 크기 960×540/.test(r.res.r960.line), J([r.res.r1280.canvas, r.res.r960.canvas, r.res.r960.line]));
-  check('[medium] 자동 keeps the preset\'s ratio (1.25 → 800×450)', J(r.res.auto.canvas) === J([800, 450]), J(r.res.auto.canvas));
-  const D = r.day, byB = (list, b) => list.find((x) => x.b === b);
+  check('[medium] the post chain is up and the output pass carries the brightness block', () => (r.start.composer && r.start.patched && r.start.quality === 'medium'));
+  check('[medium] 1280×720 in a 640×360 window on a device ratio of 2: drawn at 1280×720; 960×540 → 960×540', () => (J(r.res.r1280.canvas) === J([1280, 720]) && J(r.res.r960.canvas) === J([960, 540]) && /창 640×360 · 그리는 크기 960×540/.test(r.res.r960.line)), () => (J([r.res.r1280.canvas, r.res.r960.canvas, r.res.r960.line])));
+  check('[medium] 자동 keeps the preset\'s ratio (1.25 → 800×450)', () => (J(r.res.auto.canvas) === J([800, 450])), () => (J(r.res.auto.canvas)));
+  const D = r.day || [], byB = (list, b) => list.find((x) => x.b === b);
   const d0 = byB(D, 0), d25 = byB(D, 25), d50 = D[0], d75 = byB(D, 75), d100 = byB(D, 100), d50b = D[D.length - 1];
-  check('[medium] 밝기 through the shader (no CSS filter): gamma 1.625 at 0, exactly off at 50, 0.616 at 100', d0.path === 'shader' && d50.path === 'none' && d100.path === 'shader' && d0.gamma === 1.625 && d100.gamma === 0.616 && D.every((x) => x.filter === ''), J(D.map((x) => [x.b, x.path, x.gamma])));
-  check('[medium] day: the frame gets brighter with every step — 0 < 25 < 50 < 75 < 100 (mean of 255)', d0.luma.mean < d25.luma.mean - 2 && d25.luma.mean < d50.luma.mean - 2 && d50.luma.mean < d75.luma.mean - 2 && d75.luma.mean < d100.luma.mean - 2 && Math.abs(d50b.luma.mean - d50.luma.mean) < 3, J(D.map((x) => x.luma.mean)));
-  check('[medium] day: what the watchdog calls black / white is the same share at every brightness, and it stays quiet', D.every((x) => !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0 && Math.abs(x.p2.black - d50.p2.black) < 0.02 && Math.abs(x.p2.white - d50.p2.white) < 0.02), J(D.map((x) => [x.b, x.p2.black, x.p2.white])));
-  const Nn = r.night, n50 = Nn[0], n0 = byB(Nn, 0), n100 = byB(Nn, 100);
-  check('[medium] night: darker at 0, brighter at 100', n0.luma.mean < n50.luma.mean - 0.5 && n100.luma.mean > n50.luma.mean + 0.5, J(Nn.map((x) => x.luma.mean)));
-  check('[medium] night: black / white shares unchanged and the watchdog quiet at 0, 50 and 100', Nn.every((x) => !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0 && Math.abs(x.p2.black - n50.p2.black) < 0.02 && Math.abs(x.p2.white - n50.p2.white) < 0.02), J(Nn.map((x) => [x.b, x.p2.black, x.p2.white, x.luma.black])));
-  check('[medium] anti-aliasing switch: 4 samples → 0 → 4 (the frame is still a picture)', r.aa.on === 4 && r.aa.off === 0 && r.aa.back === 4 && r.aa.frameOff.mean > 20 && r.aa.frameOff.black < 0.05, J(r.aa));
-  check('[medium] dynamic resolution switch: on → off (the scale goes to its cap) → on', r.drs.on === true && r.drs.off === false && Math.abs(r.drs.scaleOff - r.drs.cap) < 1e-6 && r.drs.back === true && r.drs.why === true, J(r.drs));
-  check('[medium] DOF while playing: the pass runs with the focus on the character, and stops when switched off', r.dof.why === true && !r.dof.before && r.dof.on && !r.dof.off && r.dof.focus > 1 && Math.abs(r.dof.focus - r.dof.cam) < r.dof.cam * 0.6 + 1.5, J(r.dof));
-  const V = r.view;
-  check('[medium] 가시거리 낮음 from 만장대: far 800 m, forest levels × 0.6 — fewer trees in full / reduced detail, fewer triangles', V.low.far === 800 && V.low.veg === 0.6 && V.high.veg === 1 && V.low.near <= V.high.near && V.low.mid < V.high.mid && V.low.tris < V.high.tris, `near ${V.high.near} → ${V.low.near}, mid ${V.high.mid} → ${V.low.mid}, triangles ${V.high.tris} → ${V.low.tris}, calls ${V.high.calls} → ${V.low.calls}`);
-  check('[medium] 풀 밀도 100 → 50 → 0 %: the grass instances halve and go (and come back)', r.grass.g100 > 100 && Math.abs(r.grass.g50 - r.grass.g100 / 2) <= r.grass.g100 * 0.02 + 2 && r.grass.g0 <= 1 && r.grass.back === r.grass.g100, J(r.grass));
-  check('[medium] 이펙트 퀄리티 낮음 switches the lighter weather effects off (petals, smoke, caustics, rain rings); splashes stay', r.feat.high.includes('petals') && r.feat.high.includes('smoke') && J(r.feat.low) === J(['splashes']), `${J(r.feat.high)} → ${J(r.feat.low)}`);
-  check('[medium] 텍스쳐 퀄리티: anisotropy of the scene\'s maps ≤ 1 at 낮음, ≤ 4 at 보통, as authored again at 높음', r.tex.high.n > 0 && r.tex.low.max <= 1 && r.tex.medium.max <= 4 && r.tex.back.max === r.tex.high.max && r.tex.frame.mean > 20, J([r.tex.high, r.tex.low, r.tex.medium, r.tex.back]));
-  check('[medium] the watchdog never stepped', r.end.step === 0, J([r.end.step, r.end.state]));
+  check('[medium] 밝기 through the shader (no CSS filter): gamma 1.625 at 0, exactly off at 50, 0.616 at 100', () => (d0.path === 'shader' && d50.path === 'none' && d100.path === 'shader' && d0.gamma === 1.625 && d100.gamma === 0.616 && D.every((x) => x.filter === '')), () => (J(D.map((x) => [x.b, x.path, x.gamma]))));
+  check('[medium] day: the frame gets brighter with every step — 0 < 25 < 50 < 75 < 100 (mean of 255)', () => (d0.luma.mean < d25.luma.mean - 2 && d25.luma.mean < d50.luma.mean - 2 && d50.luma.mean < d75.luma.mean - 2 && d75.luma.mean < d100.luma.mean - 2 && Math.abs(d50b.luma.mean - d50.luma.mean) < 3), () => (J(D.map((x) => x.luma.mean))));
+  check('[medium] day: what the watchdog calls black / white is the same share at every brightness, and it stays quiet', () => (D.every((x) => !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0 && Math.abs(x.p2.black - d50.p2.black) < 0.02 && Math.abs(x.p2.white - d50.p2.white) < 0.02)), () => (J(D.map((x) => [x.b, x.p2.black, x.p2.white]))));
+  const Nn = r.night || [], n50 = Nn[0], n0 = byB(Nn, 0), n100 = byB(Nn, 100);
+  check('[medium] night: darker at 0, brighter at 100', () => (n0.luma.mean < n50.luma.mean - 0.5 && n100.luma.mean > n50.luma.mean + 0.5), () => (J(Nn.map((x) => x.luma.mean))));
+  check('[medium] night: black / white shares unchanged and the watchdog quiet at 0, 50 and 100', () => (Nn.every((x) => !x.p1.anomaly && !x.p2.anomaly && x.p2.step === 0 && Math.abs(x.p2.black - n50.p2.black) < 0.02 && Math.abs(x.p2.white - n50.p2.white) < 0.02)), () => (J(Nn.map((x) => [x.b, x.p2.black, x.p2.white, x.luma.black]))));
+  check('[medium] anti-aliasing switch: 4 samples → 0 → 4 (the frame is still a picture)', () => (r.aa.on === 4 && r.aa.off === 0 && r.aa.back === 4 && r.aa.frameOff.mean > 20 && r.aa.frameOff.black < 0.05), () => (J(r.aa)));
+  check('[medium] dynamic resolution switch: on → off (the scale goes to its cap) → on', () => (r.drs.on === true && r.drs.off === false && Math.abs(r.drs.scaleOff - r.drs.cap) < 1e-6 && r.drs.back === true && r.drs.why === true), () => (J(r.drs)));
+  check('[medium] DOF while playing: the pass runs with the focus on the character, and stops when switched off', () => (r.dof.why === true && !r.dof.before && r.dof.on && !r.dof.off && r.dof.focus > 1 && Math.abs(r.dof.focus - r.dof.cam) < r.dof.cam * 0.6 + 1.5), () => (J(r.dof)));
+  const V = r.view || {};
+  check('[medium] every part of the page could be measured', () => !r.errors, () => J(r.errors));
+  check('[medium] 가시거리 낮음 from 만장대: far 800 m, forest levels × 0.6 — fewer trees in full / reduced detail, fewer triangles', () => (V.low.far === 800 && V.low.veg === 0.6 && V.high.veg === 1 && V.low.near <= V.high.near && V.low.mid < V.high.mid && V.low.tris < V.high.tris), () => (`near ${V.high.near} → ${V.low.near}, mid ${V.high.mid} → ${V.low.mid}, triangles ${V.high.tris} → ${V.low.tris}, calls ${V.high.calls} → ${V.low.calls}`));
+  check('[medium] 풀 밀도 100 → 50 → 0 %: the grass instances halve and go (and come back)', () => (r.grass.g100 > 100 && Math.abs(r.grass.g50 - r.grass.g100 / 2) <= r.grass.g100 * 0.02 + 2 && r.grass.g0 <= 1 && r.grass.back === r.grass.g100), () => (J(r.grass)));
+  check('[medium] 이펙트 퀄리티 낮음 switches the lighter weather effects off (petals, smoke, caustics, rain rings); splashes stay', () => (r.feat.high.includes('petals') && r.feat.high.includes('smoke') && J(r.feat.low) === J(['splashes'])), () => (`${J(r.feat.high)} → ${J(r.feat.low)}`));
+  check('[medium] 텍스쳐 퀄리티: anisotropy of the scene\'s maps ≤ 1 at 낮음, ≤ 4 at 보통, as authored again at 높음', () => (r.tex.high.n > 0 && r.tex.low.max <= 1 && r.tex.medium.max <= 4 && r.tex.back.max === r.tex.high.max && r.tex.frame.mean > 20), () => (J([r.tex.high, r.tex.low, r.tex.medium, r.tex.back])));
+  check('[medium] the watchdog never stepped', () => (r.end.step === 0), () => (J([r.end.step, r.end.state])));
   await context.close();
 }
 
@@ -525,7 +532,7 @@ async function highPage() {
     return out;
   });
   numbers.high = { ao };
-  check('[high] ambient shadow switch: the pass runs → off → runs', ao.has && ao.on && !ao.off && ao.back && ao.why === true, J(ao));
+  check('[high] ambient shadow switch: the pass runs → off → runs', () => (ao.has && ao.on && !ao.off && ao.back && ao.why === true), () => (J(ao)));
   // ---- brightness by day and by night
   const lum = {};
   await ev(async () => { await window.__dt.view(0, 14, Math.PI, 10); await window.__dt.wait(9000); });
@@ -534,21 +541,21 @@ async function highPage() {
   for (const b of [50, 0, 100]) { lum['night' + b] = await ev(async (v) => { const H = window.__dt; H.set('brightness', v); await H.frames(1); H.calm(); const p2 = H.probe(); return { luma: H.luma(), p: p2, a: p2.anomaly }; }, b); await shot(`bright-night-${String(b).padStart(3, '0')}`); }
   await ev(async () => { window.__dt.set('brightness', 50); });
   numbers.high.brightness = lum;
-  check('[high] 밝기 0 / 50 / 100 by day: darker / as before / brighter, the watchdog quiet', lum.day0.luma.mean < lum.day50.luma.mean - 4 && lum.day100.luma.mean > lum.day50.luma.mean + 4 && !lum.day0.a && !lum.day50.a && !lum.day100.a, J([lum.day0.luma, lum.day50.luma, lum.day100.luma]));
-  check('[high] 밝기 0 / 50 / 100 by night: darker / as before / brighter, the watchdog quiet, black share unchanged', lum.night0.luma.mean < lum.night50.luma.mean && lum.night100.luma.mean > lum.night50.luma.mean && !lum.night0.a && !lum.night50.a && !lum.night100.a && Math.abs(lum.night0.p.black - lum.night50.p.black) < 0.02, J([lum.night0.luma, lum.night50.luma, lum.night100.luma]));
+  check('[high] 밝기 0 / 50 / 100 by day: darker / as before / brighter, the watchdog quiet', () => (lum.day0.luma.mean < lum.day50.luma.mean - 4 && lum.day100.luma.mean > lum.day50.luma.mean + 4 && !lum.day0.a && !lum.day50.a && !lum.day100.a), () => (J([lum.day0.luma, lum.day50.luma, lum.day100.luma])));
+  check('[high] 밝기 0 / 50 / 100 by night: darker / as before / brighter, the watchdog quiet, black share unchanged', () => (lum.night0.luma.mean < lum.night50.luma.mean && lum.night100.luma.mean > lum.night50.luma.mean && !lum.night0.a && !lum.night50.a && !lum.night100.a && Math.abs(lum.night0.p.black - lum.night50.p.black) < 0.02), () => (J([lum.night0.luma, lum.night50.luma, lum.night100.luma])));
   // ---- view distance from 만장대
   const vd = {};
   await ev(async () => { await window.__dt.view(52, 109.4, Math.PI, 10); await window.__dt.wait(9000); });
   for (const v of ['high', 'low']) { vd[v] = await ev(async (q) => { const H = window.__dt, E = G.sys.engine; H.set('viewQuality', q); await H.wait(6000); const f = H.frame(); return { far: E.camera.far, fog: +E.viewFog.toFixed(3), calls: f.calls, tris: f.tris }; }, v); await shot(`view-${v}`); }
   await ev(async () => { window.__dt.set('viewQuality', 'high'); });
   numbers.high.view = vd;
-  check('[high] 가시거리 낮음 from 만장대: 800 m, thicker fog, a lighter frame', vd.low.far === 800 && vd.low.fog >= 1.35 && vd.low.tris < vd.high.tris && vd.low.calls <= vd.high.calls, J(vd));
+  check('[high] 가시거리 낮음 from 만장대: 800 m, thicker fog, a lighter frame', () => (vd.low.far === 800 && vd.low.fog >= 1.35 && vd.low.tris < vd.high.tris && vd.low.calls <= vd.high.calls), () => (J(vd)));
   // ---- field of view on the plaza
   const fv = {};
   await ev(async () => { await window.__dt.view(0, 14, Math.PI, 10); await window.__dt.wait(6000); });
   for (const w of [false, true]) { fv[w ? 'wide' : 'normal'] = await ev(async (on) => { const H = window.__dt, E = G.sys.engine; H.set('wideView', on); await H.frames(1); for (let i = 0; i < 4; i++) G.sys.camera.snap(); await H.frames(1); const f = H.frame(); return { fov: +E.camera.fov.toFixed(1), calls: f.calls, tris: f.tris }; }, w); await shot(`fov-${w ? '70-wide' : '55'}`); }
   numbers.high.fov = fv;
-  check('[high] 최대 시야 확장 on the plaza: 55° → 70° (what it costs: draw calls and triangles of the frame are reported)', Math.abs(fv.normal.fov - 55) < 1 && Math.abs(fv.wide.fov - 70) < 1.2, `calls ${fv.normal.calls} → ${fv.wide.calls}, triangles ${fv.normal.tris} → ${fv.wide.tris}`);
+  check('[high] 최대 시야 확장 on the plaza: 55° → 70° (what it costs: draw calls and triangles of the frame are reported)', () => (Math.abs(fv.normal.fov - 55) < 1 && Math.abs(fv.wide.fov - 70) < 1.2), () => (`calls ${fv.normal.calls} → ${fv.wide.calls}, triangles ${fv.normal.tris} → ${fv.wide.tris}`));
   await ev(async () => { window.__dt.set('wideView', false); await window.__dt.wait(3000); });
   // ---- effect distance: the same bursts and floating marks 7 … 100 m along the view, with the range at 2 (11 m) and at 10 (165 m)
   const fxd = {};
@@ -572,27 +579,24 @@ async function highPage() {
   }
   await ev(async () => { window.__dt.set('fxDistance', 9); G.fx.clear(); });
   numbers.high.fxDistance = fxd;
-  check('[high] 이펙트 가시거리 2 (11 m) makes only the effects near the character and the camera; 10 makes all five (7 … 100 m)', fxd[2].made.every((m) => (m[1] > 0) === (m[3] <= fxd[2].range)) && fxd[2].made.some((m) => m[1] > 0) && fxd[2].made.some((m) => m[1] === 0) && fxd[10].made.every((m) => m[1] > 0 && m[2] === 1), J([fxd[2].made, fxd[10].made]));
+  check('[high] 이펙트 가시거리 2 (11 m) makes only the effects near the character and the camera; 10 makes all five (7 … 100 m)', () => (fxd[2].made.every((m) => (m[1] > 0) === (m[3] <= fxd[2].range)) && fxd[2].made.some((m) => m[1] > 0) && fxd[2].made.some((m) => m[1] === 0) && fxd[10].made.every((m) => m[1] > 0 && m[2] === 1)), () => (J([fxd[2].made, fxd[10].made])));
   // ---- DOF while playing
   const dof = {};
   for (const on of [false, true]) { dof[on ? 'on' : 'off'] = await ev(async (v) => { const H = window.__dt, E = G.sys.engine; H.set('dof', v); await H.wait(4000); return { pass: !!(E.dofPass && E.dofPass.enabled), luma: H.luma() }; }, on); await shot(`dof-${on ? 'on' : 'off'}`); }
   await ev(async () => { window.__dt.set('dof', false); });
   numbers.high.dof = dof;
-  check('[high] DOF while playing: off → the pass runs', !dof.off.pass && dof.on.pass, J(dof));
+  check('[high] DOF while playing: off → the pass runs', () => (!dof.off.pass && dof.on.pass), () => (J(dof)));
   const end = await ev(() => ({ step: G.gfx.guard.watchdog.step, state: G.gfx.guard.watchdog.state }));
-  check('[high] the watchdog never stepped', end.step === 0, J(end));
+  check('[high] the watchdog never stepped', () => (end.step === 0), () => (J(end)));
   await context.close();
 }
 
-try {
-  if (['rows', 'resolution', 'brightness', 'frame', 'view', 'wide', 'fx', 'photo', 'window', 'persist'].some(want)) await lowPage();
-  if (!flag('--skip-medium') && want('medium')) await mediumPage();
-  if (SHOTS && want('high')) await highPage();
-} catch (e) {
-  check('the run finished', false, String(e?.stack || e).slice(0, 500));
-}
-check('no page errors', pageErrors.length === 0, pageErrors.slice(0, 4).join(' | '));
-check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 4).join(' | '));
+const runPage = async (tag, fn) => { try { await fn(); } catch (e) { check(`the ${tag} page ran to its end`, false, String(e?.stack || e).slice(0, 500)); } };
+if (['rows', 'resolution', 'brightness', 'frame', 'view', 'wide', 'fx', 'photo', 'window', 'persist'].some(want)) await runPage('low', lowPage);
+if (!flag('--skip-medium') && want('medium')) await runPage('medium', mediumPage);
+if (SHOTS && want('high')) await runPage('high', highPage);
+check('no page errors', () => (pageErrors.length === 0), () => (pageErrors.slice(0, 4).join(' | ')));
+check('no console errors', () => (consoleErrors.length === 0), () => (consoleErrors.slice(0, 4).join(' | ')));
 await browser.close();
 const failed = results.filter((r) => !r.ok);
 if (jsonOut) console.log(JSON.stringify({ pass: results.length - failed.length, fail: failed.length, results, numbers }, null, 1));

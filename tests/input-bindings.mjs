@@ -213,6 +213,7 @@ function page(opts = {}) {
   const card = p.coach();
   const text = card ? card.children.map((c) => c.children.map((x) => x.textContent).join(' ')).join(' ') : '';
   check('first start: the card explains the key in the contract\'s words', !!card && text.includes('Ctrl 키를 누르면 마우스가 풀려요. 한 번 더 누르면 다시 캐릭터를 따라 돌아요.'), text);
+  check('the first-start card sits under windows (z 41 < 50): a window that opens covers it', !!card && card.style.zIndex === '41', card ? card.style.zIndex : 'no card');
   check('the card carries a drawn key cap (svg with the key name)', !!card && card.children[0].tagName === 'SVG' && card.children[0].children[0].children.some((n) => n.textContent === 'Ctrl'));
   check('easy mode: the card is read aloud', p.T.said.some((x) => /Ctrl 키를 누르면 마우스가 풀려요/.test(x)), J(p.T.said));
   check('the card is shown once per device', p.store['tfm.v1.ctrlcoach'] === '1');
@@ -267,6 +268,11 @@ function page(opts = {}) {
   const gone = !p.coach();
   p.ML.coach();
   check('the card leaves by itself and mouseLook.coach() shows it again (from 도움말)', gone && !!p.coach());
+  // the way the settings window's help tab asks for it: coach({ force }) — above the open window; { force: false } = only the first time
+  const z1 = p.coach().style.zIndex; p.coach().remove();
+  p.ML.coach({ force: false }); const notAgain = !p.coach();
+  p.ML.coach({ force: true }); const again = p.coach();
+  check('도움말 shows the card again with coach({ force: true }) above the open window (z 60, a window is 50); coach({ force: false }) keeps "only once"', notAgain && !!again && again.style.zIndex === '60' && z1 === '60', `first ${z1}, again ${again && again.style.zIndex}`);
   // a rebound toggle key
   p.B.set('mouseToggle', ['KeyV']);
   p.frame();
