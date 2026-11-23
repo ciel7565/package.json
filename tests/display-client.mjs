@@ -400,12 +400,11 @@ async function lowPage() {
       out.d0 = cam._distT;
       return out;
     });
+    // (the camera takes the keys' zoom in its next frame: wait frames, not milliseconds — software GL draws one in 1–2 s)
     await page.keyboard.press('x'); await page.keyboard.press('x');
-    await page.waitForTimeout(600);
-    const zOut = await page.evaluate(() => G.sys.camera._distT);
+    const zOut = await page.evaluate(async () => { await window.__dt.frames(3); return G.sys.camera._distT; });
     await page.keyboard.press('z'); await page.keyboard.press('z'); await page.keyboard.press('z');
-    await page.waitForTimeout(600);
-    const zIn = await page.evaluate(() => G.sys.camera._distT);
+    const zIn = await page.evaluate(async () => { await window.__dt.frames(3); return G.sys.camera._distT; });
     numbers.window.misc = { ...misc, zOut, zIn };
     check('`low` says why DOF, anti-aliasing, dynamic resolution, textures and ambient shadow cannot be used there (and DOF stays off)', () => ([misc.dofWhy, misc.aaWhy, misc.drWhy, misc.texWhy, misc.aoWhy].every((w) => typeof w === 'string' && /[가-힣]/.test(w)) && misc.dofOn === false), () => (J([misc.dofWhy, misc.aoWhy])));
     check('zoom keys: X steps back, Z comes closer', () => (zOut > misc.d0 + 0.05 && zIn < zOut - 0.05), () => (`${misc.d0.toFixed(2)} → ${zOut.toFixed(2)} → ${zIn.toFixed(2)}`));

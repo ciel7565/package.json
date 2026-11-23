@@ -401,7 +401,8 @@ async function mainPage() {
       ML.coach();
       out.card = { text: document.querySelector('#ml-coach .ml-coach-text')?.textContent || '', key: !!document.querySelector('#ml-coach svg text'), say: document.getElementById('ml-coach')?.dataset.say || '' };
       // ---- [phase 10] a clean tap of Ctrl frees the pointer; the keys then walk with a free pointer; another tap fixes it
-      const tap = async (code) => { H.key(code, true, 'Control'); await H.wait(60); H.key(code, false, 'Control'); await H.wait(120); };
+      // (down and up back to back: on software GL a 60 ms timer can fire a whole frame — over a second — later)
+      const tap = async (code) => { H.key(code, true, 'Control'); H.key(code, false, 'Control'); await H.wait(120); };
       await tap('ControlLeft');
       const f1 = ML.state(), reqFree = req;
       H.key('KeyW', true); await H.wait(100); H.key('KeyW', false); await H.wait(120);

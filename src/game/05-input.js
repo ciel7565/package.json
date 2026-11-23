@@ -573,7 +573,8 @@
       else if (now - (ml._chipAt || 0) > 150) { ml._chipAt = now; ml._chipSync(); }   // (the chip follows windows opening and closing; state changes sync it at once)
       // the first calm moment of the first game on this device: the card that explains the key (1.5 s of play first)
       if (!ml._coachTried && ml.active()) {
-        if (G.state && G.ready && input.gameplay() && !G.sys?.manjangdae?.introActive) { ml._playT += dt; if (ml._playT > 1.5) { ml._coachTried = true; ml.coach(); } }
+        // (wall-clock time: on a slow device frames are long and the clamped dt would stretch 1.5 s into half a minute)
+        if (G.state && G.ready && input.gameplay() && !G.sys?.manjangdae?.introActive) { if (!ml._playT) ml._playT = now; else if (now - ml._playT > 1500) { ml._coachTried = true; ml.coach(); } }
         else ml._playT = 0;
       }
     },
@@ -723,12 +724,14 @@
   G.bus.on('settings:changed', ({ key } = {}) => { if (key === 'mouseLook' || key === 'easyMode') input.mouseLook.refresh(); });
   // [gfx] the tap of the key: down and up of it alone within TAP_MS (called from the keyboard listeners below)
   let ctrlAt = -1e9;   // when a Control key was last seen down (see the beforeunload guard)
+  // when the key really went down / up: the event's own time (a long frame delays the handling of both, not the press)
+  const evT = (e) => (e && Number.isFinite(e.timeStamp) && e.timeStamp > 0 ? e.timeStamp : performance.now());
   function tapDown(e) {
     if (e.ctrlKey || /^Control/.test(e.code)) ctrlAt = performance.now();
     if (input.bindings.mouseToggle.includes(e.code)) {
       if (e.repeat) return;
       const chord = e.altKey || e.metaKey || (e.shiftKey && !/^Shift/.test(e.code)) || (e.ctrlKey && !/^Control/.test(e.code));
-      ml._tap = chord ? null : { code: e.code, t: performance.now(), clean: true };
+      ml._tap = chord ? null : { code: e.code, t: evT(e), clean: true };
       return;
     }
     if (ml._tap) ml._tap.clean = false;   // another key between: not a tap
@@ -738,7 +741,7 @@
     const T = ml._tap;
     if (!T || e.code !== T.code) return;
     ml._tap = null;
-    if (!T.clean || performance.now() - T.t > TAP_MS) return;
+    if (!T.clean || evT(e) - T.t > TAP_MS) return;
     if (!G.state || !input.enabled || G.util?.isTyping?.() || G.ui?.isBlocking?.()) return;
     ml.toggle('ctrl');
   }
