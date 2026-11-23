@@ -327,7 +327,7 @@
     const saltMat = own(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, transparent: true, opacity: 0, depthWrite: false }));
     const salt = new THREE.Mesh(own(mergeAll(grains)), saltMat);
     const g = new THREE.Group(); g.add(inner, new THREE.Object3D(), crust, salt);
-    if (place) { g.position.set(place.x || 0, place.y || 0, place.z || 0); g.rotation.set(place.rx || 0, place.ry || 0, place.rz || 0); }
+    if (place) { g.position.set(place.x || 0, place.y || 0, place.z || 0); g.rotation.set(place.rx || 0, place.ry || 0, place.rz || 0, 'YXZ'); }
     const DONE = col('#e9caa0'), GLAZE = col('#b3402a'), tmp = new THREE.Color();
     // the same child order as the merged fish: [body, fins, crust, salt, eyes] — the tests read children[2] for the crust
     const handle = { group: g, kit: true, set(cook, crustK, saltK, glazeK) {
@@ -348,7 +348,7 @@
     const m = BGU && BGU.mergeGeometries ? BGU.mergeGeometries(norm, false) : null;
     return m || list[0];
   }
-  const placed = (g, p) => g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(p.x || 0, p.y || 0, p.z || 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rx || 0, p.ry || 0, p.rz || 0)), new THREE.Vector3(p.s || 1, p.s || 1, p.s || 1)));
+  const placed = (g, p) => g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(p.x || 0, p.y || 0, p.z || 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rx || 0, p.ry || 0, p.rz || 0, 'YXZ')), new THREE.Vector3(p.s || 1, p.s || 1, p.s || 1)));
   /** one or many fish of one species, merged (body · fins · crust · salt · eyes = 5 draw calls for any count):
    *  {group, set(cook, crust, salt, glaze)} — the body texture is the species' skin; cooked = paler and golden */
   function makeFish(itemId, cls, len, own, places) {
