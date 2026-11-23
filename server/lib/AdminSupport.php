@@ -32,7 +32,7 @@ final class AdminSupport
         'build' => '빌드', 'browser' => '브라우저', 'screen' => '화면', 'view' => '창 크기', 'dpr' => '화면 배율', 'quality' => '그래픽 품질', 'mode' => '모드',
         'net' => '연결', 'place' => '장소', 'zone' => '구역', 'x' => 'x', 'y' => 'y', 'z' => 'z', 'fps' => '초당 화면 수', 'look' => '마우스 보기',
         'lang' => '언어', 'touch' => '터치 기기', 'gl' => '그래픽 장치', 'errors' => '오류 수', 'lastError' => '마지막 오류', 'uptime' => '켜 둔 시간(초)',
-        'memMB' => '메모리(MB)', 'blur' => '채팅 가림',
+        'memMB' => '메모리(MB)', 'blur' => '채팅 가림', 'ui' => '열려 있던 창·패널',
     ];
 
     /** @var string the CSRF token of the page being drawn */

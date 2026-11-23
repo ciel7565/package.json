@@ -190,13 +190,16 @@ check('create: refusals — unknown kind, a category of another kind, more than 
     ];
     return $c === ['400 INVALID_INPUT', '400 INVALID_INPUT', '400 INVALID_INPUT', '400 INVALID_INPUT', '400 SELF_REPORT'] ? true : j($c);
 });
-check('create: device facts — the listed keys with their types are kept (numbers rounded), an unknown key or a wrong type is refused, personal data in a free text is masked', function () use ($A) {
-    $meta = ['build' => 'p10-abc', 'browser' => 'Chrome 140', 'screen' => '1920x1080', 'quality' => 'high', 'place' => 'PL_BUEOK', 'x' => 12.3456, 'z' => -3.21, 'fps' => 58.71, 'look' => 'lock', 'lastError' => 'TypeError at 010-9876-5432'];
+check('create: device facts — the listed keys with their types are kept (numbers rounded), an unknown key or a wrong type is refused, personal data in a free text is masked, the open windows are code words only', function () use ($A) {
+    $meta = ['build' => 'p10-abc', 'browser' => 'Chrome 140', 'screen' => '1920x1080', 'quality' => 'high', 'place' => 'PL_BUEOK', 'x' => 12.3456, 'z' => -3.21, 'fps' => 58.71, 'look' => 'lock', 'lastError' => 'TypeError at 010-9876-5432', 'ui' => 'app-menu,cook,show-chat'];
     $t = mk($A, ['meta' => json_encode($meta)]);
     $m = json_decode((string) Db::value('SELECT meta FROM support_tickets WHERE id = ?', [$t['id']]), true);
-    if ($m['x'] !== 12.35 || $m['fps'] !== 58.71 || $m['place'] !== 'PL_BUEOK' || strpos($m['lastError'], '9876') !== false) return j($m);
-    $c = [code(function () use ($A) { mk($A, ['meta' => json_encode(['save' => '{...}'])]); }), code(function () use ($A) { mk($A, ['meta' => json_encode(['fps' => 'fast'])]); }), code(function () use ($A) { mk($A, ['meta' => '[1,2']); })];
-    return $c === ['400 INVALID_INPUT', '400 INVALID_INPUT', '400 INVALID_INPUT'] ? true : j($c);
+    if ($m['x'] !== 12.35 || $m['fps'] !== 58.71 || $m['place'] !== 'PL_BUEOK' || strpos($m['lastError'], '9876') !== false || $m['ui'] !== 'app-menu,cook,show-chat') return j($m);
+    $c = [code(function () use ($A) { mk($A, ['meta' => json_encode(['save' => '{...}'])]); }), code(function () use ($A) { mk($A, ['meta' => json_encode(['fps' => 'fast'])]); }), code(function () use ($A) { mk($A, ['meta' => '[1,2']); }),
+        // [support-verify] the open windows are code words only: a title / a name, markup, a too long list are refused
+        code(function () use ($A) { mk($A, ['meta' => json_encode(['ui' => '용감한다람쥐의 방'])]); }), code(function () use ($A) { mk($A, ['meta' => json_encode(['ui' => 'a<b>'])]); }),
+        code(function () use ($A) { mk($A, ['meta' => json_encode(['ui' => str_repeat('a', 201)])]); }), code(function () use ($A) { mk($A, ['meta' => json_encode(['ui' => ['app-menu']])]); })];
+    return $c === array_fill(0, 7, '400 INVALID_INPUT') ? true : j($c);
 });
 check('create: a 🚨 report of a chat line keeps the line as target chat:<id> and its sender as the target account; a nickname finds the account', function () use ($A, $B) {
     $mid = Db::insert('chat_messages', ['user_id' => (int) $B['id'], 'nickname' => $B['nickname'], 'text' => '나쁜 말', 'channel' => 'all', 'created_at' => Tfm\Clock::ms()]);

@@ -61,6 +61,9 @@ final class Support
         'fps' => ['num', [0, 1000]], 'look' => ['str', 12], 'lang' => ['str', 16], 'touch' => ['int', [0, 1]], 'gl' => ['str', 80],
         'errors' => ['int', [0, 100000]], 'lastError' => ['str', 200], 'uptime' => ['int', [0, 100000000]], 'memMB' => ['int', [0, 100000]],
         'blur' => ['int', [0, 1]],
+        // the code names of the windows and panels that were open on top of the 3D view (78-support.js uiFacts: letters,
+        // digits, '-', '_' and ',' only — never a title, a name or a chat line)
+        'ui' => ['ids', 200],
     ];
     public const NOT_FOUND = '문의를 찾을 수 없어요.';
     private const CACHE_COUNTS = 'support:counts';
@@ -118,7 +121,10 @@ final class Support
         foreach (self::META as $k => $def) {
             if (!array_key_exists($k, $raw) || $raw[$k] === null) continue;
             $v = $raw[$k];
-            if ($def[0] === 'str') {
+            if ($def[0] === 'ids') {
+                if (!is_string($v) || strlen($v) > (int) $def[1] || !preg_match('/^[a-z0-9_,-]*$/', $v)) V::fail('meta.' . $k, '창 이름 형식이 올바르지 않아요.');
+                if ($v !== '') $out[$k] = $v;
+            } elseif ($def[0] === 'str') {
                 if (!is_string($v) && !is_int($v) && !is_float($v)) V::fail('meta.' . $k, '글자여야 해요.');
                 $s = Users::cleanText((string) $v, (int) $def[1]);
                 // a free text (an error message, a browser string) never carries personal information to the admin site
