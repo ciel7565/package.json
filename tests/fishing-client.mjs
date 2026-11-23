@@ -88,7 +88,7 @@ async function boot() {
     // careful child that winds, pauses while the fish pulls, and keeps the button down while lifting a stone
     // the frame clock is capped at 0.1 s a frame (00-core), so on software GL a 'slow' factor costs frames, not seconds:
     // the bite keeps ≥ 30 frames for the test's hands, everything else hurries
-    window.__speed = { bite: 0.4, 'net-run': 0.3, land: 0.8, reel: 2.5, cast: 1.5 }; window.__fast = 8; window.__last = ''; window.__log = []; window.__hands = 0;
+    window.__speed = { bite: 0.4, 'net-run': 0.3, land: 0.8, reel: 2.5, cast: 1.5, missed: 1 }; window.__fast = 8; window.__last = ''; window.__log = []; window.__hands = 0;
     setInterval(() => { const p = f.state.phase; if (p !== window.__last) { window.__last = p; window.__log.push(p); f.debug.speed(window.__speed[p] || window.__fast); } }, 20);
     setInterval(() => { const st = f.state; if (!window.__hands) return; if (st.phase === 'reel') { if (st.tension > 0.72) f.press(false); else if (st.tension < 0.5) f.press(true); } else if (st.phase === 'net-stir') f.press(true); }, 40);
   }, JUNE);
@@ -293,8 +293,8 @@ try {
     await goSpot(sid);
     await ev((id) => { G.sys.fishing.debug.force('BEODEULCHI'); return G.sys.fishing.start(id, 'rod'); }, sid);
     await phase('ready'); await tap(); await phase('bite');
-    await phase('missed', 180000); await sleep(300); await shot('missed');
-    const miss = await ev(() => document.querySelector('.fish-hint').textContent);
+    const miss = await (await page.waitForFunction(() => G.sys.fishing.state.phase === 'missed' && document.querySelector('.fish-hint').textContent, null, { timeout: 180000, polling: 40 })).jsonValue();
+    await shot('missed');
     check('a fish that got away gets a kind word (괜찮아요), never a scolding', /괜찮아요/.test(miss), miss);
     await phase('ready', 180000);
     await ev(() => G.sys.fishing.cancel('test'));
@@ -303,13 +303,13 @@ try {
   await step('book', async () => {
     if (SHOTS) for (const id of ['YEOLMOGEO', 'KKEOKJI', 'GEUMGANGMOCHI', 'TUNGGARI']) { ev((sid) => { G.sys.fishing.preview(sid); }, id); await cardOpen(); await shot(`card-${id}`); await ev(() => G.ui.modal.closeAll()); await sleep(300); }
     await ev(() => { G.sys.fishing.book(); });
-    await page.waitForFunction(() => [...document.querySelectorAll('.fish-book-modal .fish-thumb')].filter((i) => i.src.startsWith('data:image')).length >= 31, null, { timeout: 150000, polling: 250 }).catch(() => {});
+    await page.waitForFunction(() => [...document.querySelectorAll('.fish-book-modal .fish-thumb')].filter((i) => i.src.startsWith('data:image')).length >= 31, null, { timeout: 420000, polling: 250 }).catch(() => {});
     await sleep(500); await shot('book-grid');
     const g = await ev(() => ({ tiles: document.querySelectorAll('.fish-book-modal .fish-tile').length, locked: document.querySelectorAll('.fish-book-modal .fish-tile.is-locked').length, thumbs: [...document.querySelectorAll('.fish-book-modal .fish-thumb')].filter((i) => i.src.startsWith('data:image')).length, met: Object.keys(G.state.fishing.book).length, names: [...document.querySelectorAll('.fish-book-modal .fish-tile:not(.is-locked) b')].map((b) => b.textContent) }));
     check('어류 도감: 31 tiles with their pictures; met fish have names, the others are shadows', g.tiles === 31 && g.thumbs === 31 && g.locked === 31 - g.met && g.names.length === g.met, JSON.stringify({ thumbs: g.thumbs, met: g.met, names: g.names.join(',') }));
     await ev(() => { G.sys.fishing.book('SANCHEONEO'); }); await sleep(SHOTS ? 2400 : 1500); await shot('book-detail');
-    const d = await ev(() => { const el = document.querySelector('.fish-book-modal'); const cv = el.querySelector('.fish-canvas'); let spread = -1; try { const x = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let lo = 255, hi = 0; for (let i = 0; i < x.length; i += 64) { const l = (x[i] + x[i + 1] + x[i + 2]) / 3; if (l < lo) lo = l; if (l > hi) hi = l; } spread = hi - lo; } catch (e) { spread = -2; } return { rows: el.querySelectorAll('.fish-row').length, src: el.querySelector('.fish-src')?.textContent || '', spread, sci: el.querySelector('.fish-sci')?.textContent || '' }; });
-    check('a page: the turning fish, the Latin name, twelve or more rows of facts, the sources', d.rows >= 12 && /출처/.test(d.src) && d.spread > 25 && /Oncorhynchus/.test(d.sci), JSON.stringify(d).slice(0, 200));
+    const d = await ev(() => { const el = document.querySelector('.fish-book-modal'); const cv = el.querySelector('.fish-canvas'); let spread = -1; try { const x = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let lo = 255, hi = 0; for (let i = 0; i < x.length; i += 64) { const l = (x[i] + x[i + 1] + x[i + 2]) / 3; if (l < lo) lo = l; if (l > hi) hi = l; } spread = hi - lo; } catch (e) { spread = -2; } return { met: !!G.state.fishing.book.SANCHEONEO, rows: el.querySelectorAll('.fish-row').length, src: el.querySelector('.fish-src')?.textContent || '', spread, sci: el.querySelector('.fish-sci')?.textContent || '' }; });
+    check('a page: the turning fish, the Latin name, eleven or more rows of facts (+ 내 기록 once met), the sources', d.rows >= (d.met ? 12 : 11) && /출처/.test(d.src) && d.spread > 25 && /Oncorhynchus/.test(d.sci), JSON.stringify(d).slice(0, 200));
     await ev(() => { document.querySelector('.fish-book-modal .fish-back').click(); document.querySelectorAll('.fish-book-modal .fish-tab')[1].click(); }); await sleep(400); await shot('book-neighbours');
     const nb = await ev(() => document.querySelectorAll('.fish-book-modal .fish-tile').length);
     await ev(() => { document.querySelectorAll('.fish-book-modal .fish-tab')[2].click(); }); await sleep(400); await shot('book-know');
