@@ -278,6 +278,28 @@ try {
     await ev((june) => G.sys.fishing.debug.setNow(june), JUNE);
   });
 
+  await step('limit', async () => {
+    // the daily keep limit, in the page: today's basket is full → the card offers only 놓아주기, with the reason
+    const before = await ev(() => { const f = G.sys.fishing, k = f.debug.info().kst; G.state.fishing.day = { key: k.key, kept: f.keepLimit() }; return { limit: f.keepLimit(), inv: G.sys.inventory.count('FISH_BEODEULCHI') }; });
+    ev(() => { G.sys.fishing._landed('BEODEULCHI', 96, 'rod'); });
+    const c = await cardOpen(); await shot('card-limit');
+    check(`the daily keep limit (${before.limit}): the card has only 놓아주기 and says why`, /버들치/.test(c.title) && c.buttons.length === 1 && /놓아주기/.test(c.buttons[0]) && /먹을 만큼/.test(c.why), `${c.buttons.join('|')} · ${c.why.slice(0, 80)}`);
+    await clickCard('release'); await sleep(400);
+    const after = await ev(() => ({ inv: G.sys.inventory.count('FISH_BEODEULCHI'), kept: G.sys.fishing.keptToday() }));
+    check('… and nothing reaches the bag', after.inv === before.inv && after.kept === before.limit, JSON.stringify(after));
+    await ev(() => { G.state.fishing.day = { key: 0, kept: 0 }; G.sys.fishing.cancel('test'); });
+    // a fish that gets away: no tap in the bite window → a kind word, and the rod is ready again
+    const sid = valley.find((s) => s.methods.includes('rod')).id;
+    await goSpot(sid);
+    await ev((id) => { G.sys.fishing.debug.force('BEODEULCHI'); return G.sys.fishing.start(id, 'rod'); }, sid);
+    await phase('ready'); await tap(); await phase('bite');
+    await phase('missed', 180000); await sleep(300); await shot('missed');
+    const miss = await ev(() => document.querySelector('.fish-hint').textContent);
+    check('a fish that got away gets a kind word (괜찮아요), never a scolding', /괜찮아요/.test(miss), miss);
+    await phase('ready', 180000);
+    await ev(() => G.sys.fishing.cancel('test'));
+  });
+
   await step('book', async () => {
     if (SHOTS) for (const id of ['YEOLMOGEO', 'KKEOKJI', 'GEUMGANGMOCHI', 'TUNGGARI']) { ev((sid) => { G.sys.fishing.preview(sid); }, id); await cardOpen(); await shot(`card-${id}`); await ev(() => G.ui.modal.closeAll()); await sleep(300); }
     await ev(() => { G.sys.fishing.book(); });

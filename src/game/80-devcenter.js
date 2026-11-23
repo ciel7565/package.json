@@ -470,6 +470,7 @@
   const EMITTED_KINDS = new Set(['place', 'motion', 'roombook', 'heritage']);
   const UNLOCK_ON = new Set(['harvest', 'item', 'talk', 'edu', 'interact', 'claim', 'visit', 'quiz', 'craft', 'ferment', 'photo']);
   OBJECTIVE_TYPES.add('fish'); INTERACT_KINDS.add('fishspot'); UNLOCK_ON.add('fish');   // [fishing] objective { type: 'fish', what } · the 🎣 spots · sticker rule { on: 'fish', id }
+  ITEM_TYPES.add('fish');   // [fishing-verify] the catch in the bag: items FISH_<ID> are of type 'fish' (34-fish-data.js, §18.3)
   const DIALOGUE_ACTIONS = new Set(['openEdu', 'openQuiz', 'openLibrary', 'openShop', 'openCraft', 'openJar', 'openMap', 'openFastTravel', 'openJournal', 'openQuestLog', 'openInventory', 'openCollection', 'teleport', 'acceptQuest', 'claimQuest', 'giveItem', 'takeItem', 'setFlag', 'clearFlag', 'emote', 'npcAnim', 'event', 'toast', 'sfx', 'activity']);
   const DIALOGUE_CONDS = new Set(['questStatus', 'questStep', 'hasItem', 'itemType', 'flag', 'notFlag', 'level', 'jarStatus', 'jarRecipe', 'plot', 'phase', 'weather', 'visited', 'any', 'all', 'not', 'chance', 'easy']);
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
