@@ -459,11 +459,12 @@
     { text: '김장 문화', kid: '김장', emoji: '🥬', next: 'k_kimjang' },
     { text: '이제 됐어요', kid: '그만할래요', emoji: '👋', next: 'hub_short' },
   ];
-  const ANY_CULTURE_QUEST = { any: [S('Q_QUIZ3', 'open'), S('Q_CULTURE', 'open')] };
+  const ANY_CULTURE_QUEST = { any: [S('Q_QUIZ3', 'open'), S('Q_CULTURE', 'open'), S('Q_LEARN_MORE', 'open')] }; // [finisher] + Q_LEARN_MORE
   // 쉬운 모드: a new task opens straight on its offer (the coach says "전통사랑에게 가요"; no menu hunting)
   const CULTURE_KID_OFFER = [
     { if: KID(S('Q_QUIZ3', 'available')), node: 'quiz_offer' },
     { if: KID(S('Q_CULTURE', 'available')), node: 'tools_offer' },
+    { if: KID(S('Q_LEARN_MORE', 'available')), node: 'learn_offer' }, // [finisher] the phase-9 quest had no offer
   ];
   const npc_culture = {
     npc: 'NPC003',
@@ -515,7 +516,17 @@
           { if: S('Q_QUIZ3', 'active'), text: '퀴즈는 어디서 풀어요?', kid: '퀴즈는 어디?', emoji: '🔍', next: 'quiz_prog' },
           { if: S('Q_CULTURE', 'available'), text: '옛 농기구가 궁금해요', kid: '옛날 도구', emoji: '🪵', next: 'tools_offer' },
           { if: S('Q_CULTURE', 'active'), text: '농기구 전시장은 어디예요?', kid: '도구는 어디?', emoji: '🔍', next: 'tools_prog' },
+          { if: S('Q_LEARN_MORE', 'available'), text: '배움터를 더 탐험할게요', kid: '배움터 탐험', emoji: '📚', next: 'learn_offer' }, // [finisher]
           { text: '다음에 할게요', kid: '나중에', emoji: '👋', end: true },
+        ],
+      },
+      // [finisher] the offer of Q_LEARN_MORE
+      learn_offer: {
+        kid: '이야기 열 개를 보고 퀴즈 열 개를 맞혀 볼래요? 📚',
+        text: '배움터에는 발효 과학, 절기, 옹기, 정선 이야기가 가득해요.\n이야기 **10개**를 끝까지 보고 퀴즈 **10문제**를 맞혀 볼래요?',
+        choices: [
+          { text: '탐험해 볼게요!', kid: '할래요', emoji: '📚', actions: [A.accept('Q_LEARN_MORE')], end: true },
+          { text: '다음에요', kid: '나중에', emoji: '👋', end: true },
         ],
       },
       quiz_offer: {
@@ -590,12 +601,16 @@
   };
 
   // ============================================================== 장독지기 (NPC004) — Q_MEJU, Q_DOENJANG, Q_NEW_FERMENT
-  const ANY_KEEPER_QUEST = { any: [S('Q_MEJU', 'open'), S('Q_DOENJANG', 'open'), S('Q_NEW_FERMENT', 'open')] };
+  const ANY_KEEPER_QUEST = { any: [S('Q_MEJU', 'open'), S('Q_DOENJANG', 'open'), S('Q_NEW_FERMENT', 'open'), S('Q_GIMJANG', 'open'), S('Q_JANG_SPLIT', 'open'), S('Q_FERMENT_FIVE', 'open')] }; // [finisher] + the phase-9 quests
   // 쉬운 모드: a new task opens straight on its offer (the coach says "장독지기에게 가요"; no menu hunting)
   const KEEPER_KID_OFFER = [
     { if: KID(S('Q_MEJU', 'available')), node: 'meju_offer' },
     { if: KID(S('Q_DOENJANG', 'available')), node: 'doen_offer' },
     { if: KID(S('Q_NEW_FERMENT', 'available')), node: 'new_offer' },
+    // [finisher] the phase-9 quests of the keeper (content lane) had no offer: nobody could accept them in easy mode
+    { if: KID(S('Q_GIMJANG', 'available')), node: 'gimjang_offer' },
+    { if: KID(S('Q_JANG_SPLIT', 'available')), node: 'split_offer' },
+    { if: KID(S('Q_FERMENT_FIVE', 'available')), node: 'five_offer' },
   ];
   const keeperTips = [
     { text: '장독은 어디에 둬요?', kid: '장독은 어디?', emoji: '☀️', next: 'tip_place' },
@@ -699,10 +714,38 @@
           { if: S('Q_DOENJANG', 'active'), text: '된장은 언제 다 익어요?', kid: '된장은 언제?', emoji: '⏳', next: 'doen_prog' },
           { if: S('Q_NEW_FERMENT', 'available'), text: '새로운 장을 담가 볼래요', kid: '새 장 담그기', emoji: '🫙', next: 'new_offer' },
           { if: S('Q_NEW_FERMENT', 'active'), text: '새 발효는 어떻게 시작해요?', kid: '어떻게 해요?', emoji: '🤔', next: 'new_prog' },
+          { if: S('Q_GIMJANG', 'available'), text: '김장을 해 볼게요', kid: '김장', emoji: '🥬', next: 'gimjang_offer' }, // [finisher]
+          { if: S('Q_JANG_SPLIT', 'available'), text: '장 가르기를 해 볼게요', kid: '장 가르기', emoji: '✂️', next: 'split_offer' }, // [finisher]
+          { if: S('Q_FERMENT_FIVE', 'available'), text: '발효 장인에 도전할게요', kid: '장인 도전', emoji: '🏺', next: 'five_offer' }, // [finisher]
           { text: '다음에 할게요', kid: '나중에', emoji: '👋', end: true },
         ],
       },
       // Q_MEJU
+      // [finisher] offers of the phase-9 keeper quests (Q_GIMJANG · Q_JANG_SPLIT · Q_FERMENT_FIVE)
+      gimjang_offer: {
+        kid: '김장해 볼래요? 배추김치·깍두기·동치미를 담가요 🥬',
+        text: '겨울이 오기 전에 온 집안이 모여 김치를 담그는 걸 **김장**이라고 해요.\n배추김치·깍두기·동치미를 장독에 담가 볼래요?',
+        choices: [
+          { text: '김장해 볼게요!', kid: '할래요', emoji: '🥬', actions: [A.accept('Q_GIMJANG')], end: true },
+          { text: '다음에요', kid: '나중에', emoji: '👋', end: true },
+        ],
+      },
+      split_offer: {
+        kid: '장 가르기 해 볼래요? 간장이랑 된장으로 나눠요 ✂️',
+        text: '메주를 소금물에 담가 두었다가 건져 내면, 물은 **간장**이 되고 메주는 **된장**이 돼요.\n이걸 **장 가르기**라고 해요. 해 볼래요?',
+        choices: [
+          { text: '장 가르기 해 볼게요!', kid: '할래요', emoji: '✂️', actions: [A.accept('Q_JANG_SPLIT')], end: true },
+          { text: '다음에요', kid: '나중에', emoji: '👋', end: true },
+        ],
+      },
+      five_offer: {
+        kid: '맛있는 걸 다섯 번 꺼내 볼래요? 🏺',
+        text: '여러 가지를 담그고 다 익으면 꺼내 보세요.\n다섯 번 꺼내면 **발효 장인**이에요!',
+        choices: [
+          { text: '도전할게요!', kid: '할래요', emoji: '🏺', actions: [A.accept('Q_FERMENT_FIVE')], end: true },
+          { text: '다음에요', kid: '나중에', emoji: '👋', end: true },
+        ],
+      },
       meju_offer: {
         kid: '메주를 만들어 볼래요? 콩이 필요해요 🫘',
         text: '메주는 장 담그기의 시작이에요.\n콩을 거둬서 작업대에서 메주를 빚어 볼래요?',

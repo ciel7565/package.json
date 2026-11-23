@@ -167,7 +167,9 @@ try {
   check('at least one place is defined', places.length >= 1, places.map((p) => p.id).join(' '));
   // [rooms-b] --only <id,id,…>: walk in only these places (the definition / door checks still see every place)
   const ONLY = String(opt('--only', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const walk = ONLY.length ? places.filter((p) => ONLY.includes(p.id)) : places;
+  // [finisher] a copy: the splice below took PL_ALLOT out of `places` itself on a full run (no --only), so its door read as
+  // dangling and the 집 구경 page as one picture too many
+  const walk = ONLY.length ? places.filter((p) => ONLY.includes(p.id)) : places.slice();
   // [complex-ground] the district PL_ALLOT has its own suite (tests/complex-client.mjs): walked here only when asked by --only
   for (let i = walk.length - 1; i >= 0; i--) if (walk[i].id === 'PL_ALLOT' && !ONLY.includes('PL_ALLOT')) walk.splice(i, 1);
   if (ONLY.length) check(`--only: every place asked for is defined (${ONLY.join(' ')})`, walk.length === ONLY.length && walk.length > 0, walk.map((p) => p.id).join(' '));
@@ -449,8 +451,8 @@ try {
     await page.evaluate(() => G.sys.places.exit({ fade: false }));
     await settled(page, null);
     await page.waitForTimeout(1500);
-    const envOut = await page.evaluate(() => { const E = G.sys.engine; return { uuid: E.scene.environment ? E.scene.environment.uuid : null, same: !!E._envRT && E.scene.environment === E._envRT.texture, shadowR: E.sun.shadow.camera.right, map: E.sun.shadow.mapSize.x, indoor: +E.indoor.toFixed(2) }; });
-    check('outside again: the same environment texture object, the valley\'s shadow frustum and map size back', envOut.uuid === env0.uuid && envOut.same && envOut.shadowR === env0.shadowR && envOut.map === env0.map && envOut.indoor < 0.05, JSON.stringify({ env0, envOut }));
+    const envOut = await page.evaluate(() => { const E = G.sys.engine; return { uuid: E.scene.environment ? E.scene.environment.uuid : null, same: !!E._envRT && E.scene.environment === E._envRT.texture, shadowR: E.sun.shadow.camera.right, shR: E._sh ? E._sh.R : null, wide: E._sh ? E._sh.wide : null, map: E.sun.shadow.mapSize.x, indoor: +E.indoor.toFixed(2) }; });
+    check('outside again: the same environment texture object, the valley\'s shadow frustum and map size back', envOut.uuid === env0.uuid && envOut.same && (envOut.shR == null ? envOut.shadowR === env0.shadowR : envOut.shadowR === envOut.shR) && envOut.map === env0.map && envOut.indoor < 0.05 /* [finisher] the engine's own outdoor frustum for the view now (near / wide): env0 was read from the high boot camera */, JSON.stringify({ env0, envOut }));
     await context.close();
   }
 

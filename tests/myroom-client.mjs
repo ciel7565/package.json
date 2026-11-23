@@ -535,7 +535,7 @@ try {
   const win0 = (await snap(page)).style.win;
   await page.click('.mr-tile[data-do="style:win"]');
   const plan = await until(page, () => document.querySelectorAll('#modal-root .mr-wplan .mr-wcell').length === 18, null, 8000);
-  const cells = await ev(page, () => { const c = [...document.querySelectorAll('.mr-wplan .mr-wcell')]; return { disabled: c.filter((b) => b.disabled).length, min: Math.min(...c.map((b) => Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height))), first: c[0].getAttribute('aria-label') }; });
+  const cells = await ev(page, () => { const c = [...document.querySelectorAll('.mr-wplan .mr-wcell')]; return { disabled: c.filter((b) => b.disabled).length, min: Math.min(...c.map((b) => Math.min(b.offsetWidth, b.offsetHeight))) /* [finisher] layout size: the dialog's scale-in (0.9 → 1) shrank the rect to 50.4 px */, first: c[0].getAttribute('aria-label') }; });
   // the far wall's first bay twice (→ two kinds on), its third bay once
   const cell = (n) => page.locator(`.mr-wplan .mr-wcell >> nth=${n}`).first().dispatchEvent('click');   // the plan pops in (see the dialogs above)
   await cell(0); await cell(0); await cell(2);
