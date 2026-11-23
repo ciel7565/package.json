@@ -6,11 +6,12 @@
 //     open(kind?, opts?) -> Promise<modal|null>   the 📮 문의·신고 window. kind: 'bug' | 'question' | 'report' (else the
 //                         player picks). opts: { category, target: { name, id?, messageId? }, about: 'chat', quiet }
 //                         The picture of the screen is taken FIRST (before any window covers it), then the window opens.
-//     capture({ chat }) -> Promise<{ blob, url, w, h, blur } | null>   the 3D picture of this moment as a JPEG (≤ 1600 px,
+//     capture({ chat, ui }) -> Promise<{ blob, url, w, h, blur, ui } | null>   the picture of this moment as a JPEG (≤ 1600 px,
 //                         ≤ the server's size limit). The drawing buffer is not kept by WebGL, so a fresh frame is
 //                         rendered and read in the same task (like 52-photo). The chat window's place is pixelated and
 //                         labelled unless the report is about chat (chat: true draws the visible chat lines instead —
-//                         they were already filtered and masked by 60-social). DOM name plates are never in the picture.
+//                         they were already filtered and masked by 60-social). DOM name plates are never in the picture. ui (default on): the HUD and the open windows are drawn over the
+//                         3D frame through an SVG <foreignObject> image (uiLayer, ≤ 0.9 s; result.ui says whether it worked).
 //     mine() -> Promise<{ tickets, unread, limits, local }>   server: GET api/support/mine.php; file mode: the outbox
 //     openMine() -> modal  · unread (getter) · refresh() -> Promise<unread>
 //   Ways in: menu tiles 📮 문의·신고 (70-app), the buttons 📮 문의 · 🚨 신고 in the chat window (and a big 📮 in the
@@ -22,7 +23,8 @@
 //     report in a local outbox (no picture there, only a small preview) that a grown-up can save as a file.
 //   Device facts sent along (never the save, never a name or a number of the person): build, browser, screen and window
 //     size, pixel ratio, quality preset, easy / normal, server / local, place, zone, position, frame rate, look mode,
-//     language, touch, the graphics device's name, error count and the last error (masked), up time, memory.
+//     language, touch, the graphics device's name, error count and the last error (masked), up time, memory, and the code
+//     names of the windows / panels open on top of the 3D view (uiFacts: the picture shows only the 3D scene).
 //   KID RULES (§12): easy mode sends with picture tiles alone (멈췄어요 · 안 보여요 · 소리가 이상해요 · 길을 잃었어요 ·
 //     누가 괴롭혀요 · 궁금해요 · 다른 거예요) — typing sits behind the grown-up gate; big buttons, 🔊 lines, ⬅️ 닫기 always.
 //   SECURITY: every server text (the operator's answers) reaches the page as text (G.ui.h children / textContent);
@@ -139,6 +141,104 @@
     ctx.restore();
   }
 
+  // ---------------------------------------------------------------- the interface over the 3D picture (best effort)
+  // The HUD and the open windows are HTML, not part of the 3D canvas. They are drawn over the picture through an SVG
+  // <foreignObject> image built from a clone of #hud and #modal-root and the page's own style rules (font files left out:
+  // the system font draws the letters). Never the name plates (#labels-layer), never the chat lines: the chat panel's
+  // clone is emptied (hidden below by hideRegion, or drawn by drawChat for a chat report). Every <canvas> of the clone
+  // (the minimap) becomes a picture of itself; a picture that is not a data: URL is left out (an SVG image cannot load
+  // anything). If the browser marks the canvas as unreadable after drawing (some browsers do for <foreignObject>), the
+  // 3D-only picture is used — capture() checks with toBlob. The whole layer gives up after UI_MS.
+  const UI_MS = 900;
+  let cssCache = null;
+  /** why the last interface layer was not drawn (developer centre / tests): '' = drawn */
+  const uiWhy = { last: '', ms: 0, bytes: 0 };
+  function pageCss() {
+    if (cssCache) return cssCache;
+    const out = [];
+    for (const sh of document.styleSheets) {
+      let rules = null;
+      try { rules = sh.cssRules; } catch (e) { continue; }
+      for (const r of rules || []) {
+        if (typeof CSSFontFaceRule !== 'undefined' && r instanceof CSSFontFaceRule) continue;
+        out.push(r.cssText);
+      }
+    }
+    cssCache = out.join('\n');
+    return cssCache;
+  }
+  function cloneFor(el, chat) {
+    const c = el.cloneNode(true);
+    const srcCanvases = el.querySelectorAll('canvas'), cloneCanvases = c.querySelectorAll('canvas');
+    cloneCanvases.forEach((cc, i) => {
+      const img = document.createElement('img');
+      const sc = srcCanvases[i];
+      let url = '';
+      try { if (sc && sc.width > 0 && sc.height > 0) url = sc.toDataURL('image/png'); } catch (e) { url = ''; }
+      if (url) img.setAttribute('src', url);
+      img.setAttribute('width', String(sc?.clientWidth || cc.width || 0)); img.setAttribute('height', String(sc?.clientHeight || cc.height || 0));
+      img.setAttribute('class', cc.getAttribute('class') || '');
+      if (cc.getAttribute('style')) img.setAttribute('style', cc.getAttribute('style'));
+      cc.replaceWith(img);
+    });
+    for (const im of c.querySelectorAll('img')) if (!/^data:image\//.test(im.getAttribute('src') || '')) im.removeAttribute('src');
+    for (const x of c.querySelectorAll('script, iframe, video, audio, input[type=password]')) x.remove();
+    // typed words in fields are never drawn (a half-written chat line, a search)
+    for (const x of c.querySelectorAll('input, textarea')) { x.removeAttribute('value'); x.textContent = ''; }
+    const cp = c.id === 'chat-panel' ? c : c.querySelector('#chat-panel');
+    if (cp && !chat) { cp.textContent = ''; cp.style.visibility = 'hidden'; }
+    if (cp && chat) { const log = cp.querySelector('#chat-log'); if (log) log.textContent = ''; }   // drawChat writes the lines
+    c.removeAttribute('hidden');
+    return c;
+  }
+  const svgLen = (x) => (typeof x === 'string' ? x.length : 0);
+  async function uiLayer(W, H, opts) {
+    const t0 = performance.now();
+    const hud = document.getElementById('hud');
+    const mr = document.getElementById('modal-root');
+    uiWhy.last = 'hud-hidden'; uiWhy.ms = 0; uiWhy.bytes = 0;
+    if (!hud || hud.hidden) return null;
+    const vw = Math.max(1, innerWidth), vh = Math.max(1, innerHeight);
+    const html = document.documentElement;
+    const wrap = document.createElementNS('http://www.w3.org/1999/xhtml', 'body');
+    wrap.setAttribute('class', document.body.className.replace(/\bmodal-open\b/g, ''));
+    wrap.setAttribute('style', `margin:0;width:${vw}px;height:${vh}px;position:relative;overflow:hidden;background:transparent;${html.getAttribute('style') || ''}`);
+    const st = document.createElementNS('http://www.w3.org/1999/xhtml', 'style');
+    // the picture is one still moment: entrance animations would draw their first (invisible) frame
+    st.textContent = `${pageCss()}\n*, *::before, *::after { animation: none !important; transition: none !important; }`;
+    wrap.append(st, cloneFor(hud, !!opts.chat));
+    if (mr && mr.querySelector('.modal')) {
+      const mc = mr.cloneNode(false);
+      for (const bd of mr.children) if (bd.querySelector?.('.modal:not(.sup-modal)')) mc.append(cloneFor(bd, !!opts.chat));
+      if (mc.children.length) wrap.append(mc);
+    }
+    const xml = new XMLSerializer().serializeToString(wrap);
+    uiWhy.bytes = svgLen(xml);
+    if (performance.now() - t0 > UI_MS) { uiWhy.last = 'slow-clone'; uiWhy.ms = Math.round(performance.now() - t0); return null; }
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="0 0 ${vw} ${vh}" class="${(html.className || '').replace(/[^\w -]/g, '')}"><foreignObject x="0" y="0" width="${vw}" height="${vh}">${xml}</foreignObject></svg>`;
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    try {
+      const img = new Image();
+      img.decoding = 'async';
+      const ok = await Promise.race([
+        new Promise((res) => { img.onload = () => res(true); img.onerror = () => res(false); img.src = url; }),
+        new Promise((res) => setTimeout(() => res(false), Math.max(50, UI_MS - (performance.now() - t0)))),
+      ]);
+      uiWhy.ms = Math.round(performance.now() - t0);
+      if (!ok || !img.naturalWidth) { uiWhy.last = ok ? 'empty-image' : (img.complete ? 'image-error' : 'timeout'); return null; }
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const ctx = c.getContext('2d');
+      if (!ctx) return null;
+      const r = opts.rect && opts.rect.width > 0 ? opts.rect : { left: 0, top: 0, width: vw, height: vh };
+      ctx.drawImage(img, r.left, r.top, r.width, r.height, 0, 0, W, H);
+      // a browser that taints the canvas for <foreignObject> throws here: the caller keeps the 3D-only picture
+      uiWhy.last = 'tainted';
+      ctx.getImageData(0, 0, 1, 1);
+      uiWhy.last = '';
+      return c;
+    } catch (e) { if (!uiWhy.last) uiWhy.last = 'error'; return null; } finally { URL.revokeObjectURL(url); }
+  }
+
   // ---------------------------------------------------------------- device facts
   function glName() {
     try {
@@ -148,7 +248,21 @@
       return typeof v === 'string' ? v.slice(0, 80) : '';
     } catch (e) { return ''; }
   }
-  function facts(blur) {
+  /** what was open on top of the 3D view when the report began: the code names of the open windows (their `…-modal`
+   *  class) and of open panels (body classes `show-…` / `…-open`). Code words only — never a title, a name or a chat
+   *  line — at most 12, ≤ 200 characters. (The picture shows only the 3D scene; this tells the operator which window.) */
+  function uiFacts() {
+    const ids = [];
+    const add = (s) => { const id = String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 32); if (id && !ids.includes(id)) ids.push(id); };
+    for (const el of document.querySelectorAll('#modal-root .modal')) {
+      if (el.classList.contains('sup-modal')) continue;
+      const c = [...el.classList].find((k) => /^[a-z0-9-]+-modal$/.test(k));
+      add(c ? c.replace(/-modal$/, '') : 'window');
+    }
+    for (const k of document.body.classList) if (/^show-[a-z0-9-]+$|^[a-z0-9-]+-open$/.test(k) && k !== 'modal-open') add(k);
+    return ids.slice(0, 12).join(',').slice(0, 200);
+  }
+  function facts(blur, ui) {
     const E = G.sys.engine, P = G.sys.player?.position, st = G.state || {};
     const m = {
       build: String(G.VERSION || 'dev').slice(0, 40),
@@ -160,6 +274,7 @@
       lang: String(navigator.language || '').slice(0, 16), touch: G.input?.touchUI ? 1 : 0, gl: glName(),
       errors: Array.isArray(G.__systemErrors) ? G.__systemErrors.length : 0, uptime: Math.round(performance.now() / 1000),
       blur: blur ? 1 : 0,
+      ui: typeof ui === 'string' ? ui.slice(0, 200) : '',
     };
     if (P && Number.isFinite(P.x)) { m.x = Math.round(P.x * 10) / 10; m.y = Math.round(P.y * 10) / 10; m.z = Math.round(P.z * 10) / 10; }
     const last = Array.isArray(G.__systemErrors) && G.__systemErrors.length ? G.__systemErrors[G.__systemErrors.length - 1] : null;
@@ -237,6 +352,14 @@
         const cr = src.getBoundingClientRect();
         const kx = cr.width > 0 ? W / cr.width : 1, ky = cr.height > 0 ? H / cr.height : 1;
         let blur = false;
+        // the HUD and the open windows over the 3D frame (best effort, ≤ UI_MS; the 3D-only picture otherwise)
+        let ui = false;
+        if (opts.ui !== false) {
+          try {
+            const layer = await uiLayer(W, H, { chat: !!opts.chat, rect: cr });
+            if (layer) { ctx.drawImage(layer, 0, 0); ui = true; }
+          } catch (e) { ui = false; }
+        }
         const chat = document.getElementById('chat-panel');
         const shown = chat && !chat.classList.contains('chat-off') && !(G.sys.social?._smallScreen?.() && !document.body.classList.contains('show-chat'));
         const a = shown ? areaOf(chat, cr, kx, ky, W, H) : null;
@@ -257,7 +380,7 @@
           blob = await toBlob(c2, 'image/jpeg', 0.72);
         }
         if (!blob) return null;
-        return { blob, url: URL.createObjectURL(blob), w, h: hh, blur };
+        return { blob, url: URL.createObjectURL(blob), w, h: hh, blur, ui };
       } catch (e) {
         G.log.warn(CAT, 'screen picture not taken', e);
         return null;
@@ -275,6 +398,7 @@
         return null;
       }
       // the picture first: the window must not stand in front of it (the 3D canvas never carries the windows anyway)
+      this._ui = uiFacts();
       this._dropShot();
       this._shot = await this.capture({ chat: opts.about === 'chat' });
       G.ui.modal.get('support')?.close({ instant: true });
@@ -459,7 +583,7 @@
       this._busy = true;
       try {
         const shot = state.keep ? this._shot : null;
-        const meta = facts(!!shot?.blur);
+        const meta = facts(!!shot?.blur, this._ui);
         const body = String(state.body || '').slice(0, BODY_MAX);
         if (serverUser()) {
           const form = new FormData();
@@ -505,7 +629,7 @@
       const form = new FormData();
       form.append('kind', 'report');
       form.append('category', map[p.reason] || 'other');
-      form.append('meta', JSON.stringify(facts(false)));
+      form.append('meta', JSON.stringify(facts(false, uiFacts())));
       const mid = Number(p.messageId);
       if (Number.isInteger(mid) && mid > 0) form.append('messageId', String(mid));
       else if (/^\d{1,12}$/.test(String(p.targetId || ''))) form.append('targetId', String(p.targetId));
@@ -725,7 +849,7 @@
   };
 
   // test hooks (tests/support-client.mjs, the developer centre): the pure pieces
-  S._internal = { KINDS, CATEGORIES, KID_TILES, facts, outbox, saveOutbox, outKey, areaOf, catOf };
+  S._internal = { KINDS, CATEGORIES, KID_TILES, facts, uiFacts, uiWhy, outbox, saveOutbox, outKey, areaOf, catOf };
   G.register(S);
   G.sys.support = S;
 })();

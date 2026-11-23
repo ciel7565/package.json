@@ -44,6 +44,10 @@
 .sup-kid-words textarea { width: 100%; }
 .sup-done-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: .6rem; }
 
+/* easy mode: every word a child may read is at least 16 px (kid rule §12.0) — notes, dates, chips, captions */
+body.easy .sup-modal .sup-note, body.easy .sup-modal small, body.easy .sup-modal .chip, body.easy .sup-fig figcaption,
+body.easy .sup-modal .sup-local, body.easy .sup-modal .sup-nopic, body.easy .sup-modal .dim, body.easy .sup-thread li small { font-size: max(1rem, 16px); }
+
 /* 내 문의 */
 .sup-card { display: grid; gap: .35rem; padding: .75rem .85rem; border-radius: 14px; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12); }
 .sup-card.is-unread { border-color: rgba(85, 209, 135, .7); box-shadow: 0 0 0 2px rgba(85, 209, 135, .25); }
@@ -81,5 +85,18 @@ body.easy .sup-chip { min-height: 56px; font-size: 1.05rem; }
   .sup-kind .emoji { grid-row: span 2; align-self: center; }
   .sup-kid-row { grid-template-columns: minmax(0, 1fr); }
   .sup-chip { top: calc(env(safe-area-inset-top, 0px) + 58px); }
+}
+/* a phone held sideways (844 × 390): the seven picture tiles in one row and the picture beside its two buttons, so the
+   tiles and 📤 보내요 are on the screen without scrolling (the line above the tiles is read aloud and repeated by the title) */
+@media (max-height: 520px) and (orientation: landscape) {
+  .sup-kid .easy-pick-text { display: none; }
+  .sup-kid .sup-kid-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+  .sup-kid .sup-kid-grid .easy-tile { min-height: var(--tap); }
+  .sup-kid .sup-kid-grid .et-emoji { min-height: 2.5rem; font-size: 1.9rem; }
+  .sup-kid .sup-kid-grid .et-label { padding: .3rem .12rem .4rem; overflow-wrap: normal; }
+  .sup-kid-pic { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: center; }
+  .sup-kid-pic img { max-height: 30vh; }
+  .sup-kid-pic .sup-kid-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .sup-kid-row .easy-big-btn { min-height: var(--tap); }
 }
 @media (prefers-reduced-motion: reduce) { .sup-kind { transition: none; } }

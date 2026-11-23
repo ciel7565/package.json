@@ -89,6 +89,21 @@ const fakeServer = (page, state = {}) => page.evaluate((state) => {
   G.auth.current = { id: '7', kind: 'server', nickname: '시험어린이', role: 'user', guest: false };
   const orig = G.net.request.bind(G.net);
   window.__origRequest = window.__origRequest || orig;
+  // the picture of one's own ticket (api/support/shot.php) is a plain fetch: a page opened as a file cannot reach a
+  // server, so the scripted server answers it with a small JPEG drawn here (the real endpoint is tested by road / unit)
+  if (!window.__origFetch) {
+    window.__origFetch = window.fetch.bind(window);
+    window.fetch = async (u, o) => {
+      if (/support\/shot\.php\?id=\d+$/.test(String(u))) {
+        window.__calls.push({ path: 'support/shot.php', method: 'GET', url: String(u) });
+        const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+        const x = c.getContext('2d'); x.fillStyle = '#5c8046'; x.fillRect(0, 0, 64, 36);
+        const b = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.8));
+        return new Response(b, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+      }
+      return window.__origFetch(u, o);
+    };
+  }
   G.net.request = async (p, o = {}) => {
     const S = window.__srv;
     const call = { path: p, method: o.method || (o.body || o.form ? 'POST' : 'GET'), body: o.body ?? null, form: null };
@@ -114,7 +129,7 @@ const fakeServer = (page, state = {}) => page.evaluate((state) => {
     return orig(p, o).catch(() => ({}));
   };
 }, state);
-const ALLOWED_META = ['build', 'browser', 'screen', 'view', 'dpr', 'quality', 'mode', 'net', 'place', 'zone', 'x', 'y', 'z', 'fps', 'look', 'lang', 'touch', 'gl', 'errors', 'lastError', 'uptime', 'memMB', 'blur'];
+const ALLOWED_META = ['build', 'browser', 'screen', 'view', 'dpr', 'quality', 'mode', 'net', 'place', 'zone', 'x', 'y', 'z', 'fps', 'look', 'lang', 'touch', 'gl', 'errors', 'lastError', 'uptime', 'memMB', 'blur', 'ui'];
 
 log(`support-client — ${file}`);
 // =============================================================================== 1 · normal mode (file, then a scripted server)
@@ -127,9 +142,13 @@ log(`support-client — ${file}`);
       return { quick, kid, api: ['open', 'capture', 'mine', 'openMine', 'refresh'].filter((k) => typeof G.sys.support[k] === 'function'), unread: G.sys.support.unread };
     });
     check('ways in: G.sys.support has open · capture · mine · openMine · refresh; the chat window has 문의하기 · 신고하기 and the easy chat row a 📮', w.api.length === 5 && w.quick.join(',') === '문의하기,신고하기' && w.kid && w.unread === 0, JSON.stringify(w));
-    await page.keyboard.press('Escape');
-    const menu = await page.evaluate(async () => { G.app?.openMenu?.({ adult: true }); await new Promise((r) => setTimeout(r, 400)); const t = document.querySelector('.modal [data-act="support"], .modal [data-action="support"]') || [...document.querySelectorAll('.modal button, .modal a')].find((b) => /문의·신고/.test(b.textContent)); const ok = !!t; G.ui.modal.closeAll(); return ok; });
-    check('ways in: the grown-up menu has a 📮 문의·신고 tile', menu);
+    // (no Escape key here: in the game Esc opens the menu, and openMenu() then toggles it shut)
+    await page.evaluate(() => { G.ui.modal.closeAll(); G.app.openMenu({ adult: true }); });
+    const tileOk = await until(page, () => !!document.querySelector('.app-menu-modal .am-tile[data-mm="support"]'), null, 10000);
+    if (tileOk) await page.click('.app-menu-modal .am-tile[data-mm="support"]');
+    const menu = tileOk && await until(page, () => !!document.querySelector('.sup-modal .sup-kinds'));
+    await page.evaluate(() => G.ui.modal.closeAll());
+    check('ways in: the grown-up menu has a 📮 문의·신고 tile that opens the window', menu, JSON.stringify({ tileOk }));
     const help = await page.evaluate(async () => { G.app?.openHelp?.(null, { full: true }); await new Promise((r) => setTimeout(r, 300)); const ok = [...document.querySelectorAll('.app-help-modal .modal-foot button')].some((b) => /문의·신고/.test(b.textContent)); G.ui.modal.closeAll(); return ok; });
     check('ways in: the help window has a 📮 문의·신고 button', help);
   });
@@ -139,7 +158,7 @@ log(`support-client — ${file}`);
       await new Promise((r) => setTimeout(r, 200));
       const a = await G.sys.support.capture({});
       const b = await G.sys.support.capture({ chat: true });
-      const out = { a: a && { type: a.blob.type, size: a.blob.size, w: a.w, h: a.h, blur: a.blur, url: /^blob:/.test(a.url) }, b: b && { blur: b.blur, size: b.blob.size } };
+      const out = { a: a && { type: a.blob.type, size: a.blob.size, w: a.w, h: a.h, blur: a.blur, url: /^blob:/.test(a.url), ui: a.ui }, b: b && { blur: b.blur, size: b.blob.size, ui: b.ui } };
       // the picture is a real JPEG of the 3D frame (its first bytes)
       const head = a ? new Uint8Array(await a.blob.slice(0, 3).arrayBuffer()) : [];
       out.jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
@@ -176,7 +195,8 @@ log(`support-client — ${file}`);
   });
   await guard('server', async () => {
     await fakeServer(page);
-    await page.evaluate(() => G.sys.support.open('report', { target: { name: '다른친구', id: 12 } }));
+    // the help window stays open underneath: the report says which windows were open (code names only)
+    await page.evaluate(() => { G.app.openHelp(null, { full: true }); return G.sys.support.open('report', { target: { name: '다른친구', id: 12 } }); });
     await until(page, () => document.querySelectorAll('.sup-modal .sup-cat').length === 5);
     const target = await page.evaluate(() => document.querySelector('.sup-modal .sup-target')?.textContent || '');
     await page.click('.sup-modal .sup-cat[data-cat="badword"]');
@@ -188,7 +208,7 @@ log(`support-client — ${file}`);
     const f = sent.call?.form || {};
     const meta = (() => { try { return JSON.parse(f.meta || '{}'); } catch { return null; } })();
     check('server: a multipart create with kind, category, words, the target account and a JPEG "shot"', f.kind === 'report' && f.category === 'badword' && f.body === '채팅에서 나쁜 말을 했어요' && f.targetId === '12' && f.shot?.blob && f.shot.type === 'image/jpeg' && f.shot.size > 1000, JSON.stringify(f).slice(0, 300));
-    check('server: device facts only from the allowed list (no save, no nickname, no e-mail), mode normal, net server', meta && Object.keys(meta).every((k) => ALLOWED_META.includes(k)) && meta.mode === 'normal' && meta.net === 'server' && !/시험어린이|@/.test(JSON.stringify(meta)), JSON.stringify(meta).slice(0, 300));
+    check('server: device facts only from the allowed list (no save, no nickname, no e-mail), mode normal, net server, the open window (app-help) by its code name', meta && Object.keys(meta).every((k) => ALLOWED_META.includes(k)) && meta.mode === 'normal' && meta.net === 'server' && !/시험어린이|@/.test(JSON.stringify(meta)) && /(^|,)app-help(,|$)/.test(meta.ui || '') && /^[a-z0-9_,-]*$/.test(meta.ui), JSON.stringify(meta).slice(0, 300) + ` ui=${meta?.ui}`);
     check('server: the window says it was sent, with its number', /261123-41/.test(sent.done) && target.includes('다른친구'), sent.done.slice(0, 120));
     // a refused send keeps the window and says why
     await page.evaluate(() => { G.ui.modal.closeAll(); window.__srv.refuse = { code: 'SUPPORT_LIMIT', message: '한 시간에 5번까지 보낼 수 있어요. 조금 뒤에 다시 보내 주세요.', status: 429 }; G.sys.support.open('bug'); });
@@ -211,9 +231,9 @@ log(`support-client — ${file}`);
     await shot(page, 'hud-chip-answer');
     await page.click('#sup-chip');
     await until(page, () => document.querySelectorAll('.sup-mine .sup-card').length > 0);
-    await page.waitForTimeout(400);
-    const view = await page.evaluate(() => ({ admin: document.querySelector('.sup-mine .from-admin p')?.textContent || '', html: document.querySelector('.sup-mine .from-admin')?.innerHTML || '', xss: !!window.__xss, seen: window.__calls.some((c) => c.path === 'support/seen.php'), chip: document.getElementById('sup-chip')?.hidden }));
-    check('server: 내 문의 shows the operator\'s answer as text (markup inert), marks the answers seen, the chip goes', /<img src=x/.test(view.admin) && !/<img/i.test(view.html.replace(/&lt;img/g, '')) && !view.xss && view.seen && view.chip === true, JSON.stringify(view).slice(0, 300));
+    await until(page, () => !!document.querySelector(".sup-mine .sup-card img.sup-thumb"), null, 10000);
+    const view = await page.evaluate(() => ({ admin: document.querySelector('.sup-mine .from-admin p')?.textContent || '', html: document.querySelector('.sup-mine .from-admin')?.innerHTML || '', xss: !!window.__xss, seen: window.__calls.some((c) => c.path === 'support/seen.php'), chip: document.getElementById('sup-chip')?.hidden, thumb: !!document.querySelector('.sup-mine .sup-card img.sup-thumb') }));
+    check('server: 내 문의 shows the operator\'s answer as text (markup inert), marks the answers seen, the chip goes, the own picture loads (shot.php)', /<img src=x/.test(view.admin) && !/<img/i.test(view.html.replace(/&lt;img/g, '')) && !view.xss && view.seen && view.chip === true && view.thumb, JSON.stringify(view).slice(0, 300));
     await shot(page, 'mine-server-answer');
     // the player adds words and deletes
     await page.click('.sup-mine .sup-card .sup-card-acts .btn-soft');
@@ -266,7 +286,6 @@ log(`support-client — ${file}`);
     // the grown-up gate opens the words
     await page.evaluate(() => { G.ui.modal.closeAll(); G.sys.support.open('bug', { category: 'stuck' }); });
     await until(page, () => !!document.querySelector('.sup-kid .sup-grown'));
-    window.__noop = 0;
     await page.evaluate(() => { window.__gate = false; });
     await page.click('.sup-kid .sup-grown');
     await page.waitForTimeout(300);
@@ -300,6 +319,17 @@ if (!flag('--skip-phone')) {
       });
       await shot(page, `report-phone-${w}x${hgt}`);
       check(`phone ${w}×${hgt}: the window fits (no sideways scroll), buttons are finger-sized`, m.left >= -1 && m.right <= m.w + 1 && !m.overflow && m.small === 0, JSON.stringify(m));
+      if (m.easy) {
+        // a child must see every picture tile, and after a tap the 📤 보내요 button, without scrolling the window
+        const inView = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel)].map((el) => { const r = el.getBoundingClientRect(); return r.top >= -1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1; }), sel);
+        const tiles = await inView('.sup-kid .sup-kid-grid .easy-tile');
+        await page.click('.sup-kid .easy-tile[data-tile="k1"]');
+        await until(page, () => !!document.querySelector('.sup-kid .sup-kid-send'));
+        await page.waitForTimeout(300);
+        const send = await inView('.sup-kid .sup-kid-send, .sup-kid .sup-kid-pic .easy-big-btn');
+        await shot(page, `report-phone-${w}x${hgt}-picture`);
+        check(`phone ${w}×${hgt} (easy): all 7 tiles and then 📤 보내요 with 📷 / 🙅 are on the screen without scrolling`, tiles.length === 7 && tiles.every(Boolean) && send.length === 3 && send.every(Boolean), JSON.stringify({ tiles, send }));
+      }
     });
     await context.close();
   }
