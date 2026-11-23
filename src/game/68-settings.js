@@ -635,7 +635,8 @@
         why !== true ? h('small', { class: 'sw-why' }, `⛔ ${why}`) : null,
         d.restart ? h('small', { class: 'sw-restart' }, '🔄 새로고침한 뒤에 바뀌어요.') : null),
       h('div', { class: 'set-ctl' }, control(d, why)));
-    if (easyOn()) { r.dataset.say = `${d.label.replace(/^[^\p{L}\p{N}]+/u, '')}. ${d.hint || ''}`; G.easy?.speakable?.(r, r.dataset.say); }
+    // a voice line for every row; no extra big 🔊 per row in this grown-up window (it doubled every row's height in easy mode)
+    if (easyOn()) r.dataset.say = `${d.label.replace(/^[^\p{L}\p{N}]+/u, '')}. ${d.hint || ''}`;
     return r;
   }
   function groupsOf(defs) {
@@ -732,7 +733,6 @@
         again.addEventListener('click', () => showCtrlCoach(true));
         card.querySelector('.sw-hbody').appendChild(again);
       }
-      if (easyOn()) G.easy?.speakable?.(card, card.dataset.say);
       grid.appendChild(card);
     }
     if (!filter) {
@@ -822,7 +822,8 @@
       id: 'app-settings', title: easyOn() ? '어른 설정' : '설정', icon: 'settings', size: 'xl', className: 'app-settings-modal set-window', autofocus: false,
       body: (bodyEl, mm) => {
         mm._kind = 'full';
-        const search = h('input', { type: 'search', class: 'sw-search', 'aria-label': '설정 찾기', placeholder: '🔎 찾기 (예: 소리, 글자, 전체 화면, 키)', autocomplete: 'off', maxlength: '40' });
+        // (easy mode: this window opens only behind the grown-up gate, so its search box is a grown-up's — the kid audit skips it)
+        const search = h('input', { type: 'search', class: 'sw-search', 'aria-label': '설정 찾기', placeholder: '🔎 찾기 (예: 소리, 글자, 전체 화면, 키)', autocomplete: 'off', maxlength: '40', 'data-kid-exempt': easyOn() ? 'gate' : null });
         const tabsEl = h('div', { class: 'set-tabs sw-tabs', role: 'tablist', 'aria-label': '설정 분류' });
         const pane = h('div', { class: 'set-pane sw-pane', role: 'tabpanel' });
         bodyEl.append(h('div', { class: 'sw-top' }, search), h('div', { class: 'sw-main' }, tabsEl, pane));

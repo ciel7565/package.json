@@ -74,8 +74,13 @@
 @media (max-width: 760px) {
   .set-window .modal-body { padding: .5rem .6rem .8rem; }
   .sw-main { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
-  .set-window .set-tabs.sw-tabs { flex-direction: row; overflow-x: auto; scrollbar-width: none; top: -.6rem; z-index: 3; background: rgba(11, 18, 15, .96); }
-  .set-window .sw-tabs .tab { width: auto; flex: none; white-space: nowrap; padding: .5rem .65rem; font-size: .84rem; }
+  /* the twelve tabs as a picture grid of four columns (no row that scrolls sideways, nothing sticky over the pane) */
+  .set-window .set-tabs.sw-tabs { position: static; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem; overflow: visible; }
+  .set-window .sw-tabs .tab {
+    width: auto; min-width: 0; min-height: 3.2rem; flex-direction: column; justify-content: center; align-items: center; text-align: center;
+    gap: .1rem; padding: .3rem .15rem; font-size: .74rem; line-height: 1.15; white-space: normal; word-break: keep-all;
+  }
+  .set-window .sw-tabs .tab .emoji { font-size: 1.15rem; margin: 0; line-height: 1; }
   .sw-hgrid { grid-template-columns: minmax(0, 1fr); }
   .sw-info { text-align: left; }
   .sw-key, .sw-keynote { justify-content: flex-start; text-align: left; }
@@ -84,6 +89,12 @@
 }
 @media (max-height: 460px) {
   .set-window .modal-body { min-height: 0; }
+  /* a phone on its side: a thinner head, search and foot leave room for the rows (easy mode keeps its 56 px taps) */
+  .set-window .modal-head { padding: .4rem .9rem .35rem; }
+  .set-window .modal-foot { padding: .35rem .9rem .45rem; }
+  body:not(.easy) .set-window .modal-foot .btn { min-height: 2.25rem; padding-top: .25rem; padding-bottom: .25rem; }
+  .sw-top { margin-bottom: .35rem; }
+  body:not(.easy) .sw-search { min-height: 2.1rem; padding: .25rem .75rem; }
   .sw-main { grid-template-columns: 9.5rem minmax(0, 1fr); }
   .set-window .set-tabs.sw-tabs { flex-direction: column; overflow-y: auto; max-height: calc(100vh - 9rem); }
 }
