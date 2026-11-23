@@ -21,6 +21,8 @@
 //                          mode opens only while the player stands in the room (tests/myroom-client.mjs audits it there)
 //                          [support] support supportsend supportmine: the picture tiles of a child's report, the picture
 //                          step with 📤 보내요, and 📋 내 문의 (§18.1)
+//                          [cooking] cookpick cookbook cookpantry: 무엇을 만들까, the 요리 도감 and the 찬장 (§18.4) — the
+//                          cooking card itself needs the 부엌 (tests/cooking-client.mjs audits it there)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report

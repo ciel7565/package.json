@@ -473,6 +473,17 @@
     emote: 0.25, teleport: 0.25, correct: 0.34, sparkle: 0.4, stamp: 0.45, pop: 0.34, unlock: 0.45, lock: 0.6, pickup: 0.6,
     land_wood: 0.5, land_earth: 0.5, land_stone: 0.8,
   };
+  // [cooking] the kitchen (37-cooking.js, CONTRACT §18.4): soft, short, never harsh — called every ~0.5–1 s while a step runs
+  SFX.boil = (S, t) => { let e = t; for (let i = 0; i < 4; i++) e = Math.max(e, tone(S, { type: 'sine', f: rand(180, 420), f2: rand(500, 900), glide: 0.04, t: t + i * rand(0.08, 0.2), a: 0.004, d: 0.06, g: 0.05 })); noise(S, { kind: 'brown', ft: 'lowpass', f: 380, q: 0.7, t, a: 0.08, d: 0.5, g: 0.05 }); return e; };
+  SFX.sizzle = (S, t) => { noise(S, { kind: 'white', ft: 'highpass', f: 2600, q: 0.6, t, a: 0.05, d: 0.9, g: 0.035 }); for (let i = 0; i < 5; i++) noise(S, { kind: 'pink', ft: 'bandpass', f: rand(3000, 6000), q: 2, t: t + rand(0, 0.8), a: 0.002, d: 0.03, g: 0.04 }); return t + 1; };
+  SFX.fire_crackle = (S, t) => { let e = t; for (let i = 0; i < 3; i++) e = Math.max(e, noise(S, { kind: 'pink', ft: 'bandpass', f: rand(1200, 2600), q: 1.4, t: t + rand(0, 0.35), a: 0.001, d: rand(0.015, 0.04), g: rand(0.04, 0.08) })); noise(S, { kind: 'brown', ft: 'lowpass', f: 240, q: 0.6, t, a: 0.1, d: 0.5, g: 0.04 }); return e; };
+  SFX.steam_hiss = (S, t) => noise(S, { kind: 'white', ft: 'bandpass', f: 4200, f2: 3400, sweep: 0.8, q: 0.8, t, a: 0.2, d: 0.7, g: 0.03 });
+  SFX.pour = (S, t) => { noise(S, { kind: 'pink', ft: 'bandpass', f: 900, f2: 1400, sweep: 0.4, q: 1.2, t, a: 0.05, d: 0.45, g: 0.06 }); return tone(S, { type: 'sine', f: rand(600, 900), f2: rand(1000, 1400), glide: 0.1, t: t + 0.05, a: 0.01, d: 0.12, g: 0.02 }); };
+  SFX.stir = (S, t) => { noise(S, { kind: 'pink', ft: 'bandpass', f: 700, f2: 500, sweep: 0.3, q: 1.5, t, a: 0.06, d: 0.32, g: 0.045 }); return gk(S, 'moktak', t + 0.18, { f: 420, vel: 0.12 }); };
+  SFX.grind = (S, t) => noise(S, { kind: 'brown', ft: 'bandpass', f: 160, f2: 220, sweep: 0.5, q: 1.1, t, a: 0.1, d: 0.5, g: 0.14 });
+  SFX.knead = (S, t) => { noise(S, { kind: 'brown', ft: 'lowpass', f: 500, q: 0.7, t, a: 0.03, d: 0.18, g: 0.08 }); return t + 0.2; };
+  SFX.chop = (S, t) => gk(S, 'moktak', t, { f: 640, vel: 0.3 });
+  SFX.pound = (S, t) => { tone(S, { type: 'sine', f: 120, f2: 70, t, a: 0.002, d: 0.16, g: 0.18 }); return gk(S, 'moktak', t + 0.01, { f: 300, vel: 0.28 }); };
 
   // ================================================================= nature calls (ambient bus)
   // each fn(S, t, g, pan, extra) → end time. g already holds the distance / time-of-day level.

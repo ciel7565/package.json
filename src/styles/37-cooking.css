@@ -1,0 +1,110 @@
+/* =============================================================================
+   37-cooking.css — the kitchen (CONTRACT §18.4): the cooking dock at the bottom, the dish picker, the 요리 도감.
+   Kid rules: targets ≥ 56 px in 쉬운 모드, nothing flashes, reduce motion → no pulses. Animations use transform / opacity.
+   ============================================================================= */
+.cook-dock {
+  position: fixed; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  width: min(560px, calc(100vw - 16px)); z-index: 60; pointer-events: auto;
+  background: linear-gradient(180deg, rgba(43, 30, 20, .94), rgba(28, 20, 14, .96)); color: #fbf3e2;
+  border: 1px solid rgba(255, 220, 160, .28); border-radius: 18px; box-shadow: 0 10px 34px rgba(0, 0, 0, .45);
+  padding: 10px 14px 12px; font-size: 15px; line-height: 1.4;
+}
+.cook-head { display: flex; align-items: center; gap: 10px; }
+.cook-dish { font-size: 28px; }
+.cook-title { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.cook-title b { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cook-count { font-size: 12px; opacity: .7; }
+.cook-stop { display: inline-flex; align-items: center; gap: 4px; min-width: 56px; min-height: 44px; border-radius: 12px; border: 1px solid rgba(255, 220, 160, .35); background: rgba(255, 255, 255, .06); color: inherit; font: inherit; cursor: pointer; padding: 0 10px; }
+.cook-dots { display: flex; gap: 4px; margin: 6px 0 4px; }
+.cook-dots i { flex: 1; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .15); }
+.cook-dots i.done { background: #e6b45a; }
+.cook-dots i.now { background: #ffd98a; }
+.cook-what { display: flex; align-items: center; gap: 10px; }
+.cook-ico { font-size: 30px; }
+.cook-verb { font-weight: 800; font-size: 18px; }
+.cook-where { font-size: 13px; opacity: .78; }
+.cook-kid { margin: 6px 0 2px; font-size: 16px; }
+.cook-note { margin: 2px 0; font-size: 13px; opacity: .78; }
+.cook-safe { margin: 4px 0 0; font-size: 13px; color: #ffcf9a; }
+.cook-ctl { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; gap: 6px 12px; align-items: center; margin-top: 8px; }
+.cook-big {
+  grid-row: span 2; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-width: 112px; min-height: 76px; border-radius: 16px; border: 2px solid #f0c06a; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+  background: linear-gradient(180deg, #e8a948, #c9812e); color: #2a1a0c; font: inherit; font-weight: 800; padding: 6px 12px;
+  transition: transform var(--dur-1, 120ms) ease, opacity var(--dur-1, 120ms) ease;
+}
+.cook-big .emoji { font-size: 26px; }
+.cook-big:active { transform: scale(.96); }
+.cook-big:disabled { opacity: .55; cursor: default; }
+.cook-big.ready { background: linear-gradient(180deg, #ffd166, #f0a030); border-color: #fff1c4; }
+.cook-big:focus-visible { outline: 3px solid #fff1c4; outline-offset: 2px; }
+.cook-bar { position: relative; height: 16px; border-radius: 9px; background: rgba(255, 255, 255, .14); overflow: hidden; }
+.cook-bar .fill { position: absolute; inset: 0; transform-origin: 0 50%; transform: scaleX(0); background: linear-gradient(90deg, #f0c06a, #ffe0a0); border-radius: 9px; }
+.cook-bar.fire { height: 22px; background: linear-gradient(90deg, #3c4a5a 0%, #8a6a3a 40%, #d8662a 75%, #ff3a1a 100%); }
+.cook-bar.fire .fill { top: auto; height: 4px; bottom: 0; background: #b8f08a; }
+.cook-bar .band { position: absolute; top: 0; bottom: 0; border: 2px solid #b8f08a; border-radius: 6px; background: rgba(184, 240, 138, .18); }
+.cook-bar .band.turn { border-color: #ffe08a; background: rgba(255, 224, 138, .2); }
+.cook-bar .needle { position: absolute; inset: 0; transform: translateX(0); pointer-events: none; }
+.cook-bar .needle::before { content: ''; position: absolute; left: -2px; top: -2px; bottom: -2px; width: 4px; border-radius: 2px; background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .6); }
+.cook-msg { font-size: 14px; opacity: .9; min-height: 1.4em; }
+.cook-picks { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.cook-pick { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 76px; border-radius: 14px; border: 2px solid rgba(255, 220, 160, .35); background: rgba(255, 255, 255, .07); color: inherit; font: inherit; cursor: pointer; padding: 6px; }
+.cook-pick .emoji { font-size: 26px; }
+.cook-pick small { font-size: 11px; opacity: .8; text-align: center; }
+.cook-pick.mine { border-color: #f0c06a; background: rgba(240, 192, 106, .16); }
+/* easy mode: bigger, voice lines */
+.cook-easy .cook-big { min-width: 132px; min-height: 92px; font-size: 18px; }
+.cook-easy .cook-stop { min-height: 56px; min-width: 64px; }
+.cook-easy .cook-pick { min-height: 92px; }
+.cook-easy .cook-kid { font-size: 18px; }
+
+/* the picker, the 도감, the pantry */
+.cook-modal .cook-lead { margin: 0 0 8px; opacity: .85; }
+.cook-kind { margin: 12px 0 6px; font-size: 15px; }
+.cook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
+.cook-tile {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 104px;
+  border-radius: 14px; border: 2px solid var(--line, rgba(120, 90, 50, .25)); background: var(--panel-2, rgba(255, 250, 238, .7)); color: inherit; font: inherit; cursor: pointer; padding: 8px 6px; text-align: center;
+  transition: transform var(--dur-1, 120ms) ease;
+}
+.cook-tile:active { transform: scale(.97); }
+.cook-tile b { font-size: 14px; }
+.cook-tile small { font-size: 12px; opacity: .8; }
+.cook-tile.ok { border-color: #8fbf6a; }
+.cook-tile.miss { opacity: .78; }
+.cook-tile.locked .cook-tile-e { filter: grayscale(1); opacity: .55; }
+.cook-tile-e { font-size: 34px; line-height: 1; }
+.cook-tile-e img { width: 96px; height: 72px; object-fit: cover; border-radius: 10px; display: block; }
+.cook-tile-s { position: absolute; top: 4px; right: 6px; font-size: 11px; }
+.cook-tile:disabled { cursor: default; }
+.cook-links { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.cook-link { min-height: 48px; }
+.cook-pic { display: flex; align-items: center; justify-content: center; min-height: 120px; font-size: 64px; }
+.cook-pic img { border-radius: 14px; max-width: 100%; height: auto; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+.cook-pic.big img { width: 240px; }
+.cook-ings, .cook-steps, .cook-why { margin: 4px 0 8px; padding-left: 20px; }
+.cook-ings li.need { color: #b4492c; }
+.cook-ings li.base, .cook-ings li.opt { opacity: .78; }
+.cook-missing { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.cook-go { min-height: 48px; text-align: left; }
+.cook-origin, .cook-src { font-size: 13px; opacity: .8; }
+.cook-stars { display: flex; justify-content: center; gap: 6px; font-size: 34px; margin: 4px 0; }
+.cook-stars .emoji { filter: grayscale(1); opacity: .35; }
+.cook-stars .emoji.on { filter: none; opacity: 1; }
+body.easy .cook-tile { min-height: 112px; }
+body.easy .cook-go, body.easy .cook-link { min-height: 56px; }
+
+@media (max-width: 480px) {
+  .cook-dock { padding: 8px 10px 10px; font-size: 14px; }
+  .cook-ctl { grid-template-columns: 1fr; }
+  .cook-big { grid-row: auto; width: 100%; min-height: 72px; }
+  .cook-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+}
+@media (max-height: 460px) {
+  .cook-dock { bottom: 6px; padding: 6px 10px; }
+  .cook-note, .cook-dots { display: none; }
+  .cook-big { min-height: 60px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cook-big, .cook-tile { transition: none; }
+}

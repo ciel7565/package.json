@@ -263,6 +263,8 @@
       F('78-support.js', 'devcenter', '신고·문의(G.sys.support): 화면 사진(채팅 창은 가림)·버그 신고/문의/신고·쉬운 모드 그림 신고·기기 정보·내 문의와 운영자 답·답 알림·로컬 보낼 함 (§18.1)'), // [support]
       F('75-myroom.js', 'buildings', '내 방(G.sys.myroom, PL_MYROOM): 분양받은 사람이 꾸미는 한옥 방 — 방 꾸미기(그림 판·끌어 놓기·돌리기·색·되돌리기)·꾸며 둔 방 3개·이 기기/서버 저장·안내 카드 (§17.4)'), // [myroom]
       F('76-myroom-data.js', 'buildings', '내 방 물건 148가지·색·방 모양·놓는 규칙(문 앞 비우기·벽·창문·상 위)·꾸며 둔 방 3개 — 서버 검사표의 원본 (순수 데이터)'), // [myroom]
+      F('36-cooking-data.js', 'farm', '요리 26가지(냇가의 물고기 9·장과 김치 5·밭 5·정선의 밥상 7)의 실제 차례·부엌 자리 11곳·찬장 재료·카드·퀴즈·강의·할 일 (순수 데이터)'), // [cooking]
+      F('37-cooking.js', 'farm', '부엌(G.sys.cooking): 부엌 안 자리(물두멍·도마·가마솥·시루·화로·솥뚜껑·맷돌·양념 선반·소반)·냇가 화덕·차례대로 요리하기(누르기·불 맞추기·뒤집기)·3D 음식 변화·별·요리 도감'), // [cooking]
       F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
       F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
       F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
@@ -302,6 +304,7 @@
       F('74-lecture.css', 'edu', '강의실 창·강의 카드·슬라이드 종이 카드·넘김 단추·방 안 강의 보기 카드'), // [lecture]
       F('78-support.css', 'devcenter', '문의·신고 창·종류 카드·분류·화면 사진 미리 보기·내 문의 카드와 답·채팅 창 문의/신고 단추·답 알림 칩'), // [support]
       F('75-myroom.css', 'buildings', '방 꾸미기 화면(위 막대·물건 판·고른 물건 단추)·방 꾸미기 단추·창문 고르기 판·안내 카드'), // [myroom]
+      F('37-cooking.css', 'farm', '요리 카드(아래쪽)·큰 누르기 단추·불 막대·뒤집기 칸·음식 고르기·요리 도감·찬장'), // [cooking]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
@@ -457,6 +460,7 @@
   const BASE_STATS = ['level', 'exp', 'coin', 'edu', 'logins', 'playTime', 'distance', 'waters', 'plants', 'harvests', 'harvestedItems', 'fermentsStarted', 'fermentsClaimed', 'fermentChecks', 'quizCorrect', 'quizAnswered', 'eduCompleted', 'journals', 'photos', 'emotes', 'gestures', 'chats', 'talks', 'crafts', 'interacts', 'doubleJumps'];
   const DERIVED_STATS = ['zonesVisited', 'npcsTalked', 'cropKinds', 'socials'];
   DERIVED_STATS.push('placesSeen', 'exhibitsSeen', 'exhibitRooms', 'motionsSeen');   // [rooms-b] 집 구경 counters (03-state.js / 49-exhibits.js)
+  BASE_STATS.push('dishesCooked', 'dishKinds', 'dishesShared', 'dishStars3');   // [cooking] plain counters of 37-cooking.js (achievements ACH_COOK_*)
   const EXPECTED_SYSTEMS = ['engine', 'terrain', 'nature', 'water', 'buildings', 'props', 'manjangdae', 'places', 'player', 'camera', 'interaction', 'npc', 'dialogue', 'inventory', 'quest', 'progression', 'farming', 'realfarm', 'storage', 'fermentation', 'education', 'exhibits', 'journal', 'minimap', 'weather', 'photo', 'social', 'companion', 'fx', 'engagement', 'audio', 'easy', 'speed', 'app', 'subscription', 'devcenter'];
   EXPECTED_SYSTEMS.push('allot');   // [allot-client] 43-allot.js
   EXPECTED_SYSTEMS.push('complexSite');   // [complex-ground] 53-complex-site.js
@@ -464,6 +468,7 @@
   EXPECTED_SYSTEMS.push('support');   // [support] 78-support.js
   EXPECTED_SYSTEMS.push('display');   // [gfx] 67-display.js
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
+  EXPECTED_SYSTEMS.push('cooking');   // [cooking] 37-cooking.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
@@ -1477,6 +1482,10 @@
     { id: 'support', emoji: '📮', label: '어른에게 알려요 (그림 신고)', fn: () => { const f = fnOf(G.sys.support, 'open'); return f && (() => f()); } },
     { id: 'supportsend', emoji: '📤', label: '신고 보내기 (사진 고르기)', fn: () => { const f = fnOf(G.sys.support, 'open'); return f && (() => f('bug', { category: 'stuck' })); } },
     { id: 'supportmine', emoji: '📋', label: '내 문의', fn: () => fnOf(G.sys.support, 'openMine') },
+    // [cooking] 부엌 (§18.4): the dish picker, the 요리 도감, the 찬장 (the cooking card itself needs the 부엌: tests/cooking-client.mjs audits it there)
+    { id: 'cookpick', emoji: '🍳', label: '무엇을 만들까 (음식 고르기)', fn: () => { const f = fnOf(G.sys.cooking, 'open'); return f && (() => f(null)); } },
+    { id: 'cookbook', emoji: '📖', label: '요리 도감', fn: () => fnOf(G.sys.cooking, 'book') },
+    { id: 'cookpantry', emoji: '🗄️', label: '찬장 (부엌 재료)', fn: () => fnOf(G.sys.cooking, 'pantry') },
     // [myroom] 내 방 (§17.4): the card that says what the room is, and the edit mode itself (its bars and tray are not a
     // modal: the scope is its own root) — the edit mode can be opened only while the player stands in the room
     { id: 'myroomcard', emoji: '🏠', label: '내 방 안내 카드', fn: () => fnOf(G.sys.myroom, 'explain') },
