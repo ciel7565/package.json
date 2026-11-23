@@ -76,7 +76,7 @@ function page(opts = {}) {
   });
   ctx.window.window = window;
   vm.runInContext(SRC, ctx, { filename: '05-input.js' });
-  const ev = (code, o = {}) => ({ code, key: o.key || code, repeat: !!o.repeat, ctrlKey: !!o.ctrl || /^Control/.test(code) && o.type !== 'keyup', shiftKey: !!o.shift, altKey: !!o.alt, metaKey: !!o.meta, defaultPrevented: false, target: body,
+  const ev = (code, o = {}) => ({ code, key: o.key || code, repeat: !!o.repeat, ...(o.ts != null ? { timeStamp: o.ts } : {}), ctrlKey: !!o.ctrl || /^Control/.test(code) && o.type !== 'keyup', shiftKey: !!o.shift, altKey: !!o.alt, metaKey: !!o.meta, defaultPrevented: false, target: body,
     preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} });
   const P = {
     G, T, I: G.input, B: G.input.bindings, ML: G.input.mouseLook, body, gc, lock, store, document, window, flush,
@@ -253,11 +253,21 @@ function page(opts = {}) {
   p.down('ControlLeft', { shift: true }); p.T.now += 60; p.up('ControlLeft');
   const c4 = st();
   check('no toggle: another key between · held longer than 600 ms · a click between · with Shift held', c1 && c2 && c3 && c4, J([c1, c2, c3, c4]));
+  // a long frame (1.5 s) between the handling of down and up: the events' own times (80 ms apart) make it a tap
+  const tp0 = p.ML.state().taps;
+  p.down('ControlLeft', { ts: p.T.now }); const tsD = p.T.now; p.T.now += 1500; p.up('ControlLeft', { ts: tsD + 80 });
+  const slow = p.ML.state();
+  // … and a real long hold stays no tap even when both are handled at once
+  p.down('ControlLeft', { ts: p.T.now }); const tsH = p.T.now; p.up('ControlLeft', { ts: tsH + 900 });
+  const held = p.ML.state();
+  check('the tap is timed by the key events: handled 1.5 s late (a long frame) it still frees; held 900 ms it is no tap', slow.taps === tp0 + 1 && slow.free === 'ctrl' && held.taps === tp0 + 1, J([slow.taps - tp0, slow.free, held.taps - tp0]));
+  p.tap(); p.frame();   // fixed again for what follows
+  const tpB = p.ML.state().taps;
   p.T.blocking = true; p.frame();
   const freedForWindow = !p.ML.state().locked;
   p.tap(); p.frame();
   p.T.blocking = false; p.T.typing = true; p.tap(); p.T.typing = false;
-  check('a window frees the pointer by itself; taps inside a window or while typing change nothing', freedForWindow && p.ML.state().free === null && p.ML.state().taps === 2, J(p.ML.state()));
+  check('a window frees the pointer by itself; taps inside a window or while typing change nothing', freedForWindow && p.ML.state().free === null && p.ML.state().taps === tpB, J(p.ML.state()));
   p.press('KeyW'); p.frame();
   check('after the window the next movement key fixes the view again (not freed by the player)', p.ML.state().locked);
   // Esc (the browser takes the pointer): keys walk free, Ctrl or a press on the view locks
