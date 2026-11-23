@@ -637,10 +637,10 @@
       drone: 'geomungo', drum: { inst: 'janggu', level: 0.2, density: 0.55 }, jing: 0, bak: 0.1, kkw: 0,
       quote: { arirang: 0.1 }, rest: [5, 12], silence: 0.3, level: 0.78, range: [3, 10] },
     evening: { label: '저녁', modes: [['gyemyeon', 3], ['menari', 1]], base: { gyemyeon: 220, menari: 164.8 },
-      jangdan: [['jungmori', 3], ['jinyang', 1]], tempo: [0.15, 0.45],
+      jangdan: [['jungmori', 3], ['semachi', 1]], tempo: [0.15, 0.45], // [finisher] 세마치 for 진양조: the slowest 장단 left the evening silent two thirds of the time (night / rain / room keep it)
       lead: [['haegeum', 3], ['gayageum', 2]], answer: [['gayageum', 3], ['daegeum', 2]],
       drone: 'geomungo', drum: { inst: 'janggu', level: 0.24, density: 0.6 }, jing: 0.15, bak: 0, kkw: 0,
-      quote: { jeongseon: 0.12, arirang: 0.05 }, rest: [4, 10], silence: 0.25, level: 0.82, range: [1, 9] },
+      quote: { jeongseon: 0.12, arirang: 0.05 }, rest: [3, 7], silence: 0.18, level: 0.82, range: [1, 9] }, // [finisher] rest 4–10 / silence 0.25: music only a third of the time
     night: { label: '밤', modes: [['gyemyeon', 2], ['menari', 2]], base: { gyemyeon: 196, menari: 146.8 },
       jangdan: [['jinyang', 3], ['jungmori', 1]], tempo: [0, 0.25],
       lead: [['daegeum', 3], ['geomungo', 1]], answer: [['geomungo', 2], ['gayageum', 2]],
@@ -665,7 +665,7 @@
       jangdan: [['jinyang', 3], ['semachi', 1]], tempo: [0, 0.2],
       lead: [['gayageum', 3], ['daegeum', 1]], answer: [['gayageum', 2], ['geomungo', 1]],
       drone: 'geomungo', drum: { inst: 'buk', level: 0.08, density: 0.25 }, jing: 0.12, bak: 0, kkw: 0,
-      quote: { arirang: 0.06 }, rest: [8, 16], silence: 0.4, level: 0.58, range: [4, 11] },
+      quote: { arirang: 0.06 }, rest: [5, 10], silence: 0.3, level: 0.58, range: [4, 11] }, // [finisher] rest 8–16 / silence 0.4: music only a third of the time
     festival: { label: '잔치', modes: [['pyeong', 1]], base: { pyeong: 220 },
       jangdan: [['jajin', 3], ['gutgeori', 1]], tempo: [0.3, 0.6],
       lead: [['piri', 2], ['haegeum', 1], ['daegeum', 1]], answer: [['gayageum', 2], ['haegeum', 1]],
