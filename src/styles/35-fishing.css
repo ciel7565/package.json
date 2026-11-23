@@ -52,7 +52,7 @@ body.fishing-on #interact-prompt, body.fishing-on #mobile-controls, body.fishing
 
 /* ---------------------------------------------------------------- the one big button */
 .fish-act {
-  position: absolute; left: 50%; bottom: calc(1.6rem + env(safe-area-inset-bottom, 0px)); width: 8.4rem; height: 8.4rem; margin-left: -4.2rem;
+  position: absolute; left: 50%; bottom: calc(1.6rem + env(safe-area-inset-bottom, 0px)); width: max(8.4rem, 128px); height: max(8.4rem, 128px); margin-left: min(-4.2rem, -64px); /* big even when the UI size makes the root font small */
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem;
   border-radius: 50%; border: 4px solid rgba(255, 255, 255, .9); cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none;
   background: radial-gradient(circle at 35% 28%, #5fc0e6, #2f7fb0 70%); color: #fff; font: inherit; font-size: 1.15rem;
@@ -142,6 +142,8 @@ body.easy .fish-top-chip.is-cond { display: none; }
 .fish-why.is-soft { border-left-color: var(--gold); background: rgba(244, 197, 74, .11); font-weight: 500; }
 .fish-note { margin: .6rem 0 0; color: var(--text-dim); font-size: .88rem; line-height: 1.5; }
 .fish-card-actions { display: flex; gap: .6rem; margin-top: .9rem; }
+.modal-foot.fish-card-foot { display: flex; }
+.modal-foot.fish-card-foot > .fish-card-actions { flex: 1 1 100%; margin-top: 0; }
 .fish-big { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: max(var(--tap), 3.4rem); border-radius: 1rem; font-size: 1.12rem; font-weight: 800; }
 .fish-big .emoji { font-size: 1.5rem; }
 .fish-more { display: block; margin: .6rem auto 0; min-height: var(--tap); color: var(--text-dim); }

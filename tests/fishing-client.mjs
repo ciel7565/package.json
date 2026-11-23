@@ -86,7 +86,9 @@ async function boot() {
     const f = G.sys.fishing; f.debug.setNow(june); f.debug.setSeed(11); f.debug.setWeather('CLOUDY');
     // the test's hands: a watcher that slows the short moments down (software WebGL draws a few frames a second) and a
     // careful child that winds, pauses while the fish pulls, and keeps the button down while lifting a stone
-    window.__speed = { bite: 0.12, 'net-run': 0.12, land: 0.35, reel: 1, cast: 0.7 }; window.__fast = 4; window.__last = ''; window.__log = []; window.__hands = 0;
+    // the frame clock is capped at 0.1 s a frame (00-core), so on software GL a 'slow' factor costs frames, not seconds:
+    // the bite keeps ≥ 30 frames for the test's hands, everything else hurries
+    window.__speed = { bite: 0.4, 'net-run': 0.3, land: 0.8, reel: 2.5, cast: 1.5 }; window.__fast = 8; window.__last = ''; window.__log = []; window.__hands = 0;
     setInterval(() => { const p = f.state.phase; if (p !== window.__last) { window.__last = p; window.__log.push(p); f.debug.speed(window.__speed[p] || window.__fast); } }, 20);
     setInterval(() => { const st = f.state; if (!window.__hands) return; if (st.phase === 'reel') { if (st.tension > 0.72) f.press(false); else if (st.tension < 0.5) f.press(true); } else if (st.phase === 'net-stir') f.press(true); }, 40);
   }, JUNE);
@@ -99,7 +101,7 @@ const tap = () => ev(() => { const f = G.sys.fishing; f.press(true); f.press(fal
 /** the catch card is open and its fish has been drawn at least three times → what it shows */
 const cardOpen = async () => { await page.waitForFunction(() => !!G.ui.modal.get('fish-card'), null, { timeout: 150000, polling: 100 }); const k0 = await ev(() => G.fishkit.stats.frames); await page.waitForFunction((k) => G.fishkit.stats.frames >= k + 3, k0, { timeout: 120000, polling: 100 }).catch(() => {}); if (SHOTS) await frames(2); return ev(() => { const el = document.querySelector('.fish-card-modal'); const cv = el.querySelector('.fish-canvas'); let spread = -1; try { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let lo = 255, hi = 0; for (let i = 0; i < d.length; i += 64) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; if (l < lo) lo = l; if (l > hi) hi = l; } spread = hi - lo; } catch (e) { spread = -2; } return { title: G.ui.modal.get('fish-card').opts?.title || el.querySelector('.modal-title, h2, h3')?.textContent || '', buttons: [...el.querySelectorAll('.fish-card-actions .fish-big')].map((b) => b.textContent.trim()), why: [...el.querySelectorAll('.fish-why')].map((e) => e.textContent).join(' '), canvas: [cv.width, cv.height], spread, stamp: !!el.querySelector('.fish-stamp'), text: el.textContent.slice(0, 300) }; }); };
 const clickCard = async (which) => { await ev((w) => { const b = [...document.querySelectorAll('.fish-card-actions .fish-big')]; (w === 'keep' ? b[1] || b[0] : b[0])?.click(); }, which); await sleep(700); };
-const step = async (name, fn) => { if (!want(name)) return; const t = Date.now(); log(`\n▶ ${name}`); try { await fn(); } catch (e) { check(`${name}: ran to its end`, false, String(e?.message || e).slice(0, 300)); try { await ev(() => { G.ui.modal.closeAll(); G.sys.fishing.cancel('test'); }); } catch (x) { /* page gone */ } } log(`   (${((Date.now() - t) / 1000).toFixed(1)} s)`); };
+const step = async (name, fn) => { if (!want(name)) return; const t = Date.now(); log(`\n▶ ${name}`); try { await fn(); } catch (e) { let trail = ''; try { trail = await ev(() => { const st = G.sys.fishing.state; return ` · phases ${(window.__log || []).slice(-14).join('>')} · now ${st.phase} t ${Number(st.t).toFixed(2)} · modal ${(G.ui.modal.list?.() || []).join(',') || document.querySelector('.modal:not([hidden])')?.className || '-'}`; }); } catch (x) { /* page gone */ } check(`${name}: ran to its end`, false, String(e?.message || e).slice(0, 300) + trail); try { await ev(() => { G.ui.modal.closeAll(); G.sys.fishing.cancel('test'); }); } catch (x) { /* page gone */ } } log(`   (${((Date.now() - t) / 1000).toFixed(1)} s)`); };
 
 try {
   await boot();
@@ -233,18 +235,18 @@ try {
     await phase('net-ready'); await sleep(500); await tap();
     await phase('net-stir'); await sleep(700); await shot('net-stir');
     await phase('net-run'); await sleep(250); await shot('net-run');
-    await page.waitForFunction(() => { const st = G.sys.fishing.state; return st.phase !== 'net-run' || st.t >= st.winA + 0.05; }, null, { timeout: 90000, polling: 40 });
+    await page.waitForFunction(() => { const st = G.sys.fishing.state; return st.phase !== 'net-run' || st.t >= st.winA + 0.05; }, null, { timeout: 180000, polling: 40 });
     await tap();
-    await phase(['land', 'card'], 90000); await sleep(300); await shot('net-land');
+    await phase(['land', 'card'], 180000); await sleep(300); await shot('net-land');
     let c = await cardOpen(); await shot('card-DOLGOGI');
     check('족대 to a catch', /돌고기/.test(c.title) && c.buttons.length === 2, c.title);
     await clickCard('release');
     await phase('net-ready');
     await ev(() => { G.sys.fishing.debug.force('GAJAE'); }); await tap();
-    await phase('net-run', 90000);
-    await page.waitForFunction(() => { const st = G.sys.fishing.state; return st.phase !== 'net-run' || st.t >= st.winA + 0.05; }, null, { timeout: 90000, polling: 40 });
+    await phase('net-run', 180000);
+    await page.waitForFunction(() => { const st = G.sys.fishing.state; return st.phase !== 'net-run' || st.t >= st.winA + 0.05; }, null, { timeout: 180000, polling: 40 });
     await tap();
-    await page.waitForFunction(() => !!document.querySelector('.fish-neighbour'), null, { timeout: 90000, polling: 100 }); await sleep(700); await shot('card-neighbour');
+    await page.waitForFunction(() => !!document.querySelector('.fish-neighbour'), null, { timeout: 180000, polling: 100 }); await sleep(700); await shot('card-neighbour');
     const nb = await ev(() => ({ text: document.querySelector('.fish-neighbour').textContent.slice(0, 120), buttons: document.querySelectorAll('.fish-neighbour .fish-big').length, seen: G.state.fishing.seen }));
     check('a clean-water neighbour (가재) is looked at and put back', /가재/.test(nb.text) && nb.buttons === 1 && nb.seen.GAJAE === 1, nb.text);
     await ev(() => { document.querySelector('.fish-neighbour .fish-big').click(); }); await sleep(500);
@@ -255,7 +257,7 @@ try {
     const sid = valley.find((s) => s.methods.includes('trap')).id;
     await goSpot(sid);
     await ev((id) => { G.sys.fishing.debug.force(null); return G.sys.fishing.start(id, 'trap'); }, sid);
-    await page.waitForFunction(() => G.ui.modal.isOpen(), null, { timeout: 90000, polling: 100 }); await sleep(600); await shot('trap-set');
+    await page.waitForFunction(() => G.ui.modal.isOpen(), null, { timeout: 180000, polling: 100 }); await sleep(600); await shot('trap-set');
     const told = await ev(() => document.querySelector('#modal-root').textContent.replace(/\s+/g, ' ').slice(0, 160));
     await ev(() => G.ui.modal.closeAll()); await sleep(900);
     const set = await ev((id) => { const f = G.sys.fishing; return { trap: G.state.fishing.traps[id], info: f.spots().find((s) => s.id === id).trap, phase: f.state.phase, obj: !!f._spots.get(id).trapObj, label: G.interact.get(id).label() }; }, sid);
@@ -266,7 +268,7 @@ try {
     ev((id) => { G.sys.fishing.open(id); }, sid);
     const titles = [];
     for (let i = 0; i < 4; i++) {
-      await page.waitForFunction(() => !!G.ui.modal.get('fish-card') || G.sys.fishing.state.phase === 'idle', null, { timeout: 90000, polling: 100 });
+      await page.waitForFunction(() => !!G.ui.modal.get('fish-card') || G.sys.fishing.state.phase === 'idle', null, { timeout: 180000, polling: 100 });
       if (!(await ev(() => !!G.ui.modal.get('fish-card')))) break;
       const c = await cardOpen(); titles.push(c.title); if (i === 0) await shot('trap-card');
       await clickCard('release'); await sleep(400);
@@ -309,7 +311,7 @@ try {
     await ev(() => { G.setSetting('easyMode', true); }); await sleep(500);
     await goSpot('FS_V_DECK');
     ev(() => { G.sys.fishing.open('FS_V_DECK'); });
-    await page.waitForFunction(() => G.ui.modal.isOpen(), null, { timeout: 90000, polling: 100 }); await sleep(900); await shot('easy-pick');
+    await page.waitForFunction(() => G.ui.modal.isOpen(), null, { timeout: 180000, polling: 100 }); await sleep(900); await shot('easy-pick');
     const pick = await ev(() => ({ inputs: document.querySelectorAll('#modal-root input, #modal-root textarea, #modal-root select').length, tiles: [...document.querySelectorAll('#modal-root .easy-tile')].map((b) => { const r = b.getBoundingClientRect(); return [b.textContent.trim().slice(0, 8), Math.round(Math.min(r.width, r.height))]; }) }));
     check('easy mode: a picture chooser — big tiles (≥ 56 px), no typing', pick.inputs === 0 && pick.tiles.length >= 3 && pick.tiles.every((t) => t[1] >= 56), JSON.stringify(pick.tiles));
     await ev(() => { G.sys.fishing.debug.force('BEODEULCHI'); [...document.querySelectorAll('#modal-root .easy-tile')][0].click(); });

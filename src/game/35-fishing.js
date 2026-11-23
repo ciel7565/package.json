@@ -1009,6 +1009,8 @@
           onClose: () => { try { view?.stop(); } catch (e) { /* gone */ } resolve(answer); },
         });
         if (!m) resolve('release');
+        // the two choices stay in sight on a short screen: they live in the window's footer, the picture and words scroll
+        try { const a = m && m.foot && m.body.querySelector('.fish-card-actions'); if (a) { m.foot.appendChild(a); m.foot.classList.add('fish-card-foot'); } } catch (e) { /* stays in the body */ }
         if (first) { sfx('stamp', { volume: 0.7 }); try { G.fx?.kidParty && easyOn() && G.fx.kidParty(null, { rain: false, burst: true, emoji: '🐟' }); } catch (e) { /* fx optional */ } }
         else sfx('reward', { volume: 0.5 });
       });
@@ -1160,7 +1162,7 @@
         case 'wait': set('👀', '기다려요', { wait: true }); break;
         case 'bite': set('❗', '당겨요!', { go: true }); break;
         case 'reel': set('🧵', '감아요'); break;
-        case 'land': set('🐟', '올라와요', { wait: true }); break;
+        case 'land': set('🐟', '올라와요', { wait: true }); if (st.landKind === 'fish' || st.landKind == null) this._hint('물고기가 올라와요! 어떤 물고기일까요?', '물고기가 올라와요!', { quiet: true }); break;
         case 'missed': set('💧', '다시 해요', { wait: true }); break;
         case 'net-ready': set('🥅', '족대 대기'); this._hint('족대를 돌 아래쪽 물에 대요. 단추를 눌러요.', '단추를 눌러 족대를 대요.'); break;
         case 'net-set': set('🥅', '대는 중', { wait: true }); break;
