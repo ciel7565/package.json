@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-11-12T21:30:15.576Z",
+  "exportedAt": "2026-11-23T07:19:54.227Z",
   "quests": {
     "QUEST001": {
       "reward": {
@@ -119,6 +119,63 @@
       "reward": {
         "coin": 300,
         "exp": 40
+      }
+    },
+    "Q_HOUSE_ROOMS": {
+      "reward": {
+        "coin": 600,
+        "exp": 100
+      }
+    },
+    "Q_HOUSE_EXHIBITS": {
+      "reward": {
+        "coin": 1000,
+        "exp": 180,
+        "edu": 15
+      }
+    },
+    "Q_HOUSE_MOTION": {
+      "reward": {
+        "coin": 800,
+        "exp": 150,
+        "edu": 15
+      }
+    },
+    "Q_HOUSE_BOOK": {
+      "reward": {
+        "coin": 1500,
+        "exp": 250,
+        "title": "집 구경 박사"
+      }
+    },
+    "Q_JANG_SPLIT": {
+      "reward": {
+        "coin": 2500,
+        "exp": 350,
+        "edu": 20,
+        "title": "장 가르는 손"
+      }
+    },
+    "Q_GIMJANG": {
+      "reward": {
+        "coin": 2000,
+        "exp": 300,
+        "edu": 15
+      }
+    },
+    "Q_FERMENT_FIVE": {
+      "reward": {
+        "coin": 3000,
+        "exp": 400,
+        "edu": 30,
+        "title": "발효 장인"
+      }
+    },
+    "Q_LEARN_MORE": {
+      "reward": {
+        "coin": 2000,
+        "exp": 300,
+        "edu": 40
       }
     }
   },
@@ -272,6 +329,104 @@
         "stat": "doubleJumps",
         "gte": 10
       }
+    },
+    "ACH_HOUSE_FIRST": {
+      "reward": {
+        "coin": 100
+      },
+      "condition": {
+        "stat": "placesSeen",
+        "gte": 1
+      }
+    },
+    "ACH_HOUSE_ALL": {
+      "reward": {
+        "coin": 500,
+        "title": "한옥 길잡이"
+      },
+      "condition": {
+        "stat": "placesSeen",
+        "gte": 6
+      }
+    },
+    "ACH_EXHIBIT10": {
+      "reward": {
+        "coin": 300
+      },
+      "condition": {
+        "stat": "exhibitsSeen",
+        "gte": 10
+      }
+    },
+    "ACH_EXHIBIT40": {
+      "reward": {
+        "coin": 800,
+        "edu": 20
+      },
+      "condition": {
+        "stat": "exhibitsSeen",
+        "gte": 40
+      }
+    },
+    "ACH_ROOMBOOK1": {
+      "reward": {
+        "coin": 400
+      },
+      "condition": {
+        "stat": "exhibitRooms",
+        "gte": 1
+      }
+    },
+    "ACH_ROOMBOOK_ALL": {
+      "reward": {
+        "coin": 1500,
+        "title": "한옥 도감 지킴이"
+      },
+      "condition": {
+        "stat": "exhibitRooms",
+        "gte": 11
+      }
+    },
+    "ACH_MOTION5": {
+      "reward": {
+        "coin": 400,
+        "edu": 15
+      },
+      "condition": {
+        "stat": "motionsSeen",
+        "gte": 5
+      }
+    },
+    "ACH_FERMENT_10": {
+      "reward": {
+        "coin": 1000,
+        "title": "장독대 지킴이"
+      },
+      "condition": {
+        "stat": "fermentsClaimed",
+        "gte": 10
+      }
+    },
+    "ACH_EDU_30": {
+      "reward": {
+        "coin": 1500,
+        "edu": 50
+      },
+      "condition": {
+        "stat": "eduCompleted",
+        "gte": 30
+      }
+    },
+    "ACH_QUIZ_50": {
+      "reward": {
+        "coin": 1500,
+        "edu": 50,
+        "title": "퀴즈 달인"
+      },
+      "condition": {
+        "stat": "quizCorrect",
+        "gte": 50
+      }
     }
   },
   "quizzes": {
@@ -424,6 +579,516 @@
         "exp": 100,
         "edu": 10
       }
+    },
+    "QZ_R_CHEONGGUKJANG_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_CHEONGGUKJANG_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_MAKJANG_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_BAEKKIMCHI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_KKAKDUGI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_DONGCHIMI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_DONGCHIMI_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_CHONGGAK_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_SOBAGI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_GATKIMCHI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_PAKIMCHI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_YEOLMU_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_NABAK_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_JEOTGAL_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_JEOTGAL_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_SIKHAE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_VINEGAR_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_VINEGAR_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_NURUK_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_JEUNGPYEON_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_SIKHYE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_SIKHYE_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_JANGAJJI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_R_TEA_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_MICROBES_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_MICROBES_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_LACTIC_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_LACTIC_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_KOJI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_ACETIC_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_YEAST_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_ENZYME_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_SALT_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_TEMP_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_MEJU_TIME_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_DAY_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_SALTWATER_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_SPLIT_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_SPLIT_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_SEED_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JANG_UNESCO_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_MAKE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_KINDS_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_BREATH_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_REGION_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_CARE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_CARE_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_24_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_SPRING_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_SUMMER_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_AUTUMN_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_WINTER_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_FARMYEAR_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_GIMJANG_DAY_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_GIMJANG_UNESCO_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_GIMJANG_STORE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_GIMJANG_SHARE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_REGION_KIMCHI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_REGION_JANG_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_REGION_JEOT_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_REGION_SIKHAE_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_TOOL_KITCHEN_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_TOOL_MEJU_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_TOOL_YONGSU_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_TOOL_GEUMJUL_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_HANOK_ONDOL_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_HANOK_MARU_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_HANOK_KITCHEN_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_HANOK_JANGDOK_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_FOLK_SEOLLAL_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_FOLK_DANO_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_FOLK_CHUSEOK_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_FOLK_DONGJI_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_FOLK_GEUMJUL_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JS_ARIRANG_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JS_MARKET_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JS_FOOD_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JS_FARM_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JS_MANJANG_1": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_JS_FOOD_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SEASON_24_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_HANOK_ONDOL_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_ONGGI_KINDS_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_GIMJANG_DAY_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
+    },
+    "QZ_SCI_YEAST_2": {
+      "reward": {
+        "exp": 60,
+        "edu": 8
+      }
     }
   },
   "crops": {
@@ -558,6 +1223,180 @@
       "exp": 280,
       "coin": 450,
       "resultItem": "ITEM_VINEGAR"
+    },
+    "FER006": {
+      "baseDuration": 480,
+      "exp": 300,
+      "coin": 420,
+      "resultItem": "ITEM_GANJANG"
+    },
+    "FER007": {
+      "baseDuration": 240,
+      "exp": 180,
+      "coin": 250,
+      "resultItem": "ITEM_DOENJANG"
+    },
+    "FER008": {
+      "baseDuration": 150,
+      "exp": 170,
+      "coin": 240,
+      "resultItem": "ITEM_CHEONGGUKJANG"
+    },
+    "FER009": {
+      "baseDuration": 300,
+      "exp": 230,
+      "coin": 330,
+      "resultItem": "ITEM_MAKJANG"
+    },
+    "FER010": {
+      "baseDuration": 180,
+      "exp": 200,
+      "coin": 300,
+      "resultItem": "ITEM_BAEKKIMCHI"
+    },
+    "FER011": {
+      "baseDuration": 160,
+      "exp": 190,
+      "coin": 280,
+      "resultItem": "ITEM_KKAKDUGI"
+    },
+    "FER012": {
+      "baseDuration": 300,
+      "exp": 230,
+      "coin": 330,
+      "resultItem": "ITEM_DONGCHIMI"
+    },
+    "FER013": {
+      "baseDuration": 200,
+      "exp": 200,
+      "coin": 300,
+      "resultItem": "ITEM_CHONGGAK"
+    },
+    "FER014": {
+      "baseDuration": 140,
+      "exp": 170,
+      "coin": 250,
+      "resultItem": "ITEM_OISOBAGI"
+    },
+    "FER015": {
+      "baseDuration": 220,
+      "exp": 210,
+      "coin": 310,
+      "resultItem": "ITEM_GATKIMCHI"
+    },
+    "FER016": {
+      "baseDuration": 150,
+      "exp": 170,
+      "coin": 250,
+      "resultItem": "ITEM_PAKIMCHI"
+    },
+    "FER017": {
+      "baseDuration": 140,
+      "exp": 160,
+      "coin": 240,
+      "resultItem": "ITEM_YEOLMUKIMCHI"
+    },
+    "FER018": {
+      "baseDuration": 130,
+      "exp": 160,
+      "coin": 240,
+      "resultItem": "ITEM_NABAKKIMCHI"
+    },
+    "FER019": {
+      "baseDuration": 420,
+      "exp": 280,
+      "coin": 400,
+      "resultItem": "ITEM_SAEUJEOT"
+    },
+    "FER020": {
+      "baseDuration": 450,
+      "exp": 290,
+      "coin": 410,
+      "resultItem": "ITEM_MYEOLCHIJEOT"
+    },
+    "FER021": {
+      "baseDuration": 240,
+      "exp": 240,
+      "coin": 360,
+      "resultItem": "ITEM_SIKHAE"
+    },
+    "FER022": {
+      "baseDuration": 480,
+      "exp": 300,
+      "coin": 440,
+      "resultItem": "ITEM_GAMSIKCHO"
+    },
+    "FER023": {
+      "baseDuration": 420,
+      "exp": 290,
+      "coin": 430,
+      "resultItem": "ITEM_HYEONMISIKCHO"
+    },
+    "FER024": {
+      "baseDuration": 300,
+      "exp": 220,
+      "coin": 300,
+      "resultItem": "ITEM_NURUK"
+    },
+    "FER025": {
+      "baseDuration": 120,
+      "exp": 160,
+      "coin": 230,
+      "resultItem": "ITEM_JEUNGPYEON"
+    },
+    "FER026": {
+      "baseDuration": 120,
+      "exp": 150,
+      "coin": 220,
+      "resultItem": "ITEM_SIKHYE"
+    },
+    "FER027": {
+      "baseDuration": 160,
+      "exp": 180,
+      "coin": 260,
+      "resultItem": "ITEM_JOCHEONG"
+    },
+    "FER028": {
+      "baseDuration": 180,
+      "exp": 190,
+      "coin": 270,
+      "resultItem": "ITEM_CORNYEOT"
+    },
+    "FER029": {
+      "baseDuration": 260,
+      "exp": 210,
+      "coin": 300,
+      "resultItem": "ITEM_MUJANGAJJI"
+    },
+    "FER030": {
+      "baseDuration": 180,
+      "exp": 180,
+      "coin": 260,
+      "resultItem": "ITEM_KKAENNIPJANGAJJI"
+    },
+    "FER031": {
+      "baseDuration": 300,
+      "exp": 220,
+      "coin": 310,
+      "resultItem": "ITEM_MANEULJANGAJJI"
+    },
+    "FER032": {
+      "baseDuration": 220,
+      "exp": 200,
+      "coin": 290,
+      "resultItem": "ITEM_GOCHUJANGAJJI"
+    },
+    "FER033": {
+      "baseDuration": 420,
+      "exp": 270,
+      "coin": 400,
+      "resultItem": "ITEM_TTEOKCHA"
+    },
+    "FER034": {
+      "baseDuration": 240,
+      "exp": 180,
+      "coin": 220,
+      "resultItem": "ITEM_MEJU"
     }
   },
   "items": {
@@ -740,6 +1579,246 @@
       "price": 600,
       "sell": 120,
       "type": "decoration"
+    },
+    "ITEM_STRAW": {
+      "price": 40,
+      "sell": 10,
+      "type": "ingredient"
+    },
+    "ITEM_BARLEY": {
+      "price": 80,
+      "sell": 25,
+      "type": "ingredient"
+    },
+    "ITEM_MALT": {
+      "price": 140,
+      "sell": 50,
+      "type": "ingredient"
+    },
+    "ITEM_WHEAT": {
+      "price": 80,
+      "sell": 25,
+      "type": "ingredient"
+    },
+    "ITEM_NURUK": {
+      "price": 220,
+      "sell": 80,
+      "type": "ingredient"
+    },
+    "ITEM_MEPSSAL": {
+      "price": 100,
+      "sell": 35,
+      "type": "ingredient"
+    },
+    "ITEM_BROWN_RICE": {
+      "price": 110,
+      "sell": 35,
+      "type": "ingredient"
+    },
+    "ITEM_PERSIMMON": {
+      "price": 90,
+      "sell": 30,
+      "type": "ingredient"
+    },
+    "ITEM_GARLIC": {
+      "price": 60,
+      "sell": 20,
+      "type": "ingredient"
+    },
+    "ITEM_GINGER": {
+      "price": 70,
+      "sell": 25,
+      "type": "ingredient"
+    },
+    "ITEM_SCALLION": {
+      "price": 50,
+      "sell": 15,
+      "type": "ingredient"
+    },
+    "ITEM_CUCUMBER": {
+      "price": 50,
+      "sell": 15,
+      "type": "ingredient"
+    },
+    "ITEM_GAT": {
+      "price": 60,
+      "sell": 20,
+      "type": "ingredient"
+    },
+    "ITEM_YEOLMU": {
+      "price": 50,
+      "sell": 15,
+      "type": "ingredient"
+    },
+    "ITEM_CHONGGAKMU": {
+      "price": 60,
+      "sell": 20,
+      "type": "ingredient"
+    },
+    "ITEM_PEAR": {
+      "price": 90,
+      "sell": 30,
+      "type": "ingredient"
+    },
+    "ITEM_SHRIMP": {
+      "price": 120,
+      "sell": 40,
+      "type": "ingredient"
+    },
+    "ITEM_ANCHOVY": {
+      "price": 110,
+      "sell": 35,
+      "type": "ingredient"
+    },
+    "ITEM_FLATFISH": {
+      "price": 180,
+      "sell": 60,
+      "type": "ingredient"
+    },
+    "ITEM_MILLET": {
+      "price": 80,
+      "sell": 25,
+      "type": "ingredient"
+    },
+    "ITEM_TEALEAF": {
+      "price": 150,
+      "sell": 50,
+      "type": "ingredient"
+    },
+    "ITEM_CHARCOAL": {
+      "price": 40,
+      "sell": 10,
+      "type": "ingredient"
+    },
+    "ITEM_HANJI": {
+      "price": 40,
+      "sell": 10,
+      "type": "ingredient"
+    },
+    "ITEM_CHEONGGUKJANG": {
+      "price": 0,
+      "sell": 380,
+      "type": "fermented"
+    },
+    "ITEM_MAKJANG": {
+      "price": 0,
+      "sell": 380,
+      "type": "fermented"
+    },
+    "ITEM_BAEKKIMCHI": {
+      "price": 0,
+      "sell": 420,
+      "type": "fermented"
+    },
+    "ITEM_KKAKDUGI": {
+      "price": 0,
+      "sell": 380,
+      "type": "fermented"
+    },
+    "ITEM_DONGCHIMI": {
+      "price": 0,
+      "sell": 400,
+      "type": "fermented"
+    },
+    "ITEM_CHONGGAK": {
+      "price": 0,
+      "sell": 400,
+      "type": "fermented"
+    },
+    "ITEM_OISOBAGI": {
+      "price": 0,
+      "sell": 360,
+      "type": "fermented"
+    },
+    "ITEM_GATKIMCHI": {
+      "price": 0,
+      "sell": 400,
+      "type": "fermented"
+    },
+    "ITEM_PAKIMCHI": {
+      "price": 0,
+      "sell": 360,
+      "type": "fermented"
+    },
+    "ITEM_YEOLMUKIMCHI": {
+      "price": 0,
+      "sell": 360,
+      "type": "fermented"
+    },
+    "ITEM_NABAKKIMCHI": {
+      "price": 0,
+      "sell": 360,
+      "type": "fermented"
+    },
+    "ITEM_SAEUJEOT": {
+      "price": 0,
+      "sell": 440,
+      "type": "fermented"
+    },
+    "ITEM_MYEOLCHIJEOT": {
+      "price": 0,
+      "sell": 420,
+      "type": "fermented"
+    },
+    "ITEM_SIKHAE": {
+      "price": 0,
+      "sell": 460,
+      "type": "fermented"
+    },
+    "ITEM_GAMSIKCHO": {
+      "price": 0,
+      "sell": 460,
+      "type": "fermented"
+    },
+    "ITEM_HYEONMISIKCHO": {
+      "price": 0,
+      "sell": 460,
+      "type": "fermented"
+    },
+    "ITEM_JEUNGPYEON": {
+      "price": 0,
+      "sell": 340,
+      "type": "fermented"
+    },
+    "ITEM_SIKHYE": {
+      "price": 0,
+      "sell": 320,
+      "type": "fermented"
+    },
+    "ITEM_JOCHEONG": {
+      "price": 0,
+      "sell": 380,
+      "type": "fermented"
+    },
+    "ITEM_CORNYEOT": {
+      "price": 0,
+      "sell": 360,
+      "type": "fermented"
+    },
+    "ITEM_MUJANGAJJI": {
+      "price": 0,
+      "sell": 340,
+      "type": "fermented"
+    },
+    "ITEM_KKAENNIPJANGAJJI": {
+      "price": 0,
+      "sell": 340,
+      "type": "fermented"
+    },
+    "ITEM_MANEULJANGAJJI": {
+      "price": 0,
+      "sell": 340,
+      "type": "fermented"
+    },
+    "ITEM_GOCHUJANGAJJI": {
+      "price": 0,
+      "sell": 340,
+      "type": "fermented"
+    },
+    "ITEM_TTEOKCHA": {
+      "price": 0,
+      "sell": 440,
+      "type": "fermented"
     }
   },
   "titles": [
@@ -748,13 +1827,20 @@
     "발효 견습생",
     "발효 연구생",
     "발효 입문자",
+    "발효 장인",
     "산골 사진작가",
     "산골 탐험가",
     "입문자",
+    "장 가르는 손",
     "장 담그는 손",
+    "장독대 지킴이",
     "전통발효 전문가",
+    "집 구경 박사",
     "체험관 새내기",
-    "체험생"
+    "체험생",
+    "퀴즈 달인",
+    "한옥 길잡이",
+    "한옥 도감 지킴이"
   ],
   "limits": {
     "saveMaxBytes": 1500000,
@@ -853,7 +1939,1628 @@
       "ITEM_GANJANG",
       "ITEM_GOCHUJANG",
       "ITEM_KIMCHI",
-      "ITEM_VINEGAR"
+      "ITEM_VINEGAR",
+      "ITEM_CHEONGGUKJANG",
+      "ITEM_MAKJANG",
+      "ITEM_BAEKKIMCHI",
+      "ITEM_KKAKDUGI",
+      "ITEM_DONGCHIMI",
+      "ITEM_CHONGGAK",
+      "ITEM_OISOBAGI",
+      "ITEM_GATKIMCHI",
+      "ITEM_PAKIMCHI",
+      "ITEM_YEOLMUKIMCHI",
+      "ITEM_NABAKKIMCHI",
+      "ITEM_SAEUJEOT",
+      "ITEM_MYEOLCHIJEOT",
+      "ITEM_SIKHAE",
+      "ITEM_GAMSIKCHO",
+      "ITEM_HYEONMISIKCHO",
+      "ITEM_JEUNGPYEON",
+      "ITEM_SIKHYE",
+      "ITEM_JOCHEONG",
+      "ITEM_CORNYEOT",
+      "ITEM_MUJANGAJJI",
+      "ITEM_KKAENNIPJANGAJJI",
+      "ITEM_MANEULJANGAJJI",
+      "ITEM_GOCHUJANGAJJI",
+      "ITEM_TTEOKCHA"
+    ]
+  },
+  "cropCalendar": {
+    "CROP_BEAN": {
+      "sow": [
+        5,
+        6
+      ],
+      "harvest": [
+        10
+      ],
+      "days": 120
+    },
+    "CROP_PEPPER": {
+      "sow": [
+        5
+      ],
+      "harvest": [
+        8,
+        9,
+        10
+      ],
+      "days": 90
+    },
+    "CROP_CABBAGE": {
+      "sow": [
+        3,
+        4,
+        8
+      ],
+      "harvest": [
+        5,
+        6,
+        10,
+        11
+      ],
+      "days": 85
+    },
+    "CROP_PERILLA": {
+      "sow": [
+        5,
+        6
+      ],
+      "harvest": [
+        9,
+        10
+      ],
+      "days": 120
+    },
+    "CROP_CORN": {
+      "sow": [
+        4,
+        5
+      ],
+      "harvest": [
+        7,
+        8
+      ],
+      "days": 95
+    },
+    "CROP_RADISH": {
+      "sow": [
+        3,
+        4,
+        8
+      ],
+      "harvest": [
+        5,
+        6,
+        10,
+        11
+      ],
+      "days": 75
+    },
+    "CROP_MINT": {
+      "sow": [
+        4,
+        5
+      ],
+      "harvest": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "days": 70
+    },
+    "CROP_LAVENDER": {
+      "sow": [
+        3,
+        4,
+        5
+      ],
+      "harvest": [
+        6,
+        7
+      ],
+      "days": 100
+    },
+    "CROP_ROSEMARY": {
+      "sow": [
+        4,
+        5
+      ],
+      "harvest": [
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "days": 90
+    },
+    "CROP_LEMONBALM": {
+      "sow": [
+        4,
+        5
+      ],
+      "harvest": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "days": 70
+    }
+  },
+  "myroom": {
+    "v": 1,
+    "room": {
+      "w": 14,
+      "d": 11,
+      "h": 3.4,
+      "ceil": 3.05,
+      "pad": 0.12,
+      "fine": 0.125,
+      "wallN": 0.062,
+      "wallV": [
+        0.2,
+        2.5
+      ],
+      "keep": {
+        "x0": -1.6,
+        "x1": 1.6,
+        "z0": 3.1,
+        "z1": 5.5
+      }
+    },
+    "limits": {
+      "free": 80,
+      "paid": 160,
+      "hard": 200,
+      "bytes": 24576
+    },
+    "sizes": [
+      0.8,
+      1,
+      1.2
+    ],
+    "items": {
+      "F_BANDAJI": [
+        "F",
+        1,
+        0.54,
+        0.81,
+        8,
+        0
+      ],
+      "F_JANG2": [
+        "F",
+        1.19,
+        0.56,
+        1.65,
+        8,
+        0
+      ],
+      "F_JANG3": [
+        "F",
+        1.04,
+        0.56,
+        1.93,
+        8,
+        0
+      ],
+      "F_IBULJANG": [
+        "F",
+        1.34,
+        0.62,
+        1.53,
+        8,
+        0
+      ],
+      "F_MEORIJANG": [
+        "F",
+        0.74,
+        0.46,
+        0.63,
+        8,
+        0
+      ],
+      "F_MUNGAP": [
+        "F",
+        1.43,
+        0.39,
+        0.53,
+        8,
+        0
+      ],
+      "F_MUNGAP_S": [
+        "F",
+        0.93,
+        0.39,
+        0.53,
+        8,
+        0
+      ],
+      "F_SABANG": [
+        "F",
+        0.46,
+        0.46,
+        1.46,
+        8,
+        0
+      ],
+      "F_CHAEKJANG": [
+        "F",
+        1.04,
+        0.42,
+        1.74,
+        8,
+        0
+      ],
+      "F_SHELF": [
+        "F",
+        0.9,
+        0.36,
+        1.2,
+        8,
+        0
+      ],
+      "F_SEOAN": [
+        "F",
+        1.05,
+        0.37,
+        0.37,
+        8,
+        0
+      ],
+      "F_GYEONGSANG": [
+        "F",
+        0.9,
+        0.42,
+        0.32,
+        8,
+        0
+      ],
+      "F_SOBAN": [
+        "F",
+        0.5,
+        0.5,
+        0.31,
+        8,
+        0
+      ],
+      "F_SANG": [
+        "F",
+        1.5,
+        0.9,
+        0.36,
+        8,
+        0
+      ],
+      "F_PYEONGSANG": [
+        "F",
+        1.8,
+        1.2,
+        0.36,
+        8,
+        0
+      ],
+      "F_DWIJU": [
+        "F",
+        0.99,
+        0.69,
+        1.01,
+        8,
+        0
+      ],
+      "F_CHANJANG": [
+        "F",
+        1.22,
+        0.52,
+        1.77,
+        0,
+        0
+      ],
+      "F_GYEONGDAE": [
+        "T",
+        0.43,
+        0.39,
+        0.57,
+        0,
+        0
+      ],
+      "F_GAT": [
+        "T",
+        0.44,
+        0.44,
+        0.46,
+        0,
+        0
+      ],
+      "F_INLAY": [
+        "T",
+        0.38,
+        0.24,
+        0.18,
+        0,
+        0
+      ],
+      "S_BANGSEOK": [
+        "T",
+        0.6,
+        0.6,
+        0.1,
+        16,
+        1
+      ],
+      "S_BANGSEOK_L": [
+        "T",
+        1.2,
+        0.6,
+        0.1,
+        16,
+        0
+      ],
+      "S_BORYO": [
+        "F",
+        1.91,
+        0.91,
+        0.76,
+        16,
+        0
+      ],
+      "S_BEDDING": [
+        "F",
+        1.09,
+        1.9,
+        0.24,
+        16,
+        0
+      ],
+      "S_ROLL": [
+        "T",
+        0.91,
+        0.26,
+        0.25,
+        16,
+        0
+      ],
+      "S_JUKBUIN": [
+        "T",
+        1.12,
+        0.25,
+        0.23,
+        0,
+        0
+      ],
+      "R_DOTJARI": [
+        "R",
+        2.4,
+        1.6,
+        0.02,
+        0,
+        0
+      ],
+      "R_MEONGSEOK": [
+        "R",
+        2,
+        2,
+        0.02,
+        0,
+        0
+      ],
+      "R_HWAMUN": [
+        "R",
+        2.4,
+        1.6,
+        0.02,
+        0,
+        0
+      ],
+      "R_HWAMUN_S": [
+        "R",
+        1.5,
+        1,
+        0.02,
+        0,
+        0
+      ],
+      "R_JOGAK": [
+        "R",
+        1.8,
+        1.2,
+        0.02,
+        0,
+        0
+      ],
+      "R_SAEKDONG": [
+        "R",
+        1.8,
+        1,
+        0.02,
+        0,
+        0
+      ],
+      "R_ROUND": [
+        "R",
+        1.4,
+        1.4,
+        0.02,
+        16,
+        0
+      ],
+      "R_FELT": [
+        "R",
+        2,
+        1.4,
+        0.03,
+        16,
+        0
+      ],
+      "A_SCREEN_BIRDS": [
+        "F",
+        2.86,
+        0.16,
+        1.77,
+        0,
+        0
+      ],
+      "A_SCREEN_BOOKS": [
+        "F",
+        3.24,
+        0.15,
+        1.47,
+        0,
+        0
+      ],
+      "A_SCREEN_STILL": [
+        "F",
+        3.15,
+        0.14,
+        1.62,
+        0,
+        0
+      ],
+      "A_SCREEN_PLAIN": [
+        "F",
+        2.56,
+        0.19,
+        1.73,
+        16,
+        0
+      ],
+      "A_SCROLL_TIGER": [
+        "W",
+        0.61,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_ROOSTER": [
+        "W",
+        0.58,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_DEER": [
+        "W",
+        0.6,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_GEESE": [
+        "W",
+        0.62,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_PLUM": [
+        "W",
+        0.8,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_BAMBOO": [
+        "W",
+        0.6,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_CARP": [
+        "W",
+        0.8,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_OFFICIALS": [
+        "W",
+        0.75,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_SCROLL_PORTRAIT": [
+        "W",
+        0.69,
+        0.05,
+        1.64,
+        0,
+        0
+      ],
+      "A_FRAME_CARP": [
+        "W",
+        0.68,
+        0.03,
+        0.97,
+        0,
+        0
+      ],
+      "A_FRAME_PLUM": [
+        "W",
+        0.67,
+        0.03,
+        0.95,
+        0,
+        0
+      ],
+      "A_FRAME_ROOSTER": [
+        "W",
+        0.5,
+        0.03,
+        0.99,
+        0,
+        0
+      ],
+      "W_JOGAKBO": [
+        "W",
+        1.03,
+        0.04,
+        1.05,
+        0,
+        0
+      ],
+      "W_JOGAKBO_L": [
+        "W",
+        1.73,
+        0.04,
+        0.85,
+        0,
+        0
+      ],
+      "W_CLOCK": [
+        "W",
+        0.39,
+        0.13,
+        0.78,
+        8,
+        0
+      ],
+      "W_MASK_Y": [
+        "W",
+        0.22,
+        0.08,
+        0.36,
+        0,
+        0
+      ],
+      "W_MASK_G": [
+        "W",
+        0.28,
+        0.08,
+        0.34,
+        0,
+        0
+      ],
+      "W_FAN": [
+        "W",
+        0.66,
+        0.03,
+        0.51,
+        16,
+        0
+      ],
+      "W_KITE": [
+        "W",
+        0.58,
+        0.02,
+        0.94,
+        16,
+        0
+      ],
+      "W_KITE_G": [
+        "W",
+        0.53,
+        0.02,
+        1.2,
+        16,
+        0
+      ],
+      "W_MAEDEUP": [
+        "W",
+        0.12,
+        0.04,
+        0.48,
+        16,
+        0
+      ],
+      "W_GOBI": [
+        "W",
+        0.41,
+        0.06,
+        1.03,
+        0,
+        0
+      ],
+      "W_JORI": [
+        "W",
+        0.27,
+        0.07,
+        0.43,
+        0,
+        0
+      ],
+      "W_HOMI": [
+        "W",
+        0.13,
+        0.1,
+        0.4,
+        0,
+        0
+      ],
+      "W_JEOUL": [
+        "W",
+        0.9,
+        0.28,
+        0.61,
+        0,
+        0
+      ],
+      "J_HANGARI": [
+        "F",
+        0.84,
+        0.85,
+        1.08,
+        6,
+        1
+      ],
+      "J_DOK": [
+        "F",
+        0.8,
+        0.81,
+        1.4,
+        6,
+        1
+      ],
+      "J_JUNGDURI": [
+        "F",
+        0.96,
+        0.97,
+        1.06,
+        6,
+        1
+      ],
+      "J_DANJI": [
+        "T",
+        0.51,
+        0.51,
+        0.54,
+        6,
+        1
+      ],
+      "J_GEUMJUL": [
+        "F",
+        0.8,
+        0.82,
+        1.4,
+        0,
+        0
+      ],
+      "J_MULDUMEONG": [
+        "F",
+        1.02,
+        1.02,
+        0.8,
+        0,
+        0
+      ],
+      "J_DONGI": [
+        "T",
+        0.55,
+        0.5,
+        0.43,
+        6,
+        0
+      ],
+      "J_SIRU": [
+        "T",
+        0.61,
+        0.62,
+        0.3,
+        0,
+        0
+      ],
+      "J_SOT": [
+        "T",
+        0.92,
+        0.93,
+        0.48,
+        0,
+        0
+      ],
+      "J_BASIN": [
+        "T",
+        0.72,
+        0.73,
+        0.2,
+        6,
+        0
+      ],
+      "J_BOWLS": [
+        "T",
+        0.39,
+        0.22,
+        0.12,
+        0,
+        0
+      ],
+      "J_MOON": [
+        "T",
+        0.42,
+        0.42,
+        0.44,
+        0,
+        1
+      ],
+      "J_MAEBYEONG": [
+        "T",
+        0.24,
+        0.24,
+        0.4,
+        0,
+        1
+      ],
+      "J_BOTTLE": [
+        "T",
+        0.2,
+        0.2,
+        0.37,
+        0,
+        1
+      ],
+      "J_HWARO": [
+        "T",
+        0.57,
+        0.56,
+        0.44,
+        0,
+        0
+      ],
+      "J_MAETDOL": [
+        "T",
+        0.53,
+        0.54,
+        0.22,
+        0,
+        0
+      ],
+      "J_JEOLGU": [
+        "F",
+        0.51,
+        0.51,
+        1.31,
+        0,
+        0
+      ],
+      "J_TEASET": [
+        "T",
+        0.46,
+        0.46,
+        0.3,
+        0,
+        0
+      ],
+      "L_JWADEUNG": [
+        "T",
+        0.34,
+        0.34,
+        0.9,
+        0,
+        0
+      ],
+      "L_DEUNGJAN": [
+        "T",
+        0.2,
+        0.2,
+        0.54,
+        0,
+        0
+      ],
+      "L_CANDLE": [
+        "T",
+        0.2,
+        0.2,
+        0.72,
+        0,
+        0
+      ],
+      "L_PAPER": [
+        "T",
+        0.34,
+        0.34,
+        0.5,
+        0,
+        0
+      ],
+      "L_PAPER_T": [
+        "T",
+        0.34,
+        0.34,
+        0.9,
+        0,
+        0
+      ],
+      "L_CHORONG": [
+        "T",
+        0.4,
+        0.25,
+        1.21,
+        0,
+        0
+      ],
+      "L_CHORONG_H": [
+        "H",
+        0.23,
+        0.23,
+        0.76,
+        0,
+        0
+      ],
+      "P_ORCHID": [
+        "T",
+        0.57,
+        0.56,
+        0.51,
+        0,
+        1
+      ],
+      "P_PINE": [
+        "T",
+        0.51,
+        0.27,
+        0.55,
+        0,
+        1
+      ],
+      "P_BAMBOO": [
+        "T",
+        0.53,
+        0.36,
+        1.12,
+        0,
+        1
+      ],
+      "P_PLUM": [
+        "T",
+        0.39,
+        0.23,
+        0.87,
+        0,
+        0
+      ],
+      "P_MUM": [
+        "T",
+        0.35,
+        0.31,
+        0.4,
+        16,
+        1
+      ],
+      "P_CAMELLIA": [
+        "T",
+        0.35,
+        0.31,
+        0.4,
+        0,
+        1
+      ],
+      "P_LOTUS": [
+        "T",
+        0.56,
+        0.56,
+        0.33,
+        16,
+        0
+      ],
+      "P_PEONY": [
+        "T",
+        0.25,
+        0.26,
+        0.73,
+        16,
+        0
+      ],
+      "P_LETTUCE": [
+        "T",
+        0.57,
+        0.32,
+        0.21,
+        0,
+        0
+      ],
+      "P_PEPPER": [
+        "T",
+        0.27,
+        0.27,
+        0.78,
+        0,
+        0
+      ],
+      "G_TOP": [
+        "T",
+        0.46,
+        0.22,
+        0.12,
+        16,
+        0
+      ],
+      "G_EOLLE": [
+        "T",
+        0.42,
+        0.15,
+        0.14,
+        0,
+        0
+      ],
+      "G_YUT": [
+        "T",
+        0.47,
+        0.62,
+        0.03,
+        0,
+        0
+      ],
+      "G_JEGI": [
+        "T",
+        0.2,
+        0.1,
+        0.15,
+        0,
+        0
+      ],
+      "G_GONGGI": [
+        "T",
+        0.24,
+        0.15,
+        0.08,
+        0,
+        0
+      ],
+      "G_TUHO": [
+        "T",
+        0.66,
+        0.5,
+        0.83,
+        0,
+        0
+      ],
+      "G_BADUK": [
+        "T",
+        0.96,
+        0.44,
+        0.25,
+        0,
+        0
+      ],
+      "G_DOLL_G": [
+        "T",
+        0.16,
+        0.16,
+        0.33,
+        16,
+        1
+      ],
+      "G_DOLL_B": [
+        "T",
+        0.16,
+        0.16,
+        0.33,
+        16,
+        1
+      ],
+      "G_BOOKS": [
+        "T",
+        0.22,
+        0.3,
+        0.14,
+        0,
+        0
+      ],
+      "G_MUNBANG": [
+        "T",
+        0.9,
+        0.31,
+        0.31,
+        0,
+        0
+      ],
+      "M_GAYAGEUM": [
+        "T",
+        1.57,
+        0.32,
+        0.19,
+        0,
+        0
+      ],
+      "M_GEOMUNGO": [
+        "T",
+        1.66,
+        0.33,
+        0.31,
+        0,
+        0
+      ],
+      "M_JANGGU": [
+        "T",
+        0.6,
+        0.64,
+        0.44,
+        16,
+        0
+      ],
+      "M_BUK": [
+        "T",
+        0.51,
+        0.28,
+        0.59,
+        0,
+        0
+      ],
+      "M_JING": [
+        "F",
+        0.78,
+        0.36,
+        0.94,
+        0,
+        0
+      ],
+      "M_FLUTES": [
+        "T",
+        0.81,
+        0.21,
+        0.23,
+        0,
+        0
+      ],
+      "K_SONGPYEON": [
+        "T",
+        0.36,
+        0.36,
+        0.1,
+        0,
+        0
+      ],
+      "K_TTEOK": [
+        "T",
+        0.35,
+        0.35,
+        0.15,
+        0,
+        0
+      ],
+      "K_YAKGWA": [
+        "T",
+        0.35,
+        0.35,
+        0.07,
+        0,
+        0
+      ],
+      "K_PERSIMMON": [
+        "T",
+        0.35,
+        0.35,
+        0.14,
+        0,
+        0
+      ],
+      "K_TANGERINE": [
+        "T",
+        0.32,
+        0.32,
+        0.15,
+        0,
+        0
+      ],
+      "K_CHESTNUT": [
+        "T",
+        0.32,
+        0.32,
+        0.11,
+        0,
+        0
+      ],
+      "K_WATERMELON": [
+        "T",
+        0.42,
+        0.42,
+        0.19,
+        0,
+        0
+      ],
+      "K_SWEETPOTATO": [
+        "T",
+        0.4,
+        0.34,
+        0.08,
+        0,
+        0
+      ],
+      "K_PUMPKIN": [
+        "T",
+        0.49,
+        0.46,
+        0.39,
+        0,
+        1
+      ],
+      "C_GOTGAM": [
+        "H",
+        0.91,
+        0.07,
+        0.8,
+        0,
+        0
+      ],
+      "C_MEJU": [
+        "H",
+        0.92,
+        0.22,
+        0.67,
+        0,
+        0
+      ],
+      "C_GOCHU": [
+        "H",
+        0.91,
+        0.19,
+        0.93,
+        0,
+        0
+      ],
+      "C_CORN": [
+        "H",
+        0.91,
+        0.08,
+        0.66,
+        0,
+        0
+      ],
+      "C_SIRAEGI": [
+        "H",
+        0.91,
+        0.17,
+        0.93,
+        0,
+        0
+      ],
+      "H_BASKET": [
+        "T",
+        0.52,
+        0.52,
+        0.21,
+        0,
+        1
+      ],
+      "H_KI": [
+        "T",
+        0.56,
+        0.61,
+        0.14,
+        0,
+        0
+      ],
+      "H_SIEVE": [
+        "T",
+        0.52,
+        0.52,
+        0.21,
+        0,
+        0
+      ],
+      "H_NURUK": [
+        "T",
+        0.59,
+        0.6,
+        0.06,
+        0,
+        0
+      ],
+      "H_STRAW": [
+        "T",
+        0.38,
+        0.39,
+        0.85,
+        0,
+        0
+      ],
+      "H_GAMANI": [
+        "F",
+        1.24,
+        1,
+        0.67,
+        0,
+        0
+      ],
+      "H_SEOM": [
+        "T",
+        0.62,
+        0.55,
+        1.01,
+        0,
+        0
+      ],
+      "H_MEONGSEOK": [
+        "T",
+        1.52,
+        0.45,
+        0.44,
+        0,
+        0
+      ],
+      "H_JANGJAK": [
+        "F",
+        1.28,
+        0.56,
+        0.73,
+        0,
+        0
+      ],
+      "H_JIGE": [
+        "F",
+        0.58,
+        0.58,
+        1.43,
+        0,
+        0
+      ],
+      "H_BROOM": [
+        "T",
+        0.3,
+        0.3,
+        0.98,
+        0,
+        0
+      ],
+      "H_JIPSIN": [
+        "T",
+        0.25,
+        0.3,
+        0.05,
+        0,
+        0
+      ],
+      "H_KKOTSIN": [
+        "T",
+        0.21,
+        0.27,
+        0.06,
+        16,
+        0
+      ],
+      "H_GOMUSIN": [
+        "T",
+        0.21,
+        0.27,
+        0.06,
+        0,
+        0
+      ],
+      "H_DOE": [
+        "T",
+        0.68,
+        0.41,
+        0.29,
+        0,
+        0
+      ],
+      "H_DADEUMI": [
+        "T",
+        0.63,
+        0.58,
+        0.32,
+        0,
+        0
+      ],
+      "H_BANJIT": [
+        "T",
+        0.65,
+        0.49,
+        0.29,
+        0,
+        0
+      ],
+      "H_SOTDAE": [
+        "T",
+        0.31,
+        0.27,
+        1.01,
+        0,
+        0
+      ],
+      "H_FAN": [
+        "T",
+        0.66,
+        0.14,
+        0.5,
+        16,
+        0
+      ]
+    },
+    "styles": {
+      "floor": [
+        "jangpan",
+        "maru",
+        "stone",
+        "earth"
+      ],
+      "wall": [
+        "plaster",
+        "clay",
+        "board"
+      ],
+      "wood": [
+        "warm",
+        "pale",
+        "dark"
+      ],
+      "mood": [
+        "day",
+        "warm",
+        "lamp",
+        "bright"
+      ],
+      "winLen": 18,
+      "winDoor": 11
+    }
+  },
+  "avatar": {
+    "v": 2,
+    "options": {
+      "style": [
+        "real",
+        "cute"
+      ],
+      "skin": [
+        "#fde3cf",
+        "#f6d0b1",
+        "#efc6a2",
+        "#e6b48d",
+        "#d9a77f",
+        "#c68b62",
+        "#a86d48",
+        "#7d4f33"
+      ],
+      "face": [
+        "smile",
+        "calm",
+        "cheer",
+        "gentle",
+        "bright"
+      ],
+      "hair": [
+        "short",
+        "long",
+        "bun",
+        "ponytail",
+        "buzz",
+        "curly",
+        "daenggi",
+        "jjok",
+        "sangtu",
+        "pigtails",
+        "side",
+        "wave",
+        "bangs",
+        "twinbraid"
+      ],
+      "hairColor": [
+        "#1f1a18",
+        "#2f2520",
+        "#3a2a20",
+        "#4a3a2c",
+        "#6b4a2e",
+        "#8a5a34",
+        "#b07a45",
+        "#d9b26f",
+        "#b9b4ad",
+        "#6e3b4e"
+      ],
+      "hat": [
+        "none",
+        "gat",
+        "jokduri",
+        "ayam",
+        "jobawi",
+        "hogeon",
+        "bokgeon",
+        "strawhat",
+        "cap",
+        "headband"
+      ],
+      "hatColor": [
+        "#1f1f22",
+        "#2e3f6e",
+        "#6e2f4e",
+        "#8a3b4b",
+        "#2f5a3c",
+        "#e2c27a",
+        "#d9534f",
+        "#f4c54a",
+        "#ffffff",
+        "#3b5ba5"
+      ],
+      "top": [
+        "hanbok",
+        "saekdong",
+        "dangui",
+        "baeja",
+        "kwaeja",
+        "durumagi",
+        "tshirt",
+        "hoodie",
+        "shirt",
+        "jacket",
+        "apron"
+      ],
+      "topColor": [
+        "#f1ece1",
+        "#ffffff",
+        "#e8d9b5",
+        "#f08bb0",
+        "#ff9f6b",
+        "#ffd766",
+        "#9bd27a",
+        "#2f7d4a",
+        "#6fc3df",
+        "#4a78c8",
+        "#2e3f6e",
+        "#8b6fd6",
+        "#d9534f",
+        "#6d8f4e",
+        "#7a5a43",
+        "#3a3d42"
+      ],
+      "outerColor": [
+        "#2e3f6e",
+        "#4a78c8",
+        "#2f7d4a",
+        "#6d8f4e",
+        "#8a3b4b",
+        "#b45a73",
+        "#6e3b4e",
+        "#7a5a43",
+        "#3a3d42",
+        "#e8d9b5",
+        "#f1ece1",
+        "#d9534f"
+      ],
+      "pattern": [
+        "none",
+        "geumbak",
+        "cloud",
+        "flower"
+      ],
+      "bottom": [
+        "skirt",
+        "pants",
+        "shorts"
+      ],
+      "bottomColor": [
+        "#2c3540",
+        "#3c3934",
+        "#3f5a3c",
+        "#5a4636",
+        "#2f6f8f",
+        "#3b5ba5",
+        "#7a6a55",
+        "#c9b38f",
+        "#8a3b4b",
+        "#b45a73",
+        "#e9e4da",
+        "#1f1f22",
+        "#d9534f",
+        "#2e3f6e",
+        "#6e3b4e",
+        "#f08bb0"
+      ],
+      "footwear": [
+        "gomusin",
+        "kkotsin",
+        "jipsin",
+        "sneakers"
+      ],
+      "shoes": [
+        "#f5f0e6",
+        "#ffffff",
+        "#2a1d14",
+        "#1f1f22",
+        "#7a4a2c",
+        "#d9534f",
+        "#3b5ba5",
+        "#e2c27a",
+        "#b45a73",
+        "#2f7d4a"
+      ],
+      "bag": [
+        "none",
+        "backpack",
+        "basket",
+        "pouch"
+      ],
+      "bagColor": [
+        "#8a5a3b",
+        "#6b4a2e",
+        "#b88a4a",
+        "#2f7d4a",
+        "#3b5ba5",
+        "#d9534f",
+        "#f4c54a",
+        "#3a3d42"
+      ],
+      "accessory": [
+        "none",
+        "norigae",
+        "bokjumeoni",
+        "fan",
+        "daenggi",
+        "glasses",
+        "beard"
+      ],
+      "accessoryColor": [
+        "#d9534f",
+        "#8a3b4b",
+        "#f4c54a",
+        "#2f7d4a",
+        "#3b5ba5",
+        "#6e3b4e",
+        "#ffffff",
+        "#1f1f22",
+        "#e2c27a",
+        "#cfcac2"
+      ]
+    },
+    "legacy": {
+      "accessory": [
+        "strawhat",
+        "headband",
+        "cap",
+        "gat"
+      ]
+    },
+    "colorKeys": [
+      "skin",
+      "hairColor",
+      "hatColor",
+      "topColor",
+      "outerColor",
+      "bottomColor",
+      "shoes",
+      "bagColor",
+      "accessoryColor"
     ]
   }
 }
