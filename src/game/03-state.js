@@ -550,6 +550,8 @@
     sanitizePlaces(data); // 집 구경 (phase 8): { visits, seen, motions } with known ids only
     // [myroom] 내 방: catalogue ids and numbers in range only; what cannot be drawn safely is dropped (76-myroom-data.js)
     data.myroom = G.data.myroom?.sanitize ? G.data.myroom.sanitize(data.myroom, G.data.myroom.LIMITS.hard) : { v: 0, style: {}, items: [], public: false };
+    // [cooking] 부엌 (CONTRACT §18.4): known dishes and staples, small numbers, bounded lists (36-cooking-data.js)
+    if (G.data.cooking?.sanitize) data.cooking = G.data.cooking.sanitize(data.cooking);
     if (profile) { data.profile.id = profile.id; if (profile.nickname) data.profile.nickname = profile.nickname; if (profile.role) data.profile.role = profile.role; if (profile.email) data.profile.email = profile.email; }
     return data;
   }

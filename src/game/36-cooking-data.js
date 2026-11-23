@@ -674,10 +674,14 @@
         const out = [];
         for (const s of sp) {
           if (!s || typeof s.id !== 'string' || s.protected || s.observe || s.observationOnly) continue;
-          const c = typeof s.cook === 'string' ? s.cook : null;
+          // lane fishing names the dish kind itself (`cook`: small | trout | bottom | null = not for the pot); older data
+          // without the field falls back to the family
           const fam = String(s.family || '');
-          const hit = c ? c === cls : fc.families.some((f) => fam.indexOf(f.replace(/과$/, '')) >= 0);
-          if (hit) out.push({ id: s.id, itemId: 'FISH_' + s.id, name: s.name || s.id });
+          const hit = Object.prototype.hasOwnProperty.call(s, 'cook') ? s.cook === cls : fc.families.some((f) => fam.indexOf(f.replace(/과$/, '')) >= 0);
+          if (!hit) continue;
+          const F = G.data.fish;
+          const itemId = F && typeof F.itemId === 'function' && !list ? F.itemId(s.id) : 'FISH_' + s.id;
+          if (itemId) out.push({ id: s.id, itemId, name: s.name || s.id });
         }
         return out;
       }
@@ -692,6 +696,33 @@
       for (const c of Object.values(d.crafts || {})) for (const id of Object.keys(c.out || {})) set.add(id);
       for (const id of C.pantry) set.add(id);
       return set;
+    },
+    /** a clean G.state.cooking (also what 03-state keeps): known dish ids, small numbers, bounded lists; returns the
+     *  same object when it was already clean (cheap to call on every access) */
+    sanitize(raw) {
+      const L = C.limits, okN = (v, a, b) => Number.isFinite(v) && v >= a && v <= b;
+      const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+      let clean = !!o && o.v === 1 && o.book && typeof o.book === 'object' && o.pantry && typeof o.pantry === 'object' && o.catches && typeof o.catches === 'object' && Array.isArray(o.table) && okN(o.shared, 0, L.sharedMax);
+      if (clean) {
+        const bk = Object.keys(o.book);
+        clean = bk.length <= L.bookMax && bk.every((k) => C.dishes[k] && o.book[k] && okN(o.book[k].n, 0, 1e6) && okN(o.book[k].best, 0, 3))
+          && o.table.length <= L.tableMax && o.table.every((e) => e && C.dishes[e.d] && okN(e.s, 1, 3))
+          && Object.keys(o.catches).length <= 30 && Object.entries(o.catches).every(([k, a]) => /^FISH_[A-Z0-9_]{1,30}$/.test(k) && Array.isArray(a) && a.length <= 10 && a.every((t) => okN(t, 0, 1e14)))
+          && typeof o.pantry.day === 'string' && o.pantry.day.length <= 10 && o.pantry.got && typeof o.pantry.got === 'object' && Object.entries(o.pantry.got).every(([k, n]) => C.pantry.includes(k) && okN(n, 0, L.pantryPerDay));
+      }
+      if (clean) return o;
+      const out = { v: 1, book: {}, pantry: { day: '', got: {} }, catches: {}, table: [], shared: 0 };
+      if (!o) return out;
+      const int = (v, a, b) => (Number.isFinite(Number(v)) ? Math.max(a, Math.min(b, Math.floor(Number(v)))) : a);
+      if (o.book && typeof o.book === 'object') for (const [k, b] of Object.entries(o.book).slice(0, L.bookMax)) if (C.dishes[k] && b && typeof b === 'object') out.book[k] = { n: int(b.n, 0, 1e6), best: int(b.best, 0, 3), first: int(b.first, 0, 1e14), last: int(b.last, 0, 1e14) };
+      if (Array.isArray(o.table)) for (const e of o.table.slice(-L.tableMax)) if (e && C.dishes[e.d]) out.table.push({ d: e.d, s: int(e.s, 1, 3), t: int(e.t, 0, 1e14) });
+      if (o.catches && typeof o.catches === 'object') for (const [k, a] of Object.entries(o.catches).slice(0, 30)) if (/^FISH_[A-Z0-9_]{1,30}$/.test(k) && Array.isArray(a)) out.catches[k] = a.slice(-10).map((t) => int(t, 0, 1e14));
+      if (o.pantry && typeof o.pantry === 'object' && typeof o.pantry.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.pantry.day)) {
+        out.pantry.day = o.pantry.day;
+        for (const id of C.pantry) if (o.pantry.got && o.pantry.got[id] != null) out.pantry.got[id] = int(o.pantry.got[id], 0, L.pantryPerDay);
+      }
+      out.shared = int(o.shared, 0, L.sharedMax);
+      return out;
     },
     /** fold the cards, quizzes, deck, quests and achievements into G.data (idempotent; runs again after 45 has loaded) */
     mergeContent() {

@@ -913,11 +913,9 @@ final class SaveValidator
         if ($table !== null && !is_array($table)) self::bad('cooking table');
         $book = self::kv(self::p($c, 'book'));
         if (count($book) > $bookMax) { $this->violate('COOK_BAD_SHAPE', ['field' => 'book']); return; }
-        $stars3 = 0;
         foreach ($book as $id => $b) {
             $b = self::o($b);
             if (!isset($dishes[(string) $id]) || $b === null || !$int(self::p($b, 'n'), 0, 1000000) || !$int(self::p($b, 'best'), 0, 3)) { $this->violate('COOK_BAD_SHAPE', ['field' => 'book', 'id' => self::safeId((string) $id)]); return; }
-            if (self::p($b, 'best') === 3) $stars3 += max(1, (int) self::p($b, 'n'));
         }
         if (is_array($table)) {
             if (count($table) > $tableMax) { $this->violate('COOK_BAD_SHAPE', ['field' => 'table']); return; }
@@ -949,7 +947,6 @@ final class SaveValidator
         foreach ($book as $b) $cooked += (int) self::p(self::o($b), 'n');
         if (self::n(self::p($stats, 'dishesCooked')) > $cooked + 1) $this->violate('COOK_BAD_SHAPE', ['field' => 'dishesCooked']);
         if (self::n(self::p($stats, 'dishStars3')) > $cooked) $this->violate('COOK_BAD_SHAPE', ['field' => 'dishStars3']);
-        unset($stars3);
     }
 
     // ------------------------------------------------------------------ [fishing] 낚시 (CONTRACT §18.3)

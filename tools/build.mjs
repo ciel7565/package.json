@@ -230,6 +230,12 @@ function exportGameData() {
     try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
     catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
   }
+  // [cooking] the dishes and the kitchen staples (CONTRACT §18.4): their items, quests, cards and the state limits reach
+  // the server (evaluated after the education data, so its cards and quizzes merge into G.data like in the page)
+  for (const f of fragments.filter((x) => /cooking-data/.test(x.name))) {
+    try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
+    catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
+  }
   const d = G.data || {};
   // Only what the server needs to validate rewards / timings.
   const pick = (obj, fn) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, fn(v)]));
@@ -270,6 +276,8 @@ function exportGameData() {
     avatar: d.avatar ? { v: d.avatar.v, options: d.avatar.options, legacy: d.avatar.legacy, colorKeys: d.avatar.colorKeys } : {},
     // [settings] ids → { t: b | n | e, min, max, step, values, d, s: a | d } (CONTRACT §18.2), tabs, limits
     settings: d.settingsTable ? { v: d.settingsTable.v, bytes: d.settingsTable.bytes, devices: d.settingsTable.devices, maxOptions: d.settingsTable.maxOptions, tabs: d.settingsTable.tabs, options: d.settingsTable.options } : {},
+    // [cooking] dish ids, the 찬장 staples and the limits of G.state.cooking (SaveValidator's [cooking] block)
+    cooking: d.cooking ? { v: d.cooking.v, dishes: Object.keys(d.cooking.dishes || {}), kinds: Object.fromEntries(Object.entries(d.cooking.dishes || {}).map(([k, x]) => [k, x.kind])), pantry: d.cooking.pantry || [], limits: d.cooking.limits || {} } : {},
     // [fishing] species ids → { p: protected 0 | 1, max: mm, d: difficulty }, neighbours, spots, baits, the daily keep limit,
     // exp per catch (CONTRACT §18.3): Tfm\SaveValidator checks the `fishing` block of a save and keeps protected fish out of the bag
     fish: d.fish && typeof d.fish.serverTable === 'function' ? d.fish.serverTable() : {},
