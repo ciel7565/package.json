@@ -40,7 +40,9 @@
 .sw-seg button .emoji { margin-right: .2rem; }
 .sw-select { min-height: 2.3rem; padding: .3rem .6rem; border-radius: 10px; background: rgba(0, 0, 0, .3); color: var(--text); border: 1px solid var(--line); font: inherit; max-width: 100%; }
 .sw-test { min-width: 2.3rem; padding: .2rem .45rem; }
-.sw-info { font-size: .82rem; color: var(--text-dim); text-align: right; max-width: 22rem; }
+/* (the row itself also carries the class sw-info — its type — so the value box is named through .set-ctl) */
+.set-ctl > .sw-info { font-size: .82rem; color: var(--text-dim); text-align: right; max-width: 22rem; }
+.sw-row.sw-info .set-label { min-width: 9rem; }
 .sw-legacy { margin: .3rem 0 .8rem; padding: 0 .7rem; border-radius: 14px; border: 1px dashed var(--line); }
 .sw-jump { margin: .25rem .3rem .25rem 0; }
 /* keys */
@@ -82,7 +84,7 @@
   }
   .set-window .sw-tabs .tab .emoji { font-size: 1.15rem; margin: 0; line-height: 1; }
   .sw-hgrid { grid-template-columns: minmax(0, 1fr); }
-  .sw-info { text-align: left; }
+  .set-ctl > .sw-info { text-align: left; }
   .sw-key, .sw-keynote { justify-content: flex-start; text-align: left; }
   .sw-seg { justify-content: flex-start; }
   .set-window .modal-foot { flex-wrap: wrap; }
