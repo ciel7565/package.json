@@ -1100,6 +1100,9 @@
 
   const RULES = {
     keepPerDay: 6,            // fish taken along per Korean day (site setting fishing.keep_per_day overrides; 0 … 20)
+    bagMax: 30,               // fish the bag holds at once: with that many the next catch only goes back (cook first). It
+                              // must stay BELOW what the server calls a hoard (2 × keepPerDayMax = 40, SaveValidator
+                              // FISH_KEEP_LIMIT) — an honest save is never refused for a full basket
     trapMinutes: 10,          // real minutes until a set 어항 can be looked at (site setting fishing.trap_minutes; 1 … 240)
     trapMax: 3,               // 어항 standing at the same time
     trapFish: [1, 3],         // how many small fish an 어항 holds
@@ -1233,7 +1236,7 @@
     const species = {};
     for (const s of S) species[s.id] = { p: s.protected ? 1 : 0, max: Math.round(s.size.max * 10), d: s.difficulty };
     return {
-      v: 1, keepPerDay: RULES.keepPerDay, keepPerDayMax: 20, species, neighbours: NEIGHBOURS.map((n) => n.id), spots: SPOTS.map((x) => x.id), baits: Object.keys(BAITS),
+      v: 1, keepPerDay: RULES.keepPerDay, keepPerDayMax: 20, bagMax: RULES.bagMax, species, neighbours: NEIGHBOURS.map((n) => n.id), spots: SPOTS.map((x) => x.id), baits: Object.keys(BAITS),
       exp: { catchMax: Math.max.apply(null, RULES.expByDifficulty), first: RULES.firstBonus.exp, release: RULES.releaseBonus.exp, firstEdu: RULES.firstBonus.edu },
     };
   }

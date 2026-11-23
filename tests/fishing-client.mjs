@@ -6,7 +6,8 @@
 //   node tests/fishing-client.mjs --file /abs/page.html  test an already built page
 //   options: --quality low|medium|high (default low: function; looks are judged at medium / high)
 //            --shots <dir>   also save the evidence pictures there (contact sheet, sessions, cards, 도감, phones)
-//            --only a,b      steps: fish, rod, gyeonji, net, trap, book, school, easy, phone, complex, reload
+//            --only a,b      steps: fish, rod, gyeonji, net, trap, limit, book, school, easy, phone, complex, reload
+//            --viewport WxH  the desktop viewport (default 1280x800; functional runs on software WebGL: 960x600)
 //            --keep · --json · --headed · --timeout <ms>
 //
 // What only a browser can show: the fish are painted (31 different skins, 31 different pictures), the catch card's fish
@@ -37,6 +38,7 @@ const opt = (n, d = null) => { const i = args.indexOf(n); return i >= 0 && i + 1
 const TIMEOUT = Number(opt('--timeout', '300000'));
 const QUALITY = opt('--quality', 'low');
 const SHOTS = opt('--shots');
+const [VW, VH] = (() => { const m = /^(\d{3,4})x(\d{3,4})$/.exec(opt('--viewport', '1280x800') || ''); return m ? [Number(m[1]), Number(m[2])] : [1280, 800]; })();
 const ONLY = (opt('--only', 'all') || 'all').split(',').map((s) => s.trim());
 const want = (k) => ONLY.includes('all') || ONLY.includes(k);
 const jsonOut = flag('--json');
@@ -57,7 +59,7 @@ const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail: String(detail ?? '').slice(0, 500) }); log(`${ok ? '  ✔' : '  ✖'} ${name}${detail !== '' && detail != null ? ` — ${String(detail).slice(0, 260)}` : ''}`); };
 
 const browser = await chromium.launch({ headless: !flag('--headed'), args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'] });
-const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul', hasTouch: true });
+const context = await browser.newContext({ viewport: { width: VW, height: VH }, locale: 'ko-KR', timezoneId: 'Asia/Seoul', hasTouch: true });
 await context.addInitScript(() => { try { const s = JSON.parse(localStorage.getItem('tfm.v1.settings') || '{}'); if (!('_fishTest' in s)) { s.easyMode = false; s._v = 2; s._fishTest = 1; localStorage.setItem('tfm.v1.settings', JSON.stringify(s)); } } catch (e) { /* first run */ } });
 const page = await context.newPage();
 await page.route('**/*', (route) => (/^(file|data|blob):/.test(route.request().url()) ? route.continue() : route.abort()));
@@ -66,7 +68,7 @@ page.on('pageerror', (e) => pageErrors.push(String(e?.message || e).slice(0, 300
 page.on('console', (m) => { if (m.type() === 'error' && !/net::ERR|Failed to load resource/.test(m.text())) pageErrors.push('console: ' + m.text().slice(0, 300)); });
 const url = `${pathToFileURL(file).href}?autostart=1&notutorial=1&quality=${QUALITY}`;
 const ev = (fn, arg) => page.evaluate(fn, arg);
-const sleep = (ms) => page.waitForTimeout(ms);
+const sleep = async (ms) => { await page.waitForTimeout(ms); await frames(2); };   // the time AND two drawn frames (software WebGL)
 const shot = async (name) => { if (!SHOTS) return; try { await page.screenshot({ path: path.join(SHOTS, `${name}-${QUALITY}.png`) }); } catch (e) { log('   (shot failed)', name, e.message); } };
 const phase = (n, timeout = 150000) => page.waitForFunction((x) => (Array.isArray(x) ? x : [x]).includes(G.sys.fishing.state.phase), n, { timeout, polling: 50 });
 const JUNE = Date.UTC(2026, 5, 9, 22, 0, 0);                // 2026-06-10 07:00 in Korea
@@ -74,6 +76,11 @@ const JUNE = Date.UTC(2026, 5, 9, 22, 0, 0);                // 2026-06-10 07:00 
 async function boot() {
   await page.goto(url, { waitUntil: 'load', timeout: TIMEOUT });
   await page.waitForFunction(() => window.G && window.G.ready === true && !!window.G.sys?.fishing, null, { timeout: TIMEOUT, polling: 250 });
+  // an autostart guest is a NEW profile, and a new profile starts in easy mode whatever the device store says (the mode
+  // is kept in the save, CONTRACT §12.1): the suite's default is the grown-up mode, so it is switched here (a reload
+  // then reads it back from the save)
+  await ev(() => { G.ui.modal.closeAll(); if (G.easy.on) G.setSetting('easyMode', false); });
+  await page.waitForFunction(() => G.easy.on === false, null, { timeout: 60000, polling: 100 });
   await ev((june) => {
     G.ui.modal.closeAll();
     const f = G.sys.fishing; f.debug.setNow(june); f.debug.setSeed(11); f.debug.setWeather('CLOUDY');
@@ -84,9 +91,13 @@ async function boot() {
     setInterval(() => { const st = f.state; if (!window.__hands) return; if (st.phase === 'reel') { if (st.tension > 0.72) f.press(false); else if (st.tension < 0.5) f.press(true); } else if (st.phase === 'net-stir') f.press(true); }, 40);
   }, JUNE);
 }
-const goSpot = (id) => ev(async (sid) => { const s = G.sys.fishing.spots().find((x) => x.id === sid); if (!s || !s.ready) throw new Error('spot not ready: ' + sid); await G.sys.player.teleport(s.x - 1.5, s.z, 0, { fade: false }); return true; }, id);
+/** wait until the page has DRAWN n more frames (software WebGL: a frame can take a second — never wait for milliseconds) */
+const frames = async (n = 2, timeout = 120000) => { const f0 = await ev(() => G.time.frame); await page.waitForFunction(([a, k]) => G.time.frame >= a + k, [f0, n], { timeout, polling: 50 }); };
+/** stand on the bank d metres behind the spot's place (the bank's side, away from the water) */
+const goSpot = async (id, d = 1.5) => { await ev(async ([sid, dd]) => { const f = G.sys.fishing; const s = f.spots().find((x) => x.id === sid); if (!s || !s.ready) throw new Error('spot not ready: ' + sid); const r = f._spots.get(sid).r; await G.sys.player.teleport(r.x + r.nx * dd, r.z + r.nz * dd, Math.atan2(-r.nx, -r.nz), { fade: false }); return true; }, [id, d]); await frames(2); };
 const tap = () => ev(() => { const f = G.sys.fishing; f.press(true); f.press(false); });
-const cardOpen = async () => { await page.waitForFunction(() => !!G.ui.modal.get('fish-card'), null, { timeout: 150000, polling: 100 }); await sleep(SHOTS ? 2600 : 1600); return ev(() => { const el = document.querySelector('.fish-card-modal'); const cv = el.querySelector('.fish-canvas'); let spread = -1; try { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let lo = 255, hi = 0; for (let i = 0; i < d.length; i += 64) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; if (l < lo) lo = l; if (l > hi) hi = l; } spread = hi - lo; } catch (e) { spread = -2; } return { title: G.ui.modal.get('fish-card').opts?.title || el.querySelector('.modal-title, h2, h3')?.textContent || '', buttons: [...el.querySelectorAll('.fish-card-actions .fish-big')].map((b) => b.textContent.trim()), why: [...el.querySelectorAll('.fish-why')].map((e) => e.textContent).join(' '), canvas: [cv.width, cv.height], spread, stamp: !!el.querySelector('.fish-stamp'), text: el.textContent.slice(0, 300) }; }); };
+/** the catch card is open and its fish has been drawn at least three times → what it shows */
+const cardOpen = async () => { await page.waitForFunction(() => !!G.ui.modal.get('fish-card'), null, { timeout: 150000, polling: 100 }); const k0 = await ev(() => G.fishkit.stats.frames); await page.waitForFunction((k) => G.fishkit.stats.frames >= k + 3, k0, { timeout: 120000, polling: 100 }).catch(() => {}); if (SHOTS) await frames(2); return ev(() => { const el = document.querySelector('.fish-card-modal'); const cv = el.querySelector('.fish-canvas'); let spread = -1; try { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let lo = 255, hi = 0; for (let i = 0; i < d.length; i += 64) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; if (l < lo) lo = l; if (l > hi) hi = l; } spread = hi - lo; } catch (e) { spread = -2; } return { title: G.ui.modal.get('fish-card').opts?.title || el.querySelector('.modal-title, h2, h3')?.textContent || '', buttons: [...el.querySelectorAll('.fish-card-actions .fish-big')].map((b) => b.textContent.trim()), why: [...el.querySelectorAll('.fish-why')].map((e) => e.textContent).join(' '), canvas: [cv.width, cv.height], spread, stamp: !!el.querySelector('.fish-stamp'), text: el.textContent.slice(0, 300) }; }); };
 const clickCard = async (which) => { await ev((w) => { const b = [...document.querySelectorAll('.fish-card-actions .fish-big')]; (w === 'keep' ? b[1] || b[0] : b[0])?.click(); }, which); await sleep(700); };
 const step = async (name, fn) => { if (!want(name)) return; const t = Date.now(); log(`\n▶ ${name}`); try { await fn(); } catch (e) { check(`${name}: ran to its end`, false, String(e?.message || e).slice(0, 300)); try { await ev(() => { G.ui.modal.closeAll(); G.sys.fishing.cancel('test'); }); } catch (x) { /* page gone */ } } log(`   (${((Date.now() - t) / 1000).toFixed(1)} s)`); };
 
@@ -147,9 +158,18 @@ try {
 
   // ---------------------------------------------------------------- 대낚시 with the keyboard, then a protected fish
   await step('rod', async () => {
-    await goSpot('FS_V_DECK');
-    check('start() begins a session at the spot', await ev(() => { G.sys.fishing.debug.force('SANCHEONEO'); return G.sys.fishing.start('FS_V_DECK', 'rod', { bait: 'worm' }); }) === true);
-    await phase('ready'); await sleep(900);
+    // the first click of a player: the sign's prompt from some metres back on the bank → the player walks up and the
+    // chooser opens → 낚시 시작 walks to the water's edge
+    await goSpot('FS_V_DECK', 7);
+    const from = await ev(() => { const f = G.sys.fishing, r = f._spots.get('FS_V_DECK').r, p = G.sys.player.position; f.debug.force('SANCHEONEO'); return { d: Math.hypot(p.x - r.x, p.z - r.z), go: G.interact.activate('FS_V_DECK') !== false }; });
+    await page.waitForFunction(() => !!G.ui.modal.get('fish-choose'), null, { timeout: 150000, polling: 100 });
+    await frames(2); await shot('rod-0-choose');
+    const ch = await ev(() => { const el = G.ui.modal.get('fish-choose').el; return { methods: [...el.querySelectorAll('.fish-method b')].map((b) => b.textContent), on: el.querySelector('.fish-method.is-on b')?.textContent || '', baits: [...el.querySelectorAll('.fish-bait')].map((b) => b.textContent.trim()), who: el.querySelector('.fish-who')?.textContent || '', cond: el.querySelector('.fish-cond')?.textContent || '', inputs: el.querySelectorAll('input, textarea, select').length, foot: [...el.querySelectorAll('.modal-foot .btn')].map((b) => b.textContent.trim()) }; });
+    check('the sign\'s prompt walks the player up and opens the chooser: four methods, the baits of the chosen one, who bites now, today\'s count', from.d > 5 && from.go && ch.methods.length === 4 && /대낚시/.test(ch.on) && ch.baits.length === 4 && /잘 만나는 물고기/.test(ch.who) && /6월/.test(ch.cond) && /0 \/ 6/.test(ch.cond) && ch.foot.some((t) => /낚시 시작/.test(t)), JSON.stringify(ch).slice(0, 300));
+    await ev(() => { [...G.ui.modal.get('fish-choose').el.querySelectorAll('.modal-foot .btn')].find((b) => /낚시 시작/.test(b.textContent)).click(); });
+    await phase(['walk', 'ready']);
+    check('낚시 시작 begins a session at the spot', true);
+    await phase('ready'); await frames(3);
     const ui = await ev(() => { const r = (el) => { const b = el.getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; }; const f = G.sys.fishing; return { shown: !document.getElementById('fishing-ui').hidden, act: r(document.querySelector('.fish-act')), label: document.querySelector('.fish-act').textContent, hint: document.querySelector('.fish-hint').textContent, blocking: G.ui.isBlocking(), cam: G.sys.camera.mode, hudOff: document.body.classList.contains('fishing-on'), rod: !!f._gear?.rod && f._gear.rod.parent === f._gearRoot, dist: Math.hypot(G.sys.player.position.x - f._rec.r.x, G.sys.player.position.z - f._rec.r.z) }; });
     check('the session shows its own controls: one big button, a hint, the rod in the hand; the world\'s input is blocked', ui.shown && ui.act[0] >= 120 && /던져요/.test(ui.label) && ui.hint.length > 5 && ui.blocking && ui.cam === 'shot' && ui.hudOff && ui.rod && ui.dist < 1, JSON.stringify(ui));
     await shot('rod-1-ready');
@@ -325,7 +345,7 @@ try {
     const fit = await ev(() => { const m = document.querySelector('.fish-book-modal'); const b = m.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.right), innerWidth, Math.round(b.bottom), innerHeight]; });
     check('the 도감 fits a phone', fit[0] >= 0 && fit[1] <= fit[2] && fit[3] <= fit[4] + 1, fit.join(' '));
     await ev(() => { G.ui.modal.closeAll(); G.sys.fishing.cancel('test'); });
-    await page.setViewportSize({ width: 1280, height: 800 }); await sleep(500);
+    await page.setViewportSize({ width: VW, height: VH }); await sleep(500);
     await ev(() => { G.setSetting('easyMode', false); });
   });
 

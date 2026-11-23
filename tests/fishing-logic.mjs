@@ -346,6 +346,47 @@ try {
     K2.F.init();
     check('fishing switched off by the operator: the spots rest', (await K2.F.open('FS_V_DECK')) === false && K2.G.interact.list.every((o) => o.enabled() === false) && K2.toasts.length === 1);
   }
+  // ================================================================ slow frames, a full basket (fishing-verify)
+  {
+    const K = makeGame({ inventory: {} });
+    const { G, F } = K;
+    F.init(); F.debug.setNow(JUNE); F.debug.setSeed(7);
+    // ten frames a second (a weak phone, software WebGL): every frame is 0.1 s
+    await K.begin('FS_V_DECK', 'rod', 'SANCHEONEO');
+    F.press(true); F.press(false);
+    let guard = 0;
+    while (F.state.phase !== 'bite' && guard++ < 4000) K.tick(1, 0.1);
+    F.press(true); F.press(false);
+    guard = 0;
+    while (F.state.phase === 'reel' && guard++ < 4000) { if (F.state.tension > 0.72) F.press(false); else if (F.state.tension < 0.5) F.press(true); K.tick(1, 0.1); }
+    const landed = F.state.phase === 'land';
+    K.tick(1, 0.1);
+    const fish = F._gear && F._gear.fish;
+    check('at ten frames a second the landed fish is still built and held up (a flag, not "the first 50 ms" of the phase)', landed && !!fish && fish.parent === F._gearRoot && fish.userData.fish.id === 'SANCHEONEO', `${F.state.phase} · fish ${!!fish}`);
+    // the button is let go while the card is open: nothing stays "held"
+    F.press(true);
+    await K.until(() => !!K.card(), 600);
+    F.press(false);
+    check('letting go while the card is open lets go (the next session does not start with a held button)', F._held === false);
+    await K.answer('release');
+    check('… and after the card the session is ready for the next cast', F.state.phase === 'ready');
+    F.cancel('test');
+
+    const R = G.data.fish.rules, T = G.data.fish.serverTable();
+    check('the page\'s basket limit stays below the server\'s hoard line (2 × the hard daily ceiling) and is exported', R.bagMax >= 12 && R.bagMax < 2 * T.keepPerDayMax && T.bagMax === R.bagMax && F.bagLimit() === R.bagMax, `${R.bagMax} < ${2 * T.keepPerDayMax}`);
+    G.state.inventory.FISH_BEODEULCHI = R.bagMax - 1;
+    await K.begin('FS_V_DECK', 'rod', 'SANCHEONEO'); await K.toCard();
+    const two = K.buttons().length;
+    await K.answer('keep');
+    const held = F.heldFish();
+    await K.toCard();
+    const one = K.buttons().length, why = K.card() ? K.card().el.byClass('fish-why').map((e) => e.textContent).join(' ') : '';
+    check('a full basket: the last place is filled, then a catch only goes back and the card says why (cook first)', two === 2 && held === R.bagMax && one === 1 && /바구니/.test(why) && /요리/.test(why), `${two} → ${one} · held ${held} · ${why.slice(0, 60)}`);
+    await K.answer('button');
+    check('… the bag never holds more than the limit and the day\'s number did not move for the fish that went back', F.heldFish() === R.bagMax && G.state.fishing.day.kept === 1 && G.state.fishing.book.SANCHEONEO.kept === 1, `${F.heldFish()} · day ${G.state.fishing.day.kept}`);
+    F.cancel('test');
+    check('no warning was logged', G._warn.length === 0, G._warn.slice(0, 3).join(' | '));
+  }
 } catch (e) {
   check('the test ran to its end', false, e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : String(e));
 }

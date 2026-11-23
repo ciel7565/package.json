@@ -211,6 +211,12 @@ check('… while the same 14 catches over two minutes pass', function () use ($j
     $r = $judge(state($u, $T0 + 120000, $f, $st, $goodBag), state($u, $T0), 120);
     return $r['ok'] ? true : j(codes($r));
 });
+check('a full basket as the page allows it (rules.bagMax fish, exported) is an honest save; the page\'s limit is below the server\'s hoard line', function () use ($judge, $u, $T0, $good, $goodStats, $gd, $F, $K1, $K2) {
+    $bagMax = isset($gd['fish']['bagMax']) ? (int) $gd['fish']['bagMax'] : 0;
+    if ($bagMax < 12 || $bagMax >= 2 * $F['keepPerDayMax']) return 'bagMax ' . $bagMax . ' vs ' . (2 * $F['keepPerDayMax']);
+    $r = $judge(state($u, $T0 + 60000, $good, $goodStats, ['FISH_' . $K1 => $bagMax - 5, 'FISH_' . $K2 => 5]), state($u, $T0));
+    return $r['ok'] ? true : j(codes($r));
+});
 foreach (['the block is a string' => 'trout', 'the 도감 is a number' => ['v' => 1, 'book' => 5], 'the 어항 list is a string' => ['v' => 1, 'book' => new stdClass(), 'traps' => 'x']] as $name => $blk) {
     check('malformed (400) — ' . $name, function () use ($judge, $u, $T0, $blk) {
         try { $judge(state($u, $T0 + 60000, $blk), state($u, $T0)); return 'accepted'; }

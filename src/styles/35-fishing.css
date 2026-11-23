@@ -9,10 +9,14 @@
 body.fishing-on #interact-prompt, body.fishing-on #mobile-controls, body.fishing-on #joystick { display: none !important; }
 
 /* ---------------------------------------------------------------- the top bar */
-.fish-top {
-  position: absolute; left: 50%; top: calc(.6rem + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
-  display: flex; align-items: center; gap: .45rem; padding: .35rem .45rem; border-radius: 999px; max-width: calc(100vw - 1rem);
+/* the bar and the hint are ONE column: the hint always sits under the bar, whatever the tap size (56 px in easy mode),
+   the UI scale or the text size make of the bar's height */
+.fish-ui > .fish-head {
+  position: absolute; left: 0; right: 0; top: calc(.6rem + env(safe-area-inset-top, 0px)); padding: 0 .5rem;
+  display: flex; flex-direction: column; align-items: center; gap: .5rem; pointer-events: none;
 }
+.fish-head > * { pointer-events: auto; }
+.fish-top { display: flex; align-items: center; gap: .45rem; padding: .35rem .45rem; border-radius: 999px; max-width: 100%; }
 .fish-top-chip { padding: .3rem .7rem; border-radius: 999px; background: rgba(255, 255, 255, .08); white-space: nowrap; font-weight: 600; font-size: .86rem; }
 .fish-top-chip.is-cond { color: var(--text-dim); font-weight: 500; }
 .fish-top-btn { display: inline-flex; align-items: center; gap: .3rem; min-height: var(--tap); padding: .3rem .8rem; border-radius: 999px; white-space: nowrap; }
@@ -21,8 +25,7 @@ body.fishing-on #interact-prompt, body.fishing-on #mobile-controls, body.fishing
 
 /* ---------------------------------------------------------------- the hint line */
 .fish-hint {
-  position: absolute; left: 50%; top: calc(4.4rem + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
-  max-width: min(34rem, calc(100vw - 1.5rem)); padding: .55rem 1rem; border-radius: 1rem; text-align: center;
+  max-width: min(34rem, 100%); padding: .55rem 1rem; border-radius: 1rem; text-align: center;
   font-size: 1.02rem; font-weight: 600; line-height: 1.45; word-break: keep-all;
 }
 .fish-hint:empty { display: none; }
@@ -83,15 +86,15 @@ body.easy .fish-top-chip.is-cond { display: none; }
   .fish-top-chip { padding: .28rem .55rem; font-size: .8rem; max-width: 9.5rem; overflow: hidden; text-overflow: ellipsis; }
   .fish-top-chip.is-cond { display: none; }
   .fish-top-btn { padding: .3rem .65rem; }
-  .fish-hint { top: calc(4.6rem + env(safe-area-inset-top, 0px)); font-size: .98rem; }
+  .fish-hint { font-size: .98rem; }
 }
 /* a phone on its side: the button moves to the thumb, the bar beside it */
 @media (max-height: 480px) {
   .fish-act, body.easy .fish-act { left: auto; right: calc(1.2rem + env(safe-area-inset-right, 0px)); bottom: calc(.9rem + env(safe-area-inset-bottom, 0px)); margin-left: 0; width: 7rem; height: 7rem; font-size: 1.02rem; }
   .fish-act .emoji, body.easy .fish-act .emoji { font-size: 1.9rem; }
   .fish-bar, body.easy .fish-bar { left: auto; right: calc(9.4rem + env(safe-area-inset-right, 0px)); bottom: calc(1.1rem + env(safe-area-inset-bottom, 0px)); transform: none; width: min(20rem, calc(100vw - 12rem)); }
-  .fish-hint, body.easy .fish-hint { top: calc(3.7rem + env(safe-area-inset-top, 0px)); padding: .35rem .8rem; font-size: .95rem; max-width: calc(100vw - 12rem); }
-  .fish-top { top: calc(.35rem + env(safe-area-inset-top, 0px)); }
+  .fish-hint, body.easy .fish-hint { padding: .35rem .8rem; font-size: .95rem; max-width: calc(100vw - 12rem); }
+  .fish-ui > .fish-head { top: calc(.35rem + env(safe-area-inset-top, 0px)); gap: .3rem; }
 }
 
 /* ---------------------------------------------------------------- the chooser (normal mode) */

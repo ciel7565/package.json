@@ -13,6 +13,8 @@
 //     preview(id)                      the catch card of a species without recording anything (developer centre, kid audit)
 //     nearestSpot() → spot | null      for quest markers
 //     keepLimit() / keptToday()        the daily limit (site setting fishing.keep_per_day) and today's count (KST day)
+//     heldFish() / bagLimit()          fish in the bag now · how many it holds (rules.bagMax: with a full basket a catch
+//                                      only goes back — cook first; the server calls more than 40 a hoard)
 //     debug                            test seam: setNow(ms | null) · setSeed(n) · setWeather(id | null) · force(id | null)
 //                                      · speed(k) · trapReady(spotId) · info()
 //   Events (G.bus): 'fish:landed' { id, method, spot, mm, protected, first } · 'fish:kept' { id, itemId, mm } ·
@@ -440,7 +442,7 @@
         signs.push(put(signGeometry(), r.gx, r.gy, r.gz, 0, Math.atan2(-r.nx, -r.nz) + PI, 0));
         try { ctx.addCollider?.({ shape: 'circle', x: r.gx, z: r.gz, r: 0.16, tag: 'sign' }); } catch (e) { /* cosmetic */ }
         // the same spot in WORLD coordinates for the session
-        const fy = Number(self._floorY) || 0;
+        const fy = Number(ctx.floorY) || 0;
         const w = Object.assign({}, r, { x: r.x + O.x, z: r.z + O.z, wx: r.wx + O.x, wz: r.wz + O.z, gx: r.gx + O.x, gz: r.gz + O.z, cx: r.cx + O.x, cz: r.cz + O.z, y: r.y + fy, wy: r.wy + fy, gy: r.gy + fy });
         const rec = { def, r: w, local: r, place: ctx.id, handle: null, trapObj: null, group };
         self._spots.set(def.id, rec); made.push(def.id);
@@ -475,6 +477,9 @@
     },
     keepLimit() { return clamp(Math.round(Number(site('fishing.keep_per_day', FD().rules.keepPerDay)) || 0), 0, 20); },
     keptToday() { const f = fst(); if (!f) return 0; const k = kst().key; return f.day.key === k ? f.day.kept : 0; },
+    /** fish in the bag (every FISH_<ID> item) */
+    heldFish() { let n = 0; try { for (const id of FD().keepable) n += Number(G.sys.inventory?.count?.(FD().itemId(id))) || 0; } catch (e) { /* bag optional */ } return n; },
+    bagLimit() { return clamp(Math.round(Number(FD().rules.bagMax) || 30), 1, 40); },
     trapMinutes() { return clamp(Number(site('fishing.trap_minutes', FD().rules.trapMinutes)) || FD().rules.trapMinutes, 0.05, 240); },
 
     // ------------------------------------------------------------ traps (real time)
@@ -692,6 +697,7 @@
     _phase(name, extra) {
       const st = this.state;
       st.phase = name; st.t = 0;
+      if (name === 'land') st.shown = false;
       if (extra) Object.assign(st, extra);
       this._renderUi();
     },
@@ -699,8 +705,9 @@
     press(down) {
       const st = this.state;
       const d = down !== false;
+      // letting go always lets go — also when a card opened while the button was held
+      if (!d) { this._held = false; return st.phase !== 'idle'; }
       if (st.phase === 'idle' || st.phase === 'walk' || st.phase === 'card' || G.ui.modal.isOpen()) return false;
-      if (!d) { this._held = false; return true; }
       this._held = true;
       const R = FD().rules;
       switch (st.phase) {
@@ -722,14 +729,21 @@
       }
     },
     release() { return this.press(false); },
+    /** the keys of the big action: the player's own keys for "use" and "jump" (G.input.bindings, §18.2) and Enter */
+    _isActionKey(code) {
+      if (code === 'Enter' || code === 'NumpadEnter') return true;
+      const b = G.input?.bindings;
+      const use = b && Array.isArray(b.interact) ? b.interact : ['KeyE'], jump = b && Array.isArray(b.jump) ? b.jump : ['Space'];
+      return use.includes(code) || jump.includes(code);
+    },
     _key(e, down) {
       if (this.state.phase === 'idle' || this.state.phase === 'walk') return;
+      if (e.ctrlKey || e.altKey || e.metaKey || !this._isActionKey(e.code)) return;
+      if (!down) { this.press(false); return; }
       if (G.ui.modal.isOpen() || (G.util.isTyping && G.util.isTyping())) return;
-      if (e.code === 'Space' || e.code === 'KeyE' || e.code === 'Enter' || e.code === 'NumpadEnter') {
-        e.preventDefault(); e.stopPropagation();
-        if (down && e.repeat) return;
-        this.press(down);
-      }
+      e.preventDefault(); e.stopPropagation();
+      if (e.repeat) return;
+      this.press(true);
     },
     _hint(normal, kid, opts) {
       const text = easyOn() ? (kid || normal) : normal;
@@ -892,7 +906,9 @@
         const k = kst();
         if (f.day.key !== k.key) { f.day.key = k.key; f.day.kept = 0; }
         let got = 0;
-        try { got = G.sys.inventory?.add?.(F.itemId(id), 1, { source: 'fishing' }) || 0; } catch (e) { got = 0; }
+        // the rules once more at the moment of taking (the card may have stood open over midnight or a full basket)
+        const may = F.canKeep(sp, k.mo, k.d).ok && f.day.kept < this.keepLimit() && this.heldFish() < this.bagLimit();
+        try { got = may ? (G.sys.inventory?.add?.(F.itemId(id), 1, { source: 'fishing' }) || 0) : 0; } catch (e) { got = 0; }
         if (got > 0) {
           f.day.kept++; b.kept++;
           S.fishKept = (Number(S.fishKept) || 0) + 1;
@@ -900,7 +916,7 @@
           G.ui.toast(easyOn() ? `${josa(sp.name, '을/를')} 바구니에 담았어요.` : `${sp.name} 1마리를 가방에 담았어요. 부엌에서 익혀서 요리해요. (오늘 ${f.day.kept} / ${this.keepLimit()})`, { emoji: '🧺', type: 'success' });
         } else {
           b.rel++; S.fishReleased = (Number(S.fishReleased) || 0) + 1;
-          G.ui.toast('가방이 가득 차서 물로 돌려보냈어요.', { emoji: '🌊' });
+          G.ui.toast(may ? '가방이 가득 차서 물로 돌려보냈어요.' : '오늘은 더 데려갈 수 없어서 물로 돌려보냈어요.', { emoji: '🌊' });
           G.bus.emit('fish:released', { id, protected: !!sp.protected, mm });
         }
       } else {
@@ -949,13 +965,15 @@
       const k = kst();
       const can = F.canKeep(sp, k.mo, k.d);
       const limit = this.keepLimit(), kept = this.keptToday();
-      const full = can.ok && kept >= limit;
+      const held = this.heldFish(), bagFull = can.ok && held >= this.bagLimit();
+      const full = can.ok && (kept >= limit || bagFull);
       const spawning = sp.spawn.includes(k.mo);
       const cm = (mm / 10).toFixed(1);
       const eul = josa(sp.name, '을/를').slice(sp.name.length);
       let why = '';
       if (can.why === 'protected') why = sp.protected.kind === 'care' ? sp.protected.note : `${sp.protected.label}이에요. ${sp.protected.note} 눈으로 보고 바로 놓아줘요.`;
       else if (can.why === 'closed') why = `${sp.closed.say} 오늘은 놓아줘요.`;
+      else if (bagFull) why = `바구니에 물고기가 ${held}마리나 있어요. 부엌에서 요리해 먹고 나서 또 데려가요. 오늘은 놓아줘요.`;
       else if (full) why = `오늘은 먹을 만큼 데려갔어요 (${kept} / ${limit}마리). 이제는 놓아주기만 해요.`;
       const sayLine = `${sp.name}${eul} 만났어요! ${sp.kid} ${why || (spawning ? '지금은 알을 낳는 철이에요. 놓아주면 더 좋아요.' : '')}`.trim();
       return new Promise((resolve) => {
@@ -1106,9 +1124,11 @@
       act.addEventListener('contextmenu', (e) => e.preventDefault());
       // keyboard users: Enter / Space on the focused button are handled by the key listener of the session
       act.addEventListener('click', (e) => e.preventDefault());
-      root.append(top, hint, bar, act);
+      // the bar and the hint are one column (the hint sits under the bar whatever the bar's height is)
+      const head = h('div', { class: 'fish-head' }, top, hint);
+      root.append(head, bar, act);
       (document.getElementById('app') || document.body).appendChild(root);
-      this._ui = { root, top, chipSpot, chipCond, hint, bar, act, mark, prog, progFish, zone };
+      this._ui = { root, head, top, chipSpot, chipCond, hint, bar, act, mark, prog, progFish, zone };
     },
     _showUi(on) {
       const ui = this._ui;
@@ -1224,7 +1244,9 @@
           break;
         }
         case 'land': {
-          if (st.t < 0.05 && !g.fish && st.landKind === 'fish') {
+          // once per landing (a flag, not "the first 50 ms": a slow frame is longer than that and nobody saw the fish)
+          if (!st.shown && !g.fish && st.landKind === 'fish') {
+            st.shown = true;
             const sp = FD().byId[st.fish];
             try { g.fish = G.fishkit.build(st.fish, { length: clamp(st.mm / 1000 * 2.2, 0.22, 0.75), month: kst().mo }); if (g.fish) this._gearRoot.add(g.fish); } catch (e) { g.fish = null; }
             if (sp) this._splash(st.fx != null ? st.fx : r.wx, st.fz != null ? st.fz : r.wz, r.wy, true);
