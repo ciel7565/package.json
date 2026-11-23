@@ -7,6 +7,7 @@
 //     plane, the option switches, the effect cap, the texture sweep (anisotropy, size cap and back), and the
 //     screen-brightness block of the output pass — patched into three's real OutputPass, and its curve checked value
 //     by value against the screen watchdog's two thresholds (black < 6, white > 250).
+//   G.sys.camera (22-camera.js with the real three.js): the wide view's 70° and longer zoom-out.
 //   G.fx (66-fx.js with the real three.js): particle share, the effect distance from the character and the camera,
 //     what is left of the player's own effects.
 //   G.sys.display (67-display.js, its system part with a small fake DOM, a recording engine and the real options
@@ -281,6 +282,47 @@ function loadEngine(win = {}) {
   check('이펙트 투명화(자신): the double-jump sparkles thin out with it and are gone at the end (0 → none)', dj[0] > 0 && dj[1] > 0 && dj[1] <= dj[0] && dj[3] === 0 && dj[2] <= dj[1], J(dj));
   let upErr = null; try { for (let i = 0; i < 30; i++) { T.now += 16; for (const x of systems) if (x.update) x.update(1 / 60, T.now / 1000); } } catch (e) { upErr = e; }
   check('thirty frames of the effect module run without an error', upErr === null && errors.length === 0, upErr ? String(upErr.stack).split('\n').slice(0, 2).join(' | ') : errors.slice(0, 2).join(' | '));
+}
+
+// ----------------------------------------------------------------------------------------------- the camera with the wide view
+// The real 22-camera.js with the real three.js: 최대 시야 확장 opens the follow view from 55° to 70° and lets the wheel
+// zoom out to 30 m (easy mode 16 m); switched off while far out, the camera comes back inside the usual range.
+{
+  const camPage = (easy) => {
+    const camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.1, 3000), systems = [], Z = { zoom: 0 }, errors = [];
+    const G = { data: {}, sys: { engine: { camera, scene: new THREE.Scene(), renderer: { domElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1280, height: 720 }) } }, preset: { name: 'high' } },
+        player: { position: new THREE.Vector3(0, 0, 0), velocity: new THREE.Vector3(), yaw: 0, _ready: true, group: new THREE.Group() }, display: { wide: false } },
+      bus: { on: () => () => {}, emit() {} }, settings: { easyMode: easy, sensitivity: 1, lookSpeed: 1, invertY: false, cameraShake: true, reduceMotion: false }, state: {}, ready: true,
+      util: { clamp: (v, a, b) => Math.min(b, Math.max(a, v)), lerp: (a, b, t) => a + (b - a) * t, damp: (l, dt) => 1 - Math.exp(-l * dt),
+        angleDiff(a, b) { let d = (b - a) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; } },
+      register(x) { systems.push(x); G.sys[x.name] = x; }, log: { warn() {}, error(...a) { errors.push(a.map(String).join(' ')); }, info() {}, debug() {} },
+      ui: { isBlocking: () => false }, easy: { on: easy }, flags: {}, params: new URLSearchParams(''), world: new Proxy({ heightAt: () => 0, isWater: () => false, colliders: [] }, { get: (o, k) => (k in o ? o[k] : () => null) }),   // (flat dry ground, nothing in the way)
+      input: { consumeLook: () => ({ dx: 0, dy: 0 }), consumeZoom: () => { const z = Z.zoom; Z.zoom = 0; return z; }, gameplay: () => true, touchUI: false, isDown: () => false },
+      display: { WIDE_FOV: 70, WIDE_ZOOM: { normal: 30, easy: 16 } } };
+    const ctx = vm.createContext({ G, THREE, window: { innerWidth: 1280, innerHeight: 720, addEventListener() {}, matchMedia: () => ({ matches: false }) }, document: { body: { classList: { contains: () => false } }, getElementById: () => null, addEventListener() {} },
+      console, Math, Number, Object, Map, Set, WeakMap, Array, String, JSON, Promise, Error, RegExp, Infinity, NaN, Float32Array, URLSearchParams, performance: { now: () => 0 }, navigator: {}, setTimeout: () => 0, clearTimeout() {} });
+    vm.runInContext(fs.readFileSync(path.join(ROOT, 'src/game/22-camera.js'), 'utf8'), ctx, { filename: '22-camera.js' });
+    const C = G.sys.camera; if (C.init) C.init();
+    let t = 0;
+    const run = (frames, zoom = 0) => { for (let k = 0; k < frames; k++) { Z.zoom = zoom; t += 1 / 60; C.update(1 / 60, t); } return { fov: Math.round(camera.fov * 10) / 10, dist: Math.round(C.distance * 10) / 10 }; };
+    return { G, C, camera, run, errors };
+  };
+  let err = null, n, e;
+  try { n = camPage(false); e = camPage(true); } catch (x) { err = x; }
+  check('22-camera.js loads with the real three.js and follows the character', !err && n.C.mode === 'follow', err ? String(err.stack).split('\n').slice(0, 2).join(' | ') : '');
+  if (!err) try {
+    const base = n.run(120), out0 = n.run(400, 1);
+    n.G.sys.display.wide = true;
+    const wide = n.run(300), out1 = n.run(400, 1);
+    n.G.sys.display.wide = false;
+    const back = n.run(400);
+    check('최대 시야 확장 off: 55°, the wheel zooms out to 22 m', base.fov === 55 && out0.dist === 22, J([base, out0]));
+    check('최대 시야 확장 on: the view opens to 70°, the wheel zooms out to 30 m', wide.fov === 70 && wide.dist === 22 && out1.dist === 30 && out1.fov === 70, J([wide, out1]));
+    check('switched off while far out: back to 55° and inside 22 m', back.fov === 55 && back.dist === 22, J(back));
+    const eb = e.run(120), eo = e.run(400, 1); e.G.sys.display.wide = true; const ew = e.run(400, 1);
+    check('easy mode: 12.5 m, with the wide view 16 m and 70°', eo.dist === 12.5 && ew.dist === 16 && ew.fov === 70 && eb.fov === 55, J([eb, eo, ew]));
+    check('the camera reported no error', n.errors.length === 0 && e.errors.length === 0, n.errors.concat(e.errors).slice(0, 2).join(' | '));
+  } catch (x) { check('the camera runs its frames in this test', false, String(x.stack).split('\n').slice(0, 3).join(' | ')); }
 }
 
 // ----------------------------------------------------------------------------------------------- G.sys.display (system)
