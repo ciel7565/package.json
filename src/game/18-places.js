@@ -393,6 +393,8 @@
       // itself or asks its server and enters later) · exitTo(opts) -> { place, spawn } | { to } where its way out leads
       if (typeof d.canEnter === 'function') def.canEnter = d.canEnter;
       if (typeof d.exitTo === 'function') def.exitTo = d.exitTo;
+      // [finisher] the place's own water surface for wading (number or fn(x, z), world metres); none: no wading limit
+      if (typeof d.waterY === 'function' || fin(Number(d.waterY))) def.waterY = typeof d.waterY === 'function' ? d.waterY : Number(d.waterY);
       const old = defs.get(id);
       if (old) { zoneToPlace.delete(old.zoneId); if (cur && cur.def === old) this._leaveSync('redefine'); const L = live.get(id); if (L) { disposeBuilt(L); live.delete(id); } }
       defs.set(id, def);

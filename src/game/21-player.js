@@ -70,6 +70,19 @@
   const _t1 = new THREE.Vector3();
   /** would stepping to (x, z) (feet at y) take the walker below the wading limit lim? (a walker already clearly
    *  below it — never placed there by the game — may move level or climb out, not sink further) */
+  // [finisher] the water surface that limits wading here: the valley's river outside (layout.waterY); inside a place its
+  // own `waterY` (a number or fn(x, z) in world metres, −Infinity away from its water), none for a place without one. The
+  // valley's −1.1 used to hold everywhere: the bowl of 만장대 단지's jar circle lies below −1.28, so nobody could walk
+  // (or be routed) down its aisles to the centre plaza.
+  function waterYAt(x, z) {
+    const P = G.sys.places, cur = P && P.current;
+    if (cur) {
+      const d = typeof P.def === 'function' ? P.def(cur) : null, w = d && d.waterY;
+      const v = typeof w === 'function' ? Number(w(x, z)) : Number(w);
+      return fin(v) ? v : -Infinity;
+    }
+    return G.data.layout?.waterY ?? -1.1;
+  }
   function tooDeep(x, z, y, lim) { const gn = G.world.heightAt(x, z, y + 0.05); return gn < lim && gn < (y < lim - 0.02 ? y : lim) - 1e-4; }
   const _fallbackBasis = { forward: new THREE.Vector3(0, 0, -1), right: new THREE.Vector3(1, 0, 0) };
 
@@ -130,7 +143,7 @@
     const W = G.world;
     const y = W.heightAt(x, z, y0 + 0.05);
     if (!fin(y)) return NaN;
-    const wy = G.data.layout?.waterY ?? -1.1;
+    const wy = waterYAt(x, z); // [finisher] per place
     if (y < wy - WADE_DEPTH) return NaN;
     const rise = y - y0;
     if (rise > 0.02) {
@@ -168,7 +181,7 @@
    * plan from (sx, sz, feet sy) to (tx, tz). Returns [{x,z}, ...] (first point = start) or null.
    * goalR: any cell within this radius of the target counts as arrival (targets inside props / NPCs).
    */
-  function planPath(sx, sz, sy, tx, tz, goalR) {
+  function planPath(sx, sz, sy, tx, tz, goalR, margin = NAV.margin) { // [finisher] margin: see planRoute
     if (!fin(sx) || !fin(sz) || !fin(sy) || !fin(tx) || !fin(tz)) return null;
     goalR = fin(goalR) ? Math.max(0.5, goalR) : 1;
     // straight line clear up to where the walker stops (targets are often inside a prop / an NPC)
@@ -179,8 +192,9 @@
     }
     const W = G.world, b = W.bounds;
     let cell = NAV.cell;
-    let x0 = Math.min(sx, tx) - NAV.margin, x1 = Math.max(sx, tx) + NAV.margin;
-    let z0 = Math.min(sz, tz) - NAV.margin, z1 = Math.max(sz, tz) + NAV.margin;
+    const mx = Array.isArray(margin) ? margin[0] : margin, mz = Array.isArray(margin) ? margin[1] : margin;
+    let x0 = Math.min(sx, tx) - mx, x1 = Math.max(sx, tx) + mx;
+    let z0 = Math.min(sz, tz) - mz, z1 = Math.max(sz, tz) + mz;
     x0 = Math.max(x0, b.minX); z0 = Math.max(z0, b.minZ); x1 = Math.min(x1, b.maxX); z1 = Math.min(z1, b.maxZ);
     const span = Math.max(x1 - x0, z1 - z0);
     if (span / cell > NAV.fineSide) cell = span / NAV.fineSide; // big detours plan on a coarser grid (bounded cost)
@@ -409,7 +423,19 @@
         return append(out, leg(exit.x, exit.z, ey, tx, tz, goalR));
       }
     }
-    return planPath(sx, sz, sy, tx, tz, goalR);
+    // [finisher] the search box is the start / target rectangle + 14 m: a trip whose only way out leaves that box (a long
+    // north–south walk out of a yard between two storehouse rows whose openings lie at their far ends) found nothing and
+    // fell back to a straight line into the wall. One retry with the narrow side of the box widened to the long one (the
+    // cell size, set by the long side, stays the same; the same expansion budget).
+    const p = planPath(sx, sz, sy, tx, tz, goalR), partial = lastPlanPartial;
+    if (p && !partial) return p;
+    const ex = Math.abs(tx - sx), ez = Math.abs(tz - sz), wide = [NAV.margin + Math.max(0, (ez - ex) / 2), NAV.margin + Math.max(0, (ex - ez) / 2)];
+    if (Math.abs(ex - ez) < 8) { lastPlanPartial = partial; return p; }
+    lastPlanPartial = false;
+    const q = planPath(sx, sz, sy, tx, tz, goalR, wide);
+    if (q && !lastPlanPartial) return q;
+    if (p) { lastPlanPartial = partial; return p; }
+    return q;
   }
 
   // =========================================================================== route trail (easy mode)
@@ -1071,7 +1097,7 @@
       const W = G.world;
       if (!fin(x) || !fin(z)) return null;
       if (!fin(y)) y = 0;
-      const deep = (G.data.layout?.waterY ?? -1.1) - WADE_DEPTH;
+      const deep = waterYAt(x, z) - WADE_DEPTH; // [finisher] per place
       const ok = (px, pz, fy) => { const gy = W.heightAt(px, pz, fy + 0.3); return fin(gy) && gy >= deep && !W.blocked(px, pz, RADIUS * 0.9, gy); };
       if (ok(x, z, y)) return { x, z };
       for (let r = 0.75; r <= 8; r += 0.75) {
@@ -1090,7 +1116,7 @@
       const W = G.world, p = this.position;
       if (!fin(tx) || !fin(tz)) return false;
       if (W.isWater(tx, tz)) return false;
-      const wy = G.data.layout?.waterY ?? -1.1;
+      const wy = waterYAt(tx, tz); // [finisher] per place
       // shallow banks below the water surface: ankle-deep wading only, climbing out is always allowed. The limit is
       // fixed (not "a little below the current feet"): a per-step tolerance adds up, step after step, until the
       // walker stands knee-deep. Checked for the target and again for the spot the colliders push the walker to.
@@ -1367,7 +1393,7 @@
         this._steps = this.rig.steps;
         if (this._stepT >= 0.075) {
           this._stepT = 0;
-          this._stepOpts.surface = p.y < (G.data.layout?.waterY ?? -1.1) - 0.02 ? 'water' : W.surfaceAt(p.x, p.z);
+          this._stepOpts.surface = p.y < waterYAt(p.x, p.z) - 0.02 ? 'water' : W.surfaceAt(p.x, p.z);
           this._stepOpts.run = hs > RUN_STEP * mv;
           G.sfx('step', this._stepOpts);
         }

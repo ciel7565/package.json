@@ -1517,6 +1517,7 @@ const CX = (G.complexParts = G.complexParts || { list: [], add(name, fn, order) 
       id: ID, name: '만장대 단지', kidName: '만 개의 장독대', emoji: '🏺', zoneId: 'ZONE_PL_ALLOT', color: '#c98d4f',
       desc: '항아리 1만 개가 둥글게 놓인 장독대 단지예요. 셔틀버스를 타고 가요.',
       origin: { x: ORIGIN.x, z: ORIGIN.z },
+      waterY: (x, z) => C.waterY(x - ORIGIN.x, z - ORIGIN.z), // [finisher] the district's own river (the valley's −1.1 does not hold here)
       size: { w: B.maxX - B.minX, d: B.maxZ - B.minZ, h: 120 },
       bounds: { minX: B.minX, maxX: B.maxX, minZ: B.minZ, maxZ: B.maxZ },         // [complex-ground] local, not centred
       margin: 0,
