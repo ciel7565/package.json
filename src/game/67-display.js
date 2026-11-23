@@ -190,7 +190,8 @@
         this._fsBusy = true;
         this.enterFullscreen().then((r) => {
           this._fsBusy = false;
-          this._fsWish = r !== 'ok' && r !== 'unsupported' && this.get('windowMode') === 'fullscreen';
+          if (this._fsOn() !== this.fullscreen) this._onFsChange();
+          this._fsWish = r !== 'ok' && r !== 'unsupported' && !this._fsOn() && this.get('windowMode') === 'fullscreen';
           if (r === 'unsupported' && !this._fsToldNo) { this._fsToldNo = true; G.ui?.toast?.('이 브라우저는 전체 화면을 지원하지 않아요.', { type: 'info' }); }
           this._chipSync();
         });
@@ -455,7 +456,11 @@
         if (k !== this._zoomK) { this._zoomK = k; eng.setView({ fog: this._viewBase.fog * (1 - 0.06 * k) }); }
       }
       this._chipT = (this._chipT || 0) + dt;
-      if (this._chipT > 0.5) { this._chipT = 0; if (this._fsWish || (this._fsChip && !this._fsChip.hidden)) this._chipSync(); }
+      if (this._chipT > 0.5) {
+        this._chipT = 0;
+        if (this._fsOn() !== this.fullscreen) this._onFsChange();   // (a fullscreenchange this browser did not deliver)
+        if (this._fsWish || (this._fsChip && !this._fsChip.hidden)) this._chipSync();
+      }
     },
   };
   G.register(display);
