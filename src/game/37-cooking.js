@@ -963,9 +963,10 @@
     const dx = sw.work.x - sw.stand.x, dz = sw.work.z - sw.stand.z;
     try { P?.teleport?.(sw.stand.x, sw.stand.z, Math.atan2(dx, dz), { fade: false, silent: true }); } catch (e) { /* player optional */ }
     session.cam = { look: sw.work.clone(), pos: new THREE.Vector3(sw.stand.x - dx * 0.25, sw.work.y + 0.95, sw.stand.z - dz * 0.25 + 0.0) };
-    // the camera sits behind and above the player's shoulder, looking down at the food
-    const len = Math.hypot(dx, dz) || 1;
-    session.cam.pos.set(sw.stand.x - (dx / len) * 0.9 + (dz / len) * 0.45, sw.work.y + 1.05, sw.stand.z - (dz / len) * 0.9 - (dx / len) * 0.45);
+    // the camera stands beside the station (not behind the child, whose back would fill the view), a little higher
+    // than the food and looking down at it; the child stays at the edge of the picture
+    const len = Math.hypot(dx, dz) || 1, ux = dx / len, uz = dz / len, px = -uz, pz = ux;
+    session.cam.pos.set(sw.work.x - ux * 0.5 + px * 1.0, sw.work.y + 0.95, sw.work.z - uz * 0.5 + pz * 1.0);
   }
   const fireList = () => [...(room ? Object.values(room.fires) : []), ...(river ? [river.fire] : [])];
   function fireFor(stationId) {

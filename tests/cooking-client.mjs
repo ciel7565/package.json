@@ -98,7 +98,7 @@ async function cook(opts = {}) {
       shotAt.delete(actions[i]);
       // run up to this step, then into it a little (the food shows the step's change), then the picture
       log.push(...await ev((i) => window.G.sys.cooking.test.autoplay(900, { stopAt: i }), i));
-      await ev(() => window.G.sys.cooking.test.tick(['grill', 'fry', 'boil', 'steam'].includes(window.G.sys.cooking.state?.action) ? 6 : 1.5));
+      await ev(() => { const C = window.G.sys.cooking; C.timeScale = 1; const a = C.state?.action; if (C.state?.mode === 'hold' || C.state?.mode === 'fire') C.test.down(); C.test.tick(['grill', 'fry', 'boil', 'steam'].includes(a) ? 7 : a === 'fire' ? 1.8 : 2); });
       await shot(`${opts.shot}-${String(i).padStart(2, '0')}-${actions[i]}`);
     }
   }
@@ -146,7 +146,7 @@ try {
     check('cooking starts in the 부엌', started === true);
     const dock = await ev(() => { const d = document.querySelector('.cook-dock'); const b = d?.querySelector('.cook-big'); const r = b?.getBoundingClientRect(); return d ? { big: r ? [Math.round(r.width), Math.round(r.height)] : null, say: !!d.querySelector('[data-say]'), stop: !!d.querySelector('.cook-stop'), inputs: d.querySelectorAll('input, textarea').length } : null; });
     check('the cooking card is up with a big button, a way out and voice lines, no typing', dock && dock.stop && dock.say && dock.inputs === 0 && dock.big && dock.big[0] >= 56 && dock.big[1] >= 56, dock);
-    const ptr = await ev(() => { const b = document.querySelector('.cook-big'); const o = { pointerId: 1, bubbles: true, isPrimary: true }; b.dispatchEvent(new PointerEvent('pointerdown', o)); const down = window.G.sys.cooking.state.hold; window.G.sys.cooking.test.tick(1); const p = window.G.sys.cooking.state.progress; b.dispatchEvent(new PointerEvent('pointerup', o)); return { down, p, up: window.G.sys.cooking.state.hold }; });
+    const ptr = await ev(() => { const b = document.querySelector('.cook-big'); const o = { pointerId: 1, bubbles: true, isPrimary: true }; b.dispatchEvent(new PointerEvent('pointerdown', o)); const down = window.G.sys.cooking.state.hold; window.G.sys.cooking.timeScale = 1; window.G.sys.cooking.test.tick(0.5); const p = window.G.sys.cooking.state.progress; b.dispatchEvent(new PointerEvent('pointerup', o)); return { down, p, up: window.G.sys.cooking.state.hold }; });
     check('the big button holds while pressed and lets go (a real pointer on the card)', ptr.down === true && ptr.up === false && ptr.p > 0, ptr);
     const midFish = await ev(() => window.G.sys.inventory.count(window.G.data.cooking.fishFor('trout')[0].itemId));
     check('the fish stays in the bag while cooking (taken only when served)', midFish === 2, midFish);
