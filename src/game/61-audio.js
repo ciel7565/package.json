@@ -479,6 +479,7 @@
     levelup: 0.5, levelUp: 0.5, festival: 0.45, achievement: 0.27, harvest: 0.39, plant: 0.32, craft: 0.41, shutter: 0.66, jump2: 0.34, chat: 0.44,
     emote: 0.25, teleport: 0.25, correct: 0.34, sparkle: 0.4, stamp: 0.45, pop: 0.34, unlock: 0.45, lock: 0.6, pickup: 0.6,
     land_wood: 0.5, land_earth: 0.5, land_stone: 0.8,
+    water: 0.85, step: 1.25, drip: 1.3, // [finisher] water was louder than before (peak 0.105 vs 0.082); step / drip under the audible floor (peak 0.009 / 0.008)
   };
   // [cooking] the kitchen (37-cooking.js, CONTRACT §18.4): soft, short, never harsh — called every ~0.5–1 s while a step runs
   SFX.boil = (S, t) => { let e = t; for (let i = 0; i < 4; i++) e = Math.max(e, tone(S, { type: 'sine', f: rand(180, 420), f2: rand(500, 900), glide: 0.04, t: t + i * rand(0.08, 0.2), a: 0.004, d: 0.06, g: 0.05 })); noise(S, { kind: 'brown', ft: 'lowpass', f: 380, q: 0.7, t, a: 0.08, d: 0.5, g: 0.05 }); return e; };
@@ -1689,7 +1690,9 @@
     async renderInstrument(name, opts = {}) {
       const L = GK(), O = OAC();
       if (!L || !O || !L.INST[name]) return null;
-      const sr = opts.sr || 32000, secs = opts.seconds || 6;
+      // [finisher] long enough for every scheduled note to stop (the 9 s 징, the rings of the plucked strings): a source
+      // that stops after the end of an offline render never fires `ended` and read as a leak
+      const sr = opts.sr || 32000, secs = opts.seconds || (name === 'jing' ? 12 : 9);
       const oac = new O(2, Math.ceil(sr * secs), sr);
       const m = buildMaster(oac, oac.destination);
       const bus = gainNode(oac, (opts.bus ?? 0.28) * BASE.music); bus.connect(m.input);
@@ -1702,7 +1705,7 @@
       else if (name === 'bak' || name === 'moktak' || name === 'pungkyeong') for (let i = 0; i < 4; i++) { L.INST[name](K, t, { vel: 0.6, f: name === 'pungkyeong' ? 1650 : undefined }); t += name === 'pungkyeong' ? 1.2 : 0.6; }
       else for (const d of [0, 1, 2, 3, 4, 3, 2, 0]) { const f = L.freq('pyeong', base, d + (name === 'geomungo' || name === 'ajaeng' ? 0 : 5)); L.INST[name](K, t, { f, dur: 0.55, vel: 0.65, vib: 22 }); t += 0.6; }
       const rb = await oac.startRendering();
-      await new Promise((res) => setTimeout(res, 120));   // let the ended events arrive
+      await new Promise((res) => setTimeout(res, 500));   // let the ended events arrive ([finisher] 120 ms was short on a loaded machine)
       return { name, ...measure(rb), made: K.made, live: K.live, wav: opts.wav ? toB64Int16(rb) : undefined };
     },
     /** one 장단 played on its drum for `cycles` cycles */
