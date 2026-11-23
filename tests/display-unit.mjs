@@ -193,10 +193,14 @@ function loadEngine(win = {}) {
   E.scene.add(m1, m2);
   const s1 = { ...E.setTextureQuality({ aniso: 1, cap: 256 }) };
   check('텍스쳐 낮음: every map gets anisotropy 1; the pack\'s 512 px maps are swapped for 256 px copies; signs and undecoded maps keep their image', packT.anisotropy === 1 && board.anisotropy === 1 && packT.image.width === 256 && packT.image.small === true && uni.image.width === 256 && smallT.image.width === 256 && !smallT.image.small && board.image.width === 1024 && waiting.image.width === 1 && s1.capped === 2 && s1.seen === 5, J(s1));
+  // a module that writes .anisotropy again later (a redrawn face, a label) cannot slip past the cap; the authored value comes back at 높음
+  board.anisotropy = 8;
+  const late = board.anisotropy;
+  check('텍스쳐 낮음: a later write of .anisotropy (8) still reads as the cap (1)', late === 1, String(late));
   const s2 = { ...E.setTextureQuality({ aniso: 4, cap: 384 }) };
   check('텍스쳐 보통: anisotropy up to 4, 384 px copies (made from the full image, not from the small one)', packT.anisotropy === 4 && smallT.anisotropy === 4 && packT.image.width === 384 && uni.image.width === 384, J(s2));
   const s3 = { ...E.setTextureQuality({ aniso: 16, cap: 0 }) };
-  check('텍스쳐 높음: the full images and the authored anisotropy are back — no restart', packT.anisotropy === 8 && board.anisotropy === 4 && packT.image.width === 512 && !packT.image.small && uni.image.width === 512 && packT.userData._full === null, J(s3));
+  check('텍스쳐 높음: the full images and the authored anisotropy are back (the sign\'s later 8 too) — no restart', packT.anisotropy === 8 && board.anisotropy === 8 && packT.image.width === 512 && !packT.image.small && uni.image.width === 512 && packT.userData._full === null, J(s3));
   check('nothing to do the second time (a sweep changes only what differs)', E.setTextureQuality({ aniso: 16, cap: 0 }).changed === 0);
   // ---- the summary
   const I = E.displayInfo;

@@ -3291,10 +3291,19 @@
         seen.add(tex);
         if (tex.isRenderTargetTexture || tex.isDepthTexture || tex.isFramebufferTexture) return;
         const ud = tex.userData || (tex.userData = {});
-        if (ud._aniso0 == null) ud._aniso0 = tex.anisotropy || 1;
-        const an = Math.min(ud._aniso0, T.aniso);
+        // the cap lives in the texture itself: a module that writes .anisotropy again later (a redrawn face, a label) sets
+        // the authored value; reading gives min(authored, cap) — so a later write cannot slip past 텍스쳐 퀄리티
+        if (!ud._anisoHook) {
+          let raw = tex.anisotropy || 1;
+          try {
+            Object.defineProperty(tex, 'anisotropy', { configurable: true, enumerable: true, get: () => Math.min(raw, T.aniso), set: (v) => { raw = Number(v) || 1; } });
+            ud._anisoHook = true; ud._aniso0 = raw; ud._anEff = raw; ud._anisoGet = () => raw;   // (_anEff: what the GPU copy has)
+          } catch (e) { if (ud._aniso0 == null) ud._aniso0 = raw; }
+        }
         let touch = false;
-        if (tex.anisotropy !== an) { tex.anisotropy = an; touch = true; }
+        const an = ud._anisoHook ? tex.anisotropy : Math.min(ud._aniso0, T.aniso);
+        if (ud._anisoHook) { if (ud._anEff !== an) { ud._anEff = an; touch = true; } }
+        else if (tex.anisotropy !== an) { tex.anisotropy = an; touch = true; }
         // the size cap: only decoded maps of the pack (their full image is kept, so it comes back when the cap goes)
         if (ud.pack && ud.pack.ready && !ud.pack.failed && !tex.isDataTexture && !tex.isCompressedTexture && !tex.isCubeTexture) {
           const full = ud._full || tex.image, fw = full ? (full.width | 0) : 0, fh = full ? (full.height | 0) : 0;
