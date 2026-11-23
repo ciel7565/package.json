@@ -477,6 +477,7 @@ const DEFS = {
   allot:      { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.7: the allotment matrix + its IDOR check (own account budget)
   sync:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.9 [scale-server]: the sync matrix and token checks (own account budget)
   room:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §17.4 [myroom]: the room matrix, its IDOR check and the operator's grant (own account budget)
+  pay:        { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // [finisher] S15 payments (own account budget: 'val' ran out of its 60 registrations an hour per address)
   // attackers arrive through a trusted proxy (one address each). force_https is off: these instances exercise the
   // attack-logging / install / admin-IP behaviour over plain http — HTTPS forcing is tested on its own instances
   // ('https', 'httpsproxy', 'main', 'prod'). With a trusted proxy configured, force_https=auto would (correctly) treat
@@ -2032,7 +2033,7 @@ async function S05() {
   await check('S05', 'a tampered payment amount is written to security_events (payment_tamper)', { sev: 'high', fix: EV_FIX }, async () => {
     const ip = '203.0.113.124';
     const u = await newUser(s, 'Pay', { xff: ip });
-    const o = await u.json('api/sub/prepare.php', { tier: 4, kind: 'card' });
+    const o = await u.json('api/sub/prepare.php', { tier: 3, kind: 'card' }); // [finisher] 3: tier 4 is not on sale by default (§17.2 sub.tiers_on [2, 3])
     assert(o.status === 200 && o.data, `prepare → ${o.status} ${(o.error && o.error.code) || ''}`);
     return logged(['payment_tamper'], ip, () => u.json('api/sub/confirm.php', { paymentKey: 'mock_' + o.data.orderId, orderId: o.data.orderId, amount: 100 }));
   });
@@ -3600,7 +3601,7 @@ async function S14() {
 // =============================================================================
 async function S15() {
   if (!want('S15')) return;
-  const s = await srv('val');
+  const s = await srv('pay'); // [finisher] own instance (was 'val', whose registration budget the phase 9 checks use up)
   const tierOf = async (c) => (await c.req('api/auth/me.php')).data.sub.tier;
   const order = async (c, tier = 2, kind = 'card') => { const p = await c.json('api/sub/prepare.php', { tier, kind }); assert(p.status === 200 && p.data && p.data.orderId, `prepare → ${p.status} ${(p.error && p.error.code) || ''} (mock payments are needed)`); return p.data; };
   const confirm = (c, o, amount, key = 'mock_' + o.orderId) => c.json('api/sub/confirm.php', { paymentKey: key, orderId: o.orderId, amount });
@@ -3609,11 +3610,12 @@ async function S15() {
   // CONTRACT §15.7 #15 — the order amount is created from the server's tier table
   await check('S15', 'prepare: the amount comes from the server\'s tier table — a price sent by the client is ignored or refused', { sev: 'high', fix: FIX }, async () => {
     const u = await newUser(s, 'Prc');
-    const r = await u.json('api/sub/prepare.php', { tier: 4, kind: 'card', amount: 1, price: 1, orderName: 'free', customerKey: 'cus_' + 'ab'.repeat(16) });
+    // [finisher] tier 3: tier 4 is not on sale by default (§17.2), so an order for it is refused before the price logic runs
+    const r = await u.json('api/sub/prepare.php', { tier: 3, kind: 'card', amount: 1, price: 1, orderName: 'free', customerKey: 'cus_' + 'ab'.repeat(16) });
     if (r.status >= 400 && r.status < 500) return `refused (${r.status} ${r.error.code})`;
-    assert(r.status === 200 && r.data.amount === prices[4] && r.data.tier === 4, `order amount ${r.data && r.data.amount} (the tier costs ${prices[4]})`);
+    assert(r.status === 200 && r.data.amount === prices[3] && r.data.tier === 3, `order amount ${r.data && r.data.amount} (the tier costs ${prices[3]})`);
     assert(r.data.customerKey !== 'cus_' + 'ab'.repeat(16), 'the client chose the customerKey');
-    return `tier 4 → ₩${r.data.amount} (the client's ₩1 is ignored)`;
+    return `tier 3 → ₩${r.data.amount} (the client's ₩1 is ignored)`;
   });
   // CONTRACT §15.7 #15 — the confirmation must match it exactly
   await check('S15', 'confirm: a tampered amount (lower, 0, negative, higher) is refused and the tier stays 1; the exact amount then works', { sev: 'high', fix: FIX }, async () => {
@@ -3647,15 +3649,15 @@ async function S15() {
   // CONTRACT §15.7 #15 — foreign / replayed orders refused
   await check('S15', 'confirm: another account\'s order is refused, the owner can still pay it', { sev: 'high', fix: FIX }, async () => {
     const owner = await newUser(s, 'Own'), thief = await newUser(s, 'Thf');
-    const o = await order(owner, 4);
+    const o = await order(owner, 3); // [finisher] 3: tier 4 is not on sale by default (§17.2)
     const r = await confirm(thief, o, o.amount);
     assert([403, 404].includes(r.status), `foreign order → ${r.status}`);
     const b = await thief.json('api/sub/billing-issue.php', { authKey: 'mock_auth_ok', customerKey: o.customerKey, orderId: o.orderId });
     assert(isCleanError(b), `foreign order through billing-issue → ${b.status}`);
     assert(await tierOf(thief) === 1 && await tierOf(owner) === 1, 'a tier changed');
     const ok = await confirm(owner, o, o.amount);
-    assert(ok.status === 200 && ok.data.sub.tier === 4, `the owner → ${ok.status}`);
-    return `thief ${r.status} / ${b.status}; owner → tier 4`;
+    assert(ok.status === 200 && ok.data.sub.tier === 3, `the owner → ${ok.status}`);
+    return `thief ${r.status} / ${b.status}; owner → tier 3`;
   });
   await check('S15', 'confirm: replaying a confirmed order is refused and does not extend the period', { sev: 'high', fix: FIX }, async () => {
     const u = await newUser(s, 'Rpl');
@@ -3692,7 +3694,7 @@ async function S15() {
   // CONTRACT §15.7 #15 — webhook re-fetched and never raises a tier
   await check('S15', 'webhook: forged events can never raise a tier', { sev: 'high', fix: 'Keep Subscription::webhook(): verify, record, only downgrade.' }, async () => {
     const u = await newUser(s, 'Whk');
-    const o = await order(u, 4);
+    const o = await order(u, 3); // [finisher] 3: tier 4 is not on sale by default (§17.2); the forged events still claim 4
     const hook = new Client(s);
     for (const body of [
       { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_' + o.orderId, orderId: o.orderId, status: 'DONE', totalAmount: o.amount, tier: 4 } },
@@ -3705,7 +3707,7 @@ async function S15() {
       assert(await tierOf(u) === 1, `the webhook raised the tier: ${JSON.stringify(body).slice(0, 80)}`);
     }
     const paid = await confirm(u, o, o.amount);
-    assert(paid.status === 200 && paid.data.sub.tier === 4, `confirm → ${paid.status}`);
+    assert(paid.status === 200 && paid.data.sub.tier === 3, `confirm → ${paid.status}`);
     const o2 = await order(await newUser(s, 'Whk'), 2);
     await hook.json(WEBHOOK, { eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey: 'mock_' + o2.orderId, orderId: o2.orderId, status: 'DONE' } }, { csrf: false });
     assert(dbQuery(s, 'SELECT status FROM orders WHERE order_id = ?', [o2.orderId])[0].status === 'created', 'a DONE webhook confirmed an unpaid order');
@@ -3721,6 +3723,7 @@ async function S15() {
     assert(g.data.save.data.sub.tier === 1 && g.data.sub.tier === 1 && await tierOf(u) === 1, 'the forged tier is served back');
     return 'stored and served as tier 1';
   });
+  await stopServer('pay'); // [finisher] frees its port for the instances that follow
 }
 
 // =============================================================================
