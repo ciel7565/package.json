@@ -123,5 +123,40 @@
     "file": "server/lib/Sync.php",
     "snippet": "'INSERT INTO presence (user_id, nickname, x, y, z, rot_y, anim, speed, zone_id, emote, emote_at, appearance, updated_at) VALUES ' . implode(', ', array_fill(0, count($rows), '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)'))",
     "reason": "Sync::flush() [scale-server, CONTRACT §16.9]: the write-behind presence upsert. The statement text is made of literals only; the one varying part is how many '(?, …)' placeholder groups follow VALUES (one per row, array_fill of a literal). Every value is bound."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "FROM support_messages WHERE ticket_id IN (' . $marks . ') ORDER BY ticket_id, id'",
+    "reason": "Support::threads() [support, CONTRACT §18.1]: $marks is implode of array_fill of the literal '?' (one per ticket id); the ids are bound (intval'd)."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "FROM support_tickets WHERE user_id = ? AND id < ? ORDER BY id DESC LIMIT ' .($limit + 1)",
+    "reason": "Support::mine(): $limit is an int clamped to 1…50 by max/min; the account id and the keyset bound are bound."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "' WHERE ' . implode(' AND ', $w)",
+    "reason": "Support::where(): every $w entry is a literal condition ('status = ?', 'kind = ?', \"status IN ('new', 'open')\", '(id = ? OR user_id = ?)', 'user_id = ?'); every value is bound in $p."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "FROM support_tickets' . $where . ' ORDER BY id DESC LIMIT ' .($limit + 1)",
+    "reason": "Support::page(): $where comes from Support::where() (literal conditions, values bound) plus the literal ' AND id < ?'; $limit is an int clamped to 1…200."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "'SELECT id, nickname FROM users WHERE id IN (' . implode(', ', array_fill(0, count($chunk), '?')) . ')'",
+    "reason": "Support::nicknames(): placeholders only (array_fill of '?'); the ids are bound (intval'd, positive)."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "WHERE status = 'closed' AND updated_at < ? ORDER BY updated_at LIMIT ' . $max",
+    "reason": "Support::cleanup(): $max is an int clamped to 1…5000; the cut-off time is bound."
+  },
+  {
+    "file": "server/lib/Support.php",
+    "snippet": "WHERE status = ? AND updated_at < ? ORDER BY updated_at LIMIT ' .($max- count($rows))",
+    "reason": "Support::cleanup(): an int (the clamped $max minus the rows already found, > 0 inside the loop); status and time are bound."
   }
 ]

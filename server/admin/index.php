@@ -30,6 +30,7 @@ require __DIR__ . '/../lib/bootstrap.php';
 
 use Tfm\AdminAllot;
 use Tfm\AdminLecture; // [lecture]
+use Tfm\AdminSupport; // [support]
 use Tfm\AdminSettings; // [entitle]
 use Tfm\AdminGate;
 use Tfm\AdminOps;
@@ -86,6 +87,7 @@ const TABS = [
     'sub' => ['⚡', '구독·결제'],
     'settings' => ['⚙️', '설정'], // [entitle] CONTRACT §17.2
     'moderation' => ['🚨', '신고·채팅'],
+    'support' => ['📮', '신고·문의'], // [support] CONTRACT §18.1
     'security' => ['🛡️', '보안'],
     'twofa' => ['🔐', '2단계 인증'],
     'account' => ['🔐', '내 계정'], // [entitle] CONTRACT §17.2
@@ -108,6 +110,7 @@ const KIND_KO = [
     'probe_sqli' => 'SQL 주입 시도', 'probe_xss' => '스크립트 심기(XSS) 시도', 'probe_traversal' => '폴더 거슬러 오르기 시도', 'honeypot' => '함정 주소 방문(스캐너)',
     'payment_tamper' => '결제 금액 조작 시도', 'upload_rejected' => '허용되지 않은 파일 올리기', 'save_rejected' => '거부된 저장', 'https_required' => '보안 연결(HTTPS) 아닌 요청',
     'ip_blocked' => '차단된 주소의 접속', 'ai_abuse' => 'AI 도우미 남용', 'auto_block' => '자동 차단',
+    'support_abuse' => '신고·문의 한도 넘김', 'support_idor' => '남의 신고·문의를 열려는 시도', // [support]
 ];
 const SINCE = ['1h' => [3600, '1시간'], '24h' => [86400, '24시간'], '7d' => [604800, '7일'], '30d' => [2592000, '30일'], '90d' => [7776000, '90일']];
 /** rows per page of the farm lists */
@@ -333,6 +336,45 @@ function doLecture(Ctx $c, string $action): string
     return (string) $r['msg'];
 }
 
+/** [support] 📮 신고·문의 (CONTRACT §18.1): lib/AdminSupport.php (the view and the actions) is loaded on first use */
+function supportReady(): bool
+{
+    static $ok = null;
+    if ($ok === null) $ok = is_file(__DIR__ . '/../lib/AdminSupport.php') && class_exists('Tfm\Support') && class_exists('Tfm\AdminSupport');
+    return $ok;
+}
+
+/** [support] one `support_*` action (AdminSupport::action does the work); the 303 goes back to the list / ticket the form came from */
+function doSupport(Ctx $c, string $action): string
+{
+    if (!supportReady()) throw new ApiException(503, 'NOT_READY', '신고·문의 기능이 아직 준비 중이에요.');
+    $place = AdminSupport::back($_POST);
+    try {
+        $r = AdminSupport::action($action, $c, $_POST);
+    } catch (ApiException $e) {
+        $id = isset($_POST['id']) && is_string($_POST['id']) && ctype_digit($_POST['id']) && strlen($_POST['id']) <= 12 ? (int) $_POST['id'] : 0;
+        backExtra($place + ($id > 0 ? ['t' => $id] : []));
+        throw $e;
+    }
+    backExtra(array_filter($r['back'] + $place, function ($v) { return $v !== null; }));
+    return (string) $r['msg'];
+}
+
+/**
+ * [support] GET ./?supshot=<ticket id>: the picture of a report for the tab, streamed by this entry after ITS OWN check
+ * (the elevated administrator only; it does not extend the idle time). Everybody else and every bad id get the plain
+ * 404 of a missing page. The answer: image/jpeg, nosniff, no-store, a sandbox CSP.
+ */
+function serveSupport(Ctx $c): void
+{
+    if (AdminGate::expired() || !AdminGate::check($c->user, true, false) || !supportReady()) AdminGate::notFound();
+    try {
+        AdminSupport::serve((array) $c->user, getStr('supshot'));
+    } catch (ApiException $e) {
+        AdminGate::notFound();
+    }
+}
+
 /**
  * [lecture] GET ./?lecfile=<lecture id>.<n>: a stored lecture file for the tab's preview, streamed by this entry after
  * ITS OWN check (the elevated administrator only; it does not extend the idle time). Everybody else and every bad id
@@ -464,6 +506,10 @@ function handlePost(Ctx $c)
             // 🏠 내 방 (CONTRACT §17.4) [myroom]: the operator gives an account a room of its own, or takes that back
             case 'room_grant': case 'room_revoke':
                 $msg = doRoom($admin, $uid, $action === 'room_grant'); break;
+            // 📮 신고·문의 (CONTRACT §18.1) [support]: the work is lib/AdminSupport.php; the labels stay here for tests/admin-lock.mjs
+            case 'support_answer': case 'support_status': case 'support_delete': case 'support_delete_many':
+            case 'support_cleanup': case 'support_settings': case 'support_export':
+                $msg = doSupport($c, $action); break;
             default: throw new ApiException(400, 'UNKNOWN_ACTION', '알 수 없는 작업이에요.');
         }
         flash('ok', $msg);
@@ -1021,6 +1067,7 @@ function viewOverview(): string
         foreach (SecEvent::counts(Clock::startOfDayMs()) as $n) $sec += (int) $n;
         $tiles[] = ['🛡️', '오늘 보안 기록', $sec];
     }
+    if (supportReady()) { try { $tiles[] = ['📮', '새 신고·문의', (int) Tfm\Support::counts()['new']]; } catch (\Throwable $e) { /* the tab says why */ } } // [support]
     $live = getStr('live') === '1';
     if ($live) pageRefresh(href(['tab' => 'overview', 'live' => 1, 'auto' => 1]));
     $h = '<div class="row">' . liveSwitch(['tab' => 'overview'], $live) . '</div>' . tiles($tiles) . '<div class="grid2">' . farmCard() . alertsCard() . '</div>' . allotCard() . '<div class="grid2">';
@@ -1853,7 +1900,7 @@ function page(Ctx $c, string $tab, string $body, ?array $flash, bool $inside): s
     $banner = '';
     if ($inside) {
         $nav = '<nav class="tabs" aria-label="관리 메뉴">';
-        foreach (TABS as $k => $t) $nav .= '<a href="./?tab=' . $k . '"' . ($k === $tab ? ' class="on" aria-current="page"' : '') . '><span aria-hidden="true">' . $t[0] . '</span> ' . e($t[1]) . '</a>';
+        foreach (TABS as $k => $t) $nav .= '<a href="./?tab=' . $k . '"' . ($k === $tab ? ' class="on" aria-current="page"' : '') . '><span aria-hidden="true">' . $t[0] . '</span> ' . e($t[1]) . ($k === 'support' && supportReady() ? AdminSupport::navBadge() : '') . '</a>'; // [support] badge
         $nav .= '</nav>';
         $who = '<div class="who"><span class="avatar" aria-hidden="true">' . e(mb_substr((string) $c->user['nickname'], 0, 1)) . '</span><span><b>' . e($c->user['nickname']) . '</b><small>👑 관리자</small></span>' . actionForm('logout', '로그아웃', [], 'btn ghost sm', 'overview') . '</div>';
         if (AdminTotp::mode() === 'optional' && !AdminTotp::enabled($c->uid())) {
@@ -1888,6 +1935,7 @@ function render(Ctx $c): string
         switch ($tab) {
             case 'allot': $body = allotReady() ? AdminAllot::view($c, $_GET, Session::csrf()) : notReady('🏺 분양 관리', '분양 관리(lib/Allot.php · lib/AdminAllot.php)'); break;
             case 'lecture': $body = lectureReady() ? AdminLecture::view($c, $_GET, Session::csrf()) : notReady('🎓 강의 자료', '강의 자료(lib/Lecture.php · lib/AdminLecture.php)'); break; // [lecture]
+            case 'support': $body = supportReady() ? AdminSupport::view($c, $_GET, Session::csrf()) : notReady('📮 신고·문의', '신고·문의(lib/Support.php · lib/AdminSupport.php)'); break; // [support]
             case 'settings': $body = AdminSettings::view($c, $_GET, Session::csrf()); break; // [entitle]
             case 'account': $body = AdminSettings::accountView($c, Session::csrf()); break; // [entitle]
             case 'beds': $body = viewBeds(); break;
@@ -1988,6 +2036,7 @@ try {
     if ($method !== 'POST' && isset($_GET['photo'])) servePhoto($ctx);
     if ($method !== 'POST' && isset($_GET['download'])) serveDownload($ctx);
     if ($method !== 'POST' && isset($_GET['lecfile'])) serveLecture($ctx); // [lecture]
+    if ($method !== 'POST' && isset($_GET['supshot'])) serveSupport($ctx); // [support]
     if ($method === 'POST') handlePost($ctx);
     $html = render($ctx);
 } catch (ApiException $e) {

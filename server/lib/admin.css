@@ -212,3 +212,9 @@ tr.bad td{background:rgba(255,107,94,.08)}
 .setname label{color:var(--text);font-weight:600;font-size:.95rem;display:inline}.setname p,.setval p{margin:4px 0 0}.setval{display:grid;gap:6px;justify-items:start;min-width:0}
 .setval input[type=number],.setval input[type=text]{width:100%;max-width:260px}.setval select{width:auto;max-width:100%;flex:none}.setchecks{display:flex;gap:6px 14px;flex-wrap:wrap}.setnote{margin:8px 0 0}.setjump{justify-content:flex-start}
 @media (max-width:640px){.setrow{grid-template-columns:minmax(0,1fr)}.setval input[type=number],.setval input[type=text]{max-width:none}.bannerform{grid-template-columns:minmax(0,1fr)}}
+
+/* [support] 📮 신고·문의 (CONTRACT §18.1): the picture of a report fits its column; a chosen row is marked */
+img.supshot { display: block; max-width: 100%; height: auto; border: 1px solid #d8cdb8; border-radius: 8px; background: #222; }
+tr.on td { background: #fff6dc; }
+.tiles a.tile { color: inherit; text-decoration: none; }
+.tiles a.tile.on { outline: 3px solid #c9a227; }

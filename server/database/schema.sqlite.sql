@@ -682,3 +682,47 @@ CREATE INDEX IF NOT EXISTS ix_rooms_public ON user_rooms (public, updated_at);
 -- [/myroom]
 
 INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (8, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');
+
+-- v9 (phase 10, CONTRACT §18.0): ONE shared block, as v8 was. Every lane adds only its own tables here, marked [lane];
+-- every statement must be safe to run again (CREATE TABLE / INDEX IF NOT EXISTS). The INSERT of version 9 stays the LAST line.
+--
+-- [support] §18.1: reports and questions of the players with an optional picture of the screen, and the thread of each
+-- (see database/schema.sql for every column). Deleting a ticket deletes its messages and its file (Tfm\Support).
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  no           TEXT NOT NULL DEFAULT '',
+  user_id      INTEGER NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('bug', 'question', 'report')),
+  category     TEXT NOT NULL DEFAULT 'other',
+  body         TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'open', 'answered', 'closed')),
+  meta         TEXT NOT NULL DEFAULT '',
+  shot_path    TEXT NOT NULL DEFAULT '',
+  shot_bytes   INTEGER NOT NULL DEFAULT 0,
+  shot_w       INTEGER NOT NULL DEFAULT 0,
+  shot_h       INTEGER NOT NULL DEFAULT 0,
+  target_user  INTEGER,
+  target_ref   TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  answered_at  INTEGER NOT NULL DEFAULT 0,
+  user_seen_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_sup_status ON support_tickets (status, id);
+CREATE INDEX IF NOT EXISTS ix_sup_kind ON support_tickets (kind, id);
+CREATE INDEX IF NOT EXISTS ix_sup_user ON support_tickets (user_id, id);
+CREATE INDEX IF NOT EXISTS ix_sup_user_status ON support_tickets (user_id, status);
+CREATE INDEX IF NOT EXISTS ix_sup_clean ON support_tickets (status, updated_at);
+
+CREATE TABLE IF NOT EXISTS support_messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id  INTEGER NOT NULL,
+  side       TEXT NOT NULL CHECK (side IN ('user', 'admin')),
+  author_id  INTEGER,
+  body       TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_supmsg_ticket ON support_messages (ticket_id, id);
+-- [/support]
+
+INSERT OR IGNORE INTO schema_version (version, applied_at, note) VALUES (9, CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'phase 10: reports and questions with a picture of the screen, account settings');

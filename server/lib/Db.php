@@ -14,7 +14,7 @@ if (!defined('TFM_BOOT')) { if (function_exists('header_remove')) header_remove(
 
 final class Db
 {
-    public const SCHEMA_VERSION = 8;
+    public const SCHEMA_VERSION = 9; // [support] v9 (phase 10, CONTRACT §18.0): support_tickets · support_messages · user_settings
     /** @var PDO|null */
     private static $pdo = null;
     /** @var string */

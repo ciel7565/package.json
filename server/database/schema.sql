@@ -731,3 +731,54 @@ CREATE TABLE IF NOT EXISTS user_rooms (
 -- [/myroom]
 
 INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (8, UNIX_TIMESTAMP() * 1000, 'phase 9: login id and default-password flag of accounts, lectures, rooms, environment');
+
+-- v9 (phase 10, CONTRACT §18.0): ONE shared block, as v8 was. Every lane adds only its own tables here, marked [lane];
+-- every statement must be safe to run again. The INSERT of version 9 stays the LAST line of this file.
+--
+-- [support] §18.1: reports and questions of the players (🐞 버그 신고 · ❓ 문의하기 · 🚨 신고하기) with an optional picture
+-- of the screen, and the thread of each (the player's words and the operator's answers). no = the number the player is
+-- told (yymmdd-<id>); kind / category are fixed words (Tfm\Support::KINDS); body ≤ 1,000 characters after the bad-word
+-- filter and the personal-data mask; meta = the device facts as JSON (build, browser, screen, quality, place, position,
+-- frame rate, look mode — never the save, never personal data); shot_path is relative to data/support/ (a private folder,
+-- random names; only api/support/shot.php and the admin entry stream it). target_user / target_ref: whom or what a 🚨
+-- report is about (an account id; 'chat:<message id>'). user_seen_at < answered_at = an answer the player has not read.
+-- Indexes: the admin list pages by id (newest first, keyset) per status and per kind; a player's own list and limits by
+-- (user_id, id) / (user_id, status); the clean-up by (status, updated_at). Deleting a ticket deletes its messages and file.
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  no           VARCHAR(20) NOT NULL DEFAULT '',
+  user_id      BIGINT UNSIGNED NOT NULL,
+  kind         ENUM('bug', 'question', 'report') NOT NULL,
+  category     VARCHAR(24) NOT NULL DEFAULT 'other',
+  body         TEXT NOT NULL,
+  status       ENUM('new', 'open', 'answered', 'closed') NOT NULL DEFAULT 'new',
+  meta         TEXT NOT NULL,
+  shot_path    VARCHAR(191) NOT NULL DEFAULT '',
+  shot_bytes   INT NOT NULL DEFAULT 0,
+  shot_w       INT NOT NULL DEFAULT 0,
+  shot_h       INT NOT NULL DEFAULT 0,
+  target_user  BIGINT UNSIGNED NULL,
+  target_ref   VARCHAR(64) NOT NULL DEFAULT '',
+  created_at   BIGINT NOT NULL,
+  updated_at   BIGINT NOT NULL,
+  answered_at  BIGINT NOT NULL DEFAULT 0,
+  user_seen_at BIGINT NOT NULL DEFAULT 0,
+  KEY ix_sup_status (status, id),
+  KEY ix_sup_kind (kind, id),
+  KEY ix_sup_user (user_id, id),
+  KEY ix_sup_user_status (user_id, status),
+  KEY ix_sup_clean (status, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+CREATE TABLE IF NOT EXISTS support_messages (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ticket_id  BIGINT UNSIGNED NOT NULL,
+  side       ENUM('user', 'admin') NOT NULL,
+  author_id  BIGINT UNSIGNED NULL,
+  body       TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  KEY ix_supmsg_ticket (ticket_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+-- [/support]
+
+INSERT IGNORE INTO schema_version (version, applied_at, note) VALUES (9, UNIX_TIMESTAMP() * 1000, 'phase 10: reports and questions with a picture of the screen, account settings');

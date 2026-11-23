@@ -206,6 +206,11 @@ return [
         // ↓ 9단계 내 방 (CONTRACT §17.4) — [myroom]
         'room_get'     => [60, 60],      // api/room/get.php — 내 방 읽기 (계정별; 앱은 방에 들어갈 때 한 번 물어요)
         'room_save'    => [40, 60],      // api/room/save.php — 방 저장 (계정별; 꾸미는 동안 4초에 한 번을 넘지 않아요)
+        // ↓ 10단계 신고·문의 (CONTRACT §18.1) — [support]. 계정별 시간·하루·열린 문의 수는 ⚙️ 설정 → 📮 신고·문의 에서 따로 정해요.
+        'support_create' => [12, 3600],  // api/support/create.php — 새 문의 보내기 (계정별, 한 시간에 12번이 문 앞의 한도)
+        'support_read'   => [60, 60],    // api/support/mine.php — 내 문의·답 읽기 (계정별; 앱은 몇 분에 한 번 물어요)
+        'support_write'  => [40, 600],   // reply · seen · delete (계정별, 10분에 40번)
+        'support_shot'   => [120, 60],   // api/support/shot.php — 내 문의의 화면 사진 보기
     ],
 
     // ------------------------------------------------------------------ chat

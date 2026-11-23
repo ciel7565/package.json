@@ -120,6 +120,14 @@ spl_autoload_register(static function (string $class): void {
         if (is_file($file)) require_once $file;
     }
 });
+// phase 10 (CONTRACT §18.1) [support]: Tfm\Support (reports and questions of the players with a picture of the screen)
+// and the admin site's 📮 신고·문의 tab — used by api/support/* and one admin tab only; loaded on first use.
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'Tfm\\Support' || $class === 'Tfm\\AdminSupport') {
+        $file = __DIR__ . '/' . substr($class, 4) . '.php';
+        if (is_file($file)) require_once $file;
+    }
+});
 
 try {
     if (!@date_default_timezone_set((string) Tfm\Config::get('app.timezone', 'Asia/Seoul'))) date_default_timezone_set('Asia/Seoul');

@@ -74,9 +74,9 @@ $DAY = 86400000;
 $CLI = ['id' => 0, 'nickname' => 'CLI'];
 
 // =============================================================================================== 1 · schema v8, the migration, the seed marker
-check('schema — Db::SCHEMA_VERSION is 8 and a fresh database is created at version 8 with users.login_id and users.pw_default', function () {
+check('schema — Db::SCHEMA_VERSION is 8 or newer (9 since phase 10) and a fresh database is created at that version with users.login_id and users.pw_default', function () {
     Tfm\Db::pdo();
-    return Tfm\Db::SCHEMA_VERSION === 8 && Tfm\Db::schemaVersion() === 8 && Tfm\Db::hasColumn('users', 'login_id') && Tfm\Db::hasColumn('users', 'pw_default')
+    return Tfm\Db::SCHEMA_VERSION >= 8 && Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION && Tfm\Db::hasColumn('users', 'login_id') && Tfm\Db::hasColumn('users', 'pw_default')
         ? true : 'code ' . Tfm\Db::SCHEMA_VERSION . ', database ' . Tfm\Db::schemaVersion();
 });
 echo 'driver: ' . Tfm\Db::driverSafe() . PHP_EOL;
@@ -88,7 +88,7 @@ check('schema — re-running the schema file changes nothing (idempotent; the ma
     $v = (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version');
     $s = (int) Tfm\Db::value('SELECT COUNT(*) FROM settings');
     foreach (Tfm\Db::splitSql((string) file_get_contents($file)) as $stmt) Tfm\Db::pdo()->exec($stmt);
-    return (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version') === $v && (int) Tfm\Db::value('SELECT COUNT(*) FROM settings') === $s && Tfm\Db::schemaVersion() === 8;
+    return (int) Tfm\Db::value('SELECT COUNT(*) FROM schema_version') === $v && (int) Tfm\Db::value('SELECT COUNT(*) FROM settings') === $s && Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION;
 });
 
 /**
@@ -155,7 +155,7 @@ check('migration — a v7 site with accounts is upgraded to v8 on the first requ
         Tfm\Db::exec("INSERT INTO users (email, nickname, nickname_key, password_hash, created_at, updated_at) VALUES ('d@example.com', 'Dd', 'dd', 'x', $now, $now)");
         Tfm\Users::ensureDefaultAdmin('admin'); // must do nothing here
         $admins = (int) Tfm\Db::value("SELECT COUNT(*) FROM users WHERE role = 'admin'");
-        return $v === 8 && $row && $row['nickname'] === 'OldSite' && $row['login_id'] === null && (int) $row['pw_default'] === 0 && $set === '2' && $state === '' && $dup === '23000' && $admins === 0
+        return $v === Tfm\Db::SCHEMA_VERSION && $row && $row['nickname'] === 'OldSite' && $row['login_id'] === null && (int) $row['pw_default'] === 0 && $set === '2' && $state === '' && $dup === '23000' && $admins === 0
             ? true : j([$v, $row, $set, $state, $dup, $admins]);
     } finally { $back(); }
 });
@@ -164,7 +164,7 @@ check('migration — a v7 site without any account becomes v8 and is marked pend
     try {
         $use();
         Tfm\Db::pdo();
-        return Tfm\Db::schemaVersion() === 8 && Tfm\Users::defaultAdminState() === 'pending' ? true : Tfm\Db::schemaVersion() . ' ' . Tfm\Users::defaultAdminState();
+        return Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION && Tfm\Users::defaultAdminState() === 'pending' ? true : Tfm\Db::schemaVersion() . ' ' . Tfm\Users::defaultAdminState();
     } finally { $back(); }
 });
 check('migration — with db.auto_migrate off a v7 site answers 503 SCHEMA_OUTDATED until the upgrade runs (cli migrate)', function () use ($v7Site) {
@@ -174,11 +174,11 @@ check('migration — with db.auto_migrate off a v7 site answers 503 SCHEMA_OUTDA
         Tfm\Config::override('db.auto_migrate', false);
         $code = apiCode(function () { Tfm\Db::pdo(); });
         $after = Tfm\Db::upgrade();
-        return $code === '503 SCHEMA_OUTDATED' && $after === 8 && Tfm\Db::hasColumn('users', 'login_id') ? true : j([$code, $after]);
+        return $code === '503 SCHEMA_OUTDATED' && $after === Tfm\Db::SCHEMA_VERSION && Tfm\Db::hasColumn('users', 'login_id') ? true : j([$code, $after]);
     } finally { $back(); }
 });
-check('migration — back on the test database (version 8, still pending)', function () {
-    return Tfm\Db::schemaVersion() === 8 && Tfm\Users::defaultAdminState() === 'pending';
+check('migration — back on the test database (the current version, still pending)', function () {
+    return Tfm\Db::schemaVersion() === Tfm\Db::SCHEMA_VERSION && Tfm\Users::defaultAdminState() === 'pending';
 });
 
 // =============================================================================================== 2 · the settings registry

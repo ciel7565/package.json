@@ -48,6 +48,7 @@ final class Settings
         'room'     => ['🏠', '방 꾸미기'],
         'notice'   => ['📢', '공지'],
         'admin'    => ['🔐', '관리자 보안'],
+        'support'  => ['📮', '신고·문의'], // [support] CONTRACT §18.1
         'etc'      => ['🧩', '기타'],
     ];
     private const TYPES = ['bool', 'int', 'float', 'enum', 'list', 'str'];
@@ -138,6 +139,15 @@ final class Settings
         self::define('lecture.slide_hosts', 'list', ['docs.google.com', 'view.officeapps.live.com'], ['docs.google.com' => '구글 슬라이드 (docs.google.com)', 'view.officeapps.live.com' => '오피스 온라인 뷰어 (view.officeapps.live.com)'], 'lecture', '화면 안에 띄워도 되는 슬라이드 사이트', false, '체크를 빼면 그 사이트의 슬라이드 강의는 목록에서 빠지고 새로 추가할 수도 없어요. 다른 사이트는 언제나 새 창 링크로만 열려요.');
         self::define('lecture.images_max', 'int', 80, [1, 200], 'lecture', '강의 하나에 올릴 수 있는 그림 수');
         // ---------------------------------------------------------------- [/lecture]
+        // ---------------------------------------------------------------- [support] 신고·문의 (CONTRACT §18.1) — read through Tfm\Support::opt(); the 📮 신고·문의 tab has the same rows on its own card
+        self::define('support.enabled', 'bool', true, null, 'support', '신고·문의 받기', true, '끄면 체험관의 📮 문의·신고 버튼이 "지금은 받지 않아요"라고 알려 줘요. 이미 받은 문의와 답은 그대로 남아요.');
+        self::define('support.shots', 'bool', true, null, 'support', '화면 사진 받기', true, '켜면 문의와 함께 그 순간의 화면 사진(1.5MB 이하)을 받아요. 끄면 글과 고른 분류만 받아요.');
+        self::define('support.per_hour', 'int', 5, [1, 100], 'support', '한 계정이 한 시간에 보낼 수 있는 수');
+        self::define('support.per_day', 'int', 20, [1, 500], 'support', '한 계정이 하루에 보낼 수 있는 수');
+        self::define('support.max_open', 'int', 30, [1, 200], 'support', '한 계정이 답을 기다리며 둘 수 있는 문의 수', false, '닫은 문의는 세지 않아요.');
+        self::define('support.keep_days', 'int', 180, [7, 3650], 'support', '보관 기간 (일)', false, '이 기간 동안 아무 변화가 없는 문의는 사진과 함께 저절로 지워져요. 닫은 문의부터 지워요.');
+        self::define('support.shot_kb', 'int', 1536, [100, 1536], 'support', '화면 사진 최대 크기 (KB)');
+        // ---------------------------------------------------------------- [/support]
     }
 
     /** the definitions of one group, in registry order */

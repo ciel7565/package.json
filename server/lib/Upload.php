@@ -537,4 +537,88 @@ final class Upload
             fclose($fh);
         }
     }
+
+    // =================================================================================================================
+    // [support] The picture of the screen that goes with a report or a question (CONTRACT §18.1).
+    // The same rules as a journal photo, a little stricter: one file in the form field, ≤ maxBytes (1.5 MB), the type
+    // from the BYTES (finfo + getimagesize agree: jpeg / png / webp), pixel and memory caps, script / markup polyglots
+    // refused (a security event 'warn'), then ALWAYS decoded and encoded again as JPEG (no metadata, nothing appended
+    // survives, one fixed type to serve) and scaled to ≤ maxDimension. Stored in the PRIVATE folder data/support/
+    // YYYY/MM/<32 random hex>.jpg (deny rules, never served by the web server; only Tfm\Support::stream sends it).
+    // Nothing of the client's file name or Content-Type is read or stored. $opt: maxBytes, maxDimension, trusted (tests
+    // and the command line only: the path was made by the caller — copied, not moved).
+    // =================================================================================================================
+    /** the private folder of the pictures (created with deny rules on first use) */
+    public static function supportDir(): string
+    {
+        $d = Config::dataDir() . DIRECTORY_SEPARATOR . 'support';
+        Config::ensureDir($d, true);
+        return $d;
+    }
+
+    /** the absolute path of a stored relative path "YYYY/MM/<32 hex>.jpg" — only that form, only a file that is there */
+    public static function supportAbs(string $rel): ?string
+    {
+        if (!preg_match('#^(\d{4})/(\d{2})/([a-f0-9]{32}\.jpg)$#', $rel, $m)) return null;
+        $abs = self::supportDir() . DIRECTORY_SEPARATOR . $m[1] . DIRECTORY_SEPARATOR . $m[2] . DIRECTORY_SEPARATOR . $m[3];
+        return is_file($abs) ? $abs : null;
+    }
+
+    /** remove a stored picture (only the form supportShot() makes); true when a file went */
+    public static function supportDiscard(string $rel): bool
+    {
+        $abs = self::supportAbs($rel);
+        return $abs !== null && @unlink($abs);
+    }
+
+    /**
+     * Check and store the picture of form field $field (a single file). Returns ['path' => relative path, 'bytes', 'w',
+     * 'h'] or throws ApiException 400 (UPLOAD_MISSING · UPLOAD_TOO_LARGE · UPLOAD_EMPTY · UPLOAD_TYPE · UPLOAD_INVALID ·
+     * UPLOAD_REJECTED · UPLOAD_DIMENSIONS · UPLOAD_UNSUPPORTED · UPLOAD_FAILED). Every refusal is audited and counted.
+     */
+    public static function supportShot(array $user, string $field, array $opt = []): array
+    {
+        $cfg = (array) Config::get('uploads', []);
+        $max = max(1024, (int) (isset($opt['maxBytes']) ? $opt['maxBytes'] : 1572864));
+        $maxDim = max(64, min(4096, (int) (isset($opt['maxDimension']) ? $opt['maxDimension'] : 1920)));
+        $tooLarge = '화면 사진이 너무 커요. ' . self::mbText($max) . ' 이하만 보낼 수 있어요.';
+        $why = function (array $a) { return $a + ['what' => 'support']; };
+        $f = isset($_FILES[$field]) ? $_FILES[$field] : null;
+        if (!is_array($f) || !isset($f['error']) || is_array($f['error']) || is_array(isset($f['tmp_name']) ? $f['tmp_name'] : null)) self::reject('UPLOAD_MISSING', '화면 사진을 찾을 수 없어요.', $why(['why' => 'field']));
+        $err = (int) $f['error'];
+        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) self::reject('UPLOAD_TOO_LARGE', $tooLarge, $why(['why' => 'server limit']));
+        if ($err !== UPLOAD_ERR_OK) self::reject('UPLOAD_FAILED', '화면 사진을 보내지 못했어요. 다시 해 주세요.', $why(['why' => 'upload error ' . $err]));
+        $tmp = (string) (isset($f['tmp_name']) ? $f['tmp_name'] : '');
+        $trusted = !empty($opt['trusted']);
+        if ($tmp === '' || !is_file($tmp) || (!$trusted && !is_uploaded_file($tmp))) self::reject('UPLOAD_FAILED', '화면 사진을 보내지 못했어요. 다시 해 주세요.', $why(['why' => 'not uploaded file']));
+        $size = (int) @filesize($tmp);
+        if ($size <= 0) self::reject('UPLOAD_EMPTY', '빈 파일이에요.', $why(['why' => 'empty']));
+        if ($size > $max) self::reject('UPLOAD_TOO_LARGE', $tooLarge, $why(['bytes' => $size]));
+        if (!extension_loaded('gd') || !function_exists('imagecreatefromstring') || !function_exists('imagejpeg')) self::reject('UPLOAD_UNSUPPORTED', '서버에 이미지 처리 기능(GD)이 없어 화면 사진을 받을 수 없어요. 글만 보내 주세요.', $why(['why' => 'no gd']));
+        if (!class_exists('finfo')) self::reject('UPLOAD_UNSUPPORTED', '서버에서 사진 형식을 확인할 수 없어요. 글만 보내 주세요.', $why(['why' => 'no fileinfo']));
+        $mime = (string) (new \finfo(FILEINFO_MIME_TYPE))->file($tmp);
+        if (!isset(self::TYPES[$mime])) self::reject('UPLOAD_TYPE', 'JPG · PNG · WEBP 사진만 보낼 수 있어요.', $why(['mime' => mb_substr($mime, 0, 40)]));
+        $info = @getimagesize($tmp);
+        if (!$info || (isset($info[2]) ? $info[2] : 0) !== self::TYPES[$mime]['it']) self::reject('UPLOAD_INVALID', '올바른 사진 파일이 아니에요.', $why(['mime' => $mime, 'why' => 'getimagesize']));
+        $w = (int) $info[0];
+        $h = (int) $info[1];
+        if ($w < 16 || $h < 16 || $w > 8192 || $h > 8192 || $w * $h > min(40000000, (int) (isset($cfg['max_pixels']) ? $cfg['max_pixels'] : 40000000))) self::reject('UPLOAD_DIMENSIONS', '화면 사진의 크기가 알맞지 않아요.', $why(['w' => $w, 'h' => $h]));
+        $limit = self::iniBytes((string) ini_get('memory_limit'));
+        if ($limit > 0 && memory_get_usage(true) + $w * $h * 5 + 8 * 1048576 > $limit) self::reject('UPLOAD_DIMENSIONS', '화면 사진이 너무 커요. 화면을 작게 해서 다시 찍어 주세요.', $why(['w' => $w, 'h' => $h, 'why' => 'memory']));
+        $bytes = (string) file_get_contents($tmp);
+        if (preg_match(self::POLYGLOT, $bytes, $hit)) self::reject('UPLOAD_REJECTED', '안전하지 않은 내용이 들어 있는 파일이라 보낼 수 없어요.', $why(['why' => 'polyglot', 'marker' => strtolower(substr($hit[0], 0, 16))]));
+        // always JPEG: one fixed type to serve; a screenshot has no transparency worth keeping
+        $out = self::reencode($bytes, 'image/jpeg', $w, $h, ['max_dimension' => $maxDim, 'jpeg_quality' => 82] + $cfg);
+        if ($out === null || $out['mime'] !== 'image/jpeg') self::reject('UPLOAD_INVALID', '화면 사진을 읽지 못했어요. 다시 찍어 주세요.', $why(['why' => 'decode']));
+        $sub = date('Y') . '/' . date('m');
+        $dir = self::supportDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $sub);
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) throw new \RuntimeException('support dir not writable');
+        $rel = $sub . '/' . bin2hex(random_bytes(16)) . '.jpg';
+        $abs = self::supportDir() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+        if (file_put_contents($abs, $out['bytes'], LOCK_EX) === false) throw new \RuntimeException('support picture write failed');
+        @chmod($abs, 0640);
+        Log::info('UPLOAD', 'support picture stored', ['uid' => (int) (isset($user['id']) ? $user['id'] : 0), 'bytes' => strlen($out['bytes'])]);
+        return ['path' => $rel, 'bytes' => strlen($out['bytes']), 'w' => (int) $out['w'], 'h' => (int) $out['h']];
+    }
+    // [/support]
 }
