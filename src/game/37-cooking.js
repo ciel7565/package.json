@@ -1503,7 +1503,8 @@
         const sw = spotWorld(id) || (id === 'hwadeok' && river ? { work: river.spot.work.clone().add(river.group.position), stand: { x: river.at.x + 0.9, z: river.at.z + 0.85 } } : null);
         if (!sw) return false;
         const dx = sw.work.x - sw.stand.x, dz = sw.work.z - sw.stand.z, len = Math.hypot(dx, dz) || 1;
-        const pos = new THREE.Vector3(sw.work.x - (dx / len) * dist, sw.work.y + dist * 0.75, sw.work.z - (dz / len) * dist);
+        const ux = dx / len, uz = dz / len;   // beside the station, like the cooking camera (never through the child)
+        const pos = new THREE.Vector3(sw.work.x - ux * dist * 0.5 - uz * dist, sw.work.y + dist * 0.85, sw.work.z - uz * dist * 0.5 + ux * dist);
         try { G.sys.camera.shot(pos, sw.work.clone(), { fov: 40, duration: 0 }); } catch (e) { return false; }
         return true;
       },
