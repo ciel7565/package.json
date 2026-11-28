@@ -1086,7 +1086,9 @@
       let k = 1;
       if (pl && y < pl) k += 0.05 * Math.sin(a * 44) * smooth(pl, pl - 0.08, y);                     // 철릭: pleats below the waist
       if (back) fl += 0.012 * smooth(1.2, 0.8, y) * smooth(1.6, 2.6, Math.abs(a > Math.PI ? a - TAU : a)); // 도포: the back flap
-      const p = se(a, (Math.max(r[0], y < 0.84 ? 0.15 : 0) + off + fl) * k, (Math.max(r[1], y < 0.84 ? 0.1 : 0) + off + fl * 0.9) * k, 2.3);
+      // below the waist the robe clears the hips and the tops of the trousers (they never poke through it)
+      const hip = smooth(1.08, 0.92, y);
+      const p = se(a, (Math.max(r[0], y < 0.84 ? 0.15 : 0, 0.205 * hip) + off + fl) * k, (Math.max(r[1], y < 0.84 ? 0.1 : 0, 0.13 * hip) + off + fl * 0.9) * k, 2.3);
       out[0] = p[0]; out[1] = y; out[2] = (y < 0.84 ? 0 : r[2]) + p[1];
     }, { nu: o.nu || 34, nv: o.nv || 16, open: !!gap, cap0: false, cap1: false });
   }
@@ -1177,7 +1179,8 @@
       const hemFn = typeof o.len === 'function' ? o.len : o.len;
       outerHem = typeof o.len === 'function' ? o.len(0) : o.len;
       const w = longRobe || o.pleat ? coatW : torsoW;
-      let shell = robe(yTop, hemFn, off, { flare: o.flare, gap: o.gap, pleat: o.pleat === 1.02 ? 1.02 : 0, back: o.back, nu: o.pleat ? 48 : 34, nv: longRobe ? 18 : 12, flareFrom: o.pleat ? 1.02 : 1.05 });
+      const oFlare = chima && longRobe ? Math.max(o.flare, BK.flare * 1.08 + 0.02) : o.flare; // over a full skirt the robe flares past it
+      let shell = robe(yTop, hemFn, off, { flare: oFlare, gap: o.gap, pleat: o.pleat === 1.02 ? 1.02 : 0, back: o.back, nu: o.pleat ? 48 : 34, nv: longRobe ? 18 : 12, flareFrom: o.pleat ? 1.02 : 1.05 });
       if (o.sleeve === 'none' || o.sleeve === 'short') { // armholes: pull the shoulder caps in (sleeveless / short sleeves)
         const vp = shell.attributes.position;
         for (let i = 0; i < vp.count; i++) { const x = vp.getX(i), y = vp.getY(i); if (y > 1.2 && Math.abs(x) > 0.13) vp.setX(i, Math.sign(x) * (0.13 + (Math.abs(x) - 0.13) * 0.4)); }
@@ -1185,9 +1188,8 @@
       }
       if (o.head) shell = null; // the head coverings are drawn below
       if (shell) P.add(shell, w, slot);
-      if (shell) P.add(robe(typeof hemFn === 'function' ? (a) => hemFn(a) + 0.03 : hemFn + 0.03, hemFn, off + 0.002, { flare: o.flare, gap: o.gap, nu: o.pleat ? 48 : 34, nv: 1, flareFrom: o.pleat ? 1.02 : 1.05 }), w, o.band === 'gold' ? S.band : o.band === 'trim' ? S.trim : S.outer2); // hem band
+      if (shell) P.add(robe(typeof hemFn === 'function' ? (a) => hemFn(a) + 0.03 : hemFn + 0.03, hemFn, off + 0.002, { flare: oFlare, gap: o.gap, nu: o.pleat ? 48 : 34, nv: 1, flareFrom: o.pleat ? 1.02 : 1.05 }), w, o.band === 'gold' ? S.band : o.band === 'trim' ? S.trim : S.outer2); // hem band
       if (o.pleat === 1.02) P.add(torsoShell(1.05, 1.01, off + 0.004, { nu: 34, nv: 1 }), torsoW, S.outer2); // the waist seam of the 철릭
-      if (o.quilt && shell) for (let i = 1; i < 9; i++) { const y = lerp(1.36, outerHem + 0.04, i / 9); P.add(robe(y + 0.0025, y - 0.0025, off + 0.003, { flare: o.flare, nu: 34, nv: 1 }), w, S.outer2); } // 누비: the stitched rows
       if (o.under) P.add(robe(0.62, o.under, off - 0.006, { flare: o.flare * 0.9, nu: 34, nv: 4 }), coatW, S.red); // 동달이: the red coat under the 전복
       if (o.collar === 'cross') crossCollar(P, { off: off - 0.002, yEnd: o.short ? 1.245 : 1.2, hemY: longRobe ? Math.max(0.3, outerHem) : 0.86, knotY: o.short ? 1.215 : 1.17, slot: o.band === 'trim' ? S.trim : o.short ? S.top3 : S.outer2, seop: o.band === 'trim' ? S.trim : S.outer2, goC: o.short ? S.band : S.outer2, goreum: o.goreum || 0, weight: w, w: 0.015 });
       else if (o.collar === 'round') { // 단령: a round collar ring and the 흉배 square on the chest
@@ -1292,13 +1294,12 @@
           P.add(xf(rbox(0.012, 0.05, 0.004, 0.002), x0 - s * 0.035, 0.12, 0.012, 0, 0, s * 0.3), legBones(s)[1], fem ? S.top3 : S.band);
         }
         if (BK.cuff) P.add(rings([[0.13, 0.033, 0.037, x0, -0.002], [0.1, 0.033, 0.037, x0, -0.002]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, S.bottom2);
-        if (BK.quilt) for (const y of [0.3, 0.5, 0.7]) P.add(rings([[y + 0.003, 0.06 * wk + 0.02, 0.063 * wk + 0.02, x0 + s * 0.01, 0.004], [y - 0.003, 0.06 * wk + 0.02, 0.063 * wk + 0.02, x0 + s * 0.01, 0.004]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, S.bottom2);
       }
       buildRealFoot(P, app, s);
     }
     if (!chima) {
       P.add(torsoShell(1.03, 0.84, 0.016 * (BK.width || 1), { nu: 28, nv: 6 }), torsoW, S.bottom);
-      P.add(torsoShell(1.03, 0.995, 0.026, { nu: 28, nv: 1 }), torsoW, BK.cuff ? S.bottom2 : S.top3);   // 허리띠
+      P.add(torsoShell(1.03, 0.995, BK.cuff ? 0.026 : 0.012, { nu: 28, nv: 1 }), torsoW, BK.cuff ? S.bottom2 : S.top3);   // 허리띠 (under the 저고리; the 생활한복 band shows)
       if (BK.split) P.add(xf(rbox(0.07, 0.12, 0.006, 0.003), 0, 0.86, -0.12, 0.1, 0, 0), B.hips, S.bottom2); // 풍차: the back flap
     } else {
       const pleats = BK.pleats, hem = BK.hem, flare = BK.flare;
@@ -1353,7 +1354,7 @@
       return;
     }
     // a boat-shaped shoe: open on top (the 버선 shows), the toe drawn up; side height and toe curl per kind
-    const K = { gomusin: [0.03, 0.03, 1], kkotsin: [0.036, 0.03, 1], danghye: [0.034, 0.036, 1.02], unhye: [0.034, 0.03, 1.02], taesahye: [0.04, 0.026, 1.04], gatsin: [0.044, 0.022, 1.05], namaksin: [0.03, 0.02, 1.02], mokhwa: [0.05, 0.02, 1.06] }[fw] || [0.03, 0.03, 1];
+    const K = { gomusin: [0.036, 0.03, 1], kkotsin: [0.042, 0.03, 1], danghye: [0.046, 0.036, 1.02], unhye: [0.046, 0.03, 1.02], taesahye: [0.05, 0.026, 1.04], gatsin: [0.054, 0.022, 1.05], namaksin: [0.036, 0.02, 1.02], mokhwa: [0.06, 0.02, 1.06] }[fw] || [0.036, 0.03, 1];
     const shoe = sweep((v, u, out) => {
       const z = lerp(-0.064, 0.215, v);
       const w = (0.035 + 0.016 * smooth(-0.05, 0.08, z) - 0.043 * smooth(0.12, 0.215, z)) * K[2];
@@ -1494,8 +1495,8 @@
       for (const s of [1, -1]) { P.add(xf(torus(0.03, 0.013, 6, 16), s * 0.045, 1.49, -0.1, 0, s * 0.5, 0), B.head, S.hair); P.add(xf(rbox(0.02, 0.03, 0.012, 0.005), s * 0.02, 1.5, -0.104), B.head, ribbon); }
     } else if (hs === 'keunmeori') { // 큰머리 (가체): a great braided roll over the head on a 쪽
       P.add(xf(sphere(1, 16, 12), 0, 1.462, -0.104, 0, 0, 0, 0.043, 0.028, 0.032), B.head, S.hair);
-      const pts = []; for (let i = 0; i <= 20; i++) { const a = (i / 20) * TAU; pts.push([Math.sin(a) * 0.16, 1.685 + 0.012 * Math.cos(a * 2), -0.03 + Math.cos(a) * 0.095]); }
-      plait(P, pts, 0.034, B.head, S.hair);
+      const pts = []; for (let i = 0; i <= 20; i++) { const a = (i / 20) * TAU; pts.push([Math.sin(a) * 0.13, 1.645 + 0.01 * Math.cos(a * 2), -0.012 + Math.cos(a) * 0.11]); }
+      plait(P, pts, 0.03, B.head, S.hair);
     }
   }
 
@@ -1565,7 +1566,7 @@
       case 'ayam': case 'jobawi': case 'nambawi': case 'pungcha': { // winter coverings: 아얌 (forehead), 조바위 (ears), 남바위 / 풍차 (ears, neck; open on top)
         const ear = hat !== 'ayam', open = hat === 'nambawi' || hat === 'pungcha';
         const lo = (ay) => (hat === 'pungcha' ? lerp(-0.6, 0.3, smooth(2.2, 0.9, ay)) : hat === 'nambawi' ? lerp(-0.62, 0.3, smooth(1.9, 0.9, ay)) : ear ? lerp(-0.42, 0.3, smooth(1.9, 0.9, ay)) : 0.22);
-        P.add(cap(0.016, lo, open ? 0.72 : 0.86, 0.62), B.head, S.hat);
+        P.add(cap(ear ? 0.03 : 0.022, lo, open ? 0.72 : 0.86, 0.62), B.head, S.hat);
         P.add(ring(() => (open ? 0.72 : 0.86), () => (open ? 0.78 : 0.9), 0.018), B.head, S.dark);       // fur trim
         if (open) P.add(ring(() => 0.3, () => 0.36, 0.019, 30, true), B.head, S.dark);
         P.add(xf(sphere(0.011, 8, 6), 0, HEAD.cy + 0.095, headPos(0, 0.8, 0.6, 0.02, [0, 0, 0])[2] + 0.004), B.head, S.hat2); // 술
@@ -1660,9 +1661,9 @@
         P.add(xf(sphere(0.007, 8, 6), p[0] + dx, y0, p[2]), B.cloth, S.nor);
         if (orn === 'nabi') for (const s of [1, -1]) P.add(xf(sphere(1, 10, 8), p[0] + dx + s * 0.016, y0 - 0.035, p[2] + 0.002, 0, 0, s * 0.5, 0.017, 0.012, 0.004), B.cloth, S.gold);
         else if (orn === 'bangul') for (let i = 0; i < 3; i++) P.add(xf(sphere(0.008, 8, 6), p[0] + dx + (i - 1) * 0.012, y0 - 0.032 - (i === 1 ? 0.006 : 0), p[2]), B.cloth, S.gold);
-        else P.add(xf(sphere(1, 10, 8), p[0] + dx, y0 - 0.035, p[2] + 0.002, 0, 0, 0, 0.014, 0.02, 0.007), B.cloth, orn === 'jade' ? S.leaf : S.gold);
-        P.add(xf(sphere(0.006, 8, 6), p[0] + dx, y0 - 0.065, p[2]), B.cloth, S.nor);
-        P.add(xf(lathe([[0, 0], [0.005, -0.004], [0.01, -0.05], [0.012, -len], [0, -len - 0.004]], 10), p[0] + dx, y0 - 0.072, p[2]), B.cloth, S.nor);
+        else P.add(xf(sphere(1, 10, 8), p[0] + dx, y0 - 0.035, p[2] + 0.002, 0, 0, 0, 0.02, 0.028, 0.009), B.cloth, orn === 'jade' ? S.leaf : S.gold);
+        P.add(xf(sphere(0.008, 8, 6), p[0] + dx, y0 - 0.07, p[2]), B.cloth, S.nor);
+        P.add(xf(lathe([[0, 0], [0.007, -0.004], [0.013, -0.05], [0.016, -len * 1.3], [0, -len * 1.3 - 0.004]], 10), p[0] + dx, y0 - 0.078, p[2]), B.cloth, S.nor);
       };
       P.add(sweepPath([[p[0], p[1], p[2]], [p[0], p[1] - 0.05, p[2] + 0.002]], 0.002, { nu: 3, nv: 4 }), B.cloth, S.nor);
       if (nor === 'samjak') { one(-0.026, p[1] - 0.06, 'gold', 0.13); one(0, p[1] - 0.05, 'jade', 0.15); one(0.026, p[1] - 0.06, 'gold', 0.13); }
