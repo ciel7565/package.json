@@ -1505,8 +1505,8 @@ G.healStations = G.healStations || { map: new Map(),
       const L = [];
       for (const i of [1, 3, 7, 9]) {
         const th = (-240 + i * 30) * PI / 180, x = 3.2 * Math.cos(th), z = -1.2 + 3.2 * Math.sin(th), ry = Math.atan2(-x, -1.2 - z);
-        L.push({ x, y: -0.32, z, rotY: ry });
-        R.add('cloth', cyl(0.17, 0.5, 0.92, 14), M(x, 0.98, z), ['#c9b48a', '#a8b89a', '#d9c7a4', '#b8a3c4'][i % 4], { cast: false });
+        L.push({ x, y: -0.2, z, rotY: ry });   // (the head stays above the cape: the cape ends at the neck)
+        R.add('cloth', cyl(0.13, 0.5, 0.78, 14), M(x, 0.89, z), ['#c9b48a', '#a8b89a', '#d9c7a4', '#b8a3c4'][i % 4], { cast: false });
       }
       L.push({ x: 3.4, z: -8.95, rotY: PI, look: 'staff', solid: true });
       people(ctx, 'R3', L);
