@@ -37,10 +37,20 @@ export function minifyFragmentCached(name, code, opts = {}) {
   if (!opts.cacheDir) return minifyFragment(name, code, opts);
   const key = crypto.createHash('sha256').update(`${VERSION}\0${esbuild.version}\0${opts.mangle !== false}\0${name}\0${code}`).digest('hex').slice(0, 32);
   const file = path.join(opts.cacheDir, `frag-${key}.json`);
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* not cached yet */ }
+  try { const hit = JSON.parse(fs.readFileSync(file, 'utf8')); try { const now = new Date(); fs.utimesSync(file, now, now); } catch (e) { /* read-only */ } return hit; } catch (e) { /* not cached yet */ }
   const r = minifyFragment(name, code, opts);
   try { fs.mkdirSync(opts.cacheDir, { recursive: true }); fs.writeFileSync(file, JSON.stringify(r)); } catch (e) { /* a cache is optional */ }
   return r;
+}
+
+/** removes cached results nobody used for `days` days (every build touches what it uses), so the cache stays small */
+export function pruneCache(cacheDir, days = 7) {
+  let n = 0;
+  try {
+    const limit = Date.now() - days * 86400e3;
+    for (const f of fs.readdirSync(cacheDir)) if (/^frag-[0-9a-f]{32}\.json$/.test(f)) { const p = path.join(cacheDir, f); if (fs.statSync(p).mtimeMs < limit) { fs.unlinkSync(p); n++; } }
+  } catch (e) { /* no cache yet */ }
+  return n;
 }
 
 export function minifyFragment(name, code, opts = {}) {

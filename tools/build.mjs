@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib'; // [scale-server] precompressed copies of the page
-import { minifyFragmentCached, minifyCss } from './minify.mjs'; // [opt]
+import { minifyFragmentCached, minifyCss, pruneCache } from './minify.mjs'; // [opt]
 import { writeInstallable } from './pwa.mjs'; // [opt] the installable page of a server copy
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -169,6 +169,7 @@ if (MINIFY) {
     if (r.minified) f.min = r.code;
     else { minNotes.push(`${f.name}: ${r.reason}`); console.warn(`⚠ ${f.name} is not minified: ${r.reason}`); }
   }
+  pruneCache(path.join(ROOT, '.cache', 'min'));
 }
 
 // --strict: the server's PII rule file must match the client engine (one rule list, CONTRACT §12.4)
