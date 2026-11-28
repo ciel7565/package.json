@@ -295,7 +295,8 @@ async function partA() {
     const press = (code) => { window.dispatchEvent(new KeyboardEvent('keydown', { code, key: code, bubbles: true, cancelable: true })); window.dispatchEvent(new KeyboardEvent('keyup', { code, key: code, bubbles: true, cancelable: true })); };
     row.querySelector('.sw-rebind').click(); await new Promise((r) => setTimeout(r, 120));
     const waiting = row.querySelector('.sw-rebind').classList.contains('waiting');
-    press('KeyK'); await new Promise((r) => setTimeout(r, 200));
+    // [fix10] KeyU: KeyK is the auto-forward key since the move lane
+    press('KeyU'); await new Promise((r) => setTimeout(r, 200));
     const j = B.get('jump').join();
     const caps = row.querySelector('.sw-caps').textContent;
     row.querySelector('.sw-rebind').click(); await new Promise((r) => setTimeout(r, 120));
@@ -307,8 +308,8 @@ async function partA() {
   });
   if (keys.bindings) {
     check('A: 조작 → the key table from G.input.bindings (one row per action)', keys.row && keys.rows >= 15, JSON.stringify(keys));
-    check('A: 바꾸기 + a key → the action gets it, the caps show it', keys.waiting && keys.j === 'KeyK' && /K/.test(keys.caps), JSON.stringify(keys));
-    check('A: a key another action uses → a conflict notice, nothing changes', /이미/.test(keys.conflict) && keys.still === 'KeyK', keys.conflict);
+    check('A: 바꾸기 + a key → the action gets it, the caps show it', keys.waiting && keys.j === 'KeyU' && /U/.test(keys.caps), JSON.stringify(keys));
+    check('A: a key another action uses → a conflict notice, nothing changes', /이미/.test(keys.conflict) && keys.still === 'KeyU', keys.conflict);
     check('A: 처음대로 → the default key again', keys.back === 'Space', keys.back);
   } else check('A: 조작 → without G.input.bindings the fixed keys are shown read-only', keys.fixed);
 
