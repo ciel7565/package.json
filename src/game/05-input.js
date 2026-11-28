@@ -35,6 +35,18 @@
 // turn speed, zoom) are plain dialog keys again — Space / Enter / E / arrows always work there, whatever was rebound.
 // Keys with Ctrl / Alt / Meta held are never game keys. Emits 'input:bindings' { id, codes }.
 //
+// [move] DOUBLE TAP → RUN, DASH (CONTRACT §19.3). Two fresh presses of the same direction within the tap window (200 – 450 ms,
+// default 300; counted from press to press, timed by the key events' own timeStamp so that a long frame cannot spoil it):
+//   forward  → the run latches while that second press stays down (input.running; event 'input:run' {on, via}); letting go
+//              of forward ends it. Left / right / back never latch: they give ONE dash (event 'input:dash' {dir: 'left' |
+//              'right' | 'back', via, t}) that the player carries out. Key auto-repeat (e.repeat, or a release + press pair
+//              closer than 20 ms), a second key of the same direction while one is down, another direction pressed in
+//              between, and a press that is still held from before never count. WASD and the arrows alike, through the bindings.
+//   Touch: the stick (two quick flicks past 55 %) and the d-pad buttons feed the same detector; the run button stays.
+//   input.taps (the pure detector: down / up / reset / held), input.makeTapDetector(windowFn), input.comfort() (the options
+//   of the 조작 tab, mode-dependent defaults), input.tapRun (false | 'key' | 'stick' | 'dpad'), input.autoForward /
+//   input.setAutoForward(on) (the 'autoForward' key walks on by itself until forward / back is pressed).
+//
 // Ghost clicks (NEW-1): a touch / pen tap is pointerdown → pointerup → (later) a compatibility `click` that the
 // browser hit-tests at the tap point AFTER our handlers ran. When the press itself opened something there (the
 // phone 👆 opening a dialogue, a tap on the 3D view opening a picker), that click used to land on the new UI and
@@ -53,6 +65,8 @@
   const joy = { x: 0, y: 0, active: false };
   const dpad = { x: 0, y: 0 };
   let mobileRun = false;
+  let tapRun = false;       // [move] the double-tapped run is on: false | 'key' | 'stick' | 'dpad'
+  let autoFwd = false;      // [move] the auto-forward key is on
   let wasMoving = false;
   // a finger resting on the joystick / a held d-pad button sends no DOM events, yet the child keeps walking: every
   // HOLD_NOTE_MS the held control re-tells the play counters (03-state playTime, 08-easy healthy play) that there is
@@ -144,6 +158,7 @@
     ['run', '달리기 (누른 채 움직이기)', 'move', ['ShiftLeft', 'ShiftRight'], 'g'],
     ['jump', '점프', 'move', ['Space'], 'g'],
     ['interact', '말 걸기 · 살펴보기', 'move', ['KeyE'], 'g'],
+    ['autoForward', '앞으로 계속 가기 (켜고 끄기)', 'move', ['KeyK'], 'g'],   // [move]
     ['mouseToggle', '마우스 고정 ↔ 풀기 (한 번 톡)', 'view', ['ControlLeft', 'ControlRight'], 'gt'],
     ['lookFaster', '화면 돌리기 빠르게', 'view', ['Equal', 'NumpadAdd'], 'g'],
     ['lookSlower', '화면 돌리기 느리게', 'view', ['Minus', 'NumpadSubtract'], 'g'],
@@ -314,6 +329,91 @@
   // the old shape: bindings.forward, bindings.jump … are the live code arrays
   for (const A of acts.values()) Object.defineProperty(bindings, A.id, { get: () => A.codes, enumerable: false });
 
+  // ---------------------------------------------------------------- [move] double tap → run, dash (see the header)
+  /** the options of the 조작 tab that decide how moving feels (a value the player never set follows the mode: easy = gentler) */
+  const hasSet = (k) => !!G.settings && Object.prototype.hasOwnProperty.call(G.settings, k);
+  const easyMv = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
+  const numSet = (k, lo, hi, dNormal, dEasy) => { const v = hasSet(k) ? Number(G.settings[k]) : NaN; return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : (easyMv() ? dEasy : dNormal); };
+  const boolSet = (k, dNormal, dEasy = dNormal) => (hasSet(k) && typeof G.settings[k] === 'boolean' ? G.settings[k] : (easyMv() ? dEasy : dNormal));
+  const _cf = { alwaysRun: false, tapRun: true, dash: true, tapMs: 300, jumpBufMs: 120, coyoteMs: 100, wallSlide: true, stepAround: true, lowFences: true };
+  function comfort() {
+    const c = _cf;
+    c.alwaysRun = boolSet('alwaysRun', false); c.tapRun = boolSet('tapRun', true); c.dash = boolSet('dashOn', true);
+    c.tapMs = numSet('tapWindow', 200, 450, 300, 360); c.jumpBufMs = numSet('jumpBuffer', 0, 200, 120, 180); c.coyoteMs = numSet('coyoteMs', 0, 200, 100, 150);
+    c.wallSlide = boolSet('wallSlide', true); c.stepAround = boolSet('stepAround', true); c.lowFences = boolSet('lowFences', true);
+    return c;
+  }
+  /**
+   * The double-tap detector as pure logic (no DOM, no clock of its own: every call carries the time of the event).
+   *   down(dir, code, t, repeat) → null | { dir } — dir: 'f' | 'b' | 'l' | 'r'; the second FRESH press of a direction ≤ windowMs()
+   *       after the first one (press to press) answers { dir }; the press after that starts a new count.
+   *   up(dir, code, t)  reset()  held(dir)
+   * Never counted: auto-repeat (repeat = true), a key that is already down, a second key of the direction while one is held,
+   * a press within 60 ms of the last one (a bounce) or within 20 ms of that key's release (an old X11 repeat pair), a press
+   * while another direction was pressed in between, a first press that is older than the window, timestamps that run backwards.
+   */
+  function makeTapDetector(windowFn) {
+    const mk = () => ({ held: new Set(), at: -1e9, pend: false, upAt: new Map() });
+    const D = { f: mk(), b: mk(), l: mk(), r: mk() };
+    const BOUNCE = 60, PAIR = 20;
+    return {
+      down(dir, code, t, repeat) {
+        const d = D[dir];
+        if (!d || repeat || !Number.isFinite(t)) return null;
+        if (d.held.has(code)) return null;                       // already down: a repeat the browser did not flag
+        const ua = d.upAt.get(code);
+        if (ua !== undefined && t - ua >= 0 && t - ua < PAIR) return null;   // release + press pair of one auto-repeat tick
+        const was = d.held.size > 0;
+        d.held.add(code);
+        if (was) return null;                                    // another key of this direction is still down
+        for (const k in D) if (k !== dir) D[k].pend = false;     // another direction in between spoils the count
+        const gap = t - d.at;
+        if (d.pend && gap >= 0 && gap < BOUNCE) return null;     // a bounce of the switch
+        if (d.pend && gap >= BOUNCE && gap <= windowFn()) { d.pend = false; return { dir }; }
+        d.pend = true; d.at = t;
+        return null;
+      },
+      up(dir, code, t) { const d = D[dir]; if (!d) return; d.held.delete(code); if (Number.isFinite(t)) d.upAt.set(code, t); },
+      held(dir) { return !!D[dir] && D[dir].held.size > 0; },
+      pending(dir) { return !!D[dir] && D[dir].pend; },
+      reset() { for (const k in D) { D[k].held.clear(); D[k].pend = false; D[k].upAt.clear(); } },
+    };
+  }
+  const taps = makeTapDetector(() => comfort().tapMs);
+  const DIR_ACTION = { f: 'forward', b: 'back', l: 'left', r: 'right' };
+  const DIR_WORD = { b: 'back', l: 'left', r: 'right' };
+  function dirOfCode(code) { for (const d in DIR_ACTION) { if (bindings[DIR_ACTION[d]].includes(code)) return d; } return null; }
+  function endTapRun() { if (!tapRun) return; tapRun = false; try { G.bus.emit('input:run', { on: false }); } catch (e) { /* bus optional */ } }
+  /** one fresh press of a direction (a key, the stick or a d-pad button) → the double tap, if it is one */
+  function tapPress(dir, code, t, via) {
+    if (!input.gameplay()) return;
+    if (!taps.down(dir, code, t, false)) return;
+    const C = comfort();
+    if (dir === 'f') { if (C.tapRun && !tapRun) { tapRun = via; try { G.bus.emit('input:run', { on: true, via }); } catch (e) { /* bus optional */ } } }
+    else if (C.dash) { try { G.bus.emit('input:dash', { dir: DIR_WORD[dir], via, t }); } catch (e) { /* bus optional */ } }
+  }
+  function setAutoForward(on) {
+    on = !!on && input.gameplay();
+    if (on === autoFwd) return autoFwd;
+    autoFwd = on;
+    try { G.bus.emit('input:autoforward', { on }); } catch (e) { /* bus optional */ }
+    try { G.ui?.toast?.(on ? `⬆️ 앞으로 계속 가요 · 멈추려면 ${bindings.label('back') || 'S'} 또는 ${bindings.label('autoForward') || 'K'}` : '⏹️ 멈췄어요'); } catch (e) { /* toast optional */ }
+    return autoFwd;
+  }
+  // touch: the stick counts as four keys (a press = it reaches 55 % of its travel in a direction, released below 30 %)
+  let stickDir = null;
+  function stickTap(t) {
+    const mag = Math.hypot(joy.x, joy.y);
+    let nd = null;
+    if (mag >= (stickDir ? 0.3 : 0.55)) nd = Math.abs(joy.y) >= Math.abs(joy.x) ? (joy.y > 0 ? 'f' : 'b') : (joy.x > 0 ? 'r' : 'l');
+    if (nd === stickDir) return;
+    if (stickDir) taps.up(stickDir, 'stick', t);
+    stickDir = nd;
+    if (nd) tapPress(nd, 'stick', t, 'stick');
+  }
+  function stickEnd(t) { if (stickDir) { taps.up(stickDir, 'stick', t); stickDir = null; } }
+  const DPAD_DIR = { up: 'f', down: 'b', left: 'l', right: 'r' };
+
   const input = {
     keys,
     hasTouch: isTouch,
@@ -323,6 +423,10 @@
     running: false,
     pointerDown: false,
     bindings,
+    taps, makeTapDetector, comfort,   // [move] the double-tap detector (pure), its factory and the comfort options
+    get tapRun() { return tapRun; },
+    get autoForward() { return autoFwd; },
+    setAutoForward,
     isDown: (code) => keys.has(code),
     any(list) { return list.some((c) => keys.has(c)); },
     onKey(code, fn, opts = {}) {
@@ -346,7 +450,7 @@
     queueJump() { jumpQueued = true; },
     /** swallow the trailing browser click of the press in progress (or of the one that just ended) */
     shieldClicks(ms = GHOST_MS) { shieldPress(ms); },
-    reset() { keys.clear(); look.dx = look.dy = 0; zoom = 0; jumpQueued = false; joy.x = joy.y = 0; dpad.x = dpad.y = 0; input.setMobileRun(false); },
+    reset() { keys.clear(); taps.reset(); tapRun = false; autoFwd = false; look.dx = look.dy = 0; zoom = 0; jumpQueued = false; joy.x = joy.y = 0; dpad.x = dpad.y = 0; input.setMobileRun(false); },
 
     /** recompute axis; called by the player each frame */
     update() {
@@ -359,11 +463,17 @@
         if (input.any(b.right)) x += 1;
         if (input.any(b.left)) x -= 1;
         x += joy.x + dpad.x; y += joy.y + dpad.y;
+        if (autoFwd) y += 1;   // [move] the auto-forward key
+      } else {
+        taps.reset(); if (autoFwd) setAutoForward(false);   // [move] a window opened: nothing is half-counted, nothing walks on
       }
       const len = Math.hypot(x, y);
       if (len > 1) { x /= len; y /= len; }
       input.axis.x = x; input.axis.y = y;
-      input.running = input.gameplay() && (input.any(input.bindings.run) || mobileRun || Math.hypot(joy.x, joy.y) > 0.92);
+      // [move] the double-tapped run holds while forward is held; 항상 달리기 turns Shift / the run button into "walk"
+      if (tapRun && !(input.gameplay() && (tapRun === 'key' ? input.any(input.bindings.forward) : tapRun === 'stick' ? (joy.active && joy.y > 0.3) : dpad.y > 0))) endTapRun();
+      const slow = input.any(input.bindings.run) || mobileRun;
+      input.running = input.gameplay() && ((comfort().alwaysRun ? !slow : (slow || Math.hypot(joy.x, joy.y) > 0.92)) || !!tapRun);
       const moving = len > 0.05;
       if (moving && !wasMoving) G.bus.emit('input:move-start');
       wasMoving = moving;
@@ -397,6 +507,26 @@
       const id = key.slice(KEYSET.length);
       if (acts.has(id) && Array.isArray(value)) adoptKeys(id, value);
     });
+  }
+  // [move] the auto-forward key (a plain toggle; the dispatcher already translates a rebound key)
+  bindings.on('autoForward', () => { setAutoForward(!autoFwd); return false; });
+  // [move] the comfort options of the 조작 tab (CONTRACT §19.3): declared here, drained by 68-settings (queue); a value the
+  // player never set follows the mode (easy mode = the gentler side), see comfort()
+  {
+    const Q = (G.settingsQueue = G.settingsQueue || []);
+    const grp = '달리기 · 대시 · 편의';
+    Q.push(
+      { id: 'tapRun', tab: 'controls', group: grp, type: 'toggle', label: '🏃 앞으로 두 번 눌러 달리기', hint: '앞으로 가는 키를 두 번 톡톡 누르고 두 번째에서 손을 떼지 않으면 달려요. 키에서 손을 떼면 걸어요. Shift로도 달릴 수 있어요.', default: true, order: 200, words: '달리기 더블탭 두번 달려 run' },
+      { id: 'dashOn', tab: 'controls', group: grp, type: 'toggle', label: '💨 옆·뒤로 두 번 눌러 대시', hint: '왼쪽·오른쪽·뒤로 가는 키를 두 번 누르면 그쪽으로 휙 한 번 물러나요. 계속 눌러도 달리지는 않아요.', default: true, order: 201, words: '대시 회피 더블탭 dash' },
+      { id: 'tapWindow', tab: 'controls', group: grp, type: 'slider', label: '⏱️ 두 번 누르는 간격', hint: '이 시간 안에 두 번 누르면 한 묶음이에요. 길수록 천천히 눌러도 돼요. (쉬운 모드는 처음에 360)', min: 200, max: 450, step: 10, unit: '밀리초', default: 300, order: 202, words: '더블탭 간격 시간' },
+      { id: 'alwaysRun', tab: 'controls', group: grp, type: 'toggle', label: '🏃‍♀️ 항상 달리기', hint: '켜면 늘 달려요. 이때 Shift(또는 달리기 단추)를 누르면 걸어요.', default: false, order: 203, words: '자동 달리기 항상 run' },
+      { id: 'jumpBuffer', tab: 'controls', group: grp, type: 'slider', label: '🦘 점프 미리 누르기', hint: '땅에 닿기 조금 전에 점프를 눌러도 닿자마자 뛰어요. (쉬운 모드는 처음에 180)', min: 0, max: 200, step: 10, unit: '밀리초', default: 120, order: 204, words: '점프 버퍼 입력' },
+      { id: 'coyoteMs', tab: 'controls', group: grp, type: 'slider', label: '🪂 낭떠러지 끝에서 뛰기', hint: '땅 끝을 막 벗어난 뒤에도 이 시간 동안은 점프가 돼요. (쉬운 모드는 처음에 150)', min: 0, max: 200, step: 10, unit: '밀리초', default: 100, order: 205, words: '코요테 점프 유예' },
+      { id: 'wallSlide', tab: 'controls', group: grp, type: 'toggle', label: '🧱 벽을 따라 미끄러지기', hint: '비스듬히 벽이나 모서리에 닿아도 멈추지 않고 벽을 따라 돌아 가요.', default: true, order: 206, words: '벽 미끄러짐 모서리' },
+      { id: 'stepAround', tab: 'controls', group: grp, type: 'toggle', label: '🪨 작은 것 비켜 가기', hint: '길에 작은 돌이나 항아리가 있으면 살짝 비켜서 지나가요.', default: true, order: 207, words: '장애물 우회 비켜' },
+      { id: 'lowFences', tab: 'controls', group: grp, type: 'toggle', label: '🌾 달릴 때 낮은 울타리 넘기', hint: '달리다가 낮은 울타리나 돌담을 만나면 점프하지 않아도 훌쩍 넘어가요. (쉬운 모드는 처음부터 켜져 있어요)', default: true, order: 208, words: '울타리 자동 넘기 vault' },
+      { id: 'runFree', tab: 'controls', group: grp, type: 'info', label: '🍃 달려도 힘이 들지 않아요', hint: '', order: 209, words: '달리기 힘 피로', render: (el) => { el.textContent = '달리기와 대시는 아무것도 줄어들게 하지 않아요. 힘이 떨어지거나 느려지는 일이 없어요.'; } },
+    );
   }
   // every profile starts with clean input: no held keys, no 달리기 toggle left on by the previous child
   for (const ev of ['game:logout', 'game:login']) G.bus.on(ev, () => input.reset());
@@ -736,6 +866,15 @@
     }
     if (ml._tap) ml._tap.clean = false;   // another key between: not a tap
   }
+  // [move] the keys of the four directions feed the double-tap detector (the press is stamped with the event's own time)
+  function moveTapDown(e) {
+    if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+    const dir = dirOfCode(e.code);
+    if (!dir) return;
+    if ((dir === 'f' || dir === 'b') && autoFwd) setAutoForward(false);
+    tapPress(dir, e.code, evT(e), 'key');
+  }
+  function moveTapUp(e) { const dir = dirOfCode(e.code); if (dir) taps.up(dir, e.code, evT(e)); }
   function tapUp(e) {
     if (/^Control/.test(e.code)) ctrlAt = performance.now();
     const T = ml._tap;
@@ -863,12 +1002,13 @@
     }
     if (typing || e.repeat) return;
     if (!input.gameplay()) return;
+    moveTapDown(e);   // [move] double tap → run / dash; forward or back also stops the auto-forward walk
     if (!kbdFocus && ml.isMoveKey(e.code)) ml.onMoveKey();   // [controls] lock / walk: the first movement key captures the pointer
     if (input.bindings.jump.includes(e.code) && !kbdFocus) jumpQueued = true;
     if (input.bindings.interact.includes(e.code)) G.bus.emit('input:interact', { source: 'key' });
   });
-  window.addEventListener('keyup', (e) => { keys.delete(e.code); if (ml.isMoveKey(e.code) && ml.mode() === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS; tapUp(e); });   // [controls] walk: + 1.2 s after the last key · [gfx] the Ctrl tap
-  window.addEventListener('blur', () => { keys.clear(); });
+  window.addEventListener('keyup', (e) => { keys.delete(e.code); moveTapUp(e); if (ml.isMoveKey(e.code) && ml.mode() === 'walk') ml.walkUntil = performance.now() + WALK_HOLD_MS; tapUp(e); });   // [controls] walk: + 1.2 s after the last key · [gfx] the Ctrl tap
+  window.addEventListener('blur', () => { keys.clear(); taps.reset(); endTapRun(); setAutoForward(false); });   // [move]
 
   // ---------------------------------------------------------------- mouse / pointer on the 3D canvas
   function bindCanvas() {
@@ -962,6 +1102,7 @@
         return;
       }
       active.set(e.pointerId, dir); b.classList.add('pressed');
+      if (DPAD_DIR[dir]) tapPress(DPAD_DIR[dir], 'dpad:' + dir, evT(e), 'dpad');   // [move]
       try { pad.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       recompute();
     });
@@ -972,7 +1113,7 @@
         if (e.type === 'pointerup' && overEl(c.el, e)) { shieldPress(); G.bus.emit('input:interact', { source: 'dpad' }); }
         return;
       }
-      if (active.has(e.pointerId)) { active.delete(e.pointerId); pad.querySelectorAll('.pressed').forEach((x) => x.classList.remove('pressed')); recompute(); if (!active.size && hold.el === pad) hold.el = null; }
+      if (active.has(e.pointerId)) { const d0 = active.get(e.pointerId); if (DPAD_DIR[d0]) taps.up(DPAD_DIR[d0], 'dpad:' + d0, evT(e)); active.delete(e.pointerId); pad.querySelectorAll('.pressed').forEach((x) => x.classList.remove('pressed')); recompute(); if (!active.size && hold.el === pad) hold.el = null; }
     };
     pad.addEventListener('pointerup', up);
     pad.addEventListener('pointercancel', up);
@@ -995,12 +1136,13 @@
     stick._bound = true;
     const knob = stick.querySelector('.joystick-knob');
     let id = null, cx = 0, cy = 0, R = 50;
-    const set = (x, y) => {
+    const set = (x, y, t) => {
       let dx = x - cx, dy = y - cy;
       const len = Math.hypot(dx, dy);
       if (len > R) { dx = (dx / len) * R; dy = (dy / len) * R; }
       knob.style.transform = `translate(${dx}px, ${dy}px)`;
       joy.x = dx / R; joy.y = -dy / R; joy.active = true;
+      stickTap(t);   // [move] two quick flicks = the double tap
     };
     stick.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -1008,11 +1150,11 @@
       const r = stick.getBoundingClientRect();
       cx = r.left + r.width / 2; cy = r.top + r.height / 2; R = r.width * 0.36;
       try { stick.setPointerCapture(id); } catch (err) { /* ignore */ }
-      set(e.clientX, e.clientY);
+      set(e.clientX, e.clientY, evT(e));
       hold.el = stick; hold.id = id; hold.x = e.clientX; hold.y = e.clientY; hold.last = performance.now();
     });
-    stick.addEventListener('pointermove', (e) => { if (e.pointerId === id) { set(e.clientX, e.clientY); if (e.isTrusted) { hold.x = e.clientX; hold.y = e.clientY; } } });
-    const end = (e) => { if (e.pointerId !== id) return; id = null; joy.x = joy.y = 0; joy.active = false; knob.style.transform = ''; if (hold.el === stick) hold.el = null; };
+    stick.addEventListener('pointermove', (e) => { if (e.pointerId === id) { set(e.clientX, e.clientY, evT(e)); if (e.isTrusted) { hold.x = e.clientX; hold.y = e.clientY; } } });
+    const end = (e) => { if (e.pointerId !== id) return; stickEnd(evT(e)); id = null; joy.x = joy.y = 0; joy.active = false; knob.style.transform = ''; if (hold.el === stick) hold.el = null; };
     stick.addEventListener('pointerup', end);
     stick.addEventListener('pointercancel', end);
 
