@@ -316,6 +316,20 @@ check('the thread: the player adds words, the operator answers (status answered,
     $left = Support::seen((int) $A['id'], $t['id']);
     return $left === 0 && Support::mine((int) $A['id'])['tickets'][0]['unread'] === false;
 });
+check('seen(): a look inside the millisecond of the answer still clears the badge (the answer may be stamped one tick ahead of the clock) — one ticket and all tickets', function () use ($A, $ADMIN) {
+    Db::exec('DELETE FROM support_tickets WHERE user_id = ?', [(int) $A['id']]);
+    $t = mk($A, ['kind' => 'question', 'category' => 'howto', 'body' => '답이 왔나요?']);
+    Support::answer($ADMIN, $t['id'], '네, 왔어요.');
+    // answer() stamps answered_at = the player's last look + 1 when both share a millisecond, so it can be ahead of
+    // the clock; here it is put well ahead so that the case does not depend on the speed of the machine
+    $ahead = Tfm\Clock::ms() + 60000;
+    Db::exec('UPDATE support_tickets SET answered_at = ?, user_seen_at = ? WHERE id = ?', [$ahead, $ahead - 1, $t['id']]);
+    if (Support::unread((int) $A['id']) !== 1) return 'not unread before the look';
+    $one = Support::seen((int) $A['id'], $t['id']);
+    Db::exec('UPDATE support_tickets SET user_seen_at = ? WHERE id = ?', [$ahead - 1, $t['id']]);
+    $all = Support::seen((int) $A['id']);
+    return $one === 0 && $all === 0 ? true : j(['left after one' => $one, 'left after all' => $all]);
+});
 check('the thread: the operator answer keeps personal data out (masked) and is plain text; an answer to a missing ticket is a 404; a player is not an operator', function () use ($A, $ADMIN) {
     $t = mk($A);
     Support::answer($ADMIN, $t['id'], '<b>확인</b> 전화 010-2222-3333 으로 연락 주세요');

@@ -308,11 +308,14 @@ final class Support
     public static function seen(int $uid, int $id = 0): int
     {
         $now = Clock::ms();
+        // a look is stamped with the later of the clock and the answer: answer() may stamp answered_at one millisecond
+        // ahead of the clock (it has to be later than the player's last look), and a look inside that millisecond
+        // left the badge at 1 until the next look
         if ($id > 0) {
             self::own($uid, $id);
-            Db::exec('UPDATE support_tickets SET user_seen_at = ? WHERE id = ? AND user_seen_at < ?', [$now, $id, $now]);
+            Db::exec('UPDATE support_tickets SET user_seen_at = CASE WHEN answered_at > ? THEN answered_at ELSE ? END WHERE id = ? AND (user_seen_at < ? OR user_seen_at < answered_at)', [$now, $now, $id, $now]);
         } else {
-            Db::exec('UPDATE support_tickets SET user_seen_at = ? WHERE user_id = ? AND answered_at > user_seen_at', [$now, $uid]);
+            Db::exec('UPDATE support_tickets SET user_seen_at = CASE WHEN answered_at > ? THEN answered_at ELSE ? END WHERE user_id = ? AND answered_at > user_seen_at', [$now, $now, $uid]);
         }
         return self::unread($uid);
     }
