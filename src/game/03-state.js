@@ -554,6 +554,9 @@
     if (G.data.cooking?.sanitize) data.cooking = G.data.cooking.sanitize(data.cooking);
     // [fishing] 낚시 (CONTRACT §18.3): the 어류 도감, today's count, the 어항 standing in the water (34-fish-data.js)
     if (G.data.fish?.sanitizeState) data.fishing = G.data.fish.sanitizeState(data.fishing);
+    // [wardrobe] 옷장 (CONTRACT §19.1): owned pieces (known WEAR_ ids), ≤ 12 outfits, three words, the usual face (24-wardrobe.js);
+    // the migration of a profile without a wardrobe and the "only owned pieces are worn" rule run in G.sys.wardrobe on load
+    if (G.data.wardrobe?.sanitize) data.wardrobe = G.data.wardrobe.sanitize(data.wardrobe);
     if (profile) { data.profile.id = profile.id; if (profile.nickname) data.profile.nickname = profile.nickname; if (profile.role) data.profile.role = profile.role; if (profile.email) data.profile.email = profile.email; }
     return data;
   }

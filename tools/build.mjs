@@ -236,6 +236,12 @@ function exportGameData() {
     try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
     catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
   }
+  // [wardrobe] clothes as items (CONTRACT §19.1): 24-wardrobe.js makes one item WEAR_<KEY>_<ID> per value of a slot key of
+  // the avatar table (its data half is pure); its gift pieces join the rewards of quests / achievements of every fragment above
+  for (const f of fragments.filter((x) => /^24-wardrobe/.test(x.name))) {
+    try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); G.data.wardrobe?.applyGifts?.(G.data); }
+    catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
+  }
   const d = G.data || {};
   // Only what the server needs to validate rewards / timings.
   const pick = (obj, fn) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, fn(v)]));
@@ -281,6 +287,9 @@ function exportGameData() {
     // [fishing] species ids → { p: protected 0 | 1, max: mm, d: difficulty }, neighbours, spots, baits, the daily keep limit,
     // exp per catch (CONTRACT §18.3): Tfm\SaveValidator checks the `fishing` block of a save and keeps protected fish out of the bag
     fish: d.fish && typeof d.fish.serverTable === 'function' ? d.fish.serverTable() : {},
+    // [wardrobe] item ids → [slot key, value id, sell], the starter kit, the words / homes / faces of 기본 정보, the limits
+    // (CONTRACT §19.1): Tfm\SaveValidator's [wardrobe] block checks G.state.wardrobe and that the look wears owned pieces
+    wardrobe: d.wardrobe && typeof d.wardrobe.serverTable === 'function' ? d.wardrobe.serverTable() : {},
   };
 }
 
