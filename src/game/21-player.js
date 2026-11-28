@@ -34,6 +34,16 @@
 //         player:arrived {id, x, z, rescued, clamped} (a walkTo reached its goal — clamped: the goal itself was
 //         unreachable (outside the play area / inside a collider) and the closest spot is the arrival),
 //         player:walk-clamped {id, x, z, short}, player:jump {n, pos}, player:appearance {appearance}.
+// [move] CONTRACT §19.3 — moveState 'walk' | 'run' | 'dash' | 'air' (events player:run {on}, player:dash {dir, pos}). The
+//   double tap of 05-input.js gives 'input:run' (a short burst — a 1.4 × RUN target that eases back in 0.35 s — then the run
+//   holds while forward is held; G.input.running) and 'input:dash' {dir: left | right | back} (relative to the camera):
+//   ONE dash of 3.2 m in 0.22 s outdoors (2.2 m in a roofed place), eased (distance 1 − (1 − k)², no end speed), × the speed
+//   tier's 1 + (tier − 1) / 4 capped at 1.5, 0.6 s between two starts. Only on the ground, never while sitting, in a window,
+//   in a cinematic, during a walkTo or on a slide; it runs through the same sub-stepped mover (≤ 0.25 m per slice, per-slice
+//   displacement taken from the eased curve, so 5 and 60 frames per second travel the same distance) and ends at the first
+//   blocked slice. Comfort options (G.input.comfort()): jump buffer / coyote time in ms, sliding past wedges, stepping round a
+//   small thing (a free lane within 1.15 m), low fences (0.55 – 1.3 m) cleared by a running player without a jump.
+//   Running and dashing take nothing from anyone: player.runDrains = false.
 // Every number that reaches a matrix is checked with Number.isFinite (a NaN here would poison the
 // camera, the shadow map and — on Direct3D — bloom).
 // =============================================================================
@@ -62,6 +72,10 @@
   const MAX_SUBSTEP = 0.25;            // m of travel per collision sub-step (fences are >= 0.1 m)
   const MAX_SUBSTEPS = 20;             // [controls] 43.2 m/s (tier 3 sprint, §17.1) at 10 fps = 4.3 m per frame
   const MAX_SLOPE = Math.tan(40 * Math.PI / 180);
+  // [move] §19.3
+  const DASH_T = 0.22, DASH_OUT = 3.2, DASH_IN = 2.2, DASH_GAP = 0.6;   // seconds · metres · metres · seconds between two starts
+  const BURST_T = 0.35;                                                // the run's first burst: 1.4 × RUN easing back in this long
+  const dashEase = (k) => 1 - (1 - k) * (1 - k);                       // distance share after k of the dash (speed 2 D / T → 0)
   const RADIUS = 0.35;
   const DEFAULT_SEAT = 0.42;
   const WADE_DEPTH = 0.18; // deepest shallow water (below the surface) the player may wade into
@@ -611,6 +625,8 @@
     get speedMul() { return moveMul(); },
     _walk: null, _walkSeq: 0, _faceT: null, _slide: null,
     _jumpBuf: 0, _coyote: 0, _airJump: false, _doubleUsed: false, _clampToastAt: -1e9,
+    // [move] §19.3
+    moveState: 'walk', runDrains: false, _dash: null, _dashAt: -1e9, _burst: 0, _runOn: false, _slideSign: 1, _fenceAt: -1e9, DASH_T, DASH_OUT, DASH_IN, DASH_GAP,
     _rigParams: { speed: 0, grounded: true, vy: 0 },
     _stepOpts: { surface: 'grass', run: false },
     _steps: 0, _stepT: 0, wantSpeed: 0, _lastEmit: new THREE.Vector3(), _emitT: 0, _distAcc: 0, _saveT: 0, _tagT: 0, _tagKey: '',
@@ -648,6 +664,7 @@
         this.cancelWalk('manual');
         if (this.sitting) this.standUp();
       });
+      this._bindMoveEvents();   // [move]
       G.bus.on('state:before-save', () => this._writeState());
       G.bus.on('world:object', ({ id, obj }) => {
         if (/^BENCH_\d+$/.test(id) && G.interact?.get?.(id)) G.interact.setObject?.(id, obj);
@@ -1151,6 +1168,24 @@
       const ox = p.x, oz = p.z;
       if (Math.abs(nx - ox) > 1e-5 && this._tryStep(nx, oz)) return true;
       if (Math.abs(nz - oz) > 1e-5 && this._tryStep(ox, nz)) return true;
+      // [move] sliding past wedges, slanted walls, shores and steep banks: turn the step away from the heading (≤ 70°) and take
+      // it when it still makes headway (≥ 20 % of the step along the way)
+      const C = G.input?.comfort?.();
+      if (C && C.wallSlide && this.grounded) {
+        const sx = nx - ox, sz = nz - oz, s = Math.hypot(sx, sz);
+        if (s > 1e-4) {
+          const ux = sx / s, uz = sz / s;
+          for (const ang of [0.4, 0.8, 1.2]) {
+            for (let k = 0; k < 2; k++) {
+              const sg = k === 0 ? this._slideSign : -this._slideSign, c = Math.cos(ang), sn = Math.sin(ang) * sg;
+              if (this._tryStep(ox + (ux * c - uz * sn) * s, oz + (ux * sn + uz * c) * s)) {
+                if ((p.x - ox) * ux + (p.z - oz) * uz >= s * 0.2) { this._slideSign = sg; return true; }
+                p.x = ox; p.z = oz;
+              }
+            }
+          }
+        }
+      }
       return false;
     },
 
@@ -1206,6 +1241,68 @@
       try { G.fx?.doubleJump?.(pos); } catch (e) { /* visual only */ }
       G.bus.emit('player:jump', { n: 2, pos });
     },
+    /** [move] the double tap's events from 05-input.js: a dash, and the run's first burst */
+    _bindMoveEvents() {
+      G.bus.on('input:dash', ({ dir } = {}) => { try { this._startDash(dir); } catch (e) { G.log.warn('PLAYER', 'dash', e); } });
+      G.bus.on('input:run', ({ on } = {}) => { if (on) this._burst = BURST_T; });
+    },
+    /**
+     * [move] begin ONE dash (dir: 'left' | 'right' | 'back', relative to the camera) → started? (see the header for the rules)
+     * The checks are made NOW — on the key event, before the next frame cancels a walk or stands a sitter up — so a dash never
+     * starts "through" a guided walk or a seat.
+     */
+    _startDash(dir) {
+      if (!this._ready || this._dash || !this.enabled) return false;
+      const I = G.input, t = G.time.elapsed;
+      if (I && !I.gameplay()) return false;
+      if (this.sitting || this._slide || this._walk || !this.grounded || this._cinematic()) return false;
+      if (t - this._dashAt < DASH_GAP) return false;
+      const bs = G.sys.camera?.getMoveBasis?.() || _fallbackBasis;
+      let dx, dz;
+      if (dir === 'left') { dx = -bs.right.x; dz = -bs.right.z; }
+      else if (dir === 'right') { dx = bs.right.x; dz = bs.right.z; }
+      else if (dir === 'back') { dx = -bs.forward.x; dz = -bs.forward.z; }
+      else return false;
+      const l = Math.hypot(dx, dz);
+      if (!(l > 1e-6) || !fin(l)) return false;
+      dx /= l; dz /= l;
+      const indoor = !!G.sys.places?.noDoubleJump?.();                    // under a roof: the shorter dash
+      const D = (indoor ? DASH_IN : DASH_OUT) * Math.min(1.5, 1 + (moveMul() - 1) * 0.25);
+      this._dash = { dx, dz, D, T: DASH_T, t: 0, s: 0, dir };
+      this._dashAt = t;
+      if (this.rig?.actionFullBody) this.rig.stopAction();
+      const p = this.position, pos = { x: p.x, y: p.y, z: p.z };
+      try { G.sfx('dash'); } catch (e) { /* sound optional */ }
+      try { G.sys.camera?.kick?.(dir === 'back' ? 0.6 : 0.85); } catch (e) { /* camera optional */ }
+      G.bus.emit('player:dash', { dir, pos, dx, dz, dist: D });
+      return true;
+    },
+    /**
+     * [move] "stepping round a small thing": the way ahead is blocked head-on (almost no progress) — look for a free lane to
+     * the side within 1.15 m (the lane itself and 0.6 m / 1.4 m ahead of it must be clear) and slide towards it, at most
+     * `step` m per call. A long wall has no lane that close, so nobody drifts along walls. → moved?
+     */
+    _aroundStep(dx, dz, step) {
+      const W = G.world, p = this.position;
+      if (!(step > 1e-4) || !W?.blocked) return false;
+      if (!W.blocked(p.x + dx * 0.5, p.z + dz * 0.5, RADIUS * 0.9, p.y)) return false;   // nothing right ahead: nobody is nudged
+      const px = -dz, pz = dx;                       // the perpendicular
+      for (const L of [0.45, 0.8, 1.15]) {
+        for (let k = 0; k < 2; k++) {
+          const sg = k === 0 ? this._slideSign : -this._slideSign;
+          const cx = p.x + px * L * sg, cz = p.z + pz * L * sg;
+          if (W.blocked(cx, cz, RADIUS * 0.9, p.y) || W.blocked(cx + dx * 0.6, cz + dz * 0.6, RADIUS * 0.9, p.y) || W.blocked(cx + dx * 1.4, cz + dz * 1.4, RADIUS * 0.9, p.y)) continue;
+          if (W.isWater(cx, cz)) continue;
+          const n = Math.min(L, step);
+          const ox = p.x, oz = p.z;
+          if (this._tryStep(ox + px * n * sg, oz + pz * n * sg)) { this._slideSign = sg; return true; }
+          p.x = ox; p.z = oz;
+        }
+      }
+      return false;
+    },
+    /** [move] the run's first burst: × 1.4 (easy mode × 1.18) of the target speed, easing back to 1 over BURST_T */
+    _burstK() { if (!(this._burst > 0)) return 1; return 1 + (easyOn() ? 0.18 : 0.4) * (this._burst / BURST_T); },
     /** a scripted camera (intro drone flight, telescope tour, title orbit) is running */
     _cinematic() {
       const m = G.sys.camera?.mode;
@@ -1221,6 +1318,7 @@
       const ctl = this.enabled && (input ? input.gameplay() : true);
       // the speed tier's movement multiplier, read every frame (tier 1 → 7.68 / 14.4, tier 3+ → 23.04 / 43.2 m/s)
       const mv = moveMul(), RUNX = RUN * mv, WALKX = WALK * mv;
+      const C = input && input.comfort ? input.comfort() : null;   // [move] the comfort options (jump buffer, coyote, lanes, fences)
 
       // ---- smooth reposition (sit / stand up)
       if (this._slide) {
@@ -1240,7 +1338,7 @@
         mdx = bs.forward.x * ax.y + bs.right.x * ax.x;
         mdz = bs.forward.z * ax.y + bs.right.z * ax.x;
         const l = Math.hypot(mdx, mdz);
-        if (l > 1e-6 && fin(l)) { mdx /= l; mdz /= l; mwant = (input.running ? RUNX : WALKX) * mag; } else { mdx = 0; mdz = 0; }
+        if (l > 1e-6 && fin(l)) { mdx /= l; mdz /= l; mwant = (input.running ? RUNX * this._burstK() : WALKX) * mag; } else { mdx = 0; mdz = 0; }   // [move] burst
         this._faceT = null;
       } else if (this._walk && !ctl) {
         // paused by a modal / dialogue: freeze the stuck & time budget clocks
@@ -1249,6 +1347,7 @@
       }
       const manual = mwant > 0;
       const frozen = !!(this.sitting || this._slide);
+      if (this._burst > 0) this._burst = input && input.running && manual ? Math.max(0, this._burst - dt) : 0;   // [move] the run's first burst
       if (!frozen && (manual || (this._walk && ctl)) && this.rig.actionFullBody) this.rig.stopAction();
 
       // ---- jump (buffered input + coyote time) — once per frame, before the sub-steps. A second press while airborne
@@ -1258,11 +1357,16 @@
       if (jumped && ctl) {
         if (this.sitting) this.standUp();
         else if (!this.grounded && this._airJump && !this._doubleUsed && this._coyote <= 0 && !this._slide && !this._cinematic() && !G.sys.places?.noDoubleJump?.()) this._doubleJump(this._vaultDir(mdx, mdz, mwant, WALKX), t);   // [places-kit] none under a ceiling
-        else this._jumpBuf = 0.15;
+        else this._jumpBuf = Math.max(C ? C.jumpBufMs / 1000 : 0.15, dt * 1.01);   // [move] the buffer is an option (≥ this frame)
+      }
+      // [move] low fences cleared while running: a running player a step from a fence / low wall (top 0.55 – 1.3 m) jumps by itself
+      if (C && C.lowFences && ctl && manual && this.grounded && !frozen && !this._dash && this._jumpBuf <= 0 && input.running && this.speed > WALKX * 0.8 && t - this._fenceAt > 0.6 && W.obstacleAhead) {
+        const o = W.obstacleAhead(p.x, p.z, mdx, mdz, RADIUS, p.y, 1.15, 4.5);
+        if (o && !o.tall && fin(o.top) && o.top - p.y >= 0.55 && o.top - p.y <= 1.3) { this._jumpBuf = 0.2; this._fenceAt = t; }
       }
       this._jumpBuf -= dt;
-      this._coyote = this.grounded ? 0.1 : this._coyote - dt;
-      if (this._jumpBuf > 0 && this._coyote > 0 && !this.sitting && !this._slide) {
+      this._coyote = this.grounded ? (C ? C.coyoteMs / 1000 : 0.1) : this._coyote - dt;
+      if (this._jumpBuf > 0 && (this.grounded || this._coyote > 0) && !this.sitting && !this._slide) {
         v.y = JUMP_V; this._jumpY = p.y;
         { const vd = this._vaultDir(mdx, mdz, mwant, WALKX); const vv = vd ? this._vaultSpeed(1, vd.dx, vd.dz, vd.s) : 0; if (vv > v.y) { v.y = vv; this._vaultPush(vd.dx, vd.dz, vd.s, t); } }   // [controls] vault assist
         this.grounded = false; this._coyote = 0; this._jumpBuf = 0;
@@ -1274,7 +1378,14 @@
 
       // ---- sub-stepped locomotion: steering + velocity + turning + collisions + ground, <= MAX_SUBSTEP each
       // (a fall counts too: at a low frame rate one slice of a jump's descent could otherwise pass a rock top)
-      const reach = Math.max(Math.hypot(v.x, v.z), manual ? mwant : (this._walk ? RUNX : 0), this.grounded ? 0 : Math.abs(v.y) + GRAVITY * dt) * dt;
+      // [move] a dash in progress: this frame's share of its eased distance (taken from the curve, never from a speed × dt step)
+      let dashD = 0;
+      if (this._dash) {
+        const ds = this._dash;
+        if (!ctl || frozen || !this.grounded || this._cinematic()) { this._dash = null; if (!ctl || frozen) { v.x = 0; v.z = 0; } }   // (a window / a seat takes the momentum with it)
+        else { dashD = ds.D * (dashEase(Math.min(1, (ds.t + dt) / ds.T)) - ds.s); ds.t += dt; }
+      }
+      const reach = Math.max(dashD, Math.max(Math.hypot(v.x, v.z), manual ? mwant : (this._walk ? RUNX : 0), this.grounded ? 0 : Math.abs(v.y) + GRAVITY * dt) * dt);
       const n = frozen ? 1 : clamp(Math.ceil(reach / MAX_SUBSTEP), 1, MAX_SUBSTEPS);
       const sdt = dt / n;
       let moved = false, pushed = false, lastWant = 0;
@@ -1287,7 +1398,17 @@
           if (this._steer(this._walk, t, sdt, o) && o.want > 0) { dx = o.dx; dz = o.dz; want = o.want; }
         }
         if (frozen) want = 0;
+        // [move] the dash slice: direction and distance from the eased curve (the walk code below is skipped for it)
+        let dashing = this._dash, dashStep = 0;
+        if (dashing && !this.grounded) this._dash = dashing = null;
+        if (dashing) {
+          // equal DISTANCE per slice (the frame's share dashD split by n): a long frame must not put 1 m into one slice
+          dashStep = dashD / n; dashing.s += dashStep / dashing.D;
+          dx = dashing.dx; dz = dashing.dz; want = RUNX;
+        }
         lastWant = want;
+        if (dashing) { v.x = sdt > 0 ? dx * dashStep / sdt : 0; v.z = sdt > 0 ? dz * dashStep / sdt : 0; }
+        else {
         // velocity (turning against the current motion brakes at DECEL: crisp reversals at speed)
         const tvx = dx * want, tvz = dz * want;
         let acc; // accelerations scale with the tier so the feel stays the same (walk pace in 0.18 s at every tier)
@@ -1299,6 +1420,7 @@
         if (dl > maxd && dl > 1e-9) { ddx *= maxd / dl; ddz *= maxd / dl; }
         v.x += ddx; v.z += ddz;
         if (!fin(v.x) || !fin(v.z)) { v.x = 0; v.z = 0; }
+        }
         // turning (a touch softer at a full sprint: no jitter, still precise)
         if (want > 0.1) {
           const sp = Math.hypot(v.x, v.z);
@@ -1310,6 +1432,7 @@
           if (Math.abs(diff) < 0.01) this._faceT = null;
         }
         // horizontal move with collisions (<= MAX_SUBSTEP by construction of n)
+        const bx0 = p.x, bz0 = p.z;   // [move] where the slice began (the step-around measures its progress)
         if (!this._slide && (Math.abs(v.x) > 1e-4 || Math.abs(v.z) > 1e-4)) {
           const ox = p.x, oz = p.z;
           let sx = v.x * sdt, sz = v.z * sdt;
@@ -1318,13 +1441,18 @@
           // [controls] while vaulting (airborne, ≤ 1.6 s after an assisted take-off) the body keeps its momentum at
           // the obstacle's face and goes over as soon as the feet are above its top
           const vaulting = !this.grounded && this._vaultUntil > t;
-          if (!this._move(p.x + sx, p.z + sz)) { if (!vaulting) { v.x = 0; v.z = 0; } pushed = pushed || want > 0; }
+          if (!this._move(p.x + sx, p.z + sz)) { if (!vaulting) { v.x = 0; v.z = 0; } pushed = pushed || want > 0; if (dashing) this._dash = null; }   // [move] a blocked slice ends the dash
           else if (sdt > 0) {
             moved = true;
             // keep velocity consistent with what actually happened (sliding along walls)
             const mvx = (p.x - ox) / sdt, mvz = (p.z - oz) / sdt;
             if (!vaulting && Math.hypot(mvx, mvz) < Math.hypot(v.x, v.z) * 0.6) { v.x = mvx; v.z = mvz; }
           }
+        }
+        // [move] stepping round a small thing: head-on against something with a free lane beside it → slide into the lane
+        if (C && C.stepAround && manual && !dashing && this.grounded && !this._slide && want > WALKX * 0.4 && (p.x - bx0) * dx + (p.z - bz0) * dz < want * sdt * 0.2) {
+          const bx = p.x, bz = p.z;
+          if (this._aroundStep(dx, dz, Math.min(want * sdt, MAX_SUBSTEP))) { moved = true; pushed = false; if (sdt > 0) { v.x = (p.x - bx) / sdt * 0.5 + dx * want * 0.5; v.z = (p.z - bz) / sdt * 0.5 + dz * want * 0.5; } }
         }
         // vertical: follow the ground slice by slice (slopes & stairs at speed never launch the player)
         if (!this._slide) {
@@ -1366,6 +1494,7 @@
         }
         if (!fin(p.x) || !fin(p.y) || !fin(p.z)) break;
       }
+      if (this._dash && this._dash.t >= this._dash.T - 1e-9) { this._dash = null; v.x = 0; v.z = 0; }   // [move] the dash is over (eased to a stop)
       const blocked = pushed && !moved;
       this.rotY = Math.atan2(Math.sin(this.rotY), Math.cos(this.rotY));
       if (!fin(this.rotY)) this.rotY = 0;
@@ -1385,7 +1514,15 @@
 
       // ---- animation (gait, stride and playback rate follow the ground speed: no foot sliding)
       const rp = this._rigParams;
-      rp.speed = blocked ? 0 : this.grounded ? hs : hs * 0.5; rp.grounded = this.grounded; rp.vy = v.y;
+      const hsAnim = this._dash ? Math.min(hs, RUNX * 1.1) : hs;   // [move] a dash is a lunge, not a 40 m/s stride
+      rp.speed = blocked ? 0 : this.grounded ? hsAnim : hsAnim * 0.5; rp.grounded = this.grounded; rp.vy = v.y;
+      // [move] moveState + player:run (hysteresis so the speed ramp does not flicker)
+      {
+        const intent = manual && !!input?.running && this.grounded && !this._dash;
+        const runNow = intent && (this._runOn ? hs > WALKX * 1.02 : hs > WALKX * 1.12);
+        this.moveState = !this.grounded ? 'air' : this._dash ? 'dash' : runNow ? 'run' : 'walk';
+        if (runNow !== this._runOn) { this._runOn = runNow; G.bus.emit('player:run', { on: runNow }); }
+      }
       this.rig.update(dt, rp);
       // footsteps: one per half stride of the animation (distance based), never machine-gunned
       this._stepT += dt;

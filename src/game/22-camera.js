@@ -122,7 +122,7 @@
     _pos: new THREE.Vector3(0, 12, 30), _look: new THREE.Vector3(),
     _dPos: new THREE.Vector3(), _dLook: new THREE.Vector3(),
     _trans: null,                    // {t, dur, fromPos, fromLook}
-    _shake: 0, _t: 0, _fov: FOV,
+    _shake: 0, _t: 0, _fov: FOV, _kick: 0,
     _lastUserLook: -10,
     _cine: { center: new THREE.Vector3(0, 6, -30), radius: 70, height: 26, speed: 0.045, angle: 0.6 },
     _focus: { point: new THREE.Vector3(), obj: null, distance: 3.4, height: 1.75, side: 0.95, dir: new THREE.Vector3(0, 0, 1), orbit: false, yaw: 0, pitch: 0.25, pair: 0 },
@@ -302,6 +302,13 @@
       if (G.settings.cameraShake === false || G.settings.reduceMotion || gentle()) return;
       if (!Number.isFinite(amount)) return;
       this._shake = clamp(this._shake + amount, 0, 1);
+    },
+
+    /** [move] CONTRACT §19.3: the small kick of a dash — the view widens by up to 4° for a moment and eases back (0.3 s, no shake,
+     *  nothing flashes). Dropped with reduce-motion and in easy mode (its camera never moves on its own). */
+    kick(amount = 0.8) {
+      if (G.settings.reduceMotion || gentle() || this.mode !== 'follow' || !Number.isFinite(amount)) return;
+      this._kick = clamp(this._kick + amount, 0, 1);
     },
 
     /** place the camera immediately (after teleport / load) */
@@ -662,6 +669,7 @@
       else if (this.mode === 'follow') {
         target = followFov();   // [gfx] 55°, or the wide view's 70°
         if (!this._wasGentle && !G.settings?.reduceMotion && Number.isFinite(sp)) { const w = WALK() * 1.05 * (RUNX() / RUN()); target += clamp((sp - w) / (RUNX() - w), 0, 1) * FOV_KICK; }
+        if (this._kick > 0.001) { target += this._kick * 4; this._kick = Math.max(0, this._kick - (dt || 0.016) * 3.3); }   // [move] the dash's kick
       }
       this._fov += (target - this._fov) * damp(this.mode === 'shot' ? 6 : 3, dt || 1);
       if (!Number.isFinite(this._fov)) this._fov = FOV;

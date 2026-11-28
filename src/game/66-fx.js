@@ -1244,12 +1244,13 @@
       }
     },
     /** dust at the feet; dir -1 = kicked backwards (sprint start), +1 = sprayed forwards (skid), 0 = around */
-    _footDust(pl, l, power, dir = 0) {
+    _footDust(pl, l, power, dir = 0, vec = null) {   // [move] vec: the direction of travel when it is not where the body faces (a dash)
       const p = pl.position;
       let surf = 'grass';
       try { surf = G.world?.surfaceAt?.(p.x, p.z) || 'grass'; } catch (e) { surf = 'grass'; }
       const water = surf === 'water' || p.y < (G.data.layout?.waterY ?? -1.1) - 0.02;
       let fx = Math.sin(pl.rotY || 0), fz = Math.cos(pl.rotY || 0);
+      if (vec && Number.isFinite(vec.x) && Number.isFinite(vec.z)) { fx = vec.x; fz = vec.z; }   // [move]
       if (dir > 0) { fx = -fx; fz = -fz; }   // skid: the spray goes ahead of the feet (the "behind" below flips)
       // [gfx] 이펙트 투명화(자신): the shared point pool has no alpha per particle, so the dust thins out with the option
       // (and is gone at the last step); the own pool below fades
@@ -1596,6 +1597,8 @@
       on('level:up', ({ level }) => { this.levelUp(level); });
       // the double jump (§14.2): 21-player calls G.fx.doubleJump itself too — deduped inside (150 ms)
       on('player:jump', ({ n, pos }) => { if (n === 2) this.doubleJump(pos || null); });
+      // [move] a dash (§19.3): a small kick-off puff of dust behind the feet along the direction of travel; nothing flashes
+      on('player:dash', ({ dx, dz }) => { const pl = G.sys.player; if (lv() && pl?.position && pl.grounded && !cinematic()) this._footDust(pl, lv(), 1.6, -1, { x: dx, z: dz }); });
 
       on('quest:completed', ({ questId }) => {
         if (pnow() < this._questQuietUntil) return;

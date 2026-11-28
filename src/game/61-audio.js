@@ -6,7 +6,7 @@
 //   G.sys.audio.play(name, {volume, pan, at:{x,z}, surface, run, exact, force}) -> bool
 //       UI      click open close notify error coin reward quest levelup achievement correct wrong page slide chat emote
 //               teleport shutter camera screen lecture lock unlock bell sparkle stamp tap oops pop whoosh festival
-//       body    step jump jump2 vault land land_wood land_stone land_earth land_grass land_gravel splash
+//       body    step jump jump2 vault dash land land_wood land_stone land_earth land_grass land_gravel splash
 //       work    water harvest plant pickup jar lid craft bubble drip
 //       room    door_open door_close door_slide place pick turn
 //       (쉬운 모드: click → tap (목탁), error / wrong → oops (대금): never a harsh buzzer; fanfares a little softer)
@@ -63,7 +63,7 @@
     chat: 0.09, emote: 0.15, page: 0.07, slide: 0.07, water: 0.25, harvest: 0.15, plant: 0.15, jar: 0.15, lid: 0.15, bubble: 0.03,
     drip: 0.02, reward: 0.3, quest: 0.4, levelup: 0.8, achievement: 0.5, correct: 0.25, wrong: 0.25, teleport: 0.4, shutter: 0.12,
     camera: 0.12, tap: 0.06, oops: 0.3, sparkle: 0.3, stamp: 0.2, pickup: 0.12, door_open: 0.3, door_close: 0.3, door_slide: 0.3,
-    place: 0.1, pick: 0.1, turn: 0.08, vault: 0.2, screen: 0.4, lecture: 0.5, lock: 0.2, unlock: 0.3, bell: 0.2, festival: 2,
+    place: 0.1, pick: 0.1, turn: 0.08, vault: 0.2, dash: 0.3, screen: 0.4, lecture: 0.5, lock: 0.2, unlock: 0.3, bell: 0.2, festival: 2,
   };
   const FANFARE = { levelup: 2.6, achievement: 2.0, quest: 1.6, reward: 1.4, festival: 4 }; // duck the music under these (s)
   const WET = { notify: 0.5, coin: 0.4, reward: 0.7, quest: 0.7, levelup: 0.8, achievement: 0.8, correct: 0.5, emote: 0.3, teleport: 0.8, open: 0.25, close: 0.2,
@@ -379,6 +379,11 @@
     vault(S, t) {
       noise(S, { kind: 'pink', ft: 'bandpass', f: 420, f2: 1700, sweep: 0.22, q: 0.7, t, a: 0.03, d: 0.24, g: 0.16 });
       return gk(S, 'janggu', t + 0.05, { stroke: 'gi', vel: 0.5 });
+    },
+    /** [move] a dash (CONTRACT §19.3): a soft whoosh of the 한복 sleeves — no tone, no click, quieter than a jump */
+    dash(S, t) {
+      noise(S, { kind: 'pink', ft: 'bandpass', f: 380, f2: 1100, sweep: 0.2, q: 0.6, t, a: 0.035, d: 0.2, g: 0.09 });
+      return noise(S, { kind: 'white', ft: 'highpass', f: 2600, f2: 1400, sweep: 0.18, q: 0.5, t: t + 0.02, a: 0.03, d: 0.14, g: 0.014 });
     },
     splash(S, t) {
       const end = noise(S, { kind: 'white', ft: 'bandpass', f: 1500, f2: 600, sweep: 0.3, q: 0.7, t, a: 0.003, d: 0.38, g: 0.2 });
