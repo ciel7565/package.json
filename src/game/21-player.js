@@ -1362,7 +1362,7 @@
       // [move] low fences cleared while running: a running player a step from a fence / low wall (top 0.55 – 1.3 m) jumps by itself
       if (C && C.lowFences && ctl && manual && this.grounded && !frozen && !this._dash && this._jumpBuf <= 0 && input.running && this.speed > WALKX * 0.8 && t - this._fenceAt > 0.6 && W.obstacleAhead) {
         const o = W.obstacleAhead(p.x, p.z, mdx, mdz, RADIUS, p.y, 1.15, 4.5);
-        if (o && !o.tall && fin(o.top) && o.top - p.y >= 0.55 && o.top - p.y <= 1.3) { this._jumpBuf = 0.2; this._fenceAt = t; }
+        if (o && !o.tall && fin(o.top) && o.top - p.y >= 0.55 && o.top - p.y <= 1.3 && o.b - o.a <= 1.35) { this._jumpBuf = 0.2; this._fenceAt = t; }   // (thin: a fence or a low wall — not a jar row or a field of stones)
       }
       this._jumpBuf -= dt;
       this._coyote = this.grounded ? (C ? C.coyoteMs / 1000 : 0.1) : this._coyote - dt;

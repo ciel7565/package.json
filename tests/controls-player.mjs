@@ -174,6 +174,8 @@ function dashOnce(dir, opts = {}, fps = 60, seconds = 1) {
   check('walking (not running) never jumps by itself', e.z > -9 + 0.06 + 0.35 - 0.05 && e.jumps === 0, f2(e.z));
   const f = loadPlayer({ easy: true }); f.W.addCollider({ shape: 'box', x: 0, z: -9, hw: 6, hd: 3, tag: 'B_HOUSE' }); f.place(0, 0, Math.PI); f.keys(0, 1, true); f.run(2, 60);
   check('a building is no fence: running into it never jumps', f.ev('player:jump').length === 0 && f.P.position.z > -6, f2(f.P.position.z));
+  const jr = loadPlayer({ easy: true }); jr.W.addCollider({ shape: 'circle', x: 0, z: -9, r: 0.9, tag: 'onggi' }); jr.place(0, 0, Math.PI); jr.keys(0, 1, true); jr.run(2, 60);
+  check('a big jar (a wide obstacle, 1.9 m deep) is no fence: no automatic hop', jr.ev('player:jump').length === 0, f2(jr.P.position.z));
   const g = loadPlayer({ easy: true }); g.W.addCollider({ shape: 'box', x: 0, z: -9, hw: 6, hd: 0.1, tag: 'stonewall' }); g.place(0, 0, Math.PI); g.keys(0, 1, true); g.run(2, 60);
   check('a stone wall (1.9 m) is too high for the automatic hop', g.ev('player:jump').length === 0 && g.P.position.z > -9, f2(g.P.position.z));
 }
