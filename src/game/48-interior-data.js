@@ -710,10 +710,10 @@
       floor: 'maru', keeper: { name: '훈장님', role: '서당 선생님', sets: ['hunjang', 'scholar', 'seonbi'], hello: '어서 와서 앉으렴. 오늘은 셈하기와 한글 놀이를 하자.' },
       desc: '낮은 책상 앞에 앉아 글과 셈을 배우던 마을 학교, 서당이에요.' }),
     H('forge', 'B_FORGE', '대장간', '🔨', '#6e3b4e', 300, { w: 12, d: 10, h: 4.4 }, {
-      floor: 'earth', tone: 'dark', post: 3.0, keeper: { name: '대장장이', role: '쇠를 다루는 사람', sets: ['nongbu', 'potter', 'farmer'], hello: '풀무질을 하면 불이 확 살아나요. 멀리서 봐요.' },
+      floor: 'stone', tone: 'dark', post: 3.0, keeper: { name: '대장장이', role: '쇠를 다루는 사람', sets: ['nongbu', 'potter', 'farmer'], hello: '풀무질을 하면 불이 확 살아나요. 멀리서 봐요.' },
       desc: '화덕에 쇠를 달구어 호미와 낫을 만들던 대장간이에요.' }),
     H('mill', 'B_MILL', '방앗간', '🌾', '#7a6a55', 500, { w: 14, d: 11, h: 4.6 }, {
-      floor: 'earth', tone: 'dark', post: 3.1, keeper: { name: '방앗간 아저씨', role: '곡식 찧는 사람', sets: ['nongbu', 'farmer'], hello: '물레방아가 돌면 방아가 쿵쿵 찧어요.' },
+      floor: 'stone', tone: 'warm', post: 3.1, keeper: { name: '방앗간 아저씨', role: '곡식 찧는 사람', sets: ['nongbu', 'farmer'], hello: '물레방아가 돌면 방아가 쿵쿵 찧어요.' },
       desc: '물레방아와 디딜방아로 곡식을 찧던 방앗간이에요.' }),
     H('herb', 'B_HERB', '약초방', '🌿', '#6d8f4e', 700, { w: 12, d: 9, h: 3.4 }, {
       floor: 'maru', keeper: { name: '약초방 할아버지', role: '풀과 차를 아는 사람', sets: ['magoja', 'seonbi'], hello: '말린 풀마다 향이 달라요. 냄새를 맡아 볼래요?' },
