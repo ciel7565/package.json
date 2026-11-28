@@ -226,7 +226,9 @@ try {
   if (want('reload')) {
     await ev(() => { const H = G.sys.healing; if (!H.visit || H.visit.out) H.book(); H.counsel({}); H.start('R5', { acts: false }); });
     const before = await ev(() => ({ c: G.sys.healing.visit.rooms.R5, id: G.sys.healing.visit.id }));
-    await ev(async () => { await G.save.save({ reason: 'test' }); });
+    // a save already in flight makes save() return false without writing: try until this one is written
+    const saved = await ev(async () => { for (let i = 0; i < 20; i++) { if (await G.save.save({ reason: 'test' })) return true; await new Promise((r) => setTimeout(r, 400)); } return false; });
+    check('the save before the reload was written', saved);
     await boot();
     const after = await ev(() => ({ c: G.sys.healing.visit?.rooms?.R5, id: G.sys.healing.visit?.id, run: G.sys.healing.running().map((r) => r.room) }));
     check('after a reload the course is the same and still running', after.id === before.id && after.c && after.c.at === before.c.at && after.c.end === before.c.end && after.run.includes('R5'), { before, after });

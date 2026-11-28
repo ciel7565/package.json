@@ -208,3 +208,20 @@ body.reduce-motion .hd-ring > i { animation: none; transform: scale(.85); }
   .heal-stamps { grid-template-columns: repeat(5, 1fr); }
   .heal-hud { min-width: 0; }
 }
+/* 쉬운 모드: the map in two rows of big doors, every word at least 16 px (kid audit) */
+body.easy .heal-corr { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+body.easy .heal-door .hd-no, body.easy .heal-door .hd-name, body.easy .heal-door .hd-line, body.easy .heal-corr-line, body.easy .heal-glass { font-size: 16px; }
+body.easy .heal-modal .heal-meta, body.easy .heal-modal .heal-note, body.easy .heal-modal .heal-claim, body.easy .heal-modal .hn-d,
+body.easy .heal-modal .heal-stampbox small, body.easy .heal-modal .heal-tbl, body.easy .heal-modal .heal-letter, body.easy .heal-modal .heal-num,
+body.easy .heal-modal .heal-course small, body.easy .heal-dock .hd-sub, body.easy .heal-dock .hd-count, body.easy .heal-dock .hd-note { font-size: 16px; }
+@media (max-width: 560px) { body.easy .heal-corr { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* phones: the four numbers in one row (picture + value), never over the room card */
+.heal-num .hn-l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 560px) {
+  .heal-hud { padding: 4px 8px; }
+  .heal-hud .heal-nums.small { grid-template-columns: repeat(4, auto); gap: 4px 10px; }
+  .heal-hud .heal-nums.small .heal-num { grid-template-columns: auto auto; gap: 3px; }
+  .heal-hud .heal-nums.small .hn-l, .heal-hud .heal-nums.small .hn-bar { display: none; }
+  body.heal-docked .heal-hud { display: none; }
+  .heal-chip .hc-s { display: none; }
+}

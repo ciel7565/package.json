@@ -397,6 +397,7 @@
     if (ses && ses.veil) veil(null);
     unpose(); batOn(false);
     if (dock) { dock.remove(); dock = null; }
+    document.body.classList.remove('heal-docked');
     ses = null;
     if (reason !== 'switch') clearProps();
   }
@@ -404,6 +405,7 @@
     if (dock) return dock;
     dock = h('section', { id: 'heal-dock', class: 'heal-dock', role: 'region', 'aria-label': '힐링관 체험' });
     document.body.appendChild(dock);
+    document.body.classList.add('heal-docked');
     return dock;
   }
   const curStep = () => (ses && ses.i < ses.steps.length ? ses.steps[ses.i] : null);

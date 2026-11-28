@@ -322,9 +322,9 @@
       F('24-wardrobe.css', 'player', '옷장·한복집 창(왼쪽 모습·네 방향 단추·칸 그림 타일·물감 색·표정·기본 정보 칩·갖춤 카드·설정 시트)·쉬운 모드 큰 타일·휴대폰 한 줄'), // [wardrobe]
       F('35-fishing.css', 'farm', '낚시 화면(위 막대·알림 줄·큰 단추·당김 막대)·낚시 방법 고르기·만남 카드·어류 도감'), // [fishing]
       F('37-cooking.css', 'farm', '요리 카드(아래쪽)·큰 누르기 단추·불 막대·뒤집기 칸·음식 고르기·요리 도감·찬장'), // [cooking]
+      F('39-healing.css', 'edu', '힐링관 상태창·복도 지도·안내데스크/숙소/상담/관/리포트 창·관 체험 카드·제10관 어둠 막(4초에 걸쳐 천천히)'), // [healing]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
-      F('39-healing.css', 'edu', '힐링관 상태창·복도 지도·안내데스크/숙소/상담/관/리포트 창·관 체험 카드·제10관 어둠 막(4초에 걸쳐 천천히)'), // [healing]
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
       F('53-complex-site.css', 'map', '만장대 단지 첫 방문 환영 카드(큰 버튼)'), // [complex-ground]
       F('60-social.css', 'social', '채팅·말풍선·이모지 선택·아이 말하기(skc-*)'),
@@ -501,9 +501,9 @@
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
   EXPECTED_SYSTEMS.push('cooking');   // [cooking] 37-cooking.js
   EXPECTED_SYSTEMS.push('wardrobe');   // [wardrobe] 24-wardrobe.js
+  EXPECTED_SYSTEMS.push('healing', 'healacts');   // [healing] 39-healing.js · 79-healing-acts.js
   EXPECTED_SYSTEMS.push('fishing');   // [fishing] 35-fishing.js
   EXPECTED_SYSTEMS.push('healHall');   // [heal-hall] 69-healing-hall.js
-  EXPECTED_SYSTEMS.push('healing', 'healacts');   // [healing] 39-healing.js · 79-healing-acts.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
