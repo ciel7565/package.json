@@ -489,6 +489,17 @@
   SFX.knead = (S, t) => { noise(S, { kind: 'brown', ft: 'lowpass', f: 500, q: 0.7, t, a: 0.03, d: 0.18, g: 0.08 }); return t + 0.2; };
   SFX.chop = (S, t) => gk(S, 'moktak', t, { f: 640, vel: 0.3 });
   SFX.pound = (S, t) => { tone(S, { type: 'sine', f: 120, f2: 70, t, a: 0.002, d: 0.16, g: 0.18 }); return gk(S, 'moktak', t + 0.01, { f: 300, vel: 0.28 }); };
+  // [healing] the 힐링관 (39-healing.js / 79-healing-acts.js, CONTRACT §19.6): bright, short hits for room 9 (never a long
+  // harsh noise), soft water / ember / steam / bell for the calm rooms
+  SFX.heal_swing = (S, t) => noise(S, { kind: 'pink', ft: 'bandpass', f: 300, f2: 2200, sweep: 0.18, q: 0.9, t, a: 0.04, d: 0.2, g: 0.11 });
+  SFX.heal_plate = (S, t) => { let e = noise(S, { kind: 'white', ft: 'highpass', f: 2400, q: 0.7, t, a: 0.001, d: 0.22, g: 0.12 }); for (let i = 0; i < 7; i++) e = Math.max(e, tone(S, { type: 'triangle', f: rand(2400, 5200), f2: rand(1800, 4200), glide: 0.05, t: t + rand(0, 0.18), a: 0.001, d: rand(0.05, 0.14), g: rand(0.03, 0.06) })); return e; };
+  SFX.heal_glass = (S, t) => { let e = noise(S, { kind: 'white', ft: 'highpass', f: 4200, q: 0.8, t, a: 0.001, d: 0.3, g: 0.1 }); for (let i = 0; i < 10; i++) e = Math.max(e, tone(S, { type: 'sine', f: rand(3800, 7600), f2: rand(3600, 7200), glide: 0.02, t: t + rand(0, 0.35), a: 0.001, d: rand(0.08, 0.3), g: rand(0.02, 0.05) })); return e; };
+  SFX.heal_clang = (S, t) => { let e = t; for (const [f, g] of [[196, 0.12], [311, 0.08], [523, 0.06], [877, 0.04]]) e = Math.max(e, tone(S, { type: 'triangle', f: f * rand(0.97, 1.03), f2: f * 0.96, glide: 0.8, t, a: 0.002, d: rand(0.7, 1.1), g })); noise(S, { kind: 'pink', ft: 'bandpass', f: 1800, q: 1, t, a: 0.001, d: 0.08, g: 0.08 }); return e; };
+  SFX.heal_can = (S, t) => { let e = noise(S, { kind: 'pink', ft: 'bandpass', f: 1600, f2: 900, sweep: 0.12, q: 1.4, t, a: 0.001, d: 0.16, g: 0.12 }); for (let i = 0; i < 4; i++) e = Math.max(e, tone(S, { type: 'square', f: rand(700, 1400), f2: rand(400, 800), glide: 0.03, t: t + i * 0.025, a: 0.001, d: 0.03, g: 0.02 })); return e; };
+  SFX.heal_bell = (S, t) => gk(S, 'pungkyeong', t, { f: rand(1300, 1500), vel: 0.3, dur: 2.6 });
+  SFX.heal_ember = (S, t) => SFX.fire_crackle(S, t);
+  SFX.heal_steam = (S, t) => SFX.steam_hiss(S, t);
+  SFX.heal_pour = (S, t) => SFX.pour(S, t);
   /** per-effect trim (the timbre changed — the loudness must not: measured against the old effects) */
   const TRIM = {
     click: 0.45, tap: 0.45, open: 0.21, close: 0.14, notify: 0.7, error: 0.26, oops: 0.24, coin: 0.58, reward: 0.36, quest: 0.4, welcome: 0.4,

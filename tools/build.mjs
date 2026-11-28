@@ -242,6 +242,11 @@ function exportGameData() {
     try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); G.data.wardrobe?.applyGifts?.(G.data); }
     catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
   }
+  // [healing] the 힐링관 (CONTRACT §19.6): room ids → minutes, the bundle size and the state limits reach SaveValidator
+  for (const f of fragments.filter((x) => /^38-healing-data/.test(x.name))) {
+    try { vm.runInContext(`(function(){'use strict';\n${f.code}\n})()`, ctx, { timeout: 2000 }); }
+    catch (e) { console.warn(`⚠ data export: ${f.name} could not be evaluated in Node: ${e.message}`); }
+  }
   const d = G.data || {};
   // Only what the server needs to validate rewards / timings.
   const pick = (obj, fn) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, fn(v)]));
@@ -290,6 +295,8 @@ function exportGameData() {
     // [wardrobe] item ids → [slot key, value id, sell], the starter kit, the words / homes / faces of 기본 정보, the limits
     // (CONTRACT §19.1): Tfm\SaveValidator's [wardrobe] block checks G.state.wardrobe and that the look wears owned pieces
     wardrobe: d.wardrobe && typeof d.wardrobe.serverTable === 'function' ? d.wardrobe.serverTable() : {},
+    // [healing] { v, rooms: { R1: minutes, … }, bundle, nums, limits, scaleMax } (CONTRACT §19.6) — Tfm\SaveValidator's [healing] block
+    healing: d.healing && typeof d.healing.serverTable === 'function' ? d.healing.serverTable() : {},
   };
 }
 

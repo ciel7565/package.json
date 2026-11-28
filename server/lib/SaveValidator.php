@@ -203,6 +203,7 @@ final class SaveValidator
         $this->planMarks($n, $p); // [content] CONTRACT §17.8
         // [fishing] CONTRACT §18.3: the catches since the last save, bounded by time, explain their exp / edu
         $fishX = $this->fishing($n, $p, $dt);
+        $this->healing($n, $p, $dt, $now); // [healing] CONTRACT §19.6
         $explain['value'] += $this->wardrobe($n, $p, $user, $first); // [wardrobe] CONTRACT §19.1: owned pieces, worn pieces, the migration
         $explain['exp'] += $fishX['exp'];
         $explain['edu'] += $fishX['edu'];
@@ -1081,6 +1082,119 @@ final class SaveValidator
         foreach ($book as $b) $cooked += (int) self::p(self::o($b), 'n');
         if (self::n(self::p($stats, 'dishesCooked')) > $cooked + 1) $this->violate('COOK_BAD_SHAPE', ['field' => 'dishesCooked']);
         if (self::n(self::p($stats, 'dishStars3')) > $cooked) $this->violate('COOK_BAD_SHAPE', ['field' => 'dishStars3']);
+    }
+
+    // ------------------------------------------------------------------ [healing] 힐링관 (CONTRACT §19.6)
+    /**
+     * The `healing` block of a save: {v, visit: null | {id, at, band, stow, changed, ask, base, rooms: {R1: {at, end, done,
+     * small?, stop?, step?}}, r1?, r9?, r10?, wear?, rep, out}, visits, stamps, last?}. A missing block is fine; a wrong
+     * container is malformed (400). A violation (the client restores the server's copy): an unknown room, a number or a
+     * list out of range, a time in the future, or a course that is NEW in this save (not in the server's copy with the same
+     * start) and runs faster than the operator's healing.time_scale allows — courses already in the server's copy are not
+     * judged again, so lowering the scale never turns an old visit into a violation. The hall pays nothing; the letter and
+     * the portrait are never part of a save. Nothing is judged while the export has no healing table.
+     */
+    private function healing(object $n, ?object $p, float $dt, int $now): void
+    {
+        $h = self::p($n, 'healing');
+        if ($h === null) return;
+        if (!self::o($h)) self::bad('healing');
+        $tab = GameData::all();
+        $t = isset($tab['healing']) && is_array($tab['healing']) ? $tab['healing'] : [];
+        if (empty($t['rooms']) || !is_array($t['rooms'])) return;
+        $lim = isset($t['limits']) && is_array($t['limits']) ? $t['limits'] : [];
+        $L = function (string $k, int $d) use ($lim): int { return isset($lim[$k]) ? (int) $lim[$k] : $d; };
+        $int = function ($v, float $lo, float $hi): bool { return (is_int($v) || is_float($v)) && is_finite((float) $v) && floor((float) $v) == $v && $v >= $lo && $v <= $hi; };
+        $num = function ($v, float $lo, float $hi): bool { return (is_int($v) || is_float($v)) && is_finite((float) $v) && $v >= $lo && $v <= $hi; };
+        $bad = function (string $f, array $more = []): void { $this->violate('HEAL_BAD_SHAPE', array_merge(['field' => $f], $more)); };
+        $nowMs = (float) $now;
+        $late = $nowMs + $L('skewMs', 300000);
+        $tOk = function ($v) use ($int, $late): bool { return $int($v, 0, 1e14) && $v <= $late; };
+        $scale = 1;
+        if (class_exists('Tfm\\Settings')) { try { $scale = (int) Settings::get('healing.time_scale'); } catch (\Throwable $e) { $scale = 1; } }
+        $scale = max(1, min(isset($t['scaleMax']) ? (int) $t['scaleMax'] : 120, $scale));
+        foreach (['visits' => $L('visits', 100000), 'stamps' => $L('visits', 100000) * 10] as $k => $hi) {
+            $v = self::p($h, $k);
+            if ($v !== null && !$int($v, 0, $hi)) { $bad($k); return; }
+        }
+        $last = self::p($h, 'last');
+        if ($last !== null && !self::o($last)) self::bad('healing last');
+        $v = self::p($h, 'visit');
+        if ($v === null) return;
+        if (!self::o($v)) self::bad('healing visit');
+        foreach (['at', 'band', 'changed', 'rep', 'out'] as $k) {
+            $x = self::p($v, $k);
+            if ($x !== null && !$tOk($x)) { $bad($k); return; }
+        }
+        $id = self::p($v, 'id');
+        if ($id !== null && (!is_string($id) || !preg_match('/^H[0-9a-z]{1,14}\z/', $id))) { $bad('id'); return; }
+        $stow = self::p($v, 'stow');
+        if ($stow !== null && !$int($stow, 0, isset($t['bundle']) ? (int) $t['bundle'] : 3)) { $bad('stow'); return; }
+        $ask = self::p($v, 'ask');
+        if ($ask !== null) {
+            if (!self::o($ask) && $ask !== []) self::bad('healing ask');
+            foreach (self::kv($ask) as $k => $x) if (!in_array((string) $k, ['mood', 'ache', 'sleep', 'wish'], true) || !$int($x, 0, 3)) { $bad('ask'); return; }
+        }
+        $numIds = isset($t['nums']) && is_array($t['nums']) ? array_map('strval', $t['nums']) : [];
+        $base = self::p($v, 'base');
+        if ($base !== null) {
+            if (!self::o($base) && $base !== []) self::bad('healing base');
+            foreach (self::kv($base) as $k => $x) if (!in_array((string) $k, $numIds, true) || !$num($x, 0, 100)) { $bad('base'); return; }
+        }
+        $rooms = self::p($v, 'rooms');
+        if ($rooms !== null && !self::o($rooms) && $rooms !== []) self::bad('healing rooms');
+        $prevV = $p ? self::o(self::p(self::o(self::p($p, 'healing')), 'visit')) : null;
+        $prevRooms = $prevV ? self::o(self::p($prevV, 'rooms')) : null;
+        foreach (self::kv($rooms) as $rid => $c) {
+            $rid = (string) $rid;
+            $c = self::o($c);
+            if (!isset($t['rooms'][$rid]) || $c === null) { $bad('rooms', ['room' => self::safeId($rid)]); return; }
+            $at = self::p($c, 'at'); $end = self::p($c, 'end'); $done = self::p($c, 'done');
+            if (!$tOk($at) || !$int($end, 0, 1e14) || $end < $at || ($done !== null && $done !== 0 && !$tOk($done))) { $bad('rooms', ['room' => self::safeId($rid)]); return; }
+            foreach (['small' => $L('small', 60), 'step' => 20] as $k => $hi) { $x = self::p($c, $k); if ($x !== null && !$int($x, 0, $hi)) { $bad('rooms', ['room' => self::safeId($rid)]); return; } }
+            $stop = self::p($c, 'stop');
+            if ($stop !== null && !$num($stop, 0, 1)) { $bad('rooms', ['room' => self::safeId($rid)]); return; }
+            // a course that is new in this save (or started again) must not run faster than the operator's scale allows
+            $pc = $prevRooms ? self::o(self::p($prevRooms, $rid)) : null;
+            $same = $pc !== null && self::p($pc, 'at') === $at && self::p($pc, 'end') === $end;
+            $need = (float) $t['rooms'][$rid] * 60000.0 / $scale;
+            if (!$same && ($end - $at) < $need * 0.98 - 1000) { $this->violate('HEAL_TOO_FAST', ['room' => self::safeId($rid), 'ms' => (int) ($end - $at), 'need' => (int) $need]); return; }
+            if ($done && !$same && $done < $end - 1000) { $this->violate('HEAL_TOO_FAST', ['room' => self::safeId($rid), 'done' => 'early']); return; }
+        }
+        $r1 = self::p($v, 'r1');
+        if ($r1 !== null) {
+            if (!self::o($r1)) self::bad('healing r1');
+            foreach (self::kv($r1) as $k => $x) {
+                if ((string) $k === 'pat') { if (!is_string($x) || !preg_match('/^[ATGC]{0,12}\z/', $x)) { $bad('r1'); return; } continue; }
+                if (!in_array((string) $k, ['balance', 'breath', 'posture', 'microbes', 'salt'], true) || !$num($x, 0, 100)) { $bad('r1'); return; }
+            }
+        }
+        $r9 = self::p($v, 'r9');
+        if ($r9 !== null) {
+            if (!self::o($r9)) self::bad('healing r9');
+            $sum = 0;
+            foreach (self::kv($r9) as $k => $x) {
+                if (!in_array((string) $k, ['plates', 'drums', 'cans', 'bottles'], true) || !$int($x, 0, $L('r9', 100000))) { $bad('r9'); return; }
+                $sum += (int) $x;
+            }
+            // about three hits a second at most since the server's copy
+            $prevSum = 0;
+            $pr9 = $prevV ? self::o(self::p($prevV, 'r9')) : null;
+            if ($pr9 && self::p($prevV, 'id') === $id) foreach (self::kv($pr9) as $x) $prevSum += self::i($x);
+            if ($sum - $prevSum > 40 + 3 * min($dt, 86400.0)) { $this->violate('HEAL_TOO_FAST', ['field' => 'r9', 'hits' => $sum - $prevSum]); return; }
+        }
+        $r10 = self::p($v, 'r10');
+        if ($r10 !== null && $r10 !== 'full' && $r10 !== 'gentle') { $bad('r10'); return; }
+        $wear = self::p($v, 'wear');
+        if ($wear !== null) {
+            if (!self::o($wear) && $wear !== []) self::bad('healing wear');
+            $w = self::kv($wear);
+            if (count($w) > $L('wearKeys', 32)) { $bad('wear'); return; }
+            foreach ($w as $k => $x) {
+                if (!preg_match('/^[a-zA-Z]{1,20}\z/', (string) $k)) { $bad('wear'); return; }
+                if (is_string($x) ? (strlen($x) > 16 || !preg_match('/^[#a-zA-Z0-9_-]*\z/', $x)) : !$num($x, 0, 10)) { $bad('wear'); return; }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ [fishing] 낚시 (CONTRACT §18.3)

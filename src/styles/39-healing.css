@@ -1,0 +1,207 @@
+/* =============================================================================
+   39-healing.css — the 힐링관 (CONTRACT §19.6, lane heal-program): the HUD chip and the four numbers, the corridor map,
+   the desk / stay / counselling / room / report windows, the docked step card of the rooms (79-healing-acts.js), the
+   veil of room 10. Kid rules: targets ≥ 56 px in 쉬운 모드, nothing flashes (the veil fades over 4 s), reduce motion →
+   no breathing pulse, no wiggle. Animations use transform / opacity only.
+   ============================================================================= */
+.heal-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 4px 12px; margin-top: 6px; border-radius: 14px;
+  border: 1px solid rgba(200, 230, 190, .45); background: rgba(34, 52, 36, .82); color: #f1f7ea; font: inherit; cursor: pointer;
+}
+.heal-chip .hc-t { font-size: 14px; white-space: nowrap; }
+.heal-chip .hc-s { font-size: 12px; opacity: .8; white-space: nowrap; max-width: 30vw; overflow: hidden; text-overflow: ellipsis; }
+.heal-hud { margin-top: 6px; padding: 6px 10px; border-radius: 14px; background: rgba(34, 52, 36, .78); color: #f1f7ea; min-width: 220px; }
+.heal-hud .heal-nums { gap: 3px; }
+body.easy .heal-chip { min-height: 56px; font-size: 16px; }
+
+/* the numbers */
+.heal-nums { display: grid; gap: 6px; margin: 8px 0; }
+.heal-num { display: grid; grid-template-columns: 22px minmax(70px, 7.5em) 1fr 32px auto; align-items: center; gap: 6px; font-size: 14px; }
+.heal-nums.small .heal-num { grid-template-columns: 18px 3.2em 1fr 26px; font-size: 12px; }
+.hn-bar { position: relative; height: 9px; border-radius: 5px; background: rgba(255, 255, 255, .18); overflow: hidden; }
+.hn-bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: #9bbf6a; }
+.hn-bar.down > i { background: #7fb6d9; }
+.hn-v { text-align: right; font-variant-numeric: tabular-nums; }
+.hn-d { font-size: 12px; opacity: .8; white-space: nowrap; }
+.hn-d.good { color: #4f8a3c; opacity: 1; font-weight: 700; }
+.heal-modal .hn-bar { background: rgba(60, 50, 30, .14); }
+
+/* windows */
+.heal-modal .heal-claim { margin: 0 0 8px; padding: 6px 10px; border-radius: 10px; background: rgba(155, 191, 106, .16); font-size: 13px; }
+.heal-lead { margin: 4px 0 10px; font-size: 15px; }
+.heal-meta { margin: 4px 0; font-size: 13px; opacity: .85; }
+.heal-q { font-size: 18px; font-weight: 800; margin: 6px 0 10px; }
+.heal-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.heal-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+body.easy .heal-btn { min-height: 56px; min-width: 56px; font-size: 17px; }
+.heal-btn.ready { box-shadow: 0 0 0 2px #f0c06a inset; }
+.heal-grid, .heal-shelf { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.heal-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 84px; padding: 8px; border-radius: 14px;
+  border: 2px solid rgba(120, 100, 70, .25); background: rgba(255, 252, 244, .9); color: #3a2c1c; font: inherit; cursor: pointer;
+  transition: transform var(--dur-1, 120ms) ease;
+}
+.heal-tile:active { transform: scale(.97); }
+.heal-tile .big { font-size: 34px; }
+.heal-tile.on, .heal-tile.now { border-color: #e6b45a; background: #fff3d6; }
+.heal-tile.done { opacity: .7; }
+.heal-tile:disabled { cursor: default; }
+.heal-tile small { font-size: 12px; opacity: .75; }
+body.easy .heal-tile { min-height: 104px; font-size: 17px; }
+.heal-band { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px; background: rgba(0, 0, 0, .05); }
+.heal-band .emoji { font-size: 28px; }
+.heal-band.on { background: rgba(155, 191, 106, .22); }
+.heal-road, .heal-plan { margin: 6px 0 6px 1.2em; line-height: 1.7; }
+.heal-stamp { font-weight: 700; color: #3f6d2f; }
+.heal-course { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.heal-course .bar { flex: 1; height: 10px; border-radius: 5px; background: rgba(255, 255, 255, .2); overflow: hidden; position: relative; }
+.heal-modal .heal-course .bar { background: rgba(60, 50, 30, .14); }
+.heal-course .bar > i { position: absolute; inset: 0 auto 0 0; background: #9bbf6a; border-radius: 5px; }
+.heal-course small { font-size: 12px; white-space: nowrap; }
+
+/* the corridor map */
+.heal-mapbox { display: grid; gap: 6px; padding: 10px; border-radius: 16px; background: linear-gradient(180deg, #efe6d2, #e4d6ba); }
+.heal-corr { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.heal-corr-line { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 8px; background: repeating-linear-gradient(90deg, #d8c8a4 0 18px, #cfbd96 18px 36px); font-size: 12px; color: #5a4a32; }
+.heal-door {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 92px; padding: 6px 4px; border-radius: 12px;
+  border: 2px solid rgba(90, 70, 40, .25); background: #fffaf0; color: #3a2c1c; font: inherit; cursor: pointer;
+}
+.heal-door .hd-no { font-size: 11px; opacity: .75; }
+.heal-door .emoji { font-size: 24px; }
+.heal-door .hd-name { font-size: 12px; font-weight: 700; text-align: center; line-height: 1.2; }
+.heal-door .hd-line { font-size: 11px; opacity: .85; text-align: center; }
+.heal-door .hd-bar { position: absolute; left: 6px; right: 6px; bottom: 4px; height: 4px; border-radius: 2px; background: rgba(0, 0, 0, .1); overflow: hidden; }
+.heal-door .hd-bar > i { position: absolute; inset: 0 auto 0 0; background: #e6a040; }
+.heal-door .hd-here { position: absolute; top: -8px; right: -4px; font-size: 18px; }
+.heal-door.s-next { border-color: #e6b45a; box-shadow: 0 0 0 3px rgba(230, 180, 90, .35); }
+.heal-door.s-run { border-color: #e6a040; background: #fff3dc; }
+.heal-door.s-done { border-color: #7fae5f; background: #eef6e4; }
+.heal-door.s-closed { opacity: .45; }
+.heal-door.here { outline: 3px solid #4a78c8; outline-offset: 1px; }
+body.easy .heal-door { min-height: 110px; }
+@media (max-width: 560px) { .heal-corr { grid-template-columns: repeat(3, 1fr); } }
+
+/* the report */
+.heal-stamps { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin: 6px 0 10px; }
+.heal-stampbox { display: flex; flex-direction: column; align-items: center; padding: 4px 0; border-radius: 10px; border: 2px dashed rgba(120, 90, 50, .3); }
+.heal-stampbox.on { border-style: solid; border-color: #c0503a; background: rgba(192, 80, 58, .08); }
+.heal-stampbox.off { opacity: .35; }
+.heal-tbl { border-collapse: collapse; width: 100%; font-size: 14px; }
+.heal-tbl th, .heal-tbl td { padding: 4px 8px; border-bottom: 1px solid rgba(0, 0, 0, .08); text-align: left; }
+.heal-r10 { display: grid; grid-template-columns: 130px 1fr; gap: 10px; align-items: start; margin-top: 8px; }
+.heal-three { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.heal-chip3 { padding: 4px 10px; border-radius: 999px; background: #f3ead8; }
+.heal-portrait { display: flex; align-items: center; justify-content: center; width: 120px; height: 150px; border-radius: 6px; background: #eee5d4; border: 6px solid #2a2420; overflow: hidden; }
+.heal-portrait img { width: 100%; height: 100%; object-fit: cover; filter: saturate(.85); }
+.heal-portrait.s-classic { border-color: #1f1a18; box-shadow: inset 0 -16px 0 -10px #1f1a18; }
+.heal-portrait.s-classic img { filter: grayscale(1) contrast(1.05); }
+.heal-portrait.s-hanji { border-color: #d9c9a6; background: #f6efe0; }
+.heal-portrait.s-flower { border-color: #e3a0a8; }
+.heal-portrait.s-star { border-color: #2e3f6e; }
+.heal-portrait .emoji { font-size: 40px; }
+.heal-letter { padding: 8px 12px; border-radius: 10px; background: #fbf6ea; border: 1px solid #e6d8b8; color: #3a2c1c; font-size: 14px; }
+.heal-letter p { margin: 4px 0; }
+.heal-letter .own { font-style: italic; }
+.heal-note { font-size: 12px; opacity: .75; }
+.heal-help { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #eef3fb; font-size: 13px; }
+
+/* the dock of the rooms */
+.heal-dock {
+  position: fixed; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60;
+  width: min(600px, calc(100vw - 16px)); max-height: min(62vh, 520px); overflow: auto; pointer-events: auto;
+  background: linear-gradient(180deg, rgba(30, 44, 32, .95), rgba(22, 32, 24, .97)); color: #f2f7ec;
+  border: 1px solid rgba(200, 230, 190, .3); border-radius: 18px; box-shadow: 0 10px 34px rgba(0, 0, 0, .45); padding: 10px 14px 12px; font-size: 15px;
+}
+.hd-head { display: flex; align-items: center; gap: 10px; }
+.hd-ico { font-size: 28px; }
+.hd-title { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.hd-title b { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hd-sub { font-size: 12px; opacity: .75; }
+.hd-x { display: inline-flex; align-items: center; gap: 4px; min-width: 56px; min-height: 44px; border-radius: 12px; border: 1px solid rgba(200, 230, 190, .35); background: rgba(255, 255, 255, .06); color: inherit; font: inherit; cursor: pointer; padding: 0 10px; }
+body.easy .hd-x { min-height: 56px; }
+.hd-kid { margin: 8px 0; font-size: 16px; }
+body.easy .hd-kid { font-size: 18px; }
+.hd-ctl { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.hd-count { font-size: 14px; opacity: .85; }
+.hd-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.hd-note { display: block; margin-top: 6px; font-size: 12px; opacity: .7; }
+.hd-hint { font-size: 14px; opacity: .85; }
+.heal-big {
+  position: relative; overflow: hidden; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-width: 124px; min-height: 80px; padding: 6px 14px; border-radius: 16px; border: 2px solid #b8d99a; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+  background: linear-gradient(180deg, #9bbf6a, #6f9a46); color: #17240f; font: inherit; font-weight: 800;
+}
+.heal-big .emoji { font-size: 26px; position: relative; }
+.heal-big .hb-l { position: relative; font-size: 14px; }
+.heal-big .hb-fill { position: absolute; inset: 0; background: rgba(255, 245, 200, .45); transform-origin: left center; transform: scaleX(0); pointer-events: none; }
+.heal-big.swing { background: linear-gradient(180deg, #e8a948, #c9812e); border-color: #f0c06a; color: #2a1a0c; }
+.heal-big:active { transform: scale(.97); }
+body.easy .heal-big { min-width: 140px; min-height: 96px; }
+.hd-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-top: 6px; }
+.hd-pick.small .heal-tile { min-height: 60px; }
+.hd-pick.three { grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); }
+.hd-dock .heal-tile, .heal-dock .heal-tile { background: rgba(255, 252, 244, .95); }
+.heal-tile.base b { font-size: 30px; }
+.heal-tile.wiggle { animation: heal-wiggle .4s ease; }
+@keyframes heal-wiggle { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+.hd-lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.heal-tile.lane { min-height: 70px; }
+.heal-tile.lane.on { border-color: #e6a040; background: #fff1d6; }
+.hd-spotwrap { display: flex; align-items: center; gap: 12px; }
+.hd-spots { position: relative; width: 220px; height: 220px; border-radius: 16px; background: radial-gradient(circle at 50% 45%, #f6ead2, #e2cfa8); flex: none; }
+.hd-spots.scope { border-radius: 50%; background: radial-gradient(circle at 50% 50%, #f2fbf0 0, #cfe9cf 60%, #2a3a2a 61%); }
+.hd-pic { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 150px; opacity: .55; pointer-events: none; }
+.hd-spot {
+  position: absolute; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .6);
+  background: rgba(255, 255, 255, .25); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 22px; padding: 0;
+}
+body.easy .hd-spot { width: 58px; height: 58px; margin: -29px 0 0 -29px; }
+.hd-spot.now { background: rgba(255, 200, 90, .85); border-color: #fff4c8; box-shadow: 0 0 0 6px rgba(255, 200, 90, .28); }
+.hd-spot.done { background: rgba(120, 180, 90, .7); }
+.hd-helix { display: grid; gap: 6px; }
+.hd-rungs { display: flex; gap: 6px; justify-content: center; }
+.hd-rung { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 8px; border-radius: 10px; background: rgba(255, 255, 255, .08); }
+.hd-rung.now { background: rgba(255, 200, 90, .25); }
+.hd-rung i { width: 2px; height: 14px; background: rgba(255, 255, 255, .5); }
+.b-A { color: #ff9f6b; } .b-T { color: #6fc3df; } .b-G { color: #9bd27a; } .b-C { color: #ffd766; }
+.heal-tile.base.b-A b { color: #c0502a; } .heal-tile.base.b-T b { color: #2f6f8f; } .heal-tile.base.b-G b { color: #3f7d2a; } .heal-tile.base.b-C b { color: #a07a10; }
+.hd-r1bars { display: grid; gap: 4px; margin: 6px 0; }
+.hd-r1b { display: grid; grid-template-columns: 5em 1fr 30px; gap: 6px; align-items: center; font-size: 13px; }
+.hd-r1b .bar { position: relative; height: 9px; border-radius: 5px; background: rgba(255, 255, 255, .18); overflow: hidden; }
+.hd-r1b .bar > i { position: absolute; inset: 0 auto 0 0; background: #7fb6d9; }
+.hd-advice { padding: 8px 10px; border-radius: 12px; background: rgba(255, 255, 255, .08); font-size: 14px; }
+.hd-advice ol { margin: 4px 0 4px 1.2em; }
+.hd-ring { width: 110px; height: 110px; margin: 6px auto; border-radius: 50%; border: 2px solid rgba(200, 230, 190, .5); display: flex; align-items: center; justify-content: center; }
+.hd-ring > i { width: 80px; height: 80px; border-radius: 50%; background: radial-gradient(circle, rgba(200, 235, 190, .7), rgba(120, 170, 110, .25)); animation: heal-breath 8s ease-in-out infinite; }
+.hd-ring.slow > i { animation-duration: 10s; }
+.hd-ring.still > i { animation: none; transform: scale(.85); }
+@keyframes heal-breath { 0%, 100% { transform: scale(.6); } 50% { transform: scale(1); } }
+.hd-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px; margin-top: 6px; }
+.heal-card { min-height: 56px; padding: 6px 10px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .06); color: inherit; font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.heal-card.on { border-color: #e6b45a; background: rgba(230, 180, 90, .2); }
+.heal-letter.live { background: #fbf6ea; }
+.heal-dock .heal-portrait { margin: 4px auto; }
+.heal-ta { width: 100%; font: inherit; padding: 8px; border-radius: 10px; }
+.btn.wait { opacity: .6; }
+
+/* room 10: the veil (fades over 4 s; never a flash) */
+.heal-veil { position: fixed; inset: 0; z-index: 55; pointer-events: none; opacity: 0; transition: opacity 4s ease; }
+.heal-veil.on { opacity: 1; }
+.heal-veil.v-dark { background: radial-gradient(ellipse at 50% 60%, rgba(10, 8, 6, .82), rgba(0, 0, 0, .94)); }
+.heal-veil.v-stars { background: radial-gradient(circle at 20% 30%, rgba(255, 255, 255, .9) 0 1px, transparent 2px), radial-gradient(circle at 70% 20%, rgba(255, 255, 255, .8) 0 1px, transparent 2px), radial-gradient(circle at 45% 55%, rgba(255, 255, 230, .8) 0 1px, transparent 2px), radial-gradient(circle at 85% 65%, rgba(255, 255, 255, .7) 0 1px, transparent 2px), radial-gradient(circle at 12% 75%, rgba(255, 255, 255, .7) 0 1px, transparent 2px), linear-gradient(180deg, rgba(14, 22, 54, .9), rgba(28, 36, 74, .86)); }
+.heal-veil.v-morning, .heal-veil.v-dawn { transition-duration: 2.5s; background: radial-gradient(ellipse at 50% 20%, rgba(255, 236, 190, .55), rgba(255, 214, 150, .2)); }
+@media (prefers-reduced-motion: reduce) {
+  .hd-ring > i { animation: none; transform: scale(.85); }
+  .heal-tile.wiggle { animation: none; }
+  .heal-veil { transition-duration: 1s; }
+}
+body.reduce-motion .hd-ring > i { animation: none; transform: scale(.85); }
+@media (max-width: 560px) {
+  .heal-dock { font-size: 14px; max-height: 58vh; }
+  .hd-spots { width: 180px; height: 180px; }
+  .hd-pic { font-size: 120px; }
+  .heal-r10 { grid-template-columns: 1fr; }
+  .heal-stamps { grid-template-columns: repeat(5, 1fr); }
+  .heal-hud { min-width: 0; }
+}

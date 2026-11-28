@@ -3239,6 +3239,7 @@
       G.sys.lecture && !G.sys.lecture._failed && typeof G.sys.lecture.open === 'function' && { id: 'lecture', emoji: '🎓', label: '강의실', color: '#8fb4ff', say: '강의실. 영상과 슬라이드로 배워요.' }, // [lecture]
       G.sys.support && !G.sys.support._failed && typeof G.sys.support.open === 'function' && { id: 'support', emoji: '📮', label: '어른에게 알려요', color: '#ff9f43', badge: G.sys.support.unread || 0, say: '어른에게 알려요. 이상한 일이 있으면 그림으로 알려요.' }, // [support]
       G.sys.cooking && !G.sys.cooking._failed && typeof G.sys.cooking.book === 'function' && { id: 'cookbook', emoji: '🍳', label: '요리 도감', color: '#e8a948', say: '요리 도감. 부엌에서 만든 음식을 봐요.' }, // [cooking]
+      G.sys.healing && !G.sys.healing._failed && typeof G.sys.healing.openMap === 'function' && { id: 'healing', emoji: '🌿', label: '힐링관', color: '#7fae5f', say: '힐링관. 열 개의 방에서 천천히 쉬어요.' }, // [healing]
       comp && !NoThree.active && { id: 'ongi', emoji: '🏺', label: '옹이랑', color: '#36cfc0', say: '옹이랑 놀아요.' },
       { id: 'sound', emoji: '🔊', label: '소리', color: '#b48bff', say: '소리. 소리 크기를 바꿔요.' },
       { id: 'help', emoji: '❓', label: '도와줘요', color: '#6c8cff', say: '도와줘요. 노는 방법을 봐요.' },
@@ -3295,6 +3296,7 @@
       case 'lecture': return G.sys.lecture?.open?.(); // [lecture]
       case 'support': return G.sys.support?.open?.(); // [support]
       case 'cookbook': return G.sys.cooking?.book?.(); // [cooking]
+      case 'healing': return G.sys.healing?.go ? G.sys.healing.go('LOBBY').then(() => { const H = G.sys.healing; if (!H.visit) H.openKiosk(); else H.openMap(); }) : null; // [healing]
       case 'ongi': return G.sys.companion?.openMenu?.();
       case 'sound': return openSettings();
       case 'help': return openHelp();
@@ -3329,6 +3331,7 @@
       G.sys.lecture && !G.sys.lecture._failed && typeof G.sys.lecture.open === 'function' && { act: 'lecture', emoji: '🎓', label: '강의실', desc: '영상·슬라이드·문서 강의 보기', tint: '#8fb4ff' }, // [lecture]
       G.sys.support && !G.sys.support._failed && typeof G.sys.support.open === 'function' && { act: 'support', emoji: '📮', label: '문의·신고', desc: '버그 신고·문의·신고 (화면 사진과 함께) · 내 문의', badge: G.sys.support.unread || 0, tint: '#ff9f43' }, // [support]
       G.sys.cooking && !G.sys.cooking._failed && typeof G.sys.cooking.book === 'function' && { act: 'cookbook', emoji: '🍳', label: '요리 도감', desc: '부엌과 냇가 화덕에서 만든 음식 26가지 · 만드는 차례', tint: '#e8a948' }, // [cooking]
+      G.sys.healing && !G.sys.healing._failed && typeof G.sys.healing.openMap === 'function' && { act: 'healing', emoji: '🌿', label: '힐링관', desc: '통유리 한옥 힐링관 · 10개 관을 진짜 시간으로 · 복도 지도 · 종합 리포트', tint: '#7fae5f' }, // [healing]
       { act: 'avatar', emoji: '👕', label: '아바타 꾸미기', desc: '옷차림·헤어·닉네임', tint: '#ff9fc7' },
       G.sys.minimap?.openWorldMap && !NoThree.active && { act: 'map', emoji: '🗺️', label: '지도·빠른 이동', desc: '구역 안내와 순간 이동', key: 'M', tint: '#f4c54a' },
       NoThree.active && G.sys.education?.openLibrary && { act: 'learn', emoji: '📖', label: '배움터', desc: '전통 발효 배우기·퀴즈 (3D 없이)', tint: '#7fc4ff' },
@@ -3423,6 +3426,7 @@
       case 'lecture': if (G.sys.lecture?.open) G.sys.lecture.open(); else missing('강의실'); return; // [lecture]
       case 'support': if (G.sys.support?.open) G.sys.support.open(); else missing('문의·신고'); return; // [support]
       case 'cookbook': if (G.sys.cooking?.book) G.sys.cooking.book(); else missing('요리 도감'); return; // [cooking]
+      case 'healing': if (G.sys.healing?.go) G.sys.healing.go('LOBBY').then(() => { const H = G.sys.healing; if (!H.visit) H.openKiosk(); else H.openMap(); }); else missing('힐링관'); return; // [healing]
       case 'avatar': openAvatar(); return;
       case 'map': G.sys.minimap?.openWorldMap?.(); return;
       case 'learn': G.sys.education?.openLibrary?.(); return;

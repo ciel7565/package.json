@@ -49,6 +49,7 @@ final class Settings
         'notice'   => ['📢', '공지'],
         'admin'    => ['🔐', '관리자 보안'],
         'support'  => ['📮', '신고·문의'], // [support] CONTRACT §18.1
+        'healing'  => ['🌿', '힐링관'], // [healing] CONTRACT §19.6
         'etc'      => ['🧩', '기타'],
     ];
     private const TYPES = ['bool', 'int', 'float', 'enum', 'list', 'str'];
@@ -153,6 +154,13 @@ final class Settings
         self::define('fishing.keep_per_day', 'int', 6, [0, 20], 'etc', '하루에 데려갈 수 있는 물고기 수', true, '한 사람이 하루(한국 날짜)에 가방에 담을 수 있는 수예요. 0이면 모두 놓아주기만 해요. 법으로 지키는 물고기는 이 숫자와 상관없이 언제나 놓아줘요.');
         self::define('fishing.trap_minutes', 'int', 10, [1, 240], 'etc', '어항에 물고기가 드는 데 걸리는 시간 (분)', true, '어항을 놓고 이만큼 진짜 시간이 지나야 살펴볼 수 있어요.');
         // ---------------------------------------------------------------- [/fishing]
+        // ---------------------------------------------------------------- [healing] 힐링관 (CONTRACT §19.6) — public: 39-healing.js reads them through G.site.get(); SaveValidator reads healing.time_scale
+        self::define('healing.enabled', 'bool', true, null, 'healing', '힐링관 열기', true, '끄면 힐링관 안내데스크가 "오늘은 쉬어요"라고 알려 줘요. 이미 받은 도장과 리포트는 그대로 남아요.');
+        self::define('healing.time_scale', 'int', 1, [1, 120], 'healing', '시간 배속 (1 = 진짜 시간)', true, '1이면 60분 코스가 진짜 60분 걸려요. 시험해 볼 때만 크게 하세요(예: 60이면 60분 코스가 1분). 이미 시작한 코스는 그대로 가요.');
+        self::define('healing.overlap', 'bool', false, null, 'healing', '여러 코스 함께 하기', true, '켜면 한 코스가 도는 동안 다른 관의 코스도 시작할 수 있어요. 끄면(기본) 한 번에 한 코스예요.');
+        self::define('healing.room10', 'enum', 'gate', ['gentle' => '언제나 부드러운 마음 돌아보기', 'gate' => '쉬운 모드는 부드럽게, 어른 확인 뒤 전체 (기본)', 'off' => '제10관 닫기'], 'healing', '제10관 임종체험', true, '쉬운 모드(어린이)에서는 관과 죽음 이야기가 없는 "마음 돌아보기"가 나와요.');
+        self::define('healing.rooms', 'list', ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10'], ['R1' => '제1관 기본 검사관', 'R2' => '제2관 쑥뜸관', 'R3' => '제3관 좌훈관', 'R4' => '제4관 맨발걷기·헬스장', 'R5' => '제5관 족욕관', 'R6' => '제6관 발마사지관', 'R7' => '제7관 얼굴마사지관', 'R8' => '제8관 바디마사지관', 'R9' => '제9관 스트레스 해소관', 'R10' => '제10관 임종체험관'], 'healing', '여는 관', true, '고르지 않은 관은 문이 닫혀 있고, 리포트에도 필요하지 않아요.');
+        // ---------------------------------------------------------------- [/healing]
     }
 
     /** the definitions of one group, in registry order */

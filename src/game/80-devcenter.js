@@ -271,6 +271,9 @@
       F('36-cooking-data.js', 'farm', '요리 26가지(냇가의 물고기 9·장과 김치 5·밭 5·정선의 밥상 7)의 실제 차례·부엌 자리 11곳·찬장 재료·카드·퀴즈·강의·할 일 (순수 데이터)'), // [cooking]
       F('37-cooking.js', 'farm', '부엌(G.sys.cooking): 부엌 안 자리(물두멍·도마·가마솥·시루·화로·솥뚜껑·맷돌·양념 선반·소반)·냇가 화덕·차례대로 요리하기(누르기·불 맞추기·뒤집기)·3D 음식 변화·별·요리 도감'), // [cooking]
       F('50-minimap.js', 'map', '구역 감지·미니맵·월드맵(빠른 이동 통합)·그림 지도 "어디 갈까?"'),
+      F('38-healing-data.js', 'edu', '힐링관 방문 데이터(G.data.healing): 10개 관(분·단계·쉼 거리·숫자 곡선)·상담 질문 4개·숫자 6가지(놀이 값)·문장 카드·자리 이름·G.healStations (순수 데이터)'), // [healing]
+      F('39-healing.js', 'edu', '힐링관 방문(G.sys.healing): 예약·체크인·숙소(보따리·힐링복)·상담·진짜 시간 코스(배속은 운영자 설정)·도장·🔔 알림·복도 지도·상태창·종합 리포트·체크아웃'), // [healing]
+      F('79-healing-acts.js', 'edu', '힐링관 10개 관 체험(G.healActs): 아래 카드의 단계(누르기·꾹 누르기·빛나는 곳·숨)·제9관 깨고 부수기(조각·찌그러짐·소리)·제10관 사진·편지·누워 쉬기(이 기기에만)'), // [healing]
       F('51-weather.js', 'map', '날씨·하루 시간·하늘·강수 파티클·기온/습도·아이 날씨 카드'),
       F('52-photo.js', 'map', '사진 모드·필터·프레임·포즈·갤러리·아이 사진(그림 틀·스티커)'),
       F('53-complex-site.js', 'map', '만장대 단지(PL_ALLOT) 장소·땅(지형·길·주차장·포장·동심원 길·계단밭·돌담·돌다리·계단·전망 데크·가로등·안내판·충돌)·단지 부품 등록부·미니맵 평면도·골짜기 셔틀버스 정류장 (§16.8)'), // [complex-ground]
@@ -319,6 +322,7 @@
       F('37-cooking.css', 'farm', '요리 카드(아래쪽)·큰 누르기 단추·불 막대·뒤집기 칸·음식 고르기·요리 도감·찬장'), // [cooking]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
       F('51-weather.css', 'map', '날씨 팝오버·아이 날씨 카드'),
+      F('39-healing.css', 'edu', '힐링관 상태창·복도 지도·안내데스크/숙소/상담/관/리포트 창·관 체험 카드·제10관 어둠 막(4초에 걸쳐 천천히)'), // [healing]
       F('52-photo.css', 'map', '사진 모드 UI·갤러리'),
       F('53-complex-site.css', 'map', '만장대 단지 첫 방문 환영 카드(큰 버튼)'), // [complex-ground]
       F('60-social.css', 'social', '채팅·말풍선·이모지 선택·아이 말하기(skc-*)'),
@@ -496,6 +500,7 @@
   EXPECTED_SYSTEMS.push('cooking');   // [cooking] 37-cooking.js
   EXPECTED_SYSTEMS.push('fishing');   // [fishing] 35-fishing.js
   EXPECTED_SYSTEMS.push('healHall');   // [heal-hall] 69-healing-hall.js
+  EXPECTED_SYSTEMS.push('healing', 'healacts');   // [healing] 39-healing.js · 79-healing-acts.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
@@ -1523,6 +1528,12 @@
     { id: 'myroomcard', emoji: '🏠', label: '내 방 안내 카드', fn: () => fnOf(G.sys.myroom, 'explain') },
     { id: 'myroomedit', emoji: '🎨', label: '방 꾸미기 (내 방 안에서)', fn: () => { const M = G.sys.myroom; return M?.edit && G.sys.places?.is?.('PL_MYROOM') && !M.state?.().visiting ? () => M.edit.start() : null; }, scope: () => document.getElementById('myroom-ui'), close: () => { try { G.sys.myroom?.edit?.stop({ silent: true }); } catch (e) { /* not open */ } } },
     // [content] 장독대 (§17.8): my jar's card (with the new picture actions), the two-step "무엇을 담글까?" picker, a jar
+    // [healing] 힐링관 (§19.6): the corridor map, the window of a room, the HUD chip with the four numbers (a visit is
+    // booked for the tour when there is none), the report — the docked step card of a room needs its station (tests/healing-client.mjs)
+    { id: 'healmap', emoji: '🗺️', label: '힐링관 복도 지도', fn: () => fnOf(G.sys.healing, 'openMap') },
+    { id: 'healroom', emoji: '🔥', label: '힐링관 관 안내 (제2관)', fn: () => { const f = fnOf(G.sys.healing, 'openRoom'); return f && (() => f('R2')); } },
+    { id: 'healhud', emoji: '🌿', label: '힐링관 상담 (숫자 상태)', fn: () => fnOf(G.sys.healing, 'openCounsel') },
+    { id: 'healreport', emoji: '📋', label: '힐링관 종합 리포트', fn: () => { const H = G.sys.healing; return H && typeof H.openReport === 'function' ? () => { if (!H.visit) H.book(); H.openReport(); } : null; } },
     // locked by the plan limit, the name-tag picker and the work table
     { id: 'jar', emoji: '🏺', label: '내 장독 (장독 일 그림 단추)', fn: () => (G.sys.fermentation?.openJar ? () => G.sys.fermentation.openJar('J1') : null) },
     { id: 'jarpick', emoji: '🥣', label: '무엇을 담글까 (종류 고르기)', fn: () => (G.sys.fermentation?._kidStart ? () => { G.sys.fermentation._kidStart('J1'); } : null) },
