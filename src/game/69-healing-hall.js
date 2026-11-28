@@ -46,6 +46,8 @@
 //   setRoom10(full)        show / hide the coffin of 제10관 now and in every later build (the program calls it when the
 //                          gate opens or closes; null = back to asking G.sys.healing.room10Full() / easy mode)
 //   place(room) -> 'PL_HEAL_R1' …          ids: PLACES
+//   stations(room) -> [keys]               the station keys of a built room
+//   census(room) -> { kind: count }        what the last build of that room holds, by kind (mats, pillows, tubs, …)
 // =============================================================================
 G.healStations = G.healStations || { map: new Map(),
   set(room, key, at) { this.map.set(room + ':' + key, at); G.bus && G.bus.emit('heal:station', { room, key }); },
@@ -110,6 +112,10 @@ G.healStations = G.healStations || { map: new Map(),
     stationsOf.delete(room);
     try { G.bus.emit('heal:stations-gone', { room }); } catch (e) { /* bus optional */ }
   }
+
+  // [heal-look] the census of things: what a layout puts into a room, by kind (tests/heal-hall-unit.mjs reads it)
+  const tallies = new Map();   // room -> { kind: count }
+  function tally(room, kind, n = 1) { const t = tallies.get(room) || {}; t[kind] = (t[kind] || 0) + n; tallies.set(room, t); }
 
   // ---------------------------------------------------------------- door states (kept while the hall is not built)
   const STATES = ['idle', 'next', 'run', 'done'];
@@ -1195,6 +1201,7 @@ G.healStations = G.healStations || { map: new Map(),
 
   function buildRoom(r) {
     return function (ctx) {
+      tallies.set(r.key, {});
       const R = roomShell(ctx, r, r.shell || {});
       try { LAYOUT[r.key](ctx, R, r); } catch (e) { warn('room ' + r.key + ' layout', e); }
       try { furnish(ctx, R, r); } catch (e) { warn('room ' + r.key + ' furnish', e); }
@@ -1417,6 +1424,7 @@ G.healStations = G.healStations || { map: new Map(),
     gentle,
     setRoom10(full) { room10Set = full == null ? null : !!full; if (room10Live) room10Live.setGentle(gentle()); applyDoorStates(); return true; },
     stations(room) { return (stationsOf.get(room) || []).slice(); },
+    census(room) { return { ...(tallies.get(room) || {}) }; },
   };
 
   G.register({

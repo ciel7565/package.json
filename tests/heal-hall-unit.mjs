@@ -172,6 +172,129 @@ check('nested rooms have no door outside and the hall\'s valley exit as their sa
 }
 check('no error was logged while defining', !events.some((e) => e[0] === 'error'), events.filter((e) => e[0] === 'error').map((e) => e[1]).join(' | '));
 
+// ---- [heal-look] the census: every place built with the REAL kits and three.js (the harness of tests/myroom-logic.mjs),
+// at medium and at low. Per place: the pieces the layout adds by material key, the things by kind (G.healHall.census),
+// the meshes (≈ draw calls of the colour pass) and triangles, the share of the floor within 2.5 m of a thing, and a free
+// walking lane of 1.6 m (a walker of radius 0.8 among every collider) from the door to every station of the program.
+const census = [];
+{
+  const { makeRoomWorld } = await import('./myroom-logic.mjs');
+  let W = null;
+  try { W = await makeRoomWorld(ROOT); } catch (e) { check('[census] the real-kit world starts', false, String(e.stack || e).slice(0, 300)); }
+  if (W) {
+    const { THREE: T3, Gb, colliders, warns } = W;
+    const proxy2d = () => new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'measureText' ? () => ({ width: 10 }) : /^create.*(Gradient|Pattern)$/.test(String(k)) ? () => ({ addColorStop() {} }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const doc = { createElement: () => ({ width: 256, height: 256, style: {}, getContext() { return this._c || (this._c = proxy2d()); } }) };
+    Gb.register = (s) => { Gb.sys[s.name] = s; };
+    Gb.easy = { on: true }; Gb.settings = Object.assign(Gb.settings || {}, { easyMode: true });
+    const loadReal = (file) => vm.runInThisContext(`(function (THREE, G, document, setTimeout) {\n${src(file)}\n})`, { filename: file })(T3, Gb, doc, setTimeout);
+    try { loadReal('02-layout.js'); loadReal('69-healing-hall.js'); Gb.sys.healHall.init(); } catch (e) { check('[census] 69-healing-hall.js loads next to the real kits', false, String(e.stack || e).slice(0, 300)); }
+    // record every piece a layout adds after the shell (generators call T.add on the room, so they are seen too)
+    const realRoom = Gb.hanok.room, pieces = [];
+    let rec = false;
+    Gb.hanok.room = (c, spec) => {
+      const R = realRoom(c, spec), add0 = R.add.bind(R), fin0 = R.finish.bind(R);
+      R.add = (key, g, m, tint, o) => {
+        if (rec && g && g.attributes?.position) {
+          g.computeBoundingBox(); const bb = g.boundingBox.clone(); if (m) bb.applyMatrix4(m);
+          pieces.push({ key, x0: bb.min.x, x1: bb.max.x, z0: bb.min.z, z1: bb.max.z, y0: bb.min.y, y1: bb.max.y });
+        }
+        return add0(key, g, m, tint, o);
+      };
+      R.finish = (o) => { rec = false; return fin0(o); };
+      rec = true;
+      return R;
+    };
+    const defsR = Gb.sys.places._defs;
+    for (const low of [false, true]) for (const id of Gb.healHall.PLACES) {
+      const def = defsR.get(id); if (!def) { check(`[census] ${id} defined in the real world`, false); continue; }
+      pieces.length = 0; for (const k of [...colliders.keys()]) colliders.delete(k);
+      const group = new T3.Group(); group.position.set(def.origin.x, 0, def.origin.z);
+      const ctxC = new Proxy({ id, def, place: def, group, size: def.size, origin: def.origin, floorY: 0, low, quality: low ? 'low' : 'medium', preset: { shadows: !low },
+        own: (x) => x, anchor() {}, lightCount: 0, light: (cfg) => ({ cfg, light: null, set() {} }), addCollider: (c) => Gb.world.addCollider(c),
+        exitDoor: () => ({}), onUpdate() {}, interact: () => ({ unregister() {} }), board: () => ({}) }, { get: (t, k) => (k in t ? t[k] : typeof k === 'symbol' ? undefined : (t[k] = () => ({}))) });
+      const w0 = warns.length;
+      let live = null;
+      try { live = def.build(ctxC); } catch (e) { check(`[census] ${id} builds (${low ? 'low' : 'medium'})`, false, String(e.stack || e).slice(0, 300)); continue; }
+      group.updateMatrixWorld(true);
+      let meshes = 0, tris = 0, nan = 0;
+      group.traverse((o) => {
+        if (!(o.isMesh || o.isPoints || o.isInstancedMesh) || !o.visible) return;
+        meshes++;
+        const pa = o.geometry?.attributes?.position; if (!pa) return;
+        for (let i = 0; i < pa.array.length; i++) if (!Number.isFinite(pa.array[i])) { nan++; break; }
+        tris += (o.geometry.index ? o.geometry.index.count : pa.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+      });
+      const w = def.size.w, d = def.size.d, room = id === 'PL_HEAL' ? 'LOBBY' : id.replace('PL_HEAL_', '');
+      // the share of the floor within 2.5 m of a thing (pieces lower than 2.6 m whose footprint is not a floor of its own)
+      const things = pieces.filter((p) => p.y0 < 2.6 && (p.x1 - p.x0) * (p.z1 - p.z0) < 30);
+      const st = 0.25, near = 2.5;
+      let cells = 0, cov = 0, cov1 = 0;
+      const rx = id === 'PL_HEAL' ? 30 : w / 2;     // the hall: the lobby only (60 m of the 171 m gallery around it)
+      for (let x = -rx + st / 2; x < rx; x += st) for (let z = -d / 2 + st / 2; z < d / 2; z += st) {
+        cells++;
+        let m2 = Infinity;
+        for (const p of things) { const dx = Math.max(p.x0 - x, 0, x - p.x1), dz = Math.max(p.z0 - z, 0, z - p.z1); m2 = Math.min(m2, dx * dx + dz * dz); if (m2 <= 1.44) break; }
+        if (m2 <= near * near) cov++;
+        if (m2 <= 1.44) cov1++;
+      }
+      // the free lane: a walker of radius 0.8 among every collider, from the door to each station (to within 1.5 m)
+      const cols = [...colliders.values()].map((c) => ({ ...c, x: c.x - (Math.abs(c.x) > 300 ? def.origin.x : 0), z: c.z - (Math.abs(c.z) > 300 ? def.origin.z : 0) }));
+      const freeAt = (x, z, r) => {
+        if (Math.abs(x) > w / 2 - r || Math.abs(z) > d / 2 - r) return false;
+        for (const c of cols) {
+          if (c.maxY != null && c.maxY <= 0.05) continue;
+          const dx = x - c.x, dz = z - c.z;
+          if (c.shape === 'circle') { if (dx * dx + dz * dz <= (c.r + r) * (c.r + r)) return false; continue; }
+          const a = c.rot || 0, co = Math.cos(a), sn = Math.sin(a);
+          if (Math.abs(dx * co - dz * sn) <= c.hw + r && Math.abs(dx * sn + dz * co) <= c.hd + r) return false;
+        }
+        return true;
+      };
+      const lane = (r) => {
+        const g = 0.1, nx = Math.round(w / g), nz = Math.round(d / g), seen = new Uint8Array(nx * nz), q = [];
+        const at = (i, j) => [-w / 2 + (i + 0.5) * g, -d / 2 + (j + 0.5) * g];
+        const ex = def.spawn || { x: 0, z: d / 2 - 2 };
+        let si = Math.floor((ex.x + w / 2) / g), sj = Math.floor((ex.z + d / 2) / g);
+        if (!freeAt(...at(si, sj), r)) for (let k = 1; k < 40 && !freeAt(...at(si, sj), r); k++) sj--;
+        if (freeAt(...at(si, sj), r)) { seen[si * nz + sj] = 1; q.push(si * nz + sj); }
+        for (let h = 0; h < q.length; h++) {
+          const i = Math.floor(q[h] / nz), j = q[h] % nz;
+          for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const ii = i + a, jj = j + b; if (ii < 0 || jj < 0 || ii >= nx || jj >= nz || seen[ii * nz + jj]) continue;
+            seen[ii * nz + jj] = 2; if (freeAt(...at(ii, jj), r)) { seen[ii * nz + jj] = 1; q.push(ii * nz + jj); }
+          }
+        }
+        const miss = [];
+        for (const key of Gb.healHall.stations(room)) {
+          const s = Gb.healStations.get(room, key); if (!s || key === 'board' || key === 'camera') continue;
+          const p = s.userData.local; let best = Infinity;
+          for (let i = Math.max(0, Math.floor((p.x + w / 2 - 1.6) / g)); i < Math.min(nx, Math.ceil((p.x + w / 2 + 1.6) / g)); i++)
+            for (let j = Math.max(0, Math.floor((p.z + d / 2 - 1.6) / g)); j < Math.min(nz, Math.ceil((p.z + d / 2 + 1.6) / g)); j++)
+              if (seen[i * nz + j] === 1) { const [x, z] = at(i, j); best = Math.min(best, Math.hypot(x - p.x, z - p.z)); }
+          if (!(best <= 1.5)) miss.push(key);
+        }
+        return { cells: q.length, miss };
+      };
+      const L16 = id === 'PL_HEAL' ? { cells: 0, miss: [] } : lane(0.8), L07 = id === 'PL_HEAL' ? { cells: 0, miss: [] } : lane(0.35);
+      const byKey = {}; for (const p of pieces) byKey[p.key] = (byKey[p.key] || 0) + 1;
+      const kinds = Gb.healHall.census?.(room) || {};
+      census.push({ id, room, low, meshes, tris: Math.round(tris), nan, pieces: pieces.length, byKey, kinds, things: Object.values(kinds).reduce((s, n) => s + n, 0), cover: cells ? cov / cells : 0, cover12: cells ? cov1 / cells : 0, colliders: cols.length, lane16: L16, lane07: L07, warns: warns.slice(w0) });
+      try { live?.dispose?.(); } catch (e) { /* reported below */ }
+    }
+    for (const c of census) {
+      const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
+      check(`[census] ${tag}: every geometry finite, nothing warned`, c.nan === 0 && !c.warns.length, c.warns.slice(0, 2).join(' | '));
+      if (c.room === 'LOBBY') continue;
+      check(`[census] ${tag}: a 0.7 m path from the door to every station`, !c.lane07.miss.length, c.lane07.miss.join(' '));
+    }
+    const rows = census.filter((c) => !c.low);
+    const table = rows.map((c) => `${c.room.padEnd(5)} things ${String(c.things).padStart(4)} · pieces ${String(c.pieces).padStart(5)} · cover 2.5 m ${(c.cover * 100).toFixed(0).padStart(3)}% / 1.2 m ${(c.cover12 * 100).toFixed(0).padStart(3)}% · meshes ${c.meshes}/${census.find((x) => x.low && x.id === c.id)?.meshes} · ${(c.tris / 1000).toFixed(0)}k tris · lane 1.6 m ${c.lane16.miss.length ? 'blocked: ' + c.lane16.miss.join(',') : 'free'}`);
+    if (!jsonOut) console.log('  · census (medium; meshes medium/low)\n    ' + table.join('\n    '));
+    const out = process.env.HEAL_CENSUS_OUT; if (out) fs.writeFileSync(out, JSON.stringify(census.map((c) => ({ ...c, warns: c.warns.length })), null, 1));
+  }
+}
+
 const failed = results.filter((r) => !r.ok);
 if (jsonOut) console.log(JSON.stringify({ passed: results.length - failed.length, failed: failed.length, results }, null, 1));
 else console.log(`\n${results.length - failed.length}/${results.length} passed`);
