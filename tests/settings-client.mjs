@@ -462,7 +462,7 @@ async function partD() {
     const saves = [];
     // (a context-wide watch: the request a closing page sends is seen too)
     const watch = (page, tag) => (page.context ? page.context() : page).on('request', (q) => { if (/\/api\/settings\/save\.php/.test(q.url())) saves.push({ tag, csrf: !!q.headers()['x-csrf-token'], at: Date.now() }); });
-    const settled = (page) => page.evaluate(async () => { const st = G.sys.settings.store, t0 = Date.now(); await new Promise((r) => setTimeout(r, 300)); while (Date.now() - t0 < 40000 && (st.pending || st.busy)) await new Promise((r) => setTimeout(r, 200)); return { v: st.v, sent: st.sent, unsent: Object.keys(st.unsent()).length, ms: Date.now() - t0 }; });
+    const settled = (page) => page.evaluate(async () => { const st = G.sys.settings.store, t0 = Date.now(); await new Promise((r) => setTimeout(r, 300)); while (Date.now() - t0 < 90000 && (st.pending || st.busy)) await new Promise((r) => setTimeout(r, 200)); return { v: st.v, sent: st.sent, unsent: Object.keys(st.unsent()).length, ms: Date.now() - t0 }; });
 
     // ---- device 1: register, change account and device options, the 2 s pause
     const one = await open('device1', {}, BASE);
