@@ -75,6 +75,7 @@
 
 /* 쉬운 모드: picture tiles, big targets (≥ 56 px), letters of 16 px and more; the right column scrolls as one and the
    buy / sell card stays at its foot */
+body.easy .wd { height: min(58vh, 36rem); } /* the big easy header and footer: the sticky buy card stays whole on screen */
 body.easy .wd-main { overflow-y: auto; padding-right: .3rem; }
 body.easy .wd-panel { flex: none; overflow: visible; }
 body.easy .wd-detail { position: sticky; bottom: 0; z-index: 1; background: #1d2a22; box-shadow: 0 -8px 18px rgba(0, 0, 0, .35); }
