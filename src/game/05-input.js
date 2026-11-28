@@ -40,7 +40,7 @@
 //   forward  → the run latches while that second press stays down (input.running; event 'input:run' {on, via}); letting go
 //              of forward ends it. Left / right / back never latch: they give ONE dash (event 'input:dash' {dir: 'left' |
 //              'right' | 'back', via, t}) that the player carries out. Key auto-repeat (e.repeat, or a release + press pair
-//              closer than 20 ms), a second key of the same direction while one is down, another direction pressed in
+//              closer than 10 ms), a second key of the same direction while one is down, another direction pressed in
 //              between, and a press that is still held from before never count. WASD and the arrows alike, through the bindings.
 //   Touch: the stick (two quick flicks past 55 %) and the d-pad buttons feed the same detector; the run button stays.
 //   input.taps (the pure detector: down / up / reset / held), input.makeTapDetector(windowFn), input.comfort() (the options
@@ -349,13 +349,13 @@
    *       after the first one (press to press) answers { dir }; the press after that starts a new count.
    *   up(dir, code, t)  reset()  held(dir)
    * Never counted: auto-repeat (repeat = true), a key that is already down, a second key of the direction while one is held,
-   * a press within 60 ms of the last one (a bounce) or within 20 ms of that key's release (an old X11 repeat pair), a press
+   * a press within 60 ms of the last one (a bounce) or within 10 ms of that key's release (an old X11 repeat pair), a press
    * while another direction was pressed in between, a first press that is older than the window, timestamps that run backwards.
    */
   function makeTapDetector(windowFn) {
     const mk = () => ({ held: new Set(), at: -1e9, pend: false, upAt: new Map() });
     const D = { f: mk(), b: mk(), l: mk(), r: mk() };
-    const BOUNCE = 60, PAIR = 20;
+    const BOUNCE = 60, PAIR = 10;
     return {
       down(dir, code, t, repeat) {
         const d = D[dir];
