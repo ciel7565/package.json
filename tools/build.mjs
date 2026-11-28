@@ -10,6 +10,13 @@
 //   node tools/build.mjs --no-assets          -> skip embedding the asset pack (assets/pack, CONTRACT §16.1): the page is
 //                                                ~3.9 MB smaller and G.pack is empty (procedural fallbacks everywhere)
 //   node tools/build.mjs --strict             -> fail if any fragment has a syntax error (default: skip it + warn)
+//   node tools/build.mjs --minify | --no-minify | --dev | --no-mangle
+//                                             -> [opt] fragments and stylesheets are minified (tools/minify.mjs: whitespace,
+//                                                syntax, each fragment's own local names; property names and strings never)
+//                                                by default with --strict and for the release output; --minify forces it,
+//                                                --no-minify / --dev keep the source text, --no-mangle keeps local names.
+//                                                The page warns when it is over the budget of CONTRACT §16.0 (release page
+//                                                12.5 MB raw / 7 MB brotli, test build 6.8 MB); --budget makes that an error.
 //   node tools/build.mjs --out <dir>/index.html --data-out <dir>/data/game-data.json
 //                                             -> also export the server's game data (a server copy outside dist/:
 //                                                cp -r server/. <dir>/ first; the default build writes server/data/)
@@ -32,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib'; // [scale-server] precompressed copies of the page
+import { minifyFragmentCached, minifyCss } from './minify.mjs'; // [opt]
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -50,6 +58,10 @@ const EMBED_ASSETS = !flag('--no-assets');   // [render-assets] the licence-chec
 const DATA_OUT = opt('--data-out') ? path.resolve(opt('--data-out')) : null;
 const STRICT = flag('--strict');
 const QUIET = flag('--quiet');
+// [opt] minification of the fragments and stylesheets (tools/minify.mjs, CONTRACT §19.4): on for --strict and the release
+// output (dist/metaverse), and with --minify; --no-minify (or --dev) keeps the source text; --no-mangle keeps local names
+const MINIFY = !flag('--no-minify') && !flag('--dev') && (flag('--minify') || STRICT || DEFAULT_OUT);
+const MANGLE = !flag('--no-mangle');
 // Core fragments are always included, even with --only.
 // 07-speed.js (CONTRACT §14.1, G.sys.speed) is core too: everything that moves or grows reads it.
 // [render-assets] 09-pack.js (G.pack) and 14-materials.js (G.mat) are core as well: the world fragments ask them for
@@ -145,6 +157,16 @@ for (const f of listSorted(gameDir, '.js')) {
     if (idx.has(a) && idx.has(b) && idx.get(a) > idx.get(b)) { console.error(`✖ fragment order: ${a} must come before ${b}`); process.exit(1); }
   }
 }
+// [opt] each fragment minified on its own, exactly as gameScript() wraps it (f.min = the whole try … catch statement);
+// a fragment that cannot be minified safely keeps its source text (tools/minify.mjs says why)
+const minNotes = [];
+if (MINIFY) {
+  for (const f of fragments) {
+    const r = minifyFragmentCached(f.name, f.code, { mangle: MANGLE, cacheDir: path.join(ROOT, '.cache', 'min') });
+    if (r.minified) f.min = r.code;
+    else { minNotes.push(`${f.name}: ${r.reason}`); console.warn(`⚠ ${f.name} is not minified: ${r.reason}`); }
+  }
+}
 
 // --strict: the server's PII rule file must match the client engine (one rule list, CONTRACT §12.4)
 if (STRICT && fs.existsSync(path.join(ROOT, 'tests/pii-sync.mjs'))) {
@@ -158,7 +180,8 @@ const cssFiles = listSorted(styleDir, '.css').filter((f) => {
   if (ONLY) return ONLY.some((p) => f.startsWith(p));
   return true;
 });
-const css = cssFiles.map((f) => `/* ==== ${f} ==== */\n` + fs.readFileSync(path.join(styleDir, f), 'utf8')).join('\n');
+const cssMin = {}; // [opt] file → minified bytes (MINIFY); the /* ==== file ==== */ markers stay (tools/weight.mjs reads them)
+const css = cssFiles.map((f) => `/* ==== ${f} ==== */\n` + ((src) => { if (!MINIFY) return src; const r = minifyCss(f, src); if (r.minified) cssMin[f] = Buffer.byteLength(r.code); else console.warn(`⚠ ${f} is not minified: ${r.reason}`); return r.code; })(fs.readFileSync(path.join(styleDir, f), 'utf8'))).join('\n');
 
 // ---------------------------------------------------------------- font
 function fontFace() {
@@ -193,6 +216,7 @@ function __fragErr(name, e) {
   console.error('[FRAGMENT] ' + name + ' failed to load:', e);
 }`);
   for (const f of fragments) {
+    if (f.min) { parts.push(`//@ ${f.name}\n${f.min}`); continue; } // [opt] minified: a short marker line + the statement
     parts.push(`// =============================================================== ${f.name}
 try {
 ${f.code}
@@ -407,8 +431,9 @@ const buildInfo = {
   builtAt: new Date().toISOString(),
   fragments: fragments.length,
   manifest: {
-    js: fragments.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.code), lines: f.code.split('\n').length, sha: sha(f.code) })),
-    css: cssFiles.map((f) => { const c = fs.readFileSync(path.join(styleDir, f), 'utf8'); return { name: f, bytes: Buffer.byteLength(c), lines: c.split('\n').length, sha: sha(c) }; }),
+    js: fragments.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.code), lines: f.code.split('\n').length, sha: sha(f.code), ...(f.min ? { min: Buffer.byteLength(f.min) } : {}) })), // [opt] min = bytes in the page
+    css: cssFiles.map((f) => { const c = fs.readFileSync(path.join(styleDir, f), 'utf8'); return { name: f, bytes: Buffer.byteLength(c), lines: c.split('\n').length, sha: sha(c), ...(cssMin[f] ? { min: cssMin[f] } : {}) }; }),
+    minified: MINIFY ? { mangle: MANGLE, js: fragments.filter((f) => f.min).length, kept: minNotes } : false, // [opt]
     skipped: skipped.filter((x) => x.reason !== 'filtered'),
     fontEmbedded: EMBED_FONT,
   },
@@ -555,3 +580,18 @@ log(`  css: ${cssFiles.join(', ')}`);
 if (DEFAULT_OUT) log(`  server files copied: ${serverFiles}`);
 if (precompressed) log(`  precompressed copies: ${Object.entries(precompressed.copies).map(([n, c]) => `${n} ${kb(c.bytes)} (${(c.bytes / precompressed.bytes * 100).toFixed(0)}%)`).join(', ')}`);
 if (pack) log(`  asset pack: ${pack.files.length} files, ${kb(pack.bytes)}${EMBED_ASSETS ? ' embedded (base64)' : ' — NOT embedded (--no-assets)'}`);
+// [opt] minification summary and the page budget (CONTRACT §16.0): release page (font + pack) 12.5 MB raw / 7 MB brotli,
+// test build (--no-font --no-assets) 6.8 MB raw. Brotli is measured only when a precompressed copy was made.
+{
+  const bytes = Buffer.byteLength(html);
+  if (MINIFY) log(`  minified: ${fragments.filter((f) => f.min).length}/${fragments.length} fragments${MANGLE ? ' (local names shortened)' : ''}, ${Object.keys(cssMin).length}/${cssFiles.length} stylesheets`);
+  const release = EMBED_FONT && pack && EMBED_ASSETS, test = !EMBED_FONT && !(pack && EMBED_ASSETS);
+  const limit = !MINIFY ? 0 : release ? 12.5e6 : test ? 6.8e6 : 0;   // the budgets are for minified pages
+  const brBytes = precompressed?.copies?.['index.br.html']?.bytes;
+  const over = (limit && bytes > limit) || (release && brBytes > 7e6);
+  if (over) {
+    const msg = `page is over the budget of CONTRACT §16.0: ${(bytes / 1e6).toFixed(2)} MB raw${brBytes ? `, ${(brBytes / 1e6).toFixed(2)} MB brotli` : ''} (limit ${(limit / 1e6).toFixed(1)} MB${release ? ' raw / 7 MB brotli' : ''})${MINIFY ? '' : ' — not minified (--no-minify / --dev, or neither --strict nor --minify)'}`;
+    if (flag('--budget')) { console.error(`✖ ${msg}`); process.exit(1); }
+    console.warn(`⚠ ${msg}`);
+  }
+}
