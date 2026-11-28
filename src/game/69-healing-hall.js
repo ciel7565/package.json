@@ -801,7 +801,7 @@ G.healStations = G.healStations || { map: new Map(),
     const Kt = K(), Z = ROOM.d / 2;
     for (const x of [-2.5, 2.5]) plant(R, ctx, x, Z - 0.7, 1.0);
     if (['R1', 'R3', 'R5', 'R7'].includes(r.key) && Kt.floorMat) try { Kt.floorMat(R, { x: 0, z: Z - 4.6, w: 1.4, d: 7.6, tint: r.mood === 'calm' ? '#a58a64' : '#c4ab7c' }); } catch (e) { /* optional */ }
-    if (['R3', 'R5', 'R6', 'R7', 'R8'].includes(r.key)) {
+    if (['R3', 'R5'].includes(r.key)) {   // [heal-look] 제6관 … 제8관 have their own wall furniture now
       R.add('furn', box(0.5, 0.62, 2.2), M(6.6, 0.31, 1.6), '#7a5234');
       R.add('furn', box(0.56, 0.04, 2.3), M(6.6, 0.64, 1.6), '#9c6b42');
       if (Kt.pot) ['hangari', 'danji', 'bottle', 'danji'].forEach((kind, i) => { try { Kt.pot(R, { x: 6.6, y: 0.66, z: 0.8 + i * 0.52, kind, s: kind === 'hangari' ? 0.5 : 0.55, lid: kind !== 'bottle' }); } catch (e) { /* optional */ } });
@@ -1135,19 +1135,68 @@ G.healStations = G.healStations || { map: new Map(),
       station(ctx, 'R10', 'spot', 0, 0, 1.0, PI);
     },
   };
-  /** 제6관 · 제7관 · 제8관: calm rooms — low warm light, folding screens without written characters, a bed or a chair */
+  /** 제6관 · 제7관 · 제8관: calm rooms full of guests' places — rows of chairs or beds, each with its own table, low
+   *  folding screens without written characters, soft paper lamps. [heal-look] The program's own chair / bed stays at
+   *  (0, −4.2) with its stations exactly where they were; the rows are built around it (one merged mesh per material). */
   function calmRoom(ctx, R, key, kind) {
     const Kt = K(), low = ctx.low, x = 0, z = -4.2;
+    const T = (kind_, n = 1) => tally(key, kind_, n);
+    const scr = (sx, sz, ry, panels, h, collide = true) => {
+      if (!Kt.screen) return;
+      try { Kt.screen(R, { x: sx, z: sz, rotY: ry, panels, h }); T('screen'); } catch (e) { return; }
+      if (collide) { const half = panels * 0.45 * Math.cos(0.35) / 2; ctx.addCollider({ shape: 'box', x: sx, z: sz, hw: Math.abs(Math.sin(ry)) > 0.5 ? 0.12 : half, hd: Math.abs(Math.sin(ry)) > 0.5 ? half : 0.12, maxY: h }); }
+    };
+    const bowl = (bx, by, bz, c = '#6a3f22', r = 0.07) => { R.add('onggi', cyl(r, r * 0.6, r * 0.7, 10), M(bx, by + r * 0.35, bz), c, { cast: false }); R.add('lacquer', new THREE.CircleGeometry(r * 0.85, 10), M(bx, by + r * 0.66, bz, 0, 1, 1, 1, -PI / 2), '#c99a3a', { cast: false }); T('bowl'); };
+    const bottle = (bx, by, bz, c = '#7a4a22') => { R.add('lacquer', cyl(0.035, 0.04, 0.16, 8), M(bx, by + 0.08, bz), c, { cast: false }); R.add('lacquer', cyl(0.012, 0.02, 0.06, 6), M(bx, by + 0.19, bz), c, { cast: false }); T('oil bottle'); };
+    const towel = (tx, ty, tz, ry = 0, c = '#f6f2e8') => { R.add('cloth', box(0.34, 0.06, 0.26), M(tx, ty + 0.03, tz, ry), c, { cast: false }); R.add('cloth', cyl(0.035, 0.035, 0.3, 8), M(tx, ty + 0.095, tz, ry, 1, 1, 1, 0).multiply(new THREE.Matrix4().makeRotationZ(PI / 2)), c, { cast: false }); T('towel'); };
+    const table = (tx, tz, top = 0.46, w = 0.44, d = w) => {
+      R.add('furn', box(w, 0.035, d), M(tx, top, tz), '#8a5a36');
+      for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) R.add('furn', box(0.035, top, 0.035), M(tx + a * (w / 2 - 0.03), top / 2, tz + b * (d / 2 - 0.03)), '#6a4428', { cast: false });
+      ctx.addCollider({ shape: 'box', x: tx, z: tz, hw: w / 2, hd: d / 2, maxY: top + 0.05 });
+      T('table'); return top + 0.018;
+    };
+    const vase = (vx, vy, vz, petal = '#f3d6dc') => {
+      R.add('onggi', cyl(0.035, 0.05, 0.16, 8), M(vx, vy + 0.08, vz), '#e8e2d6', { cast: false });
+      for (let k = 0; k < 5; k++) { const a = k * 1.3; R.add('paint', cyl(0.004, 0.004, 0.18, 4), M(vx + Math.cos(a) * 0.02, vy + 0.24, vz + Math.sin(a) * 0.02, 0, 1, 1, 1, 0.2 * Math.cos(a)), '#4f7a3a', { cast: false }); R.add('paint', new THREE.SphereGeometry(0.03, 6, 4), M(vx + Math.cos(a) * 0.05, vy + 0.33 + (k % 2) * 0.03, vz + Math.sin(a) * 0.05), k % 2 ? petal : '#ffffff', { cast: false }); }
+      T('flowers');
+    };
+    const floorLamp = (lx, lz) => { R.add('furn', box(0.26, 0.04, 0.26), M(lx, 0.02, lz), '#5a3c26', { cast: false }); R.add('glow', box(0.2, 0.32, 0.2), M(lx, 0.2, lz), '#ffd9a0', { cast: false }); R.add('wood', box(0.24, 0.03, 0.24), M(lx, 0.375, lz), '#6a4428', { cast: false }); T('floor lamp'); };
+    const paperLamp = (lx, lz, light) => { if (!Kt.jwadeung) return; try { Kt.jwadeung(R, { x: lx, z: lz, h: 0.9 }); T('paper lamp'); if (light && !low && Kt.lamp) Kt.lamp(R, { x: lx, y: 0.75, z: lz, s: 0.5, intensity: 2.2, distance: 7 }); } catch (e) { /* optional */ } };
+    const runner = (rx, rz, w, d, tint) => { if (Kt.floorMat) try { Kt.floorMat(R, { x: rx, z: rz, w, d, tint }); T('mat'); } catch (e) { /* optional */ } };
+
     if (kind === 'chair') {
-      // a reclining chair: a padded seat and back at an angle on a wooden base, a footrest, a low stool
-      R.add('furn', box(0.8, 0.36, 1.0), M(x, 0.18, z), '#6a4428');
-      R.add('cloth', box(0.72, 0.12, 0.9), M(x, 0.42, z + 0.05), '#cdbfa5');
-      R.add('cloth', box(0.72, 0.1, 0.9), M(x, 0.75, z - 0.55, 0, 1, 1, 1, -0.95), '#cdbfa5');
-      R.add('cloth', box(0.6, 0.1, 0.55), M(x, 0.38, z + 0.8, 0, 1, 1, 1, 0.25), '#cdbfa5');
-      ctx.addCollider({ shape: 'box', x, z: z + 0.1, hw: 0.42, hd: 1.0, maxY: 0.6, stand: true });
-      R.add('furn', cyl(0.2, 0.22, 0.42, 12), M(x, 0.21, z + 1.6), '#7a5234');
-      ctx.addCollider({ shape: 'circle', x, z: z + 1.6, r: 0.22, maxY: 0.44, stand: true });
+      // 제6관 발마사지관: eleven reclining chairs in two rows facing the garden side (south), a foot stool before each,
+      // a low table with oil bowls and a rolled towel beside it, low screens between the chairs of the front row
+      const chair = (cx, cz, side) => {
+        R.add('furn', box(0.8, 0.36, 1.0), M(cx, 0.18, cz), '#6a4428');
+        R.add('cloth', box(0.72, 0.12, 0.9), M(cx, 0.42, cz + 0.05), '#cdbfa5');
+        R.add('cloth', box(0.72, 0.1, 0.9), M(cx, 0.75, cz - 0.55, 0, 1, 1, 1, -0.95), '#cdbfa5');
+        R.add('cloth', box(0.6, 0.1, 0.55), M(cx, 0.38, cz + 0.8, 0, 1, 1, 1, 0.25), '#cdbfa5');
+        R.add('cloth', box(0.5, 0.08, 0.2), M(cx, 1.02, cz - 0.86, 0, 1, 1, 1, -0.95), '#f4efe4', { cast: false });
+        for (const s of [-1, 1]) R.add('furn', box(0.07, 0.05, 0.78), M(cx + s * 0.42, 0.56, cz - 0.05), '#7a5234');
+        ctx.addCollider({ shape: 'box', x: cx, z: cz + 0.1, hw: 0.42, hd: 1.0, maxY: 0.6, stand: true });
+        R.add('furn', cyl(0.2, 0.22, 0.42, 12), M(cx, 0.21, cz + 1.6), '#7a5234');
+        R.add('cloth', cyl(0.19, 0.19, 0.04, 12), M(cx, 0.44, cz + 1.6), '#e9e1cf', { cast: false });
+        ctx.addCollider({ shape: 'circle', x: cx, z: cz + 1.6, r: 0.22, maxY: 0.44, stand: true });
+        T('chair'); T('foot stool');
+        if (side) { const tx = cx + side * 0.86, ty = table(tx, cz + 0.3); bowl(tx - 0.08, ty, cz + 0.22); bowl(tx + 0.1, ty, cz + 0.34, '#5a3a22', 0.055); bottle(tx - 0.1, ty, cz + 0.44); towel(tx + 0.04, ty, cz + 0.12, PI / 2); }
+      };
+      for (const cx of [-5.6, -2.8, 2.8, 5.6]) chair(cx, z, cx < 0 ? -1 : 1);
+      chair(x, z, -1);
       R.add('cloth', box(0.36, 0.06, 0.28), M(x + 0.9, 0.5, z + 0.6), '#f4efe4');
+      for (const cx of [-6.4, -4.15, -1.9, 1.9, 4.15, 6.4]) chair(cx, 1.0, Math.abs(cx) < 6 ? Math.sign(cx) * 1.0 : 0);
+      for (const sx of [-4.2, 4.2]) scr(sx, z - 0.2, PI / 2, 3, 1.15);
+      scr(x, z - 2.6, 0, 6, 1.7); scr(-4.4, z - 2.4, 0, 6, 1.7); scr(4.4, z - 2.4, 0, 6, 1.7);
+      runner(0, z + 0.6, 13.4, 3.4, '#b39a6a'); runner(0, 1.6, 14.2, 3.6, '#a8906a');
+      // a towel warmer by the west wall: a cabinet with a warm glow behind its lattice and rolled towels inside
+      { const wx = -6.95, wz = -9.0;
+        R.add('furn', box(0.5, 1.3, 1.0), M(wx, 0.65, wz), '#6a4428');
+        R.add('glow', box(0.02, 0.9, 0.8), M(wx + 0.26, 0.75, wz), '#ffcf96', { cast: false });
+        for (let k = 0; k < 8; k++) R.add('cloth', cyl(0.045, 0.045, 0.3, 8), M(wx + 0.22, 0.45 + Math.floor(k / 4) * 0.4, wz - 0.3 + (k % 4) * 0.2, 0, 1, 1, 1, PI / 2), '#f8f5ee', { cast: false });
+        ctx.addCollider({ shape: 'box', x: wx, z: wz, hw: 0.26, hd: 0.5, maxY: 1.35 }); T('towel warmer'); }
+      for (const [px, pz, s] of [[-6.6, -10.2, 1.1], [6.6, -10.2, 1.1], [-2.2, -10.3, 0.9], [2.2, -10.3, 0.9], [-6.8, 4.6, 1.0], [6.8, 4.6, 1.0]]) { plant(R, ctx, px, pz, s); T('plant'); }
+      for (const [lx, lz] of [[-6.9, -1.8], [6.9, -1.8], [6.4, 8]]) paperLamp(lx, lz, true);
+      for (const lx of [-4.2, -1.4, 1.4, 4.2]) floorLamp(lx, z + 1.1);
       station(ctx, key, 'chair', x, 0.48, z, PI);
       station(ctx, key, 'stool', x, 0.42, z + 1.6, PI);
       station(ctx, key, 'guide', x, 0, z + 2.1, PI);
@@ -1155,29 +1204,93 @@ G.healStations = G.healStations || { map: new Map(),
     } else {
       // a padded bed: a wooden frame, a mattress under a white sheet, a pillow (a face cradle for the face room)
       const L = kind === 'body' ? 2.1 : 2.0, Wd = kind === 'body' ? 0.95 : 0.85;
-      R.add('furn', box(Wd, 0.5, L), M(x, 0.25, z), '#6a4428');
-      R.add('cloth', box(Wd - 0.04, 0.14, L - 0.04), M(x, 0.57, z), '#efe9dc');
-      R.add('cloth', box(Wd + 0.02, 0.02, L * 0.55), M(x, 0.645, z + L * 0.18), kind === 'body' ? '#9aa98a' : '#d8cdb8');
-      if (kind === 'face') R.add('cloth', cyl(0.18, 0.2, 0.1, 16), M(x, 0.69, z - L / 2 + 0.25), '#ffffff');
-      else R.add('cloth', box(0.5, 0.1, 0.3), M(x, 0.69, z - L / 2 + 0.25), '#ffffff');
-      ctx.addCollider({ shape: 'box', x, z, hw: Wd / 2 + 0.02, hd: L / 2, maxY: 0.66, stand: true });
-      // the little table with bowls / oil bottles, the towel warmer cabinet
-      R.add('furn', box(0.5, 0.75, 0.4), M(x + 1.4, 0.375, z - 0.4), '#7a5234');
-      if (Kt.pot) for (let k = 0; k < 3; k++) try { Kt.pot(R, { x: x + 1.27 + k * 0.13, y: 0.75, z: z - 0.4, kind: kind === 'body' ? 'bottle' : 'bowl', s: 0.34, mat: kind === 'body' ? 'onggi' : 'onggi' }); } catch (e) { /* optional */ }
-      ctx.addCollider({ shape: 'box', x: x + 1.4, z: z - 0.4, hw: 0.26, hd: 0.22, maxY: 0.8 });
-      R.add('furn', box(0.9, 1.1, 0.45), M(-5.8, 0.55, -9.9), '#7a5234');
-      for (let k = 0; k < 6; k++) R.add('cloth', box(0.32, 0.05, 0.24), M(-5.8 + (k % 2 ? 0.18 : -0.18), 1.14 + Math.floor(k / 2) * 0.055, -9.9), '#f8f5ee');
-      ctx.addCollider({ shape: 'box', x: -5.8, z: -9.9, hw: 0.46, hd: 0.24, maxY: 1.3 });
-      if (kind === 'face') { station(ctx, key, 'bed', x, 0.66, z, PI); station(ctx, key, 'towel', -5.8, 1.2, -9.6, 0); station(ctx, key, 'guide', x, 0, z - L / 2 - 0.55, 0); }
-      else { station(ctx, key, 'bed', x, 0.66, z, PI); station(ctx, key, 'oil', x + 1.4, 0.76, z - 0.4, 0); station(ctx, key, 'guide', x - 0.9, 0, z, PI / 2); }
+      const bed = (bx, bz, ry = 0) => {
+        const m = (dx, dy, dz) => M(bx + Math.cos(ry) * dx + Math.sin(ry) * dz, dy, bz - Math.sin(ry) * dx + Math.cos(ry) * dz, ry);
+        R.add('furn', box(Wd, 0.5, L), m(0, 0.25, 0), '#6a4428');
+        R.add('cloth', box(Wd - 0.04, 0.14, L - 0.04), m(0, 0.57, 0), '#efe9dc');
+        R.add('cloth', box(Wd + 0.02, 0.02, L * 0.55), m(0, 0.645, L * 0.18), kind === 'body' ? '#9aa98a' : '#d8cdb8');
+        R.add('cloth', box(Wd + 0.03, 0.2, 0.012), m(0, 0.52, L * 0.18 + L * 0.275), kind === 'body' ? '#9aa98a' : '#d8cdb8', { cast: false });
+        if (kind === 'face') R.add('cloth', cyl(0.18, 0.2, 0.1, 16), m(0, 0.69, -L / 2 + 0.25), '#ffffff');
+        else R.add('cloth', box(0.5, 0.1, 0.3), m(0, 0.69, -L / 2 + 0.25), '#ffffff');
+        const hw = Math.abs(Math.cos(ry)) > 0.5 ? Wd / 2 + 0.02 : L / 2, hd = Math.abs(Math.cos(ry)) > 0.5 ? L / 2 : Wd / 2 + 0.02;
+        ctx.addCollider({ shape: 'box', x: bx, z: bz, hw, hd, maxY: 0.66, stand: true });
+        T('bed');
+      };
+      const tray = (tx, ty, tz) => {   // a brass tray with three bowls and a hand mirror
+        R.add('brass', cyl(0.17, 0.16, 0.015, 14), M(tx, ty + 0.008, tz), '#c9a24a', { cast: false });
+        bowl(tx - 0.07, ty + 0.015, tz - 0.05, '#e8e2d6', 0.045); bowl(tx + 0.06, ty + 0.015, tz - 0.06, '#d9c9a8', 0.04); bowl(tx, ty + 0.015, tz + 0.07, '#efe6d6', 0.04);
+        R.add('lacquer', cyl(0.055, 0.055, 0.01, 14), M(tx + 0.2, ty + 0.02, tz + 0.05, 0.4, 1, 1, 1, 0), '#2a2422', { cast: false });
+        R.add('lacquer', cyl(0.045, 0.045, 0.004, 14), M(tx + 0.2, ty + 0.027, tz + 0.05), '#dfe8ee', { cast: false });
+        R.add('lacquer', box(0.022, 0.01, 0.09), M(tx + 0.2 + 0.03, ty + 0.02, tz + 0.05 + 0.1, 0.3), '#2a2422', { cast: false });
+        T('tray'); T('hand mirror');
+      };
+      if (kind === 'face') {
+        // 제7관 얼굴마사지관: nine padded beds in two rows, heads to the north; a stool at each head for the keeper,
+        // a tray of bowls with a hand mirror and a vase of flowers on a little table beside each bed
+        // (the tables stand between the beds; the west and east aisles and the one west of the program's bed stay free)
+        const rowA = [-5.2, -2.6, 2.6, 5.2], rowB = [-5.0, -2.2, 2.2, 5.0];
+        bed(x, z);
+        for (const bx of rowA) bed(bx, z);
+        for (const bx of rowB) bed(bx, 1.8);
+        // one table between two beds: a tray (bowls and a hand mirror) for each of them and a vase of flowers
+        const side = (tx, bz, s) => { const ty = table(tx, bz - 0.4, 0.62, 0.5, 0.9); tray(tx - 0.02, ty, bz - 0.62); tray(tx - 0.02, ty, bz - 0.2); vase(tx + 0.17, ty, bz - 0.41, s > 0 ? '#f3d6dc' : '#f6e7b0'); };
+        for (const tx of [-3.9, 3.9]) side(tx, z, Math.sign(tx));
+        for (const tx of [-3.6, 3.6]) side(tx, 1.8, Math.sign(tx));
+        for (const bx of rowA) { R.add('furn', cyl(0.19, 0.2, 0.46, 12), M(bx, 0.23, z - L / 2 - 0.55), '#7a5234'); ctx.addCollider({ shape: 'circle', x: bx, z: z - L / 2 - 0.55, r: 0.2, maxY: 0.48, stand: true }); T('stool'); }
+        for (const bx of rowB) { R.add('furn', cyl(0.19, 0.2, 0.46, 12), M(bx, 0.23, 1.8 - L / 2 - 0.55), '#7a5234'); ctx.addCollider({ shape: 'circle', x: bx, z: 1.8 - L / 2 - 0.55, r: 0.2, maxY: 0.48, stand: true }); T('stool'); }
+        // the program's own bed: its little table (as before) with bowls, a tray and flowers
+        R.add('furn', box(0.5, 0.75, 0.4), M(x + 1.4, 0.375, z - 0.4), '#7a5234');
+        if (Kt.pot) for (let k = 0; k < 3; k++) try { Kt.pot(R, { x: x + 1.27 + k * 0.13, y: 0.75, z: z - 0.4, kind: 'bowl', s: 0.34, mat: 'onggi' }); } catch (e) { /* optional */ }
+        vase(x + 1.4, 0.75, z - 0.25);
+        ctx.addCollider({ shape: 'box', x: x + 1.4, z: z - 0.4, hw: 0.26, hd: 0.22, maxY: 0.8 });
+        R.add('furn', box(0.9, 1.1, 0.45), M(-5.8, 0.55, -9.9), '#7a5234');
+        for (let k = 0; k < 6; k++) R.add('cloth', box(0.32, 0.05, 0.24), M(-5.8 + (k % 2 ? 0.18 : -0.18), 1.14 + Math.floor(k / 2) * 0.055, -9.9), '#f8f5ee');
+        ctx.addCollider({ shape: 'box', x: -5.8, z: -9.9, hw: 0.46, hd: 0.24, maxY: 1.3 }); T('towel cabinet');
+        // low screens behind the heads, flowers by the windows, soft lamps
+        scr(-4.05, z - 2.4, 0, 6, 1.45); scr(4.05, z - 2.4, 0, 6, 1.45); scr(x, z - 2.6, 0, 4, 1.45);
+        for (const [px, pz] of [[-3.0, -10.3], [0, -10.3], [3.0, -10.3], [6.6, -10.2]]) { R.add('onggi', cyl(0.12, 0.09, 0.34, 10), M(px, 0.17, pz), '#ddd5c6'); vase(px, 0.34, pz, '#f0c3cf'); ctx.addCollider({ shape: 'circle', x: px, z: pz, r: 0.16 }); }
+        for (const [lx, lz] of [[-6.9, -1.6], [6.9, -1.6], [6.4, 8]]) paperLamp(lx, lz, true);
+        for (const lx of [-6.9, 6.9]) paperLamp(lx, 4.4, false);
+        runner(0, z + 0.2, 14.2, 3.2, '#b7a07a'); runner(0, 2.0, 14.2, 3.0, '#ad977a');
+        station(ctx, key, 'bed', x, 0.66, z, PI); station(ctx, key, 'towel', -5.8, 1.2, -9.6, 0); station(ctx, key, 'guide', x, 0, z - L / 2 - 0.55, 0);
+      } else {
+        // 제8관 바디마사지관: eight broad beds, each in a bay of its own — folding screens around the front row, hanging
+        // cloths between the beds of the back row and one more bay along the north wall; oil bottles on a shelf, a
+        // basket of warm stones, lamps on the floor
+        const rowB = [-5.6, -2.6, 2.6, 5.6];
+        bed(x, z); bed(-4.8, z); bed(4.8, z);
+        for (const bx of rowB) bed(bx, 2.4);
+        bed(-3.4, -9.4, PI / 2);
+        // the program's oil table (as before) and the same little table by every other bed
+        R.add('furn', box(0.5, 0.75, 0.4), M(x + 1.4, 0.375, z - 0.4), '#7a5234');
+        if (Kt.pot) for (let k = 0; k < 3; k++) try { Kt.pot(R, { x: x + 1.27 + k * 0.13, y: 0.75, z: z - 0.4, kind: 'bottle', s: 0.34, mat: 'onggi' }); } catch (e) { /* optional */ }
+        ctx.addCollider({ shape: 'box', x: x + 1.4, z: z - 0.4, hw: 0.26, hd: 0.22, maxY: 0.8 });
+        const side = (tx, tz) => { const ty = table(tx, tz, 0.62, 0.42); bottle(tx - 0.1, ty, tz - 0.05); bottle(tx + 0.02, ty, tz + 0.08, '#a8742e'); towel(tx + 0.08, ty, tz - 0.08, 0, '#f1ead8'); };
+        side(-4.8 + 1.4, z - 0.4); side(4.8 + 1.4, z - 0.4);
+        for (const bx of rowB) side(Math.abs(bx) < 4 ? bx - Math.sign(bx) * 1.3 : bx + Math.sign(bx) * 1.25, 2.0);
+        side(-3.4, -8.55);
+        // the bays: screens around the front row, curtains on rails between the back-row beds
+        for (const sx of [-2.4, 2.4]) scr(sx, z, PI / 2, 5, 1.75);
+        for (const sx of [-4.8, 0, 4.8]) scr(sx, z - 2.3, 0, 7, 1.75);
+        for (const cx of [-4.1, 4.1, -7.2, 7.2]) {
+          if (Math.abs(cx) < 7) { R.add('wood', cyl(0.025, 0.025, 2.6, 8), M(cx, 2.35, 2.4, 0, 1, 1, 1, PI / 2), '#8a5a36'); for (const s of [-1, 1]) R.add('wood', cyl(0.03, 0.03, 2.35, 8), M(cx, 1.18, 2.4 + s * 1.3), '#7a5234'); }
+          for (let k = 0; k < 5; k++) R.add('cloth', box(0.02, 2.1, 0.5), M(cx + (k % 2 ? 0.05 : -0.05), 1.27, 2.4 - 1.0 + k * 0.5, k % 2 ? 0.2 : -0.2), k % 2 ? '#e9dfcb' : '#f1e8d6', { cast: false });
+          ctx.addCollider({ shape: 'box', x: cx, z: 2.4, hw: 0.1, hd: 1.3, maxY: 2.3 }); T('hanging cloth');
+        }
+        scr(-1.6, -9.4, PI / 2, 4, 1.6); scr(-5.2, -9.4, PI / 2, 4, 1.6);
+        // oil bottles on a shelf (north wall, east), the basket of warm stones, lamps on the floor
+        if (Kt.shelf) try { const sp = Kt.shelf(R, { x: 3.6, z: -10.6, rotY: 0, w: 1.8, d: 0.36, h: 1.5, levels: 3 }) || []; sp.forEach((p) => { for (let k = 0; k < 6; k++) bottle(p.x - 0.7 + k * 0.28, p.y, p.z, ['#7a4a22', '#a8742e', '#5a3a1a'][k % 3]); }); ctx.addCollider({ shape: 'box', x: 3.6, z: -10.6, hw: 0.92, hd: 0.2, maxY: 1.6 }); T('oil shelf'); } catch (e) { /* optional */ }
+        if (Kt.basket) try { Kt.basket(R, { x: 5.6, z: -9.6, r: 0.3, h: 0.18, kind: 'round' }); for (let k = 0; k < 9; k++) R.add('stone', new THREE.DodecahedronGeometry(0.055, 0), M(5.6 + Math.cos(k * 2.4) * 0.15 * (k % 3) / 2, 0.16 + (k % 2) * 0.03, -9.6 + Math.sin(k * 2.4) * 0.15 * (k % 3) / 2, k, 1.3, 0.6, 1), '#2f2d2b', { cast: false }); ctx.addCollider({ shape: 'circle', x: 5.6, z: -9.6, r: 0.32 }); T('warm stones'); } catch (e) { /* optional */ }
+        for (const [lx, lz] of [[-2.4, z + 1.5], [2.4, z + 1.5], [-4.1, 4.0], [4.1, 4.0], [-7.0, -6.8], [7.0, -6.8], [0, -10.4]]) floorLamp(lx, lz);
+        for (const [lx, lz] of [[-6.9, -1.6], [6.9, -1.6], [6.4, 8]]) paperLamp(lx, lz, true);
+        runner(0, z + 0.3, 14.2, 3.4, '#a58e6a'); runner(0, 2.4, 14.2, 3.2, '#9c8664');
+        station(ctx, key, 'bed', x, 0.66, z, PI); station(ctx, key, 'oil', x + 1.4, 0.76, z - 0.4, 0); station(ctx, key, 'guide', x - 0.9, 0, z, PI / 2);
+      }
       station(ctx, key, 'spot', x, 0.66, z, PI);
     }
-    // folding screens without written characters (blank silk), paper lamps, a woven mat, a little 수반 with stones
-    if (Kt.screen) try { Kt.screen(R, { x, z: z - 2.6, rotY: 0, panels: 6, h: 1.7 }); Kt.screen(R, { x: -3.4, z, rotY: PI / 2, panels: 4, h: 1.6 }); } catch (e) { /* optional */ }
-    if (Kt.floorMat) try { Kt.floorMat(R, { x, z: z + 0.4, w: 3.2, d: 3.6, tint: '#b39a6a' }); } catch (e) { /* optional */ }
-    for (const [lx, lz] of [[-2.2, z - 1.8], [2.4, z + 1.6], [6.4, 8]]) { if (Kt.jwadeung) try { Kt.jwadeung(R, { x: lx, z: lz, h: 0.9 }); if (!low && Kt.lamp) Kt.lamp(R, { x: lx, y: 0.75, z: lz, s: 0.5, intensity: 2.2, distance: 7 }); } catch (e) { /* optional */ } }
-    if (Kt.pot) try { Kt.pot(R, { x: 5.6, z: -8.8, kind: 'basin', s: 1.3 }); for (let k = 0; k < 5; k++) R.add('stone', new THREE.DodecahedronGeometry(0.06, 0), M(5.5 + k * 0.05, 0.12, -8.8 + (k % 2) * 0.06, k), '#5a5650', { cast: false }); } catch (e) { /* optional */ }
-    bench(R, ctx, 4.6, 7.6);
+    // a little 수반 with stones (not in 제8관: the warm stones stand there) and a waiting bench by the door
+    if (kind !== 'body' && Kt.pot) try { Kt.pot(R, { x: kind === 'face' ? 6.0 : 5.6, z: kind === 'face' ? -8.6 : -8.8, kind: 'basin', s: 1.3 }); for (let k = 0; k < 5; k++) R.add('stone', new THREE.DodecahedronGeometry(0.06, 0), M((kind === 'face' ? 5.9 : 5.5) + k * 0.05, 0.12, (kind === 'face' ? -8.6 : -8.8) + (k % 2) * 0.06, k), '#5a5650', { cast: false }); T('water basin'); } catch (e) { /* optional */ }
+    bench(R, ctx, 4.6, 7.6); bench(R, ctx, -4.6, 7.6); T('bench', 2);
   }
   /** a staved wooden foot tub with two iron hoops and warm water */
   function tub(R, x, z, s = 1) {

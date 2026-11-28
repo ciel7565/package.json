@@ -288,6 +288,14 @@ const census = [];
       if (c.room === 'LOBBY') continue;
       check(`[census] ${tag}: a 0.7 m path from the door to every station`, !c.lane07.miss.length, c.lane07.miss.join(' '));
     }
+    // the rooms that are full now (the rest follow, two per commit): many things, most of the floor near one, the lane free
+    const FULL = new Set(['R6', 'R7', 'R8']);
+    for (const c of census.filter((x) => FULL.has(x.room))) {
+      const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
+      check(`[census] ${tag}: full — ≥ 50 things, ≥ 60 % of the floor within 1.2 m of one`, c.things >= 50 && c.cover12 >= 0.6, `${c.things} things, ${(c.cover12 * 100).toFixed(0)} %`);
+      check(`[census] ${tag}: a free 1.6 m lane from the door to every station`, !c.lane16.miss.length, c.lane16.miss.join(' '));
+      check(`[census] ${tag}: still one mesh per material (≤ 50 meshes here, ≤ 0.35 M triangles)`, c.meshes <= 50 && c.tris <= 350000, `${c.meshes} meshes, ${c.tris} triangles`);
+    }
     const rows = census.filter((c) => !c.low);
     const table = rows.map((c) => `${c.room.padEnd(5)} things ${String(c.things).padStart(4)} · pieces ${String(c.pieces).padStart(5)} · cover 2.5 m ${(c.cover * 100).toFixed(0).padStart(3)}% / 1.2 m ${(c.cover12 * 100).toFixed(0).padStart(3)}% · meshes ${c.meshes}/${census.find((x) => x.low && x.id === c.id)?.meshes} · ${(c.tris / 1000).toFixed(0)}k tris · lane 1.6 m ${c.lane16.miss.length ? 'blocked: ' + c.lane16.miss.join(',') : 'free'}`);
     if (!jsonOut) console.log('  · census (medium; meshes medium/low)\n    ' + table.join('\n    '));
