@@ -2481,7 +2481,7 @@
           // that slips under the tiles must not leave the camera above the roof (only buckets that exist are added).
           // The gate's big 현판 hangs at head height right where the follow camera sits when a child walks through to the
           // plaza: it blocks the camera as well, so the camera pulls in instead of showing only the board's letters
-          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' || b.type === 'gotgan' ? ['thatch'] : b.type === 'gate' ? ['roof', 'soffit', 'fascia', 'sign'] : ['roof', 'soffit', 'fascia'] });
+          const meshes = site.finish(root, { blockKeys: b.type === 'thatched' || b.type === 'gotgan' ? ['thatch'] : b.type === 'gate' ? ['roof', 'soffit', 'fascia', 'sign'] : b.type === 'craft' ? ['roof', 'soffit', 'fascia', 'thatch'] /* [buildings] the 주막 · 대장간 · 방앗간 are thatched */ : ['roof', 'soffit', 'fascia'] });
           site.group.userData.building = b;
           site.group.userData.colliders = site.colliders;
           this.groups[b.id] = site.group;
