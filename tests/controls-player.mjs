@@ -8,10 +8,12 @@
 //   a small thing without drifting along walls.
 // Usage: node tests/controls-player.mjs [--json]    exit 0 = all green, 1 = a check failed
 import { loadPlayer } from './helpers/player-world.mjs';
+import { page as inputPage } from './helpers/input-page.mjs';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail: String(detail) }); if (!process.argv.includes('--json')) console.log(`${ok ? '✓' : '✗'} ${name}${detail !== '' ? ' — ' + detail : ''}`); };
 const near = (a, b, e) => Math.abs(a - b) <= e;
+const J = (v) => JSON.stringify(v);
 const f2 = (v) => (Math.round(v * 100) / 100).toString();
 const FPS = [60, 30, 10, 5, 2];
 
@@ -200,6 +202,46 @@ function dashOnce(dir, opts = {}, fps = 60, seconds = 1) {
   check('a row of three jars: it finds the gap or stops — it never ends up inside one', r.h.W.blocked(r.x, r.z, 0.35 - 0.03, 0) === false, `${f2(r.x)}, ${f2(r.z)}`);
   const d = loadPlayer({ easy: false }); d.W.addCollider({ shape: 'circle', x: 0, z: -4, r: 0.3, tag: 'onggi' }); d.place(0, 0, Math.PI); d.keys(0, 1, true); d.run(3, 60);
   check('running into a jar: round it too', d.P.position.z < -7, f2(d.P.position.z));
+}
+
+// ----------------------------------------------------------------------------------------------- key events → input → player, at any frame rate
+{
+  /** the real 05-input.js and the real 21-player.js together: timestamped key events are delivered at the first frame after
+   *  their time (as a browser does at a low frame rate), the frames run at `fps`; script = [[ms, 'down' | 'up', code], ...] */
+  function combo(fps, script, seconds, opts = {}) {
+    const p = inputPage({ easy: false, ...opts });
+    const h = loadPlayer({ easy: false, ...opts });
+    h.G.input = p.G.input;                                           // the player reads the real input
+    p.G.bus.on('input:dash', (d) => h.G.bus.emit('input:dash', d)); p.G.bus.on('input:run', (d) => h.G.bus.emit('input:run', d));
+    h.place(0, 0, Math.PI);
+    const dt = 1 / fps, ev = script.slice().sort((a, b) => a[0] - b[0]);
+    let i = 0, ms = 1000; const tl = [];
+    const t0 = ms;
+    for (let f = 0; f < Math.round(seconds * fps); f++) {
+      ms += dt * 1000; p.T.now = ms; h.G.time.elapsed += dt;
+      while (i < ev.length && t0 + ev[i][0] <= ms) { const [at, ty, code] = ev[i++]; p[ty](code, { ts: t0 + at }); }
+      h.P.update(dt, h.G.time.elapsed);
+      tl.push({ x: h.P.position.x, z: h.P.position.z, v: h.P.speed, st: h.P.moveState });
+    }
+    return { p, h, tl, end: tl[tl.length - 1] };
+  }
+  const near2 = (a, b, e) => Math.abs(a - b) <= e;
+  // a left double tap (press 0, release 60, press 130, release 190) at 60 / 30 / 10 / 5 fps
+  const dashes = [60, 30, 10, 5].map((fps) => combo(fps, [[100, 'down', 'KeyA'], [160, 'up', 'KeyA'], [230, 'down', 'KeyA'], [290, 'up', 'KeyA']], 1.5));
+  const dd = dashes.map((c) => { const e = c.h.ev('player:dash')[0]; return e ? -(c.end.x - e.pos.x) : NaN; });   // from where the dash began (the first tap walked a step already)
+  check('end to end: A A dashes 3.2 m to the left at 60, 30, 10 and 5 frames per second, the same distance from where it began', dd.every((d) => near2(d, 3.2, 0.1)) && dashes.every((c) => c.h.ev('player:dash').length === 1 && Math.abs(c.end.z) < 0.05), dd.map(f2).join(' · ') + ` (total with the first tap's step: ${dashes.map((c) => f2(-c.end.x)).join(' · ')})`);
+  // a forward double tap with the second press held for 1.5 s, then released
+  const runs = [60, 30, 10, 5].map((fps) => combo(fps, [[100, 'down', 'KeyW'], [160, 'up', 'KeyW'], [230, 'down', 'KeyW'], [1730, 'up', 'KeyW']], 3.0));
+  check('end to end: W W (second held) runs at 14.4 m/s at every frame rate and ends when W is let go', runs.every((c) => { const mid = c.tl[Math.round(c.tl.length * 0.45)]; return near2(mid.v, 14.4, 0.4) && mid.st === 'run' && c.end.st === 'walk' && c.end.v < 0.5; }), runs.map((c) => `${f2(c.tl[Math.round(c.tl.length * 0.45)].v)} ${c.end.st}`).join(' · '));
+  const dz = runs.map((c) => -c.end.z);
+  check('end to end: …and it covers the same ground (± 3 m) at 60 and at 5 frames per second', Math.abs(dz[0] - dz[3]) < 3 && dz[0] > 18, dz.map(f2).join(' · '));
+  // a single press, then one 600 ms later: nothing
+  const slow = combo(60, [[100, 'down', 'KeyA'], [150, 'up', 'KeyA'], [700, 'down', 'KeyA'], [750, 'up', 'KeyA']], 1.5);
+  check('end to end: A … A 600 ms apart is no dash (walks a little only)', slow.h.ev('player:dash').length === 0);
+  // while a window is open nothing starts (the input is blocked)
+  const blk = (() => { const q = inputPage({ easy: false }); const h = loadPlayer({ easy: false }); h.G.input = q.G.input; q.G.bus.on('input:dash', (d) => h.G.bus.emit('input:dash', d)); h.place(0, 0); q.T.blocking = true; h.I = q.G.input;
+    for (const [ms, ty] of [[100, 'down'], [150, 'up'], [230, 'down'], [290, 'up']]) { q.T.now = 1000 + ms; q[ty]('KeyA', { ts: 1000 + ms }); } h.run(1, 60); return { n: h.ev('player:dash').length, x: h.P.position.x }; })();
+  check('end to end: with a window open (input blocked) the same four events do nothing', blk.n === 0 && Math.abs(blk.x) < 0.01, J(blk));
 }
 
 // ----------------------------------------------------------------------------------------------- nothing odd
