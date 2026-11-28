@@ -1614,6 +1614,9 @@ is `PL_HEAL` (lobby + corridor) with the rooms as nested places `PL_HEAL_R1 … 
 | opt | `tools/*` for weight and the installable page, `docs/MOBILE-APP-KO.md` | `src/template.html`, `tools/build.mjs`, `tools/package.mjs` |
 | people (§19.9, after lane hanbok has ended) | `20-avatar.js`, `02-avatar-data.js`, looks in `25-npc.js`, tests `avatar-*` | `80-devcenter.js` |
 | fix10 (§19.10) | the named faults in `68-settings.js`, `67-display.js`, `78-support.js` (+ css) and their tests | — |
+| heal-look (§19.11, after lane heal-hall) | `69-healing-hall.js`, `tests/heal-hall-unit.mjs` | `80-devcenter.js` |
+| fit (§19.12, after lane wardrobe) | `24-wardrobe.css`, the layout parts of `24-wardrobe.js`, the `fit` group of `tests/wardrobe-client.mjs` | `tools/kid-audit.mjs` (the short-screen pass), `00-base.css`, `02-responsive.css`, `08-easy.css` (window sizing only) |
+| claude-api (§15.6, §16.10) | `server/lib/Claude.php`, `server/lib/AdminAi.php`, `server/api/ai/*`, `73-ai.js` (+ css), tests `ai-*` | `server/admin/index.php`, `Settings.php`, `Db.php` + schema files, `server/cli/tfm.php`, `80-devcenter.js`, `tools/kid-audit.mjs`, `tests/security-e2e.mjs` |
 
 ### 19.8 Acceptance (added to §18.8)
 A new profile wears hanbok, earns coins, buys a piece in the shop, tries it on, wears it, sells another, makes its
@@ -1659,3 +1662,43 @@ account store, two devices at once must both be kept (`settings-client` part D),
 calm sentence; (b) support — on a 390-px phone in normal mode every button of the window is at least 40 px high, and
 the suite's scripted server must not call itself; (c) the carry-over list of the orchestrator's notes (allotment
 requests, the chat filter's 400 characters against the memo limit of 500, wording in §15.7, numbers in documents).
+
+### 19.11 Third pass: the rooms of the 힐링관 filled (lane `heal-look`) — P0 of the third wave
+The orchestrator's eyes on the pictures of Nov 28: the house, the ceiling, the lattice doors and the light are right,
+but each 15 × 22 m room (330 m², 100 평) holds one small island of things — it reads empty and its theme cannot be told
+from the door. The owner asked for light, props and sound that fit each room and for as much to touch as possible.
+- **Full, by theme**: every room is furnished for the many guests such a house would serve — rows of mats, seats, tubs,
+  beds or lanes as its theme asks, with what belongs beside them (trays, towels, kettles, racks, screens, plants) — so
+  that a visitor at the door can name the room without reading its sign. The lobby, the 숙소 and the 상담실 likewise.
+  제10관 keeps both variants: the gentle one (what a child gets) never shows the coffin.
+- **Nothing moves that is used**: every station of `G.healStations`, every door and the corridor stay exactly where
+  they are; a free walking lane of 1.6 m leads from the door to every station (computed in `tests/heal-hall-unit.mjs`,
+  with the share of the floor that lies within 2.5 m of a thing, before and after).
+- **People**: staff in the named looks of `G.data.npcLooks` at their places, and a few guests in the set `healing`
+  resting where that fits, drawn through the crowd path — at most two draw calls for all people of a room; still
+  poses.
+- **Glass and garden**: the front reads as glass (frames at human scale, a faint reflection, a hint of tint, door
+  handles); the garden behind it is planted with the valley's own vegetation and follows `G.season`.
+- **Budgets**: rows are instanced or merged; a room at `high` costs at most 110 draw calls and 0.35 M triangles; `low`
+  stays within 6 draw calls of the first pass and has no texture maps; everything is disposed with the place.
+- **Proof**: every room from the door at `high`, before and after, with its draw calls and triangles; two rooms at
+  `low`; the unit suite and lane heal-program's suites green; a walk to a station through the new rows.
+
+### 19.12 Third pass: windows on short screens (lane `fit`) — P0 of the third wave
+Found on Nov 28 by the walk through the packaged page in easy mode at 960 × 540: the buy button of the 한복집 lay under
+the footer bar, and the tiles were hidden behind the detail card (`body.easy .wd { height: min(58vh, 36rem) }` is
+taller than the room between the big easy header and footer). No suite looked at a short screen; a phone held sideways
+(844 × 390, 640 × 360) is the usual way to walk a 3D world on a phone.
+- **The rule (added to §12)**: every window, in easy and in normal mode, fits any viewport from 640 × 360 upward — its
+  close button and its primary action (buy, sell, wear, save, send, next) lie entirely inside the visible window and
+  are the topmost element at their centre; no scrolling body reaches under a header or a footer; what does not fit
+  scrolls inside the body; a preview (the figure of the 옷장, a picture) shrinks or folds away before content is pushed
+  out. Tap sizes are layout sizes (measured after the opening animation, which a slow machine holds at scale .96).
+- **The 옷장 and the 한복집** are repaired first (lane wardrobe has ended): at 640 × 360, 844 × 390, 960 × 540,
+  1024 × 600, 1280 × 720 and 390 × 844, in both modes, one whole row of tiles is visible together with the action, and
+  the five view buttons under the figure are 56 px in easy mode.
+- **Every other easy-mode screen** of `tools/kid-audit.mjs` is walked once at 844 × 390 (a new short-screen pass of the
+  tool, part of `--both`): a cause in the shared window sizing (`00-base.css`, `02-responsive.css`, `08-easy.css`) is
+  repaired once, in a small marked block; a window of a running lane is reported with its picture, not edited.
+- **Proof**: the `fit` group of `tests/wardrobe-client.mjs` (geometry only, `quality=low`), the short-screen pass of the
+  kid audit without a critical finding, one picture per viewport of the 한복집 with a piece picked.
