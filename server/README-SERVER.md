@@ -138,7 +138,9 @@ return [
 | `TFM_TOSS_MOCK` | 0 | 1 이면 결제 서버에 연결하지 않는 모의 결제 (E2E·시연) — 서버 PC(또는 `TFM_ENV=development`)에서만 동작 |
 | `TFM_DB_ADMIN_PASS` · `TFM_ADMIN_PASS` · `TFM_TOSS_SECRET_KEY` · `TFM_NEW_PASSWORD` | (없음) | **명령줄 도구용**: `cli install`·`migrate`·`db:*` 의 DB 관리자 비밀번호, 첫 관리자 비밀번호, 토스 시크릿 키, `reset-password` 의 새 비밀번호를 다른 프로그램에서 넘길 때. 명령줄 인수로는 받지 않아요(같은 PC 의 다른 사용자가 프로세스 목록에서 볼 수 있어서). 사람이 칠 때는 화면에 보이지 않게 물어요 |
 | `TFM_ADMIN_HTACCESS` | (내부) | 관리자 폴더의 `.htaccess` 가 스스로 켜는 표시 — 점검 화면이 `.htaccess` 가 동작하는지 알아보는 데 써요. 직접 정하지 마세요 |
-| `ANTHROPIC_API_KEY` · `TFM_AI_*` · `TFM_RT_SCALE` | (없음) | 다음 단계 기능(Claude 도우미 · 실시간 텃밭)용 자리예요. 이번 버전에는 그 기능의 입구(API)가 없어요. Claude 키를 넣는다면 `config.local.php`·환경 변수에만(저장소·DB·로그·브라우저에 남기지 않아요) |
+| `ANTHROPIC_API_KEY` | (없음 = AI 기능 꺼짐) | Claude API 키 — 🤖 AI 도우미(관리자 센터)와 옹이 선생님(체험관)을 켜요. `config.local.php` 의 `anthropic.api_key` 나 이 환경 변수에만 두고, 저장소·DB·로그·브라우저에는 절대 남기지 않아요 (아래 "Claude API" 절) |
+| `TFM_AI_MOCK` · `TFM_AI_MODEL` · `TFM_AI_EFFORT` · `TFM_AI_MAX_TOKENS` · `TFM_AI_TIMEOUT` · `TFM_AI_API_BASE` · `TFM_AI_CA_FILE` | 0 · `claude-opus-5-5` · `low` · 4096 · 60 · `https://api.anthropic.com` · (없음) | 모의 모드(밖으로 보내지 않는 정해진 답) · 모델 · 생각하는 정도 · 최대 토큰 · 기다리는 시간(초) · API 주소(시험용 스텁만 바꿔요) · 윈도우에서 인증서 묶음 파일 경로 |
+| `TFM_RT_SCALE` | (없음) | 실시간 텃밭 시간 배율 (관리자 센터 ⚙️ 설정의 `farm.rt_scale` 이 우선) |
 
 ### MySQL / MariaDB (XAMPP) — 수동 설치 (install.php 를 쓰지 않을 때)
 1. phpMyAdmin (`http://localhost/phpmyadmin`) → 새 데이터베이스 `fermentation_metaverse` (utf8mb4_unicode_ci) → 선택 → **가져오기** → `database/schema.sql` 실행
@@ -258,6 +260,8 @@ JSON 깊이 32 · 한도 초과 429 + `Retry-After` + `data.retryAfter` · 파�
 | `sub/webhook.php` | POST | 토스 서버 | 본문을 믿지 않고 결제를 다시 조회(모의 모드는 결제 키 대조) · `payment_events` 에 (주문, 이벤트, 상태) 중복 없이 기록 · 취소/환불이면 그 기간을 산 구독을 내림 · 단계를 **올릴 수는 없음** · IP 별 제한 · 항상 200 |
 | `sub/renew.php` | POST | 관리자(승격) | `{userId?, force?}` → `{results}` — 만료 하루 전부터 빌링키 결제 (실패 → `past_due`, 유예 3일 뒤 `none`); 카드를 등록한 단계만 청구, 강제 갱신도 한 기간에 한 번만; `cli/tfm.php sub:renew` 와 같음 |
 | `sub/grant.php` | POST | 관리자(승격) | `{userId, tier, days}` 수동 부여 / `{userId, revoke:true}` 해지 → `{message, sub}` (관리자 센터 ⚡ 구독 탭과 같은 작업, 감사 로그) |
+| `ai/status.php` | GET | 로그인 | `{enabled, kid, presets:[{id, icon, label, say, topic}], left, max}` — 옹이 선생님이 지금 켜져 있는지(키 있음 + 운영자 스위치 `ai.kid_helper`), 질문 그림(질문 글은 서버에만), 오늘 남은 질문 수, 직접 쓰는 질문의 최대 글자 수. 키·모델 이름은 없음 · 질의 문자열 400 · rate `ai_status` |
+| `ai/ask.php` | POST | 로그인 | `{presetId}` 또는 `{question}`(200자까지) 중 **하나만** → `{ok, answer, why, left, presetId}` — 꺼짐·한도·거절·빈 답·연결 실패도 200 + `ok:false` + 차분한 한 문장(`why`: off · capped_user · capped · words · refusal · empty · network …). 그 밖의 모양은 400 · rate `ai_ask` (계정당 1분 10번) |
 | `trap.php` | GET·HEAD | (함정) | 스캐너가 찾는 주소(`/.env`, `/wp-login.php`, `/phpmyadmin`, `/.git/config`, `*.bak` …)를 루트 `.htaccess` 가 여기로 보내요 → `honeypot` 기록 + 빈 404 · 주소별 `trap` 한도 · 사전 요청(OPTIONS) 403 · 그 밖의 방식 405 |
 
 ## 7. 저장 검증 (부정 진행 방지)
@@ -403,6 +407,17 @@ PHP 8 이전에 나와 `fn`·`match`·`?->`·이름 붙은 인수·`str_contains
 | 관리자 센터가 "Not Found" | 폴더 이름이 바뀌었는지(`php cli/tfm.php admin:path`), 지금 있는 곳의 주소가 `security.admin_ip_allowlist` 에 있는지 |
 | 체험관이 "서버를 업데이트하는 중이에요" (503 `SCHEMA_OUTDATED`) | 전용 DB 계정 설치는 표를 바꿀 수 없어요 → 서버 PC 에서 `php cli/tfm.php migrate --admin-user root` |
 | 구독 화면이 "결제 설정이 필요해요" | 토스 키가 없어요(기본 키는 없어요) → `toss.client_key`·`secret_key` 또는 `TFM_TOSS_CLIENT_KEY`·`TFM_TOSS_SECRET_KEY` |
+
+## Claude API (🤖 AI 도우미 · 옹이 선생님) — CONTRACT §15.6 · §16.10
+
+- **무엇**: 서버만 Claude API 와 이야기해요 (브라우저는 키도 주소도 몰라요). 두 곳에서 써요 — 관리자 센터 🤖 AI 도우미 탭(📝 오늘 요약 · 💬 자유 질문 · ✅ 완료 확인의 🤖 메모 초안 · 🧪 연결 시험)과, 체험관 옹이 메뉴의 다섯째 칸 **🤖 옹이 선생님**(아이의 질문).
+- **어떻게 보내나** (`lib/Claude.php`, PHP 7.2 · curl): `POST {api_base}/v1/messages`, 헤더 `content-type: application/json` · `x-api-key` · `anthropic-version: 2026-10-21` (+ 그 기능이 있는 모델이면 `anthropic-beta: server-side-fallback-2026-07-01`), 본문 `{model, max_tokens, system, messages, output_config:{effort}, fallbacks:"default"}`. `temperature`·`top_p`·`top_k`·`thinking`·미리 쓴 답(prefill)은 보내지 않아요 (지금 API 에서 400). TLS 검증은 언제나 켜져 있어요. 408·409·429·5xx·529·연결 오류는 `retry-after` 와 `x-should-retry` 를 지키며 두 번까지 다시 해요 (전체 `anthropic.timeout` 초 안에서). 답은 `stop_reason` 부터 봐요: `refusal` → 글을 버리고 차분한 한 줄, `max_tokens` 인데 글이 없으면(생각에 토큰을 다 씀) 차분한 한 줄, 글은 `type:"text"` 블록만 이어 붙여요. `response.model` 이 실제로 답한 모델이에요.
+- **설정** (`config.php` 의 `anthropic`, 바꿀 때는 `config.local.php`): `api_key` (빈칸 = 꺼짐) · `model` (`claude-opus-5-5`) · `effort` (`low`) · `max_tokens` (4096; 아이 질문은 2048) · `timeout` (60) · `api_base` · `mock` · `kid_helper` (기본 false — 관리자 센터에서 켜면 `settings` 의 `ai.kid_helper` 가 우선, 이 값은 공개 설정이라 체험관이 메뉴 칸을 보일지 알아요) · `daily_user` 20 · `daily_total` 2000 (관리자 센터 ⚙️ 설정 → 🧩 기타의 `ai.daily_user` · `ai.daily_total` 이 우선) · `question_max` 200 · `answer_max` 600 · `fallbacks` (`auto` | `off`) · `ca_file`.
+- **아이 쪽 보호**: 쉬운 모드는 준비된 질문 그림만 — 그림의 id 를 보내고 질문 글은 서버가 정해요 (아이가 친 글은 앱 밖으로 나가지 않아요). 보통 모드의 직접 쓴 질문은 200자까지, 나쁜 말이 있으면 보내지 않고, `ChatFilter::maskPII` 로 전화번호·이메일·주소를 가린 **다음에** 보내요. 고정된 규칙 글(시스템 프롬프트): 한국어 두세 문장 · 체험관 주제(농사 · 발효 · 장독대 · 한옥 · 한복 · 계절)만 · 개인정보를 묻거나 되풀이하지 않기 · 링크 없음 · **건강·의학 효과를 말하지 않기**(발효 음식은 맛 · 냄새 · 만드는 법으로만) · 모르면 "잘 모르겠어요, 선생님께 여쭤봐요." 받은 답도 다시 가리고, 링크 · 꾸밈 기호를 지우고 600자에서 끊어요. 화면에는 글자로만(`textContent`) 넣어요.
+- **기록**: `ai_usage` 표에 누가(계정 번호) · 언제 · 어디서(kid · admin · cli) · 모델 · 토큰 수 · 멈춘 까닭 · 성공 여부 · 걸린 시간만 — **질문과 답의 글은 남기지 않아요**. 요청 전에 줄을 먼저 써서 동시에 들어온 질문도 한도에 세요. 감사 로그 `ai_admin_ask` · `ai_selftest` 에도 글은 없어요. 키는 어떤 결과 · 로그 · 오류 글 · 화면에도 나오지 않게 `Claude::scrub()` 을 거쳐요.
+- **명령**: `php cli/tfm.php ai:test` (아주 짧은 요청 하나 — 답한 모델 · 토큰 · 걸린 시간 · 보낸 요청(키는 `***`), 잘 되면 종료 코드 0) · `php cli/tfm.php ai:status` (설정과 오늘 쓴 양, 아무것도 보내지 않음). 키 없이 시험: `TFM_AI_MOCK=1`.
+- **시험**: `php tests/ai-unit.php` (SQLite · MariaDB: 꺼짐 · 정확한 요청 · 스텁 `tests/ai-stub.mjs` 의 정상 답 · 거절 · 글 없는 max_tokens · 429 retry-after · 529 · x-should-retry · 시간 초과 · 깨진 답 · 401 · 키를 되풀이하는 오류 · 대신 답한 모델, 한도, 가림, 기록, 모의 모드, 엔드포인트) · `node tests/ai-client.mjs --file <page>` (체험관 창) · `tests/admin-lock.mjs --only 'signin|csrf|ai'` · `tests/security-e2e.mjs --only S03,S09`.
+- **PHP 8.1 이상으로 옮기면** 이 파일 하나만 공식 PHP SDK 로 바꾸면 돼요 (나머지는 `Claude::ask()` 만 불러요).
 
 ## 13. 한계
 

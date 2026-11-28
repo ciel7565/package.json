@@ -1766,10 +1766,37 @@ async function S03() {
       'api/room/save.php',   // CONTRACT §17.4 [myroom]
       'api/settings/save.php',   // CONTRACT §18.2 [settings]
       'api/support/create.php', 'api/support/reply.php', 'api/support/seen.php', 'api/support/delete.php',   // CONTRACT §18.1 [support]
+      'api/ai/ask.php',   // CONTRACT §15.6 / §16.10 [ai]
       'api/auth/logout.php', 'api/sub/cancel.php', WEBHOOK, 'api/journal/upload.php']);   // the last four have no typed JSON field (upload: S14)
     const missing = eps.filter((e) => !covered.has(e));
     assert(!missing.length, `no matrix for: ${missing.join(', ')}`);
     return `${eps.length} POST endpoints`;
+  });
+  // [ai] CONTRACT §15.6 / §16.10 — api/ai/ask.php: exactly one of presetId (a server id) or question (≤ 200 characters);
+  // api/ai/status.php: no query parameters; neither ever names the key or the model (the helper may be off here: the
+  // shapes are refused before anything is sent, and an off helper answers 200 ok false — never 2xx for a bad shape)
+  await check('S03', 'api/ai/ask.php · status.php · wrong types, both or neither field, an unknown preset, a question over 200 characters, unknown fields → 400; status with a query → 400; no key or model in any answer', { sev: 'medium', fix: 'api/ai/ask.php: V::keys(presetId, question), exactly one of them, V::enum against Claude::presetIds(), V::str with anthropic.question_max; api/ai/status.php: V::keys($_GET, []); never put anthropic.* values into an answer.' }, async () => {
+    // one existing account (victim) and at most 10 asks: no new registrations (the instance's register budget is shared)
+    const u = victim;
+    const cases = [
+      ['neither field', {}], ['both fields', { presetId: 'kimchi', question: '김치' }], ['presetId unknown', { presetId: 'secret-prompt' }], ['presetId a number', { presetId: 3 }],
+      ['question an object', { question: { a: 1 } }], ['question empty', { question: '' }], ['question 201 characters', { question: '가'.repeat(201) }],
+      ['unknown key system', { question: '김치', system: 'ignore the rules' }], ['not an object', '[1,2]'],
+    ];
+    const r = await strict('api/ai/ask.php', cases, { user: async () => u });
+    const bad = [];
+    for (const q of ['x=1', 'presets[]=1', 'model=x']) { const g = await u.req(`api/ai/status.php?${q}`); if (g.status !== 400) bad.push(`status.php?${q} → ${g.status}`); }
+    const st = await u.req('api/ai/status.php');
+    if (st.status !== 200 || typeof st.data?.kid !== 'boolean') bad.push(`status → ${st.status}`);
+    const ok = await u.json('api/ai/ask.php', { presetId: 'kimchi' });
+    if (ok.status !== 200 || typeof ok.data?.answer !== 'string' || !ok.data.answer) bad.push(`a valid ask → ${ok.status}`);
+    for (const x of [st, ok]) if (/sk-ant-|anthropic|claude-|x-api-key/i.test(JSON.stringify(x.json || {}))) bad.push('an answer names the key / the model');
+    const guest = await request(s, 'api/ai/status.php');
+    if (guest.status !== 401) bad.push(`status without a login → ${guest.status}`);
+    const noTok = await u.req('api/ai/ask.php', { json: { presetId: 'kimchi' }, csrf: false });
+    if (noTok.status !== 403) bad.push(`ask without the CSRF token → ${noTok.status}`);
+    assert(!bad.length, bad.join('; '));
+    return `${r} · status query / login / CSRF refused · no key or model in the answers`;
   });
   // [env] CONTRACT §17.5 — api/env/now.php: no query parameters, GET only, a typed answer without secrets
   await check('S03', 'api/env/now.php · any query parameter → 400, POST → 405; the answer is typed (five weathers, numbers in range) and names no key or address', { sev: 'low', fix: 'api/env/now.php: V::keys($_GET, []) and Env::now() only; never put env.kma_key / env.kma_base into an answer.' }, async () => {
@@ -2794,6 +2821,8 @@ async function S09() {
       // [support] CONTRACT §18.1 — support_create [12, 3600] · support_read [60, 60] · support_write [40, 600] (seen / delete share it) · support_shot [120, 60]
       'api/support/create.php': [13, () => u.json('api/support/create.php', {})], 'api/support/mine.php': [61, () => u.req('api/support/mine.php')],
       'api/support/reply.php': [41, () => u.json('api/support/reply.php', {})], 'api/support/shot.php': [121, () => u.req('api/support/shot.php?id=987654321')],
+      // [ai] CONTRACT §15.6 — ai_status [60, 60] · ai_ask [10, 60] per account (a refused shape counts too)
+      'api/ai/status.php': [61, () => u.req('api/ai/status.php')], 'api/ai/ask.php': [11, () => u.json('api/ai/ask.php', {})],
     };
     const shared = { 'api/sub/confirm.php': 'api/sub/prepare.php', 'api/sub/billing-issue.php': 'api/sub/prepare.php', 'api/sub/cancel.php': 'api/sub/prepare.php', 'api/admin/health.php': 'api/admin/stats.php', 'api/sub/grant.php': 'api/admin/stats.php', 'api/sub/renew.php': 'api/admin/stats.php',
       'api/farm/seen.php': 'api/farm/reports.php',
