@@ -64,16 +64,16 @@ G.healStations = G.healStations || { map: new Map(),
   const ROOM = { w: 15, d: 22, h: 4.4, post: 3.4, ceil: 3.8 };
   const SMALL = { w: 9, d: 7, h: 3.4, post: 2.7, ceil: 3.0 };
   const ROOMS = [
-    { n: 1, key: 'R1', name: '기본 검사관', kid: '기본 검사관', emoji: '🔍', floor: 'maru', tone: 'pale', min: 10 },
-    { n: 2, key: 'R2', name: '쑥뜸관', kid: '쑥뜸관', emoji: '🔥', floor: 'jangpan', tone: 'warm', min: 60 },
-    { n: 3, key: 'R3', name: '좌훈관', kid: '좌훈관', emoji: '♨️', floor: 'maru', tone: 'warm', min: 30 },
-    { n: 4, key: 'R4', name: '실내 맨발걷기 · 헬스', kid: '맨발걷기 · 헬스', emoji: '👣', floor: 'maru', tone: 'pale', min: 60 },
-    { n: 5, key: 'R5', name: '족욕관', kid: '족욕관', emoji: '🛁', floor: 'stone', tone: 'warm', min: 60 },
-    { n: 6, key: 'R6', name: '발마사지관', kid: '발마사지관', emoji: '🌿', floor: 'maru', tone: 'warm', min: 30 },
-    { n: 7, key: 'R7', name: '얼굴마사지관', kid: '얼굴마사지관', emoji: '😌', floor: 'maru', tone: 'warm', min: 60 },
-    { n: 8, key: 'R8', name: '바디마사지관', kid: '바디마사지관', emoji: '💆', floor: 'jangpan', tone: 'warm', min: 60 },
-    { n: 9, key: 'R9', name: '스트레스 해소관', kid: '스트레스 해소관', emoji: '💥', floor: 'earth', tone: 'dark', min: 30 },
-    { n: 10, key: 'R10', name: '임종체험관', kid: '마음 돌아보기', emoji: '🕯️', kidEmoji: '🌙', floor: 'maru', tone: 'warm', min: 60 },
+    { n: 1, key: 'R1', name: '기본 검사관', kid: '기본 검사관', emoji: '🔍', floor: 'maru', tone: 'pale', wall: 'plaster', mood: 'bright', min: 10 },
+    { n: 2, key: 'R2', name: '쑥뜸관', kid: '쑥뜸관', emoji: '🔥', floor: 'jangpan', tone: 'warm', wall: 'clay', mood: 'warm', min: 60 },
+    { n: 3, key: 'R3', name: '좌훈관', kid: '좌훈관', emoji: '♨️', floor: 'maru', tone: 'warm', wall: 'board', mood: 'warm', min: 30 },
+    { n: 4, key: 'R4', name: '실내 맨발걷기 · 헬스', kid: '맨발걷기 · 헬스', emoji: '👣', floor: 'maru', tone: 'pale', wall: 'plaster', mood: 'bright', tall: true, min: 60 },
+    { n: 5, key: 'R5', name: '족욕관', kid: '족욕관', emoji: '🛁', floor: 'stone', tone: 'warm', wall: 'clay', mood: 'warm', min: 60 },
+    { n: 6, key: 'R6', name: '발마사지관', kid: '발마사지관', emoji: '🌿', floor: 'jangpan', tone: 'warm', wall: 'clay', mood: 'calm', min: 30 },
+    { n: 7, key: 'R7', name: '얼굴마사지관', kid: '얼굴마사지관', emoji: '😌', floor: 'maru', tone: 'pale', wall: 'plaster', mood: 'calm', min: 60 },
+    { n: 8, key: 'R8', name: '바디마사지관', kid: '바디마사지관', emoji: '💆', floor: 'jangpan', tone: 'warm', wall: 'clay', mood: 'calm', min: 60 },
+    { n: 9, key: 'R9', name: '스트레스 해소관', kid: '스트레스 해소관', emoji: '💥', floor: 'stone', tone: 'dark', wall: 'board', mood: 'bright', min: 30 },
+    { n: 10, key: 'R10', name: '임종체험관', kid: '마음 돌아보기', emoji: '🕯️', kidEmoji: '🌙', floor: 'maru', tone: 'dark', wall: 'plaster', mood: 'calm', min: 60 },
   ];
   for (const r of ROOMS) {
     r.place = 'PL_HEAL_R' + r.n;
@@ -171,6 +171,8 @@ G.healStations = G.healStations || { map: new Map(),
     return m.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, 'YXZ')), new THREE.Vector3(sx, sy, sz));
   };
   const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  /** a long block with metre UVs (the photographed surfaces would stretch on a plain box) */
+  const slab = (w, h, d) => (K()?.geo?.slab ? K().geo.slab(w, h, d, 0.01) : box(w, h, d));
   const cyl = (rt, rb, h, s = 10) => new THREE.CylinderGeometry(rt, rb, h, s);
 
   // ================================================================ the lobby and the corridor (PL_HEAL)
@@ -249,11 +251,11 @@ G.healStations = G.healStations || { map: new Map(),
     // ---- eaves outside the glass: 서까래 ends under a board soffit, 처마 edge (they cast the shadow line on the floor)
     {
       const ey = R.post + 0.05, ov = 2.1;
-      R.add('wood', box(W + 2.4, 0.06, ov + 0.3), M(0, ey + 0.34, FRONT_Z + ov / 2), '#b99872');
+      R.add('wood', slab(W + 2.4, 0.06, ov + 0.3), M(0, ey + 0.34, FRONT_Z + ov / 2), '#b99872');
       for (let x = -W / 2 - 1; x <= W / 2 + 1; x += 0.42) R.add('wood', cyl(0.06, 0.06, ov, 6), M(x, ey + 0.26, FRONT_Z + ov / 2, 0, 1, 1, 1, PI / 2), '#a07a52', { cast: false });
-      R.add('wood', box(W + 2.4, 0.22, 0.14), M(0, ey + 0.28, FRONT_Z + ov + 0.05), '#8a6644');
-      R.add('paint', box(W + 2.6, 0.2, 0.5), M(0, ey + 0.5, FRONT_Z + ov + 0.2), '#3e4246');
-      R.add('wood', box(W + 0.4, 0.3, 0.26), M(0, R.post + 0.02, FRONT_Z + 0.05), '#a8865c');       // 창방 over the glass
+      R.add('wood', slab(W + 2.4, 0.22, 0.14), M(0, ey + 0.28, FRONT_Z + ov + 0.05), '#8a6644');
+      R.add('paint', slab(W + 2.6, 0.2, 0.5), M(0, ey + 0.5, FRONT_Z + ov + 0.2), '#3e4246');
+      R.add('wood', slab(W + 0.4, 0.3, 0.26), M(0, R.post + 0.02, FRONT_Z + 0.05), '#a8865c');       // 창방 over the glass
     }
     // ---- the 기단 and the garden strip outside the glass (stone edge, gravel, stepping stones, pines, jars, a pond)
     const garden = buildGarden(ctx, R, live);
@@ -275,7 +277,19 @@ G.healStations = G.healStations || { map: new Map(),
     buildLobby(ctx, R, live);
     // ---- the doors: a name board over each, a lamp that tells its state, the interactable that leads in
     buildDoors(ctx, R, live);
+    try { hangPaintings(ctx, R); } catch (e) { warn('paintings', e); }
     R.finish({ exit: { x: 0, z: FRONT_Z - 0.6 } });
+    // the follow camera stays inside: an invisible blocker along the glass (and the two end walls)
+    live.blockers = [];
+    try {
+      const bm = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }); ctx.own(bm);
+      for (const [x, z, w, ry] of [[0, FRONT_Z + 0.08, W + 2, 0], [-W / 2 - 0.08, 0, D + 2, PI / 2], [W / 2 + 0.08, 0, D + 2, PI / 2]]) {
+        const g = new THREE.PlaneGeometry(w, HALL.CEIL + 0.6); g.translate(0, (HALL.CEIL + 0.6) / 2 - 0.3, 0); ctx.own(g);
+        const m = new THREE.Mesh(g, bm); m.position.set(x, 0, z); m.rotation.y = ry; m.name = 'heal-camera-blocker'; m.visible = false;
+        ctx.group.add(m); m.updateMatrixWorld(true);
+        if (G.world?.cameraBlockers) { G.world.cameraBlockers.push(m); live.blockers.push(m); }
+      }
+    } catch (e) { warn('camera blockers', e); }
     // the light: the real sun through the glass (the shadow frustum follows the visitor), dimmed by clouds and rain
     setupSun(ctx, live);
     emitter(ctx, 'water', -26, FRONT_Z + 11, 0.35);
@@ -283,7 +297,7 @@ G.healStations = G.healStations || { map: new Map(),
     hallLive = live;
     applyDoorStates();
     ctx.onUpdate((dt, t) => { for (const f of live.updates) f(dt, t); });
-    return { dispose() { if (hallLive === live) hallLive = null; dropStations('LOBBY'); dropEmitters(ctx.id); } };
+    return { dispose() { if (hallLive === live) hallLive = null; dropStations('LOBBY'); dropEmitters(ctx.id); const cb = G.world?.cameraBlockers; if (cb) for (const m of live.blockers || []) { const i = cb.indexOf(m); if (i >= 0) cb.splice(i, 1); } } };
   }
 
   function bench(R, ctx, x, z) {
@@ -312,10 +326,10 @@ G.healStations = G.healStations || { map: new Map(),
     R.add('furn', box(5.6, 0.9, 0.45), M(0, 0.45, Z0 + 0.4), '#8a5a36');
     ctx.addCollider({ shape: 'box', x: 0, z: deskZ, hw: 2.7, hd: 0.42, maxY: 1.06, stand: false });
     ctx.addCollider({ shape: 'box', x: 0, z: Z0 + 0.4, hw: 2.8, hd: 0.3, maxY: 0.95 });
-    nameBoard(ctx, R, { title: '안내데스크', sub: '체크인 · 체크아웃', x: 0, y: 2.55, z: Z0 + 0.06, w: 2.4 });
-    nameBoard(ctx, R, { title: '힐링관', sub: '쉬어 가는 열 개의 방', x: 0, y: 3.35, z: Z0 + 0.06, w: 3.4, bg1: '#3f2a18', bg2: '#2a1a0e' });
+    nameBoard(ctx, R, { title: '안내데스크', sub: '체크인 · 체크아웃', x: 0, y: 2.3, z: Z0 + 0.06, w: 2.2 });
+    nameBoard(ctx, R, { title: '힐링관', sub: '쉬어 가는 열 개의 방', x: 0, y: 3.42, z: Z0 + 0.06, w: 2.9, bg1: '#3f2a18', bg2: '#2a1a0e' });
     // a calm line: this is play, not a real test or treatment (§19.0)
-    nameBoard(ctx, R, { title: '놀이로 해 보는 쉼 체험이에요', sub: '진짜 검사나 치료가 아니에요', x: 3.9, y: 1.62, z: Z0 + 0.06, w: 1.7, bg1: '#f3ead8', bg2: '#e8dcc4', border: '#b08a5a', color: '#3a2616', subColor: '#6a4a2a' });
+    nameBoard(ctx, R, { title: '놀이로 해 보는 쉼 체험이에요', sub: '진짜 검사나 치료가 아니에요', x: 3.0, y: 1.62, z: Z0 + 0.06, w: 1.7, bg1: '#f3ead8', bg2: '#e8dcc4', border: '#b08a5a', color: '#3a2616', subColor: '#6a4a2a' });
     station(ctx, 'LOBBY', 'desk', 0, 0, deskZ + 1.1, PI);
     station(ctx, 'LOBBY', 'guide', 0, 0, deskZ - 0.75, 0);
     // the kiosk: a slim wooden stand with a lit screen
@@ -355,7 +369,7 @@ G.healStations = G.healStations || { map: new Map(),
       // a lamp bracket of brass under each state lamp
       if (isRoom) R.add('brass', box(0.2, 0.04, 0.16), M(r.doorX + 1.25, 2.4, DOOR_Z + 0.08), '#c9a24a', { cast: false });
       const title = isRoom ? `제${r.n}관` : r.name;
-      const sub = isRoom ? (r.n === 10 && gentle() ? r.kid : r.name) : (r.key === 'STAY' ? '예약한 방' : '담당 매니저');
+      const sub = isRoom ? `${r.n === 10 && gentle() ? r.kid : r.name} · ${r.min}분` : (r.key === 'STAY' ? '예약한 방' : '담당 매니저');
       live.signs[r.key] = nameBoard(ctx, R, { title, sub, x: r.doorX, y: 3.0, z: DOOR_Z + 0.07, w: 1.55 });
       ctx.interact({
         id: 'heal-door-' + r.key, kind: 'door', emoji: isRoom ? (r.n === 10 && gentle() ? r.kidEmoji : r.emoji) : r.emoji, radius: 2.6, priority: 0.7,
@@ -365,13 +379,62 @@ G.healStations = G.healStations || { map: new Map(),
       });
     }
   }
+  /** ink-wash pictures between the doors (painted here: no artwork with a seal or an inscription can slip in) —
+   *  four pictures on one canvas, every frame of the corridor one merged mesh (one draw call) */
+  function hangPaintings(ctx, R) {
+    const low = ctx.low, rnd = G.util?.rng ? G.util.rng('heal:ink') : Math.random;
+    const tex = canvasTex(low ? 1024 : 2048, low ? 512 : 1024, (c, w, h) => {
+      const cw = w / 2, ch = h / 2;
+      const paper = (x0, y0) => { const g = c.createLinearGradient(x0, y0, x0, y0 + ch); g.addColorStop(0, '#f3ead6'); g.addColorStop(1, '#e8dcc2'); c.fillStyle = g; c.fillRect(x0, y0, cw, ch); };
+      const ink = (a) => `rgba(34,30,26,${a})`;
+      // 1 · mountains in mist
+      paper(0, 0);
+      for (let k = 0; k < 4; k++) { c.fillStyle = ink(0.12 + k * 0.13); c.beginPath(); c.moveTo(0, ch); for (let x = 0; x <= cw; x += 6) c.lineTo(x, ch * (0.42 + k * 0.12) - Math.sin(x * (0.012 + k * 0.004) + k) * ch * (0.12 - k * 0.02) - Math.sin(x * 0.041 + k * 2) * ch * 0.03); c.lineTo(cw, ch); c.fill(); }
+      c.fillStyle = 'rgba(243,234,214,0.55)'; c.fillRect(0, ch * 0.62, cw, ch * 0.08);
+      c.fillStyle = 'rgba(170,40,30,0.0)';
+      // 2 · a pine branch
+      paper(cw, 0);
+      c.strokeStyle = ink(0.85); c.lineWidth = 10; c.lineCap = 'round'; c.beginPath(); c.moveTo(cw + 20, ch * 0.85); c.bezierCurveTo(cw + cw * 0.35, ch * 0.55, cw + cw * 0.55, ch * 0.62, cw + cw * 0.95, ch * 0.3); c.stroke();
+      for (let i = 0; i < 9; i++) { const t = i / 8, x = cw + 20 + t * cw * 0.85, y = ch * (0.85 - t * 0.55); for (let k = 0; k < 26; k++) { const a = -PI / 2 + (k / 25 - 0.5) * 2.6; c.strokeStyle = ink(0.55 + rnd() * 0.3); c.lineWidth = 2; c.beginPath(); c.moveTo(x, y - 16); c.lineTo(x + Math.cos(a) * 46, y - 16 + Math.sin(a) * 30); c.stroke(); } }
+      // 3 · a plum branch in blossom
+      paper(0, ch);
+      c.strokeStyle = ink(0.8); c.lineWidth = 8; c.beginPath(); c.moveTo(cw * 0.1, ch * 1.92); c.lineTo(cw * 0.35, ch * 1.55); c.lineTo(cw * 0.3, ch * 1.3); c.moveTo(cw * 0.35, ch * 1.55); c.lineTo(cw * 0.75, ch * 1.38); c.lineTo(cw * 0.9, ch * 1.18); c.stroke();
+      for (let i = 0; i < 26; i++) { const x = cw * (0.2 + rnd() * 0.7), y = ch * (1.15 + rnd() * 0.5); c.fillStyle = `rgba(${200 + rnd() * 40 | 0},${110 + rnd() * 40 | 0},${120 + rnd() * 30 | 0},0.85)`; for (let k = 0; k < 5; k++) { c.beginPath(); c.arc(x + Math.cos(k * 1.256) * 7, y + Math.sin(k * 1.256) * 7, 6, 0, TAU); c.fill(); } }
+      // 4 · reeds by the water and wild geese
+      paper(cw, ch);
+      c.strokeStyle = ink(0.35); c.lineWidth = 2; for (let k = 0; k < 6; k++) { c.beginPath(); c.moveTo(cw + cw * 0.1, ch * (1.75 + k * 0.03)); c.lineTo(cw + cw * 0.9, ch * (1.75 + k * 0.03)); c.stroke(); }
+      for (let i = 0; i < 30; i++) { const x = cw + cw * (0.05 + rnd() * 0.35), b = ch * 1.9; c.strokeStyle = ink(0.6 + rnd() * 0.3); c.lineWidth = 3; c.beginPath(); c.moveTo(x, b); c.quadraticCurveTo(x + 10, b - 90, x + 20 + rnd() * 30, b - 160 - rnd() * 60); c.stroke(); }
+      for (let i = 0; i < 7; i++) { const x = cw + cw * (0.45 + i * 0.06), y = ch * (1.25 + Math.abs(i - 3) * 0.04); c.strokeStyle = ink(0.8); c.lineWidth = 4; c.beginPath(); c.moveTo(x - 18, y - 6); c.quadraticCurveTo(x, y + 4, x + 18, y - 6); c.stroke(); }
+      // the mounting: a silk border around each picture
+      c.strokeStyle = '#b7a58a'; c.lineWidth = 18; for (const [x0, y0] of [[0, 0], [cw, 0], [0, ch], [cw, ch]]) c.strokeRect(x0 + 9, y0 + 9, cw - 18, ch - 18);
+    });
+    ctx.own(tex);
+    const mat = low ? new THREE.MeshLambertMaterial({ map: tex }) : new THREE.MeshStandardMaterial({ map: tex, roughness: 0.92 });
+    ctx.own(mat);
+    const geos = [], spots = [];
+    for (const r of ROOMS) spots.push(r.doorX - 3);
+    spots.push(-9, 9);
+    spots.forEach((x, i) => {
+      const k = i % 4, pw = 1.5, ph = 0.75;
+      const g = new THREE.PlaneGeometry(pw, ph), uv = g.attributes.uv;
+      const u0 = (k % 2) * 0.5, v0 = k < 2 ? 0.5 : 0;
+      for (let q = 0; q < uv.count; q++) uv.setXY(q, u0 + uv.getX(q) * 0.5, v0 + uv.getY(q) * 0.5);
+      g.translate(x, 1.75, DOOR_Z + 0.07);
+      geos.push(g);
+      R.add('wood', box(pw + 0.1, ph + 0.1, 0.03), M(x, 1.75, DOOR_Z + 0.045), '#5a3a22', { cast: false });
+    });
+    const BGU = (typeof ADDONS !== 'undefined' && ADDONS.BufferGeometryUtils) || null;
+    const merged = BGU ? BGU.mergeGeometries(geos, false) : null;
+    for (const g of merged ? [merged] : geos) { ctx.own(g); const m = new THREE.Mesh(g, mat); m.name = 'heal-ink'; m.receiveShadow = true; m.userData.guardSkip = true; m.raycast = () => {}; R.addMesh(m, null); }
+    if (merged) for (const g of geos) g.dispose();
+  }
   function applyDoorStates() {
     const L = hallLive;
     if (!L || !L.lamps) return;
     ROOMS.forEach((r, i) => L.lamps.setColorAt(i, LAMP_COL[doorState[r.key]] || LAMP_COL.idle));
     if (L.lamps.instanceColor) L.lamps.instanceColor.needsUpdate = true;
     const s10 = L.signs.R10;
-    if (s10 && s10.userData.redraw) { const g = gentle(); if (L._g10 !== g) { L._g10 = g; s10.userData.redraw('제10관', g ? '마음 돌아보기' : '임종체험관'); } }
+    if (s10 && s10.userData.redraw) { const g = gentle(); if (L._g10 !== g) { L._g10 = g; s10.userData.redraw('제10관', (g ? '마음 돌아보기' : '임종체험관') + ' · 60분'); } }
   }
   // the 'next' lamp breathes slowly (0.4 Hz; steady with reduce motion)
   function lampTick(t) {
@@ -439,7 +502,7 @@ G.healStations = G.healStations || { map: new Map(),
     const Kt = K(), low = ctx.low, W = HALL.W, Z = FRONT_Z, rnd = G.util?.rng ? G.util.rng('heal:garden') : Math.random;
     const o = { cast: false };
     // 기단: the stone edge the glass stands on, a step down to the garden
-    R.add('stone', box(W + 3, 0.5, 2.6), M(0, -0.25, Z + 1.3), '#cdc6b8', o);
+    R.add('stone', slab(W + 3, 0.5, 2.6), M(0, -0.25, Z + 1.3), '#cdc6b8', o);
     R.add('stone', box(4.4, 0.24, 0.6), M(0, -0.38, Z + 2.9), '#bdb6a8', o);
     // the garden ground (lies 0.5 m below the floor): gravel near the house, then moss and grass
     const gz0 = Z + 2.6, gz1 = Z + 19;
@@ -448,11 +511,11 @@ G.healStations = G.healStations || { map: new Map(),
     ctx.own(ground); ctx.own(gmat);
     const gmesh = new THREE.Mesh(ground, gmat); gmesh.name = 'heal-garden-ground'; gmesh.receiveShadow = true; gmesh.userData.guardSkip = true;
     R.addMesh(gmesh, null);
-    R.add('earth', box(W + 40, 0.04, 2.2), M(0, -0.49, Z + 3.7), '#d8ccb4', o);     // the gravel band
+    R.add('stone', slab(W + 40, 0.04, 2.2), M(0, -0.49, Z + 3.7), '#e2dccf', o);     // the gravel band
     // the stone wall (돌담) with a tile cap at the far edge of the garden
-    R.add('stone', box(W + 60, 1.3, 0.6), M(0, -0.5 + 0.65, gz1), '#d9cdb6', o);
-    R.add('paint', box(W + 60, 0.1, 0.85), M(0, 0.85, gz1), '#45494e', o);
-    R.add('paint', box(W + 60, 0.09, 0.36), M(0, 0.94, gz1), '#3c4045', o);
+    R.add('stone', slab(W + 60, 1.3, 0.6), M(0, -0.5 + 0.65, gz1), '#d9cdb6', o);
+    R.add('paint', slab(W + 60, 0.1, 0.85), M(0, 0.85, gz1), '#45494e', o);
+    R.add('paint', slab(W + 60, 0.09, 0.36), M(0, 0.94, gz1), '#3c4045', o);
     // stepping stones, rocks, stone lanterns (lit at night), 장독대 clusters, a small pond with a stone rim
     for (let x = -W / 2 + 4; x < W / 2 - 4; x += 2.1 + rnd() * 1.2) R.add('stone', cyl(0.3 + rnd() * 0.12, 0.34 + rnd() * 0.12, 0.08, 9), M(x, -0.46, Z + 5.4 + (rnd() - 0.5) * 0.8, rnd() * 3), '#aaa395', o);
     for (let i = 0; i < 26; i++) { const s = 0.4 + rnd() * 0.9, x = (rnd() - 0.5) * (W + 20), z = Z + 7 + rnd() * 9; R.add('stone', new THREE.DodecahedronGeometry(s, 0), M(x, -0.5 + s * 0.35, z, rnd() * 6, 1.3, 0.6, 1.0), '#8f897c', o); }
@@ -539,8 +602,9 @@ G.healStations = G.healStations || { map: new Map(),
       if (live.pano) live.pano.color.copy(day).lerp(dusk, duskK * 0.8).lerp(night, nf);
       const snow = clamp(Number(Wx?.precipitation?.snow) || Number(Wx?.mix?.SNOW) || 0, 0, 1), cover = clamp((G.sys.weather?._snowCover ?? snow), 0, 1);
       live.snowK = lerp(live.snowK || 0, cover, 0.3);
-      gmat.color.copy(gDay).lerp(gSnow, live.snowK * 0.9).multiplyScalar(lerp(1, 0.35, nf));
-      if (live.meadow) live.meadow.color.copy(mDay).lerp(gSnow, live.snowK * 0.85).multiplyScalar(lerp(1, 0.3, nf));
+      // (lit by the room's own sun / moon: no extra darkening at night — the screen watchdog wants no black block)
+      gmat.color.copy(gDay).lerp(gSnow, live.snowK * 0.9);
+      if (live.meadow) live.meadow.color.copy(mDay).lerp(gSnow, live.snowK * 0.85);
       const s = seasonId();
       if (s !== lastSeason && live.crowns) {
         lastSeason = s;
@@ -651,19 +715,39 @@ G.healStations = G.healStations || { map: new Map(),
   }
 
   // ================================================================ the rooms
+  /** the light of a room's theme (overrides of the kit profile; never so dark that a wall sinks to a black block) */
+  function moodLight(mood) {
+    const sh = !!G.sys.engine?.indoorShadows;
+    if (mood === 'bright') return { hemi: { sky: '#f7f6f2', ground: '#cdbca4', intensity: sh ? 0.56 : 1.0 }, exposure: 1.08, warmth: 0.0 };
+    if (mood === 'calm') return { hemi: { sky: '#eadac2', ground: '#8f735a', intensity: sh ? 0.34 : 0.74 }, exposure: 0.95, exposureNight: 1.3, warmth: 0.07, background: '#463c33' };
+    return { hemi: { sky: '#f3e2c6', ground: '#b8946a', intensity: sh ? 0.44 : 0.88 }, exposure: 1.0, warmth: 0.06 };
+  }
+  /** what makes every room lived-in: plants by the door, a runner from the door, a low cabinet with jars */
+  function furnish(ctx, R, r) {
+    const Kt = K(), Z = ROOM.d / 2;
+    for (const x of [-2.5, 2.5]) plant(R, ctx, x, Z - 0.7, 1.0);
+    if (['R1', 'R3', 'R5', 'R7'].includes(r.key) && Kt.floorMat) try { Kt.floorMat(R, { x: 0, z: Z - 4.6, w: 1.4, d: 7.6, tint: r.mood === 'calm' ? '#a58a64' : '#c4ab7c' }); } catch (e) { /* optional */ }
+    if (['R3', 'R5', 'R6', 'R7', 'R8'].includes(r.key)) {
+      R.add('furn', box(0.5, 0.62, 2.2), M(6.6, 0.31, 1.6), '#7a5234');
+      R.add('furn', box(0.56, 0.04, 2.3), M(6.6, 0.64, 1.6), '#9c6b42');
+      if (Kt.pot) ['hangari', 'danji', 'bottle', 'danji'].forEach((kind, i) => { try { Kt.pot(R, { x: 6.6, y: 0.66, z: 0.8 + i * 0.52, kind, s: kind === 'hangari' ? 0.5 : 0.55, lid: kind !== 'bottle' }); } catch (e) { /* optional */ } });
+      ctx.addCollider({ shape: 'box', x: 6.6, z: 1.6, hw: 0.28, hd: 1.15, maxY: 0.9 });
+    }
+  }
   /** the shell of a room: door in the south wall (back to the corridor), windows of 한지 on the north wall */
   function roomShell(ctx, r, o = {}) {
     const Kt = K(), w = ROOM.w, d = ROOM.d;
     const win = (p, wd = 1.6, hg = 1.5, sill = 0.7) => ({ window: p, w: wd, h: hg, sill });
+    const P_ = r.wall || 'plaster', tall = !!(o.tall || r.tall);
     const R = Kt.room(ctx, {
       w, d, post: ROOM.post, ridge: ROOM.h, ceiling: ROOM.ceil, bays: { x: 5, z: 8 }, floor: o.floor || r.floor, roof: 'ceiling', tone: o.tone || r.tone,
       walls: o.walls || {
-        N: ['plaster', win(o.pattern || 'ttisal', 1.8, o.tall ? 2.2 : 1.5, o.tall ? 0.45 : 0.7), 'plaster', win(o.pattern || 'ttisal', 1.8, o.tall ? 2.2 : 1.5, o.tall ? 0.45 : 0.7), 'plaster'],
-        E: ['plaster', 'plaster', win('yongja'), 'plaster', 'plaster', win('yongja'), 'plaster', 'plaster'],
-        S: ['plaster', 'plaster', { door: 'changho', exit: true, w: 1.9, h: 2.6 }, 'plaster', 'plaster'],
-        W: ['plaster', 'plaster', win('yongja'), 'plaster', 'plaster', win('yongja'), 'plaster', 'plaster'],
+        N: [P_, win(o.pattern || 'ttisal', 1.8, tall ? 2.4 : 1.5, tall ? 0.35 : 0.7), tall ? win('ttisal', 1.8, 2.4, 0.35) : P_, win(o.pattern || 'ttisal', 1.8, tall ? 2.4 : 1.5, tall ? 0.35 : 0.7), P_],
+        E: [P_, P_, win('yongja'), P_, P_, win('yongja'), P_, P_],
+        S: [P_, P_, { door: 'changho', exit: true, w: 1.9, h: 2.6 }, P_, P_],
+        W: [P_, P_, win('yongja'), P_, P_, win('yongja'), P_, P_],
       },
-      sun: o.sun || { az: 180, el: 30 }, light: o.light,
+      sun: o.sun || { az: 180, el: 30 }, light: o.light || moodLight(r.mood),
     });
     // the room's name board over the inside of its door
     nameBoard(ctx, R, { title: r.n ? `제${r.n}관` : r.name, sub: r.n ? (r.n === 10 && gentle() ? r.kid : r.name) : '', x: 0, y: 3.05, z: d / 2 - 0.08, rotY: PI, w: 1.6 });
@@ -783,9 +867,9 @@ G.healStations = G.healStations || { map: new Map(),
       const seg = (x0, z0, x1, z1, kind) => {
         const w = Math.abs(x1 - x0) || bw, d = Math.abs(z1 - z0) || bw, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
         const col = kind === 'clay' ? '#b8743e' : kind === 'sand' ? '#e2cf9e' : '#a59c8c';
-        R.add(kind === 'pebble' ? 'stone' : 'earth', box(w, 0.04, d), M(cx, y, cz), col, { cast: false });
+        R.add(kind === 'pebble' ? 'stone' : 'clay', slab(w, 0.04, d), M(cx, y, cz), kind === 'clay' ? '#c98a55' : kind === 'sand' ? '#f2e2b4' : '#b9b2a4', { cast: false });
         if (kind === 'pebble') for (let i = 0; i < (low ? 60 : 220); i++) { const s = 0.03 + rnd() * 0.04; R.add('stone', new THREE.DodecahedronGeometry(s, 0), M(cx + (rnd() - 0.5) * (w - 0.1), y + 0.02, cz + (rnd() - 0.5) * (d - 0.1), rnd() * 6, 1.3, 0.55, 1), rnd() < 0.5 ? '#bfb6a6' : '#8f887a', { cast: false }); }
-        if (kind === 'sand') for (let i = 0; i < 18; i++) R.add('earth', box(0.4 + rnd() * 0.5, 0.005, 0.02), M(cx + (rnd() - 0.5) * (w - 0.4), y + 0.022, cz + (rnd() - 0.5) * (d - 0.4), rnd() * 3), '#cdb985', { cast: false });
+        if (kind === 'sand') for (let i = 0; i < 18; i++) R.add('clay', box(0.4 + rnd() * 0.5, 0.005, 0.02), M(cx + (rnd() - 0.5) * (w - 0.4), y + 0.022, cz + (rnd() - 0.5) * (d - 0.4), rnd() * 3), '#cdb985', { cast: false });
       };
       seg(-ox, -oz, ox, -oz + bw, 'clay'); seg(ox - bw, -oz + bw, ox, oz - bw, 'pebble'); seg(-ox, oz - bw, ox, oz, 'sand'); seg(-ox, -oz + bw, -ox + bw, oz - bw, 'clay');
       // a low wooden kerb around the inside of the loop
@@ -1043,6 +1127,7 @@ G.healStations = G.healStations || { map: new Map(),
     return function (ctx) {
       const R = roomShell(ctx, r, r.shell || {});
       try { LAYOUT[r.key](ctx, R, r); } catch (e) { warn('room ' + r.key + ' layout', e); }
+      try { furnish(ctx, R, r); } catch (e) { warn('room ' + r.key + ' furnish', e); }
       R.finish({ exit: { x: 0, z: ROOM.d / 2 - 0.6 } });
       return { dispose() { dropStations(r.key); dropEmitters(ctx.id); if (r.key === 'R10') room10Live = null; } };
     };
@@ -1064,6 +1149,12 @@ G.healStations = G.healStations || { map: new Map(),
     station(ctx, 'STAY', 'rail', 1.2, 0, -d / 2 + 1.1, PI);
     if (Kt.cushion) try { Kt.cushion(R, { x: 2.4, z: 1.2, w: 1.0, d: 2.0, h: 0.14, tint: '#f1ead8', trim: '#b85a4a' }); } catch (e) { /* optional */ }
     station(ctx, 'STAY', 'bed', 2.4, 0.14, 1.2, PI);
+    // the bedding chest with folded 이불, a low tea table, a 경대 (mirror chest), a paper lamp
+    if (Kt.chest) try { Kt.chest(R, { x: w / 2 - 0.45, z: -1.4, rotY: -PI / 2, w: 1.2, d: 0.45, h: 0.7, fittings: 'brass' }); for (let k = 0; k < 4; k++) R.add('cloth', box(0.42, 0.09, 1.0), M(w / 2 - 0.45, 0.75 + k * 0.095, -1.4), ['#f3ede0', '#d9a7a0', '#e9dfc6', '#9fb3c8'][k]); ctx.addCollider({ shape: 'box', x: w / 2 - 0.45, z: -1.4, hw: 0.25, hd: 0.62, maxY: 1.2 }); } catch (e) { /* optional */ }
+    if (Kt.table) try { Kt.table(R, { x: -0.6, z: 1.6, w: 0.7, d: 0.45, h: 0.3 }); if (Kt.pot) for (let k = 0; k < 2; k++) Kt.pot(R, { x: -0.75 + k * 0.3, y: 0.3, z: 1.6, kind: 'bowl', s: 0.3 }); ctx.addCollider({ shape: 'box', x: -0.6, z: 1.6, hw: 0.36, hd: 0.24, maxY: 0.32 }); } catch (e) { /* optional */ }
+    if (Kt.chest) try { Kt.chest(R, { x: -w / 2 + 0.5, z: 2.2, rotY: PI / 2, w: 0.6, d: 0.38, h: 0.35, drawers: 2 }); R.add('lacquer', box(0.02, 0.5, 0.36), M(-w / 2 + 0.36, 0.62, 2.2, PI / 2), '#cfd9de'); ctx.addCollider({ shape: 'box', x: -w / 2 + 0.5, z: 2.2, hw: 0.2, hd: 0.32, maxY: 0.9 }); } catch (e) { /* optional */ }
+    if (Kt.jwadeung) try { Kt.jwadeung(R, { x: w / 2 - 0.6, z: 2.6, h: 0.9 }); if (!ctx.low && Kt.lamp) Kt.lamp(R, { x: w / 2 - 0.6, y: 0.75, z: 2.6, s: 0.5, intensity: 2.2, distance: 6 }); } catch (e) { /* optional */ }
+    if (Kt.floorMat) try { Kt.floorMat(R, { x: 0.4, z: 0.2, w: 2.4, d: 3.2, tint: '#c9b27c' }); } catch (e) { /* optional */ }
     station(ctx, 'STAY', 'door', 0, 0, d / 2 - 1.0, PI);
     station(ctx, 'STAY', 'guide', -1.4, 0, 1.6, PI);
     station(ctx, 'STAY', 'spot', 0, 0, 0.6, PI);
@@ -1081,6 +1172,12 @@ G.healStations = G.healStations || { map: new Map(),
     if (Kt.table) try { Kt.table(R, { x: 0, z: -0.6, w: 1.2, d: 0.7, h: 0.34 }); } catch (e) { /* optional */ }
     ctx.addCollider({ shape: 'box', x: 0, z: -0.6, hw: 0.6, hd: 0.36, maxY: 0.36 });
     if (Kt.cushion) for (const z of [0.4, -1.6]) try { Kt.cushion(R, { x: 0, z, tint: '#7a8a5a', trim: '#d9b24c' }); } catch (e) { /* optional */ }
+    // a tea set on the table, a screen without written characters behind the manager, a lamp, a plant, a bookcase
+    if (Kt.pot) try { Kt.pot(R, { x: 0.25, y: 0.34, z: -0.6, kind: 'bottle', s: 0.36 }); for (const [dx, dz] of [[-0.2, -0.35], [-0.2, -0.85]]) Kt.pot(R, { x: dx, y: 0.34, z: -0.6 + dz + 0.6, kind: 'bowl', s: 0.24 }); } catch (e) { /* optional */ }
+    if (Kt.screen) try { Kt.screen(R, { x: 0, z: -d / 2 + 0.9, rotY: 0, panels: 6, h: 1.5 }); } catch (e) { /* optional */ }
+    if (Kt.jwadeung) try { Kt.jwadeung(R, { x: -w / 2 + 0.7, z: -d / 2 + 0.8, h: 0.9 }); if (!ctx.low && Kt.lamp) Kt.lamp(R, { x: -w / 2 + 0.7, y: 0.75, z: -d / 2 + 0.8, s: 0.5, intensity: 2.2, distance: 6 }); } catch (e) { /* optional */ }
+    plant(R, ctx, w / 2 - 0.7, -d / 2 + 0.8, 1.1);
+    if (Kt.shelf) try { const sp = Kt.shelf(R, { x: w / 2 - 0.4, z: 1.0, rotY: -PI / 2, w: 1.2, d: 0.35, h: 1.5, levels: 3 }) || []; sp.forEach((q) => { for (let k = 0; k < 5; k++) R.add('paint', box(0.05, 0.24, 0.17), M(q.x, q.y + 0.12, q.z - 0.3 + k * 0.12), ['#6a3a2a', '#2f4a6a', '#3a5a3a', '#8a6a3a', '#5a4a6a'][k]); }); ctx.addCollider({ shape: 'box', x: w / 2 - 0.4, z: 1.0, hw: 0.2, hd: 0.62, maxY: 1.6 }); } catch (e) { /* optional */ }
     station(ctx, 'TALK', 'seat', 0, 0.09, 0.4, PI);
     station(ctx, 'TALK', 'manager', 0, 0.09, -1.6, 0);
     station(ctx, 'TALK', 'guide', 0, 0.09, -1.6, 0);
@@ -1143,8 +1240,8 @@ G.healStations = G.healStations || { map: new Map(),
       id: r.place, name: r.n ? `제${r.n}관 ${r.name}` : r.name, kidName: r.n ? `제${r.n}관 ${r.kid}` : r.kid, emoji: r.emoji, zoneId: r.zone,
       color: '#c9b48a', desc: r.n ? `힐링관의 제${r.n}관이에요.` : `힐링관의 ${r.name}이에요.`,
       origin: r.origin, size, floorY: 0, surface: r.floor === 'stone' ? 'stone' : r.floor === 'earth' ? 'dirt' : 'wood',
-      spawn: { x: 0, z: size.d / 2 - 2.0, rotY: PI }, exit, indoor: true, far: 150,
-      camera: { dist: 5.6, min: 2.4, max: 8, pitch: 0.18, pmin: -0.1, pmax: 0.85, ceil: (r.n ? ROOM.ceil : SMALL.ceil) - 0.5 },
+      spawn: { x: 0, z: size.d / 2 - (r.n ? 5.0 : 2.0), rotY: PI }, exit, indoor: true, far: 150,
+      camera: r.n ? { dist: 5.6, min: 2.4, max: 8, pitch: 0.18, pmin: -0.1, pmax: 0.85, ceil: ROOM.ceil - 0.5 } : { dist: 4.0, min: 2.0, max: 5.4, pitch: 0.2, pmin: -0.1, pmax: 0.85, ceil: SMALL.ceil - 0.45 },
       // came in from the hall (its corridor door, the map, G.healHall.enter): the way out leads back into the corridor
       // in front of this door; came another way (the 가기 picture menu from the valley): out to the valley like any room
       canEnter: (o) => { fromDoor[r.place] = !(o && o.quiet) && PLACES.includes(P().current); return true; },
