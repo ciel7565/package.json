@@ -31,6 +31,7 @@ const server = {
     if (!this.up) return { status: 0 };
     if (!user) return { status: 401, json: { success: false, error: { code: 'AUTH_REQUIRED' } } };
     if (p === 'settings/get.php') {
+      if (this.failGet > 0) { this.failGet--; return { status: 0 }; } // [fix10] a read that does not arrive (a busy server)
       const r = this.rows.get(user);
       return { status: 200, json: { success: true, data: r ? { v: r.v, data: JSON.parse(r.data), updatedAt: r.at } : { v: 0, data: { acct: {}, dev: {} }, updatedAt: 0 } } };
     }
@@ -215,6 +216,28 @@ check('slow server + 409: device 2\'s 효과음 30 and device 1\'s 글자 3, 캐
 check('slow server + 409: device 1 shows 효과음 30 and keeps its own three changes', d1.S.get('mixSfx') === 30 && d1.S.get('textScale') === 3 && d1.S.get('avatarScale') === 90 && d1.S.get('mixUi') === 25 && !d1.S.store.busy && Object.keys(d1.S.store.unsent()).length === 0);
 check('slow server + 409: one save of a device at a time (never two saves of one device in flight)', server.maxInflight <= 1 && d1.S.store.stale >= 1, `max in flight ${server.maxInflight} · 409 seen ${d1.S.store.stale}`);
 server.latency = 0;
+
+// ---- [fix10] 409 and then the read does not arrive (a busy server): the stale copy must never be written over the other device's
+const e3 = device('e3'), e4 = device('e4');
+await e3.login('u2'); await e3.advance(2500); // (the first copy of the account)
+await e4.login('u2'); await e4.advance(2500);
+e4.S.set('mixSfx', 20);
+await e4.advance(2500);
+e3.S.set('textScale', 4);
+server.failGet = 1;
+await e3.advance(2500);
+const afterFail = server.acct('u2');
+check('[fix10] 409 then a failed read: nothing is written over device 2\'s value (효과음 20 stays)', afterFail.mixSfx === 20, JSON.stringify({ sfx: afterFail.mixSfx, text: afterFail.textScale, v: server.rows.get('u2')?.v }));
+await e3.advance(20000);
+const a5 = server.acct('u2');
+check('[fix10] … and the retry reads, merges and sends: both values end in the store, device 1 shows 효과음 20', a5.mixSfx === 20 && a5.textScale === 4 && e3.S.get('mixSfx') === 20 && e3.S.get('textScale') === 4 && !e3.S.store.pending, JSON.stringify({ sfx: a5.mixSfx, text: a5.textScale, pending: e3.S.store.pending }));
+// a server that stays away for a long time: the changes are not given up after a few tries
+server.up = false;
+e3.S.set('mixUi', 15);
+await e3.advance(120000);
+server.up = true;
+await e3.advance(90000);
+check('[fix10] a server that is away for two minutes: the change is still sent when it is back (no giving up after four tries)', server.acct('u2').mixUi === 15 && !e3.S.store.pending, JSON.stringify({ ui: server.acct('u2').mixUi, errors: e3.S.store.errors }));
 
 // ---- unsent over a logout: the server is down while device 1 changes things
 server.up = false;

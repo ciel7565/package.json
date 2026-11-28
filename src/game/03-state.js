@@ -1016,6 +1016,9 @@
         if (G.save._pendingServerRestore) G.log.warn('SAVE', 'save refused, restoring the server copy', e?.code || e);
         // an ended server session is expected (idle / lifetime): save:auth-lost and the re-login prompt handle it
         else if (G.save.adapter === ServerAdapter && (Number(e?.status) === 401 || e?.code === 'AUTH_REQUIRED')) G.log.warn('SAVE', 'save needs a new login (session ended)', e?.code || e?.status);
+        // [fix10] a server that does not answer (a busy one, a dropped connection) is an expected failure like an ended session:
+        // the snapshot is kept for the next try (onFailed) and the player is told on the second failure — not a program error
+        else if (G.save.adapter === ServerAdapter && e?.code === 'NETWORK_ERROR') G.log.warn('SAVE', 'save failed (the server did not answer; kept for the next try)', e?.code);
         else G.log.error('SAVE', 'save failed', e);
         if (G.save._pendingServerRestore) {
           const srv = G.save._pendingServerRestore, code = G.save._pendingServerRestoreCode;

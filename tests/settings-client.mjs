@@ -489,12 +489,17 @@ async function partD() {
     // ---- a change 0.5 s before the tab closes
     const pre = await one.page.evaluate(async () => { G.sys.settings.set('mixMusic', 30); G.sys.settings.set('hudOpacity', 65); await new Promise((r) => setTimeout(r, 500)); const st = G.sys.settings.store; return { pending: st.pending, busy: st.busy, online: st.online(), pulled: st.pulled }; });
     const s1 = saves.length;
+    // [fix10] the page that is leaving cannot report its own request to the test (Playwright does not always see a request
+    // that an unloading document sends), so the page notes in its own storage what its pagehide handler did; the database row is the proof
+    await one.page.evaluate(() => { window.addEventListener('pagehide', () => { try { const st = G.sys.settings.store; localStorage.setItem('test.pagehide', JSON.stringify({ beaconAt: st.beaconAt || 0, pending: st.pending })); } catch (e) { /* storage */ } }); });
     one.page.on('dialog', (d) => d.accept().catch(() => {}));
     // the page goes away 0.5 s after the change (a real unload: pagehide runs; Playwright's page.close() removes a page
     // without it, so the page is left for another address the way a closing tab leaves)
     await one.page.goto(`${BASE}api/ping.php`, { waitUntil: 'load', timeout: 60000 });
     const r2 = await dbWait((r) => r.blob.acct.mixMusic === 30 && r.blob.acct.hudOpacity === 65, 10000);
-    check('D: a change 0.5 s before the page goes away still reaches the database (pagehide → keepalive)', r2?.blob?.acct?.mixMusic === 30 && r2.blob.acct.hudOpacity === 65 && saves.length > s1, `${note(r2)} · music ${r2?.blob?.acct?.mixMusic} hud ${r2?.blob?.acct?.hudOpacity} · saves on leaving ${saves.length - s1} · before ${JSON.stringify(pre)}`);
+    const ph = await one.page.evaluate(() => { try { return JSON.parse(localStorage.getItem('test.pagehide') || 'null'); } catch (e) { return null; } }).catch(() => null);
+    check('D: a change 0.5 s before the page goes away still reaches the database (pagehide → keepalive)', r2?.blob?.acct?.mixMusic === 30 && r2.blob.acct.hudOpacity === 65, `${note(r2)} · music ${r2?.blob?.acct?.mixMusic} hud ${r2?.blob?.acct?.hudOpacity} · requests seen by the test ${saves.length - s1} · before ${JSON.stringify(pre)}`);
+    check('D: … and it was the page leaving that sent it (pagehide ran the keepalive send), not the 2 s timer', !!ph && ph.beaconAt > 0 && ph.pending === false, JSON.stringify(ph));
     await one.page.close();
 
     // ---- a value that only the account store has (the player save never carries it)

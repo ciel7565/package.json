@@ -1059,12 +1059,17 @@
             if (e && e.code === 'SETTINGS_STALE' && round < 2) {
               // another device wrote in between: take its copy (keeping the changes made here), then send again
               store.stale = (store.stale || 0) + 1;
-              try { store.merge(await G.net.request('settings/get.php', { quiet: true, timeout: 9000 })); }
-              catch (err) { store.v = Math.max(store.v, Number(e.data?.v) || 0); }
-              continue;
+              // [fix10] never send over a copy that was not read: when the read does not arrive (a busy server) the change waits
+              // and the retry meets 409 again — bumping v without the other device's values wrote the old copy over them
+              let fresh = null;
+              try { fresh = await G.net.request('settings/get.php', { quiet: true, timeout: 9000 }); } catch (err) { fresh = null; }
+              if (fresh) { store.merge(fresh); continue; }
+              e = { code: 'NETWORK_ERROR', message: 'the read after 409 failed' };
             }
             store.pending = true;
-            if (++store.errors < 4 && e?.code !== 'NOT_FOUND' && !/^HTTP_404$/.test(e?.code || '')) { clearTimeout(store.timer); store.timer = setTimeout(() => store.push(), 5000 * store.errors); }
+            // [fix10] a busy or absent server is not a reason to give up for the whole session: retry with growing pauses
+            // (5 s … 60 s, twelve times); an older server without the endpoint (404) is left alone
+            if (++store.errors <= 12 && e?.code !== 'NOT_FOUND' && !/^HTTP_404$/.test(e?.code || '')) { clearTimeout(store.timer); store.timer = setTimeout(() => store.push(), Math.min(60000, 5000 * store.errors)); }
             G.log.info('SETTINGS', 'account settings not saved', e?.code || e?.message || e);
             return false;
           }
@@ -1105,6 +1110,10 @@
   G.bus.on('game:logout', () => { store.reset(); });
   window.addEventListener('pagehide', () => { try { store.beacon(); } catch (e) { /* leaving */ } });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { try { store.beacon(); } catch (e) { /* hidden */ } } });
+  // [fix10] back on the network, or the tab visible again: what is still waiting is sent without waiting for the long pause
+  const wake = () => { try { if (store.pending && !store.busy && store.online() && store.pulled) { store.errors = Math.min(store.errors, 2); store.schedule(); } } catch (e) { /* waking */ } };
+  window.addEventListener('online', wake);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
 
   // dev centre / tests
   S._W = W;

@@ -114,7 +114,7 @@
   const dpr = () => { const d = Number(window.devicePixelRatio); return d > 0 && Number.isFinite(d) ? d : 1; };
   const low = () => (E()?.preset?.name || 'low') === 'low';
   const hasPost = () => !!E()?.composer;
-  const LOW_WHY = '그래픽 퀄리티가 ‘낮음’일 때는 쓸 수 없어요. 낮음은 추가 처리가 없는 가장 가벼운 단계예요.';
+  const LOW_WHY = '추가 처리를 쓰지 않는 ‘낮음’ 퀄리티라서 지금은 쓸 수 없어요.'; // [fix10] one sentence (was two)
   const wideAsked = (() => { try { const v = new URLSearchParams(location.search).get('wide'); return v === '1' ? true : v === '0' ? false : null; } catch (e) { return null; } })();
 
   const display = {
