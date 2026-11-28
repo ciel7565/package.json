@@ -4493,7 +4493,7 @@
       const rig = T.rig;
       rig.setAppearance(app);
       for (let i = 0; i < 3; i++) rig.update(1 / 30, IDLE);
-      const hs = rig.heightMul || 1, real = rig.style === 'real', H = (real ? 1.62 : 1.45) * hs, hc = (rig.K?.HC || (real ? 1.55 : 1.11)) * hs;
+      const hs = rig.heightMul || 1, real = rig.style === 'real', H = (real ? (rig.K?.height || 1.62) : 1.45) * hs, hc = (rig.K?.HC || (real ? 1.55 : 1.11)) * hs; // [people] §19.9 a child's stature
       const c = T.cam, F = {
         face: [0.22, hc - 0.01, real ? 0.62 : 1.25, hc - 0.01],
         hair: [0.85, hc + 0.02, real ? 0.85 : 1.55, hc - 0.01],

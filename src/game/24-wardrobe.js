@@ -1074,7 +1074,7 @@
     scene.add(rig.group);
     const cam = new THREE.PerspectiveCamera(22, 1, 0.03, 30);
     const real = rig.style === 'real', hs = rig.heightMul || Number(app.height) || 1;
-    const H = (real ? 1.62 : 1.45) * hs, hc = (rig.K?.HC || (real ? 1.55 : 1.11)) * hs;
+    const H = (real ? (rig.K?.height || 1.62) : 1.45) * hs, hc = (rig.K?.HC || (real ? 1.55 : 1.11)) * hs; // [people] §19.9 a child's stature
     const settle = (n = 6) => { for (let i = 0; i < n; i++) rig.update(1 / 30, IDLE); };
     const shot = (pw, ph, yaw, pos, look, fov = 22) => {
       rig.group.rotation.y = yaw;

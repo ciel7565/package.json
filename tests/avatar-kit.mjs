@@ -150,6 +150,57 @@ log('👘 avatar kit — the hanbok table and the garment kit (Node)');
   check('every set within the budget', Object.values(per).every((t) => t <= BUDGET), JSON.stringify(per).slice(0, 300));
 }
 
+// ------------------------------------------------------------------ builds (§19.9, lane people)
+{
+  const heads = {}, legs = {}, bad = [];
+  const measure = (app) => {
+    const g = A._geometry(app), pa = g.attributes.position, sl = g.attributes.aSlot, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+    let top = -1, chin = 9, minY = 9;
+    for (let i = 0; i < pa.count; i++) {
+      const y = pa.getY(i); minY = Math.min(minY, y);
+      if (sl.getX(i) === 0 && si.getX(i) === 4 && sw.getX(i) > 0.99) { top = Math.max(top, y); chin = Math.min(chin, y); }
+    }
+    return { top, head: top - chin, minY };
+  };
+  for (const p of A.presets) {
+    const app = p.appearance; if (app.style !== 'real') continue;
+    const b = A.buildOf(app), m = measure(app), k = A.kin(app);
+    (heads[b] = heads[b] || []).push(+(m.top / m.head).toFixed(2));
+    (legs[b] = legs[b] || []).push(+((k.L1 + k.L2 + 0.08 * (k.L1 / 0.4)) / m.top).toFixed(3));
+    if (!(Math.abs(m.minY) < 0.03) || !(k.height > 1 && k.height < m.top) || !(k.HC > 0.9 && k.HC < m.top)) bad.push(`${p.id}: floor ${m.minY.toFixed(3)} stature ${k.height.toFixed(3)} HC ${k.HC.toFixed(3)} top ${m.top.toFixed(3)}`);
+  }
+  numbers.headCounts = heads;
+  const near = (b, want) => (heads[b] || []).every((h) => Math.abs(h - want) <= 0.2);
+  check('head counts by build: child ≈ 6.0 · youth ≈ 6.6 · adult ≈ 7.2 · elder ≈ 7.0 (± 0.2, chin to the top of the skull)',
+    near('child', 6) && near('adult', 7.2) && near('elder', 7) && (heads.child || []).length > 3 && (heads.adult || []).length > 3 && (heads.elder || []).length > 0, JSON.stringify(heads));
+  const y = A.normalize({ ...A.defaultAppearance, height: 1.08 });
+  const youth = measure(y);
+  check('a tall look without grown-up hair or hat is a youth of ≈ 6.6 heads; the default profile stays a child', A.buildOf(y) === 'youth' && Math.abs(youth.top / youth.head - 6.6) <= 0.2 && A.buildOf(A.defaultAppearance) === 'child', `${A.buildOf(y)} ${(youth.top / youth.head).toFixed(2)} default ${A.buildOf(A.defaultAppearance)}`);
+  check('every build stands on the floor; stature and head centre lie inside the figure; legs are a child\'s ≈ 45 % and an adult\'s ≈ 50 % of the stature', bad.length === 0 && legs.child.every((r) => r > 0.4 && r < 0.49) && legs.adult.every((r) => r > 0.47 && r < 0.56), bad.slice(0, 3).join(' | ') + ' legs ' + JSON.stringify({ c: legs.child[0], a: legs.adult[0] }));
+  // cloth over cloth: per (2 cm band, 15° wedge) the outermost radius of each layer from the body axis, in the rest pose
+  const poke = (app) => {
+    const g = A._geometry(app), pa = g.attributes.position, sl = g.attributes.aSlot, si = g.attributes.skinIndex;
+    const sleeveless = ['kwaeja', 'jeonbok', 'gugunbok', 'dapho', 'baeja', 'jokki'].includes(app.outer);
+    const LAY = { 0: 'skin', 6: 'bottom', 2: 'top', 20: 'outer' }, ARM = new Set([5, 6, 7, 8, 9, 10, 19, 20, 21]), bins = new Map();
+    for (let i = 0; i < pa.count; i++) {
+      const lay = LAY[sl.getX(i)]; if (!lay || ARM.has(si.getX(i))) continue;
+      const x = pa.getX(i), yy = pa.getY(i), z = pa.getZ(i); if (yy < 0.12 || yy > 1.36) continue;
+      const a = Math.floor(((Math.atan2(x, z) + Math.PI) / (2 * Math.PI)) * 24) % 24, k = Math.floor(yy / 0.02) * 100 + a;
+      let b = bins.get(k); if (!b) bins.set(k, b = {}); b[lay] = Math.max(b[lay] || 0, Math.hypot(x, z));
+    }
+    const out = { pants: 0, top: 0, skin: 0 };
+    for (const [k, b] of bins) {
+      const a = k % 100, side = a === 5 || a === 6 || a === 17 || a === 18 || (sleeveless && ((a >= 4 && a <= 7) || (a >= 16 && a <= 19))); // the armholes of a sleeveless 겉옷 show the 저고리 by design
+      if (b.bottom && b.outer && b.bottom > b.outer + 0.008) out.pants++;
+      if (!side && b.top && b.outer && b.top > b.outer + 0.008) out.top++;
+      if (Math.floor(k / 100) * 0.02 > 1.0 && b.skin && b.top && b.skin > b.top + 0.008) out.skin++;
+    }
+    return out;
+  };
+  const pk = []; for (const p of A.presets) { if (p.appearance.style !== 'real') continue; const r = poke(p.appearance); if (r.pants || r.top || r.skin) pk.push(`${p.id} ${JSON.stringify(r)}`); }
+  check('no body or under-layer pokes through the cloth over it (sampled radii of 36 sets: trousers / skirt in the 겉옷, the 저고리 in the 겉옷, skin in the 저고리)', pk.length === 0, pk.slice(0, 4).join(' | '));
+}
+
 // ------------------------------------------------------------------ cache
 {
   A.cache.clear();

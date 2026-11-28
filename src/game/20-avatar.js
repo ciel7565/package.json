@@ -245,6 +245,108 @@
   };
   for (const k of Object.values(KIN)) { k.max = (k.L1 + k.L2) * 0.999; k.min = Math.abs(k.L1 - k.L2) + 0.03 * k.fp; }
 
+  // [people] §19.9 head counts by build: child ≈ 6.0, youth ≈ 6.6, adult ≈ 7.2, elder ≈ 7.0 heads tall. The garment kit
+  // draws ONE adult body; a build re-proportions it bone by bone — every vertex moves with the bones it is skinned to,
+  // v' = p'(bone) + S(bone) · (v − p(bone)), blended by its skin weights — and the skeleton follows (p' below), so every
+  // piece of clothing keeps fitting and the locomotion maths (KIN) stay exact for the new limb lengths.
+  //   leg: length of legs + pelvis · torso: length of the spine · head: size of head and neck (headW: its width) ·
+  //   sh / hip: width of chest / pelvis (depth: dz) · lg: girth of the legs · arm: [length, girth] · foot: its length
+  const BUILDS = {
+    child: { leg: 0.7, torso: 0.94, head: 0.93, headW: 1.04, sh: 0.8, hip: 0.84, dz: 0.88, lg: 0.8, arm: [0.75, 0.8], foot: 0.8 },
+    youth: { leg: 0.86, torso: 0.957, head: 0.96, headW: 1.01, sh: 0.9, hip: 0.9, dz: 0.92, lg: 0.88, arm: [0.88, 0.88], foot: 0.92 },
+    adult: { leg: 1, torso: 1, head: 0.98, headW: 1, sh: 1, hip: 1, dz: 1, lg: 1, arm: [1, 1], foot: 1.04 },
+    elder: { leg: 0.96, torso: 0.998, head: 0.98, headW: 1, sh: 0.98, hip: 1.02, dz: 1.02, lg: 0.94, arm: [0.98, 0.94], foot: 1.02 },
+  };
+  const ADULT_HAIR = new Set(['sangtu', 'jjok', 'eonjeun', 'keunmeori']);
+  const ADULT_HAT = new Set(['gat', 'jeongja', 'tanggeon', 'samo', 'jeollip', 'jokduri', 'hwagwan', 'jeonmo', 'yugeon', 'satgat', 'ayam', 'sugeon', 'paeraengi', 'chorip']);
+  const ADULT_OUTER = new Set(['dopo', 'dallyeong', 'gugunbok', 'cheollik', 'wonsam', 'hwarot', 'dangui', 'jangot', 'sseugae', 'hakchang', 'magoja', 'haengju', 'dapho', 'jeonbok']);
+  /** the build of a realistic look, from what it wears (no new key: saves and the server's whitelist stay as they are):
+   *  grey hair → elder; a married person's hair (상투, 쪽, 얹은머리, 큰머리), a beard, a grown-up's hat or robe → adult;
+   *  tall (≥ 1.05) without those → youth; everybody else — the default profile too — is a child */
+  function buildOf(app) {
+    if (!app || app.style !== 'real') return 'adult';
+    const hc = String(app.hairColor || '').toLowerCase();
+    if (hc === '#b9b4ad') return 'elder';
+    if (ADULT_HAIR.has(app.hair) || (app.beard && app.beard !== 'none') || ADULT_HAT.has(app.hat) || ADULT_OUTER.has(app.outer) || app.bottom === 'jambang') return 'adult';
+    if ((Number(app.height) || 1) >= 1.05) return 'youth';
+    return 'child';
+  }
+  /** per-bone scale S (x, y, z) of a build (index = bone) */
+  function buildScales(b) {
+    const P = BUILDS[b] || BUILDS.adult, out = [];
+    const hd = [P.head * P.headW, P.head, P.head * (P.headW * 0.5 + 0.5)], arm = [P.arm[1], P.arm[0], P.arm[1]], leg = [P.lg, P.leg, P.lg];
+    for (const [name] of BONES_REAL) {
+      let s;
+      if (name === 'root') s = [1, P.leg, 1];
+      else if (name === 'hips' || name === 'skirt') s = [P.hip, P.leg, P.dz];
+      else if (name === 'spine' || name === 'bag' || name === 'cloth') s = [P.sh, P.torso, P.dz];
+      else if (name === 'neck' || name === 'head' || name === 'pony' || name === 'hairB') s = hd;
+      else if (/^(sh|el|hd)[LR]$|^fg/.test(name)) s = arm;
+      else if (/^ft[LR]$/.test(name)) s = [P.lg, P.leg, P.foot];
+      else s = leg;
+      out.push(s);
+    }
+    return out;
+  }
+  /** the re-proportioned skeleton: [name, parent, x', y', z'] (hairB follows the head, as its hair does) */
+  function buildBones(b) {
+    const S = buildScales(b), out = [];
+    BONES_REAL.forEach(([name, parent, x, y, z], i) => {
+      let ref = parent;
+      if (name === 'hairB') ref = B.head;
+      if (ref < 0) { out.push([name, parent, x, y * S[i][1], z]); return; }
+      const p = BONES_REAL[ref], q = out[ref], s = S[ref];
+      out.push([name, parent, q[2] + s[0] * (x - p[2]), q[3] + s[1] * (y - p[3]), q[4] + s[2] * (z - p[4])]);
+    });
+    return out;
+  }
+  /** model-space point of the adult body → the same point on a build, as rigidly attached to bone i */
+  function buildPoint(b, i, x, y, z, out) {
+    const S = BUILD_CACHE(b), s = S.scales[i], p = BONES_REAL[i], q = S.bones[i];
+    out[0] = q[2] + s[0] * (x - p[2]); out[1] = q[3] + s[1] * (y - p[3]); out[2] = q[4] + s[2] * (z - p[4]);
+    return out;
+  }
+  const _buildC = new Map();
+  function BUILD_CACHE(b) {
+    let c = _buildC.get(b);
+    if (!c) { c = { scales: buildScales(b), bones: buildBones(b) }; _buildC.set(b, c); }
+    return c;
+  }
+  /** re-proportion a built adult geometry (positions + normals, by its skin weights) */
+  function warpBuild(g, b) {
+    if (b === 'adult' && BUILDS.adult.head === 1) return g;
+    const C = BUILD_CACHE(b), pa = g.attributes.position, na = g.attributes.normal, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+    for (let i = 0; i < pa.count; i++) {
+      const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
+      let ox = 0, oy = 0, oz = 0, nx = 0, ny = 0, nz = 0, wt = 0;
+      for (let k = 0; k < 2; k++) {
+        const w = sw.getComponent(i, k); if (!(w > 0)) continue;
+        const j = si.getComponent(i, k), s = C.scales[j], p = BONES_REAL[j], q = C.bones[j];
+        ox += w * (q[2] + s[0] * (x - p[2])); oy += w * (q[3] + s[1] * (y - p[3])); oz += w * (q[4] + s[2] * (z - p[4]));
+        if (na) { nx += w * na.getX(i) / s[0]; ny += w * na.getY(i) / s[1]; nz += w * na.getZ(i) / s[2]; }
+        wt += w;
+      }
+      if (!(wt > 0)) continue;
+      pa.setXYZ(i, ox / wt, oy / wt, oz / wt);
+      if (na) { const l = Math.hypot(nx, ny, nz) || 1; na.setXYZ(i, nx / l, ny / l, nz / l); }
+    }
+    pa.needsUpdate = true; if (na) na.needsUpdate = true;
+    g.computeBoundingSphere();
+    return g;
+  }
+  /** the kinematics of a build (bone rests, inverse binds, leg lengths, seat, head centre, stature) */
+  for (const b of Object.keys(BUILDS)) {
+    const bones = buildBones(b), K0 = KIN.real, P = BUILDS[b], L = P.leg;
+    const hb = bones[B.head], th = bones[B.thL], kn = bones[B.knL], ft = bones[B.ftL];
+    const K = Object.assign({}, K0, { bones, inv: invOf(bones), build: b, L1: th[3] - kn[3], L2: kn[3] - ft[3], LF: ft[3],
+      seat: ft[3] - th[3], HC: hb[3] + P.head * (K0.HC - BONES_REAL[B.head][3]), height: hb[3] + P.head * (K0.height - BONES_REAL[B.head][3]),
+      sweep: K0.sweep * L, lift: K0.lift.map((v) => v * L), crouch: K0.crouch.map((v) => v * L), bob: K0.bob.map((v) => v * L), fp: K0.fp * L,
+      headK: [P.head * P.headW, P.head, P.head * (P.headW * 0.5 + 0.5)] });
+    K.max = (K.L1 + K.L2) * 0.999; K.min = Math.abs(K.L1 - K.L2) + 0.03 * K.fp;
+    KIN['real:' + b] = K;
+  }
+  const kinKey = (app) => (app.style === 'real' ? 'real:' + buildOf(app) : app.style);
+
   // ---------------------------------------------------------------- palette slots
   const SLOT = { skin: 0, hair: 1, top: 2, top2: 3, top3: 4, under: 5, bottom: 6, bottom2: 7, shoe: 8, sole: 9, bag: 10, bag2: 11, acc: 12, acc2: 13, white: 14, dark: 15, red: 16, gold: 17, leaf: 18, metal: 19,
     outer: 20, outer2: 21, sleeve: 22, hat: 23, hat2: 24, band: 25,
@@ -433,7 +535,7 @@
   function styleSig(app) { return [app.style, app.hair, app.hat, app.top, app.bottom, app.footwear, app.bag, app.accessory].join('|'); }
   /** the realistic body depends on every piece (one geometry per combination, cached) */
   const SHAPE_KEYS = ['hair', 'beard', 'hat', 'outer', 'top', 'bottom', 'footwear', 'norigae', 'pouch', 'fan', 'hairpin', 'ribbon', 'belt', 'bag'];
-  function shapeSig(app) { return app.style === 'real' ? 'r|' + SHAPE_KEYS.map((k) => app[k]).join('|') + (app.pattern === 'geumbak' ? '|g' : '') : styleSig(view(app)); }
+  function shapeSig(app) { return app.style === 'real' ? 'r|' + SHAPE_KEYS.map((k) => app[k]).join('|') + (app.pattern === 'geumbak' ? '|g' : '') + '|' + buildOf(app) : styleSig(view(app)); }
   const HAT = { strawhat: true, cap: true, gat: true, jokduri: true, ayam: true, jobawi: true, hogeon: true, bokgeon: true };
   const HANBOK_TOPS = new Set(['hanbok', 'saekdong', 'dangui', 'baeja', 'kwaeja', 'durumagi']);
   // the round style draws the newer hair styles from its six shells + a few extra volumes (cuteExtras)
@@ -829,6 +931,7 @@
     if (!g) {
       const t0 = performance.now();
       g = buildBody(app.style === 'real' ? app : view(app));
+      if (app.style === 'real') warpBuild(g, buildOf(app)); // [people] §19.9 the build's proportions
       geoCache.set(key, g);
       trimCache(key);
       G.log.debug('AVATAR', `geometry ${key}: ${g.attributes.position.count} verts, ${(performance.now() - t0).toFixed(1)}ms`);
@@ -1049,10 +1152,10 @@
     cheollik: { len: 0.3, sleeve: 'wide', collar: 'cross', goreum: 1, flare: 0.16, pleat: 1.02 },
     jangot: { len: 0.55, sleeve: 'none', collar: 'none', head: 1, gap: 0.55, flare: 0.06, band: 'trim' },
     sseugae: { len: 0.86, sleeve: 'none', collar: 'none', head: 1, gap: 0.5, flare: 0.1, pleat: 2 },
-    kwaeja: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.9 : 0.5), sleeve: 'none', collar: 'v', gap: 0.16, flare: 0.05, open: 1 },
-    jeonbok: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.95 : Math.abs(a) > 2.95 ? 0.7 : 0.42), sleeve: 'none', collar: 'none', gap: 0.05, flare: 0.06, open: 1 },
-    gugunbok: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.95 : Math.abs(a) > 2.95 ? 0.7 : 0.42), sleeve: 'narrow', sleeveSlot: 'red', collar: 'none', gap: 0.05, flare: 0.06, open: 1, under: 0.36 },
-    dapho: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.9 : 0.44), sleeve: 'short', collar: 'none', gap: 0.05, flare: 0.06, open: 1 },
+    kwaeja: { len: (a) => (Math.abs(Math.sin(a)) > 0.985 ? 0.86 : 0.5), sleeve: 'none', collar: 'v', gap: 0.16, flare: 0.05, open: 1 }, // [people] narrow side slits (the panels nearly meet)
+    jeonbok: { len: (a) => (Math.abs(Math.sin(a)) > 0.985 ? 0.9 : Math.abs(a) > 3.04 ? 0.72 : 0.42), sleeve: 'none', collar: 'none', gap: 0.05, flare: 0.06, open: 1 },
+    gugunbok: { len: (a) => (Math.abs(Math.sin(a)) > 0.985 ? 0.9 : Math.abs(a) > 3.04 ? 0.72 : 0.42), sleeve: 'narrow', sleeveSlot: 'red', collar: 'none', gap: 0.05, flare: 0.06, open: 1, under: 0.36 },
+    dapho: { len: (a) => (Math.abs(Math.sin(a)) > 0.985 ? 0.86 : 0.44), sleeve: 'short', collar: 'none', gap: 0.05, flare: 0.06, open: 1 },
     baeja: { len: 0.97, sleeve: 'none', collar: 'v', gap: 0.16, flare: 0.008, fur: 1, open: 1 },
     jokki: { len: 0.92, sleeve: 'none', collar: 'v', gap: 0.02, flare: 0.006, buttons: 5, pockets: 1, open: 1 },
     magoja: { len: 0.96, sleeve: 'narrow', collar: 'band', gap: 0.02, flare: 0.012, buttons: 2 },
@@ -1088,7 +1191,7 @@
       if (back) fl += 0.012 * smooth(1.2, 0.8, y) * smooth(1.6, 2.6, Math.abs(a > Math.PI ? a - TAU : a)); // 도포: the back flap
       // below the waist the robe clears the hips and the tops of the trousers (they never poke through it)
       const hip = smooth(1.08, 0.92, y);
-      let rx = (Math.max(r[0], y < 0.84 ? 0.15 : 0, 0.205 * hip) + off + fl) * k, rz = (Math.max(r[1], y < 0.84 ? 0.1 : 0, 0.13 * hip) + off + fl * 0.9) * k;
+      let rx = (Math.max(r[0], y < 0.84 ? 0.15 : 0, 0.188 * hip) + off + fl) * k, rz = (Math.max(r[1], y < 0.84 ? 0.1 : 0, 0.136 * hip) + off + fl * 0.9) * k;
       if (o.skirt && y < 1.27) { // over a 치마: just outside the skirt's own radius at this height (pleats included)
         const sf = o.skirt * Math.pow(smooth(1.15, 0.04, y), 0.8);
         rx = Math.max(rx, (Math.max(r[0], 0.15) + sf) * 1.05 + 0.012); rz = Math.max(rz, (Math.max(r[1], 0.1) + sf * 0.92) * 1.05 + 0.012);
@@ -1278,8 +1381,9 @@
     // ---- legs and the 아래옷
     for (const s of [1, -1]) {
       const x0 = s * 0.091, lw = legW(s);
-      const legT = [[0.94, 0.084, 0.085, x0 + s * 0.008, 0.004], [0.86, 0.088, 0.09, x0 + s * 0.008, 0.008], [0.76, 0.075, 0.078, x0 + s * 0.005, 0.01], [0.64, 0.062, 0.064, x0 + s * 0.003, 0.008],
-        [0.53, 0.05, 0.052, x0 + s * 0.001, 0.006], [0.48, 0.046, 0.05, x0, 0.01], [0.42, 0.045, 0.05, x0, 0.002], [0.34, 0.048, 0.055, x0, -0.008], [0.24, 0.038, 0.042, x0, -0.006], [0.14, 0.028, 0.032, x0, -0.004], [0.095, 0.026, 0.03, x0, -0.002]];
+      // [people] §19.9 thighs that taper into the pelvis (no riding-breech bulge), a knee, a calf, a slim ankle
+      const legT = [[0.94, 0.074, 0.08, x0 + s * 0.002, 0.004], [0.86, 0.075, 0.082, x0 + s * 0.002, 0.008], [0.76, 0.066, 0.072, x0 + s * 0.002, 0.01], [0.64, 0.056, 0.06, x0 + s * 0.001, 0.008],
+        [0.53, 0.047, 0.05, x0, 0.006], [0.48, 0.043, 0.048, x0, 0.012], [0.42, 0.043, 0.048, x0, 0.002], [0.34, 0.046, 0.054, x0, -0.01], [0.24, 0.034, 0.04, x0, -0.006], [0.14, 0.025, 0.03, x0, -0.004], [0.095, 0.024, 0.028, x0, -0.002]];
       if (chima) { // under a skirt: the 속바지 (white) from the knee down shows only under a short skirt
         if (BK.hem > 0.2) P.add(rings(legT.filter((r) => r[0] <= BK.hem + 0.06 && r[0] >= 0.11).map((r) => [r[0], r[1] + 0.01, r[2] + 0.01, r[3], r[4]]), { nu: 12, nv: 10 }), lw, S.white);
       } else {
@@ -1287,8 +1391,9 @@
         if (endY > 0.3) P.add(rings(legT.filter((r) => r[0] <= endY + 0.04), { nu: 12, nv: 12 }), lw, S.skin); // 잠방이: the bare shin
         const wk = BK.width || 1;
         const pl = legT.filter((r) => r[0] >= endY - 0.05).map((r) => {
-          const k = (endY > 0.3 ? 0.03 : 0.016 + 0.024 * smooth(0.2, 0.75, r[0])) * wk + (BK.quilt ? 0.006 : 0);
-          return [r[0], r[1] + k, r[2] + k, r[3] + s * 0.01 * wk, r[4]];
+          // [people] gathered at the hip, full over the knee and the shin, bunched above the 대님 (no breeches at the thigh)
+          const k = (endY > 0.3 ? 0.026 : 0.014 + 0.02 * smooth(0.18, 0.5, r[0]) - 0.012 * smooth(0.62, 0.9, r[0])) * wk + (BK.quilt ? 0.006 : 0);
+          return [r[0], r[1] + k, r[2] + k * 1.1, r[3] + s * 0.004 * wk, r[4]];
         });
         pl[pl.length - 1][0] = endY;
         if (BK.tie) pl.push([0.112, 0.034, 0.038, x0, -0.002]);
@@ -2478,7 +2583,7 @@
     setAppearance(appearance) {
       const app = normalize(appearance);
       this.appearance = app;
-      if (app.style !== this.style) this._setStyle(app.style);
+      if (kinKey(app) !== this._kin) this._setStyle(app.style, kinKey(app));
       applyPalette(this.material, app);
       const geo = bodyGeometry(app);
       const gk = shapeSig(app);
@@ -2504,7 +2609,8 @@
       this.height = this.K.height * app.height * ds;
       const top = app.style === 'real' ? (HEAD_TOP_REAL[app.hat] || 1.69) + (app.hair === 'bun' && app.hat === 'none' ? 0.02 : app.hair === 'sangtu' && app.hat === 'none' ? 0.04 : 0)
         : HEAD_TOP[app.hat] || (app.hair === 'bun' ? 1.47 : 1.43);
-      this.headAnchor.position.set(0, top + 0.08 - this.K.bones[B.head][3], 0);
+      const hk = this.K.headK ? this.K.headK[1] : 1; // [people] the head of a build is smaller / larger than the adult's
+      this.headAnchor.position.set(0, app.style === 'real' ? (top - BONES_REAL[B.head][3]) * hk + 0.08 : top + 0.08 - this.K.bones[B.head][3], 0);
       this._faceFace = '';
       return app;
     }
@@ -2521,15 +2627,16 @@
     }
 
     /** switch the skeleton (bone rest positions + inverse binds), the kinematics and the face decal to another style */
-    _setStyle(style) {
-      const K = KIN[style] || KIN.cute;
-      this.style = style; this.K = K;
+    _setStyle(style, kin) {
+      const K = KIN[kin || style] || KIN[style] || KIN.cute;
+      this.style = style; this.K = K; this._kin = kin || style;
       K.bones.forEach(([, parent, x, y, z], i) => {
         const p = parent >= 0 ? K.bones[parent] : null;
         this.bones[i].position.set(x - (p ? p[2] : 0), y - (p ? p[3] : 0), z - (p ? p[4] : 0));
         this.skeleton.boneInverses[i].copy(K.inv[i]);
       });
       this.face.geometry = faceGeometry(style);
+      if (K.headK) this.face.scale.set(K.headK[0], K.headK[1], K.headK[2]); else this.face.scale.set(1, 1, 1); // [people] the build's head
       this._faceFace = '';
       this.phase = this.phase % 1;
     }
@@ -2732,11 +2839,14 @@
       const sd = this._seed * 10;
       const br = Math.sin(t * 2.1 + sd);
       // idle
-      o[C.spineX] = 0.025 + 0.018 * br; o[C.headX] = -0.02 - 0.012 * br;
-      o[C.shLZ] = 0.14 + 0.02 * br; o[C.shRZ] = -0.14 - 0.02 * br; o[C.shLX] = 0.02; o[C.shRX] = 0.02;
-      o[C.elLX] = -0.14; o[C.elRX] = -0.14; o[C.hdLZ] = -0.08; o[C.hdRZ] = 0.08;
-      o[C.hipsZ] = 0.025 * Math.sin(t * 0.55 + sd); o[C.spineZ] = -o[C.hipsZ] * 0.7;
-      o[C.thLZ] = 0.035; o[C.thRZ] = -0.035; o[C.knLX] = 0.03; o[C.knRX] = 0.03; o[C.ftLZ] = -0.03; o[C.ftRZ] = 0.03;
+      // [people] §19.9 a relaxed stance: arms a little away from the body, elbows softly bent, hands turned in; slow
+      // breathing; the weight shifts from one leg to the other now and then; an elder stands a little stooped
+      const eld = this.K.build === 'elder' ? 1 : 0, sh = Math.sin(t * 0.37 + sd) * 0.6 + Math.sin(t * 0.13 + sd * 2) * 0.4;
+      o[C.spineX] = 0.025 + 0.018 * br + 0.1 * eld; o[C.headX] = -0.02 - 0.012 * br - 0.06 * eld; o[C.neckX] = 0.05 * eld;
+      o[C.shLZ] = 0.2 + 0.015 * br; o[C.shRZ] = -0.2 - 0.015 * br; o[C.shLX] = 0.05 + 0.04 * eld; o[C.shRX] = 0.05 + 0.04 * eld;
+      o[C.elLX] = -0.3 - 0.1 * eld; o[C.elRX] = -0.3 - 0.1 * eld; o[C.elLZ] = -0.06; o[C.elRZ] = 0.06; o[C.hdLZ] = -0.12; o[C.hdRZ] = 0.12; o[C.hdLX] = -0.08; o[C.hdRX] = -0.08;
+      o[C.hipsZ] = 0.035 * sh; o[C.spineZ] = -o[C.hipsZ] * 0.75; o[C.headZ] = -o[C.hipsZ] * 0.2;
+      o[C.thLZ] = 0.035 - 0.03 * sh; o[C.thRZ] = -0.035 - 0.03 * sh; o[C.knLX] = 0.03 + 0.06 * Math.max(0, sh) + 0.04 * eld; o[C.knRX] = 0.03 + 0.06 * Math.max(0, -sh) + 0.04 * eld; o[C.ftLZ] = -0.03 + 0.03 * sh; o[C.ftRZ] = 0.03 + 0.03 * sh;
       o[C.ponyX] = 0.04 * Math.sin(t * 1.3 + sd); o[C.ponyZ] = 0.04 * Math.sin(t * 0.9 + sd);
       // walk / run
       const mw = this._moveW;
@@ -3011,7 +3121,7 @@
       push(x, y, z, rotY, app, phase = 0, swing = 0) {
         if (n >= max) return false;
         const a = view(app || DEFAULT);
-        const hs = (a.style === 'real' ? 1 : 0.9) * (Number(a.height) || 1);
+        const hs = (a.style === 'real' ? (KIN[kinKey(a)] || KIN.real).height / 1.62 : 0.9) * (Number(a.height) || 1); // [people] a far child is a child's size
         q.setFromAxisAngle(up, rotY || 0); pv.set(x, y, z); sv.set(hs, hs, hs);
         m4.compose(pv, q, sv); mesh.setMatrixAt(n, m4);
         const sk = lin(skinTone(a.skin || '#f6d0b1')), tp = lin(a.top === 'durumagi' ? a.outerColor || a.topColor : a.topColor || '#888888'), bt = lin(a.bottomColor || '#333333'), hr = lin(a.hat !== 'none' && HAT[a.hat] ? a.hatColor || a.hairColor : a.hairColor || '#222222');
@@ -3059,5 +3169,8 @@
     warm(list) { for (const a of list || []) { try { bodyGeometry(normalize(a)); } catch (e) { G.log.warn('AVATAR', 'warm failed', e); } } for (const f of OPTIONS.face) { faceMaterial(f, 'base', 'real'); faceMaterial(f, 'base', 'cute'); } },
     slotColors,
     _ACTIONS: ACTIONS,
+    // [people] §19.9 the build of a look ('child' | 'youth' | 'adult' | 'elder') and its kinematics (stature, head centre)
+    buildOf: (app) => buildOf(normalize(app)),
+    kin: (app) => { const K = KIN[kinKey(normalize(app))]; return { build: K.build || 'adult', height: K.height, HC: K.HC, L1: K.L1, L2: K.L2 }; },
   };
 })();
