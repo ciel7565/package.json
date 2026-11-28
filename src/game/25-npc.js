@@ -204,6 +204,38 @@
   }
 
   // ---------------------------------------------------------------- per-NPC personality (idle gestures, pace)
+  // [hanbok] CONTRACT §19.1 — every NPC wears a named hanbok look that fits its work. By id for the guides of the valley;
+  // an NPC added later (other places, the 힐링관 staff) gets the look its role words name, else a calm hanbok from its id.
+  // G.data.npcLooks = { looks: { name: appearance patch }, byId: { NPC id: look name }, roles: [[RegExp source, look name]] }
+  const NPC_LOOKS = {
+    hunjang: { label: '훈장님', app: { style: 'real', hair: 'sangtu', hairColor: '#b9b4ad', beard: 'long', hat: 'jeongja', hatColor: '#1f1f22', outer: 'durumagi', outerColor: '#e9e4da', top: 'hanbok', topColor: '#f1ece1', bottom: 'pants', bottomColor: '#e9e4da', footwear: 'taesahye', shoes: '#1f1f22', fan: 'hapjuk', accessoryColor: '#e2c27a', expr: 'neutral', face: 'calm' } },
+    farmer: { label: '농부', app: { style: 'real', hair: 'side', hat: 'strawhat', hatColor: '#e2c27a', top: 'jeoksam', topColor: '#c9b38f', pattern: 'mosi', bottom: 'pants', bottomColor: '#5a4636', footwear: 'jipsin', shoes: '#e2c27a', bag: 'basket', bagColor: '#b88a4a', expr: 'smile' } },
+    culture: { label: '아씨', app: { style: 'real', hair: 'jjok', hairpin: 'binyeo', accessoryColor: '#e2c27a', top: 'samhoejang', topColor: '#f2e18c', trimColor: '#8a3b4b', bottom: 'skirt', bottomColor: '#2f6f8f', footwear: 'unhye', shoes: '#8a3b4b', norigae: 'samjak', norigaeColor: '#8a3b4b', expr: 'smile', face: 'gentle' } },
+    jangGrandma: { label: '장독대 할머니', app: { style: 'real', hair: 'jjok', hairColor: '#b9b4ad', hat: 'ayam', hatColor: '#1f1f22', top: 'hanbok', topColor: '#e8d9b5', outer: 'haengju', outerColor: '#f1ece1', bottom: 'skirt', bottomColor: '#5a4636', footwear: 'gomusin', shoes: '#ffffff', expr: 'smile', face: 'gentle', height: 0.92 } },
+    merchant: { label: '상인', app: { style: 'real', hair: 'sangtu', hat: 'paeraengi', hatColor: '#e2c27a', top: 'jeoksam', topColor: '#e8d9b5', outer: 'jokki', outerColor: '#2e3f6e', bottom: 'pants', bottomColor: '#3c3934', footwear: 'mituri', shoes: '#c9b38f', pouch: 'gwijumeoni', pouchColor: '#8a3b4b', expr: 'laugh' } },
+    seonbi: { label: '선비', app: { style: 'real', hair: 'sangtu', hat: 'gat', outer: 'dopo', outerColor: '#f1ece1', top: 'hanbok', topColor: '#f1ece1', bottom: 'pants', bottomColor: '#e9e4da', belt: 'sejodae', beltColor: '#2e3f6e', footwear: 'taesahye', shoes: '#1f1f22', expr: 'neutral', face: 'calm' } },
+    child: { label: '아이', app: { style: 'real', hair: 'ttaeun', ribbon: 'jebi', ribbonColor: '#d9534f', top: 'saekdong', topColor: '#ffd766', bottom: 'pants', bottomColor: '#2e3f6e', footwear: 'gomusin', shoes: '#d9534f', pouch: 'bokjumeoni', pouchColor: '#d9534f', expr: 'laugh', height: 0.9 } },
+    healstaff: { label: '힐링관 선생님', app: { style: 'real', hair: 'jjok', hairpin: 'dwikkoji', accessoryColor: '#cfcac2', top: 'saenghwal', topColor: '#f1ece1', trimColor: '#2f6f8f', outer: 'baeja', outerColor: '#2f6f8f', bottom: 'saenghwal', bottomColor: '#2e3f6e', footwear: 'gomusin', shoes: '#1f1f22', expr: 'smile', face: 'gentle' } },
+    healstaffM: { label: '힐링관 선생님', app: { style: 'real', hair: 'short', top: 'saenghwal', topColor: '#f1ece1', trimColor: '#2f6f8f', outer: 'jokki', outerColor: '#2f6f8f', bottom: 'saenghwal', bottomColor: '#2e3f6e', footwear: 'gomusin', shoes: '#1f1f22', expr: 'smile', face: 'gentle' } },
+    guide: { label: '안내 선생님', app: { style: 'real', hair: 'ponytail', top: 'saenghwal', topColor: '#a8d8c8', trimColor: '#2e3f6e', bottom: 'saenghwal', bottomColor: '#2e3f6e', footwear: 'gomusin', shoes: '#1f1f22', expr: 'smile' } },
+    potter: { label: '옹기장이', app: { style: 'real', skin: '#c68b62', hair: 'sangtu', hat: 'sugeon', hatColor: '#e8d9b5', top: 'jeoksam', topColor: '#7a6a55', bottom: 'jambang', bottomColor: '#5a4636', footwear: 'jipsin', shoes: '#e2c27a', beard: 'mustache', expr: 'focus' } },
+    cook: { label: '부엌 살림꾼', app: { style: 'real', hair: 'jjok', hat: 'sugeon', hatColor: '#ffffff', top: 'jeoksam', topColor: '#f1ece1', outer: 'haengju', outerColor: '#ffffff', bottom: 'mongdang', bottomColor: '#2c3540', footwear: 'gomusin', shoes: '#f5f0e6', expr: 'smile' } },
+  };
+  const NPC_BY_ID = { NPC001: 'hunjang', NPC002: 'farmer', NPC003: 'culture', NPC004: 'jangGrandma', NPC005: 'merchant' };
+  const NPC_ROLES = [['힐링|상담|매니저|치유', 'healstaff'], ['훈장|서당|강의|교육|선생', 'hunjang'], ['농부|농사|재배|밭|논', 'farmer'], ['장독|장 담|간장|된장', 'jangGrandma'],
+    ['매점|상점|가게|장터|상인|한복집', 'merchant'], ['옹기|가마|공방', 'potter'], ['부엌|요리|주방|음식', 'cook'], ['안내|입구|접수|데스크', 'guide'], ['선비|서원|향교', 'seonbi'], ['아이|어린이|학동', 'child']];
+  G.data.npcLooks = { looks: NPC_LOOKS, byId: NPC_BY_ID, roles: NPC_ROLES.map((r) => r.slice()) };
+  /** the hanbok look of an NPC: its named look (by id, then by role words) over its own appearance, always normalized */
+  function npcLook(id, data) {
+    const own = (data && data.appearance) || {};
+    let name = (data && typeof data.look === 'string' && NPC_LOOKS[data.look]) ? data.look : NPC_BY_ID[id];
+    if (!name) { const role = String((data && (data.role || '')) || '') + ' ' + String((data && data.name) || ''); for (const [re, n] of NPC_ROLES) if (new RegExp(re).test(role)) { name = n; break; } }
+    const look = name ? NPC_LOOKS[name].app : null;
+    const base = look ? Object.assign({}, own, look, { skin: own.skin || look.skin, height: own.height || look.height }) : (G.avatar?.random ? Object.assign(G.avatar.random(G.util.hashInt ? G.util.hashInt('npc:' + id) : id.length), { skin: own.skin }) : own);
+    for (const k of Object.keys(base)) if (base[k] === undefined) delete base[k];
+    return G.avatar?.normalize ? G.avatar.normalize(base) : base;
+  }
+
   const PERSONA = {
     NPC001: { icon: '🧑‍🍳', gestures: ['nod', 'think', 'point', 'clap', 'nod'], walk: 1.3 },
     NPC002: { icon: '👨‍🌾', gestures: ['water', 'harvest', 'think', 'water', 'nod'], walk: 1.35 },
@@ -325,7 +357,7 @@
       E.scene.add(this._root);
       const shadow = !!E.preset?.shadows;
       this._crops = (G.data.layout?.farmPlots || []).map((p) => ({ x: p.x, z: p.z, hw: (p.w || 6) / 2 + 0.55, hd: (p.d || 6) / 2 + 0.55 }));
-      try { G.avatar?.warm?.(Object.values(G.data.npcs || {}).map((n) => n.appearance)); } catch (e) { /* optional */ }
+      try { G.avatar?.warm?.(Object.entries(G.data.npcs || {}).map(([nid, n]) => npcLook(nid, n))); } catch (e) { /* optional */ }
       for (const [id, data] of Object.entries(G.data.npcs || {})) {
         try { this._spawn(id, data, shadow); } catch (e) { G.log.error('NPC', `spawn ${id} failed`, e); }
       }
@@ -372,8 +404,9 @@
     _spawn(id, data, shadow) {
       const [hx, hz] = Array.isArray(data.pos) ? data.pos : [0, 0];
       let rig = null;
-      try { rig = G.avatar?.create ? G.avatar.create(data.appearance || {}, { shadow }) : null; } catch (e) { G.log.warn('NPC', `avatar for ${id} failed, using a capsule`, e); rig = null; }
-      if (!rig) rig = capsuleRig(data.appearance, shadow);
+      const look = npcLook(id, data); // [hanbok] the named hanbok look of this NPC
+      try { rig = G.avatar?.create ? G.avatar.create(look, { shadow }) : null; } catch (e) { G.log.warn('NPC', `avatar for ${id} failed, using a capsule`, e); rig = null; }
+      if (!rig) rig = capsuleRig(look, shadow);
       const group = new THREE.Group();
       group.name = 'npc:' + id;
       group.userData.npcId = id;
@@ -393,7 +426,7 @@
       markAnchor.position.y = (Number(rig.height) || 1.45) + 0.1 + MARK_UP;
       group.add(markAnchor);
       const rec = {
-        id, data, rig, group, position: group.position, focusAnchor, markAnchor, mark3d: null,
+        id, data, rig, group, position: group.position, focusAnchor, markAnchor, mark3d: null, look,
         persona: PERSONA[id] || DEFAULT_PERSONA,
         rotY: data.rotY || 0,
         home: { x: hx, z: hz, rotY: data.rotY || 0, wander: Math.max(0, Number(data.wander) || 0) },
@@ -918,7 +951,7 @@
       for (const rec of this.records.values()) {
         if (rec.portrait) continue;   // a re-run (after a context loss) renders only the missing ones
         try {
-          const rig = G.avatar.create(rec.data.appearance || {}, { shadow: false });
+          const rig = G.avatar.create(rec.look || rec.data.appearance || {}, { shadow: false });
           rig.setExpression?.('happy', 60);
           for (let i = 0; i < 4; i++) rig.update(1 / 30, params);
           rig.group.visible = false;

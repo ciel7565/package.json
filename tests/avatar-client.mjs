@@ -18,7 +18,7 @@
 //
 //   node tests/avatar-client.mjs                       builds a private page (--no-assets) in a temp directory
 //   node tests/avatar-client.mjs --file /abs/page.html test an already built page
-//   options: --json · --headed · --timeout <ms> · --only <a,b> (groups: options, normalize, motion, save, dispose,
+//   options: --json · --headed · --timeout <ms> · --only <a,b> (groups: options, normalize, motion, save, dispose, hanbok,
 //            crowd, editor, phone)
 //   Run it through the shared browser lock (at most two browsers on the build machine).
 // Exit 0 = all passed, 1 = a check failed, 2 = could not run.
@@ -260,6 +260,30 @@ try {
   }
 
   // ------------------------------------------------------------------ editor (normal + easy)
+  // ------------------------------------------------------------------ hanbok (phase 11, lane hanbok)
+  if (want('hanbok')) {
+    const r = await page.evaluate(() => {
+      const A = G.avatar, D = G.data.avatar, legacyTop = D.legacy.top;
+      const npcs = (G.sys.npc?.list?.() || []).map((rec) => ({ id: rec.id, top: rec.rig?.appearance?.top, foot: rec.rig?.appearance?.footwear, outer: rec.rig?.appearance?.outer, look: !!rec.look }));
+      const modernNpc = npcs.filter((n) => legacyTop.includes(n.top) || n.foot === 'sneakers');
+      // nine faces: each one gives the realistic face its own decal
+      const rig = A.create(A.presets[0].appearance, { shadow: false });
+      const maps = new Set();
+      for (const e of D.expressions) { rig.setExpression(e.id, 5); rig.update(1 / 30, { speed: 0 }); maps.add(rig.face.material.map ? rig.face.material.map.uuid : rig.face.material.uuid); }
+      const usual = A.create({ ...A.presets[0].appearance, expr: 'sleepy' }, { shadow: false }); usual.update(1 / 30, { speed: 0 });
+      const sleepyMap = usual.face.material.map ? usual.face.material.map.uuid : usual.face.material.uuid;
+      rig.dispose(); usual.dispose();
+      const looks = G.data.npcLooks ? Object.keys(G.data.npcLooks.looks) : [];
+      return { npcs, modernNpc: modernNpc.length, faces: maps.size, sleepyDiffers: !!sleepyMap, looks, slots: A.slots.length, sets: A.presets.length };
+    });
+    check('every NPC wears its named hanbok look (none in modern clothes)', r.npcs.length >= 5 && r.modernNpc === 0 && r.npcs.every((n) => n.look), JSON.stringify(r.npcs));
+    check('named NPC looks for 훈장 · 장독대 할머니 · 농부 · 상인 · 선비 · 아이 · 힐링관 staff', ['hunjang', 'jangGrandma', 'farmer', 'merchant', 'seonbi', 'child', 'healstaff'].every((k) => r.looks.includes(k)), r.looks.join(' '));
+    check('the nine expressions each draw their own face (setExpression), and a usual face shows at rest', r.faces === 9 && r.sleepyDiffers, `${r.faces} faces`);
+    check('≥ 12 wearable slots and ≥ 24 sets reach the page', r.slots >= 12 && r.sets >= 24, `${r.slots} slots, ${r.sets} sets`);
+    const flat = await page.evaluate(() => { const rig = G.avatar.create(G.avatar.presets[1].appearance, { shadow: false }); const q0 = G.sys.engine.preset.name; rig.update(1 / 30, { speed: 0 }); const low = rig.material.userData; let uni = null; rig.material.onBeforeCompile({ uniforms: {}, vertexShader: '#include <color_vertex>', fragmentShader: '#include <color_fragment>#include <roughnessmap_fragment>#include <metalnessmap_fragment>#include <emissivemap_fragment>' }); void low; try { G.sys.engine.setQuality('medium'); rig.update(1 / 30, { speed: 0 }); } catch (e) { /* no switch */ } const sh = { uniforms: {}, vertexShader: '#include <color_vertex>', fragmentShader: '#include <color_fragment>#include <roughnessmap_fragment>#include <metalnessmap_fragment>#include <emissivemap_fragment>' }; rig.material.onBeforeCompile(sh); const med = sh.uniforms.uAvFlat ? sh.uniforms.uAvFlat.value : null; try { G.sys.engine.setQuality(q0); } catch (e) { /* back */ } rig.update(1 / 30, { speed: 0 }); const sh2 = { uniforms: {}, vertexShader: '#include <color_vertex>', fragmentShader: '#include <color_fragment>#include <roughnessmap_fragment>#include <metalnessmap_fragment>#include <emissivemap_fragment>' }; rig.material.onBeforeCompile(sh2); const lowV = sh2.uniforms.uAvFlat ? sh2.uniforms.uAvFlat.value : null; rig.dispose(); void uni; return { q0, med, low: lowV }; });
+    check('flat colours on low, woven cloth and patterns on medium / high (one shared uniform, no new program)', flat.q0 === 'low' && flat.low === 1 && flat.med === 0, JSON.stringify(flat));
+  }
+
   if (want('editor')) {
     const r = await page.evaluate(async () => {
       const raf = () => new Promise((res) => requestAnimationFrame(() => res()));

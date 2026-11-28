@@ -8,6 +8,11 @@
 //   G.avatar.presets -> 15 ready-made looks [{id, emoji, label, say, appearance}] (frozen, normalized; the first six are
 //                       the title screen's picks) — data in 02-avatar-data.js
 //   G.avatar.far.create(max) -> instanced far figures for crowds (one draw call); G.avatar.triangles(app); G.avatar.cache
+//                       (bounded: { size, max, clear() } — least recently used bodies no rig wears are given back)
+//   G.avatar.slots / expressions -> the table's wearable keys and nine faces (G.data.avatar, 02-avatar-data.js)
+//   Hanbok only (§19.1, lane hanbok): the realistic body is built from the garment kit below (OUTER_KIT · TOP_KIT ·
+//   BOTTOM_KIT tables → robe / crossCollar / sleeves / chima / baji / shoe parts; hats as lathe profiles and shells;
+//   꾸미개 in their own slots); the round style and the far figures draw each piece as its nearest simple form (view).
 //   G.avatar.create(appearance, {shadow=true}) -> rig
 //     rig.group (feet at y=0, faces +Z, ~1.45 m), rig.height, rig.headAnchor, rig.handR, rig.handL
 //     rig.update(dt, {speed, grounded, vy})      locomotion: idle / walk / run / jump / fall / land; above
@@ -19,6 +24,8 @@
 //                                                eased in/out (no overshoot), knees up and arms in, landing squash as usual
 //     rig.stopAction(), rig.currentAction, rig.setAppearance(app), rig.setHeld(name|null),
 //     rig.setLookTarget(vec3|null), rig.setExpression(expr, seconds), rig.dispose()
+//       expr: the nine of the table (neutral smile laugh surprise curious proud shy sleepy focus) or the passing ones
+//       (happy wink blink think talk); appearance.expr is the usual face
 //
 // Rendering: every avatar is ONE rigidly skinned mesh (all body parts merged, bone per part)
 // + one face decal. Body geometry is cached per style combination and shared between
@@ -240,16 +247,23 @@
 
   // ---------------------------------------------------------------- palette slots
   const SLOT = { skin: 0, hair: 1, top: 2, top2: 3, top3: 4, under: 5, bottom: 6, bottom2: 7, shoe: 8, sole: 9, bag: 10, bag2: 11, acc: 12, acc2: 13, white: 14, dark: 15, red: 16, gold: 17, leaf: 18, metal: 19,
-    outer: 20, outer2: 21, sleeve: 22, hat: 23, hat2: 24, band: 25 };
-  const NSLOT = 26;
-  const ROUGH = [0.6, 0.46, 0.86, 0.8, 0.7, 0.86, 0.82, 0.8, 0.55, 0.72, 0.62, 0.6, 0.5, 0.6, 0.7, 0.5, 0.6, 0.32, 0.72, 0.3, 0.84, 0.8, 0.86, 0.7, 0.6, 0.62];
+    outer: 20, outer2: 21, sleeve: 22, hat: 23, hat2: 24, band: 25,
+    // [hanbok] phase 11: 회장 (trim), the 꾸미개 of their own slots, a fixed blue (삼색띠, 전모), the sleeves of a 겉옷
+    trim: 26, nor: 27, pouch: 28, rib: 29, belt: 30, blue: 31, osleeve: 32 };
+  const NSLOT = 33;
+  const ROUGH = [0.6, 0.46, 0.86, 0.8, 0.7, 0.86, 0.82, 0.8, 0.55, 0.72, 0.62, 0.6, 0.5, 0.6, 0.7, 0.5, 0.6, 0.32, 0.72, 0.3, 0.84, 0.8, 0.86, 0.7, 0.6, 0.62,
+    0.78, 0.6, 0.7, 0.62, 0.72, 0.7, 0.84];
   // surface kind per slot (shader): 0 plain, 1 woven cloth, 2 hair strands, 3 skin; + 8 × pattern (FX below)
-  const KIND = [3, 2, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1];
-  const FX = { none: 0, gold: 1, cloud: 2, flower: 3, stripes: 4, straw: 5, tiger: 6 };
+  const KIND = [3, 2, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+  const FX = { none: 0, gold: 1, cloud: 2, flower: 3, stripes: 4, straw: 5, tiger: 6, gyeokja: 7, jul: 8, nubi: 9, mosi: 10, myeongju: 11, gwigap: 12, mulgyeol: 13 };
+  const STRAW_HATS = new Set(['strawhat', 'chorip', 'paeraengi', 'satgat']);
+  const RED_TASSEL = new Set(['ayam', 'jobawi', 'nambawi', 'pungcha', 'jeollip']);
+  const GOLD_HAT = new Set(['jokduri', 'hwagwan', 'hogeon', 'gulle', 'sangmo']);
 
   function slotColors(app) {
     const out = new Array(NSLOT);
     const topL = lum(app.topColor), botL = lum(app.bottomColor);
+    const strawFoot = app.footwear === 'jipsin' || app.footwear === 'mituri';
     out[SLOT.skin] = skinTone(app.skin);
     out[SLOT.hair] = app.hairColor;
     out[SLOT.top] = app.topColor;
@@ -258,8 +272,8 @@
     out[SLOT.under] = topL > 0.6 ? '#7a6250' : '#efe8dc';
     out[SLOT.bottom] = app.bottomColor;
     out[SLOT.bottom2] = shade(app.bottomColor, botL < 0.2 ? 0.18 : -0.25);
-    out[SLOT.shoe] = app.footwear === 'jipsin' ? '#c9a964' : app.shoes;
-    out[SLOT.sole] = app.footwear === 'jipsin' ? '#a88a4c' : lum(app.shoes) > 0.75 ? '#cfc8bb' : '#f2eee6';
+    out[SLOT.shoe] = app.footwear === 'jipsin' ? '#c9a964' : app.footwear === 'mituri' ? '#b9a27a' : app.footwear === 'namaksin' ? '#8a6440' : app.shoes;
+    out[SLOT.sole] = strawFoot ? '#a88a4c' : app.footwear === 'namaksin' ? '#6e4e30' : lum(app.shoes) > 0.75 ? '#cfc8bb' : '#f2eee6';
     out[SLOT.bag] = app.bagColor;
     out[SLOT.bag2] = shade(app.bagColor, lum(app.bagColor) < 0.2 ? 0.2 : -0.28);
     out[SLOT.acc] = app.accessoryColor;
@@ -273,22 +287,45 @@
     out[SLOT.outer] = app.outerColor;
     out[SLOT.outer2] = shade(app.outerColor, lum(app.outerColor) < 0.2 ? 0.22 : -0.25);
     out[SLOT.sleeve] = app.topColor;
-    out[SLOT.hat] = app.hat === 'strawhat' && !HEX.test(app.hatColor) ? '#e2c27a' : app.hatColor;
-    out[SLOT.hat2] = app.hat === 'strawhat' ? '#8a2f2f' : app.hat === 'jokduri' || app.hat === 'hogeon' ? '#e8b84a' : app.hat === 'ayam' || app.hat === 'jobawi' ? '#c8323c' : shade(app.hatColor, lum(app.hatColor) < 0.2 ? 0.3 : -0.3);
-    out[SLOT.band] = app.pattern === 'geumbak' ? (app.bottom === 'skirt' ? shade(app.bottomColor, -0.18) : shade(app.topColor, -0.3)) : out[SLOT.top3];
+    out[SLOT.hat] = STRAW_HATS.has(app.hat) && !HEX.test(app.hatColor) ? '#e2c27a' : app.hatColor;
+    out[SLOT.hat2] = app.hat === 'strawhat' ? '#8a2f2f' : GOLD_HAT.has(app.hat) ? '#e8b84a' : RED_TASSEL.has(app.hat) ? '#c8323c' : shade(app.hatColor, lum(app.hatColor) < 0.2 ? 0.3 : -0.3);
+    const chima = !!(BOTTOM_KIT[app.bottom] || {}).chima || app.bottom === 'skirt';
+    out[SLOT.band] = app.pattern === 'geumbak' || BOTTOM_KIT[app.bottom]?.bands ? (chima ? shade(app.bottomColor, -0.18) : shade(app.topColor, -0.3)) : out[SLOT.top3];
+    if (app.outer === 'dallyeong') out[SLOT.band] = shade(app.outerColor, -0.2);
+    out[SLOT.trim] = app.trimColor || out[SLOT.top3];
+    out[SLOT.nor] = app.norigaeColor || app.accessoryColor;
+    out[SLOT.pouch] = app.pouchColor || app.accessoryColor;
+    out[SLOT.rib] = app.ribbonColor || '#c8323c';
+    out[SLOT.belt] = app.beltColor || '#2e3f6e';
+    out[SLOT.blue] = '#2f5fb0';
+    out[SLOT.osleeve] = app.outerColor;
     return out;
   }
-  /** pattern per slot (shader): 금박 on bands (and all over a 당의), tone-on-tone cloud / flower on the garments, 색동 sleeves */
+  /** pattern per slot (shader): 금박 on bands (and all over a 당의), tone-on-tone motifs and fabrics on the garments, 색동 sleeves */
   function slotFx(app) {
     const fx = new Array(NSLOT).fill(0);
-    const tone = app.pattern === 'cloud' ? FX.cloud : app.pattern === 'flower' ? FX.flower : 0;
-    if (tone) { fx[SLOT.top] = tone; fx[SLOT.bottom] = tone; fx[SLOT.outer] = tone; fx[SLOT.sleeve] = tone; }
-    if (app.pattern === 'geumbak') { fx[SLOT.band] = FX.gold; if (app.top === 'dangui') fx[SLOT.top] = FX.gold; fx[SLOT.sleeve] = app.top === 'dangui' ? FX.gold : 0; }
-    if (app.top === 'saekdong') fx[SLOT.sleeve] = FX.stripes;
-    if (app.footwear === 'jipsin') { fx[SLOT.shoe] = FX.straw; fx[SLOT.sole] = FX.straw; }
-    if (app.hat === 'strawhat') fx[SLOT.hat] = FX.straw;
+    const P = FX[app.pattern] || 0;
+    const tone = app.pattern !== 'geumbak' && app.pattern !== 'saekdong' ? P : 0;
+    if (tone) for (const k of ['top', 'bottom', 'outer', 'sleeve', 'osleeve']) fx[SLOT[k]] = tone;
+    const OD = OUTER_KIT[app.outer] || {};
+    if (app.pattern === 'geumbak') { fx[SLOT.band] = FX.gold; if (app.top === 'dangui' || app.outer === 'dangui') { fx[SLOT.top] = FX.gold; fx[SLOT.outer] = FX.gold; fx[SLOT.osleeve] = FX.gold; } }
+    if (BOTTOM_KIT[app.bottom]?.bands || app.outer === 'dangui') fx[SLOT.band] = FX.gold;
+    if (app.outer === 'dallyeong') fx[SLOT.band] = FX.cloud;
+    if (app.top === 'saekdong' || app.pattern === 'saekdong') fx[SLOT.sleeve] = FX.stripes;
+    if (OD.stripes) fx[SLOT.osleeve] = FX.stripes;
+    if (app.outer === 'hwarot') fx[SLOT.outer] = FX.flower;
+    if ((TOP_KIT[app.top] || {}).quilt) fx[SLOT.top] = fx[SLOT.sleeve] = FX.nubi;
+    if (OD.quilt) fx[SLOT.outer] = fx[SLOT.osleeve] = FX.nubi;
+    if ((BOTTOM_KIT[app.bottom] || {}).quilt) fx[SLOT.bottom] = FX.nubi;
+    if ((TOP_KIT[app.top] || {}).sheer && !tone) fx[SLOT.top] = fx[SLOT.sleeve] = FX.mosi;
+    if (app.footwear === 'jipsin' || app.footwear === 'mituri') { fx[SLOT.shoe] = FX.straw; fx[SLOT.sole] = FX.straw; }
+    if (app.footwear === 'unhye') fx[SLOT.shoe] = FX.cloud;
+    if (STRAW_HATS.has(app.hat)) fx[SLOT.hat] = FX.straw;
     if (app.hat === 'hogeon') fx[SLOT.hat] = FX.tiger;
+    if (app.hat === 'gulle') fx[SLOT.hat] = FX.stripes;
     if (app.bag === 'basket') { fx[SLOT.bag] = FX.straw; }
+    if (app.pouch === 'bokjumeoni') fx[SLOT.pouch] = FX.gold;
+    if (app.ribbon === 'doturak') fx[SLOT.rib] = FX.gold;
     return fx;
   }
 
@@ -394,6 +431,9 @@
   // ---------------------------------------------------------------- body builder
   const geoCache = new Map();
   function styleSig(app) { return [app.style, app.hair, app.hat, app.top, app.bottom, app.footwear, app.bag, app.accessory].join('|'); }
+  /** the realistic body depends on every piece (one geometry per combination, cached) */
+  const SHAPE_KEYS = ['hair', 'beard', 'hat', 'outer', 'top', 'bottom', 'footwear', 'norigae', 'pouch', 'fan', 'hairpin', 'ribbon', 'belt', 'bag'];
+  function shapeSig(app) { return app.style === 'real' ? 'r|' + SHAPE_KEYS.map((k) => app[k]).join('|') + (app.pattern === 'geumbak' ? '|g' : '') : styleSig(view(app)); }
   const HAT = { strawhat: true, cap: true, gat: true, jokduri: true, ayam: true, jobawi: true, hogeon: true, bokgeon: true };
   const HANBOK_TOPS = new Set(['hanbok', 'saekdong', 'dangui', 'baeja', 'kwaeja', 'durumagi']);
   // the round style draws the newer hair styles from its six shells + a few extra volumes (cuteExtras)
@@ -770,14 +810,27 @@
     }
     g.computeVertexNormals();
   }
+  // the body cache is bounded (§19.1): least recently used bodies that no rig wears any more are given back
+  const CACHE_MAX = 64;
+  const geoRefs = new Map();
+  const geoRef = (key, d) => { if (!key) return; const n = (geoRefs.get(key) || 0) + d; if (n > 0) geoRefs.set(key, n); else geoRefs.delete(key); };
+  function trimCache(keep) {
+    if (geoCache.size <= CACHE_MAX) return;
+    for (const [k, g] of geoCache) {
+      if (geoCache.size <= CACHE_MAX) break;
+      if (k === keep || geoRefs.has(k)) continue;
+      geoCache.delete(k); g.dispose();
+    }
+  }
   function bodyGeometry(app) {
-    const v = view(app);
-    const key = styleSig(v);
+    const key = shapeSig(app);
     let g = geoCache.get(key);
+    if (g) { geoCache.delete(key); geoCache.set(key, g); } // most recently used at the end
     if (!g) {
       const t0 = performance.now();
-      g = buildBody(v);
+      g = buildBody(app.style === 'real' ? app : view(app));
       geoCache.set(key, g);
+      trimCache(key);
       G.log.debug('AVATAR', `geometry ${key}: ${g.attributes.position.count} verts, ${(performance.now() - t0).toFixed(1)}ms`);
     }
     return g;
@@ -969,16 +1022,109 @@
     return pts;
   }
 
+  // ---------------------------------------------------------------- the garment kit (§19.1, lane hanbok)
+  // Every hanbok piece of the table is a few lines of data below, drawn by a handful of parametric parts:
+  //   robe()     a garment shell from the shoulders to a hem (may depend on the angle: slits, curved 당의 panels),
+  //              optional front opening, flare, pleats from the waist (철릭), a back flap (도포), an edge band
+  //   collar()   the overlapping 깃 (LEFT front over the RIGHT, as a hanbok closes) with 동정, the 섶 line and the
+  //              고름 that hangs from the right chest on the cloth spring — or a round 단령 collar, a band, or none
+  //   sleeve     rings along the arm: narrow, wide with the curved 배래 (the lower line of the sleeve), short, none;
+  //              끝동 (cuff band), 한삼 (the white cuff of 원삼 / 활옷)
+  //   chima()    a high-waisted wrapped skirt with pleats, volume and gold bands (스란 / 대란)
+  //   baji()     wide trousers tied with 대님 at the ankle, or short work trousers
+  //   shoe()     heel → toe sections with a raised toe, sides, a boot shaft, wooden teeth
+  // Hats are lathe profiles and shells in buildRealHat; trinkets have slots of their own (노리개, 주머니, 부채, 머리꽂이,
+  // 댕기, 띠, 짐). Colours come from the palette slots, patterns from the slot's FX code (shader below).
+  const WIDE = { wide: 1, wider: 1.5 };
+  /** 겉옷: o = { len, sleeve, collar, gap, flare, slit, back, pleat, band, apron, head, goreum, kid } */
+  const OUTER_KIT = {
+    durumagi: { len: 0.36, sleeve: 'wide', collar: 'cross', goreum: 1, flare: 0.1 },
+    dopo: { len: 0.2, sleeve: 'wider', collar: 'cross', goreum: 0.6, flare: 0.13, back: 1 },
+    hakchang: { len: 0.22, sleeve: 'wider', collar: 'cross', goreum: 0, flare: 0.12, band: 'trim' },
+    nubi: { len: 0.36, sleeve: 'wide', collar: 'cross', goreum: 1, flare: 0.1, quilt: 1 },
+    kkachi: { len: 0.42, sleeve: 'wide', collar: 'cross', goreum: 1, flare: 0.09, stripes: 1 },
+    dallyeong: { len: 0.17, sleeve: 'wider', collar: 'round', goreum: 0, flare: 0.13, badge: 1 },
+    wonsam: { len: (a) => 0.5 - 0.3 * smooth(1.2, 2.6, Math.abs(a)), sleeve: 'wider', collar: 'cross', goreum: 0, flare: 0.12, gap: 0.05, slit: 0.95, stripes: 1, hansam: 1 },
+    hwarot: { len: (a) => 0.42 - 0.3 * smooth(1.2, 2.6, Math.abs(a)), sleeve: 'wider', collar: 'cross', goreum: 0, flare: 0.13, gap: 0.05, slit: 0.95, stripes: 1, hansam: 1 },
+    cheollik: { len: 0.3, sleeve: 'wide', collar: 'cross', goreum: 1, flare: 0.16, pleat: 1.02 },
+    jangot: { len: 0.55, sleeve: 'none', collar: 'none', head: 1, gap: 0.55, flare: 0.06, band: 'trim' },
+    sseugae: { len: 0.86, sleeve: 'none', collar: 'none', head: 1, gap: 0.5, flare: 0.1, pleat: 2 },
+    kwaeja: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.9 : 0.5), sleeve: 'none', collar: 'v', gap: 0.16, flare: 0.05, open: 1 },
+    jeonbok: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.95 : Math.abs(a) > 2.95 ? 0.7 : 0.42), sleeve: 'none', collar: 'none', gap: 0.05, flare: 0.06, open: 1 },
+    gugunbok: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.95 : Math.abs(a) > 2.95 ? 0.7 : 0.42), sleeve: 'narrow', sleeveSlot: 'red', collar: 'none', gap: 0.05, flare: 0.06, open: 1, under: 0.36 },
+    dapho: { len: (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.9 : 0.44), sleeve: 'short', collar: 'none', gap: 0.05, flare: 0.06, open: 1 },
+    baeja: { len: 0.97, sleeve: 'none', collar: 'v', gap: 0.16, flare: 0.008, fur: 1, open: 1 },
+    jokki: { len: 0.92, sleeve: 'none', collar: 'v', gap: 0.02, flare: 0.006, buttons: 5, pockets: 1, open: 1 },
+    magoja: { len: 0.96, sleeve: 'narrow', collar: 'band', gap: 0.02, flare: 0.012, buttons: 2 },
+    dangui: { len: (a) => 0.86 + 0.27 * Math.pow(Math.abs(Math.sin(a)), 3), sleeve: 'narrow', collar: 'cross', goreum: 1, flare: 0.045, band: 'gold', short: 1 },
+    haengju: { apron: 1 },
+  };
+  /** 저고리: trim 0 = 민, 1 = 반회장 (깃 · 고름 · 끝동), 2 = 삼회장 (+ 곁마기); thick = padding */
+  const TOP_KIT = {
+    hanbok: { trim: 0 }, banhoejang: { trim: 1 }, samhoejang: { trim: 2 }, saekdong: { trim: 1, stripes: 1 }, kkaekki: { trim: 0, sheer: 1 },
+    nubi: { trim: 0, quilt: 1, thick: 0.004 }, jeoksam: { trim: 0, plain: 1 }, som: { trim: 0, thick: 0.006 }, saenghwal: { trim: 1, band: 1 },
+  };
+  /** 아래옷: chima { hem, flare, pleats, bands } or baji { end, width, tie, kid } */
+  const BOTTOM_KIT = {
+    skirt: { chima: 1, hem: 0.035, flare: 0.17, pleats: 22 }, tongchima: { chima: 1, hem: 0.26, flare: 0.12, pleats: 18 },
+    seuran: { chima: 1, hem: 0.02, flare: 0.19, pleats: 24, bands: [0.17] }, daeran: { chima: 1, hem: 0.006, flare: 0.22, pleats: 26, bands: [0.21, 0.1] },
+    mongdang: { chima: 1, hem: 0.4, flare: 0.1, pleats: 16 }, pants: { end: 0.13, width: 1, tie: 1 }, pungcha: { end: 0.13, width: 0.9, tie: 1, split: 1 },
+    jambang: { end: 0.52, width: 1.1, tie: 0 }, nubibaji: { end: 0.13, width: 1.15, tie: 1, quilt: 1 }, saenghwal: { end: 0.12, width: 0.7, tie: 0, cuff: 1 },
+  };
+  const STRAW_FEET = new Set(['jipsin', 'mituri']);
+
+  /** a garment shell around the torso and below it: yTop → hem(a); off = distance from the skin */
+  function robe(yTop, hem, off, o) {
+    const flare = o.flare || 0, gap = o.gap || 0, pl = o.pleat, back = o.back;
+    return sweep((v, u, out) => {
+      const a = gap ? lerp(gap, TAU - gap, u) : u * TAU;
+      const aa = a > Math.PI ? a - TAU : a;
+      const yb = typeof hem === 'function' ? hem(aa) : hem;
+      const y = lerp(typeof yTop === 'function' ? yTop(aa) : yTop, yb, v);
+      const r = torsoAt(Math.min(1.405, Math.max(0.84, y)));
+      let fl = flare * smooth(o.flareFrom || 1.02, yb, y);
+      let k = 1;
+      if (pl && y < pl) k += 0.05 * Math.sin(a * 44) * smooth(pl, pl - 0.08, y);                     // 철릭: pleats below the waist
+      if (back) fl += 0.012 * smooth(1.2, 0.8, y) * smooth(1.6, 2.6, Math.abs(a > Math.PI ? a - TAU : a)); // 도포: the back flap
+      const p = se(a, (Math.max(r[0], y < 0.84 ? 0.15 : 0) + off + fl) * k, (Math.max(r[1], y < 0.84 ? 0.1 : 0) + off + fl * 0.9) * k, 2.3);
+      out[0] = p[0]; out[1] = y; out[2] = (y < 0.84 ? 0 : r[2]) + p[1];
+    }, { nu: o.nu || 34, nv: o.nv || 16, open: !!gap, cap0: false, cap1: false });
+  }
+  /** a ribbon of cloth that hangs on the cloth spring (고름, 끈, 띠 ends): from p, length, width, sway */
+  function hangBand(P, p, len, w, rz, slot, bone = B.cloth) {
+    P.add(xf(rbox(w, len, 0.004, 0.002), p[0], p[1] - len / 2, p[2], -0.06, -0.5, rz), bone, slot);
+  }
+  /** 깃 + 동정 + 섶 + 고름 of a crossed collar (left front over right, tied on the right chest) */
+  function crossCollar(P, o) {
+    const S = SLOT;
+    const cp = collarPath(o.off, o.yEnd, -0.075);
+    P.add(sweepPath(cp, o.w || 0.013, { nu: 6, nv: 22, flat: 0.45 }), torsoW, o.slot);
+    if (o.dongjeong !== false) P.add(sweepPath(cp.slice(0, 8).map((p, i) => [p[0], p[1] + 0.008, p[2] + 0.006 * (i > 3 ? 1 : 0.4)]), 0.0065, { nu: 5, nv: 14, flat: 0.5 }), torsoW, S.white);
+    const sb = cp[cp.length - 1];
+    P.add(sweepPath([sb, torsoPt(-0.55, lerp(sb[1], o.hemY, 0.5), o.off + 0.006), torsoPt(-0.62, o.hemY + 0.01, o.off + 0.006)], 0.004, { nu: 4, nv: 10 }), o.weight || torsoW, o.seop);
+    if (o.goreum) {
+      const kn = torsoPt(-0.58, o.knotY, o.off + 0.02), L = o.goreum;
+      P.add(xf(sphere(0.013, 10, 8), kn[0], kn[1], kn[2], 0, 0, 0, 1.4, 1, 0.7), B.cloth, o.goC);
+      P.add(xf(rbox(0.032, 0.3 * L, 0.004, 0.002), kn[0] + 0.012, kn[1] - 0.155 * L, kn[2] + 0.006, -0.06, -0.5, 0.06), B.cloth, o.goC);
+      P.add(xf(rbox(0.026, 0.22 * L, 0.004, 0.002), kn[0] - 0.014, kn[1] - 0.115 * L, kn[2] + 0.01, -0.05, -0.5, -0.08), B.cloth, o.goC);
+      for (const s of [1, -1]) P.add(xf(rbox(0.05, 0.03, 0.006, 0.003), kn[0] + s * 0.022, kn[1] + 0.004, kn[2] + 0.002, 0, -0.5, s * 0.5), B.cloth, o.goC);
+    }
+    return cp;
+  }
+  /** knotted buttons (매듭단추) down the front */
+  function knotButtons(P, n, y0, y1, off, slot) { for (let i = 0; i < n; i++) { const p = torsoPt(0, lerp(y0, y1, n > 1 ? i / (n - 1) : 0), off); P.add(xf(sphere(0.0075, 8, 6), p[0], p[1], p[2]), torsoW, slot); } }
+
   function buildReal(app) {
     const P = new Parts();
     const S = SLOT;
-    const top = app.top, bottom = app.bottom, hair = app.hair, hat = app.hat, acc = app.accessory, fw = app.footwear;
-    const hanbok = HANBOK_TOPS.has(top);
-    const skirtB = bottom === 'skirt';
-    const chima = hanbok && skirtB;
-    const longCoat = top === 'durumagi';
-    const fem = skirtB;
-    const jeoHem = top === 'dangui' ? (a) => 0.86 + 0.27 * Math.pow(Math.abs(Math.sin(a)), 3) : chima ? 1.17 : 0.95;
+    const OK = OUTER_KIT[app.outer] || null, TK = TOP_KIT[app.top] || TOP_KIT.hanbok, BK = BOTTOM_KIT[app.bottom] || BOTTOM_KIT.pants;
+    const chima = !!BK.chima;
+    const apron = OK && OK.apron;
+    const robeO = OK && !apron ? OK : null;              // a 겉옷 that is a garment shell
+    const longRobe = robeO && (typeof robeO.len === 'function' || robeO.len < 0.8) && !robeO.open && !robeO.head;
+    const fem = chima;
+    const jeoHem = chima ? 1.17 : TK.band ? 0.98 : 0.95;
+    const jeoOff = (chima ? 0.014 : 0.008) + (TK.thick || 0);
 
     // ---- head, ears, nose, neck (skin)
     P.add(headShell(0, 40, 30), B.head, S.skin);
@@ -997,111 +1143,117 @@
       P.add(xf(torus(0.024, 0.005, 5, 14, Math.PI * 1.25), s * (HEAD.rx + 0.006), HEAD.cy - 0.008, -0.016, 0, s * (Math.PI / 2 - 0.35), Math.PI * 0.55, 1, 1.3, 1), B.head, S.skin);
     }
     P.add(rings([[1.515, 0.05, 0.053, 0, -0.012], [1.46, 0.051, 0.054, 0, -0.012], [1.405, 0.056, 0.058, 0, -0.014], [1.37, 0.07, 0.07, 0, -0.012]], { nu: 14, nv: 6 }), torsoW, S.skin);
-    // upper chest skin (shows in a hanbok's V and above a crew neck)
     P.add(torsoShell(1.405, 1.25, -0.003, { nu: 22, nv: 5 }), torsoW, S.skin);
 
-    // ---- hair
+    // ---- hair, hat, beard
     buildRealHair(P, app);
     buildRealHat(P, app);
+    buildRealBeard(P, app);
 
-    // ---- upper garments
-    const torsoSlot = top === 'apron' ? S.under : longCoat ? S.outer : S.top;
-    if (top === 'tshirt' || top === 'shirt' || top === 'hoodie' || top === 'jacket' || top === 'apron') {
-      const th = top === 'hoodie' ? 0.012 : top === 'jacket' ? 0.01 : 0.007;
-      P.add(torsoShell(1.4, top === 'jacket' ? 0.9 : 0.91, th, { flare: top === 'hoodie' ? 0.01 : 0.004 }), torsoW, torsoSlot);
-      if (top === 'tshirt') P.add(xf(torus(0.064, 0.007, 6, 26), 0, 1.398, -0.008, Math.PI / 2 - 0.05, 0, 0, 1, 0.9, 1), torsoW, S.top2);
-      if (top === 'shirt' || top === 'apron') {
-        for (const s of [1, -1]) P.add(xf(rbox(0.06, 0.04, 0.006, 0.003), s * 0.035, 1.39, 0.045, -0.85, s * -0.45, s * 0.35), B.spine, top === 'apron' ? S.under : S.top2);
-        P.add(sweepPath([torsoPt(0, 1.38, 0.008), torsoPt(0, 1.2, 0.008), torsoPt(0, 0.95, 0.008)], 0.006, { nu: 5, nv: 10, flat: 0.4 }), torsoW, top === 'apron' ? S.under : S.top2);
-        for (const y of [1.32, 1.22, 1.12, 1.02]) { const p = torsoPt(0, y, 0.012); P.add(xf(sphere(0.0045, 6, 4), p[0], p[1], p[2]), torsoW, S.white); }
-      }
-      if (top === 'hoodie') {
-        P.add(xf(sphere(1, 18, 12), 0, 1.4, -0.085, 0.2, 0, 0, 0.11, 0.055, 0.06), B.spine, S.top);
-        P.add(xf(torus(0.07, 0.016, 6, 22), 0, 1.4, -0.01, Math.PI / 2 - 0.15, 0, 0), torsoW, S.top);
-        const pc = torsoPt(0, 1.02, 0.014); P.add(xf(rbox(0.17, 0.09, 0.012, 0.01), pc[0], pc[1], pc[2] - 0.002), torsoW, S.top2);
-        for (const s of [1, -1]) P.add(xf(capsule(0.003, 0.08, 4), s * 0.03, 1.33, torsoPt(0, 1.33, 0.02)[2]), B.spine, S.white);
-      }
-      if (top === 'jacket') {
-        P.add(xf(cyl(0.064, 0.072, 0.045, 18, true), 0, 1.405, -0.01, 0, 0, 0, 1, 1, 0.96), torsoW, S.top);
-        P.add(sweepPath([torsoPt(0, 1.4, 0.012), torsoPt(0, 1.15, 0.012), torsoPt(0, 0.91, 0.012)], 0.003, { nu: 4, nv: 10 }), torsoW, S.metal);
-        P.add(torsoShell(0.945, 0.9, 0.013, { nv: 2 }), torsoW, S.top2);
-      }
-      if (top === 'apron') {
-        const ap = sweep((v, u, out) => { const y = lerp(1.3, 0.62, v); const r = torsoAt(Math.max(0.84, Math.min(1.4, y))); const a = lerp(-0.95, 0.95, u); const p = se(a, r[0] + 0.012 + 0.03 * smooth(0.95, 0.62, y), r[1] + 0.012 + 0.03 * smooth(0.95, 0.62, y), 2.3); out[0] = p[0]; out[1] = y; out[2] = r[2] + p[1]; }, { nu: 14, nv: 10, open: true });
-        P.add(ap, skirtW, S.top);
-        P.add(sweepPath([torsoPt(0.8, 1.3, 0.014), [0.07, 1.42, -0.02], [0, 1.44, -0.06], [-0.07, 1.42, -0.02], torsoPt(-0.8, 1.3, 0.014)], 0.005, { nu: 5, nv: 14, flat: 0.4 }), B.spine, S.top);
-        P.add(torsoShell(1.06, 1.035, 0.016, { nv: 1 }), torsoW, S.top);
-      }
+    // ---- 저고리 (always worn): body, collar, 곁마기
+    const trimTop = TK.trim ? S.trim : TK.stripes ? S.top3 : S.top2;
+    if (!(robeO && robeO.short)) { // a 당의 replaces the 저고리 body (the 저고리 shows at the collar and the cuffs)
+      P.add(torsoShell(1.402, jeoHem, jeoOff, { nu: 32, nv: 10, flare: chima ? 0.006 : 0.016, flareFrom: 1.2 }), torsoW, S.top);
     }
-    if (hanbok) {
-      const jeTop = longCoat ? null : S.top;
-      if (jeTop != null) P.add(torsoShell(1.402, jeoHem, top === 'dangui' ? 0.02 : chima ? 0.014 : 0.008, { nu: 32, nv: top === 'dangui' ? 14 : 10, flare: top === 'dangui' ? 0.045 : chima ? 0.006 : 0.016, flareFrom: 1.2 }), top === 'dangui' ? coatW : torsoW, jeTop);
-      if (top === 'dangui') { // the gold border along the slit hem
-        P.add(sweep((v, u, out) => { const a = u * TAU; const yb = jeoHem(a); const y = yb + (1 - v) * 0.035; const r = torsoAt(Math.min(1.4, Math.max(0.84, y))); const fl = 0.045 * smooth(1.2, yb, y); const p = se(a, r[0] + 0.022 + fl, r[1] + 0.022 + fl * 0.85, 2.3); out[0] = p[0]; out[1] = y; out[2] = r[2] + p[1]; }, { nu: 48, nv: 1 }), coatW, S.band);
+    const knotY = chima ? 1.215 : 1.17;
+    if (TK.band) { // 생활한복: a straight band collar and knotted buttons instead of the 고름
+      P.add(sweepPath(collarPath(jeoOff, 1.24, -0.02), 0.011, { nu: 6, nv: 18, flat: 0.45 }), torsoW, trimTop);
+      knotButtons(P, 3, 1.22, 1.06, jeoOff + 0.008, trimTop);
+    } else if (!(robeO && robeO.collar === 'cross' && longRobe) && !(robeO && robeO.collar === 'round')) {
+      crossCollar(P, { off: jeoOff, yEnd: chima ? 1.245 : 1.2, hemY: jeoHem, knotY, slot: trimTop, seop: S.top2, goC: TK.trim ? S.trim : chima || TK.stripes ? S.top3 : S.top2, goreum: TK.plain ? 0.75 : chima ? 1 : 0.85 });
+    } else {
+      // under a long crossed robe: the 저고리's own 동정 shows as a layer at the neck
+      P.add(sweepPath(collarPath(jeoOff, 1.3, -0.04).slice(0, 7), 0.008, { nu: 5, nv: 12, flat: 0.5 }), torsoW, S.white);
+    }
+    if (TK.trim === 2) for (const s of [1, -1]) P.add(xf(sphere(1, 10, 8), s * 0.155, 1.3, -0.005, 0, 0, s * 0.2, 0.02, 0.05, 0.06), torsoW, S.trim); // 곁마기
+    if (TK.quilt) for (let i = 0; i < 6; i++) { const y = lerp(1.36, jeoHem + 0.03, i / 5); P.add(torsoShell(y + 0.002, y - 0.002, jeoOff + 0.002, { nu: 32, nv: 1 }), torsoW, S.top2); }
+
+    // ---- 겉옷
+    let outerSleeve = null, outerHem = null;
+    if (robeO) {
+      const o = robeO, slot = S.outer;
+      const yTop = o.head ? 1.405 : 1.4;
+      const off = o.open ? 0.03 : 0.032;
+      const hemFn = typeof o.len === 'function' ? o.len : o.len;
+      outerHem = typeof o.len === 'function' ? o.len(0) : o.len;
+      const w = longRobe || o.pleat ? coatW : torsoW;
+      let shell = robe(yTop, hemFn, off, { flare: o.flare, gap: o.gap, pleat: o.pleat === 1.02 ? 1.02 : 0, back: o.back, nu: o.pleat ? 48 : 34, nv: longRobe ? 18 : 12, flareFrom: o.pleat ? 1.02 : 1.05 });
+      if (o.sleeve === 'none' || o.sleeve === 'short') { // armholes: pull the shoulder caps in (sleeveless / short sleeves)
+        const vp = shell.attributes.position;
+        for (let i = 0; i < vp.count; i++) { const x = vp.getX(i), y = vp.getY(i); if (y > 1.2 && Math.abs(x) > 0.13) vp.setX(i, Math.sign(x) * (0.13 + (Math.abs(x) - 0.13) * 0.4)); }
+        shell.computeVertexNormals();
       }
-      // 깃 + 동정 + 섶 + 고름
-      const off = longCoat ? 0.03 : 0.008;
-      const cp = collarPath(off, chima ? 1.245 : 1.2, -0.075);
-      P.add(sweepPath(cp, 0.013, { nu: 6, nv: 22, flat: 0.45 }), torsoW, longCoat ? S.outer2 : chima || top === 'saekdong' ? S.top3 : S.top2);
-      P.add(sweepPath(cp.slice(0, 8).map((p, i) => [p[0], p[1] + 0.008, p[2] + 0.006 * (i > 3 ? 1 : 0.4)]), 0.0065, { nu: 5, nv: 14, flat: 0.5 }), torsoW, S.white);
-      const sb = cp[cp.length - 1];
-      const hemY = typeof jeoHem === 'function' ? 0.86 : longCoat ? 0.45 : jeoHem;
-      P.add(sweepPath([sb, torsoPt(-0.55, lerp(sb[1], hemY, 0.5), off + 0.006), torsoPt(-0.62, hemY + 0.01, off + 0.006)], 0.004, { nu: 4, nv: 10 }), longCoat ? coatW : torsoW, longCoat ? S.outer2 : S.top2);
-      const kn = torsoPt(-0.58, chima ? 1.215 : 1.17, off + 0.02);
-      const goC = longCoat ? S.outer2 : top === 'dangui' ? S.band : S.top3;
-      P.add(xf(sphere(0.013, 10, 8), kn[0], kn[1], kn[2], 0, 0, 0, 1.4, 1, 0.7), B.cloth, goC);
-      P.add(xf(rbox(0.032, chima ? 0.3 : 0.24, 0.004, 0.002), kn[0] + 0.012, kn[1] - (chima ? 0.155 : 0.125), kn[2] + 0.006, -0.06, -0.5, 0.06), B.cloth, goC);
-      P.add(xf(rbox(0.026, chima ? 0.22 : 0.18, 0.004, 0.002), kn[0] - 0.014, kn[1] - (chima ? 0.115 : 0.095), kn[2] + 0.01, -0.05, -0.5, -0.08), B.cloth, goC);
-      for (const s of [1, -1]) P.add(xf(rbox(0.05, 0.03, 0.006, 0.003), kn[0] + s * 0.022, kn[1] + 0.004, kn[2] + 0.002, 0, -0.5, s * 0.5), B.cloth, goC);
+      if (o.head) shell = null; // the head coverings are drawn below
+      if (shell) P.add(shell, w, slot);
+      if (shell) P.add(robe(typeof hemFn === 'function' ? (a) => hemFn(a) + 0.03 : hemFn + 0.03, hemFn, off + 0.002, { flare: o.flare, gap: o.gap, nu: o.pleat ? 48 : 34, nv: 1, flareFrom: o.pleat ? 1.02 : 1.05 }), w, o.band === 'gold' ? S.band : o.band === 'trim' ? S.trim : S.outer2); // hem band
+      if (o.pleat === 1.02) P.add(torsoShell(1.05, 1.01, off + 0.004, { nu: 34, nv: 1 }), torsoW, S.outer2); // the waist seam of the 철릭
+      if (o.quilt && shell) for (let i = 1; i < 9; i++) { const y = lerp(1.36, outerHem + 0.04, i / 9); P.add(robe(y + 0.0025, y - 0.0025, off + 0.003, { flare: o.flare, nu: 34, nv: 1 }), w, S.outer2); } // 누비: the stitched rows
+      if (o.under) P.add(robe(0.62, o.under, off - 0.006, { flare: o.flare * 0.9, nu: 34, nv: 4 }), coatW, S.red); // 동달이: the red coat under the 전복
+      if (o.collar === 'cross') crossCollar(P, { off: off - 0.002, yEnd: o.short ? 1.245 : 1.2, hemY: longRobe ? Math.max(0.3, outerHem) : 0.86, knotY: o.short ? 1.215 : 1.17, slot: o.band === 'trim' ? S.trim : o.short ? S.top3 : S.outer2, seop: o.band === 'trim' ? S.trim : S.outer2, goC: o.short ? S.band : S.outer2, goreum: o.goreum || 0, weight: w, w: 0.015 });
+      else if (o.collar === 'round') { // 단령: a round collar ring and the 흉배 square on the chest
+        P.add(xf(torus(0.078, 0.011, 6, 28), 0, 1.395, -0.006, Math.PI / 2 - 0.12, 0, 0, 1, 1.05, 1), torsoW, S.outer2);
+        P.add(sweepPath(collarPath(off, 1.3, -0.05).slice(0, 6), 0.007, { nu: 5, nv: 10, flat: 0.5 }), torsoW, S.white);
+      } else if (o.collar === 'v' || o.collar === 'band') {
+        for (const s of [1, -1]) P.add(sweepPath([torsoPt(s * 0.16, 1.39, off - 0.008), torsoPt(s * 0.17, 1.2, off - 0.008), torsoPt(s * 0.18, (outerHem || 0.95) + 0.02, off - 0.008 + (o.open && outerHem < 0.8 ? 0.04 : 0))], o.fur ? 0.008 : 0.004, { nu: 6, nv: 12 }), w, o.fur ? S.white : S.outer2);
+      }
+      if (o.badge) for (const z of [1, -1]) { const p = torsoPt(z > 0 ? 0 : Math.PI, 1.18, off + 0.004); P.add(xf(rbox(0.13, 0.13, 0.004, 0.003), p[0], p[1], p[2], 0, z > 0 ? 0 : Math.PI, 0), torsoW, S.band); }
+      if (o.buttons) knotButtons(P, o.buttons, 1.3, o.len > 0.9 ? o.len + 0.05 : 1.05, off + 0.01, o.buttons > 2 ? S.metal : S.outer2);
+      if (o.pockets) for (const s of [1, -1]) { const p = torsoPt(s * 0.55, 1.0, off + 0.004); P.add(xf(rbox(0.06, 0.004, 0.012, 0.002), p[0], p[1], p[2], 0, s * 0.5, 0), torsoW, S.outer2); }
+      if (o.head) { // 장옷 / 쓰개치마: worn over the head, open at the face, falling over the back and the sides
+        const len = o.len, pleated = o.pleat === 2;
+        P.add(sweep((v, u, out) => {
+          const a = lerp(o.gap, TAU - o.gap, u);
+          const y = lerp(1.72, len, v);
+          const hy = Math.min(1.405, Math.max(0.84, y));
+          const r = torsoAt(hy);
+          const hr = y > 1.42 ? 1 : 0;
+          const k = pleated ? 1 + 0.04 * Math.sin(a * 30) * smooth(1.3, 0.9, y) : 1;
+          let rx, rz, cz;
+          if (hr) { const t = smooth(1.72, 1.45, y); rx = lerp(0.05, 0.12, t) + 0.01; rz = lerp(0.06, 0.13, t) + 0.01; cz = -0.03 * t; }
+          else { rx = Math.max(r[0], 0.15) + 0.05 + (o.flare || 0) * smooth(1.2, len, y); rz = Math.max(r[1], 0.1) + 0.05 + (o.flare || 0) * smooth(1.2, len, y); cz = r[2] - 0.01; }
+          const p = se(a, rx * k, rz * k, 2.2);
+          out[0] = p[0]; out[1] = y; out[2] = cz + p[1] - (hr ? 0 : 0.01);
+        }, { nu: 34, nv: 18, open: true, cap0: false, cap1: false }), (x, y, z) => (y > 1.42 ? [B.head, 1, B.spine, 0] : coatW(x, y, z)), slot);
+        P.add(sweepPath([[-0.07, 1.62, 0.07], [0, 1.73, 0.03], [0.07, 1.62, 0.07]], 0.009, { nu: 5, nv: 10, flat: 0.5 }), B.head, o.band === 'trim' ? S.trim : S.outer2); // the edge round the face
+        if (!pleated) for (const s of [1, -1]) P.add(xf(rbox(0.05, 0.36, 0.006, 0.003), s * 0.2, 1.27, 0.02, 0.03, 0, s * 0.06), B.cloth, S.outer2); // the empty 장옷 sleeves hang at the sides
+      }
+      outerSleeve = o.sleeve;
     }
-    if (top === 'baeja' || top === 'kwaeja') {
-      const hemV = top === 'kwaeja' ? (a) => (Math.abs(Math.sin(a)) > 0.92 ? 0.9 : 0.5) : chima ? 1.02 : 0.97;
-      const vest = torsoShell(1.395, hemV, 0.032, { gap: 0.16, nu: 30, nv: 12, flare: top === 'kwaeja' ? 0.05 : 0.008, flareFrom: 1.05 });
-      // armholes: pull the shoulder caps of the vest in (sleeveless)
-      const vp = vest.attributes.position;
-      for (let i = 0; i < vp.count; i++) { const x = vp.getX(i), y = vp.getY(i); if (y > 1.2 && Math.abs(x) > 0.13) vp.setX(i, Math.sign(x) * (0.13 + (Math.abs(x) - 0.13) * 0.4)); }
-      vest.computeVertexNormals();
-      P.add(vest, top === 'kwaeja' ? coatW : torsoW, S.outer);
-      const trimSlot = top === 'baeja' ? S.white : S.outer2;
-      const hm = top === 'kwaeja' ? 0.5 : chima ? 1.02 : 0.97;
-      for (const s of [1, -1]) P.add(sweepPath([torsoPt(s * 0.16, 1.39, 0.024), torsoPt(s * 0.17, 1.2, 0.024), torsoPt(s * 0.18, hm + 0.02, 0.024 + (top === 'kwaeja' ? 0.04 : 0))], top === 'baeja' ? 0.008 : 0.004, { nu: 6, nv: 12 }), top === 'kwaeja' ? coatW : torsoW, trimSlot);
-      if (top === 'kwaeja') P.add(torsoShell(1.075, 1.035, 0.03, { nv: 1, nu: 30 }), torsoW, S.band); // 전대 (belt)
-    }
-    if (longCoat) {
-      P.add(torsoShell(1.4, 0.36, 0.03, { nu: 34, nv: 16, flare: 0.1, flareFrom: 1.02 }), coatW, S.outer);
-      P.add(torsoShell(0.405, 0.36, 0.033, { nu: 34, nv: 1, flare: 0.1, flareFrom: 1.02 }), coatW, S.outer2);
+    if (apron) { // 행주치마: wrapped round the front of the skirt from under the chest, tied at the back
+      const yT = chima ? 1.2 : 1.06;
+      const ap = sweep((v, u, out) => { const y = lerp(yT, chima ? 0.32 : 0.55, v); const r = torsoAt(Math.max(0.84, Math.min(1.4, y))); const a = lerp(-1.25, 1.25, u); const fl = (chima ? 0.2 : 0.06) * Math.pow(smooth(1.1, 0.3, y), 0.8) + 0.03 * smooth(0.95, 0.6, y); const p = se(a, Math.max(r[0], 0.15) + 0.016 + fl, Math.max(r[1], 0.1) + 0.016 + fl * 0.92, 2.2); out[0] = p[0]; out[1] = y; out[2] = (y < 0.84 ? 0 : r[2]) + p[1]; }, { nu: 18, nv: 12, open: true });
+      P.add(ap, skirtW, S.outer);
+      P.add(torsoShell(yT + 0.025, yT - 0.005, chima ? 0.018 : 0.02, { nv: 1 }), torsoW, S.outer2);
+      hangBand(P, [0, yT - 0.01, -0.12], 0.24, 0.03, 0.08, S.outer2);
     }
 
-    // ---- arms: sleeves + skin + hands
-    const longSleeve = top !== 'tshirt' && top !== 'apron';
-    const sleeveEnd = hanbok || longCoat ? 0.875 : 0.875;
+    // ---- arms: the outermost sleeve over the arm, skin, hands
+    const sleeveOuter = outerSleeve === 'wide' || outerSleeve === 'wider' || outerSleeve === 'narrow' ? outerSleeve : null;
     for (const s of [1, -1]) {
       const x0 = s * 0.19;
       const aw = armW(s), hd = armBones(s)[2];
       const armT = [[1.392, 0.022, 0.026, x0 - s * 0.034, -0.016], [1.375, 0.044, 0.046, x0 - s * 0.012, -0.018], [1.33, 0.048, 0.047, x0, -0.02], [1.25, 0.043, 0.044, x0 + s * 0.002, -0.024],
         [1.17, 0.039, 0.04, x0 + s * 0.004, -0.028], [1.1, 0.035, 0.037, x0 + s * 0.006, -0.03], [1.04, 0.037, 0.037, x0 + s * 0.008, -0.028], [0.96, 0.032, 0.031, x0 + s * 0.011, -0.02], [0.88, 0.025, 0.023, x0 + s * 0.013, -0.014], [0.85, 0.023, 0.021, x0 + s * 0.014, -0.012]];
-      const bare = longSleeve ? armT.filter((r) => r[0] <= sleeveEnd + 0.02) : top === 'tshirt' ? armT.filter((r) => r[0] <= 1.24) : armT;
-      if (bare.length > 1) P.add(rings(bare, { nu: 12, nv: bare.length * 2 }), aw, S.skin);
-      if (longSleeve || top === 'tshirt') {
-        const wide = hanbok || longCoat;
-        const endY = top === 'tshirt' ? 1.2 : sleeveEnd;
-        const sl = armT.filter((r) => r[0] >= endY - 0.03).map((r) => {
-          const dz = wide ? 0.006 + 0.032 * smooth(1.32, 0.95, r[0]) : 0;
-          const g = r[0] > 1.36 ? 0.006 : wide ? 0.014 : 0.01;
-          return [r[0], r[1] + g, r[2] + g + dz, r[3], r[4] - dz * 0.35];
-        });
-        sl[sl.length - 1][0] = endY;
-        const slot = longCoat ? S.outer : top === 'apron' ? S.under : hanbok ? S.sleeve : S.top;
-        P.add(rings(sl, { nu: 14, nv: 14, n: 2.1, cap1: false }), aw, slot);
-        if (hanbok || longCoat) { // 끝동 (cuff band)
-          const c = sl[sl.length - 1];
-          P.add(rings([[endY + 0.05, c[1] + 0.002, c[2] + 0.002, c[3], c[4]], [endY - 0.002, c[1] + 0.003, c[2] + 0.003, c[3], c[4]]], { nu: 14, nv: 2, cap0: false, cap1: false }), aw, top === 'dangui' ? S.white : longCoat ? S.outer2 : top === 'saekdong' ? S.band : S.top3);
-        } else if (top !== 'tshirt') {
-          const c = sl[sl.length - 1];
-          P.add(rings([[endY + 0.03, c[1] + 0.002, c[2] + 0.002, c[3], c[4]], [endY, c[1] + 0.002, c[2] + 0.002, c[3], c[4]]], { nu: 12, nv: 1, cap0: false, cap1: false }), aw, top === 'jacket' ? S.top2 : S.top);
-        }
-      }
-      // hand: palm (thin across x, wide along z), four fingers in a relaxed curl, the thumb in front
+      const endY = 0.875;
+      const bare = armT.filter((r) => r[0] <= endY + 0.02);
+      P.add(rings(bare, { nu: 12, nv: bare.length * 2 }), aw, S.skin);
+      // 배래: the wide sleeve hangs below the arm in a curve; wider for 도포 / 단령 / 원삼
+      const kind = sleeveOuter || 'jeo';
+      const wideK = WIDE[kind] || 0;
+      const sl = armT.filter((r) => r[0] >= endY - 0.03).map((r) => {
+        const dz = kind === 'narrow' ? 0.002 : kind === 'jeo' ? 0.006 + 0.032 * smooth(1.32, 0.95, r[0]) : 0.012 + 0.05 * wideK * smooth(1.32, 0.95, r[0]);
+        const g = r[0] > 1.36 ? 0.006 + (sleeveOuter ? 0.01 : 0) : kind === 'narrow' ? 0.016 : sleeveOuter ? 0.022 : 0.014;
+        return [r[0], r[1] + g + (wideK ? 0.008 * wideK : 0), r[2] + g + dz, r[3], r[4] - dz * 0.35];
+      });
+      sl[sl.length - 1][0] = endY;
+      const sSlot = sleeveOuter ? (robeO.sleeveSlot ? S[robeO.sleeveSlot] : S.osleeve) : S.sleeve;
+      P.add(rings(sl, { nu: 14, nv: 14, n: 2.1, cap1: false }), aw, sSlot);
+      const c = sl[sl.length - 1];
+      const cuffSlot = sleeveOuter ? (robeO.band === 'trim' ? S.trim : robeO.short ? S.white : robeO.stripes ? S.band : S.outer2) : TK.trim ? S.trim : TK.stripes ? S.band : TK.plain ? S.top : S.top3;
+      P.add(rings([[endY + 0.05, c[1] + 0.002, c[2] + 0.002, c[3], c[4]], [endY - 0.002, c[1] + 0.003, c[2] + 0.003, c[3], c[4]]], { nu: 14, nv: 2, cap0: false, cap1: false }), aw, cuffSlot); // 끝동
+      if (sleeveOuter && robeO.hansam) P.add(rings([[endY + 0.004, c[1] - 0.004, c[2] - 0.004, c[3], c[4]], [endY - 0.16, c[1] - 0.006, c[2] - 0.01, c[3] + s * 0.004, c[4] + 0.01]], { nu: 14, nv: 4, cap0: false, cap1: false }), hd, S.white); // 한삼
+      if (outerSleeve === 'short') { const st = armT.filter((r) => r[0] >= 1.08).map((r) => [r[0], r[1] + 0.03, r[2] + 0.032, r[3], r[4]]); P.add(rings(st, { nu: 14, nv: 6, cap1: false, cap0: false }), aw, S.outer); }
+      // hand: palm, four fingers in a relaxed curl, the thumb in front
       const hx = x0 + s * 0.016, hz = -0.008;
       P.add(rings([[0.852, 0.017, 0.022, hx, hz], [0.82, 0.018, 0.034, hx, hz + 0.004], [0.785, 0.0175, 0.041, hx - s * 0.001, hz + 0.006], [0.758, 0.015, 0.04, hx - s * 0.003, hz + 0.006]], { nu: 12, nv: 6, n: 2.6 }), hd, S.skin);
       for (let f = 0; f < 4; f++) {
@@ -1111,84 +1263,75 @@
       P.add(sweepPath([[hx - s * 0.004, 0.83, hz + 0.03], [hx - s * 0.008, 0.8, hz + 0.044], [hx - s * 0.012, 0.775, hz + 0.05]], (v) => 0.0095 - 0.002 * v, { nu: 6, nv: 6 }), hd, S.skin);
       if (s < 0) { // gesture fingers on the right hand (scaled up by the fgP / fgV / fgT channels)
         P.add(sweepPath([[hx - s * 0.002, 0.758, hz + 0.022], [hx - s * 0.002, 0.71, hz + 0.024], [hx - s * 0.002, 0.672, hz + 0.024]], 0.0075, { nu: 6, nv: 4 }), B.fgP, S.skin);
-        for (const dz of [0.022, 0.006]) P.add(sweepPath([[hx - s * 0.002, 0.758, hz + dz], [hx - s * 0.002 + (dz > 0.01 ? 0.004 : -0.004) * 0, 0.712, hz + dz * 1.6], [hx - s * 0.002, 0.675, hz + dz * 2.1]], 0.0075, { nu: 6, nv: 4 }), B.fgV, S.skin);
+        for (const dz of [0.022, 0.006]) P.add(sweepPath([[hx - s * 0.002, 0.758, hz + dz], [hx - s * 0.002, 0.712, hz + dz * 1.6], [hx - s * 0.002, 0.675, hz + dz * 2.1]], 0.0075, { nu: 6, nv: 4 }), B.fgV, S.skin);
         P.add(sweepPath([[hx, 0.79, hz + 0.03], [hx, 0.79, hz + 0.06], [hx, 0.79, hz + 0.082]], 0.0095, { nu: 6, nv: 4 }), B.fgT, S.skin);
       }
     }
 
-    // ---- legs and lower garments
+    // ---- legs and the 아래옷
     for (const s of [1, -1]) {
       const x0 = s * 0.091, lw = legW(s);
       const legT = [[0.94, 0.084, 0.085, x0 + s * 0.008, 0.004], [0.86, 0.088, 0.09, x0 + s * 0.008, 0.008], [0.76, 0.075, 0.078, x0 + s * 0.005, 0.01], [0.64, 0.062, 0.064, x0 + s * 0.003, 0.008],
         [0.53, 0.05, 0.052, x0 + s * 0.001, 0.006], [0.48, 0.046, 0.05, x0, 0.01], [0.42, 0.045, 0.05, x0, 0.002], [0.34, 0.048, 0.055, x0, -0.008], [0.24, 0.038, 0.042, x0, -0.006], [0.14, 0.028, 0.032, x0, -0.004], [0.095, 0.026, 0.03, x0, -0.002]];
-      const covered = bottom === 'pants' || chima || longCoat;
-      const bareFrom = bottom === 'shorts' ? 0.62 : skirtB && !chima ? 0.62 : null;
-      if (!covered && bareFrom != null) { const lt = legT.filter((r) => r[0] <= bareFrom + 0.04); P.add(rings(lt, { nu: 12, nv: 16 }), lw, S.skin); }
-      if (bottom === 'pants' || bottom === 'shorts') {
-        const baji = hanbok && bottom === 'pants';
-        const endY = bottom === 'shorts' ? 0.6 : baji ? 0.13 : 0.1;
+      if (chima) { // under a skirt: the 속바지 (white) from the knee down shows only under a short skirt
+        if (BK.hem > 0.2) P.add(rings(legT.filter((r) => r[0] <= BK.hem + 0.06 && r[0] >= 0.11).map((r) => [r[0], r[1] + 0.01, r[2] + 0.01, r[3], r[4]]), { nu: 12, nv: 10 }), lw, S.white);
+      } else {
+        const endY = BK.end;
+        if (endY > 0.3) P.add(rings(legT.filter((r) => r[0] <= endY + 0.04), { nu: 12, nv: 12 }), lw, S.skin); // 잠방이: the bare shin
+        const wk = BK.width || 1;
         const pl = legT.filter((r) => r[0] >= endY - 0.05).map((r) => {
-          const k = baji ? 0.016 + 0.024 * smooth(0.2, 0.75, r[0]) : bottom === 'shorts' ? 0.018 : 0.012;
-          return [r[0], r[1] + k, r[2] + k, r[3] + (baji ? s * 0.01 : 0), r[4]];
+          const k = (endY > 0.3 ? 0.03 : 0.016 + 0.024 * smooth(0.2, 0.75, r[0])) * wk + (BK.quilt ? 0.006 : 0);
+          return [r[0], r[1] + k, r[2] + k, r[3] + s * 0.01 * wk, r[4]];
         });
         pl[pl.length - 1][0] = endY;
-        if (baji) pl.push([0.112, 0.034, 0.038, x0, -0.002]);
-        P.add(rings(pl, { nu: 14, nv: 18, cap1: !baji }), lw, S.bottom);
-        if (baji) P.add(rings([[0.16, 0.036, 0.04, x0, -0.002], [0.13, 0.036, 0.04, x0, -0.002]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, fem ? S.top3 : S.band); // 대님
-        else if (bottom === 'pants') P.add(rings([[endY + 0.035, pl[pl.length - 1][1] + 0.002, pl[pl.length - 1][2] + 0.002, x0, 0], [endY, pl[pl.length - 1][1] + 0.002, pl[pl.length - 1][2] + 0.002, x0, 0]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, S.bottom2);
+        if (BK.tie) pl.push([0.112, 0.034, 0.038, x0, -0.002]);
+        if (BK.cuff) pl.push([0.1, 0.03, 0.034, x0, -0.002]);
+        P.add(rings(pl, { nu: 14, nv: 18, cap1: false }), lw, S.bottom);
+        if (BK.tie) { // 대님: the ankle tie, with its bow on the inner side
+          P.add(rings([[0.16, 0.036, 0.04, x0, -0.002], [0.13, 0.036, 0.04, x0, -0.002]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, fem ? S.top3 : S.band);
+          P.add(xf(rbox(0.012, 0.05, 0.004, 0.002), x0 - s * 0.035, 0.12, 0.012, 0, 0, s * 0.3), legBones(s)[1], fem ? S.top3 : S.band);
+        }
+        if (BK.cuff) P.add(rings([[0.13, 0.033, 0.037, x0, -0.002], [0.1, 0.033, 0.037, x0, -0.002]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, S.bottom2);
+        if (BK.quilt) for (const y of [0.3, 0.5, 0.7]) P.add(rings([[y + 0.003, 0.06 * wk + 0.02, 0.063 * wk + 0.02, x0 + s * 0.01, 0.004], [y - 0.003, 0.06 * wk + 0.02, 0.063 * wk + 0.02, x0 + s * 0.01, 0.004]], { nu: 12, nv: 1, cap0: false, cap1: false }), lw, S.bottom2);
       }
-      // feet: 버선 (traditional) + the shoe
       buildRealFoot(P, app, s);
     }
-    if (bottom === 'pants' || bottom === 'shorts') {
-      const baji = hanbok && bottom === 'pants';
-      P.add(torsoShell(1.03, 0.84, baji ? 0.016 : 0.012, { nu: 28, nv: 6 }), torsoW, S.bottom);
-      P.add(torsoShell(1.03, 0.995, baji ? 0.026 : 0.016, { nu: 28, nv: 1 }), torsoW, baji ? S.top3 : S.bottom2);
-    }
-    if (chima) {
-      const pleats = 22;
+    if (!chima) {
+      P.add(torsoShell(1.03, 0.84, 0.016 * (BK.width || 1), { nu: 28, nv: 6 }), torsoW, S.bottom);
+      P.add(torsoShell(1.03, 0.995, 0.026, { nu: 28, nv: 1 }), torsoW, BK.cuff ? S.bottom2 : S.top3);   // 허리띠
+      if (BK.split) P.add(xf(rbox(0.07, 0.12, 0.006, 0.003), 0, 0.86, -0.12, 0.1, 0, 0), B.hips, S.bottom2); // 풍차: the back flap
+    } else {
+      const pleats = BK.pleats, hem = BK.hem, flare = BK.flare;
       const ch = sweep((v, u, out) => {
-        const y = lerp(1.275, 0.035, v);
+        const y = lerp(1.275, hem, v);
         const r = torsoAt(Math.min(1.4, Math.max(0.84, y)));
-        const fl = 0.17 * Math.pow(smooth(1.15, 0.04, y), 0.8);
+        const fl = flare * Math.pow(smooth(1.15, 0.04, y), 0.8);
         const a = u * TAU;
         const pl = 1 + 0.045 * Math.sin(a * pleats) * smooth(1.0, 0.3, y);
         const p = se(a, (Math.max(r[0], 0.15) + 0.004 + fl) * pl, (Math.max(r[1], 0.1) + 0.004 + fl * 0.92) * pl, 2.1);
         out[0] = p[0]; out[1] = y; out[2] = r[2] * (1 - v) + p[1];
       }, { nu: 66, nv: 18, cap0: false, cap1: true });
       P.add(ch, skirtW, S.bottom);
-      P.add(torsoShell(1.285, 1.255, 0.006, { nu: 30, nv: 1 }), torsoW, S.white); // 치마허리 (under the 저고리)
-      if (app.pattern === 'geumbak') {
-        P.add(sweep((v, u, out) => { const y = lerp(0.22, 0.13, v); const a = u * TAU; const fl = 0.17 * Math.pow(smooth(1.15, 0.04, y), 0.8); const pl = 1 + 0.045 * Math.sin(a * pleats) * smooth(1.0, 0.3, y); const p = se(a, (0.15 + 0.0055 + fl) * pl, (0.1 + 0.0055 + fl * 0.92) * pl, 2.1); out[0] = p[0]; out[1] = y; out[2] = p[1]; }, { nu: 66, nv: 2 }), skirtW, S.band);
+      P.add(torsoShell(1.285, 1.255, 0.006, { nu: 30, nv: 1 }), torsoW, S.white); // 치마허리
+      const bands = BK.bands || (app.pattern === 'geumbak' ? [0.22] : []);
+      for (const yb of bands) { // 스란단 / 대란단: gold bands round the skirt
+        P.add(sweep((v, u, out) => { const y = lerp(yb, yb - 0.07, v); const a = u * TAU; const fl = flare * Math.pow(smooth(1.15, 0.04, y), 0.8); const pl = 1 + 0.045 * Math.sin(a * pleats) * smooth(1.0, 0.3, y); const p = se(a, (0.15 + 0.0055 + fl) * pl, (0.1 + 0.0055 + fl * 0.92) * pl, 2.1); out[0] = p[0]; out[1] = y; out[2] = p[1]; }, { nu: 66, nv: 2 }), skirtW, S.band);
       }
-    } else if (skirtB) {
-      const sk = sweep((v, u, out) => {
-        const y = lerp(1.06, 0.56, v);
-        const r = torsoAt(Math.max(0.84, y));
-        const a = u * TAU, fl = 0.08 * smooth(0.9, 0.56, y);
-        const pl = 1 + 0.035 * Math.sin(a * 16) * smooth(0.9, 0.7, y);
-        const p = se(a, (Math.max(r[0], 0.15) + 0.014 + fl) * pl, (Math.max(r[1], 0.1) + 0.014 + fl) * pl, 2.2);
-        out[0] = p[0]; out[1] = y; out[2] = r[2] + p[1];
-      }, { nu: 48, nv: 10, cap0: false, cap1: false });
-      P.add(sk, skirtW, S.bottom);
-      P.add(torsoShell(1.065, 1.035, 0.018, { nu: 28, nv: 1 }), torsoW, S.bottom2);
     }
 
-    // ---- bags and trinkets
+    // ---- 꾸미개 and 짐
     buildRealBag(P, app);
     buildRealTrinket(P, app);
     return P.build();
   }
 
-  /** 버선 (white socks with the pointed toe) + 고무신 / 꽃신 / 짚신, or sneakers */
+  /** 신: 버선 (white socks with the pointed toe) + one of ten traditional shoes */
   function buildRealFoot(P, app, s) {
     const S = SLOT;
     const ft = legBones(s)[2], kn = legBones(s)[1];
     const x0 = s * 0.094;
     const fw = app.footwear;
-    const trad = fw !== 'sneakers';
-    // the foot volume: heel → toe along z (a swept section), sole flat at y = 0
-    const footSweep = (grow, toeUp, yTopMul, slot, nv = 12) => sweep((v, u, out) => {
+    const footSweep = (grow, toeUp, yTopMul, nv = 12) => sweep((v, u, out) => {
       const z = lerp(-0.058, 0.19 + toeUp * 0.02, v);
       const w = (0.03 + 0.016 * smooth(-0.05, 0.08, z) - 0.03 * smooth(0.13, 0.2 + toeUp * 0.02, z)) + grow;
       const top = (0.078 - 0.046 * smooth(-0.01, 0.15, z)) * yTopMul + grow;
@@ -1198,35 +1341,47 @@
       out[1] = Math.max(0, top * 0.5 + ca * top * 0.5) + lift;
       out[2] = z;
     }, { nu: 14, nv, cap0: true, cap1: true });
-    if (trad) {
-      P.add(footSweep(0.002, fw === 'jipsin' ? 0.3 : 0.6, 1, S.white), ft, S.white);                                     // 버선 foot
-      P.add(rings([[0.2, 0.034, 0.038, x0, -0.004], [0.13, 0.031, 0.035, x0, -0.004], [0.07, 0.031, 0.04, x0, 0.004]], { nu: 12, nv: 4, cap0: false, cap1: false }), (x, y) => { const t = smooth(0.13, 0.08, y); return [kn, 1 - t, ft, t]; }, S.white);
-    }
-    if (fw === 'sneakers') {
-      P.add(footSweep(0.006, 0, 1.02, S.shoe), ft, S.shoe);
-      P.add(xf(rbox(0.085, 0.022, 0.265, 0.01), x0, 0.011, 0.065), ft, S.sole);
-      for (let i = 0; i < 4; i++) P.add(xf(capsule(0.0025, 0.03, 4), x0, 0.064 - i * 0.008, 0.03 + i * 0.022, 0, 0, Math.PI / 2), ft, S.white);
-      P.add(rings([[0.115, 0.036, 0.04, x0, -0.01], [0.085, 0.036, 0.042, x0, -0.008]], { nu: 12, nv: 1, cap0: false, cap1: false }), ft, S.shoe);
-    } else if (fw === 'gomusin' || fw === 'kkotsin') {
-      // a boat-shaped low shoe: open on top (the 버선 shows), the toe drawn up into a point
-      const shoe = sweep((v, u, out) => {
-        const z = lerp(-0.062, 0.215, v);
-        const w = 0.035 + 0.016 * smooth(-0.05, 0.08, z) - 0.043 * smooth(0.12, 0.215, z);
-        const side = fw === 'kkotsin' ? 0.036 : 0.03;
-        const h = lerp(0.012, side, u < 0.5 ? u * 2 : 2 - u * 2) + 0.03 * smooth(0.14, 0.215, z);
-        const a = u * Math.PI; // a U section: bottom → sides
-        out[0] = x0 + Math.cos(a) * Math.max(0.004, w); out[1] = Math.sin(a) * 0.004 + (Math.abs(Math.cos(a)) > 0.3 ? h * Math.abs(Math.cos(a)) : 0) + 0.002; out[2] = z;
-      }, { nu: 16, nv: 14, open: true, cap0: false, cap1: false });
-      P.add(shoe, ft, S.shoe);
-      P.add(xf(rbox(0.08, 0.01, 0.26, 0.004), x0, 0.005, 0.07), ft, S.sole);
-      if (fw === 'kkotsin') {
-        for (const [dx, dz, c] of [[0, 0.16, S.red], [0.008, 0.14, S.gold], [-0.008, 0.14, S.gold], [0, 0.12, S.leaf]]) P.add(xf(sphere(0.0055, 6, 4), x0 + dx, 0.045 + (0.16 - dz) * -0.2, dz), ft, c);
-        P.add(sweepPath([[x0 + 0.035, 0.034, -0.05], [x0 + 0.045, 0.034, 0.06], [x0, 0.06, 0.205], [x0 - 0.045, 0.034, 0.06], [x0 - 0.035, 0.034, -0.05]], 0.0025, { nu: 4, nv: 24 }), ft, S.top3);
-      }
-    } else if (fw === 'jipsin') {
-      P.add(xf(rbox(0.088, 0.016, 0.27, 0.007), x0, 0.008, 0.068), ft, S.sole);
-      for (const z of [0.02, 0.09, 0.15]) P.add(sweepPath([[x0 + 0.042, 0.012, z], [x0 + 0.03, 0.05 - z * 0.12, z + 0.01], [x0, 0.06 - z * 0.15, z + 0.012], [x0 - 0.03, 0.05 - z * 0.12, z + 0.01], [x0 - 0.042, 0.012, z]], 0.004, { nu: 5, nv: 12 }), ft, S.shoe);
+    const lift = fw === 'namaksin' ? 0.05 : 0;
+    const boot = fw === 'mokhwa';
+    P.add(xf(footSweep(0.002, STRAW_FEET.has(fw) ? 0.3 : 0.6, 1), 0, lift, 0), ft, S.white);                                // 버선 foot
+    P.add(rings([[0.2 + lift, 0.034, 0.038, x0, -0.004], [0.13 + lift, 0.031, 0.035, x0, -0.004], [0.07 + lift, 0.031, 0.04, x0, 0.004]], { nu: 12, nv: 4, cap0: false, cap1: false }), (x, y) => { const t = smooth(0.13, 0.08, y); return [kn, 1 - t, ft, t]; }, S.white);
+    if (STRAW_FEET.has(fw)) { // 짚신 / 미투리: a woven sole with straps over the 버선
+      const fine = fw === 'mituri';
+      P.add(xf(rbox(0.088, fine ? 0.012 : 0.016, 0.27, 0.007), x0, 0.008, 0.068), ft, S.sole);
+      for (const z of fine ? [0.0, 0.05, 0.1, 0.15] : [0.02, 0.09, 0.15]) P.add(sweepPath([[x0 + 0.042, 0.012, z], [x0 + 0.03, 0.05 - z * 0.12, z + 0.01], [x0, 0.06 - z * 0.15, z + 0.012], [x0 - 0.03, 0.05 - z * 0.12, z + 0.01], [x0 - 0.042, 0.012, z]], fine ? 0.003 : 0.004, { nu: 5, nv: 12 }), ft, S.shoe);
       P.add(sweepPath([[x0 + 0.03, 0.012, -0.05], [x0 + 0.034, 0.07, -0.045], [x0, 0.085, -0.05], [x0 - 0.034, 0.07, -0.045], [x0 - 0.03, 0.012, -0.05]], 0.004, { nu: 5, nv: 12 }), ft, S.shoe);
+      return;
+    }
+    // a boat-shaped shoe: open on top (the 버선 shows), the toe drawn up; side height and toe curl per kind
+    const K = { gomusin: [0.03, 0.03, 1], kkotsin: [0.036, 0.03, 1], danghye: [0.034, 0.036, 1.02], unhye: [0.034, 0.03, 1.02], taesahye: [0.04, 0.026, 1.04], gatsin: [0.044, 0.022, 1.05], namaksin: [0.03, 0.02, 1.02], mokhwa: [0.05, 0.02, 1.06] }[fw] || [0.03, 0.03, 1];
+    const shoe = sweep((v, u, out) => {
+      const z = lerp(-0.064, 0.215, v);
+      const w = (0.035 + 0.016 * smooth(-0.05, 0.08, z) - 0.043 * smooth(0.12, 0.215, z)) * K[2];
+      const h = lerp(0.012, K[0], u < 0.5 ? u * 2 : 2 - u * 2) + K[1] * smooth(0.14, 0.215, z);
+      const a = u * Math.PI;
+      out[0] = x0 + Math.cos(a) * Math.max(0.004, w); out[1] = lift + Math.sin(a) * 0.004 + (Math.abs(Math.cos(a)) > 0.3 ? h * Math.abs(Math.cos(a)) : 0) + 0.002; out[2] = z;
+    }, { nu: 16, nv: 14, open: true, cap0: false, cap1: false });
+    P.add(shoe, ft, S.shoe);
+    P.add(xf(rbox(0.08, 0.01, 0.26, 0.004), x0, 0.005 + lift, 0.07), ft, S.sole);
+    if (fw === 'namaksin') for (const z of [-0.02, 0.13]) P.add(xf(rbox(0.07, 0.05, 0.035, 0.006), x0, 0.025, z), ft, S.shoe);             // the two wooden teeth
+    if (boot) P.add(rings([[0.36, 0.044, 0.05, x0, -0.004], [0.2, 0.04, 0.046, x0, -0.004], [0.08, 0.042, 0.06, x0, 0.01], [0.04, 0.045, 0.07, x0, 0.02]], { nu: 14, nv: 6, cap0: false, cap1: false }), (x, y) => { const t = smooth(0.13, 0.08, y); return [kn, 1 - t, ft, t]; }, S.shoe); // 목화: the boot shaft
+    if (fw === 'kkotsin' || fw === 'danghye' || fw === 'unhye') { // flowers / clouds on the toe, a coloured edge
+      for (const [dx, dz, c] of [[0, 0.16, S.red], [0.008, 0.14, S.gold], [-0.008, 0.14, S.gold], [0, 0.12, S.leaf]]) P.add(xf(sphere(0.0055, 6, 4), x0 + dx, 0.045 + (0.16 - dz) * -0.2, dz), ft, fw === 'unhye' ? S.white : c);
+      P.add(sweepPath([[x0 + 0.035, 0.034, -0.05], [x0 + 0.045, 0.034, 0.06], [x0, 0.06, 0.205], [x0 - 0.045, 0.034, 0.06], [x0 - 0.035, 0.034, -0.05]], 0.0025, { nu: 4, nv: 24 }), ft, fw === 'danghye' ? S.gold : S.top3);
+    }
+    if (fw === 'taesahye') P.add(sweepPath([[x0 + 0.02, 0.04, 0.12], [x0, 0.058, 0.2], [x0 - 0.02, 0.04, 0.12]], 0.0022, { nu: 4, nv: 10 }), ft, S.white);   // 태사 무늬 on the toe
+    if (fw === 'gatsin') P.add(sweepPath([[x0, 0.05, -0.06], [x0, 0.055, 0.1], [x0, 0.06, 0.2]], 0.0018, { nu: 4, nv: 10 }), ft, S.dark);                   // the seam
+  }
+
+  /** 수염: 콧수염, 염소수염, 긴 수염 (hair colour) */
+  function buildRealBeard(P, app) {
+    const S = SLOT, b = app.beard;
+    if (!b || b === 'none') return;
+    for (const s of [1, -1]) P.add(sweepPath([[0, HEAD.cy - 0.06, headPos(0, -0.52, 0.85, 0.004, [0, 0, 0])[2]], [s * 0.016, HEAD.cy - 0.063, headPos(0.25, -0.55, 0.8, 0.004, [0, 0, 0])[2]], [s * 0.03, HEAD.cy - 0.072, headPos(0.42, -0.6, 0.7, 0.004, [0, 0, 0])[2]]], (v) => 0.0035 * (1 - 0.6 * v), { nu: 5, nv: 8 }), B.head, S.hair);
+    if (b === 'goatee' || b === 'long') {
+      const cz = headPos(0, -0.95, 0.3, 0.004, [0, 0, 0]);
+      const end = b === 'long' ? [[0, cz[1] - 0.05, cz[2] + 0.02], [0, cz[1] - 0.12, cz[2] + 0.04], [0, cz[1] - 0.2, cz[2] + 0.05]] : [[0, cz[1] - 0.04, cz[2] + 0.015]];
+      P.add(sweepPath([[0, cz[1] + 0.02, cz[2] - 0.01], [0, cz[1], cz[2] + 0.006], ...end], (v) => (b === 'long' ? 0.02 : 0.012) * (1 - 0.8 * v) + 0.002, { nu: 8, nv: b === 'long' ? 14 : 8 }), (x, y) => { const t = smooth(1.45, 1.38, y); return [B.head, 1 - t, B.cloth, t]; }, S.hair);
     }
   }
   // hair of the realistic style: shells over the skull (hairline, parting, combed grooves) + real volumes
@@ -1245,6 +1400,11 @@
     buzz: { fringe: 0.74, faceW: 1.22, side: 0.0, nape: -0.4, thick: 0.0045 },
     curly: { fringe: 0.6, faceW: 1.05, side: -0.25, nape: -0.5, thick: 0.022, curly: true },
     side: { fringe: 0.66, faceW: 1.15, side: 0.02, nape: -0.45, thick: 0.011, part: 0.45, sweep: true },
+    eonjeun: { fringe: 0.74, faceW: 1.16, side: 0.02, nape: -0.45, thick: 0.008, part: 0 },
+    saengang: { fringe: 0.72, faceW: 1.14, side: 0.02, nape: -0.45, thick: 0.009, part: 0 },
+    ttaeun: { fringe: 0.74, faceW: 1.16, side: 0.02, nape: -0.45, thick: 0.008, part: 0 },
+    keunmeori: { fringe: 0.74, faceW: 1.18, side: 0.02, nape: -0.45, thick: 0.008, part: 0 },
+    gwimit: { fringe: 0.72, faceW: 1.14, side: 0.0, nape: -0.45, thick: 0.009, part: 0 },
   };
   function hairCovReal(h, yaw, elev) {
     const ay = Math.abs(yaw);
@@ -1268,7 +1428,7 @@
     const S = SLOT;
     const hs = app.hair, h = HAIR_REAL[hs] || HAIR_REAL.short;
     const hatOn = app.hat !== 'none' && app.hat !== 'headband';
-    const ribbon = app.accessory === 'daenggi' ? S.acc : S.red;
+    const ribbon = app.ribbon && app.ribbon !== 'none' ? S.rib : S.red;
     const shell = headShell((yaw, elev, v) => {
       const cov = hairCovReal(h, yaw, elev);
       let t = h.thick * (1 + 0.45 * Math.max(0, v.y)) + (h.flare || 0) * smooth(0.1, -0.5, elev) * smooth(0.6, 1.4, Math.abs(yaw));
@@ -1301,8 +1461,8 @@
       P.add(xf(cyl(0.003, 0.003, 0.12, 6), 0, by + 0.004, bz, 0, 0, Math.PI / 2 - 0.3), B.head, S.gold);
     } else if (hs === 'jjok') {
       P.add(xf(sphere(1, 16, 12), 0, 1.462, -0.104, 0, 0, 0, 0.043, 0.028, 0.032), B.head, S.hair);
-      P.add(xf(cyl(0.0035, 0.0035, 0.17, 8), 0, 1.466, -0.11, 0, 0, Math.PI / 2), B.head, S.gold);            // 비녀
-      for (const s of [1, -1]) P.add(xf(sphere(0.007, 8, 6), s * 0.085, 1.466, -0.11), B.head, s > 0 ? S.gold : S.leaf);
+      if (!app.hairpin || app.hairpin === 'none') P.add(xf(cyl(0.0035, 0.0035, 0.17, 8), 0, 1.466, -0.11, 0, 0, Math.PI / 2), B.head, S.gold); // 비녀
+      if (!app.hairpin || app.hairpin === 'none') for (const s of [1, -1]) P.add(xf(sphere(0.007, 8, 6), s * 0.085, 1.466, -0.11), B.head, s > 0 ? S.gold : S.leaf);
     } else if (hs === 'daenggi') {
       const pts = [[0, 1.47, -0.094], [0, 1.41, -0.103], [0, 1.3, -0.12], [0, 1.17, -0.128], [0, 1.06, -0.125]];
       plait(P, pts, 0.02, hairW(1.47, 1.41), S.hair);
@@ -1323,117 +1483,249 @@
       P.add(xf(cyl(0.0025, 0.0025, 0.07, 6), 0, 1.69, -0.012, 0, 0, Math.PI / 2), B.head, S.metal);           // 동곳
       P.add(sweep((v, u, out) => { const yaw = u * TAU; const e = 0.6 + 0.12 * (1 - Math.cos(yaw)) * 0.5 + v * 0.09; const c = Math.cos(e); headPos(Math.sin(yaw) * c, Math.sin(e), Math.cos(yaw) * c, 0.0095, out); }, { nu: 40, nv: 1 }), B.head, S.dark); // 망건
     }
-    if (app.accessory === 'daenggi' && !['daenggi', 'twinbraid', 'pigtails', 'ponytail'].includes(hs)) {
-      P.add(xf(rbox(0.05, 0.022, 0.012, 0.006), 0, 1.5, backZ(1.5) - 0.012, 0.2, 0, 0), B.head, S.acc);
-      for (const s of [1, -1]) P.add(xf(rbox(0.018, 0.09, 0.004, 0.002), s * 0.012, 1.44, backZ(1.44) - 0.016, 0.1, 0, s * 0.2), B.hairB, S.acc);
+    if (hs === 'ttaeun' || hs === 'gwimit') { // 땋은머리: one long plait down the back (귀밑머리: side locks plaited over the ears into it)
+      plait(P, [[0, 1.47, -0.094], [0, 1.4, -0.104], [0, 1.25, -0.122], [0, 1.08, -0.13], [0, 0.95, -0.128]], 0.019, hairW(1.47, 1.41), S.hair);
+      if (hs === 'gwimit') for (const s of [1, -1]) plait(P, [[s * 0.07, 1.56, 0.02], [s * 0.085, 1.5, -0.02], [s * 0.07, 1.47, -0.07], [s * 0.02, 1.46, -0.095]], 0.008, B.head, S.hair);
+      if (app.ribbon === 'jebi') { P.add(xf(rbox(0.03, 0.1, 0.004, 0.002), 0, 0.9, -0.128, 0.05, 0, 0), B.hairB, ribbon); for (const s of [1, -1]) P.add(xf(rbox(0.016, 0.05, 0.004, 0.002), s * 0.008, 0.84, -0.126, 0.05, 0, s * 0.35), B.hairB, ribbon); }
+    } else if (hs === 'eonjeun') { // 얹은머리: a plait wound round the head like a crown
+      const pts = []; for (let i = 0; i <= 16; i++) { const yaw = (i / 16) * TAU * 0.96 + 0.1; const c = Math.cos(0.55); const p = headPos(Math.sin(yaw) * c, Math.sin(0.55), Math.cos(yaw) * c, 0.022, [0, 0, 0]); pts.push(p); }
+      plait(P, pts, 0.02, B.head, S.hair);
+    } else if (hs === 'saengang') { // 새앙머리: two loops at the back, tied with ribbons
+      for (const s of [1, -1]) { P.add(xf(torus(0.03, 0.013, 6, 16), s * 0.045, 1.49, -0.1, 0, s * 0.5, 0), B.head, S.hair); P.add(xf(rbox(0.02, 0.03, 0.012, 0.005), s * 0.02, 1.5, -0.104), B.head, ribbon); }
+    } else if (hs === 'keunmeori') { // 큰머리 (가체): a great braided roll over the head on a 쪽
+      P.add(xf(sphere(1, 16, 12), 0, 1.462, -0.104, 0, 0, 0, 0.043, 0.028, 0.032), B.head, S.hair);
+      const pts = []; for (let i = 0; i <= 20; i++) { const a = (i / 20) * TAU; pts.push([Math.sin(a) * 0.16, 1.685 + 0.012 * Math.cos(a * 2), -0.03 + Math.cos(a) * 0.095]); }
+      plait(P, pts, 0.034, B.head, S.hair);
     }
   }
 
-  /** headwear of the realistic style */
+  /** headwear of the realistic style: shells over the head and lathe profiles (§19.1) */
   function buildRealHat(P, app) {
     const S = SLOT, hat = app.hat;
+    if (!hat || hat === 'none') return;
     const ring = (e0, e1, grow, nu = 44, open) => sweep((v, u, out) => { const yaw = u * TAU; const e = lerp(e0(yaw), e1(yaw), v); const c = Math.cos(e); headPos(Math.sin(yaw) * c, Math.sin(e), Math.cos(yaw) * c, grow, out); }, { nu, nv: 4, open, cap0: false, cap1: false });
-    if (hat === 'gat') {
-      const brim = cyl(0.205, 0.205, 0.003, 48, false);
-      const bp = brim.attributes.position;
-      for (let i = 0; i < bp.count; i++) { const r = Math.hypot(bp.getX(i), bp.getZ(i)); bp.setY(i, bp.getY(i) - 0.01 * smooth(0.12, 0.205, r)); }
-      brim.computeVertexNormals();
-      P.add(xf(brim, 0, 1.632, -0.004), B.head, S.hat);
-      P.add(xf(cyl(0.056, 0.067, 0.14, 24), 0, 1.703, -0.004), B.head, S.hat);
-      P.add(xf(cyl(0.068, 0.068, 0.018, 24, true), 0, 1.64, -0.004), B.head, S.hat2);
-      for (const s of [1, -1]) { // 갓끈: bead strings from the brim, tied under the chin, hanging to the chest
+    /** a flat brim that droops (or turns up) toward its edge */
+    const brim = (r, y, drop, segs = 48, z = -0.004) => { const g = cyl(r, r, 0.003, segs, false); const bp = g.attributes.position; for (let i = 0; i < bp.count; i++) { const d = Math.hypot(bp.getX(i), bp.getZ(i)); bp.setY(i, bp.getY(i) - drop * smooth(0.1, r, d)); } g.computeVertexNormals(); return xf(g, 0, y, z); };
+    /** 갓끈: bead strings from the brim tied under the chin */
+    const strings = (slot, beads) => {
+      for (const s of [1, -1]) {
         const pts = [[s * 0.07, 1.63, 0.02], [s * 0.075, 1.52, 0.055], [s * 0.035, 1.41, 0.075], [s * 0.03, 1.32, 0.11], [s * 0.035, 1.22, 0.12]];
-        P.add(sweepPath(pts, 0.0022, { nu: 4, nv: 16 }), (x, y) => { const t = smooth(1.43, 1.36, y); return [B.head, 1 - t, B.cloth, t]; }, S.dark);
-        for (let i = 0; i < 6; i++) { const t = 0.45 + i * 0.09; const q = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))).getPointAt(Math.min(1, t)); P.add(xf(sphere(0.0055, 6, 5), q.x, q.y, q.z), (x, y) => { const k = smooth(1.43, 1.36, y); return [B.head, 1 - k, B.cloth, k]; }, S.gold); }
+        P.add(sweepPath(pts, 0.0022, { nu: 4, nv: 16 }), (x, y) => { const t = smooth(1.43, 1.36, y); return [B.head, 1 - t, B.cloth, t]; }, slot);
+        if (beads) for (let i = 0; i < 6; i++) { const t = 0.45 + i * 0.09; const q = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))).getPointAt(Math.min(1, t)); P.add(xf(sphere(0.0055, 6, 5), q.x, q.y, q.z), (x, y) => { const k = smooth(1.43, 1.36, y); return [B.head, 1 - k, B.cloth, k]; }, S.dark); }
       }
-    } else if (hat === 'jokduri') {
-      P.add(xf(lathe([[0, 0], [0.034, 0.004], [0.04, 0.03], [0.027, 0.045], [0, 0.048]], 6), 0, 1.658, 0.016, -0.18, 0, 0), B.head, S.hat);
-      for (let i = 0; i < 6; i++) { const a = (i / 6) * TAU; P.add(xf(sphere(0.006, 6, 5), Math.sin(a) * 0.03, 1.704, 0.016 + Math.cos(a) * 0.03 - 0.008), B.head, i % 2 ? S.red : S.hat2); }
-      P.add(xf(sphere(0.009, 8, 6), 0, 1.718, 0.012), B.head, S.hat2);
-    } else if (hat === 'ayam' || hat === 'jobawi') {
-      const ear = hat === 'jobawi';
-      P.add(headShell((yaw, elev) => {
-        const ay = Math.abs(yaw);
-        const lo = ear ? lerp(-0.42, 0.3, smooth(1.9, 0.9, ay)) : 0.22, hi = 0.86;
-        const face = smooth(-0.08, 0.08, 1.0 - ay) * smooth(-0.06, 0.06, 0.62 - elev);
-        const on = smooth(lo - 0.04, lo + 0.04, elev) * smooth(hi + 0.04, hi - 0.04, elev) * (1 - face);
-        return lerp(-0.004, 0.016, on);
-      }, 44, 30), B.head, S.hat);
-      P.add(ring(() => 0.86, () => 0.9, 0.018), B.head, S.dark);                                               // fur trim
-      P.add(xf(sphere(0.011, 8, 6), 0, HEAD.cy + 0.095, headPos(0, 0.8, 0.6, 0.02, [0, 0, 0])[2] + 0.004), B.head, S.hat2); // 술
-      if (!ear) for (const s of [1, -1]) P.add(xf(rbox(0.04, 0.42, 0.004, 0.002), s * 0.024, 1.36, backZ(1.36) - 0.03, 0.03, 0, s * 0.04), B.hairB, S.hat2); // 드림
-      else for (const z of [1, -1]) P.add(xf(sphere(0.008, 8, 6), 0, HEAD.cy + 0.075, headPos(0, 0.65, 0.76 * z, 0.02, [0, 0, 0])[2]), B.head, S.gold);
-    } else if (hat === 'hogeon' || hat === 'bokgeon') {
-      P.add(headShell((yaw, elev) => {
-        const face = smooth(-0.08, 0.08, 1.0 - Math.abs(yaw)) * smooth(-0.06, 0.06, 0.55 - elev);
-        return lerp(-0.004, 0.015 + (hat === 'bokgeon' ? 0.012 * smooth(0, -1, Math.cos(yaw)) * smooth(0.2, 0.9, elev) : 0), (1 - face) * smooth(-0.55, -0.45, elev));
-      }, 44, 30), B.head, S.hat);
-      P.add(xf(rbox(0.12, 0.2, 0.008, 0.004), 0, 1.43, backZ(1.43) - 0.022, 0.12, 0, 0), B.hairB, S.hat);       // back flap
-      if (hat === 'hogeon') for (const s of [1, -1]) { P.add(xf(sphere(0.022, 8, 6), s * 0.055, 1.67, -0.01, 0, 0, 0, 1, 1, 0.5), B.head, S.hat); P.add(xf(sphere(0.012, 6, 5), s * 0.055, 1.67, 0.0, 0, 0, 0, 1, 1, 0.4), B.head, S.hat2); }
-      else for (const s of [1, -1]) P.add(xf(rbox(0.02, 0.16, 0.004, 0.002), s * 0.03, 1.35, backZ(1.35) - 0.03, 0.08, 0, s * 0.1), B.hairB, S.hat);
-    } else if (hat === 'strawhat') {
-      const brim = cyl(0.215, 0.215, 0.006, 40, false);
-      const bp = brim.attributes.position;
-      for (let i = 0; i < bp.count; i++) { const r = Math.hypot(bp.getX(i), bp.getZ(i)); bp.setY(i, bp.getY(i) - 0.028 * smooth(0.11, 0.215, r)); }
-      brim.computeVertexNormals();
-      P.add(tilt2(xf(brim, 0, 1.635, -0.006), -0.08), B.head, S.hat);
-      P.add(tilt2(xf(lathe([[0.096, 1.632], [0.095, 1.69], [0.088, 1.715], [0.06, 1.728], [0, 1.73]], 28), 0, 0, -0.006), -0.08), B.head, S.hat);
-      P.add(tilt2(xf(cyl(0.0975, 0.0975, 0.018, 28, true), 0, 1.648, -0.006), -0.08), B.head, S.hat2);
-    } else if (hat === 'cap') {
-      P.add(headShell((yaw, elev) => { const lo = lerp(0.34, -0.12, smooth(1.2, 2.6, Math.abs(yaw))); return lerp(-0.004, 0.012, smooth(lo - 0.04, lo + 0.04, elev)); }, 40, 28), B.head, S.hat);
-      P.add(xf(cyl(0.085, 0.085, 0.006, 24, false, -1.1, 2.2), 0, 1.632, 0.06, 0.12, 0, 0, 1, 1, 1.15), B.head, S.hat);
-    } else if (hat === 'headband') {
-      P.add(ring(() => 0.5, () => 0.6, 0.014), B.head, S.hat);
+    };
+    const ties = (slot) => { for (const s of [1, -1]) P.add(sweepPath([[s * 0.075, 1.6, 0.0], [s * 0.07, 1.5, 0.04], [s * 0.03, 1.43, 0.07]], 0.003, { nu: 4, nv: 8 }), B.head, slot); };
+    /** a cap over the skull: lo / hi = the elevation band it covers, face = how far it stays off the face */
+    const cap = (grow, lo, hi, faceEl, extra) => headShell((yaw, elev) => {
+      const ay = Math.abs(yaw), l = typeof lo === 'function' ? lo(ay) : lo;
+      const face = faceEl == null ? 0 : smooth(-0.08, 0.08, 1.0 - ay) * smooth(-0.06, 0.06, faceEl - elev);
+      const on = smooth(l - 0.04, l + 0.04, elev) * smooth(hi + 0.04, hi - 0.04, elev) * (1 - face);
+      return lerp(-0.004, grow + (extra ? extra(yaw, elev) : 0), on);
+    }, 44, 30);
+    switch (hat) {
+      case 'gat': case 'chorip': case 'paeraengi': { // 갓 (horsehair), 초립 (fine straw), 패랭이 (bamboo)
+        const R = hat === 'gat' ? 0.205 : hat === 'chorip' ? 0.15 : 0.17, H = hat === 'gat' ? 0.14 : hat === 'chorip' ? 0.1 : 0.085;
+        P.add(brim(R, 1.632, hat === 'paeraengi' ? 0.014 : 0.01), B.head, S.hat);
+        P.add(xf(cyl(hat === 'paeraengi' ? 0.045 : 0.056, hat === 'paeraengi' ? 0.07 : 0.067, H, 24), 0, 1.633 + H / 2, -0.004), B.head, S.hat);
+        P.add(xf(cyl(0.068, 0.068, 0.018, 24, true), 0, 1.64, -0.004), B.head, S.hat2);
+        strings(hat === 'gat' ? S.dark : S.hat2, hat === 'gat');
+        if (hat === 'paeraengi') for (const s of [1, -1]) P.add(xf(sphere(0.02, 8, 6), s * 0.07, 1.665, 0.0), B.head, S.white); // 목화송이
+        break;
+      }
+      case 'jeollip': { // 전립: a felt dome with a turned-up brim, a peacock feather and a red tassel
+        const g = brim(0.15, 1.632, -0.03, 40); P.add(g, B.head, S.hat);
+        P.add(xf(lathe([[0.085, 0], [0.084, 0.03], [0.07, 0.06], [0.04, 0.078], [0, 0.082]], 24), 0, 1.632, -0.004), B.head, S.hat);
+        P.add(xf(sphere(0.016, 8, 6), 0, 1.718, -0.004), B.head, S.gold);
+        P.add(xf(lathe([[0, 0], [0.012, -0.004], [0.02, -0.05], [0, -0.054]], 10), 0, 1.72, -0.03, 0.9, 0, 0), B.head, S.red);
+        P.add(sweepPath([[0.03, 1.71, -0.03], [0.06, 1.78, -0.1], [0.07, 1.82, -0.18]], (v) => 0.006 + 0.012 * Math.sin(Math.PI * v), { nu: 5, nv: 8, flat: 0.3 }), B.head, S.leaf);
+        strings(S.hat2, false);
+        break;
+      }
+      case 'satgat': case 'jeonmo': { // 삿갓 (a deep straw cone) / 전모 (a flat umbrella of oiled paper)
+        const deep = hat === 'satgat';
+        P.add(xf(lathe(deep ? [[0.27, 0], [0.2, 0.04], [0.1, 0.12], [0.02, 0.18], [0, 0.185]] : [[0.25, 0], [0.18, 0.025], [0.07, 0.07], [0, 0.085]], 32), 0, deep ? 1.6 : 1.64, -0.006), B.head, S.hat);
+        P.add(xf(cyl(0.09, 0.09, 0.03, 20, true), 0, 1.65, -0.006), B.head, S.hat2);
+        if (!deep) for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; P.add(sweepPath([[0, 1.725, -0.006], [Math.sin(a) * 0.12, 1.69, Math.cos(a) * 0.12 - 0.006], [Math.sin(a) * 0.245, 1.643, Math.cos(a) * 0.245 - 0.006]], 0.002, { nu: 3, nv: 6 }), B.head, i % 2 ? S.red : S.blue); }
+        ties(S.hat2);
+        break;
+      }
+      case 'samo': { // 사모: a black crown higher at the back, two flat wings
+        P.add(cap(0.016, -0.15, 1.6, 0.55), B.head, S.hat);
+        P.add(xf(lathe([[0.075, 0], [0.074, 0.06], [0.055, 0.09], [0, 0.095]], 24, 0.8), 0, 1.63, -0.04), B.head, S.hat);
+        for (const s of [1, -1]) P.add(xf(rbox(0.14, 0.05, 0.004, 0.02), s * 0.11, 1.68, -0.08, 0, s * 0.15, s * 0.1), B.head, S.hat);
+        break;
+      }
+      case 'yugeon': case 'tanggeon': case 'jeongja': { // 유건 (a square hood), 탕건 (the small crown under a 갓), 정자관 (tiers of peaks)
+        P.add(cap(0.01, 0.35, 1.6, null), B.head, S.hat);
+        if (hat === 'yugeon') { P.add(xf(rbox(0.15, 0.1, 0.19, 0.01), 0, 1.68, -0.01), B.head, S.hat); P.add(xf(rbox(0.004, 0.09, 0.2, 0.002), 0, 1.73, -0.01, 0, 0, 0), B.head, S.hat2); for (const s of [1, -1]) P.add(xf(rbox(0.035, 0.16, 0.004, 0.002), s * 0.03, 1.5, backZ(1.5) - 0.02, 0.1, 0, s * 0.08), B.hairB, S.hat); }
+        else if (hat === 'tanggeon') P.add(xf(lathe([[0.086, 0], [0.085, 0.04], [0.075, 0.075], [0.05, 0.09], [0, 0.092]], 24, 0.95), 0, 1.6, -0.01, -0.12, 0, 0), B.head, S.hat);
+        else for (let k = 0; k < 3; k++) { const y = 1.64 + k * 0.045, w = 0.17 - k * 0.035; for (const z of [1, -1]) P.add(xf(rbox(w, 0.06, 0.006, 0.003), 0, y, -0.01 + z * (0.07 - k * 0.012), 0, 0, 0), B.head, S.hat); for (const s of [1, -1]) P.add(xf(rbox(0.006, 0.06, 0.14 - k * 0.024, 0.003), s * w / 2, y, -0.01), B.head, S.hat); P.add(xf(rbox(w * 0.7, 0.04, 0.006, 0.003), 0, y + 0.04, -0.01, 0, 0, 0), B.head, S.hat2); }
+        break;
+      }
+      case 'ayam': case 'jobawi': case 'nambawi': case 'pungcha': { // winter coverings: 아얌 (forehead), 조바위 (ears), 남바위 / 풍차 (ears, neck; open on top)
+        const ear = hat !== 'ayam', open = hat === 'nambawi' || hat === 'pungcha';
+        const lo = (ay) => (hat === 'pungcha' ? lerp(-0.6, 0.3, smooth(2.2, 0.9, ay)) : hat === 'nambawi' ? lerp(-0.62, 0.3, smooth(1.9, 0.9, ay)) : ear ? lerp(-0.42, 0.3, smooth(1.9, 0.9, ay)) : 0.22);
+        P.add(cap(0.016, lo, open ? 0.72 : 0.86, 0.62), B.head, S.hat);
+        P.add(ring(() => (open ? 0.72 : 0.86), () => (open ? 0.78 : 0.9), 0.018), B.head, S.dark);       // fur trim
+        if (open) P.add(ring(() => 0.3, () => 0.36, 0.019, 30, true), B.head, S.dark);
+        P.add(xf(sphere(0.011, 8, 6), 0, HEAD.cy + 0.095, headPos(0, 0.8, 0.6, 0.02, [0, 0, 0])[2] + 0.004), B.head, S.hat2); // 술
+        if (!ear) for (const s of [1, -1]) P.add(xf(rbox(0.04, 0.42, 0.004, 0.002), s * 0.024, 1.36, backZ(1.36) - 0.03, 0.03, 0, s * 0.04), B.hairB, S.hat2); // 드림
+        else for (const z of [1, -1]) P.add(xf(sphere(0.008, 8, 6), 0, HEAD.cy + 0.075, headPos(0, 0.65, 0.76 * z, 0.02, [0, 0, 0])[2]), B.head, S.gold);
+        break;
+      }
+      case 'hogeon': case 'bokgeon': case 'gulle': { // 호건 (tiger), 복건 (black hood, a flap), 굴레 (a child's bright cap with beads)
+        P.add(cap(0.015, -0.5, 1.6, 0.55, hat === 'bokgeon' ? (yaw, elev) => 0.012 * smooth(0, -1, Math.cos(yaw)) * smooth(0.2, 0.9, elev) : null), B.head, S.hat);
+        if (hat !== 'gulle') P.add(xf(rbox(0.12, 0.2, 0.008, 0.004), 0, 1.43, backZ(1.43) - 0.022, 0.12, 0, 0), B.hairB, S.hat);
+        if (hat === 'hogeon') for (const s of [1, -1]) { P.add(xf(sphere(0.022, 8, 6), s * 0.055, 1.67, -0.01, 0, 0, 0, 1, 1, 0.5), B.head, S.hat); P.add(xf(sphere(0.012, 6, 5), s * 0.055, 1.67, 0.0, 0, 0, 0, 1, 1, 0.4), B.head, S.hat2); }
+        else if (hat === 'bokgeon') for (const s of [1, -1]) P.add(xf(rbox(0.02, 0.16, 0.004, 0.002), s * 0.03, 1.35, backZ(1.35) - 0.03, 0.08, 0, s * 0.1), B.hairB, S.hat);
+        else { for (let i = 0; i < 5; i++) P.add(xf(sphere(0.008, 6, 5), 0, 1.66 - i * 0.03, headPos(0, 0.95 - i * 0.2, -0.3 - i * 0.12, 0.02, [0, 0, 0])[2]), B.head, i % 2 ? S.red : S.gold); P.add(xf(rbox(0.05, 0.22, 0.004, 0.002), 0, 1.4, backZ(1.4) - 0.03, 0.1, 0, 0), B.hairB, S.hat2); }
+        break;
+      }
+      case 'jokduri': case 'hwagwan': { // 족두리 / 화관: a small crown on the top of the head; the 화관 with flowers
+        const big = hat === 'hwagwan';
+        P.add(xf(lathe(big ? [[0, 0], [0.045, 0.004], [0.052, 0.04], [0.036, 0.062], [0, 0.066]] : [[0, 0], [0.034, 0.004], [0.04, 0.03], [0.027, 0.045], [0, 0.048]], 8), 0, 1.658, 0.016, -0.18, 0, 0), B.head, S.hat);
+        const n = big ? 10 : 6;
+        for (let i = 0; i < n; i++) { const a = (i / n) * TAU; P.add(xf(sphere(big ? 0.009 : 0.006, 6, 5), Math.sin(a) * (big ? 0.042 : 0.03), big ? 1.72 : 1.704, 0.016 + Math.cos(a) * (big ? 0.042 : 0.03) - 0.008), B.head, i % 3 === 0 ? S.red : i % 3 === 1 ? S.hat2 : big ? S.leaf : S.hat2); }
+        P.add(xf(sphere(big ? 0.013 : 0.009, 8, 6), 0, big ? 1.74 : 1.718, 0.012), B.head, S.hat2);
+        if (big) for (const s of [1, -1]) P.add(sweepPath([[s * 0.04, 1.71, 0.02], [s * 0.07, 1.68, 0.04], [s * 0.08, 1.62, 0.05]], 0.0025, { nu: 3, nv: 6 }), B.head, S.gold);
+        break;
+      }
+      case 'gokkal': { // 고깔: a tall paper cone covered in paper flowers
+        P.add(xf(lathe([[0.088, 0], [0.07, 0.08], [0.04, 0.17], [0, 0.25]], 24, 0.95), 0, 1.6, -0.01), B.head, S.hat);
+        const fc = [S.red, S.gold, S.blue, S.red, S.leaf, S.gold];
+        for (let i = 0; i < 12; i++) { const t = (i % 4) / 4, a = i * 2.4; const r = lerp(0.085, 0.045, t); P.add(xf(sphere(0.02, 8, 6), Math.sin(a) * r, 1.62 + t * 0.15, Math.cos(a) * r - 0.01), B.head, fc[i % 6]); }
+        ties(S.hat);
+        break;
+      }
+      case 'sangmo': { // 상모: a small black hat with a long white ribbon on a pivot
+        P.add(xf(lathe([[0.088, 0], [0.087, 0.03], [0.07, 0.06], [0, 0.066]], 24), 0, 1.6, -0.01), B.head, S.hat);
+        P.add(xf(brim(0.12, 1.604, 0.004, 32, -0.01), 0, 0, 0), B.head, S.hat);
+        P.add(xf(sphere(0.012, 8, 6), 0, 1.672, -0.01), B.head, S.gold);
+        P.add(sweepPath([[0, 1.68, -0.01], [0, 1.78, -0.08], [0, 1.72, -0.25], [0, 1.55, -0.36], [0, 1.35, -0.4]], 0.012, { nu: 6, nv: 24, flat: 0.12 }), B.pony, S.white);
+        ties(S.hat);
+        break;
+      }
+      case 'strawhat': {
+        const g = brim(0.215, 1.635, 0.028, 40, -0.006);
+        P.add(tilt2(g, -0.08), B.head, S.hat);
+        P.add(tilt2(xf(lathe([[0.096, 1.632], [0.095, 1.69], [0.088, 1.715], [0.06, 1.728], [0, 1.73]], 28), 0, 0, -0.006), -0.08), B.head, S.hat);
+        P.add(tilt2(xf(cyl(0.0975, 0.0975, 0.018, 28, true), 0, 1.648, -0.006), -0.08), B.head, S.hat2);
+        break;
+      }
+      case 'sugeon': { // 머릿수건: a cloth round the head, knotted at the right front
+        P.add(ring(() => 0.48, () => 0.66, 0.014), B.head, S.hat);
+        const k = headPos(-0.5, 0.55, 0.7, 0.02, [0, 0, 0]);
+        P.add(xf(sphere(0.014, 8, 6), k[0], k[1], k[2], 0, 0, 0, 1.3, 1, 0.7), B.head, S.hat);
+        for (const s of [1, -1]) P.add(xf(rbox(0.022, 0.05, 0.004, 0.002), k[0] - 0.01, k[1] - 0.025, k[2] + 0.004, 0, -0.6, s * 0.5), B.head, S.hat);
+        break;
+      }
+      default: break;
     }
   }
   /** rotate a model-space geometry around the realistic head centre (hat tilt) */
   function tilt2(geo, rx) { xf(geo, 0, -HEAD.cy, 0); xf(geo, 0, 0, 0, rx, 0, 0); return xf(geo, 0, HEAD.cy, 0); }
 
+  /** 짐: 봇짐 (a bundle on the back), 괴나리봇짐 (a small one with a strap), 바구니 (basket), 보자기 (a wrapped bundle in the hand) */
   function buildRealBag(P, app) {
     const S = SLOT, bag = app.bag;
-    if (bag === 'backpack') {
-      P.add(xf(rbox(0.26, 0.33, 0.12, 0.04), 0, 1.17, -0.17), B.bag, S.bag);
-      P.add(xf(rbox(0.19, 0.12, 0.04, 0.016), 0, 1.07, -0.24), B.bag, S.bag2);
-      P.add(xf(rbox(0.262, 0.07, 0.124, 0.03), 0, 1.31, -0.168), B.bag, S.bag2);
-      for (const s of [1, -1]) P.add(sweepPath([[s * 0.07, 1.33, -0.115], [s * 0.1, 1.41, -0.06], [s * 0.115, 1.4, 0.03], torsoPt(s * 0.75, 1.28, 0.014), torsoPt(s * 1.1, 1.12, 0.014), [s * 0.12, 1.06, -0.11]], 0.009, { nu: 5, nv: 22, flat: 0.35 }), torsoW, S.bag2);
+    const straps = (y0) => { for (const s of [1, -1]) P.add(sweepPath([[s * 0.07, y0, -0.12], [s * 0.1, 1.41, -0.06], [s * 0.115, 1.4, 0.03], torsoPt(s * 0.75, 1.28, 0.014), torsoPt(s * 1.1, 1.12, 0.014), [s * 0.12, 1.06, -0.11]], 0.008, { nu: 5, nv: 20, flat: 0.4 }), torsoW, S.bag2); };
+    if (bag === 'botjim' || bag === 'gwaenari') {
+      const big = bag === 'botjim';
+      P.add(xf(sphere(1, 16, 12), 0, big ? 1.18 : 1.24, big ? -0.2 : -0.17, 0, 0, 0, big ? 0.17 : 0.12, big ? 0.15 : 0.1, big ? 0.1 : 0.075), B.bag, S.bag);
+      P.add(xf(sphere(0.03, 10, 8), 0, big ? 1.32 : 1.33, big ? -0.18 : -0.16, 0, 0, 0, 1.4, 0.8, 1), B.bag, S.bag2);             // the knot
+      for (const s of [1, -1]) P.add(xf(rbox(0.03, 0.07, 0.005, 0.002), s * 0.03, big ? 1.3 : 1.31, big ? -0.165 : -0.15, 0.2, 0, s * 0.7), B.bag, S.bag2);
+      straps(1.32);
     } else if (bag === 'basket') {
       P.add(xf(lathe([[0, 0], [0.1, 0.005], [0.13, 0.12], [0.15, 0.3], [0.145, 0.305], [0, 0.29]], 20), 0, 1.04, -0.22, -0.1, 0, 0), B.bag, S.bag);
       P.add(xf(torus(0.148, 0.01, 5, 24), 0, 1.335, -0.25, Math.PI / 2 - 0.1, 0, 0), B.bag, S.bag2);
       for (const [lx, ly, lz] of [[-0.05, 1.36, -0.24], [0.05, 1.37, -0.21], [0, 1.38, -0.28]]) P.add(xf(sphere(0.05, 10, 8), lx, ly, lz, 0, 0, 0, 1, 0.7, 1), B.bag, S.leaf);
       for (const s of [1, -1]) P.add(sweepPath([[s * 0.08, 1.32, -0.14], [s * 0.11, 1.41, -0.05], [s * 0.115, 1.4, 0.03], torsoPt(s * 0.75, 1.27, 0.014), [s * 0.13, 1.12, -0.13]], 0.008, { nu: 5, nv: 18, flat: 0.5 }), torsoW, S.bag2);
-    } else if (bag === 'pouch') {
-      P.add(xf(rbox(0.13, 0.11, 0.05, 0.02), 0.17, 0.96, 0.04, 0, 0.5, 0), B.hips, S.bag);
-      P.add(xf(rbox(0.134, 0.05, 0.054, 0.016), 0.17, 0.995, 0.042, 0.1, 0.5, 0), B.hips, S.bag2);
-      P.add(sweepPath([[0.16, 1.02, 0.07], torsoPt(0.5, 1.12, 0.016), torsoPt(0, 1.24, 0.016), torsoPt(-0.55, 1.36, 0.014), [-0.12, 1.41, -0.03], torsoPt(-2.6, 1.3, 0.014), torsoPt(2.8, 1.06, 0.016), [0.17, 0.99, 0.0]], 0.0075, { nu: 5, nv: 34, flat: 0.4 }), torsoW, S.bag2);
+    } else if (bag === 'bojagi') { // in the left hand: a square bundle with its four corners knotted on top
+      P.add(xf(rbox(0.13, 0.09, 0.11, 0.035), 0.22, 0.69, 0.0), B.hdL, S.bag);
+      P.add(xf(sphere(0.018, 8, 6), 0.215, 0.76, 0.0), B.hdL, S.bag);
+      for (const s of [1, -1]) P.add(xf(rbox(0.02, 0.04, 0.004, 0.002), 0.215 + s * 0.012, 0.785, 0, 0, 0, s * 0.6), B.hdL, S.bag2);
     }
   }
 
+  /** 꾸미개, each in a slot of its own: 노리개, 주머니, 부채, 머리꽂이, 댕기, 띠 */
   function buildRealTrinket(P, app) {
-    const S = SLOT, a = app.accessory;
-    const hanbok = HANBOK_TOPS.has(app.top);
-    if (a === 'norigae') { // hangs from the 고름 (or the waist): knot, ornament, long tassel
-      const p = hanbok ? torsoPt(-0.58, app.bottom === 'skirt' ? 1.2 : 1.15, 0.03) : torsoPt(-0.7, 1.02, 0.03);
-      P.add(xf(sphere(0.008, 8, 6), p[0], p[1] - 0.01, p[2]), B.cloth, S.acc);
-      P.add(xf(sphere(1, 10, 8), p[0], p[1] - 0.05, p[2] + 0.002, 0, 0, 0, 0.016, 0.022, 0.007), B.cloth, S.gold);
-      P.add(xf(sphere(0.007, 8, 6), p[0], p[1] - 0.082, p[2]), B.cloth, S.acc);
-      P.add(xf(lathe([[0, 0], [0.006, -0.004], [0.011, -0.05], [0.013, -0.12], [0, -0.124]], 10), p[0], p[1] - 0.09, p[2]), B.cloth, S.acc);
-    } else if (a === 'bokjumeoni') {
-      P.add(xf(lathe([[0, 0], [0.03, 0.006], [0.042, 0.035], [0.03, 0.064], [0.014, 0.072], [0.02, 0.08], [0, 0.084]], 14), 0.165, 0.9, 0.05), B.hips, S.acc);
-      P.add(xf(torus(0.015, 0.0035, 4, 12), 0.165, 0.97, 0.05, Math.PI / 2, 0, 0), B.hips, S.gold);
-      P.add(sweepPath([[0.165, 0.975, 0.05], [0.16, 1.0, 0.07], torsoPt(0.9, 1.02, 0.02)], 0.003, { nu: 4, nv: 8 }), B.hips, S.gold);
-    } else if (a === 'fan') { // a folded 합죽선 in the left hand
-      P.add(xf(rbox(0.012, 0.25, 0.028, 0.005), 0.215, 0.73, 0.03, -0.35, 0, 0.05), B.hdL, S.acc);
-      P.add(xf(sphere(0.008, 6, 5), 0.215, 0.85, -0.012), B.hdL, S.dark);
-    } else if (a === 'glasses') {
-      const ez = headPos(0.38, 0.06, 0.92, 0, [0, 0, 0])[2] + 0.012;
-      for (const s of [1, -1]) {
-        P.add(xf(torus(0.017, 0.0017, 5, 20), s * 0.03, HEAD.cy + 0.004, ez), B.head, S.acc);
-        P.add(sweepPath([[s * 0.047, HEAD.cy + 0.008, ez - 0.004], [s * 0.074, HEAD.cy + 0.01, ez - 0.05], [s * 0.08, HEAD.cy, -0.02]], 0.0016, { nu: 4, nv: 8 }), B.head, S.acc);
-      }
-      P.add(xf(cyl(0.0016, 0.0016, 0.026, 5), 0, HEAD.cy + 0.009, ez + 0.003, 0, 0, Math.PI / 2), B.head, S.acc);
-    } else if (a === 'beard') {
-      P.add(headShell((yaw, elev) => lerp(-0.003, 0.0065, smooth(-0.5, -0.62, elev) * smooth(1.25, 1.0, Math.abs(yaw)) * (1 - gauss((elev + 0.64) / 0.05) * gauss(yaw / 0.35))), 40, 30), B.head, S.hair);
-      for (const s of [1, -1]) P.add(sweepPath([[0, HEAD.cy - 0.06, headPos(0, -0.52, 0.85, 0.004, [0, 0, 0])[2]], [s * 0.016, HEAD.cy - 0.063, headPos(0.25, -0.55, 0.8, 0.004, [0, 0, 0])[2]], [s * 0.03, HEAD.cy - 0.072, headPos(0.42, -0.6, 0.7, 0.003, [0, 0, 0])[2]]], (v) => 0.004 * (1 - 0.6 * v), { nu: 5, nv: 6 }), B.head, S.hair);
+    const S = SLOT;
+    const chima = !!(BOTTOM_KIT[app.bottom] || {}).chima;
+    const knot = torsoPt(-0.58, chima ? 1.2 : 1.15, 0.03);
+    // ---- 노리개: hangs from the 고름 (knot, ornaments, long tassels on the cloth spring)
+    const nor = app.norigae;
+    if (nor && nor !== 'none') {
+      const p = knot;
+      const one = (dx, y0, orn, len) => {
+        P.add(xf(sphere(0.007, 8, 6), p[0] + dx, y0, p[2]), B.cloth, S.nor);
+        if (orn === 'nabi') for (const s of [1, -1]) P.add(xf(sphere(1, 10, 8), p[0] + dx + s * 0.016, y0 - 0.035, p[2] + 0.002, 0, 0, s * 0.5, 0.017, 0.012, 0.004), B.cloth, S.gold);
+        else if (orn === 'bangul') for (let i = 0; i < 3; i++) P.add(xf(sphere(0.008, 8, 6), p[0] + dx + (i - 1) * 0.012, y0 - 0.032 - (i === 1 ? 0.006 : 0), p[2]), B.cloth, S.gold);
+        else P.add(xf(sphere(1, 10, 8), p[0] + dx, y0 - 0.035, p[2] + 0.002, 0, 0, 0, 0.014, 0.02, 0.007), B.cloth, orn === 'jade' ? S.leaf : S.gold);
+        P.add(xf(sphere(0.006, 8, 6), p[0] + dx, y0 - 0.065, p[2]), B.cloth, S.nor);
+        P.add(xf(lathe([[0, 0], [0.005, -0.004], [0.01, -0.05], [0.012, -len], [0, -len - 0.004]], 10), p[0] + dx, y0 - 0.072, p[2]), B.cloth, S.nor);
+      };
+      P.add(sweepPath([[p[0], p[1], p[2]], [p[0], p[1] - 0.05, p[2] + 0.002]], 0.002, { nu: 3, nv: 4 }), B.cloth, S.nor);
+      if (nor === 'samjak') { one(-0.026, p[1] - 0.06, 'gold', 0.13); one(0, p[1] - 0.05, 'jade', 0.15); one(0.026, p[1] - 0.06, 'gold', 0.13); }
+      else one(0, p[1] - 0.05, nor === 'nabi' ? 'nabi' : nor === 'bangul' ? 'bangul' : 'gold', 0.12);
+    }
+    // ---- 주머니: at the left hip on a cord
+    const pou = app.pouch;
+    if (pou && pou !== 'none') {
+      const x = 0.165, y = 0.9, z = 0.05;
+      if (pou === 'gwijumeoni') { P.add(xf(rbox(0.07, 0.06, 0.025, 0.012), x, y + 0.03, z), B.hips, S.pouch); for (const s of [1, -1]) P.add(xf(sphere(0.012, 6, 5), x + s * 0.037, y + 0.012, z, 0, 0, 0, 1, 1.4, 0.6), B.hips, S.pouch); }
+      else P.add(xf(lathe([[0, 0], [0.03, 0.006], [0.042, 0.035], [0.03, 0.064], [0.014, 0.072], [0.02, 0.08], [0, 0.084]], 14), x, y, z), B.hips, S.pouch);
+      P.add(xf(torus(0.015, 0.0035, 4, 12), x, 0.97, z, Math.PI / 2, 0, 0), B.hips, pou === 'bokjumeoni' ? S.gold : S.dark);
+      P.add(sweepPath([[x, 0.975, z], [x - 0.005, 1.0, z + 0.02], torsoPt(0.9, 1.02, 0.02)], 0.003, { nu: 4, nv: 8 }), B.hips, S.gold);
+    }
+    // ---- 부채: in the left hand — 합죽선 (folded), 단선 (round silk), 파초선 (a big leaf)
+    const fan = app.fan;
+    if (fan === 'hapjuk') { P.add(xf(rbox(0.012, 0.25, 0.028, 0.005), 0.215, 0.73, 0.03, -0.35, 0, 0.05), B.hdL, S.acc); P.add(xf(sphere(0.008, 6, 5), 0.215, 0.85, -0.012), B.hdL, S.dark); }
+    else if (fan === 'danseon' || fan === 'pacho') {
+      const big = fan === 'pacho';
+      P.add(xf(cyl(0.004, 0.004, big ? 0.16 : 0.12, 6), 0.215, 0.73, 0.02, -0.3, 0, 0), B.hdL, S.dark);
+      P.add(xf(cyl(big ? 0.12 : 0.085, big ? 0.12 : 0.085, 0.004, 24), 0.215, big ? 0.6 : 0.62, big ? 0.07 : 0.06, Math.PI / 2 - 0.3, 0, 0, big ? 0.7 : 1, 1, 1), B.hdL, S.acc);
+    }
+    // ---- 머리꽂이: 비녀 / 옥비녀 through the bun, 떨잠 on the top of the head, 뒤꽂이 behind the bun
+    const pin = app.hairpin;
+    if (pin && pin !== 'none') {
+      const bunHair = app.hair === 'jjok' || app.hair === 'keunmeori' || app.hair === 'eonjeun';
+      const by = app.hair === 'jjok' ? 1.466 : 1.5, bz = backZ(by) - 0.03;
+      if (pin === 'binyeo' || pin === 'okbinyeo') { P.add(xf(cyl(0.004, 0.004, bunHair ? 0.19 : 0.14, 8), 0, by, bz, 0, 0, Math.PI / 2), B.head, pin === 'okbinyeo' ? S.leaf : S.acc); for (const s of [1, -1]) P.add(xf(sphere(0.008, 8, 6), s * (bunHair ? 0.095 : 0.07), by, bz), B.head, pin === 'okbinyeo' ? S.leaf : S.acc); }
+      else if (pin === 'tteoljam') { const p = headPos(0, 0.9, 0.42, 0.014, [0, 0, 0]); P.add(xf(sphere(0.014, 8, 6), p[0], p[1], p[2]), B.head, S.acc); for (let i = 0; i < 5; i++) { const a = (i / 5) * TAU; P.add(xf(sphere(0.006, 6, 5), p[0] + Math.sin(a) * 0.016, p[1] + 0.006 + Math.cos(a) * 0.01, p[2]), B.head, i % 2 ? S.red : S.gold); } }
+      else { P.add(xf(rbox(0.05, 0.012, 0.012, 0.005), 0, by + 0.02, bz - 0.01, 0, 0, 0.3), B.head, S.acc); P.add(xf(sphere(0.009, 6, 5), 0.024, by + 0.028, bz - 0.012), B.head, S.red); }
+    }
+    // ---- 댕기: 제비부리 at a braid's end (or a bow), 도투락 (a wide pair falling down the back), 배씨 (on the parting)
+    const rib = app.ribbon;
+    if (rib === 'jebi' && !['daenggi', 'twinbraid', 'ttaeun', 'gwimit'].includes(app.hair)) {
+      P.add(xf(rbox(0.05, 0.022, 0.012, 0.006), 0, 1.5, backZ(1.5) - 0.012, 0.2, 0, 0), B.head, S.rib);
+      for (const s of [1, -1]) P.add(xf(rbox(0.018, 0.09, 0.004, 0.002), s * 0.012, 1.44, backZ(1.44) - 0.016, 0.1, 0, s * 0.2), B.hairB, S.rib);
+    } else if (rib === 'doturak') {
+      for (const s of [1, -1]) P.add(sweep((v, u, out) => { const y = lerp(1.47, 0.62, v); const x = s * (0.035 + 0.01 * v) + lerp(-0.022, 0.022, u); out[0] = x; out[1] = y; out[2] = backZ(Math.max(0.85, y)) - 0.04 - 0.05 * smooth(1.1, 0.62, y); }, { nu: 2, nv: 14, open: true }), B.hairB, S.rib);
+      P.add(xf(rbox(0.09, 0.03, 0.014, 0.006), 0, 1.475, backZ(1.475) - 0.03), B.head, S.rib);
+    } else if (rib === 'baessi') {
+      const p = headPos(0, 0.72, 0.68, 0.012, [0, 0, 0]);
+      P.add(xf(sphere(1, 10, 8), p[0], p[1], p[2], -0.6, 0, 0, 0.012, 0.018, 0.005), B.head, S.rib);
+      P.add(xf(sphere(0.005, 6, 5), p[0], p[1] + 0.018, p[2] - 0.004), B.head, S.gold);
+    }
+    // ---- 띠: 세조대 (a thin cord at the chest), 광다회 (a wide cord), 전대 (a sash), 각대 (a stiff belt), 삼색띠 (풍물)
+    const belt = app.belt;
+    const od = OUTER_KIT[app.outer];
+    const over = od && !od.apron ? 0.036 : chima ? 0.02 : 0.026;
+    if (belt === 'sejodae' || belt === 'gwangdahoe' || belt === 'jeondae') {
+      const y = belt === 'sejodae' ? 1.2 : belt === 'jeondae' ? 1.08 : 1.06, th = belt === 'sejodae' ? 0.006 : belt === 'gwangdahoe' ? 0.012 : 0.022;
+      P.add(torsoShell(y + th, y - th, over + 0.004, { nu: 34, nv: 1 }), torsoW, S.belt);
+      const k = torsoPt(-0.35, y, over + 0.012);
+      P.add(xf(sphere(belt === 'jeondae' ? 0.018 : 0.011, 8, 6), k[0], k[1], k[2], 0, 0, 0, 1.4, 1, 0.7), B.cloth, S.belt);
+      hangBand(P, [k[0] + 0.01, k[1] - 0.01, k[2] + 0.004], belt === 'sejodae' ? 0.42 : 0.32, belt === 'jeondae' ? 0.04 : 0.012, 0.04, S.belt);
+      hangBand(P, [k[0] - 0.01, k[1] - 0.01, k[2] + 0.006], belt === 'sejodae' ? 0.36 : 0.28, belt === 'jeondae' ? 0.034 : 0.012, -0.06, S.belt);
+      if (belt === 'sejodae') for (const dx of [0.01, -0.01]) P.add(xf(lathe([[0, 0], [0.006, -0.004], [0.01, -0.05], [0, -0.054]], 8), k[0] + dx, k[1] - 0.42, k[2] + 0.004), B.cloth, S.belt); // 술
+    } else if (belt === 'gakdae') { // stands off the robe, lower in front
+      P.add(sweep((v, u, out) => { const a = u * TAU; const y = lerp(1.03, 1.06, (1 - Math.cos(a)) / 2) + lerp(0.012, -0.012, v); const r = torsoAt(y); const p = se(a, r[0] + over + 0.03, r[1] + over + 0.035, 2.3); out[0] = p[0]; out[1] = y; out[2] = r[2] + p[1] + 0.01; }, { nu: 40, nv: 1 }), torsoW, S.belt);
+    } else if (belt === 'saekdi') { // 삼색띠: three sashes across the chest from the left shoulder to the right hip
+      const cols = [S.red, S.blue, S.gold];
+      for (let i = 0; i < 3; i++) { const d = (i - 1) * 0.025; P.add(sweepPath([torsoPt(0.9, 1.36 + d, over), torsoPt(0.25, 1.22 + d, over + 0.004), torsoPt(-0.4, 1.06 + d, over + 0.004), torsoPt(-1.2, 0.98 + d, over), torsoPt(-2.4, 1.1 + d, over), torsoPt(-3.0, 1.3 + d, over)], 0.01, { nu: 5, nv: 24, flat: 0.25 }), torsoW, cols[i]); }
+      const k = torsoPt(-0.9, 1.0, over + 0.02);
+      hangBand(P, k, 0.3, 0.03, 0.05, S.red); hangBand(P, [k[0] - 0.02, k[1], k[2]], 0.26, 0.03, -0.05, S.blue);
     }
   }
 
@@ -1468,7 +1760,10 @@
     return g;
   }
   const faceMats = new Map();
+  // the round style draws the nine faces with its own few (§19.1)
+  const CUTE_EXPR = { neutral: 'base', smile: 'base', laugh: 'happy', proud: 'happy', curious: 'think', focus: 'think', shy: 'base', sleepy: 'blink' };
   function faceMaterial(face, expr, style) {
+    if (style !== 'real' && CUTE_EXPR[expr]) expr = CUTE_EXPR[expr];
     const real = style === 'real';
     const key = (real ? 'r:' : '') + face + ':' + expr;
     let m = faceMats.get(key);
@@ -1491,21 +1786,25 @@
     ctx.clearRect(0, 0, W, H);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     const soft = (x, y, rx, ry, rgba) => { ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx); const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx); g.addColorStop(0, rgba); g.addColorStop(1, rgba.replace(/[\d.]+\)$/, '0)')); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, TAU); ctx.fill(); ctx.restore(); };
-    const happy = expr === 'happy' || expr === 'wink' || face === 'cheer';
+    // [hanbok] §19.1 the nine calm faces (무표정 미소 활짝 웃음 놀람 궁금 뿌듯 수줍음 졸림 집중) + the passing ones
+    const M = { neutral: { smile: 0 }, laugh: { happy: 1, open: 0.62, brow: -3 }, curious: { browOne: -9, look: [5, -3], smile: 0.2, shift: 4 },
+      proud: { happy: 1, open: 0.5, brow: -2, smile: 1, noTeeth: 1, blush: 0.22 }, shy: { look: [0, 5], open: 0.72, inner: 5, blush: 0.34, smile: 0.5, mw: 0.8 },
+      sleepy: { open: 0.3, brow: 4, smile: 0.1, mw: 0.85, inner: 2 }, focus: { open: 0.7, brow: 3, inner: -5, smile: 0, mw: 0.9 } }[expr] || {};
+    const happy = expr === 'happy' || expr === 'wink' || !!M.happy || (face === 'cheer' && !(expr in { neutral: 1, sleepy: 1, focus: 1, shy: 1, curious: 1 }));
     const ey = Y(0.005), edx = (0.031 / FACE_W) * W;
     // shading: eye sockets, nose sides, under the nose, under the lower lip, cheek warmth
     for (const s of [-1, 1]) {
       soft(cx + s * edx * 1.02, ey - 4, 44, 26, 'rgba(120,70,52,0.16)');
       soft(cx + s * 13, Y(-0.022), 9, 40, 'rgba(120,72,55,0.14)');
-      soft(cx + s * 88, Y(-0.042), 42, 26, `rgba(232,110,110,${happy ? 0.2 : 0.13})`);
+      soft(cx + s * 88, Y(-0.042), 42, 26, `rgba(232,110,110,${M.blush || (happy ? 0.2 : 0.13)})`);
     }
     soft(cx, Y(-0.056), 22, 8, 'rgba(110,60,48,0.22)');
     soft(cx, Y(-0.092), 26, 9, 'rgba(120,70,55,0.15)');
     // brows: short strokes
-    const browLift = expr === 'surprise' ? -10 : face === 'bright' ? -4 : 0;
+    const browLift = (expr === 'surprise' ? -10 : face === 'bright' ? -4 : 0) + (M.brow || 0);
     for (const s of [-1, 1]) {
-      const bx = cx + s * edx * 1.04, by = Y(0.027) + browLift - (expr === 'think' && s > 0 ? 8 : 0);
-      const inner = face === 'gentle' ? 4 : face === 'calm' ? 1 : -1;
+      const bx = cx + s * edx * 1.04, by = Y(0.027) + browLift - (expr === 'think' && s > 0 ? 8 : 0) + (M.browOne && s > 0 ? M.browOne : 0);
+      const inner = M.inner != null ? M.inner : face === 'gentle' ? 4 : face === 'calm' ? 1 : -1;
       ctx.strokeStyle = 'rgba(52,34,26,0.85)';
       for (let i = 0; i < 16; i++) {
         const t = i / 15, x = bx + s * lerp(-30, 32, t), y = by + (inner * (1 - t) * 1.2) - 7 * Math.sin(Math.PI * Math.min(1, t * 1.25)) + (t > 0.8 ? (t - 0.8) * 14 : 0);
@@ -1536,7 +1835,7 @@
       ctx.closePath();
       ctx.fillStyle = '#f2ece6'; ctx.fill();
       ctx.clip();
-      const ir = 11.5 * (expr === 'surprise' ? 0.95 : 1), ix = x + (expr === 'think' ? s * 0 + 5 : 0), iy = y - 1 + (expr === 'think' ? -4 : 0);
+      const ir = 11.5 * (expr === 'surprise' ? 0.95 : 1), ix = x + (expr === 'think' ? s * 0 + 5 : 0) + (M.look ? M.look[0] : 0), iy = y - 1 + (expr === 'think' ? -4 : 0) + (M.look ? M.look[1] : 0);
       const g = ctx.createRadialGradient(ix, iy, 1, ix, iy, ir);
       g.addColorStop(0, '#120b08'); g.addColorStop(0.3, '#2a1810'); g.addColorStop(0.62, '#4a2c1a'); g.addColorStop(0.9, '#3a2216'); g.addColorStop(1, '#1a100b');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(ix, iy, ir, 0, TAU); ctx.fill();
@@ -1558,12 +1857,13 @@
       let open = 1;
       if (expr === 'blink') open = 0;
       else if (expr === 'wink' && s > 0) open = 0;
+      else if (M.open) open = M.open;
       else if (expr === 'happy' || face === 'cheer') open = 0.82;
       else if (face === 'calm') open = 0.94;
       drawEye(s, open);
     }
     // lips
-    const my = Y(-0.075), mw = 22 * (expr === 'surprise' ? 0.6 : happy ? 1.15 : 1);
+    const my = Y(-0.075), mw = 22 * (expr === 'surprise' ? 0.6 : happy ? 1.15 : 1) * (M.mw || 1);
     const lipU = '#b8635d', lipL = '#cf7d74';
     if (expr === 'surprise' || expr === 'talk') {
       const oh = expr === 'surprise' ? 13 : 8;
@@ -1572,8 +1872,8 @@
       ctx.fillStyle = 'rgba(255,190,190,0.35)'; ctx.beginPath(); ctx.ellipse(cx, my + oh * 0.9, mw * 0.5, 2.5, 0, 0, TAU); ctx.fill();
       return;
     }
-    const smileK = expr === 'think' ? 0 : happy ? 1 : face === 'calm' ? 0.15 : face === 'gentle' ? 0.45 : 0.55;
-    const corner = -6 * smileK, shift = expr === 'think' ? 6 : 0;
+    const smileK = M.smile != null ? M.smile : expr === 'think' ? 0 : happy ? 1 : face === 'calm' ? 0.15 : face === 'gentle' ? 0.45 : 0.55;
+    const corner = -6 * smileK, shift = expr === 'think' ? 6 : M.shift || 0;
     // upper lip with a cupid's bow
     ctx.fillStyle = lipU;
     ctx.beginPath();
@@ -1591,7 +1891,7 @@
     ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK, cx + mw * 0.92 + shift, my + corner + 1);
     ctx.bezierCurveTo(cx + mw * 0.55, my + 13, cx - mw * 0.55, my + 13, cx - mw * 0.92 + shift, my + corner + 1);
     ctx.fill();
-    if (face === 'cheer' || expr === 'happy') { // a smile that shows the teeth
+    if ((face === 'cheer' && happy || expr === 'happy' || expr === 'laugh') && !M.noTeeth) { // a smile that shows the teeth
       ctx.fillStyle = '#f6f1ea'; ctx.beginPath(); ctx.moveTo(cx - mw * 0.75, my + corner * 0.7); ctx.quadraticCurveTo(cx, my + 9, cx + mw * 0.75, my + corner * 0.7); ctx.quadraticCurveTo(cx, my + 1, cx - mw * 0.75, my + corner * 0.7); ctx.fill();
     }
     ctx.strokeStyle = 'rgba(90,32,30,0.8)'; ctx.lineWidth = 1.8;
@@ -1757,6 +2057,9 @@
     }
     return weaveTex;
   }
+  // low: flat colours (§19.1) — one uniform shared by every avatar material, set from the engine's preset each frame
+  const AV_FLAT = { value: 0 };
+  const syncFlat = () => { AV_FLAT.value = G.sys && G.sys.engine && G.sys.engine.preset && G.sys.engine.preset.name === 'low' ? 1 : 0; };
   function makeBodyMaterial() {
     // double-sided: open garment edges (sleeve ends, hems, a shoe's inside) never show the world through them
     const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.6, side: THREE.DoubleSide });
@@ -1769,14 +2072,16 @@
       sh.uniforms.uFx = { value: fx };
       sh.uniforms.uPatTex = { value: patternAtlas() };
       sh.uniforms.uWeave = { value: weaveTexture() };
+      sh.uniforms.uAvFlat = AV_FLAT;
       sh.vertexShader = `attribute float aSlot;\nuniform vec3 uPal[${NSLOT}];\nuniform float uRough[${NSLOT}];\nuniform float uFx[${NSLOT}];\nvarying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\n` +
         sh.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n  { int si = int(aSlot + 0.5); vPalColor = uPal[si]; vPalRough = uRough[si]; vFx = uFx[si]; vRest = position; }');
-      sh.fragmentShader = 'varying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nuniform sampler2D uPatTex;\nuniform sampler2D uWeave;\n' + sh.fragmentShader
+      sh.fragmentShader = 'varying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nuniform sampler2D uPatTex;\nuniform sampler2D uWeave;\nuniform float uAvFlat;\n' + sh.fragmentShader
         .replace('#include <color_fragment>', `#include <color_fragment>
   diffuseColor.rgb *= vPalColor;
-  float avGold = 0.0;
+  float avGold = 0.0, avSilk = 0.0;
   {
     float kind = mod(vFx, 8.0), pat = floor(vFx / 8.0 + 0.01);
+    if (uAvFlat > 0.5) { kind = 0.0; pat = pat < 1.5 || (pat > 3.5 && pat < 4.5) ? pat : 0.0; } // low: flat colours (gold and 색동 stay, they are colours)
     float ang = atan(vRest.x, vRest.z);
     vec2 cylUv = vec2(ang * 0.16, vRest.y);
     if (kind > 0.5 && kind < 1.5) { float w = texture(uWeave, cylUv * 26.0 + vec2(vRest.x * 9.0, 0.0)).r; diffuseColor.rgb *= 0.84 + 0.3 * w; }
@@ -1795,21 +2100,42 @@
       } else if (pat < 5.5) {
         float s1 = sin(cylUv.x * 420.0 + cylUv.y * 60.0), s2 = sin(cylUv.y * 380.0 - cylUv.x * 50.0);
         diffuseColor.rgb *= 0.78 + 0.3 * (0.5 + 0.5 * max(s1, s2));
-      } else {
+      } else if (pat < 6.5) {
         float tg = smoothstep(0.55, 0.75, sin(ang * 14.0 + sin(vRest.y * 160.0) * 1.4 + vRest.y * 40.0));
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.05, 0.04), tg * 0.85);
+      } else if (pat < 7.5) { // 격자: a tone-on-tone woven grid
+        vec2 gq = abs(fract(cylUv * 18.0) - 0.5);
+        diffuseColor.rgb *= 1.0 - 0.16 * smoothstep(0.42, 0.48, max(gq.x, gq.y));
+      } else if (pat < 8.5) { // 줄: soft vertical stripes
+        diffuseColor.rgb *= 0.9 + 0.16 * smoothstep(0.3, 0.7, abs(fract(ang * 7.64) - 0.5) * 2.0);
+      } else if (pat < 9.5) { // 누비: stitched rows every 2.5 cm, the padding swelling between them
+        float rq = abs(fract(vRest.y / 0.025) - 0.5) * 2.0;
+        diffuseColor.rgb *= 0.76 + 0.26 * smoothstep(0.0, 0.55, rq);
+      } else if (pat < 10.5) { // 모시 결: a fine open weave, a little lighter
+        float wq = texture(uWeave, cylUv * 64.0).r;
+        diffuseColor.rgb = mix(diffuseColor.rgb * (0.9 + 0.18 * wq), vec3(1.0), 0.05);
+      } else if (pat < 11.5) { // 명주 윤: silk — smoother, with a faint lengthwise lustre
+        avSilk = 1.0;
+        diffuseColor.rgb *= 1.0 + 0.05 * sin(vRest.y * 260.0 + ang * 3.0);
+      } else if (pat < 12.5) { // 거북등: hexagons, tone on tone
+        vec2 hq = cylUv * 14.0; hq.x *= 1.1547; hq.y += mod(floor(hq.x), 2.0) * 0.5;
+        vec2 fq = abs(fract(hq) - 0.5);
+        diffuseColor.rgb *= 1.0 - 0.14 * smoothstep(0.4, 0.47, max(fq.x * 1.5 + fq.y * 0.5, fq.y));
+      } else { // 물결: rolling waves
+        float wv = sin(cylUv.x * 44.0 + sin(vRest.y * 90.0) * 1.6 + vRest.y * 62.0);
+        diffuseColor.rgb *= 0.96 + 0.13 * smoothstep(0.55, 0.92, wv);
       }
     }
   }`)
-        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix(roughnessFactor * vPalRough, 0.28, avGold);')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix(mix(roughnessFactor * vPalRough, 0.28, avGold), 0.36, avSilk);')
         .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n  metalnessFactor = mix(metalnessFactor, 0.8, avGold);')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  { float rimF = 1.0 - saturate(dot(normal, normalize(vViewPosition))); totalEmissiveRadiance += diffuseColor.rgb * rimF * rimF * rimF * 0.16; }');
     };
-    m.customProgramCacheKey = () => 'tfmAvatarPalette2';
+    m.customProgramCacheKey = () => 'tfmAvatarPalette3';
     return m;
   }
   function applyPalette(mat, app) {
-    const va = view(app), cols = slotColors(va), fxs = slotFx(va);
+    const va = app.style === 'real' ? app : view(app), cols = slotColors(va), fxs = slotFx(va);
     const pal = mat.userData.pal, rough = mat.userData.rough, fx = mat.userData.fx;
     const real = app.style === 'real';
     for (let i = 0; i < NSLOT; i++) {
@@ -2082,7 +2408,9 @@
   const sharedBounds = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 1.15);
   const sharedBox = new THREE.Box3(new THREE.Vector3(-0.48, -0.05, -0.45), new THREE.Vector3(0.48, 1.86, 0.5));
   const HEAD_TOP = { strawhat: 1.5, cap: 1.47, gat: 1.62, jokduri: 1.45, ayam: 1.44, jobawi: 1.44, hogeon: 1.47, bokgeon: 1.48 };
-  const HEAD_TOP_REAL = { none: 1.69, gat: 1.78, strawhat: 1.735, jokduri: 1.73, ayam: 1.7, jobawi: 1.7, hogeon: 1.71, bokgeon: 1.72, cap: 1.7, headband: 1.69 };
+  const HEAD_TOP_REAL = { none: 1.69, gat: 1.78, strawhat: 1.735, jokduri: 1.73, ayam: 1.7, jobawi: 1.7, hogeon: 1.71, bokgeon: 1.72, cap: 1.7, headband: 1.69,
+    chorip: 1.74, paeraengi: 1.72, jeollip: 1.72, satgat: 1.79, jeonmo: 1.73, samo: 1.73, yugeon: 1.74, tanggeon: 1.7, jeongja: 1.8, gulle: 1.71,
+    nambawi: 1.7, pungcha: 1.7, hwagwan: 1.76, gokkal: 1.86, sangmo: 1.7, sugeon: 1.69 };
 
   class Rig {
     constructor(appearance, opts = {}) {
@@ -2147,6 +2475,8 @@
       if (app.style !== this.style) this._setStyle(app.style);
       applyPalette(this.material, app);
       const geo = bodyGeometry(app);
+      const gk = shapeSig(app);
+      if (gk !== this._geoKey) { geoRef(gk, 1); geoRef(this._geoKey, -1); this._geoKey = gk; }
       if (!this.mesh) {
         this.mesh = new THREE.SkinnedMesh(geo, this.material);
         this.mesh.name = 'avatarBody';
@@ -2280,6 +2610,7 @@
 
     // -------------------------------------------------------------- per-frame
     update(dt, p) {
+      syncFlat();
       if (!(dt > 0)) return;
       const speed = p && p.speed > 0 ? p.speed : 0;
       const grounded = !p || p.grounded !== false;
@@ -2576,17 +2907,18 @@
     _updateFace(dt) {
       const app = this.appearance;
       const a = this._act;
-      let expr = 'base';
+      const usual = app.expr && app.expr !== 'smile' ? app.expr : 'base';
+      let expr = usual;
       if (this._exprOverride) { this._exprT -= dt; if (this._exprT <= 0) this._exprOverride = null; else expr = this._exprOverride; }
-      if (expr === 'base' && a && !a.stopping && a.def.face) expr = typeof a.def.face === 'function' ? a.def.face(a.t) : a.def.face;
+      if (expr === usual && a && !a.stopping && a.def.face) expr = typeof a.def.face === 'function' ? a.def.face(a.t) : a.def.face;
       if (expr === 'talk') {
         this._talkT -= dt;
         if (this._talkT <= 0) { this._talkOpen = !this._talkOpen; this._talkT = 0.07 + Math.random() * 0.12; }
-        if (!this._talkOpen) expr = 'base';
+        if (!this._talkOpen) expr = usual;
       }
       // blink
       this._blinkT -= dt;
-      if (this._blinking > 0) { this._blinking -= dt; if (expr === 'base' || expr === 'talk' || expr === 'think') expr = 'blink'; }
+      if (this._blinking > 0) { this._blinking -= dt; if (expr === 'base' || expr === usual || expr === 'talk' || expr === 'think') expr = 'blink'; }
       else if (this._blinkT <= 0) { this._blinking = 0.12; this._blinkT = 2 + Math.random() * 3.5; if (Math.random() < 0.15) this._blinkT = 0.25; }
       // (compared field by field: building a 'face:expr' key string every frame was per-frame garbage for every avatar)
       if (app.face !== this._faceFace || expr !== this._faceExpr) { this._faceFace = app.face; this._faceExpr = expr; this.face.material = faceMaterial(app.face, expr, this.style); }
@@ -2598,6 +2930,7 @@
       this._act = null; this._sitL = null; this._look = null;
       this.material.dispose();
       this.skeleton.dispose();
+      geoRef(this._geoKey, -1); this._geoKey = null;
       this.mesh = null;
     }
   }
@@ -2709,7 +3042,12 @@
     /** the triangle count of the body geometry of an appearance (budgets, tests) */
     triangles(app) { const g = bodyGeometry(normalize(app)); return g.index ? g.index.count / 3 : g.attributes.position.count / 3; },
     /** the geometry cache (tests): size, and clear() which disposes every cached body */
-    cache: { get size() { return geoCache.size; }, clear() { for (const g of geoCache.values()) g.dispose(); geoCache.clear(); } },
+    cache: { get size() { return geoCache.size; }, max: CACHE_MAX, clear() { for (const g of geoCache.values()) g.dispose(); geoCache.clear(); } },
+    /** (tests) the body geometry and the palette of a normalized look */
+    _geometry: (app) => bodyGeometry(app),
+    _palette(app) { const a = normalize(app), va = a.style === 'real' ? a : view(a); return { cols: slotColors(va), fx: slotFx(va) }; },
+    /** the table's slots, names and expressions (G.data.avatar), for the wardrobe and the sheet */
+    slots: (DATA.slots || []).slice(), expressions: (DATA.expressions || []).slice(),
     create(appearance, opts = {}) { return new Rig(appearance, opts); },
     /** pre-build geometry/face textures for a list of appearances (avoids hitches later) */
     warm(list) { for (const a of list || []) { try { bodyGeometry(normalize(a)); } catch (e) { G.log.warn('AVATAR', 'warm failed', e); } } for (const f of OPTIONS.face) { faceMaterial(f, 'base', 'real'); faceMaterial(f, 'base', 'cute'); } },
