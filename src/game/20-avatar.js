@@ -1263,7 +1263,7 @@
     const fz = headPos(0, -0.28, 0.96, 0, [0, 0, 0])[2];
     const nose = sweep((v, u, out) => { // bridge → tip: a narrow wedge that widens to the wings
       const y = lerp(HEAD.cy + 0.004, HEAD.cy - 0.047, v); // [people] §19.9 a lower, softer bridge into a small rounded tip
-      const w = lerp(0.0068, 0.0135, smooth(0.25, 1, v)), d = lerp(0.0012, 0.0145, Math.pow(v, 1.6));
+      const w = lerp(0.0068, 0.0128, smooth(0.25, 1, v)), d = lerp(0.0012, 0.0125, Math.pow(v, 1.6));
       const a = u * TAU, s = Math.sin(a), c = Math.cos(a);
       out[0] = s * w; out[1] = y - (c < 0 ? 0 : 0.003 * v * c); out[2] = fz - 0.012 + Math.max(0, c) * d + 0.006 * v + c * 0.002;
     }, { nu: 12, nv: 8, cap0: true, cap1: true });
@@ -1273,7 +1273,7 @@
       // [people] §19.9 the ear: a flat shell close to the head with its rim lying on it (it read as a handle)
       const ear = xf(sphere(1, 12, 10), s * (HEAD.rx - 0.001), HEAD.cy - 0.012, -0.014, 0, s * -0.3, s * 0.1, 0.009, 0.03, 0.019);
       P.add(ear, B.head, S.skin);
-      P.add(xf(torus(0.02, 0.0032, 5, 14, Math.PI * 1.2), s * (HEAD.rx + 0.003), HEAD.cy - 0.009, -0.016, 0, s * (Math.PI / 2 - 0.3), Math.PI * 0.55, 1, 1.4, 1), B.head, S.skin);
+      P.add(xf(torus(0.019, 0.0024, 5, 14, Math.PI * 1.15), s * (HEAD.rx + 0.0015), HEAD.cy - 0.009, -0.016, 0, s * (Math.PI / 2 - 0.3), Math.PI * 0.55, 1, 1.4, 0.7), B.head, S.skin);
     }
     P.add(rings([[1.515, 0.05, 0.053, 0, -0.012], [1.46, 0.051, 0.054, 0, -0.012], [1.405, 0.056, 0.058, 0, -0.014], [1.37, 0.07, 0.07, 0, -0.012]], { nu: 14, nv: 6 }), torsoW, S.skin);
     P.add(torsoShell(1.405, 1.25, -0.003, { nu: 22, nv: 5 }), torsoW, S.skin);
@@ -1573,7 +1573,7 @@
       const cov = hairCovReal(h, yaw, elev);
       // [people] §19.9 more volume over the crown when no hat sits on it; deeper combed locks
       let t = h.thick * (1 + (hatOn ? 0.45 : 0.85) * Math.max(0, v.y)) + (h.flare || 0) * smooth(0.1, -0.5, elev) * smooth(0.6, 1.4, Math.abs(yaw));
-      t += (0.0012 * Math.sin(yaw * 38 + elev * 3) + 0.0009 * Math.sin(yaw * 17 - elev * 5 + 1.3)) * smooth(-0.6, 0.4, elev); // combed strands, locks
+      t += (0.0006 * Math.sin(yaw * 38 + elev * 3) + 0.0009 * Math.sin(yaw * 11 - elev * 5 + 1.3)) * smooth(-0.6, 0.4, elev); // combed strands, locks
       if (h.part != null && elev > 0.45) t -= 0.006 * gauss((yaw - h.part) / 0.045) * smooth(0.45, 0.7, elev); // the parting
       if (h.sweep) t += 0.009 * gauss((elev - 0.78) / 0.2) * gauss(yaw / 0.8);                 // a swept front
       if (h.curly) t += 0.008 * (Math.sin(v.x * 31) * Math.sin(v.y * 27 + 1) * Math.sin(v.z * 29 + 2) + 0.4);
@@ -1952,7 +1952,7 @@
     const soft = (x, y, rx, ry, rgba) => { ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx); const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx); g.addColorStop(0, rgba); g.addColorStop(1, rgba.replace(/[\d.]+\)$/, '0)')); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, TAU); ctx.fill(); ctx.restore(); };
     const blur = (px) => { try { ctx.filter = px > 0 ? `blur(${(px * sc).toFixed(2)}px)` : 'none'; } catch (e) { /* no filter: hard edges */ } };
     // the nine calm faces (무표정 미소 활짝 웃음 놀람 궁금 뿌듯 수줍음 졸림 집중) + the passing ones
-    const M = { neutral: { smile: 0.04, open: 1 }, smile: { smile: 0.62, open: 0.92 },
+    const M = { neutral: { smile: 0.04, open: 1 }, smile: { smile: 0.95, open: 0.9 },
       laugh: { happy: 1, open: 0.55, brow: -6, teeth: 1, smile: 1, mouthOpen: 9, blush: 0.3 },
       surprise: { open: 1.32, brow: -15, ring: 1, oMouth: 13 },
       curious: { browOne: -13, look: [7, -4], smile: 0.18, shift: 5, open: 1.05 },
@@ -1961,7 +1961,7 @@
       sleepy: { open: 0.26, brow: 4, smile: 0.06, mw: 0.82, inner: 2, yawn: 1 },
       focus: { open: 0.72, brow: 4, inner: -7, smile: -0.12, mw: 0.86, press: 1 },
       happy: { happy: 1, open: 0.7, smile: 1, teeth: 1, mouthOpen: 5, brow: -3 }, wink: { happy: 1, smile: 0.9 }, think: { look: [6, -5], smile: 0, shift: 6, browOne: -8 },
-      talk: { oMouth: 7, smile: 0.2 }, blink: { open: 0 } }[expr] || { smile: face === 'calm' ? 0.15 : face === 'gentle' ? 0.45 : 0.55 };
+      talk: { oMouth: 7, smile: 0.2 }, blink: { open: 0 } }[expr] || { smile: face === 'calm' ? 0.3 : face === 'gentle' ? 0.6 : 0.8 };
     const happy = !!M.happy || (face === 'cheer' && !(expr in { neutral: 1, sleepy: 1, focus: 1, shy: 1, curious: 1, surprise: 1 }));
     const ey = Y(0.005), edx = (0.031 / FACE_W) * W;
     const hairTone = A.grey ? 'rgba(150,144,136,0.9)' : 'rgba(48,32,24,0.88)';
@@ -2330,7 +2330,7 @@
     // double-sided: open garment edges (sleeve ends, hems, a shoe's inside) never show the world through them
     const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.6, side: THREE.DoubleSide });
     const pal = new Float32Array(NSLOT * 3), rough = new Float32Array(NSLOT), fx = new Float32Array(NSLOT);
-    m.userData.pal = pal; m.userData.rough = rough; m.userData.fx = fx; m.userData.skirt = { value: 0 };
+    m.userData.pal = pal; m.userData.rough = rough; m.userData.fx = fx; m.userData.skirt = { value: 0 }; m.userData.stride = { value: 0 };
     m.name = 'avatarBody';
     m.onBeforeCompile = (sh) => {
       sh.uniforms.uPal = { value: pal };
@@ -2341,24 +2341,26 @@
       sh.uniforms.uAvFlat = AV_FLAT;
       sh.uniforms.uAvQ = AV_Q;
       sh.uniforms.uAvSkirt = m.userData.skirt;
+      sh.uniforms.uAvStride = m.userData.stride;
       sh.vertexShader = `attribute float aSlot;\nuniform vec3 uPal[${NSLOT}];\nuniform float uRough[${NSLOT}];\nuniform float uFx[${NSLOT}];\nvarying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nvarying float vSlotF;\n` +
         sh.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n  { int si = int(aSlot + 0.5); vPalColor = uPal[si]; vPalRough = uRough[si]; vFx = uFx[si]; vRest = position; vSlotF = aSlot; }');
-      sh.fragmentShader = 'varying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nvarying float vSlotF;\nuniform sampler2D uPatTex;\nuniform sampler2D uWeave;\nuniform float uAvFlat;\nuniform float uAvQ;\nuniform float uAvSkirt;\n' + AV_LIGHT_HEAD + AV_BUMP + sh.fragmentShader
+      sh.fragmentShader = 'varying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nvarying float vSlotF;\nuniform sampler2D uPatTex;\nuniform sampler2D uWeave;\nuniform float uAvFlat;\nuniform float uAvQ;\nuniform float uAvSkirt;\nuniform float uAvStride;\n' + AV_LIGHT_HEAD + AV_BUMP + sh.fragmentShader
         .replace('#include <lights_physical_pars_fragment>', avLightChunk())
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
   if (uAvQ > 0.5 && avKindG > 0.5) { // [people] §19.9 folds, creases, weave and strands as a height field on the rest pose
     float ang = atan(vRest.x, vRest.z), y = vRest.y, h = 0.0;
     vec2 cu = vec2(ang * 0.16, y);
     if (avKindG > 1.5 && avKindG < 2.5) { // hair: strands (fine on high), a few locks
-      float f = 1.0 - smoothstep(0.25, 0.7, fwidth(ang * 260.0));
-      h = 0.00055 * sin(ang * 46.0 + sin(y * 30.0) * 1.2) + 0.00012 * f * (uAvQ > 1.5 ? 1.0 : 0.5) * sin(ang * 260.0 + sin(y * 55.0 + ang * 9.0) * 2.4);
+      float f = 1.0 - smoothstep(0.15, 0.45, fwidth(ang * 260.0));
+      h = 0.0005 * sin(ang * 13.0 + sin(y * 30.0) * 1.2) + 0.00006 * f * (uAvQ > 1.5 ? 1.0 : 0.5) * sin(ang * 260.0 + sin(y * 55.0 + ang * 9.0) * 2.4); // [people] locks + fine strands (the strands were a moiré)
     } else if (avKindG < 1.5) {
       float sl = vSlotF;
       bool lower = (sl > 5.5 && sl < 7.5) || (sl > 19.5 && sl < 21.5);
       if (lower && y < 1.0) { // hanging cloth: vertical folds that deepen to the hem (around the body on a skirt or robe, round each leg on trousers)
         float a2 = uAvSkirt > 0.5 || sl > 19.5 ? ang : atan(vRest.x - sign(vRest.x) * 0.091, vRest.z);
         float n2 = uAvSkirt > 0.5 || sl > 19.5 ? 15.0 : 7.0;
-        h += 0.0042 * smoothstep(1.0, 0.45, y) * sin(a2 * n2 + 1.6 * sin(a2 * 3.0 + y * 5.0));
+        float op = 1.0 - 0.6 * uAvStride * abs(cos(ang)) * smoothstep(0.95, 0.4, y); // the folds open in front and behind as the legs part in a walk
+        h += 0.0042 * op * smoothstep(1.0, 0.45, y) * sin(a2 * n2 * (1.0 - 0.12 * uAvStride) + 1.6 * sin(a2 * 3.0 + y * 5.0));
         if (uAvSkirt < 0.5 && sl < 7.5) h += 0.0016 * exp(-((y - 0.49) * (y - 0.49)) / 0.0025) * sin(y * 150.0 + ang * 3.0); // creases over the knee
       }
       if ((sl > 1.5 && sl < 4.5) || (sl > 21.5 && sl < 22.5) || (sl > 19.5 && sl < 21.5 && y > 1.0)) { // sleeves: creases at the elbow and the 배래 curve
@@ -2937,6 +2939,8 @@
 
     update(dt, p) {
       this._lodTick(dt);
+      const su = this.material && this.material.userData.stride; // [people] how far the legs are apart (skirt folds open)
+      if (su) su.value = clamp((this._moveW || 0) * Math.abs(Math.sin(this.phase * TAU)), 0, 1) || 0;
       syncFlat();
       if (!(dt > 0)) return;
       const speed = p && p.speed > 0 ? p.speed : 0;
