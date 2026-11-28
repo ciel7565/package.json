@@ -1091,6 +1091,53 @@
       else tween(L, 1.6, (t) => { beam.rotation.z = t < 0.55 ? DOWN + (UP - DOWN) * ease(t / 0.55) : UP + (DOWN - UP) * Math.min(1, ((t - 0.55) / 0.45) ** 2); });
     };
   };
+  // ---- small things outside (the building kit's own materials only: wood · plank · stone · plaster · thatch · glaze · paint)
+  // the 대장간: a clay chimney at the back with the forge's smoke (medium / high), firewood by the side wall
+  EXT.forge = function (site, b, H) {
+    const B = site.B, hw = b.w / 2, hd = b.d / 2, cx = -hw + 1.6, cz = -hd - 0.7;
+    B.add('stone', geo.box(0.9, 0.5, 0.9, 'world'), M(cx, 0.15, cz), '#8a8478');
+    B.add('plaster', geo.cyl(0.3, 0.4, 3.2, 10), M(cx, 0.4 + 1.6, cz), '#8a6a4e');
+    B.add('plaster', geo.cyl(0.36, 0.32, 0.16, 10), M(cx, 3.6, cz), '#6e5640');
+    site.circle(cx, cz, 0.48);
+    H.SMOKE_SOURCES?.push({ x: site.wx(cx, cz), y: site.gy + 3.7, z: site.wz(cx, cz), s: 1.2 });
+    for (let i = 0; i < 12; i++) B.add('wood', geo.cyl(0.08, 0.08, 1.0, 7), M(hw + 0.45, 0.4 + ((i / 4) | 0) * 0.16, -1.6 + (i % 4) * 0.18 + (((i / 4) | 0) % 2) * 0.08, 0, 1, 1, 1, PI / 2), '#8a6a48');
+    site.box(hw + 0.45, -1.3, 0.3, 0.45);
+  };
+  // the 주막: a 평상 and two jars in the west yard, a red paper lantern on a pole by the door
+  EXT.jumak = function (site, b) {
+    const B = site.B, hw = b.w / 2, hd = b.d / 2, px = -hw - 2.1, pz = 0.4;
+    B.add('plank', geo.box(1.9, 0.08, 1.3, 'world'), M(px, 0.46, pz), '#b08a5e');
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) B.add('wood', geo.box(0.08, 0.42, 0.08, 'grain'), M(px + sx * 0.85, 0.21, pz + sz * 0.55), '#6a4a30');
+    site.walk(px, pz, 0.95, 0.65, 0.5, 'wood');
+    for (const [x, z, k, s] of [[px - 0.2, pz - 1.3, 'hangari', 0.8], [px + 0.55, pz - 1.35, 'danji', 1.0]]) { B.add('glaze', BK.jarGeometry(k, 12), M(x, 0, z, 0.4, s), '#ffffff'); site.circle(x, z, 0.35 * s); }
+    const lx = -b.w / 6 - 1.1, lz = hd + 0.85;
+    B.add('wood', geo.cyl(0.04, 0.05, 2.5, 8), M(lx, 1.25, lz), '#4a2f1c');
+    B.add('wood', geo.box(0.5, 0.05, 0.05, 'grain'), M(lx + 0.2, 2.45, lz), '#4a2f1c');
+    B.add('paint', geo.cyl(0.16, 0.16, 0.36, 12), M(lx + 0.38, 2.12, lz), '#c23a4a');
+    B.add('paint', geo.cyl(0.17, 0.17, 0.04, 12), M(lx + 0.38, 2.31, lz), '#2e2a26');
+    site.circle(lx, lz, 0.12);
+  };
+  // the 약초방: bunches of herbs drying under the front eave
+  EXT.herb = function (site, b) {
+    const B = site.B, hw = b.w / 2, hd = b.d / 2, y = 0.55 + clamp(2.55 + b.d * 0.06, 2.6, 3.2) - 0.45;
+    B.add('wood', geo.cyl(0.025, 0.025, b.w - 1.2, 6).rotateZ(PI / 2), M(0, y, hd + 0.35), '#5e3a22');
+    const tn = ['#6f7346', '#8a8a4a', '#5e6b3a', '#a09a5a'];
+    for (let i = 0; i < 10; i++) {
+      const x = -hw + 0.9 + i * ((b.w - 1.8) / 9);
+      B.add('thatch', geo.cyl(0.07, 0.02, 0.42, 6), M(x, y - 0.24, hd + 0.35, i), tn[i % tn.length]);
+    }
+  };
+  // the 한지 공방: drying boards with white sheets leaning on the east wall
+  EXT.hanji = function (site, b) {
+    const B = site.B, hw = b.w / 2;
+    for (let i = 0; i < 3; i++) {
+      const z = -1.6 + i * 1.4;
+      B.add('plank', geo.box(0.05, 1.7, 1.2, 'world'), M(hw + 1.25, 0.9, z, 0, 1, 1, 1, 0, -0.2), '#a07c50');
+      B.add('paint', geo.box(0.01, 1.2, 0.9, 'world'), M(hw + 1.2, 1.0, z, 0, 1, 1, 1, 0, -0.2), '#f6f0de');
+    }
+    site.box(hw + 1.3, -0.2, 0.3, 2.1);
+  };
+
   // outside: the water wheel on the east side, fed by a wooden flume from upstream (north) — it turns all the time
   const wheels = [];
   EXT.mill = function (site, b) {

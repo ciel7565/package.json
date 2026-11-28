@@ -89,6 +89,31 @@ for (const row of rows) {
   } else check('염색 공방: the dipping cloth exists', false);
   await P.exit();
 }
+// the outsides: G.bkit.craft with stand-in builders (the real buildHanok / buildThatched stay inside 15-buildings.js) —
+// the extras of each house (drying rack, water wheel, chimney, 평상, herbs, paper boards) build, finite, near the house
+{
+  Gb.world.terrainHeight = () => 0;
+  Gb.sys.engine.scene = new THREE.Scene();
+  const calls = [];
+  const H = { buildHanok: (site, b, o) => calls.push(['hanok', b.id, o && o.sign]), buildThatched: (site, b) => calls.push(['thatch', b.id]), addSignBoard() {}, WOOD: {}, SMOKE_SOURCES: [] };
+  let bad = [], far = [];
+  for (const b of (Gb.data.layout.buildings || []).filter((x) => x.type === 'craft')) {
+    try {
+      const site = new Gb.bkit.Site(b);
+      Gb.bkit.craft(site, b, H);
+      for (const [key, part] of site.B.parts) for (const it of (Array.isArray(part) ? part : (part.items || part.list || part.geos || []))) {
+        const g = it.g || it.geometry || it; const pa = g?.attributes?.position; if (!pa) continue;
+        for (let i = 0; i < pa.array.length; i++) if (!Number.isFinite(pa.array[i])) { bad.push(`${b.id}:${key}`); break; }
+      }
+      const grp = new THREE.Box3().setFromObject(site.group);
+      if (!grp.isEmpty() && (grp.max.x - grp.min.x > b.w + 16 || grp.max.z - grp.min.z > b.d + 16)) far.push(b.id);
+    } catch (e) { bad.push(`${b.id}: ${String(e.message || e).slice(0, 120)}`); }
+  }
+  check('every outside builds (G.bkit.craft + its extras), finite', !bad.length, bad.join(' | '));
+  check('the extras stay near their house', !far.length, far.join(' '));
+  check('tiled houses get no sign from the shared atlas (their own atlas instead), thatched ones are thatched', calls.filter((c) => c[0] === 'hanok').every((c) => c[2] === null) && calls.filter((c) => c[0] === 'thatch').length === 3, JSON.stringify(calls.map((c) => c[0][0] + ':' + c[1])));
+  check('the forge chimney smokes, the dye yard cloth and the water wheel exist', H.SMOKE_SOURCES.length === 1 && Gb.sys.engine.scene.children.some((m) => m.name === 'dye-yard'));
+}
 console.log(jsonOut ? '' : `  · ${report.join(' · ')}`);
 const failed = results.filter((r) => !r.ok);
 if (jsonOut) console.log(JSON.stringify({ ok: !failed.length, passed: results.length - failed.length, failed: failed.length, report, results }, null, 1));
