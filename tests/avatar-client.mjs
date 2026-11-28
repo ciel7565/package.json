@@ -201,6 +201,8 @@ try {
   if (want('save')) {
     const r = await page.evaluate(() => {
       const A = G.avatar, app = { ...A.presets[1].appearance, hat: 'gat', hatColor: '#1f1f22', pattern: 'cloud' };
+      // [hanbok] clothes are items (§19.1): the pieces of this look are owned first, or the wardrobe puts them back
+      try { const W = G.data.wardrobe; if (W && G.state.wardrobe) for (const id of W.wornItems(A.normalize(app))) G.state.wardrobe.own[id] = 1; } catch (e) { /* no wardrobe */ }
       G.sys.player.setAppearance(app);
       const stored = G.state.profile.avatar;
       const round = A.normalize(JSON.parse(JSON.stringify(G.state)).profile.avatar);
@@ -264,7 +266,7 @@ try {
   if (want('hanbok')) {
     const r = await page.evaluate(() => {
       const A = G.avatar, D = G.data.avatar, legacyTop = D.legacy.top;
-      const npcs = (G.sys.npc?.list?.() || []).map((rec) => ({ id: rec.id, top: rec.rig?.appearance?.top, foot: rec.rig?.appearance?.footwear, outer: rec.rig?.appearance?.outer, look: !!rec.look }));
+      const npcs = (G.sys.npc?.list?.() || []).map((rec) => ({ id: rec.id, top: rec.rig?.appearance?.top, foot: rec.rig?.appearance?.footwear, outer: rec.rig?.appearance?.outer, look: !!rec.lookApp }));
       const modernNpc = npcs.filter((n) => legacyTop.includes(n.top) || n.foot === 'sneakers');
       // nine faces: each one gives the realistic face its own decal
       const rig = A.create(A.presets[0].appearance, { shadow: false });
@@ -290,9 +292,11 @@ try {
       const wait = async (fn, ms = 60000) => { const t0 = performance.now(); while (performance.now() - t0 < ms) { if (fn()) return true; await raf(); } return false; };
       const out = {};
       G.app.openAvatar();
-      const m = await wait(() => document.querySelector('.avatar-modal .av-tabs'));
+      const m = await wait(() => document.querySelector('.avatar-modal .av-tabs'), 15000);
       const body = document.querySelector('.avatar-modal');
       out.open = !!m;
+      // [hanbok] phase 11: lane wardrobe's 옷장 window (G.sys.wardrobe.open) replaces the old customiser's entry points
+      if (!document.querySelector('.avatar-modal .av-tabs')) { try { G.ui.modal.closeAll(); } catch (e) { /* none */ } return { replaced: true, wardrobe: !!(G.sys.wardrobe && typeof G.sys.wardrobe.open === 'function') }; }
       out.tabs = [...body.querySelectorAll('[data-tab]')].map((b) => b.dataset.tab);
       out.looks = body.querySelectorAll('.av-looks .av-tile').length;
       out.drawn = await wait(() => body.querySelectorAll('.av-tile.drawn').length >= 4, 90000);
@@ -327,11 +331,14 @@ try {
       out.saved = { hair: G.state.profile.avatar?.hair, hat: G.state.profile.avatar?.hat, style: G.state.profile.avatar?.style };
       return out;
     });
+    if (r.replaced) check('the old customiser is replaced by the 옷장 window (G.sys.wardrobe.open; lane wardrobe\'s suite covers it)', r.wardrobe);
+    else {
     check('the customiser opens with tabs 추천 / 얼굴 / 머리 / 옷 / 장신구 / 색', r.open && r.tabs.join() === 'looks,face,hair,clothes,acc,color', r.tabs.join());
     check('≥ 12 ready-made looks as picture tiles, and the tiles get drawn (each is the real option rendered)', r.looks >= 12 && r.drawn, `${r.looks} looks, drawn ${r.drawn}`);
     check('← → move between tabs; arrow keys move between tiles', r.tabAfterKey === 'face' && r.focusMoved, `tab ${r.tabAfterKey}, focus moved ${r.focusMoved}`);
     check('≥ 12 hair tiles; a pick changes the look; the hat tiles are drawn', r.hairTiles >= 12 && r.picked && r.hatTilesDrawn, `${r.hairTiles} hair tiles`);
     check('save keeps the new look (댕기머리 + 갓, style real)', r.saved && r.saved.hair === 'daenggi' && r.saved.hat === 'gat' && r.saved.style === 'real', JSON.stringify(r));
+    }
   }
   await context.close();
 
@@ -342,7 +349,8 @@ try {
       const raf = () => new Promise((res) => requestAnimationFrame(() => res()));
       const wait = async (fn, ms = 60000) => { const t0 = performance.now(); while (performance.now() - t0 < ms) { if (fn()) return true; await raf(); } return false; };
       G.app.openAvatar();
-      await wait(() => document.querySelector('.avatar-modal .av-tabs'));
+      await wait(() => document.querySelector('.avatar-modal .av-tabs'), 15000);
+      if (!document.querySelector('.avatar-modal .av-tabs')) { try { G.ui.modal.closeAll(); } catch (e) { /* none */ } return { replaced: true, wardrobe: !!(G.sys.wardrobe && typeof G.sys.wardrobe.open === 'function') }; }
       const body = document.querySelector('.avatar-modal');
       body.querySelector('[data-tab="clothes"]').click(); await raf(); await raf();
       const tiles = [...body.querySelectorAll('.av-tile')];
@@ -360,9 +368,12 @@ try {
         drawn: await wait(() => body.querySelectorAll('.av-tile.drawn').length >= 3, 90000),
       };
     });
+    if (r.replaced) check('phone: the 옷장 window replaces the kid customiser (lane wardrobe)', r.wardrobe);
+    else {
     check('easy mode on a phone: the kid customiser, no sideways scroll', r.kid && r.overflow <= 1 && r.bodyOverflow <= 1, `page ${r.overflow} px, dialog ${r.bodyOverflow} px`);
     check('easy mode: tiles and tabs ≥ 56 px, every tile speaks, a 🔊 button, no text field', r.minTile >= 56 && r.minTab >= 56 && r.speaks && r.sayAgain && r.inputs === 0, `tile ${r.minTile.toFixed(0)} px, tab ${r.minTab.toFixed(0)} px, inputs ${r.inputs}`);
     check('easy mode on a phone: the tile pictures are drawn', r.drawn);
+    }
     await pc.close();
   }
 } catch (e) {

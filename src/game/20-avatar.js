@@ -1088,7 +1088,12 @@
       if (back) fl += 0.012 * smooth(1.2, 0.8, y) * smooth(1.6, 2.6, Math.abs(a > Math.PI ? a - TAU : a)); // 도포: the back flap
       // below the waist the robe clears the hips and the tops of the trousers (they never poke through it)
       const hip = smooth(1.08, 0.92, y);
-      const p = se(a, (Math.max(r[0], y < 0.84 ? 0.15 : 0, 0.205 * hip) + off + fl) * k, (Math.max(r[1], y < 0.84 ? 0.1 : 0, 0.13 * hip) + off + fl * 0.9) * k, 2.3);
+      let rx = (Math.max(r[0], y < 0.84 ? 0.15 : 0, 0.205 * hip) + off + fl) * k, rz = (Math.max(r[1], y < 0.84 ? 0.1 : 0, 0.13 * hip) + off + fl * 0.9) * k;
+      if (o.skirt && y < 1.27) { // over a 치마: just outside the skirt's own radius at this height (pleats included)
+        const sf = o.skirt * Math.pow(smooth(1.15, 0.04, y), 0.8);
+        rx = Math.max(rx, (Math.max(r[0], 0.15) + sf) * 1.05 + 0.012); rz = Math.max(rz, (Math.max(r[1], 0.1) + sf * 0.92) * 1.05 + 0.012);
+      }
+      const p = se(a, rx, rz, 2.3);
       out[0] = p[0]; out[1] = y; out[2] = (y < 0.84 ? 0 : r[2]) + p[1];
     }, { nu: o.nu || 34, nv: o.nv || 16, open: !!gap, cap0: false, cap1: false });
   }
@@ -1179,8 +1184,8 @@
       const hemFn = typeof o.len === 'function' ? o.len : o.len;
       outerHem = typeof o.len === 'function' ? o.len(0) : o.len;
       const w = longRobe || o.pleat ? coatW : torsoW;
-      const oFlare = chima && longRobe ? Math.max(o.flare, BK.flare * 1.08 + 0.02) : o.flare; // over a full skirt the robe flares past it
-      let shell = robe(yTop, hemFn, off, { flare: oFlare, gap: o.gap, pleat: o.pleat === 1.02 ? 1.02 : 0, back: o.back, nu: o.pleat ? 48 : 34, nv: longRobe ? 18 : 12, flareFrom: o.pleat ? 1.02 : 1.05 });
+      const oFlare = o.flare, overSkirt = chima ? BK.flare : 0; // over a 치마 the robe keeps outside the skirt
+      let shell = robe(yTop, hemFn, off, { skirt: overSkirt, flare: oFlare, gap: o.gap, pleat: o.pleat === 1.02 ? 1.02 : 0, back: o.back, nu: o.pleat ? 48 : 34, nv: longRobe ? 18 : 12, flareFrom: o.pleat ? 1.02 : 1.05 });
       if (o.sleeve === 'none' || o.sleeve === 'short') { // armholes: pull the shoulder caps in (sleeveless / short sleeves)
         const vp = shell.attributes.position;
         for (let i = 0; i < vp.count; i++) { const x = vp.getX(i), y = vp.getY(i); if (y > 1.2 && Math.abs(x) > 0.13) vp.setX(i, Math.sign(x) * (0.13 + (Math.abs(x) - 0.13) * 0.4)); }
@@ -1188,7 +1193,7 @@
       }
       if (o.head) shell = null; // the head coverings are drawn below
       if (shell) P.add(shell, w, slot);
-      if (shell) P.add(robe(typeof hemFn === 'function' ? (a) => hemFn(a) + 0.03 : hemFn + 0.03, hemFn, off + 0.002, { flare: oFlare, gap: o.gap, nu: o.pleat ? 48 : 34, nv: 1, flareFrom: o.pleat ? 1.02 : 1.05 }), w, o.band === 'gold' ? S.band : o.band === 'trim' ? S.trim : S.outer2); // hem band
+      if (shell) P.add(robe(typeof hemFn === 'function' ? (a) => hemFn(a) + 0.03 : hemFn + 0.03, hemFn, off + 0.002, { skirt: overSkirt, flare: oFlare, gap: o.gap, nu: o.pleat ? 48 : 34, nv: 1, flareFrom: o.pleat ? 1.02 : 1.05 }), w, o.band === 'gold' ? S.band : o.band === 'trim' ? S.trim : S.outer2); // hem band
       if (o.pleat === 1.02) P.add(torsoShell(1.05, 1.01, off + 0.004, { nu: 34, nv: 1 }), torsoW, S.outer2); // the waist seam of the 철릭
       if (o.under) P.add(robe(0.62, o.under, off - 0.006, { flare: o.flare * 0.9, nu: 34, nv: 4 }), coatW, S.red); // 동달이: the red coat under the 전복
       if (o.collar === 'cross') crossCollar(P, { off: off - 0.002, yEnd: o.short ? 1.245 : 1.2, hemY: longRobe ? Math.max(0.3, outerHem) : 0.86, knotY: o.short ? 1.215 : 1.17, slot: o.band === 'trim' ? S.trim : o.short ? S.top3 : S.outer2, seop: o.band === 'trim' ? S.trim : S.outer2, goC: o.short ? S.band : S.outer2, goreum: o.goreum || 0, weight: w, w: 0.015 });

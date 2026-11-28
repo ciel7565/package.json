@@ -426,7 +426,7 @@
       markAnchor.position.y = (Number(rig.height) || 1.45) + 0.1 + MARK_UP;
       group.add(markAnchor);
       const rec = {
-        id, data, rig, group, position: group.position, focusAnchor, markAnchor, mark3d: null, look,
+        id, data, rig, group, position: group.position, focusAnchor, markAnchor, mark3d: null, lookApp: look,
         persona: PERSONA[id] || DEFAULT_PERSONA,
         rotY: data.rotY || 0,
         home: { x: hx, z: hz, rotY: data.rotY || 0, wander: Math.max(0, Number(data.wander) || 0) },
@@ -951,7 +951,7 @@
       for (const rec of this.records.values()) {
         if (rec.portrait) continue;   // a re-run (after a context loss) renders only the missing ones
         try {
-          const rig = G.avatar.create(rec.look || rec.data.appearance || {}, { shadow: false });
+          const rig = G.avatar.create(rec.lookApp || rec.data.appearance || {}, { shadow: false });
           rig.setExpression?.('happy', 60);
           for (let i = 0; i < 4; i++) rig.update(1 / 30, params);
           rig.group.visible = false;
