@@ -254,7 +254,7 @@ const FAKE = String.raw`
     period: 'year', termMonths: 12, startsAt: t - 70 * 86400000, endsAt: t + 200 * 86400000, paidUntil: t + 200 * 86400000, autoRenew: false, holdUntil: k === 0 ? t + 86400000 : 0, payDue: k === 1 ? 1 : 0, cancelRequested: false,
     nameplate: { text: k === 2 ? '<b>굵게</b>' : '', show: false }, createdAt: t - 80 * 86400000, decidedAt: t - 79 * 86400000, endedAt: 0, endReason: '',
     timeline: [{ k: 'applied', at: t - 80 * 86400000, done: true }, { k: 'approved', at: t - 79 * 86400000, done: k !== 0 }, { k: 'ends', at: t + 200 * 86400000, done: false }] });
-  const F = window.__F = { calls: [], v: 5, zones, contracts, applyScript: [], firstOpen,
+  const F = window.__F = { calls: [], v: 5, zones, contracts, applyScript: [], payScript: [], firstOpen,
     notices: [{ id: 41, kind: 'approved', title: '<img src=x onerror="window.__xss=1">확정', body: '장독대 <script>1</script> 확정', at: t - 1000, seen: false, contractNo: 'AL-2026-101' }, { id: 40, kind: 'info', title: '안내', body: '가르기 날', at: t - 9000, seen: true, contractNo: '' }] };
   const err = (status, code, data) => Object.assign(new Error(code), { status, code, data: data || {} });
   G.net.mode = 'server';
@@ -278,6 +278,7 @@ const FAKE = String.raw`
         if (s) throw err(s.status, s.code, s.data); return { contractNo: 'AL-2026-900', status: 'pending', unit: opts.body.unit || 'J01-0002', holdUntil: t + 48 * 3600000, pay: { toss: false, guide: '계좌 이체 안내 (예시)', until: t + 48 * 3600000 } }; }
       case 'allot/cancel.php': return { contractNo: opts.body.contractNo, status: 'canceled', requested: false };
       case 'allot/nameplate.php': return { contractNo: opts.body.contractNo, nameplate: { text: opts.body.text, show: opts.body.show } };
+      case 'allot/pay-prepare.php': { const s = F.payScript.shift(); if (s) throw err(s.status, s.code, s.data); throw err(404, 'NOT_FOUND'); } // [fix10]
       case 'allot/pay-confirm.php': return { contractNo: 'AL-2026-101', status: 'active', paidUntil: t + 365 * 86400000 };
       case 'allot/waitlist.php': return opts.body.action === 'leave' ? { id: opts.body.id, status: 'canceled' } : { id: 4, status: 'waiting', position: 1 };
       default: throw err(404, 'NOT_FOUND');
@@ -475,6 +476,18 @@ async function serverSection() {
   check('토스 return: ?allot=pay is read once and the address is cleaned', ret.r && ret.r.ok && ret.cleaned, JSON.stringify(ret.r));
   check('토스 return: pay-confirm gets {paymentKey, orderId, amount: JSON integer}', ret.body && ret.body.amount === 220000 && Number.isInteger(ret.body.amount) && ret.body.orderId === 'AL1234567890abcdef' && ret.body.paymentKey === 'tgen_ABC123', JSON.stringify(ret.body));
   check('토스 return: a malformed return is refused (no confirm)', ret.bad && ret.bad.ok === false, JSON.stringify(ret.bad));
+  // [fix10] a payment that cannot be made answers with calm words: 409 NOTHING_DUE (nothing is owed) and 409 CONTRACT_CLOSED (the contract has ended)
+  for (const [code, re] of [['NOTHING_DUE', /낼 금액이 없어요/], ['CONTRACT_CLOSED', /끝난 계약/]]) {
+    const got = await page.evaluate(async (x) => {
+      window.__F.payScript.push({ status: 409, code: x });
+      const before = document.querySelectorAll('.toast').length;
+      await G.sys.allot._pay({ contractNo: 'AL-2026-101' });
+      const t = [...document.querySelectorAll('.toast')].map((n) => n.textContent || '');
+      return { added: t.length - before, last: t.slice(-3).join(' | '), calls: window.__F.calls.filter((c) => /pay-prepare\.php/.test(c.p)).length };
+    }, code);
+    check(`pay: 409 ${code} → one calm sentence (no raw code, no crash)`, re.test(got.last) && !/NOTHING_DUE|CONTRACT_CLOSED/.test(got.last), JSON.stringify(got));
+  }
+  await page.evaluate(() => { try { G.easy.lockGate(); } catch (e) { /* no gate */ } }); // the grown-up gate those payments passed must not stay open for the easy-mode checks below
   // ---- closing stops polling
   const closed = await page.evaluate(() => { G.sys.allot.close(); return { t: G.sys.allot._pollT, poll: G.sys.allot._pollTick() }; });
   check('closing the panel stops the map poll', !closed.t && closed.poll === false);

@@ -425,7 +425,10 @@ async function partD() {
   fs.cpSync(path.join(ROOT, 'server'), docroot, { recursive: true, filter: (src) => !skip(path.relative(path.join(ROOT, 'server'), src)) });
   fs.mkdirSync(path.join(docroot, 'data'), { recursive: true });
   const serverPage = opt('--server-file');
-  if (serverPage) { fs.copyFileSync(serverPage, path.join(docroot, 'index.html')); fs.copyFileSync(opt('--server-data'), path.join(docroot, 'data/game-data.json')); }
+  if (serverPage) { fs.copyFileSync(serverPage, path.join(docroot, 'index.html')); fs.copyFileSync(opt('--server-data'), path.join(docroot, 'data/game-data.json'));
+    // [fix10] the files a server build writes beside its page (service worker, manifest, offline page, icons): the page asks for them, a missing one is a console error
+    for (const f of ['sw.js', 'manifest.webmanifest', 'offline.html', 'icons']) { try { const src = path.join(path.dirname(serverPage), f); if (fs.existsSync(src)) fs.cpSync(src, path.join(docroot, f), { recursive: true }); } catch (e) { /* none */ } }
+  }
   else {
     const b = spawnSync(process.execPath, [path.join(ROOT, 'tools/build.mjs'), '--no-font', '--quiet', '--no-assets', '--out', path.join(docroot, 'index.html'), '--data-out', path.join(docroot, 'data/game-data.json')], { encoding: 'utf8' });
     if (b.status !== 0) { check('D: server page build', false, (b.stderr || b.stdout).slice(0, 300)); return; }
@@ -460,7 +463,11 @@ async function partD() {
       for (let i = 0; i < 3; i++) {
         try {
           const prof = reg && i === 0 ? await G.auth.register({ email: a.email, nickname: a.nickname, password: a.password, confirm: a.password, agree: true, easy: false }) : await G.auth.login({ login: a.email, password: a.password });
-          return { ok: await G.app.enterGame(prof), tries: i + 1 };
+          const ok = await G.app.enterGame(prof);
+          if (ok || i === 2) return { ok, tries: i + 1 };
+          last = { ok: false, tries: i + 1 }; // [fix10] the save did not load in time (the page keeps the title screen): ask again
+          await new Promise((r) => setTimeout(r, 2500));
+          continue;
         } catch (e) {
           last = { ok: false, err: `${e?.code || ''} ${e?.message || e}`, tries: i + 1 };
           if (!/NETWORK_ERROR/.test(last.err) && !(reg && i === 0 && /EMAIL|NICK|EXIST|USED/i.test(last.err))) return last;
@@ -498,6 +505,8 @@ async function partD() {
     log(`    database after the pause: ${note(r1)} acct ${JSON.stringify(r1?.blob?.acct || {}).slice(0, 400)}`);
 
     // ---- a change 0.5 s before the tab closes
+    // [fix10] only the leaving page may send it: the 2 s timer is switched off in the page (a change still marks the store as waiting; on a loaded machine the unload came later than the timer and the timer sent it)
+    await one.page.evaluate(() => { const st = G.sys.settings.store; clearTimeout(st.timer); st.schedule = () => { st.pending = true; }; });
     const pre = await one.page.evaluate(async () => { G.sys.settings.set('mixMusic', 30); G.sys.settings.set('hudOpacity', 65); await new Promise((r) => setTimeout(r, 500)); const st = G.sys.settings.store; return { pending: st.pending, busy: st.busy, online: st.online(), pulled: st.pulled }; });
     const s1 = saves.length;
     // [fix10] the page that is leaving cannot report its own request to the test (Playwright does not always see a request
