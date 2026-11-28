@@ -96,6 +96,7 @@ for (const id of plan) {
 check('all ten stamped → report', D.nextStep(v) === 'report');
 const n1 = D.numbers(v, now);
 check('after the ten rooms: less stress, less fatigue, more calm, more vital', n1.stress < n0.stress && n1.fatigue < n0.fatigue && n1.calm > n0.calm && n1.vital > n0.vital, { n0, n1 });
+check('…and no number is pinned at 0 or 100 after all ten (a natural end, not a meter at its stop)', Object.values(n1).every((x) => x > 2 && x < 98), n1);
 check('no number ever leaves 0 … 100 (even from the worst start)', (() => { const w = { base: { stress: 100, fatigue: 100, vital: 0, calm: 0, warm: 0, stamina: 0 }, rooms: v.rooms, r9: { plates: 1e6, drums: 0, cans: 0, bottles: 0 } }; const x = D.numbers(w, now); return Object.values(x).every((y) => y >= 0 && y <= 100); })());
 v.rep = now; check('report seen → checkout', D.nextStep(v) === 'checkout');
 v.out = now + MIN; check('checked out → out', D.nextStep(v) === 'out');
@@ -111,7 +112,7 @@ check('the numbers after a reload match', JSON.stringify(D.numbers(back, 1e12 + 
 check('five hours away: the course is due and its full effect counts', D.due(back, 1e12 + 5 * 60 * MIN).includes('R5'));
 back.rooms.R5.done = back.rooms.R5.end;
 const nAway = D.numbers(back, 1e12 + 5 * 60 * MIN), nBase = D.numbers({ base: back.base, rooms: {} }, 0);
-check('…and the numbers moved by the room\'s change', Math.abs((nBase.fatigue - nAway.fatigue) - 16) < 1.01, { nBase, nAway });
+check('…and the numbers moved by the room\'s change (16 % of the fatigue)', Math.abs((nBase.fatigue - nAway.fatigue) - nBase.fatigue * 0.16) < 0.11, { nBase, nAway });
 const fast = D.sanitize({ visit: { at: 5, band: 5, stow: 3, changed: 5 } }).visit;
 const cf = D.startCourse(fast, 'R2', 1000, 60);
 check('scale 60: a 60-minute course takes one real minute', cf.end - cf.at === MIN);
@@ -122,7 +123,7 @@ const sv = { base: D.base({}), rooms: {} };
 D.startCourse(sv, 'R7', 0, 1);
 sv.rooms.R7.stop = D.curve('ease', D.progress(sv.rooms.R7, 30 * MIN));
 const nStop = D.numbers(sv, 10 * 60 * MIN);
-check('stopped at half time: about half of the change stays', Math.abs((D.numbers({ base: sv.base, rooms: {} }, 0).stress - nStop.stress) - 5) < 0.6, nStop);
+check('stopped at half time: about half of the change stays', (() => { const b = D.numbers({ base: sv.base, rooms: {} }, 0).stress; return Math.abs((b - nStop.stress) - b * 0.05) < 0.2; })(), nStop);
 check('a stopped course is never due', !D.due(sv, 1e15).includes('R7'));
 
 // any order works; closed rooms are not needed for the report

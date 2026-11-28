@@ -17,7 +17,7 @@ body.easy .heal-chip { min-height: 56px; font-size: 16px; }
 /* the numbers */
 .heal-nums { display: grid; gap: 6px; margin: 8px 0; }
 .heal-num { display: grid; grid-template-columns: 22px minmax(70px, 7.5em) 1fr 32px auto; align-items: center; gap: 6px; font-size: 14px; }
-.heal-nums.small .heal-num { grid-template-columns: 18px 3.2em 1fr 26px; font-size: 12px; }
+.heal-nums.small .heal-num { grid-template-columns: 18px 4.6em 1fr 26px; font-size: 12px; }
 .hn-bar { position: relative; height: 9px; border-radius: 5px; background: rgba(255, 255, 255, .18); overflow: hidden; }
 .hn-bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: #9bbf6a; }
 .hn-bar.down > i { background: #7fb6d9; }

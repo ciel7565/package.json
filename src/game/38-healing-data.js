@@ -16,7 +16,8 @@
 //     limits: { …state bounds }, scaleMax
 //     base(ask, play) -> numbers     the numbers at the 상담실 (answers + the day's play)
 //     curve(kind, p) -> 0 … 1        how much of a room's change has happened at progress p
-//     numbers(visit, now, scale) -> numbers   base + finished rooms + the running course's share (any time, here or away)
+//     numbers(visit, now, scale) -> numbers   base, then each finished room (and the running course's share of its curve)
+//                                   moves a number eff % of the way left towards 0 (down) or 100 (up) — here or away
 //     measure(nums, seed) -> { balance, breath, posture, salt, microbes }   the play values of 제1관
 //     courseMs(roomId, scale) / progress(course, now) / plan(ask) / nextStep(visit) / sanitize(raw) / serverTable()
 //     startCourse(visit, roomId, now, scale) -> course   due(visit, now) -> [roomIds whose course ended, not yet stamped]
@@ -263,7 +264,12 @@ G.healStations = G.healStations || { map: new Map(), set(room, key, at) { this.m
       if (!isMap(c) || !fin(c.at)) continue;
       const R = rooms[id];
       const share = c.done ? 1 : (c.stop ? clamp(Number(c.stop) || 0, 0, 1) : curve(R.curve, progress(c, now)));
-      for (const k of NUM_IDS) out[k] += (R.eff[k] || 0) * share;
+      // a room moves a number by a SHARE of the way left (eff % of it): ten rooms bring stress well down and calm well
+      // up, never to 0 or 100, and the order of the rooms does not matter
+      for (const k of NUM_IDS) {
+        const e = (R.eff[k] || 0) * share / 100;
+        if (e < 0) out[k] *= 1 + e; else if (e > 0) out[k] += (100 - out[k]) * e;
+      }
       const sm = clamp(Number(c.small) || 0, 0, limits.small);
       out.calm += Math.min(4, sm * 0.5); out.stress -= Math.min(4, sm * 0.5);
     }

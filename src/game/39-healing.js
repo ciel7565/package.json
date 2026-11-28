@@ -148,7 +148,9 @@
     const pick = (k, ...vs) => { for (const v of vs) if (has(k, v)) { base[k] = v; return; } };
     pick('top', 'hanbok'); pick('bottom', 'pants'); pick('footwear', 'gomusin');
     for (const k of ['outer', 'hat', 'norigae', 'pouch', 'fan', 'ribbon', 'belt', 'bag', 'accessory']) pick(k, 'none');
-    pick('topColor', '#ffffff', '#f5f0e6', '#f1ece1'); pick('bottomColor', '#f5f0e6', '#e9e4da', '#f1ece1', '#ffffff');
+    // the lightest dye the table has (the dye lists change with lane hanbok): 힐링복 is white top and bottom
+    const lightest = (k) => { const L = Array.isArray(O[k]) ? O[k].filter((c) => /^#[0-9a-f]{6}$/i.test(c)) : []; let best = null, bl = -1; for (const c of L) { const n = parseInt(c.slice(1), 16), l = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255); if (l > bl) { bl = l; best = c; } } if (best) base[k] = best; };
+    lightest('topColor'); lightest('bottomColor');
     pick('trimColor', '#9bbf6a', '#6d8f4e', '#2f7d4a'); pick('pattern', 'none'); pick('shoes', '#f5f0e6', '#ffffff');
     return base;
   }
@@ -613,7 +615,7 @@
   function openMap() {
     const v = vis();
     M().open({
-      id: 'heal-map', title: '힐링관 복도 지도', icon: '🗺️', size: 'lg', className: 'heal-modal heal-map-modal', say: '가고 싶은 관을 누르면 그리로 가요.',
+      id: 'heal-map', title: '힐링관 복도 지도', icon: '🗺️', size: 'xl', className: 'heal-modal heal-map-modal', say: '가고 싶은 관을 누르면 그리로 가요.',
       body: (el, m) => drawMap(el, m),
       actions: [],
     });
@@ -655,7 +657,7 @@
       if (!v) lob.prepend(B('예약하기', '🖥️', () => { m.close(); openKiosk(); }, 'btn-primary'));
       if (v && (step === 'report' || step === 'checkout' || v.rep)) lob.prepend(B('종합 리포트', '📋', () => { m.close(); openReport(); }, 'btn-primary'));
       el.appendChild(lob);
-      if (v) el.appendChild(numsView(D.numbers(v, now()), v.base, true));
+      if (v) el.appendChild(numsView(D.numbers(v, now()), v.base));
     }
   }
   function stepLine(step) {
