@@ -323,7 +323,7 @@
   // front faces south, rot π = north); steps end at the street's edge, doors are the middle of each front (doorOf).
   //  장터 거리 — west of the entrance path, inside the campus between the 한옥 마을 and the gate: the street z 44 … 48
   //    from the entrance path (x −1) to x −53. North side (fronts south): 한복집 x −20.9 … −7.1 · 염색 공방 −37.4 … −23.6 ·
-  //    주막 −51 … −39. South side (fronts north): 떡집 −37.9 … −26.1 · 한지 공방 −51.2 … −39.8. Kept free: the entrance
+  //    주막 −53.2 … −41.2 (the 3.8 m side yard between it and the 염색 공방 holds the dye drying rack). South side (fronts north): 떡집 −37.9 … −26.1 · 한지 공방 −51.2 … −39.8. Kept free: the entrance
   //    path and its view to the plaza, the gate's stone walls (z 58 … 59.5), 6 m to the road and to the 한옥 마을.
   //  공방 마을 — east of the main hall, towards the river: the street z −89.75 … −86.25 from PATH_HEAL (x 32.5) to x 79.
   //    North side: 서당 x 40.6 … 53.4 · 대장간 55 … 66 · 방앗간 68.5 … 79.5 (its water wheel and flume east of it,
@@ -332,7 +332,7 @@
   L.buildings.push(
     { id: 'B_HANBOK', type: 'craft', craft: 'hanbok', name: '한복집', sign: '한복집', x: -14, z: 38.6, w: 12, d: 7, rot: 0 },
     { id: 'B_DYE', type: 'craft', craft: 'dye', name: '염색 공방', sign: '염색 공방', x: -30.5, z: 38.25, w: 12, d: 8, rot: 0 },
-    { id: 'B_JUMAK', type: 'craft', craft: 'jumak', name: '주막', sign: '주막', x: -45, z: 38.9, w: 11, d: 7, rot: 0 },
+    { id: 'B_JUMAK', type: 'craft', craft: 'jumak', name: '주막', sign: '주막', x: -47.2, z: 38.9, w: 11, d: 7, rot: 0 },
     { id: 'B_TTEOK', type: 'craft', craft: 'tteok', name: '떡집', sign: '떡집', x: -32, z: 53.4, w: 10, d: 7, rot: PI },
     { id: 'B_HANJI', type: 'craft', craft: 'hanji', name: '한지 공방', sign: '한지 공방', x: -45.5, z: 53.4, w: 9.5, d: 7, rot: PI },
     { id: 'B_SEODANG', type: 'craft', craft: 'seodang', name: '서당', sign: '서당', x: 47, z: -95, w: 11, d: 7, rot: 0 },

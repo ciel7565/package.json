@@ -288,6 +288,7 @@
         if (FURNISH[row.id]) FURNISH[row.id](R, ctx, row, L);
         else plain(R, ctx, row, L);
       } catch (e) { G.log.warn('WORLD', `craft ${row.id}: furnishing failed`, e?.message || e); }
+      ctx.onUpdate((dt) => runTweens(L, dt));
       // the keeper (where FURNISH said, or by the north wall)
       const ks = L.keeperSpot || { x: 0, z: -row.size.d / 2 + 1.6, rotY: 0 };
       L.keeper = keeper(ctx, row, ks);
@@ -306,6 +307,367 @@
     ctx.light({ x: 0, y: 2.2, z: 0, color: '#ffc98a', intensity: 3.0, distance: 8, decay: 1.8, day: 0.2 });
     K.dust(R, { count: 60 });
   }
+
+  // ============================================================================================ shared pieces
+  /** the named dyes of the avatar table (G.data.avatar.dyes) by id, read at run time; a fallback colour without it */
+  function dye(id, fb) { const d = (G.data.avatar?.dyes || []).find((x) => x && x.id === id); return d ? d.hex : fb; }
+  function dyeName(id, fb) { const d = (G.data.avatar?.dyes || []).find((x) => x && x.id === id); return d ? d.name : fb; }
+  /**
+   * cloth strips that move in the wind: ONE mesh (vertex colours, a sway in the vertex shader that grows towards the free
+   * end), a material of its own. strips: [{x, y, z, w, h, color, rotY}] (top edge centre); returns { mesh, update(dt, k) }.
+   * k = wind strength (0 = still: reduce motion). Never faster than 0.5 Hz.
+   */
+  function windCloth(strips, o = {}) {
+    const pos = [], nor = [], col = [], sway = [], idx = [];
+    const c = new THREE.Color();
+    const NX = 4, NY = 8;
+    for (const s of strips) {
+      c.set(s.color || '#ffffff');
+      const cs = Math.cos(s.rotY || 0), sn = Math.sin(s.rotY || 0), ph = Math.random() * TAU;
+      const base0 = pos.length / 3;
+      for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
+        const u = (i / NX - 0.5) * s.w, v = -(j / NY) * s.h;
+        pos.push(s.x + u * cs, s.y + v, s.z - u * sn); nor.push(sn, 0, cs);
+        const shade = 0.92 + 0.08 * Math.sin(i * 2.1 + j);
+        col.push(c.r * shade, c.g * shade, c.b * shade); sway.push(j / NY, ph);
+      }
+      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const a = base0 + j * (NX + 1) + i, b = a + 1, d = a + NX + 1, e = d + 1;
+        idx.push(a, d, b, b, d, e);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('aSway', new THREE.Float32BufferAttribute(sway, 2));
+    g.setIndex(idx);
+    g.computeBoundingSphere();
+    const U = { uT: { value: 0 }, uK: { value: 1 }, uDir: { value: new THREE.Vector2(0.8, 0.6) } };
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+    mat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, U);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute vec2 aSway; uniform float uT; uniform float uK; uniform vec2 uDir;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          float sw = aSway.x * aSway.x;
+          float w1 = sin(uT * 1.7 + aSway.y + position.y * 2.0) * 0.6 + sin(uT * 2.9 + aSway.y * 1.3) * 0.25;
+          transformed.x += uDir.x * (0.05 + 0.07 * w1) * sw * uK;
+          transformed.z += uDir.y * (0.05 + 0.07 * w1) * sw * uK;`);
+    };
+    mat.customProgramCacheKey = () => 'tfm-windcloth';
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.name = o.name || 'wind-cloth';
+    mesh.castShadow = !!o.cast; mesh.receiveShadow = true;
+    return { mesh, uniforms: U, update(dt, k) { U.uT.value = (U.uT.value + Math.min(dt || 0, 0.1)) % 1000; U.uK.value = reduceMotion() ? 0 : (k == null ? 1 : k); } };
+  }
+  /** a hanging jeogori (저고리), front view, its top centre at m (faces +Z) — boxes only, merge-friendly */
+  function jeogori(T, m, o = {}) {
+    const body = o.tint || '#f1ece1', trim = o.trim || '#24508e', go = o.goreum || '#c23a4a', s = o.s || 1;
+    const S = (x, y, z, w, h, d, tn, rz = 0) => T.add('cloth', K.geo.slab(w * s, h * s, d, 0.004), mul(m, M(x * s, y * s, z, 0, 1, 1, 1, 0, rz)), tn, o);
+    S(0, -0.19, 0, 0.5, 0.36, 0.035, body);                                     // 길 (body)
+    for (const sx of [-1, 1]) {
+      S(sx * 0.42, -0.12, 0, 0.42, 0.17, 0.03, body, sx * -0.38);              // 소매 (sleeves), drooping
+      S(sx * 0.6, -0.26, 0.002, 0.07, 0.19, 0.034, trim, sx * -0.38);          // 끝동 (cuffs)
+    }
+    S(-0.07, -0.13, 0.02, 0.06, 0.3, 0.012, trim, -0.62);                      // 깃 (collar), crossing
+    S(-0.055, -0.115, 0.027, 0.02, 0.27, 0.008, '#ffffff', -0.62);              // 동정 (white collar strip)
+    S(0.09, -0.24, 0.026, 0.035, 0.26, 0.008, go, 0.08);                         // 고름 (long ribbon)
+    S(0.13, -0.2, 0.026, 0.03, 0.14, 0.008, go, -0.25);                          // 고름 (short ribbon)
+  }
+  /** a pleated 치마 hung by its waistband at m (faces +Z): a grid that widens downward, pleats as a zigzag */
+  function chima(T, m, o = {}) {
+    const w0 = (o.w || 0.6), w1 = w0 * 1.5, h = o.h || 1.05, tn = o.tint || '#d9534f', NX = 24, NY = 6;
+    for (const flip of [false, true]) {
+      const g = geo.grid(NX, NY, (i, j, out) => {
+        const u = i / NX, v = j / NY, w = w0 + (w1 - w0) * v;
+        out[0] = (u - 0.5) * w; out[1] = -v * h; out[2] = (i % 2 ? 0.018 : -0.018) * (0.4 + v) + (flip ? -0.004 : 0);
+        out[3] = u * w; out[4] = v * h;
+      }, flip);
+      T.add('cloth', g, m, tn, o);
+    }
+    T.add('cloth', K.geo.slab(w0 + 0.04, 0.06, 0.03, 0.004), mul(m, M(0, -0.02, 0)), o.band || '#f1ece1', o);   // 허리말기
+  }
+  /** a 횃대: a bar on two posts with things hanging from it; returns the hook spots (local to the room) */
+  function haetdae(R, o) {
+    const len = o.len || 2.4, y = o.y || 1.95, ry = o.rotY || 0, m0 = M(o.x, 0, o.z, ry);
+    for (const sx of [-1, 1]) {
+      R.add('furn', K.geo.slab(0.06, y + 0.08, 0.06, 0.008), mul(m0, M(sx * len / 2, (y + 0.08) / 2, 0)), '#5a3822');
+      R.add('furn', K.geo.slab(0.36, 0.05, 0.3, 0.008), mul(m0, M(sx * len / 2, 0.025, 0)), '#5a3822');
+    }
+    const bar = geo.cyl(0.022, 0.022, len + 0.16, 10); bar.applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 2));
+    R.add('furn', bar, mul(m0, M(0, y, 0)), '#6e4129');
+    return { m0, y, len };
+  }
+  /** a tween helper for room hooks: run fn(t 0..1) over sec seconds inside the room's update loop */
+  function tween(L, sec, fn, done) {
+    (L.tweens || (L.tweens = [])).push({ t: 0, sec: reduceMotion() ? 0.01 : sec, fn, done });
+  }
+  /** run the room's tweens (buildHouse registers it with ctx.onUpdate) */
+  function runTweens(L, dt) {
+    const list = L.tweens;
+    if (!list || !list.length) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const tw = list[i];
+      tw.t = Math.min(1, tw.t + (dt || 0) / tw.sec);
+      try { tw.fn(tw.t); } catch (e) { /* one frame */ }
+      if (tw.t >= 1) { list.splice(i, 1); try { tw.done?.(); } catch (e) { /* done */ } }
+    }
+  }
+  const ease = (t) => t * t * (3 - 2 * t);
+
+  // ============================================================================================ 한복집 PL_HANBOK
+  // A tailor's shop under open rafters: shelves of cloth bolts (필) in the named dyes along the north wall, the keeper behind
+  // a long cutting table (ruler, scissors, thread, the 인두 in its 화로), hanging 저고리 and 치마 on two 횃대, a 다듬잇돌, a
+  // tall mirror (→ 옷장), folded clothes on a 반닫이, cushions for customers by the door. Thing to do: 저고리 짓기 — the
+  // chosen colour's bolt comes to the table, is cut into pieces, and a new jeogori in that colour hangs on the stand.
+  FURNISH.hanbok = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    const DY = ['jjok', 'cheong', 'ok', 'chorok', 'songhwa', 'chija', 'dahong', 'yeonji', 'bunhong', 'jaju', 'bora', 'nam', 'mosi', 'so', 'gal', 'meok'];
+    const cols = DY.map((k) => dye(k, '#c9b38f'));
+    // ---- north wall: four shelf units full of bolts; the name board over the middle window
+    let n = 0;
+    for (const sx of [-5.6, -2.8, 2.8, 5.6]) {
+      const spots = K.shelf(R, { x: sx, z: -hd + 0.32, w: 2.3, d: 0.48, h: 2.05, levels: 4, back: true, tone: '#5e3a22' });
+      spots.forEach((sp) => {
+        for (let k = 0; k < 6; k++) { K.roll(R, { x: sp.x - 0.9 + k * 0.36, y: sp.y, z: sp.z + 0.02, len: 0.42, r: 0.072, tint: cols[(n * 5 + k * 3) % cols.length], band: '#e9dcc0', rotY: PI / 2 }); }
+        n++;
+      });
+      R.block(sx, -hd + 0.32, 1.17, 0.26, { maxY: 2.1 });
+    }
+    R.label('한복집', { side: 'N', u: hw, v: 2.35, n: 0.09, w: 1.5, h: 0.32, style: 'wood' });
+    A('otgam', { x: -2.8, y: 1.5, z: -hd + 0.75 });
+    // ---- the cutting table and what lies on it
+    const tz = -1.0, tw = K.table(R, { x: 0, z: tz, w: 2.8, d: 1.1, h: 0.76, legs: 'straight', tone: '#7a4a2c' });
+    const top = tw.top;
+    R.block(0, tz, 1.42, 0.57, { maxY: top + 0.05 });
+    R.add('cloth', K.geo.slab(1.3, 0.012, 0.62, 0.003), M(-0.45, top + 0.006, tz + 0.05, 0.08), dye('mosi', '#e8d9b5'));          // a length of 모시 laid out
+    R.add('furn', K.geo.slab(0.9, 0.01, 0.04, 0.002), M(-0.45, top + 0.018, tz + 0.42, 0.08), '#c9a46a');                           // 자 (ruler)
+    for (const [x, z, tn] of [[0.75, tz - 0.2, '#c23a4a'], [0.86, tz - 0.12, '#24508e'], [0.8, tz - 0.32, '#f2e18c']]) {          // 실패 (thread spools)
+      R.add('furn', geo.cyl(0.03, 0.03, 0.07, 10), M(x, top + 0.035, z), '#8a5a36'); R.add('cloth', geo.cyl(0.026, 0.026, 0.05, 10), M(x, top + 0.035, z), tn);
+    }
+    R.add('iron', K.geo.slab(0.16, 0.012, 0.03, 0.002), M(0.4, top + 0.008, tz + 0.3, 0.5), '#6a6a6a');                              // 가위 (scissors)
+    R.add('iron', K.geo.slab(0.16, 0.012, 0.03, 0.002), M(0.4, top + 0.008, tz + 0.3, -0.2), '#6a6a6a');
+    K.pot(R, { kind: 'brazier', x: 1.15, y: top, z: tz + 0.1, s: 0.7 });                                                              // 화로 with the 인두
+    R.add('iron', geo.cyl(0.004, 0.004, 0.32, 6), M(1.1, top + 0.22, tz + 0.1, 0, 1, 1, 1, 0, 0.7), '#3a3a3a');
+    R.add('iron', K.geo.slab(0.05, 0.012, 0.09, 0.002), M(1.0, top + 0.12, tz + 0.1, 0.3), '#2e2e2e');
+    if (has('bojagi')) K.bojagi(R, { x: -1.2, y: top, z: tz - 0.32, w: 0.26, h: 0.12, tint: dye('dahong', '#d9534f'), trim: dye('songhwa', '#f2e18c') });
+    A('indu', { x: 1.1, y: top + 0.35, z: tz + 0.5 });
+    L.keeperSpot = { x: 0.3, z: tz - 1.0, rotY: 0 };
+    // ---- west: two 횃대 with hanging clothes (they sway a little when the door lets the air in)
+    const hangs = [
+      { x: -hw + 0.9, z: -1.2, rotY: PI / 2, items: [['j', 'ok', 'jajeok'], ['c', 'dahong'], ['j', 'songhwa', 'nam']] },
+      { x: -hw + 0.9, z: 2.0, rotY: PI / 2, items: [['j', 'mosi', 'gam'], ['c', 'nam'], ['j', 'yeonji', 'chorok']] },
+    ];
+    for (const hg of hangs) {
+      const H0 = haetdae(R, { x: hg.x, z: hg.z, rotY: hg.rotY, len: 2.3, y: 1.95 });
+      R.block(hg.x, hg.z, 0.32, 1.25, { maxY: 2.0 });
+      hg.items.forEach(([kind, c1, c2], i) => {
+        const u = (i - 1) * 0.76;
+        const S = has('sway') ? K.sway(R, { x: hg.x, y: H0.y, z: hg.z + u, amp: 0.025, speed: 0.4 + i * 0.07, axis: 'z' }) : R;
+        const m = mul(H0.m0, M(u, H0.y - 0.02, 0.04));
+        if (kind === 'j') jeogori(S, m, { tint: dye(c1, '#f1ece1'), trim: dye(c2, '#24508e'), goreum: dye(c2, '#c23a4a') });
+        else chima(S, m, { tint: dye(c1, '#d9534f'), w: 0.56, h: 1.0 });
+        if (S !== R) S.done();
+      });
+    }
+    A('jeogori', { x: -hw + 1.3, y: 1.6, z: -1.2 });
+    A('chima', { x: -hw + 1.3, y: 1.3, z: 2.0 });
+    A('goreum', { x: -hw + 1.3, y: 1.7, z: -2.0 });
+    // ---- the display stand where the visitor's jeogori will hang (thing to do), by the table
+    const st = haetdae(R, { x: 2.6, z: -2.25, rotY: 0, len: 1.2, y: 1.8 });
+    R.block(2.6, -2.25, 0.7, 0.22, { maxY: 1.85 });
+    // ---- east: the tall mirror (→ 옷장), a 반닫이 with folded clothes, the 다듬잇돌
+    const mx = hw - 0.45, mz = 0.6;
+    R.add('furn', K.geo.slab(0.08, 2.0, 0.9, 0.01), M(mx, 1.05, mz), '#4a2a18');
+    R.add('furn', K.geo.slab(0.5, 0.08, 1.1, 0.01), M(mx - 0.1, 0.04, mz), '#4a2a18');
+    R.add('brass', K.geo.slab(0.012, 0.1, 0.1, 0.002), M(mx - 0.045, 1.98, mz), '#c9a24a');
+    const mirrorMat = ctx.own(new THREE.MeshStandardMaterial({ color: ctx.low ? '#b9c4c8' : '#e6ebee', metalness: ctx.low ? 0.2 : 1.0, roughness: 0.06 }));
+    const mirror = new THREE.Mesh(ctx.own(new THREE.PlaneGeometry(0.76, 1.8)), mirrorMat);
+    mirror.position.set(mx - 0.046, 1.08, mz); mirror.rotation.y = -PI / 2; mirror.name = 'hanbok-mirror';
+    R.addMesh(mirror);
+    R.block(mx - 0.05, mz, 0.3, 0.55, { maxY: 2.1 });
+    ctx.interact({ id: 'PL_HANBOK:mirror', kind: 'wardrobe', label: '🪞 옷장 열기 (거울)', kidLabel: '거울 보고 옷 입기', emoji: '🪞', radius: 2.8, priority: 0.7,
+      position: { x: mx - 0.6, y: 1.2, z: mz }, onInteract: () => wardrobe('open') });
+    const ch = K.chest(R, { x: hw - 0.55, z: -2.6, rotY: -PI / 2, w: 1.3, d: 0.5, h: 0.78, doors: 2, fittings: 'brass', tone: '#7a3e24' });
+    R.block(hw - 0.55, -2.6, 0.27, 0.67, { maxY: 0.8 });
+    ['so', 'ok', 'dahong', 'nam'].forEach((k, i) => R.add('cloth', K.geo.slab(0.42, 0.05, 0.36, 0.01), M(hw - 0.56, 0.78 + 0.03 + i * 0.052, -2.6 + (i % 2 ? 0.02 : -0.02), 0.05 * i), dye(k, '#e9dcc0')));
+    if (has('dadeumitdol')) { K.dadeumitdol(R, { x: hw - 1.3, z: 2.9, rotY: -PI / 2 }); R.block(hw - 1.3, 2.9, 0.18, 0.36, { maxY: 0.3 }); }
+    A('dadeumi', { x: hw - 1.3, y: 0.5, z: 2.9 });
+    // ---- by the door: cushions and a low table for customers, a pair of 꽃신 on the step, 청사초롱
+    for (const x of [-3.4, -2.4]) K.cushion(R, { x, z: hd - 1.4, w: 0.62, d: 0.62, tint: dye('dahong', '#b8322e'), trim: dye('nam', '#2f4f8a') });
+    if (has('shoes')) { K.shoes(R, { x: -0.9, z: hd - 0.55, kind: 'kkotsin', tint: dye('bunhong', '#f08bb0') }); }
+    if (has('chorong')) for (const x of [-1.4, 1.4]) K.chorong(R, { x, y: R.post - 0.05, z: tz, hang: true, drop: 0.45 });
+    if (has('jogakbo')) K.jogakbo(R, { m: R.wm('E', 1.4, 1.55, 0.04), w: 0.9, h: 0.9, seed: 7, wall: 'E' });
+    // ---- light and life
+    ctx.light({ x: 0, y: 2.3, z: tz, color: '#ffcf8f', intensity: 5.0, distance: 9, decay: 1.7, flicker: 0.04, day: 0.25 });
+    ctx.light({ x: hw - 1.2, y: 2.0, z: 0.6, color: '#ffd6a0', intensity: 2.4, distance: 6, decay: 1.8, day: 0.15 });
+    K.dust(R, { count: 90 });
+    // ---- the thing to do: the bolt, the cut pieces, the new jeogori (own material, coloured at step 0)
+    const dm = ctx.own(new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.85, metalness: 0 }));
+    const bolt = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.08, 0.08, 0.5, 16).rotateZ(PI / 2)), dm);
+    bolt.position.set(0.25, top + 0.09, tz - 0.05); bolt.visible = false; R.addMesh(bolt);
+    const pieces = new THREE.Group(); pieces.visible = false;
+    for (const [x, z, sw, sd, r] of [[0.1, -0.15, 0.45, 0.3, 0.1], [0.55, -0.12, 0.3, 0.18, -0.2], [0.5, 0.12, 0.3, 0.18, 0.25], [0.12, 0.2, 0.28, 0.12, 0]]) {
+      const p = new THREE.Mesh(ctx.own(new THREE.BoxGeometry(sw, 0.012, sd)), dm); p.position.set(x, top + 0.012, tz + z); p.rotation.y = r; pieces.add(p);
+    }
+    R.addMesh(pieces);
+    const newJ = new THREE.Group(); newJ.visible = false; newJ.name = 'hanbok-new-jeogori';
+    const JB = new BK.Bucket(); const JT = { add: (key, g, m, tn) => JB.add(key, g, m, tn) };
+    jeogori(JT, M(0, 0, 0), { tint: '#ffffff', trim: '#ffffff', goreum: '#ffffff' });
+    JB.build(newJ, { name: 'hanbok-new', materials: { cloth: dm }, shadows: false, ao: false });
+    newJ.position.set(2.6, st.y - 0.02, -2.25 + 0.05); R.addMesh(newJ);
+    A('do', { x: 2.6, y: 1.5, z: -1.9 });
+    const pickCol = ['jjok', 'dahong', 'ok', 'songhwa', 'yeonji', 'chorok'];
+    L.step = (i) => {
+      if (i === 0) {
+        L.color = dye(pickCol[(Math.random() * pickCol.length) | 0], '#24508e');
+        dm.color.set(L.color); bolt.visible = true; pieces.visible = false; newJ.visible = false;
+        bolt.position.y = top + 0.6;
+        tween(L, 0.8, (t) => { bolt.position.y = top + 0.09 + (1 - ease(t)) * 0.5; });
+        return dyeName(pickCol[0]);
+      }
+      if (i === 1) { bolt.visible = false; pieces.visible = true; pieces.scale.setScalar(0.6); tween(L, 0.6, (t) => pieces.scale.setScalar(0.6 + 0.4 * ease(t))); return null; }
+      pieces.visible = false; newJ.visible = true; newJ.scale.setScalar(0.3);
+      tween(L, 0.9, (t) => newJ.scale.setScalar(0.3 + 0.7 * ease(t)));
+      return null;
+    };
+  };
+
+  // ============================================================================================ 염색 공방 PL_DYE
+  // An earth-floored workshop under smoke-dark rafters: five dye jars along the north wall (쪽 · 홍화 · 치자 · 소목 · 감물),
+  // each with what it is made from in a basket and its name on the wall; a drying line across the room with strips in the
+  // named dyes of G.data.avatar moving in the draught; a hearth with a cauldron of 소목 simmering (fire, steam); the
+  // dipping frame over the big 쪽물 jar where the visitor dips a white cloth three times — it deepens dip by dip.
+  const DYE_VATS = [
+    { key: 'jjok', dye: 'jjok', liquid: '#1d3f73', name: '쪽', raw: 'leaf' },
+    { key: 'honghwa', dye: 'yeonji', liquid: '#9e2238', name: '홍화', raw: 'petal' },
+    { key: 'chija', dye: 'chija', liquid: '#e0a92e', name: '치자', raw: 'fruit' },
+    { key: 'somok', dye: 'jaju', liquid: '#6a1f33', name: '소목', raw: 'chip' },
+    { key: 'gammul', dye: 'gal', liquid: '#6a4a30', name: '감물', raw: 'persimmon' },
+  ];
+  FURNISH.dye = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    // ---- the five jars along the north wall, what each is made from, the names on the wall
+    DYE_VATS.forEach((v, i) => {
+      const x = -5.2 + i * 2.6, z = -hd + 0.9;
+      const p = K.pot(R, { kind: 'dok', x, z, s: 0.82 });
+      R.add('paint', geo.cyl(0.33, 0.33, 0.012, 22), M(x, p.top - 0.08, z), v.liquid);
+      R.block(x, z, 0.4, 0.4, { maxY: p.top });
+      const bx = x + 0.75, bz = z + 0.35;
+      K.basket(R, { x: bx, z: bz, r: 0.22, h: 0.13 });
+      const rnd = R.rnd || Math.random;
+      for (let k = 0; k < 14; k++) {
+        const a = rnd() * TAU, rr = rnd() * 0.15, px = bx + Math.cos(a) * rr, pz = bz + Math.sin(a) * rr, py = 0.12 + rnd() * 0.03;
+        if (v.raw === 'leaf') R.add('cloth', K.geo.slab(0.07, 0.006, 0.035, 0.001), M(px, py, pz, a), '#3f6b3a');
+        else if (v.raw === 'petal') R.add('cloth', K.geo.slab(0.03, 0.008, 0.018, 0.001), M(px, py, pz, a), k % 3 ? '#e2562a' : '#f2a03a');
+        else if (v.raw === 'fruit') R.add('paint', geo.cyl(0.018, 0.022, 0.05, 6), M(px, py + 0.01, pz, a, 1, 1, 1, PI / 2), '#e07a1f');
+        else if (v.raw === 'chip') R.add('furn', K.geo.slab(0.06, 0.012, 0.02, 0.002), M(px, py, pz, a), '#9a3b2a');
+        else R.add('paint', geo.cyl(0.026, 0.03, 0.04, 8), M(px, py + 0.01, pz, a), '#6f8a3a');
+      }
+      R.label(v.name, { side: 'N', u: x + hw, v: 1.75, n: 0.08, w: 0.7, h: 0.28, style: 'paper' });
+      A(v.key, { x, y: 1.05, z: z + 0.3 });
+    });
+    // ---- the drying line: strips in the named dyes of the avatar table, moving in the draught
+    const DRY = ['jjok', 'cheong', 'ok', 'cheoncheong', 'dahong', 'yeonji', 'bunhong', 'chija', 'hwang', 'songhwa', 'jaju', 'gal', 'godong', 'ssuk'];
+    const strips = [];
+    const lineY = R.post - 0.12, lz = 0.6;
+    DRY.forEach((k, i) => strips.push({ x: -hw + 1.3 + i * ((w - 2.6) / (DRY.length - 1)), y: lineY - 0.02, z: lz, w: 0.5, h: 0.95 + (i % 3) * 0.08, color: dye(k, '#c9b38f') }));
+    for (const sx of [-1, 1]) R.add('furn', K.geo.slab(0.08, lineY + 0.1, 0.08, 0.01), M(sx * (hw - 0.5), (lineY + 0.1) / 2, lz), '#4a2f1c');
+    if (has('rope')) K.rope(R, { points: [[-hw + 0.5, lineY + 0.02, lz], [0, lineY - 0.06, lz], [hw - 0.5, lineY + 0.02, lz]], r: 0.012, tint: '#b89a62' });
+    for (const sx of [-1, 1]) R.block(sx * (hw - 0.5), lz, 0.06, 0.06, { maxY: lineY });
+    const WC = windCloth(strips, { name: 'dye-line', cast: false });
+    R.addMesh(WC.mesh);
+    ctx.onUpdate((dt) => WC.update(dt, 0.55));
+    A('line', { x: 0, y: 1.6, z: lz });
+    // ---- east: the hearth with the 소목 cauldron (fire, steam); firewood
+    if (has('buttumak')) {
+      const bt = K.buttumak(R, { x: hw - 0.75, z: 1.6, rotY: -PI / 2, w: 2.2, d: 0.95, h: 0.72, mouths: [0], pots: [{ u: 0, s: 0.85 }], fireS: 0.7 });
+      R.block(hw - 0.75, 1.6, 0.5, 1.12, { maxY: bt?.top || 0.8 });
+    } else {
+      K.pot(R, { kind: 'sot', x: hw - 0.9, z: 1.6, lid: true }); K.fire(R, { x: hw - 0.9, y: 0.05, z: 1.6, s: 0.6 }); R.block(hw - 0.9, 1.6, 0.45, 0.45, { maxY: 0.6 });
+    }
+    if (has('jangjak')) { K.jangjak(R, { x: hw - 0.7, z: 3.7, rotY: -PI / 2, w: 1.2 }); R.block(hw - 0.7, 3.7, 0.3, 0.62, { maxY: 0.8 }); }
+    // ---- west: shelves of folded dyed cloth and the 잿물 jars; a 함지박 of rinse water
+    const spots = K.shelf(R, { x: -hw + 0.4, z: -0.6, rotY: PI / 2, w: 2.2, d: 0.5, h: 1.8, levels: 3, back: true, tone: '#4e321e' });
+    spots.forEach((sp, li) => { for (let k = 0; k < 4; k++) R.add('cloth', K.geo.slab(0.4, 0.07, 0.34, 0.01), M(sp.x, sp.y + 0.035 + (k % 2) * 0.072, sp.z - 0.75 + k * 0.5, 0.05), dye(DRY[(li * 4 + k) % DRY.length], '#c9b38f')); });
+    R.block(-hw + 0.4, -0.6, 0.27, 1.12, { maxY: 1.85 });
+    for (const z of [2.0, 2.8]) { K.pot(R, { kind: 'hangari', x: -hw + 0.6, z, s: 0.55, lid: true }); R.block(-hw + 0.6, z, 0.25, 0.25, { maxY: 0.6 }); }
+    A('jaetmul', { x: -hw + 0.9, y: 0.9, z: 2.4 });
+    if (has('hamjibak')) K.hamjibak(R, { x: -2.4, z: 2.6, r: 0.42, fill: 'water' });
+    R.block(-2.4, 2.6, 0.42, 0.42, { maxY: 0.2 });
+    // ---- the dipping place: the big 쪽물 jar with a frame; the white cloth that deepens dip by dip
+    const vx = 0.4, vz = -1.3;
+    const big = K.pot(R, { kind: 'dok', x: vx, z: vz, s: 1.05 });
+    R.add('paint', geo.cyl(0.43, 0.43, 0.012, 24), M(vx, big.top - 0.1, vz), '#16335e');
+    R.block(vx, vz, 0.5, 0.5, { maxY: big.top });
+    const fy = 2.05;
+    for (const sx of [-1, 1]) R.add('furn', K.geo.slab(0.07, fy, 0.07, 0.008), M(vx + sx * 0.75, fy / 2, vz), '#4a2f1c');
+    const bar = geo.cyl(0.025, 0.025, 1.6, 8); bar.applyMatrix4(new THREE.Matrix4().makeRotationZ(PI / 2));
+    R.add('furn', bar, M(vx, fy, vz), '#5e3a22');
+    for (const sx of [-1, 1]) R.block(vx + sx * 0.75, vz, 0.06, 0.06, { maxY: fy });
+    const cm = ctx.own(new THREE.MeshStandardMaterial({ color: dye('so', '#f1ece1'), roughness: 0.92, side: THREE.DoubleSide }));
+    const cloth = new THREE.Mesh(ctx.own(new THREE.PlaneGeometry(0.62, 1.0, 1, 6).translate(0, -0.5, 0)), cm);
+    cloth.position.set(vx, fy - 0.02, vz); cloth.name = 'dye-cloth';
+    R.addMesh(cloth);
+    L.keeperSpot = { x: vx + 1.35, z: vz - 0.4, rotY: -0.5 };
+    A('do', { x: vx, y: 1.3, z: vz + 0.55 });
+    // dip shades: white → sky → blue → deep indigo (쪽빛), read from the dye table
+    const shades = [dye('so', '#f1ece1'), dye('cheoncheong', '#6fc3df'), dye('cheong', '#4a78c8'), dye('jjok', '#24508e')];
+    L.dips = 0;
+    L.step = (i) => {
+      const from = new THREE.Color(shades[Math.min(i, 3)]), to = new THREE.Color(shades[Math.min(i + 1, 3)]);
+      L.dips = i + 1;
+      tween(L, 2.4, (t) => {
+        // down into the jar (0 … 0.45), a rest, up and drip-dry (0.55 … 1); the colour turns while it is under
+        const k = t < 0.45 ? ease(t / 0.45) : t < 0.55 ? 1 : 1 - ease((t - 0.55) / 0.45);
+        cloth.position.y = fy - 0.02 - k * 0.95;
+        if (t >= 0.45) cm.color.copy(from).lerp(to, Math.min(1, (t - 0.45) / 0.3));
+      }, () => cm.color.copy(to));
+      return null;
+    };
+    // ---- light and life: the window sun, a lamp over the jars, the hearth glow (its own fire light)
+    ctx.light({ x: 0, y: 2.4, z: -hd + 1.6, color: '#ffd29a', intensity: 4.0, distance: 10, decay: 1.7, flicker: 0.03, day: 0.2 });
+    K.dust(R, { count: 110 });
+    L.shelf = true;
+    R.shelfWall('S', 0, { levels: 2, slots: 3, w: 1.8, y: 0.95, gap: 0.5 }).forEach((sp, i) => A('shelf:' + i, sp));
+  };
+  // outside: a drying rack in the side yard (west of the house, towards the 주막), strips in the named dyes, in the wind
+  const yardCloth = [];
+  EXT.dye = function (site, b) {
+    const B = site.B, hw = b.w / 2, x0 = -hw - 0.9 - 1.9;   // the middle of the 3.8 m side yard
+    const H = 2.35, z0 = -b.d / 2 + 0.6, z1 = b.d / 2 - 0.4;
+    for (const z of [z0, z1]) {
+      B.add('wood', geo.cyl(0.05, 0.06, H, 8), M(x0, H / 2, z), '#5a3c26');
+      site.circle(x0, z, 0.12);
+    }
+    B.add('wood', geo.tube(x0, H - 0.05, z0, x0, H - 0.05, z1, 0.022, 6), BK.I4, '#7a5a3e');
+    const ks = ['jjok', 'dahong', 'chija', 'ok', 'jaju', 'gal', 'cheong', 'yeonji'];
+    const n = ks.length, strips = [];
+    for (let i = 0; i < n; i++) {
+      const lz = z0 + 0.35 + i * ((z1 - z0 - 0.7) / (n - 1));
+      strips.push({ x: site.wx(x0, lz), y: site.gy + H - 0.08, z: site.wz(x0, lz), w: 0.55, h: 1.25 - (i % 2) * 0.12, color: dye(ks[i], '#c9b38f'), rotY: (b.rot || 0) + PI / 2 });
+    }
+    const WC = windCloth(strips, { name: 'dye-yard', cast: true });
+    yardCloth.push({ WC, x: site.x, z: site.z });
+    try { G.sys.engine?.scene?.add(WC.mesh); } catch (e) { /* the engine */ }
+    site.blocker(x0, 0, (z0 + z1) / 2, 0.2, H, z1 - z0);
+  };
+  // the outdoor cloth moves only while somebody is near enough to see it (and never inside a place)
+  G.register({
+    name: 'crafts', order: 72, label: '공방 마을',
+    init() {
+      G.bus.on('place:enter', () => { for (const y of yardCloth) y.WC.mesh.visible = false; });
+      G.bus.on('place:exit', () => { for (const y of yardCloth) y.WC.mesh.visible = true; });
+    },
+    update(dt) {
+      if (!yardCloth.length || G.sys.places?.current) return;
+      const p = G.sys.player?.position;
+      if (!p) return;
+      const W = G.sys.nature?.uniforms?.uWindStrength?.value;
+      for (const y of yardCloth) { if ((p.x - y.x) ** 2 + (p.z - y.z) ** 2 < 90 * 90) y.WC.update(dt, W == null ? 0.8 : clamp(0.35 + W * 0.5, 0.2, 1.2)); }
+    },
+  });
 
   // ============================================================================================ the PLACES
   for (const row of ROWS) {
