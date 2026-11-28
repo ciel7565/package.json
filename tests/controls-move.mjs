@@ -220,6 +220,24 @@ const tapKey = (p, code, t, hold = 50) => { p.down(code, { ts: t }); p.up(code, 
   check('… the key can be rebound', p.I.autoForward === true);
 }
 
+// ----------------------------------------------------------------------------------------------- the rows for the 조작 tab
+{
+  const p = mk({ easy: false });
+  const rows = (p.G.settingsQueue || []).filter((d) => d.tab === 'controls' && d.group === '달리기 · 대시 · 편의');
+  const ids = rows.map((d) => d.id);
+  const need = ['tapRun', 'dashOn', 'tapWindow', 'alwaysRun', 'jumpBuffer', 'coyoteMs', 'wallSlide', 'stepAround', 'lowFences', 'runFree'];
+  check('registry: the ten comfort rows are queued for the 조작 tab', need.every((i) => ids.includes(i)), J(need.filter((i) => !ids.includes(i))));
+  check('registry: sliders carry their ranges (window 200 – 450, buffer 0 – 200, coyote 0 – 200), toggles a boolean default', rows.filter((d) => d.type === 'slider').every((d) => Number.isFinite(d.min) && Number.isFinite(d.max) && d.default >= d.min && d.default <= d.max)
+    && rows.find((d) => d.id === 'tapWindow').min === 200 && rows.find((d) => d.id === 'tapWindow').max === 450 && rows.filter((d) => d.type === 'toggle').every((d) => typeof d.default === 'boolean'));
+  check('registry: every row has a Korean label and a hint of what it does', rows.every((d) => /[가-힣]/.test(d.label) && (d.type === 'info' || /[가-힣]/.test(d.hint))));
+  const c = p.I.comfort();
+  check('comfort(): normal defaults — window 300, buffer 120, coyote 100, every convenience on, always-run off', c.tapMs === 300 && c.jumpBufMs === 120 && c.coyoteMs === 100 && c.tapRun && c.dash && c.wallSlide && c.stepAround && c.lowFences && !c.alwaysRun, J(c));
+  const e = mk({ easy: true }).I.comfort();
+  check('comfort(): easy defaults — window 360, buffer 180, coyote 150 (the gentle side), always-run still off', e.tapMs === 360 && e.jumpBufMs === 180 && e.coyoteMs === 150 && !e.alwaysRun, J(e));
+  const o = mk({ easy: false, settings: { tapWindow: 9999, jumpBuffer: -5, coyoteMs: 'x', tapRun: 'yes' } }).I.comfort();
+  check('comfort(): out-of-range numbers are clamped, junk falls back to the default', o.tapMs === 450 && o.jumpBufMs === 0 && o.coyoteMs === 100 && o.tapRun === true, J(o));
+}
+
 // ----------------------------------------------------------------------------------------------- touch
 {
   const stickEl = { id: 'joystick' };
