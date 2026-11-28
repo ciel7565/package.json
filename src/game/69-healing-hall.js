@@ -1069,8 +1069,49 @@ G.healStations = G.healStations || { map: new Map(),
         R.add('wood', cyl(0.02, 0.02, 0.9, 8), M(x, 0.05, z - 0.6, 0, 1, 1, 1, 0).multiply(new THREE.Matrix4().makeRotationZ(PI / 2)), '#c9ab83');
         station(ctx, 'R4', 'gym3', x, 0.02, z, PI); }
       // a water jar with a gourd ladle and towels on a peg rail by the door
-      if (Kt.pot) try { Kt.pot(R, { x: -6.5, z: 9.6, kind: 'dok', s: 0.8, lid: true }); ctx.addCollider({ shape: 'circle', x: -6.5, z: 9.6, r: 0.38 }); } catch (e) { /* optional */ }
+      if (Kt.pot) try { Kt.pot(R, { x: -6.95, z: 9.7, kind: 'dok', s: 0.8, lid: true }); ctx.addCollider({ shape: 'circle', x: -6.95, z: 9.7, r: 0.38 }); } catch (e) { /* optional */ }
       for (let k = 0; k < 4; k++) R.add('cloth', box(0.3, 0.5, 0.02), M(5.2 + k * 0.42, 1.35, ROOM.d / 2 - 0.06), k % 2 ? '#e6efe8' : '#f4efe4', { cast: false });
+      // [heal-look] more of the course and three more strength stations: stepping stones on the north stretch, a spur of
+      // stones from the sand to a foot-wash trough by the door; a balance beam, step boxes and a sand-bag pulley; clubs
+      // and sand bags on racks, a wall bar (늑목) on the east wall, mats under the stations
+      const T = (k, n = 1) => tally('R4', k, n);
+      T('barefoot stretch', 5); T('strength station', 6);
+      for (let i = 0; i < 9; i++) { const sx = -ox + 0.5 + i * 0.58, sz = -oz + bw / 2 + (i % 2 ? 0.25 : -0.25); R.add('stone', cyl(0.24, 0.26, 0.07, 12), M(sx, 0.055, sz, i), i % 3 ? '#9a9286' : '#8a8378'); }
+      T('stepping stone', 9);
+      for (let i = 0; i < 6; i++) { const sx = 1.2 - i * 0.6, sz = oz + 0.5 + (i % 2) * 0.2; R.add('stone', cyl(0.22, 0.24, 0.06, 12), M(sx, 0.035, sz, i), '#9a9286'); }
+      T('stepping stone', 6);
+      { const tx = -4.4, tz = ROOM.d / 2 - 1.1;
+        R.add('stone', box(2.6, 0.42, 0.7), M(tx, 0.21, tz), '#a8a196'); R.add('lacquer', box(2.4, 0.02, 0.5), M(tx, 0.4, tz), '#7a9aa2', { cast: false });
+        R.add('stone', box(0.42, 0.24, 0.42), M(tx - 1.6, 0.12, tz - 0.05), '#b8b2a6');
+        if (Kt.pot) try { Kt.pot(R, { x: tx + 1.0, y: 0.42, z: tz + 0.15, kind: 'bowl', s: 0.4 }); } catch (e) { /* optional */ }
+        ctx.addCollider({ shape: 'box', x: tx - 0.15, z: tz, hw: 1.6, hd: 0.35, maxY: 0.44 }); T('foot-wash trough');
+        emitter(ctx, 'water', tx, tz, 0.15); }
+      // gym4: a low balance beam (평균대) · gym5: two step boxes (디딤대) · gym6: a sand bag on a rope over a pulley frame
+      { const x = -2.6, z = 2.6;
+        R.add('wood', box(0.12, 0.1, 2.4), M(x, 0.3, z), '#c9ab83'); for (const s of [-1, 1]) R.add('wood', box(0.4, 0.25, 0.12), M(x, 0.125, z + s * 1.0), '#8a5a36');
+        ctx.addCollider({ shape: 'box', x, z, hw: 0.2, hd: 1.2, maxY: 0.36, stand: true }); T('balance beam'); }
+      { const x = 2.6, z = 2.6;
+        for (const [s, h] of [[-0.45, 0.2], [0.45, 0.32]]) { R.add('furn', box(0.7, h, 0.45), M(x + s, h / 2, z), '#9a6a40'); R.add('cloth', box(0.66, 0.02, 0.41), M(x + s, h + 0.01, z), '#6a7a5a', { cast: false }); }
+        ctx.addCollider({ shape: 'box', x, z, hw: 0.82, hd: 0.25, maxY: 0.34, stand: true }); T('step box', 2); }
+      { const x = 0, z = -6.2;
+        for (const s of [-1, 1]) R.add('wood', box(0.1, 2.3, 0.1), M(x + s * 0.6, 1.15, z), '#8a5a36');
+        R.add('wood', box(1.3, 0.12, 0.12), M(x, 2.3, z), '#8a5a36'); R.add('iron', new THREE.TorusGeometry(0.08, 0.015, 6, 14), M(x, 2.18, z), '#3a3430', { cast: false });
+        R.add('straw', cyl(0.006, 0.006, 1.3, 4), M(x, 1.5, z), '#d9c7a4', { cast: false }); R.add('cloth', cyl(0.14, 0.16, 0.42, 10), M(x, 0.62, z), '#a8875a');
+        for (const s of [-1, 1]) ctx.addCollider({ shape: 'circle', x: x + s * 0.6, z, r: 0.1 }); T('sand-bag pulley'); }
+      if (Kt.floorMat) for (const [mx, mz, w, d] of [[-2.6, 2.6, 1.2, 3.0], [2.6, 2.6, 2.0, 1.4], [0, -6.0, 1.8, 1.2], [-2.6, -2.5, 1.6, 1.8], [0, -4.0, 2.2, 1.6]]) try { Kt.floorMat(R, { x: mx, z: mz, w, d, tint: '#6a7a5a' }); T('mat'); } catch (e) { /* optional */ }
+      // clubs (곤봉) and sand bags on racks along the west wall (outside the loop), a wall bar on the east wall
+      { const x = -6.95, z = -1.6;
+        R.add('furn', box(0.36, 0.9, 1.6), M(x, 0.45, z), '#6a4428');
+        for (let k = 0; k < 8; k++) R.add('wood', cyl(0.025, 0.05, 0.5, 8), M(x + 0.05, 1.05, z - 0.7 + k * 0.2, 0, 1, 1, 1, 0.08), '#c9a273', { cast: false });
+        ctx.addCollider({ shape: 'box', x, z, hw: 0.2, hd: 0.82, maxY: 1.3 }); T('club rack'); T('club', 8); }
+      { const x = -6.95, z = 1.4;
+        R.add('furn', box(0.4, 0.5, 1.4), M(x, 0.25, z), '#6a4428');
+        for (let k = 0; k < 6; k++) R.add('cloth', box(0.32, 0.14, 0.4), M(x + 0.02, 0.57 + Math.floor(k / 3) * 0.15, z - 0.45 + (k % 3) * 0.45, k * 0.2), k % 2 ? '#a8875a' : '#8f7a5a');
+        ctx.addCollider({ shape: 'box', x, z, hw: 0.22, hd: 0.72, maxY: 0.9 }); T('sand bag', 6); }
+      { const x = 7.35, z = 0;
+        for (const s of [-1, 1]) R.add('wood', box(0.08, 2.4, 0.08), M(x, 1.2, z + s * 1.1), '#9a6a40');
+        for (let k = 0; k < 12; k++) R.add('wood', cyl(0.018, 0.018, 2.2, 8), M(x - 0.02, 0.2 + k * 0.19, z, 0, 1, 1, 1, PI / 2), '#c9ab83', { cast: false });
+        ctx.addCollider({ shape: 'box', x, z, hw: 0.1, hd: 1.15, maxY: 2.4 }); T('wall bar'); }
       station(ctx, 'R4', 'track', -ox + bw / 2, 0.02, 4.5, PI);
       station(ctx, 'R4', 'guide', 0, 0, 1.6, PI);
       station(ctx, 'R4', 'spot', -ox + bw / 2, 0.02, 4.5, PI);
@@ -1200,6 +1241,49 @@ G.healStations = G.healStations || { map: new Map(),
       // bright work lamps
       for (const x of [-3, 3]) R.add('glow', box(1.6, 0.06, 0.3), M(x, ROOM.ceil - 0.05, -3.5), '#fff6e6', { cast: false });
       if (!low) ctx.light({ x: 0, y: ROOM.ceil - 0.4, z: -3.5, color: 0xfff1dc, intensity: 6, distance: 16, decay: 2, day: 0.4 });
+      // [heal-look] the workshop around the four lanes: nets between the lanes, a stand mark in each, spare targets
+      // behind the back net (a row of steel drums, a big pyramid of cans, a crate wall of bottles, a second plate shelf),
+      // a standing bat rack, helmets and gloves on hooks by the door, a shard bin with a broom and a dustpan
+      const T = (k, n = 1) => tally('R9', k, n);
+      T('lane', 4); T('target stand', 4);
+      for (const lx of [-2.15, 0.3, 2.35]) {
+        const g = new THREE.PlaneGeometry(3.0, 2.6); ctx.own(g);
+        const net = new THREE.Mesh(g, netMat); net.position.set(lx, 1.35, -6.1); net.rotation.y = PI / 2; net.name = 'heal-net'; net.userData.guardSkip = true; net.raycast = () => {};
+        R.addMesh(net, null); R.add('iron', cyl(0.035, 0.035, 2.7, 8), M(lx, 1.35, -4.6), '#3a3f44');
+        ctx.addCollider({ shape: 'box', x: lx, z: -6.1, hw: 0.05, hd: 1.5, maxY: 2.6 }); T('lane net');
+      }
+      for (const lx of [-3.2, -0.74, 1.3, 3.4]) { R.add('paint', box(0.5, 0.085, 0.04), M(lx, 0.043, -2.6), '#f2f0ea', { cast: false }); for (const s of [-1, 1]) R.add('paint', box(0.12, 0.086, 0.26), M(lx + s * 0.16, 0.043, -2.25, s * 0.15), '#f2f0ea', { cast: false }); T('floor mark'); }
+      R.add('paint', box(9.4, 0.084, 0.08), M(0, 0.042, 0.9), '#e8c23a', { cast: false }); T('floor mark');
+      // spare targets behind the back net
+      for (let k = 0; k < 6; k++) { const dx = -6.6 + k * 0.7; R.add('iron', cyl(0.29, 0.29, 0.88, 18), M(dx, 0.44, -10.4), ['#4d5d6c', '#3e6a8a', '#6a4d3a'][k % 3]); for (const yy of [0.18, 0.7]) R.add('iron', cyl(0.3, 0.3, 0.03, 18), M(dx, yy, -10.4), '#5a6773', { cast: false }); }
+      ctx.addCollider({ shape: 'box', x: -4.85, z: -10.4, hw: 2.1, hd: 0.32, maxY: 0.9 }); T('steel drum', 6);
+      { let n = 0; for (let row = 0; row < 5; row++) for (let k = 0; k < 6 - row; k++) { R.add('iron', cyl(0.045, 0.045, 0.13, 12), M(4.6 - (5 - row) * 0.05 + k * 0.1, 0.065 + row * 0.13, -10.5), ['#c43b33', '#d9a43a', '#3c7f5a', '#2f5a8a', '#8a8f94'][(n++) % 5], { cast: false }); }
+        ctx.addCollider({ shape: 'box', x: 4.6, z: -10.5, hw: 0.4, hd: 0.12, maxY: 0.7 }); T('can', n); }
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+        const bx = 1.0 + c * 0.5, by = 0.15 + r * 0.31, bz = -10.5;
+        R.add('wood', box(0.46, 0.28, 0.36), M(bx, by, bz), r % 2 ? '#a8875a' : '#9a7a4e');
+        for (let k = 0; k < 6; k++) R.add('lacquer', cyl(0.014, 0.022, 0.07, 6), M(bx - 0.15 + (k % 3) * 0.15, by + 0.17, bz - 0.08 + Math.floor(k / 3) * 0.16), ['#2f6a3a', '#6a3f1f', '#9fb8b0'][k % 3], { cast: false });
+      }
+      ctx.addCollider({ shape: 'box', x: 1.5, z: -10.5, hw: 0.75, hd: 0.2, maxY: 1.0 }); T('bottle crate', 9);
+      if (Kt.shelf) try { const sp = Kt.shelf(R, { x: -6.7, z: -5.2, rotY: PI / 2, w: 2.0, d: 0.45, h: 1.6, levels: 3 }) || []; sp.forEach((p) => { for (let k = 0; k < 10; k++) R.add('paint', cyl(0.1, 0.09, 0.016, 14), M(p.x, p.y + 0.01 + k * 0.018, p.z - 0.55 + Math.floor(k / 5) * 1.1), '#f1efe8', { cast: false }); }); ctx.addCollider({ shape: 'box', x: -6.7, z: -5.2, hw: 0.24, hd: 1.02, maxY: 1.7 }); T('plate shelf'); T('plate', 60); } catch (e) { /* optional */ }
+      // a standing bat rack by the lanes
+      { const x = -5.6, z = 1.8;
+        R.add('furn', box(1.0, 0.1, 0.36), M(x, 0.05, z), '#6a4a30'); R.add('furn', box(1.0, 0.06, 0.1), M(x, 0.75, z - 0.12), '#6a4a30');
+        for (let k = 0; k < 6; k++) R.add('wood', cyl(0.022, 0.04, 0.84, 8), M(x - 0.4 + k * 0.16, 0.46, z, 0, 1, 1, 1, -0.12), '#c9a273');
+        ctx.addCollider({ shape: 'box', x, z, hw: 0.5, hd: 0.2, maxY: 0.9 }); T('bat rack'); T('bat', 10); }
+      // helmets and gloves on hooks on the south wall (by the door), safety glasses on the gear shelf
+      { const z = ROOM.d / 2 - 0.12;
+        R.add('wood', box(3.0, 0.08, 0.05), M(4.6, 1.55, z), '#7a5234');
+        for (let k = 0; k < 5; k++) { const hx = 3.4 + k * 0.6; R.add('iron', cyl(0.008, 0.008, 0.1, 5), M(hx, 1.5, z - 0.05, 0, 1, 1, 1, PI / 2), '#3a3430', { cast: false }); R.add('paint', new THREE.SphereGeometry(0.13, 12, 8, 0, TAU, 0, PI / 2), M(hx, 1.3, z - 0.15, 0, 1, 0.9, 1, -0.6), k % 2 ? '#2a2f33' : '#c43b33', { cast: false }); R.add('cloth', box(0.12, 0.18, 0.04), M(hx + 0.2, 1.38, z - 0.06), '#c9a24a', { cast: false }); }
+        T('helmet', 5); T('glove pair', 5); }
+      // the shard bin with a lid, a broom and a dustpan beside it
+      { const x = 6.4, z = -2.2;
+        R.add('iron', box(0.7, 0.75, 0.55), M(x, 0.375, z), '#4a5a4a'); R.add('iron', box(0.74, 0.05, 0.59), M(x, 0.77, z - 0.08, 0, 1, 1, 1, -0.3), '#3a4a3a');
+        R.add('paint', box(0.5, 0.12, 0.005), M(x, 0.55, z + 0.278), '#e8c23a', { cast: false });
+        R.add('wood', cyl(0.015, 0.015, 1.3, 6), M(x + 0.55, 0.66, z + 0.3, 0, 1, 1, 1, 0.15), '#c9a273'); R.add('straw', box(0.3, 0.22, 0.08), M(x + 0.62, 0.1, z + 0.4, 0, 1, 1, 1, 0.15), '#c8b07a');
+        R.add('iron', box(0.26, 0.02, 0.22), M(x - 0.5, 0.01, z + 0.4), '#5a6773'); R.add('iron', box(0.03, 0.2, 0.03), M(x - 0.5, 0.1, z + 0.29), '#5a6773');
+        ctx.addCollider({ shape: 'box', x: x + 0.1, z, hw: 0.5, hd: 0.36, maxY: 0.8 }); T('shard bin'); T('broom'); T('dustpan'); }
+      bench(R, ctx, -3.2, 8.2); bench(R, ctx, 0, 6.8); T('bench', 2);
       station(ctx, 'R9', 'stand', 0, 0.08, -1.55, PI);
       station(ctx, 'R9', 'guide', 3.6, 0, 1.4, -PI / 2 - 0.4);
       station(ctx, 'R9', 'spot', 0, 0.08, -1.55, PI);
