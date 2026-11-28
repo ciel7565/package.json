@@ -17,6 +17,8 @@
 //                                                --no-minify / --dev keep the source text, --no-mangle keeps local names.
 //                                                The page warns when it is over the budget of CONTRACT §16.0 (release page
 //                                                12.5 MB raw / 7 MB brotli, test build 6.8 MB); --budget makes that an error.
+//   node tools/build.mjs --no-pwa             -> [opt] a server copy gets no manifest / service worker / offline page / icons
+//                                                (tools/pwa.mjs; CONTRACT §18.6 — written only next to a server copy's index.html)
 //   node tools/build.mjs --out <dir>/index.html --data-out <dir>/data/game-data.json
 //                                             -> also export the server's game data (a server copy outside dist/:
 //                                                cp -r server/. <dir>/ first; the default build writes server/data/)
@@ -40,6 +42,7 @@ import * as esbuild from 'esbuild';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib'; // [scale-server] precompressed copies of the page
 import { minifyFragmentCached, minifyCss } from './minify.mjs'; // [opt]
+import { writeInstallable } from './pwa.mjs'; // [opt] the installable page of a server copy
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -570,6 +573,14 @@ if (DATA_OUT) {
   if (path.basename(path.dirname(DATA_OUT)) === 'data' && path.resolve(copyRoot) !== path.join(ROOT, 'server')) {
     log(`  admin docs: ${copyAdminDocs(copyRoot)} → ${path.join(copyRoot, 'lib', 'docs')}`);
   }
+}
+
+// [opt] the installable page of a server copy (CONTRACT §18.6, tools/pwa.mjs): manifest.webmanifest, sw.js, offline.html
+// and icons/ next to index.html — only for a server copy (the release output, or --out <dir>/index.html with
+// --data-out <dir>/data/game-data.json); a page opened as a file never gets them (--no-pwa: none at all)
+if (path.basename(OUT) === 'index.html' && !flag('--no-pwa') && (DEFAULT_OUT || (DATA_OUT && path.basename(path.dirname(DATA_OUT)) === 'data' && path.dirname(path.dirname(DATA_OUT)) === path.dirname(OUT)))) {
+  const pwa = writeInstallable(path.dirname(OUT), { version: crypto.createHash('sha1').update(html).digest('hex').slice(0, 12) });
+  log(`  installable page: ${pwa.files.join(', ')}`);
 }
 
 const kb = (n) => (n / 1024).toFixed(0) + ' KB';

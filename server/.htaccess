@@ -36,6 +36,7 @@ LimitRequestBody 8388608
   AddType image/webp .webp
   AddType model/gltf-binary .glb
   AddType font/woff2 .woff2
+  AddType application/manifest+json .webmanifest
 </IfModule>
 
 # small static error pages (carry the static headers below; no server signature). An ErrorDocument path is counted
@@ -172,6 +173,22 @@ ErrorDocument 404 /%{reqenv:TFM_BASEREL}e404.html
     Header merge Vary "Accept-Encoding"
   </FilesMatch>
   Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+
+  # [opt] the installable page (CONTRACT §18.6; tools/build.mjs writes these next to index.html). The service worker
+  # must fetch the page shell for its cache: its own CSP allows that one thing (connect-src 'self') instead of the
+  # default-src 'none' of the .js block above; it and the manifest are always asked again (no stale worker / name).
+  <Files "sw.js">
+    Header always set Content-Security-Policy "default-src 'none'; connect-src 'self'"
+    Header always set Cache-Control "no-cache"
+  </Files>
+  <FilesMatch "(?i)\.webmanifest$">
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header always set X-Frame-Options "DENY"
+    Header always set Content-Security-Policy "default-src 'none'"
+    Header always set Cache-Control "no-cache"
+  </FilesMatch>
 
   # Apache answers that never reach PHP (the HTTPS redirect, a LimitRequestBody / error page, a TRACE echo) still carry a
   # strict CSP + nosniff. Scoped so an ordinary PHP or static HTML response is untouched (no doubled header on those):

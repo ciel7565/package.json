@@ -13,6 +13,20 @@
 <style>
 /*@CSS*/
 </style>
+<!-- [opt] the 📲 chip of the installable page (CONTRACT §18.6) -->
+<style>
+.install-chip { display: inline-flex; align-items: center; gap: .2rem; padding: .25rem; border-radius: 999px; border: 1px solid rgba(232, 197, 138, .55);
+  background: linear-gradient(180deg, rgba(58, 42, 28, .92), rgba(30, 22, 15, .92)); box-shadow: var(--shadow, 0 6px 16px rgba(0, 0, 0, .3)); }
+.install-chip[hidden], body.easy .install-chip { display: none; }
+.install-chip button { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: var(--tap, 44px); min-width: var(--tap, 44px);
+  padding: 0 .9rem; border: 0; border-radius: 999px; background: transparent; color: #fff3df; font: inherit; font-weight: 800; font-size: max(15px, .95rem);
+  cursor: pointer; touch-action: manipulation; transition: transform .12s ease-out; }
+.install-chip .ic-go { background: linear-gradient(180deg, #ffe7a8, #f0b44a); color: #2b1d02; }
+.install-chip .ic-x { padding: 0; color: #e8d9bd; }
+.install-chip button:active { transform: scale(.97); }
+.install-chip button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .install-chip button { transition: none; } }
+</style>
 </head>
 <body>
 <div id="app">
@@ -110,6 +124,8 @@
         <span class="pc-here"><span class="emoji" aria-hidden="true">📍</span><b class="pc-name"></b></span>
         <button type="button" class="pc-exit" data-action="place-exit" data-say="밖으로 나가요."><span class="emoji" aria-hidden="true">🚪</span><span class="pc-exit-lbl">밖으로</span></button>
       </div>
+      <!-- [opt] 📲 앱처럼 설치 (CONTRACT §18.6): shown only in server mode, in grown-up mode, when the browser offers to install -->
+      <div id="install-chip" class="install-chip easy-hide" hidden><button type="button" class="ic-go" data-action="app-install" data-say="이 체험관을 앱처럼 설치해요."><span class="emoji" aria-hidden="true">📲</span><span>앱처럼 설치</span></button><button type="button" class="ic-x" data-action="app-install-no" aria-label="설치 안내 닫기" title="닫기" data-say="닫아요.">✕</button></div>
       <div id="notice-banner" class="glass notice-banner" hidden></div>
       <div id="objective-hint" class="glass objective-hint" hidden></div>
     </div>
@@ -230,6 +246,38 @@
 </script>
 <script>
 /*@GAME*/
+</script>
+<!-- [opt] the installable page (CONTRACT §18.6): in server mode only (never for a page opened as a file or in local mode)
+     the page links manifest.webmanifest + the home-screen icon and registers sw.js — files that tools/build.mjs writes
+     next to a server copy's index.html (tools/pwa.mjs). The chip appears when the browser offers to install. -->
+<script>
+(function () {
+  'use strict';
+  var G = window.G, offer = null, started = false, KEY = 'tfm.v1.installChip';
+  var said = (function () { try { return localStorage.getItem(KEY) === 'no'; } catch (e) { return false; } })();
+  function chip() { return document.getElementById('install-chip'); }
+  function show(on) { var c = chip(); if (c) c.hidden = !on || said; }
+  function start() {
+    if (started || !G || !G.net || G.net.mode !== 'server') return;
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+    started = true;
+    var l = document.createElement('link'); l.rel = 'manifest'; l.href = 'manifest.webmanifest'; document.head.appendChild(l);
+    var a = document.createElement('link'); a.rel = 'apple-touch-icon'; a.href = 'icons/icon-180.png'; document.head.appendChild(a);
+    navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function (e) { try { G.log.warn('NET', 'service worker not registered', e && e.message); } catch (x) { /* no log */ } });
+    if (offer) show(true);
+  }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); offer = e; if (started) show(true); });
+  window.addEventListener('appinstalled', function () { offer = null; show(false); });
+  if (!G || !G.bus || !G.ui || typeof G.ui.onAction !== 'function') return;
+  G.ui.onAction('app-install', function () {
+    var p = offer; offer = null; show(false);
+    if (p) { try { p.prompt(); } catch (e) { /* the browser said no */ } }
+  });
+  G.ui.onAction('app-install-no', function () { said = true; show(false); try { localStorage.setItem(KEY, 'no'); } catch (e) { /* storage blocked */ } });
+  G.bus.on('game:ready', start);
+  G.bus.on('game:login', start);
+  if (G.ready) start();
+})();
 </script>
 </body>
 </html>
