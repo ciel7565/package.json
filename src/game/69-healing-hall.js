@@ -217,11 +217,13 @@ G.healStations = G.healStations || { map: new Map(),
       // 머름-like sill rail, transom, mullion (pine, slim)
       R.add('wood', box(pw, 0.08, 0.1), M(cx, gy0 - 0.02, FRONT_Z - 0.02), '#c9ab83');
       R.add('wood', box(pw, 0.06, 0.09), M(cx, trY, FRONT_Z - 0.02), '#c9ab83');
-      if (!entrance) R.add('wood', box(0.05, trY - gy0, 0.08), M(cx, (gy0 + trY) / 2, FRONT_Z - 0.02), '#c9ab83');
+      // [heal-look] lites at human scale: two mullions at the thirds (≈ 0.9 m lites) and a low rail at knee height
+      if (!entrance) for (const t of [1 / 3, 2 / 3]) R.add('wood', box(0.05, trY - gy0, 0.08), M(x0 + pw * t, (gy0 + trY) / 2, FRONT_Z - 0.02), '#c9ab83');
+      if (!entrance) R.add('wood', box(pw, 0.05, 0.07), M(cx, 0.48, FRONT_Z - 0.02), '#c9ab83', { cast: false });
       R.add('wood', box(0.05, gTop - trY, 0.08), M(cx, (trY + gTop) / 2, FRONT_Z - 0.02), '#c9ab83');
       const g = new THREE.PlaneGeometry(pw, gTop - gy0); g.translate(cx, (gy0 + gTop) / 2, FRONT_Z - 0.01);
       // the sun-patch decal: the two half-panes under the transom (the mullion between them), and the upper light
-      if (!entrance) { live.ports.push([x0, cx - 0.03, gy0 + 0.04, trY - 0.03], [cx + 0.03, x1, gy0 + 0.04, trY - 0.03], [x0, x1, trY + 0.03, gTop]); }
+      if (!entrance) { const a = x0 + pw / 3, b = x0 + pw * 2 / 3; live.ports.push([x0, a - 0.03, gy0 + 0.04, trY - 0.03], [a + 0.03, b - 0.03, gy0 + 0.04, trY - 0.03], [b + 0.03, x1, gy0 + 0.04, trY - 0.03], [x0, x1, trY + 0.03, gTop]); }
       else live.ports.push([x0, x1, gy0 + 0.1, trY - 0.06], [x0, x1, trY + 0.03, gTop]);
       if (entrance) {   // the entrance: two glass leaves slid half open, a wooden frame and a step out to the garden
         const lw = pw / 2;
@@ -229,7 +231,9 @@ G.healStations = G.healStations || { map: new Map(),
           const lx = cx + s * (lw * 1.25);
           R.add('wood', box(lw, 0.07, 0.07), M(lx, trY - 0.06, FRONT_Z + 0.05), '#a8865c');
           R.add('wood', box(0.06, trY - 0.1, 0.07), M(lx - s * lw / 2, trY / 2, FRONT_Z + 0.05), '#a8865c');
-          R.add('iron', box(0.03, 0.42, 0.03), M(lx - s * (lw / 2 - 0.12), 1.05, FRONT_Z + 0.1), '#2f2b28');
+          // pull handles of brass on both faces (a bar on two stand-offs), a floor track under the leaf
+          for (const f of [1, -1]) { const hz = FRONT_Z + 0.05 + f * 0.06, hx = lx - s * (lw / 2 - 0.14); R.add('brass', cyl(0.014, 0.014, 0.5, 8), M(hx, 1.05, hz), '#b8924a'); for (const dy of [-0.2, 0.2]) R.add('brass', cyl(0.008, 0.008, 0.06, 6), M(hx, 1.05 + dy, hz - f * 0.03, 0, 1, 1, 1, PI / 2), '#b8924a', { cast: false }); }
+          R.add('iron', box(lw, 0.012, 0.05), M(lx, 0.006, FRONT_Z + 0.05), '#6a6a66', { cast: false });
           const lg = new THREE.PlaneGeometry(lw - 0.06, trY - 0.16); lg.translate(lx, trY / 2, FRONT_Z + 0.05); panes.push(lg);
         }
         const tg = new THREE.PlaneGeometry(pw, gTop - trY); tg.translate(cx, (trY + gTop) / 2, FRONT_Z - 0.01); panes.push(tg);
@@ -241,7 +245,19 @@ G.healStations = G.healStations || { map: new Map(),
       const list = merged ? [merged] : panes;
       const gm = low
         ? new THREE.MeshBasicMaterial({ color: 0xcfe2e6, transparent: true, opacity: 0.08, depthWrite: false, side: THREE.DoubleSide })
-        : new THREE.MeshStandardMaterial({ color: 0xdcecee, transparent: true, opacity: 0.16, roughness: 0.04, metalness: 0.15, envMapIntensity: 1.6, depthWrite: false, side: THREE.DoubleSide });
+        : new THREE.MeshStandardMaterial({ color: 0xd2e6e2, transparent: true, opacity: 0.11, roughness: 0.04, metalness: 0.15, envMapIntensity: 1.6, depthWrite: false, side: THREE.DoubleSide });
+      // [heal-look] glass that reads as glass: a faint green-blue tint, and towards grazing angles (Fresnel) the pane
+      // turns more opaque and mirrors the sky's colour — seen straight on it stays clear
+      if (!low) {
+        gm.userData.sky = { value: new THREE.Color(0xb9cfdc) };
+        gm.onBeforeCompile = (sh) => {
+          sh.uniforms.uHealSky = gm.userData.sky;
+          sh.fragmentShader = 'uniform vec3 uHealSky;\n' + sh.fragmentShader.replace('#include <opaque_fragment>',
+            'float healFr = pow(1.0 - clamp(abs(dot(normalize(vViewPosition), normal)), 0.0, 1.0), 4.0);\n' +
+            'outgoingLight = mix(outgoingLight, uHealSky, healFr * 0.55);\n diffuseColor.a = mix(diffuseColor.a, 0.62, healFr);\n#include <opaque_fragment>');
+        };
+        gm.customProgramCacheKey = () => 'heal-glass-fresnel';
+      }
       ctx.own(gm);
       for (const g of list) {
         ctx.own(g);
@@ -311,7 +327,7 @@ G.healStations = G.healStations || { map: new Map(),
     hallLive = live;
     applyDoorStates();
     ctx.onUpdate((dt, t) => { for (const f of live.updates) f(dt, t); });
-    return { dispose() { if (hallLive === live) hallLive = null; dropStations('LOBBY'); dropEmitters(ctx.id); const cb = G.world?.cameraBlockers; if (cb) for (const m of live.blockers || []) { const i = cb.indexOf(m); if (i >= 0) cb.splice(i, 1); } } };
+    return { dispose() { for (const k of ['grove', 'grass']) { const v = live[k]; if (!v) continue; const g = v.group || v.mesh; try { v.dispose(); } catch (e) { /* gone */ } g?.parent?.remove(g); live[k] = null; } if (hallLive === live) hallLive = null; dropStations('LOBBY'); dropEmitters(ctx.id); const cb = G.world?.cameraBlockers; if (cb) for (const m of live.blockers || []) { const i = cb.indexOf(m); if (i >= 0) cb.splice(i, 1); } } };
   }
 
   function bench(R, ctx, x, z) {
@@ -648,9 +664,28 @@ G.healStations = G.healStations || { map: new Map(),
     // pines (evergreen) and broadleaf trees that follow the season
     const pines = [], leafy = [];
     for (let x = -W / 2 + 3; x < W / 2; x += 9 + rnd() * 7) { if (Math.abs(x + 26) < 6) continue; (rnd() < 0.62 ? pines : leafy).push({ x, z: Z + 12 + rnd() * 5, s: 0.8 + rnd() * 0.5 }); }
-    for (const p of pines) pine(R, p.x, p.z, p.s, rnd);
+    // [heal-look] medium / high: the valley's own trees (G.sys.nature.grove — the same species, levels of detail, wind,
+    // shadows and seasons as outside) and its grass and wild flowers (meadow); `low` and a build without the
+    // vegetation kit keep the plain trees below
+    const NAT = G.sys.nature;
+    if (!low && NAT?.real && typeof NAT.grove === 'function') {
+      try {
+        const broad = ['zelkova', 'maple', 'redMaple', 'oak', 'zelkova', 'birch'];
+        const list = [...pines.map((p, i) => ({ x: p.x, y: -0.5, z: p.z, species: Math.abs(p.x) < 30 && i % 2 ? 'gardenPine' : 'pine', scale: 0.55 + p.s * 0.35 })),
+          ...leafy.map((p, i) => ({ x: p.x, y: -0.5, z: p.z, species: broad[i % broad.length], scale: 0.5 + p.s * 0.3 }))];
+        live.grove = NAT.grove(list, { parent: ctx.group, space: 'parent', name: 'heal-garden-grove', heightAt: () => -0.5, colliders: false });
+        if (!live.grove || !live.grove.count) live.grove = null;
+      } catch (e) { warn('garden grove', e); live.grove = null; }
+      if (typeof NAT.meadow === 'function') try {
+        const pond = (x, z) => ((x + 26) / (3.4 * 1.6 + 0.8)) ** 2 + ((z - (Z + 11)) / (3.4 + 0.8)) ** 2 < 1;
+        live.grass = NAT.meadow({ parent: ctx.group, x: 0, z: Z + 11.4, w: W + 24, d: 14.6, density: 4, flowers: 0.25, seed: 1919, heightAt: () => -0.5,
+          mask: (x, z) => (z < Z + 4.9 || z > Z + 18.4 || pond(x, z) ? 0 : clamp((z - (Z + 4.9)) / 1.5, 0, 1)) });
+        if (!live.grass || !live.grass.count) live.grass = null;
+      } catch (e) { warn('garden meadow', e); live.grass = null; }
+    }
+    if (!live.grove) for (const p of pines) pine(R, p.x, p.z, p.s, rnd);
     const crowns = [];
-    for (const p of leafy) {
+    for (const p of (live.grove ? [] : leafy)) {
       const h = 3.2 * p.s;
       R.add('wood', cyl(0.12 * p.s, 0.18 * p.s, h, 7), M(p.x, -0.5 + h / 2, p.z), '#5d4a3a', { cast: true });
       for (let b = 0; b < 5; b++) { const a = (b / 5) * TAU + rnd(); R.add('wood', cyl(0.03, 0.06, 1.6 * p.s, 5), M(p.x + Math.cos(a) * 0.5 * p.s, -0.5 + h * 0.85, p.z + Math.sin(a) * 0.5 * p.s, a, 1, 1, 1, 0.7), '#5d4a3a', o); }
@@ -701,6 +736,8 @@ G.healStations = G.healStations || { map: new Map(),
       const el = Number(Wx?.sunElevation);
       const duskK = fin(el) ? clamp(1 - Math.abs(el - 2) / 10, 0, 1) * (1 - nf) : 0;
       if (live.pano) live.pano.color.copy(day).lerp(dusk, duskK * 0.8).lerp(night, nf);
+      const sky = live.glassMat?.userData?.sky?.value;   // [heal-look] what the glass mirrors at a grazing angle
+      if (sky) sky.set(0xb9cfdc).lerp(_tmpC.set(0xe8b48a), duskK * 0.7).lerp(_tmpC.set(0x1b2233), nf);
       // snow lying in the garden: the season's snow cover (12-seasons; its global hook is off indoors) or falling snow
       const SN = G.season, snow = clamp(Number(Wx?.precipitation?.snow) || Number(Wx?.mix?.SNOW) || 0, 0, 1), cover = clamp(Math.max(fin(Number(SN?.snow)) ? Number(SN.snow) : 0, snow), 0, 1);
       live.snowK = lerp(live.snowK || 0, cover, 0.3);
