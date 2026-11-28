@@ -1231,7 +1231,7 @@
     const S = SLOT;
     const cp = collarPath(o.off, o.yEnd, -0.075);
     P.add(sweepPath(cp, o.w || 0.013, { nu: 6, nv: 22, flat: 0.45 }), torsoW, o.slot);
-    if (o.dongjeong !== false) P.add(sweepPath(cp.slice(0, 8).map((p, i) => [p[0], p[1] + 0.008, p[2] + 0.006 * (i > 3 ? 1 : 0.4)]), 0.0065, { nu: 5, nv: 14, flat: 0.5 }), torsoW, S.white);
+    if (o.dongjeong !== false) P.add(sweepPath(cp.slice(0, o.djN || 8).map((p, i) => [p[0], p[1] + 0.008, p[2] + 0.006 * (i > 3 ? 1 : 0.4)]), 0.0065, { nu: 5, nv: 14, flat: 0.5 }), torsoW, S.white);
     const sb = cp[cp.length - 1];
     P.add(sweepPath([sb, torsoPt(-0.55, lerp(sb[1], o.hemY, 0.5), o.off + 0.006), torsoPt(-0.62, o.hemY + 0.01, o.off + 0.006)], 0.004, { nu: 4, nv: 10 }), o.weight || torsoW, o.seop);
     if (o.goreum) {
@@ -1322,7 +1322,7 @@
       if (shell) P.add(robe(typeof hemFn === 'function' ? (a) => hemFn(a) + 0.03 : hemFn + 0.03, hemFn, off + 0.002, { skirt: overSkirt, flare: oFlare, gap: o.gap, nu: o.pleat ? 48 : 34, nv: 1, flareFrom: o.pleat ? 1.02 : 1.05 }), w, o.band === 'gold' ? S.band : o.band === 'trim' ? S.trim : S.outer2); // hem band
       if (o.pleat === 1.02) P.add(torsoShell(1.05, 1.01, off + 0.004, { nu: 34, nv: 1 }), torsoW, S.outer2); // the waist seam of the 철릭
       if (o.under) P.add(robe(0.62, o.under, off - 0.006, { flare: o.flare * 0.9, nu: 34, nv: 4 }), coatW, S.red); // 동달이: the red coat under the 전복
-      if (o.collar === 'cross') crossCollar(P, { off: off - 0.002, yEnd: o.short ? 1.245 : 1.2, hemY: longRobe ? Math.max(0.3, outerHem) : 0.86, knotY: o.short ? 1.215 : 1.17, slot: o.band === 'trim' ? S.trim : o.short ? S.top3 : S.outer2, seop: o.band === 'trim' ? S.trim : S.outer2, goC: o.short ? S.band : S.outer2, goreum: o.goreum || 0, weight: w, w: 0.015 });
+      if (o.collar === 'cross') crossCollar(P, { off: off - 0.002, yEnd: o.short ? 1.245 : 1.2, hemY: longRobe ? Math.max(0.3, outerHem) : 0.86, knotY: o.short ? 1.215 : 1.17, slot: o.band === 'trim' ? S.trim : o.short ? S.top3 : S.outer2, seop: o.band === 'trim' ? S.trim : S.outer2, goC: o.short ? S.band : S.outer2, goreum: o.goreum || 0, weight: w, w: 0.015, djN: o.short ? 8 : 6 }); // [people] a robe's 동정 ends at the collarbone (its end read as a white speck on the chest)
       else if (o.collar === 'round') { // 단령: a round collar ring and the 흉배 square on the chest
         P.add(xf(torus(0.078, 0.011, 6, 28), 0, 1.395, -0.006, Math.PI / 2 - 0.12, 0, 0, 1, 1.05, 1), torsoW, S.outer2);
         P.add(sweepPath(collarPath(off, 1.3, -0.05).slice(0, 6), 0.007, { nu: 5, nv: 10, flat: 0.5 }), torsoW, S.white);
@@ -1375,8 +1375,9 @@
       const wideK = WIDE[kind] || 0;
       const sl = armT.filter((r) => r[0] >= endY - 0.03).map((r) => {
         const dz = kind === 'narrow' ? 0.002 : kind === 'jeo' ? 0.006 + 0.032 * smooth(1.32, 0.95, r[0]) : 0.012 + 0.05 * wideK * smooth(1.32, 0.95, r[0]);
-        const g = r[0] > 1.36 ? 0.006 + (sleeveOuter ? 0.01 : 0) : kind === 'narrow' ? 0.016 : sleeveOuter ? 0.022 : 0.014;
-        return [r[0], r[1] + g + (wideK ? 0.008 * wideK : 0), r[2] + g + dz, r[3], r[4] - dz * 0.35];
+        // [people] §19.9 a robe's sleeve sits close over the upper arm and widens toward the 배래 (it read as puffed shoulders)
+        const g = r[0] > 1.36 ? 0.006 + (sleeveOuter ? 0.007 : 0) : kind === 'narrow' ? 0.016 : sleeveOuter ? lerp(0.012, 0.022, smooth(1.3, 1.08, r[0])) : 0.014;
+        return [r[0], r[1] + g + (wideK ? 0.008 * wideK * smooth(1.3, 1.1, r[0]) : 0), r[2] + g + dz, r[3], r[4] - dz * 0.35];
       });
       sl[sl.length - 1][0] = endY;
       const sSlot = sleeveOuter ? (robeO.sleeveSlot ? S[robeO.sleeveSlot] : S.osleeve) : S.sleeve;
@@ -1391,7 +1392,9 @@
       P.add(rings([[0.852, 0.017, 0.022, hx, hz], [0.82, 0.018, 0.034, hx, hz + 0.004], [0.785, 0.0175, 0.041, hx - s * 0.001, hz + 0.006], [0.758, 0.015, 0.04, hx - s * 0.003, hz + 0.006]], { nu: 12, nv: 6, n: 2.6 }), hd, S.skin);
       for (let f = 0; f < 4; f++) {
         const fzz = hz + 0.006 + lerp(0.026, -0.024, f / 3), len = [0.06, 0.068, 0.064, 0.05][f];
-        P.add(sweepPath([[hx - s * 0.003, 0.765, fzz], [hx - s * 0.005, 0.765 - len * 0.55, fzz + 0.006], [hx - s * 0.009, 0.765 - len, fzz + 0.014]], (v) => 0.0078 - 0.0022 * v, { nu: 6, nv: 6 }), hd, S.skin);
+        // [people] §19.9 three joints that curl the finger in toward the palm at rest (the little finger most)
+        const cu = 1 + f * 0.25;
+        P.add(sweepPath([[hx - s * 0.003, 0.765, fzz], [hx - s * (0.004 + 0.004 * cu), 0.765 - len * 0.45, fzz + 0.004], [hx - s * (0.006 + 0.012 * cu), 0.765 - len * 0.8, fzz + 0.009], [hx - s * (0.008 + 0.02 * cu), 0.765 - len * 0.97, fzz + 0.012]], (v) => 0.0079 - 0.0024 * v, { nu: 6, nv: 8 }), hd, S.skin);
       }
       P.add(sweepPath([[hx - s * 0.004, 0.83, hz + 0.03], [hx - s * 0.008, 0.8, hz + 0.044], [hx - s * 0.012, 0.775, hz + 0.05]], (v) => 0.0095 - 0.002 * v, { nu: 6, nv: 6 }), hd, S.skin);
       if (s < 0) { // gesture fingers on the right hand (scaled up by the fgP / fgV / fgT channels)
