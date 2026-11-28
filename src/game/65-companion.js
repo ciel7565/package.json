@@ -2073,6 +2073,7 @@
         { key: 'dress', emoji: '👒', label: '옷 갈아입히기', fn: () => this.openWardrobe() },
         { key: 'rename', emoji: '✏️', label: '이름 바꾸기', fn: () => this.openRename() },
       ];
+      { const ai = G.sys.ai?.menuItem?.(false); if (ai) ITEMS.push({ key: 'ai', emoji: ai.emoji, label: ai.label, fn: ai.fn, cls: 'ong-rad-ai' }); } // [ai] 🤖 옹이 선생님 (73-ai.js; only in server mode when the operator switched it on)
       const back = h('div', { class: 'ong-radial-back' });
       const wrap = h('div', { class: 'ong-radial', role: 'dialog', 'aria-label': `${josa(name, '과/와')} 놀기` });
       const hearts = Math.round(affection() / 20);
@@ -2083,7 +2084,7 @@
       center.addEventListener('click', () => this.closeMenu());
       wrap.append(pill, center);
       ITEMS.forEach((it, i) => {
-        const b = h('button', { class: 'ong-rad-item', type: 'button', dataset: { key: it.key } },
+        const b = h('button', { class: 'ong-rad-item' + (it.cls ? ' ' + it.cls : ''), type: 'button', dataset: { key: it.key } }, // [ai] it.cls
           h('span', { class: 'ong-rad-ico emoji', 'aria-hidden': 'true' }, it.emoji),
           h('span', { class: 'ong-rad-lbl', text: it.label }),
           G.input?.touchUI ? null : h('kbd', { class: 'ong-rad-kbd' }, String(i + 1)));
@@ -2091,7 +2092,7 @@
         b.addEventListener('click', (ev) => { ev.stopPropagation(); this._pick(it); });
         wrap.appendChild(b);
       });
-      if (!G.input?.touchUI) wrap.appendChild(h('div', { class: 'ong-rad-hint' }, '숫자 1–4 · Esc 닫기'));
+      if (!G.input?.touchUI) wrap.appendChild(h('div', { class: 'ong-rad-hint' }, `숫자 1–${ITEMS.length} · Esc 닫기`)); // [ai] 1–5 with 옹이 선생님
       back.appendChild(wrap);
       back.addEventListener('pointerdown', (e) => { if (e.target === back) this.closeMenu(); });
       // anchor at the companion on screen (clamped), otherwise centred
@@ -2106,7 +2107,7 @@
       wrap.style.left = x + 'px'; wrap.style.top = y + 'px';
       (document.getElementById('app') || document.body).appendChild(back);
       const onKey = (e) => {
-        const n = /^(Digit|Numpad)([1-4])$/.exec(e.code);
+        const n = /^(Digit|Numpad)([1-5])$/.exec(e.code); // [ai] the fifth key only acts when the fifth item is there (ITEMS[4] undefined → _pick ignores it)
         if (n) { e.preventDefault(); e.stopPropagation(); this._pick(ITEMS[Number(n[2]) - 1]); }
       };
       window.addEventListener('keydown', onKey, true);
@@ -2132,6 +2133,8 @@
         { id: 'dress', emoji: '👒', label: '옷 입히기', say: '옷을 입혀 줘요', color: '#ffd43b' },
         { id: 'rename', emoji: '🏷️', label: '이름 짓기', say: '이름을 지어 줘요', color: '#8ce99a' },
       ];
+      const aiKid = G.sys.ai?.menuItem?.(true); // [ai] 🤖 물어보기 (73-ai.js)
+      if (aiKid) items.push({ id: 'ai', emoji: aiKid.emoji, label: aiKid.label, say: aiKid.say, color: aiKid.color }); // [ai]
       this._kidMenuOpen = true;
       this._setMood('happy', 2); this._wake();
       if (this._shown) this._start('wave', 1.6);
@@ -2152,7 +2155,7 @@
       Promise.resolve(p).then((id) => {
         this._kidMenuOpen = false;
         if (!id || !G.state) return;
-        const fn = { pet: () => this.pet(), talk: () => this.talk(), dress: () => this.openWardrobe(), rename: () => this.openRename() }[id];
+        const fn = { pet: () => this.pet(), talk: () => this.talk(), dress: () => this.openWardrobe(), rename: () => this.openRename(), ai: () => aiKid?.fn?.() }[id]; // [ai] ai
         // let the picker close first (its focus/sounds), then act
         if (fn) this._later(fn, 160);
       }, () => { this._kidMenuOpen = false; });

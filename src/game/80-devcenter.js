@@ -262,6 +262,7 @@
       F('49-exhibits.js', 'edu', '한옥 전시(G.sys.exhibits): 아이 카드·집 구경 도감(도장)·움직이는 그림 10편(2D 캔버스)·방 안 그림판·전시 붙이기'), // [exhibits]
       F('74-lecture.js', 'edu', '강의실(G.sys.lecture): 강의 카드·유튜브 재생(바깥으로 못 나가는 틀)·그림 슬라이드·PDF·PPTX 간단 보기·기본 슬라이드·방 안 강의 화면·입장 때 강의 보기 (§17.3)'), // [lecture]
       F('78-support.js', 'devcenter', '신고·문의(G.sys.support): 화면 사진(채팅 창은 가림)·버그 신고/문의/신고·쉬운 모드 그림 신고·기기 정보·내 문의와 운영자 답·답 알림·로컬 보낼 함 (§18.1)'), // [support]
+      F('73-ai.js', 'edu', '옹이 선생님(G.sys.ai): 서버의 AI 도우미에게 묻기 — 쉬운 모드는 준비된 질문 그림만·보통 모드는 200자 칸·답은 글자로만·오늘 남은 질문·쉬고 있을 때 한 줄 안내'), // [ai]
       F('75-myroom.js', 'buildings', '내 방(G.sys.myroom, PL_MYROOM): 분양받은 사람이 꾸미는 한옥 방 — 방 꾸미기(그림 판·끌어 놓기·돌리기·색·되돌리기)·꾸며 둔 방 3개·이 기기/서버 저장·안내 카드 (§17.4)'), // [myroom]
       F('76-myroom-data.js', 'buildings', '내 방 물건 148가지·색·방 모양·놓는 규칙(문 앞 비우기·벽·창문·상 위)·꾸며 둔 방 3개 — 서버 검사표의 원본 (순수 데이터)'), // [myroom]
       F('77-env.js', 'map', '한국 실시간(G.env): 서울 시각·해와 달·계절·날씨(기상청 또는 모델)·수확 달력 (§17.5)'), // [finisher]
@@ -319,6 +320,7 @@
       F('49-exhibits.css', 'edu', '전시 카드·집 구경 도감·움직이는 그림 재생기'), // [exhibits]
       F('74-lecture.css', 'edu', '강의실 창·강의 카드·슬라이드 종이 카드·넘김 단추·방 안 강의 보기 카드'), // [lecture]
       F('78-support.css', 'devcenter', '문의·신고 창·종류 카드·분류·화면 사진 미리 보기·내 문의 카드와 답·채팅 창 문의/신고 단추·답 알림 칩'), // [support]
+      F('73-ai.css', 'edu', '옹이 선생님 창(옹이 얼굴과 말풍선·질문 그림 타일·남은 질문·보통 모드 입력 칸)·옹이 메뉴의 다섯째 칸'), // [ai]
       F('75-myroom.css', 'buildings', '방 꾸미기 화면(위 막대·물건 판·고른 물건 단추)·방 꾸미기 단추·창문 고르기 판·안내 카드'), // [myroom]
       F('24-wardrobe.css', 'player', '옷장·한복집 창(왼쪽 모습·네 방향 단추·칸 그림 타일·물감 색·표정·기본 정보 칩·갖춤 카드·설정 시트)·쉬운 모드 큰 타일·휴대폰 한 줄'), // [wardrobe]
       F('35-fishing.css', 'farm', '낚시 화면(위 막대·알림 줄·큰 단추·당김 막대)·낚시 방법 고르기·만남 카드·어류 도감'), // [fishing]
@@ -498,6 +500,7 @@
   EXPECTED_SYSTEMS.push('complexOffice', 'env');   // [finisher] 56-complex-office.js · 77-env.js
   EXPECTED_SYSTEMS.push('lecture');   // [lecture] 74-lecture.js
   EXPECTED_SYSTEMS.push('support');   // [support] 78-support.js
+  EXPECTED_SYSTEMS.push('ai');   // [ai] 73-ai.js
   EXPECTED_SYSTEMS.push('display');   // [gfx] 67-display.js
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
   EXPECTED_SYSTEMS.push('cooking');   // [cooking] 37-cooking.js
@@ -1520,6 +1523,8 @@
     { id: 'support', emoji: '📮', label: '어른에게 알려요 (그림 신고)', fn: () => { const f = fnOf(G.sys.support, 'open'); return f && (() => f()); } },
     { id: 'supportsend', emoji: '📤', label: '신고 보내기 (사진 고르기)', fn: () => { const f = fnOf(G.sys.support, 'open'); return f && (() => f('bug', { category: 'stuck' })); } },
     { id: 'supportmine', emoji: '📋', label: '내 문의', fn: () => fnOf(G.sys.support, 'openMine') },
+    // [ai] 옹이 선생님 (§15.6): the question tiles and an answer — preview() shows the same window with sample tiles, no server
+    { id: 'ai', emoji: '🤖', label: '옹이 선생님 (질문 그림)', fn: () => { const A = G.sys.ai; return A && typeof A.preview === 'function' ? () => { A.preview({ left: 5 }); } : null; } },
     // [cooking] 부엌 (§18.4): the dish picker, the 요리 도감, the 찬장 (the cooking card itself needs the 부엌: tests/cooking-client.mjs audits it there)
     { id: 'cookpick', emoji: '🍳', label: '무엇을 만들까 (음식 고르기)', fn: () => { const f = fnOf(G.sys.cooking, 'open'); return f && (() => f(null)); } },
     { id: 'cookbook', emoji: '📖', label: '요리 도감', fn: () => fnOf(G.sys.cooking, 'book') },

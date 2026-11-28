@@ -370,6 +370,14 @@ check('kid: presets — at least 8, unique ids, an icon, a label and a voice lin
     }
     return count($ids) === count($p) ? true : 'duplicate ids';
 });
+check('kid: the sample tiles of the app\'s preview() (src/game/73-ai.js) are the server\'s presets (same ids, icons and labels)', function () {
+    $js = (string) @file_get_contents(__DIR__ . '/../src/game/73-ai.js');
+    if (!preg_match('/const PREVIEW_TILES = \[(.*?)\];/s', $js, $m)) return 'PREVIEW_TILES not found';
+    preg_match_all("/\{ id: '([a-z0-9_]+)', icon: '([^']+)', label: '([^']+)' \}/u", $m[1], $all, PREG_SET_ORDER);
+    $app = array_map(function ($x) { return [$x[1], $x[2], $x[3]]; }, $all);
+    $srv = array_map(function ($p) { return [$p['id'], $p['icon'], $p['label']]; }, Claude::presets());
+    return $app === $srv ? true : j(['app' => $app, 'server' => $srv]);
+});
 
 // ---------------------------------------------------------------------------------------------- caps and usage rows
 check('caps per account: with ai.daily_user 3 the fourth question of A is not sent (capped_user, "내일 또 만나요"); B may still ask; left counts down', function () use ($uidA, $uidB, $setCaps) {
