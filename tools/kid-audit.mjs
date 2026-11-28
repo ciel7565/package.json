@@ -28,6 +28,7 @@
 //                          [healing] healmap healroom healhud healreport: the 힐링관 corridor map, a room's window, the
 //                          상담실 with the four numbers and the 종합 리포트 (§19.6) — the docked step card of a room needs
 //                          its station in the hall (tests/healing-client.mjs audits it there)
+//                          [wardrobe] wardrobe hanbokshop charsheet: the 옷장 (장비 칸), the 한복집 with 입어 보기 and
 //                          the 설정 시트 tab of the 옷장 (§19.1)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)

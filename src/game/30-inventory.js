@@ -382,6 +382,8 @@
       const it = itemOf(itemId);
       if (!it) { G.log.warn('INVENTORY', `unknown item "${itemId}"`); return 0; }
       if (!G.state) return 0;
+      // [wardrobe] clothes (type wear) live in the 옷장, never in the bag: a gift of a quest / achievement goes there
+      if (it.type === 'wear' && G.sys.wardrobe?.grant) return G.sys.wardrobe.grant(itemId, { source: opts.source, silent: opts.silent }) ? Math.max(1, Math.floor(Number(qty)) || 1) : 0;
       qty = Math.floor(Number(qty));
       if (!(qty > 0)) return 0;
       const inv = G.state.inventory || (G.state.inventory = {});
@@ -770,6 +772,7 @@
       this._shopModal = m;
       this._shopId = shopId;
       if (this._shopTab !== 'sell') this._shopTab = 'buy';
+      G.sys.wardrobe?.decorateShop?.(m, shopId, true); // [wardrobe] the 한복 corner as a big picture button
       this._renderKidShop();
       G.log.info('INVENTORY', `shop open ${shopId} (easy)`);
       G.activity('shop', `${shop.name} 방문`);
@@ -940,6 +943,8 @@
       const shop = G.data.shops?.[shopId];
       if (!shop) { G.log.warn('INVENTORY', `unknown shop ${shopId}`); return null; }
       if (!G.state) return null;
+      // [wardrobe] the 한복집 (kind wear): shelves by slot, 입어 보기 on the player's figure, buy / sell back (24-wardrobe.js)
+      if (shop.kind === 'wear' && G.sys.wardrobe?.openShop) return G.sys.wardrobe.openShop(shopId);
       if (easyOn()) return this._openKidShop(shopId, shop);
       this._qty = {};
       const npc = G.data.npcs?.[shop.npc];
@@ -961,6 +966,7 @@
       // assign after open(): re-opening closes the previous shop modal, whose onClose resets these
       this._shopModal = m;
       this._shopId = shopId;
+      G.sys.wardrobe?.decorateShop?.(m, shopId, false); // [wardrobe] until the 한복집 stands, a 한복 corner in the 매점
       this._queueRefresh();
       const tabsEl = m.body.querySelector('.shop-tabs');
       G.ui.tabs(tabsEl, [{ id: 'buy', label: '구매', icon: '🛍️' }, { id: 'sell', label: '판매', icon: '💰' }], (id) => { this._shopTab = id; this._renderShop(); }, this._shopTab || 'buy');

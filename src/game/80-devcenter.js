@@ -265,6 +265,7 @@
       F('75-myroom.js', 'buildings', '내 방(G.sys.myroom, PL_MYROOM): 분양받은 사람이 꾸미는 한옥 방 — 방 꾸미기(그림 판·끌어 놓기·돌리기·색·되돌리기)·꾸며 둔 방 3개·이 기기/서버 저장·안내 카드 (§17.4)'), // [myroom]
       F('76-myroom-data.js', 'buildings', '내 방 물건 148가지·색·방 모양·놓는 규칙(문 앞 비우기·벽·창문·상 위)·꾸며 둔 방 3개 — 서버 검사표의 원본 (순수 데이터)'), // [myroom]
       F('77-env.js', 'map', '한국 실시간(G.env): 서울 시각·해와 달·계절·날씨(기상청 또는 모델)·수확 달력 (§17.5)'), // [finisher]
+      F('24-wardrobe.js', 'player', '옷장(G.sys.wardrobe)·옷 아이템(G.data.wardrobe): 아바타 표의 칸마다 옷 아이템 WEAR_<칸>_<값>·기본 옷·값 규칙·한복집(칸별 선반·입어 보기·사기/반값 팔기)·옷장 창(장비·색·표정·기본 정보·갖춤·설정 시트)·설정 시트 그림'), // [wardrobe]
       F('34-fish-data.js', 'farm', '강원도 1급수 물고기 31종(법으로 지키는 종은 놓아주기만)·맑은 물 이웃 7종·낚시 방법 4가지·미끼·낚시터 7곳·규칙·카드·퀴즈·강의·할 일 (순수 데이터)'), // [fishing]
       F('35-fishing-kit.js', 'farm', '물고기 만들기(G.fishkit): 종마다 몸 윤곽으로 몸을 빚고 캔버스에 무늬를 그림·지느러미·헤엄 물결(셰이더)·도감용 스튜디오(사진·모둠표)·물고기 떼 실루엣'), // [fishing]
       F('35-fishing.js', 'farm', '낚시(G.sys.fishing): 강가 낚시터 7곳·대낚시/견지낚시/족대/어항(실제 시간)·찌와 줄·물속 물고기 떼·만남 카드(놓아주기/데려가기)·어류 도감 (§18.3)'), // [fishing]
@@ -318,6 +319,7 @@
       F('74-lecture.css', 'edu', '강의실 창·강의 카드·슬라이드 종이 카드·넘김 단추·방 안 강의 보기 카드'), // [lecture]
       F('78-support.css', 'devcenter', '문의·신고 창·종류 카드·분류·화면 사진 미리 보기·내 문의 카드와 답·채팅 창 문의/신고 단추·답 알림 칩'), // [support]
       F('75-myroom.css', 'buildings', '방 꾸미기 화면(위 막대·물건 판·고른 물건 단추)·방 꾸미기 단추·창문 고르기 판·안내 카드'), // [myroom]
+      F('24-wardrobe.css', 'player', '옷장·한복집 창(왼쪽 모습·네 방향 단추·칸 그림 타일·물감 색·표정·기본 정보 칩·갖춤 카드·설정 시트)·쉬운 모드 큰 타일·휴대폰 한 줄'), // [wardrobe]
       F('35-fishing.css', 'farm', '낚시 화면(위 막대·알림 줄·큰 단추·당김 막대)·낚시 방법 고르기·만남 카드·어류 도감'), // [fishing]
       F('37-cooking.css', 'farm', '요리 카드(아래쪽)·큰 누르기 단추·불 막대·뒤집기 칸·음식 고르기·요리 도감·찬장'), // [cooking]
       F('50-minimap.css', 'map', '미니맵·월드맵(이동 목록 포함)'),
@@ -498,6 +500,7 @@
   EXPECTED_SYSTEMS.push('display');   // [gfx] 67-display.js
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
   EXPECTED_SYSTEMS.push('cooking');   // [cooking] 37-cooking.js
+  EXPECTED_SYSTEMS.push('wardrobe');   // [wardrobe] 24-wardrobe.js
   EXPECTED_SYSTEMS.push('fishing');   // [fishing] 35-fishing.js
   EXPECTED_SYSTEMS.push('healHall');   // [heal-hall] 69-healing-hall.js
   EXPECTED_SYSTEMS.push('healing', 'healacts');   // [healing] 39-healing.js · 79-healing-acts.js
@@ -1543,6 +1546,10 @@
     { id: 'emote', emoji: '😊', label: '표현하기', fn: () => { const f = fnOf(G.sys.social, 'openExpress', 'openEmotes'); return f && (() => f(document.querySelector('[data-action="emote"]') || undefined)); } },
     { id: 'chat', emoji: '💬', label: '말하기 (채팅)', fn: () => { const f = fnOf(G.sys.social, 'openKidChat', 'openPhrases'); if (f) return f; return typeof G.ui?.triggerAction === 'function' ? () => G.ui.triggerAction('chat') : null; } },
     { id: 'avatar', emoji: '👕', label: '꾸미기 (아바타)', fn: () => fnOf(G.app, 'openAvatar') },
+    // [wardrobe] 옷장 (§19.1): the window laid out like a character sheet, the 한복집 (shelves by slot, 입어 보기), the 설정 시트 tab
+    { id: 'wardrobe', emoji: '👘', label: '옷장 (장비 칸)', fn: () => { const f = fnOf(G.sys.wardrobe, 'open'); return f && (() => f('equip')); } },
+    { id: 'hanbokshop', emoji: '🛍️', label: '한복집 (입어 보기)', fn: () => { const f = fnOf(G.sys.wardrobe, 'openShop'); return f && (() => f('SHOP_HANBOK')); } },
+    { id: 'charsheet', emoji: '🖼️', label: '설정 시트 (옷장)', fn: () => { const f = fnOf(G.sys.wardrobe, 'open'); return f && (() => f('sheet')); } },
     { id: 'menu', emoji: '☰', label: '메뉴', fn: () => fnOf(G.app, 'openMenu') },
     // kid settings sheet (소리·음악·읽어주기·쉬운 모드) is ungated on purpose (§12.4 quick toggles);
     // the grown-up settings must show the parent gate first

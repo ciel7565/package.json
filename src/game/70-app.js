@@ -4884,7 +4884,10 @@
       return true;
     },
   };
-  function openAvatar() { return AvatarEditor.open(); }
+  // [wardrobe] 꾸미기 opens the 옷장 (CONTRACT §19.1, 24-wardrobe.js): clothes are owned items there; the old customiser
+  // stays for the 3D-less fallback (no wardrobe in the page) and for the nickname — the first-start picture tiles are untouched
+  const openAvatarOrWardrobe = () => (G.sys.wardrobe?.open && !G.unsupported ? G.sys.wardrobe.open() : AvatarEditor.open());
+  function openAvatar() { return openAvatarOrWardrobe(); } // [wardrobe] (was AvatarEditor.open())
 
   // ================================================================ fallback debug panel (only while 80-devcenter.js is missing)
   const Debug = {
@@ -5664,6 +5667,7 @@
     noThree: NoThree,
     debug: Debug,
     avatarEditor: AvatarEditor,
+    avatarPreview: AvatarPreview, // [wardrobe] the shared turntable preview class (the 옷장 and the 한복집 draw their figure with it)
     auth,
     profiles: Profiles,
     get version() { return G.VERSION; },
@@ -5948,7 +5952,7 @@
       buildMobileToggles();
       const A = G.ui.onAction;
       A('menu', () => { if (app.loggedIn) openMenu(); });
-      A('avatar', () => { if (app.loggedIn) AvatarEditor.open(); });
+      A('avatar', () => { if (app.loggedIn) openAvatarOrWardrobe(); }); // [wardrobe] (was AvatarEditor.open())
       A('help', () => openHelp());
       A('settings', () => openSettings());
       A('logout', () => app.logout({ confirm: true }));
