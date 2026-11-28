@@ -37,6 +37,7 @@ const PHONE = flag('--phone');
 const SHOTS = opt('--shots');
 const ONLY = (opt('--only') || '').split(',').filter(Boolean);
 const want = (id) => !ONLY.length || ONLY.includes(id);
+const ROOMS = (opt('--rooms') || '').split(',').filter(Boolean);   // --rooms R1,R9: only these are entered and played; the others run their course from the map
 const log = (...a) => { if (!jsonOut) console.log(...a); };
 const file = opt('--file');
 if (!file || !fs.existsSync(file)) { console.error('--file <built page> is required'); process.exit(2); }
@@ -71,6 +72,8 @@ async function boot() {
 }
 /** go to a room (or a lobby key) and wait until the player is inside its place */
 async function goTo(key) {
+  // the first way in from the valley goes straight through the door (the walk there is the places suite's business)
+  await ev(async () => { const P = G.sys.places; const H = G.sys.healing; if (!H.inHall()) await P.enter(H.placeFor('LOBBY'), { fade: false }); });
   await ev((k) => G.sys.healing.go(k), key);
   await page.waitForFunction((k) => { const H = G.sys.healing; const pid = H.placeFor(k); return G.sys.places.current === pid; }, key, { timeout: 90000, polling: 250 });
   await wait(300);
@@ -90,44 +93,54 @@ try {
   // ------------------------------------------------------------ one whole visit under the debug clock
   if (want('visit')) {
     await ev((t) => { G.sys.healing.debug.setNow(t); }, T0);
-    const look0 = await ev(() => JSON.stringify(G.state.profile?.appearance || G.sys.player?.appearance || null));
+    const look0 = await ev(() => JSON.stringify(G.state.profile?.avatar || null));
     await goTo('LOBBY');
     await ev(() => G.sys.healing.openKiosk());
-    await page.waitForSelector('.heal-modal', { timeout: 20000 });
+    await page.waitForSelector('.heal-m-kiosk .heal-btn.btn-primary', { timeout: 20000 });
     await shot('01-kiosk');
-    await page.click('.heal-modal .heal-btn.btn-primary', { timeout: 30000 });   // 예약하기 → the desk opens
+    await page.click('.heal-m-kiosk .heal-btn.btn-primary', { timeout: 30000 });   // 예약하기 → the desk opens
     await page.waitForFunction(() => !!G.ui.modal.get('heal-desk'), null, { timeout: 20000 });
     check('booked at the kiosk', await ev(() => !!G.sys.healing.visit && G.sys.healing.step() === 'checkin'));
     await shot('02-desk');
-    await page.click('.heal-modal .heal-btn.btn-primary', { timeout: 30000 });   // 체크인
+    await page.waitForSelector('.heal-m-desk .heal-btn.btn-primary', { timeout: 20000 });
+    await page.click('.heal-m-desk .heal-btn.btn-primary', { timeout: 30000 });   // 체크인
     check('checked in at the desk (a wrist band)', await ev(() => G.sys.healing.visit.band > 0 && G.sys.healing.step() === 'stay'));
     check('the HUD chip shows inside the hall', await ev(() => !document.getElementById('heal-chip').hidden && !document.getElementById('heal-hud').hidden));
     await ev(() => G.ui.modal.closeAll());
     await goTo('STAY');
     await ev(() => G.sys.healing.openStay());
-    for (let i = 0; i < 3; i++) { await page.waitForSelector('.heal-shelf .heal-tile.now', { timeout: 20000 }); await page.click('.heal-shelf .heal-tile.now', { timeout: 30000 }); }
+    for (let i = 0; i < 3; i++) { await page.waitForSelector(`.heal-m-stay .heal-shelf .heal-tile.now >> nth=0`, { timeout: 20000 }); await page.click('.heal-m-stay .heal-shelf .heal-tile.now >> nth=-1', { timeout: 30000 }); await page.waitForFunction((n) => G.sys.healing.visit.stow >= n, i + 1, { timeout: 20000 }); }
     check('the bundle unpacked onto the shelf (three taps)', await ev(() => G.sys.healing.visit.stow === 3 && G.sys.healing.step() === 'change'));
     await shot('03-stay');
-    await page.click('.heal-modal .heal-btn.btn-primary', { timeout: 30000 });   // 힐링복으로 갈아입기
-    const look1 = await ev(() => ({ s: JSON.stringify(G.state.profile?.appearance || G.sys.player?.appearance || null), top: (G.state.profile?.appearance || G.sys.player?.appearance || {}).topColor, wear: !!G.sys.healing.visit.wear }));
+    await page.click('.heal-m-stay .heal-btn.btn-primary >> nth=-1', { timeout: 30000 });   // 힐링복으로 갈아입기
+    await page.waitForFunction(() => G.sys.healing.visit.changed > 0, null, { timeout: 20000 });
+    const look1 = await ev(() => ({ s: JSON.stringify(G.state.profile?.avatar || null), top: (G.state.profile?.avatar || {}).topColor, wear: !!G.sys.healing.visit.wear }));
     check('changed into the 힐링복 (the old look is kept for the check-out)', look1.wear && look1.s !== look0 && G_ok(look1.top), look1);
     await ev(() => G.ui.modal.closeAll());
     await goTo('TALK');
     await ev(() => G.sys.healing.openCounsel());
-    for (let q = 0; q < 4; q++) { await page.waitForSelector('.heal-grid .heal-tile', { timeout: 20000 }); await page.click(`.heal-grid .heal-tile >> nth=${q % 4}`, { timeout: 30000 }); }
+    for (let q = 0; q < 4; q++) { await page.waitForSelector('.heal-m-counsel .heal-grid .heal-tile', { timeout: 20000 }); await page.click(`.heal-m-counsel .heal-grid .heal-tile >> nth=${q % 4}`, { timeout: 30000 }); }
+    await page.waitForFunction(() => !!G.sys.healing.visit.base, null, { timeout: 20000 });
     const base = await ev(() => G.sys.healing.visit.base);
     check('the manager\'s four picture questions set the numbers', base && Object.values(base).every((x) => x >= 0 && x <= 100), base);
     await shot('04-counsel');
     await ev(() => G.ui.modal.closeAll());
     await ev(() => G.sys.healing.openMap());
     await page.waitForSelector('.heal-door', { timeout: 20000 });
-    check('the corridor map shows ten doors', await ev(() => document.querySelectorAll('.heal-door').length === 10));
+    check('the corridor map shows ten doors', await ev(() => document.querySelectorAll('.heal-door[data-room]').length === 10));
     await shot('05-map');
     await ev(() => G.ui.modal.closeAll());
 
     const plan = await ev(() => G.sys.healing.plan());
     check('the suggested order begins with 제1관 and ends with 제10관', plan[0] === 'R1' && plan[plan.length - 1] === 'R10', plan);
     for (const room of plan) {
+      if (ROOMS.length && !ROOMS.includes(room)) {
+        const r0 = await ev((id) => G.sys.healing.start(id, { acts: false }), room);
+        const ms0 = await ev((id) => { const c = G.sys.healing.visit.rooms[id]; return c.end - c.at; }, room);
+        await ev((t) => G.sys.healing.debug.advance(t), ms0 + 1000);
+        check(`${room}: run from the map without entering, stamped`, r0 && r0.ok && await ev((id) => G.sys.healing.visit.rooms[id].done > 0, room), r0);
+        continue;
+      }
       await goTo(room);
       const r = await ev((id) => G.sys.healing.start(id), room);
       check(`${room}: the course starts`, r && r.ok, r);
@@ -178,7 +191,7 @@ try {
     check('the report is kept in the 일지', jn.ok && jn.n === 1, jn);
     await ev(() => G.ui.modal.closeAll());
     await ev(() => G.sys.healing.checkout());
-    const out = await ev(() => ({ out: G.state.healing.visit?.out > 0, visits: G.state.healing.visits, look: JSON.stringify(G.state.profile?.appearance || G.sys.player?.appearance || null) }));
+    const out = await ev(() => ({ out: G.state.healing.visit?.out > 0, visits: G.state.healing.visits, look: JSON.stringify(G.state.profile?.avatar || null) }));
     check('checked out: the visit is closed, the old look is back', out.out && out.visits >= 1 && out.look !== look1.s, out);
     await ev(() => G.sys.healing.debug.setNow(null));
   }
@@ -189,7 +202,8 @@ try {
     await goTo('R3');
     await ev(() => G.sys.healing.start('R3'));
     await page.waitForSelector('#heal-dock', { timeout: 20000 });
-    await ev(() => G.sys.places.exit({ fade: false }));
+    // a nested room leads back into the corridor first, the corridor out to the valley
+    for (let k = 0; k < 3; k++) { const cur = await ev(() => G.sys.places.current); if (!cur) break; await ev(() => G.sys.places.exit({ fade: false })); await wait(500); }
     await page.waitForFunction(() => !G.sys.places.current, null, { timeout: 60000 });
     const left = await ev(() => ({ dock: !!document.getElementById('heal-dock'), run: G.sys.healing.running().map((r) => r.room), chip: !document.getElementById('heal-chip').hidden }));
     check('leaving: the dock goes, the course runs on, the chip shows the minutes outside', !left.dock && left.run.includes('R3') && left.chip, left);
@@ -273,7 +287,7 @@ try {
   check('the run finished', false, String(e?.stack || e).slice(0, 600));
   exitCode = 2;
 }
-function G_ok(c) { return typeof c === 'string' && /^#(ffffff|f1ece1)$/i.test(c); }
+function G_ok(c) { return typeof c === 'string' && /^#(ffffff|f5f0e6|f1ece1)$/i.test(c); }
 await browser.close();
 const failed = results.filter((r) => !r.ok);
 if (jsonOut) console.log(JSON.stringify({ ok: failed.length === 0, total: results.length, failed, results }, null, 1));

@@ -25,6 +25,10 @@
 //                          cooking card itself needs the 부엌 (tests/cooking-client.mjs audits it there)
 //                          [fishing] fishpick fishbook fishcard: the picture chooser of a 낚시터, the 어류 도감 and a
 //                          catch card (§18.3) — the session's own controls need the river (tests/fishing-client.mjs)
+//                          [healing] healmap healroom healhud healreport: the 힐링관 corridor map, a room's window, the
+//                          상담실 with the four numbers and the 종합 리포트 (§19.6) — the docked step card of a room needs
+//                          its station in the hall (tests/healing-client.mjs audits it there)
+//                          the 설정 시트 tab of the 옷장 (§19.1)
 //     --out <base>         also write <base>.json and <base>.md (default: no files)
 //     --strict             exit 1 on warnings too (default: only on critical)
 //     --json               print only the JSON report

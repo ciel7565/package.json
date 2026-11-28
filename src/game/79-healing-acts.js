@@ -46,16 +46,37 @@
 
   // ---------------------------------------------------------------- poses: sit, lie, stand
   let pose = null;   // { kind: 'lie' | 'sit', prev: { rx, y } }
-  function lie(at, faceDown) {
-    const p = P(); if (!p?.rig) return;
+  /** the yaw a station faces (an Object3D of the hall), or null */
+  function stationYaw(room, key) {
+    const o = G.healStations.get(room, key);
+    if (!o || !o.isObject3D || !o.parent) return fin(o && o.rotY) ? o.rotY : null;
+    const q = new THREE.Quaternion(); o.getWorldQuaternion(q);
+    return new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
+  }
+  /** lying on a mat / bed / in the coffin: the visitor's root stays where it stood (colliders and the ground keep it
+   *  there); only the body is laid flat, its middle on the station along the way the station faces — placed every frame
+   *  in the root's own frame, so nothing pushes it out of a coffin or onto a bed's top */
+  function lie(at, faceDown, yaw) {
+    const p = P(); if (!p?.rig || !at) return;
     unpose();
     try { p.cancelWalk?.('heal'); } catch (e) { /* optional */ }
-    if (at) { p.position.set(at.x, at.y || p.position.y, at.z); }
     const g = p.rig.group;
-    pose = { kind: 'lie', rx: g.rotation.x, y: g.position.y, en: p.enabled };
-    g.rotation.x = faceDown ? Math.PI / 2 : -Math.PI / 2;
-    g.position.y = 0.32;
+    pose = { kind: 'lie', en: p.enabled, order: g.rotation.order, y0: g.position.y, down: !!faceDown, at: new THREE.Vector3(at.x, fin(at.y) ? at.y : 0, at.z), yaw: fin(yaw) ? yaw : (fin(p.rotY) ? p.rotY : 0) };
     p.enabled = false;
+    placeLying();
+  }
+  const _o = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+  function placeLying() {
+    const p = P(); if (!pose || pose.kind !== 'lie' || !p?.rig) return;
+    const g = p.rig.group, par = g.parent; if (!par) return;
+    const k = pose.down ? -0.72 : 0.72, ty = pose.yaw;
+    _o.set(pose.at.x + Math.sin(ty) * k, pose.at.y + 0.16, pose.at.z + Math.cos(ty) * k);
+    par.updateWorldMatrix(true, false);
+    par.worldToLocal(_o);
+    g.position.copy(_o);
+    par.getWorldQuaternion(_q); _e.setFromQuaternion(_q, 'YXZ');
+    g.rotation.order = 'YXZ';
+    g.rotation.set(pose.down ? Math.PI / 2 : -Math.PI / 2, ty - _e.y, 0);
   }
   function sit(at) {
     const p = P(); if (!p?.sit) return;
@@ -64,7 +85,7 @@
   }
   function unpose() {
     const p = P(); if (!p?.rig || !pose) { pose = null; return; }
-    if (pose.kind === 'lie') { const g = p.rig.group; g.rotation.x = pose.rx || 0; g.position.y = pose.y || 0; p.enabled = pose.en !== false; }
+    if (pose.kind === 'lie') { const g = p.rig.group; g.rotation.set(0, 0, 0); g.rotation.order = pose.order || 'XYZ'; g.position.set(0, pose.y0 || 0, 0); p.enabled = pose.en !== false; }
     if (pose.kind === 'sit') { try { p.standUp?.(); } catch (e) { /* optional */ } }
     pose = null;
   }
@@ -121,7 +142,13 @@
       if (room === 'R5') { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.02, 24), mat('water')); w.userData.own = true; w.position.set(at.x, (at.y || 0) + 0.32, at.z); w.visible = false; add(w); props.water = w; }
     }
     if (room === 'R9') buildR9();
-    if (room === 'R10' && !Hs()?.gentle?.()) {
+    if (room === 'R10' && !Hs()?.gentle?.() && stationPos('R10', 'coffin')) {
+      // the hall's coffin (69-healing-hall.js shows it for the full version): only a lid of ours that slides away
+      const at = stationPos('R10', 'coffin');
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 2.04), mat('lid')); lid.userData.own = true;
+      lid.position.set(at.x + 0.8, (at.y || 0) - 0.06, at.z); lid.visible = true;
+      add(lid); props.lid = lid; props.lidHome = { x: at.x, y: (at.y || 0) + 0.44, z: at.z }; props.lidOpen = { x: at.x + 0.8, y: (at.y || 0) - 0.06, z: at.z };
+    } else if (room === 'R10' && !Hs()?.gentle?.()) {
       const at = stationPos('R10', 'rest');
       if (at) {
         const body = new THREE.Group(); body.name = 'heal-coffin';
@@ -160,7 +187,12 @@
       const dir = new THREE.Vector3(base.x - st.x, 0, base.z - st.z); if (dir.lengthSq() < 0.01) dir.set(0, 0, -1); dir.normalize();
       const side = new THREE.Vector3(-dir.z, 0, dir.x);
       const lane = { k, base, dir, side, items: [] };
-      if (k !== 'drums') {
+      // a station high above the floor is the top of the hall's own stand (69-healing-hall.js): the targets stand on its
+      // front edge (the hall's display stays behind them); a floor station gets a small table of ours (the test room)
+      const onStand = (base.y - floorY) > 0.3;
+      if (onStand) base.addScaledVector(dir, -0.14);
+      if (k === 'drums') base.addScaledVector(dir, -0.85);
+      if (k !== 'drums' && !onStand) {
         const tb = new THREE.Group();
         const top = new THREE.Mesh(tableG, mat('wood')); top.position.y = 0.9; tb.add(top);
         for (const sx of [-0.8, 0.8]) for (const sz of [-0.2, 0.2]) { const l = new THREE.Mesh(legG, mat('wood')); l.position.set(sx, 0.45, sz); tb.add(l); }
@@ -171,9 +203,10 @@
         const off = (i - (n - 1) / 2) * gap;
         const home = base.clone().addScaledVector(side, off);
         let m;
-        if (k === 'plates') { m = new THREE.Mesh(plateG, mat('ceramic')); m.rotation.set(Math.PI / 2 - 0.15, Math.atan2(dir.x, dir.z), 0); home.y += 0.9 + 0.17; }
-        else if (k === 'cans') { m = new THREE.Mesh(canG, mat('can')); home.y += 0.9 + 0.065; }
-        else if (k === 'bottles') { m = new THREE.Mesh(bottleG, mat('glass')); home.y += 0.93; }
+        const top = onStand ? 0 : 0.9;
+        if (k === 'plates') { m = new THREE.Mesh(plateG, mat('ceramic')); m.rotation.set(Math.PI / 2 - 0.15, Math.atan2(dir.x, dir.z), 0); home.y += top + 0.17; }
+        else if (k === 'cans') { m = new THREE.Mesh(canG, mat('can')); home.y += top + 0.065; }
+        else if (k === 'bottles') { m = new THREE.Mesh(bottleG, mat('glass')); home.y += top + 0.005; }
         else { const dg = new THREE.CylinderGeometry(0.28, 0.28, 0.86, 22, 6); m = new THREE.Mesh(dg, mat('drum')); m.userData.own = true; m.userData.orig = Float32Array.from(dg.attributes.position.array); home.y += 0.43; }
         m.castShadow = true; m.position.copy(home); g.add(m); props.items.push(m);
         lane.items.push({ k, m, home, alive: true, dents: 0, rot0: m.rotation.clone(), crushT: -1, wob: 0 });
@@ -405,8 +438,9 @@
     // the pose a finished hold leaves the visitor in (the next steps happen lying or sitting)
     if (s && s.k === 'hold') {
       const at = stationPos(room, s.at) || stationPos(room, 'spot');
-      if (/엎드/.test(s.t)) lie(at, true);
-      else if (/바로 누워|돌아누워|눕|누워|담요/.test(s.t)) lie(at, false);
+      const yaw = stationYaw(room, s.at) ?? stationYaw(room, 'spot');
+      if (/엎드/.test(s.t)) lie(at, true, yaw);
+      else if (/바로 누워|돌아누워|눕|누워|담요/.test(s.t)) lie(at, false, yaw);
       else if (/앉/.test(s.t)) sit(at);
     }
     if (room === 'R5' && props.water && s && (s.k === 'taps' || s.k === 'hold')) props.water.visible = true;
@@ -614,6 +648,7 @@
     if (s.k === 'breath') { if (ses.holdT >= 1.2) { ses.taps++; sfx('heal_steam', { volume: 0.35 }); if (ses.taps >= s.n) { stepDone(); return; } } ses.holdT = 0; updateDock(); }
   }
   function frame(dt) {
+    if (pose && pose.kind === 'lie') placeLying();
     if (!ses) return;
     ses.t += dt;
     const s = curStep();
@@ -700,16 +735,48 @@
     body.appendChild(row);
     body.appendChild(h('small', { class: 'hd-note' }, '사진은 이 기기에만 남아요.'));
   }
+  /** a few rendered frames (the camera has moved: the snapshot must show the new view) */
+  const frames = (n) => new Promise((res) => { let k = 0; const f = () => { if (++k >= n) res(); else requestAnimationFrame(f); }; requestAnimationFrame(f); setTimeout(res, 4000); });
+  /** the middle of the wide view as a 4 : 5 portrait, 240 × 300 JPEG (small: it lives in this device's storage) */
+  function cropPortrait(url) {
+    return new Promise((res) => {
+      try {
+        const img = new Image();
+        img.onload = () => { try { const W = 240, Hh = 300, c = document.createElement('canvas'); c.width = W; c.height = Hh; const x = c.getContext('2d'); const sh = img.height, sw = sh * W / Hh; x.drawImage(img, (img.width - sw) / 2, 0, sw, sh, 0, 0, W, Hh); res(c.toDataURL('image/jpeg', 0.82)); } catch (e) { res(url); } };
+        img.onerror = () => res(url);
+        img.src = url;
+      } catch (e) { res(url); }
+    });
+  }
   async function shoot() {
     const H = Hs();
-    sfx('shutter');
     let url = null;
+    // frame the face: the visitor on the studio stool facing the camera on its tripod (the hall's 'camera' station), a
+    // narrow lens like a portrait studio; the follow camera comes back afterwards
+    const p = P(), cam = G.sys.camera;
+    let framed = false;
+    try {
+      const st = stationPos('R10', 'studio');
+      if (st && p) { p.cancelWalk?.('heal'); p.position.set(st.x, p.position.y, st.z); }
+      const c = stationPos('R10', 'camera');
+      if (p && cam?.shot) {
+        const head = new THREE.Vector3(p.position.x, p.position.y + 1.22, p.position.z);
+        const from = c ? new THREE.Vector3(c.x, head.y + 0.05, c.z) : new THREE.Vector3(p.position.x + Math.sin(p.rotY || 0) * 2.2, head.y + 0.05, p.position.z + Math.cos(p.rotY || 0) * 2.2);
+        p.faceTowards?.(from.x, from.z);
+        cam.shot(from, head, { fov: 26, duration: 0 });
+        framed = true;
+        await frames(4);
+      }
+    } catch (e) { G.log.warn('HEAL', 'portrait framing failed', e?.message || e); }
+    sfx('shutter');
     try {
       const snap = G.sys.photo?.snapshot;
-      const blob = typeof snap === 'function' ? await snap.call(G.sys.photo, { format: 'jpg', quality: 0.8, maxWidth: 320, maxHeight: 320 }) : null;
+      const blob = typeof snap === 'function' ? await snap.call(G.sys.photo, { format: 'jpg', quality: 0.85, maxWidth: 640, maxHeight: 400 }) : null;
       if (blob) url = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result || '')); r.onerror = () => res(null); r.readAsDataURL(blob); });
     } catch (e) { G.log.warn('HEAL', 'portrait snapshot failed', e?.message || e); }
     if (!url) { try { const c = document.createElement('canvas'); c.width = c.height = 160; const x = c.getContext('2d'); x.fillStyle = '#e8dcc6'; x.fillRect(0, 0, 160, 160); x.fillStyle = '#4a3a2c'; x.beginPath(); x.arc(80, 62, 30, 0, 7); x.fill(); x.fillRect(38, 100, 84, 60); url = c.toDataURL('image/jpeg', 0.8); } catch (e) { url = null; } }
+    if (url && framed) url = await cropPortrait(url);
+    if (framed) { try { cam.setMode?.('follow'); } catch (e) { /* camera optional */ } }
     if (url) H.setLocal({ portrait: url, style: H.local().style || (H.gentle() ? 'flower' : 'classic') });
     renderDock();
   }
@@ -741,10 +808,11 @@
   }
   function lieBody(body, s) {
     const H = Hs(); const g = H.gentle();
-    const at = stationPos('R10', 'rest');
+    const at = (!g && stationPos('R10', 'coffin')) || stationPos('R10', 'rest');
     if (!ses.sub.lying) {
       ses.sub.lying = performance.now();
-      lie(at, false);
+      lie(at, false, stationYaw('R10', !g && stationPos('R10', 'coffin') ? 'coffin' : 'rest'));
+      if (props.lid && props.lidHome) { props.lid.position.set(props.lidHome.x, props.lidHome.y, props.lidHome.z); }
       veil(g ? 'stars' : 'dark');
       sfx('heal_bell', { volume: 0.6 });
       ses.sub.voice = 0;
@@ -761,7 +829,8 @@
   }
   function wake() {
     const g = Hs().gentle();
-    if (props.lid) { const lid = props.lid; const t0 = performance.now(); const go = () => { const k = clamp((performance.now() - t0) / 2200, 0, 1); lid.position.z = 0.7 + k * 0.6; lid.position.y = 0.56 - k * 0.5; if (k < 1) requestAnimationFrame(go); }; go(); }
+    if (props.lid && props.lidHome) { const lid = props.lid, a = props.lidHome, b = props.lidOpen; const t0 = performance.now(); const go = () => { const k = clamp((performance.now() - t0) / 2200, 0, 1); const e = k * k * (3 - 2 * k); lid.position.set(a.x + (b.x - a.x) * e, a.y + (b.y - a.y) * e + Math.sin(e * Math.PI) * 0.25, a.z + (b.z - a.z) * e); if (k < 1 && lid.parent) requestAnimationFrame(go); }; go(); }
+    else if (props.lid) { const lid = props.lid; const t0 = performance.now(); const go = () => { const k = clamp((performance.now() - t0) / 2200, 0, 1); lid.position.z = 0.7 + k * 0.6; lid.position.y = 0.56 - k * 0.5; if (k < 1 && lid.parent) requestAnimationFrame(go); }; go(); }
     veil(g ? 'dawn' : 'morning');
     sfx('heal_bell', { volume: 0.5 });
     setTimeout(() => { veil(null); unpose(); }, 3200);

@@ -61,7 +61,9 @@ body.easy .heal-tile { min-height: 104px; font-size: 17px; }
 
 /* the corridor map */
 .heal-mapbox { display: grid; gap: 6px; padding: 10px; border-radius: 16px; background: linear-gradient(180deg, #efe6d2, #e4d6ba); }
-.heal-corr { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.heal-corr { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px; }
+.heal-door.lobby { background: #f3ead6; border-style: dashed; }
+.heal-glass { padding: 4px 10px; border-radius: 8px; background: linear-gradient(90deg, rgba(150, 200, 225, .5), rgba(190, 225, 240, .7), rgba(150, 200, 225, .5)); font-size: 12px; color: #2a4a5a; text-align: center; }
 .heal-corr-line { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 8px; background: repeating-linear-gradient(90deg, #d8c8a4 0 18px, #cfbd96 18px 36px); font-size: 12px; color: #5a4a32; }
 .heal-door {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 92px; padding: 6px 4px; border-radius: 12px;
@@ -80,7 +82,8 @@ body.easy .heal-tile { min-height: 104px; font-size: 17px; }
 .heal-door.s-closed { opacity: .45; }
 .heal-door.here { outline: 3px solid #4a78c8; outline-offset: 1px; }
 body.easy .heal-door { min-height: 110px; }
-@media (max-width: 560px) { .heal-corr { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px) { .heal-corr { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .heal-corr { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 /* the report */
 .heal-stamps { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin: 6px 0 10px; }

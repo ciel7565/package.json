@@ -38,8 +38,9 @@ G.healStations = G.healStations || { map: new Map(), set(room, key, at) { this.m
     LOBBY: ['desk', 'kiosk', 'bench'], STAY: ['door', 'shelf', 'rail', 'bed'], TALK: ['seat', 'manager'],
     R1: ['body', 'gut', 'gene', 'salt', 'board'], R2: ['mat', 'tray'], R3: ['seat', 'pot'], R4: ['track', 'gym1', 'gym2', 'gym3'],
     R5: ['tub', 'kettle', 'herbs'], R6: ['chair', 'stool'], R7: ['bed', 'towel'], R8: ['bed', 'oil'],
-    R9: ['stand', 'plates', 'drums', 'cans', 'bottles', 'rack'], R10: ['studio', 'desk', 'rest'],
+    R9: ['stand', 'plates', 'drums', 'cans', 'bottles', 'rack', 'gear'], R10: ['studio', 'desk', 'rest', 'coffin', 'camera'],
   };
+  // + 'gear' (R9) and 'coffin' / 'camera' (R10), which the hall also sets; every room also 'guide' and 'spot'
   for (const k of Object.keys(stationKeys)) stationKeys[k].push('guide', 'spot');
 
   // the numbers (0 – 100, play values). good: which way is the calmer one
@@ -163,7 +164,7 @@ G.healStations = G.healStations || { map: new Map(), set(room, key, at) { this.m
       no: 9, name: '스트레스 해소관', kid: '깨고 부수며 시원하게', emoji: '⚾', min: 30, curve: 'early', color: '#d9534f',
       eff: { stress: -26, fatigue: -2, vital: 8, calm: 2, warm: 4, stamina: 4 },
       steps: [
-        { k: 'gear', at: 'stand', emoji: '🥽', t: '보안경·장갑·앞치마를 차례로 입어요.', kid: '보안경·장갑·앞치마', say: '보안경, 장갑, 앞치마를 입어요.' },
+        { k: 'gear', at: 'gear', emoji: '🥽', t: '보안경·장갑·앞치마를 차례로 입어요.', kid: '보안경·장갑·앞치마', say: '보안경, 장갑, 앞치마를 입어요.' },
         { k: 'swing', at: 'stand', emoji: '⚾', t: '나무 방망이로 접시·드럼통·깡통·유리병을 쳐요. 누르면 휘두르고, 꾹 누르면 더 세게!', kid: '방망이로 쳐요', say: '방망이로 시원하게 쳐요!' },
       ],
       little: [P('swing', '⚾', '한 번 더 치기'), P('water', '💧', '물 한 모금'), P('shout', '📣', '야호! 외치기')],
@@ -222,7 +223,7 @@ G.healStations = G.healStations || { map: new Map(), set(room, key, at) { this.m
     outfit: '힐링복',
   };
 
-  const limits = { rooms: 10, small: 60, r9: 100000, visits: 100000, wearKeys: 32, skewMs: 5 * MIN };
+  const limits = { rooms: 10, small: 60, r9: 100000, visits: 100000, wearKeys: 48, skewMs: 5 * MIN };
   const scaleMax = 120;
 
   // ---------------------------------------------------------------- pure helpers

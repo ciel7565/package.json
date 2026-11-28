@@ -74,9 +74,13 @@
   /** room 10 in its gentle version? easy mode always (unless a grown-up opened the full one for this visit); 'gentle' everywhere for children */
   function gentleOn() {
     const v = vis();
+    if (room10() === 'gentle') return true;
     if (v && v.r10) return v.r10 === 'gentle';
     return easyOn();
   }
+  /** for the hall (69-healing-hall.js): true = the full sequence is open (the coffin shows), false = gentle, null = not decided */
+  function room10Full() { if (room10() === 'gentle') return false; const v = vis(); return v && v.r10 ? v.r10 === 'full' : null; }
+  function setR10(kind) { const v = vis(); if (!v) return; v.r10 = kind; try { G.healHall?.setRoom10?.(kind === 'full'); } catch (e) { /* hall optional */ } save(); }
 
   // ---------------------------------------------------------------- state (G.state.healing)
   function st() {
@@ -136,18 +140,22 @@
   }
   function checkIn() { const v = ensure('checkin'); if (!v) return false; if (!v.band) { v.band = now(); sfx('bell'); G.bus.emit('healing:checkin', {}); save(); } return true; }
   function stow() { const v = ensure('stay'); if (!v) return 0; if (v.stow < D.words.bundle.length) { v.stow++; sfx('click'); G.bus.emit('healing:stow', { n: v.stow }); save(); } return v.stow; }
+  /** the lent 힐링복: the free kit's 저고리 and 바지 (no piece that must be owned — lane wardrobe judges the worn look) in
+   *  plain white, everything over it taken off; the keys are read from the avatar table at runtime (lane hanbok) */
   function outfitOf(app) {
     const A = G.data.avatar || {}, O = A.options || {}, base = Object.assign({}, A.defaults || {}, app || {});
-    const pick = (k, v) => { if (Array.isArray(O[k]) && O[k].includes(v)) base[k] = v; };
-    pick('top', 'hanbok'); pick('topColor', '#ffffff'); pick('topColor', '#f1ece1'); if (base.topColor !== '#ffffff' && Array.isArray(O.topColor) && O.topColor.includes('#ffffff')) base.topColor = '#ffffff';
-    pick('outerColor', '#e8d9b5'); pick('pattern', 'none'); pick('bottom', 'pants'); pick('bottomColor', '#e9e4da');
-    pick('footwear', 'gomusin'); pick('shoes', '#f5f0e6'); pick('hat', 'none'); pick('bag', 'none'); pick('accessory', 'none');
+    const has = (k, v) => Array.isArray(O[k]) && O[k].includes(v);
+    const pick = (k, ...vs) => { for (const v of vs) if (has(k, v)) { base[k] = v; return; } };
+    pick('top', 'hanbok'); pick('bottom', 'pants'); pick('footwear', 'gomusin');
+    for (const k of ['outer', 'hat', 'norigae', 'pouch', 'fan', 'ribbon', 'belt', 'bag', 'accessory']) pick(k, 'none');
+    pick('topColor', '#ffffff', '#f5f0e6', '#f1ece1'); pick('bottomColor', '#f5f0e6', '#e9e4da', '#f1ece1', '#ffffff');
+    pick('trimColor', '#9bbf6a', '#6d8f4e', '#2f7d4a'); pick('pattern', 'none'); pick('shoes', '#f5f0e6', '#ffffff');
     return base;
   }
-  function currentLook() { return G.state?.profile?.appearance || G.state?.appearance || G.sys.player?.appearance || null; }
+  function currentLook() { return G.state?.profile?.avatar || G.sys.player?.rig?.appearance || null; }
   function wearOutfit(v) {
     const cur = currentLook();
-    if (cur && isMap(cur) && !v.wear) { const w = {}; let n = 0; for (const [k, x] of Object.entries(cur)) { if (n >= 32) break; if ((typeof x === 'string' && x.length <= 16) || (fin(x) && x >= 0 && x <= 10)) { w[k] = x; n++; } } v.wear = w; }
+    if (cur && isMap(cur) && !v.wear) { const w = {}; let n = 0; for (const [k, x] of Object.entries(cur)) { if (n >= D.limits.wearKeys) break; if ((typeof x === 'string' && x.length <= 16) || (fin(x) && x >= 0 && x <= 10)) { w[k] = x; n++; } } v.wear = w; }
     try { G.sys.player?.setAppearance?.(outfitOf(cur)); } catch (e) { G.log.warn('HEAL', 'outfit not applied', e?.message || e); }
     v.changed = now();
   }
@@ -313,6 +321,7 @@
       return openRoom(room);
     };
     if (kind === 'room' && key === 'guide' && G.healStations.get(room, 'spot')) return; // one interactable per room: the spot
+    if (kind === 'room' && key === 'spot') { const gh = handles.get(room + ':guide'); if (gh) { try { gh.unregister(); } catch (e) { /* gone */ } handles.delete(room + ':guide'); } }
     try {
       const reg = G.interact.register({
         id: 'heal:' + hk, kind: 'kiosk',
@@ -424,7 +433,13 @@
     const pid = placeFor(room);
     const P = G.sys.places; if (!P) return false;
     try {
-      if (P.current !== pid) { const ok = P.travel ? await P.travel(pid) : await P.enter(pid); if (!ok) return false; }
+      if (P.current !== pid) {
+        // the hall knows the way in (the corridor door of a room, from anywhere); else travel / enter the place
+        let ok = false;
+        if (room !== 'LOBBY' && hallReady() && typeof G.healHall?.enter === 'function') ok = await G.healHall.enter(room);
+        if (P.current !== pid) ok = P.travel ? await P.travel(pid) : await P.enter(pid);
+        if (!ok && P.current !== pid) return false;
+      }
       const key = D.rooms[room] ? 'spot' : (room === 'LOBBY' ? 'desk' : room === 'STAY' ? 'shelf' : 'manager');
       const p = stationPos(room, key);
       if (p && G.sys.player?.walkTo) G.sys.player.walkTo({ x: p.x, z: p.z }, { stopDistance: 1.6, trail: true, label: roomName(room) || '힐링관' });
@@ -440,7 +455,7 @@
     if (!enabled()) return G.ui.alert('오늘은 힐링관이 쉬어요. 다음에 또 와요.', { title: '힐링관', icon: '🌿' });
     const v = vis();
     M().open({
-      id: 'heal-kiosk', title: '힐링관 예약', icon: '🖥️', size: 'md', className: 'heal-modal', say: v ? '이미 예약했어요.' : '힐링관을 예약할까요?',
+      id: 'heal-kiosk', title: '힐링관 예약', icon: '🖥️', size: 'md', className: 'heal-modal heal-m-kiosk', say: v ? '이미 예약했어요.' : '힐링관을 예약할까요?',
       body: (el, m) => {
         el.appendChild(claimLine());
         if (v) {
@@ -460,7 +475,7 @@
     if (!v) return;
     const done = !!v.band;
     M().open({
-      id: 'heal-desk', title: '안내데스크', icon: '🛎️', size: 'md', className: 'heal-modal', say: done ? '체크인했어요. 숙소로 가요.' : '어서 오세요. 체크인할까요?',
+      id: 'heal-desk', title: '안내데스크', icon: '🛎️', size: 'md', className: 'heal-modal heal-m-desk', say: done ? '체크인했어요. 숙소로 가요.' : '어서 오세요. 체크인할까요?',
       body: (el, m) => {
         el.appendChild(claimLine());
         el.appendChild(h('div', { class: 'heal-band' + (done ? ' on' : '') }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '⌚'), h('b', {}, done ? '손목 밴드를 찼어요' : '체크인하면 손목 밴드를 드려요'), h('small', {}, `예약 ${v.id.slice(1, 6).toUpperCase()}`)));
@@ -477,7 +492,7 @@
     const v = ensure('stay'); if (!v) return;
     const N = D.words.bundle.length;
     M().open({
-      id: 'heal-stay', title: '숙소', icon: '🧺', size: 'md', className: 'heal-modal', say: v.stow < N ? '보따리를 풀어 선반에 올려요.' : v.changed ? '힐링복을 입었어요. 상담실로 가요.' : '힐링복으로 갈아입어요.',
+      id: 'heal-stay', title: '숙소', icon: '🧺', size: 'md', className: 'heal-modal heal-m-stay', say: v.stow < N ? '보따리를 풀어 선반에 올려요.' : v.changed ? '힐링복을 입었어요. 상담실로 가요.' : '힐링복으로 갈아입어요.',
       body: (el, m) => {
         el.appendChild(h('p', { class: 'heal-lead' }, v.stow < N ? '보따리를 풀어 하나씩 선반에 올려요.' : v.changed ? '힐링복을 입었어요. 원래 옷은 체크아웃할 때 돌려받아요.' : `이제 빌려 주는 ${D.words.outfit}으로 갈아입어요.`));
         el.appendChild(h('div', { class: 'heal-shelf' }, ...D.words.bundle.map((b, i) => h('button', {
@@ -516,7 +531,7 @@
       }, h('span', { class: 'emoji big', 'aria-hidden': 'true' }, o.emoji), h('span', {}, o.label)))));
       if (qi > 0) el.appendChild(h('div', { class: 'heal-row' }, B('앞 질문', '⬅️', () => { qi--; body(el, m); })));
     };
-    M().open({ id: 'heal-counsel', title: '상담실 · 담당 매니저', icon: '💬', size: 'md', className: 'heal-modal', say: v.ask ? '오늘의 쉼 차례예요.' : D.ask[0].say, body: (el, m) => body(el, m), actions: [] });
+    M().open({ id: 'heal-counsel', title: '상담실 · 담당 매니저', icon: '💬', size: 'md', className: 'heal-modal heal-m-counsel', say: v.ask ? '오늘의 쉼 차례예요.' : D.ask[0].say, body: (el, m) => body(el, m), actions: [] });
   }
   function numsView(n, prev, small) {
     const wrap = h('div', { class: 'heal-nums' + (small ? ' small' : '') });
@@ -542,13 +557,13 @@
         title: '제10관 — 어떻게 할까요?', say: '마음 돌아보기를 할까요?', emoji: '🌟', columns: 2,
         items: [{ id: 'gentle', emoji: '🌟', label: '마음 돌아보기', say: '마음 돌아보기' }, { id: 'full', emoji: '🕯️', label: '어른과 함께 (전체)', say: '어른과 함께 하기' }],
       }).then(async (pick) => {
-        if (pick === 'full') { const ok = await G.easy.gate?.({ reason: 'heal-room10', title: '어른만 열 수 있어요' }); v.r10 = ok ? 'full' : 'gentle'; }
-        else if (pick === 'gentle') v.r10 = 'gentle';
+        if (pick === 'full') { const ok = await G.easy.gate?.({ reason: 'heal-room10', title: '어른만 열 수 있어요' }); setR10(ok ? 'full' : 'gentle'); }
+        else if (pick === 'gentle') setR10('gentle');
         else return;
-        save(); openRoom(id);
+        openRoom(id);
       }) : null;
     }
-    if (id === 'R10' && v && !v.r10) { v.r10 = room10() === 'gentle' && easyOn() ? 'gentle' : (easyOn() ? 'gentle' : 'full'); save(); }
+    if (id === 'R10' && v && !v.r10) setR10(easyOn() || room10() === 'gentle' ? 'gentle' : 'full');
     const c = v && v.rooms[id];
     M().open({
       id: 'heal-room', title: roomName(id), icon: roomEmoji(id), size: 'md', className: 'heal-modal', say: (id === 'R10' && gentleOn() ? R.gentleSays.in : R.says.in),
@@ -600,20 +615,34 @@
       const here = hereRoom();
       const step = D.nextStep(v, openRooms());
       el.appendChild(h('p', { class: 'heal-lead' }, v ? stepLine(step) : '아직 예약하지 않았어요. 키오스크나 아래 단추로 예약해요.'));
-      const top = h('div', { class: 'heal-corr top' }), bot = h('div', { class: 'heal-corr bottom' });
-      D.order.forEach((id, i) => {
+      // one straight corridor behind the glass front: 제10관 … 제6관 (west wing) · the lobby · 제1관 … 제5관 (east wing), as the
+      // hall lays them out (G.healHall.corridor(): sorted by their x); without the hall the same order
+      let seq = ['R10', 'R9', 'R8', 'R7', 'R6', 'LOBBY', 'R1', 'R2', 'R3', 'R4', 'R5'];
+      try {
+        const cor = G.healHall?.corridor?.();
+        if (Array.isArray(cor) && cor.length) {
+          const rs = cor.filter((d) => D.rooms[d.room] && fin(d.x)).sort((a, b) => a.x - b.x).map((d) => d.room);
+          if (rs.length === 10) { const lx = fin(cor.lobby?.x) ? cor.lobby.x : 0; const west = cor.filter((d) => D.rooms[d.room] && d.x < lx).sort((a, b) => a.x - b.x).map((d) => d.room); seq = west.concat(['LOBBY'], rs.filter((r) => !west.includes(r))); }
+        }
+      } catch (e) { /* the default order */ }
+      const row = h('div', { class: 'heal-corr' });
+      for (const id of seq) {
+        if (id === 'LOBBY') {
+          row.appendChild(h('button', { type: 'button', class: 'heal-door lobby' + (here === 'LOBBY' || here === 'STAY' || here === 'TALK' ? ' here' : ''), 'data-say': '로비와 안내데스크', onclick: () => { m.close(); go('LOBBY').then((ok) => { if (!ok) openDesk(); }); } },
+            h('span', { class: 'hd-no' }, '로비'), h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🛎️'), h('span', { class: 'hd-name' }, '안내데스크 · 숙소 · 상담실'),
+            here === 'LOBBY' || here === 'STAY' || here === 'TALK' ? h('span', { class: 'hd-here', 'aria-label': '지금 여기' }, '📍') : null));
+          continue;
+        }
         const s = roomState(id), c = v && v.rooms[id];
         const line = s === 'run' && c ? `${minsLeft(c.end - now())}분 남음 · ${clock(c.end)}` : s === 'done' ? '도장 🟢' : s === 'closed' ? '쉬어요' : `${D.rooms[id].min}분`;
-        const tile = h('button', {
+        row.appendChild(h('button', {
           type: 'button', class: `heal-door s-${s}${here === id ? ' here' : ''}`, 'data-room': id, 'data-say': `${roomName(id)}. ${s === 'run' ? '쉬는 중' : s === 'done' ? '도장 받음' : ''}`, disabled: s === 'closed' || null,
-          onclick: () => { m.close(); go(id).then((ok) => { if (!ok) openRoom(id); }); },
+          onclick: () => { m.close(); go(id).then((ok) => { if (ok) openRoom(id); }); },
         }, h('span', { class: 'hd-no' }, `제${D.rooms[id].no}관`), h('span', { class: 'emoji', 'aria-hidden': 'true' }, roomEmoji(id)), h('span', { class: 'hd-name' }, id === 'R10' && gentleOn() ? D.rooms.R10.gentle.name : D.rooms[id].name), h('small', { class: 'hd-line' }, line),
           s === 'run' && c ? h('span', { class: 'hd-bar' }, h('i', { style: { width: Math.round(D.progress(c, now()) * 100) + '%' } })) : null,
-          here === id ? h('span', { class: 'hd-here', 'aria-label': '지금 여기' }, '📍') : null);
-        (i < 5 ? top : bot).appendChild(tile);
-      });
-      const corr = h('div', { class: 'heal-corr-line' }, h('span', {}, '← 로비 · 안내데스크'), h('span', {}, '복도'), h('span', {}, '통유리 창 →'));
-      el.appendChild(h('div', { class: 'heal-mapbox' }, top, corr, bot));
+          here === id ? h('span', { class: 'hd-here', 'aria-label': '지금 여기' }, '📍') : null));
+      }
+      el.appendChild(h('div', { class: 'heal-mapbox' }, row, h('div', { class: 'heal-corr-line' }, h('span', {}, '← 서쪽 날개'), h('span', {}, '하나로 이어진 복도'), h('span', {}, '동쪽 날개 →')), h('div', { class: 'heal-glass' }, '통유리 창 너머 정원 · 남쪽')));
       const lob = h('div', { class: 'heal-row heal-lobby' },
         B('안내데스크', '🛎️', () => { m.close(); if (inHall()) go('LOBBY'); else openDesk(); }), B('숙소', '🧺', () => { m.close(); go('STAY'); }), B('상담실', '💬', () => { m.close(); go('TALK'); }));
       if (!v) lob.prepend(B('예약하기', '🖥️', () => { m.close(); openKiosk(); }, 'btn-primary'));
@@ -721,7 +750,7 @@
     get visit() { return vis(); },
     step: () => D.nextStep(vis(), openRooms()),
     book, checkIn, stow, change, counsel, start, stop, little, stepOf, running, roomState, numbers, plan, openRooms, checkout, go,
-    scale, now, local, setLocal, reportData, toJournal, gentle: () => gentleOn(), roomName, roomEmoji, hereRoom, inHall, stationPos, placeFor,
+    scale, now, local, setLocal, reportData, toJournal, gentle: () => gentleOn(), room10Full, setR10, roomName, roomEmoji, hereRoom, inHall, stationPos, placeFor,
     openMap, openRoom, openReport, openDesk, openKiosk, openStay, openCounsel, numsView, courseBar, clock, minsLeft,
     debug: {
       setNow(ms) { dbg.now = ms == null ? null : Number(ms); tick(); changed(); },
@@ -733,6 +762,11 @@
     },
     init() {
       G.bus.on('heal:station', onStation);
+      G.bus.on('heal:stations-gone', (p) => {   // the hall disposed a place: its stations (and our interactables on them) go
+        if (!p || !p.room) return;
+        for (const [hk, reg] of [...handles]) if (hk.indexOf(p.room + ':') === 0) { try { reg.unregister(); } catch (e) { /* gone */ } handles.delete(hk); }
+        if (keeperRoom === p.room && keeper) { keeper.group.visible = false; keeperRoom = null; }
+      });
       for (const k of G.healStations.map.keys()) { const [room, key] = k.split(':'); onStation({ room, key }); }
       G.bus.on('place:enter', () => { setTimeout(() => { keeperSync(); syncHud(); }, 0); });
       G.bus.on('place:exit', () => { G.healActs?.left?.(); setTimeout(() => { keeperSync(); syncHud(); }, 0); });
