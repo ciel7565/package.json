@@ -421,6 +421,7 @@ G.healStations = G.healStations || { map: new Map(),
     }
     for (const [px, pz, s] of [[-4.05, FRONT_Z - 0.6, 1.0], [4.05, FRONT_Z - 0.6, 1.0], [-10.1, FRONT_Z - 0.6, 1.0], [10.1, FRONT_Z - 0.6, 1.0], [-4.2, Z0 + 0.6, 1.0]]) { plant(R, ctx, px, pz, s); T('plant'); }
     T('plant', 2);
+    people(ctx, 'LOBBY', [{ x: -1.0, z: Z0 + 3.2, rotY: PI, solid: true }, { x: -6.4, y: -0.4, z: FRONT_Z - 1.3, rotY: 0 }, { x: -5.6, y: -0.4, z: FRONT_Z - 1.3, rotY: 0 }, { x: 3.4, z: Z0 + 1.2, rotY: PI, look: 'staffM', solid: true }]);
     // the water jar with a gourd dipper and cups on a tray, by the 상담실 door
     if (Kt.pot) try { Kt.pot(R, { x: 7.7, z: Z0 + 0.6, kind: 'dok', s: 0.75, lid: true }); R.add('straw', new THREE.SphereGeometry(0.11, 10, 6, 0, TAU, 0, PI / 2), M(7.7, 0.83, Z0 + 0.6, 0, 1, 0.5, 1, PI), '#d9b77a'); R.add('furn', box(0.5, 0.5, 0.36), M(8.4, 0.25, Z0 + 0.5), '#8a5a36'); for (let k = 0; k < 4; k++) R.add('onggi', cyl(0.035, 0.03, 0.07, 8), M(8.25 + (k % 2) * 0.12, 0.54, Z0 + 0.44 + Math.floor(k / 2) * 0.12), '#e8e2d6', { cast: false }); ctx.addCollider({ shape: 'box', x: 8.05, z: Z0 + 0.55, hw: 0.75, hd: 0.36, maxY: 0.9 }); T('water jar'); T('dipper'); T('cup', 4); } catch (e) { /* optional */ }
   }
@@ -1489,6 +1490,58 @@ G.healStations = G.healStations || { map: new Map(),
       station(ctx, 'R10', 'spot', 0, 0, 1.0, PI);
     },
   };
+  // [heal-look] who is in each room (besides the program's keeper at the guide station): guests resting where the room's
+  // things invite it, one or two staff at work — one instanced mesh per room (people() above)
+  const lying = (x, y, z, ry = 0, len = 0.85) => ({ x: x + Math.sin(ry) * len, y, z: z + Math.cos(ry) * len, rotY: ry, pose: 'lie' });
+  const PEOPLE = {
+    R1(ctx, R) { people(ctx, 'R1', [{ x: -5.0, y: -0.4, z: 4.0, rotY: PI }, { x: -4.2, y: -0.4, z: 4.0, rotY: PI }, { x: 4.6, y: -0.4, z: 5.8, rotY: PI }, { x: -6.7, z: 5.0, rotY: -PI / 2, solid: true }, { x: -1.0, z: -7.6, rotY: 0, look: 'staff', solid: true }, { x: -6.5, z: -7.85, rotY: 0, look: 'staffM', solid: true }]); },
+    R2(ctx, R) {
+      const L = [];
+      for (const [x, z] of [[2.6, -4.2], [-5.8, -4.2], [-3.7, 1.4], [3.7, 1.4], [5.8, 1.4]]) { L.push(lying(x, 0.14, z - 0.23)); cover(R, x, 0.2, z + 0.15, 1.05, 0.78, ['#9fb3c8', '#d9a7a0', '#b8c4a0'][L.length % 3]); }
+      L.push({ x: 5.0, z: 4.6, rotY: -PI / 2, look: 'staffM', solid: true });
+      people(ctx, 'R2', L);
+    },
+    R3(ctx, R) {
+      const L = [];
+      for (const i of [1, 3, 7, 9]) {
+        const th = (-240 + i * 30) * PI / 180, x = 3.2 * Math.cos(th), z = -1.2 + 3.2 * Math.sin(th), ry = Math.atan2(-x, -1.2 - z);
+        L.push({ x, y: -0.32, z, rotY: ry });
+        R.add('cloth', cyl(0.17, 0.5, 0.92, 14), M(x, 0.98, z), ['#c9b48a', '#a8b89a', '#d9c7a4', '#b8a3c4'][i % 4], { cast: false });
+      }
+      L.push({ x: 3.4, z: -8.95, rotY: PI, look: 'staff', solid: true });
+      people(ctx, 'R3', L);
+    },
+    R4(ctx, R) { people(ctx, 'R4', [{ x: -5.2, y: 0.02, z: -1.0, rotY: PI, phase: 0.25, swing: 0.55 }, { x: 5.2, y: 0.02, z: 2.0, rotY: 0, phase: 0.7, swing: 0.55 }, { x: 1.0, y: 0.02, z: 7.7, rotY: -PI / 2, phase: 0.4, swing: 0.5 }, { x: 6.85, z: 0.3, rotY: PI / 2, solid: true }, { x: 3.7, z: -1.4, rotY: -PI / 2, look: 'staffM', solid: true }]); },
+    R5(ctx, R) {
+      const z0 = -ROOM.d / 2 + 1.3;
+      people(ctx, 'R5', [{ x: -5.4, y: -0.36, z: z0 + 0.95, rotY: PI }, { x: 3.6, y: -0.36, z: z0 + 0.95, rotY: PI }, { x: -3.2, y: -0.36, z: -4.4, rotY: PI }, { x: 4.9, y: -0.36, z: -4.4, rotY: PI }, { x: -4.2, z: -6.7, rotY: PI, solid: true }, { x: -5.6, z: -0.5, rotY: -PI / 2, look: 'staff', solid: true }]);
+    },
+    R6(ctx, R) {
+      const L = [];
+      for (const [cx, cz] of [[-5.6, -4.2], [2.8, -4.2], [5.6, -4.2], [-4.15, 1.0], [1.9, 1.0]]) { L.push({ x: cx, y: 0.47, z: cz + 1.12, rotY: 0, pose: 'recline', tilt: 1.12 }); R.add('cloth', box(0.62, 0.07, 0.72), M(cx, 0.62, cz + 0.72, 0, 1, 1, 1, 0.2), '#e9e1cf', { cast: false }); }
+      L.push({ x: -2.8, z: -2.05, rotY: PI, look: 'staffM', solid: true });
+      people(ctx, 'R6', L);
+    },
+    R7(ctx, R) {
+      const L = [];
+      for (const [bx, bz] of [[-5.2, -4.2], [2.6, -4.2], [-2.2, 1.8], [2.2, 1.8], [5.0, 1.8]]) { L.push(lying(bx, 0.7, bz)); cover(R, bx, 0.75, bz + 0.3, 1.25, 0.8, '#efe6d6'); }
+      L.push({ x: -2.6, z: -6.05, rotY: 0, look: 'staff' }, { x: 5.0, z: -0.25, rotY: 0, look: 'staff' });
+      people(ctx, 'R7', L);
+    },
+    R8(ctx, R) {
+      const L = [];
+      for (const [bx, bz] of [[-4.8, -4.2], [4.8, -4.2], [-5.6, 2.4], [2.6, 2.4], [5.6, 2.4]]) { L.push(lying(bx, 0.7, bz, 0, 0.9)); cover(R, bx, 0.75, bz + 0.35, 1.3, 0.9, '#9aa98a'); }
+      L.push(lying(-3.4, 0.7, -9.4, PI / 2, 0.9)); cover(R, -3.4 + 0.35, 0.75, -9.4, 1.3, 0.9, '#9aa98a', PI / 2);
+      L.push({ x: 3.4, z: 2.4, rotY: -PI / 2, look: 'staff' });
+      people(ctx, 'R8', L);
+    },
+    R9(ctx, R) { people(ctx, 'R9', [{ x: -3.2, y: 0.08, z: -2.4, rotY: PI, phase: 0.15, swing: 0.3 }, { x: -5.6, z: 2.5, rotY: PI, solid: true }, { x: -0.4, y: -0.4, z: 6.8, rotY: 0 }, { x: 0.4, y: -0.4, z: 6.8, rotY: 0 }, { x: 5.45, z: -1.5, rotY: PI / 2, look: 'staffM', solid: true }]); },
+    R10(ctx, R) {
+      const L = [{ x: 2.0, y: -0.72, z: -6.95, rotY: PI }, { x: 5.9, y: -0.72, z: -6.95, rotY: PI }, lying(2.4, 0.1, 2.95), { x: -6.7, z: -6.6, rotY: -PI / 2, solid: true }, { x: -4.05, z: -4.35, rotY: PI, look: 'staff', solid: true }];
+      cover(R, 2.4, 0.16, 3.25, 1.05, 0.8, '#d8d0bc');
+      people(ctx, 'R10', L);
+    },
+  };
   /** 제6관 · 제7관 · 제8관: calm rooms full of guests' places — rows of chairs or beds, each with its own table, low
    *  folding screens without written characters, soft paper lamps. [heal-look] The program's own chair / bed stays at
    *  (0, −4.2) with its stations exactly where they were; the rows are built around it (one merged mesh per material). */
@@ -1646,6 +1699,44 @@ G.healStations = G.healStations || { map: new Map(),
     if (kind !== 'body' && Kt.pot) try { Kt.pot(R, { x: kind === 'face' ? 6.0 : 5.6, z: kind === 'face' ? -8.6 : -8.8, kind: 'basin', s: 1.3 }); for (let k = 0; k < 5; k++) R.add('stone', new THREE.DodecahedronGeometry(0.06, 0), M((kind === 'face' ? 5.9 : 5.5) + k * 0.05, 0.12, (kind === 'face' ? -8.6 : -8.8) + (k % 2) * 0.06, k), '#5a5650', { cast: false }); T('water basin'); } catch (e) { /* optional */ }
     bench(R, ctx, 4.6, 7.6); bench(R, ctx, -4.6, 7.6); T('bench', 2);
   }
+  /** [heal-look] the people of a room: guests in the 힐링복 set (G.data.avatar.presets 'healing', hair varied) and the
+   *  staff in the named looks healstaff / healstaffM (G.data.npcLooks) — all of them ONE instanced far-figure mesh of
+   *  G.avatar (one draw call + its shadow), still poses, no AI. list: [{ x, y, z, rotY, pose: 'stand' | 'lie' |
+   *  'recline', tilt, look: 'staff' | 'staffM' | undefined (a guest), phase, swing, solid }] in room coordinates. A guest
+   *  who sits on the floor or in a cape is a standing figure lowered into the floor / the cape (the floor hides the rest). */
+  const GUEST_HAIR = ['short', 'jjok', 'bun', 'side', 'daenggi', 'wave', 'ponytail', 'buzz'];
+  function people(ctx, room, list) {
+    try {
+      const A = G.avatar, mk = A?.far?.create;
+      if (typeof mk !== 'function' || !list.length) return null;
+      const far = mk(list.length);
+      if (!far || !(far.mesh instanceof THREE.Object3D)) return null;
+      const presets = Array.isArray(G.data.avatar?.presets) ? G.data.avatar.presets : [];
+      const guest = presets.find((p) => p && p.id === 'healing')?.app || {};
+      const looks = G.data.npcLooks?.looks || {}, hairs = (A.options?.hair || GUEST_HAIR).filter((h) => GUEST_HAIR.includes(h));
+      const norm = (a) => (typeof A.normalize === 'function' ? A.normalize(a) : a);
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+      far.begin();
+      list.forEach((p, i) => {
+        const L = p.look ? looks[p.look === 'staffM' ? 'healstaffM' : 'healstaff'] : null;
+        const app = L ? { ...(L.app || L) } : { ...guest, hair: hairs.length ? hairs[i % hairs.length] : guest.hair, expr: 'smile' };
+        if (!far.push(p.x, p.y || 0, p.z, p.rotY || 0, norm(app), p.phase || 0, p.swing || 0)) return;
+        if (p.pose === 'lie' || p.pose === 'recline') {
+          far.mesh.getMatrixAt(i, m4); m4.decompose(v, q, sc);
+          e.set(p.pose === 'lie' ? -PI / 2 : -(p.tilt || 1.1), p.rotY || 0, 0, 'YXZ'); q.setFromEuler(e);
+          m4.compose(v, q, sc); far.mesh.setMatrixAt(i, m4);
+        }
+        if (p.solid) ctx.addCollider({ shape: 'circle', x: p.x, z: p.z, r: 0.24 });
+        tally(room, p.look ? 'staff' : 'guest');
+      });
+      far.end();
+      far.mesh.name = 'heal-people-' + room; far.mesh.castShadow = !ctx.low; far.mesh.userData.guardSkip = true; far.mesh.raycast = () => {};
+      ctx.group.add(far.mesh); ctx.own(far);
+      return far;
+    } catch (e) { warn('people ' + room, e); return null; }
+  }
+  /** a cover over a guest lying on a bed or a mat (a sheet or a quilt from the chest to the feet) */
+  function cover(R, x, y, z, len, w, tint, ry = 0) { R.add('cloth', box(w, 0.12, len), M(x, y, z, ry), tint, { cast: false }); }
   /** a staved wooden foot tub with two iron hoops and warm water */
   function tub(R, x, z, s = 1) {
     const r = 0.32 * s, h = 0.36 * s;
@@ -1672,6 +1763,7 @@ G.healStations = G.healStations || { map: new Map(),
       const R = roomShell(ctx, r, r.shell || {});
       try { LAYOUT[r.key](ctx, R, r); } catch (e) { warn('room ' + r.key + ' layout', e); }
       try { furnish(ctx, R, r); } catch (e) { warn('room ' + r.key + ' furnish', e); }
+      try { PEOPLE[r.key]?.(ctx, R); } catch (e) { warn('room ' + r.key + ' people', e); }
       R.finish({ exit: { x: 0, z: ROOM.d / 2 - 0.6 } });
       return { dispose() { dropStations(r.key); dropEmitters(ctx.id); if (r.key === 'R10') room10Live = null; } };
     };

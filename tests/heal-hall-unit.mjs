@@ -189,6 +189,17 @@ const census = [];
     Gb.register = (s) => { Gb.sys[s.name] = s; };
     Gb.easy = { on: true }; Gb.settings = Object.assign(Gb.settings || {}, { easyMode: true });
     const loadReal = (file) => vm.runInThisContext(`(function (THREE, G, document, setTimeout) {\n${src(file)}\n})`, { filename: file })(T3, Gb, doc, setTimeout);
+    // the avatar kit for the people of the rooms (its far figures need no textures); the two staff looks by name
+    let avatarOk = false;
+    try {
+      const BGU = await import(new URL('../node_modules/three/examples/jsm/utils/BufferGeometryUtils.js', import.meta.url).href);
+      const RB = await import(new URL('../node_modules/three/examples/jsm/geometries/RoundedBoxGeometry.js', import.meta.url).href);
+      Gb.data.avatar = undefined;
+      for (const f of ['02-avatar-data.js', '20-avatar.js']) vm.runInThisContext(`(function (THREE, ADDONS, G, document, window, performance) {\n${src(f)}\n})`, { filename: f })(T3, { BufferGeometryUtils: BGU, RoundedBoxGeometry: RB.RoundedBoxGeometry }, Gb, doc, {}, performance);
+      const npc = src('25-npc.js'), look = (name) => { const m = new RegExp(`\\n    ${name}: \\{ label: '[^']*', app: (\\{[^\\n]*\\}) \\},`).exec(npc); return m ? { app: Function(`return (${m[1]})`)() } : null; };
+      Gb.data.npcLooks = { looks: { healstaff: look('healstaff'), healstaffM: look('healstaffM') } };
+      avatarOk = typeof Gb.avatar?.far?.create === 'function' && !!Gb.data.npcLooks.looks.healstaff && !!Gb.data.npcLooks.looks.healstaffM;
+    } catch (e) { check('[census] the avatar kit loads (people of the rooms)', false, String(e.stack || e).slice(0, 300)); }
     try { loadReal('02-layout.js'); loadReal('69-healing-hall.js'); Gb.sys.healHall.init(); } catch (e) { check('[census] 69-healing-hall.js loads next to the real kits', false, String(e.stack || e).slice(0, 300)); }
     // record every piece a layout adds after the shell (generators call T.add on the room, so they are seen too)
     const realRoom = Gb.hanok.room, pieces = [];
@@ -278,9 +289,13 @@ const census = [];
         return { cells: q.length, miss };
       };
       const L16 = id === 'PL_HEAL' ? { cells: 0, miss: [] } : lane(0.8), L07 = id === 'PL_HEAL' ? { cells: 0, miss: [] } : lane(0.35);
+      // the people: one instanced figure mesh per room, every figure finite and inside the room
+      const crowd = []; group.traverse((o) => { if (/^heal-people-/.test(o.name || '')) crowd.push(o); });
+      let pplBad = 0; const m4 = new T3.Matrix4(), pv = new T3.Vector3();
+      for (const cm of crowd) for (let i = 0; i < cm.count; i++) { cm.getMatrixAt(i, m4); pv.setFromMatrixPosition(m4); if (!m4.elements.every(Number.isFinite) || Math.abs(pv.x) > (id === 'PL_HEAL' ? 85 : w / 2) || Math.abs(pv.z) > d / 2) pplBad++; }
       const byKey = {}; for (const p of pieces) byKey[p.key] = (byKey[p.key] || 0) + 1;
       const kinds = Gb.healHall.census?.(room) || {};
-      census.push({ id, room, low, meshes, tris: Math.round(tris), nan, pieces: pieces.length, byKey, kinds, things: Object.values(kinds).reduce((s, n) => s + n, 0), cover: cells ? cov / cells : 0, cover12: cells ? cov1 / cells : 0, colliders: cols.length, lane16: L16, lane07: L07, warns: warns.slice(w0) });
+      census.push({ id, room, low, meshes, tris: Math.round(tris), nan, pieces: pieces.length, byKey, kinds, things: Object.values(kinds).reduce((s, n) => s + n, 0), cover: cells ? cov / cells : 0, cover12: cells ? cov1 / cells : 0, crowdMeshes: crowd.length, crowdCount: crowd.reduce((n, c) => n + c.count, 0), pplBad, colliders: cols.length, lane16: L16, lane07: L07, warns: warns.slice(w0) });
       try { live?.dispose?.(); } catch (e) { /* reported below */ }
     }
     // 제10관 in both variants: the gentle one shows a daybed under a quilt where the full one shows the coffin
@@ -313,6 +328,10 @@ const census = [];
       check(`[census] ${tag}: full — ≥ 50 things, ≥ 60 % of the floor within 1.2 m of one`, c.things >= 50 && c.cover12 >= 0.6, `${c.things} things, ${(c.cover12 * 100).toFixed(0)} %`);
       check(`[census] ${tag}: a free 1.6 m lane from the door to every station`, !c.lane16.miss.length, c.lane16.miss.join(' '));
       check(`[census] ${tag}: still one mesh per material (≤ 50 meshes here, ≤ 0.35 M triangles)`, c.meshes <= 50 && c.tris <= 350000, `${c.meshes} meshes, ${c.tris} triangles`);
+    }
+    if (avatarOk) for (const c of census.filter((x) => !x.low && x.room !== 'STAY' && x.room !== 'TALK')) {
+      const g = c.kinds.guest || 0, st = c.kinds.staff || 0;
+      check(`[census] ${c.room}: people — ${c.room === 'LOBBY' ? '' : '3 … 6 guests, '}staff at work, all in ONE instanced mesh, finite and inside the room`, c.crowdMeshes === 1 && c.crowdCount === g + st && st >= 1 && (c.room === 'LOBBY' || (g >= 3 && g <= 6)) && !c.pplBad, `${g} guests, ${st} staff, ${c.crowdMeshes} mesh(es), ${c.pplBad} misplaced`);
     }
     const rows = census.filter((c) => !c.low);
     const table = rows.map((c) => `${c.room.padEnd(5)} things ${String(c.things).padStart(4)} · pieces ${String(c.pieces).padStart(5)} · cover 2.5 m ${(c.cover * 100).toFixed(0).padStart(3)}% / 1.2 m ${(c.cover12 * 100).toFixed(0).padStart(3)}% · meshes ${c.meshes}/${census.find((x) => x.low && x.id === c.id)?.meshes} · ${(c.tris / 1000).toFixed(0)}k tris · lane 1.6 m ${c.lane16.miss.length ? 'blocked: ' + c.lane16.miss.join(',') : 'free'}`);
