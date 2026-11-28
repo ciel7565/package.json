@@ -85,7 +85,7 @@ check('every colour of every colour key is accepted (lower case)', function () u
     foreach ($colorKeys as $k) foreach ($table['options'][$k] as $c) { $out = ap(array_merge($def, [$k => strtoupper($c)])); if (($out[$k] ?? '') !== strtolower($c)) $bad[] = "$k=$c"; }
     return $bad ? implode(', ', $bad) : true;
 });
-check('all 15 ready-made looks pass whole', function () use ($table) {
+check('every ready-made look (갖춤) passes whole', function () use ($table) {
     if (count($table['presets']) < 12) return 'fewer than 12 presets';
     foreach ($table['presets'] as $p) { $out = ap($p['app']); foreach ($p['app'] as $k => $v) if ($k !== 'height' && ($out[$k] ?? null) !== $v) return "{$p['id']}: $k"; }
     return true;
@@ -113,6 +113,20 @@ check('SaveValidator::profileSummary carries the new look (style real, 갓, 두�
     $a = isset($sum['avatar']) && is_string($sum['avatar']) ? json_decode($sum['avatar'], true) : null;
     if (!is_array($a)) return 'no avatar in the summary: ' . json_encode($sum);
     return ($a['style'] ?? '') === 'real' && ($a['hat'] ?? '') === 'gat' && ($a['top'] ?? '') === 'durumagi' && ($a['footwear'] ?? '') === 'gomusin' ? true : json_encode($a);
+});
+// [hanbok] phase 11 (CONTRACT §19.0 / §19.1): modern ids left `options` for `legacy` — an old save keeps passing; the
+// new colour rows (회장 · 노리개 · 주머니 · 댕기 · 띠) come from the exported colorKeys
+check('phase 11: a look with the modern (legacy) ids of phase 10 still passes whole', function () use ($def) {
+    $modern = ['style' => 'real', 'top' => 'hoodie', 'bottom' => 'shorts', 'footwear' => 'sneakers', 'hat' => 'cap', 'bag' => 'backpack', 'accessory' => 'glasses', 'topColor' => '#8b6fd6'];
+    $out = ap($modern);
+    foreach ($modern as $k => $v) if (($out[$k] ?? null) !== $v) return "dropped $k";
+    return true;
+});
+check('phase 11: the new colour rows and slots are kept (trimColor, norigaeColor, outer, belt …)', function () use ($def) {
+    $a = array_merge($def, ['outer' => 'dopo', 'belt' => 'sejodae', 'norigae' => 'samjak', 'trimColor' => '#8A3B4B', 'norigaeColor' => '#c23a4a', 'ribbonColor' => '#2e3f6e', 'beltColor' => '#2e3f6e', 'pouchColor' => '#d9534f']);
+    $out = ap($a);
+    foreach (['outer' => 'dopo', 'belt' => 'sejodae', 'norigae' => 'samjak', 'trimColor' => '#8a3b4b', 'norigaeColor' => '#c23a4a', 'ribbonColor' => '#2e3f6e', 'beltColor' => '#2e3f6e', 'pouchColor' => '#d9534f'] as $k => $v) if (($out[$k] ?? null) !== $v) return "$k: " . json_encode($out[$k] ?? null);
+    return true;
 });
 check('a too-big or non-object appearance gives nothing', function () {
     return Tfm\Presence::appearance('x') === null && Tfm\Presence::appearance(null) === null && Tfm\Presence::appearance([]) === null;

@@ -69,7 +69,18 @@ final class Presence
     }
 
     /** [avatar] the colour keys (hex values) */
-    private static function colorKeys(): array { return array_merge(self::COLORS, self::COLORS9); }
+    private static function colorKeys(): array
+    {
+        // [hanbok] CONTRACT §19.1 — the colour rows of the phase-11 table (회장 · 노리개 · 주머니 · 댕기 · 띠 …) come from the
+        // exported `avatar.colorKeys` (widened, never narrowed; each value must still be #rrggbb in appearance())
+        static $k = null;
+        if ($k !== null) return $k;
+        $k = array_merge(self::COLORS, self::COLORS9);
+        $av = class_exists('Tfm\\GameData') ? GameData::all() : [];
+        $ck = isset($av['avatar']['colorKeys']) && is_array($av['avatar']['colorKeys']) ? $av['avatar']['colorKeys'] : [];
+        foreach ($ck as $c) if (is_string($c) && preg_match('/^[a-zA-Z]{1,20}$/', $c) && !in_array($c, $k, true)) $k[] = $c;
+        return $k;
+    }
 
     /** whitelist-sanitized appearance as a JSON string, or null */
     public static function appearance($a): ?string

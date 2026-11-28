@@ -38,30 +38,20 @@
   const OPTIONS = DATA.options;
   const COLOR_KEYS = new Set(DATA.colorKeys);
   const HEX = /^#[0-9a-f]{6}$/i;
-  const LEGACY_HAT = new Set((DATA.legacy && DATA.legacy.accessory) || []);
+  const LEGACY_HAT = new Set(['strawhat', 'headband', 'cap', 'gat']);   // phase ≤ 8: hats were kept as accessories
+  const MIGRATE = DATA.migrate || {};
+  const NAMES = DATA.names || {};
+  const own = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
 
   const LABELS = {
     keys: {
-      style: '모습', skin: '피부색', face: '눈매', hair: '머리 모양', hairColor: '머리 색', hat: '쓰개(모자)', hatColor: '쓰개 색',
-      top: '윗옷', topColor: '윗옷 색', outerColor: '겉옷 색', pattern: '옷 무늬', bottom: '아래옷', bottomColor: '아래옷 색',
-      footwear: '신발', shoes: '신발 색', bag: '가방', bagColor: '가방 색', accessory: '꾸미개', accessoryColor: '꾸미개 색', height: '키',
+      style: '모습', skin: '피부색', face: '눈매', expr: '표정', hair: '머리 모양', hairColor: '머리 색', beard: '수염', hat: '쓰개', hatColor: '쓰개 색',
+      outer: '겉옷', outerColor: '겉옷 색', top: '저고리', topColor: '저고리 색', trimColor: '회장 색', pattern: '옷감과 무늬', bottom: '아래옷', bottomColor: '아래옷 색',
+      footwear: '신', shoes: '신 색', norigae: '노리개', norigaeColor: '노리개 색', pouch: '주머니', pouchColor: '주머니 색', fan: '부채', hairpin: '머리꽂이',
+      ribbon: '댕기', ribbonColor: '댕기 색', belt: '띠', beltColor: '띠 색', bag: '짐', bagColor: '짐 색', accessoryColor: '꾸미개 색', height: '키',
     },
     style: { real: '진짜 같은 모습', cute: '귀여운 모습' },
     face: { smile: '웃는 눈', calm: '차분한 눈', cheer: '활짝 웃음', gentle: '순한 눈', bright: '또렷한 눈' },
-    hair: {
-      short: '단발머리', long: '긴 생머리', bun: '올림머리', ponytail: '하나 묶음', buzz: '짧은 머리', curly: '곱슬머리', daenggi: '댕기머리',
-      jjok: '쪽머리', sangtu: '상투', pigtails: '양갈래', side: '옆가르마', wave: '물결 머리', bangs: '앞머리 단발', twinbraid: '양갈래 땋기',
-    },
-    hat: { none: '안 써요', gat: '갓', jokduri: '족두리', ayam: '아얌', jobawi: '조바위', hogeon: '호건', bokgeon: '복건', strawhat: '밀짚모자', cap: '모자', headband: '머리띠' },
-    top: {
-      hanbok: '저고리', saekdong: '색동저고리', dangui: '당의', baeja: '저고리와 배자', kwaeja: '저고리와 쾌자', durumagi: '두루마기',
-      tshirt: '티셔츠', hoodie: '후드티', shirt: '셔츠', jacket: '재킷', apron: '앞치마',
-    },
-    pattern: { none: '민무늬', geumbak: '금박 무늬', cloud: '구름 무늬', flower: '꽃 무늬' },
-    bottom: { skirt: '치마', pants: '바지', shorts: '반바지' },
-    footwear: { gomusin: '고무신', kkotsin: '꽃신', jipsin: '짚신', sneakers: '운동화' },
-    bag: { none: '없음', backpack: '백팩', basket: '등바구니', pouch: '크로스 주머니' },
-    accessory: { none: '없음', norigae: '노리개', bokjumeoni: '복주머니', fan: '부채', daenggi: '댕기', glasses: '안경', beard: '수염' },
     height: { 0.9: '아담하게', 0.95: '조금 작게', 1: '보통', 1.05: '조금 크게', 1.1: '크게' },
     anims: {
       idle: '대기', walk: '걷기', run: '달리기', jump: '점프', fall: '낙하', sit: '앉기', wave: '손 흔들기', bow: '인사(절)', clap: '박수',
@@ -70,69 +60,92 @@
     },
     colors: {
       '#fde3cf': '밝은 살구', '#f6d0b1': '살구', '#efc6a2': '복숭아', '#e6b48d': '밀색', '#d9a77f': '황갈색', '#c68b62': '구릿빛', '#a86d48': '갈색', '#7d4f33': '짙은 갈색',
-      '#1f1a18': '흑색', '#2f2520': '흑갈색', '#3a2a20': '진갈색', '#4a3a2c': '고동색', '#6b4a2e': '밤색', '#8a5a34': '갈색', '#b07a45': '밝은 갈색', '#d9b26f': '금발', '#b9b4ad': '은회색', '#6e3b4e': '와인색',
-      '#f1ece1': '미색', '#ffffff': '흰색', '#e8d9b5': '베이지', '#f08bb0': '분홍', '#ff9f6b': '살구 주황', '#ffd766': '노랑', '#9bd27a': '연두', '#2f7d4a': '초록', '#6fc3df': '하늘',
-      '#4a78c8': '파랑', '#2e3f6e': '남색', '#8b6fd6': '보라', '#d9534f': '다홍', '#6d8f4e': '올리브', '#7a5a43': '갈색', '#3a3d42': '먹색',
-      '#2c3540': '진청', '#3c3934': '먹회색', '#3f5a3c': '진초록', '#5a4636': '흙갈색', '#2f6f8f': '청록', '#3b5ba5': '파랑', '#7a6a55': '카키', '#c9b38f': '모래색',
-      '#8a3b4b': '자주', '#b45a73': '장미', '#e9e4da': '아이보리', '#1f1f22': '검정', '#f5f0e6': '아이보리', '#2a1d14': '흑갈색', '#7a4a2c': '갈색', '#e2c27a': '짚색',
-      '#8a5a3b': '가죽 갈색', '#b88a4a': '대나무색', '#f4c54a': '황금색', '#cfcac2': '은백색', '#6e2f4e': '자줏빛', '#2f5a3c': '짙은 초록',
+      '#1f1a18': '흑색', '#2f2520': '흑갈색', '#3a2a20': '진갈색', '#4a3a2c': '고동색', '#6b4a2e': '밤색', '#8a5a34': '갈색', '#b07a45': '밝은 갈색', '#d9b26f': '금발', '#b9b4ad': '은회색', '#6e3b4e': '자적색',
+      '#f5f0e6': '아이보리', '#2a1d14': '흑갈색', '#7a4a2c': '갈색', '#e2c27a': '짚색', '#8a5a3b': '가죽 갈색', '#b88a4a': '대나무색', '#cfcac2': '은백색', '#6e2f4e': '자줏빛',
     },
   };
+  // the Hangul names of the table (02-avatar-data.js) and the traditional dye names win over the plain colour words
+  for (const [k, m] of Object.entries(NAMES)) LABELS[k] = Object.assign({}, LABELS[k] || {}, m);
+  for (const d of DATA.dyes || []) LABELS.colors[d.hex] = d.name;
 
   const DEFAULT = Object.assign({}, DATA.defaults);
 
   /**
    * a complete, valid appearance. Unknown ids / colours fall back to the default; a look WITHOUT `style` is an older
-   * save (phase ≤ 8) and keeps the round style; a hat stored as `accessory` moves to `hat` (with its colour).
+   * save (phase ≤ 8) and keeps the round style; a hat stored as `accessory` moves to `hat` (with its colour). Every id
+   * of `legacy` (modern clothes, pieces that now have a key of their own) becomes its hanbok counterpart (`migrate`).
    */
   function normalize(a) {
     const src = a && typeof a === 'object' ? a : {};
-    const old = !Object.prototype.hasOwnProperty.call(src, 'style') && Object.keys(src).length > 0;
+    const s = {};
+    for (const k of Object.keys(src)) if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') s[k] = src[k];
+    const old = !own(src, 'style') && Object.keys(src).length > 0;
+    if (old) {
+      if (s.hat === undefined && LEGACY_HAT.has(s.accessory)) { s.hat = s.accessory; s.hatColor = s.accessoryColor; s.accessory = 'none'; }
+      if (s.footwear === undefined) s.footwear = 'sneakers';
+      if (s.top === undefined) s.top = 'jacket';
+      if (s.bottom === undefined) s.bottom = 'pants';
+    }
+    const given = Object.assign({}, s);
+    for (const k of Object.keys(MIGRATE)) {
+      const map = MIGRATE[k], v = s[k];
+      if (typeof v !== 'string' || !own(map, v)) continue;
+      if (k === 'accessory' && LEGACY_HAT.has(v)) { if (s.hat === undefined || s.hat === 'none') { s.hat = v; if (s.hatColor === undefined) s.hatColor = given.accessoryColor; } continue; }
+      if (OPTIONS[k] && OPTIONS[k].includes(v)) continue; // still a current id of that key
+      const m = map[v];
+      for (const k2 of Object.keys(m)) {
+        const v2 = m[k2];
+        const val = typeof v2 === 'string' && v2[0] === '$' ? given[v2.slice(1)] : v2;
+        if (val === undefined) continue;
+        if (k2 === k || COLOR_KEYS.has(k2) || given[k2] === undefined || given[k2] === 'none') s[k2] = val;
+      }
+      if (!own(m, k)) delete s[k];
+    }
     const out = {};
     for (const k of Object.keys(DEFAULT)) {
-      const v = src[k];
+      const v = s[k];
       if (k === 'height') { const n = Number(v); out.height = Number.isFinite(n) && v !== null && v !== '' && typeof v !== 'boolean' ? Math.round(clamp(n, 0.9, 1.1) * 100) / 100 : DEFAULT.height; continue; }
       if (COLOR_KEYS.has(k)) { out[k] = typeof v === 'string' && HEX.test(v) ? v.toLowerCase() : DEFAULT[k]; continue; }
       out[k] = OPTIONS[k] && OPTIONS[k].includes(v) ? v : DEFAULT[k];
     }
-    if (old) {
-      out.style = 'cute';
-      if (src.footwear === undefined) out.footwear = 'sneakers';
-      if (src.hat === undefined && LEGACY_HAT.has(src.accessory)) {
-        out.hat = src.accessory;
-        out.hatColor = typeof src.accessoryColor === 'string' && HEX.test(src.accessoryColor) ? src.accessoryColor.toLowerCase() : DEFAULT.hatColor;
-      }
-      if (src.top === undefined) out.top = 'jacket';
-      if (src.bottom === undefined) out.bottom = 'pants';
-    }
+    if (old) out.style = 'cute';
     if (out.hat === 'strawhat' && src.hatColor === undefined && !old) out.hatColor = '#e2c27a';
     return out;
   }
 
-  /** a random look from a seed (visitors in the valley): mostly the realistic style, everyday or traditional clothes */
+  /** a random look from a seed (visitors in the valley): always hanbok (§19.0) — a set's pieces, recoloured with dyes */
   function random(seed) {
     const r = G.util.rng(seed == null ? Math.floor(Math.random() * 1e9) : seed);
     const pick = (arr) => arr[Math.floor(r() * arr.length) % arr.length];
     const wpick = (pairs) => { let tot = 0; for (const p of pairs) tot += p[1]; let x = r() * tot; for (const p of pairs) { x -= p[1]; if (x <= 0) return p[0]; } return pairs[0][0]; };
-    const style = r() < 0.86 ? 'real' : 'cute';
-    const trad = r() < 0.5;
-    const top = trad ? wpick([['hanbok', 5], ['saekdong', 1.2], ['baeja', 1.4], ['kwaeja', 1], ['durumagi', 1.4], ['dangui', 0.5]])
-      : wpick([['tshirt', 4], ['hoodie', 3], ['shirt', 3], ['jacket', 3], ['apron', 1]]);
+    const style = r() < 0.88 ? 'real' : 'cute';
     const fem = r() < 0.5;
-    const bottom = fem ? wpick([['skirt', 4], ['pants', 1.5]]) : wpick([['pants', 5], ['shorts', trad ? 0 : 1.2]]);
-    const hair = fem ? wpick(trad ? [['daenggi', 3], ['jjok', 2], ['bun', 1.5], ['long', 1], ['twinbraid', 0.8]] : [['long', 3], ['ponytail', 3], ['short', 2], ['bangs', 2], ['wave', 1.5], ['pigtails', 1], ['curly', 0.8]])
-      : wpick(trad ? [['sangtu', 2], ['side', 2], ['buzz', 1.5], ['daenggi', 1]] : [['short', 3], ['side', 3], ['buzz', 2], ['curly', 1.2]]);
-    let hat = wpick([['none', 10], ['strawhat', 1.2], ['cap', trad ? 0 : 1.6], ['headband', 0.6]]);
-    if (trad && r() < 0.35) hat = fem ? wpick([['jobawi', 1], ['ayam', 1], ['jokduri', 0.4]]) : (hair === 'sangtu' ? 'gat' : wpick([['bokgeon', 1], ['hogeon', 0.6], ['gat', 0.5]]));
-    const footwear = trad ? wpick([['gomusin', 4], ['kkotsin', fem ? 2 : 0.2], ['jipsin', 1.2]]) : wpick([['sneakers', 6], ['gomusin', 0.6]]);
-    const accessory = trad ? wpick([['none', 6], ['norigae', fem ? 2 : 0], ['bokjumeoni', 1], ['fan', fem ? 0.4 : 1]]) : wpick([['none', 8], ['glasses', 2.4], ['beard', fem ? 0 : 0.4]]);
+    const dye = (DATA.dyes || []).map((d) => d.hex);
+    const calm = dye.filter((h) => lum(h) > 0.55);     // light 저고리 colours
+    const deep = dye.filter((h) => lum(h) < 0.5);      // 치마 / 바지 / 겉옷 colours
+    const top = wpick([['hanbok', 6], ['banhoejang', fem ? 2.5 : 0.4], ['samhoejang', fem ? 1.2 : 0], ['jeoksam', 2], ['saekdong', 0.6], ['som', 0.6], ['nubi', 0.5], ['kkaekki', fem ? 0.6 : 0], ['saenghwal', 1.2]]);
+    const bottom = fem ? wpick([['skirt', 5], ['tongchima', 2], ['mongdang', 0.8], ['seuran', 0.4], ['saenghwal', 0.6]]) : wpick([['pants', 7], ['jambang', 0.8], ['nubibaji', 0.6], ['saenghwal', 0.6]]);
+    const outer = wpick([['none', 9], ['durumagi', fem ? 1 : 2.4], ['baeja', 1.4], ['magoja', fem ? 0 : 0.8], ['jokki', fem ? 0 : 0.6], ['kwaeja', 0.4], ['haengju', fem ? 0.8 : 0], ['dopo', fem ? 0 : 0.5]]);
+    const hair = fem ? wpick([['jjok', 3], ['daenggi', 3], ['eonjeun', 1], ['bun', 1], ['long', 0.8], ['twinbraid', 0.6], ['gwimit', 0.5]])
+      : wpick([['sangtu', 3], ['side', 2], ['short', 2], ['buzz', 1.4], ['ttaeun', 0.8]]);
+    let hat = 'none';
+    if (r() < 0.38) hat = fem ? wpick([['jobawi', 1], ['ayam', 1], ['jeonmo', 0.5], ['sugeon', 0.6], ['strawhat', 0.4]])
+      : (hair === 'sangtu' ? wpick([['gat', 3], ['tanggeon', 0.6], ['paeraengi', 0.8], ['satgat', 0.4]]) : wpick([['bokgeon', 1], ['strawhat', 1], ['sugeon', 1], ['nambawi', 0.4]]));
+    const footwear = fem ? wpick([['gomusin', 5], ['kkotsin', 2], ['unhye', 0.6], ['danghye', 0.6], ['jipsin', 0.6]]) : wpick([['gomusin', 5], ['jipsin', 1.4], ['mituri', 1], ['taesahye', 0.8]]);
     return normalize({
-      style, skin: pick(OPTIONS.skin.slice(0, 6)), face: pick(OPTIONS.face), hair, hairColor: pick(OPTIONS.hairColor.slice(0, 7)), hat,
-      hatColor: hat === 'strawhat' ? '#e2c27a' : hat === 'cap' ? pick(OPTIONS.hatColor) : hat === 'headband' ? pick(OPTIONS.accessoryColor) : '#1f1f22',
-      top, topColor: pick(OPTIONS.topColor), outerColor: pick(OPTIONS.outerColor), pattern: trad ? wpick([['none', 5], ['geumbak', 1], ['cloud', 1], ['flower', 1]]) : 'none',
-      bottom, bottomColor: pick(OPTIONS.bottomColor), footwear, shoes: footwear === 'gomusin' ? pick(['#f5f0e6', '#1f1f22', '#ffffff']) : footwear === 'jipsin' ? '#e2c27a' : pick(OPTIONS.shoes),
-      bag: wpick([['none', 6], ['backpack', trad ? 0.3 : 3], ['basket', 1], ['pouch', 2]]), bagColor: pick(OPTIONS.bagColor),
-      accessory, accessoryColor: pick(OPTIONS.accessoryColor), height: Math.round((0.92 + r() * 0.16) * 100) / 100,
+      style, skin: pick(OPTIONS.skin.slice(0, 6)), face: pick(OPTIONS.face), expr: wpick([['smile', 5], ['neutral', 2], ['laugh', 1], ['curious', 1]]),
+      hair, hairColor: pick(OPTIONS.hairColor.slice(0, 7)), beard: !fem && r() < 0.18 ? pick(['mustache', 'goatee', 'long']) : 'none',
+      hat, hatColor: hat === 'strawhat' || hat === 'satgat' || hat === 'paeraengi' || hat === 'jeonmo' ? '#e2c27a' : hat === 'sugeon' ? '#ffffff' : hat === 'jobawi' || hat === 'nambawi' ? pick(['#6e2f4e', '#2e3f6e', '#1f1f22']) : '#1f1f22',
+      outer, outerColor: outer === 'haengju' ? '#f1ece1' : pick(deep.concat(calm.slice(0, 4))), top, topColor: pick(calm), trimColor: pick(deep),
+      pattern: wpick([['none', 8], ['cloud', 0.6], ['flower', fem ? 0.8 : 0.2], ['mosi', 0.6], ['myeongju', 0.6], ['gyeokja', 0.3], ['jul', 0.3]]),
+      bottom, bottomColor: pick(deep.concat(fem ? calm.slice(0, 6) : [])), footwear,
+      shoes: footwear === 'gomusin' ? pick(['#f5f0e6', '#1f1f22', '#ffffff']) : footwear === 'jipsin' || footwear === 'mituri' ? '#e2c27a' : pick(OPTIONS.shoes),
+      norigae: fem && r() < 0.3 ? pick(['danjak', 'samjak', 'nabi', 'bangul']) : 'none', norigaeColor: pick(OPTIONS.norigaeColor),
+      pouch: r() < 0.2 ? pick(['durujumeoni', 'gwijumeoni', 'bokjumeoni']) : 'none', pouchColor: pick(OPTIONS.pouchColor),
+      fan: !fem && r() < 0.12 ? 'hapjuk' : 'none', hairpin: fem && hair === 'jjok' && r() < 0.6 ? pick(['binyeo', 'okbinyeo', 'dwikkoji']) : 'none',
+      ribbon: fem && hair === 'daenggi' ? 'jebi' : 'none', ribbonColor: pick(OPTIONS.ribbonColor),
+      belt: 'none', beltColor: pick(OPTIONS.beltColor), bag: wpick([['none', 8], ['basket', 1], ['botjim', 0.6], ['bojagi', 0.8], ['gwaenari', 0.4]]), bagColor: pick(OPTIONS.bagColor),
+      accessoryColor: pick(OPTIONS.accessoryColor), height: Math.round((0.92 + r() * 0.16) * 100) / 100,
     });
   }
 
@@ -386,6 +399,32 @@
   // the round style draws the newer hair styles from its six shells + a few extra volumes (cuteExtras)
   const CUTE_HAIR = { daenggi: 'ponytail', jjok: 'bun', sangtu: 'buzz', pigtails: 'short', side: 'short', wave: 'long', bangs: 'short', twinbraid: 'short' };
 
+  // ---- what the builders draw (§19.1): a piece that has no model of its own yet is drawn as its nearest modelled one
+  const DRAW_TOP_OUTER = { durumagi: 'durumagi', dopo: 'durumagi', hakchang: 'durumagi', nubi: 'durumagi', kkachi: 'durumagi', dallyeong: 'durumagi', wonsam: 'durumagi',
+    hwarot: 'durumagi', jangot: 'durumagi', sseugae: 'durumagi', cheollik: 'durumagi', gugunbok: 'kwaeja', kwaeja: 'kwaeja', jeonbok: 'kwaeja', dapho: 'kwaeja',
+    baeja: 'baeja', jokki: 'baeja', magoja: 'baeja', dangui: 'dangui' };
+  const DRAW_BOTTOM = { skirt: 'skirt', tongchima: 'skirt', seuran: 'skirt', daeran: 'skirt', mongdang: 'skirt', pants: 'pants', pungcha: 'pants', nubibaji: 'pants', saenghwal: 'pants', jambang: 'shorts' };
+  const DRAW_HAT = { none: 'none', gat: 'gat', chorip: 'gat', paeraengi: 'gat', jeollip: 'gat', satgat: 'strawhat', jeonmo: 'strawhat', strawhat: 'strawhat', yugeon: 'bokgeon',
+    tanggeon: 'bokgeon', jeongja: 'bokgeon', samo: 'bokgeon', bokgeon: 'bokgeon', gokkal: 'bokgeon', sangmo: 'bokgeon', hogeon: 'hogeon', gulle: 'jobawi', nambawi: 'jobawi',
+    pungcha: 'jobawi', jobawi: 'jobawi', ayam: 'ayam', jokduri: 'jokduri', hwagwan: 'jokduri', sugeon: 'headband' };
+  const DRAW_FOOT = { gomusin: 'gomusin', kkotsin: 'kkotsin', danghye: 'kkotsin', unhye: 'kkotsin', gatsin: 'kkotsin', taesahye: 'gomusin', mokhwa: 'gomusin', namaksin: 'gomusin', jipsin: 'jipsin', mituri: 'jipsin' };
+  const DRAW_BAG = { none: 'none', botjim: 'backpack', gwaenari: 'backpack', bojagi: 'backpack', basket: 'basket' };
+  const DRAW_PATTERN = { none: 'none', geumbak: 'geumbak', cloud: 'cloud', flower: 'flower' };
+  function view(app) {
+    const v = Object.assign({}, app);
+    const o = DRAW_TOP_OUTER[app.outer];
+    v.top = o || (app.top === 'saekdong' ? 'saekdong' : 'hanbok');
+    if (o === 'dangui') v.topColor = app.outerColor;
+    v.bottom = DRAW_BOTTOM[app.bottom] || 'pants';
+    v.hat = DRAW_HAT[app.hat] || 'none';
+    v.footwear = DRAW_FOOT[app.footwear] || 'gomusin';
+    v.bag = DRAW_BAG[app.bag] || 'none';
+    v.pattern = DRAW_PATTERN[app.pattern] || 'none';
+    v.accessory = app.norigae !== 'none' ? 'norigae' : app.pouch !== 'none' ? 'bokjumeoni' : app.fan !== 'none' ? 'fan' : app.ribbon !== 'none' ? 'daenggi' : app.beard !== 'none' ? 'beard' : 'none';
+    v.accessoryColor = app.norigae !== 'none' ? app.norigaeColor : app.pouch !== 'none' ? app.pouchColor : app.ribbon !== 'none' && app.fan === 'none' ? app.ribbonColor : app.accessoryColor;
+    if (v.accessory === 'beard') v.accessoryColor = app.hairColor;
+    return v;
+  }
   function buildBody(app) { return app.style === 'real' ? buildReal(app) : buildCute(app); }
 
   function buildCute(app) {
@@ -732,11 +771,12 @@
     g.computeVertexNormals();
   }
   function bodyGeometry(app) {
-    const key = styleSig(app);
+    const v = view(app);
+    const key = styleSig(v);
     let g = geoCache.get(key);
     if (!g) {
       const t0 = performance.now();
-      g = buildBody(app);
+      g = buildBody(v);
       geoCache.set(key, g);
       G.log.debug('AVATAR', `geometry ${key}: ${g.attributes.position.count} verts, ${(performance.now() - t0).toFixed(1)}ms`);
     }
@@ -1769,7 +1809,7 @@
     return m;
   }
   function applyPalette(mat, app) {
-    const cols = slotColors(app), fxs = slotFx(app);
+    const va = view(app), cols = slotColors(va), fxs = slotFx(va);
     const pal = mat.userData.pal, rough = mat.userData.rough, fx = mat.userData.fx;
     const real = app.style === 'real';
     for (let i = 0; i < NSLOT; i++) {
@@ -2631,7 +2671,7 @@
       /** add one figure: world position, facing, a normalized appearance, walk phase 0..1 and swing 0..1 */
       push(x, y, z, rotY, app, phase = 0, swing = 0) {
         if (n >= max) return false;
-        const a = app || DEFAULT;
+        const a = view(app || DEFAULT);
         const hs = (a.style === 'real' ? 1 : 0.9) * (Number(a.height) || 1);
         q.setFromAxisAngle(up, rotY || 0); pv.set(x, y, z); sv.set(hs, hs, hs);
         m4.compose(pv, q, sv); mesh.setMatrixAt(n, m4);

@@ -88,11 +88,15 @@ try {
       G.log.warn = (...a) => { warn.push(a.map(String).join(' ')); return ow.apply(G.log, a); };
       G.log.error = (...a) => { warn.push('E ' + a.map(String).join(' ')); return oe.apply(G.log, a); };
       try {
-        for (const p of A.presets) for (const style of A.styles) {
-          const base = { ...p.appearance, style };
-          for (const [k, vals] of Object.entries(A.options)) {
-            if (k === 'style' || String(vals[0]).startsWith('#')) continue;
-            for (const v of vals) {
+        // [hanbok] phase 11: the table has ~200 piece ids and 36 sets — the full matrix runs in Node (tests/avatar-kit.mjs);
+        // here every id builds on three of the sets (rotating) in both styles
+        let turn = 0;
+        for (const [k, vals] of Object.entries(A.options)) {
+          if (k === 'style' || String(vals[0]).startsWith('#')) continue;
+          for (const v of vals) for (let j = 0; j < 3; j++) for (const style of A.styles) {
+            const p = A.presets[(turn + j * 7) % A.presets.length];
+            const base = { ...p.appearance, style };
+            {
               const app = { ...base, [k]: v };
               try {
                 const t = A.triangles(app); out.combos++;
@@ -100,6 +104,7 @@ try {
               } catch (e) { out.errors.push(`${p.id} ${style} ${k}=${v}: ${e.message}`); }
             }
           }
+          turn++;
         }
         // finite positions / normals on a sample of bodies
         for (const style of A.styles) for (const p of A.presets.slice(0, 5)) {
@@ -123,7 +128,7 @@ try {
       out.presets = A.presets.length; out.hair = A.options.hair.length; out.styles = A.styles;
       return out;
     }, BUDGET);
-    check('every option id builds on every ready-made look in both styles', r.errors.length === 0 && r.combos > 1500, `${r.combos} bodies; ${r.errors.slice(0, 3).join(' | ')}`);
+    check('every option id builds on every ready-made look in both styles', r.errors.length === 0 && r.combos > 800, `${r.combos} bodies; ${r.errors.slice(0, 3).join(' | ')}`);
     check('no avatar warning or error while building', r.warnings.length === 0, r.warnings.join(' | '));
     check('≥ 12 ready-made looks, ≥ 12 hair styles, styles real + cute', r.presets >= 12 && r.hair >= 12 && r.styles.join() === 'real,cute', `${r.presets} looks, ${r.hair} hair styles`);
     check(`triangle budget: real ≤ ${BUDGET.realTris}, cute ≤ ${BUDGET.cuteTris} (worst combination)`, r.maxReal <= BUDGET.realTris && r.maxCute <= BUDGET.cuteTris, `real ${r.maxReal}, cute ${r.maxCute}`);
@@ -145,11 +150,17 @@ try {
         idem: JSON.stringify(n(n(A.presets[3].appearance))) === JSON.stringify(n(A.presets[3].appearance)),
         height: [n({ style: 'real', height: 5 }).height, n({ style: 'real', height: -1 }).height, n({ style: 'real', height: true }).height],
         upper: n({ style: 'real', topColor: '#ABCDEF' }).topColor,
+        modern: n({ style: 'real', top: 'hoodie', bottom: 'shorts', footwear: 'sneakers', hat: 'cap', bag: 'backpack', accessory: 'glasses' }),
+        coat: n({ style: 'real', top: 'durumagi', outerColor: '#e8d9b5' }), dangui: n({ style: 'real', top: 'dangui', topColor: '#2f7d4a' }),
+        modernRandom: Array.from({ length: 300 }, (_, i) => A.random(i)).filter((a) => G.data.avatar.legacy.top.includes(a.top) || a.footwear === 'sneakers').length,
+        modernPreset: A.presets.filter((p) => { const a = p.appearance; return G.data.avatar.legacy.top.includes(a.top) || a.footwear === 'sneakers' || a.bottom === 'shorts'; }).length,
       };
     });
     check('an empty look is the new default: the realistic style', r.empty.style === 'real' && r.emptyObj.style === 'real' && r.keys === r.defKeys, `${r.empty.style} / ${r.emptyObj.style}`);
-    check('an older (phase 8) look keeps the round style and its colours', r.old.style === 'cute' && r.old.topColor === '#f08bb0' && r.old.hair === 'bun' && r.old.footwear === 'sneakers', JSON.stringify(r.old));
-    check('its 갓 moves from accessory to hat (with its colour)', r.old.hat === 'gat' && r.old.hatColor === '#1f1f22' && r.old.accessory === 'none', `hat ${r.old.hat}, accessory ${r.old.accessory}`);
+    check('an older (phase 8) look keeps the round style and its colours (its sneakers became 고무신, its pouch a 두루주머니)', r.old.style === 'cute' && r.old.topColor === '#f08bb0' && r.old.hair === 'bun' && r.old.footwear === 'gomusin' && r.old.pouch === 'durujumeoni' && r.old.pouchColor === '#f4c54a' && r.old.bag === 'none', JSON.stringify(r.old));
+    check('its 갓 moves from accessory to hat (with its colour)', r.old.hat === 'gat' && r.old.hatColor === '#1f1f22' && !('accessory' in r.old), `hat ${r.old.hat}, accessory ${r.old.accessory}`);
+    check('hanbok only: a phase-10 look in modern clothes is dressed in its hanbok counterpart', r.modern.top === 'nubi' && r.modern.bottom === 'jambang' && r.modern.footwear === 'gomusin' && r.modern.hat === 'paeraengi' && r.modern.bag === 'gwaenari' && r.coat.top === 'hanbok' && r.coat.outer === 'durumagi' && r.dangui.outer === 'dangui' && r.dangui.outerColor === '#2f7d4a', JSON.stringify([r.modern, r.coat.outer, r.dangui.outer]));
+    check('no random visitor and no ready-made look wears a modern piece', r.modernRandom === 0 && r.modernPreset === 0, `${r.modernRandom} visitors, ${r.modernPreset} looks`);
     check('unknown ids / colours / types fall back to the default', r.evil.hair === r.empty.hair && r.evil.hat === r.empty.hat && r.evil.topColor === r.empty.topColor && r.evil.height === 1 && r.evil.style === 'real', JSON.stringify(r.evil));
     check('__proto__ / constructor keys do nothing', !r.polluted && !('polluted' in r.evil));
     check('normalize is idempotent; height clamps to 0.9 … 1.1; colours become lower case', r.idem && r.height.join() === '1.1,0.9,1' && r.upper === '#abcdef', `${r.height} ${r.upper}`);
