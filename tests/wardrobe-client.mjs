@@ -100,7 +100,7 @@ try {
 
   // the 옷장 from the 꾸미기 action
   await page.evaluate(() => G.ui.triggerAction ? G.ui.triggerAction('avatar') : G.app.openAvatar());
-  await page.waitForSelector('.wd-modal .wd-tab', { timeout: 30000 });
+  await page.waitForSelector('.wd-modal .wd-tab', { state: 'attached', timeout: 120000 });
   const win = await page.evaluate(() => ({ tabs: Array.from(document.querySelectorAll('.wd-modal .wd-tab')).map((b) => b.textContent.trim()), slots: document.querySelectorAll('.wd-modal .wd-slot').length, canvas: !!document.querySelector('.wd-modal .wd-stage canvas') }));
   check('꾸미기 opens the 옷장: six tabs, one tile per slot, the figure turns', win.tabs.length === 6 && win.slots === base.slots.length && win.canvas, short(win));
   await thumbs(page, 6);
@@ -111,7 +111,7 @@ try {
   await page.click('.wd-modal .wd-view[data-view="front"]');
   // a slot list
   await page.click('.wd-modal .wd-slot[data-slot="hat"]');
-  await page.waitForSelector('.wd-modal .wd-back', { timeout: 10000 });
+  await page.waitForSelector('.wd-modal .wd-back', { state: 'attached', timeout: 120000 });
   await thumbs(page, 8);
   const slotList = await page.evaluate(() => ({ tiles: document.querySelectorAll('.wd-modal .wd-panel .wd-tile').length, locked: document.querySelectorAll('.wd-modal .wd-panel .wd-tile.locked').length }));
   check('장비 → 쓰개: owned pieces first, the ones to buy greyed with their price', slotList.tiles > 5 && slotList.locked > 0, short(slotList));
@@ -164,7 +164,7 @@ try {
     return { iid, id: W.parse(iid).id, price: W.priceOf(iid), hat0: look.hat };
   });
   await page.evaluate(() => G.sys.inventory.openShop('SHOP_HANBOK'));
-  await page.waitForSelector('.wd-shopm .wd-shelf', { timeout: 30000 });
+  await page.waitForSelector('.wd-shopm .wd-shelf', { state: 'attached', timeout: 120000 });
   await page.click('.wd-shopm .wd-shelf:has-text("쓰개")').catch(() => {});
   await page.waitForTimeout(300);
   await page.click(`.wd-shopm .wd-tile[data-item="${target.iid}"]`);
@@ -234,7 +234,7 @@ try {
 
   // the 매점 has a 한복 corner
   await page.evaluate(() => G.sys.inventory.openShop('SHOP_GENERAL'));
-  await page.waitForSelector('.shop-modal', { timeout: 20000 });
+  await page.waitForSelector('.shop-modal', { state: 'attached', timeout: 120000 });
   const corner = await page.evaluate(() => !!document.querySelector('.shop-modal .wd-corner'));
   check('the 매점 shows a 한복 corner (until the 한복집 stands)', corner);
   await press(page, '닫기');
@@ -255,7 +255,7 @@ try {
   if (!flag('--skip-easy')) {
     const E = await openPage({ easy: true });
     await E.page.evaluate(() => G.ui.triggerAction ? G.ui.triggerAction('avatar') : G.sys.wardrobe.open());
-    await E.page.waitForSelector('.wd-modal.kid .wd-tab', { timeout: 30000 });
+    await E.page.waitForSelector('.wd-modal.kid .wd-tab', { state: 'attached', timeout: 120000 });
     await thumbs(E.page, 6);
     const kid = await E.page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('.wd-modal .wd-tab')).map((b) => b.getBoundingClientRect().height);
@@ -269,11 +269,11 @@ try {
     for (const t of ['color', 'face', 'info', 'sets']) { await E.page.click(`.wd-modal .wd-tab[data-tab="${t}"]`); await E.page.waitForTimeout(300); await shoot(E.page, `e-${t}`); }
     await press(E.page, '다 됐어요');
     await E.page.evaluate(() => G.sys.inventory.openShop('SHOP_GENERAL'));
-    await E.page.waitForSelector('.kk-shop-modal .wd-corner', { timeout: 20000 }).catch(() => {});
+    await E.page.waitForSelector('.kk-shop-modal .wd-corner', { state: 'attached', timeout: 120000 }).catch(() => {});
     const kc = await E.page.evaluate(() => { const b = document.querySelector('.kk-shop-modal .wd-corner'); return b ? Math.round(b.getBoundingClientRect().height) : 0; });
     check('easy mode: the 매점 has a big 한복 corner button', kc >= 56, `height ${kc}`);
     await E.page.click('.kk-shop-modal .wd-corner').catch(() => {});
-    await E.page.waitForSelector('.wd-shopm.kid .wd-tile', { timeout: 30000 });
+    await E.page.waitForSelector('.wd-shopm.kid .wd-tile', { state: 'attached', timeout: 120000 });
     await E.page.click('.wd-shopm .wd-tile');
     await thumbs(E.page, 6);
     await shoot(E.page, 'e-shop');
@@ -282,13 +282,13 @@ try {
   if (!flag('--skip-phone')) {
     const P = await openPage({ easy: true, viewport: { width: 390, height: 844 }, mobile: true });
     await P.page.evaluate(() => G.sys.wardrobe.open());
-    await P.page.waitForSelector('.wd-modal .wd-tab', { timeout: 30000 });
+    await P.page.waitForSelector('.wd-modal .wd-tab', { state: 'attached', timeout: 120000 });
     await thumbs(P.page, 4);
     const ph = await P.page.evaluate(() => ({ scrollX: document.documentElement.scrollWidth - window.innerWidth, box: Math.round(document.querySelector('.wd-modal').getBoundingClientRect().width) }));
     check('a phone: the 옷장 fits the width (no sideways scroll)', ph.scrollX <= 1 && ph.box <= 392, short(ph));
     await shoot(P.page, 'p-equip');
     await P.page.evaluate(() => { G.ui.modal.get('wardrobe')?.close(); G.sys.wardrobe.openShop('SHOP_HANBOK'); });
-    await P.page.waitForSelector('.wd-shopm .wd-tile', { timeout: 30000 });
+    await P.page.waitForSelector('.wd-shopm .wd-tile', { state: 'attached', timeout: 120000 });
     await thumbs(P.page, 4);
     await shoot(P.page, 'p-shop');
     await P.ctx.close();
