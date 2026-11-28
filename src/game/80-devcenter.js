@@ -278,6 +278,7 @@
       F('55-complex-buildings.js', 'map', '만장대 단지의 건물: 한옥 마을·회랑·정자·문간채·카페·곳간·공방·가마 (§16.8)'), // [finisher]
       F('56-complex-office.js', 'map', '만장대 단지 안쪽 방: 본관 로비·옹기 공방·카페 (§16.4·§16.8)'), // [finisher]
       F('59-vehicles.js', 'map', '차(G.vehicles): 골짜기 주차장과 단지의 차·버스를 하나의 만들기로 (§17.9)'), // [finisher]
+      F('69-healing-hall.js', 'map', '힐링관 건물(B_HEAL)과 안: 통유리 복도·로비(안내데스크·키오스크)·숙소·상담실·제1관~제10관, 체험 자리(G.healStations)·문 상태(G.healHall) (§19.6)'), // [heal-hall]
       F('57-complex-landscape.js', 'map', '만장대 단지 풍경: 둘레 산(능선·골짜기)·숲(나무 세 단계 상세도·바람)·산 숲 표면·강물(흐름·거품)·바위와 절벽·갈대·소나무 정원과 분수·주차된 차·관광버스·만장대 셔틀·접지 그림자·새·새벽 안개 (§16.8)'), // [complex-landscape]
       F('60-social.js', 'social', '채팅·필터·개인정보 가림(maskPII)·말풍선·아이 말하기(문장 고르기)·표현하기·체험객·서버 접속자'),
       F('61-audio.js', 'social', '절차적 효과음·환경음·국악풍 BGM·음성 합성'),
@@ -494,6 +495,7 @@
   EXPECTED_SYSTEMS.push('myroom');   // [myroom] 75-myroom.js
   EXPECTED_SYSTEMS.push('cooking');   // [cooking] 37-cooking.js
   EXPECTED_SYSTEMS.push('fishing');   // [fishing] 35-fishing.js
+  EXPECTED_SYSTEMS.push('healHall');   // [heal-hall] 69-healing-hall.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);

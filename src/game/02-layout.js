@@ -309,6 +309,14 @@
   L.benches.push({ x: 46.6, z: 112.4, rot: PI, manjangdae: true }, { x: 57.4, z: 112.4, rot: PI, manjangdae: true });
   L.photoZones.push({ id: 'PZ_MANJANGDAE', name: '만장대 전망대', x: 60.8, z: 117.2, r: 3, look: [10, 6, -30], elevated: true });
 
+  // [heal] 힐링관 (CONTRACT §19.6, lane heal-hall) — THE PLOT TAKEN: the north edge behind the main hall, east of its axis:
+  // the footprint x 8 … 68, z −126 … −110 (60 × 16 m, the glass front faces south, rot 0), the door in the middle of
+  // the front at (38, −109.7), the spot outside it (38, −107.1). Kept free around it: 6 m in front (the yard and the
+  // path), 3 m at the back and the ends; the main hall's back wall (z −102) stands 8 m south-west of the front. The
+  // inside is the place PL_HEAL of 69-healing-hall.js (the type 'heal' is built there, not by 15-buildings.js).
+  L.buildings.push({ id: 'B_HEAL', type: 'heal', name: '힐링관', x: 38, z: -118, w: 60, d: 16, rot: 0, floors: 1 });
+  L.paths.push({ id: 'PATH_HEAL', type: 'stone', width: 3.0, points: [[15, -70], [28, -79], [34, -92], [38, -101], [38, -108.6]] });
+
   // ---------------------------------------------------------------- anchor lookup
   L.anchors = {};
   const add = (o) => { if (o && o.id) L.anchors[o.id] = o; };
