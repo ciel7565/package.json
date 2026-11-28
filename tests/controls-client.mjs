@@ -9,11 +9,16 @@
 //   state chip, the Ctrl tap (fixed ↔ free) and the card that explains it · + / − and 0 (turn speed)
 //   · wheel zoom range 2 … 22 m (easy 4.5 … 12.5) also while locked · the settings tiles · finite numbers · the phone
 //   is unchanged (drag, no lock requests).
+//   [phase 11, §19.3] group `dash`: REAL key events (page.keyboard, fired without waiting for each other so the browser stamps
+//   them a few ms apart whatever the frame rate) — forward tapped twice and held runs until it is let go, left / right / back
+//   tapped twice dash ≈ 3.2 m relative to the camera and never run, a window or a fence stops it, the events' own timestamps
+//   decide (two synthetic events stamped 1 ms apart but handled 600 ms later still count), the sound, the camera kick (not
+//   with reduce-motion), the options; on the phone the same with two quick flicks of the stick.
 //
 //   node tests/controls-client.mjs                       builds a private page (--no-assets) in a temp directory
 //   node tests/controls-client.mjs --file /abs/page.html test an already built page
 //   options: --json · --headed · --timeout <ms> · --skip-phone · --only <a,b> (groups: pace, jump, walkto, look, keys,
-//            zoom, settings, phone)
+//            zoom, settings, dash, phone)
 //   Run it through the shared browser lock (at most two browsers on the build machine).
 // Exit 0 = all passed, 1 = a check failed, 2 = could not run.
 // =============================================================================
@@ -592,6 +597,220 @@ async function mainPage() {
     check('settings → 조작: a tile changes G.settings.mouseLook', st.chosen === 'walk', st.chosen);
     check('settings → 조작: the turn-speed slider', st.slider);
   }
+  // ------------------------------------------------------------------------------------------------ [move] §19.3 dash
+  if (want('dash')) {
+    const ev = (fn, arg) => page.evaluate(fn, arg);
+    // a clear open spot (no collider, no water within 6 m all round), the camera behind the player looking along -z
+    const setup = await ev(async () => {
+      const H = window.__ct, W = G.world;
+      await H.ready();
+      G.setSetting('easyMode', false); G.setSetting('reduceMotion', false); G.setSetting('alwaysRun', false);
+      G.input.mouseLook.setMode('drag');   // (the page was opened with mouselook=lock: its hover-look edge turning would swing the camera under the test)
+      G.sys.weather?.setAuto?.(false);
+      window.__ks = [];
+      for (const t of ['keydown', 'keyup']) window.addEventListener(t, (e) => { if (e.isTrusted) window.__ks.push([t, e.code, e.timeStamp, e.repeat]); }, true);   // the browser's own stamps of REAL key events
+      const sp = G.data.layout?.spawn || { x: 0, z: 9 };
+      let spot = null;
+      for (let rad = 0; rad <= 110 && !spot; rad += 10) for (let a = 0; a < 16 && !spot; a++) {
+        const cx = sp.x + Math.cos(a * 0.39) * rad, cz = sp.z + Math.sin(a * 0.39) * rad;
+        let ok = true;
+        for (let k = 0; k < 16 && ok; k++) for (let d = 0; d <= 6 && ok; d += 1) if (!H.free(cx + Math.cos(k * Math.PI / 8) * d, cz + Math.sin(k * Math.PI / 8) * d, 0.9)) ok = false;
+        if (ok) spot = { x: cx, z: cz };
+      }
+      // record every sound and the camera kick
+      window.__dash = { sfx: [], kick: 0, dashes: [], runs: [], states: [] };
+      const sfx0 = G.sfx; G.sfx = function (n, ...r) { window.__dash.sfx.push(n); return sfx0.call(this, n, ...r); };
+      G.bus.on('player:dash', (d) => window.__dash.dashes.push(d));
+      G.bus.on('player:run', (d) => window.__dash.runs.push(d));
+      H.onTick = (pl) => { window.__dash.kick = Math.max(window.__dash.kick, G.sys.camera?._kick || 0); window.__dash.states.push(pl.moveState); };
+      return { spot, run: H.findRun(48), easy: G.easy.on };
+    });
+    check('dash: an open spot (nothing within 6 m) and a clear straight run of 48 m exist for the test', !!setup.spot && !!setup.run && setup.easy === false, JSON.stringify(setup));
+    const reset = async (spot) => ev(async ({ sp, dx, dz }) => {
+      const H = window.__ct; G.input.reset(); H.release();
+      await H.place(sp.x, sp.z, dx, dz);
+      await H.waitGame(0.5);
+      window.__dash.sfx.length = 0; window.__dash.dashes.length = 0; window.__dash.runs.length = 0; window.__dash.states.length = 0; window.__dash.kick = 0;
+      G.sys.player._dashAt = -1e9;
+      const b = G.sys.camera.getMoveBasis();
+      const p = G.sys.player.position;
+      return { x: p.x, z: p.z, fx: b.forward.x, fz: b.forward.z, rx: b.right.x, rz: b.right.z };
+    }, { sp: spot || setup.spot, dx: spot && spot.dx !== undefined ? spot.dx : 0, dz: spot && spot.dz !== undefined ? spot.dz : -1 });
+    const after = (sec) => ev(async (s) => { await window.__ct.waitGame(s); const p = G.sys.player; return { x: p.position.x, z: p.position.z, speed: p.speed, state: p.moveState, running: G.input.running, tapRun: G.input.tapRun, gt: window.__ct.gt() }; }, sec);
+    // REAL key events from the browser process (Input.dispatchKeyEvent) with explicit times: the CDP `timestamp` is what the page
+    // sees as event.timeStamp, so all events of a tap can be sent at once, 50 / 60 ms apart, whatever the frame rate is doing.
+    // If this browser ignores the stamps (checked below) the taps fall back to awaited page.keyboard calls and a wider window.
+    const cdp = await page.context().newCDPSession(page);
+    const VK = { KeyA: [65, 'a'], KeyD: [68, 'd'], KeyS: [83, 's'], KeyW: [87, 'w'] };
+    let stamped = true;
+    const send = async (code, seq) => {         // seq: [['down' | 'up', ms after the first], ...]
+      if (stamped) {
+        const base = Date.now() / 1000 + 0.05;
+        await Promise.all(seq.map(([ty, ms]) => cdp.send('Input.dispatchKeyEvent', { type: ty === 'down' ? 'rawKeyDown' : 'keyUp', code, key: VK[code][1], windowsVirtualKeyCode: VK[code][0], timestamp: base + ms / 1000 })));
+      } else {
+        for (const [ty] of seq) { if (ty === 'down') await page.keyboard.down(code); else await page.keyboard.up(code); }
+      }
+    };
+    /** a double tap: down, up, down (+ up unless the second press is held) — presses 110 ms apart, 50 ms held */
+    const tap2 = (code, hold2 = false) => send(code, [['down', 0], ['up', 50], ['down', 110], ...(hold2 ? [] : [['up', 160]])]);
+    {
+      await ev(() => { window.__ks.length = 0; });
+      await send('KeyD', [['down', 0], ['up', 50], ['down', 340], ['up', 390]]);   // (340 ms: just outside the default window — no dash from this one)
+      await ev(() => window.__ct.wait(300));
+      const ks = await ev(() => window.__ks.filter((k) => k[1] === 'KeyD'));
+      const gap = ks.length >= 3 ? ks[2][2] - ks[0][2] : -1;
+      stamped = Math.abs(gap - 340) < 25;
+      check('dash: real key events carry the stamps they were sent with (two presses stamped 340 ms apart arrive ~340 ms apart)', stamped, `gap ${gap.toFixed ? gap.toFixed(1) : gap} ms · ${JSON.stringify(ks.map((k) => k.slice(0, 3)))}`);
+      if (!stamped) await ev(() => { G.setSetting('tapWindow', 450); });   // (a fallback: awaited calls are slow under load)
+      await ev(async () => { G.input.reset(); window.__ct.release(); window.__dash.dashes.length = 0; await window.__ct.waitGame(1.0); });
+    }
+
+    // ---- left, right, back: one dash of about 3.2 m relative to the camera, real key events
+    for (const [code, name, sx, sz] of [['KeyA', 'left', -1, 0], ['KeyD', 'right', 1, 0], ['KeyS', 'back', 0, 1]]) {
+      const b0 = await reset();
+      await tap2(code);
+      const r = await after(1.2);
+      const dx = r.x - b0.x, dz = r.z - b0.z;
+      const d = await ev(() => ({ n: window.__dash.dashes.length, dir: window.__dash.dashes[0]?.dir, ex: window.__dash.dashes[0]?.dx, ez: window.__dash.dashes[0]?.dz, sfx: window.__dash.sfx.filter((x) => x === 'dash').length, runs: window.__dash.runs.length }));
+      // the camera's own axis for this direction, read before the keys; the dash must go along it (the camera stands still in drag mode)
+      const ax = name === 'left' ? [-b0.rx, -b0.rz] : name === 'right' ? [b0.rx, b0.rz] : [-b0.fx, -b0.fz];
+      const along = dx * ax[0] + dz * ax[1], side = dx * -ax[1] + dz * ax[0];
+      const ang = d.ex === undefined ? 999 : Math.acos(Math.max(-1, Math.min(1, ((d.ex || 0) * ax[0] + (d.ez || 0) * ax[1])))) * 180 / Math.PI;
+      check(`dash ${name}: the key tapped twice goes 3.2 m (3.0 – 3.4) relative to the camera, straight`, along > 3.0 && along < 3.4 && Math.abs(side) < 0.4 && ang < 10, `${along.toFixed(2)} m, sideways ${side.toFixed(2)}, ${ang.toFixed(1)}° off the camera axis`);
+      check(`dash ${name}: one player:dash {dir: ${name}}, the soft sound once, no run`, d.n === 1 && d.dir === name && d.sfx === 1 && d.runs === 0, JSON.stringify(d));
+    }
+
+    // ---- the second press held after a dash only walks
+    {
+      const b0 = await reset();
+      await tap2('KeyA', true);
+      await after(0.9);
+      const r = await after(0.9);
+      await page.keyboard.up('KeyA');
+      const d = await ev(() => ({ running: G.input.running, runs: window.__dash.runs.length, dashes: window.__dash.dashes.length }));
+      check('dash: holding the key afterwards only walks (≈ 7.7 m/s, no run, one dash)', r.speed > 5 && r.speed < 9.5 && !r.running && d.runs === 0 && d.dashes === 1, `speed ${r.speed.toFixed(2)} ${JSON.stringify(d)}`);
+      void b0;
+    }
+
+    // ---- forward: two presses, the second held → runs until forward is let go
+    {
+      const b0 = await reset(setup.run);
+      await tap2('KeyW', true);
+      const r1 = await after(1.5);
+      const r2 = await after(1.0);
+      const run = { running: r2.running, tap: r2.tapRun, state: r2.state, speed: r2.speed };
+      await page.keyboard.up('KeyW');
+      const r3 = await after(0.8);
+      const d = await ev(() => ({ dashes: window.__dash.dashes.length, runs: window.__dash.runs.map((x) => x.on), kick: window.__dash.kick }));
+      const prog = Math.hypot(r2.x - b0.x, r2.z - b0.z);
+      check('run: forward tapped twice and held → running (state "run", about 14.4 m/s) and still running a second later', run.running && run.tap === 'key' && run.state === 'run' && run.speed > 13 && run.speed < 16.5 && r1.speed > 12, JSON.stringify(run) + ` r1 ${r1.speed.toFixed(1)}`);
+      check('run: it covered the ground of a run (≥ 18 m in 2.5 s) and made no dash', prog > 18 && d.dashes === 0, `${prog.toFixed(1)} m ${JSON.stringify(d)}`);
+      check('run: letting go of forward ends it (not running, walking state, stopped)', !r3.running && r3.tapRun === false && r3.state === 'walk' && r3.speed < 1, JSON.stringify({ running: r3.running, state: r3.state, speed: r3.speed.toFixed(2) }));
+      check('run: player:run {on: true} then {on: false}', JSON.stringify(d.runs) === JSON.stringify([true, false]), JSON.stringify(d.runs));
+    }
+    // ---- steering sideways keeps the run, a single press does not run
+    {
+      await reset(setup.run);
+      await tap2('KeyW', true);
+      await after(0.8);
+      await page.keyboard.down('KeyA');
+      const r = await after(0.8);
+      await page.keyboard.up('KeyA'); await page.keyboard.up('KeyW');
+      check('run: steering left while forward is held keeps the run', r.running && r.state === 'run', JSON.stringify({ running: r.running, state: r.state }));
+      await reset(setup.run);
+      await send('KeyW', [['down', 0], ['up', 50], ['down', 1000]]);   // two presses a second apart, the second held
+      const r2 = await after(1.2);
+      const r3 = await after(0.6);
+      await send('KeyW', [['up', 0]]);
+      check('run: two presses 1 s apart are not a run; the key held just walks', !r3.running && r3.speed < 9.5 && r2.state !== 'dash', JSON.stringify({ running: r3.running, speed: r3.speed.toFixed(2) }));
+    }
+
+    // ---- the events' own timestamps decide, not the moment the page gets round to them
+    {
+      await reset();
+      const t = await ev(async () => {
+        const mk = (type) => new KeyboardEvent(type, { code: 'KeyD', key: 'd', bubbles: true, cancelable: true });
+        const spin = (ms) => { const t0 = performance.now(); while (performance.now() - t0 < ms) { /* busy */ } };
+        // a human double tap: press, 40 ms, release, 40 ms, press, 40 ms, release — the events are stamped when they are made
+        const a = mk('keydown'); spin(40); const b = mk('keyup'); spin(40); const c = mk('keydown'); spin(40); const d = mk('keyup');
+        spin(700);                                              // … then the page is busy for 700 ms (a very long frame) before it sees them
+        for (const e of [a, b, c, d]) window.dispatchEvent(e);
+        await window.__ct.waitGame(0.3);
+        const n1 = window.__dash.dashes.length;
+        await window.__ct.waitGame(0.8);
+        // the same keys, the second press STAMPED 740 ms after the first: no dash, however soon the page handles them
+        const e1 = mk('keydown'); spin(40); const e2 = mk('keyup'); spin(700); const e3 = mk('keydown'); spin(40); const e4 = mk('keyup');
+        for (const e of [e1, e2, e3, e4]) window.dispatchEvent(e);
+        await window.__ct.waitGame(0.8);
+        return { n1, n2: window.__dash.dashes.length };
+      });
+      check('timestamps: two presses stamped 80 ms apart still count when the page handles them 700 ms later (a long frame)', t.n1 === 1, JSON.stringify(t));
+      check('… and two stamped 740 ms apart do not, however quickly the page handles them', t.n2 === 1, JSON.stringify(t));
+    }
+
+    // ---- never through a thin fence, never in a window
+    {
+      const b0 = await reset();
+      const w = await ev(async (b) => {
+        const W = G.world, y = W.heightAt(b.x, b.z, Infinity);
+        // a thin tall fence 1.6 m to the camera's left, running along the camera's forward direction
+        const cx = b.x - b.rx * 1.6, cz = b.z - b.rz * 1.6;
+        const id = W.addCollider({ shape: 'box', x: cx, z: cz, hw: 0.06, hd: 3, rot: Math.atan2(b.fx, b.fz) , tag: 'B_TESTFENCE', maxY: y + 5 });
+        window.__fenceId = id;
+        return { id };
+      }, b0);
+      await tap2('KeyA');
+      const r = await after(1.2);
+      const dist = -((r.x - b0.x) * b0.rx + (r.z - b0.z) * b0.rz);
+      await ev(() => { G.world.removeCollider(window.__fenceId); });
+      check('dash: a thin fence 1.6 m away stops it (no further than 1.6 − 0.06 − 0.35 + a little)', w.id && dist < 1.25 + 0.3 && dist > 0.6, dist.toFixed(2));
+    }
+    {
+      const b0 = await reset();
+      const blocked = await ev(() => { G.ui.block('dashtest'); return !G.input.gameplay(); });
+      await tap2('KeyA');
+      const r = await after(0.9);
+      const d = await ev(() => { G.ui.unblock('dashtest'); return window.__dash.dashes.length; });
+      check('dash: nothing happens while a window is open (input blocked)', blocked && d === 0 && Math.hypot(r.x - b0.x, r.z - b0.z) < 0.3, `blocked ${blocked} dashes ${d} moved ${Math.hypot(r.x - b0.x, r.z - b0.z).toFixed(2)}`);
+      await after(0.4);
+      await tap2('KeyA'); await after(0.6);
+      const d2 = await ev(() => window.__dash.dashes.length);
+      check('dash: and works again when it closes', d2 === 1, String(d2));
+    }
+    // ---- the camera kick (normal mode only) and reduce-motion
+    {
+      await reset();
+      await tap2('KeyD'); await after(0.6);
+      const k1 = await ev(() => window.__dash.kick);
+      await ev(() => { G.setSetting('reduceMotion', true); });
+      await reset();
+      await tap2('KeyD'); await after(0.6);
+      const k2 = await ev(() => window.__dash.kick);
+      await ev(() => { G.setSetting('reduceMotion', false); });
+      check('camera: a dash gives the view a small kick; reduce-motion drops it', k1 > 0.3 && k2 === 0, `kick ${k1.toFixed(2)} / with reduce-motion ${k2}`);
+    }
+    // ---- the options: off means off, easy mode keeps the same keys
+    {
+      await ev(() => { G.setSetting('dashOn', false); G.setSetting('tapRun', false); });
+      const b0 = await reset();
+      await tap2('KeyA'); await after(0.5);
+      await tap2('KeyW', true); const r = await after(1.0); await page.keyboard.up('KeyW');
+      const d = await ev(() => ({ dashes: window.__dash.dashes.length, runs: window.__dash.runs.length }));
+      check('options: 대시 off and 두 번 눌러 달리기 off → neither happens', d.dashes === 0 && d.runs === 0 && !r.running, JSON.stringify(d));
+      await ev(() => { G.setSetting('dashOn', true); G.setSetting('tapRun', true); });
+      void b0;
+      await ev(() => { G.setSetting('alwaysRun', true); });
+      await reset(setup.run);
+      await page.keyboard.down('KeyW'); const r2 = await after(1.4); await page.keyboard.up('KeyW');
+      await ev(() => { G.setSetting('alwaysRun', false); });
+      check('options: 항상 달리기 on → a plain W runs (≈ 14.4 m/s)', r2.running && r2.speed > 12.5, JSON.stringify({ running: r2.running, speed: r2.speed.toFixed(1) }));
+      const rows = await ev(() => ['tapRun', 'dashOn', 'tapWindow', 'alwaysRun', 'jumpBuffer', 'coyoteMs', 'wallSlide', 'stepAround', 'lowFences', 'runFree'].map((id) => !!G.sys.settings?.list?.().find((d) => d.id === id && d.tab === 'controls')));
+      check('options: the ten rows of the 조작 tab exist in the registry', rows.every(Boolean), JSON.stringify(rows));
+      const keyrow = await ev(() => { const l = G.input.bindings.list().find((a) => a.id === 'autoForward'); return l ? { codes: l.codes, group: l.group } : null; });
+      check('key table: "앞으로 계속 가기" (K) is a move action', !!keyrow && keyrow.codes[0] === 'KeyK' && keyrow.group === 'move', JSON.stringify(keyrow));
+    }
+    await ev(() => { window.__ct.onTick = null; try { G.input.mouseLook.setMode(null); G.setSetting('easyMode', true); } catch (e) { /* ok */ } });
+  }
   await context.close();
 }
 
@@ -610,6 +829,46 @@ async function phonePage() {
   });
   check('phone: touch UI keeps the drag look, never asks for the pointer', r.touchUI && r.s0.mode === 'drag' && r.s1.requests === 0 && !r.dot, JSON.stringify({ mode: r.s0.mode, req: r.s1.requests, touch: r.touchUI }));
   check('phone: the same pace constants (7.68 m/s)', r.WALK === 7.68);
+  if (want('dash')) {
+    // [move] §19.3: two quick flicks of the stick — forward held = run, left = dash; the run button stays
+    const t = await page.evaluate(async () => {
+      const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
+      const frames = async (n) => { for (let i = 0; i < n; i++) await raf(); };
+      for (let i = 0; i < 400 && !(G.input.gameplay() && G.sys.player.enabled && G.sys.camera?.mode === 'follow'); i++) { try { G.ui.modal.closeAll(); } catch (e) { /* none */ } await raf(); }
+      const spin = (ms) => { const t0 = performance.now(); while (performance.now() - t0 < ms) { /* a human's pace: events are stamped when they are made */ } };
+      const st = document.getElementById('joystick'), rc = st.getBoundingClientRect();
+      const cx = rc.left + rc.width / 2, cy = rc.top + rc.height / 2, R = rc.width * 0.36;
+      const ptr = (type, id, x, y) => st.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: id, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1 }));
+      const out = { stick: !!st, runBtn: !!document.querySelector('[data-mobile=run]') };
+      const dashes = [], runs = [];
+      G.bus.on('player:dash', (d) => dashes.push(d.dir)); G.bus.on('player:run', (d) => runs.push(d.on));
+      const P = G.sys.player;
+      P._dashAt = -1e9;
+      // forward, forward (held)
+      const x0 = P.position.x, z0 = P.position.z;
+      ptr('pointerdown', 11, cx, cy - R * 0.95); spin(40); ptr('pointerup', 11, cx, cy - R * 0.95); spin(40);
+      ptr('pointerdown', 12, cx, cy - R * 0.95);
+      await frames(24);
+      out.run = { tap: G.input.tapRun, running: G.input.running, state: P.moveState, speed: P.speed, moved: Math.hypot(P.position.x - x0, P.position.z - z0) };
+      ptr('pointerup', 12, cx, cy - R * 0.95);
+      await frames(10);
+      out.after = { running: G.input.running, tap: G.input.tapRun };
+      // left, left → a dash (no run)
+      await frames(30);
+      P._dashAt = -1e9;
+      const n0 = dashes.length;
+      ptr('pointerdown', 13, cx - R * 0.95, cy); spin(40); ptr('pointerup', 13, cx - R * 0.95, cy); spin(40);
+      ptr('pointerdown', 14, cx - R * 0.95, cy); spin(40); ptr('pointerup', 14, cx - R * 0.95, cy);
+      await frames(20);
+      out.dash = { n: dashes.length - n0, dir: dashes[dashes.length - 1], running: G.input.running };
+      out.runs = runs;
+      return out;
+    });
+    check('phone: the stick and the run button are there', t.stick && t.runBtn, JSON.stringify({ stick: t.stick, run: t.runBtn }));
+    check('phone: two quick flicks of the stick forward, the second held → running (via stick)', t.run.tap === 'stick' && t.run.running && t.run.moved > 3, JSON.stringify(t.run));
+    check('phone: letting go of the stick ends the run', t.after.running === false && t.after.tap === false, JSON.stringify(t.after));
+    check('phone: two flicks to the left → one dash left, no run', t.dash.n === 1 && t.dash.dir === 'left' && t.dash.running === false, JSON.stringify(t.dash));
+  }
   await context.close();
 }
 
