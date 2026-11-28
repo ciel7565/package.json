@@ -477,6 +477,7 @@ const DEFS = {
   allot:      { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.7: the allotment matrix + its IDOR check (own account budget)
   sync:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §16.9 [scale-server]: the sync matrix and token checks (own account budget)
   room:       { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §17.4 [myroom]: the room matrix, its IDOR check and the operator's grant (own account budget)
+  ai:         { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // CONTRACT §15.6 [ai]: the malformed-body probe of api/ai/* (own account budget)
   pay:        { env: { TFM_ADMIN_EMAILS: ADMINS } },                                  // [finisher] S15 payments (own account budget: 'val' ran out of its 60 registrations an hour per address)
   // attackers arrive through a trusted proxy (one address each). force_https is off: these instances exercise the
   // attack-logging / install / admin-IP behaviour over plain http — HTTPS forcing is tested on its own instances
@@ -1121,7 +1122,7 @@ async function S03() {
     await check('S03', `${ep} · malformed bodies (array / scalar root, cut-off, depth 40 and 300, NaN, bad UTF-8, oversize) → 4xx JSON error, never 5xx`, { sev: 'medium', fix: 'Route every body through Http::json() / Tfm\\V with the depth-32 and size caps; answer 400 / 413.' }, async () => {
       // the allotment endpoints are exercised on their own instance (see below): one address may register 60 accounts
       // an hour on an instance, and "val" needs its budget for the upload and payment checks that follow
-      let u = await newUser(ep.startsWith('api/allot/') ? sa : ep === 'api/sync.php' ? await srv('sync') : ep.startsWith('api/room/') ? await srv('room') : s, 'Mal');   // [scale-server] sync: its own instance · [myroom] room: its own
+      let u = await newUser(ep.startsWith('api/allot/') ? sa : ep === 'api/sync.php' ? await srv('sync') : ep.startsWith('api/room/') ? await srv('room') : ep.startsWith('api/ai/') ? await srv('ai') : s, 'Mal');   // [scale-server] sync: its own instance · [myroom] room: its own   // [ai] api/ai/*: its own instance (the 'val' register budget is used up exactly)
       const probe = await u.json(ep, {});
       if (probe.status === 403 && probe.error && probe.error.code === 'FORBIDDEN') u = adm;
       const bad = [];
