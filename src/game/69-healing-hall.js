@@ -1349,9 +1349,65 @@ G.healStations = G.healStations || { map: new Map(),
         station(ctx, 'R10', 'rest', x, 0.04, z, PI); }
       if (Kt.screen) try { Kt.screen(R, { x: -6.4, z: 0, rotY: PI / 2, panels: 8, h: 1.7 }); } catch (e) { /* optional */ }
       for (const [x, z] of [[-6.4, 6], [6.4, 6]]) { if (Kt.jwadeung) try { Kt.jwadeung(R, { x, z, h: 0.9 }); } catch (e) { /* optional */ } }
-      const setGentle = (g) => { coffin.visible = !g; if (coffin.userData.pool) coffin.userData.pool.visible = !g; };
+      // [heal-look] three calm corners that fill the room. The portrait corner: a wall of empty frames, a reflector.
+      // The writing corner: four low desks with paper, a brush stand and a steady candle each, a letter box. The rest
+      // corner: cushions, a low screen, a water jar. White flowers in vases, candle stands around the middle — every
+      // flame here is a still glow (nothing flickers). In the gentle variant a daybed under a quilt stands where the
+      // coffin stands in the full one (the same spot, the same collider).
+      const T = (k, n = 1) => tally('R10', k, n);
+      T('calm corner', 3); T('backdrop'); T('camera'); T('stool');
+      for (const [u, v, fw, fh] of [[16.9, 1.45, 0.56, 0.7], [17.8, 1.4, 0.48, 0.6], [18.7, 1.45, 0.62, 0.5], [19.6, 1.4, 0.5, 0.64], [20.5, 1.45, 0.56, 0.7], [17.3, 2.2, 0.42, 0.5], [18.2, 2.25, 0.5, 0.4], [19.1, 2.2, 0.44, 0.56], [20.0, 2.25, 0.52, 0.42], [20.9, 2.2, 0.4, 0.5]]) {   // the solid bay by the portrait corner (u from the south end)
+        const m = R.wm('W', u, v, 0.03);
+        R.add('wood', box(fw, fh, 0.035), m, '#2e2622', { cast: false });
+        R.add('paint', box(fw - 0.1, fh - 0.1, 0.01), m.clone().multiply(M(0, 0, 0.02)), '#efece4', { cast: false });
+        R.add('paint', box(fw - 0.2, fh - 0.2, 0.004), m.clone().multiply(M(0, 0, 0.027)), '#d8d4cc', { cast: false });
+        T('empty frame');
+      }
+      { const x = -2.6, z = -7.4; R.add('iron', cyl(0.012, 0.012, 1.4, 6), M(x, 0.7, z), '#2a2a2a'); R.add('paint', cyl(0.42, 0.42, 0.01, 20), M(x, 1.45, z, 0.9, 1, 1, 1, PI / 2), '#f4f2ea', { cast: false }); ctx.addCollider({ shape: 'circle', x, z, r: 0.2 }); T('reflector'); }
+      // the writing corner: three more low desks beside the program's (4.6, −7.6), a candle and a brush stand on each
+      const candle = (cx, cy, cz, h = 0.12) => { R.add('brass', cyl(0.035, 0.045, 0.02, 10), M(cx, cy + 0.01, cz), '#c9a24a', { cast: false }); R.add('paint', cyl(0.016, 0.016, h, 8), M(cx, cy + 0.02 + h / 2, cz), '#f6f2e6', { cast: false }); R.add('glow', new THREE.SphereGeometry(0.014, 6, 5), M(cx, cy + 0.04 + h, cz, 0, 0.8, 1.6, 0.8), '#ffd08a', { cast: false }); T('candle'); };
+      const brushes = (bx, by, bz) => { R.add('onggi', cyl(0.03, 0.03, 0.09, 8), M(bx, by + 0.045, bz), '#e8e2d6', { cast: false }); for (let k = 0; k < 3; k++) R.add('wood', cyl(0.005, 0.005, 0.2, 5), M(bx + (k - 1) * 0.012, by + 0.14, bz, 0, 1, 1, 1, (k - 1) * 0.12), '#6a4428', { cast: false }); T('brush stand'); };
+      for (const dx of [2.0, 3.3, 5.9]) {
+        const dz = -7.6;
+        if (Kt.table) try { Kt.table(R, { x: dx, z: dz, w: 0.9, d: 0.48, h: 0.32 }); } catch (e) { /* optional */ }
+        R.add('hanji', box(0.36, 0.004, 0.26), M(dx - 0.08, 0.325, dz), '#f4ead3', { cast: false }); R.add('stone', box(0.1, 0.025, 0.16), M(dx + 0.3, 0.335, dz - 0.08), '#2a2826', { cast: false });
+        brushes(dx + 0.3, 0.32, dz + 0.12); candle(dx - 0.35, 0.32, dz - 0.14);
+        if (Kt.cushion) try { Kt.cushion(R, { x: dx, z: dz + 0.72, tint: '#5a5048', trim: '#a8946a' }); } catch (e) { /* optional */ }
+        ctx.addCollider({ shape: 'box', x: dx, z: dz, hw: 0.46, hd: 0.25, maxY: 0.34 }); T('low desk'); T('cushion');
+      }
+      T('low desk'); brushes(4.95, 0.34, -7.48); T('paper', 4);
+      { const x = 7.0, z = -6.4; R.add('wood', box(0.3, 1.0, 0.3), M(x, 0.5, z), '#5a3c26'); R.add('wood', box(0.42, 0.36, 0.34), M(x, 1.18, z), '#7a5234'); R.add('iron', box(0.03, 0.02, 0.22), M(x - 0.21, 1.26, z), '#1a1612', { cast: false }); R.add('wood', box(0.46, 0.04, 0.38), M(x, 1.38, z), '#5a3c26'); ctx.addCollider({ shape: 'box', x, z, hw: 0.22, hd: 0.2, maxY: 1.4 }); T('letter box'); }
+      // the rest corner (south, by the door side): floor cushions, a low screen, a water jar, a long low table
+      if (Kt.cushion) for (const [cx, cz] of [[-4.4, 4.2], [-4.4, 5.4], [-3.0, 6.4], [4.4, 4.6]]) try { Kt.cushion(R, { x: cx, z: cz, w: 0.7, d: 0.7, h: 0.12, tint: '#7a8aa0', trim: '#d8d0bc' }); T('floor cushion'); } catch (e) { /* optional */ }
+      if (Kt.table) try { Kt.table(R, { x: -3.0, z: 4.8, w: 1.0, d: 0.5, h: 0.3 }); ctx.addCollider({ shape: 'box', x: -3.0, z: 4.8, hw: 0.5, hd: 0.26, maxY: 0.32 }); T('low table'); if (Kt.pot) for (let k = 0; k < 2; k++) Kt.pot(R, { x: -3.2 + k * 0.3, y: 0.3, z: 4.8, kind: 'bowl', s: 0.28 }); } catch (e) { /* optional */ }
+      if (Kt.screen) try { Kt.screen(R, { x: -5.6, z: 3.0, rotY: 0, panels: 4, h: 1.2 }); T('screen'); } catch (e) { /* optional */ }
+      if (Kt.pot) try { Kt.pot(R, { x: 6.8, z: 8.6, kind: 'dok', s: 0.7, lid: true }); ctx.addCollider({ shape: 'circle', x: 6.8, z: 8.6, r: 0.34 }); T('water jar'); } catch (e) { /* optional */ }
+      // two more resting mats with pillows beside the program's, a bedding chest, a low shelf of plain books
+      for (const mx of [-2.4, 2.4]) { if (Kt.floorMat) try { Kt.floorMat(R, { x: mx, z: 3.0, w: 1.2, d: 2.2, tint: '#7a8aa0' }); T('resting mat'); } catch (e) { /* optional */ } if (Kt.cushion) try { Kt.cushion(R, { x: mx, z: 2.15, w: 0.5, d: 0.3, h: 0.12, tint: '#e9e6dc', trim: '#9aa7b8' }); T('pillow'); } catch (e) { /* optional */ } R.add('cloth', box(0.9, 0.08, 0.5), M(mx, 0.05, 3.75), '#d8d0bc', { cast: false }); T('folded quilt'); }
+      if (Kt.chest) try { Kt.chest(R, { x: 6.9, z: 3.4, rotY: -PI / 2, w: 1.2, d: 0.45, h: 0.7, fittings: 'brass' }); for (let k = 0; k < 3; k++) R.add('cloth', box(0.42, 0.09, 1.0), M(6.9, 0.75 + k * 0.095, 3.4), ['#f3ede0', '#9fb3c8', '#e9dfc6'][k]); ctx.addCollider({ shape: 'box', x: 6.9, z: 3.4, hw: 0.25, hd: 0.62, maxY: 1.0 }); T('bedding chest'); } catch (e) { /* optional */ }
+      if (Kt.shelf) try { const sp = Kt.shelf(R, { x: 6.95, z: 0.6, rotY: -PI / 2, w: 1.2, d: 0.32, h: 1.0, levels: 2 }) || []; sp.forEach((q) => { for (let k = 0; k < 6; k++) R.add('paint', box(0.05, 0.22, 0.16), M(q.x, q.y + 0.11, q.z - 0.35 + k * 0.13), ['#d8d0bc', '#c9c2b0', '#e6dfcc'][k % 3], { cast: false }); }); ctx.addCollider({ shape: 'box', x: 6.95, z: 0.6, hw: 0.18, hd: 0.62, maxY: 1.0 }); T('book shelf'); } catch (e) { /* optional */ }
+      // white flowers in white vases on low stands; candle stands (촛대) with still flames around the middle
+      for (const [vx, vz] of [[-6.6, -10.2], [6.6, -10.2], [-2.2, -1.6], [2.6, -1.4], [-6.6, 8.6], [-1.6, -9.8]]) {
+        R.add('furn', box(0.36, 0.5, 0.36), M(vx, 0.25, vz), '#5a3c26'); R.add('onggi', cyl(0.06, 0.09, 0.3, 12), M(vx, 0.65, vz), '#f2f0ea');
+        for (let k = 0; k < 7; k++) { const a = k * 0.9; R.add('paint', cyl(0.004, 0.004, 0.24, 4), M(vx + Math.cos(a) * 0.02, 0.88, vz + Math.sin(a) * 0.02, 0, 1, 1, 1, 0.25 * Math.cos(a)), '#5a7a4a', { cast: false }); R.add('paint', new THREE.SphereGeometry(0.035, 7, 5), M(vx + Math.cos(a) * 0.07, 1.0 + (k % 3) * 0.03, vz + Math.sin(a) * 0.07), '#fbfaf6', { cast: false }); }
+        ctx.addCollider({ shape: 'circle', x: vx, z: vz, r: 0.24 }); T('white flowers');
+      }
+      for (const [sx, sz] of [[-1.3, -5.2], [2.2, -5.2], [-1.3, -1.8], [-6.2, -6.0], [-3.4, -7.4]]) { R.add('brass', cyl(0.12, 0.15, 0.03, 12), M(sx, 0.015, sz), '#b08a4a'); R.add('brass', cyl(0.016, 0.02, 1.1, 8), M(sx, 0.57, sz), '#b08a4a'); R.add('brass', cyl(0.06, 0.04, 0.03, 10), M(sx, 1.13, sz), '#b08a4a'); candle(sx, 1.13, sz, 0.18); ctx.addCollider({ shape: 'circle', x: sx, z: sz, r: 0.14 }); T('candle stand'); }
+      // the daybed under a quilt (gentle variant): its own small group, shown where the coffin is hidden
+      const daybed = new THREE.Group(); daybed.name = 'heal-r10-daybed';
+      { const x = 0.45, z = -3.4;
+        const wd = ctx.own(new THREE.MeshStandardMaterial({ color: 0x8a5f3c, roughness: 0.75 }));
+        const cl = ctx.own(new THREE.MeshStandardMaterial({ color: 0xf1ead8, roughness: 0.95 }));
+        const qu = ctx.own(new THREE.MeshStandardMaterial({ color: 0x9fb3c8, roughness: 0.92 }));
+        const add = (g, m, px, py, pz) => { ctx.own(g); const me = new THREE.Mesh(g, m); me.position.set(px, py, pz); me.castShadow = !low; me.receiveShadow = true; daybed.add(me); return me; };
+        add(box(1.0, 0.36, 2.1), wd, x, 0.18, z);
+        add(box(0.94, 0.12, 2.0), cl, x, 0.42, z);
+        add(box(1.02, 0.06, 1.3), qu, x, 0.5, z + 0.3);
+        add(box(0.5, 0.1, 0.28), cl, x, 0.53, z - 0.78);
+        R.addMesh(daybed, null); T('daybed'); T('quilt'); }
+      const setGentle = (g) => { coffin.visible = !g; if (coffin.userData.pool) coffin.userData.pool.visible = !g; daybed.visible = !!g; };
       setGentle(gentle());
-      room10Live = { coffin, setGentle };
+      room10Live = { coffin, daybed, setGentle };
       station(ctx, 'R10', 'guide', 1.8, 0, 0.4, PI);
       station(ctx, 'R10', 'spot', 0, 0, 1.0, PI);
     },

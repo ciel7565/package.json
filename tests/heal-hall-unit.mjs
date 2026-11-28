@@ -219,8 +219,8 @@ const census = [];
       try { live = def.build(ctxC); } catch (e) { check(`[census] ${id} builds (${low ? 'low' : 'medium'})`, false, String(e.stack || e).slice(0, 300)); continue; }
       group.updateMatrixWorld(true);
       let meshes = 0, tris = 0, nan = 0;
-      group.traverse((o) => {
-        if (!(o.isMesh || o.isPoints || o.isInstancedMesh) || !o.visible) return;
+      group.traverseVisible((o) => {    // (a hidden group — the coffin or the daybed of 제10관 — is not drawn)
+        if (!(o.isMesh || o.isPoints || o.isInstancedMesh)) return;
         meshes++;
         const pa = o.geometry?.attributes?.position; if (!pa) return;
         for (let i = 0; i < pa.array.length; i++) if (!Number.isFinite(pa.array[i])) { nan++; break; }
@@ -283,6 +283,23 @@ const census = [];
       census.push({ id, room, low, meshes, tris: Math.round(tris), nan, pieces: pieces.length, byKey, kinds, things: Object.values(kinds).reduce((s, n) => s + n, 0), cover: cells ? cov / cells : 0, cover12: cells ? cov1 / cells : 0, colliders: cols.length, lane16: L16, lane07: L07, warns: warns.slice(w0) });
       try { live?.dispose?.(); } catch (e) { /* reported below */ }
     }
+    // 제10관 in both variants: the gentle one shows a daybed under a quilt where the full one shows the coffin
+    {
+      const def = defsR.get('PL_HEAL_R10'), vis = {};
+      for (const full of [false, true]) {
+        Gb.healHall.setRoom10(full);
+        const group = new T3.Group();
+        const c2 = new Proxy({ id: def.id, def, place: def, group, size: def.size, origin: def.origin, floorY: 0, low: false, quality: 'medium', preset: { shadows: true }, own: (x) => x, anchor() {}, lightCount: 0, light: (cfg) => ({ cfg, light: null, set() {} }), addCollider: (c) => Gb.world.addCollider(c), exitDoor: () => ({}), onUpdate() {}, interact: () => ({ unregister() {} }), board: () => ({}) }, { get: (t, k) => (k in t ? t[k] : typeof k === 'symbol' ? undefined : (t[k] = () => ({}))) });
+        const live = def.build(c2);
+        const coffin = group.getObjectByName('heal-r10-coffin'), bed = group.getObjectByName('heal-r10-daybed');
+        vis[full ? 'full' : 'gentle'] = { coffin: !!coffin?.visible, daybed: !!bed?.visible };
+        Gb.healHall.setRoom10(!full);
+        vis[full ? 'fullThenGentle' : 'gentleThenFull'] = { coffin: !!coffin?.visible, daybed: !!bed?.visible };
+        live?.dispose?.(); for (const k of [...colliders.keys()]) colliders.delete(k);
+      }
+      Gb.healHall.setRoom10(null);
+      check('[census] 제10관: gentle = a daybed under a quilt and no coffin; full = the coffin and no daybed; setRoom10 switches a built room', vis.gentle.daybed && !vis.gentle.coffin && vis.full.coffin && !vis.full.daybed && vis.gentleThenFull.coffin && !vis.gentleThenFull.daybed && vis.fullThenGentle.daybed && !vis.fullThenGentle.coffin, JSON.stringify(vis));
+    }
     for (const c of census) {
       const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
       check(`[census] ${tag}: every geometry finite, nothing warned`, c.nan === 0 && !c.warns.length, c.warns.slice(0, 2).join(' | '));
@@ -290,7 +307,7 @@ const census = [];
       check(`[census] ${tag}: a 0.7 m path from the door to every station`, !c.lane07.miss.length, c.lane07.miss.join(' '));
     }
     // the rooms that are full now (the rest follow, two per commit): many things, most of the floor near one, the lane free
-    const FULL = new Set(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9']);
+    const FULL = new Set(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10']);
     for (const c of census.filter((x) => FULL.has(x.room))) {
       const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
       check(`[census] ${tag}: full — ≥ 50 things, ≥ 60 % of the floor within 1.2 m of one`, c.things >= 50 && c.cover12 >= 0.6, `${c.things} things, ${(c.cover12 * 100).toFixed(0)} %`);
