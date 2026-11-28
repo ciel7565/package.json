@@ -1537,6 +1537,7 @@ G.healStations = G.healStations || { map: new Map(),
     },
     R9(ctx, R) { people(ctx, 'R9', [{ x: -3.2, y: 0.08, z: -2.4, rotY: PI, phase: 0.15, swing: 0.3 }, { x: -5.6, z: 2.5, rotY: PI, solid: true }, { x: -0.4, y: -0.4, z: 6.8, rotY: 0 }, { x: 0.4, y: -0.4, z: 6.8, rotY: 0 }, { x: 5.45, z: -1.5, rotY: PI / 2, look: 'staffM', solid: true }]); },
     R10(ctx, R) {
+      windBell(R, -2.0, 4.4); emitter(ctx, 'bell', -2.0, 4.4, 0.06); tally('R10', 'wind bell');
       const L = [{ x: 2.0, y: -0.72, z: -6.95, rotY: PI }, { x: 5.9, y: -0.72, z: -6.95, rotY: PI }, lying(2.4, 0.1, 2.95), { x: -6.7, z: -6.6, rotY: -PI / 2, solid: true }, { x: -4.05, z: -4.35, rotY: PI, look: 'staff', solid: true }];
       cover(R, 2.4, 0.16, 3.25, 1.05, 0.8, '#d8d0bc');
       people(ctx, 'R10', L);
@@ -1698,6 +1699,15 @@ G.healStations = G.healStations || { map: new Map(),
     // a little 수반 with stones (not in 제8관: the warm stones stand there) and a waiting bench by the door
     if (kind !== 'body' && Kt.pot) try { Kt.pot(R, { x: kind === 'face' ? 6.0 : 5.6, z: kind === 'face' ? -8.6 : -8.8, kind: 'basin', s: 1.3 }); for (let k = 0; k < 5; k++) R.add('stone', new THREE.DodecahedronGeometry(0.06, 0), M((kind === 'face' ? 5.9 : 5.5) + k * 0.05, 0.12, (kind === 'face' ? -8.6 : -8.8) + (k % 2) * 0.06, k), '#5a5650', { cast: false }); T('water basin'); } catch (e) { /* optional */ }
     bench(R, ctx, 4.6, 7.6); bench(R, ctx, -4.6, 7.6); T('bench', 2);
+    // [heal-look] the sound of the room: a 풍경 (wind bell) by the north windows rings now and then, the basin trickles
+    windBell(R, -3.6, -10.2); emitter(ctx, 'bell', -3.6, -10.2, 0.1); T('wind bell');
+    if (kind !== 'body') { emitter(ctx, 'water', kind === 'face' ? 6.0 : 5.6, kind === 'face' ? -8.6 : -8.8, 0.12); T('water sound'); }
+  }
+  /** a small 풍경 hung from the ceiling: a bronze bell with a fish-shaped plate under it */
+  function windBell(R, x, z) {
+    R.add('iron', cyl(0.004, 0.004, 0.5, 4), M(x, ROOM.ceil - 0.25, z), '#3a3430', { cast: false });
+    R.add('brass', cyl(0.035, 0.07, 0.12, 12), M(x, ROOM.ceil - 0.56, z), '#8a6a3a', { cast: false });
+    R.add('brass', box(0.12, 0.06, 0.004), M(x, ROOM.ceil - 0.7, z), '#8a6a3a', { cast: false });
   }
   /** [heal-look] the people of a room: guests in the 힐링복 set (G.data.avatar.presets 'healing', hair varied) and the
    *  staff in the named looks healstaff / healstaffM (G.data.npcLooks) — all of them ONE instanced far-figure mesh of
