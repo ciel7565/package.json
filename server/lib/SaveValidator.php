@@ -1189,7 +1189,7 @@ final class SaveValidator
         if ($wear !== null) {
             if (!self::o($wear) && $wear !== []) self::bad('healing wear');
             $w = self::kv($wear);
-            if (count($w) > $L('wearKeys', 32)) { $bad('wear'); return; }
+            if (count($w) > $L('wearKeys', 48)) { $bad('wear'); return; }
             foreach ($w as $k => $x) {
                 if (!preg_match('/^[a-zA-Z]{1,20}\z/', (string) $k)) { $bad('wear'); return; }
                 if (is_string($x) ? (strlen($x) > 16 || !preg_match('/^[#a-zA-Z0-9_-]*\z/', $x)) : !$num($x, 0, 10)) { $bad('wear'); return; }

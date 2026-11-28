@@ -131,6 +131,23 @@ $expect('a bundle bigger than the shelf', 'HEAL_BAD_SHAPE', function (&$b) { $b[
 $expect('a check-in in the future', 'HEAL_BAD_SHAPE', function (&$b) use ($at0) { $b['visit']['band'] = $at0 + 400 * MIN; });
 $expect('an id that is not plain', 'HEAL_BAD_SHAPE', function (&$b) { $b['visit']['id'] = '<b>x</b>'; });
 $expect('a look with markup', 'HEAL_BAD_SHAPE', function (&$b) { $b['visit']['wear'] = ['top' => '<script>']; });
+// the whole look of the garment kit (lane hanbok: slots, colours, dyes, expression …) has up to 48 keys — 40 keys must pass
+$wearOf = function (int $n): array { $w = []; for ($i = 0; $i < $n; $i++) { $w['k' . chr(97 + intdiv($i, 26)) . chr(97 + $i % 26)] = ($i % 2) ? 1 : 'hanbok'; } return $w; };
+check('a look of 40 keys (the full garment kit) passes', function () use ($judge, $u, $at0, $visit, $block, $wearOf) {
+    $t = $at0 + 100 * MIN;
+    $b = $block($visit(['R5' => ['at' => $at0 + 10 * MIN, 'end' => $at0 + 70 * MIN, 'done' => $at0 + 70 * MIN]], ['wear' => $wearOf(40)]));
+    $r = $judge(state($u, $t, $b), state($u, $t - MIN), $t);
+    return $r['ok'] ? true : j(codes($r) ?: $r);
+});
+$expect('a look of 49 keys', 'HEAL_BAD_SHAPE', function (&$b) use ($wearOf) { $b['visit']['wear'] = $wearOf(49); });
+// the validator's own fallbacks (used when an older game-data.json carries no limits) are the client's limits
+check('the server\'s fallback limits are the client\'s (wearKeys 48, small 60, visits, r9, skewMs)', function () use ($repo, $gd) {
+    $lim = isset($gd['healing']['limits']) ? $gd['healing']['limits'] : [];
+    preg_match_all("/\\\$L\\('([a-zA-Z0-9]+)', ([0-9]+)\\)/", (string) file_get_contents($repo . '/server/lib/SaveValidator.php'), $m, PREG_SET_ORDER);
+    if (count($m) < 4) return 'found ' . count($m) . ' fallbacks';
+    foreach ($m as $x) { if (!isset($lim[$x[1]]) || (int) $lim[$x[1]] !== (int) $x[2]) return $x[1] . ': server ' . $x[2] . ', client ' . j(isset($lim[$x[1]]) ? $lim[$x[1]] : null); }
+    return true;
+});
 $expect('room 10 in an unknown version', 'HEAL_BAD_SHAPE', function (&$b) { $b['visit']['r10'] = 'scary'; });
 $expect('a negative room-9 count', 'HEAL_BAD_SHAPE', function (&$b) { $b['visit']['r9']['plates'] = -3; });
 $expect('too many small things', 'HEAL_BAD_SHAPE', function (&$b) { $b['visit']['rooms']['R5']['small'] = 9999; });
