@@ -56,7 +56,8 @@ const pageErrors = [], consoleErrors = [];
 page.on('pageerror', (e) => pageErrors.push(String(e?.message || e).slice(0, 300)));
 page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 300)); });
 const quality = SHOTS ? 'high' : 'low';
-const url = `${pathToFileURL(file).href}?autostart=1&notutorial=1&quality=${quality}`;
+// normal mode enters through the title (a grown-up's path; the autostart guest is a child in easy mode) — as tools/smoke.mjs
+const url = `${pathToFileURL(file).href}?${MODE === 'easy' ? 'autostart=1&' : ''}notutorial=1&quality=${quality}`;
 const ev = (fn, a) => page.evaluate(fn, a);
 const wait = (ms) => page.waitForTimeout(ms);
 async function shot(name) {
@@ -67,6 +68,10 @@ async function shot(name) {
 }
 async function boot() {
   await page.goto(url, { waitUntil: 'load', timeout: TIMEOUT });
+  if (MODE === 'normal') {
+    await page.waitForFunction(() => document.querySelector('.title-screen.in .ts-start') && document.getElementById('loading-screen')?.hidden, null, { timeout: TIMEOUT, polling: 250 });
+    await page.evaluate(() => document.querySelector('.title-screen .ts-start').click());
+  }
   await page.waitForFunction(() => window.G && window.G.ready === true && !!window.G.sys?.healing && !!window.G.healActs, null, { timeout: TIMEOUT, polling: 250 });
   await ev(() => { G.ui.modal.closeAll(); try { G.sys.weather.setLockTime(true); G.sys.weather.setAuto(false); G.sys.weather.setHour(11); } catch (e) { /* weather optional */ } });
 }
@@ -260,6 +265,18 @@ try {
     await ev(() => { G.healActs.close('test'); G.healActs.open('R10', {}); });
     await wait(5000);
     await shot('41-room10-full-coffin');
+  }
+
+  // ------------------------------------------------------------ one course left running for its REAL minutes (no debug clock)
+  if (want('real') && ONLY.includes('real')) {
+    await ev(() => { const H = G.sys.healing; H.debug.setNow(null); H.debug.scale(null); if (!H.visit || H.visit.out) H.book(); H.counsel({}); if (H.visit.rooms.R1) delete H.visit.rooms.R1; });
+    const c = await ev(() => { const r = G.sys.healing.start('R1', { acts: false }); const c0 = G.sys.healing.visit.rooms.R1; return { r, at: c0.at, end: c0.end, scale: G.sys.healing.scale(), wall: Date.now() }; });
+    log(`    ⏳ 제1관: ${Math.round((c.end - c.at) / 60000)} real minutes (scale ${c.scale}) — waiting`);
+    check('a real course of 10 minutes at scale 1', c.r.ok && c.end - c.at === 600000 && c.scale === 1, c);
+    const before = await ev(() => G.sys.healing.visit.rooms.R1.done);
+    await page.waitForFunction(() => G.sys.healing.visit.rooms.R1.done > 0, null, { timeout: 14 * 60000, polling: 5000 });
+    const after = await ev(() => ({ done: G.sys.healing.visit.rooms.R1.done, now: G.sys.healing.now(), wall: Date.now() }));
+    check('…stamped by itself after its real minutes (not before)', before === 0 && after.done === c.end && after.wall - c.wall >= 600000 - 2000, { c, after });
   }
 
   // ------------------------------------------------------------ phone: the dock and the map fit

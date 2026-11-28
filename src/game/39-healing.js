@@ -243,6 +243,13 @@
     if (any) { save(); if (D.nextStep(v, openRooms()) === 'report') notify('report', '🌿 종합 리포트가 나왔어요', '열 개의 관을 모두 돌았어요. 리포트를 열어 봐요.'); }
   }
   function numbers() { const v = vis(); return v ? D.numbers(v, now()) : null; }
+  /** the lamps over the corridor doors (69-healing-hall.js): idle · next (the suggested one) · run · done */
+  let doorsAt = -1;
+  function syncDoors() {
+    if (!G.healHall?.door) return;
+    doorsAt = changedAt;
+    for (const id of D.order) { const s = roomState(id); try { G.healHall.door(id, s === 'closed' ? 'idle' : s); } catch (e) { /* hall optional */ } }
+  }
   function notify(key, title, text) {
     try { G.sys.engagement?.notify?.({ type: 'system', icon: '🌿', title, text, act: 'healing', key: 'heal:' + key + ':' + (vis()?.id || '') }); } catch (e) { /* inbox optional */ }
   }
@@ -785,7 +792,7 @@
       hudT -= dt;
       if (hudT > 0) return;
       hudT = 1;   // once a wall-clock second: stamps, the chip, the numbers
-      try { tick(); syncHud(); if (keeper && keeper.group.visible && keeperRoom) { const pp = G.sys.player?.position; if (pp) keeper.group.rotation.y = Math.atan2(pp.x - keeper.group.position.x, pp.z - keeper.group.position.z); } } catch (e) {
+      try { tick(); syncHud(); if (doorsAt !== changedAt) syncDoors(); if (keeper && keeper.group.visible && keeperRoom) { const pp = G.sys.player?.position; if (pp) keeper.group.rotation.y = Math.atan2(pp.x - keeper.group.position.x, pp.z - keeper.group.position.z); } } catch (e) {
         const msg = String(e && e.stack || e).slice(0, 300);
         if (api._lastError !== msg) { api._lastError = msg; G.log.warn('HEAL', 'tick failed', msg); }
       }
