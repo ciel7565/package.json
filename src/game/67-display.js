@@ -251,8 +251,9 @@
       const s = this.screens().state;
       return s === 'ready' ? true
         : s === 'single' ? '모니터가 하나라서 고를 것이 없어요.'
-        : s === 'unsupported' ? '이 브라우저는 모니터를 골라 주는 기능이 없어요. 창을 원하는 모니터로 옮긴 뒤 전체 화면을 켜 주세요.'
-        : s === 'denied' ? '모니터 정보를 보는 것을 허락하지 않았어요. 브라우저 주소창의 사이트 설정에서 허락하면 고를 수 있어요.'
+        // [fix10] one sentence each (the window shows a greyed option's reason as one calm sentence)
+        : s === 'unsupported' ? '이 브라우저는 모니터를 고르는 기능이 없어서, 창을 원하는 모니터로 옮긴 뒤 전체 화면을 켜 주세요.'
+        : s === 'denied' ? '모니터 정보를 보는 것을 허락하지 않아서, 브라우저 주소창의 사이트 설정에서 허락하면 고를 수 있어요.'
         : '아래 ‘모니터 찾기’를 누르고 허락하면 고를 수 있어요.';
     },
     _monitorOptions() {

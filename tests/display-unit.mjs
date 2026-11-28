@@ -514,7 +514,7 @@ async function systemPage(opts = {}) {
 {
   // the monitors
   const one = await systemPage();
-  check('출력될 모니터 without the browser feature: "1 모니터", disabled with the reason, 모니터 찾기 says so too', one.D.screens().state === 'unsupported' && J(one.S.def('monitor').options.map((o) => o.l)) === J(['1 모니터']) && /기능이 없어요/.test(one.S.available('monitor')) && /없어요/.test(one.S.available('monitorFind')), String(one.S.available('monitor')));
+  check('출력될 모니터 without the browser feature: "1 모니터", disabled with the reason, 모니터 찾기 says so too', one.D.screens().state === 'unsupported' && J(one.S.def('monitor').options.map((o) => o.l)) === J(['1 모니터']) && /기능이 없어/.test(one.S.available('monitor')) && /없어/.test(one.S.available('monitorFind')), String(one.S.available('monitor')));
   const mons = [{ width: 1920, height: 1080, isPrimary: true, label: 'A' }, { width: 2560, height: 1440, isPrimary: false, label: 'B' }];
   const two = await systemPage({ monitors: mons, settings: { monitor: '2' } });
   check('before the player allows it: one choice, the reason "모니터 찾기를 누르고 허락하면 …"', two.D.screens().state === 'ask' && /모니터 찾기/.test(two.S.available('monitor')) && two.S.available('monitorFind') === true, String(two.S.available('monitor')));
@@ -526,7 +526,7 @@ async function systemPage(opts = {}) {
   await gone.D.findScreens(); gone.S.set('monitor', '2'); gone.S.set('windowMode', 'fullscreen'); await gone.tick(); await gone.tick(); await gone.tick();
   check('a chosen monitor the browser refuses: full screen on the monitor of the window instead', gone.fs.asked.length === 2 && !gone.fs.asked[1].screen && gone.D.fullscreen === true, `asked ${gone.fs.asked.length}`);
   const deny = await systemPage({ monitors: 'deny' }); const ds = await deny.D.findScreens();
-  check('not allowed: the row says where to allow it', ds === 'denied' && /허락하지 않았어요/.test(deny.S.available('monitor')), String(deny.S.available('monitor')));
+  check('not allowed: the row says where to allow it', ds === 'denied' && /허락하지 않아서/.test(deny.S.available('monitor')), String(deny.S.available('monitor')));
   const granted = await systemPage({ monitors: mons, permission: 'granted' }); await granted.tick(); await granted.tick();
   check('allowed at an earlier visit: the monitors are there at the start without a question', granted.D.screens().state === 'ready' && granted.S.def('monitor').options.length === 3);
 }
