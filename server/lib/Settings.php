@@ -123,7 +123,7 @@ final class Settings
         self::define('security.notice', 'str', '', 200, 'notice', '체험관 공지 한 줄', true, '모든 방문자의 화면에 한 번 보여 주는 짧은 알림이에요 (200자까지). 비워 두면 보이지 않아요. 전화번호·주소 같은 개인정보는 자동으로 가려져요.');
         self::define('admin.twofa_required', 'bool', strtolower(trim((string) Config::get('security.admin_2fa', 'optional'))) === 'required', null, 'admin', '관리자 2단계 인증을 꼭 쓰게 하기', false, '켜면 모든 관리자가 다음 로그인 때 휴대폰 인증 앱을 등록해야 해요. 기본 비밀번호를 바꾼 뒤에 켜는 것을 권해요.');
         self::define('farm.rt_scale', 'float', 1.0, [0.1, 3600], 'env', '실시간 텃밭 시간 배율', false, '1 = 진짜 시간, 60 = 60배 빠르게(시연). 이제부터 심는 작물에 적용돼요.');
-        self::define('ai.kid_helper', 'bool', false, null, 'etc', '어린이 AI 질문 도우미', false, '🤖 AI 도우미 탭에서도 켜고 끌 수 있어요.');
+        self::define('ai.kid_helper', 'bool', false, null, 'etc', '어린이 AI 질문 도우미', true, '🤖 AI 도우미 탭에서도 켜고 끌 수 있어요.'); // [ai] public: the page shows the 옹이 선생님 menu item only when this is on (73-ai.js)
         // ---------------------------------------------------------------- [entitle → controls] the keys CONTRACT §17.1 names (the controls lane reads them)
         $look = ['lock' => '마우스를 움직이면 돌기 (잠금)', 'walk' => '걸을 때만 돌기', 'drag' => '누르고 끌어서 돌기 (예전 방식)'];
         self::define('controls.mouse_look_normal', 'enum', 'lock', $look, 'controls', '보통 모드의 마우스 회전 기본값', true);
@@ -161,6 +161,10 @@ final class Settings
         self::define('healing.room10', 'enum', 'gate', ['gentle' => '언제나 부드러운 마음 돌아보기', 'gate' => '쉬운 모드는 부드럽게, 어른 확인 뒤 전체 (기본)', 'off' => '제10관 닫기'], 'healing', '제10관 임종체험', true, '쉬운 모드(어린이)에서는 관과 죽음 이야기가 없는 "마음 돌아보기"가 나와요.');
         self::define('healing.rooms', 'list', ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10'], ['R1' => '제1관 기본 검사관', 'R2' => '제2관 쑥뜸관', 'R3' => '제3관 좌훈관', 'R4' => '제4관 맨발걷기·헬스장', 'R5' => '제5관 족욕관', 'R6' => '제6관 발마사지관', 'R7' => '제7관 얼굴마사지관', 'R8' => '제8관 바디마사지관', 'R9' => '제9관 스트레스 해소관', 'R10' => '제10관 임종체험관'], 'healing', '여는 관', true, '고르지 않은 관은 문이 닫혀 있고, 리포트에도 필요하지 않아요.');
         // ---------------------------------------------------------------- [/healing]
+        // ---------------------------------------------------------------- [ai] 🤖 AI 도우미 (CONTRACT §15.6 / §16.10) — read through Tfm\Claude::capUser() / capTotal(); the switch is ai.kid_helper above
+        self::define('ai.daily_user', 'int', max(0, min(200, (int) Config::get('anthropic.daily_user', 20))), [0, 200], 'etc', '옹이 선생님 — 한 계정의 하루 질문 수', false, '아이 한 명이 하루(서버 날짜)에 물어볼 수 있는 수예요. 0이면 아무도 물어볼 수 없어요.');
+        self::define('ai.daily_total', 'int', max(0, min(100000, (int) Config::get('anthropic.daily_total', 2000))), [0, 100000], 'etc', 'AI 도우미 — 서버 전체 하루 질문 수 (비용 상한)', false, '아이 · 관리자 · 서버 명령의 질문을 모두 합친 하루 상한이에요. 이 수를 넘으면 그날은 더 보내지 않아요.');
+        // ---------------------------------------------------------------- [/ai]
     }
 
     /** the definitions of one group, in registry order */
