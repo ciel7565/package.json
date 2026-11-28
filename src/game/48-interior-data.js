@@ -695,16 +695,16 @@
       floor: 'jangpan', keeper: { name: '한복집 주인', role: '옷 짓는 사람', sets: ['sseugae', 'jangot', 'grandma'], hello: '어서 오세요. 고운 옷감이 많아요.' },
       desc: '옷감 필이 가득한 한복집이에요. 주인에게 옷을 사고팔 수 있고, 거울 앞에서 옷장을 열어요.' }),
     H('dye', 'B_DYE', '염색 공방', '🎨', '#24508e', -700, { w: 16, d: 12, h: 4.4 }, {
-      floor: 'earth', tone: 'dark', post: 2.9, keeper: { name: '염색장', role: '물들이는 사람', sets: ['cook', 'nongbu', 'farmer'], hello: '쪽물에 담글 때마다 색이 짙어져요.' },
+      floor: 'stone', tone: 'warm', post: 2.9, keeper: { name: '염색장', role: '물들이는 사람', sets: ['cook', 'nongbu', 'farmer'], hello: '쪽물에 담글 때마다 색이 짙어져요.' },
       desc: '쪽·홍화·치자·소목·감물로 천을 물들이는 공방이에요. 물든 천이 바람에 흔들려요.' }),
     H('jumak', 'B_JUMAK', '주막', '🍲', '#a8693f', -500, { w: 14, d: 10, h: 3.6 }, {
-      floor: 'earth', tone: 'dark', keeper: { name: '주막 아주머니', role: '국밥 끓이는 사람', sets: ['cook', 'grandma'], hello: '따끈한 국밥과 시원한 식혜가 있어요.' },
+      floor: 'stone', tone: 'dark', keeper: { name: '주막 아주머니', role: '국밥 끓이는 사람', sets: ['cook', 'grandma'], hello: '따끈한 국밥과 시원한 식혜가 있어요.' },
       desc: '길 가던 사람이 쉬어 가던 주막이에요. 가마솥 국밥과 식혜, 수정과를 내어 줘요.' }),
     H('tteok', 'B_TTEOK', '떡집', '🍡', '#c9a24a', -300, { w: 12, d: 10, h: 3.6 }, {
-      floor: 'earth', tone: 'warm', keeper: { name: '떡집 할머니', role: '떡 빚는 사람', sets: ['grandma', 'cook'], hello: '시루떡이 김을 내며 익고 있어요.' },
+      floor: 'stone', tone: 'warm', keeper: { name: '떡집 할머니', role: '떡 빚는 사람', sets: ['grandma', 'cook'], hello: '시루떡이 김을 내며 익고 있어요.' },
       desc: '시루에 떡을 찌고 떡메로 인절미를 치는 떡집이에요.' }),
     H('hanji', 'B_HANJI', '한지 공방', '📜', '#e8d9b5', -100, { w: 14, d: 10, h: 3.8 }, {
-      floor: 'earth', keeper: { name: '한지장', role: '종이 뜨는 사람', sets: ['potter', 'nongbu'], hello: '닥나무 껍질이 고운 종이가 돼요.' },
+      floor: 'stone', keeper: { name: '한지장', role: '종이 뜨는 사람', sets: ['potter', 'nongbu'], hello: '닥나무 껍질이 고운 종이가 돼요.' },
       desc: '닥나무로 종이를 뜨는 공방이에요. 물통에서 발로 종이를 떠서 말려요.' }),
     H('seodang', 'B_SEODANG', '서당', '📖', '#3b5ba5', 100, { w: 14, d: 10, h: 3.8 }, {
       floor: 'maru', keeper: { name: '훈장님', role: '서당 선생님', sets: ['hunjang', 'scholar', 'seonbi'], hello: '어서 와서 앉으렴. 오늘은 셈하기와 한글 놀이를 하자.' },
