@@ -982,8 +982,11 @@
     z -= 0.01 * smooth(0, -0.8, nz) * smooth(-0.3, 0.6, ny);         // the cranium bulges at the back
     z -= 0.006 * smooth(0.2, 0.8, ny) * smooth(0.5, 1, nz);          // a flatter forehead
     x += Math.sign(nx) * 0.006 * gauss((ny + 0.05) / 0.2) * gauss((Math.abs(nx) - 0.72) / 0.25) * smooth(0, 0.8, nz); // cheekbones
-    z -= 0.0045 * gauss((ny - 0.08) / 0.08) * gauss((Math.abs(nx) - 0.36) / 0.14) * smooth(0.6, 1, nz);               // eye sockets
-    z += 0.003 * gauss((ny - 0.2) / 0.06) * gauss((Math.abs(nx) - 0.35) / 0.25) * smooth(0.6, 1, nz);                // brow ridge
+    z -= 0.0055 * gauss((ny - 0.08) / 0.08) * gauss((Math.abs(nx) - 0.36) / 0.14) * smooth(0.6, 1, nz);               // eye sockets
+    z += 0.0035 * gauss((ny - 0.2) / 0.06) * gauss((Math.abs(nx) - 0.35) / 0.25) * smooth(0.6, 1, nz);               // brow ridge
+    z += 0.0035 * gauss((ny + 0.86) / 0.09) * gauss(nx / 0.26) * smooth(0.5, 1, nz);                                  // [people] the chin
+    z -= 0.0022 * gauss((ny + 0.74) / 0.05) * gauss(nx / 0.3) * smooth(0.7, 1, nz);                                   // the dip under the lower lip
+    z += 0.0025 * gauss((ny + 0.32) / 0.16) * gauss((Math.abs(nx) - 0.5) / 0.2) * smooth(0.4, 0.9, nz);               // soft cheeks
     z += 0.0035 * gauss((ny + 0.63) / 0.07) * gauss(nx / 0.28) * smooth(0.7, 1, nz);                                  // lips
     x *= 1 - 0.04 * smooth(0.2, 0.6, ny);                            // temples
     if (grow) { const gx = x / (HEAD.rx * HEAD.rx), gy = y / (HEAD.ry * HEAD.ry), gz = z / (HEAD.rz * HEAD.rz); const gl = Math.hypot(gx, gy, gz) || 1; x += (gx / gl) * grow; y += (gy / gl) * grow; z += (gz / gl) * grow; }
