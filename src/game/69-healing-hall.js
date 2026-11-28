@@ -876,9 +876,64 @@ G.healStations = G.healStations || { map: new Map(),
       { const p = R.wp('N', ROOM.w / 2, 1.75, 0.06);
         R.add('wood', box(3.4, 1.9, 0.06), M(p.x, p.y, p.z + 0.02), '#c9ab83'); R.add('paint', box(3.2, 1.7, 0.02), M(p.x, p.y, p.z + 0.06), '#fbfaf6');
         station(ctx, 'R1', 'board', p.x, p.y, p.z + 0.09, 0); }
-      bench(R, ctx, -4.6, 4.0); bench(R, ctx, 4.6, 4.0);
-      for (const x of [-6.6, 6.6]) for (let k = 0; k < 6; k++) R.add('cloth', box(0.02, 2.5, 0.42), M(x, 1.35, -9.8 + k * 0.4, k % 2 ? 0.25 : -0.25), '#f4f2ec', { cast: false });
-      plant(R, ctx, 6.6, 8.6, 1.1); plant(R, ctx, -6.6, 8.6, 1.1);
+      // [heal-look] four bays behind low partitions (paper panels in a timber frame, 1.2 m high), each with what its
+      // test needs; a height rod, a waiting area of benches, and walls of picture charts (pictures only — no numbers,
+      // no real people)
+      const T = (k, n = 1) => tally('R1', k, n);
+      T('test bay', 4); T('instrument', 4);
+      const partition = (x, z0, z1, h = 1.2) => {
+        const len = z1 - z0, zc = (z0 + z1) / 2;
+        for (const zz of [z0, z1]) R.add('wood', box(0.07, h, 0.07), M(x, h / 2, zz), '#b89a72');
+        R.add('wood', box(0.06, 0.06, len), M(x, h, zc), '#b89a72'); R.add('wood', box(0.05, 0.05, len), M(x, 0.12, zc), '#b89a72');
+        R.add('hanji', box(0.015, h - 0.2, len - 0.08), M(x, h / 2 + 0.04, zc), '#f6f1e4', { cast: false });
+        for (let k = 1; k < Math.round(len / 0.6); k++) R.add('wood', box(0.03, h - 0.2, 0.025), M(x, h / 2 + 0.04, z0 + k * len / Math.round(len / 0.6)), '#c9ab83', { cast: false });
+        ctx.addCollider({ shape: 'box', x, z: zc, hw: 0.06, hd: len / 2, maxY: h }); T('low partition');
+      };
+      partition(-3.05, -9.4, -6.1); partition(3.1, -9.4, -6.1); partition(0.05, -8.6, -7.4, 1.0);
+      // bay 1 (body): a height rod beside the platform and a small desk with a lit screen
+      { const x = -6.4, z = -6.2;
+        R.add('paint', box(0.36, 0.04, 0.36), M(x, 0.02, z), '#f4f4f2'); R.add('paint', box(0.06, 2.1, 0.06), M(x, 1.07, z - 0.15), '#f2f3f3');
+        for (let k = 0; k < 10; k++) R.add('paint', box(0.004, 0.012, 0.02), M(x + 0.032, 0.95 + k * 0.1, z - 0.15), '#6a7a8a', { cast: false });
+        R.add('paint', box(0.26, 0.02, 0.2), M(x, 1.62, z - 0.05), '#dfe3e6'); ctx.addCollider({ shape: 'circle', x, z, r: 0.22 }); T('height rod');
+        const dx = -6.5, dz = -8.6; R.add('furn', box(1.0, 0.74, 0.55), M(dx, 0.37, dz), '#f1ece4'); R.add('stone', box(1.08, 0.04, 0.6), M(dx, 0.76, dz), '#ffffff');
+        R.add('paint', box(0.5, 0.32, 0.03), M(dx, 1.0, dz - 0.15, 0, 1, 1, 1, -0.1), '#2a2f33'); R.add('glow', box(0.44, 0.26, 0.005), M(dx, 1.0, dz - 0.132, 0, 1, 1, 1, -0.1), '#bfe3ff', { cast: false });
+        ctx.addCollider({ shape: 'box', x: dx, z: dz, hw: 0.54, hd: 0.3, maxY: 0.8 }); T('desk'); T('screen'); }
+      // bay 2 (gut): round dishes on the bench, a rack of tubes, a stool
+      { const x = -1.5, z = -6.6;
+        for (let k = 0; k < 8; k++) { const dx = x - 0.62 + (k % 4) * 0.13, dz = z - 0.22 + Math.floor(k / 4) * 0.13; R.add('lacquer', cyl(0.05, 0.05, 0.012, 14), M(dx, 0.876, dz), '#e8f0f2', { cast: false }); R.add('paint', cyl(0.04, 0.04, 0.004, 12), M(dx, 0.884, dz), ['#e7d38a', '#c9e0b0', '#f0c9a8', '#d8c8e8'][k % 4], { cast: false }); }
+        T('round dish', 8);
+        R.add('furn', box(0.3, 0.06, 0.1), M(x + 0.6, 0.9, z - 0.25), '#c9ab83'); for (let k = 0; k < 6; k++) R.add('lacquer', cyl(0.011, 0.011, 0.13, 6), M(x + 0.48 + k * 0.05, 0.97, z - 0.25), '#dfe9ee', { cast: false });
+        T('tube rack');
+        R.add('furn', cyl(0.17, 0.18, 0.5, 12), M(x - 0.5, 0.25, z + 1.15), '#d8d2c6'); ctx.addCollider({ shape: 'circle', x: x - 0.5, z: z + 1.15, r: 0.18, maxY: 0.52, stand: true }); T('stool');
+        R.add('furn', box(0.7, 1.2, 0.4), M(x, 0.6, -10.6), '#f1ece4'); for (let k = 0; k < 3; k++) R.add('lacquer', box(0.6, 0.01, 0.34), M(x, 0.4 + k * 0.32, -10.4), '#cfe0e6', { cast: false }); ctx.addCollider({ shape: 'box', x, z: -10.6, hw: 0.36, hd: 0.22, maxY: 1.2 }); T('cabinet'); }
+      // bay 3 (gene): two sample racks and a stool
+      { const x = 1.6, z = -6.6;
+        for (const sx of [-0.35, 0.35]) { R.add('paint', box(0.26, 0.05, 0.16), M(x + sx, 0.895, z + 0.2), '#3d85c6'); for (let k = 0; k < 8; k++) R.add('lacquer', cyl(0.009, 0.009, 0.07, 6), M(x + sx - 0.09 + (k % 4) * 0.06, 0.95, z + 0.16 + Math.floor(k / 4) * 0.08), ['#e07a5f', '#81b29a', '#f2cc8f', '#ffffff'][k % 4], { cast: false }); }
+        T('sample rack', 2);
+        R.add('furn', cyl(0.17, 0.18, 0.5, 12), M(x + 0.5, 0.25, z + 1.15), '#d8d2c6'); ctx.addCollider({ shape: 'circle', x: x + 0.5, z: z + 1.15, r: 0.18, maxY: 0.52, stand: true }); T('stool');
+        R.add('furn', box(0.7, 1.2, 0.4), M(x, 0.6, -10.6), '#f1ece4'); for (let k = 0; k < 3; k++) R.add('paint', box(0.6, 0.02, 0.3), M(x, 0.4 + k * 0.32, -10.4), ['#c9e0b0', '#e7d38a', '#d8c8e8'][k], { cast: false }); ctx.addCollider({ shape: 'box', x, z: -10.6, hw: 0.36, hd: 0.22, maxY: 1.2 }); T('cabinet'); }
+      // bay 4 (salt): paper cups in a stack and in a dispenser, a basin for washing hands
+      { const x = 4.6, z = -5.2;
+        for (let k = 0; k < 6; k++) R.add('paint', cyl(0.035, 0.026, 0.08, 10), M(x - 0.05 + (k % 3) * 0.085, 0.91, z + 0.12 + Math.floor(k / 3) * 0.085), '#ffffff', { cast: false });
+        R.add('paint', cyl(0.04, 0.04, 0.28, 10), M(x + 0.5, 1.01, z + 0.15), '#f4f4f2'); T('paper cup', 10);
+        R.add('furn', box(0.9, 0.82, 0.55), M(6.6, 0.41, -8.4), '#f1ece4'); R.add('stone', cyl(0.22, 0.18, 0.12, 16), M(6.6, 0.86, -8.4), '#e8eef0'); R.add('iron', cyl(0.015, 0.015, 0.3, 6), M(6.6, 1.0, -8.62), '#b8c0c4', { cast: false });
+        ctx.addCollider({ shape: 'box', x: 6.6, z: -8.4, hw: 0.46, hd: 0.3, maxY: 0.9 }); T('wash basin'); }
+      // the waiting area: two rows of benches facing the bays, a water jar with cups, a low table with picture books
+      for (const [bx, bz] of [[-4.6, 4.0], [4.6, 4.0], [-4.6, 5.8], [4.6, 5.8]]) { bench(R, ctx, bx, bz); T('waiting bench'); }
+      if (Kt.pot) try { Kt.pot(R, { x: -6.8, z: 2.4, kind: 'dok', s: 0.7, lid: true }); ctx.addCollider({ shape: 'circle', x: -6.8, z: 2.4, r: 0.34 }); T('water jar'); } catch (e) { /* optional */ }
+      R.add('furn', box(0.9, 0.36, 0.5), M(6.7, 0.18, 2.4), '#b8875a'); for (let k = 0; k < 4; k++) R.add('paint', box(0.22, 0.02, 0.3), M(6.45 + k * 0.17, 0.38 + (k % 2) * 0.02, 2.4, k * 0.2), ['#e07a5f', '#81b29a', '#3d85c6', '#f2cc8f'][k], { cast: false });
+      ctx.addCollider({ shape: 'box', x: 6.7, z: 2.4, hw: 0.45, hd: 0.25, maxY: 0.4 }); T('picture books');
+      // picture charts on the side walls: a frame, white paper and simple coloured pictures (bowls, leaves, a body outline)
+      for (const side of ['E', 'W']) for (let k = 0; k < 4; k++) {
+        const u = [1.6, 3.9, 9.8, 12.2][k], m = R.wm(side, u, 1.55, 0.03);   // the solid bays between the windows
+        R.add('wood', box(1.0, 0.75, 0.03), m, '#9c7a52', { cast: false });
+        R.add('paint', box(0.9, 0.65, 0.01), m.clone().multiply(M(0, 0, 0.02)), '#fbfaf6', { cast: false });
+        const cols = ['#e07a5f', '#81b29a', '#3d85c6', '#f2cc8f', '#c4554d'];
+        if (k % 2 === 0) for (let j = 0; j < 4; j++) R.add('paint', cyl(0.07, 0.05, 0.01, 12), m.clone().multiply(M(-0.3 + j * 0.2, -0.05, 0.03, 0, 1, 1, 1, PI / 2)), cols[(j + k) % 5], { cast: false });
+        else { R.add('paint', new THREE.SphereGeometry(0.06, 8, 6), m.clone().multiply(M(-0.18, 0.16, 0.03, 0, 1, 1, 0.2)), '#c9a07a', { cast: false }); R.add('paint', box(0.14, 0.3, 0.01), m.clone().multiply(M(-0.18, -0.08, 0.03)), cols[k % 5], { cast: false }); for (let j = 0; j < 3; j++) R.add('paint', box(0.32, 0.05, 0.01), m.clone().multiply(M(0.16, 0.12 - j * 0.12, 0.03)), cols[(j + 2) % 5], { cast: false }); }
+        T('picture chart');
+      }
+      plant(R, ctx, 6.6, 8.6, 1.1); plant(R, ctx, -6.6, 8.6, 1.1); T('plant', 2);
       for (let i = 0; i < 3; i++) R.add('glow', box(2.6, 0.04, 0.5), M(0, ROOM.ceil - 0.03, -6 + i * 5), '#f3f7ff', { cast: false });
       station(ctx, 'R1', 'guide', -2.8, 0, -3.6, PI / 2);
       station(ctx, 'R1', 'spot', 0, 0, -3.0, PI);
@@ -925,28 +980,56 @@ G.healStations = G.healStations || { map: new Map(),
       station(ctx, 'R2', 'spot', -1.6, 0.04, -4.2, 0);
       emitter(ctx, 'fire', -0.65, -4.2, 0.35);
     },
-    // 제3관 좌훈관: wooden seats over herb pots, steam, herb bundles drying under the beams
+    // 제3관 좌훈관: eleven 좌훈 seats in a horseshoe open to the door — a wooden box seat with a round opening over a
+    // pot of steaming herbs, a cape on a hook beside each — herb pots on the floor and a shelf, 쑥 bundles under the
+    // beams, a water jar with a dipper. [heal-look] The program's seat and pot (0, −4.4) are the top of the horseshoe.
     R3(ctx, R) {
-      const Kt = K(), low = ctx.low;
-      for (let i = 0; i < 3; i++) {
-        const x = -3.6 + i * 3.6, z = -4.4;
-        if (Kt.pot) try { Kt.pot(R, { x, z, kind: 'sot', s: 1.0, mat: 'onggi' }); } catch (e) { /* optional */ }
-        // the seat: a board ring on four legs over the pot
-        R.add('furn', box(0.86, 0.05, 0.22), M(x, 0.5, z - 0.32), '#a57446'); R.add('furn', box(0.86, 0.05, 0.22), M(x, 0.5, z + 0.32), '#a57446');
-        R.add('furn', box(0.22, 0.05, 0.42), M(x - 0.32, 0.5, z), '#a57446'); R.add('furn', box(0.22, 0.05, 0.42), M(x + 0.32, 0.5, z), '#a57446');
-        for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) R.add('furn', box(0.05, 0.48, 0.05), M(x + a * 0.38, 0.24, z + b * 0.38), '#7a5234');
-        ctx.addCollider({ shape: 'box', x, z, hw: 0.44, hd: 0.44, maxY: 0.52, stand: true });
-        if (!low && Kt.steam) try { Kt.steam(R, { x, y: 0.55, z, s: 0.5 }); } catch (e) { /* optional */ }
-        // a cloth to drape over the knees
-        if (Kt.cloth) try { Kt.cloth(R, { x: x + 0.8, z: z + 0.2, w: 0.5, d: 0.35, drop: 0.2, tint: '#d9c7a4' }); } catch (e) { /* optional */ }
+      const Kt = K(), low = ctx.low, T = (k, n = 1) => tally('R3', k, n), cx = 0, cz = -1.2, rad = 3.2;
+      const seat = (x, z, ry, i) => {
+        const m = (dx, dy, dz, rr = 0) => M(x + Math.cos(ry) * dx + Math.sin(ry) * dz, dy, z - Math.sin(ry) * dx + Math.cos(ry) * dz, ry + rr);
+        // the box: four side boards down to the floor, the top a board ring around the round opening
+        for (const s of [-1, 1]) { R.add('furn', box(0.05, 0.48, 0.86), m(s * 0.41, 0.24, 0), '#a57446'); R.add('furn', box(0.86, 0.48, 0.05), m(0, 0.24, s * 0.41), '#9a6a40'); }
+        R.add('furn', box(0.88, 0.05, 0.22), m(0, 0.5, -0.33), '#b8875a'); R.add('furn', box(0.88, 0.05, 0.22), m(0, 0.5, 0.33), '#b8875a');
+        R.add('furn', box(0.22, 0.05, 0.44), m(-0.33, 0.5, 0), '#b8875a'); R.add('furn', box(0.22, 0.05, 0.44), m(0.33, 0.5, 0), '#b8875a');
+        R.add('earth', new THREE.CircleGeometry(0.21, 16), m(0, 0.48, 0).multiply(new THREE.Matrix4().makeRotationX(-PI / 2)), '#2a1c12', { cast: false });
+        R.add('cloth', box(0.4, 0.03, 0.3), m(0, 0.54, 0.3), i % 2 ? '#e9dfc6' : '#d9c7a4', { cast: false });
+        ctx.addCollider({ shape: 'circle', x, z, r: 0.5, maxY: 0.52, stand: true });
+        T('좌훈 seat');
+        // the hook post beside it with a cape (the long cloth wrapped around the sitter)
+        const hx = x + Math.cos(ry) * 0.75 - Math.sin(ry) * 0.25, hz = z - Math.sin(ry) * 0.75 - Math.cos(ry) * 0.25;
+        R.add('wood', cyl(0.025, 0.035, 1.6, 8), M(hx, 0.8, hz), '#7a5234'); R.add('wood', cyl(0.12, 0.14, 0.04, 10), M(hx, 0.02, hz), '#6a4428');
+        R.add('wood', cyl(0.012, 0.012, 0.16, 6), M(hx, 1.5, hz, ry, 1, 1, 1, PI / 2), '#5a3c26', { cast: false });
+        R.add('cloth', box(0.42, 0.95, 0.07), M(hx, 1.05, hz, ry + 0.2), ['#c9b48a', '#a8b89a', '#d9c7a4', '#b8a3c4'][i % 4], { cast: false });
+        ctx.addCollider({ shape: 'circle', x: hx, z: hz, r: 0.14 }); T('cape on a hook');
+        if (!low && Kt.steam && i % 3 === 1) try { Kt.steam(R, { x, y: 0.55, z, s: 0.45 }); T('steam'); } catch (e) { /* optional */ }
+      };
+      for (let i = 0; i < 11; i++) {
+        const th = (-240 + i * 30) * PI / 180, x = cx + rad * Math.cos(th), z = cz + rad * Math.sin(th);
+        seat(i === 5 ? 0 : x, i === 5 ? -4.4 : z, Math.atan2(cx - x, cz - z), i);
       }
-      // herb bundles hanging from the beams (쑥 and 약쑥 drying)
-      if (Kt.rope && Kt.straw) for (const x of [-5.4, -2, 2, 5.4]) try {
-        Kt.rope(R, { points: [[x - 1.2, ROOM.ceil - 0.25, -8.2], [x + 1.2, ROOM.ceil - 0.25, -8.2]], r: 0.01, sag: 0.25 });
-        for (let k = 0; k < 4; k++) R.add('paint', new THREE.ConeGeometry(0.07, 0.42, 6), M(x - 0.8 + k * 0.53, ROOM.ceil - 0.66, -8.2, 0, 1, 1, 1, PI), k % 2 ? '#7a8a4a' : '#8a9a58', { cast: false });
+      if (Kt.pot) try { Kt.pot(R, { x: 0, z: -4.4, kind: 'sot', s: 0.8, mat: 'onggi' }); } catch (e) { /* optional */ }
+      if (!low && Kt.steam) try { Kt.steam(R, { x: 0, y: 0.55, z: -4.4, s: 0.5 }); } catch (e) { /* optional */ }
+      // herb pots along the walls (쑥, 약쑥, 익모초 in onggi pots), the herb shelf, a low table where the herbs are cut
+      const herbPot = (x, z, s = 1) => { if (!Kt.pot) return; try { Kt.pot(R, { x, z, kind: 'danji', s: 0.9 * s }); for (let k = 0; k < 6; k++) { const a = k * 1.05; R.add('paint', new THREE.ConeGeometry(0.05, 0.36, 5), M(x + Math.cos(a) * 0.08, 0.5 * s + 0.12, z + Math.sin(a) * 0.08, a, 1, 1, 1, 0.3), k % 2 ? '#6f8a4a' : '#8a9a58', { cast: false }); } ctx.addCollider({ shape: 'circle', x, z, r: 0.26 * s }); T('herb pot'); } catch (e) { /* optional */ } };
+      for (const [x, z] of [[-6.8, -9.8], [-5.6, -10.3], [6.8, -2.8], [-6.8, -2.8], [-6.8, 3.2], [6.8, 3.2], [-4.2, -10.3]]) herbPot(x, z);
+      if (Kt.shelf) try { const sp = Kt.shelf(R, { x: 6.6, z: -6, rotY: -PI / 2, w: 1.6, d: 0.4, h: 1.6, levels: 3 }); (sp || []).slice(0, 6).forEach((p, i) => { if (Kt.pot) Kt.pot(R, { x: p.x, y: p.y, z: p.z, kind: i % 2 ? 'danji' : 'bottle', s: 0.5 }); }); ctx.addCollider({ shape: 'box', x: 6.6, z: -6, hw: 0.22, hd: 0.82, maxY: 1.7 }); T('herb shelf'); } catch (e) { /* optional */ }
+      if (Kt.table) try { Kt.table(R, { x: 3.4, z: -9.6, w: 1.2, d: 0.55, h: 0.36 }); for (let k = 0; k < 8; k++) R.add('paint', new THREE.ConeGeometry(0.03, 0.26, 5), M(3.0 + k * 0.1, 0.39, -9.6 + (k % 2) * 0.08, k, 1, 1, 1, PI / 2), '#7a8a4a', { cast: false }); R.add('stone', box(0.3, 0.04, 0.2), M(3.75, 0.38, -9.55), '#6a6258'); ctx.addCollider({ shape: 'box', x: 3.4, z: -9.6, hw: 0.62, hd: 0.3, maxY: 0.4 }); T('cutting table'); } catch (e) { /* optional */ }
+      // herb bundles hanging from the beams (쑥 and 약쑥 drying), two lines
+      if (Kt.rope) for (const zz of [-8.2, 4.6]) for (const x of [-5.4, -2, 2, 5.4]) try {
+        Kt.rope(R, { points: [[x - 1.2, ROOM.ceil - 0.25, zz], [x + 1.2, ROOM.ceil - 0.25, zz]], r: 0.01, sag: 0.25 });
+        for (let k = 0; k < 4; k++) R.add('paint', new THREE.ConeGeometry(0.07, 0.42, 6), M(x - 0.8 + k * 0.53, ROOM.ceil - 0.66, zz, 0, 1, 1, 1, PI), k % 2 ? '#7a8a4a' : '#8a9a58', { cast: false });
+        T('쑥 bundle', 4);
       } catch (e) { /* optional */ }
-      if (Kt.shelf) try { const sp = Kt.shelf(R, { x: 6.6, z: -6, rotY: -PI / 2, w: 1.6, d: 0.4, h: 1.6, levels: 3 }); (sp || []).slice(0, 6).forEach((p, i) => { if (Kt.pot) Kt.pot(R, { x: p.x, y: p.y, z: p.z, kind: i % 2 ? 'danji' : 'bottle', s: 0.5 }); }); ctx.addCollider({ shape: 'box', x: 6.6, z: -6, hw: 0.22, hd: 0.82, maxY: 1.7 }); } catch (e) { /* optional */ }
-      bench(R, ctx, -4.8, 5.0); bench(R, ctx, 4.8, 5.0);
+      // the water jar with a gourd dipper floating on its lid
+      if (Kt.pot) try { Kt.pot(R, { x: -6.5, z: 7.0, kind: 'dok', s: 0.8, lid: true }); R.add('straw', new THREE.SphereGeometry(0.11, 10, 6, 0, TAU, 0, PI / 2), M(-6.5, 0.86, 7.0, 0, 1, 0.5, 1, PI), '#d9b77a'); R.add('straw', cyl(0.015, 0.015, 0.28, 6), M(-6.32, 0.84, 7.0, 0, 1, 1, 1, 0).multiply(new THREE.Matrix4().makeRotationZ(1.3)), '#c9a46a', { cast: false }); ctx.addCollider({ shape: 'circle', x: -6.5, z: 7.0, r: 0.38 }); T('water jar'); T('dipper'); } catch (e) { /* optional */ }
+      // a round straw mat inside the horseshoe; two low drying platforms (평상) with herbs spread out, nearer the door
+      if (Kt.floorMat) try { Kt.floorMat(R, { x: cx, z: cz + 0.4, w: 4.2, d: 3.8, tint: '#b9a070' }); T('mat'); } catch (e) { /* optional */ }
+      for (const px of [-4.4, 4.4]) {
+        R.add('furn', box(1.8, 0.06, 1.1), M(px, 0.42, 2.8), '#a57446'); for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) R.add('furn', box(0.07, 0.4, 0.07), M(px + a * 0.82, 0.2, 2.8 + b * 0.48), '#7a5234', { cast: false });
+        if (Kt.basket) try { for (const dx of [-0.45, 0.45]) { Kt.basket(R, { x: px + dx, y: 0.45, z: 2.8, r: 0.34, h: 0.06, kind: 'sieve' }); for (let k = 0; k < 7; k++) R.add('paint', box(0.12, 0.01, 0.04), M(px + dx + Math.cos(k * 0.9) * 0.18 * (k % 3) / 2, 0.5, 2.8 + Math.sin(k * 0.9) * 0.18 * (k % 3) / 2, k), k % 2 ? '#6f8a4a' : '#8a9a58', { cast: false }); } } catch (e) { /* optional */ }
+        ctx.addCollider({ shape: 'box', x: px, z: 2.8, hw: 0.9, hd: 0.55, maxY: 0.48, stand: true }); T('drying platform'); T('herb sieve', 2);
+      }
+      bench(R, ctx, -4.8, 6.6); bench(R, ctx, 4.8, 6.6); T('bench', 2);
       emitter(ctx, 'water', 0, -4.4, 0.18);
       station(ctx, 'R3', 'seat', 0, 0.52, -4.4, PI);
       station(ctx, 'R3', 'pot', 0, 0.1, -4.4, 0);

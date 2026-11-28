@@ -290,7 +290,7 @@ const census = [];
       check(`[census] ${tag}: a 0.7 m path from the door to every station`, !c.lane07.miss.length, c.lane07.miss.join(' '));
     }
     // the rooms that are full now (the rest follow, two per commit): many things, most of the floor near one, the lane free
-    const FULL = new Set(['R2', 'R5', 'R6', 'R7', 'R8']);
+    const FULL = new Set(['R1', 'R2', 'R3', 'R5', 'R6', 'R7', 'R8']);
     for (const c of census.filter((x) => FULL.has(x.room))) {
       const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
       check(`[census] ${tag}: full — ≥ 50 things, ≥ 60 % of the floor within 1.2 m of one`, c.things >= 50 && c.cover12 >= 0.6, `${c.things} things, ${(c.cover12 * 100).toFixed(0)} %`);
