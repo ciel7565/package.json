@@ -1403,3 +1403,221 @@ Touch controls for fishing and cooking (big buttons, holds instead of fast taps)
 
 ### 18.8 Acceptance (added to §17.12)
 A report with its picture arrives in the admin tab, is answered, the answer shows in the app, and deleting it removes the row and the file; another account cannot read it. Every option of the owner's list exists, does what it says, and is still set after logging out, in again and on another device. A tap of Ctrl frees the mouse and another locks it; the first start explains it. At a river spot each method lands a fish that looks like its species; a protected one goes back; the catch is cooked in the kitchen step by step and served. Everything above works on a phone. Text audit clean; all earlier suites green.
+
+## 19. Phase 11 — clothes as items (the hanbok wardrobe, the 한복집, the character sheet), double-tap run and dash, more hanok to walk into, the real seasons, the 힐링관 (ten rooms in real time)
+
+The owner's request of 2026-11-28 (verbatim in the agents' rules file, Addendum 8). Two pictures came with it: a character
+design sheet (front / side / back views, a card of basic facts, nine expressions, a colour palette, extra looks, detail
+close-ups, the pieces of equipment one by one) and a 3D figure another tool made from that sheet. They show the LEVEL of
+the character and the LAYOUT of a sheet — not the clothes: the owner wants hanbok only. The pictures are not in the tree.
+
+### 19.0 Rules that change
+- **Hanbok only.** Every person in the world — the player, other players, NPCs, staff, far figures, people drawn on
+  cards — wears traditional Korean dress. The modern ids of the avatar table (`tshirt hoodie shirt jacket shorts
+  sneakers cap backpack glasses`) leave `options`, move to `legacy` and are turned into a hanbok counterpart by
+  `normalize` (an old save never breaks; the server keeps accepting them). Work clothes stay when they are traditional
+  (행주치마 over a 저고리, 밀짚모자, 머릿수건).
+- **Clothes are items** (§19.1): owned, worn, bought and sold for the coins of the app. Nothing in the wardrobe costs
+  real money. Administrators own everything (§17.2).
+- **Movement** (§19.3): running is a double tap of *forward* that is held; a double tap of left / right / back is a
+  dash. Shift keeps working. Everything goes through `G.input.bindings` and the options registry (§18.0).
+- **The look of the world follows the real season and weather of 정선** (§19.5). Under automation the fixed test
+  season stays unless `?season=real` (or `?clock=kst`).
+- **힐링관 time is real time** (§19.6): a 60-minute course lasts 60 real minutes at the operator's scale 1 (the
+  default); it runs on while the visitor is somewhere else or offline; nothing in the hall can be failed or lost.
+- **No health claims** (§12 stays): the 힐링관 is a pretend visit. Its tests and numbers are play values that come from
+  what the visitor chose and did in the app — never from a real body. No real weight, height, age, illness or any other
+  body data is asked for, stored or sent. The words for curing, healing an illness, preventing or medical effect are not
+  used: the hall says 쉬어요 · 따뜻해요 · 시원해요 · 마음이 가벼워요. One calm line at the desk and on the report says
+  that this is play and not a real test or treatment. The owner's "오늘의 처방" is shown as **오늘의 쉼 안내**.
+- **Room 10 and children**: in easy mode the room is the gentle "마음 돌아보기" (no coffin, no words about death)
+  unless a grown-up opens the full sequence through `G.easy.gate`; the operator can set gentle / gate / off.
+- **Schema**: nothing new is needed for P0 — `wardrobe` and `healing` live in the validated save. A lane that does
+  need a table adds schema v10 as ONE shared block (as v8 / v9 were).
+- **Weight**: the page is over the budget of §14.7 already. New fragments keep their data in compact tables, build
+  geometry from shared kit parts, add no texture files without need; every new place keeps the budgets of §16.
+- New fragment numbers: `24-wardrobe.js`, `38-healing-data.js`, `39-healing.js`, `69-healing-hall.js`,
+  `79-healing-acts.js`, `64-interiors-e.js`, `12-seasons.js` (+ a stylesheet of the same name where needed).
+
+### 19.1 The wardrobe (lanes `hanbok`, `wardrobe`) — P0
+**The model is the sheet**: what a character sheet shows becomes what the player can set — views from four sides,
+basic facts, expressions, colours, extra looks, details, and every piece of clothing as its own item.
+- **Pieces (lane hanbok: `02-avatar-data.js`, `20-avatar.js`, the looks of `25-npc.js`).** As many kinds of hanbok
+  as fit the budgets, each one recognisable at two metres and named in Hangul:
+  겉옷 (`outer`, new key; `none` allowed) 두루마기 · 도포 · 철릭 · 쾌자 · 답호 · 전복 · 구군복 · 장옷 · 쓰개치마 · 배자 ·
+  마고자 · 조끼 · 당의 · 원삼 · 활옷 · 까치두루마기 · 누비옷 … (≥ 14); 저고리 (`top`) 민저고리 · 반회장 · 삼회장 · 색동 ·
+  깨끼 · 누비 · 적삼 … (≥ 8); 아래옷 (`bottom`) 풀치마 · 통치마 · 스란치마 · 대란치마 · 사폭바지 · 풍차바지 · 잠방이 …
+  (≥ 8); 쓰개 (`hat`) 갓 · 초립 · 패랭이 · 전립 · 삿갓 · 유건 · 정자관 · 탕건 · 복건 · 호건 · 굴레 · 조바위 · 아얌 · 남바위 ·
+  풍차 · 족두리 · 화관 · 전모 · 고깔 · 상모 · 밀짚모자 · 머릿수건 … (≥ 22); 신 (`footwear`) 고무신 · 꽃신 · 당혜 · 운혜 ·
+  태사혜 · 짚신 · 미투리 · 나막신 · 목화 · 갖신 (≥ 10); 머리 (`hair`, ≥ 18 with 얹은머리 · 새앙머리 · 땋은머리 …);
+  꾸미개 in slots of their own — 노리개 · 주머니 (두루주머니, 귀주머니, 복주머니) · 부채 · 비녀 · 떨잠 · 뒤꽂이 · 댕기
+  (제비부리, 도투락, 배씨) · 띠 (세조대, 광다회) · 짐 (봇짐, 괴나리봇짐, 바구니, 보자기) (≥ 24 in all); 옷감과 무늬
+  (≥ 10: 금박, 색동, 구름, 꽃, 격자, 줄, 누비 줄, 모시 결, 명주 윤 … — no written characters in a pattern).
+  `G.data.avatar.slots = [{ key, name, colorKey, empty }]` says which keys are things to wear (pushed in the lane's
+  first hour: the wardrobe lane reads it). Colours get the names of traditional dyes (쪽빛 · 옥색 · 송화색 · 치자색 ·
+  다홍 · 연지 · 자주 · 감색 · 먹색 · 소색 …, ≥ 24); every hex value of today stays valid.
+- **갖춤 (sets)**, ≥ 24, each historically sensible: 평상복 · 일옷 · 나들이옷 · 선비 · 무관 · 혼례 (활옷 / 원삼, 사모관대) ·
+  돌복 · 설빔 · 궁중 · 겨울 누비 · 여름 모시 · 풍물패 · 힐링복 …; a set is data (`presets` grow, the first six stay).
+- **Looking real**: collar, 동정, 고름, 섶 and the curve of the sleeve are modelled, a skirt has pleats and volume, 바지
+  is tied with 대님, layers show at the neck; woven micro-texture and soft cloth shading on medium / high, flat colours
+  on `low`; the springs of §17.7 carry the new skirts, sleeves, 고름 and 노리개. **Expressions**: nine calm ones (무표정 ·
+  미소 · 활짝 웃음 · 놀람 · 궁금 · 뿌듯 · 수줍음 · 졸림 · 집중) through `rig.setExpression`; listed in
+  `G.data.avatar.expressions`. One skinned mesh and one face decal per avatar stay; the geometry cache is bounded
+  (least recently used); far figures stay one draw call; triangles per avatar ≤ 1.5 × today's at every preset.
+- **NPCs**: every NPC has a named hanbok look that fits its work (훈장, 장독대 할머니, 농부, 상인, 선비, 아이들, the
+  staff of the 힐링관 in neat 생활한복).
+- **Items (lane wardrobe: `24-wardrobe.js` + css, hooks in `30-inventory.js`).** Every value of a slot key is an item
+  `WEAR_<KEY>_<ID>` of type `wear`, made from the table at start (never listed by hand) and exported to
+  `game-data.json` by a `[wardrobe]` block of the build. `G.data.wardrobe = { starter, price (by rule + overrides),
+  rarity, shops, gifts }` is pure data. `G.state.wardrobe = { v, own: { ITEM: 1 }, sets: [≤ 12 saved outfits],
+  sheet: { traits: [≤ 3 words from a list] }, expr }`; the appearance stays where it is and may only hold pieces that
+  are owned, part of the free starter kit, or anything for an administrator (client always; `SaveValidator`
+  `[wardrobe]` block on the server). A new profile owns a plain everyday kit and whatever its chosen look wears; an
+  existing profile is granted everything it wears at the moment of the migration.
+- **Buying and selling**: the shop `SHOP_HANBOK` through today's shop code (`G.sys.inventory.openShop`): shelves by
+  slot, **입어 보기** (the piece on the player's figure before paying), buy for coins, sell back for half — never the
+  starter kit, never a piece that is being worn (the window offers to change first). Clothes are also gifts of quests,
+  achievements, festivals, the 힐링관 (힐링복), fishing, cooking and fermenting milestones. A first new piece is within
+  reach after about ten minutes of play. Until lane buildings' 한복집 stands, the counter is a second shelf of the
+  매점 and of `PL_SHOP`.
+- **The 옷장 window** (`G.sys.wardrobe.open(tab?)`, replaces the entry points of the old customiser; the first-start
+  picture tiles stay): ① the figure, turning — 앞 · 왼쪽 · 뒤 · 오른쪽 and free turning; ② 장비: one tile per slot with
+  the worn piece, a tap lists the owned pieces of that slot and, greyed with their price, the ones to buy; ③ 색: the
+  named dyes; ④ 표정: the nine, one chosen as the usual face; ⑤ 기본 정보: nickname, 칭호 (from progression), the
+  figure's height as a play number, where it belongs, three words of character picked from a list — no real personal
+  data; ⑥ 갖춤: save / wear / rename outfits; ⑦ **설정 시트 만들기**: one picture in the layout of a character sheet
+  (four views, the face close up, nine expressions, the palette, three details, every worn piece with its name), kept
+  in the album; leaving the app with it sits behind the grown-up gate as photos do. Easy mode: picture tiles, no
+  typing, one tap + `G.easy.confirm`, coin prices as pictures.
+- Tests: Node (items from the table, own / wear / buy / sell, migration of a modern look), PHP unit on both drivers,
+  browser (buy → wear → reload → still worn; sell; easy; phone; the sheet is a real picture), kid-audit screens
+  `wardrobe`, `hanbokshop`, `charsheet`, contact sheets of every piece and every set looked at by the lane.
+
+### 19.2 More hanok to walk into (lane `buildings`) — P1
+At least eight new buildings with a door, an inside built from the kit, a keeper in hanbok, three things to learn and
+one thing to do: **한복집** (the clothes shop of §19.1, a mirror, bolts of cloth), **염색 공방** (natural dyes: the named
+colours come from here), **서당**, **약초방** (herbs as plants and teas — no claims), **대장간**, **방앗간** (물레방아 ·
+디딜방아), **주막** (국밥과 식혜), **찻집**, **한지 공방**, **떡집**; a generator from data keeps the code small
+(`64-interiors-e.js`, rows in `48-interior-data.js`), plots are marked blocks of `02-layout.js` that say which lane
+took them (the 힐링관 chooses first).
+
+### 19.3 Movement (lane `move`) — P0
+- **Run**: two presses of the *forward* binding within the tap window (300 ms; option 200 – 450) and the second one
+  held → a short burst, then running for as long as forward stays down (steering left and right keeps it); letting go
+  of forward ends it. **Dash**: two presses of left, right or back → one dash in that direction (about 3.2 m in
+  0.22 s outdoors, 2.2 m indoors, eased, 0.6 s before the next one); holding the key afterwards only walks. On the
+  ground only, never while sitting, in a window, a cinematic or a guided walk; a dash uses the sub-stepped mover, so it
+  never passes a wall, water, a slope or the edge of the play area. Shift (binding `run`) still runs.
+- Touch: the same with two quick flicks of the stick; the run button stays. Small dust and a soft whoosh; nothing
+  flashes; reduce-motion drops the camera kick.
+- **Comfort** (each an option of the 조작 tab, sensible defaults, easy mode on the gentle side): 항상 달리기, 두 번 눌러
+  달리기 on / off, 대시 on / off, the tap window, jump buffering (a press up to 120 ms before landing counts), 100 ms of
+  coyote time, sliding along walls and round corners instead of stopping, stepping round a small thing in the way, low
+  fences cleared without a jump while running (easy mode: on), an auto-forward toggle key, a run that never drains
+  anything. `G.sys.player.moveState` → `walk | run | dash | air`; events `player:run {on}`, `player:dash {dir}`.
+- Tests: the detector as pure logic with timestamps (Node), `controls-client` group `dash` with real key events and
+  touch, the old groups stay green; help topic and key table updated.
+
+### 19.4 Looks, weight, faults (all lanes; lane `opt` — P1)
+The complex still reads as a model on sand (terraces, lawns, a rock crag, the main building's timber and glass);
+the page is over its budget (minify the fragments safely, lazy pack blocks, smaller textures); the installable page
+of §18.6 and `docs/MOBILE-APP-KO.md` are still owed; `tools/package.mjs` ships `assets/pack` in the source part and
+never `assets/reference`. Every lane fixes the faults it meets in its own area and reports the others.
+
+### 19.5 The real seasons (lane `seasons`) — P1
+Today only sound, crops and fish follow the season; the trees are in summer leaf all year. `12-seasons.js` turns
+`G.env` (day of the year, weather, temperature, snow of the last days) into one state `G.season = { id, phase 0…1,
+leaf, blossom, autumn, bare, snow 0…1, frost, grass }` that changes slowly and drives: leaf colour and leaf fall of the
+broadleaf trees (pines stay green), blossom weeks in spring, grass from green to straw, flowers by month, snow that
+gathers on the ground, roofs, walls, jars and branches while it snows and melts above freezing, ice at the river's
+edge, breath in the cold. `low` gets the colours only. The four seasons can be looked at by the lane through
+`?season=spring|summer|autumn|winter` and are compared with photographs of 정선 in those months. Real weather needs the
+operator's 기상청 key (§17.5); without it the climate model of 정선 decides.
+
+### 19.6 The 힐링관 (lanes `heal-hall`, `heal-program`) — P0
+**The house.** One storey, a timber frame under a tiled hanok roof, the whole front in glass. Ten rooms of 100 평
+(about 330 m² each, 1,000 평 ≈ 3,300 m² together) open off ONE corridor, which runs behind the glass for its whole
+length; through the glass the real hour, weather and season are seen (sun patches on the floor by day, lamps in the
+garden by night, rain on the panes, snow). Lobby with the 안내데스크 and a kiosk, the 상담실, the lodging (숙소: a small
+hanok room with a shelf for the bundle and a clothes rail). In the valley the house `B_HEAL` stands on a plot the lane
+chooses first (the north-east quarter or the north edge behind the main hall are free; say what was chosen); inside it
+is `PL_HEAL` (lobby + corridor) with the rooms as nested places `PL_HEAL_R1 … PL_HEAL_R10`, `PL_HEAL_STAY`,
+`PL_HEAL_TALK` (§16.4 nested places as the complex's lobby uses them). Signs in Hangul and digits: 제1관 기본 검사관 …
+제10관. Each room has the light, the materials, the things and the sound of its theme and names its stations.
+- **Stations** — the only link between the two lanes: `G.healStations = G.healStations || { map: new Map(),
+  set(room, key, at) { this.map.set(room + ':' + key, at); G.bus && G.bus.emit('heal:station', { room, key }); },
+  get(room, key) { return this.map.get(room + ':' + key) || null; } }` (the same line in both fragments). The hall
+  calls `set(room, key, Object3D | { x, y, z, rotY })` while a place is built and never makes an interactable of its
+  own except doors; the program makes its interactables, figures' talk and moving things on those stations and
+  removes them when the place goes. Keys: `LOBBY: desk kiosk bench` · `STAY: door shelf rail bed` · `TALK: seat
+  manager` · `R1: body gut gene salt board` · `R2: mat tray` · `R3: seat pot` · `R4: track gym1 gym2 gym3` ·
+  `R5: tub kettle herbs` · `R6: chair stool` · `R7: bed towel` · `R8: bed oil` · `R9: stand plates drums cans
+  bottles rack` · `R10: studio desk rest`; every room also `guide` (where the keeper stands) and `spot` (where the
+  visitor stands or lies). `G.healHall = { door(room, 'idle' | 'next' | 'run' | 'done'), corridor() → the door
+  positions for the map }` is the hall's small interface; without it the program still works in a plain test room.
+- **The visit** (`38-healing-data.js` pure data, `39-healing.js` the system `healing`, `79-healing-acts.js` the ten
+  activities): 예약 (at the kiosk, the 가기 list or a notice) → 체크인 at the desk (a wrist band) → to the 숙소 along a
+  golden trail, the bundle unpacked onto the shelf (three taps) → changed into the lent **힐링복** (the old outfit comes
+  back at check-out; the set is a gift at the end) → the 상담실: the manager asks four picture questions (오늘 기분 ·
+  뻐근한 곳 · 잠 · 바라는 쉼) → the ten rooms in the recommended or any order → 종합 리포트 → check-out. A visit may be
+  put down and taken up on another day.
+- **Numbers on the HUD** (0 – 100, play values): 스트레스 · 피로·긴장 · 활력·컨디션 · 내면 성찰(평온); the report also
+  shows 온기·순환 and 체력. They start from the counselling answers and the day's play, move while a course runs, and
+  have no value at which anything stops working.
+- **Real time**: `course = { at, end = at + minutes × 60 000 / scale }` on the server-synced wall clock. The numbers
+  follow the course's curve as the minutes pass, here or away; at the end the room is stamped and a 🔔 notice says so.
+  One course runs at a time (operator option `overlap`); the visitor may stay and take part, walk off, or stop for
+  today. Operator settings (group 🌿 힐링관): `healing.enabled`, `healing.time_scale` (1; 1 – 120),
+  `healing.overlap`, `healing.room10` (gentle | gate | off), `healing.rooms` (which are open). The map and the HUD chip
+  always show the minutes left and the clock time of the end.
+- **The rooms** — each starts with one to three minutes of unhurried hands-on steps (wide timing, no fast tapping,
+  nothing to get wrong), then rests with small things to do now and then, and ends with a stamp:
+  **제1관 기본 검사관** (10 min) 인바디 → balance, breath and posture bars from standing still on the plate; 장내미생물
+  → a look through the microscope at the friendly microbes of what was eaten in the app (jars, dishes); 유전자 →
+  pairing the bases of a double helix into "나만의 무늬"; 소변염분 → a colour strip for how salty today's dishes were;
+  result: **오늘의 쉼 안내** with a suggested order. **제2관 쑥뜸관** (60) on the warm floor, moxa holders on the back,
+  then the belly — glowing embers, a thread of smoke, warmth rising. **제3관 좌훈관** (30) the herb pot, steam, slow
+  breath. **제4관 맨발걷기 · 헬스** (30 + 30) barefoot laps over 황토, pebbles and sand, then three slow strength
+  stations. **제5관 족욕관** (60) warm water by the ladle, herbs, steam. **제6관 발마사지관** (30) pressing the points
+  of a foot map after a glowing guide. **제7관 얼굴마사지관** (60) strokes along drawn lines, a warm towel. **제8관
+  바디마사지관** (60) front, then back, under a blanket — shoulders, arms, back and calves as calm zones, the keeper's
+  hands only. **제9관 스트레스 해소관** (30) goggles, gloves and an apron on, a wooden bat: plates, steel drums, cans
+  and glass bottles that break, dent, crush and shatter with pieces, dust and bright sound; racks refill; the number
+  of each is kept; 스트레스 falls fast. **제10관 임종체험관** (60) the portrait (framed, kept on the device), the letter
+  (sentence cards; typing behind the gate; the words stay on this device), lying in the wooden coffin in the dark with
+  slow breath and a voice, then the lid opens to morning light and three things that matter most are chosen; the
+  gentle version is 오늘의 나 사진 · 고마운 마음 편지 · 별빛 아래 고요한 쉼. The full version shows one line of where
+  to talk when the heart is heavy.
+- **Corridor map** (inside the hall: key M and a HUD chip): the corridor with the ten doors, where the visitor is,
+  each room idle / running with minutes left / done, the recommended minutes, a tap walks there. **Report**: the first
+  and the last measurements side by side, the four numbers before and after, minutes rested, what was broken in room
+  9, the portrait's style and the letter (from this device), ten stamps; kept in the 일지 and as a picture.
+- Server: `SaveValidator` `[healing]` block (shape, known rooms, times that cannot run faster than the scale allows,
+  bounded lists); the settings above; ids through a `[healing]` export. Nothing about the letter or the portrait is
+  sent.
+- Tests: Node logic (the visit, the clock at any scale, catching up after hours away, the curves, never-blocked
+  rules), PHP unit on both drivers, browser: one whole visit under the debug clock in normal and easy mode and on a
+  phone, a course that survives a reload, every room entered and left, kid-audit screens `healmap`, `healhud`,
+  `healroom`, `healreport`; pictures of the house from outside, the corridor at noon / dusk / night / in snow, and each
+  room, looked at by the lanes.
+
+### 19.7 File ownership (add to §18.7; shared files stay add-only)
+| lane | owns | adds marked blocks to |
+|---|---|---|
+| hanbok | `02-avatar-data.js`, `20-avatar.js`, looks in `25-npc.js`, tests `avatar-*` | `80-devcenter.js` |
+| wardrobe | `24-wardrobe.js` (+ css), tests `wardrobe-*` | `30-inventory.js`, `03-state.js`, `01-data.js`, `tools/build.mjs`, `SaveValidator.php`, `70-app.js`, `08-easy.js`, `80-devcenter.js`, `tools/kid-audit.mjs` |
+| move | the run / dash parts of `05-input.js`, `21-player.js`, `22-camera.js`; tests `controls-*`, `input-bindings` | `68-settings.js` (help topic), `66-fx.js`, `61-audio.js` |
+| heal-hall | `69-healing-hall.js` | `02-layout.js`, `80-devcenter.js` |
+| heal-program | `38-healing-data.js`, `39-healing.js` (+ css), `79-healing-acts.js`, tests `healing-*` | `03-state.js`, `tools/build.mjs`, `SaveValidator.php`, `Settings.php`, `70-app.js`, `08-easy.js`, `61-audio.js`, `62-engagement.js`, `47-journal.js`, `80-devcenter.js`, `tools/kid-audit.mjs`, `tools/package.mjs` |
+| buildings | `64-interiors-e.js`, rows of `48-interior-data.js` | `02-layout.js`, `15-buildings.js`, `80-devcenter.js` |
+| seasons | `12-seasons.js`, the season hooks of `12-nature.js`, `11-terrain.js`, `13-water.js`, `15-buildings.js`, `51-weather.js` | `10-engine.js`, `68-settings.js` |
+| opt | `tools/*` for weight and the installable page, `docs/MOBILE-APP-KO.md` | `src/template.html`, `tools/build.mjs`, `tools/package.mjs` |
+
+### 19.8 Acceptance (added to §18.8)
+A new profile wears hanbok, earns coins, buys a piece in the shop, tries it on, wears it, sells another, makes its
+sheet; no person in the world wears modern clothes. Forward tapped twice and held runs until it is let go; left,
+right and back tapped twice dash and do not run; nothing passes a wall. A visit to the 힐링관 goes from the booking
+to the report through all ten rooms in real time (proved under a debug clock and by one course left running for its
+real minutes), survives a reload and a day away, and can be left at any moment; the gentle room 10 is what a child
+gets. Every suite of the earlier phases stays green; smoke in three modes has no errors; the kid audit has no
+critical finding on the new screens; the text audit is clean.
