@@ -8,7 +8,11 @@
 //   options:
 //     --file <html>        built game (default dist/metaverse/index.html)
 //     --viewport WxH       default 1366x768 (--mobile: 390x844, touch, DPR 2)
-//     --both               desktop AND mobile in one run
+//     --both               desktop AND mobile in one run (and, [fit], the short pass below)
+//     [fit] --short        a phone held sideways: 844×390 with touch; every screen is also measured for §19.12 — the
+//                          close button can be reached, the primary action is whole and on top, nothing of the
+//                          scrolling body lies under the header or the footer (kind `fit`, critical). --fit-checks adds
+//                          the same measurement to the other runs
 //     --normal             audit normal (grown-up) mode instead of easy mode
 //     --screens a,b,c      only these screens (ids: hud bag shop sticker today quest journal edu lesson quiz map
 //                          rtbed gotgan rtbook emote chat avatar menu settings-kid settings help photo — rtbed/gotgan/
@@ -84,10 +88,11 @@ if (!fs.existsSync(file)) {
 
 const runs = [];
 if (flag('--both')) runs.push({ name: 'desktop', vw: 1366, vh: 768, mobile: false }, { name: 'mobile', vw: 390, vh: 844, mobile: true });
+if (flag('--both') || flag('--short')) runs.push({ name: 'short', vw: 844, vh: 390, mobile: true, fit: true }); // [fit] §19.12
 else if (flag('--mobile')) {
   const [w, h] = (opt('--viewport', '390x844')).split('x').map(Number);
   runs.push({ name: 'mobile', vw: w, vh: h, mobile: true });
-} else {
+} else if (!flag('--short')) { // [fit] --short alone runs only the short pass
   const [w, h] = (opt('--viewport', '1366x768')).split('x').map(Number);
   runs.push({ name: 'desktop', vw: w, vh: h, mobile: false });
 }
@@ -137,10 +142,23 @@ try {
       await new Promise((r) => setTimeout(r, 900));
     }, !normal);
     log(`  준비 ${(result.loadMs / 1000).toFixed(1)}초 · G.easy ${api.easy ? '있음' : '없음'} · 화면 ${api.screens.filter((s) => s.available).length}/${api.screens.length}개 열 수 있음 — 점검 시작`);
-    const tour = await page.evaluate(async (ids) => {
-      const r = await G.sys.devcenter.kidTour(ids ? { screens: ids } : {});
+    const fitOn = !!run.fit || flag('--fit-checks'); // [fit]
+    if (fitOn) await installFitSampler(page);
+    const tour = await page.evaluate(async ([ids, fit]) => {
+      // [fit] each finished step takes the sampler's last calm measurement of its window
+      const onStep = fit ? (row) => { window.__fit.rows[row.id] = window.__fit.cur; window.__fit.cur = null; } : undefined;
+      const r = await G.sys.devcenter.kidTour(ids ? { screens: ids, onStep } : { onStep });
+      if (fit) {
+        clearTimeout(window.__fit.timer);
+        for (const row of r.rows || []) {
+          const m = window.__fit.rows[row.id];
+          row.fit = m ? { box: m.box, close: m.close, action: m.action, n: m.items.length } : null;
+          if (!m || !row.audit) continue;
+          for (const it of m.items) { row.audit.items.unshift(it); row.audit.counts[it.sev] = (row.audit.counts[it.sev] || 0) + 1; r.totals[it.sev] = (r.totals[it.sev] || 0) + 1; }
+        }
+      }
       return r;
-    }, screens);
+    }, [screens, fitOn]);
     result.tour = tour;
     result.easyStatus = await page.evaluate(() => G.sys.devcenter.easyStatus?.() || null);
     await context.close();
@@ -154,7 +172,86 @@ try {
 }
 
 // ------------------------------------------------------------------ markdown
+// [fit] §19.12 the short-screen pass: while the tour holds each screen open, a sampler measures its window after the
+// opening animation (the last calm measurement before the screen closes wins) — the close button can be reached, the
+// primary action is wholly visible and on top, nothing of the scrolling body lies under the header or the footer, and
+// the window stays on the screen. Its findings join the audit of that screen as kind `fit` (critical).
+async function installFitSampler(page) {
+  await page.evaluate(() => {
+    const W = window;
+    W.__fit = { cur: null, rows: {} };
+    const excluded = (el) => !!el.closest('#devcenter, .dc-spot, .dc-tour-pill, [data-kid-exempt]');
+    const shown = (el) => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden' && Number(getComputedStyle(el).opacity) > 0.05;
+    const idleV = (v) => !v || v === 'none' || v === '1' || v === '0px' || v === '0px 0px' || v === 'matrix(1, 0, 0, 1, 0, 0)';
+    const scopeNow = () => {
+      const top = W.G?.ui?.modal?.top?.();
+      if (top?.el?.isConnected && !top.closed) return top.el;
+      return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).filter((d) => !excluded(d) && shown(d) && d.getBoundingClientRect().width > 40 && d.getBoundingClientRect().height > 40).pop() || null;
+    };
+    const calm = (sc) => {
+      const cs = getComputedStyle(sc);
+      if (!idleV(cs.transform) || !idleV(cs.scale) || !idleV(cs.translate)) return false;
+      for (let a = sc.parentElement; a && a !== document.body; a = a.parentElement) { const c = getComputedStyle(a); if (Number(c.opacity) < 0.99) return false; }
+      const anims = sc.getAnimations ? sc.getAnimations({ subtree: true }) : [];
+      return !anims.some((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime));
+    };
+    const measure = (sc) => {
+      const vw = innerWidth, vh = innerHeight, items = [];
+      const name = (e) => (e ? `${e.tagName.toLowerCase()}${typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\s+/).slice(0, 2).join('.') : ''}` : 'none');
+      const sb = sc.getBoundingClientRect();
+      const box = { L: Math.max(sb.left, 0), T: Math.max(sb.top, 0), R: Math.min(sb.right, vw), B: Math.min(sb.bottom, vh) };
+      const clip = (el) => {
+        const r = el.getBoundingClientRect(); let L = r.left, T = r.top, R = r.right, B = r.bottom;
+        for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') { const q = a.getBoundingClientRect(); L = Math.max(L, q.left); T = Math.max(T, q.top); R = Math.min(R, q.right); B = Math.min(B, q.bottom); }
+        }
+        return { L: Math.max(L, box.L), T: Math.max(T, box.T), R: Math.min(R, box.R), B: Math.min(B, box.B) };
+      };
+      const whole = (el) => {
+        const r = el.getBoundingClientRect(), c = clip(el);
+        const inside = r.left >= c.L - 1 && r.top >= c.T - 1 && r.right <= c.R + 1 && r.bottom <= c.B + 1;
+        // 6 px inside each corner — deeper on a rounded corner (a pill's corner is not part of it: the browser's hit test follows the curve)
+        const rad = Math.min(parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0, r.width / 2, r.height / 2), d = Math.max(6, Math.ceil(rad * 0.3) + 1);
+        const pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + d, r.top + d], [r.right - d, r.top + d], [r.left + d, r.bottom - d], [r.right - d, r.bottom - d]];
+        const miss = pts.filter(([x, y]) => { const e = document.elementFromPoint(x, y); return !e || !(e === el || el.contains(e)); }).map(([x, y]) => `${Math.round(x)},${Math.round(y)}→${name(document.elementFromPoint(x, y))}`);
+        return { ok: inside && !miss.length, why: `${inside ? '' : `outside its visible box (${Math.round(r.top)}–${Math.round(r.bottom)} of ${Math.round(c.T)}–${Math.round(c.B)}) `}${miss.length ? `covered at ${miss.slice(0, 2).join(' ')}` : ''}`.trim() };
+      };
+      const label = (el) => (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const pick = (sels) => { for (const s of sels) { const e = Array.from(sc.querySelectorAll(s)).find((x) => shown(x) && !x.disabled && !excluded(x)); if (e) return e; } return null; };
+      const close = pick(['.modal-head .easy-back', '.modal-head .modal-x', '[aria-label*="닫기"]', '[aria-label*="뒤로"]', '.easy-back', '[data-close]']);
+      if (close) { const w = whole(close); if (!w.ok) items.push({ sev: 'critical', kind: 'fit', sel: name(close), text: label(close), detail: `닫기 버튼에 닿을 수 없어요: ${w.why}` }); }
+      const act = pick(['.modal-foot .btn-primary', '.modal-foot .btn-gold', '.btn-primary', '.btn-gold', '.easy-btn-yes', '.modal-foot .btn']);
+      if (act) { const w = whole(act); if (!w.ok) items.push({ sev: 'critical', kind: 'fit', sel: name(act), text: label(act), detail: `주 버튼이 가려지거나 잘려요: ${w.why}` }); }
+      const body = sc.querySelector('.modal-body');
+      const hits = [];
+      for (const part of [sc.querySelector('.modal-head'), sc.querySelector('.modal-foot')]) {
+        if (!part || !body || !shown(part)) continue;
+        const r = part.getBoundingClientRect();
+        for (let i = 0; i < 7; i++) for (let j = 0; j < 3; j++) {
+          const x = r.left + (r.width * (i + 0.5)) / 7, y = r.top + (r.height * (j + 0.5)) / 3;
+          if (x < 0 || y < 0 || x >= vw || y >= vh) continue;
+          const e = document.elementFromPoint(x, y);
+          if (e && body.contains(e)) hits.push(`${Math.round(x)},${Math.round(y)}`);
+        }
+      }
+      if (hits.length) items.push({ sev: 'critical', kind: 'fit', sel: name(sc), text: '', detail: `창의 본문이 머리줄·발줄 밑에 깔려요 (${hits.length}곳, 예: ${hits.slice(0, 3).join(' ')})` });
+      if (sb.top < -1 || sb.bottom > vh + 1 || sb.left < -1 || sb.right > vw + 1) items.push({ sev: 'critical', kind: 'fit', sel: name(sc), text: '', detail: `창이 화면 밖으로 나가요 (위 ${Math.round(sb.top)} · 아래 ${Math.round(sb.bottom)} / 화면 ${vh})` });
+      return { at: performance.now(), box: { x: Math.round(sb.left), y: Math.round(sb.top), w: Math.round(sb.width), h: Math.round(sb.height) }, close: !!close, action: act ? label(act) : null, items };
+    };
+    const tick = () => {
+      try {
+        const sc = scopeNow();
+        if (sc && calm(sc)) W.__fit.cur = measure(sc);
+      } catch (e) { /* a screen closing under the sampler */ }
+      W.__fit.timer = setTimeout(tick, 140);
+    };
+    tick();
+  });
+}
+
 const KIND = { freetext: '⌨️ 글자 입력칸', tap: '👆 누르기 크기', errtext: '🐞 오류 글자', exit: '🚪 나가기 버튼', name: '🏷️ 이름·그림', label: '🔤 긴 버튼 글자', overlap: '🧱 HUD 겹침', contrast: '🌗 글자 대비', fontsize: '🔠 작은 글자', flash: '⚡ 깜빡임', speak: '🔊 읽어주기', focus: '🎯 한 가지 행동', hanja: '🈶 한자', gate: '🔒 보호자 확인' };
+KIND.fit = '📐 짧은 화면'; // [fit] §19.12
 const cell = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').slice(0, 160);
 function markdown() {
   const L = [`# 👶 쉬운 모드 화면 점검 (kid-audit)`, '', `- 파일: \`${cell(path.relative(ROOT, file) || file)}\``, `- 모드: ${normal ? '보통 모드' : '쉬운 모드'} · ${report.startedAt}`, ''];

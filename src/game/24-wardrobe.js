@@ -418,6 +418,14 @@
     if (v === 'face') { pv.setView('face'); pv.yaw = 0; } else { pv.setView('full'); if (yaw != null) pv.yaw = yaw; }
     pv._idle = -1e9; // hold the chosen side (a drag lets it sway again)
   }
+  // [fit] §19.12 one 🔄 button turns the figure through the sides (front → left → back → right [→ face]); the CSS shows it
+  // instead of the row of view buttons when the window is short or narrow, so the figure keeps its room
+  function turnButton(ctx, views, list) {
+    let i = 0;
+    return h('button', { type: 'button', class: 'wd-turn', 'data-say': '돌려 봐요.', 'aria-label': '돌려 보기', title: '돌려 보기',
+      onclick: () => { i = (i + 1) % list.length; setView(ctx.pv, list[i]); for (const b of views.children) b.classList.toggle('on', b.dataset.view === list[i]); } },
+    h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🔄'), h('span', { class: 'wd-turn-l' }, '돌려 보기'));
+  }
 
   const sys = {
     name: 'wardrobe', order: 52, label: '옷장',
@@ -593,7 +601,7 @@
               h('span', { class: 'emoji', 'aria-hidden': 'true' }, t.emoji), h('span', null, t.label)));
           }
           body.appendChild(h('div', { class: 'wd' },
-            h('div', { class: 'wd-figure' }, stage, views, card),
+            h('div', { class: 'wd-figure' }, stage, views, turnButton(ctx, views, ['front', 'left', 'back', 'right', 'face']), card), // [fit] + 🔄
             h('div', { class: 'wd-main' }, tabs, h('div', { class: 'wd-panel', role: 'tabpanel' }))));
           ctx.stage = stage;
         },
@@ -609,6 +617,7 @@
       ctx.pv = makeStage(ctx.stage, this.look(), ctx);
       this._render();
       G.log.info('WARDROBE', `open ${this._tab}${kid ? ' (easy)' : ''}`);
+      if (!kid) setTimeout(() => { if (!m.closed && !m.el.contains(document.activeElement)) m.el.querySelector('.wd-tab.active, .wd-tab')?.focus({ preventScroll: true }); }, 40); // [fit] keyboard focus into the window (grown-up mode: a child's tap shows no ring)
       return m;
     },
     _redraw() {
@@ -936,17 +945,18 @@
           const stage = h('div', { class: 'wd-stage' });
           const views = h('div', { class: 'wd-views' });
           for (const [v, e, l] of [['front', '🧍', '앞'], ['left', '⬅️', '왼쪽'], ['back', '🔙', '뒤'], ['right', '➡️', '오른쪽']]) {
-            views.appendChild(h('button', { type: 'button', class: 'wd-view', 'data-say': `${l}에서 봐요.`, 'aria-label': `${l}에서 보기`, onclick: () => setView(ctx.pv, v) }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e), h('span', null, l)));
+            views.appendChild(h('button', { type: 'button', class: 'wd-view', dataset: { view: v }, 'data-say': `${l}에서 봐요.`, 'aria-label': `${l}에서 보기`, onclick: () => setView(ctx.pv, v) }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e), h('span', null, l))); // [fit] data-view for 🔄
           }
           const seg = h('div', { class: 'wd-seg', role: 'tablist' });
           for (const [id, e, l, s] of [['buy', '🛍️', '사기', '옷을 사요.'], ['sell', '💰', '팔기', '옷을 팔아요. 반값을 받아요.']]) {
             seg.appendChild(h('button', { type: 'button', role: 'tab', class: 'wd-segb', dataset: { tab: id }, 'data-say': s, onclick: () => { st.tab = id; st.pick = null; ctx.pv?.setAppearance(this.look()); this._renderShop(); } }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, e), h('span', null, l)));
           }
           body.appendChild(h('div', { class: 'wd' },
-            h('div', { class: 'wd-figure' }, stage, views, h('div', { class: 'wd-try' })),
+            h('div', { class: 'wd-figure' }, stage, views, turnButton(ctx, views, ['front', 'left', 'back', 'right']), h('div', { class: 'wd-try' })), // [fit] + 🔄
             h('div', { class: 'wd-main' },
-              h('div', { class: 'wd-shopbar' }, h('span', { class: 'wd-clerk emoji', 'aria-hidden': 'true' }, '🧑‍💼'), h('p', { class: 'wd-bubble' }, kid ? '어서 와요! 옷을 눌러 입어 봐요.' : '어서 오세요. 옷을 고르면 먼저 입어 볼 수 있어요.'), h('span', { class: 'wd-coin' })),
-              seg, h('div', { class: 'wd-shelves', role: 'tablist', 'aria-label': '옷 칸' }), h('div', { class: 'wd-panel' }), h('div', { class: 'wd-detail' }))));
+              h('div', { class: 'wd-shopbar' }, h('span', { class: 'wd-clerk emoji', 'aria-hidden': 'true' }, '🧑‍💼'), h('p', { class: 'wd-bubble' }, kid ? '어서 와요! 옷을 눌러 입어 봐요.' : '어서 오세요. 옷을 고르면 먼저 입어 볼 수 있어요.')),
+              // [fit] 사기 / 팔기, the shelves and the coins share one row (the shelves scroll sideways on a short screen)
+              h('div', { class: 'wd-row' }, seg, h('div', { class: 'wd-shelves', role: 'tablist', 'aria-label': '옷 칸' }), h('span', { class: 'wd-coin' })), h('div', { class: 'wd-panel' }), h('div', { class: 'wd-detail' }))));
           ctx.stage = stage;
         },
         actions: kid ? [{ label: '✅ 다 봤어요', class: 'btn-primary' }] : [
@@ -960,6 +970,7 @@
       ctx.pv = makeStage(ctx.stage, this.look(), ctx);
       this._renderShop();
       G.activity?.('shop', `${shop.name} 방문`);
+      if (!kid) setTimeout(() => { if (!m.closed && !m.el.contains(document.activeElement)) m.el.querySelector('.wd-segb.active, .wd-segb')?.focus({ preventScroll: true }); }, 40); // [fit] keyboard focus into the window (grown-up mode: a child's tap shows no ring)
       G.log.info('WARDROBE', `shop open ${shopId}${kid ? ' (easy)' : ''}`);
       return m;
     },
@@ -968,7 +979,7 @@
       if (!m || m.closed || !st || !G.state) return;
       const ctx = m._ctx, kid = easyOn(), shop = D.shops[st.id], w = this.w(), app = this.look();
       ctx.q.length = 0;
-      m.body.querySelector('.wd-shopbar .wd-coin').textContent = `🪙 ${fmt(coins())}`;
+      m.body.querySelector('.wd-row .wd-coin').textContent = `🪙 ${fmt(coins())}`; // [fit] the coins sit in the 사기 / 팔기 row
       for (const b of m.body.querySelectorAll('.wd-segb')) { const on = b.dataset.tab === st.tab; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); }
       const sh = m.body.querySelector('.wd-shelves');
       sh.innerHTML = '';
@@ -1008,7 +1019,9 @@
       const iid = st.pick, it = D.items[iid], { key, id } = W.parse(iid), owned = this.owns(iid), r = RARITY[it.rarity] || RARITY.common;
       const worn = this.look()[key] === id;
       tryEl.append(h('span', null, `입어 보는 중: ${it.name}`), h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-say': '원래 옷으로 봐요.', onclick: () => { st.pick = null; m._ctx.pv?.setAppearance(this.look()); this._renderShop(); } }, '↩️ 원래대로'));
-      el.append(h('div', { class: 'wd-dhead' }, h('b', null, it.name), r[1] && it.rarity !== 'common' ? h('span', { class: 'chip chip-gold' }, `${r[0]} ${r[1]}`) : null, h('span', { class: 'wd-dslot' }, slotOf(key).name)),
+      el.classList.toggle('more', !!st.more); // [fit] §19.12 on a short screen the story folds behind … so the button stays whole
+      el.append(h('div', { class: 'wd-dhead' }, h('b', null, it.name), r[1] && it.rarity !== 'common' ? h('span', { class: 'chip chip-gold' }, `${r[0]} ${r[1]}`) : null, h('span', { class: 'wd-dslot' }, slotOf(key).name),
+        it.desc ? h('button', { type: 'button', class: 'wd-more', 'aria-expanded': st.more ? 'true' : 'false', 'aria-label': st.more ? '이야기 접기' : '이야기 더 보기', 'data-say': it.desc, onclick: () => { st.more = !st.more; this._renderDetail(el, tryEl); } }, st.more ? '▴' : '…') : null),
         it.desc ? h('p', { class: 'wd-about' }, it.desc) : '');
       const acts = h('div', { class: 'wd-acts' });
       if (st.tab === 'buy') {

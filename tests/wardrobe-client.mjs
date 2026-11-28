@@ -150,7 +150,9 @@ async function fitMeasure(page, which) {
       if (!shown(el)) return { ok: false, why: 'hidden' };
       const r = el.getBoundingClientRect(), c = clip(el);
       const inside = r.left >= Math.max(c.L, box.L) - 1 && r.top >= Math.max(c.T, box.T) - 1 && r.right <= Math.min(c.R, box.R) + 1 && r.bottom <= Math.min(c.B, box.B) + 1;
-      const pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 6, r.top + 6], [r.right - 6, r.top + 6], [r.left + 6, r.bottom - 6], [r.right - 6, r.bottom - 6]];
+      // 6 px inside each corner — deeper on a rounded corner (a pill's corner is not part of it: the browser's hit test follows the curve)
+      const rad = Math.min(parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0, r.width / 2, r.height / 2), d = Math.max(6, Math.ceil(rad * 0.3) + 1);
+      const pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + d, r.top + d], [r.right - d, r.top + d], [r.left + d, r.bottom - d], [r.right - d, r.bottom - d]];
       const miss = pts.filter(([x, y]) => { const e = document.elementFromPoint(x, y); return !e || !(e === el || el.contains(e)); }).map(([x, y]) => { const e = document.elementFromPoint(x, y); return `${Math.round(x)},${Math.round(y)}→${e ? (e.className && typeof e.className === 'string' ? e.className.split(' ')[0] : e.tagName) : 'none'}`; });
       return { ok: inside && !miss.length, inside, r: R(r), miss };
     };

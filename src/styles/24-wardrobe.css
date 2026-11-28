@@ -1,9 +1,13 @@
 /* ================================================================== 옷장 · 한복집 (24-wardrobe.js, CONTRACT §19.1) */
-.wd-modal .modal-body { padding-bottom: .6rem; }
-.wd { display: grid; grid-template-columns: minmax(15rem, 2fr) minmax(0, 3fr); gap: 1.1rem; height: min(68vh, 42rem); }
-.wd-figure { display: flex; flex-direction: column; gap: .5rem; min-height: 0; }
+/* [fit] §19.12 the window takes the room the backdrop leaves (no fixed share of the viewport): its body is the one flex
+   box between head and foot (min-height 0), the two columns fill it, the right column scrolls inside its panel and the
+   action card stays whole at its foot */
+#modal-root .wd-modal { height: min(100%, 54rem); } /* the max-height of the shared .modal (86 vh / 94 vh, the backdrop) still caps it */
+.wd-modal .modal-body { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: .6rem; }
+.wd { display: grid; grid-template-columns: minmax(15rem, 2fr) minmax(0, 3fr); grid-template-rows: minmax(0, 1fr); gap: 1.1rem; flex: 1 1 auto; min-height: 0; }
+.wd-figure { display: flex; flex-direction: column; gap: .5rem; min-height: 0; min-width: 0; }
 .wd-stage {
-  position: relative; flex: 1; min-height: 12rem; border-radius: 18px; overflow: hidden;
+  position: relative; flex: 1; min-height: 7rem; border-radius: 18px; overflow: hidden;
   background:
     radial-gradient(70% 55% at 50% 74%, rgba(244, 197, 74, .2), rgba(244, 197, 74, 0) 70%),
     linear-gradient(180deg, #e9dcc0 0%, #d8c6a0 62%, #bfa67a 100%);
@@ -20,12 +24,12 @@
 .wd-nick { font-size: 1rem; color: var(--text); }
 .wd-title { color: #ffe7a6; font-weight: 700; }
 .wd-coin { margin-left: auto; font-weight: 800; color: var(--gold); }
-.wd-main { display: flex; flex-direction: column; gap: .55rem; min-height: 0; }
+.wd-main { display: flex; flex-direction: column; gap: .55rem; min-height: 0; min-width: 0; }
 .wd-tabs, .wd-seg, .wd-shelves { display: flex; flex-wrap: wrap; gap: .35rem; }
 .wd-tab, .wd-segb, .wd-shelf { display: inline-flex; align-items: center; gap: .3rem; min-height: 2.4rem; padding: .35rem .8rem; border-radius: 12px; background: rgba(255, 255, 255, .07); border: 1px solid var(--line); font-weight: 700; font-size: .86rem; color: var(--text-dim); transition: background .15s, color .15s, border-color .15s; }
 .wd-tab.active, .wd-segb.active, .wd-shelf.active { background: rgba(46, 63, 110, .55); border-color: rgba(120, 150, 230, .7); color: #fff; box-shadow: inset 0 -3px 0 #d9534f; }
 .wd-shelf { min-height: 2.1rem; font-size: .8rem; padding: .25rem .65rem; border-radius: 999px; }
-.wd-panel { flex: 1; min-height: 0; overflow-y: auto; padding-right: .3rem; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .25) transparent; }
+.wd-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: .3rem; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .25) transparent; }
 .wd-hint { margin: .1rem 0 .55rem; font-size: .82rem; color: var(--text-mute); line-height: 1.5; }
 .wd-h { display: flex; align-items: baseline; gap: .2rem; margin: .8rem 0 .4rem; font-size: .9rem; color: #ffe7a6; }
 .wd-h small { color: var(--text-mute); font-weight: 600; font-size: .76rem; }
@@ -58,7 +62,7 @@
 .wd-sets { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
 .wd-set { display: flex; flex-direction: column; align-items: center; gap: .25rem; padding: .45rem; border-radius: 14px; background: rgba(243, 234, 214, .08); border: 1px solid var(--line); text-align: center; font-size: .84rem; }
 .wd-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: .35rem; margin-top: .35rem; }
-.wd-detail { padding: .6rem .75rem; border-radius: 14px; background: rgba(243, 234, 214, .1); border: 1px solid var(--line); }
+.wd-detail { flex: none; padding: .6rem .75rem; border-radius: 14px; background: rgba(243, 234, 214, .1); border: 1px solid var(--line); }
 .wd-dhead { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: 1rem; }
 .wd-dslot { color: var(--text-mute); font-size: .8rem; font-weight: 700; }
 .wd-about { margin: .35rem 0 0; font-size: .82rem; color: var(--text-dim); line-height: 1.55; }
@@ -75,13 +79,10 @@
 
 /* 쉬운 모드: picture tiles, big targets (≥ 56 px), letters of 16 px and more; the right column scrolls as one and the
    buy / sell card stays at its foot */
-body.easy .wd { height: min(58vh, 36rem); } /* the big easy header and footer: the sticky buy card stays whole on screen */
-body.easy .wd-main { overflow-y: auto; padding-right: .3rem; }
-body.easy .wd-panel { flex: none; overflow: visible; }
-body.easy .wd-detail { position: sticky; bottom: 0; z-index: 1; background: #1d2a22; box-shadow: 0 -8px 18px rgba(0, 0, 0, .35); }
+body.easy .wd-detail { background: #1d2a22; box-shadow: 0 -8px 18px rgba(0, 0, 0, .35); } /* [fit] pinned at the column's foot (the panel scrolls) */
 body.easy .wd-tab, body.easy .wd-segb { min-height: 60px; padding: 6px 16px; font-size: 17px; border-radius: 16px; }
 body.easy .wd-tab .emoji, body.easy .wd-segb .emoji { font-size: 24px; }
-body.easy .wd-shelf, body.easy .wd-view, body.easy .wd-chip { min-height: 58px; min-width: 58px; font-size: 16px; padding: 6px 14px; }
+body.easy .wd-shelf, body.easy .wd-view, body.easy .wd-chip, body.easy .wd-turn, body.easy .wd-more { min-height: 58px; min-width: 58px; font-size: 16px; padding: 6px 14px; }
 body.easy .wd-grid { grid-template-columns: repeat(auto-fill, minmax(134px, 1fr)); gap: 10px; }
 body.easy .wd-tile { min-height: 128px; border-radius: 18px; border-width: 2px; }
 body.easy .wd-tl { font-size: 17px; }
@@ -92,16 +93,84 @@ body.easy .wd-sw { width: 58px; height: 58px; }
 body.easy .wd-acts .btn, body.easy .wd-bar .btn, body.easy .wd-detail .btn, body.easy .wd-try .btn, body.easy .wd-make { min-height: 58px; font-size: 17px; padding: 6px 16px; }
 body.easy .wd-hint { font-size: 16px; color: var(--text-dim); }
 
-@media (max-width: 900px) {
-  .wd { grid-template-columns: 1fr; height: auto; }
-  .wd-stage { flex: none; height: 34vh; min-height: 12rem; }
-  .wd-panel { max-height: none; overflow: visible; }
+/* [fit] §19.12 the window on short and narrow screens ---------------------------------------------------------------
+   The 사기 / 팔기 row (+ shelves + coins), the detail card (name and button in one row, the story below), the 🔄 turn
+   button and the … of the story. Tall screens keep the five view buttons, the clerk's bubble and the whole story. */
+.wd-row { display: flex; align-items: center; gap: .35rem .5rem; min-width: 0; }
+.wd-row .wd-seg { flex: none; flex-wrap: nowrap; }
+.wd-row .wd-shelves { flex: 1 1 12rem; min-width: 0; }
+.wd-row .wd-coin { flex: none; }
+.wd-detail { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .35rem .6rem; max-height: 45%; overflow-y: auto; overscroll-behavior: contain; }
+.wd-detail .wd-dhead { grid-column: 1; grid-row: 1; min-width: 0; }
+.wd-detail .wd-acts { grid-column: 2; grid-row: 1; margin-top: 0; }
+.wd-detail .wd-about { grid-column: 1 / -1; grid-row: 2; margin: 0; }
+.wd-detail > .wd-hint { grid-column: 1 / -1; margin: 0; }
+.wd-turn, .wd-more { display: none; align-items: center; justify-content: center; gap: .3rem; min-height: 2.2rem; min-width: 2.2rem; padding: .3rem .6rem; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid var(--line); font-weight: 800; color: var(--text-dim); transition: background .15s, color .15s; }
+.wd-turn:hover, .wd-more:hover, .wd-more[aria-expanded="true"] { background: rgba(244, 197, 74, .2); color: #ffe7a6; border-color: rgba(244, 197, 74, .55); }
+.wd-turn .emoji { font-size: 1.25rem; }
+.wd-more { margin-left: auto; font-size: 1.05rem; line-height: 1; }
+
+/* short (a laptop, a tablet or a phone held sideways) or a phone held upright: one row for the tabs and the shelves
+   (they scroll sideways, the open tab keeps its word, the others show their picture), 🔄 instead of five view buttons,
+   the story behind …, no clerk's bubble; in easy mode the footer goes (its ✅ is the ⬅️ 닫기 of the header) */
+@media (max-height: 860px), (orientation: portrait) and (max-width: 900px) {
+  .wd-views { display: none; }
+  .wd-turn, .wd-more { display: inline-flex; }
+  .wd-tab:not(.active) > span:not(.emoji), .wd-segb:not(.active) > span:not(.emoji), .wd-turn-l {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .wd-tabs, .wd-shelves { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .wd-tabs::-webkit-scrollbar, .wd-shelves::-webkit-scrollbar { display: none; }
+  .wd-tab, .wd-shelf, .wd-segb { flex: none; }
+  .wd-tab:not(.active), .wd-segb:not(.active) { justify-content: center; padding-left: .55rem; padding-right: .55rem; }
+  .wd-shopbar { display: none; }
+  .wd-detail { max-height: 34%; padding: .4rem .6rem; }
+  .wd-detail .wd-about { display: none; }
+  .wd-detail.more .wd-about { display: block; }
+  .wd-detail .wd-dhead { flex-wrap: nowrap; }
+  .wd-detail .wd-dhead > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wd-detail .wd-dslot, .wd-detail .chip { flex: none; }
+  .wd-detail .wd-dslot { display: none; } /* the open shelf already names the slot */
+  .wd-figure { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; align-items: center; gap: .45rem; }
+  .wd-stage { grid-column: 1 / -1; grid-row: 1; align-self: stretch; }
+  .wd-turn { grid-column: 1; grid-row: 2; }
+  .wd-try, .wd-card { grid-column: 2; grid-row: 2; min-width: 0; }
+  .wd-try { justify-content: flex-end; padding: 0; background: none; border: 0; }
+  .wd-try > span { display: none; }
+  .wd-card { padding: .3rem .55rem; }
+  body.easy .wd-modal .modal-foot { display: none; }
 }
-@media (max-width: 520px) {
-  .wd-stage { height: 28vh; }
-  .wd-shelves, .wd-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-  .wd-shelf, .wd-tab { flex: none; }
-  .wd-grid { grid-template-columns: repeat(auto-fill, minmax(6.4rem, 1fr)); }
+/* a short screen: the window's own margins shrink; the 옷장 card (name, coins) folds away under 600 px */
+@media (max-height: 600px) and (orientation: landscape) {
+  .wd-modal .modal-body { padding-top: .5rem; padding-bottom: .5rem; }
+  .wd { gap: .75rem; grid-template-columns: minmax(10rem, 2fr) minmax(0, 3fr); }
+  .wd-card { display: none; }
+  .wd-hint { margin-bottom: .35rem; }
+  .wd-bar { margin-bottom: .35rem; }
+}
+/* very short (a phone held sideways): a small figure beside the column */
+@media (max-height: 480px) and (orientation: landscape) {
+  body.easy .wd-modal .modal-head { padding-top: .3rem; padding-bottom: .3rem; }
+  .wd { grid-template-columns: minmax(9rem, 2fr) minmax(0, 3.4fr); gap: .6rem; }
+  .wd-main { gap: .4rem; }
+  .wd-detail .chip { display: none; }
+}
+/* very short, or a phone held upright: tiles become rows (picture left, words right), so a whole one shows with the button */
+@media (max-height: 480px) and (orientation: landscape), (orientation: portrait) and (max-width: 900px) {
+  .wd-grid { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .4rem; }
+  body.easy .wd-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .wd-tile { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr 1fr; align-items: center; justify-items: start; column-gap: .45rem; row-gap: 0; padding: .3rem .45rem; text-align: left; }
+  .wd-tile > .wd-thumb, .wd-tile > .wd-emo { grid-row: 1 / 3; width: 3.2rem; }
+  .wd-tile > .wd-tl { align-self: end; }
+  .wd-tile > .wd-ts { align-self: start; }
+  body.easy .wd-tile { min-height: 72px; padding: 6px 8px; }
+  body.easy .wd-tile > .wd-thumb { width: 60px; }
+  .wd-faces .wd-tile { min-height: 56px; }
+}
+/* a phone held upright: one column, the figure on top at a fixed share, the column below fills the rest */
+@media (orientation: portrait) and (max-width: 900px) {
+  .wd { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: .7rem; }
+  .wd-stage { height: 22vh; min-height: 8rem; }
   body.easy .wd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) {

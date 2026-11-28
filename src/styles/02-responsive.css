@@ -149,6 +149,13 @@ body.easy.modal-open .modal-backdrop { padding-top: max(7rem, calc(env(safe-area
 @media (max-height: 520px) {
   body.easy.modal-open .modal-backdrop { padding-top: max(6.7rem, calc(env(safe-area-inset-top, 0px) + 6.2rem)); }
 }
+/* [fit] §19.12 a phone held sideways (≤ 420 px tall): the toast lane above an easy dialog would take a quarter of the
+   screen and leave the dialog no room for its button — the dialog takes the full height, and a toast of that moment
+   sits in the top-right corner (over the dialog's 🔊 for a few seconds, never over its ⬅️ 닫기 at the top-left) */
+@media (max-height: 420px) {
+  body.easy.modal-open .modal-backdrop { padding-top: max(var(--bd-pad), env(safe-area-inset-top, 0px)); }
+  body.easy.modal-open .toast-root { left: auto; right: max(.5rem, env(safe-area-inset-right, 0px)); transform: none; width: min(46vw, 22rem); align-items: flex-end; }
+}
 
 /* Phones (portrait): stack bottom bar → joystick/buttons → menu/chat so nothing overlaps. */
 @media (max-width: 560px) {
