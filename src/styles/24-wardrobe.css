@@ -97,7 +97,9 @@ body.easy .wd-hint { font-size: 16px; color: var(--text-dim); }
   .wd-panel { max-height: none; overflow: visible; }
 }
 @media (max-width: 520px) {
-  .wd-stage { height: 30vh; }
+  .wd-stage { height: 28vh; }
+  .wd-shelves, .wd-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .wd-shelf, .wd-tab { flex: none; }
   .wd-grid { grid-template-columns: repeat(auto-fill, minmax(6.4rem, 1fr)); }
   body.easy .wd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
