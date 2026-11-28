@@ -1803,7 +1803,17 @@ async function main() {
           const s2 = await admF(c, ADM, { action: 'ai_ask', tab: 'ai', prompt: '오늘 할 일을 알려 줘' }, { page: '?tab=ai' });
           assert(flashOf(s2.text)?.type === 'ok' && /<div class="aianswer"/.test(s2.text), `ask: ${flashOf(s2.text)?.msg}`);
           assert(Number(dbVal(r2, "SELECT COUNT(*) FROM ai_usage WHERE scope = 'admin'")) >= 2, 'ai_usage rows (scope admin)');
-          return 'real Tfm\\Claude in mock mode: summary + ask answered';
+          // [ai] lib/AdminAi.php: the usage card against the caps and 🧪 연결 시험 (POST + CSRF + audit ai_selftest + 303), no prompt text in the audit
+          if (fs.existsSync(path.join(r2.site, 'lib/AdminAi.php'))) {
+            const card = await c.req(`${ADM}?tab=ai`);
+            assert(/📈 오늘 쓴 양과 하루 한도/.test(card.text) && /<meter /.test(card.text) && /value="ai_selftest"/.test(card.text), 'the usage card and the self-test button');
+            const t1 = await admF(c, ADM, { action: 'ai_selftest', tab: 'ai' }, { page: '?tab=ai' });
+            assert(flashOf(t1.text)?.type === 'ok' && /연결 시험: ✅ mock/.test(flashOf(t1.text)?.msg || ''), `self-test: ${flashOf(t1.text)?.msg}`);
+            assert(/잘 연결됐어요/.test(t1.text) && /x-api-key: \*\*\*/.test(t1.text) && /anthropic-version: 2026-10-21/.test(t1.text), 'the result and the request as sent (key ***) on the page');
+            const au = dbAll(r2, "SELECT * FROM audit_log WHERE event = 'ai_selftest' ORDER BY id DESC LIMIT 1")[0];
+            assert(au && Number(au.actor_id) === A2.id && /"model":"mock"/.test(au.detail) && !/OK 라고만/.test(au.detail), `audit ai_selftest ${au && au.detail}`);
+          }
+          return 'real Tfm\\Claude in mock mode: summary + ask answered' + (fs.existsSync(path.join(r2.site, 'lib/AdminAi.php')) ? ' · usage card + 🧪 self-test (audit ai_selftest)' : '');
         } finally { await sv4.stop(); }
       });
     } finally { await sv.stop(); }

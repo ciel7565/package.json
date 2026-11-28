@@ -482,6 +482,7 @@ function handlePost(Ctx $c)
             case 'ai_kid': $msg = doAiKid($admin); break;
             case 'ai_summary': $msg = doAiSummary($c); break;
             case 'ai_ask': $msg = doAiAsk($c); break;
+            case 'ai_selftest': if (!aiExtraReady()) throw new ApiException(503, 'NOT_READY', '🧪 연결 시험이 아직 준비 중이에요.'); $msg = Tfm\AdminAi::selfTest($c); break; // [ai] lib/AdminAi.php
             case 'ip_block': $msg = doIpBlock($c); break;
             case 'ip_unblock': $msg = doIpUnblock($c); break;
             case 'twofa_disable': $msg = doDisable($c); break;
@@ -1729,6 +1730,18 @@ function viewMaintenance(): string
 }
 
 // ------------------------------------------------------------------ 🤖 AI 도우미 (CONTRACT §15.6 admin part, workflow interface 5)
+/** [ai] lib/AdminAi.php (the usage card and 🧪 연결 시험 of this tab) is loaded on first use */
+function aiExtraReady(): bool
+{
+    static $ok = null;
+    if ($ok === null) {
+        $f = __DIR__ . '/../lib/AdminAi.php';
+        $ok = is_file($f) && class_exists('Tfm\Claude');
+        if ($ok) { require_once $f; $ok = class_exists('Tfm\AdminAi', false); }
+    }
+    return $ok;
+}
+
 /** the latest admin AI answer of this session (shown for 30 minutes): {kind summary | ask, text, prompt, model, stop, usage, at} */
 function aiAnswer(): ?array
 {
@@ -1819,13 +1832,14 @@ function viewAi(): string
         . '<dt>사용</dt><dd>' . ($enabled ? '✅ 켜짐' : '⏸️ 꺼져 있어요') . '</dd>'
         . '<dt>모델</dt><dd><code>' . e((string) Config::get('anthropic.model', '')) . '</code></dd>'
         . '<dt>생각하는 정도(effort)</dt><dd>' . e((string) Config::get('anthropic.effort', 'low')) . ' <span class="dim small">(low 는 짧은 질문·답에 알맞아요)</span></dd>'
-        . '<dt>하루 한도</dt><dd>한 계정 ' . e(num(Config::get('anthropic.daily_user', 20))) . '번 · 서버 전체 ' . e(num(Config::get('anthropic.daily_total', 2000))) . '번</dd>'
+        . '<dt>하루 한도</dt><dd>한 계정 ' . e(num(method_exists('Tfm\Claude', 'capUser') ? Claude::capUser() : Config::get('anthropic.daily_user', 20))) . '번 · 서버 전체 ' . e(num(method_exists('Tfm\Claude', 'capTotal') ? Claude::capTotal() : Config::get('anthropic.daily_total', 2000))) . '번</dd>' // [ai] the values ⚙️ 설정 may have changed
         . '<dt>오늘 쓰임</dt><dd>' . ($by ? e(implode(' · ', array_map(function ($k, $v) use ($scopeKo) { return (isset($scopeKo[$k]) ? $scopeKo[$k] : $k) . ' ' . (int) $v . '번'; }, array_keys($by), array_values($by)))) : '-') . '</dd>'
         . '</dl></section>';
     // the kid helper switch (Settings ai.kid_helper; Settings::set audits setting_changed)
     $h .= '<section class="card"><h3>🧒 아이용 "옹이 선생님" ' . ($kid ? '<span class="badge ok">켜짐</span>' : '<span class="badge">꺼짐</span>') . '</h3>'
         . '<p class="dim small">켜면 체험관의 옹이 메뉴에 "🤖 옹이 선생님에게 물어보기"가 열려요. 아이 질문은 개인정보를 가리고 나쁜 말을 거른 뒤에만 AI에게 가고, 답도 다시 걸러서 짧게 보여 줘요. 한 계정이 하루에 물을 수 있는 수가 정해져 있어요. 쉬운 모드에서는 준비된 질문 버튼만 보여요.</p>'
         . '<div class="row">' . ($kid ? actionForm('ai_kid', '⏸️ 옹이 선생님 끄기', ['on' => '0'], 'btn ghost', 'ai') : actionForm('ai_kid', '🧒 옹이 선생님 켜기', ['on' => '1'], 'btn primary', 'ai')) . '</div></section>';
+    if (aiExtraReady()) $h .= Tfm\AdminAi::card(Session::csrf()); // [ai] today's use against the caps · the cost estimate · 🧪 연결 시험 (lib/AdminAi.php)
     $a = aiAnswer();
     if (!$enabled) {
         return $h . '<section class="card"><h3>📝 오늘 요약 · 💬 자유 질문</h3><p class="notice">AI 도우미가 꺼져 있어서 쓸 수 없어요. 키를 넣거나(운영) 모의 모드(TFM_AI_MOCK=1, 시험·시연)를 켜면 이곳과 ✅ 완료 확인의 🤖 메모 초안이 열려요.</p></section>';
