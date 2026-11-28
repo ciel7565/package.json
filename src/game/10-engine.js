@@ -2685,8 +2685,11 @@
       // (asynchronous) event: a first-use program would throw inside three
       if (!this.renderer || this._isLost()) return;
       // The opaque developer center hides the world (render ~1/6); a large blocking modal covers most of it (~1/3).
+      // [opt] any other open window dims the world behind its backdrop and holds the player still: every second frame
+      // (CONTRACT §19.4 idle cost — it was drawn at the full rate behind a small or medium window)
       const cover = opts?.force ? 1 : document.body.classList.contains('dc-open') ? 6
-        : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3 : 1;
+        : (G.ui?.modal?.isOpen?.() && document.querySelector('.modal.modal-lg, .modal.modal-xl')) ? 3
+        : G.ui?.modal?.isOpen?.() ? 2 : 1;
       this._thin = cover;   // (the dynamic resolution does not judge a thinned render)
       if (cover > 1) {
         this._skip = ((this._skip || 0) + 1) % cover;
