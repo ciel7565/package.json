@@ -141,7 +141,7 @@ const tapKey = (p, code, t, hold = 50) => { p.down(code, { ts: t }); p.up(code, 
   // the window option and the easy-mode default
   const q = mk({ easy: false }), e = mk({ easy: true });
   for (const [P, name] of [[q, 'normal'], [e, 'easy']]) { tapKey(P, 'KeyW', 100); P.down('KeyW', { ts: 440 }); P.frame(); P.name = name; }
-  check('window default: 300 ms in normal mode (a 340 gap fails), 360 ms in easy mode (it works)', q.I.running === false && e.I.running === true, `normal ${q.I.running} easy ${e.I.running}`);
+  check('window default: 300 ms in both modes (a 340 gap fails in each)', q.I.running === false && e.I.running === false, `normal ${q.I.running} easy ${e.I.running}`);
   const w = mk({ settings: { tapWindow: 450 } }); tapKey(w, 'KeyW', 100); w.down('KeyW', { ts: 520 }); w.frame();
   const n = mk({ settings: { tapWindow: 200 } }); tapKey(n, 'KeyW', 100); n.down('KeyW', { ts: 350 }); n.frame();
   check('window option 450 accepts a 420 gap, 200 refuses a 250 gap', w.I.running === true && n.I.running === false);
@@ -231,9 +231,9 @@ const tapKey = (p, code, t, hold = 50) => { p.down(code, { ts: t }); p.up(code, 
     && rows.find((d) => d.id === 'tapWindow').min === 200 && rows.find((d) => d.id === 'tapWindow').max === 450 && rows.filter((d) => d.type === 'toggle').every((d) => typeof d.default === 'boolean'));
   check('registry: every row has a Korean label and a hint of what it does', rows.every((d) => /[가-힣]/.test(d.label) && (d.type === 'info' || /[가-힣]/.test(d.hint))));
   const c = p.I.comfort();
-  check('comfort(): normal defaults — window 300, buffer 120, coyote 100, every convenience on, always-run off', c.tapMs === 300 && c.jumpBufMs === 120 && c.coyoteMs === 100 && c.tapRun && c.dash && c.wallSlide && c.stepAround && c.lowFences && !c.alwaysRun, J(c));
+  check('comfort(): normal defaults — window 300, buffer 150 (the old pace), coyote 100, every convenience on, always-run off', c.tapMs === 300 && c.jumpBufMs === 150 && c.coyoteMs === 100 && c.tapRun && c.dash && c.wallSlide && c.stepAround && c.lowFences && !c.alwaysRun, J(c));
   const e = mk({ easy: true }).I.comfort();
-  check('comfort(): easy defaults — window 360, buffer 180, coyote 150 (the gentle side), always-run still off', e.tapMs === 360 && e.jumpBufMs === 180 && e.coyoteMs === 150 && !e.alwaysRun, J(e));
+  check('comfort(): easy mode has the same numbers (the registry writes its defaults into both modes), always-run off', e.tapMs === 300 && e.jumpBufMs === 150 && e.coyoteMs === 100 && !e.alwaysRun, J(e));
   const o = mk({ easy: false, settings: { tapWindow: 9999, jumpBuffer: -5, coyoteMs: 'x', tapRun: 'yes' } }).I.comfort();
   check('comfort(): out-of-range numbers are clamped, junk falls back to the default', o.tapMs === 450 && o.jumpBufMs === 0 && o.coyoteMs === 100 && o.tapRun === true, J(o));
 }

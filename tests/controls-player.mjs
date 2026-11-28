@@ -142,9 +142,9 @@ function dashOnce(dir, opts = {}, fps = 60, seconds = 1) {
     h.run(1, 120, (i, t) => { if (!pressed && t >= tLand - before - 1e-6) { pressed = true; h.I.queueJump(); } });
     return h.ev('player:jump').length > 0;
   };
-  check('jump buffer: a press 90 ms before landing jumps on landing (normal mode, 120 ms)', buffered({ easy: false }, 0.09) === true);
+  check('jump buffer: a press 90 ms (and 140 ms) before landing jumps on landing (default 150 ms)', buffered({ easy: false }, 0.09) === true && buffered({ easy: false }, 0.14) === true);
   check('… a press 200 ms before landing does not', buffered({ easy: false }, 0.2) === false);
-  check('… easy mode (180 ms): 160 ms before counts, 260 ms does not', buffered({ easy: true }, 0.16) === true && buffered({ easy: true }, 0.26) === false);
+  check('… easy mode has the same: 140 ms before counts, 260 ms does not', buffered({ easy: true }, 0.14) === true && buffered({ easy: true }, 0.26) === false);
   check('… the option: 0 ms = no buffer (a press 50 ms before does nothing), 200 ms = a press 190 ms before counts', buffered({ easy: false, settings: { jumpBuffer: 0 } }, 0.05) === false && buffered({ easy: false, settings: { jumpBuffer: 200 } }, 0.19) === true);
   const coyote = (opts, after) => {
     const h = loadPlayer(opts); h.place(0, 0); h.run(0.05, 60);     // a grounded frame sets the coyote time
@@ -153,7 +153,7 @@ function dashOnce(dir, opts = {}, fps = 60, seconds = 1) {
     return h.ev('player:jump').length > 0;
   };
   check('coyote time: 70 ms after walking off an edge a jump still works (100 ms, normal)', coyote({ easy: false }, 0.07) === true);
-  check('… 150 ms after it does not; easy mode (150 ms) still allows 130 ms', coyote({ easy: false }, 0.15) === false && coyote({ easy: true }, 0.13) === true);
+  check('… 150 ms after it does not (easy mode the same); a longer option (200 ms) still allows 170 ms', coyote({ easy: false }, 0.15) === false && coyote({ easy: true }, 0.15) === false && coyote({ easy: false, settings: { coyoteMs: 200 } }, 0.17) === true);
   check('… the option: 0 ms = none (a press 20 ms after the edge does nothing)', coyote({ easy: false, settings: { coyoteMs: 0 } }, 0.02) === false);
   const g = loadPlayer({ easy: false, settings: { jumpBuffer: 0, coyoteMs: 0 } }); g.place(0, 0); g.I.queueJump(); g.run(0.2, 60);
   check('with both at 0 a jump from the ground still works', g.ev('player:jump').length === 1);

@@ -17,7 +17,7 @@
 //
 //   node tests/controls-client.mjs                       builds a private page (--no-assets) in a temp directory
 //   node tests/controls-client.mjs --file /abs/page.html test an already built page
-//   options: --json · --headed · --timeout <ms> · --skip-phone · --only <a,b> (groups: pace, jump, walkto, look, keys,
+//   options: --json · --headed · --timeout <ms> · --skip-phone · --set <k=v,…> · --only <a,b> (groups: pace, jump, walkto, look, keys,
 //            zoom, settings, dash, phone)
 //   Run it through the shared browser lock (at most two browsers on the build machine).
 // Exit 0 = all passed, 1 = a check failed, 2 = could not run.
@@ -43,6 +43,7 @@ const opt = (n, d = null) => { const i = args.indexOf(n); return i >= 0 && i + 1
 const TIMEOUT = Number(opt('--timeout', '300000'));
 const jsonOut = flag('--json');
 const only = (opt('--only', '') || '').split(',').filter(Boolean);
+const presets = (opt('--set', '') || '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v]);   // --set a=1,b=false: settings applied after the page is up (to tell which option changes a result)
 const want = (g) => !only.length || only.includes(g);
 const log = (...a) => { if (!jsonOut) console.log(...a); };
 
@@ -72,6 +73,7 @@ async function boot(page, extra = '') {
   await page.goto(`${pathToFileURL(file).href}?autostart=1&notutorial=1&quality=low${extra}`, { waitUntil: 'load', timeout: TIMEOUT });
   await page.waitForFunction(() => window.G && window.G.ready === true && !!window.G.state && !!window.G.sys?.player?._ready, null, { timeout: TIMEOUT, polling: 250 });
   await page.evaluate(() => { try { G.ui.modal.closeAll(); } catch (e) { /* nothing open */ } });
+  if (presets.length) await page.evaluate((kv) => { for (const [k, v] of kv) G.setSetting(k, v); }, presets);
 }
 
 /** in-page helpers (installed once per page) */

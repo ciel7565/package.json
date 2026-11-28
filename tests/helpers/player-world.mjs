@@ -45,13 +45,13 @@ export function loadPlayer(opts = {}) {
   vm.runInContext(SRC('06-world.js'), ctx, { filename: '06-world.js' });
   const W = G.world;
   W.setTerrain(opts.terrain || (() => 0));
-  vm.runInContext(SRC('21-player.js'), ctx, { filename: '21-player.js' });
+  vm.runInContext(opts.playerSrc || SRC('21-player.js'), ctx, { filename: '21-player.js' });   // (playerSrc: another version of the file, to compare behaviour)
   const P = G._registered;
   // the comfort options come from the real 05-input.js function when asked for (a Node vm with the fake DOM is too heavy here)
   const has = (k) => Object.prototype.hasOwnProperty.call(settings, k);
   const num = (k, d, dE) => (has(k) ? Number(settings[k]) : (settings.easyMode ? dE : d));
   const bool = (k, d, dE = d) => (has(k) ? !!settings[k] : (settings.easyMode ? dE : d));
-  I.comfort = () => ({ alwaysRun: bool('alwaysRun', false), tapRun: bool('tapRun', true), dash: bool('dashOn', true), tapMs: num('tapWindow', 300, 360), jumpBufMs: num('jumpBuffer', 120, 180), coyoteMs: num('coyoteMs', 100, 150), wallSlide: bool('wallSlide', true), stepAround: bool('stepAround', true), lowFences: bool('lowFences', true) });
+  I.comfort = () => ({ alwaysRun: bool('alwaysRun', false), tapRun: bool('tapRun', true), dash: bool('dashOn', true), tapMs: num('tapWindow', 300, 300), jumpBufMs: num('jumpBuffer', 150, 150), coyoteMs: num('coyoteMs', 100, 100), wallSlide: bool('wallSlide', true), stepAround: bool('stepAround', true), lowFences: bool('lowFences', true) });
   // a player standing at the origin, ready
   P.position = new V3(0, 0, 0);
   P.object = { rotation: { y: 0 }, visible: true };
@@ -59,7 +59,7 @@ export function loadPlayer(opts = {}) {
   P.nametag = { setVisible() {}, setHTML() {} };
   P._ready = true; P.grounded = true;
   P._writeState = () => {}; P._refreshTag = () => {};
-  P._bindMoveEvents();   // what init() does for the double tap's events
+  if (P._bindMoveEvents) P._bindMoveEvents();   // what init() does for the double tap's events
   const d = {
     G, W, P, I, camera, events, log, settings,
     /** put the player at (x, z) on the ground, standing still, facing yaw */

@@ -330,16 +330,16 @@
   for (const A of acts.values()) Object.defineProperty(bindings, A.id, { get: () => A.codes, enumerable: false });
 
   // ---------------------------------------------------------------- [move] double tap → run, dash (see the header)
-  /** the options of the 조작 tab that decide how moving feels (a value the player never set follows the mode: easy = gentler) */
+  /** the options of the 조작 tab that decide how moving feels (a value that is not in G.settings falls back to this table; easy mode may differ) */
   const hasSet = (k) => !!G.settings && Object.prototype.hasOwnProperty.call(G.settings, k);
   const easyMv = () => (G.easy ? !!G.easy.on : G.settings?.easyMode !== false);
   const numSet = (k, lo, hi, dNormal, dEasy) => { const v = hasSet(k) ? Number(G.settings[k]) : NaN; return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : (easyMv() ? dEasy : dNormal); };
   const boolSet = (k, dNormal, dEasy = dNormal) => (hasSet(k) && typeof G.settings[k] === 'boolean' ? G.settings[k] : (easyMv() ? dEasy : dNormal));
-  const _cf = { alwaysRun: false, tapRun: true, dash: true, tapMs: 300, jumpBufMs: 120, coyoteMs: 100, wallSlide: true, stepAround: true, lowFences: true };
+  const _cf = { alwaysRun: false, tapRun: true, dash: true, tapMs: 300, jumpBufMs: 150, coyoteMs: 100, wallSlide: true, stepAround: true, lowFences: true };
   function comfort() {
     const c = _cf;
     c.alwaysRun = boolSet('alwaysRun', false); c.tapRun = boolSet('tapRun', true); c.dash = boolSet('dashOn', true);
-    c.tapMs = numSet('tapWindow', 200, 450, 300, 360); c.jumpBufMs = numSet('jumpBuffer', 0, 200, 120, 180); c.coyoteMs = numSet('coyoteMs', 0, 200, 100, 150);
+    c.tapMs = numSet('tapWindow', 200, 450, 300, 300); c.jumpBufMs = numSet('jumpBuffer', 0, 200, 150, 150); c.coyoteMs = numSet('coyoteMs', 0, 200, 100, 100);
     c.wallSlide = boolSet('wallSlide', true); c.stepAround = boolSet('stepAround', true); c.lowFences = boolSet('lowFences', true);
     return c;
   }
@@ -510,18 +510,19 @@
   }
   // [move] the auto-forward key (a plain toggle; the dispatcher already translates a rebound key)
   bindings.on('autoForward', () => { setAutoForward(!autoFwd); return false; });
-  // [move] the comfort options of the 조작 tab (CONTRACT §19.3): declared here, drained by 68-settings (queue); a value the
-  // player never set follows the mode (easy mode = the gentler side), see comfort()
+  // [move] the comfort options of the 조작 tab (CONTRACT §19.3): declared here, drained by 68-settings (queue). The registry
+  // writes every default into G.settings, so a value the player never set is the registry's default in both modes; comfort()
+  // only falls back to its own table (the same numbers) where no registry is loaded
   {
     const Q = (G.settingsQueue = G.settingsQueue || []);
     const grp = '달리기 · 대시 · 편의';
     Q.push(
       { id: 'tapRun', tab: 'controls', group: grp, type: 'toggle', label: '🏃 앞으로 두 번 눌러 달리기', hint: '앞으로 가는 키를 두 번 톡톡 누르고 두 번째에서 손을 떼지 않으면 달려요. 키에서 손을 떼면 걸어요. Shift로도 달릴 수 있어요.', default: true, order: 200, words: '달리기 더블탭 두번 달려 run' },
       { id: 'dashOn', tab: 'controls', group: grp, type: 'toggle', label: '💨 옆·뒤로 두 번 눌러 대시', hint: '왼쪽·오른쪽·뒤로 가는 키를 두 번 누르면 그쪽으로 휙 한 번 물러나요. 계속 눌러도 달리지는 않아요.', default: true, order: 201, words: '대시 회피 더블탭 dash' },
-      { id: 'tapWindow', tab: 'controls', group: grp, type: 'slider', label: '⏱️ 두 번 누르는 간격', hint: '이 시간 안에 두 번 누르면 한 묶음이에요. 길수록 천천히 눌러도 돼요. (쉬운 모드는 처음에 360)', min: 200, max: 450, step: 10, unit: '밀리초', default: 300, order: 202, words: '더블탭 간격 시간' },
+      { id: 'tapWindow', tab: 'controls', group: grp, type: 'slider', label: '⏱️ 두 번 누르는 간격', hint: '이 시간 안에 두 번 누르면 한 묶음이에요. 길수록 천천히 눌러도 돼요.', min: 200, max: 450, step: 10, unit: '밀리초', default: 300, order: 202, words: '더블탭 간격 시간' },
       { id: 'alwaysRun', tab: 'controls', group: grp, type: 'toggle', label: '🏃‍♀️ 항상 달리기', hint: '켜면 늘 달려요. 이때 Shift(또는 달리기 단추)를 누르면 걸어요.', default: false, order: 203, words: '자동 달리기 항상 run' },
-      { id: 'jumpBuffer', tab: 'controls', group: grp, type: 'slider', label: '🦘 점프 미리 누르기', hint: '땅에 닿기 조금 전에 점프를 눌러도 닿자마자 뛰어요. (쉬운 모드는 처음에 180)', min: 0, max: 200, step: 10, unit: '밀리초', default: 120, order: 204, words: '점프 버퍼 입력' },
-      { id: 'coyoteMs', tab: 'controls', group: grp, type: 'slider', label: '🪂 낭떠러지 끝에서 뛰기', hint: '땅 끝을 막 벗어난 뒤에도 이 시간 동안은 점프가 돼요. (쉬운 모드는 처음에 150)', min: 0, max: 200, step: 10, unit: '밀리초', default: 100, order: 205, words: '코요테 점프 유예' },
+      { id: 'jumpBuffer', tab: 'controls', group: grp, type: 'slider', label: '🦘 점프 미리 누르기', hint: '땅에 닿기 조금 전에 점프를 눌러도 닿자마자 뛰어요. 처음 값 150 밀리초는 닿기 0.12초 전에 눌러도 되는 넉넉함이에요.', min: 0, max: 200, step: 10, unit: '밀리초', default: 150, order: 204, words: '점프 버퍼 입력' },
+      { id: 'coyoteMs', tab: 'controls', group: grp, type: 'slider', label: '🪂 낭떠러지 끝에서 뛰기', hint: '땅 끝을 막 벗어난 뒤에도 이 시간 동안은 점프가 돼요.', min: 0, max: 200, step: 10, unit: '밀리초', default: 100, order: 205, words: '코요테 점프 유예' },
       { id: 'wallSlide', tab: 'controls', group: grp, type: 'toggle', label: '🧱 벽을 따라 미끄러지기', hint: '비스듬히 벽이나 모서리에 닿아도 멈추지 않고 벽을 따라 돌아 가요.', default: true, order: 206, words: '벽 미끄러짐 모서리' },
       { id: 'stepAround', tab: 'controls', group: grp, type: 'toggle', label: '🪨 작은 것 비켜 가기', hint: '길에 작은 돌이나 항아리가 있으면 살짝 비켜서 지나가요.', default: true, order: 207, words: '장애물 우회 비켜' },
       { id: 'lowFences', tab: 'controls', group: grp, type: 'toggle', label: '🌾 달릴 때 낮은 울타리 넘기', hint: '달리다가 낮은 울타리나 돌담을 만나면 점프하지 않아도 훌쩍 넘어가요. (쉬운 모드는 처음부터 켜져 있어요)', default: true, order: 208, words: '울타리 자동 넘기 vault' },
