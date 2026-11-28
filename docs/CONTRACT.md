@@ -1612,6 +1612,8 @@ is `PL_HEAL` (lobby + corridor) with the rooms as nested places `PL_HEAL_R1 … 
 | buildings | `64-interiors-e.js`, rows of `48-interior-data.js` | `02-layout.js`, `15-buildings.js`, `80-devcenter.js` |
 | seasons | `12-seasons.js`, the season hooks of `12-nature.js`, `11-terrain.js`, `13-water.js`, `15-buildings.js`, `51-weather.js` | `10-engine.js`, `68-settings.js` |
 | opt | `tools/*` for weight and the installable page, `docs/MOBILE-APP-KO.md` | `src/template.html`, `tools/build.mjs`, `tools/package.mjs` |
+| people (§19.9, after lane hanbok has ended) | `20-avatar.js`, `02-avatar-data.js`, looks in `25-npc.js`, tests `avatar-*` | `80-devcenter.js` |
+| fix10 (§19.10) | the named faults in `68-settings.js`, `67-display.js`, `78-support.js` (+ css) and their tests | — |
 
 ### 19.8 Acceptance (added to §18.8)
 A new profile wears hanbok, earns coins, buys a piece in the shop, tries it on, wears it, sells another, makes its
@@ -1621,3 +1623,39 @@ to the report through all ten rooms in real time (proved under a debug clock and
 real minutes), survives a reload and a day away, and can be left at any moment; the gentle room 10 is what a child
 gets. Every suite of the earlier phases stays green; smoke in three modes has no errors; the kid audit has no
 critical finding on the new screens; the text audit is clean.
+
+### 19.9 Second pass: people who look real (lane `people`) — P0 of the second wave
+The owner's second picture shows the level meant by "실사화": a figure with human proportions, a modelled face, hair
+with strands and cloth with folds. The first pass (§19.1) gave the pieces; at two metres the people still read as
+mannequins (heavy hips and thighs, a flat face, hair like a cap, arms hanging straight). This pass changes the body
+under the clothes, not the wardrobe: ids, slots, sets, the palette and the garment kit's parameters stay, and every
+piece must still fit.
+- **Body**: head counts by build — child about 6.0, youth 6.6, adult 7.2, elder 7.0 heads tall (from the table's
+  height / age key; the default profile stays a child); shoulders, waist, hips, limbs and feet in human ratios; a
+  neck; hands with a thumb and fingers that curl at rest; a relaxed stance (arms a little away from the body, elbows
+  slightly bent), breathing, a shift of weight.
+- **Head and face**: a modelled head (brow, eye sockets, nose with bridge and tip, lips, chin and jaw, cheeks, ears)
+  with smooth normals; the face painted on a canvas at 512 px (high) / 256 px (medium): irises with a rim and a catch
+  light, lids with a lash line, brows of strokes, lips with a soft edge, a little colour in the cheeks; children
+  rounder, elders with fine lines and grey hair; the nine expressions repaint eyes, brows and mouth (and may move
+  jaw and brows); blinking, and eyes that follow what the person looks at.
+- **Hair**: every hair id as volume with a hairline, strands (a generated strand map as colour and normal, soft tips
+  on medium / high) and a soft band of light; 댕기머리, 쪽진머리 with 비녀, 상투 and 얹은머리 as modelled shapes.
+- **Cloth**: folds where cloth hangs or bends (skirt pleats that open in a walk, creases at elbow and knee, the 배래
+  curve), a weave per fabric as a tiling normal with a little colour variation, a soft edge light for silk; flat
+  colours on low as before.
+- **Skin**: a soft terminator and a warm tint in thin parts on medium / high (a few shader lines, no extra pass).
+- **Budgets**: a near figure at most 40 000 triangles (the 1.5 × rule of §19.1), a middle level of at most 12 000
+  beyond 12 m, far figures one draw call per crowd; 2 draw calls per near avatar; the bounded geometry cache stays;
+  no texture maps on low; with thirty people on the plaza the frame time rises by at most 10 % at any preset.
+- **Proof**: sheets at high — the whole figure in four views and the face from the front, three-quarter and the side
+  for a girl, a boy, a woman, a man, a grandmother and a grandfather; hands; every hair id; six sets before and
+  after side by side; the nine expressions; the plaza with thirty people; the sheet picture of §19.1 made again;
+  the avatar and wardrobe suites green; saves and the server's whitelist untouched.
+
+### 19.10 Second pass: faults left from phase 10 (lane `fix10`) — P1
+Found by the orchestrator's re-runs on Nov 28: (a) settings — a change 0.5 s before the page goes away must reach the
+account store, two devices at once must both be kept (`settings-client` part D), and a greyed option says why in ONE
+calm sentence; (b) support — on a 390-px phone in normal mode every button of the window is at least 40 px high, and
+the suite's scripted server must not call itself; (c) the carry-over list of the orchestrator's notes (allotment
+requests, the chat filter's 400 characters against the memo limit of 500, wording in §15.7, numbers in documents).
