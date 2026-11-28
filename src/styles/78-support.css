@@ -64,9 +64,16 @@ body.easy .sup-modal .sup-local, body.easy .sup-modal .sup-nopic, body.easy .sup
 .sup-card-acts textarea { flex: 1 1 100%; min-height: 4.5rem; }
 body.easy .sup-card-acts .btn { min-height: 56px; }
 
-/* the chat window: 📮 문의 · 🚨 신고 */
-.chat-quick .sup-cq { width: auto; padding: 0 .55rem; gap: .25rem; display: inline-flex; align-items: center; }
-.chat-quick .sup-cq-t { font-size: .78rem; font-weight: 700; }
+/* the chat window: 📮 문의하기 · 🚨 신고하기 — a row of their own under the reaction row */
+.sup-chat-row { display: flex; gap: 6px; margin: 0 0 .4rem; padding: 0 .1rem; }
+.sup-chat-row .sup-cq { flex: 1 1 0; min-width: 0; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: 0 .5rem;
+  border-radius: 999px; border: 1px solid rgba(255, 255, 255, .14); background: rgba(255, 255, 255, .07); color: inherit; cursor: pointer; transition: background-color .15s, transform .15s; }
+.sup-chat-row .sup-cq:hover { background: rgba(255, 255, 255, .14); }
+.sup-chat-row .sup-cq:active { transform: scale(.96); }
+.sup-chat-row .sup-cq:focus-visible { outline: 2px solid var(--green-l, #7fd6a0); outline-offset: 1px; }
+.sup-chat-row .sup-cq-t { font-size: .8rem; font-weight: 700; white-space: nowrap; }
+body.kid-chat .sup-chat-row, .chat-panel.collapsed .sup-chat-row { display: none !important; }
+body.is-touch .sup-chat-row .sup-cq { min-height: 40px; }
 .chat-kid-row .sup-ck { min-width: 64px; }
 
 /* the HUD chip: an answer arrived */
@@ -99,4 +106,4 @@ body.easy .sup-chip { min-height: 56px; font-size: 1.05rem; }
   .sup-kid-pic .sup-kid-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .sup-kid-row .easy-big-btn { min-height: var(--tap); }
 }
-@media (prefers-reduced-motion: reduce) { .sup-kind { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sup-kind, .sup-chat-row .sup-cq { transition: none; } }

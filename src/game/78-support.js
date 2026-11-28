@@ -109,21 +109,31 @@
   }
   /** the chat lines a player sees, drawn where the chat window is (only for a report about chat) */
   function drawChat(ctx, a) {
-    const lines = [];
-    for (const el of document.querySelectorAll('#chat-log .chat-msg, #chat-log [data-mid]')) {
-      const t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (t) lines.push(t.slice(0, 90));
+    // the lines as 60-social keeps them (already filtered and masked): "name: words", newest last
+    let lines = (Array.isArray(G.sys.social?.messages) ? G.sys.social.messages : []).filter((m) => m && m.text)
+      .slice(-40).map((m) => `${m.name ? `${String(m.name).slice(0, 16)}: ` : ''}${String(m.text).replace(/\s+/g, ' ')}`.slice(0, 90));
+    if (!lines.length) {
+      for (const el of document.querySelectorAll('#chat-log .chat-msg, #chat-log [data-mid]')) {
+        const t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t) lines.push(t.slice(0, 90));
+      }
     }
-    const show = lines.slice(-9);
     ctx.save();
-    ctx.fillStyle = 'rgba(20,26,22,.82)';
+    ctx.fillStyle = 'rgba(20,26,22,.86)';
     ctx.fillRect(a.x, a.y, a.w, a.h);
-    const fs = Math.max(12, Math.min(20, Math.round(a.h / 13)));
+    const fs = Math.max(12, Math.min(18, Math.round(a.h / 14)));
+    const lh = Math.round(fs * 1.35);
+    const top = a.y + 8 + lh + 4;                         // under the title
+    const bottom = a.y + a.h - Math.max(34, fs * 2.6);    // above the date stamp drawn in the corner later
+    const fit = Math.max(1, Math.floor((bottom - top) / lh));
+    lines = lines.slice(-fit);                            // the newest lines always fit (the reported one is the newest)
+    ctx.font = `700 ${fs}px system-ui, sans-serif`;
+    ctx.fillStyle = '#ffd98a';
+    ctx.textBaseline = 'top';
+    ctx.fillText('💬 채팅 (신고한 때의 화면)', a.x + 10, a.y + 8, a.w - 20);
     ctx.font = `600 ${fs}px system-ui, sans-serif`;
     ctx.fillStyle = '#fdf8ec';
-    ctx.textBaseline = 'top';
-    ctx.fillText('💬 채팅 (신고한 화면)', a.x + 10, a.y + 8, a.w - 20);
-    show.forEach((t, i) => ctx.fillText(t, a.x + 10, a.y + 14 + fs * 1.4 * (i + 1), a.w - 20));
+    lines.forEach((t, k) => ctx.fillText(t, a.x + 10, top + lh * k, a.w - 20));
     ctx.restore();
   }
   function stampCorner(ctx, W, H) {
@@ -831,13 +841,15 @@
 
     // ------------------------------------------------------------ the chat window's buttons
     _chatButtons() {
+      // their own row under the reaction row: appended to that row they were pushed out of the panel's width (the
+      // emoji row already fills a 265 px panel) and could not be pressed
       const quick = document.querySelector('#chat-panel .chat-quick');
-      if (quick && !quick.querySelector('.sup-cq')) {
-        const ask = h('button', { type: 'button', class: 'cq-btn sup-cq', title: '문의하기 — 운영자에게 묻거나 버그를 알려요', 'aria-label': '문의하기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📮'), h('span', { class: 'sup-cq-t' }, '문의'));
-        const rep = h('button', { type: 'button', class: 'cq-btn sup-cq', title: '신고하기 — 괴롭힘·나쁜 말을 화면 사진과 함께 알려요', 'aria-label': '신고하기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🚨'), h('span', { class: 'sup-cq-t' }, '신고'));
+      if (quick && !document.querySelector('#chat-panel .sup-chat-row')) {
+        const ask = h('button', { type: 'button', class: 'sup-cq', title: '문의하기 — 운영자에게 묻거나 버그를 알려요', 'aria-label': '문의하기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '📮'), h('span', { class: 'sup-cq-t' }, '문의하기'));
+        const rep = h('button', { type: 'button', class: 'sup-cq', title: '신고하기 — 괴롭힘·나쁜 말을 화면 사진과 함께 알려요', 'aria-label': '신고하기' }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, '🚨'), h('span', { class: 'sup-cq-t' }, '신고하기'));
         ask.addEventListener('click', (e) => { e.stopPropagation(); this.open('question'); });
         rep.addEventListener('click', (e) => { e.stopPropagation(); this.open('report', { about: 'chat' }); });
-        quick.append(ask, rep);
+        quick.after(h('div', { class: 'sup-chat-row', role: 'toolbar', 'aria-label': '운영자에게 알리기' }, ask, rep));
       }
       const kidRow = document.querySelector('#chat-panel .chat-kid-row');
       if (kidRow && !kidRow.querySelector('.sup-ck')) {
