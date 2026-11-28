@@ -292,8 +292,11 @@
       // the keeper (where FURNISH said, or by the north wall)
       const ks = L.keeperSpot || { x: 0, z: -row.size.d / 2 + 1.6, rotY: 0 };
       L.keeper = keeper(ctx, row, ks);
-      // the fallback shelf for exhibits whose anchor is missing
-      if (!L.shelf) R.shelfWall('E', 0, { levels: 2, slots: 3, w: 1.8, y: 0.95, gap: 0.5 }).forEach((sp, i) => A('shelf:' + i, sp));
+      // the fallback spots for exhibits whose anchor is missing: points by the door inside (a plain room gets a real shelf)
+      if (!L.shelf) {
+        if (!FURNISH[row.id]) R.shelfWall('E', 0, { levels: 2, slots: 3, w: 1.8, y: 0.95, gap: 0.5 }).forEach((sp, i) => A('shelf:' + i, sp));
+        else for (let i = 0; i < 3; i++) A('shelf:' + i, { x: -1.6 - i * 0.6, y: 1.3, z: row.size.d / 2 - 0.6 });
+      }
       R.finish();
       live[row.place] = L;
       return { dispose() { try { L.keeper?.rig?.dispose?.(); } catch (e) { /* gone */ } if (live[row.place] === L) delete live[row.place]; } };
