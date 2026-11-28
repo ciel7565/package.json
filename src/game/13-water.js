@@ -284,6 +284,11 @@
           tWaterN: { value: this.tex }, tFoamMask: { value: this.foamMask },
         }, deep ? { tSceneDepth: u.tSceneDepth, uDepthOn: u.uDepthOn, uPrevVP: u.uPrevVP, uCamNF: u.uCamNF, uClear: u.uClear, tPlanar: u.tPlanar, uPlanarOn: u.uPlanarOn, uPlanarVP: u.uPlanarVP } : {});
         sh.defines = sh.defines || {};
+        // [seasons] (CONTRACT §19.5) no snow lies on open water (the global snow hook of 12-seasons.js skips it); in a
+        // cold spell ice grows out from the shallow edges, the fast current stays open (tfmSeasG.w = G.season.ice)
+        sh.defines.TFM_NO_SNOW = '';
+        const seas = G.seasons && G.seasons.glsl && G.seasons.U ? G.seasons : null;
+        if (seas) { sh.defines.TFM_ICE = ''; Object.assign(sh.uniforms, { tfmSeasT: seas.U.tfmSeasT, tfmSeasG: seas.U.tfmSeasG }); sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + seas.glsl.phen); }
         if (hasT) sh.defines.TF_TERRAIN = '';
         if (deep) sh.defines.TF_SCENE_DEPTH = '';
         sh.vertexShader = sh.vertexShader
@@ -394,6 +399,16 @@
                 col += vec3(0.8, 1.0, 0.92) * caus * uCaustic * 0.6;
               }
               col = mix(col, vec3(0.93, 0.97, 1.0), foam * 0.85);
+              float tfmIceA = 0.0;
+              #ifdef TFM_ICE
+              if (tfmSeasG.w > 0.01) {
+                float tfmIn = tfmN1(p * 0.7) * 0.6 + tfmN1(p * 3.1 + 4.0) * 0.4;
+                tfmIceA = (1.0 - smoothstep(0.03 + tfmSeasG.w * 0.2, 0.07 + tfmSeasG.w * 0.28, depth + (tfmIn - 0.5) * 0.12)) * smoothstep(0.0, 0.2, tfmSeasG.w);
+                tfmIceA *= 1.0 - smoothstep(0.55, 1.05, spd) * 0.8;
+                col = mix(col, vec3(0.72, 0.78, 0.82) * (0.9 + 0.16 * tfmIn), tfmIceA);
+                tfFoamAmt = max(tfFoamAmt, tfmIceA * 0.8);
+              }
+              #endif
               vec3 tfVv = cameraPosition - vWPos; float tfVl = length(tfVv);
               vec3 V = tfVl > 1e-5 ? tfVv / tfVl : vec3(0.0, 1.0, 0.0);
               float fres = pow(1.0 - clamp(dot(tfWaterN, V), 0.0, 1.0), 5.0);
@@ -405,6 +420,7 @@
               alpha = mix(alpha, mix(0.1, 0.93, tfBody) + fres * 0.5 + foam * 0.7, uClear);
               #endif
               alpha *= smoothstep(0.0, 0.1, depth);
+              alpha = mix(alpha, 0.97, tfmIceA);
               diffuseColor.rgb = col;
               diffuseColor.a = clamp(alpha, 0.0, 1.0);
             }`)

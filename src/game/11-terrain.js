@@ -920,18 +920,40 @@ float terrainH(vec2 p) {
   // sampled at two scales and far away the large scale takes over, so no tile grid shows from the 만장대 lookout.
   // Detail normals of soil, gravel and rock bend the lighting near the camera and fade out with distance.
   const TERRAIN_SETS = ['grass', 'yard_dirt_path', 'field_soil', 'gravel', 'granite_stone'];
+  // [seasons] (CONTRACT §19.5) the grass of the ground turns straw in autumn and winter (G.season.grass through the shared
+  // uniform tfmSeasG.x of 12-seasons.js): green texels go tan, in patches by a slow noise. Snow and rime come from the
+  // global snow hook of 12-seasons.js (every lit material). Without 12-seasons.js nothing is added.
+  const SEAS = () => (G.seasons && G.seasons.glsl && G.seasons.U ? G.seasons : null);
+  const seasTerrain = (sh, wxz) => {
+    const S = SEAS();
+    if (!S) return false;
+    Object.assign(sh.uniforms, { tfmSeasT: S.U.tfmSeasT, tfmSeasG: S.U.tfmSeasG });
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + S.glsl.phen);
+    return `
+      if ( tfmSeasG.x < 0.998 ) {
+        vec3 tfmC = diffuseColor.rgb;
+        float tfmL = dot( tfmC, vec3( 0.30, 0.55, 0.15 ) );
+        float tfmGr = clamp( ( tfmC.g - max( tfmC.r, tfmC.b ) ) / max( tfmL, 0.02 ) * 2.2, 0.0, 1.0 );
+        float tfmPn = ${wxz ? `tfmN1( ${wxz} * 0.06 ) * 0.6 + tfmN1( ${wxz} * 0.41 + 9.0 ) * 0.4` : '0.5'};
+        vec3 tfmStraw = mix( vec3( 1.52, 1.04, 0.42 ), vec3( 1.25, 0.98, 0.62 ), tfmPn ) * tfmL * mix( 0.92, 1.12, tfmPn );
+        float tfmK = clamp( ( 1.0 - tfmSeasG.x ) * 1.15 - ( tfmPn - 0.5 ) * 0.3, 0.0, 1.0 );
+        diffuseColor.rgb = mix( tfmC, tfmStraw, tfmK * tfmGr * 0.92 );
+      }`;
+  };
   /** the plain terrain of `low` (and of builds without the pack): vertex colours x a two-scale procedural detail */
   function terrainLambertMaterial() {
     const detail = grassDetailTexture();
     detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detail });
     mat.onBeforeCompile = (sh) => {
+      const seas = seasTerrain(sh, null);   // [seasons] colours only on `low`
       sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
         #ifdef USE_MAP
           vec3 tfA = texture2D(map, vMapUv).rgb;
           vec3 tfB = texture2D(map, vMapUv * 0.231 + vec2(0.37, 0.71)).rgb;
           diffuseColor.rgb *= mix(tfA, tfB, 0.45) * 1.27;
         #endif`);
+      if (seas) sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n' + seas);
     };
     mat.customProgramCacheKey = () => 'tf-terrain';
     return mat;
@@ -959,6 +981,7 @@ float terrainH(vec2 p) {
     m.userData.tf = U;
     m.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U);
+      const seasPbr = seasTerrain(sh, 'vTfW.xz');   // [seasons]
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nattribute vec4 aSplat;\nvarying vec4 vTfSplat;\nvarying vec3 vTfW;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTfSplat = aSplat;\nvTfW = (modelMatrix * vec4(position, 1.0)).xyz;');
@@ -990,6 +1013,7 @@ float terrainH(vec2 p) {
           tfG *= mix(vec3(1.0), vec3(1.12, 1.05, 0.84), smoothstep(0.56, 0.86, tfNa) * 0.45) * (0.90 + 0.20 * tfNoise(tfP * 0.11 + 31.0));
           vec3 tfLayer = tfG * tfWg + tfR * tfW.x + tfD * tfW.y + tfS * tfW.z + tfV * tfW.w;
           diffuseColor.rgb *= mix(vec3(1.0), clamp(tfLayer, 0.2, 2.4), tfDetail);`)
+        .replace('#include <color_fragment>', '#include <color_fragment>\n' + (seasPbr || ''))
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
           roughnessFactor = clamp(0.94 * tfWg + 0.80 * tfW.x + 0.96 * tfW.y + 0.98 * tfW.z + 0.86 * tfW.w - (dot(tfLayer, vec3(0.3333)) - 1.0) * 0.12, 0.3, 1.0);`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -1503,29 +1527,49 @@ float terrainH(vec2 p) {
       geo.setAttribute('aLayer', new THREE.Float32BufferAttribute(layerAttr, 1));
       geo.setIndex(index);
       geo.computeVertexNormals();
+      // [seasons] (CONTRACT §19.5) the far hills follow G.season: patches of red, orange and brown in autumn, grey-brown
+      // bare woods with dark pine patches in winter, snow on the upper slopes (shared uniforms of 12-seasons.js)
+      const SS = SEAS();
+      const seasU = SS ? { tfmSeasT: SS.U.tfmSeasT, tfmSeasG: SS.U.tfmSeasG, tfmSnowU: SS.U.tfmSnowU } : {};
+      const seasFrag = SS ? `
+            {
+              float tfmL = dot(c, vec3(0.30, 0.55, 0.15));
+              float tfmPn = tfmN1(vXZ * 0.018 + 4.0), tfmPq = tfmN1(vXZ * 0.047 + 11.0);
+              float tfmEver = step(0.58, tfmPn * 0.7 + tfmPq * 0.3);
+              vec3 tfmAc = mix(vec3(0.62, 0.15, 0.05), vec3(0.66, 0.42, 0.10), tfmPq);
+              tfmAc = mix(tfmAc, vec3(0.46, 0.30, 0.12), step(0.62, tfmN1(vXZ * 0.09)));
+              vec3 tfmA = tfmAc * tfmL / max(dot(tfmAc, vec3(0.30, 0.55, 0.15)), 0.02) * 1.15;
+              float tfmLeaf = tfmSeasG.y, tfmAut = tfmSeasG.z * (1.0 - tfmEver);
+              vec3 tfmW = mix(c, tfmA, tfmAut * 0.85);
+              vec3 tfmTw = vec3(0.30, 0.25, 0.22) * tfmL / 0.245 * 1.05;
+              tfmW = mix(mix(tfmTw, tfmW, tfmLeaf), tfmW, tfmEver);
+              float tfmSn = tfmSnowU.x * smoothstep(0.35, 0.8, n.y + (tfmPq - 0.5) * 0.4) * (0.55 + 0.45 * smoothstep(10.0, 140.0, vY)) * (1.0 - tfmEver * 0.45);
+              c = mix(tfmW, vec3(0.70, 0.73, 0.78) * sh * uLight, clamp(tfmSn, 0.0, 0.9));
+            }` : '';
       const mat = new THREE.ShaderMaterial({
-        uniforms: {
+        uniforms: Object.assign({
           uFogColor: { value: new THREE.Color(0xbcd6e8) },
           uFogDensity: { value: 0.0028 },
           uLight: { value: 1 },
           uSunDir: { value: new THREE.Vector3(0.4, 0.8, 0.3) },
-        },
+        }, seasU),
         vertexShader: `
           attribute vec3 aCol; attribute float aLayer;
-          varying vec3 vCol; varying float vLayer; varying vec3 vN; varying float vDist; varying float vY;
+          varying vec3 vCol; varying float vLayer; varying vec3 vN; varying float vDist; varying float vY; varying vec2 vXZ;
           void main() {
             vCol = aCol; vLayer = aLayer; vN = normalize(mat3(modelMatrix) * normal);
             vec4 wp = modelMatrix * vec4(position, 1.0);
-            vDist = distance(wp.xyz, cameraPosition); vY = wp.y;
+            vDist = distance(wp.xyz, cameraPosition); vY = wp.y; vXZ = wp.xz;
             gl_Position = projectionMatrix * viewMatrix * wp;
           }`,
         fragmentShader: `
           uniform vec3 uFogColor; uniform float uFogDensity; uniform float uLight; uniform vec3 uSunDir;
-          varying vec3 vCol; varying float vLayer; varying vec3 vN; varying float vDist; varying float vY;
+          varying vec3 vCol; varying float vLayer; varying vec3 vN; varying float vDist; varying float vY; varying vec2 vXZ;
+          ${SS ? SS.glsl.phen + 'uniform vec4 tfmSnowU;' : ''}
           void main() {
             vec3 n = normalize(vN);
             float sh = 0.58 + 0.42 * max(dot(n, normalize(uSunDir)), 0.0);
-            vec3 c = vCol * sh * uLight;
+            vec3 c = vCol * sh * uLight;${seasFrag}
             float f = 1.0 - exp(-pow(uFogDensity * vDist * 0.34, 2.0));
             f = clamp(max(f, 0.18 + vLayer * 0.42) + (1.0 - smoothstep(0.0, 90.0, vY)) * 0.18, 0.0, 0.97);
             gl_FragColor = vec4(mix(c, uFogColor, f), 1.0);

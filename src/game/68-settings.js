@@ -58,6 +58,7 @@
       autoWeather: B(true), lockTime: B(false), chatVisible: B(true), companion: B(true),
       reduceMotion: B(false), voiceOver: B(false), voiceGuide: B(true), voiceRate: N(0.6, 1.4, 0.05, 0.95), playReminderMin: N(0, 240, 1, 30),
       helpSeen: N(0, 99, 1, 0),
+      seasonLook: E(['real', 'spring', 'summer', 'autumn', 'winter'], 'real', 'd'),   // [seasons] §19.5 계절 풍경 (12-seasons.js)
     },
   };
   G.data = G.data || {};

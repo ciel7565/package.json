@@ -1305,7 +1305,13 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
     const n = Q.n;
     return { n, wood, P: Q.P.subarray(0, n * 12), N: Q.N.subarray(0, n * 12), U: Q.U.subarray(0, n * 8), C: Q.C.subarray(0, n * 16), W: Q.W.subarray(0, n * 16), radius: rad, top, H, crown: [C[0], C[1], C[2], RX, RY] };
   }
-  VEG.SPECIES = ['pine', 'oak', 'maple', 'zelkova', 'conifer', 'birch'];   // birch: for grove() callers; the valley's placement has none
+  VEG.SPECIES = ['pine', 'oak', 'maple', 'zelkova', 'conifer', 'birch'];
+  // [seasons] (CONTRACT §19.5) the season kind of a species: −1 evergreen (pines stay green), 0 birch, 1 zelkova,
+  // 2 maple, 3 oak, 4 the red garden maple. A leaf card carries it in its tint alpha: 255 evergreen, 128 + kind × 20 +
+  // a per-card number 0…19 (which card drops first, its shade of colour); 12-seasons.js reads it back in the shader.
+  const SEASON_KIND = { pine: -1, conifer: -1, birch: 0, zelkova: 1, maple: 2, oak: 3 };
+  function seasonKind(sp, v) { const k = SEASON_KIND[sp]; return k === undefined ? 3 : k === 2 && v === 3 ? 4 : k; }
+  const seasonByte = (sk, a, b) => (sk < 0 ? 255 : 128 + sk * 20 + ((Math.imul(a + 1, 2654435761) ^ Math.imul(b + 7, 40503)) >>> 0) % 20);   // birch: for grove() callers; the valley's placement has none
   VEG.VARIANTS = 4;
   /** every template: tpl[species][variant] = [level 0, level 1]. Seeded: the same trees on every device. */
   function buildTemplates() {
@@ -1317,6 +1323,7 @@ float tfNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3
         const T = sp === 'pine' ? growPine(rnd, v) : sp === 'conifer' ? growConifer(rnd, v) : growBroad(rnd, v, sp);
         if (sp === 'maple' && v === 3) T.red = true;   // 홍단풍: the red garden maple
         out[sp].push([emitTree(T, 0, G.util.rng(seed + 1)), emitTree(T, 1, G.util.rng(seed + 2))]);
+        out[sp][v][0].sk = out[sp][v][1].sk = seasonKind(sp, v);   // [seasons] how its leaves turn (−1 evergreen)
       }
     });
     return out;
@@ -1489,6 +1496,37 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     transformed.y += sin( uTime * 1.7 + aWind.z * 6.2832 + position.x * 0.3 ) * aWind.w * 0.035 * uWindStrength;
     transformed += normal * ( sin( uTime * 4.6 + aWind.z * 6.2832 + position.z * 1.7 ) * aWind.y * 0.022 * uWindStrength * uFlutter );
     vTint = aTint; vFade = tfLod( position.xz );`;
+  // [seasons] (CONTRACT §19.5) the leaves follow G.season: colour, thinning, bare branches, blossom (12-seasons.js
+  // writes the shared uniforms; without that fragment nothing is added). A card whose number is above the tree's leaf
+  // amount drops; the tree's own days shift with a slow noise over the land and with its height (the hills turn first).
+  const SEAS = () => (G.seasons && G.seasons.glsl && G.seasons.U ? G.seasons : null);
+  const SEAS_VERT_PARS = 'varying vec3 vTfmW;\n';
+  const SEAS_FRAG_PARS = () => 'varying vec3 vTfmW;\n' + SEAS().glsl.phen;
+  const SEAS_TREE = `
+      float tfSk = floor( vTint.a * 255.0 + 0.5 );
+      float tfK = floor( ( tfSk - 128.0 ) / 20.0 ); float tfR = ( tfSk - 128.0 - tfK * 20.0 ) / 19.0;
+      float tfOff = ( tfmN1( vTfmW.xz * 0.035 ) - 0.5 ) * 10.0 + clamp( vTfmW.y / 150.0, 0.0, 1.0 ) * 10.0;
+      float tfBt = tfK < 3.5 ? step( 0.70, tfmN1( vTfmW.xz * 0.05 + 3.1 ) ) : 0.0;`;
+  const SEAS_LEAF = `
+    if ( tfmSeasT.w > 0.5 && tfIsLeaf > 0.5 && vTint.a < 0.985 ) {
+      ${SEAS_TREE}
+      vec4 tfSs = tfmLeafSeason( diffuseColor.rgb, tfK, tfR, tfmSeasT.x - tfOff, tfmSeasT.y + tfOff, tfBt );
+      diffuseColor.rgb = tfSs.rgb;
+      if ( tfR > tfSs.a * 1.02 - 0.01 ) diffuseColor.a = 0.0;
+    }`;
+  const SEAS_LEAF_DEPTH = `
+    if ( tfmSeasT.w > 0.5 && vTint.a > 0.5 && vTint.a < 0.985 ) {
+      ${SEAS_TREE}
+      vec4 tfSs = tfmLeafSeason( vec3( 0.2 ), tfK, tfR, tfmSeasT.x - tfOff, tfmSeasT.y + tfOff, tfBt );
+      if ( tfR > tfSs.a * 1.02 - 0.01 ) discard;
+    }`;
+  // grass blades: straw in autumn and winter, pressed low under snow (the snow hook whitens what stays up)
+  const SEAS_GRASS = `
+          if ( tfmSeasG.x < 0.998 ) { vec3 tfmC = diffuseColor.rgb; float tfmL = dot( tfmC, vec3( 0.30, 0.55, 0.15 ) );
+            vec3 tfmSt = vec3( 1.45, 1.02, 0.46 ) * tfmL * 1.06; diffuseColor.rgb = mix( tfmC, tfmSt, clamp( ( 1.0 - tfmSeasG.x ) * 1.1, 0.0, 1.0 ) * 0.9 ); }`;
+  const SEAS_GRASS_V = `
+          tfHgt *= 1.0 - clamp( tfmSnowU.x, 0.0, 1.0 ) * 0.75;`;
+  const seasUniforms = (sh) => { const S = SEAS(); if (S) Object.assign(sh.uniforms, { tfmSeasT: S.U.tfmSeasT, tfmSeasG: S.U.tfmSeasG }); return !!S; };
   /** the material of a quad batch; fade = [in0, in1, out0, out1] metres from the centre */
   function batchMaterial(fade, FU) {
     const m = new THREE.MeshLambertMaterial({ map: VEG.atlasTex, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide });
@@ -1496,11 +1534,12 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     m.userData.FU = FU;
     m.onBeforeCompile = (sh) => {
       vegUniforms(sh, { uFade: m.userData.uFade, uLodC: FU.uLodC, uOrigin: FU.uOrigin });
+      const seas = seasUniforms(sh);   // [seasons]
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute vec4 aTint; attribute vec4 aWind;\n' + GLSL_VEG_VERT)
-        .replace('#include <begin_vertex>', BATCH_VERT);
+        .replace('#include <common>', '#include <common>\nattribute vec4 aTint; attribute vec4 aWind;\n' + GLSL_VEG_VERT + (seas ? SEAS_VERT_PARS : ''))
+        .replace('#include <begin_vertex>', BATCH_VERT + (seas ? '\n    vTfmW = transformed;' : ''));
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D tBark; uniform vec3 uBarkGain;\n' + GLSL_VEG_FRAG)
+        .replace('#include <common>', '#include <common>\nuniform sampler2D tBark; uniform vec3 uBarkGain;\n' + GLSL_VEG_FRAG + (seas ? SEAS_FRAG_PARS() : ''))
         .replace('#include <lights_lambert_pars_fragment>', GLSL_LEAF_LIGHT)
         .replace('#include <map_fragment>', `
           vec4 tfLeafT = texture2D( map, vMapUv );
@@ -1508,7 +1547,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           tfBarkT = clamp( ( tfBarkT - 1.0 ) * 1.8 + 1.0, 0.25, 2.4 );   // furrows and plates read from a few metres away
           float tfIsLeaf = step( 0.5, vTint.a );
           diffuseColor.rgb *= mix( tfBarkT, tfLeafT.rgb * uLeafGain, tfIsLeaf ) * vTint.rgb * vTint.rgb * 4.0;
-          diffuseColor.a *= mix( 1.0, tfLeafT.a, tfIsLeaf );`)
+          diffuseColor.a *= mix( 1.0, tfLeafT.a, tfIsLeaf );` + (seas ? SEAS_LEAF : ''))
         .replace('#include <alphatest_fragment>', '#include <alphatest_fragment>\n' + GLSL_FADE)
         .replace('#include <normal_fragment_begin>', NOFLIP());
     };
@@ -1521,14 +1560,15 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     const d = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: VEG.atlasTex, alphaTest: 0.5, side: THREE.DoubleSide });
     d.onBeforeCompile = (sh) => {
       vegUniforms(sh, { uFade: main.userData.uFade, uLodC: main.userData.FU.uLodC, uOrigin: main.userData.FU.uOrigin });
+      const seas = seasUniforms(sh);   // [seasons] a dropped leaf casts no shadow
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute vec4 aTint; attribute vec4 aWind;\n' + GLSL_VEG_VERT)
-        .replace('#include <begin_vertex>', BATCH_VERT);
+        .replace('#include <common>', '#include <common>\nattribute vec4 aTint; attribute vec4 aWind;\n' + GLSL_VEG_VERT + (seas ? SEAS_VERT_PARS : ''))
+        .replace('#include <begin_vertex>', BATCH_VERT + (seas ? '\n    vTfmW = transformed;' : ''));
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\n' + GLSL_VEG_FRAG)
+        .replace('#include <common>', '#include <common>\n' + GLSL_VEG_FRAG + (seas ? SEAS_FRAG_PARS() : ''))
         .replace('#include <map_fragment>', `
           if ( vFade < 0.999 && vFade <= tfIgn( gl_FragCoord.xy ) ) discard;
-          diffuseColor.a *= mix( 1.0, texture2D( map, vMapUv ).a, step( 0.5, vTint.a ) );`);
+          diffuseColor.a *= mix( 1.0, texture2D( map, vMapUv ).a, step( 0.5, vTint.a ) );` + (seas ? SEAS_LEAF_DEPTH : ''));
     };
     d.customProgramCacheKey = () => 'nat-veg-batch-depth1';
     VEG.atlasUsers.push(d);
@@ -1540,8 +1580,9 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     m.userData.uFade = { value: new THREE.Vector4(fade[0], fade[1], fade[2], fade[3]) };
     m.onBeforeCompile = (sh) => {
       vegUniforms(sh, { uFade: m.userData.uFade, uLodC: FU.uLodC, uOrigin: FU.uOrigin, tImpN: VEG.U.tImpN, uImpUV: VEG.U.uImpUV });
+      const seas = seasUniforms(sh);   // [seasons] far trees turn too: aTintI.w = the tree's season code
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute vec4 aTree; attribute vec4 aRect; attribute vec3 aTintI; uniform vec2 uImpUV; varying vec4 vBill;\n' + GLSL_VEG_VERT)
+        .replace('#include <common>', '#include <common>\nattribute vec4 aTree; attribute vec4 aRect; attribute vec4 aTintI; uniform vec2 uImpUV; varying vec4 vBill;\n' + GLSL_VEG_VERT + (seas ? SEAS_VERT_PARS + 'varying float vTfmSk;\n' : ''))
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3( 0.0, 1.0, 0.0 );')
         .replace('#include <begin_vertex>', `
           vec2 tfTo = cameraPosition.xz - uOrigin.xz - aTree.xz; float tfTl = length( tfTo );
@@ -1551,14 +1592,26 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           transformed.xz += uWind * ( tfSway( aTree.xz ) * tfH * tfH * 0.00088 );
           vMapUv = aRect.xy + uv * uImpUV;
           vBill = vec4( tfR * sign( aRect.z ), tfF );
-          vTint = vec4( aTintI, 1.0 ); vFade = tfLod( aTree.xz );`)
+          vTint = vec4( aTintI.rgb, 1.0 ); vFade = tfLod( aTree.xz );` + (seas ? '\n          vTfmW = aTree.xyz; vTfmSk = aTintI.w;' : ''))
         .replace('#include <project_vertex>', '#include <project_vertex>\nif ( vFade <= 0.002 ) gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D tImpN; varying vec4 vBill;\n' + GLSL_VEG_FRAG)
+        .replace('#include <common>', '#include <common>\nuniform sampler2D tImpN; varying vec4 vBill;\n' + GLSL_VEG_FRAG + (seas ? SEAS_FRAG_PARS() + 'varying float vTfmSk;\n' : ''))
         .replace('#include <lights_lambert_pars_fragment>', GLSL_LEAF_LIGHT)
         .replace('#include <map_fragment>', `
           vec4 tfT = texture2D( map, vMapUv );
-          diffuseColor *= vec4( tfT.rgb * uLeafGain * vTint.rgb * vTint.rgb * 4.0, tfT.a );`)
+          diffuseColor *= vec4( tfT.rgb * uLeafGain * vTint.rgb * vTint.rgb * 4.0, tfT.a );` + (seas ? `
+          if ( tfmSeasT.w > 0.5 && vTfmSk < 0.985 && tfT.g > tfT.r * 0.92 ) {
+            float tfSk = floor( vTfmSk * 255.0 + 0.5 );
+            float tfK = floor( ( tfSk - 128.0 ) / 20.0 ); float tfR = ( tfSk - 128.0 - tfK * 20.0 ) / 19.0;
+            float tfOff = ( tfmN1( vTfmW.xz * 0.035 ) - 0.5 ) * 10.0 + clamp( vTfmW.y / 150.0, 0.0, 1.0 ) * 10.0;
+            float tfBt = tfK < 3.5 ? step( 0.70, tfmN1( vTfmW.xz * 0.05 + 3.1 ) ) : 0.0;
+            float tfRc = fract( tfR * 7.31 + tfmH1( floor( vMapUv * 96.0 ) ) );
+            vec4 tfSs = tfmLeafSeason( diffuseColor.rgb, tfK, tfRc, tfmSeasT.x - tfOff, tfmSeasT.y + tfOff, tfBt );
+            // a bare far crown: twig grey, seen through
+            vec3 tfTw = vec3( 0.30, 0.26, 0.23 ) * ( 0.7 + 0.6 * dot( tfT.rgb, vec3( 0.33 ) ) );
+            diffuseColor.rgb = mix( tfTw, tfSs.rgb, clamp( tfSs.a * 1.4, 0.0, 1.0 ) );
+            if ( tfmH1( floor( vMapUv * 420.0 ) + 0.5 ) > 0.42 + 0.58 * tfSs.a ) diffuseColor.a = 0.0;
+          }` : ''))
         .replace('#include <alphatest_fragment>', '#include <alphatest_fragment>\n' + GLSL_FADE)
         .replace('#include <normal_fragment_begin>', `
           float faceDirection = 1.0;
@@ -1611,7 +1664,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       const ch = this.chunk, need = Math.ceil(t.n / ch);
       if (this.used + need > this.maxChunks) return false;
       const P = this.aP.array, N = this.aN.array, U = this.aU.array, C = this.aC.array, W = this.aW.array;
-      const tP = t.P, tN = t.N, tU = t.U, tC = t.C, tW = t.W, is = 127 / s, s2 = s * s;
+      const tP = t.P, tN = t.N, tU = t.U, tC = t.C, tW = t.W, is = 127 / s, s2 = s * s, sk = t.sk ?? -1;
       let prev = -1;
       for (let c = 0; c < need; c++) {
         const ci = this.used++;
@@ -1626,7 +1679,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           N[vo * 3] = (m[0] * nx + m[1] * ny + m[2] * nz) * is; N[vo * 3 + 1] = (m[4] * nx + m[5] * ny + m[6] * nz) * is; N[vo * 3 + 2] = (m[8] * nx + m[9] * ny + m[10] * nz) * is;
           U[vo * 2] = tU[v * 2]; U[vo * 2 + 1] = tU[v * 2 + 1];
           const b = v * 4, o = vo * 4;
-          if (tC[b + 3]) { C[o] = Math.min(255, tC[b] * tr); C[o + 1] = Math.min(255, tC[b + 1] * tg); C[o + 2] = Math.min(255, tC[b + 2] * tb); C[o + 3] = 255; }
+          if (tC[b + 3]) { C[o] = Math.min(255, tC[b] * tr); C[o + 1] = Math.min(255, tC[b + 1] * tg); C[o + 2] = Math.min(255, tC[b + 2] * tb); C[o + 3] = sk < 0 ? 255 : seasonByte(sk, v >> 2, id); }
           else { C[o] = Math.min(255, tC[b] * bk); C[o + 1] = Math.min(255, tC[b + 1] * bk); C[o + 2] = Math.min(255, tC[b + 2] * bk); C[o + 3] = 0; }
           W[o] = Math.min(255, tW[b] * s2); W[o + 1] = tW[b + 1]; W[o + 2] = tW[b + 2]; W[o + 3] = tW[b + 3];
         }
@@ -1787,6 +1840,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         aTree[i * 4] = this.X[i]; aTree[i * 4 + 1] = this.Y[i]; aTree[i * 4 + 2] = this.Z[i]; aTree[i * 4 + 3] = this.S[i];
         aRect[i * 4] = si / imp.cols; aRect[i * 4 + 1] = 1 - (v + 1) / imp.rows; aRect[i * 4 + 2] = c.w * (hash01(i, 77) < 0.5 ? -1 : 1); aRect[i * 4 + 3] = c.h;
         aTint[i * 4] = Math.min(255, 127.5 * this.TINT[i * 3]); aTint[i * 4 + 1] = Math.min(255, 127.5 * this.TINT[i * 3 + 1]); aTint[i * 4 + 2] = Math.min(255, 127.5 * this.TINT[i * 3 + 2]);
+        aTint[i * 4 + 3] = seasonByte(seasonKind(VEG.SPECIES[si], v), i, 3);   // [seasons]
         top = Math.max(top, c.h * this.S[i], c.w * this.S[i]);
       }
       g.setAttribute('aTree', new THREE.InstancedBufferAttribute(aTree, 4));
@@ -2162,7 +2216,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           uniform vec2 uGrassNear; uniform vec2 uGrassFar; uniform vec2 uPlayer;
           uniform float uTime; uniform vec2 uWind; uniform float uWindStrength; uniform vec2 uGustPos; uniform float uGustAmt;
           uniform sampler2D tTerrColor; uniform sampler2D tGrassMask;
-          varying vec3 vGrassCol; varying vec4 vTint; varying float vFade;
+          varying vec3 vGrassCol; varying vec4 vTint; varying float vFade;` + (SEAS() ? '\nuniform vec4 tfmSnowU;' : '') + `
           ${terr.glslTerrain}
           ${GLSL_NOISE}`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3( 0.0, 1.0, 0.0 );')
@@ -2178,7 +2232,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           float tfScale = ( 0.72 + fract( aOff.w * 13.71 ) * 0.56 ) * smoothstep( aOff.w - 0.12, aOff.w + 0.02, tfMask ) * step( 0.004, tfMask ) * tfFadeR * aLay.y;
           float tfCell = floor( fract( aOff.w * 7.31 ) * 4.0 );
           // lawn tufts stay short; meadow and seeding tufts stand taller where the grass is thick (far from paths)
-          float tfHgt = ( tfCell < 0.5 ? 0.36 : tfCell < 2.5 ? 0.62 : 0.34 ) * ( 0.62 + 0.55 * tfMask ) * ( tfT < 40.0 ? 0.86 : 1.12 );
+          float tfHgt = ( tfCell < 0.5 ? 0.36 : tfCell < 2.5 ? 0.62 : 0.34 ) * ( 0.62 + 0.55 * tfMask ) * ( tfT < 40.0 ? 0.86 : 1.12 );` + (SEAS() ? SEAS_GRASS_V : '') + `
           float tfCs = cos( aOff.z ), tfSn = sin( aOff.z );
           vec3 tfL = vec3( position.x * 0.62, position.y * tfHgt, position.z * 0.62 ) * tfScale;
           tfL.xz = vec2( tfCs * tfL.x - tfSn * tfL.z, tfSn * tfL.x + tfCs * tfL.z );
@@ -2200,11 +2254,11 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           vMapUv = vec2( ( tfCell + uv.x ) * 0.25, 0.5 + uv.y * 0.5 );
           vTint = vec4( 0.5, 0.5, 0.5, 1.0 ); vFade = 1.0;`);
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol; uniform vec3 uGroundGain;\n' + GLSL_VEG_FRAG)
+        .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol; uniform vec3 uGroundGain;\n' + GLSL_VEG_FRAG + (seasUniforms(sh) ? SEAS().glsl.phen : ''))
         .replace('#include <lights_lambert_pars_fragment>', GLSL_LEAF_LIGHT)
         .replace('#include <map_fragment>', `
           vec4 tfT = texture2D( map, vMapUv );
-          diffuseColor.rgb *= vGrassCol * tfT.rgb * uGroundGain;
+          diffuseColor.rgb *= vGrassCol * tfT.rgb * uGroundGain;` + (SEAS() ? SEAS_GRASS : '') + `
           diffuseColor.a *= tfT.a;`)
         .replace('#include <normal_fragment_begin>', NOFLIP());
     };
@@ -2252,7 +2306,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           .replace('#include <common>', `#include <common>
             attribute vec4 aPos; uniform vec3 uPatchCol; uniform vec2 uPlayerL;
             uniform float uTime; uniform vec2 uWind; uniform float uWindStrength; uniform vec2 uGustPos; uniform float uGustAmt;
-            varying vec3 vGrassCol; varying vec4 vTint; varying float vFade;
+            varying vec3 vGrassCol; varying vec4 vTint; varying float vFade;` + (SEAS() ? '\nuniform vec4 tfmSnowU;' : '') + `
             ${GLSL_NOISE}`)
           .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3( 0.0, 1.0, 0.0 );')
           .replace('#include <begin_vertex>', `
@@ -2260,7 +2314,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
             vec3 tfWp = ( modelMatrix * vec4( aPos.xyz, 1.0 ) ).xyz;
             float tfScale = ( 0.72 + fract( aPos.w * 13.71 ) * 0.56 ) * ( 1.0 - smoothstep( 46.0, 60.0, distance( tfWp, cameraPosition ) ) );
             float tfCell = floor( fract( aPos.w * 7.31 ) * 4.0 );
-            float tfHgt = tfCell < 0.5 ? 0.34 : tfCell < 2.5 ? 0.56 : 0.32;
+            float tfHgt = tfCell < 0.5 ? 0.34 : tfCell < 2.5 ? 0.56 : 0.32;` + (SEAS() ? SEAS_GRASS_V : '') + `
             float tfRot = aPos.w * 61.7, tfCs = cos( tfRot ), tfSn = sin( tfRot );
             vec3 tfL = vec3( position.x * 0.62, position.y * tfHgt, position.z * 0.62 ) * tfScale;
             tfL.xz = vec2( tfCs * tfL.x - tfSn * tfL.z, tfSn * tfL.x + tfCs * tfL.z );
@@ -2278,11 +2332,11 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
             vMapUv = vec2( ( tfCell + uv.x ) * 0.25, 0.5 + uv.y * 0.5 );
             vTint = vec4( 0.5, 0.5, 0.5, 1.0 ); vFade = 1.0;`);
         sh.fragmentShader = sh.fragmentShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol; uniform vec3 uGroundGain;\n' + GLSL_VEG_FRAG)
+          .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol; uniform vec3 uGroundGain;\n' + GLSL_VEG_FRAG + (seasUniforms(sh) ? SEAS().glsl.phen : ''))
           .replace('#include <lights_lambert_pars_fragment>', GLSL_LEAF_LIGHT)
           .replace('#include <map_fragment>', `
             vec4 tfT = texture2D( map, vMapUv );
-            diffuseColor.rgb *= vGrassCol * tfT.rgb * uGroundGain;
+            diffuseColor.rgb *= vGrassCol * tfT.rgb * uGroundGain;` + (SEAS() ? SEAS_GRASS : '') + `
             diffuseColor.a *= tfT.a;`)
           .replace('#include <normal_fragment_begin>', NOFLIP());
       };
@@ -2550,6 +2604,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     },
     setPetals(amount) { this._petalAmt = clamp(Number(amount) || 0, 0, 1); },
     _mistAmt: 0.35, _mistCol: new THREE.Color(0xc9d8e4), _petalAmt: 1,
+    _seasPet: { value: new THREE.Vector4(0, 0, 0, 0) }, _seasPetK: 1,   // [seasons] what drifts in the air this week
 
     async init() {
       const eng = G.sys.engine;
@@ -3200,6 +3255,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         list.push({ x, y: H(x, z) - 0.02, z, s: 0.6 + rnd() * 0.6, rot: rnd() * TAU, tiltX: (rnd() - 0.5) * 0.3, tiltZ: (rnd() - 0.5) * 0.3, color: c });
         i++;
       }
+      this._flowerWild = list.length;   // [seasons] the first entries are the wild flowers (they follow the month)
       // flower beds: dense blooms + low leafy mounds (never on paths/decks that cross a bed)
       const onPath = (x, z, pad) => {
         const sf = surfaceAt(x, z);
@@ -3697,10 +3753,11 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
           uTime: uniforms.uTime, uWind: uniforms.uWind, uWindStrength: uniforms.uWindStrength,
           uCenter: { value: new THREE.Vector3() }, uBox: { value: new THREE.Vector3(56, 20, 56) },
           uScale: { value: 600 }, uAmount: { value: 0 }, uLight: { value: new THREE.Color(1, 1, 1) },
+          uSeasPet: this._seasPet,   // [seasons] x blossom share, y green share (rest: autumn leaves), w 1 = in use
         },
         vertexShader: `
           attribute vec4 aSeed; attribute float aKind;
-          uniform float uTime; uniform vec2 uWind; uniform float uWindStrength; uniform vec3 uCenter; uniform vec3 uBox; uniform float uScale; uniform float uAmount;
+          uniform float uTime; uniform vec2 uWind; uniform float uWindStrength; uniform vec3 uCenter; uniform vec3 uBox; uniform float uScale; uniform float uAmount; uniform vec4 uSeasPet;
           varying float vA; varying float vSpin; varying vec3 vCol;
           void main() {
             if (aSeed.w > uAmount) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; vSpin = 0.0; vCol = vec3(0.0); return; }
@@ -3719,6 +3776,12 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
             vA = edge * smoothstep(0.4, 1.6, dist) * (1.0 - smoothstep(24.0, 30.0, dist));
             vSpin = uTime * (1.5 + aSeed.z * 2.5) + aSeed.x * 6.283;
             vCol = aKind < 0.62 ? mix(vec3(1.0, 0.72, 0.84), vec3(1.0, 0.95, 0.96), step(0.42, aKind)) : aKind < 0.85 ? vec3(0.42, 0.66, 0.26) : vec3(0.95, 0.72, 0.28);
+            if (uSeasPet.w > 0.5) {
+              float tfK = aKind, tfT = fract(aKind * 13.1);
+              vec3 tfBl = mix(vec3(1.0, 0.72, 0.84), vec3(1.0, 0.95, 0.96), step(0.42, fract(tfK * 3.7)));
+              vec3 tfAu = tfK < 0.3 ? vec3(0.86, 0.22, 0.06) : tfK < 0.55 ? vec3(0.95, 0.55, 0.12) : tfK < 0.8 ? vec3(0.92, 0.76, 0.22) : vec3(0.55, 0.34, 0.16);
+              vCol = tfT < uSeasPet.x ? tfBl : tfT < uSeasPet.x + uSeasPet.y ? vec3(0.42, 0.66, 0.26) : tfAu;
+            }
           }`,
         fragmentShader: `
           uniform vec3 uLight;
@@ -3888,7 +3951,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       // petals: day, dry weather, a little more with wind
       const pm = this.meshes.petals;
       if (pm) {
-        const amt = this._petalsOn ? this._petalAmt * (1 - smooth(0.25, 0.7, night)) * (1 - smooth(0.05, 0.4, rain)) * (1 - snow) * clamp(0.55 + uniforms.uWindStrength.value * 0.35, 0, 1) : 0;
+        const amt = this._petalsOn ? this._petalAmt * this._seasPetK * (1 - smooth(0.25, 0.7, night)) * (1 - smooth(0.05, 0.4, rain)) * (1 - snow) * clamp(0.55 + uniforms.uWindStrength.value * 0.35, 0, 1) : 0;
         pm.visible = amt > 0.01;
         if (pm.visible) {
           const u = this._petalMat.uniforms;
@@ -3973,6 +4036,84 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     },
 
     // ============================================================== per frame
+    // [seasons] (CONTRACT §19.5) `low` gets the colours only: the plain broadleaf trees take the season's colours on the
+    // CPU (instance colours, written again only when G.season moved by a visible step); pines stay green, white under snow
+    _seasonLow() {
+      const st = G.season, grp = this.meshes?.trees;
+      if (!st || !grp) return;
+      const key = [st.leaf, st.autumn, st.fresh, st.brown, st.snow, st.blossom].map((v) => Math.round((v || 0) * 30)).join(',');
+      if (key === this._seasKey) return;
+      this._seasKey = key;
+      const AUT = { oak: [0.50, 0.30, 0.08], maple: [0.70, 0.12, 0.03], zelkova: [0.62, 0.32, 0.07], farRound: [0.56, 0.30, 0.08] };
+      const lumOf = (r, g, b) => r * 0.3 + g * 0.55 + b * 0.15;
+      for (const m of grp.children) {
+        if (!m.isInstancedMesh || !m.instanceColor) continue;
+        const mk = /^trees-(?:campus|slope|far)-([a-zA-Z]+)/.exec(m.name || ''), kind = mk ? mk[1] : '';
+        const ever = /pine|conifer|Pine|Conifer/.test(kind);
+        if (!ever && !AUT[kind]) continue;
+        const arr = m.instanceColor.array;
+        if (!m.userData.seasBase) m.userData.seasBase = arr.slice();
+        const base = m.userData.seasBase, n = arr.length / 3;
+        for (let i = 0; i < n; i++) {
+          let r = base[i * 3], g = base[i * 3 + 1], b = base[i * 3 + 2];
+          const L = lumOf(r, g, b), h = ((Math.imul(i + 1, 2654435761) >>> 0) % 1000) / 1000;
+          if (!ever) {
+            const fr = (st.fresh || 0) * 0.8;
+            r *= 1 + 0.15 * fr; g *= 1 + 0.12 * fr; b *= 1 - 0.3 * fr;
+            const ac = kind === 'farRound' ? (h < 0.33 ? AUT.maple : h < 0.66 ? AUT.oak : AUT.zelkova) : AUT[kind];
+            const ak = L / lumOf(ac[0], ac[1], ac[2]) * 1.2, a = clamp((st.autumn || 0) * (0.75 + 0.5 * h), 0, 1);
+            r += (ac[0] * ak - r) * a; g += (ac[1] * ak - g) * a; b += (ac[2] * ak - b) * a;
+            const bw = (st.brown || 0) * 0.6;
+            r += (0.36 * L / 0.25 - r) * bw; g += (0.23 * L / 0.25 - g) * bw; b += (0.12 * L / 0.25 - b) * bw;
+            if (h < 0.3 && (st.blossom || 0) > 0.01 && kind !== 'farRound') { const bl = st.blossom; r += (0.95 - r) * bl; g += (0.85 - g) * bl; b += (0.88 - b) * bl; }
+            // bare crowns: grey-brown twigs
+            const lf = clamp((st.leaf || 0) + (kind === 'oak' ? 0.15 : 0), 0, 1);
+            const tw = [0.26, 0.22, 0.19];
+            r = tw[0] + (r - tw[0]) * lf; g = tw[1] + (g - tw[1]) * lf; b = tw[2] + (b - tw[2]) * lf;
+          }
+          const sn = (st.snow || 0) * (ever ? 0.32 : 0.2);
+          r += (0.74 - r) * sn; g += (0.77 - g) * sn; b += (0.82 - b) * sn;
+          arr[i * 3] = r; arr[i * 3 + 1] = g; arr[i * 3 + 2] = b;
+        }
+        m.instanceColor.needsUpdate = true;
+      }
+    },
+    // [seasons] the flowers of the month: wild flowers take the month's colours and stand only in their weeks (none in
+    // winter, none under snow); the garden beds bloom April – October. CPU, only when G.season moved a visible step.
+    _seasonFlowers() {
+      const st = G.season, m = this.meshes?.flowers?.children?.find((c) => c.name === 'flowers');
+      if (!st || !m || !m.instanceColor) return;
+      const fl = st.flowers || { amount: 0, colors: [] };
+      // what drifts: blossom petals in spring, green leaves now and then in summer, coloured leaves while they fall
+      if (G.sys.season?.mode?.() === 'fixed') { this._seasPet.value.set(0, 0, 0, 0); this._seasPetK = 1; }
+      else {
+        const bl = st.blossom || 0, fall = (st.autumn || 0) > 0.3 && (st.leaf || 0) > 0.02 ? clamp(st.autumn, 0, 1) : 0, gr = (st.leaf || 0) * 0.35 * (1 - (st.autumn || 0));
+        const sum = bl + fall + gr;
+        this._seasPetK = clamp(Math.max(bl, fall, gr), 0, 1);
+        this._seasPet.value.set(sum > 0 ? bl / sum : 0, sum > 0 ? gr / sum : 0, 0, 1);
+      }
+      const mo = st.month || 7;
+      const bed = clamp((mo >= 4 && mo <= 10 ? 1 : mo === 3 || mo === 11 ? 0.3 : 0) * (1 - (st.snow || 0)), 0, 1);
+      const key = `${mo}|${Math.round((fl.amount || 0) * 20)}|${Math.round(bed * 20)}|${(fl.colors || []).join('')}`;
+      if (key === this._flKey) return;
+      this._flKey = key;
+      const IM = m.instanceMatrix.array, IC = m.instanceColor.array;
+      if (!m.userData.seasM) { m.userData.seasM = IM.slice(); m.userData.seasC = IC.slice(); }
+      const M0 = m.userData.seasM, C0 = m.userData.seasC, n = m.count, wild = Math.min(n, this._flowerWild ?? n);
+      const fixed = (G.sys.season?.mode?.() === 'fixed');   // the test season keeps the planted colours exactly
+      const pal = (fl.colors || []).map((h) => new THREE.Color(h));
+      for (let i = 0; i < n; i++) {
+        const h = ((Math.imul(i + 1, 2654435761) >>> 0) % 1000) / 1000;
+        const on = fixed ? true : i < wild ? h < (fl.amount || 0) : h < bed;
+        // an off flower shrinks to a speck at its place (never a zero matrix: the normal matrix would divide by 0)
+        for (let k = 0; k < 16; k++) IM[i * 16 + k] = on || k >= 12 || k % 4 === 3 ? M0[i * 16 + k] : M0[i * 16 + k] * 1e-3;
+        if (on && !fixed && i < wild && pal.length) {
+          const c = pal[(Math.imul(i + 7, 40503) >>> 0) % pal.length], v = 0.85 + h * 0.2;
+          IC[i * 3] = c.r * v; IC[i * 3 + 1] = c.g * v; IC[i * 3 + 2] = c.b * v;
+        } else { IC[i * 3] = C0[i * 3]; IC[i * 3 + 1] = C0[i * 3 + 1]; IC[i * 3 + 2] = C0[i * 3 + 2]; }
+      }
+      m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true;
+    },
     update(dt, t) {
       uniforms.uTime.value = t;
       const night = clamp(G.world.nightFactor || 0, 0, 1);
@@ -3993,6 +4134,13 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       else this._engineWind = false;
       if (this.real) {
         try { this._updateReal(dt, eng); } catch (e) { if (!this._realErr) { this._realErr = true; G.log.warn('WORLD', 'vegetation update failed', e?.message || e); } }
+      }
+      if (G.season) {
+        this._seasT = (this._seasT || 0) - (dt || 0);
+        if (this._seasT <= 0) {
+          this._seasT = 1;
+          try { if (!this.real) this._seasonLow(); this._seasonFlowers(); } catch (e) { if (!this._seasErr) { this._seasErr = true; G.log.warn('WORLD', 'season colours failed', e?.message || e); } }
+        }
       }
       // grass follows the camera
       if (this._grassUniforms && eng) {
