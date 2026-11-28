@@ -3,6 +3,7 @@
 // tests/wardrobe-client.mjs — the 옷장 and the 한복집 in a real page (CONTRACT §19.1, lane wardrobe)
 //
 //   node tests/wardrobe-client.mjs --file x.html [--shots <dir>] [--skip-easy] [--skip-phone]
+//   [fit] --only fit runs only the short-screen group (CONTRACT §19.12); --skip-fit leaves it out; --fit-json <file> keeps its table
 //
 // Grown-up mode (1280×800): a new profile owns what it wears (the migration ran); the 옷장 opens from the 꾸미기 action
 // with its six tabs (장비 · 색 · 표정 · 기본 정보 · 갖춤 · 설정 시트) and slot tiles with rendered pictures; the 한복집
@@ -87,7 +88,164 @@ async function press(page, label) {
   }, label);
 }
 
+// ============================================================== fit: the two windows on short screens (CONTRACT §19.12, lane fit)
+// Geometry only (quality=low, no pictures needed): the 한복집 with a piece picked and the 옷장 on its 장비 tab (a slot open,
+// a piece to wear), in easy and in normal mode, at six viewports. After the opening animation (a slow machine holds the
+// box at scale .96) the close button and the primary action lie wholly inside the window's visible box and are the
+// topmost element at their centre and 6 px inside each corner; nothing of the scrolling body can be hit under the header
+// or the footer; one whole tile is visible together with the action; easy-mode targets are ≥ 56 px as layout size (the
+// five view buttons under the figure included, when the figure is shown); the page never scrolls sideways.
+const FIT_SIZES = [[640, 360], [844, 390], [960, 540], [1024, 600], [1280, 720], [390, 844]];
+const fitRows = [];
+async function fitMeasure(page, which) {
+  // open the window fresh at this size
+  const opened = await page.evaluate((w) => {
+    for (const id of ['wardrobe', 'hanbokshop']) G.ui.modal.get(id)?.close({ instant: true });
+    const W = G.data.wardrobe, sys = G.sys.wardrobe;
+    if (w === 'shop') {
+      const shop = G.data.shops.SHOP_HANBOK;
+      const pick = (W.byKey.outer || []).find((iid) => shop.sells.includes(iid) && !sys.owns(iid)) || (W.byKey.top || []).find((iid) => shop.sells.includes(iid) && !sys.owns(iid));
+      sys.openShop('SHOP_HANBOK', { slot: W.parse(pick).key, pick });
+      return { pick };
+    }
+    const look = sys.look();
+    let slot = null;
+    for (const s of W.slots) {
+      const ids = (W.byKey[s.key] || []).map((iid) => W.parse(iid).id).filter((id) => sys.owns(W.itemId(s.key, id)));
+      if (s.empty) ids.push(s.empty);
+      if (ids.some((id) => id !== look[s.key])) { slot = s.key; break; }
+    }
+    sys._slot = null; sys.open('equip'); sys._slot = slot || 'top'; sys._render();
+    return { slot: sys._slot };
+  }, which);
+  const sel = which === 'shop' ? '.wd-shopm' : '.wd-modal:not(.wd-shopm)';
+  await page.waitForSelector(`${sel} .wd-tile`, { state: 'attached', timeout: 120000 });
+  // the opening animation has ended: no transform / scale / translate left on the box
+  await page.waitForFunction((s) => {
+    const m = document.querySelector(`#modal-root ${s}`);
+    if (!m) return false;
+    const cs = getComputedStyle(m);
+    const idle = (v) => !v || v === 'none' || v === '1' || v === '0px' || v === '0px 0px' || v === 'matrix(1, 0, 0, 1, 0, 0)';
+    return idle(cs.transform) && idle(cs.scale) && idle(cs.translate) && (!m.getAnimations || m.getAnimations().every((a) => a.playState !== 'running'));
+  }, sel, { timeout: 60000, polling: 200 });
+  await page.waitForTimeout(250);
+  return page.evaluate(({ s, which, kid }) => {
+    const m = document.querySelector(`#modal-root ${s}`);
+    const R = (r) => ({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
+    const vw = innerWidth, vh = innerHeight;
+    const shown = (el) => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+    /** the visible box of an element: its rect clipped by every scrolling / clipping ancestor and the viewport */
+    const clip = (el) => {
+      let r = el.getBoundingClientRect(), L = r.left, T = r.top, Rr = r.right, B = r.bottom;
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') { const q = a.getBoundingClientRect(); L = Math.max(L, q.left); T = Math.max(T, q.top); Rr = Math.min(Rr, q.right); B = Math.min(B, q.bottom); }
+      }
+      return { L: Math.max(L, 0), T: Math.max(T, 0), R: Math.min(Rr, vw), B: Math.min(B, vh) };
+    };
+    const mb = m.getBoundingClientRect();
+    const box = { L: Math.max(mb.left, 0), T: Math.max(mb.top, 0), R: Math.min(mb.right, vw), B: Math.min(mb.bottom, vh) };
+    /** wholly inside its visible box and the window's, and topmost at its centre and 6 px inside each corner */
+    const whole = (el) => {
+      if (!shown(el)) return { ok: false, why: 'hidden' };
+      const r = el.getBoundingClientRect(), c = clip(el);
+      const inside = r.left >= Math.max(c.L, box.L) - 1 && r.top >= Math.max(c.T, box.T) - 1 && r.right <= Math.min(c.R, box.R) + 1 && r.bottom <= Math.min(c.B, box.B) + 1;
+      const pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 6, r.top + 6], [r.right - 6, r.top + 6], [r.left + 6, r.bottom - 6], [r.right - 6, r.bottom - 6]];
+      const miss = pts.filter(([x, y]) => { const e = document.elementFromPoint(x, y); return !e || !(e === el || el.contains(e)); }).map(([x, y]) => { const e = document.elementFromPoint(x, y); return `${Math.round(x)},${Math.round(y)}→${e ? (e.className && typeof e.className === 'string' ? e.className.split(' ')[0] : e.tagName) : 'none'}`; });
+      return { ok: inside && !miss.length, inside, r: R(r), miss };
+    };
+    const closeBtn = [...m.querySelectorAll('.modal-head .easy-back, .modal-head .modal-x')].find(shown);
+    const action = which === 'shop'
+      ? m.querySelector('.wd-detail .wd-acts .btn')
+      : ([...m.querySelectorAll('.wd-panel .wd-tile:not(.locked):not(.on)')].find(shown) || m.querySelector('.wd-panel .wd-tile'));
+    const head = m.querySelector('.modal-head').getBoundingClientRect(), foot = m.querySelector('.modal-foot');
+    const fr = foot && shown(foot) ? foot.getBoundingClientRect() : null;
+    // nothing of the scrolling body under the head or the foot: sample a grid of points over both
+    const under = [];
+    for (const r of [head, fr].filter(Boolean)) {
+      for (let i = 0; i < 7; i++) for (let j = 0; j < 3; j++) {
+        const x = r.left + (r.width * (i + .5)) / 7, y = r.top + (r.height * (j + .5)) / 3;
+        if (x < 0 || y < 0 || x >= vw || y >= vh) continue;
+        const e = document.elementFromPoint(x, y);
+        if (e && m.querySelector('.modal-body').contains(e)) under.push(`${Math.round(x)},${Math.round(y)}`);
+      }
+    }
+    const bodyR = m.querySelector('.modal-body').getBoundingClientRect();
+    // a whole tile visible together with the action
+    const tiles = [...m.querySelectorAll('.wd-panel .wd-tile')].filter(shown);
+    const wholeTiles = tiles.filter((t) => whole(t).ok).length;
+    // easy mode: layout sizes of every target of the two windows
+    const small = [];
+    if (kid) {
+      for (const b of m.querySelectorAll('.wd-tab, .wd-segb, .wd-shelf, .wd-view, .wd-tile, .wd-acts .btn, .wd-back, .wd-more, .wd-peek, .modal-head .easy-back, .modal-head .easy-speak, .modal-foot .btn')) {
+        if (!shown(b)) continue;
+        if (b.offsetWidth < 56 || b.offsetHeight < 56) small.push(`${(b.className.split(' ').find((c) => c.startsWith('wd-') || c.startsWith('easy-')) || b.className.split(' ')[0])}:${b.offsetWidth}×${b.offsetHeight}`);
+      }
+    }
+    const views = [...m.querySelectorAll('.wd-view')];
+    const viewsShown = views.filter(shown);
+    const viewsWhole = viewsShown.filter((v) => whole(v).ok).length;
+    const sideways = document.documentElement.scrollWidth - vw;
+    return {
+      vw, vh, modal: R(mb), body: R(bodyR), head: R(head), foot: fr ? R(fr) : null,
+      inView: mb.top >= -1 && mb.bottom <= vh + 1 && mb.left >= -1 && mb.right <= vw + 1,
+      close: closeBtn ? whole(closeBtn) : { ok: false, why: 'no close button' },
+      action: action ? whole(action) : { ok: false, why: 'no action' },
+      under: under.slice(0, 6), underN: under.length, bodyOver: bodyR.bottom > (fr ? fr.top : mb.bottom) + 1 || bodyR.top < head.bottom - 1,
+      tiles: tiles.length, wholeTiles, small: small.slice(0, 12), smallN: small.length,
+      views: views.length, viewsShown: viewsShown.length, viewsWhole, sideways,
+      figure: (() => { const st = m.querySelector('.wd-stage'); return st && shown(st) ? R(st.getBoundingClientRect()) : null; })(),
+    };
+  }, { s: sel, which, kid: await page.evaluate(() => !!G.easy?.on) });
+}
+async function fitGroup(easy) {
+  const F = await openPage({ easy, viewport: { width: 1280, height: 720 } });
+  const mode = easy ? 'easy' : 'normal';
+  for (const [w, hgt] of FIT_SIZES) {
+    await F.page.setViewportSize({ width: w, height: hgt });
+    await F.page.waitForTimeout(400);
+    for (const which of ['shop', 'wardrobe']) {
+      let g;
+      try { g = await fitMeasure(F.page, which); } catch (e) { check(`fit ${mode} ${w}×${hgt} ${which === 'shop' ? '한복집' : '옷장'}: measured`, false, e.message); continue; }
+      const fails = [];
+      if (!g.inView) fails.push(`window outside the screen ${short(g.modal)}`);
+      if (!g.close.ok) fails.push(`close ${short(g.close)}`);
+      if (!g.action.ok) fails.push(`action ${short(g.action)}`);
+      if (g.underN || g.bodyOver) fails.push(`body under head/foot (${g.underN} points ${g.under.join(' ')}; body ${short(g.body)} head ${short(g.head)} foot ${short(g.foot)})`);
+      if (g.wholeTiles < 1) fails.push(`no whole tile (${g.tiles} tiles)`);
+      if (easy && g.smallN) fails.push(`under 56 px: ${g.small.join(' ')}`);
+      if (g.viewsShown && g.viewsWhole < g.viewsShown) fails.push(`view buttons ${g.viewsWhole}/${g.viewsShown} whole`);
+      if (g.sideways > 1) fails.push(`sideways scroll ${g.sideways}`);
+      fitRows.push({ mode, size: `${w}×${hgt}`, win: which, ok: !fails.length, fails, g });
+      check(`fit ${mode} ${w}×${hgt} ${which === 'shop' ? '한복집 (piece picked)' : '옷장 장비'}: close + action whole & on top, nothing under head/foot, a whole tile${easy ? ', ≥ 56 px' : ''}, no sideways scroll`, !fails.length, fails.join(' | ') || `action ${short(g.action.r)} foot ${short(g.foot)} tiles ${g.wholeTiles}/${g.tiles} figure ${short(g.figure)}`);
+      if (shotDir) await shoot(F.page, `fit-${mode}-${w}x${hgt}-${which}`);
+    }
+  }
+  if (!easy) {
+    // keyboard: the focus goes into the 옷장 (not to a hidden key-hint bar elsewhere in the page), and Esc closes it
+    await F.page.setViewportSize({ width: 1280, height: 720 });
+    await F.page.evaluate(() => { for (const id of ['wardrobe', 'hanbokshop']) G.ui.modal.get(id)?.close({ instant: true }); G.sys.wardrobe.open('equip'); });
+    await F.page.waitForSelector('#modal-root .wd-modal .wd-tab', { state: 'attached', timeout: 60000 });
+    await F.page.waitForTimeout(600);
+    const kb = await F.page.evaluate(() => { const a = document.activeElement; return { inside: !!a?.closest?.('.wd-modal'), what: a ? `${a.tagName}.${String(a.className).split(' ')[0]}` : null, firstDialog: (document.querySelector('[role="dialog"]')?.className || '').toString().slice(0, 60) }; });
+    await F.page.keyboard.press('Escape');
+    await F.page.waitForTimeout(700);
+    const gone = await F.page.evaluate(() => !G.ui.modal.get('wardrobe'));
+    check('fit normal: the keyboard focus goes into the 옷장 and Esc closes it', kb.inside && gone, short({ ...kb, closedByEsc: gone }));
+  }
+  await F.ctx.close();
+}
+if (!flag('--skip-fit') && (!opt('--only') || opt('--only') === 'fit')) {
+  try { await fitGroup(true); } catch (e) { check('fit easy: the run finished', false, e.stack || e.message); }
+  try { await fitGroup(false); } catch (e) { check('fit normal: the run finished', false, e.stack || e.message); }
+  const out = opt('--fit-json');
+  if (out) fs.writeFileSync(out, JSON.stringify(fitRows, null, 1));
+  console.log('\nfit table (size × mode × window):');
+  for (const r of fitRows) console.log(`  ${r.ok ? 'ok  ' : 'FAIL'} ${r.mode.padEnd(6)} ${r.size.padEnd(8)} ${r.win.padEnd(8)} ${r.fails.join(' | ').slice(0, 300)}`);
+}
+
 try {
+  if (opt('--only') !== 'fit') { // [fit] the groups below are skipped by --only fit
   // ============================================================== grown-up mode
   const { ctx, page } = await openPage({ easy: false });
   const base = await page.evaluate(() => {
@@ -293,6 +451,7 @@ try {
     await shoot(P.page, 'p-shop');
     await P.ctx.close();
   }
+  } // [fit] end of the groups skipped by --only fit
 } catch (e) {
   check('the run finished', false, e.stack || e.message);
 }
