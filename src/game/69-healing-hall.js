@@ -421,7 +421,7 @@ G.healStations = G.healStations || { map: new Map(),
     }
     for (const [px, pz, s] of [[-4.05, FRONT_Z - 0.6, 1.0], [4.05, FRONT_Z - 0.6, 1.0], [-10.1, FRONT_Z - 0.6, 1.0], [10.1, FRONT_Z - 0.6, 1.0], [-4.2, Z0 + 0.6, 1.0]]) { plant(R, ctx, px, pz, s); T('plant'); }
     T('plant', 2);
-    people(ctx, 'LOBBY', [{ x: -1.0, z: Z0 + 3.2, rotY: PI, solid: true }, { x: -6.4, y: -0.4, z: FRONT_Z - 1.3, rotY: 0 }, { x: -5.6, y: -0.4, z: FRONT_Z - 1.3, rotY: 0 }, { x: 3.4, z: Z0 + 1.2, rotY: PI, look: 'staffM', solid: true }]);
+    people(ctx, 'LOBBY', [{ x: -1.7, z: Z0 + 3.1, rotY: PI, solid: true }, { x: -6.4, y: -0.4, z: FRONT_Z - 1.3, rotY: 0 }, { x: -5.6, y: -0.4, z: FRONT_Z - 1.3, rotY: 0 }, { x: 3.4, z: Z0 + 1.2, rotY: PI, look: 'staffM', solid: true }]);
     // the water jar with a gourd dipper and cups on a tray, by the 상담실 door
     if (Kt.pot) try { Kt.pot(R, { x: 7.7, z: Z0 + 0.6, kind: 'dok', s: 0.75, lid: true }); R.add('straw', new THREE.SphereGeometry(0.11, 10, 6, 0, TAU, 0, PI / 2), M(7.7, 0.83, Z0 + 0.6, 0, 1, 0.5, 1, PI), '#d9b77a'); R.add('furn', box(0.5, 0.5, 0.36), M(8.4, 0.25, Z0 + 0.5), '#8a5a36'); for (let k = 0; k < 4; k++) R.add('onggi', cyl(0.035, 0.03, 0.07, 8), M(8.25 + (k % 2) * 0.12, 0.54, Z0 + 0.44 + Math.floor(k / 2) * 0.12), '#e8e2d6', { cast: false }); ctx.addCollider({ shape: 'box', x: 8.05, z: Z0 + 0.55, hw: 0.75, hd: 0.36, maxY: 0.9 }); T('water jar'); T('dipper'); T('cup', 4); } catch (e) { /* optional */ }
   }

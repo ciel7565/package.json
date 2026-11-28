@@ -288,7 +288,7 @@ const census = [];
         }
         return { cells: q.length, miss };
       };
-      const L16 = id === 'PL_HEAL' ? { cells: 0, miss: [] } : lane(0.8), L07 = id === 'PL_HEAL' ? { cells: 0, miss: [] } : lane(0.35);
+      const L16 = lane(0.8), L07 = lane(0.35);
       // the people: one instanced figure mesh per room, every figure finite and inside the room
       const crowd = []; group.traverse((o) => { if (/^heal-people-/.test(o.name || '')) crowd.push(o); });
       let pplBad = 0; const m4 = new T3.Matrix4(), pv = new T3.Vector3();
@@ -318,8 +318,8 @@ const census = [];
     for (const c of census) {
       const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
       check(`[census] ${tag}: every geometry finite, nothing warned`, c.nan === 0 && !c.warns.length, c.warns.slice(0, 2).join(' | '));
-      if (c.room === 'LOBBY') continue;
       check(`[census] ${tag}: a 0.7 m path from the door to every station`, !c.lane07.miss.length, c.lane07.miss.join(' '));
+      if (c.room === 'LOBBY') { const miss = c.lane16.miss.filter((k) => k !== 'guide'); check(`[census] ${tag}: a free 1.6 m lane from the glass doors to the desk, the kiosk and the bench (the keeper's place behind the counter is staff-only)`, !miss.length, miss.join(' ')); }
     }
     // the rooms that are full now (the rest follow, two per commit): many things, most of the floor near one, the lane free
     const FULL = new Set(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10']);
