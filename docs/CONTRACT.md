@@ -1616,6 +1616,8 @@ is `PL_HEAL` (lobby + corridor) with the rooms as nested places `PL_HEAL_R1 … 
 | fix10 (§19.10) | the named faults in `68-settings.js`, `67-display.js`, `78-support.js` (+ css) and their tests | — |
 | heal-look (§19.11, after lane heal-hall) | `69-healing-hall.js`, `tests/heal-hall-unit.mjs` | `80-devcenter.js` |
 | fit (§19.12, after lane wardrobe) | `24-wardrobe.css`, the layout parts of `24-wardrobe.js`, the `fit` group of `tests/wardrobe-client.mjs` | `tools/kid-audit.mjs` (the short-screen pass), `00-base.css`, `02-responsive.css`, `08-easy.css` (window sizing only) |
+| fix-econ (§19.13) | the `[wardrobe]` block of `SaveValidator.php`, the name and migration rules of `24-wardrobe.js`, the `[hanbok]` block of `Presence.php`, tests `wardrobe-unit`, `wardrobe-logic`, `avatar-unit` | `tools/build.mjs` (the export of the migrate map) |
+| fix-ends (§19.13 and the requests no lane owned) | `12-seasons.js`, `19-hanok-kit.js`, `50-minimap.js`, the thatch of `15-buildings.js`, `57-complex-landscape.js` (the lawn), the stories of `02-avatar-data.js`; after lane fit: the windows of `24-wardrobe.js` (+ css) | `04-ui.js` (the back button), `70-app.js`, `26-dialogues.js`, `80-devcenter.js` |
 | claude-api (§15.6, §16.10) | `server/lib/Claude.php`, `server/lib/AdminAi.php`, `server/api/ai/*`, `73-ai.js` (+ css), tests `ai-*` | `server/admin/index.php`, `Settings.php`, `Db.php` + schema files, `server/cli/tfm.php`, `80-devcenter.js`, `tools/kid-audit.mjs`, `tests/security-e2e.mjs` |
 
 ### 19.8 Acceptance (added to §18.8)
@@ -1702,3 +1704,35 @@ taller than the room between the big easy header and footer). No suite looked at
   repaired once, in a small marked block; a window of a running lane is reported with its picture, not edited.
 - **Proof**: the `fit` group of `tests/wardrobe-client.mjs` (geometry only, `quality=low`), the short-screen pass of the
   kid audit without a critical finding, one picture per viewport of the 한복집 with a piece picked.
+
+### 19.13 Third pass: faults found by the review of the wardrobe, the hanbok data and the seasons — P0 of the third wave
+Four reviewers and four skeptics (Nov 28; 24 findings confirmed, 3 refuted; the list with proofs is kept by the
+orchestrator). The rules the repairs establish:
+- **The migration allowance is the server's to remember** (lane `fix-econ`). The value of the pieces a look wore before
+  clothes were items is explained ONCE per account; the server keeps that fact with the save's own bookkeeping and never
+  takes it from the client's `migrated`. A save without the wardrobe block is judged against the stored copy's block:
+  the look may only wear what the stored copy owns (the free kit and administrators as before) and nothing is
+  explained. No sequence of saves makes coins or pieces out of nothing: leaving the block out, sending it back, toggling
+  `migrated`, restoring an older save, a reset.
+- **An honest save from before phase 11 migrates without a refusal.** The build exports the avatar table's `migrate`
+  map; the server prices a stored look after mapping its old ids exactly as the page's `normalize` does. Every old id
+  and every ready-made look of phase 10 is accepted on the first save with nothing unexplained. A server whose
+  `game-data.json` has no such map explains nothing extra (it fails closed) and says so once in its log.
+- **A first save and a save after a reset** have the worn value of the chosen look explained up to the dearest of the
+  title looks, not beyond.
+- **A look shows only what is owned**: old ids are mapped first and then checked like any other piece; an outfit's
+  values are ids of their own slot (the server checks what its comment promises).
+- **Names are cut by letters, not by code units**, in the page and on the server alike: no save can carry half a
+  character.
+- **Presence**: every pattern that judges a colour or a set is anchored at the true end of the value.
+- **In the windows** (lanes `fix-ends`, `fit`): no pedestal and no far figure is snowed on in winter; every text of the
+  옷장 and the 한복집 is at least 16 px in easy mode and every control at least 56 px (40 px in normal mode on a touch
+  screen); when all twelve outfit places are full a sentence says so and offers a way on; selling a worn piece asks
+  once; the back button or the back gesture closes the open window instead of leaving the page; every hair style,
+  pattern and dye has its one-line story; the 설정 시트 never shows a picture that was released; the tile pictures are
+  kept within a few megabytes.
+- **The seasons**: the yearly calendar is right in a leap year; the minute's refresh does not rebuild what has not
+  changed.
+- **Proof**: each finding first as a failing check (`tests/wardrobe-unit.php` on both drivers, `tests/wardrobe-logic.mjs`,
+  `tests/seasons-logic.mjs`, `tests/avatar-unit.php`), then green; the reviewers' replay scripts leave every account with
+  the coins it had; `tests/server-e2e.mjs` and the save sections of `tests/security-e2e.mjs` stay green.
