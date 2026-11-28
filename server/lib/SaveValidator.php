@@ -203,6 +203,7 @@ final class SaveValidator
         $this->planMarks($n, $p); // [content] CONTRACT §17.8
         // [fishing] CONTRACT §18.3: the catches since the last save, bounded by time, explain their exp / edu
         $fishX = $this->fishing($n, $p, $dt);
+        $explain['value'] += $this->wardrobe($n, $p, $user, $first); // [wardrobe] CONTRACT §19.1: owned pieces, worn pieces, the migration
         $explain['exp'] += $fishX['exp'];
         $explain['edu'] += $fishX['edu'];
         $max = GameData::maxima();
@@ -827,6 +828,139 @@ final class SaveValidator
         return ['slots' => $slots, 'values' => $values, 'exps' => $exps];
     }
 
+    // [wardrobe] ------------------------------------------------------------ 옷장: clothes as items (CONTRACT §19.1)
+    /** the exported wardrobe table (game-data.json `wardrobe`): items id → [slot key, value id, sell], slots, starter … */
+    private static function wardrobeTable(): array
+    {
+        static $m = null;
+        if ($m !== null) return $m;
+        $a = GameData::all();
+        $t = isset($a['wardrobe']) && is_array($a['wardrobe']) ? $a['wardrobe'] : [];
+        $list = function ($k) use ($t): array { $out = []; foreach ((array) (isset($t[$k]) ? $t[$k] : []) as $v) if (is_string($v) && $v !== '') $out[$v] = true; return $out; };
+        $items = [];
+        foreach ((array) (isset($t['items']) ? $t['items'] : []) as $id => $row) {
+            if (is_string($id) && preg_match('/^WEAR_[A-Z0-9_]{1,42}$/', $id) && is_array($row) && isset($row[0], $row[1]) && is_string($row[0]) && is_string($row[1])) $items[$id] = [$row[0], $row[1]];
+        }
+        $slots = [];
+        foreach ((array) (isset($t['slots']) ? $t['slots'] : []) as $s) {
+            if (is_array($s) && isset($s['key']) && is_string($s['key']) && preg_match('/^[A-Za-z]{1,24}$/', $s['key'])) $slots[$s['key']] = isset($s['empty']) && is_string($s['empty']) ? $s['empty'] : null;
+        }
+        $lim = isset($t['limits']) && is_array($t['limits']) ? $t['limits'] : [];
+        return $m = [
+            'items' => $items, 'slots' => $slots, 'starter' => $list('starter'), 'traits' => $list('traits'), 'homes' => $list('homes'),
+            'expressions' => $list('expressions'), 'setKeys' => $list('setKeys'),
+            'sets' => isset($lim['sets']) ? max(0, min(50, (int) $lim['sets'])) : 12, 'traitMax' => isset($lim['traits']) ? max(0, min(10, (int) $lim['traits'])) : 3,
+            'setName' => isset($lim['setName']) ? max(1, min(40, (int) $lim['setName'])) : 12, 'own' => isset($lim['own']) ? max(1, min(5000, (int) $lim['own'])) : 2000,
+        ];
+    }
+    /** the item id of a worn value, as 24-wardrobe.js names it: WEAR_<KEY>_<ID> (non-alphanumerics → _, upper case) */
+    private static function wearId(string $key, string $id): string
+    {
+        $up = function (string $s): string { return strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $s)); };
+        return 'WEAR_' . $up($key) . '_' . $up($id);
+    }
+    /** the coin value of the pieces a save owns (starter pieces are worth nothing) */
+    private function wardrobeWorth(object $s): int
+    {
+        $T = self::wardrobeTable();
+        if (!$T['items']) return 0;
+        $w = 0;
+        foreach (array_slice(self::kv(self::p(self::o(self::p($s, 'wardrobe')), 'own')), 0, $T['own'], true) as $iid => $on) {
+            $iid = (string) $iid;
+            if (isset($T['items'][$iid]) && !isset($T['starter'][$iid]) && ($on === 1 || $on === true)) $w += GameData::itemValue($iid);
+        }
+        return $w;
+    }
+    /** the pieces of $own that $avatar wears (not the free kit) → their coin value */
+    private function wornValue(?object $own, $avatar): int
+    {
+        $T = self::wardrobeTable();
+        $av = self::o($avatar);
+        if (!$own || !$av) return 0;
+        $v = 0;
+        foreach ($T['slots'] as $key => $empty) {
+            $val = self::p($av, $key);
+            if (!is_string($val) || $val === $empty) continue;
+            $iid = self::wearId($key, $val);
+            $on = self::p($own, $iid);
+            if (isset($T['items'][$iid]) && !isset($T['starter'][$iid]) && ($on === 1 || $on === true)) $v += GameData::itemValue($iid);
+        }
+        return $v;
+    }
+    /**
+     * The `wardrobe` block of a save: {v: 1, own: {WEAR_…: 1}, migrated?: true, sets: [{id, name, app}] (≤ 12),
+     * sheet: {traits: [≤ 3 words of the list], home: id | null}, expr: id | null}. A missing block is fine (an older
+     * client); a wrong container is malformed (400); an unknown piece, an outfit or a word out of the table, a name that
+     * is not plain letters, or a look that wears a piece the save does not own (not the free kit, not an administrator)
+     * is a violation (the client is handed the server's copy back). Explains the value of the pieces an existing profile
+     * is given once by the migration (what its look already wore) and those a new profile's chosen look wears.
+     */
+    private function wardrobe(object $n, ?object $p, array $user, bool $first): int
+    {
+        $wd = self::p($n, 'wardrobe');
+        if ($wd === null) return 0;
+        if (!self::o($wd)) self::bad('wardrobe');
+        $T = self::wardrobeTable();
+        if (!$T['items']) return 0;
+        $bad = function (string $f, array $more = []): void { $this->violate('WARDROBE_BAD_SHAPE', array_merge(['field' => $f], $more)); };
+        if (self::p($wd, 'v') !== 1) { $bad('v'); return 0; }
+        $own = self::p($wd, 'own');
+        if ($own !== null && !self::o($own) && $own !== []) self::bad('wardrobe own');
+        $ownO = self::o($own);
+        $rows = self::kv($own);
+        if (count($rows) > $T['own']) { $bad('own', ['count' => count($rows)]); return 0; }
+        foreach ($rows as $iid => $on) {
+            if (!isset($T['items'][(string) $iid]) || !($on === 1 || $on === true)) { $bad('own', ['item' => self::safeId((string) $iid)]); return 0; }
+        }
+        $mig = self::p($wd, 'migrated');
+        if ($mig !== null && $mig !== true) { $bad('migrated'); return 0; }
+        $sets = self::p($wd, 'sets');
+        if ($sets !== null) {
+            if (!is_array($sets) || count($sets) > $T['sets']) { $bad('sets'); return 0; }
+            foreach ($sets as $s) {
+                $so = self::o($s);
+                $id = self::p($so, 'id');
+                $name = self::p($so, 'name');
+                $app = self::p($so, 'app');
+                if (!$so || !is_string($id) || !preg_match('/^[A-Za-z0-9_]{1,24}$/', $id) || !is_string($name) || mb_strlen($name) > $T['setName']
+                    || !preg_match('/^[\p{L}\p{N} ·\-]*$/u', $name) || (!self::o($app) && $app !== [])) { $bad('sets'); return 0; }
+                $keys = self::kv($app);
+                if (count($keys) > 60) { $bad('sets'); return 0; }
+                foreach ($keys as $k => $v) if (!isset($T['setKeys'][(string) $k]) || !is_string($v) || !preg_match('/^[#A-Za-z0-9_]{1,32}$/', $v)) { $bad('sets'); return 0; }
+            }
+        }
+        $sheet = self::p($wd, 'sheet');
+        if ($sheet !== null) {
+            if (!self::o($sheet)) self::bad('wardrobe sheet');
+            $tr = self::p($sheet, 'traits');
+            if ($tr !== null) {
+                if (!is_array($tr) || count($tr) > $T['traitMax'] || count(array_unique(array_map('strval', array_filter($tr, 'is_string')))) !== count($tr)) { $bad('traits'); return 0; }
+                foreach ($tr as $x) if (!is_string($x) || !isset($T['traits'][$x])) { $bad('traits'); return 0; }
+            }
+            $home = self::p($sheet, 'home');
+            if ($home !== null && (!is_string($home) || !isset($T['homes'][$home]))) { $bad('home'); return 0; }
+        }
+        $expr = self::p($wd, 'expr');
+        if ($expr !== null && (!is_string($expr) || !isset($T['expressions'][$expr]))) { $bad('expr'); return 0; }
+        // the look wears owned pieces only (an administrator owns every piece, CONTRACT §17.2)
+        $avatar = self::o(self::p(self::o(self::p($n, 'profile')), 'avatar'));
+        if ($avatar && $user['role'] !== 'admin') {
+            foreach ($T['slots'] as $key => $empty) {
+                $val = self::p($avatar, $key);
+                if (!is_string($val) || $val === $empty) continue;
+                $iid = self::wearId($key, $val);
+                if (!isset($T['items'][$iid]) || isset($T['starter'][$iid])) continue; // a legacy id is Presence's to judge
+                $on = $ownO ? self::p($ownO, $iid) : null;
+                if (!($on === 1 || $on === true)) { $this->violate('WARDROBE_NOT_OWNED', ['item' => self::safeId($iid)]); return 0; }
+            }
+        }
+        // what the pieces given without coins are worth: a new profile's chosen look, or an existing look at the migration
+        if ($first) return $this->wornValue($ownO, $avatar);
+        $wp = $p ? self::o(self::p($p, 'wardrobe')) : null;
+        if ($mig === true && (!$wp || self::p($wp, 'migrated') !== true)) return $this->wornValue($ownO, self::p(self::o(self::p($p, 'profile')), 'avatar'));
+        return 0;
+    }
+
     // [entitle] ------------------------------------------------------------- the jar limit (CONTRACT §17.2)
     /**
      * limits.jars of the account (free 3, a paid plan or an administrator 12 — operator settings):
@@ -1088,6 +1222,8 @@ final class SaveValidator
                 if ($item !== '') $w += GameData::itemValue($item);
             }
         }
+        // [wardrobe] the pieces of the 옷장 count at their price: buying turns coins into a piece, selling back gives half
+        $w += $this->wardrobeWorth($s);
         $owned = 0;
         // [content] a jar a plan / an administrator opened (via 'plan', CONTRACT §17.8) was not bought with coins: it is no
         // part of the net worth (counting it would read as 1,500 coins appearing per jar when a plan starts). Clearing the

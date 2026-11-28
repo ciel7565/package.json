@@ -215,8 +215,8 @@
     return out;
   }
   function cleanName(s, max) {
-    // plain text only: no control characters or angle brackets, trimmed and bounded (it is shown with textContent)
-    return String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+    // letters, digits, spaces, · and - only (the server's rule too), trimmed and bounded; shown with textContent
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').replace(/[^\p{L}\p{N} ·-]/gu, '').trim().slice(0, max);
   }
   function sanitize(w) {
     const out = blank();
