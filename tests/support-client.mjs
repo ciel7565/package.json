@@ -325,15 +325,29 @@ if (!flag('--skip-phone')) {
       await fakeServer(page);
       await page.evaluate(() => G.sys.support.open(G.easy.on ? null : 'bug'));
       await until(page, () => !!document.querySelector('.sup-modal .sup-cats, .sup-kid .sup-kid-grid'));
+      // [fix10] the same window at the first frame of its open animation (paused at 0): the painted boxes are 4 % smaller, the layout is not
+      const early = await page.evaluate(() => {
+        const box = document.querySelector('.sup-modal');
+        const anims = box.getAnimations ? box.getAnimations() : [];
+        anims.forEach((a) => { a.pause(); a.currentTime = 0; });
+        const btns = [...box.querySelectorAll('button')].filter((b) => b.getClientRects().length);
+        const r = { buttons: btns.length, paintedUnder40: btns.filter((b) => b.getBoundingClientRect().height < 40).length, layoutUnder40: btns.filter((b) => b.offsetHeight < 40).length, anims: anims.length };
+        anims.forEach((a) => a.finish());
+        return r;
+      });
       await page.waitForTimeout(500);
+      // [fix10] the window opens with a scale-up animation (modalIn: scale .96 → 1). getBoundingClientRect() sees the scaled box, so a
+      // 40 px button reads 38.4 px until the animation has ended — on a loaded machine (one frame in a second) that is how 13 buttons
+      // "were lower than 40 px". The size of a button is its layout height (offsetHeight, no transform), measured after the animation.
+      await page.waitForFunction(() => { const b = document.querySelector('.sup-modal'); return !b || !b.getAnimations || b.getAnimations().every((a) => a.playState !== 'running'); }, null, { timeout: 30000, polling: 200 }).catch(() => {});
       const m = await page.evaluate(() => {
         const box = document.querySelector('.sup-modal');
         const r = box.getBoundingClientRect();
         const btns = [...box.querySelectorAll('button')].filter((b) => b.getClientRects().length);
-        return { w: innerWidth, left: r.left, right: r.right, overflow: document.documentElement.scrollWidth > innerWidth + 1, small: btns.filter((b) => { const q = b.getBoundingClientRect(); return q.height < 40; }).length, smallList: btns.filter((b) => b.getBoundingClientRect().height < 40).slice(0, 14).map((b) => `${b.className.replace(/\s+/g, '.')}:${Math.round(b.getBoundingClientRect().height)}:${b.textContent.trim().slice(0, 8)}`), touch: document.body.classList.contains('is-touch'), unscripted: window.__unscripted || [], easy: G.easy.on };
+        return { w: innerWidth, left: r.left, right: r.right, overflow: document.documentElement.scrollWidth > innerWidth + 1, small: btns.filter((b) => b.offsetHeight < 40).length, smallList: btns.filter((b) => b.offsetHeight < 40).slice(0, 14).map((b) => `${b.className.replace(/\s+/g, '.')}:${b.offsetHeight}:${b.textContent.trim().slice(0, 8)}`), minH: Math.min(...btns.map((b) => b.offsetHeight)), scaled: btns.filter((b) => b.getBoundingClientRect().height < 40).length, animating: (box.getAnimations ? box.getAnimations().length : -1), touch: document.body.classList.contains('is-touch'), unscripted: window.__unscripted || [], easy: G.easy.on };
       });
       await shot(page, `report-phone-${w}x${hgt}`);
-      check(`phone ${w}×${hgt}: the window fits (no sideways scroll), buttons are finger-sized`, m.left >= -1 && m.right <= m.w + 1 && !m.overflow && m.small === 0, JSON.stringify(m));
+      check(`phone ${w}×${hgt}: the window fits (no sideways scroll), buttons are finger-sized`, m.left >= -1 && m.right <= m.w + 1 && !m.overflow && m.small === 0 && early.layoutUnder40 === 0, JSON.stringify({ ...m, early }));
       if (m.easy) {
         // a child must see every picture tile, and after a tap the 📤 보내요 button, without scrolling the window
         const inView = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel)].map((el) => { const r = el.getBoundingClientRect(); return r.top >= -1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1; }), sel);

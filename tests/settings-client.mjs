@@ -432,7 +432,9 @@ async function partD() {
   }
   const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
   const port = Number(opt('--port', '0')) || await freePort();
-  const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: dataDir, TFM_SQLITE_PATH: dbFile, TFM_UPLOAD_DIR: path.join(srvTmp, 'uploads'), TFM_TOSS_MOCK: '1', PHP_CLI_SERVER_WORKERS: '4' }, stdio: ['ignore', 'ignore', 'ignore'] });
+  const phpErr = path.join(srvTmp, 'php.err'); // [fix10] the server's own log: a failure of this part says what the server saw
+  const proc = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', docroot], { env: { ...process.env, TFM_DATA_DIR: dataDir, TFM_SQLITE_PATH: dbFile, TFM_UPLOAD_DIR: path.join(srvTmp, 'uploads'), TFM_TOSS_MOCK: '1', PHP_CLI_SERVER_WORKERS: '4' }, stdio: ['ignore', 'ignore', fs.openSync(phpErr, 'a')] });
+  const phpTail = () => { try { return fs.readFileSync(phpErr, 'utf8').split('\n').slice(-8).join(' | ').slice(0, 600); } catch (e) { return ''; } };
   const BASE = `http://127.0.0.1:${port}/`;
   /** the user_settings row(s) as the database has them: [{ user_id, v, data, updated_at }] */
   const dbRows = () => {
@@ -452,11 +454,20 @@ async function partD() {
       await page.goto(`${BASE}index.html?notutorial=1&quality=low`, { waitUntil: 'load', timeout: TIMEOUT });
       await page.waitForFunction(() => window.G && G.net && G.net.mode === 'server' && G.app && G.app._booted === true && G.app._booting === false, null, { timeout: TIMEOUT, polling: 250 });
     };
+    // [fix10] on a loaded machine one request can run into its 12 s limit: the entry tries again (a register that had arrived is then a login)
     const enter = (page, register) => page.evaluate(async ([a, reg]) => {
-      try {
-        const prof = reg ? await G.auth.register({ email: a.email, nickname: a.nickname, password: a.password, confirm: a.password, agree: true, easy: false }) : await G.auth.login({ login: a.email, password: a.password });
-        return { ok: await G.app.enterGame(prof) };
-      } catch (e) { return { ok: false, err: `${e?.code || ''} ${e?.message || e}` }; }
+      let last = null;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const prof = reg && i === 0 ? await G.auth.register({ email: a.email, nickname: a.nickname, password: a.password, confirm: a.password, agree: true, easy: false }) : await G.auth.login({ login: a.email, password: a.password });
+          return { ok: await G.app.enterGame(prof), tries: i + 1 };
+        } catch (e) {
+          last = { ok: false, err: `${e?.code || ''} ${e?.message || e}`, tries: i + 1 };
+          if (!/NETWORK_ERROR/.test(last.err) && !(reg && i === 0 && /EMAIL|NICK|EXIST|USED/i.test(last.err))) return last;
+          await new Promise((r) => setTimeout(r, 2500));
+        }
+      }
+      return last;
     }, [acct, register]);
     const synced = (page) => page.waitForFunction(() => G.ready === true && !!G.state && G.sys.settings.store.pulled && !!G.sys.settings.store.last, null, { timeout: TIMEOUT, polling: 250 });
     const saves = [];
@@ -469,7 +480,7 @@ async function partD() {
     watch(one.page, 'd1');
     await openTitle(one.page);
     const e1 = await enter(one.page, true);
-    check('D: device 1 — a new account enters (server mode)', e1.ok === true, JSON.stringify(e1));
+    check('D: device 1 — a new account enters (server mode)', e1.ok === true, JSON.stringify(e1) + (e1.ok === true ? '' : ' · php: ' + phpTail()));
     if (!e1.ok) return;
     await synced(one.page);
     const ACCT = { mixMaster: 65, mixMusic: 25, mixSfx: 85, mixUi: 45, mixVoice: 75, mixNature: 35, textScale: 5, uiStep: 3, avatarScale: 115, nameplates: 'off', hudOpacity: 70, muteHidden: false };
