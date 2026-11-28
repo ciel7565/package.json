@@ -96,7 +96,7 @@ for (const row of rows) {
   Gb.sys.engine.scene = new THREE.Scene();
   const calls = [];
   const H = { buildHanok: (site, b, o) => calls.push(['hanok', b.id, o && o.sign]), buildThatched: (site, b) => calls.push(['thatch', b.id]), addSignBoard() {}, WOOD: {}, SMOKE_SOURCES: [] };
-  let bad = [], far = [];
+  let bad = [], far = [], ropes = [];
   for (const b of (Gb.data.layout.buildings || []).filter((x) => x.type === 'craft')) {
     try {
       const site = new Gb.bkit.Site(b);
@@ -105,11 +105,13 @@ for (const row of rows) {
         const g = it.g || it.geometry || it; const pa = g?.attributes?.position; if (!pa) continue;
         for (let i = 0; i < pa.array.length; i++) if (!Number.isFinite(pa.array[i])) { bad.push(`${b.id}:${key}`); break; }
       }
+      if (calls.length && calls[calls.length - 1][0] === 'thatch' && calls[calls.length - 1][1] === b.id) ropes.push(site.B.parts.has ? (site.B.parts.has('thatch') ? 1 : 0) : (site.B.parts.thatch ? 1 : 0));
       const grp = new THREE.Box3().setFromObject(site.group);
       if (!grp.isEmpty() && (grp.max.x - grp.min.x > b.w + 16 || grp.max.z - grp.min.z > b.d + 16)) far.push(b.id);
     } catch (e) { bad.push(`${b.id}: ${String(e.message || e).slice(0, 120)}`); }
   }
   check('every outside builds (G.bkit.craft + its extras), finite', !bad.length, bad.join(' | '));
+  check('the three thatched roofs get their 새끼줄 net (straw ropes over the stand-in roof)', ropes.length === 3 && ropes.every(Boolean), JSON.stringify(ropes));
   check('the extras stay near their house', !far.length, far.join(' '));
   check('tiled houses get no sign from the shared atlas (their own atlas instead), thatched ones are thatched', calls.filter((c) => c[0] === 'hanok').every((c) => c[2] === null) && calls.filter((c) => c[0] === 'thatch').length === 3, JSON.stringify(calls.map((c) => c[0][0] + ':' + c[1])));
   check('the forge chimney smokes, the dye yard cloth and the water wheel exist', H.SMOKE_SOURCES.length === 1 && Gb.sys.engine.scene.children.some((m) => m.name === 'dye-yard'));

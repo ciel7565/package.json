@@ -60,6 +60,37 @@
     site.B.add('wood', geo.box(w + 0.14, h + 0.14, 0.06), mul(m, M(0, 0, -0.035)), frame);
   }
   const THATCHED = new Set(['jumak', 'forge', 'mill']);
+  /**
+   * the 새끼줄 net that ties a 초가 roof down: ropes over the straw of 15-buildings.js buildThatched (the same rounded
+   * roof — superellipse rings, A = w/2 + 0.95, C = d/2 + 0.95, H = 2.25, walls 2.57 m) — meridians from the eave to the
+   * 용마름 and two rings; a few hundred triangles, merged with the straw.
+   */
+  function thatchRopes(site, b) {
+    if (typeof geo.sweep !== 'function') return;
+    const hw = b.w / 2, hd = b.d / 2, wallTop = 0.32 + 2.25, A = hw + 0.95, Cc = hd + 0.95, H = 2.25, r0 = Math.max(0.3, A - Cc);
+    const y0 = wallTop - 0.25, NR = 10, NA = 40;
+    const at = (i, j, off) => {
+      const phi = (j / NR) * (Math.PI / 2) * 0.96, s = Math.cos(phi);
+      const ra = r0 + (A - r0) * s, rb = Cc * s, ang = (i / NA) * Math.PI * 2, ca = Math.cos(ang), sa = Math.sin(ang);
+      const v = new THREE.Vector3(Math.sign(ca) * Math.pow(Math.abs(ca), 0.55) * ra, y0 + Math.sin(phi) * H, Math.sign(sa) * Math.pow(Math.abs(sa), 0.55) * Math.max(0.02, rb));
+      const c = new THREE.Vector3(clamp(v.x, -r0, r0), y0, 0), n = v.clone().sub(c);
+      if (n.lengthSq() > 1e-6) v.addScaledVector(n.normalize(), off);
+      return v;
+    };
+    const prof = [[-0.028, -0.02], [0.028, -0.02], [0.028, 0.03], [-0.028, 0.03]], tint = ['#6f5a3b'];
+    for (let i = 0; i < NA; i += 2) {
+      const pts = [];
+      for (let j = 0; j <= 9; j++) pts.push(at(i, j, 0.035));
+      const g = geo.sweep(pts, prof, tint, false);
+      if (g) site.B.add('thatch', g, BK.I4);
+    }
+    for (const j of [2.5, 5.5]) {
+      const pts = [];
+      for (let i = 0; i <= NA; i++) pts.push(at(i % NA, j, 0.035));
+      const g = geo.sweep(pts, prof, tint, false);
+      if (g) site.B.add('thatch', g, BK.I4);
+    }
+  }
   /** the outside of one house (15-buildings.js BUILDERS.craft) */
   BK.craft = function craft(site, b, H) {
     const row = byBuilding[b.id] || null, kind = b.craft || row?.id || '';
@@ -67,6 +98,7 @@
     let topY;
     if (THATCHED.has(kind)) {
       H.buildThatched(site, b);
+      try { thatchRopes(site, b); } catch (e) { G.log.warn('WORLD', `craft ${b.id}: roof ropes failed`, e?.message || e); }
       topY = 0.32 + 2.25;
       signBoard(site, b.sign || b.name, 1.5, M(b.w / 6 + 0.25, topY - 0.42, b.d / 2 + 0.16, 0, 1, 1, 1, -0.05));
     } else {
