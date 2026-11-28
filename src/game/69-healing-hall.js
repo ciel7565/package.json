@@ -196,7 +196,7 @@ G.healStations = G.healStations || { map: new Map(),
     });
     // the glass front: the 'none' bays must not cast the window sun's shadow (only the lintel band above the glass does)
     if (R.solid && Array.isArray(R.solid.S)) R.solid.S = R.solid.S.map((s) => (s[2] === 0 && s[3] === R.post ? [s[0], s[1], R.post - 0.32, R.post] : s));
-    const live = { lamps: null, signs: {}, lightSpots: [], handles: [], updates: [] };
+    const live = { lamps: null, signs: {}, lightSpots: [], handles: [], updates: [], ports: [] };
 
     // ---- glass: one pane per bay between the posts, a slim transom and a slim middle mullion in the rhythm of the bays
     const panes = [];
@@ -210,6 +210,9 @@ G.healStations = G.healStations || { map: new Map(),
       if (!entrance) R.add('wood', box(0.05, trY - gy0, 0.08), M(cx, (gy0 + trY) / 2, FRONT_Z - 0.02), '#c9ab83');
       R.add('wood', box(0.05, gTop - trY, 0.08), M(cx, (trY + gTop) / 2, FRONT_Z - 0.02), '#c9ab83');
       const g = new THREE.PlaneGeometry(pw, gTop - gy0); g.translate(cx, (gy0 + gTop) / 2, FRONT_Z - 0.01);
+      // the sun-patch decal: the two half-panes under the transom (the mullion between them), and the upper light
+      if (!entrance) { live.ports.push([x0, cx - 0.03, gy0 + 0.04, trY - 0.03], [cx + 0.03, x1, gy0 + 0.04, trY - 0.03], [x0, x1, trY + 0.03, gTop]); }
+      else live.ports.push([x0, x1, gy0 + 0.1, trY - 0.06], [x0, x1, trY + 0.03, gTop]);
       if (entrance) {   // the entrance: two glass leaves slid half open, a wooden frame and a step out to the garden
         const lw = pw / 2;
         for (const s of [-1, 1]) {
@@ -292,6 +295,7 @@ G.healStations = G.healStations || { map: new Map(),
     } catch (e) { warn('camera blockers', e); }
     // the light: the real sun through the glass (the shadow frustum follows the visitor), dimmed by clouds and rain
     setupSun(ctx, live);
+    try { sunPatches(ctx, R, live); } catch (e) { warn('sun patches', e); }
     emitter(ctx, 'water', -26, FRONT_Z + 11, 0.35);
     for (const x of [-60, 0, 60]) emitter(ctx, 'bell', x, FRONT_Z + 2.0, 0.25);
     hallLive = live;
@@ -326,10 +330,10 @@ G.healStations = G.healStations || { map: new Map(),
     R.add('furn', box(5.6, 0.9, 0.45), M(0, 0.45, Z0 + 0.4), '#8a5a36');
     ctx.addCollider({ shape: 'box', x: 0, z: deskZ, hw: 2.7, hd: 0.42, maxY: 1.06, stand: false });
     ctx.addCollider({ shape: 'box', x: 0, z: Z0 + 0.4, hw: 2.8, hd: 0.3, maxY: 0.95 });
-    nameBoard(ctx, R, { title: '안내데스크', sub: '체크인 · 체크아웃', x: 0, y: 2.3, z: Z0 + 0.06, w: 2.2 });
-    nameBoard(ctx, R, { title: '힐링관', sub: '쉬어 가는 열 개의 방', x: 0, y: 3.42, z: Z0 + 0.06, w: 2.9, bg1: '#3f2a18', bg2: '#2a1a0e' });
+    nameBoard(ctx, R, { title: '안내데스크', sub: '체크인 · 체크아웃', x: 0, y: 2.2, z: Z0 + 0.06, w: 2.2 });
+    nameBoard(ctx, R, { title: '힐링관', sub: '쉬어 가는 열 개의 방', x: 0, y: 3.2, z: Z0 + 0.06, w: 2.9, bg1: '#3f2a18', bg2: '#2a1a0e' });
     // a calm line: this is play, not a real test or treatment (§19.0)
-    nameBoard(ctx, R, { title: '놀이로 해 보는 쉼 체험이에요', sub: '진짜 검사나 치료가 아니에요', x: 3.0, y: 1.62, z: Z0 + 0.06, w: 1.7, bg1: '#f3ead8', bg2: '#e8dcc4', border: '#b08a5a', color: '#3a2616', subColor: '#6a4a2a' });
+    nameBoard(ctx, R, { title: '놀이로 해 보는 쉼 체험이에요', sub: '진짜 검사나 치료가 아니에요', x: 3.0, y: 1.78, z: Z0 + 0.06, w: 1.7, bg1: '#f3ead8', bg2: '#e8dcc4', border: '#b08a5a', color: '#3a2616', subColor: '#6a4a2a' });
     station(ctx, 'LOBBY', 'desk', 0, 0, deskZ + 1.1, PI);
     station(ctx, 'LOBBY', 'guide', 0, 0, deskZ - 0.75, 0);
     // the kiosk: a slim wooden stand with a lit screen
@@ -494,6 +498,46 @@ G.healStations = G.healStations || { map: new Map(),
         const near = live.lightSpots.slice().sort((a, b) => Math.abs(a.x - px) - Math.abs(b.x - px));
         live.handles.forEach((h, i) => { const s = near[i], l = h.light; if (s && l) l.position.set(origin.x + s.x, s.y, origin.z + s.z); });
       }
+    });
+  }
+
+  /** sun patches on the corridor floor: every glass port projected along the REAL sun direction (the same sun the
+   *  engine aims), cut by the eaves and the back wall — drawn when the window sun casts no real shadow here (the kit's
+   *  rooms do the same with their windows); additive, warm, fading with clouds, a low sun and the night */
+  function sunPatches(ctx, R, live) {
+    const ports = live.ports, n = ports.length;
+    if (!n) return;
+    const pos = new Float32Array(n * 4 * 3), idx = [];
+    for (let i = 0; i < n; i++) idx.push(i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(idx); ctx.own(g);
+    const m = new THREE.MeshBasicMaterial({ color: 0xffe2b0, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }); ctx.own(m);
+    const mesh = new THREE.Mesh(g, m); mesh.name = 'heal-sun-patches'; mesh.renderOrder = 2; mesh.frustumCulled = false; mesh.userData.guardSkip = true; mesh.raycast = () => {};
+    R.addMesh(mesh, null);
+    const E = G.sys.engine, Y = 0.012, eaveY = R.post + 0.3, eaveZ = FRONT_Z + 2.1, backZ = DOOR_Z + 0.05;
+    let acc = 1;
+    live.updates.push((dt) => {
+      acc += dt;
+      if (acc < 0.4) return;
+      acc = 0;
+      const Wx = G.sys.weather, az = Number(Wx?.sunAzimuth), el = Number(Wx?.sunElevation), nf = clamp(Number(G.world?.nightFactor) || 0, 0, 1);
+      const shadows = !!E?.indoorShadows;
+      if (!fin(az) || !fin(el) || el < 1 || shadows) { mesh.visible = false; return; }
+      const a = az * PI / 180, e = el * PI / 180, dx = Math.sin(a) * Math.cos(e), dy = Math.sin(e), dz = -Math.cos(a) * Math.cos(e);
+      if (dz < 0.05) { mesh.visible = false; return; }      // the sun is behind the house: no light comes through the glass
+      // a ray from a pane point towards the sun must pass under the eave edge (z = eaveZ, y = eaveY)
+      const k = dy / dz;                                       // rise per metre towards the sun
+      const capY = Math.min(R.post, eaveY - (eaveZ - FRONT_Z) * k);
+      for (let i = 0; i < n; i++) {
+        const [x0, x1, y0, y1raw] = ports[i], y1 = Math.min(y1raw, capY), o = i * 12;
+        if (y1 <= y0 + 0.02) { pos.fill(0, o, o + 12); continue; }
+        // a pane point (x, y, FRONT_Z) lands on the floor at x − dx / dy · y, z = FRONT_Z − dz / dy · y (stopped at the back wall)
+        const put = (j, x, y) => { let zf = FRONT_Z - (dz / dy) * y, xf = x - (dx / dy) * y; if (zf < backZ) { const t = (FRONT_Z - backZ) / (FRONT_Z - zf); xf = x - (dx / dy) * y * t; zf = backZ; } pos[o + j * 3] = xf; pos[o + j * 3 + 1] = Y; pos[o + j * 3 + 2] = zf; };
+        put(0, x0, y0); put(1, x1, y0); put(2, x1, y1); put(3, x0, y1);
+      }
+      g.attributes.position.needsUpdate = true;
+      const mix = Wx?.mix || {}, clear = fin(mix.CLEAR) ? mix.CLEAR : 1, wk = clamp(clear + 0.25 * (mix.CLOUDY || 0), 0, 1);
+      m.opacity = 0.2 * wk * clamp((el - 1) / 8, 0, 1) * (1 - nf);
+      mesh.visible = m.opacity > 0.005;
     });
   }
 
@@ -1060,6 +1104,7 @@ G.healStations = G.healStations || { map: new Map(),
         const pg = new THREE.CircleGeometry(1.8, 32); pg.rotateX(-PI / 2); pg.translate(x, 0.01, z); ctx.own(pg);
         const pm = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.12, depthWrite: false, blending: THREE.AdditiveBlending }); ctx.own(pm);
         const pool = new THREE.Mesh(pg, pm); pool.name = 'heal-r10-pool'; pool.userData.guardSkip = true; pool.raycast = () => {}; R.addMesh(pool, null);
+        coffin.userData.pool = pool;
         station(ctx, 'R10', 'coffin', x, y0 + t, z, PI); }
       // the resting mat (gentle version) under small star lights on the ceiling
       { const x = 0, z = 3.0;
@@ -1074,7 +1119,7 @@ G.healStations = G.healStations || { map: new Map(),
         station(ctx, 'R10', 'rest', x, 0.04, z, PI); }
       if (Kt.screen) try { Kt.screen(R, { x: -6.4, z: 0, rotY: PI / 2, panels: 8, h: 1.7 }); } catch (e) { /* optional */ }
       for (const [x, z] of [[-6.4, 6], [6.4, 6]]) { if (Kt.jwadeung) try { Kt.jwadeung(R, { x, z, h: 0.9 }); } catch (e) { /* optional */ } }
-      const setGentle = (g) => { coffin.visible = !g; const pool = ctx.group.getObjectByName('heal-r10-pool'); if (pool) pool.visible = !g; };
+      const setGentle = (g) => { coffin.visible = !g; if (coffin.userData.pool) coffin.userData.pool.visible = !g; };
       setGentle(gentle());
       room10Live = { coffin, setGentle };
       station(ctx, 'R10', 'guide', 1.8, 0, 0.4, PI);
