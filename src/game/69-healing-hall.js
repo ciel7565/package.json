@@ -345,6 +345,13 @@ G.healStations = G.healStations || { map: new Map(),
     station(ctx, 'LOBBY', 'spot', 0, 0, deskZ + 1.6, PI);
     plant(R, ctx, 9.4, Z0 + 1.0, 1.2); plant(R, ctx, -9.4, Z0 + 1.0, 1.2);
     if (Kt.screen) try { Kt.screen(R, { x: 8.4, z: FRONT_Z - 3.2, rotY: -PI / 2, panels: 6, h: 1.6 }); } catch (e) { /* optional */ }
+    // wayfinding where the lobby opens into the two wings (both faces: towards the lobby and back towards it)
+    for (const sx of [1, -1]) {
+      const x = sx * (LOBBY_W / 2), wing = sx > 0 ? '제1관 ~ 제5관' : '제6관 ~ 제10관';
+      R.add('wood', box(0.05, 0.5, 0.05), M(x, HALL.CEIL - 0.25, -0.75), '#5a3a22', { cast: false }); R.add('wood', box(0.05, 0.5, 0.05), M(x, HALL.CEIL - 0.25, 0.75), '#5a3a22', { cast: false });
+      nameBoard(ctx, R, { title: wing, sub: '이쪽으로 가요', x: x - sx * 0.02, y: HALL.CEIL - 0.72, z: 0, rotY: sx > 0 ? -PI / 2 : PI / 2, w: 1.7 });
+      nameBoard(ctx, R, { title: '로비', sub: '안내데스크 · 숙소 · 상담실', x: x + sx * 0.02, y: HALL.CEIL - 0.72, z: 0, rotY: sx > 0 ? PI / 2 : -PI / 2, w: 1.7 });
+    }
     // a woven mat under the waiting benches
     if (Kt.floorMat) try { Kt.floorMat(R, { x: 0, z: FRONT_Z - 2.0, w: 8, d: 2.4 }); } catch (e) { /* optional */ }
   }
@@ -493,7 +500,7 @@ G.healStations = G.healStations || { map: new Map(),
   // ================================================================ the garden strip and the far view (outside the glass)
   function seasonId() {
     try {
-      const s = G.sys.seasons?.current?.() || G.seasons?.current?.() || G.sys.seasons?.id || null;
+      const s = G.season?.id || G.sys.season?.mode?.() || null;
       if (s) return typeof s === 'string' ? s : s.id;
     } catch (e) { /* optional */ }
     try { return G.env?.season?.()?.id || 'autumn'; } catch (e) { return 'autumn'; }
@@ -592,6 +599,7 @@ G.healStations = G.healStations || { map: new Map(),
     if (!low) for (const l of lanterns.slice(0, 4)) lanternLights.push({ h: ctx.light({ x: l.x, y: 0.7, z: l.z, color: 0xffc070, intensity: 3, distance: 6, decay: 2, day: 0, flicker: 0.04 }), x: l.x, z: l.z });
     const SEASON_LEAF = { spring: '#9cc46a', summer: '#4f7f34', autumn: '#c0662c', winter: null };
     let acc = 1, lastSeason = null;
+    const _leaf = new THREE.Color(), _tmpC = new THREE.Color();
     live.updates.push((dt) => {
       acc += dt;
       if (acc < 0.5) return;
@@ -600,17 +608,30 @@ G.healStations = G.healStations || { map: new Map(),
       const el = Number(Wx?.sunElevation);
       const duskK = fin(el) ? clamp(1 - Math.abs(el - 2) / 10, 0, 1) * (1 - nf) : 0;
       if (live.pano) live.pano.color.copy(day).lerp(dusk, duskK * 0.8).lerp(night, nf);
-      const snow = clamp(Number(Wx?.precipitation?.snow) || Number(Wx?.mix?.SNOW) || 0, 0, 1), cover = clamp((G.sys.weather?._snowCover ?? snow), 0, 1);
+      // snow lying in the garden: the season's snow cover (12-seasons; its global hook is off indoors) or falling snow
+      const SN = G.season, snow = clamp(Number(Wx?.precipitation?.snow) || Number(Wx?.mix?.SNOW) || 0, 0, 1), cover = clamp(Math.max(fin(Number(SN?.snow)) ? Number(SN.snow) : 0, snow), 0, 1);
       live.snowK = lerp(live.snowK || 0, cover, 0.3);
       // (lit by the room's own sun / moon: no extra darkening at night — the screen watchdog wants no black block)
       gmat.color.copy(gDay).lerp(gSnow, live.snowK * 0.9);
       if (live.meadow) live.meadow.color.copy(mDay).lerp(gSnow, live.snowK * 0.85);
-      const s = seasonId();
-      if (s !== lastSeason && live.crowns) {
-        lastSeason = s;
-        const col = SEASON_LEAF[s] !== undefined ? SEASON_LEAF[s] : SEASON_LEAF.autumn;
-        live.crowns.visible = !!col;
-        if (col) live.crowns.material.color.set(col);
+      // the broadleaf crowns follow G.season (leaf, fresh green, autumn colour, withered); without it the season id
+      if (live.crowns) {
+        if (SN && fin(Number(SN.leaf))) {
+          const leaf = clamp(Number(SN.leaf), 0, 1);
+          live.crowns.visible = leaf > 0.12;
+          _leaf.set('#4f7f34').lerp(_tmpC.set('#9cc46a'), clamp(Number(SN.fresh) || 0, 0, 1)).lerp(_tmpC.set('#c8642a'), clamp(Number(SN.autumn) || 0, 0, 1)).lerp(_tmpC.set('#8a6a3a'), clamp(Number(SN.brown) || 0, 0, 1) * 0.8)
+            .lerp(_tmpC.set('#f3d6de'), clamp(Number(SN.blossom) || 0, 0, 1) * 0.6);
+          live.crowns.material.color.copy(_leaf);
+          live.crowns.scale.setScalar(1);
+        } else {
+          const s = seasonId();
+          if (s !== lastSeason) {
+            lastSeason = s;
+            const col = SEASON_LEAF[s] !== undefined ? SEASON_LEAF[s] : SEASON_LEAF.autumn;
+            live.crowns.visible = !!col;
+            if (col) live.crowns.material.color.set(col);
+          }
+        }
       }
     });
     // rain and snow outside the glass (medium / high): streaks / flakes in a box that follows the visitor along the
@@ -854,6 +875,7 @@ G.healStations = G.healStations || { map: new Map(),
       } catch (e) { /* optional */ }
       if (Kt.shelf) try { const sp = Kt.shelf(R, { x: 6.6, z: -6, rotY: -PI / 2, w: 1.6, d: 0.4, h: 1.6, levels: 3 }); (sp || []).slice(0, 6).forEach((p, i) => { if (Kt.pot) Kt.pot(R, { x: p.x, y: p.y, z: p.z, kind: i % 2 ? 'danji' : 'bottle', s: 0.5 }); }); ctx.addCollider({ shape: 'box', x: 6.6, z: -6, hw: 0.22, hd: 0.82, maxY: 1.7 }); } catch (e) { /* optional */ }
       bench(R, ctx, -4.8, 5.0); bench(R, ctx, 4.8, 5.0);
+      emitter(ctx, 'water', 0, -4.4, 0.18);
       station(ctx, 'R3', 'seat', 0, 0.52, -4.4, PI);
       station(ctx, 'R3', 'pot', 0, 0.1, -4.4, 0);
       station(ctx, 'R3', 'guide', 1.8, 0, -2.6, PI);
@@ -1287,6 +1309,20 @@ G.healStations = G.healStations || { map: new Map(),
     ro.ridge = { w: 0.44, h: 0.44 };
     try { Bk.roof(B, Mb(0, 0, 0), ro); } catch (e) { warn('house roof', e); }
     site.box(0, 0, w / 2 + 0.4, d / 2 + 0.4);
+    // two stone lanterns and low pines flanking the entrance steps
+    for (const sx of [-1, 1]) {
+      const lx = sx * 3.6, lz = d / 2 + 2.6;
+      B.add('stone', geo.box(0.6, 0.14, 0.6, 'world'), Mb(lx, 0.07, lz), '#bdb6a8');
+      B.add('stone', geo.cyl(0.1, 0.13, 0.9, 8), Mb(lx, 0.59, lz), '#bdb6a8');
+      B.add('stone', geo.box(0.56, 0.1, 0.56, 'world'), Mb(lx, 1.09, lz), '#b3ac9e');
+      B.add('glow', geo.box(0.34, 0.34, 0.34, 'world'), Mb(lx, 1.31, lz), '#ffcf8a');
+      B.add('stone', geo.box(0.62, 0.12, 0.62, 'world'), Mb(lx, 1.54, lz), '#a9a294');
+      site.circle(lx, lz, 0.38);
+      const px = sx * 7.4, pz = d / 2 + 2.2;
+      B.add('wood', geo.cyl(0.1, 0.16, 2.4, 7), Mb(px, 1.2, pz), '#6a4a34');
+      for (let k = 0; k < 3; k++) B.add('paint', geo.cyl(0.05, 1.2 - k * 0.3, 0.8, 8), Mb(px + (k - 1) * 0.15, 1.9 + k * 0.5, pz), k % 2 ? '#2f5a34' : '#355f3a');
+      site.circle(px, pz, 0.3);
+    }
     const root = new THREE.Group(); root.name = 'heal-house';
     E.scene.add(root);
     site.finish(root, { blockKeys: ['roof', 'soffit', 'fascia'] });
