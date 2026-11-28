@@ -55,11 +55,13 @@ await page.route('**/*', (route) => (/^(file|data|blob):/.test(route.request().u
 const pageErrors = [], consoleErrors = [];
 page.on('pageerror', (e) => pageErrors.push(String(e?.message || e).slice(0, 300)));
 page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 300)); });
-const quality = SHOTS ? 'high' : 'low';
+const quality = opt('--quality', SHOTS ? 'high' : 'low');
 // normal mode enters through the title (a grown-up's path; the autostart guest is a child in easy mode) — as tools/smoke.mjs
 const url = `${pathToFileURL(file).href}?${MODE === 'easy' ? 'autostart=1&' : ''}notutorial=1&quality=${quality}`;
 const ev = (fn, a) => page.evaluate(fn, a);
 const wait = (ms) => page.waitForTimeout(ms);
+/** press a button like a finger, without Playwright's wait for a still element (at quality=high a frame takes seconds) */
+async function tap(sel) { await page.waitForSelector(sel, { timeout: 60000 }); await page.$eval(sel, (el) => el.click()); }
 async function shot(name) {
   if (!SHOTS) return;
   await wait(1500);
@@ -103,28 +105,28 @@ try {
     await ev(() => G.sys.healing.openKiosk());
     await page.waitForSelector('.heal-m-kiosk .heal-btn.btn-primary', { timeout: 20000 });
     await shot('01-kiosk');
-    await page.click('.heal-m-kiosk .heal-btn.btn-primary', { timeout: 30000 });   // 예약하기 → the desk opens
+    await tap('.heal-m-kiosk .heal-btn.btn-primary');   // 예약하기 → the desk opens
     await page.waitForFunction(() => !!G.ui.modal.get('heal-desk'), null, { timeout: 20000 });
     check('booked at the kiosk', await ev(() => !!G.sys.healing.visit && G.sys.healing.step() === 'checkin'));
     await shot('02-desk');
     await page.waitForSelector('.heal-m-desk .heal-btn.btn-primary', { timeout: 20000 });
-    await page.click('.heal-m-desk .heal-btn.btn-primary', { timeout: 30000 });   // 체크인
+    await tap('.heal-m-desk .heal-btn.btn-primary');   // 체크인
     check('checked in at the desk (a wrist band)', await ev(() => G.sys.healing.visit.band > 0 && G.sys.healing.step() === 'stay'));
     check('the HUD chip shows inside the hall', await ev(() => !document.getElementById('heal-chip').hidden && !document.getElementById('heal-hud').hidden));
     await ev(() => G.ui.modal.closeAll());
     await goTo('STAY');
     await ev(() => G.sys.healing.openStay());
-    for (let i = 0; i < 3; i++) { await page.waitForSelector(`.heal-m-stay .heal-shelf .heal-tile.now >> nth=0`, { timeout: 20000 }); await page.click('.heal-m-stay .heal-shelf .heal-tile.now >> nth=-1', { timeout: 30000 }); await page.waitForFunction((n) => G.sys.healing.visit.stow >= n, i + 1, { timeout: 20000 }); }
+    for (let i = 0; i < 3; i++) { await page.waitForSelector(`.heal-m-stay .heal-shelf .heal-tile.now >> nth=0`, { timeout: 20000 }); await tap('.heal-m-stay .heal-shelf .heal-tile.now >> nth=-1'); await page.waitForFunction((n) => G.sys.healing.visit.stow >= n, i + 1, { timeout: 20000 }); }
     check('the bundle unpacked onto the shelf (three taps)', await ev(() => G.sys.healing.visit.stow === 3 && G.sys.healing.step() === 'change'));
     await shot('03-stay');
-    await page.click('.heal-m-stay .heal-btn.btn-primary >> nth=-1', { timeout: 30000 });   // 힐링복으로 갈아입기
+    await tap('.heal-m-stay .heal-btn.btn-primary >> nth=-1');   // 힐링복으로 갈아입기
     await page.waitForFunction(() => G.sys.healing.visit.changed > 0, null, { timeout: 20000 });
     const look1 = await ev(() => ({ s: JSON.stringify(G.state.profile?.avatar || null), top: (G.state.profile?.avatar || {}).topColor, wear: !!G.sys.healing.visit.wear }));
     check('changed into the 힐링복 (the old look is kept for the check-out)', look1.wear && look1.s !== look0 && G_ok(look1.top), look1);
     await ev(() => G.ui.modal.closeAll());
     await goTo('TALK');
     await ev(() => G.sys.healing.openCounsel());
-    for (let q = 0; q < 4; q++) { await page.waitForSelector('.heal-m-counsel .heal-grid .heal-tile', { timeout: 20000 }); await page.click(`.heal-m-counsel .heal-grid .heal-tile >> nth=${q % 4}`, { timeout: 30000 }); }
+    for (let q = 0; q < 4; q++) { await page.waitForSelector('.heal-m-counsel .heal-grid .heal-tile', { timeout: 20000 }); await tap(`.heal-m-counsel .heal-grid .heal-tile >> nth=${q % 4}`); }
     await page.waitForFunction(() => !!G.sys.healing.visit.base, null, { timeout: 20000 });
     const base = await ev(() => G.sys.healing.visit.base);
     check('the manager\'s four picture questions set the numbers', base && Object.values(base).every((x) => x >= 0 && x <= 100), base);
