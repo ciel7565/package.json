@@ -283,6 +283,7 @@
       F('56-complex-office.js', 'map', '만장대 단지 안쪽 방: 본관 로비·옹기 공방·카페 (§16.4·§16.8)'), // [finisher]
       F('59-vehicles.js', 'map', '차(G.vehicles): 골짜기 주차장과 단지의 차·버스를 하나의 만들기로 (§17.9)'), // [finisher]
       F('69-healing-hall.js', 'map', '힐링관 건물(B_HEAL)과 안: 통유리 복도·로비(안내데스크·키오스크)·숙소·상담실·제1관~제10관, 체험 자리(G.healStations)·문 상태(G.healHall) (§19.6)'), // [heal-hall]
+      F('64-interiors-e.js', 'buildings', '집 안 ⑤: 장터 거리·공방 마을의 한옥 열 채 — 한복집(옷 사고팔기·거울 옷장)·염색 공방(쪽물 들이기)·주막(국밥·식혜)·떡집(떡메)·한지 공방(종이 뜨기)·서당(셈·한글)·대장간(풀무)·방앗간(디딜방아·물레방아)·약초방(향)·찻집(다도) — 바깥(G.bkit.craft)·주인·배울 것·해 볼 것·도장 (§19.2)'), // [buildings]
       F('57-complex-landscape.js', 'map', '만장대 단지 풍경: 둘레 산(능선·골짜기)·숲(나무 세 단계 상세도·바람)·산 숲 표면·강물(흐름·거품)·바위와 절벽·갈대·소나무 정원과 분수·주차된 차·관광버스·만장대 셔틀·접지 그림자·새·새벽 안개 (§16.8)'), // [complex-landscape]
       F('60-social.js', 'social', '채팅·필터·개인정보 가림(maskPII)·말풍선·아이 말하기(문장 고르기)·표현하기·체험객·서버 접속자'),
       F('61-audio.js', 'social', '절차적 효과음·환경음·국악풍 BGM·음성 합성'),
@@ -504,6 +505,7 @@
   EXPECTED_SYSTEMS.push('healing', 'healacts');   // [healing] 39-healing.js · 79-healing-acts.js
   EXPECTED_SYSTEMS.push('fishing');   // [fishing] 35-fishing.js
   EXPECTED_SYSTEMS.push('healHall');   // [heal-hall] 69-healing-hall.js
+  EXPECTED_SYSTEMS.push('crafts');   // [buildings] 64-interiors-e.js
   EXPECTED_SYSTEMS.push('entitle');   // [entitle] 71-entitle.js
   const HANGUL = /[가-힣]/;
   const CROP_MODELS = new Set(['bean', 'pepper', 'cabbage', 'perilla', 'corn', 'radish', 'mint', 'lavender', 'rosemary', 'lemonbalm']);
@@ -1550,6 +1552,10 @@
     { id: 'wardrobe', emoji: '👘', label: '옷장 (장비 칸)', fn: () => { const f = fnOf(G.sys.wardrobe, 'open'); return f && (() => f('equip')); } },
     { id: 'hanbokshop', emoji: '🛍️', label: '한복집 (입어 보기)', fn: () => { const f = fnOf(G.sys.wardrobe, 'openShop'); return f && (() => f('SHOP_HANBOK')); } },
     { id: 'charsheet', emoji: '🖼️', label: '설정 시트 (옷장)', fn: () => { const f = fnOf(G.sys.wardrobe, 'open'); return f && (() => f('sheet')); } },
+    // [buildings] the ten hanok (§19.2): the keeper's menu, the 배워요 list, the first step of a thing to do
+    { id: 'craft-menu', emoji: '👘', label: '한복집 주인 (집 메뉴)', fn: () => (G.crafts?.menu ? () => { G.crafts.menu('PL_HANBOK'); } : null) }, // [buildings]
+    { id: 'craft-learn', emoji: '📖', label: '염색 공방 배워요', fn: () => (G.crafts?.learn ? () => { G.crafts.learn(G.crafts.houses.find((h) => h.id === 'dye')); } : null) }, // [buildings]
+    { id: 'craft-act', emoji: '✋', label: '떡집 해 봐요 (떡메)', fn: () => (G.crafts?.act ? () => { G.crafts.act('PL_TTEOK'); } : null) }, // [buildings]
     { id: 'menu', emoji: '☰', label: '메뉴', fn: () => fnOf(G.app, 'openMenu') },
     // kid settings sheet (소리·음악·읽어주기·쉬운 모드) is ungated on purpose (§12.4 quick toggles);
     // the grown-up settings must show the parent gate first
