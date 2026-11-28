@@ -432,6 +432,7 @@
   }
 
   // ---------------------------------------------------------------- geometry helpers
+  const _lodV = new THREE.Vector3();
   const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
   function xf(geo, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
     _e.set(rx, ry, rz); _q.setFromEuler(_e); _p.set(x, y, z); _s.set(sx, sy, sz);
@@ -439,13 +440,16 @@
     geo.applyMatrix4(_m4);
     return geo;
   }
-  const sphere = (r, w = 16, h = 12) => new THREE.SphereGeometry(r, w, h);
-  const capsule = (r, len, rs = 8) => new THREE.CapsuleGeometry(r, len, 2, rs);
-  const cyl = (rt, rb, h, rs = 14, open = false, ts, tl) => new THREE.CylinderGeometry(rt, rb, h, rs, 1, open, ts ?? 0, tl ?? TAU);
-  const torus = (r, t, rs = 5, ts = 18, arc = TAU) => new THREE.TorusGeometry(r, t, Math.min(rs, 5), Math.min(ts, 20), arc);
+  // [people] §19.9 the middle level (beyond 12 m): the same kit built with fewer segments (LODK < 1), ≤ 12 000 triangles
+  let LODK = 1;
+  const lk = (n, min) => (LODK === 1 ? n : Math.max(min, Math.round(n * LODK)));
+  const sphere = (r, w = 16, h = 12) => new THREE.SphereGeometry(r, lk(w, 6), lk(h, 4));
+  const capsule = (r, len, rs = 8) => new THREE.CapsuleGeometry(r, len, LODK === 1 ? 2 : 1, lk(rs, 5));
+  const cyl = (rt, rb, h, rs = 14, open = false, ts, tl) => new THREE.CylinderGeometry(rt, rb, h, lk(rs, 5), 1, open, ts ?? 0, tl ?? TAU);
+  const torus = (r, t, rs = 5, ts = 18, arc = TAU) => new THREE.TorusGeometry(r, t, lk(Math.min(rs, 5), 3), lk(Math.min(ts, 20), 6), arc);
   const rbox = (w, h, d, rad, seg) => new ADDONS.RoundedBoxGeometry(w, h, d, seg ?? (Math.max(w, h, d) > 0.15 ? 2 : 1), Math.min(rad, w / 2, h / 2, d / 2) * 0.999);
-  function lathe(pts, segs = 20, zs = 1) { const g = new THREE.LatheGeometry(pts.map((p) => new THREE.Vector2(p[0], p[1])), segs); if (zs !== 1) xf(g, 0, 0, 0, 0, 0, 0, 1, 1, zs); return g; }
-  function tube(points, r, segs = 20, rs = 6) { return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(p[0], p[1], p[2]))), segs, r, rs, false); }
+  function lathe(pts, segs = 20, zs = 1) { const g = new THREE.LatheGeometry(pts.map((p) => new THREE.Vector2(p[0], p[1])), lk(segs, 6)); if (zs !== 1) xf(g, 0, 0, 0, 0, 0, 0, 1, 1, zs); return g; }
+  function tube(points, r, segs = 20, rs = 6) { return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(p[0], p[1], p[2]))), lk(segs, 4), r, lk(rs, 4), false); }
   /** limb capsule between y0 (top) and y1 (bottom) at (x, z) */
   function limb(x, y0, y1, r, z = 0) { return xf(capsule(r, Math.max(0.001, y0 - y1)), x, (y0 + y1) / 2, z); }
 
@@ -939,6 +943,24 @@
     return g;
   }
 
+  /** [people] §19.9 the middle level of a realistic body (beyond 12 m): the same pieces with about a fifth of the
+   *  triangles (≤ 12 000), built at most once per 120 ms across all rigs (null until then: the rig keeps its near body) */
+  const MID_K = 0.45;
+  let midLast = -1e9;
+  function midGeometry(app, force) {
+    const key = shapeSig(app) + '|m';
+    let g = geoCache.get(key);
+    if (g) { geoCache.delete(key); geoCache.set(key, g); return g; }
+    const now = performance.now();
+    if (!force && now - midLast < 120) return null;
+    midLast = now;
+    LODK = MID_K;
+    try { g = buildBody(app); warpBuild(g, buildOf(app)); } finally { LODK = 1; }
+    geoCache.set(key, g);
+    trimCache(key);
+    return g;
+  }
+
   // ---------------------------------------------------------------- the realistic body (style `real`, CONTRACT §17.7)
   // Natural proportions (1.62 m, ~7 heads). Every part is a shaped surface — swept rings with superelliptic sections
   // (torso, limbs, garments), a sculpted head (skull, jaw, cheekbones, eye sockets, lips, a separate nose and ears),
@@ -954,7 +976,7 @@
   function headPos(nx, ny, nz, grow, out) {
     let x = nx * HEAD.rx, y = ny * HEAD.ry, z = nz * HEAD.rz;
     const low = smooth(-0.05, -0.95, ny), front = smooth(0.2, 1, nz);
-    x *= 1 - 0.3 * low * low;                                        // jaw narrows to the chin
+    x *= 1 - 0.24 * low * low;                                       // jaw narrows to the chin ([people] rounder, less of a V)
     if (nz < 0) z *= 1 - 0.4 * low * -nz;                            // the back of the lower head goes into the neck
     z += 0.012 * low * front; y -= 0.01 * low * front;               // face plane and chin forward
     z -= 0.01 * smooth(0, -0.8, nz) * smooth(-0.3, 0.6, ny);         // the cranium bulges at the back
@@ -971,7 +993,7 @@
   const _hp = [0, 0, 0];
   /** a sphere grid mapped through headPos; growFn(yaw, elev, dir) → metres (or a number) */
   function headShell(growFn, w = 44, hgt = 34, phiStart = 0, phiLen = TAU, thStart = 0, thLen = Math.PI) {
-    let g = new THREE.SphereGeometry(1, w, hgt, phiStart, phiLen, thStart, thLen);
+    let g = new THREE.SphereGeometry(1, lk(w, 10), lk(hgt, 8), phiStart, phiLen, thStart, thLen);
     g.deleteAttribute('normal');
     if (phiLen >= TAU - 1e-6) { g.deleteAttribute('uv'); g = BGU.mergeVertices(g, 1e-5); }
     const p = g.attributes.position, v = new THREE.Vector3();
@@ -1010,7 +1032,7 @@
    * opts: nu, nv, open (no seam closing: a sheet), cap0 / cap1 (close the first / last ring with a fan)
    */
   function sweep(ringFn, opts) {
-    const nu = opts.nu || 18, nv = opts.nv || 8, open = !!opts.open;
+    const nu = lk(opts.nu || 18, opts.open ? 2 : 4), nv = lk(opts.nv || 8, 1), open = !!opts.open;
     const cols = open ? nu + 1 : nu;
     const pos = [], uv = [], idx = [], pt = [0, 0, 0];
     for (let j = 0; j <= nv; j++) {
@@ -1052,7 +1074,7 @@
   /** a tube with varying radius along a Catmull-Rom path; radius(t) → metres; flat: section squash (thin ribbons) */
   function sweepPath(points, radius, opts = {}) {
     const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
-    const nv = opts.nv || 16, nu = opts.nu || 8;
+    const nv = opts.nv || 16, nu = opts.nu || 8; // (sweep thins the grid on the middle level; frames stay at nv)
     const fr = curve.computeFrenetFrames(nv, false);
     const c = new THREE.Vector3();
     return sweep((v, u, out) => {
@@ -1240,17 +1262,18 @@
     P.add(headShell(0, 40, 30), B.head, S.skin);
     const fz = headPos(0, -0.28, 0.96, 0, [0, 0, 0])[2];
     const nose = sweep((v, u, out) => { // bridge → tip: a narrow wedge that widens to the wings
-      const y = lerp(HEAD.cy + 0.012, HEAD.cy - 0.048, v);
-      const w = lerp(0.006, 0.0125, smooth(0.2, 1, v)), d = lerp(0.004, 0.016, Math.pow(v, 1.3));
+      const y = lerp(HEAD.cy + 0.004, HEAD.cy - 0.047, v); // [people] §19.9 a lower, softer bridge into a small rounded tip
+      const w = lerp(0.0068, 0.0135, smooth(0.25, 1, v)), d = lerp(0.0012, 0.0145, Math.pow(v, 1.6));
       const a = u * TAU, s = Math.sin(a), c = Math.cos(a);
       out[0] = s * w; out[1] = y - (c < 0 ? 0 : 0.003 * v * c); out[2] = fz - 0.012 + Math.max(0, c) * d + 0.006 * v + c * 0.002;
     }, { nu: 12, nv: 8, cap0: true, cap1: true });
     P.add(nose, B.head, S.skin);
     for (const s of [1, -1]) {
       P.add(xf(sphere(0.006, 8, 6), s * 0.0095, HEAD.cy - 0.0465, fz - 0.002, 0, 0, 0, 1, 0.75, 1.1), B.head, S.skin);  // nostril wings
-      const ear = xf(sphere(1, 12, 10), s * (HEAD.rx + 0.002), HEAD.cy - 0.012, -0.014, 0, s * -0.35, s * 0.12, 0.011, 0.031, 0.02);
+      // [people] §19.9 the ear: a flat shell close to the head with its rim lying on it (it read as a handle)
+      const ear = xf(sphere(1, 12, 10), s * (HEAD.rx - 0.001), HEAD.cy - 0.012, -0.014, 0, s * -0.3, s * 0.1, 0.009, 0.03, 0.019);
       P.add(ear, B.head, S.skin);
-      P.add(xf(torus(0.024, 0.005, 5, 14, Math.PI * 1.25), s * (HEAD.rx + 0.006), HEAD.cy - 0.008, -0.016, 0, s * (Math.PI / 2 - 0.35), Math.PI * 0.55, 1, 1.3, 1), B.head, S.skin);
+      P.add(xf(torus(0.02, 0.0032, 5, 14, Math.PI * 1.2), s * (HEAD.rx + 0.003), HEAD.cy - 0.009, -0.016, 0, s * (Math.PI / 2 - 0.3), Math.PI * 0.55, 1, 1.4, 1), B.head, S.skin);
     }
     P.add(rings([[1.515, 0.05, 0.053, 0, -0.012], [1.46, 0.051, 0.054, 0, -0.012], [1.405, 0.056, 0.058, 0, -0.014], [1.37, 0.07, 0.07, 0, -0.012]], { nu: 14, nv: 6 }), torsoW, S.skin);
     P.add(torsoShell(1.405, 1.25, -0.003, { nu: 22, nv: 5 }), torsoW, S.skin);
@@ -1501,13 +1524,13 @@
     bangs: { fringe: 0.3, faceW: 1.08, side: -0.45, nape: -0.6, thick: 0.012, flare: 0.014, flat: true },
     long: { fringe: 0.7, faceW: 1.0, side: -0.72, nape: -0.85, thick: 0.011, flare: 0.006 },
     wave: { fringe: 0.68, faceW: 1.0, side: -0.72, nape: -0.85, thick: 0.015, flare: 0.012 },
-    bun: { fringe: 0.74, faceW: 1.18, side: 0.04, nape: -0.42, thick: 0.008 },
-    ponytail: { fringe: 0.74, faceW: 1.16, side: 0.04, nape: -0.42, thick: 0.008 },
+    bun: { fringe: 0.74, faceW: 1.18, side: 0.04, nape: -0.42, thick: 0.008, back: 1 },
+    ponytail: { fringe: 0.74, faceW: 1.16, side: 0.04, nape: -0.42, thick: 0.008, back: 1 },
     daenggi: { fringe: 0.74, faceW: 1.16, side: 0.02, nape: -0.45, thick: 0.008, part: 0 },
     jjok: { fringe: 0.74, faceW: 1.16, side: 0.02, nape: -0.45, thick: 0.008, part: 0 },
     twinbraid: { fringe: 0.72, faceW: 1.14, side: 0.0, nape: -0.45, thick: 0.009, part: 0 },
     pigtails: { fringe: 0.6, faceW: 1.12, side: 0.0, nape: -0.45, thick: 0.01, part: 0 },
-    sangtu: { fringe: 0.74, faceW: 1.2, side: 0.08, nape: -0.4, thick: 0.007 },
+    sangtu: { fringe: 0.74, faceW: 1.2, side: 0.08, nape: -0.4, thick: 0.007, back: 1 },
     buzz: { fringe: 0.74, faceW: 1.22, side: 0.0, nape: -0.4, thick: 0.0045 },
     curly: { fringe: 0.6, faceW: 1.05, side: -0.25, nape: -0.5, thick: 0.022, curly: true },
     side: { fringe: 0.66, faceW: 1.15, side: 0.02, nape: -0.45, thick: 0.011, part: 0.45, sweep: true },
@@ -1517,9 +1540,12 @@
     keunmeori: { fringe: 0.74, faceW: 1.18, side: 0.02, nape: -0.45, thick: 0.008, part: 0 },
     gwimit: { fringe: 0.72, faceW: 1.14, side: 0.0, nape: -0.45, thick: 0.009, part: 0 },
   };
-  function hairCovReal(h, yaw, elev) {
+  function hairCovReal(h, yaw, elev, inset = 0) {
     const ay = Math.abs(yaw);
-    const fringe = h.flat ? h.fringe : h.fringe + 0.015 * Math.cos(yaw * 9);
+    let fringe = h.flat ? h.fringe : h.fringe + 0.015 * Math.cos(yaw * 9);
+    // [people] §19.9 a hair pulled back from a parting has a rounded hairline: higher over the forehead, lower at the temples
+    if (h.part != null || h.back) fringe += 0.05 * (1 - smooth(0, h.faceW, ay)) - 0.05 * smooth(h.faceW * 0.55, h.faceW, ay);
+    if (inset) { fringe += inset; h = Object.assign({}, h, { faceW: h.faceW + inset, side: h.side + inset * 0.7, nape: h.nape + inset * 0.5 }); }
     const faceCut = smooth(-0.12, 0.12, h.faceW - ay) * smooth(-0.1, 0.1, fringe - elev);
     const bottom = lerp(h.side, h.nape, smooth(h.faceW, Math.PI, ay));
     return (1 - faceCut) * smooth(bottom - 0.09, bottom + 0.09, elev);
@@ -1542,13 +1568,16 @@
     const ribbon = app.ribbon && app.ribbon !== 'none' ? S.rib : S.red;
     const shell = headShell((yaw, elev, v) => {
       const cov = hairCovReal(h, yaw, elev);
-      let t = h.thick * (1 + 0.45 * Math.max(0, v.y)) + (h.flare || 0) * smooth(0.1, -0.5, elev) * smooth(0.6, 1.4, Math.abs(yaw));
-      t += 0.0012 * Math.sin(yaw * 38 + elev * 3) * smooth(-0.6, 0.4, elev);                 // combed strands
+      // [people] §19.9 more volume over the crown when no hat sits on it; deeper combed locks
+      let t = h.thick * (1 + (hatOn ? 0.45 : 0.85) * Math.max(0, v.y)) + (h.flare || 0) * smooth(0.1, -0.5, elev) * smooth(0.6, 1.4, Math.abs(yaw));
+      t += (0.0012 * Math.sin(yaw * 38 + elev * 3) + 0.0009 * Math.sin(yaw * 17 - elev * 5 + 1.3)) * smooth(-0.6, 0.4, elev); // combed strands, locks
       if (h.part != null && elev > 0.45) t -= 0.006 * gauss((yaw - h.part) / 0.045) * smooth(0.45, 0.7, elev); // the parting
       if (h.sweep) t += 0.009 * gauss((elev - 0.78) / 0.2) * gauss(yaw / 0.8);                 // a swept front
       if (h.curly) t += 0.008 * (Math.sin(v.x * 31) * Math.sin(v.y * 27 + 1) * Math.sin(v.z * 29 + 2) + 0.4);
       if (h.flat) t += 0.004 * smooth(0.25, 0.5, elev) * smooth(0.6, 0, Math.abs(yaw));
-      return lerp(-0.003, t, cov);
+      // [people] the hair thins to a couple of millimetres at its edge (no cap-like lip at the hairline)
+      const deep = hairCovReal(h, yaw, elev, 0.28);
+      return lerp(-0.003, t * (0.16 + 0.84 * deep), cov);
     }, 64, 46);
     P.add(shell, B.head, S.hair);
 
@@ -1873,141 +1902,222 @@
   const faceMats = new Map();
   // the round style draws the nine faces with its own few (§19.1)
   const CUTE_EXPR = { neutral: 'base', smile: 'base', laugh: 'happy', proud: 'happy', curious: 'think', focus: 'think', shy: 'base', sleepy: 'blink' };
-  function faceMaterial(face, expr, style) {
+  const FACE_RES = [[FWR, FHR], [256, 320], [512, 640]]; // [people] §19.9 the face on low (as before), medium, high
+  const FACE_MAX = 72; // painted faces kept (least recently used ones are given back)
+  function faceMaterial(face, expr, style, age, gaze) {
     if (style !== 'real' && CUTE_EXPR[expr]) expr = CUTE_EXPR[expr];
     const real = style === 'real';
-    const key = (real ? 'r:' : '') + face + ':' + expr;
+    const q = real ? AV_Q.value : 0, res = FACE_RES[q] || FACE_RES[0];
+    const key = real ? 'r:' + face + ':' + expr + ':' + (age || 'adult') + ':' + (gaze || 0) + ':' + res[0] : face + ':' + expr;
     let m = faceMats.get(key);
+    if (m) { faceMats.delete(key); faceMats.set(key, m); }
     if (!m) {
-      const tex = real ? G.gfx.canvasTexture(FWR, FHR, (ctx) => drawFaceReal(ctx, face, expr)) : G.gfx.canvasTexture(FW, FH, (ctx) => drawFace(ctx, face, expr));
+      if (faceMats.size >= FACE_MAX) { const [k0, m0] = faceMats.entries().next().value; faceMats.delete(k0); if (m0.map) m0.map.dispose(); m0.dispose(); }
+      const tex = real ? G.gfx.canvasTexture(res[0], res[1], (ctx) => drawFaceReal(ctx, face, expr, age, gaze, res[0], res[1]), { full: true }) : G.gfx.canvasTexture(FW, FH, (ctx) => drawFace(ctx, face, expr));
       m = new THREE.MeshStandardMaterial({ map: tex, transparent: true, depthWrite: false, roughness: real ? 0.5 : 0.55, envMapIntensity: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
       m.name = 'avatarFace:' + key;
+      if (real) { // [people] §19.9 the painted face is lit like the skin under it (wrapped, warm at the terminator)
+        m.onBeforeCompile = (sh) => {
+          sh.uniforms.uAvQ = AV_Q;
+          sh.fragmentShader = 'uniform float uAvQ;\n' + AV_LIGHT_HEAD + sh.fragmentShader.replace('#include <lights_physical_pars_fragment>', avLightChunk())
+            .replace('#include <color_fragment>', '#include <color_fragment>\n  avKindG = uAvQ > 0.5 ? 3.0 : 0.0;');
+        };
+        m.customProgramCacheKey = () => 'tfmAvatarFace1';
+      }
       faceMats.set(key, m);
     }
     return m;
   }
   /**
-   * the realistic face, drawn: soft shading of the sockets, the nose and under the lips, an upper lid crease, lashes,
-   * eyes with a white, a brown iris with a darker rim, pupil and two highlights, brows from single hairs, lips with an
-   * upper / lower tone and a parting line, a faint blush. Expressions move lids, brows and mouth.
+   * [people] §19.9 the realistic face, painted at 512 px on high, 256 px on medium and 320 px on low (as before) — the
+   * drawing keeps the 320 × 400 frame and is scaled. A calm picture-book face: eyes set into soft sockets with an upper
+   * lid fold, a lash line and a lower lid, a white that darkens to its corners, an iris of fine fibres with a dark rim,
+   * a pupil and a catch light; brows of single strokes; a small nose drawn by its shadows; lips with a soft edge and a
+   * little colour; warm cheeks. Children: rounder, larger eyes and a smaller mouth; elders: grey brows, a heavier lid
+   * and fine lines. The nine expressions move brows, lids, the eyes' direction and the mouth; gaze -1 / 0 / 1 turns
+   * both irises to the person's right / ahead / left.
    */
-  function drawFaceReal(ctx, face, expr) {
-    const W = FWR, H = FHR, cx = W / 2;
-    const X = (m) => cx + (m / FACE_W) * W, Y = (dy) => (1 - (0.5 + (dy + 0.02) / FACE_H)) * H; // dy: metres from the head centre
-    ctx.clearRect(0, 0, W, H);
+  const FACE_AGE = { child: { ew: 1.08, eh: 1.14, ir: 1.12, mw: 0.86, blush: 1.35, brow: 0.8 }, youth: { ew: 1.04, eh: 1.06, ir: 1.06, mw: 0.93, blush: 1.15, brow: 0.9 },
+    adult: { ew: 1, eh: 1, ir: 1, mw: 1, blush: 1, brow: 1 }, elder: { ew: 0.98, eh: 0.86, ir: 0.98, mw: 0.98, blush: 0.7, brow: 1.05, lines: 1, grey: 1 } };
+  function drawFaceReal(ctx, face, expr, age, gaze, W0, H0) {
+    const W = FWR, H = FHR, cx = W / 2, sc = (W0 || W) / W;
+    ctx.clearRect(0, 0, W0 || W, H0 || H);
+    ctx.save(); ctx.scale(sc, (H0 || H) / H);
+    const A = FACE_AGE[age] || FACE_AGE.adult;
+    const Y = (dy) => (1 - (0.5 + (dy + 0.02) / FACE_H)) * H; // dy: metres from the head centre
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     const soft = (x, y, rx, ry, rgba) => { ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx); const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx); g.addColorStop(0, rgba); g.addColorStop(1, rgba.replace(/[\d.]+\)$/, '0)')); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, TAU); ctx.fill(); ctx.restore(); };
-    // [hanbok] §19.1 the nine calm faces (무표정 미소 활짝 웃음 놀람 궁금 뿌듯 수줍음 졸림 집중) + the passing ones
-    const M = { neutral: { smile: 0 }, laugh: { happy: 1, open: 0.62, brow: -3 }, curious: { browOne: -9, look: [5, -3], smile: 0.2, shift: 4 },
-      proud: { happy: 1, open: 0.5, brow: -2, smile: 1, noTeeth: 1, blush: 0.22 }, shy: { look: [0, 5], open: 0.72, inner: 5, blush: 0.34, smile: 0.5, mw: 0.8 },
-      sleepy: { open: 0.3, brow: 4, smile: 0.1, mw: 0.85, inner: 2 }, focus: { open: 0.7, brow: 3, inner: -5, smile: 0, mw: 0.9 } }[expr] || {};
-    const happy = expr === 'happy' || expr === 'wink' || !!M.happy || (face === 'cheer' && !(expr in { neutral: 1, sleepy: 1, focus: 1, shy: 1, curious: 1 }));
+    const blur = (px) => { try { ctx.filter = px > 0 ? `blur(${(px * sc).toFixed(2)}px)` : 'none'; } catch (e) { /* no filter: hard edges */ } };
+    // the nine calm faces (무표정 미소 활짝 웃음 놀람 궁금 뿌듯 수줍음 졸림 집중) + the passing ones
+    const M = { neutral: { smile: 0.04, open: 1 }, smile: { smile: 0.62, open: 0.92 },
+      laugh: { happy: 1, open: 0.55, brow: -6, teeth: 1, smile: 1, mouthOpen: 9, blush: 0.3 },
+      surprise: { open: 1.32, brow: -15, ring: 1, oMouth: 13 },
+      curious: { browOne: -13, look: [7, -4], smile: 0.18, shift: 5, open: 1.05 },
+      proud: { happy: 0.6, open: 0.62, brow: -4, smile: 1.15, blush: 0.2, chin: 1 },
+      shy: { look: [-3, 6], open: 0.68, inner: 7, blush: 0.42, smile: 0.42, mw: 0.78 },
+      sleepy: { open: 0.26, brow: 4, smile: 0.06, mw: 0.82, inner: 2, yawn: 1 },
+      focus: { open: 0.72, brow: 4, inner: -7, smile: -0.12, mw: 0.86, press: 1 },
+      happy: { happy: 1, open: 0.7, smile: 1, teeth: 1, mouthOpen: 5, brow: -3 }, wink: { happy: 1, smile: 0.9 }, think: { look: [6, -5], smile: 0, shift: 6, browOne: -8 },
+      talk: { oMouth: 7, smile: 0.2 }, blink: { open: 0 } }[expr] || { smile: face === 'calm' ? 0.15 : face === 'gentle' ? 0.45 : 0.55 };
+    const happy = !!M.happy || (face === 'cheer' && !(expr in { neutral: 1, sleepy: 1, focus: 1, shy: 1, curious: 1, surprise: 1 }));
     const ey = Y(0.005), edx = (0.031 / FACE_W) * W;
-    // shading: eye sockets, nose sides, under the nose, under the lower lip, cheek warmth
+    const hairTone = A.grey ? 'rgba(150,144,136,0.9)' : 'rgba(48,32,24,0.88)';
+    // ---- the shading that models the face: sockets, nose, the cheeks, under the lip, the jaw line
     for (const s of [-1, 1]) {
-      soft(cx + s * edx * 1.02, ey - 4, 44, 26, 'rgba(120,70,52,0.16)');
-      soft(cx + s * 13, Y(-0.022), 9, 40, 'rgba(120,72,55,0.14)');
-      soft(cx + s * 88, Y(-0.042), 42, 26, `rgba(232,110,110,${M.blush || (happy ? 0.2 : 0.13)})`);
+      soft(cx + s * edx * 1.04, ey - 6, 46, 30, `rgba(118,68,52,${A.lines ? 0.22 : 0.15})`);   // eye socket
+      soft(cx + s * edx * 0.62, ey + 2, 14, 16, 'rgba(112,66,54,0.12)');                        // the inner corner, beside the bridge
+      soft(cx + s * 15, Y(-0.028), 8, 30, 'rgba(118,70,55,0.13)');                              // sides of the nose
+      soft(cx + s * 86, Y(-0.044), 44, 28, `rgba(236,112,108,${(M.blush || (happy ? 0.2 : 0.12)) * A.blush})`); // cheek
+      soft(cx + s * 98, Y(-0.02), 26, 40, 'rgba(255,236,226,0.12)');                            // light on the cheekbone
+      soft(cx + s * 108, Y(-0.098), 34, 52, 'rgba(110,64,50,0.08)');                            // under the jaw
+      soft(cx + s * 142, Y(-0.03), 30, 90, 'rgba(120,70,56,0.1)');                              // the side of the face turns away
     }
-    soft(cx, Y(-0.056), 22, 8, 'rgba(110,60,48,0.22)');
-    soft(cx, Y(-0.092), 26, 9, 'rgba(120,70,55,0.15)');
-    // brows: short strokes
-    const browLift = (expr === 'surprise' ? -10 : face === 'bright' ? -4 : 0) + (M.brow || 0);
+    soft(cx, Y(0.06), 70, 26, 'rgba(255,238,228,0.1)');   // light on the forehead
+    soft(cx, Y(-0.012), 7, 26, 'rgba(255,240,232,0.2)');  // the bridge of the nose catches the light
+    soft(cx, Y(-0.043), 9, 7, 'rgba(255,238,230,0.18)');  // its tip
+    for (const s of [-1, 1]) soft(cx + s * 8.5, Y(-0.0495), 4.6, 2.8, 'rgba(80,38,32,0.42)'); // nostrils
+    soft(cx, Y(-0.055), 24, 7, 'rgba(105,58,46,0.22)');   // under the nose
+    soft(cx, Y(-0.066), 5, 8, 'rgba(110,62,50,0.12)');    // the groove above the lip
+    soft(cx, Y(-0.093), 24, 9, 'rgba(118,68,54,0.17)');   // under the lower lip
+    if (A.lines) { // fine lines: crow's feet, the folds from nose to mouth, the forehead, under the eyes
+      ctx.strokeStyle = 'rgba(112,70,54,0.28)'; ctx.lineWidth = 1.3;
+      for (const s of [-1, 1]) {
+        const ox = cx + s * (edx + 36);
+        for (let k = -1; k <= 1; k++) { ctx.beginPath(); ctx.moveTo(ox, ey + k * 6); ctx.quadraticCurveTo(ox + s * 7, ey + k * 7.5, ox + s * 12, ey + k * 10); ctx.stroke(); }
+        ctx.beginPath(); ctx.moveTo(cx + s * 20, Y(-0.046)); ctx.quadraticCurveTo(cx + s * 34, Y(-0.066), cx + s * 31, Y(-0.088)); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx + s * (edx - 20), ey + 18); ctx.quadraticCurveTo(cx + s * edx, ey + 24, cx + s * (edx + 18), ey + 17); ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(112,70,54,0.16)'; ctx.lineWidth = 1.4;
+      for (const yy of [0.072, 0.083]) { ctx.beginPath(); ctx.moveTo(cx - 52, Y(yy)); ctx.quadraticCurveTo(cx, Y(yy + 0.004), cx + 52, Y(yy)); ctx.stroke(); }
+    }
+    // ---- brows: single strokes along an arch, thick at the head, fine at the tail
+    const browLift = (face === 'bright' ? -4 : 0) + (M.brow || 0);
     for (const s of [-1, 1]) {
-      const bx = cx + s * edx * 1.04, by = Y(0.027) + browLift - (expr === 'think' && s > 0 ? 8 : 0) + (M.browOne && s > 0 ? M.browOne : 0);
+      const bx = cx + s * edx * 1.04, by = Y(0.028) + browLift + (M.browOne && s > 0 ? M.browOne : 0);
       const inner = M.inner != null ? M.inner : face === 'gentle' ? 4 : face === 'calm' ? 1 : -1;
-      ctx.strokeStyle = 'rgba(52,34,26,0.85)';
-      for (let i = 0; i < 16; i++) {
-        const t = i / 15, x = bx + s * lerp(-30, 32, t), y = by + (inner * (1 - t) * 1.2) - 7 * Math.sin(Math.PI * Math.min(1, t * 1.25)) + (t > 0.8 ? (t - 0.8) * 14 : 0);
-        ctx.lineWidth = lerp(3.4, 1.6, t);
-        ctx.beginPath(); ctx.moveTo(x - s * 3, y + 3); ctx.lineTo(x + s * 4, y - 1.5); ctx.stroke();
+      ctx.strokeStyle = hairTone;
+      const n = Math.round(22 * A.brow);
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1), x = bx + s * lerp(-31, 33, t), y = by + inner * (1 - t) * 1.25 - 8 * Math.sin(Math.PI * Math.min(1, t * 1.2)) + (t > 0.82 ? (t - 0.82) * 18 : 0);
+        ctx.lineWidth = lerp(4.2, 1.6, t) * A.brow;
+        const ang = lerp(-1.1, -0.25, t);
+        ctx.beginPath(); ctx.moveTo(x - s * 3.5 * Math.cos(ang), y + 3.5); ctx.lineTo(x + s * 4.5 * Math.cos(ang), y - 2.5 + (i % 2)); ctx.stroke();
       }
     }
-    // eyes
-    const eyeH = (face === 'bright' ? 15.5 : face === 'calm' ? 12 : face === 'gentle' ? 13 : 14) * (expr === 'surprise' ? 1.3 : 1);
-    const eyeW = 29;
+    // ---- eyes
+    // (picture-book proportions: the eye a little larger and rounder than life, so that it reads at two metres)
+    const eyeH = (face === 'bright' ? 19 : face === 'calm' ? 16.5 : face === 'gentle' ? 17.5 : 18.5) * A.eh;
+    const eyeW = 33 * A.ew;
+    const ir = 14.6 * A.ir * (M.ring ? 0.88 : 1);
+    const look = [(M.look ? M.look[0] : 0) + (gaze || 0) * 7.5, M.look ? M.look[1] : 0];
     const drawEye = (s, open) => {
       const x = cx + s * edx, y = ey;
-      const up = happy ? 3 : 0;
-      if (open <= 0.12) { // closed: a lash line, curved by mood
+      const hv = M.happy ? 3 * M.happy : 0;
+      const xi = x - s * eyeW, xo = x + s * eyeW, outer = (face === 'gentle' ? 3 : face === 'bright' ? -3 : -1) - (A.lines ? -2 : 0);
+      if (open <= 0.12) { // closed: a curved lash line, the lid's fold above it
         ctx.strokeStyle = '#2a1a14'; ctx.lineWidth = 3.2;
-        ctx.beginPath(); ctx.moveTo(x - eyeW, y + 1); ctx.quadraticCurveTo(x, y + (happy ? -8 : 6), x + eyeW, y + 1); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(xi, y + 2); ctx.quadraticCurveTo(x, y + (happy ? -9 : 7), xo, y + 1 + outer); ctx.stroke();
+        ctx.strokeStyle = 'rgba(110,68,50,0.4)'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(xi + s * 6, y - 5); ctx.quadraticCurveTo(x, y + (happy ? -17 : -4), xo - s * 4, y - 4 + outer); ctx.stroke();
+        if (!happy) { ctx.strokeStyle = 'rgba(40,24,18,0.55)'; ctx.lineWidth = 1.2; for (let k = 0; k < 5; k++) { const t = 0.35 + k * 0.14, lx = lerp(xi, xo, t), lyy = y + 1 + 6 * Math.sin(Math.PI * t); ctx.beginPath(); ctx.moveTo(lx, lyy); ctx.lineTo(lx + s * 2.5, lyy + 3); ctx.stroke(); } }
         return;
       }
       const hh = eyeH * open;
-      const outer = face === 'gentle' ? 3 : face === 'bright' ? -3 : -1;
+      const up = -hh * 1.22 + hv, lo = hh * (happy ? 0.42 : 0.8);
+      const shape = () => {
+        ctx.beginPath(); ctx.moveTo(xi, y + 2);
+        ctx.bezierCurveTo(x - s * eyeW * 0.45, y + up, x + s * eyeW * 0.45, y + up * 0.96, xo, y + outer);
+        ctx.bezierCurveTo(x + s * eyeW * 0.4, y + lo, x - s * eyeW * 0.5, y + lo * 1.04, xi, y + 2);
+        ctx.closePath();
+      };
+      // the lid fold above the eye: a soft shadow and a crease line
+      soft(x + s * 2, y + up - 6, eyeW * 0.95, 9, 'rgba(120,72,56,0.22)');
+      ctx.strokeStyle = 'rgba(112,68,52,0.42)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(xi + s * 7, y + up * 0.62 - 3); ctx.bezierCurveTo(x - s * eyeW * 0.3, y + up * 1.5 - 2, x + s * eyeW * 0.45, y + up * 1.42 - 2, xo - s * 1, y + outer - hh * 0.55); ctx.stroke();
       ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(x - s * eyeW, y + (s < 0 ? 0 : 0) + (s > 0 ? outer : 0) * 0);
-      const xi = x - s * eyeW, xo = x + s * eyeW;
-      ctx.moveTo(xi, y + 1);
-      ctx.bezierCurveTo(x - s * eyeW * 0.4, y - hh * 1.25 + up, x + s * eyeW * 0.5, y - hh * 1.2 + up, xo, y + outer);
-      ctx.bezierCurveTo(x + s * eyeW * 0.4, y + hh * (happy ? 0.45 : 0.8), x - s * eyeW * 0.5, y + hh * (happy ? 0.5 : 0.85), xi, y + 1);
-      ctx.closePath();
-      ctx.fillStyle = '#f2ece6'; ctx.fill();
+      shape();
+      const wg = ctx.createRadialGradient(x, y - 2, 2, x, y, eyeW * 1.05);
+      wg.addColorStop(0, '#f5f0ea'); wg.addColorStop(0.62, '#eee6df'); wg.addColorStop(1, '#cdbdb3');
+      ctx.fillStyle = wg; ctx.fill();
       ctx.clip();
-      const ir = 11.5 * (expr === 'surprise' ? 0.95 : 1), ix = x + (expr === 'think' ? s * 0 + 5 : 0) + (M.look ? M.look[0] : 0), iy = y - 1 + (expr === 'think' ? -4 : 0) + (M.look ? M.look[1] : 0);
+      // the iris: fibres of warm brown, a lighter ring round the pupil, a dark rim; the pupil; the lid's shadow over it
+      const ix = x + look[0], iy = y - 1 + look[1];
       const g = ctx.createRadialGradient(ix, iy, 1, ix, iy, ir);
-      g.addColorStop(0, '#120b08'); g.addColorStop(0.3, '#2a1810'); g.addColorStop(0.62, '#4a2c1a'); g.addColorStop(0.9, '#3a2216'); g.addColorStop(1, '#1a100b');
+      g.addColorStop(0, '#1a0f0a'); g.addColorStop(0.36, '#5a3620'); g.addColorStop(0.62, '#7a4c2c'); g.addColorStop(0.86, '#4e2f1c'); g.addColorStop(1, '#1d120c');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(ix, iy, ir, 0, TAU); ctx.fill();
-      ctx.fillStyle = '#070403'; ctx.beginPath(); ctx.arc(ix, iy, ir * 0.42, 0, TAU); ctx.fill();
-      ctx.fillStyle = 'rgba(80,45,35,0.32)'; ctx.fillRect(x - eyeW, y - hh * 1.4, eyeW * 2, hh * 0.55); // lid shadow on the white
-      ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.beginPath(); ctx.arc(ix - 3.5, iy - 4, 3, 0, TAU); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(ix + 3.5, iy + 3.5, 1.4, 0, TAU); ctx.fill();
+      ctx.lineWidth = 0.9;
+      for (let k = 0; k < 28; k++) { const a = k / 28 * TAU + 0.11 * (k % 3); ctx.strokeStyle = k % 2 ? 'rgba(160,110,70,0.35)' : 'rgba(40,22,14,0.3)'; ctx.beginPath(); ctx.moveTo(ix + Math.cos(a) * ir * 0.42, iy + Math.sin(a) * ir * 0.42); ctx.lineTo(ix + Math.cos(a) * ir * 0.9, iy + Math.sin(a) * ir * 0.9); ctx.stroke(); }
+      ctx.strokeStyle = 'rgba(20,12,8,0.75)'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(ix, iy, ir - 0.6, 0, TAU); ctx.stroke();
+      ctx.fillStyle = '#070403'; ctx.beginPath(); ctx.arc(ix, iy, ir * 0.38, 0, TAU); ctx.fill();
+      const lg0 = ctx.createLinearGradient(0, y + up, 0, y + up + hh * 1.2);
+      lg0.addColorStop(0, 'rgba(60,32,24,0.55)'); lg0.addColorStop(1, 'rgba(60,32,24,0)');
+      ctx.fillStyle = lg0; ctx.fillRect(x - eyeW - 4, y + up - 2, eyeW * 2 + 8, hh * 1.3);
+      ctx.fillStyle = 'rgba(255,255,255,0.96)'; ctx.beginPath(); ctx.ellipse(ix - 4, iy - 4.5, 3.6, 3.1, -0.4, 0, TAU); ctx.fill(); // the catch light
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(ix + 4, iy + 4, 1.5, 0, TAU); ctx.fill();
       ctx.restore();
-      // upper lash line (thicker at the outer corner) and the lid crease
-      ctx.strokeStyle = '#1c110c'; ctx.lineWidth = 3.4;
-      ctx.beginPath(); ctx.moveTo(xi, y + 1); ctx.bezierCurveTo(x - s * eyeW * 0.4, y - hh * 1.25 + up, x + s * eyeW * 0.5, y - hh * 1.2 + up, xo + s * 3, y + outer - 2); ctx.stroke();
-      ctx.strokeStyle = 'rgba(110,68,50,0.45)'; ctx.lineWidth = 1.6;
-      ctx.beginPath(); ctx.moveTo(xi + s * 4, y - hh * 0.9 - 2); ctx.bezierCurveTo(x - s * eyeW * 0.3, y - hh * 1.9 + up, x + s * eyeW * 0.5, y - hh * 1.8 + up, xo + s * 1, y - hh * 0.5 + outer); ctx.stroke();
-      ctx.strokeStyle = 'rgba(90,55,40,0.35)'; ctx.lineWidth = 1.3;
-      ctx.beginPath(); ctx.moveTo(xi + s * 3, y + 3); ctx.quadraticCurveTo(x, y + hh * (happy ? 0.75 : 1.1), xo, y + outer + 1); ctx.stroke();
-      if (happy) soft(x, y + hh + 6, 20, 6, 'rgba(255,225,210,0.25)');
+      // the upper lash line (thicker to the outer corner, a small flick) and the lower lid
+      ctx.strokeStyle = '#1c110c';
+      for (let k = 0; k < 3; k++) {
+        ctx.lineWidth = 3.6 - k * 0.9;
+        ctx.beginPath(); ctx.moveTo(xi + s * k * 6, y + 2 - (k ? 1 : 0)); ctx.bezierCurveTo(x - s * eyeW * 0.45, y + up, x + s * eyeW * 0.45, y + up * 0.96, xo + s * 3, y + outer - 2.5); ctx.stroke();
+      }
+      ctx.lineWidth = 1.2;
+      for (let k = 0; k < 5; k++) { const t = 0.5 + k * 0.11, lx = lerp(xi, xo + s * 3, t), lyy = y + up * (0.92 - 0.6 * Math.pow(t - 0.5, 2) * 4) + (t > 0.8 ? 4 : 0); ctx.beginPath(); ctx.moveTo(lx, lyy); ctx.lineTo(lx + s * 3.5, lyy - 3.2); ctx.stroke(); }
+      ctx.strokeStyle = 'rgba(255,226,214,0.5)'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(xi + s * 4, y + 4); ctx.quadraticCurveTo(x, y + lo + 2.5, xo - s * 2, y + outer + 1.5); ctx.stroke();
+      ctx.strokeStyle = 'rgba(96,58,44,0.38)'; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(xi + s * 6, y + 5.5); ctx.quadraticCurveTo(x, y + lo + 5, xo - s * 1, y + outer + 3); ctx.stroke();
+      ctx.fillStyle = 'rgba(214,128,124,0.7)'; ctx.beginPath(); ctx.ellipse(xi + s * 3, y + 2, 2.6, 2, 0, 0, TAU); ctx.fill(); // the inner corner
+      if (happy) soft(x, y + lo + 8, 22, 6, 'rgba(255,226,212,0.3)'); // a smile lifts the cheek under the eye
     };
     for (const s of [-1, 1]) {
-      let open = 1;
-      if (expr === 'blink') open = 0;
-      else if (expr === 'wink' && s > 0) open = 0;
-      else if (M.open) open = M.open;
-      else if (expr === 'happy' || face === 'cheer') open = 0.82;
-      else if (face === 'calm') open = 0.94;
+      let open = M.open != null ? M.open : happy ? 0.8 : face === 'calm' ? 0.94 : 1;
+      if (expr === 'wink' && s > 0) open = 0;
       drawEye(s, open);
     }
-    // lips
-    const my = Y(-0.075), mw = 22 * (expr === 'surprise' ? 0.6 : happy ? 1.15 : 1) * (M.mw || 1);
-    const lipU = '#b8635d', lipL = '#cf7d74';
-    if (expr === 'surprise' || expr === 'talk') {
-      const oh = expr === 'surprise' ? 13 : 8;
-      ctx.fillStyle = lipU; ctx.beginPath(); ctx.ellipse(cx, my + 2, mw * 0.85, oh, 0, 0, TAU); ctx.fill();
-      ctx.fillStyle = '#4a1c1c'; ctx.beginPath(); ctx.ellipse(cx, my + 3, mw * 0.62, oh * 0.62, 0, 0, TAU); ctx.fill();
-      ctx.fillStyle = 'rgba(255,190,190,0.35)'; ctx.beginPath(); ctx.ellipse(cx, my + oh * 0.9, mw * 0.5, 2.5, 0, 0, TAU); ctx.fill();
-      return;
+    // ---- lips: an upper lip with a bow, a fuller lower lip with a light on it, soft edges; the mouth's line
+    const my = Y(-0.074), mw = 26 * A.mw * (M.oMouth ? 0.62 : happy ? 1.14 : 1) * (M.mw || 1);
+    const lipU = A.grey ? '#a8635d' : '#c0605a', lipL = A.grey ? '#bb7a72' : '#d97970';
+    blur(0.7);
+    if (M.oMouth) {
+      const oh = M.oMouth;
+      ctx.fillStyle = lipU; ctx.beginPath(); ctx.ellipse(cx, my + 2, mw * 0.9, oh, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#4a1c1c'; ctx.beginPath(); ctx.ellipse(cx, my + 3, mw * 0.64, oh * 0.64, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(200,110,110,0.55)'; ctx.beginPath(); ctx.ellipse(cx, my + 3 + oh * 0.35, mw * 0.4, oh * 0.22, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(255,200,196,0.4)'; ctx.beginPath(); ctx.ellipse(cx, my + oh * 0.95, mw * 0.5, 2.5, 0, 0, TAU); ctx.fill();
+      blur(0); ctx.restore(); return;
     }
-    const smileK = M.smile != null ? M.smile : expr === 'think' ? 0 : happy ? 1 : face === 'calm' ? 0.15 : face === 'gentle' ? 0.45 : 0.55;
-    const corner = -6 * smileK, shift = expr === 'think' ? 6 : M.shift || 0;
-    // upper lip with a cupid's bow
+    const smileK = M.smile != null ? M.smile : 0.5;
+    const corner = -6.5 * smileK, shift = M.shift || 0, open = M.mouthOpen || (M.yawn ? 3 : 0);
     ctx.fillStyle = lipU;
     ctx.beginPath();
     ctx.moveTo(cx - mw + shift, my + corner);
-    ctx.bezierCurveTo(cx - mw * 0.6, my - 7, cx - 6, my - 9, cx, my - 5);
-    ctx.bezierCurveTo(cx + 6, my - 9, cx + mw * 0.6, my - 7, cx + mw + shift, my + corner);
+    ctx.bezierCurveTo(cx - mw * 0.6, my - 8.5, cx - 7, my - 11, cx, my - 6.5);
+    ctx.bezierCurveTo(cx + 7, my - 11, cx + mw * 0.6, my - 8.5, cx + mw + shift, my + corner);
     ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK, cx - mw + shift, my + corner);
     ctx.fill();
-    // lower lip
-    const lg = ctx.createLinearGradient(0, my, 0, my + 12);
-    lg.addColorStop(0, lipL); lg.addColorStop(1, 'rgba(207,125,116,0.55)');
+    const lg = ctx.createLinearGradient(0, my + open, 0, my + open + 13);
+    lg.addColorStop(0, lipL); lg.addColorStop(1, 'rgba(210,125,116,0.5)');
     ctx.fillStyle = lg;
     ctx.beginPath();
     ctx.moveTo(cx - mw * 0.92 + shift, my + corner + 1);
-    ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK, cx + mw * 0.92 + shift, my + corner + 1);
-    ctx.bezierCurveTo(cx + mw * 0.55, my + 13, cx - mw * 0.55, my + 13, cx - mw * 0.92 + shift, my + corner + 1);
+    ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK + open * 2, cx + mw * 0.92 + shift, my + corner + 1);
+    ctx.bezierCurveTo(cx + mw * 0.55, my + 15.5 + open, cx - mw * 0.55, my + 15.5 + open, cx - mw * 0.92 + shift, my + corner + 1);
     ctx.fill();
-    if ((face === 'cheer' && happy || expr === 'happy' || expr === 'laugh') && !M.noTeeth) { // a smile that shows the teeth
-      ctx.fillStyle = '#f6f1ea'; ctx.beginPath(); ctx.moveTo(cx - mw * 0.75, my + corner * 0.7); ctx.quadraticCurveTo(cx, my + 9, cx + mw * 0.75, my + corner * 0.7); ctx.quadraticCurveTo(cx, my + 1, cx - mw * 0.75, my + corner * 0.7); ctx.fill();
+    blur(0);
+    if (open > 0) { // an open smile: the dark of the mouth, the upper teeth
+      ctx.fillStyle = '#4c1e1e';
+      ctx.beginPath(); ctx.moveTo(cx - mw * 0.82 + shift, my + corner * 0.8); ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK + open * 2.2, cx + mw * 0.82 + shift, my + corner * 0.8); ctx.quadraticCurveTo(cx, my + 1 + 3 * smileK, cx - mw * 0.82 + shift, my + corner * 0.8); ctx.fill();
+      if (M.teeth) { ctx.fillStyle = '#f4efe8'; ctx.beginPath(); ctx.moveTo(cx - mw * 0.7 + shift, my + corner * 0.7); ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK + open * 0.9, cx + mw * 0.7 + shift, my + corner * 0.7); ctx.quadraticCurveTo(cx, my + 1 + 3 * smileK, cx - mw * 0.7 + shift, my + corner * 0.7); ctx.fill(); }
     }
-    ctx.strokeStyle = 'rgba(90,32,30,0.8)'; ctx.lineWidth = 1.8;
+    ctx.strokeStyle = M.press ? 'rgba(80,28,26,0.9)' : 'rgba(92,34,30,0.75)'; ctx.lineWidth = M.press ? 2.2 : 1.7;
     ctx.beginPath(); ctx.moveTo(cx - mw + shift, my + corner); ctx.quadraticCurveTo(cx, my + 2 + 3 * smileK, cx + mw + shift, my + corner); ctx.stroke();
-    soft(cx, my - 5, 8, 3, 'rgba(255,215,200,0.22)'); // light on the upper lip
+    for (const s of [-1, 1]) soft(cx + s * (mw + 2) + shift, my + corner, 4, 4, 'rgba(100,52,42,0.3)'); // the corners
+    if (smileK > 0.8) for (const s of [-1, 1]) soft(cx + s * (mw + 9) + shift, my + corner - 2, 5, 7, 'rgba(110,60,48,0.16)'); // dimples
+    soft(cx, my - 5.5, 8, 3, 'rgba(255,215,200,0.25)'); // light on the upper lip
+    soft(cx + 2, my + 7 + open, 9, 3, 'rgba(255,225,215,0.35)'); // and on the lower
+    if (M.chin) soft(cx, Y(-0.1), 16, 7, 'rgba(255,232,222,0.18)');
+    ctx.restore();
   }
   function drawFace(ctx, face, expr) {
     const cx = FW / 2, ey = 160, edx = 80;
@@ -2170,12 +2280,54 @@
   }
   // low: flat colours (§19.1) — one uniform shared by every avatar material, set from the engine's preset each frame
   const AV_FLAT = { value: 0 };
-  const syncFlat = () => { AV_FLAT.value = G.sys && G.sys.engine && G.sys.engine.preset && G.sys.engine.preset.name === 'low' ? 1 : 0; };
+  const AV_Q = { value: 1 }; // [people] §19.9 the preset: 0 low (flat), 1 medium, 2 high — skin, hair, folds and weave
+  const syncFlat = () => { const n = G.sys && G.sys.engine && G.sys.engine.preset && G.sys.engine.preset.name; AV_FLAT.value = n === 'low' ? 1 : 0; AV_Q.value = n === 'low' ? 0 : n === 'high' ? 2 : 1; };
+  /**
+   * [people] §19.9 skin, hair, cloth and silk light (medium / high; low stays flat). A few lines in the lighting of the
+   * standard material — no extra pass, no texture: skin wraps the light round its terminator with a warm tint where
+   * it turns away (thin parts glow a little); hair gets two shifted highlight bands along its strands (Kajiya–Kay);
+   * silk a soft edge light. `avKindG` / `avSilkG` are set per pixel by the colour stage (3 skin, 2 hair, 1 cloth).
+   */
+  const AV_LIGHT_HEAD = 'float avKindG = 0.0;\nfloat avSilkG = 0.0;\nvec3 avHairT = vec3(0.0, 1.0, 0.0);\n';
+  function avLightChunk() {
+    return THREE.ShaderChunk.lights_physical_pars_fragment.replace('reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );', `{
+    float avNL = dot( geometryNormal, directLight.direction );
+    vec3 avIrr = irradiance;
+    if ( avKindG > 2.5 ) { // skin: wrapped diffuse + a warm band at the terminator
+      float avW = saturate( ( avNL + 0.42 ) / 1.42 );
+      float avT = smoothstep( -0.42, 0.05, avNL ) * ( 1.0 - smoothstep( 0.05, 0.6, avNL ) );
+      avIrr = directLight.color * ( vec3( mix( dotNL, avW * avW, 0.55 ) ) + vec3( 0.32, 0.1, 0.05 ) * avT );
+      // thin parts (ears, the nose's wings, fingers) glow warm when the light is behind them
+      avIrr += directLight.color * vec3( 0.42, 0.12, 0.06 ) * pow( saturate( dot( -directLight.direction, geometryViewDir ) ), 6.0 ) * ( 1.0 - smoothstep( -0.6, 0.15, avNL ) ) * 0.5;
+    } else if ( avKindG > 1.5 ) { // hair: soft diffuse, two highlight bands along the strand
+      avIrr = directLight.color * saturate( ( avNL + 0.25 ) / 1.25 ) * 0.92;
+      vec3 avH = normalize( directLight.direction + geometryViewDir );
+      vec3 avT1 = normalize( avHairT + geometryNormal * 0.12 ), avT2 = normalize( avHairT - geometryNormal * 0.1 );
+      float avTH1 = dot( avT1, avH ), avTH2 = dot( avT2, avH );
+      float avS1 = pow( sqrt( max( 0.0, 1.0 - avTH1 * avTH1 ) ), 70.0 ), avS2 = pow( sqrt( max( 0.0, 1.0 - avTH2 * avTH2 ) ), 22.0 );
+      reflectedLight.directSpecular += directLight.color * saturate( avNL * 1.4 + 0.2 ) * ( vec3( 0.13 ) * avS1 + material.diffuseColor * 0.7 * avS2 );
+    } else if ( avSilkG > 0.0 ) { // silk: a soft edge light
+      float avR = 1.0 - saturate( dot( geometryNormal, geometryViewDir ) );
+      reflectedLight.directSpecular += directLight.color * material.diffuseColor * avSilkG * 0.55 * avR * avR * saturate( avNL + 0.3 );
+    }
+    reflectedLight.directDiffuse += avIrr * BRDF_Lambert( material.diffuseColor );
+  }`);
+  }
+  /** a bump from a height field h (metres) by screen-space derivatives (no tangents needed; safe when flat) */
+  const AV_BUMP = `vec3 avBump( vec3 pos, vec3 n, float h ) {
+    vec3 dpx = dFdx( pos ), dpy = dFdy( pos );
+    vec3 r1 = cross( dpy, n ), r2 = cross( n, dpx );
+    float det = dot( dpx, r1 );
+    vec3 g = sign( det ) * ( dFdx( h ) * r1 + dFdy( h ) * r2 );
+    vec3 r = abs( det ) * n - g;
+    float l2 = dot( r, r );
+    return l2 > 1e-24 ? r * inversesqrt( l2 ) : n;
+  }\n`;
   function makeBodyMaterial() {
     // double-sided: open garment edges (sleeve ends, hems, a shoe's inside) never show the world through them
     const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.6, side: THREE.DoubleSide });
     const pal = new Float32Array(NSLOT * 3), rough = new Float32Array(NSLOT), fx = new Float32Array(NSLOT);
-    m.userData.pal = pal; m.userData.rough = rough; m.userData.fx = fx;
+    m.userData.pal = pal; m.userData.rough = rough; m.userData.fx = fx; m.userData.skirt = { value: 0 };
     m.name = 'avatarBody';
     m.onBeforeCompile = (sh) => {
       sh.uniforms.uPal = { value: pal };
@@ -2184,19 +2336,58 @@
       sh.uniforms.uPatTex = { value: patternAtlas() };
       sh.uniforms.uWeave = { value: weaveTexture() };
       sh.uniforms.uAvFlat = AV_FLAT;
-      sh.vertexShader = `attribute float aSlot;\nuniform vec3 uPal[${NSLOT}];\nuniform float uRough[${NSLOT}];\nuniform float uFx[${NSLOT}];\nvarying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\n` +
-        sh.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n  { int si = int(aSlot + 0.5); vPalColor = uPal[si]; vPalRough = uRough[si]; vFx = uFx[si]; vRest = position; }');
-      sh.fragmentShader = 'varying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nuniform sampler2D uPatTex;\nuniform sampler2D uWeave;\nuniform float uAvFlat;\n' + sh.fragmentShader
+      sh.uniforms.uAvQ = AV_Q;
+      sh.uniforms.uAvSkirt = m.userData.skirt;
+      sh.vertexShader = `attribute float aSlot;\nuniform vec3 uPal[${NSLOT}];\nuniform float uRough[${NSLOT}];\nuniform float uFx[${NSLOT}];\nvarying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nvarying float vSlotF;\n` +
+        sh.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\n  { int si = int(aSlot + 0.5); vPalColor = uPal[si]; vPalRough = uRough[si]; vFx = uFx[si]; vRest = position; vSlotF = aSlot; }');
+      sh.fragmentShader = 'varying vec3 vPalColor;\nvarying float vPalRough;\nvarying float vFx;\nvarying vec3 vRest;\nvarying float vSlotF;\nuniform sampler2D uPatTex;\nuniform sampler2D uWeave;\nuniform float uAvFlat;\nuniform float uAvQ;\nuniform float uAvSkirt;\n' + AV_LIGHT_HEAD + AV_BUMP + sh.fragmentShader
+        .replace('#include <lights_physical_pars_fragment>', avLightChunk())
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+  if (uAvQ > 0.5 && avKindG > 0.5) { // [people] §19.9 folds, creases, weave and strands as a height field on the rest pose
+    float ang = atan(vRest.x, vRest.z), y = vRest.y, h = 0.0;
+    vec2 cu = vec2(ang * 0.16, y);
+    if (avKindG > 1.5 && avKindG < 2.5) { // hair: strands (fine on high), a few locks
+      float f = 1.0 - smoothstep(0.25, 0.7, fwidth(ang * 260.0));
+      h = 0.00055 * sin(ang * 46.0 + sin(y * 30.0) * 1.2) + 0.00012 * f * (uAvQ > 1.5 ? 1.0 : 0.5) * sin(ang * 260.0 + sin(y * 55.0 + ang * 9.0) * 2.4);
+    } else if (avKindG < 1.5) {
+      float sl = vSlotF;
+      bool lower = (sl > 5.5 && sl < 7.5) || (sl > 19.5 && sl < 21.5);
+      if (lower && y < 1.0) { // hanging cloth: vertical folds that deepen to the hem (around the body on a skirt or robe, round each leg on trousers)
+        float a2 = uAvSkirt > 0.5 || sl > 19.5 ? ang : atan(vRest.x - sign(vRest.x) * 0.091, vRest.z);
+        float n2 = uAvSkirt > 0.5 || sl > 19.5 ? 15.0 : 7.0;
+        h += 0.0042 * smoothstep(1.0, 0.45, y) * sin(a2 * n2 + 1.6 * sin(a2 * 3.0 + y * 5.0));
+        if (uAvSkirt < 0.5 && sl < 7.5) h += 0.0016 * exp(-((y - 0.49) * (y - 0.49)) / 0.0025) * sin(y * 150.0 + ang * 3.0); // creases over the knee
+      }
+      if ((sl > 1.5 && sl < 4.5) || (sl > 21.5 && sl < 22.5) || (sl > 19.5 && sl < 21.5 && y > 1.0)) { // sleeves: creases at the elbow and the 배래 curve
+        float ax = abs(vRest.x);
+        h += 0.0018 * smoothstep(0.15, 0.2, ax) * exp(-((y - 1.09) * (y - 1.09)) / 0.0036) * sin((y + ax * 0.7) * 170.0);
+      }
+      float fw = 1.0 - smoothstep(0.3, 0.9, fwidth(cu.x * 1900.0)); // the weave: only where a thread is wider than a pixel
+      if (fw > 0.0) h += fw * 0.00005 * (sin(cu.x * 2800.0) * sin(cu.y * 2800.0) + 0.6 * sin(cu.y * 2800.0 + 1.6));
+    } else { // skin: pores on high only, a faint unevenness on medium
+      float fp = 1.0 - smoothstep(0.3, 0.9, fwidth(vRest.y * 2100.0));
+      h = fp * 0.00004 * (uAvQ > 1.5 ? 1.0 : 0.4) * sin(vRest.x * 2300.0 + sin(vRest.y * 1700.0) * 2.0) * sin(vRest.y * 2100.0 + vRest.z * 900.0);
+    }
+    if (h != 0.0) normal = avBump(-vViewPosition, normal, h);
+    if (avKindG > 1.5 && avKindG < 2.5) { // the strand direction in view space: down the head, along the surface
+      vec3 up = (viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
+      vec3 t = up - normal * dot(normal, up);
+      float tl = dot(t, t);
+      avHairT = tl > 1e-6 ? t * inversesqrt(tl) : normalize(cross(normal, vec3(1.0, 0.0, 0.0)) + vec3(0.0, 1e-3, 0.0));
+    }
+  }`)
         .replace('#include <color_fragment>', `#include <color_fragment>
   diffuseColor.rgb *= vPalColor;
   float avGold = 0.0, avSilk = 0.0;
   {
     float kind = mod(vFx, 8.0), pat = floor(vFx / 8.0 + 0.01);
     if (uAvFlat > 0.5) { kind = 0.0; pat = pat < 1.5 || (pat > 3.5 && pat < 4.5) ? pat : 0.0; } // low: flat colours (gold and 색동 stay, they are colours)
+    avKindG = uAvQ > 0.5 ? kind : 0.0;
+    if (uAvQ > 0.5 && kind > 0.5 && kind < 1.5 && vPalRough < 0.66) avSilkG = 0.6; // smooth cloth is silk
     float ang = atan(vRest.x, vRest.z);
     vec2 cylUv = vec2(ang * 0.16, vRest.y);
     if (kind > 0.5 && kind < 1.5) { float w = texture(uWeave, cylUv * 26.0 + vec2(vRest.x * 9.0, 0.0)).r; diffuseColor.rgb *= 0.84 + 0.3 * w; }
-    else if (kind > 1.5 && kind < 2.5) { float st = sin(ang * 150.0 + vRest.y * 22.0 + sin(ang * 23.0) * 2.0) * 0.5 + 0.5; diffuseColor.rgb *= 0.8 + 0.3 * st; }
+    else if (kind > 1.5 && kind < 2.5) { float sa = ang * 150.0 + vRest.y * 22.0 + sin(ang * 23.0) * 2.0; float sf = 1.0 - smoothstep(0.4, 1.2, fwidth(sa)); float st = sin(sa) * 0.5 + 0.5; float lk = sin(ang * 31.0 + sin(vRest.y * 40.0)) * 0.5 + 0.5; diffuseColor.rgb *= 0.86 + 0.1 * lk + sf * 0.12 * (st - 0.5); } // [people] strands that fade where finer than a pixel, a few locks
     if (pat > 0.5) {
       vec2 puv = cylUv / 0.085;
       vec2 off = pat < 1.5 ? vec2(0.0, 0.5) : pat < 2.5 ? vec2(0.5, 0.5) : vec2(0.0, 0.0);
@@ -2238,11 +2429,11 @@
       }
     }
   }`)
-        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix(mix(roughnessFactor * vPalRough, 0.28, avGold), 0.36, avSilk);')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix(mix(roughnessFactor * vPalRough, 0.28, avGold), 0.36, avSilk);\n  if (avSilk > 0.5) avSilkG = 1.0;')
         .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n  metalnessFactor = mix(metalnessFactor, 0.8, avGold);')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  { float rimF = 1.0 - saturate(dot(normal, normalize(vViewPosition))); totalEmissiveRadiance += diffuseColor.rgb * rimF * rimF * rimF * 0.16; }');
     };
-    m.customProgramCacheKey = () => 'tfmAvatarPalette3';
+    m.customProgramCacheKey = () => 'tfmAvatarPalette4';
     return m;
   }
   function applyPalette(mat, app) {
@@ -2256,6 +2447,7 @@
       fx[i] = (real || KIND[i] !== 1 ? KIND[i] : 0) + 8 * fxs[i];
     }
     if (real) { rough[SLOT.skin] = 0.52; rough[SLOT.hair] = 0.42; }
+    if (mat.userData.skirt) mat.userData.skirt.value = DRAW_BOTTOM[app.bottom] === 'skirt' ? 1 : 0; // [people] folds round the body or round each leg
     if (app.accessory === 'glasses') rough[SLOT.acc] = 0.32;
     if (app.hat === 'gat') rough[SLOT.hat] = 0.4;
     if (app.footwear === 'gomusin') rough[SLOT.shoe] = 0.35;
@@ -2588,6 +2780,7 @@
       const geo = bodyGeometry(app);
       const gk = shapeSig(app);
       if (gk !== this._geoKey) { geoRef(gk, 1); geoRef(this._geoKey, -1); this._geoKey = gk; }
+      if (this._midKey) { geoRef(this._midKey, -1); this._midKey = null; } this._lod = 0; this._lodT = 0; // [people] re-chosen on the next tick
       if (!this.mesh) {
         this.mesh = new THREE.SkinnedMesh(geo, this.material);
         this.mesh.name = 'avatarBody';
@@ -2722,7 +2915,25 @@
     get actionFullBody() { return !!(this._act && !this._act.stopping && this._act.def.fullBody) || this.sitting; }
 
     // -------------------------------------------------------------- per-frame
+    /** [people] §19.9 near body within 11 m of the game camera, the middle level beyond 13 m (only for rigs in the world scene) */
+    _lodTick(dt) {
+      this._lodT = (this._lodT || 0) - dt;
+      if (this._lodT > 0 || !this.mesh || this.style !== 'real') return;
+      this._lodT = 0.3 + Math.random() * 0.2;
+      const E = G.sys && G.sys.engine, cam = E && E.camera;
+      if (!cam || !E.scene) return;
+      let r = this.group; while (r.parent) r = r.parent;
+      let want = 0;
+      if (r === E.scene) { this.group.getWorldPosition(_lodV); const d = _lodV.distanceTo(cam.position); want = d > 13 ? 1 : d < 11 ? 0 : (this._lod || 0); }
+      if (want === (this._lod || 0)) return;
+      const geo = want ? midGeometry(this.appearance) : bodyGeometry(this.appearance);
+      if (!geo) { this._lodT = 0.05; return; }
+      if (want) { const mk = shapeSig(this.appearance) + '|m'; geoRef(mk, 1); this._midKey = mk; } else { geoRef(this._midKey, -1); this._midKey = null; }
+      this.mesh.geometry = geo; this._lod = want;
+    }
+
     update(dt, p) {
+      this._lodTick(dt);
       syncFlat();
       if (!(dt > 0)) return;
       const speed = p && p.speed > 0 ? p.speed : 0;
@@ -2806,6 +3017,7 @@
         ly = this._idleLookTarget; lw = 1;
       }
       const ld = damp(lw ? 5 : 4, dt);
+      this._lookAim = this._look && lw ? clamp(Math.atan2(_v.x, _v.z), -1.6, 1.6) : ly; // [people] where the eyes go (the head follows ly)
       this._lookY += (ly - this._lookY) * ld; this._lookX += (lx - this._lookX) * ld;
       F[C.neckY] += this._lookY * 0.35; F[C.headY] += this._lookY * 0.65;
       F[C.neckX] += this._lookX * 0.35; F[C.headX] += this._lookX * 0.65;
@@ -3037,7 +3249,19 @@
       if (this._blinking > 0) { this._blinking -= dt; if (expr === 'base' || expr === usual || expr === 'talk' || expr === 'think') expr = 'blink'; }
       else if (this._blinkT <= 0) { this._blinking = 0.12; this._blinkT = 2 + Math.random() * 3.5; if (Math.random() < 0.15) this._blinkT = 0.25; }
       // (compared field by field: building a 'face:expr' key string every frame was per-frame garbage for every avatar)
-      if (app.face !== this._faceFace || expr !== this._faceExpr) { this._faceFace = app.face; this._faceExpr = expr; this.face.material = faceMaterial(app.face, expr, this.style); }
+      // [people] §19.9 the eyes lead where the person turns to look (a glance before the head follows); the face's age and the preset's resolution
+      let gz = 0;
+      if (this.style === 'real') {
+        const d = this._lookAim - this._lookY;
+        gz = this._gaze || 0;
+        if (d > 0.28) gz = 1; else if (d < -0.28) gz = -1; else if (Math.abs(d) < 0.12) gz = Math.abs(this._lookAim) > 1.0 ? Math.sign(this._lookAim) : 0;
+        this._gaze = gz;
+      }
+      const fq = this.style === 'real' ? AV_Q.value : 0, age = this.K.build || 'adult';
+      if (app.face !== this._faceFace || expr !== this._faceExpr || gz !== this._faceGaze || fq !== this._faceQ || age !== this._faceAge) {
+        this._faceFace = app.face; this._faceExpr = expr; this._faceGaze = gz; this._faceQ = fq; this._faceAge = age;
+        this.face.material = faceMaterial(app.face, expr, this.style, age, gz);
+      }
     }
 
     dispose() {
@@ -3047,6 +3271,7 @@
       this.material.dispose();
       this.skeleton.dispose();
       geoRef(this._geoKey, -1); this._geoKey = null;
+      geoRef(this._midKey, -1); this._midKey = null; this._lod = 0;
       this.mesh = null;
     }
   }
@@ -3156,7 +3381,7 @@
     /** far figures for crowds: create(max) → { mesh, begin(), push(x, y, z, rotY, app, phase, swing), end(), count, dispose() } */
     far: { create: createFar },
     /** the triangle count of the body geometry of an appearance (budgets, tests) */
-    triangles(app) { const g = bodyGeometry(normalize(app)); return g.index ? g.index.count / 3 : g.attributes.position.count / 3; },
+    triangles(app, o) { const a = normalize(app), g = o && o.mid && a.style === 'real' ? midGeometry(a, true) : bodyGeometry(a); return g.index ? g.index.count / 3 : g.attributes.position.count / 3; },
     /** the geometry cache (tests): size, and clear() which disposes every cached body */
     cache: { get size() { return geoCache.size; }, max: CACHE_MAX, clear() { for (const g of geoCache.values()) g.dispose(); geoCache.clear(); } },
     /** (tests) the body geometry and the palette of a normalized look */
@@ -3171,6 +3396,7 @@
     _ACTIONS: ACTIONS,
     // [people] §19.9 the build of a look ('child' | 'youth' | 'adult' | 'elder') and its kinematics (stature, head centre)
     buildOf: (app) => buildOf(normalize(app)),
+    _midGeometry: (app) => midGeometry(normalize(app), true), // [people] tests: the middle level of a look
     kin: (app) => { const K = KIN[kinKey(normalize(app))]; return { build: K.build || 'adult', height: K.height, HC: K.HC, L1: K.L1, L2: K.L2 }; },
   };
 })();

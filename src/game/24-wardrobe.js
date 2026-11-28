@@ -366,6 +366,19 @@
   const thumbCache = new Map(); // key → ImageData (bounded)
   function thumbKey(app, frame) { return frame + '|' + JSON.stringify(app); }
   function queueThumb(ctx, canvas, app, frame) {
+    // [people] §19.9 a 겉옷 tile shows the whole figure (the length tells the robes apart) in a readable tone of its dye:
+    // a dark dye (the default navy) read as a near-black torso on every tile of the shelf
+    if (canvas && canvas.dataset && canvas.dataset.outerTile === '1') {
+      frame = 'full';
+      try {
+        const c = new THREE.Color(app.outerColor), hsl = {}; c.getHSL(hsl);
+        if (hsl.l < 0.3) {
+          let best = null, bd = 9;
+          for (const hx of G.data.avatar?.options?.outerColor || []) { const d = new THREE.Color(hx), q = {}; d.getHSL(q); if (q.l < 0.38 || q.l > 0.72) continue; const dh = Math.min(Math.abs(q.h - hsl.h), 1 - Math.abs(q.h - hsl.h)) + Math.abs(q.s - hsl.s) * 0.3; if (dh < bd) { bd = dh; best = hx; } }
+          if (best) app = Object.assign({}, app, { outerColor: best });
+        }
+      } catch (e) { /* keep the dye */ }
+    }
     const key = thumbKey(app, frame);
     const hit = thumbCache.get(key);
     if (hit) { try { canvas.getContext('2d')?.putImageData(hit, 0, 0); canvas.classList.add('ready'); } catch (e) { /* ignore */ } return; }
@@ -672,6 +685,7 @@
           this._offerShop(it, key);
         });
         grid.appendChild(b);
+        if (key === 'outer') cv.dataset.outerTile = '1'; // [people] §19.9
         queueThumb(ctx, cv, Object.assign({}, app, { [key]: id }), FRAME[key] || 'body');
       };
       if (s.empty) tile(s.empty, true);
@@ -980,6 +994,7 @@
         cv, h('span', { class: 'wd-tl' }, it.name), h('span', { class: 'wd-ts' }, sub), r[0] ? h('span', { class: 'wd-rar', title: r[1] }, r[0]) : null);
         b.addEventListener('click', () => { st.pick = iid; ctx.pv?.setAppearance(Object.assign(this.look(), { [key]: id })); this._renderShop(); if (kid) say(`${josa(it.name, '을/를')} 입어 봐요.`); });
         grid.appendChild(b);
+        if (key === 'outer') cv.dataset.outerTile = '1'; // [people] §19.9
         queueThumb(ctx, cv, Object.assign({}, app, { [key]: id }), FRAME[key] || 'body');
       }
       p.appendChild(grid);

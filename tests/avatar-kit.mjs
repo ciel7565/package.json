@@ -148,6 +148,15 @@ log('👘 avatar kit — the hanbok table and the garment kit (Node)');
   const per = {}; for (const p of A.presets) per[p.id] = A.triangles(p.appearance);
   numbers.trianglesPerSet = per;
   check('every set within the budget', Object.values(per).every((t) => t <= BUDGET), JSON.stringify(per).slice(0, 300));
+  // [people] §19.9 the middle level (beyond 12 m): every set ≤ 12 000 triangles, finite, standing in the same box
+  const mid = {}, midBad = [];
+  for (const p of A.presets) {
+    mid[p.id] = A.triangles(p.appearance, { mid: true });
+    const g = A._midGeometry ? A._midGeometry(p.appearance) : null;
+    if (g) { const pa = g.attributes.position.array; for (let i = 0; i < pa.length; i++) if (!Number.isFinite(pa[i])) { midBad.push(p.id); break; } g.computeBoundingBox(); const bb = g.boundingBox; if (bb.min.y < -0.03 || bb.max.y > 2.4) midBad.push(p.id + ' box'); }
+  }
+  numbers.trianglesMid = mid;
+  check('the middle level: every set ≤ 12 000 triangles, finite, on the floor', Object.values(mid).every((t) => t <= 12000) && midBad.length === 0 && !!A._midGeometry, JSON.stringify(mid).slice(0, 300) + ' ' + midBad.join(' '));
 }
 
 // ------------------------------------------------------------------ builds (§19.9, lane people)
