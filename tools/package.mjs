@@ -12,8 +12,14 @@
 //   (only the three.js entry vendor/three-entry.js, which is source), node_modules/, hidden tool state.
 //   The zip is verified after writing (required entries present, forbidden ones absent).
 //
-//   --dry-run   stage and verify exactly what would ship, print the summary (and every path with --list), write no zip.
+//   --dry-run   stage and verify exactly what would ship, print the summary and every path, write no zip.
 //               Use with --dist <built folder> to check a server copy without building into dist/.
+//   [opt] CONTRACT §19.4: the source part also ships assets/pack (the licence-checked asset pack with its MANIFEST.json
+//   and recipe — what the build embeds), never assets/reference (the owner's planning images) and nothing else of
+//   assets/. The packager stops when server/data/game-data.json (shipped as source) or the server copy's
+//   data/game-data.json differs from a fresh export of the build (only `exportedAt` may differ): run the release build
+//   (node tools/build.mjs --strict, which writes both) and package again. --allow-stale-data turns that into a warning.
+//   The release page's weight is reported against the §16.0 budget (12.5 MB raw); over it, a warning.
 // =============================================================================
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,7 +34,7 @@ const run = (cmd, a, opts = {}) => execFileSync(cmd, a, { cwd: ROOT, stdio: 'inh
 const DRY = args.includes('--dry-run');
 /** a path for the log: relative inside the repo, absolute outside it */
 const show = (p) => (p === ROOT || p.startsWith(ROOT + path.sep) ? path.relative(ROOT, p) || '.' : p);
-const LIST = args.includes('--list');
+const LIST = args.includes('--list') || DRY;   // [opt] a dry run prints every path
 
 const DIST = path.resolve(opt('--dist', path.join(ROOT, 'dist/metaverse')));
 const ZIP = path.resolve(opt('--out', path.join(ROOT, 'release', 'fermentation-metaverse.zip')));
@@ -36,6 +42,25 @@ if (!args.includes('--no-build') && !opt('--dist')) run('node', ['tools/build.mj
 if (!fs.existsSync(path.join(DIST, 'index.html')) || !fs.existsSync(path.join(DIST, 'api/ping.php'))) {
   console.error(`✖ ${DIST} is not a built server folder (index.html + api/ping.php expected)`);
   process.exit(2);
+}
+
+// [opt] CONTRACT §19.4: the game data that ships must be what the build exports now (a stale table lets the server refuse
+// items, rooms or rewards the page offers). A fresh export: a quick build into a temp folder (no font, no pack, not minified).
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tfm-export-'));
+  try {
+    execFileSync(process.execPath, ['tools/build.mjs', '--no-font', '--no-assets', '--no-minify', '--no-pwa', '--no-precompress', '--quiet',
+      '--out', path.join(tmp, 'index.html'), '--data-out', path.join(tmp, 'data', 'game-data.json')], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
+    const norm = (file) => { const j = JSON.parse(fs.readFileSync(file, 'utf8')); delete j.exportedAt; return JSON.stringify(j); };
+    const fresh = norm(path.join(tmp, 'data', 'game-data.json'));
+    const stale = [path.join(ROOT, 'server/data/game-data.json'), path.join(DIST, 'data/game-data.json')]
+      .filter((f) => { try { return norm(f) !== fresh; } catch (e) { return true; } });
+    if (stale.length) {
+      const msg = `game data differs from a fresh export of the build: ${stale.map(show).join(', ')} — run \`node tools/build.mjs --strict\` (it writes server/data/game-data.json and the server copy's data/) and package again`;
+      if (!args.includes('--allow-stale-data')) { console.error(`✖ ${msg}`); process.exit(1); }
+      console.warn(`⚠ ${msg} (--allow-stale-data)`);
+    } else console.log('  game data: server/data/game-data.json and the server copy match a fresh export');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
 // a dry run stages in the temp dir (nothing is written next to --out)
@@ -85,6 +110,8 @@ fs.copyFileSync(path.join(DIST, 'index.html'), path.join(stage, '전통발효체
 for (const f of ['README.md', 'package.json', 'package-lock.json', '.gitignore']) copy(path.join(ROOT, f), f);
 // source copies; tests/ is developer tooling and never ships (CONTRACT §14.10: no test suites in the release)
 for (const d of ['docs', 'src', 'tools', 'server']) copy(path.join(ROOT, d), d);
+// [opt] the asset pack (CONTRACT §16.1 / §19.4): its images, MANIFEST.json and recipe ship as source; assets/reference never
+copy(path.join(ROOT, 'assets/pack'), 'assets/pack');
 // the three.js esbuild entry is source (not a composer folder): ship it explicitly
 if (fs.existsSync(path.join(ROOT, 'vendor/three-entry.js'))) { fs.mkdirSync(path.join(stage, 'vendor'), { recursive: true }); fs.copyFileSync(path.join(ROOT, 'vendor/three-entry.js'), path.join(stage, 'vendor/three-entry.js')); }
 const testsLeftOut = fs.existsSync(path.join(ROOT, 'tests')) ? walk(path.join(ROOT, 'tests')).length : 0;
@@ -123,6 +150,12 @@ const MUST = ['전통발효체험관.html', 'metaverse/index.html', 'metaverse/i
   'metaverse/lib/Entitle.php', 'metaverse/lib/AdminSettings.php', 'metaverse/lib/Settings.php', 'metaverse/api/auth/password.php',
   // [myroom] CONTRACT §17.4: the room an allotment holder decorates — the library and its two endpoints
   'metaverse/lib/Room.php', 'metaverse/api/room/get.php', 'metaverse/api/room/save.php',
+  // [opt] CONTRACT §18.6 / §19.4: the installable page of the server copy, the asset pack with its manifest and credits,
+  // and the phone guide
+  'metaverse/manifest.webmanifest', 'metaverse/sw.js', 'metaverse/offline.html',
+  ...['icon-180.png', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'].map((n) => `metaverse/icons/${n}`),
+  'assets/pack/MANIFEST.json', 'docs/ASSET-CREDITS.md', 'docs/MOBILE-APP-KO.md',
+  ...(() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'assets/pack/MANIFEST.json'), 'utf8')).files.map((f) => `assets/pack/${f.file}`); } catch (e) { return []; } })(),
   // every file of the built admin folder ships (it is index.php + .htaccess — CONTRACT §15.11 #6; any part added there must ship too)
   ...(fs.existsSync(path.join(DIST, 'admin')) ? walk(path.join(DIST, 'admin')).filter((p) => !skipReason(`admin/${p}`)).map((p) => `metaverse/admin/${p}`) : [])]
   .filter((p, i, all) => all.indexOf(p) === i);
@@ -134,7 +167,8 @@ const FORBIDDEN = (p) => /^tests\//.test(p)
   || /(^|\/)(sessions|logs|backups|node_modules)\//.test(p)
   || (/(^|\/)vendor\//.test(p) && p !== 'vendor/three-entry.js')
   || /(^|\/)uploads\/journal\//.test(p)
-  || /(^|\/)data\/lectures\//.test(p);   // [lecture] the lecture files an operator uploaded stay on the server
+  || /(^|\/)data\/lectures\//.test(p)    // [lecture] the lecture files an operator uploaded stay on the server
+  || /^assets\/(?!pack\/)/.test(p);         // [opt] of assets/ only the pack ships — never assets/reference (the owner's planning images)
 function verify(list) {
   const files = list.filter((p) => !p.endsWith('/'));
   const missing = MUST.filter((m) => !files.includes(m));
@@ -149,6 +183,12 @@ function report(files) {
   console.log(`  not shipped: tests/ (${testsLeftOut} files: developer suites; tests/server-unit.php is PHP 8 dev tooling)`
     + (skipped.size ? ' · ' + [...skipped].map(([why, ps]) => `${why} ${ps.length} (${ps.slice(0, 2).join(', ')}${ps.length > 2 ? ', …' : ''})`).join(' · ') : ''));
   if (LIST) for (const p of files) console.log(`    ${p}`);
+  // [opt] the release page against the §16.0 budget (raw; tools/weight.mjs shows the parts)
+  try {
+    const bytes = fs.statSync(path.join(DIST, 'index.html')).size;
+    const msg = `  release page: ${(bytes / 1e6).toFixed(2)} MB raw (budget 12.5 MB${fs.existsSync(path.join(DIST, 'index.br.html')) ? `; brotli copy ${(fs.statSync(path.join(DIST, 'index.br.html')).size / 1e6).toFixed(2)} MB, budget 7 MB` : ''})`;
+    if (bytes > 12.5e6) console.warn('⚠' + msg.slice(1) + ' — OVER the budget: node tools/weight.mjs ' + show(path.join(DIST, 'index.html'))); else console.log(msg);
+  } catch (e) { /* no page */ }
 }
 
 if (DRY) {
