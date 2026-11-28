@@ -96,6 +96,11 @@ final class Allot
 
     /** @var array request-local memo (map version, summary) */
     private static $memo = [];
+    /** [fix10] set by lazyTick() for the tick it starts: the stamp of the run before, and whether it runs on the real clock */
+    private static $lastBefore = null;
+    private static $lazyReal = false;
+    /** [fix10] a silence longer than this on the real clock (a machine that slept, a clock that jumped) holds the steps that cannot be taken back */
+    public const GAP_GUARD_MS = 3 * 86400000;
 
     /** forget the request-local memo (tests, long-running CLI) */
     public static function forget(): void
@@ -155,7 +160,7 @@ final class Allot
     /** text a customer (maybe a child looking on) can read: cleaned, personal information masked, bad words masked */
     public static function cleanPublic(string $s, int $max): string
     {
-        $t = Users::cleanText($s, min(400, max(1, $max)));
+        $t = Users::cleanText(str_replace(['<', '>'], '', $s), min(400, max(1, $max))); // [fix10] no tag characters in public text
         if ($t === '') return '';
         return mb_substr(trim(ChatFilter::mask(ChatFilter::maskPII($t))), 0, $max);
     }
@@ -885,9 +890,20 @@ final class Allot
             'name_enc' => self::seal($f['name']), 'phone_enc' => self::seal($f['phone']), 'phone_hash' => self::phoneHash($f['phone']), 'phone_tail' => substr($f['phone'], -4),
             'name_hash' => self::nameHash($f['name']), 'consent_at' => $now, 'consent_ver' => $ver, 'guardian' => $f['guardian'] ? 1 : 0, 'purged_at' => 0, 'updated_at' => $now,
         ];
-        $cur = Db::one('SELECT id, addr_enc FROM allot_customers WHERE user_id = ?' . Db::forUpdate(), [$uid]);
+        $cur = Db::one('SELECT id, addr_enc, name_hash, phone_hash, guardian FROM allot_customers WHERE user_id = ?' . Db::forUpdate(), [$uid]);
         if ($cur) {
             $addr = $f['addr'] !== '' ? self::seal($f['addr']) : $cur['addr_enc'];
+            // [fix10] a new form replaces what the customer's running contracts show (name, phone, guardian flag): the change is
+            // written down — which fields, never the values — so an operator can see that and when it happened
+            $changed = [];
+            if ((string) $cur['name_hash'] !== (string) $row['name_hash']) $changed[] = 'name';
+            if ((string) $cur['phone_hash'] !== (string) $row['phone_hash']) $changed[] = 'phone';
+            if ((int) $cur['guardian'] !== (int) $row['guardian']) $changed[] = 'guardian';
+            if ($f['addr'] !== '' && self::unseal($cur['addr_enc']) !== $f['addr']) $changed[] = 'addr';
+            if ($changed) {
+                Audit::log('allot_customer_changed', $uid, ['customer' => (int) $cur['id'], 'fields' => $changed,
+                    'live' => (int) Db::value("SELECT COUNT(*) FROM allot_contracts WHERE customer_id = ? AND status IN ('pending', 'active', 'overdue')", [(int) $cur['id']])]);
+            }
             Db::exec('UPDATE allot_customers SET name_enc = ?, phone_enc = ?, phone_hash = ?, phone_tail = ?, name_hash = ?, addr_enc = ?, consent_at = ?, consent_ver = ?, guardian = ?, purged_at = 0, updated_at = ? WHERE id = ?',
                 [$row['name_enc'], $row['phone_enc'], $row['phone_hash'], $row['phone_tail'], $row['name_hash'], $addr, $now, $ver, $row['guardian'], $now, (int) $cur['id']]);
             return (int) $cur['id'];
@@ -1524,7 +1540,7 @@ final class Allot
     /**
      * Move a live contract to another free unit (the jar was moved, a plot was swapped). The nameplate goes along, the old
      * unit is free (and offered to the waiting list). The contract keeps its own price and dates.
-     * 404 NOT_FOUND · 409 NOT_LIVE · 409 UNIT_TAKEN · 409 NOT_OPEN (the target is closed).
+     * 404 NOT_FOUND · 409 NOT_LIVE · 409 UNIT_TAKEN · 409 NOT_OPEN (the target is closed) · 409 KIND_MISMATCH (another kind of unit).
      */
     public static function transfer(array $a, int $contractId, $toUnit, ?int $now = null): array
     {
@@ -1545,6 +1561,10 @@ final class Allot
             $from = $rows[$fromId];
             $dst = $rows[$toId];
             if (!$from || !$dst) throw new ApiException(404, 'NOT_FOUND', '자리를 찾을 수 없어요.');
+            // [fix10] a jar is not a plot: the contract's price and period belong to its kind
+            $fk = (string) Db::value('SELECT kind FROM allot_zones WHERE id = ?', [(int) $from['zone_id']]);
+            $dk = (string) Db::value('SELECT kind FROM allot_zones WHERE id = ?', [(int) $dst['zone_id']]);
+            if ($fk !== '' && $dk !== '' && $fk !== $dk) throw new ApiException(409, 'KIND_MISMATCH', '같은 종류의 자리로만 옮길 수 있어요. (장독 ↔ 텃밭 ↔ 창고는 새로 신청해 주세요.)');
             if ((string) $dst['status'] === 'closed') throw new ApiException(409, 'NOT_OPEN', '닫아 둔 자리로는 옮길 수 없어요.');
             if ((string) $dst['status'] !== 'open' || $dst['contract_id'] !== null) throw new ApiException(409, 'UNIT_TAKEN', '이미 쓰고 있는 자리예요.');
             $state = (string) $c['status'] === 'pending' ? 'held' : 'leased';
@@ -3268,6 +3288,7 @@ final class Allot
     {
         try {
             if (!self::enabled()) return false;
+            $real = $now === null; // [fix10]
             $now = self::now($now);
             $every = (int) self::conf('lazy_tick_minutes') * 60000;
             $seen = self::cacheGet('tick');
@@ -3287,6 +3308,8 @@ final class Allot
                 if (Db::exec("UPDATE settings SET v = ?, updated_at = ? WHERE k = 'allot.tick_at' AND v = ?", [(string) $now, $now, (string) $old]) !== 1) return false;
             }
             self::cacheSet('tick', $now, 3600);
+            self::$lastBefore = $old === null ? 0 : (int) $old; // [fix10] the stamp from before this run (tick() looks for a long silence)
+            self::$lazyReal = $real;
             self::tick($now, 'lazy');
             return true;
         } catch (\Throwable $e) {
@@ -3320,6 +3343,8 @@ final class Allot
     public static function tick(?int $now = null, string $source = 'cli'): array
     {
         if (!in_array($source, ['cli', 'lazy', 'admin'], true)) $source = 'cli';
+        $real = $now === null || ($source === 'lazy' && self::$lazyReal === true); // [fix10] the real clock (a test or a tool injects its own: never guarded)
+        self::$lazyReal = false;
         $now = self::now($now);
         $t0 = microtime(true);
         $batch = (int) self::conf('tick_batch');
@@ -3327,12 +3352,29 @@ final class Allot
         $out = ['ok' => true, 'at' => $now, 'source' => $source, 'more' => false, 'ms' => 0,
             'steps' => ['holds' => 0, 'approved' => 0, 'renewed' => 0, 'notices' => 0, 'overdue' => 0, 'ended' => 0, 'offers' => 0, 'sent' => 0, 'stats' => 0, 'healed' => 0, 'purged' => 0],
             'paidPending' => 0, 'issues' => [], 'errors' => [], 'mail' => 'off'];
+        // [fix10] (c) switched off: the unattended automation (cli, lazy) leaves applications, holds, dues and notices alone; only the
+        // bookkeeping and the erasure of personal data after its retention time go on. The admin button is a decision: it runs everything.
+        // (d) a long silence on the real clock (a machine that slept, a clock that jumped forward): the steps that cannot be taken back
+        // — an application cancelled for its hold, a contract made overdue or ended, personal data erased — wait for the next run, so
+        // that a wrong clock cannot do it all in one go; the gap is listed as an issue. The first tick afterwards sees a small gap.
+        $skip = [];
+        $last = self::$lastBefore !== null ? self::$lastBefore : self::lastTickAt();
+        self::$lastBefore = null;
+        if (!self::enabled() && $source !== 'admin') {
+            $skip = ['holds', 'approved', 'renewed', 'notices', 'overdue', 'ended', 'offers', 'sent'];
+            $out['paused'] = true;
+        } elseif ($real && $source !== 'admin' && $last > 0 && $now - $last > self::GAP_GUARD_MS) {
+            $skip = ['holds', 'overdue', 'ended', 'purged'];
+            $out['gapMs'] = $now - $last;
+            $out['gapIssue'] = ['kind' => 'clock_gap', 'ref' => '', 'note' => '자동화가 ' . (int) floor(($now - $last) / 86400000) . '일 넘게 쉬었어요. 기한 정리는 다음 실행으로 미뤘어요. 서버 시계가 맞는지 확인해 주세요'];
+        }
         if ($source !== 'lazy') self::tickMark($now);
         $started = Clock::ms();
         $runId = Db::insert('job_runs', ['job' => 'allot:tick', 'source' => $source, 'started_at' => $started, 'finished_at' => 0, 'ok' => 0, 'summary' => null]);
         $steps = ['holds' => 'tickHolds', 'approved' => 'tickApprove', 'renewed' => 'tickRenew', 'notices' => 'tickNotices', 'overdue' => 'tickOverdue', 'ended' => 'tickAutoEnd', 'offers' => 'tickOffers',
             'sent' => 'tickSend', 'stats' => 'tickStats', 'healed' => 'tickIntegrity', 'purged' => 'tickPurge'];
         foreach ($steps as $key => $fn) {
+            if (in_array($key, $skip, true)) continue;
             try {
                 $n = (int) self::$fn($now, $batch, $out);
                 $out['steps'][$key] = $n;
@@ -3617,7 +3659,8 @@ final class Allot
     private static function tickIntegrity(int $now, int $batch, array &$out): int
     {
         $r = self::integrity($batch, true, $now);
-        $out['issues'] = $r['issues'];
+        $out['issues'] = array_merge(isset($out['gapIssue']) ? [$out['gapIssue']] : [], $r['issues']); // [fix10] the gap notice stays in the list
+        unset($out['gapIssue']);
         return $r['healed'];
     }
 

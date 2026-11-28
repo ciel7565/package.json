@@ -176,6 +176,7 @@ final class Db
         self::reset();
         self::$pdo = self::open();
         self::migrate();
+        try { self::ensureIndexes(); } catch (\Throwable $e) { Log::error('DB', 'ensureIndexes failed: ' . get_class($e)); } // [fix10] a database that is already current still gets them
         return self::schemaVersionRaw();
     }
 
@@ -579,6 +580,7 @@ final class Db
             } else {
                 foreach ($stmts as $s) $pdo->exec($s); // MySQL DDL auto-commits; statements are idempotent (IF NOT EXISTS)
                 self::ensureColumns(); // schema.sql already adds them (information_schema check); this is the safety net
+                self::ensureIndexes(); // [fix10] an existing table never gets a key from CREATE TABLE IF NOT EXISTS
             }
             Log::info('DB', 'schema installed/upgraded', ['from' => $have, 'to' => self::SCHEMA_VERSION, 'driver' => self::$driver]);
         } finally {
@@ -613,6 +615,38 @@ final class Db
             self::$pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $col . ' ' . (self::$driver === 'mysql' ? $mysqlType : $sqliteType));
             Log::info('DB', 'column added', ['table' => $table, 'column' => $col]);
         }
+    }
+
+    // [fix10] indexes that were added to the schema files after some databases had already reached the version that created their
+    // table (CREATE TABLE IF NOT EXISTS never adds a key to a table that exists): [table, index, columns]
+    private const ENSURED_INDEXES = [
+        ['allot_units', 'ix_aunits_state', 'status, id'],
+        ['allot_payments', 'ix_apay_paid', 'paid_at'],
+    ];
+
+    /** [fix10] does $table have an index called $index (sqlite_master / information_schema) */
+    public static function hasIndex(string $table, string $index): bool
+    {
+        self::ident($table);
+        self::ident($index);
+        if (self::driver() === 'mysql') {
+            return (int) self::value('SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?', [$table, $index]) > 0;
+        }
+        return (int) self::value("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name = ?", [$table, $index]) > 0;
+    }
+
+    /** [fix10] create the missing ones of ENSURED_INDEXES (an existing table only); idempotent. @return int indexes created */
+    public static function ensureIndexes(): int
+    {
+        $n = 0;
+        foreach (self::ENSURED_INDEXES as $x) {
+            list($table, $index, $cols) = $x;
+            if (!self::hasTable($table) || self::hasIndex($table, $index)) continue;
+            self::$pdo->exec('CREATE INDEX ' . $index . ' ON ' . $table . ' (' . $cols . ')');
+            Log::info('DB', 'index added', ['table' => $table, 'index' => $index]);
+            $n++;
+        }
+        return $n;
     }
 
     /** [entitle] does $table exist in this database (sqlite_master / information_schema) */

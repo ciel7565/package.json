@@ -260,7 +260,7 @@
   // so the shown text only changes where 🔒 replaces something (emoji, ZWJ sequences, spelling stay as typed).
   // Digit runs that look like counting (1 2 3 …, 10 20 30, 369 369 369, 1000000000, dates) are kept.
   const PII_MARK = '🔒';
-  const PII_MAX = 400; // code points looked at (chat ≤ 120, reports ≤ 300); anything longer is cut
+  const PII_MAX = 2000; // code points looked at (chat ≤ 120, reports ≤ 300, support text ≤ 1000); anything longer is cut — [fix10] was 400, the server's number too
   const PR = String.raw;
   // ---- building blocks (the very same strings appear in ChatFilter.php)
   const P_SEP = PR`(?:[^\p{L}\p{N}🔒]|[ㄱ-ㆎ]|하고|그리고|(?:그\s?)?다음(?:에|으로)?|이랑(?=[\s0-9])|에|and|x)`;  // one separator unit between digit groups

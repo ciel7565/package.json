@@ -158,5 +158,10 @@
     "file": "server/lib/Support.php",
     "snippet": "WHERE status = ? AND updated_at < ? ORDER BY updated_at LIMIT ' .($max- count($rows))",
     "reason": "Support::cleanup(): an int (the clamped $max minus the rows already found, > 0 inside the loop); status and time are bound."
+  },
+  {
+    "file": "server/lib/Db.php",
+    "snippet": "'CREATE INDEX ' . $index . ' ON ' . $table . ' (' . $cols . ')'",
+    "reason": "[fix10] Db::ensureIndexes(): table, index name and column list come from the ENSURED_INDEXES constant of Db.php; table and index pass Db::ident() (hasTable / hasIndex) first; DDL cannot take bound parameters."
   }
 ]

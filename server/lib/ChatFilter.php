@@ -95,7 +95,7 @@ final class ChatFilter
     // lower case, O/l look-alikes inside digit tokens → 0/1, "k i d d i n o" spaced letters join). Every match is
     // mapped back to the ORIGINAL characters it covers, so only the masked part changes.
     public const PII_MARK = '🔒';
-    private const PII_MAX = 400; // code points looked at (chat ≤ 120, reports ≤ 300)
+    private const PII_MAX = 2000; // code points looked at (chat ≤ 120, reports ≤ 300, support text and admin memos ≤ 1000) — [fix10] was 400: a longer text was silently cut
     /** invisible characters removed by Users::cleanText (same list as INVISIBLE_RANGES in 60-social.js) */
     public const INVISIBLE_CLASS = '\x{0000}-\x{001F}\x{007F}-\x{009F}\x{00AD}\x{034F}\x{061C}\x{115F}-\x{1160}\x{17B4}-\x{17B5}\x{180E}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}\x{3164}\x{FEFF}\x{FFA0}\x{FFF0}-\x{FFFB}\x{E0000}-\x{E007F}';
 

@@ -4,7 +4,7 @@
 //
 //   node tests/support-client.mjs                        builds a private page (tools/build.mjs --out <tmp>) and tests it
 //   node tests/support-client.mjs --file /abs/page.html  test an already built page
-//   options: --shots <dir> (evidence pictures) · --skip-phone · --quality low|medium · --json · --headed · --timeout <ms>
+//   options: --shots <dir> (evidence pictures) · --skip-phone · --only-phone · --quality low|medium · --json · --headed · --timeout <ms>
 //   Run it through the browser wrapper (…/p9/locks/browser-run.sh node tests/support-client.mjs …).
 //
 // Steps: the module and its ways in (menu tiles, chat buttons, help) → capture() (a JPEG of a fresh frame; the chat
@@ -87,8 +87,7 @@ const fakeServer = (page, state = {}) => page.evaluate((state) => {
   window.__srv = Object.assign({ unread: 0, tickets: [], refuse: null, nextId: 41 }, state);
   G.net.mode = 'server';
   G.auth.current = { id: '7', kind: 'server', nickname: '시험어린이', role: 'user', guest: false };
-  const orig = G.net.request.bind(G.net);
-  window.__origRequest = window.__origRequest || orig;
+  // (no `orig`: see the end of the function below)
   // the picture of one's own ticket (api/support/shot.php) is a plain fetch: a page opened as a file cannot reach a
   // server, so the scripted server answers it with a small JPEG drawn here (the real endpoint is tested by road / unit)
   if (!window.__origFetch) {
@@ -126,14 +125,19 @@ const fakeServer = (page, state = {}) => page.evaluate((state) => {
     if (p === 'support/delete.php') { S.tickets = S.tickets.filter((t) => t.id !== o.body.id); return { deleted: true, unread: S.unread }; }
     if (p === 'support/reply.php') { const t = S.tickets.find((x) => x.id === o.body.id); t.thread.push({ side: 'user', body: o.body.body, at: Date.now() }); t.status = 'open'; return { ticket: t }; }
     if (p === 'chat/report.php') return { reportId: 5, duplicate: false };
-    return orig(p, o).catch(() => ({}));
+    // [fix10] every other path is answered here, calmly, and written down. It used to fall through to `orig`, which is NOT
+    // the real function: G.net.request is the entitlement tap (71-entitle.js installTap), and a replacement set on it is
+    // what the tap calls — so `orig` (the tap) called the replacement again and again until "Maximum call stack size
+    // exceeded". The product itself never calls the tap from its own replacement; only a test that does can recurse.
+    (window.__unscripted = window.__unscripted || []).push(p);
+    return {};
   };
 }, state);
 const ALLOWED_META = ['build', 'browser', 'screen', 'view', 'dpr', 'quality', 'mode', 'net', 'place', 'zone', 'x', 'y', 'z', 'fps', 'look', 'lang', 'touch', 'gl', 'errors', 'lastError', 'uptime', 'memMB', 'blur', 'ui'];
 
 log(`support-client — ${file}`);
 // =============================================================================== 1 · normal mode (file, then a scripted server)
-{
+if (!flag('--only-phone')) {
   const { page, context } = await open('normal', {}, { easy: false });
   await guard('ways in', async () => {
     const w = await page.evaluate(() => {
@@ -272,7 +276,7 @@ log(`support-client — ${file}`);
 }
 
 // =============================================================================== 2 · easy mode
-{
+if (!flag('--only-phone')) {
   const { page, context } = await open('easy', {}, { easy: true });
   await guard('easy', async () => {
     await fakeServer(page);
@@ -326,7 +330,7 @@ if (!flag('--skip-phone')) {
         const box = document.querySelector('.sup-modal');
         const r = box.getBoundingClientRect();
         const btns = [...box.querySelectorAll('button')].filter((b) => b.getClientRects().length);
-        return { w: innerWidth, left: r.left, right: r.right, overflow: document.documentElement.scrollWidth > innerWidth + 1, small: btns.filter((b) => { const q = b.getBoundingClientRect(); return q.height < 40; }).length, easy: G.easy.on };
+        return { w: innerWidth, left: r.left, right: r.right, overflow: document.documentElement.scrollWidth > innerWidth + 1, small: btns.filter((b) => { const q = b.getBoundingClientRect(); return q.height < 40; }).length, smallList: btns.filter((b) => b.getBoundingClientRect().height < 40).slice(0, 14).map((b) => `${b.className.replace(/\s+/g, '.')}:${Math.round(b.getBoundingClientRect().height)}:${b.textContent.trim().slice(0, 8)}`), touch: document.body.classList.contains('is-touch'), unscripted: window.__unscripted || [], easy: G.easy.on };
       });
       await shot(page, `report-phone-${w}x${hgt}`);
       check(`phone ${w}×${hgt}: the window fits (no sideways scroll), buttons are finger-sized`, m.left >= -1 && m.right <= m.w + 1 && !m.overflow && m.small === 0, JSON.stringify(m));
