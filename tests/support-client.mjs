@@ -137,11 +137,22 @@ log(`support-client — ${file}`);
   const { page, context } = await open('normal', {}, { easy: false });
   await guard('ways in', async () => {
     const w = await page.evaluate(() => {
-      const quick = [...document.querySelectorAll('#chat-panel .chat-quick .sup-cq')].map((b) => b.getAttribute('aria-label'));
+      const quick = [...document.querySelectorAll('#chat-panel .sup-chat-row .sup-cq')].map((b) => b.getAttribute('aria-label'));
       const kid = !!document.querySelector('#chat-panel .chat-kid-row .sup-ck');
       return { quick, kid, api: ['open', 'capture', 'mine', 'openMine', 'refresh'].filter((k) => typeof G.sys.support[k] === 'function'), unread: G.sys.support.unread };
     });
     check('ways in: G.sys.support has open · capture · mine · openMine · refresh; the chat window has 문의하기 · 신고하기 and the easy chat row a 📮', w.api.length === 5 && w.quick.join(',') === '문의하기,신고하기' && w.kid && w.unread === 0, JSON.stringify(w));
+    // the chat window's buttons are really pressable: inside the panel (not pushed out of its width), a real click opens the window
+    await page.evaluate(() => G.sys.social.toggleChat(true));
+    const inside = await page.evaluate(() => { const p = document.getElementById('chat-panel').getBoundingClientRect(); return [...document.querySelectorAll('#chat-panel .sup-cq')].map((b) => { const r = b.getBoundingClientRect(); return r.width > 20 && r.left >= p.left - 1 && r.right <= p.right + 1; }); });
+    // a real mouse press at the button's middle, as a person does it. (page.click first waits for several animation
+    // frames with an unchanged box; on software WebGL a frame can take seconds and that wait alone ran into the
+    // timeout although the button was pressable — a press at the coordinates still proves that nothing lies over it.)
+    const mid = await page.evaluate(() => { const r = document.querySelector('#chat-panel .sup-cq[aria-label="문의하기"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await page.mouse.click(mid.x, mid.y);
+    const viaChat = await until(page, () => !!document.querySelector('.sup-modal .sup-kind.is-on[data-kind="question"]'), null, 45000);
+    await page.evaluate(() => G.ui.modal.closeAll());
+    check('ways in: the chat window\'s 문의하기 · 신고하기 sit inside the panel and a real click opens the window (kind 문의하기)', inside.length === 2 && inside.every(Boolean) && viaChat, JSON.stringify({ inside, viaChat }));
     // (no Escape key here: in the game Esc opens the menu, and openMenu() then toggles it shut)
     await page.evaluate(() => { G.ui.modal.closeAll(); G.app.openMenu({ adult: true }); });
     const tileOk = await until(page, () => !!document.querySelector('.app-menu-modal .am-tile[data-mm="support"]'), null, 10000);
