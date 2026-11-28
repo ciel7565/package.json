@@ -317,6 +317,35 @@
   L.buildings.push({ id: 'B_HEAL', type: 'heal', name: '힐링관', x: 38, z: -118, w: 60, d: 16, rot: 0, floors: 1 });
   L.paths.push({ id: 'PATH_HEAL', type: 'stone', width: 3.0, points: [[15, -70], [28, -79], [34, -92], [38, -101], [38, -108.6]] });
 
+  // [buildings] ten hanok to walk into (CONTRACT §19.2, lane buildings) — THE PLOTS TAKEN, two small streets (the 힐링관
+  // chose first; its plot and yard stay free). Type 'craft' is built by 64-interiors-e.js (G.bkit.craft, called from the
+  // BUILDERS of 15-buildings.js); `craft` names the house, `sign` is its 현판. Every front faces its street (rot 0 = the
+  // front faces south, rot π = north); steps end at the street's edge, doors are the middle of each front (doorOf).
+  //  장터 거리 — west of the entrance path, inside the campus between the 한옥 마을 and the gate: the street z 44 … 48
+  //    from the entrance path (x −1) to x −53. North side (fronts south): 한복집 x −20.9 … −7.1 · 염색 공방 −37.4 … −23.6 ·
+  //    주막 −51 … −39. South side (fronts north): 떡집 −37.9 … −26.1 · 한지 공방 −51.2 … −39.8. Kept free: the entrance
+  //    path and its view to the plaza, the gate's stone walls (z 58 … 59.5), 6 m to the road and to the 한옥 마을.
+  //  공방 마을 — east of the main hall, towards the river: the street z −89.75 … −86.25 from PATH_HEAL (x 32.5) to x 79.
+  //    North side: 서당 x 40.6 … 53.4 · 대장간 55 … 66 · 방앗간 68.5 … 79.5 (its water wheel and flume east of it,
+  //    x 80 … 84, still dry land: the river's west bank is at x ≈ 88). South side: 약초방 42.1 … 53.9 · 찻집 56.6 … 67.4.
+  //    Kept free: the 힐링관 yard (z > −104), PATH_HEAL, the hall plaza and the hall zone (r 28).
+  L.buildings.push(
+    { id: 'B_HANBOK', type: 'craft', craft: 'hanbok', name: '한복집', sign: '한복집', x: -14, z: 38.6, w: 12, d: 7, rot: 0 },
+    { id: 'B_DYE', type: 'craft', craft: 'dye', name: '염색 공방', sign: '염색 공방', x: -30.5, z: 38.25, w: 12, d: 8, rot: 0 },
+    { id: 'B_JUMAK', type: 'craft', craft: 'jumak', name: '주막', sign: '주막', x: -45, z: 38.9, w: 11, d: 7, rot: 0 },
+    { id: 'B_TTEOK', type: 'craft', craft: 'tteok', name: '떡집', sign: '떡집', x: -32, z: 53.4, w: 10, d: 7, rot: PI },
+    { id: 'B_HANJI', type: 'craft', craft: 'hanji', name: '한지 공방', sign: '한지 공방', x: -45.5, z: 53.4, w: 9.5, d: 7, rot: PI },
+    { id: 'B_SEODANG', type: 'craft', craft: 'seodang', name: '서당', sign: '서당', x: 47, z: -95, w: 11, d: 7, rot: 0 },
+    { id: 'B_FORGE', type: 'craft', craft: 'forge', name: '대장간', sign: '대장간', x: 60.5, z: -94.7, w: 9, d: 7, rot: 0 },
+    { id: 'B_MILL', type: 'craft', craft: 'mill', name: '방앗간', sign: '방앗간', x: 74, z: -95.2, w: 9, d: 8, rot: 0 },
+    { id: 'B_HERB', type: 'craft', craft: 'herb', name: '약초방', sign: '약초방', x: 48, z: -81, w: 10, d: 7, rot: PI },
+    { id: 'B_TEA', type: 'craft', craft: 'tea', name: '찻집', sign: '찻집', x: 62, z: -81, w: 9, d: 7, rot: PI },
+  );
+  L.paths.push(
+    { id: 'PATH_MARKET', type: 'stone', width: 4.0, points: [[-1, 46], [-12, 46], [-30, 46.2], [-53, 46]] },
+    { id: 'PATH_CRAFT', type: 'stone', width: 3.5, points: [[32.5, -88], [44, -88], [62, -88], [79, -88]] },
+  );
+
   // ---------------------------------------------------------------- anchor lookup
   L.anchors = {};
   const add = (o) => { if (o && o.id) L.anchors[o.id] = o; };

@@ -2443,6 +2443,13 @@
     stall: buildStall,
     rtgarden: buildRtGarden,   // phase 7: 실시간 텃밭 (fence, raised beds, clock sign)
     gotgan: buildGotgan,       // phase 7: 곳간
+    // [buildings] phase 11 (CONTRACT §19.2): the ten hanok of the 장터 거리 and the 공방 마을 — their outside is drawn by
+    // 64-interiors-e.js (G.bkit.craft, set at load) with this file's own builders; a plain signed hanok without it.
+    // B_HEAL (the 힐링관) is built by 69-healing-hall.js: nothing to do here (lane heal-hall's request).
+    craft: (site, b) => (typeof G.bkit.craft === 'function'
+      ? G.bkit.craft(site, b, { buildHanok, buildThatched, addSignBoard, WOOD, SMOKE_SOURCES })
+      : buildHanok(site, b, { sign: b.sign || b.name, chimney: true })),
+    heal: () => {},
   };
 
   const buildings = {

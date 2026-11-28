@@ -676,3 +676,279 @@
 
   G.data.motions = M;
 })();
+
+// =============================================================================
+// [buildings] the ten hanok of the 장터 거리 and the 공방 마을 (CONTRACT §19.2, lane buildings; built by 64-interiors-e.js)
+//   G.data.crafts = { houses: [{ id, place, zone, building, name, kidName, emoji, color, origin: {x, z},
+//                     size: {w, d, h}, floor, roof, tone, post, keeper: { name, role, sets: [preset ids of
+//                     G.data.avatar.presets, first one found wins], hello }, desc }] }
+// Pure data (evaluable in Node). The plots are the [buildings] block of 02-layout.js; the places stand in their own row
+// (z = 4400, x = −900 … 900, 200 m apart), far from the valley, the 힐링관 rows (z 3400 / 3800) and the district.
+// =============================================================================
+(function () {
+  const H = (id, building, name, emoji, color, x, size, o) => Object.assign({
+    id, place: 'PL_' + id.toUpperCase(), zone: 'ZONE_PL_' + id.toUpperCase(), building, name, kidName: name, emoji, color,
+    origin: { x, z: 4400 }, size, floor: 'maru', roof: 'rafters', tone: 'warm', post: 2.7,
+  }, o || {});
+  const houses = [
+    H('hanbok', 'B_HANBOK', '한복집', '👘', '#b45a73', -900, { w: 14, d: 10, h: 3.8 }, {
+      floor: 'jangpan', keeper: { name: '한복집 주인', role: '옷 짓는 사람', sets: ['sseugae', 'jangot', 'grandma'], hello: '어서 오세요. 고운 옷감이 많아요.' },
+      desc: '옷감 필이 가득한 한복집이에요. 주인에게 옷을 사고팔 수 있고, 거울 앞에서 옷장을 열어요.' }),
+    H('dye', 'B_DYE', '염색 공방', '🎨', '#24508e', -700, { w: 16, d: 12, h: 4.4 }, {
+      floor: 'earth', tone: 'dark', post: 2.9, keeper: { name: '염색장', role: '물들이는 사람', sets: ['cook', 'nongbu', 'farmer'], hello: '쪽물에 담글 때마다 색이 짙어져요.' },
+      desc: '쪽·홍화·치자·소목·감물로 천을 물들이는 공방이에요. 물든 천이 바람에 흔들려요.' }),
+    H('jumak', 'B_JUMAK', '주막', '🍲', '#a8693f', -500, { w: 14, d: 10, h: 3.6 }, {
+      floor: 'earth', tone: 'dark', keeper: { name: '주막 아주머니', role: '국밥 끓이는 사람', sets: ['cook', 'grandma'], hello: '따끈한 국밥과 시원한 식혜가 있어요.' },
+      desc: '길 가던 사람이 쉬어 가던 주막이에요. 가마솥 국밥과 식혜, 수정과를 내어 줘요.' }),
+    H('tteok', 'B_TTEOK', '떡집', '🍡', '#c9a24a', -300, { w: 12, d: 10, h: 3.6 }, {
+      floor: 'earth', tone: 'warm', keeper: { name: '떡집 할머니', role: '떡 빚는 사람', sets: ['grandma', 'cook'], hello: '시루떡이 김을 내며 익고 있어요.' },
+      desc: '시루에 떡을 찌고 떡메로 인절미를 치는 떡집이에요.' }),
+    H('hanji', 'B_HANJI', '한지 공방', '📜', '#e8d9b5', -100, { w: 14, d: 10, h: 3.8 }, {
+      floor: 'earth', keeper: { name: '한지장', role: '종이 뜨는 사람', sets: ['potter', 'nongbu'], hello: '닥나무 껍질이 고운 종이가 돼요.' },
+      desc: '닥나무로 종이를 뜨는 공방이에요. 물통에서 발로 종이를 떠서 말려요.' }),
+    H('seodang', 'B_SEODANG', '서당', '📖', '#3b5ba5', 100, { w: 14, d: 10, h: 3.8 }, {
+      floor: 'maru', keeper: { name: '훈장님', role: '서당 선생님', sets: ['hunjang', 'scholar', 'seonbi'], hello: '어서 와서 앉으렴. 오늘은 셈하기와 한글 놀이를 하자.' },
+      desc: '낮은 책상 앞에 앉아 글과 셈을 배우던 마을 학교, 서당이에요.' }),
+    H('forge', 'B_FORGE', '대장간', '🔨', '#6e3b4e', 300, { w: 12, d: 10, h: 4.4 }, {
+      floor: 'earth', tone: 'dark', post: 3.0, keeper: { name: '대장장이', role: '쇠를 다루는 사람', sets: ['nongbu', 'potter', 'farmer'], hello: '풀무질을 하면 불이 확 살아나요. 멀리서 봐요.' },
+      desc: '화덕에 쇠를 달구어 호미와 낫을 만들던 대장간이에요.' }),
+    H('mill', 'B_MILL', '방앗간', '🌾', '#7a6a55', 500, { w: 14, d: 11, h: 4.6 }, {
+      floor: 'earth', tone: 'dark', post: 3.1, keeper: { name: '방앗간 아저씨', role: '곡식 찧는 사람', sets: ['nongbu', 'farmer'], hello: '물레방아가 돌면 방아가 쿵쿵 찧어요.' },
+      desc: '물레방아와 디딜방아로 곡식을 찧던 방앗간이에요.' }),
+    H('herb', 'B_HERB', '약초방', '🌿', '#6d8f4e', 700, { w: 12, d: 9, h: 3.4 }, {
+      floor: 'maru', keeper: { name: '약초방 할아버지', role: '풀과 차를 아는 사람', sets: ['magoja', 'seonbi'], hello: '말린 풀마다 향이 달라요. 냄새를 맡아 볼래요?' },
+      desc: '산과 들의 풀을 말려 두고 차로 우려 보던 약초방이에요.' }),
+    H('tea', 'B_TEA', '찻집', '🍵', '#2f6a58', 900, { w: 12, d: 9, h: 3.4 }, {
+      floor: 'maru', keeper: { name: '차 선생님', role: '차를 우리는 사람', sets: ['mosisummer', 'seonbi', 'magoja'], hello: '찻잔을 데우고, 따르고, 기다려 봐요.' },
+      desc: '다도 상 앞에서 차를 천천히 우려 마시는 찻집이에요.' }),
+  ];
+  G.data.crafts = { v: 1, houses };
+
+  // ---------------------------------------------------------------- what each house teaches (G.data.exhibits) + its stamp
+  // Same writing rules as above: every sentence newly written from the named pages (한국민족문화대백과사전,
+  // 한국민속대백과사전); "~래요 / ~대요" where a fact is of medium confidence; no health claims, no prices. The anchors are
+  // the keys 64-interiors-e.js registers with ctx.anchor; HX_<HOUSE>_DO is the stamp of the house's one thing to do
+  // (marked seen when the visitor finishes it — never opened as a card on its own).
+  const X = G.data.exhibits = G.data.exhibits || {};
+  const ENC = 'https://encykorea.aks.ac.kr/Article/', FOLK = 'https://folkency.nfm.go.kr/topic/detail/';
+  const enc = (id, name) => ({ label: `한국민족문화대백과사전 「${name}」`, url: ENC + id });
+  const folk = (id, name) => ({ label: `한국민속대백과사전 「${name}」`, url: FOLK + id });
+  const add = (house, key, anchor, emoji, title, kid, detail, sources, extra) => {
+    const id = 'HX_' + house.toUpperCase() + '_' + key;
+    X[id] = Object.assign({ id, place: 'PL_' + house.toUpperCase(), anchor, title, emoji, kid, detail, sources, confidence: 'high' }, extra || {});
+  };
+  const jong = (w) => { const c = String(w).charCodeAt(String(w).length - 1); return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 > 0; };
+  const stampOf = (house, emoji, title, kid, sources) => add(house, 'DO', 'do', emoji, title, kid, `${title}${jong(title) ? '을' : '를'} 끝까지 해 보면 이 도장이 찍혀요.`, sources, { stamp: true });
+  const HANBOK = enc('E0061645', '한복'), HANBOK_F = folk('12220', '한복'), BOKSIK = enc('E0023690', '복식');
+  const YEOMSAEK = enc('E0037112', '염색'), YEOMNYO = enc('E0037087', '염료'), JJOK = enc('E0021476', '쪽염색'), HONGHWA = folk('7267', '홍화');
+  const JUMAK = enc('E0053227', '주막'), SUJEONG = enc('E0031667', '수정과'), SUJEONG_F = folk('12042', '수정과'), SIKHYE = folk('7825', '식혜');
+  const TTEOK = enc('E0017196', '떡'), SIRU = folk('2450', '시루'), SEOLGI = enc('E0029013', '설기떡');
+  const HANJI = enc('E0061987', '한지'), HANJIJANG = enc('E0054341', '한지장');
+  const SEODANG = enc('E0027680', '서당'), HUNJANG = enc('E0065817', '훈장'), CHAEKSSISI = enc('E0055694', '책씻이');
+  const DAEJANG = enc('E0014680', '대장간'), DAEJANG_F = folk('8731', '대장간'), DAEJANGJANG = enc('E0014692', '대장장이');
+  const BANGAT = enc('E0021738', '방앗간'), BANGA = enc('E0021733', '방아');
+  const CHA = enc('E0055116', '차'), CHA_F = folk('8063', '차'), DADO = enc('E0013419', '다도');
+
+  // ===== 한복집
+  add('hanbok', 'JEOGORI', 'jeogori', '👘', '저고리',
+    '저고리는 몸 위쪽에 입는 짧은 윗옷이에요.',
+    '저고리는 한복의 윗옷이에요. 깃과 고름, 소매가 있고, 앞을 여며 고름으로 묶어요. 저고리 길이는 시대마다 달라서, 저고리가 길 때는 치마가 짧고 저고리가 짧을 때는 치마가 길었대요.',
+    [HANBOK, BOKSIK], { confidence: 'medium' });
+  add('hanbok', 'CHIMA', 'chima', '🎽', '치마와 바지',
+    '여자는 치마, 남자는 바지를 저고리와 입어요.',
+    '한복은 저고리에 여자는 치마를, 남자는 바지를 갖춰 입어요. 그 위에 두루마기를 걸치고, 조끼나 마고자를 더하기도 해요. 저고리와 바지, 치마로 된 옷차림은 아주 오래전부터 이어져 왔어요.',
+    [HANBOK, BOKSIK, HANBOK_F]);
+  add('hanbok', 'OTGAM', 'otgam', '🧵', '옷감',
+    '비단, 모시, 삼베, 무명으로 옷을 지었어요.',
+    '옛사람들은 철에 따라 옷감을 골랐어요. 여름에는 시원한 모시와 삼베를, 봄가을과 겨울에는 무명과 명주, 비단을 썼어요. 선반에 쌓인 천 꾸러미를 한 필, 두 필 하고 세어요.',
+    [HANBOK_F, HANBOK], { confidence: 'medium' });
+  add('hanbok', 'GOREUM', 'goreum', '🎀', '옷고름',
+    '앞섶을 여며 리본처럼 고름을 묶어요.',
+    '옷고름은 저고리의 앞을 여미려고 단 끈이에요. 긴 고름과 짧은 고름을 묶어 맵시를 내요. 고름의 색과 매듭은 저고리를 더 곱게 보이게 해 줘요.',
+    [HANBOK, HANBOK_F]);
+  stampOf('hanbok', '🪡', '저고리 짓기', '옷감을 골라 저고리를 지었어요.', [HANBOK]);
+
+  // ===== 염색 공방
+  add('dye', 'JJOK', 'jjok', '💙', '쪽',
+    '쪽 잎을 우려 하늘빛, 바다빛 쪽빛을 내요.',
+    '쪽은 파란 물을 들이는 풀이에요. 쪽잎을 물에 담가 우리고 잿물과 함께 발효시켜 쪽물을 만들어요. 천을 여러 번 담글수록 옅은 하늘빛에서 짙은 남빛으로 깊어져요.',
+    [JJOK, YEOMSAEK]);
+  add('dye', 'HONGHWA', 'honghwa', '❤️', '홍화',
+    '홍화 꽃잎으로 고운 붉은빛을 내요.',
+    '홍화는 잇꽃이라고도 해요. 꽃잎에는 노란 물과 붉은 물이 함께 들어 있어서, 먼저 노란 물을 빼고 잿물로 붉은 물을 우려내요. 그 붉은 물로 다홍이나 연지 같은 고운 빛을 들였어요.',
+    [HONGHWA, YEOMSAEK]);
+  add('dye', 'CHIJA', 'chija', '💛', '치자',
+    '치자 열매를 우리면 환한 노란빛이 나요.',
+    '치자나무 열매를 물에 우리면 노란 물이 나와요. 이 물로 천에 노란빛을 들이고, 음식에 고운 색을 내기도 했어요. 옛 기록에도 노랑을 들이는 재료로 치자가 나와요.',
+    [YEOMSAEK, YEOMNYO]);
+  add('dye', 'SOMOK', 'somok', '💗', '소목',
+    '소목 나무 속을 끓이면 붉은 물이 나와요.',
+    '소목은 붉은 물이 드는 나무예요. 나무 속을 잘게 쪼개 끓여 물을 받아요. 우리 땅에서 나지 않아 멀리서 사 왔을 만큼 귀한 염료였대요.',
+    [YEOMSAEK, YEOMNYO], { confidence: 'medium' });
+  add('dye', 'GAMMUL', 'gammul', '🤎', '감물',
+    '덜 익은 감 물로 흙빛 갈색을 들여요.',
+    '떫은 풋감을 찧어 짠 물에 천을 담갔다가 햇볕에 말리면 갈색이 짙어져요. 감물 들인 옷은 빳빳해서 일옷으로 많이 입었대요.',
+    [YEOMSAEK, YEOMNYO], { confidence: 'medium' });
+  stampOf('dye', '🫙', '쪽물 들이기', '천을 쪽물에 세 번 담가 물들였어요.', [JJOK]);
+
+  // ===== 주막
+  add('jumak', 'JUMAK', 'jumak', '🏮', '주막',
+    '길 가던 사람이 밥 먹고 쉬어 가던 집이에요.',
+    '주막은 큰길가나 나루터, 장터에 있던 집이에요. 길손은 여기서 밥을 먹고 쉬었고, 밥을 사 먹으면 잠은 대개 그냥 재워 주었대요. 간판은 없었지만 저마다 이름이 있었어요.',
+    [JUMAK], { confidence: 'medium' });
+  add('jumak', 'GUKBAP', 'gukbap', '🍲', '국밥',
+    '뜨끈한 국에 밥을 말아 한 그릇에 내요.',
+    '국밥은 가마솥에 오래 끓인 국에 밥을 말아 내는 음식이에요. 바쁜 길손이 한 그릇으로 든든히 먹을 수 있어서 주막과 장터에서 많이 팔았어요.',
+    [JUMAK], { confidence: 'medium' });
+  add('jumak', 'SIKHYE', 'sikhye', '🥤', '식혜',
+    '엿기름 물에 밥을 삭혀 달콤하게 만들어요.',
+    '식혜는 보리에 싹을 틔워 말린 엿기름 가루를 물에 우리고, 그 물에 밥을 넣어 따뜻하게 삭혀 만들어요. 밥알이 동동 뜨면 끓여서 시원하게 식혀 마셔요.',
+    [SIKHYE]);
+  add('jumak', 'SUJEONG', 'sujeonggwa', '🍹', '수정과',
+    '생강과 계피 물에 곶감을 띄운 음료예요.',
+    '수정과는 생강과 계피를 달인 물에 꿀이나 설탕을 타고 곶감과 잣을 띄운 차가운 음료예요. 곶감이 마르는 늦가을부터 정월 무렵까지 식혜와 함께 즐겨 마셨어요.',
+    [SUJEONG, SUJEONG_F]);
+  stampOf('jumak', '🍲', '국밥 한 상 차리기', '국밥과 식혜를 한 상 차렸어요.', [JUMAK]);
+
+  // ===== 떡집
+  add('tteok', 'SIRU', 'siru', '🏺', '시루',
+    '바닥에 구멍이 숭숭 난 그릇으로 떡을 쪄요.',
+    '시루는 바닥에 구멍이 여럿 뚫린 질그릇이에요. 물이 끓는 솥 위에 얹으면 김이 구멍으로 올라와 떡가루를 익혀요. 시루는 잔치나 고사 같은 특별한 날에 떡을 찌던 그릇이었어요.',
+    [SIRU, TTEOK]);
+  add('tteok', 'SIRUTTEOK', 'sirutteok', '🍰', '시루떡',
+    '쌀가루와 팥을 켜켜이 깔아 시루에 쪄요.',
+    '시루떡은 쌀가루와 팥이나 콩을 한 켜씩 번갈아 시루에 안쳐 쪄 낸 떡이에요. 켜를 만들지 않고 한 덩어리로 찌면 백설기 같은 설기떡이 돼요.',
+    [SEOLGI, TTEOK]);
+  add('tteok', 'INJEOLMI', 'injeolmi', '🔨', '인절미와 떡메',
+    '찐 찹쌀을 떡메로 쳐서 콩고물을 묻혀요.',
+    '인절미는 찹쌀을 쪄서 떡판에 놓고 떡메로 쳐서 만든 떡이에요. 차지게 쳐진 떡을 알맞게 잘라 콩고물이나 팥고물을 묻혀요. 아주 옛날부터 즐겨 먹던 떡이래요.',
+    [TTEOK], { confidence: 'medium' });
+  add('tteok', 'NANUM', 'nanum', '🤲', '떡 나누기',
+    '좋은 날 떡을 쪄서 이웃과 나눠 먹었어요.',
+    '떡은 매일 먹는 밥과 달리 명절, 잔치, 고사 같은 날에 만드는 음식이었어요. 떡을 찌면 이웃과 나눠 먹으며 기쁜 일을 함께했어요.',
+    [SIRU, TTEOK]);
+  stampOf('tteok', '🔨', '떡메 치기', '떡메로 쳐서 인절미를 만들었어요.', [TTEOK]);
+
+  // ===== 한지 공방
+  add('hanji', 'DAK', 'dak', '🌳', '닥나무',
+    '한지는 닥나무 껍질로 만들어요.',
+    '한지는 닥나무 껍질을 벗겨 삶고 두드려 만든 종이예요. 질긴 섬유가 길게 얽혀서 오래 가고 잘 찢어지지 않아요.',
+    [HANJI, HANJIJANG]);
+  add('hanji', 'DAKPUL', 'dakpul', '🫧', '닥풀',
+    '끈끈한 닥풀이 섬유를 고르게 퍼지게 해요.',
+    '종이를 뜰 때는 물통에 닥 섬유와 함께 황촉규 뿌리에서 얻은 끈끈한 풀을 섞어요. 이 풀 덕분에 섬유가 물속에 고르게 퍼져서 얇고 고른 종이가 떠져요.',
+    [HANJI], { confidence: 'medium' });
+  add('hanji', 'OEBAL', 'oebal', '🧺', '외발뜨기',
+    '대나무 발로 물을 앞뒤로 흔들어 떠요.',
+    '한지장은 대나무로 엮은 발을 물통에 넣어 섬유가 섞인 물을 앞뒤, 옆으로 흔들며 떠요. 이렇게 뜬 종이를 한 장씩 겹겹이 쌓아 물을 빼고, 판에 붙여 말려요.',
+    [HANJIJANG, HANJI], { confidence: 'medium' });
+  add('hanji', 'SSEUIM', 'sseuim', '🪟', '한지의 쓰임',
+    '문에 바르고, 책을 만들고, 등을 만들었어요.',
+    '한지는 창과 문에 바르는 창호지가 되고, 책과 편지, 부채와 등, 상자가 되었어요. 빛을 부드럽게 걸러 주어서 한옥 방이 은은하게 밝아요.',
+    [HANJI]);
+  stampOf('hanji', '📜', '종이 뜨기', '발로 종이를 떠서 말렸어요.', [HANJIJANG]);
+
+  // ===== 서당
+  add('seodang', 'SEODANG', 'seodang', '🏫', '서당',
+    '마을 아이들이 모여 글을 배우던 학교예요.',
+    '서당은 마을에 있던 작은 학교예요. 아이들이 훈장님께 글 읽기와 쓰기, 예절을 배웠어요. 계절에 맞춰 공부를 바꾸고 놀이로 배우기도 했어요.',
+    [SEODANG]);
+  add('seodang', 'HUNJANG', 'hunjang', '🧑‍🏫', '훈장님',
+    '서당에서 아이들을 가르치던 선생님이에요.',
+    '훈장은 서당의 선생님이에요. 조선 중기 이후 서당이 늘어나면서 마을마다 훈장이 생겼어요. 훈장마다 배운 정도는 서로 달랐대요.',
+    [HUNJANG], { confidence: 'medium' });
+  add('seodang', 'CHAEKSSISI', 'chaekssisi', '🍡', '책씻이',
+    '책 한 권을 다 떼면 떡을 나눠 먹었어요.',
+    '책씻이는 책 한 권을 다 배우고 나서 하던 잔치예요. 아이 집에서 떡과 음식을 마련해 훈장님과 친구들에게 대접했어요. 더 열심히 배우라는 뜻과 고마운 마음이 함께 담겼어요.',
+    [CHAEKSSISI]);
+  add('seodang', 'SANGASI', 'sangaji', '🥢', '산가지 셈',
+    '가느다란 막대를 놓으며 수를 셌어요.',
+    '산가지는 수를 셀 때 쓰던 가느다란 막대예요. 막대를 가로세로로 늘어놓아 수를 나타내고 더하기와 빼기를 했어요. 이 서당에서는 산가지와 한글로 놀이하듯 배워요.',
+    [SEODANG], { confidence: 'medium' });
+  stampOf('seodang', '✏️', '셈하기와 한글 놀이', '산가지로 셈하고 한글을 썼어요.', [SEODANG]);
+
+  // ===== 대장간
+  add('forge', 'DAEJANG', 'daejanggan', '🔥', '대장간',
+    '쇠를 불에 달궈 연장을 만들던 곳이에요.',
+    '대장간은 쇠를 불에 달구고 두드려 연장을 만들거나 고치던 곳이에요. 마을 사람들은 무뎌진 호미와 낫을 들고 와 다시 날을 세웠어요.',
+    [DAEJANG, DAEJANG_F]);
+  add('forge', 'PULMU', 'pulmu', '💨', '풀무',
+    '바람을 불어 넣어 불을 세게 해요.',
+    '풀무는 화덕에 바람을 불어 넣어 불길을 세게 하는 도구예요. 손으로 미는 손풀무와 발로 밟는 발풀무가 있고, 발풀무가 더 오래되었어요.',
+    [DAEJANG, DAEJANG_F]);
+  add('forge', 'MORU', 'moru', '⚒️', '모루와 메',
+    '달군 쇠를 모루에 올려 메로 두드려요.',
+    '모루는 쇠를 올려놓고 두드리는 쇳덩이 받침이에요. 대장장이는 집게로 달군 쇠를 잡고 메와 망치로 두드려 모양을 잡아요.',
+    [DAEJANGJANG, DAEJANG]);
+  add('forge', 'NONGGI', 'nonggi', '🌾', '호미와 낫',
+    '대장간에서 호미, 낫, 괭이를 만들었어요.',
+    '대장간에서는 호미와 낫, 괭이, 쇠스랑, 도끼, 작두 같은 연장을 만들었어요. 대장장이는 담금질로 쇠의 단단함을 알맞게 맞췄어요.',
+    [DAEJANG_F, DAEJANG]);
+  stampOf('forge', '💨', '풀무질하기', '풀무질로 화덕 불을 살렸어요.', [DAEJANG]);
+
+  // ===== 방앗간
+  add('mill', 'BANGA', 'banga', '🌾', '방아',
+    '곡식 껍질을 벗기고 가루를 내는 연장이에요.',
+    '방아는 곡식을 찧어 껍질을 벗기거나 빻아서 가루를 내는 연장이에요. 사람이 밟는 디딜방아, 소나 말이 돌리는 연자방아, 물의 힘으로 움직이는 물레방아가 있었어요.',
+    [BANGA, BANGAT]);
+  add('mill', 'MULLE', 'mulle', '💧', '물레방아',
+    '물이 바퀴를 돌리면 공이가 쿵쿵 찧어요.',
+    '물레방아는 떨어지는 물로 큰 바퀴를 돌려요. 바퀴의 굴대가 돌면서 방아채를 들었다 놓으면 공이가 확 안의 곡식을 찧어요. 물가에 방앗간을 지은 까닭이에요.',
+    [BANGAT, BANGA]);
+  add('mill', 'DIDIL', 'didil', '🦶', '디딜방아',
+    '발로 밟았다 떼면 공이가 떨어져 찧어요.',
+    '디딜방아는 사람이 발로 방아채 한쪽을 밟았다 놓으며 찧는 방아예요. 공이가 쿵 하고 떨어지면 확에 담긴 곡식이 찧어져요. 두 사람이 함께 밟는 디딜방아도 있었어요.',
+    [BANGAT, BANGA]);
+  add('mill', 'YEONJA', 'yeonja', '🐂', '연자방아',
+    '소가 둥근 돌을 굴려 곡식을 찧어요.',
+    '연자방아는 넓은 돌판 위에서 둥근 돌을 굴려 곡식을 찧는 방아예요. 소나 말이 돌을 끌고 빙글빙글 돌았어요.',
+    [BANGAT, BANGA]);
+  stampOf('mill', '🦶', '디딜방아 찧기', '디딜방아를 밟아 곡식을 찧었어요.', [BANGAT]);
+
+  // ===== 약초방 (herbs as plants, smells and teas — no claims)
+  add('herb', 'SSUK', 'ssuk', '🌱', '쑥',
+    '봄 들판의 쑥은 향긋한 냄새가 나요.',
+    '쑥은 봄이 되면 들과 길가에 흔히 돋는 풀이에요. 잎을 비비면 향긋한 냄새가 나요. 어린 쑥으로 쑥떡과 쑥국을 만들어 먹었어요.',
+    [CHA_F]);
+  add('herb', 'GUKHWA', 'gukhwa', '🌼', '국화차',
+    '말린 국화꽃을 따뜻한 물에 띄워요.',
+    '가을에 핀 국화꽃을 따서 말려 두었다가 따뜻한 물에 띄우면 꽃 향이 은은한 국화차가 돼요. 차나무 잎 말고 다른 풀과 열매로 우린 이런 차를 대용차라고 불러요.',
+    [CHA_F]);
+  add('herb', 'OMIJA', 'omija', '🔴', '오미자',
+    '다섯 가지 맛이 난다는 빨간 열매예요.',
+    '오미자는 다섯 가지 맛을 지닌 열매라는 이름이에요. 단맛, 신맛, 쓴맛, 짠맛, 매운맛이 난대요. 물에 우리면 고운 붉은빛이 나요.',
+    [CHA_F], { confidence: 'medium' });
+  add('herb', 'GAMIP', 'gamip', '🍂', '감잎차',
+    '감나무 잎을 말려서 차로 우려요.',
+    '감나무 잎을 따서 말려 두었다가 물에 우리면 감잎차가 돼요. 조선 시대에는 차나무 차가 줄면서 감잎차, 구기자차, 모과차, 국화차 같은 대용차를 많이 만들었어요.',
+    [CHA_F]);
+  add('herb', 'MALLIGI', 'malligi', '🌬️', '풀 말리기',
+    '그늘에 매달아 바람에 천천히 말려요.',
+    '산과 들에서 딴 풀과 꽃은 그늘진 곳에 매달아 바람으로 천천히 말려요. 잘 마른 풀은 향이 오래가서 철이 지나도 차로 우릴 수 있어요.',
+    [CHA_F], { confidence: 'medium' });
+  stampOf('herb', '👃', '향 맡아 보기', '말린 풀 세 가지의 향을 맡았어요.', [CHA_F]);
+
+  // ===== 찻집
+  add('tea', 'DADO', 'dado', '🍵', '다도',
+    '차를 우리고 권하고 마시는 예절이에요.',
+    '다도는 차를 달여 손님에게 권하고 함께 마실 때의 예법이에요. 차를 마시며 마음을 차분하게 가다듬는 일로 여겼어요.',
+    [DADO, CHA]);
+  add('tea', 'DAGI', 'dagi', '🫖', '다기',
+    '찻주전자, 물 식힘 그릇, 찻잔이 한 벌이에요.',
+    '차를 우리는 그릇을 다기라고 해요. 찻잎을 넣고 우리는 다관, 끓인 물을 알맞게 식히는 숙우, 차를 마시는 찻잔이 있어요. 찻잔은 먼저 따뜻한 물로 데워 둬요.',
+    [CHA, DADO], { confidence: 'medium' });
+  add('tea', 'WAIT', 'gidarim', '⏳', '기다리기',
+    '찻잎이 우러날 때까지 조용히 기다려요.',
+    '찻잎은 물에 닿아 천천히 우러나요. 서두르지 않고 기다리면 맛과 향이 알맞게 나요. 차를 기다리는 동안 이야기를 나누는 것도 다도의 하나예요.',
+    [DADO], { confidence: 'medium' });
+  add('tea', 'DAERYE', 'daerye', '🙇', '다례',
+    '옛사람들은 차를 올리는 예절을 다례라 했어요.',
+    '우리나라에서는 예부터 차를 올리고 마시는 예절을 다례라고 불렀어요. 명절과 제사에 차를 올리는 풍습도 있었어요.',
+    [CHA, CHA_F], { confidence: 'medium' });
+  stampOf('tea', '🍵', '차 한 잔 우리기', '잔을 데우고, 따르고, 기다렸어요.', [DADO]);
+
+  // the 도감 rows of the ten houses
+  if (Array.isArray(G.data.exhibitRooms)) {
+    for (const h of houses) G.data.exhibitRooms.push({ id: h.place, name: h.name, emoji: h.emoji, kid: h.desc.split('.')[0].slice(0, 40), motions: [] });
+  }
+})();
