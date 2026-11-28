@@ -43,7 +43,8 @@
 //   enter(room)            go into a room / STAY / TALK (from the corridor; from the valley the hall first)  -> Promise
 //   gentle()               is 제10관 the gentle 마음 돌아보기 right now (no coffin)? (G.sys.healing.room10Full() when the
 //                          program answers; otherwise easy mode = gentle)
-//   setRoom10(full)        show / hide the coffin of 제10관 now (the program calls it when the gate opens or closes)
+//   setRoom10(full)        show / hide the coffin of 제10관 now and in every later build (the program calls it when the
+//                          gate opens or closes; null = back to asking G.sys.healing.room10Full() / easy mode)
 //   place(room) -> 'PL_HEAL_R1' …          ids: PLACES
 // =============================================================================
 G.healStations = G.healStations || { map: new Map(),
@@ -124,7 +125,9 @@ G.healStations = G.healStations || { map: new Map(),
   };
 
   // room 10: gentle (no coffin, no words about death) unless the program says the full sequence is open
+  let room10Set = null;    // setRoom10(full) remembered (also for the next build); null = ask the program / easy mode
   function gentle() {
+    if (room10Set !== null) return !room10Set;
     try { const f = G.sys.healing?.room10Full?.(); if (f === true) return false; if (f === false) return true; } catch (e) { /* program optional */ }
     return easyOn();
   }
@@ -1412,7 +1415,7 @@ G.healStations = G.healStations || { map: new Map(),
     },
     enter(room) { return enterFromAnywhere(room); },
     gentle,
-    setRoom10(full) { if (room10Live) room10Live.setGentle(!full); applyDoorStates(); return true; },
+    setRoom10(full) { room10Set = full == null ? null : !!full; if (room10Live) room10Live.setGentle(gentle()); applyDoorStates(); return true; },
     stations(room) { return (stationsOf.get(room) || []).slice(); },
   };
 

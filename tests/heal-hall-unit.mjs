@@ -143,6 +143,14 @@ check('nested rooms have no door outside and the hall\'s valley exit as their sa
   const d = H.gentle();
   delete G.sys.healing; G.easy.on = true;
   check('제10관 is gentle in easy mode, full in normal mode, and the program decides when it answers', a === true && b === false && c === true && d === false, JSON.stringify([a, b, c, d]));
+  G.easy.on = true; H.setRoom10(true);
+  const e = H.gentle();
+  H.setRoom10(false); G.easy.on = false;
+  const f2 = H.gentle();
+  H.setRoom10(null);
+  const g2 = H.gentle();
+  G.easy.on = true;
+  check('setRoom10(full) is remembered for later builds (true → full, false → gentle, null → back to the default)', e === false && f2 === true && g2 === false, JSON.stringify([e, f2, g2]));
   check('the easy name of 제10관 says no word about death (마음 돌아보기)', defs.get('PL_HEAL_R10').kidName === '제10관 마음 돌아보기');
 }
 
