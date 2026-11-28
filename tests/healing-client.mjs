@@ -190,8 +190,11 @@ try {
     check('the four numbers moved the calm way', nums.after.stress < nums.before.stress && nums.after.calm > nums.before.calm && nums.after.fatigue < nums.before.fatigue, nums);
     await ev(() => G.sys.healing.openReport());
     await page.waitForSelector('.heal-report', { timeout: 20000 });
-    const rep = await ev(() => ({ stamps: document.querySelectorAll('.heal-stampbox.on').length, nums: document.querySelectorAll('.heal-report .heal-num').length, claim: !!document.querySelector('.heal-report .heal-claim'), help: !!document.querySelector('.heal-report .heal-help'), portrait: !!document.querySelector('.heal-report .heal-portrait img') }));
+    const rep = await ev(() => ({ stamps: document.querySelectorAll('.heal-stampbox.on').length, nums: document.querySelectorAll('.heal-report .heal-num').length, claim: !!document.querySelector('.heal-report .heal-claim'), help: !!document.querySelector('.heal-report .heal-help'), portrait: !!document.querySelector('.heal-report .heal-portrait img'), pic: (() => { const i = document.querySelector('.heal-report .heal-portrait img'); return i ? { ok: i.complete && i.naturalWidth > 0, w: i.naturalWidth, src: i.src.slice(0, 30), len: i.src.length } : null; })() }));
     check('the report: ten stamps, the numbers before and after, the claim line, the portrait', rep.stamps >= 9 && rep.nums === 6 && rep.claim && rep.portrait, rep);
+    // the picture of the 영정 / 오늘의 나 must decode (a report picture of a7434b3's run showed a broken-image box there)
+    await page.waitForFunction(() => { const i = document.querySelector('.heal-report .heal-portrait img'); return !i || (i.complete && i.naturalWidth > 0); }, null, { timeout: 5000 }).catch(() => {});
+    check('the report: the portrait picture decodes (not a broken image)', await ev(() => { const i = document.querySelector('.heal-report .heal-portrait img'); return !!i && i.complete && i.naturalWidth > 0; }), rep.pic);
     check(MODE === 'easy' ? 'easy mode: the gentle report has no help line' : 'the full version shows the one help line (109)', MODE === 'easy' ? !rep.help : rep.help, rep);
     await shot('30-report');
     const jn = await ev(() => { const n0 = G.sys.journal?.count?.() || 0; const e = G.sys.healing.toJournal(G.sys.healing.reportData()); return { ok: !!e, n: (G.sys.journal?.count?.() || 0) - n0 }; });
