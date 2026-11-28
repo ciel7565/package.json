@@ -719,7 +719,7 @@
       floor: 'maru', keeper: { name: '약초방 할아버지', role: '풀과 차를 아는 사람', sets: ['magoja', 'seonbi'], hello: '말린 풀마다 향이 달라요. 냄새를 맡아 볼래요?' },
       desc: '산과 들의 풀을 말려 두고 차로 우려 보던 약초방이에요.' }),
     H('tea', 'B_TEA', '찻집', '🍵', '#2f6a58', 900, { w: 12, d: 9, h: 3.4 }, {
-      floor: 'maru', keeper: { name: '차 선생님', role: '차를 우리는 사람', sets: ['mosisummer', 'seonbi', 'magoja'], hello: '찻잔을 데우고, 따르고, 기다려 봐요.' },
+      floor: 'maru', walls: { W: ['plaster', { open: true, bunhap: 4 }, 'plaster'] }, keeper: { name: '차 선생님', role: '차를 우리는 사람', sets: ['mosisummer', 'seonbi', 'magoja'], hello: '찻잔을 데우고, 따르고, 기다려 봐요.' },
       desc: '다도 상 앞에서 차를 천천히 우려 마시는 찻집이에요.' }),
   ];
   G.data.crafts = { v: 1, houses };

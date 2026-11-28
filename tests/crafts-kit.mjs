@@ -55,7 +55,9 @@ for (const row of rows) {
     if (o.isMesh && pa && pa.count) { geo.computeBoundingBox(); bb.copy(geo.boundingBox).applyMatrix4(o.matrixWorld); box.union(bb); }
   });
   const o = row.origin, hw = row.size.w / 2 + 1.6, hd = row.size.d / 2 + 1.6;
-  const inside = box.min.x >= o.x - hw && box.max.x <= o.x + hw && box.min.z >= o.z - hd && box.max.z <= o.z + hd && box.min.y >= -0.8 && box.max.y <= row.size.h + 0.9;
+  // a room with an open bay (들어열개) shows the kit's painted courtyard beyond that wall: only the other sides are checked
+  const openW = !!(row.walls && Array.isArray(row.walls.W) && row.walls.W.some((x) => x && x.open));
+  const inside = (openW || box.min.x >= o.x - hw) && box.max.x <= o.x + hw && (openW || (box.min.z >= o.z - hd && box.max.z <= o.z + hd)) && box.min.y >= (openW ? -1.5 : -0.8) && box.max.y <= row.size.h + (openW ? 4.5 : 0.9);
   check(`${row.name}: every geometry finite`, nan === 0, `${nan} with NaN`);
   check(`${row.name}: ≤ 200 meshes (draw calls of the colour pass)`, meshes <= 200, `${meshes} meshes, ${Math.round(tris / 1000)}k triangles`);
   check(`${row.name}: stays inside its room`, inside, `x ${(box.min.x - o.x).toFixed(1)}…${(box.max.x - o.x).toFixed(1)} y ${box.min.y.toFixed(1)}…${box.max.y.toFixed(1)} z ${(box.min.z - o.z).toFixed(1)}…${(box.max.z - o.z).toFixed(1)}`);

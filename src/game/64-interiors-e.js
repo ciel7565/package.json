@@ -855,6 +855,399 @@
     };
   };
 
+  const FONT = BK.FONT || '"PretendardEmbed","Pretendard","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
+  /** a canvas texture with big Hangul on 한지 (a sheet on a desk, a chart on the wall) */
+  function hangulTex(ctx, text, w, h, o = {}) {
+    const draw = (c, W, H) => {
+      c.fillStyle = o.bg || '#f4ecd8'; c.fillRect(0, 0, W, H);
+      c.strokeStyle = 'rgba(120,90,50,.35)'; c.lineWidth = Math.max(2, W / 120); c.strokeRect(W * 0.04, H * 0.05, W * 0.92, H * 0.9);
+      c.fillStyle = o.color || '#2a221a'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const lines = String(text).split('\n');
+      const fs = Math.round(Math.min(H / (lines.length + 0.6), W / Math.max(1, ...lines.map((l) => Array.from(l).length)) * 1.1) * (o.scale || 0.8));
+      c.font = `800 ${fs}px ${FONT}`;
+      lines.forEach((l, i) => c.fillText(l, W / 2, H * (i + 1) / (lines.length + 1)));
+    };
+    let tex = null;
+    if (G.gfx && typeof G.gfx.canvasTexture === 'function') tex = G.gfx.canvasTexture(w, h, draw);
+    else if (typeof document !== 'undefined' && document.createElement) {
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const c = cv.getContext && cv.getContext('2d'); if (c) draw(c, w, h);
+      tex = new THREE.CanvasTexture(cv);
+    }
+    if (tex) { tex.colorSpace = THREE.SRGBColorSpace; ctx.own(tex); }
+    return tex;
+  }
+
+  // ============================================================================================ 서당 PL_SEODANG
+  // The village school: the 훈장's 서안 with brush, ink, paper and 산가지 before a folding screen, rows of low desks with
+  // 방석 for the children, books on a 책장, a chart of Hangul on the wall (가나다라 · 마바사), an oil lamp. No written
+  // Chinese characters anywhere. Thing to do: 셈하기와 한글 놀이 — three 산가지, two more (= five), then 가 on the paper.
+  FURNISH.seodang = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    // the teacher's place by the north wall
+    const tz = -hd + 1.5;
+    const sd = has('seoan') ? K.seoan(R, { x: 0, z: tz, rotY: 0 }) : K.table(R, { x: 0, z: tz, w: 1.0, d: 0.42, h: 0.34, legs: 'curved', tone: '#5a3420' });
+    const st = (sd && sd.top) || 0.34;
+    R.block(0, tz, 0.55, 0.25, { maxY: st });
+    if (has('munbang')) K.munbang(R, { x: -0.25, y: st, z: tz });
+    for (let k = 0; k < 7; k++) R.add('furn', geo.cyl(0.004, 0.004, 0.22, 5), M(0.25 + k * 0.012, st + 0.006, tz + 0.02, 0, 1, 1, 1, PI / 2, 0.1 * (k - 3)), '#c9a46a');   // 산가지
+    K.cushion(R, { x: 0, z: tz - 0.65, w: 0.7, d: 0.7, h: 0.1, tint: '#2f4a80', trim: '#c9a24a' });
+    if (has('foldScreen')) { try { K.foldScreen(R, { x: 0, z: -hd + 0.45, panels: 8, h: 1.6 }); } catch (e) { K.screen(R, { x: 0, z: -hd + 0.45, panels: 8, h: 1.6 }); } }
+    else K.screen(R, { x: 0, z: -hd + 0.45, panels: 8, h: 1.6 });
+    A('hunjang', { x: 0, y: 1.0, z: tz + 0.4 });
+    A('sangaji', { x: 0.3, y: st + 0.25, z: tz + 0.35 });
+    // the pupils' desks: three rows of four, a book and a brush on each
+    const desks = [];
+    for (let r0 = 0; r0 < 3; r0++) for (let c0 = 0; c0 < 4; c0++) {
+      const x = -3.6 + c0 * 2.4, z = -0.6 + r0 * 1.55;
+      const t = K.table(R, { x, z, w: 0.72, d: 0.38, h: 0.3, tone: '#6b3d26' });
+      R.block(x, z, 0.36, 0.19, { maxY: 0.3 });
+      K.cushion(R, { x, z: z + 0.5, w: 0.5, d: 0.5, h: 0.07, tint: r0 % 2 ? '#8a3b4b' : '#2f6a58', trim: '#c9a24a' });
+      if (has('books') && (c0 + r0) % 2 === 0) K.books(R, { x: x - 0.15, y: t.top, z, w: 0.16, d: 0.24, n: 1, seed: c0 + r0 * 4 });
+      R.add('paint', K.geo.slab(0.24, 0.004, 0.3, 0.001), M(x + 0.12, t.top + 0.002, z, 0.05), '#f2ead6');
+      desks.push({ x, z, top: t.top });
+    }
+    A('seodang', { x: -3.6, y: 0.8, z: -0.2 });
+    // a book case, the Hangul chart, the 책씻이 table (떡 for the class)
+    if (has('chaekjang')) { K.chaekjang(R, { x: hw - 0.45, z: -2.2, rotY: -PI / 2 }); R.block(hw - 0.45, -2.2, 0.27, 0.6, { maxY: 1.8 }); }
+    else { const sp = K.shelf(R, { x: hw - 0.45, z: -2.2, rotY: -PI / 2, w: 1.4, d: 0.4, h: 1.7, levels: 4, back: true }); sp.forEach((p) => has('books') && K.books(R, { x: p.x, y: p.y, z: p.z, w: 0.2, d: 0.26, n: 5, seed: 3, rotY: PI / 2 })); R.block(hw - 0.45, -2.2, 0.22, 0.72, { maxY: 1.75 }); }
+    const chart = hangulTex(ctx, '가 나 다 라\n마 바 사 아\n하나 둘 셋', 512, 384);
+    if (chart) {
+      const cm = ctx.own(new THREE.MeshStandardMaterial({ map: chart, roughness: 0.95 }));
+      const cp = new THREE.Mesh(ctx.own(new THREE.PlaneGeometry(1.6, 1.2)), cm);
+      const p = R.wp('W', d / 2, 1.65, 0.05); cp.position.copy(p); cp.rotation.y = PI / 2; cp.name = 'seodang-chart';
+      R.addMesh(cp, 'W');
+    }
+    A('chart', { x: -hw + 0.6, y: 1.5, z: 0 });
+    const ct = K.table(R, { x: hw - 1.4, z: 2.6, w: 0.9, d: 0.6, h: 0.32, round: true, tone: '#6b3d26' });
+    if (has('dish')) { K.dish(R, { x: hw - 1.55, y: ct.top, z: 2.55, kind: 'songpyeon' }); K.dish(R, { x: hw - 1.2, y: ct.top, z: 2.7, kind: 'tteok' }); }
+    R.block(hw - 1.4, 2.6, 0.45, 0.45, { maxY: 0.4 });
+    A('chaekssisi', { x: hw - 1.4, y: 0.8, z: 2.6 });
+    // light: an oil lamp by the teacher, a lamp by the door
+    if (has('deungjan')) { K.deungjan(R, { x: 0.9, z: tz + 0.05, h: 0.45 }); K.lamp(R, { x: 0.9, y: 0.48, z: tz + 0.05, s: 0.5 }); }
+    if (has('jwadeung')) K.jwadeung(R, { x: -hw + 0.8, z: hd - 0.9 });
+    ctx.light({ x: 0, y: 2.3, z: 0.6, color: '#ffd9a8', intensity: 3.8, distance: 10, decay: 1.7, day: 0.2 });
+    K.dust(R, { count: 90 });
+    L.keeperSpot = { x: -0.9, z: tz - 0.15, rotY: 0.2 };
+    // the thing to do on the front-row desk nearest the door
+    const D0 = desks[9] || desks[0];
+    const sticks = new THREE.Group(); sticks.name = 'seodang-sticks';
+    const skm = ctx.own(new THREE.MeshStandardMaterial({ color: '#c9a46a', roughness: 0.7 }));
+    const sg = ctx.own(new THREE.CylinderGeometry(0.006, 0.006, 0.24, 6).rotateX(PI / 2));
+    for (let k = 0; k < 5; k++) { const s = new THREE.Mesh(sg, skm); s.position.set(-0.22 + k * 0.05, 0.008, 0); s.visible = false; sticks.add(s); }
+    sticks.position.set(D0.x, D0.top, D0.z); R.addMesh(sticks);
+    const gaTex = hangulTex(ctx, '가', 256, 320, { scale: 0.95 });
+    const ga = new THREE.Mesh(ctx.own(new THREE.PlaneGeometry(0.22, 0.28).rotateX(-PI / 2)), ctx.own(new THREE.MeshStandardMaterial({ map: gaTex || null, color: gaTex ? '#ffffff' : '#f2ead6', roughness: 0.95 })));
+    ga.position.set(D0.x + 0.14, D0.top + 0.006, D0.z); ga.visible = false; R.addMesh(ga);
+    A('do', { x: D0.x, y: 0.7, z: D0.z + 0.3 });
+    L.step = (i) => {
+      if (i === 0) { ga.visible = false; sticks.children.forEach((s) => { s.visible = false; }); sticks.children.slice(0, 3).forEach((s, k) => setTimeout(() => { s.visible = true; }, reduceMotion() ? 0 : k * 350)); }
+      else if (i === 1) sticks.children.slice(3).forEach((s, k) => setTimeout(() => { s.visible = true; }, reduceMotion() ? 0 : k * 350));
+      else { ga.visible = true; ga.scale.setScalar(0.3); tween(L, 0.7, (t) => ga.scale.setScalar(0.3 + 0.7 * ease(t))); }
+    };
+  };
+
+  // ============================================================================================ 대장간 PL_FORGE
+  // A smithy under a soot-dark roof: the 화덕 (a clay hearth with a hood up to the rafters) with a real fire light, the box
+  // 풀무 beside it with its handle and air pipe, the 모루 on its stump with 메 · 망치 · 집게, the quench tub, charcoal,
+  // finished farm tools on the wall (호미 · 낫 · 쇠스랑 · 도리깨), a low rail that keeps children back from the fire.
+  // Thing to do: 풀무질 — each pump brightens the fire (slowly: no flicker above 3 Hz), then the iron glows and is struck.
+  FURNISH.forge = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    const fx = -1.4, fz = -hd + 0.9;
+    // the hearth: a clay block, a fire bowl on it, the hood narrowing up into the roof
+    R.add('clay', K.geo.slab(1.6, 0.8, 1.2, 0.04), M(fx, 0.4, fz), '#8a6a4e');
+    R.add('stone', K.geo.slab(1.7, 0.08, 1.3, 0.02), M(fx, 0.82, fz), '#5e5850');
+    R.add('earth', geo.cyl(0.32, 0.28, 0.1, 16), M(fx, 0.88, fz), '#2a1f18');
+    for (let k = 0; k < 4; k++) R.add('clay', K.geo.slab(1.5 - k * 0.3, 0.5, 1.1 - k * 0.2, 0.03), M(fx, 1.95 + k * 0.5, fz - 0.1), '#6e5640');
+    R.block(fx, fz, 0.82, 0.62, { maxY: 0.85 });
+    K.fire(R, { x: fx, y: 0.9, z: fz, s: 0.8, light: false });
+    const fire = ctx.light({ x: fx, y: 1.2, z: fz + 0.2, color: '#ff7a2a', intensity: 3.0, distance: 7, decay: 1.8, flicker: 0.08, day: 0.6 });
+    for (let k = 0; k < 18; k++) R.add('earth', K.geo.slab(0.07, 0.05, 0.06, 0.01), M(fx - 0.25 + (k % 6) * 0.1, 0.9 + ((k / 6) | 0) * 0.03, fz - 0.2 + ((k * 7) % 5) * 0.08, k), '#1c1a1a');
+    A('daejanggan', { x: fx, y: 1.4, z: fz + 0.7 });
+    // the 풀무 (box bellows): body, the handle that goes in and out, the pipe to the hearth
+    const bx = fx + 1.6, bz = fz + 0.2;
+    R.add('furn', K.geo.slab(0.9, 0.55, 0.45, 0.02), M(bx, 0.42, bz), '#5e3a22');
+    R.add('furn', K.geo.slab(0.9, 0.12, 0.5, 0.02), M(bx, 0.1, bz), '#4a2f1c');
+    R.add('iron', geo.cyl(0.04, 0.04, 0.75, 8).rotateZ(PI / 2), M(bx - 0.75, 0.55, bz - 0.05), '#3a3634');
+    R.block(bx, bz, 0.47, 0.25, { maxY: 0.72 });
+    const handle = new THREE.Group(); handle.name = 'forge-bellows-handle';
+    const hm = ctx.own(new THREE.MeshStandardMaterial({ color: '#7a5636', roughness: 0.8 }));
+    const rod = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8).rotateZ(PI / 2)), hm); rod.position.x = 0.3;
+    const grip = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.03, 0.03, 0.26, 8).rotateX(PI / 2)), hm); grip.position.x = 0.6;
+    handle.add(rod, grip); handle.position.set(bx + 0.45, 0.48, bz); R.addMesh(handle);
+    A('pulmu', { x: bx, y: 0.95, z: bz + 0.4 });
+    // the 모루 on its stump; hammers and tongs on a rack; the quench tub
+    const ax = fx + 0.6, az = fz + 1.6;
+    R.add('furn', geo.cyl(0.28, 0.3, 0.55, 12), M(ax, 0.275, az), '#6e4a2c');
+    R.add('iron', K.geo.slab(0.42, 0.18, 0.2, 0.02), M(ax, 0.64, az), '#3a3634');
+    R.add('iron', geo.cyl(0.0, 0.09, 0.22, 8).rotateZ(PI / 2), M(ax + 0.32, 0.67, az), '#3a3634');
+    R.block(ax, az, 0.3, 0.3, { maxY: 0.73 });
+    A('moru', { x: ax, y: 1.0, z: az + 0.4 });
+    for (const [k, len, hd2] of [[0, 0.7, 0.12], [1, 0.5, 0.07], [2, 0.6, 0.03]]) {
+      R.add('furn', geo.cyl(0.018, 0.02, len, 6), M(-hw + 0.25, 1.1, -1.4 + k * 0.35, 0, 1, 1, 1, 0, 0), '#7a5636');
+      R.add('iron', K.geo.slab(0.06, hd2 + 0.04, 0.16, 0.01), M(-hw + 0.25, 1.1 + len / 2, -1.4 + k * 0.35), '#3a3634');
+    }
+    R.add('furn', K.geo.slab(0.08, 0.08, 1.2, 0.01), M(-hw + 0.2, 1.5, -1.05), '#4a2f1c');
+    K.pot(R, { kind: 'basin', x: ax - 1.2, z: az + 0.2, s: 1.1, tint: '#6e5a48' });
+    R.add('paint', geo.cyl(0.33, 0.33, 0.006, 18), M(ax - 1.2, 0.17, az + 0.2), '#2e3a40');
+    R.block(ax - 1.2, az + 0.2, 0.4, 0.4, { maxY: 0.25 });
+    // finished tools on the east wall, charcoal in sacks, firewood
+    if (has('farmTool')) ['homi', 'nat', 'soeseurang', 'dorikkae', 'homi', 'nat'].forEach((k, i) => { try { K.farmTool(R, k, R.wm('E', 1.2 + i * 1.1, 1.9, 0.05), { wall: 'E' }); } catch (e) { /* the tool */ } });
+    A('nonggi', { x: hw - 0.5, y: 1.5, z: -1.5 });
+    if (has('gamaniStack')) { K.gamaniStack(R, { x: hw - 0.8, z: 3.0, rotY: -PI / 2, rows: [2, 1] }); R.block(hw - 0.8, 3.0, 0.5, 0.65, { maxY: 0.95 }); }
+    if (has('jangjak')) { K.jangjak(R, { x: -hw + 0.7, z: 2.6, rotY: PI / 2, w: 1.2 }); R.block(-hw + 0.7, 2.6, 0.3, 0.62, { maxY: 0.8 }); }
+    // a low rail in front of the hearth: children watch from behind it
+    for (const x of [-3.0, -1.4, 0.2]) R.add('furn', geo.cyl(0.04, 0.05, 0.7, 8), M(x, 0.35, fz + 2.6), '#5a3c26');
+    R.add('furn', geo.cyl(0.03, 0.03, 3.4, 8).rotateZ(PI / 2), M(-1.4, 0.68, fz + 2.6), '#6e4a2c');
+    R.block(-1.4, fz + 2.6, 1.7, 0.08, { maxY: 0.7 });
+    ctx.light({ x: 1.5, y: 2.6, z: 1.2, color: '#ffd0a0', intensity: 3.0, distance: 9, decay: 1.7, day: 0.2 });
+    K.dust(R, { count: 120 });
+    L.keeperSpot = { x: ax + 0.6, z: az - 0.1, rotY: -0.6 };
+    // the thing to do: the iron bar on the anvil glows; the fire light grows with each pump (smoothly, ≤ 1 Hz)
+    const barM = ctx.own(new THREE.MeshStandardMaterial({ color: '#3a3634', emissive: '#000000', roughness: 0.5, metalness: 0.6 }));
+    const bar = new THREE.Mesh(ctx.own(new THREE.BoxGeometry(0.34, 0.03, 0.05)), barM); bar.position.set(ax, 0.745, az); R.addMesh(bar);
+    const hot = new THREE.Color('#ff6a1a');
+    A('do', { x: bx, y: 1.0, z: bz + 0.6 });
+    L.heat = 0;
+    L.step = (i) => {
+      const from = 3.0 + L.heat * 2.2;
+      L.heat = Math.min(2, L.heat + 1);
+      const to = 3.0 + L.heat * 2.2;
+      tween(L, 1.4, (t) => {
+        handle.position.x = bx + 0.45 - Math.sin(t * PI) * 0.35;     // pushed in and pulled back, once
+        try { fire.set({ intensity: from + (to - from) * ease(t) }); } catch (e) { /* the pool */ }
+        if (i === 2) barM.emissive.copy(hot).multiplyScalar(0.25 + 0.75 * ease(t));
+      });
+      try { G.sfx?.(i === 2 ? 'thud' : 'whoosh'); } catch (e) { /* a sound */ }
+    };
+  };
+
+  // ============================================================================================ 방앗간 PL_MILL
+  // A mill house: the 디딜방아 (a long beam on its pivot posts, the pestle over a stone 확 sunk in the floor), the axle of
+  // the water wheel coming through the east wall and lifting a second pestle in a slow rhythm (the wheel turns outside),
+  // a 연자방아 model in the corner, sacks of grain, 키 and 되, a 멍석 of grain. Thing to do: 디딜방아 — step, release, again.
+  FURNISH.mill = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    // the 디딜방아: pivot posts with the crossbar at x = 0; the beam runs along X, the pestle at x = −1.8, the foot at +1.4
+    const pz = -0.6, py = 0.42;
+    for (const sz of [-1, 1]) R.add('furn', K.geo.slab(0.12, 0.6, 0.12, 0.01), M(0, 0.3, pz + sz * 0.32), '#5a3c26');
+    R.add('furn', geo.cyl(0.04, 0.04, 0.78, 8).rotateX(PI / 2), M(0, py, pz), '#6e4a2c');
+    R.block(0, pz, 0.1, 0.4, { maxY: 0.6 });
+    // the 확 (stone mortar sunk to its rim) with grain
+    R.add('stone', geo.cyl(0.34, 0.3, 0.18, 16), M(-1.8, 0.09, pz), '#8a8478');
+    R.add('cloth', geo.cyl(0.2, 0.2, 0.012, 14), M(-1.8, 0.17, pz), '#d8c08a');
+    R.block(-1.8, pz, 0.34, 0.34, { maxY: 0.2 });
+    const beam = new THREE.Group(); beam.name = 'mill-didil';
+    const bm = ctx.own(new THREE.MeshStandardMaterial({ color: '#8a6440', roughness: 0.85 }));
+    const plank = new THREE.Mesh(ctx.own(new THREE.BoxGeometry(3.4, 0.14, 0.2)), bm); plank.position.x = -0.2;
+    const pestle = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.09, 0.11, 0.55, 12)), bm); pestle.position.set(-1.8, -0.2, 0);
+    const foot = new THREE.Mesh(ctx.own(new THREE.BoxGeometry(0.4, 0.05, 0.3)), bm); foot.position.set(1.35, 0.09, 0);
+    beam.add(plank, pestle, foot);
+    beam.position.set(0, py, pz);
+    const DOWN = -0.12, UP = 0.22;   // rotation z: + lifts the pestle end (−X) … the beam rests with the pestle in the 확
+    beam.rotation.z = DOWN; R.addMesh(beam);
+    R.block(-0.2, pz, 1.7, 0.14, { maxY: 0.62 });
+    A('didil', { x: 0.6, y: 0.9, z: pz + 0.5 });
+    // the water-wheel pestle by the east wall: the axle through the wall, a cam, the pestle rising and falling slowly
+    const ex = hw - 0.9;
+    R.add('furn', geo.cyl(0.12, 0.12, 1.4, 12).rotateZ(PI / 2), M(hw - 0.5, 1.1, -2.2), '#5e3a22');
+    R.add('stone', geo.cyl(0.32, 0.28, 0.2, 16), M(ex - 0.2, 0.1, -1.4), '#8a8478');
+    R.block(ex - 0.2, -1.4, 0.32, 0.32, { maxY: 0.22 });
+    const p2 = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.1, 0.12, 1.3, 12)), bm); p2.position.set(ex - 0.2, 0.9, -1.4); p2.name = 'mill-wheel-pestle'; R.addMesh(p2);
+    for (const sx of [-1, 1]) R.add('furn', K.geo.slab(0.1, 2.0, 0.1, 0.01), M(ex - 0.2 + sx * 0.3, 1.0, -1.4), '#4a2f1c');
+    R.add('furn', K.geo.slab(0.7, 0.08, 0.12, 0.01), M(ex - 0.2, 1.95, -1.4), '#4a2f1c');
+    R.block(ex - 0.2, -1.4, 0.4, 0.1, { maxY: 2.0 });
+    let ph = 0;
+    ctx.onUpdate((dt) => {
+      if (reduceMotion()) return;
+      ph = (ph + (dt || 0) * 0.45) % 1;                           // 0.45 strokes a second: a slow, steady 쿵
+      const k = ph < 0.6 ? ease(ph / 0.6) : 1 - Math.min(1, (ph - 0.6) / 0.08);
+      p2.position.y = 0.9 + k * 0.32;
+    });
+    A('mulle', { x: ex - 0.6, y: 1.3, z: -1.0 });
+    // the 연자방아 model in the corner: a round stone bed and the millstone on its edge with its pole
+    const yx = -hw + 1.4, yz = -hd + 1.4;
+    R.add('stone', geo.cyl(0.9, 0.95, 0.22, 24), M(yx, 0.11, yz), '#8a8478');
+    R.add('stone', geo.cyl(0.42, 0.42, 0.22, 20).rotateX(PI / 2), M(yx + 0.35, 0.64, yz), '#7a746a');
+    R.add('furn', geo.cyl(0.04, 0.04, 1.3, 8).rotateZ(PI / 2), M(yx + 0.1, 0.64, yz), '#6e4a2c');
+    R.add('furn', geo.cyl(0.06, 0.06, 0.9, 8), M(yx, 0.66, yz), '#5e3a22');
+    R.block(yx, yz, 0.95, 0.95, { maxY: 1.0 });
+    A('yeonja', { x: yx + 0.9, y: 0.9, z: yz + 0.8 });
+    // grain: sacks, a 멍석 with rice drying, 키, 되와 말
+    if (has('gamaniStack')) { K.gamaniStack(R, { x: -hw + 0.8, z: 2.2, rotY: PI / 2, rows: [3, 2] }); R.block(-hw + 0.8, 2.2, 0.55, 0.9, { maxY: 1.0 }); }
+    K.floorMat(R, { x: 1.6, z: 2.6, w: 2.4, d: 1.6, tint: '#b89a62' });
+    for (let k = 0; k < 40; k++) R.add('cloth', K.geo.slab(0.12, 0.01, 0.08, 0.002), M(0.7 + (k % 8) * 0.25, 0.02, 2.1 + ((k / 8) | 0) * 0.25, k), '#e2cf98');
+    if (has('doe')) { K.doe(R, { x: 3.2, z: 2.0, kind: 'mal', fill: 'rice' }); K.doe(R, { x: 3.5, z: 2.5, kind: 'doe', fill: 'bean', rotY: 0.4 }); }
+    K.basket(R, { x: -1.2, z: 2.6, r: 0.3, h: 0.18 });
+    A('banga', { x: 1.6, y: 0.8, z: 2.0 });
+    ctx.light({ x: 0, y: 2.6, z: 0.4, color: '#ffd8a8', intensity: 3.8, distance: 10, decay: 1.7, day: 0.2 });
+    K.dust(R, { count: 140 });
+    L.keeperSpot = { x: -1.0, z: pz - 1.1, rotY: 0.3 };
+    A('do', { x: 1.35, y: 0.7, z: pz + 0.5 });
+    L.step = (i) => {
+      if (i === 0) tween(L, 0.9, (t) => { beam.rotation.z = DOWN + (UP - DOWN) * ease(t); });                       // step on: the pestle rises
+      else if (i === 1) { tween(L, 0.35, (t) => { beam.rotation.z = UP + (DOWN - UP) * t * t; }); try { G.sfx?.('thud'); } catch (e) { /* a sound */ } }
+      else tween(L, 1.6, (t) => { beam.rotation.z = t < 0.55 ? DOWN + (UP - DOWN) * ease(t / 0.55) : UP + (DOWN - UP) * Math.min(1, ((t - 0.55) / 0.45) ** 2); });
+    };
+  };
+  // outside: the water wheel on the east side, fed by a wooden flume from upstream (north) — it turns all the time
+  const wheels = [];
+  EXT.mill = function (site, b) {
+    const B = site.B, hw = b.w / 2, hd = b.d / 2;
+    const wx = hw + 1.0, wz = -0.4, R0 = 1.7, y0 = R0 + 0.15;
+    // the wheel pit (stone) and the axle bearing posts
+    B.add('stone', geo.box(0.9, 0.5, 2.6, 'world'), M(wx, 0.05, wz), '#8f877a');
+    for (const sx of [-1, 1]) B.add('wood', geo.box(0.24, y0 + 0.2, 0.24, 'grain'), M(wx + sx * 0.55, (y0 + 0.2) / 2, wz), '#5a3c26');
+    B.add('wood', geo.cyl(0.1, 0.1, 1.6, 10).rotateZ(PI / 2), M(wx - 0.35, y0, wz), '#4a2f1c');
+    // the flume: a wooden trough on legs from the north, its water spilling onto the top of the wheel
+    const fz0 = wz - R0 - 0.1, fz1 = -hd - 6.0, fy = y0 + R0 + 0.12;
+    B.add('wood', geo.box(0.42, 0.08, fz0 - fz1, 'grain'), M(wx, fy, (fz0 + fz1) / 2), '#7a5a3e');
+    for (const sx of [-1, 1]) B.add('wood', geo.box(0.05, 0.22, fz0 - fz1, 'grain'), M(wx + sx * 0.2, fy + 0.1, (fz0 + fz1) / 2), '#6e5034');
+    for (let z = fz1 + 0.8; z < fz0; z += 1.8) for (const sx of [-1, 1]) B.add('wood', geo.box(0.08, fy, 0.08, 'grain'), M(wx + sx * 0.25, fy / 2, z), '#5a3c26');
+    site.box(wx, wz, 0.55, 1.4);
+    site.box(wx, (fz0 + fz1) / 2, 0.3, (fz0 - fz1) / 2);
+    site.blocker(wx, 0, wz, 1.2, y0 + R0 + 0.3, R0 * 2 + 0.4);
+    // the wheel: rim rings, spokes, paddles — its own mesh, turned every frame
+    const wb = new BK.Bucket();
+    const n = 16;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * TAU, ca = Math.cos(a), sa = Math.sin(a);
+      for (const sx of [-0.28, 0.28]) {
+        wb.add('wood', geo.box(0.07, 0.07, R0 * 2 * Math.sin(PI / n) + 0.04, 'grain'), M(sx, ca * R0, sa * R0, 0, 1, 1, 1, a), '#7a5a3e');         // rim segment
+        if (i % 2 === 0) wb.add('wood', geo.box(0.05, R0 - 0.1, 0.06, 'grain'), M(sx, ca * (R0 / 2), sa * (R0 / 2), 0, 1, 1, 1, a), '#6e5034');   // spoke
+      }
+      wb.add('plank', geo.box(0.66, 0.38, 0.04, 'world'), M(0, ca * (R0 + 0.1), sa * (R0 + 0.1), 0, 1, 1, 1, a), '#8a6646');                      // paddle
+    }
+    wb.add('wood', geo.cyl(0.16, 0.16, 0.7, 12).rotateZ(PI / 2), BK.I4, '#4a2f1c');
+    const wheel = new THREE.Group(); wheel.name = 'mill-wheel';
+    wheel.position.set(wx, y0, wz);
+    wb.build(wheel, { name: 'mill-wheel', materials: { wood: BK.mat('wood'), plank: BK.mat('plank') }, shadows: true });
+    site.group.add(wheel);
+    // falling water (a thin sheet off the flume) and the tail race
+    const wm = new THREE.MeshStandardMaterial({ color: '#a8c8d6', roughness: 0.15, metalness: 0, transparent: true, opacity: 0.55, depthWrite: false });
+    const fall = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.9), wm); fall.position.set(wx, fy - 0.35, fz0 + 0.12); fall.rotation.x = -0.25;
+    site.group.add(fall);
+    const race = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 2.4).rotateX(-PI / 2), wm); race.position.set(wx, 0.31, wz); site.group.add(race);
+    wheels.push({ wheel, x: site.x, z: site.z, fall });
+  };
+
+  // ============================================================================================ 약초방 PL_HERB
+  // A dry, sweet-smelling room: bunches of herbs hung from a pole under the rafters (they sway), flat baskets of 쑥, 국화,
+  // 오미자 and 감잎 on a rack, a chest of many small drawers for dried plants, potted 국화 and 난, the three jars of the smell
+  // game on a low table with a tea set. No health claims: plants, smells, colours, teas. Thing to do: 향 맡기 — three lids.
+  FURNISH.herb = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    // herbs hung from two poles (sway)
+    const tints = ['#6f7346', '#8a8a4a', '#5e6b3a', '#a09a5a', '#7a6a3a', '#6a7a4a'];
+    for (const [pz, ph] of [[-1.4, 0], [0.6, 1.3]]) {
+      R.add('furn', geo.cyl(0.03, 0.03, w - 1.6, 8).rotateZ(PI / 2), M(0, R.post - 0.15, pz), '#5e3a22');
+      if (has('sway') && has('herbs')) {
+        const S = K.sway(R, { x: 0, y: R.post - 0.15, z: pz, amp: 0.03, speed: 0.42, phase: ph });
+        for (let k = 0; k < 9; k++) K.herbs(S, { x: -hw + 1.3 + k * ((w - 2.6) / 8), y: R.post - 0.15, z: pz, tint: tints[(k + (pz > 0 ? 3 : 0)) % tints.length], len: 0.38 });
+        S.done();
+      }
+    }
+    A('malligi', { x: 0, y: 1.6, z: -1.4 });
+    // the rack of flat baskets: 쑥 (green), 국화 (yellow), 오미자 (red), 감잎 (brown)
+    const rackX = -hw + 0.55;
+    const sp = K.shelf(R, { x: rackX, z: -0.8, rotY: PI / 2, w: 2.6, d: 0.55, h: 1.6, levels: 3, back: false, tone: '#5e3a22' });
+    const fills = [['#5e7a3a', 'ssuk'], ['#e2b23a', 'gukhwa'], ['#b8322e', 'omija'], ['#8a6a3a', 'gamip']];
+    sp.forEach((p, li) => {
+      for (let k = -1; k <= 1; k += 2) {
+        const [tn, key] = fills[(li * 2 + (k + 1) / 2) % fills.length];
+        const cz = p.z + k * 0.6;
+        K.basket(R, { x: p.x, y: p.y, z: cz, kind: 'sieve', r: 0.24, h: 0.05 });
+        for (let j = 0; j < 22; j++) { const a = j * 2.4, rr = 0.03 + (j % 7) * 0.025; R.add(key === 'omija' ? 'paint' : 'cloth', key === 'omija' ? geo.cyl(0.012, 0.012, 0.02, 6) : K.geo.slab(0.04, 0.006, 0.025, 0.001), M(p.x + Math.cos(a) * rr, p.y + 0.02, cz + Math.sin(a) * rr, a), tn); }
+        if (li === 0 && k < 0) A(key, { x: p.x + 0.4, y: p.y + 0.3, z: cz });
+      }
+    });
+    A('omija', { x: rackX + 0.4, y: 1.0, z: -0.2 });
+    A('gamip', { x: rackX + 0.4, y: 0.6, z: -1.4 });
+    R.block(rackX, -0.8, 0.29, 1.32, { maxY: 1.65 });
+    // the chest of small drawers on the north wall, potted plants
+    K.chest(R, { x: 1.6, z: -hd + 0.32, w: 1.8, d: 0.45, h: 1.3, doors: 0, drawers: 12, fittings: 'brass', tone: '#7a4a2c' });
+    R.block(1.6, -hd + 0.32, 0.92, 0.24, { maxY: 1.32 });
+    if (has('plant')) { K.plant(R, { x: -1.0, z: -hd + 0.5, kind: 'mum', s: 1.0 }); K.plant(R, { x: hw - 0.6, z: 1.6, kind: 'orchid', s: 0.9 }); K.plant(R, { x: hw - 0.6, z: 2.6, kind: 'mum', s: 0.8 }); }
+    A('gukhwa', { x: -1.0, y: 0.8, z: -hd + 0.9 });
+    // the low table with the three jars of the smell game and a tea set
+    const tx = 1.2, tz = 1.4;
+    const tb = K.table(R, { x: tx, z: tz, w: 1.5, d: 0.8, h: 0.34, tone: '#6b3d26' });
+    R.block(tx, tz, 0.76, 0.41, { maxY: 0.36 });
+    for (const [x, z] of [[tx - 0.6, tz + 0.75], [tx + 0.6, tz + 0.75]]) K.cushion(R, { x, z, w: 0.55, d: 0.55, h: 0.08, tint: '#6d8f4e', trim: '#c9a24a' });
+    if (has('teaSet')) K.teaSet(R, { x: tx + 0.45, y: tb.top, z: tz - 0.1 });
+    const lids = [];
+    const jarTints = ['#6d7a4e', '#c9a24a', '#8a6a3a'];
+    for (let k = 0; k < 3; k++) {
+      const x = tx - 0.55 + k * 0.32;
+      const p = K.pot(R, { kind: 'danji', x, y: tb.top, z: tz + 0.05, s: 0.42, tint: jarTints[k] });
+      const lm = ctx.own(new THREE.MeshStandardMaterial({ color: '#5e3620', roughness: 0.7 }));
+      const lid = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.07, 0.085, 0.04, 14)), lm); lid.position.set(x, p.top + 0.01, tz + 0.05);
+      R.addMesh(lid); lids.push({ lid, y0: p.top + 0.01 });
+    }
+    A('ssuk', { x: tx - 0.55, y: 0.75, z: tz + 0.4 });
+    A('do', { x: tx - 0.25, y: 0.75, z: tz + 0.45 });
+    if (has('deungjan')) { K.deungjan(R, { x: hw - 0.7, z: -hd + 0.6 }); K.lamp(R, { x: hw - 0.7, y: 0.48, z: -hd + 0.6, s: 0.5 }); }
+    ctx.light({ x: 0, y: 2.2, z: 0.6, color: '#ffe2b0', intensity: 3.4, distance: 9, decay: 1.7, day: 0.2 });
+    K.dust(R, { count: 110 });
+    L.keeperSpot = { x: tx + 0.2, z: tz - 0.95, rotY: 0 };
+    L.step = (i) => {
+      lids.forEach((l, k) => { if (k !== i) l.lid.position.y = l.y0; });
+      const l = lids[i]; if (!l) return;
+      tween(L, 0.8, (t) => { l.lid.position.y = l.y0 + 0.12 * ease(t); l.lid.rotation.z = 0.35 * ease(t); });
+    };
+  };
+
+  // ============================================================================================ 찻집 PL_TEA
+  // A quiet tea room open to a little garden (들어열개 on the west side): the 다도 table with cushions, the 화로 with the
+  // kettle steaming, a tea set (다관 · 숙우 · 찻잔), jars of tea leaves and a shelf of tea bowls, a folding screen, a 족자,
+  // potted bamboo and orchid. Thing to do: 잔 데우기 → 차 따르기 → 기다리기 (the cup warms, the tea fills it, the steam
+  // thins as it cools).
+  FURNISH.tea = function (R, ctx, row, L) {
+    const A = L.A, w = row.size.w, d = row.size.d, hw = w / 2, hd = d / 2;
+    const tx = 0.6, tz = -0.3;
+    const tb = K.table(R, { x: tx, z: tz, w: 1.4, d: 0.8, h: 0.32, legs: 'curved', tone: '#5a3420' });
+    R.block(tx, tz, 0.71, 0.41, { maxY: 0.34 });
+    for (const [x, z] of [[tx, tz + 0.85], [tx, tz - 0.85], [tx - 1.0, tz]]) K.cushion(R, { x, z, w: 0.62, d: 0.62, h: 0.09, tint: '#2f6a58', trim: '#e9dcc0' });
+    if (has('teaSet')) K.teaSet(R, { x: tx + 0.3, y: tb.top, z: tz - 0.1 });
+    // the 화로 with the kettle, steam
+    K.pot(R, { kind: 'brazier', x: tx + 1.1, z: tz + 0.3, s: 1.2 });
+    K.pot(R, { kind: 'sot', x: tx + 1.1, y: 0.27, z: tz + 0.3, s: 0.35, lid: true });
+    K.steam(R, { x: tx + 1.1, y: 0.45, z: tz + 0.3, s: 0.35, count: 8 });
+    R.block(tx + 1.1, tz + 0.3, 0.3, 0.3, { maxY: 0.45 });
+    A('dagi', { x: tx + 0.3, y: 0.7, z: tz + 0.35 });
+    A('dado', { x: tx - 0.4, y: 0.7, z: tz + 0.35 });
+    // behind: a folding screen, a hanging scroll, a shelf of bowls and tea jars; plants by the open side
+    K.screen(R, { x: 0.4, z: -hd + 0.45, panels: 6, h: 1.5 });
+    if (has('scroll')) { try { K.scroll(R, { m: R.wm('E', d / 2, 2.2, 0.04), h: 1.3, maxW: 0.6, wall: 'E' }); } catch (e) { /* no art */ } }
+    const sp = K.shelf(R, { x: hw - 0.4, z: -1.6, rotY: -PI / 2, w: 1.8, d: 0.4, h: 1.5, levels: 3, back: true, tone: '#5e3a22' });
+    sp.forEach((p, li) => { for (let k = -1; k <= 1; k++) { if (li === 2) K.pot(R, { kind: 'danji', x: p.x, y: p.y, z: p.z + k * 0.5, s: 0.36, lid: true, tint: ['#6e3f24', '#7a6a55', '#3f5a3c'][k + 1] }); else K.pot(R, { kind: 'bowl', x: p.x, y: p.y, z: p.z + k * 0.5, s: 1.4, tint: li ? '#c9c0a8' : '#8fbfa8' }); } });
+    R.block(hw - 0.4, -1.6, 0.22, 0.92, { maxY: 1.55 });
+    A('daerye', { x: hw - 0.8, y: 1.2, z: -1.6 });
+    if (has('plant')) { K.plant(R, { x: -hw + 0.6, z: -hd + 0.6, kind: 'bamboo', s: 1.1 }); K.plant(R, { x: -hw + 0.6, z: hd - 0.8, kind: 'orchid', s: 0.9 }); }
+    if (has('paperLamp')) K.paperLamp(R, { x: hw - 0.7, z: hd - 0.8, h: 0.6 });
+    ctx.light({ x: 0.4, y: 2.1, z: 0, color: '#ffe0b4', intensity: 3.2, distance: 8, decay: 1.7, day: 0.15 });
+    ctx.light({ x: tx + 1.1, y: 0.5, z: tz + 0.3, color: '#ff8a3a', intensity: 1.4, distance: 3, decay: 2, flicker: 0.1, day: 0.5 });
+    K.dust(R, { count: 80 });
+    L.keeperSpot = { x: tx, z: tz - 1.15, rotY: 0 };
+    // the visitor's cup on the near side: warms (a soft glow), fills (tea), cools (its steam thins)
+    const cx = tx - 0.2, cz = tz + 0.22;
+    const cupM = ctx.own(new THREE.MeshStandardMaterial({ color: '#e9e4d6', roughness: 0.4, emissive: '#000000' }));
+    const cup = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.05, 0.035, 0.05, 16)), cupM); cup.position.set(cx, tb.top + 0.025, cz); R.addMesh(cup);
+    const teaM = ctx.own(new THREE.MeshStandardMaterial({ color: '#9a8a3a', roughness: 0.15 }));
+    const tea = new THREE.Mesh(ctx.own(new THREE.CylinderGeometry(0.044, 0.044, 0.004, 16)), teaM); tea.position.set(cx, tb.top + 0.042, cz); tea.visible = false; R.addMesh(tea);
+    const puffM = ctx.own(new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false }));
+    const puff = new THREE.Mesh(ctx.own(new THREE.SphereGeometry(0.06, 10, 8)), puffM); puff.position.set(cx, tb.top + 0.12, cz); puff.scale.set(1, 1.6, 1); R.addMesh(puff);
+    A('gidarim', { x: cx, y: 0.7, z: cz + 0.4 });
+    A('do', { x: cx + 0.2, y: 0.7, z: cz + 0.45 });
+    const warm = new THREE.Color('#5a2a10');
+    L.step = (i) => {
+      if (i === 0) { tea.visible = false; tween(L, 1.2, (t) => { cupM.emissive.copy(warm).multiplyScalar(0.5 * ease(t)); puffM.opacity = 0.35 * ease(t); }); }
+      else if (i === 1) { tea.visible = true; tea.scale.set(1, 1, 1); tween(L, 1.0, (t) => { tea.position.y = tb.top + 0.012 + 0.03 * ease(t); }); }
+      else tween(L, 3.0, (t) => { puffM.opacity = 0.35 * (1 - ease(t)); cupM.emissive.copy(warm).multiplyScalar(0.5 * (1 - 0.6 * ease(t))); });
+    };
+  };
+
   // outside: a drying rack in the side yard (west of the house, towards the 주막), strips in the named dyes, in the wind
   const yardCloth = [];
   EXT.dye = function (site, b) {
@@ -884,9 +1277,11 @@
       G.bus.on('place:exit', () => { for (const y of yardCloth) y.WC.mesh.visible = true; });
     },
     update(dt) {
-      if (!yardCloth.length || G.sys.places?.current) return;
+      if (G.sys.places?.current) return;
       const p = G.sys.player?.position;
       if (!p) return;
+      // the water wheels turn all the time (slowly: one turn in about ten seconds); still under reduce motion
+      if (!reduceMotion()) for (const wh of wheels) if ((p.x - wh.x) ** 2 + (p.z - wh.z) ** 2 < 160 * 160) wh.wheel.rotation.x -= Math.min(dt || 0, 0.1) * 0.62;
       const W = G.sys.nature?.uniforms?.uWindStrength?.value;
       for (const y of yardCloth) { if ((p.x - y.x) ** 2 + (p.z - y.z) ** 2 < 90 * 90) y.WC.update(dt, W == null ? 0.8 : clamp(0.35 + W * 0.5, 0.2, 1.2)); }
     },
