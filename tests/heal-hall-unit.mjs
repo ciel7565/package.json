@@ -175,7 +175,8 @@ check('no error was logged while defining', !events.some((e) => e[0] === 'error'
 // ---- [heal-look] the census: every place built with the REAL kits and three.js (the harness of tests/myroom-logic.mjs),
 // at medium and at low. Per place: the pieces the layout adds by material key, the things by kind (G.healHall.census),
 // the meshes (≈ draw calls of the colour pass) and triangles, the share of the floor within 2.5 m of a thing, and a free
-// walking lane of 1.6 m (a walker of radius 0.8 among every collider) from the door to every station of the program.
+// walking lane of 1.6 m (a walker of radius 0.8 among every collider) from the door to within 1.5 m of every station of
+// the program (2 m for a raised one: a seat, a bed or a chair is sat on from its side).
 const census = [];
 {
   const { makeRoomWorld } = await import('./myroom-logic.mjs');
@@ -272,7 +273,7 @@ const census = [];
           for (let i = Math.max(0, Math.floor((p.x + w / 2 - 1.6) / g)); i < Math.min(nx, Math.ceil((p.x + w / 2 + 1.6) / g)); i++)
             for (let j = Math.max(0, Math.floor((p.z + d / 2 - 1.6) / g)); j < Math.min(nz, Math.ceil((p.z + d / 2 + 1.6) / g)); j++)
               if (seen[i * nz + j] === 1) { const [x, z] = at(i, j); best = Math.min(best, Math.hypot(x - p.x, z - p.z)); }
-          if (!(best <= 1.5)) miss.push(key);
+          if (!(best <= (p.y >= 0.3 ? 2.0 : 1.5))) miss.push(key);   // a seat, bed or chair (raised) is sat on from 2 m
         }
         return { cells: q.length, miss };
       };
@@ -289,7 +290,7 @@ const census = [];
       check(`[census] ${tag}: a 0.7 m path from the door to every station`, !c.lane07.miss.length, c.lane07.miss.join(' '));
     }
     // the rooms that are full now (the rest follow, two per commit): many things, most of the floor near one, the lane free
-    const FULL = new Set(['R6', 'R7', 'R8']);
+    const FULL = new Set(['R2', 'R5', 'R6', 'R7', 'R8']);
     for (const c of census.filter((x) => FULL.has(x.room))) {
       const tag = `${c.room} (${c.low ? 'low' : 'medium'})`;
       check(`[census] ${tag}: full — ≥ 50 things, ≥ 60 % of the floor within 1.2 m of one`, c.things >= 50 && c.cover12 >= 0.6, `${c.things} things, ${(c.cover12 * 100).toFixed(0)} %`);
