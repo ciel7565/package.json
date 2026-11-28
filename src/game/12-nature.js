@@ -4082,7 +4082,8 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
     // winter, none under snow); the garden beds bloom April – October. CPU, only when G.season moved a visible step.
     _seasonFlowers() {
       const st = G.season, m = this.meshes?.flowers?.children?.find((c) => c.name === 'flowers');
-      if (!st || !m || !m.instanceColor) return;
+      if (!st) return;
+      if (!m || !m.instanceColor) { this._seasonShrubs(st); return; }
       const fl = st.flowers || { amount: 0, colors: [] };
       // what drifts: blossom petals in spring, green leaves now and then in summer, coloured leaves while they fall
       if (G.sys.season?.mode?.() === 'fixed') { this._seasPet.value.set(0, 0, 0, 0); this._seasPetK = 1; }
@@ -4095,7 +4096,7 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
       const mo = st.month || 7;
       const bed = clamp((mo >= 4 && mo <= 10 ? 1 : mo === 3 || mo === 11 ? 0.3 : 0) * (1 - (st.snow || 0)), 0, 1);
       const key = `${mo}|${Math.round((fl.amount || 0) * 20)}|${Math.round(bed * 20)}|${(fl.colors || []).join('')}`;
-      if (key === this._flKey) return;
+      if (key === this._flKey) { this._seasonShrubs(st); return; }
       this._flKey = key;
       const IM = m.instanceMatrix.array, IC = m.instanceColor.array;
       if (!m.userData.seasM) { m.userData.seasM = IM.slice(); m.userData.seasC = IC.slice(); }
@@ -4113,6 +4114,36 @@ void RE_IndirectDiffuse_Lambert( const in vec3 irradiance, const in vec3 geometr
         } else { IC[i * 3] = C0[i * 3]; IC[i * 3 + 1] = C0[i * 3 + 1]; IC[i * 3 + 2] = C0[i * 3 + 2]; }
       }
       m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true;
+      this._seasonShrubs(st);
+    },
+    /** [seasons] the real shrubs (medium / high): 진달래 · 철쭉 bloom mid-April to May only; their leaves colour in autumn,
+     *  go twig-brown in winter and whiten under snow (instance colours are factors on the leaf atlas) */
+    _seasonShrubs(st) {
+      const S = this._shrubReal;
+      if (!S || !S.im || !S.im.instanceColor) return;
+      const fixed = (G.sys.season?.mode?.() === 'fixed');
+      const d = st.doy || 196, sm = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+      const bloomK = fixed ? 1 : sm(98, 110, d) * (1 - sm(136, 152, d));
+      const key = `${Math.round(bloomK * 20)}|${[st.leaf, st.autumn, st.brown, st.snow].map((v) => Math.round((v || 0) * 30)).join(',')}|${S.n}`;
+      if (key === this._shKey) return;
+      this._shKey = key;
+      const IC = S.im.instanceColor.array;
+      if (!S.baseC || S.baseN !== S.n) { S.baseC = IC.slice(0, S.n * 3); S.baseA = Float32Array.from({ length: S.n }, (_, i) => S.bloom[i * 4 + 3]); S.baseN = S.n; }
+      for (let i = 0; i < S.n; i++) {
+        let r = S.baseC[i * 3], g = S.baseC[i * 3 + 1], b = S.baseC[i * 3 + 2];
+        if (!fixed) {
+          const a = clamp((st.autumn || 0) * (0.7 + 0.3 * (((i * 7919) % 100) / 100)), 0, 1);
+          r *= 1 + 1.1 * a; g *= 1 - 0.2 * a; b *= 1 - 0.55 * a;
+          const lf = clamp((st.leaf || 0) + 0.25, 0, 1);
+          r = 1.05 + (r - 1.05) * lf; g = 0.66 + (g - 0.66) * lf; b = 0.86 + (b - 0.86) * lf;
+          const sn = (st.snow || 0) * 0.25;   // (the snow hook whitens the tops; this greys the rest a little)
+          r += (2.4 - r) * sn; g += (1.75 - g) * sn; b += (3.6 - b) * sn;
+        }
+        IC[i * 3] = r; IC[i * 3 + 1] = g; IC[i * 3 + 2] = b;
+        S.bloom[i * 4 + 3] = S.baseA[i] * bloomK;
+      }
+      S.im.instanceColor.needsUpdate = true;
+      S.im.geometry.attributes.aBloom.needsUpdate = true;
     },
     update(dt, t) {
       uniforms.uTime.value = t;

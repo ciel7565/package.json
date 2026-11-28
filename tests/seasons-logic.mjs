@@ -102,5 +102,53 @@ const P = (mo, d) => S.phen(doyOf(at(2026, mo, d)));
   check('phase stays in 0…1', [1, 59, 60, 151, 243, 334, 335, 366].every((d) => { const p = S.seasonOf(d).phase; return p >= 0 && p <= 1; }));
 }
 
+// ---- the system in a stub page: the snow hook, the shared uniforms, the fixed test season, the query, the settings row
+function page(search, webdriver) {
+  const chunks = { emissivemap_pars_fragment: '// pars\n', emissivemap_fragment: '// frag\n' };
+  const lib = { standard: { uniforms: {} }, physical: { uniforms: {} }, lambert: { uniforms: {} }, phong: { uniforms: {} }, toon: { uniforms: {} } };
+  const systems = [], events = {};
+  const ENVC = E;
+  const G = {
+    log: { info() {}, warn() {} }, sys: { engine: { quality: 'high' }, places: { indoor: false } }, time: { now: () => at(2026, 11, 28, 15) },
+    bus: { on: (k, f) => { (events[k] = events[k] || []).push(f); }, emit() {} },
+    register: (s) => { systems.push(s); G.sys[s.name] = s; },
+    env: { core: ENVC, kst: (ms) => ENVC.kst(ms), now: () => ENVC.modelSnap(at(2026, 11, 28, 15)) },
+  };
+  const ctx = { G, THREE: { ShaderChunk: chunks, ShaderLib: lib }, location: { search }, navigator: { webdriver }, URLSearchParams };
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'src/game/12-seasons.js'), 'utf8'), ctx);
+  const sys = systems.find((x) => x.name === 'season');
+  sys.init();
+  return { G, sys, chunks, lib };
+}
+{
+  const a = page('?autostart=1', true);
+  check('the snow hook joins the shader chunks once', (a.chunks.emissivemap_fragment.match(/tfmSnowU\.x/g) || []).length >= 1 && a.chunks.emissivemap_pars_fragment.includes('uniform vec4 tfmSnowU'));
+  check('…and skips skinned people and opted-out materials', a.chunks.emissivemap_fragment.includes('! defined( USE_SKINNING )') && a.chunks.emissivemap_fragment.includes('! defined( TFM_NO_SNOW )'));
+  check('one uniform object shared by every lit material library', ['standard', 'physical', 'lambert', 'phong'].every((k) => a.lib[k].uniforms.tfmSnowU === a.sys.U.tfmSnowU));
+  check('the shared value is a plain object (three keeps it by reference when it clones uniforms)', Object.prototype.toString.call(a.sys.U.tfmSnowU.value) === '[object Object]' && !a.sys.U.tfmSnowU.value.isVector4 && 'x' in a.sys.U.tfmSnowU.value);
+  check('under automation: the fixed test season (summer, no snow)', a.sys.mode() === 'fixed' && a.G.season.id === 'summer' && a.sys.U.tfmSnowU.value.x === 0 && a.sys.U.tfmSeasG.value.x === 1 && a.sys.U.tfmSeasT.value.x === 196);
+  check('the settings row is queued (계절 풍경, device)', (a.G.settingsQueue || []).some((d) => d.id === 'seasonLook' && d.scope === 'device' && d.options.length === 5));
+  a.sys.update(1);
+  check('a frame changes nothing in the fixed season', a.G.season.leaf === 1 && a.G.season.snow === 0);
+  a.sys.force('winter');
+  check('force(winter): bare, snow on the uniforms', a.G.season.id === 'winter' && a.G.season.leaf === 0 && a.sys.U.tfmSnowU.value.x > 0.6 && a.sys.U.tfmSeasG.value.w > 0.5);
+  a.G.sys.places.indoor = true; a.sys.update(0.016);
+  check('inside a room no snow is drawn', a.sys.U.tfmSnowU.value.x === 0);
+  a.G.sys.places.indoor = false; a.G.sys.engine.quality = 'low'; a.sys.update(0.016);
+  check('low: the snow colour without rime or twig snow', a.sys.U.tfmSnowU.value.x > 0.6 && a.sys.U.tfmSnowU.value.y === 0 && a.sys.U.tfmSnowU.value.z === 0);
+  a.sys.force('auto');
+  check('force(auto) goes back to the fixed season', a.sys.mode() === 'fixed' && a.G.season.id === 'summer');
+  const b = page('?season=real', true);
+  check('?season=real under automation: today in 정선 (11/28: bare, straw)', b.sys.mode() === 'real' && b.G.season.leaf < 0.05 && b.G.season.grass < 0.1);
+  const c = page('?clock=kst', true);
+  check('?clock=kst also turns the real season on', c.sys.mode() === 'real');
+  const d = page('', false);
+  check('a person (no automation): the real season by default', d.sys.mode() === 'real' && d.G.season.source === 'real');
+  const e = page('?season=autumn&doy=110', true);
+  check('?doy= picks a day of the year', e.G.season.doy === 110 && e.G.season.id === 'spring');
+  const f2 = page('?season=winter&snow=0.3', true);
+  check('?snow= sets the cover', Math.abs(f2.G.season.snow - 0.3) < 1e-9);
+}
+
 console.log(`\n${n - fails} / ${n} checks passed`);
 process.exit(fails ? 1 : 0);
