@@ -473,14 +473,6 @@
   SFX.jing = (S, t) => gk(S, 'jing', t, { f: 146, vel: 0.3, dur: 4 });
   SFX.bak = (S, t) => gk(S, 'bak', t, { vel: 0.45 });
   SFX.moktak = (S, t) => gk(S, 'moktak', t, { vel: 0.4 });
-  /** per-effect trim (the timbre changed — the loudness must not: measured against the old effects) */
-  const TRIM = {
-    click: 0.45, tap: 0.45, open: 0.21, close: 0.14, notify: 0.7, error: 0.26, oops: 0.24, coin: 0.58, reward: 0.36, quest: 0.4, welcome: 0.4,
-    levelup: 0.5, levelUp: 0.5, festival: 0.45, achievement: 0.27, harvest: 0.39, plant: 0.32, craft: 0.41, shutter: 0.66, jump2: 0.34, chat: 0.44,
-    emote: 0.25, teleport: 0.25, correct: 0.34, sparkle: 0.4, stamp: 0.45, pop: 0.34, unlock: 0.45, lock: 0.6, pickup: 0.6,
-    land_wood: 0.5, land_earth: 0.5, land_stone: 0.8,
-    water: 0.85, step: 1.25, drip: 1.3, // [finisher] water was louder than before (peak 0.105 vs 0.082); step / drip under the audible floor (peak 0.009 / 0.008)
-  };
   // [cooking] the kitchen (37-cooking.js, CONTRACT §18.4): soft, short, never harsh — called every ~0.5–1 s while a step runs
   SFX.boil = (S, t) => { let e = t; for (let i = 0; i < 4; i++) e = Math.max(e, tone(S, { type: 'sine', f: rand(180, 420), f2: rand(500, 900), glide: 0.04, t: t + i * rand(0.08, 0.2), a: 0.004, d: 0.06, g: 0.05 })); noise(S, { kind: 'brown', ft: 'lowpass', f: 380, q: 0.7, t, a: 0.08, d: 0.5, g: 0.05 }); return e; };
   SFX.sizzle = (S, t) => { noise(S, { kind: 'white', ft: 'highpass', f: 2600, q: 0.6, t, a: 0.05, d: 0.9, g: 0.035 }); for (let i = 0; i < 5; i++) noise(S, { kind: 'pink', ft: 'bandpass', f: rand(3000, 6000), q: 2, t: t + rand(0, 0.8), a: 0.002, d: 0.03, g: 0.04 }); return t + 1; };
@@ -492,6 +484,14 @@
   SFX.knead = (S, t) => { noise(S, { kind: 'brown', ft: 'lowpass', f: 500, q: 0.7, t, a: 0.03, d: 0.18, g: 0.08 }); return t + 0.2; };
   SFX.chop = (S, t) => gk(S, 'moktak', t, { f: 640, vel: 0.3 });
   SFX.pound = (S, t) => { tone(S, { type: 'sine', f: 120, f2: 70, t, a: 0.002, d: 0.16, g: 0.18 }); return gk(S, 'moktak', t + 0.01, { f: 300, vel: 0.28 }); };
+  /** per-effect trim (the timbre changed — the loudness must not: measured against the old effects) */
+  const TRIM = {
+    click: 0.45, tap: 0.45, open: 0.21, close: 0.14, notify: 0.7, error: 0.26, oops: 0.24, coin: 0.58, reward: 0.36, quest: 0.4, welcome: 0.4,
+    levelup: 0.5, levelUp: 0.5, festival: 0.45, achievement: 0.27, harvest: 0.39, plant: 0.32, craft: 0.41, shutter: 0.66, jump2: 0.34, chat: 0.44,
+    emote: 0.25, teleport: 0.25, correct: 0.34, sparkle: 0.4, stamp: 0.45, pop: 0.34, unlock: 0.45, lock: 0.6, pickup: 0.6,
+    land_wood: 0.5, land_earth: 0.5, land_stone: 0.8,
+    water: 0.85, step: 1.25, drip: 1.3, // [finisher] water was louder than before (peak 0.105 vs 0.082); step / drip under the audible floor (peak 0.009 / 0.008)
+  };
 
   // ================================================================= nature calls (ambient bus)
   // each fn(S, t, g, pan, extra) → end time. g already holds the distance / time-of-day level.
@@ -1262,16 +1262,15 @@
         voice: clamp(Number(this._setting('volumeVoice', 'sound.volume_voice', 0.9)), 0, 1) || 0,
       };
       if (!Number.isFinite(this.levels.voice)) this.levels.voice = 0.9;
-      if (this._E) this._E.setLevels(this.levels, instant);
       // [settings] the mixer rows (0 – 100, 100 = the level above); effects and interface sounds are split per play()
       const mx = this.channels();
       this.levels.master *= mx.master; this.levels.music *= mx.music; this.levels.ambient *= mx.nature; this.levels.voice *= mx.voice;
       this._mixSfx = mx.sfx; this._mixUi = mx.ui;
+      if (this._E) this._E.setLevels(this.levels, instant);
       this._syncSuspend();
     },
     /** the 목소리 level for speech (08-easy's voice guide and speak()) */
     voiceGain() { return this.levels.voice ?? 0.9; },
-
     /** [settings] the six mixer factors (perceptual curve; 1 = the balanced level) */
     channels() {
       const s = G.settings || {};
@@ -1293,6 +1292,7 @@
         }
       } catch (e) { return false; }
     },
+
     /** suspend the context while the tab is hidden or everything is silent (saves CPU) */
     _syncSuspend() {
       const ac = this.ctx;
@@ -1323,10 +1323,10 @@
         const last = this._last.get(name);
         if (last != null && now - last < min && !o.force) return false;
         let vol = (o.volume ?? 1) * (kid ? (EASY_GAIN[name] ?? 1) : 1), pan = o.pan || 0;
-        if (o.at && Number.isFinite(o.at.x)) { // distance attenuation + panning from the camera
         const chan = UI_SFX.has(name) ? (this._mixUi ?? 1) : (this._mixSfx ?? 1);   // [settings] 효과음 · UI 효과음 rows
         if (chan <= 0.0001) return false;
         vol *= chan;
+        if (o.at && Number.isFinite(o.at.x)) { // distance attenuation + panning from the camera
           const cam = G.sys.engine?.camera;
           if (cam) {
             const dx = o.at.x - cam.position.x, dz = o.at.z - cam.position.z;
